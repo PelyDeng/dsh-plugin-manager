@@ -15,7 +15,7 @@ const outputRoot = join(root, '.local/data/acceptance')
 mkdirSync(outputRoot, { recursive: true })
 const operation = mkdtempSync(join(outputRoot, 'example-host-'))
 const home = join(operation, 'home')
-const cli = join(root, 'deepseek-harness/apps/cli/lib/bin.js')
+const cli = process.env.DSH_TEST_CLI ?? join(root, 'deepseek-harness/apps/cli/lib/bin.js')
 const patch = join(operation, 'mode.patch.yml')
 const port = Number(process.env.EXAMPLE_TEST_PORT ?? 18951)
 const origin = `http://127.0.0.1:${port}`

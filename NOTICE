@@ -1,9 +1,3 @@
 DSH Plugin
 
-This distribution includes dsh-auth, derived from
-https://github.com/taichuy/deepseek-harness-auth
-at commit 4464052fc1dcae45622cfcef6f9cbbbaaa6004a6.
-The derived implementation uses shared WebServer routes, multi-user access
-control and SQLite persistence. Its Apache-2.0 license is retained.
-
 DeepSeek Harness and other third-party dependencies retain their own licenses.

@@ -26,4 +26,4 @@
 
 部署见[公共说明](../../deploy/README.md)。运行 `pnpm --filter dsh-auth check` 检查账号、授权、持久化、撤权与页面逻辑。
 
-本插件基于 [deepseek-harness-auth](https://github.com/taichuy/deepseek-harness-auth/tree/4464052fc1dcae45622cfcef6f9cbbbaaa6004a6) 修改，采用随附 [Apache-2.0](LICENSE)。
+本插件采用随附 [Apache-2.0](LICENSE)。

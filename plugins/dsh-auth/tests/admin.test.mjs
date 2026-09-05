@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn } from 'node:child_process'
 import { scryptSync } from 'node:crypto'
-import { validateRequest } from '../../../plugins/dsh-auth/scripts/auth-admin.mjs'
+import { validateRequest } from '../scripts/auth-admin.mjs'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const script = join(root, 'plugins/dsh-auth/scripts/auth-admin.mjs')

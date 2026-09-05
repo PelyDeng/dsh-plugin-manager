@@ -58,7 +58,7 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && node --test tests/admin.test.mjs",
     "check:web": "node --check web/app.js && node --check web/catalog-view.js",
     "check": "pnpm typecheck && pnpm check:web && pnpm test",
     "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
