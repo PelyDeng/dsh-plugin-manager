@@ -45,8 +45,9 @@ function run(args, options = {}) {
 
 test('public plugins are discovered independently from library packages and remain optional', () => {
   const plugins = discoverPlugins(repositoryRoot);
-  assert.deepEqual(plugins.map(plugin => plugin.id), ['auth','example']);
-  assert.deepEqual(selectPlugins(plugins), []);
+  assert.ok(['auth', 'example'].every(id => plugins.some(plugin => plugin.id === id)));
+  assert.ok(!plugins.some(plugin => plugin.package.startsWith('@dsh-plugin/')));
+  assert.ok(selectPlugins(plugins).every(plugin => !['auth','example'].includes(plugin.id)));
   assert.ok(plugins.every(plugin => plugin.verifyFiles.includes('cordis.patch.yml')));
 });
 

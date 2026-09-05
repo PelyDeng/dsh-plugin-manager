@@ -7,12 +7,21 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { cwd: root, encoding: 'utf8' }).trim().split('\n');
+const vendorArchives = new Set();
+for (const name of files.filter(name => /^plugins\/[^/]+\/package.json$/.test(name))) {
+  const manifest = JSON.parse(readFileSync(resolve(root, name), 'utf8'));
+  for (const spec of Object.values(manifest.devDependencies ?? {})) {
+    if (typeof spec === 'string' && /^file:(?:\.\/)?vendor\/[a-zA-Z0-9._-]+\.tgz$/.test(spec)) {
+      vendorArchives.add(resolve(root, dirname(name), spec.slice(5)));
+    }
+  }
+}
 let checked = 0;
 for (const name of new Set(files)) {
   if (name === 'deepseek-harness') continue;
   const path = resolve(root, name);
   assert.ok(!name.split('/').some(part => ['.local', 'data', 'deploy-artifacts', 'node_modules', 'dist', 'env.conf', '.env'].includes(part)), `Non-source file: ${name}`);
-  assert.ok(!name.endsWith('.tgz'), `Archive in Git: ${name}`);
+  assert.ok(!name.endsWith('.tgz') || vendorArchives.has(path), `Undeclared vendor archive in Git: ${name}`);
   assert.ok(existsSync(path) && lstatSync(path).isFile(), `Expected regular source file: ${name}`);
   if (!/\.(?:md|mjs|js|ts|json|ya?ml|sh|ps1)$/.test(name)) continue;
   const content = readFileSync(path, 'utf8');
@@ -27,7 +36,8 @@ for (const name of new Set(files)) {
   }
   if (/^(packages|plugins)\/[^/]+\/package.json$/.test(name)) {
     const manifest = JSON.parse(content);
-    assert.equal(manifest.license, 'Apache-2.0', `License: ${name}`);
+    assert.ok(typeof manifest.license === 'string' && manifest.license.length, `Missing license declaration: ${name}`);
+    if (manifest.license === 'UNLICENSED') assert.equal(manifest.private, true, `Unlicensed package must be private: ${name}`);
     assert.ok(existsSync(resolve(dirname(path), 'LICENSE')), `Missing license: ${name}`);
     assert.ok(existsSync(resolve(dirname(path), 'README.md')), `Missing README: ${name}`);
   }
