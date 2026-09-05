@@ -1,0 +1,243 @@
+/** DSH Agent chat with protected HTTP/SSE, deliberately without business tools. */
+import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import type { Context } from '@deepseek-ai/cordis'
+import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+import type {} from '@deepseek-ai/dsh-agent-default-model'
+import type {} from '@deepseek-ai/dsh-host-webserver'
+import type {} from '@deepseek-ai/dsh-system-prompt'
+import type {} from '@deepseek-ai/dsh-tools'
+import type {} from '@deepseek-ai/dsh-session-persistence'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { AccessError, createAccess, createPluginHttp, onRevoked, registerPlugin, type Actor } from '@dsh-plugin/plugin-kit'
+import type { Config } from './config.ts'
+import { HistoryStore, projectHistory } from './history.ts'
+export { Config } from './config.ts'
+
+export const name = 'example'
+export const inject = ['agents', 'agentDefaultModel', 'webServer', 'systemPrompt', 'tools', 'sessionPersistence'] as const
+
+interface Conversation {
+  owner: Actor
+  handle?: AgentHandle
+  opening?: Promise<AgentHandle>
+  busy: boolean
+  used: number
+  stop?: () => void
+}
+
+function json(response: ServerResponse, value: unknown): void {
+  response.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+  response.end(JSON.stringify(value))
+}
+
+/** Limit the untrusted request before JSON parsing; identities never come from this body. */
+async function body(request: IncomingMessage, maxChars: number): Promise<{ message: string; conversationId?: string }> {
+  if (request.method !== 'POST') throw new AccessError(405, '只支持 POST')
+  if (!(request.headers['content-type'] ?? '').startsWith('application/json')) throw new AccessError(415, '需要 JSON 请求')
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of request) {
+    const bytes = Buffer.from(chunk)
+    size += bytes.length
+    if (size > maxChars * 6 + 1024) throw new AccessError(413, '消息过长')
+    chunks.push(bytes)
+  }
+  let value: unknown
+  try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch { throw new AccessError(400, '无效 JSON') }
+  if (!value || typeof value !== 'object' || !('message' in value) || typeof value.message !== 'string'
+    || !value.message.trim() || value.message.length > maxChars) throw new AccessError(400, '请输入有效消息')
+  const id = 'conversationId' in value ? value.conversationId : undefined
+  if (id !== undefined && (typeof id !== 'string' || !/^example-[0-9a-f-]{36}$/.test(id))) throw new AccessError(400, '会话标识无效')
+  return { message: value.message.trim(), ...(typeof id === 'string' ? { conversationId: id } : {}) }
+}
+
+/** Register the page, catalog entry and a login-bound conversation lifecycle. */
+export async function apply(ctx: Context, config: Config): Promise<void> {
+  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+  const access = createAccess(ctx, { pluginId: manifest.deepseekPlugin.id, mode: config.accessMode, publicOrigin: config.publicOrigin })
+  const http = createPluginHttp(ctx, { access, routePrefix: config.routePrefix })
+  const conversations = new Map<string, Conversation>()
+  const store = new HistoryStore(config.historyPath || dshHomePath('plugins', manifest.deepseekPlugin.id, 'history.sqlite'))
+  const closings = new Map<string, Promise<void>>()
+  let disposed = false
+  const release = (id: string, conversation: Conversation) => {
+    if (conversations.get(id) === conversation) conversations.delete(id)
+    conversation.stop?.()
+    const pending = conversation.opening ?? (conversation.handle ? Promise.resolve(conversation.handle) : undefined)
+    delete conversation.handle
+    if (pending && !closings.has(id)) {
+      const closing = pending.then(async handle => {
+        handle.agent.cancel({ kind: 'user' })
+        await handle.dispose()
+      }).finally(() => { closings.delete(id) })
+      closings.set(id, closing)
+      void closing.catch(() => { console.error('example: 会话资源释放失败') })
+    }
+  }
+  const recheck = () => {
+    for (const [id, conversation] of conversations) {
+      try { access.assert(conversation.owner) } catch { release(id, conversation); continue }
+      if (!conversation.busy && Date.now() - conversation.used > config.idleTimeoutMs) release(id, conversation)
+    }
+  }
+  ctx.effect(() => onRevoked(ctx, recheck))
+  ctx.effect(() => {
+    const timer = setInterval(recheck, config.authRecheckMs)
+    timer.unref()
+    return async () => {
+      disposed = true; clearInterval(timer)
+      for (const [id, c] of conversations) release(id, c)
+      await Promise.allSettled(closings.values())
+      store.close()
+    }
+  })
+  ctx.effect(() => registerPlugin(ctx, {
+    id: manifest.deepseekPlugin.id, packageName: manifest.name, version: manifest.version,
+    description: manifest.description, displayName: manifest.deepseekPlugin.displayName,
+    entryPath: config.routePrefix, permissions: manifest.deepseekPlugin.permissions, tools: [],
+  }))
+  const assets = [['', 'index.html', 'text/html'], ['/app.js', 'app.js', 'text/javascript'],
+    ['/stream.js', 'stream.js', 'text/javascript'], ['/style.css', 'style.css', 'text/css']] as const
+  for (const [suffix, file, mime] of assets) {
+    const content = (await readFile(new URL(`../web/${file}`, import.meta.url), 'utf8')).replaceAll('__BASE__', config.routePrefix)
+    ctx.effect(() => http.register({ kind: 'exact', path: config.routePrefix + suffix, surface: suffix ? 'asset' : 'page',
+      handler(request, response) {
+        if (request.method !== 'GET') throw new AccessError(405, '只支持 GET')
+        response.writeHead(200, { 'content-type': `${mime}; charset=utf-8`, 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
+        response.end(content)
+      },
+    }))
+  }
+  ctx.effect(() => http.registerPublic({ kind: 'exact', path: config.routePrefix + '/ready', handler(_req, res) {
+    try { access.ready(); json(res, { ok: true }) } catch { res.writeHead(503); res.end() }
+  } }))
+  ctx.effect(() => http.register({ kind: 'exact', path: config.routePrefix + '/identity', handler(_req, res) {
+    json(res, { mode: access.mode, maxMessageChars: config.maxMessageChars })
+  } }))
+  ctx.effect(() => http.register({ kind: 'exact', path: config.routePrefix + '/conversations', handler(req, res, actor) {
+    if (req.method !== 'GET') throw new AccessError(405, '只支持 GET')
+    const offset = Number(new URL(req.url ?? '/', 'http://localhost').searchParams.get('offset') ?? 0)
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new AccessError(400, '无效分页参数')
+    const rows = store.list(actor, offset, 31)
+    json(res, { items: rows.slice(0, 30), nextOffset: rows.length > 30 ? offset + 30 : null })
+  } }))
+  ctx.effect(() => http.register({ kind: 'exact', path: config.routePrefix + '/history', handler: async (req, res, actor) => {
+    if (req.method !== 'GET') throw new AccessError(405, '只支持 GET')
+    const id = new URL(req.url ?? '/', 'http://localhost').searchParams.get('id') ?? ''
+    store.assertOwner(id, actor)
+    await closings.get(id)
+    if (disposed) throw new AccessError(503, '插件正在停止')
+    access.assert(actor)
+    const active = conversations.get(id)
+    let events: readonly SessionEvent[]
+    if (active?.handle) events = active.handle.agent.session.snapshotEvents()
+    else {
+      // The pinned official source has SessionHandle; its same-version published declarations predate it.
+      const persistence = ctx.sessionPersistence as unknown as {
+        open(id: SessionId, access: 'read'): Promise<{ read(): Promise<readonly SessionEvent[]>; close(): Promise<void> }>
+      }
+      const handle = await persistence.open(SessionId(id), 'read')
+      try { events = await handle.read() } finally { await handle.close() }
+    }
+    access.assert(actor)
+    json(res, { conversationId: id, messages: projectHistory(events), busy: active?.busy ?? false })
+  } }))
+  ctx.effect(() => http.register({ kind: 'exact', path: config.routePrefix + '/chat', handler: async (request, response, actor) => {
+    const input = await body(request, config.maxMessageChars)
+    if (disposed) throw new AccessError(503, '插件正在停止')
+    access.assert(actor)
+    const id = input.conversationId ?? `example-${randomUUID()}`
+    if (input.conversationId) store.assertOwner(id, actor)
+    await closings.get(id)
+    if (disposed) throw new AccessError(503, '插件正在停止')
+    access.assert(actor)
+    let conversation = conversations.get(id)
+    if (conversation?.busy) throw new AccessError(409, '上一条回答尚未结束')
+    if (!conversation) {
+      if (conversations.size + closings.size >= config.maxConversations) throw new AccessError(429, '当前会话较多，请稍后重试')
+      conversation = { owner: actor, busy: true, used: Date.now() }
+      conversations.set(id, conversation)
+      if (!input.conversationId) store.reserve(id, actor, input.message)
+    }
+    const current = conversation
+    current.owner = actor
+    current.busy = true
+    let ended = false
+    let timer: NodeJS.Timeout | undefined
+    let unsubscribe: (() => void) | undefined
+    const finish = () => {
+      if (ended) return
+      ended = true
+      clearTimeout(timer)
+      unsubscribe?.()
+      delete current.stop
+      current.busy = false
+      current.used = Date.now()
+      response.off('close', disconnected)
+      response.end()
+    }
+    const disconnected = () => release(id, current)
+    current.stop = finish
+    response.once('close', disconnected)
+    const send = (value: unknown) => {
+      if (ended) return
+      try { access.assert(actor) } catch { release(id, current); return }
+      // A slow client cannot accumulate an unbounded output buffer in the host.
+      if (!response.write(`data: ${JSON.stringify(value)}\n\n`)) release(id, current)
+    }
+    try {
+      if (!current.handle) {
+        const selection = ctx.agentDefaultModel.currentSelection()
+        const options = {
+          agentOptions: { provider: selection.provider, model: selection.model },
+          setup(agentCtx: Context) {
+            agentCtx.systemPrompt.section({ name: 'example:persona', order: 600, text: config.systemPrompt })
+            agentCtx.tools.restrict({ allow: [] })
+          },
+        }
+        current.opening = input.conversationId
+          ? ctx.agents.resume({ ...options, resumeSessionId: SessionId(id) })
+          : ctx.agents.create({ ...options, sessionId: SessionId(id), meta: { cwd: process.cwd() } })
+        const handle = await current.opening
+        delete current.opening
+        current.handle = handle
+        if (disposed || ended || response.destroyed) { release(id, current); return }
+      }
+      if (disposed || ended || response.destroyed) { release(id, current); return }
+      access.assert(actor)
+      store.publish(id)
+      response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
+      response.flushHeaders()
+      send({ type: 'session', conversationId: id })
+      unsubscribe = ctx.on('session/event', (session, event: SessionEvent) => {
+        if (String(session.id) !== id || ended) return
+        if (event.type === 'assistant/chunk' && event.data.chunk.type === 'text-delta') send({ type: 'delta', text: event.data.chunk.text })
+        if (event.type === 'assistant/message') {
+          const text = event.data.message.content.filter(block => block.type === 'text').map(block => block.text).join('')
+          send({ type: 'answer', text })
+        }
+        if (event.type === 'turn/end') {
+          if (event.data.reason.kind === 'error') send({ type: 'error', message: '模型请求失败，请检查 DSH 模型配置后重试。' })
+          send({ type: 'done', reason: event.data.reason.kind })
+          finish()
+          if (event.data.reason.kind !== 'completed') release(id, current)
+        }
+      })
+      timer = setTimeout(() => { send({ type: 'error', message: '回答超时，请新建对话重试。' }); release(id, current) }, config.turnTimeoutMs)
+      if (!ended) current.handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: input.message }], source: { kind: 'user' } }))
+    } catch (error) {
+      if (!response.headersSent) {
+        response.off('close', disconnected)
+        delete current.stop
+        release(id, current)
+        throw error
+      }
+      send({ type: 'error', message: '对话中断，请新建对话重试。' })
+      release(id, current)
+    }
+  } }))
+}

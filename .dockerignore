@@ -1,0 +1,11 @@
+.git
+**/node_modules
+**/dist
+**/coverage
+.local
+data
+deploy-artifacts
+.env*
+**/env.conf
+**/*.tgz
+deploy/config/*.conf

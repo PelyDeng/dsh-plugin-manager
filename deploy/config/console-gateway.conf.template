@@ -1,0 +1,58 @@
+# Include inside the existing HTTPS server after removing its previous location /.
+# The DSH upstream must listen on loopback; auth remains on that same upstream.
+# Nginx error records can include the original credential-bearing request URI.
+error_log /dev/null;
+proxy_http_version 1.1;
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header X-Forwarded-Host $host;
+proxy_set_header X-Forwarded-Port $server_port;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection $connection_upgrade;
+proxy_buffering off;
+proxy_cache off;
+proxy_request_buffering off;
+proxy_connect_timeout 30s;
+proxy_send_timeout 3600s;
+proxy_read_timeout 3600s;
+proxy_redirect off;
+
+location = /auth {
+    proxy_pass http://127.0.0.1:__DSH_PORT__;
+    access_log off;
+}
+location ^~ /auth/ {
+    proxy_pass http://127.0.0.1:__DSH_PORT__;
+    access_log off;
+}
+location = /__dsh_console_access {
+    internal;
+    proxy_pass http://127.0.0.1:__DSH_PORT__/auth/api/console-access;
+    proxy_method GET;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header Host $host;
+    proxy_set_header Cookie $http_cookie;
+    proxy_set_header X-Original-URI $request_uri;
+    access_log off;
+}
+location / {
+    auth_request /__dsh_console_access;
+    auth_request_set $dsh_auth_login $upstream_http_x_dsh_login;
+    error_page 401 = @dsh_auth_login;
+    proxy_pass http://127.0.0.1:__DSH_PORT__;
+    # Official launch URLs can carry a credential in their query string.
+    access_log off;
+}
+location @dsh_auth_login {
+    absolute_redirect off;
+    access_log off;
+    add_header Cache-Control "no-store" always;
+    if ($request_method != GET) { return 401; }
+    if ($uri != /) { return 401; }
+    if ($http_accept !~* "text/html") { return 401; }
+    if ($dsh_auth_login = "") { return 401; }
+    return 303 $dsh_auth_login;
+}

@@ -1,0 +1,28 @@
+name: Check
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  public-workspace:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm install --global pnpm@11.19.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm check
+      - run: node scripts/check-artifacts.mjs
+      - run: node scripts/check-repository.mjs
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./packages/plugin-manager/tests/start.test.ps1

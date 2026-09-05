@@ -1,0 +1,130 @@
+{
+  "name": "dsh-example",
+  "version": "0.1.0",
+  "description": "可复制的 AI 流式对话与可选 auth 接入示例",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/",
+    "web/",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "packageManager": "pnpm@11.19.0",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "deepseekPlugin": {
+    "schemaVersion": 3,
+    "id": "example",
+    "defaultEnabled": false,
+    "displayName": "AI 对话示例",
+    "entryPath": "/example",
+    "healthPath": "/example/ready",
+    "permissions": [
+      "example:access"
+    ],
+    "verifyFiles": [
+      "web/index.html",
+      "web/app.js",
+      "web/stream.js",
+      "web/style.css"
+    ]
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "pnpm typecheck && node --check web/app.js && node --check web/stream.js && pnpm test",
+    "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-home-paths": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-host-webserver": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-llm": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-session": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-session-persistence": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-system-prompt": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-tools": "0.1.2-alpha.5"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent-default-model": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-host-webserver": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-system-prompt": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session-persistence": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-home-paths": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-attachment": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-code-runtime": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-home-paths": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-host-webserver": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-llm": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-scope": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-session": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-session-persistence": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-system-prompt": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-tools": "0.1.2-alpha.5",
+    "@dsh-plugin/plugin-kit": "workspace:*",
+    "@types/node": "^22.20.0",
+    "tsdown": "^0.22.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PelyDeng/dsh-plugin.git",
+    "directory": "plugins/dsh-example"
+  }
+}

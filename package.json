@@ -1,0 +1,20 @@
+{
+  "name": "dsh-plugin-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "build": "pnpm --filter @dsh-plugin/plugin-manager build && node scripts/run-plugin-task.mjs build --plugins all",
+    "check": "pnpm --filter @dsh-plugin/plugin-kit check && pnpm --filter @dsh-plugin/plugin-manager check && node scripts/run-plugin-task.mjs check --plugins all",
+    "list:plugins": "node scripts/run-plugin-task.mjs list",
+    "clean": "node scripts/clean.mjs",
+    "package": "node scripts/package-plugins.mjs"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@types/node": "^22.20.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8",
+    "tsdown": "^0.22.2"
+  }
+}

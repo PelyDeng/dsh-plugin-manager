@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.local/
+data/
+deploy-artifacts/
+.env
+.env.*
+!.env.example
+env.conf
+deploy/config/*.conf
+!deploy/config/*.conf.example
+*.tgz
+*.log

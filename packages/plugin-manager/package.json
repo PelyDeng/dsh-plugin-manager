@@ -1,0 +1,22 @@
+{
+  "name": "@dsh-plugin/plugin-manager",
+  "version": "0.1.0",
+  "description": "Discover, package and manage DSH plugin bundles",
+  "type": "module",
+  "license": "Apache-2.0",
+  "bin": { "dsh-plugin": "dist/cli.mjs" },
+  "exports": {
+    ".": "./dist/deployment.mjs",
+    "./catalog": "./dist/plugins.mjs",
+    "./packaging": "./dist/package-plugins.mjs"
+  },
+  "files": ["dist", "runtime", "LICENSE", "README.md"],
+  "engines": { "node": "^22.19.0 || >=24.0.0" },
+  "publishConfig": { "access": "public" },
+  "repository": { "type": "git", "url": "git+https://github.com/PelyDeng/dsh-plugin.git", "directory": "packages/plugin-manager" },
+  "scripts": {
+    "build": "tsdown",
+    "check": "node --test tests/*.test.mjs"
+  },
+  "devDependencies": { "@dsh-plugin/plugin-kit": "workspace:*", "tsdown": "^0.22.2" }
+}

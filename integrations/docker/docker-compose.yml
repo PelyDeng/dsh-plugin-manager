@@ -1,0 +1,31 @@
+name: dsh-plugins
+
+services:
+  dsh:
+    image: ${DSH_HOST_IMAGE:?Prepare a shared host image and set its immutable reference}
+    restart: unless-stopped
+    init: true
+    network_mode: host
+    environment:
+      DSH_DATA_DIR: /data
+      DSH_HOME: /data/dsh-home
+      DSH_WORKSPACE: /data/workspace
+      DSH_AUTH_URL_FILE: /data/dsh-web-auth-url.txt
+      DSH_PORT: ${DSH_PORT:-7902}
+      DSH_BIND_HOST: 127.0.0.1
+      DSH_PROFILE: ${DSH_PROFILE:-web}
+      DSH_STORE_DIR: /data/plugin-store
+      PLUGIN_MANIFEST_FILE: /opt/plugin-packages/manifest.json
+    volumes:
+      - type: bind
+        source: ${DSH_DATA_DIR:-../../.local/data}
+        target: /data
+      - type: bind
+        source: ${DSH_PLUGIN_RELEASE_DIR:?Set the absolute plugins release directory}
+        target: /opt/plugin-packages
+        read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    stop_grace_period: 30s

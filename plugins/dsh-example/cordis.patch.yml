@@ -1,0 +1,7 @@
+- insert:
+    - id: example
+      name: dsh-example
+      config:
+        accessMode: !!js process.env.DSH_ACCESS_MODE ?? 'standalone'
+        publicOrigin: !!js process.env.DSH_PUBLIC_ORIGIN ?? ''
+        routePrefix: /example

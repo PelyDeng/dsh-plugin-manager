@@ -1,0 +1,15 @@
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.Dockerfile text eol=lf
+/plugins/dsh-auth/*.yml text eol=lf
+/plugins/dsh-auth/**/*.ts text eol=lf
+/plugins/dsh-auth/**/*.tsx text eol=lf
+
+/data export-ignore
+/.local export-ignore
+/deploy-artifacts export-ignore
+/.tmp export-ignore
+**/env.conf export-ignore
+/deploy/config/deployment.json export-ignore
+/deploy/config/host-image.json export-ignore
+/deploy/config/host-image.conf export-ignore
