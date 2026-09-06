@@ -1,6 +1,6 @@
 {
   "name": "dsh-example",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "可复制的 AI 流式对话与可选 auth 接入示例",
   "license": "Apache-2.0",
   "private": true,

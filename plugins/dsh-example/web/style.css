@@ -260,8 +260,26 @@ h1 {
   padding:0 2px
 }
 .assistant.busy .text:empty:after {
-  content:'正在思考…';
+  content:'等待回答…';
   color:#8a978d
+}
+.thinking {
+  margin:0 0 14px;
+  padding:10px 14px;
+  border-left:3px solid #b7cbb9;
+  border-radius:6px;
+  background:#f1f4ed;
+  color:#62756a;
+  font-size:13px
+}
+.thinking summary {
+  cursor:pointer;
+  font-weight:600
+}
+.reasoning-text {
+  margin-top:8px;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere
 }
 .assistant.busy .text:not(:empty):after {
   content:'▍';

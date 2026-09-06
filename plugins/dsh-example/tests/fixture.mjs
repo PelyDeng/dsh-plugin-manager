@@ -24,11 +24,16 @@ export async function fixture({ mode, autoReply = false, logs = new Map(), befor
           logs.get(handle.id).push({ type: 'user/message', data: message })
           if (autoReply) {
             const text = '你好！这是隔离测试模型的流式回答。可以继续追问，或试试左侧的新建对话。'
+            const reasoning = '这是隔离测试模型返回的思考片段：先理解问题，再组织回答。'
             let index = 0
             const timer = setInterval(() => {
               if (handle.cancelled) { clearInterval(timer); timers.delete(timer); return }
-              if (index < text.length) {
-                const event = { type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: text[index++] } } }
+              if (index < reasoning.length + text.length) {
+                const chunk = index < reasoning.length
+                  ? { type: 'reasoning-delta', text: reasoning[index] }
+                  : { type: 'text-delta', text: text[index - reasoning.length] }
+                index++
+                const event = { type: 'assistant/chunk', data: { chunk } }
                 logs.get(handle.id).push(event); ctx.emit('session/event', { id: handle.id }, event)
               }
               else { clearInterval(timer); timers.delete(timer); ctx.emit('session/event', { id: handle.id }, { type: 'turn/end', data: { reason: { kind: 'completed' } } }) }

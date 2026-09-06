@@ -42,7 +42,7 @@ test('live runtime frames stream only for the request Agent and stop after revoc
   const f = await setup()
   const response = await f.request('/chat', { message: 'first' })
   const agent = f.handles[0].agent
-  const frame = text => ({ type: 'chunk', chunk: { type: 'text-delta', text } })
+  const frame = text => ({ type: 'chunk', chunk: { type: 'reasoning-delta', text } })
   f.ctx.emit('agent/assistant-stream', { agent: {}, frame: frame('FOREIGN') })
   f.ctx.emit('agent/assistant-stream', { agent, frame: frame('你好') })
   f.revoked.add('login-a')
@@ -52,6 +52,40 @@ test('live runtime frames stream only for the request Agent and stop after revoc
   expect(body).not.toContain('FOREIGN')
   expect(body).not.toContain('PRIVATE')
   expect(f.handles[0].cancelled).toBe(true)
+})
+
+test.each(['legacy', 'live'])('%s reasoning and answer arrive before completion and history keeps them separate', async mode => {
+  const f = await setup({ mode: 'standalone' })
+  const response = await f.request('/chat', { message: '分步计算' }, '')
+  const h = f.handles[0], events = []
+  const reading = readEvents(response, event => events.push(event))
+  const emit = (type, text) => {
+    const chunk = { type, text }
+    if (mode === 'live') f.ctx.emit('agent/assistant-stream', { agent: h.agent, frame: { type: 'chunk', chunk } })
+    else f.emit(h, 'assistant/chunk', { chunk })
+  }
+  emit('reasoning-delta', '先分析'); emit('reasoning-delta', '条件。')
+  await expect.poll(() => events.filter(e => e.type === 'reasoning').map(e => e.text).join('')).toBe('先分析条件。')
+  expect(events.some(e => e.type === 'done')).toBe(false)
+  emit('text-delta', '答案'); emit('text-delta', '是 2。')
+  await expect.poll(() => events.filter(e => e.type === 'delta').map(e => e.text).join('')).toBe('答案是 2。')
+  expect(events.some(e => e.type === 'done')).toBe(false)
+  f.emit(h, 'assistant/message', { message: { content: [{ type: 'reasoning', text: '先分析条件。' }, { type: 'text', text: '答案是 2。' }] } })
+  f.emit(h, 'turn/end', { reason: { kind: 'completed' } })
+  await reading
+  const history = await (await f.request('/history?id=' + h.id, undefined, '')).json()
+  expect(history.messages.at(-1)).toEqual({ role: 'assistant', reasoning: '先分析条件。', text: '答案是 2。' })
+})
+
+test('interrupted reasoning-only output remains visible in durable history', async () => {
+  const f = await setup({ mode: 'standalone' })
+  const response = await f.request('/chat', { message: 'q' }, '')
+  const h = f.handles[0]
+  f.emit(h, 'assistant/chunk', { chunk: { type: 'reasoning-delta', text: '已分析的部分' } })
+  await response.body.cancel()
+  await expect.poll(() => h.disposed).toBe(true)
+  const history = await (await f.request('/history?id=' + h.id, undefined, '')).json()
+  expect(history.messages.at(-1)).toEqual({ role: 'assistant', reasoning: '已分析的部分', text: '' })
 })
 
 test('followups reuse owned Agent; concurrent, foreign and other-login requests fail', async () => {

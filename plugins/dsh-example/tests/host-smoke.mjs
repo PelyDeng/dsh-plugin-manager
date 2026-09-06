@@ -29,6 +29,11 @@ const model = createServer(async (req, res) => {
   res.writeHead(200, { 'content-type': 'text/event-stream' })
   res.write('data: {"choices":[{"delta":{"role":"assistant","content":null}}]}\n\n')
   const count = value.messages.filter(m => m.role === 'user').length
+  for (const text of ['先理解问题。', '再组织回答。']) {
+    if (res.destroyed) return
+    await delay(180)
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: text } }] })}\n\n`)
+  }
   for (const text of ['你好！', '这是本地测试模型的回答。', `已收到 ${count} 条用户消息。`, '我们可以继续探索这个问题。']) {
     if (res.destroyed) return
     await delay(180)
@@ -89,6 +94,7 @@ async function chat(text, login, id) {
   await readEvents(response, e => events.push(e))
   assert.equal(events.at(-1).reason, 'completed', JSON.stringify(events))
   assert.ok(events.filter(e => e.type === 'delta').length > 1, 'must stream before completion')
+  assert.ok(events.filter(e => e.type === 'reasoning').length > 1, 'must stream reasoning before completion')
   await delay(400)
   return events[0].conversationId
 }
