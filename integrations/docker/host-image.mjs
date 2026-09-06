@@ -67,7 +67,7 @@ function command(bin, args, options = {}, execute = spawnSync) {
 /** Only registry responses explicitly describing absence permit upstream fallback. */
 export function isMissingImage(error) {
   if (/unauthori[sz]ed|denied|forbidden|certificate|tls|timeout|timed out|no matching manifest|connection|credential|\b50[0234]\b/iu.test(error)) return false;
-  return /manifest unknown|name unknown|manifest for .+ not found|unknown: repository .+ not found/iu.test(error);
+  return /manifest unknown|name unknown|manifest for .+ not found|unknown: (?:repository|artifact) .+ not found/iu.test(error);
 }
 
 /** Hash build inputs, excluding business plugins and checkout location. */
