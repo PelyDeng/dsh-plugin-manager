@@ -65,3 +65,15 @@ bash deploy/build.sh
 只调整插件配置而不更新代码时，使用 `bash deploy/build.sh apply-compose --config .local/deployment.json`。站点 origin 和 Compose 项目名在站点配置中维护；源码发版自动更新镜像和发布清单，日常认证切换不修改这些字段。不要使用原手工 Compose 覆盖文件重启同一实例。当前成功生成的 Compose 路径记录在 `.local/artifacts/active-compose.json`。
 
 首次规范验收证据位于 `.local/artifacts/plugin-settings-release/`：`production-result.json` 记录备份位置、版本、数据库计数和生产检查，`smoke-result.json` 与 `private-smoke-result.json` 记录隔离验收，`linux-final-tests.log` 记录 Linux 专项检查。运行证据和备份不提交 Git。
+
+## 一键初始化隔离验收（2026-09-06）
+
+公共框架已合并到本仓库；源码选择与构建相关 25 项测试通过。首次使用及已有站点维护两项独立 agents 复审通过，设计和操作方式见[一键部署说明](first-deployment.md)。部署使用已有宿主源码，不自行下载、切换或要求匹配预设版本。
+
+服务器隔离目录为 `/data/public/pelycloud/dsh-plugin-bootstrap-smoke`，容器为 `dsh-bootstrap-smoke-dsh-1`，回环端口为 `17913`。首次自动生成站点设置；因默认端口被正式站点占用，仅调整隔离端口、origin、Compose 项目名及本机可用镜像源。宿主由该公共检出提供的 `0.1.2-alpha.5` 源码完整构建，管理器为 `0.2.3`，未设置模型密钥。
+
+- 首次构建及启动通过；auth/example 健康接口、管理员首次改密、授权页面及历史接口访问通过，匿名历史请求返回 401。
+- 使用公共提交 `0482ea9` 更新时，对启动中的隔离容器发送 SIGKILL；脚本记录 `deployment-failed`，停服备份及 OWNER/LOCK 保留。
+- `bash deploy/build.sh --resume` 恢复同一操作成功，复用镜像 `sha256:6c974b66dd41c63ab8706c71e6aa2439c83c9319d5cec31ec696e09da63fdf17` 和归档，备存两份残留记录；站点及 auth/example 设置摘要不变，已修改的管理员密码仍有效。
+
+证据保存在隔离目录 `.local/acceptance-summary.json`、`.local/acceptance-first.json`、`.local/acceptance-resumed.json`、`.local/kill-evidence.json`；操作记录及备份位于 `.local/artifacts/source-release-0482ea92de0d-22165763-6faa-444e-b89b-51df8f2416cd/`。隔离容器验收后已停止，数据和备份保留。正式容器 `dsh-plugin-dsh-1` 未重启，仍使用上文记录的镜像且健康。此次未进行正式服务升级、封闭化功能、浏览器交互或真实模型问答回归。
