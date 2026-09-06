@@ -8,9 +8,9 @@ import { pathToFileURL } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { loadRelease } from '../../../packages/plugin-manager/src/release.mjs';
 
 if (!existsSync('/.dockerenv')) throw new Error('This smoke only runs in a disposable Docker container.');
+const { loadRelease } = await import('/opt/plugin-manager/node_modules/@dsh-plugin/plugin-manager/dist/deployment.mjs');
 const [manifest, runtimeConfig, results] = process.argv.slice(2);
 if (!manifest || !runtimeConfig || !existsSync(runtimeConfig)) throw new Error('Usage: auth-host-smoke.mjs <manifest.json> <isolated closedoff env.conf> [results directory].');
 const release = loadRelease(manifest);
