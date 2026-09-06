@@ -75,6 +75,7 @@ test('Linux build entry holds the lock across sync and build, skips sync for res
   const { checkout, upstream, git, commit } = fixture(t);
   mkdirSync(join(checkout, 'deploy/scripts'), { recursive: true });
   cpSync(new URL('../build.sh', import.meta.url), join(checkout, 'deploy/build.sh'));
+  cpSync(new URL('../scripts/build-output.mjs', import.meta.url), join(checkout, 'deploy/scripts/build-output.mjs'));
   cpSync(new URL('../scripts/sync-upstream.mjs', import.meta.url), join(checkout, 'deploy/scripts/sync-upstream.mjs'));
   writeFileSync(join(checkout, 'deploy/scripts/build.mjs'), `import {spawnSync} from 'node:child_process'; import {writeFileSync} from 'node:fs'; if(spawnSync('flock',['-n','.local/source-release.lock','true']).status!==1) throw Error('lock not held'); writeFileSync('.local/built','ok');`);
   git(checkout, 'add', 'deploy'); git(checkout, 'commit', '-m', 'private entry');

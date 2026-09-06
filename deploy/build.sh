@@ -12,6 +12,6 @@ if [[ $# -eq 0 || "$1" == "release" || "$1" == --* ]]; then
   exec 9>"${DEPLOY_DIR}/../.local/source-release.lock"
   flock -n 9
   node "${DEPLOY_DIR}/scripts/sync-upstream.mjs" "$@"
-  exec node "${DEPLOY_DIR}/scripts/build.mjs" "$@"
+  exec node "${DEPLOY_DIR}/scripts/build-output.mjs" "$@"
 fi
 exec node "${DEPLOY_DIR}/scripts/deployment.mjs" "$@"
