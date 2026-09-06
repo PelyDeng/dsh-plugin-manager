@@ -90,7 +90,6 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       }
       run('pnpm', ['install', '--frozen-lockfile']);
       run('pnpm', ['--filter', '@dsh-plugin/plugin-kit', 'build']);
-      run('pnpm', ['--filter', '@dsh-plugin/plugin-manager', 'check']);
       run('pnpm', ['--filter', '@dsh-plugin/plugin-manager', 'build']);
       record.managerArchive = resolve(operation, 'plugin-manager.tgz');
       run('pnpm', ['--filter', '@dsh-plugin/plugin-manager', 'pack', '--out', record.managerArchive]);

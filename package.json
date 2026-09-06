@@ -8,7 +8,8 @@
     "check": "node scripts/workspace.mjs check",
     "list:plugins": "node scripts/run-plugin-task.mjs list",
     "clean": "node scripts/clean.mjs",
-    "package": "node scripts/package-plugins.mjs"
+    "package": "node scripts/package-plugins.mjs",
+    "test": "pnpm build && pnpm -r --workspace-concurrency=1 --if-present test"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.2",

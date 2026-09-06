@@ -1,6 +1,6 @@
 # dsh-auth
 
-通过管理器部署时，本插件按 `configuration.auth: provider` 提供认证，站点 origin 统一配置。实例配置为 `<DSH home>/plugins/auth/plugin.json`，不接受 `accessMode`；其他插件各自决定是否要求认证。见[配置规范](../../doc/plugin-configuration.md)。
+通过管理器部署时，本插件按 `configuration.auth: provider` 提供认证，站点 origin 统一配置。实例配置为 `<DSH home>/plugins/auth/plugin.json`，不接受 `accessMode`；其他插件各自决定是否要求认证。配置与部署步骤见管理器包内 DELIVERY.md。
 
 可选统一认证插件，在宿主 WebServer 提供 `/auth` 页面、账号管理与逐插件授权。默认纳入插件选集，不改变业务插件的访问模式，不替代 DSH 官方控制台认证。
 
@@ -26,6 +26,6 @@
 
 `GET /auth/api/console-access` 可供反向代理 `auth_request` 检查控制台授权，返回 204、401、403 或 503，不发行官方 token。代理必须覆盖页面、API 和 WebSocket，并用原始请求 URI 覆盖 `X-Original-URI`。已登记插件的路由前缀交回插件自行鉴权；未知路由和控制台要求 `dsh-console`。已建立 WebSocket 不会因撤权自动断开。
 
-部署见[公共说明](../../deploy/README.md)。运行 `pnpm --filter dsh-auth check` 检查账号、授权、持久化、撤权与页面逻辑。
+源码开发时运行 `pnpm --filter dsh-auth test` 检查账号、授权、持久化、撤权与页面逻辑；日常 check 只做类型与 Web 脚本语法检查。
 
 本插件采用随附 [Apache-2.0](LICENSE)。

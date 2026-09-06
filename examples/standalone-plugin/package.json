@@ -1,0 +1,15 @@
+{
+  "name": "dsh-independent-example",
+  "version": "0.1.0",
+  "description": "Independent DSH Bundle with one public readiness endpoint",
+  "type": "module",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@11.19.0",
+  "engines": { "node": "^22.19.0 || >=24" },
+  "main": "./dist/index.mjs",
+  "exports": "./dist/index.mjs",
+  "files": ["dist", "cordis.patch.yml", "README.md"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "deepseekPlugin": { "schemaVersion": 3, "id": "independent-example", "healthPath": "/independent-example/ready" },
+  "scripts": { "build": "node build.mjs", "check": "node --check dist/index.mjs" }
+}

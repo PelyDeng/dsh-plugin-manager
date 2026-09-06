@@ -6,9 +6,11 @@ import { execFileSync } from 'node:child_process';
 import { LOCK, OWNER, atomicJSON, canonical, fail, json, within } from './state.mjs';
 import { renderCompose } from './compose.mjs';
 import { resolvePluginSettings } from './plugin-settings.mjs';
+import { assertReleaseMode } from './release.mjs';
 
 /** Initialize missing settings and perform a controlled restart with readiness checks. */
 export function applyCompose(deployment, release, execute = (args, options = { stdio: 'inherit' }) => execFileSync('docker', args, options)) {
+  assertReleaseMode(release, deployment.mode);
   const image = deployment.config.containerImage;
   if (typeof image !== 'string' || !/^(?:sha256:[a-f0-9]{64}|\S+@sha256:[a-f0-9]{64})$/.test(image)) fail('apply-compose 需要 containerImage 不可变镜像 ID 或仓库摘要。');
   const project = deployment.config.composeProject ?? 'dsh-plugins';

@@ -2,8 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve, relative } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { discoverPlugins, privatePackagePath } from './plugins.mjs';
+import { discoverPlugins, privatePackagePath, parseOptions, sourcePlugins } from './plugins.mjs';
 
 const nativeTar = process.platform === 'win32' && process.env.SystemRoot ? join(process.env.SystemRoot, 'System32', 'tar.exe') : undefined;
 const tarCommand = nativeTar && existsSync(nativeTar) ? nativeTar : 'tar';
@@ -56,7 +55,7 @@ export function verifyPackage(plugin, archive) {
 /** Check the archive against the exact source build before emitting a release manifest. */
 export function verifyBuildPackage(root, plugin, archive) {
   const packed = verifyPackage(plugin, archive);
-  const sourceRoot = resolve(root, plugin.directory);
+  const sourceRoot = resolve(root, plugin.directory ?? '.');
   const source = JSON.parse(readFileSync(resolve(sourceRoot, 'package.json'), 'utf8'));
   for (const field of ['deepseekPlugin', 'dsh', 'main', 'exports']) {
     if (JSON.stringify(packed[field]) !== JSON.stringify(source[field])) throw new Error(`发布包 ${field} 与插件声明不一致。`);
@@ -70,8 +69,17 @@ export function verifyBuildPackage(root, plugin, archive) {
 }
 
 export function main(args = process.argv.slice(2)) {
+  if (args[0]?.startsWith('--')) {
+    const options = parseOptions(args, ['root', 'package', 'archive']);
+    if (!options.root || options.package !== '.' || !options.archive) throw new Error('用法：verify-package --root <包根> --package . --archive <tgz>');
+    const root = resolve(options.root);
+    const [plugin] = sourcePlugins(root, undefined, options.package);
+    verifyBuildPackage(root, plugin, resolve(root, options.archive));
+    console.log(`发布包已验证：${plugin.id} ${plugin.version}。`);
+    return;
+  }
   const [sourceDirectory, archive, requestedRoot] = args;
-  if (!sourceDirectory || !archive || !requestedRoot) throw new Error('用法：verify-package <插件目录> <tgz> <项目根>');
+  if (args.length !== 3 || !sourceDirectory || !archive || !requestedRoot) throw new Error('用法：verify-package <插件目录> <tgz> <项目根>');
   const root = resolve(requestedRoot);
   const directory = relative(root, resolve(sourceDirectory)).replaceAll('\\', '/');
   const plugin = discoverPlugins(root).find(candidate => candidate.directory === directory);

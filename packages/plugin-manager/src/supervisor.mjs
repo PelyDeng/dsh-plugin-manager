@@ -1,5 +1,6 @@
 import { hostCLI, stopOwned } from './process.mjs';
 import { runtimeEnvironment } from './config.mjs';
+import { assertReleaseMode } from './release.mjs';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { OWNER, STOPPED, atomicJSON, fail, privateFile, readOptional, synchronizedStopped, within } from './state.mjs';
@@ -11,6 +12,7 @@ import { createInterface } from 'node:readline';
 import { hostname } from 'node:os';
 /** Start one DSH child, keeping startup tokens out of normal logs. */
 export async function supervise(deployment, release) {
+  assertReleaseMode(release, deployment.mode);
   const cli = hostCLI(deployment);
   const runtime = runtimeEnvironment(deployment, release.plugins);
   mkdirSync(deployment.workspace, { recursive: true });

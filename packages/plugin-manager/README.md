@@ -1,22 +1,44 @@
 # @dsh-plugin/plugin-manager
 
-发现 schema 3 插件，执行 build → check → pack，校验发布清单与归档，并通过官方 DSH CLI 管理安装。管理器不启动另一套 Agent 引擎。
+DSH 应用接入与交付管理 CLI。独立包和内部 `plugins/*` 共用 build → check → pack，通过官方 DSH CLI 安装 Bundle、配置并受控启停。kit 和基础认证可选；管理声明不会自动保护业务路由。
 
-独立安装 `.tgz` 后使用 `dsh-plugin`。每个项目操作要求 `--root <项目根>`；相对配置、home 和产物路径均相对这个根解析。
+## 安装与作者操作
 
-标准插件的 `plugin.json` 由本包统一读取。Docker 实例使用 `dsh-plugin apply-compose --root <项目根> --config .local/deployment.json` 应用配置并等待就绪；`health` 根据已验证部署状态检查插件。声明、权限和迁移说明见[插件运行配置规范](../../doc/plugin-configuration.md)。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。在工具目录执行 `pnpm add --ignore-workspace /path/to/plugin-manager-0.3.0.tgz`，随后使用 `pnpm exec dsh-plugin`。包名不表示已发布到公共 registry。本 README 随工具版本交付。
 
-仓库源码部署使用 `bash deploy/build.sh` 自动初始化和更新，见[一键部署](../../doc/first-deployment.md)。`apply-compose` 接受不可变本机镜像 ID 或仓库摘要；本机镜像不触发拉取。生成的容器配置同步自定义端口供健康检查使用，`--resume` 转交容器内管理器恢复原安装操作。
+每个项目操作要求 `--root`；相对配置、home 和产物路径相对这个根解析。独立作者包根需有 package.json：有效 name/version、main、files、README、scripts.build/check、官方 dsh.bundle.patch，以及 `deepseekPlugin: { "schemaVersion": 3, "id": "my-plugin" }`。页面、探针、权限、认证与 kit 均不强制要求。构建产物可以由 build 生成。
+
+在作者根执行 `pnpm install --ignore-workspace` 并保存 pnpm-lock.yaml，随后在工具目录调用：
 
 ```sh
-dsh-plugin list --root /path/to/project
-dsh-plugin pack --root /path/to/project --plugins example --output .local/artifacts/release/plugins
-dsh-plugin paths --root /path/to/project
-dsh-plugin start --root /path/to/project --manifest /path/to/release/manifest.json --plugins example --dsh-cli-js /path/to/dsh/lib/bin.js
+pnpm exec dsh-plugin list --root /path/to/author-project --package .
+pnpm exec dsh-plugin pack --root /path/to/author-project --package . --output .local/artifacts/release
 ```
 
-源码任务需要 workspace 和锁文件。有清单的安装只读取发布清单、归档及显式运行配置，无需作者源码、Git 或 `plugins/`。归档中的身份、摘要、必需文件、Bundle、依赖和导出均在修改 profile 前验证。
+`--package` 仅支持 `.`，与 `--plugins` 互斥。list 不执行脚本、不要求锁文件；build/check 使用作者已安装的依赖；pack 冻结安装根锁文件，忽略父 workspace，依次执行一次 build 和 check 后打包。check 本身先执行 build。直接 pack 无需预先 build/check；不使用 prepare/prepack/postpack 重复构建。检查限于声明、交付与启动条件，不注入业务测试。
 
-归档名为 `<插件 ID>-<SHA-256>.tgz`，以清单中的 `archive` 字段为准。即使 npm 版本号相同，内容变化也会产生不同的安装路径，避免固定容器挂载路径下复用旧包。
+独立包产出清单 2，包含内容摘要命名的 tgz，不携带作者源码目录。额外核对归档时执行 `pnpm exec dsh-plugin verify-package --root <作者根> --package . --archive <tgz>`，不重新构建。
 
-部署、恢复和停服证据见[部署说明](../../deploy/README.md)。迁移使用 `migrate-data` 或 `migrate-artifacts`，默认只预览。模块 API 从包根导出部署函数，`/catalog` 导出发现与选集，`/packaging` 导出打包函数。
+## 部署现成归档
+
+完整部署、普通账号授权和更新步骤见随包发布的 [DELIVERY.md](DELIVERY.md)。组合命令：
+
+```sh
+pnpm exec dsh-plugin compose-release --root /path/to/site --output releases/site-v1 --manifest incoming/auth/manifest.json --manifest incoming/app/manifest.json
+```
+
+更新使用新输出目录并加 `--previous <现用清单>` 保留旧归档；新候选只来自 manifest 输入。完整站点部署显式 `--plugins all`，避免旧配置过滤新增应用。
+
+运行端无需作者源码、Git 或 plugins 目录。启动、健康检查与停止使用 DELIVERY 中的实例配置命令。
+
+清单 2 不支持 development；请求在修改实例前拒绝。内部清单 1 继续支持 release 和原有 development/link。未声明 healthPath 的插件显示 not-provided，不表示业务就绪。依赖安装仍可能需要网络。
+
+支持 configuration 的插件使用 `<DSH home>/plugins/<id>/plugin.json`，例如 `{"schemaVersion":1,"enabled":true,"accessMode":"standalone","config":{}}`。accessMode 仅适用于认证消费者；authenticated 需要合法站点 publicOrigin 和候选清单中唯一、已启用的认证提供者。使用 compose-release 显式组合业务应用与认证插件。认证模式修改需配置加受控重启。
+
+Docker 实例通过 `apply-compose --root <项目根> --config <deployment.json>` 应用配置，接受不可变本机镜像 ID 或 registry 摘要，`--resume` 恢复原操作。`migrate-data` / `migrate-artifacts` 默认仅预览。完整命令参数见 `pnpm exec dsh-plugin --help`；部署细节与示例见[仓库开发分支文档](https://github.com/PelyDeng/dsh-plugin/tree/main/doc)，该链接可能领先于已安装版本。
+
+## 内部批量开发与 API
+
+省略 `--package` 时保留根锁文件及 `plugins/*` 扫描，支持 `--plugins auth,example`、默认选集、all/none。内部 kit 工作区准备和批量操作保持原行为。
+
+包根导出部署函数，`/catalog` 导出 `readPlugin`、发现与选集，`/packaging` 导出打包函数。管理器只读取声明与归档，不导入业务源码。

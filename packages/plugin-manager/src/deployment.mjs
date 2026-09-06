@@ -7,7 +7,7 @@ import { rmSync } from 'node:fs';
 import { adoptLegacy, finalize, readState, synchronize } from './installation.mjs';
 import { randomUUID } from 'node:crypto';
 import { packagePlugins } from './package-plugins.mjs';
-import { loadRelease, selectRelease } from './release.mjs';
+import { loadRelease, selectRelease, assertReleaseMode } from './release.mjs';
 import { renderCompose } from './compose.mjs';
 import { prepareOfflineDependencies } from './offline.mjs';
 import { supervise } from './supervisor.mjs';
@@ -46,6 +46,7 @@ export async function main(args = process.argv.slice(2)) {
     deployment.manifest = join(output, 'manifest.json');
   }
   const candidates = selectRelease(loadRelease(resolve(deployment.root, deployment.manifest)), deployment.selection);
+  assertReleaseMode(candidates, deployment.mode);
   if (options.action === 'apply-compose') { console.log(JSON.stringify(applyCompose(deployment, candidates))); return; }
   if (options.action === 'render-compose') { console.log(JSON.stringify(renderCompose(deployment, candidates, resolve(deployment.root, options.output ?? join(deployment.artifacts, randomUUID()))))); return; }
   const settings = resolvePluginSettings(deployment, candidates);
