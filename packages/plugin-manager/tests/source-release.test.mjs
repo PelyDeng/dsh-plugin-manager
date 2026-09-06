@@ -24,6 +24,7 @@ function fixture(t, { fresh = false, fail } = {}) {
   put('package.json', { packageManager: 'pnpm@11.19.0' });
   put('packages/plugin-manager/package.json', { version: '0.2.3' });
   put('integrations/docker/manager-update.Dockerfile', 'FROM test');
+  put('deepseek-harness/.git', 'fixture git worktree');
   if (!fresh) {
     put('.local/deployment.json', { containerImage: base, manifest: '.local/artifacts/old/manifest.json', plugins: ['example'], publicOrigin: 'https://example.test', composeProject: 'site' });
     put('.local/artifacts/old/example.tgz', 'old archive');
@@ -37,7 +38,7 @@ function fixture(t, { fresh = false, fail } = {}) {
   const execute = (bin, args) => {
     calls.push([bin, ...args]);
     if (fail?.(bin, args)) throw new Error('simulated failure');
-    if (bin === 'git') return args[0] === 'ls-tree' ? `160000 commit ${hostCommit}\tdeepseek-harness` : args[0] === 'rev-parse' ? revision : '';
+    if (bin === 'git') return args[0] === '-C' ? args[2] === 'rev-parse' ? hostCommit : '' : args[0] === 'ls-tree' ? `160000 commit ${hostCommit}\tdeepseek-harness` : args[0] === 'rev-parse' ? revision : '';
     if (bin === 'pnpm' && args[0] === '--version') return '11.19.0';
     if (bin === 'pnpm' && args.includes('pack')) put(args.at(-1), 'archive');
     if (bin === process.execPath && args[0] === 'scripts/package-plugins.mjs') {
@@ -61,16 +62,38 @@ function fixture(t, { fresh = false, fail } = {}) {
   return { root, config, original, calls, execute, buildHost, result, put };
 }
 
-test('empty checkout initializes defaults and builds a host without a registry or previous artifacts', t => {
+test('a complete source checkout initializes defaults without fetching official source or using previous artifacts', t => {
   const f = fixture(t, { fresh: true });
   assert.equal(release({ root: f.root }, f.execute, f.buildHost).status, 'ready');
   assert.ok(f.calls.some(call => call[0] === 'build-host'));
-  assert.ok(f.calls.some(call => call.includes('submodule')));
+  assert.equal(f.calls.some(call => call[0] === 'git' && call.some(value => ['submodule', 'clone', 'fetch', 'pull'].includes(value))), false);
   assert.equal(f.calls.some(call => call.includes('push') || call.includes('stop') || call.includes('-czf')), false);
   assert.equal(JSON.parse(readFileSync(f.config)).containerImage, builtId);
   const site = JSON.parse(readFileSync(resolve(f.root, '.local/site.json')));
   assert.deepEqual(site.plugins, ['auth', 'example']);
   assert.equal('containerImage' in site, false);
+});
+
+test('missing source fails without downloading, while a different supplied commit is accepted', t => {
+  const f = fixture(t, { fresh: true });
+  rmSync(resolve(f.root, 'deepseek-harness/.git'));
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /checkout is incomplete/);
+  f.put('deepseek-harness/.git', 'fixture git worktree');
+  const wrongPin = (bin, args, options) => bin === 'git' && args[0] === '-C' && args[2] === 'rev-parse' ? 'c'.repeat(40) : f.execute(bin, args, options);
+  assert.equal(release({ root: f.root }, wrongPin, f.buildHost).status, 'ready');
+  assert.equal(f.calls.some(call => call.includes('submodule') || call.includes('stop')), false);
+});
+
+test('missing pnpm is prepared locally at the pinned version without changing the caller PATH', t => {
+  let unavailable = true;
+  const f = fixture(t, { fresh: true, fail: (bin, args) => {
+    if (unavailable && bin === 'pnpm' && args[0] === '--version') { unavailable = false; return true; }
+    return false;
+  } });
+  const originalPath = process.env.PATH;
+  release({ root: f.root }, f.execute, f.buildHost);
+  assert.ok(f.calls.some(call => call[0] === 'npm' && call.includes(resolve(f.root, '.local/tooling/pnpm')) && call.includes('pnpm@11.19.0')));
+  assert.equal(process.env.PATH, originalPath);
 });
 
 test('legacy update preserves site values, copies old references and backs up before applying', t => {
@@ -158,7 +181,7 @@ test('tampered previous archives are rejected before stopping', t => {
   assert.equal(f.calls.some(call => call.includes('stop')), false);
 });
 
-test('mutable or mismatched explicit bases are rejected', () => {
-  assert.throws(() => validateBase(base, info, 'c'.repeat(40)), /gitlink/);
-  assert.throws(() => validateBase('registry.test/dsh:latest', info, hostCommit), /immutable/);
+test('immutable supplied images are accepted without a predetermined host version', () => {
+  assert.equal(validateBase(base, { ...info, Config: {} }), baseId);
+  assert.throws(() => validateBase('registry.test/dsh:latest', info), /immutable/);
 });

@@ -18,10 +18,9 @@ function command(bin, args, options) {
   return result.stdout?.trim() ?? '';
 }
 
-/** Reject a supplied base belonging to another pinned host. */
-export function validateBase(reference, info, hostCommit) {
+/** Require an immutable Linux image for a recoverable container deployment. */
+export function validateBase(reference, info) {
   if (!immutableImage(reference)) throw new Error('Host image must be an immutable image ID or registry digest.');
-  if (info.Config?.Labels?.['org.opencontainers.image.revision'] !== hostCommit) throw new Error('Host image differs from the repository gitlink.');
   if (info.Os !== 'linux') throw new Error('Source deployment requires a Linux host image.');
   return info.Id;
 }
@@ -39,8 +38,8 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
   for (const [bin, args] of [['docker', ['info']], ['docker', ['compose', 'version']], ['npm', ['--version']], ['tar', ['--version']]]) capture(bin, args);
   if (git(['status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=all'])) throw new Error('Commit source changes before release; the checkout must be clean.');
   const revision = git(['rev-parse', 'HEAD']);
-  const hostCommit = /^160000 commit ([a-f0-9]{40})\tdeepseek-harness$/.exec(git(['ls-tree', 'HEAD', '--', 'deepseek-harness']))?.[1];
-  if (!hostCommit) throw new Error('The repository must pin a DSH gitlink.');
+  const host = resolve(root, 'deepseek-harness');
+  const hostCommit = existsSync(resolve(host, '.git')) ? git(['-C', host, 'rev-parse', 'HEAD']) : undefined;
   const { site, sitePath, runtimePath } = loadSite(root, config);
   const resolvedSite = resolveDeployment({ root, config: sitePath, 'data-root': site.dataRoot, home: site.home, workspace: site.workspace, artifacts: site.artifacts, profile: site.profile }, {});
   const pointer = resolve(root, '.local/source-release.json');
@@ -122,21 +121,18 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
         }
         if (baseReference) {
           base = inspect(baseReference);
-          if (site.hostImage) validateBase(baseReference, base, hostCommit);
-          else if (base.Config?.Labels?.['org.opencontainers.image.revision'] !== hostCommit) baseReference = null;
+          if (!site.hostImage && hostCommit && base.Config?.Labels?.['org.opencontainers.image.revision'] !== hostCommit) baseReference = null;
         }
       }
       let image;
       if (!baseReference) {
-        console.log('Preparing the repository-pinned DSH host from source.');
-        const host = resolve(root, 'deepseek-harness');
-        if (existsSync(resolve(host, '.git')) && git(['-C', host, 'status', '--porcelain'])) throw new Error('The host submodule has local changes; it will not be overwritten.');
-        run('git', ['submodule', 'update', '--init', '--recursive', '--depth', '1', '--', 'deepseek-harness']);
+        console.log('Building the DSH host from the supplied local source.');
+        if (!existsSync(resolve(host, '.git'))) throw new Error('The checkout is incomplete: supply deepseek-harness source before deployment. build.sh does not download official source.');
         const built = buildHost({ root, ...(site.hostImageConfig ? { config: site.hostImageConfig } : {}) });
         image = built.imageId;
         record.hostBuild = built.resultFile;
       } else {
-        validateBase(baseReference, base, hostCommit);
+        validateBase(baseReference, base);
         const baseTag = `dsh-local/source-base:${base.Id.slice(7)}`;
         run('docker', ['tag', base.Id, baseTag]);
         const imageContext = resolve(operation, 'image'); mkdirSync(imageContext);
@@ -147,7 +143,8 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
         if (inspect(baseTag).Id !== base.Id) throw new Error('The base image changed during construction.');
       }
       const info = inspect(image);
-      validateBase(info.Id, info, hostCommit);
+      validateBase(info.Id, info);
+      record.hostCommit = info.Config?.Labels?.['org.opencontainers.image.revision'];
       const manager = json(resolve(root, 'packages/plugin-manager/package.json')).version;
       if (capture('docker', ['run', '--rm', '--network', 'none', '--entrypoint', 'node', info.Id, '-p', 'require("/opt/plugin-manager/node_modules/@dsh-plugin/plugin-manager/package.json").version']) !== manager) throw new Error('Built manager version differs from source.');
       let reference = info.Id;

@@ -111,7 +111,7 @@ export function buildHostImage(options = {}, { execute = spawnSync, inspectSourc
   const previousPath = options.resume && resolve(root, options.resume);
   const previous = previousPath && readJson(previousPath);
   if (previous && (previous.schemaVersion !== 1 || previous.development || !previous.imageId || !previous.toolchainId || !previous.baseImageId)) throw new Error('Only a verified formal build can resume publishing.');
-  const host = previous ? null : inspectSource(root, { formal: !options.workingTree });
+  const host = previous ? null : inspectSource(root);
   const operationId = options.operationId ?? randomUUID();
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/u.test(operationId)) throw new Error('Invalid operation ID.');
   if (!options.artifacts && existsSync(resolve(root, 'deploy-artifacts'))) throw new Error('Select --artifacts explicitly for existing operation records.');

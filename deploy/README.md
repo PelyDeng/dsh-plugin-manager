@@ -17,9 +17,9 @@ bash deploy/build.sh
 
 首次自动从 Git 中的 `deploy/config/site.defaults.json` 生成 `.local/site.json`。已有站点会先导入 `.local/deployment.json` 的设置及实际数据路径。以后读取 `.local/site.json`；`.local/deployment.json`、发布清单、Compose 和操作记录均由脚本生成，不需要人工准备，也不提交 Git。完整配置、前置环境和恢复说明见[一键部署设计与使用](../doc/first-deployment.md)。
 
-脚本检查源码已提交且工作区干净，自动准备锁定的 pnpm，安装依赖，构建和检查管理器及 `plugins` 列出的全部插件，并打包发布清单。没有匹配宿主时自动下载仓库 gitlink 锁定的官方源码并构建；已有匹配镜像时复用宿主层，安装本次构建的 manager。默认直接使用本机不可变镜像 ID，仅设置 `publishImage` 时推送镜像仓库。各组件版本均来自源码，无需分别升级。
+脚本自动准备锁定的 pnpm，安装依赖，构建和检查管理器及 `plugins` 列出的全部插件，并打包发布清单。需要宿主镜像时直接使用仓库已提供的官方源码构建；源码不完整时提示缺失，不自动拉取，也不要求与预设锁定版本一致。宿主源码未变时复用已有宿主层，安装本次构建的 manager。默认使用本机不可变镜像 ID，仅设置 `publishImage` 时推送镜像仓库。构建记录使用已提交源码，无需分别选择组件版本。
 
-DSH 宿主必须与仓库 gitlink 一致，宿主版本变更会自动重新构建。站点插件启停、认证配置及持久数据继续沿用；修改数据路径或 profile 需要显式迁移。
+站点插件启停、认证配置及持久数据继续沿用；修改数据路径或 profile 需要显式迁移。
 
 新归档使用内容摘要命名。发布目录同时保留上一份清单引用的已校验归档，供 pnpm 在替换旧依赖引用时解析；部署目标仍只来自新清单，不重新启用已停用的插件。
 
@@ -35,7 +35,7 @@ node deploy/scripts/deployment.mjs paths
 node deploy/scripts/deployment.mjs start --plugins auth,example --manifest .local/artifacts/release/plugins/manifest.json --dsh-cli-js /path/to/dsh/lib/bin.js
 ```
 
-示例默认启用登录鉴权，启动前设置 `DSH_PUBLIC_ORIGIN` 为实际访问 origin。Windows 可使用 `deploy/scripts/start.ps1 -Mode release -Plugins auth,example -Manifest .local/artifacts/release/plugins/manifest.json -DshCliJs C:/path/to/bin.js`。源码开发使用 `-Mode development -HarnessRoot deepseek-harness`；需要先显式初始化并构建锁定的官方子模块。
+示例默认启用登录鉴权，启动前设置 `DSH_PUBLIC_ORIGIN` 为实际访问 origin。Windows 可使用 `deploy/scripts/start.ps1 -Mode release -Plugins auth,example -Manifest .local/artifacts/release/plugins/manifest.json -DshCliJs C:/path/to/bin.js`。源码开发使用 `-Mode development -HarnessRoot deepseek-harness`，直接使用仓库已有宿主源码；运行前需要准备其依赖和构建结果。
 
 ## 运行配置
 

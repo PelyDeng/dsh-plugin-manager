@@ -32,7 +32,7 @@ pnpm package --plugins auth,example --output .local/artifacts/release/plugins
 
 运行示例见[示例说明](plugins/dsh-example/README.md)。独立管理器接受明确的 `--root` 项目根，安装现成发布清单不需要作者源码。npm 包可在本地构建为 `.tgz`；这里的包名不表示已经发布到公共 registry。
 
-Linux 服务器首次部署执行 `bash deploy/build.sh`，自动生成本机配置、构建锁定宿主及插件并启动；以后 `git pull --ff-only` 后仍执行同一命令。默认无需镜像仓库，监听 `http://127.0.0.1:7902`。环境要求、域名配置和失败恢复见[一键部署](doc/first-deployment.md)。
+Linux 服务器取得完整仓库源码后，首次部署执行 `bash deploy/build.sh`，自动生成本机配置、构建宿主及插件并启动；以后更新仓库代码后仍执行同一命令。部署直接使用已有官方源码，不主动拉取或要求匹配预设版本。默认无需镜像仓库，监听 `http://127.0.0.1:7902`。环境要求和失败恢复见[一键部署](doc/first-deployment.md)。
 
 ## 贡献与许可
 
