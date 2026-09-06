@@ -1,0 +1,11 @@
+- id: hmr
+  disabled: false
+  config:
+    root:
+      - !!js process.env.CLOSEDOFF_PLUGIN_DEV_ROOT + '/dist'
+    ignored: ['**/node_modules', '**/.*']
+    debounce: 100
+
+- insert:
+    - id: closedoff-dev-hmr-observer
+      name: ../scripts/hmr-observer.mjs

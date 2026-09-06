@@ -1,0 +1,13 @@
+node_modules/
+dist/
+web/assets/
+.env
+.env.*
+*.tgz
+.tmp/
+*.log
+req_*.json
+res_*.json
+token.txt
+.credentials.yaml
+!vendor/*.tgz

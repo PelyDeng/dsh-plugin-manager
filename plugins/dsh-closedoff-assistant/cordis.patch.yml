@@ -1,0 +1,13 @@
+- insert:
+    - id: closedoff-assistant
+      name: dsh-closedoff-assistant
+      config:
+        accessMode: !!js process.env.DSH_ACCESS_MODE ?? 'standalone'
+        publicOrigin: !!js process.env.DSH_PUBLIC_ORIGIN ?? ''
+        reasoningEffort: !!js process.env.CLOSEDOFF_REASONING_EFFORT ?? 'low'
+        terrainUrl: !!js process.env.CLOSEDOFF_TERRAIN_URL ?? 'https://hyzhmodel.scshyzh.cn:50068/Models/ChongQing/Terrain/ChongQing_all'
+        tilesetUrl: !!js process.env.CLOSEDOFF_TILESET_URL ?? 'https://hyzhmodel.scshyzh.cn:50068/Models/ChongQing/Fuling/Models/B3DM/tileset.json'
+        tilesetHeight: !!js Number(process.env.CLOSEDOFF_TILESET_HEIGHT ?? 60)
+        trackDeviceRadiusMeters: !!js Number(process.env.CLOSEDOFF_TRACK_DEVICE_RADIUS_METERS ?? 100)
+        trackDwellMaxGapSeconds: !!js Number(process.env.CLOSEDOFF_TRACK_DWELL_MAX_GAP_SECONDS ?? 300)
+        routePrefix: /closedoff-qa
