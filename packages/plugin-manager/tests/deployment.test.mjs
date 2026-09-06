@@ -196,6 +196,7 @@ test('optional runtime files do not inherit stale process values and config revi
   const plugins = [{ id: 'alpha', runtimeConfig: { variable: 'ALPHA_CONFIG', required: false } }];
   const env = runtimeEnvironment(f.deployment, plugins);
   assert.equal(env.variables.ALPHA_CONFIG, undefined);
+  assert.throws(() => runtimeEnvironment(f.deployment, [{ id: 'alpha', runtimeConfig: { variable: 'ALPHA_CONFIG', required: true } }]), /alpha: 缺少运行配置/);
   f.deployment.instances.alpha = { configRevision: -1 };
   assert.throws(() => runtimeEnvironment(f.deployment, plugins), /configRevision/);
 });

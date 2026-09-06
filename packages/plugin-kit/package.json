@@ -49,7 +49,8 @@
   },
   "scripts": {
     "build": "tsdown",
-    "check": "tsc --noEmit && vitest run"
+    "check": "tsc --noEmit",
+    "test": "vitest run"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.2",

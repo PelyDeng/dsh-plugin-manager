@@ -2,8 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { delimiter, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { discoverPlugins, parseOptions, selectPlugins } from './plugins.mjs';
+import { parseOptions, sourcePlugins } from './plugins.mjs';
 
 /** Run pnpm without passing repository paths or metadata through a command shell. */
 export function runPnpm(args, cwd, options = {}) {
@@ -30,13 +29,14 @@ export function runPnpm(args, cwd, options = {}) {
 export function runPluginTask(root, plugin, action) {
   for (const task of action === 'check' ? ['build', 'check'] : [action]) {
     console.log(`[${plugin.id}] pnpm ${task}`);
-    runPnpm(['run', task], resolve(root, plugin.directory));
+    runPnpm([...(plugin.directory === undefined ? ['--ignore-workspace'] : []), 'run', task], resolve(root, plugin.directory ?? '.'));
   }
 }
 
 /** Build the local kit once when selected plugin sources declare it as a workspace dependency. */
 export function preparePluginDependencies(root, plugins) {
   const needsKit = plugins.some(plugin => {
+    if (plugin.directory === undefined) return false;
     const manifest = JSON.parse(readFileSync(resolve(root, plugin.directory, 'package.json'), 'utf8'));
     return manifest.devDependencies?.['@dsh-plugin/plugin-kit']?.startsWith('workspace:');
   });
@@ -46,11 +46,11 @@ export function preparePluginDependencies(root, plugins) {
 export function main(argv = process.argv.slice(2)) {
   const [action, ...args] = argv;
   if (!['build', 'check', 'clean', 'list'].includes(action)) throw new Error('任务必须是 build、check、clean 或 list。');
-  const options = parseOptions(args, ['root', 'plugins']);
+  const options = parseOptions(args, ['root', 'plugins', ...(action === 'clean' ? [] : ['package'])]);
   if (!options.root) throw new Error('必须显式指定 --root 项目根目录。');
   const root = resolve(options.root);
-  const plugins = discoverPlugins(root);
-  const selected = action === 'list' && options.plugins === undefined ? plugins : selectPlugins(plugins, options.plugins);
+  const requested = action === 'list' && options.plugins === undefined && options.package === undefined ? 'all' : options.plugins;
+  const selected = sourcePlugins(root, requested, options.package);
   if (['build', 'check'].includes(action)) preparePluginDependencies(root, selected);
   for (const plugin of selected) {
     if (action === 'list') console.log(`${plugin.id}\t${plugin.package}\tdefault=${plugin.defaultEnabled}`);

@@ -1,7 +1,6 @@
 /** Discover independently packaged plugins and validate their repository metadata. */
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { isPluginPath } from '@dsh-plugin/plugin-kit/route-path';
 import { validateConfiguration } from './plugin-settings.mjs';
 
@@ -43,6 +42,67 @@ function pluginFile(root, input, label, { required = false, standard = false } =
   return value;
 }
 
+/** Read one explicit source package without requiring a workspace or running its code. */
+export function readPlugin(root) {
+  requireValue(root && existsSync(root) && lstatSync(root).isDirectory() && !lstatSync(root).isSymbolicLink(), '插件根必须是存在的真实目录。');
+  const packageLabel = basename(root);
+  pluginFile(root, 'package.json', packageLabel, { required: true });
+  const manifest = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
+  requireValue(manifest && typeof manifest === 'object' && !Array.isArray(manifest), 'package.json 必须是对象。');
+  requireValue(Object.hasOwn(manifest, 'deepseekPlugin'), '显式插件缺少 deepseekPlugin。');
+  const meta = manifest.deepseekPlugin;
+  const label = `${packageLabel}/package.json#deepseekPlugin`;
+  requireValue(meta && meta.schemaVersion === 3, `${label}.schemaVersion 仅支持 3；旧 env 声明请迁移为 runtimeConfig，并从 files 移除用户配置。`);
+  object(meta, ['schemaVersion', 'id', 'defaultEnabled', 'runtimeConfig', 'configuration', 'healthPath', 'verifyFiles', 'development', 'displayName', 'entryPath', 'permissions'], label);
+  validateConfiguration(meta.configuration, label);
+  requireValue(typeof meta.id === 'string' && /^[a-z][a-z0-9-]*$/u.test(meta.id) && !['all', 'none', 'dsh-console'].includes(meta.id), `${label}.id 无效或为保留字。`);
+  requireValue(typeof manifest.name === 'string' && /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(manifest.name), `${packageLabel} 包名无效。`);
+  requireValue(typeof manifest.version === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(manifest.version), `${packageLabel} 必须声明版本。`);
+  requireValue(manifest.description === undefined || typeof manifest.description === 'string', `${packageLabel}.description 必须是文本。`);
+  requireValue(Array.isArray(manifest.files) && manifest.files.length > 0 && manifest.files.every(file => typeof file === 'string' && file.trim()), `${packageLabel} 必须声明 npm files。`);
+  requireValue(!manifest.files.some(privatePackagePath), `${packageLabel}.files 不得包含用户配置或部署数据。`);
+  for (const task of ['build', 'check']) requireValue(typeof manifest.scripts?.[task] === 'string' && manifest.scripts[task].trim(), `${packageLabel} 缺少 scripts.${task}。`);
+  for (const hook of ['prepare', 'prepack', 'postpack']) requireValue(!manifest.scripts?.[hook], `${packageLabel} 不得声明 ${hook}；构建由统一流水线执行。`);
+  pluginFile(root, 'README.md', packageLabel, { required: true });
+  const main = pluginFile(root, manifest.main, `${packageLabel}.main`, { standard: true });
+  const patch = pluginFile(root, manifest.dsh?.bundle?.patch, `${packageLabel}.dsh.bundle.patch`, { required: true, standard: true });
+  requireValue(meta.defaultEnabled === undefined || typeof meta.defaultEnabled === 'boolean', `${label}.defaultEnabled 必须是布尔值。`);
+  let runtimeConfig;
+  if (meta.runtimeConfig !== undefined) {
+    object(meta.runtimeConfig, ['variable', 'template', 'required'], `${label}.runtimeConfig`);
+    requireValue(meta.runtimeConfig.required === undefined || typeof meta.runtimeConfig.required === 'boolean', `${label}.runtimeConfig.required 必须为布尔值。`);
+    runtimeConfig = {
+      variable: variable(meta.runtimeConfig.variable, `${label}.runtimeConfig.variable`),
+      ...(meta.runtimeConfig.template === undefined ? {} : { template: pluginFile(root, meta.runtimeConfig.template, `${label}.runtimeConfig.template`, { required: true }) }),
+      required: meta.runtimeConfig.required ?? true,
+    };
+  }
+  let development;
+  if (meta.development !== undefined) {
+    object(meta.development, ['patch', 'rootVariable'], `${label}.development`);
+    development = {
+      patch: pluginFile(root, meta.development.patch, `${label}.development.patch`, { required: true }),
+      rootVariable: variable(meta.development.rootVariable, `${label}.development.rootVariable`),
+    };
+  }
+  requireValue(meta.healthPath === undefined || (typeof meta.healthPath === 'string' && /^\/[a-zA-Z0-9_~./-]*$/u.test(meta.healthPath)
+    && !meta.healthPath.startsWith('//') && !meta.healthPath.split('/').some(part => part === '.' || part === '..')), `${label}.healthPath 无效。`);
+  requireValue(meta.displayName === undefined || (typeof meta.displayName === 'string' && meta.displayName.trim().length > 0), `${label}.displayName 必须是非空文本。`);
+  requireValue(meta.entryPath === undefined || isPluginPath(meta.entryPath), `${label}.entryPath 必须是规范的非根插件路由。`);
+  const permissions = meta.permissions ?? [];
+  requireValue(Array.isArray(permissions) && permissions.every(permission => typeof permission === 'string'
+    && new RegExp(`^${meta.id}:[a-z][a-z0-9-]*$`, 'u').test(permission)) && new Set(permissions).size === permissions.length,
+  `${label}.permissions 必须是本插件 id 命名空间内不重复的权限列表。`);
+  requireValue(meta.verifyFiles === undefined || Array.isArray(meta.verifyFiles), `${label}.verifyFiles 必须是数组。`);
+  requireValue(!runtimeConfig || !development || runtimeConfig.variable !== development.rootVariable, '插件环境变量重复。');
+  const verifyFiles = [...new Set(['package.json', 'README.md', main, patch, ...(runtimeConfig?.template ? [runtimeConfig.template] : []),
+    ...(meta.verifyFiles ?? []).map(file => pluginFile(root, file, `${label}.verifyFiles`))])];
+  requireValue(!verifyFiles.some(privatePackagePath), `${packageLabel} 的公开资源不得指向用户配置或部署数据。`);
+  return { id: meta.id, package: manifest.name, version: manifest.version,
+    displayName: meta.displayName ?? manifest.name, description: manifest.description, entryPath: meta.entryPath, permissions,
+    defaultEnabled: meta.defaultEnabled ?? true, runtimeConfig, configuration: meta.configuration, development, healthPath: meta.healthPath, verifyFiles };
+}
+
 /** Return all declared plugins in stable id order; malformed declarations fail before work starts. */
 export function discoverPlugins(root) {
   if (!root) throw new Error('必须显式指定 --root 项目根目录。');
@@ -66,56 +126,7 @@ export function discoverPlugins(root) {
       continue;
     }
     requireValue(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(entry.name), `插件目录名称无效：${entry.name}。`);
-    const meta = manifest.deepseekPlugin;
-    const label = `${entry.name}/package.json#deepseekPlugin`;
-    requireValue(meta && meta.schemaVersion === 3, `${label}.schemaVersion 仅支持 3；旧 env 声明请迁移为 runtimeConfig，并从 files 移除用户配置。`);
-    object(meta, ['schemaVersion', 'id', 'defaultEnabled', 'runtimeConfig', 'configuration', 'healthPath', 'verifyFiles', 'development', 'displayName', 'entryPath', 'permissions'], label);
-    validateConfiguration(meta.configuration, label);
-    requireValue(typeof meta.id === 'string' && /^[a-z][a-z0-9-]*$/u.test(meta.id) && !['all', 'none', 'dsh-console'].includes(meta.id), `${label}.id 无效或为保留字。`);
-    requireValue(typeof manifest.name === 'string' && /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(manifest.name), `${entry.name} 包名无效。`);
-    requireValue(typeof manifest.version === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(manifest.version), `${entry.name} 必须声明版本。`);
-    requireValue(manifest.description === undefined || typeof manifest.description === 'string', `${entry.name}.description 必须是文本。`);
-    requireValue(Array.isArray(manifest.files) && manifest.files.length > 0 && manifest.files.every(file => typeof file === 'string' && file.trim()), `${entry.name} 必须声明 npm files。`);
-    requireValue(!manifest.files.some(privatePackagePath), `${entry.name}.files 不得包含用户配置或部署数据。`);
-    for (const task of ['build', 'check']) requireValue(typeof manifest.scripts?.[task] === 'string' && manifest.scripts[task].trim(), `${entry.name} 缺少 scripts.${task}。`);
-    for (const hook of ['prepare', 'prepack', 'postpack']) requireValue(!manifest.scripts?.[hook], `${entry.name} 不得声明 ${hook}；构建由统一流水线执行。`);
-    pluginFile(pluginRoot, 'README.md', entry.name, { required: true });
-    const main = pluginFile(pluginRoot, manifest.main, `${entry.name}.main`, { standard: true });
-    const patch = pluginFile(pluginRoot, manifest.dsh?.bundle?.patch, `${entry.name}.dsh.bundle.patch`, { required: true, standard: true });
-    requireValue(meta.defaultEnabled === undefined || typeof meta.defaultEnabled === 'boolean', `${label}.defaultEnabled 必须是布尔值。`);
-    let runtimeConfig;
-    if (meta.runtimeConfig !== undefined) {
-      object(meta.runtimeConfig, ['variable', 'template', 'required'], `${label}.runtimeConfig`);
-      requireValue(meta.runtimeConfig.required === undefined || typeof meta.runtimeConfig.required === 'boolean', `${label}.runtimeConfig.required 必须为布尔值。`);
-      runtimeConfig = {
-        variable: variable(meta.runtimeConfig.variable, `${label}.runtimeConfig.variable`),
-        ...(meta.runtimeConfig.template === undefined ? {} : { template: pluginFile(pluginRoot, meta.runtimeConfig.template, `${label}.runtimeConfig.template`, { required: true }) }),
-        required: meta.runtimeConfig.required ?? true,
-      };
-    }
-    let development;
-    if (meta.development !== undefined) {
-      object(meta.development, ['patch', 'rootVariable'], `${label}.development`);
-      development = {
-        patch: pluginFile(pluginRoot, meta.development.patch, `${label}.development.patch`, { required: true }),
-        rootVariable: variable(meta.development.rootVariable, `${label}.development.rootVariable`),
-      };
-    }
-    requireValue(meta.healthPath === undefined || (typeof meta.healthPath === 'string' && /^\/[a-zA-Z0-9_~./-]*$/u.test(meta.healthPath)
-      && !meta.healthPath.startsWith('//') && !meta.healthPath.split('/').some(part => part === '.' || part === '..')), `${label}.healthPath 无效。`);
-    requireValue(meta.displayName === undefined || (typeof meta.displayName === 'string' && meta.displayName.trim().length > 0), `${label}.displayName 必须是非空文本。`);
-    requireValue(meta.entryPath === undefined || isPluginPath(meta.entryPath), `${label}.entryPath 必须是规范的非根插件路由。`);
-    const permissions = meta.permissions ?? [];
-    requireValue(Array.isArray(permissions) && permissions.every(permission => typeof permission === 'string'
-      && new RegExp(`^${meta.id}:[a-z][a-z0-9-]*$`, 'u').test(permission)) && new Set(permissions).size === permissions.length,
-    `${label}.permissions 必须是本插件 id 命名空间内不重复的权限列表。`);
-    requireValue(meta.verifyFiles === undefined || Array.isArray(meta.verifyFiles), `${label}.verifyFiles 必须是数组。`);
-    const verifyFiles = [...new Set(['package.json', 'README.md', main, patch, ...(runtimeConfig?.template ? [runtimeConfig.template] : []),
-      ...(meta.verifyFiles ?? []).map(file => pluginFile(pluginRoot, file, `${label}.verifyFiles`))])];
-    requireValue(!verifyFiles.some(privatePackagePath), `${entry.name} 的公开资源不得指向用户配置或部署数据。`);
-    plugins.push({ id: meta.id, directory: `plugins/${entry.name}`, package: manifest.name, version: manifest.version,
-      displayName: meta.displayName ?? manifest.name, description: manifest.description, entryPath: meta.entryPath, permissions,
-      defaultEnabled: meta.defaultEnabled ?? true, runtimeConfig, configuration: meta.configuration, development, healthPath: meta.healthPath, verifyFiles });
+    plugins.push({ ...readPlugin(pluginRoot), directory: `plugins/${entry.name}` });
   }
   for (const field of ['id', 'package']) {
     const seen = new Set();
@@ -152,6 +163,14 @@ export function selectPlugins(plugins, requested) {
     });
   }
   return selected;
+}
+
+/** Select either an explicit single package or the existing workspace inventory. */
+export function sourcePlugins(root, requested, packageDirectory) {
+  if (!root) throw new Error('必须显式指定 --root 项目根目录。');
+  if (packageDirectory === undefined) return selectPlugins(discoverPlugins(root), requested);
+  requireValue(packageDirectory === '.' && requested === undefined, '--package 仅支持 .，且不能与 --plugins 同用。');
+  return [readPlugin(root)];
 }
 
 /** Parse repository options once for every CLI consumer. */

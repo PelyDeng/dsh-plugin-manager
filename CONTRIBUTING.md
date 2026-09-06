@@ -1,6 +1,6 @@
 # 贡献
 
-先按 [README](README.md) 安装依赖、构建并运行检查。新增插件可复制 `plugins/dsh-example`，修改包名、插件 ID、Bundle、路由、权限及测试；通过 `plugins/*` 自动发现，不修改中央名单。
+先按 [README](README.md) 安装依赖、构建并运行检查。`pnpm check` 执行必要的编译、类型和语法检查，行为回归使用 `pnpm test`；CI 将两者分开运行。新增插件可复制 `plugins/dsh-example`，修改包名、插件 ID、Bundle、路由、权限及测试；通过 `plugins/*` 自动发现，不修改中央名单。独立作者参见[接入指南](doc/plugin-development.md)。
 
 公共代码按包名引用。kit 和 manager 独立版本管理；插件的运行与类型产物不得包含工作区绝对路径、`workspace:`、`file:` 或 `link:` 运行依赖。修改公共包时检查实际消费者，更新相应 README。
 

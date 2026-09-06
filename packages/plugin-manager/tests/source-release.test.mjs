@@ -65,6 +65,11 @@ function fixture(t, { fresh = false, fail } = {}) {
 test('a complete source checkout initializes defaults without fetching official source or using previous artifacts', t => {
   const f = fixture(t, { fresh: true });
   assert.equal(release({ root: f.root }, f.execute, f.buildHost).status, 'ready');
+  for (const call of f.calls.filter(call => call[0] === 'pnpm' && call[1] === '--filter' && ['build', 'check', 'test'].includes(call[3]))) {
+    const name = call[2].split('/').at(-1);
+    const manifest = JSON.parse(readFileSync(new URL(`../../${name}/package.json`, import.meta.url)));
+    assert.ok(manifest.scripts[call[3]], `${call[2]} does not declare ${call[3]}`);
+  }
   assert.ok(f.calls.some(call => call[0] === 'build-host'));
   assert.equal(f.calls.some(call => call[0] === 'git' && call.some(value => ['submodule', 'clone', 'fetch', 'pull'].includes(value))), false);
   assert.equal(f.calls.some(call => call.includes('push') || call.includes('stop') || call.includes('-czf')), false);
@@ -139,7 +144,7 @@ test('changing the established data location is rejected before stopping the ser
 });
 
 test('build failure leaves service and deployment inputs unchanged', t => {
-  const f = fixture(t, { fail: (bin, args) => bin === 'pnpm' && args.includes('check') });
+  const f = fixture(t, { fail: (bin, args) => bin === 'pnpm' && args.includes('build') });
   assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
   assert.equal(readFileSync(f.config, 'utf8'), f.original);
   assert.equal(f.calls.some(call => call.includes('stop')), false);

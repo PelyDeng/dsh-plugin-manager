@@ -1,6 +1,6 @@
 # @dsh-plugin/plugin-kit
 
-可选的 DSH 插件接入库，通过宿主 Cordis 事件通信，不启动服务。源码使用包名导入；auth 和 example 在构建时将 kit 内嵌到独立归档。
+可选的 DSH 插件接入库，通过宿主 Cordis 事件通信，不启动服务。消费插件在构建时将 kit 内嵌到独立归档。独立作者可将维护者提供的版本化 tgz 安装为开发依赖，例如 `pnpm add --ignore-workspace --save-dev /path/to/plugin-kit-0.1.0.tgz`，再通过构建器内嵌。包名不表示版本已发布到公共 registry。
 
 | 导出 | 用途 |
 | --- | --- |

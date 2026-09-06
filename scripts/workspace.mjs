@@ -7,8 +7,8 @@ const [action, ...args] = process.argv.slice(2);
 try {
   if (!['build', 'check'].includes(action)) throw new Error('任务必须是 build 或 check。');
   if (!args.includes('--plugins')) args.push('--plugins', 'all');
-  if (action === 'build') runPnpm(['--filter', '@dsh-plugin/plugin-manager', 'build'], root);
-  else for (const name of ['plugin-kit', 'plugin-manager']) runPnpm(['--filter', `@dsh-plugin/${name}`, 'check'], root);
+  runPnpm(['--filter', '@dsh-plugin/plugin-manager', 'build'], root);
+  if (action === 'check') runPnpm(['--filter', '@dsh-plugin/plugin-kit', 'check'], root);
   await main([action, ...args, '--root', root]);
 } catch (error) {
   console.error(error.message);

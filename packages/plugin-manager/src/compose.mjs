@@ -3,8 +3,10 @@ import { runtimeEnvironment } from './config.mjs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { atomicJSON, canonical, fail, within } from './state.mjs';
 import { resolvePluginSettings } from './plugin-settings.mjs';
+import { assertReleaseMode } from './release.mjs';
 /** Produce private Compose overrides with runtime-only configuration mounts. */
 export function renderCompose(deployment, release, outputDirectory) {
+  assertReleaseMode(release, deployment.mode);
   mkdirSync(outputDirectory, { recursive: true });
   const settings = resolvePluginSettings(deployment, release);
   const runtime = runtimeEnvironment(deployment, settings.release.plugins);

@@ -61,7 +61,7 @@
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && node --check web/app.js && node --check web/stream.js && pnpm test",
+    "check": "pnpm typecheck && node --check web/app.js && node --check web/stream.js",
     "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
   },
   "dependencies": {

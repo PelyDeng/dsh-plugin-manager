@@ -101,9 +101,12 @@ export function runtimeEnvironment(deployment, plugins) {
     configurations[plugin.id] = { configRevision: revision, ...(file ? { file } : {}) };
     if (plugin.development?.rootVariable) {
       if (!environmentName(plugin.development.rootVariable) || Object.hasOwn(variables, plugin.development.rootVariable)) fail(`${plugin.id}: 开发变量无效或重复。`);
-      const source = canonical(resolve(deployment.root, plugin.directory));
-      if (!within(join(deployment.root, 'plugins'), source)) fail('开发插件源码目录越界。');
-      variables[plugin.development.rootVariable] = deployment.mode === 'development' ? source : undefined;
+      variables[plugin.development.rootVariable] = undefined;
+      if (deployment.mode === 'development') {
+        const source = canonical(resolve(deployment.root, plugin.directory));
+        if (!within(join(deployment.root, 'plugins'), source)) fail('开发插件源码目录越界。');
+        variables[plugin.development.rootVariable] = source;
+      }
     }
   }
   return { variables, configurations };

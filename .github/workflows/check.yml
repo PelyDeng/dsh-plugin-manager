@@ -21,6 +21,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm check
+      - run: pnpm -r --workspace-concurrency=1 --if-present test
       - run: node scripts/check-artifacts.mjs
       - run: node scripts/check-repository.mjs
       - if: runner.os == 'Windows'

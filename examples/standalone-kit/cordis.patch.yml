@@ -1,0 +1,5 @@
+- insert:
+    - id: independent-access-example
+      name: dsh-independent-access-example
+      config:
+        accessMode: authenticated

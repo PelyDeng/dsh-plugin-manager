@@ -1,0 +1,20 @@
+{
+  "name": "dsh-independent-access-example",
+  "version": "0.1.0",
+  "description": "Independent DSH endpoint using optional shared access checks",
+  "type": "module",
+  "license": "Apache-2.0",
+  "packageManager": "pnpm@11.19.0",
+  "engines": { "node": "^22.19.0 || >=24" },
+  "main": "./dist/index.mjs",
+  "exports": "./dist/index.mjs",
+  "files": ["dist", "cordis.patch.yml", "README.md"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "deepseekPlugin": {
+    "schemaVersion": 3, "id": "independent-access-example",
+    "configuration": { "entryId": "independent-access-example", "auth": "consumer" },
+    "permissions": ["independent-access-example:access"]
+  },
+  "scripts": { "build": "tsdown", "check": "node --check dist/index.mjs" },
+  "devDependencies": { "tsdown": "0.22.14" }
+}

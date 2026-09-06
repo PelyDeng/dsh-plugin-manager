@@ -48,7 +48,8 @@ export function resolvePluginSettings(deployment, candidates) {
   }
   const providers = plugins.filter(plugin => plugin.configuration?.auth === 'provider');
   if (providers.length > 1) fail('只能启用一个认证提供者。');
-  if (entries.some(entry => entry.config.accessMode === 'authenticated') && providers.length !== 1) fail('要求认证的插件必须同时启用一个认证提供者；拒绝自动降级匿名访问。');
+  const consumers = entries.filter(entry => entry.config.accessMode === 'authenticated');
+  if (consumers.length && providers.length !== 1) fail(`${consumers.map(entry => entry.id).join(', ')}: authenticated 模式必须同时启用一个认证提供者。`);
   return { release: { ...candidates, plugins }, entries, files };
 }
 

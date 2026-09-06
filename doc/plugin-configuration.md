@@ -26,7 +26,7 @@
 
 ## 必填与可选字段
 
-构建只检查插件声明、源码和归档，不读取运行实例的 `plugin.json`、业务凭据或站点 origin。可选字段省略不会导致构建失败；已经填写但类型、路径或取值错误仍会报错。
+构建与检查入口复用同一流水线，调用各插件声明的脚本，不增加业务插件名单或业务专属检查。管理器检查交付和启动必需的插件声明、源码和归档，不读取运行实例的 `plugin.json`、业务凭据或站点 origin。可选字段省略不会导致构建失败；已经填写但类型、路径或取值错误仍会报错。
 
 | 字段 | 是否必填及省略行为 |
 | --- | --- |
@@ -42,7 +42,7 @@
 | `development` | 可整体省略；声明时开发 patch 和变量映射仍须有效 |
 | 运行配置的 `enabled`、`accessMode`、`config` | 可省略，分别默认 true、消费者 authenticated、空对象；这些字段不参与构建 |
 
-用于确定包身份、执行构建和加载 Bundle 的 `name`、`version`、`deepseekPlugin.schemaVersion`、`deepseekPlugin.id`、`main`、`dsh.bundle.patch`、`files`、README、`scripts.build` 和 `scripts.check` 仍是仓库必需输入。声明的文件必须真实存在；构建产物可由 build 生成。
+用于确定包身份、执行构建和加载 Bundle 的 `name`、`version`、`deepseekPlugin.schemaVersion`、`deepseekPlugin.id`、`main`、`dsh.bundle.patch`、`files`、README、`scripts.build` 和 `scripts.check` 是内部与独立包共用的必需输入。声明的文件必须真实存在；构建产物可由 build 生成。
 
 要求认证的实例仍需在部署时提供合法站点 origin 和认证提供者；声明为必需的业务配置也在部署时检查。运行前置条件不会被可选构建字段豁免。
 
