@@ -17,14 +17,15 @@ Bash 实际构建入口为 `bash deploy/scripts/build-host-image.sh`，Node 入�
 
 Compose 文件为 `integrations/docker/docker-compose.yml`，需要设置 `DSH_HOST_IMAGE` 为验证过的镜像引用、`DSH_PLUGIN_RELEASE_DIR` 为发布目录绝对路径。默认将宿主 `.local/data` 挂载为容器 `/data`。外部 home、配置文件、用户 patch 和离线来源可用管理器的 `render-compose` 生成覆盖文件，运行配置仅在运行时挂载。
 
-以下 Bash 示例仅安装独立模式 example。镜像引用使用已完成操作记录中的 `image`（本机构建）或 `reference`（已发布摘要），模型凭据仍需在对应 home 配置。
+以下 Bash 示例安装 auth 与 example。先按[部署说明](../../deploy/README.md)准备 `.local/deployment.json`：选择 `auth,example`，并通过用户 patch 为二者设置实际 `publicOrigin`、为 example 设置 `accessMode: authenticated`。镜像引用使用已完成操作记录中的 `image`（本机构建）或 `reference`（已发布摘要），模型凭据仍需在对应 home 配置。
 
 ```sh
-pnpm package --plugins example --output .local/artifacts/example-release/plugins
+pnpm package --plugins auth,example --output .local/artifacts/example-release/plugins
 mkdir -p .local/data
 export DSH_HOST_IMAGE='<已验证的镜像引用>'
 export DSH_PLUGIN_RELEASE_DIR="$(pwd)/.local/artifacts/example-release/plugins"
-docker compose -f integrations/docker/docker-compose.yml up -d
+node deploy/scripts/deployment.mjs render-compose --manifest .local/artifacts/example-release/plugins/manifest.json --config .local/deployment.json --output .local/artifacts/example-compose
+docker compose -f integrations/docker/docker-compose.yml -f .local/artifacts/example-compose/compose.override.json up -d
 ```
 
 包含 auth 的发布清单需要额外配置 `publicOrigin`，不能直接套用独立模式示例。使用官方 patch 为 auth 与业务插件配置固定 origin 和认证模式，并通过部署配置的 `patches` 加载；`render-compose --manifest <清单> --config <配置> --output .local/artifacts/compose` 生成覆盖文件后，将其以第二个 `-f` 传给 Compose。

@@ -5,10 +5,10 @@
 ```sh
 pnpm package --plugins auth,example --output .local/artifacts/release/plugins
 node deploy/scripts/deployment.mjs paths
-node deploy/scripts/deployment.mjs start --plugins example --manifest .local/artifacts/release/plugins/manifest.json --dsh-cli-js /path/to/dsh/lib/bin.js
+node deploy/scripts/deployment.mjs start --plugins auth,example --manifest .local/artifacts/release/plugins/manifest.json --dsh-cli-js /path/to/dsh/lib/bin.js
 ```
 
-Windows 可使用 `deploy/scripts/start.ps1 -Mode release -Plugins example -Manifest .local/artifacts/release/plugins/manifest.json -DshCliJs C:/path/to/bin.js`。源码开发使用 `-Mode development -HarnessRoot deepseek-harness`；需要先显式初始化并构建锁定的官方子模块。
+示例默认启用登录鉴权，启动前设置 `DSH_PUBLIC_ORIGIN` 为实际访问 origin。Windows 可使用 `deploy/scripts/start.ps1 -Mode release -Plugins auth,example -Manifest .local/artifacts/release/plugins/manifest.json -DshCliJs C:/path/to/bin.js`。源码开发使用 `-Mode development -HarnessRoot deepseek-harness`；需要先显式初始化并构建锁定的官方子模块。
 
 ## 运行配置
 
@@ -29,7 +29,7 @@ Windows 可使用 `deploy/scripts/start.ps1 -Mode release -Plugins example -Mani
 ```json
 {
   "profile": "web",
-  "plugins": ["example"],
+  "plugins": ["auth", "example"],
   "home": ".local/data/dsh-home",
   "manifest": ".local/artifacts/release/plugins/manifest.json",
   "dshCliJs": "/path/to/dsh/lib/bin.js",

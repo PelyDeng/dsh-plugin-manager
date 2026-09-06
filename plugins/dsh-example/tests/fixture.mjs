@@ -2,7 +2,7 @@
 import { createServer } from 'node:http'
 import { apply, Config } from '../dist/index.mjs'
 
-export async function fixture({ mode = 'authenticated', autoReply = false, logs = new Map(), beforeCreate = async () => {}, beforeDispose = async () => {}, ...overrides } = {}) {
+export async function fixture({ mode, autoReply = false, logs = new Map(), beforeCreate = async () => {}, beforeDispose = async () => {}, ...overrides } = {}) {
   const routes = new Map(), listeners = new Map(), effects = [], handles = [], timers = new Set()
   const revoked = new Set()
   let provider = true
