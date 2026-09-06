@@ -92,7 +92,7 @@ test('default configuration does not read a legacy credential file; literal valu
 });
 
 test('only explicit absence permits fallback, including mixed error responses', () => {
-  for (const value of ['manifest unknown', 'name unknown', 'manifest for x not found']) assert.equal(isMissingImage(value), true);
+  for (const value of ['manifest unknown', 'name unknown', 'manifest for x not found', 'unknown: artifact project/image:tag not found']) assert.equal(isMissingImage(value), true);
   for (const value of ['unauthorized', 'manifest unknown: unauthorized', 'x509: certificate error', 'no matching manifest for linux/amd64', '503 Service Unavailable', 'credential helper not found', 'host not found']) assert.equal(isMissingImage(value), false);
 });
 
