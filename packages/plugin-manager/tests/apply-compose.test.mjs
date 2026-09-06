@@ -55,6 +55,7 @@ test('local image startup uses the configured health port and forwards recovery 
 
 test('a stopped matching container permits preserving and clearing only its stale process records', t => {
   const f = fixture(t);
+  applyCompose(f.deployment, f.release, () => {});
   const records = {
     [LOCK]: { host: 'old-container', pid: 7 },
     [OWNER]: { host: 'old-container', home: '/data/dsh-home', profile: 'web', pid: 7, token: 'kept-private' },
@@ -75,6 +76,7 @@ test('a stopped matching container permits preserving and clearing only its stal
 
 for (const problem of ['running', 'hostname', 'mount', 'legacy', 'no-container', 'inspect-error']) test(`recovery retains process records when container proof fails: ${problem}`, t => {
   const f = fixture(t);
+  applyCompose(f.deployment, f.release, () => {});
   const owner = { ...(problem === 'legacy' ? {} : { host: 'old-container' }), home: '/data/dsh-home', profile: 'web' };
   atomicJSON(join(f.deployment.profileRoot, OWNER), owner);
   let started = false;
@@ -86,7 +88,7 @@ for (const problem of ['running', 'hostname', 'mount', 'legacy', 'no-container',
       return JSON.stringify([{ State: { Running: problem === 'running', Restarting: false }, Config: { Hostname: problem === 'hostname' ? 'other' : 'old-container', Env: ['DSH_HOME=/data/dsh-home', 'DSH_PROFILE=web'] }, Mounts: [{ Type: 'bind', Source: problem === 'mount' ? join(f.root, 'other') : f.deployment.dataRoot, Destination: '/data' }] }]);
     }
     return '';
-  }));
+  }), /旧容器|残留运行记录|inspect failed/);
   assert.equal(started, false);
   assert.deepEqual(JSON.parse(readFileSync(join(f.deployment.profileRoot, OWNER))), owner);
 });
