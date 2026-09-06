@@ -1,8 +1,10 @@
 # 私有插件仓库
 
-本仓库的 `origin` 为 `git@gitee.com:dengpeilin/dsh-plugin.git`。公共框架来自 `upstream`：`git@github.com:PelyDeng/dsh-plugin.git`。两者通过 Git 合并更新，未配置持续镜像。
+本仓库的 `origin` 为 `git@gitee.com:dengpeilin/dsh-plugin.git`。公共框架来自 `upstream`：`https://github.com/PelyDeng/dsh-plugin.git`（已有 SSH 地址也可沿用）。两者通过 Git 合并更新；不要在 Gitee 使用覆盖式同步 GitHub，否则会替换包含私有插件的主分支历史。
 
 公共框架改动在 `dsh-plugin` 工作区完成、验证并推送 GitHub，然后在本仓库执行 `git fetch upstream` 和 `git merge upstream/main`。客户插件只在本仓库开发并推送 Gitee；`upstream` 的推送地址禁用。
+
+私有库的 `bash deploy/build.sh` 在构建前自动获取并合并 origin/main 和 upstream/main，保留私有提交；恢复部署时跳过同步。流程和失败处理见[部署说明](deploy/README.md)。脚本不自动推送；合并产生的本地提交可用 `git push origin main` 共享到 Gitee。同步专项测试：`node --test deploy/tests/sync-upstream.test.mjs`。
 
 `plugins/dsh-closedoff-assistant` 是私有定制插件，其 `vendor/` 包含构建播放器所需的版本化归档。该目录不受根 Apache-2.0 许可授权，适用插件 [LICENSE](plugins/dsh-closedoff-assistant/LICENSE)。第三方资源保持各自许可。不得将该目录或包含它的提交推送公共仓库。
 
