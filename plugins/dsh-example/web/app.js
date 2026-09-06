@@ -25,7 +25,7 @@ function scroll() {
   const area = $('scroll-area')
   if (area.scrollHeight - area.scrollTop - area.clientHeight < 180) area.scrollTop = area.scrollHeight
 }
-function message(role, text) {
+function message(role, text, reasoning = '') {
   const article = document.createElement('article')
   article.className = `message ${role}`
   const label = document.createElement('div')
@@ -34,7 +34,16 @@ function message(role, text) {
   const content = document.createElement('div')
   content.className = 'text'
   content.textContent = text
-  article.append(label, content)
+  article.append(label)
+  const thinking = document.createElement('details')
+  thinking.className = 'thinking'; thinking.hidden = !reasoning
+  const summary = document.createElement('summary')
+  summary.textContent = '思考过程'
+  const reasoningText = document.createElement('div')
+  reasoningText.className = 'reasoning-text'; reasoningText.textContent = reasoning
+  thinking.append(summary, reasoningText)
+  if (role === 'assistant') article.append(thinking)
+  article.append(content)
   if (role === 'assistant') {
     const copy = document.createElement('button')
     copy.type = 'button'; copy.className = 'copy'; copy.textContent = '复制回答'
@@ -45,7 +54,7 @@ function message(role, text) {
     article.append(copy)
   }
   $('messages').append(article)
-  return { article, content }
+  return { article, content, thinking, summary, reasoningText }
 }
 async function send(text) {
   if (controller || !text.trim()) return
@@ -54,6 +63,7 @@ async function send(text) {
   message('user', text)
   const answer = message('assistant', '')
   answer.article.classList.add('busy')
+  answer.thinking.open = true
   $('prompt').value = ''
   const current = new AbortController()
   controller = current
@@ -71,8 +81,19 @@ async function send(text) {
     }
     await readEvents(response, event => {
       if (event.type === 'session') conversationId = event.conversationId
-      if (event.type === 'delta') { answer.content.textContent += event.text; setStatus('正在回答…'); scroll() }
-      if (event.type === 'answer') { answer.content.textContent = event.text; scroll() }
+      if (event.type === 'reasoning' && event.text) {
+        answer.thinking.hidden = false; answer.reasoningText.textContent += event.text
+        answer.summary.textContent = '正在思考…'; setStatus('正在思考…'); scroll()
+      }
+      if (event.type === 'delta') {
+        answer.content.textContent += event.text; answer.summary.textContent = '思考过程'
+        setStatus('正在回答…'); scroll()
+      }
+      if (event.type === 'answer') {
+        answer.content.textContent = event.text
+        if (event.reasoning) { answer.reasoningText.textContent = event.reasoning; answer.thinking.hidden = false }
+        answer.summary.textContent = '思考过程'; scroll()
+      }
       if (event.type === 'error') { failed = true; notice(event.message) }
       if (event.type === 'done') {
         failed ||= event.reason !== 'completed'
@@ -84,6 +105,7 @@ async function send(text) {
     else { notice(error.message); setStatus('回答未完成'); $('prompt').value = text }
   } finally {
     answer.article.classList.remove('busy')
+    answer.summary.textContent = '思考过程'
     controller = undefined
     busy(false)
     if (resetAfterStop) { resetAfterStop = false; reset() }
@@ -138,7 +160,7 @@ async function openHistory(id) {
     conversationId = data.conversationId
     if (narrow.matches) historyPanel.open = false
     $('messages').replaceChildren(); $('welcome').hidden = true
-    for (const item of data.messages) message(item.role, item.text)
+    for (const item of data.messages) message(item.role, item.text, item.reasoning)
     notice(data.busy ? '此会话仍在另一页面回答，请等待结束后刷新历史。' : '')
     setStatus('历史已恢复 · 可以继续追问')
     $('scroll-area').scrollTop = $('scroll-area').scrollHeight

@@ -215,22 +215,25 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
       response.flushHeaders()
       send({ type: 'session', conversationId: id })
+      const sendChunk = (chunk: StreamChunk) => {
+        if (chunk.type === 'text-delta') send({ type: 'delta', text: chunk.text })
+        if (chunk.type === 'reasoning-delta') send({ type: 'reasoning', text: chunk.text })
+      }
       // This runtime event is absent from the published 0.1.2 development types.
       const onLive = ctx.on.bind(ctx) as (name: 'agent/assistant-stream', listener: (payload: {
         agent: AgentHandle['agent']
         frame: { type: 'start' | 'end' } | { type: 'chunk'; chunk: StreamChunk }
       }) => void) => () => void
       unsubscribeLive = onLive('agent/assistant-stream', ({ agent, frame }) => {
-        if (agent === current.handle?.agent && frame.type === 'chunk' && frame.chunk.type === 'text-delta') {
-          send({ type: 'delta', text: frame.chunk.text })
-        }
+        if (agent === current.handle?.agent && frame.type === 'chunk') sendChunk(frame.chunk)
       })
       unsubscribe = ctx.on('session/event', (session, event: SessionEvent) => {
         if (String(session.id) !== id || ended) return
-        if (event.type === 'assistant/chunk' && event.data.chunk.type === 'text-delta') send({ type: 'delta', text: event.data.chunk.text })
+        if (event.type === 'assistant/chunk') sendChunk(event.data.chunk)
         if (event.type === 'assistant/message') {
           const text = event.data.message.content.filter(block => block.type === 'text').map(block => block.text).join('')
-          send({ type: 'answer', text })
+          const reasoning = event.data.message.content.filter(block => block.type === 'reasoning').map(block => block.text).join('')
+          send({ type: 'answer', text, reasoning })
         }
         if (event.type === 'turn/end') {
           if (event.data.reason.kind === 'error') send({ type: 'error', message: '模型请求失败，请检查 DSH 模型配置后重试。' })
