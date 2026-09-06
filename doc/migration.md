@@ -31,3 +31,11 @@ node deploy/scripts/migrate-artifacts.mjs --source deploy-artifacts --target .lo
 复制成功后，显式更新部署配置和挂载路径，再验证原账号、历史、工作文件与插件配置。tgz、清单和历史操作记录保持原字节；旧记录中的绝对路径不批量替换。涉及旧路径或镜像 ID 的 resume/recover 继续使用原目录和匹配环境，目录副本不自动成为可恢复操作。
 
 目标开始写入后，回退需要再次停写、保存新增数据并确认处理方式。不能直接切回旧副本丢弃新会话。原源和备份由维护者明确清理；普通 clean 保留所有运行数据和恢复产物。
+
+## 已安装的容器 profile
+
+完整安装目录包含 pnpm 定位文件，不能直接交给上述通用复制工具。由容器管理者停写并完整备份、复制和校验后，先核验 Node 版本、ABI、平台、libc 与挂载路径；有旧受管标记而无新版状态时，保留已安装文件，通过 `adopt --plugins <明确的 ID 列表>` 接管，再同步新归档。
+
+pnpm 报 `ERR_PNPM_UNEXPECTED_STORE` 时，`--rebuild` 不会迁移既有 store 记录。停止目标副本的宿主，使用官方 CLI 的 `plugin --profile <profile> install --offline --store-dir <目标 store> --cache-dir <目标 cache> --config.force=true` 重装安装目录；全部依赖必须已在离线闭包中，业务数据和原备份保持完整。随后按原清单恢复管理器 pending，不能删除状态来绕过恢复检查。
+
+容器在同步期间被终止可能留下锁。主机网络容器可能共享 hostname，但 PID 属于不同命名空间；不能据此推断原进程已退出。先核验原容器状态与所有重叠的可写数据挂载，保存停写证据及原锁，再处理遗留锁。改名备份后，旧容器仍记录原 bind 路径，回退必须恢复该路径或明确重建挂载。
