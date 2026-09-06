@@ -71,11 +71,10 @@ export function discoverPlugins(root) {
     requireValue(meta && meta.schemaVersion === 3, `${label}.schemaVersion 仅支持 3；旧 env 声明请迁移为 runtimeConfig，并从 files 移除用户配置。`);
     object(meta, ['schemaVersion', 'id', 'defaultEnabled', 'runtimeConfig', 'configuration', 'healthPath', 'verifyFiles', 'development', 'displayName', 'entryPath', 'permissions'], label);
     validateConfiguration(meta.configuration, label);
-    requireValue(!meta.configuration || meta.healthPath, `${label}: configuration 需要 healthPath。`);
     requireValue(typeof meta.id === 'string' && /^[a-z][a-z0-9-]*$/u.test(meta.id) && !['all', 'none', 'dsh-console'].includes(meta.id), `${label}.id 无效或为保留字。`);
     requireValue(typeof manifest.name === 'string' && /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(manifest.name), `${entry.name} 包名无效。`);
     requireValue(typeof manifest.version === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(manifest.version), `${entry.name} 必须声明版本。`);
-    requireValue(typeof manifest.description === 'string' && manifest.description.trim(), `${entry.name} 必须声明 description。`);
+    requireValue(manifest.description === undefined || typeof manifest.description === 'string', `${entry.name}.description 必须是文本。`);
     requireValue(Array.isArray(manifest.files) && manifest.files.length > 0 && manifest.files.every(file => typeof file === 'string' && file.trim()), `${entry.name} 必须声明 npm files。`);
     requireValue(!manifest.files.some(privatePackagePath), `${entry.name}.files 不得包含用户配置或部署数据。`);
     for (const task of ['build', 'check']) requireValue(typeof manifest.scripts?.[task] === 'string' && manifest.scripts[task].trim(), `${entry.name} 缺少 scripts.${task}。`);
@@ -90,7 +89,7 @@ export function discoverPlugins(root) {
       requireValue(meta.runtimeConfig.required === undefined || typeof meta.runtimeConfig.required === 'boolean', `${label}.runtimeConfig.required 必须为布尔值。`);
       runtimeConfig = {
         variable: variable(meta.runtimeConfig.variable, `${label}.runtimeConfig.variable`),
-        template: pluginFile(pluginRoot, meta.runtimeConfig.template, `${label}.runtimeConfig.template`, { required: true }),
+        ...(meta.runtimeConfig.template === undefined ? {} : { template: pluginFile(pluginRoot, meta.runtimeConfig.template, `${label}.runtimeConfig.template`, { required: true }) }),
         required: meta.runtimeConfig.required ?? true,
       };
     }
@@ -111,7 +110,7 @@ export function discoverPlugins(root) {
       && new RegExp(`^${meta.id}:[a-z][a-z0-9-]*$`, 'u').test(permission)) && new Set(permissions).size === permissions.length,
     `${label}.permissions 必须是本插件 id 命名空间内不重复的权限列表。`);
     requireValue(meta.verifyFiles === undefined || Array.isArray(meta.verifyFiles), `${label}.verifyFiles 必须是数组。`);
-    const verifyFiles = [...new Set(['package.json', 'README.md', main, patch, ...(runtimeConfig ? [runtimeConfig.template] : []),
+    const verifyFiles = [...new Set(['package.json', 'README.md', main, patch, ...(runtimeConfig?.template ? [runtimeConfig.template] : []),
       ...(meta.verifyFiles ?? []).map(file => pluginFile(pluginRoot, file, `${label}.verifyFiles`))])];
     requireValue(!verifyFiles.some(privatePackagePath), `${entry.name} 的公开资源不得指向用户配置或部署数据。`);
     plugins.push({ id: meta.id, directory: `plugins/${entry.name}`, package: manifest.name, version: manifest.version,

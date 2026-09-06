@@ -1,6 +1,6 @@
 # 插件运行配置规范
 
-管理器 0.2 起，支持 `configuration` 声明的插件使用自己的 `plugin.json`。插件作者声明入口、认证角色和就绪地址；管理器负责配置读取、DSH patch、容器挂载、启停和健康检查。添加合规插件不需要修改管理器名单或分支。
+管理器 0.2.1 起，支持 `configuration` 声明的插件使用自己的 `plugin.json`。插件作者声明入口、认证角色和就绪地址；管理器负责配置读取、DSH patch、容器挂载、启停和健康检查。添加合规插件不需要修改管理器名单或分支。
 
 ## 插件声明
 
@@ -20,7 +20,29 @@
 
 `entryId` 必须匹配插件 Bundle 中可配置的 Cordis entry ID，不一定等于插件 ID。`auth: consumer` 接入统一认证；认证提供者声明 `auth: provider`。不涉及认证的插件可以省略 `auth`，仍可使用统一配置。认证提供者只能有一个；消费者通过 kit 的身份和 HTTP 接口执行真实鉴权，元数据不会自动保护自行注册的路由。
 
-标准配置插件必须声明 `healthPath` 并实现 GET 就绪探针：当前可服务时返回 200，必需认证服务不可用时返回 503。探针无需登录，不返回账号、密钥或业务数据，不执行付费模型调用。地址必须是本站绝对路径，不能重定向到外部。管理器按实际已安装插件的声明检查，不维护额外地址名单。
+`healthPath` 可省略；未声明时构建、打包及部署均可继续，管理器仍检查宿主和安装状态，将该插件就绪结果标记为 `not-provided`，不代表已验证业务就绪。声明后需要实现对应的 GET 就绪探针：当前可服务时返回 200，必需认证服务不可用时返回 503。探针无需登录，不返回账号、密钥或业务数据，不执行付费模型调用。地址必须是本站绝对路径，不能重定向到外部。管理器按实际已安装插件的声明检查，不维护额外地址名单。
+
+## 必填与可选字段
+
+构建只检查插件声明、源码和归档，不读取运行实例的 `plugin.json`、业务凭据或站点 origin。可选字段省略不会导致构建失败；已经填写但类型、路径或取值错误仍会报错。
+
+| 字段 | 是否必填及省略行为 |
+| --- | --- |
+| `description` | 可选，可省略或填写空文本 |
+| `displayName` | 可选，默认使用 npm 包名 |
+| `defaultEnabled` | 可选，默认 true |
+| `entryPath`、`healthPath` | 可选，不猜测页面或健康检查地址 |
+| `permissions`、`verifyFiles` | 可选，默认没有额外声明；基本归档文件仍校验 |
+| `configuration` | 可整体省略，使用插件自身的 Bundle 配置 |
+| `configuration.entryId` | 声明 `configuration` 时必填，否则无法确定配置目标 |
+| `configuration.auth` | 可选，不声明则不接入统一认证角色 |
+| `runtimeConfig` | 可整体省略；声明时 `variable` 必填，`template` 可选，`required` 默认 true |
+| `development` | 可整体省略；声明时开发 patch 和变量映射仍须有效 |
+| 运行配置的 `enabled`、`accessMode`、`config` | 可省略，分别默认 true、消费者 authenticated、空对象；这些字段不参与构建 |
+
+用于确定包身份、执行构建和加载 Bundle 的 `name`、`version`、`deepseekPlugin.schemaVersion`、`deepseekPlugin.id`、`main`、`dsh.bundle.patch`、`files`、README、`scripts.build` 和 `scripts.check` 仍是仓库必需输入。声明的文件必须真实存在；构建产物可由 build 生成。
+
+要求认证的实例仍需在部署时提供合法站点 origin 和认证提供者；声明为必需的业务配置也在部署时检查。运行前置条件不会被可选构建字段豁免。
 
 ## 每个插件一份运行配置
 
@@ -74,4 +96,4 @@ dsh-plugin apply-compose --root /path/to/project --config .local/deployment.json
 
 ## 接入验收
 
-新插件必须验证默认鉴权、单插件 standalone 切换、未授权拒绝、认证提供者缺失、健康探针以及停用后重新启用。新增插件不改框架源码；私有插件遵循相同声明。标准新增公共能力时需要版本化演进，业务独有字段保持在插件 `config` 中。
+接入认证的插件需要验证默认鉴权、单插件 standalone 切换、未授权拒绝和认证提供者缺失；接入统一配置的插件需要验证停用后重新启用；声明健康探针的插件需要验证探针。新增插件不改框架源码；私有插件遵循相同声明。标准新增公共能力时需要版本化演进，业务独有字段保持在插件 `config` 中。

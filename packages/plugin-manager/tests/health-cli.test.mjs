@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { atomicJSON, PENDING, STATE } from '../src/state.mjs';
+import { atomicJSON, json, PENDING, STATE } from '../src/state.mjs';
 import { statePlugin } from '../src/installation.mjs';
 
 const execute = promisify(execFile);
@@ -46,6 +46,17 @@ test('health CLI accepts real persisted state without release archives or verify
   const result = await f.run();
   assert.deepEqual(JSON.parse(result.stdout), [{ id: 'weather', installed: true, activated: 'unknown', ready: 'ready' }]);
   assert.deepEqual(f.requested, ['/', '/weather/ready']);
+});
+
+test('omitting a plugin probe reports not-provided while preserving host and installation checks', async t => {
+  const f = await fixture(t);
+  const state = json(join(f.profile, STATE));
+  delete state.plugins[0].healthPath;
+  atomicJSON(join(f.profile, STATE), state);
+  assert.equal(JSON.parse((await f.run()).stdout)[0].ready, 'not-provided');
+  assert.deepEqual(f.requested, ['/']);
+  atomicJSON(join(f.packageRoot, 'package.json'), { ...f.installed, version: '2.0.0' });
+  await assert.rejects(f.run(), /安装或 Bundle 漂移/);
 });
 
 test('health CLI rejects package name, version, Bundle and entry drift', async t => {

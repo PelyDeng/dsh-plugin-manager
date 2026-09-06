@@ -47,6 +47,16 @@ test('disabled authentication never downgrades protected consumers', t => {
   assert.deepEqual(resolvePluginSettings(f.deployment, f.release).release.plugins.map(p => p.id), ['weather']);
 });
 
+test('omitted health paths and runtime fields keep authenticated defaults', t => {
+  const f = fixture(t);
+  for (const plugin of f.release.plugins) delete plugin.healthPath;
+  f.settings('weather', {});
+  const result = resolvePluginSettings(f.deployment, f.release);
+  assert.equal(result.release.plugins.length, 2);
+  assert.equal(result.entries[1].config.accessMode, 'authenticated');
+  assert.equal(result.entries[1].config.publicOrigin, 'https://plugins.example');
+});
+
 test('invalid or ambiguous settings fail before deployment', t => {
   const f = fixture(t);
   for (const bad of [{ schemaVersion: 2 }, { enabled: 'false' }, { accessMode: 'typo' }, { auth: false }, { config: { accessMode: 'standalone' } }, { config: [] }]) {
