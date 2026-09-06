@@ -1,6 +1,6 @@
 {
   "name": "dsh-example",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "可复制的 AI 流式对话与可选 auth 接入示例",
   "license": "Apache-2.0",
   "private": true,
@@ -46,7 +46,11 @@
       "web/app.js",
       "web/stream.js",
       "web/style.css"
-    ]
+    ],
+    "configuration": {
+      "entryId": "example",
+      "auth": "consumer"
+    }
   },
   "scripts": {
     "build": "tsdown",

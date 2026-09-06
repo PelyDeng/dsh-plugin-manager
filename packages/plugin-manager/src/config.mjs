@@ -54,7 +54,8 @@ export function resolveDeployment(options = {}, env = process.env) {
   if (!['external', 'owned'].includes(hostMode)) fail('host-mode 必须是 external 或 owned。');
   const instances = config.instances ?? {};
   if (!instances || typeof instances !== 'object' || Array.isArray(instances)) fail('instances 必须是以插件 ID 为键的对象。');
-  return { root, config, configPath: configPath && resolve(root, configPath), dataRoot, home, workspace, authUrlFile, artifacts,
+  const publicOrigin = env.DSH_PUBLIC_ORIGIN ?? config.publicOrigin ?? options['public-url'] ?? env.DSH_PUBLIC_URL ?? config.publicUrl;
+  return { root, config: { ...config, ...(publicOrigin ? { publicOrigin } : {}) }, configPath: configPath && resolve(root, configPath), dataRoot, home, workspace, authUrlFile, artifacts,
     profile, profileRoot: join(home, 'profiles', profile), mode, hostMode, instances,
     explicitArtifacts: options.artifacts !== undefined || env.DSH_DEPLOY_ARTIFACTS !== undefined || config.artifacts !== undefined,
     explicitData: options.home !== undefined || env.DSH_HOME !== undefined || config.home !== undefined || options['data-root'] !== undefined || env.DSH_DATA_DIR !== undefined || config.dataRoot !== undefined,

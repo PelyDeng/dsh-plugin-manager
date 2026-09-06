@@ -43,11 +43,11 @@ function run(args, options = {}) {
   return spawnSync(process.execPath, args, { cwd: repositoryRoot, encoding: 'utf8', ...options });
 }
 
-test('public plugins are discovered independently from library packages and remain optional', () => {
+test('public auth and example are discovered independently from library packages and enabled by default', () => {
   const plugins = discoverPlugins(repositoryRoot);
   assert.ok(['auth', 'example'].every(id => plugins.some(plugin => plugin.id === id)));
   assert.ok(!plugins.some(plugin => plugin.package.startsWith('@dsh-plugin/')));
-  assert.ok(selectPlugins(plugins).every(plugin => !['auth','example'].includes(plugin.id)));
+  assert.ok(['auth', 'example'].every(id => selectPlugins(plugins).some(plugin => plugin.id === id)));
   assert.ok(plugins.every(plugin => plugin.verifyFiles.includes('cordis.patch.yml')));
 });
 

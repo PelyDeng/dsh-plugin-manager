@@ -12,6 +12,7 @@ export function readState(path) {
   const state = readOptional(path);
   if (state && (state.schemaVersion !== 2 || !Array.isArray(state.plugins))) fail('未知受管状态版本；请显式迁移，不能当成空安装。');
   if (state) validateRecordedPlugins(state.plugins);
+  if (state?.candidates !== undefined && (!Array.isArray(state.candidates) || state.candidates.some(id => typeof id !== 'string' || !idPattern.test(id)) || new Set(state.candidates).size !== state.candidates.length)) fail('受管候选插件列表无效。');
   return state;
 }
 
@@ -90,7 +91,7 @@ export function anchoredSpec(profileRoot, spec) {
 }
 
 export function statePlugin(plugin) {
-  return { id: plugin.id, package: plugin.package, version: plugin.version, sha256: plugin.sha256, mode: plugin.mode, ...(plugin.source ? { source: plugin.source } : {}) };
+  return { id: plugin.id, package: plugin.package, version: plugin.version, sha256: plugin.sha256, mode: plugin.mode, ...(plugin.healthPath ? { healthPath: plugin.healthPath } : {}), ...(plugin.source ? { source: plugin.source } : {}) };
 }
 
 /** Preflight in an isolated profile before stopping or modifying the live target. */
@@ -164,7 +165,7 @@ export async function synchronize(deployment, release, options = {}) {
   const cli = options.cli ?? hostCLI(deployment);
   const environment = { os: process.platform, architecture: process.arch, node: process.versions.node, mode: deployment.mode, ...(options.cli ? {} : runtimeIdentity(cli, deployment)) };
   const patches = (deployment.config.patches ?? []).map(path => canonical(resolve(deployment.root, path)));
-  const desired = { schemaVersion: 2, plugins: plugins.map(statePlugin), configurations: runtime.configurations, patches, environment };
+  const desired = { schemaVersion: 2, candidates: deployment.candidates ?? plugins.map(plugin => plugin.id), plugins: plugins.map(statePlugin), configurations: runtime.configurations, patches, environment };
   const desiredHash = hash(JSON.stringify(desired));
   if (pending && !deployment.options.recover && (!deployment.options.resume || pending.desiredHash !== desiredHash)) fail('存在未完成部署；使用原清单和配置 --resume，或选择修复清单并显式 --recover --data-compatible。');
   const legacy = [join(deployment.profileRoot, '.deepseek-plugin-managed.json'), join(deployment.home, '.managed-dsh-plugins')];
@@ -173,7 +174,7 @@ export async function synchronize(deployment, release, options = {}) {
   if (environmentChanged && !deployment.options.rebuild) fail('运行环境已变化；请在目标环境预检后显式 --rebuild。');
   const execute = options.execute ?? cliRun;
     const changes = computeChanges(previous, plugins, profileManifest(deployment.profileRoot), plugin => !environmentChanged && installedMatches(deployment.profileRoot, plugin), pending);
-    const configurationChanged = !previous || !same(previous.configurations, desired.configurations) || !same(previous.patches ?? [], patches) || environmentChanged;
+    const configurationChanged = !previous || !same(previous.candidates, desired.candidates) || !same(previous.configurations, desired.configurations) || !same(previous.patches ?? [], patches) || environmentChanged;
     if (!changes.add.length && !changes.remove.length && !configurationChanged && !pending) {
       if (options.freshContainer) synchronizedStopped.add(deployment);
       return { changed: false, status: 'installed', activated: 'unknown', plugins: desired.plugins };
@@ -214,21 +215,44 @@ export async function synchronize(deployment, release, options = {}) {
   } finally { releaseLock(); }
 }
 
+/** Check the declared endpoint without accepting cross-origin redirects. */
+async function probePlugin(deployment, plugin, fetcher) {
+  if (!plugin.healthPath) return 'not-provided';
+  if (!deployment.baseUrl) fail(`${plugin.id}: 就绪探针需要 --base-url。`);
+  const base = new URL(deployment.baseUrl);
+  const target = new URL(plugin.healthPath, base);
+  if (target.origin !== base.origin) fail('健康探针不能跳转到其他来源。');
+  const response = await fetcher(target, { signal: AbortSignal.timeout(5000), redirect: 'error' });
+  if (!response.ok) fail(`${plugin.id}: 就绪探针失败 HTTP ${response.status}`);
+  return 'ready';
+}
+
+/** Periodic health uses installed metadata and HTTP probes, without reading release archives. */
+export async function verifyHealth(deployment, state, fetcher = fetch) {
+  if (!deployment.baseUrl) fail('宿主存活检查需要 --base-url。');
+  const host = await fetcher(deployment.baseUrl, { signal: AbortSignal.timeout(5000), redirect: 'manual' });
+  if (host.status >= 500) fail(`宿主存活检查失败 HTTP ${host.status}`);
+  const manifest = profileManifest(deployment.profileRoot);
+  const results = [];
+  for (const plugin of state.plugins) {
+    const packageRoot = join(deployment.profileRoot, 'node_modules', plugin.package);
+    const installed = readOptional(join(packageRoot, 'package.json'));
+    if (!manifest.dependencies?.[plugin.package] || !manifest.dsh?.profile?.bundles?.includes(plugin.package)
+      || installed?.name !== plugin.package || installed?.version !== plugin.version
+      || typeof installed.main !== 'string' || !installed.main) fail(`${plugin.id}: 安装或 Bundle 漂移。`);
+    const entry = resolve(packageRoot, installed.main);
+    if (!within(packageRoot, entry) || !existsSync(entry) || !statSync(entry).isFile()) fail(`${plugin.id}: 插件入口缺失或无效。`);
+    results.push({ id: plugin.id, installed: true, activated: 'unknown', ready: await probePlugin(deployment, plugin, fetcher) });
+  }
+  return results;
+}
+
 /** Probes are per plugin; host liveness never substitutes for plugin activation. */
 export async function verifyReady(deployment, release, fetcher = fetch) {
   const results = [];
   for (const plugin of release.plugins) {
     if (!installedMatches(deployment.profileRoot, plugin)) fail(`${plugin.id}: 安装或 Bundle 漂移。`);
-    let ready = 'not-provided';
-    if (plugin.healthPath) {
-      if (!deployment.baseUrl) fail(`${plugin.id}: 就绪探针需要 --base-url。`);
-      const base = new URL(deployment.baseUrl);
-      const target = new URL(plugin.healthPath, base);
-      if (target.origin !== base.origin) fail('健康探针不能跳转到其他来源。');
-      const response = await fetcher(target, { signal: AbortSignal.timeout(5000), redirect: 'error' });
-      if (!response.ok) fail(`${plugin.id}: 就绪探针失败 HTTP ${response.status}`);
-      ready = 'ready';
-    }
+    const ready = await probePlugin(deployment, plugin, fetcher);
     results.push({ id: plugin.id, installed: true, activated: 'unknown', ready });
   }
   return results;

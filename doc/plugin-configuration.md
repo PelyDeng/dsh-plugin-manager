@@ -1,0 +1,77 @@
+# 插件运行配置规范
+
+管理器 0.2 起，支持 `configuration` 声明的插件使用自己的 `plugin.json`。插件作者声明入口、认证角色和就绪地址；管理器负责配置读取、DSH patch、容器挂载、启停和健康检查。添加合规插件不需要修改管理器名单或分支。
+
+## 插件声明
+
+在 `package.json` 的 `deepseekPlugin` 中配置：
+
+```json
+{
+  "schemaVersion": 3,
+  "id": "example",
+  "defaultEnabled": true,
+  "entryPath": "/example",
+  "healthPath": "/example/ready",
+  "permissions": ["example:access"],
+  "configuration": { "entryId": "example", "auth": "consumer" }
+}
+```
+
+`entryId` 必须匹配插件 Bundle 中可配置的 Cordis entry ID，不一定等于插件 ID。`auth: consumer` 接入统一认证；认证提供者声明 `auth: provider`。不涉及认证的插件可以省略 `auth`，仍可使用统一配置。认证提供者只能有一个；消费者通过 kit 的身份和 HTTP 接口执行真实鉴权，元数据不会自动保护自行注册的路由。
+
+标准配置插件必须声明 `healthPath` 并实现 GET 就绪探针：当前可服务时返回 200，必需认证服务不可用时返回 503。探针无需登录，不返回账号、密钥或业务数据，不执行付费模型调用。地址必须是本站绝对路径，不能重定向到外部。管理器按实际已安装插件的声明检查，不维护额外地址名单。
+
+## 每个插件一份运行配置
+
+默认位置为 `<DSH home>/plugins/<插件 ID>/plugin.json`，可用部署配置 `instances.<id>.settingsFile` 指定外部路径。文件不进入 Git、插件包或镜像。首次 `apply-compose` 为缺少配置文件的标准插件创建默认配置，已有文件保持原内容。
+
+```json
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "accessMode": "authenticated",
+  "config": {}
+}
+```
+
+- `enabled` 默认 true，控制该实例是否运行插件；false 会从受管 profile 移除该插件，保留数据。插件仍须存在于部署候选清单，才能通过此开关重新启用。
+- `accessMode` 仅适用于认证消费者，默认 `authenticated`。`standalone` 关闭该插件认证，其他插件不变；共享历史与个人历史仍分别保留，不迁移或合并。
+- `config` 是插件自己的 Cordis Config 参数，由插件 Schema 校验。`accessMode` 放在顶层；`publicOrigin` 由站点部署配置统一提供，禁止在 `config` 中重复定义。
+- 存在的文件必须声明 `schemaVersion: 1`，未知顶层字段、非法类型及非法模式在部署前报错。缺失文件使用安全默认值。
+
+业务凭据继续使用插件声明的 `runtimeConfig` 文件（如 `env.conf`），不会因为认证开关被合并、打印或重新写入。修改认证只编辑 `plugin.json` 的 `accessMode`。
+
+## 一次配置站点，之后统一应用
+
+站点 `.local/deployment.json` 保存候选发布清单和公共参数，例如：
+
+```json
+{
+  "profile": "web",
+  "plugins": ["auth", "example"],
+  "manifest": ".local/artifacts/release/plugins/manifest.json",
+  "publicOrigin": "https://plugins.example.com",
+  "publicUrl": "https://plugins.example.com",
+  "containerImage": "registry.example.com/dsh-host@sha256:<已验证的64位摘要>",
+  "composeProject": "dsh-plugins"
+}
+```
+
+`auth` 和 `example` 默认纳入源码选集。站点 origin 只配置一次；标准插件的认证和配置由管理器自动生成 patch。`patches` 仅保留其他宿主定制，不再手工为这些标准入口重复配置认证。迁移旧实例时应移除对应旧 patch 条目。
+
+修改某个 `plugin.json` 后，在安装了新版管理器的宿主机执行：
+
+```sh
+dsh-plugin apply-compose --root /path/to/project --config .local/deployment.json
+```
+
+此命令校验配置与归档，生成独立 Compose 文档，停止指定项目的 dsh 服务，重新创建并等待健康检查通过。使用已有发布包，不重新构建插件；镜像必须包含同版本管理器。生成文件位于 `.local/artifacts/`，当前成功部署记录为 `.local/artifacts/active-compose.json`。不要手改生成文件，也不要混用旧 Compose 覆盖文件启动同一项目。Docker 和 Compose 需在执行命令的宿主机可用，命令仅支持串行执行。容器使用 `containerUid`/`containerGid`（默认均为 1000）；root 首次执行时只为新创建目录和设置文件赋权，已有目录或文件权限不符会在停服前报错，需要部署者调整。
+
+配置变更通过受控重启生效，不承诺热切换。运行中修改配置文件不会改变当前已验证的健康检查对象；新配置应用后，检查实际启用的插件。周期探针检查宿主 HTTP、安装包版本、入口、Bundle 和插件就绪地址；完整归档内容验证在部署和启动验收阶段执行。停用 auth 而仍有消费者要求认证时，在停服前拒绝操作。
+
+非 Docker 启动同样通过 `start --config ...` 读取每个插件的配置。生成的 patch 使用内容摘要命名，保持旧运行实例所读文件不变；发布目录、历史和配置均不由停用操作删除。
+
+## 接入验收
+
+新插件必须验证默认鉴权、单插件 standalone 切换、未授权拒绝、认证提供者缺失、健康探针以及停用后重新启用。新增插件不改框架源码；私有插件遵循相同声明。标准新增公共能力时需要版本化演进，业务独有字段保持在插件 `config` 中。

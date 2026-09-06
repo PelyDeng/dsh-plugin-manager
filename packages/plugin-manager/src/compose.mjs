@@ -2,10 +2,12 @@ import { chmodSync, closeSync, existsSync, mkdirSync, openSync, statSync } from 
 import { runtimeEnvironment } from './config.mjs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { atomicJSON, canonical, fail, within } from './state.mjs';
+import { resolvePluginSettings } from './plugin-settings.mjs';
 /** Produce private Compose overrides with runtime-only configuration mounts. */
 export function renderCompose(deployment, release, outputDirectory) {
   mkdirSync(outputDirectory, { recursive: true });
-  const runtime = runtimeEnvironment(deployment, release.plugins);
+  const settings = resolvePluginSettings(deployment, release);
+  const runtime = runtimeEnvironment(deployment, settings.release.plugins);
   const configPath = join(outputDirectory, 'container-deployment.json');
   const mounts = [{ type: 'bind', source: deployment.dataRoot, target: '/data' },
     { type: 'bind', source: dirname(release.path), target: '/opt/plugin-packages', read_only: true }];
@@ -37,7 +39,13 @@ export function renderCompose(deployment, release, outputDirectory) {
   }
   const instances = {};
   for (const plugin of release.plugins) {
-    instances[plugin.id] = { configRevision: runtime.configurations[plugin.id].configRevision };
+    instances[plugin.id] = { configRevision: runtime.configurations[plugin.id]?.configRevision ?? 0 };
+    const settingsFile = settings.files[plugin.id];
+    if (settingsFile && existsSync(settingsFile)) {
+      const target = `/run/dsh-plugin-settings/${plugin.id}.json`;
+      mounts.push({ type: 'bind', source: settingsFile, target, read_only: true });
+      instances[plugin.id].settingsFile = target;
+    }
     const variable = plugin.runtimeConfig?.variable;
     if (variable && runtime.variables[variable]) {
       const target = `/run/dsh-plugin-config/${plugin.id}/env.conf`;
@@ -46,9 +54,10 @@ export function renderCompose(deployment, release, outputDirectory) {
     }
   }
   atomicJSON(configPath, { profile: deployment.profile, plugins: release.plugins.map(plugin => plugin.id), home: containerHome, workspace: containerWorkspace, authUrlFile: containerAuth, authUrlDirectWrite: directAuth, dataRoot: '/data', instances, patches, offline: deployment.offline, storeDir: '/data/plugin-store', cacheDir: '/data/plugin-cache', ...offlineSources,
-    ...(deployment.config.publicUrl ? { publicUrl: deployment.config.publicUrl } : {}), ...(deployment.config.trustedHosts ? { trustedHosts: deployment.config.trustedHosts } : {}) });
+    ...(deployment.config.publicUrl ? { publicUrl: deployment.config.publicUrl } : {}), ...(deployment.config.publicOrigin ? { publicOrigin: deployment.config.publicOrigin } : {}), ...(deployment.config.trustedHosts ? { trustedHosts: deployment.config.trustedHosts } : {}) });
   mounts.push({ type: 'bind', source: configPath, target: '/run/dsh-deployment.json', read_only: true });
   const override = { services: { dsh: { environment: { DSH_HOME: containerHome, DSH_WORKSPACE: containerWorkspace, DSH_AUTH_URL_FILE: containerAuth, DSH_PROFILE: deployment.profile, DEPLOYMENT_CONFIG: '/run/dsh-deployment.json', PLUGIN_MANIFEST_FILE: '/opt/plugin-packages/manifest.json' }, volumes: mounts } } };
+  override.services.dsh.healthcheck = { test: ['CMD', 'node', '/opt/plugin-manager/node_modules/@dsh-plugin/plugin-manager/dist/cli.mjs', 'health', '--root', '/opt/plugin-project', '--config', '/run/dsh-deployment.json'], interval: '10s', timeout: '30s', retries: 3, start_period: '120s' };
   const path = join(outputDirectory, 'compose.override.json'); atomicJSON(path, override);
   return { path, configPath };
 }

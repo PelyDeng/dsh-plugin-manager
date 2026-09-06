@@ -15,17 +15,19 @@ Bash 实际构建入口为 `bash deploy/scripts/build-host-image.sh`，Node 入�
 
 操作记录默认保存在 `.local/artifacts/<操作 ID>/host-image.json`。`--resume <记录>` 仅用于恢复显式发布，并重新核验本机镜像 ID、标签、平台和目标仓库。
 
-Compose 文件为 `integrations/docker/docker-compose.yml`，需要设置 `DSH_HOST_IMAGE` 为验证过的镜像引用、`DSH_PLUGIN_RELEASE_DIR` 为发布目录绝对路径。默认将宿主 `.local/data` 挂载为容器 `/data`。外部 home、配置文件、用户 patch 和离线来源可用管理器的 `render-compose` 生成覆盖文件，运行配置仅在运行时挂载。
+## 配置和运行
 
-以下 Bash 示例安装 auth 与 example。先按[部署说明](../../deploy/README.md)准备 `.local/deployment.json`：选择 `auth,example`，并通过用户 patch 为二者设置实际 `publicOrigin`、为 example 设置 `accessMode: authenticated`。镜像引用使用已完成操作记录中的 `image`（本机构建）或 `reference`（已发布摘要），模型凭据仍需在对应 home 配置。
+按[插件运行配置规范](../../doc/plugin-configuration.md)准备站点 `.local/deployment.json`，设置发布清单、站点 origin、不可变 `containerImage` 和 `composeProject`。auth 默认启用，每个标准插件的 `plugin.json` 独立控制启停和认证。
 
 ```sh
 pnpm package --plugins auth,example --output .local/artifacts/example-release/plugins
-mkdir -p .local/data
-export DSH_HOST_IMAGE='<已验证的镜像引用>'
-export DSH_PLUGIN_RELEASE_DIR="$(pwd)/.local/artifacts/example-release/plugins"
-node deploy/scripts/deployment.mjs render-compose --manifest .local/artifacts/example-release/plugins/manifest.json --config .local/deployment.json --output .local/artifacts/example-compose
-docker compose -f integrations/docker/docker-compose.yml -f .local/artifacts/example-compose/compose.override.json up -d
+node deploy/scripts/deployment.mjs apply-compose --config .local/deployment.json
 ```
 
-包含 auth 的发布清单需要额外配置 `publicOrigin`，不能直接套用独立模式示例。使用官方 patch 为 auth 与业务插件配置固定 origin 和认证模式，并通过部署配置的 `patches` 加载；`render-compose --manifest <清单> --config <配置> --output .local/artifacts/compose` 生成覆盖文件后，将其以第二个 `-f` 传给 Compose。
+`apply-compose` 生成完整 Compose 文档并受控重启；修改插件配置后重复执行同一命令，不需要另改 Compose、健康检查或认证 patch。命令只支持串行执行。Linux 目录和配置权限按 `containerUid`/`containerGid` 检查，默认均为 1000；新建受管目录由 root 执行时赋予该用户，已有路径不会自动改权。
+
+需要自行编排时可用 `render-compose` 输出覆盖文件，配合 `docker-compose.yml` 和自己的进程管理流程。不得同时用两种流程管理同一实例。
+
+## 只升级管理器的镜像
+
+宿主版本保持不变时，可使用 `manager-update.Dockerfile`，以已验证的不可变运行镜像为基础，只安装独立 manager 归档。构建上下文只包含该 Dockerfile 和 `plugin-manager.tgz`；`RUNTIME_IMAGE` 必须是摘要引用，`MANAGER_SHA256` 是归档摘要，`FRAMEWORK_REVISION` 是归档对应的已提交框架版本。构建完成后验证管理器版本、宿主版本和实际容器，再发布新摘要到站点配置。此流程不改变 DSH 闭包和业务发布包。
