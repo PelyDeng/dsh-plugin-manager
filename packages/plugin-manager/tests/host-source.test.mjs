@@ -12,7 +12,7 @@ function git(root, ...args) {
   return result.stdout.trim();
 }
 
-test('pinned official source accepts Git worktrees and refuses drift, dirty input and a different origin', t => {
+test('supplied source uses its current commit without requiring the parent gitlink or official origin', t => {
   const root = mkdtempSync(join(tmpdir(), 'dsh source '));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   git(root, 'init');
@@ -38,10 +38,10 @@ test('pinned official source accepts Git worktrees and refuses drift, dirty inpu
   assert.throws(() => inspectHostSource(root), /worktree has changes/u);
   rmSync(join(host, 'untracked.txt'));
   git(host, 'remote', 'set-url', 'origin', 'https://example.invalid/fork.git');
-  assert.throws(() => inspectHostSource(root), /official HTTPS/u);
+  assert.equal(inspectHostSource(root).commit, commit);
   git(host, 'remote', 'set-url', 'origin', officialHostUrl);
   git(host, 'commit', '--allow-empty', '-m', 'drift');
-  assert.throws(() => inspectHostSource(root), /differs from the parent gitlink/u);
+  assert.equal(inspectHostSource(root).commit, git(host, 'rev-parse', 'HEAD'));
 });
 
 test('an empty submodule directory cannot be mistaken for its parent worktree', t => {
@@ -49,5 +49,5 @@ test('an empty submodule directory cannot be mistaken for its parent worktree', 
   t.after(() => rmSync(root, { recursive: true, force: true }));
   git(root, 'init');
   mkdirSync(join(root, 'deepseek-harness'));
-  assert.throws(() => inspectHostSource(root), /not an initialized/u);
+  assert.throws(() => inspectHostSource(root), /source is missing/u);
 });

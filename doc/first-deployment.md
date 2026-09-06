@@ -1,18 +1,20 @@
 # 一键部署设计与使用
 
-一个仓库检出目录管理一个 Linux Docker 站点。首次初始化与更新统一使用 `bash deploy/build.sh`，脚本根据保存的部署记录选择流程。依赖和镜像从服务器构建，不需要先提供旧镜像、发布清单或 Compose。
+一个完整的仓库检出目录管理一个 Linux Docker 站点。首次初始化与更新统一使用 `bash deploy/build.sh`，脚本根据保存的部署记录选择流程。依赖和镜像从服务器构建，不需要先提供旧镜像、发布清单或 Compose。部署直接使用仓库现有的官方宿主源码，不下载、更新、切换它，也不要求它与预设锁定版本一致。
 
 ## 首次部署
 
 服务器需要 Git、Node.js `^22.19 || >=24`、npm、可用的 Linux Docker 引擎及 Compose 插件、tar 和 flock。Docker 需要支持多阶段构建与命名构建上下文。脚本自动在需要时安装仓库锁定的 pnpm；不会自动安装系统软件、修改防火墙或创建反向代理。执行用户必须有 Docker 权限，并能创建默认 UID/GID 1000 可访问的运行目录；以 root 执行时脚本只给新建目录设置所有者。
 
 ```sh
-git clone https://github.com/PelyDeng/dsh-plugin.git
+git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin.git
 cd dsh-plugin
 bash deploy/build.sh
 ```
 
-默认选中 auth、example，使用本机镜像，监听 `http://127.0.0.1:7902`。首次需要访问官方 Git 仓库、npm、基础镜像和 Debian 软件源；本机依赖缓存和 Docker 缓存可以复用。首次完整构建比后续更新耗时更长。受限网络可通过 `hostImageConfig` 配置镜像源；预构建宿主是可选加速，不是初始化前置条件。
+源码检出阶段使用递归克隆带齐仓库提供的子模块；已有完整源码无需重复克隆。普通 Git 克隆只取得子模块版本引用，实际源码缺失时，部署脚本提示检出不完整，不自行补拉。镜像记录实际使用的源码提交，便于定位构建来源，不拿它与预设版本作准入比较。
+
+默认选中 auth、example，使用本机镜像，监听 `http://127.0.0.1:7902`。构建依赖 npm、基础镜像和 Debian 软件源；本机依赖缓存和 Docker 缓存可以复用。首次完整构建比后续更新耗时更长。受限网络可通过 `hostImageConfig` 配置镜像源；预构建宿主是可选加速，不是初始化前置条件。
 
 远程浏览器通过 SSH 端口转发访问，或配置反向代理后将 `publicOrigin`、`publicUrl` 改为实际访问 origin。设置自定义端口时同时调整这两个 URL。首次管理员及密码修改流程见 [auth 说明](../plugins/dsh-auth/README.md)。站点启动和登录不要求模型密钥；实际 AI 对话需按[部署说明](../deploy/README.md#运行配置)配置模型密钥。
 
@@ -46,7 +48,7 @@ bash deploy/build.sh
 | `containerUid`、`containerGid` | `1000` | 非 root 容器身份；已有目录不会自动改权 |
 | `patches` | `[]` | 额外官方 profile patch；标准认证无需自行写 patch |
 | `publishImage` | `null` | 可选 `registry/project/image`；设置后推送，执行前需 `docker login` |
-| `hostImage` | `null` | 可选 `registry/image@sha256:…`；必须匹配 gitlink，错误版本拒绝使用 |
+| `hostImage` | `null` | 可选 `registry/image@sha256:…`；显式选用预构建宿主，无预设版本匹配要求 |
 | `hostImageConfig` | `null` | 可选宿主构建 `.conf` 路径；格式见 `deploy/config/host-image.conf.example`，Linux 权限须为 0600 |
 
 相对路径均从检出目录解析。`instances`、`authUrlFile`、离线源等高级选项沿用[管理器运行配置](../deploy/README.md#运行配置)。源码入口从站点文件读取部署选项，不使用基础管理命令的环境变量覆盖。模型密钥及插件密钥按各自文档保存在本机文件，不进入站点默认模板。
@@ -54,11 +56,11 @@ bash deploy/build.sh
 ## 更新与恢复
 
 ```sh
-git pull --ff-only
+git pull --ff-only --recurse-submodules
 bash deploy/build.sh
 ```
 
-更新从干净的已提交源码重新构建管理器及选中插件。宿主 gitlink 未变化时复用镜像中的宿主层，变化时自动下载并构建锁定源码。构建和归档校验通过后，停止旧服务、备份原配置及持久挂载，再安装并等待健康检查。重复运行沿用已有插件设置和数据，不执行重置。
+更新代码时按需同步子模块；版本选择由源码维护者决定。部署从干净的已提交源码重新构建管理器及选中插件。宿主源码未变化时复用已有宿主层；本地宿主源码更新后构建新的镜像，不因此拒绝部署。构建和归档校验通过后，停止旧服务、备份原配置及持久挂载，再安装并等待健康检查。重复运行沿用已有插件设置和数据，不执行重置。
 
 | 情况 | 行为与处理 |
 | --- | --- |
