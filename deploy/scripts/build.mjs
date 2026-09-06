@@ -1,7 +1,7 @@
 /** Build this checkout and deploy its complete site selection through the manager. */
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { relative, resolve } from 'node:path';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
@@ -70,6 +70,15 @@ export function release({ root = repositoryRoot, config = '.local/deployment.jso
     if (previousCompose.services.dsh.image !== site.containerImage) throw new Error('The active Compose image differs from the site configuration.');
     previousArgs = ['compose', '-p', active.project, '-f', active.path];
     const manifest = resolve(operation, 'plugins/manifest.json');
+    // pnpm resolves the old profile references before replacing them with new specs.
+    const previousManifest = resolve(root, site.manifest);
+    for (const plugin of json(previousManifest).plugins) {
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/.test(plugin.archive) || !/^[a-f0-9]{64}$/.test(plugin.sha256)) throw new Error('Invalid previous archive descriptor.');
+      const source = resolve(dirname(previousManifest), plugin.archive);
+      const destination = resolve(dirname(manifest), plugin.archive);
+      if (hash(source) !== plugin.sha256 || (existsSync(destination) && hash(destination) !== plugin.sha256)) throw new Error('Previous archive content differs from its manifest.');
+      if (!existsSync(destination)) copyFileSync(source, destination);
+    }
     run(process.execPath, [cli, 'render-compose', ...deploymentArgs, '--manifest', manifest, '--output', resolve(operation, 'preflight')]);
     const imageContext = resolve(operation, 'image');
     mkdirSync(imageContext);

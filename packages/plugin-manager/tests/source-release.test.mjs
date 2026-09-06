@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
 import { release, validateBase } from '../../../deploy/scripts/build.mjs';
 
 const hostCommit = 'a'.repeat(40), revision = 'b'.repeat(40);
@@ -19,7 +20,9 @@ function fixture(t, fail) {
   put('package.json', { packageManager: 'pnpm@11.19.0' });
   put('packages/plugin-manager/package.json', { version: '0.2.1' });
   put('integrations/docker/manager-update.Dockerfile', 'FROM test');
-  put('.local/deployment.json', { containerImage: base, plugins: ['example'], publicOrigin: 'https://example.test', composeProject: 'site' });
+  put('.local/deployment.json', { containerImage: base, manifest: '.local/artifacts/old/manifest.json', plugins: ['example'], publicOrigin: 'https://example.test', composeProject: 'site' });
+  put('.local/artifacts/old/example.tgz', 'old archive');
+  put('.local/artifacts/old/manifest.json', { plugins: [{ archive: 'example.tgz', sha256: createHash('sha256').update('old archive').digest('hex') }] });
   put('.local/artifacts/active-compose.json', { project: 'site', path: resolve(artifacts, 'previous.json') });
   put('.local/artifacts/previous.json', { services: { dsh: { image: base, volumes: [{ type: 'bind', source: '/srv/example-data', target: '/data' }] } } });
   const original = readFileSync(config, 'utf8'), calls = [];
@@ -53,6 +56,7 @@ test('source release builds all site plugins before stopping and keeps site sett
   assert.equal(updated.publicOrigin, 'https://example.test');
   assert.equal(updated.containerImage, target);
   assert.deepEqual(updated.plugins, ['example']);
+  assert.equal(readFileSync(resolve(f.root, updated.manifest, '../example.tgz'), 'utf8'), 'old archive');
   assert.equal(f.result().revision, revision);
 });
 
@@ -82,4 +86,11 @@ test('deployment failure retains recovery evidence and does not blindly restore 
 test('a different host pin or mutable base is rejected', () => {
   assert.throws(() => validateBase(base, info, 'c'.repeat(40)), /gitlink/);
   assert.throws(() => validateBase('registry.test/dsh:latest', info, hostCommit), /immutable/);
+});
+
+test('a tampered previous archive fails before stopping the service', t => {
+  const f = fixture(t);
+  writeFileSync(resolve(f.root, '.local/artifacts/old/example.tgz'), 'changed');
+  assert.throws(() => release({ root: f.root }, f.execute), /Previous archive content/);
+  assert.equal(f.calls.some(call => call.includes('stop')), false);
 });
