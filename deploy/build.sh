@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# Public deployment entrypoint; configuration and synchronization live in Node.
+# Source releases are serialized; explicit management commands retain their CLI.
 set -Eeuo pipefail
 DEPLOY_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ $# -eq 0 || "$1" == "release" || "$1" == "--config" ]]; then
+  [[ "${1:-}" != "release" ]] || shift
+  mkdir -p "${DEPLOY_DIR}/../.local"
+  exec flock -n "${DEPLOY_DIR}/../.local/source-release.lock" node "${DEPLOY_DIR}/scripts/build.mjs" "$@"
+fi
 exec node "${DEPLOY_DIR}/scripts/deployment.mjs" "$@"
