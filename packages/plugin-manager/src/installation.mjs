@@ -23,6 +23,8 @@ export function validateRecordedPlugins(plugins) {
 export function installedMatches(root, plugin) {
   const manifest = profileManifest(root);
   if (!manifest.dependencies?.[plugin.package] || !manifest.dsh?.profile?.bundles?.includes(plugin.package)) return false;
+  const reference = plugin.mode === 'development' ? `link:${canonical(plugin.source)}` : `file:${canonical(plugin.archivePath)}`;
+  if (anchoredSpec(root, manifest.dependencies[plugin.package]) !== reference) return false;
   const packageRoot = join(root, 'node_modules', plugin.package);
   if (!existsSync(join(packageRoot, 'package.json'))) return false;
   for (const file of plugin.verifyFiles) {

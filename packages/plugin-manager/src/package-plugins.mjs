@@ -17,11 +17,14 @@ export function packagePlugins(root, requested, output) {
   const plugins = [];
   for (const plugin of selected) {
     runPluginTask(root, plugin, 'check');
-    const archive = `${plugin.id}.tgz`;
-    const destination = resolve(output, archive);
+    const destination = resolve(output, `${plugin.id}.tgz`);
     runPnpm(['pack', '--json', '--out', destination], resolve(root, plugin.directory), { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 32 * 1024 * 1024 });
     verifyBuildPackage(root, plugin, destination);
-    plugins.push({ ...plugin, archive, sha256: createHash('sha256').update(readFileSync(destination)).digest('hex') });
+    const sha256 = createHash('sha256').update(readFileSync(destination)).digest('hex');
+    // pnpm must see a new file spec when the same package version has new bytes.
+    const archive = `${plugin.id}-${sha256}.tgz`;
+    renameSync(destination, resolve(output, archive));
+    plugins.push({ ...plugin, archive, sha256 });
     console.log(`[${plugin.id}] 发布包已验证：${archive}`);
   }
   const manifest = { schemaVersion: 1, plugins };
