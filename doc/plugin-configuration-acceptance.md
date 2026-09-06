@@ -2,7 +2,20 @@
 
 2026-09-06，公共框架 `c97f8d1` 合并至私有集成 `7a2b1ec`，封闭化插件按统一规范声明配置入口。公共改动保存在 GitHub，定制插件保存在 Gitee，宿主 gitlink 保持 `d347e703908d0406b7a7ef80e3a0e594d86b2215`。
 
-## 最新部署：0.2.1
+## 最新部署：服务器源码发版
+
+2026-09-06，服务器在私有集成提交 `e0bfca90a30ea991807cfccd52094d0128e107b8` 上执行 `git pull --ff-only` 和 `bash deploy/build.sh`，完整完成源码依赖安装、管理器与三个插件的构建检查、打包、镜像推送、停服备份、Compose 部署及健康等待。公共框架对应 `bd8d7ad`；管理器为 `0.2.2`，example 为 `0.2.1`。各组件版本来自源码，运维不需要分别指定版本或上传本机归档。
+
+- 生产容器 healthy，重启次数 0，无未完成安装记录；三项健康接口返回 200，两个业务历史接口匿名访问返回 401。
+- 三个插件共 31 个受检文件与服务器生成的归档逐字节一致；安装引用使用清单中的摘要文件名。
+- 插件配置及业务 `env.conf` 摘要未变；数据库完整性检查通过，账号、授权、登录会话及业务会话计数与更新前一致。
+- 生产部署前，使用停服备份的隔离副本，在独立端口验证了相同的安装文件和认证行为。未执行浏览器或真实模型问答回归。
+
+迁移验证中发现固定归档名复用旧包，以及 pnpm 替换依赖时仍需读取旧归档的问题。两次失败均恢复了停服备份中的 profile 和原 Compose，业务数据库没有回退。修复采用内容摘要归档名，并在新发布目录保留上一份清单引用的已校验归档；隔离验证通过后，生产按完整源码入口重新部署成功。
+
+完整构建日志和最终验证位于 `.local/artifacts/source-build-e0bfca9/`，隔离验证位于 `.local/artifacts/source-migration-smoke/result.json`。成功操作记录及备份位于 `.local/artifacts/source-release-e0bfca90a30e-df75a2b3-4d84-440c-8380-3174b5e0e55c/`。失败现场和旧版本备份保留，不提交 Git。
+
+## 历次部署：0.2.1
 
 2026-09-06，服务器部署公共框架 `7fc04ef`、私有集成 `7beb8fd`。plugin-manager 与 example 均更新为 `0.2.1`：管理器支持省略非必填发布元数据，example 归档包含完整配置模板及必填、默认值说明。DSH、auth 和 closedoff 版本保持不变。
 
@@ -31,23 +44,24 @@
 | 组件 | 版本 |
 | --- | --- |
 | DSH | 0.1.3-alpha.1 |
-| plugin-manager | 0.2.1 |
+| plugin-manager | 0.2.2 |
 | auth | 0.8.0 |
 | example | 0.2.1 |
 | closedoff | 0.3.0 |
 
-镜像以原运行镜像为基础，仅替换 manager，当前引用为 `harbor.pelycloud.com/pelycloud/dsh-host@sha256:f447357b0d2203072fb1eb76ebfb02ca6fd607b0a7655b725fd0385abc341f42`。升级前镜像为 `harbor.pelycloud.com/pelycloud/dsh-host@sha256:9dff95f5e3eac32e331ed6a4fac9e74c192473daa2f85f189d1bcf37536b5f0f`。
+当前源码发版镜像为 `harbor.pelycloud.com/pelycloud/dsh-host@sha256:023707a3a8ab7acceb20b5a80815c5b2ceeb4c9bc46ba6c4882380854b936ca5`，复用已验证的 DSH 宿主层；同次发版的三个插件均从服务器源码重新构建。升级前镜像为 `harbor.pelycloud.com/pelycloud/dsh-host@sha256:f447357b0d2203072fb1eb76ebfb02ca6fd607b0a7655b725fd0385abc341f42`。
 
 ## 日常配置
 
 每个插件使用 `<DSH home>/plugins/<id>/plugin.json`。生产实例的 auth、example、closedoff 均已初始化配置，两个业务插件都保持 `accessMode: authenticated`。`enabled` 控制插件启停；`accessMode: standalone` 仅关闭对应业务插件认证。修改后需要受控重启，见[插件配置规范](plugin-configuration.md)。
 
-服务器在仓库根目录使用已安装的独立 manager：
+服务器版本更新在仓库根目录执行：
 
 ```sh
-node .local/tooling/node_modules/@dsh-plugin/plugin-manager/dist/cli.mjs apply-compose --root . --config .local/deployment.json
+git pull --ff-only
+bash deploy/build.sh
 ```
 
-站点 origin、镜像、发布清单和 Compose 项目名只需在站点配置中维护；日常认证切换不修改这些字段。不要使用原手工 Compose 覆盖文件重启同一实例。当前成功生成的 Compose 路径记录在 `.local/artifacts/active-compose.json`。
+只调整插件配置而不更新代码时，使用 `bash deploy/build.sh apply-compose --config .local/deployment.json`。站点 origin 和 Compose 项目名在站点配置中维护；源码发版自动更新镜像和发布清单，日常认证切换不修改这些字段。不要使用原手工 Compose 覆盖文件重启同一实例。当前成功生成的 Compose 路径记录在 `.local/artifacts/active-compose.json`。
 
 首次规范验收证据位于 `.local/artifacts/plugin-settings-release/`：`production-result.json` 记录备份位置、版本、数据库计数和生产检查，`smoke-result.json` 与 `private-smoke-result.json` 记录隔离验收，`linux-final-tests.log` 记录 Linux 专项检查。运行证据和备份不提交 Git。
