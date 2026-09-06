@@ -9,6 +9,6 @@ if [[ $# -eq 0 || "$1" == "release" || "$1" == --* ]]; then
     command -v "$command" >/dev/null || { printf 'Missing prerequisite: %s. See deploy/README.md.\n' "$command" >&2; exit 1; }
   done
   mkdir -p "${DEPLOY_DIR}/../.local"
-  exec flock -n "${DEPLOY_DIR}/../.local/source-release.lock" node "${DEPLOY_DIR}/scripts/build.mjs" "$@"
+  exec flock -n "${DEPLOY_DIR}/../.local/source-release.lock" node "${DEPLOY_DIR}/scripts/build-output.mjs" "$@"
 fi
 exec node "${DEPLOY_DIR}/scripts/deployment.mjs" "$@"

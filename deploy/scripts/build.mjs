@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { buildHostImage } from '../../integrations/docker/host-image.mjs';
 import { loadSite, readJson as json, saveJson as save } from './site.mjs';
 import { resolveDeployment } from '../../packages/plugin-manager/src/config.mjs';
+import { buildMessage, buildStep } from './build-output.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -32,10 +33,13 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
   // Source releases take their deployment choices from the saved site file.
   for (const key of ['DEPLOYMENT_CONFIG', 'PLUGIN_MANIFEST_FILE', 'DSH_DATA_DIR', 'DSH_HOME', 'DSH_WORKSPACE', 'DSH_AUTH_URL_FILE', 'DSH_DEPLOY_ARTIFACTS', 'DSH_PROFILE', 'DSH_PUBLIC_ORIGIN', 'DSH_PUBLIC_URL', 'DSH_STORE_DIR', 'DSH_OFFLINE_STORE_DIR', 'DSH_CACHE_DIR', 'DSH_OFFLINE_CACHE_DIR']) delete env[key];
   const run = (bin, args, options = {}) => execute(bin, args, { cwd: root, env, ...options });
+  const step = (label, bin, args) => buildStep(label, () => run(bin, args));
   const capture = (bin, args) => run(bin, args, { stdio: 'pipe', encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
   const probe = (bin, args) => { try { return capture(bin, args); } catch { return null; } };
   const git = args => capture('git', args);
-  for (const [bin, args] of [['docker', ['info']], ['docker', ['compose', 'version']], ['npm', ['--version']], ['tar', ['--version']]]) capture(bin, args);
+  buildStep('检查构建环境', () => {
+    for (const [bin, args] of [['docker', ['info']], ['docker', ['compose', 'version']], ['npm', ['--version']], ['tar', ['--version']]]) capture(bin, args);
+  });
   if (git(['status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=all'])) throw new Error('Commit source changes before release; the checkout must be clean.');
   const revision = git(['rev-parse', 'HEAD']);
   const host = resolve(root, 'deepseek-harness');
@@ -84,18 +88,18 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       if (!/^pnpm@[0-9]+\.[0-9]+\.[0-9]+$/.test(pin)) throw new Error('packageManager must pin a pnpm version.');
       if (probe('pnpm', ['--version']) !== pin.slice(5)) {
         const tooling = resolve(root, '.local/tooling/pnpm');
-        run('npm', ['install', '--prefix', tooling, '--ignore-scripts', '--no-audit', '--no-fund', pin]);
+        step('准备构建工具', 'npm', ['install', '--prefix', tooling, '--ignore-scripts', '--no-audit', '--no-fund', pin]);
         env.PATH = `${resolve(tooling, 'node_modules/.bin')}${delimiter}${env.PATH ?? ''}`;
         if (capture('pnpm', ['--version']) !== pin.slice(5)) throw new Error('Could not prepare the pinned pnpm version.');
       }
-      run('pnpm', ['install', '--frozen-lockfile']);
-      run('pnpm', ['--filter', '@dsh-plugin/plugin-kit', 'build']);
-      run('pnpm', ['--filter', '@dsh-plugin/plugin-manager', 'build']);
+      step('安装项目依赖', 'pnpm', ['install', '--frozen-lockfile']);
+      step('构建 plugin-kit', 'pnpm', ['--filter', '@dsh-plugin/plugin-kit', 'build']);
+      step('构建 plugin-manager', 'pnpm', ['--filter', '@dsh-plugin/plugin-manager', 'build']);
       record.managerArchive = resolve(operation, 'plugin-manager.tgz');
-      run('pnpm', ['--filter', '@dsh-plugin/plugin-manager', 'pack', '--out', record.managerArchive]);
+      step('打包 plugin-manager', 'pnpm', ['--filter', '@dsh-plugin/plugin-manager', 'pack', '--out', record.managerArchive]);
       record.managerHash = hash(record.managerArchive);
-      run('npm', ['install', '--prefix', resolve(operation, 'tooling'), '--offline', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', record.managerArchive]);
-      run(process.execPath, ['scripts/package-plugins.mjs', '--plugins', site.plugins.join(',') || 'none', '--output', resolve(operation, 'plugins')]);
+      step('准备发布工具', 'npm', ['install', '--prefix', resolve(operation, 'tooling'), '--offline', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', record.managerArchive]);
+      step(`构建、检查和打包插件（${site.plugins.join('、') || '无插件'}）`, process.execPath, ['scripts/package-plugins.mjs', '--plugins', site.plugins.join(',') || 'none', '--output', resolve(operation, 'plugins')]);
       const manifest = resolve(operation, 'plugins/manifest.json');
       if (active) {
         const oldManifest = resolve(root, previous.manifest);
@@ -109,14 +113,14 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       const candidate = { ...site, manifest: relative(root, manifest).replaceAll('\\', '/') };
       record.candidatePath = resolve(operation, 'deployment.json');
       save(record.candidatePath, candidate);
-      run(process.execPath, [cli, 'render-compose', '--root', root, '--config', record.candidatePath, '--output', resolve(operation, 'preflight')]);
+      step('准备部署配置', process.execPath, [cli, 'render-compose', '--root', root, '--config', record.candidatePath, '--output', resolve(operation, 'preflight')]);
       let baseReference = site.hostImage ?? previous?.containerImage;
       let base;
       if (baseReference) {
         if (!immutableImage(baseReference)) throw new Error('Host image must be immutable.');
         if (probe('docker', ['image', 'inspect', baseReference]) === null) {
           if (baseReference.startsWith('sha256:')) baseReference = null;
-          else run('docker', ['pull', baseReference]);
+          else step('拉取宿主镜像', 'docker', ['pull', baseReference]);
         }
         if (baseReference) {
           base = inspect(baseReference);
@@ -125,9 +129,8 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       }
       let image;
       if (!baseReference) {
-        console.log('Building the DSH host from the supplied local source.');
         if (!existsSync(resolve(host, '.git'))) throw new Error('The checkout is incomplete: supply deepseek-harness source before deployment. build.sh does not download official source.');
-        const built = buildHost({ root, ...(site.hostImageConfig ? { config: site.hostImageConfig } : {}) });
+        const built = buildStep('构建 DSH 宿主镜像', () => buildHost({ root, ...(site.hostImageConfig ? { config: site.hostImageConfig } : {}) }));
         image = built.imageId;
         record.hostBuild = built.resultFile;
       } else {
@@ -138,7 +141,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
         copyFileSync(record.managerArchive, resolve(imageContext, 'plugin-manager.tgz'));
         copyFileSync(resolve(root, 'integrations/docker/manager-update.Dockerfile'), resolve(imageContext, 'Dockerfile'));
         image = `dsh-local/source:${revision.slice(0, 12)}-${record.managerHash.slice(0, 12)}`;
-        run('docker', ['build', '--network', 'none', '--build-arg', `RUNTIME_IMAGE=${baseTag}`, '--build-arg', `MANAGER_SHA256=${record.managerHash}`, '--build-arg', `FRAMEWORK_REVISION=${revision}`, '--tag', image, imageContext]);
+        step('构建部署镜像', 'docker', ['build', '--network', 'none', '--build-arg', `RUNTIME_IMAGE=${baseTag}`, '--build-arg', `MANAGER_SHA256=${record.managerHash}`, '--build-arg', `FRAMEWORK_REVISION=${revision}`, '--tag', image, imageContext]);
         if (inspect(baseTag).Id !== base.Id) throw new Error('The base image changed during construction.');
       }
       const info = inspect(image);
@@ -149,7 +152,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       let reference = info.Id;
       if (site.publishImage) {
         const tag = `${site.publishImage}:source-${revision.slice(0, 12)}-${record.managerHash.slice(0, 12)}`;
-        run('docker', ['tag', info.Id, tag]); run('docker', ['push', tag]);
+        run('docker', ['tag', info.Id, tag]); step('推送部署镜像', 'docker', ['push', tag]);
         reference = inspect(tag).RepoDigests?.find(value => value.startsWith(`${site.publishImage}@sha256:`));
         if (!reference) throw new Error('The published image has no matching digest.');
       }
@@ -164,7 +167,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
     inspect(record.image);
     const candidate = json(record.candidatePath);
     if (candidate.containerImage !== record.image || resolve(root, candidate.manifest) !== record.manifest) throw new Error('Saved deployment configuration changed.');
-    if (resume) run(process.execPath, [cli, 'render-compose', '--root', root, '--config', record.candidatePath, '--output', resolve(operation, 'resume-preflight')]);
+    if (resume) step('恢复部署配置', process.execPath, [cli, 'render-compose', '--root', root, '--config', record.candidatePath, '--output', resolve(operation, 'resume-preflight')]);
     if (record.previous && !record.backupComplete) {
       const backup = resolve(operation, 'backup'); mkdirSync(backup, { recursive: true, mode: 0o700 });
       record.backup = backup; record.status = 'backing-up'; persist();
@@ -172,23 +175,23 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       save(resolve(backup, 'active-compose.json'), record.previous);
       copyFileSync(record.previous.path, resolve(backup, 'compose.json'));
       const oldArgs = ['compose', '-p', record.previous.project, '-f', record.previous.path];
-      run('docker', [...oldArgs, 'stop', 'dsh']); stopped = true;
+      step('停止旧服务', 'docker', [...oldArgs, 'stop', 'dsh']); stopped = true;
       if (capture('docker', [...oldArgs, 'ps', '--status', 'running', '-q', 'dsh'])) throw new Error('The previous service is still running; backup refused.');
       const mounts = json(record.previous.path).services.dsh.volumes.filter(m => m.type === 'bind' && (!m.read_only || m.target.startsWith('/run/'))).map(m => m.source);
       if (!mounts.length || mounts.some(path => !path.startsWith('/') || path === '/')) throw new Error('Invalid persistent mounts for backup.');
       const archive = resolve(backup, `runtime-${randomUUID()}.tar.gz`);
-      run('tar', ['-czf', archive, '--', ...new Set(mounts)]); chmodSync(archive, 0o600);
+      step('备份运行数据', 'tar', ['-czf', archive, '--', ...new Set(mounts)]); chmodSync(archive, 0o600);
       record.backupArchive = archive; record.backupComplete = true; persist();
     }
     record.status = 'applying'; persist(); installing = true;
     save(runtimePath, candidate);
-    run(process.execPath, [cli, 'apply-compose', '--root', root, '--config', runtimePath, '--rebuild', ...(resume ? ['--resume'] : [])]);
+    step('部署并验证服务', process.execPath, [cli, 'apply-compose', '--root', root, '--config', runtimePath, '--rebuild', ...(resume ? ['--resume'] : [])]);
     record.status = 'ready'; record.completedAt = new Date().toISOString(); persist();
-    console.log(`Source release ready: ${record.revision}\nSite: ${site.publicUrl}\nEvidence: ${recordPath}`);
+    buildMessage(`发布已完成：${record.revision.slice(0, 12)}\n访问地址：${site.publicUrl}\n发布记录：${recordPath}`);
     return record;
   } catch (error) {
     record.status = installing || resume ? 'deployment-failed' : 'build-failed'; persist();
-    if (stopped && !installing) run('docker', ['compose', '-p', record.previous.project, '-f', record.previous.path, 'up', '-d', '--wait', 'dsh']);
+    if (stopped && !installing) step('恢复旧服务', 'docker', ['compose', '-p', record.previous.project, '-f', record.previous.path, 'up', '-d', '--wait', 'dsh']);
     console.error(`Release failed; inputs retained at ${operation}.${record.status === 'deployment-failed' ? ' Retry the saved deployment with bash deploy/build.sh --resume.' : ' Correct the build error and run bash deploy/build.sh again.'}`);
     throw error;
   }
