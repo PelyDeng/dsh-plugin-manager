@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { buildHostImage } from '../../integrations/docker/host-image.mjs';
 import { loadSite, readJson as json, saveJson as save } from './site.mjs';
 import { resolveDeployment } from '../../packages/plugin-manager/src/config.mjs';
-import { buildMessage, buildStep } from './build-output.mjs';
+import { buildMessage, buildProgress, buildStep } from './build-output.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -28,6 +28,8 @@ export function validateBase(reference, info) {
 
 /** Initialize missing inputs; resume only the saved image, packages and unchanged site preferences. */
 export function release({ root = repositoryRoot, config, resume = false } = {}, execute = command, buildHost = buildHostImage) {
+  const progress = completed => buildProgress(completed, 5);
+  progress(0);
   root = resolve(root);
   const env = { ...process.env };
   // Source releases take their deployment choices from the saved site file.
@@ -80,6 +82,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
   if (resume && (record.schemaVersion !== 2 || record.sitePath !== sitePath || record.siteHash !== hash(sitePath))) throw new Error('Resume requires the original unchanged site configuration. The saved release and backup are retained.');
   const persist = () => { save(recordPath, record); save(pointer, { operation, status: record.status }); };
   persist();
+  progress(1);
   let stopped = false, installing = false;
   try {
     const cli = resolve(operation, 'tooling/node_modules/@dsh-plugin/plugin-manager/dist/cli.mjs');
@@ -114,6 +117,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       record.candidatePath = resolve(operation, 'deployment.json');
       save(record.candidatePath, candidate);
       step('准备部署配置', process.execPath, [cli, 'render-compose', '--root', root, '--config', record.candidatePath, '--output', resolve(operation, 'preflight')]);
+      progress(2);
       let baseReference = site.hostImage ?? previous?.containerImage;
       let base;
       if (baseReference) {
@@ -168,6 +172,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
     const candidate = json(record.candidatePath);
     if (candidate.containerImage !== record.image || resolve(root, candidate.manifest) !== record.manifest) throw new Error('Saved deployment configuration changed.');
     if (resume) step('恢复部署配置', process.execPath, [cli, 'render-compose', '--root', root, '--config', record.candidatePath, '--output', resolve(operation, 'resume-preflight')]);
+    progress(3);
     if (record.previous && !record.backupComplete) {
       const backup = resolve(operation, 'backup'); mkdirSync(backup, { recursive: true, mode: 0o700 });
       record.backup = backup; record.status = 'backing-up'; persist();
@@ -183,10 +188,12 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       step('备份运行数据', 'tar', ['-czf', archive, '--', ...new Set(mounts)]); chmodSync(archive, 0o600);
       record.backupArchive = archive; record.backupComplete = true; persist();
     }
+    progress(4);
     record.status = 'applying'; persist(); installing = true;
     save(runtimePath, candidate);
     step('部署并验证服务', process.execPath, [cli, 'apply-compose', '--root', root, '--config', runtimePath, '--rebuild', ...(resume ? ['--resume'] : [])]);
     record.status = 'ready'; record.completedAt = new Date().toISOString(); persist();
+    progress(5);
     buildMessage(`发布已完成：${record.revision.slice(0, 12)}\n访问地址：${site.publicUrl}\n发布记录：${recordPath}`);
     return record;
   } catch (error) {
