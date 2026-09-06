@@ -8,6 +8,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createInterface } from 'node:readline';
+import { hostname } from 'node:os';
 /** Start one DSH child, keeping startup tokens out of normal logs. */
 export async function supervise(deployment, release) {
   const cli = hostCLI(deployment);
@@ -62,7 +63,7 @@ export async function supervise(deployment, release) {
     });
   });
   await new Promise((resolvePromise, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolvePromise); });
-  atomicJSON(ownerPath, { home: deployment.home, profile: deployment.profile, pid: process.pid, port: server.address().port, token });
+  atomicJSON(ownerPath, { home: deployment.home, profile: deployment.profile, host: hostname(), pid: process.pid, port: server.address().port, token });
   rmSync(join(deployment.profileRoot, STOPPED), { force: true });
   if (deployment.config.authUrlDirectWrite) privateFile(deployment.authUrlFile, '', true);
   else rmSync(deployment.authUrlFile, { force: true });

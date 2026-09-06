@@ -1,0 +1,18 @@
+{
+  "profile": "web",
+  "plugins": ["auth", "example"],
+  "dataRoot": ".local/data",
+  "home": ".local/data/dsh-home",
+  "workspace": ".local/data/workspace",
+  "artifacts": ".local/artifacts",
+  "publicOrigin": "http://127.0.0.1:7902",
+  "publicUrl": "http://127.0.0.1:7902",
+  "port": 7902,
+  "composeProject": "dsh-plugins",
+  "containerUid": 1000,
+  "containerGid": 1000,
+  "patches": [],
+  "publishImage": null,
+  "hostImage": null,
+  "hostImageConfig": null
+}

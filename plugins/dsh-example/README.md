@@ -12,7 +12,7 @@
 
 ## 运行
 
-先按[完整配置示例](examples/README.md)准备 `.local/deployment.json` 和两份插件配置，生成发布目录，并在同一个 DSH home 配置默认模型与密钥。直接使用已构建的官方宿主 CLI 时，省略 auth 模板的 Docker 专用 stateDir，再运行：
+Linux Docker 首次体验运行 `bash deploy/build.sh`，自动生成站点和插件默认配置，见[一键部署](../../doc/first-deployment.md)。全部配置字段及可选性见[完整配置示例](examples/README.md)。AI 对话需在同一个 DSH home 配置默认模型与密钥。使用已构建的官方宿主 CLI 直接启动时，按完整示例准备运行配置及发布目录，省略 auth 模板的 Docker 专用 stateDir，再运行：
 
 ```sh
 node deploy/scripts/deployment.mjs start --config .local/deployment.json --dsh-cli-js /path/to/dsh/lib/bin.js
