@@ -2,6 +2,8 @@
 
 镜像包含锁定官方 DSH 及独立打包的公共 manager，业务插件通过发布目录安装。需要 Linux Docker 引擎，Compose 使用 host 网络，DSH 默认监听宿主回环地址；外部入口由部署者配置代理。
 
+管理器构建仅安装根工具链、kit 和 manager 的锁定依赖，使用隔离依赖布局；下游插件的私有 `file:` 构建资源不进入镜像上下文。
+
 ```sh
 git submodule update --init --recursive -- deepseek-harness
 bash deploy/scripts/build-host-image.sh --help
