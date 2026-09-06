@@ -1,7 +1,7 @@
 /** Independent author packages share the workspace pipeline without inheriting its layout. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +44,38 @@ function run(root, ...args) {
   return spawnSync(process.execPath, [cli, ...args], { cwd: dirname(root), encoding: 'utf8', timeout: 30000 });
 }
 function ok(result) { assert.equal(result.status, 0, result.stdout + result.stderr); }
+
+test('repository packaging reports build, check and verified pack separately for each discovered plugin', t => {
+  const { base, root, manifest } = fixture(t);
+  const workspace = join(base, 'workspace');
+  mkdirSync(join(workspace, 'plugins'), { recursive: true });
+  json(join(workspace, 'package.json'), { private: true, packageManager: 'pnpm@11.19.0' });
+  writeFileSync(join(workspace, 'pnpm-workspace.yaml'), "packages:\n  - 'plugins/*'\n");
+  writeFileSync(join(workspace, 'pnpm-lock.yaml'), lock + '  plugins/alpha: {}\n  plugins/beta: {}\n');
+  for (const id of ['alpha', 'beta']) {
+    const pluginRoot = join(workspace, 'plugins', id);
+    mkdirSync(pluginRoot);
+    for (const file of readdirSync(root)) copyFileSync(join(root, file), join(pluginRoot, file));
+    json(join(pluginRoot, 'package.json'), { ...manifest, name: id, deepseekPlugin: { schemaVersion: 3, id, defaultEnabled: true } });
+    writeFileSync(join(pluginRoot, 'cordis.patch.yml'), `- insert:\n    - id: ${id}\n      name: ${id}\n`);
+  }
+  const script = fileURLToPath(new URL('../../../scripts/package-plugins.mjs', import.meta.url));
+  const pack = output => spawnSync(process.execPath, [script, '--root', workspace, '--plugins', 'all', '--output', output], {
+    encoding: 'utf8', timeout: 60000, env: { ...process.env, DSH_BUILD_PROGRESS: '1' },
+  });
+  const events = result => result.stdout.split(/\r?\n/).filter(line => line.startsWith('DSH_BUILD_PROGRESS ')).map(line => JSON.parse(line.slice('DSH_BUILD_PROGRESS '.length)));
+  const result = pack('.local/success'); ok(result);
+  const labels = ['安装插件依赖', ...['alpha', 'beta'].flatMap(id => ['构建', '检查', '打包'].map(task => `${task}插件 ${id}`))];
+  assert.deepEqual(events(result), labels.flatMap(label => [{ type: 'start', label }, { type: 'done', label }]));
+  assert.equal(read(join(workspace, '.local/success/manifest.json')).plugins.length, 2);
+  for (const id of ['alpha', 'beta']) assert.equal(readFileSync(join(workspace, 'plugins', id, 'tasks'), 'utf8'), 'build\ncheck\n');
+  writeFileSync(join(workspace, 'plugins/beta/check.mjs'), 'process.exitCode = 8;\n');
+  const failure = pack('.local/failure');
+  assert.notEqual(failure.status, 0);
+  assert.deepEqual(events(failure).at(-1), { type: 'failed', label: '检查插件 beta' });
+  assert.equal(events(failure).some(event => event.label === '打包插件 beta'), false);
+  assert.equal(existsSync(join(workspace, '.local/failure/manifest.json')), false);
+});
 
 test('explicit sources select disabled packages without a lockfile, and reject invalid declarations before scripts', t => {
   const { root, manifest } = fixture(t);

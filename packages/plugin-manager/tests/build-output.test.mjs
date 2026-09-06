@@ -32,11 +32,11 @@ test('successful builds show stages and summary while retaining noisy tool outpu
   assert.match(f.text(), /正在构建示例插件[\s\S]*构建示例插件已完成/);
   assert.match(f.text(), /发布已完成\n访问地址：https:\/\/example.test/);
   for (const label of ['构建示例插件', '准备镜像']) {
-    assert.ok(f.text().includes(`正在${label} [--------------------]   0%（估算）`));
+    assert.ok(f.text().includes(`正在${label} [--------------------]   0%`));
     assert.ok(f.text().includes(`${label}已完成 [====================] 100%`));
   }
   assert.ok(f.text().endsWith('发布已完成\n访问地址：https://example.test\n'));
-  assert.doesNotMatch(f.text(), /compiler-detail|tool-warning|DSH_BUILD_PROGRESS|\x1b|\r/);
+  assert.doesNotMatch(f.text(), /估算|compiler-detail|tool-warning|DSH_BUILD_PROGRESS|\x1b|\r/);
   assert.match(f.log().text, /compiler-detail/);
   assert.match(f.log().text, /tool-warning/);
   if (process.platform !== 'win32') assert.equal(statSync(f.log().path).mode & 0o777, 0o600);
@@ -69,7 +69,7 @@ test('each interactive step starts at zero, estimates waiting progress and smoot
   `, true);
   assert.equal(await f.run(), 0);
   for (const label of ['构建插件', '检查配置']) {
-    const frames = [...f.text().matchAll(new RegExp(`正在${label} \\[([^\\]]+)\\]\\s+(\\d+)%（估算）`, 'g'))];
+    const frames = [...f.text().matchAll(new RegExp(`正在${label} \\[([^\\]]+)\\]\\s+(\\d+)%`, 'g'))];
     const percents = frames.map(match => Number(match[2]));
     assert.equal(percents[0], 0);
     assert.ok(percents.length >= 9);

@@ -25,22 +25,23 @@ export function runPnpm(args, cwd, options = {}) {
   return result;
 }
 
-/** Execute build once before checks; pack callers consume the same checked output. */
-export function runPluginTask(root, plugin, action) {
+/** Execute build once before checks; step optionally wraps each synchronous task for progress display. */
+export function runPluginTask(root, plugin, action, step = (_label, run) => run()) {
   for (const task of action === 'check' ? ['build', 'check'] : [action]) {
     console.log(`[${plugin.id}] pnpm ${task}`);
-    runPnpm([...(plugin.directory === undefined ? ['--ignore-workspace'] : []), 'run', task], resolve(root, plugin.directory ?? '.'));
+    step(`${({ build: '构建', check: '检查', clean: '清理' })[task]}插件 ${plugin.id}`, () =>
+      runPnpm([...(plugin.directory === undefined ? ['--ignore-workspace'] : []), 'run', task], resolve(root, plugin.directory ?? '.')));
   }
 }
 
 /** Build the local kit once when selected plugin sources declare it as a workspace dependency. */
-export function preparePluginDependencies(root, plugins) {
+export function preparePluginDependencies(root, plugins, step = (_label, run) => run()) {
   const needsKit = plugins.some(plugin => {
     if (plugin.directory === undefined) return false;
     const manifest = JSON.parse(readFileSync(resolve(root, plugin.directory, 'package.json'), 'utf8'));
     return manifest.devDependencies?.['@dsh-plugin/plugin-kit']?.startsWith('workspace:');
   });
-  if (needsKit) runPnpm(['--filter', '@dsh-plugin/plugin-kit', 'build'], root);
+  if (needsKit) step('准备插件共享依赖', () => runPnpm(['--filter', '@dsh-plugin/plugin-kit', 'build'], root));
 }
 
 export function main(argv = process.argv.slice(2)) {

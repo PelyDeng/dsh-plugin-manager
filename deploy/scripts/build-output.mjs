@@ -48,11 +48,11 @@ export async function presentBuild(entry, args, { logDirectory, output = process
     const cursor = animate && remaining && frame++ % 2 === 0 ? '>' : '-';
     return `[${'='.repeat(filled)}${remaining ? cursor + '-'.repeat(remaining - 1) : ''}] ${String(percent).padStart(3)}%`;
   };
-  const draw = () => { if (output.isTTY && active) { clear(); output.write(`正在${active} ${bar(true)}（估算）`); } };
+  const draw = () => { if (output.isTTY && active) { clear(); output.write(`正在${active} ${bar(true)}`); } };
   const show = async event => {
     if (event.type === 'start') {
       active = event.label; frame = 0; percent = 0; started = performance.now();
-      if (output.isTTY) draw(); else line(`正在${active} ${bar()}（估算）`);
+      if (output.isTTY) draw(); else line(`正在${active} ${bar()}`);
     } else if (event.type === 'done') {
       settling = true;
       // Animate only the display; the build process continues without waiting.
