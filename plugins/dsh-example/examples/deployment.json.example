@@ -1,0 +1,31 @@
+{
+  "profile": "web",
+  "plugins": ["auth", "example"],
+  "manifest": ".local/artifacts/release/plugins/manifest.json",
+  "mode": "release",
+  "dataRoot": ".local/data",
+  "home": ".local/data/dsh-home",
+  "workspace": ".local/data/workspace",
+  "authUrlFile": ".local/data/dsh-web-auth-url.txt",
+  "artifacts": ".local/artifacts",
+  "publicOrigin": "http://127.0.0.1:7902",
+  "publicUrl": "http://127.0.0.1:7902",
+  "port": 7902,
+  "trustedHosts": ["127.0.0.1:7902"],
+  "containerImage": "registry.example.com/dsh-host@sha256:<替换为已验证的64位镜像摘要>",
+  "composeProject": "dsh-example-demo",
+  "containerUid": 1000,
+  "containerGid": 1000,
+  "offline": false,
+  "patches": [],
+  "instances": {
+    "auth": {
+      "settingsFile": ".local/data/dsh-home/plugins/auth/plugin.json",
+      "configRevision": 0
+    },
+    "example": {
+      "settingsFile": ".local/data/dsh-home/plugins/example/plugin.json",
+      "configRevision": 0
+    }
+  }
+}
