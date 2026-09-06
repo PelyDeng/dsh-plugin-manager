@@ -1,13 +1,13 @@
 /** Container settings must be usable by the declared process identity before restart. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { resolveDeployment } from '../src/config.mjs';
 import { applyCompose } from '../src/apply-compose.mjs';
-import { atomicJSON } from '../src/state.mjs';
+import { LOCK, OWNER, PENDING, atomicJSON } from '../src/state.mjs';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-compose-access-'));
@@ -36,6 +36,59 @@ test('fresh deployment initializes directories and settings for the container us
     cwd: f.root, encoding: 'utf8', ...(process.getuid() === 0 ? { uid, gid } : {}),
   });
   assert.equal(probe.status, 0, probe.stderr || probe.error?.message);
+});
+
+test('local image startup uses the configured health port and forwards recovery to the container', t => {
+  const f = fixture(t);
+  f.deployment.config.containerImage = `sha256:${'b'.repeat(64)}`;
+  f.deployment.config.port = 17913;
+  f.deployment.options.resume = true;
+  f.deployment.options.rebuild = true;
+  const result = applyCompose(f.deployment, f.release, () => {});
+  const service = JSON.parse(readFileSync(result.path, 'utf8')).services.dsh;
+  assert.equal(service.image, f.deployment.config.containerImage);
+  assert.equal(service.pull_policy, 'never');
+  assert.deepEqual(service.command, ['--rebuild', '--resume']);
+  assert.equal(service.environment.DSH_PORT, '17913');
+  assert.equal(JSON.parse(readFileSync(result.configPath, 'utf8')).port, 17913);
+});
+
+test('a stopped matching container permits preserving and clearing only its stale process records', t => {
+  const f = fixture(t);
+  const records = {
+    [LOCK]: { host: 'old-container', pid: 7 },
+    [OWNER]: { host: 'old-container', home: '/data/dsh-home', profile: 'web', pid: 7, token: 'kept-private' },
+    [PENDING]: { operationId: 'retain-this-operation' },
+  };
+  for (const [name, value] of Object.entries(records)) atomicJSON(join(f.deployment.profileRoot, name), value);
+  const result = applyCompose(f.deployment, f.release, args => {
+    if (args.includes('ps')) return 'old-id';
+    if (args[0] === 'inspect') return JSON.stringify([{ State: { Running: false, Restarting: false }, Config: { Hostname: 'old-container', Env: ['DSH_HOME=/data/dsh-home', 'DSH_PROFILE=web'] }, Mounts: [{ Type: 'bind', Source: f.deployment.dataRoot, Destination: '/data' }] }]);
+    return '';
+  });
+  for (const name of [LOCK, OWNER]) {
+    assert.equal(existsSync(join(f.deployment.profileRoot, name)), false);
+    assert.deepEqual(JSON.parse(readFileSync(join(dirname(result.path), 'stopped-records', name))), records[name]);
+  }
+  assert.deepEqual(JSON.parse(readFileSync(join(f.deployment.profileRoot, PENDING))), records[PENDING]);
+});
+
+for (const problem of ['running', 'hostname', 'mount', 'legacy', 'no-container', 'inspect-error']) test(`recovery retains process records when container proof fails: ${problem}`, t => {
+  const f = fixture(t);
+  const owner = { ...(problem === 'legacy' ? {} : { host: 'old-container' }), home: '/data/dsh-home', profile: 'web' };
+  atomicJSON(join(f.deployment.profileRoot, OWNER), owner);
+  let started = false;
+  assert.throws(() => applyCompose(f.deployment, f.release, args => {
+    if (args.includes('up')) started = true;
+    if (args.includes('ps')) return problem === 'no-container' ? '' : 'old-id';
+    if (args[0] === 'inspect') {
+      if (problem === 'inspect-error') throw new Error('inspect failed');
+      return JSON.stringify([{ State: { Running: problem === 'running', Restarting: false }, Config: { Hostname: problem === 'hostname' ? 'other' : 'old-container', Env: ['DSH_HOME=/data/dsh-home', 'DSH_PROFILE=web'] }, Mounts: [{ Type: 'bind', Source: problem === 'mount' ? join(f.root, 'other') : f.deployment.dataRoot, Destination: '/data' }] }]);
+    }
+    return '';
+  }));
+  assert.equal(started, false);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.deployment.profileRoot, OWNER))), owner);
 });
 
 test('unreadable existing settings reject deployment before stopping Docker and keep ownership', { skip: process.platform !== 'linux' ? 'Linux filesystem permissions required' : false }, t => {

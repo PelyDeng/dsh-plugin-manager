@@ -6,6 +6,8 @@
 
 标准插件的 `plugin.json` 由本包统一读取。Docker 实例使用 `dsh-plugin apply-compose --root <项目根> --config .local/deployment.json` 应用配置并等待就绪；`health` 根据已验证部署状态检查插件。声明、权限和迁移说明见[插件运行配置规范](../../doc/plugin-configuration.md)。
 
+仓库源码部署使用 `bash deploy/build.sh` 自动初始化和更新，见[一键部署](../../doc/first-deployment.md)。`apply-compose` 接受不可变本机镜像 ID 或仓库摘要；本机镜像不触发拉取。生成的容器配置同步自定义端口供健康检查使用，`--resume` 转交容器内管理器恢复原安装操作。
+
 ```sh
 dsh-plugin list --root /path/to/project
 dsh-plugin pack --root /path/to/project --plugins example --output .local/artifacts/release/plugins

@@ -17,12 +17,11 @@ Bash 实际构建入口为 `bash deploy/scripts/build-host-image.sh`，Node 入�
 
 ## 配置和运行
 
-已有站点的版本更新统一使用 `git pull --ff-only` 后执行 `bash deploy/build.sh`，构建当前仓库的管理器及站点选中的全部插件，自动更新镜像和清单、备份并部署，见[服务器源码发版](../../deploy/README.md#服务器源码发版)。下方为首次站点初始化及配置变更使用的基础命令。
+首次部署执行 `bash deploy/build.sh`，自动生成配置并从锁定源码构建、启动。以后 `git pull --ff-only` 后执行同一命令。默认使用本机镜像，无需 Harbor；配置和恢复见[一键部署](../../doc/first-deployment.md)。下方为配置变更及自定义集成使用的基础命令。
 
-按[插件运行配置规范](../../doc/plugin-configuration.md)准备站点 `.local/deployment.json`，设置发布清单、站点 origin、不可变 `containerImage` 和 `composeProject`。auth 默认启用，每个标准插件的 `plugin.json` 独立控制启停和认证。
+一键部署生成 `.local/deployment.json` 后，可通过基础命令单独应用插件 `plugin.json` 的启停和认证设置，见[插件运行配置规范](../../doc/plugin-configuration.md)。自定义集成需要自行提供清单及不可变 `containerImage`，支持本机 `sha256:<ID>` 或仓库 `repo@sha256:<摘要>`。
 
 ```sh
-pnpm package --plugins auth,example --output .local/artifacts/example-release/plugins
 node deploy/scripts/deployment.mjs apply-compose --config .local/deployment.json
 ```
 
@@ -32,4 +31,4 @@ node deploy/scripts/deployment.mjs apply-compose --config .local/deployment.json
 
 ## 源码发版使用的宿主层
 
-`deploy/build.sh` 使用 `manager-update.Dockerfile` 复用锁定的 DSH 宿主层，并安装服务器从当前源码构建的 manager 归档；同次发版还会重新构建全部选定业务插件。构建上下文只包含该 Dockerfile 和 `plugin-manager.tgz`；`RUNTIME_IMAGE` 必须是摘要引用，`MANAGER_SHA256` 是归档摘要，`FRAMEWORK_REVISION` 是已提交的仓库版本。宿主 gitlink 不一致时拒绝部署。
+`deploy/build.sh` 自动构建缺失或版本不匹配的宿主；匹配时使用 `manager-update.Dockerfile` 复用宿主层，安装当前源码打包的 manager。同次发版重新构建全部选定业务插件。增量构建上下文仅包含该 Dockerfile 和 `plugin-manager.tgz`；基底先固定到已核验的本机镜像 ID，构建后再次核对，`MANAGER_SHA256` 是归档摘要，`FRAMEWORK_REVISION` 是已提交仓库版本。

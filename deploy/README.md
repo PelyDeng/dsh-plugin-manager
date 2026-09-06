@@ -2,22 +2,28 @@
 
 ## 服务器源码发版
 
-已有 Docker 站点统一从服务器的插件仓库构建并部署：
+Linux Docker 站点首次部署和后续更新使用同一入口。首次克隆仓库后执行：
+
+```sh
+bash deploy/build.sh
+```
+
+后续更新：
 
 ```sh
 git pull --ff-only
 bash deploy/build.sh
 ```
 
-默认读取 `.local/deployment.json`，其他站点可用 `bash deploy/build.sh --config <站点配置>`。首次需要安装仓库 `packageManager` 锁定的 pnpm、Node.js、Docker Compose、tar 和 flock，并登录站点镜像仓库。该入口要求已有成功的 `active-compose.json`，首次部署按下文及 Docker 集成文档初始化。
+首次自动从 Git 中的 `deploy/config/site.defaults.json` 生成 `.local/site.json`。已有站点会先导入 `.local/deployment.json` 的设置及实际数据路径。以后读取 `.local/site.json`；`.local/deployment.json`、发布清单、Compose 和操作记录均由脚本生成，不需要人工准备，也不提交 Git。完整配置、前置环境和恢复说明见[一键部署设计与使用](../doc/first-deployment.md)。
 
-脚本检查源码已提交且工作区干净，安装锁定依赖，构建和检查管理器及站点 `plugins` 列出的全部插件，生成新的归档与发布清单。随后基于站点不可变镜像构建当前管理器镜像并推送，自动更新站点的镜像摘要和发布清单，停服备份后调用 `apply-compose` 等待健康检查。各组件版本来自源码，无需分别选择或升级，也不依赖本机上传的包或临时部署脚本。
+脚本检查源码已提交且工作区干净，自动准备锁定的 pnpm，安装依赖，构建和检查管理器及 `plugins` 列出的全部插件，并打包发布清单。没有匹配宿主时自动下载仓库 gitlink 锁定的官方源码并构建；已有匹配镜像时复用宿主层，安装本次构建的 manager。默认直接使用本机不可变镜像 ID，仅设置 `publishImage` 时推送镜像仓库。各组件版本均来自源码，无需分别升级。
 
-DSH 宿主必须与仓库 gitlink 一致，可以复用已构建的宿主层；宿主版本变更时先用仓库 `deploy/scripts/build-host-image.sh` 构建相应基底。构建不会拉取宿主的浮动版本。站点配置中的其他字段、插件认证配置及持久数据保持原值。
+DSH 宿主必须与仓库 gitlink 一致，宿主版本变更会自动重新构建。站点插件启停、认证配置及持久数据继续沿用；修改数据路径或 profile 需要显式迁移。
 
 新归档使用内容摘要命名。发布目录同时保留上一份清单引用的已校验归档，供 pnpm 在替换旧依赖引用时解析；部署目标仍只来自新清单，不重新启用已停用的插件。
 
-构建期间旧服务继续运行。每次记录和备份位于 `.local/artifacts/source-release-<提交>-<操作 ID>/`；备份包含原站点配置、Compose 和停止服务后的持久挂载数据。构建失败不停止服务，备份失败恢复旧服务；安装开始后失败则保留现场与备份，避免将已经迁移的数据自动交给旧版本。源码发版使用 flock 排他执行，期间不要并行运行其他管理命令。
+构建期间旧服务继续运行。每次记录和备份位于 `.local/artifacts/source-release-<提交>-<操作 ID>/`；备份包含原运行配置、Compose 和停止服务后的持久挂载数据。构建失败不停止服务，备份失败恢复旧服务；安装开始后失败则保留现场与备份，保持站点配置不变并执行 `bash deploy/build.sh --resume`。恢复使用同一次已验证的镜像和归档。源码发版使用 flock 排他执行，期间不要并行运行其他管理命令。
 
 标准插件的日常认证及启停只修改自身 `plugin.json`，然后执行 `apply-compose`；首次站点配置和旧 patch 迁移见[插件运行配置规范](../doc/plugin-configuration.md)。下方 `render-compose` 等基础操作用于自定义集成，不要求日常手工维护多份配置。
 
@@ -33,7 +39,7 @@ node deploy/scripts/deployment.mjs start --plugins auth,example --manifest .loca
 
 ## 运行配置
 
-`--config` 指向 JSON 配置。相对路径以显式项目根解析；仓库入口默认传入仓库根，独立 `dsh-plugin` 必须传 `--root`。路径优先级为 CLI → 环境变量 → 配置文件 → 默认值。
+以下为基础管理命令的运行配置；源码发版的用户配置见[站点配置](../doc/first-deployment.md#配置归属)。基础命令的 `--config` 指向运行 JSON。相对路径以显式项目根解析；仓库入口默认传入仓库根，独立 `dsh-plugin` 必须传 `--root`。基础命令的路径优先级为 CLI → 环境变量 → 配置文件 → 默认值。源码发版仅采用站点文件中的部署选项，不采用这些环境覆盖项。
 
 | CLI | 环境变量 | JSON 字段 | 新环境默认值 |
 | --- | --- | --- | --- |

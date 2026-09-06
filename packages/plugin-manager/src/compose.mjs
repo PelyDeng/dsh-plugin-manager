@@ -53,7 +53,7 @@ export function renderCompose(deployment, release, outputDirectory) {
       instances[plugin.id].runtimeConfig = target;
     }
   }
-  atomicJSON(configPath, { profile: deployment.profile, plugins: release.plugins.map(plugin => plugin.id), home: containerHome, workspace: containerWorkspace, authUrlFile: containerAuth, authUrlDirectWrite: directAuth, dataRoot: '/data', instances, patches, offline: deployment.offline, storeDir: '/data/plugin-store', cacheDir: '/data/plugin-cache', ...offlineSources,
+  atomicJSON(configPath, { profile: deployment.profile, port: deployment.config.port ?? 7902, plugins: release.plugins.map(plugin => plugin.id), home: containerHome, workspace: containerWorkspace, authUrlFile: containerAuth, authUrlDirectWrite: directAuth, dataRoot: '/data', instances, patches, offline: deployment.offline, storeDir: '/data/plugin-store', cacheDir: '/data/plugin-cache', ...offlineSources,
     ...(deployment.config.publicUrl ? { publicUrl: deployment.config.publicUrl } : {}), ...(deployment.config.publicOrigin ? { publicOrigin: deployment.config.publicOrigin } : {}), ...(deployment.config.trustedHosts ? { trustedHosts: deployment.config.trustedHosts } : {}) });
   mounts.push({ type: 'bind', source: configPath, target: '/run/dsh-deployment.json', read_only: true });
   const override = { services: { dsh: { environment: { DSH_HOME: containerHome, DSH_WORKSPACE: containerWorkspace, DSH_AUTH_URL_FILE: containerAuth, DSH_PROFILE: deployment.profile, DEPLOYMENT_CONFIG: '/run/dsh-deployment.json', PLUGIN_MANIFEST_FILE: '/opt/plugin-packages/manifest.json' }, volumes: mounts } } };

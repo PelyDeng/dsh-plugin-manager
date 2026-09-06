@@ -68,7 +68,7 @@
 
 ## 一次配置站点，之后统一应用
 
-站点 `.local/deployment.json` 保存候选发布清单和公共参数，例如：
+源码一键部署自动创建 `.local/site.json` 并生成 `.local/deployment.json`，后者保存候选清单和公共参数，不需要手工填写。首次部署及站点字段见[一键部署](first-deployment.md)。以下运行配置仅供自定义管理器集成参考：
 
 ```json
 {
