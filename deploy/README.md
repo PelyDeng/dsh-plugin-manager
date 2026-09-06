@@ -1,8 +1,25 @@
 # 部署与管理
 
+## 服务器源码发版
+
+已有 Docker 站点统一从服务器的插件仓库构建并部署：
+
+```sh
+git pull --ff-only
+bash deploy/build.sh
+```
+
+默认读取 `.local/deployment.json`，其他站点可用 `bash deploy/build.sh --config <站点配置>`。首次需要安装仓库 `packageManager` 锁定的 pnpm、Node.js、Docker Compose、tar 和 flock，并登录站点镜像仓库。该入口要求已有成功的 `active-compose.json`，首次部署按下文及 Docker 集成文档初始化。
+
+脚本检查源码已提交且工作区干净，安装锁定依赖，构建和检查管理器及站点 `plugins` 列出的全部插件，生成新的归档与发布清单。随后基于站点不可变镜像构建当前管理器镜像并推送，自动更新站点的镜像摘要和发布清单，停服备份后调用 `apply-compose` 等待健康检查。各组件版本来自源码，无需分别选择或升级，也不依赖本机上传的包或临时部署脚本。
+
+DSH 宿主必须与仓库 gitlink 一致，可以复用已构建的宿主层；宿主版本变更时先用仓库 `deploy/scripts/build-host-image.sh` 构建相应基底。构建不会拉取宿主的浮动版本。站点配置中的其他字段、插件认证配置及持久数据保持原值。
+
+构建期间旧服务继续运行。每次记录和备份位于 `.local/artifacts/source-release-<提交>-<操作 ID>/`；备份包含原站点配置、Compose 和停止服务后的持久挂载数据。构建失败不停止服务，备份失败恢复旧服务；安装开始后失败则保留现场与备份，避免将已经迁移的数据自动交给旧版本。源码发版使用 flock 排他执行，期间不要并行运行其他管理命令。
+
 标准插件的日常认证及启停只修改自身 `plugin.json`，然后执行 `apply-compose`；首次站点配置和旧 patch 迁移见[插件运行配置规范](../doc/plugin-configuration.md)。下方 `render-compose` 等基础操作用于自定义集成，不要求日常手工维护多份配置。
 
-插件先构建成独立发布目录，再通过官方 DSH CLI 安装。普通插件交付无需 Docker。Bash 使用 `deploy/build.sh`，Node 使用 `deploy/scripts/deployment.mjs`；两者支持同一组参数。
+插件先构建成独立发布目录，再通过官方 DSH CLI 安装。普通插件交付无需 Docker。基础管理操作使用 `deploy/build.sh <命令>` 或 `deploy/scripts/deployment.mjs <命令>`；不带参数的 `deploy/build.sh` 执行上述完整源码发版。
 
 ```sh
 pnpm package --plugins auth,example --output .local/artifacts/release/plugins

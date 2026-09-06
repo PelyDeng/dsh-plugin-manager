@@ -17,6 +17,8 @@ Bash 实际构建入口为 `bash deploy/scripts/build-host-image.sh`，Node 入�
 
 ## 配置和运行
 
+已有站点的版本更新统一使用 `git pull --ff-only` 后执行 `bash deploy/build.sh`，构建当前仓库的管理器及站点选中的全部插件，自动更新镜像和清单、备份并部署，见[服务器源码发版](../../deploy/README.md#服务器源码发版)。下方为首次站点初始化及配置变更使用的基础命令。
+
 按[插件运行配置规范](../../doc/plugin-configuration.md)准备站点 `.local/deployment.json`，设置发布清单、站点 origin、不可变 `containerImage` 和 `composeProject`。auth 默认启用，每个标准插件的 `plugin.json` 独立控制启停和认证。
 
 ```sh
@@ -28,6 +30,6 @@ node deploy/scripts/deployment.mjs apply-compose --config .local/deployment.json
 
 需要自行编排时可用 `render-compose` 输出覆盖文件，配合 `docker-compose.yml` 和自己的进程管理流程。不得同时用两种流程管理同一实例。
 
-## 只升级管理器的镜像
+## 源码发版使用的宿主层
 
-宿主版本保持不变时，可使用 `manager-update.Dockerfile`，以已验证的不可变运行镜像为基础，只安装独立 manager 归档。构建上下文只包含该 Dockerfile 和 `plugin-manager.tgz`；`RUNTIME_IMAGE` 必须是摘要引用，`MANAGER_SHA256` 是归档摘要，`FRAMEWORK_REVISION` 是归档对应的已提交框架版本。构建完成后验证管理器版本、宿主版本和实际容器，再发布新摘要到站点配置。此流程不改变 DSH 闭包和业务发布包。
+`deploy/build.sh` 使用 `manager-update.Dockerfile` 复用锁定的 DSH 宿主层，并安装服务器从当前源码构建的 manager 归档；同次发版还会重新构建全部选定业务插件。构建上下文只包含该 Dockerfile 和 `plugin-manager.tgz`；`RUNTIME_IMAGE` 必须是摘要引用，`MANAGER_SHA256` 是归档摘要，`FRAMEWORK_REVISION` 是已提交的仓库版本。宿主 gitlink 不一致时拒绝部署。

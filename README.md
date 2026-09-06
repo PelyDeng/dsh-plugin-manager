@@ -32,6 +32,8 @@ pnpm package --plugins auth,example --output .local/artifacts/release/plugins
 
 运行示例见[示例说明](plugins/dsh-example/README.md)。独立管理器接受明确的 `--root` 项目根，安装现成发布清单不需要作者源码。npm 包可在本地构建为 `.tgz`；这里的包名不表示已经发布到公共 registry。
 
+已有服务器站点更新只需 `git pull --ff-only` 后执行 `bash deploy/build.sh`，由服务器源码构建、备份并部署。前置条件及失败恢复见[部署说明](deploy/README.md#服务器源码发版)。
+
 ## 贡献与许可
 
 参见 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)。本仓库自有代码采用 [Apache-2.0](LICENSE)，第三方归属见 [NOTICE](NOTICE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目由社区维护，不是 DeepSeek 官方发布渠道。
