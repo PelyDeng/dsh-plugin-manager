@@ -5,3 +5,14 @@
 公共代码按包名引用。kit 和 manager 独立版本管理；插件的运行与类型产物不得包含工作区绝对路径、`workspace:`、`file:` 或 `link:` 运行依赖。修改公共包时检查实际消费者，更新相应 README。
 
 提交应包含必要的行为测试，并说明执行的验证和未覆盖范围。不要提交模型密钥、`.env`、真实 `env.conf`、用户数据库或构建产物。提交的自有贡献按仓库 Apache-2.0 许可提供；引入第三方材料时保留其许可与来源。
+
+Git 只保存可复现构建所需的输入。各级 `node_modules/` 是本机安装结果，由 `pnpm install --frozen-lockfile` 恢复；目录出现在资源管理器中不代表已提交，无需为整理 Git 删除它。
+
+| 内容 | 提交规则 |
+| --- | --- |
+| 源码、静态源资源、`package.json`、`pnpm-lock.yaml`、构建配置、配置模板 | 保留，用于复现安装与构建 |
+| `node_modules/`、`dist/`、`coverage/`、缓存、测试报告、`*.tsbuildinfo` | 忽略，由安装、构建或测试生成 |
+| `.local/`、真实配置、日志、编辑器临时文件和系统元数据 | 忽略，保留本机所需文件；运行数据放 `.local/data/`，发布产物放 `.local/artifacts/` |
+| `*.tgz` | 默认忽略；作为构建输入的 vendor 包须在插件 `devDependencies` 中声明 `file:vendor/<文件名>.tgz`，在插件 `.gitignore` 中显式放行并确认分发权限 |
+
+提交前运行 `node scripts/check-repository.mjs`。CI 同样执行此检查，拒绝被强制加入索引的忽略文件，并核验 vendor 声明。可用 `git check-ignore -v <路径>` 查看忽略依据，用 `git ls-files -- <路径>` 确认是否已跟踪；新增忽略规则不会自动移除已跟踪文件。

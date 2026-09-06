@@ -1,6 +1,14 @@
 node_modules/
+.pnpm-store/
 dist/
 coverage/
+.cache/
+.vite/
+.vitest/
+.tmp/
+playwright-report/
+test-results/
+*.tsbuildinfo
 .local/
 data/
 deploy-artifacts/
@@ -12,3 +20,10 @@ deploy/config/*.conf
 !deploy/config/*.conf.example
 *.tgz
 *.log
+*.log.*
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
