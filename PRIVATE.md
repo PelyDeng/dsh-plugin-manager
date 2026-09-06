@@ -15,3 +15,14 @@ pnpm package --plugins auth,closedoff --output .local/artifacts/release/plugins
 ```
 
 宿主子模块锁定 DSH `0.1.3-alpha.1`，以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。
+
+## 已部署实例的运维
+
+生产实例使用 `.local/compose.env` 中的不可变镜像引用、发布目录及数据目录。运行配置由 `.local/deployment.json` 和 `.local/production.patch.yml` 提供，Compose 覆盖位于 `.local/artifacts/compose/`。在仓库根操作：
+
+```sh
+docker compose --env-file .local/compose.env -p dsh-plugin -f integrations/docker/docker-compose.yml -f .local/artifacts/compose/compose.override.json ps
+docker compose --env-file .local/compose.env -p dsh-plugin -f integrations/docker/docker-compose.yml -f .local/artifacts/compose/compose.override.json up -d
+```
+
+调整发布清单或配置后，通过已安装管理器重新生成 Compose 覆盖并核对挂载；不能只替换 tgz 而忽略恢复状态。迁移证据位于实例 `.local/artifacts/migration/`。完整旧目录备份独立保留，不由部署或 clean 自动删除。
