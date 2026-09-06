@@ -12,6 +12,11 @@ function report(event) {
   if (process.env.DSH_BUILD_PROGRESS === '1') writeSync(process.stdout.fd, marker + JSON.stringify(event) + '\n');
 }
 
+/** Report completed release phases; this measures work stages, not elapsed time. */
+export function buildProgress(completed, total) {
+  report({ type: 'progress', percent: Math.floor(completed / total * 100) });
+}
+
 /** Report a synchronous build step without changing its result or failure. */
 export function buildStep(label, action) {
   report({ type: 'start', label });
@@ -36,11 +41,17 @@ export async function presentBuild(entry, args, { logDirectory, output = process
   mkdirSync(logDirectory, { recursive: true, mode: 0o700 });
   const log = resolve(logDirectory, `build-${Date.now()}-${randomUUID()}.log`);
   const fd = openSync(log, 'wx', 0o600);
-  let active = '', dots = 0;
+  let active = '', frame = 0, percent = 0;
   const tail = [];
   const clear = () => { if (output.isTTY) output.write('\r\x1b[2K'); };
   const line = text => { clear(); output.write(`${text}\n`); };
-  const draw = () => { if (output.isTTY && active) { clear(); output.write(`正在${active}${'.'.repeat(dots++ % 3 + 1)}`); } };
+  const bar = (animate = false) => {
+    const filled = Math.floor(percent / 5);
+    const remaining = 20 - filled;
+    const cursor = animate && remaining && frame++ % 2 === 0 ? '>' : '-';
+    return `[${'='.repeat(filled)}${remaining ? cursor + '-'.repeat(remaining - 1) : ''}] ${String(percent).padStart(3)}%`;
+  };
+  const draw = () => { if (output.isTTY && active) { clear(); output.write(`${bar(true)} 正在${active}`); } };
   const child = spawn(process.execPath, [entry, ...args], {
     env: { ...process.env, DSH_BUILD_PROGRESS: '1' },
     stdio: ['inherit', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
@@ -58,10 +69,15 @@ export async function presentBuild(entry, args, { logDirectory, output = process
       if (progress && text.startsWith(marker)) {
         let event;
         try { event = JSON.parse(text.slice(marker.length)); } catch { /* Tool text is retained as ordinary log output. */ }
+        if (event?.type === 'progress' && Number.isFinite(event.percent)) {
+          // The child must exit successfully before the terminal can show 100%.
+          percent = Math.max(percent, Math.min(99, Math.floor(event.percent)));
+          draw(); return;
+        }
         if (event && typeof event.label === 'string') {
-          if (event.type === 'start') { active = event.label; dots = 0; if (output.isTTY) draw(); else line(`正在${active}...`); return; }
-          if (event.type === 'done') { line(`${event.label}已完成`); active = ''; return; }
-          if (event.type === 'failed') { line(`${event.label}失败`); active = ''; return; }
+          if (event.type === 'start') { active = event.label; frame = 0; if (output.isTTY) draw(); else line(`${bar()} 正在${active}...`); return; }
+          if (event.type === 'done') { line(`${bar()} ${event.label}已完成`); active = ''; return; }
+          if (event.type === 'failed') { line(`${bar()} ${event.label}失败`); active = ''; return; }
           if (event.type === 'message') { line(event.label); return; }
         }
       }
@@ -75,10 +91,10 @@ export async function presentBuild(entry, args, { logDirectory, output = process
       child.once('close', (code, signal) => resolve(code ?? (signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 1)));
     });
     if (code !== 0) {
-      line(`${active || '构建发布'}失败（退出码 ${code}）`);
+      line(`${bar()} ${active || '构建发布'}失败（退出码 ${code}）`);
       if (tail.length) line(tail.join('\n'));
       line(`完整日志：${log}`);
-    }
+    } else { percent = 100; line(`${bar()} 构建发布已完成`); }
     return code;
   } finally {
     clearInterval(timer); clear(); closeSync(fd);
