@@ -2,7 +2,19 @@
 
 2026-09-06，公共框架 `c97f8d1` 合并至私有集成 `7a2b1ec`，封闭化插件按统一规范声明配置入口。公共改动保存在 GitHub，定制插件保存在 Gitee，宿主 gitlink 保持 `d347e703908d0406b7a7ef80e3a0e594d86b2215`。
 
-## 已验证
+## 最新部署：0.2.1
+
+2026-09-06，服务器部署公共框架 `7fc04ef`、私有集成 `7beb8fd`。plugin-manager 与 example 均更新为 `0.2.1`：管理器支持省略非必填发布元数据，example 归档包含完整配置模板及必填、默认值说明。DSH、auth 和 closedoff 版本保持不变。
+
+- 容器内与服务器独立运维目录 `.local/tooling` 的 manager 均为 `0.2.1`；容器 healthy，重启次数 0。
+- 容器内实际 health CLI 检查 auth、example、closedoff 均 ready；独立夹具验证未声明 `healthPath` 时返回 `ready: not-provided`，不阻断检查。
+- 公网三项健康接口均返回 200；example 与 closedoff 历史接口匿名访问均返回 401。两个业务插件继续要求认证。
+- 三份插件配置与业务 `env.conf` 摘要未变，数据库完整性检查通过。更新前后均为 3 个账号、4 条授权、3 个登录会话、6 条封闭化会话、0 条 example 会话。
+- 已安装 example 归档包含说明文档及三份 JSON 配置模板；模板没有覆盖生产配置。
+
+本次检查覆盖镜像、归档、容器健康、HTTP 接口及数据保留，没有执行浏览器交互或真实模型问答回归。证据位于 `.local/artifacts/runtime-0.2.1-7beb8fd/result.json`，镜像构建记录位于同目录 `image/record.json`。同目录 `backup/` 保留停写后的完整 DSH home、原站点配置及 Compose 配置；旧镜像和发布目录保留。
+
+## 首次规范验收
 
 - 公共仓库 `pnpm check`、`pnpm build`、`node scripts/check-artifacts.mjs` 和源码文档检查通过；manager 74 项通过，3 项 Windows 平台不适用的检查跳过。
 - 私人仓库 `pnpm check` 通过，包含封闭化插件 105 项行为测试；三个插件的发布归档已生成并验证。
@@ -14,17 +26,17 @@
 
 验收覆盖配置应用、HTTP 接口、安装状态和数据保留；本次没有执行浏览器交互或真实模型问答回归。
 
-## 运行版本
+## 当前运行版本
 
 | 组件 | 版本 |
 | --- | --- |
 | DSH | 0.1.3-alpha.1 |
-| plugin-manager | 0.2.0 |
+| plugin-manager | 0.2.1 |
 | auth | 0.8.0 |
-| example | 0.2.0 |
+| example | 0.2.1 |
 | closedoff | 0.3.0 |
 
-镜像以原运行镜像为基础，仅替换 manager，引用为 `harbor.pelycloud.com/pelycloud/dsh-host@sha256:9dff95f5e3eac32e331ed6a4fac9e74c192473daa2f85f189d1bcf37536b5f0f`。
+镜像以原运行镜像为基础，仅替换 manager，当前引用为 `harbor.pelycloud.com/pelycloud/dsh-host@sha256:f447357b0d2203072fb1eb76ebfb02ca6fd607b0a7655b725fd0385abc341f42`。升级前镜像为 `harbor.pelycloud.com/pelycloud/dsh-host@sha256:9dff95f5e3eac32e331ed6a4fac9e74c192473daa2f85f189d1bcf37536b5f0f`。
 
 ## 日常配置
 
@@ -38,4 +50,4 @@ node .local/tooling/node_modules/@dsh-plugin/plugin-manager/dist/cli.mjs apply-c
 
 站点 origin、镜像、发布清单和 Compose 项目名只需在站点配置中维护；日常认证切换不修改这些字段。不要使用原手工 Compose 覆盖文件重启同一实例。当前成功生成的 Compose 路径记录在 `.local/artifacts/active-compose.json`。
 
-本次证据位于 `.local/artifacts/plugin-settings-release/`：`production-result.json` 记录备份位置、版本、数据库计数和生产检查，`smoke-result.json` 与 `private-smoke-result.json` 记录隔离验收，`linux-final-tests.log` 记录 Linux 专项检查。运行证据和备份不提交 Git。
+首次规范验收证据位于 `.local/artifacts/plugin-settings-release/`：`production-result.json` 记录备份位置、版本、数据库计数和生产检查，`smoke-result.json` 与 `private-smoke-result.json` 记录隔离验收，`linux-final-tests.log` 记录 Linux 专项检查。运行证据和备份不提交 Git。
