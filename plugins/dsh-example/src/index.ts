@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, createAccess, createPluginHttp, onRevoked, registerPlugin, type Actor } from '@dsh-plugin/plugin-kit'
 import type { Config } from './config.ts'
@@ -169,11 +169,13 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     let ended = false
     let timer: NodeJS.Timeout | undefined
     let unsubscribe: (() => void) | undefined
+    let unsubscribeLive: (() => void) | undefined
     const finish = () => {
       if (ended) return
       ended = true
       clearTimeout(timer)
       unsubscribe?.()
+      unsubscribeLive?.()
       delete current.stop
       current.busy = false
       current.used = Date.now()
@@ -213,6 +215,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
       response.flushHeaders()
       send({ type: 'session', conversationId: id })
+      // This runtime event is absent from the published 0.1.2 development types.
+      const onLive = ctx.on.bind(ctx) as (name: 'agent/assistant-stream', listener: (payload: {
+        agent: AgentHandle['agent']
+        frame: { type: 'start' | 'end' } | { type: 'chunk'; chunk: StreamChunk }
+      }) => void) => () => void
+      unsubscribeLive = onLive('agent/assistant-stream', ({ agent, frame }) => {
+        if (agent === current.handle?.agent && frame.type === 'chunk' && frame.chunk.type === 'text-delta') {
+          send({ type: 'delta', text: frame.chunk.text })
+        }
+      })
       unsubscribe = ctx.on('session/event', (session, event: SessionEvent) => {
         if (String(session.id) !== id || ended) return
         if (event.type === 'assistant/chunk' && event.data.chunk.type === 'text-delta') send({ type: 'delta', text: event.data.chunk.text })
