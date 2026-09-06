@@ -3,6 +3,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSyn
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isPluginPath } from '@dsh-plugin/plugin-kit/route-path';
+import { validateConfiguration } from './plugin-settings.mjs';
 
 
 const reservedVariables = new Set('PATH HOME USER USERNAME PWD OLDPWD IFS ENV SHELL SHELLOPTS CDPATH TMP TEMP TMPDIR COMSPEC PATHEXT SYSTEMROOT WINDIR UID EUID PPID LANG LC_ALL MANIFEST_FILE CATALOG_FILE AUTH_URL_FILE PUBLIC_URL PROFILE_DIR MANAGED_FILE STATE_FILE PACKAGE_DIR VERIFY_BIN NODE_BIN'.split(' '));
@@ -68,7 +69,9 @@ export function discoverPlugins(root) {
     const meta = manifest.deepseekPlugin;
     const label = `${entry.name}/package.json#deepseekPlugin`;
     requireValue(meta && meta.schemaVersion === 3, `${label}.schemaVersion 仅支持 3；旧 env 声明请迁移为 runtimeConfig，并从 files 移除用户配置。`);
-    object(meta, ['schemaVersion', 'id', 'defaultEnabled', 'runtimeConfig', 'healthPath', 'verifyFiles', 'development', 'displayName', 'entryPath', 'permissions'], label);
+    object(meta, ['schemaVersion', 'id', 'defaultEnabled', 'runtimeConfig', 'configuration', 'healthPath', 'verifyFiles', 'development', 'displayName', 'entryPath', 'permissions'], label);
+    validateConfiguration(meta.configuration, label);
+    requireValue(!meta.configuration || meta.healthPath, `${label}: configuration 需要 healthPath。`);
     requireValue(typeof meta.id === 'string' && /^[a-z][a-z0-9-]*$/u.test(meta.id) && !['all', 'none', 'dsh-console'].includes(meta.id), `${label}.id 无效或为保留字。`);
     requireValue(typeof manifest.name === 'string' && /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(manifest.name), `${entry.name} 包名无效。`);
     requireValue(typeof manifest.version === 'string' && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(manifest.version), `${entry.name} 必须声明版本。`);
@@ -113,7 +116,7 @@ export function discoverPlugins(root) {
     requireValue(!verifyFiles.some(privatePackagePath), `${entry.name} 的公开资源不得指向用户配置或部署数据。`);
     plugins.push({ id: meta.id, directory: `plugins/${entry.name}`, package: manifest.name, version: manifest.version,
       displayName: meta.displayName ?? manifest.name, description: manifest.description, entryPath: meta.entryPath, permissions,
-      defaultEnabled: meta.defaultEnabled ?? true, runtimeConfig, development, healthPath: meta.healthPath, verifyFiles });
+      defaultEnabled: meta.defaultEnabled ?? true, runtimeConfig, configuration: meta.configuration, development, healthPath: meta.healthPath, verifyFiles });
   }
   for (const field of ['id', 'package']) {
     const seen = new Set();

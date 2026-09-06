@@ -4,6 +4,8 @@
 
 独立安装 `.tgz` 后使用 `dsh-plugin`。每个项目操作要求 `--root <项目根>`；相对配置、home 和产物路径均相对这个根解析。
 
+标准插件的 `plugin.json` 由本包统一读取。Docker 实例使用 `dsh-plugin apply-compose --root <项目根> --config .local/deployment.json` 应用配置并等待就绪；`health` 根据已验证部署状态检查插件。声明、权限和迁移说明见[插件运行配置规范](../../doc/plugin-configuration.md)。
+
 ```sh
 dsh-plugin list --root /path/to/project
 dsh-plugin pack --root /path/to/project --plugins example --output .local/artifacts/release/plugins

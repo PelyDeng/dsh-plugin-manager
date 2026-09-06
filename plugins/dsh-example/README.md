@@ -1,5 +1,7 @@
 # dsh-example
 
+通过管理器部署时，编辑 `<DSH home>/plugins/example/plugin.json` 的 `accessMode` 即可单独切换本插件认证，默认 `authenticated`；`enabled` 控制插件是否运行。修改后统一应用部署，无需重打包或修改生产 patch、Compose、健康检查名单，见[配置规范](../../doc/plugin-configuration.md)。下方环境变量适用于直接使用官方 DSH Bundle 的接入方式。
+
 可复制的 AI 对话插件，页面为 `/example`，就绪探针为 `/example/ready`。支持多轮问答、SSE 流式输出、停止生成、新建对话、历史列表和恢复追问。
 
 示例使用宿主选择的模型与 DSH Agent、会话日志，不保存模型密钥。工具白名单为空，即使宿主安装其他工具也不会自动使用。SQLite 仅保存身份、标题和时间等历史目录信息，消息正文由 DSH 持久化。

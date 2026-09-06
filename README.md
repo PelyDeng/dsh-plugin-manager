@@ -14,7 +14,7 @@ pnpm list:plugins
 pnpm package --plugins auth,example --output .local/artifacts/release/plugins
 ```
 
-普通构建和测试无需初始化宿主子模块、配置模型密钥或启动 Docker。源码默认选集包含 `example`，`auth` 需显式选择；示例默认要求登录，部署时选择 `auth,example` 并配置公开访问 origin。安装现成清单默认选中其中全部插件，可用 `--plugins` 限定。
+普通构建和测试无需初始化宿主子模块、配置模型密钥或启动 Docker。源码默认选集包含 `auth` 和 `example`；示例默认要求登录，部署时选择 `auth,example` 并配置公开访问 origin。安装现成清单默认选中其中全部插件，可用 `--plugins` 限定。
 
 ## 包与目录
 

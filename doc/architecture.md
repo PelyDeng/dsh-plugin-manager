@@ -7,3 +7,5 @@
 根 workspace 包含 `packages/*` 与 `plugins/*`，发现器只扫描后者。官方 `deepseek-harness/` 是独立的可选 gitlink，使用自己的 workspace 和锁文件。Docker 集成消费同一构建流程产生的 manager tgz，宿主镜像不内置业务插件。
 
 源码、发布归档和运行数据分别管理。`.local` 不进入 Git、插件归档或源码镜像上下文。部署可显式挂载其中的发布目录；这不改变其作为运行输入的性质。
+
+标准插件通过 `configuration` 声明 Cordis 配置入口和认证角色，每个实例的 `plugin.json` 控制启用及认证模式。管理器据此生成不可变 patch，通过官方 CLI 同步 Bundle；健康检查读取成功部署状态中的探针声明。站点参数与业务凭据分别保存，不在插件切换时重复修改。完整规则见[插件运行配置规范](plugin-configuration.md)。

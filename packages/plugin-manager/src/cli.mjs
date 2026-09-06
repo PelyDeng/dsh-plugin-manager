@@ -11,7 +11,7 @@ import { migrateData, parseMigrationArguments } from './migrate-data.mjs';
 export async function main(args = process.argv.slice(2)) {
   const [action, ...rest] = args;
   if (!action || action === '--help') {
-    console.log('dsh-plugin <list|build|check|clean|pack|catalog|deploy|start|stop|sync|verify|paths|adopt|unlock|render-compose|migrate-data|migrate-artifacts|set-api-key> --root <project> [options]');
+    console.log('dsh-plugin <list|build|check|clean|pack|catalog|deploy|start|stop|sync|verify|paths|adopt|unlock|health|apply-compose|render-compose|migrate-data|migrate-artifacts|set-api-key> --root <project> [options]');
   } else if (['list', 'build', 'check', 'clean'].includes(action)) tasks(args);
   else if (action === 'pack') pack(rest);
   else if (action === 'catalog') catalog(rest);

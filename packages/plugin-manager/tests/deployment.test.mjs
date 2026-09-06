@@ -7,6 +7,7 @@ import { join, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { resolveDeployment, parseArguments, loadRelease, runtimeEnvironment, computeChanges, synchronize, atomicJSON, finalize, acquireLock, renderCompose, checkDataSelection, verifyReady, adoptLegacy, tarCommand, supervise, prepareOfflineDependencies } from '../src/deployment.mjs';
+import { readState } from '../src/installation.mjs';
 
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
 
@@ -118,6 +119,23 @@ test('official add, install and remove receive the same offline store and metada
     assert.equal(args[args.indexOf('--store-dir') + 1], join(f.root, 'data/writable store'));
     assert.equal(args[args.indexOf('--cache-dir') + 1], join(f.root, 'data/writable cache'));
   }
+});
+
+test('saved candidates survive disabling every plugin and allow re-enabling from source', async t => {
+  const f = fixture(t);
+  f.deployment.candidates = f.release.plugins.map(plugin => plugin.id);
+  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  await finalize(f.deployment, f.release, { running: true });
+  const disabled = { ...f.release, plugins: [] };
+  await synchronize(f.deployment, disabled, { execute: f.execute, cli: f.cli });
+  await finalize(f.deployment, disabled, { running: true });
+  const state = readState(join(f.deployment.profileRoot, '.deepseek-plugin-state.json'));
+  assert.deepEqual(state.plugins, []);
+  assert.deepEqual(state.candidates, ['alpha', 'beta']);
+  const enabled = { ...f.release, plugins: f.release.plugins.filter(plugin => state.candidates.includes(plugin.id)) };
+  await synchronize(f.deployment, enabled, { execute: f.execute, cli: f.cli });
+  await finalize(f.deployment, enabled, { running: true });
+  assert.deepEqual(readState(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')).plugins.map(plugin => plugin.id), ['alpha', 'beta']);
 });
 
 test('offline inputs are copied independently and warmed metadata refreshes an existing writable cache', t => {

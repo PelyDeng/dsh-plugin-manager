@@ -1,6 +1,6 @@
 {
   "name": "@dsh-plugin/plugin-manager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Discover, package and manage DSH plugin bundles",
   "type": "module",
   "license": "Apache-2.0",

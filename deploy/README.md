@@ -1,5 +1,7 @@
 # 部署与管理
 
+标准插件的日常认证及启停只修改自身 `plugin.json`，然后执行 `apply-compose`；首次站点配置和旧 patch 迁移见[插件运行配置规范](../doc/plugin-configuration.md)。下方 `render-compose` 等基础操作用于自定义集成，不要求日常手工维护多份配置。
+
 插件先构建成独立发布目录，再通过官方 DSH CLI 安装。普通插件交付无需 Docker。Bash 使用 `deploy/build.sh`，Node 使用 `deploy/scripts/deployment.mjs`；两者支持同一组参数。
 
 ```sh
