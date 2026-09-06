@@ -38,6 +38,22 @@ test('standalone works without auth and restricts the Agent to zero tools', asyn
   expect(events.find(e => e.type === 'answer').text).toBe('你好！')
 })
 
+test('live runtime frames stream only for the request Agent and stop after revocation', async () => {
+  const f = await setup()
+  const response = await f.request('/chat', { message: 'first' })
+  const agent = f.handles[0].agent
+  const frame = text => ({ type: 'chunk', chunk: { type: 'text-delta', text } })
+  f.ctx.emit('agent/assistant-stream', { agent: {}, frame: frame('FOREIGN') })
+  f.ctx.emit('agent/assistant-stream', { agent, frame: frame('你好') })
+  f.revoked.add('login-a')
+  f.ctx.emit('agent/assistant-stream', { agent, frame: frame('PRIVATE') })
+  const body = await response.text()
+  expect(body).toContain('你好')
+  expect(body).not.toContain('FOREIGN')
+  expect(body).not.toContain('PRIVATE')
+  expect(f.handles[0].cancelled).toBe(true)
+})
+
 test('followups reuse owned Agent; concurrent, foreign and other-login requests fail', async () => {
   const f = await setup()
   const response = await f.request('/chat', { message: 'first' })

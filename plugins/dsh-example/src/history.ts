@@ -3,6 +3,7 @@ import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import * as llm from '@deepseek-ai/dsh-llm'
 import { AccessError, actorKey, type Actor } from '@dsh-plugin/plugin-kit'
 
 export class HistoryStore {
@@ -47,6 +48,13 @@ export function projectHistory(events: readonly SessionEvent[]): { role: 'user' 
       answer = undefined
     } else if (event.type === 'assistant/chunk' && event.data.chunk.type === 'text-delta') current().text += event.data.chunk.text
     else if (event.type === 'assistant/message') current().text = event.data.message.content.filter(block => block.type === 'text').map(block => block.text).join('')
+    else if ((event.type as string) === 'assistant/attempt') {
+      // Decode the installed runtime's durable format through its public API.
+      const runtime = llm as unknown as { expandAssistantStream?: (stream: unknown) => readonly { chunk: llm.StreamChunk }[] }
+      if (!runtime.expandAssistantStream) throw new Error('The DSH runtime cannot read its assistant attempt stream')
+      const { stream } = event.data as unknown as { stream: unknown }
+      current().text = runtime.expandAssistantStream(stream).map(({ chunk }) => chunk.type === 'text-delta' ? chunk.text : '').join('')
+    }
   }
   return messages.filter(message => message.text !== '')
 }

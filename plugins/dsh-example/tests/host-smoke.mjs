@@ -53,6 +53,7 @@ const run = (...args) => {
   }
   const result = spawnSync(process.execPath, [cli, ...args], { env, cwd: operation, encoding: 'utf8', timeout: 120000 })
   if (result.status !== 0) { writeFileSync(join(operation, 'cli.log'), result.stdout + result.stderr); throw new Error('CLI failed; diagnostics: ' + operation) }
+  return result.stdout.trim()
 }
 let child, hostLog = ''
 async function stop() {
@@ -121,9 +122,14 @@ try {
   const catalog = await (await request('/auth/api/plugins', undefined, alice)).json()
   assert.equal(catalog.plugins.find(p => p.id === 'example').tools.length, 0)
   const live = await request('/example/chat', { message: '退出时停止', conversationId: personal }, alice)
-  const streamed = live.text()
+  let signalDelta
+  const firstDelta = new Promise(resolve => { signalDelta = resolve })
+  const interrupted = []
+  const streamed = readEvents(live, event => { interrupted.push(event); if (event.type === 'delta') signalDelta() }).catch(error => error)
+  await Promise.race([firstDelta, streamed.then(() => { throw new Error('Stream ended before its first delta') })])
   assert.equal((await request('/auth/api/logout', {}, alice)).status, 200)
-  assert.ok(!(await streamed).includes('"type":"done"'), 'logout must interrupt the stream')
+  await streamed
+  assert.ok(!interrupted.some(event => event.type === 'done'), 'logout must interrupt the stream')
   await stop()
   await start('standalone')
   assert.deepEqual((await list()).map(i => i.id), [shared])
@@ -136,11 +142,14 @@ try {
   await start('authenticated')
   alice = await login('alice')
   assert.deepEqual((await list(alice)).map(i => i.id), [personal])
+  const partial = await (await request('/example/history?id=' + personal, undefined, alice)).json()
+  assert.equal(partial.messages.at(-1).role, 'assistant')
+  assert.ok(partial.messages.at(-1).text.startsWith('你好！'), 'interrupted durable answer must survive restart')
   await chat('重新登录后继续追问', alice, personal)
   assert.ok(JSON.stringify(requests.at(-1).messages).includes('个人模式问题'), 'resumed model request must contain previous personal question')
-  const result = { officialHost: '49a606bc5b5934603f22a26957a07dc799ab0291', realTgz: true, realAuth: true,
+  const result = { officialHost: process.env.DSH_HOST_SOURCE_SHA ?? null, hostVersion: run('--version'), realTgz: true, realAuth: true,
     stream: true, standaloneWithoutAuth: true, modeSwitch: 'off-on-off-on', crossUserDenied: true,
-    logoutStopsStream: true, persistentResume: true, model: 'local HTTP fixture; no paid API call' }
+    logoutStopsStream: true, interruptedHistory: true, persistentResume: true, model: 'local HTTP fixture; no paid API call' }
   writeFileSync(join(operation, 'result.json'), JSON.stringify(result, null, 2) + '\n')
   console.log(JSON.stringify({ ...result, operation }))
   if (process.argv.includes('--serve')) {
