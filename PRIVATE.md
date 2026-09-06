@@ -11,14 +11,14 @@
 ```sh
 pnpm install --frozen-lockfile
 pnpm check --plugins auth,closedoff,example
-pnpm package --plugins auth,closedoff --output .local/artifacts/release/plugins
+pnpm package --plugins auth,closedoff,example --output .local/artifacts/release/plugins
 ```
 
 宿主子模块锁定 DSH `0.1.3-alpha.1`，以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。
 
 ## 已部署实例的运维
 
-生产实例使用 `.local/compose.env` 中的不可变镜像引用、发布目录及数据目录。运行配置由 `.local/deployment.json` 和 `.local/production.patch.yml` 提供，Compose 覆盖位于 `.local/artifacts/compose/`。在仓库根操作：
+生产实例启用 `auth,closedoff,example`，封闭化和示例均使用 `authenticated` 模式。管理员自动看到“AI 对话示例”，普通账号通过权限管理授权。生产实例使用 `.local/compose.env` 中的不可变镜像引用、发布目录及数据目录。运行配置由 `.local/deployment.json` 和 `.local/production.patch.yml` 提供，Compose 覆盖位于 `.local/artifacts/compose/`，健康检查包含 `/example/ready`。在仓库根操作：
 
 ```sh
 docker compose --env-file .local/compose.env -p dsh-plugin -f integrations/docker/docker-compose.yml -f .local/artifacts/compose/compose.override.json ps
