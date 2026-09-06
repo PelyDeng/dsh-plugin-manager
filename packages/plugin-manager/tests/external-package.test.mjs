@@ -45,6 +45,28 @@ function run(root, ...args) {
 }
 function ok(result) { assert.equal(result.status, 0, result.stdout + result.stderr); }
 
+test('runPnpm forwards captured pack diagnostics on failure and keeps successful pack output quiet', t => {
+  const { base, root, manifest } = fixture(t);
+  manifest.scripts.prepack = 'node prepack.mjs';
+  json(join(root, 'package.json'), manifest);
+  const runner = join(base, 'pack.mjs');
+  const tasks = new URL('../src/run-plugin-task.mjs', import.meta.url).href;
+  writeFileSync(runner, `import { runPnpm } from ${JSON.stringify(tasks)};\ntry { runPnpm(['--ignore-workspace', 'pack', '--json', '--out', process.argv[2]], ${JSON.stringify(root)}, { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 32 * 1024 * 1024 }); } catch (error) { console.error(error.message); process.exitCode = 1; }\n`);
+  const pack = name => spawnSync(process.execPath, [runner, join(base, name)], { encoding: 'utf8', timeout: 30000 });
+  const messages = 'console.log("pack-stdout-detail"); console.error("pack-stderr-detail");';
+  writeFileSync(join(root, 'prepack.mjs'), messages + 'process.exitCode = 6;\n');
+  const failure = pack('failure.tgz');
+  assert.notEqual(failure.status, 0);
+  assert.match(failure.stdout + failure.stderr, /pack-stdout-detail/);
+  assert.match(failure.stdout + failure.stderr, /pack-stderr-detail/);
+  assert.match(failure.stderr, /pnpm .*失败/);
+  writeFileSync(join(root, 'prepack.mjs'), messages + '\n');
+  const success = pack('success.tgz');
+  ok(success);
+  assert.doesNotMatch(success.stdout + success.stderr, /pack-stdout-detail|pack-stderr-detail/);
+  assert.ok(existsSync(join(base, 'success.tgz')));
+});
+
 test('repository packaging reports build, check and verified pack separately for each discovered plugin', t => {
   const { base, root, manifest } = fixture(t);
   const workspace = join(base, 'workspace');

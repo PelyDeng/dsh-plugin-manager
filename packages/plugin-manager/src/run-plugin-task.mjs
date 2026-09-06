@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { delimiter, resolve } from 'node:path';
 import { parseOptions, sourcePlugins } from './plugins.mjs';
 
-/** Run pnpm without passing repository paths or metadata through a command shell. */
+/** Run pnpm without a command shell; forward captured diagnostics only on failure. */
 export function runPnpm(args, cwd, options = {}) {
   let command = 'pnpm';
   let prefix = [];
@@ -20,8 +20,11 @@ export function runPnpm(args, cwd, options = {}) {
     prefix = [cli];
   }
   const result = spawnSync(command, [...prefix, ...args], { cwd, stdio: 'inherit', ...options, shell: false });
-  if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`pnpm ${args[0]} 失败，退出码 ${result.status ?? result.signal}。`);
+  if (result.error || result.status !== 0) {
+    if (result.stdout?.length) process.stdout.write(result.stdout);
+    if (result.stderr?.length) process.stderr.write(result.stderr);
+    throw result.error ?? new Error(`pnpm ${args[0]} 失败，退出码 ${result.status ?? result.signal}。`);
+  }
   return result;
 }
 
