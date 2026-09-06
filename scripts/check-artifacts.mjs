@@ -68,8 +68,7 @@ try {
   runPnpm(['typecheck'], external);
   const plugins = JSON.parse(readFileSync(join(releasePath, 'manifest.json'))).plugins;
   const installed = JSON.parse(readFileSync(join(consumer, 'package.json')));
-  installed.dependencies['dsh-auth'] = 'file:../release/auth.tgz';
-  installed.dependencies['dsh-example'] = 'file:../release/example.tgz';
+  for (const plugin of plugins) installed.dependencies[plugin.package] = `file:../release/${plugin.archive}`;
   Object.assign(installed.devDependencies, original.devDependencies);
   delete installed.devDependencies['@dsh-plugin/plugin-kit'];
   json(join(consumer, 'package.json'), installed);

@@ -7,7 +7,7 @@ import { join, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { resolveDeployment, parseArguments, loadRelease, runtimeEnvironment, computeChanges, synchronize, atomicJSON, finalize, acquireLock, renderCompose, checkDataSelection, verifyReady, adoptLegacy, tarCommand, supervise, prepareOfflineDependencies } from '../src/deployment.mjs';
-import { readState } from '../src/installation.mjs';
+import { installedMatches, readState } from '../src/installation.mjs';
 
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
 
@@ -71,6 +71,19 @@ function fixture(t) {
   };
   return { root, deployment, release, execute, calls, cli: { command: 'fixture' } };
 }
+
+test('an unchanged package is re-added when its archive reference changes', t => {
+  const f = fixture(t);
+  const plugin = f.release.plugins[0];
+  f.execute(f.cli, f.deployment, ['add', `file:${plugin.archivePath}`]);
+  assert.equal(installedMatches(f.deployment.profileRoot, plugin), true);
+  const archivePath = join(f.root, `${plugin.id}-${plugin.sha256}.tgz`);
+  writeFileSync(archivePath, readFileSync(plugin.archivePath));
+  const next = { ...plugin, archivePath };
+  assert.equal(installedMatches(f.deployment.profileRoot, next), false);
+  const changes = computeChanges({ plugins: [plugin] }, [next], read(join(f.deployment.profileRoot, 'package.json')), p => installedMatches(f.deployment.profileRoot, p));
+  assert.deepEqual(changes.add, [next]);
+});
 
 test('paths use repo root, honor explicit home, and exclude persistent paths from operation output', t => {
   const f = fixture(t);

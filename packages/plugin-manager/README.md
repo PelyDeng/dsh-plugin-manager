@@ -15,4 +15,6 @@ dsh-plugin start --root /path/to/project --manifest /path/to/release/manifest.js
 
 源码任务需要 workspace 和锁文件。有清单的安装只读取发布清单、归档及显式运行配置，无需作者源码、Git 或 `plugins/`。归档中的身份、摘要、必需文件、Bundle、依赖和导出均在修改 profile 前验证。
 
+归档名为 `<插件 ID>-<SHA-256>.tgz`，以清单中的 `archive` 字段为准。即使 npm 版本号相同，内容变化也会产生不同的安装路径，避免固定容器挂载路径下复用旧包。
+
 部署、恢复和停服证据见[部署说明](../../deploy/README.md)。迁移使用 `migrate-data` 或 `migrate-artifacts`，默认只预览。模块 API 从包根导出部署函数，`/catalog` 导出发现与选集，`/packaging` 导出打包函数。

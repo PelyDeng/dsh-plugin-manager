@@ -264,10 +264,15 @@ test('the package pipeline builds once, checks that build, and writes a portable
   const output = resolve(root, 'output with spaces');
   const manifest = packagePlugins(root, 'all', output);
   assert.equal(readFileSync(resolve(dir, 'trace'), 'utf8'), 'build\ncheck\n');
-  assert.equal(manifest.plugins[0].archive, 'a.tgz');
+  assert.equal(manifest.plugins[0].archive, `a-${manifest.plugins[0].sha256}.tgz`);
   assert.match(manifest.plugins[0].sha256, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.plugins[0].directory, 'plugins/plugin-a');
   assert.equal(readFileSync(resolve(output, 'manifest.json'), 'utf8').includes(root), false);
+  writeFileSync(resolve(dir, 'README.md'), 'Updated bytes at the same version\n');
+  const updated = packagePlugins(root, 'all', resolve(root, 'updated-output'));
+  assert.equal(updated.plugins[0].version, manifest.plugins[0].version);
+  assert.notEqual(updated.plugins[0].archive, manifest.plugins[0].archive);
+  assert.match(spawnSync('tar', ['-xOf', resolve(root, 'updated-output', updated.plugins[0].archive), 'package/README.md'], { encoding: 'utf8' }).stdout, /Updated bytes/);
   assert.throws(() => packagePlugins(root, 'all', output), /为空/u);
   assert.deepEqual(packagePlugins(root, 'none', resolve(root, 'empty')).plugins, []);
   mkdirSync(resolve(root, 'leak/package'), { recursive: true });
