@@ -34,7 +34,6 @@ export function resolvePluginSettings(deployment, candidates) {
     if (!config || typeof config !== 'object' || Array.isArray(config) || ['accessMode', 'publicOrigin'].some(key => Object.hasOwn(config, key))) fail(`${plugin.id}: config 无效，accessMode 和 publicOrigin 由公共规范管理。`);
     files[plugin.id] = file;
     if (settings.enabled === false) continue;
-    if (!plugin.healthPath) fail(`${plugin.id}: 标准配置插件必须声明 healthPath。`);
     plugins.push(plugin);
     const merged = { ...config };
     if (spec.auth === 'consumer') merged.accessMode = settings.accessMode ?? 'authenticated';

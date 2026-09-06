@@ -4,7 +4,7 @@
 
 统一运行配置使用 `configuration` 声明，字段、健康检查和单插件认证切换见[插件运行配置规范](plugin-configuration.md)。
 
-插件放在 `plugins/*`，需要 `description`、`files`、README、`build` 和 `check`。构建由管理器按 build → check → pack 执行，不能用 prepare/prepack/postpack 重复构建。`files` 仅包含公开产物，用户配置使用公开模板及 `runtimeConfig` 声明。发现时允许尚未生成的入口，打包时必须提供全部声明文件。
+插件放在 `plugins/*`，需要 `files`、README、`build` 和 `check`；`description` 可省略。构建由管理器按 build → check → pack 执行，不能用 prepare/prepack/postpack 重复构建。`files` 仅包含公开产物，用户配置通过 `runtimeConfig` 声明，公开模板可选。发现时允许尚未生成的入口，打包时必须提供全部声明文件。
 
 kit 是可选的。源码按需导入 `@dsh-plugin/plugin-kit/access`、`/http` 或 `/tools`。注册资源依附 Cordis 生命周期；工具执行前后复核服务端绑定的身份，不从模型参数接收身份。
 

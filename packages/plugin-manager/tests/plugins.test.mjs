@@ -9,6 +9,9 @@ import { test } from 'node:test';
 import { discoverPlugins, parseOptions, pluginRecord, selectPlugins } from '../src/plugins.mjs';
 import { packagePlugins } from '../src/package-plugins.mjs';
 import { verifyBuildPackage as verifyPackage } from '../src/verify-package.mjs';
+import { loadRelease } from '../src/release.mjs';
+import { resolveDeployment, runtimeEnvironment } from '../src/config.mjs';
+import { resolvePluginSettings } from '../src/plugin-settings.mjs';
 
 function fixture(t) {
   const parent = tmpdir();
@@ -93,6 +96,29 @@ test('selection and arguments reject empty, repeated and unknown values', t => {
   assert.deepEqual(JSON.parse(result.stdout), { plugins: [], selected: [] });
 });
 
+test('optional metadata and deployment-only settings do not block build, pack or release consumption', t => {
+  const root = fixture(t);
+  plugin(root, 'minimal', m => {
+    delete m.description;
+    m.deepseekPlugin.configuration = { entryId: 'minimal', auth: 'consumer' };
+    m.deepseekPlugin.runtimeConfig = { variable: 'MINIMAL_CONFIG' };
+  });
+  const output = resolve(root, 'release');
+  packagePlugins(root, 'minimal', output);
+  const release = loadRelease(resolve(output, 'manifest.json'));
+  const [result] = release.plugins;
+  assert.equal(result.healthPath, undefined);
+  assert.equal(result.description, undefined);
+  assert.deepEqual(result.permissions, []);
+  assert.equal(result.displayName, '@fixture/minimal');
+  assert.equal(result.defaultEnabled, true);
+  assert.deepEqual(result.runtimeConfig, { variable: 'MINIMAL_CONFIG', required: true });
+  assert.ok(result.verifyFiles.every(file => typeof file === 'string'));
+  const deployment = resolveDeployment({ root }, {});
+  assert.throws(() => resolvePluginSettings(deployment, release), /publicOrigin/);
+  assert.throws(() => runtimeEnvironment(deployment, release.plugins), /配置/);
+});
+
 test('display metadata accepts a local entry and owns its permission namespace', t => {
   const root = fixture(t);
   plugin(root, 'demo', m => { Object.assign(m.deepseekPlugin, { displayName: '示例插件', entryPath: '/demo', permissions: ['demo:access'] }); });
@@ -138,13 +164,15 @@ test('malformed declarations fail before any task runs', t => {
     m => { m.deepseekPlugin.id = 'none'; }, m => { m.scripts.prepack = 'pnpm build'; },
     m => { m.files.push('env.conf'); }, m => { m.files.push('data/'); },
     m => { m.deepseekPlugin.defaultEnabled = 'false'; }, m => { delete m.scripts.build; },
-    m => { delete m.scripts.check; }, m => { delete m.description; }, m => { delete m.files; },
+    m => { delete m.scripts.check; }, m => { m.description = 42; }, m => { delete m.files; },
     m => { m.main = '../escape'; }, m => { m.main = '././index.js'; },
     m => { m.deepseekPlugin.healthPath = '//example.com'; }, m => { m.deepseekPlugin.healthPath = '/a/../b'; },
     m => { m.deepseekPlugin.verifyFiles = ['../escape']; }, m => { m.deepseekPlugin.verifyFiles = ['a|b']; },
     m => { m.deepseekPlugin.verifyFiles = ['/absolute']; }, m => { m.deepseekPlugin.verifyFiles = ['a\\b']; },
     m => { m.deepseekPlugin.verifyFiles = ['./index.js']; }, m => { m.deepseekPlugin.verifyFiles = ['a//b']; },
-    m => { m.deepseekPlugin.runtimeConfig = { variable: 'EXAMPLE_ENV' }; },
+    m => { m.deepseekPlugin.runtimeConfig = { template: 'env.conf.example' }; },
+    m => { m.deepseekPlugin.runtimeConfig = { variable: 'EXAMPLE_ENV', template: 'missing.example' }; },
+    m => { m.deepseekPlugin.configuration = { auth: 'consumer' }; },
     m => { m.deepseekPlugin.development = { rootVariable: 'EXAMPLE_ROOT' }; },
     m => { delete m.deepseekPlugin; },
   ];
