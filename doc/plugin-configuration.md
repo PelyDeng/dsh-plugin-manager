@@ -1,5 +1,7 @@
 # 插件运行配置规范
 
+需要完整可复制配置时，使用 [demo 配置示例](../plugins/dsh-example/examples/README.md)，其中列出 example、auth、部署配置的全部适用字段、默认值和必填条件。
+
 管理器 0.2.1 起，支持 `configuration` 声明的插件使用自己的 `plugin.json`。插件作者声明入口、认证角色和就绪地址；管理器负责配置读取、DSH patch、容器挂载、启停和健康检查。添加合规插件不需要修改管理器名单或分支。
 
 ## 插件声明

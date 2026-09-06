@@ -1,6 +1,6 @@
 {
   "name": "dsh-example",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "可复制的 AI 流式对话与可选 auth 接入示例",
   "license": "Apache-2.0",
   "private": true,
@@ -18,6 +18,7 @@
   "files": [
     "dist/",
     "web/",
+    "examples/",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -45,7 +46,11 @@
       "web/index.html",
       "web/app.js",
       "web/stream.js",
-      "web/style.css"
+      "web/style.css",
+      "examples/README.md",
+      "examples/plugin.json.example",
+      "examples/auth.plugin.json.example",
+      "examples/deployment.json.example"
     ],
     "configuration": {
       "entryId": "example",

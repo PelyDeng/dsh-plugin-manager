@@ -1,7 +1,27 @@
+# 直接使用官方 Bundle 的完整默认配置；管理器部署时由 plugin.json 覆盖。
+# 全量模板、必填条件和字段范围见 examples/README.md。
 - insert:
     - id: example
       name: dsh-example
       config:
+        # 可选，默认 authenticated；standalone 允许匿名访问。
         accessMode: !!js process.env.DSH_ACCESS_MODE ?? 'authenticated'
+        # authenticated 模式条件必填：HTTP(S) origin，无路径或尾斜杠。
+        # 管理器从站点部署配置注入；直接 Bundle 才使用此环境变量。
         publicOrigin: !!js process.env.DSH_PUBLIC_ORIGIN ?? ''
+        # 可选，默认 /example；与包内 entryPath、healthPath 及前端保持一致。
         routePrefix: /example
+        # 可选，默认提示词；管理器实例使用 config.systemPrompt 覆盖。
+        systemPrompt: 你是一位清晰、友好的 AI 助手。用用户的语言回答，区分事实与推测；不知道时直接说明。
+        # 可选，空字符串自动使用实际 DSH home 下的插件历史库。
+        historyPath: ''
+        # 可选，认证复核间隔（毫秒），100–30000，默认 1000。
+        authRecheckMs: 1000
+        # 可选，单轮超时（毫秒），1000–1800000，默认 180000。
+        turnTimeoutMs: 180000
+        # 可选，空闲回收（毫秒），1000–86400000，默认 1800000。
+        idleTimeoutMs: 1800000
+        # 可选，活动会话数，1–500，默认 32。
+        maxConversations: 32
+        # 可选，单条消息字符数，1–32000，默认 8000。
+        maxMessageChars: 8000

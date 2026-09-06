@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "accessMode": "authenticated",
+  "config": {
+    "routePrefix": "/example",
+    "systemPrompt": "你是一位清晰、友好的 AI 助手。用用户的语言回答，区分事实与推测；不知道时直接说明。",
+    "historyPath": "",
+    "authRecheckMs": 1000,
+    "turnTimeoutMs": 180000,
+    "idleTimeoutMs": 1800000,
+    "maxConversations": 32,
+    "maxMessageChars": 8000
+  }
+}

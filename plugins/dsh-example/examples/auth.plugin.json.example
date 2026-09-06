@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "enabled": true,
+  "config": {
+    "stateDir": "/data/dsh-home/auth",
+    "sessionTtlSeconds": 86400,
+    "maxAttempts": 6,
+    "lockSeconds": 30
+  }
+}
