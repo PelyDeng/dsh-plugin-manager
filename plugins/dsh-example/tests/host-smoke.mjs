@@ -41,6 +41,16 @@ await new Promise(resolve => model.listen(0, '127.0.0.1', resolve))
 const env = { ...process.env, DSH_HOME: home, DSH_AUTH_STATE_DIR: join(home, 'auth'), DEEPSEEK_API_KEY: 'keyless-example-local-fixture',
   DEEPSEEK_BASE_URL: `http://127.0.0.1:${model.address().port}`, DSH_TELEMETRY_DISABLED: '1' }
 const run = (...args) => {
+  if (args[0] === 'plugin') {
+    const action = args.findIndex(value => ['add', 'remove'].includes(value))
+    if (action >= 0) {
+      const options = []
+      if (process.env.DSH_TEST_OFFLINE === '1') options.push(args[action] === 'remove' ? '--config.offline=true' : '--offline')
+      if (process.env.DSH_STORE_DIR) options.push('--store-dir', process.env.DSH_STORE_DIR)
+      if (process.env.DSH_CACHE_DIR) options.push('--cache-dir', process.env.DSH_CACHE_DIR)
+      args.splice(action + 1, 0, ...options)
+    }
+  }
   const result = spawnSync(process.execPath, [cli, ...args], { env, cwd: operation, encoding: 'utf8', timeout: 120000 })
   if (result.status !== 0) { writeFileSync(join(operation, 'cli.log'), result.stdout + result.stderr); throw new Error('CLI failed; diagnostics: ' + operation) }
 }
