@@ -5,6 +5,8 @@ kind: "package-bundle"
 
 # DSH 封闭化管理智能助手
 
+通过插件管理器部署时，遵循[插件运行配置规范](../../doc/plugin-configuration.md)。在 `<DSH home>/plugins/closedoff/plugin.json` 中用 `enabled` 启停插件，用 `accessMode: authenticated|standalone` 切换认证；默认要求登录。修改后执行同一 `apply-compose` 命令，站点 origin、健康检查和挂载由管理器统一处理。`env.conf` 保留为业务配置，不因认证切换改写。以下直接 Bundle 配置方式适用于自行启动宿主的场景。
+
 ## 摘要
 
 `dsh-closedoff-assistant` 是独立于 `deepseek-harness` 主仓的 DSH profile bundle。它把封闭化园区接口封装成 37 个只读 Tool，为每个浏览器会话创建独立的 DSH Agent，并在 `/closedoff-qa` 提供面向业务人员的问答页面、可展示思考、工具执行状态、数据卡片与车辆轨迹地图。
