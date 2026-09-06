@@ -6,15 +6,11 @@ import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { stripVTControlCharacters } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const marker = 'DSH_BUILD_PROGRESS ';
 function report(event) {
   if (process.env.DSH_BUILD_PROGRESS === '1') writeSync(process.stdout.fd, marker + JSON.stringify(event) + '\n');
-}
-
-/** Report completed release phases; this measures work stages, not elapsed time. */
-export function buildProgress(completed, total) {
-  report({ type: 'progress', percent: Math.floor(completed / total * 100) });
 }
 
 /** Report a synchronous build step without changing its result or failure. */
@@ -41,7 +37,8 @@ export async function presentBuild(entry, args, { logDirectory, output = process
   mkdirSync(logDirectory, { recursive: true, mode: 0o700 });
   const log = resolve(logDirectory, `build-${Date.now()}-${randomUUID()}.log`);
   const fd = openSync(log, 'wx', 0o600);
-  let active = '', frame = 0, percent = 0;
+  let active = '', frame = 0, percent = 0, started = 0, settling = false;
+  let presentation = Promise.resolve();
   const tail = [];
   const clear = () => { if (output.isTTY) output.write('\r\x1b[2K'); };
   const line = text => { clear(); output.write(`${text}\n`); };
@@ -51,7 +48,27 @@ export async function presentBuild(entry, args, { logDirectory, output = process
     const cursor = animate && remaining && frame++ % 2 === 0 ? '>' : '-';
     return `[${'='.repeat(filled)}${remaining ? cursor + '-'.repeat(remaining - 1) : ''}] ${String(percent).padStart(3)}%`;
   };
-  const draw = () => { if (output.isTTY && active) { clear(); output.write(`${bar(true)} 正在${active}`); } };
+  const draw = () => { if (output.isTTY && active) { clear(); output.write(`正在${active} ${bar(true)}（估算）`); } };
+  const show = async event => {
+    if (event.type === 'start') {
+      active = event.label; frame = 0; percent = 0; started = performance.now();
+      if (output.isTTY) draw(); else line(`正在${active} ${bar()}（估算）`);
+    } else if (event.type === 'done') {
+      settling = true;
+      // Animate only the display; the build process continues without waiting.
+      if (output.isTTY) {
+        const from = percent;
+        for (let frame = 1; frame <= 8; frame++) {
+          await delay(30);
+          percent = Math.floor(from + (100 - from) * frame / 9);
+          draw();
+        }
+      }
+      percent = 100; line(`${event.label}已完成 ${bar()}`); active = ''; settling = false;
+    } else if (event.type === 'failed') {
+      line(`${event.label}失败 ${bar()}`); active = '';
+    } else if (event.type === 'message') line(event.label);
+  };
   const child = spawn(process.execPath, [entry, ...args], {
     env: { ...process.env, DSH_BUILD_PROGRESS: '1' },
     stdio: ['inherit', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsHide: true,
@@ -62,23 +79,21 @@ export async function presentBuild(entry, args, { logDirectory, output = process
   };
   const interrupt = () => forward('SIGINT'), terminate = () => forward('SIGTERM');
   process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
-  const timer = setInterval(draw, 250);
+  const timer = setInterval(() => {
+    if (!active || settling) return;
+    // Tools do not expose a common work counter. Estimated waiting progress stays below completion.
+    percent = Math.min(95, Math.floor(95 * (1 - Math.exp(-(performance.now() - started) / 15000))));
+    draw();
+  }, 100);
   for (const [stream, progress] of [[child.stdout, true], [child.stderr, false]]) {
     stream.on('data', chunk => writeSync(fd, chunk));
     createInterface({ input: stream, crlfDelay: Infinity }).on('line', text => {
       if (progress && text.startsWith(marker)) {
         let event;
         try { event = JSON.parse(text.slice(marker.length)); } catch { /* Tool text is retained as ordinary log output. */ }
-        if (event?.type === 'progress' && Number.isFinite(event.percent)) {
-          // The child must exit successfully before the terminal can show 100%.
-          percent = Math.max(percent, Math.min(99, Math.floor(event.percent)));
-          draw(); return;
-        }
-        if (event && typeof event.label === 'string') {
-          if (event.type === 'start') { active = event.label; frame = 0; if (output.isTTY) draw(); else line(`${bar()} 正在${active}...`); return; }
-          if (event.type === 'done') { line(`${bar()} ${event.label}已完成`); active = ''; return; }
-          if (event.type === 'failed') { line(`${bar()} ${event.label}失败`); active = ''; return; }
-          if (event.type === 'message') { line(event.label); return; }
+        if (event && typeof event.label === 'string' && ['start', 'done', 'failed', 'message'].includes(event.type)) {
+          presentation = presentation.then(() => show(event));
+          return;
         }
       }
       if (text.trim()) { tail.push(stripVTControlCharacters(text).slice(-500)); if (tail.length > 12) tail.shift(); }
@@ -90,11 +105,12 @@ export async function presentBuild(entry, args, { logDirectory, output = process
       child.once('error', reject);
       child.once('close', (code, signal) => resolve(code ?? (signal === 'SIGINT' ? 130 : signal === 'SIGTERM' ? 143 : 1)));
     });
+    await presentation;
     if (code !== 0) {
-      line(`${bar()} ${active || '构建发布'}失败（退出码 ${code}）`);
+      line(`${active || '构建发布'}失败（退出码 ${code}）${active ? ` ${bar()}` : ''}`);
       if (tail.length) line(tail.join('\n'));
       line(`完整日志：${log}`);
-    } else { percent = 100; line(`${bar()} 构建发布已完成`); }
+    }
     return code;
   } finally {
     clearInterval(timer); clear(); closeSync(fd);
