@@ -15,7 +15,7 @@ export interface Config {
 }
 
 export const Config: Schema<Config> = Schema.object({
-  accessMode: Schema.union(['standalone', 'authenticated']).default('standalone'),
+  accessMode: Schema.union(['standalone', 'authenticated']).default('authenticated'),
   publicOrigin: Schema.string().default(''),
   routePrefix: Schema.string().pattern(/^\/[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)*$/).default('/example'),
   systemPrompt: Schema.string().default('你是一位清晰、友好的 AI 助手。用用户的语言回答，区分事实与推测；不知道时直接说明。'),

@@ -11,10 +11,12 @@
 先按根 README 构建并生成发布目录，准备兼容的官方宿主 CLI。在同一个 DSH home 配置默认模型与密钥，然后运行：
 
 ```sh
-node deploy/scripts/deployment.mjs start --plugins example --manifest .local/artifacts/release/plugins/manifest.json --dsh-cli-js /path/to/dsh/lib/bin.js
+node deploy/scripts/deployment.mjs start --plugins auth,example --manifest .local/artifacts/release/plugins/manifest.json --dsh-cli-js /path/to/dsh/lib/bin.js
 ```
 
-打开 `http://127.0.0.1:7902/example`。默认 `standalone` 使用安装级共享历史。需要个人历史时设置 `DSH_ACCESS_MODE=authenticated`、`DSH_PUBLIC_ORIGIN=http://127.0.0.1:7902`，并将插件选择改为 `auth,example`；普通账号还需要管理员授予 example 访问权限。
+示例默认纳入源码选集，并默认使用 `authenticated` 模式。启动前设置 `DSH_PUBLIC_ORIGIN=http://127.0.0.1:7902`，同时安装 auth 后打开 `/auth`；管理员自动看到“AI 对话示例”，普通账号需要管理员授予 example 访问权限。示例入口为 `/example`，对话历史按账号隔离。缺少认证提供者时就绪探针返回 503，不会自动开放匿名访问。
+
+需要无认证的独立演示时，显式设置 `DSH_ACCESS_MODE=standalone`，并仅选择 `example`。该模式使用安装级共享历史。反向代理或容器部署应通过用户 patch 为 example 和 auth 配置实际 `publicOrigin`，服务器实例明确设置 example 的 `accessMode: authenticated`；具体步骤见[部署说明](../../deploy/README.md)。
 
 模式切换需要保持相同 home 并受控重启。独立历史与账号历史分别保留，不迁移、不合并；同一账号的不同登录共享个人历史。退出或撤权会取消该登录发起的活动回合。刷新或重启后可从历史继续追问。
 
