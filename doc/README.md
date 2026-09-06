@@ -2,6 +2,7 @@
 
 - [架构与包职责](architecture.md)
 - [插件运行配置规范](plugin-configuration.md)
+- [插件配置集成验收](plugin-configuration-acceptance.md)
 - [插件作者接入](plugin-development.md)
 - [部署与管理命令](../deploy/README.md)
 - [数据和产物迁移](migration.md)
