@@ -20,4 +20,6 @@ python3 /absolute/plugin/backup/install.py --config /absolute/private/executor.j
 
 生产恢复在执行前通过 DSH 的内部 Token 接口重新验证原用户和备份管理权限。停写后若过程失败，恢复日志用于回滚目录和指定策略图片记录，之后再恢复服务。检查恢复失败与 `recoveryPending`，不能将文件已解压等同网站已经恢复。
 
+SQL 导出不携带服务器级 GTID 状态，旧归档若包含 `GTID_PURGED` 会在创建恢复数据库前拒绝。正常备份要求引用的附件存在；恢复前的保护备份允许记录当前已缺失的附件，清单中的 `missingAttachments` 明确列出缺失项，以便从选定备份补回，同时保留其余当前状态。
+
 此执行器针对当前单机 Typecho 1.2.1、Lsky Pro 2.1 与单节点 MinIO 部署。数据库存储过程、事件、其他对象存储拓扑和新增 Lsky 策略需要先扩展一致性及恢复验证。仅同机保存不等于异机容灾。

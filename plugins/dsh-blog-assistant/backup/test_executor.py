@@ -35,6 +35,16 @@ def fixture(root):
 
 
 class BackupTests(unittest.TestCase):
+    def test_safeguard_records_missing_attachment_but_regular_backup_fails(self):
+        with tempfile.TemporaryDirectory() as directory,patch('executor.run',return_value=b'minio-fixture'):
+            root=pathlib.Path(directory);e=fixture(root);digest='b'*64
+            db=sqlite3.connect(str(root/'pluginData/blog.sqlite'));db.execute('INSERT INTO attachments VALUES(?)',(json.dumps({'original':{'attachmentId':'sha256:'+digest,'name':'lost.txt'}}),));db.commit();db.close()
+            with self.assertRaises(FileNotFoundError):e.perform_backup()
+            backup=e.perform_backup(rotate=False,allow_missing_attachments=True);manifest=e.verify(backup)
+            self.assertEqual(len(manifest['missingAttachments']),2)
+            self.assertEqual(manifest['attachmentFiles'],0)
+            self.assertEqual(e.isolate(backup)['status'],'succeeded')
+
     def test_global_gtid_dump_rejected_before_restore_database_creation(self):
         with tempfile.TemporaryDirectory() as directory,patch('executor.run',return_value=b'minio-fixture'):
             e=fixture(pathlib.Path(directory));backup_id=e.perform_backup();path=e.backups/backup_id/'blog.sql'

@@ -151,7 +151,7 @@ class Executor:
             except (urllib.error.URLError,TimeoutError):
                 if time.monotonic()>=deadline:raise
             time.sleep(1)
-    def attachments(self, stage):
+    def attachments(self, stage, missing=None):
         source=pathlib.Path(self.c['attachmentRoot']); target=stage/'attachment-files';target.mkdir(mode=0o700)
         database=pathlib.Path(self.c['pluginData'])/'blog.sqlite'
         db=sqlite3.connect('file:'+str(database)+'?mode=ro',uri=True)
@@ -173,11 +173,13 @@ class Executor:
                     else: paths.add(pathlib.Path('objects')/digest[:2]/digest)
             for relative in paths:
                 if not within(source/relative,source): raise ValueError('attachment outside provider root')
+                if missing is not None and not (source/relative).exists():
+                    missing.append(str(relative));continue
                 destination=target/relative;destination.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
                 shutil.copy2(str(source/relative),str(destination))
         finally: db.close()
-        return target,len(paths)
-    def perform_backup(self, rotate=True):
+        return target,len(paths)-(len(missing) if missing is not None else 0)
+    def perform_backup(self, rotate=True, allow_missing_attachments=False):
         databases=self.databases()
         backup_id=datetime.datetime.now(UTC8).strftime('%Y%m%dT%H%M%S')+'-'+secrets.token_hex(4)
         destination=self.backups/backup_id;destination.mkdir(mode=0o700)
@@ -194,7 +196,9 @@ class Executor:
                      'minio-bucket-metadata':str(pathlib.Path(self.c['minioData'])/'.minio.sys/buckets'/self.c['bucket']),
                      'minio-format':str(pathlib.Path(self.c['minioData'])/'.minio.sys/format.json')}
             attachment_stage=destination/'staging';attachment_stage.mkdir(mode=0o700)
-            sources['attachment-files'],manifest['attachmentFiles']=self.attachments(attachment_stage)
+            missing=[] if allow_missing_attachments else None
+            sources['attachment-files'],manifest['attachmentFiles']=self.attachments(attachment_stage,missing)
+            if missing:manifest['missingAttachments']=missing
             for index,path in enumerate(self.c.get('nginxFiles',[])): sources['nginx-'+str(index)]=path
             for name,source in sources.items():manifest['components'][name+'.tar.gz']=pack(source,destination/(name+'.tar.gz'))
             manifest['minioImage']=run(['docker','inspect',self.c['minioContainer'],'--format','{{.Config.Image}}']).decode().strip()
@@ -325,7 +329,7 @@ class Executor:
         if m['bucket']!=self.c['bucket'] or m['strategyId']!=self.c['strategyId']:raise ValueError('restore storage scope differs')
         restored=self.isolate(backup_id);target=pathlib.Path(restored['path']);restore_id=restored['id']
         # A fresh complete backup protects current databases and files before the first live mutation.
-        safeguard=self.perform_backup(rotate=False);before=self.isolate(safeguard);databases=self.databases()
+        safeguard=self.perform_backup(rotate=False,allow_missing_attachments=True);before=self.isolate(safeguard);databases=self.databases()
         self.authorize_restore(actor)
         self.stop_writers()
         journal={'id':restore_id,'committed':False,'imageChanged':False,'swaps':[],'imageDatabase':databases['image']['database'],'rollbackImageDatabase':before['databases']['image']}
