@@ -38,15 +38,15 @@
 
 ## 为搜索和社区介绍准备准确材料
 
-About 的描述准备采用：
+About 已填写并通过公开 API 核对，描述为：
 
-> Build, package, deploy, and manage plugins and AI apps on DeepSeek Harness, with optional shared authentication.
+> Deploy and manage DeepSeek Harness apps with shared authentication, plugin packaging, and Docker deployment.
 
-Website 计划指向公开的图文导览。Topics 在保留原标签的基础上，补充 `deepseek`、`deepseek-harness`、`dsh-plugin`、`plugin-manager`、`self-hosted`。这些词与项目实际用途有关。[GitHub 的 Topics 说明](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/classifying-your-repository-with-topics)介绍了按主题浏览和搜索仓库的方式；添加标签提供了发现入口，并不保证排名或流量。
+Website 已指向公开的图文导览。Topics 在保留原标签的基础上，补充 `deepseek`、`deepseek-harness`、`dsh-plugin`、`plugin-manager`、`self-hosted`。这些词与项目实际用途有关。[GitHub 的 Topics 说明](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/classifying-your-repository-with-topics)介绍了按主题浏览和搜索仓库的方式；添加标签提供了发现入口，并不保证排名或流量。
 
 社区介绍选择官方 DeepSeek Harness 的插件展示分类，因为读者本身就关心 DSH 扩展。发帖材料按照[该分类规则](https://github.com/deepseek-ai/deepseek-harness/discussions/2004)整理：只介绍这一个项目，提供项目地址、用途、截图和实际集成方式，显著标明非官方身份，也不把社区互动解释成官方推荐。
 
-介绍覆盖开发到部署管理的路径：作者在独立仓库开发，管理器读取声明与归档，通过 CLI 和部署流程完成安装与更新，运行继续交给官方宿主。个人使用和团队交付都可以复用这条路径。真实模型选择、业务数据授权和第三方插件兼容性各有边界，这些说明帮助读者判断是否适合自己。
+[社区介绍帖](https://github.com/deepseek-ai/deepseek-harness/discussions/5858)已发布到 Show Your Plugins! 分类，发布后核对了作者、正文、图片和版本链接。介绍覆盖开发到部署管理的路径：作者在独立仓库开发，管理器读取声明与归档，通过 CLI 和部署流程完成安装与更新，运行继续交给官方宿主。个人使用和团队交付都可以复用这条路径。真实模型选择、业务数据授权和第三方插件兼容性各有边界，这些说明帮助读者判断是否适合自己。
 
 检索还发现社区中存在名称相近的其他项目，例如[这个插件启停管理器的介绍](https://github.com/deepseek-ai/deepseek-harness/discussions/3848)。所以我在介绍中同时保留完整仓库地址和“基于 DeepSeek Harness 的 AI 应用开发与部署框架”的定位说明。仅靠一个通用名字，不足以让读者辨认项目，也不能据此宣称功能首创。
 
@@ -78,11 +78,11 @@ Website 计划指向公开的图文导览。Topics 在保留原标签的基础�
 | 公共界面截图与图文导览 | 已完成隔离环境截图 | 在安装前解释流程与认证边界 |
 | 熟人邀请和反馈清单 | 已准备，由我自行联系 | 收集首次使用中的具体问题 |
 | 公共工具与插件归档 | 已构建，独立消费检查与公开下载校验通过 | 降低取得和核对交付物的成本 |
-| GitHub About、Website、Topics | 文案已准备，外部设置待完成 | 提供用途说明和相关主题入口 |
+| GitHub About、Website、Topics | 已保存，公开 API 核验通过 | 提供用途说明和相关主题入口 |
 | GitHub Release | v0.3.2 已正式发布，四个附件已核验 | 提供固定版本、安装材料与校验值 |
-| 官方社区介绍帖 | 材料已准备，尚未发布 | 向关心 DSH 扩展的开发者说明用途 |
+| 官方社区介绍帖 | 已发布 Discussion #5858 | 向关心 DSH 扩展的开发者说明用途 |
 | 外部开发者反馈及增长结果 | 尚未收集 | 必须等真实使用发生后再评价 |
 
-About 设置和社区发帖仍受 GitHub 浏览器登录连接阻碍，因此没有把“材料准备好”写成“已经发布”。Release 已通过仓库的自动发布流程完成；社区帖完成后应再补充真实 Discussion 链接。
+这次也遇到了一次 Windows CI 的偶发测试失败：测试用已退出子进程的 PID 表示持续停服，后续子进程可能复用该 PID。模拟复用能够重现错误，因此将隔离测试的进程探测改为确定的模拟状态，并增加真实活进程必须被拒绝的检查。公共和私有仓库各自的 25 项部署测试通过，[修正后的四组 CI 检查](https://github.com/PelyDeng/dsh-plugin-manager/actions/runs/34093983707)也全部通过，生产停服保护没有放宽。这个插曲提醒我，发布记录也要说明失败和修正，不能只保留成功截图。
 
 接下来我会观察熟人能否独立跑通、哪些步骤最容易停住、哪些问题重复出现，再结合实际反馈调整文档和产品。Star 可以作为关注信号，但第一次问答成功、独立打包成功、愿意再次使用，更接近这个框架希望解决的问题。准备传播材料只是开始，是否对别人有用，需要由使用结果回答。
