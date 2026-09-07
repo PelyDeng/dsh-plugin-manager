@@ -26,3 +26,4 @@ if(args.includes('fail')) process.exitCode=7;
   if (-not $resolved.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)) {throw '测试清理路径越界'}
   Remove-Item -LiteralPath $resolved -Recurse -Force
 }
+exit 0

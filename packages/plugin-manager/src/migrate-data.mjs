@@ -100,7 +100,7 @@ export function checkStoppedEvidence(file, paths) {
 function permissions(source, target, entries) {
   if (process.platform === 'win32') {
     const mapping = entries.filter(entry => entry.kind !== 'link').map(entry => ({ source: join(source, entry.path), target: join(target, entry.path) }));
-    const script = '$ErrorActionPreference="Stop"; [Console]::InputEncoding=[Text.UTF8Encoding]::new(); $items=[Console]::In.ReadToEnd() | ConvertFrom-Json; foreach($item in $items){$acl=Get-Acl -LiteralPath $item.source; Set-Acl -LiteralPath $item.target -AclObject $acl; if((Get-Acl -LiteralPath $item.target).Sddl -ne $acl.Sddl){throw "ACL verification failed"}}';
+    const script = '$ErrorActionPreference="Stop"; [Console]::InputEncoding=[Text.UTF8Encoding]::new(); $items=[Console]::In.ReadToEnd() | ConvertFrom-Json; foreach($item in $items){$acl=Get-Acl -LiteralPath $item.source; Set-Acl -LiteralPath $item.target -AclObject $acl; if((Get-Acl -LiteralPath $item.target).Sddl -ne $acl.Sddl){throw "[DEBUG-ci-acl] ACL verification failed: source=$($acl.Sddl) target=$((Get-Acl -LiteralPath $item.target).Sddl)"}}';
     const args = ['-NoProfile', '-NonInteractive', '-Command', script];
     const options = { input: JSON.stringify(mapping), encoding: 'utf8' };
     let result = spawnSync('pwsh', args, options);
