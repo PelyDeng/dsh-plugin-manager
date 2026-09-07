@@ -102,7 +102,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     description: manifest.description, displayName: manifest.deepseekPlugin.displayName,
     entryPath: config.routePrefix, permissions: manifest.deepseekPlugin.permissions, tools: [],
   }))
-  const assets = [['', 'index.html', 'text/html'], ['/app.js', 'app.js', 'text/javascript'],
+  const assets = [['', 'index.html', 'text/html'], ['/app.js', '../dist/web/app.js', 'text/javascript'],
     ['/stream.js', 'stream.js', 'text/javascript'], ['/style.css', 'style.css', 'text/css'],
     ['/guide.md', '../knowledge/guide.md', 'text/plain'], ['/prompts.md', '../knowledge/prompts.md', 'text/plain']] as const
   for (const [suffix, file, mime] of assets) {

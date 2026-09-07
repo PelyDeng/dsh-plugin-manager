@@ -270,8 +270,37 @@ h1 {
   font-size:15px
 }
 .assistant .text {
-  padding:0 2px
+  padding:0 2px;
+  white-space:normal
 }
+.assistant .text>:first-child { margin-top:0 }
+.assistant .text>:last-child { margin-bottom:0 }
+.assistant .text p { margin:0 0 1em }
+.assistant .text :is(h1,h2,h3,h4,h5,h6) { margin:1.3em 0 .55em; line-height:1.4; letter-spacing:0; font-weight:650 }
+.assistant .text h1 { font-size:1.65em }
+.assistant .text h2 { font-size:1.4em }
+.assistant .text h3 { font-size:1.2em }
+.assistant .text :is(h4,h5,h6) { font-size:1em }
+.assistant .text :is(ul,ol) { padding-left:1.6em; margin:.6em 0 1em }
+.assistant .text li+li { margin-top:.3em }
+.assistant .text li>p { margin:.3em 0 }
+.assistant .text blockquote { margin:1em 0; padding:.6em 1em; border-left:3px solid #87a58f; background:#f1f4ed; color:#62756a }
+.assistant .text blockquote p:last-child { margin-bottom:0 }
+.assistant .text a { color:#27664d; text-decoration:underline; text-underline-offset:3px }
+.assistant .text hr { border:0; border-top:1px solid #dce2d5; margin:1.5em 0 }
+.assistant .text img { max-width:100%; height:auto; border-radius:8px }
+.assistant .text code { font: .9em/1.6 Consolas,"Cascadia Code",monospace; background:#edf0e8; padding:.15em .35em; border-radius:4px }
+.code-block { margin:1em 0; border:1px solid #dce2d5; border-radius:10px; overflow:hidden; background:#f4f5f0 }
+.code-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:7px 12px; background:#eaf0e4; font-size:12px }
+.code-toolbar span { overflow-wrap:anywhere; min-width:0 }
+.copy-code { flex-shrink:0; border:1px solid #b7cbb9; border-radius:5px; padding:2px 8px; color:#355444; background:#fffefa; font-size:12px }
+.assistant .text pre { margin:0; padding:14px; overflow:auto; white-space:pre; tab-size:2; background:#f4f5f0 }
+.assistant .text pre code { padding:0; background:none; border-radius:0; overflow-wrap:normal }
+.table-scroll { max-width:100%; overflow:auto; margin:1em 0; border:1px solid #dce2d5; border-radius:8px }
+.table-scroll table { border-collapse:collapse; min-width:100%; font-size:14px }
+.table-scroll :is(th,td) { padding:9px 12px; border-bottom:1px solid #dce2d5; text-align:left; min-width:100px }
+.table-scroll th { background:#eaf0e4; font-weight:650 }
+.table-scroll tr:last-child td { border-bottom:0 }
 .assistant.busy .text:empty:after {
   content:'等待回答…';
   color:#8a978d

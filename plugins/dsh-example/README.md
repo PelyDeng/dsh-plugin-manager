@@ -29,6 +29,10 @@ pnpm exec dsh-plugin start --root <交付根> --config .local/deployment.json --
 
 ## 历史与认证
 
+回答支持 Markdown 标题、列表、表格、引用、链接、图片、行内代码和带语言标签的代码块；流式输出、停止后的部分回答和历史回放使用相同渲染。长代码和宽表格可横向滚动。代码块可单独复制，“复制回答”保留原始 Markdown，便于继续编辑。用户输入和思考过程保留纯文本；原始 HTML 不执行，Mermaid、公式等未启用的扩展按文本或代码展示。
+
+浏览器脚本在构建时内嵌 markdown-it，不依赖外部 CDN；保留解析器的链接校验，禁用原始 HTML。第三方许可随发布包的 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) 分发。开发时修改 web 源码后执行 `pnpm build`；正式部署需重新打包并更新实例。
+
 SQLite 只存账号所有者、标题和时间等历史目录；消息正文使用 DSH 会话日志。账号历史与 standalone 共享历史分别保留，不迁移合并；同一账号的不同登录共享个人历史。沿用同一 home 才能恢复原数据。退出或撤权取消该登录的活动回合；停止生成取消模型工作，已持久化内容仍可从历史继续。
 
 支持旧日志 chunk 与 DSH 0.1.3 瞬态流；思考和回答分开展示，无 reasoning 时不模拟。历史支持已发布宿主的 inspect 与早期源码宿主的 open/read/close，缺少这两种接口时明确拒绝。CLI、基础 Bundle 与间接依赖需要一起核对，不能只凭 CLI 版本保证兼容。宿主、模型和当前插件的组合仍需真实验证。

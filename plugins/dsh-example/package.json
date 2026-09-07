@@ -1,6 +1,6 @@
 {
   "name": "dsh-example",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "DSH Plugin 开发者接入答疑助手与可复制的鉴权对话示例",
   "license": "Apache-2.0",
   "private": true,
@@ -20,6 +20,7 @@
     "web/",
     "examples/",
     "knowledge/",
+    "THIRD_PARTY_NOTICES.md",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -48,6 +49,8 @@
       "knowledge/prompts.md",
       "web/index.html",
       "web/app.js",
+      "dist/web/app.js",
+      "THIRD_PARTY_NOTICES.md",
       "web/stream.js",
       "web/style.css",
       "examples/README.md",
@@ -61,10 +64,10 @@
     }
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "tsdown && tsdown --config tsdown.web.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && node --check web/app.js && node --check web/stream.js",
+    "check": "pnpm typecheck && node --check web/app.js && node --check web/stream.js && node --check web/markdown.js",
     "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
   },
   "dependencies": {
@@ -130,6 +133,7 @@
     "@deepseek-ai/dsh-tools": "0.1.2-alpha.5",
     "@dsh-plugin/plugin-kit": "workspace:*",
     "@types/node": "^22.20.0",
+    "markdown-it": "15.0.1",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"

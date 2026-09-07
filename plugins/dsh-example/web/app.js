@@ -1,4 +1,5 @@
 import { readEvents } from './stream.js'
+import { renderMarkdown } from './markdown.js'
 
 const $ = id => document.getElementById(id)
 const base = document.body.dataset.base
@@ -33,7 +34,13 @@ function message(role, text, reasoning = '') {
   label.textContent = role === 'user' ? '你' : '✳ 拾问'
   const content = document.createElement('div')
   content.className = 'text'
-  content.textContent = text
+  let source = text
+  const render = () => {
+    if (role === 'assistant') content.innerHTML = renderMarkdown(source)
+    else content.textContent = source
+  }
+  const update = (value, append = false) => { source = append ? source + value : value; render() }
+  render()
   article.append(label)
   const thinking = document.createElement('details')
   thinking.className = 'thinking'; thinking.hidden = !reasoning
@@ -48,14 +55,23 @@ function message(role, text, reasoning = '') {
     const copy = document.createElement('button')
     copy.type = 'button'; copy.className = 'copy'; copy.textContent = '复制回答'
     copy.onclick = async () => {
-      try { await navigator.clipboard.writeText(content.textContent); copy.textContent = '已复制'; setTimeout(() => { copy.textContent = '复制回答' }, 1500) }
+      try { await navigator.clipboard.writeText(source); copy.textContent = '已复制'; setTimeout(() => { copy.textContent = '复制回答' }, 1500) }
       catch { notice('无法访问剪贴板，请选中回答手动复制。') }
     }
     article.append(copy)
   }
   $('messages').append(article)
-  return { article, content, thinking, summary, reasoningText }
+  return { article, update, thinking, summary, reasoningText }
 }
+$('messages').addEventListener('click', async event => {
+  const button = event.target.closest('.copy-code')
+  if (!button) return
+  try {
+    await navigator.clipboard.writeText(button.closest('.code-block').querySelector('code').textContent)
+    button.textContent = '已复制'
+    setTimeout(() => { button.textContent = '复制代码' }, 1500)
+  } catch { notice('无法访问剪贴板，请选中代码手动复制。') }
+})
 async function send(text) {
   if (controller || !text.trim()) return
   notice('')
@@ -86,11 +102,11 @@ async function send(text) {
         answer.summary.textContent = '正在思考…'; setStatus('正在思考…'); scroll()
       }
       if (event.type === 'delta') {
-        answer.content.textContent += event.text; answer.summary.textContent = '思考过程'
+        answer.update(event.text, true); answer.summary.textContent = '思考过程'
         setStatus('正在回答…'); scroll()
       }
       if (event.type === 'answer') {
-        answer.content.textContent = event.text
+        answer.update(event.text)
         if (event.reasoning) { answer.reasoningText.textContent = event.reasoning; answer.thinking.hidden = false }
         answer.summary.textContent = '思考过程'; scroll()
       }
