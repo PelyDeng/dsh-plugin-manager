@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
 import { posix } from 'node:path'
 import { AccessError, emitRevoked, isAccessError, listPlugins, type Actor } from '@dsh-plugin-manager/plugin-kit/access'
-import { DeepSeekKeyError, deepSeekKeyStatus, setDeepSeekKey } from '@dsh-plugin-manager/plugin-kit/deepseek-key'
+import { ModelKeyError, modelKeyStatus, setModelKey } from '@dsh-plugin-manager/plugin-kit/model-key'
 import { AuthService, SESSION_COOKIE } from './service.ts'
 import { hashPassword, validatePassword } from './password.ts'
 import { normalizeUsername, type Role } from './store.ts'
@@ -176,11 +176,13 @@ export async function createHandler(ctx: Context, service: AuthService, config: 
         }); return
       }
       service.requireAdmin(actor)
-      if (path === '/auth/api/deepseek-key') {
+      if (['/auth/api/deepseek-key', '/auth/api/model-key/deepseek', '/auth/api/model-key/zhipu'].includes(path)) {
+        if (!['GET', 'POST'].includes(req.method ?? '')) throw new AccessError(405, '只支持 GET 或 POST')
+        const kind = path.endsWith('/zhipu') ? 'zhipu' : 'deepseek'
         const provider: unknown = ctx.get('credentials')
         const status = req.method === 'POST'
-          ? await setDeepSeekKey(provider, (await body(req)).apiKey, () => service.requireAdmin(actor))
-          : await deepSeekKeyStatus(provider)
+          ? await setModelKey(provider, kind, (await body(req)).apiKey, () => service.requireAdmin(actor))
+          : await modelKeyStatus(provider, kind)
         service.requireAdmin(actor)
         json(res, 200, status); return
       }
@@ -190,7 +192,7 @@ export async function createHandler(ctx: Context, service: AuthService, config: 
       }
       throw new AccessError(404, '接口不存在')
     } catch (error) {
-      if (error instanceof DeepSeekKeyError) json(res, 400, { error: error.message })
+      if (error instanceof ModelKeyError) json(res, 400, { error: error.message })
       else if (isAccessError(error)) json(res, error.status, { error: error.message })
       else { ctx.logger('auth').error('认证请求失败，详情仅记录错误类型', error instanceof Error ? error.name : 'unknown'); json(res, 500, { error: '认证服务处理失败' }) }
     }

@@ -1,6 +1,6 @@
 {
   "name": "@dsh-plugin-manager/plugin-kit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Optional identity, HTTP and tool integration for DSH plugins",
   "type": "module",
   "license": "Apache-2.0",
@@ -28,6 +28,10 @@
       "default": "./src/route-path.mjs"
     },
     "./package.json": "./package.json",
+    "./model-key": {
+      "types": "./src/model-key.d.mts",
+      "default": "./src/model-key.mjs"
+    },
     "./deepseek-key": {
       "types": "./src/deepseek-key.d.mts",
       "default": "./src/deepseek-key.mjs"
@@ -40,7 +44,9 @@
     "src/route-path.mjs",
     "src/route-path.d.mts",
     "src/deepseek-key.mjs",
-    "src/deepseek-key.d.mts"
+    "src/deepseek-key.d.mts",
+    "src/model-key.mjs",
+    "src/model-key.d.mts"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

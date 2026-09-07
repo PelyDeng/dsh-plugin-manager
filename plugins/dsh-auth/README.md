@@ -22,11 +22,11 @@
 
 所有变更请求检查 Origin 与 CSRF。Cookie 使用 HttpOnly、SameSite=Strict，在 HTTPS 下启用 Secure。卸载插件不删除数据库。备份需要停止写入或使用 SQLite 一致备份。
 
-## 默认 DeepSeek 密钥
+## 模型密钥
 
-管理员完成初始改密后可从左侧“模型设置”配置或更换默认 `DEEPSEEK_API_KEY`。页面只展示配置状态及不可逆 SHA-256 指纹，不返回原密钥，不验证余额或模型调用；此配置作用于整个宿主。普通用户和未完成初始改密的管理员不能读取或写入此接口。
+管理员完成初始改密后可从左侧“模型设置”选择 DeepSeek 或智谱，配置或更换对应的 `DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`。页面只展示配置状态及不可逆 SHA-256 指纹，不返回原密钥，不验证余额或模型调用；此配置作用于整个宿主。普通用户和未完成初始改密的管理员不能读取或写入此接口。
 
-`GET/POST /auth/api/deepseek-key` 复用现有会话、Origin、CSRF 及管理员校验，调用 kit 的共享凭据逻辑与宿主 `credentials` 服务。网页和 `set-api-key` 脚本使用同一官方存储，无需重启，后续请求使用新密钥；外部环境覆盖显示只读。没有官方凭据服务时明确禁用，不另建业务配置文件。模型选择和其他提供方仍由官方控制台管理。
+`GET/POST /auth/api/model-key/deepseek`、`/auth/api/model-key/zhipu`（旧 `/auth/api/deepseek-key` 保留兼容） 复用现有会话、Origin、CSRF 及管理员校验，调用 kit 的共享凭据逻辑与宿主 `credentials` 服务。网页和 `set-api-key` 脚本使用同一官方存储，无需重启，后续请求使用新密钥；外部环境覆盖显示只读。没有官方凭据服务时明确禁用，不另建业务配置文件。智谱入口面向普通模型 API，密钥支持 GLM-5.3 和 GLM-5V-Turbo 等模型；实际模型路由由宿主或应用装配，保存密钥不改变全局默认模型。其他提供方仍由官方控制台管理。
 
 ## 控制台代理
 

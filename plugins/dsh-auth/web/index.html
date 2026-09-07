@@ -41,15 +41,16 @@
           <div class="card narrow"><h2>修改密码</h2><p class="muted">修改后，所有设备上的登录会话均会失效。</p><form id="password-form"><label>当前密码<input name="currentPassword" type="password" autocomplete="current-password" required maxlength="256"></label><label>新密码<input name="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="256" required></label><button class="primary">更新密码</button></form></div>
         </section>
         <section id="page-models" class="page" hidden>
-          <div class="page-heading"><h1>模型设置</h1><p class="muted">配置默认 DeepSeek API，供此宿主上的模型请求使用。</p></div>
+          <div class="page-heading"><h1>模型设置</h1><p class="muted">统一管理此宿主共享的模型 API 密钥。</p></div>
           <div class="card model-card">
-            <div class="model-heading"><div class="model-emblem"><svg class="icon" aria-hidden="true"><use href="/auth/icons.svg#key"></use></svg></div><div><h2>DeepSeek</h2><p class="muted small">deepseek-harness · 默认 API 密钥</p></div><button id="model-refresh" type="button">刷新状态</button></div>
+            <label>模型服务商<select id="model-provider"><option value="deepseek">DeepSeek</option><option value="zhipu">智谱 GLM</option></select></label>
+            <div class="model-heading"><div class="model-emblem"><svg class="icon" aria-hidden="true"><use href="/auth/icons.svg#key"></use></svg></div><div><h2 id="model-name">DeepSeek</h2><p id="model-description" class="muted small">默认 DeepSeek API 密钥</p></div><button id="model-refresh" type="button">刷新状态</button></div>
             <div id="model-status" class="model-status" role="status"><svg class="icon" aria-hidden="true"><use id="model-status-icon" href="/auth/icons.svg#key"></use></svg><strong id="model-status-label">正在读取…</strong></div>
             <p id="model-source" class="muted small"></p>
             <div id="model-fingerprint-row" hidden><span class="muted small">密钥指纹 · SHA-256</span><code id="model-fingerprint" class="model-fingerprint"></code><p class="muted small">指纹仅用于识别密钥，无法还原原密钥。</p></div>
             <form id="model-form"><label>新 API 密钥<input id="model-key" name="apiKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-…" maxlength="4096" required disabled></label><button id="model-save" class="primary" disabled>保存密钥</button></form>
             <p id="model-message" role="status" aria-live="polite"></p>
-            <p class="muted small model-note">保存后无需重启，后续请求使用新密钥；正在进行的回答不受影响。配置状态不代表密钥有效或模型服务可用。</p>
+            <p class="muted small model-note">密钥供此宿主上使用该服务商的应用共享，仅管理员可更换。保存后无需重启，后续请求使用新密钥；正在进行的回答不受影响。配置状态不代表密钥有效或模型服务可用。</p>
           </div>
         </section>
         <section id="page-users" class="page" hidden>

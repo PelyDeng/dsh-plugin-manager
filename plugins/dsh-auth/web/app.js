@@ -197,8 +197,12 @@ async function showPage(next) {
     else button.removeAttribute('aria-current')
   }
   if (next === 'models') {
+    const kind = modelKind()
+    $('#model-name').textContent = kind === 'zhipu' ? '智谱 GLM' : 'DeepSeek'
+    $('#model-description').textContent = kind === 'zhipu' ? '普通模型 API · GLM-5.3 / GLM-5V-Turbo' : '默认 DeepSeek API 密钥'
+    $('#model-key').placeholder = kind === 'zhipu' ? '输入智谱开放平台 API Key' : 'sk-…'
     try {
-      const result = await api('deepseek-key')
+      const result = await api(`model-key/${kind}`)
       if (version === pageEpoch && identity === identityEpoch) renderModel(result)
     } catch (error) {
       if (version === pageEpoch && identity === identityEpoch && error.name !== 'AbortError') {
@@ -219,10 +223,13 @@ async function showPage(next) {
   }
 }
 
+function modelKind() { return $('#model-provider').value === 'zhipu' ? 'zhipu' : 'deepseek' }
+
 function clearModel() {
   $('#model-key').value = ''
   $('#model-key').disabled = true
   $('#model-save').disabled = true
+  $('#model-refresh').disabled = false
   $('#model-fingerprint').textContent = ''
   $('#model-fingerprint-row').hidden = true
   $('#model-source').textContent = ''
@@ -235,7 +242,7 @@ function renderModel(status) {
   $('#model-status-label').textContent = !status.supported ? '凭据服务不可用' : status.configured ? '已配置' : '未配置'
   $('#model-status').className = `model-status ${status.configured ? 'configured' : 'unconfigured'}`
   $('#model-status-icon').setAttribute('href', `/auth/icons.svg#${status.configured ? 'check-circle' : 'key'}`)
-  $('#model-source').textContent = !status.supported ? '请检查官方宿主的凭据服务。' : !status.writable ? '外部环境配置 · 只读。请由服务管理者移除环境覆盖后再更换。' : status.source === 'file' ? '已保存到官方凭据存储' : status.configured ? '当前使用 .env 配置；保存后由官方凭据存储接管。' : '添加密钥后即可供默认 DeepSeek 模型使用。'
+  $('#model-source').textContent = !status.supported ? '请检查官方宿主的凭据服务。' : !status.writable ? '外部环境配置 · 只读。请由服务管理者移除环境覆盖后再更换。' : status.source === 'file' ? '已保存到官方凭据存储' : status.configured ? '当前使用 .env 配置；保存后由官方凭据存储接管。' : '添加密钥后可供已接入该服务商的模型使用。'
   $('#model-fingerprint-row').hidden = !status.fingerprint
   $('#model-fingerprint').textContent = status.fingerprint?.replace(/^SHA-256:/, '') ?? ''
   $('#model-key').disabled = !status.writable
@@ -244,16 +251,17 @@ function renderModel(status) {
 }
 
 $('#model-refresh').addEventListener('click', () => perform(() => showPage('models'), $('#model-refresh')))
+$('#model-provider').addEventListener('change', () => perform(() => showPage('models')))
 $('#model-form').addEventListener('submit', async event => {
   event.preventDefault()
-  const identity = identityEpoch, version = pageEpoch
+  const identity = identityEpoch, version = pageEpoch, kind = modelKind()
   const key = $('#model-key').value
   $('#model-key').value = ''
   $('#model-save').disabled = true
   $('#model-refresh').disabled = true
   $('#model-message').textContent = '正在保存…'
   try {
-    const status = await api('deepseek-key', { apiKey: key })
+    const status = await api(`model-key/${kind}`, { apiKey: key })
     if (identity !== identityEpoch || version !== pageEpoch) return
     renderModel(status)
     $('#model-message').textContent = '密钥已更新，后续请求立即生效，无需重启。'
@@ -262,7 +270,7 @@ $('#model-form').addEventListener('submit', async event => {
       $('#model-message').textContent = error.message ?? '保存失败，请重试。'
       $('#model-save').disabled = false
     }
-  } finally { $('#model-refresh').disabled = false }
+  } finally { if (identity === identityEpoch && version === pageEpoch) $('#model-refresh').disabled = false }
 })
 
 function field(label, input) { const element = node('label', label); element.append(input); return element }

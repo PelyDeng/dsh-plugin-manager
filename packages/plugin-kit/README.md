@@ -8,7 +8,8 @@
 | `@dsh-plugin-manager/plugin-kit/http` | `createPluginHttp`：受保护路由与显式公开探针 |
 | `@dsh-plugin-manager/plugin-kit/tools` | `createPluginTools`、`guardTool`：执行前后鉴权与工具登记 |
 | `@dsh-plugin-manager/plugin-kit/route-path` | 无宿主依赖的规范路由校验 |
-| `@dsh-plugin-manager/plugin-kit/deepseek-key` | 默认 DeepSeek 凭据校验、状态与 SHA-256 指纹；写入委托给传入的官方 credentials 服务 |
+| `@dsh-plugin-manager/plugin-kit/model-key` | 固定 DeepSeek/智谱凭据校验、状态与 SHA-256 指纹；写入委托给官方 credentials 服务，不接受任意凭据引用 |
+| `@dsh-plugin-manager/plugin-kit/deepseek-key` | 默认 DeepSeek 凭据操作的兼容入口 |
 | `@dsh-plugin-manager/plugin-kit` | 上述访问、HTTP 和工具 API 的统一导出 |
 
 DSH 类型依赖是可选 peer，由使用相应接口的作者提供；只使用 access 或 route-path 不会加载工具运行实现。业务插件自行声明实际使用的 DSH/Cordis peer。
