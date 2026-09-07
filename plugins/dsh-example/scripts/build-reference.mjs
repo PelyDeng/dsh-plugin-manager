@@ -4,9 +4,9 @@ import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 
-const directories = ['packages/plugin-manager', 'packages/plugin-kit', 'plugins/dsh-auth', 'plugins/dsh-example', 'scripts', 'deploy', 'integrations', 'examples', 'doc'];
+const directories = ['packages/plugin-manager', 'packages/plugin-kit', 'plugins/dsh-auth', 'plugins/dsh-example', 'scripts', 'deploy', 'integrations', 'examples', 'doc', '.github'];
 const ignored = new Set(['node_modules', 'dist', 'lib', '.local', '.git', 'coverage', 'assets', 'vendor']);
-const extensions = new Set(['.ts', '.mjs', '.js', '.md', '.sh', '.ps1', '.html', '.css', '.yml', '.yaml', '.Dockerfile', '.example', '.template']);
+const extensions = new Set(['.ts', '.mts', '.mjs', '.js', '.md', '.sh', '.ps1', '.html', '.css', '.yml', '.yaml', '.Dockerfile', '.example', '.template']);
 const metadata = new Set(['package.json', 'tsconfig.json', 'site.defaults.json', 'Dockerfile']);
 
 export function buildReference(root, output) {

@@ -26,7 +26,7 @@ pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment
 
 职责、知识与部署者的 config.systemPrompt 分开注入官方 systemPrompt.section。补充提示默认空；已有配置不会被自动重写。改成其他业务助手时需替换内置职责、知识和建议问题，不能仅设置补充提示。未知版本、私有业务和未提供的 API 应明确待核实。
 
-代码问题通过官方工具协议检索和分页阅读 `dist/framework-reference.json`，回答引用文件路径、行号和快照摘要。索引覆盖公共 manager、kit、auth、example、部署脚本、集成、示例与文档；构建时从显式框架根目录生成，随最终 tgz 交付。运行时没有原仓库依赖，也不读取生产配置、私有插件或官方宿主源码。构建输入上限为 1500 个文件、8 MiB、每行 19000 字符，超限拒绝；工具一次最多读 100 行。两个工具 `example_search_framework` / `example_read_framework` 绑定当前会话 Agent，并执行 example 访问授权。源码只是回答资料，不是执行指令；助手没有命令执行或任意文件访问能力。
+代码问题通过官方工具协议检索和分页阅读 `dist/framework-reference.json`，回答引用文件路径、行号和快照摘要。索引覆盖公共 manager、kit、auth、example、部署脚本、集成、示例、文档、GitHub 构建发布流程及类型声明；构建时从显式框架根目录生成，随最终 tgz 交付。运行时没有原仓库依赖，也不读取生产配置、私有插件或官方宿主源码。构建输入上限为 1500 个文件、8 MiB、每行 19000 字符，超限拒绝；工具一次最多读 100 行。两个工具 `example_search_framework` / `example_read_framework` 绑定当前会话 Agent，并执行 example 访问授权。源码只是回答资料，不是执行指令；助手没有命令执行或任意文件访问能力。
 
 可用“我是外部作者，怎么取得工具？”开始，再追问“增加第二应用时原账号怎样保留？”；也可以让它生成带占位符的开发提示词。给出 OS、版本、目录角色和目标可获得更准确步骤，勿发送真实凭据。
 
