@@ -14,6 +14,7 @@ let pageEpoch = 0
 let dialogPlugin = null
 let dialogPage = 1
 let dialogTrigger = null
+const modelCards = [...document.querySelectorAll('[data-model]')].map(element => ({ element, kind: element.dataset.model, epoch: 0, pending: false, status: null }))
 
 function identityChanged() {
   try { localStorage.setItem('dsh_auth_changed', crypto.randomUUID()) }
@@ -197,19 +198,7 @@ async function showPage(next) {
     else button.removeAttribute('aria-current')
   }
   if (next === 'models') {
-    const kind = modelKind()
-    $('#model-name').textContent = kind === 'zhipu' ? '智谱 GLM' : 'DeepSeek'
-    $('#model-description').textContent = kind === 'zhipu' ? '普通模型 API · GLM-5.3 / GLM-5V-Turbo' : '默认 DeepSeek API 密钥'
-    $('#model-key').placeholder = kind === 'zhipu' ? '输入智谱开放平台 API Key' : 'sk-…'
-    try {
-      const result = await api(`model-key/${kind}`)
-      if (version === pageEpoch && identity === identityEpoch) renderModel(result)
-    } catch (error) {
-      if (version === pageEpoch && identity === identityEpoch && error.name !== 'AbortError') {
-        $('#model-status-label').textContent = '状态读取失败'
-        $('#model-message').textContent = error.message
-      }
-    }
+    await Promise.all(modelCards.map(card => loadModel(card)))
   } else if (next === 'plugins' || next === 'users') {
     const result = await api('plugins')
     if (version !== pageEpoch || identity !== identityEpoch) return
@@ -223,55 +212,85 @@ async function showPage(next) {
   }
 }
 
-function modelKind() { return $('#model-provider').value === 'zhipu' ? 'zhipu' : 'deepseek' }
-
+function modelField(card, name) { return card.element.querySelector(`[data-field="${name}"]`) }
+function modelControls(card) {
+  modelField(card, 'key').disabled = card.pending || !card.status?.writable
+  modelField(card, 'save').disabled = card.pending || !card.status?.writable
+  card.element.querySelector('[data-action="refresh"]').disabled = card.pending
+  card.element.setAttribute('aria-busy', String(card.pending))
+}
 function clearModel() {
-  $('#model-key').value = ''
-  $('#model-key').disabled = true
-  $('#model-save').disabled = true
-  $('#model-refresh').disabled = false
-  $('#model-fingerprint').textContent = ''
-  $('#model-fingerprint-row').hidden = true
-  $('#model-source').textContent = ''
-  $('#model-message').textContent = ''
-  $('#model-status-label').textContent = '正在读取…'
-  $('#model-status').className = 'model-status'
+  for (const card of modelCards) {
+    card.epoch++
+    card.status = null
+    modelField(card, 'key').value = ''
+    modelField(card, 'fingerprint').textContent = ''
+    modelField(card, 'fingerprint-row').hidden = true
+    modelField(card, 'source').textContent = ''
+    modelField(card, 'message').textContent = ''
+    modelField(card, 'message').classList.remove('error')
+    modelField(card, 'status').textContent = '正在读取…'
+    modelField(card, 'status').className = 'model-status'
+    card.element.querySelector('details').open = false
+    modelControls(card)
+  }
 }
-
-function renderModel(status) {
-  $('#model-status-label').textContent = !status.supported ? '凭据服务不可用' : status.configured ? '已配置' : '未配置'
-  $('#model-status').className = `model-status ${status.configured ? 'configured' : 'unconfigured'}`
-  $('#model-status-icon').setAttribute('href', `/auth/icons.svg#${status.configured ? 'check-circle' : 'key'}`)
-  $('#model-source').textContent = !status.supported ? '请检查官方宿主的凭据服务。' : !status.writable ? '外部环境配置 · 只读。请由服务管理者移除环境覆盖后再更换。' : status.source === 'file' ? '已保存到官方凭据存储' : status.configured ? '当前使用 .env 配置；保存后由官方凭据存储接管。' : '添加密钥后可供已接入该服务商的模型使用。'
-  $('#model-fingerprint-row').hidden = !status.fingerprint
-  $('#model-fingerprint').textContent = status.fingerprint?.replace(/^SHA-256:/, '') ?? ''
-  $('#model-key').disabled = !status.writable
-  $('#model-save').disabled = !status.writable
-  $('#model-save').textContent = status.configured ? '更换密钥' : '保存密钥'
+function renderModel(card, status) {
+  card.status = status
+  const label = modelField(card, 'status')
+  label.textContent = !status.supported ? '凭据服务不可用' : status.configured ? '已配置 · 未验证' : '未配置'
+  label.className = `model-status ${status.configured ? 'configured' : 'unconfigured'}`
+  modelField(card, 'source').textContent = !status.supported ? '请检查官方宿主的凭据服务。' : !status.writable ? '外部环境配置 · 只读。请由服务管理者移除环境覆盖后再更换。' : status.source === 'file' ? '已保存到官方凭据存储' : status.configured ? '当前使用 .env 配置；保存后由官方凭据存储接管。' : '添加密钥后可供已接入该服务商的模型使用。'
+  modelField(card, 'fingerprint-row').hidden = !status.fingerprint
+  modelField(card, 'fingerprint').textContent = status.fingerprint?.replace(/^SHA-256:/, '') ?? ''
+  modelField(card, 'save').textContent = status.configured ? '更换密钥' : '保存密钥'
+  modelControls(card)
 }
-
-$('#model-refresh').addEventListener('click', () => perform(() => showPage('models'), $('#model-refresh')))
-$('#model-provider').addEventListener('change', () => perform(() => showPage('models')))
-$('#model-form').addEventListener('submit', async event => {
-  event.preventDefault()
-  const identity = identityEpoch, version = pageEpoch, kind = modelKind()
-  const key = $('#model-key').value
-  $('#model-key').value = ''
-  $('#model-save').disabled = true
-  $('#model-refresh').disabled = true
-  $('#model-message').textContent = '正在保存…'
+async function loadModel(card, key) {
+  if (card.pending) return
+  const identity = identityEpoch, version = pageEpoch, epoch = ++card.epoch
+  const current = () => identity === identityEpoch && version === pageEpoch && epoch === card.epoch
+  const saving = key !== undefined
+  card.pending = true
+  modelField(card, 'message').classList.remove('error')
+  modelField(card, 'message').textContent = saving ? '正在保存…' : ''
+  if (!saving) {
+    card.status = null
+    modelField(card, 'status').textContent = '正在读取…'
+    modelField(card, 'status').className = 'model-status'
+    modelField(card, 'fingerprint').textContent = ''
+    modelField(card, 'fingerprint-row').hidden = true
+    modelField(card, 'source').textContent = ''
+  }
+  modelControls(card)
   try {
-    const status = await api(`model-key/${kind}`, { apiKey: key })
-    if (identity !== identityEpoch || version !== pageEpoch) return
-    renderModel(status)
-    $('#model-message').textContent = '密钥已更新，后续请求立即生效，无需重启。'
+    const status = await api(`model-key/${card.kind}`, saving ? { apiKey: key } : undefined)
+    if (!current()) return
+    renderModel(card, status)
+    if (saving) modelField(card, 'message').textContent = '密钥已更新，后续请求生效；尚未验证模型可用性。'
   } catch (error) {
-    if (identity === identityEpoch && version === pageEpoch && error.name !== 'AbortError') {
-      $('#model-message').textContent = error.message ?? '保存失败，请重试。'
-      $('#model-save').disabled = false
+    if (current() && error.name !== 'AbortError') {
+      modelField(card, 'message').textContent = error.message ?? '操作失败，请重试。'
+      modelField(card, 'message').classList.add('error')
+      if (!saving) { card.status = null; modelField(card, 'status').textContent = '状态读取失败' }
     }
-  } finally { if (identity === identityEpoch && version === pageEpoch) $('#model-refresh').disabled = false }
-})
+  } finally {
+    card.pending = false
+    if (current()) modelControls(card)
+    // A page may have reopened while its previous request was still settling.
+    else if (page === 'models' && session?.user.role === 'admin') void loadModel(card)
+  }
+}
+for (const card of modelCards) {
+  card.element.querySelector('[data-action="refresh"]').addEventListener('click', () => loadModel(card))
+  card.element.querySelector('form').addEventListener('submit', event => {
+    event.preventDefault()
+    if (card.pending || !card.status?.writable) return
+    const input = modelField(card, 'key'), key = input.value
+    input.value = ''
+    void loadModel(card, key)
+  })
+}
 
 function field(label, input) { const element = node('label', label); element.append(input); return element }
 
