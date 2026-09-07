@@ -22,7 +22,7 @@ import { loadFramework } from './framework.ts'
 export { Config } from './config.ts'
 
 export const name = 'example'
-export const inject = {required:['agents', 'agentDefaultModel', 'webServer', 'systemPrompt', 'tools', 'sessionPersistence'],optional:['messageFeedback']} as const
+export const inject = ['agents', 'agentDefaultModel', 'webServer', 'systemPrompt', 'tools', 'sessionPersistence', 'messageFeedback'] as const
 
 interface Conversation {
   owner: Actor

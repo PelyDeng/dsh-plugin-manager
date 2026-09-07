@@ -1,6 +1,12 @@
 import {test,expect} from 'vitest'
 import {fixture} from './fixture.mjs'
 import {projectTurns} from '../src/turns.ts'
+import {Inject} from '@deepseek-ai/cordis'
+import {inject} from '../src/index.ts'
+
+test('Cordis resolves actual service names instead of dependency group labels',()=>{
+ expect(Object.keys(Inject.resolve(inject))).toEqual(['agents','agentDefaultModel','webServer','systemPrompt','tools','sessionPersistence','messageFeedback'])
+})
 
 const events=[
  {type:'turn/start',seq:0,time:1000,data:{turn:1}},
