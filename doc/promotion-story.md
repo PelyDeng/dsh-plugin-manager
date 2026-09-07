@@ -4,7 +4,7 @@
 
 把项目推到 GitHub 以后，我开始考虑另一个问题：别人为什么会点开这个仓库，点开之后又为什么愿意试用？
 
-[DSH Plugin Manager](https://github.com/PelyDeng/dsh-plugin-manager) 是我基于 DeepSeek Harness 做的应用接入与交付管理框架。它沿用官方插件和 Bundle 机制，帮助开发者把应用打包、部署，并按需接入统一登录和应用授权。代码能运行只是起点，项目的用途、安装路径和验证边界也需要让第一次来的人看懂。
+[DSH Plugin Manager](https://github.com/PelyDeng/dsh-plugin-manager) 是我基于 DeepSeek Harness 做的 AI 应用开发与部署框架。它沿用官方插件和 Bundle 机制，让个人开发者和小团队开发自己的插件，并统一打包、安装、更新和管理，按需接入统一登录和应用授权。代码能运行只是起点，项目的用途、安装路径和验证边界也需要让第一次来的人看懂。
 
 这次我请 AI 协助检查公开仓库、整理材料和验证归档，自己负责真实服务器验收和熟人试用安排。这里记录的是这次做了什么、为什么做，以及哪些事情还没有完成。
 
@@ -20,11 +20,11 @@
 
 首页现在的核心说明是：
 
-> 把 DeepSeek Harness 插件交付成团队可使用的应用：统一登录、应用授权、独立打包与部署。
+> 基于 DeepSeek Harness 的 AI 应用开发与部署框架，让个人开发者和小团队开发自己的插件，并统一安装、更新和管理。
 
 这句话先说明用途，后面再解释 Cordis、Bundle 和框架边界。我把演示图、部署入口、Release 和反馈入口放到首页靠前的位置，并补充了 [English README](../README.en.md)。英文版提供用途、前置条件和操作路径；目前应用界面和详细文档主要仍是中文，没有把“有英文简介”写成“已经完整国际化”。
 
-首页还保留了不适用的情况：只运行一个个人工具时，直接用官方 Bundle 可能更简单。项目不是对所有用户都更好的选择，说清楚适用范围，可以减少无效尝试和维护沟通。
+首页还保留了选择更简单方案的情况：只运行一个个人工具时，直接用官方 Bundle 可能更简单；需要统一管理自己的插件，或组合应用交付给他人时，可以复用本框架。说清楚适用范围，可以减少无效尝试和维护沟通。
 
 ## 用公开演示说明完整路径
 
@@ -40,15 +40,15 @@
 
 About 的描述准备采用：
 
-> Deploy and manage DeepSeek Harness apps with shared authentication, plugin packaging, and Docker deployment.
+> Build, package, deploy, and manage plugins and AI apps on DeepSeek Harness, with optional shared authentication.
 
 Website 计划指向公开的图文导览。Topics 在保留原标签的基础上，补充 `deepseek`、`deepseek-harness`、`dsh-plugin`、`plugin-manager`、`self-hosted`。这些词与项目实际用途有关。[GitHub 的 Topics 说明](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/classifying-your-repository-with-topics)介绍了按主题浏览和搜索仓库的方式；添加标签提供了发现入口，并不保证排名或流量。
 
 社区介绍选择官方 DeepSeek Harness 的插件展示分类，因为读者本身就关心 DSH 扩展。发帖材料按照[该分类规则](https://github.com/deepseek-ai/deepseek-harness/discussions/2004)整理：只介绍这一个项目，提供项目地址、用途、截图和实际集成方式，显著标明非官方身份，也不把社区互动解释成官方推荐。
 
-介绍重点是交付问题：作者在独立仓库开发，管理器读取声明与归档，运行继续交给官方宿主。真实模型选择、业务数据授权和第三方插件兼容性各有边界。相比笼统说“强大的插件平台”，这样的描述更容易让读者判断是否适合自己。
+介绍覆盖开发到部署管理的路径：作者在独立仓库开发，管理器读取声明与归档，通过 CLI 和部署流程完成安装与更新，运行继续交给官方宿主。个人使用和团队交付都可以复用这条路径。真实模型选择、业务数据授权和第三方插件兼容性各有边界，这些说明帮助读者判断是否适合自己。
 
-检索还发现社区中存在名称相近的其他项目，例如[这个插件启停管理器的介绍](https://github.com/deepseek-ai/deepseek-harness/discussions/3848)。所以我在介绍中同时保留完整仓库地址和“团队应用交付”的用途说明。仅靠一个通用名字，不足以让读者辨认项目，也不能据此宣称功能首创。
+检索还发现社区中存在名称相近的其他项目，例如[这个插件启停管理器的介绍](https://github.com/deepseek-ai/deepseek-harness/discussions/3848)。所以我在介绍中同时保留完整仓库地址和“基于 DeepSeek Harness 的 AI 应用开发与部署框架”的定位说明。仅靠一个通用名字，不足以让读者辨认项目，也不能据此宣称功能首创。
 
 ## 让一个版本可以被明确地取得和核对
 

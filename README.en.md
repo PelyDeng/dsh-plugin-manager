@@ -21,7 +21,7 @@ Use official Cordis plugins, Bundles, and Agents without modifying DSH or manage
 | Optional `dsh-auth` | Accounts, login, and app access grants |
 | Your app | Tools, pages, business rules, and data authorization |
 
-For one personal tool, an official Bundle may be enough. This project is useful when you need consistent packaging, installation, updates, and management for your own plugins, or need to deliver several apps to a team or customer. App access does not grant access to every business record: each app must still enforce its own data permissions.
+For one personal tool, an official Bundle may be enough. This project is useful when you need consistent packaging, installation, updates, and management for your own plugins, or need to deliver several apps to a team or customer. Plugin installation and updates use the manager CLI and deployment workflows; the authentication UI manages accounts and app access grants. App access does not grant access to every business record: each app must still enforce its own data permissions.
 
 ## Start with the included apps
 
