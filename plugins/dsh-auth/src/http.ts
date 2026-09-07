@@ -95,6 +95,8 @@ export async function createHandler(ctx: Context, service: AuthService, config: 
     ['/auth/app.js', { file: 'app.js', type: 'text/javascript; charset=utf-8' }],
     ['/auth/catalog-view.js', { file: 'catalog-view.js', type: 'text/javascript; charset=utf-8' }],
     ['/auth/icons.svg', { file: 'icons.svg', type: 'image/svg+xml' }],
+    ['/auth/deepseek.svg', { file: 'deepseek.svg', type: 'image/svg+xml' }],
+    ['/auth/zhipu.svg', { file: 'zhipu.svg', type: 'image/svg+xml' }],
     ['/auth/style.css', { file: 'style.css', type: 'text/css; charset=utf-8' }],
   ])
   const content = new Map<string, { bytes: Buffer; type: string }>()

@@ -62,6 +62,19 @@ async function httpFixture(initial = false) {
   return { store, admin, ctx, service, config, origin, request, login }
 }
 
+describe('provider brand assets', () => {
+  it('serves both packaged SVGs from explicit same-origin routes', async () => {
+    const f = await httpFixture()
+    for (const provider of ['deepseek', 'zhipu']) {
+      const response = await f.request(`/auth/${provider}.svg`)
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toBe('image/svg+xml')
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+      expect(await response.text()).toBe(await readFile(new URL(`../web/${provider}.svg`, import.meta.url), 'utf8'))
+    }
+  })
+})
+
 describe('administrator DeepSeek credentials', () => {
   it('shares the protected UI contract with Zhipu without overwriting DeepSeek or accepting arbitrary refs', async () => {
     const f = await httpFixture(), values = new Map<string, string>([['DEEPSEEK_API_KEY', 'sk-original']])
