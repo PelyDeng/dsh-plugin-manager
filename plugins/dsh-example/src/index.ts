@@ -1,4 +1,4 @@
-/** DSH Agent chat with protected HTTP/SSE, deliberately without business tools. */
+/** Developer onboarding assistant with protected HTTP/SSE and package-local knowledge. */
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -15,6 +15,7 @@ import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, createAccess, createPluginHttp, onRevoked, registerPlugin, type Actor } from '@dsh-plugin/plugin-kit'
 import type { Config } from './config.ts'
 import { HistoryStore, projectHistory } from './history.ts'
+import { loadKnowledge, developerInstructions } from './knowledge.ts'
 export { Config } from './config.ts'
 
 export const name = 'example'
@@ -58,6 +59,7 @@ async function body(request: IncomingMessage, maxChars: number): Promise<{ messa
 /** Register the page, catalog entry and a login-bound conversation lifecycle. */
 export async function apply(ctx: Context, config: Config): Promise<void> {
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+  const knowledge = await loadKnowledge()
   const access = createAccess(ctx, { pluginId: manifest.deepseekPlugin.id, mode: config.accessMode, publicOrigin: config.publicOrigin })
   const http = createPluginHttp(ctx, { access, routePrefix: config.routePrefix })
   const conversations = new Map<string, Conversation>()
@@ -101,7 +103,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     entryPath: config.routePrefix, permissions: manifest.deepseekPlugin.permissions, tools: [],
   }))
   const assets = [['', 'index.html', 'text/html'], ['/app.js', 'app.js', 'text/javascript'],
-    ['/stream.js', 'stream.js', 'text/javascript'], ['/style.css', 'style.css', 'text/css']] as const
+    ['/stream.js', 'stream.js', 'text/javascript'], ['/style.css', 'style.css', 'text/css'],
+    ['/guide.md', '../knowledge/guide.md', 'text/plain'], ['/prompts.md', '../knowledge/prompts.md', 'text/plain']] as const
   for (const [suffix, file, mime] of assets) {
     const content = (await readFile(new URL(`../web/${file}`, import.meta.url), 'utf8')).replaceAll('__BASE__', config.routePrefix)
     ctx.effect(() => http.register({ kind: 'exact', path: config.routePrefix + suffix, surface: suffix ? 'asset' : 'page',
@@ -116,7 +119,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     try { access.ready(); json(res, { ok: true }) } catch { res.writeHead(503); res.end() }
   } }))
   ctx.effect(() => http.register({ kind: 'exact', path: config.routePrefix + '/identity', handler(_req, res) {
-    json(res, { mode: access.mode, maxMessageChars: config.maxMessageChars })
+    json(res, { mode: access.mode, maxMessageChars: config.maxMessageChars, version: manifest.version, knowledgeRevision: knowledge.revision })
   } }))
   ctx.effect(() => http.register({ kind: 'exact', path: config.routePrefix + '/conversations', handler(req, res, actor) {
     if (req.method !== 'GET') throw new AccessError(405, '只支持 GET')
@@ -136,12 +139,16 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     let events: readonly SessionEvent[]
     if (active?.handle) events = active.handle.agent.session.snapshotEvents()
     else {
-      // The pinned official source has SessionHandle; its same-version published declarations predate it.
+      // Published hosts expose inspect; the source host used by earlier releases exposes read handles.
       const persistence = ctx.sessionPersistence as unknown as {
-        open(id: SessionId, access: 'read'): Promise<{ read(): Promise<readonly SessionEvent[]>; close(): Promise<void> }>
+        inspect?: (id: SessionId) => Promise<{ events: readonly SessionEvent[] }>
+        open?: (id: SessionId, access: 'read') => Promise<{ read(): Promise<readonly SessionEvent[]>; close(): Promise<void> }>
       }
-      const handle = await persistence.open(SessionId(id), 'read')
-      try { events = await handle.read() } finally { await handle.close() }
+      if (persistence.inspect) events = (await persistence.inspect(SessionId(id))).events
+      else if (persistence.open) {
+        const handle = await persistence.open(SessionId(id), 'read')
+        try { events = await handle.read() } finally { await handle.close() }
+      } else throw new AccessError(503, '当前 DSH 不提供受支持的历史读取接口，请核对应用交付的宿主版本。')
     }
     access.assert(actor)
     json(res, { conversationId: id, messages: projectHistory(events), busy: active?.busy ?? false })
@@ -197,7 +204,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         const options = {
           agentOptions: { provider: selection.provider, model: selection.model },
           setup(agentCtx: Context) {
-            agentCtx.systemPrompt.section({ name: 'example:persona', order: 600, text: config.systemPrompt })
+            agentCtx.systemPrompt.section({ name: 'example:developer', order: 600, text: developerInstructions })
+            agentCtx.systemPrompt.section({ name: 'example:knowledge', order: 610, text: `知识摘要 ${knowledge.revision}\n\n${knowledge.text}` })
+            if (config.systemPrompt) agentCtx.systemPrompt.section({ name: 'example:persona', order: 620, text: config.systemPrompt })
             agentCtx.tools.restrict({ allow: [] })
           },
         }

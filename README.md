@@ -4,6 +4,20 @@
 
 独立仓库单包开发与内部 `plugins/*` 批量开发均受支持。新增插件通过声明接入，无需修改管理器名单或 DSH 源码；统一鉴权需要作者显式接入 kit，管理声明不会自动保护业务路由。官方运行时负责执行，本框架负责接入约定和交付管理，不承诺所有社区插件或任意宿主版本自动兼容。
 
+首次使用从[图文接入手册](doc/getting-started.md)开始。遇到问题可问内置的[开发者接入助手](plugins/dsh-example/README.md)，或直接读随包[FAQ](plugins/dsh-example/knowledge/guide.md)与[开发提示词](plugins/dsh-example/knowledge/prompts.md)。
+
+## 价值与适用范围
+
+| 读者 | 获得什么 | 仍需负责 |
+| --- | --- | --- |
+| 应用作者 | 独立仓库、统一声明、可选账号接口、通用打包 | 业务工具/页面、数据授权、配置校验与宿主兼容 |
+| 部署维护者 | 发布物组合、实例配置、受控安装与启停 | 可信来源、运行环境、凭据、备份及业务验收 |
+| 团队使用者 | 一套登录与获授权的应用入口 | 按应用能力使用；不把登录许可当全部业务数据许可 |
+
+例如知识库助手负责检索和文档权限，销售报表助手负责接口、指标、部门权限和图表。两者可以复用 auth 账号和 manager 交付流程，避免另维护一套密码、登录与部署代码。kit 内嵌于各应用，升级 kit 仍需作者重新打包；复制示例也不等于后续自动更新。具体分工见[第二应用示例](plugins/dsh-example/knowledge/guide.md#第二个应用到底少写什么)。
+
+个人只需一个工具时，直接用官方 Bundle 可能更简单。需要向团队或客户交付多个应用时，本框架更适合。当前外部接入需要取得版本化工具 tgz、维护声明与锁文件；没有插件市场、外部 workspace 自动扫描或外部 development/link。第三方插件的可信性和宿主升级测试仍需维护者承担。
+
 ## 独立仓库接入
 
 从[独立插件示例](examples/standalone-plugin/README.md)开始；需要统一身份时参考[可选 kit 示例](examples/standalone-kit/README.md)。先按[作者指南](doc/plugin-development.md)取得并安装 manager `.tgz`，再执行：
@@ -24,7 +38,7 @@ pnpm install --frozen-lockfile
 pnpm build
 pnpm check
 pnpm list:plugins
-pnpm package --plugins auth,example --output .local/artifacts/release/plugins
+pnpm package --plugins "auth,example" --output .local/artifacts/release/plugins
 ```
 
 普通构建和测试无需初始化宿主子模块、配置模型密钥或启动 Docker。源码默认选集包含 `auth` 和 `example`；示例默认要求登录，部署时选择 `auth,example` 并配置公开访问 origin。安装现成清单默认选中其中全部插件，可用 `--plugins` 限定。
@@ -38,7 +52,7 @@ pnpm package --plugins auth,example --output .local/artifacts/release/plugins
 | [packages/plugin-kit](packages/plugin-kit/README.md) | `@dsh-plugin/plugin-kit`：身份、权限、HTTP、工具登记 |
 | [packages/plugin-manager](packages/plugin-manager/README.md) | `@dsh-plugin/plugin-manager`：发现、打包、安装和受控启停 |
 | [plugins/dsh-auth](plugins/dsh-auth/README.md) | 可选账号、登录与插件授权 |
-| [plugins/dsh-example](plugins/dsh-example/README.md) | AI 流式对话、历史与可选认证示例 |
+| [plugins/dsh-example](plugins/dsh-example/README.md) | 开发者接入答疑、流式对话、历史与可选认证示例 |
 | [integrations/docker](integrations/docker/README.md) | 官方宿主镜像与 Compose 集成 |
 | [deploy](deploy/README.md) | Bash、PowerShell、Node 入口和配置模板 |
 | [doc](doc/README.md) | 作者接入、架构与数据迁移说明 |

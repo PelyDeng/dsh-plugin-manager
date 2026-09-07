@@ -1,41 +1,40 @@
-# dsh-example
+# dsh-example · 开发者接入助手
 
-通过管理器部署时，编辑 `<DSH home>/plugins/example/plugin.json` 的 `accessMode` 即可单独切换本插件认证，默认 `authenticated`；`enabled` 控制插件是否运行。修改后统一应用部署，无需重打包或修改生产 patch、Compose、健康检查名单。
+在 `/example` 询问框架是什么、内部或独立仓库如何接入、可选鉴权、发布交付、错误排查，以及如何生成给其他 AI 的开发提示词。它也保留可复制的流式问答、停止、多轮和个人历史实现。就绪地址为 `/example/ready`。
 
-[完整配置示例](examples/README.md)提供可复制的 example、auth、部署 JSON 模板，并逐项说明是否必填、默认值、单位、范围和使用条件；模板随插件归档发布。统一规则见[配置规范](../../doc/plugin-configuration.md)。
+## 启动与使用
 
-可复制的 AI 对话插件，页面为 `/example`，就绪探针为 `/example/ready`。支持多轮问答、SSE 流式输出、停止生成、新建对话、历史列表和恢复追问。
-
-示例使用宿主选择的模型与 DSH Agent、会话日志，不保存模型密钥。工具白名单为空，即使宿主安装其他工具也不会自动使用。SQLite 仅保存身份、标题和时间等历史目录信息，消息正文由 DSH 持久化。
-
-实时输出支持旧版日志 chunk 与 DSH 0.1.3 的瞬态流事件。模型返回的思考内容与回答分别流式展示：思考区生成时默认展开，可手动折叠；复制按钮只复制回答。没有 reasoning 输出的模型不显示思考区，不生成模拟思考。中断后的历史从宿主持久化记录恢复，包含已保存的思考和回答；历史中的思考区默认折叠。正在生成且尚未结算的文本仅通过当前 SSE 连接显示。
-
-## 运行
-
-Linux Docker 首次体验运行 `bash deploy/build.sh`，自动生成站点和插件默认配置，见[一键部署](../../doc/first-deployment.md)。全部配置字段及可选性见[完整配置示例](examples/README.md)。AI 对话需在同一个 DSH home 配置默认模型与密钥。使用已构建的官方宿主 CLI 直接启动时，按完整示例准备运行配置及发布目录，省略 auth 模板的 Docker 专用 stateDir，再运行：
+需要应用交付说明中验证过的官方 DSH、manager 0.3.0 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
 
 ```sh
-node deploy/scripts/deployment.mjs start --config .local/deployment.json --dsh-cli-js /path/to/dsh/lib/bin.js
+pnpm exec dsh-plugin start --root <交付根> --config .local/deployment.json --plugins all
 ```
 
-示例默认纳入源码选集，并默认使用 `authenticated` 模式。站点 origin 在部署配置中统一填写，同时安装 auth 后打开 `/auth`；管理员自动看到“AI 对话示例”，普通账号需要管理员授予 example 访问权限。示例入口为 `/example`，对话历史按账号隔离。管理器在部署前拒绝缺少认证提供者的组合；运行中认证服务不可用时就绪探针返回 503，不会自动开放匿名访问。
+配置与获取发布物的完整步骤见[图文手册](https://github.com/PelyDeng/dsh-plugin/blob/main/doc/getting-started.md)和 manager 随包 DELIVERY.md；在线 main 可能领先于当前版本。Linux Docker 完整源码部署可使用仓库的 `bash deploy/build.sh`。
 
-需要无认证的独立演示时，将 example 的 `plugin.json` 中 `accessMode` 改为 `standalone`，然后重新应用部署。该模式使用安装级共享历史。完全绕过管理器、直接使用官方 Bundle 时，才由 `DSH_ACCESS_MODE` 和 `DSH_PUBLIC_ORIGIN` 或官方 patch 提供对应配置；它们不能替代管理器的实例配置。
+默认 authenticated。登录 `/auth`，首次 admin 必须改密；普通账号需要 example 授权，再打开 `/example`。同一个 DSH home 还需官方默认模型与凭据，插件不保存模型密钥。探针成功只说明基本可服务，不证明模型请求成功。
 
-模式切换需要保持相同 home 并受控重启。独立历史与账号历史分别保留，不迁移、不合并；同一账号的不同登录共享个人历史。退出或撤权会取消该登录发起的活动回合。刷新或重启后可从历史继续追问。
+实例配置在 `<home>/plugins/example/plugin.json`。将 accessMode 改为 standalone 后受控重启可独立体验；这是安装级共享历史。enabled 控制停用；停用不删除数据。字段与可复制模板见随包[配置参考](examples/README.md)。
 
-宿主基线由根 gitlink 锁定。历史读取使用 `SessionHandle.open/read/close`，发布版类型与锁定源码存在差异，源码保留该接口的局部类型适配；不能仅凭 npm 版本字符串推断历史恢复兼容。
+## 知识和回答范围
 
-## 复制与扩展
+- [接入 FAQ](knowledge/guide.md)：定位、架构、命令、代码、鉴权、交付和限制。
+- [五种开发提示词](knowledge/prompts.md)：工具、问答应用、已有项目、内部交付与故障诊断。
 
-复制本目录后修改 package.json 中的包名、插件 ID、入口、权限和探针；同步 Bundle、默认路由、会话 ID 前缀、提示词段名及测试。默认历史库按插件 ID 分开，不要复用原示例数据库。
+这两份 Markdown 同时是读者文档和模型知识，不另建副本。只加载包内固定路径，合计不超过 32 KiB；构建与启动时超限拒绝，不截断。页面展示插件版本及内容摘要；摘要标识资料内容，不证明远程仓库实时同步。维护者变更支持能力时同步这些文件、相关命令和来源，并检查打包内容、代表性问答与真实宿主请求。
 
-仓库外开发时将 kit 的 `workspace:*` 开发依赖替换为可安装的 kit `.tgz`，保留 tsdown 内嵌配置。`clean` 是本仓库工具入口，独立项目应提供自己的清理命令。无需复制 kit 源码。
+职责、知识与部署者的 config.systemPrompt 分开注入官方 systemPrompt.section。补充提示默认空；已有配置不会被自动重写。改成其他业务助手时需替换内置职责、知识和建议问题，不能仅设置补充提示。未知版本、私有业务和未提供的 API 应明确待核实。助手不会执行命令或读取用户机器；工具白名单始终为空。
 
-配置定义位于 `src/config.ts`，管理器部署时写入实例配置的 `config`。全部字段和约束见[完整配置示例](examples/README.md)。添加工具时通过 kit 注册真实 ToolDefinition，并将对应工具名加入 Agent 白名单。
+可用“我是外部作者，怎么取得工具？”开始，再追问“增加第二应用时原账号怎样保留？”；也可以让它生成带占位符的开发提示词。给出 OS、版本、目录角色和目标可获得更准确步骤，勿发送真实凭据。
 
-```sh
-pnpm --filter dsh-example check
-```
+## 历史与认证
 
-测试使用隔离 SQLite、HTTP 与可控 Agent，不消耗模型额度。真实宿主集成入口为 `tests/host-smoke.mjs`，需要已准备的锁定宿主与 auth/example 发布目录。
+SQLite 只存账号所有者、标题和时间等历史目录；消息正文使用 DSH 会话日志。账号历史与 standalone 共享历史分别保留，不迁移合并；同一账号的不同登录共享个人历史。沿用同一 home 才能恢复原数据。退出或撤权取消该登录的活动回合；停止生成取消模型工作，已持久化内容仍可从历史继续。
+
+支持旧日志 chunk 与 DSH 0.1.3 瞬态流；思考和回答分开展示，无 reasoning 时不模拟。历史支持已发布宿主的 inspect 与早期源码宿主的 open/read/close，缺少这两种接口时明确拒绝。CLI、基础 Bundle 与间接依赖需要一起核对，不能只凭 CLI 版本保证兼容。宿主、模型和当前插件的组合仍需真实验证。
+
+## 作者复制与检查
+
+内部复制本目录，修改包名、ID、路由、权限、Bundle、会话前缀、提示词段名、知识、页面和测试。外部作者把 kit workspace:* 换成版本化 tgz 开发依赖、保留 tsdown 内嵌；移除原仓库 clean 入口及框架专用集成测试依赖。配置与知识输入都随包目录携带；[外部复制步骤](https://github.com/PelyDeng/dsh-plugin/blob/main/doc/plugin-development.md#复制完整问答应用到独立仓库)说明具体操作。
+
+在包根运行 `pnpm build`、`pnpm check`，行为回归单独运行 `pnpm test`。框架内也可用 `pnpm --filter dsh-example ...`。测试使用隔离数据和 Agent 替身，不证明真实模型回答质量。`tests/host-smoke.mjs` 使用真实官方宿主和 auth/example tgz，但模型 HTTP 是明确标识的本地替身。

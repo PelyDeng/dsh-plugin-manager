@@ -1,0 +1,234 @@
+# 从一个示例，到两个应用
+
+这份手册带你交付 `dsh-example` 开发者接入助手，再加入另一位作者的独立鉴权示例。第二个示例只返回当前身份，用来学习交付；真实销售查询、数据权限和图表需要业务作者实现。
+
+![开发者接入助手：首页可选择六类问题，也能从左侧恢复个人历史](assets/developer-assistant.png)
+
+页面截图来自隔离实例；首页仅展示操作入口，模型连接验证使用本地替身，不代表真实答疑质量。知识摘要随发布内容变化。
+
+**作者**开发并交出发布目录；**部署者**填写配置、安装和维护；**使用者**登录、打开获授权的应用。只想体验完整源码站点的 Linux Docker 用户，可直接走[一键部署](first-deployment.md)。以下主线使用 Node CLI，Windows PowerShell 与 Bash 均可，不需要 Docker。
+
+## 1. 先看关系，选一条路
+
+```mermaid
+flowchart LR
+  U[使用者] --> A[auth：登录与应用授权]
+  A --> E[example：开发者答疑]
+  A --> S[第二应用：业务代码]
+  E --> K[可选 kit：可信身份与受保护接口]
+  S --> K
+  K --> H[官方 DSH：插件、Agent、模型、会话]
+  M[manager：清单、配置、安装与启停] --> H
+```
+
+DSH 执行应用；本框架规范接入与交付。写个人工具可直接用官方 Bundle。需要交给团队、共用账号和部署流程，再使用 manager 和可选 kit。声明不会自动保护业务接口，可信身份也不等于业务数据授权。
+
+```mermaid
+flowchart LR
+  I[内部 plugins/*] --> B[批量 build/check/pack]
+  X[外部独立 pnpm 单包] --> P[显式 root + package .]
+  B --> R[清单 1：含源码位置]
+  P --> T[清单 2：无源码位置]
+  R --> C[compose-release：完整候选集合]
+  T --> C
+  C --> D[release 部署与更新]
+  R --> V[内部 development/link]
+```
+
+外部路径目前不自动发现多包 workspace、不提供 development/link。内部扫描、默认选集和批量开发继续保留。
+
+## 2. 准备工具和目录
+
+**目的**：让工具、作者源码、发布物、运行数据各有位置。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0`、系统 `tar`，安装依赖需要可用网络或完整缓存。先运行 `node --version`、`pnpm --version`、`tar --version`。
+
+```text
+dsh-lab/
+├─ framework/       本框架源码（内部 auth/example）
+├─ tools/           安装 manager 与官方 CLI
+├─ second/          外部作者的独立示例
+└─ site/            部署者的交付根
+   ├─ incoming/    作者给的原始发布目录
+   ├─ releases/    组合后的完整站点发布物
+   └─ .local/      deployment.json、data/dsh-home、运行记录
+```
+
+**取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager 0.3.0、kit 0.1.0 tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。仅消费现成发布物的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
+
+```sh
+git clone https://github.com/PelyDeng/dsh-plugin.git framework
+cd framework
+git rev-parse HEAD
+pnpm install --frozen-lockfile
+node -e "require('fs').mkdirSync('.local/artifacts/tools',{recursive:true})"
+pnpm --filter @dsh-plugin/plugin-manager build
+pnpm --filter @dsh-plugin/plugin-kit build
+```
+
+记录本次源码提交。初始化后续命令所用变量；路径来自当前目录，不写机器固定路径。
+
+PowerShell（仍在框架根）：
+
+```powershell
+$framework = (Get-Location).Path
+$lab = Split-Path -Parent $framework
+```
+
+Bash（仍在框架根）：
+
+```sh
+framework="$PWD"
+lab="$(dirname "$framework")"
+```
+
+两个终端后续均使用以下命令；新终端需重新设置这两个变量：
+
+```sh
+pnpm --filter @dsh-plugin/plugin-manager pack --out "$framework/.local/artifacts/tools/plugin-manager-0.3.0.tgz"
+pnpm --filter @dsh-plugin/plugin-kit pack --out "$framework/.local/artifacts/tools/plugin-kit-0.1.0.tgz"
+node -e "for (const p of ['../tools','../site/incoming']) require('fs').mkdirSync(p,{recursive:true})"
+cd ../tools
+pnpm add --ignore-workspace "$framework/.local/artifacts/tools/plugin-manager-0.3.0.tgz"
+pnpm add --ignore-workspace @deepseek-ai/dsh@0.1.2-alpha.5
+pnpm exec dsh-plugin --version
+node node_modules/@deepseek-ai/dsh/lib/bin.js --version
+```
+
+**预期**：工具目录能运行 manager 0.3.0 和官方 CLI。上面的宿主是应用已有交付基线，升级需重新验证插件接口和历史恢复；保存工具目录的锁文件，不能把 CLI 固定版本当成所有依赖都固定。pnpm 若提示依赖构建脚本审批，按官方依赖要求运行 `pnpm approve-builds` 后重装。后文所有 `pnpm exec dsh-plugin` 都在这个 tools 目录执行。
+
+## 3. 内部作者：交付第一个应用
+
+**目的**：继续利用 `plugins/*` 自动扫描。回到框架根：
+
+```sh
+cd "$framework"
+pnpm list:plugins
+pnpm package --plugins "auth,example" --output "$lab/site/incoming/base-v1"
+```
+
+**预期**：输出 `manifest.json` 和 auth/example 的摘要命名 tgz。pack 已执行构建与必要检查，无需事先重复 check。目录非空时改用新名称；不要覆盖现用发布物。完整业务测试单独运行 `pnpm --filter dsh-example test`。
+
+example 的关键位置：
+
+| 文件 | 学什么 |
+| --- | --- |
+| `package.json` + `cordis.patch.yml` | 官方 Bundle、受管 ID、页面与探针、认证角色 |
+| `src/index.ts` | 受保护 HTTP、官方 Agent、流式与会话生命周期 |
+| `src/history.ts` | 可信账号所有者、历史目录与宿主日志恢复 |
+| `src/knowledge.ts` + `knowledge/*.md` | 固定公开知识、职责与摘要，不读任意文件 |
+| `web/` | 提问、停止、历史、建议问题与资料入口 |
+
+复制成自己应用时修改包名、ID、Bundle、路由、权限、会话前缀、提示词段名、知识、页面和测试；详见[作者指南](plugin-development.md)。日常构建/检查不需要模型密钥。
+
+## 4. 部署者：只用发布物启动
+
+在 tools 目录组合第一站点；这一步不读取作者源码：
+
+```sh
+cd "$lab/tools"
+pnpm exec dsh-plugin compose-release --root "$lab/site" --output releases/site-v1 --manifest incoming/base-v1/manifest.json
+```
+
+在 `site/.local/deployment.json` 新建下列文件。唯一必须替换的 CLI 占位符指向工具目录实际文件，Windows JSON 路径使用 `/` 或 `\\`。这是新隔离实例；已有站点不要覆盖配置或更换 home。
+
+```json
+{
+  "manifest": "releases/site-v1/manifest.json",
+  "plugins": "all",
+  "mode": "release",
+  "home": ".local/data/dsh-home",
+  "dshCliJs": "<tools绝对路径>/node_modules/@deepseek-ai/dsh/lib/bin.js",
+  "port": 7902,
+  "publicOrigin": "http://127.0.0.1:7902"
+}
+```
+
+```sh
+pnpm exec dsh-plugin start --root "$lab/site" --config .local/deployment.json --plugins all
+```
+
+**预期**：前台启动官方 web profile；保持终端运行，在另一个 tools 终端用同 root/config 执行 `health`。端口冲突时选空闲端口并同步 origin。所有相对部署路径以 site 为根；DSH_HOME 是该 site 下的 `.local/data/dsh-home`，不是 tools 或作者目录。
+
+打开 `http://127.0.0.1:7902/auth`，admin 初始密码为 `123456`，强制改密后重新登录；创建普通账号，授予 example。普通用户打开 `/example`。根路径属于官方控制台，其认证与插件账号不同。
+
+![插件账号登录：登录后只能访问获授权的应用](assets/login.png)
+
+问答还需在**同一个 home** 的官方模型设置中配置默认模型与凭据。密钥不要放进 plugin.json、命令参数或截图。无模型配置时可以验证页面与权限，但不能称问答已成功。凭据入口与更详细交付步骤见[部署指南](../packages/plugin-manager/DELIVERY.md)。
+
+![官方控制台：设置中的模型页管理提供方凭据，启动环境提供的密钥不能在此覆盖](assets/model-settings.png)
+
+## 5. 外部作者：加入第二个应用
+
+**目的**：另一个作者只维护自己的仓库，复用身份与交付。下面复制最小鉴权示例，真实入口为 `/independent-access-example/identity`。
+
+在框架根复制公开示例（只创建不存在的 second 目录）：
+
+```sh
+cd "$framework"
+node -e "const fs=require('fs'); if(fs.existsSync('../second')) throw Error('second 已存在，请换新目录'); fs.cpSync('examples/standalone-kit','../second',{recursive:true})"
+cd ../second
+pnpm add --ignore-workspace --save-dev "$framework/.local/artifacts/tools/plugin-kit-0.1.0.tgz"
+cd ../tools
+pnpm exec dsh-plugin list --root "$lab/second" --package .
+pnpm exec dsh-plugin pack --root "$lab/second" --package . --output "$lab/site/incoming/second-v1"
+```
+
+**预期**：独立作者锁文件与构建留在 second，交付目录只含可迁移清单和归档。kit 是构建依赖并内嵌；部署机器不需要它的原 tgz 或作者源码。list 不要求锁文件，pack 要求根锁文件且冻结安装，忽略父 workspace。无鉴权的最小 Bundle 可改用 [standalone-plugin](../examples/standalone-plugin/README.md)。完整聊天应用的独立复制步骤见[作者指南](plugin-development.md#复制完整问答应用到独立仓库)。
+
+## 6. 部署者：保留第一应用，应用新清单
+
+```mermaid
+flowchart LR
+  A[作者 build/check/pack] --> P[原始 tgz + manifest + 配置说明]
+  P --> C[部署者 compose-release 全部候选]
+  O[previous 现用清单：仅旧归档] --> C
+  C --> V[配置校验 + 官方安装预检]
+  V --> R[同 home 受控启动]
+  R --> H[health + 普通账号真实使用]
+```
+
+在 tools 目录先生成新发布目录，再停止旧实例：
+
+```sh
+pnpm exec dsh-plugin compose-release --root "$lab/site" --output releases/site-v2 --previous releases/site-v1/manifest.json --manifest incoming/base-v1/manifest.json --manifest incoming/second-v1/manifest.json
+pnpm exec dsh-plugin stop --root "$lab/site" --config .local/deployment.json
+```
+
+把 deployment.json 的 manifest 改为 `releases/site-v2/manifest.json`，其余 home、origin 等保持。然后 start（同上一节命令，显式 --plugins all）。原账号重新登录，管理员给普通账号增加 independent-access-example 授权；授权变更会撤销其旧登录，需要重新登录。
+
+**预期**：example 和第二应用同时可用，旧账号、授权与实例配置保留。未授权普通账号访问第二端点应返回 403，获授权后返回当前身份。它不查询销售数据。已安装但不在本次候选的 auth 不能满足依赖；--previous 也不会把它补选回来。
+
+更新某应用时替换其原始分项清单，重新组合**所有**要保留的应用。不要将旧整站清单和同 ID 新包叠加。保留旧目录、一致数据备份和作者迁移说明；存量数据可否回退不是清单能够保证的。
+
+## 7. 登录、配置与停用
+
+```mermaid
+flowchart LR
+  R[业务请求] --> L{有效登录？}
+  L -- 否 --> N[要求登录]
+  L -- 是 --> P{有应用授权？}
+  P -- 否 --> F[403]
+  P -- 是 --> A[kit 提供可信 actor]
+  A --> B{应用的数据授权}
+  B -- 允许 --> D[仅查询获准业务数据]
+  B -- 拒绝 --> F
+```
+
+实例设置在 `<home>/plugins/<id>/plugin.json`。`enabled:false` 停用，数据保留；认证 consumer 的 `accessMode:standalone` 改为共享体验，不能承诺个人历史。修改后 stop/start；Docker 才用 apply-compose。重新启用需原候选仍包含应用。auth 不接受 accessMode，停用它前要处理仍要求登录的应用。
+
+业务参数放 config，业务凭据按作者 runtimeConfig 模板提供；销售数据范围由应用检查。全部字段只在[配置参考](../plugins/dsh-example/examples/README.md)维护。
+
+## 8. 命令速查与求助
+
+| 目的 | 执行位置与命令 |
+| --- | --- |
+| 内部扫描 | 框架根：`pnpm list:plugins` |
+| 内部日常检查 | 框架根：`pnpm check --plugins example` |
+| 独立检查 | tools：`pnpm exec dsh-plugin check --root <作者根> --package .` |
+| 构建并交付 | 作者用 pack；内部用 pnpm package，均用新输出目录 |
+| 就绪检查 | tools：`pnpm exec dsh-plugin health --root <交付根> --config .local/deployment.json` |
+| 停止 | tools：同上，将 health 换成 stop |
+| 看参数 | tools：`pnpm exec dsh-plugin --help` |
+
+先区分**安装成功 → 宿主监听 → 应用就绪 → 真实业务完成**。401/303 查登录，403 查授权/origin，503 查启动依赖，404 查路由和启用；探针通过但问答失败，查同 home 的模型。不要用删数据、清 pending 或关闭鉴权试错。
+
+更多问题见随助手发布的[FAQ](../plugins/dsh-example/knowledge/guide.md)；把需求交给其他 AI，复制[五种开发提示词](../plugins/dsh-example/knowledge/prompts.md)。求助提供脱敏错误、命令、目录角色、版本、候选 ID 和认证模式，不提供凭据、Cookie 或客户数据。

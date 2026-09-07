@@ -173,6 +173,8 @@ try {
   const response = await fetch(base + '/identity')
   if (!response.ok) throw new Error('无法验证访问状态，请重新登录。')
   const identity = await response.json()
+  $('knowledge-version').textContent = `v${identity.version} · 知识 ${identity.knowledgeRevision}`
+  $('knowledge-version').title = '知识摘要标识随包资料内容，不代表远程仓库实时状态'
   $('access-mode').textContent = identity.mode === 'authenticated' ? '已通过身份认证' : '独立体验模式'
   $('auth-link').hidden = identity.mode !== 'authenticated'
   $('history-label').textContent = identity.mode === 'authenticated' ? '我的历史对话' : '独立模式历史'

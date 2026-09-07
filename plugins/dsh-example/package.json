@@ -1,7 +1,7 @@
 {
   "name": "dsh-example",
-  "version": "0.2.2",
-  "description": "可复制的 AI 流式对话与可选 auth 接入示例",
+  "version": "0.3.0",
+  "description": "DSH Plugin 开发者接入答疑助手与可复制的鉴权对话示例",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -19,6 +19,7 @@
     "dist/",
     "web/",
     "examples/",
+    "knowledge/",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -36,13 +37,15 @@
     "schemaVersion": 3,
     "id": "example",
     "defaultEnabled": true,
-    "displayName": "AI 对话示例",
+    "displayName": "开发者接入助手",
     "entryPath": "/example",
     "healthPath": "/example/ready",
     "permissions": [
       "example:access"
     ],
     "verifyFiles": [
+      "knowledge/guide.md",
+      "knowledge/prompts.md",
       "web/index.html",
       "web/app.js",
       "web/stream.js",

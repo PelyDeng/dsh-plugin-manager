@@ -9,7 +9,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 // Repository rules apply even to force-added files; personal Git excludes are not project policy.
 const ignoredTracked = execFileSync('git', ['ls-files', '--cached', '--ignored', '--exclude-per-directory=.gitignore', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
 assert.equal(ignoredTracked.length, 0, `Ignored files tracked by Git:\n${ignoredTracked.join('\n')}`);
-const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { cwd: root, encoding: 'utf8' }).trim().split('\n');
+const deleted = new Set(execFileSync('git', ['ls-files', '--deleted', '-z'], { cwd: root, encoding: 'utf8' }).split('\0'));
+const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(name => name && !deleted.has(name));
 const vendorArchives = new Set();
 for (const name of files.filter(name => /^plugins\/[^/]+\/package.json$/.test(name))) {
   const manifest = JSON.parse(readFileSync(resolve(root, name), 'utf8'));

@@ -16,5 +16,5 @@ DSH 类型依赖是可选 peer，由使用相应接口的作者提供；只使�
 
 ```sh
 pnpm --filter @dsh-plugin/plugin-kit build
-pnpm --filter @dsh-plugin/plugin-kit check
+pnpm --filter @dsh-plugin/plugin-kit test
 ```
