@@ -16,7 +16,7 @@ test('setup FAQ remains readable with application authorization when the model i
     expect(text).toContain('dsh web authentication required')
     expect(text).toContain('bash deploy/scripts/set-api-key.sh --config .local/deployment.json')
     expect(text).toContain('写入官方存储时默认无需重启')
-    expect(text).toContain('SHA-256指纹')
+    expect(text).toMatch(/SHA-256\s*指纹/)
     expect(text).toContain('文件为准，只注入官方DSH子进程，网页只读')
     expect(text).toContain('留空不添加覆盖、不删除官方凭据、不清除继承环境密钥')
     expect(f.handles).toHaveLength(0)

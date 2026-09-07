@@ -36,7 +36,7 @@ DSH_TRUSTED_HOSTS=["dsh.example.com"]
 
 文件 DEEPSEEK_API_KEY/ZHIPU_API_KEY 非空时，以文件为准，只注入官方DSH子进程，网页只读；修改后正常部署并受控重启。留空不添加覆盖、不删除官方凭据、不清除继承环境密钥。官方来源顺序为进程环境、.credentials.yaml、工作目录.env、home.env；已有环境覆盖时仍只读，没有覆盖时继续网页管理。
 
-管理员完成初始改密后，在 /auth “模型设置”选择DeepSeek或智谱，页面仅返回状态及SHA-256指纹，不返回密钥。脚本仅支持DeepSeek：在源码仓库执行 `bash deploy/scripts/set-api-key.sh --config .local/deployment.json`，隐藏输入，不将密钥放入参数。独立工具使用 `dsh-plugin-manager set-api-key --root <交付根> --config <部署文件>`，需已安装兼容官方CLI及正确数据所有者。文件管理的DeepSeek会拒绝脚本写入。
+管理员完成初始改密后，在 /auth “模型设置”的 DeepSeek 或智谱 GLM 卡片管理对应密钥，桌面每行最多两张、手机单列。页面仅返回状态及 SHA-256 指纹，不返回密钥。脚本仅支持 DeepSeek：在源码仓库执行 `bash deploy/scripts/set-api-key.sh --config .local/deployment.json`，隐藏输入，不将密钥放入参数。独立工具使用 `dsh-plugin-manager set-api-key --root <交付根> --config <部署文件>`，需已安装兼容官方 CLI 及正确数据所有者。文件管理的 DeepSeek 会拒绝脚本写入。
 
 网页与脚本复用官方凭据服务及文件锁，保留其他凭据、账号和历史。写入官方存储时默认无需重启，宿主监听加载；自定义存储或关闭监听时使用网页。Compose脚本确认活动容器/home后以容器用户执行，Linux凭据文件0600。文件覆盖不会导入.credentials.yaml，原值仍需保存在私有文件供宿主调用，不能仅保存指纹。
 
