@@ -27,7 +27,7 @@ kind: "package-bundle"
 - [启动与访问](#启动与访问)
 - [开发模式与正式模式](#开发模式与正式模式)
 - [开发与升级](#开发与升级)
-- [限制与安全边界](#限制与安全边界)
+- [使用限制](#使用限制)
 
 ## 功能范围
 
@@ -72,7 +72,7 @@ flowchart LR
 
 ## 本地构建
 
-要求 Node.js `^22.19.0` 或 `>=24.0.0`，并安装 pnpm 11。
+要求 Node.js `^22.19.0` 或 `>=24.0.0`，并使用仓库锁定的 pnpm 11.19.0。
 
 ```powershell
 Set-Location '<dsh-plugin-manager-gitee 仓库目录>'
@@ -100,18 +100,39 @@ Set-Location '<deepseek-harness 仓库目录>'
 pnpm dsh plugin --profile web add "file:$pluginRoot"
 ```
 
-上面的源码安装命令应从插件包根目录开始执行，因此 `$pluginRoot` 会自动使用当前电脑上的实际位置。
+上面的命令从已完成构建的插件包根执行，`$pluginRoot` 使用本机实际路径。直接使用官方 Bundle 时，配置路径和认证模式由自己的 patch 或环境设置；使用管理器时按后文统一启动，不混用两套安装流程。
 
 该命令把本包作为 profile 依赖安装，并自动把 `cordis.patch.yml` 加入 `web` profile 的 bundle 层。无需改动 `deepseek-harness/packages/` 或官方 profile 模板。
 
 ## 配置业务参数
 
-用户运行配置保存网关地址与两阶段认证参数；通过主仓部署器启动时默认位置为 `.local/data/dsh-home/plugins/closedoff/env.conf`。在主仓根从公开模板创建文件并自行填写：
+业务配置保存网关地址和两阶段认证参数。首次部署前，在私有仓库根创建独立配置文件，避免提前向空数据目录写入内容：
 
 ```powershell
-New-Item -ItemType Directory -Force .local/data/dsh-home/plugins/closedoff | Out-Null
-Copy-Item plugins/dsh-closedoff-assistant/env.conf.example .local/data/dsh-home/plugins/closedoff/env.conf
+New-Item -ItemType Directory -Force .local/secrets | Out-Null
+if (-not (Test-Path .local/secrets/closedoff.env.conf)) {
+  Copy-Item plugins/dsh-closedoff-assistant/env.conf.example .local/secrets/closedoff.env.conf
+}
 ```
+
+填写该文件，并在 `.local/site.json` 设置 `instances.closedoff.runtimeConfig` 为 `.local/secrets/closedoff.env.conf`。首次站点配置与服务器更新见私有仓库根 `PRIVATE.md`。已有实例沿用当前配置路径，不覆盖配置文件。
+
+Node 开发或独立运行时，可在仓库根新建 `.local/closedoff.deployment.json`，再通过下文的 `-Config` 指定；这份文件与 Docker 自动生成的部署配置分开：
+
+```json
+{
+  "publicOrigin": "http://127.0.0.1:7903",
+  "port": 7903,
+  "dataRoot": ".local/data/closedoff-dev",
+  "home": ".local/data/closedoff-dev/dsh-home",
+  "artifacts": ".local/closedoff-dev/artifacts",
+  "instances": {
+    "closedoff": { "runtimeConfig": ".local/secrets/closedoff.env.conf" }
+  }
+}
+```
+
+该示例使用独立端口、数据与产物目录，workspace 和官方认证地址文件也由独立 dataRoot 派生。端口占用时同时调整 port 和 publicOrigin；现有实例应选择其原配置，不用它替换生产配置。
 
 `env.conf` 包含 `CLOSEDOFF_BASE_URL`、阶段一 `clientId/clientSecret`，以及阶段二 `appCode/clientId/clientSecret/username`。插件每次激活时读取并校验该文件；缺失文件、空字段、非 HTTPS 网关地址都会使插件明确启动失败。
 
@@ -119,13 +140,13 @@ Copy-Item plugins/dsh-closedoff-assistant/env.conf.example .local/data/dsh-home/
 
 ## 启动与访问
 
-专用业务 Agent 默认使用 `low` 推理等级，避免查询型任务继承 DSH 全局的高推理等级而产生冗长思考和额外等待；部署环境可用 `CLOSEDOFF_REASONING_EFFORT` 在 `off`、`low`、`high`、`max` 中调整。轨迹地图默认读取插件配置中的地形与 3D Tiles 地址。部署环境可分别通过 `CLOSEDOFF_TERRAIN_URL` 和 `CLOSEDOFF_TILESET_URL` 覆盖这两个地址，并通过 `CLOSEDOFF_TILESET_HEIGHT` 设置模型沿椭球法向的高度偏移（米）；当前 Fuling 数据经浏览器差分检查后的默认值为 `60`。`CLOSEDOFF_TRACK_DEVICE_RADIUS_METERS` 设置设备组到轨迹线的最大距离，默认 `100` 米；`CLOSEDOFF_TRACK_DWELL_MAX_GAP_SECONDS` 设置驻留估算允许累计的最大相邻采样间隔，默认 `300` 秒，超过该值的间隔按定位中断排除。正文三维视图和三维弹窗都根据轨迹、起终点和筛选后的设备组自动计算完整取景范围。浏览器必须能直接访问目标服务，目标服务也必须允许跨域读取。更换数据集或定位采样策略时必须重新标定高度、设备组距离和驻留间隔，不能照搬当前默认值。
+专用业务 Agent 默认使用 `low` 推理等级，避免查询型任务继承 DSH 全局的高推理等级而产生冗长思考和额外等待；部署环境可用 `CLOSEDOFF_REASONING_EFFORT` 在 `off`、`low`、`high`、`max` 中调整。轨迹地图默认读取插件配置中的地形与 3D Tiles 地址。部署环境可分别通过 `CLOSEDOFF_TERRAIN_URL` 和 `CLOSEDOFF_TILESET_URL` 覆盖这两个地址，并通过 `CLOSEDOFF_TILESET_HEIGHT` 设置模型沿椭球法向的高度偏移（米）；默认值为 `60`。`CLOSEDOFF_TRACK_DEVICE_RADIUS_METERS` 设置设备组到轨迹线的最大距离，默认 `100` 米；`CLOSEDOFF_TRACK_DWELL_MAX_GAP_SECONDS` 设置驻留估算允许累计的最大相邻采样间隔，默认 `300` 秒，超过该值的间隔按定位中断排除。正文三维视图和三维弹窗都根据轨迹、起终点和筛选后的设备组自动计算完整取景范围。浏览器必须能直接访问目标服务，目标服务也必须允许跨域读取。更换数据集或定位采样策略时必须重新标定高度、设备组距离和驻留间隔，不能照搬当前默认值。
 
 推荐通过仓库统一启动脚本启动；脚本从运行配置映射解析文件位置，再把路径传给开发或正式安装的插件：
 
 ```powershell
 Set-Location '<dsh-plugin-manager-gitee 仓库目录>'
-.\deploy\scripts\start.ps1 -Plugin closedoff -Mode development
+.\deploy\scripts\start.ps1 -Plugins auth,closedoff -Config .local/closedoff.deployment.json -Mode development
 ```
 
 直接运行已经安装的 profile 时，设置的只是配置文件路径，正式值仍从文件读取：
@@ -143,16 +164,16 @@ dsh --profile web
 
 ```powershell
 # 开发模式：link 安装并加载 HMR patch
-.\deploy\scripts\start.ps1 -Plugin closedoff -Mode development
+.\deploy\scripts\start.ps1 -Plugins auth,closedoff -Config .local/closedoff.deployment.json -Mode development
 
 # 正式模式：tgz 发布快照安装，不加载开发 patch
-.\deploy\scripts\start.ps1 -Plugin closedoff -Mode release -HarnessRoot deepseek-harness
+.\deploy\scripts\start.ps1 -Plugins auth,closedoff -Config .local/closedoff.deployment.json -Mode release -HarnessRoot deepseek-harness
 ```
 
 开发模式默认查找插件主仓内部的 `deepseek-harness` 官方子模块；发布模式也可显式选择该源码宿主，否则使用已安装的 dsh。目录布局不同时传入仓库位置：
 
 ```powershell
-.\deploy\scripts\start.ps1 -Plugin closedoff -Mode development -HarnessRoot '<deepseek-harness 仓库目录>'
+.\deploy\scripts\start.ps1 -Plugins auth,closedoff -Config .local/closedoff.deployment.json -Mode development -HarnessRoot '<deepseek-harness 仓库目录>'
 ```
 
 开发模式会以 `link:` 方式接入 DSH，并通过 [dev/dev-hmr.patch.yml](dev/dev-hmr.patch.yml) 启用 Cordis 模块 HMR。再打开另一个终端，在插件包根目录启动持续构建：
@@ -187,7 +208,7 @@ DSH 上游升级时，先在单独测试 profile 中安装本包并运行 `--dum
 
 文档和命令示例不得写入开发者电脑的盘符或用户目录；使用仓库相对路径、当前目录命令或 `<插件包目录>` 一类明确占位符。
 
-## 限制与安全边界
+## 使用限制
 
 - 当前 37 个接口全部是查询接口；本包没有审批、放行、删除或其他写操作。
 - `baseUrl` 必须是 HTTPS。服务端只访问 Tool catalog 内声明的固定路径，不接受模型或浏览器传入任意 URL。

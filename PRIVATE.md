@@ -45,7 +45,7 @@ pnpm package --plugins "auth,closedoff,example" --output .local/artifacts/releas
 
 ## 已部署实例的运维
 
-生产实例启用 `auth,closedoff,example`，封闭化和示例均使用 `authenticated` 模式。管理员自动看到“AI 对话示例”，普通账号通过权限管理授权。站点设置保存在 `.local/site.json`，当前镜像与发布清单由 `.local/deployment.json` 记录。Compose 项目名为 `dsh-plugin-manager`，实际配置路径由 `.local/artifacts/active-compose.json` 指向，不使用固定的历史产物目录。健康检查包含 `/example/ready`。在仓库根操作：
+生产实例启用 `auth,closedoff,example`，封闭化和示例均使用 `authenticated` 模式。管理员自动看到“开发者接入助手”，普通账号通过权限管理授权。站点设置保存在 `.local/site.json`，当前镜像与发布清单由 `.local/deployment.json` 记录。Compose 项目名为 `dsh-plugin-manager`，实际配置路径由 `.local/artifacts/active-compose.json` 指向，不使用固定的历史产物目录。健康检查包含 `/example/ready`。在仓库根操作：
 
 ```sh
 compose_file=$(node -p "JSON.parse(require('node:fs').readFileSync('.local/artifacts/active-compose.json', 'utf8')).path")
@@ -54,3 +54,10 @@ bash build.sh
 ```
 
 调整发布清单或配置后，通过管理器重新生成 Compose 配置并核对挂载；不能只替换 tgz 而忽略恢复状态。迁移须保留停写证据、完整数据备份和校验记录。旧目录及独立备份不由部署或 clean 自动删除；历史产物中的绝对路径保持原样，不能批量替换成新路径。
+
+
+## 查看运行状态
+
+`.local/source-release.json` 记录最近一次源码部署状态，成功状态为 `ready`；其中 revision 对应服务器构建的源码提交。实际容器由 `.local/artifacts/active-compose.json` 指向的 Compose 配置管理。
+
+启用 auth、example、closedoff 时，就绪地址分别是 `/auth/health`、`/example/ready`、`/closedoff-qa/ready`。认证模式的业务历史接口要求登录；健康探针不执行模型问答。账号、授权和历史保存在现有数据目录，服务更新继续沿用该目录。

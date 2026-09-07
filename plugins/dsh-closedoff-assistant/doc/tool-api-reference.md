@@ -11,7 +11,7 @@ kind: "package-reference"
 
 本文不会记录真实凭据、token 或生产响应。示例中的 `<业务网关>`、`<客户端 ID>`、`<记录 ID>`、`<车牌号>` 等均为占位符。
 
-本文中的请求是根据当前源码和测试核对的集成模板；本次没有使用真实凭据向正式业务网关执行请求。接口 `data` 的完整字段仍应由业务系统 OpenAPI、后端 DTO 或脱敏实测响应确认。
+请求示例描述本插件的调用方式；业务接口 `data` 的完整字段以部署环境的 OpenAPI、后端 DTO 和实际响应为准。
 
 ## 目录
 
@@ -239,7 +239,7 @@ curl 'https://<业务网关>/closed-off/comprehensive/getVehicleComprehensivePag
 
 DSH Native Agent 收到的 Tool 定义只包含名称、说明和入参，不直接包含 `output.schema`。因此插件从同一个 `result` 声明生成 Tool description 中的“主要返回”提示；`output.schema` 用于运行时结果校验，并可供 PTC 工具 SDK 投影。新增或调整字段时只修改 `src/specs.ts`，不能分别手写两份字段目录。
 
-本次核对日期为 2026-09-04，依据后端 `4f17bc2ce77ef755f2726bc91cee461964d21914` 和前端 `7318355ecefd6ccbedc20ad8cd74433d331e2976`。当前 37 个 Tool 没有已证明的 `dataKind` 变化；新增的 `dataId`、`dataSource` 未进入主要字段，白名单分页补充了源码已证明的个人与提交字段并在投影时脱敏。后端最新设备消息逻辑会按 AI 直播可用性在 `accessAddress` 与 `videoAddress` 二选一写入播放地址；两者已经登记为页面运行字段，不进入模型字段提示。这些 Schema 是当前代码的兼容描述，不替代正式 OpenAPI；下次前后端更新后仍需重新核对。
+`src/specs.ts` 中的 `result` 定义各 Tool 当前使用的数据结构和字段。设备播放地址来自 `accessAddress` 或 `videoAddress`，两者仅供页面运行，不传给模型。未声明的响应字段不自动扩展模型可见数据；网关接口更新后需同步这些映射。
 
 ### DSH Tool 成功结果
 
