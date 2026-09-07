@@ -27,7 +27,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PelyDeng/dsh-plugin.git",
+    "url": "git+https://github.com/PelyDeng/dsh-plugin-manager.git",
     "directory": "packages/plugin-manager"
   },
   "scripts": {

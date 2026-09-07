@@ -1,7 +1,7 @@
 /** Updating a key follows the deployment home selection and never starts a service. */
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -13,7 +13,7 @@ import { resolveDeployment } from '../src/deployment.mjs';
 const directories = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 function fixture() {
-  const root = mkdtempSync(resolve(tmpdir(), 'dsh api key ')); directories.push(root); return root;
+  const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'dsh api key '))); directories.push(root); return root;
 }
 
 test('explicit home replaces duplicate key assignments atomically and retains other variables', () => {

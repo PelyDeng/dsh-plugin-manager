@@ -1,6 +1,6 @@
 /** Exercise public archives and external source consumers without repository-relative imports. */
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, cpSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, cpSync, existsSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,7 @@ import { packagePlugins } from '../packages/plugin-manager/src/package-plugins.m
 import { spawnSync } from 'node:child_process';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-const temporary = mkdtempSync(join(tmpdir(), 'dsh archives with spaces '));
+const temporary = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh archives with spaces ')));
 const json = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const run = (args, cwd = temporary) => {
   const result = spawnSync(process.execPath, args, { cwd, encoding: 'utf8' });
@@ -39,7 +39,7 @@ try {
   const kitConsumer = JSON.parse(readFileSync(join(consumer, 'package.json')));
   kitConsumer.devDependencies = { '@deepseek-ai/cordis': '4.0.2', typescript: '^6.0.3', '@types/node': '^22.20.0' };
   json(join(consumer, 'package.json'), kitConsumer);
-  runPnpm(['install', '--ignore-scripts'], consumer);
+  runPnpm(['install', '--ignore-scripts', '--no-frozen-lockfile'], consumer);
   writeFileSync(join(consumer, 'check.ts'), "import { actorKey, type Actor } from '@dsh-plugin/plugin-kit/access';\nconst actor: Actor = {namespace:'standalone',userId:'local'};\nactorKey(actor);\n");
   runPnpm(['exec', 'tsc', '--strict', '--noEmit', '--types', 'node', '--module', 'NodeNext', '--target', 'ES2022', 'check.ts'], consumer);
   assert.equal(existsSync(join(consumer, 'node_modules/@deepseek-ai/dsh-tools')), false);
@@ -59,7 +59,7 @@ try {
   packagePlugins(root, 'auth,example', releasePath);
   const original = JSON.parse(readFileSync(join(root, 'plugins/dsh-example/package.json')));
   const external = join(temporary, 'external example'); mkdirSync(external);
-  for (const path of ['src', 'web', 'cordis.patch.yml', 'tsconfig.json', 'tsdown.config.ts']) cpSync(join(root, 'plugins/dsh-example', path), join(external, path), { recursive: true });
+  for (const path of ['src', 'web', 'knowledge', 'cordis.patch.yml', 'tsconfig.json', 'tsdown.config.ts', 'tsdown.web.config.ts']) cpSync(join(root, 'plugins/dsh-example', path), join(external, path), { recursive: true });
   const metadata = { ...original, devDependencies: { ...original.devDependencies, '@dsh-plugin/plugin-kit': 'file:../plugin-kit.tgz' } };
   json(join(external, 'package.json'), metadata);
   writeFileSync(join(external, 'pnpm-workspace.yaml'), policy);
@@ -72,7 +72,7 @@ try {
   Object.assign(installed.devDependencies, original.devDependencies);
   delete installed.devDependencies['@dsh-plugin/plugin-kit'];
   json(join(consumer, 'package.json'), installed);
-  runPnpm(['install', '--ignore-scripts'], consumer);
+  runPnpm(['install', '--ignore-scripts', '--no-frozen-lockfile'], consumer);
   writeFileSync(join(consumer, 'check.ts'), "import * as auth from 'dsh-auth';\nimport * as example from 'dsh-example';\nvoid auth.apply; void example.apply;\n");
   runPnpm(['exec', 'tsc', '--strict', '--noEmit', '--types', 'node', '--module', 'NodeNext', '--target', 'ES2022', 'check.ts'], consumer);
   run(['--input-type=module', '-e', "await import('dsh-auth'); await import('dsh-example');"], consumer);
@@ -84,6 +84,6 @@ try {
   run(['--input-type=module', '-e', `import { loadRelease } from '@dsh-plugin/plugin-manager'; const release=loadRelease(${JSON.stringify(join(releasePath, 'manifest.json'))}); if(release.plugins.length!==2) throw Error('release');`], consumer);
   console.log('Archive checks passed: host-free manager and route leaf, minimal access types, external example source, plugin JS/types/assets and source-free release validation.');
 } finally {
-  assert.equal(dirname(temporary), tmpdir());
+  assert.equal(dirname(temporary), realpathSync.native(tmpdir()));
   rmSync(temporary, { recursive: true, force: true });
 }

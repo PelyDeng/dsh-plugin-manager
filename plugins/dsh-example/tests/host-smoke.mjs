@@ -169,7 +169,7 @@ try {
   await chat('重新登录后继续追问', alice, personal)
   assert.ok(JSON.stringify(requests.at(-1).messages).includes('个人模式问题'), 'resumed model request must contain previous personal question')
   const modelInput = JSON.stringify(requests.at(-1).messages)
-  for (const text of ['你是 DSH Plugin 开发者接入助手', '第二个应用到底少写什么', 'compose-release', '可复制的开发提示词']) {
+  for (const text of ['你是 DSH Plugin Manager 开发者接入助手', '第二个应用到底少写什么', 'compose-release', '可复制的开发提示词']) {
     assert.ok(modelInput.includes(text), `Real DSH model request must contain shipped knowledge: ${text}`)
   }
   const result = { officialHost: process.env.DSH_HOST_SOURCE_SHA ?? null, hostVersion: run('--version'), realTgz: true, realAuth: true,

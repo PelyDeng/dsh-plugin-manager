@@ -7,8 +7,8 @@
 服务器需要 Git、Node.js `^22.19 || >=24`、npm、可用的 Linux Docker 引擎及 Compose 插件、tar 和 flock。Docker 需要支持多阶段构建与命名构建上下文。脚本自动在需要时安装仓库锁定的 pnpm；不会自动安装系统软件、修改防火墙或创建反向代理。执行用户必须有 Docker 权限，并能创建默认 UID/GID 1000 可访问的运行目录；以 root 执行时脚本只给新建目录设置所有者。
 
 ```sh
-git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin.git
-cd dsh-plugin
+git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin-manager.git
+cd dsh-plugin-manager
 bash deploy/build.sh
 ```
 

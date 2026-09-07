@@ -1,36 +1,109 @@
 # 插件作者接入
 
-本框架支持独立 pnpm 单包与内部 `plugins/*` 批量开发，复用单包读取、任务执行、归档和部署实现。接口与参数见随版本交付的 [manager README](../packages/plugin-manager/README.md)，交付者步骤见 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
+本框架支持独立 pnpm 单包与内部 `plugins/*` 批量开发。选择一种开发方式即可，无需先运行内置问答应用，也无需修改 DSH 本体。
 
-第一次接入请先走[图文手册](getting-started.md)，其中包含源码取得工具、实际目录和第二应用交付。下面说明作者修改点。
+[项目首页](../README.md) · [文档导航](README.md) · [CLI 参数](../packages/plugin-manager/README.md) · [部署者指南](../packages/plugin-manager/DELIVERY.md)
 
-## 准备工具
+## 本页导航
 
-维护者在本仓库安装冻结依赖后构建工具包，输出目录预先创建：
+- [独立仓库开发](#独立仓库开发)
+- [内部工作区开发](#内部工作区开发)
+- [复制完整问答应用到独立仓库](#复制完整问答应用到独立仓库)
+- [交付前确认](#交付前确认)
+
+## 独立仓库开发
+
+### 1. 取得并安装工具
+
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者提供的 manager 0.3.0 tgz，核对提供方 SHA-256；需要统一身份时再取得 kit 0.1.0 tgz。包名不表示已公开发布到 npm。
+
+在工具目录执行，把占位路径替换成实际文件的绝对路径：
 
 ```sh
-pnpm --filter @dsh-plugin/plugin-manager build
-pnpm --filter @dsh-plugin/plugin-manager pack --out /absolute/output/plugin-manager-0.3.0.tgz
-pnpm --filter @dsh-plugin/plugin-kit build
-pnpm --filter @dsh-plugin/plugin-kit pack --out /absolute/output/plugin-kit-0.1.0.tgz
+pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.3.0.tgz"
+pnpm exec dsh-plugin --version
 ```
 
-提供工具版本和 SHA-256；本地 tgz 不代表已经发布到公共 registry。作者安装 manager 即可交付无 kit 的插件，统一身份按需安装 kit。源码构建与运行不要求修改 DSH 本体。
+**预期**：输出 manager 0.3.0。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
 
-## 两种示例
+### 2. 选择示例，建立自己的仓库
+
+将选定目录的内容复制到新的作者包根，放在框架 workspace 之外。不要复制 node_modules、dist 或 .local。
 
 | 示例 | 验证能力 |
 | --- | --- |
 | [standalone-plugin](../examples/standalone-plugin/README.md) | 不依赖 kit，官方 Bundle 与受管 release 均可加载 |
 | [standalone-kit](../examples/standalone-kit/README.md) | 独立消费 kit tgz，复用登录及应用授权，返回当前账号身份 |
 
-将示例复制到自己的仓库，修改包名、插件 ID、Bundle 和路由，执行作者根的 `pnpm install --ignore-workspace` 并保存锁文件。通过 manager 的 `--root <作者根> --package .` 执行 list/build/check/pack。只需交付时直接 pack，无需先运行重复的 build/check。
+无 kit 的示例，在作者根执行：
 
-build/check 由作者声明，完成产物和必需启动检查，不复制框架登录、密码、授权或部署实现。完整业务测试保留独立 test。插件声明与配置字段集中见[配置规范](plugin-configuration.md)；业务字段校验归应用所有，错误应标明应用 ID 与字段名，不能输出凭据。
+```sh
+pnpm install --ignore-workspace
+```
 
-发布包可脱离源码部署。作者提供归档、清单、公开配置模板、包内 README、已验证宿主版本、就绪地址和业务查询方法；销售接口、数据范围、Agent 工具和图表属于应用代码。kit 的可信身份不能替代业务数据授权。
+统一身份示例，在作者根执行以下命令安装实际 kit 归档，同时生成锁文件：
 
-内部流程不传 `--package`，继续使用 `plugins/*`、`--plugins` 选集和批量任务。内部清单 1 保留 development/link；外部单包与组合清单 2 只支持 release，不支持外部 workspace 自动发现或 link/HMR。
+```sh
+pnpm add --ignore-workspace --save-dev "/absolute/path/plugin-kit-0.1.0.tgz"
+```
+
+**预期**：作者根生成自己的 pnpm-lock.yaml，应随源码保存。kit 是构建依赖并内嵌到应用；作者构建需能取得该 tgz，release 运行端不需要它的原始路径。希望从完整聊天应用开始时，见[完整问答应用复制步骤](#复制完整问答应用到独立仓库)。
+
+### 3. 填写声明，实现业务
+
+修改包名、插件 ID、Bundle 与路由，保持相互一致；声明和配置字段见[配置规范](plugin-configuration.md)。在工具目录验证能发现自己的单包：
+
+```sh
+pnpm exec dsh-plugin list --root "/absolute/path/my-plugin" --package .
+```
+
+**预期**：只列出指定包的插件声明，不依赖框架内部名单。`--package .` 相对于 `--root`；list 不要求锁文件，后续 pack 要求作者根存在锁文件并冻结安装。
+
+build/check 由作者声明，完成产物构建和不可缺少的启动检查；完整业务测试保留独立 test。需要统一身份时显式接入 kit 的受保护接口，业务数据范围由应用检查。业务配置错误应标明应用 ID 与字段名，不能输出凭据。不要复制框架登录、密码或部署实现。
+
+### 4. 构建、检查并交付
+
+在工具目录执行，将作者根替换成实际绝对路径：
+
+```sh
+pnpm exec dsh-plugin pack --root "/absolute/path/my-plugin" --package . --output .local/artifacts/release/v1
+```
+
+**预期**：在作者根的 `.local/artifacts/release/v1` 生成 manifest.json 和摘要命名 tgz。pack 已依次执行安装、build、check 和打包，无需先重复 build/check。输出目录必须使用新目录或空目录；失败时按对应任务错误修复，若已留下产物则换一个新输出目录重试。
+
+日常开发可单独执行 `pnpm exec dsh-plugin check --root "/absolute/path/my-plugin" --package .`；完整业务测试在作者根按自己的 test 脚本运行，不塞进每次打包的启动检查。
+
+将整个发布目录交给部署者，不能只交 manifest.json。部署者按[交付指南](../packages/plugin-manager/DELIVERY.md)组合与启动；统一身份示例需要把认证 provider 一起选入候选清单，并配置 publicOrigin。两应用的完整演练见[进阶手册](getting-started.md#进阶加入第二个应用)。
+
+当前外部入口仅支持 pnpm 单包及 release；不支持外部 workspace 自动发现或 development/link/HMR。
+
+## 内部工作区开发
+
+### 1. 安装依赖并扫描插件
+
+在本仓库根执行，内部流程不传 `--package`：
+
+```sh
+pnpm install --frozen-lockfile
+pnpm list:plugins
+```
+
+**预期**：继续扫描 `plugins/*`。新增插件放在该目录并按[配置规范](plugin-configuration.md)声明；使用 `--plugins` 选择需要处理的插件。源码默认选集包含 auth 和 example。
+
+### 2. 选择日常检查或直接打包
+
+| 目的 | 在本仓库根执行 |
+| --- | --- |
+| 日常构建 | `pnpm build` |
+| 必要检查 | `pnpm check`，单插件可用 `pnpm check --plugins example` |
+| 完整开发回归 | `pnpm test`，先构建再运行测试；CI 单独执行测试步骤 |
+| 构建并交付 | `pnpm package --plugins "auth,example" --output .local/artifacts/release/plugins` |
+
+只交付时直接 package，不需要先重复 build/check。普通构建和测试不要求宿主子模块、模型密钥或 Docker；内部清单 1 保留 development/link，外部单包与组合清单 2 只支持 release。
+
+### 3. 运行并验证
+
+首次运行按[配置并启动](getting-started.md#3-配置并启动)操作；开发模式及管理参数见[部署命令](../deploy/README.md)。示例默认要求登录，候选选入 auth、example 并配置公开 origin。安装现成清单默认选择其中全部插件，也可通过 `--plugins` 限定。
 
 ## 复制完整问答应用到独立仓库
 
@@ -44,3 +117,11 @@ build/check 由作者声明，完成产物和必需启动检查，不复制框�
 6. 在作者根执行 `pnpm build`、`pnpm check` 和 `pnpm test`，保存 pnpm-lock.yaml。在工具目录执行 `pnpm exec dsh-plugin pack --root <作者包根> --package . --output <新发布目录>`。只交付无需事先重复 build/check。
 
 部署者只取得整个发布目录及说明。确认 tgz 包含知识、页面、配置模板和入口；作者源码目录不参与 release。kit 更新需每个消费应用更新内嵌版本后重新交付，不能只升级管理器。
+
+## 交付前确认
+
+作者随归档提供公开配置模板、包内 README、已验证宿主版本、就绪地址和一次业务验证方法。不要在归档中加入真实凭据或客户数据。
+
+部署验证应覆盖应用就绪、普通账号实际操作及未授权访问被拒绝；构建通过不等于这些行为已经验证。销售接口、数据范围、Agent 工具和图表属于应用代码，kit 的可信身份不能替代业务数据授权。
+
+交付后的组合、配置、启动和更新统一参考[部署者指南](../packages/plugin-manager/DELIVERY.md)。

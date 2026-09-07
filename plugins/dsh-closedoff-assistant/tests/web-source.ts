@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 function read(name: string): string {
-  return readFileSync(fileURLToPath(new URL(`../web/${name}`, import.meta.url)), 'utf8')
+  return readFileSync(fileURLToPath(new URL(`../web/${name}`, import.meta.url)), 'utf8').replaceAll('\r\n', '\n')
 }
 
 export const webHtml = read('index.html')

@@ -13,12 +13,12 @@ function git(root, args) {
   return result.stdout.trim();
 }
 
-/** Capture the current committed host source for a reproducible build. */
+/** Capture committed host source, comparing native paths so Windows short names identify the same worktree. */
 export function inspectHostSource(repoRoot = defaultRoot) {
-  const root = realpathSync(repoRoot);
+  const root = realpathSync.native(repoRoot);
   const path = resolve(root, 'deepseek-harness');
   if (!existsSync(resolve(path, 'package.json'))) throw new Error('The local deepseek-harness source is missing; supply a complete checkout before building.');
-  if (realpathSync(git(path, ['rev-parse', '--show-toplevel'])) !== realpathSync(path)) {
+  if (realpathSync.native(git(path, ['rev-parse', '--show-toplevel'])) !== realpathSync.native(path)) {
     throw new Error('deepseek-harness is not an initialized independent Git worktree.');
   }
   const repositoryCommit = git(root, ['rev-parse', '--verify', 'HEAD^{commit}']);

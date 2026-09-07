@@ -1,8 +1,8 @@
 # 私有插件仓库
 
-本仓库的 `origin` 为 `git@gitee.com:dengpeilin/dsh-plugin.git`。公共框架来自 `upstream`：`https://github.com/PelyDeng/dsh-plugin.git`（已有 SSH 地址也可沿用）。两者通过 Git 合并更新；不要在 Gitee 使用覆盖式同步 GitHub，否则会替换包含私有插件的主分支历史。
+本仓库的 `origin` 为 `git@gitee.com:dengpeilin/dsh-plugin-manager.git`。公共框架来自 `upstream`：`https://github.com/PelyDeng/dsh-plugin-manager.git`（已有 SSH 地址也可沿用）。两者通过 Git 合并更新；不要在 Gitee 使用覆盖式同步 GitHub，否则会替换包含私有插件的主分支历史。
 
-公共框架改动在 `dsh-plugin` 工作区完成、验证并推送 GitHub，再由本地私有集成库合并、检查并推送 Gitee。服务器只更新 Gitee 的集成版本。客户插件只在本仓库开发并推送 Gitee；`upstream` 的推送地址禁用。
+公共框架改动在 `dsh-plugin-manager` 工作区完成、验证并推送 GitHub，再由本地私有集成库合并、检查并推送 Gitee。服务器只更新 Gitee 的集成版本。客户插件只在本仓库开发并推送 Gitee；`upstream` 的推送地址禁用。
 
 ## 服务器一键更新
 
@@ -51,11 +51,12 @@ pnpm package --plugins auth,closedoff,example --output .local/artifacts/release/
 
 ## 已部署实例的运维
 
-生产实例启用 `auth,closedoff,example`，封闭化和示例均使用 `authenticated` 模式。管理员自动看到“AI 对话示例”，普通账号通过权限管理授权。生产实例使用 `.local/compose.env` 中的不可变镜像引用、发布目录及数据目录。运行配置由 `.local/deployment.json` 和 `.local/production.patch.yml` 提供，Compose 覆盖位于 `.local/artifacts/compose/`，健康检查包含 `/example/ready`。在仓库根操作：
+生产实例启用 `auth,closedoff,example`，封闭化和示例均使用 `authenticated` 模式。管理员自动看到“AI 对话示例”，普通账号通过权限管理授权。站点设置保存在 `.local/site.json`，当前镜像与发布清单由 `.local/deployment.json` 记录。Compose 项目名为 `dsh-plugin-manager`，实际配置路径由 `.local/artifacts/active-compose.json` 指向，不使用固定的历史产物目录。健康检查包含 `/example/ready`。在仓库根操作：
 
 ```sh
-docker compose --env-file .local/compose.env -p dsh-plugin -f integrations/docker/docker-compose.yml -f .local/artifacts/compose/compose.override.json ps
-docker compose --env-file .local/compose.env -p dsh-plugin -f integrations/docker/docker-compose.yml -f .local/artifacts/compose/compose.override.json up -d
+compose_file=$(node -p "JSON.parse(require('node:fs').readFileSync('.local/artifacts/active-compose.json', 'utf8')).path")
+docker compose -p dsh-plugin-manager -f "$compose_file" ps
+bash build.sh
 ```
 
-调整发布清单或配置后，通过已安装管理器重新生成 Compose 覆盖并核对挂载；不能只替换 tgz 而忽略恢复状态。迁移证据位于实例 `.local/artifacts/migration/`。完整旧目录备份独立保留，不由部署或 clean 自动删除。
+调整发布清单或配置后，通过管理器重新生成 Compose 配置并核对挂载；不能只替换 tgz 而忽略恢复状态。迁移须保留停写证据、完整数据备份和校验记录。旧目录及独立备份不由部署或 clean 自动删除；历史产物中的绝对路径保持原样，不能批量替换成新路径。

@@ -75,7 +75,7 @@ flowchart LR
 要求 Node.js `^22.19.0` 或 `>=24.0.0`，并安装 pnpm 11。
 
 ```powershell
-Set-Location '<dsh-plugin-gitee 仓库目录>'
+Set-Location '<dsh-plugin-manager-gitee 仓库目录>'
 pnpm install --frozen-lockfile
 pnpm check
 ```
@@ -124,7 +124,7 @@ Copy-Item plugins/dsh-closedoff-assistant/env.conf.example .local/data/dsh-home/
 推荐通过仓库统一启动脚本启动；脚本从运行配置映射解析文件位置，再把路径传给开发或正式安装的插件：
 
 ```powershell
-Set-Location '<dsh-plugin-gitee 仓库目录>'
+Set-Location '<dsh-plugin-manager-gitee 仓库目录>'
 .\deploy\scripts\start.ps1 -Plugin closedoff -Mode development
 ```
 
