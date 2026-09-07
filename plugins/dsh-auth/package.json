@@ -1,6 +1,6 @@
 {
   "name": "dsh-auth",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "统一管理用户账号、登录会话和插件访问权限。",
   "license": "Apache-2.0",
   "private": true,
@@ -25,6 +25,7 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
+    "THIRD_PARTY.md",
     "scripts/auth-admin.mjs"
   ],
   "engines": {
@@ -47,7 +48,9 @@
       "web/app.js",
       "web/style.css",
       "web/catalog-view.js",
-      "web/icons.svg"
+      "web/icons.svg",
+      "web/deepseek.svg",
+      "web/zhipu.svg"
     ],
     "displayName": "统一认证",
     "entryPath": "/auth",

@@ -35,3 +35,5 @@
 源码开发时运行 `pnpm --filter dsh-auth test` 检查账号、授权、持久化、撤权与页面逻辑；日常 check 只做类型与 Web 脚本语法检查。
 
 本插件采用随附 [Apache-2.0](LICENSE)。
+
+模型服务商图标使用 DeepSeek Harness 官方鱼形图标及智谱 BigModel 官网资源，随归档本地提供；来源与许可见 [THIRD_PARTY.md](THIRD_PARTY.md)。
