@@ -1,3 +1,4 @@
+# 旧显式镜像配置兼容模板；新部署使用根env.conf模板的镜像部分，真实值填写.local/env.conf。
 # Copy outside version control; chmod 0600 on Linux. Paths resolve from repository root.
 HARBOR_ENABLED=false
 ALLOW_UPSTREAM=true

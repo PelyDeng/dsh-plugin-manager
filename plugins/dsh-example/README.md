@@ -4,7 +4,7 @@
 
 ## 启动与使用
 
-需要应用交付说明中验证过的官方 DSH、manager 0.3.3 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
+需要应用交付说明中验证过的官方 DSH、manager 0.3.4 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
 
 ```sh
 pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --plugins all
@@ -45,3 +45,5 @@ SQLite 只存账号所有者、标题和时间等历史目录；消息正文使�
 内部复制本目录，修改包名、ID、路由、权限、Bundle、会话前缀、提示词段名、知识、页面和测试。外部作者把 kit workspace:* 换成版本化 tgz 开发依赖、保留 tsdown 内嵌；移除原仓库 clean 入口及框架专用集成测试依赖。配置与知识输入都随包目录携带；[外部复制步骤](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/plugin-development.md#复制完整问答应用到独立仓库)说明具体操作。
 
 在包根运行 `pnpm build`、`pnpm check`，行为回归单独运行 `pnpm test`。框架内也可用 `pnpm --filter dsh-example ...`。测试使用隔离数据和 Agent 替身，不证明真实模型回答质量。`tests/host-smoke.mjs` 使用真实官方宿主和 auth/example tgz，但模型 HTTP 是明确标识的本地替身。
+
+框架入口与模型密钥来源见[统一配置](../../doc/framework-configuration.md)。根模板只提交空值，私有 env 维护部署参数及可选宿主模型凭据；example 不保存模型密钥。随包 FAQ 包含配置默认值、文件只读/空值回退、控制台域名信任及框架源码问答。

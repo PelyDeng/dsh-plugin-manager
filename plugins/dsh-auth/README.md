@@ -26,7 +26,7 @@
 
 管理员完成初始改密后可从左侧“模型设置”选择 DeepSeek 或智谱，配置或更换对应的 `DEEPSEEK_API_KEY`、`ZHIPU_API_KEY`。页面只展示配置状态及不可逆 SHA-256 指纹，不返回原密钥，不验证余额或模型调用；此配置作用于整个宿主。普通用户和未完成初始改密的管理员不能读取或写入此接口。
 
-`GET/POST /auth/api/model-key/deepseek`、`/auth/api/model-key/zhipu`（旧 `/auth/api/deepseek-key` 保留兼容） 复用现有会话、Origin、CSRF 及管理员校验，调用 kit 的共享凭据逻辑与宿主 `credentials` 服务。网页和 `set-api-key` 脚本使用同一官方存储，无需重启，后续请求使用新密钥；外部环境覆盖显示只读。没有官方凭据服务时明确禁用，不另建业务配置文件。智谱入口面向普通模型 API，密钥支持 GLM-5.3 和 GLM-5V-Turbo 等模型；实际模型路由由宿主或应用装配，保存密钥不改变全局默认模型。其他提供方仍由官方控制台管理。
+`GET/POST /auth/api/model-key/deepseek`、`/auth/api/model-key/zhipu`（旧 `/auth/api/deepseek-key` 保留兼容） 复用现有会话、Origin、CSRF 及管理员校验，调用 kit 的共享凭据逻辑与宿主 `credentials` 服务。网页支持上述两种提供方，`set-api-key` 脚本仅支持 DeepSeek；无环境覆盖时调用同一官方存储，默认无需重启，后续请求使用新密钥；外部环境覆盖显示只读。没有官方凭据服务时明确禁用，不另建业务配置文件。智谱入口面向普通模型 API，密钥支持 GLM-5.3 和 GLM-5V-Turbo 等模型；实际模型路由由宿主或应用装配，保存密钥不改变全局默认模型。其他提供方仍由官方控制台管理。
 
 ## 控制台代理
 
@@ -35,3 +35,5 @@
 源码开发时运行 `pnpm --filter dsh-auth test` 检查账号、授权、持久化、撤权与页面逻辑；日常 check 只做类型与 Web 脚本语法检查。
 
 本插件采用随附 [Apache-2.0](LICENSE)。
+
+框架私有 env 的相应密钥非空时文件优先、网页只读，修改须受控重启；留空不删除官方凭据，若仍有启动环境覆盖也会只读。网页支持 DeepSeek/智谱，`set-api-key` 脚本仅支持 DeepSeek。规则见[统一配置](../../doc/framework-configuration.md)。

@@ -2,7 +2,7 @@
 
 这是基于 DeepSeek Harness 的 AI 应用开发与部署框架。个人开发者和小团队可以在自己的仓库开发各类插件，通过管理器 CLI 和部署流程统一打包、安装、更新与管理，供自己使用或交付给他人。
 
-本页演示启用可选认证后的登录与问答流程：管理员管理账号、应用访问权限和默认 DeepSeek 密钥，普通用户进入已授权的应用。插件开发和安装更新分别见[作者指南](plugin-development.md)与[发布物交付指南](../packages/plugin-manager/DELIVERY.md)。
+本页演示启用可选认证后的登录与问答流程：管理员管理账号、应用访问权限和DeepSeek/智谱密钥，普通用户进入已授权的应用。插件开发和安装更新分别见[作者指南](plugin-development.md)与[发布物交付指南](../packages/plugin-manager/DELIVERY.md)。
 
 [开始 Linux Docker 部署](first-deployment.md) · [English introduction](../README.en.md) · [完整 CLI 体验](getting-started.md) · [FAQ](FAQ.md)
 
@@ -20,11 +20,13 @@
 
 ![公共插件目录：统一认证与开发者接入助手](assets/app-management.png)
 
-## 3. 配置默认 DeepSeek 密钥
+## 3. 配置模型密钥
 
-管理员打开“模型设置”，录入自己的 API 密钥。保存或更换后，后续请求无需重启即可使用新密钥；页面只显示状态和 SHA-256 指纹，不返回原密钥。指纹用于比较是否更换，不是可还原的加密密钥。
+管理员打开“模型设置”，选择 DeepSeek 或智谱。私有 env 中相应密钥非空时页面只读，需修改文件并受控重启；留空且无其他环境覆盖时可在网页保存，官方存储更新默认无需重启；页面只显示状态和 SHA-256 指纹，不返回原密钥。指纹用于比较是否更换，不是可还原的加密密钥。
 
-![管理员模型设置：状态与指纹](assets/admin-model-settings.png)
+![模型设置旧版界面示意：状态与指纹](assets/admin-model-settings.png)
+
+图片为旧版界面示意；当前页面支持选择 DeepSeek/智谱，具体字段以安装版本为准。
 
 “已配置”表示凭据存在，不代表余额、网络、提供方授权或实际模型调用已经通过。其他提供方和默认模型选择在官方模型设置中处理。服务器也可通过[交互式脚本](first-deployment.md#首次登录与模型密钥)录入；脚本和网页复用同一凭据操作。
 

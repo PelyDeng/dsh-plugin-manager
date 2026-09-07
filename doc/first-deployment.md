@@ -14,67 +14,44 @@ bash deploy/build.sh
 
 源码检出阶段使用递归克隆带齐仓库提供的子模块；已有完整源码无需重复克隆。普通 Git 克隆只取得子模块版本引用，实际源码缺失时，部署脚本提示检出不完整，不自行补拉。镜像记录实际使用的源码提交，便于定位构建来源，不拿它与预设版本作准入比较。
 
-默认选中 auth、example，使用本机镜像，监听 `http://127.0.0.1:7902`。构建依赖 npm、基础镜像和 Debian 软件源；本机依赖缓存和 Docker 缓存可以复用。首次完整构建比后续更新耗时更长。受限网络可通过 `hostImageConfig` 配置镜像源；预构建宿主是可选加速，不是初始化前置条件。
+默认选中 auth、example，使用本机镜像，监听 `http://127.0.0.1:7902`。构建依赖 npm、基础镜像和 Debian 软件源；本机依赖缓存和 Docker 缓存可以复用。首次完整构建比后续更新耗时更长。受限网络可通过 `.local/env.conf` 的镜像字段配置镜像源；预构建宿主是可选加速，不是初始化前置条件。
 
-远程浏览器通过 SSH 端口转发访问，或配置反向代理后将 `publicOrigin`、`publicUrl` 改为实际访问 origin。设置自定义端口时同时调整这两个 URL。首次管理员及密码修改流程见 [auth 说明](../plugins/dsh-auth/README.md)。站点启动和登录不要求模型密钥；实际 AI 对话需按[部署说明](../deploy/README.md#运行配置)配置模型密钥。
+远程浏览器通过 SSH 端口转发访问，或配置反向代理后填写 `DSH_PUBLIC_ORIGIN`、`DSH_PUBLIC_URL`，并在 `DSH_TRUSTED_HOSTS` 加入实际主机名。设置自定义端口时同时调整这两个 URL。首次管理员及密码修改流程见 [auth 说明](../plugins/dsh-auth/README.md)。站点启动和登录不要求模型密钥；实际 AI 对话需按[部署说明](../deploy/README.md#运行配置)配置模型密钥。
 
 本机访问 `http://127.0.0.1:7902/auth` 登录插件账号，`http://127.0.0.1:7902/example` 打开示例；根路径属于官方控制台，使用独立的官方认证地址。
 
 ## 首次登录与模型密钥
 
-插件 `/auth` 登录、官方控制台 `/` 认证和模型 API 密钥分别管理。根路径提示 `dsh web authentication required; reopen the URL printed by dsh web.` 表示官方控制台尚未认证；录入 API 密钥不能消除此提示。
+插件 /auth 登录、官方控制台根路径认证和模型 API 密钥分别管理。根路径提示 `dsh web authentication required; reopen the URL printed by dsh web.` 时，在服务器私有终端读取本次启动生成的 `.local/data/dsh-web-auth-url.txt`，仅在自己的浏览器打开完整地址。自定义路径按生成的 deployment.json 的 authUrlFile 核对；不要分享其中的令牌，详情见 [FAQ](FAQ.md)。
 
-管理员在服务器的私有终端读取本次启动保存的认证地址，默认文件为 `.local/data/dsh-web-auth-url.txt`，再在自己的浏览器打开完整地址。自定义路径以 `.local/deployment.json` 的 `authUrlFile` 或实际 `dataRoot` 为准。该地址含控制台访问令牌，不要分享或截图；普通用户使用应用入口。具体步骤与地址失效处理见 [FAQ](FAQ.md#auth-登录后为什么根路径仍提示认证)。
+框架模型密钥有两种管理方式：在私有 `.local/env.conf` 填写 `DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` 时，以文件为准，网页只读，修改后受控重启；字段留空时沿用官方凭据，不删除已有值，也不清除继承环境覆盖。
 
-使用默认官方 DeepSeek 提供方时，管理员完成初始密码修改后，在 `/auth` 左侧打开“模型设置”，填写或更换 API 密钥。页面只返回配置状态与 SHA-256 指纹，不返回原密钥；“已配置”不代表已经验证模型可用。
-
-也可在服务器仓库根执行同一凭据逻辑的脚本，然后在提示后手动输入 API 密钥，按 Enter 保存：
+没有环境覆盖时，管理员完成初始改密后可在 /auth 的“模型设置”管理 DeepSeek 或智谱。页面只返回状态与不可逆指纹，不返回密钥。命令行只支持 DeepSeek，在仓库根执行后隐藏输入：
 
 ```sh
 bash deploy/scripts/set-api-key.sh --config .local/deployment.json
 ```
 
-输入不回显，可用 Ctrl+C 取消，密钥不能放入命令参数。网页和脚本均调用官方凭据服务，更新选定 home 下 `.credentials.yaml` 中的 `DEEPSEEK_API_KEY`，复用官方文件锁与原子写入，保留其他凭据和旧 `.env`。Linux 凭据文件权限为 `0600`；Compose 脚本核验当前容器与 home 后，以容器配置用户执行，不以服务器 root 创建文件。
+密钥不放进命令参数。网页和脚本复用官方凭据服务，保留其他凭据、账号和历史；默认官方文件监听使存储更新无需重启。文件或其他启动环境覆盖时拒绝写入。Compose 脚本核验活动容器与 home，以容器用户执行；独立 CLI 要以数据所有者运行，并指向已安装的兼容官方 CLI。自定义存储或关闭监听时使用当前运行服务的网页入口。
 
-保存密钥无需重启。网页更新当前运行服务；脚本由默认官方文件监听自动加载（有短暂监听延迟），后续请求使用新密钥，已开始的请求继续使用原请求凭据。两者不选择模型、不调用模型。若由外部进程环境注入密钥，会显示只读并拒绝覆盖；移除外部环境覆盖本身仍需服务管理者调整启动配置。
-
-脚本适用于默认 `credentials-local` 存储路径及启用文件监听的官方宿主。自定义凭据路径或关闭监听时，使用网页入口更新运行中的实际凭据服务。独立 CLI 部署需用 `harnessRoot` 指向已构建宿主源码，或指定已安装宿主的 `dshCliJs`（或传 `--dsh-cli-js`），以数据所有者身份执行；不会下载宿主或创建新实例。
-
-完成后在 `/auth` 的模型设置刷新指纹，并在 `/example` 新建对话验证回答。默认模型选择、其他提供方和旧会话的注意事项见 [FAQ](FAQ.md#密钥已保存为什么问答仍然失败)及[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
+密钥保存不验证模型可用性、不创建路由、不选择默认模型。智谱等提供方需要在同一 DSH 的官方设置或 patch 中配置相应路由和凭据引用。随后在 /example 新建对话验收；详见[统一配置](framework-configuration.md)与[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
 
 ## 配置归属
 
-| 文件 | 谁维护 | 是否提交 Git |
+| 文件 | 用途 | 提交 Git |
 | --- | --- | --- |
-| `deploy/config/site.defaults.json` | 仓库维护者，通用默认值 | 是 |
-| `.local/site.json` | 首次自动生成；部署者按需调整站点设置 | 否 |
-| `.local/deployment.json` | 脚本生成，含本次镜像和发布清单 | 否 |
-| `.local/data/dsh-home/plugins/<id>/plugin.json` | 首次生成；各插件的启停及认证设置 | 否 |
-| `.local/artifacts/`、`.local/source-release.json` | 构建记录、备份、Compose 及恢复指针 | 否 |
+| 根 `env.conf` | 带中文注释的公开空模板，真实值不得填入 | 是，仅空值 |
+| `.local/env.conf` | 部署者维护的框架运行输入，常用配置排在前面 | 否 |
+| `deploy/config/site.defaults.json` | 源码一键入口的通用默认值 | 是 |
+| `.local/deployment.json`、清单及 Compose | 脚本生成的本次部署输入 | 否 |
+| 各插件 `plugin.json` / runtimeConfig | 插件自己的启停、认证及业务配置 | 否，运行实例私有 |
+| `.local/secrets/`、`.local/artifacts/` | 私有凭据投影、备份和部署记录 | 否 |
 
-无需手工创建 `.local/site.json`。已有 `.local/deployment.json` 时，脚本在首次生成站点文件时导入其设置，保留已解析的数据路径、profile、origin 和镜像发布仓库。已有站点文件以后不会被默认模板覆盖。`--config <文件>` 可显式选择另一个已有站点文件；文件不存在时报错，避免拼写错误部署出新站点。同一检出目录的状态仍只服务一个站点，多站点应使用独立检出目录和端口。
+首次运行自动创建私有配置；也可在尚无旧配置和数据的新站点先复制空模板再填写。通常只需核对公网 URL、trustedHosts 与所用模型凭据。端口默认7902、profile默认web、插件默认auth/example、容器UID/GID默认1000，其余高级字段按需填写，完整键名与默认规则见[框架统一配置](framework-configuration.md)。
 
-所有站点字段均可省略并采用默认值；提供的值必须合法。可选字段缺省不会阻止构建，非法端口、缺失的显式文件、错误插件依赖等配置错误会明确拒绝。
+已有站点没有 env 文件时，优先导入旧 site.json，其次导入 deployment.json，保留原文件和已解析的数据路径。旧 hostImageConfig 的镜像配置一并导入，未知字段拒绝静默丢弃。显式 `--config <旧站点.json>` 仍兼容；生成的 deployment.json 不作为人工站点输入。未完成部署沿用原操作文件，恢复期间不迁移。
 
-| 字段 | 默认值 | 说明 |
-| --- | --- | --- |
-| `profile` | `web` | 官方 DSH profile；已有站点切换需迁移 |
-| `plugins` | `["auth", "example"]` | 构建的插件 ID 选集；`[]` 表示无业务插件 |
-| `port` | `7902` | 回环监听端口，1–65535 |
-| `publicOrigin`、`publicUrl` | `http://127.0.0.1:7902` | 实际访问 origin，无路径或尾部斜杠 |
-| `trustedHosts` | 未设置 | 公网访问官方控制台时显式加入实际主机名，如 `["dsh.example.com"]`；不带协议或路径，配置后按部署流程重启。仅设置 publicUrl 不会自动信任域名，见 [FAQ](FAQ.md#控制台能打开但模型和插件报-http-403-怎么办) |
-| `composeProject` | `dsh-plugins` | 独占的 Compose 项目名 |
-| `dataRoot` | `.local/data` | 持久数据根目录 |
-| `home` | `.local/data/dsh-home` | DSH profile、插件配置及业务数据 |
-| `workspace` | `.local/data/workspace` | 工作目录；上述路径独立配置，已有站点需显式迁移 |
-| `artifacts` | `.local/artifacts` | 管理器生成 Compose 等产物；源码构建记录固定保存在检出目录 `.local/artifacts` |
-| `containerUid`、`containerGid` | `1000` | 非 root 容器身份；已有目录不会自动改权 |
-| `patches` | `[]` | 额外官方 profile patch；标准认证无需自行写 patch |
-| `publishImage` | `null` | 可选 `registry/project/image`；设置后推送，执行前需 `docker login` |
-| `hostImage` | `null` | 可选 `registry/image@sha256:…`；显式选用预构建宿主，无预设版本匹配要求 |
-| `hostImageConfig` | `null` | 可选宿主构建 `.conf` 路径；格式见 `deploy/config/host-image.conf.example`，Linux 权限须为 0600 |
-
-相对路径均从检出目录解析。`instances`、`authUrlFile`、离线源等高级选项沿用[管理器运行配置](../deploy/README.md#运行配置)。源码入口从站点文件读取部署选项，不使用基础管理命令的环境变量覆盖。模型密钥及插件密钥按各自文档保存在本机文件，不进入站点默认模板。
+相对路径从检出目录解析，一个检出目录只管理一个站点。源码入口以文件为准，不套用基础管理器的环境变量覆盖。`DSH_MANIFEST`、`DSH_CONTAINER_IMAGE` 仅供独立归档部署，源码构建自动生成，必须留空。`DSH_PUBLISH_IMAGE` 可选；填写仓库账号时使用临时 Docker 登录且验证目标主机，留空凭据时沿用 Docker 已有登录。业务配置不集中到框架文件，见[插件配置规范](plugin-configuration.md)。
 
 ## 更新与恢复
 
@@ -97,8 +74,10 @@ bash deploy/build.sh
 ```sh
 bash deploy/build.sh --resume
 # 使用过显式站点文件时，恢复仍传入同一个文件：
-bash deploy/build.sh --config .local/my-site.json --resume
+bash deploy/build.sh --config .local/env.conf --resume
 ```
+
+原先显式使用旧 JSON 时，恢复仍传原 JSON。私有操作目录中的 `framework-input.conf` 备存本次 env 原始字节；输入误改时先恢复原文件再 resume，不自动切换来源。
 
 恢复不重建镜像和插件归档，重新核验保存的输入，并交给原管理器恢复安装。源码入口允许管理器在检测到宿主或 Node 等运行环境变化时预检并重装依赖；环境未变化时不会因该许可单独重装。若断电留下进程记录，必须先由 Docker 确认对应容器已停止且其 hostname、profile、home 挂载匹配，才能备存并解除残留记录，pending 保持原样。旧版无 hostname 的运行记录不支持自动解除，需由维护者核实原容器归属后处理。
 

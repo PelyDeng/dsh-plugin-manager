@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { release, validateBase } from '../../../deploy/scripts/build.mjs';
 import { loadSite } from '../../../deploy/scripts/site.mjs';
+import { renderFrameworkConfig } from '../src/framework-config.mjs';
 
 const hostCommit = 'a'.repeat(40), revision = 'b'.repeat(40);
 const base = `registry.test/dsh@sha256:${'1'.repeat(64)}`, target = `registry.test/dsh@sha256:${'2'.repeat(64)}`;
@@ -17,7 +18,7 @@ const defaults = JSON.parse(readFileSync(new URL('../../../deploy/config/site.de
 function fixture(t, { fresh = false, fail } = {}) {
   const root = mkdtempSync(resolve(tmpdir(), 'source-release-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const put = (path, value) => { path = resolve(root, path); mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value)); };
+  const put = (path, value) => { path = resolve(root, path); mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value), { mode: 0o600 }); };
   const artifacts = resolve(root, '.local/artifacts');
   const config = resolve(root, '.local/deployment.json');
   put('deploy/config/site.defaults.json', defaults);
@@ -74,7 +75,7 @@ test('a complete source checkout initializes defaults without fetching official 
   assert.equal(f.calls.some(call => call[0] === 'git' && call.some(value => ['submodule', 'clone', 'fetch', 'pull'].includes(value))), false);
   assert.equal(f.calls.some(call => call.includes('push') || call.includes('stop') || call.includes('-czf')), false);
   assert.equal(JSON.parse(readFileSync(f.config)).containerImage, builtId);
-  const site = JSON.parse(readFileSync(resolve(f.root, '.local/site.json')));
+  const { site } = loadSite(f.root);
   assert.deepEqual(site.plugins, ['auth', 'example']);
   assert.equal('containerImage' in site, false);
 });
@@ -118,10 +119,10 @@ test('legacy update preserves site values, copies old references and backs up be
 test('repeated execution keeps the site file and uses the established deployment', t => {
   const f = fixture(t, { fresh: true });
   release({ root: f.root }, f.execute, f.buildHost);
-  const site = readFileSync(resolve(f.root, '.local/site.json'), 'utf8');
+  const site = readFileSync(resolve(f.root, '.local/env.conf'), 'utf8');
   release({ root: f.root }, f.execute, f.buildHost);
   assert.equal(f.calls.filter(call => call[0] === 'build-host').length, 1);
-  assert.equal(readFileSync(resolve(f.root, '.local/site.json'), 'utf8'), site);
+  assert.equal(readFileSync(resolve(f.root, '.local/env.conf'), 'utf8'), site);
   assert.ok(f.result().backupComplete);
 });
 
@@ -131,14 +132,14 @@ test('a partial site override uses the same effective paths on repeated deployme
   release({ root: f.root }, f.execute, f.buildHost);
   release({ root: f.root }, f.execute, f.buildHost);
   assert.equal(f.result().status, 'ready');
-  assert.equal(JSON.parse(readFileSync(f.config)).home, defaults.home);
+  assert.equal(JSON.parse(readFileSync(f.config)).home, resolve(f.root, defaults.home));
   assert.ok(f.calls.filter(call => call.includes('apply-compose')).every(call => call.includes('--rebuild')));
 });
 
 test('changing the established data location is rejected before stopping the service', t => {
   const f = fixture(t, { fresh: true });
   release({ root: f.root }, f.execute, f.buildHost);
-  f.put('.local/site.json', { ...defaults, home: '.local/data/another-home' });
+  f.put('.local/env.conf', renderFrameworkConfig({ config: { ...defaults, home: '.local/data/another-home' } }));
   assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /explicit migration/);
   assert.equal(f.calls.some(call => call.includes('stop')), false);
 });
@@ -189,4 +190,49 @@ test('tampered previous archives are rejected before stopping', t => {
 test('immutable supplied images are accepted without a predetermined host version', () => {
   assert.equal(validateBase(base, { ...info, Config: {} }), baseId);
   assert.throws(() => validateBase('registry.test/dsh:latest', info), /immutable/);
+});
+
+test('unified source keeps exact private input backup while generated records contain no secret values', t => {
+  const f = fixture(t, { fresh: true });
+  const text = renderFrameworkConfig({ credentials: { DEEPSEEK_API_KEY: 'sk-source-private-sentinel' }, privateInput: true });
+  f.put('.local/env.conf', text);
+  const result = release({ root: f.root }, f.execute, f.buildHost);
+  assert.equal(readFileSync(resolve(result.operation, 'framework-input.conf'), 'utf8'), text);
+  assert.equal(JSON.stringify(result).includes('private-sentinel'), false);
+  assert.equal(readFileSync(f.config, 'utf8').includes('private-sentinel'), false);
+  assert.equal(JSON.stringify(f.calls).includes('private-sentinel'), false);
+  assert.equal(JSON.parse(readFileSync(f.config)).frameworkCredentials.sha256.length, 64);
+});
+
+test('unsupported legacy business fields reject migration before creating a unified file', t => {
+  const f = fixture(t, { fresh: true });
+  const previous = { instances: { example: { apiKey: 'private-sentinel' } } };
+  f.put('.local/site.json', previous);
+  assert.throws(() => loadSite(f.root), error => /DSH_INSTANCES/.test(error.message) && !error.message.includes('private-sentinel'));
+  assert.equal(existsSync(resolve(f.root, '.local/env.conf')), false);
+  assert.deepEqual(JSON.parse(readFileSync(resolve(f.root, '.local/site.json'))), previous);
+});
+
+test('legacy image preferences import once and retain the original source', t => {
+  const f = fixture(t, { fresh: true });
+  f.put('.local/site.json', { hostImageConfig: '.local/image.conf', home: '.local/data/custom home' });
+  const previous = 'HARBOR_ENABLED=true\nREGISTRY_HOST=registry.example\nREGISTRY_USERNAME=fixture\nREGISTRY_PASSWORD=registry-private-sentinel\n';
+  f.put('.local/image.conf', previous);
+  const loaded = loadSite(f.root);
+  assert.equal(loaded.source.image.REGISTRY_PASSWORD, 'registry-private-sentinel');
+  assert.equal(loaded.site.home, resolve(f.root, '.local/data/custom home'));
+  assert.equal(readFileSync(resolve(f.root, '.local/image.conf'), 'utf8'), previous);
+  assert.equal(JSON.stringify(loaded.site).includes('private-sentinel'), false);
+  f.put('.local/image.conf', 'REGISTRY_HOST=changed.example\n');
+  assert.equal(loadSite(f.root).source.image.REGISTRY_HOST, 'registry.example');
+});
+
+test('new unified source derives unset home and workspace from dataRoot, while explicit JSON keeps its defaults', t => {
+  const f = fixture(t, { fresh: true });
+  f.put('.local/env.conf', 'DSH_DATA_DIR=data/custom\n');
+  const { site } = loadSite(f.root);
+  assert.equal(site.home, resolve(f.root, 'data/custom/dsh-home'));
+  assert.equal(site.workspace, resolve(f.root, 'data/custom/workspace'));
+  f.put('.local/legacy.json', { dataRoot: 'data/custom' });
+  assert.equal(loadSite(f.root, '.local/legacy.json').site.home, defaults.home);
 });

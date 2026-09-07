@@ -29,9 +29,11 @@ export function buildReference(root, output) {
     for (let count = 1; count <= parts.length; count++) if (lstatSync(join(root, ...parts.slice(0, count))).isSymbolicLink()) throw new Error('公开源码索引不接受符号链接。');
     visit(path);
   }
-  for (const path of ['README.md', 'README.en.md', 'package.json', 'pnpm-workspace.yaml']) if (existsSync(join(root, path))) {
+  for (const path of ['README.md', 'README.en.md', 'package.json', 'pnpm-workspace.yaml', 'env.conf']) if (existsSync(join(root, path))) {
     if (lstatSync(join(root, path)).isSymbolicLink()) throw new Error('公开源码索引不接受符号链接。');
-    files.push({ path, text: readFileSync(join(root, path), 'utf8') });
+    const text = readFileSync(join(root, path), 'utf8');
+    if (path === 'env.conf' && text.split(/\r?\n/u).map(line => line.trim()).some(line => line && !line.startsWith('#') && !/^[A-Z][A-Z0-9_]*=$/u.test(line))) throw new Error('公开env.conf只能包含空值，不能将真实配置加入源码索引。');
+    files.push({ path, text });
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
   const revision = createHash('sha256').update(JSON.stringify(files)).digest('hex').slice(0, 12);

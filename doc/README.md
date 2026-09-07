@@ -26,7 +26,7 @@
 2. [部署与管理命令](../deploy/README.md)——仓库入口、运行配置、构建日志与恢复。
 3. [数据和产物迁移](migration.md)——已有数据目录与发布物的迁移。
 4. [Docker 集成](../integrations/docker/README.md)——宿主镜像与 Compose 使用。
-5. [版本说明](releases/v0.3.2.md)——组件变化、下载文件和宿主要求。
+5. [历史版本说明 v0.3.2](releases/v0.3.2.md)——组件变化、下载文件和宿主要求。
 
 ## 查接口与解决问题
 
@@ -38,3 +38,5 @@
 | 框架和官方 DSH 的职责 | [架构与包职责](architecture.md) |
 | 开发、授权及第二应用问题 | [开发者 FAQ](../plugins/dsh-example/knowledge/guide.md) |
 | 让 AI 协助开发 | [五种可复制开发提示词](../plugins/dsh-example/knowledge/prompts.md) |
+
+配置入口、默认值、文件密钥只读及旧 JSON 导入见[框架统一配置](framework-configuration.md)。

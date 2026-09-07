@@ -18,7 +18,7 @@ import { applyCompose } from './apply-compose.mjs';
 /** Public CLI shared by Bash, PowerShell and the container entrypoint. */
 export async function main(args = process.argv.slice(2)) {
   const options = parseArguments([...args]);
-  if (options.help) { console.log('deployment.mjs deploy|start|stop|sync|verify|adopt|paths|health|apply-compose|render-compose|unlock --plugins all|none|id,... --manifest path --home path --profile web --host-mode owned|external --stopped-file path --started-file path --resume | --recover --data-compatible'); return; }
+  if (options.help) { console.log('deployment.mjs deploy|start|stop|sync|verify|adopt|paths|health|apply-compose|render-compose|unlock --root <project> --config <env.conf|deployment.json> --plugins all|none|id,... --manifest path --home path --profile web --host-mode owned|external --stopped-file path --started-file path --resume | --recover --data-compatible'); return; }
   const deployment = resolveDeployment(options);
   if (options.action === 'health') {
     if (existsSync(join(deployment.profileRoot, PENDING))) fail('部署尚未完成。');

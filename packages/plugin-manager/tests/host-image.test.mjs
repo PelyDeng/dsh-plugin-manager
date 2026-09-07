@@ -4,7 +4,7 @@ import { afterEach, test } from 'node:test';
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { buildHostImage, isMissingImage, loadImageConfig, recipeHash, repositoryDigest } from '../../../integrations/docker/host-image.mjs';
+import { buildHostImage, isMissingImage, loadImageConfig, recipeHash, repositoryDigest, withRegistryAuthentication } from '../../../integrations/docker/host-image.mjs';
 import { migrateConfig } from '../../../integrations/docker/migrate-config.mjs';
 import { tarCommand } from '../src/deployment.mjs';
 
@@ -28,6 +28,29 @@ function config(root, extra = '') {
   return path;
 }
 const digest = character => `sha256:${character.repeat(64)}`;
+
+test('deployment publish credentials are destination-bound, stdin-only and removed on callback failure', () => {
+  const root = fixture();
+  const values = loadImageConfig(root, config(root, 'REGISTRY_USERNAME=fixture\nREGISTRY_PASSWORD=private-sentinel\n'));
+  let calls = 0, temporary;
+  const execute = (_bin, args, settings) => {
+    calls++;
+    temporary = args[1];
+    assert.equal(existsSync(temporary), true);
+    assert.equal(args.includes('private-sentinel'), false);
+    assert.equal(args.at(-1), '--password-stdin');
+    assert.equal(settings.input, 'private-sentinel');
+    return { status: 0, stdout: '' };
+  };
+  assert.throws(() => withRegistryAuthentication(values, 'other.example/app/image', () => {}, execute), /differs/);
+  assert.equal(calls, 0);
+  assert.throws(() => withRegistryAuthentication(values, 'harbor.example/app/image', flags => {
+    assert.deepEqual(flags, ['--config', temporary]);
+    throw new Error('fixture publish failed');
+  }, execute), /fixture publish failed/);
+  assert.equal(calls, 1);
+  assert.equal(existsSync(temporary), false);
+});
 
 function engine(root, { pullError = '', pushError = false, wrongLabel = false } = {}) {
   const calls = [];
@@ -86,7 +109,9 @@ test('default configuration does not read a legacy credential file; literal valu
   const path = config(root, 'REGISTRY_USERNAME=test\nREGISTRY_PASSWORD=$(touch stolen)\n');
   assert.equal(loadImageConfig(root, path).REGISTRY_PASSWORD, '$(touch stolen)');
   writeFileSync(path, 'DSH_PORT=7902\n');
-  assert.throws(() => loadImageConfig(root, path), /Unknown.*line 1/u);
+  assert.equal(loadImageConfig(root, path).HARBOR_ENABLED, 'false');
+  writeFileSync(path, 'UNKNOWN_FRAMEWORK_FIELD=private-fixture\n');
+  assert.throws(() => loadImageConfig(root, path), /未知配置字段.*行 1/u);
   writeFileSync(path, 'IMAGE_NAME=other/image:tag\n');
   assert.throws(() => loadImageConfig(root, path), /IMAGE_NAME/u);
 });

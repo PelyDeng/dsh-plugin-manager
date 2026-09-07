@@ -10,8 +10,10 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { createInterface } from 'node:readline';
 import { hostname } from 'node:os';
+import { frameworkCredentialEnvironment, prepareFrameworkCredentials } from './framework-credentials.mjs';
 /** Start one DSH child, keeping startup tokens out of normal logs. */
 export async function supervise(deployment, release) {
+  prepareFrameworkCredentials(deployment);
   assertReleaseMode(release, deployment.mode);
   const cli = hostCLI(deployment);
   const runtime = runtimeEnvironment(deployment, release.plugins);
@@ -31,7 +33,7 @@ export async function supervise(deployment, release) {
   if (deployment.profile === 'web') args.push('--host', host, '--port', String(port), '--no-open');
   const trusted = options['trusted-hosts'] ?? process.env.DSH_TRUSTED_HOSTS ?? deployment.config.trustedHosts;
   if (trusted) for (const value of (Array.isArray(trusted) ? trusted : trusted.split(','))) args.push('--trusted-host', value);
-  const env = { ...process.env, ...runtime.variables };
+  const env = { ...process.env, ...runtime.variables, ...frameworkCredentialEnvironment(deployment) };
   for (const [key, value] of Object.entries(env)) if (value === undefined) delete env[key];
   const startupUnlock = acquireLock(deployment.profileRoot);
   let startupLocked = true;

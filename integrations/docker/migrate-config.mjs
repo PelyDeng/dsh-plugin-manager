@@ -1,10 +1,10 @@
-/** Convert explicitly selected legacy registry settings; retain every original file. */
+/** Legacy registry-to-host-image.conf compatibility migration; retain every original file. */
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadImageConfig } from './host-image.mjs';
 
-/** Create host-image.conf without executing shell settings or deleting migration sources. */
+/** Create legacy host-image.conf; unified env import is handled by the source deployment entrypoint. */
 export function migrateConfig(root) {
   const destination = resolve(root, 'deploy/config/host-image.conf');
   const candidates = ['deploy/config/registry.conf', 'deploy/registry.conf'].map(path => resolve(root, path));

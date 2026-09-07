@@ -4,7 +4,7 @@ DSH 应用接入与交付管理 CLI。独立包和内部 `plugins/*` 共用 buil
 
 ## 安装与作者操作
 
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。在工具目录执行 `pnpm add --ignore-workspace /path/to/plugin-manager-0.3.3.tgz`，随后使用 `pnpm exec dsh-plugin-manager`。包名不表示已发布到公共 registry。本 README 随工具版本交付。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。在工具目录执行 `pnpm add --ignore-workspace /path/to/plugin-manager-0.3.4.tgz`，随后使用 `pnpm exec dsh-plugin-manager`。包名不表示已发布到公共 registry。本 README 随工具版本交付。
 
 每个项目操作要求 `--root`；相对配置、home 和产物路径相对这个根解析。独立作者包根需有 package.json：有效 name/version、main、files、README、scripts.build/check、官方 dsh.bundle.patch，以及 `deepseekPlugin: { "schemaVersion": 3, "id": "my-plugin" }`。页面、探针、权限、认证与 kit 均不强制要求。构建产物可以由 build 生成。
 
@@ -46,4 +46,8 @@ Docker 实例通过 `apply-compose --root <项目根> --config <deployment.json>
 包根导出部署函数，`/catalog` 导出 `readPlugin`、发现与选集，`/packaging` 导出打包函数。管理器只读取声明与归档，不导入业务源码。
 ## 发布物宿主验证
 
-0.3.3 支持可选验证记录及 `compose-release --verification-report <JSON>`。pack 只记录构建输入，测试运行器在最终 tgz 上验证后输出报告；安装提示不新增版本硬门槛。完整流程、报告字段和证据边界见 [VERIFICATION.md](VERIFICATION.md)。
+自 0.3.3 起支持可选验证记录及 `compose-release --verification-report <JSON>`。pack 只记录构建输入，测试运行器在最终 tgz 上验证后输出报告；安装提示不新增版本硬门槛。完整流程、报告字段和证据边界见 [VERIFICATION.md](VERIFICATION.md)。
+
+## 框架配置文件
+
+独立 CLI 通过显式 `--root` 和 `--config <env.conf|deployment.json>`（或 `DEPLOYMENT_CONFIG`）选择输入，不扫描作者源码仓库。env 为字面量键值文件；源码入口生成 manifest/containerImage，独立交付需自行提供。非空 `DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` 只注入 DSH，文件优先、网页只读，修改需受控重启；留空不删除官方凭据或清除继承环境覆盖。网页支持两种提供方，set-api-key 命令仅管理 DeepSeek 官方存储。插件的 plugin.json/runtimeConfig 仍各自维护。

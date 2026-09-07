@@ -4,6 +4,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { frameworkKeys } from '../packages/plugin-manager/src/framework-config.mjs';
+import { parseLiteralConfig } from '../packages/plugin-manager/src/literal-config.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 // Repository rules apply even to force-added files; personal Git excludes are not project policy.
@@ -24,9 +26,13 @@ let checked = 0;
 for (const name of new Set(files)) {
   if (name === 'deepseek-harness') continue;
   const path = resolve(root, name);
-  assert.ok(!name.split('/').some(part => ['.local', 'data', 'deploy-artifacts', 'node_modules', 'dist', 'env.conf', '.env'].includes(part)), `Non-source file: ${name}`);
+  assert.ok(name === 'env.conf' || !name.split('/').some(part => ['.local', 'data', 'deploy-artifacts', 'node_modules', 'dist', 'env.conf', '.env'].includes(part)), `Non-source file: ${name}`);
   assert.ok(!name.endsWith('.tgz') || vendorArchives.has(path), `Undeclared vendor archive in Git: ${name}`);
   assert.ok(existsSync(path) && lstatSync(path).isFile(), `Expected regular source file: ${name}`);
+  if (name === 'env.conf') {
+    const values = parseLiteralConfig(readFileSync(path, 'utf8'), frameworkKeys);
+    assert.ok(Object.keys(values).length === frameworkKeys.size && Object.values(values).every(value => value === ''), 'Root env.conf must contain every framework key with empty values; real configuration belongs in .local/env.conf.');
+  }
   if (!/\.(?:md|mjs|js|ts|json|ya?ml|sh|ps1)$/.test(name)) continue;
   const content = readFileSync(path, 'utf8');
   assert.ok(content.endsWith('\n') && !content.endsWith('\n\n'), `Expected one final newline: ${name}`);

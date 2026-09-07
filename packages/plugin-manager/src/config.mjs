@@ -2,6 +2,8 @@ import { canonical, environmentName, fail, json, within } from './state.mjs';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { closeSync, existsSync, openSync, statSync } from 'node:fs';
+import { readFrameworkConfig } from './framework-config.mjs';
+import { frameworkCredentialEnvironment, rememberFrameworkInput } from './framework-credentials.mjs';
 /** Parse CLI options without interpreting user text as shell code. */
 export function parseArguments(args) {
   const result = { action: args[0] && !args[0].startsWith('--') ? args.shift() : 'deploy' };
@@ -24,7 +26,8 @@ export function resolveDeployment(options = {}, env = process.env) {
   if (!options.root) fail('必须显式指定 --root 项目根目录。');
   const root = canonical(options.root);
   const configPath = options.config ?? env.DEPLOYMENT_CONFIG;
-  const config = configPath ? json(resolve(root, configPath)) : {};
+  const framework = configPath?.endsWith('.conf') ? readFrameworkConfig(resolve(root, configPath)) : undefined;
+  const config = framework?.config ?? (configPath ? json(resolve(root, configPath)) : {});
   if (!config || typeof config !== 'object' || Array.isArray(config)) fail('部署配置必须是对象。');
   const pick = (option, variable, field, fallback) => options[option] ?? env[variable] ?? config[field] ?? fallback;
   const path = value => {
@@ -55,7 +58,7 @@ export function resolveDeployment(options = {}, env = process.env) {
   const instances = config.instances ?? {};
   if (!instances || typeof instances !== 'object' || Array.isArray(instances)) fail('instances 必须是以插件 ID 为键的对象。');
   const publicOrigin = env.DSH_PUBLIC_ORIGIN ?? config.publicOrigin ?? options['public-url'] ?? env.DSH_PUBLIC_URL ?? config.publicUrl;
-  return { root, config: { ...config, ...(publicOrigin ? { publicOrigin } : {}) }, configPath: configPath && resolve(root, configPath), dataRoot, home, workspace, authUrlFile, artifacts,
+  const deployment = { root, config: { ...config, ...(publicOrigin ? { publicOrigin } : {}) }, configPath: configPath && resolve(root, configPath), dataRoot, home, workspace, authUrlFile, artifacts,
     profile, profileRoot: join(home, 'profiles', profile), mode, hostMode, instances,
     explicitArtifacts: options.artifacts !== undefined || env.DSH_DEPLOY_ARTIFACTS !== undefined || config.artifacts !== undefined,
     explicitData: options.home !== undefined || env.DSH_HOME !== undefined || config.home !== undefined || options['data-root'] !== undefined || env.DSH_DATA_DIR !== undefined || config.dataRoot !== undefined,
@@ -68,6 +71,8 @@ export function resolveDeployment(options = {}, env = process.env) {
     offline: options.offline ?? config.offline ?? false,
     baseUrl: options['base-url'] ?? config.baseUrl,
     options };
+  if (framework) rememberFrameworkInput(deployment, framework);
+  return deployment;
 }
 
 /** Avoid silently replacing an existing deployment with an empty default home. */
@@ -81,6 +86,11 @@ export function checkDataSelection(deployment, userHome = homedir()) {
 /** Resolve optional runtime files without inspecting business configuration values. */
 export function runtimeEnvironment(deployment, plugins) {
   const variables = { DSH_HOME: deployment.home }; const configurations = {};
+  if (deployment.config.frameworkCredentials) {
+    frameworkCredentialEnvironment(deployment);
+    // '$' cannot occur in a plugin ID: reuse the existing configuration identity and resume checks.
+    configurations.$framework = deployment.config.frameworkCredentials;
+  }
   for (const plugin of plugins) {
     const instance = deployment.instances[plugin.id] ?? {};
     if (!instance || typeof instance !== 'object' || Array.isArray(instance)) fail(`${plugin.id}: 实例配置必须是对象。`);
