@@ -19,6 +19,9 @@
 3. [复制完整问答应用](plugin-development.md#复制完整问答应用到独立仓库)——将流式对话、历史与知识示例迁入自己的仓库。
 4. [插件配置规范](plugin-configuration.md)——声明、实例参数和运行配置。
 5. [kit 接口](../packages/plugin-kit/README.md)——接入身份、权限、HTTP 与工具登记。
+6. [聊天风格 skill](../plugins/dsh-example/skills/dsh-chat-style/SKILL.md)——统一聊天视觉、思考预览、流式行为和回答工具栏。
+
+发布版本遵循[开发约定](../AGENTS.md)：功能大改升级次版本并归零补丁号，小改升级补丁号；`1.0.0` 及以上仅在用户明确指定里程碑时使用。当前组件版本以各包 `package.json` 和实际交付清单为准。
 
 ## 部署与维护
 
