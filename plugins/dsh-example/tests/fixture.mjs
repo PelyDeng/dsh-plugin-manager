@@ -4,6 +4,7 @@ import { apply, Config } from '../dist/index.mjs'
 
 export async function fixture({ mode, autoReply = false, persistenceApi = 'handle', logs = new Map(), beforeCreate = async () => {}, beforeDispose = async () => {}, ...overrides } = {}) {
   const routes = new Map(), listeners = new Map(), effects = [], handles = [], timers = new Set()
+  const tools = new Map()
   const revoked = new Set()
   let provider = true
   const actors = { alice: { namespace: 'user', userId: 'alice', sessionId: 'login-a' },
@@ -12,6 +13,7 @@ export async function fixture({ mode, autoReply = false, persistenceApi = 'handl
     on(name, listener) { const group = listeners.get(name) ?? new Set(); group.add(listener); listeners.set(name, group); return () => group.delete(listener) },
     emit(name, ...args) { for (const f of [...listeners.get(name) ?? []]) f(...args) },
     effect(factory) { const dispose = factory(); effects.push(dispose); return dispose },
+    tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
     webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
     agentDefaultModel: { currentSelection: () => ({ provider: 'test', model: 'test' }) },
     sessionPersistence: persistenceApi === 'inspection'
@@ -69,7 +71,7 @@ export async function fixture({ mode, autoReply = false, persistenceApi = 'handl
   const origin = `http://127.0.0.1:${server.address().port}`
   await apply(ctx, Config({ accessMode: mode, publicOrigin: origin, authRecheckMs: 100, historyPath: ':memory:', ...overrides }))
   return {
-    origin, ctx, handles, revoked,
+    origin, ctx, handles, revoked, tools,
     removeProvider() { provider = false; ctx.emit('ecosystem/revoked', {}) },
     emit(handle, type, data) { const event = { type, data }; logs.get(handle.id).push(event); ctx.emit('session/event', { id: handle.id }, event) },
     request(path, data, cookie = 'alice', headers = {}, signal) { return fetch(origin + '/example' + path, {

@@ -3,6 +3,7 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { digestPattern, environmentName, fail, hash, idPattern, json, packageName, same, within } from './state.mjs';
 import { readFileSync } from 'node:fs';
 import { validateConfiguration } from './plugin-settings.mjs';
+import { selectVerification, validateVerification } from './verification.mjs';
 /** Validate a public release manifest and its exact tarballs before profile writes. */
 export function loadRelease(manifestPath) {
   const path = resolve(manifestPath);
@@ -33,7 +34,8 @@ export function loadRelease(manifestPath) {
     if (mandatory.some(file => !plugin.verifyFiles.includes(file)) || plugin.healthPath !== packed.deepseekPlugin?.healthPath) fail(`${plugin.id}: 清单省略或改变了包内验证声明。`);
     return { ...plugin, archivePath: archive };
   });
-  return { path, schemaVersion: manifest.schemaVersion, plugins };
+  const verification = validateVerification(manifest.verification, plugins);
+  return { path, schemaVersion: manifest.schemaVersion, plugins, ...(verification ? { verification } : {}) };
 }
 
 /** Reject source-mode requests for archive-only releases before changing deployment state. */
@@ -51,5 +53,5 @@ export function selectRelease(release, requested) {
     if (!plugin) fail(`发布清单未声明插件 ${id}。`);
     return plugin;
   });
-  return { ...release, plugins };
+  return { ...release, plugins, ...(release.verification ? { verification: selectVerification(release.verification, plugins) } : {}) };
 }

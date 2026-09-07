@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { parseOptions, sourcePlugins } from './plugins.mjs';
 import { preparePluginDependencies, runPluginTask, runPnpm } from './run-plugin-task.mjs';
 import { verifyBuildPackage } from './verify-package.mjs';
+import { validateVerification } from './verification.mjs';
 
 /** Write one manifest after archive validation; step wraps each synchronous task for progress display. */
 export function packagePlugins(root, requested, output, packageDirectory, step = (_label, run) => run()) {
@@ -30,7 +31,13 @@ export function packagePlugins(root, requested, output, packageDirectory, step =
       console.log(`[${plugin.id}] 发布包已验证：${archive}`);
     });
   }
-  const manifest = { schemaVersion: single ? 2 : 1, plugins };
+  const lockPath = resolve(root, 'pnpm-lock.yaml');
+  const packageManagerVersion = plugins.length ? runPnpm(['--version'], root, { stdio: ['ignore', 'pipe', 'pipe'] }).stdout.toString().trim() : undefined;
+  const verification = validateVerification({ schemaVersion: 1, builds: plugins.map(plugin => ({
+    pluginId: plugin.id, archiveSha256: plugin.sha256, nodeVersion: process.versions.node, packageManagerVersion,
+    ...(existsSync(lockPath) ? { lockSha256: createHash('sha256').update(readFileSync(lockPath)).digest('hex') } : {}),
+  })), runs: [] }, plugins);
+  const manifest = { schemaVersion: single ? 2 : 1, plugins, verification };
   const temporary = resolve(output, 'manifest.json.tmp');
   writeFileSync(temporary, `${JSON.stringify(manifest, null, 2)}\n`);
   renameSync(temporary, resolve(output, 'manifest.json'));

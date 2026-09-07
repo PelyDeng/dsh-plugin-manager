@@ -15,6 +15,7 @@ import { applyCompose } from '../src/apply-compose.mjs';
 import { renderCompose } from '../src/compose.mjs';
 import { synchronize, finalize, adoptLegacy } from '../src/installation.mjs';
 import { supervise } from '../src/supervisor.mjs';
+import { verificationSubjects, writeVerificationReport } from '../src/verification.mjs';
 
 const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const lock = "lockfileVersion: '9.0'\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\nimporters:\n  .: {}\n";
@@ -136,6 +137,9 @@ test('a single package builds once and packs a source-free release without touch
   const packed = read(releasePath);
   assert.equal(packed.schemaVersion, 2);
   assert.equal(packed.plugins.length, 1);
+  assert.equal(packed.verification.builds[0].archiveSha256, packed.plugins[0].sha256);
+  assert.equal(packed.verification.builds[0].nodeVersion, process.versions.node);
+  assert.deepEqual(packed.verification.runs, []);
   assert.equal(Object.hasOwn(packed.plugins[0], 'directory'), false);
   assert.equal(packed.plugins[0].defaultEnabled, false);
   assert.deepEqual(packed.plugins[0].development, manifest.deepseekPlugin.development);
@@ -206,6 +210,23 @@ test('compose releases from archives, reject conflicts before output, retain sou
   assert.equal(result.status, 0, result.stderr);
   const release = loadRelease(join(output, 'manifest.json'));
   assert.equal(release.schemaVersion, 2); assert.equal(release.plugins.length, 2);
+  const primary = release.plugins[0];
+  const report = join(base, 'verification.json');
+  writeVerificationReport(report, [{ pluginId: primary.id, archiveSha256: primary.sha256, subjects: verificationSubjects(release.plugins),
+    scenarioId: 'external-pair', suiteId: 'external-fixture', suiteRevision: 'a'.repeat(64), finishedAt: '2026-09-07T00:00:00Z',
+    outcome: 'passed', scope: 'archive-consumption', source: 'runner', host: { kind: 'unknown' },
+    platform: { os: process.platform, architecture: process.arch, nodeVersion: process.versions.node } }]);
+  const annotatedOutput = join(base, 'annotated');
+  const annotatedResult = run(base, 'compose-release', '--root', base, '--output', annotatedOutput, '--manifest', join(output, 'manifest.json'), '--verification-report', report);
+  assert.equal(annotatedResult.status, 0, annotatedResult.stderr);
+  const annotated = loadRelease(join(annotatedOutput, 'manifest.json'));
+  assert.equal(annotated.verification.runs[0].subjects.length, 2);
+  assert.deepEqual(readFileSync(annotated.plugins[0].archivePath), readFileSync(primary.archivePath));
+  assert.equal(selectRelease(annotated, primary.id).verification.runs[0].subjects.length, 2);
+  const invalidReport = read(report); invalidReport.runs[0].archiveSha256 = '0'.repeat(64); json(report, invalidReport);
+  const rejected = join(base, 'rejected-evidence');
+  assert.throws(() => composeRelease([path1, path2], rejected, undefined, [report]), /subject|归属/);
+  assert.equal(existsSync(rejected), false);
   assert.ok(release.plugins.every(plugin => !Object.hasOwn(plugin, 'directory')));
   const conflict = join(base, 'conflict');
   assert.throws(() => composeRelease([path1, path1], conflict), /重复/);

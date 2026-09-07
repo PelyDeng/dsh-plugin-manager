@@ -1,6 +1,6 @@
 {
   "name": "@dsh-plugin-manager/plugin-manager",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Package and deploy independent DSH applications with optional shared access management",
   "type": "module",
   "license": "Apache-2.0",
@@ -10,14 +10,16 @@
   "exports": {
     ".": "./dist/deployment.mjs",
     "./catalog": "./dist/plugins.mjs",
-    "./packaging": "./dist/package-plugins.mjs"
+    "./packaging": "./dist/package-plugins.mjs",
+    "./verification": "./dist/verification.mjs"
   },
   "files": [
     "dist",
     "runtime",
     "LICENSE",
     "README.md",
-    "DELIVERY.md"
+    "DELIVERY.md",
+    "VERIFICATION.md"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"

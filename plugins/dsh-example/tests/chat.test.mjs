@@ -21,13 +21,13 @@ test('auth protects page, assets and APIs; missing provider never opens the plug
   expect((await f.request('/identity')).status).toBe(503)
 })
 
-test('standalone works without auth and restricts the Agent to zero tools', async () => {
+test('standalone works without auth and restricts the Agent to shipped public-source tools', async () => {
   const f = await setup({ mode: 'standalone' })
   f.removeProvider()
   expect((await f.request('', undefined, '')).status).toBe(200)
   const response = await f.request('/chat', { message: '你好' }, '')
   const h = f.handles[0]
-  expect(h.allowed).toEqual([])
+  expect(h.allowed).toEqual(['example_search_framework', 'example_read_framework'])
   f.emit(h, 'assistant/chunk', { chunk: { type: 'text-delta', text: '你' } })
   f.emit(h, 'assistant/chunk', { chunk: { type: 'text-delta', text: '好' } })
   f.emit(h, 'assistant/message', { message: { content: [{ type: 'text', text: '你好！' }] } })

@@ -77,6 +77,35 @@ export function runtimeIdentity(cli, deployment) {
   return { hostVersion: version.stdout.trim(), packageManager: manager.stdout.trim(), hostEntry: entry && existsSync(entry) ? hash(readFileSync(entry)) : cli.command, ...(sourceCommit ? { sourceCommit } : {}) };
 }
 
+/** Evidence probe only. Never change the deployment fingerprint or trust an injected source SHA. */
+export function verificationIdentity(cli, deployment, knownVersion) {
+  const prefix = cli.prefix ?? [];
+  const probe = (command, args, cwd = cli.cwd) => {
+    const result = spawnSync(command, args, { cwd, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024, windowsHide: true,
+      env: { ...process.env, DSH_HOME: deployment.home } });
+    return !result.error && result.status === 0 ? result.stdout.trim() : undefined;
+  };
+  const rawVersion = knownVersion ?? probe(cli.command, [...prefix, '--version']);
+  const version = rawVersion?.match(/(?:^|\s)(\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?(?:\+[a-zA-Z0-9.-]+)?)$/)?.[1];
+  let host = { kind: 'unknown', ...(version ? { version } : {}) };
+  const entry = prefix.at(-1);
+  if (entry && existsSync(entry)) {
+    const root = probe('git', ['rev-parse', '--show-toplevel'], dirname(entry));
+    if (root) {
+      let metadata;
+      try { metadata = readOptional(join(root, 'package.json')); } catch { /* Unreadable provenance remains unknown. */ }
+      if (metadata?.name === '@deepseek-ai/dsh-root') {
+        const commit = probe('git', ['rev-parse', 'HEAD'], root);
+        const status = probe('git', ['status', '--porcelain', '--untracked-files=normal'], root);
+        if (commit && status !== undefined) host = { ...host, kind: 'source', commit, dirty: status !== '',
+          // A clean checkout does not prove ignored compiled JS matches its source.
+          identitySource: entry.endsWith('.ts') ? 'detected' : 'declared' };
+      }
+    }
+  }
+  return { host, platform: { os: process.platform, architecture: process.arch, nodeVersion: process.versions.node } };
+}
+
 export function alive(pid) {
   try { process.kill(pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; }
 }

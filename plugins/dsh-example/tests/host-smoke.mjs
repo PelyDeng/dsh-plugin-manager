@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { readEvents } from '../web/stream.js'
+import { hash } from '../../../packages/plugin-manager/src/state.mjs'
+import { loadRelease } from '../../../packages/plugin-manager/src/release.mjs'
+import { verificationIdentity, verificationSubjects, writeVerificationReport } from '../../../packages/plugin-manager/src/verification.mjs'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const release = resolve(root, process.argv[2] ?? '.local/artifacts/release/plugins')
@@ -21,6 +24,22 @@ mkdirSync(outputRoot, { recursive: true })
 const operation = mkdtempSync(join(outputRoot, 'example-host-'))
 const home = join(operation, 'home')
 const cli = process.env.DSH_TEST_CLI ?? join(root, 'deepseek-harness/apps/cli/lib/bin.js')
+const reportIndex = process.argv.indexOf('--report')
+const reportPath = reportIndex < 0 ? undefined : process.argv[reportIndex + 1]
+if (reportIndex >= 0 && (!reportPath || reportPath.startsWith('--'))) throw new Error('--report requires a new output file')
+const testedRelease = loadRelease(join(release, 'manifest.json'))
+const suiteRevision = hash(readFileSync(fileURLToPath(import.meta.url)))
+const stages = []
+let suiteFailure
+function recordStage(ids, scenarioId) {
+  const plugins = ids.map(id => testedRelease.plugins.find(plugin => plugin.id === id))
+  for (const plugin of plugins) assert.equal(hash(readFileSync(plugin.archivePath)), plugin.sha256)
+  const identity = verificationIdentity({ command: process.execPath, prefix: [cli], cwd: operation }, { home })
+  for (const plugin of plugins) for (const scope of ['archive-consumption', 'real-host', 'model-double']) stages.push({
+    pluginId: plugin.id, archiveSha256: plugin.sha256, subjects: verificationSubjects(plugins), scenarioId,
+    suiteId: 'example-host-smoke', suiteRevision, scope, source: 'runner', ...identity,
+  })
+}
 const patch = join(operation, 'mode.patch.yml')
 const port = Number(process.env.EXAMPLE_TEST_PORT ?? 18951)
 const origin = `http://127.0.0.1:${port}`
@@ -33,6 +52,16 @@ const model = createServer(async (req, res) => {
   const value = JSON.parse(Buffer.concat(chunks).toString('utf8')); requests.push(value)
   res.writeHead(200, { 'content-type': 'text/event-stream' })
   res.write('data: {"choices":[{"delta":{"role":"assistant","content":null}}]}\n\n')
+  const lastUser = value.messages.findLastIndex(message => message.role === 'user')
+  if (JSON.stringify(value.messages[lastUser]).includes('源码工具验收')) {
+    const toolResults = value.messages.slice(lastUser + 1).filter(message => message.role === 'tool')
+    if (toolResults.length < 2) {
+      const name = toolResults.length ? 'example_read_framework' : 'example_search_framework'
+      const args = toolResults.length ? { path: 'packages/plugin-manager/src/verification.mjs', startLine: 1, lines: 40 } : { query: 'verificationSubjects' }
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `reference_${toolResults.length}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: 'tool_calls' }] })}\n\n`)
+      res.end('data: [DONE]\n\n'); return
+    }
+  }
   const count = value.messages.filter(m => m.role === 'user').length
   for (const text of ['先理解问题。', '再组织回答。']) {
     if (res.destroyed) return
@@ -114,6 +143,7 @@ try {
   run('plugin', '--profile', 'web', 'add', `file:${archive('example')}`)
   await start('standalone')
   const shared = await chat('独立模式问题')
+  recordStage(['example'], 'example-standalone')
   await stop()
   run('plugin', '--profile', 'web', 'add', `file:${archive('auth')}`)
   await start('authenticated')
@@ -134,10 +164,15 @@ try {
   assert.deepEqual(await list(alice), [])
   assert.equal((await request('/example/history?id=' + shared, undefined, alice)).status, 404)
   const personal = await chat('个人模式问题', alice)
+  const toolRequestStart = requests.length
+  await chat('源码工具验收：检索并读取验证模块', alice, personal)
+  const toolMessages = requests.slice(toolRequestStart).flatMap(request => request.messages).filter(message => message.role === 'tool')
+  assert.ok(toolMessages.some(message => JSON.stringify(message).includes('packages/plugin-manager/src/verification.mjs')), 'real Agent must receive source search results')
+  assert.ok(toolMessages.some(message => JSON.stringify(message).includes('verificationSubjects')), 'real Agent must receive source content')
   assert.deepEqual(await list(bob), [])
   assert.equal((await request('/example/history?id=' + personal, undefined, bob)).status, 404)
   const catalog = await (await request('/auth/api/plugins', undefined, alice)).json()
-  assert.equal(catalog.plugins.find(p => p.id === 'example').tools.length, 0)
+  assert.deepEqual(catalog.plugins.find(p => p.id === 'example').tools.map(tool => tool.name).sort(), ['example_read_framework', 'example_search_framework'])
   const live = await request('/example/chat', { message: '退出时停止', conversationId: personal }, alice)
   let signalDelta
   const firstDelta = new Promise(resolve => { signalDelta = resolve })
@@ -177,9 +212,10 @@ try {
   for (const text of ['你是 DSH Plugin Manager 开发者接入助手', '第二个应用到底少写什么', 'compose-release', '可复制的开发提示词']) {
     assert.ok(modelInput.includes(text), `Real DSH model request must contain shipped knowledge: ${text}`)
   }
-  const result = { officialHost: process.env.DSH_HOST_SOURCE_SHA ?? null, hostVersion: run('--version'), realTgz: true, realAuth: true,
+  recordStage(['example', 'auth'], 'example-authenticated')
+  const result = { host: verificationIdentity({ command: process.execPath, prefix: [cli], cwd: operation }, { home }).host, hostVersion: run('--version'), realTgz: true, realAuth: true,
     stream: true, standaloneWithoutAuth: true, modeSwitch: 'off-on-off-on', crossUserDenied: true,
-    logoutStopsStream: true, interruptedHistory: true, persistentResume: true, knowledgeInModelRequest: true, model: 'local HTTP fixture; no paid API call' }
+    logoutStopsStream: true, interruptedHistory: true, persistentResume: true, knowledgeInModelRequest: true, sourceToolsExecuted: true, model: 'local HTTP fixture; no paid API call' }
   writeFileSync(join(operation, 'result.json'), JSON.stringify(result, null, 2) + '\n')
   console.log(JSON.stringify({ ...result, operation }))
   if (process.argv.includes('--serve')) {
@@ -191,6 +227,9 @@ try {
     process.once('SIGINT', () => { stopping = true }); process.once('SIGTERM', () => { stopping = true })
     while (!stopping && !existsSync(join(operation, 'stop'))) await delay(100)
   }
-} finally {
-  await stop(); model.closeAllConnections(); await new Promise(resolve => model.close(resolve))
+} catch (error) { suiteFailure = error } finally {
+  try { await stop() } catch (error) { suiteFailure ??= error }
+  try { model.closeAllConnections(); await new Promise(resolve => model.close(resolve)) } catch (error) { suiteFailure ??= error }
 }
+if (reportPath) writeVerificationReport(resolve(reportPath), stages.map(stage => ({ ...stage, finishedAt: new Date().toISOString(), outcome: suiteFailure ? 'failed' : 'passed' })))
+if (suiteFailure) throw suiteFailure

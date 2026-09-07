@@ -15,16 +15,16 @@
 
 ### 1. 取得并安装工具
 
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。从 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases) 下载 manager 0.3.2 tgz；需要统一身份时再下载 kit 0.1.1 tgz，按随版本提供的 SHA-256 核对文件。以下命令安装本地归档。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者交付的 manager 0.3.3 tgz；需要统一身份时再取得 kit 0.1.1 tgz，按交付 SHA-256 核对文件。已公开归档见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)，目标版本没有附件时按下方源码步骤构建，不假定 npm 已发布。以下命令安装本地归档。
 
 在工具目录执行，把占位路径替换成实际文件的绝对路径：
 
 ```sh
-pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.3.2.tgz"
+pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.3.3.tgz"
 pnpm exec dsh-plugin-manager --version
 ```
 
-**预期**：输出 manager 0.3.2。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
+**预期**：输出 manager 0.3.3。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
 
 ### 2. 选择示例，建立自己的仓库
 
@@ -107,20 +107,20 @@ pnpm list:plugins
 
 ## 复制完整问答应用到独立仓库
 
-复制 `plugins/dsh-example` 中的源码、web、knowledge、examples、Bundle、README/LICENSE、package.json、tsconfig 与 tsdown 配置；不复制 node_modules、dist、数据库和 .local。选择一个未加入原框架 workspace 的新包根。
+复制 `plugins/dsh-example` 中的源码、scripts、web、knowledge、examples、Bundle、README/LICENSE、package.json、tsconfig 与 tsdown 配置；不复制 node_modules、dist、数据库和 .local。选择一个未加入原框架 workspace 的新包根。
 
 1. 在作者 package.json 删除 `@dsh-plugin-manager/plugin-kit` 的 `workspace:*` 开发依赖，再在作者根执行 `pnpm add --ignore-workspace --save-dev <kit-tgz绝对路径>`。保留 tsdown 内嵌 kit，宿主依赖保持 peer。
 2. 删除 scripts.clean 的原仓库相对入口，或换成只清理本包构建目录的实现。不要把数据目录加入清理命令。
 3. `tests/config-examples.test.mjs` 含框架管理器集成检查，`tests/host-smoke.mjs` 使用框架相对宿主和归档路径；这两份留在框架，不复制到独立应用测试。其余 chat/history/knowledge 测试和 fixture 可作为应用自己的回归基础。
 4. 修改包名、ID、Bundle、页面/探针、权限、配置 entryId、会话前缀/正则、提示词段名、知识、页面文案和测试；仅验证原 example 独立构建时可先保留名称，但不能与原包在同一候选中重复安装。
-5. 知识输入只读取包内 knowledge，不依赖原框架目录；改成其他业务应替换 src/knowledge.ts 中开发者职责及两份知识。部署的 config.systemPrompt 仅为补充。
+5. FAQ 读取包内 knowledge；源码问答索引在构建时生成。保留框架答疑用途时，把 build 中 `scripts/build-reference.mjs --root ../..` 的 root 改为明确的公共框架源码根路径；只在作者构建机需要该源码。部署时索引随 tgz 携带，不依赖作者目录。改成其他业务应替换 src/knowledge.ts 中职责、两份知识及源码检索能力，不能只改 config.systemPrompt；它仅为补充。
 6. 在作者根执行 `pnpm build`、`pnpm check` 和 `pnpm test`，保存 pnpm-lock.yaml。在工具目录执行 `pnpm exec dsh-plugin-manager pack --root <作者包根> --package . --output <新发布目录>`。只交付无需事先重复 build/check。
 
 部署者只取得整个发布目录及说明。确认 tgz 包含知识、页面、配置模板和入口；作者源码目录不参与 release。kit 更新需每个消费应用更新内嵌版本后重新交付，不能只升级管理器。
 
 ## 交付内容
 
-作者随归档提供公开配置模板、包内 README、已验证宿主版本、就绪地址和一次业务验证方法。不要在归档中加入真实凭据或客户数据。
+作者随归档提供公开配置模板、包内 README、已验证宿主版本、就绪地址和一次业务验证方法。manager 0.3.3 可通过 `compose-release --verification-report` 将最终归档的测试记录附入新发布清单，详细字段与命令见[发布物验证记录](../packages/plugin-manager/VERIFICATION.md)。pack 的构建检查不等于宿主或模型测试。不要在归档中加入真实凭据或客户数据。
 
 使用说明应提供就绪地址、普通账号操作步骤和所需授权。销售接口、数据范围、Agent 工具和图表属于应用代码，kit 的可信身份不能替代业务数据授权。
 

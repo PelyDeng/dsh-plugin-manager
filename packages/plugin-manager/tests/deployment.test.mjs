@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { resolveDeployment, parseArguments, loadRelease, runtimeEnvironment, computeChanges, synchronize, atomicJSON, finalize, acquireLock, renderCompose, checkDataSelection, verifyReady, adoptLegacy, tarCommand, supervise, prepareOfflineDependencies } from '../src/deployment.mjs';
 import { installedMatches, readState } from '../src/installation.mjs';
+import { verificationSubjects } from '../src/verification.mjs';
 
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
 
@@ -77,6 +78,33 @@ function fixture(t) {
   };
   return { root, deployment, release, execute, calls, cli: { command: 'fixture' } };
 }
+
+test('adding publisher evidence preserves pending resume and unchanged installs without reinstallation', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  const pendingPath = join(f.deployment.profileRoot, '.deepseek-plugin-pending.json');
+  const before = read(pendingPath).desiredHash;
+  const plugin = f.release.plugins[0];
+  const annotated = { ...f.release, verification: { schemaVersion: 1, builds: [], runs: [{
+    pluginId: plugin.id, archiveSha256: plugin.sha256, subjects: verificationSubjects(f.release.plugins),
+    scenarioId: 'fixture-profile', suiteId: 'fixture', suiteRevision: 'a'.repeat(64), finishedAt: '2026-09-07T00:00:00Z',
+    outcome: 'passed', scope: 'real-host', source: 'runner', host: { kind: 'unknown' },
+    platform: { os: process.platform, architecture: process.arch, nodeVersion: process.versions.node }, reportSha256: 'b'.repeat(64),
+  }] } };
+  f.deployment.options.resume = true;
+  const calls = f.calls.length;
+  const resumed = await synchronize(f.deployment, annotated, { execute: f.execute, cli: f.cli });
+  assert.equal(read(pendingPath).desiredHash, before);
+  assert.equal(resumed.verification[0].records[0].status, 'partial-match');
+  assert.equal(f.calls.length, calls);
+  await finalize(f.deployment, annotated, { running: true });
+  delete f.deployment.options.resume;
+  const unchanged = await synchronize(f.deployment, annotated, { execute: f.execute, cli: f.cli });
+  assert.equal(unchanged.changed, false);
+  assert.equal(unchanged.verification[0].records[0].scope, 'real-host');
+  assert.equal(f.calls.length, calls);
+  assert.equal(Object.hasOwn(readState(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')), 'verification'), false);
+});
 
 test('an unchanged package is re-added when its archive reference changes', t => {
   const f = fixture(t);

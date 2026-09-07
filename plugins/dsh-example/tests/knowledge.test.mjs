@@ -23,7 +23,7 @@ test('setup FAQ remains readable with application authorization when the model i
   } finally { await f.close() }
 })
 
-test('package knowledge and supplemental instructions reach new and resumed Agents without tools', async () => {
+test('package knowledge and source instructions reach new and resumed Agents with only bounded readers', async () => {
   const pages = ['guide.md', 'prompts.md'].map(file => readFileSync(new URL('../knowledge/' + file, import.meta.url), 'utf8'))
   const text = pages.join('\n\n')
   expect(Buffer.byteLength(text)).toBeLessThanOrEqual(32 * 1024)
@@ -41,7 +41,8 @@ test('package knowledge and supplemental instructions reach new and resumed Agen
       expect(handle.sections.find(s => s.name === 'example:knowledge').text).toBe(`知识摘要 ${revision}\n\n${text}`)
       expect(handle.sections.find(s => s.name === 'example:developer').text).toContain('不能编造命令')
       expect(handle.sections.find(s => s.name === 'example:persona').text).toBe('请优先给出 PowerShell 示例。')
-      expect(handle.allowed).toEqual([])
+      expect(handle.allowed).toEqual(['example_search_framework', 'example_read_framework'])
+      expect(handle.sections.find(s => s.name === 'example:framework').text).toContain('example_search_framework')
     }
     expect(f.handles).toHaveLength(2)
     await resumed.body.cancel()
