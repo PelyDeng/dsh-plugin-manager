@@ -1,4 +1,4 @@
-/* Blog layout using the generic dsh-example chat primitives; editor controls keep their existing layout. */
+/* Blog chat layout using the generic dsh-example chat primitives. */
 body[data-view=writing] #workspace-menu,body[data-view=writing] #quick-new>span:not(.icon){display:none}
 body[data-view=chat]{font-family:var(--qa-font);color:var(--qa-text);background:var(--qa-bg);--header:64px;--line:var(--qa-line);--muted:var(--qa-muted);--accent:var(--qa-accent)}
 body[data-view=chat] .topbar{padding:0 20px;gap:14px}.topbar .brand-mark{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#2457d6,#2f6fe4);color:#fff;align-items:center;justify-content:center}.topbar .brand-mark .icon{width:19px;height:19px}

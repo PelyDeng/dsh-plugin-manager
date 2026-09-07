@@ -1,5 +1,5 @@
 import {icon} from './icons.js'
-import {glyph,stat,compactTokens} from './chat-ui.js'
+import {glyph,stat,compactTokens,thinking,updateThinking} from './chat-ui.js'
 
 export function shouldSendChatEnter(event,{touch=false,composing=false}={}){
   return event.key==='Enter'&&!touch&&!event.shiftKey&&!event.isComposing&&!composing&&event.keyCode!==229
@@ -72,7 +72,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     if(wasBusy&&!data.busy)void conversations().catch(error)
   }
   function prose(text){const el=element('div',undefined,'prose qa-prose');el.innerHTML=renderMarkdown(text??'');return el}
-  function reasoning(text,id){const d=element('details',undefined,'chat-reasoning qa-thinking');d.dataset.detail=id;const summary=element('summary');summary.append(glyph('think'),document.createTextNode('思考'));d.append(summary,element('pre',text,'qa-thinking-body'));return d}
+  function reasoning(text,id){const d=thinking(text,{className:'chat-reasoning'});d.dataset.detail=id;return d}
   function bubble(node,user=false){node.classList.add('qa-message');if(user)node.classList.add('qa-user');const avatar=element('span',undefined,'qa-avatar');avatar.setAttribute('aria-hidden','true');avatar.append(glyph(user?'user':'chat'));const content=element('div',undefined,'qa-bubble');node.append(avatar,content);return content}
   function renderLive(live=state.history?.live,{follow=nearBottom(),scrollTop=$('chat-scroll').scrollTop}={}){
     const box=$('chat-live');box.hidden=!live
@@ -80,7 +80,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
       box.className='chat-message assistant-message qa-message qa-streaming';const content=box.querySelector('.qa-bubble')??bubble(box)
       let thought=box.querySelector('.chat-reasoning'),text=box.querySelector('.chat-live-text'),status=box.querySelector('.chat-stream-status')
       if(!thought){thought=reasoning('','live');content.append(thought)}
-      thought.classList.toggle('running',!live.text);thought.hidden=!live.reasoning;thought.querySelector('pre').textContent=live.reasoning??''
+      updateThinking(thought,live.reasoning??'',!!live.text)
       if(!text){text=prose('');text.classList.add('chat-live-text');content.append(text)}
       text.innerHTML=renderMarkdown(live.text??'')
       if(!status){status=element('small',undefined,'chat-stream-status');status.setAttribute('role','status');content.append(status)}
