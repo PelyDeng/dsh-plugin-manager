@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { assessVerification, mergeVerification, printVerification, selectVerification, validateVerification, verificationSubjects, writeVerificationReport } from '../src/verification.mjs';
 import { verificationIdentity } from '../src/process.mjs';
 import { hash } from '../src/state.mjs';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 
 const a = { id: 'example', sha256: 'a'.repeat(64) }, b = { id: 'auth', sha256: 'b'.repeat(64) };
 const target = { host: { kind: 'source', version: '0.1.3-alpha.1', commit: 'c'.repeat(40), dirty: false, identitySource: 'detected' },
@@ -108,4 +110,15 @@ test('identity probe cannot turn an injected source SHA into an observed host', 
   assert.deepEqual(identity.host, { kind: 'unknown', version: '0.1.3-alpha.1' });
   const unavailable = verificationIdentity({ command: join(root, 'absent'), prefix: [], cwd: root }, { home: root });
   assert.equal(unavailable.host.kind, 'unknown'); assert.equal(unavailable.host.commit, undefined);
+});
+
+test('temporary housekeeping cannot report failure after a report has been published', t => {
+  const root = directory(t), path = join(root, 'published.json');
+  const { reportSha256, ...input } = run();
+  const original = fs.rmSync;
+  fs.rmSync = () => { throw new Error('Temporary unlink unavailable'); };
+  syncBuiltinESMExports();
+  try { assert.doesNotThrow(() => writeVerificationReport(path, [input])); }
+  finally { fs.rmSync = original; syncBuiltinESMExports(); }
+  assert.deepEqual(JSON.parse(readFileSync(path)), { schemaVersion: 1, runs: [input] });
 });
