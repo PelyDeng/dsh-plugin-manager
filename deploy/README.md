@@ -68,7 +68,7 @@ node deploy/scripts/deployment.mjs start --plugins "auth,example" --manifest .lo
 
 插件如声明 `runtimeConfig`，其配置默认从 `home/plugins/<id>/env.conf` 读取，可由 `instances.<id>.runtimeConfig` 覆盖。配置内容不进入发布包；`configRevision` 由维护者递增以声明需要重新应用的配置。
 
-模型密钥通过 `bash deploy/scripts/set-api-key.sh --config .local/deployment.json` 在提示后隐藏输入，写入选定 home 的 `.env`，不放在 argv。Windows 可使用 `node deploy/scripts/set-api-key.mjs --config .local/deployment.json`。脚本不自动重启或选择模型；首次文件属主、Docker 受控重启及问答验证见[首次登录与模型密钥](../doc/first-deployment.md#首次登录与模型密钥)。官方认证地址写入私有 `authUrlFile`，不输出令牌；插件 Auth 登录不会自动完成官方控制台认证，常见提示见 [FAQ](../doc/FAQ.md)。
+默认 DeepSeek 密钥由管理员在 `/auth` →“模型设置”填写或更换，也可执行 `bash deploy/scripts/set-api-key.sh --config .local/deployment.json` 隐藏输入。Windows 入口为 `node deploy/scripts/set-api-key.mjs --config .local/deployment.json`。两个入口共用官方凭据服务，写入选定 home 的 `.credentials.yaml`，无需重启；页面只显示状态与不可逆指纹。脚本不选择模型，不把密钥放入 argv。运行条件、环境只读与问答验证见[首次登录与模型密钥](../doc/first-deployment.md#首次登录与模型密钥)。官方认证地址写入私有 `authUrlFile`，不输出令牌；插件 Auth 登录不会自动完成官方控制台认证，常见提示见 [FAQ](../doc/FAQ.md)。
 
 ## 安装与恢复
 

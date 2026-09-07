@@ -1,13 +1,13 @@
 # 独立发布物交付
 
-适用于 manager 0.3.1。部署者只需管理工具、匹配的官方 DSH、应用与认证插件各自的发布目录，以及作者提供的配置模板；无需作者源码。以下 `dsh-plugin-manager` 指已安装 CLI，本地工具目录安装时用 `pnpm exec dsh-plugin-manager`。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。
+适用于 manager 0.3.2。部署者只需管理工具、匹配的官方 DSH、应用与认证插件各自的发布目录，以及作者提供的配置模板；无需作者源码。以下 `dsh-plugin-manager` 指已安装 CLI，本地工具目录安装时用 `pnpm exec dsh-plugin-manager`。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。
 
 ## 1. 准备与组合
 
 核对提供方记录的工具、宿主版本及归档 SHA-256；包名不表示已发布到公共 registry。首次安装管理工具：
 
 ```sh
-pnpm add --ignore-workspace /path/to/plugin-manager-0.3.1.tgz
+pnpm add --ignore-workspace /path/to/plugin-manager-0.3.2.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
@@ -84,11 +84,13 @@ dsh-plugin-manager health --root /path/to/site --config .local/deployment.json
 auth 登录和模型凭据是两件事。example 在新建会话时读取同一宿主的 agentDefaultModel；不要把模型密钥放进插件 config。
 
 1. 管理器 start 打印“DSH 认证地址已保存至 …”。在本机编辑器打开该私有文件（默认 `<交付根>/.local/data/dsh-web-auth-url.txt`），仅在自己的浏览器访问其中地址；这是官方控制台入口，不能公开粘贴或截图 token。它对应本次启动的 home/profile。
-2. 打开官方控制台左下角“设置”→“模型”，配置或编辑提供方凭据；由启动环境提供的密钥会显示只读。采用官方 DeepSeek 提供方时，也可在工具目录通过下列命令隐藏输入 `DEEPSEEK_API_KEY`；命令只保存到本次 home/.env，不选择模型，也不自动重启。
+2. 默认官方 DeepSeek 密钥可由管理员在 `/auth` →“模型设置”填写或更换；页面仅展示状态与 SHA-256 指纹。其他提供方使用官方控制台左下角“设置”→“模型”。也可在工具目录通过下列命令隐藏输入 `DEEPSEEK_API_KEY`，与网页共用官方凭据写入逻辑；命令不选择模型。
 
 ```sh
 pnpm exec dsh-plugin-manager set-api-key --root /path/to/site --config .local/deployment.json
 ```
+
+网页直接更新运行中的官方凭据服务；脚本使用已安装宿主的 `credentials-local`，保存到本次 home/.credentials.yaml，默认文件监听会自动热加载，无需重启。保留其他凭据及旧 .env。独立进程部署要求配置 `dshCliJs`（或传 `--dsh-cli-js`）并以 home/凭据文件所有者运行；脚本不会下载宿主。Compose 部署自动核验当前容器与 home 并以容器配置用户执行。脚本仅适用于默认凭据路径与开启监听的宿主，自定义服务请使用网页入口。外部进程环境密钥为只读，两入口都拒绝覆盖；调整外部环境需由原服务管理者处理。
 
 3. 新实例默认沿用宿主组合中的模型。需要切换时，可在官方会话输入框的模型选择器选择模型，保存为后续 Agent 的默认选择；该输入框要求先选择工作区。也可在停止服务后，向同一 `<home>/settings.yaml` 合并以下设置分节，保留文件其他设置；替换为实际提供方 ID 和它支持的模型 ID，不是显示名称。
 
@@ -98,7 +100,7 @@ agent-default-model:
   model: <该提供方支持的模型ID>
 ```
 
-4. 由原管理器 stop/start，让环境配置生效；在 `/example` 新建对话并提问。其他提供方的凭据按该宿主版本的模型设置填写，不能套用只写 DeepSeek 密钥的命令。
+4. 更换密钥后无需 stop/start，在 `/auth` 刷新指纹并在 `/example` 新建对话提问。只有停服手工修改 settings.yaml 等启动配置时，才由原管理器重新启动。其他提供方的凭据按该宿主版本的模型设置填写，不能套用默认 DeepSeek 密钥命令。
 
 模型选择以实际控制台为准，不根据文档中的模型名猜可用性；旧会话保留已创建 Agent 的选择，改变默认值后用新会话核实。健康探针不调用模型；真实问答失败时检查提供方、凭据、网络及具体模型是否可用。
 

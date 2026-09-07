@@ -1,6 +1,6 @@
 # 开发者接入 FAQ
 
-适用：plugin-manager 0.3.1、plugin-kit 0.1.0，示例宿主接口以仓库锁定源码为基线；宿主版本号相同也可能存在源码与发布类型差异。这是随 dsh-example 发布的知识快照，不是对远程仓库的实时查询。框架维护者在接口、命令或支持范围变化时更新本页及提示词，发布前复核代码与示例；页面摘要只标识知识内容，不证明所有代码自动同步。
+适用：plugin-manager 0.3.2、plugin-kit 0.1.1，示例宿主接口以仓库锁定源码为基线；宿主版本号相同也可能存在源码与发布类型差异。这是随 dsh-example 发布的知识快照，不是对远程仓库的实时查询。框架维护者在接口、命令或支持范围变化时更新本页及提示词，发布前复核代码与示例；页面摘要只标识知识内容，不证明所有代码自动同步。
 
 ## Auth 登录后，根路径为什么仍提示认证？
 
@@ -10,32 +10,31 @@
 
 重启后启动令牌会重新生成；旧书签、新浏览器或 Cookie 清理后无法进入时，重新读取当前文件。地址不正确时核对站点 `publicUrl`/`publicOrigin`；完整新地址仍被拒绝时检查代理的查询参数、Host 和 Cookie 转发。不要关闭认证，也不要公开 token 或用它替代普通用户的应用授权。
 
-## 第一次如何在服务器录入 API 密钥？
+## 第一次如何配置或更换 API 密钥？
 
-源码部署完成后，在服务器仓库根执行以下脚本，再在提示后输入官方 DeepSeek API 密钥并按 Enter。输入不回显，可 Ctrl+C 取消，不要将密钥贴进聊天或命令参数。
+管理员完成初始密码修改后，在 `/auth` 左侧打开“模型设置”，输入默认官方 DeepSeek API 密钥并保存。页面展示配置状态与 SHA-256 指纹，不返回原密钥；指纹不可逆，不能拿它调用模型。“已配置”不代表密钥有效、余额充足或模型服务可用。
+
+也可在服务器仓库根执行脚本，提示后输入密钥并按 Enter。输入不回显，可 Ctrl+C 取消，不要将密钥贴进聊天或命令参数：
 
 ```sh
 bash deploy/scripts/set-api-key.sh --config .local/deployment.json
 ```
 
-脚本只更新选定 home 的 `.env` 中 `DEEPSEEK_API_KEY`，保留其他设置。manager 0.3.1 起，新文件沿用 home 的 UID/GID；已有文件保持属主，Linux 权限为 `0600`。home 本身须归运行用户所有，旧文件若已有错误属主须按实际运行用户单独修正，不能递归改整个数据目录权限。
+网页与脚本共用 kit 的校验和指纹逻辑，调用官方凭据服务，更新选定 home 的 `.credentials.yaml` 中 `DEEPSEEK_API_KEY`，复用官方文件锁与原子写入，保留其他凭据和旧 `.env`。Linux 文件权限为 `0600`。Compose 脚本核对活动容器及 home 挂载后，以容器配置用户执行，不会以服务器 root 创建凭据文件。
 
-脚本只检查格式，不验证模型服务，不选模型，也不自动重启。管理员确认可以中断进行中的问答后，使用当前活动 Compose 配置重启，让宿主读取密钥：
+保存无需重启：网页更新当前运行服务；默认宿主监听脚本写入，有短暂监听延迟，之后的新请求使用新密钥，已开始的回答不受影响。脚本适用于默认 `credentials-local` 文件路径及开启监听的官方宿主；自定义存储路径或关闭监听时，使用网页更新实际运行服务。
 
-```sh
-compose_file=$(node -p "JSON.parse(require('node:fs').readFileSync('.local/artifacts/active-compose.json', 'utf8')).path")
-compose_project=$(node -p "JSON.parse(require('node:fs').readFileSync('.local/deployment.json', 'utf8')).composeProject")
-docker compose -p "$compose_project" -f "$compose_file" restart dsh
-docker compose -p "$compose_project" -f "$compose_file" ps
-```
+独立 CLI 交付环境使用 `pnpm exec dsh-plugin-manager set-api-key --root <交付根> --config .local/deployment.json`；须指定已安装宿主的 `dshCliJs` 或 `--dsh-cli-js`，并以 home 与凭据文件所有者运行。脚本不会安装宿主、重启服务或选择模型。随后刷新模型设置的指纹，在 `/example` 新建对话验证。其他提供方或自定义凭据引用需使用官方模型设置。
 
-等待 healthy，在官方控制台核对提供方和默认模型，然后在 `/example` 新建对话验证。独立 CLI 交付环境使用 `pnpm exec dsh-plugin-manager set-api-key --root <交付根> --config .local/deployment.json`，随后由原管理器 stop/start，不套用 Docker 命令。其他提供方按官方模型设置配置，不能套用只写 DeepSeek 密钥的脚本。
+## 为什么密钥显示外部环境只读？
+
+官方优先级为继承的进程环境 > `.credentials.yaml` > 工作目录 `.env` > home `.env`。环境注入为只读，页面与脚本均拒绝覆盖；服务管理者先移除外部环境覆盖并调整启动配置后，才能由页面或脚本接管。旧 `.env` 可保留，官方凭据存储优先于它。原密钥必须保留在服务器供模型调用，前端只接收不可逆指纹，并非服务器只保存摘要。
 
 ## 密钥已填、探针 200，为什么仍不能回答？
 
-依次核对：是否重启加载密钥；脚本输出的 home 是否属于当前容器；遗留 `DSH_HOME`/`DSH_DATA_DIR` 是否覆盖实例路径；启动环境、官方凭据设置或工作目录 `.env` 是否覆盖密钥；默认模型是否属于已配置且可用的提供方。改变默认模型后新建对话，旧会话保留创建时的模型选择。再根据具体错误检查密钥有效性、余额/配额、限流和服务器网络。健康探针不调用模型，不能证明真实问答成功。
+在“模型设置”刷新状态和指纹，核对当前实例的 home、`.local/deployment.json` 及是否有遗留 `DSH_HOME`/`DSH_DATA_DIR` 路径覆盖；检查是否显示外部环境只读。然后核对默认模型是否使用已配置且可用的提供方，以及是否仍使用默认 `DEEPSEEK_API_KEY` 引用。更换密钥不需要重启；改变默认模型后新建对话，旧会话保留创建时的模型选择。根据具体错误检查密钥有效性、余额/配额、限流和服务器网络。健康探针不调用模型，不能证明真实问答成功。
 
-密钥是站点维护者配置的宿主凭据，不是每个 Auth 用户单独提供。正常更新与密钥脚本不会清空账号或历史，重启会中断进行中的问答；保留 `.local/data`、`.local/artifacts` 和备份，不用删除 `.local` 或空数据初始化排错。模型尚未可用时，首页“阅读 FAQ（无需模型）”仍可直接阅读本页；快捷提问生成回答需要模型。
+密钥是站点维护者配置的宿主凭据，不是每个 Auth 用户单独提供。更换密钥不清空账号或历史，不中断已开始的回答。保留 `.local/data`、`.local/artifacts` 和备份，不用删除 `.local` 或空数据初始化排错。模型尚未可用时，首页“阅读 FAQ（无需模型）”仍可直接阅读本页；快捷提问生成回答需要模型。
 
 ## 这个仓库是什么？
 
@@ -167,7 +166,7 @@ start 前台运行，保留终端；另开工具目录终端执行 health（同 
 
 安装成功、宿主监听、应用探针 200、真实问答完成是四个不同结果。example 问答还需在同一 DSH_HOME 配置官方默认模型与密钥；插件不保存模型密钥，模型失败先查宿主设置。
 
-管理器启动打印认证地址文件位置，默认 `<交付根>/.local/data/dsh-web-auth-url.txt`；仅在本机编辑器读取并访问其中官方控制台地址，不公开 token。“设置”→“模型”管理提供方凭据；默认模型由官方会话输入框的模型选择器保存（先选择工作区），或停服后在同 home/settings.yaml 合并 agent-default-model 分节的 provider/model。两者必须是实际已注册提供方 ID 及其支持的模型 ID，保留其他设置。使用官方 DeepSeek 时，在工具目录运行 `pnpm exec dsh-plugin-manager set-api-key --root <交付根> --config .local/deployment.json` 隐藏输入密钥，保存到该 home/.env 后 stop/start，新建对话核实。该命令不切换模型；其他提供方按宿主模型设置配置。
+管理器启动打印认证地址文件位置，默认 `<交付根>/.local/data/dsh-web-auth-url.txt`；仅在本机编辑器读取并访问其中官方控制台地址，不公开 token。“设置”→“模型”管理提供方凭据；默认模型由官方会话输入框的模型选择器保存（先选择工作区），或停服后在同 home/settings.yaml 合并 agent-default-model 分节的 provider/model。两者必须是实际已注册提供方 ID 及其支持的模型 ID，保留其他设置。使用官方 DeepSeek 时，在工具目录运行 `pnpm exec dsh-plugin-manager set-api-key --root <交付根> --config .local/deployment.json` 隐藏输入密钥，写入该 home/.credentials.yaml，默认宿主热加载，无需重启；也可由管理员在 /auth 的模型设置中更换。新建对话核实。该命令不切换模型；其他提供方按宿主模型设置配置。
 
 ## 配置在哪里？为什么装了 auth 还提示缺 provider？
 
