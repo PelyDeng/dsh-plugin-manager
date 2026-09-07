@@ -1,52 +1,19 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <title>拾问 · 开发者接入助手</title>
-  <link rel="stylesheet" href="__BASE__/style.css">
-  <script type="module" src="__BASE__/app.js"></script>
-</head>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light"><title>拾问 · 开发者接入助手</title><link rel="stylesheet" href="__BASE__/chat-base.css"><link rel="stylesheet" href="__BASE__/style.css"><script type="module" src="__BASE__/app.js"></script></head>
 <body data-base="__BASE__">
-  <aside class="sidebar">
-    <a class="brand" href="__BASE__"><span class="brand-mark">拾</span><span>拾问 <small>开发者接入助手</small></span></a>
-    <button class="new-chat" id="new-chat"><span aria-hidden="true">＋</span> 新建对话 <kbd>NEW</kbd></button>
-    <details class="history-panel" open><summary id="history-label">历史对话</summary><div id="history-list"></div><button id="more-history" hidden>加载更多</button></details>
-    <div class="sidebar-bottom"><span class="status-dot"></span><span id="access-mode">正在连接…</span><a id="auth-link" href="/auth" hidden>账号</a></div>
-  </aside>
-  <main>
-    <header class="topbar"><span>从插件开发，到应用交付</span><span class="badge" id="knowledge-version">DSH · EXAMPLE</span></header>
-    <div class="scroll-area" id="scroll-area">
-      <section class="welcome" id="welcome">
-        <span class="welcome-icon" aria-hidden="true">✳</span>
-        <p class="eyebrow">DSH PLUGIN · 开发与交付</p>
-        <h1>你的应用，下一步怎么接入？</h1>
-        <p class="intro">了解框架、选择接入方式、准备交付。依据随包公开知识答疑。</p>
-        <div class="suggestions" aria-label="快捷提问">
-          <button data-question="Auth 已登录，根路径仍提示 dsh web authentication required，是缺 API 密钥吗？如何取得官方控制台认证地址？"><span class="card-icon">↗</span><strong>登录后仍提示认证</strong><span>区分应用登录与官方控制台</span><i aria-hidden="true">↗</i></button>
-          <button data-question="如何在 Auth 的模型设置或服务器脚本中配置、更换默认 DeepSeek API 密钥并无需重启生效？请说明共享存储、指纹和外部环境只读，不要索取我的密钥。"><span class="card-icon">⌘</span><strong>配置或更换 API 密钥</strong><span>模型设置与脚本 · 无需重启</span><i aria-hidden="true">↗</i></button>
-          <button data-question="API 密钥已保存，健康接口也是 200，为什么仍不能回答？请核对状态与指纹、实例路径、环境只读、默认模型和旧会话，解释已配置不等于模型可用。"><span class="card-icon">◈</span><strong>密钥已填仍无法回答</strong><span>指纹、配置与模型可用性的区别</span><i aria-hidden="true">↗</i></button>
-          <button data-question="这个框架和官方 DSH 分别做什么？用知识库助手和销售报表助手举例说明。"><span class="card-icon">◈</span><strong>先了解框架</strong><span>定位、优势与业务职责</span><i aria-hidden="true">↗</i></button>
-          <button data-question="我是独立开发者，如何在自己的仓库接入？给出工具获取、执行目录和最短命令。"><span class="card-icon">⌘</span><strong>独立仓库接入</strong><span>从工具准备到发布包</span><i aria-hidden="true">↗</i></button>
-          <button data-question="如何在内部 plugins 目录复制 dsh-example？哪些名称和代码必须修改？"><span class="card-icon">▦</span><strong>内部开发</strong><span>复制示例，保留批量扫描</span><i aria-hidden="true">↗</i></button>
-          <button data-question="已有 auth 和 example，如何加入第二个独立应用，保留账号、授权和配置？"><span class="card-icon">＋</span><strong>交付第二个应用</strong><span>组合清单、配置与升级</span><i aria-hidden="true">↗</i></button>
-          <button data-question="生成一份可交给其他 AI 的提示词：开发带登录和个人历史的问答应用。缺少信息用占位符。"><span class="card-icon">✎</span><strong>生成开发提示词</strong><span>带约束、步骤与验收要求</span><i aria-hidden="true">↗</i></button>
-          <button data-question="插件安装成功却无法访问，应按什么顺序排查？区分登录、授权、探针和模型失败。"><span class="card-icon">↗</span><strong>遇到问题</strong><span>找到失败步骤与核实方法</span><i aria-hidden="true">↗</i></button>
-        </div>
-        <nav class="resources" aria-label="随包资料"><a href="__BASE__/guide.md" target="_blank" rel="noopener">阅读 FAQ（无需模型）↗</a><a href="__BASE__/prompts.md" target="_blank" rel="noopener">复制 AI 任务模板 ↗</a></nav>
-      </section>
-      <section id="messages" class="messages" role="log" aria-label="对话记录" aria-live="off"></section>
-    </div>
-    <div class="composer-wrap">
-      <div class="notice" id="notice" role="alert" hidden></div>
-      <form id="chat-form" class="composer">
-        <label class="sr-only" for="prompt">输入问题</label>
-        <textarea id="prompt" rows="2" maxlength="8000" placeholder="例如：我有一个独立插件，怎么带登录交给客户？" required></textarea>
-        <div class="composer-actions"><span>Enter 发送 <span class="divider">·</span> Shift + Enter 换行</span><button id="stop" type="button" hidden>■ 停止生成</button><button id="send" type="submit" aria-label="发送问题">发送 <span aria-hidden="true">↑</span></button></div>
-      </form>
-      <div class="footer"><span id="status" role="status">对话自动保存，可以从历史继续</span><span>知识随版本发布；命令请对照实际环境核实</span></div>
-    </div>
-  </main>
-</body>
-</html>
+<header class="topbar"><a class="brand" href="__BASE__"><span class="brand-mark" data-glyph="chat"></span><span><strong>拾问 · 开发者接入助手</strong><small>插件开发 · 应用接入 · 交付与运维</small></span></a><div class="topbar-actions"><a id="auth-link" href="/auth" hidden>账号</a><button id="history-open">历史对话</button><span class="status-pill" id="access-mode">正在连接…</span><button id="new-chat">新对话</button></div></header>
+<div class="main"><main class="chat-col"><div class="scroll-area" id="scroll-area"><section class="welcome" id="welcome"><h1>你的应用，下一步怎么接入？</h1><p>了解框架、选择接入方式、准备交付。依据随包公开知识答疑。</p><div class="caps"><button data-question="这个框架和官方 DSH 分别负责什么？">了解框架</button><button data-question="如何从 dsh-example 创建一个新的插件？">接入应用</button><button data-question="应用部署后如何排查无法回答的问题？">排查问题</button></div></section><section id="messages" class="messages" role="log" aria-label="对话记录" aria-live="off"></section></div>
+<div class="composer-wrap"><div class="notice" id="notice" role="alert" hidden></div><form id="chat-form" class="composer"><div class="input-box"><label class="sr-only" for="prompt">输入问题</label><textarea id="prompt" rows="1" maxlength="8000" placeholder="请输入您的问题，例如：如何接入第二个应用？" required></textarea><div class="hint" id="input-hint">Enter 发送 · Shift+Enter 换行</div></div><button id="stop" type="button" aria-label="停止回答" title="停止回答" hidden data-glyph="stop"></button><button id="send" type="submit" aria-label="发送问题" title="发送问题" data-glyph="send"></button></form><div class="footer"><span id="status" role="status">对话自动保存，可以从历史继续</span></div></div></main>
+<aside class="side"><h2>快捷提问 · 开发与交付</h2><div class="suggestions" aria-label="快捷提问">
+          <button data-question="Auth 已登录，根路径仍提示 dsh web authentication required，是缺 API 密钥吗？如何取得官方控制台认证地址？"><strong>登录后仍提示认证</strong><span>区分应用登录与官方控制台</span></button>
+          <button data-question="如何在 Auth 的模型设置或服务器脚本中配置、更换默认 DeepSeek API 密钥并无需重启生效？请说明共享存储、指纹和外部环境只读，不要索取我的密钥。"><strong>配置或更换 API 密钥</strong><span>模型设置与脚本 · 无需重启</span></button>
+          <button data-question="API 密钥已保存，健康接口也是 200，为什么仍不能回答？请核对状态与指纹、实例路径、环境只读、默认模型和旧会话，解释已配置不等于模型可用。"><strong>密钥已填仍无法回答</strong><span>指纹、配置与模型可用性的区别</span></button>
+          <button data-question="这个框架和官方 DSH 分别做什么？用知识库助手和销售报表助手举例说明。"><strong>先了解框架</strong><span>定位、优势与业务职责</span></button>
+          <button data-question="我是独立开发者，如何在自己的仓库接入？给出工具获取、执行目录和最短命令。"><strong>独立仓库接入</strong><span>从工具准备到发布包</span></button>
+          <button data-question="如何在内部 plugins 目录复制 dsh-example？哪些名称和代码必须修改？"><strong>内部开发</strong><span>复制示例，保留批量扫描</span></button>
+          <button data-question="已有 auth 和 example，如何加入第二个独立应用，保留账号、授权和配置？"><strong>交付第二个应用</strong><span>组合清单、配置与升级</span></button>
+          <button data-question="生成一份可交给其他 AI 的提示词：开发带登录和个人历史的问答应用。缺少信息用占位符。"><strong>生成开发提示词</strong><span>带约束、步骤与验收要求</span></button>
+          <button data-question="插件安装成功却无法访问，应按什么顺序排查？区分登录、授权、探针和模型失败。"><strong>遇到问题</strong><span>找到失败步骤与核实方法</span></button>
+        </div><h2>随包资料</h2><nav class="resources"><a href="__BASE__/guide.md" target="_blank" rel="noopener">阅读 FAQ（无需模型）</a><a href="__BASE__/prompts.md" target="_blank" rel="noopener">复制 AI 任务模板</a></nav><p class="side-note">回答依据随包公开知识。命令请对照实际环境核实。</p><small id="knowledge-version">DSH · EXAMPLE</small></aside></div>
+<dialog id="history-dialog" class="history-panel" aria-labelledby="history-label"><div class="dialog-head"><h2 id="history-label">历史对话</h2><button id="history-close">关闭</button></div><div id="history-list"></div><button id="more-history" hidden>加载更多</button></dialog>
+</body></html>

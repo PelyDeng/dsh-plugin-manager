@@ -2,7 +2,7 @@
 import { createServer } from 'node:http'
 import { apply, Config } from '../dist/index.mjs'
 
-export async function fixture({ mode, autoReply = false, persistenceApi = 'handle', logs = new Map(), beforeCreate = async () => {}, beforeDispose = async () => {}, ...overrides } = {}) {
+export async function fixture({ mode, autoReply = false, persistenceApi = 'handle', logs = new Map(), feedbackService, beforeCreate = async () => {}, beforeDispose = async () => {}, ...overrides } = {}) {
   const routes = new Map(), listeners = new Map(), effects = [], handles = [], timers = new Set()
   const tools = new Map()
   const revoked = new Set()
@@ -10,6 +10,7 @@ export async function fixture({ mode, autoReply = false, persistenceApi = 'handl
   const actors = { alice: { namespace: 'user', userId: 'alice', sessionId: 'login-a' },
     other: { namespace: 'user', userId: 'alice', sessionId: 'login-b' }, bob: { namespace: 'user', userId: 'bob', sessionId: 'login-c' } }
   const ctx = {
+    messageFeedback:feedbackService,
     on(name, listener) { const group = listeners.get(name) ?? new Set(); group.add(listener); listeners.set(name, group); return () => group.delete(listener) },
     emit(name, ...args) { for (const f of [...listeners.get(name) ?? []]) f(...args) },
     effect(factory) { const dispose = factory(); effects.push(dispose); return dispose },
@@ -21,7 +22,7 @@ export async function fixture({ mode, autoReply = false, persistenceApi = 'handl
       : { async open(id) { return { async read() { return logs.get(id) ?? [] }, async close() {} } } },
     agents: { async resume(options) { return this.create({ ...options, sessionId: options.resumeSessionId }) }, async create(options) {
       await beforeCreate(options)
-      if (!logs.has(options.sessionId)) logs.set(options.sessionId, [])
+      if (!logs.has(options.sessionId)) logs.set(options.sessionId, [...options.seed??[]])
       const handle = { id: options.sessionId, cancelled: false, disposed: false, messages: [], sections: [], allowed: undefined,
         agent: { session: { snapshotEvents: () => logs.get(handle.id) }, cancel() { handle.cancelled = true }, followup(message) {
           handle.messages.push(message)

@@ -34,7 +34,7 @@ test('standalone works without auth and restricts the Agent to shipped public-so
   f.emit(h, 'turn/end', { reason: { kind: 'completed' } })
   const events = []
   await readEvents(response, event => events.push(event))
-  expect(events.map(e => e.type)).toEqual(['session', 'delta', 'delta', 'answer', 'done'])
+  expect(events.map(e => e.type)).toEqual(['session', 'delta', 'delta', 'answer', 'meta', 'done'])
   expect(events.find(e => e.type === 'answer').text).toBe('你好！')
 })
 
