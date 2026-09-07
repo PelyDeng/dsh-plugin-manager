@@ -1,3 +1,33 @@
+# Reuse the official adapter already provided by dsh-base; reserve a blog route.
+- id: llm-pi-ai
+  config:
+    providers:
+      blog-zhipu:
+        displayName: 博客智谱
+        api: openai-completions
+        baseURL: https://open.bigmodel.cn/api/paas/v4
+        apiKeyEnv: ZHIPU_API_KEY
+        reasoning: high
+        compat:
+          thinkingFormat: zai
+          maxTokensField: max_tokens
+        models:
+          - id: glm-5.3
+            name: GLM-5.3
+            input: [text]
+            contextWindow: 1000000
+            maxTokens: 8192
+            reasoningEfforts: { low: low, high: high, max: max }
+            compat:
+              supportsReasoningEffort: true
+          - id: glm-5v-turbo
+            name: GLM-5V-Turbo
+            input: [text, image]
+            contextWindow: 200000
+            maxTokens: 8192
+            reasoningEfforts: { off: null, high: high }
+            compat:
+              supportsReasoningEffort: false
 - insert:
     - id: blog
       name: dsh-blog-assistant

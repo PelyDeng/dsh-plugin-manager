@@ -37,7 +37,7 @@ export async function apply(ctx:Context,config:Config){
   const blog=new BlogClient(settings.blog),images=new ImageClient(settings.image,join(root,'image-token.json')),backups=new BackupClient(settings.backup,access)
   const conversations=new ChatStore(store)
   const attachments=new BlogAttachments(ctx,access,store,(owner:string,id:string)=>conversations.assertScope(owner,id))
-  const jobs=new BlogJobs(ctx,access,store,blog,attachments,config.turnTimeoutMs)
+  const jobs=new BlogJobs(ctx,access,store,blog,attachments,config.turnTimeoutMs,settings.models)
   const app=new BlogApplication(store,access,blog,images,backups,jobs,attachments)
   const {chatSdk}=await import(new URL('../runtime/chat-sdk.mjs',import.meta.url).href)
   const chat=new BlogChat(ctx,access,store,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)

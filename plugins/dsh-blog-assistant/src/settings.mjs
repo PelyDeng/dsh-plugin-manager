@@ -15,6 +15,10 @@ export function loadSettings(path) {
   let value
   try { value = JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) } catch { throw new BlogError(503, '无法读取博客 config/config.json，请检查配置路径与 JSON 格式') }
   invariant(value?.schemaVersion === 1, '配置 schemaVersion 必须为 1', 503)
+  if(value.models!==undefined){
+    invariant(value.models&&typeof value.models==='object'&&!Array.isArray(value.models),'配置 models 无效',503)
+    for(const [kind,model] of Object.entries(value.models))invariant(['text','vision'].includes(kind)&&model&&['provider','model'].every(k=>typeof model[k]==='string'&&model[k].length>0&&model[k].length<=200),'配置 models 需要有效的 text/vision provider 和 model',503)
+  }
   for (const section of ['blog', 'image']) {
     const c = value[section]
     invariant(c && typeof c === 'object', `缺少配置 ${section}`, 503)

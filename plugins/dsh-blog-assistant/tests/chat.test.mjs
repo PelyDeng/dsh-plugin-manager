@@ -165,6 +165,26 @@ test('draft creation rolls back if the logical request binding cannot be persist
   const selected=await execute();assert.ok(selected.draftId);assert.equal(f.store.list(owner).length,1)
 })
 
+test('image model survives removed selection, native history reopening and branch continuation',async t=>{
+  const f=await fixture(t),chat=f.chat
+  chat.jobs.models={text:{provider:'glm-fixture',model:'text'},vision:{provider:'glm-fixture',model:'vision'}}
+  chat.ctx.llm.resolveModelInfo=async(provider,model)=>{assert.equal(provider,'glm-fixture');return{inputModalities:model==='vision'?['text','image']:['text']}}
+  await f.send();await tick();assert.equal(f.handles[0].options.agentOptions.model,'text');complete(f.handles[0],'text-answer');await tick()
+  chat.attachments.freeze=()=>[{id:'image-fixture',version:1,name:'image',image:{provider:'fixture',attachmentId:'image'}}]
+  await f.send({requestId:'image-request'});await tick();assert.equal(f.handles[1].options.agentOptions.model,'vision');complete(f.handles[1],'image-answer');await tick()
+  chat.attachments.freeze=()=>[]
+  await f.send({requestId:'text-after-image'});await tick();assert.equal(f.handles[2].options.agentOptions.model,'vision');complete(f.handles[2],'continued-answer');await tick()
+  const branch=await chat.fork(actor,{conversationId:f.conversation.id,messageId:'continued-answer',requestId:'image-fork'})
+  assert.equal(f.handles[3].options.agentOptions.model,'vision')
+  await chat.close()
+  const reopened=new BlogChat(chat.ctx,chat.access,chat.store,chat.index,chat.attachments,chat.jobs,chat.app,chat.sdk,3000)
+  t.after(()=>reopened.close())
+  await reopened.send(actor,{conversationId:branch.id,requestId:'reopened-image-followup',text:'继续看前面的图',research:false})
+  await tick();assert.equal(f.handles[4].options.agentOptions.model,'vision')
+  assert.equal(chat.ctx.agentDefaultModel.currentSelection().model,'test')
+  complete(f.handles[4],'branch-answer');await tick()
+})
+
 test('history waits for a pending fork checkpoint instead of publishing ready from stat',async t=>{
   const f=await fixture(t);await f.send();await tick();complete(f.handles[0]);await tick()
   const release=f.holdNextFlush(),fork=f.chat.fork(actor,{conversationId:f.conversation.id,messageId:'answer-1',requestId:'fork-delayed'})
@@ -172,4 +192,26 @@ test('history waits for a pending fork checkpoint instead of publishing ready fr
   let read=false;const history=f.chat.history(actor,id).then(result=>{read=true;return result})
   await tick();assert.equal(read,false);assert.equal(f.index.get(owner,id).ready,false)
   release();await fork;assert.equal((await history).messages.at(-1).id,'answer-1');assert.equal(f.index.get(owner,id).ready,true)
+})
+
+test('closing aborts pending fork model lookup and cannot create an Agent after it resolves',async t=>{
+  const f=await fixture(t),chat=f.chat
+  chat.ctx.llm.resolveModelInfo=async()=>({inputModalities:['text','image']})
+  chat.attachments.freeze=()=>[{id:'image-fixture',version:1,name:'image',image:{provider:'fixture',attachmentId:'image'}}]
+  await f.send();await tick();complete(f.handles[0]);await tick()
+  let entered,release,lookupSignal
+  const lookupStarted=new Promise(resolve=>{entered=resolve})
+  // Even an adapter that resolves after cancellation must not open a new Agent.
+  chat.ctx.llm.resolveModelInfo=(_provider,_model,signal)=>new Promise(resolve=>{lookupSignal=signal;release=()=>resolve({inputModalities:['text','image']});entered()})
+  const fork=chat.fork(actor,{conversationId:f.conversation.id,messageId:'answer-1',requestId:'fork-close-pending'})
+  const rejected=assert.rejects(fork,/abort|停止/i)
+  await lookupStarted
+  const closing=chat.close()
+  assert.equal(lookupSignal.aborted,true)
+  assert.equal(f.handles.length,1)
+  release();await Promise.all([closing,rejected])
+  assert.equal(f.handles.length,1)
+  assert.equal(chat.forks.size,0)
+  const branch=f.index.list(owner,0).items.find(c=>c.id!==f.conversation.id)
+  assert.equal(f.index.get(owner,branch.id).ready,false)
 })

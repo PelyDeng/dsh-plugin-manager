@@ -18,6 +18,10 @@
 
 官方 web Bundle 已提供会话持久化、JSON storage-domain 和 messageFeedback，无需重复装配。博客接口将反馈备注限制为 4000 UTF-8 字节，沿用宿主共享反馈服务的配置，不改变其他应用的备注上限。
 
+模型接入复用官方 `dsh-llm-pi-ai`，Bundle 在已有适配器中声明 `blog-zhipu` 专属路由，使用智谱普通模型 API。管理员从 auth“模型设置 → 智谱 GLM”保存 `ZHIPU_API_KEY`，密钥只写官方 credentials 存储；不复制到博客配置。此密钥为宿主共享凭据，与 DeepSeek 的密钥分别管理。
+
+博客配置的 `models.text` 和 `models.vision` 只保存 provider/model 引用。模板使用 GLM-5.3 写作、GLM-5V-Turbo 看图；未配置模型引用的旧部署沿用宿主默认模型。含图的本轮附件或已发送历史会选视觉模型，分支和重启后的续聊同样保留该能力。缺少智谱密钥时明确提示配置，不悄悄改用其他模型；其他插件的默认模型不变。GLM-5.3 始终开启思考，路由默认 high；GLM-5V-Turbo 只发送文档支持的思考开关。每次输出上限配置为 8192 Token。
+
 AI 任务使用官方 Jobs controller 和真实 Agent owner。文章编辑器的单次写作建立独立 Agent；对话每轮恢复同一官方 Session，并在结束时持久化、释放 Agent。任务结果、幂等请求、候选稿和原用户归属保存在本插件 SQLite 中。服务重启会将未完成任务标记中断，不自动重新调用模型。
 
 对话全文使用官方 Session 日志。点赞、点踩及备注使用官方 messageFeedback 的版本校验；Token 使用官方 token-meter 的单轮统计，缺失用量显示“未提供”。分支保留完成轮次之前的消息，重新生成在分支中追加新请求并沿用逻辑文章绑定，不回滚原文章。消息中的文章卡是不可变候选快照，当前正文和可应用状态以编辑器为准。

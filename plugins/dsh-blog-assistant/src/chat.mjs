@@ -5,6 +5,7 @@ import {ownerKey} from './store.mjs'
 import {invariant} from './settings.mjs'
 import {persona} from './jobs.mjs'
 import {projectChat} from './chat-history.mjs'
+import {historyHasImages,selectBlogModel} from './models.mjs'
 
 const instructions=`${persona}
 这是可持续多轮的博客对话。用户不需要先创建文章即可提问或分析资料。
@@ -19,7 +20,7 @@ export class BlogChat {
   constructor(ctx,access,store,index,attachments,jobs,app,sdk,timeoutMs=240000){
     Object.assign(this,{ctx,access,store,index,attachments,jobs,app,sdk,timeoutMs})
     this.active=new Map();this.forks=new Map();this.listeners=new Map();this.closed=false
-    const recheck=()=>{for(const b of this.active.values())try{access.assert(b.job.actor)}catch{void this.finish(b,'interrupted','登录或授权已失效')}}
+    const recheck=()=>{for(const b of this.active.values())try{access.assert(b.job.actor)}catch{void this.finish(b,'interrupted','登录或授权已失效')}for(const fork of this.forks.values())try{access.assert(fork.actor)}catch{fork.abort.abort()}}
     ctx.effect(()=>onRevoked(ctx,recheck))
     ctx.effect(()=>{const timer=setInterval(recheck,1000);timer.unref();return()=>clearInterval(timer)})
   }
@@ -50,10 +51,13 @@ export class BlogChat {
     this.access.assert(actor);let c=this.index.get(ownerKey(actor),id);const b=this.active.get(id)
     if(b?.handle)return b.handle.agent.session.snapshotEvents()
     if(b)return []
-    if(this.forks.has(id)){await this.forks.get(id);this.access.assert(actor);c=this.index.get(ownerKey(actor),id)}
+    if(this.forks.has(id)){await this.forks.get(id).promise;this.access.assert(actor);c=this.index.get(ownerKey(actor),id)}
     c=await this.recover(actor,c)
     if(!c.ready)return []
-    const handle=await this.ctx.sessionPersistence.open(SessionId(id),'read')
+    return this.persistedEvents(actor,c)
+  }
+  async persistedEvents(actor,c){
+    const handle=await this.ctx.sessionPersistence.open(SessionId(c.id),'read')
     try{this.assertLifecycle(c,handle.header);const events=await handle.read();this.access.assert(actor);return events}finally{await handle.close()}
   }
   async history(actor,id){
@@ -107,20 +111,17 @@ export class BlogChat {
     b.runPromise=this.run(b,conversation)
     return{id:request.id,status:'queued',conversationId:conversation.id}
   }
-  options(b){
-    const selection=this.ctx.agentDefaultModel.currentSelection()
+  options(b,selection){
     return{agentOptions:{provider:selection.provider,model:selection.model},signal:b.abort.signal,
       setup:agentCtx=>{agentCtx.systemPrompt.section({name:'blog:persona',order:600,text:instructions});agentCtx.tools.restrict({allow:this.jobs.chatTools.map(t=>t.name).filter(n=>b.job.input.research||!n.startsWith('blog_web_'))})}}
   }
   async run(b,conversation){
     try{
-      const options=this.options(b)
-      if(b.request.attachments.some(a=>a.image)){
-        const info=await this.ctx.llm.resolveModelInfo(options.agentOptions.provider,options.agentOptions.model,b.abort.signal)
-        invariant(info.inputModalities?.includes('image'),'当前模型未声明支持图片，请切换模型后重试',422)
-      }
       this.access.assert(b.job.actor);if(b.stopped)return
       conversation=await this.recover(b.job.actor,conversation)
+      const history=conversation.ready?await this.persistedEvents(b.job.actor,conversation):[]
+      const selection=await selectBlogModel(this.ctx,this.jobs.models,b.request.attachments.some(a=>a.image)||historyHasImages(history),b.abort.signal)
+      const options=this.options(b,selection)
       this.access.assert(b.job.actor);if(b.stopped)return
       if(!conversation.ready)conversation=this.beginCreation(b.job.owner,conversation.id)
       b.opening=conversation.ready?this.ctx.agents.resume({...options,resumeSessionId:SessionId(conversation.id)}):this.ctx.agents.create({...options,sessionId:SessionId(conversation.id),meta:{cwd:process.cwd()}})
@@ -190,7 +191,7 @@ export class BlogChat {
       }
     })();return b.finishing
   }
-  async stop(actor,id){this.access.assert(actor);this.index.get(ownerKey(actor),id);const b=this.active.get(id);if(b)await this.finish(b,'interrupted','已停止回答');this.access.assert(actor);return{stopped:true}}
+  async stop(actor,id){this.access.assert(actor);this.index.get(ownerKey(actor),id);const b=this.active.get(id),fork=this.forks.get(id);if(fork){fork.abort.abort();await fork.promise.catch(()=>{})}if(b)await this.finish(b,'interrupted','已停止回答');this.access.assert(actor);return{stopped:true}}
   async selectDraft(b,args,signal){
     this.jobs.bound(b.handle.agent);signal?.throwIfAborted()
     invariant([typeof args.draftId==='string',Number.isSafeInteger(args.cid)&&args.cid>0,args.newArticle===true].filter(Boolean).length===1,'请选择一种文章来源')
@@ -258,21 +259,26 @@ export class BlogChat {
       inheritedResults:history.results.filter(r=>requests.some(q=>q.id===r.requestId))})
     invariant(c.parent===args.conversationId&&c.forkCut===target.forkCut,'同一请求标识不能用于不同分支',409)
     if(c.ready)return this.publicConversation(c)
-    if(this.forks.has(c.id)){await this.forks.get(c.id);this.access.assert(actor);return this.publicConversation(this.index.get(owner,c.id))}
+    if(this.forks.has(c.id)){await this.forks.get(c.id).promise;this.access.assert(actor);return this.publicConversation(this.index.get(owner,c.id))}
+    const fork={actor,job:{input:{research:true}},abort:new AbortController(),promise:null}
+    const check=()=>{fork.abort.signal.throwIfAborted();invariant(!this.closed,'博客助手正在停止',503);this.access.assert(actor)}
     const pending=(async()=>{
       const recovered=await this.recover(actor,c)
+      check()
       if(recovered.ready)return
       this.beginCreation(owner,c.id)
-      const options=this.options({job:{input:{research:true}},abort:new AbortController()})
+      const selection=await selectBlogModel(this.ctx,this.jobs.models,historyHasImages(seed),fork.abort.signal)
+      check()
+      const options=this.options(fork,selection)
       const handle=await this.ctx.agents.create({...options,sessionId:SessionId(c.id),seed,inheritedEventCount:seed.length,meta:{cwd:process.cwd(),parentSession:SessionId(args.conversationId),isSeeded:true}})
-      try{await this.durable({handle,job:{owner},request:{conversationId:c.id}});this.access.assert(actor)}finally{await handle.dispose()}
+      try{check();await this.durable({handle,job:{owner},request:{conversationId:c.id}});check()}finally{await handle.dispose()}
     })()
-    this.forks.set(c.id,pending)
+    fork.promise=pending;this.forks.set(c.id,fork)
     try{await pending;return this.publicConversation(this.index.get(owner,c.id))}finally{this.forks.delete(c.id)}
   }
   async original(actor,conversationId,requestId,id){
     const guard=()=>{this.access.assert(actor);return this.index.historyAttachment(ownerKey(actor),conversationId,requestId,id)}
     return this.attachments.readOriginal(actor,guard(),guard)
   }
-  async close(){this.closed=true;const all=[...this.active.values()];await Promise.all(all.map(b=>this.finish(b,'interrupted','服务正在停止')));await Promise.all(all.map(b=>b.runPromise));await Promise.allSettled(this.forks.values())}
+  async close(){this.closed=true;const all=[...this.active.values()],forks=[...this.forks.values()];for(const fork of forks)fork.abort.abort();await Promise.all(all.map(b=>this.finish(b,'interrupted','服务正在停止')));await Promise.all(all.map(b=>b.runPromise));await Promise.allSettled(forks.map(fork=>fork.promise))}
 }
