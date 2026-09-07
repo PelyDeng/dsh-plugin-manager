@@ -2,9 +2,11 @@
 
 [中文](README.md) · [Visual tour (Chinese)](doc/quick-tour.md) · [Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases) · [Report an issue](https://github.com/PelyDeng/dsh-plugin-manager/issues)
 
-**Deliver DeepSeek Harness plugins as apps for your team: shared login, app access control, independent packaging, and deployment.**
+**An AI application development and deployment framework built on DeepSeek Harness, helping individual developers and small teams build their own plugins and manage installation, updates, and operations consistently.**
 
-Build your app in its own repository, declare how it is packaged and configured, and run it on official [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). DSH Plugin Manager uses Cordis plugins, Bundles, and Agents without modifying the host source. Authentication is optional.
+Build plugins and AI applications in your own repository using the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) ecosystem: knowledge assistants, reporting assistants, business tools, or agent applications with their own pages. The framework provides shared conventions for integration, packaging, installation, updates, configuration, and lifecycle management. Combine multiple plugins into a deployment for personal use or delivery to teams and customers.
+
+Use official Cordis plugins, Bundles, and Agents without modifying DSH or manager source. Develop and package plugins independently, deploy releases without author source code, and optionally reuse shared login and app access control to reduce repeated development and operational work. Integration requires supported plugin declarations and compatibility verification against the target host version.
 
 > Unofficial project, independently developed and maintained by community members. This is not a DeepSeek product or endorsement.
 
@@ -19,7 +21,7 @@ Build your app in its own repository, declare how it is packaged and configured,
 | Optional `dsh-auth` | Accounts, login, and app access grants |
 | Your app | Tools, pages, business rules, and data authorization |
 
-For one personal tool, an official Bundle may be enough. This project is useful when you need to deliver several apps to a team or customer. App access does not grant access to every business record: each app must still enforce its own data permissions.
+For one personal tool, an official Bundle may be enough. This project is useful when you need consistent packaging, installation, updates, and management for your own plugins, or need to deliver several apps to a team or customer. App access does not grant access to every business record: each app must still enforce its own data permissions.
 
 ## Start with the included apps
 

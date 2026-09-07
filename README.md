@@ -2,9 +2,11 @@
 
 [English](README.en.md) · [图文导览](doc/quick-tour.md) · [部署指南](doc/first-deployment.md) · [Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases) · [反馈问题](https://github.com/PelyDeng/dsh-plugin-manager/issues)
 
-**把 DeepSeek Harness 插件交付成团队可使用的应用：统一登录、应用授权、独立打包与部署。**
+**基于 DeepSeek Harness 的 AI 应用开发与部署框架，让个人开发者和小团队开发自己的插件，并统一安装、更新和管理。**
 
-面向独立开发者和小团队。你在自己的仓库开发应用，框架按声明组合发布物，在官方 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 中运行。沿用 Cordis 插件、Bundle 和 Agent，无需修改 DSH 源码；认证按需启用。
+你可以基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 生态，在自己的仓库开发各类插件和 AI 应用，例如知识库助手、报表助手、业务工具或带独立页面的智能体应用。框架提供统一的接入约定、打包、安装、更新、配置和启停管理，支持将多个插件组合部署，供自己使用或交付给团队与客户。
+
+沿用官方 Cordis 插件、Bundle 和 Agent 机制，无需修改 DSH 或管理器源码；插件可以独立开发和打包，发布运行端无需作者源码，并可按需复用统一登录与应用访问授权，减少重复开发和运维工作。接入需遵循框架支持的插件声明，并验证目标宿主版本的兼容性。
 
 > 社区独立维护的非官方项目，不代表 DeepSeek 官方产品或推荐。
 
