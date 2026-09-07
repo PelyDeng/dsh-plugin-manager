@@ -122,6 +122,8 @@ pnpm package --plugins "auth,example" --output .local/artifacts/release/plugins
 
 ## 常见问题
 
+首次登录、官方控制台认证、服务器录入模型密钥及问答排错见 [FAQ](doc/FAQ.md)。
+
 | 问题 | 说明 |
 | --- | --- |
 | 新插件必须修改 DSH 或管理器源码吗？ | 不需要；按支持的包声明与扩展接口接入 |

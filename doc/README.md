@@ -29,6 +29,7 @@
 
 | 需要查什么 | 文档 |
 | --- | --- |
+| 登录、官方控制台认证、模型密钥与首次问答 | [常见问题 FAQ](FAQ.md) |
 | 常用命令与启动排错 | [体验手册速查](getting-started.md#命令速查与求助) |
 | CLI 完整参数与行为 | [管理器参考](../packages/plugin-manager/README.md) |
 | 框架和官方 DSH 的职责 | [架构与包职责](architecture.md) |

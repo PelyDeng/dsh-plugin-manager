@@ -1,6 +1,6 @@
 /** Store a DeepSeek API key in the selected DSH home without restarting services. */
 import { randomUUID } from 'node:crypto';
-import { chmodSync, chownSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, chownSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -46,7 +46,7 @@ export async function readApiKey(input = process.stdin, output = process.stderr)
   });
 }
 
-/** Atomically replace only DEEPSEEK_API_KEY; other settings and existing ownership remain. */
+/** Replace only DEEPSEEK_API_KEY; new files inherit the selected home's owner. */
 export function storeApiKey(deployment, key, userHome = homedir()) {
   checkDataSelection(deployment, userHome);
   if (typeof key !== 'string' || key.length > 4096 || !/^sk-[A-Za-z0-9_-]+$/u.test(key)) throw new Error('API 密钥格式无效，未修改配置。');
@@ -64,7 +64,8 @@ export function storeApiKey(deployment, key, userHome = homedir()) {
     descriptor = openSync(temporary, 'wx', 0o600);
     writeFileSync(descriptor, value); fsyncSync(descriptor); closeSync(descriptor); descriptor = undefined;
     if (process.platform !== 'win32') {
-      if (existing && (existing.uid !== process.getuid() || existing.gid !== process.getgid())) chownSync(temporary, existing.uid, existing.gid);
+      const owner = existing ?? statSync(deployment.home);
+      if (owner.uid !== process.getuid() || owner.gid !== process.getgid()) chownSync(temporary, owner.uid, owner.gid);
       chmodSync(temporary, 0o600);
     }
     renameSync(temporary, destination);
@@ -82,7 +83,7 @@ export async function main(args = process.argv.slice(2)) {
   catch { throw new Error('参数无效；密钥只能经 stdin 输入，不能放入命令参数。'); }
   const allowed = new Set(['action', 'root', 'config', 'home', 'data-root', 'profile', 'help']);
   if (Object.keys(options).some(key => !allowed.has(key))) throw new Error('只接受 --root、--config、--home、--data-root 和 --profile；密钥必须经 stdin 输入。');
-  if (options.help) { console.log('set-api-key.sh [--config path] [--home path] [--data-root path] [--profile name]'); return; }
+  if (options.help) { console.log('set-api-key --root <project> [--config path] [--home path] [--data-root path] [--profile name]\n服务器源码部署：bash deploy/scripts/set-api-key.sh --config .local/deployment.json\n在提示后输入密钥（不回显）；只写入选定 home/.env，不选择模型、不重启服务，也不处理官方控制台认证。'); return; }
   let deployment;
   try { deployment = resolveDeployment(options); }
   catch { throw new Error('无法解析部署配置或路径，请先通过 deployment.mjs paths 核对配置。'); }
