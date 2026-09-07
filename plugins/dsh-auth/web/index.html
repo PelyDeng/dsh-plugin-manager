@@ -42,16 +42,19 @@
         </section>
         <section id="page-models" class="page" hidden>
           <div class="page-heading"><h1>模型设置</h1><p class="muted">统一管理此宿主共享的模型 API 密钥。</p></div>
-          <div class="card model-card">
-            <label>模型服务商<select id="model-provider"><option value="deepseek">DeepSeek</option><option value="zhipu">智谱 GLM</option></select></label>
-            <div class="model-heading"><div class="model-emblem"><svg class="icon" aria-hidden="true"><use href="/auth/icons.svg#key"></use></svg></div><div><h2 id="model-name">DeepSeek</h2><p id="model-description" class="muted small">默认 DeepSeek API 密钥</p></div><button id="model-refresh" type="button">刷新状态</button></div>
-            <div id="model-status" class="model-status" role="status"><svg class="icon" aria-hidden="true"><use id="model-status-icon" href="/auth/icons.svg#key"></use></svg><strong id="model-status-label">正在读取…</strong></div>
-            <p id="model-source" class="muted small"></p>
-            <div id="model-fingerprint-row" hidden><span class="muted small">密钥指纹 · SHA-256</span><code id="model-fingerprint" class="model-fingerprint"></code><p class="muted small">指纹仅用于识别密钥，无法还原原密钥。</p></div>
-            <form id="model-form"><label>新 API 密钥<input id="model-key" name="apiKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-…" maxlength="4096" required disabled></label><button id="model-save" class="primary" disabled>保存密钥</button></form>
-            <p id="model-message" role="status" aria-live="polite"></p>
-            <p class="muted small model-note">密钥供此宿主上使用该服务商的应用共享，仅管理员可更换。保存后无需重启，后续请求使用新密钥；正在进行的回答不受影响。配置状态不代表密钥有效或模型服务可用。</p>
+          <div class="model-grid">
+            <article class="card model-card" data-model="deepseek" aria-labelledby="model-deepseek-name">
+            <div class="model-heading"><span class="model-emblem" aria-hidden="true"><img src="/auth/deepseek.svg" alt="" width="30" height="30"></span><div><h2 id="model-deepseek-name">DeepSeek</h2><span data-field="status" class="model-status" role="status">正在读取…</span></div><button data-action="refresh" type="button" aria-label="刷新 DeepSeek 配置状态">刷新</button></div>
+            <div class="model-tags" aria-label="模型用途"><span>DeepSeek 默认模型</span></div><p class="muted small model-description">供已接入 DeepSeek 的应用使用。</p>
+            <form data-action="save"><label for="model-deepseek-key">新 API 密钥</label><div class="model-key-row"><input id="model-deepseek-key" data-field="key" name="apiKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-…" maxlength="4096" required disabled><button data-field="save" class="primary" disabled>保存密钥</button></div></form>
+            <p data-field="message" class="model-message" role="status" aria-live="polite"></p><details class="model-details"><summary>凭据详情</summary><p data-field="source" class="muted small"></p><div data-field="fingerprint-row" hidden><span class="muted small">密钥指纹 · SHA-256</span><code data-field="fingerprint" class="model-fingerprint"></code><p class="muted small">指纹用于核对配置，不显示原密钥。</p></div></details></article>
+            <article class="card model-card" data-model="zhipu" aria-labelledby="model-zhipu-name">
+            <div class="model-heading"><span class="model-emblem zhipu-emblem" aria-hidden="true"><img src="/auth/zhipu.svg" alt="" width="42" height="42"></span><div><h2 id="model-zhipu-name">智谱 GLM</h2><span data-field="status" class="model-status" role="status">正在读取…</span></div><button data-action="refresh" type="button" aria-label="刷新智谱 GLM 配置状态">刷新</button></div>
+            <div class="model-tags" aria-label="模型用途"><span>GLM-5.3 · 写作</span><span>GLM-5V-Turbo · 识图</span></div><p class="muted small model-description">两个模型共用一份智谱普通模型 API 密钥。</p>
+            <form data-action="save"><label for="model-zhipu-key">新 API 密钥</label><div class="model-key-row"><input id="model-zhipu-key" data-field="key" name="apiKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="输入智谱开放平台 API Key" maxlength="4096" required disabled><button data-field="save" class="primary" disabled>保存密钥</button></div></form>
+            <p data-field="message" class="model-message" role="status" aria-live="polite"></p><details class="model-details"><summary>凭据详情</summary><p data-field="source" class="muted small"></p><div data-field="fingerprint-row" hidden><span class="muted small">密钥指纹 · SHA-256</span><code data-field="fingerprint" class="model-fingerprint"></code><p class="muted small">指纹用于核对配置，不显示原密钥。</p></div></details></article>
           </div>
+          <p class="muted small model-note">密钥由此宿主的官方凭据服务保存，供使用该服务商的应用共享，仅管理员可更换。保存后无需重启，后续请求使用新密钥；正在进行的回答不受影响。已配置不代表密钥有效、模型可用或额度充足。</p>
         </section>
         <section id="page-users" class="page" hidden>
           <div class="page-heading"><h1>用户管理 <span id="user-count" class="count">0</span></h1><p class="muted">管理用户账号、角色和访问权限。</p></div>

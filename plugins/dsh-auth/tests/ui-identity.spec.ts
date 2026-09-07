@@ -34,9 +34,7 @@ describe('account identity cleanup', () => {
     expect(f.element('#account-name').textContent).toBe('')
     expect(f.element('#users').children).toEqual([])
     expect(f.element('#plugins').children).toEqual([])
-    expect(f.element('#model-key').value).toBe('')
-    expect(f.element('#model-fingerprint').textContent).toBe('')
-    expect(f.element('#model-fingerprint-row').hidden).toBe(true)
+    // Both provider cards and late save responses are exercised in model-cards.test.mjs.
     expect(f.element('#workspace').hidden).toBe(true)
   })
 
