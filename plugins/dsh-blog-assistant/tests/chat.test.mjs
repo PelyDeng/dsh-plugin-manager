@@ -9,10 +9,16 @@ import {ChatStore} from '../src/chat-store.mjs'
 import {BlogJobs} from '../src/jobs.mjs'
 import {BlogChat} from '../src/chat.mjs'
 import {BlogApplication} from '../src/application.mjs'
+import {projectChat} from '../src/chat-history.mjs'
 
 const actor={namespace:'user',userId:'writer',sessionId:'login'},owner='user:writer'
 const tick=()=>new Promise(r=>setTimeout(r,10))
 const sdk={isAppendSurfaceEvent:e=>['user/message','assistant/message'].includes(e.type),deriveEventMessage:e=>e.type==='user/message'?e.data:e.data.message,expandAssistantStream:s=>s??[],deriveTurnTokenUsage:()=>null}
+test('language plugin snapshots preserve visible history without adding user bubbles',()=>{
+  const events=[{type:'user/message',seq:1,time:1000,data:{id:'u',role:'user',source:{kind:'user'},content:[{type:'text',text:'原用户问题'}]}},{type:'assistant/message',seq:2,time:2000,data:{message:{id:'a',role:'assistant',source:{model:'test',provider:'test'},content:[{type:'reasoning',text:'Earlier English reasoning.'},{type:'text',text:'旧回答'}]},stream:[]}}]
+  const snapshot={type:'user/message',seq:3,time:3000,data:{id:'language',role:'user',source:{kind:'plugin',plugin:'@deepseek-ai/dsh-system-prompt',form:'snapshot'},content:[{type:'text',text:'当前语言：简体中文'}]}}
+  assert.deepEqual(projectChat([...events,snapshot],[],sdk),projectChat(events,[],sdk))
+})
 async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=false}={}){
   const root=new Context(),registry=root.plugin(AgentRegistry);await registry
   const runtimeJobs=root.plugin(LocalJobRegistry);await runtimeJobs
@@ -36,7 +42,7 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
       const agent={id:options.sessionId,ctx:scope.ctx,session,options:{},status:'idle',cancel(){handle.cancelled=true},whenIdle:async()=>{},followup(message){handle.message=message;handle.emit('user/message',message);handle.emit('turn/start',{turn:'turn-'+events.length})}}
       const unregister=root.agents.register(agent)
       const handle={agent,options,events,cancelled:false,disposed:false,emit(type,data){const event={type,data,seq:events.length,time:1000+events.length*100};events.push(event);root.emit('session/event',session,event)},async dispose(){if(handle.disposed)return;handle.disposed=true;await unregister();await scope.dispose()}}
-      handle.sections=[];options.setup({systemPrompt:{section(s){handle.sections.push(s)}},tools:{restrict:rule=>{handle.allowed=rule.allow}}});handles.push(handle);return handle
+      handle.sections=[];handle.contexts=[];options.setup({systemPrompt:{section(s){handle.sections.push(s)},context(c){handle.contexts.push(c)}},tools:{restrict:rule=>{handle.allowed=rule.allow}}});handles.push(handle);return handle
     },async resume(options){return this.create({...options,sessionId:options.resumeSessionId,seed:saved.get(String(options.resumeSessionId))})}},
   }
   const attachments={freeze:()=>[]},blog={list:async()=>({items:[{cid:337,title:'现有文章'}]})}
@@ -78,7 +84,7 @@ test('chat starts without an article, preserves native history, resumes and dedu
   assert.equal(f.handles[0].disposed,true)
   await f.send({requestId:'request-456',text:'继续'});await tick()
   assert.equal(f.handles[1].events[0].data.id,f.handles[0].message.id)
-  for(const h of f.handles){assert.match(h.sections.at(-1).text,/reasoning_content/);assert.ok(h.sections.at(-1).order>h.sections[0].order)}
+  for(const h of f.handles){assert.match(h.sections.at(-1).text,/reasoning_content/);assert.ok(h.sections.at(-1).order>h.sections[0].order);assert.match(h.contexts[0].text,/当前交互界面的语言是简体中文/)}
   assert.equal(f.handles[1].message.content[0].text,'继续')
   await assert.rejects(f.chat.history({...actor,userId:'other'},f.conversation.id),/无权/)
 })
