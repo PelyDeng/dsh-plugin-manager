@@ -68,7 +68,8 @@
       "web/index.html",
       "web/style.css",
       "config/config.example.json",
-      "typecho/DshBlogBridge/Plugin.php"
+      "typecho/DshBlogBridge/Plugin.php",
+      "typecho/DshBlogBridge/Action.php"
     ],
     "displayName": "博客工作台",
     "schemaVersion": 3
