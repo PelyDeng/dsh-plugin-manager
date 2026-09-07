@@ -3,6 +3,14 @@ import assert from 'node:assert/strict'
 import { BlogStore } from '../src/store.mjs'
 import { BlogApplication } from '../src/application.mjs'
 
+test('draft listing is lossless JSON when only one remote variant exists',t=>{
+  const s=new BlogStore(':memory:');t.after(()=>s.close())
+  s.create('u',{title:'昨天的文章'}, {published:{cid:338},savedDraft:null})
+  s.create('u',{title:'博客草稿'}, {published:null,savedDraft:{cid:337}})
+  const rows=s.list('u')
+  assert.deepEqual(rows,JSON.parse(JSON.stringify(rows)))
+})
+
 test('manual edits cannot be overwritten by a stale model proposal',t=>{
   const s=new BlogStore(':memory:');t.after(()=>s.close())
   const d=s.create('u',{title:'first',text:'<!--raw--> body'})

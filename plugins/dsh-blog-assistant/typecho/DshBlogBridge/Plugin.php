@@ -3,7 +3,7 @@
  * DSH 博客原文与确认提交桥接。使用 Typecho 原生内容组件，分离公开版和保存稿。
  * @package DshBlogBridge
  * @author DPL
- * @version 0.1.0
+ * @version 0.2.0
  * @link https://pelyblog.com/
  */
 if (!defined('__TYPECHO_ROOT_DIR__')) { exit; }
@@ -95,6 +95,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             $action = $input['action'] ?? '';
             if ($action === 'status') { $data = $this->status(); }
             elseif ($action === 'list') { $data = $this->posts($input); }
+            elseif ($action === 'search') { $data = $this->searchPosts($input); }
             elseif ($action === 'get') { $data = $this->snapshot($this->id($input['cid'] ?? null)); }
             elseif ($action === 'save') { $data = $this->saveArticle($input); }
             elseif ($action === 'receipt') { $data = $this->receipt($input); }
@@ -127,7 +128,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             $this->demand(($engines[$db->getPrefix() . $name] ?? '') === 'InnoDB', 'incompatible', 503);
         }
         $categories = $db->fetchAll($db->select('mid', 'name')->from('table.metas')->where('type = ?', 'category')->order('order', \Typecho\Db::SORT_ASC));
-        return ['protocolVersion' => 1, 'version' => '0.1.0', 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
+        return ['protocolVersion' => 1, 'version' => '0.2.0', 'structuredSearch' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
     }
     private function posts(array $input): array
     {
@@ -144,6 +145,63 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             $items[] = ['cid' => (int) $row['cid'], 'title' => html_entity_decode($row['title'] ?? '', ENT_QUOTES, 'UTF-8'), 'hasPublished' => $row['type'] === 'post', 'hasSavedDraft' => $row['type'] === 'post_draft' || !!$child, 'modified' => (int) $row['modified']];
         }
         return ['items' => $items, 'hasMore' => count($rows) > 30];
+    }
+    private function searchPosts(array $input): array
+    {
+        $db = $this->bridgeDb;
+        $f = [];
+        foreach (['query', 'title', 'content', 'category', 'tag'] as $key) {
+            $value = $input[$key] ?? '';
+            $this->demand(is_string($value) && mb_strlen($value) <= 200);
+            $f[$key] = trim($value);
+        }
+        $page = $input['page'] ?? 1;
+        $dateField = $input['dateField'] ?? 'modified'; $sortBy = $input['sortBy'] ?? 'modified';
+        $order = $input['order'] ?? 'desc'; $status = $input['status'] ?? 'all';
+        $start = $input['start'] ?? null; $end = $input['end'] ?? null;
+        $this->demand(is_int($page) && $page > 0 && $page <= 10000);
+        $this->demand(in_array($dateField, ['created','modified'], true) && in_array($sortBy, ['created','modified'], true));
+        $this->demand(in_array($order, ['asc','desc'], true) && in_array($status, ['all','published','draft'], true));
+        $this->demand(($start === null || (is_int($start) && $start >= 0)) && ($end === null || (is_int($end) && $end >= 0)));
+        $this->demand($start === null || $end === null || $start < $end);
+        $sql = $db->select('DISTINCT table.contents.*')->from('table.contents')->where('table.contents.type = ? OR table.contents.type = ?', 'post', 'post_draft');
+        if ($status === 'published') { $sql->where('table.contents.type = ? AND status = ?', 'post', 'publish'); }
+        elseif ($status === 'draft') { $sql->where('table.contents.type = ? OR status <> ?', 'post_draft', 'publish'); }
+        // LOCATE uses literal substrings: user '%' and '_' are not SQL wildcards.
+        if ($f['query'] !== '') { $sql->where('LOCATE(?, title) > 0 OR LOCATE(?, text) > 0', $f['query'], $f['query']); }
+        if ($f['title'] !== '') { $sql->where('LOCATE(?, title) > 0', $f['title']); }
+        if ($f['content'] !== '') { $sql->where('LOCATE(?, text) > 0', $f['content']); }
+        foreach (['category','tag'] as $type) {
+            if ($f[$type] !== '') {
+                $sql->join('table.relationships ' . $type . '_rel', $type . '_rel.cid = table.contents.cid')
+                    ->join('table.metas ' . $type . '_meta', $type . '_meta.mid = ' . $type . '_rel.mid')
+                    ->where($type . '_meta.type = ? AND ' . $type . '_meta.name = ?', $type, $f[$type]);
+            }
+        }
+        if ($start !== null) { $sql->where('table.contents.' . $dateField . ' >= ?', $start); }
+        if ($end !== null) { $sql->where('table.contents.' . $dateField . ' < ?', $end); }
+        $direction = $order === 'asc' ? \Typecho\Db::SORT_ASC : \Typecho\Db::SORT_DESC;
+        $rows = $db->fetchAll($sql->order('table.contents.' . $sortBy, $direction)->order('table.contents.cid', $direction)->offset(($page - 1) * 30)->limit(31));
+        $items = [];
+        foreach (array_slice($rows, 0, 30) as $row) {
+            $published = $row['type'] === 'post' && $row['status'] === 'publish';
+            $metas = $db->fetchAll($db->select('table.metas.mid','table.metas.name','table.metas.type')->from('table.metas')
+                ->join('table.relationships','table.relationships.mid = table.metas.mid')->where('table.relationships.cid = ?', $row['cid']));
+            $tags = []; $categories = [];
+            foreach ($metas as $meta) {
+                $term = ['id' => (int) $meta['mid'], 'name' => $meta['name']];
+                if ($meta['type'] === 'category') { $categories[] = $term; } elseif ($meta['type'] === 'tag') { $tags[] = $term; }
+            }
+            $url = $published ? (\Widget\Base\Contents::alloc()->filter($row)['permalink'] ?? null) : null;
+            $items[] = ['cid' => (int) $row['cid'], 'rootCid' => (int) ($row['parent'] ?: $row['cid']),
+                'title' => html_entity_decode($row['title'] ?? '', ENT_QUOTES, 'UTF-8'),
+                'variant' => $row['type'] === 'post_draft' ? 'savedDraft' : 'post', 'status' => $row['status'], 'hasPublished' => $published,
+                'created' => (int) $row['created'], 'modified' => (int) $row['modified'],
+                'createdAt' => gmdate('c', (int) $row['created']), 'modifiedAt' => gmdate('c', (int) $row['modified']),
+                'tags' => $tags, 'categories' => $categories, 'url' => $url];
+        }
+        return ['items' => $items, 'page' => $page, 'hasMore' => count($rows) > 30,
+            'dateNote' => 'created是Typecho设定的文章时间，modified是该版本最近修改时间；保存稿单独返回，不等于已发布。'];
     }
     private function row(int $cid): ?array
     {

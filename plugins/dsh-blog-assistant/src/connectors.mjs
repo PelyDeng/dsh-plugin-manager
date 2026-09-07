@@ -3,6 +3,7 @@ import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { BlogError, invariant, readJSON } from './settings.mjs'
 import { digest } from './store.mjs'
+import { normalizeSearch,searchContext } from './search.mjs'
 
 const requestSignal = signal => signal ? AbortSignal.any([signal, AbortSignal.timeout(45000)]) : AbortSignal.timeout(45000)
 export class BlogClient {
@@ -25,6 +26,12 @@ export class BlogClient {
   }
   async list(query = '', page = 1, signal) { invariant(typeof query === 'string' && query.length <= 200 && Number.isSafeInteger(page) && page > 0, '检索参数无效'); return this.call('list', { query, page, pageSize: 30 }, signal) }
   async get(cid, signal) { invariant(Number.isSafeInteger(cid) && cid > 0, '文章 ID 无效'); return this.call('get', { cid }, signal) }
+  async search(input={},signal) {
+    const {filters,timeZone,start,end}=normalizeSearch(input)
+    const result=await this.call('search',{...filters,start:start===null?null:start/1000,end:end===null?null:end/1000},signal)
+    const items=result.items.map(item=>{if(!item.url)return item;const url=new URL(item.url,this.config.url);invariant(['https:','http:'].includes(url.protocol),'博客返回了无效文章链接',502);return {...item,url:url.href}})
+    return {...result,items,filters,timeZone,clock:searchContext()}
+  }
 }
 
 export function imageType(bytes) {

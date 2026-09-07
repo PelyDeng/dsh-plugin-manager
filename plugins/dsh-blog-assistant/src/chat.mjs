@@ -6,10 +6,14 @@ import {invariant} from './settings.mjs'
 import {persona} from './jobs.mjs'
 import {projectChat} from './chat-history.mjs'
 import {historyHasImages,selectBlogModel} from './models.mjs'
+import {searchContext} from './search.mjs'
 
 const instructions=`${persona}
 这是可持续多轮的博客对话。用户不需要先创建文章即可提问或分析资料。
 查询博客近况先使用 blog_search_posts；只报告工具实际提供的信息，不猜测访问量。
+标题、正文、关键词、分类、标签、时间可组合查询。query只匹配字面文字；今天/昨天用period，日期范围用dateFrom/dateTo，默认以modified表示写作/修改活动。不要把修改时间说成新建/首次发表时间。
+“写了哪些文章”未限定发布状态时，同时查询博客和当前用户工作台草稿，区分公开版、博客保存稿和工作台稿；按关联ID说明重复，不混算数量。工具失败或hasMore为true时不可得出“没有任何文章”的完整结论。
+明确报告查询日期和上海时区。零点附近“今天”可能与用户刚结束的一天不同，按实际日期查询并可补充昨天的结果，不能悄悄改日期。历史工具结果只代表当时状态，新的日期查询要重新调用工具。
 需要写作时，先用 blog_select_draft 明确选择工作台文章、导入远程文章或新建文章，再提交候选。
 编辑旧文先搜索或读取确认目标；目标或公开版/保存稿有歧义时向用户澄清。
 同一轮只处理一篇文章；需要另一篇时请用户发起下一轮。保存候选不等于已应用或公开发布。
@@ -113,7 +117,7 @@ export class BlogChat {
   }
   options(b,selection){
     return{agentOptions:{provider:selection.provider,model:selection.model},signal:b.abort.signal,
-      setup:agentCtx=>{agentCtx.systemPrompt.section({name:'blog:persona',order:600,text:instructions});agentCtx.tools.restrict({allow:this.jobs.chatTools.map(t=>t.name).filter(n=>b.job.input.research||!n.startsWith('blog_web_'))})}}
+      setup:agentCtx=>{agentCtx.systemPrompt.section({name:'blog:persona',order:600,text:instructions+'\n本轮时间基准：'+JSON.stringify(searchContext())});agentCtx.tools.restrict({allow:this.jobs.chatTools.map(t=>t.name).filter(n=>b.job.input.research||!n.startsWith('blog_web_'))})}}
   }
   async run(b,conversation){
     try{

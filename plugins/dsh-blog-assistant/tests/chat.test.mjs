@@ -52,6 +52,17 @@ function complete(handle,id='answer-1'){
   handle.emit('turn/end',{turn,reason:{kind:'completed'}})
 }
 
+test('chat search tools preserve structured dates and return lossless imported draft references',async t=>{
+  const f=await fixture(t);f.store.create(owner,{title:'时间检索稿'},{published:{cid:338}})
+  let received;f.blog.search=async args=>{received=args;return {items:[],hasMore:false}}
+  await f.send();await tick();const agent=f.handles[0].agent
+  const args={period:'yesterday',title:'测试',category:'摘抄笔记',page:2}
+  await f.tools.get('blog_search_posts').execute(args,{agent});assert.deepEqual(received,args)
+  const result=await f.tools.get('blog_list_drafts').execute({title:'时间检索稿'},{agent})
+  assert.equal(result.items.length,1);assert.equal(result.items[0].remote.savedDraftCid,null)
+  assert.deepEqual(result,JSON.parse(JSON.stringify(result)))
+})
+
 test('chat starts without an article, preserves native history, resumes and deduplicates network requests',async t=>{
   const f=await fixture(t),request=await f.send();await tick()
   assert.equal(f.store.list(owner).length,0);assert.equal(f.handles.length,1)

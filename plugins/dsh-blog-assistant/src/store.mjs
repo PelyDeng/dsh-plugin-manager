@@ -42,10 +42,11 @@ export class BlogStore {
   record(owner, action, data) { this.db.prepare('INSERT INTO audit(at,owner,action,data) VALUES(?,?,?,?)').run(Date.now(), owner, action, JSON.stringify(data)) }
   create(owner, initial = {}, remote = null) {
     const content = article({ title: '', text: '', slug: '', tags: [], categories: [], format: 'markdown', ...initial })
-    const value = { id: randomUUID(), ...content, remote, proposal: null, sources: [], revision: 1, updatedAt: Date.now() }
+    const now=Date.now()
+    const value = { id: randomUUID(), ...content, remote, proposal: null, sources: [], revision: 1, createdAt:now, updatedAt:now }
     this.db.prepare('INSERT INTO drafts VALUES(?,?,?,?,?)').run(value.id, owner, 1, value.updatedAt, JSON.stringify(value)); return value
   }
-  list(owner, query='') { const search=String(query).trim().toLowerCase(); return this.db.prepare('SELECT data FROM drafts WHERE owner=? ORDER BY updated DESC').all(owner).map(row=>JSON.parse(row.data)).filter(d=>!search||d.title.toLowerCase().includes(search)||d.text.toLowerCase().includes(search)).map(d => ({ id: d.id, title: d.title, revision: d.revision, updatedAt: d.updatedAt, remote: d.remote ? { publishedCid: d.remote.published?.cid, savedDraftCid: d.remote.savedDraft?.cid } : null })) }
+  list(owner, query='') { const search=String(query).trim().toLowerCase(); return this.db.prepare('SELECT data FROM drafts WHERE owner=? ORDER BY updated DESC').all(owner).map(row=>JSON.parse(row.data)).filter(d=>!search||d.title.toLowerCase().includes(search)||d.text.toLowerCase().includes(search)).map(d => ({ id: d.id, title: d.title, revision: d.revision, updatedAt: d.updatedAt, remote: d.remote ? { publishedCid: d.remote.published?.cid??null, savedDraftCid: d.remote.savedDraft?.cid??null } : null })) }
   get(owner, id) {
     const row = this.db.prepare('SELECT data FROM drafts WHERE owner=? AND id=?').get(owner, id)
     invariant(row, '草稿不存在或无权访问', 404); return JSON.parse(row.data)

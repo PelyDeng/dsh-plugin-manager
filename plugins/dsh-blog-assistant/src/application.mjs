@@ -10,6 +10,8 @@ export class BlogApplication {
     let result
     switch(action) {
       case 'drafts': result=this.store.list(owner,args.query);break
+      case 'search-drafts': result=await this.jobs.searchDrafts(owner,args);break
+      case 'search-articles': result=await this.blog.search(args);break
       case 'create': result=this.store.create(owner);break
       case 'draft': result=this.store.get(owner,args.id);break
       case 'save': result=this.store.edit(owner,args.id,args.revision,args.content);break
