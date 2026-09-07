@@ -1,9 +1,11 @@
 import {icon} from './icons.js'
+import {glyph} from './chat-ui.js'
 
 /** Keep one set of live controls: narrow layouts move panels into native dialogs. */
 export function initLayout(){
   const $=id=>document.getElementById(id),mobile=matchMedia('(max-width:760px)'),compact=matchMedia('(max-width:1180px)')
   for(const el of document.querySelectorAll('[data-icon]'))el.prepend(icon(el.dataset.icon))
+  for(const [id,name] of [['chat-send','send'],['chat-stop','stop']])$(id).replaceChildren(glyph(name))
   const panels=new Map()
   for(const id of ['chat-history','library','assistant']){const el=$(id),anchor=document.createComment(id);el.before(anchor);panels.set(id,{el,anchor})}
   function restore(dialog){for(const {el,anchor} of panels.values())if(el.parentElement===dialog)anchor.after(el)}

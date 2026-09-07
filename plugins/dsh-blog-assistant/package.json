@@ -1,6 +1,6 @@
 {
   "name": "dsh-blog-assistant",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "个人博客写作、发布、图床与备份助手",
   "license": "UNLICENSED",
   "private": true,
@@ -38,7 +38,10 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    "APACHE-2.0.txt"
+    "APACHE-2.0.txt",
+    "web/chat-base.css",
+    "web/chat-theme.css",
+    "web/media/"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
@@ -72,7 +75,10 @@
       "web/style.css",
       "config/config.example.json",
       "typecho/DshBlogBridge/Plugin.php",
-      "typecho/DshBlogBridge/Action.php"
+      "typecho/DshBlogBridge/Action.php",
+      "web/chat-base.css",
+      "web/chat-theme.css",
+      "web/media/icon-copy.svg"
     ],
     "displayName": "博客工作台",
     "schemaVersion": 3

@@ -1,4 +1,5 @@
 import {icon} from './icons.js'
+import {glyph,stat,compactTokens} from './chat-ui.js'
 
 export function shouldSendChatEnter(event,{touch=false,composing=false}={}){
   return event.key==='Enter'&&!touch&&!event.shiftKey&&!event.isComposing&&!composing&&event.keyCode!==229
@@ -13,7 +14,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
   const error=(e,id='chat-error')=>{if(id==='chat-error'&&$('navigation-dialog').open)id='navigation-error';const el=$(id);el.textContent=e.message??String(e);el.hidden=false;el.focus()}
   const run=(fn,id='chat-error')=>async event=>{try{$(id).hidden=true;$('navigation-error').hidden=true;await fn(event)}catch(e){error(e,id)}}
   const button=(label,fn)=>{const b=element('button',label);b.type='button';b.addEventListener('click',run(fn));return b}
-  const iconButton=(name,label,fn)=>{const b=button('',fn);b.className='icon-button';b.setAttribute('aria-label',label);b.title=label;b.dataset.action=label;b.append(icon(name));return b}
+  const iconButton=(name,label,fn)=>{const b=button('',fn);b.className='qa-action';b.setAttribute('aria-label',label);b.title=label;b.dataset.action=label;b.append(glyph(name));return b}
   const touchInput=()=>matchMedia('(pointer: coarse), (max-width: 760px)').matches
   const focusInput=()=>{if(!touchInput())$('chat-input').focus({preventScroll:true})}
   const url=value=>{try{const u=new URL(value);return ['https:','http:'].includes(u.protocol)?u.href:null}catch{return null}}
@@ -70,30 +71,30 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     if(!data.busy){const feedback=await api('chat-feedback',{conversationId:id,operation:'list'});if(epoch!==state.epoch||version!==refreshVersion)return;if(feedback.ok){state.feedback=new Map(feedback.value.items.map(i=>[i.messageId,i]));state.feedbackReady=true;render()}}
     if(wasBusy&&!data.busy)void conversations().catch(error)
   }
-  function prose(text){const el=element('div',undefined,'prose');el.innerHTML=renderMarkdown(text??'');return el}
-  function reasoning(text,id){const d=element('details',undefined,'chat-reasoning');d.dataset.detail=id;d.append(element('summary','查看思考过程'),element('pre',text));return d}
+  function prose(text){const el=element('div',undefined,'prose qa-prose');el.innerHTML=renderMarkdown(text??'');return el}
+  function reasoning(text,id){const d=element('details',undefined,'chat-reasoning qa-thinking');d.dataset.detail=id;const summary=element('summary');summary.append(glyph('think'),document.createTextNode('思考'));d.append(summary,element('pre',text,'qa-thinking-body'));return d}
+  function bubble(node,user=false){node.classList.add('qa-message');if(user)node.classList.add('qa-user');const avatar=element('span',undefined,'qa-avatar');avatar.setAttribute('aria-hidden','true');avatar.append(glyph(user?'user':'chat'));const content=element('div',undefined,'qa-bubble');node.append(avatar,content);return content}
   function renderLive(live=state.history?.live,{follow=nearBottom(),scrollTop=$('chat-scroll').scrollTop}={}){
     const box=$('chat-live');box.hidden=!live
     if(live){
-      box.className='chat-message assistant-message'
+      box.className='chat-message assistant-message qa-message qa-streaming';const content=box.querySelector('.qa-bubble')??bubble(box)
       let thought=box.querySelector('.chat-reasoning'),text=box.querySelector('.chat-live-text'),status=box.querySelector('.chat-stream-status')
-      if(!thought){thought=reasoning('','live');box.append(thought)}
-      thought.hidden=!live.reasoning;thought.querySelector('pre').textContent=live.reasoning??''
-      if(!text){text=prose('');text.classList.add('chat-live-text');box.append(text)}
+      if(!thought){thought=reasoning('','live');content.append(thought)}
+      thought.classList.toggle('running',!live.text);thought.hidden=!live.reasoning;thought.querySelector('pre').textContent=live.reasoning??''
+      if(!text){text=prose('');text.classList.add('chat-live-text');content.append(text)}
       text.innerHTML=renderMarkdown(live.text??'')
-      if(!status){status=element('small',undefined,'chat-stream-status');status.setAttribute('role','status');box.append(status)}
+      if(!status){status=element('small',undefined,'chat-stream-status');status.setAttribute('role','status');content.append(status)}
       status.textContent=state.stopping?'正在停止，保留已生成内容…':live.text?'正在回答…':live.reasoning?'正在思考…':'正在连接模型…'
     }else box.replaceChildren()
     if(follow)bottom();else $('chat-scroll').scrollTop=scrollTop
     $('chat-bottom').hidden=nearBottom()
   }
-  function usage(turn){
-    const details=element('details',undefined,'chat-usage');details.dataset.detail='usage-'+turn.turn
-    details.append(element('summary',`Token ${turn.usage?.totalTokens?.toLocaleString()??'未提供'} · ${formatTime(turn.runMs)}`))
-    const list=element('dl'),add=(name,value)=>{list.append(element('dt',name),element('dd',value))},u=turn.usage
-    for(const [key,label] of [['uncachedInputTokens','未缓存输入'],['outputTokens','输出'],['cacheReadTokens','缓存读取'],['cacheWriteTokens','缓存写入'],['reasoningTokens','其中推理']])if(['uncachedInputTokens','outputTokens'].includes(key)||u?.[key]!==undefined)add(label,u?.[key]?.toLocaleString()??'未提供')
-    add('总用时',formatTime(turn.runMs));add('首 Token 等待',formatTime(turn.ttftMs));add('输出速度',Number.isFinite(turn.tokensPerSecond)?`${turn.tokensPerSecond.toFixed(1)} Token/秒`:'未提供');add('模型尝试',Number.isFinite(turn.attempts)?String(turn.attempts):'未提供');details.append(list)
-    return details
+  function usage(turn,message){
+    const fragment=document.createDocumentFragment(),u=turn.usage,rows=[]
+    for(const [key,label] of [['uncachedInputTokens','未缓存输入'],['outputTokens','输出'],['cacheReadTokens','缓存读取'],['cacheWriteTokens','缓存写入'],['reasoningTokens','其中推理']])if(['uncachedInputTokens','outputTokens'].includes(key)||u?.[key]!==undefined)rows.push([label,u?.[key]?.toLocaleString()??'未提供'])
+    const tokens=stat('database',`用量 ${compactTokens(u?.totalTokens)} tok`,rows);tokens.dataset.detail='tokens-'+turn.turn
+    const time=stat('clock',`用时 ${formatTime(turn.runMs)}`,[['总用时',formatTime(turn.runMs)],['首 Token 等待',formatTime(turn.ttftMs)],['输出速度',Number.isFinite(turn.tokensPerSecond)?`${turn.tokensPerSecond.toFixed(1)} Token/秒`:'未提供'],['模型尝试',turn.attempts],['模型',message?.model?`${message.provider} / ${message.model}`:null]]);time.dataset.detail='time-'+turn.turn
+    fragment.append(tokens,time);return fragment
   }
   function render(){
     const box=$('chat-messages'),follow=nearBottom(),scrollTop=$('chat-scroll').scrollTop,history=state.history
@@ -109,34 +110,35 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     $('chat-welcome').hidden=!!history?.messages.length
     for(const message of history?.messages??[]){
       const node=element('section',undefined,`chat-message ${message.role}-message`);node.dataset.message=message.id
-      if(message.role==='tool'){node.append(element('small',`${{blog_search_posts:'查询博客文章',blog_read_post:'读取文章',blog_list_drafts:'查找工作台草稿',blog_select_draft:'选择写作文章',blog_propose:'保存候选稿',blog_web_search:'搜索资料',blog_web_fetch:'阅读网页'}[message.name]??'执行博客工具'} · ${{running:'进行中',succeeded:'完成',failed:'失败',interrupted:'已中断'}[message.status]??message.status}`));append(node,'message-'+message.id,message);continue}
+      if(message.role==='tool'){const chip=element('span',undefined,`qa-tool ${message.status}`);chip.append(glyph('api'),element('small',`${{blog_search_posts:'查询博客文章',blog_read_post:'读取文章',blog_list_drafts:'查找工作台草稿',blog_select_draft:'选择写作文章',blog_propose:'保存候选稿',blog_web_search:'搜索资料',blog_web_fetch:'阅读网页'}[message.name]??'执行博客工具'} · ${{running:'进行中',succeeded:'完成',failed:'失败',interrupted:'已中断'}[message.status]??message.status}`));node.append(chip);append(node,'message-'+message.id,message);continue}
       if(message.role==='status'){node.textContent=message.text;append(node,'message-'+message.id,message);continue}
-      node.append(element('small',message.role==='user'?'你':'博客智能体','chat-author'))
-      if(message.reasoning)node.append(reasoning(message.reasoning,message.id))
-      node.append(message.role==='user'?element('div',message.text,'chat-user-text'):prose(message.text))
-      for(const a of message.attachments??[]){const link=element('a',undefined,'chat-file-link');link.append(icon('paperclip'),document.createTextNode(`${a.name}${a.range?`（${a.range.from}–${a.range.to}）`:''}`));link.href=`${base}/chat-attachment?${new URLSearchParams({conversationId:state.id,requestId:message.requestId,id:a.id})}`;node.append(link)}
-      const actions=element('div',undefined,'chat-message-actions');actions.append(element('time',new Date(message.time).toLocaleTimeString('zh-CN'), 'muted'))
+      const content=bubble(node,message.role==='user')
+      if(message.reasoning)content.append(reasoning(message.reasoning,message.id))
+      content.append(message.role==='user'?element('div',message.text,'chat-user-text'):prose(message.text))
+      for(const a of message.attachments??[]){const link=element('a',undefined,'chat-file-link');link.append(icon('paperclip'),document.createTextNode(`${a.name}${a.range?`（${a.range.from}–${a.range.to}）`:''}`));link.href=`${base}/chat-attachment?${new URLSearchParams({conversationId:state.id,requestId:message.requestId,id:a.id})}`;content.append(link)}
+      const actions=element('div',undefined,'chat-message-actions qa-actions')
       if(message.role==='assistant'){
         actions.append(iconButton('copy','复制回答',async event=>{const control=event.currentTarget;await navigator.clipboard.writeText(message.text);control.title='已复制';control.setAttribute('aria-label','已复制回答');setTimeout(()=>{if(control.isConnected){control.title='复制回答';control.setAttribute('aria-label','复制回答')}},1500)}))
         if(message.feedback){
           const current=state.feedback.get(message.id)
           for(const [rating,name,label] of [['positive','like','有帮助'],['negative','dislike','有待改进']]){const b=iconButton(name,label,()=>rate(message,rating));b.disabled=!state.feedbackReady;b.setAttribute('aria-pressed',String(current?.rating===rating));actions.append(b)}
         }
+        if(message.forkCut)actions.append(iconButton('branch','在新对话中继续',()=>branch(message,false)))
         if(message.feedback||message.forkCut){
           const more=element('details',undefined,'message-more');more.dataset.detail='more-'+message.id
-          const summary=element('summary',undefined,'icon-button');summary.setAttribute('aria-label','更多回答操作');summary.title='更多回答操作';summary.dataset.action='更多回答操作';summary.append(icon('more'))
+          const summary=element('summary',undefined,'qa-action');summary.setAttribute('aria-label','更多回答操作');summary.title='更多回答操作';summary.dataset.action='更多回答操作';summary.append(icon('more'))
           const menu=element('div',undefined,'message-menu'),item=(name,label,fn)=>{const b=button('',async()=>{more.open=false;await fn()});b.dataset.action=label;b.append(icon(name),document.createTextNode(label));menu.append(b);return b}
           if(message.feedback)item('comment','评价备注',()=>openFeedback(message)).disabled=!state.feedbackReady
-          if(message.forkCut){item('branch','在新对话中继续',()=>branch(message,false));item('refresh','重新生成',()=>branch(message,true)).title='保留原回答与文章，在新分支重新生成'}
+          if(message.forkCut){item('refresh','重新生成',()=>branch(message,true)).title='保留原回答与文章，在新分支重新生成'}
           more.append(summary,menu);actions.append(more)
         }
-        if(message.model)actions.append(element('small',`${message.provider} / ${message.model}`,'muted chat-model'))
         if(message.interrupted)actions.append(element('small','本段回答已中断','muted'))
-        if(message.tail){const turn=history.turns.find(t=>t.turn===message.turn);if(turn)actions.append(usage(turn))}
+        if(message.tail){const turn=history.turns.find(t=>t.turn===message.turn);if(turn)actions.append(usage(turn,message))}
       }
-      node.append(actions);append(node,'message-'+message.id,{message,feedback:state.feedback.get(message.id),feedbackReady:state.feedbackReady,turn:message.tail?history.turns.find(t=>t.turn===message.turn):null})
+      if(message.role==='assistant'){actions.append(element('time',new Date(message.time).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}),'qa-clock'));content.append(actions)}
+      append(node,'message-'+message.id,{message,feedback:state.feedback.get(message.id),feedbackReady:state.feedbackReady,turn:message.tail?history.turns.find(t=>t.turn===message.turn):null})
     }
-    for(const turn of history?.turns??[])if(turn.runMs!==null&&!history.messages.some(m=>m.tail&&m.turn===turn.turn)){const row=element('div',undefined,'chat-turn-summary');row.append(usage(turn));append(row,'turn-'+turn.turn,turn)}
+    for(const turn of history?.turns??[])if(turn.runMs!==null&&!history.messages.some(m=>m.tail&&m.turn===turn.turn)){const row=element('div',undefined,'chat-turn-summary qa-actions');row.append(usage(turn));append(row,'turn-'+turn.turn,turn)}
     for(const r of history?.requests??[]){
       if(['failed','interrupted'].includes(r.status)){const row=element('div',r.message??'本轮未完成','chat-status');row.append(button('继续本次请求',()=>send(`请基于前面的资料继续完成上一轮未完成的请求。`,r.id)));append(row,'request-'+r.id,{status:r.status,message:r.message})}
       if(r.sources?.length){const details=element('details',undefined,'chat-sources');details.dataset.detail='sources-'+r.id;details.append(element('summary',`查证来源（${r.sources.length}）`));for(const source of r.sources){const row=element('div'),href=url(source.url),link=element(href?'a':'span',source.title??source.url);if(href){link.href=href;link.target='_blank';link.rel='noopener noreferrer'}row.append(link,element('small',source.fetched?' · 已读取原文':' · 搜索摘要'));details.append(row)}append(details,'sources-'+r.id,r.sources)}
@@ -220,11 +222,12 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
   $('chat-stop').addEventListener('click',run(async()=>{if(state.stopping)return;const id=state.id,epoch=state.epoch;state.stopping=true;controls();renderLive();try{await api('chat-stop',{conversationId:id});if(epoch===state.epoch)await refresh()}finally{if(epoch===state.epoch){state.stopping=false;controls();renderLive()}}}))
   $('chat-new').addEventListener('click',run(()=>activate(null)));$('chat-more').addEventListener('click',run(()=>conversations(true)))
   for(const b of document.querySelectorAll('[data-prompt]'))b.addEventListener('click',()=>{$('chat-input').value=b.dataset.prompt;$('chat-input').dispatchEvent(new Event('input'));focusInput()})
-  $('chat-messages').addEventListener('toggle',event=>{if(event.target.matches('.message-more[open]'))for(const menu of $('chat-messages').querySelectorAll('.message-more[open]'))if(menu!==event.target)menu.open=false},true)
-  document.addEventListener('click',event=>{for(const menu of $('chat-messages').querySelectorAll('.message-more[open]'))if(!menu.contains(event.target))menu.open=false})
-  document.addEventListener('keydown',event=>{if(event.key==='Escape'){const menu=$('chat-messages').querySelector('.message-more[open]');if(menu){menu.open=false;menu.querySelector('summary').focus({preventScroll:true});event.preventDefault()}}})
+  $('chat-messages').addEventListener('toggle',event=>{if(event.target.matches('.message-more[open], .qa-meta[open]'))for(const menu of $('chat-messages').querySelectorAll('.message-more[open], .qa-meta[open]'))if(menu!==event.target)menu.open=false},true)
+  document.addEventListener('click',event=>{for(const menu of $('chat-messages').querySelectorAll('.message-more[open], .qa-meta[open]'))if(!menu.contains(event.target))menu.open=false})
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'){const menu=$('chat-messages').querySelector('.message-more[open], .qa-meta[open]');if(menu){menu.open=false;menu.querySelector('summary').focus({preventScroll:true});event.preventDefault()}}})
   $('chat-scroll').addEventListener('scroll',()=>{$('chat-bottom').hidden=nearBottom()});$('chat-bottom').addEventListener('click',bottom)
   window.addEventListener('beforeunload',()=>state.stream?.close())
+  window.addEventListener('resize',controls)
   void conversations().catch(error)
   controls()
   const previous=sessionStorage.getItem(key);if(previous)void activate(previous).catch(e=>{error(e);void activate(null)})
