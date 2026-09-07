@@ -12,4 +12,6 @@
 
 example 的代码问答通过 kit 工具授权包装官方工具，只检索构建时生成的公共框架快照；索引随插件归档交付，不在运行时扫描框架或私有插件源码。FAQ、源码参考与业务运行数据分开，回答引用快照路径及行号。
 
-标准插件通过 `configuration` 声明 Cordis 配置入口和认证角色，每个实例的 `plugin.json` 控制启用及认证模式。管理器据此生成不可变 patch，通过官方 CLI 同步 Bundle；健康检查读取成功部署状态中的探针声明。站点参数与业务凭据分别保存，不在插件切换时重复修改。完整规则见[插件运行配置规范](plugin-configuration.md)。
+标准插件通过 `configuration` 声明 Cordis 配置入口和认证角色，每个实例的 `plugin.json` 控制启用及认证模式。管理器据此生成不可变 patch，通过官方 CLI 同步 Bundle；健康检查读取成功部署状态中的探针声明。框架输入与插件业务配置分别维护，不在插件切换时重复修改。完整规则见[插件运行配置规范](plugin-configuration.md)。
+
+框架人工输入集中在私有 `.local/env.conf`，公开根模板只含空值。管理器继续生成部署文件、Compose和官方patch；插件自己的Schema、plugin.json及runtimeConfig仍独立维护，账号与会话保持原存储。详见[配置范围](framework-configuration.md)。

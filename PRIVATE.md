@@ -41,13 +41,13 @@ pnpm package --plugins "auth,closedoff,example" --output .local/artifacts/releas
 
 `plugins/dsh-blog-assistant` 是个人博客私有插件，适用其 [LICENSE](plugins/dsh-blog-assistant/LICENSE)，只在 Gitee 集成。它通过 auth 使用博客工作台，通过 Typecho 桥接编辑文章，并使用独立 systemd 执行器备份网站。运行凭据源为插件自己的 `config/config.json`；文件不提交、不进入镜像和归档，生产以 `instances.blog.runtimeConfig` 显式引用。安装与使用见[插件说明](plugins/dsh-blog-assistant/README.md)。
 
-首次部署时，从插件模板创建 `.local/secrets/closedoff.env.conf`，并在 `.local/site.json` 中设置 `instances.closedoff.runtimeConfig` 为该文件路径。配置文件应仅允许服务运行用户读取。不要提前向数据目录写入文件；首次构建由管理器初始化数据目录。模型凭据、真实业务配置及运行数据不进入 Git。发布包放在 `.local/artifacts/`。
+首次部署时，从插件模板创建 `.local/secrets/closedoff.env.conf`，在私有 `.local/env.conf` 的 `DSH_INSTANCES` 对象中设置 `closedoff.runtimeConfig` 为该文件路径，保留其他插件引用。业务配置仍由各插件维护。根 `env.conf` 只提交空模板；真实模型密钥填写私有副本，非空时文件优先且网页只读，留空沿用官方来源而不删除旧值。配置文件应仅允许服务运行用户读取。不要提前向数据目录写入文件；首次构建由管理器初始化数据目录。真实凭据及运行数据不进入 Git。发布包放在 `.local/artifacts/`。
 
 宿主子模块锁定 DSH `0.1.3-alpha.1`，以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。
 
 ## 已部署实例的运维
 
-生产实例启用 `auth,closedoff,example`，封闭化和示例均使用 `authenticated` 模式。管理员自动看到“开发者接入助手”，普通账号通过权限管理授权。站点设置保存在 `.local/site.json`，当前镜像与发布清单由 `.local/deployment.json` 记录。Compose 项目名为 `dsh-plugin-manager`，实际配置路径由 `.local/artifacts/active-compose.json` 指向，不使用固定的历史产物目录。健康检查包含 `/example/ready`。在仓库根操作：
+实例插件选集以私有 `.local/env.conf` 的 `DSH_PLUGINS` 及生成的发布清单为准；各插件认证模式按自己的 `plugin.json` 维护。管理员管理普通账号的应用授权。默认更新入口会一次导入旧 site.json/deployment.json，保留已解析路径与原文件；已有未完成操作继续使用原输入恢复。当前镜像与发布清单由 `.local/deployment.json` 记录。Compose 项目名为 `dsh-plugin-manager`，实际配置路径由 `.local/artifacts/active-compose.json` 指向，不使用固定的历史产物目录。启用 example 时健康检查包含 `/example/ready`。在仓库根操作：
 
 ```sh
 compose_file=$(node -p "JSON.parse(require('node:fs').readFileSync('.local/artifacts/active-compose.json', 'utf8')).path")

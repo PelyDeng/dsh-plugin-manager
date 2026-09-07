@@ -7,6 +7,7 @@ import { assessVerification, printVerification } from './verification.mjs';
 import { randomUUID } from 'node:crypto';
 import { runtimeEnvironment } from './config.mjs';
 import { assertReleaseMode } from './release.mjs';
+import { prepareFrameworkCredentials } from './framework-credentials.mjs';
 export function profileManifest(profileRoot) { return readOptional(join(profileRoot, 'package.json')) ?? {}; }
 
 export function readState(path) {
@@ -149,6 +150,7 @@ export function dependencyEvidence(profileRoot, excluded) {
 /** Synchronize only owned packages; pending state survives every partial failure. */
 export async function synchronize(deployment, release, options = {}) {
   assertReleaseMode(release, deployment.mode);
+  prepareFrameworkCredentials(deployment);
   synchronizedStopped.delete(deployment);
   const runtime = runtimeEnvironment(deployment, release.plugins);
   const plugins = release.plugins.map(plugin => ({ ...plugin, mode: deployment.mode, ...(deployment.mode === 'development' ? { source: canonical(resolve(deployment.root, plugin.directory)) } : {}) }));
@@ -271,6 +273,7 @@ export async function verifyReady(deployment, release, fetcher = fetch) {
 /** Finalize a started operation only after the selected installation and probes pass. */
 export async function finalize(deployment, release, { running = false, locked = false } = {}) {
   assertReleaseMode(release, deployment.mode);
+  prepareFrameworkCredentials(deployment);
   const unlock = locked ? () => {} : acquireLock(deployment.profileRoot);
   try {
     const pendingPath = join(deployment.profileRoot, PENDING);
