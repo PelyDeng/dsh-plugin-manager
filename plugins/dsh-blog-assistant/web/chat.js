@@ -1,6 +1,6 @@
 export function initChat({api,request,identity,openDraft,renderMarkdown}){
   const $=id=>document.getElementById(id),base=document.body.dataset.base
-  const state={id:null,epoch:0,history:null,files:[],feedback:new Map(),stream:null,offset:null,sending:false,uploading:false,liveClock:0,pending:null}
+  const state={id:null,epoch:0,history:null,files:[],feedback:new Map(),feedbackReady:false,stream:null,offset:null,sending:false,uploading:false,liveClock:0,pending:null}
   const inputs=new Map(),key=`blog-chat:${identity.userId}`
   let refreshTimer,refreshVersion=0,feedbackTarget,fileTarget,composing=false,creating
   const element=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el}
@@ -30,7 +30,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
   }
   async function activate(id){
     inputs.set(state.id??'new',$('chat-input').value)
-    state.epoch++;state.stream?.close();state.stream=null;clearTimeout(refreshTimer);state.pending=null;state.sending=false;state.id=id;state.history=null;state.files=[];state.feedback.clear();state.liveClock=0
+    state.epoch++;state.stream?.close();state.stream=null;clearTimeout(refreshTimer);state.pending=null;state.sending=false;state.id=id;state.history=null;state.files=[];state.feedback.clear();state.feedbackReady=false;state.liveClock=0
     $('chat-feedback-dialog').close();$('chat-file-dialog').close()
     $('chat-input').value=inputs.get(id??'new')??'';$('chat-error').hidden=true;render();renderFiles();controls()
     if(id){sessionStorage.setItem(key,id);connect();await Promise.all([refresh(),loadFiles()])}else{sessionStorage.removeItem(key);$('chat-input').focus()}
@@ -57,7 +57,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     if(epoch!==state.epoch||version!==refreshVersion)return
     if(data.busy&&clock!==state.liveClock)data.live=state.history?.live??data.live
     const wasBusy=state.history?.busy;state.history=data;render();controls()
-    if(!data.busy){const feedback=await api('chat-feedback',{conversationId:id,operation:'list'});if(epoch!==state.epoch||version!==refreshVersion)return;if(feedback.ok){state.feedback=new Map(feedback.value.items.map(i=>[i.messageId,i]));render()}}
+    if(!data.busy){const feedback=await api('chat-feedback',{conversationId:id,operation:'list'});if(epoch!==state.epoch||version!==refreshVersion)return;if(feedback.ok){state.feedback=new Map(feedback.value.items.map(i=>[i.messageId,i]));state.feedbackReady=true;render()}}
     if(wasBusy&&!data.busy)void conversations().catch(error)
   }
   function prose(text){const el=element('div',undefined,'prose');el.innerHTML=renderMarkdown(text??'');return el}
@@ -88,8 +88,8 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
         if(message.model)actions.append(element('small',`${message.provider} / ${message.model}`,'muted'))
         if(message.feedback){
           const current=state.feedback.get(message.id)
-          for(const [rating,label] of [['positive','赞'],['negative','踩']]){const b=button(label,()=>rate(message,rating));b.setAttribute('aria-pressed',String(current?.rating===rating));actions.append(b)}
-          actions.append(button('评价备注',()=>openFeedback(message)))
+          for(const [rating,label] of [['positive','赞'],['negative','踩']]){const b=button(label,()=>rate(message,rating));b.disabled=!state.feedbackReady;b.setAttribute('aria-pressed',String(current?.rating===rating));actions.append(b)}
+          const note=button('评价备注',()=>openFeedback(message));note.disabled=!state.feedbackReady;actions.append(note)
         }
         if(message.forkCut){actions.append(button('在新对话中继续',()=>branch(message,false)),button('重新生成',()=>branch(message,true)))}
         if(message.interrupted)actions.append(element('small','本段回答已中断','muted'))
@@ -112,15 +112,22 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     const id=state.id,epoch=state.epoch,old=state.feedback.get(message.id)
     const result=await api('chat-feedback',{conversationId:id,operation:old?.rating===rating?'delete':'put',messageId:message.id,rating,ifVersion:old?.version??null,...(old?.note?{note:old.note}:{})})
     if(epoch!==state.epoch)return
-    checkFeedback(result,message.id);await refresh()
+    checkFeedback(result,message.id);rememberFeedback(result,message.id,id);await refresh()
   }
   function checkFeedback(result,messageId,conversationId=state.id){
     if(result.ok)return
-    if(result.error.code==='version-conflict'){const current=result.error.current;if(conversationId===state.id){if(current)state.feedback.set(messageId,current);else state.feedback.delete(messageId);render()}throw new Error('评价已在其他窗口变化，已刷新当前版本，请核对后再提交')}
+    if(result.error.code==='version-conflict'){const current=result.error.current;if(conversationId===state.id){refreshVersion++;if(current)state.feedback.set(messageId,current);else state.feedback.delete(messageId);render()}throw new Error('评价已在其他窗口变化，已刷新当前版本，请核对后再提交')}
     throw new Error(({ 'note-too-large':'评价备注过长，请缩短','note-blank':'评价备注不能只有空格','session-not-found':'对话尚未完成持久化，请稍后重试','target-not-found':'回答不存在或尚未完成' })[result.error.code]??'评价未能保存')
   }
+  function rememberFeedback(result,messageId,conversationId){
+    if(state.id!==conversationId)return
+    refreshVersion++
+    if(result.value.absent)state.feedback.delete(messageId)
+    else state.feedback.set(messageId,result.value)
+    render()
+  }
   function openFeedback(message){feedbackTarget={conversationId:state.id,messageId:message.id,version:state.feedback.get(message.id)?.version??null};const old=state.feedback.get(message.id);$('chat-rating').value=old?.rating??'positive';$('chat-feedback-note').value=old?.note??'';$('chat-feedback-error').hidden=true;$('chat-feedback-delete').disabled=!old;$('chat-feedback-dialog').showModal()}
-  async function saveFeedback(operation){const target=feedbackTarget,note=$('chat-feedback-note').value;const result=await api('chat-feedback',{...target,operation,ifVersion:target.version,rating:$('chat-rating').value,...(note.trim()?{note}:{})});if(!result.ok&&result.error.code==='version-conflict'){target.version=result.error.current?.version??null;if(feedbackTarget===target){$('chat-rating').value=result.error.current?.rating??'positive';$('chat-feedback-note').value=result.error.current?.note??'';$('chat-feedback-delete').disabled=!result.error.current}}checkFeedback(result,target.messageId,target.conversationId);if(feedbackTarget===target)$('chat-feedback-dialog').close();if(state.id===target.conversationId)await refresh()}
+  async function saveFeedback(operation){const target=feedbackTarget,note=$('chat-feedback-note').value;const result=await api('chat-feedback',{...target,operation,ifVersion:target.version,rating:$('chat-rating').value,...(note.trim()?{note}:{})});if(!result.ok&&result.error.code==='version-conflict'){target.version=result.error.current?.version??null;if(feedbackTarget===target){$('chat-rating').value=result.error.current?.rating??'positive';$('chat-feedback-note').value=result.error.current?.note??'';$('chat-feedback-delete').disabled=!result.error.current}}checkFeedback(result,target.messageId,target.conversationId);rememberFeedback(result,target.messageId,target.conversationId);if(feedbackTarget===target)$('chat-feedback-dialog').close();if(state.id===target.conversationId)await refresh()}
   $('chat-feedback-save').addEventListener('click',run(()=>saveFeedback('put'),'chat-feedback-error'))
   $('chat-feedback-delete').addEventListener('click',run(()=>saveFeedback('delete'),'chat-feedback-error'))
   async function branch(message,regenerate){
