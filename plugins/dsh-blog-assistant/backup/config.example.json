@@ -8,6 +8,11 @@
   "imageRoot": "/absolute/lsky-site",
   "pluginData": "/absolute/dsh-home/plugins/blog",
   "attachmentRoot": "/absolute/dsh-home/attachments/v1",
+  "chat": {
+    "sessionRoot": "/absolute/official-session-root",
+    "storageRoot": "/absolute/official-json-storage-root",
+    "cwd": "/absolute/cwd-recorded-by-dsh"
+  },
   "minioData": "/absolute/minio-data",
   "nginxFiles": [],
   "mysqlContainer": "mysql-container",

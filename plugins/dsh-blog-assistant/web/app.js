@@ -1,5 +1,6 @@
 import DOMPurify from 'dompurify'
 import { renderMarkdown } from './markdown.js'
+import { initChat } from './chat.js'
 
 const $=id=>document.getElementById(id), base=document.body.dataset.base
 const S={draft:null,dirty:false,saving:null,tab:'local',page:1,mode:'ai',view:'split',job:null,identity:null,attachments:[],selected:new Set(),prepared:null,metadataReady:false}
@@ -90,5 +91,5 @@ $('schedule').addEventListener('submit',action(async e=>{e.preventDefault();awai
 document.addEventListener('click',action(async e=>{if(e.target.matches('.copy-code')){const code=e.target.closest('.code-block').querySelector('code');await navigator.clipboard.writeText(code.textContent);e.target.textContent='已复制'}}))
 window.addEventListener('beforeunload',e=>{if(S.dirty){e.preventDefault();e.returnValue=''}})
 async function loadMetadata(){try{const meta=await api('metadata');for(const c of meta.categories){const option=document.createElement('option');option.value=c.id;option.textContent=c.name;option.selected=S.draft?.categories.includes(c.id)??false;$('categories').append(option)}S.metadataReady=true;$('categories').disabled=false;$('category-help').textContent='可多选已有分类'}catch(err){$('category-help').textContent='分类加载失败，保存时保留原分类';notice(err)}}
-async function start(){S.identity=await request('/identity');$('backup-open').hidden=!S.identity.backupAdmin;$('blog-link').href=S.identity.blogUrl;void loadMetadata();await loadList();const id=sessionStorage.getItem(`blog-draft:${S.identity.userId}`);if(id)await openDraft(id)}
+async function start(){S.identity=await request('/identity');$('backup-open').hidden=!S.identity.backupAdmin;$('blog-link').href=S.identity.blogUrl;initChat({api,request,identity:S.identity,openDraft,flush,renderMarkdown});void loadMetadata();await loadList();const id=sessionStorage.getItem(`blog-draft:${S.identity.userId}`);if(id)await openDraft(id)}
 start().catch(notice)

@@ -1,6 +1,6 @@
-# 博客工作台
+# 博客智能体
 
-私有 DSH 业务插件，入口 `/blog`。通过 auth 授权后使用同一份草稿进行手动编辑、AI 写作、资料查证、候选合并和确认发布。博客端为 Typecho 1.2.1，图床端为 Lsky Pro 2.1 的固定存储策略。
+私有 DSH 业务插件，入口 `/blog`。通过 auth 授权后直接对话、查询博客、分析资料或写作；文章编辑视图提供手动编辑、候选合并和确认发布。博客端为 Typecho 1.2.1，图床端为 Lsky Pro 2.1 的固定存储策略。
 
 ## 配置
 
@@ -14,9 +14,17 @@
 
 ## 宿主能力
 
-通过官方 `dsh` profile 运行，不自建第二个宿主。宿主需提供 agents、agentDefaultModel、llm、tools、systemPrompt、webServer、jobs 和 attachments。最终运行契约以仓库锁定的 DSH `0.1.3-alpha.1` 为准：原文件需要该版本的 `saveFileStream/readFileStream`，不能仅凭较旧开发依赖的类型检查认定可用。
+通过官方 `dsh` profile 运行，不自建第二个宿主。宿主需提供 agents、agentDefaultModel、llm、tools、systemPrompt、webServer、jobs、attachments、sessions、sessionPersistence 和 messageFeedback。最终运行契约以仓库锁定的 DSH `0.1.3-alpha.1` 为准：原文件需要该版本的 `saveFileStream/readFileStream`，历史与用量依赖其公开子路径，不能仅凭较旧开发依赖的类型检查认定可用。
 
-AI 任务使用官方 Jobs controller 和真实 Agent owner；每次写作建立新 Agent，避免上一次已移除的附件仍进入上下文。任务结果、幂等请求、候选稿和原用户归属保存在本插件 SQLite 中。服务重启会将未完成任务标记中断，不自动重新调用模型。
+官方 web Bundle 已提供会话持久化、JSON storage-domain 和 messageFeedback，无需重复装配。博客接口将反馈备注限制为 4000 UTF-8 字节，沿用宿主共享反馈服务的配置，不改变其他应用的备注上限。
+
+AI 任务使用官方 Jobs controller 和真实 Agent owner。文章编辑器的单次写作建立独立 Agent；对话每轮恢复同一官方 Session，并在结束时持久化、释放 Agent。任务结果、幂等请求、候选稿和原用户归属保存在本插件 SQLite 中。服务重启会将未完成任务标记中断，不自动重新调用模型。
+
+对话全文使用官方 Session 日志。点赞、点踩及备注使用官方 messageFeedback 的版本校验；Token 使用官方 token-meter 的单轮统计，缺失用量显示“未提供”。分支保留完成轮次之前的消息，重新生成在分支中追加新请求并沿用逻辑文章绑定，不回滚原文章。消息中的文章卡是不可变候选快照，当前正文和可应用状态以编辑器为准。
+
+对话附件不要求先创建文章。发送时冻结资料版本及阅读范围；移除待发送选择不删除历史消息中的原件引用。新对话不继承旧资料，分支只继承切点之前的消息与资料。
+
+`pnpm test` 运行可在已发布开发依赖上执行的行为测试；`pnpm test:host` 必须在锁定 DSH 0.1.3 运行环境中运行，覆盖真实公开 SDK 的历史/Token 投影及受保护 HTTP 路由。HTTP 测试使用隔离数据与身份替身，不等于正式浏览器或真实模型验收。
 
 联网查证复用宿主 `web`，需要挂载一个明确的搜索 provider 和抓取 provider。多个未指定默认 provider 的配置会报歧义，不能当作已有联网能力。公开网页抓取应使用官方限制私网地址和重定向的 `web-fetch-http`。来源记录区分搜索摘要和实际抓取原文。
 
@@ -24,7 +32,7 @@ AI 任务使用官方 Jobs controller 和真实 Agent owner；每次写作建立
 
 - 手动和 AI 模式共用草稿；支持原文、分屏、预览、标签、已有分类、图片和自动保存。预览不执行脚本，主题短代码以博客最终渲染为准。
 - AI 输出先成为候选，用户按标题、正文、标签选择应用。草稿基线变化时禁止覆盖，可人工比较后合并。
-- 私有资料支持 UTF-8 TXT、Markdown、CSV、JSON、文本层 PDF、DOCX、PNG/JPEG/WebP/GIF。单文件 20 MiB、每稿 10 个、本次选中 40 MiB；模型资料文本限 100000 字符。可选择页、段或行范围。
+- 私有资料支持 UTF-8 TXT、Markdown、CSV、JSON、文本层 PDF、DOCX、PNG/JPEG/WebP/GIF。单文件 20 MiB、每份草稿或对话 10 个、本次选中 40 MiB；模型资料文本限 100000 字符。可选择页、段或行范围。
 - 原文件复用官方 File API；模型图片复用 Image API。GIF 的模型输入为规范化单帧，原文件完整保留。图片模型能力按实际 provider/model 检查。
 - PDF/DOCX 在有限内存的可终止 worker 中提取，解析限时 30 秒。扫描 PDF 提示需要 OCR；部分解析明确展示覆盖范围，不能默认声称全文读取。
 - “添加资料”不会公开文件。“插入图片”才上传到配置的图床策略。Lsky 必须开启 API；Token 缓存放在插件运行数据中，不修改其他用户 Token。
@@ -39,7 +47,7 @@ AI 任务使用官方 Jobs controller 和真实 Agent owner；每次写作建立
 
 备份执行器作为服务器独立 systemd 服务运行；不把 Docker socket、SSH 私钥或 root 数据库凭据挂进 DSH。阅读 [执行器说明](backup/README.md)，使用显式路径配置安装。API 仅监听回环地址并校验 Token；本部署依赖 DSH 使用 host 网络。
 
-备份包含 Typecho、Lsky 数据库和网站文件、pelyblog 桶数据、工作台草稿和引用的官方附件。恢复可选择隔离演练或生产恢复；生产恢复需输入备份 ID，再次校验原用户会话，先备份当前状态并保留旧目录和数据库。其他图床策略不会被覆盖；共享引用或存储策略发生不兼容变化时拒绝恢复。
+备份包含 Typecho、Lsky 数据库和网站文件、pelyblog 桶数据、工作台草稿、引用的官方附件，以及博客会话的官方日志和反馈。聊天快照需要执行器显式配置官方存储路径；旧备份缺少聊天组件且当前已有会话时拒绝恢复。恢复可选择隔离演练或生产恢复；生产恢复需输入备份 ID，再次校验原用户会话，先备份当前状态并保留旧目录和数据库。其他图床策略、其他插件会话和反馈不会被旧备份覆盖；共享引用或存储策略发生不兼容变化时拒绝恢复。
 
 同机备份不提供整机故障后的容灾能力。备份含站点配置和私有资料，仅在受限目录保管；异机目的地由管理员另外配置。
 

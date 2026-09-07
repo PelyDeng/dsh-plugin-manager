@@ -28,6 +28,9 @@ IDENT = re.compile(r'^[A-Za-z0-9_]+$')
 BACKUP_ID = re.compile(r'^\d{8}T\d{6}-[a-f0-9]{8}$')
 
 
+class ChatRestoreError(ValueError):pass
+
+
 def read(path, default=None):
     try:
         with open(str(path), encoding='utf-8') as stream: return json.load(stream)
@@ -67,6 +70,14 @@ def load_config(path):
     origin=urllib.parse.urlsplit(c['dshOrigin'])
     if origin.scheme!='http' or origin.hostname not in ['127.0.0.1','::1'] or origin.username or origin.password or origin.path:raise ValueError('DSH authorization callback must be a loopback origin')
     sources = [c[k] for k in ['blogRoot','imageRoot','pluginData','attachmentRoot','minioData']]
+    if c.get('chat'):
+        for field in ['sessionRoot','storageRoot']:
+            p=pathlib.Path(c['chat'][field])
+            if not p.is_absolute() or p==pathlib.Path('/') or any(ch in str(p) for ch in ',\n\r'):raise ValueError('absolute scoped chat root required')
+            c['chat'][field]=str(p.resolve());sources.append(str(p.resolve()))
+        if not isinstance(c['chat'].get('cwd'),str) or not c['chat']['cwd'].startswith('/'):raise ValueError('explicit host session cwd required')
+        chat_roots=[c['chat']['sessionRoot'],c['chat']['storageRoot'],c['pluginData']]
+        if any(within(a,b) or within(b,a) for i,a in enumerate(chat_roots) for b in chat_roots[i+1:]):raise ValueError('chat and plugin roots must be disjoint')
     for field in ['stateRoot','backupRoot','restoreRoot']:
         if any(within(c[field], source) or within(source,c[field]) for source in sources): raise ValueError('backup and source roots must be separate')
         pathlib.Path(c[field]).mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -121,10 +132,12 @@ class Executor:
             if journal.get('imageChanged'):
                 self.restore_images(journal['imageDatabase'],journal['rollbackImageDatabase'])
             for entry in reversed(journal.get('swaps',[])):
-                target,old,new=map(pathlib.Path,[entry['target'],entry['old'],entry['new']])
+                target,old=map(pathlib.Path,[entry['target'],entry['old']]);new=pathlib.Path(entry['new']) if entry.get('new') else None
                 if old.exists():
-                    if target.exists():os.rename(str(target),str(new)+'.failed')
+                    if target.exists():os.rename(str(target),str(new or old)+'.failed')
                     os.rename(str(old),str(target))
+                elif entry.get('existed') is False and new and not new.exists() and target.exists():
+                    os.rename(str(target),str(new)+'.failed')
             journal['committed']=True;journal['rolledBack']=True;write(self.state/'restore-journal.json',journal)
         record=read(self.state/'stopped.json',{'services':[]}); failed=[]
         allowed={self.c['phpUnit'],self.c['dshContainer'],self.c['minioContainer']}
@@ -157,8 +170,10 @@ class Executor:
         db=sqlite3.connect('file:'+str(database)+'?mode=ro',uri=True)
         paths=set()
         try:
-            for row in db.execute('SELECT data FROM attachments'):
-                a=json.loads(row[0])
+            references=[json.loads(row[0]) for row in db.execute('SELECT data FROM attachments')]
+            if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_requests'").fetchone():
+                for row in db.execute('SELECT data FROM chat_requests'):references.extend(json.loads(row[0]).get('attachments',[]))
+            for a in references:
                 for key in ['original','image']:
                     ref=a.get(key)
                     if not ref: continue
@@ -179,6 +194,45 @@ class Executor:
                 shutil.copy2(str(source/relative),str(destination))
         finally: db.close()
         return target,len(paths)-(len(missing) if missing is not None else 0)
+    def chat_count(self, database=None):
+        database=pathlib.Path(database or pathlib.Path(self.c['pluginData'])/'blog.sqlite')
+        db=sqlite3.connect('file:'+str(database)+'?mode=ro',uri=True)
+        try:
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversations'").fetchone():return 0
+            return db.execute('SELECT COUNT(*) FROM conversations').fetchone()[0]
+        finally:db.close()
+    def chat_preflight(self, manifest):
+        has_chat='chat-state.tar.gz' in manifest['components']
+        if not has_chat and self.chat_count():raise ChatRestoreError('此备份早于聊天功能，无法一致恢复当前聊天数据；请使用包含聊天记录的新备份')
+        if has_chat and not self.c.get('chat'):raise ChatRestoreError('恢复聊天记录需要先配置官方会话与反馈存储路径')
+    def chat_stage(self, operation, work, database=None, snapshot=None, merge=False):
+        chat=self.c.get('chat')
+        if not chat:raise ChatRestoreError('请先配置官方会话与反馈存储路径')
+        if (operation=='export' or merge) and self.service_active('docker',self.c['dshContainer']):raise RuntimeError('chat writers must be stopped before snapshot or merge')
+        work=pathlib.Path(work);work.mkdir(mode=0o700)
+        helper=pathlib.Path(__file__).resolve().parent/'chat-state.mjs'
+        image=run(['docker','inspect',self.c['dshContainer'],'--format','{{.Image}}']).decode().strip()
+        if not re.match(r'^sha256:[a-f0-9]{64}$',image):raise ValueError('invalid pinned DSH runtime image')
+        args=['docker','run','--rm','--user','0:0','--network','none','--read-only','--memory','1g','--pids-limit','128','--tmpfs','/tmp:rw,size=268435456','--entrypoint','node']
+        def mount(source,target,readonly=True):
+            source=pathlib.Path(source).resolve()
+            if not source.exists() or any(ch in str(source) for ch in ',\n\r'):raise ValueError('invalid offline helper mount')
+            args.extend(['--mount','type=bind,src='+str(source)+',dst='+target+(',readonly' if readonly else '')])
+        mount(work,'/work',False);mount(helper,'/helper/chat-state.mjs')
+        config={'database':'/source/plugin/blog.sqlite','sessionRoot':'/source/sessions','storageRoot':'/source/storage','output':'/work/output','cwd':chat['cwd']}
+        if operation=='export' or merge:
+            mount(self.c['pluginData'],'/source/plugin');mount(chat['sessionRoot'],'/source/sessions');mount(chat['storageRoot'],'/source/storage')
+        if operation=='stage':
+            database=pathlib.Path(database)
+            if database.name!='blog.sqlite':raise ValueError('invalid restored chat database')
+            mount(database.parent,'/restore/plugin');mount(snapshot,'/snapshot')
+            config.update(database='/restore/plugin/blog.sqlite',snapshot='/snapshot')
+            if merge:config['currentDatabase']='/source/plugin/blog.sqlite'
+        elif operation!='export':raise ValueError('unsupported offline helper operation')
+        write(work/'request.json',{'operation':operation,'config':config})
+        result=json.loads(run(args+[image,'/helper/chat-state.mjs'],timeout=600).decode())
+        if result.get('ok') is not True:raise RuntimeError('offline chat helper did not complete')
+        return work/'output',result
     def perform_backup(self, rotate=True, allow_missing_attachments=False):
         databases=self.databases()
         backup_id=datetime.datetime.now(UTC8).strftime('%Y%m%dT%H%M%S')+'-'+secrets.token_hex(4)
@@ -199,6 +253,10 @@ class Executor:
             missing=[] if allow_missing_attachments else None
             sources['attachment-files'],manifest['attachmentFiles']=self.attachments(attachment_stage,missing)
             if missing:manifest['missingAttachments']=missing
+            if self.c.get('chat'):
+                sources['chat-state'],chat=self.chat_stage('export',attachment_stage/'chat-work')
+                manifest['chatVersion']=1;manifest['chatSessions']=chat['sessions']
+            elif self.chat_count():raise ChatRestoreError('已有聊天数据，必须配置官方会话与反馈存储路径后才能完整备份')
             for index,path in enumerate(self.c.get('nginxFiles',[])): sources['nginx-'+str(index)]=path
             for name,source in sources.items():manifest['components'][name+'.tar.gz']=pack(source,destination/(name+'.tar.gz'))
             manifest['minioImage']=run(['docker','inspect',self.c['minioContainer'],'--format','{{.Config.Image}}']).decode().strip()
@@ -224,6 +282,8 @@ class Executor:
         if manifest.get('schemaVersion')!=1 or manifest.get('id')!=backup_id or manifest.get('status')!='complete':raise ValueError('backup not complete')
         required={'blog.sql','image.sql','blog-site.tar.gz','image-site.tar.gz','plugin-data.tar.gz','plugin-config.tar.gz','minio-bucket.tar.gz','minio-bucket-metadata.tar.gz','minio-format.tar.gz','attachment-files.tar.gz'}
         if not required.issubset(manifest['components']):raise ValueError('backup components missing')
+        if manifest.get('chatVersion') is not None and (manifest['chatVersion']!=1 or 'chat-state.tar.gz' not in manifest['components']):raise ValueError('chat backup component missing or unsupported')
+        if for_restore:self.chat_preflight(manifest)
         for name,record in manifest['components'].items():
             if not re.match(r'^[a-z0-9-]+\.(sql|tar\.gz)$',name):raise ValueError('invalid component name')
             path=directory/name
@@ -268,6 +328,9 @@ class Executor:
         target=pathlib.Path(self.c['restoreRoot'])/restore_id;target.mkdir(mode=0o700)
         for name in manifest['components']:
             if name.endswith('.tar.gz'):unpack(self.backups/backup_id/name,target/name[:-7])
+        if 'chat-state.tar.gz' in manifest['components']:
+            self.chat_stage('stage',target/'chat-isolated',database=target/'plugin-data/data/blog.sqlite',snapshot=target/'chat-state/data')
+        elif self.chat_count(target/'plugin-data/data/blog.sqlite'):raise ChatRestoreError('备份中的聊天索引缺少对应官方记录，不能恢复')
         databases={}
         for key in ['blog','image']:
             name='dsh_restore_'+key+'_'+secrets.token_hex(6)
@@ -301,10 +364,21 @@ class Executor:
         fields=','.join('`'+n+'`' for n in names)
         self.mysql('START TRANSACTION; DELETE FROM '+a+'.images WHERE strategy_id='+strategy+'; INSERT INTO '+a+'.images ('+fields+') SELECT '+fields+' FROM '+b+'.images WHERE strategy_id='+strategy+'; COMMIT;')
     def stage_swap(self, source, target, restore_id):
-        source,target=pathlib.Path(source),pathlib.Path(target)
+        source,target=pathlib.Path(source) if source is not None else None,pathlib.Path(target)
         if not target.is_absolute() or target==pathlib.Path('/') or target.is_symlink():raise ValueError('unsafe live target')
-        new=target.parent/('.'+target.name+'.'+restore_id+'.new');old=target.parent/('.'+target.name+'.'+restore_id+'.before')
+        stage_parent=target.parent
+        chat=self.c.get('chat')
+        if chat and within(target,chat['sessionRoot']):
+            # Native JSONL lists exactly project/session. Keep retained generations one level deeper,
+            # otherwise the official list API sees duplicate session IDs after a successful restore.
+            root=pathlib.Path(chat['sessionRoot']);owner=root.stat()
+            stage_parent=root/'.blog-restore'/restore_id
+            for directory in [root/'.blog-restore',stage_parent]:
+                if directory.is_symlink():raise ValueError('unsafe chat recovery directory')
+                directory.mkdir(mode=0o700,exist_ok=True);os.chown(str(directory),owner.st_uid,owner.st_gid)
+        new=stage_parent/('.'+target.name+'.'+restore_id+'.new');old=stage_parent/('.'+target.name+'.'+restore_id+'.before')
         if new.exists() or old.exists():raise ValueError('restore staging already exists')
+        if source is None:return {'target':str(target),'new':None,'old':str(old),'existed':target.exists()}
         if source.is_dir():shutil.copytree(str(source),str(new),symlinks=True)
         else:shutil.copy2(str(source),str(new))
         if source.is_file():
@@ -323,9 +397,36 @@ class Executor:
                 for folder,dirs,files in os.walk(str(source),followlinks=False):entries.extend(pathlib.Path(folder)/n for n in dirs+files)
             for original in entries:
                 copy=new if original==source else new/original.relative_to(source);stat=original.lstat();os.lchown(str(copy),stat.st_uid,stat.st_gid)
-        return {'target':str(target),'new':str(new),'old':str(old)}
+        return {'target':str(target),'new':str(new),'old':str(old),'existed':target.exists()}
+    def apply_swaps(self, swaps):
+        for entry in swaps:
+            if pathlib.Path(entry['target']).exists()!=entry['existed']:raise ValueError('restore target changed after staging')
+            if entry['existed']:os.rename(entry['target'],entry['old'])
+            if entry['new']:os.rename(entry['new'],entry['target'])
+    def chat_mappings(self, target):
+        output,result=self.chat_stage('stage',target/'chat-merge',database=target/'plugin-data/data/blog.sqlite',snapshot=target/'chat-state/data',merge=True)
+        report=read(output/'result.json');mappings=[];chat=self.c['chat']
+        for entry in report['mappings']:
+            relative=pathlib.Path(entry['target'])
+            if relative.is_absolute() or len(relative.parts)!=2 or relative.parts[0] in ['.','..'] or not re.match(r'^blog-chat-[a-f0-9-]{36}$',relative.name):raise ValueError('invalid scoped chat destination')
+            dest=pathlib.Path(chat['sessionRoot'])/relative
+            source=output/entry['source'] if entry['source'] else None
+            if not within(dest,chat['sessionRoot']) or (source and not within(source,output/'sessions')):raise ValueError('chat restore escaped configured root')
+            owner=pathlib.Path(chat['sessionRoot']).stat()
+            if not dest.parent.exists():dest.parent.mkdir(mode=0o700);os.chown(str(dest.parent),owner.st_uid,owner.st_gid)
+            mappings.append((source,dest,owner))
+        if report['feedback']:
+            if report['feedback']!='storage/message_feedback.json':raise ValueError('unexpected feedback medium')
+            mappings.append((output/report['feedback'],pathlib.Path(chat['storageRoot'])/'message_feedback.json',pathlib.Path(chat['storageRoot']).stat()))
+        for source,dest,owner in mappings:
+            if not source:continue
+            os.chown(str(source),owner.st_uid,owner.st_gid)
+            if source.is_dir():
+                for folder,dirs,files in os.walk(str(source)):
+                    for name in dirs+files:os.chown(str(pathlib.Path(folder)/name),owner.st_uid,owner.st_gid)
+        return [(source,dest) for source,dest,owner in mappings]
     def production_restore(self, backup_id, actor):
-        m=self.verify(backup_id)
+        m=self.verify(backup_id,for_restore=True)
         if m['bucket']!=self.c['bucket'] or m['strategyId']!=self.c['strategyId']:raise ValueError('restore storage scope differs')
         restored=self.isolate(backup_id);target=pathlib.Path(restored['path']);restore_id=restored['id']
         # A fresh complete backup protects current databases and files before the first live mutation.
@@ -335,6 +436,7 @@ class Executor:
         journal={'id':restore_id,'committed':False,'imageChanged':False,'swaps':[],'imageDatabase':databases['image']['database'],'rollbackImageDatabase':before['databases']['image']}
         write(self.state/'restore-journal.json',journal)
         try:
+            self.chat_preflight(m)
             # Switch the restored blog to a new scoped database, retaining the previous database intact.
             db_user='dsh_restore_'+secrets.token_hex(6);password=secrets.token_hex(24);blog_database=restored['databases']['blog']
             self.mysql("CREATE USER '"+db_user+"'@'%' IDENTIFIED BY '"+password+"'; GRANT ALL ON `"+blog_database+"`.* TO '"+db_user+"'@'%';")
@@ -350,6 +452,7 @@ class Executor:
             config_stage=target/'runtime-config.json';write(config_stage,current)
             current_stat=pathlib.Path(self.c['pluginConfig']).stat();os.chmod(str(config_stage),current_stat.st_mode & 0o777);os.chown(str(config_stage),current_stat.st_uid,current_stat.st_gid)
             mappings.append((config_stage,self.c['pluginConfig']))
+            if 'chat-state.tar.gz' in m['components']:mappings.extend(self.chat_mappings(target))
             for source,destination in mappings:journal['swaps'].append(self.stage_swap(source,destination,restore_id))
             write(self.state/'restore-journal.json',journal)
             # Immutable official objects can be added without overwriting unrelated objects or references.
@@ -369,9 +472,7 @@ class Executor:
                         shutil.copy2(str(item),str(dest));os.chown(str(dest),owner.st_uid,owner.st_gid)
             journal['imageChanged']=True;write(self.state/'restore-journal.json',journal)
             self.restore_images(databases['image']['database'],restored['databases']['image'])
-            for entry in journal['swaps']:
-                if pathlib.Path(entry['target']).exists():os.rename(entry['target'],entry['old'])
-                os.rename(entry['new'],entry['target'])
+            self.apply_swaps(journal['swaps'])
             journal['committed']=True;write(self.state/'restore-journal.json',journal)
             return {'id':restore_id,'backupId':backup_id,'safeguardBackupId':safeguard,'mode':'production','status':'succeeded','at':time.time(),'note':'博客与 pelyblog 图片已恢复；原目录与原数据库完整保留'}
         finally:self.recover()
@@ -420,6 +521,7 @@ def serve(executor):
                 else:self.reply(404,{'error':'unknown operation'});return
                 self.reply(200,result)
             except BlockingIOError:self.reply(409,{'error':'备份或恢复正在运行'})
+            except ChatRestoreError as error:self.reply(400,{'error':str(error)})
             except Exception:self.reply(400,{'error':'操作未完成，请检查参数、备份或服务状态'})
         def reply(self,status,data):
             body=json.dumps(data,ensure_ascii=False).encode();self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Content-Length',str(len(body)));self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(body)

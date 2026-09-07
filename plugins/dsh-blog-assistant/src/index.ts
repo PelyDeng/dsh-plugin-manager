@@ -18,10 +18,12 @@ import { BlogClient,ImageClient,BackupClient } from './connectors.mjs'
 import { BlogJobs } from './jobs.mjs'
 import { BlogApplication } from './application.mjs'
 import { BlogAttachments, MAX_ATTACHMENT_BYTES } from './attachments.mjs'
+import { ChatStore } from './chat-store.mjs'
+import { BlogChat } from './chat.mjs'
 import type { Config } from './config.ts'
 export { Config } from './config.ts'
 export const name='blog'
-export const inject=['agents','agentDefaultModel','webServer','systemPrompt','tools','attachments','jobs','llm'] as const
+export const inject=['agents','agentDefaultModel','webServer','systemPrompt','tools','attachments','jobs','llm','sessions','sessionPersistence','messageFeedback'] as const
 
 function json(res:ServerResponse,data:unknown){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(data))}
 async function body(req:IncomingMessage,max:number){const chunks:Buffer[]=[];let size=0;for await(const b of req){const chunk=Buffer.from(b);size+=chunk.length;if(size>max)throw new AccessError(413,'请求超过大小限制');chunks.push(chunk)}return Buffer.concat(chunks)}
@@ -33,12 +35,15 @@ export async function apply(ctx:Context,config:Config){
   const http=createPluginHttp(ctx,{access,routePrefix:config.routePrefix})
   const store=new BlogStore(join(root,'blog.sqlite'))
   const blog=new BlogClient(settings.blog),images=new ImageClient(settings.image,join(root,'image-token.json')),backups=new BackupClient(settings.backup,access)
-  const attachments=new BlogAttachments(ctx,access,store)
+  const conversations=new ChatStore(store)
+  const attachments=new BlogAttachments(ctx,access,store,(owner:string,id:string)=>conversations.assertScope(owner,id))
   const jobs=new BlogJobs(ctx,access,store,blog,attachments,config.turnTimeoutMs)
   const app=new BlogApplication(store,access,blog,images,backups,jobs,attachments)
-  ctx.effect(()=>async()=>{await jobs.close();await attachments.close();store.close()})
+  const {chatSdk}=await import(new URL('../runtime/chat-sdk.mjs',import.meta.url).href)
+  const chat=new BlogChat(ctx,access,store,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)
+  ctx.effect(()=>async()=>{await chat.close();await jobs.close();await attachments.close();store.close()})
   const manifest=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'))
-  ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客工作台',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],tools:jobs.tools}))
+  ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],tools:jobs.chatTools}))
   for(const [suffix,file,mime] of [['','web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],['/style.css','web/style.css','text/css']] as const){
     const content=(await readFile(new URL(`../${file}`,import.meta.url),'utf8')).replaceAll('__BASE__',config.routePrefix)
     ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+suffix,surface:suffix?'asset':'page',handler(req,res){if(req.method!=='GET')throw new AccessError(405,'只支持 GET');res.writeHead(200,{'content-type':`${mime}; charset=utf-8`,'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"});res.end(content)}}))
@@ -57,7 +62,37 @@ export async function apply(ctx:Context,config:Config){
     let input
     try{input=JSON.parse((await body(req,3*1024*1024)).toString('utf8'))}catch(e){if(e instanceof AccessError)throw e;throw new AccessError(400,'无效 JSON')}
     if(!input||typeof input.action!=='string'||!input.args||typeof input.args!=='object'||Array.isArray(input.args))throw new AccessError(400,'请求格式无效')
-    json(res,await app.call(actor,input.action,input.args))
+    const args=input.args
+    let result
+    switch(input.action){
+      case 'chat-create':result=chat.create(actor,args.requestId);break
+      case 'chat-list':result=chat.list(actor,args.offset??0);break
+      case 'chat-history':result=await chat.history(actor,args.conversationId);break
+      case 'chat-send':result=await chat.send(actor,args);break
+      case 'chat-stop':result=await chat.stop(actor,args.conversationId);break
+      case 'chat-fork':result=await chat.fork(actor,args);break
+      case 'chat-feedback':result=await chat.feedback(actor,args.conversationId,args.operation,args);break
+      default:result=await app.call(actor,input.action,args)
+    }
+    json(res,result)
+  }}))
+  ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/chat-events',handler:async(req,res,actor)=>{
+    if(req.method!=='GET')throw new AccessError(405,'只支持 GET')
+    const id=new URL(req.url!,'http://localhost').searchParams.get('conversationId')!
+    // Validate ownership before opening an authenticated stream.
+    await chat.history(actor,id);access.assert(actor)
+    res.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','cache-control':'no-store','x-accel-buffering':'no'});res.flushHeaders()
+    let closed=false
+    const send=(value:unknown)=>{if(closed)return;if(!res.write(`data: ${JSON.stringify(value)}\n\n`))res.destroy()}
+    const unsubscribe=chat.subscribe(actor,id,send,()=>res.end())
+    res.once('close',()=>{closed=true;unsubscribe()})
+    try{send({type:'snapshot',value:await chat.history(actor,id)})}catch{res.end()}
+  }}))
+  ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/chat-attachment',handler:async(req,res,actor)=>{
+    if(req.method!=='GET')throw new AccessError(405,'只支持 GET')
+    const query=new URL(req.url!,'http://localhost').searchParams
+    const file=await chat.original(actor,query.get('conversationId'),query.get('requestId'),query.get('id'));access.assert(actor)
+    res.writeHead(200,{'content-type':'application/octet-stream','content-disposition':`attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`,'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"});res.end(file.bytes)
   }}))
   ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/upload',handler:async(req,res,actor)=>{
     if(req.method!=='POST')throw new AccessError(405,'只支持 POST')

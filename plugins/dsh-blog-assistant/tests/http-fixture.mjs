@@ -21,7 +21,8 @@ export async function httpFixture(hostname='127.0.0.1'){
     void Promise.resolve(route.handler(req,res)).catch(()=>{if(!res.headersSent)res.writeHead(500);res.end()})
   })
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin=`http://${hostname}:${server.address().port}`
-  await apply(ctx,Config({runtimeConfig:configPath,dataPath:join(directory,'data'),publicOrigin:origin}))
+  try{await apply(ctx,Config({runtimeConfig:configPath,dataPath:join(directory,'data'),publicOrigin:origin}))}
+  catch(error){server.closeAllConnections();await new Promise(r=>server.close(r));for(const cleanup of effects.reverse())await cleanup?.();throw error}
   return{origin,ctx,actors,revoked,token,
     request(path,{actor='alice',method='GET',body,headers={}}={}){return fetch(origin+'/blog'+path,{method,redirect:'manual',headers:{origin,...actor?{cookie:actor}:{},...headers},...body===undefined?{}:{body}})},
     api(action,args={},actor='alice'){return this.request('/api',{method:'POST',actor,headers:{'content-type':'application/json'},body:JSON.stringify({action,args})})},

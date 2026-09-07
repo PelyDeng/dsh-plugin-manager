@@ -4,7 +4,7 @@ import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
-from executor import Executor,read,write
+from executor import Executor,ChatRestoreError,read,write
 from archive import checksum
 
 
@@ -35,6 +35,61 @@ def fixture(root):
 
 
 class BackupTests(unittest.TestCase):
+    def test_frozen_chat_attachment_is_backed_up_without_pending_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory);e=fixture(root);digest='c'*64
+            db=sqlite3.connect(str(root/'pluginData/blog.sqlite'))
+            db.execute('CREATE TABLE chat_requests(data TEXT)')
+            db.execute('INSERT INTO chat_requests VALUES(?)',(json.dumps({'attachments':[{'original':{'attachmentId':'sha256:'+digest,'name':'history.txt'}}]}),));db.commit();db.close()
+            for relative in ['files/'+digest[:2]+'/'+digest+'/history.txt','file-objects/'+digest[:2]+'/'+digest]:
+                path=root/'attachmentRoot'/relative;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(b'frozen-history')
+            stage=root/'stage';stage.mkdir();target,count=e.attachments(stage)
+            self.assertEqual(count,2);self.assertEqual((target/'files'/digest[:2]/digest/'history.txt').read_bytes(),b'frozen-history')
+    def test_old_backup_is_rejected_when_current_chat_exists(self):
+        with tempfile.TemporaryDirectory() as directory,patch('executor.run',return_value=b'minio-fixture'):
+            root=pathlib.Path(directory);e=fixture(root);backup_id=e.perform_backup()
+            db=sqlite3.connect(str(root/'pluginData/blog.sqlite'));db.execute('CREATE TABLE conversations(id TEXT)');db.execute("INSERT INTO conversations VALUES('blog-chat-fixture')");db.commit();db.close()
+            with self.assertRaisesRegex(ChatRestoreError,'此备份早于聊天功能'):e.verify(backup_id,for_restore=True)
+            with self.assertRaisesRegex(ChatRestoreError,'已有聊天数据'):e.perform_backup()
+            self.assertTrue(e.recovered)
+    def test_chat_helper_uses_pinned_one_off_image_with_readonly_sources_after_stop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=pathlib.Path(directory);e=fixture(root);e.c['dshContainer']='fixture-dsh'
+            e.c['chat']={'sessionRoot':str(root/'sessions'),'storageRoot':str(root/'storage'),'cwd':'/data/workspace'}
+            (root/'sessions').mkdir();(root/'storage').mkdir()
+            e.service_active=lambda kind,name:True
+            with self.assertRaisesRegex(RuntimeError,'must be stopped'):e.chat_stage('export',root/'blocked')
+            self.assertFalse((root/'blocked').exists())
+            e.service_active=lambda kind,name:False;commands=[]
+            def command(args,**kwargs):
+                commands.append(args)
+                return ('sha256:'+'a'*64).encode() if args[1]=='inspect' else b'{"ok":true,"sessions":2}'
+            with patch('executor.run',side_effect=command):output,result=e.chat_stage('export',root/'work')
+            self.assertEqual(result['sessions'],2);self.assertEqual(commands[1][:3],['docker','run','--rm'])
+            self.assertNotIn('exec',commands[1]);self.assertIn('none',commands[1]);self.assertIn('sha256:'+'a'*64,commands[1])
+            self.assertEqual(commands[1][commands[1].index('--user')+1],'0:0')
+            self.assertTrue(all(v.endswith(',readonly') for v in commands[1] if v.startswith('type=bind') and ',dst=/work' not in v))
+            self.assertEqual(read(root/'work/request.json')['config']['cwd'],'/data/workspace')
+    def test_failed_chat_swaps_roll_back_existing_new_and_removed_targets(self):
+        with tempfile.TemporaryDirectory() as directory,patch('executor.run',return_value=b'true'):
+            root=pathlib.Path(directory);e=fixture(root);e.c.update(phpUnit='php-fixture',dshContainer='dsh-fixture')
+            old=root/'existing';old.write_text('before');removed=root/'removed';removed.write_text('delete only on commit')
+            new=root/'brand-new';last=root/'last';last.write_text('last-before')
+            replacement=root/'replacement';replacement.write_text('restored')
+            swaps=[e.stage_swap(replacement,old,'fixture'),e.stage_swap(replacement,new,'fixture'),e.stage_swap(None,removed,'fixture'),e.stage_swap(replacement,last,'fixture')]
+            journal={'committed':False,'imageChanged':False,'swaps':swaps};write(e.state/'restore-journal.json',journal)
+            import os
+            rename=os.rename
+            def fail(source,dest):
+                if str(source)==swaps[-1]['new']:raise OSError('injected after old file was moved')
+                rename(source,dest)
+            with patch('executor.os.rename',side_effect=fail):
+                with self.assertRaises(OSError):e.apply_swaps(swaps)
+            Executor.recover(e)
+            self.assertEqual(old.read_text(),'before');self.assertEqual(removed.read_text(),'delete only on commit');self.assertEqual(last.read_text(),'last-before')
+            self.assertFalse(new.exists());self.assertEqual(pathlib.Path(swaps[1]['new']+'.failed').read_text(),'restored')
+            Executor.recover(e)
+            self.assertEqual(old.read_text(),'before');self.assertTrue(read(e.state/'restore-journal.json')['rolledBack'])
     def test_safeguard_records_missing_attachment_but_regular_backup_fails(self):
         with tempfile.TemporaryDirectory() as directory,patch('executor.run',return_value=b'minio-fixture'):
             root=pathlib.Path(directory);e=fixture(root);digest='b'*64

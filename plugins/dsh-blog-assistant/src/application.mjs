@@ -17,11 +17,7 @@ export class BlogApplication {
       case 'articles': result=await this.blog.list(args.query??'',args.page??1);break
       case 'metadata': result=await this.blog.call('status');break
       case 'import': {
-        const remote=await this.blog.get(args.cid);this.access.assert(actor)
-        invariant(['published','savedDraft'].includes(args.variant),'请选择导入公开版或保存稿')
-        const source=remote[args.variant];invariant(source,'所选版本不存在',404)
-        result=this.store.create(owner,{title:source.title,text:source.text,slug:source.slug,format:source.format,tags:source.tags.map(t=>typeof t==='string'?t:t.name),categories:source.categories.map(c=>typeof c==='number'?c:c.id)},{...remote,selectedVariant:args.variant})
-        this.store.record(owner,'import',{draftId:result.id,cid:args.cid,variant:args.variant});break
+        result=await this.importDraft(actor,args.cid,args.variant);break
       }
       case 'tasks': result=this.store.jobList(owner,args.draftId);break
       case 'attachments': result=this.attachments.list(actor,args.draftId);break
@@ -45,6 +41,19 @@ export class BlogApplication {
     }
     this.access.assert(actor);return result
   }
+  async readImport(actor,cid,variant,signal){
+    this.access.assert(actor);signal?.throwIfAborted()
+    invariant(['published','savedDraft'].includes(variant),'请选择导入公开版或保存稿')
+    const remote=await this.blog.get(cid,signal);this.access.assert(actor);signal?.throwIfAborted()
+    const source=remote[variant];invariant(source,'所选版本不存在',404)
+    return{source,remote,variant}
+  }
+  importSnapshot(actor,{source,remote,variant},cid){
+    this.access.assert(actor)
+    const owner=ownerKey(actor),result=this.store.create(owner,{title:source.title,text:source.text,slug:source.slug,format:source.format,tags:source.tags.map(t=>typeof t==='string'?t:t.name),categories:source.categories.map(c=>typeof c==='number'?c:c.id)},{...remote,selectedVariant:variant})
+    this.store.record(owner,'import',{draftId:result.id,cid,variant});return result
+  }
+  async importDraft(actor,cid,variant){return this.importSnapshot(actor,await this.readImport(actor,cid,variant),cid)}
   operation(owner,id) { const row=this.store.db.prepare('SELECT data FROM operations WHERE id=? AND owner=?').get(id,owner);invariant(row,'发布记录不存在',404);return JSON.parse(row.data) }
   operationSave(id,value) { this.store.db.prepare('UPDATE operations SET data=? WHERE id=?').run(JSON.stringify(value),id) }
   async prepare(actor,args) {
