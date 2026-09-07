@@ -1,6 +1,6 @@
 import { readEvents } from './stream.js'
 import { renderMarkdown } from './markdown.js'
-import {element,glyph,action,stat,compactTokens,keyboardSend} from './chat-ui.js'
+import {element,glyph,action,stat,compactTokens,keyboardSend,thinking as makeThinking,updateThinking} from './chat-ui.js'
 
 const $ = id => document.getElementById(id)
 const base = document.body.dataset.base
@@ -37,7 +37,7 @@ function message(role,text,reasoning='',meta){
  const article=element('article',undefined,'message qa-message '+(role==='user'?'qa-user':'qa-assistant')),avatar=element('div',undefined,'qa-avatar'),bubble=element('div',undefined,'qa-bubble'),content=element('div',undefined,'text qa-prose');avatar.append(glyph(role==='user'?'user':'chat'));article.append(avatar,bubble)
  let source=text,currentMeta=meta,targetId=conversationId
  const update=(value,append=false)=>{source=append?source+value:value;if(role==='assistant')content.innerHTML=renderMarkdown(source);else content.textContent=source};update(text)
- const thinking=element('details',undefined,'thinking qa-thinking'),summary=element('summary'),reasoningText=element('div',reasoning,'reasoning-text qa-thinking-body');summary.append(glyph('think'),element('span','思考'));thinking.hidden=!reasoning;thinking.append(summary,reasoningText)
+ const thinking=makeThinking(reasoning,{className:'thinking'}),summary=thinking.querySelector('summary'),reasoningText=thinking.querySelector('.qa-thinking-body')
  const tools=element('section',undefined,'qa-tools');tools.hidden=true
  const setTools=items=>{tools.replaceChildren(element('h4','工具调用'));const list=element('div',undefined,'qa-tool-list');for(const item of items){const row=element('div',undefined,'qa-tool '+item.status);row.append(glyph('api'),element('span',({'example_search_framework':'检索框架源码','example_read_framework':'读取框架源码'})[item.name]??item.name),element('span',({running:'执行中',succeeded:'已完成',failed:'失败'})[item.status]??item.status));list.append(row)}tools.append(list);tools.hidden=!items.length}
  const actions=element('div',undefined,'qa-actions'),error=element('span',undefined,'qa-action-error');error.setAttribute('role','status')
@@ -69,7 +69,6 @@ async function send(text) {
   message('user', text)
   const answer = message('assistant', '')
   answer.article.classList.add('busy','qa-streaming');answer.thinking.classList.add('running')
-  answer.thinking.open = true
   $('prompt').value = ''
   const current = new AbortController()
   controller = current
@@ -91,16 +90,16 @@ async function send(text) {
       if (event.type === 'step') answer.update('')
       if (event.type === 'reasoning' && event.text) {
         answer.thinking.hidden = false; answer.reasoningText.textContent += event.text
-        answer.summary.lastElementChild.textContent = '正在思考…'; setStatus('正在思考…'); scroll()
+        updateThinking(answer.thinking,answer.reasoningText.textContent,false); setStatus('正在思考…'); scroll()
       }
       if (event.type === 'delta') {
-        answer.update(event.text, true); answer.summary.lastElementChild.textContent = '思考'
+        answer.update(event.text, true); updateThinking(answer.thinking,answer.reasoningText.textContent)
         setStatus('正在回答…'); scroll()
       }
       if (event.type === 'answer') {
         answer.update(event.text)
         if (event.reasoning) { answer.reasoningText.textContent = event.reasoning; answer.thinking.hidden = false }
-        answer.summary.lastElementChild.textContent = '思考'; scroll()
+        updateThinking(answer.thinking,answer.reasoningText.textContent); scroll()
       }
       if (event.type === 'tools') answer.setTools(event.tools)
       if (event.type === 'meta') answer.setMeta(event.meta)
@@ -116,7 +115,7 @@ async function send(text) {
     else { notice(error.message); setStatus('回答未完成'); $('prompt').value = text }
   } finally {
     answer.article.classList.remove('busy','qa-streaming');answer.thinking.classList.remove('running')
-    answer.summary.lastElementChild.textContent = '思考'
+    updateThinking(answer.thinking,answer.reasoningText.textContent)
     controller = undefined
     busy(false);answer.setMeta(answer.meta)
     if (resetAfterStop) { resetAfterStop = false; reset() }
