@@ -1,7 +1,7 @@
 /** Cookie sessions and live access grants; never issues official DSH authentication tokens. */
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage } from 'node:http'
-import { AccessError, emitRevoked, listPlugins, type Actor, type AuthProvider } from '@dsh-plugin/plugin-kit/access'
+import { AccessError, emitRevoked, listPlugins, type Actor, type AuthProvider } from '@dsh-plugin-manager/plugin-kit/access'
 import { AuthStore, type User, type Session } from './store.ts'
 import { hashPassword, verifyPassword, type PasswordHash } from './password.ts'
 

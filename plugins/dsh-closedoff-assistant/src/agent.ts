@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { Config } from './config.ts'
-import { AccessError, type Access, type Actor } from '@dsh-plugin/plugin-kit'
+import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import type { ConversationStore, ConversationSummary } from './conversation-store.ts'
 
 const SESSION_ID = /^closedoff-web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/

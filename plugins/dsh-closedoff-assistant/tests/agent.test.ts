@@ -1,7 +1,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AccessError, type Access, type Actor } from '@dsh-plugin/plugin-kit'
+import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ConversationManager } from '../src/agent.ts'
 import { ConversationStore } from '../src/conversation-store.ts'
 import { Config } from '../src/config.ts'

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import type { Actor } from '@dsh-plugin/plugin-kit'
+import type { Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ConversationStore } from '../src/conversation-store.ts'
 
 const user: Actor = { namespace: 'user', userId: 'one', sessionId: 'login-one' }

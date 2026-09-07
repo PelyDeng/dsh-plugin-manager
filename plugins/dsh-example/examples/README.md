@@ -14,13 +14,13 @@
 
 在交付根目录操作：只为新实例复制模板，已有实例请对照字段修改，勿覆盖原配置。配置文件必须是 JSON；可选字段不使用时直接省略，不用 `null` 或无效空字符串代替。
 
-1. 取得作者交付的 auth/example 完整发布目录；在安装 manager 的工具目录使用 `pnpm exec dsh-plugin compose-release --root <交付根> --output releases/site-v1 --manifest <auth清单> --manifest <example清单>` 组合。若已有包含两者的完整清单，只输入一次。输出目录必须为空或不存在。
+1. 取得作者交付的 auth/example 完整发布目录；在安装 manager 的工具目录使用 `pnpm exec dsh-plugin-manager compose-release --root <交付根> --output releases/site-v1 --manifest <auth清单> --manifest <example清单>` 组合。若已有包含两者的完整清单，只输入一次。输出目录必须为空或不存在。
 2. 按上表创建目录并复制三份模板，将 manifest 改为实际组合清单。填写真实不可变 `containerImage`；示例中的占位符必须替换，镜像需包含匹配版本的 manager。
 3. 本机演示可保留回环 origin；通过域名访问时同步填写 `publicOrigin`、`publicUrl`、`trustedHosts`，并配置站点反向代理。
 4. 在同一个 DSH home 完成宿主默认模型与凭据配置；这些内容不属于插件模板，不能填写到 `plugin.json`。
-5. Linux Docker 主机在工具目录执行 `pnpm exec dsh-plugin apply-compose --root <交付根> --config .local/deployment.json --plugins all`。无需框架源码或手改 Compose。
+5. Linux Docker 主机在工具目录执行 `pnpm exec dsh-plugin-manager apply-compose --root <交付根> --config .local/deployment.json --plugins all`。无需框架源码或手改 Compose。
 
-Docker 模板保持 `/data/dsh-home` 为容器 home，auth 的 `stateDir` 与之配套。本机直接运行官方宿主时，删除 auth 配置中的 `stateDir`，让其使用实际 `DSH_HOME/auth`；再从工具目录执行 `pnpm exec dsh-plugin start --root <交付根> --config .local/deployment.json --dsh-cli-js <官方CLI绝对路径> --plugins all`。不要把本机的绝对路径复制进容器配置。
+Docker 模板保持 `/data/dsh-home` 为容器 home，auth 的 `stateDir` 与之配套。本机直接运行官方宿主时，删除 auth 配置中的 `stateDir`，让其使用实际 `DSH_HOME/auth`；再从工具目录执行 `pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --dsh-cli-js <官方CLI绝对路径> --plugins all`。不要把本机的绝对路径复制进容器配置。
 
 ## example 运行配置
 

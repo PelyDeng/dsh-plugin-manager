@@ -7,7 +7,7 @@
 需要应用交付说明中验证过的官方 DSH、manager 0.3.0 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
 
 ```sh
-pnpm exec dsh-plugin start --root <交付根> --config .local/deployment.json --plugins all
+pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --plugins all
 ```
 
 配置与获取发布物的完整步骤见[图文手册](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/getting-started.md)和 manager 随包 DELIVERY.md；在线 main 可能领先于当前版本。Linux Docker 完整源码部署可使用仓库的 `bash deploy/build.sh`。

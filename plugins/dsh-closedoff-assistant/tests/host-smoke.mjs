@@ -1,16 +1,14 @@
 /** Consume real plugin archives in an isolated, network-disabled DSH runtime container. */
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
 if (!existsSync('/.dockerenv')) throw new Error('This smoke only runs in a disposable Docker container.');
-const { loadRelease } = await import('/opt/plugin-manager/node_modules/@dsh-plugin/plugin-manager/dist/deployment.mjs');
+const { loadRelease } = await import('/opt/plugin-manager/node_modules/@dsh-plugin-manager/plugin-manager/dist/deployment.mjs');
 const [manifest, runtimeConfig, results] = process.argv.slice(2);
 if (!manifest || !runtimeConfig || !existsSync(runtimeConfig)) throw new Error('Usage: auth-host-smoke.mjs <manifest.json> <isolated closedoff env.conf> [results directory].');
 const release = loadRelease(manifest);
@@ -38,10 +36,7 @@ const install = name => cli('plugin', '--profile', 'web', 'add', '--offline', ..
 install('auth');
 install('closedoff');
 const profile = join(home, 'profiles/web/package.json');
-const require = createRequire(profile);
-const { bootstrap } = await import(pathToFileURL(require.resolve('dsh-auth/admin')).href);
 const password = randomBytes(24).toString('base64url');
-await bootstrap('smoke_admin', password, join(home, 'auth'), ['closedoff']);
 env.CLOSEDOFF_ENV_CONF = runtimeConfig;
 
 let child;
@@ -72,11 +67,24 @@ async function start(mode, ready) {
 const get = (path, cookie) => fetch(origin + path, { redirect: 'manual', headers: cookie ? { cookie } : {} });
 try {
   await start('authenticated', 200);
+  const initial = await fetch(`${origin}/auth/api/login`, { method: 'POST',
+    headers: { origin, 'content-type': 'application/json', 'x-dsh-csrf': 'login' },
+    body: JSON.stringify({ username: 'admin', password: '123456' }),
+  });
+  assert.equal(initial.status, 200);
+  const initialBody = await initial.json();
+  assert.equal(initialBody.user.mustChangePassword, true);
+  const changed = await fetch(`${origin}/auth/api/password`, { method: 'POST',
+    headers: { origin, 'content-type': 'application/json', 'x-dsh-csrf': initialBody.csrf,
+      cookie: initial.headers.get('set-cookie').split(';')[0] },
+    body: JSON.stringify({ currentPassword: '123456', newPassword: password }),
+  });
+  assert.equal(changed.status, 200);
   assert.equal((await get('/closedoff-qa')).status, 303);
   assert.equal((await get('/closedoff-qa/identity')).status, 401);
   const login = await fetch(`${origin}/auth/api/login`, { method: 'POST',
     headers: { origin, 'content-type': 'application/json', 'x-dsh-csrf': 'login' },
-    body: JSON.stringify({ username: 'smoke_admin', password }),
+    body: JSON.stringify({ username: 'admin', password }),
   });
   assert.equal(login.status, 200);
   const cookie = login.headers.get('set-cookie').split(';')[0];

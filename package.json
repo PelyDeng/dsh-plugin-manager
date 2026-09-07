@@ -1,5 +1,5 @@
 {
-  "name": "dsh-plugin-workspace",
+  "name": "dsh-plugin-manager-workspace",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.19.0",

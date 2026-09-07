@@ -33,7 +33,7 @@ import {
 } from './presentation.ts'
 import { redactVisibleText } from './redaction.ts'
 import { TOOL_BY_NAME } from './specs.ts'
-import { isAccessError, createPluginHttp, actorKey, onRevoked, type Access, type Actor } from '@dsh-plugin/plugin-kit'
+import { isAccessError, createPluginHttp, actorKey, onRevoked, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 
 class HttpError extends Error {
   constructor(readonly status: number, message: string) {

@@ -59,10 +59,10 @@ WORKDIR /app/plugin-manager
 COPY --from=manager-source / /app/plugin-manager/
 # Isolated filtered installation excludes downstream plugin-only file dependencies.
 RUN pnpm --config.node-linker=isolated --config.dedupe-peer-dependents=false \
-        --filter dsh-plugin-workspace --filter @dsh-plugin/plugin-manager... install --frozen-lockfile \
-    && pnpm --config.node-linker=isolated --config.dedupe-peer-dependents=false --filter @dsh-plugin/plugin-kit build \
-    && pnpm --config.node-linker=isolated --config.dedupe-peer-dependents=false --filter @dsh-plugin/plugin-manager build \
-    && pnpm --config.node-linker=isolated --config.dedupe-peer-dependents=false --filter @dsh-plugin/plugin-manager pack --out /tmp/plugin-manager.tgz
+        --filter dsh-plugin-manager-workspace --filter @dsh-plugin-manager/plugin-manager... install --frozen-lockfile \
+    && pnpm --config.node-linker=isolated --config.dedupe-peer-dependents=false --filter @dsh-plugin-manager/plugin-kit build \
+    && pnpm --config.node-linker=isolated --config.dedupe-peer-dependents=false --filter @dsh-plugin-manager/plugin-manager build \
+    && pnpm --config.node-linker=isolated --config.dedupe-peer-dependents=false --filter @dsh-plugin-manager/plugin-manager pack --out /tmp/plugin-manager.tgz
 
 FROM ${BASE_IMAGE} AS dsh-runtime
 
@@ -100,4 +100,4 @@ ENV NODE_ENV=production \
 USER node
 WORKDIR /data/workspace
 EXPOSE 7902
-ENTRYPOINT ["node", "/opt/plugin-manager/node_modules/@dsh-plugin/plugin-manager/dist/cli.mjs", "container-start", "--root", "/opt/plugin-project"]
+ENTRYPOINT ["node", "/opt/plugin-manager/node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs", "container-start", "--root", "/opt/plugin-project"]

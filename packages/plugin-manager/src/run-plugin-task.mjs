@@ -42,9 +42,9 @@ export function preparePluginDependencies(root, plugins, step = (_label, run) =>
   const needsKit = plugins.some(plugin => {
     if (plugin.directory === undefined) return false;
     const manifest = JSON.parse(readFileSync(resolve(root, plugin.directory, 'package.json'), 'utf8'));
-    return manifest.devDependencies?.['@dsh-plugin/plugin-kit']?.startsWith('workspace:');
+    return manifest.devDependencies?.['@dsh-plugin-manager/plugin-kit']?.startsWith('workspace:');
   });
-  if (needsKit) step('准备插件共享依赖', () => runPnpm(['--filter', '@dsh-plugin/plugin-kit', 'build'], root));
+  if (needsKit) step('准备插件共享依赖', () => runPnpm(['--filter', '@dsh-plugin-manager/plugin-kit', 'build'], root));
 }
 
 export function main(argv = process.argv.slice(2)) {

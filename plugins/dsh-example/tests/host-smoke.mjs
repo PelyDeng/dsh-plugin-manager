@@ -1,10 +1,9 @@
 /** Opt-in real DSH/auth/tgz integration. Only the model HTTP endpoint is a local fixture. */
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { createRequire } from 'node:module'
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { resolve, join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 import { readEvents } from '../web/stream.js'
@@ -117,12 +116,18 @@ try {
   const shared = await chat('独立模式问题')
   await stop()
   run('plugin', '--profile', 'web', 'add', `file:${archive('auth')}`)
-  const require = createRequire(join(home, 'profiles/web/package.json'))
-  const { bootstrap } = await import(pathToFileURL(require.resolve('dsh-auth/admin')).href)
-  await bootstrap('example_admin', password, join(home, 'auth'), ['example'])
   await start('authenticated')
+  const initial = await fetch(origin + '/auth/api/login', { method: 'POST',
+    headers: { origin, 'content-type': 'application/json', 'x-dsh-csrf': 'login' },
+    body: JSON.stringify({ username: 'admin', password: '123456' }),
+  })
+  assert.equal(initial.status, 200)
+  const initialBody = await initial.json()
+  assert.equal(initialBody.user.mustChangePassword, true)
+  const initialSession = { cookie: initial.headers.get('set-cookie').split(';')[0], csrf: initialBody.csrf }
+  assert.equal((await request('/auth/api/password', { currentPassword: '123456', newPassword: password }, initialSession)).status, 200)
   assert.equal((await request('/example')).status, 303)
-  const admin = await login('example_admin')
+  const admin = await login('admin')
   for (const username of ['alice', 'bob']) assert.equal((await request('/auth/api/users', { username, password, role: 'user', grants: ['example'] }, admin)).status, 200)
   let alice = await login('alice')
   const bob = await login('bob')

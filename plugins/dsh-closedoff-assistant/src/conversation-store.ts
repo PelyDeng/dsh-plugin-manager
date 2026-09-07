@@ -2,7 +2,7 @@
 import { mkdirSync, chmodSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { AccessError, type Actor } from '@dsh-plugin/plugin-kit'
+import { AccessError, type Actor } from '@dsh-plugin-manager/plugin-kit'
 
 /** One owner-visible history item, without conversation content. */
 export interface ConversationSummary {

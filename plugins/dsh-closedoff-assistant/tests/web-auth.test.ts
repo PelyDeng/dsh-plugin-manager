@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net'
 import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AccessError, createAccess, emitRevoked, installProvider, onRevoked, type Actor } from '@dsh-plugin/plugin-kit'
+import { AccessError, createAccess, emitRevoked, installProvider, onRevoked, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ConversationManager } from '../src/agent.ts'
 import { ConversationStore } from '../src/conversation-store.ts'
 import { Config } from '../src/config.ts'

@@ -147,6 +147,6 @@
     "vue": "3.5.42",
     "vitest": "^4.1.8",
     "@deepseek-ai/dsh-home-paths": "0.1.2-alpha.5",
-    "@dsh-plugin/plugin-kit": "workspace:*"
+    "@dsh-plugin-manager/plugin-kit": "workspace:*"
   }
 }

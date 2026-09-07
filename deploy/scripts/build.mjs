@@ -82,7 +82,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
   persist();
   let stopped = false, installing = false;
   try {
-    const cli = resolve(operation, 'tooling/node_modules/@dsh-plugin/plugin-manager/dist/cli.mjs');
+    const cli = resolve(operation, 'tooling/node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs');
     if (!resume) {
       const pin = json(resolve(root, 'package.json')).packageManager;
       if (!/^pnpm@[0-9]+\.[0-9]+\.[0-9]+$/.test(pin)) throw new Error('packageManager must pin a pnpm version.');
@@ -93,10 +93,10 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
         if (capture('pnpm', ['--version']) !== pin.slice(5)) throw new Error('Could not prepare the pinned pnpm version.');
       }
       step('安装项目依赖', 'pnpm', ['install', '--frozen-lockfile']);
-      step('构建 plugin-kit', 'pnpm', ['--filter', '@dsh-plugin/plugin-kit', 'build']);
-      step('构建 plugin-manager', 'pnpm', ['--filter', '@dsh-plugin/plugin-manager', 'build']);
+      step('构建 plugin-kit', 'pnpm', ['--filter', '@dsh-plugin-manager/plugin-kit', 'build']);
+      step('构建 plugin-manager', 'pnpm', ['--filter', '@dsh-plugin-manager/plugin-manager', 'build']);
       record.managerArchive = resolve(operation, 'plugin-manager.tgz');
-      step('打包 plugin-manager', 'pnpm', ['--filter', '@dsh-plugin/plugin-manager', 'pack', '--out', record.managerArchive]);
+      step('打包 plugin-manager', 'pnpm', ['--filter', '@dsh-plugin-manager/plugin-manager', 'pack', '--out', record.managerArchive]);
       record.managerHash = hash(record.managerArchive);
       step('准备发布工具', 'npm', ['install', '--prefix', resolve(operation, 'tooling'), '--offline', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', record.managerArchive]);
       run(process.execPath, ['scripts/package-plugins.mjs', '--plugins', site.plugins.join(',') || 'none', '--output', resolve(operation, 'plugins')]);
@@ -148,7 +148,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       validateBase(info.Id, info);
       record.hostCommit = info.Config?.Labels?.['org.opencontainers.image.revision'];
       const manager = json(resolve(root, 'packages/plugin-manager/package.json')).version;
-      if (capture('docker', ['run', '--rm', '--network', 'none', '--entrypoint', 'node', info.Id, '-p', 'require("/opt/plugin-manager/node_modules/@dsh-plugin/plugin-manager/package.json").version']) !== manager) throw new Error('Built manager version differs from source.');
+      if (capture('docker', ['run', '--rm', '--network', 'none', '--entrypoint', 'node', info.Id, '-p', 'require("/opt/plugin-manager/node_modules/@dsh-plugin-manager/plugin-manager/package.json").version']) !== manager) throw new Error('Built manager version differs from source.');
       let reference = info.Id;
       if (site.publishImage) {
         const tag = `${site.publishImage}:source-${revision.slice(0, 12)}-${record.managerHash.slice(0, 12)}`;

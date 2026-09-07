@@ -19,7 +19,7 @@ import {
 } from './presentation.ts'
 import { redactJsonValue } from './redaction.ts'
 import { TOOL_BY_NAME, TOOL_SPECS, type ToolParam, type ToolSpec } from './specs.ts'
-import { createPluginTools, guardTool, type ToolAuthorizer, type ToolDescriptor } from '@dsh-plugin/plugin-kit'
+import { createPluginTools, guardTool, type ToolAuthorizer, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 
 const DEFAULTED_DATE_KEYS = new Set([
   'beginTime', 'startTime', 'inDateBegin', 'outDateBegin', 'warningStartTimeBegin',

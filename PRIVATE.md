@@ -39,13 +39,7 @@ pnpm package --plugins "auth,closedoff,example" --output .local/artifacts/releas
 
 `plugins/dsh-closedoff-assistant` 是私有定制插件，其 `vendor/` 包含构建播放器所需的版本化归档。该目录不受根 Apache-2.0 许可授权，适用插件 [LICENSE](plugins/dsh-closedoff-assistant/LICENSE)。第三方资源保持各自许可。不得将该目录或包含它的提交推送公共仓库。
 
-运行配置放在 `.local/data/dsh-home/plugins/closedoff/env.conf`，从插件模板创建；模型凭据、真实业务配置及运行数据不进入 Git。发布包放在 `.local/artifacts/`。
-
-```sh
-pnpm install --frozen-lockfile
-pnpm check --plugins auth,closedoff,example
-pnpm package --plugins auth,closedoff,example --output .local/artifacts/release/plugins
-```
+首次部署时，从插件模板创建 `.local/secrets/closedoff.env.conf`，并在 `.local/site.json` 中设置 `instances.closedoff.runtimeConfig` 为该文件路径。配置文件应仅允许服务运行用户读取。不要提前向数据目录写入文件；首次构建由管理器初始化数据目录。模型凭据、真实业务配置及运行数据不进入 Git。发布包放在 `.local/artifacts/`。
 
 宿主子模块锁定 DSH `0.1.3-alpha.1`，以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。
 

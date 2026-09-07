@@ -13,10 +13,10 @@ test('escapes HTML, fenced code and language labels and rejects executable links
 })
 
 test('unfinished stream blocks remain safe and render correctly when completed', () => {
-  const prefix = '## 命令\n\n```sh\npnpm exec dsh-plugin '
+  const prefix = '## 命令\n\n```sh\npnpm exec dsh-plugin-manager '
   expect(renderMarkdown(prefix)).toContain('<h2>命令</h2>')
   expect(renderMarkdown(prefix)).toContain('language-sh')
   const complete = renderMarkdown(prefix + 'list\n```\n\n**完成**')
-  expect(complete).toContain('pnpm exec dsh-plugin list\n</code>')
+  expect(complete).toContain('pnpm exec dsh-plugin-manager list\n</code>')
   expect(complete).toContain('<strong>完成</strong>')
 })

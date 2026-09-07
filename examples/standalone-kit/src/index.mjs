@@ -1,5 +1,5 @@
 /** Protected account identity endpoint; business data ownership stays with its application. */
-import { actorKey, createAccess, createPluginHttp, registerPlugin } from '@dsh-plugin/plugin-kit';
+import { actorKey, createAccess, createPluginHttp, registerPlugin } from '@dsh-plugin-manager/plugin-kit';
 export const name = 'independent-access-example';
 export const inject = ['webServer'];
 
