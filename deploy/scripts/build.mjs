@@ -99,7 +99,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       step('打包 plugin-manager', 'pnpm', ['--filter', '@dsh-plugin/plugin-manager', 'pack', '--out', record.managerArchive]);
       record.managerHash = hash(record.managerArchive);
       step('准备发布工具', 'npm', ['install', '--prefix', resolve(operation, 'tooling'), '--offline', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', record.managerArchive]);
-      step(`构建、检查和打包插件（${site.plugins.join('、') || '无插件'}）`, process.execPath, ['scripts/package-plugins.mjs', '--plugins', site.plugins.join(',') || 'none', '--output', resolve(operation, 'plugins')]);
+      run(process.execPath, ['scripts/package-plugins.mjs', '--plugins', site.plugins.join(',') || 'none', '--output', resolve(operation, 'plugins')]);
       const manifest = resolve(operation, 'plugins/manifest.json');
       if (active) {
         const oldManifest = resolve(root, previous.manifest);
