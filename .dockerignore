@@ -7,5 +7,6 @@ data
 deploy-artifacts
 .env*
 **/env.conf
+plugins/*/config/config.json
 **/*.tgz
 deploy/config/*.conf
