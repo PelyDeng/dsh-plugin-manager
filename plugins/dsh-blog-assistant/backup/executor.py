@@ -212,7 +212,7 @@ class Executor:
                 state.update(status='failed',message='备份数据已保留，但相关服务尚未恢复，请检查运维状态',finishedAt=time.time());write(self.state/'current.json',state);write(self.state/'last.json',state);raise
         if rotate:self.rotate()
         return backup_id
-    def verify(self, backup_id):
+    def verify(self, backup_id, for_restore=False):
         if not isinstance(backup_id,str) or not BACKUP_ID.match(backup_id): raise ValueError('invalid backup id')
         directory=self.backups/backup_id
         if not within(directory,self.backups) or directory.is_symlink():raise ValueError('invalid backup directory')
@@ -224,7 +224,7 @@ class Executor:
             if not re.match(r'^[a-z0-9-]+\.(sql|tar\.gz)$',name):raise ValueError('invalid component name')
             path=directory/name
             if path.is_symlink() or path.stat().st_size!=record['bytes'] or checksum(path)!=record['sha256']:raise ValueError('backup checksum mismatch')
-            if name.endswith('.sql'):
+            if for_restore and name.endswith('.sql'):
                 with path.open('rb') as stream:
                     if any(line.lstrip().upper().startswith(b'SET @@GLOBAL.GTID_PURGED') for line in stream):raise ValueError('legacy dump contains server-wide GTID state; create a new scoped backup')
         return manifest
@@ -260,7 +260,7 @@ class Executor:
                 if target.parent!=self.backups.resolve():raise ValueError('retention boundary violation')
                 shutil.rmtree(str(target))
     def isolate(self, backup_id):
-        manifest=self.verify(backup_id);restore_id='restore-'+backup_id+'-'+secrets.token_hex(4)
+        manifest=self.verify(backup_id,for_restore=True);restore_id='restore-'+backup_id+'-'+secrets.token_hex(4)
         target=pathlib.Path(self.c['restoreRoot'])/restore_id;target.mkdir(mode=0o700)
         for name in manifest['components']:
             if name.endswith('.tar.gz'):unpack(self.backups/backup_id/name,target/name[:-7])
@@ -398,7 +398,7 @@ def serve(executor):
                 elif self.path=='/verify':
                     m=executor.verify(data.get('id'));result={'id':m['id'],'status':'verified','components':len(m['components'])}
                 elif self.path=='/restore-prepare':
-                    backup_id=data.get('id');executor.verify(backup_id)
+                    backup_id=data.get('id');executor.verify(backup_id,for_restore=True)
                     # Interactive confirmations are scoped and single-use; the web app rechecks auth before dispatch.
                     confirmation={'id':secrets.token_hex(16),'nonce':secrets.token_hex(24),'actor':actor,'backupId':backup_id,'mode':data.get('mode','isolated'),'expiresAt':time.time()+600}
                     if confirmation['mode'] not in ['isolated','production']:raise ValueError('invalid restore mode')
