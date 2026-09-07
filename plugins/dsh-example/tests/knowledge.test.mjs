@@ -42,6 +42,10 @@ test('package knowledge and source instructions reach new and resumed Agents wit
       expect(handle.sections.find(s => s.name === 'example:knowledge').text).toBe(`知识摘要 ${revision}\n\n${text}`)
       expect(handle.sections.find(s => s.name === 'example:developer').text).toContain('不能编造命令')
       expect(handle.sections.find(s => s.name === 'example:persona').text).toBe('请优先给出 PowerShell 示例。')
+      const language = handle.sections.find(s => s.name === 'example:language')
+      expect(language.text).toContain('reasoning_content')
+      expect(language.text).toContain('不要先用英文分析')
+      expect(language.order).toBeGreaterThan(Math.max(...handle.sections.filter(s => s.name !== language.name).map(s => s.order)))
       expect(handle.allowed).toEqual(['example_search_framework', 'example_read_framework'])
       expect(handle.sections.find(s => s.name === 'example:framework').text).toContain('example_search_framework')
     }
