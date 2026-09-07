@@ -11,14 +11,12 @@ pnpm add --ignore-workspace /path/to/plugin-manager-0.3.2.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
-官方宿主可在独立工具目录安装固定版本（Windows HTTP 接入验收使用 0.1.2-alpha.5）：
+宿主应使用应用交付说明所要求的版本及依赖。内置 auth/example 的源码部署使用框架 gitlink 对应的官方源码，准备步骤见[Node CLI 手册](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/getting-started.md#1-准备工具和目录)。运行配置二选一：
 
-```sh
-pnpm add --ignore-workspace @deepseek-ai/dsh@0.1.2-alpha.5
-node node_modules/@deepseek-ai/dsh/lib/bin.js --version
-```
+- 源码宿主：在其目录完成安装与构建，设置 `harnessRoot` 为源码根的绝对路径。
+- 已安装宿主：设置 `dshCliJs` 为实际 CLI JS 文件的绝对路径，例如工具目录下 `node_modules/@deepseek-ai/dsh/lib/bin.js`。保留它的锁文件，按应用要求选择版本。
 
-若 pnpm 报依赖构建脚本待批准，执行 `pnpm approve-builds` 按官方依赖要求选择，再重新安装。保存生成的 pnpm-lock.yaml，后续使用冻结安装；不要将固定 CLI 版本等同于全部间接依赖也已固定。配置中的 dshCliJs 指向该工具目录下 `node_modules/@deepseek-ai/dsh/lib/bin.js` 的绝对路径。具体应用应采用其交付说明中验证过的宿主版本。
+源码版本号不等于相同版本已在 npm 发布。默认 DeepSeek 密钥管理需要官方 `credentials` 服务及 `credentials-local` 存储；旧 SDK 编译依赖不是这项运行能力的保证。管理器不下载或构建宿主。
 
 将每个应用的完整发布目录放到交付根的 `incoming/`。例如 auth、knowledge、sales 分别来自不同作者；这些是目录示意，插件 ID 以各自清单为准。组合完整候选集合：
 
@@ -32,7 +30,7 @@ dsh-plugin-manager compose-release --root /path/to/site --output releases/site-v
 
 ## 2. 填写实例配置
 
-在交付根创建 `.local/deployment.json`，替换官方 CLI 位置与实际站点 origin：
+在交付根创建 `.local/deployment.json`，替换官方 CLI 位置与实际站点 origin；源码宿主将 `dshCliJs` 整项替换为 `"harnessRoot": "<已构建宿主源码根>"`：
 
 ```json
 {
@@ -90,7 +88,7 @@ auth 登录和模型凭据是两件事。example 在新建会话时读取同一�
 pnpm exec dsh-plugin-manager set-api-key --root /path/to/site --config .local/deployment.json
 ```
 
-网页直接更新运行中的官方凭据服务；脚本使用已安装宿主的 `credentials-local`，保存到本次 home/.credentials.yaml，默认文件监听会自动热加载，无需重启。保留其他凭据及旧 .env。独立进程部署要求配置 `dshCliJs`（或传 `--dsh-cli-js`）并以 home/凭据文件所有者运行；脚本不会下载宿主。Compose 部署自动核验当前容器与 home 并以容器配置用户执行。脚本仅适用于默认凭据路径与开启监听的宿主，自定义服务请使用网页入口。外部进程环境密钥为只读，两入口都拒绝覆盖；调整外部环境需由原服务管理者处理。
+网页直接更新运行中的官方凭据服务；脚本使用已安装宿主的 `credentials-local`，保存到本次 home/.credentials.yaml，默认文件监听会自动热加载，无需重启。保留其他凭据及旧 .env。独立进程部署要求配置 `harnessRoot` 或 `dshCliJs`（后者也可传 `--dsh-cli-js`）并以 home/凭据文件所有者运行；脚本不会下载宿主。Compose 部署自动核验当前容器与 home 并以容器配置用户执行。脚本仅适用于默认凭据路径与开启监听的宿主，自定义服务请使用网页入口。外部进程环境密钥为只读，两入口都拒绝覆盖；调整外部环境需由原服务管理者处理。
 
 3. 新实例默认沿用宿主组合中的模型。需要切换时，可在官方会话输入框的模型选择器选择模型，保存为后续 Agent 的默认选择；该输入框要求先选择工作区。也可在停止服务后，向同一 `<home>/settings.yaml` 合并以下设置分节，保留文件其他设置；替换为实际提供方 ID 和它支持的模型 ID，不是显示名称。
 
@@ -114,6 +112,6 @@ dsh-plugin-manager compose-release --root /path/to/site --output releases/site-v
 
 previous 保留当前旧归档的相对路径，仅供安装器解析旧 file: 依赖，不加入新候选。保留旧目录供恢复。不要把旧整站清单与同 ID 新包直接叠加；从分项清单重新组合。未选入新集合的受管应用会被撤选，但数据保留。
 
-将 deployment.json 的 manifest 改为新清单，再执行 start，始终显式 `--plugins all`，避免旧选集过滤新增应用；各实例 enabled=false 仍生效。确认新旧应用均可用、原普通账号仍能登录、授权及业务配置保留。应用自身数据格式升级仍需作者提供迁移/回滚说明，不能仅凭保留文件承诺跨版本兼容。
+先用同一 root/config 执行 stop 停止原实例，再将 deployment.json 的 manifest 改为新清单并执行 start，始终显式 `--plugins all`，避免旧选集过滤新增应用；各实例 enabled=false 仍生效。确认新旧应用均可用、原普通账号仍能登录、授权及业务配置保留。应用自身数据格式升级仍需作者提供迁移/回滚说明，不能仅凭保留文件承诺跨版本兼容。
 
 Docker 部署使用同版本 manager 的宿主镜像，在 deployment.json 补 containerImage（不可变镜像 ID 或 digest）和 composeProject，再执行 `dsh-plugin-manager apply-compose --root /path/to/site --config .local/deployment.json --plugins all`。管理器生成配置及挂载，不手改 Compose；升级时必须提供 previous，旧归档需在固定容器挂载内可见。镜像获取与实例参数由交付方提供，不能把任意 DSH 镜像视为已包含 manager。

@@ -1,6 +1,6 @@
 # 开发者助手配置参考
 
-本目录展示 example、配套 auth 和站点部署的完整常用配置，适用于本文交付的 manager 0.3.0。在线 main 链接可能领先于安装版本，模板与本页随应用版本交付。JSON 不支持注释，因此模板只保存真实配置字段，逐项备注、是否必填和默认值在下表说明。模板可提交 Git；复制后的实例配置只保存在 `.local/`，不会随源码或归档自动生效。
+本目录展示 example、配套 auth 和站点部署的完整常用配置，适用于 manager 0.3.2。在线 main 链接可能领先于安装版本，模板与本页随应用版本交付。JSON 不支持注释，因此模板只保存真实配置字段，逐项备注、是否必填和默认值在下表说明。模板可提交 Git；复制后的实例配置只保存在 `.local/`，不会随源码或归档自动生效。
 
 源码一键部署直接运行 `bash deploy/build.sh`，站点和插件文件自动初始化，无需复制下方模板。站点选项修改 `.local/site.json`，插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值及必填性见[一键部署](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/first-deployment.md)。
 

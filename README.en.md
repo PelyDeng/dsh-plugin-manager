@@ -72,7 +72,7 @@ bash deploy/build.sh
 
 Do not delete `.local` to recover a failed deployment. Follow the [recovery instructions](doc/first-deployment.md#更新与恢复).
 
-Host compatibility is verified against specific versions; arbitrary community plugins and host versions are not automatically supported. Build checks, archive-consumption checks, browser checks, and real-model acceptance are distinct. See each release's evidence and limitations.
+Host compatibility is verified against specific versions; arbitrary community plugins and host versions are not automatically supported. Use the host requirements in the release notes, and configure your own model provider before starting a conversation.
 
 ## Contribute
 

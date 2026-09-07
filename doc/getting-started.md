@@ -15,9 +15,9 @@
 - [登录、配置与停用](#登录配置与停用)
 - [命令速查与求助](#命令速查与求助)
 
-![开发者接入助手：首页可选择六类问题，也能从左侧恢复个人历史](assets/developer-assistant.png)
+![开发者接入助手：首页快捷问题与个人历史](assets/developer-assistant.png)
 
-页面截图来自隔离实例；首页仅展示操作入口，模型连接验证使用本地替身，不代表真实答疑质量。知识摘要随发布内容变化。
+截图使用演示数据；实际问答需要自己的模型凭据。
 
 **作者**开发并交出发布目录；**部署者**填写配置、安装和维护；**使用者**登录、打开获授权的应用。只想体验完整源码站点的 Linux Docker 用户，可直接走[一键部署](first-deployment.md)。以下主线使用 Node CLI，Windows PowerShell 与 Bash 均可，不需要 Docker。
 
@@ -52,12 +52,12 @@ flowchart LR
 
 ## 1. 准备工具和目录
 
-**目的**：让工具、作者源码、发布物、运行数据各有位置。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0`、系统 `tar`，安装依赖需要可用网络或完整缓存。先运行 `node --version`、`pnpm --version`、`tar --version`。
+**目的**：让工具、作者源码、发布物、运行数据各有位置。需要 Git、Node.js `^22.19.0 || >=24`、pnpm `11.19.0`、系统 `tar`，安装依赖需要可用网络或完整缓存。先运行 `git --version`、`node --version`、`pnpm --version`、`tar --version`。
 
 ```text
 dsh-lab/
 ├─ framework/       本框架源码（内部 auth/example）
-├─ tools/           安装 manager 与官方 CLI
+├─ tools/           安装 manager 工具
 ├─ second/          外部作者的独立示例
 └─ site/            部署者的交付根
    ├─ incoming/    作者给的原始发布目录
@@ -68,7 +68,7 @@ dsh-lab/
 **取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager 0.3.2、kit 0.1.1 tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。仅消费现成发布物的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
 
 ```sh
-git clone https://github.com/PelyDeng/dsh-plugin-manager.git framework
+git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin-manager.git framework
 cd framework
 git rev-parse HEAD
 pnpm install --frozen-lockfile
@@ -101,12 +101,15 @@ pnpm --filter @dsh-plugin-manager/plugin-kit pack --out "$framework/.local/artif
 node -e "for (const p of ['../tools','../site/incoming']) require('fs').mkdirSync(p,{recursive:true})"
 cd ../tools
 pnpm add --ignore-workspace "$framework/.local/artifacts/tools/plugin-manager-0.3.2.tgz"
-pnpm add --ignore-workspace @deepseek-ai/dsh@0.1.2-alpha.5
 pnpm exec dsh-plugin-manager --version
-node node_modules/@deepseek-ai/dsh/lib/bin.js --version
+cd "$framework/deepseek-harness"
+pnpm install --frozen-lockfile
+pnpm run build
+pnpm dsh --version
+cd "$lab/tools"
 ```
 
-**预期**：工具目录能运行 manager 0.3.2 和官方 CLI。上面的宿主是应用已有交付基线，升级需重新验证插件接口和历史恢复；保存工具目录的锁文件，不能把 CLI 固定版本当成所有依赖都固定。pnpm 若提示依赖构建脚本审批，按官方依赖要求运行 `pnpm approve-builds` 后重装。后文所有 `pnpm exec dsh-plugin-manager` 都在这个 tools 目录执行。
+**预期**：tools 中能运行 manager 0.3.2，deepseek-harness 中能运行官方 CLI。宿主使用自身 `packageManager` 与锁文件（当前源码为 pnpm 11.7.0），和框架 pnpm 11.19.0 分开安装。按宿主提示处理必要的依赖构建许可。源码版本由本次检出的 gitlink 决定，不用旧 npm CLI 替代。后文管理器命令均在 tools 目录运行；宿主源码构建步骤与[官方源码说明](https://github.com/deepseek-ai/deepseek-harness/blob/d347e703908d0406b7a7ef80e3a0e594d86b2215/README.md#run-from-source)一致。
 
 ## 2. 打包第一个应用
 
@@ -151,7 +154,7 @@ pnpm exec dsh-plugin-manager compose-release --root "$lab/site" --output release
 node -e "require('fs').mkdirSync('../site/.local',{recursive:true})"
 ```
 
-在 `site/.local/deployment.json` 新建下列文件。唯一必须替换的 CLI 占位符指向工具目录实际文件，Windows JSON 路径使用 `/` 或 `\\`。这是新隔离实例；已有站点不要覆盖配置或更换 home。
+在 `site/.local/deployment.json` 新建下列文件。唯一必须替换的宿主占位符指向刚构建的 deepseek-harness 目录，Windows JSON 路径使用 `/` 或 `\\`。这是新隔离实例；已有站点不要覆盖配置或更换 home。
 
 ```json
 {
@@ -159,7 +162,7 @@ node -e "require('fs').mkdirSync('../site/.local',{recursive:true})"
   "plugins": "all",
   "mode": "release",
   "home": ".local/data/dsh-home",
-  "dshCliJs": "<tools绝对路径>/node_modules/@deepseek-ai/dsh/lib/bin.js",
+  "harnessRoot": "<framework绝对路径>/deepseek-harness",
   "port": 7902,
   "publicOrigin": "http://127.0.0.1:7902"
 }
@@ -192,7 +195,7 @@ pnpm exec dsh-plugin-manager health --root "$lab/site" --config .local/deploymen
 
 ![插件账号登录：登录后只能访问获授权的应用](assets/login.png)
 
-问答还需在**同一个 home** 的官方模型设置中配置默认模型与凭据。密钥不要放进 plugin.json、命令参数或截图。无模型配置时可以验证页面与权限，但不能称问答已成功。凭据入口与更详细交付步骤见[部署指南](../packages/plugin-manager/DELIVERY.md)。
+管理员在 `/auth` 的“模型设置”填写默认 DeepSeek API 密钥，保存后无需重启。默认模型选择及其他提供方在**同一个 home** 的官方模型设置中管理；密钥不要放进 plugin.json、命令参数或截图。操作见[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
 
 ![官方控制台：设置中的模型页管理提供方凭据，启动环境提供的密钥不能在此覆盖](assets/model-settings.png)
 
