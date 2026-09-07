@@ -14,7 +14,7 @@ export async function main(args = process.argv.slice(2)) {
   const [action, ...rest] = args;
   if (!action || action === '--help') {
     console.log('dsh-plugin-manager <list|build|check|clean|pack|catalog|verify-package|deploy|start|stop|sync|verify|paths|adopt|unlock|health|apply-compose|render-compose|migrate-data|migrate-artifacts|set-api-key> --root <project> [options]\nlist/build/check/pack: --package . 选择独立包；省略时保留 plugins/* 扫描和 --plugins 选集。\nverify-package --root <包根> --package . --archive <tgz>');
-    console.log('compose-release --root <交付根> --output <新发布目录> --manifest <清单1> --manifest <清单2>\n--version 显示管理器版本');
+    console.log('compose-release --root <交付根> --output <新发布目录> --manifest <清单1> --manifest <清单2> [--verification-report <报告.json>]\n--verification-report 可重复；记录仅作安装提示，不是兼容认证。\n--version 显示管理器版本');
   } else if (action === '--version') console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url))).version);
   else if (['list', 'build', 'check', 'clean'].includes(action)) tasks(args);
   else if (action === 'pack') pack(rest);

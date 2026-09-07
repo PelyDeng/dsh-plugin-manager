@@ -1,6 +1,6 @@
 # 开发者接入 FAQ
 
-适用：plugin-manager 0.3.2、plugin-kit 0.1.1，示例宿主接口以仓库锁定源码为基线；宿主版本号相同也可能存在源码与发布类型差异。这是随 dsh-example 发布的知识快照，不是对远程仓库的实时查询。页面摘要标识当前知识内容；在线 main 资料可能领先于安装版本。
+适用：plugin-manager 0.3.3、plugin-kit 0.1.1，示例宿主接口以仓库锁定源码为基线；宿主版本号相同也可能存在源码与发布类型差异。这是随 dsh-example 发布的知识快照，不是对远程仓库的实时查询。页面摘要标识当前知识内容；在线 main 资料可能领先于安装版本。
 
 ## Auth 登录后，根路径为什么仍提示认证？
 
@@ -78,6 +78,10 @@ bash deploy/scripts/set-api-key.sh --config .local/deployment.json
 
 ## 工具从哪里来？
 
+代码细节可以直接在本助手询问。它会检索随包公共框架源码，阅读实现和调用方，引用路径与行号；覆盖 manager、kit、auth、example、部署与集成代码。资料是构建时的快照，不能据此声称生产已经执行成功，也不包含私有业务源码或真实配置。
+
+发布包的宿主验证记录由 manager 0.3.3 支持：pack 只记录构建输入；最终 tgz 经测试后，由 `compose-release --verification-report <JSON>` 把报告附入新发布目录。安装时对照宿主、平台和插件组合，展示已测、未知或差异；没测过不等于不能用，模型替身通过不等于真实模型通过。它不增加“版本不同就禁止安装”的规则。完整格式见随 manager 交付的 VERIFICATION.md。
+
 需要 Node.js `^22.19.0 || >=24`、pnpm 11.19.0、系统 tar。包名不表示已发布到公共 npm。取得可信维护者的版本化 manager tgz（用 kit 才需 kit tgz），核对提供方摘要；没有现成包时，按仓库作者指南从明确源码提交构建。依赖安装可能需要网络，只有 tgz 不等于完整离线闭包。
 
 在独立工具目录安装：`pnpm add --ignore-workspace <manager-tgz绝对路径>`，以后在该目录执行 `pnpm exec dsh-plugin-manager ...`。不要在任意目录假设全局命令可用。作者包根的 package.json、pnpm-lock.yaml 与工具目录分开。
@@ -132,7 +136,7 @@ ctx.effect(() => http.register({ kind: 'exact', path: '/sales/identity', handler
 } }))
 ```
 
-import 来自 `@dsh-plugin-manager/plugin-kit`，完整可运行实例见 examples/standalone-kit。Tool 使用官方 ToolDefinition；需要认证时参照 kit/tools 的 createPluginTools/guardTool，声明权限并将工具名加入 Agent 白名单。不要猜测未提供的工具签名，应查当前安装版本导出与示例。Agent 使用官方 ctx.agents 与默认模型选择，systemPrompt.section 注入提示，tools.restrict 限制能力。example 当前白名单为空，无法代你执行命令、读磁盘或访问销售系统。
+import 来自 `@dsh-plugin-manager/plugin-kit`，完整可运行实例见 examples/standalone-kit。Tool 使用官方 ToolDefinition；需要认证时参照 kit/tools 的 createPluginTools/guardTool，声明权限并将工具名加入 Agent 白名单。不要猜测未提供的工具签名，应查当前安装版本导出与示例。Agent 使用官方 ctx.agents 与默认模型选择，systemPrompt.section 注入提示，tools.restrict 限制能力。example 的白名单仅含随包公共源码检索和阅读工具，不能执行命令、读取服务器文件或访问销售系统。
 
 ## 复制 example 需要改哪些名字？
 

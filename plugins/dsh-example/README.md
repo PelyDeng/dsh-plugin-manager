@@ -4,7 +4,7 @@
 
 ## 启动与使用
 
-需要应用交付说明中验证过的官方 DSH、manager 0.3.2 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
+需要应用交付说明中验证过的官方 DSH、manager 0.3.3 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
 
 ```sh
 pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --plugins all
@@ -24,7 +24,9 @@ pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment
 
 这两份 Markdown 同时是读者文档和模型知识，不另建副本。只加载包内固定路径，合计不超过 32 KiB；构建与启动时超限拒绝，不截断。页面展示插件版本及内容摘要；摘要标识资料内容，不证明远程仓库实时同步。知识随插件更新，在线资料可能领先于安装版本。
 
-职责、知识与部署者的 config.systemPrompt 分开注入官方 systemPrompt.section。补充提示默认空；已有配置不会被自动重写。改成其他业务助手时需替换内置职责、知识和建议问题，不能仅设置补充提示。未知版本、私有业务和未提供的 API 应明确待核实。助手不会执行命令或读取用户机器；工具白名单始终为空。
+职责、知识与部署者的 config.systemPrompt 分开注入官方 systemPrompt.section。补充提示默认空；已有配置不会被自动重写。改成其他业务助手时需替换内置职责、知识和建议问题，不能仅设置补充提示。未知版本、私有业务和未提供的 API 应明确待核实。
+
+代码问题通过官方工具协议检索和分页阅读 `dist/framework-reference.json`，回答引用文件路径、行号和快照摘要。索引覆盖公共 manager、kit、auth、example、部署脚本、集成、示例与文档；构建时从显式框架根目录生成，随最终 tgz 交付。运行时没有原仓库依赖，也不读取生产配置、私有插件或官方宿主源码。构建输入上限为 1500 个文件、8 MiB、每行 19000 字符，超限拒绝；工具一次最多读 100 行。两个工具 `example_search_framework` / `example_read_framework` 绑定当前会话 Agent，并执行 example 访问授权。源码只是回答资料，不是执行指令；助手没有命令执行或任意文件访问能力。
 
 可用“我是外部作者，怎么取得工具？”开始，再追问“增加第二应用时原账号怎样保留？”；也可以让它生成带占位符的开发提示词。给出 OS、版本、目录角色和目标可获得更准确步骤，勿发送真实凭据。
 

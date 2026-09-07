@@ -2,7 +2,8 @@ import { LOCK, OWNER, PENDING, STATE, atomicJSON, canonical, digestPattern, fail
 import { dirname, join, resolve, sep } from 'node:path';
 import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
-import { cliRun, externalStopped, hostCLI, observeManager, runtimeIdentity, stopOwned } from './process.mjs';
+import { cliRun, externalStopped, hostCLI, observeManager, runtimeIdentity, stopOwned, verificationIdentity } from './process.mjs';
+import { assessVerification, printVerification } from './verification.mjs';
 import { randomUUID } from 'node:crypto';
 import { runtimeEnvironment } from './config.mjs';
 import { assertReleaseMode } from './release.mjs';
@@ -169,6 +170,10 @@ export async function synchronize(deployment, release, options = {}) {
   if (deployment.options['data-compatible'] && !deployment.options.recover) fail('--data-compatible 仅用于 --recover。');
   const cli = options.cli ?? hostCLI(deployment);
   const environment = { os: process.platform, architecture: process.arch, node: process.versions.node, mode: deployment.mode, ...(options.cli ? {} : runtimeIdentity(cli, deployment)) };
+  const verification = assessVerification(release, release.verification?.runs.length
+    ? verificationIdentity(cli, deployment, environment.hostVersion)
+    : { host: { kind: 'unknown' }, platform: { os: process.platform, architecture: process.arch, nodeVersion: process.versions.node } }, deployment.mode);
+  printVerification(verification);
   const patches = (deployment.config.patches ?? []).map(path => canonical(resolve(deployment.root, path)));
   const desired = { schemaVersion: 2, candidates: deployment.candidates ?? plugins.map(plugin => plugin.id), plugins: plugins.map(statePlugin), configurations: runtime.configurations, patches, environment };
   const desiredHash = hash(JSON.stringify(desired));
@@ -182,7 +187,7 @@ export async function synchronize(deployment, release, options = {}) {
     const configurationChanged = !previous || !same(previous.candidates, desired.candidates) || !same(previous.configurations, desired.configurations) || !same(previous.patches ?? [], patches) || environmentChanged;
     if (!changes.add.length && !changes.remove.length && !configurationChanged && !pending) {
       if (options.freshContainer) synchronizedStopped.add(deployment);
-      return { changed: false, status: 'installed', activated: 'unknown', plugins: desired.plugins };
+      return { changed: false, status: 'installed', activated: 'unknown', plugins: desired.plugins, verification };
     }
     if (!options.skipPreflight && (changes.add.length || changes.remove.length)) preflightInstall(deployment, plugins, changes, cli, execute);
     if (deployment.hostMode === 'owned' && !options.freshContainer) await stopOwned(deployment);
@@ -213,7 +218,7 @@ export async function synchronize(deployment, release, options = {}) {
     for (const plugin of changes.remove) if (after.dependencies?.[plugin.package] || after.dsh?.profile?.bundles?.includes(plugin.package)) fail(`${plugin.id}: 撤选后仍有依赖或 Bundle，保留恢复日志。`);
     pending.status = 'awaiting-start'; pending.phase = 'installed'; atomicJSON(pendingPath, pending);
     synchronizedStopped.add(deployment);
-    return { changed: true, status: 'awaiting-start', activated: 'unknown', plugins: desired.plugins };
+    return { changed: true, status: 'awaiting-start', activated: 'unknown', plugins: desired.plugins, verification };
   } catch (error) {
     if (pending && operationStarted) { pending.status = 'failed'; pending.error = '部署未完成，请核实实际状态后恢复。'; atomicJSON(pendingPath, pending); }
     throw error;

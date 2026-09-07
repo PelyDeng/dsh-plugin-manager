@@ -1,6 +1,6 @@
 {
   "name": "dsh-example",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "DSH Plugin Manager 开发者接入答疑助手与可复制的鉴权对话示例",
   "license": "Apache-2.0",
   "private": true,
@@ -47,6 +47,7 @@
     "verifyFiles": [
       "knowledge/guide.md",
       "knowledge/prompts.md",
+      "dist/framework-reference.json",
       "web/index.html",
       "web/app.js",
       "dist/web/app.js",
@@ -64,7 +65,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown && tsdown --config tsdown.web.config.ts",
+    "build": "tsdown && tsdown --config tsdown.web.config.ts && node scripts/build-reference.mjs --root ../..",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check": "pnpm typecheck && node --check web/app.js && node --check web/stream.js && node --check web/markdown.js",

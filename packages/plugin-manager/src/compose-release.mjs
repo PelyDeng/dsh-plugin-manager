@@ -1,14 +1,17 @@
 /** Assemble existing releases without source checkouts, dependency installation or builds. */
-import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import { loadRelease } from './release.mjs';
 import { parseOptions } from './plugins.mjs';
-import { within } from './state.mjs';
+import { hash, within } from './state.mjs';
+import { mergeVerification } from './verification.mjs';
 
 /** Validate all inputs before writing a new portable release; never choose conflict winners. */
-export function composeRelease(manifests, output, previous) {
+export function composeRelease(manifests, output, previous, verificationReports = []) {
   if (!manifests.length) throw new Error('至少提供一个 --manifest。');
-  const plugins = manifests.flatMap(path => loadRelease(path).plugins);
+  const releases = manifests.map(path => loadRelease(path));
+  const plugins = releases.flatMap(release => release.plugins);
+  const verification = mergeVerification(releases.map(release => release.verification), verificationReports, plugins);
   for (const field of ['id', 'package']) {
     const seen = new Set();
     for (const plugin of plugins) {
@@ -39,16 +42,17 @@ export function composeRelease(manifests, output, previous) {
     copies.set(key, { target, source: plugin.archivePath, sha256: plugin.sha256 });
   }
   if (previous) for (const plugin of loadRelease(previous).plugins) include(plugin, plugin.archive);
-  const manifest = { schemaVersion: 2, plugins: plugins.map(({ directory, archivePath, ...plugin }) => {
+  const manifest = { schemaVersion: 2, verification, plugins: plugins.map(({ directory, archivePath, ...plugin }) => {
     const archive = `${plugin.id}-${plugin.sha256}.tgz`;
     include({ ...plugin, archivePath }, archive);
     return { ...plugin, archive };
   }) };
   if (existsSync(output) && readdirSync(output).length) throw new Error('发布目录必须不存在或为空；不会覆盖旧操作产物。');
   mkdirSync(output, { recursive: true });
-  for (const { target, source } of copies.values()) {
+  for (const { target, source, sha256 } of copies.values()) {
     mkdirSync(dirname(target), { recursive: true });
     cpSync(source, target);
+    if (hash(readFileSync(target)) !== sha256) throw new Error('复制后的归档摘要与发布清单不一致。');
   }
   const temporary = resolve(output, 'manifest.json.tmp');
   writeFileSync(temporary, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -57,14 +61,15 @@ export function composeRelease(manifests, output, previous) {
 }
 
 export function main(args = process.argv.slice(2)) {
-  const paths = [], rest = [];
+  const paths = [], reports = [], rest = [];
   for (let i = 0; i < args.length; i += 2) {
     if (args[i] === '--manifest' && args[i + 1] && !args[i + 1].startsWith('--')) paths.push(args[i + 1]);
+    else if (args[i] === '--verification-report' && args[i + 1] && !args[i + 1].startsWith('--')) reports.push(args[i + 1]);
     else rest.push(args[i], args[i + 1]);
   }
   const options = parseOptions(rest, ['root', 'output', 'previous']);
   if (!options.root || !options.output) throw new Error('compose-release 需要 --root 和 --output。');
   const root = resolve(options.root), output = resolve(root, options.output);
-  composeRelease(paths.map(path => resolve(root, path)), output, options.previous && resolve(root, options.previous));
+  composeRelease(paths.map(path => resolve(root, path)), output, options.previous && resolve(root, options.previous), reports.map(path => resolve(root, path)));
   console.log(`组合发布清单：${resolve(output, 'manifest.json')}`);
 }

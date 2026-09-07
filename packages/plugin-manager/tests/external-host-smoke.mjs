@@ -3,20 +3,39 @@ import assert from 'node:assert/strict';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import { runPnpm } from '../src/run-plugin-task.mjs';
 
 const repo = fileURLToPath(new URL('../../../', import.meta.url));
-const [managerArchive, kitArchive, cli, authManifest] = process.argv.slice(2).map(value => resolve(value));
+const [managerArchive, kitArchive, cli, authManifest] = process.argv.slice(2, 6).map(value => resolve(value));
+const reportIndex = process.argv.indexOf('--report');
+const reportPath = reportIndex < 0 ? undefined : process.argv[reportIndex + 1];
+if (reportIndex >= 0 && (!reportPath || reportPath.startsWith('--'))) throw new Error('--report requires a new output file');
 if (![managerArchive, kitArchive, cli, authManifest].every(value => value && existsSync(value))) throw new Error('Usage: external-host-smoke.mjs <manager.tgz> <kit.tgz> <official-cli.js> <auth-manifest.json>');
 const operation = mkdtempSync(join(tmpdir(), 'dsh-independent-'));
 const tools = join(operation, 'tools'); mkdirSync(tools);
 writeFileSync(join(tools, 'package.json'), '{"private":true}');
 runPnpm(['add', '--ignore-workspace', managerArchive], tools);
 const manager = join(tools, 'node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs');
+const installed = createRequire(join(tools, 'package.json'));
+const { verificationIdentity, verificationSubjects, writeVerificationReport } = await import(pathToFileURL(installed.resolve('@dsh-plugin-manager/plugin-manager/verification')).href);
+const { loadRelease } = await import(pathToFileURL(installed.resolve('@dsh-plugin-manager/plugin-manager')).href);
+const hash = bytes => createHash('sha256').update(bytes).digest('hex');
+const suiteRevision = hash(readFileSync(fileURLToPath(import.meta.url)));
+const stages = []; let suiteFailure;
+function recordStage(manifest, scenarioId, home) {
+  const { plugins } = loadRelease(manifest);
+  const identity = verificationIdentity({ command: process.execPath, prefix: [cli], cwd: operation }, { home });
+  for (const plugin of plugins) for (const scope of ['archive-consumption', 'real-host']) stages.push({
+    pluginId: plugin.id, archiveSha256: plugin.sha256, subjects: verificationSubjects(plugins), scenarioId,
+    suiteId: 'external-host-smoke', suiteRevision, scope, source: 'runner', ...identity,
+  });
+}
 const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(DSH_|PLUGIN_|DEPLOYMENT_CONFIG$|DEEPSEEK_)/u.test(name)));
 env.DSH_TELEMETRY_DISABLED = '1';
 const redact = text => text.replace(/\?token=\S+/gu, '?token=[redacted]');
@@ -79,6 +98,7 @@ try {
   const rawHome = join(operation, 'raw-home');
   run(cli, ['plugin', '--profile', 'web', 'add', `file:${join(plainRelease, plain.plugins[0].archive)}`], { DSH_HOME: rawHome });
   await start(cli, ['--profile', 'web', '--host', '127.0.0.1', '--port', String(port), '--no-open'], { DSH_HOME: rawHome }, '/independent-example/ready', 200);
+  recordStage(join(plainRelease, 'manifest.json'), 'independent-raw-bundle', rawHome);
   await stop(); console.log('PASS official Bundle without manager or kit');
   await startManaged('site-instance', join(plainRelease, 'manifest.json'), '/independent-example/ready', 200);
   run(manager, ['health', '--root', managedRoot, '--home', join(managedRoot, '.local/data/home'), '--port', String(port)]);
@@ -104,6 +124,7 @@ try {
   const reader = await login('fixture_reader');
   const allowed = await request('/independent-access-example/identity', undefined, reader); assert.equal(allowed.status, 200); assert.ok((await allowed.json()).owner);
   run(manager, ['health', '--root', managedRoot, '--home', home, '--port', String(port)]);
+  recordStage(join(combined, 'manifest.json'), 'independent-authenticated', home);
   await stop(); console.log('PASS kit tgz: anonymous 401, ungranted 403, ordinary authorized 200');
   const settingsPath = join(home, 'plugins/independent-access-example/plugin.json');
   mkdirSync(join(home, 'plugins/independent-access-example'), {recursive: true});
@@ -125,7 +146,12 @@ try {
   assert.equal((await request('/independent-access-example/identity',undefined,returning)).status,200);
   assert.equal(readFileSync(settingsPath,'utf8'),settings);
   assert.equal((await fetch(origin + '/independent-example/ready')).status, 200);
+  recordStage(join(combined, 'manifest.json'), 'independent-update', home);
   await stop(); console.log('PASS fixed-path update retains accounts, grants and instance settings');
-  writeFileSync(join(operation, 'result.json'), JSON.stringify({ platform: process.platform, node: process.version, managerVersion: '0.3.2', rawBundle: true, relocatedRelease: true, authStatuses: [401, 403, 200], updatePreservesState: true }, null, 2));
+  writeFileSync(join(operation, 'result.json'), JSON.stringify({ platform: process.platform, node: process.version, managerVersion: run(manager, ['--version']).trim(), rawBundle: true, relocatedRelease: true, authStatuses: [401, 403, 200], updatePreservesState: true }, null, 2));
   console.log(`Evidence: ${operation}`);
-} finally { await stop(); }
+} catch (error) { suiteFailure = error; } finally {
+  try { await stop(); } catch (error) { suiteFailure ??= error; }
+}
+if (reportPath) writeVerificationReport(resolve(reportPath), stages.map(stage => ({ ...stage, finishedAt: new Date().toISOString(), outcome: suiteFailure ? 'failed' : 'passed' })));
+if (suiteFailure) throw suiteFailure;
