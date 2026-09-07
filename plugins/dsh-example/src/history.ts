@@ -38,11 +38,12 @@ export class HistoryStore {
 }
 
 /** Project model reasoning and answer text, retaining durable interrupted output. */
-export function projectHistory(events: readonly SessionEvent[]): { role: 'user' | 'assistant'; text: string; reasoning?: string }[] {
-  const messages: { role: 'user' | 'assistant'; text: string; reasoning?: string }[] = []
-  let answer: { role: 'assistant'; text: string; reasoning?: string } | undefined
-  const current = () => { if (!answer) { answer = { role: 'assistant', text: '' }; messages.push(answer) } return answer }
+export function projectHistory(events: readonly SessionEvent[]): { role: 'user' | 'assistant'; text: string; reasoning?: string;turn?:number }[] {
+  const messages: { role: 'user' | 'assistant'; text: string; reasoning?: string;turn?:number }[] = []
+  let answer: { role: 'assistant'; text: string; reasoning?: string;turn?:number } | undefined,turn=-1
+  const current = () => { if (!answer) { answer = { role: 'assistant', text: '',...(turn<0?{}:{turn}) }; messages.push(answer) } return answer }
   for (const event of events) {
+    if(event.type==='turn/start')turn++
     if (event.type === 'user/message' && event.data.source.kind === 'user') {
       messages.push({ role: 'user', text: event.data.content.filter(block => block.type === 'text').map(block => block.text).join('') })
       answer = undefined

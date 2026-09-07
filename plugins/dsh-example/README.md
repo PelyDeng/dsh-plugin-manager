@@ -16,6 +16,14 @@ pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment
 
 实例配置在 `<home>/plugins/example/plugin.json`。将 accessMode 改为 standalone 后受控重启可独立体验；这是安装级共享历史。enabled 控制停用；停用不删除数据。字段与可复制模板见随包[配置参考](examples/README.md)。
 
+## 聊天界面复用
+
+聊天布局与基础样式以封闭化通用聊天代码为依据，采用顶栏、蓝色用户气泡、白色回答卡片、右侧快捷提问、独立思考与工具状态区。手机隐藏辅助区，通过弹层读取历史；Enter 换行，发送按钮提交。
+
+回答工具栏包含复制、官方反馈、从已完成回合创建分支、官方 Token 用量和事件耗时详情。反馈按版本更新并检查会话归属；分支只继承所选回合之前的完整历史。缺失统计不估算；未启用官方反馈服务时反馈按钮不可用。现有 Markdown、代码复制、停止和历史功能保留。
+
+后续问答插件请阅读 [聊天风格 skill](skills/dsh-chat-style/SKILL.md)，复用 `web/chat-base.css` 和官方图标；无需引用私有业务插件。三维、视频和业务结果组件不在本示例中。
+
 ## 知识和回答范围
 
 - [接入 FAQ](knowledge/guide.md)：定位、架构、命令、代码、鉴权、交付和限制。
