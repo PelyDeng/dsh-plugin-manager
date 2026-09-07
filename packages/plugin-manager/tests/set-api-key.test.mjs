@@ -25,6 +25,15 @@ test('invalid input does not create a home or overwrite legacy dotenv', async ()
   assert.equal(existsSync(deployment.home), false);
 });
 
+test('file-owned DeepSeek keys reject the native writer before touching credential storage', async () => {
+  const root = fixture();
+  const config = join(root, 'env.conf');
+  writeFileSync(config, 'DEEPSEEK_API_KEY=sk-file-owner\n', { mode: 0o600 });
+  const deployment = resolveDeployment({ root, config }, {});
+  await assert.rejects(storeApiKey(deployment, 'sk-new-value'), /配置文件管理.*只读/);
+  assert.equal(existsSync(deployment.home), false);
+});
+
 test('interactive input remains hidden, supports backspace and restores terminal raw mode', async () => {
   const input = new PassThrough(); const output = new PassThrough(); const rendered = [];
   input.isTTY = true; input.isRaw = false;
@@ -93,4 +102,62 @@ test('native host hot-reloads CLI writes and shares the same document with the p
     assert.ok(!`${readonly.stdout}${readonly.stderr}`.includes('sk-'));
     assert.equal((await provider.resolve('DEEPSEEK_API_KEY')).value, 'sk-cli-fixture');
   } finally { await fiber.dispose(); }
+});
+
+test('native credentials make both file overrides read-only and preserve official values after blank fallback', { skip: !process.env.DSH_TEST_CLI_JS }, () => {
+  const root = fixture(), entry = resolve(process.env.DSH_TEST_CLI_JS);
+  const config = join(root, 'env.conf');
+  mkdirSync(join(root, 'data/home'), { recursive: true });
+  const child = `
+    import { createRequire } from 'node:module';
+    import { pathToFileURL } from 'node:url';
+    import { createHash } from 'node:crypto';
+    import { realpathSync } from 'node:fs';
+    const require = createRequire(realpathSync(process.argv[1]));
+    const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href);
+    const { LocalCredentialProvider } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-credentials-local')).href);
+    const ctx = new Context(), fiber = ctx.plugin(LocalCredentialProvider, { dshHome: process.argv[2], watch: false });
+    await fiber;
+    try {
+      const provider = ctx.get('credentials');
+      if (process.argv[3] === 'seed') {
+        await provider.set('DEEPSEEK_API_KEY', 'sk-official-retained');
+        await provider.set('ZHIPU_API_KEY', 'official.zhipu.retained');
+      }
+      const result = {};
+      for (const key of ['DEEPSEEK_API_KEY', 'ZHIPU_API_KEY']) {
+        const info = await provider.describe(key), value = await provider.resolve(key);
+        let rejected = false;
+        if (!info.writable) { try { await provider.set(key, 'sk-refused'); } catch { rejected = true; } }
+        result[key] = { writable: info.writable, rejected, hash: createHash('sha256').update(value.value).digest('hex') };
+      }
+      console.log(JSON.stringify(result));
+    } finally { await fiber.dispose(); }
+  `;
+  const inherited = { ...process.env };
+  delete inherited.DEEPSEEK_API_KEY; delete inherited.ZHIPU_API_KEY;
+  const run = (env, mode = 'inspect') => {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', child, entry, join(root, 'data/home'), mode], { env: { ...inherited, ...env }, cwd: tmpdir(), encoding: 'utf8', timeout: 30000 });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout.trim().split('\n').at(-1));
+  };
+  const original = run({}, 'seed');
+  const stored = readFileSync(join(root, 'data/home/.credentials.yaml'));
+  // The same projection reader used by the supervisor is exercised from the installed archive.
+  return import(new URL('framework-credentials.mjs', managerBase)).then(({ prepareFrameworkCredentials, frameworkCredentialEnvironment }) => {
+    writeFileSync(config, 'DSH_HOME=data/home\nDEEPSEEK_API_KEY=sk-file-override\nZHIPU_API_KEY=file.zhipu.override\n', { mode: 0o600 });
+    let deployment = resolveDeployment({ root, config }, {});
+    prepareFrameworkCredentials(deployment);
+    const overridden = run(frameworkCredentialEnvironment(deployment));
+    for (const key of Object.keys(overridden)) {
+      assert.equal(overridden[key].writable, false);
+      assert.equal(overridden[key].rejected, true);
+      assert.notEqual(overridden[key].hash, original[key].hash);
+    }
+    assert.deepEqual(readFileSync(join(root, 'data/home/.credentials.yaml')), stored);
+    writeFileSync(config, 'DSH_HOME=data/home\nDEEPSEEK_API_KEY=\nZHIPU_API_KEY=\n');
+    deployment = resolveDeployment({ root, config }, {});
+    prepareFrameworkCredentials(deployment);
+    assert.deepEqual(run(frameworkCredentialEnvironment(deployment)), original);
+  });
 });

@@ -8,6 +8,12 @@ import { setDeepSeekKey, validateDeepSeekKey } from '@dsh-plugin-manager/plugin-
 import { checkDataSelection, parseArguments, resolveDeployment } from './deployment.mjs';
 import { hostCLI } from './process.mjs';
 import { canonical } from './state.mjs';
+import { frameworkInput, frameworkCredentialEnvironment } from './framework-credentials.mjs';
+
+function assertWritableKey(deployment) {
+  const values = frameworkInput(deployment)?.credentials ?? frameworkCredentialEnvironment(deployment);
+  if (values.DEEPSEEK_API_KEY) throw new Error('DeepSeek密钥由框架配置文件管理，当前只读；请修改私有env.conf并受控重启。');
+}
 
 /** Read a single key from stdin; interactive input uses raw mode and is never echoed. */
 export async function readApiKey(input = process.stdin, output = process.stderr) {
@@ -72,6 +78,7 @@ export function credentialContainer(deployment, execute = spawnSync) {
 
 /** Use the already-installed host's native writer, including its cross-process lock. */
 export async function storeApiKey(deployment, key) {
+  assertWritableKey(deployment);
   validateDeepSeekKey(key);
   checkDataSelection(deployment);
   const home = statSync(deployment.home, { throwIfNoEntry: false });
@@ -106,12 +113,13 @@ export async function main(args = process.argv.slice(2)) {
   catch { throw new Error('参数无效；密钥只能经 stdin 输入，不能放入命令参数。'); }
   const allowed = new Set(['action', 'root', 'config', 'home', 'data-root', 'profile', 'dsh-cli-js', 'help']);
   if (Object.keys(options).some(key => !allowed.has(key))) throw new Error('只接受部署路径、profile 和 --dsh-cli-js 参数；密钥必须经 stdin 输入。');
-  if (options.help) { console.log('set-api-key --root <project> [--config path] [--home path] [--data-root path] [--profile name] [--dsh-cli-js path]\n服务器源码部署：bash deploy/scripts/set-api-key.sh --config .local/deployment.json\n隐藏输入，复用官方 .credentials.yaml 存储；默认宿主自动热更新，无需重启。也可在 /auth 的模型设置中更换。'); return; }
+  if (options.help) { console.log('set-api-key --root <project> [--config path] [--home path] [--data-root path] [--profile name] [--dsh-cli-js path]\n服务器源码部署：bash deploy/scripts/set-api-key.sh --config .local/deployment.json\n隐藏输入，复用官方 .credentials.yaml 存储；默认宿主自动热更新，无需重启。仅管理DeepSeek官方存储，不修改env；文件或外部环境覆盖时只读。/auth网页支持DeepSeek与智谱。'); return; }
   let deployment;
   try { deployment = resolveDeployment(options); }
   catch { throw new Error('无法解析部署配置或路径，请先通过 deployment.mjs paths 核对配置。'); }
   checkDataSelection(deployment);
   const container = credentialContainer(deployment);
+  assertWritableKey(deployment);
   const key = await readApiKey();
   validateDeepSeekKey(key);
   if (container) {

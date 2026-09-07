@@ -7,44 +7,29 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { inspectHostSource } from './host-source.mjs';
 import { tarCommand } from '../../packages/plugin-manager/src/state.mjs';
+import { imageDefaults, readFrameworkConfig } from '../../packages/plugin-manager/src/framework-config.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const managerInputs = ['integrations/docker', 'packages/plugin-kit', 'packages/plugin-manager', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'];
-const defaults = {
-  HARBOR_ENABLED: 'false', REGISTRY_HOST: '', BASE_PROJECT: 'library', APP_PROJECT: 'dsh',
-  IMAGE_NAME: 'dsh-host',
-  REGISTRY_USERNAME: '', REGISTRY_PASSWORD: '', ALLOW_UPSTREAM: 'true',
-  DSH_SOURCE_BASE_IMAGE: 'docker.io/library/node:24-bookworm-slim',
-  DSH_DEBIAN_MIRROR: 'http://deb.debian.org', DSH_IMAGE_PLATFORM: 'linux/amd64',
-};
+const defaults = imageDefaults;
 
 /** Parse literal configuration without executing shell code or implicitly opening credentials. */
 export function loadImageConfig(root, filename) {
-  const config = { ...defaults };
-  if (filename) {
-    const path = resolve(root, filename);
-    if (process.platform !== 'win32' && (statSync(path).mode & 0o077) !== 0) throw new Error('Host image configuration permissions must be 0600.');
-    for (const [index, raw] of readFileSync(path, 'utf8').split(/\r?\n/u).entries()) {
-      const line = raw.trim();
-      if (!line || line.startsWith('#')) continue;
-      const match = /^([A-Z][A-Z0-9_]*)=(.*)$/u.exec(line);
-      if (!match || !Object.hasOwn(defaults, match[1])) throw new Error(`Unknown host image configuration field on line ${index + 1}.`);
-      let value = match[2].trim();
-      if (value.startsWith('"')) {
-        try { value = JSON.parse(value); } catch { throw new Error(`Invalid quoted value on line ${index + 1}.`); }
-        if (typeof value !== 'string') throw new Error(`Expected string on line ${index + 1}.`);
-      } else if (/^'.*'$/u.test(value)) value = value.slice(1, -1);
-      if (/[\r\n\0]/u.test(value)) throw new Error(`Invalid host image configuration on line ${index + 1}.`);
-      config[match[1]] = value;
-    }
-  }
+  return validateImageConfig(filename ? readFrameworkConfig(resolve(root, filename)).image : defaults);
+}
+
+/** Validate already-read unified inputs without opening a second configuration source. */
+export function validateImageConfig(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config) || Object.keys(config).some(key => !Object.hasOwn(defaults, key))) throw new Error('Unknown host image configuration field.');
+  config = { ...defaults, ...config };
   for (const key of ['HARBOR_ENABLED', 'ALLOW_UPSTREAM']) if (!['true', 'false'].includes(config[key])) throw new Error(`${key} must be true or false.`);
   if (!/^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$/u.test(config.IMAGE_NAME)) throw new Error('IMAGE_NAME must be a lowercase image repository name without a registry, project, or tag.');
   if (!/^linux\/(amd64|arm64)$/u.test(config.DSH_IMAGE_PLATFORM)) throw new Error('DSH_IMAGE_PLATFORM must be linux/amd64 or linux/arm64.');
   if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/u.test(config.DSH_SOURCE_BASE_IMAGE)) throw new Error('Invalid DSH_SOURCE_BASE_IMAGE reference.');
-  const mirror = new URL(config.DSH_DEBIAN_MIRROR);
+  let mirror;
+  try { mirror = new URL(config.DSH_DEBIAN_MIRROR); } catch { throw new Error('Invalid Debian mirror URL.'); }
   if (!['http:', 'https:'].includes(mirror.protocol) || mirror.username || mirror.password || /[|\s]/u.test(config.DSH_DEBIAN_MIRROR)) throw new Error('Invalid Debian mirror URL.');
-  if (config.HARBOR_ENABLED === 'true') {
+  if (config.HARBOR_ENABLED === 'true' || config.REGISTRY_USERNAME || config.REGISTRY_PASSWORD) {
     if (!/^[A-Za-z0-9.-]+(?::[0-9]+)?$/u.test(config.REGISTRY_HOST)) throw new Error('REGISTRY_HOST must be a host with an optional port.');
     for (const key of ['BASE_PROJECT', 'APP_PROJECT']) if (!/^[a-z0-9][a-z0-9._-]*$/u.test(config[key])) throw new Error(`Invalid ${key}.`);
     if (Boolean(config.REGISTRY_USERNAME) !== Boolean(config.REGISTRY_PASSWORD)) throw new Error('Supply both registry credentials or neither for anonymous access.');
@@ -62,6 +47,23 @@ function command(bin, args, options = {}, execute = spawnSync) {
   const result = execute(bin, args, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, windowsHide: true, ...options });
   if (result.error || result.status !== 0) throw new Error(`${bin} failed${result.status === null ? '' : ` (${result.status})`}: ${result.error?.message ?? result.stderr ?? ''}`);
   return result.stdout?.trim() ?? '';
+}
+
+function loginRegistry(config, docker) {
+  if (config.REGISTRY_USERNAME) docker(['login', config.REGISTRY_HOST, '--username', config.REGISTRY_USERNAME, '--password-stdin'], { input: config.REGISTRY_PASSWORD });
+}
+
+/** Reuse literal registry credentials for a matching deployment-image destination only. */
+export function withRegistryAuthentication(config, target, operation, execute = spawnSync) {
+  config = validateImageConfig(config);
+  if (!config.REGISTRY_USERNAME) return operation([]);
+  if (target.split('/')[0] !== config.REGISTRY_HOST) throw new Error('Deployment image registry differs from the configured credential destination.');
+  const auth = mkdtempSync(resolve(tmpdir(), 'dsh-image-auth-'));
+  const flags = ['--config', auth];
+  try {
+    loginRegistry(config, (args, settings) => command('docker', [...flags, ...args], settings, execute));
+    return operation(flags);
+  } finally { rmSync(auth, { recursive: true, force: true }); }
 }
 
 /** Only registry responses explicitly describing absence permit upstream fallback. */
@@ -103,7 +105,8 @@ export function repositoryDigest(image, inspection) {
 /** Prepare or explicitly publish a shared image, preserving operation results on failure. */
 export function buildHostImage(options = {}, { execute = spawnSync, inspectSource = inspectHostSource } = {}) {
   const root = realpathSync(resolve(repositoryRoot, options.root ?? '.'));
-  const config = loadImageConfig(root, options.config);
+  if (options.config && options.configValues) throw new Error('Select one host image configuration source.');
+  const config = options.configValues ? validateImageConfig(options.configValues) : loadImageConfig(root, options.config);
   if (options.publish && config.HARBOR_ENABLED !== 'true') throw new Error('--publish requires an explicitly enabled registry configuration.');
   if (options.publish && options.workingTree) throw new Error('Development working-tree images cannot be published.');
   if (options.publish && !config.REGISTRY_USERNAME) throw new Error('Publishing requires registry credentials with write permission.');
@@ -151,7 +154,7 @@ export function buildHostImage(options = {}, { execute = spawnSync, inspectSourc
     Object.assign(state, { status: 'published', published: true }); atomicJson(resultFile, state);
   };
   try {
-    if (config.HARBOR_ENABLED === 'true' && config.REGISTRY_USERNAME) docker(['login', config.REGISTRY_HOST, '--username', config.REGISTRY_USERNAME, '--password-stdin'], { input: config.REGISTRY_PASSWORD });
+    if (config.HARBOR_ENABLED === 'true') loginRegistry(config, docker);
     if (previous) { publish(); return { ...state, resultFile }; }
     const managerSource = resolve(operation, 'manager-source');
     const harnessSource = resolve(operation, 'harness-source');
@@ -233,9 +236,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         const value = args.shift(); if (!value || value.startsWith('--')) throw new Error(`Missing value for ${arg}.`);
         options[arg === '--operation-id' ? 'operationId' : arg.slice(2)] = value;
       } else if (arg === '--help') {
-        console.log('build-host-image.sh [--config <root-relative-file>] [--publish] [--resume <host-image.json>] [--artifacts <directory>] [--operation-id <id>] [--working-tree]'); process.exit(0);
+        console.log('build-host-image.sh [--config <root-relative-file>] [--publish] [--resume <host-image.json>] [--artifacts <directory>] [--operation-id <id>] [--working-tree]\nDefaults to <root>/.local/env.conf when present; explicit legacy image conf is supported.'); process.exit(0);
       } else throw new Error(`Unknown argument: ${arg}`);
     }
+    const configured = resolve(repositoryRoot, options.root ?? '.', '.local/env.conf');
+    if (!options.config && existsSync(configured)) options.config = configured;
     console.log(JSON.stringify(buildHostImage(options), null, 2));
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

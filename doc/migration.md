@@ -41,3 +41,5 @@ Windows 的 8.3 短目录名按完整路径解析；源、目标、备份及其�
 pnpm 报 `ERR_PNPM_UNEXPECTED_STORE` 时，`--rebuild` 不会迁移既有 store 记录。停止目标副本的宿主，使用官方 CLI 的 `plugin --profile <profile> install --offline --store-dir <目标 store> --cache-dir <目标 cache> --config.force=true` 重装安装目录；全部依赖必须已在离线闭包中，业务数据和原备份保持完整。随后按原清单恢复管理器 pending，不能删除状态来绕过恢复检查。
 
 容器在同步期间被终止可能留下锁。主机网络容器可能共享 hostname，但 PID 属于不同命名空间；不能据此推断原进程已退出。先核验原容器状态与所有重叠的可写数据挂载，保存停写证据及原锁，再处理遗留锁。改名备份后，旧容器仍记录原 bind 路径，回退必须恢复该路径或明确重建挂载。
+
+采用统一配置时，数据迁移成功后修改私有 `.local/env.conf` 中的相应路径。旧JSON导入仅转换配置格式，不搬迁数据；保留原恢复记录及其绝对路径，不能用修改配置替代停写、备份、复制与校验。

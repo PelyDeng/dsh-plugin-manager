@@ -1,13 +1,14 @@
 /** Initialize or update one checkout's site using committed source and saved release inputs. */
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { buildHostImage } from '../../integrations/docker/host-image.mjs';
+import { buildHostImage, withRegistryAuthentication } from '../../integrations/docker/host-image.mjs';
 import { loadSite, readJson as json, saveJson as save } from './site.mjs';
 import { resolveDeployment } from '../../packages/plugin-manager/src/config.mjs';
 import { buildMessage, buildStep } from './build-output.mjs';
+import { frameworkInput, prepareFrameworkCredentials, rememberFrameworkInput } from '../../packages/plugin-manager/src/framework-credentials.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -44,8 +45,12 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
   const revision = git(['rev-parse', 'HEAD']);
   const host = resolve(root, 'deepseek-harness');
   const hostCommit = existsSync(resolve(host, '.git')) ? git(['-C', host, 'rev-parse', 'HEAD']) : undefined;
-  const { site, sitePath, runtimePath } = loadSite(root, config);
+  const { site, sitePath, runtimePath, source } = loadSite(root, config);
   const resolvedSite = resolveDeployment({ root, config: sitePath, 'data-root': site.dataRoot, home: site.home, workspace: site.workspace, artifacts: site.artifacts, profile: site.profile }, {});
+  if (source) {
+    if (frameworkInput(resolvedSite)?.sha256 !== source.sha256 || hash(sitePath) !== source.sha256) throw new Error('Framework input changed while resolving the deployment.');
+    rememberFrameworkInput(resolvedSite, source);
+  }
   const pointer = resolve(root, '.local/source-release.json');
   const prior = existsSync(pointer) ? json(pointer) : null;
   if (prior && (typeof prior.operation !== 'string' || !resolve(prior.operation).startsWith(resolve(root, '.local/artifacts') + (process.platform === 'win32' ? '\\' : '/')))) throw new Error('Invalid saved operation location.');
@@ -74,10 +79,14 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
     capture(process.execPath, ['--input-type=module', '-e', 'import net from "node:net"; const s=net.createServer(); s.once("error",()=>{console.error("Requested port is unavailable.");process.exitCode=1});s.listen(Number(process.argv[1]),"127.0.0.1",()=>s.close());', String(site.port)]);
   }
   const operation = resume ? prior.operation : resolve(root, '.local/artifacts', `source-release-${revision.slice(0, 12)}-${randomUUID()}`);
-  mkdirSync(operation, { recursive: true });
+  mkdirSync(operation, { recursive: true, mode: 0o700 });
   const recordPath = resolve(operation, 'result.json');
   const record = resume ? json(recordPath) : { schemaVersion: 2, operation, revision, hostCommit, sitePath, siteHash: hash(sitePath), status: 'building', previous: active, previousRuntime: previous };
   if (resume && (record.schemaVersion !== 2 || record.sitePath !== sitePath || record.siteHash !== hash(sitePath))) throw new Error('Resume requires the original unchanged site configuration. The saved release and backup are retained.');
+  if (!resume && source) {
+    if (record.siteHash !== source.sha256) throw new Error('Framework input changed before its private backup.');
+    writeFileSync(resolve(operation, 'framework-input.conf'), source.bytes, { mode: 0o600, flag: 'wx' });
+  }
   const persist = () => { save(recordPath, record); save(pointer, { operation, status: record.status }); };
   persist();
   let stopped = false, installing = false;
@@ -110,7 +119,9 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
           if (!existsSync(destination)) copyFileSync(source, destination);
         }
       }
-      const candidate = { ...site, manifest: relative(root, manifest).replaceAll('\\', '/') };
+      prepareFrameworkCredentials(resolvedSite, { uid: site.containerUid, gid: site.containerGid });
+      const candidate = { ...site, manifest: relative(root, manifest).replaceAll('\\', '/'),
+        ...(resolvedSite.config.frameworkCredentials ? { frameworkCredentials: resolvedSite.config.frameworkCredentials } : {}) };
       record.candidatePath = resolve(operation, 'deployment.json');
       save(record.candidatePath, candidate);
       step('准备部署配置', process.execPath, [cli, 'render-compose', '--root', root, '--config', record.candidatePath, '--output', resolve(operation, 'preflight')]);
@@ -130,7 +141,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       let image;
       if (!baseReference) {
         if (!existsSync(resolve(host, '.git'))) throw new Error('The checkout is incomplete: supply deepseek-harness source before deployment. build.sh does not download official source.');
-        const built = buildStep('构建 DSH 宿主镜像', () => buildHost({ root, ...(site.hostImageConfig ? { config: site.hostImageConfig } : {}) }));
+        const built = buildStep('构建 DSH 宿主镜像', () => buildHost({ root, ...(source ? { configValues: source.image } : site.hostImageConfig ? { config: site.hostImageConfig } : {}) }));
         image = built.imageId;
         record.hostBuild = built.resultFile;
       } else {
@@ -152,7 +163,11 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       let reference = info.Id;
       if (site.publishImage) {
         const tag = `${site.publishImage}:source-${revision.slice(0, 12)}-${record.managerHash.slice(0, 12)}`;
-        run('docker', ['tag', info.Id, tag]); step('推送部署镜像', 'docker', ['push', tag]);
+        run('docker', ['tag', info.Id, tag]);
+        const publish = flags => step('推送部署镜像', 'docker', [...flags, 'push', tag]);
+        if (source) withRegistryAuthentication(source.image, site.publishImage, publish,
+          (bin, args, settings) => ({ status: 0, stdout: run(bin, args, { stdio: 'pipe', ...settings }) }));
+        else publish([]);
         reference = inspect(tag).RepoDigests?.find(value => value.startsWith(`${site.publishImage}@sha256:`));
         if (!reference) throw new Error('The published image has no matching digest.');
       }
@@ -200,7 +215,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const args = process.argv.slice(2), options = {};
-    if (args.includes('--help')) console.log('bash deploy/build.sh [--config <site.json>] [--resume]\nFirst run creates .local/site.json; .local/deployment.json and release records are generated.\nRequires Linux, Node.js ^22.19 or >=24, npm, Git, Docker Compose, tar and flock. pnpm is prepared automatically.');
+    if (args.includes('--help')) console.log('bash deploy/build.sh [--config <env.conf|site.json>] [--resume]\nFirst run initializes .local/env.conf (legacy JSON remains explicit-compatible); .local/deployment.json and release records are generated.\nRequires Linux, Node.js ^22.19 or >=24, npm, Git, Docker Compose, tar and flock. pnpm is prepared automatically.');
     else {
       if (process.platform !== 'linux') throw new Error('Source deployment requires Linux and Docker Compose.');
       const [major, minor] = process.versions.node.split('.').map(Number);
