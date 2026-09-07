@@ -1,6 +1,7 @@
 import { invariant } from './settings.mjs'
 
 export const searchTimeZone='Asia/Shanghai'
+export const searchLocalTime=ms=>Number.isFinite(ms)?new Intl.DateTimeFormat('sv-SE',{timeZone:searchTimeZone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date(ms)):null
 const day=ms=>new Intl.DateTimeFormat('en-CA',{timeZone:searchTimeZone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(ms))
 export function searchContext(now=Date.now()) { return {now:new Date(now).toISOString(),timeZone:searchTimeZone,today:day(now),yesterday:day(now-86400000)} }
 export const searchParameters={
@@ -46,5 +47,5 @@ export function searchDrafts(store,owner,input={},now=Date.now(),categories=[]) 
   const timestamp=d=>f.sortBy==='created'?d.createdAt??0:d.updatedAt
   rows.sort((a,b)=>(timestamp(a)-timestamp(b))*(f.order==='asc'?1:-1)||a.id.localeCompare(b.id))
   const offset=(f.page-1)*30,items=rows.slice(offset,offset+30).map(d=>({id:d.id,title:d.title,revision:d.revision,createdAt:d.createdAt??null,updatedAt:d.updatedAt,status:'workspace-draft',tags:d.tags,categories:d.categories,remote:d.remote?{publishedCid:d.remote.published?.cid??null,savedDraftCid:d.remote.savedDraft?.cid??null}:null}))
-  return {items,page:f.page,hasMore:offset+30<rows.length,total:rows.length,unknownDateCount,filters:f,timeZone,dateNote:'工作台私有草稿；历史记录缺少创建时间时返回null，不推断首次写作日期。'}
+  return {items:items.map(d=>({...d,localTime:{created:searchLocalTime(d.createdAt),modified:searchLocalTime(d.updatedAt)}})),page:f.page,hasMore:offset+30<rows.length,total:rows.length,unknownDateCount,filters:f,timeZone,dateNote:'localTime是上海时间，其他时间戳保留原值。工作台私有草稿；历史记录缺少创建时间时返回null，不推断首次写作日期。同名且没有共同关联ID的草稿不能合并计数。'}
 }

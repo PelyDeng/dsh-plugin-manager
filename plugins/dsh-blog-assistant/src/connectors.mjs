@@ -3,7 +3,7 @@ import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { BlogError, invariant, readJSON } from './settings.mjs'
 import { digest } from './store.mjs'
-import { normalizeSearch,searchContext } from './search.mjs'
+import { normalizeSearch,searchContext,searchLocalTime } from './search.mjs'
 
 const requestSignal = signal => signal ? AbortSignal.any([signal, AbortSignal.timeout(45000)]) : AbortSignal.timeout(45000)
 export class BlogClient {
@@ -29,8 +29,8 @@ export class BlogClient {
   async search(input={},signal) {
     const {filters,timeZone,start,end}=normalizeSearch(input)
     const result=await this.call('search',{...filters,start:start===null?null:start/1000,end:end===null?null:end/1000},signal)
-    const items=result.items.map(item=>{if(!item.url)return item;const url=new URL(item.url,this.config.url);invariant(['https:','http:'].includes(url.protocol),'博客返回了无效文章链接',502);return {...item,url:url.href}})
-    return {...result,items,filters,timeZone,clock:searchContext()}
+    const items=result.items.map(item=>{const row={...item,localTime:{created:searchLocalTime(item.created*1000),modified:searchLocalTime(item.modified*1000)}};if(!item.url)return row;const url=new URL(item.url,this.config.url);invariant(['https:','http:'].includes(url.protocol),'博客返回了无效文章链接',502);return {...row,url:url.href}})
+    return {...result,items,filters,timeZone,clock:searchContext(),dateNote:'localTime是上海时间，其他时间戳保留原值。created是Typecho设定的文章时间，不是首次创建或首次发布的证据；modified是该版本最近修改时间。'}
   }
 }
 
