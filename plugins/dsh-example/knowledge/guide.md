@@ -10,6 +10,24 @@
 
 重启后启动令牌会重新生成；旧书签、新浏览器或 Cookie 清理后无法进入时，重新读取当前文件。地址不正确时核对站点 `publicUrl`/`publicOrigin`；完整新地址仍被拒绝时检查代理的查询参数、Host 和 Cookie 转发。不要关闭认证，也不要公开 token 或用它替代普通用户的应用授权。
 
+## 控制台能打开，但模型和插件报 HTTP 403 怎么办？
+
+如果通过官方认证地址进入后，页面显示“连接异常”，模型接口（如 `/api/llm/listProviders`）返回 403，先检查公网域名是否加入官方 DSH 的 `trustedHosts`。`publicUrl` 决定认证地址，`publicOrigin` 声明应用访问来源；仅设置它们不会自动允许该域名调用官方控制台 API。
+
+在已有 `.local/site.json` 中补充以下字段，保留其他配置。这里的域名仅为示例，请替换为自己的实际访问域名：
+
+```json
+{
+  "publicUrl": "https://dsh.example.com",
+  "publicOrigin": "https://dsh.example.com",
+  "trustedHosts": ["dsh.example.com"]
+}
+```
+
+`trustedHosts` 填主机名，不带 `https://` 或路径；如需限定端口，填写与请求 Host 一致的 `主机名:端口`。保留已有信任项，不使用通配域名或关闭认证。通过仓库正常部署入口应用配置并受控重启；重启后读取当前认证地址，再检查模型、插件和工作区是否可用。真实域名属于站点配置，不写入公共模板。
+
+403 也可能来自反向代理或 Origin 校验：如果仍失败，核对代理是否正确转发 Host、Cookie，以及请求 Origin 是否与访问地址一致。401 是认证未通过，与这里的 Host 信任检查不同；健康接口 200 不能证明控制台 API 正常。
+
 ## 运行内置应用应选择什么宿主？
 
 完整源码部署使用仓库 gitlink 对应的 DeepSeek Harness，并在宿主目录按自己的 packageManager 和锁文件安装、构建。源码版本号不等于同名 npm 包已发布，不能把历史 SDK 依赖版本当作当前运行宿主。Node CLI 可通过部署配置的 harnessRoot 指向已准备的宿主源码目录；已安装的兼容宿主则使用 dshCliJs，二选一。默认密钥管理需要官方 credentials 服务和 credentials-local 存储；具体步骤见图文接入手册。

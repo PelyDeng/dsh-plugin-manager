@@ -62,6 +62,7 @@ bash deploy/scripts/set-api-key.sh --config .local/deployment.json
 | `plugins` | `["auth", "example"]` | 构建的插件 ID 选集；`[]` 表示无业务插件 |
 | `port` | `7902` | 回环监听端口，1–65535 |
 | `publicOrigin`、`publicUrl` | `http://127.0.0.1:7902` | 实际访问 origin，无路径或尾部斜杠 |
+| `trustedHosts` | 未设置 | 公网访问官方控制台时显式加入实际主机名，如 `["dsh.example.com"]`；不带协议或路径，配置后按部署流程重启。仅设置 publicUrl 不会自动信任域名，见 [FAQ](FAQ.md#控制台能打开但模型和插件报-http-403-怎么办) |
 | `composeProject` | `dsh-plugins` | 独占的 Compose 项目名 |
 | `dataRoot` | `.local/data` | 持久数据根目录 |
 | `home` | `.local/data/dsh-home` | DSH profile、插件配置及业务数据 |
