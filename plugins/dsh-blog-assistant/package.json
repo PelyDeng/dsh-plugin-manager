@@ -1,6 +1,6 @@
 {
   "name": "dsh-blog-assistant",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "个人博客写作、发布、图床与备份助手",
   "license": "UNLICENSED",
   "private": true,
@@ -23,6 +23,8 @@
     "dist/",
     "web/index.html",
     "web/style.css",
+    "web/icons.svg",
+    "web/ICONS-LICENSE.txt",
     "config/config.example.json",
     "config/README.md",
     "backup/archive.py",
@@ -78,7 +80,7 @@
   "scripts": {
     "build": "tsdown && tsdown --config tsdown.web.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/attachments.test.mjs tests/chat-store.test.mjs tests/chat.test.mjs tests/drafts.test.mjs tests/jobs.test.mjs tests/models.test.mjs",
+    "test": "node --test tests/attachments.test.mjs tests/chat-store.test.mjs tests/chat.test.mjs tests/chat-ui.test.mjs tests/drafts.test.mjs tests/jobs.test.mjs tests/models.test.mjs",
     "test:host": "node --test tests/http.test.mjs tests/chat-history-native.test.mjs tests/chat-backup-native.test.mjs",
     "check": "pnpm typecheck && node --check web/app.js",
     "clean": "node ../../scripts/clean-plugin.mjs dist coverage"

@@ -1,14 +1,15 @@
 import DOMPurify from 'dompurify'
 import { renderMarkdown } from './markdown.js'
 import { initChat } from './chat.js'
+import { initLayout } from './layout.js'
 
 const $=id=>document.getElementById(id), base=document.body.dataset.base
 const S={draft:null,dirty:false,saving:null,tab:'local',page:1,mode:'ai',view:'split',job:null,identity:null,attachments:[],selected:new Set(),prepared:null,metadataReady:false}
 let saveTimer,pollTimer,searchTimer,cursor={start:0,end:0}
 const content=()=>({title:$('title').value,text:$('text').value,slug:$('slug').value,format:S.draft.format,tags:$('tags').value.split(/[,，]/).map(v=>v.trim()).filter(Boolean),categories:S.metadataReady?[...$('categories').selectedOptions].map(v=>Number(v.value)):S.draft.categories})
 const safeURL=value=>{try{const u=new URL(value);return ['http:','https:'].includes(u.protocol)?u.href:null}catch{return null}}
-function notice(error,target='notice'){const el=$(target);el.textContent=error?.message??String(error);el.hidden=false;el.focus()}
-function clearNotice(){$('notice').hidden=true}
+function notice(error,target='notice'){if(target==='notice')target=$('assistant-dialog').open?'assistant-error':$('navigation-dialog').open?'navigation-error':target;const el=$(target);el.textContent=error?.message??String(error);el.hidden=false;el.focus()}
+function clearNotice(){for(const id of ['notice','assistant-error','navigation-error'])$(id).hidden=true}
 async function request(path,options={}){const r=await fetch(base+path,{credentials:'same-origin',...options});let data;try{data=await r.json()}catch{throw new Error('服务返回异常，请检查登录状态')}if(!r.ok)throw new Error(data.error??data.message??`请求失败（${r.status}）`);return data}
 const api=(action,args={})=>request('/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,args})})
 const action=(fn,target='notice')=>async e=>{try{clearNotice();await fn(e)}catch(err){notice(err,target)}}
@@ -20,7 +21,7 @@ async function flush(){
   S.saving=(async()=>{while(S.dirty&&S.draft){const id=S.draft.id,payload=content();$('save-state').textContent='保存中…';const result=await api('save',{id,revision:S.draft.revision,content:payload});if(S.draft?.id!==id)return;S.draft=result;S.dirty=JSON.stringify(payload)!==JSON.stringify(content());$('save-state').textContent=S.dirty?'还有修改待保存':'已保存';showProposal()}})()
   try{await S.saving;await loadList()}catch(err){$('save-state').textContent='保存失败 · 内容仍在编辑器';throw err}finally{S.saving=null}
 }
-function fill(draft){S.draft=draft;S.dirty=false;$('empty').hidden=true;$('editor').hidden=false;for(const key of ['title','text','slug'])$(key).value=draft[key];$('tags').value=draft.tags.join('，');for(const option of $('categories').options)option.selected=draft.categories.includes(Number(option.value));$('format-label').textContent=draft.format==='html'?'HTML 原文 · 原格式保留':'Markdown 原文';$('save-state').textContent='已保存';$('answer').innerHTML='';$('task-state').textContent='';S.job=null;clearTimeout(pollTimer);render();showProposal();sessionStorage.setItem(`blog-draft:${S.identity.userId}`,draft.id);$('library').classList.remove('open')}
+function fill(draft){S.draft=draft;S.dirty=false;$('empty').hidden=true;$('editor').hidden=false;for(const key of ['title','text','slug'])$(key).value=draft[key];$('tags').value=draft.tags.join('，');for(const option of $('categories').options)option.selected=draft.categories.includes(Number(option.value));$('format-label').textContent=draft.format==='html'?'HTML 原文 · 原格式保留':'Markdown 原文';$('save-state').textContent='已保存';$('answer').innerHTML='';$('task-state').textContent='';S.job=null;clearTimeout(pollTimer);render();showProposal();sessionStorage.setItem(`blog-draft:${S.identity.userId}`,draft.id);$('library').classList.remove('open');window.dispatchEvent(new Event('blog:draft'))}
 async function openDraft(id){await flush();fill(await api('draft',{id}));await Promise.all([loadAttachments(),loadTasks(),loadOperations()]);await loadList()}
 async function createDraft(){await flush();fill(await api('create'));S.attachments=[];S.selected.clear();showAttachments();await loadList()}
 async function loadList(){const list=$('article-list');list.replaceChildren();$('more-articles').hidden=true;const query=$('search').value.trim();let items
@@ -66,11 +67,11 @@ for(const id of ['title','text','slug','tags','categories'])$(id).addEventListen
 for(const event of ['keyup','mouseup','select','blur'])$('text').addEventListener(event,()=>{cursor={start:$('text').selectionStart,end:$('text').selectionEnd}})
 $('new-draft').addEventListener('click',action(createDraft));$('empty-new').addEventListener('click',action(createDraft));$('save').addEventListener('click',action(flush))
 $('mode-ai').addEventListener('click',()=>mode('ai'));$('mode-manual').addEventListener('click',()=>mode('manual'))
-for(const b of document.querySelectorAll('[data-view]'))b.addEventListener('click',()=>{S.view=b.dataset.view;$('document').className=`document ${S.view}`;for(const el of document.querySelectorAll('[data-view]'))el.setAttribute('aria-pressed',String(el===b))})
+for(const b of document.querySelectorAll('button[data-view]'))b.addEventListener('click',()=>{S.view=b.dataset.view;$('document').className=`document ${S.view}`;for(const el of document.querySelectorAll('button[data-view]'))el.setAttribute('aria-pressed',String(el===b))})
 for(const b of document.querySelectorAll('[data-insert]'))b.addEventListener('click',action(()=>{if(S.draft?.format==='html')throw new Error('当前是 HTML 原文，请直接编辑标签，避免隐式转换格式');const selected=$('text').value.slice(cursor.start,cursor.end);insert({heading:'\n## '+(selected||'小标题')+'\n',bold:'**'+(selected||'重点')+'**',italic:'*'+(selected||'文字')+'*',code:'\n```text\n'+(selected||'代码')+'\n```\n',link:'['+(selected||'链接文字')+'](https://)',list:'\n- '+(selected||'列表项')+'\n'}[b.dataset.insert])}))
 for(const tab of ['local','remote'])$(`${tab}-tab`).addEventListener('click',action(async()=>{S.tab=tab;S.page=1;tabs();await loadList()}))
 $('search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{S.page=1;loadList().catch(notice)},300)})
-$('more-articles').addEventListener('click',action(async()=>{S.page++;await loadList()}));$('library-toggle').addEventListener('click',()=>$('library').classList.toggle('open'))
+$('more-articles').addEventListener('click',action(async()=>{S.page++;await loadList()}))
 $('insert-image').addEventListener('click',()=>{if(S.draft)$('image-file').click();else notice('请先选择草稿')})
 $('image-file').addEventListener('change',action(async()=>{const file=$('image-file').files[0];if(!file)return;const draftId=S.draft.id;const r=await request('/upload',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});if(S.draft?.id!==draftId)throw new Error('图片上传成功，但草稿已切换，请回原草稿插入');insert(S.draft.format==='html'?`<img src="${r.url.replaceAll('"','&quot;')}" alt="">`:`\n![图片说明](${r.url})\n`);$('image-file').value=''}))
 $('ask').addEventListener('click',action(async()=>{await flush();if(!S.draft)throw new Error('请先新建或选择草稿');S.job=await api('task-start',{requestId:crypto.randomUUID(),draftId:S.draft.id,expectedRevision:S.draft.revision,instruction:$('instruction').value,research:$('research').checked,attachments:S.attachments.filter(a=>S.selected.has(a.id)).map(a=>({id:a.id,version:a.version,range:a.range}))});showJob();poll()}))
@@ -92,4 +93,5 @@ document.addEventListener('click',action(async e=>{if(e.target.matches('.copy-co
 window.addEventListener('beforeunload',e=>{if(S.dirty){e.preventDefault();e.returnValue=''}})
 async function loadMetadata(){try{const meta=await api('metadata');for(const c of meta.categories){const option=document.createElement('option');option.value=c.id;option.textContent=c.name;option.selected=S.draft?.categories.includes(c.id)??false;$('categories').append(option)}S.metadataReady=true;$('categories').disabled=false;$('category-help').textContent='可多选已有分类'}catch(err){$('category-help').textContent='分类加载失败，保存时保留原分类';notice(err)}}
 async function start(){S.identity=await request('/identity');$('backup-open').hidden=!S.identity.backupAdmin;$('blog-link').href=S.identity.blogUrl;initChat({api,request,identity:S.identity,openDraft,flush,renderMarkdown});void loadMetadata();await loadList();const id=sessionStorage.getItem(`blog-draft:${S.identity.userId}`);if(id)await openDraft(id)}
+initLayout()
 start().catch(notice)
