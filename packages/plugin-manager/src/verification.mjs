@@ -135,7 +135,11 @@ export function writeVerificationReport(path, runs) {
     writeFileSync(temporary, bytes, { flag: 'wx', mode: 0o600 });
     // Atomic create, unlike rename which can overwrite a report created concurrently.
     linkSync(temporary, path);
-  } finally { rmSync(temporary, { force: true }); }
+  } finally {
+    // Publishing succeeded once the hard link exists. Housekeeping must not turn
+    // that valid report into a failed suite, or mask an earlier publication error.
+    try { rmSync(temporary, { force: true }); } catch { /* The next directory cleanup can remove this temporary file. */ }
+  }
 }
 
 const strongIdentity = host => host.identitySource === 'detected' && (host.kind === 'source' ? !!host.commit && host.dirty === false : host.kind === 'distribution' && !!host.digest);
