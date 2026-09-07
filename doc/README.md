@@ -6,6 +6,8 @@
 
 ## 第一次使用
 
+先看 [图文导览](quick-tour.md)；参与维护者邀请的试用可使用[反馈清单](try-it.md)。English introduction: [README.en.md](../README.en.md)。
+
 1. [图文体验：启动第一个应用](getting-started.md)——准备工具、打包、启动、登录与问答。
 2. [Linux Docker 一键部署](first-deployment.md)——在服务器运行完整源码站点的另一条路径。
 3. [进阶：加入第二个应用](getting-started.md#进阶加入第二个应用)——组合不同作者的交付物，保留原应用与账号。
@@ -35,3 +37,7 @@
 | 框架和官方 DSH 的职责 | [架构与包职责](architecture.md) |
 | 开发、授权及第二应用问题 | [开发者 FAQ](../plugins/dsh-example/knowledge/guide.md) |
 | 让 AI 协助开发 | [五种可复制开发提示词](../plugins/dsh-example/knowledge/prompts.md) |
+
+## 项目实践
+
+[开源项目的发现与试用准备记录](promotion-story.md)——首页、演示、发布材料和熟人反馈安排，包含实际完成情况与验证边界。
