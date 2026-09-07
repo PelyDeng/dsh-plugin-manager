@@ -139,7 +139,7 @@ test('internal relative links preserve their topology when the platform permits 
     throw error;
   }
   migrateData({ ...options, apply: true });
-  assert.equal(readlinkSync(join(options.target, 'event-link')), 'sessions/event.jsonl');
+  assert.equal(readlinkSync(join(options.target, 'event-link')), readlinkSync(join(options.source, 'event-link')));
   assert.equal(readFileSync(join(options.target, 'event-link'), 'utf8'), '{"event":"fixture"}\n');
 });
 
