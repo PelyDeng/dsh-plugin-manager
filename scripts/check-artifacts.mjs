@@ -35,6 +35,8 @@ try {
   assert.equal(paths.home, join(project, '.local/data/dsh-home'));
   assert.notEqual(spawnSync(process.execPath, [cli, 'paths'], { cwd: consumer }).status, 0);
   run(['--input-type=module', '-e', "import {isPluginPath} from '@dsh-plugin-manager/plugin-kit/route-path'; if(!isPluginPath('/example')) throw Error('route leaf'); import('@dsh-plugin-manager/plugin-manager');"], consumer);
+  run(['--input-type=module', '-e', "import {deepSeekKeyStatus,setDeepSeekKey} from '@dsh-plugin-manager/plugin-kit/deepseek-key'; const status=await deepSeekKeyStatus(); if(status.supported || status.fingerprint) throw Error('credential leaf');"], consumer);
+  assert.match(run([cli, 'set-api-key', '--help']), /无需重启/u);
 
   const kitConsumer = JSON.parse(readFileSync(join(consumer, 'package.json')));
   kitConsumer.devDependencies = { '@deepseek-ai/cordis': '4.0.2', typescript: '^6.0.3', '@types/node': '^22.20.0' };

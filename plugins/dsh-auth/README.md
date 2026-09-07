@@ -22,6 +22,12 @@
 
 所有变更请求检查 Origin 与 CSRF。Cookie 使用 HttpOnly、SameSite=Strict，在 HTTPS 下启用 Secure。卸载插件不删除数据库。备份需要停止写入或使用 SQLite 一致备份。
 
+## 默认 DeepSeek 密钥
+
+管理员完成初始改密后可从左侧“模型设置”配置或更换默认 `DEEPSEEK_API_KEY`。页面只展示配置状态及不可逆 SHA-256 指纹，不返回原密钥，不验证余额或模型调用；此配置作用于整个宿主。普通用户和未完成初始改密的管理员不能读取或写入此接口。
+
+`GET/POST /auth/api/deepseek-key` 复用现有会话、Origin、CSRF 及管理员校验，调用 kit 的共享凭据逻辑与宿主 `credentials` 服务。网页和 `set-api-key` 脚本使用同一官方存储，无需重启，后续请求使用新密钥；外部环境覆盖显示只读。没有官方凭据服务时明确禁用，不另建业务配置文件。模型选择和其他提供方仍由官方控制台管理。
+
 ## 控制台代理
 
 `GET /auth/api/console-access` 可供反向代理 `auth_request` 检查控制台授权，返回 204、401、403 或 503，不发行官方 token。代理必须覆盖页面、API 和 WebSocket，并用原始请求 URI 覆盖 `X-Original-URI`。已登记插件的路由前缀交回插件自行鉴权；未知路由和控制台要求 `dsh-console`。已建立 WebSocket 不会因撤权自动断开。

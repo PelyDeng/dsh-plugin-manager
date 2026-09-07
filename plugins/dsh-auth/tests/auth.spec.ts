@@ -62,6 +62,59 @@ async function httpFixture(initial = false) {
   return { store, admin, ctx, service, config, origin, request, login }
 }
 
+describe('administrator DeepSeek credentials', () => {
+  it('protects reads and writes, returns fingerprints only, and updates the runtime service', async () => {
+    const f = await httpFixture()
+    let value: string | undefined
+    const writes: string[] = []
+    f.ctx.provide('credentials', {
+      describe: async () => ({ writable: true }),
+      resolve: async () => value ? { value, source: 'file' } : undefined,
+      set: async (ref: string, key: string) => { writes.push(ref); value = key },
+    })
+    const path = '/auth/api/deepseek-key'
+    expect((await f.request(path)).status).toBe(401)
+    f.store.create('reader', hash, 'user', ['demo'])
+    const reader = await f.login('reader')
+    expect((await f.request(path, undefined, reader.cookie)).status).toBe(403)
+    expect((await f.request(path, { apiKey: 'sk-refused' }, reader.cookie, reader.result.csrf)).status).toBe(403)
+    const admin = await f.login()
+    expect(await (await f.request(path, undefined, admin.cookie)).json()).toMatchObject({ configured: false })
+    expect((await f.request(path, { apiKey: 'sk-refused' }, admin.cookie)).status).toBe(403)
+    expect((await f.request(path, { apiKey: 'sk-refused' }, admin.cookie, admin.result.csrf, 'https://other.invalid')).status).toBe(403)
+    expect((await f.request(path, { apiKey: 'sk-bad\nINJECT=1' }, admin.cookie, admin.result.csrf)).status).toBe(400)
+    expect(writes).toEqual([])
+    const saved = await f.request(path, { apiKey: 'sk-first-fixture' }, admin.cookie, admin.result.csrf)
+    expect(saved.status).toBe(200)
+    expect(saved.headers.get('cache-control')).toBe('no-store')
+    const first = await saved.json()
+    expect(first).toMatchObject({ configured: true, writable: true, source: 'file' })
+    expect(JSON.stringify(first)).not.toContain('sk-first-fixture')
+    const replaced = await (await f.request(path, { apiKey: 'sk-second-fixture' }, admin.cookie, admin.result.csrf)).json()
+    expect(replaced.fingerprint).not.toBe(first.fingerprint)
+    expect(value).toBe('sk-second-fixture')
+    expect(writes).toEqual(['DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY'])
+  })
+  it('requires the initial password change and refuses a missing credential service', async () => {
+    const f = await httpFixture(true), admin = await f.login('admin', '123456')
+    expect((await f.request('/auth/api/deepseek-key', undefined, admin.cookie)).status).toBe(403)
+    expect((await f.request('/auth/api/deepseek-key', { apiKey: 'sk-fixture' }, admin.cookie, admin.result.csrf)).status).toBe(403)
+    const ready = await httpFixture(), owner = await ready.login()
+    expect(await (await ready.request('/auth/api/deepseek-key', undefined, owner.cookie)).json()).toMatchObject({ supported: false, writable: false })
+  })
+  it('rechecks a revoked administrator after asynchronous credential reads before writing', async () => {
+    const f = await httpFixture(), admin = await f.login()
+    let writes = 0
+    f.ctx.provide('credentials', {
+      describe: async () => ({ writable: true }),
+      resolve: async () => { f.service.logout(f.service.resolve({ headers: { cookie: admin.cookie } } as IncomingMessage)!); return undefined },
+      set: async () => { writes++ },
+    })
+    expect((await f.request('/auth/api/deepseek-key', { apiKey: 'sk-fixture' }, admin.cookie, admin.result.csrf)).status).toBe(401)
+    expect(writes).toBe(0)
+  })
+})
+
 describe('durable accounts', () => {
   it('persists multiple accounts, hashed sessions and explicit grants across reopening', async () => {
     const dir = await directory()

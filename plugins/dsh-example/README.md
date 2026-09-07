@@ -4,7 +4,7 @@
 
 ## 启动与使用
 
-需要应用交付说明中验证过的官方 DSH、manager 0.3.1 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
+需要应用交付说明中验证过的官方 DSH、manager 0.3.2 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
 
 ```sh
 pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --plugins all

@@ -1,14 +1,17 @@
-/** Updating a key follows the deployment home selection and never starts a service. */
+/** Secret input and deployment selection; native runtime acceptance is opt-in. */
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { chownSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { resolve, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { PassThrough } from 'node:stream';
-import { fileURLToPath } from 'node:url';
-import { readApiKey, storeApiKey } from '../src/set-api-key.mjs';
-import { resolveDeployment } from '../src/deployment.mjs';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
+const managerBase = process.env.DSH_TEST_MANAGER_DIST ? pathToFileURL(resolve(process.env.DSH_TEST_MANAGER_DIST) + '/') : new URL('../src/', import.meta.url);
+const { credentialContainer, readApiKey, storeApiKey } = await import(new URL('set-api-key.mjs', managerBase));
+const { resolveDeployment } = await import(new URL('deployment.mjs', managerBase));
+const command = process.env.DSH_TEST_MANAGER_DIST ? [fileURLToPath(new URL('cli.mjs', managerBase)), 'set-api-key'] : [fileURLToPath(new URL('set-api-key.mjs', managerBase))];
 
 const directories = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -16,40 +19,10 @@ function fixture() {
   const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'dsh api key '))); directories.push(root); return root;
 }
 
-test('explicit home replaces duplicate key assignments atomically and retains other variables', () => {
+test('invalid input does not create a home or overwrite legacy dotenv', async () => {
   const root = fixture(); const deployment = resolveDeployment({ root, home: 'data/custom home' }, {});
-  mkdirSync(deployment.home, { recursive: true });
-  writeFileSync(resolve(deployment.home, '.env'), '# models\r\nDEEPSEEK_BASE_URL=https://example.invalid\r\nexport DEEPSEEK_API_KEY=sk-old\r\nOTHER_KEY=unchanged\r\nDEEPSEEK_API_KEY=sk-duplicate\r\n');
-  const path = storeApiKey(deployment, 'sk-fixture-new', resolve(root, 'fake user'));
-  assert.equal(path, resolve(root, 'data/custom home/.env'));
-  assert.equal(readFileSync(path, 'utf8'), '# models\nDEEPSEEK_BASE_URL=https://example.invalid\nOTHER_KEY=unchanged\nDEEPSEEK_API_KEY=sk-fixture-new\n');
-  assert.deepEqual(readdirSync(deployment.home), ['.env']);
-  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600);
-});
-
-test('legacy data ambiguity and invalid input do not create a new home or replace a key', () => {
-  const root = fixture(); const user = resolve(root, 'fake-user'); mkdirSync(resolve(user, '.dsh'), { recursive: true });
-  const deployment = resolveDeployment({ root }, {});
-  assert.throws(() => storeApiKey(deployment, 'sk-fixture', user), /旧目录/u);
+  await assert.rejects(storeApiKey(deployment, 'sk-valid\nINJECTED=value'), /格式无效/u);
   assert.equal(existsSync(deployment.home), false);
-  const explicit = resolveDeployment({ root, home: 'data/selected' }, {});
-  assert.throws(() => storeApiKey(explicit, 'sk-valid\nINJECTED=value', user), /格式无效/u);
-  assert.equal(existsSync(explicit.home), false);
-});
-
-test('root first-time setup inherits the container home owner and preserves an existing file owner', { skip: process.platform === 'win32' || process.getuid?.() !== 0 }, () => {
-  const root = fixture(); const deployment = resolveDeployment({ root, home: 'data/container-home' }, {});
-  mkdirSync(deployment.home, { recursive: true });
-  chownSync(deployment.home, 1000, 1000);
-  const path = storeApiKey(deployment, 'sk-fixture-first');
-  assert.equal(statSync(path).uid, 1000);
-  assert.equal(statSync(path).gid, 1000);
-  assert.equal(statSync(path).mode & 0o777, 0o600);
-  chownSync(path, 1001, 1001);
-  storeApiKey(deployment, 'sk-fixture-replacement');
-  assert.equal(statSync(path).uid, 1001);
-  assert.equal(statSync(path).gid, 1001);
-  assert.equal(statSync(path).mode & 0o777, 0o600);
 });
 
 test('interactive input remains hidden, supports backspace and restores terminal raw mode', async () => {
@@ -64,13 +37,60 @@ test('interactive input remains hidden, supports backspace and restores terminal
   assert.ok(!rendered.join('').includes('sk-fixture'));
 });
 
-test('CLI reads stdin, uses root-relative home from unrelated cwd, and rejects key arguments without echo', () => {
-  const root = fixture(); const script = fileURLToPath(new URL('../src/set-api-key.mjs', import.meta.url));
-  const result = spawnSync(process.execPath, [script, '--root', root, '--home', 'data/my home'], { cwd: tmpdir(), input: 'sk-fixture-stdin\n', encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(readFileSync(resolve(root, 'data/my home/.env'), 'utf8'), 'DEEPSEEK_API_KEY=sk-fixture-stdin\n');
-  assert.ok(!`${result.stdout}${result.stderr}`.includes('sk-fixture-stdin'));
-  assert.match(result.stdout, /未重启服务/u);
-  const refused = spawnSync(process.execPath, [script, 'sk-argv-secret'], { encoding: 'utf8' });
+test('CLI rejects key arguments without echo and does not fall back to a dotenv writer', () => {
+  const root = fixture();
+  const refused = spawnSync(process.execPath, [...command, 'sk-argv-secret'], { encoding: 'utf8' });
   assert.notEqual(refused.status, 0); assert.ok(!`${refused.stdout}${refused.stderr}`.includes('sk-argv-secret'));
+  const missing = spawnSync(process.execPath, [...command, '--root', root, '--home', 'data/my home'], { cwd: tmpdir(), input: 'sk-fixture-stdin\n', encoding: 'utf8' });
+  assert.notEqual(missing.status, 0);
+  assert.ok(!`${missing.stdout}${missing.stderr}`.includes('sk-fixture-stdin'));
+  assert.equal(existsSync(resolve(root, 'data/my home/.env')), false);
+});
+
+test('Compose target must be running and bind the selected home; ambiguous selections fail closed', () => {
+  const root = fixture(); const deployment = resolveDeployment({ root, home: 'data/home' }, {});
+  mkdirSync(deployment.artifacts, { recursive: true }); mkdirSync(deployment.home, { recursive: true });
+  const compose = join(root, 'compose.json'); writeFileSync(compose, '{}');
+  writeFileSync(join(deployment.artifacts, 'active-compose.json'), JSON.stringify({ project: 'dsh-plugins', path: compose }));
+  const id = 'a'.repeat(64);
+  const container = { Config: { Env: ['DSH_HOME=/data/home'] }, State: { Running: true }, Mounts: [{ Type: 'bind', Source: join(root, 'data'), Destination: '/data', RW: true }] };
+  const execute = (_command, args) => ({ status: 0, stdout: args[0] === 'compose' ? id : JSON.stringify([container]) });
+  assert.equal(credentialContainer(deployment, execute), id);
+  container.State.Running = false;
+  assert.throws(() => credentialContainer(deployment, execute), /未修改密钥/u);
+  container.State.Running = true; container.Config.Env = ['DSH_HOME=/data/other'];
+  assert.throws(() => credentialContainer(deployment, execute), /未修改密钥/u);
+  assert.throws(() => credentialContainer(deployment, () => ({ status: 0, stdout: `${id}\n${id}` })), /未修改密钥/u);
+});
+
+test('native host hot-reloads CLI writes and shares the same document with the page helper', { skip: !process.env.DSH_TEST_CLI_JS }, async () => {
+  const root = fixture(), entry = resolve(process.env.DSH_TEST_CLI_JS);
+  const deployment = resolveDeployment({ root, home: 'data/home', 'dsh-cli-js': entry }, {});
+  mkdirSync(deployment.home, { recursive: true });
+  const dotenv = '# retained fallback\nDEEPSEEK_API_KEY=sk-old-env\nOTHER=value\n';
+  writeFileSync(join(deployment.home, '.env'), dotenv);
+  const require = createRequire(realpathSync(entry));
+  const { Context } = await import(pathToFileURL(require.resolve('@deepseek-ai/cordis')).href);
+  const { LocalCredentialProvider } = await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-credentials-local')).href);
+  const { setDeepSeekKey, deepSeekKeyStatus } = await import('@dsh-plugin-manager/plugin-kit/deepseek-key');
+  const ctx = new Context(), fiber = ctx.plugin(LocalCredentialProvider, { dshHome: deployment.home });
+  await fiber;
+  try {
+    const provider = ctx.get('credentials');
+    await provider.set('OTHER_REF', 'unrelated-fixture');
+    await setDeepSeekKey(provider, 'sk-page-fixture');
+    const child = spawnSync(process.execPath, [...command, '--root', root, '--home', 'data/home', '--dsh-cli-js', entry], { input: 'sk-cli-fixture\n', encoding: 'utf8', cwd: tmpdir(), timeout: 30000 });
+    assert.equal(child.status, 0, child.stderr);
+    assert.ok(!`${child.stdout}${child.stderr}`.includes('sk-cli-fixture'));
+    const deadline = Date.now() + 10000;
+    while ((await provider.resolve('DEEPSEEK_API_KEY'))?.value !== 'sk-cli-fixture' && Date.now() < deadline) await new Promise(done => setTimeout(done, 50));
+    assert.equal((await provider.resolve('DEEPSEEK_API_KEY')).value, 'sk-cli-fixture');
+    assert.equal((await provider.resolve('OTHER_REF')).value, 'unrelated-fixture');
+    assert.equal(readFileSync(join(deployment.home, '.env'), 'utf8'), dotenv);
+    assert.equal((await deepSeekKeyStatus(provider)).configured, true);
+    const readonly = spawnSync(process.execPath, [...command, '--root', root, '--home', 'data/home', '--dsh-cli-js', entry], { input: 'sk-refused\n', encoding: 'utf8', env: { ...process.env, DEEPSEEK_API_KEY: 'sk-external-fixture' }, timeout: 30000 });
+    assert.notEqual(readonly.status, 0);
+    assert.ok(!`${readonly.stdout}${readonly.stderr}`.includes('sk-'));
+    assert.equal((await provider.resolve('DEEPSEEK_API_KEY')).value, 'sk-cli-fixture');
+  } finally { await fiber.dispose(); }
 });

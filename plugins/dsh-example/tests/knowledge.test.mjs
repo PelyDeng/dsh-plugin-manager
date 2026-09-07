@@ -9,12 +9,15 @@ test('setup FAQ remains readable with application authorization when the model i
   try {
     const page = await f.request('')
     expect(page.status).toBe(200)
-    expect(await page.text()).toContain('首次配置 API 密钥')
+    expect(await page.text()).toContain('配置或更换 API 密钥')
     const faq = await f.request('/guide.md')
     expect(faq.status).toBe(200)
     const text = await faq.text()
     expect(text).toContain('dsh web authentication required')
     expect(text).toContain('bash deploy/scripts/set-api-key.sh --config .local/deployment.json')
+    expect(text).toContain('保存无需重启')
+    expect(text).toContain('SHA-256 指纹')
+    expect(text).toContain('环境注入为只读')
     expect(f.handles).toHaveLength(0)
     expect((await f.request('/guide.md', undefined, '')).status).not.toBe(200)
   } finally { await f.close() }

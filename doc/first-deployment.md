@@ -26,24 +26,21 @@ bash deploy/build.sh
 
 管理员在服务器的私有终端读取本次启动保存的认证地址，默认文件为 `.local/data/dsh-web-auth-url.txt`，再在自己的浏览器打开完整地址。自定义路径以 `.local/deployment.json` 的 `authUrlFile` 或实际 `dataRoot` 为准。该地址含控制台访问令牌，不要分享或截图；普通用户使用应用入口。具体步骤与地址失效处理见 [FAQ](FAQ.md#auth-登录后为什么根路径仍提示认证)。
 
-使用官方 DeepSeek 提供方时，在服务器仓库根执行已有脚本，然后在提示后手动输入 API 密钥，按 Enter 保存：
+使用默认官方 DeepSeek 提供方时，管理员完成初始密码修改后，在 `/auth` 左侧打开“模型设置”，填写或更换 API 密钥。页面只返回配置状态与 SHA-256 指纹，不返回原密钥；“已配置”不代表已经验证模型可用。
+
+也可在服务器仓库根执行同一凭据逻辑的脚本，然后在提示后手动输入 API 密钥，按 Enter 保存：
 
 ```sh
 bash deploy/scripts/set-api-key.sh --config .local/deployment.json
 ```
 
-输入不回显，可用 Ctrl+C 取消。脚本只替换选定 DSH home 下 `.env` 中的 `DEEPSEEK_API_KEY`，保留其他设置；Linux 文件权限为 `0600`，首次创建沿用 home 的属主，已有文件保留属主。不要将密钥写在命令参数中。只有格式检查通过不代表密钥有效或模型可用。
+输入不回显，可用 Ctrl+C 取消，密钥不能放入命令参数。网页和脚本均调用官方凭据服务，更新选定 home 下 `.credentials.yaml` 中的 `DEEPSEEK_API_KEY`，复用官方文件锁与原子写入，保留其他凭据和旧 `.env`。Linux 凭据文件权限为 `0600`；Compose 脚本核验当前容器与 home 后，以容器配置用户执行，不以服务器 root 创建文件。
 
-脚本不选择模型、不调用模型，也不自动重启。管理员确认当前没有需要保留的进行中问答后，使用活动 Compose 配置重启服务，让宿主重新加载密钥：
+保存密钥无需重启。网页更新当前运行服务；脚本由默认官方文件监听自动加载（有短暂监听延迟），后续请求使用新密钥，已开始的请求继续使用原请求凭据。两者不选择模型、不调用模型。若由外部进程环境注入密钥，会显示只读并拒绝覆盖；移除外部环境覆盖本身仍需服务管理者调整启动配置。
 
-```sh
-compose_file=$(node -p "JSON.parse(require('node:fs').readFileSync('.local/artifacts/active-compose.json', 'utf8')).path")
-compose_project=$(node -p "JSON.parse(require('node:fs').readFileSync('.local/deployment.json', 'utf8')).composeProject")
-docker compose -p "$compose_project" -f "$compose_file" restart dsh
-docker compose -p "$compose_project" -f "$compose_file" ps
-```
+脚本适用于默认 `credentials-local` 存储路径及启用文件监听的官方宿主。自定义凭据路径或关闭监听时，使用网页入口更新运行中的实际凭据服务。独立 CLI 部署需在配置中指定已安装宿主的 `dshCliJs`（或传 `--dsh-cli-js`），以数据所有者身份执行；不会下载宿主或创建新实例。
 
-等待容器 healthy，再进入官方控制台确认提供方与默认模型，在 `/example` 新建对话验证回答。其他提供方、环境变量覆盖和旧会话的注意事项见 [FAQ](FAQ.md#密钥已保存为什么问答仍然失败)；独立 CLI 部署按[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)由原管理器 stop/start，不套用 Docker 命令。
+完成后在 `/auth` 的模型设置刷新指纹，并在 `/example` 新建对话验证回答。默认模型选择、其他提供方和旧会话的注意事项见 [FAQ](FAQ.md#密钥已保存为什么问答仍然失败)及[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
 
 ## 配置归属
 

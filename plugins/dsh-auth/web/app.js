@@ -63,6 +63,7 @@ function loggedOut() {
   for (const id of ['#account-name', '#account-role', '#greeting']) $(id).textContent = ''
   $('#user-search').value = ''
   $('#plugin-search').value = ''
+  clearModel()
 }
 
 async function api(path, data, login = false) {
@@ -183,18 +184,29 @@ function renderTools() {
 }
 
 async function showPage(next) {
-  if (next === 'users' && session?.user.role !== 'admin') next = 'plugins'
+  if (['users', 'models'].includes(next) && session?.user.role !== 'admin') next = 'plugins'
   const version = ++pageEpoch
   const identity = identityEpoch
   page = next
   closeTools()
+  clearModel()
   for (const section of document.querySelectorAll('.page')) section.hidden = section.id !== `page-${next}`
   for (const button of document.querySelectorAll('[data-page]')) {
     button.classList.toggle('selected', button.dataset.page === next)
     if (button.dataset.page === next) button.setAttribute('aria-current', 'page')
     else button.removeAttribute('aria-current')
   }
-  if (next === 'plugins' || next === 'users') {
+  if (next === 'models') {
+    try {
+      const result = await api('deepseek-key')
+      if (version === pageEpoch && identity === identityEpoch) renderModel(result)
+    } catch (error) {
+      if (version === pageEpoch && identity === identityEpoch && error.name !== 'AbortError') {
+        $('#model-status-label').textContent = '状态读取失败'
+        $('#model-message').textContent = error.message
+      }
+    }
+  } else if (next === 'plugins' || next === 'users') {
     const result = await api('plugins')
     if (version !== pageEpoch || identity !== identityEpoch) return
     catalog = result.plugins
@@ -206,6 +218,52 @@ async function showPage(next) {
     }
   }
 }
+
+function clearModel() {
+  $('#model-key').value = ''
+  $('#model-key').disabled = true
+  $('#model-save').disabled = true
+  $('#model-fingerprint').textContent = ''
+  $('#model-fingerprint-row').hidden = true
+  $('#model-source').textContent = ''
+  $('#model-message').textContent = ''
+  $('#model-status-label').textContent = '正在读取…'
+  $('#model-status').className = 'model-status'
+}
+
+function renderModel(status) {
+  $('#model-status-label').textContent = !status.supported ? '凭据服务不可用' : status.configured ? '已配置' : '未配置'
+  $('#model-status').className = `model-status ${status.configured ? 'configured' : 'unconfigured'}`
+  $('#model-status-icon').setAttribute('href', `/auth/icons.svg#${status.configured ? 'check-circle' : 'key'}`)
+  $('#model-source').textContent = !status.supported ? '请检查官方宿主的凭据服务。' : !status.writable ? '外部环境配置 · 只读。请由服务管理者移除环境覆盖后再更换。' : status.source === 'file' ? '已保存到官方凭据存储' : status.configured ? '当前使用 .env 配置；保存后由官方凭据存储接管。' : '添加密钥后即可供默认 DeepSeek 模型使用。'
+  $('#model-fingerprint-row').hidden = !status.fingerprint
+  $('#model-fingerprint').textContent = status.fingerprint?.replace(/^SHA-256:/, '') ?? ''
+  $('#model-key').disabled = !status.writable
+  $('#model-save').disabled = !status.writable
+  $('#model-save').textContent = status.configured ? '更换密钥' : '保存密钥'
+}
+
+$('#model-refresh').addEventListener('click', () => perform(() => showPage('models'), $('#model-refresh')))
+$('#model-form').addEventListener('submit', async event => {
+  event.preventDefault()
+  const identity = identityEpoch, version = pageEpoch
+  const key = $('#model-key').value
+  $('#model-key').value = ''
+  $('#model-save').disabled = true
+  $('#model-refresh').disabled = true
+  $('#model-message').textContent = '正在保存…'
+  try {
+    const status = await api('deepseek-key', { apiKey: key })
+    if (identity !== identityEpoch || version !== pageEpoch) return
+    renderModel(status)
+    $('#model-message').textContent = '密钥已更新，后续请求立即生效，无需重启。'
+  } catch (error) {
+    if (identity === identityEpoch && version === pageEpoch && error.name !== 'AbortError') {
+      $('#model-message').textContent = error.message ?? '保存失败，请重试。'
+      $('#model-save').disabled = false
+    }
+  } finally { $('#model-refresh').disabled = false }
+})
 
 function field(label, input) { const element = node('label', label); element.append(input); return element }
 
