@@ -6,7 +6,7 @@
 
 ## 第一次使用
 
-先看 [图文导览](quick-tour.md)；参与维护者邀请的试用可使用[反馈清单](try-it.md)。English introduction: [README.en.md](../README.en.md)。
+先看 [图文导览](quick-tour.md)。English introduction: [README.en.md](../README.en.md)。
 
 1. [图文体验：启动第一个应用](getting-started.md)——准备工具、打包、启动、登录与问答。
 2. [Linux Docker 一键部署](first-deployment.md)——在服务器运行完整源码站点的另一条路径。
@@ -26,7 +26,7 @@
 2. [部署与管理命令](../deploy/README.md)——仓库入口、运行配置、构建日志与恢复。
 3. [数据和产物迁移](migration.md)——已有数据目录与发布物的迁移。
 4. [Docker 集成](../integrations/docker/README.md)——宿主镜像与 Compose 使用。
-5. [公共版本发布](releasing.md)——稳定版本标签、归档、校验值与 GitHub Release。
+5. [版本说明](releases/v0.3.2.md)——组件变化、下载文件和宿主要求。
 
 ## 查接口与解决问题
 

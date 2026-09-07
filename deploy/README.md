@@ -8,12 +8,14 @@ Linux Docker 站点首次部署和后续更新使用同一入口。首次克隆�
 bash deploy/build.sh
 ```
 
-默认只显示正在执行的步骤、完成或失败结果，以及最终访问地址和发布记录。每项步骤右侧都有独立的进度条和百分比，从 0% 开始，成功后显示 100%。插件按各自的构建、检查、打包三步依次显示，每一步独立计数。底层工具没有统一的工作量计数，执行中的百分比是等待进度提示，按等待时间逐渐增长并放缓，最高为 95%，不代表真实工作量或剩余时间；只有该步骤成功后才填满。交互终端持续刷新，快速步骤也有短暂的填充动画，动画不阻塞后台构建。重定向输出或 CI 环境只记录开始和结果，不播放动画。pnpm、打包器和 Docker 的详细输出保存在 `.local/artifacts/build-logs/build-*.log`，每次运行打印其路径。失败步骤保留当时的百分比，并显示最后 12 行诊断信息；`pnpm pack` 失败时会将捕获到的标准输出和错误输出写入同一日志，成功时保持安静；完整日志仍保留，Linux 日志文件仅当前用户可读写。构建与校验照常执行。
+终端显示各步骤的进度和结果；执行中的百分比是等待提示，只有成功后才显示 100%，不表示剩余时间。重定向输出时只记录开始和结果。
+
+详细输出写入 `.local/artifacts/build-logs/build-*.log`，终端会显示日志路径。失败时显示最后 12 行诊断信息，完整日志保留在文件中。
 
 后续更新：
 
 ```sh
-git pull --ff-only
+git pull --ff-only --recurse-submodules
 bash deploy/build.sh
 ```
 
@@ -41,7 +43,7 @@ node deploy/scripts/deployment.mjs start --plugins "auth,example" --manifest .lo
 
 ## 运行配置
 
-以下为基础管理命令的运行配置；源码发版的用户配置见[站点配置](../doc/first-deployment.md#配置归属)。基础命令的 `--config` 指向运行 JSON。相对路径以显式项目根解析；仓库入口默认传入仓库根，独立 `dsh-plugin-manager` 必须传 `--root`。基础命令的路径优先级为 CLI → 环境变量 → 配置文件 → 默认值。源码发版仅采用站点文件中的部署选项，不采用这些环境覆盖项。
+以下为基础管理命令的运行配置；源码发版的用户配置见[站点配置](../doc/first-deployment.md#配置归属)。基础命令的 `--config` 指向运行 JSON。相对路径以显式项目根解析；仓库入口默认传入仓库根，独立 `dsh-plugin-manager` 必须传 `--root`。基础命令的路径优先级为 CLI → 环境变量 → 配置文件 → 默认值。源码宿主可用 `harnessRoot` 指向已安装依赖并构建的源码根；已安装宿主用 `dshCliJs` 指向 CLI 文件，二选一。源码发版仅采用站点文件中的部署选项，不采用这些环境覆盖项。
 
 | CLI | 环境变量 | JSON 字段 | 新环境默认值 |
 | --- | --- | --- | --- |
@@ -62,7 +64,7 @@ node deploy/scripts/deployment.mjs start --plugins "auth,example" --manifest .lo
   "home": ".local/data/dsh-home",
   "manifest": ".local/artifacts/release/plugins/manifest.json",
   "dshCliJs": "/path/to/dsh/lib/bin.js",
-  "patches": [".local/example.patch.yml"]
+  "publicOrigin": "http://127.0.0.1:7902"
 }
 ```
 

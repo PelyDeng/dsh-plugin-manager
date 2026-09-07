@@ -36,11 +36,11 @@
 
 ![流式对话演示，回答来自明确标注的隔离模型替身](assets/example-conversation.png)
 
-本页新增管理与对话截图来自公共 auth/example 的隔离演示环境，凭据服务和模型使用测试替身，不包含真实密钥或客户应用。对话图展示界面行为，不能作为真实模型问答成功的证据。实际部署请使用自己的模型完成一次新对话，再确认历史恢复。早期登录截图用于说明入口，具体文案以当前版本为准。
+截图使用演示数据和测试模型，界面文案以安装版本为准。实际问答需要自己的模型凭据。
 
 ## 下一步
 
 - 运行站点：[首次部署及恢复](first-deployment.md)。
 - 写自己的插件：[最小独立 Bundle](../examples/standalone-plugin/README.md)，或[统一身份示例](../examples/standalone-kit/README.md)。
 - 交付现有应用：[源码之外的发布物交付](../packages/plugin-manager/DELIVERY.md)。
-- 反馈体验：[反馈清单](try-it.md)，公开问题提交到 [Issues](https://github.com/PelyDeng/dsh-plugin-manager/issues)。
+- 反馈问题：提供版本、复现步骤和脱敏报错，提交到 [Issues](https://github.com/PelyDeng/dsh-plugin-manager/issues)。

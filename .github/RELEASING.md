@@ -1,13 +1,13 @@
 # 发布公共 GitHub Release
 
-公共仓库的 [Release 工作流](../.github/workflows/release.yml) 在维护者推送稳定版本标签 `vX.Y.Z` 时执行。普通 main 推送只运行检查，不发布版本，不更新服务器，也不发布 npm 包。工作流只在 `PelyDeng/dsh-plugin-manager` 运行；Gitee 集成仓库不作为公共发布源。
+公共仓库的 [Release 工作流](workflows/release.yml) 在维护者推送稳定版本标签 `vX.Y.Z` 时执行。普通 main 推送只运行检查，不发布版本，不更新服务器，也不发布 npm 包。工作流只在 `PelyDeng/dsh-plugin-manager` 运行；Gitee 集成仓库不作为公共发布源。
 
 ## 准备与触发
 
 1. 在公共仓库更新组件版本和锁文件；框架标签对应 manager 版本，各组件可以独立版本化。
 2. 新建 `doc/releases/vX.Y.Z.md`，写清变化、安装入口、兼容的宿主提交和实际验证边界。归档不包含宿主、模型凭据或运行数据。
 3. 完成相关验证，提交并推送公共 main，确认该提交的 Check 工作流通过。
-4. 从这个已核验的公共提交创建带说明的标签并推送，例如本次版本：
+4. 从这个已核验的公共提交创建带说明的标签并推送，例如 manager 0.3.2：
 
 ```sh
 git tag -a v0.3.2 -m "DSH Plugin Manager v0.3.2" <已核验的公共提交号>

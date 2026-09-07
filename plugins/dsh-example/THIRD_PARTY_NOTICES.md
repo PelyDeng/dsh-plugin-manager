@@ -1,6 +1,6 @@
 # Browser bundle third-party licenses
 
-The browser bundle includes the following MIT-licensed packages.
+The browser bundle includes the following packages, each under the license reproduced below.
 
 ## markdown-it 15.0.1
 

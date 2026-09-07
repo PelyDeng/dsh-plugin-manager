@@ -1,6 +1,6 @@
 # 开发者接入 FAQ
 
-适用：plugin-manager 0.3.2、plugin-kit 0.1.1，示例宿主接口以仓库锁定源码为基线；宿主版本号相同也可能存在源码与发布类型差异。这是随 dsh-example 发布的知识快照，不是对远程仓库的实时查询。框架维护者在接口、命令或支持范围变化时更新本页及提示词，发布前复核代码与示例；页面摘要只标识知识内容，不证明所有代码自动同步。
+适用：plugin-manager 0.3.2、plugin-kit 0.1.1，示例宿主接口以仓库锁定源码为基线；宿主版本号相同也可能存在源码与发布类型差异。这是随 dsh-example 发布的知识快照，不是对远程仓库的实时查询。页面摘要标识当前知识内容；在线 main 资料可能领先于安装版本。
 
 ## Auth 登录后，根路径为什么仍提示认证？
 
@@ -9,6 +9,10 @@
 普通用户从 `/auth` 进入 `/example` 等应用。需要管理模型的站点维护者，在服务器仓库根的私有终端执行 `cat .local/data/dsh-web-auth-url.txt`，仅在自己的浏览器打开完整地址（含 token）。这是默认位置；自定义 `dataRoot` 或 `authUrlFile` 时按 `.local/deployment.json` 的路径读取。正常情况下校验令牌、设置 Cookie 后跳转回干净的 `/`。
 
 重启后启动令牌会重新生成；旧书签、新浏览器或 Cookie 清理后无法进入时，重新读取当前文件。地址不正确时核对站点 `publicUrl`/`publicOrigin`；完整新地址仍被拒绝时检查代理的查询参数、Host 和 Cookie 转发。不要关闭认证，也不要公开 token 或用它替代普通用户的应用授权。
+
+## 运行内置应用应选择什么宿主？
+
+完整源码部署使用仓库 gitlink 对应的 DeepSeek Harness，并在宿主目录按自己的 packageManager 和锁文件安装、构建。源码版本号不等于同名 npm 包已发布，不能把历史 SDK 依赖版本当作当前运行宿主。Node CLI 可通过部署配置的 harnessRoot 指向已准备的宿主源码目录；已安装的兼容宿主则使用 dshCliJs，二选一。默认密钥管理需要官方 credentials 服务和 credentials-local 存储；具体步骤见图文接入手册。
 
 ## 第一次如何配置或更换 API 密钥？
 
@@ -24,7 +28,7 @@ bash deploy/scripts/set-api-key.sh --config .local/deployment.json
 
 保存无需重启：网页更新当前运行服务；默认宿主监听脚本写入，有短暂监听延迟，之后的新请求使用新密钥，已开始的回答不受影响。脚本适用于默认 `credentials-local` 文件路径及开启监听的官方宿主；自定义存储路径或关闭监听时，使用网页更新实际运行服务。
 
-独立 CLI 交付环境使用 `pnpm exec dsh-plugin-manager set-api-key --root <交付根> --config .local/deployment.json`；须指定已安装宿主的 `dshCliJs` 或 `--dsh-cli-js`，并以 home 与凭据文件所有者运行。脚本不会安装宿主、重启服务或选择模型。随后刷新模型设置的指纹，在 `/example` 新建对话验证。其他提供方或自定义凭据引用需使用官方模型设置。
+独立 CLI 交付环境使用 `pnpm exec dsh-plugin-manager set-api-key --root <交付根> --config .local/deployment.json`；须通过 `harnessRoot` 指向已构建宿主源码，或指定已安装宿主的 `dshCliJs` / `--dsh-cli-js`，并以 home 与凭据文件所有者运行。脚本不会安装宿主、重启服务或选择模型。随后刷新模型设置的指纹，在 `/example` 新建对话验证。其他提供方或自定义凭据引用需使用官方模型设置。
 
 ## 为什么密钥显示外部环境只读？
 
