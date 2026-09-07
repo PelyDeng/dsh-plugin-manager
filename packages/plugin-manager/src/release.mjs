@@ -1,8 +1,7 @@
 import { verifyPackage } from './verify-package.mjs';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { digestPattern, environmentName, fail, hash, idPattern, json, packageName, same, tarCommand, within } from './state.mjs';
+import { digestPattern, environmentName, fail, hash, idPattern, json, packageName, same, within } from './state.mjs';
 import { readFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { validateConfiguration } from './plugin-settings.mjs';
 /** Validate a public release manifest and its exact tarballs before profile writes. */
 export function loadRelease(manifestPath) {
@@ -25,16 +24,13 @@ export function loadRelease(manifestPath) {
     if (plugin.healthPath !== undefined && (typeof plugin.healthPath !== 'string' || !/^\/[a-zA-Z0-9_~./-]*$/.test(plugin.healthPath) || plugin.healthPath.startsWith('//') || plugin.healthPath.split('/').includes('..'))) fail('healthPath 无效。');
     if (plugin.runtimeConfig && (!environmentName(plugin.runtimeConfig.variable) || (plugin.runtimeConfig.required !== undefined && typeof plugin.runtimeConfig.required !== 'boolean'))) fail('runtimeConfig 无效。');
     if (plugin.development && (!environmentName(plugin.development.rootVariable) || typeof plugin.development.patch !== 'string' || isAbsolute(plugin.development.patch) || plugin.development.patch.split(/[\\/]/).includes('..'))) fail('development 无效。');
-    const packedResult = spawnSync(tarCommand, ['-xOf', archive, 'package/package.json'], { maxBuffer: 1024 * 1024 });
-    if (packedResult.status !== 0) fail(`${plugin.id}: 无法读取发布包。`);
-    const packed = JSON.parse(packedResult.stdout.toString('utf8'));
+    const packed = verifyPackage(plugin, archive);
     validateConfiguration(plugin.configuration, plugin.id);
     if (!same(plugin.configuration, packed.deepseekPlugin?.configuration)) fail(`${plugin.id}: configuration 与包内声明不一致。`);
     const packedRuntime = packed.deepseekPlugin?.runtimeConfig;
     if (packed.name !== plugin.package || packed.version !== plugin.version || packed.deepseekPlugin?.id !== plugin.id || !same(packedRuntime && { ...packedRuntime, required: packedRuntime.required ?? true }, plugin.runtimeConfig) || !same(packed.deepseekPlugin?.development, plugin.development)) fail(`${plugin.id}: 清单与包内元数据不一致。`);
     const mandatory = ['package.json', packed.main, packed.dsh?.bundle?.patch, packedRuntime?.template, ...(packed.deepseekPlugin?.verifyFiles ?? [])].filter(Boolean).map(file => file.replace(/^\.\//, ''));
     if (mandatory.some(file => !plugin.verifyFiles.includes(file)) || plugin.healthPath !== packed.deepseekPlugin?.healthPath) fail(`${plugin.id}: 清单省略或改变了包内验证声明。`);
-    verifyPackage(plugin, archive);
     return { ...plugin, archivePath: archive };
   });
   return { path, schemaVersion: manifest.schemaVersion, plugins };

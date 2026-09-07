@@ -1,11 +1,23 @@
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 export const nativeTar = join(process.env.SystemRoot ?? process.env.SYSTEMROOT ?? '/', 'System32', 'tar.exe');
 
 /** Windows drive-letter paths must reach bsdtar, not Git Bash's remote-archive parser. */
 export const tarCommand = process.platform === 'win32' && existsSync(nativeTar) ? nativeTar : 'tar';
+
+/** Read tar output through an open archive handle, preserving Unicode paths on Windows. */
+export function readArchive(archive, args, maxBuffer = 32 * 1024 * 1024) {
+  const fd = openSync(archive, 'r');
+  try {
+    const result = spawnSync(tarCommand, args, { stdio: [fd, 'pipe', 'pipe'], maxBuffer, windowsHide: true });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`无法读取插件归档。${result.stderr.toString('utf8').trim()}`);
+    return result.stdout;
+  } finally { closeSync(fd); }
+}
 
 export const STATE = '.deepseek-plugin-state.json';
 

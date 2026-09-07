@@ -108,7 +108,7 @@ function permissions(source, target, entries) {
       const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PSMODULEPATH'));
       result = spawnSync('powershell.exe', args, { ...options, env });
     }
-    if (result.error || result.status !== 0) fail('Windows ACL 复制或校验失败；保留备份和目标，请使用原权限管理者恢复。');
+    if (result.error || result.status !== 0) fail(`Windows ACL 复制或校验失败；保留备份和目标，请使用原权限管理者恢复。${result.error?.message ?? result.stderr.trim()}`);
   } else {
     for (const entry of [...entries].reverse()) {
       if (entry.kind === 'link') continue;

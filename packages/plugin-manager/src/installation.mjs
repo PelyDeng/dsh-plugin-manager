@@ -1,7 +1,6 @@
-import { LOCK, OWNER, PENDING, STATE, atomicJSON, canonical, digestPattern, fail, hash, idPattern, json, packageName, readOptional, same, synchronizedStopped, tarCommand, within } from './state.mjs';
+import { LOCK, OWNER, PENDING, STATE, atomicJSON, canonical, digestPattern, fail, hash, idPattern, json, packageName, readArchive, readOptional, same, synchronizedStopped, within } from './state.mjs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { spawnSync } from 'node:child_process';
 import { hostname } from 'node:os';
 import { cliRun, externalStopped, hostCLI, observeManager, runtimeIdentity, stopOwned } from './process.mjs';
 import { randomUUID } from 'node:crypto';
@@ -31,8 +30,10 @@ export function installedMatches(root, plugin) {
   for (const file of plugin.verifyFiles) {
     const target = join(packageRoot, file);
     if (!existsSync(target) || !within(packageRoot, target) || !statSync(target).isFile()) return false;
-    const expected = spawnSync(tarCommand, ['-xOf', plugin.archivePath, `package/${file}`], { maxBuffer: statSync(target).size + 1024 * 1024 });
-    if (expected.status !== 0 || !readFileSync(target).equals(expected.stdout)) return false;
+    let expected;
+    try { expected = readArchive(plugin.archivePath, ['-xOf', '-', `package/${file}`], statSync(target).size + 1024 * 1024); }
+    catch { return false; } // An unreadable archive cannot verify the installed file.
+    if (!readFileSync(target).equals(expected)) return false;
   }
   return true;
 }

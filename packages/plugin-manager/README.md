@@ -19,7 +19,7 @@ pnpm exec dsh-plugin pack --root /path/to/author-project --package . --output .l
 
 `--package` 仅支持 `.`，与 `--plugins` 互斥。list 不执行脚本、不要求锁文件；build/check 使用作者已安装的依赖；pack 冻结安装根锁文件，忽略父 workspace，依次执行一次 build 和 check 后打包。check 本身先执行 build。直接 pack 无需预先 build/check；不使用 prepare/prepack/postpack 重复构建。检查限于声明、交付与启动条件，不注入业务测试。
 
-独立包产出清单 2，包含内容摘要命名的 tgz，不携带作者源码目录。额外核对归档时执行 `pnpm exec dsh-plugin verify-package --root <作者根> --package . --archive <tgz>`，不重新构建。
+独立包产出清单 2，包含内容摘要命名的 tgz，不携带作者源码目录。额外核对归档时执行 `pnpm exec dsh-plugin verify-package --root <作者根> --package . --archive <tgz>`，不重新构建。Windows 归档校验通过文件句柄读取，支持中文目录且不依赖 tar 的路径编码。
 
 ## 部署现成归档
 
