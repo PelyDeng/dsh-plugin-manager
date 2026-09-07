@@ -84,7 +84,7 @@ class Executor:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             yield
     def mysql(self, sql=None, database=None, dump=None, target=None):
-        args = ['mysqldump', '-uroot', '--lock-all-tables', '--no-tablespaces', '--hex-blob', '--skip-add-locks', '--default-character-set=utf8mb4'] if dump else ['mysql', '-uroot', '--batch', '--raw', '--skip-column-names', '--default-character-set=utf8mb4']
+        args = ['mysqldump', '-uroot', '--lock-all-tables', '--no-tablespaces', '--set-gtid-purged=OFF', '--hex-blob', '--skip-add-locks', '--default-character-set=utf8mb4'] if dump else ['mysql', '-uroot', '--batch', '--raw', '--skip-column-names', '--default-character-set=utf8mb4']
         name = dump or database
         if name:
             if not IDENT.match(name): raise ValueError('invalid database identifier')
@@ -224,6 +224,9 @@ class Executor:
             if not re.match(r'^[a-z0-9-]+\.(sql|tar\.gz)$',name):raise ValueError('invalid component name')
             path=directory/name
             if path.is_symlink() or path.stat().st_size!=record['bytes'] or checksum(path)!=record['sha256']:raise ValueError('backup checksum mismatch')
+            if name.endswith('.sql'):
+                with path.open('rb') as stream:
+                    if any(line.lstrip().upper().startswith(b'SET @@GLOBAL.GTID_PURGED') for line in stream):raise ValueError('legacy dump contains server-wide GTID state; create a new scoped backup')
         return manifest
     def list_backups(self):
         items=[]

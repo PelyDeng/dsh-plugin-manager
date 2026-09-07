@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from executor import Executor,read,write
+from archive import checksum
 
 
 class FakeServices(Executor):
@@ -34,6 +35,13 @@ def fixture(root):
 
 
 class BackupTests(unittest.TestCase):
+    def test_global_gtid_dump_rejected_before_restore_database_creation(self):
+        with tempfile.TemporaryDirectory() as directory,patch('executor.run',return_value=b'minio-fixture'):
+            e=fixture(pathlib.Path(directory));backup_id=e.perform_backup();path=e.backups/backup_id/'blog.sql'
+            path.write_bytes(b"SET @@GLOBAL.GTID_PURGED='unsafe-server-state';\n")
+            manifest=read(e.backups/backup_id/'manifest.json');manifest['components']['blog.sql']={'bytes':path.stat().st_size,'sha256':checksum(path)};write(e.backups/backup_id/'manifest.json',manifest)
+            with self.assertRaises(ValueError):e.isolate(backup_id)
+            self.assertEqual(e.sql,[])
     def test_official_attachment_ids_restore_exact_referenced_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root=pathlib.Path(directory);e=fixture(root);digest='a'*64
