@@ -41,8 +41,9 @@ export function initLayout(){
     const container=document.querySelector('.writing'),r=field.getBoundingClientRect(),frame=container.getBoundingClientRect(),footer=document.querySelector('.editor-footer').getBoundingClientRect()
     const toolbar=document.querySelector('.formatbar').getBoundingClientRect()
     const top=field.matches('.title-input')?frame.top+12:Math.max(frame.top+12,toolbar.bottom+12),bottom=footer.top-16
+    const fieldTop=field.closest('label')?.getBoundingClientRect().top??r.top
     let delta=Math.max(0,r.bottom-bottom)
-    if(r.top-delta<top)delta=r.top-top
+    if(fieldTop-delta<top)delta=fieldTop-top
     container.scrollTop+=delta
   }
   function viewport(){
