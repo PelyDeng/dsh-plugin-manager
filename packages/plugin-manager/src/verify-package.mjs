@@ -6,19 +6,19 @@ import { readArchive } from './state.mjs';
 
 /** Return the verified manifest without extracting files onto the host filesystem. */
 export function verifyPackage(plugin, archive) {
-  const entries = readArchive(archive, ['-tf', '-']).toString('utf8').trim().split(/\r?\n/u);
+  const entries = readArchive(archive, ['-tzf', '-']).toString('utf8').trim().split(/\r?\n/u);
   const seen = new Set();
   for (const entry of entries) {
     if (!entry.startsWith('package/') || entry.includes('\\') || entry.split('/').some(part => part === '..' || part === '.')
       || privatePackagePath(entry) || seen.has(entry)) throw new Error(`发布包包含私密、重复或非法路径：${entry}。`);
     seen.add(entry);
   }
-  if (readArchive(archive, ['-tvf', '-']).toString('utf8').split(/\r?\n/u).some(line => /^[lh]/u.test(line))) {
+  if (readArchive(archive, ['-tzvf', '-']).toString('utf8').split(/\r?\n/u).some(line => /^[lh]/u.test(line))) {
     throw new Error('发布包不得包含符号链接或硬链接。');
   }
   function extract(file, maxBuffer) {
     if (!seen.has(`package/${file}`)) throw new Error(`发布包缺少文件：${file}。`);
-    return readArchive(archive, ['-xOf', '-', `package/${file}`], maxBuffer);
+    return readArchive(archive, ['-xzOf', '-', `package/${file}`], maxBuffer);
   }
   const packed = JSON.parse(extract('package.json').toString('utf8'));
   if (packed.name !== plugin.package || packed.version !== plugin.version) throw new Error('发布包的包名或版本与声明不一致。');
@@ -53,7 +53,7 @@ export function verifyBuildPackage(root, plugin, archive) {
   }
   for (const file of plugin.verifyFiles.filter(file => file !== 'package.json')) {
     const contents = readFileSync(resolve(sourceRoot, file));
-    const packedContents = readArchive(archive, ['-xOf', '-', `package/${file}`], contents.length + 1024 * 1024);
+    const packedContents = readArchive(archive, ['-xzOf', '-', `package/${file}`], contents.length + 1024 * 1024);
     if (!packedContents.equals(contents)) throw new Error(`发布包 ${file} 与本次构建文件不一致。`);
   }
   return packed;

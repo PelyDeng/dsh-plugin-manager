@@ -31,7 +31,7 @@ export function installedMatches(root, plugin) {
     const target = join(packageRoot, file);
     if (!existsSync(target) || !within(packageRoot, target) || !statSync(target).isFile()) return false;
     let expected;
-    try { expected = readArchive(plugin.archivePath, ['-xOf', '-', `package/${file}`], statSync(target).size + 1024 * 1024); }
+    try { expected = readArchive(plugin.archivePath, ['-xzOf', '-', `package/${file}`], statSync(target).size + 1024 * 1024); }
     catch { return false; } // An unreadable archive cannot verify the installed file.
     if (!readFileSync(target).equals(expected)) return false;
   }
