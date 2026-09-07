@@ -1,0 +1,28 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { httpFixture } from './http-fixture.mjs'
+
+test('auth protects pages, private drafts, attachments and backup roles',async t=>{
+  const f=await httpFixture();t.after(()=>f.close())
+  assert.equal((await f.request('/identity',{actor:null})).status,401)
+  assert.equal((await f.request('/identity',{actor:'eve'})).status,403)
+  const page=await f.request('');assert.equal(page.status,200);assert.match(await page.text(),/博客工作台/)
+  const draft=await (await f.api('create')).json()
+  const saved=await f.api('save',{id:draft.id,revision:1,content:{...draft,title:'manual',text:'# body\n<!-- unchanged -->'}});assert.equal(saved.status,200)
+  assert.equal((await f.api('draft',{id:draft.id},'bob')).status,404)
+  const attachment=await f.request(`/attachment?draftId=${draft.id}&name=private.txt`,{method:'POST',body:'PRIVATE-MARKER-812',headers:{'content-type':'application/octet-stream'}})
+  assert.equal(attachment.status,200);const a=await attachment.json();assert.equal(a.status,'ready');assert.equal(a.original,undefined)
+  const downloaded=await f.request(`/attachment-download?draftId=${draft.id}&id=${a.id}`);assert.equal(await downloaded.text(),'PRIVATE-MARKER-812')
+  assert.equal((await f.request(`/attachment-download?draftId=${draft.id}&id=${a.id}`,{actor:'bob'})).status,404)
+  assert.equal((await f.api('backup-status',{},'bob')).status,403)
+  const external=await f.request('/backup-authorize',{method:'POST',body:JSON.stringify({actor:f.actors.alice}),headers:{'content-type':'application/json'}});assert.equal(external.status,403)
+  const authorized=()=>f.request('/backup-authorize',{method:'POST',actor:null,body:JSON.stringify({actor:f.actors.alice}),headers:{authorization:`Bearer ${f.token}`,'content-type':'application/json'}})
+  assert.equal((await authorized()).status,200)
+  f.revoked.add('session-a');f.ctx.emit('ecosystem/revoked',{sessionId:'session-a'})
+  assert.equal((await f.api('draft',{id:draft.id})).status,403);assert.equal((await authorized()).status,403)
+})
+test('cross-origin mutation cannot use a valid login cookie',async t=>{
+  const f=await httpFixture();t.after(()=>f.close())
+  const response=await f.request('/api',{method:'POST',body:JSON.stringify({action:'create',args:{}}),headers:{origin:'https://untrusted.invalid','content-type':'application/json'}})
+  assert.equal(response.status,403)
+})

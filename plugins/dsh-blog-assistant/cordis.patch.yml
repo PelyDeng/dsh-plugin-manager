@@ -1,0 +1,8 @@
+- insert:
+    - id: blog
+      name: dsh-blog-assistant
+      config:
+        accessMode: authenticated
+        publicOrigin: !!js process.env.DSH_PUBLIC_ORIGIN ?? ''
+        runtimeConfig: !!js process.env.BLOG_CONFIG_PATH ?? ''
+        routePrefix: /blog

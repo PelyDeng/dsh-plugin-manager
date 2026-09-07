@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "blog": { "url": "https://blog.example.com", "username": "", "password": "" },
+  "image": { "url": "https://images.example.com", "username": "", "password": "", "strategyId": 2, "maxBytes": 10485760 },
+  "backup": { "url": "http://127.0.0.1:7913", "token": "", "allowedUserIds": [] }
+}

@@ -39,6 +39,8 @@ pnpm package --plugins "auth,closedoff,example" --output .local/artifacts/releas
 
 `plugins/dsh-closedoff-assistant` 是私有定制插件，其 `vendor/` 包含构建播放器所需的版本化归档。该目录不受根 Apache-2.0 许可授权，适用插件 [LICENSE](plugins/dsh-closedoff-assistant/LICENSE)。第三方资源保持各自许可。不得将该目录或包含它的提交推送公共仓库。
 
+`plugins/dsh-blog-assistant` 是个人博客私有插件，适用其 [LICENSE](plugins/dsh-blog-assistant/LICENSE)，只在 Gitee 集成。它通过 auth 使用博客工作台，通过 Typecho 桥接编辑文章，并使用独立 systemd 执行器备份网站。运行凭据源为插件自己的 `config/config.json`；文件不提交、不进入镜像和归档，生产以 `instances.blog.runtimeConfig` 显式引用。安装与使用见[插件说明](plugins/dsh-blog-assistant/README.md)。
+
 首次部署时，从插件模板创建 `.local/secrets/closedoff.env.conf`，并在 `.local/site.json` 中设置 `instances.closedoff.runtimeConfig` 为该文件路径。配置文件应仅允许服务运行用户读取。不要提前向数据目录写入文件；首次构建由管理器初始化数据目录。模型凭据、真实业务配置及运行数据不进入 Git。发布包放在 `.local/artifacts/`。
 
 宿主子模块锁定 DSH `0.1.3-alpha.1`，以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。
