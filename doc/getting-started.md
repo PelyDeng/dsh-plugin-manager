@@ -34,7 +34,7 @@ flowchart LR
   M[manager：清单、配置、安装与启停] --> H
 ```
 
-DSH 执行应用；本框架规范接入与交付。写个人工具可直接用官方 Bundle。需要交给团队、共用账号和部署流程，再使用 manager 和可选 kit。声明不会自动保护业务接口，可信身份也不等于业务数据授权。
+DSH 负责应用运行；本框架提供插件开发接入约定和统一部署管理。只运行一个个人工具时，官方 Bundle 可能更简单；需要统一打包、安装、更新和管理自己的插件，或交付给团队与客户时，可以使用 manager。安装和更新通过 CLI 与部署流程完成，kit 和统一认证按需接入。声明不会自动保护业务接口，可信身份也不等于业务数据授权。
 
 ```mermaid
 flowchart LR
@@ -65,7 +65,7 @@ dsh-lab/
    └─ .local/      deployment.json、data/dsh-home、运行记录
 ```
 
-**取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager 0.3.0、kit 0.1.0 tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。仅消费现成发布物的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
+**取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager 0.3.2、kit 0.1.1 tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。仅消费现成发布物的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
 
 ```sh
 git clone https://github.com/PelyDeng/dsh-plugin-manager.git framework
@@ -96,17 +96,17 @@ lab="$(dirname "$framework")"
 两个终端后续均使用以下命令；新终端需重新设置这两个变量：
 
 ```sh
-pnpm --filter @dsh-plugin-manager/plugin-manager pack --out "$framework/.local/artifacts/tools/plugin-manager-0.3.0.tgz"
-pnpm --filter @dsh-plugin-manager/plugin-kit pack --out "$framework/.local/artifacts/tools/plugin-kit-0.1.0.tgz"
+pnpm --filter @dsh-plugin-manager/plugin-manager pack --out "$framework/.local/artifacts/tools/plugin-manager-0.3.2.tgz"
+pnpm --filter @dsh-plugin-manager/plugin-kit pack --out "$framework/.local/artifacts/tools/plugin-kit-0.1.1.tgz"
 node -e "for (const p of ['../tools','../site/incoming']) require('fs').mkdirSync(p,{recursive:true})"
 cd ../tools
-pnpm add --ignore-workspace "$framework/.local/artifacts/tools/plugin-manager-0.3.0.tgz"
+pnpm add --ignore-workspace "$framework/.local/artifacts/tools/plugin-manager-0.3.2.tgz"
 pnpm add --ignore-workspace @deepseek-ai/dsh@0.1.2-alpha.5
 pnpm exec dsh-plugin-manager --version
 node node_modules/@deepseek-ai/dsh/lib/bin.js --version
 ```
 
-**预期**：工具目录能运行 manager 0.3.0 和官方 CLI。上面的宿主是应用已有交付基线，升级需重新验证插件接口和历史恢复；保存工具目录的锁文件，不能把 CLI 固定版本当成所有依赖都固定。pnpm 若提示依赖构建脚本审批，按官方依赖要求运行 `pnpm approve-builds` 后重装。后文所有 `pnpm exec dsh-plugin-manager` 都在这个 tools 目录执行。
+**预期**：工具目录能运行 manager 0.3.2 和官方 CLI。上面的宿主是应用已有交付基线，升级需重新验证插件接口和历史恢复；保存工具目录的锁文件，不能把 CLI 固定版本当成所有依赖都固定。pnpm 若提示依赖构建脚本审批，按官方依赖要求运行 `pnpm approve-builds` 后重装。后文所有 `pnpm exec dsh-plugin-manager` 都在这个 tools 目录执行。
 
 ## 2. 打包第一个应用
 
@@ -212,7 +212,7 @@ pnpm exec dsh-plugin-manager health --root "$lab/site" --config .local/deploymen
 cd "$framework"
 node -e "const fs=require('fs'); if(fs.existsSync('../second')) throw Error('second 已存在，请换新目录'); fs.cpSync('examples/standalone-kit','../second',{recursive:true})"
 cd ../second
-pnpm add --ignore-workspace --save-dev "$framework/.local/artifacts/tools/plugin-kit-0.1.0.tgz"
+pnpm add --ignore-workspace --save-dev "$framework/.local/artifacts/tools/plugin-kit-0.1.1.tgz"
 cd ../tools
 pnpm exec dsh-plugin-manager list --root "$lab/second" --package .
 pnpm exec dsh-plugin-manager pack --root "$lab/second" --package . --output "$lab/site/incoming/second-v1"

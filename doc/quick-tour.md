@@ -1,6 +1,8 @@
 # 从登录到首次问答：DSH Plugin Manager 图文导览
 
-这是一套围绕官方 DeepSeek Harness 的应用交付工具。管理员管理账号、应用访问权限和默认 DeepSeek 密钥；普通用户进入已授权的应用。作者可以在自己的仓库开发，通过声明打包交付。
+这是基于 DeepSeek Harness 的 AI 应用开发与部署框架。个人开发者和小团队可以在自己的仓库开发各类插件，通过管理器 CLI 和部署流程统一打包、安装、更新与管理，供自己使用或交付给他人。
+
+本页演示启用可选认证后的登录与问答流程：管理员管理账号、应用访问权限和默认 DeepSeek 密钥，普通用户进入已授权的应用。插件开发和安装更新分别见[作者指南](plugin-development.md)与[发布物交付指南](../packages/plugin-manager/DELIVERY.md)。
 
 [开始 Linux Docker 部署](first-deployment.md) · [English introduction](../README.en.md) · [完整 CLI 体验](getting-started.md) · [FAQ](FAQ.md)
 
