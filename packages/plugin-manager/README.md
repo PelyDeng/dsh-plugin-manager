@@ -8,6 +8,8 @@ DSH 应用接入与交付管理 CLI。独立包和内部 `plugins/*` 共用 buil
 
 每个项目操作要求 `--root`；相对配置、home 和产物路径相对这个根解析。独立作者包根需有 package.json：有效 name/version、main、files、README、scripts.build/check、官方 dsh.bundle.patch，以及 `deepseekPlugin: { "schemaVersion": 3, "id": "my-plugin" }`。页面、探针、权限、认证与 kit 均不强制要求。构建产物可以由 build 生成。
 
+部署和迁移输出使用规范化的完整路径，包括 Windows 8.3 短目录名。迁移仍拒绝通过符号链接或目录联接指定源、目标和备份。
+
 在作者根执行 `pnpm install --ignore-workspace` 并保存 pnpm-lock.yaml，随后在工具目录调用：
 
 ```sh

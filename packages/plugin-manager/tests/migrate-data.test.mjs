@@ -1,14 +1,14 @@
 /** Persistent migration fixtures never use a real DSH home or business configuration. */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { inventory, migrateData, migrationPaths, parseMigrationArguments } from '../src/migrate-data.mjs';
 
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), 'dsh-migrate-'));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-migrate-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const source = join(root, 'data/old home');
   const target = join(root, 'data/new home 中文');
@@ -32,6 +32,18 @@ test('default dry-run reports paths and counts without creating backup or target
   assert.equal(existsSync(options.backup), false);
   assert.deepEqual(inventory(options.source), original);
   assert.equal(JSON.stringify(result).includes('FIXTURE_SECRET'), false);
+});
+
+test('Windows short directory names resolve to the same migration locations', { skip: process.platform !== 'win32' }, t => {
+  const options = fixture(t);
+  const result = spawnSync('cmd.exe', ['/d', '/c', 'for %I in (.) do @echo %~sI'], { cwd: options.root, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const root = result.stdout.trim();
+  if (root === options.root) { t.skip('8.3 directory names are disabled on this volume'); return; }
+  const aliased = { ...options, root, source: join(root, 'data/old home'), target: join(root, 'data/new home 中文'), backup: join(root, 'data/backup') };
+  assert.deepEqual(migrateData(aliased), migrateData(options));
+  assert.equal(existsSync(options.target), false);
+  assert.equal(existsSync(options.backup), false);
 });
 
 test('apply creates a verified backup and copy, preserving source and private modes', t => {
@@ -95,7 +107,7 @@ test('same paths, containment, artifact locations and nonempty outputs never get
 
 test('external explicit locations are allowed, while root directory aliases are rejected', t => {
   const options = fixture(t);
-  const external = mkdtempSync(join(tmpdir(), 'dsh-migrate-external-'));
+  const external = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-migrate-external-')));
   t.after(() => rmSync(external, { recursive: true, force: true }));
   assert.equal(migrationPaths({ ...options, target: join(external, 'target') }).target, join(external, 'target'));
   symlinkSync(external, join(options.root, 'data/alias'), process.platform === 'win32' ? 'junction' : 'dir');

@@ -34,6 +34,11 @@ test('supplied source uses its current commit without requiring the parent gitli
   git(root, 'commit', '-m', 'pin');
   git(root, 'submodule', 'absorbgitdirs');
   assert.equal(inspectHostSource(root).commit, commit);
+  if (process.platform === 'win32') {
+    const result = spawnSync('cmd.exe', ['/d', '/c', 'for %I in (.) do @echo %~sI'], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(inspectHostSource(result.stdout.trim()).commit, commit);
+  }
   writeFileSync(join(host, 'untracked.txt'), 'not build input');
   assert.throws(() => inspectHostSource(root), /worktree has changes/u);
   rmSync(join(host, 'untracked.txt'));

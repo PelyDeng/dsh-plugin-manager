@@ -5,16 +5,11 @@ import { spawnSync } from 'node:child_process';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
+import { canonical } from './state.mjs';
 
 const LOCK = '.deepseek-plugin-migration-lock';
 const fail = message => { throw new Error(message); };
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
-
-function canonical(path) {
-  if (existsSync(path)) return realpathSync.native(path);
-  const parent = dirname(path);
-  return parent === path ? path : join(canonical(parent), relative(parent, path));
-}
 
 function within(parent, child) {
   const path = relative(parent, child);
@@ -25,7 +20,7 @@ function empty(path) {
   if (existsSync(path) && (!lstatSync(path).isDirectory() || readdirSync(path).length)) fail('目标或备份目录已存在内容；保留源、目标及备份，不合并或覆盖。');
 }
 
-/** Resolve explicit locations; persistent data never belongs in deployment artifacts. */
+/** Resolve explicit locations, accepting short names but rejecting symlink ancestors. */
 export function migrationPaths(options) {
   if (!options.root) fail('必须显式指定 --root 项目根目录。');
   const root = canonical(resolve(options.root));
@@ -36,8 +31,10 @@ export function migrationPaths(options) {
     if (typeof options[key] !== 'string' || !options[key]) fail(`必须显式指定 --${key}。`);
     const lexical = resolve(root, options[key]);
     const path = canonical(lexical);
-    const normalize = value => process.platform === 'win32' ? value.toLowerCase() : value;
-    if (normalize(lexical) !== normalize(path)) fail('迁移根路径不得通过符号链接或目录联接跳转；请显式指定真实外部目录。');
+    for (let ancestor = lexical; ; ancestor = dirname(ancestor)) {
+      if (lstatSync(ancestor, { throwIfNoEntry: false })?.isSymbolicLink()) fail('迁移根路径不得通过符号链接或目录联接跳转；请显式指定真实外部目录。');
+      if (dirname(ancestor) === ancestor) break;
+    }
     const folders = key === 'backup' ? ['.local/backups', 'data'] : kind === 'data' ? ['.local/data', 'data'] : ['.local/artifacts', 'deploy-artifacts'];
     if ((within(root, path) && !folders.some(folder => within(join(root, folder), path))) || within(path, root)) fail('仓库内迁移路径必须位于对应 .local/data/、.local/artifacts/ 或旧目录；备份只能位于 .local/backups/、data/ 或仓库外。');
     paths[key] = path;

@@ -1,13 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveDeployment, checkDataSelection } from '../src/config.mjs';
 import { migrationPaths, migrateData, inventory, checkCapacity } from '../src/migrate-data.mjs';
 
 function fixture(t) {
-  const parent = mkdtempSync(join(tmpdir(), 'dsh local paths '));
+  const parent = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh local paths ')));
   t.after(() => rmSync(parent, { recursive: true, force: true }));
   const root = join(parent, 'project'); mkdirSync(root);
   return { parent, root };

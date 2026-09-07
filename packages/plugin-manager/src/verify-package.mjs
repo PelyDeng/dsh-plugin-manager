@@ -12,7 +12,7 @@ export function verifyPackage(plugin, archive) {
   function tar(args, maxBuffer = 32 * 1024 * 1024) {
     const result = spawnSync(tarCommand, args, { maxBuffer, windowsHide: true });
     if (result.error) throw result.error;
-    if (result.status !== 0) throw new Error(`无法读取插件归档：${plugin.id}。`);
+    if (result.status !== 0) throw new Error(`无法读取插件归档：${plugin.id}。${result.stderr?.toString('utf8').trim() ?? ''}`);
     return result.stdout;
   }
   const entries = tar(['-tf', archive]).toString('utf8').trim().split(/\r?\n/u);

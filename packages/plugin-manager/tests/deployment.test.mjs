@@ -1,7 +1,7 @@
 /** Isolated profile behavior tests; real DSH startup is verified separately. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -12,9 +12,9 @@ import { installedMatches, readState } from '../src/installation.mjs';
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
 
 function fixture(t) {
-  const root = mkdtempSync(join(tmpdir(), 'dsh-deployment-test-'));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-deployment-test-')));
   t.after(() => {
-    assert.equal(dirname(root), resolve(tmpdir()));
+    assert.equal(dirname(root), realpathSync.native(tmpdir()));
     rmSync(root, { recursive: true, force: true });
   });
   const deployment = resolveDeployment({ root, home: 'data/home', 'host-mode': 'owned' }, {});
