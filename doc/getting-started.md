@@ -1,6 +1,19 @@
-# 从一个示例，到两个应用
+# 图文体验：启动第一个应用
 
-这份手册带你交付 `dsh-example` 开发者接入助手，再加入另一位作者的独立鉴权示例。第二个示例只返回当前身份，用来学习交付；真实销售查询、数据权限和图表需要业务作者实现。
+先用四步运行 `dsh-example` 开发者接入助手：准备工具、打包、启动、登录与问答。完成后可选做第二应用演练，学习组合不同作者的交付物。第二个示例只返回当前身份；真实销售查询、数据权限和图表需要业务作者实现。
+
+[项目首页](../README.md) · [文档导航](README.md) · [独立作者直接接入](plugin-development.md#独立仓库开发) · [已有发布物直接部署](../packages/plugin-manager/DELIVERY.md)
+
+## 本页导航
+
+- [开始前：选择体验路径](#开始前选择体验路径)
+- [1. 准备工具和目录](#1-准备工具和目录)
+- [2. 打包第一个应用](#2-打包第一个应用)
+- [3. 配置并启动](#3-配置并启动)
+- [4. 登录并体验问答](#4-登录并体验问答)
+- [进阶：加入第二个应用](#进阶加入第二个应用)
+- [登录、配置与停用](#登录配置与停用)
+- [命令速查与求助](#命令速查与求助)
 
 ![开发者接入助手：首页可选择六类问题，也能从左侧恢复个人历史](assets/developer-assistant.png)
 
@@ -8,7 +21,7 @@
 
 **作者**开发并交出发布目录；**部署者**填写配置、安装和维护；**使用者**登录、打开获授权的应用。只想体验完整源码站点的 Linux Docker 用户，可直接走[一键部署](first-deployment.md)。以下主线使用 Node CLI，Windows PowerShell 与 Bash 均可，不需要 Docker。
 
-## 1. 先看关系，选一条路
+## 开始前：选择体验路径
 
 ```mermaid
 flowchart LR
@@ -37,7 +50,7 @@ flowchart LR
 
 外部路径目前不自动发现多包 workspace、不提供 development/link。内部扫描、默认选集和批量开发继续保留。
 
-## 2. 准备工具和目录
+## 1. 准备工具和目录
 
 **目的**：让工具、作者源码、发布物、运行数据各有位置。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0`、系统 `tar`，安装依赖需要可用网络或完整缓存。先运行 `node --version`、`pnpm --version`、`tar --version`。
 
@@ -95,7 +108,7 @@ node node_modules/@deepseek-ai/dsh/lib/bin.js --version
 
 **预期**：工具目录能运行 manager 0.3.0 和官方 CLI。上面的宿主是应用已有交付基线，升级需重新验证插件接口和历史恢复；保存工具目录的锁文件，不能把 CLI 固定版本当成所有依赖都固定。pnpm 若提示依赖构建脚本审批，按官方依赖要求运行 `pnpm approve-builds` 后重装。后文所有 `pnpm exec dsh-plugin` 都在这个 tools 目录执行。
 
-## 3. 内部作者：交付第一个应用
+## 2. 打包第一个应用
 
 **目的**：继续利用 `plugins/*` 自动扫描。回到框架根：
 
@@ -119,13 +132,23 @@ example 的关键位置：
 
 复制成自己应用时修改包名、ID、Bundle、路由、权限、会话前缀、提示词段名、知识、页面和测试；详见[作者指南](plugin-development.md)。日常构建/检查不需要模型密钥。
 
-## 4. 部署者：只用发布物启动
+## 3. 配置并启动
 
 在 tools 目录组合第一站点；这一步不读取作者源码：
+
+### 组合发布物
 
 ```sh
 cd "$lab/tools"
 pnpm exec dsh-plugin compose-release --root "$lab/site" --output releases/site-v1 --manifest incoming/base-v1/manifest.json
+```
+
+### 填写实例配置
+
+先在 tools 目录执行以下命令创建配置目录：
+
+```sh
+node -e "require('fs').mkdirSync('../site/.local',{recursive:true})"
 ```
 
 在 `site/.local/deployment.json` 新建下列文件。唯一必须替换的 CLI 占位符指向工具目录实际文件，Windows JSON 路径使用 `/` 或 `\\`。这是新隔离实例；已有站点不要覆盖配置或更换 home。
@@ -142,11 +165,28 @@ pnpm exec dsh-plugin compose-release --root "$lab/site" --output releases/site-v
 }
 ```
 
+### 启动并检查就绪
+
 ```sh
 pnpm exec dsh-plugin start --root "$lab/site" --config .local/deployment.json --plugins all
 ```
 
 **预期**：前台启动官方 web profile；保持终端运行，在另一个 tools 终端用同 root/config 执行 `health`。端口冲突时选空闲端口并同步 origin。所有相对部署路径以 site 为根；DSH_HOME 是该 site 下的 `.local/data/dsh-home`，不是 tools 或作者目录。
+
+新终端重新设置第一步的变量后执行：
+
+```sh
+cd "$lab/tools"
+pnpm exec dsh-plugin health --root "$lab/site" --config .local/deployment.json
+```
+
+### 启动失败时
+
+先查看终端中的安装或启动错误，再按[命令速查与求助](#命令速查与求助)检查配置。确认宿主与应用探针通过后，进入下一步。
+
+## 4. 登录并体验问答
+
+**目的**：用普通账号验证授权与实际问答。操作位置是浏览器，启动终端继续保持运行。
 
 打开 `http://127.0.0.1:7902/auth`，admin 初始密码为 `123456`，强制改密后重新登录；创建普通账号，授予 example。普通用户打开 `/example`。根路径属于官方控制台，其认证与插件账号不同。
 
@@ -156,7 +196,13 @@ pnpm exec dsh-plugin start --root "$lab/site" --config .local/deployment.json --
 
 ![官方控制台：设置中的模型页管理提供方凭据，启动环境提供的密钥不能在此覆盖](assets/model-settings.png)
 
-## 5. 外部作者：加入第二个应用
+**预期**：普通账号可进入 example、提交问题并收到模型回答，历史列表可恢复对话。若页面正常但回答失败，检查同一个 home 的模型与凭据。到这里已完成首次体验；可以转到[作者指南](plugin-development.md)开发自己的应用，或继续下面的两应用演练。
+
+## 进阶：加入第二个应用
+
+本节沿用前四步的目录、变量和已运行实例。只想独立开发、不需要先部署 example 的作者，可直接使用[独立仓库开发步骤](plugin-development.md#独立仓库开发)。
+
+### 1. 外部作者交付第二个应用
 
 **目的**：另一个作者只维护自己的仓库，复用身份与交付。下面复制最小鉴权示例，真实入口为 `/independent-access-example/identity`。
 
@@ -174,7 +220,7 @@ pnpm exec dsh-plugin pack --root "$lab/second" --package . --output "$lab/site/i
 
 **预期**：独立作者锁文件与构建留在 second，交付目录只含可迁移清单和归档。kit 是构建依赖并内嵌；部署机器不需要它的原 tgz 或作者源码。list 不要求锁文件，pack 要求根锁文件且冻结安装，忽略父 workspace。无鉴权的最小 Bundle 可改用 [standalone-plugin](../examples/standalone-plugin/README.md)。完整聊天应用的独立复制步骤见[作者指南](plugin-development.md#复制完整问答应用到独立仓库)。
 
-## 6. 部署者：保留第一应用，应用新清单
+### 2. 部署者组合并应用新清单
 
 ```mermaid
 flowchart LR
@@ -199,7 +245,7 @@ pnpm exec dsh-plugin stop --root "$lab/site" --config .local/deployment.json
 
 更新某应用时替换其原始分项清单，重新组合**所有**要保留的应用。不要将旧整站清单和同 ID 新包叠加。保留旧目录、一致数据备份和作者迁移说明；存量数据可否回退不是清单能够保证的。
 
-## 7. 登录、配置与停用
+## 登录、配置与停用
 
 ```mermaid
 flowchart LR
@@ -217,7 +263,7 @@ flowchart LR
 
 业务参数放 config，业务凭据按作者 runtimeConfig 模板提供；销售数据范围由应用检查。全部字段只在[配置参考](../plugins/dsh-example/examples/README.md)维护。
 
-## 8. 命令速查与求助
+## 命令速查与求助
 
 | 目的 | 执行位置与命令 |
 | --- | --- |
