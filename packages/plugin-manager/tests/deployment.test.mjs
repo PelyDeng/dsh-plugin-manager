@@ -19,7 +19,13 @@ function fixture(t) {
   });
   const deployment = resolveDeployment({ root, home: 'data/home', 'host-mode': 'owned' }, {});
   const stoppedFile = join(root, 'stopped.json');
-  const stoppedPid = spawnSync(process.execPath, ['-e', '']).pid;
+  // Simulate a stopped manager: a real exited child's PID can be reused by tar/Node.
+  const stoppedPid = 2147483647;
+  const kill = process.kill;
+  t.mock.method(process, 'kill', function(pid, signal) {
+    if (pid === stoppedPid && signal === 0) throw Object.assign(new Error('fixture manager is stopped'), { code: 'ESRCH' });
+    return kill.call(this, pid, signal);
+  });
   atomicJSON(stoppedFile, { schemaVersion: 1, home: deployment.home, profile: 'web', manager: 'process', instanceId: 'isolated', pid: stoppedPid, stopped: true, stoppedAt: new Date().toISOString() });
   deployment.options['stopped-file'] = stoppedFile;
   const directory = join(root, 'release'); mkdirSync(directory);
@@ -266,12 +272,18 @@ test('external synchronization requires stop evidence and applied configuration 
   delete f.deployment.options['stopped-file'];
   await assert.rejects(synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli }), /停服证据/);
   assert.equal(existsSync(join(f.deployment.profileRoot, 'package.json')), false);
-  const evidence = join(f.root, 'stopped.json');
-  atomicJSON(evidence, { schemaVersion: 1, home: f.deployment.home, profile: 'web', manager: 'process', instanceId: 'isolated', pid: spawnSync(process.execPath, ['-e', '']).pid, stopped: true, stoppedAt: new Date().toISOString() });
-  f.deployment.options['stopped-file'] = evidence;
+  f.deployment.options['stopped-file'] = join(f.root, 'stopped.json');
   await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
   await assert.rejects(finalize(f.deployment, f.release), /启动证据/);
   assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')), false);
+});
+
+test('external synchronization rejects stopped evidence for a live process', async t => {
+  const f = fixture(t); f.deployment.hostMode = 'external';
+  const evidence = f.deployment.options['stopped-file'];
+  atomicJSON(evidence, { ...read(evidence), pid: process.pid });
+  await assert.rejects(synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli }), /进程状态与证据不符/);
+  assert.equal(existsSync(join(f.deployment.profileRoot, 'package.json')), false);
 });
 
 test('recovery selects a corrected release while retaining the old journal and partial ownership', async t => {
