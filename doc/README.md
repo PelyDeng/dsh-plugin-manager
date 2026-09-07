@@ -26,6 +26,7 @@
 2. [部署与管理命令](../deploy/README.md)——仓库入口、运行配置、构建日志与恢复。
 3. [数据和产物迁移](migration.md)——已有数据目录与发布物的迁移。
 4. [Docker 集成](../integrations/docker/README.md)——宿主镜像与 Compose 使用。
+5. [公共版本发布](releasing.md)——稳定版本标签、归档、校验值与 GitHub Release。
 
 ## 查接口与解决问题
 

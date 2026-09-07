@@ -1,0 +1,98 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.repository == 'PelyDeng/dsh-plugin-manager'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate tag and release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, re
+          tag = os.environ['RELEASE_TAG']
+          version = json.loads(pathlib.Path('packages/plugin-manager/package.json').read_text(encoding='utf-8'))['version']
+          assert re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', tag), 'Only stable version tags are supported'
+          assert tag == 'v' + version, 'Tag must match the manager version'
+          assert pathlib.Path('doc/releases', tag + '.md').is_file(), 'Missing versioned release notes'
+          PY
+      - run: npm install --global pnpm@11.19.0
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm check
+      - run: pnpm -r --workspace-concurrency=1 --if-present test
+      - run: node scripts/check-artifacts.mjs
+      - run: node scripts/check-repository.mjs
+      - name: Package public apps and tools
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          release_root="$PWD/.local/artifacts/github-release"
+          mkdir -p "$release_root/upload"
+          node scripts/package-plugins.mjs --plugins auth,example --output "$release_root/input"
+          node packages/plugin-manager/dist/cli.mjs compose-release --root "$PWD" --manifest "$release_root/input/manifest.json" --output "$release_root/apps"
+          for package in plugin-manager plugin-kit; do
+            version=$(node -p "require('./packages/$package/package.json').version")
+            pnpm --filter "@dsh-plugin-manager/$package" pack --out "$release_root/upload/$package-$version.tgz"
+          done
+          cp "doc/releases/$RELEASE_TAG.md" "$release_root/apps/README.md"
+          cp "doc/releases/$RELEASE_TAG.md" "$release_root/upload/release-notes.md"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, zipfile
+          root = pathlib.Path('.local/artifacts/github-release')
+          version = os.environ['RELEASE_TAG'][1:]
+          manifest = json.loads((root / 'apps/manifest.json').read_text(encoding='utf-8'))
+          assert manifest['schemaVersion'] == 2
+          assert {p['id'] for p in manifest['plugins']} == {'auth', 'example'}
+          assert all('directory' not in p for p in manifest['plugins'])
+          with zipfile.ZipFile(root / 'upload' / f'dsh-plugin-manager-public-apps-{version}.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+              for path in sorted((root / 'apps').iterdir()):
+                  assert path.is_file(), 'Unexpected directory in portable apps'
+                  archive.write(path, 'public-plugins/' + path.name)
+          assets = sorted(p for p in (root / 'upload').iterdir() if p.suffix in {'.tgz', '.zip'})
+          assert len(assets) == 3, 'Expected manager, kit and public apps'
+          checks = ''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n' for p in assets)
+          (root / 'upload/SHA256SUMS.txt').write_text(checks, encoding='utf-8', newline='\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: .local/artifacts/github-release/upload/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
+      - name: Publish the verified tag and assets
+        working-directory: release-assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          sha256sum --check SHA256SUMS.txt
+          gh release create "$RELEASE_TAG" ./*.tgz ./*.zip SHA256SUMS.txt \
+            --verify-tag --title "DSH Plugin Manager $RELEASE_TAG" --notes-file release-notes.md
