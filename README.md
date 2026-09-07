@@ -1,8 +1,16 @@
 # DSH Plugin Manager
 
-基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的应用接入与交付管理框架，面向将插件或智能体应用交付给团队、客户使用的独立开发者和小团队。
+[English](README.en.md) · [图文导览](doc/quick-tour.md) · [部署指南](doc/first-deployment.md) · [Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases) · [反馈问题](https://github.com/PelyDeng/dsh-plugin-manager/issues)
 
-**在自己的仓库开发，按统一声明打包，在 DSH 中运行和管理。** 沿用官方 Cordis 插件、Bundle 和 Agent，无需修改 DSH 源码；统一账号与应用授权按需接入。
+**把 DeepSeek Harness 插件交付成团队可使用的应用：统一登录、应用授权、独立打包与部署。**
+
+面向独立开发者和小团队。你在自己的仓库开发应用，框架按声明组合发布物，在官方 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 中运行。沿用 Cordis 插件、Bundle 和 Agent，无需修改 DSH 源码；认证按需启用。
+
+> 社区独立维护的非官方项目，不代表 DeepSeek 官方产品或推荐。
+
+![开发者接入助手：快捷问题、流式对话与个人历史](doc/assets/developer-assistant.png)
+
+已有 Linux Docker 环境？从[首次部署](doc/first-deployment.md)开始，完成“登录 → 授权 → 配置模型 → 首次问答”。只想先看效果，请看[图文导览](doc/quick-tour.md)。
 
 | 你想做什么 | 从这里开始 |
 | --- | --- |
@@ -40,9 +48,7 @@
 
 内置 `dsh-example` 是开发者接入助手，展示提问、流式回答、个人历史和可选认证的接入方式。
 
-![开发者接入助手：首页问题入口与个人历史](doc/assets/developer-assistant.png)
-
-实际问答需先配置模型，操作见[图文体验手册](doc/getting-started.md)。
+登录、模型设置与问答步骤见[图文导览](doc/quick-tour.md)。实际问答需先配置自己的模型凭据。
 
 ## 与官方 DSH 的关系
 
@@ -77,7 +83,7 @@ bash deploy/build.sh
 
 ### 第三步：完成一次问答
 
-在同一个实例的官方模型设置中配置默认模型与凭据，再发送一个问题，确认能收到流式回答并恢复历史对话。详细操作见[模型准备](packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
+使用默认 DeepSeek 提供方时，管理员在 `/auth` 的“模型设置”录入 API 密钥，无需重启；页面只显示配置状态与不可逆指纹。默认模型选择或其他提供方仍由同一实例的官方模型设置管理。随后在 `/example` 新建对话，确认收到流式回答并能恢复历史。详细操作见[模型准备](packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
 
 ## 开发自己的插件
 
