@@ -63,6 +63,29 @@ async function httpFixture(initial = false) {
 }
 
 describe('administrator DeepSeek credentials', () => {
+  it('shares the protected UI contract with Zhipu without overwriting DeepSeek or accepting arbitrary refs', async () => {
+    const f = await httpFixture(), values = new Map<string, string>([['DEEPSEEK_API_KEY', 'sk-original']])
+    f.ctx.provide('credentials', {
+      describe: async () => ({ writable: true }),
+      resolve: async (ref: string) => values.has(ref) ? { value: values.get(ref), source: 'file' } : undefined,
+      set: async (ref: string, value: string) => { values.set(ref, value) },
+    })
+    const path = '/auth/api/model-key/zhipu'
+    expect((await f.request(path)).status).toBe(401)
+    f.store.create('reader', hash, 'user', ['demo'])
+    const reader = await f.login('reader')
+    expect((await f.request(path, undefined, reader.cookie)).status).toBe(403)
+    expect((await f.request(path, { apiKey: 'id.refused' }, reader.cookie, reader.result.csrf)).status).toBe(403)
+    const admin = await f.login()
+    expect((await f.request(path, { apiKey: 'id.refused' }, admin.cookie)).status).toBe(403)
+    for (const invalid of ['constructor', '__proto__', 'OTHER_API_KEY']) expect((await f.request(`/auth/api/model-key/${invalid}`, { apiKey: 'id.refused' }, admin.cookie, admin.result.csrf)).status).toBe(404)
+    const response = await f.request(path, { apiKey: 'id.zhipu-fixture' }, admin.cookie, admin.result.csrf)
+    expect(response.status).toBe(200)
+    expect(JSON.stringify(await response.json())).not.toContain('id.zhipu-fixture')
+    expect(values.get('DEEPSEEK_API_KEY')).toBe('sk-original')
+    expect(values.get('ZHIPU_API_KEY')).toBe('id.zhipu-fixture')
+    expect(await (await f.request('/auth/api/deepseek-key', undefined, admin.cookie)).json()).toEqual(await (await f.request('/auth/api/model-key/deepseek', undefined, admin.cookie)).json())
+  })
   it('protects reads and writes, returns fingerprints only, and updates the runtime service', async () => {
     const f = await httpFixture()
     let value: string | undefined
