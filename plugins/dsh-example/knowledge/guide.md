@@ -187,11 +187,11 @@ pnpm exec dsh-plugin compose-release --root <交付根> --output releases/site-v
 
 本 FAQ 由框架维护者维护，职责与示例应与下列公开资料及代码核对；在线 main 文档可能领先于安装版本，交付时以随包 README 和知识摘要为准。
 
-- [产品与导航](https://github.com/PelyDeng/dsh-plugin/blob/main/README.md)
-- [图文接入手册](https://github.com/PelyDeng/dsh-plugin/blob/main/doc/getting-started.md)
-- [作者指南](https://github.com/PelyDeng/dsh-plugin/blob/main/doc/plugin-development.md)
-- [实例配置规范](https://github.com/PelyDeng/dsh-plugin/blob/main/doc/plugin-configuration.md)
-- [发布物交付](https://github.com/PelyDeng/dsh-plugin/blob/main/packages/plugin-manager/DELIVERY.md)
-- [kit 接口](https://github.com/PelyDeng/dsh-plugin/tree/main/packages/plugin-kit/src)
-- [示例实现](https://github.com/PelyDeng/dsh-plugin/tree/main/plugins/dsh-example/src)
+- [产品与导航](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/README.md)
+- [图文接入手册](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/getting-started.md)
+- [作者指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/plugin-development.md)
+- [实例配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/plugin-configuration.md)
+- [发布物交付](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/packages/plugin-manager/DELIVERY.md)
+- [kit 接口](https://github.com/PelyDeng/dsh-plugin-manager/tree/main/packages/plugin-kit/src)
+- [示例实现](https://github.com/PelyDeng/dsh-plugin-manager/tree/main/plugins/dsh-example/src)
 - [可复制 AI 提示词](prompts.md)

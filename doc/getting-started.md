@@ -68,7 +68,7 @@ dsh-lab/
 **取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager 0.3.0、kit 0.1.0 tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。仅消费现成发布物的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
 
 ```sh
-git clone https://github.com/PelyDeng/dsh-plugin.git framework
+git clone https://github.com/PelyDeng/dsh-plugin-manager.git framework
 cd framework
 git rev-parse HEAD
 pnpm install --frozen-lockfile

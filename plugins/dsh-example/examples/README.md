@@ -2,7 +2,7 @@
 
 本目录展示 example、配套 auth 和站点部署的完整常用配置，适用于本文交付的 manager 0.3.0。在线 main 链接可能领先于安装版本，模板与本页随应用版本交付。JSON 不支持注释，因此模板只保存真实配置字段，逐项备注、是否必填和默认值在下表说明。模板可提交 Git；复制后的实例配置只保存在 `.local/`，不会随源码或归档自动生效。
 
-源码一键部署直接运行 `bash deploy/build.sh`，站点和插件文件自动初始化，无需复制下方模板。站点选项修改 `.local/site.json`，插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值及必填性见[一键部署](https://github.com/PelyDeng/dsh-plugin/blob/main/doc/first-deployment.md)。
+源码一键部署直接运行 `bash deploy/build.sh`，站点和插件文件自动初始化，无需复制下方模板。站点选项修改 `.local/site.json`，插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值及必填性见[一键部署](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/first-deployment.md)。
 
 ## 文件与使用位置
 
@@ -58,7 +58,7 @@ Docker 模板保持 `/data/dsh-home` 为容器 home，auth 的 `stateDir` 与之
 | `config.lockSeconds` | 可选 | `30` 秒 | 达到失败限制后的锁定时长，1–3600 |
 | `publicOrigin` | 使用认证时条件必填 | 来自站点配置 | 由管理器注入；不重复写入 auth 的 config |
 
-auth 是认证提供者，没有 `accessMode` 配置。账号、密码和逐用户插件授权通过 auth 管理功能维护，不在模板中预置。详见 [auth 使用说明](https://github.com/PelyDeng/dsh-plugin/blob/main/plugins/dsh-auth/README.md)。
+auth 是认证提供者，没有 `accessMode` 配置。账号、密码和逐用户插件授权通过 auth 管理功能维护，不在模板中预置。详见 [auth 使用说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/plugins/dsh-auth/README.md)。
 
 ## 站点部署配置
 
@@ -131,4 +131,4 @@ auth 是认证提供者，没有 `accessMode` 配置。账号、密码和逐用�
 | `deepseekPlugin.runtimeConfig` | 可整体省略 | demo 使用宿主模型，不读取独立 env 文件，故不启用。声明时 variable 必填、template 可选、required 默认 true |
 | `deepseekPlugin.development` | 可整体省略 | demo 无专用开发 patch，故不启用。声明时 patch 和 rootVariable 必填，文件必须存在、变量不得占用保留名称 |
 
-新增业务 env 或开发 patch 能力时，先实现对应读取或源码加载，再声明 runtimeConfig/development；元数据本身不会替插件实现功能。统一规则见[插件运行配置规范](https://github.com/PelyDeng/dsh-plugin/blob/main/doc/plugin-configuration.md)。
+新增业务 env 或开发 patch 能力时，先实现对应读取或源码加载，再声明 runtimeConfig/development；元数据本身不会替插件实现功能。统一规则见[插件运行配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/plugin-configuration.md)。

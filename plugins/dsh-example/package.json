@@ -1,7 +1,7 @@
 {
   "name": "dsh-example",
   "version": "0.3.1",
-  "description": "DSH Plugin 开发者接入答疑助手与可复制的鉴权对话示例",
+  "description": "DSH Plugin Manager 开发者接入答疑助手与可复制的鉴权对话示例",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -140,7 +140,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/PelyDeng/dsh-plugin.git",
+    "url": "git+https://github.com/PelyDeng/dsh-plugin-manager.git",
     "directory": "plugins/dsh-example"
   }
 }

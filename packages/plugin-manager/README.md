@@ -37,7 +37,7 @@ pnpm exec dsh-plugin compose-release --root /path/to/site --output releases/site
 
 支持 configuration 的插件使用 `<DSH home>/plugins/<id>/plugin.json`，例如 `{"schemaVersion":1,"enabled":true,"accessMode":"standalone","config":{}}`。accessMode 仅适用于认证消费者；authenticated 需要合法站点 publicOrigin 和候选清单中唯一、已启用的认证提供者。使用 compose-release 显式组合业务应用与认证插件。认证模式修改需配置加受控重启。
 
-Docker 实例通过 `apply-compose --root <项目根> --config <deployment.json>` 应用配置，接受不可变本机镜像 ID 或 registry 摘要，`--resume` 恢复原操作。`migrate-data` / `migrate-artifacts` 默认仅预览。完整命令参数见 `pnpm exec dsh-plugin --help`；部署细节与示例见[仓库开发分支文档](https://github.com/PelyDeng/dsh-plugin/tree/main/doc)，该链接可能领先于已安装版本。
+Docker 实例通过 `apply-compose --root <项目根> --config <deployment.json>` 应用配置，接受不可变本机镜像 ID 或 registry 摘要，`--resume` 恢复原操作。`migrate-data` / `migrate-artifacts` 默认仅预览。完整命令参数见 `pnpm exec dsh-plugin --help`；部署细节与示例见[仓库开发分支文档](https://github.com/PelyDeng/dsh-plugin-manager/tree/main/doc)，该链接可能领先于已安装版本。
 
 ## 内部批量开发与 API
 

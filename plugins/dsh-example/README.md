@@ -10,7 +10,7 @@
 pnpm exec dsh-plugin start --root <交付根> --config .local/deployment.json --plugins all
 ```
 
-配置与获取发布物的完整步骤见[图文手册](https://github.com/PelyDeng/dsh-plugin/blob/main/doc/getting-started.md)和 manager 随包 DELIVERY.md；在线 main 可能领先于当前版本。Linux Docker 完整源码部署可使用仓库的 `bash deploy/build.sh`。
+配置与获取发布物的完整步骤见[图文手册](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/getting-started.md)和 manager 随包 DELIVERY.md；在线 main 可能领先于当前版本。Linux Docker 完整源码部署可使用仓库的 `bash deploy/build.sh`。
 
 默认 authenticated。登录 `/auth`，首次 admin 必须改密；普通账号需要 example 授权，再打开 `/example`。同一个 DSH home 还需官方默认模型与凭据，插件不保存模型密钥。探针成功只说明基本可服务，不证明模型请求成功。
 
@@ -39,6 +39,6 @@ SQLite 只存账号所有者、标题和时间等历史目录；消息正文使�
 
 ## 作者复制与检查
 
-内部复制本目录，修改包名、ID、路由、权限、Bundle、会话前缀、提示词段名、知识、页面和测试。外部作者把 kit workspace:* 换成版本化 tgz 开发依赖、保留 tsdown 内嵌；移除原仓库 clean 入口及框架专用集成测试依赖。配置与知识输入都随包目录携带；[外部复制步骤](https://github.com/PelyDeng/dsh-plugin/blob/main/doc/plugin-development.md#复制完整问答应用到独立仓库)说明具体操作。
+内部复制本目录，修改包名、ID、路由、权限、Bundle、会话前缀、提示词段名、知识、页面和测试。外部作者把 kit workspace:* 换成版本化 tgz 开发依赖、保留 tsdown 内嵌；移除原仓库 clean 入口及框架专用集成测试依赖。配置与知识输入都随包目录携带；[外部复制步骤](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/plugin-development.md#复制完整问答应用到独立仓库)说明具体操作。
 
 在包根运行 `pnpm build`、`pnpm check`，行为回归单独运行 `pnpm test`。框架内也可用 `pnpm --filter dsh-example ...`。测试使用隔离数据和 Agent 替身，不证明真实模型回答质量。`tests/host-smoke.mjs` 使用真实官方宿主和 auth/example tgz，但模型 HTTP 是明确标识的本地替身。

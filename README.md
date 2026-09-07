@@ -1,4 +1,4 @@
-# DSH Plugin
+# DSH Plugin Manager
 
 基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的应用接入与交付管理框架，面向将插件或智能体应用交付给团队、客户使用的独立开发者和小团队。
 
