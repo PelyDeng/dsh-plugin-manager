@@ -53,7 +53,6 @@ pnpm package --plugins "auth,example" --output .local/artifacts/release/plugins
 | [packages/plugin-manager](packages/plugin-manager/README.md) | `@dsh-plugin/plugin-manager`：发现、打包、安装和受控启停 |
 | [plugins/dsh-auth](plugins/dsh-auth/README.md) | 可选账号、登录与插件授权 |
 | [plugins/dsh-example](plugins/dsh-example/README.md) | 开发者接入答疑、流式对话、历史与可选认证示例 |
-| [plugins/dsh-closedoff-assistant](plugins/dsh-closedoff-assistant/README.md) | 私有封闭化业务查询、轨迹与个人历史 |
 | [integrations/docker](integrations/docker/README.md) | 官方宿主镜像与 Compose 集成 |
 | [deploy](deploy/README.md) | Bash、PowerShell、Node 入口和配置模板 |
 | [doc](doc/README.md) | 作者接入、架构与数据迁移说明 |
@@ -66,4 +65,4 @@ Linux 服务器取得完整仓库源码后，首次部署执行 `bash deploy/bui
 
 ## 贡献与许可
 
-公共框架采用 [Apache-2.0](LICENSE)，私有插件范围及双仓库工作流见 [PRIVATE.md](PRIVATE.md)。第三方归属见 [NOTICE](NOTICE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目由社区维护，不是 DeepSeek 官方发布渠道。
+参见 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)。本仓库自有代码采用 [Apache-2.0](LICENSE)，第三方归属见 [NOTICE](NOTICE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目由社区维护，不是 DeepSeek 官方发布渠道。

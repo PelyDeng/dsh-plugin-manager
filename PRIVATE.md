@@ -2,9 +2,40 @@
 
 本仓库的 `origin` 为 `git@gitee.com:dengpeilin/dsh-plugin.git`。公共框架来自 `upstream`：`https://github.com/PelyDeng/dsh-plugin.git`（已有 SSH 地址也可沿用）。两者通过 Git 合并更新；不要在 Gitee 使用覆盖式同步 GitHub，否则会替换包含私有插件的主分支历史。
 
-公共框架改动在 `dsh-plugin` 工作区完成、验证并推送 GitHub，然后在本仓库执行 `git fetch upstream` 和 `git merge upstream/main`。客户插件只在本仓库开发并推送 Gitee；`upstream` 的推送地址禁用。
+公共框架改动在 `dsh-plugin` 工作区完成、验证并推送 GitHub，再由本地私有集成库合并、检查并推送 Gitee。服务器只更新 Gitee 的集成版本。客户插件只在本仓库开发并推送 Gitee；`upstream` 的推送地址禁用。
 
-私有库的 `bash deploy/build.sh` 在构建前自动获取并合并 origin/main 和 upstream/main，保留私有提交；恢复部署时跳过同步。流程和失败处理见[部署说明](deploy/README.md)。脚本不自动推送；合并产生的本地提交可用 `git push origin main` 共享到 Gitee。同步专项测试：`node --test deploy/tests/sync-upstream.test.mjs`。
+## 服务器一键更新
+
+在仓库根执行 `bash build.sh`（也支持 `sh build.sh`）。根 [build.sh](build.sh) 和 [private-deploy](private-deploy/sync-origin.mjs) 专门负责私有更新，不修改公共框架的 [deploy/build.sh](deploy/build.sh)。根入口获取 `origin/main` 并且只允许快进，不访问 GitHub、不生成合并提交、不自动推送、不更新宿主子模块；成功后调用框架构建。直接执行 `bash deploy/build.sh` 仅构建当前检出代码，不更新 Git。
+
+更新与框架构建分别持有同一部署锁；同步完成后释放，框架重新取得该锁。并发任务无法在构建期间更新源码，未取得锁的任务直接退出。快进前保留 `codex/before-origin-*` 本地分支。`--resume`、`--help` 和管理子命令跳过源码更新，参数转交框架；未完成部署需要执行 `bash build.sh --resume`。
+
+工作区改动、未完成 Git 操作、本机未共享到 Gitee 的提交或分支分叉都会阻止更新。将这些修改带回私有集成库，保留并合并、检查后推送 Gitee，再重试。不要在服务器执行强制覆盖、丢弃本地提交，或在 Gitee 网页覆盖同步 GitHub。网络错误显示 Git 原始诊断，源码更新失败时不启动构建或停止服务。
+
+## 本地集成公共更新
+
+在私有仓库的 `main` 分支上操作；先确认工作区干净。已经在服务器产生的提交应先取回并保留，不能直接覆盖。
+
+```sh
+git fetch origin
+git merge --ff-only origin/main
+git fetch upstream
+git merge --no-edit upstream/main
+```
+
+冲突在这里处理一次并提交。`pnpm-lock.yaml` 同时记录公共和私有插件依赖，不能整份选 GitHub 或 Gitee 一方；先检查各包声明，保留双方需要的依赖，再用仓库锁定的 pnpm 校验或整理锁文件，并审查版本变化。独立的根入口减少脚本和文档冲突，但不消除共享锁文件或公共接口的集成成本。
+
+```sh
+pnpm install --frozen-lockfile
+pnpm build --plugins "auth,closedoff,example"
+pnpm check --plugins "auth,closedoff,example"
+pnpm --filter dsh-example test
+pnpm --filter dsh-closedoff-assistant test
+node --test private-deploy/tests/sync-origin.test.mjs
+pnpm package --plugins "auth,closedoff,example" --output .local/artifacts/release/plugins
+```
+
+检查、归档及与改动相关的业务验收完成后，提交集成修改并执行 `git push origin main`。服务器随后运行 `bash build.sh` 获取这一版本。Gitee 分支本身不自动证明所有测试通过；发布维护者负责检查，不能把冲突转移回服务器。框架构建、配置和恢复能力见[部署说明](deploy/README.md)。
 
 `plugins/dsh-closedoff-assistant` 是私有定制插件，其 `vendor/` 包含构建播放器所需的版本化归档。该目录不受根 Apache-2.0 许可授权，适用插件 [LICENSE](plugins/dsh-closedoff-assistant/LICENSE)。第三方资源保持各自许可。不得将该目录或包含它的提交推送公共仓库。
 

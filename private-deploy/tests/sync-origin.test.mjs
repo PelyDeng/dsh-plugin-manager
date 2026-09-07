@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { syncUpstream } from '../scripts/sync-upstream.mjs';
+import { syncOrigin } from '../sync-origin.mjs';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-sync-'));
@@ -21,69 +21,77 @@ function fixture(t) {
   return { root, upstream, origin, checkout, git, commit };
 }
 
-test('merges private and public changes, preserves local commits and repeats without pushing', t => {
+test('fast-forwards only the integrated origin and repeats without fetching upstream', t => {
   const f = fixture(t), { checkout, git, commit, origin, upstream } = f;
-  commit(checkout, 'local.txt', 'local commit\n');
   commit(origin, 'private-update.txt', 'private update\n');
   commit(upstream, 'framework.txt', 'framework update\n');
+  git(checkout, 'remote', 'set-url', 'upstream', join(checkout, 'missing-upstream'));
   const remoteHead = git(origin, 'rev-parse', 'HEAD');
-  syncUpstream(checkout);
-  for (const file of ['private.txt', 'private-update.txt', 'local.txt']) assert.ok(existsSync(join(checkout, file)));
-  assert.equal(readFileSync(join(checkout, 'framework.txt'), 'utf8'), 'framework update\n');
+  syncOrigin(checkout);
+  for (const file of ['private.txt', 'private-update.txt']) assert.ok(existsSync(join(checkout, file)));
+  assert.equal(readFileSync(join(checkout, 'framework.txt'), 'utf8'), 'base\n');
   const head = git(checkout, 'rev-parse', 'HEAD');
-  syncUpstream(checkout);
+  assert.equal(head, remoteHead);
+  syncOrigin(checkout);
   assert.equal(git(checkout, 'rev-parse', 'HEAD'), head);
   assert.equal(git(origin, 'rev-parse', 'HEAD'), remoteHead);
   assert.equal(git(checkout, 'status', '--porcelain'), '');
 });
 
-test('conflicts abort the failed merge and preserve the private checkout', t => {
-  const { checkout, upstream, git, commit } = fixture(t);
+test('local commits and diverged origin stop without starting a merge', t => {
+  const { checkout, origin, git, commit } = fixture(t);
   commit(checkout, 'framework.txt', 'private customization\n');
-  commit(upstream, 'framework.txt', 'public change\n');
   const head = git(checkout, 'rev-parse', 'HEAD');
-  assert.throws(() => syncUpstream(checkout), /合并 upstream\/main 失败/);
+  assert.throws(() => syncOrigin(checkout), /本机.*提交/);
+  commit(origin, 'framework.txt', 'integrated change\n');
+  assert.throws(() => syncOrigin(checkout), /本机.*提交/);
   assert.equal(git(checkout, 'rev-parse', 'HEAD'), head);
   assert.equal(readFileSync(join(checkout, 'framework.txt'), 'utf8'), 'private customization\n');
   assert.equal(git(checkout, 'status', '--porcelain'), '');
-  assert.ok(git(checkout, 'branch', '--list', 'codex/before-upstream-*'));
+  assert.equal(existsSync(join(checkout, '.git/MERGE_HEAD')), false);
 });
 
 test('dirty files and pending deployments block sync; resume and help do not fetch', t => {
   const { checkout, git } = fixture(t);
   git(checkout, 'remote', 'set-url', 'upstream', join(checkout, 'missing-remote'));
   writeFileSync(join(checkout, 'private.txt'), 'uncommitted\n');
-  assert.throws(() => syncUpstream(checkout), /工作区改动/);
+  assert.throws(() => syncOrigin(checkout), /工作区.*改动/);
   mkdirSync(join(checkout, '.local'));
   writeFileSync(join(checkout, '.local/source-release.json'), JSON.stringify({ status: 'deployment-failed' }));
-  assert.throws(() => syncUpstream(checkout), /未完成部署/);
-  syncUpstream(checkout, ['--resume']); syncUpstream(checkout, ['--help']);
+  assert.throws(() => syncOrigin(checkout), /未完成部署/);
+  syncOrigin(checkout, ['--resume']); syncOrigin(checkout, ['--help']);
   assert.equal(readFileSync(join(checkout, 'private.txt'), 'utf8'), 'uncommitted\n');
 });
 
-test('network failure does not apply already-fetched origin changes', t => {
+test('origin network failure leaves the checkout unchanged', t => {
   const { checkout, origin, git, commit } = fixture(t);
   commit(origin, 'new-private.txt', 'new\n');
-  git(checkout, 'remote', 'set-url', 'upstream', join(checkout, 'missing-remote'));
+  git(checkout, 'remote', 'set-url', 'origin', join(checkout, 'missing-remote'));
   const head = git(checkout, 'rev-parse', 'HEAD');
-  assert.throws(() => syncUpstream(checkout));
+  assert.throws(() => syncOrigin(checkout));
   assert.equal(git(checkout, 'rev-parse', 'HEAD'), head);
   assert.equal(existsSync(join(checkout, 'new-private.txt')), false);
 });
 
-test('Linux build entry holds the lock across sync and build, skips sync for resume and stops on conflict', { skip: process.platform !== 'linux' }, t => {
-  const { checkout, upstream, git, commit } = fixture(t);
+test('Linux build entry holds the lock across origin update and build and skips sync for resume', { skip: process.platform !== 'linux' }, t => {
+  const { checkout, origin, git, commit } = fixture(t);
   mkdirSync(join(checkout, 'deploy/scripts'), { recursive: true });
-  cpSync(new URL('../build.sh', import.meta.url), join(checkout, 'deploy/build.sh'));
-  cpSync(new URL('../scripts/build-output.mjs', import.meta.url), join(checkout, 'deploy/scripts/build-output.mjs'));
-  cpSync(new URL('../scripts/sync-upstream.mjs', import.meta.url), join(checkout, 'deploy/scripts/sync-upstream.mjs'));
+  mkdirSync(join(checkout, 'private-deploy'));
+  cpSync(new URL('../../build.sh', import.meta.url), join(checkout, 'build.sh'));
+  cpSync(new URL('../../deploy/build.sh', import.meta.url), join(checkout, 'deploy/build.sh'));
+  cpSync(new URL('../../deploy/scripts/build-output.mjs', import.meta.url), join(checkout, 'deploy/scripts/build-output.mjs'));
+  cpSync(new URL('../sync-origin.mjs', import.meta.url), join(checkout, 'private-deploy/sync-origin.mjs'));
   writeFileSync(join(checkout, 'deploy/scripts/build.mjs'), `import {spawnSync} from 'node:child_process'; import {writeFileSync} from 'node:fs'; if(spawnSync('flock',['-n','.local/source-release.lock','true']).status!==1) throw Error('lock not held'); writeFileSync('.local/built','ok');`);
-  git(checkout, 'add', 'deploy'); git(checkout, 'commit', '-m', 'private entry');
-  const run = (...args) => spawnSync('bash', ['deploy/build.sh', ...args], { cwd: checkout, encoding: 'utf8' });
+  git(checkout, 'add', 'deploy', 'private-deploy', 'build.sh'); git(checkout, 'commit', '-m', 'private entry');
+  git(origin, 'fetch', checkout, 'main'); git(origin, 'merge', '--ff-only', 'FETCH_HEAD');
+  const run = (...args) => spawnSync('sh', ['build.sh', ...args], { cwd: checkout, encoding: 'utf8' });
   assert.equal(run().status, 0);
   assert.equal(readFileSync(join(checkout, '.local/built'), 'utf8'), 'ok');
   rmSync(join(checkout, '.local/built'));
-  commit(checkout, 'framework.txt', 'private conflict\n'); commit(upstream, 'framework.txt', 'public conflict\n');
+  const locked = spawnSync('flock', ['-n', '.local/source-release.lock', 'sh', 'build.sh'], { cwd: checkout, encoding: 'utf8' });
+  assert.notEqual(locked.status, 0);
+  assert.equal(existsSync(join(checkout, '.local/built')), false);
+  commit(checkout, 'framework.txt', 'private conflict\n'); commit(origin, 'framework.txt', 'integrated conflict\n');
   assert.notEqual(run().status, 0);
   assert.equal(existsSync(join(checkout, '.local/built')), false);
   assert.equal(run('--resume').status, 0);

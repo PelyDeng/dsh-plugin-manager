@@ -10,13 +10,12 @@ bash deploy/build.sh
 
 默认只显示正在执行的步骤、完成或失败结果，以及最终访问地址和发布记录。每项步骤右侧都有独立的进度条和百分比，从 0% 开始，成功后显示 100%。插件按各自的构建、检查、打包三步依次显示，每一步独立计数。底层工具没有统一的工作量计数，执行中的百分比是等待进度提示，按等待时间逐渐增长并放缓，最高为 95%，不代表真实工作量或剩余时间；只有该步骤成功后才填满。交互终端持续刷新，快速步骤也有短暂的填充动画，动画不阻塞后台构建。重定向输出或 CI 环境只记录开始和结果，不播放动画。pnpm、打包器和 Docker 的详细输出保存在 `.local/artifacts/build-logs/build-*.log`，每次运行打印其路径。失败步骤保留当时的百分比，并显示最后 12 行诊断信息；`pnpm pack` 失败时会将捕获到的标准输出和错误输出写入同一日志，成功时保持安静；完整日志仍保留，Linux 日志文件仅当前用户可读写。构建与校验照常执行。
 
-私有库后续更新仍使用同一命令：
+后续更新：
 
 ```sh
+git pull --ff-only
 bash deploy/build.sh
 ```
-
-私有库入口先在同一部署锁内获取 `origin/main`（Gitee）和 `upstream/main`（GitHub），依次合并，再开始构建。缺少 upstream 时自动添加公共框架仓库；不下载或切换 `deepseek-harness` 子模块。每次需要合并时保留一个 `codex/before-upstream-*` 本地分支；冲突会撤销本次冲突合并并退出，不停止服务。工作区改动和未完成部署会阻止同步；`--resume`、`--help` 及管理子命令不进行同步。合并提交只保存在当前检出目录，脚本不自动推送；需要共享到 Gitee 时执行 `git push origin main`。不要使用 Gitee 网页覆盖同步公共库，否则私有提交会退出远程主分支。
 
 首次自动从 Git 中的 `deploy/config/site.defaults.json` 生成 `.local/site.json`。已有站点会先导入 `.local/deployment.json` 的设置及实际数据路径。以后读取 `.local/site.json`；`.local/deployment.json`、发布清单、Compose 和操作记录均由脚本生成，不需要人工准备，也不提交 Git。完整配置、前置环境和恢复说明见[Linux Docker 一键部署](../doc/first-deployment.md)。
 
