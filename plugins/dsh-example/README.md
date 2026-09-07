@@ -4,7 +4,7 @@
 
 ## 启动与使用
 
-需要应用交付说明中验证过的官方 DSH、manager 0.3.0 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
+需要应用交付说明中验证过的官方 DSH、manager 0.3.1 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
 
 ```sh
 pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --plugins all
@@ -19,6 +19,7 @@ pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment
 ## 知识和回答范围
 
 - [接入 FAQ](knowledge/guide.md)：定位、架构、命令、代码、鉴权、交付和限制。
+- 首页快捷提问包含官方控制台认证、首次录入 API 密钥和模型失败排查；对应答案已纳入接入 FAQ 和 Agent 知识。尚未配置模型时可点击“阅读 FAQ（无需模型）”直接阅读，快捷提问生成回答仍需模型。
 - [五种开发提示词](knowledge/prompts.md)：工具、问答应用、已有项目、内部交付与故障诊断。
 
 这两份 Markdown 同时是读者文档和模型知识，不另建副本。只加载包内固定路径，合计不超过 32 KiB；构建与启动时超限拒绝，不截断。页面展示插件版本及内容摘要；摘要标识资料内容，不证明远程仓库实时同步。维护者变更支持能力时同步这些文件、相关命令和来源，并检查打包内容、代表性问答与真实宿主请求。

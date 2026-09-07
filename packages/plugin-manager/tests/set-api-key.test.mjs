@@ -1,7 +1,7 @@
 /** Updating a key follows the deployment home selection and never starts a service. */
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chownSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -35,6 +35,21 @@ test('legacy data ambiguity and invalid input do not create a new home or replac
   const explicit = resolveDeployment({ root, home: 'data/selected' }, {});
   assert.throws(() => storeApiKey(explicit, 'sk-valid\nINJECTED=value', user), /格式无效/u);
   assert.equal(existsSync(explicit.home), false);
+});
+
+test('root first-time setup inherits the container home owner and preserves an existing file owner', { skip: process.platform === 'win32' || process.getuid?.() !== 0 }, () => {
+  const root = fixture(); const deployment = resolveDeployment({ root, home: 'data/container-home' }, {});
+  mkdirSync(deployment.home, { recursive: true });
+  chownSync(deployment.home, 1000, 1000);
+  const path = storeApiKey(deployment, 'sk-fixture-first');
+  assert.equal(statSync(path).uid, 1000);
+  assert.equal(statSync(path).gid, 1000);
+  assert.equal(statSync(path).mode & 0o777, 0o600);
+  chownSync(path, 1001, 1001);
+  storeApiKey(deployment, 'sk-fixture-replacement');
+  assert.equal(statSync(path).uid, 1001);
+  assert.equal(statSync(path).gid, 1001);
+  assert.equal(statSync(path).mode & 0o777, 0o600);
 });
 
 test('interactive input remains hidden, supports backspace and restores terminal raw mode', async () => {

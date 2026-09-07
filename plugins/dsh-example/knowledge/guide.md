@@ -1,6 +1,41 @@
 # 开发者接入 FAQ
 
-适用：plugin-manager 0.3.0、plugin-kit 0.1.0，示例宿主接口以仓库锁定源码为基线；宿主版本号相同也可能存在源码与发布类型差异。这是随 dsh-example 发布的知识快照，不是对远程仓库的实时查询。框架维护者在接口、命令或支持范围变化时更新本页及提示词，发布前复核代码与示例；页面摘要只标识知识内容，不证明所有代码自动同步。
+适用：plugin-manager 0.3.1、plugin-kit 0.1.0，示例宿主接口以仓库锁定源码为基线；宿主版本号相同也可能存在源码与发布类型差异。这是随 dsh-example 发布的知识快照，不是对远程仓库的实时查询。框架维护者在接口、命令或支持范围变化时更新本页及提示词，发布前复核代码与示例；页面摘要只标识知识内容，不证明所有代码自动同步。
+
+## Auth 登录后，根路径为什么仍提示认证？
+
+`dsh web authentication required; reopen the URL printed by dsh web.` 是官方控制台认证提示，不是模型密钥错误。插件 Auth 账号用于 `/auth` 及已授权应用；官方控制台根路径 `/` 使用自己的启动令牌和浏览器 Cookie；API 密钥用于调用模型。这三者独立，登录插件不会自动登录官方控制台。
+
+普通用户从 `/auth` 进入 `/example` 等应用。需要管理模型的站点维护者，在服务器仓库根的私有终端执行 `cat .local/data/dsh-web-auth-url.txt`，仅在自己的浏览器打开完整地址（含 token）。这是默认位置；自定义 `dataRoot` 或 `authUrlFile` 时按 `.local/deployment.json` 的路径读取。正常情况下校验令牌、设置 Cookie 后跳转回干净的 `/`。
+
+重启后启动令牌会重新生成；旧书签、新浏览器或 Cookie 清理后无法进入时，重新读取当前文件。地址不正确时核对站点 `publicUrl`/`publicOrigin`；完整新地址仍被拒绝时检查代理的查询参数、Host 和 Cookie 转发。不要关闭认证，也不要公开 token 或用它替代普通用户的应用授权。
+
+## 第一次如何在服务器录入 API 密钥？
+
+源码部署完成后，在服务器仓库根执行以下脚本，再在提示后输入官方 DeepSeek API 密钥并按 Enter。输入不回显，可 Ctrl+C 取消，不要将密钥贴进聊天或命令参数。
+
+```sh
+bash deploy/scripts/set-api-key.sh --config .local/deployment.json
+```
+
+脚本只更新选定 home 的 `.env` 中 `DEEPSEEK_API_KEY`，保留其他设置。manager 0.3.1 起，新文件沿用 home 的 UID/GID；已有文件保持属主，Linux 权限为 `0600`。home 本身须归运行用户所有，旧文件若已有错误属主须按实际运行用户单独修正，不能递归改整个数据目录权限。
+
+脚本只检查格式，不验证模型服务，不选模型，也不自动重启。管理员确认可以中断进行中的问答后，使用当前活动 Compose 配置重启，让宿主读取密钥：
+
+```sh
+compose_file=$(node -p "JSON.parse(require('node:fs').readFileSync('.local/artifacts/active-compose.json', 'utf8')).path")
+compose_project=$(node -p "JSON.parse(require('node:fs').readFileSync('.local/deployment.json', 'utf8')).composeProject")
+docker compose -p "$compose_project" -f "$compose_file" restart dsh
+docker compose -p "$compose_project" -f "$compose_file" ps
+```
+
+等待 healthy，在官方控制台核对提供方和默认模型，然后在 `/example` 新建对话验证。独立 CLI 交付环境使用 `pnpm exec dsh-plugin-manager set-api-key --root <交付根> --config .local/deployment.json`，随后由原管理器 stop/start，不套用 Docker 命令。其他提供方按官方模型设置配置，不能套用只写 DeepSeek 密钥的脚本。
+
+## 密钥已填、探针 200，为什么仍不能回答？
+
+依次核对：是否重启加载密钥；脚本输出的 home 是否属于当前容器；遗留 `DSH_HOME`/`DSH_DATA_DIR` 是否覆盖实例路径；启动环境、官方凭据设置或工作目录 `.env` 是否覆盖密钥；默认模型是否属于已配置且可用的提供方。改变默认模型后新建对话，旧会话保留创建时的模型选择。再根据具体错误检查密钥有效性、余额/配额、限流和服务器网络。健康探针不调用模型，不能证明真实问答成功。
+
+密钥是站点维护者配置的宿主凭据，不是每个 Auth 用户单独提供。正常更新与密钥脚本不会清空账号或历史，重启会中断进行中的问答；保留 `.local/data`、`.local/artifacts` 和备份，不用删除 `.local` 或空数据初始化排错。模型尚未可用时，首页“阅读 FAQ（无需模型）”仍可直接阅读本页；快捷提问生成回答需要模型。
 
 ## 这个仓库是什么？
 
@@ -167,7 +202,8 @@ pnpm exec dsh-plugin-manager compose-release --root <交付根> --output release
 | 发布输出非空 | 用新版本目录；保留现用目录和恢复归档 |
 | 包含 workspace:/file:/link: 运行依赖 | 宿主做 peer，kit 做内嵌开发依赖，重新 pack |
 | 外部 development 不支持 | 用 release；需要 link/HMR 时用原内部开发路径 |
-| 匿名 303/401 | 登录 /auth；不是“安装失败” |
+| 应用入口匿名 303/401 | 登录 /auth；不是“安装失败” |
+| 根路径提示 dsh web authentication required | 官方控制台认证，读取当前私有认证地址；与 API 密钥分开处理 |
 | 登录后 403 | 管理员检查应用授权，重新登录；核对 origin/CSRF，不关闭防护 |
 | 探针 503 | 查缺 provider、插件启动错误和必需服务；不把匿名开放当修复 |
 | 探针成功但模型失败 | 同 home/default model/凭据与模型网络；探针不验证付费调用 |
@@ -188,6 +224,7 @@ pnpm exec dsh-plugin-manager compose-release --root <交付根> --output release
 本 FAQ 由框架维护者维护，职责与示例应与下列公开资料及代码核对；在线 main 文档可能领先于安装版本，交付时以随包 README 和知识摘要为准。
 
 - [产品与导航](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/README.md)
+- [使用与运维 FAQ](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/FAQ.md)
 - [图文接入手册](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/getting-started.md)
 - [作者指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/plugin-development.md)
 - [实例配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/plugin-configuration.md)

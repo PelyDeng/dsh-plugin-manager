@@ -126,6 +126,6 @@ try {
   assert.equal(readFileSync(settingsPath,'utf8'),settings);
   assert.equal((await fetch(origin + '/independent-example/ready')).status, 200);
   await stop(); console.log('PASS fixed-path update retains accounts, grants and instance settings');
-  writeFileSync(join(operation, 'result.json'), JSON.stringify({ platform: process.platform, node: process.version, managerVersion: '0.3.0', rawBundle: true, relocatedRelease: true, authStatuses: [401, 403, 200], updatePreservesState: true }, null, 2));
+  writeFileSync(join(operation, 'result.json'), JSON.stringify({ platform: process.platform, node: process.version, managerVersion: '0.3.1', rawBundle: true, relocatedRelease: true, authStatuses: [401, 403, 200], updatePreservesState: true }, null, 2));
   console.log(`Evidence: ${operation}`);
 } finally { await stop(); }

@@ -4,6 +4,22 @@ import { readFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { fixture } from './fixture.mjs'
 
+test('setup FAQ remains readable with application authorization when the model is unavailable', async () => {
+  const f = await fixture({ mode: 'authenticated', beforeCreate() { throw new Error('model unavailable') } })
+  try {
+    const page = await f.request('')
+    expect(page.status).toBe(200)
+    expect(await page.text()).toContain('首次配置 API 密钥')
+    const faq = await f.request('/guide.md')
+    expect(faq.status).toBe(200)
+    const text = await faq.text()
+    expect(text).toContain('dsh web authentication required')
+    expect(text).toContain('bash deploy/scripts/set-api-key.sh --config .local/deployment.json')
+    expect(f.handles).toHaveLength(0)
+    expect((await f.request('/guide.md', undefined, '')).status).not.toBe(200)
+  } finally { await f.close() }
+})
+
 test('package knowledge and supplemental instructions reach new and resumed Agents without tools', async () => {
   const pages = ['guide.md', 'prompts.md'].map(file => readFileSync(new URL('../knowledge/' + file, import.meta.url), 'utf8'))
   const text = pages.join('\n\n')
