@@ -34,6 +34,12 @@ cat .local/data/dsh-web-auth-url.txt
 
 如果文件中的域名不对，检查站点的 `publicUrl`、`publicOrigin` 与实际访问地址，并按部署流程应用配置。如果完整的新地址仍返回 401，检查反向代理是否保留查询参数、正确转发 Host 和 Cookie；不要通过关闭认证解决。
 
+## 控制台能打开，但模型和插件报 HTTP 403 怎么办？
+
+检查实际访问域名是否进入官方 DSH 的 `trustedHosts`。仅配置 `publicUrl`、`publicOrigin` 不会自动允许公网域名调用控制台 API。在已有 `.local/site.json` 中补充 `"trustedHosts": ["dsh.example.com"]`，将示例域名替换为实际主机名，保留其他设置及已有信任项。值不带协议或路径；需要限定端口时，使用与请求 Host 一致的 `主机名:端口`。
+
+按正常部署流程应用配置并受控重启，再读取当前认证地址，验证模型、插件及工作区接口。不要修改生成的 Compose 或临时运行文件来代替持久配置。仍返回 403 时检查代理和 Host/Origin 是否一致；不要关闭认证。完整配置示例见 [example FAQ](../plugins/dsh-example/knowledge/guide.md#控制台能打开但模型和插件报-http-403-怎么办)。
+
 ## 第一次如何在服务器手动录入 DeepSeek API 密钥？
 
 完成首次部署后，在服务器仓库根执行：
