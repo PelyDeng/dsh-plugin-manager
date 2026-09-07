@@ -41,7 +41,7 @@ node deploy/scripts/deployment.mjs start --plugins "auth,example" --manifest .lo
 
 ## 运行配置
 
-以下为基础管理命令的运行配置；源码发版的用户配置见[站点配置](../doc/first-deployment.md#配置归属)。基础命令的 `--config` 指向运行 JSON。相对路径以显式项目根解析；仓库入口默认传入仓库根，独立 `dsh-plugin` 必须传 `--root`。基础命令的路径优先级为 CLI → 环境变量 → 配置文件 → 默认值。源码发版仅采用站点文件中的部署选项，不采用这些环境覆盖项。
+以下为基础管理命令的运行配置；源码发版的用户配置见[站点配置](../doc/first-deployment.md#配置归属)。基础命令的 `--config` 指向运行 JSON。相对路径以显式项目根解析；仓库入口默认传入仓库根，独立 `dsh-plugin-manager` 必须传 `--root`。基础命令的路径优先级为 CLI → 环境变量 → 配置文件 → 默认值。源码发版仅采用站点文件中的部署选项，不采用这些环境覆盖项。
 
 | CLI | 环境变量 | JSON 字段 | 新环境默认值 |
 | --- | --- | --- | --- |

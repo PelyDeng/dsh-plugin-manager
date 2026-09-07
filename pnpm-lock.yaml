@@ -53,7 +53,7 @@ importers:
 
   packages/plugin-manager:
     devDependencies:
-      '@dsh-plugin/plugin-kit':
+      '@dsh-plugin-manager/plugin-kit':
         specifier: workspace:*
         version: link:../plugin-kit
       tsdown:
@@ -72,7 +72,7 @@ importers:
       '@deepseek-ai/dsh-host-webserver':
         specifier: 0.1.2-alpha.5
         version: 0.1.2-alpha.5(@deepseek-ai/cordis@4.0.2)
-      '@dsh-plugin/plugin-kit':
+      '@dsh-plugin-manager/plugin-kit':
         specifier: workspace:*
         version: link:../../packages/plugin-kit
       '@types/node':
@@ -133,7 +133,7 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: 0.1.2-alpha.5
         version: 0.1.2-alpha.5(d3b57c497ac02550202c843c2dc1984e)
-      '@dsh-plugin/plugin-kit':
+      '@dsh-plugin-manager/plugin-kit':
         specifier: workspace:*
         version: link:../../packages/plugin-kit
       '@types/node':

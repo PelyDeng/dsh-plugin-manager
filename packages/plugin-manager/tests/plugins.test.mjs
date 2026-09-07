@@ -49,7 +49,7 @@ function run(args, options = {}) {
 test('public auth and example are discovered independently from library packages and enabled by default', () => {
   const plugins = discoverPlugins(repositoryRoot);
   assert.ok(['auth', 'example'].every(id => plugins.some(plugin => plugin.id === id)));
-  assert.ok(!plugins.some(plugin => plugin.package.startsWith('@dsh-plugin/')));
+  assert.ok(!plugins.some(plugin => plugin.package.startsWith('@dsh-plugin-manager/')));
   assert.ok(['auth', 'example'].every(id => selectPlugins(plugins).some(plugin => plugin.id === id)));
   assert.ok(plugins.every(plugin => plugin.verifyFiles.includes('cordis.patch.yml')));
 });

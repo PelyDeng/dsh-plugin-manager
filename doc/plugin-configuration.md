@@ -87,7 +87,7 @@
 修改某个 `plugin.json` 后，在安装了新版管理器的宿主机执行：
 
 ```sh
-dsh-plugin apply-compose --root /path/to/project --config .local/deployment.json
+dsh-plugin-manager apply-compose --root /path/to/project --config .local/deployment.json
 ```
 
 此命令校验配置与归档，生成独立 Compose 文档，停止指定项目的 dsh 服务，重新创建并等待健康检查通过。使用已有发布包，不重新构建插件；镜像必须包含同版本管理器。生成文件位于 `.local/artifacts/`，当前成功部署记录为 `.local/artifacts/active-compose.json`。不要手改生成文件，也不要混用旧 Compose 覆盖文件启动同一项目。Docker 和 Compose 需在执行命令的宿主机可用，命令仅支持串行执行。容器使用 `containerUid`/`containerGid`（默认均为 1000）；root 首次执行时只为新创建目录和设置文件赋权，已有目录或文件权限不符会在停服前报错，需要部署者调整。

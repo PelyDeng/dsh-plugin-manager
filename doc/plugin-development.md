@@ -21,10 +21,10 @@
 
 ```sh
 pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.3.0.tgz"
-pnpm exec dsh-plugin --version
+pnpm exec dsh-plugin-manager --version
 ```
 
-**预期**：输出 manager 0.3.0。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
+**预期**：输出 manager 0.3.0。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
 
 ### 2. 选择示例，建立自己的仓库
 
@@ -54,7 +54,7 @@ pnpm add --ignore-workspace --save-dev "/absolute/path/plugin-kit-0.1.0.tgz"
 修改包名、插件 ID、Bundle 与路由，保持相互一致；声明和配置字段见[配置规范](plugin-configuration.md)。在工具目录验证能发现自己的单包：
 
 ```sh
-pnpm exec dsh-plugin list --root "/absolute/path/my-plugin" --package .
+pnpm exec dsh-plugin-manager list --root "/absolute/path/my-plugin" --package .
 ```
 
 **预期**：只列出指定包的插件声明，不依赖框架内部名单。`--package .` 相对于 `--root`；list 不要求锁文件，后续 pack 要求作者根存在锁文件并冻结安装。
@@ -66,12 +66,12 @@ build/check 由作者声明，完成产物构建和不可缺少的启动检查�
 在工具目录执行，将作者根替换成实际绝对路径：
 
 ```sh
-pnpm exec dsh-plugin pack --root "/absolute/path/my-plugin" --package . --output .local/artifacts/release/v1
+pnpm exec dsh-plugin-manager pack --root "/absolute/path/my-plugin" --package . --output .local/artifacts/release/v1
 ```
 
 **预期**：在作者根的 `.local/artifacts/release/v1` 生成 manifest.json 和摘要命名 tgz。pack 已依次执行安装、build、check 和打包，无需先重复 build/check。输出目录必须使用新目录或空目录；失败时按对应任务错误修复，若已留下产物则换一个新输出目录重试。
 
-日常开发可单独执行 `pnpm exec dsh-plugin check --root "/absolute/path/my-plugin" --package .`；完整业务测试在作者根按自己的 test 脚本运行，不塞进每次打包的启动检查。
+日常开发可单独执行 `pnpm exec dsh-plugin-manager check --root "/absolute/path/my-plugin" --package .`；完整业务测试在作者根按自己的 test 脚本运行，不塞进每次打包的启动检查。
 
 将整个发布目录交给部署者，不能只交 manifest.json。部署者按[交付指南](../packages/plugin-manager/DELIVERY.md)组合与启动；统一身份示例需要把认证 provider 一起选入候选清单，并配置 publicOrigin。两应用的完整演练见[进阶手册](getting-started.md#进阶加入第二个应用)。
 
@@ -109,12 +109,12 @@ pnpm list:plugins
 
 复制 `plugins/dsh-example` 中的源码、web、knowledge、examples、Bundle、README/LICENSE、package.json、tsconfig 与 tsdown 配置；不复制 node_modules、dist、数据库和 .local。选择一个未加入原框架 workspace 的新包根。
 
-1. 在作者 package.json 删除 `@dsh-plugin/plugin-kit` 的 `workspace:*` 开发依赖，再在作者根执行 `pnpm add --ignore-workspace --save-dev <kit-tgz绝对路径>`。保留 tsdown 内嵌 kit，宿主依赖保持 peer。
+1. 在作者 package.json 删除 `@dsh-plugin-manager/plugin-kit` 的 `workspace:*` 开发依赖，再在作者根执行 `pnpm add --ignore-workspace --save-dev <kit-tgz绝对路径>`。保留 tsdown 内嵌 kit，宿主依赖保持 peer。
 2. 删除 scripts.clean 的原仓库相对入口，或换成只清理本包构建目录的实现。不要把数据目录加入清理命令。
 3. `tests/config-examples.test.mjs` 含框架管理器集成检查，`tests/host-smoke.mjs` 使用框架相对宿主和归档路径；这两份留在框架，不复制到独立应用测试。其余 chat/history/knowledge 测试和 fixture 可作为应用自己的回归基础。
 4. 修改包名、ID、Bundle、页面/探针、权限、配置 entryId、会话前缀/正则、提示词段名、知识、页面文案和测试；仅验证原 example 独立构建时可先保留名称，但不能与原包在同一候选中重复安装。
 5. 知识输入只读取包内 knowledge，不依赖原框架目录；改成其他业务应替换 src/knowledge.ts 中开发者职责及两份知识。部署的 config.systemPrompt 仅为补充。
-6. 在作者根执行 `pnpm build`、`pnpm check` 和 `pnpm test`，保存 pnpm-lock.yaml。在工具目录执行 `pnpm exec dsh-plugin pack --root <作者包根> --package . --output <新发布目录>`。只交付无需事先重复 build/check。
+6. 在作者根执行 `pnpm build`、`pnpm check` 和 `pnpm test`，保存 pnpm-lock.yaml。在工具目录执行 `pnpm exec dsh-plugin-manager pack --root <作者包根> --package . --output <新发布目录>`。只交付无需事先重复 build/check。
 
 部署者只取得整个发布目录及说明。确认 tgz 包含知识、页面、配置模板和入口；作者源码目录不参与 release。kit 更新需每个消费应用更新内嵌版本后重新交付，不能只升级管理器。
 

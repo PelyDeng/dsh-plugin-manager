@@ -4,7 +4,7 @@ import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import * as llm from '@deepseek-ai/dsh-llm'
-import { AccessError, actorKey, type Actor } from '@dsh-plugin/plugin-kit'
+import { AccessError, actorKey, type Actor } from '@dsh-plugin-manager/plugin-kit'
 
 export class HistoryStore {
   private readonly db: DatabaseSync

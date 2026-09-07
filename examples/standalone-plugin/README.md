@@ -2,15 +2,15 @@
 
 将本目录复制到自己的仓库。它不依赖 kit、不创建 Agent，只在官方 WebServer 注册公开的 `/independent-example/ready` 探针。完整对话可参考框架的 dsh-example；这里验证独立包交付，不模拟模型回答。
 
-需要 Node.js `^22.19.0 || >=24`、pnpm 11.19.0、系统 tar，以及已经安装的 `@dsh-plugin/plugin-manager@0.3.0`。工具可由维护者以 tgz 交付，包名不代表已经公开发布。
+需要 Node.js `^22.19.0 || >=24`、pnpm 11.19.0、系统 tar，以及已经安装的 `@dsh-plugin-manager/plugin-manager@0.3.0`。工具可由维护者以 tgz 交付，包名不代表已经公开发布。
 
 ```sh
 pnpm install --ignore-workspace
-dsh-plugin pack --root <本包绝对路径> --package . --output .local/release
+dsh-plugin-manager pack --root <本包绝对路径> --package . --output .local/release
 ```
 
 将 `.local/release` 整个目录交给部署者，其中 manifest.json 引用具有摘要的 tgz。使用具备 WebServer 的官方 web profile，管理器以 release 模式消费清单。也可通过官方 `dsh plugin --profile web add <tgz>` 安装并重启官方 `dsh web`。包配置不会修改 DSH 源码。未声明认证，此公开探针不得扩展为返回私密数据的接口。
 
 开始自己的项目时修改包名、插件 ID、Bundle 行和路由，保持相互一致。提交自己项目的 pnpm-lock.yaml；dist 和 .local 由构建生成，不作为源码提交。
 
-日常开发可单独执行 `dsh-plugin check --root <本包绝对路径> --package .`；直接交付时只需 pack。
+日常开发可单独执行 `dsh-plugin-manager check --root <本包绝对路径> --package .`；直接交付时只需 pack。

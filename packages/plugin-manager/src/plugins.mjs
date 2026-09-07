@@ -1,7 +1,7 @@
 /** Discover independently packaged plugins and validate their repository metadata. */
 import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { isPluginPath } from '@dsh-plugin/plugin-kit/route-path';
+import { isPluginPath } from '@dsh-plugin-manager/plugin-kit/route-path';
 import { validateConfiguration } from './plugin-settings.mjs';
 
 

@@ -1,5 +1,5 @@
 {
-  "name": "@dsh-plugin/plugin-kit",
+  "name": "@dsh-plugin-manager/plugin-kit",
   "version": "0.1.0",
   "description": "Optional identity, HTTP and tool integration for DSH plugins",
   "type": "module",

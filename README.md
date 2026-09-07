@@ -42,7 +42,7 @@
 
 ![开发者接入助手：首页问题入口与个人历史](doc/assets/developer-assistant.png)
 
-截图来自隔离实例，展示页面入口；模型连接验证使用本地替身，不代表真实答疑质量。实际问答需配置模型，操作见[图文体验手册](doc/getting-started.md)。
+实际问答需先配置模型，操作见[图文体验手册](doc/getting-started.md)。
 
 ## 与官方 DSH 的关系
 
@@ -77,7 +77,7 @@ bash deploy/build.sh
 
 ### 第三步：完成一次问答
 
-在同一个实例的官方模型设置中配置默认模型与凭据，再发送一个问题。页面可访问、探针通过和模型实际回答是不同的验证结果；详细操作见[模型准备](packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
+在同一个实例的官方模型设置中配置默认模型与凭据，再发送一个问题，确认能收到流式回答并恢复历史对话。详细操作见[模型准备](packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
 
 ## 开发自己的插件
 
@@ -86,8 +86,8 @@ bash deploy/build.sh
 按[作者指南](doc/plugin-development.md#独立仓库开发)取得管理工具、复制示例、填写声明并保存锁文件。在已安装 manager 的工具目录执行：
 
 ```sh
-pnpm exec dsh-plugin list --root /path/to/author-project --package .
-pnpm exec dsh-plugin pack --root /path/to/author-project --package . --output .local/artifacts/release
+pnpm exec dsh-plugin-manager list --root /path/to/author-project --package .
+pnpm exec dsh-plugin-manager pack --root /path/to/author-project --package . --output .local/artifacts/release
 ```
 
 把路径换成自己的作者根目录；输出路径相对于该根目录。`pack` 冻结安装依赖，依次执行一次 build、一次 check 和打包，交付时无需预先重复执行 build/check。
@@ -137,8 +137,8 @@ pnpm package --plugins "auth,example" --output .local/artifacts/release/plugins
 
 | 位置 | 用途 |
 | --- | --- |
-| [packages/plugin-kit](packages/plugin-kit/README.md) | `@dsh-plugin/plugin-kit`：身份、权限、HTTP、工具登记 |
-| [packages/plugin-manager](packages/plugin-manager/README.md) | `@dsh-plugin/plugin-manager`：发现、打包、安装和受控启停 |
+| [packages/plugin-kit](packages/plugin-kit/README.md) | `@dsh-plugin-manager/plugin-kit`：身份、权限、HTTP、工具登记 |
+| [packages/plugin-manager](packages/plugin-manager/README.md) | `@dsh-plugin-manager/plugin-manager`：发现、打包、安装和受控启停 |
 | [plugins/dsh-auth](plugins/dsh-auth/README.md) | 可选账号、登录与插件授权 |
 | [plugins/dsh-example](plugins/dsh-example/README.md) | 开发者答疑、流式对话、历史与可选认证示例 |
 | [integrations/docker](integrations/docker/README.md) | 官方宿主镜像与 Compose 集成 |

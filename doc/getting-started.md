@@ -73,8 +73,8 @@ cd framework
 git rev-parse HEAD
 pnpm install --frozen-lockfile
 node -e "require('fs').mkdirSync('.local/artifacts/tools',{recursive:true})"
-pnpm --filter @dsh-plugin/plugin-manager build
-pnpm --filter @dsh-plugin/plugin-kit build
+pnpm --filter @dsh-plugin-manager/plugin-manager build
+pnpm --filter @dsh-plugin-manager/plugin-kit build
 ```
 
 记录本次源码提交。初始化后续命令所用变量；路径来自当前目录，不写机器固定路径。
@@ -96,17 +96,17 @@ lab="$(dirname "$framework")"
 两个终端后续均使用以下命令；新终端需重新设置这两个变量：
 
 ```sh
-pnpm --filter @dsh-plugin/plugin-manager pack --out "$framework/.local/artifacts/tools/plugin-manager-0.3.0.tgz"
-pnpm --filter @dsh-plugin/plugin-kit pack --out "$framework/.local/artifacts/tools/plugin-kit-0.1.0.tgz"
+pnpm --filter @dsh-plugin-manager/plugin-manager pack --out "$framework/.local/artifacts/tools/plugin-manager-0.3.0.tgz"
+pnpm --filter @dsh-plugin-manager/plugin-kit pack --out "$framework/.local/artifacts/tools/plugin-kit-0.1.0.tgz"
 node -e "for (const p of ['../tools','../site/incoming']) require('fs').mkdirSync(p,{recursive:true})"
 cd ../tools
 pnpm add --ignore-workspace "$framework/.local/artifacts/tools/plugin-manager-0.3.0.tgz"
 pnpm add --ignore-workspace @deepseek-ai/dsh@0.1.2-alpha.5
-pnpm exec dsh-plugin --version
+pnpm exec dsh-plugin-manager --version
 node node_modules/@deepseek-ai/dsh/lib/bin.js --version
 ```
 
-**预期**：工具目录能运行 manager 0.3.0 和官方 CLI。上面的宿主是应用已有交付基线，升级需重新验证插件接口和历史恢复；保存工具目录的锁文件，不能把 CLI 固定版本当成所有依赖都固定。pnpm 若提示依赖构建脚本审批，按官方依赖要求运行 `pnpm approve-builds` 后重装。后文所有 `pnpm exec dsh-plugin` 都在这个 tools 目录执行。
+**预期**：工具目录能运行 manager 0.3.0 和官方 CLI。上面的宿主是应用已有交付基线，升级需重新验证插件接口和历史恢复；保存工具目录的锁文件，不能把 CLI 固定版本当成所有依赖都固定。pnpm 若提示依赖构建脚本审批，按官方依赖要求运行 `pnpm approve-builds` 后重装。后文所有 `pnpm exec dsh-plugin-manager` 都在这个 tools 目录执行。
 
 ## 2. 打包第一个应用
 
@@ -140,7 +140,7 @@ example 的关键位置：
 
 ```sh
 cd "$lab/tools"
-pnpm exec dsh-plugin compose-release --root "$lab/site" --output releases/site-v1 --manifest incoming/base-v1/manifest.json
+pnpm exec dsh-plugin-manager compose-release --root "$lab/site" --output releases/site-v1 --manifest incoming/base-v1/manifest.json
 ```
 
 ### 填写实例配置
@@ -168,7 +168,7 @@ node -e "require('fs').mkdirSync('../site/.local',{recursive:true})"
 ### 启动并检查就绪
 
 ```sh
-pnpm exec dsh-plugin start --root "$lab/site" --config .local/deployment.json --plugins all
+pnpm exec dsh-plugin-manager start --root "$lab/site" --config .local/deployment.json --plugins all
 ```
 
 **预期**：前台启动官方 web profile；保持终端运行，在另一个 tools 终端用同 root/config 执行 `health`。端口冲突时选空闲端口并同步 origin。所有相对部署路径以 site 为根；DSH_HOME 是该 site 下的 `.local/data/dsh-home`，不是 tools 或作者目录。
@@ -177,7 +177,7 @@ pnpm exec dsh-plugin start --root "$lab/site" --config .local/deployment.json --
 
 ```sh
 cd "$lab/tools"
-pnpm exec dsh-plugin health --root "$lab/site" --config .local/deployment.json
+pnpm exec dsh-plugin-manager health --root "$lab/site" --config .local/deployment.json
 ```
 
 ### 启动失败时
@@ -214,8 +214,8 @@ node -e "const fs=require('fs'); if(fs.existsSync('../second')) throw Error('sec
 cd ../second
 pnpm add --ignore-workspace --save-dev "$framework/.local/artifacts/tools/plugin-kit-0.1.0.tgz"
 cd ../tools
-pnpm exec dsh-plugin list --root "$lab/second" --package .
-pnpm exec dsh-plugin pack --root "$lab/second" --package . --output "$lab/site/incoming/second-v1"
+pnpm exec dsh-plugin-manager list --root "$lab/second" --package .
+pnpm exec dsh-plugin-manager pack --root "$lab/second" --package . --output "$lab/site/incoming/second-v1"
 ```
 
 **预期**：独立作者锁文件与构建留在 second，交付目录只含可迁移清单和归档。kit 是构建依赖并内嵌；部署机器不需要它的原 tgz 或作者源码。list 不要求锁文件，pack 要求根锁文件且冻结安装，忽略父 workspace。无鉴权的最小 Bundle 可改用 [standalone-plugin](../examples/standalone-plugin/README.md)。完整聊天应用的独立复制步骤见[作者指南](plugin-development.md#复制完整问答应用到独立仓库)。
@@ -235,8 +235,8 @@ flowchart LR
 在 tools 目录先生成新发布目录，再停止旧实例：
 
 ```sh
-pnpm exec dsh-plugin compose-release --root "$lab/site" --output releases/site-v2 --previous releases/site-v1/manifest.json --manifest incoming/base-v1/manifest.json --manifest incoming/second-v1/manifest.json
-pnpm exec dsh-plugin stop --root "$lab/site" --config .local/deployment.json
+pnpm exec dsh-plugin-manager compose-release --root "$lab/site" --output releases/site-v2 --previous releases/site-v1/manifest.json --manifest incoming/base-v1/manifest.json --manifest incoming/second-v1/manifest.json
+pnpm exec dsh-plugin-manager stop --root "$lab/site" --config .local/deployment.json
 ```
 
 把 deployment.json 的 manifest 改为 `releases/site-v2/manifest.json`，其余 home、origin 等保持。然后 start（同上一节命令，显式 --plugins all）。原账号重新登录，管理员给普通账号增加 independent-access-example 授权；授权变更会撤销其旧登录，需要重新登录。
@@ -269,11 +269,11 @@ flowchart LR
 | --- | --- |
 | 内部扫描 | 框架根：`pnpm list:plugins` |
 | 内部日常检查 | 框架根：`pnpm check --plugins example` |
-| 独立检查 | tools：`pnpm exec dsh-plugin check --root <作者根> --package .` |
+| 独立检查 | tools：`pnpm exec dsh-plugin-manager check --root <作者根> --package .` |
 | 构建并交付 | 作者用 pack；内部用 pnpm package，均用新输出目录 |
-| 就绪检查 | tools：`pnpm exec dsh-plugin health --root <交付根> --config .local/deployment.json` |
+| 就绪检查 | tools：`pnpm exec dsh-plugin-manager health --root <交付根> --config .local/deployment.json` |
 | 停止 | tools：同上，将 health 换成 stop |
-| 看参数 | tools：`pnpm exec dsh-plugin --help` |
+| 看参数 | tools：`pnpm exec dsh-plugin-manager --help` |
 
 先区分**安装成功 → 宿主监听 → 应用就绪 → 真实业务完成**。401/303 查登录，403 查授权/origin，503 查启动依赖，404 查路由和启用；探针通过但问答失败，查同 home 的模型。不要用删数据、清 pending 或关闭鉴权试错。
 

@@ -10,7 +10,7 @@
 保留官方 Cordis 插件与 dsh.bundle.patch，通过官方 dsh profile 启动，不新增独立服务启动器。
 这是无私密数据的个人工具，无需 kit/auth；如果需求实际上访问受限数据，先指出并补充鉴权方案。
 按 manager 0.3.0 添加 schema 3 声明、README、files、build/check。工具注册有 disposer，工具权限与 Agent 白名单显式配置。
-在作者根生成 pnpm 锁文件；在 <工具目录> 用 pnpm exec dsh-plugin pack --root <作者包根> --package . --output .local/release-v1。
+在作者根生成 pnpm 锁文件；在 <工具目录> 用 pnpm exec dsh-plugin-manager pack --root <作者包根> --package . --output .local/release-v1。
 保持宿主为外部依赖，运行依赖不得引用作者路径。执行构建和针对工具的测试，交付整个发布目录、输入输出例子、所验证宿主版本及使用说明。
 不修改框架或 DSH 源码；不发布、不推送、不读取真实凭据。未知接口先查证，不用伪 API。
 ```

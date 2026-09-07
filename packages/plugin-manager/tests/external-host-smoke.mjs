@@ -16,7 +16,7 @@ const operation = mkdtempSync(join(tmpdir(), 'dsh-independent-'));
 const tools = join(operation, 'tools'); mkdirSync(tools);
 writeFileSync(join(tools, 'package.json'), '{"private":true}');
 runPnpm(['add', '--ignore-workspace', managerArchive], tools);
-const manager = join(tools, 'node_modules/@dsh-plugin/plugin-manager/dist/cli.mjs');
+const manager = join(tools, 'node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs');
 const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(DSH_|PLUGIN_|DEPLOYMENT_CONFIG$|DEEPSEEK_)/u.test(name)));
 env.DSH_TELEMETRY_DISABLED = '1';
 const redact = text => text.replace(/\?token=\S+/gu, '?token=[redacted]');

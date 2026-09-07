@@ -42,7 +42,7 @@
 
 需要 Node.js `^22.19.0 || >=24`、pnpm 11.19.0、系统 tar。包名不表示已发布到公共 npm。取得可信维护者的版本化 manager tgz（用 kit 才需 kit tgz），核对提供方摘要；没有现成包时，按仓库作者指南从明确源码提交构建。依赖安装可能需要网络，只有 tgz 不等于完整离线闭包。
 
-在独立工具目录安装：`pnpm add --ignore-workspace <manager-tgz绝对路径>`，以后在该目录执行 `pnpm exec dsh-plugin ...`。不要在任意目录假设全局命令可用。作者包根的 package.json、pnpm-lock.yaml 与工具目录分开。
+在独立工具目录安装：`pnpm add --ignore-workspace <manager-tgz绝对路径>`，以后在该目录执行 `pnpm exec dsh-plugin-manager ...`。不要在任意目录假设全局命令可用。作者包根的 package.json、pnpm-lock.yaml 与工具目录分开。
 
 ## 内部与外部如何构建交付？
 
@@ -57,8 +57,8 @@ pnpm package --plugins "auth,example" --output .local/artifacts/release-v1
 外部：复制最小 examples/standalone-plugin 或完整 plugins/dsh-example 到作者自己的包根。完整 example 需替换 kit 的 workspace:* 为版本化 tgz 开发依赖，保留 tsdown 内嵌 kit，替换引用原仓库的 clean 脚本；test 中框架专用集成测试应留框架，独立项目保留自身行为测试。在作者根运行 `pnpm install --ignore-workspace`，提交作者锁文件。在工具目录运行：
 
 ```sh
-pnpm exec dsh-plugin list --root <作者包根> --package .
-pnpm exec dsh-plugin pack --root <作者包根> --package . --output .local/release-v1
+pnpm exec dsh-plugin-manager list --root <作者包根> --package .
+pnpm exec dsh-plugin-manager pack --root <作者包根> --package . --output .local/release-v1
 ```
 
 list 只读声明，不要求锁文件；check 会先 build；pack 冻结安装作者根锁文件，然后各执行一次 build/check 再打包，无需先重复 check。外部任务忽略父 workspace。不要声明 prepare/prepack/postpack 重复构建。发布目录包含 manifest.json 和摘要命名 tgz，一起交付，不能仅移动清单。运行依赖不能带 workspace:/file:/link: 或本机绝对路径；本地 kit 是构建依赖并内嵌。作者源码可以不在部署机器上。
@@ -94,7 +94,7 @@ ctx.effect(() => http.register({ kind: 'exact', path: '/sales/identity', handler
 } }))
 ```
 
-import 来自 `@dsh-plugin/plugin-kit`，完整可运行实例见 examples/standalone-kit。Tool 使用官方 ToolDefinition；需要认证时参照 kit/tools 的 createPluginTools/guardTool，声明权限并将工具名加入 Agent 白名单。不要猜测未提供的工具签名，应查当前安装版本导出与示例。Agent 使用官方 ctx.agents 与默认模型选择，systemPrompt.section 注入提示，tools.restrict 限制能力。example 当前白名单为空，无法代你执行命令、读磁盘或访问销售系统。
+import 来自 `@dsh-plugin-manager/plugin-kit`，完整可运行实例见 examples/standalone-kit。Tool 使用官方 ToolDefinition；需要认证时参照 kit/tools 的 createPluginTools/guardTool，声明权限并将工具名加入 Agent 白名单。不要猜测未提供的工具签名，应查当前安装版本导出与示例。Agent 使用官方 ctx.agents 与默认模型选择，systemPrompt.section 注入提示，tools.restrict 限制能力。example 当前白名单为空，无法代你执行命令、读磁盘或访问销售系统。
 
 ## 复制 example 需要改哪些名字？
 
@@ -107,7 +107,7 @@ import 来自 `@dsh-plugin/plugin-kit`，完整可运行实例见 examples/stand
 收到各应用完整发布目录、manager 工具及摘要、经应用验证的官方宿主版本/获取方式、公开配置模板和交付说明。使用者无需作者 Git 仓库。把分项归档放在 `<交付根>/incoming/`，在工具目录组合真实示例：
 
 ```sh
-pnpm exec dsh-plugin compose-release --root <交付根> --output releases/site-v1 --manifest incoming/base/manifest.json --manifest incoming/second/manifest.json
+pnpm exec dsh-plugin-manager compose-release --root <交付根> --output releases/site-v1 --manifest incoming/base/manifest.json --manifest incoming/second/manifest.json
 ```
 
 base 是内部 auth+example 的清单，second 是 independent-access-example 的清单。组合只读取校验并复制归档，不执行作者代码。重复 ID/包名要选择一个版本，不能直接叠加旧整站包和同 ID 新包。
@@ -125,14 +125,14 @@ base 是内部 auth+example 的清单，second 是 independent-access-example �
 在工具目录执行：
 
 ```sh
-pnpm exec dsh-plugin start --root <交付根> --config .local/deployment.json --plugins all
+pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --plugins all
 ```
 
 start 前台运行，保留终端；另开工具目录终端执行 health（同 root/config）。打开 origin/auth，首次 admin 使用初始密码 123456，强制改密后重新登录；创建普通账号并授予 example/第二应用权限，再访问 /example 或第二应用入口。官方控制台有另一套认证地址；不要把它的 token 发到公开提问中。
 
 安装成功、宿主监听、应用探针 200、真实问答完成是四个不同结果。example 问答还需在同一 DSH_HOME 配置官方默认模型与密钥；插件不保存模型密钥，模型失败先查宿主设置。
 
-管理器启动打印认证地址文件位置，默认 `<交付根>/.local/data/dsh-web-auth-url.txt`；仅在本机编辑器读取并访问其中官方控制台地址，不公开 token。“设置”→“模型”管理提供方凭据；默认模型由官方会话输入框的模型选择器保存（先选择工作区），或停服后在同 home/settings.yaml 合并 agent-default-model 分节的 provider/model。两者必须是实际已注册提供方 ID 及其支持的模型 ID，保留其他设置。使用官方 DeepSeek 时，在工具目录运行 `pnpm exec dsh-plugin set-api-key --root <交付根> --config .local/deployment.json` 隐藏输入密钥，保存到该 home/.env 后 stop/start，新建对话核实。该命令不切换模型；其他提供方按宿主模型设置配置。
+管理器启动打印认证地址文件位置，默认 `<交付根>/.local/data/dsh-web-auth-url.txt`；仅在本机编辑器读取并访问其中官方控制台地址，不公开 token。“设置”→“模型”管理提供方凭据；默认模型由官方会话输入框的模型选择器保存（先选择工作区），或停服后在同 home/settings.yaml 合并 agent-default-model 分节的 provider/model。两者必须是实际已注册提供方 ID 及其支持的模型 ID，保留其他设置。使用官方 DeepSeek 时，在工具目录运行 `pnpm exec dsh-plugin-manager set-api-key --root <交付根> --config .local/deployment.json` 隐藏输入密钥，保存到该 home/.env 后 stop/start，新建对话核实。该命令不切换模型；其他提供方按宿主模型设置配置。
 
 ## 配置在哪里？为什么装了 auth 还提示缺 provider？
 
@@ -153,7 +153,7 @@ authenticated 模式按可信账号拥有历史；同账号不同登录共享个
 在工具目录组合新目录，输入所有要保留的应用：
 
 ```sh
-pnpm exec dsh-plugin compose-release --root <交付根> --output releases/site-v2 --previous releases/site-v1/manifest.json --manifest incoming/base/manifest.json --manifest incoming/second/manifest.json
+pnpm exec dsh-plugin-manager compose-release --root <交付根> --output releases/site-v2 --previous releases/site-v1/manifest.json --manifest incoming/base/manifest.json --manifest incoming/second/manifest.json
 ```
 
 --previous 只携带旧归档供旧 file: 依赖解析，不继承旧候选。未出现在新候选的受管应用会撤选，数据保留。改部署配置 manifest 指向 v2，沿用 home/plugin.json，stop 后 start --plugins all。确认原应用、新应用、普通账号、授权、配置都可用。保留旧发布目录和一致备份；业务数据库跨版本是否可回退由作者说明，不能直接删 pending 或清数据重试。
@@ -162,7 +162,7 @@ pnpm exec dsh-plugin compose-release --root <交付根> --output releases/site-v
 
 | 现象 | 核实与处理 |
 | --- | --- |
-| 找不到 dsh-plugin | 到安装 manager 的工具目录用 pnpm exec；先 --version/--help |
+| 找不到 dsh-plugin-manager | 到安装 manager 的工具目录用 pnpm exec；先 --version/--help |
 | 根目录/锁文件错误 | 外部 root 必须是作者单包根，先在该根 install --ignore-workspace 并保存锁文件 |
 | 发布输出非空 | 用新版本目录；保留现用目录和恢复归档 |
 | 包含 workspace:/file:/link: 运行依赖 | 宿主做 peer，kit 做内嵌开发依赖，重新 pack |

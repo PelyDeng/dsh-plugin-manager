@@ -5,5 +5,5 @@ export default defineConfig({
   format: 'esm',
   dts: true,
   clean: true,
-  deps: { alwaysBundle: ['@dsh-plugin/plugin-kit'] },
+  deps: { alwaysBundle: ['@dsh-plugin-manager/plugin-kit'] },
 })
