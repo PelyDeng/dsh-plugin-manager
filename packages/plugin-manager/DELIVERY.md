@@ -79,6 +79,29 @@ dsh-plugin health --root /path/to/site --config .local/deployment.json
 
 停止使用 `dsh-plugin stop --root /path/to/site --config .local/deployment.json`。配置与认证模式变化在受控重启后生效。
 
+### 问答应用的模型准备
+
+auth 登录和模型凭据是两件事。example 在新建会话时读取同一宿主的 agentDefaultModel；不要把模型密钥放进插件 config。
+
+1. 管理器 start 打印“DSH 认证地址已保存至 …”。在本机编辑器打开该私有文件（默认 `<交付根>/.local/data/dsh-web-auth-url.txt`），仅在自己的浏览器访问其中地址；这是官方控制台入口，不能公开粘贴或截图 token。它对应本次启动的 home/profile。
+2. 打开官方控制台左下角“设置”→“模型”，配置或编辑提供方凭据；由启动环境提供的密钥会显示只读。采用官方 DeepSeek 提供方时，也可在工具目录通过下列命令隐藏输入 `DEEPSEEK_API_KEY`；命令只保存到本次 home/.env，不选择模型，也不自动重启。
+
+```sh
+pnpm exec dsh-plugin set-api-key --root /path/to/site --config .local/deployment.json
+```
+
+3. 新实例默认沿用宿主组合中的模型。需要切换时，可在官方会话输入框的模型选择器选择模型，保存为后续 Agent 的默认选择；该输入框要求先选择工作区。也可在停止服务后，向同一 `<home>/settings.yaml` 合并以下设置分节，保留文件其他设置；替换为实际提供方 ID 和它支持的模型 ID，不是显示名称。
+
+```yaml
+agent-default-model:
+  provider: <已注册提供方ID>
+  model: <该提供方支持的模型ID>
+```
+
+4. 由原管理器 stop/start，让环境配置生效；在 `/example` 新建对话并提问。其他提供方的凭据按该宿主版本的模型设置填写，不能套用只写 DeepSeek 密钥的命令。
+
+模型选择以实际控制台为准，不根据文档中的模型名猜可用性；旧会话保留已创建 Agent 的选择，改变默认值后用新会话核实。健康探针不调用模型；真实问答失败时检查提供方、凭据、网络及具体模型是否可用。
+
 ## 4. 新增或升级应用
 
 沿用原 home 和 plugin.json。替换 incoming 中该应用版本，保留其余应用输入，用新输出目录组合，并显式提供现用清单：

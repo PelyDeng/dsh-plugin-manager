@@ -1,26 +1,26 @@
-# demo 完整配置示例
+# 开发者助手配置参考
 
-本目录展示 example、配套 auth 和站点部署的完整常用配置，适用于 manager 0.2.1 及以上。JSON 不支持注释，因此模板只保存真实配置字段，逐项备注、是否必填和默认值在下表说明。模板可提交 Git；复制后的实例配置只保存在 `.local/`，不会随源码或归档自动生效。
+本目录展示 example、配套 auth 和站点部署的完整常用配置，适用于本文交付的 manager 0.3.0。在线 main 链接可能领先于安装版本，模板与本页随应用版本交付。JSON 不支持注释，因此模板只保存真实配置字段，逐项备注、是否必填和默认值在下表说明。模板可提交 Git；复制后的实例配置只保存在 `.local/`，不会随源码或归档自动生效。
 
-源码一键部署直接运行 `bash deploy/build.sh`，站点和插件文件自动初始化，无需复制下方模板。站点选项修改 `.local/site.json`，插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值及必填性见[一键部署](../../../doc/first-deployment.md)。
+源码一键部署直接运行 `bash deploy/build.sh`，站点和插件文件自动初始化，无需复制下方模板。站点选项修改 `.local/site.json`，插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值及必填性见[一键部署](https://github.com/PelyDeng/dsh-plugin/blob/main/doc/first-deployment.md)。
 
 ## 文件与使用位置
 
-| 模板 | 复制到仓库根目录下 | 作用 |
+| 模板 | 复制到交付根目录下 | 作用 |
 | --- | --- | --- |
 | [plugin.json.example](plugin.json.example) | `.local/data/dsh-home/plugins/example/plugin.json` | example 启停、认证及全部业务参数 |
 | [auth.plugin.json.example](auth.plugin.json.example) | `.local/data/dsh-home/plugins/auth/plugin.json` | auth 启停及全部认证服务参数；此模板的 stateDir 适用于随附 Docker 布局 |
 | [deployment.json.example](deployment.json.example) | `.local/deployment.json` | 站点、路径、容器和实例映射 |
 
-在仓库根目录操作：只为新实例复制模板，已有实例请对照字段修改，勿覆盖原配置。配置文件必须是 JSON；可选字段不使用时直接省略，不用 `null` 或无效空字符串代替。
+在交付根目录操作：只为新实例复制模板，已有实例请对照字段修改，勿覆盖原配置。配置文件必须是 JSON；可选字段不使用时直接省略，不用 `null` 或无效空字符串代替。
 
-1. 运行 `pnpm package --plugins auth,example --output .local/artifacts/release/plugins`，生成已验证的插件归档。已有同名非空发布目录时使用新的操作目录，并同步修改 manifest。
-2. 按上表创建目录并复制三份模板。填写真实不可变 `containerImage`；示例中的占位符必须替换，镜像需包含匹配版本的 manager。
+1. 取得作者交付的 auth/example 完整发布目录；在安装 manager 的工具目录使用 `pnpm exec dsh-plugin compose-release --root <交付根> --output releases/site-v1 --manifest <auth清单> --manifest <example清单>` 组合。若已有包含两者的完整清单，只输入一次。输出目录必须为空或不存在。
+2. 按上表创建目录并复制三份模板，将 manifest 改为实际组合清单。填写真实不可变 `containerImage`；示例中的占位符必须替换，镜像需包含匹配版本的 manager。
 3. 本机演示可保留回环 origin；通过域名访问时同步填写 `publicOrigin`、`publicUrl`、`trustedHosts`，并配置站点反向代理。
 4. 在同一个 DSH home 完成宿主默认模型与凭据配置；这些内容不属于插件模板，不能填写到 `plugin.json`。
-5. Linux Docker 主机执行 `node deploy/scripts/deployment.mjs apply-compose --config .local/deployment.json`。也可使用已安装的 `dsh-plugin apply-compose --root . --config .local/deployment.json`。
+5. Linux Docker 主机在工具目录执行 `pnpm exec dsh-plugin apply-compose --root <交付根> --config .local/deployment.json --plugins all`。无需框架源码或手改 Compose。
 
-Docker 模板保持 `/data/dsh-home` 为容器 home，auth 的 `stateDir` 与之配套。本机直接运行官方宿主时，删除 auth 配置中的 `stateDir`，让其使用实际 `DSH_HOME/auth`；再执行 `node deploy/scripts/deployment.mjs start --config .local/deployment.json --dsh-cli-js /path/to/dsh/lib/bin.js`。不要把本机的绝对路径复制进容器配置。
+Docker 模板保持 `/data/dsh-home` 为容器 home，auth 的 `stateDir` 与之配套。本机直接运行官方宿主时，删除 auth 配置中的 `stateDir`，让其使用实际 `DSH_HOME/auth`；再从工具目录执行 `pnpm exec dsh-plugin start --root <交付根> --config .local/deployment.json --dsh-cli-js <官方CLI绝对路径> --plugins all`。不要把本机的绝对路径复制进容器配置。
 
 ## example 运行配置
 
@@ -33,7 +33,7 @@ Docker 模板保持 `/data/dsh-home` 为容器 home，auth 的 `stateDir` 与之
 | `accessMode` | 可选，认证消费者适用 | `authenticated` | authenticated 要求登录与权限；standalone 使用共享本地身份 |
 | `config` | 可选 | `{}` | 插件业务参数；省略整个对象也能使用默认值 |
 | `config.routePrefix` | 可选 | `/example` | 非根绝对路由前缀；修改时同步插件声明的 entryPath、healthPath 和前端路由，重新构建验证 |
-| `config.systemPrompt` | 可选 | 模板中的中文提示词 | 插件注入的系统提示内容 |
+| `config.systemPrompt` | 可选 | `""` | 部署补充提示；内置开发者职责和随包知识独立注入，已有配置不自动覆盖 |
 | `config.historyPath` | 可选 | `""` | 空字符串表示自动使用 `<DSH home>/plugins/example/history.sqlite`；自定义时建议绝对路径，不能指向其他插件数据库 |
 | `config.authRecheckMs` | 可选 | `1000` 毫秒 | 活动请求复核认证的间隔，100–30000 |
 | `config.turnTimeoutMs` | 可选 | `180000` 毫秒 | 单轮生成超时，1000–1800000 |
@@ -58,7 +58,7 @@ Docker 模板保持 `/data/dsh-home` 为容器 home，auth 的 `stateDir` 与之
 | `config.lockSeconds` | 可选 | `30` 秒 | 达到失败限制后的锁定时长，1–3600 |
 | `publicOrigin` | 使用认证时条件必填 | 来自站点配置 | 由管理器注入；不重复写入 auth 的 config |
 
-auth 是认证提供者，没有 `accessMode` 配置。账号、密码和逐用户插件授权通过 auth 管理功能维护，不在模板中预置。详见 [auth 使用说明](../../dsh-auth/README.md)。
+auth 是认证提供者，没有 `accessMode` 配置。账号、密码和逐用户插件授权通过 auth 管理功能维护，不在模板中预置。详见 [auth 使用说明](https://github.com/PelyDeng/dsh-plugin/blob/main/plugins/dsh-auth/README.md)。
 
 ## 站点部署配置
 
@@ -110,7 +110,7 @@ auth 是认证提供者，没有 `accessMode` 配置。账号、密码和逐用�
 | 字段 | 是否必填 | 本示例值 / 说明 |
 | --- | --- | --- |
 | `name` / `version` | 必填 | npm 包名 `dsh-example` / 包版本，与私有实例配置版本无关 |
-| `description` | 可选 | 可复制的 AI 流式对话与可选 auth 接入示例 |
+| `description` | 可选 | 开发者接入答疑助手与可复制的鉴权对话示例 |
 | `main` / `dsh.bundle.patch` | 必填 | `dist/index.mjs` / `./cordis.patch.yml`，必须与构建产物和 Bundle 一致 |
 | `files`、README、`scripts.build`、`scripts.check` | 仓库必需 | 明确归档资源与构建检查流程；examples 作为公开模板一并打包 |
 | `types` / `exports` | 按包接口需要 | 本示例声明类型及 ESM 入口，填写的路径必须存在 |
@@ -120,7 +120,7 @@ auth 是认证提供者，没有 `accessMode` 配置。账号、密码和逐用�
 | `deepseekPlugin.schemaVersion` | 必填 | `3`，插件仓库声明格式 |
 | `deepseekPlugin.id` | 必填 | `example`，全仓唯一身份 |
 | `deepseekPlugin.defaultEnabled` | 可选 | `true`，源码默认候选集 |
-| `deepseekPlugin.displayName` | 可选 | `AI 对话示例`，省略时使用包名 |
+| `deepseekPlugin.displayName` | 可选 | `开发者接入助手`，省略时使用包名 |
 | `deepseekPlugin.entryPath` | 可选 | `/example`，无页面的插件可以省略 |
 | `deepseekPlugin.healthPath` | 可选 | `/example/ready`，省略后不会阻断构建；探针状态为 not-provided |
 | `deepseekPlugin.permissions` | 可选 | `["example:access"]`，省略为 []，权限标识限定在本插件命名空间 |
@@ -131,4 +131,4 @@ auth 是认证提供者，没有 `accessMode` 配置。账号、密码和逐用�
 | `deepseekPlugin.runtimeConfig` | 可整体省略 | demo 使用宿主模型，不读取独立 env 文件，故不启用。声明时 variable 必填、template 可选、required 默认 true |
 | `deepseekPlugin.development` | 可整体省略 | demo 无专用开发 patch，故不启用。声明时 patch 和 rootVariable 必填，文件必须存在、变量不得占用保留名称 |
 
-新增业务 env 或开发 patch 能力时，先实现对应读取或源码加载，再声明 runtimeConfig/development；元数据本身不会替插件实现功能。统一规则见[插件运行配置规范](../../../doc/plugin-configuration.md)。
+新增业务 env 或开发 patch 能力时，先实现对应读取或源码加载，再声明 runtimeConfig/development；元数据本身不会替插件实现功能。统一规则见[插件运行配置规范](https://github.com/PelyDeng/dsh-plugin/blob/main/doc/plugin-configuration.md)。

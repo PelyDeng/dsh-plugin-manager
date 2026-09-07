@@ -11,8 +11,8 @@
         publicOrigin: !!js process.env.DSH_PUBLIC_ORIGIN ?? ''
         # 可选，默认 /example；与包内 entryPath、healthPath 及前端保持一致。
         routePrefix: /example
-        # 可选，默认提示词；管理器实例使用 config.systemPrompt 覆盖。
-        systemPrompt: 你是一位清晰、友好的 AI 助手。用用户的语言回答，区分事实与推测；不知道时直接说明。
+        # 可选，部署补充提示；开发者职责和随包知识独立注入。
+        systemPrompt: ''
         # 可选，空字符串自动使用实际 DSH home 下的插件历史库。
         historyPath: ''
         # 可选，认证复核间隔（毫秒），100–30000，默认 1000。

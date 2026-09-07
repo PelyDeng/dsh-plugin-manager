@@ -2,7 +2,7 @@
 import { createServer } from 'node:http'
 import { apply, Config } from '../dist/index.mjs'
 
-export async function fixture({ mode, autoReply = false, logs = new Map(), beforeCreate = async () => {}, beforeDispose = async () => {}, ...overrides } = {}) {
+export async function fixture({ mode, autoReply = false, persistenceApi = 'handle', logs = new Map(), beforeCreate = async () => {}, beforeDispose = async () => {}, ...overrides } = {}) {
   const routes = new Map(), listeners = new Map(), effects = [], handles = [], timers = new Set()
   const revoked = new Set()
   let provider = true
@@ -14,11 +14,13 @@ export async function fixture({ mode, autoReply = false, logs = new Map(), befor
     effect(factory) { const dispose = factory(); effects.push(dispose); return dispose },
     webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
     agentDefaultModel: { currentSelection: () => ({ provider: 'test', model: 'test' }) },
-    sessionPersistence: { async open(id) { return { async read() { return logs.get(id) ?? [] }, async close() {} } } },
+    sessionPersistence: persistenceApi === 'inspection'
+      ? { async inspect(id) { return { events: logs.get(id) ?? [] } } }
+      : { async open(id) { return { async read() { return logs.get(id) ?? [] }, async close() {} } } },
     agents: { async resume(options) { return this.create({ ...options, sessionId: options.resumeSessionId }) }, async create(options) {
       await beforeCreate(options)
       if (!logs.has(options.sessionId)) logs.set(options.sessionId, [])
-      const handle = { id: options.sessionId, cancelled: false, disposed: false, messages: [], allowed: undefined,
+      const handle = { id: options.sessionId, cancelled: false, disposed: false, messages: [], sections: [], allowed: undefined,
         agent: { session: { snapshotEvents: () => logs.get(handle.id) }, cancel() { handle.cancelled = true }, followup(message) {
           handle.messages.push(message)
           logs.get(handle.id).push({ type: 'user/message', data: message })
@@ -43,7 +45,7 @@ export async function fixture({ mode, autoReply = false, logs = new Map(), befor
         } },
         async dispose() { await beforeDispose(); handle.disposed = true },
       }
-      options.setup({ systemPrompt: { section() {} }, tools: { restrict(value) { handle.allowed = value.allow } } })
+      options.setup({ systemPrompt: { section(value) { handle.sections.push(value) } }, tools: { restrict(value) { handle.allowed = value.allow } } })
       handles.push(handle)
       return handle
     } },

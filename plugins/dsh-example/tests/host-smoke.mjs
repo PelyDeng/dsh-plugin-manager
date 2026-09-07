@@ -11,6 +11,12 @@ import { readEvents } from '../web/stream.js'
 
 const root = fileURLToPath(new URL('../../../', import.meta.url))
 const release = resolve(root, process.argv[2] ?? '.local/artifacts/release/plugins')
+const manifest = JSON.parse(readFileSync(join(release, 'manifest.json'), 'utf8'))
+const archive = id => {
+  const plugin = manifest.plugins.find(plugin => plugin.id === id)
+  assert.ok(plugin, `Release must include ${id}`)
+  return join(release, plugin.archive)
+}
 const outputRoot = join(root, '.local/data/acceptance')
 mkdirSync(outputRoot, { recursive: true })
 const operation = mkdtempSync(join(outputRoot, 'example-host-'))
@@ -106,11 +112,11 @@ async function login(username) {
 }
 const list = async session => (await (await request('/example/conversations', undefined, session)).json()).items
 try {
-  run('plugin', '--profile', 'web', 'add', `file:${join(release, 'example.tgz')}`)
+  run('plugin', '--profile', 'web', 'add', `file:${archive('example')}`)
   await start('standalone')
   const shared = await chat('独立模式问题')
   await stop()
-  run('plugin', '--profile', 'web', 'add', `file:${join(release, 'auth.tgz')}`)
+  run('plugin', '--profile', 'web', 'add', `file:${archive('auth')}`)
   const require = createRequire(join(home, 'profiles/web/package.json'))
   const { bootstrap } = await import(pathToFileURL(require.resolve('dsh-auth/admin')).href)
   await bootstrap('example_admin', password, join(home, 'auth'), ['example'])
@@ -136,6 +142,14 @@ try {
   assert.equal((await request('/auth/api/logout', {}, alice)).status, 200)
   await streamed
   assert.ok(!interrupted.some(event => event.type === 'done'), 'logout must interrupt the stream')
+  // HTTP history waits for the revoked Agent's disposal and durable flush before host termination.
+  alice = await login('alice')
+  const beforeRestart = await request('/example/history?id=' + personal, undefined, alice)
+  assert.equal(beforeRestart.status, 200)
+  const durableBeforeRestart = await beforeRestart.json()
+  const interruptedQuestion = durableBeforeRestart.messages.findIndex(message => message.role === 'user' && message.text === '退出时停止')
+  assert.ok(interruptedQuestion >= 0, 'interrupted turn user message must be durable')
+  assert.ok(durableBeforeRestart.messages.slice(interruptedQuestion + 1).some(message => message.role === 'assistant' && (message.text || message.reasoning)), 'interrupted turn must retain durable assistant content')
   await stop()
   await start('standalone')
   assert.deepEqual((await list()).map(i => i.id), [shared])
@@ -150,16 +164,23 @@ try {
   assert.deepEqual((await list(alice)).map(i => i.id), [personal])
   const partial = await (await request('/example/history?id=' + personal, undefined, alice)).json()
   assert.equal(partial.messages.at(-1).role, 'assistant')
-  assert.ok(partial.messages.at(-1).text.startsWith('你好！'), 'interrupted durable answer must survive restart')
+  assert.deepEqual(partial.messages, durableBeforeRestart.messages, 'durable history must survive restart without loss')
+  assert.ok(partial.messages.some(message => message.text.startsWith('你好！')), 'completed answer must survive restart')
   await chat('重新登录后继续追问', alice, personal)
   assert.ok(JSON.stringify(requests.at(-1).messages).includes('个人模式问题'), 'resumed model request must contain previous personal question')
+  const modelInput = JSON.stringify(requests.at(-1).messages)
+  for (const text of ['你是 DSH Plugin 开发者接入助手', '第二个应用到底少写什么', 'compose-release', '可复制的开发提示词']) {
+    assert.ok(modelInput.includes(text), `Real DSH model request must contain shipped knowledge: ${text}`)
+  }
   const result = { officialHost: process.env.DSH_HOST_SOURCE_SHA ?? null, hostVersion: run('--version'), realTgz: true, realAuth: true,
     stream: true, standaloneWithoutAuth: true, modeSwitch: 'off-on-off-on', crossUserDenied: true,
-    logoutStopsStream: true, interruptedHistory: true, persistentResume: true, model: 'local HTTP fixture; no paid API call' }
+    logoutStopsStream: true, interruptedHistory: true, persistentResume: true, knowledgeInModelRequest: true, model: 'local HTTP fixture; no paid API call' }
   writeFileSync(join(operation, 'result.json'), JSON.stringify(result, null, 2) + '\n')
   console.log(JSON.stringify({ ...result, operation }))
   if (process.argv.includes('--serve')) {
     await stop(); await start(process.argv.includes('--serve-auth') ? 'authenticated' : 'standalone')
+    const token = hostLog.match(/\?token=([A-Za-z0-9_-]{43})/u)?.[1]
+    if (token) writeFileSync(join(operation, 'console-url.txt'), `${origin}/?token=${token}\n`, { mode: 0o600 })
     console.log('Browser acceptance: ' + origin + '/example')
     let stopping = false
     process.once('SIGINT', () => { stopping = true }); process.once('SIGTERM', () => { stopping = true })

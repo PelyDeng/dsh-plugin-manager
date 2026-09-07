@@ -88,6 +88,18 @@ test('interrupted reasoning-only output remains visible in durable history', asy
   expect(history.messages.at(-1)).toEqual({ role: 'assistant', reasoning: '已分析的部分', text: '' })
 })
 
+test('released host inspection API restores persisted history after the Agent closes', async () => {
+  const f = await setup({ mode: 'standalone', persistenceApi: 'inspection' })
+  const response = await f.request('/chat', { message: '保存历史' })
+  const h = f.handles[0]
+  f.emit(h, 'assistant/message', { message: { content: [{ type: 'text', text: '已保存回答' }] } })
+  await response.body.cancel()
+  await expect.poll(() => h.disposed).toBe(true)
+  const history = await f.request('/history?id=' + h.id)
+  expect(history.status).toBe(200)
+  expect((await history.json()).messages.at(-1).text).toBe('已保存回答')
+})
+
 test('followups reuse owned Agent; concurrent, foreign and other-login requests fail', async () => {
   const f = await setup()
   const response = await f.request('/chat', { message: 'first' })
