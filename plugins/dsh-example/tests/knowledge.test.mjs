@@ -46,6 +46,7 @@ test('package knowledge and source instructions reach new and resumed Agents wit
       expect(language.text).toContain('reasoning_content')
       expect(language.text).toContain('不要先用英文分析')
       expect(language.order).toBeGreaterThan(Math.max(...handle.sections.filter(s => s.name !== language.name).map(s => s.order)))
+      expect(handle.contexts.find(c => c.name === language.name).text).toContain('当前交互界面的语言是简体中文')
       expect(handle.allowed).toEqual(['example_search_framework', 'example_read_framework'])
       expect(handle.sections.find(s => s.name === 'example:framework').text).toContain('example_search_framework')
     }

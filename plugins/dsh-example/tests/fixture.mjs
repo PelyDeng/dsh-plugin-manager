@@ -23,7 +23,7 @@ export async function fixture({ mode, autoReply = false, persistenceApi = 'handl
     agents: { async resume(options) { return this.create({ ...options, sessionId: options.resumeSessionId }) }, async create(options) {
       await beforeCreate(options)
       if (!logs.has(options.sessionId)) logs.set(options.sessionId, [...options.seed??[]])
-      const handle = { id: options.sessionId, cancelled: false, disposed: false, messages: [], sections: [], allowed: undefined,
+      const handle = { id: options.sessionId, cancelled: false, disposed: false, messages: [], sections: [], contexts: [], allowed: undefined,
         agent: { session: { snapshotEvents: () => logs.get(handle.id) }, cancel() { handle.cancelled = true }, followup(message) {
           handle.messages.push(message)
           logs.get(handle.id).push({ type: 'user/message', data: message })
@@ -48,7 +48,7 @@ export async function fixture({ mode, autoReply = false, persistenceApi = 'handl
         } },
         async dispose() { await beforeDispose(); handle.disposed = true },
       }
-      options.setup({ systemPrompt: { section(value) { handle.sections.push(value) } }, tools: { restrict(value) { handle.allowed = value.allow } } })
+      options.setup({ systemPrompt: { section(value) { handle.sections.push(value) }, context(value) { handle.contexts.push(value) } }, tools: { restrict(value) { handle.allowed = value.allow } } })
       handles.push(handle)
       return handle
     } },
