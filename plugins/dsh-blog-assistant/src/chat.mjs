@@ -3,7 +3,7 @@ import {SessionId} from '@deepseek-ai/dsh-session'
 import {onRevoked} from '@dsh-plugin-manager/plugin-kit'
 import {ownerKey} from './store.mjs'
 import {invariant} from './settings.mjs'
-import {persona} from './jobs.mjs'
+import {persona,reasoningLanguage} from './jobs.mjs'
 import {projectChat} from './chat-history.mjs'
 import {historyHasImages,selectBlogModel} from './models.mjs'
 import {searchContext} from './search.mjs'
@@ -118,7 +118,7 @@ export class BlogChat {
   }
   options(b,selection){
     return{agentOptions:{provider:selection.provider,model:selection.model},signal:b.abort.signal,
-      setup:agentCtx=>{agentCtx.systemPrompt.section({name:'blog:persona',order:600,text:instructions+'\n本轮时间基准：'+JSON.stringify(searchContext())});agentCtx.tools.restrict({allow:this.jobs.chatTools.map(t=>t.name).filter(n=>b.job.input.research||!n.startsWith('blog_web_'))})}}
+      setup:agentCtx=>{agentCtx.systemPrompt.section({name:'blog:persona',order:600,text:instructions+'\n本轮时间基准：'+JSON.stringify(searchContext())});agentCtx.systemPrompt.section({name:'blog:language',order:10000,text:reasoningLanguage});agentCtx.tools.restrict({allow:this.jobs.chatTools.map(t=>t.name).filter(n=>b.job.input.research||!n.startsWith('blog_web_'))})}}
   }
   async run(b,conversation){
     try{

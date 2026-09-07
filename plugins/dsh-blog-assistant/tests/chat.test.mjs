@@ -36,7 +36,7 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
       const agent={id:options.sessionId,ctx:scope.ctx,session,options:{},status:'idle',cancel(){handle.cancelled=true},whenIdle:async()=>{},followup(message){handle.message=message;handle.emit('user/message',message);handle.emit('turn/start',{turn:'turn-'+events.length})}}
       const unregister=root.agents.register(agent)
       const handle={agent,options,events,cancelled:false,disposed:false,emit(type,data){const event={type,data,seq:events.length,time:1000+events.length*100};events.push(event);root.emit('session/event',session,event)},async dispose(){if(handle.disposed)return;handle.disposed=true;await unregister();await scope.dispose()}}
-      options.setup({systemPrompt:{section(){}},tools:{restrict:rule=>{handle.allowed=rule.allow}}});handles.push(handle);return handle
+      handle.sections=[];options.setup({systemPrompt:{section(s){handle.sections.push(s)}},tools:{restrict:rule=>{handle.allowed=rule.allow}}});handles.push(handle);return handle
     },async resume(options){return this.create({...options,sessionId:options.resumeSessionId,seed:saved.get(String(options.resumeSessionId))})}},
   }
   const attachments={freeze:()=>[]},blog={list:async()=>({items:[{cid:337,title:'现有文章'}]})}
@@ -78,6 +78,8 @@ test('chat starts without an article, preserves native history, resumes and dedu
   assert.equal(f.handles[0].disposed,true)
   await f.send({requestId:'request-456',text:'继续'});await tick()
   assert.equal(f.handles[1].events[0].data.id,f.handles[0].message.id)
+  for(const h of f.handles){assert.match(h.sections.at(-1).text,/reasoning_content/);assert.ok(h.sections.at(-1).order>h.sections[0].order)}
+  assert.equal(f.handles[1].message.content[0].text,'继续')
   await assert.rejects(f.chat.history({...actor,userId:'other'},f.conversation.id),/无权/)
 })
 

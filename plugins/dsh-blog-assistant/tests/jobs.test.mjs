@@ -21,7 +21,7 @@ async function fixture(t,{delayedIdle=false,images=false}={}) {
       const agent={id:options.sessionId,ctx:scope.ctx,session:Session.create(SessionId(options.sessionId)),options:{},status:'idle',cancel(){handle.cancelled=true},whenIdle(){return idle},followup(message){handle.message=message;if(delayedIdle)idle=new Promise(r=>{releaseIdle=r})}}
       const unregister=root.agents.register(agent)
       const handle={agent,cancelled:false,disposed:false,async dispose(){handle.disposed=true;await unregister();await scope.dispose()}}
-      options.setup({systemPrompt:{section(){}},tools:{restrict(rule){handle.allowed=rule.allow}}});handles.push(handle);return handle
+      handle.sections=[];options.setup({systemPrompt:{section(s){handle.sections.push(s)}},tools:{restrict(rule){handle.allowed=rule.allow}}});handles.push(handle);return handle
     }},
   }
   const attachments={freeze:()=>images?[{id:'a',version:1,name:'image',image:{attachmentId:'x'}}]:[{id:'a',version:1,name:'private.txt',range:null,unit:'行',units:[{number:1,text:'READ-MARKER-829'}]}]}
@@ -33,7 +33,7 @@ async function fixture(t,{delayedIdle=false,images=false}={}) {
 test('official Jobs owns settlement, reports completion and isolates the exact Agent owner',async t=>{
   const f=await fixture(t),job=await f.jobs.start(actor,f.request);await tick()
   assert.equal(f.handles.length,1);const handle=f.handles[0],runtime=f.root.jobs.list(handle.agent)[0]
-  assert.equal(runtime.status,'running');assert.ok(handle.message.content.some(c=>c.text?.includes('READ-MARKER-829')))
+  assert.equal(runtime.status,'running');assert.match(handle.sections.at(-1).text,/reasoning_content/);assert.ok(handle.sections.at(-1).order>handle.sections[0].order);assert.ok(handle.message.content.some(c=>c.text?.includes('READ-MARKER-829')))
   assert.throws(()=>f.root.jobs.get(runtime.id),/another session/)
   const search=await f.tools.get('blog_web_search').execute({query:'source'},{agent:handle.agent})
   assert.equal(search.sources[0].title,'https://example.com');assert.doesNotThrow(()=>JSON.stringify(search))
