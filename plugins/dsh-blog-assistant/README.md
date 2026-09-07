@@ -8,6 +8,10 @@
 
 本插件强制 `authenticated`。给需要写作的账号授予 `blog` 插件权限；备份管理另外检查 `backup.allowedUserIds` 中的 auth 稳定用户 ID，空列表拒绝所有交互备份和恢复。模型工具不能发布或恢复网站。配置更改通过管理器重新应用并重启生效。
 
+管理器认证配置层覆盖 Bundle 默认配置时，插件仍从 `BLOG_CONFIG_PATH` 取得同一凭据文件的路径；显式 `runtimeConfig` 优先。该变量只存路径，不存账号或密码。
+
+离线部署前需准备本插件新增依赖的包内容和对应 registry 元数据。pnpm 11 的已有可写 store 使用 SQLite 索引，仅复制新的只读包文件不会更新旧索引；应使用 pnpm 在独立临时项目中预热目标 store，保留已有索引，不能直接覆盖 `index.db`。准备完成后使用管理器原发布记录恢复。
+
 ## 宿主能力
 
 通过官方 `dsh` profile 运行，不自建第二个宿主。宿主需提供 agents、agentDefaultModel、llm、tools、systemPrompt、webServer、jobs 和 attachments。最终运行契约以仓库锁定的 DSH `0.1.3-alpha.1` 为准：原文件需要该版本的 `saveFileStream/readFileStream`，不能仅凭较旧开发依赖的类型检查认定可用。

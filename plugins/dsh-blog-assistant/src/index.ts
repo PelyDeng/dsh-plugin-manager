@@ -27,7 +27,7 @@ function json(res:ServerResponse,data:unknown){res.writeHead(200,{'content-type'
 async function body(req:IncomingMessage,max:number){const chunks:Buffer[]=[];let size=0;for await(const b of req){const chunk=Buffer.from(b);size+=chunk.length;if(size>max)throw new AccessError(413,'请求超过大小限制');chunks.push(chunk)}return Buffer.concat(chunks)}
 export async function apply(ctx:Context,config:Config){
   if(config.accessMode!=='authenticated')throw new Error('博客工作台必须接入 auth')
-  const settings=loadSettings(config.runtimeConfig)
+  const settings=loadSettings(config.runtimeConfig||process.env.BLOG_CONFIG_PATH||'')
   const root=config.dataPath||dshHomePath('plugins','blog')
   const access=createAccess(ctx,{pluginId:'blog',mode:'authenticated',publicOrigin:config.publicOrigin})
   const http=createPluginHttp(ctx,{access,routePrefix:config.routePrefix})
