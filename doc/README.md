@@ -38,7 +38,3 @@
 | 框架和官方 DSH 的职责 | [架构与包职责](architecture.md) |
 | 开发、授权及第二应用问题 | [开发者 FAQ](../plugins/dsh-example/knowledge/guide.md) |
 | 让 AI 协助开发 | [五种可复制开发提示词](../plugins/dsh-example/knowledge/prompts.md) |
-
-## 项目实践
-
-[开源项目的发现与试用准备记录](promotion-story.md)——首页、演示、发布材料和熟人反馈安排，包含实际完成情况与验证边界。
