@@ -61,12 +61,18 @@ try {
   packagePlugins(root, 'auth,example', releasePath);
   const original = JSON.parse(readFileSync(join(root, 'plugins/dsh-example/package.json')));
   const external = join(temporary, 'external example'); mkdirSync(external);
-  for (const path of ['src', 'web', 'knowledge', 'cordis.patch.yml', 'tsconfig.json', 'tsdown.config.ts', 'tsdown.web.config.ts']) cpSync(join(root, 'plugins/dsh-example', path), join(external, path), { recursive: true });
+  for (const path of ['src', 'web', 'knowledge', 'scripts', 'cordis.patch.yml', 'tsconfig.json', 'tsdown.config.ts', 'tsdown.web.config.ts']) cpSync(join(root, 'plugins/dsh-example', path), join(external, path), { recursive: true });
   const metadata = { ...original, devDependencies: { ...original.devDependencies, '@dsh-plugin-manager/plugin-kit': 'file:../plugin-kit.tgz' } };
+  // Independent authors supply the framework root explicitly, never relative to their checkout.
+  metadata.scripts = { ...original.scripts, build: 'tsdown && tsdown --config tsdown.web.config.ts' };
   json(join(external, 'package.json'), metadata);
   writeFileSync(join(external, 'pnpm-workspace.yaml'), policy);
   runPnpm(['install', '--ignore-scripts'], external);
   runPnpm(['build'], external);
+  run([join(external, 'scripts/build-reference.mjs'), '--root', root], external);
+  const reference = JSON.parse(readFileSync(join(external, 'dist/framework-reference.json')));
+  assert.ok(reference.files.some(file => file.path === '.github/workflows/check.yml'));
+  assert.ok(reference.files.some(file => file.path === 'packages/plugin-kit/src/route-path.d.mts'));
   runPnpm(['typecheck'], external);
   const plugins = JSON.parse(readFileSync(join(releasePath, 'manifest.json'))).plugins;
   const installed = JSON.parse(readFileSync(join(consumer, 'package.json')));
