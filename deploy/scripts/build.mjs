@@ -223,7 +223,7 @@ export function release({ root = repositoryRoot, config, resume = false, rebuild
       const hostUnchanged = Boolean(hostCommit) && git(['-C', host, 'rev-parse', 'HEAD']) === hostCommit
         && git(['-C', host, 'status', '--porcelain', '--untracked-files=normal']) === '';
       record.hostSourceClean = record.hostSourceClean && hostUnchanged;
-      if (reuse && (!record.hostSourceClean || record.hostCommit !== hostCommit)) throw new Error('Host source or image changed during selective build; service has not been stopped.');
+      if (reuse && ((!site.hostImage && !record.hostSourceClean) || record.hostCommit !== reuse.hostCommit)) throw new Error('Host source or image changed during selective build; service has not been stopped.');
       if ((originalConfig && !readFileSync(runtimePath).equals(originalConfig)) || (!originalConfig && existsSync(runtimePath))) throw new Error('Deployment state changed during the build.');
       candidate.containerImage = reference;
       save(record.candidatePath, candidate);

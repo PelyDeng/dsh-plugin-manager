@@ -146,10 +146,12 @@ test('repeated execution keeps the site file and uses the established deployment
   assert.equal(f.result().stopComplete, true);
 });
 
-test('selective source release packages only requested IDs, preserves all other bytes and resumes the fixed combination', t => {
+for (const hostMode of ['host source', 'registry image']) test(`selective source release with ${hostMode} preserves archives and resumes the fixed combination`, t => {
+  const immutableHost = hostMode !== 'host source';
   const f = fixture(t, { fresh: true }), ids = ['alpha', 'bravo', 'charlie', 'delta'];
   f.put('pnpm-lock.yaml', 'lockfileVersion: 9.0');
-  f.put('.local/site.json', { plugins: ids });
+  f.put('.local/site.json', { plugins: ids, ...(immutableHost ? { hostImage: base } : {}) });
+  if (immutableHost) rmSync(resolve(f.root, 'deepseek-harness/.git'));
   for (const id of ids) {
     f.put(`plugins/${id}/package.json`, { name: id, version: '0.1.0', type: 'module', main: 'dist/index.mjs', files: ['dist', 'cordis.patch.yml'],
       scripts: { build: 'node build.mjs', check: 'node check.mjs' }, dsh: { bundle: { patch: 'cordis.patch.yml' } }, deepseekPlugin: { schemaVersion: 3, id } });
@@ -157,8 +159,13 @@ test('selective source release packages only requested IDs, preserves all other 
     f.put(`plugins/${id}/cordis.patch.yml`, `- insert:\n  - id: ${id}\n    name: ${id}\n`);
   }
   const packaged = [], counts = Object.fromEntries(ids.map(id => [id, 0]));
-  let failApply = false, dirtyHostAfterPack = false, hostDirty = false;
+  let failApply = false, dirtyHostAfterPack = false, hostDirty = false, imageChanged = false;
   const execute = (bin, args, options) => {
+    if (bin === 'docker' && args[0] === 'image' && imageChanged) {
+      const value = JSON.parse(f.execute(bin, args, options));
+      value[0].Config.Labels['org.opencontainers.image.revision'] = 'd'.repeat(40);
+      return JSON.stringify(value);
+    }
     if (bin === 'git' && args[0] === '-C' && args[2] === 'status' && hostDirty) return ' M changed-host.mjs';
     if (bin === 'git' && args[0] === 'show') return readFileSync(resolve(f.root, args[1].slice(args[1].indexOf(':') + 1)), 'utf8');
     if (bin === process.execPath && args[0] === 'scripts/package-plugins.mjs') {
@@ -178,7 +185,7 @@ test('selective source release packages only requested IDs, preserves all other 
         plugins.push({ ...readPlugin(resolve(f.root, `plugins/${id}`)), directory: `plugins/${id}`, archive, sha256: digest(readFileSync(path)) });
       }
       f.put(resolve(output, 'manifest.json'), { schemaVersion: 1, plugins });
-      if (dirtyHostAfterPack) hostDirty = true;
+      if (dirtyHostAfterPack) { if (immutableHost) imageChanged = true; else hostDirty = true; }
       return '';
     }
     if (failApply && args[1] === 'apply-compose') throw new Error('selective apply interrupted');

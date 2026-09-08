@@ -9,6 +9,7 @@ const require = createRequire(import.meta.url);
 const json = path => JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 const commitPattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
+const imagePattern = /^(?:sha256:[a-f0-9]{64}|\S+@sha256:[a-f0-9]{64})$/;
 const refuse = reason => { throw new Error(`不能复用插件产物：${reason}。请执行不带 --rebuild-plugins 的全量构建。`); };
 
 /** This pre-install guard deliberately has no kit or workspace dependency. */
@@ -58,10 +59,16 @@ export function preparePluginReuse({ root, previous, active, site, revision, hos
     if (!within(resolve(root, site.artifacts), active.path) || active.project !== previous.composeProject || compose.services?.dsh?.image !== record.image || record.image !== previous.containerImage) refuse('活动 Compose 与成功发布镜像不匹配');
     const mounts = compose.services.dsh.volumes?.filter(mount => mount.target === '/opt/plugin-packages');
     if (mounts?.length !== 1 || mounts[0].type !== 'bind' || mounts[0].read_only !== true || resolve(mounts[0].source) !== dirname(manifest) || compose.services.dsh.environment?.PLUGIN_MANIFEST_FILE !== '/opt/plugin-packages/manifest.json') refuse('活动 Compose 的插件清单挂载不匹配');
-    if (!commitPattern.test(record.revision) || !commitPattern.test(revision) || !commitPattern.test(record.hostCommit) || record.hostCommit !== hostCommit || record.hostSourceClean !== true || record.hostSourceCommit !== hostCommit) refuse('缺少或改变了源码及宿主身份');
+    if (!commitPattern.test(record.revision) || !commitPattern.test(revision) || !commitPattern.test(record.hostCommit)) refuse('缺少源码或宿主镜像身份');
     if (!record.buildEnvironment || !['nodeVersion', 'platform', 'architecture', 'packageManager'].every(key => typeof record.buildEnvironment[key] === 'string' && record.buildEnvironment[key]) || !isDeepStrictEqual(record.buildEnvironment, buildEnvironment)) refuse('构建环境缺失或变化');
-    const host = resolve(root, 'deepseek-harness');
-    if (!existsSync(resolve(host, '.git')) || git(['-C', host, 'rev-parse', 'HEAD']) !== hostCommit || git(['-C', host, 'status', '--porcelain', '--untracked-files=normal'])) refuse('宿主源码缺失、变化或未提交');
+    if (site.hostImage != null) {
+      // An explicit immutable image is the host input; an unused checkout is not its provenance.
+      if (typeof site.hostImage !== 'string' || !imagePattern.test(site.hostImage) || buildEnvironment.hostImage !== site.hostImage) refuse('显式宿主镜像不是同一不可变引用');
+    } else {
+      if (record.hostCommit !== hostCommit || record.hostSourceClean !== true || record.hostSourceCommit !== hostCommit) refuse('缺少或改变了源码及宿主身份');
+      const host = resolve(root, 'deepseek-harness');
+      if (!existsSync(resolve(host, '.git')) || git(['-C', host, 'rev-parse', 'HEAD']) !== hostCommit || git(['-C', host, 'status', '--porcelain', '--untracked-files=normal'])) refuse('宿主源码缺失、变化或未提交');
+    }
     git(['cat-file', '-e', `${record.revision}^{commit}`]);
     const changes = git(['diff', '--name-only', '-z', '--no-renames', record.revision, revision, '--']).split('\0').filter(Boolean);
     const rebuiltSources = sources.filter(p => selected.has(p.id));
@@ -110,7 +117,7 @@ export function preparePluginReuse({ root, previous, active, site, revision, hos
       const { archive, archivePath, sha256, directory: _directory, ...packed } = plugin;
       if (!isDeepStrictEqual(packed, expected)) refuse(`${plugin.id} 的源码声明与旧归档不一致`);
     }
-    return { release, previousRelease: old, sourceRecord, builtFrom: record.pluginBuilds.filter(p => reused.includes(p.id)).map(p => ({ ...p })) };
+    return { release, previousRelease: old, sourceRecord, hostCommit: record.hostCommit, builtFrom: record.pluginBuilds.filter(p => reused.includes(p.id)).map(p => ({ ...p })) };
   } catch (error) {
     if (error.message.startsWith('不能复用插件产物：')) throw error;
     refuse(`旧发布或构建输入无法核验（${error.message}）`);

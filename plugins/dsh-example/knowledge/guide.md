@@ -2,7 +2,7 @@
 
 # 开发者接入 FAQ
 
-适用：框架 0.14.4（manager、kit、auth、example 同一发布版本）；宿主以实际检出与交付验证记录为准。本文是知识快照，不证明远程站点已升级。
+适用：框架 0.14.5（manager、kit、auth、example 同一发布版本）；宿主以实际检出与交付验证记录为准。本文是知识快照，不证明远程站点已升级。
 
 ## 如何统一新会话的默认模型？
 
@@ -46,7 +46,7 @@ DSH_TRUSTED_HOSTS=["dsh.example.com"]
 
 ## 运行内置应用应选择什么宿主？
 
-源码部署使用已有的 DeepSeek Harness 源码，记录实际提交；gitlink 只是检出参考，构建不自动更新宿主或要求匹配预设提交。在宿主目录按自己的 packageManager 和锁文件安装、构建。源码版本号不等于同名 npm 包已发布，不能把历史 SDK 依赖版本当作当前运行宿主。Node CLI 可通过部署配置的 harnessRoot 指向已准备的宿主源码目录；已安装的兼容宿主则使用 dshCliJs，二选一。默认密钥管理需要官方 credentials 服务和 credentials-local 存储；具体步骤见图文接入手册。
+可用已有 DeepSeek Harness 源码，或显式不可变 `DSH_HOST_IMAGE` / `hostImage`。按需复用时，源码模式要求与基线一致的干净检出；镜像模式核验同一摘要和旧成功记录的宿主提交，不要求宿主源码存在，最终镜像标签仍须一致。构建不自动下载或更新宿主。Node CLI 的 harnessRoot 指向已构建源码，dshCliJs 指向已安装 CLI，二选一；源码版本不证明 npm 已发布。密钥管理需要官方 credentials/credentials-local。
 
 ## 第一次如何配置或更换 API 密钥？
 
