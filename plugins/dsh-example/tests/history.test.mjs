@@ -1,7 +1,8 @@
 import { expect, test, vi } from 'vitest'
 import { projectHistory } from '../src/history.ts'
 
-vi.mock('@deepseek-ai/dsh-llm', () => ({
+vi.mock('@deepseek-ai/dsh-llm', async importOriginal => ({
+  ...await importOriginal(),
   expandAssistantStream: stream => stream.frames,
 }))
 
