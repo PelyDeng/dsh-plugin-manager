@@ -1,4 +1,4 @@
-DeepSeek Harness public UI glyphs: copy, check, like, dislike, branch, database, clock, think, api, send, chat, stop. Geometry retained from the public UI resources. User avatar is the existing generic account outline supplied by the product owner.
+DeepSeek Harness public UI glyphs: copy, check, chevron-down, like, dislike, branch, database, clock, think, api, send, chat, stop. Geometry retained from the public UI resources. User avatar is the existing generic account outline supplied by the product owner.
 
 MIT License
 

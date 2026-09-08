@@ -5,6 +5,53 @@ import { readConversationSnapshot } from './conversations.ts'
 
 export interface ConversationModel { provider: string; model: string; reasoningEffort?: string }
 
+export interface ConversationModelCatalog {
+  groups: { id: string; name: string; models: { id: string; name: string }[] }[]
+  failures: { id: string; name: string }[]
+  selected: ConversationModel
+}
+
+/** Auth and business selectors read the same host-owned directory and default. */
+export async function conversationModelCatalog(ctx: Context): Promise<ConversationModelCatalog> {
+  const controller = ctx.get('sessionController') as { modelCatalog?: () => Promise<ConversationModelCatalog> } | undefined
+  if (!controller?.modelCatalog) throw new AccessError(503, '宿主未提供官方模型目录')
+  const catalog = await controller.modelCatalog()
+  return {
+    groups: catalog.groups.map(group => ({ id: group.id, name: group.name, models: group.models.map(model => ({ id: model.id, name: model.name })) })),
+    failures: catalog.failures.map(group => ({ id: group.id, name: group.name })),
+    selected: defaultConversationModel(ctx),
+  }
+}
+
+/** undefined inherits the conversation; null explicitly picks the current Auth default. */
+export async function requestedConversationModel(ctx: Context, input: unknown): Promise<ConversationModel | undefined> {
+  if (input === undefined) return undefined
+  if (input !== null && (typeof input !== 'object' || Array.isArray(input)
+    || !('provider' in input) || typeof input.provider !== 'string' || !input.provider || input.provider.length > 200
+    || !('model' in input) || typeof input.model !== 'string' || !input.model || input.model.length > 200)) throw new AccessError(400, '请选择有效模型')
+  const catalog = await conversationModelCatalog(ctx)
+  const selected = input === null ? catalog.selected : input as ConversationModel
+  if (!catalog.groups.some(group => group.id === selected.provider && group.models.some(model => model.id === selected.model))) throw new AccessError(400, '该模型不在当前目录中，请刷新后重新选择')
+  const llm = ctx.get('llm') as { resolveCallConfig?: (value: ConversationModel) => Promise<ConversationModel> } | undefined
+  if (!llm?.resolveCallConfig) throw new AccessError(503, '宿主未提供模型路由校验')
+  // A concrete switch clears effort inherited from the previous model.
+  const selection = { provider: selected.provider, model: selected.model }
+  try { await llm.resolveCallConfig(selection) } catch { throw new AccessError(400, '模型路由当前不可用，请重新选择') }
+  return selection
+}
+
+/** Caller opens its own Agent and holds its busy guard before selecting. The host also updates its default. */
+export async function selectConversationModel(ctx: Context, sessionId: string, selected: ConversationModel, authorize: () => void): Promise<ConversationModel> {
+  const controller = ctx.get('sessionController') as { selectModel?: (request: ConversationModel & { sessionId: string }) => Promise<{ selected: ConversationModel }> } | undefined
+  if (!controller?.selectModel) throw new AccessError(503, '宿主未提供会话模型切换能力')
+  authorize()
+  let result
+  try { result = await controller.selectModel({ sessionId, ...selected }) }
+  catch { throw new AccessError(400, '模型切换失败，请刷新后重试') }
+  authorize()
+  return { ...result.selected }
+}
+
 export function defaultConversationModel(ctx: Context): ConversationModel {
   const defaults = ctx.get('agentDefaultModel') as { currentSelection?: () => ConversationModel } | undefined
   const selected = defaults?.currentSelection?.()

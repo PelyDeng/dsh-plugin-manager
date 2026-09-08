@@ -22,6 +22,8 @@ kit 提供可选的[会话管理协议](../../doc/conversation-management.md)。
 
 通过 `@dsh-plugin-manager/plugin-kit/models` 导入 `defaultConversationModel(ctx)` 和 `await conversationModel(ctx, id?, eventCount?)`。新会话不传 ID，读取官方默认；恢复前先验证所有权，再传 ID，通过官方 `modelSelection` 投影还原 `pending ?? lastUsed`。
 
+对话选择器通过 `conversationModelCatalog(ctx)` 读取与 Auth 相同的官方目录和默认值。将用户提交交给 `requestedConversationModel(ctx, input)`：`undefined` 沿用会话、`null` 选择当前默认、对象仅接受 `provider/model`。插件先检查归属并打开自己的 Agent，在会话忙碌保护内调用 `selectConversationModel(ctx, sessionId, selected, authorize)`，然后发送消息；`authorize` 在官方调用前后复核权限。切换直接复用官方 `sessionController.selectModel()`，记录会话选择并尝试更新宿主默认值，不需要管理员权限，也不需要前端取得控制台令牌。目录或切换能力缺失时明确报错。可复制 example 的 `web/model-picker.js` 和相应图标，独立打包到业务插件。
+
 分支可传入继承事件数，沿用该位置的模型。无模型使用记录时读取当前默认，持久化读取或投影失败则拒绝恢复。调用方在异步读取后再次检查授权，再将返回的 provider/model 传入 Agent。它不依赖 auth，auth 只是可选的共享设置入口；已运行的 Agent 不受默认变更影响。
 
 工具通过 `createPluginTools(...).register(definition, '中文名称')` 声明简洁的目录显示名，随 `ToolDescriptor.displayName` 交给 auth 展示；`name` 继续作为模型调用编码。名称由各业务插件维护，不改变工具参数、描述或执行权限。未提供显示名的旧插件仍可登记，目录回退显示编码。
