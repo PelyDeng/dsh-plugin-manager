@@ -26,6 +26,7 @@ export function article(value) {
   output.tags = [...new Set(value.tags.map(v => v.trim()))]
   invariant(Array.isArray(value.categories) && value.categories.length <= 50 && value.categories.every(v => Number.isSafeInteger(v) && v > 0), '分类无效')
   output.categories = [...new Set(value.categories)]
+  if(value.allowComment!==undefined){invariant(typeof value.allowComment==='boolean','评论开关无效');output.allowComment=value.allowComment}
   return output
 }
 export class BlogStore {
@@ -48,10 +49,10 @@ export class BlogStore {
   }
   close() { this.db.close() }
   record(owner, action, data) { this.db.prepare('INSERT INTO audit(at,owner,action,data) VALUES(?,?,?,?)').run(Date.now(), owner, action, JSON.stringify(data)) }
-  create(owner, initial = {}, remote = null) {
+  create(owner, initial = {}, remote = null, blogNative = false) {
     const content = article({ title: '', text: '', slug: '', tags: [], categories: [], format: 'markdown', ...initial })
     const now=Date.now()
-    const value = { id: randomUUID(), ...content, remote, proposal: null, sources: [], revision: 1, createdAt:now, updatedAt:now, contentUpdatedAt:now }
+    const value = { id: randomUUID(), ...content, remote, blogNative, proposal: null, sources: [], revision: 1, createdAt:now, updatedAt:now, contentUpdatedAt:now }
     this.db.prepare('INSERT INTO drafts VALUES(?,?,?,?,?)').run(value.id, owner, 1, value.updatedAt, JSON.stringify(value)); return value
   }
   list(owner, query='') { const search=String(query).trim().toLowerCase(); return this.db.prepare('SELECT data FROM drafts WHERE owner=? ORDER BY updated DESC').all(owner).map(row=>JSON.parse(row.data)).filter(d=>!search||d.title.toLowerCase().includes(search)||d.text.toLowerCase().includes(search)).map(draftSummary) }
@@ -62,7 +63,7 @@ export class BlogStore {
   save(owner, id, revision, patch) {
     const old = this.get(owner, id)
     invariant(old.revision === revision, '草稿已在其他窗口修改，请保留当前内容后重新加载', 409)
-    const now=Date.now(),contentChanged=['title','text','slug','format','tags','categories'].some(key=>Object.hasOwn(patch,key)&&!isDeepStrictEqual(old[key],patch[key]))
+    const now=Date.now(),contentChanged=['title','text','slug','format','tags','categories','allowComment'].some(key=>Object.hasOwn(patch,key)&&!isDeepStrictEqual(old[key],patch[key]))
     const next = { ...old, ...patch, id, revision: revision + 1, updatedAt: now, contentUpdatedAt:contentChanged?now:draftContentUpdatedAt(old), contentTimeSource:contentChanged?'content':draftContentTimeSource(old) }
     const result = this.db.prepare('UPDATE drafts SET revision=?,updated=?,data=? WHERE id=? AND owner=? AND revision=?').run(next.revision, next.updatedAt, JSON.stringify(next), id, owner, revision)
     invariant(result.changes === 1, '草稿修订冲突', 409); return next
@@ -72,7 +73,7 @@ export class BlogStore {
     const draft = this.get(owner, id)
     invariant(expectedProposalId===undefined||(draft.proposal?.id??null)===expectedProposalId,'候选稿已被其他任务更新，请重新读取并核对后再生成',409)
     const candidate = article({ ...draft, ...fields })
-    const proposal = { id: randomUUID(), baseRevision, before:baseRevision===draft.revision?{title:draft.title,text:draft.text,tags:draft.tags,format:draft.format}:null, fields: { title: candidate.title, text: candidate.text, tags: candidate.tags }, sources, createdAt: Date.now() }
+    const proposal = { id: randomUUID(), baseRevision, before:baseRevision===draft.revision?{title:draft.title,text:draft.text,tags:draft.tags,categories:draft.categories,allowComment:draft.allowComment,format:draft.format}:null, fields: { title: candidate.title, text: candidate.text, tags: candidate.tags, categories:candidate.categories,...(candidate.allowComment!==undefined?{allowComment:candidate.allowComment}:{}) }, sources, createdAt: Date.now() }
     // A proposal is a side record: do not increment the hand-written draft revision.
     draft.proposal = proposal
     this.db.prepare('UPDATE drafts SET data=? WHERE id=? AND owner=?').run(JSON.stringify(draft), id, owner)
@@ -81,7 +82,7 @@ export class BlogStore {
   applyProposal(owner, id, revision, proposalId, fields) {
     const d = this.get(owner, id)
     invariant(d.proposal?.id === proposalId && d.proposal.baseRevision === revision, 'AI 候选基线已变化，请比较并手动合并', 409)
-    invariant(Array.isArray(fields) && fields.length && fields.every(v => ['title','text','tags'].includes(v)), '请选择要应用的候选字段')
+    invariant(Array.isArray(fields) && fields.length && fields.every(v => ['title','text','tags','categories','allowComment'].includes(v)), '请选择要应用的候选字段')
     const patch = Object.fromEntries(fields.map(key => [key, d.proposal.fields[key]]))
     return this.save(owner, id, revision, { ...patch, sources: d.proposal.sources, proposal: null })
   }

@@ -9,20 +9,39 @@ export async function httpFixture(hostname='127.0.0.1'){
   const directory=await mkdtemp(join(tmpdir(),'dsh-blog-http-')),routes=new Map(),listeners=new Map(),effects=[],files=new Map(),revoked=new Set()
   const actors={alice:{namespace:'user',userId:'alice',sessionId:'session-a'},bob:{namespace:'user',userId:'bob',sessionId:'session-b'},eve:{namespace:'user',userId:'eve',sessionId:'session-e'}}
   const token=randomBytes(32).toString('hex'),configPath=join(directory,'config.json')
-  await writeFile(configPath,JSON.stringify({schemaVersion:1,blog:{url:'https://example.invalid',username:'fixture',password:'fixture'},image:{url:'https://example.invalid',username:'fixture',password:'fixture',strategyId:2},backup:{token,url:'http://127.0.0.1:1',allowedUserIds:['alice']}}))
+  const posts=new Map(),receipts=new Map();let nextCid=1
   const attachments={async saveFileStream({data,name}){const parts=[];for await(const p of data)parts.push(p);const b=Buffer.concat(parts),attachmentId=createHash('sha256').update(b).digest('hex');files.set(attachmentId,b);return{attachmentId,name,bytes:b.length}},async *readFileStream(ref){yield files.get(ref.attachmentId)}}
   const ctx={on(event,fn){const group=listeners.get(event)??new Set();group.add(fn);listeners.set(event,group);return()=>group.delete(fn)},emit(event,...args){for(const f of [...listeners.get(event)??[]])f(...args)},effect(fn){effects.push(fn())},get(name){return name==='attachments'?attachments:undefined},attachments,jobs:{attachController(){return()=>{}}},tools:{register(){return()=>{}}},webServer:{register(route){routes.set(route.path,route);return()=>routes.delete(route.path)}}}
   ctx.root=ctx
   ctx.on('ecosystem/providers',accept=>accept({protocol:1,ready(){},resolve(req){return actors[req.headers.cookie]},assertAccess(actor,pluginId){if(pluginId!=='blog'||!Object.values(actors).some(a=>a.userId===actor.userId&&a.sessionId===actor.sessionId)||actor.userId==='eve'||revoked.has(actor.sessionId)){const error=new Error('没有授权');error.code='DSH_ACCESS_ERROR';error.status=403;throw error}}}))
   const server=createServer((req,res)=>{
     const path=new URL(req.url,'http://localhost').pathname
+    if(path==='/action/dsh-blog-bridge'){
+      void(async()=>{let raw='';for await(const part of req)raw+=part;const input=JSON.parse(raw);let data
+        if(input.action==='status')data={nativeDrafts:true,management:true,categories:[]}
+        else if(input.action==='list')data={items:[...posts].map(([cid,p])=>({cid,title:p.savedDraft.title,hasSavedDraft:true,hasPublished:false})),status:input.status,hasMore:false}
+        else if(input.action==='get')data=posts.get(input.cid)
+        else if(input.action==='save'){
+          if(receipts.has(input.requestId))data=receipts.get(input.requestId)
+          else{const cid=input.base?.savedDraft?.cid??nextCid++,snapshot={version:String(receipts.size+1),published:null,savedDraft:{...input.content,cid},selectedVariant:'savedDraft'};posts.set(cid,snapshot);data={cid,snapshot};receipts.set(input.requestId,data)}
+        }else if(input.action==='receipt')data=receipts.has(input.requestId)?{status:'succeeded',result:receipts.get(input.requestId)}:{status:'unknown'}
+        else if(input.action==='manage-list')data={items:[],hasMore:false,page:1}
+        else if(input.action==='manage-preview')data={title:input.fields?.name??'条目',input:{kind:input.kind,operation:input.operation,fields:input.fields},impact:{note:'测试数据'}}
+        else if(input.action==='manage-write')data={id:1,kind:input.kind}
+        else{res.writeHead(400);res.end(JSON.stringify({ok:false,code:'invalid'}));return}
+        res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true,data}))
+      })().catch(()=>{res.writeHead(500);res.end()});return
+    }
     if(path==='/fixture-login'){res.writeHead(302,{'set-cookie':'alice','location':'/blog'});res.end();return}
     const route=routes.get(path);if(!route){res.writeHead(404);res.end();return}
     void Promise.resolve(route.handler(req,res)).catch(()=>{if(!res.headersSent)res.writeHead(500);res.end()})
   })
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin=`http://${hostname}:${server.address().port}`
+  await writeFile(configPath,JSON.stringify({schemaVersion:1,blog:{url:'https://blog-fixture.invalid',username:'fixture',password:'fixture'},image:{url:'https://example.invalid',username:'fixture',password:'fixture',strategyId:2},backup:{token,url:'http://127.0.0.1:1',allowedUserIds:['alice']}}))
+  const realFetch=globalThis.fetch;globalThis.fetch=(url,options)=>realFetch(String(url).replace('https://blog-fixture.invalid',origin),options)
   try{await apply(ctx,Config({runtimeConfig:configPath,dataPath:join(directory,'data'),publicOrigin:origin}))}
   catch(error){server.closeAllConnections();await new Promise(r=>server.close(r));for(const cleanup of effects.reverse())await cleanup?.();throw error}
+  finally{globalThis.fetch=realFetch}
   return{origin,ctx,actors,revoked,token,
     request(path,{actor='alice',method='GET',body,headers={}}={}){return fetch(origin+'/blog'+path,{method,redirect:'manual',headers:{origin,...actor?{cookie:actor}:{},...headers},...body===undefined?{}:{body}})},
     api(action,args={},actor='alice'){return this.request('/api',{method:'POST',actor,headers:{'content-type':'application/json'},body:JSON.stringify({action,args})})},

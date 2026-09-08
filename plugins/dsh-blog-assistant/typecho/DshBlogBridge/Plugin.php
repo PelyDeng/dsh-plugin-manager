@@ -8,6 +8,8 @@
  */
 if (!defined('__TYPECHO_ROOT_DIR__')) { exit; }
 
+require_once __DIR__ . '/Management.php';
+
 class DshBlogBridge_Plugin implements \Typecho\Plugin\PluginInterface
 {
     public static function activate()
@@ -82,6 +84,7 @@ class DshBlogBridge_Edit extends \Widget\Contents\Post\Edit
 
 class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInterface
 {
+    use DshBlogBridge_Management;
     private $bridgeDb;
     private $bridgeUser;
     private $transaction = false;
@@ -125,6 +128,10 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             elseif ($action === 'get') { $data = $this->snapshot($this->id($input['cid'] ?? null)); }
             elseif ($action === 'save') { $data = $this->saveArticle($input); }
             elseif ($action === 'delete') { $data = $this->deleteArticle($input); }
+            elseif ($action === 'manage-list') { $data = $this->managementList($input); }
+            elseif ($action === 'manage-get') { $data = $this->managementGet($input); }
+            elseif ($action === 'manage-preview') { $data = $this->managementPreview($input); }
+            elseif ($action === 'manage-write') { $data = $this->managementWrite($input); }
             elseif ($action === 'receipt') { $data = $this->receipt($input); }
             else { throw new DshBlogBridge_Error('invalid', 400); }
             $this->respond(200, ['ok' => true, 'data' => $data]);
@@ -155,7 +162,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             $this->demand(($engines[$db->getPrefix() . $name] ?? '') === 'InnoDB', 'incompatible', 503);
         }
         $categories = $db->fetchAll($db->select('mid', 'name')->from('table.metas')->where('type = ?', 'category')->order('order', \Typecho\Db::SORT_ASC));
-        return ['protocolVersion' => 1, 'version' => '0.3.2', 'structuredSearch' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
+        return ['protocolVersion' => 1, 'version' => '0.3.2', 'structuredSearch' => true, 'nativeDrafts' => true, 'management' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
     }
     private function posts(array $input): array
     {
@@ -166,13 +173,13 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
         $sql = $db->select('cid', 'title', 'type', 'status', 'modified')->from('table.contents')
             ->where('type = ? OR type = ?', 'post', 'post_draft')->where('parent = ?', 0);
         if ($status === 'published') { $sql->where('type = ? AND status = ?', 'post', 'publish'); }
-        elseif ($status === 'draft') { $sql->where('type = ? OR status <> ?', 'post_draft', 'publish'); }
-        if ($query !== '') { $sql->where('LOCATE(?, title) > 0 OR LOCATE(?, text) > 0', $query, $query); }
+        elseif ($status === 'draft') { $sql->where('type = ? OR status <> ? OR cid IN (SELECT parent FROM ' . $db->getPrefix() . 'contents WHERE type = ? AND parent > 0)', 'post_draft', 'publish', 'post_draft'); }
+        if ($query !== '') { $sql->where('LOCATE(?, title) > 0 OR LOCATE(?, text) > 0 OR cid IN (SELECT parent FROM ' . $db->getPrefix() . 'contents WHERE type = ? AND parent > 0 AND (LOCATE(?, title) > 0 OR LOCATE(?, text) > 0))', $query, $query, 'post_draft', $query, $query); }
         $rows = $db->fetchAll($sql->order('modified', \Typecho\Db::SORT_DESC)->offset(($page - 1) * 30)->limit(31));
         $items = [];
         foreach (array_slice($rows, 0, 30) as $row) {
-            $child = $db->fetchRow($db->select('cid')->from('table.contents')->where('parent = ? AND type = ?', $row['cid'], 'post_draft')->limit(1));
-            $items[] = ['cid' => (int) $row['cid'], 'title' => html_entity_decode($row['title'] ?? '', ENT_QUOTES, 'UTF-8'), 'hasPublished' => $row['type'] === 'post' && $row['status'] === 'publish', 'hasSavedDraft' => $row['type'] === 'post_draft' || !!$child, 'modified' => (int) $row['modified']];
+            $child = $db->fetchRow($db->select('cid', 'title', 'modified')->from('table.contents')->where('parent = ? AND type = ?', $row['cid'], 'post_draft')->limit(1));
+            $items[] = ['cid' => (int) $row['cid'], 'title' => html_entity_decode($child['title'] ?? $row['title'] ?? '', ENT_QUOTES, 'UTF-8'), 'hasPublished' => $row['type'] === 'post' && $row['status'] === 'publish', 'hasSavedDraft' => $row['type'] === 'post_draft' || !!$child, 'modified' => max((int) $row['modified'], (int) ($child['modified'] ?? 0))];
         }
         return ['items' => $items, 'status' => $status, 'hasMore' => count($rows) > 30];
     }
@@ -272,10 +279,12 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
         $this->status(); $db = $this->bridgeDb; $content = $input['content'] ?? null; $mode = $input['mode'] ?? '';
         $this->demand(is_array($content) && in_array($mode, ['draft', 'publish'], true));
         foreach (['title' => 300, 'text' => 500000, 'slug' => 200] as $key => $limit) { $this->demand(isset($content[$key]) && is_string($content[$key]) && mb_strlen($content[$key]) <= $limit); }
-        $this->demand(trim($content['title']) !== '' && trim($content['text']) !== '' && in_array($content['format'] ?? '', ['markdown', 'html'], true));
+        $this->demand(in_array($content['format'] ?? '', ['markdown', 'html'], true));
+        if ($mode === 'publish') { $this->demand(trim($content['title']) !== '' && trim($content['text']) !== ''); }
         $this->demand(is_array($content['tags'] ?? null) && count($content['tags']) <= 50 && is_array($content['categories'] ?? null) && count($content['categories']) <= 50);
         foreach ($content['tags'] as $tag) { $this->demand(is_string($tag) && mb_strlen($tag) <= 80 && trim($tag) !== '' && strpos($tag, ',') === false); }
         foreach ($content['categories'] as $category) { $this->id($category); $this->demand($db->fetchRow($db->select('mid')->from('table.metas')->where('mid = ? AND type = ?', $category, 'category'))); }
+        $this->demand(!isset($content['allowComment']) || is_bool($content['allowComment']));
         $requestId = $input['requestId'] ?? ''; $this->demand(is_string($requestId) && preg_match('/^[a-f0-9-]{36}$/', $requestId));
         $hash = hash('sha256', json_encode([$mode, $content, $input['base'] ?? null], JSON_THROW_ON_ERROR));
         $db->query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE', \Typecho\Db::WRITE);
@@ -301,7 +310,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             'slug' => $content['slug'], 'tags' => implode(',', $content['tags']), 'category' => $content['categories'],
             'type' => $mode === 'publish' ? 'post' : 'post_draft',
             'created' => (int) ($raw['created'] ?? ($mode === 'publish' ? $options->time : 0)),
-            'allowComment' => (int) ($raw['allowComment'] ?? $options->defaultAllowComment),
+            'allowComment' => (int) ($content['allowComment'] ?? $raw['allowComment'] ?? $options->defaultAllowComment),
             'allowPing' => (int) ($raw['allowPing'] ?? $options->defaultAllowPing),
             'allowFeed' => (int) ($raw['allowFeed'] ?? $options->defaultAllowFeed),
             'visibility' => !empty($raw['password']) ? 'password' : ($raw['status'] ?? 'publish'),

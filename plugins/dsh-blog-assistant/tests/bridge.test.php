@@ -68,7 +68,8 @@ namespace {
         public function where($sql, ...$values) { $this->conditions[] = [$sql, $values]; return $this; }
         public function matches($row) {
             foreach ($this->conditions as [$sql, $values]) {
-                if (str_contains($sql, 'LOCATE')) { if (!str_contains($row['title'], $values[0]) && !str_contains($row['text'], $values[1])) return false; continue; }
+                if(str_starts_with($sql,'type = ? OR status <> ? OR cid IN (SELECT parent')) { $children=\Typecho\Db::$fixture->tables['table.contents']; $hasChild=(bool)array_filter($children,fn($c)=>$c['type']==='post_draft'&&$c['parent']===$row['cid']); if(!($row['type']==='post_draft'||$row['status']!=='publish'||$hasChild))return false;continue; }
+                if (str_contains($sql, 'LOCATE')) { $childMatch=str_contains($sql,'SELECT parent')&&(bool)array_filter(\Typecho\Db::$fixture->tables['table.contents'],fn($c)=>$c['type']==='post_draft'&&$c['parent']===$row['cid']&&(str_contains($c['title'],$values[0])||str_contains($c['text'],$values[1])));if (!str_contains($row['title'], $values[0]) && !str_contains($row['text'], $values[1]) && !$childMatch) return false; continue; }
                 preg_match_all('/(?:table\.[a-z_]+\.)?([a-z_]+) (=|<>) \?/', $sql, $matches);
                 $terms = []; foreach ($matches[1] as $i => $key) $terms[] = $matches[2][$i] === '=' ? ($row[$key] ?? null) == $values[$i] : ($row[$key] ?? null) != $values[$i];
                 if (str_contains($sql, ' OR ') ? !in_array(true, $terms, true) : in_array(false, $terms, true)) return false;
@@ -124,8 +125,9 @@ namespace {
     $first=$list(['status'=>'published']);$second=$list(['status'=>'published','page'=>2]);$drafts=$list(['status'=>'draft']);
     check(count($first['items'])===30 && $first['hasMore'] && count($second['items'])===5 && !$second['hasMore'], 'status filtering must precede pagination');
     check(array_filter($first['items'],fn($r)=>!$r['hasPublished'])===[] && $first['items'][0]['hasSavedDraft'], 'published badge plus saved draft');
-    check(count($drafts['items'])===30 && array_filter($drafts['items'],fn($r)=>$r['hasPublished'])===[], 'draft filter excludes published roots and child drafts');
+    check(count($drafts['items'])===30 && $drafts['items'][0]['cid']===1000 && $drafts['items'][0]['hasSavedDraft'], 'draft filter includes published roots with pending changes before pagination');
     check(count($list(['status'=>'all','query'=>'%_'])['items'])===30, 'search treats percent and underscore literally');
+    check($list(['status'=>'draft','query'=>'关联保存稿'])['items'][0]['cid']===1000,'child draft title is searchable under the root article');
     rejects($list,['status'=>'invalid'],400);
     [$db,$action,$ref,$input,$run] = fixture();
     $db->tables['table.contents'][0]['views']=10;

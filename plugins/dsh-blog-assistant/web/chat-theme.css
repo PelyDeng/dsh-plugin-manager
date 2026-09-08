@@ -18,3 +18,5 @@ body[data-view=chat] .chat-composer{max-width:none;width:100%;margin:0;padding:1
 body[data-view=chat] .chat-home{display:flex}.chat-home>.chat-main{flex:1;min-width:0}.chat-prompts{width:262px;flex:none}.qa-history{max-width:none;max-height:none;box-sizing:border-box}.qa-user>.qa-avatar{order:1}
 @media(max-width:1280px){.qh-expanded .chat-prompts{display:none}}
 .qa-history{border-radius:0;box-shadow:none}@media(max-width:960px){.qa-history{height:var(--app-height)}}
+
+.chat-attachment-thumbnail{width:64px;height:64px;object-fit:contain;border:1px solid #dfe4ee;border-radius:8px;background:white}#chat-image-capability{margin:6px 0;font-size:12px;line-height:1.5}

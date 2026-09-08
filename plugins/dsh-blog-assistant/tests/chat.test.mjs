@@ -73,7 +73,8 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
       handle.sections=[];handle.contexts=[];options.setup({systemPrompt:{section(s){handle.sections.push(s)},context(c){handle.contexts.push(c)}},tools:{restrict:rule=>{handle.allowed=rule.allow}}});handles.push(handle);return handle
     },async resume(options){return this.create({...options,sessionId:options.resumeSessionId,seed:saved.get(String(options.resumeSessionId))})}},
   }
-  const attachments={freeze:()=>[]},blog={list:async()=>({items:[{cid:337,title:'现有文章'}]})}
+  const nativeRecords=new Map();let nativeCid=900
+  const attachments={freeze:()=>[]},blog={list:async()=>({items:[{cid:337,title:'现有文章'}]}),get:async id=>structuredClone(nativeRecords.get(id)),async call(action,args){if(action==='status')return{nativeDrafts:true};assert.equal(action,'save');const id=args.base?.savedDraft?.cid??nativeCid++,snapshot={published:null,savedDraft:{...args.content,cid:id},version:String(nativeCid),selectedVariant:'savedDraft'};nativeRecords.set(id,snapshot);return{cid:id,snapshot}}}
   const jobs=new BlogJobs(ctx,access,store,blog,attachments,3000),app=new BlogApplication(store,access,blog,null,null,jobs,attachments)
   const chat=new BlogChat(ctx,access,store,index,attachments,jobs,app,sdk,3000)
   t.after(async()=>{releaseOpen?.();releaseFlush?.();for(const release of releaseGates)release();await chat.close();await jobs.close();for(const dispose of disposers.reverse())await dispose?.();store.close();await runtimeJobs.dispose();await registry.dispose()})
@@ -258,8 +259,7 @@ test('chat search tools preserve structured dates and return lossless imported d
   const args={period:'yesterday',title:'测试',category:'摘抄笔记',page:2}
   await f.tools.get('blog_search_posts').execute(args,{agent});assert.deepEqual(received,args)
   const result=await f.tools.get('blog_list_drafts').execute({title:'时间检索稿'},{agent})
-  assert.equal(result.items.length,1);assert.equal(result.items[0].remote.savedDraftCid,null)
-  assert.equal(result.items[0].remote.deleted,true);assert.equal(result.items[0].contentUpdatedAt,draft.contentUpdatedAt)
+  assert.equal(result.items.length,0);assert.deepEqual(received,{title:'时间检索稿',status:'draft'})
   assert.deepEqual(result,JSON.parse(JSON.stringify(result)))
 })
 
@@ -318,7 +318,7 @@ test('new draft and retry share one logical article; manual changes reject stale
   const first=await execute('blog_select_draft',{newArticle:true}),second=await execute('blog_select_draft',{newArticle:true})
   assert.equal(first.draftId,second.draftId)
   await execute('blog_propose',{title:'标题',text:'第一版'})
-  f.store.save(owner,first.draftId,1,{text:'手写内容'})
+  f.store.save(owner,first.draftId,first.revision,{text:'手写内容'})
   await assert.rejects(execute('blog_propose',{text:'迟到的候选'}),/手动修改/)
   complete(h);await tick()
   await f.send({requestId:'request-retry',retryFrom:request.id,text:'重新给出候选'});await tick()
@@ -398,19 +398,19 @@ test('remote import is deduplicated across retries, rejects oversize before writ
   await tick();abort.abort();release({published:source});await assert.rejects(pending);assert.equal(f.store.list(owner).length,1)
 })
 
-test('draft creation rolls back if the logical request binding cannot be persisted',async t=>{
+test('native draft receipt survives failed logical binding and retry reuses the same article',async t=>{
   const f=await fixture(t);await f.send();await tick()
   const update=f.index.updateRequest.bind(f.index);let fail=true
   f.index.updateRequest=(id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected binding write failure')}return update(id,patch)}
   const execute=()=>f.tools.get('blog_select_draft').execute({newArticle:true},{agent:f.handles[0].agent})
-  await assert.rejects(execute(),/injected/);assert.equal(f.store.list(owner).length,0)
+  await assert.rejects(execute(),/injected/);assert.equal(f.store.list(owner).length,1);assert.ok(f.store.get(owner,f.store.list(owner)[0].id).blogNative)
   const selected=await execute();assert.ok(selected.draftId);assert.equal(f.store.list(owner).length,1)
 })
 
 test('image model survives removed selection, native history reopening and branch continuation',async t=>{
   const f=await fixture(t),chat=f.chat
   chat.jobs.models={text:{provider:'glm-fixture',model:'text'},vision:{provider:'glm-fixture',model:'vision'}}
-  chat.ctx.llm.resolveModelInfo=async(provider,model)=>{assert.equal(provider,'glm-fixture');return{inputModalities:model==='vision'?['text','image']:['text']}}
+  chat.ctx.llm.resolveModelInfo=async(provider,model)=>{assert.ok(['test','glm-fixture'].includes(provider));return{inputModalities:model==='vision'?['text','image']:['text']}}
   await f.send();await tick();assert.equal(f.handles[0].options.agentOptions.model,'test');complete(f.handles[0],'text-answer');await tick()
   chat.attachments.freeze=()=>[{id:'image-fixture',version:1,name:'image',image:{provider:'fixture',attachmentId:'image'}}]
   await f.send({requestId:'image-request'});await tick();assert.equal(f.handles[1].options.agentOptions.model,'vision');complete(f.handles[1],'image-answer');await tick()
@@ -473,4 +473,31 @@ test('closing aborts pending fork model lookup and cannot create an Agent after 
   assert.equal(chat.forks.size,0)
   const branch=f.index.list(owner,0).items.find(c=>c.id!==f.conversation.id)
   assert.equal(f.index.get(owner,branch.id).ready,false)
+})
+
+
+test('unsupported image model blocks submission before request creation and preserves attachments',async t=>{
+  const f=await fixture(t);f.chat.attachments.freeze=()=>[{id:'image',image:{attachmentId:'image'}}]
+  const capability=await f.chat.imageCapability(actor,f.conversation.id)
+  assert.equal(capability.available,false);assert.match(capability.message,/未声明支持图片/)
+  await assert.rejects(f.send(),/未声明支持图片/)
+  assert.equal(f.handles.length,0);assert.equal(f.chat.requests(owner,f.conversation.id).length,0)
+  f.chat.jobs.models.vision={provider:'vision-provider',model:'vision'}
+  f.chat.ctx.llm.resolveModelInfo=async(p,m)=>({inputModalities:m==='vision'?['text','image']:['text']})
+  const fallback=await f.chat.imageCapability(actor,f.conversation.id)
+  assert.equal(fallback.available,true);assert.equal(fallback.currentSupportsImages,false);assert.match(fallback.message,/本次图片将使用.*vision/)
+  await f.send();await tick();assert.equal(f.handles[0].options.agentOptions.model,'vision')
+  assert.ok(f.handles[0].message.content.some(c=>c.type==='image'));complete(f.handles[0]);await tick()
+})
+
+
+test('conversation management tool prepares a card without nonce and executes only after user confirmation',async t=>{
+  const f=await fixture(t);let writes=0
+  f.blog.call=async(action,input)=>{if(action==='manage-preview')return{input,title:'测试标签',impact:{relatedCount:2}};assert.equal(action,'manage-write');writes++;return{id:4,kind:'tag'}}
+  await f.send();await tick();const result=await f.tools.get('blog_manage_change').execute({kind:'tag',operation:'update',id:4,fields:{name:'新标签'}},{agent:f.handles[0].agent})
+  assert.equal(result.requiresUserAction,true);assert.equal(result.nonce,undefined);assert.equal(writes,0)
+  complete(f.handles[0]);await tick();const card=(await f.chat.history(actor,f.conversation.id)).operations[0]
+  assert.equal(card.management.kind,'tag');assert.equal(card.impact.relatedCount,2);assert.equal(card.canConfirm,true)
+  await f.chat.operationAction(actor,{conversationId:f.conversation.id,id:card.id,nonce:card.nonce,operation:'confirm'})
+  assert.equal(writes,1)
 })

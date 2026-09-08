@@ -1,3 +1,5 @@
+import {managementSummary} from './management.js'
+import {transferredFiles,attachmentName} from './clipboard.js'
 import {createConversationHistory} from './conversation-history.js'
 import {chatTurns} from './chat-turns.js'
 import {createThinkingTranslations} from './thinking-translation.js'
@@ -48,7 +50,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     inputs.set(state.id??'new',$('chat-input').value)
     state.epoch++;state.stream?.close();state.stream=null;clearTimeout(refreshTimer);state.pending=null;state.sending=false;state.stopping=false;state.id=id;state.history=null;state.files=[];state.feedback.clear();state.feedbackReady=false;state.liveClock=0
     $('chat-feedback-dialog').close();$('chat-file-dialog').close()
-    $('chat-input').value=inputs.get(id??'new')??'';$('chat-error').hidden=true;render();renderFiles();controls()
+    $('chat-image-capability').hidden=true;$('chat-input').value=inputs.get(id??'new')??'';$('chat-error').hidden=true;render();renderFiles();controls()
     window.dispatchEvent(new CustomEvent('blog:conversation',{detail:{id}}))
     if(id){sessionStorage.setItem(key,id);connect();await Promise.all([refresh(),loadFiles()])}else{sessionStorage.removeItem(key);focusInput()}
     if(id!==state.id)return
@@ -130,11 +132,11 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
         append(node,'operation-'+op.id,{op,unassociated:message.unassociated,busy:history.busy,pending:operationPending.has(op.id),error:operationErrors.get(op.id)});continue
       }
       const node=element('section',undefined,`chat-message ${message.role}-message`);node.dataset.message=message.id;if(message.role==='assistant'){node.classList.add('qa-assistant-turn');node.dataset.complete=String(!!message.tail||Number.isFinite(history?.turns?.find(t=>t.turn===message.turn)?.runMs))}
-      if(message.role==='tool'){const chip=element('span',undefined,`qa-tool ${message.status}`);chip.append(glyph('api'),element('small',`${{blog_search_posts:'查询博客文章',blog_read_post:'读取文章',blog_list_drafts:'查找工作台草稿',blog_select_draft:'选择写作文章',blog_propose:'保存候选稿',blog_web_search:'搜索资料',blog_web_fetch:'阅读网页',blog_publish_draft:'准备发布',blog_delete_post:'准备删除'}[message.name]??'执行博客工具'} · ${{running:'进行中',succeeded:'完成',failed:'失败',interrupted:'已中断'}[message.status]??message.status}`));node.append(chip);append(node,'message-'+message.id,message);continue}
+      if(message.role==='tool'){const chip=element('span',undefined,`qa-tool ${message.status}`);chip.append(glyph('api'),element('small',`${{blog_search_posts:'查询博客文章',blog_read_post:'读取文章',blog_list_drafts:'查询博客草稿',blog_select_draft:'选择写作文章',blog_propose:'保存候选稿',blog_web_search:'搜索资料',blog_web_fetch:'阅读网页',blog_publish_draft:'准备发布',blog_delete_post:'准备删除',blog_manage_list:'查询分类标签评论',blog_manage_get:'读取管理条目',blog_manage_change:'准备管理修改'}[message.name]??'执行博客工具'} · ${{running:'进行中',succeeded:'完成',failed:'失败',interrupted:'已中断'}[message.status]??message.status}`));node.append(chip);append(node,'message-'+message.id,message);continue}
       if(message.role==='status'){node.textContent=message.text;append(node,'message-'+message.id,message);continue}
       const content=bubble(node,message.role==='user')
       if(message.reasoning)content.append(reasoning(message.reasoning,message.reasoningSource??message.id))
-      if(message.tools?.length){const tools=element('section',undefined,'qa-tools'),head=element('h4','工具调用'),list=element('div',undefined,'qa-tool-list');for(const tool of message.tools){const chip=element('span',undefined,'qa-tool '+tool.status);chip.append(glyph('api'),element('span',({blog_search_posts:'查询博客文章',blog_read_post:'读取文章',blog_list_drafts:'查找工作台草稿',blog_select_draft:'选择写作文章',blog_propose:'保存候选稿',blog_web_search:'搜索资料',blog_web_fetch:'阅读网页',blog_publish_draft:'准备发布',blog_delete_post:'准备删除'})[tool.name]??'博客工具'),element('span',({running:'进行中',succeeded:'完成',failed:'失败',interrupted:'已中断'})[tool.status]??tool.status));list.append(chip)}tools.append(head,list);content.append(tools)}
+      if(message.tools?.length){const tools=element('section',undefined,'qa-tools'),head=element('h4','工具调用'),list=element('div',undefined,'qa-tool-list');for(const tool of message.tools){const chip=element('span',undefined,'qa-tool '+tool.status);chip.append(glyph('api'),element('span',({blog_search_posts:'查询博客文章',blog_read_post:'读取文章',blog_list_drafts:'查询博客草稿',blog_select_draft:'选择写作文章',blog_propose:'保存候选稿',blog_web_search:'搜索资料',blog_web_fetch:'阅读网页',blog_publish_draft:'准备发布',blog_delete_post:'准备删除',blog_manage_list:'查询分类标签评论',blog_manage_get:'读取管理条目',blog_manage_change:'准备管理修改'})[tool.name]??'博客工具'),element('span',({running:'进行中',succeeded:'完成',failed:'失败',interrupted:'已中断'})[tool.status]??tool.status));list.append(chip)}tools.append(head,list);content.append(tools)}
       if(message.statuses?.length)content.append(element('p',message.statuses.at(-1),'chat-stream-status'))
       const answer=message.role==='user'?element('div',message.text,'chat-user-text'):prose(message.text);if(message.role==='assistant')answer.classList.add('qa-turn-answer');content.append(answer)
       if(message.steps?.length>1){const process=element('details',undefined,'chat-step-history');process.dataset.detail='steps-'+message.displayKey;process.append(element('summary','本轮过程（'+message.steps.length+' 个模型步骤）'));for(const step of message.steps.slice(0,-1)){const section=element('section');if(step.reasoning&&step.id!==message.reasoningSource){const thought=reasoning(step.reasoning,step.id);thought.dataset.source=step.id;section.append(thought)}if(step.text)section.append(prose(step.text));process.append(section)}content.append(process)}
@@ -182,17 +184,19 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
   function operationCard(op){
     const row=element('section',undefined,'chat-result chat-operation'),deleting=op.mode==='delete',pending=operationPending.has(op.id)
     row.dataset.operation=op.id
-    const label=deleting?'删除文章':'发布草稿'
+    const label=op.mode==='manage'?'博客管理':deleting?'删除文章':'发布草稿'
     row.append(element('h3',`${label} · ${op.title}`))
     if(op.mode==='publish'){
       row.append(element('p',op.source==='proposal'?'发布内容：AI 候选稿（确认后应用并发布）':'发布内容：当前草稿'))
       const preview=element('details');preview.dataset.detail='operation-preview-'+op.id
-      preview.append(element('summary','查看将发布的完整内容'),prose(op.after?.text),element('p',`标签：${op.after?.tags?.join('、')||'无'}`));row.append(preview)
+      preview.append(element('summary','查看将发布的完整内容'),prose(op.after?.text),element('p',`标签：${op.after?.tags?.join('、')||'无'}；分类 ID：${op.after?.categories?.join('、')||'无'}；允许评论：${op.after?.allowComment===undefined?'沿用原设置':op.after.allowComment?'是':'否'}`));row.append(preview)
+    }else if(op.mode==='manage'){
+      const detail=element('pre',managementSummary(op));detail.style.whiteSpace='pre-wrap';row.append(detail)
     }else{
-      row.append(element('p','确认后永久删除以下博客内容及关联评论。图床文件和工作台副本保留。'))
+      row.append(element('p','确认后永久删除以下博客内容及关联评论。图床文件和编辑恢复数据保留。'))
       const targets=element('ul');for(const p of op.deletedArticles??[])targets.append(element('li',`${p.title} · ${p.type==='post_draft'?'博客保存稿':'博客文章'} · ID ${p.cid}`));row.append(targets)
     }
-    const status=element('p',pending?'正在处理…':({prepared:state.history?.busy?'请等待本轮回答完成后确认':op.canConfirm?'请核对内容后确认':'确认已失效，请重新发起操作',running:'执行结果待核对，请查询回执',uncertain:'执行结果待核对，请勿重复操作',succeeded:deleting?'已删除':'已发布',conflict:'文章已变化，请重新核对并发起操作',cancelled:'已取消'})[op.status]??op.status)
+    const status=element('p',pending?'正在处理…':({prepared:state.history?.busy?'请等待本轮回答完成后确认':op.canConfirm?'请核对内容后确认':'确认已失效，请重新发起操作',running:'执行结果待核对，请查询回执',uncertain:'执行结果待核对，请勿重复操作',succeeded:op.mode==='manage'?'已完成':deleting?'已删除':'已发布',conflict:'文章已变化，请重新核对并发起操作',cancelled:'已取消'})[op.status]??op.status)
     status.setAttribute('role','status');row.append(status)
     const href=url(op.result?.url);if(href){const link=element('a','查看博客文章');link.href=href;link.target='_blank';link.rel='noopener noreferrer';row.append(link)}
     let consent
@@ -207,7 +211,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     }
     const actions=element('div',undefined,'chat-operation-actions')
     if(op.status==='prepared'){
-      const confirm=button(deleting?'确认删除':'确认发布',()=>act('confirm'));confirm.className='primary'
+      const confirm=button(op.mode==='manage'?'确认执行':deleting?'确认删除':'确认发布',()=>act('confirm'));confirm.className='primary'
       confirm.disabled=pending||!op.canConfirm||!!consent;consent?.addEventListener('change',()=>{confirm.disabled=pending||!op.canConfirm||!consent.checked})
       const cancel=button('取消',()=>act('cancel'));cancel.disabled=pending||!op.canConfirm;actions.append(confirm,cancel)
     }
@@ -262,8 +266,14 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
       await Promise.all([refresh(),loadFiles(),conversations()]);bottom()
     }finally{if(epoch===state.epoch){state.sending=false;controls()}}
   }
-  async function loadFiles(){if(!state.id)return;const id=state.id,epoch=state.epoch,files=await api('attachments',{draftId:id});if(epoch!==state.epoch)return;state.files=files;renderFiles()}
-  function renderFiles(){const box=$('chat-files');box.replaceChildren();for(const a of state.files){const row=element('div',undefined,'attachment-row'),label=element('label'),check=element('input');check.type='checkbox';check.checked=a.selected;check.disabled=a.status!=='ready';check.setAttribute('aria-label',`发送 ${a.name}`);check.addEventListener('change',run(async()=>{await api('attachment-select',{draftId:state.id,id:a.id,selected:check.checked,range:a.range});await loadFiles()}));label.append(check,document.createTextNode(a.name));row.append(label,element('small',a.range?`${a.range.from}–${a.range.to} ${a.unit}`:a.message??({ready:'已就绪',failed:'解析失败',parsing:'解析中',uploading:'上传中'}[a.status]??a.status)),button('查看',()=>previewFile(a)),button('移除',async()=>{await api('attachment-remove',{draftId:state.id,id:a.id});await loadFiles()}));box.append(row)}}
+  async function loadFiles(){if(!state.id)return;const id=state.id,epoch=state.epoch,files=await api('attachments',{draftId:id});if(epoch!==state.epoch)return;state.files=files;renderFiles();void showImageCapability()}
+  async function showImageCapability(){
+    const tip=$('chat-image-capability'),epoch=state.epoch
+    if(!state.files.some(a=>a.selected&&a.kind.startsWith('image/'))){tip.hidden=true;return}
+    tip.hidden=false;tip.textContent='正在检查图片模型…'
+    try{const result=await api('chat-image-capability',{conversationId:state.id});if(epoch!==state.epoch||!state.files.some(a=>a.selected&&a.kind.startsWith('image/')))return;tip.textContent=result.message;tip.classList.toggle('warning',!result.available||!result.currentSupportsImages)}catch(e){if(epoch===state.epoch)tip.textContent='暂时无法检查图片模型：'+e.message}
+  }
+  function renderFiles(){const box=$('chat-files');box.replaceChildren();for(const a of state.files){const row=element('div',undefined,'attachment-row'),label=element('label'),check=element('input');check.type='checkbox';check.checked=a.selected;check.disabled=a.status!=='ready';check.setAttribute('aria-label',`发送 ${a.name}`);check.addEventListener('change',run(async()=>{await api('attachment-select',{draftId:state.id,id:a.id,selected:check.checked,range:a.range});await loadFiles()}));label.append(check,document.createTextNode(a.name));if(a.kind.startsWith('image/')&&a.status==='ready'){const thumb=element('img');thumb.className='chat-attachment-thumbnail';thumb.alt=a.name;thumb.src=`${base}/attachment-download?${new URLSearchParams({draftId:state.id,id:a.id,inline:'1'})}`;row.append(thumb)}row.append(label,element('small',a.range?`${a.range.from}–${a.range.to} ${a.unit}`:a.message??({ready:'已就绪',failed:'解析失败',parsing:'解析中',uploading:'上传中'}[a.status]??a.status)),button('查看',()=>previewFile(a)),button('移除',async()=>{await api('attachment-remove',{draftId:state.id,id:a.id});await loadFiles()}));box.append(row)}}
   async function previewFile(a){
     const id=state.id,epoch=state.epoch,content=await api('attachment-content',{draftId:id,id:a.id});if(epoch!==state.epoch)return
     fileTarget={draftId:id,id:a.id};$('chat-file-title').textContent=a.name;$('chat-file-description').textContent=`${content.partial?'部分解析；请明确选择范围':'解析完成'}${content.totalUnits?`，共 ${content.totalUnits} ${content.unit}`:''}`
@@ -274,11 +284,21 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
   }
   $('chat-range-save').addEventListener('click',run(async()=>{await api('attachment-select',{...fileTarget,selected:true,range:{from:Number($('chat-range-from').value),to:Number($('chat-range-to').value)}});$('chat-file-dialog').close();await loadFiles()},'chat-file-error'))
   $('chat-add-file').addEventListener('click',()=>$('chat-file-input').click())
-  $('chat-file-input').addEventListener('change',run(async()=>{
-    state.uploading=true;controls();const epoch=state.epoch,files=[...$('chat-file-input').files]
-    try{const id=await ensureConversation();for(const file of files){if(file.size>20*1024*1024)throw new Error('单份资料不能超过 20 MiB');await request(`/attachment?${new URLSearchParams({draftId:id,name:file.name})}`,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});if(epoch!==state.epoch)return}}
+  async function uploadFiles(files){
+    if(!files.length)return
+    if(state.uploading||state.sending)throw new Error('正在处理资料，请稍后再粘贴或选择文件')
+    state.uploading=true;controls();const epoch=state.epoch
+    try{const id=await ensureConversation();for(const [index,file] of files.entries()){if(epoch!==state.epoch)return;if(file.size>20*1024*1024)throw new Error('单份资料不能超过 20 MiB');await request(`/attachment?${new URLSearchParams({draftId:id,name:attachmentName(file,index)})}`,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});if(epoch!==state.epoch)return}}
     finally{try{if(epoch===state.epoch)await loadFiles()}finally{$('chat-file-input').value='';state.uploading=false;controls()}}
-  }))
+  }
+  $('chat-file-input').addEventListener('change',run(()=>uploadFiles([...$('chat-file-input').files])))
+  $('chat-input').addEventListener('paste',e=>{
+    const files=transferredFiles(e.clipboardData);if(!files.length)return
+    e.preventDefault();const text=e.clipboardData.getData('text/plain');if(text){$('chat-input').setRangeText(text,$('chat-input').selectionStart,$('chat-input').selectionEnd,'end');$('chat-input').dispatchEvent(new Event('input'))}
+    void run(()=>uploadFiles(files))()
+  })
+  $('chat-form').addEventListener('dragover',e=>{if([...e.dataTransfer?.types??[]].includes('Files')){e.preventDefault();e.dataTransfer.dropEffect='copy'}})
+  $('chat-form').addEventListener('drop',e=>{const files=transferredFiles(e.dataTransfer);if(!files.length)return;e.preventDefault();void run(()=>uploadFiles(files))()})
   $('chat-form').addEventListener('submit',run(async e=>{e.preventDefault();await send()}))
   $('chat-input').addEventListener('compositionstart',()=>{composing=true});$('chat-input').addEventListener('compositionend',()=>{composing=false})
   $('chat-input').addEventListener('keydown',e=>{if(shouldSendChatEnter(e,{touch:touchInput(),composing})){e.preventDefault();$('chat-form').requestSubmit()}})

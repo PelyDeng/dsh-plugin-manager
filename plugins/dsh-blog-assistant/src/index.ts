@@ -83,6 +83,7 @@ export async function apply(ctx:Context,config:Config){
       case 'chat-update':result=await chat.mutate(actor,args);break
       case 'chat-history':result=await chat.history(actor,args.conversationId);break
       case 'chat-send':result=await chat.send(actor,args);break
+      case 'chat-image-capability':result=await chat.imageCapability(actor,args.conversationId);break
       case 'chat-stop':result=await chat.stop(actor,args.conversationId);break
       case 'chat-fork':result=await chat.fork(actor,args);break
       case 'chat-feedback':result=await chat.feedback(actor,args.conversationId,args.operation,args);break
