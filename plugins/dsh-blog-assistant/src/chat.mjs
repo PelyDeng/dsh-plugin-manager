@@ -1,6 +1,6 @@
 import {createUserMessage} from '@deepseek-ai/dsh-llm'
 import {SessionId} from '@deepseek-ai/dsh-session'
-import {onRevoked} from '@dsh-plugin-manager/plugin-kit'
+import {onRevoked,conversationArchive,conversationRemover,previewPage,hostBusyConversationIds} from '@dsh-plugin-manager/plugin-kit'
 import {ownerKey,digest} from './store.mjs'
 import {invariant} from './settings.mjs'
 import {persona,reasoningLanguage} from './jobs.mjs'
@@ -30,12 +30,25 @@ export class BlogChat {
     const recheck=()=>{for(const b of this.active.values())try{access.assert(b.job.actor)}catch{void this.finish(b,'interrupted','登录或授权已失效')}for(const fork of this.forks.values())try{access.assert(fork.actor)}catch{fork.abort.abort()}}
     ctx.effect(()=>onRevoked(ctx,recheck))
     ctx.effect(()=>{const timer=setInterval(recheck,1000);timer.unref();return()=>clearInterval(timer)})
+    this.remove=conversationRemover(ctx,{assert:actor=>{access.assert(actor);invariant(!this.closed,'博客助手正在停止',503)},store:{
+      record:(actor,id)=>{const value=index.record(ownerKey(actor),id);invariant(value.ready,'对话尚未完成创建',409);return value},
+      mark:(actor,id,state)=>index.mark(ownerKey(actor),id,state),
+    },busy:id=>this.busy(id),inspect:async(actor,id)=>{const c=index.record(ownerKey(actor),id);const known=await ctx.sessionPersistence.stat(SessionId(id));invariant(known,'无法核验持久化会话',409);this.assertLifecycle(c,known.header)},release:async()=>{}})
+    /** @type {import('@dsh-plugin-manager/plugin-kit').ConversationProvider} */
+    this.provider={protocol:1,pluginId:'blog',list:async(actor,query)=>{access.assert(actor);return index.managed(ownerKey(actor),query,conversationArchive(ctx).archivedSessionIds,[...hostBusyConversationIds(ctx),...this.active.keys(),...this.forks.keys(),...this.forkSources.keys(),...index.pendingOperations()])},preview:async(actor,id,before)=>{
+      access.assert(actor);const c=index.record(ownerKey(actor),id);invariant(c.ready&&c.removalState!=='removed','对话不存在或无权访问',404)
+      const events=await this.persistedEvents(actor,c);access.assert(actor);invariant(index.record(ownerKey(actor),id).removalState!=='removed','会话已移除',404)
+      const owner=ownerKey(actor),requests=[...(c.inheritedRequests??[]).map(requestId=>index.request(owner,requestId)),...index.requests(owner,id,true)]
+      return previewPage(projectChat(events,requests,sdk).messages.filter(m=>['user','assistant','tool'].includes(m.role)).map(m=>({role:m.role,text:m.role==='tool'?`${m.name} · ${m.status}`:m.text,...(m.reasoning?{reasoning:m.reasoning}:{}),time:m.time})),before)
+    },remove:this.remove}
   }
+  busy(id){return this.active.has(id)||this.forks.has(id)||this.forkSources.has(id)||this.index.pendingOperations().includes(id)}
   create(actor,requestId){this.access.assert(actor);return this.publicConversation(this.index.create(ownerKey(actor),requestId))}
   publicConversation({id,title,updatedAt,ready,parent,pinned}){return{id,title,updatedAt,ready,parent,pinned:!!pinned}}
   list(actor,offset,query){this.access.assert(actor);return this.index.list(ownerKey(actor),offset,query)}
   mutate(actor,input){
     this.access.assert(actor);invariant(!this.closed,'博客助手正在停止',503)
+    if(input.operation==='delete')return this.remove(actor,input.ids).then(result=>{for(const id of input.ids)this.emit(id,{type:'changed'});invariant(result.results.every(item=>['removed','alreadyRemoved'].includes(item.status)),'部分会话未移除，请在会话管理中查看并重试',409);return{ok:true}})
     this.index.mutate(ownerKey(actor),input,id=>invariant(!this.active.has(id)&&!this.forks.has(id)&&!this.forkSources.has(id),'对话仍在回答或创建分支，请先停止或等待完成',409))
     for(const id of input.ids)this.emit(id,{type:'changed'})
     return{ok:true}

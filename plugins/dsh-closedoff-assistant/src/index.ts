@@ -11,7 +11,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { createAccess, onRevoked, registerPlugin } from '@dsh-plugin-manager/plugin-kit'
+import { createAccess, onRevoked, registerPlugin, registerConversations } from '@dsh-plugin-manager/plugin-kit'
 import { ConversationManager } from './agent.ts'
 import { ConversationStore } from './conversation-store.ts'
 import { Config as ConfigSchema, type Config as PluginConfig } from './config.ts'
@@ -48,6 +48,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   const access = createAccess(ctx, { mode: config.accessMode, pluginId: 'closedoff', publicOrigin: config.publicOrigin })
   const store = new ConversationStore(dshHomePath('plugins', 'closedoff', 'conversations.sqlite'))
   const manager = new ConversationManager(ctx, config, persona, TOOL_NAMES, access, store)
+  if(access.mode==='authenticated')ctx.effect(()=>registerConversations(ctx,manager.management()))
 
   ctx.effect(() => () => manager.dispose())
   const tools = registerTools(ctx, gateway, config, agent => manager.authorizeAgent(agent))

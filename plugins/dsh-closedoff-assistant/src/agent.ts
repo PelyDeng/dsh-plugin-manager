@@ -10,7 +10,8 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { Config } from './config.ts'
-import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, conversationArchive, conversationRemover, readConversationEvents, previewPage, hostBusyConversationIds, type ConversationProvider, type PreviewMessage, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { projectHistory } from './presentation.ts'
 import type { ConversationStore, ConversationSummary } from './conversation-store.ts'
 
 const SESSION_ID = /^closedoff-web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -31,6 +32,7 @@ export interface Conversation {
 export class ConversationManager {
   private readonly conversations = new Map<string, Conversation>()
   private readonly openings = new Map<string, Promise<Conversation | undefined>>()
+  private readonly forks = new Set<string>()
   private pendingOpens = 0
   private disposed = false
   private readonly identities = new WeakMap<object, Actor>()
@@ -43,6 +45,29 @@ export class ConversationManager {
     private readonly access: Access,
     private readonly store: ConversationStore,
   ) {}
+
+  /** Reuse the same ownership fence as send, resume and branch. */
+  management(): ConversationProvider {
+    const busy = (id: string) => !!this.conversations.get(id)?.active || this.openings.has(id) || this.forks.has(id)
+    return { protocol:1, pluginId:'closedoff', list:async(actor,query)=>{
+      this.access.assert(actor)
+      return this.store.managed(actor,query,conversationArchive(this.ctx).archivedSessionIds,[...hostBusyConversationIds(this.ctx),...[...new Set([...this.conversations.keys(),...this.openings.keys(),...this.forks])].filter(busy)])
+    }, preview:async(actor,id,before)=>{
+      this.access.assert(actor)
+      if(this.store.record(actor,id).removalState==='removed')throw new AccessError(404,'会话已移除')
+      const events=await readConversationEvents(this.ctx,id) as readonly SessionEvent[]
+      this.access.assert(actor)
+      if(this.store.record(actor,id).removalState==='removed')throw new AccessError(404,'会话已移除')
+      const messages=projectHistory(events,this.config.trackDeviceRadiusMeters).flatMap<PreviewMessage>(message=>message.role==='user'?[message]:[
+        {role:'assistant' as const,text:message.text,reasoning:message.thinking,time:message.time},
+        ...message.tools.map(tool=>({role:'tool' as const,text:`${tool.presentation.sourceLabel || tool.name} · ${tool.status}`})),
+      ])
+      return previewPage(messages,before)
+    }, remove:conversationRemover(this.ctx,{assert:actor=>{this.access.assert(actor);if(this.disposed)throw new AccessError(503,'插件正在停止')},store:this.store,busy,release:async id=>{
+      const conversation=this.conversations.get(id)
+      if(conversation){this.conversations.delete(id);await conversation.handle.dispose()}
+    }}) }
+  }
 
   /** Create a fresh namespaced conversation id. */
   createId(): string {
@@ -136,6 +161,7 @@ export class ConversationManager {
       await evicted?.dispose()
       if (this.disposed) throw new Error('conversation manager is disposed')
       this.access.assert(actor)
+      this.store.assertOwner(id,actor)
       handle = await this.ctx.agents.resume({
         resumeSessionId: SessionId(id),
         agentOptions: this.options(),
@@ -143,6 +169,7 @@ export class ConversationManager {
       })
       if (this.disposed) throw new Error('conversation manager is disposed')
       this.access.assert(actor)
+      this.store.assertOwner(id,actor)
       this.pendingOpens -= 1
       reserved = false
       const conversation = this.publish(id, handle)
@@ -219,6 +246,7 @@ export class ConversationManager {
     const id = this.createId()
     this.store.reserve(id, actor)
     const evicted = this.reserveSlot()
+    this.forks.add(conversation.id)
     let reserved = true
     try {
       await evicted?.dispose()
@@ -243,6 +271,7 @@ export class ConversationManager {
       reserved = false
       return this.publish(id, handle)
     } finally {
+      this.forks.delete(conversation.id)
       if (reserved) this.pendingOpens -= 1
     }
   }

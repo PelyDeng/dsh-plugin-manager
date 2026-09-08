@@ -26,13 +26,32 @@ function fixture(max = 2, store = new ConversationStore(':memory:')) {
   const resume = vi.fn(async (_options: unknown): Promise<ReturnType<typeof handle>> => {
     throw Object.assign(new Error('not found'), { name: 'SessionPersistenceNotFoundError' })
   })
-  const ctx = { agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'test' }) }, agents: { create, resume } } as unknown as Context
+  const services: Record<string, unknown> = {}
+  const ctx = { get: (key: string) => services[key], agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'test' }) }, agents: { create, resume } } as unknown as Context
   const manager = new ConversationManager(ctx, Config({ maxActiveConversations: max } as Config), 'persona', [], access, store)
   cleanup.push(() => manager.dispose())
-  return { manager, store, create, resume, revoked }
+  return { manager, store, create, resume, revoked, services }
 }
 
 describe('owned business conversation lifecycle', () => {
+  it('previews read-only, fences failed removal and retries official archival without resurrecting history',async()=>{
+    const {manager,store,create,resume,services}=fixture()
+    const c=(await manager.open(undefined,true,alice))!,id=c.id
+    const events=[{type:'user/message',seq:0,time:1000,data:{source:{kind:'user'},content:[{type:'text',text:'预览问题'}]}}]
+    let closed=0,fail=true;const archived:string[]=[]
+    services.sessionPersistence={async open(_id:string,mode:string){expect(mode).toBe('read');return{header:{id},async read(){return events},async close(){closed++}}}}
+    services.workspaceRegistry={archivedSessionIds:archived,async archiveSession(value:string){if(fail)throw Error('storage');archived.push(value)}}
+    const provider=manager.management(),before=store.record(alice,id)
+    expect((await provider.preview(alice,id)).messages).toEqual([{role:'user',text:'预览问题',time:1000}])
+    expect(closed).toBe(1);expect(create).toHaveBeenCalledOnce();expect(resume).not.toHaveBeenCalled();expect(store.record(alice,id)).toEqual(before)
+    await expect(provider.preview(bob,id)).rejects.toMatchObject({status:404})
+    c.active=true;expect((await provider.remove(alice,[id])).results[0]?.status).toBe('blocked');c.active=false
+    expect((await provider.remove(alice,[id])).results[0]?.status).toBe('failed')
+    await expect(manager.open(id,true,alice)).rejects.toMatchObject({status:404})
+    fail=false;expect((await provider.remove(alice,[id])).results[0]?.status).toBe('removed')
+    expect((await provider.remove(alice,[id])).results[0]?.status).toBe('alreadyRemoved')
+    expect(archived).toEqual([id]);expect(manager.list(alice,0,30)).toEqual([])
+  })
   it('rejects foreign namespaces, unknown and unassigned ids instead of claiming them', async () => {
     const { manager, create, resume } = fixture()
     expect(() => manager.validateId('session-other')).toThrow('not a closed-off')

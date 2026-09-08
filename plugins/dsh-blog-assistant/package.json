@@ -1,6 +1,6 @@
 {
   "name": "dsh-blog-assistant",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "个人博客写作、发布、图床与备份助手",
   "license": "UNLICENSED",
   "private": true,

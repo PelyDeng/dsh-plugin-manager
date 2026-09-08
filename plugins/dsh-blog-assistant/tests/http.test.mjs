@@ -35,7 +35,7 @@ test('cross-origin mutation cannot use a valid login cookie',async t=>{
   assert.equal(response.status,403)
 })
 
-test('history API searches renamed titles and applies owner-checked soft deletes without restoring them on replay',async t=>{
+test('history API searches renamed titles and retains records when official archival is unavailable',async t=>{
   const f=await httpFixture();t.after(()=>f.close())
   const first=await(await f.api('chat-create',{requestId:'http-history-first'})).json()
   const other=await(await f.api('chat-create',{requestId:'http-history-other'},'bob')).json()
@@ -43,13 +43,12 @@ test('history API searches renamed titles and applies owner-checked soft deletes
   assert.equal((await f.api('chat-update',{operation:'pin',ids:[first.id],pinned:true})).status,200)
   const found=await(await f.api('chat-list',{query:'dsh 100%_'})).json()
   assert.equal(found.items.length,1);assert.equal(found.items[0].pinned,true)
-  assert.equal((await f.api('chat-update',{operation:'delete',ids:[first.id,other.id]})).status,404)
+  assert.equal((await f.api('chat-update',{operation:'delete',ids:[first.id,other.id]})).status,503)
   assert.equal((await f.api('chat-update',{operation:'rename',ids:[first.id],title:'中'.repeat(101)})).status,400)
   assert.equal((await f.api('chat-list',{query:'x'.repeat(121)})).status,400)
   assert.equal((await f.api('chat-update',{operation:'delete',ids:[first.id,first.id]})).status,400)
-  assert.equal((await f.api('chat-update',{operation:'delete',ids:[first.id]})).status,200)
-  assert.equal((await(await f.api('chat-list')).json()).items.length,0)
-  assert.equal((await f.api('chat-history',{conversationId:first.id})).status,404)
-  assert.equal((await f.api('chat-create',{requestId:'http-history-first'})).status,404)
+  assert.equal((await f.api('chat-update',{operation:'delete',ids:[first.id]})).status,503)
+  assert.equal((await(await f.api('chat-list')).json()).items[0].id,first.id)
+  assert.equal((await(await f.api('chat-create',{requestId:'http-history-first'})).json()).id,first.id)
   assert.equal((await(await f.api('chat-list',{},'bob')).json()).items[0].id,other.id)
 })

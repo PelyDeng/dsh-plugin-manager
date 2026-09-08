@@ -24,6 +24,12 @@ describe('durable ownership', () => {
       expect(() => store.assertOwner('orphan', user)).toThrow()
       expect(() => store.assertOwner('legacy', user)).toThrow()
       expect(() => store.reserve('private', local)).toThrow()
+      store.mark(user,'private','pending');store.close();store=new ConversationStore(path)
+      expect(store.record(user,'private').removalState).toBe('failed')
+      expect(()=>store.assertOwner('private',user)).toThrow()
+      expect(store.managed(user,{offset:0,limit:30,q:'',state:'failed'},[],[]).total).toBe(1)
+      store.mark(user,'private','removed');store.close();store=new ConversationStore(path)
+      expect(store.managed(user,{offset:0,limit:30,q:'',state:''},[],[]).total).toBe(0)
     } finally { store.close(); rmSync(root, { recursive: true, force: true }) }
   })
 })

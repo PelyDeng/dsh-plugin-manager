@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto'
 import {digest} from './store.mjs'
 import {invariant} from './settings.mjs'
+import {queryConversationIndex} from '@dsh-plugin-manager/plugin-kit'
 
 /** Ownership and operation index; messages remain in official Session logs. */
 export class ChatStore {
@@ -14,6 +15,7 @@ export class ChatStore {
       const request=JSON.parse(row.data)
       if(['queued','running','stopping'].includes(request.status))this.updateRequest(row.id,{status:'interrupted',message:'服务已重启；已保存的对话可以继续'})
     }
+    this.db.exec("UPDATE conversations SET data=json_set(data,'$.removalState','failed') WHERE json_extract(data,'$.removalState')='pending'")
   }
   id(value){invariant(typeof value==='string'&&/^[\w-]{8,100}$/.test(value),'请求标识无效');return value}
   create(owner,requestId,initial={}) {
@@ -23,12 +25,16 @@ export class ChatStore {
     const value={id:'blog-chat-'+randomUUID(),owner,requestId,title:'新对话',ready:false,pinned:false,deletedAt:null,createdAt:Date.now(),updatedAt:Date.now(),parent:null,attachments:[],...initial}
     this.db.prepare('INSERT INTO conversations VALUES(?,?,?,?,?)').run(value.id,owner,requestId,value.updatedAt,JSON.stringify(value));return value
   }
-  get(owner,id){const row=this.db.prepare("SELECT data FROM conversations WHERE owner=? AND id=? AND json_extract(data,'$.deletedAt') IS NULL").get(owner,id);invariant(row,'对话不存在或无权访问',404);return JSON.parse(row.data)}
+  get(owner,id){const value=this.record(owner,id);invariant(!value.deletedAt&&!value.removalState,'对话不存在或无权访问',404);return value}
+  record(owner,id){const row=this.db.prepare('SELECT data FROM conversations WHERE owner=? AND id=?').get(owner,id);invariant(row,'对话不存在或无权访问',404);return{removalState:'',...JSON.parse(row.data)}}
+  mark(owner,id,removalState){const value=this.record(owner,id);value.removalState=removalState;if(removalState==='removed')value.deletedAt??=Date.now();this.db.prepare('UPDATE conversations SET data=? WHERE id=? AND owner=?').run(JSON.stringify(value),id,owner)}
+  managed(owner,query,archived,busy){return queryConversationIndex(this.db,"SELECT id,json_extract(data,'$.title') AS title,updated AS updatedAt,json_extract(data,'$.deletedAt') AS deletedAt,COALESCE(json_extract(data,'$.removalState'),'') AS removalState FROM conversations WHERE owner=? AND json_extract(data,'$.ready')=1",[owner],query,archived,busy)}
+  pendingOperations(){return this.db.prepare("SELECT DISTINCT json_extract(data,'$.chat.conversationId') AS id FROM operations WHERE json_extract(data,'$.status') IN ('running','uncertain') OR (json_extract(data,'$.status')='prepared' AND json_extract(data,'$.expiresAt')>?)").all(Date.now()).map(row=>row.id).filter(Boolean)}
   save(owner,id,patch){const old=this.get(owner,id),value={...old,...patch,id,owner,updatedAt:Date.now()};this.db.prepare('UPDATE conversations SET updated=?,data=? WHERE id=? AND owner=?').run(value.updatedAt,JSON.stringify(value),id,owner);return value}
   list(owner,offset=0,query=''){
     invariant(Number.isSafeInteger(offset)&&offset>=0,'分页参数无效')
     invariant(typeof query==='string'&&query.length<=120,'搜索文字应不超过 120 个字符')
-    const items=this.db.prepare("SELECT data FROM conversations WHERE owner=? AND json_extract(data,'$.deletedAt') IS NULL AND instr(lower(json_extract(data,'$.title')),lower(?))>0 ORDER BY COALESCE(json_extract(data,'$.pinned'),0) DESC,updated DESC,id LIMIT 31 OFFSET ?").all(owner,query.trim(),offset).map(r=>JSON.parse(r.data))
+    const items=this.db.prepare("SELECT data FROM conversations WHERE owner=? AND json_extract(data,'$.deletedAt') IS NULL AND COALESCE(json_extract(data,'$.removalState'),'')='' AND instr(lower(json_extract(data,'$.title')),lower(?))>0 ORDER BY COALESCE(json_extract(data,'$.pinned'),0) DESC,updated DESC,id LIMIT 31 OFFSET ?").all(owner,query.trim(),offset).map(r=>JSON.parse(r.data))
     return{items:items.slice(0,30).map(({id,title,updatedAt,ready,pinned})=>({id,title,updatedAt,ready,pinned:!!pinned})),nextOffset:items.length>30?offset+30:null}
   }
   mutate(owner,input,assertIdle=()=>{}){
@@ -47,7 +53,7 @@ export class ChatStore {
   }
   assertScope(owner,id){return typeof id==='string'&&id.startsWith('blog-chat-')?this.get(owner,id):this.store.get(owner,id)}
   request(owner,id){const row=this.db.prepare('SELECT data FROM chat_requests WHERE owner=? AND id=?').get(owner,id);invariant(row,'对话请求不存在或无权访问',404);return JSON.parse(row.data)}
-  requests(owner,conversationId){this.get(owner,conversationId);return this.db.prepare('SELECT data FROM chat_requests WHERE owner=? AND conversationId=? ORDER BY rowid').all(owner,conversationId).map(r=>JSON.parse(r.data))}
+  requests(owner,conversationId,includeRemoved=false){includeRemoved?this.record(owner,conversationId):this.get(owner,conversationId);return this.db.prepare('SELECT data FROM chat_requests WHERE owner=? AND conversationId=? ORDER BY rowid').all(owner,conversationId).map(r=>JSON.parse(r.data))}
   start(owner,conversationId,requestId,input) {
     this.id(requestId);this.get(owner,conversationId)
     const hash=digest({conversationId,...input}),old=this.db.prepare('SELECT inputHash,data FROM chat_requests WHERE owner=? AND requestId=?').get(owner,requestId)

@@ -17,6 +17,12 @@ kind: "package-bundle"
 
 流式呈现兼容旧版 `assistant/chunk` 与 DSH 0.1.3 的 `agent/assistant-stream`。新版历史使用运行时官方 `expandAssistantStream` 展开 message/attempt 中的记录，保留思考预览、工具提示、失败或取消的部分输出和首 token 时间；瞬时帧不写入持久化事件。开发依赖仍固定在已发布 SDK，版本差异集中在 `src/assistant-stream.ts`。
 
+## 会话管理
+
+closedoff 0.4.0 在 authenticated 模式接入 auth 0.12.0 的[会话管理](../../doc/conversation-management.md)。本人对话按插件分类、筛选和分页；只读预览复用现有脱敏消息投影，不恢复 Agent 或查询园区接口。批量移除使用官方归档，底层日志和独立分支保留。
+
+运行、恢复与分支创建中的记录不可移除；失败项禁止继续发送，允许刷新重试。owner 索引自动迁移至 schema 2，重启后 pending 转为可重试的 failed；旧数据不认领给新账号，standalone 历史不进入个人管理列表。
+
 ## 目录
 
 - [功能范围](#功能范围)

@@ -52,7 +52,9 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
   const access={assert(a){assert.ok(!revoked&&a.sessionId==='login','revoked')}}
   const openGate=delayedOpen?new Promise(r=>{releaseOpen=r}):Promise.resolve()
   const flushGate=delayedFlush?new Promise(r=>{releaseFlush=r}):Promise.resolve()
-  const ctx={root,jobs:root.jobs,effect:fn=>disposers.push(fn()),on:root.on.bind(root),get:()=>undefined,
+  const archived=[]
+  const ctx={root,jobs:root.jobs,effect:fn=>disposers.push(fn()),on:root.on.bind(root),get(key){return key==='agents'?root.agents:this[key]},
+    workspaceRegistry:{archivedSessionIds:archived,async archiveSession(id){assert.ok(saved.has(id));if(!archived.includes(id))archived.push(id)}},
     tools:{register(tool){tools.set(tool.name,tool);return()=>tools.delete(tool.name)}},
     agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{resolveModelInfo:async()=>({inputModalities:['text']})},
     sessions:{async flush(session){if(++flushCount===1)await flushGate;if(nextFlushGate){const gate=nextFlushGate;nextFlushGate=null;await gate}saved.set(String(session.id),session.snapshotEvents());headers.set(String(session.id),session.header);return !noPersistence}},
@@ -82,6 +84,27 @@ function complete(handle,id='answer-1'){
   handle.emit('assistant/message',{turn,message:{id,role:'assistant',source:{model:'test',provider:'test'},content:[{type:'text',text:'已查询博客'}]},stream:[]})
   handle.emit('turn/end',{turn,reason:{kind:'completed'}})
 }
+
+test('management previews without resuming and archives only owner sessions after pending operations finish',async t=>{
+  const f=await fixture(t);await f.send();await tick();complete(f.handles[0]);await tick()
+  const userEvent=f.handles[0].events.find(event=>event.type==='user/message')
+  userEvent.data={...userEvent.data,content:[{type:'text',text:'MODEL-ONLY-FROZEN-ATTACHMENT'}]}
+  const p=f.chat.provider,id=f.conversation.id,query={offset:0,limit:30,q:'',state:''}
+  const original=structuredClone(f.handles[0].events),before=f.index.record(owner,id),handles=f.handles.length
+  const preview=await p.preview(actor,id)
+  assert.ok(preview.messages.some(m=>m.text==='看看博客最近情况'))
+  assert.ok(!JSON.stringify(preview).includes('MODEL-ONLY-FROZEN-ATTACHMENT'))
+  assert.deepEqual(f.index.record(owner,id),before);assert.equal(f.handles.length,handles)
+  await assert.rejects(p.preview({...actor,userId:'another'},id),e=>e.status===404)
+  f.store.db.prepare('INSERT INTO operations(id,owner,draftId,revision,data) VALUES(?,?,?,1,?)').run('pending',owner,'draft',JSON.stringify({status:'prepared',expiresAt:Date.now()+60000,chat:{conversationId:id}}))
+  assert.equal((await p.list(actor,query)).items[0].canRemove,false)
+  assert.equal((await p.remove(actor,[id])).results[0].status,'blocked')
+  f.chat.app.operationSave('pending',{status:'cancelled',chat:{conversationId:id}})
+  assert.equal((await p.remove(actor,[id])).results[0].status,'removed')
+  assert.equal((await p.remove(actor,[id])).results[0].status,'alreadyRemoved')
+  assert.equal((await p.list(actor,query)).total,0)
+  assert.deepEqual(f.handles[0].events,original)
+})
 
 test('publish tool prepares a private confirmation card; candidate is applied only after user confirmation',async t=>{
   const f=await fixture(t),draft=f.store.create(owner,{title:'测试文章',text:'原文'}),proposal=f.store.propose(owner,draft.id,1,{text:'候选正文'},[])
@@ -189,11 +212,11 @@ test('cancelled cards cannot execute and unsupported bridges never prepare delet
 test('history actions refuse active and finishing conversations before changing any selected row',async t=>{
   const f=await fixture(t),idle=f.chat.create(actor,'history-idle')
   await f.send();await tick()
-  for(const operation of ['rename','pin','delete'])assert.throws(()=>f.chat.mutate(actor,{operation,ids:[f.conversation.id],title:'不应改名',pinned:true}),e=>e.status===409)
-  assert.throws(()=>f.chat.mutate(actor,{operation:'delete',ids:[idle.id,f.conversation.id]}),e=>e.status===409)
+  for(const operation of ['rename','pin'])assert.throws(()=>f.chat.mutate(actor,{operation,ids:[f.conversation.id],title:'不应改名',pinned:true}),e=>e.status===409)
+  await assert.rejects(f.chat.mutate(actor,{operation:'delete',ids:[idle.id,f.conversation.id]}),e=>e.status===409)
   assert.equal(f.index.get(owner,idle.id).deletedAt,null)
   const release=f.holdNextFlush(),stopping=f.chat.stop(actor,f.conversation.id);await tick()
-  assert.throws(()=>f.chat.mutate(actor,{operation:'delete',ids:[f.conversation.id]}),e=>e.status===409)
+  await assert.rejects(f.chat.mutate(actor,{operation:'delete',ids:[f.conversation.id]}),e=>e.status===409)
   release();await stopping
   assert.deepEqual(f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'保留的历史'}),{ok:true})
   assert.equal(f.chat.list(actor,0,'保留的历史').items[0].id,f.conversation.id)
@@ -211,18 +234,18 @@ test('fork source is protected during historical reads and both source and child
   const releaseFlush=f.holdNextFlush();releaseRead();await tick()
   const child=f.chat.list(actor).items.find(c=>c.id!==f.conversation.id)
   assert.ok(child)
-  for(const id of [f.conversation.id,child.id])assert.throws(()=>f.chat.mutate(actor,{operation:'delete',ids:[id]}),e=>e.status===409)
+  for(const id of [f.conversation.id,child.id])await assert.rejects(f.chat.mutate(actor,{operation:'delete',ids:[id]}),e=>e.status===409)
   releaseFlush();await pending
   assert.equal(f.chat.forkSources.size,0)
   const original=structuredClone(f.handles[0].events);let ended=0,changed=0
   const unsubscribe=f.chat.subscribe(actor,f.conversation.id,()=>{changed++},()=>{ended++})
-  f.chat.mutate(actor,{operation:'delete',ids:[f.conversation.id]})
+  await f.chat.mutate(actor,{operation:'delete',ids:[f.conversation.id]})
   assert.equal(ended,1);assert.equal(changed,0);unsubscribe()
   await assert.rejects(f.chat.history(actor,f.conversation.id),e=>e.status===404)
   assert.throws(()=>f.chat.create(actor,'conversation-123'),e=>e.status===404)
   assert.deepEqual(f.handles[0].events,original)
   assert.equal((await f.chat.history(actor,child.id)).messages.at(-1).id,'answer-1')
-  f.chat.mutate(actor,{operation:'delete',ids:[child.id]})
+  await f.chat.mutate(actor,{operation:'delete',ids:[child.id]})
   assert.throws(()=>f.chat.create(actor,'history-fork'),e=>e.status===404)
 })
 

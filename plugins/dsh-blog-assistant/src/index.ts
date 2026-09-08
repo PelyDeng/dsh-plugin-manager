@@ -11,7 +11,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { createAccess,createPluginHttp,registerPlugin,AccessError } from '@dsh-plugin-manager/plugin-kit'
+import { createAccess,createPluginHttp,registerPlugin,registerConversations,AccessError } from '@dsh-plugin-manager/plugin-kit'
 import { loadSettings } from './settings.mjs'
 import { BlogStore } from './store.mjs'
 import { BlogClient,ImageClient,BackupClient } from './connectors.mjs'
@@ -43,6 +43,7 @@ export async function apply(ctx:Context,config:Config){
   const app=new BlogApplication(store,access,blog,images,backups,jobs,attachments)
   const {chatSdk}=await import(new URL('../runtime/chat-sdk.mjs',import.meta.url).href)
   const chat=new BlogChat(ctx,access,store,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)
+  ctx.effect(()=>registerConversations(ctx,chat.provider))
   const translations=new ReasoningTranslations({ctx,pluginId:'blog',path:join(root,'reasoning-translations.sqlite'),access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
   ctx.effect(()=>async()=>{await translations.close();await chat.close();await jobs.close();await attachments.close();store.close()})
   const manifest=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'))
@@ -79,7 +80,7 @@ export async function apply(ctx:Context,config:Config){
     switch(input.action){
       case 'chat-create':result=chat.create(actor,args.requestId);break
       case 'chat-list':result=chat.list(actor,args.offset??0,args.query??'');break
-      case 'chat-update':result=chat.mutate(actor,args);break
+      case 'chat-update':result=await chat.mutate(actor,args);break
       case 'chat-history':result=await chat.history(actor,args.conversationId);break
       case 'chat-send':result=await chat.send(actor,args);break
       case 'chat-stop':result=await chat.stop(actor,args.conversationId);break
