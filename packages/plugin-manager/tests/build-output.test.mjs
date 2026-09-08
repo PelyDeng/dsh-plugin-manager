@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { presentBuild } from '../../../deploy/scripts/build-output.mjs';
 
-function fixture(t, source, isTTY = false) {
+function fixture(t, source, isTTY = false, columns = 100) {
   const root = mkdtempSync(resolve(tmpdir(), 'build-output-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const entry = resolve(root, 'build.mjs');
@@ -15,7 +15,7 @@ function fixture(t, source, isTTY = false) {
   let text = '';
   return {
     root, entry, module,
-    run: () => presentBuild(entry, [], { logDirectory: root, output: { isTTY, write: chunk => { text += chunk; } } }),
+    run: () => presentBuild(entry, [], { logDirectory: root, output: { isTTY, columns, write: chunk => { text += chunk; } } }),
     text: () => text,
     log: () => { const path = resolve(root, readdirSync(root).find(name => name.startsWith('build-')), 'build.log'); return { path, text: readFileSync(path, 'utf8') }; },
   };
@@ -34,6 +34,7 @@ test('successful builds show stages and summary while retaining noisy tool outpu
   for (const label of ['构建示例插件', '准备镜像']) {
     assert.ok(f.text().includes(`正在${label} [--------------------]   0%`));
     assert.ok(f.text().includes(`${label}已完成 [====================] 100%`));
+    assert.match(f.text(), new RegExp(`${label}已完成[^\\n]+耗时 \\d+:\\d{2}:\\d{2}\\.\\d\\n`));
   }
   assert.ok(f.text().endsWith('发布已完成\n访问地址：https://example.test\n'));
   assert.doesNotMatch(f.text(), /估算|compiler-detail|tool-warning|DSH_BUILD_PROGRESS|\x1b|\r/);
@@ -77,9 +78,44 @@ test('each interactive step starts at zero, estimates waiting progress and smoot
     if (label === '构建插件') assert.ok(percents.some(value => value > 0 && value < 10));
     assert.ok(percents.every((value, i) => value < 100 && (i === 0 || value >= percents[i - 1])));
     assert.ok(frames.every(match => (match[1].match(/=/g) ?? []).length === Math.floor(Number(match[2]) / 5)));
-    assert.ok(f.text().includes(`${label}已完成 [====================] 100%\n`));
+    assert.match(f.text(), new RegExp(`${label}已完成 \\[====================\\] 100% +耗时 \\d+:\\d{2}:\\d{2}\\.\\d\\n`));
   }
   assert.ok(f.text().indexOf('构建插件已完成') < f.text().indexOf('正在检查配置'));
+});
+
+test('long elapsed durations fit narrow terminals and an abrupt worker exit retains elapsed time', async t => {
+  const f = fixture(t, `
+    console.log('DSH_BUILD_PROGRESS ' + JSON.stringify({ type: 'start', label: '检查很长的部署配置步骤' }));
+    console.log('DSH_BUILD_PROGRESS ' + JSON.stringify({ type: 'done', label: '检查很长的部署配置步骤', elapsedMs: 3661234 }));
+    buildStep('异常退出', () => process.exit(8));
+  `, true, 40);
+  assert.equal(await f.run(), 8);
+  assert.match(f.text(), /耗时 01:01:01\.2\n/);
+  assert.match(f.text(), /耗时 00:00:00\.\d\n/);
+  for (const line of f.text().split(/\r|\n/).filter(line => line.includes('耗时'))) {
+    const visible = line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+    assert.equal([...visible].reduce((sum, char) => sum + (/[\p{Script=Han}（）]/u.test(char) ? 2 : 1), 0), 39);
+  }
+});
+
+test('elapsed time advances while the synchronous worker is busy and freezes at its measured duration', async t => {
+  const f = fixture(t, `
+    buildStep('备份运行数据', () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1100));
+    buildStep('快速检查', () => {});
+    try { buildStep('失败检查', () => { throw new Error('expected'); }); } catch {}
+  `, true);
+  assert.equal(await f.run(), 0);
+  const frames = [...f.text().matchAll(/正在备份运行数据 [^\r\n]*耗时 (\d+:\d{2}:\d{2}\.\d)/g)];
+  assert.ok(new Set(frames.map(match => match[1])).size >= 3, 'busy worker must show advancing elapsed time');
+  const events = f.log().text.split('\n').filter(line => line.startsWith('DSH_BUILD_PROGRESS ')).map(line => JSON.parse(line.slice(19)));
+  for (const event of events.filter(event => ['done', 'failed'].includes(event.type))) {
+    assert.ok(Number.isFinite(event.elapsedMs));
+    const expected = `00:00:${String(Math.floor(event.elapsedMs / 1000)).padStart(2, '0')}.${Math.floor(event.elapsedMs / 100) % 10}`;
+    const line = f.text().split(/\r|\n/).find(line => line.includes(`${event.label}${event.type === 'done' ? '已完成' : '失败'}`));
+    assert.ok(line?.endsWith(`耗时 ${expected}`), 'final time must exclude presentation animation and queue delay');
+    const visible = line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+    assert.equal([...visible].reduce((sum, char) => sum + (/[\p{Script=Han}（）]/u.test(char) ? 2 : 1), 0), 99, 'duration ends at the right terminal margin');
+  }
 });
 
 test('a failure outside a step does not reuse the previous successful step percentage', async t => {

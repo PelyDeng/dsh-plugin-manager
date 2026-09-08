@@ -64,6 +64,22 @@ test('real fresh worker reaches the pinned install and releases its lock after a
   f.absent();
 });
 
+test('source deployment rejects unsynchronized framework versions before installing or stopping a site', t => {
+  const f = snapshot(t);
+  const path = resolve(f.root, 'package.json');
+  const workspace = JSON.parse(readFileSync(path, 'utf8'));
+  workspace.version = '0.99.0';
+  writeFileSync(path, JSON.stringify(workspace, null, 2) + '\n');
+  command('git', ['add', 'package.json'], f.root); f.commit();
+  const result = spawnSync(process.execPath, ['deploy/scripts/build.mjs'], { cwd: f.root, env: f.env, encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /框架版本或文档未同步/);
+  assert.equal(existsSync(f.marker), false);
+  assert.equal(existsSync(resolve(f.root, '.local/env.conf')), false);
+  assert.match(command(process.execPath, ['deploy/scripts/build.mjs', '--help'], f.root, f.env), /build\.ps1/);
+  f.absent();
+});
+
 test('fresh workers reject malformed arguments, dirty source and pending recovery before installing', async t => {
   const f = snapshot(t);
   const invalid = spawnSync(process.execPath, ['deploy/scripts/build.mjs', '--unknown'], { cwd: f.root, env: f.env, encoding: 'utf8', windowsHide: true });

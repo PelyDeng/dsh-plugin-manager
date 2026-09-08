@@ -13,6 +13,7 @@ import { checkSourceNode } from './platform.mjs';
 import { backupSources, verifySourceBackup } from './backup.mjs';
 import { bootstrapSource, prepareWorkspaceDependencies } from './bootstrap.mjs';
 import { sourceArguments } from './release.mjs';
+import { frameworkVersion } from '../../scripts/version.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -35,6 +36,7 @@ if (!direct || !process.argv.slice(2).includes('--help')) {
     if (direct) {
       checkSourceNode();
       sourceArguments(process.argv.slice(2));
+      if (!process.argv.slice(2).includes('--resume')) frameworkVersion(repositoryRoot);
       bootstrapEnv = normalizeEnvironment(process.env);
       bootstrapped = bootstrapSource(repositoryRoot, process.argv.slice(2), bootstrapEnv, command);
     }

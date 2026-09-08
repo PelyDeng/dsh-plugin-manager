@@ -2,7 +2,7 @@
 
 先按 [README](README.md) 安装依赖、构建并运行检查。`pnpm check` 执行必要的编译、类型和语法检查，行为回归使用 `pnpm test`；CI 将两者分开运行。新增插件可复制 `plugins/dsh-example`，修改包名、插件 ID、Bundle、路由、权限及测试；通过 `plugins/*` 自动发现，不修改中央名单。独立作者参见[接入指南](doc/plugin-development.md)。
 
-公共代码按包名引用。kit 和 manager 独立版本管理；插件的运行与类型产物不得包含工作区绝对路径、`workspace:`、`file:` 或 `link:` 运行依赖。修改公共包时检查实际消费者，更新相应 README。
+公共代码按包名引用。manager、kit、auth、example 使用根 `package.json` 的统一框架版本，定制插件独立版本管理；同步命令与文档模板规则见[版本管理](doc/versioning.md)。插件的运行与类型产物不得包含工作区绝对路径、`workspace:`、`file:` 或 `link:` 运行依赖。修改公共包时检查实际消费者，更新相应 README 模板并生成说明文档。
 
 公开文档从[接入手册](doc/getting-started.md)导航到作者、部署、配置参考。能力变化需同步 example 随包 knowledge 的 FAQ/提示词；它们就是助手读取的知识，不另维护一份答案。校验来源、命令、知识大小及实际模型输入；真实模型问答与替身测试分别说明。`doc/` 仅保存当前产品的使用、开发、配置、部署、故障排查和版本资料。设计文档、开发计划、评审报告、验收记录和临时实验存放在 `.local/{项目名}/docs/{文档类型}/`，按“设计、计划、评审、验收”等类型分类，文件使用 `YYYYMMDD-HHmmss-中文文档名称.md` 命名，由 Git 忽略，不强制加入提交；个人博客、推广与邀请材料仍放在仓库外。不要把待办或本次执行结果写入使用手册。必要的兼容条件、权限规则与数据保护要求写在对应操作处。维护者发布流程见 [.github/RELEASING.md](.github/RELEASING.md)。
 
