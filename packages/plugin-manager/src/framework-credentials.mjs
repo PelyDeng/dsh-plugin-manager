@@ -1,9 +1,10 @@
-import { chownSync, existsSync, mkdirSync, openSync, closeSync, writeFileSync, fsyncSync, linkSync, unlinkSync } from 'node:fs';
+import { chownSync, existsSync, openSync, closeSync, fsyncSync, linkSync, unlinkSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { validateModelKey } from '@dsh-plugin-manager/plugin-kit/model-key';
 import { readPrivateConfig } from './literal-config.mjs';
 import { canonical, within, PENDING, readOptional } from './state.mjs';
+import { ensurePrivateDirectory, writePrivateFile } from './private-files.mjs';
 
 const inputs = new WeakMap();
 const keys = { DEEPSEEK_API_KEY: 'deepseek', ZHIPU_API_KEY: 'zhipu' };
@@ -59,14 +60,14 @@ export function prepareFrameworkCredentials(deployment, owner) {
   const directory = join(deployment.root, '.local', 'secrets', 'framework-credentials');
   if (!within(deployment.root, canonical(directory))) throw new Error('框架私有配置目录不能通过联接跳转到项目外。');
   if (owner && ![owner.uid, owner.gid].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('凭据挂载需要非root容器UID/GID。');
-  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  ensurePrivateDirectory(directory);
   const file = join(directory, `${sha256}.json`);
   if (!existsSync(file)) {
     const temporary = join(directory, `.${randomUUID()}.tmp`);
     let fd;
     try {
-      fd = openSync(temporary, 'wx', 0o600);
-      writeFileSync(fd, bytes);
+      writePrivateFile(temporary, bytes, { flag: 'wx' });
+      fd = openSync(temporary, 'r+');
       fsyncSync(fd);
       closeSync(fd); fd = undefined;
       if (owner && process.platform !== 'win32' && process.getuid?.() === 0) chownSync(temporary, owner.uid, owner.gid);

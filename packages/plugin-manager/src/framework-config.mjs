@@ -28,8 +28,8 @@ export const deploymentFields = [
   ['DSH_OFFLINE_STORE_DIR', 'offlineStore', 'string', '已准备的离线store输入目录；容器只读挂载，不修改源。'],
   ['DSH_OFFLINE_CACHE_DIR', 'offlineCache', 'string', '已准备的离线cache输入目录；容器只读挂载，不修改源。'],
   ['DSH_COMPOSE_PROJECT', 'composeProject', 'string', 'Compose项目名，默认dsh-plugins。每站点独占，已有站点不得随意更换。'],
-  ['DSH_CONTAINER_UID', 'containerUid', 'integer', '容器非root用户ID，默认1000；已有数据属主不自动递归修改。'],
-  ['DSH_CONTAINER_GID', 'containerGid', 'integer', '容器非root用户组ID，默认1000；须能读取只读运行输入并访问数据目录。'],
+  ['DSH_CONTAINER_UID', 'containerUid', 'integer', '容器非root用户ID，默认1000；macOS源码新站点按当前非root用户初始化，已有数据属主不自动递归修改。'],
+  ['DSH_CONTAINER_GID', 'containerGid', 'integer', '容器非root用户组ID，默认1000；macOS源码新站点按当前用户组初始化，须能读取运行输入并访问数据目录。'],
   ['DSH_HOST_IMAGE', 'hostImage', 'string', '可选预构建宿主镜像，必须为不可变仓库@sha256摘要；留空按源码部署流程构建/复用。'],
   ['DSH_PUBLISH_IMAGE', 'publishImage', 'string', '可选部署镜像推送目标：仓库主机/项目/镜像，不含tag。留空仅使用本机镜像。'],
   ['DSH_CONTAINER_IMAGE', 'containerImage', 'string', '仅独立apply-compose输入：不可变镜像ID或仓库摘要。源码一键构建自动生成，必须留空。'],
@@ -48,7 +48,7 @@ export const imageFields = [
   ['REGISTRY_PASSWORD', '', '私密：仓库登录密码；仅用于临时Docker登录，不传给业务宿主、不写入镜像或命令参数。'],
   ['DSH_SOURCE_BASE_IMAGE', 'docker.io/library/node:24-bookworm-slim', '官方源码构建基础镜像；默认docker.io/library/node:24-bookworm-slim。'],
   ['DSH_DEBIAN_MIRROR', 'http://deb.debian.org', 'Debian软件源地址，默认http://deb.debian.org，可按网络情况设置镜像源。'],
-  ['DSH_IMAGE_PLATFORM', 'linux/amd64', '容器构建平台：linux/amd64或linux/arm64，默认linux/amd64。'],
+  ['DSH_IMAGE_PLATFORM', 'linux/amd64', '容器构建平台：linux/amd64或linux/arm64；源码新站点按本机Docker引擎初始化，其他入口默认linux/amd64。'],
 ];
 export const imageDefaults = Object.fromEntries(imageFields.map(([key, value]) => [key, value]));
 export const credentialFields = [

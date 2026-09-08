@@ -1,6 +1,6 @@
 # 开发者接入 FAQ
 
-适用：plugin-manager 0.3.4、plugin-kit 0.1.2，示例宿主接口以仓库锁定源码为基线；宿主版本号相同也可能存在源码与发布类型差异。这是随 dsh-example 发布的知识快照，不是对远程仓库的实时查询。页面摘要标识当前知识内容；在线 main 资料可能领先于安装版本。
+适用：当前框架的 schema 3 插件声明与发布交付能力、plugin-kit 0.1.2，示例宿主接口以仓库锁定源码为基线；宿主版本号相同也可能存在源码与发布类型差异。这是随 dsh-example 发布的知识快照，不是对远程仓库的实时查询。页面摘要标识当前知识内容；在线 main 资料可能领先于安装版本。
 
 ## Auth 登录后，根路径为什么仍提示认证？
 
@@ -225,7 +225,7 @@ pnpm exec dsh-plugin-manager compose-release --root <交付根> --output release
 | 页面 404 | 核对 entryPath、routePrefix、Bundle 是否加载和实例 enabled |
 | 新应用未出现 | 完整候选清单、--plugins all、实例 enabled、运行模式与实际版本 |
 | 重启后历史变空 | 核对 home、账号、accessMode；不要先删除数据库 |
-| Windows 与 Linux 差异 | pnpm/node 命令一致；路径加引号。PowerShell 用 $env:NAME，Bash 用 export NAME；build.sh 源码部署仅 Linux Docker |
+| Windows、macOS 与 Linux 差异 | pnpm/node 命令一致，路径加引号；PowerShell 用 $env:NAME，Bash 用 export NAME。源码部署在 Windows 用根 build.ps1，macOS/Linux 用根 build.sh，要求本机 Linux Docker Compose。macOS 尚未完成真机验收 |
 | 宿主升级不兼容 | 查应用交付版本和真实启动/历史验证，保留旧环境；不要只凭 npm 版本判断 |
 
 提问时提供：manager/插件/官方 CLI 版本，操作系统与 Node/pnpm，已脱敏命令、执行目录角色、候选 ID、release/development、错误文本、期望与实际结果。不要提供完整 env.conf、Cookie、token、数据库或客户数据。助手没有读取你机器状态，不能声称检查过你的文件。

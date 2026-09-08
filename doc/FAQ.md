@@ -90,3 +90,11 @@ Compose 部署脚本确认活动容器与 home 后，使用 `docker exec` 以容
 ## 普通用户登录成功却不能进入应用怎么办？
 
 由管理员检查该账号的应用授权，以及目标插件是否启用。授予应用访问权不等于授予全部业务数据权限；业务数据范围仍由应用检查。不要用官方控制台 token 替代应用授权。
+
+## Windows、macOS 和 Linux 的源码部署入口是什么？
+
+在完整仓库根执行 Windows PowerShell 的 `.\build.ps1`，或 macOS/Linux 的 `./build.sh`。Node.js（含 npm）、Git、系统 tar 和本机 Linux Docker Compose 需提前可用，脚本只按需准备框架锁定的 pnpm。Windows 不需要 Bash，旧 deploy 目录入口仍兼容。macOS 尚未完成真机验收；具体平台限制和资源管理器中的运行步骤见[一键部署](first-deployment.md)。
+
+## 旧服务尚未停止，为什么提示使用 --resume 或保留源码锁？
+
+镜像和归档准备完成后会先保存 prepared 记录，再检查挂载权限。因此即使权限预检在停服前失败，也要保持原配置与产物，用对应 build 脚本加 `--resume` 继续。强制中断后遗留的 `.local/source-release.node.lock` 则需要先核实本机持锁者及其子进程全部退出；profile 的 `unlock` 命令不处理源码锁。备份验证只在临时容器中提取，`--resume` 不会回滚业务数据。完整处理顺序见[更新与恢复](first-deployment.md#更新与恢复)。

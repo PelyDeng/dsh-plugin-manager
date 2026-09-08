@@ -6,8 +6,10 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { resolveDeployment } from '../src/config.mjs';
-import { applyCompose } from '../src/apply-compose.mjs';
+import { applyCompose as apply, checkCompose } from '../src/apply-compose.mjs';
 import { LOCK, OWNER, PENDING, atomicJSON } from '../src/state.mjs';
+const runtime = { endpoint: 'unix:///var/run/docker.sock', id: 'test-engine', desktop: false, architecture: 'amd64' };
+const applyCompose = (deployment, release, execute) => apply(deployment, release, (args, options) => execute(args.slice(2), options), runtime);
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-compose-access-'));
@@ -16,6 +18,7 @@ function fixture(t) {
   atomicJSON(join(root, 'deployment.json'), { containerImage: `registry.example/host@sha256:${'a'.repeat(64)}`, containerUid: process.getuid?.() || 1000, containerGid: process.getgid?.() || 1000 });
   const deployment = resolveDeployment({ root, config: 'deployment.json' }, {});
   const release = { path: join(root, 'release/manifest.json'), plugins: [{ id: 'weather', healthPath: '/weather/ready', configuration: { entryId: 'weather' } }] };
+  mkdirSync(dirname(release.path), { recursive: true });
   return { root, deployment, release, settingsFile: join(deployment.home, 'plugins/weather/plugin.json') };
 }
 
@@ -108,4 +111,26 @@ test('unreadable existing settings reject deployment before stopping Docker and 
   assert.equal(statSync(f.settingsFile).uid, before.uid);
   assert.equal(statSync(f.settingsFile).gid, before.gid);
   assert.equal(statSync(f.settingsFile).mode, before.mode);
+});
+
+test('Desktop preflight uses bridge and rejects inaccessible mounts before any stop', t => {
+  const f = fixture(t), desktop = { ...runtime, desktop: true }, calls = [];
+  const generated = checkCompose(f.deployment, f.release, args => { calls.push(args); }, desktop);
+  const service = JSON.parse(readFileSync(generated.path, 'utf8')).services.dsh;
+  assert.equal(service.network_mode, undefined);
+  assert.equal(service.environment.DSH_BIND_HOST, '0.0.0.0');
+  assert.deepEqual(service.ports, [{ target: 7902, published: '7902', host_ip: '127.0.0.1', protocol: 'tcp' }]);
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].includes('--user'));
+  assert.ok(calls[0].includes('--mount'));
+  const failures = [];
+  assert.throws(() => apply(f.deployment, f.release, args => { failures.push(args); if (args.includes('run')) throw new Error('mount inaccessible'); }, desktop), /mount inaccessible/);
+  assert.ok(failures.every(args => !args.includes('stop') && !args.includes('up')));
+});
+
+test('an unexpected Docker engine rejects before writing candidate settings', t => {
+  const f = fixture(t);
+  f.deployment.config.dockerRuntime = { ...runtime, id: 'previous-engine' };
+  assert.throws(() => checkCompose(f.deployment, f.release, () => {}, runtime), /Docker 引擎/);
+  assert.equal(existsSync(f.settingsFile), false);
 });

@@ -25,7 +25,7 @@ ZHIPU_API_KEY=
 
 地址不带路径或末尾斜杠，信任项不带协议或路径。自定义端口时同时核对 URL 与反向代理。设置访问地址不会自动添加信任域名；控制台接口 403 的排查见 [FAQ](FAQ.md#控制台能打开但模型和插件报-http-403-怎么办)。
 
-文件按字面量 `KEY=VALUE` 解析，不执行 shell，不展开变量；数组和对象使用单行 JSON，含引号的字符串可用 JSON 字符串表示。重复字段、未知字段或非法类型会拒绝。相对路径从显式项目 root 解析。Linux 私有输入必须是普通文件且权限为 `0600` 或更严格；Windows 应由部署者限制文件 ACL，管理器不把 POSIX 检查冒充 Windows 权限验证。
+文件按字面量 `KEY=VALUE` 解析，不执行 shell，不展开变量；数组和对象使用单行 JSON，含引号的字符串可用 JSON 字符串表示。重复字段、未知字段或非法类型会拒绝。相对路径从显式项目 root 解析。Linux/macOS 私有输入必须是普通文件且权限为 `0600` 或更严格；Windows 通过 ACL 保护新建的框架私有配置、凭据投影、日志和备份。已有用户文件及数据目录不会被递归改权，手工提供的私有输入仍需部署者限制其 ACL。
 
 ## 密钥由谁管理
 
@@ -56,11 +56,13 @@ ZHIPU_API_KEY=
 
 镜像仓库账号和密码仅用于临时 Docker 登录，不传入 DSH。推送部署镜像时，凭据目标必须与 `DSH_PUBLISH_IMAGE` 的仓库主机一致；未填写凭据时沿用 Docker 已有登录。部署 JSON、Compose 和普通操作记录仅保存模型凭据投影的文件路径与摘要，原值保存在 `.local/secrets/framework-credentials/` 的私有文件中，并以只读挂载提供给容器。备份恢复时须保留这些被引用的原文件，不要手改或清理它们。
 
+源码入口初始化新站点时，`DSH_IMAGE_PLATFORM` 按本机 Docker 引擎选择 `linux/amd64` 或 `linux/arm64`；显式值和旧站点值保持，独立镜像入口缺省仍为 `linux/amd64`。容器 UID/GID 缺省为 1000；macOS 非 root 用户初始化源码新站点时采用当前 UID/GID。修改这些字段不会迁移或递归改权旧数据。Docker endpoint 与引擎身份记录在生成的发布记录中，不能切换引擎后继续原恢复操作。
+
 ## 三种入口
 
 | 入口 | 选取规则 |
 | --- | --- |
-| 源码 `bash deploy/build.sh` | 默认读取或初始化 `.local/env.conf`；默认 release、auth/example、本机镜像。支持显式旧站点 JSON。源码构建自动生成 manifest/containerImage，对应 env 字段必须留空。 |
+| 源码根 `build.sh` / `build.ps1` | 默认读取或初始化 `.local/env.conf`；默认 release、auth/example、本机镜像。兼容 deploy 目录入口和显式旧站点 JSON。源码构建自动生成 manifest/containerImage，对应 env 字段必须留空。 |
 | 仓库 Windows `deploy/scripts/start.ps1` | 未显式指定配置且没有 `DEPLOYMENT_CONFIG` 时使用已有 `.local/env.conf`。有配置时遵从配置 mode，缺省 release；无配置保留 development 默认值。显式 `-Mode` 优先。 |
 | 独立 manager CLI | 显式 `--root`，通过 `--config` 或 `DEPLOYMENT_CONFIG` 选择 env/JSON；不自动扫描作者仓库。默认 release，插件选集留空沿用发布清单；独立 Compose 必须提供不可变镜像。 |
 

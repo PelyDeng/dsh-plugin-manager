@@ -1,25 +1,45 @@
 import { spawnSync } from 'node:child_process';
-import { dirname, join, resolve } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
+import { basename, delimiter, dirname, extname, join, resolve } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { OWNER, STOPPED, canonical, fail, hash, json, readOptional } from './state.mjs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { createConnection } from 'node:net';
-/** Keep user arguments out of cmd.exe even on Windows by executing the JS shim. */
-export function commandSpec(command) {
+/** A copied Windows environment must not contain competing Path/PATH entries. */
+export function normalizeEnvironment(env = process.env) {
+  const result = { ...env };
+  if (process.platform === 'win32') {
+    const keys = Object.keys(result).filter(key => key.toLowerCase() === 'path');
+    const value = keys.length ? result[keys.at(-1)] : undefined;
+    for (const key of keys) delete result[key];
+    if (value !== undefined) result.PATH = value;
+  }
+  return result;
+}
+
+/** Keep user arguments out of cmd.exe even on Windows by executing the requested JS shim. */
+export function commandSpec(command, { env = process.env, cwd } = {}) {
   if (command.endsWith('.mjs') || command.endsWith('.cjs') || command.endsWith('.js')) return { command: process.execPath, prefix: [command] };
   if (process.platform !== 'win32') return { command, prefix: [] };
-  const located = spawnSync('where.exe', [command], { encoding: 'utf8' });
-  const paths = located.status === 0 ? located.stdout.trim().split(/\r?\n/) : [command];
+  env = normalizeEnvironment(env);
+  // Native filesystem lookup preserves Unicode paths, unlike locale-encoded where.exe output.
+  const extensions = extname(command) ? [''] : ['', ...(env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';')];
+  const directories = /[\\/]/.test(command) ? [''] : [cwd ?? process.cwd(), ...(env.PATH ?? '').split(delimiter)];
+  const paths = directories.flatMap(directory => extensions.map(extension => resolve(cwd ?? process.cwd(), directory.replace(/^"|"$/g, ''), command + extension)))
+    .filter(path => existsSync(path) && statSync(path).isFile());
+  const name = basename(command).replace(/\.cmd$/i, '').toLowerCase();
   for (const path of paths) {
     if (/\.(exe|com)$/i.test(path)) return { command: path, prefix: [] };
     const base = dirname(path);
-    for (const script of [join(base, 'node_modules', command.replace(/\.cmd$/i, ''), 'bin', 'pnpm.cjs'), join(base, 'node_modules/corepack/dist/pnpm.js')]) {
+    const scripts = name === 'npm' ? ['node_modules/npm/bin/npm-cli.js']
+      : name === 'pnpm' ? ['node_modules/pnpm/bin/pnpm.cjs', 'node_modules/corepack/dist/pnpm.js', 'pnpm.cjs'] : [];
+    for (const relative of scripts) {
+      const script = join(base, relative);
       if (existsSync(script)) return { command: process.execPath, prefix: [script] };
     }
     if (/\.cmd$/i.test(path) && existsSync(path)) {
       const shim = readFileSync(path, 'utf8');
-      const match = shim.match(/%dp0%[\\/]([^"\r\n]+\.(?:m?js|cjs))/i);
+      const match = shim.match(/%(?:dp0%|~dp0)[\\/]([^"\r\n]+\.(?:m?js|cjs))/i);
       if (match && existsSync(resolve(base, match[1]))) return { command: process.execPath, prefix: [resolve(base, match[1])] };
     }
   }
@@ -51,7 +71,7 @@ export function hostCLI(deployment, env = process.env) {
     if (!existsSync(path)) fail(`缺少 DSH CLI：${path}`);
     return { command: process.execPath, prefix: [path], cwd: deployment.root };
   }
-  return { ...commandSpec(binary ?? 'dsh'), cwd: deployment.root };
+  return { ...commandSpec(binary ?? 'dsh', { env, cwd: deployment.root }), cwd: deployment.root };
 }
 
 export function cliRun(cli, deployment, args, home = deployment.home) {

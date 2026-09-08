@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { resolveDeployment } from '../../packages/plugin-manager/src/config.mjs';
 import { decodeFrameworkConfig, deploymentFields, readFrameworkConfig, renderFrameworkConfig } from '../../packages/plugin-manager/src/framework-config.mjs';
 import { loadImageConfig, validateImageConfig } from '../../integrations/docker/host-image.mjs';
+import { ensurePrivateDirectory, writePrivateFile } from '../../packages/plugin-manager/src/private-files.mjs';
 
 export const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
 export function saveJson(path, value) {
@@ -13,7 +14,7 @@ export function saveJson(path, value) {
 }
 
 /** Generate a site once, importing existing deployment preferences without modifying them. */
-export function loadSite(root, filename) {
+export function loadSite(root, filename, { imagePlatform, desktop = false } = {}) {
   const defaults = readJson(resolve(root, 'deploy/config/site.defaults.json'));
   const runtimePath = resolve(root, '.local/deployment.json');
   const pointer = resolve(root, '.local/source-release.json');
@@ -24,9 +25,9 @@ export function loadSite(root, filename) {
   const sitePath = resolve(root, filename ?? original ?? '.local/env.conf');
   if (sitePath === runtimePath) throw new Error('Use .local/env.conf for site preferences; .local/deployment.json is generated.');
   if (!existsSync(sitePath)) {
-    if (filename) throw new Error(`Site configuration does not exist: ${sitePath}. Run bash deploy/build.sh without --config to initialize defaults.`);
+    if (filename) throw new Error(`Site configuration does not exist: ${sitePath}. Run build.ps1 (Windows) or build.sh (macOS/Linux) without --config to initialize defaults.`);
     if (original) throw new Error('The original interrupted site input is missing; restore it before resuming.');
-    initializeFrameworkSite(root, sitePath, runtimePath, defaults);
+    initializeFrameworkSite(root, sitePath, runtimePath, defaults, imagePlatform, desktop);
   }
   const source = sitePath.endsWith('.conf') ? readFrameworkConfig(sitePath) : undefined;
   const overrides = source?.config ?? readJson(sitePath);
@@ -56,15 +57,18 @@ export function loadSite(root, filename) {
 }
 
 /** One-time import preserves legacy files and resolved paths; no official API keys are read. */
-function initializeFrameworkSite(root, sitePath, runtimePath, defaults) {
+function initializeFrameworkSite(root, sitePath, runtimePath, defaults, imagePlatform, desktop) {
   const legacy = resolve(root, '.local/site.json');
   const previousPath = existsSync(legacy) ? legacy : existsSync(runtimePath) ? runtimePath : undefined;
   const previous = previousPath ? readJson(previousPath) : {};
-  const { manifest, containerImage, hostImageConfig, ...preferences } = previous;
+  const { manifest, containerImage, hostImageConfig, dockerRuntime, ...preferences } = previous;
   const known = new Set(deploymentFields.map(([, field]) => field));
   const unknown = Object.keys(preferences).filter(key => !known.has(key));
   if (unknown.length) throw new Error(`Legacy fields require explicit JSON compatibility or migration: ${unknown.join(', ')}.`);
   const config = previousPath ? { ...defaults, ...preferences } : {};
+  if (!previousPath && desktop && process.platform === 'darwin' && process.getuid?.() > 0 && process.getgid?.() > 0) {
+    config.containerUid = process.getuid(); config.containerGid = process.getgid();
+  }
   delete config.hostImageConfig;
   if (previousPath) {
     const current = resolveDeployment({ root, config: previousPath, 'data-root': config.dataRoot, home: config.home,
@@ -74,10 +78,11 @@ function initializeFrameworkSite(root, sitePath, runtimePath, defaults) {
     if (!existsSync(legacy) && typeof containerImage === 'string' && containerImage.includes('@sha256:')) config.publishImage = containerImage.split('@')[0];
   }
   const image = hostImageConfig ? loadImageConfig(root, hostImageConfig) : {};
+  if (!previousPath && imagePlatform) image.DSH_IMAGE_PLATFORM = imagePlatform;
   const text = renderFrameworkConfig({ config, image, privateInput: true });
   decodeFrameworkConfig(text);
-  mkdirSync(dirname(sitePath), { recursive: true });
-  writeFileSync(`${sitePath}.tmp`, text, { mode: 0o600, flag: 'wx' });
+  ensurePrivateDirectory(dirname(sitePath));
+  writePrivateFile(`${sitePath}.tmp`, text, { flag: 'wx' });
   renameSync(`${sitePath}.tmp`, sitePath);
   console.log(`Framework configuration initialized: ${sitePath}; legacy inputs retained.`);
 }

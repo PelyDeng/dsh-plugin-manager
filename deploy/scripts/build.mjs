@@ -1,6 +1,6 @@
 /** Initialize or update one checkout's site using committed source and saved release inputs. */
 import { createHash, randomUUID } from 'node:crypto';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { delimiter, dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -9,12 +9,18 @@ import { loadSite, readJson as json, saveJson as save } from './site.mjs';
 import { resolveDeployment } from '../../packages/plugin-manager/src/config.mjs';
 import { buildMessage, buildStep } from './build-output.mjs';
 import { frameworkInput, prepareFrameworkCredentials, rememberFrameworkInput } from '../../packages/plugin-manager/src/framework-credentials.mjs';
+import { commandSpec, normalizeEnvironment } from '../../packages/plugin-manager/src/process.mjs';
+import { inspectDocker, ensureDockerIdentity, assertStoppedCompose } from '../../packages/plugin-manager/src/docker-runtime.mjs';
+import { ensurePrivateDirectory, writePrivateFile } from '../../packages/plugin-manager/src/private-files.mjs';
+import { checkSourceNode } from './platform.mjs';
+import { backupSources, verifySourceBackup } from './backup.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 const immutableImage = value => typeof value === 'string' && /^(?:sha256:[a-f0-9]{64}|\S+@sha256:[a-f0-9]{64})$/.test(value);
 function command(bin, args, options) {
-  const result = spawnSync(bin, args, { stdio: 'inherit', ...options });
+  const cli = commandSpec(bin, { env: options?.env, cwd: options?.cwd });
+  const result = spawnSync(cli.command, [...cli.prefix, ...args], { stdio: 'inherit', windowsHide: true, ...options });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${bin} ${args[0]} failed (${result.status ?? result.signal}). ${result.stderr ?? ''}`);
   return result.stdout?.trim() ?? '';
@@ -30,7 +36,7 @@ export function validateBase(reference, info) {
 /** Initialize missing inputs; resume only the saved image, packages and unchanged site preferences. */
 export function release({ root = repositoryRoot, config, resume = false } = {}, execute = command, buildHost = buildHostImage) {
   root = resolve(root);
-  const env = { ...process.env };
+  const env = normalizeEnvironment(process.env);
   // Source releases take their deployment choices from the saved site file.
   for (const key of ['DEPLOYMENT_CONFIG', 'PLUGIN_MANIFEST_FILE', 'DSH_DATA_DIR', 'DSH_HOME', 'DSH_WORKSPACE', 'DSH_AUTH_URL_FILE', 'DSH_DEPLOY_ARTIFACTS', 'DSH_PROFILE', 'DSH_PUBLIC_ORIGIN', 'DSH_PUBLIC_URL', 'DSH_STORE_DIR', 'DSH_OFFLINE_STORE_DIR', 'DSH_CACHE_DIR', 'DSH_OFFLINE_CACHE_DIR']) delete env[key];
   const run = (bin, args, options = {}) => execute(bin, args, { cwd: root, env, ...options });
@@ -38,14 +44,17 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
   const capture = (bin, args) => run(bin, args, { stdio: 'pipe', encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
   const probe = (bin, args) => { try { return capture(bin, args); } catch { return null; } };
   const git = args => capture('git', args);
-  buildStep('检查构建环境', () => {
-    for (const [bin, args] of [['docker', ['info']], ['docker', ['compose', 'version']], ['npm', ['--version']], ['tar', ['--version']]]) capture(bin, args);
+  const runtime = buildStep('检查构建环境', () => {
+    capture('npm', ['--version']);
+    return inspectDocker((args, options) => run('docker', args, { stdio: 'pipe', encoding: 'utf8', ...options }));
   });
+  for (const key of Object.keys(env)) if (['DOCKER_HOST', 'DOCKER_CONTEXT'].includes(key.toUpperCase())) delete env[key];
+  env.DOCKER_HOST = runtime.endpoint;
   if (git(['status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=all'])) throw new Error('Commit source changes before release; the checkout must be clean.');
   const revision = git(['rev-parse', 'HEAD']);
   const host = resolve(root, 'deepseek-harness');
   const hostCommit = existsSync(resolve(host, '.git')) ? git(['-C', host, 'rev-parse', 'HEAD']) : undefined;
-  const { site, sitePath, runtimePath, source } = loadSite(root, config);
+  const { site, sitePath, runtimePath, source } = loadSite(root, config, { imagePlatform: `linux/${runtime.architecture}`, desktop: runtime.desktop });
   const resolvedSite = resolveDeployment({ root, config: sitePath, 'data-root': site.dataRoot, home: site.home, workspace: site.workspace, artifacts: site.artifacts, profile: site.profile }, {});
   if (source) {
     if (frameworkInput(resolvedSite)?.sha256 !== source.sha256 || hash(sitePath) !== source.sha256) throw new Error('Framework input changed while resolving the deployment.');
@@ -55,8 +64,8 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
   const prior = existsSync(pointer) ? json(pointer) : null;
   if (prior && (typeof prior.operation !== 'string' || !resolve(prior.operation).startsWith(resolve(root, '.local/artifacts') + (process.platform === 'win32' ? '\\' : '/')))) throw new Error('Invalid saved operation location.');
   const interrupted = prior && ['prepared', 'backing-up', 'applying', 'deployment-failed'].includes(prior.status);
-  if (interrupted && !resume) throw new Error('An unfinished deployment is recorded. Keep the site configuration unchanged and run bash deploy/build.sh --resume.');
-  if (resume && !interrupted) throw new Error('No unfinished prepared deployment to resume. Run bash deploy/build.sh normally.');
+  if (interrupted && !resume) throw new Error('An unfinished deployment is recorded. Keep the site configuration unchanged and run build.ps1 (Windows) or build.sh (macOS/Linux) with --resume.');
+  if (resume && !interrupted) throw new Error('No unfinished prepared deployment to resume. Run build.ps1 (Windows) or build.sh (macOS/Linux) normally.');
   const inspect = image => JSON.parse(capture('docker', ['image', 'inspect', image]))[0];
   const activeFile = resolve(root, site.artifacts, 'active-compose.json');
   const active = existsSync(activeFile) ? json(activeFile) : null;
@@ -79,17 +88,18 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
     capture(process.execPath, ['--input-type=module', '-e', 'import net from "node:net"; const s=net.createServer(); s.once("error",()=>{console.error("Requested port is unavailable.");process.exitCode=1});s.listen(Number(process.argv[1]),"127.0.0.1",()=>s.close());', String(site.port)]);
   }
   const operation = resume ? prior.operation : resolve(root, '.local/artifacts', `source-release-${revision.slice(0, 12)}-${randomUUID()}`);
-  mkdirSync(operation, { recursive: true, mode: 0o700 });
+  ensurePrivateDirectory(operation);
   const recordPath = resolve(operation, 'result.json');
-  const record = resume ? json(recordPath) : { schemaVersion: 2, operation, revision, hostCommit, sitePath, siteHash: hash(sitePath), status: 'building', previous: active, previousRuntime: previous };
+  const record = resume ? json(recordPath) : { schemaVersion: 2, operation, revision, hostCommit, sitePath, siteHash: hash(sitePath), status: 'building', previous: active, previousRuntime: previous, runtime };
   if (resume && (record.schemaVersion !== 2 || record.sitePath !== sitePath || record.siteHash !== hash(sitePath))) throw new Error('Resume requires the original unchanged site configuration. The saved release and backup are retained.');
+  if (record.runtime) ensureDockerIdentity(record.runtime, runtime);
   if (!resume && source) {
     if (record.siteHash !== source.sha256) throw new Error('Framework input changed before its private backup.');
-    writeFileSync(resolve(operation, 'framework-input.conf'), source.bytes, { mode: 0o600, flag: 'wx' });
+    writePrivateFile(resolve(operation, 'framework-input.conf'), source.bytes, { flag: 'wx' });
   }
   const persist = () => { save(recordPath, record); save(pointer, { operation, status: record.status }); };
   persist();
-  let stopped = false, installing = false;
+  let stopped = false, installing = false, prepared = resume;
   try {
     const cli = resolve(operation, 'tooling/node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs');
     if (!resume) {
@@ -120,7 +130,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
         }
       }
       prepareFrameworkCredentials(resolvedSite, { uid: site.containerUid, gid: site.containerGid });
-      const candidate = { ...site, manifest: relative(root, manifest).replaceAll('\\', '/'),
+      const candidate = { ...site, dockerRuntime: runtime, manifest: relative(root, manifest).replaceAll('\\', '/'),
         ...(resolvedSite.config.frameworkCredentials ? { frameworkCredentials: resolvedSite.config.frameworkCredentials } : {}) };
       record.candidatePath = resolve(operation, 'deployment.json');
       save(record.candidatePath, candidate);
@@ -177,14 +187,18 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       save(record.candidatePath, candidate);
       Object.assign(record, { image: reference, manager, candidateHash: hash(record.candidatePath), manifestHash: hash(manifest), manifest, plugins: json(manifest).plugins.map(({ id, version }) => ({ id, version })), status: 'prepared' });
       persist();
+      prepared = true;
+      step('核验容器挂载与权限', process.execPath, [cli, 'check-compose', '--root', root, '--config', record.candidatePath]);
     }
     if (!immutableImage(record.image) || hash(record.manifest) !== record.manifestHash || hash(record.managerArchive) !== record.managerHash || hash(record.candidatePath) !== record.candidateHash) throw new Error('Saved release inputs changed; the deployment is retained for inspection.');
     inspect(record.image);
     const candidate = json(record.candidatePath);
     if (candidate.containerImage !== record.image || resolve(root, candidate.manifest) !== record.manifest) throw new Error('Saved deployment configuration changed.');
     if (resume) step('恢复部署配置', process.execPath, [cli, 'render-compose', '--root', root, '--config', record.candidatePath, '--output', resolve(operation, 'resume-preflight')]);
+    if (resume) step('核验容器挂载与权限', process.execPath, [record.runtime ? cli : resolve(root, 'deploy/scripts/deployment.mjs'), 'check-compose', '--root', root, '--config', record.candidatePath]);
+    if (record.backupComplete) verifySourceBackup(record, { image: record.image, desktop: runtime.desktop }, run);
     if (record.previous && !record.backupComplete) {
-      const backup = resolve(operation, 'backup'); mkdirSync(backup, { recursive: true, mode: 0o700 });
+      const backup = resolve(operation, 'backup'); ensurePrivateDirectory(backup);
       record.backup = backup; record.status = 'backing-up'; persist();
       save(resolve(backup, 'deployment.json'), record.previousRuntime);
       save(resolve(backup, 'active-compose.json'), record.previous);
@@ -192,11 +206,11 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       const oldArgs = ['compose', '-p', record.previous.project, '-f', record.previous.path];
       step('停止旧服务', 'docker', [...oldArgs, 'stop', 'dsh']); stopped = true;
       if (capture('docker', [...oldArgs, 'ps', '--status', 'running', '-q', 'dsh'])) throw new Error('The previous service is still running; backup refused.');
-      const mounts = json(record.previous.path).services.dsh.volumes.filter(m => m.type === 'bind' && (!m.read_only || m.target.startsWith('/run/'))).map(m => m.source);
-      if (!mounts.length || mounts.some(path => !path.startsWith('/') || path === '/')) throw new Error('Invalid persistent mounts for backup.');
-      const archive = resolve(backup, `runtime-${randomUUID()}.tar.gz`);
-      step('备份运行数据', 'tar', ['-czf', archive, '--', ...new Set(mounts)]); chmodSync(archive, 0o600);
-      record.backupArchive = archive; record.backupComplete = true; persist();
+      const oldCompose = json(record.previous.path);
+      const containerIds = capture('docker', [...oldArgs, 'ps', '-a', '-q', 'dsh']).split(/\s+/).filter(Boolean);
+      assertStoppedCompose(oldCompose, containerIds, record.image, (args, options) => run('docker', args, { stdio: 'pipe', encoding: 'utf8', ...options }), runtime);
+      const snapshot = buildStep('备份运行数据', () => backupSources({ compose: oldCompose, backupDir: backup, image: record.image, desktop: runtime.desktop }, run));
+      Object.assign(record, snapshot, { backupComplete: true }); persist();
     }
     record.status = 'applying'; persist(); installing = true;
     save(runtimePath, candidate);
@@ -205,9 +219,9 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
     buildMessage(`发布已完成：${record.revision.slice(0, 12)}\n访问地址：${site.publicUrl}\n发布记录：${recordPath}`);
     return record;
   } catch (error) {
-    record.status = installing || resume ? 'deployment-failed' : 'build-failed'; persist();
+    record.status = installing || prepared ? 'deployment-failed' : 'build-failed'; persist();
     if (stopped && !installing) step('恢复旧服务', 'docker', ['compose', '-p', record.previous.project, '-f', record.previous.path, 'up', '-d', '--wait', 'dsh']);
-    console.error(`Release failed; inputs retained at ${operation}.${record.status === 'deployment-failed' ? ' Retry the saved deployment with bash deploy/build.sh --resume.' : ' Correct the build error and run bash deploy/build.sh again.'}`);
+    console.error(`Release failed; inputs retained at ${operation}.${record.status === 'deployment-failed' ? ' Retry the saved deployment using your build script with --resume.' : ' Correct the build error and run your build script again.'}`);
     throw error;
   }
 }
@@ -215,11 +229,9 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const args = process.argv.slice(2), options = {};
-    if (args.includes('--help')) console.log('bash deploy/build.sh [--config <env.conf|site.json>] [--resume]\nFirst run initializes .local/env.conf (legacy JSON remains explicit-compatible); .local/deployment.json and release records are generated.\nRequires Linux, Node.js ^22.19 or >=24, npm, Git, Docker Compose, tar and flock. pnpm is prepared automatically.');
+    if (args.includes('--help')) console.log('Windows: .\\build.ps1 [--config <env.conf|site.json>] [--resume]\nmacOS/Linux: ./build.sh [--config <env.conf|site.json>] [--resume]\nFirst run initializes .local/env.conf (legacy JSON remains explicit-compatible); .local/deployment.json and release records are generated.\nRequires Node.js ^22.19 or >=24, npm, Git, local Linux Docker Compose and system tar. pnpm is prepared automatically.');
     else {
-      if (process.platform !== 'linux') throw new Error('Source deployment requires Linux and Docker Compose.');
-      const [major, minor] = process.versions.node.split('.').map(Number);
-      if (!(major === 22 && minor >= 19 || major >= 24)) throw new Error('Use Node.js ^22.19 or >=24.');
+      checkSourceNode();
       while (args.length) {
         const flag = args.shift();
         if (flag === '--resume' && !options.resume) options.resume = true;
@@ -229,4 +241,5 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       release(options);
     }
   } catch (error) { console.error(error.message); process.exitCode = 1; }
+  if (typeof process.send === 'function') process.send({ type: 'source-build-finished', code: process.exitCode ?? 0 }, () => process.disconnect());
 }

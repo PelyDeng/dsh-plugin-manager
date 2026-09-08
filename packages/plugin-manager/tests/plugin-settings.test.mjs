@@ -85,7 +85,7 @@ test('apply generates one complete Compose document and preserves existing setti
   f.settings('weather', { accessMode: 'standalone' });
   const file = join(f.deployment.home, 'plugins/weather/plugin.json'), before = readFileSync(file, 'utf8');
   if (process.getuid?.() === 0) for (const path of [f.deployment.dataRoot, f.deployment.home, join(f.deployment.home, 'plugins'), dirname(file), file]) chownSync(path, f.deployment.config.containerUid, f.deployment.config.containerGid);
-  const result = applyCompose(f.deployment, f.release, args => calls.push(args));
+  const result = applyCompose(f.deployment, f.release, args => calls.push(args.slice(2)), { endpoint: 'unix:///var/run/docker.sock', id: 'settings-test', desktop: false, architecture: 'amd64' });
   assert.equal(readFileSync(file, 'utf8'), before);
   assert.ok(existsSync(join(f.deployment.home, 'plugins/identity/plugin.json')));
   assert.deepEqual(calls.map(args => args.slice(5)), [['stop', 'dsh'], ['up', '-d', '--force-recreate', '--wait', '--wait-timeout', '180', 'dsh']]);

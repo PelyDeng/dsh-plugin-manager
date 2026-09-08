@@ -36,12 +36,13 @@ function fixture() {
 test('无node_modules的新检出能显示帮助，并在打包前检查宿主和参数', () => {
   const f = fixture();
   try {
-    for (const name of ['scripts/test-report.mjs', 'packages/plugin-manager/src/pnpm.mjs']) {
+    for (const name of ['scripts/test-report.mjs', 'packages/plugin-manager/src/pnpm.mjs', 'packages/plugin-manager/src/process.mjs', 'packages/plugin-manager/src/state.mjs']) {
       const source = resolve(dirname(entry), '..', name), target = join(f.root, name);
       mkdirSync(dirname(target), { recursive: true }); cpSync(source, target);
     }
     const invoke = extra => spawnSync(process.execPath, [join(f.root, 'scripts/test-report.mjs'), '--root', f.root, ...extra], { encoding: 'utf8', env: { ...process.env, DSH_TEST_CLI: join(f.root, 'absent.mjs') } });
-    assert.equal(invoke(['--help']).status, 0);
+    const help = invoke(['--help']);
+    assert.equal(help.status, 0, help.stderr);
     assert.match(invoke([]).stderr, /缺少已构建/);
     assert.notEqual(f.run(['--unknown', 'value']).status, 0);
     assert.equal(existsSync(join(f.root, '.local/artifacts')), false);
