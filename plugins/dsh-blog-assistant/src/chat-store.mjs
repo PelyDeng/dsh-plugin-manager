@@ -19,13 +19,32 @@ export class ChatStore {
   create(owner,requestId,initial={}) {
     this.id(requestId)
     const old=this.db.prepare('SELECT data FROM conversations WHERE owner=? AND requestId=?').get(owner,requestId)
-    if(old)return JSON.parse(old.data)
-    const value={id:'blog-chat-'+randomUUID(),owner,requestId,title:'新对话',ready:false,createdAt:Date.now(),updatedAt:Date.now(),parent:null,attachments:[],...initial}
+    if(old)return this.get(owner,JSON.parse(old.data).id)
+    const value={id:'blog-chat-'+randomUUID(),owner,requestId,title:'新对话',ready:false,pinned:false,deletedAt:null,createdAt:Date.now(),updatedAt:Date.now(),parent:null,attachments:[],...initial}
     this.db.prepare('INSERT INTO conversations VALUES(?,?,?,?,?)').run(value.id,owner,requestId,value.updatedAt,JSON.stringify(value));return value
   }
-  get(owner,id){const row=this.db.prepare('SELECT data FROM conversations WHERE owner=? AND id=?').get(owner,id);invariant(row,'对话不存在或无权访问',404);return JSON.parse(row.data)}
+  get(owner,id){const row=this.db.prepare("SELECT data FROM conversations WHERE owner=? AND id=? AND json_extract(data,'$.deletedAt') IS NULL").get(owner,id);invariant(row,'对话不存在或无权访问',404);return JSON.parse(row.data)}
   save(owner,id,patch){const old=this.get(owner,id),value={...old,...patch,id,owner,updatedAt:Date.now()};this.db.prepare('UPDATE conversations SET updated=?,data=? WHERE id=? AND owner=?').run(value.updatedAt,JSON.stringify(value),id,owner);return value}
-  list(owner,offset=0){invariant(Number.isSafeInteger(offset)&&offset>=0,'分页参数无效');const items=this.db.prepare('SELECT data FROM conversations WHERE owner=? ORDER BY updated DESC,id LIMIT 31 OFFSET ?').all(owner,offset).map(r=>JSON.parse(r.data));return{items:items.slice(0,30).map(({id,title,updatedAt,ready})=>({id,title,updatedAt,ready})),nextOffset:items.length>30?offset+30:null}}
+  list(owner,offset=0,query=''){
+    invariant(Number.isSafeInteger(offset)&&offset>=0,'分页参数无效')
+    invariant(typeof query==='string'&&query.length<=120,'搜索文字应不超过 120 个字符')
+    const items=this.db.prepare("SELECT data FROM conversations WHERE owner=? AND json_extract(data,'$.deletedAt') IS NULL AND instr(lower(json_extract(data,'$.title')),lower(?))>0 ORDER BY COALESCE(json_extract(data,'$.pinned'),0) DESC,updated DESC,id LIMIT 31 OFFSET ?").all(owner,query.trim(),offset).map(r=>JSON.parse(r.data))
+    return{items:items.slice(0,30).map(({id,title,updatedAt,ready,pinned})=>({id,title,updatedAt,ready,pinned:!!pinned})),nextOffset:items.length>30?offset+30:null}
+  }
+  mutate(owner,input,assertIdle=()=>{}){
+    invariant(input&&['rename','pin','delete'].includes(input.operation)&&Array.isArray(input.ids)&&input.ids.length>0&&input.ids.length<=100&&input.ids.every(id=>typeof id==='string')&&new Set(input.ids).size===input.ids.length,'对话操作无效')
+    invariant(input.operation==='delete'||input.ids.length===1,'请选择一条对话')
+    if(input.operation==='rename')invariant(typeof input.title==='string'&&input.title.trim()&&input.title.trim().length<=100,'标题应为 1–100 个字符')
+    if(input.operation==='pin')invariant(typeof input.pinned==='boolean','置顶参数无效')
+    this.db.exec('BEGIN IMMEDIATE')
+    try{
+      const items=input.ids.map(id=>this.get(owner,id))
+      for(const item of items)assertIdle(item.id)
+      const patch=input.operation==='rename'?{title:input.title.trim()}:input.operation==='pin'?{pinned:input.pinned}:{deletedAt:Date.now()}
+      for(const item of items)this.db.prepare('UPDATE conversations SET data=? WHERE id=? AND owner=?').run(JSON.stringify({...item,...patch}),item.id,owner)
+      this.db.exec('COMMIT')
+    }catch(error){this.db.exec('ROLLBACK');throw error}
+  }
   assertScope(owner,id){return typeof id==='string'&&id.startsWith('blog-chat-')?this.get(owner,id):this.store.get(owner,id)}
   request(owner,id){const row=this.db.prepare('SELECT data FROM chat_requests WHERE owner=? AND id=?').get(owner,id);invariant(row,'对话请求不存在或无权访问',404);return JSON.parse(row.data)}
   requests(owner,conversationId){this.get(owner,conversationId);return this.db.prepare('SELECT data FROM chat_requests WHERE owner=? AND conversationId=? ORDER BY rowid').all(owner,conversationId).map(r=>JSON.parse(r.data))}

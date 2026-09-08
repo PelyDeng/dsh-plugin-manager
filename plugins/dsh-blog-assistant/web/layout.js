@@ -8,7 +8,7 @@ export function initLayout(){
   for(const [id,name] of [['chat-send','send'],['chat-stop','stop']])$(id).replaceChildren(glyph(name))
   for(const dialog of document.querySelectorAll('dialog')){const heading=dialog.querySelector('h2');if(heading){heading.id||=dialog.id+'-heading';dialog.setAttribute('aria-labelledby',heading.id)}}
   const panels=new Map()
-  for(const id of ['chat-history','library','assistant']){const el=$(id),anchor=document.createComment(id);el.before(anchor);panels.set(id,{el,anchor})}
+  for(const id of ['library','assistant']){const el=$(id),anchor=document.createComment(id);el.before(anchor);panels.set(id,{el,anchor})}
   function restore(dialog){for(const {el,anchor} of panels.values())if(el.parentElement===dialog)anchor.after(el)}
   function openPanel(id,dialogId,title){const dialog=$(dialogId);restore(dialog);dialog.append(panels.get(id).el);if(title)$('navigation-title').textContent=title;dialog.showModal()}
   function closeNavigation(){if($('navigation-dialog').open)$('navigation-dialog').close()}
@@ -17,10 +17,9 @@ export function initLayout(){
     const dialog=$(id);dialog.addEventListener('close',()=>restore(dialog))
     dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close()}})
   }
-  $('workspace-menu').addEventListener('click',()=>document.body.dataset.view==='chat'?openPanel('chat-history','navigation-dialog','对话历史'):library())
   $('library-toggle').addEventListener('click',library)
   $('empty-library').addEventListener('click',library)
-  $('quick-new').addEventListener('click',()=>{$('chat-view').click();$('chat-new').click()})
+  $('quick-new').addEventListener('click',()=>{$('chat-view').click();window.dispatchEvent(new Event('blog:new-conversation'))})
   $('manage-open').addEventListener('click',()=>$('management-dialog').showModal())
   $('backup-open').addEventListener('click',()=>$('management-dialog').close())
   $('mode-ai').addEventListener('click',()=>{if(compact.matches)openPanel('assistant','assistant-dialog')})
@@ -39,8 +38,7 @@ export function initLayout(){
   window.addEventListener('blog:conversation',closeNavigation)
   window.addEventListener('blog:draft',closeNavigation)
   window.addEventListener('blog:view',({detail})=>{
-    closeNavigation();$('workspace-menu').setAttribute('aria-label',detail.chat?'打开对话历史':'打开文章库')
-    $('workspace-menu').title=detail.chat?'打开对话历史':'打开文章库'
+    closeNavigation()
   })
   const area=$('chat-input')
   function resizeComposer(){area.style.height='auto';area.style.height=Math.min(area.scrollHeight,mobile.matches?110:144)+'px'}

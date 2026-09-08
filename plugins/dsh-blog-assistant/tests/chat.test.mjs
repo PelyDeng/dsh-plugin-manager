@@ -19,6 +19,31 @@ test('language plugin snapshots preserve visible history without adding user bub
   const snapshot={type:'user/message',seq:3,time:3000,data:{id:'language',role:'user',source:{kind:'plugin',plugin:'@deepseek-ai/dsh-system-prompt',form:'snapshot'},content:[{type:'text',text:'当前语言：简体中文'}]}}
   assert.deepEqual(projectChat([...events,snapshot],[],sdk),projectChat(events,[],sdk))
 })
+
+test('saved attempts display authoritative original blocks with a stable partial translation source',()=>{
+  const original='Read the original source carefully and preserve every important detail.'
+  const finalText='已保存的完整可见片段'
+  const events=[
+    {type:'turn/start',seq:0,time:1000,data:{turn:'turn-attempt'}},
+    {type:'assistant/attempt',seq:1,time:2000,data:{turn:'turn-attempt',step:0,stream:[
+      {chunk:{type:'reasoning-delta',index:0,text:'Earlier partial thinking.'}},
+      {chunk:{type:'block-end',index:0,block:{type:'reasoning',text:original}}},
+      {chunk:{type:'text-delta',index:1,text:'较早片段'}},
+      {chunk:{type:'block-end',index:1,block:{type:'text',text:finalText}}},
+      {chunk:{type:'finish',reason:{kind:'error',failure:{code:'MODEL',message:'interrupted fixture'}}}},
+    ]}},
+    {type:'turn/end',seq:2,time:3000,data:{turn:'turn-attempt',reason:{kind:'error'}}},
+  ]
+  const before=structuredClone(events),projection=projectChat(events,[],sdk)
+  assert.equal(projection.messages.length,1)
+  assert.deepEqual(
+    Object.fromEntries(['id','seq','reasoning','text','interrupted','feedback'].map(key=>[key,projection.messages[0][key]])),
+    {id:'attempt-1',seq:1,reasoning:original,text:finalText,interrupted:true,feedback:false},
+  )
+  assert.equal(projection.turns[0].status,'error')
+  assert.deepEqual(events,before,'translation source projection must not rewrite the official event log')
+})
+
 async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=false}={}){
   const root=new Context(),registry=root.plugin(AgentRegistry);await registry
   const runtimeJobs=root.plugin(LocalJobRegistry);await runtimeJobs
@@ -159,6 +184,46 @@ test('cancelled cards cannot execute and unsupported bridges never prepare delet
   const card=(await f.chat.history(actor,f.conversation.id)).operations[0],request={conversationId:f.conversation.id,id:card.id,nonce:card.nonce}
   assert.equal((await f.chat.operationAction(actor,{...request,operation:'cancel'})).status,'cancelled')
   await assert.rejects(f.chat.operationAction(actor,{...request,operation:'confirm'}),/查询回执/)
+})
+
+test('history actions refuse active and finishing conversations before changing any selected row',async t=>{
+  const f=await fixture(t),idle=f.chat.create(actor,'history-idle')
+  await f.send();await tick()
+  for(const operation of ['rename','pin','delete'])assert.throws(()=>f.chat.mutate(actor,{operation,ids:[f.conversation.id],title:'不应改名',pinned:true}),e=>e.status===409)
+  assert.throws(()=>f.chat.mutate(actor,{operation:'delete',ids:[idle.id,f.conversation.id]}),e=>e.status===409)
+  assert.equal(f.index.get(owner,idle.id).deletedAt,null)
+  const release=f.holdNextFlush(),stopping=f.chat.stop(actor,f.conversation.id);await tick()
+  assert.throws(()=>f.chat.mutate(actor,{operation:'delete',ids:[f.conversation.id]}),e=>e.status===409)
+  release();await stopping
+  assert.deepEqual(f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'保留的历史'}),{ok:true})
+  assert.equal(f.chat.list(actor,0,'保留的历史').items[0].id,f.conversation.id)
+})
+
+test('fork source is protected during historical reads and both source and child remain protected until durable',async t=>{
+  let releaseRead=()=>{};t.after(()=>releaseRead())
+  const f=await fixture(t);await f.send();await tick();complete(f.handles[0]);await tick()
+  const persistence=f.chat.ctx.sessionPersistence,open=persistence.open
+  const readGate=new Promise(r=>{releaseRead=r})
+  persistence.open=async(...args)=>{await readGate;return open(...args)}
+  const pending=f.chat.fork(actor,{conversationId:f.conversation.id,messageId:'answer-1',requestId:'history-fork'})
+  await tick()
+  assert.throws(()=>f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'分支期间'}),e=>e.status===409)
+  const releaseFlush=f.holdNextFlush();releaseRead();await tick()
+  const child=f.chat.list(actor).items.find(c=>c.id!==f.conversation.id)
+  assert.ok(child)
+  for(const id of [f.conversation.id,child.id])assert.throws(()=>f.chat.mutate(actor,{operation:'delete',ids:[id]}),e=>e.status===409)
+  releaseFlush();await pending
+  assert.equal(f.chat.forkSources.size,0)
+  const original=structuredClone(f.handles[0].events);let ended=0,changed=0
+  const unsubscribe=f.chat.subscribe(actor,f.conversation.id,()=>{changed++},()=>{ended++})
+  f.chat.mutate(actor,{operation:'delete',ids:[f.conversation.id]})
+  assert.equal(ended,1);assert.equal(changed,0);unsubscribe()
+  await assert.rejects(f.chat.history(actor,f.conversation.id),e=>e.status===404)
+  assert.throws(()=>f.chat.create(actor,'conversation-123'),e=>e.status===404)
+  assert.deepEqual(f.handles[0].events,original)
+  assert.equal((await f.chat.history(actor,child.id)).messages.at(-1).id,'answer-1')
+  f.chat.mutate(actor,{operation:'delete',ids:[child.id]})
+  assert.throws(()=>f.chat.create(actor,'history-fork'),e=>e.status===404)
 })
 
 test('chat search tools preserve structured dates and return lossless imported draft references',async t=>{

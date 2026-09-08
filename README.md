@@ -138,6 +138,7 @@ pnpm package --plugins "auth,example" --output .local/artifacts/release/plugins
 | 写完声明就能保护接口吗？ | 不能；作者需显式接入 kit，业务数据权限也由应用检查 |
 | 包名可以直接从 npm 安装吗？ | 本文包名不代表已经公开发布；先取得版本化工具 tgz |
 | 构建时会运行全部业务测试吗？ | check 只做必要编译、类型或语法检查；完整测试由作者单独运行 |
+| 如何一键生成示例测试报告？ | 准备已构建的官方 CLI 后执行根目录 `bash test-report.sh`，完成 auth/example 打包、宿主测试和报告交付；模型使用本地替身，详见[操作文档](packages/plugin-manager/VERIFICATION.md) |
 | kit 升级后所有应用自动生效吗？ | kit 内嵌于各应用，消费它的应用需要更新版本并重新打包 |
 | 接入或启动遇到问题怎么办？ | 先读[排错入口](doc/getting-started.md#命令速查与求助)和[开发者 FAQ](plugins/dsh-example/knowledge/guide.md) |
 

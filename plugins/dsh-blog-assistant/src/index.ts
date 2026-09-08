@@ -20,6 +20,8 @@ import { BlogApplication } from './application.mjs'
 import { BlogAttachments, MAX_ATTACHMENT_BYTES } from './attachments.mjs'
 import { ChatStore } from './chat-store.mjs'
 import { BlogChat } from './chat.mjs'
+import {selectBlogModel} from './models.mjs'
+import {ReasoningTranslations,reasoningOriginal} from './reasoning-translation.ts'
 import type { Config } from './config.ts'
 export { Config } from './config.ts'
 export const name='blog'
@@ -41,7 +43,8 @@ export async function apply(ctx:Context,config:Config){
   const app=new BlogApplication(store,access,blog,images,backups,jobs,attachments)
   const {chatSdk}=await import(new URL('../runtime/chat-sdk.mjs',import.meta.url).href)
   const chat=new BlogChat(ctx,access,store,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)
-  ctx.effect(()=>async()=>{await chat.close();await jobs.close();await attachments.close();store.close()})
+  const translations=new ReasoningTranslations({ctx,pluginId:'blog',path:join(root,'reasoning-translations.sqlite'),access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
+  ctx.effect(()=>async()=>{await translations.close();await chat.close();await jobs.close();await attachments.close();store.close()})
   const manifest=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'))
   ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],tools:jobs.chatTools}))
   for(const [suffix,file,mime] of [['','web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],['/style.css','web/style.css','text/css'],['/writing.css','web/writing.css','text/css'],['/chat-base.css','web/chat-base.css','text/css'],['/chat-theme.css','web/chat-theme.css','text/css'],...['copy','check','like','dislike','branch','database','clock','think','api','send','user','chat','stop'].map(name=>[`/media/icon-${name}.svg`,`web/media/icon-${name}.svg`,'image/svg+xml']),['/icons.svg','web/icons.svg','image/svg+xml']] as const){
@@ -56,6 +59,15 @@ export async function apply(ctx:Context,config:Config){
     try{const input=JSON.parse((await body(req,4096)).toString('utf8'));backups.assert({namespace:'user',userId:input.actor?.userId,sessionId:input.actor?.sessionId});json(res,{ok:true})}catch{res.writeHead(403);res.end()}
   }}))
   ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/identity',handler(_req,res,actor){json(res,{userId:actor.userId,version:manifest.version,backupAdmin:settings.backup.allowedUserIds.includes(actor.userId),maxImageBytes:settings.image.maxBytes,blogUrl:settings.blog.url})}}))
+  ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/reasoning-translation',handler:async(req,res,actor)=>{
+    if(req.method!=='POST')throw new AccessError(405,'只支持 POST')
+    if(!req.headers['content-type']?.startsWith('application/json'))throw new AccessError(415,'需要 JSON 请求')
+    let input
+    try{input=JSON.parse((await body(req,8192)).toString('utf8'))}catch(e){if(e instanceof AccessError)throw e;throw new AccessError(400,'无效 JSON')}
+    if(!input||typeof input.conversationId!=='string'||typeof input.sourceId!=='string')throw new AccessError(400,'思考定位无效')
+    const controller=new AbortController(),cancel=()=>controller.abort();res.once('close',cancel)
+    try{const value=await translations.translate(actor,input,controller.signal);access.assert(actor);if(!res.destroyed)json(res,value)}finally{res.off('close',cancel)}
+  }}))
   ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/api',handler:async(req,res,actor)=>{
     if(req.method!=='POST')throw new AccessError(405,'只支持 POST')
     if(!req.headers['content-type']?.startsWith('application/json'))throw new AccessError(415,'需要 JSON 请求')
@@ -66,7 +78,8 @@ export async function apply(ctx:Context,config:Config){
     let result
     switch(input.action){
       case 'chat-create':result=chat.create(actor,args.requestId);break
-      case 'chat-list':result=chat.list(actor,args.offset??0);break
+      case 'chat-list':result=chat.list(actor,args.offset??0,args.query??'');break
+      case 'chat-update':result=chat.mutate(actor,args);break
       case 'chat-history':result=await chat.history(actor,args.conversationId);break
       case 'chat-send':result=await chat.send(actor,args);break
       case 'chat-stop':result=await chat.stop(actor,args.conversationId);break

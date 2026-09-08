@@ -26,14 +26,20 @@ const instructions=`${persona}
 export class BlogChat {
   constructor(ctx,access,store,index,attachments,jobs,app,sdk,timeoutMs=240000){
     Object.assign(this,{ctx,access,store,index,attachments,jobs,app,sdk,timeoutMs})
-    this.active=new Map();this.forks=new Map();this.listeners=new Map();this.closed=false
+    this.active=new Map();this.forks=new Map();this.forkSources=new Map();this.listeners=new Map();this.closed=false
     const recheck=()=>{for(const b of this.active.values())try{access.assert(b.job.actor)}catch{void this.finish(b,'interrupted','登录或授权已失效')}for(const fork of this.forks.values())try{access.assert(fork.actor)}catch{fork.abort.abort()}}
     ctx.effect(()=>onRevoked(ctx,recheck))
     ctx.effect(()=>{const timer=setInterval(recheck,1000);timer.unref();return()=>clearInterval(timer)})
   }
   create(actor,requestId){this.access.assert(actor);return this.publicConversation(this.index.create(ownerKey(actor),requestId))}
-  publicConversation({id,title,updatedAt,ready,parent}){return{id,title,updatedAt,ready,parent}}
-  list(actor,offset){this.access.assert(actor);return this.index.list(ownerKey(actor),offset)}
+  publicConversation({id,title,updatedAt,ready,parent,pinned}){return{id,title,updatedAt,ready,parent,pinned:!!pinned}}
+  list(actor,offset,query){this.access.assert(actor);return this.index.list(ownerKey(actor),offset,query)}
+  mutate(actor,input){
+    this.access.assert(actor);invariant(!this.closed,'博客助手正在停止',503)
+    this.index.mutate(ownerKey(actor),input,id=>invariant(!this.active.has(id)&&!this.forks.has(id)&&!this.forkSources.has(id),'对话仍在回答或创建分支，请先停止或等待完成',409))
+    for(const id of input.ids)this.emit(id,{type:'changed'})
+    return{ok:true}
+  }
   requests(owner,id){const c=this.index.get(owner,id);return [...(c.inheritedRequests??[]).map(r=>this.index.request(owner,r)),...this.index.requests(owner,id)]}
   assertLifecycle(c,header){
     invariant(String(header.id)===c.id&&header.cwd===process.cwd()&&(header.parentSession??null)===c.parent&&!!header.isSeeded===!!c.parent,'会话持久化归属或来源不匹配',409)
@@ -128,7 +134,7 @@ export class BlogChat {
   emit(id,value){for(const listener of this.listeners.get(id)??[])listener(value)}
   subscribe(actor,id,send,end){
     this.access.assert(actor);this.index.get(ownerKey(actor),id)
-    const listener=value=>{try{this.access.assert(actor);send(value)}catch{close();end()}}
+    const listener=value=>{try{this.access.assert(actor);this.index.get(ownerKey(actor),id);send(value)}catch{close();end()}}
     const set=this.listeners.get(id)??new Set();this.listeners.set(id,set);set.add(listener)
     const timer=setInterval(()=>listener({type:'ping'}),1000);timer.unref()
     const close=()=>{clearInterval(timer);set.delete(listener);if(!set.size)this.listeners.delete(id)}
@@ -310,6 +316,12 @@ export class BlogChat {
   }
   async fork(actor,args){
     this.access.assert(actor);invariant(!this.closed,'博客助手正在停止',503)
+    this.index.get(ownerKey(actor),args.conversationId)
+    const sourceId=args.conversationId
+    this.forkSources.set(sourceId,(this.forkSources.get(sourceId)??0)+1)
+    try{return await this.createFork(actor,args)}finally{const count=this.forkSources.get(sourceId)-1;if(count)this.forkSources.set(sourceId,count);else this.forkSources.delete(sourceId)}
+  }
+  async createFork(actor,args){
     const owner=ownerKey(actor),history=await this.history(actor,args.conversationId)
     const target=history.messages.find(m=>m.id===args.messageId&&m.forkCut)
     invariant(target,'只能从已完成轮次的末条回答创建分支',409)

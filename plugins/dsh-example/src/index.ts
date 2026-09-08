@@ -19,10 +19,11 @@ import type { Config } from './config.ts'
 import { HistoryStore, projectHistory } from './history.ts'
 import { loadKnowledge, developerInstructions, reasoningLanguage } from './knowledge.ts'
 import { loadFramework } from './framework.ts'
+import { ReasoningTranslations, reasoningOriginal } from './reasoning-translation.ts'
 export { Config } from './config.ts'
 
 export const name = 'example'
-export const inject = ['agents', 'agentDefaultModel', 'webServer', 'systemPrompt', 'tools', 'sessionPersistence', 'messageFeedback'] as const
+export const inject = ['agents', 'agentDefaultModel', 'webServer', 'systemPrompt', 'tools', 'sessionPersistence', 'messageFeedback', 'llm'] as const
 
 interface Conversation {
   owner: Actor
@@ -73,6 +74,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const http = createPluginHttp(ctx, { access, routePrefix: config.routePrefix })
   const conversations = new Map<string, Conversation>()
   const store = new HistoryStore(config.historyPath || dshHomePath('plugins', manifest.deepseekPlugin.id, 'history.sqlite'))
+  let translations: ReasoningTranslations | undefined
   const closings = new Map<string, Promise<void>>()
   let disposed = false
   const release = (id: string, conversation: Conversation) => {
@@ -103,6 +105,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       disposed = true; clearInterval(timer)
       for (const [id, c] of conversations) release(id, c)
       await Promise.allSettled(closings.values())
+      await translations?.close()
       store.close()
     }
   })
@@ -157,9 +160,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     if (req.method !== 'GET') throw new AccessError(405, '只支持 GET')
     const offset = Number(new URL(req.url ?? '/', 'http://localhost').searchParams.get('offset') ?? 0)
     if (!Number.isSafeInteger(offset) || offset < 0) throw new AccessError(400, '无效分页参数')
-    const rows = store.list(actor, offset, 31)
+    const query=new URL(req.url??'/','http://localhost').searchParams.get('q')??''
+    if(query.length>120)throw new AccessError(400,'搜索文字过长')
+    const rows = store.list(actor, offset, 31, query.trim())
     json(res, { items: rows.slice(0, 30), nextOffset: rows.length > 30 ? offset + 30 : null })
   } }))
+  ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/conversation-action',handler:async(req,res,actor)=>{
+    const input=await requestBody(req,4000)
+    if(typeof input.operation!=='string'||!Array.isArray(input.ids)||!input.ids.length||input.ids.length>100||input.ids.some(id=>typeof id!=='string'))throw new AccessError(400,'对话操作无效')
+    const ids=input.ids as string[]
+    for(const id of ids){store.assertOwner(id,actor);if(conversations.get(id)?.busy)throw new AccessError(409,'对话仍在回答，请先停止或等待完成')}
+    access.assert(actor)
+    store.mutate(actor,{operation:input.operation,ids,...(typeof input.title==='string'?{title:input.title}:{}),...(typeof input.pinned==='boolean'?{pinned:input.pinned}:{})})
+    if(input.operation==='delete')for(const id of ids){const active=conversations.get(id);if(active)release(id,active)}
+    json(res,{ok:true})
+  }}))
   const readEvents = async (id: string, actor: Actor) => {
     store.assertOwner(id, actor)
     await closings.get(id)
@@ -183,6 +198,17 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     access.assert(actor)
     return events
   }
+  translations = new ReasoningTranslations({ctx,pluginId:manifest.deepseekPlugin.id,access,
+    path:config.historyPath === ':memory:' ? ':memory:' : config.historyPath ? config.historyPath+'.translations.sqlite' : dshHomePath('plugins',manifest.deepseekPlugin.id,'reasoning-translations.sqlite'),
+    selectModel:()=>ctx.agentDefaultModel.currentSelection(),
+    readOriginal:async(actor,target)=>reasoningOriginal(await readEvents(target.conversationId,actor),target.sourceId),
+  })
+  ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/reasoning-translation',handler:async(req,res,actor)=>{
+    const input=await requestBody(req,1024)
+    if(typeof input.conversationId!=='string'||typeof input.sourceId!=='string')throw new AccessError(400,'思考定位无效')
+    const controller=new AbortController(),cancel=()=>controller.abort();res.once('close',cancel)
+    try{const value=await translations!.translate(actor,{conversationId:input.conversationId,sourceId:input.sourceId},controller.signal);access.assert(actor);if(!res.destroyed)json(res,value)}finally{res.off('close',cancel)}
+  }}))
   ctx.effect(() => http.register({ kind: 'exact', path: config.routePrefix + '/history', handler: async (req, res, actor) => {
     if (req.method !== 'GET') throw new AccessError(405, '只支持 GET')
     const id = new URL(req.url ?? '/', 'http://localhost').searchParams.get('id') ?? ''
@@ -310,7 +336,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         if (event.type === 'assistant/message') {
           const text = event.data.message.content.filter(block => block.type === 'text').map(block => block.text).join('')
           const reasoning = event.data.message.content.filter(block => block.type === 'reasoning').map(block => block.text).join('')
-          send({ type: 'answer', text, reasoning })
+          send({ type: 'answer', text, reasoning, reasoningSource: reasoning ? String(event.data.message.id) : undefined })
         }
         if (event.type === 'tool/call' || event.type === 'tool/result') send({type:'tools',tools:projectTurns(current.handle!.agent.session.snapshotEvents()).at(-1)?.tools??[]})
         if (event.type === 'turn/end') {

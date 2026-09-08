@@ -1,5 +1,8 @@
+import {createConversationHistory} from './conversation-history.js'
+import {chatTurns} from './chat-turns.js'
+import {createThinkingTranslations} from './thinking-translation.js'
 import {icon} from './icons.js'
-import {glyph,stat,compactTokens,thinking,updateThinking} from './chat-ui.js'
+import {glyph,stat,compactTokens,thinking} from './chat-ui.js'
 
 export function shouldSendChatEnter(event,{touch=false,composing=false}={}){
   return event.key==='Enter'&&!touch&&!event.shiftKey&&!event.isComposing&&!composing&&event.keyCode!==229
@@ -8,6 +11,8 @@ export function shouldSendChatEnter(event,{touch=false,composing=false}={}){
 export function initChat({api,request,identity,openDraft,renderMarkdown}){
   const $=id=>document.getElementById(id),base=document.body.dataset.base
   const state={id:null,epoch:0,history:null,files:[],feedback:new Map(),feedbackReady:false,stream:null,offset:null,sending:false,stopping:false,uploading:false,liveClock:0,pending:null}
+  const translations=createThinkingTranslations(base)
+  const liveBox=$('chat-live'),liveAnchor=document.createComment('live-output');liveBox.before(liveAnchor)
   const inputs=new Map(),key=`blog-chat:${identity.userId}`
   const operationPending=new Set(),operationErrors=new Map()
   let refreshTimer,refreshVersion=0,feedbackTarget,fileTarget,composing=false,creating
@@ -25,12 +30,11 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
   function view(chat){$('chat-home').hidden=!chat;document.querySelector('.workspace').hidden=chat;document.body.dataset.view=chat?'chat':'writing';$('chat-view').setAttribute('aria-pressed',String(chat));$('writing-view').setAttribute('aria-pressed',String(!chat));window.dispatchEvent(new CustomEvent('blog:view',{detail:{chat}}));if(chat)focusInput()}
   $('chat-view').addEventListener('click',()=>view(true));$('writing-view').addEventListener('click',()=>view(false))
   function controls(){const busy=state.history?.busy||state.sending;$('chat-send').disabled=!!busy||state.uploading||state.stopping;$('chat-stop').hidden=!state.history?.busy&&!state.stopping;$('chat-stop').disabled=state.stopping;$('chat-stop').setAttribute('aria-label',state.stopping?'正在停止回答':'停止回答');$('chat-add-file').disabled=state.uploading||state.sending;$('chat-state').textContent=state.stopping?'正在停止，保留已生成内容…':state.uploading?'正在上传和解析资料…':busy?'正在回答 · 可随时停止':touchInput()?'换行继续输入 · 点击箭头发送 · 附件保持私有':'Enter 发送 · Shift+Enter 换行 · 附件保持私有'}
-  async function conversations(append=false){
-    const data=await api('chat-list',{offset:append?state.offset??0:0}),box=$('chat-conversations')
-    if(!append)box.replaceChildren()
-    for(const c of data.items){const b=button('',()=>activate(c.id));b.className='article-row';b.title=c.title;b.append(element('span',c.title,'conversation-title'),element('small',new Date(c.updatedAt).toLocaleString('zh-CN')));b.dataset.conversation=c.id;b.setAttribute('aria-current',String(c.id===state.id));box.append(b)}
-    state.offset=data.nextOffset;$('chat-more').hidden=state.offset===null
-  }
+  const sidebar=createConversationHistory({mount:$('chat-home'),toggle:$('workspace-menu'),currentId:()=>state.id,
+    newConversation:()=>{void activate(null).catch(error)},openConversation:activate,
+    list:args=>api('chat-list',args),mutate:args=>api('chat-update',args),read:id=>api('chat-history',{conversationId:id}),
+    onDeleted:async ids=>{if(ids.includes(state.id))await activate(null)},storageKey:'blog-history:'+identity.userId})
+  async function conversations(append=false){await sidebar.refresh(append)}
   async function ensureConversation(){
     if(state.id)return state.id
     const epoch=state.epoch
@@ -40,6 +44,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     try{return await pending.promise}finally{if(creating===pending)creating=null}
   }
   async function activate(id){
+    translations.reset()
     inputs.set(state.id??'new',$('chat-input').value)
     state.epoch++;state.stream?.close();state.stream=null;clearTimeout(refreshTimer);state.pending=null;state.sending=false;state.stopping=false;state.id=id;state.history=null;state.files=[];state.feedback.clear();state.feedbackReady=false;state.liveClock=0
     $('chat-feedback-dialog').close();$('chat-file-dialog').close()
@@ -47,7 +52,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     window.dispatchEvent(new CustomEvent('blog:conversation',{detail:{id}}))
     if(id){sessionStorage.setItem(key,id);connect();await Promise.all([refresh(),loadFiles()])}else{sessionStorage.removeItem(key);focusInput()}
     if(id!==state.id)return
-    for(const row of $('chat-conversations').children)row.setAttribute('aria-current',String(row.dataset.conversation===id))
+    sidebar.render()
   }
   function connect(){
     state.stream?.close();const id=state.id,epoch=state.epoch
@@ -73,15 +78,22 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     if(wasBusy&&!data.busy)void conversations().catch(error)
   }
   function prose(text){const el=element('div',undefined,'prose qa-prose');el.innerHTML=renderMarkdown(text??'');return el}
-  function reasoning(text,id){const d=thinking(text,{className:'chat-reasoning'});d.dataset.detail=id;return d}
+  function reasoning(text,id){const d=thinking(text,{className:'chat-reasoning'});d.dataset.detail=id;d.dataset.originalText=text;return d}
   function bubble(node,user=false){node.classList.add('qa-message');if(user)node.classList.add('qa-user');const avatar=element('span',undefined,'qa-avatar');avatar.setAttribute('aria-hidden','true');avatar.append(glyph(user?'user':'chat'));const content=element('div',undefined,'qa-bubble');node.append(avatar,content);return content}
   function renderLive(live=state.history?.live,{follow=nearBottom(),scrollTop=$('chat-scroll').scrollTop}={}){
-    const box=$('chat-live');box.hidden=!live
+    const box=liveBox;box.hidden=!live
+    const last=state.history?.messages.at(-1)
+    if(live&&last?.role==='user'&&![...$('chat-messages').querySelectorAll('.qa-assistant-turn')].some(n=>n.dataset.message==='pending-'+last.id)){render();return}
+    // Live can arrive before the next user-message snapshot. Never write it into a completed turn.
+    const lastCard=[...$('chat-messages').querySelectorAll('.qa-assistant-turn')].at(-1),card=lastCard?.dataset.complete==='true'?null:lastCard,inline=!!card
+    if(live&&card)card.querySelector('.qa-bubble').append(box);else liveAnchor.after(box)
+    for(const node of $('chat-messages').querySelectorAll('.qa-turn-answer,.chat-message-actions'))node.hidden=!!live?.text&&node.closest('.qa-assistant-turn')===card
     if(live){
-      box.className='chat-message assistant-message qa-message qa-streaming';const content=box.querySelector('.qa-bubble')??bubble(box)
-      let thought=box.querySelector('.chat-reasoning'),text=box.querySelector('.chat-live-text'),status=box.querySelector('.chat-stream-status')
-      if(!thought){thought=reasoning('','live');content.append(thought)}
-      updateThinking(thought,live.reasoning??'',!!live.text)
+      if(box.dataset.inline!==String(inline)){box.replaceChildren();box.dataset.inline=String(inline)}
+      box.className=inline?'chat-live-inline qa-streaming':'chat-message assistant-message qa-message qa-streaming';const content=inline?box:box.querySelector('.qa-bubble')??bubble(box)
+      let thought=inline?card.querySelector('.chat-reasoning'):box.querySelector('.chat-reasoning'),text=box.querySelector('.chat-live-text'),status=box.querySelector('.chat-stream-status')
+      if(!thought){thought=reasoning('','live');(inline?card.querySelector('.qa-bubble'):content).prepend(thought)}
+      if(live.reasoning)translations.watch(thought,{text:live.reasoning,conversationId:state.id,done:!!live.text})
       if(!text){text=prose('');text.classList.add('chat-live-text');content.append(text)}
       text.innerHTML=renderMarkdown(live.text??'')
       if(!status){status=element('small',undefined,'chat-stream-status');status.setAttribute('role','status');content.append(status)}
@@ -98,24 +110,29 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     fragment.append(tokens,time);return fragment
   }
   function render(){
-    const box=$('chat-messages'),follow=nearBottom(),scrollTop=$('chat-scroll').scrollTop,history=state.history
+    const thoughtScroll=new Map([...$('chat-messages').querySelectorAll('.qa-thinking-body,.qa-thinking-original pre')].map(el=>[el,el.scrollTop]))
+    const box=$('chat-messages'),follow=nearBottom(),scrollTop=$('chat-scroll').scrollTop,history=state.history,displayMessages=chatTurns(history?.messages??[],{busy:!!history?.busy})
     const previous=new Map([...box.children].map(n=>[n.dataset.key,n])),nodes=[]
     const focused=document.activeElement,focusKey=focused?.closest('[data-key]')?.dataset.key,focusAction=focused?.dataset.action
     const append=(node,key,value)=>{
       const old=previous.get(key),version=JSON.stringify(value)
       if(old?.dataset.version===version){nodes.push(old);return}
+      for(const newThought of node.querySelectorAll('.chat-reasoning')){const oldThought=[...old?.querySelectorAll('.chat-reasoning')??[]].find(d=>d.dataset.detail===newThought.dataset.detail&&d.dataset.originalText===newThought.dataset.originalText);if(oldThought)newThought.replaceWith(oldThought)}
       const opened=new Set([...(old?.matches('details[open]')?[old]:[]),...old?.querySelectorAll('details[open]')??[]].map(d=>d.dataset.detail))
       for(const detail of [...(node.matches('details')?[node]:[]),...node.querySelectorAll('details')])if(opened.has(detail.dataset.detail))detail.open=true
       node.dataset.key=key;node.dataset.version=version;nodes.push(node)
     }
     $('chat-welcome').hidden=!!history?.messages.length
-    for(const message of history?.messages??[]){
-      const node=element('section',undefined,`chat-message ${message.role}-message`);node.dataset.message=message.id
+    for(const message of displayMessages){
+      const node=element('section',undefined,`chat-message ${message.role}-message`);node.dataset.message=message.id;if(message.role==='assistant'){node.classList.add('qa-assistant-turn');node.dataset.complete=String(!!message.tail||Number.isFinite(history?.turns?.find(t=>t.turn===message.turn)?.runMs))}
       if(message.role==='tool'){const chip=element('span',undefined,`qa-tool ${message.status}`);chip.append(glyph('api'),element('small',`${{blog_search_posts:'查询博客文章',blog_read_post:'读取文章',blog_list_drafts:'查找工作台草稿',blog_select_draft:'选择写作文章',blog_propose:'保存候选稿',blog_web_search:'搜索资料',blog_web_fetch:'阅读网页',blog_publish_draft:'准备发布',blog_delete_post:'准备删除'}[message.name]??'执行博客工具'} · ${{running:'进行中',succeeded:'完成',failed:'失败',interrupted:'已中断'}[message.status]??message.status}`));node.append(chip);append(node,'message-'+message.id,message);continue}
       if(message.role==='status'){node.textContent=message.text;append(node,'message-'+message.id,message);continue}
       const content=bubble(node,message.role==='user')
-      if(message.reasoning)content.append(reasoning(message.reasoning,message.id))
-      content.append(message.role==='user'?element('div',message.text,'chat-user-text'):prose(message.text))
+      if(message.reasoning)content.append(reasoning(message.reasoning,message.reasoningSource??message.id))
+      if(message.tools?.length){const tools=element('section',undefined,'qa-tools'),head=element('h4','工具调用'),list=element('div',undefined,'qa-tool-list');for(const tool of message.tools){const chip=element('span',undefined,'qa-tool '+tool.status);chip.append(glyph('api'),element('span',({blog_search_posts:'查询博客文章',blog_read_post:'读取文章',blog_list_drafts:'查找工作台草稿',blog_select_draft:'选择写作文章',blog_propose:'保存候选稿',blog_web_search:'搜索资料',blog_web_fetch:'阅读网页',blog_publish_draft:'准备发布',blog_delete_post:'准备删除'})[tool.name]??'博客工具'),element('span',({running:'进行中',succeeded:'完成',failed:'失败',interrupted:'已中断'})[tool.status]??tool.status));list.append(chip)}tools.append(head,list);content.append(tools)}
+      if(message.statuses?.length)content.append(element('p',message.statuses.at(-1),'chat-stream-status'))
+      const answer=message.role==='user'?element('div',message.text,'chat-user-text'):prose(message.text);if(message.role==='assistant')answer.classList.add('qa-turn-answer');content.append(answer)
+      if(message.steps?.length>1){const process=element('details',undefined,'chat-step-history');process.dataset.detail='steps-'+message.displayKey;process.append(element('summary','本轮过程（'+message.steps.length+' 个模型步骤）'));for(const step of message.steps.slice(0,-1)){const section=element('section');if(step.reasoning&&step.id!==message.reasoningSource){const thought=reasoning(step.reasoning,step.id);thought.dataset.source=step.id;section.append(thought)}if(step.text)section.append(prose(step.text));process.append(section)}content.append(process)}
       for(const a of message.attachments??[]){const link=element('a',undefined,'chat-file-link');link.append(icon('paperclip'),document.createTextNode(`${a.name}${a.range?`（${a.range.from}–${a.range.to}）`:''}`));link.href=`${base}/chat-attachment?${new URLSearchParams({conversationId:state.id,requestId:message.requestId,id:a.id})}`;content.append(link)}
       const actions=element('div',undefined,'chat-message-actions qa-actions')
       if(message.role==='assistant'){
@@ -134,12 +151,12 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
           more.append(summary,menu);actions.append(more)
         }
         if(message.interrupted)actions.append(element('small','本段回答已中断','muted'))
-        if(message.tail){const turn=history.turns.find(t=>t.turn===message.turn);if(turn)actions.append(usage(turn,message))}
+        const turn=history.turns.find(t=>t.turn===message.turn);if(Number.isFinite(turn?.runMs))actions.append(usage(turn,message))
       }
       if(message.role==='assistant'){actions.append(element('time',new Date(message.time).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}),'qa-clock'));content.append(actions)}
-      append(node,'message-'+message.id,{message,feedback:state.feedback.get(message.id),feedbackReady:state.feedbackReady,turn:message.tail?history.turns.find(t=>t.turn===message.turn):null})
+      append(node,message.displayKey??'message-'+message.id,{message,complete:node.dataset.complete,feedback:state.feedback.get(message.id),feedbackReady:state.feedbackReady,turn:message.role==='assistant'?history.turns.find(t=>t.turn===message.turn):null})
     }
-    for(const turn of history?.turns??[])if(turn.runMs!==null&&!history.messages.some(m=>m.tail&&m.turn===turn.turn)){const row=element('div',undefined,'chat-turn-summary qa-actions');row.append(usage(turn));append(row,'turn-'+turn.turn,turn)}
+    for(const turn of history?.turns??[])if(Number.isFinite(turn.runMs)&&!displayMessages.some(m=>m.role==='assistant'&&m.turn===turn.turn)){const row=element('div',undefined,'chat-turn-summary qa-actions');row.append(usage(turn));append(row,'turn-'+turn.turn,turn);const user=history.messages.findLast(m=>m.role==='user'&&m.seq<turn.startSeq),position=nodes.findIndex(n=>n.dataset.message===user?.id);if(position>=0){const summary=nodes.pop();nodes.splice(position+1,0,summary)}}
     for(const r of history?.requests??[]){
       if(['failed','interrupted'].includes(r.status)){const row=element('div',r.message??'本轮未完成','chat-status');row.append(button('继续本次请求',()=>send(`请基于前面的资料继续完成上一轮未完成的请求。`,r.id)));append(row,'request-'+r.id,{status:r.status,message:r.message})}
       if(r.sources?.length){const details=element('details',undefined,'chat-sources');details.dataset.detail='sources-'+r.id;details.append(element('summary',`查证来源（${r.sources.length}）`));for(const source of r.sources){const row=element('div'),href=url(source.url),link=element(href?'a':'span',source.title??source.url);if(href){link.href=href;link.target='_blank';link.rel='noopener noreferrer'}row.append(link,element('small',source.fetched?' · 已读取原文':' · 搜索摘要'));details.append(row)}append(details,'sources-'+r.id,r.sources)}
@@ -152,6 +169,9 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     let cursor=box.firstElementChild
     for(const node of nodes){if(node===cursor)cursor=cursor.nextElementSibling;else box.insertBefore(node,cursor)}
     while(cursor){const next=cursor.nextElementSibling;cursor.remove();cursor=next}
+    for(const message of displayMessages){if(message.role!=='assistant')continue;const node=nodes.find(n=>n.dataset.message===message.id),thought=node?.querySelector('.qa-bubble > .chat-reasoning');if(thought)translations.watch(thought,{text:message.reasoning,conversationId:state.id,sourceId:message.reasoningSource,done:true});for(const step of message.steps?.slice(0,-1)??[]){const prior=[...node?.querySelectorAll('[data-source]')??[]].find(n=>n.dataset.source===step.id);if(prior)translations.watch(prior,{text:step.reasoning,conversationId:state.id,sourceId:step.id,done:true})}}
+    translations.sweep()
+    for(const [el,top] of thoughtScroll)el.scrollTop=top
     if(focusKey&&focusAction&&document.activeElement!==focused){const replacement=nodes.find(n=>n.dataset.key===focusKey);[...replacement?.querySelectorAll('[data-action]')??[]].find(n=>n.dataset.action===focusAction)?.focus({preventScroll:true})}
     renderLive(state.history?.live,{follow,scrollTop})
   }
@@ -259,9 +279,10 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
   $('chat-input').addEventListener('compositionstart',()=>{composing=true});$('chat-input').addEventListener('compositionend',()=>{composing=false})
   $('chat-input').addEventListener('keydown',e=>{if(shouldSendChatEnter(e,{touch:touchInput(),composing})){e.preventDefault();$('chat-form').requestSubmit()}})
   $('chat-stop').addEventListener('click',run(async()=>{if(state.stopping)return;const id=state.id,epoch=state.epoch;state.stopping=true;controls();renderLive();try{await api('chat-stop',{conversationId:id});if(epoch===state.epoch)await refresh()}finally{if(epoch===state.epoch){state.stopping=false;controls();renderLive()}}}))
-  $('chat-new').addEventListener('click',run(()=>activate(null)));$('chat-more').addEventListener('click',run(()=>conversations(true)))
+  window.addEventListener('blog:new-conversation',run(()=>activate(null)))
+  window.addEventListener('blog:view',({detail})=>{if(!detail.chat&&matchMedia('(max-width:960px)').matches)sidebar.hide()})
   for(const b of document.querySelectorAll('[data-prompt]'))b.addEventListener('click',()=>{$('chat-input').value=b.dataset.prompt;$('chat-input').dispatchEvent(new Event('input'));focusInput()})
-  $('chat-messages').addEventListener('toggle',event=>{if(event.target.matches('.message-more[open], .qa-meta[open]'))for(const menu of $('chat-messages').querySelectorAll('.message-more[open], .qa-meta[open]'))if(menu!==event.target)menu.open=false},true)
+  $('chat-messages').addEventListener('toggle',event=>{if(event.target.matches('.message-more[open], .qa-meta[open]'))for(const menu of $('chat-messages').querySelectorAll('.message-more[open], .qa-meta[open]'))if(menu!==event.target)menu.open=false;requestAnimationFrame(()=>{$('chat-bottom').hidden=nearBottom()})},true)
   document.addEventListener('click',event=>{for(const menu of $('chat-messages').querySelectorAll('.message-more[open], .qa-meta[open]'))if(!menu.contains(event.target))menu.open=false})
   document.addEventListener('keydown',event=>{if(event.key==='Escape'){const menu=$('chat-messages').querySelector('.message-more[open], .qa-meta[open]');if(menu){menu.open=false;menu.querySelector('summary').focus({preventScroll:true});event.preventDefault()}}})
   $('chat-scroll').addEventListener('scroll',()=>{$('chat-bottom').hidden=nearBottom()});$('chat-bottom').addEventListener('click',bottom)

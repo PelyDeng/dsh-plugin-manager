@@ -1,13 +1,16 @@
 import { readEvents } from './stream.js'
 import { renderMarkdown } from './markdown.js'
-import {element,glyph,action,stat,compactTokens,keyboardSend,thinking as makeThinking,updateThinking} from './chat-ui.js'
+import {element,glyph,action,stat,compactTokens,keyboardSend,thinking as makeThinking} from './chat-ui.js'
+
+import {createThinkingTranslations} from './thinking-translation.js'
+
+import {createConversationHistory} from './conversation-history.js'
 
 const $ = id => document.getElementById(id)
 const base = document.body.dataset.base
+const translations=createThinkingTranslations(base)
 const narrow = matchMedia('(max-width: 650px)')
-const historyPanel = $('history-dialog')
-$('history-open').onclick=()=>historyPanel.showModal()
-$('history-close').onclick=()=>historyPanel.close()
+
 for(const node of document.querySelectorAll('[data-glyph]'))node.append(glyph(node.dataset.glyph))
 const focusPrompt=()=>{if(!matchMedia('(pointer:coarse), (max-width:650px)').matches)$('prompt').focus()}
 let feedbackAvailable=false,feedback=new Map()
@@ -17,27 +20,29 @@ async function refreshFeedback(id){const r=await fetch(base+'/history?id='+encod
 let conversationId
 let controller
 let resetAfterStop = false
-let historyOffset = 0
 let loadingHistory = false
+const sidebar=createConversationHistory({mount:document.querySelector('.main'),toggle:$('history-open'),storageKey:base+'-history',currentId:()=>conversationId,newConversation:()=>$('new-chat').click(),openConversation:openHistory,
+ list:async({offset,query})=>{const r=await fetch(base+'/conversations?'+new URLSearchParams({offset,q:query}));const data=await r.json();if(!r.ok)throw Error(data.error??'无法读取历史对话');return data},
+ mutate:input=>post('/conversation-action',input),read:async id=>{const r=await fetch(base+'/history?id='+encodeURIComponent(id)),data=await r.json();if(!r.ok)throw Error(data.error??'无法读取对话');return data},onDeleted:ids=>{if(ids.includes(conversationId))reset()}})
 const setStatus = text => { $('status').textContent = text }
 const notice = text => { $('notice').textContent = text; $('notice').hidden = !text }
 function busy(value) {
+  sidebar.setBusy(value)
   $('send').hidden = value
   $('stop').hidden = !value
   $('prompt').disabled = value
-  $('more-history').disabled = value
-  for (const button of document.querySelectorAll('.history-item')) button.disabled = value
   for (const button of document.querySelectorAll('[data-question]')) button.disabled = value
 }
 function scroll() {
   const area = $('scroll-area')
   if (area.scrollHeight - area.scrollTop - area.clientHeight < 180) area.scrollTop = area.scrollHeight
 }
-function message(role,text,reasoning='',meta){
+function message(role,text,reasoning='',meta,reasoningSource){
  const article=element('article',undefined,'message qa-message '+(role==='user'?'qa-user':'qa-assistant')),avatar=element('div',undefined,'qa-avatar'),bubble=element('div',undefined,'qa-bubble'),content=element('div',undefined,'text qa-prose');avatar.append(glyph(role==='user'?'user':'chat'));article.append(avatar,bubble)
- let source=text,currentMeta=meta,targetId=conversationId
+ let source=text,currentMeta=meta,targetId=conversationId,rawReasoning=reasoning,savedReasoningSource=reasoningSource
  const update=(value,append=false)=>{source=append?source+value:value;if(role==='assistant')content.innerHTML=renderMarkdown(source);else content.textContent=source};update(text)
  const thinking=makeThinking(reasoning,{className:'thinking'}),summary=thinking.querySelector('summary'),reasoningText=thinking.querySelector('.qa-thinking-body')
+ const setReasoning=(value,done=true,sourceId)=>{rawReasoning=value;savedReasoningSource=sourceId;translations.watch(thinking,{text:value,conversationId,sourceId,done})}
  const tools=element('section',undefined,'qa-tools');tools.hidden=true
  const setTools=items=>{tools.replaceChildren(element('h4','工具调用'));const list=element('div',undefined,'qa-tool-list');for(const item of items){const row=element('div',undefined,'qa-tool '+item.status);row.append(glyph('api'),element('span',({'example_search_framework':'检索框架源码','example_read_framework':'读取框架源码'})[item.name]??item.name),element('span',({running:'执行中',succeeded:'已完成',failed:'失败'})[item.status]??item.status));list.append(row)}tools.append(list);tools.hidden=!items.length}
  const actions=element('div',undefined,'qa-actions'),error=element('span',undefined,'qa-action-error');error.setAttribute('role','status')
@@ -51,7 +56,7 @@ function message(role,text,reasoning='',meta){
  if(Number.isFinite(value?.completedAt))actions.append(element('time',new Date(value.completedAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}),'qa-clock'));actions.append(error)
  }
  if(role==='assistant')bubble.append(thinking,tools);bubble.append(content);if(role==='assistant'){bubble.append(actions);setMeta(meta)}
- $('messages').append(article);return {article,update,thinking,summary,reasoningText,setTools,setMeta,get meta(){return currentMeta}}
+ $('messages').append(article);if(role==='assistant')setReasoning(reasoning,true,reasoningSource);return {article,update,thinking,summary,setReasoning,setTools,setMeta,get reasoning(){return rawReasoning},get reasoningSource(){return savedReasoningSource},get meta(){return currentMeta}}
 }
 $('messages').addEventListener('click', async event => {
   const button = event.target.closest('.copy-code')
@@ -89,17 +94,16 @@ async function send(text) {
       if (event.type === 'session') conversationId = event.conversationId
       if (event.type === 'step') answer.update('')
       if (event.type === 'reasoning' && event.text) {
-        answer.thinking.hidden = false; answer.reasoningText.textContent += event.text
-        updateThinking(answer.thinking,answer.reasoningText.textContent,false); setStatus('正在思考…'); scroll()
+        answer.setReasoning(answer.reasoning+event.text,false); setStatus('正在思考…'); scroll()
       }
       if (event.type === 'delta') {
-        answer.update(event.text, true); updateThinking(answer.thinking,answer.reasoningText.textContent)
+        answer.update(event.text, true); answer.setReasoning(answer.reasoning,true,answer.reasoningSource)
         setStatus('正在回答…'); scroll()
       }
       if (event.type === 'answer') {
         answer.update(event.text)
-        if (event.reasoning) { answer.reasoningText.textContent = event.reasoning; answer.thinking.hidden = false }
-        updateThinking(answer.thinking,answer.reasoningText.textContent); scroll()
+        if (event.reasoning) answer.setReasoning(event.reasoning,true,event.reasoningSource)
+        scroll()
       }
       if (event.type === 'tools') answer.setTools(event.tools)
       if (event.type === 'meta') answer.setMeta(event.meta)
@@ -115,11 +119,13 @@ async function send(text) {
     else { notice(error.message); setStatus('回答未完成'); $('prompt').value = text }
   } finally {
     answer.article.classList.remove('busy','qa-streaming');answer.thinking.classList.remove('running')
-    updateThinking(answer.thinking,answer.reasoningText.textContent)
+    answer.setReasoning(answer.reasoning,true,answer.reasoningSource)
     controller = undefined
     busy(false);answer.setMeta(answer.meta)
     if (resetAfterStop) { resetAfterStop = false; reset() }
     await loadHistory()
+    // Interrupted attempts acquire a durable source only after the host saves them.
+    if(conversationId&&!answer.reasoningSource&&answer.reasoning){try{const saved=await refreshFeedback(conversationId),last=saved.messages.filter(m=>m.role==='assistant').at(-1);if(answer.article.isConnected&&last?.reasoning===answer.reasoning&&last.reasoningSource)answer.setReasoning(last.reasoning,true,last.reasoningSource)}catch{}}
     focusPrompt()
   }
 }
@@ -130,8 +136,9 @@ $('prompt').addEventListener('keydown', event => {
 for (const button of document.querySelectorAll('[data-question]')) button.onclick = () => { void send(button.dataset.question) }
 $('stop').onclick = () => controller?.abort()
 function reset() {
+  translations.reset()
   conversationId = undefined
-  $('messages').replaceChildren(); $('welcome').hidden = false; $('prompt').value = ''
+  $('messages').replaceChildren();sidebar.render(); $('welcome').hidden = false; $('prompt').value = ''
   notice(''); setStatus('新对话 · 之前的内容仍在历史中'); focusPrompt()
 }
 $('new-chat').onclick = () => {
@@ -139,27 +146,7 @@ $('new-chat').onclick = () => {
   if (loadingHistory) return
   reset(); void loadHistory()
 }
-async function loadHistory(append = false) {
-  try {
-    const response = await fetch(base + '/conversations?offset=' + (append ? historyOffset : 0))
-    if (!response.ok) throw new Error('无法读取历史，请确认登录和插件权限。')
-    const data = await response.json()
-    if (!append) $('history-list').replaceChildren()
-    for (const item of data.items) {
-      const button = document.createElement('button')
-      button.className = 'history-item' + (item.id === conversationId ? ' selected' : '')
-      button.textContent = item.title || '新对话'; button.title = button.textContent
-      button.disabled = Boolean(controller)
-      button.onclick = () => { void openHistory(item.id) }
-      $('history-list').append(button)
-    }
-    if (!$('history-list').childElementCount) {
-      const empty = document.createElement('p'); empty.className = 'history-empty'; empty.textContent = '还没有对话，试着问一个问题'; $('history-list').append(empty)
-    }
-    historyOffset = data.nextOffset
-    $('more-history').hidden = historyOffset === null
-  } catch (error) { notice(error.message) }
-}
+async function loadHistory(append=false){await sidebar.refresh(append)}
 async function openHistory(id) {
   if (controller || loadingHistory) return
   loadingHistory = true; busy(true); $('stop').hidden = true
@@ -167,11 +154,11 @@ async function openHistory(id) {
     const response = await fetch(base + '/history?id=' + encodeURIComponent(id))
     if (!response.ok) { const error = await response.json(); throw new Error(error.error ?? '读取历史失败') }
     const data = await response.json()
+    translations.reset()
     conversationId = data.conversationId
-    historyPanel.close()
     $('messages').replaceChildren(); $('welcome').hidden = true
     feedback=new Map((data.feedback??[]).map(f=>[f.messageId,f]));feedbackAvailable=data.feedbackAvailable
-    let turnIndex=0;for (const item of data.messages){const m=message(item.role,item.text,item.reasoning,item.role==='assistant'?data.turns?.[item.turn??turnIndex++]:undefined);if(item.role==='assistant'&&m.meta)m.setTools(m.meta.tools??[])}
+    let turnIndex=0;for (const item of data.messages){const m=message(item.role,item.text,item.reasoning,item.role==='assistant'?data.turns?.[item.turn??turnIndex++]:undefined,item.reasoningSource);if(item.role==='assistant'&&m.meta)m.setTools(m.meta.tools??[])}
     notice(data.busy ? '此会话仍在另一页面回答，请等待结束后刷新历史。' : '')
     setStatus('历史已恢复 · 可以继续追问')
     $('scroll-area').scrollTop = $('scroll-area').scrollHeight
@@ -179,7 +166,6 @@ async function openHistory(id) {
   } catch (error) { notice(error.message) }
   finally { loadingHistory = false; busy(false); focusPrompt() }
 }
-$('more-history').onclick = () => { void loadHistory(true) }
 try {
   const response = await fetch(base + '/identity')
   if (!response.ok) throw new Error('无法验证访问状态，请重新登录。')
@@ -188,7 +174,6 @@ try {
   $('knowledge-version').title = '知识摘要标识随包资料内容，不代表远程仓库实时状态'
   $('access-mode').textContent = identity.mode === 'authenticated' ? '已通过身份认证' : '独立体验模式'
   $('auth-link').hidden = identity.mode !== 'authenticated'
-  $('history-label').textContent = identity.mode === 'authenticated' ? '我的历史对话' : '独立模式历史'
   feedbackAvailable=identity.feedbackAvailable
   $('prompt').maxLength = identity.maxMessageChars
   await loadHistory()
