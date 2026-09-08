@@ -5,8 +5,10 @@ import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertPublicFrameworkConfig } from '../packages/plugin-manager/src/framework-config.mjs';
+import { frameworkVersion } from './version.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+frameworkVersion(root);
 // Repository rules apply even to force-added files; personal Git excludes are not project policy.
 const ignoredTracked = execFileSync('git', ['ls-files', '--cached', '--ignored', '--exclude-per-directory=.gitignore', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean);
 assert.equal(ignoredTracked.length, 0, `Ignored files tracked by Git:\n${ignoredTracked.join('\n')}`);
