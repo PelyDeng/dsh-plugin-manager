@@ -10,6 +10,7 @@
 | `@dsh-plugin-manager/plugin-kit/http` | `createPluginHttp`：受保护路由与显式公开探针 |
 | `@dsh-plugin-manager/plugin-kit/tools` | `createPluginTools`、`guardTool`：执行前后鉴权与工具登记 |
 | `@dsh-plugin-manager/plugin-kit/conversations` | 会话协议、只读预览、分页查询与官方归档；无需工具类型依赖 |
+| `@dsh-plugin-manager/plugin-kit/models` | 官方默认模型及会话模型恢复；无需工具类型依赖 |
 | `@dsh-plugin-manager/plugin-kit/route-path` | 无宿主依赖的规范路由校验 |
 | `@dsh-plugin-manager/plugin-kit/model-key` | 固定 DeepSeek/智谱凭据校验、状态与 SHA-256 指纹；写入委托给官方 credentials 服务，不接受任意凭据引用 |
 | `@dsh-plugin-manager/plugin-kit/deepseek-key` | 默认 DeepSeek 凭据操作的兼容入口 |
