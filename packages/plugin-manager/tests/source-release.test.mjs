@@ -4,6 +4,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { readPlugin } from '../src/plugins.mjs';
+import { loadRelease } from '../src/release.mjs';
 import { release, validateBase } from '../../../deploy/scripts/build.mjs';
 import { loadSite } from '../../../deploy/scripts/site.mjs';
 import { renderFrameworkConfig } from '../src/framework-config.mjs';
@@ -57,7 +60,7 @@ function fixture(t, { fresh = false, fail } = {}) {
     }
     if (bin === process.execPath && args[1] === 'apply-compose') {
       const candidate = JSON.parse(readFileSync(args[args.indexOf('--config') + 1]));
-      put('.local/artifacts/new-compose.json', { services: { dsh: { image: candidate.containerImage, environment: { DSH_PORT: String(candidate.port), DSH_HOME: '/data/dsh-home', DSH_PROFILE: 'web' }, volumes: [{ type: 'bind', source: runtimeData, target: '/data' }] } } });
+      put('.local/artifacts/new-compose.json', { services: { dsh: { image: candidate.containerImage, environment: { DSH_PORT: String(candidate.port), DSH_HOME: '/data/dsh-home', DSH_PROFILE: 'web', PLUGIN_MANIFEST_FILE: '/opt/plugin-packages/manifest.json' }, volumes: [{ type: 'bind', source: runtimeData, target: '/data' }, { type: 'bind', source: resolve(root, candidate.manifest, '..'), target: '/opt/plugin-packages', read_only: true }] } } });
       put('.local/artifacts/active-compose.json', { project: candidate.composeProject, path: resolve(artifacts, 'new-compose.json') });
     }
     if (bin === 'docker' && args[0] === 'tag') images.set(args[2], images.get(args[1]) ?? builtInfo);
@@ -141,6 +144,82 @@ test('repeated execution keeps the site file and uses the established deployment
   assert.equal(f.calls.filter(call => call[0] === 'build-host').length, 1);
   assert.equal(readFileSync(resolve(f.root, '.local/env.conf'), 'utf8'), site);
   assert.equal(f.result().stopComplete, true);
+});
+
+test('selective source release packages only requested IDs, preserves all other bytes and resumes the fixed combination', t => {
+  const f = fixture(t, { fresh: true }), ids = ['alpha', 'bravo', 'charlie', 'delta'];
+  f.put('pnpm-lock.yaml', 'lockfileVersion: 9.0');
+  f.put('.local/site.json', { plugins: ids });
+  for (const id of ids) {
+    f.put(`plugins/${id}/package.json`, { name: id, version: '0.1.0', type: 'module', main: 'dist/index.mjs', files: ['dist', 'cordis.patch.yml'],
+      scripts: { build: 'node build.mjs', check: 'node check.mjs' }, dsh: { bundle: { patch: 'cordis.patch.yml' } }, deepseekPlugin: { schemaVersion: 3, id } });
+    f.put(`plugins/${id}/README.md`, id);
+    f.put(`plugins/${id}/cordis.patch.yml`, `- insert:\n  - id: ${id}\n    name: ${id}\n`);
+  }
+  const packaged = [], counts = Object.fromEntries(ids.map(id => [id, 0]));
+  let failApply = false, dirtyHostAfterPack = false, hostDirty = false;
+  const execute = (bin, args, options) => {
+    if (bin === 'git' && args[0] === '-C' && args[2] === 'status' && hostDirty) return ' M changed-host.mjs';
+    if (bin === 'git' && args[0] === 'show') return readFileSync(resolve(f.root, args[1].slice(args[1].indexOf(':') + 1)), 'utf8');
+    if (bin === process.execPath && args[0] === 'scripts/package-plugins.mjs') {
+      const selected = args[args.indexOf('--plugins') + 1].split(','); packaged.push(selected);
+      const output = args.at(-1), plugins = [];
+      for (const id of selected) {
+        counts[id]++;
+        const stage = `.local/staging/${id}/package`, source = JSON.parse(readFileSync(resolve(f.root, `plugins/${id}/package.json`)));
+        f.put(`${stage}/package.json`, source);
+        f.put(`${stage}/README.md`, id);
+        f.put(`${stage}/cordis.patch.yml`, readFileSync(resolve(f.root, `plugins/${id}/cordis.patch.yml`), 'utf8'));
+        f.put(`${stage}/dist/index.mjs`, `export const build = ${counts[id]};\nexport function apply() {}\n`);
+        mkdirSync(output, { recursive: true });
+        const archive = `${id}-${counts[id]}.tgz`, path = resolve(output, archive);
+        const tar = spawnSync('tar', ['-czf', path, '-C', resolve(f.root, stage, '..'), 'package'], { encoding: 'utf8', windowsHide: true });
+        assert.equal(tar.status, 0, tar.stderr);
+        plugins.push({ ...readPlugin(resolve(f.root, `plugins/${id}`)), directory: `plugins/${id}`, archive, sha256: digest(readFileSync(path)) });
+      }
+      f.put(resolve(output, 'manifest.json'), { schemaVersion: 1, plugins });
+      if (dirtyHostAfterPack) hostDirty = true;
+      return '';
+    }
+    if (failApply && args[1] === 'apply-compose') throw new Error('selective apply interrupted');
+    return f.execute(bin, args, options);
+  };
+  const options = { root: f.root, config: '.local/site.json' };
+  release(options, execute, f.buildHost);
+  const baseline = f.result(), original = loadRelease(baseline.manifest);
+  failApply = true;
+  assert.throws(() => release({ ...options, rebuildPlugins: 'charlie' }, execute, f.buildHost), /selective apply interrupted/);
+  const partial = f.result(), candidate = loadRelease(partial.manifest);
+  assert.deepEqual(packaged, [ids, ['charlie']]);
+  assert.deepEqual(counts, { alpha: 1, bravo: 1, charlie: 2, delta: 1 });
+  assert.deepEqual(candidate.plugins.map(p => p.id).sort(), ids);
+  for (const before of original.plugins) {
+    const after = candidate.plugins.find(p => p.id === before.id);
+    if (before.id === 'charlie') assert.notEqual(after.sha256, before.sha256);
+    else assert.deepEqual(readFileSync(after.archivePath), readFileSync(before.archivePath));
+  }
+  assert.deepEqual(partial.rebuilt, ['charlie']);
+  assert.deepEqual(partial.reused, ['alpha', 'bravo', 'delta']);
+  assert.equal(partial.reuseSource, resolve(baseline.operation, 'result.json'));
+  failApply = false;
+  release({ ...options, resume: true }, execute, f.buildHost);
+  assert.equal(f.result().status, 'ready');
+  assert.equal(f.result().manifestHash, partial.manifestHash);
+  assert.deepEqual(packaged, [ids, ['charlie']]);
+  release({ ...options, rebuildPlugins: 'bravo,delta' }, execute, f.buildHost);
+  assert.deepEqual(packaged.at(-1), ['bravo', 'delta']);
+  assert.deepEqual(f.result().reused, ['alpha', 'charlie']);
+  assert.equal(f.result().pluginBuilds.find(p => p.id === 'charlie').sha256, candidate.plugins.find(p => p.id === 'charlie').sha256);
+  const beforeAll = loadRelease(f.result().manifest);
+  release({ ...options, rebuildPlugins: ids.join(',') }, execute, f.buildHost);
+  assert.deepEqual(packaged.at(-1), ids);
+  for (const plugin of beforeAll.plugins) assert.deepEqual(readFileSync(resolve(f.result().manifest, '..', plugin.archive)), readFileSync(plugin.archivePath));
+  const stops = f.calls.filter(call => call.includes('stop')).length;
+  dirtyHostAfterPack = true;
+  assert.throws(() => release({ ...options, rebuildPlugins: 'charlie' }, execute, f.buildHost), /Host source or image changed/);
+  assert.equal(f.calls.filter(call => call.includes('stop')).length, stops);
+  assert.equal(f.result().status, 'build-failed');
+  assert.equal(f.result().hostSourceClean, false);
 });
 
 test('a partial site override uses the same effective paths on repeated deployments', t => {

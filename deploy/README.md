@@ -8,7 +8,7 @@ Windows、macOS、Linux 共用一套源码部署流程。已安装 Node.js、Git
 ./build.sh
 ```
 
-Windows PowerShell 使用 `.\build.ps1`，不需要 Bash；资源管理器中的启动方式见[一键部署](../doc/first-deployment.md)。旧 `bash deploy/build.sh` 及 `deploy/build.ps1` 入口继续支持；参数一致，可使用 `--help`、`--config <文件>`、`--resume`。
+Windows PowerShell 使用 `.\build.ps1`，不需要 Bash；资源管理器中的启动方式见[一键部署](../doc/first-deployment.md)。旧 `bash deploy/build.sh` 及 `deploy/build.ps1` 入口继续支持；参数一致，可使用 `--help`、`--config <文件>`、`--rebuild-plugins <插件ID列表>`、`--resume`。
 
 脚本检查基础软件而不安装它们，pnpm 按仓库锁定版本自动准备。仅接受本机 Docker unix/npipe endpoint，不支持远端或 TCP endpoint、Windows 容器。macOS 的实际 Docker 站点部署尚未完成真机验收；CI 测试不等同于部署验收。
 
@@ -27,7 +27,21 @@ Windows 将最后一行换成 `.\build.ps1`。首次自动创建 `.local/env.con
 
 以后读取私有 env；`.local/deployment.json`、发布清单、Compose 和操作记录均由脚本生成，不需要人工准备，也不提交 Git。完整配置、前置环境和恢复说明见[Docker 一键部署](../doc/first-deployment.md)。
 
-脚本自动准备锁定的 pnpm，安装依赖，构建和检查管理器及 `plugins` 列出的全部插件，并打包发布清单。需要宿主镜像时直接使用仓库已提供的官方源码构建；源码不完整时提示缺失，不自动拉取，也不要求与预设锁定版本一致。宿主源码未变时复用已有宿主层，安装本次构建的 manager。默认使用本机不可变镜像 ID，仅设置 `publishImage` 时推送镜像仓库。构建记录使用已提交源码，无需分别选择组件版本。
+脚本自动准备锁定的 pnpm，安装依赖，默认构建管理器、构建并检查 `plugins` 列出的全部插件，再打包发布清单。需要宿主镜像时直接使用仓库已提供的官方源码构建；源码不完整时提示缺失，不自动拉取，也不要求与预设锁定版本一致。宿主源码未变时复用已有宿主层，安装本次构建的 manager。默认使用本机不可变镜像 ID，仅设置 `publishImage` 时推送镜像仓库。构建记录使用已提交源码，无需分别选择组件版本。
+
+只改动一个或几个插件时，可显式选择重建插件，其余自动复用当前成功部署的归档。例如站点启用了 a、b、c、d，只重建 c：
+
+```sh
+./build.sh --rebuild-plugins c
+```
+
+Windows 使用 `.\build.ps1 --rebuild-plugins c`；多个 ID 写成 `--rebuild-plugins c,d`。参数采用 `deepseekPlugin.id`，每个 ID 必须属于站点当前部署选集；不接受空项、重复 ID、`all` 或 `none`。保留站点的完整 `DSH_PLUGINS` / `plugins` 配置，不要把它改成只有 c。新清单仍包含 a、b、c、d，只有 c 执行插件 build/check/pack；省略参数继续全量构建。
+
+复用要求当前活动部署对应一份完整的 ready 发布记录，并能核实源码、构建环境、宿主和旧归档。首次部署、旧记录缺少来源、待复用插件缺包、摘要损坏或声明不匹配时，会在停服前拒绝，不自动改为全量构建。先普通全量部署可以建立新基线；以后每个复用包保留原构建来源和验证记录，不能把历史验证当作新组合已通过业务验收。
+
+变化检查采用保守规则：只允许重建插件目录内的已提交变动；未重建插件或共享已跟踪文件变化，包括 kit、根锁文件、构建脚本和公共文档，均要求全量构建。已声明的本地构建依赖按传递关系检查；例如 example 的源码索引读取 auth，改动 auth 时须同时重建 example。插件作者的输入声明及安装钩子约束见[内部工作区开发](../doc/plugin-development.md#内部工作区开发)。这项功能不自动推断未声明的跨目录或外部输入，也不会自动扩大重建选集。
+
+单插件重建仍执行公共 manager/kit 构建、镜像准备、停服安装和健康检查，不是热更新。失败后需要恢复已准备的发布时，只传 `--resume`，不要再带 `--rebuild-plugins`；恢复固定使用保存的完整清单、镜像和站点配置，不重新选择旧包或构建插件。
 
 站点插件启停、认证配置及持久数据继续沿用；修改数据路径或 profile 需要显式迁移。源码更新不自动创建全量运行数据备份；发布产物、操作记录和私有配置副本不代替数据备份。需要数据恢复能力时，在更新前独立备份并验证恢复；已有备份继续保留。
 

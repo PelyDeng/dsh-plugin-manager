@@ -1,6 +1,6 @@
 {
   "name": "dsh-example",
-  "version": "0.14.3",
+  "version": "0.14.4",
   "description": "DSH Plugin Manager 开发者接入答疑助手与可复制的鉴权对话示例",
   "license": "Apache-2.0",
   "private": true,
@@ -151,6 +151,7 @@
     "@deepseek-ai/dsh-token-meter": "0.1.2-alpha.5",
     "@deepseek-ai/dsh-tools": "0.1.2-alpha.5",
     "@dsh-plugin-manager/plugin-kit": "workspace:*",
+    "dsh-auth": "workspace:*",
     "@types/node": "^22.20.0",
     "markdown-it": "15.0.1",
     "tsdown": "^0.22.2",

@@ -17,16 +17,16 @@
 
 ### 1. 取得并安装工具
 
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者交付的 manager 0.14.3 tgz；需要统一身份时再取得 kit 0.14.3 tgz，按交付 SHA-256 核对文件。已公开归档见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)，目标版本没有附件时按下方源码步骤构建，不假定 npm 已发布。以下命令安装本地归档。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者交付的 manager 0.14.4 tgz；需要统一身份时再取得 kit 0.14.4 tgz，按交付 SHA-256 核对文件。已公开归档见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)，目标版本没有附件时按下方源码步骤构建，不假定 npm 已发布。以下命令安装本地归档。
 
 在工具目录执行，把占位路径替换成实际文件的绝对路径：
 
 ```sh
-pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.14.3.tgz"
+pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.14.4.tgz"
 pnpm exec dsh-plugin-manager --version
 ```
 
-**预期**：输出 manager 0.14.3。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
+**预期**：输出 manager 0.14.4。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
 
 ### 2. 选择示例，建立自己的仓库
 
@@ -46,7 +46,7 @@ pnpm install --ignore-workspace
 统一身份示例，在作者根执行以下命令安装实际 kit 归档，同时生成锁文件：
 
 ```sh
-pnpm add --ignore-workspace --save-dev "/absolute/path/plugin-kit-0.14.3.tgz"
+pnpm add --ignore-workspace --save-dev "/absolute/path/plugin-kit-0.14.4.tgz"
 ```
 
 **预期**：作者根生成自己的 pnpm-lock.yaml，应随源码保存。kit 是构建依赖并内嵌到应用；作者构建需能取得该 tgz，release 运行端不需要它的原始路径。希望从完整聊天应用开始时，见[完整问答应用复制步骤](#复制完整问答应用到独立仓库)。
@@ -103,6 +103,12 @@ pnpm list:plugins
 
 按当前改动选择上表中的命令，不必每次全部执行。只交付时直接 package，不需要先重复 build/check。普通构建和测试不要求宿主子模块、模型密钥或 Docker；内部清单 1 保留 development/link，外部单包与组合清单 2 只支持 release。
 
+源码部署可用 `./build.sh --rebuild-plugins c` 或 `.\build.ps1 --rebuild-plugins c` 只重建指定插件，并复用其余已启用插件的旧归档；部署选集、复用条件及恢复方式见[部署说明](../deploy/README.md#服务器源码发版)。日常 `pnpm package --plugins c` 只生成 c 的交付清单，不会自动补入其他插件。
+
+可复用插件的构建输入须来自自身目录、受管共享源码，以及 `dependencies`、`devDependencies`、`optionalDependencies` 声明的本地依赖。读取其他插件源码也属于构建依赖，应通过本地包名和标准 `workspace:` 声明；间接依赖变化同样影响复用，匹配本地包名的 peer 依赖也会检查。`file:` / `link:` 路径依赖不提供复用保证，含有这类依赖时须全量构建。example 读取 auth 源码生成索引，因此把 auth 声明为开发依赖。任意脚本读取未声明目录、外部文件或环境产生的输入无法由 Git 差异证明；存在这种输入变化时应全量构建。
+
+插件构建由显式 build/check/pack 流程执行，不得用依赖安装钩子触发插件构建或修改产物。选择重建前会核验相关安装钩子；不能以“插件没有被选中”为由允许其安装钩子间接重建。
+
 ### 3. 运行并验证
 
 首次运行按[配置并启动](getting-started.md#3-配置并启动)操作；开发模式及管理参数见[部署命令](../deploy/README.md)。示例默认要求登录，候选选入 auth、example 并配置公开 origin。安装现成清单默认选择其中全部插件，也可通过 `--plugins` 限定。
@@ -111,7 +117,7 @@ pnpm list:plugins
 
 复制 `plugins/dsh-example` 中的源码、scripts、web、knowledge、examples、skills、Bundle、README/LICENSE、package.json、tsconfig 与 tsdown 配置；不复制 node_modules、dist、数据库和 .local。选择一个未加入原框架 workspace 的新包根。问答视觉与交互遵循随包 [聊天风格 skill](../plugins/dsh-example/skills/dsh-chat-style/SKILL.md)，包括折叠思考预览、流式更新和回答工具栏。
 
-1. 在作者 package.json 删除 `@dsh-plugin-manager/plugin-kit` 的 `workspace:*` 开发依赖，再在作者根执行 `pnpm add --ignore-workspace --save-dev <kit-tgz绝对路径>`。保留 tsdown 内嵌 kit，宿主依赖保持 peer。
+1. 在作者 package.json 删除 `@dsh-plugin-manager/plugin-kit` 的 `workspace:*` 开发依赖，再在作者根执行 `pnpm add --ignore-workspace --save-dev <kit-tgz绝对路径>`。同时删除只用于声明框架源码索引输入的 `dsh-auth` 开发依赖；索引读取第 5 步显式提供的框架源码。保留 tsdown 内嵌 kit，宿主依赖保持 peer。
 2. 删除 scripts.clean 的原仓库相对入口，或换成只清理本包构建目录的实现。不要把数据目录加入清理命令。
 3. `tests/config-examples.test.mjs` 含框架管理器集成检查，`tests/host-smoke.mjs` 使用框架相对宿主和归档路径；这两份留在框架，不复制到独立应用测试。其余 chat/history/knowledge 测试和 fixture 可作为应用自己的回归基础。
 4. 修改包名、ID、Bundle、页面/探针、权限、配置 entryId、会话前缀/正则、提示词段名、知识、页面文案和测试；仅验证原 example 独立构建时可先保留名称，但不能与原包在同一候选中重复安装。

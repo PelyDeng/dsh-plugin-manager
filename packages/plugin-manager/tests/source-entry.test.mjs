@@ -18,7 +18,21 @@ function fixture(t) {
 
 test('source argument validation rejects unsupported, duplicate and missing options', () => {
   assert.deepEqual(sourceArguments(['--config', '中文 with spaces.conf', '--resume']), ['--config', '中文 with spaces.conf', '--resume']);
+  assert.deepEqual(sourceArguments(['--rebuild-plugins', 'alpha,charlie']), ['--rebuild-plugins', 'alpha,charlie']);
   for (const args of [['--config'], ['--config', '--resume'], ['--resume', '--resume'], ['--unknown'], ['other']]) assert.throws(() => sourceArguments(args), /argument/);
+  for (const value of ['', 'all', 'none', 'dsh-console', 'alpha,alpha', 'alpha,', 'Alpha', 'alpha beta', '../alpha']) assert.throws(() => sourceArguments(['--rebuild-plugins', value]), /argument/);
+  assert.throws(() => sourceArguments(['--resume', '--rebuild-plugins', 'alpha']), /--resume/);
+  assert.throws(() => sourceArguments(['--rebuild-plugins', 'alpha', '--rebuild-plugins', 'beta']), /argument/);
+});
+
+test('partial build selection reaches the private update and fresh worker under the source lock', async t => {
+  const f = fixture(t), args = ['--rebuild-plugins', 'alpha,charlie'];
+  f.put('deploy/scripts/build.mjs', 'import {writeFileSync} from "node:fs"; writeFileSync("selection.json", JSON.stringify(process.argv.slice(2))); process.send({type:"source-build-finished",code:0});');
+  let updated = false;
+  assert.equal(await sourceRelease({ root: f.root, args, preflight: f.preflight, beforeBuild: (_root, actual) => { assert.deepEqual(actual, args); assert.ok(existsSync(f.lock)); updated = true; } }), 0);
+  assert.ok(updated);
+  assert.deepEqual(JSON.parse(readFileSync(resolve(f.root, 'selection.json'))), args);
+  await assert.rejects(sourceRelease({ root: f.root, args: ['--rebuild-plugins', 'alpha,alpha'], beforeBuild: () => { throw new Error('must not sync'); } }), /argument/);
 });
 
 test('help and explicit management retain their routes without preflight, lock or source updates', async t => {

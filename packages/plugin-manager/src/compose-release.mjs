@@ -10,6 +10,11 @@ import { mergeVerification } from './verification.mjs';
 export function composeRelease(manifests, output, previous, verificationReports = []) {
   if (!manifests.length) throw new Error('至少提供一个 --manifest。');
   const releases = manifests.map(path => loadRelease(path));
+  return composeReleases(releases, output, previous && loadRelease(previous), verificationReports);
+}
+
+/** Compose validated, explicitly selected releases using the same archive writer as the CLI. */
+export function composeReleases(releases, output, previous, verificationReports = []) {
   const plugins = releases.flatMap(release => release.plugins);
   const verification = mergeVerification(releases.map(release => release.verification), verificationReports, plugins);
   for (const field of ['id', 'package']) {
@@ -41,7 +46,7 @@ export function composeRelease(manifests, output, previous, verificationReports 
     if (existing && existing.sha256 !== plugin.sha256) throw new Error(`归档目标路径内容冲突：${archive}。`);
     copies.set(key, { target, source: plugin.archivePath, sha256: plugin.sha256 });
   }
-  if (previous) for (const plugin of loadRelease(previous).plugins) include(plugin, plugin.archive);
+  if (previous) for (const plugin of previous.plugins) include(plugin, plugin.archive);
   const manifest = { schemaVersion: 2, verification, plugins: plugins.map(({ directory, archivePath, ...plugin }) => {
     const archive = `${plugin.id}-${plugin.sha256}.tgz`;
     include({ ...plugin, archivePath }, archive);

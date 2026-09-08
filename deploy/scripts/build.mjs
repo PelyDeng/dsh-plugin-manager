@@ -14,6 +14,7 @@ import { checkSourceNode } from './platform.mjs';
 import { bootstrapSource, prepareWorkspaceDependencies } from './bootstrap.mjs';
 import { sourceArguments } from './release.mjs';
 import { frameworkVersion } from '../../scripts/version.mjs';
+import { assertSelectiveInstallSafe, preparePluginReuse } from './plugin-reuse.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
@@ -29,7 +30,7 @@ function command(bin, args, options) {
 }
 
 const direct = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-let loadSite, json, save, resolveDeployment, frameworkInput, prepareFrameworkCredentials, rememberFrameworkInput;
+let loadSite, json, save, resolveDeployment, frameworkInput, prepareFrameworkCredentials, rememberFrameworkInput, loadRelease, composeReleases;
 let bootstrapError, bootstrapped = false, bootstrapEnv;
 if (!direct || !process.argv.slice(2).includes('--help')) {
   try {
@@ -43,6 +44,8 @@ if (!direct || !process.argv.slice(2).includes('--help')) {
     ({ loadSite, readJson: json, saveJson: save } = await import('./site.mjs'));
     ({ resolveDeployment } = await import('../../packages/plugin-manager/src/config.mjs'));
     ({ frameworkInput, prepareFrameworkCredentials, rememberFrameworkInput } = await import('../../packages/plugin-manager/src/framework-credentials.mjs'));
+    ({ loadRelease } = await import('../../packages/plugin-manager/src/release.mjs'));
+    ({ composeReleases } = await import('../../packages/plugin-manager/src/compose-release.mjs'));
   } catch (error) {
     if (!direct) throw error;
     bootstrapError = error;
@@ -57,8 +60,12 @@ export function validateBase(reference, info) {
 }
 
 /** Initialize missing inputs; resume only the saved image, packages and unchanged site preferences. */
-export function release({ root = repositoryRoot, config, resume = false } = {}, execute = command, buildHost = buildHostImage) {
+export function release({ root = repositoryRoot, config, resume = false, rebuildPlugins } = {}, execute = command, buildHost = buildHostImage) {
   root = resolve(root);
+  if (rebuildPlugins !== undefined) {
+    sourceArguments(['--rebuild-plugins', rebuildPlugins, ...(resume ? ['--resume'] : [])]);
+    assertSelectiveInstallSafe(root);
+  }
   const env = normalizeEnvironment(bootstrapped && root === resolve(repositoryRoot) ? bootstrapEnv : process.env);
   // Source releases take their deployment choices from the saved site file.
   for (const key of ['DEPLOYMENT_CONFIG', 'PLUGIN_MANIFEST_FILE', 'DSH_DATA_DIR', 'DSH_HOME', 'DSH_WORKSPACE', 'DSH_AUTH_URL_FILE', 'DSH_DEPLOY_ARTIFACTS', 'DSH_PROFILE', 'DSH_PUBLIC_ORIGIN', 'DSH_PUBLIC_URL', 'DSH_STORE_DIR', 'DSH_OFFLINE_STORE_DIR', 'DSH_CACHE_DIR', 'DSH_OFFLINE_CACHE_DIR']) delete env[key];
@@ -110,10 +117,19 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
   if (!resume && (!active || String(previousCompose.services.dsh.environment?.DSH_PORT) !== String(site.port))) {
     capture(process.execPath, ['--input-type=module', '-e', 'import net from "node:net"; const s=net.createServer(); s.once("error",()=>{console.error("Requested port is unavailable.");process.exitCode=1});s.listen(Number(process.argv[1]),"127.0.0.1",()=>s.close());', String(site.port)]);
   }
+  const buildEnvironment = { nodeVersion: process.versions.node, platform: process.platform, architecture: process.arch,
+    packageManager: json(resolve(root, 'package.json')).packageManager, targetArchitecture: runtime.architecture, hostImage: site.hostImage ?? null };
+  const rebuilt = rebuildPlugins === undefined ? site.plugins : rebuildPlugins.split(',');
+  const selection = rebuildPlugins === undefined ? null : preparePluginReuse({ root, previous, active, site, revision, hostCommit, buildEnvironment, rebuilt, git });
+  // Explicitly rebuilding the full set retains the ordinary legacy archive-copy path.
+  const reuse = selection?.release.plugins.length ? selection : null;
   const operation = resume ? prior.operation : resolve(root, '.local/artifacts', `source-release-${revision.slice(0, 12)}-${randomUUID()}`);
   ensurePrivateDirectory(operation);
   const recordPath = resolve(operation, 'result.json');
-  const record = resume ? json(recordPath) : { schemaVersion: 2, operation, revision, hostCommit, sitePath, siteHash: hash(sitePath), status: 'building', previous: active, previousRuntime: previous, runtime };
+  const record = resume ? json(recordPath) : { schemaVersion: 2, operation, revision, hostCommit, hostSourceCommit: hostCommit,
+    hostSourceClean: Boolean(hostCommit) && git(['-C', host, 'status', '--porcelain', '--untracked-files=normal']) === '',
+    buildEnvironment, sitePath, siteHash: hash(sitePath), status: 'building', previous: active, previousRuntime: previous, runtime,
+    ...(reuse ? { rebuilt, reused: reuse.builtFrom.map(plugin => plugin.id), reuseSource: reuse.sourceRecord } : {}) };
   if (resume && (record.schemaVersion !== 2 || record.sitePath !== sitePath || record.siteHash !== hash(sitePath))) throw new Error('Resume requires the original unchanged site configuration. The saved release inputs are retained.');
   if (record.runtime) ensureDockerIdentity(record.runtime, runtime);
   if (!resume && source) {
@@ -133,9 +149,14 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
       step('打包 plugin-manager', 'pnpm', ['--filter', '@dsh-plugin-manager/plugin-manager', 'pack', '--out', record.managerArchive]);
       record.managerHash = hash(record.managerArchive);
       step('准备发布工具', 'npm', ['install', '--prefix', resolve(operation, 'tooling'), '--offline', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', record.managerArchive]);
-      run(process.execPath, ['scripts/package-plugins.mjs', '--plugins', site.plugins.join(',') || 'none', '--output', resolve(operation, 'plugins')]);
+      run(process.execPath, ['scripts/package-plugins.mjs', '--plugins', rebuilt.join(',') || 'none', '--output', resolve(operation, reuse ? 'incoming' : 'plugins')]);
       const manifest = resolve(operation, 'plugins/manifest.json');
-      if (active) {
+      if (reuse) {
+        const fresh = loadRelease(resolve(operation, 'incoming/manifest.json'));
+        if (fresh.plugins.length !== rebuilt.length || fresh.plugins.some(plugin => !rebuilt.includes(plugin.id))) throw new Error('Rebuilt plugin archives differ from the requested selection.');
+        buildStep('组合新旧插件产物', () => composeReleases([reuse.release, fresh], dirname(manifest), reuse.previousRelease));
+        for (const plugin of reuse.release.plugins) buildMessage(`复用插件 ${plugin.id}：${plugin.sha256}`);
+      } else if (active) {
         const oldManifest = resolve(root, previous.manifest);
         for (const p of json(oldManifest).plugins) {
           if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/.test(p.archive) || !/^[a-f0-9]{64}$/.test(p.sha256)) throw new Error('Invalid previous archive descriptor.');
@@ -144,6 +165,8 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
           if (!existsSync(destination)) copyFileSync(source, destination);
         }
       }
+      record.pluginBuilds = json(manifest).plugins.map(plugin => reuse?.builtFrom.find(old => old.id === plugin.id)
+        ?? { id: plugin.id, sha256: plugin.sha256, builtFromRevision: revision });
       prepareFrameworkCredentials(resolvedSite, { uid: site.containerUid, gid: site.containerGid });
       const candidate = { ...site, dockerRuntime: runtime, manifest: relative(root, manifest).replaceAll('\\', '/'),
         ...(resolvedSite.config.frameworkCredentials ? { frameworkCredentials: resolvedSite.config.frameworkCredentials } : {}) };
@@ -197,6 +220,10 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
         if (!reference) throw new Error('The published image has no matching digest.');
       }
       if (git(['rev-parse', 'HEAD']) !== revision || git(['status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=all']) || hash(sitePath) !== record.siteHash) throw new Error('Source or site preferences changed during the build; service has not been stopped.');
+      const hostUnchanged = Boolean(hostCommit) && git(['-C', host, 'rev-parse', 'HEAD']) === hostCommit
+        && git(['-C', host, 'status', '--porcelain', '--untracked-files=normal']) === '';
+      record.hostSourceClean = record.hostSourceClean && hostUnchanged;
+      if (reuse && (!record.hostSourceClean || record.hostCommit !== hostCommit)) throw new Error('Host source or image changed during selective build; service has not been stopped.');
       if ((originalConfig && !readFileSync(runtimePath).equals(originalConfig)) || (!originalConfig && existsSync(runtimePath))) throw new Error('Deployment state changed during the build.');
       candidate.containerImage = reference;
       save(record.candidatePath, candidate);
@@ -239,7 +266,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
 if (direct) {
   try {
     const args = process.argv.slice(2), options = {};
-    if (args.includes('--help')) console.log('Windows: .\\build.ps1 [--config <env.conf|site.json>] [--resume]\nmacOS/Linux: ./build.sh [--config <env.conf|site.json>] [--resume]\n源码锁恢复：通过 build 脚本运行 doctor（只读诊断）或 unlock-source（安全解锁）；不更新源码、不启动构建。\nFirst run initializes .local/env.conf (legacy JSON remains explicit-compatible); .local/deployment.json and release records are generated.\nRequires Node.js ^22.19 or >=24, npm, Git, local Linux Docker Compose and system tar. pnpm is prepared automatically.');
+    if (args.includes('--help')) console.log('Windows: .\\build.ps1 [--config <env.conf|site.json>] [--rebuild-plugins <id,...> | --resume]\nmacOS/Linux: ./build.sh [--config <env.conf|site.json>] [--rebuild-plugins <id,...> | --resume]\n--rebuild-plugins：仅重建指定插件，其余从当前成功部署复用；首次部署或共享构建输入变化时先全量构建。不传参数默认全量。\n--resume：沿用原操作镜像、清单和新旧产物组合，不与 --rebuild-plugins 同用。\n源码锁恢复：通过 build 脚本运行 doctor（只读诊断）或 unlock-source（安全解锁）；不更新源码、不启动构建。\nFirst run initializes .local/env.conf (legacy JSON remains explicit-compatible); .local/deployment.json and release records are generated.\nRequires Node.js ^22.19 or >=24, npm, Git, local Linux Docker Compose and system tar. pnpm is prepared automatically.');
     else {
       if (bootstrapError) throw bootstrapError;
       checkSourceNode();
@@ -247,6 +274,7 @@ if (direct) {
         const flag = args.shift();
         if (flag === '--resume' && !options.resume) options.resume = true;
         else if (flag === '--config' && !options.config && args[0] && !args[0].startsWith('--')) options.config = args.shift();
+        else if (flag === '--rebuild-plugins' && !options.rebuildPlugins && args[0] && !args[0].startsWith('--')) options.rebuildPlugins = args.shift();
         else throw new Error(`Unknown or duplicate argument: ${flag}. Use --help.`);
       }
       release(options);

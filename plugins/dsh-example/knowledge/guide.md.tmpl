@@ -81,11 +81,7 @@ API Key不创建模型路由、不选择默认模型，也不验证额度；智�
 
 ## 第二个应用到底少写什么？
 
-已有知识库助手再加销售助手，复用 auth 登录、kit 身份和 manager 交付；作者仍写检索/销售接口、指标、图表、工具、提示词及业务数据权限。
-
-模型仅提出查询参数；服务端从可信 actor 取得身份、限定数据范围，不能将模型给出的 userId 当授权依据。应用许可与业务数据许可分别检查。
-
-第二应用复用同一认证，kit 升级仍需重打包。销售场景只是设计例子；independent-access-example 只返回身份，不证明销售查询、图表或节省工时。
+复用 auth 登录、kit 身份和 manager 交付；业务接口与数据权限仍由作者实现。模型给出的 userId 不能作授权依据。kit 升级需重打包；independent-access-example 只验证身份，不证明业务功能。
 
 ## 选择哪种接入？
 
@@ -115,7 +111,7 @@ pnpm package --plugins "auth,example" --output .local/artifacts/release-v1
 
 输出目录必须为空或不存在。日常 `pnpm check --plugins example` 做构建、类型和语法检查；业务回归另行执行 test。省略 --package 保留内部扫描、默认选集和 all/none/指定 ID；根 build/check 的默认范围是 all，源码 package 默认按 defaultEnabled 选取，安装现成清单默认选清单全部。
 
-外部：复制最小 examples/standalone-plugin 或完整 plugins/dsh-example 到作者自己的包根。完整 example 需替换 kit 的 workspace:* 为版本化 tgz 开发依赖，保留 tsdown 内嵌 kit，替换引用原仓库的 clean 脚本；test 中框架专用集成测试应留框架，独立项目保留自身行为测试。在作者根运行 `pnpm install --ignore-workspace`，提交作者锁文件。在工具目录运行：
+外部：复制 examples/standalone-plugin 或完整 plugins/dsh-example 到独立包根。完整 example 将 kit 的 workspace:* 改为 tgz 并内嵌，删除仅声明框架索引输入的 dsh-auth 开发依赖，替换框架专用脚本和测试；索引显式指定框架源码根。作者根执行 `pnpm install --ignore-workspace` 并提交锁文件；工具目录执行：
 
 ```sh
 pnpm exec dsh-plugin-manager list --root <作者包根> --package .
@@ -123,6 +119,16 @@ pnpm exec dsh-plugin-manager pack --root <作者包根> --package . --output .lo
 ```
 
 list 只读声明，不要求锁文件；check 会先 build；pack 冻结安装作者根锁文件，然后各执行一次 build/check 再打包，无需先重复 check。外部任务忽略父 workspace。不要声明 prepare/prepack/postpack 重复构建。发布目录包含 manifest.json 和摘要命名 tgz，一起交付，不能仅移动清单。运行依赖不能带 workspace:/file:/link: 或本机绝对路径；本地 kit 是构建依赖并内嵌。作者源码可以不在部署机器上。
+
+## 只改 C，能只构建 C 或任意多个插件吗？
+
+可以。日常 `pnpm build --plugins c` 只选 c；`pnpm package --plugins c,d --output <新目录>` 构建并打包 c、d，清单只包含这两项，不自动补旧包。
+
+源码部署使用 `./build.sh --rebuild-plugins c`；Windows 用 `.\build.ps1 --rebuild-plugins c`，多个 ID 用 `c,d`。站点 `DSH_PLUGINS` / `plugins` 保留 a,b,c,d，c 执行 build/check/pack，其余复用当前成功部署归档，新清单仍完整。省略参数全量构建；不接受空项、重复、all/none 或部署选集之外的 ID。
+
+没有可核实的 ready 基线、构建环境或宿主来源不匹配、旧包缺失/损坏/声明变化时拒绝。未选源码或共享已跟踪文件（kit、锁文件、构建脚本、文档等）变化要求全量。声明的本地构建依赖按传递关系校验；改 auth 要同时重建读取其源码的 example。不得靠安装钩子重建，未声明跨目录或外部输入不能自动判断；不会自动扩大重建选集。
+
+manager/kit、镜像、停服安装及健康检查仍执行，不是热更新。prepared 后失败只用 `--resume`，不能同时带重建参数；恢复固定保存的镜像和完整清单，旧验证不代表新组合已通过业务验收。详见 deploy/README.md。
 
 ## 最小声明是什么？
 
@@ -172,7 +178,7 @@ start 前台运行，保留终端；另开工具目录终端执行 health（同 
 
 安装成功、宿主监听、应用探针 200、真实问答完成是四个不同结果。example 问答还需在同一 DSH_HOME 配置官方默认模型与密钥；插件不保存模型密钥，模型失败先查宿主设置。
 
-管理员在 `/auth`“模型设置”管理默认模型及 DeepSeek/智谱凭据；默认模型和官方凭据保存默认无需重启，非空 env 密钥覆盖对应凭据并使其只读。其他提供方按同一 DSH home 的官方设置配置。管理器打印官方认证地址文件位置（默认 `<交付根>/.local/data/dsh-web-auth-url.txt`），仅本机读取，不公开 token。独立交付的密钥命令见 manager DELIVERY.md；命令不切换模型。用新对话核实真实调用。
+默认模型、密钥及官方控制台认证见前文对应问题；独立交付命令见 manager DELIVERY.md。沿用同一 DSH home，用新对话核实真实调用。
 
 ## 配置在哪里？为什么装了 auth 还提示缺 provider？
 
@@ -240,19 +246,9 @@ Windows PowerShell 用根 `.\build.ps1`，无需 Bash；macOS/Linux 用根 `./bu
 
 先用 `example_search_framework` 搜索完整路径，再用 `example_read_framework` 分页读取实现和调用方，引用仓库相对路径与行号：
 
-| 问题 | 优先阅读 |
-| --- | --- |
-| 默认模型保存、恢复和分支 | `plugins/dsh-auth/src/models.ts`、`packages/plugin-kit/src/models.ts`、`plugins/dsh-example/src/index.ts` |
-| 三平台入口、更新与锁 | `deploy/build.sh`、`deploy/build.ps1`、`deploy/scripts/release.mjs`、`deploy/scripts/build.mjs` |
-| 会话预览与逐项归档 | `packages/plugin-kit/src/conversations.ts`、`doc/conversation-management.md` |
-| 统一版本与自动检查 | `scripts/version.mjs`、`.github/workflows/check.yml`、`.github/workflows/release.yml` |
-| 知识构建与检索边界 | `plugins/dsh-example/scripts/build-reference.mjs`、`plugins/dsh-example/src/framework.ts` |
+模型查 kit/auth 的 models，会话查 kit/conversations 和 doc/conversation-management.md，部署查 deploy/scripts，版本查 scripts/version.mjs，CI 查 .github/workflows，知识索引查 example 的 build-reference.mjs 与 src/framework.ts。
 
 快照只收公共源码、当前文档和版本脚本登记的 Markdown 模板；不收历史 `doc/releases/`、真实配置、私有插件或宿主源码。根 `build.sh/build.ps1` 可能在集成库被替换，不收录它们；公共部署流程查 `deploy/`，私有入口行为不能据此推断。索引函数校验版本与模板同步，失败不覆盖已有索引；插件 build 的前序清理仍会删除旧 dist。安装新 example 归档后使用其随包知识；在线 main 与生产可能不同，源码证据不证明部署已执行。
-
-## 能回答哪些问题？哪些不能保证？
-
-可解释随包流程、给出步骤和接入提示词。先区分作者/部署者、内部/外部、认证与版本；未知 API、私有业务及兼容性需核实，不猜命令，不承诺自动沙箱、物理隔离或任意外部服务零改动接入。
 
 ## 来源与进一步阅读
 
@@ -260,12 +256,5 @@ Windows PowerShell 用根 `.\build.ps1`，无需 Bash；macOS/Linux 用根 `./bu
 
 在线 main 可能领先，交付以随包 README 和知识摘要为准。
 
-- [产品与导航](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/README.md)
-- [使用与运维 FAQ](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/FAQ.md)
-- [图文接入手册](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/getting-started.md)
-- [作者指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/plugin-development.md)
-- [实例配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/plugin-configuration.md)
-- [发布物交付](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/packages/plugin-manager/DELIVERY.md)
-- [kit 接口](https://github.com/PelyDeng/dsh-plugin-manager/tree/main/packages/plugin-kit/src)
-- [示例实现](https://github.com/PelyDeng/dsh-plugin-manager/tree/main/plugins/dsh-example/src)
+- [文档导航](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/README.md)
 - [可复制 AI 提示词](prompts.md)

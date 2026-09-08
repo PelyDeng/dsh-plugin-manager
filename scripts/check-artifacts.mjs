@@ -74,6 +74,7 @@ try {
   for (const path of ['src', 'web', 'knowledge', 'scripts', 'cordis.patch.yml', 'tsconfig.json', 'tsdown.config.ts', 'tsdown.web.config.ts']) cpSync(join(root, 'plugins/dsh-example', path), join(external, path), { recursive: true });
   const metadata = { ...original, devDependencies: { ...original.devDependencies, '@dsh-plugin-manager/plugin-kit': 'file:../plugin-kit.tgz' } };
   // Independent authors supply the framework root explicitly, never relative to their checkout.
+  delete metadata.devDependencies['dsh-auth'];
   metadata.scripts = { ...original.scripts, build: 'tsdown && tsdown --config tsdown.web.config.ts' };
   json(join(external, 'package.json'), metadata);
   writeFileSync(join(external, 'pnpm-workspace.yaml'), policy);
@@ -93,6 +94,7 @@ try {
   for (const plugin of plugins) installed.dependencies[plugin.package] = `file:../release/${plugin.archive}`;
   Object.assign(installed.devDependencies, original.devDependencies);
   delete installed.devDependencies['@dsh-plugin-manager/plugin-kit'];
+  delete installed.devDependencies['dsh-auth'];
   json(join(consumer, 'package.json'), installed);
   runPnpm(['install', '--ignore-scripts', '--no-frozen-lockfile'], consumer);
   writeFileSync(join(consumer, 'check.ts'), "import * as auth from 'dsh-auth';\nimport * as example from 'dsh-example';\nvoid auth.apply; void example.apply;\n");

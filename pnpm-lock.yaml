@@ -151,6 +151,9 @@ importers:
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.1
+      dsh-auth:
+        specifier: workspace:*
+        version: link:../dsh-auth
       markdown-it:
         specifier: 15.0.1
         version: 15.0.1
