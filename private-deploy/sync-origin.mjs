@@ -25,7 +25,7 @@ export function syncOrigin(root, args = [], env = process.env) {
   const [ahead, behind] = git('rev-list', '--left-right', '--count', `HEAD...${target}`).split(/\s+/).map(Number);
   if (ahead) throw new Error(`本机有 ${ahead} 个提交尚未包含在 origin/main 中；请在私有集成库保留并合并这些提交、检查后推送 Gitee，再重试。服务器不自动合并或覆盖。`);
   if (behind) {
-    const checkpoint = `codex/before-origin-${Date.now()}`;
+    const checkpoint = `backup/before-origin-${Date.now()}`;
     git('branch', checkpoint, 'HEAD');
     console.log(`原提交已保留：${checkpoint}`);
     git('-c', 'submodule.recurse=false', 'merge', '--ff-only', target);

@@ -122,7 +122,8 @@ test('the private platform entry fast-forwards origin and starts updated source 
   assert.notEqual(observed.pid, observed.owner);
   assert.equal(f.git(f.checkout, 'rev-parse', 'HEAD'), f.git(f.origin, 'rev-parse', 'HEAD'));
   assert.equal(existsSync(f.lock), false);
-  assert.match(f.git(f.checkout, 'branch', '--list', 'codex/before-origin-*'), /codex\/before-origin-/);
+  assert.match(f.git(f.checkout, 'branch', '--list', 'backup/before-origin-*'), /backup\/before-origin-/);
+  assert.equal(f.git(f.checkout, 'branch', '--list', '*codex*'), '');
 });
 
 test('help and management need no sync or deployment preflight; resume preserves source and pending input', t => {
