@@ -111,7 +111,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
   }
   function render(){
     const thoughtScroll=new Map([...$('chat-messages').querySelectorAll('.qa-thinking-body,.qa-thinking-original pre')].map(el=>[el,el.scrollTop]))
-    const box=$('chat-messages'),follow=nearBottom(),scrollTop=$('chat-scroll').scrollTop,history=state.history,displayMessages=chatTurns(history?.messages??[],{busy:!!history?.busy})
+    const box=$('chat-messages'),follow=nearBottom(),scrollTop=$('chat-scroll').scrollTop,history=state.history,displayMessages=chatTurns(history?.messages??[],{busy:!!history?.busy,operations:history?.operations??[],requests:history?.requests??[]})
     const previous=new Map([...box.children].map(n=>[n.dataset.key,n])),nodes=[]
     const focused=document.activeElement,focusKey=focused?.closest('[data-key]')?.dataset.key,focusAction=focused?.dataset.action
     const append=(node,key,value)=>{
@@ -124,6 +124,11 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     }
     $('chat-welcome').hidden=!!history?.messages.length
     for(const message of displayMessages){
+      if(message.role==='operation'){
+        const op=message.operation,node=operationCard(op)
+        if(message.unassociated)node.prepend(element('small','历史操作（原轮次暂不可用）','muted'))
+        append(node,'operation-'+op.id,{op,unassociated:message.unassociated,busy:history.busy,pending:operationPending.has(op.id),error:operationErrors.get(op.id)});continue
+      }
       const node=element('section',undefined,`chat-message ${message.role}-message`);node.dataset.message=message.id;if(message.role==='assistant'){node.classList.add('qa-assistant-turn');node.dataset.complete=String(!!message.tail||Number.isFinite(history?.turns?.find(t=>t.turn===message.turn)?.runMs))}
       if(message.role==='tool'){const chip=element('span',undefined,`qa-tool ${message.status}`);chip.append(glyph('api'),element('small',`${{blog_search_posts:'查询博客文章',blog_read_post:'读取文章',blog_list_drafts:'查找工作台草稿',blog_select_draft:'选择写作文章',blog_propose:'保存候选稿',blog_web_search:'搜索资料',blog_web_fetch:'阅读网页',blog_publish_draft:'准备发布',blog_delete_post:'准备删除'}[message.name]??'执行博客工具'} · ${{running:'进行中',succeeded:'完成',failed:'失败',interrupted:'已中断'}[message.status]??message.status}`));node.append(chip);append(node,'message-'+message.id,message);continue}
       if(message.role==='status'){node.textContent=message.text;append(node,'message-'+message.id,message);continue}
@@ -165,7 +170,6 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
       const row=element('section',undefined,'chat-result chat-result-compact'),head=element('div',undefined,'chat-result-head');head.append(element('h3',card.proposal?.fields.title||card.title||'文章候选稿'),button('打开文章',async()=>{const epoch=state.epoch;await openDraft(card.draftId);if(epoch===state.epoch)view(false)}));row.append(head)
       const details=element('details');details.dataset.detail='card-'+card.id;details.append(element('summary',`候选快照 · 基于版本 ${card.revision}`),prose(card.proposal?.fields.text??''),element('small','历史候选快照，当前文章状态以编辑器为准','muted'));row.append(details);append(row,'card-'+card.id,card)
     }
-    for(const op of history?.operations??[])append(operationCard(op),'operation-'+op.id,{op,busy:history.busy,pending:operationPending.has(op.id),error:operationErrors.get(op.id)})
     let cursor=box.firstElementChild
     for(const node of nodes){if(node===cursor)cursor=cursor.nextElementSibling;else box.insertBefore(node,cursor)}
     while(cursor){const next=cursor.nextElementSibling;cursor.remove();cursor=next}

@@ -41,6 +41,27 @@ test('pending and persisted answers share one stable presentation slot',()=>{
   assert.equal(interrupted.length,2);assert.equal(interrupted[1].reasoningSource,'a1');assert.equal(interrupted[1].steps[0].interrupted,true)
 })
 
+test('operation cards stay after their originating answer when later turns stream and history reloads',()=>{
+  const messages=[{id:'u1',role:'user',requestId:'r1',text:'删除文章'},
+    {id:'a1',role:'assistant',text:'请确认删除'},
+    {id:'u2',role:'user',text:'发布草稿'},
+    {id:'a2',role:'assistant',text:'请确认发布'},
+    {id:'u3',role:'user',requestId:'r3',text:'新问题'}]
+  const operations=[{id:'publish',requestId:'r2',mode:'publish',status:'prepared'},{id:'delete',requestId:'r1',mode:'delete',status:'succeeded'}]
+  const requests=[{id:'r2',userMessageId:'u2'}],before=structuredClone({messages,operations})
+  const timeline=chatTurns(messages,{busy:true,operations,requests})
+  assert.deepEqual(timeline.map(m=>m.role==='operation'?m.operation.id:m.id),['u1','a1','delete','u2','a2','publish','u3','pending-u3'])
+  const reloaded=chatTurns([...messages,{id:'a3',role:'assistant',text:'新回答'}],{operations:structuredClone(operations),requests})
+  assert.deepEqual(reloaded.map(m=>m.role==='operation'?m.operation.id:m.id),['u1','a1','delete','u2','a2','publish','u3','a3'])
+  assert.deepEqual({messages,operations},before)
+})
+
+test('operations without a matching request remain visible as unassociated history, not under the latest answer',()=>{
+  const result=chatTurns([{id:'new',role:'user',text:'新问题'}],{busy:true,operations:[{id:'old',requestId:'missing'}]})
+  assert.equal(result[0].role,'operation');assert.equal(result[0].unassociated,true)
+  assert.equal(result[0].operation.id,'old');assert.equal(result[1].id,'new')
+})
+
 test('chat keyboard sends only desktop Enter and leaves mobile and multiline input untouched',()=>{
   const enter={key:'Enter',shiftKey:false,isComposing:false,keyCode:13}
   assert.equal(shouldSendChatEnter(enter),true)
