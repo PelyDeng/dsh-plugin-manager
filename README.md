@@ -12,7 +12,7 @@
 
 ![开发者接入助手：快捷问题、流式对话与个人历史](doc/assets/developer-assistant.png)
 
-已有 Linux Docker 环境？从[首次部署](doc/first-deployment.md)开始，完成“登录 → 授权 → 配置模型 → 首次问答”。只想先看效果，请看[图文导览](doc/quick-tour.md)。
+已有 Windows、macOS 或 Linux 本机 Docker 环境？从[首次部署](doc/first-deployment.md)开始，完成“登录 → 授权 → 配置模型 → 首次问答”。只想先看效果，请看[图文导览](doc/quick-tour.md)。
 
 | 你想做什么 | 从这里开始 |
 | --- | --- |
@@ -69,15 +69,17 @@
 | 方式 | 适合谁 | 入口 |
 | --- | --- | --- |
 | Node CLI 图文体验 | Windows PowerShell 或 Bash 用户，希望了解打包、登录与运行过程 | [准备工具和目录](doc/getting-started.md#1-准备工具和目录) |
-| Linux Docker 一键部署 | 已有 Linux 服务器，希望运行完整源码站点 | [一键部署](doc/first-deployment.md) |
+| Docker 一键部署 | Windows、macOS 或 Linux 用户，希望运行完整源码站点 | [一键部署](doc/first-deployment.md) |
 
-Node 路径需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`，无需 Docker。Linux Docker 路径取得完整仓库源码并满足环境要求后，在仓库根执行：
+Node CLI 路径需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`，无需 Docker。Docker 源码部署需要完整仓库、Node.js（含 npm）、Git、系统 tar 和可用的本机 Linux Docker 引擎及 Compose；脚本按需准备锁定的 pnpm，不安装系统软件。在仓库根执行：
 
 ```sh
-bash deploy/build.sh
+./build.sh
 ```
 
-脚本生成本机配置、构建宿主及插件并启动，默认访问 `http://127.0.0.1:7902`。远程浏览器访问方式及失败恢复见一键部署文档。
+Windows PowerShell 使用 `.\build.ps1`，不需要 Bash；macOS/Linux 使用上面的 `./build.sh`。旧 `bash deploy/build.sh` 入口继续支持。仅支持本机 Docker unix/npipe endpoint，拒绝远端或 TCP endpoint、Windows 容器。macOS 流程尚未完成真机验收。
+
+脚本生成本机配置、构建宿主及插件并启动，默认访问 `http://127.0.0.1:7902`。文件资源管理器中的运行方法、远程浏览器访问及失败恢复见一键部署文档。
 
 ### 第二步：登录并打开示例
 
@@ -85,7 +87,7 @@ bash deploy/build.sh
 
 ### 第三步：完成一次问答
 
-运行前核对私有 `.local/env.conf` 的地址与信任域名；根 `env.conf` 是公开空模板。DeepSeek/智谱密钥非空时文件优先、网页只读，修改需受控重启；留空沿用官方来源且不删除旧值。没有环境覆盖时，管理员可在 `/auth` 的“模型设置”管理两种密钥，写入官方存储默认无需重启；页面只显示状态与不可逆指纹。详见[统一配置](doc/framework-configuration.md)。默认模型选择或其他提供方仍由同一实例的官方模型设置管理。随后在 `/example` 新建对话，确认收到流式回答并能恢复历史。详细操作见[模型准备](packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
+运行前核对私有 `.local/env.conf` 的地址与信任域名；根 `env.conf` 已填写固定非秘密默认值，真实站点配置只填私有文件。首次自动生成会写入本机平台默认值，已有配置不覆盖。DeepSeek/智谱密钥非空时文件优先、网页只读，修改需受控重启；留空沿用官方来源且不删除旧值。没有环境覆盖时，管理员可在 `/auth` 的“模型设置”管理两种密钥，写入官方存储默认无需重启；页面只显示状态与不可逆指纹。详见[统一配置](doc/framework-configuration.md)。默认模型选择或其他提供方仍由同一实例的官方模型设置管理。随后在 `/example` 新建对话，确认收到流式回答并能恢复历史。详细操作见[模型准备](packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
 
 ## 开发自己的插件
 
@@ -126,7 +128,7 @@ pnpm package --plugins "auth,example" --output .local/artifacts/release/plugins
 
 更新时保留原始分项发布目录，替换目标应用后重新组合全部需要保留的应用；沿用实例 home，并按指南备份、停止和启动。两应用演练见[加入第二个应用](doc/getting-started.md#进阶加入第二个应用)。
 
-使用 Linux 完整源码部署时，更新仓库后仍执行 `bash deploy/build.sh`。该入口直接使用已有官方源码，不主动拉取或要求匹配预设版本，默认无需镜像仓库。配置与恢复说明集中在[部署文档](deploy/README.md)。
+使用完整源码部署时，更新仓库后仍执行对应平台的根 build 脚本。该入口直接使用已有官方源码，不主动拉取或要求匹配预设版本，默认无需镜像仓库。产物准备后的失败使用原输入加 `--resume`；该选项继续部署，不会将备份覆盖回数据目录。配置、源码遗留锁与恢复说明集中在[部署文档](deploy/README.md)。
 
 ## 常见问题
 

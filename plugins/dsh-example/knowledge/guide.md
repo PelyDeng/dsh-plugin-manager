@@ -16,9 +16,9 @@
 
 `dsh web authentication required; reopen the URL printed by dsh web.` 是官方控制台认证提示，不是模型密钥错误。插件 Auth 账号用于 `/auth` 及已授权应用；官方控制台根路径 `/` 使用自己的启动令牌和浏览器 Cookie；API 密钥用于调用模型。这三者独立，登录插件不会自动登录官方控制台。
 
-普通用户从 `/auth` 进入 `/example` 等应用。需要管理模型的站点维护者，在服务器仓库根的私有终端执行 `cat .local/data/dsh-web-auth-url.txt`，仅在自己的浏览器打开完整地址（含 token）。这是默认位置；自定义 `dataRoot` 或 `authUrlFile` 时按 `.local/deployment.json` 的路径读取。正常情况下校验令牌、设置 Cookie 后跳转回干净的 `/`。
+普通用户从 `/auth` 进入应用。维护者在服务器私有终端读取 `.local/data/dsh-web-auth-url.txt`，在本人浏览器打开完整地址；校验后设置 Cookie 并跳转 `/`。自定义 dataRoot/authUrlFile 时按 `.local/deployment.json` 查路径。
 
-重启后启动令牌会重新生成；旧书签、新浏览器或 Cookie 清理后无法进入时，重新读取当前文件。地址不正确时核对站点 `publicUrl`/`publicOrigin`；完整新地址仍被拒绝时检查代理的查询参数、Host 和 Cookie 转发。不要关闭认证，也不要公开 token 或用它替代普通用户的应用授权。
+重启会更新令牌，旧书签或 Cookie 失效后重新读文件。新地址仍失败时核对 publicUrl/publicOrigin 及代理的查询参数、Host、Cookie 转发。不要关闭认证、公开 token 或拿它替代应用授权。
 
 ## 控制台能打开，但模型和插件报 HTTP 403 怎么办？
 
@@ -42,7 +42,7 @@ DSH_TRUSTED_HOSTS=["dsh.example.com"]
 
 ## 第一次如何配置或更换 API 密钥？
 
-根 env.conf 是带中文注释的公开空模板，真实配置只填 Git 忽略的 .local/env.conf。常用地址、信任域名、DeepSeek/智谱密钥排在前面，其他项通常留空用默认值。源码首次默认 release、auth/example、端口7902；独立manager显式选env或JSON，不扫描作者仓库。注册插件的业务配置仍各自维护。
+根 env.conf 已填写固定非秘密默认值，真实配置只填 Git 忽略的 .local/env.conf；密钥、仓库账号密码和生成项继续留空。常用地址、信任域名、DeepSeek/智谱密钥排在前面；插件业务配置各自维护。
 
 文件 DEEPSEEK_API_KEY/ZHIPU_API_KEY 非空时，以文件为准，只注入官方DSH子进程，网页只读；修改后正常部署并受控重启。留空不添加覆盖、不删除官方凭据、不清除继承环境密钥。官方来源顺序为进程环境、.credentials.yaml、工作目录.env、home.env；已有环境覆盖时仍只读，没有覆盖时继续网页管理。
 
@@ -62,7 +62,7 @@ API Key不创建模型路由、不选择默认模型，也不验证额度；智�
 
 基于 DeepSeek Harness 的 AI 应用开发与部署框架。作者沿用官方 Cordis、Bundle 和 Agent，在自己的仓库开发插件；框架提供统一打包、安装、配置、启停及可选认证。
 
-官方 DSH 提供插件加载、服务依赖、Agent、模型、工具及会话运行。本框架补充应用声明、发布物检查与组合、实例配置、受控部署和可选账号/逐应用授权。不修改 DSH 源码才能接入，是这里“无侵入”的含义；作者仍需要编写接入声明和鉴权代码。
+官方 DSH 负责插件、Agent、模型、工具及会话；框架补充声明、交付、配置、部署和可选账号授权。无需修改宿主源码，但作者仍编写接入声明和鉴权代码。
 
 | 模块 | 复用什么 | 不替作者做什么 |
 | --- | --- | --- |
@@ -75,14 +75,9 @@ API Key不创建模型路由、不选择默认模型，也不验证额度；智�
 
 ## 第二个应用到底少写什么？
 
-假设知识库助手已交付，现在新增销售报表助手。
+已有知识库助手再加销售助手，复用 auth 登录、kit 身份和 manager 交付；作者仍写检索/销售接口、指标、图表、工具、提示词及业务数据权限。
 
-| 场景 | 作者仍写 | 持续复用 |
-| --- | --- | --- |
-| 知识库问答 | 文档导入、检索、引用、文档访问范围、工具和提示词 | auth 账号/登录、kit 身份、manager 配置与交付 |
-| 销售报表 | 销售接口、指标计算、部门/客户权限、图表、工具和提示词 | 同一账号系统和部署命令，新增应用声明与必要接入代码 |
-
-销售请求“上个月哪些产品销售下降”时，模型提出查询参数，应用从可信 actor 取得身份，服务端确定允许的数据范围后调用销售接口；不能接受模型给出的 userId 作为授权依据。应用访问许可与销售数据许可是两次不同检查。
+模型仅提出查询参数；服务端从可信 actor 取得身份、限定数据范围，不能将模型给出的 userId 当授权依据。应用许可与业务数据许可分别检查。
 
 第二应用复用同一认证，kit 升级仍需重打包。销售场景只是设计例子；independent-access-example 只返回身份，不证明销售查询、图表或节省工时。
 
@@ -96,11 +91,11 @@ API Key不创建模型路由、不选择默认模型，也不验证额度；智�
 
 ## 工具从哪里来？
 
-代码细节可以直接在本助手询问。它会检索随包公共框架源码，阅读实现和调用方，引用路径与行号；覆盖 manager、kit、auth、example、部署与集成代码。资料是构建时的快照，不能据此声称生产已经执行成功，也不包含私有业务源码或真实配置。
+本助手可检索随包 manager、kit、auth、example、部署与集成源码，引用路径和行号。构建快照不含私有业务或真实配置，也不证明生产执行成功。
 
-发布包的宿主验证记录自 manager 0.3.3 起支持：pack 只记录构建输入；最终 tgz 经测试后，由 `compose-release --verification-report <JSON>` 把报告附入新发布目录。安装时对照宿主、平台和插件组合，展示已测、未知或差异；没测过不等于不能用，模型替身通过不等于真实模型通过。它不增加“版本不同就禁止安装”的规则。完整格式见随 manager 交付的 VERIFICATION.md。
+pack 只记录构建输入；最终 tgz 经测试后，用 `compose-release --verification-report <JSON>` 附加报告。安装时展示宿主、平台和组合的已测、未知或差异，不因版本不同禁止安装，也不把模型替身当真实模型。格式见 manager 的 VERIFICATION.md。
 
-需要 Node.js `^22.19.0 || >=24`、pnpm 11.19.0、系统 tar。包名不表示已发布到公共 npm。取得可信维护者的版本化 manager tgz（用 kit 才需 kit tgz），核对提供方摘要；没有现成包时，按仓库作者指南从明确源码提交构建。依赖安装可能需要网络，只有 tgz 不等于完整离线闭包。
+需要 Node.js `^22.19.0 || >=24`、pnpm 11.19.0、tar。包名不代表公共 npm 已发布；从可信维护者取得 manager/kit tgz并核对摘要，或按作者指南构建明确提交。只有 tgz 不等于完整离线依赖。
 
 在独立工具目录安装：`pnpm add --ignore-workspace <manager-tgz绝对路径>`，以后在该目录执行 `pnpm exec dsh-plugin-manager ...`。不要在任意目录假设全局命令可用。作者包根的 package.json、pnpm-lock.yaml 与工具目录分开。
 
@@ -235,18 +230,28 @@ pnpm exec dsh-plugin-manager compose-release --root <交付根> --output release
 | 页面 404 | 核对 entryPath、routePrefix、Bundle 是否加载和实例 enabled |
 | 新应用未出现 | 完整候选清单、--plugins all、实例 enabled、运行模式与实际版本 |
 | 重启后历史变空 | 核对 home、账号、accessMode；不要先删除数据库 |
-| Windows 与 Linux 差异 | pnpm/node 命令一致；路径加引号。PowerShell 用 $env:NAME，Bash 用 export NAME；build.sh 源码部署仅 Linux Docker |
+| Windows、macOS 与 Linux 差异 | 见下节三平台入口与默认值；路径加引号，PowerShell 用 $env:NAME，Bash 用 export NAME |
 | 宿主升级不兼容 | 查应用交付版本和真实启动/历史验证，保留旧环境；不要只凭 npm 版本判断 |
 
 提问时提供：manager/插件/官方 CLI 版本，操作系统与 Node/pnpm，已脱敏命令、执行目录角色、候选 ID、release/development、错误文本、期望与实际结果。不要提供完整 env.conf、Cookie、token、数据库或客户数据。助手没有读取你机器状态，不能声称检查过你的文件。
 
+## Windows、macOS、Linux 怎样构建？默认值从哪里来？
+
+Windows PowerShell 用根 `.\build.ps1`，无需 Bash；macOS/Linux 用根 `./build.sh`。共用 Node 流程，需提前准备 Node.js（含 npm）、Git、tar、本机 Linux Docker Compose；首次安装框架锁定依赖，不安装系统软件、不更新宿主子模块。`--help` 无需工作区依赖，`--resume` 沿用原归档与输入，不重装框架源码工作区依赖；缺失时须恢复原工作区，容器部署依赖仍按环境变化恢复。普通构建失败可重试；强杀遗留源码锁须确认主机、PID及子进程退出后处理。
+
+公开默认值：URL `http://127.0.0.1:7902`、端口 7902、profile web、插件 auth/example、mode release、数据 `.local/data`、产物 `.local/artifacts`、容器 UID/GID 1000、`DSH_IMAGE_PLATFORM=linux/amd64`。origin/home/workspace 等可派生；密钥和生成的镜像/manifest 留空。独立 manager 显式选择 env/JSON，选集留空沿用清单。
+
+首次自动生成私有 `.local/env.conf` 写入实际默认值：镜像架构按 Docker 引擎选 amd64/arm64，macOS 非 root 用户采用当前 UID/GID，Windows/Linux 为 1000。已有配置不覆盖，旧 JSON 导入保留原路径；手工复制公共模板不探测平台，须自行核对 UID/GID、架构和已填 URL。
+
+只支持本机 unix/npipe Docker endpoint 和 Linux 容器。Windows/macOS及 Linux Desktop 用桥接；DSH 保持 `127.0.0.1`，容器桥接地址通过 TCP 转发至它，宿主只向 `127.0.0.1` 发布端口。同 Docker 网络是信任边界，不宣称公网隔离。原生 Linux 用 host 网络。macOS 尚未真机验收；健康、知识检索或模型替身通过不等于真实模型问答通过。具体值和实现可检索 `env.conf`、`deploy/scripts/site.mjs`、`packages/plugin-manager/src/apply-compose.mjs`。
+
 ## 能回答哪些问题？哪些不能保证？
 
-可以解释此知识中的流程，按目标生成最短步骤、接入清单和可复制提示词。先明确作者/部署者、内部/外部、是否认证及版本；缺少信息时给适用条件，不猜造命令。没有知识依据的 API、最新社区功能、私有插件业务、未来路线、任意版本兼容性应明确不知道并指向当前版本文档/源码核实。不要承诺自动沙箱、多租户物理隔离、全语言应用直接运行、任意外部服务零改动接入或 marketplace 自动分发。
+可解释随包流程、给出步骤和接入提示词。先区分作者/部署者、内部/外部、认证与版本；未知 API、私有业务及兼容性需核实，不猜命令，不承诺自动沙箱、物理隔离或任意外部服务零改动接入。
 
 ## 来源与进一步阅读
 
-源码仓库的独立测试入口是根目录 `bash test-report.sh`：串联 auth/example 打包、真实宿主与本地模型替身测试、报告交付。先准备已构建的官方 CLI，可用 `--cli` 指定；不调用部署入口、不读取站点 env.conf。每次产物在 `.local/artifacts/test-report-*/`，交付本次 `delivery/`。后续重新打包不自动继承报告；其他业务插件需要自己的测试。完整前置条件和命令见 `packages/plugin-manager/VERIFICATION.md`。
+根 `bash test-report.sh --cli <已构建官方CLI>` 验证 auth/example 归档、真实宿主和本地模型替身，不读取站点配置或部署。交付 `.local/artifacts/test-report-*/delivery/`；重打包不继承报告，其他插件另测。详见 `packages/plugin-manager/VERIFICATION.md`。
 
 在线 main 可能领先，交付以随包 README 和知识摘要为准。
 

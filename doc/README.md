@@ -9,7 +9,7 @@
 先看 [图文导览](quick-tour.md)。English introduction: [README.en.md](../README.en.md)。
 
 1. [图文体验：启动第一个应用](getting-started.md)——准备工具、打包、启动、登录与问答。
-2. [Linux Docker 一键部署](first-deployment.md)——在服务器运行完整源码站点的另一条路径。
+2. [Docker 一键部署](first-deployment.md)——通过 Windows、macOS 或 Linux 的根 build 脚本运行完整源码站点。
 3. [进阶：加入第二个应用](getting-started.md#进阶加入第二个应用)——组合不同作者的交付物，保留原应用与账号。
 4. [会话管理](conversation-management.md)——按插件查找本人对话、只读预览并批量移除历史入口。
 

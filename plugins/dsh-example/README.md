@@ -4,13 +4,13 @@
 
 ## 启动与使用
 
-需要应用交付说明中验证过的官方 DSH、manager 0.3.4 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
+需要应用交付说明中验证过的官方 DSH、兼容的 manager 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
 
 ```sh
 pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --plugins all
 ```
 
-配置与获取发布物的完整步骤见[图文手册](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/getting-started.md)和 manager 随包 DELIVERY.md；在线 main 可能领先于当前版本。Linux Docker 完整源码部署可使用仓库的 `bash deploy/build.sh`。
+配置与获取发布物的完整步骤见[图文手册](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/getting-started.md)和 manager 随包 DELIVERY.md；在线 main 可能领先于当前版本。当前框架的完整源码部署在 Windows 使用根 `build.ps1`，macOS/Linux 使用根 `build.sh`，要求本机 Linux Docker Compose。macOS 尚未完成真机验收；环境与恢复说明以框架部署文档为准。
 
 默认 authenticated。登录 `/auth`，首次 admin 必须改密；普通账号需要 example 授权，再打开 `/example`。同一个 DSH home 还需官方默认模型与凭据，插件不保存模型密钥。探针成功只说明基本可服务，不证明模型请求成功。
 
@@ -62,6 +62,6 @@ SQLite 只存账号所有者、标题和时间等历史目录；消息正文使�
 
 在包根运行 `pnpm build`、`pnpm check`，行为回归单独运行 `pnpm test`。框架内也可用 `pnpm --filter dsh-example ...`。测试使用隔离数据和 Agent 替身，不证明真实模型回答质量。`tests/host-smoke.mjs` 使用真实官方宿主和 auth/example tgz，但模型 HTTP 是明确标识的本地替身。
 
-框架入口与模型密钥来源见[统一配置](../../doc/framework-configuration.md)。根模板只提交空值，私有 env 维护部署参数及可选宿主模型凭据；example 不保存模型密钥。随包 FAQ 包含配置默认值、文件只读/空值回退、控制台域名信任及框架源码问答。
+框架入口与模型密钥来源见[统一配置](../../doc/framework-configuration.md)。根模板包含固定非秘密默认值，私有 env 维护实际部署参数及可选宿主模型凭据；自动初始化按平台落值，已有文件不覆盖，example 不保存模型密钥。随包 FAQ 和源码索引支持三平台 build 入口、配置默认值、文件只读/空值回退及控制台域名信任的问答；知识注入与检索测试不代表真实模型回答已经验收。
 
 历史栏支持按标题搜索（跨分页）、按置顶/今天/昨天/7 天内/30 天内/更早分组、重命名、置顶、多选，以及预览问答正文后复制或下载 Markdown。分享不生成公开链接，不导出思考、附件文件或工具记录。删除经确认后只从当前用户插件历史列表移除，官方日志和文章/附件文件仍按原留存规则保存；删除后无法从页面恢复或继续该会话。生成中的会话须先停止或完成后操作。历史索引自动迁移到 schema 2，持久化置顶与删除标记，既有正文仍在官方会话中。

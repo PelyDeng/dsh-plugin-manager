@@ -27,17 +27,19 @@ For one personal tool, an official Bundle may be enough. This project is useful 
 
 The default source deployment includes `dsh-auth` and `dsh-example`, a developer assistant demonstrating streaming chat, personal history, and optional authentication. Its interface and most detailed guides are currently in Chinese.
 
-On Linux, prepare Git, Node.js `^22.19.0 || >=24`, npm, Docker with the Compose plugin and named build context support, `tar`, and `flock`. The deployment script installs the pinned pnpm version when needed. It does not install system packages, configure a firewall, or set up a reverse proxy.
+On Windows, macOS, or Linux, prepare Git, Node.js `^22.19.0 || >=24` with npm, system `tar`, and a working local Linux Docker engine with Compose and named build context support. The deployment script prepares the pinned pnpm version when needed. It does not install system packages, configure a firewall, or set up a reverse proxy.
 
 ```sh
 git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin-manager.git
 cd dsh-plugin-manager
-bash deploy/build.sh
+./build.sh
 ```
+
+Use `.\build.ps1` for the last command in Windows PowerShell; Bash is not required on Windows. macOS and Linux use `./build.sh`. The existing `bash deploy/build.sh` entry remains compatible. Only local Docker unix/npipe endpoints are accepted; remote or TCP endpoints and Windows containers are rejected. The macOS workflow has not been validated on a real Mac.
 
 1. Open `http://127.0.0.1:7902/auth`, sign in using the initial administrator procedure in the [auth guide](plugins/dsh-auth/README.md), and change the initial password.
 2. Create a regular account and grant it access to `example`.
-3. Check the private `.local/env.conf` URL and trusted hosts; the root `env.conf` is a blank public template. Nonempty DeepSeek/Zhipu keys in the private file take precedence and make the page read-only; apply file changes through a controlled restart. Blank values preserve official credential sources, including inherited environment overrides. Without an override, administrators can manage DeepSeek or Zhipu in **模型设置** (Model settings); updates to the official store normally apply without a restart. The page returns only configuration status and a SHA-256 fingerprint, never the original key. A configured key has not necessarily been validated by the model provider.
+3. Check the private `.local/env.conf` URL and trusted hosts. The public root template contains fixed, nonsecret defaults; real site values belong in the private file. First-run initialization writes the local platform defaults and preserves existing configuration. Nonempty DeepSeek/Zhipu keys in the private file take precedence and make the page read-only; apply file changes through a controlled restart. Blank values preserve official credential sources, including inherited environment overrides. Without an override, administrators can manage DeepSeek or Zhipu in **模型设置** (Model settings); updates to the official store normally apply without a restart. The page returns only configuration status and a SHA-256 fingerprint, never the original key. A configured key has not necessarily been validated by the model provider.
 4. Open `/example` as the regular user and send a question. Check the streamed answer and restored conversation history. Default model selection and other providers remain in the official model settings.
 
 The listener binds to loopback by default. For a remote server, use an SSH tunnel or configure a reverse proxy and the matching `publicOrigin`/`publicUrl`. The [deployment guide](doc/first-deployment.md) covers prerequisites, URLs, backups, and recovery. First builds require access to package and image sources; model use requires your own provider account and may incur charges.
@@ -67,10 +69,10 @@ For an existing source deployment, preserve its checkout, configuration, `.local
 
 ```sh
 git pull --ff-only --recurse-submodules
-bash deploy/build.sh
+./build.sh
 ```
 
-Do not delete `.local` to recover a failed deployment. Follow the [recovery instructions](doc/first-deployment.md#更新与恢复).
+On Windows, use `.\build.ps1` again. Failures after release inputs are prepared require the same build script with `--resume`, including mount preflight failures before the service stops. Resume reuses the saved image and archives; it does not roll back application data. An interrupted worker leaves the source lock in place until its owner and descendants are confirmed stopped. Do not delete `.local` or profile state to recover a failed deployment. Follow the [recovery instructions](doc/first-deployment.md#更新与恢复).
 
 Host compatibility is verified against specific versions; arbitrary community plugins and host versions are not automatically supported. Use the host requirements in the release notes, and configure your own model provider before starting a conversation.
 

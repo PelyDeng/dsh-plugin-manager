@@ -39,6 +39,7 @@ export function createConversationPage(api) {
       open.addEventListener('click', () => openPreview(row, open))
       const id = node('button', row.id, 'conversation-id'); id.title = '复制完整会话 ID'; id.addEventListener('click', async () => { try { await navigator.clipboard.writeText(row.id); notice('会话 ID 已复制。') } catch { notice('复制失败，请手动复制会话 ID。', true) } })
       title.append(open, id)
+      title.append(node('span', row.updatedAt ? new Date(row.updatedAt).toLocaleString('zh-CN', { hour12: false }) : '更新时间未知', 'conversation-mobile-time'))
       const state = node('td'), badge = node('span', labels[row.state] ?? '状态未知', `conversation-state ${row.state}`)
       state.append(badge); if (row.blockedReason) state.append(node('small', row.blockedReason, 'muted'))
       const action = node('td'), button = node('button', '预览', 'text-button'); button.addEventListener('click', () => openPreview(row, button)); action.append(button)

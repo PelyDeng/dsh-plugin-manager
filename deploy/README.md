@@ -2,24 +2,26 @@
 
 ## 服务器源码发版
 
-Linux Docker 站点首次部署和后续更新使用同一入口。首次克隆仓库后执行：
+Windows、macOS、Linux 共用一套源码部署流程。已安装 Node.js、Git 和可用的本机 Linux Docker 引擎及 Compose 后，在完整源码仓库根执行：
 
 ```sh
-bash deploy/build.sh
+./build.sh
 ```
+
+Windows PowerShell 使用 `.\build.ps1`，不需要 Bash；资源管理器中的启动方式见[一键部署](../doc/first-deployment.md)。旧 `bash deploy/build.sh` 及 `deploy/build.ps1` 入口继续支持；参数一致，可使用 `--help`、`--config <文件>`、`--resume`。脚本检查基础软件而不安装它们，pnpm 按仓库锁定版本自动准备。仅接受本机 Docker unix/npipe endpoint，不支持远端或 TCP endpoint、Windows 容器。macOS 流程尚未完成真机验收。
 
 终端显示各步骤的进度和结果；执行中的百分比是等待提示，只有成功后才显示 100%，不表示剩余时间。重定向输出时只记录开始和结果。
 
-详细输出写入 `.local/artifacts/build-logs/build-*.log`，终端会显示日志路径。失败时显示最后 12 行诊断信息，完整日志保留在文件中。
+详细输出写入 `.local/artifacts/build-logs/` 下的私有操作目录，终端会显示日志路径。失败时显示最后 12 行诊断信息，完整日志保留在文件中。
 
 后续更新：
 
 ```sh
 git pull --ff-only --recurse-submodules
-bash deploy/build.sh
+./build.sh
 ```
 
-首次自动创建 `.local/env.conf`，采用源码入口默认值；已有站点优先导入旧 site.json，其次导入 deployment.json，保留原文件和解析路径。根 `env.conf` 只提交空模板，真实值只填私有副本，详见[统一配置](../doc/framework-configuration.md)。以后读取私有 env；`.local/deployment.json`、发布清单、Compose 和操作记录均由脚本生成，不需要人工准备，也不提交 Git。完整配置、前置环境和恢复说明见[Linux Docker 一键部署](../doc/first-deployment.md)。
+Windows 将最后一行换成 `.\build.ps1`。首次自动创建 `.local/env.conf` 并写入当前平台的实际默认值；已有文件不覆盖。旧站点优先导入 site.json，其次导入 deployment.json，保留原文件和解析路径。根 `env.conf` 提供固定非秘密默认值，真实站点值只填私有副本；手工复制模板须自行核对 UID/GID 和镜像架构，详见[统一配置](../doc/framework-configuration.md)。以后读取私有 env；`.local/deployment.json`、发布清单、Compose 和操作记录均由脚本生成，不需要人工准备，也不提交 Git。完整配置、前置环境和恢复说明见[Docker 一键部署](../doc/first-deployment.md)。
 
 脚本自动准备锁定的 pnpm，安装依赖，构建和检查管理器及 `plugins` 列出的全部插件，并打包发布清单。需要宿主镜像时直接使用仓库已提供的官方源码构建；源码不完整时提示缺失，不自动拉取，也不要求与预设锁定版本一致。宿主源码未变时复用已有宿主层，安装本次构建的 manager。默认使用本机不可变镜像 ID，仅设置 `publishImage` 时推送镜像仓库。构建记录使用已提交源码，无需分别选择组件版本。
 
@@ -27,11 +29,17 @@ bash deploy/build.sh
 
 新归档使用内容摘要命名。发布目录同时保留上一份清单引用的已校验归档，供 pnpm 在替换旧依赖引用时解析；部署目标仍只来自新清单，不重新启用已停用的插件。
 
-构建期间旧服务继续运行。每次记录和备份位于 `.local/artifacts/source-release-<提交>-<操作 ID>/`；备份包含原运行配置、Compose 和停止服务后的持久挂载数据。构建失败不停止服务，备份失败恢复旧服务；安装开始后失败则保留现场与备份，保持站点配置不变并执行 `bash deploy/build.sh --resume`。恢复使用同一次已验证的镜像和归档。源码发版使用 flock 排他执行，期间不要并行运行其他管理命令。
+构建期间旧服务继续运行。每次记录和备份位于 `.local/artifacts/source-release-<提交>-<操作 ID>/`；备份包含原运行配置、Compose 和停止服务后的持久挂载数据。产物准备前失败不停止服务；产物齐备后的挂载预检或安装失败保留现场，保持站点配置不变并执行 build 脚本加 `--resume`。备份失败恢复旧服务。恢复使用同一次已验证的镜像和归档，并核验 Docker 引擎身份；`--resume` 继续部署，不会把备份覆盖回运行数据。
+
+三平台共用 `.local/source-release.node.lock`，Linux shell 同时沿用可用的 `flock` 兼容旧入口。期间不要并行运行其他管理命令。构建子进程通过 IPC 报告完成、退出码一致且没有中断时释放源码锁，包含正常报告的构建失败；进程被强制中断或无法证明完整结束时保留。遇到遗留锁，先根据其中的主机、PID 和 workerPid 核实本机进程及子进程全部退出，再只清理这个 Node 锁文件；不要删除旧 `source-release.lock`、profile 锁或恢复记录。profile 的 `unlock` 命令不能代替此核查。
+
+原生 Linux 保留 host 网络；Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge。官方 DSH 保持 `127.0.0.1` 监听，管理器在容器唯一桥接 IPv4 地址的同端口通过 TCP 转发至 DSH；宿主只向 `127.0.0.1` 发布端口。同 Docker 网络属于信任边界，此设置不代表公网隔离。部署在停服前通过 `check-compose` 核验实际容器用户的挂载访问；若 prepared 后预检失败，修正访问条件并使用原配置加 `--resume`。macOS 新站点采用当前非 root 用户 UID/GID，已保存的配置不自动修改。新站点镜像架构按 Docker 引擎初始化；显式配置及旧站点的架构保持。
+
+原生 Linux 保留绝对路径去前导 `/` 的 tar 备份格式；Windows/macOS 和 Docker Desktop 的备份使用 `sources/<序号>` 前缀，并在同目录的 `mounts-*.json` 保存原路径映射。发布记录绑定归档及映射的 SHA-256，嵌套源只归档一次。源码 `deploy/scripts/backup.mjs` 的 `validateSourceBackupRestore(record, { image: record.previousRuntime?.containerImage ?? record.image })` 可在只读备份挂载和容器 tmpfs 中实际提取，输出内容摘要、权限与链接；官方 `/opt/dsh-runtime` 依赖链接须能在对应的不可变镜像内解析，并标记为外部运行依赖。这是备份恢复验证，不是数据回滚，也不写原数据。可复制命令与资源要求见[更新与恢复](../doc/first-deployment.md#更新与恢复)。
 
 标准插件的日常认证及启停只修改自身 `plugin.json`，然后执行 `apply-compose`；首次站点配置和旧 patch 迁移见[插件运行配置规范](../doc/plugin-configuration.md)。下方 `render-compose` 等基础操作用于自定义集成，不要求日常手工维护多份配置。
 
-插件先构建成独立发布目录，再通过官方 DSH CLI 安装。普通插件交付无需 Docker。基础管理操作使用 `deploy/build.sh <命令>` 或 `deploy/scripts/deployment.mjs <命令>`；不带参数的 `deploy/build.sh` 执行上述完整源码发版。
+插件先构建成独立发布目录，再通过官方 DSH CLI 安装。普通插件交付无需 Docker。基础管理操作使用根 `build.sh <命令>` / `build.ps1 <命令>`，或 `node deploy/scripts/deployment.mjs <命令>`；不带参数的 build 脚本执行上述完整源码发版。帮助和管理动作不执行源码发布前置检查、不取得源码锁，也不初始化站点；各管理动作仍执行自身检查。
 
 ```sh
 pnpm package --plugins "auth,example" --output .local/artifacts/release/plugins

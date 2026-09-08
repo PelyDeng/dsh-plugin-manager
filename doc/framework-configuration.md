@@ -1,10 +1,12 @@
 # 框架统一配置
 
-根目录 [env.conf](../env.conf) 是可提交的公开空模板，所有值均留空，每项有中文注释。运行时使用 Git 忽略的 `.local/env.conf`；通常只需填写访问地址、信任域名和所用模型密钥，其余采用各入口默认值。不要直接在公开模板填入真实值。
+根目录 [env.conf](../env.conf) 是可提交的公开默认值模板，每项有中文注释；固定非秘密默认值已直接填入。运行时使用 Git 忽略的 `.local/env.conf`，通常只需核对访问地址、信任域名和所用模型密钥。真实域名、账号、密码和密钥只填私有文件，不能写入公共模板。
 
 ## 首次填写
 
-新站点可以先复制空模板，再修改私有副本；已有站点先由部署入口自动导入旧配置，避免空模板遮蔽旧站点路径。
+源码新站点直接执行 Windows 的 `./build.ps1` 或 macOS/Linux 的 `./build.sh`，脚本自动创建私有配置，写入本次平台的实际默认值。已有 `.local/env.conf` 不覆盖；旧站点先由部署入口导入旧 JSON，保留原路径和文件。
+
+确需手工复制时，仅用于尚无配置与数据的新站点。公开模板的 UID/GID 为 1000、镜像架构为 `linux/amd64`，不会因为复制动作自动探测平台；macOS 用户及 ARM Docker 引擎应核对并修改这些值。显式填写的值会被保留。
 
 ```sh
 # 仅用于尚无配置与数据的新站点
@@ -25,7 +27,7 @@ ZHIPU_API_KEY=
 
 地址不带路径或末尾斜杠，信任项不带协议或路径。自定义端口时同时核对 URL 与反向代理。设置访问地址不会自动添加信任域名；控制台接口 403 的排查见 [FAQ](FAQ.md#控制台能打开但模型和插件报-http-403-怎么办)。
 
-文件按字面量 `KEY=VALUE` 解析，不执行 shell，不展开变量；数组和对象使用单行 JSON，含引号的字符串可用 JSON 字符串表示。重复字段、未知字段或非法类型会拒绝。相对路径从显式项目 root 解析。Linux 私有输入必须是普通文件且权限为 `0600` 或更严格；Windows 应由部署者限制文件 ACL，管理器不把 POSIX 检查冒充 Windows 权限验证。
+文件按字面量 `KEY=VALUE` 解析，不执行 shell，不展开变量；数组和对象使用单行 JSON，含引号的字符串可用 JSON 字符串表示。重复字段、未知字段或非法类型会拒绝。相对路径从显式项目 root 解析。Linux/macOS 私有输入必须是普通文件且权限为 `0600` 或更严格；Windows 通过 ACL 保护新建的框架私有配置、凭据投影、日志和备份。已有用户文件及数据目录不会被递归改权，手工提供的私有输入仍需部署者限制其 ACL。
 
 ## 密钥由谁管理
 
@@ -40,7 +42,17 @@ ZHIPU_API_KEY=
 
 ## 配置范围与默认值
 
-完整字段和默认说明以根模板为准，运行时只需填写需要改变的项。
+完整字段以根模板为准。固定默认值直接填写，派生值、可选输入、秘密和生成项按注释留空；空值不等于没有默认行为。
+
+| 项目 | 公开模板中的值或规则 |
+| --- | --- |
+| 访问与监听 | `DSH_PUBLIC_URL=http://127.0.0.1:7902`、`DSH_BIND_HOST=127.0.0.1`、`DSH_PORT=7902`；origin 留空时从 URL 派生，信任域名按实际访问填写 |
+| 启动与存储 | profile `web`、插件 `["auth","example"]`、mode `release`、数据根 `.local/data`、产物根 `.local/artifacts` |
+| 工具与容器 | CLI `dsh`、patches `[]`、offline `false`、Compose 项目 `dsh-plugins`、UID/GID `1000` |
+| 镜像 | 平台 `linux/amd64`、基础镜像 `docker.io/library/node:24-bookworm-slim`；Harbor 关闭，上游回退开启 |
+| 保持留空 | 模型密钥、仓库账号密码、生成的镜像/manifest、可选宿主来源；home/workspace/authUrlFile 等从入口与数据根派生 |
+
+模板中的 auth/example 选集用于源码示例站点。独立归档消费按自己的清单调整；留空选集沿用发布清单。手工更改端口不会同步改写已填的 URL，需同时核对。
 
 | 类别 | 字段 |
 | --- | --- |
@@ -56,11 +68,13 @@ ZHIPU_API_KEY=
 
 镜像仓库账号和密码仅用于临时 Docker 登录，不传入 DSH。推送部署镜像时，凭据目标必须与 `DSH_PUBLISH_IMAGE` 的仓库主机一致；未填写凭据时沿用 Docker 已有登录。部署 JSON、Compose 和普通操作记录仅保存模型凭据投影的文件路径与摘要，原值保存在 `.local/secrets/framework-credentials/` 的私有文件中，并以只读挂载提供给容器。备份恢复时须保留这些被引用的原文件，不要手改或清理它们。
 
+源码入口自动创建新站点配置时，`DSH_IMAGE_PLATFORM` 按本机 Docker 引擎选择 `linux/amd64` 或 `linux/arm64`，并写入私有文件；Windows/Linux 的容器 UID/GID 为 1000，macOS 非 root 用户采用当前 UID/GID。公共模板和独立镜像入口的通用平台值仍为 `linux/amd64`。已有文件、显式值及旧站点导入值保持，不重新套用新默认值，也不会迁移或递归改权旧数据。Docker endpoint 与引擎身份记录在生成的发布记录中，不能切换引擎后继续原恢复操作。
+
 ## 三种入口
 
 | 入口 | 选取规则 |
 | --- | --- |
-| 源码 `bash deploy/build.sh` | 默认读取或初始化 `.local/env.conf`；默认 release、auth/example、本机镜像。支持显式旧站点 JSON。源码构建自动生成 manifest/containerImage，对应 env 字段必须留空。 |
+| 源码根 `build.sh` / `build.ps1` | 默认读取或初始化 `.local/env.conf`；默认 release、auth/example、本机镜像。兼容 deploy 目录入口和显式旧站点 JSON。源码构建自动生成 manifest/containerImage，对应 env 字段必须留空。 |
 | 仓库 Windows `deploy/scripts/start.ps1` | 未显式指定配置且没有 `DEPLOYMENT_CONFIG` 时使用已有 `.local/env.conf`。有配置时遵从配置 mode，缺省 release；无配置保留 development 默认值。显式 `-Mode` 优先。 |
 | 独立 manager CLI | 显式 `--root`，通过 `--config` 或 `DEPLOYMENT_CONFIG` 选择 env/JSON；不自动扫描作者仓库。默认 release，插件选集留空沿用发布清单；独立 Compose 必须提供不可变镜像。 |
 

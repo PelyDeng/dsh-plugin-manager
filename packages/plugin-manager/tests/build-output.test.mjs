@@ -17,7 +17,7 @@ function fixture(t, source, isTTY = false) {
     root, entry, module,
     run: () => presentBuild(entry, [], { logDirectory: root, output: { isTTY, write: chunk => { text += chunk; } } }),
     text: () => text,
-    log: () => { const path = resolve(root, readdirSync(root).find(name => name.endsWith('.log'))); return { path, text: readFileSync(path, 'utf8') }; },
+    log: () => { const path = resolve(root, readdirSync(root).find(name => name.startsWith('build-')), 'build.log'); return { path, text: readFileSync(path, 'utf8') }; },
   };
 }
 

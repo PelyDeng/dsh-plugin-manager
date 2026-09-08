@@ -6,7 +6,7 @@
 请按 doc/conversation-management.md 和 example 实现，为 <插件ID> 接入本人会话查询、只读预览、批量官方归档。复用 owner 索引与移除生命周期，验证撤权、旧数据、并发、只读和独立归档消费；更新文档，不操作生产数据。
 ```
 
-先替换尖括号占位符。让执行者先读取目标版本公开资料和项目 AGENTS；不要让 AI 猜不存在的命令。以下是任务模板，不代表对应业务已经实现。manager 0.3.4 的独立包只支持 pnpm 单包 release。
+替换尖括号占位符，先读目标版本资料和 AGENTS。以下模板不代表业务已实现；独立包只支持 pnpm 单包 release。源码部署按操作系统选择根 build.ps1/build.sh；核对 env.conf 的已填默认值、平台动态初始化和旧站点沿用，不让 AI 猜命令或覆盖现有配置。
 
 ## 1. 最小工具插件
 
@@ -15,7 +15,7 @@
 先读取本项目 AGENTS、所用 DSH 版本的 ToolDefinition 示例、框架作者指南及 examples/standalone-plugin。
 保留官方 Cordis 插件与 dsh.bundle.patch，通过官方 dsh profile 启动，不新增独立服务启动器。
 这是无私密数据的个人工具，无需 kit/auth；如果需求实际上访问受限数据，先指出并补充鉴权方案。
-按 manager 0.3.4 添加 schema 3 声明、README、files、build/check。工具注册有 disposer，工具权限与 Agent 白名单显式配置。
+按当前框架规范添加 schema 3 声明、README、files、build/check。工具注册有 disposer，工具权限与 Agent 白名单显式配置。
 在作者根生成 pnpm 锁文件；在 <工具目录> 用 pnpm exec dsh-plugin-manager pack --root <作者包根> --package . --output .local/release-v1。
 保持宿主为外部依赖，运行依赖不得引用作者路径。执行构建和针对工具的测试，交付整个发布目录、输入输出例子、所验证宿主版本及使用说明。
 不修改框架或 DSH 源码；不发布、不推送、不读取真实凭据。未知接口先查证，不用伪 API。
@@ -42,7 +42,7 @@
 使用 --root <作者包根> --package . 的 pnpm 单包流程，不让父 workspace 或原框架路径影响构建。
 若是多包 workspace，明确当前不支持自动发现，选择一个可独立交付的适配包；不要承诺外部 development/link。
 补齐声明、构建、check、README、锁文件及实际业务配置校验。若需 kit，内嵌版本化开发依赖，宿主仍外置。
-交付改动清单、准确命令、可迁移 tgz/manifest，以及作者源码不在部署机时的验证结果；不迁移或删除原业务数据。
+交付命令、tgz/manifest及脱离作者源码的验证结果；不删除原数据。
 ```
 
 ## 4. 内部插件交给另一位部署者
@@ -53,7 +53,7 @@
 在框架根使用 pnpm package --plugins <插件ID列表> --output <新的发布目录>，不要手写 manifest 或修改中央名单。
 提供管理器 tgz/摘要、应用完整发布目录、配置模板、已验证官方宿主版本和获取步骤；不打包真实 env、账号或客户数据。
 部署者若合并其他应用，用 compose-release 输入完整候选集合；更新加 --previous <现用清单> 仅携带旧归档，仍列出全部保留应用，start/apply-compose 显式 --plugins all。
-手册说明 cwd、home、profile、origin、首次改密、普通账号授权、health 与真实业务验证、stop/更新/恢复；无需作者源码或手改 Compose。
+手册说明目录角色、账号授权、health与真实业务验证、更新/恢复；不用手改Compose。
 核对更新保留原账号/授权/配置，业务数据格式升级需另行说明。只报告实际执行的检查，不默认推送或上线。
 ```
 

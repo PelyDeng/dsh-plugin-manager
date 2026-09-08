@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-DEPLOY_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../../deploy" && pwd)"
-for script in "${DEPLOY_DIR}/build.sh" "${DEPLOY_DIR}/scripts/"*.sh "${DEPLOY_DIR}/runtime/"*.sh; do
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)"
+for script in "${ROOT}/build.sh" "${ROOT}/test-report.sh" "${ROOT}/deploy/"*.sh "${ROOT}/deploy/scripts/"*.sh "${ROOT}/packages/plugin-manager/runtime/"*.sh; do
     [ ! -f "$script" ] || bash -n "$script"
 done
-for script in "${DEPLOY_DIR}/runtime/"*.mjs "${DEPLOY_DIR}/scripts/"*.mjs; do
+for script in "${ROOT}/deploy/scripts/"*.mjs "${ROOT}/packages/plugin-manager/runtime/"*.mjs; do
     [ ! -f "$script" ] || node --check "$script"
 done
-node --test "${DEPLOY_DIR}/../packages/plugin-manager/tests/"*.test.mjs
+node --test "${ROOT}/packages/plugin-manager/tests/"*.test.mjs
 printf '%s\n' '部署路径、安装恢复与可选宿主检查通过。'
