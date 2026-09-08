@@ -70,3 +70,34 @@ test('delegation idempotency is owner/caller scoped and rejects changed inputs',
   assert.throws(()=>s.jobStart('u','router','request-123',{draftId:'two'},{}),/不同输入/)
   assert.throws(()=>s.jobGet('other',a.id),/无权/)
 })
+
+test('legacy blog snapshots tolerate page views while preserving edits and rejecting real remote changes',async t=>{
+  const s=new BlogStore(':memory:');t.after(()=>s.close())
+  const actor={namespace:'n',userId:'u',sessionId:'s'}
+  const variant={cid:339,title:'原文',text:'原正文',tags:[],categories:[],raw:{text:'原正文',views:10,modified:100,commentsNum:0},fields:[]}
+  const base={published:variant,savedDraft:{...structuredClone(variant),cid:340},version:'legacy-with-views',selectedVariant:'published'}
+  let remote=structuredClone(base),writes=0
+  remote.version='current';remote.published.raw.views=12;remote.savedDraft.raw.views=11
+  delete remote.selectedVariant
+  const blog={get:async()=>structuredClone(remote),call:async()=>{writes++;return{snapshot:structuredClone(remote)}}}
+  const app=new BlogApplication(s,{assert(){}},blog,null,null,{modelArticle:p=>p})
+  const d=s.create('n:u',{title:'我的修改',text:'保留手写正文'},base)
+  const proposal=s.propose('n:u',d.id,1,{text:'保留候选正文'},[])
+  const prepared=await app.prepare(actor,{id:d.id,revision:1,mode:'publish',proposalId:proposal.id})
+  assert.equal(prepared.after.text,'保留候选正文');assert.equal(writes,0)
+  assert.deepEqual(s.get('n:u',d.id).remote,base);assert.equal(s.get('n:u',d.id).text,'保留手写正文')
+  assert.equal(app.operation('n:u',prepared.id).payload.base.version,'current')
+  assert.equal(app.operation('n:u',prepared.id).payload.base.published.raw.views,12)
+  const unchanged=structuredClone(remote)
+  for(const change of [
+    r=>{r.published.text='别人改了正文'},r=>{r.published.title='别人改了标题'},
+    r=>{r.published.tags=['新标签']},r=>{r.published.categories=[2]},
+    r=>{r.published.fields=[{name:'custom',value:'changed'}]},
+    r=>{r.published.raw.modified++},r=>{r.published.raw.commentsNum++},
+    r=>{r.savedDraft.text='别人改了保存稿'},r=>{r.savedDraft=null},
+  ]){
+    remote=structuredClone(unchanged);change(remote)
+    await assert.rejects(app.prepare(actor,{id:d.id,revision:1,mode:'publish',proposalId:proposal.id}),/博客.*变化|博客.*修改/)
+  }
+  assert.equal(s.get('n:u',d.id).proposal.id,proposal.id);assert.equal(writes,0)
+})

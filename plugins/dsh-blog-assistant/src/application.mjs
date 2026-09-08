@@ -1,6 +1,18 @@
 import { randomUUID } from 'node:crypto'
+import { isDeepStrictEqual } from 'node:util'
 import { article, ownerKey, digest } from './store.mjs'
 import { invariant } from './settings.mjs'
+
+// Older bridge hashes included theme view counters. Compare full variants to retain
+// existing workbench drafts across the hash upgrade without hiding actual edits.
+function sameBlogContent(a,b) {
+  const variants=snapshot=>{
+    const value=structuredClone({published:snapshot.published??null,savedDraft:snapshot.savedDraft??null})
+    for(const variant of Object.values(value))if(variant?.raw)delete variant.raw.views
+    return value
+  }
+  return isDeepStrictEqual(variants(a),variants(b))
+}
 
 export class BlogApplication {
   constructor(store,access,blog,images,backups,jobs,attachments) { Object.assign(this,{store,access,blog,images,backups,jobs,attachments}) }
@@ -81,7 +93,7 @@ export class BlogApplication {
     let remote=null
     if(d.remote) {
       remote=await this.blog.get(d.remote.published?.cid??d.remote.savedDraft?.cid,signal)
-      invariant(remote.version===d.remote.version,'博客已被其他窗口修改，请重新导入比较',409)
+      invariant(remote.version===d.remote.version||sameBlogContent(remote,d.remote),'博客内容或设置已有变化，当前改稿已保留，请重新导入比较',409)
       remote.selectedVariant=d.remote.selectedVariant??(remote.savedDraft?'savedDraft':'published')
     }
     this.access.assert(actor);signal?.throwIfAborted()
