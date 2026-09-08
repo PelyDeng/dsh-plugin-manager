@@ -33,7 +33,7 @@ pnpm exec dsh-plugin-manager --version
 | 示例 | 验证能力 |
 | --- | --- |
 | [standalone-plugin](../examples/standalone-plugin/README.md) | 不依赖 kit，官方 Bundle 与受管 release 均可加载 |
-| [standalone-kit](../examples/standalone-kit/README.md) | 独立消费 kit tgz，复用登录及应用授权，返回当前账号身份 |
+| [standalone-kit](../examples/standalone-kit/README.md) | 在独立项目中使用 kit tgz，复用登录及应用授权，返回当前账号身份 |
 
 无 kit 的示例，在作者根执行：
 
@@ -99,7 +99,7 @@ pnpm list:plugins
 | 完整开发回归 | `pnpm test`，先构建再运行测试；CI 单独执行测试步骤 |
 | 构建并交付 | `pnpm package --plugins "auth,example" --output .local/artifacts/release/plugins` |
 
-只交付时直接 package，不需要先重复 build/check。普通构建和测试不要求宿主子模块、模型密钥或 Docker；内部清单 1 保留 development/link，外部单包与组合清单 2 只支持 release。
+按当前改动选择上表中的命令，不必每次全部执行。只交付时直接 package，不需要先重复 build/check。普通构建和测试不要求宿主子模块、模型密钥或 Docker；内部清单 1 保留 development/link，外部单包与组合清单 2 只支持 release。
 
 ### 3. 运行并验证
 
@@ -116,7 +116,7 @@ pnpm list:plugins
 5. FAQ 读取包内 knowledge；源码问答索引在构建时生成。保留框架答疑用途时，把 build 中 `scripts/build-reference.mjs --root ../..` 的 root 改为明确的公共框架源码根路径；只在作者构建机需要该源码。部署时索引随 tgz 携带，不依赖作者目录。改成其他业务应替换 src/knowledge.ts 中职责、两份知识及源码检索能力，不能只改 config.systemPrompt；它仅为补充。
 6. 在作者根执行 `pnpm build`、`pnpm check` 和 `pnpm test`，保存 pnpm-lock.yaml。在工具目录执行 `pnpm exec dsh-plugin-manager pack --root <作者包根> --package . --output <新发布目录>`。只交付无需事先重复 build/check。
 
-部署者只取得整个发布目录及说明。确认 tgz 包含知识、页面、配置模板和入口；作者源码目录不参与 release。kit 更新需每个消费应用更新内嵌版本后重新交付，不能只升级管理器。
+部署者只取得整个发布目录及说明。确认 tgz 包含知识、页面、配置模板和入口；作者源码目录不参与 release。kit 更新需每个使用它的应用更新内嵌版本后重新交付，不能只升级管理器。
 
 ## 交付内容
 

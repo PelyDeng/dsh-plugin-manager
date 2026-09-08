@@ -13,13 +13,15 @@ bash test-report.sh --cli /absolute/path/to/dsh/lib/bin.js
 bash test-report.sh --help
 ```
 
-该入口在 GitHub 和 Gitee 检出目录中行为一致，不更新 Git、不加载站点 env.conf、不执行部署。需要 Node.js `^22.19.0 || >=24`、框架锁定的 pnpm 和 tar。还需已构建的官方 DSH CLI；递归克隆只取得源码，不等于完成宿主构建。默认 CLI 缺失时，先按官方说明在 `deepseek-harness` 内使用其自身锁定的 pnpm 执行 `pnpm install --frozen-lockfile`、`pnpm run build`，或用 `--cli` 指定现有 CLI。脚本不会自动下载、更新或构建宿主。`--cli` 优先于已有 `DSH_TEST_CLI`，两者的相对路径均以框架仓库根目录为准。
+该入口在 GitHub 和 Gitee 检出目录中行为一致，不更新 Git、不加载站点 env.conf、不执行部署。需要 Node.js `^22.19.0 || >=24`、框架锁定的 pnpm 和 tar。还需已构建的官方 DSH CLI；递归克隆只取得源码，不等于完成宿主构建。默认 CLI 缺失时，先按官方说明在 `deepseek-harness` 内使用其自身锁定的 pnpm 执行 `pnpm install --frozen-lockfile`、`pnpm run build`，或用 `--cli` 指定现有 CLI。
+
+脚本不会自动下载、更新或构建宿主。`--cli` 优先于已有 `DSH_TEST_CLI`，两者的相对路径均以框架仓库根目录为准。
 
 Windows 不使用 Bash 时，在框架根执行 `node scripts/test-report.mjs --root .`，其余参数相同。根 `build.ps1` / `build.sh` 是源码部署入口，不替代这里的验证报告；macOS 构建部署流程尚无真机验收，不能由命令分支或归档测试推导为通过。
 
 脚本先检查宿主可运行，再打包固定的 auth/example、执行下述宿主测试，全部成功才组合交付目录。每次新建 `.local/artifacts/test-report-<随机标识>/`，其中 `candidate/` 是被测归档、`report.json` 是报告、`delivery/` 是包含报告记录的交付清单和原样归档。任何阶段失败均非零退出，保留诊断，不继续后续步骤。测试数据独立保存在 `.local/data/acceptance/`，不清理已有运行数据。默认回环端口18951；占用时可设置 `EXAMPLE_TEST_PORT`，并行运行应使用不同端口。
 
-范围是 auth/example 的真实宿主、归档消费与本地模型替身测试，不是所有业务插件、真实模型、浏览器或生产验收。开发者自己的插件需要自己的业务测试运行器。请交付本次 `delivery/`；随后运行部署构建入口重新打包的归档不自动继承本次报告。仅持有 manager tgz 的独立部署者使用下述 CLI/API，根脚本不包含在工具包中。
+范围是 auth/example 的真实宿主、独立安装包验证与本地模型替身测试，不是所有业务插件、真实模型、浏览器或生产验收。开发者自己的插件需要自己的业务测试运行器。请交付本次 `delivery/`；随后运行部署构建入口重新打包的归档不自动继承本次报告。仅持有 manager tgz 的独立部署者使用下述 CLI/API，根脚本不包含在工具包中。
 
 需要分别控制步骤时，使用同一流程的底层命令：
 
@@ -49,7 +51,7 @@ node packages/plugin-manager/src/cli.mjs compose-release --root . --manifest .lo
 | host | kind 为 unknown/source/distribution；可选 version、identitySource（detected/declared）；source 可有 commit、dirty，distribution 可有 digest |
 | platform | os、architecture、nodeVersion |
 
-outcome 为 passed/failed/skipped。scope 为 archive-consumption、real-host、model-double、real-model、container、browser 或 production，一条仅表达一种范围。source 为 runner/maintainer，两者都是提供方声明，不是可信签名等级。suiteRevision 为实际套件入口字节的 SHA-256，不代表其完整依赖闭包。finishedAt 需要有效日期和时区。
+outcome 为 passed/failed/skipped。scope 为 archive-consumption、real-host、model-double、real-model、container、browser 或 production，一条仅表达一种范围。source 为 runner/maintainer，两者都是提供方声明，不是可信签名等级。suiteRevision 为实际套件入口字节的 SHA-256，不包含它引用的全部直接和间接依赖。finishedAt 需要有效日期和时区。
 
 单个输入报告最多 1 MiB；清单验证对象最多 4 MiB，builds 256 条、runs 1024 条、每项 subjects 128 个。拒绝未知字段、非法摘要/日期、超限、重复冲突和不属于本清单主归档的记录。记录不容纳运行配置、凭据、任意日志或命令行。
 
@@ -57,7 +59,7 @@ outcome 为 passed/failed/skipped。scope 为 archive-consumption、real-host、
 
 ## 安装提示
 
-提示输出到 stderr，CLI stdout JSON 保持可解析；synchronize 结果包含结构化 verification。未启用的主插件不参与判断，历史 subjects 保留。无包变动时也返回提示；development/link 的可变源码不能沿用 tgz 验收作为通过证明。
+提示输出到 stderr，CLI stdout JSON 保持可解析；synchronize 结果包含结构化 verification。未启用的主插件不参与判断，历史 subjects 保留。包文件未变时也会返回提示；development/link 的可变源码不能沿用 tgz 验收作为通过证明。
 
 | 状态 | 含义 |
 |---|---|
@@ -70,6 +72,6 @@ outcome 为 passed/failed/skipped。scope 为 archive-consumption、real-host、
 
 普通安装不能推断第三方 suite 的 scenarioId，通常显示场景未核对；不会据此宣称完整匹配。源码 commit 需探测执行入口所属仓库；环境变量 SHA 不成为实测事实。编译 JS 与源码 commit 的对应关系未证实时按声明处理。容器不能核验自身镜像摘要时保持 partial/unknown，不读取 Docker socket。
 
-所有结果都是建议，不增加版本不同或报告失败即阻断的门槛；原有完整性、依赖、环境变化/rebuild 和恢复约束仍有效。报告格式非法属于输入错误，会在安装变更前拒绝。验证信息不进入 desiredHash，不因补充记录触发重装。容器提示发生在旧容器停止后、新容器内安装插件前；不承诺整个容器更新开始前已有提示。
+这些结果供安装者参考，不会仅因版本不同或报告失败就阻止安装；原有完整性、依赖、环境变化/rebuild 和恢复约束仍有效。报告格式非法属于输入错误，会在安装变更前拒绝。验证信息不进入 desiredHash，不因补充记录触发重装。容器提示发生在旧容器停止后、新容器内安装插件前；不承诺整个容器更新开始前已有提示。
 
 模型替身、真实模型、容器、浏览器、生产分别验收。健康探针不能证明业务问答可用，版本号相同不能保证所有接口或传递依赖一致。

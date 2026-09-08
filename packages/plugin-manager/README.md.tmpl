@@ -1,12 +1,12 @@
 # @dsh-plugin-manager/plugin-manager
 
-DSH 应用接入与交付管理 CLI。独立包和内部 `plugins/*` 共用 build → check → pack，通过官方 DSH CLI 安装 Bundle、配置并受控启停。kit 和基础认证可选；管理声明不会自动保护业务路由。
+用于打包、安装和管理 DSH 应用的命令行工具（CLI）。独立包和内部 `plugins/*` 共用 build → check → pack，通过官方 DSH CLI 安装 Bundle、配置并受控启停。kit 和基础认证可选；管理声明不会自动保护业务路由。
 
 ## 安装与作者操作
 
 需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。在工具目录执行 `pnpm add --ignore-workspace /path/to/plugin-manager-{{FRAMEWORK_VERSION}}.tgz`，随后使用 `pnpm exec dsh-plugin-manager`。包名不表示已发布到公共 registry。本 README 随工具版本交付。
 
-每个项目操作要求 `--root`；相对配置、home 和产物路径相对这个根解析。独立作者包根需有 package.json：有效 name/version、main、files、README、scripts.build/check、官方 dsh.bundle.patch，以及 `deepseekPlugin: { "schemaVersion": 3, "id": "my-plugin" }`。页面、探针、权限、认证与 kit 均不强制要求。构建产物可以由 build 生成。
+每个项目操作都须用 `--root` 指定项目根目录；配置、home 和产物使用相对路径时，都从这个目录计算。独立作者包根需有 package.json：有效 name/version、main、files、README、scripts.build/check、官方 dsh.bundle.patch，以及 `deepseekPlugin: { "schemaVersion": 3, "id": "my-plugin" }`。页面、探针、权限、认证与 kit 均不强制要求。构建产物可以由 build 生成。
 
 部署和迁移输出使用规范化的完整路径，包括 Windows 8.3 短目录名。迁移仍拒绝通过符号链接或目录联接指定源、目标和备份。
 
@@ -37,18 +37,22 @@ pnpm exec dsh-plugin-manager compose-release --root /path/to/site --output relea
 
 支持 configuration 的插件使用 `<DSH home>/plugins/<id>/plugin.json`，例如 `{"schemaVersion":1,"enabled":true,"accessMode":"standalone","config":{}}`。accessMode 仅适用于认证消费者；authenticated 需要合法站点 publicOrigin 和候选清单中唯一、已启用的认证提供者。使用 compose-release 显式组合业务应用与认证插件。认证模式修改需配置加受控重启。
 
-Docker 实例通过 `apply-compose --root <项目根> --config <deployment.json>` 应用配置，接受不可变本机镜像 ID 或 registry 摘要，`--resume` 恢复原操作。可先运行 `check-compose` 生成候选文件并检查挂载权限，不停止服务或启动 DSH；`apply-compose` 也会先执行这些检查。仅支持本机 unix/npipe endpoint 的 Linux 引擎；Windows/macOS 与 Linux Docker Desktop 使用 bridge，容器地址通过 TCP 转发到 DSH 的 `127.0.0.1` 同端口，宿主仅向回环地址发布。同 Docker 网络是信任边界，不表示公网隔离；原生 Linux 保留 host 网络。macOS 尚未完成真机验收。
+Docker 实例通过 `apply-compose --root <项目根> --config <deployment.json>` 应用配置，接受不可变本机镜像 ID 或 registry 摘要，`--resume` 恢复原操作。可先运行 `check-compose` 生成候选文件并检查挂载权限，不停止服务或启动 DSH；`apply-compose` 也会先执行这些检查。
 
-完整源码仓库的根 `build.ps1`（Windows）或 `build.sh`（macOS/Linux）会构建宿主与插件并部署；这两个入口不包含在独立工具 tgz 中。其源码锁与 profile 安装锁用途不同，强制终止时不能用 profile `unlock` 解除源码锁；源码 `--resume` 继续发布，不回滚数据。`migrate-data` / `migrate-artifacts` 默认仅预览。完整命令参数见 `pnpm exec dsh-plugin-manager --help`；部署细节与示例见[仓库开发分支文档](https://github.com/PelyDeng/dsh-plugin-manager/tree/main/doc)，该链接可能领先于已安装版本。
+仅支持本机 unix/npipe endpoint 的 Linux 引擎；Windows/macOS 与 Linux Docker Desktop 使用 bridge，容器地址通过 TCP 转发到 DSH 的 `127.0.0.1` 同端口，宿主仅向回环地址发布。同一 Docker 网络中的其他容器仍属于受信任范围，不能据此认定服务已与公网隔离；原生 Linux 保留 host 网络。macOS 尚未完成真机验收。
+
+完整源码仓库的根 `build.ps1`（Windows）或 `build.sh`（macOS/Linux）会构建宿主与插件并部署；这两个入口不包含在独立工具 tgz 中。其源码锁与 profile 安装锁用途不同，强制终止时不能用 profile `unlock` 解除源码锁；源码 `--resume` 继续发布，不回滚数据。`migrate-data` / `migrate-artifacts` 默认仅预览。
+
+完整命令参数见 `pnpm exec dsh-plugin-manager --help`；部署细节与示例见[仓库开发分支文档](https://github.com/PelyDeng/dsh-plugin-manager/tree/main/doc)，该链接可能领先于已安装版本。
 
 ## 内部批量开发与 API
 
 省略 `--package` 时保留根锁文件及 `plugins/*` 扫描，支持 `--plugins auth,example`、默认选集、all/none。内部 kit 工作区准备和批量操作保持原行为。
 
-包根导出部署函数，`/catalog` 导出 `readPlugin`、发现与选集，`/packaging` 导出打包函数。管理器只读取声明与归档，不导入业务源码。
+包根导出部署函数，`/catalog` 导出 `readPlugin`、插件发现与选择，`/packaging` 导出打包函数。管理器只读取声明与归档，不导入业务源码。
 ## 发布物宿主验证
 
-自 0.3.3 起支持可选验证记录及 `compose-release --verification-report <JSON>`。pack 只记录构建输入，测试运行器在最终 tgz 上验证后输出报告；安装提示不新增版本硬门槛。完整流程、报告字段和证据边界见 [VERIFICATION.md](VERIFICATION.md)。
+自 0.3.3 起支持可选验证记录及 `compose-release --verification-report <JSON>`。pack 只记录构建输入，测试运行器在最终 tgz 上验证后输出报告；安装提示不会仅因版本不同而阻止安装。完整流程、报告字段和记录能证明什么、不能证明什么见 [VERIFICATION.md](VERIFICATION.md)。
 
 源码仓库提供根入口 `bash test-report.sh`，串联 auth/example 打包、真实宿主与本地模型替身测试、报告交付；需要已构建的官方 CLI，不执行站点部署。具体前置条件和输出目录见上述文档。
 

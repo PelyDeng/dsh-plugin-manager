@@ -8,7 +8,9 @@ Windows、macOS、Linux 共用一套源码部署流程。已安装 Node.js、Git
 ./build.sh
 ```
 
-Windows PowerShell 使用 `.\build.ps1`，不需要 Bash；资源管理器中的启动方式见[一键部署](../doc/first-deployment.md)。旧 `bash deploy/build.sh` 及 `deploy/build.ps1` 入口继续支持；参数一致，可使用 `--help`、`--config <文件>`、`--resume`。脚本检查基础软件而不安装它们，pnpm 按仓库锁定版本自动准备。仅接受本机 Docker unix/npipe endpoint，不支持远端或 TCP endpoint、Windows 容器。macOS 的实际 Docker 站点部署尚未完成真机验收；CI 测试不等同于部署验收。
+Windows PowerShell 使用 `.\build.ps1`，不需要 Bash；资源管理器中的启动方式见[一键部署](../doc/first-deployment.md)。旧 `bash deploy/build.sh` 及 `deploy/build.ps1` 入口继续支持；参数一致，可使用 `--help`、`--config <文件>`、`--resume`。
+
+脚本检查基础软件而不安装它们，pnpm 按仓库锁定版本自动准备。仅接受本机 Docker unix/npipe endpoint，不支持远端或 TCP endpoint、Windows 容器。macOS 的实际 Docker 站点部署尚未完成真机验收；CI 测试不等同于部署验收。
 
 终端显示各步骤的进度和结果，最右侧显示 `耗时 HH:MM:SS.s`；执行中每 100 毫秒刷新，成功或失败后保留该步骤的实际耗时，不包含补满进度条的动画时间。耗时按每个步骤分别计算。执行中的百分比是等待提示，只有成功后才显示 100%，不表示已处理的数据比例或剩余时间。重定向输出时只记录开始和结果，结果包含最终耗时。
 
@@ -21,13 +23,15 @@ git pull --ff-only --recurse-submodules
 ./build.sh
 ```
 
-Windows 将最后一行换成 `.\build.ps1`。首次自动创建 `.local/env.conf` 并写入当前平台的实际默认值；已有文件不覆盖。旧站点优先导入 site.json，其次导入 deployment.json，保留原文件和解析路径。根 `env.conf` 提供固定非秘密默认值，真实站点值只填私有副本；手工复制模板须自行核对 UID/GID 和镜像架构，详见[统一配置](../doc/framework-configuration.md)。以后读取私有 env；`.local/deployment.json`、发布清单、Compose 和操作记录均由脚本生成，不需要人工准备，也不提交 Git。完整配置、前置环境和恢复说明见[Docker 一键部署](../doc/first-deployment.md)。
+Windows 将最后一行换成 `.\build.ps1`。首次自动创建 `.local/env.conf` 并写入当前平台的实际默认值；已有文件不覆盖。旧站点优先导入 site.json，其次导入 deployment.json，保留原文件和解析路径。根 `env.conf` 提供固定非秘密默认值，真实站点值只填私有副本；手工复制模板须自行核对 UID/GID 和镜像架构，详见[统一配置](../doc/framework-configuration.md)。
+
+以后读取私有 env；`.local/deployment.json`、发布清单、Compose 和操作记录均由脚本生成，不需要人工准备，也不提交 Git。完整配置、前置环境和恢复说明见[Docker 一键部署](../doc/first-deployment.md)。
 
 脚本自动准备锁定的 pnpm，安装依赖，构建和检查管理器及 `plugins` 列出的全部插件，并打包发布清单。需要宿主镜像时直接使用仓库已提供的官方源码构建；源码不完整时提示缺失，不自动拉取，也不要求与预设锁定版本一致。宿主源码未变时复用已有宿主层，安装本次构建的 manager。默认使用本机不可变镜像 ID，仅设置 `publishImage` 时推送镜像仓库。构建记录使用已提交源码，无需分别选择组件版本。
 
 站点插件启停、认证配置及持久数据继续沿用；修改数据路径或 profile 需要显式迁移。源码更新不自动创建全量运行数据备份；发布产物、操作记录和私有配置副本不代替数据备份。需要数据恢复能力时，在更新前独立备份并验证恢复；已有备份继续保留。
 
-新归档使用内容摘要命名。发布目录同时保留上一份清单引用的已校验归档，供 pnpm 在替换旧依赖引用时解析；部署目标仍只来自新清单，不重新启用已停用的插件。
+新归档用内容摘要命名，便于识别是否为同一个包。发布目录同时保留上一份清单引用的已校验归档，供 pnpm 在替换旧依赖引用时解析；部署目标仍只来自新清单，不重新启用已停用的插件。
 
 构建期间旧服务继续运行。每次发布记录和产物位于 `.local/artifacts/source-release-<提交>-<操作 ID>/`。产物准备完成并通过挂载预检后，停止旧服务、核验容器及挂载，再安装并等待服务健康检查。停服核验失败时尝试恢复旧服务；安装失败保留现场，保持站点配置不变并执行 build 脚本加 `--resume`。恢复使用同一次已验证的镜像和归档，并核验 Docker 引擎身份；`--resume` 继续部署，不自动回滚业务数据。
 
@@ -40,13 +44,17 @@ bash deploy/build.sh unlock-source
 
 Windows 对应 `.\deploy\build.ps1 doctor` 和 `.\deploy\build.ps1 unlock-source`。带有私有根入口的集成仓库使用 `sh build.sh` 或 `.\build.ps1` 加相同子命令。命令从入口解析项目根目录，不依赖当前工作目录；不需要 Docker、pnpm 或宿主源码，不更新 Git、不初始化业务配置，也不自动继续构建。
 
-`doctor` 只读显示源码锁主机、PID、workerPid、进程组、发布状态、保留原因及后续命令。`unlock-source` 在互斥保护下重新核验，将旧锁原文移入 `.local/artifacts/source-lock-recovery/`，再给出普通构建或 `--resume` 命令。`building`、`build-failed`、`ready` 或没有发布记录时使用普通构建；`prepared`、`backing-up`、`applying`、`deployment-failed` 使用 `--resume`。无锁时重复执行不创建目录或备份。诊断有阻塞或解锁失败返回非零退出码。旧 `source-release.lock`、profile 锁、业务数据和发布记录均保留；profile 的 `unlock` 不能代替源码锁恢复。
+`doctor` 只读显示源码锁主机、PID、workerPid、进程组、发布状态、保留原因及后续命令。`unlock-source` 在互斥保护下重新核验，将旧锁原文移入 `.local/artifacts/source-lock-recovery/`，再给出普通构建或 `--resume` 命令。`building`、`build-failed`、`ready` 或没有发布记录时使用普通构建；`prepared`、`backing-up`、`applying`、`deployment-failed` 使用 `--resume`。
+
+无锁时重复执行不创建目录或备份。诊断有阻塞或解锁失败返回非零退出码。旧 `source-release.lock`、profile 锁、业务数据和发布记录均保留；profile 的 `unlock` 不能代替源码锁恢复。
 
 新版源码锁记录平台、系统启动身份及 Linux 协调进程组/构建进程组。同一 Linux 启动中必须确认主进程、worker 和两个受管进程组全部消失；仍有孤儿子进程、权限不足、外层 flock 被占用、锁损坏或发布状态未知时拒绝解锁。系统启动身份变化能够证明上次启动的进程已全部退出。Windows 可以诊断并在核实重启后解锁；同一次启动中无法完整核验遗留子进程时保留锁。macOS 当前仅提供诊断，不提供自动解锁保证。旧版锁缺少这些身份信息，需要人工核实，不能通过补写字段或强制参数绕过检查。
 
 源码锁创建和解锁共用短时 `.local/source-release.control.lock`，覆盖直接 Node 入口，防止两次恢复或恢复与新构建交错。该锁正常操作后立即释放；若元数据操作被强制终止而留下 control 锁，`doctor` 会报告路径，必须人工核实元数据操作者已经退出后处理，不能按文件年龄自动删除。源码恢复命令不杀进程，不提供 `--force`。
 
-原生 Linux 保留 host 网络；Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge。官方 DSH 保持 `127.0.0.1` 监听，管理器在容器唯一桥接 IPv4 地址的同端口通过 TCP 转发至 DSH；宿主只向 `127.0.0.1` 发布端口。同 Docker 网络属于信任边界，此设置不代表公网隔离。部署在停服前通过 `check-compose` 核验实际容器用户的挂载访问；若 prepared 后预检失败，修正访问条件并使用原配置加 `--resume`。macOS 新站点采用当前非 root 用户 UID/GID，已保存的配置不自动修改。新站点镜像架构按 Docker 引擎初始化；显式配置及旧站点的架构保持。
+原生 Linux 保留 host 网络；Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge。官方 DSH 保持 `127.0.0.1` 监听，管理器在容器唯一桥接 IPv4 地址的同端口通过 TCP 转发至 DSH；宿主只向 `127.0.0.1` 发布端口。同一 Docker 网络中的其他容器仍属于受信任范围；仅有这一设置，不能保证服务与公网隔离。
+
+部署在停服前通过 `check-compose` 核验实际容器用户的挂载访问；若 prepared 后预检失败，修正访问条件并使用原配置加 `--resume`。macOS 新站点采用当前非 root 用户 UID/GID，已保存的配置不自动修改。新站点镜像架构按 Docker 引擎初始化；显式配置及旧站点的架构保持。
 
 标准插件的日常认证及启停只修改自身 `plugin.json`，然后执行 `apply-compose`；首次站点配置和旧 patch 迁移见[插件运行配置规范](../doc/plugin-configuration.md)。下方 `render-compose` 等基础操作用于自定义集成，不要求日常手工维护多份配置。
 
@@ -62,7 +70,7 @@ node deploy/scripts/deployment.mjs start --plugins "auth,example" --manifest .lo
 
 ## 运行配置
 
-以下为基础管理命令的运行配置；源码发版的用户配置见[站点配置](../doc/first-deployment.md#配置归属)。基础命令的 `--config` 支持私有 env 或运行 JSON。相对路径以显式项目根解析；仓库入口默认传入仓库根，独立 `dsh-plugin-manager` 必须传 `--root`。基础命令的路径优先级为 CLI → 环境变量 → 配置文件 → 默认值。源码宿主可用 `harnessRoot` 指向已安装依赖并构建的源码根；已安装宿主用 `dshCliJs` 指向 CLI 文件，二选一。源码发版仅采用站点文件中的部署选项，不采用这些环境覆盖项。
+以下为基础管理命令的运行配置；源码发版的用户配置见[站点配置](../doc/first-deployment.md#配置归属)。基础命令的 `--config` 支持私有 env 或运行 JSON。相对路径从明确指定的项目根目录计算；仓库入口默认传入仓库根，独立 `dsh-plugin-manager` 必须传 `--root`。基础命令的路径优先级为 CLI → 环境变量 → 配置文件 → 默认值。源码宿主可用 `harnessRoot` 指向已安装依赖并构建的源码根；已安装宿主用 `dshCliJs` 指向 CLI 文件，二选一。源码发版仅采用站点文件中的部署选项，不采用这些环境覆盖项。
 
 | CLI | 环境变量 | JSON 字段 | 新环境默认值 |
 | --- | --- | --- | --- |
@@ -89,13 +97,17 @@ node deploy/scripts/deployment.mjs start --plugins "auth,example" --manifest .lo
 
 插件如声明 `runtimeConfig`，其配置默认从 `home/plugins/<id>/env.conf` 读取，可由 `instances.<id>.runtimeConfig` 覆盖。配置内容不进入发布包；`configRevision` 由维护者递增以声明需要重新应用的配置。
 
-文件密钥非空时文件优先、对应密钥在网页只读，修改需受控重启；留空沿用官方来源且不删除旧值。无覆盖时，DeepSeek/智谱密钥由管理员在 `/auth` →“模型设置”填写或更换，也可执行 `bash deploy/scripts/set-api-key.sh --config .local/deployment.json` 隐藏输入。Windows 入口为 `node deploy/scripts/set-api-key.mjs --config .local/deployment.json`。脚本仅支持 DeepSeek；网页和脚本共用官方凭据服务，写入选定 home 的 `.credentials.yaml`，无需重启；页面只显示状态与不可逆指纹。管理员可在同页上方的模型卡片选择新会话默认模型，保存到官方宿主设置且无需重启；已有对话和分支沿用官方记录中的模型选择。脚本不选择模型，不把密钥放入 argv。运行条件、环境只读与问答验证见[首次登录与模型密钥](../doc/first-deployment.md#首次登录与模型密钥)。官方认证地址写入私有 `authUrlFile`，不输出令牌；插件 Auth 登录不会自动完成官方控制台认证，常见提示见 [FAQ](../doc/FAQ.md)。
+文件密钥非空时文件优先、对应密钥在网页只读，修改需受控重启；留空沿用官方来源且不删除旧值。无覆盖时，DeepSeek/智谱密钥由管理员在 `/auth` →“模型设置”填写或更换，也可执行 `bash deploy/scripts/set-api-key.sh --config .local/deployment.json` 隐藏输入。Windows 入口为 `node deploy/scripts/set-api-key.mjs --config .local/deployment.json`。
+
+脚本仅支持 DeepSeek；网页和脚本共用官方凭据服务，写入选定 home 的 `.credentials.yaml`，无需重启；页面只显示状态与不可逆指纹。管理员可在同页上方的模型卡片选择新会话默认模型，保存到官方宿主设置且无需重启；已有对话和分支沿用官方记录中的模型选择。脚本不选择模型，不把密钥放入 argv。运行条件、环境只读与问答验证见[首次登录与模型密钥](../doc/first-deployment.md#首次登录与模型密钥)。
+
+官方认证地址写入私有 `authUrlFile`，不输出令牌；插件 Auth 登录不会自动完成官方控制台认证，常见提示见 [FAQ](../doc/FAQ.md)。
 
 ## 安装与恢复
 
 `start` 安装并监督 DSH 子进程；`stop` 请求原监督进程停止。`sync` 只同步，外部服务需要 `--host-mode external --stopped-file <json>`，并由原管理器重新启动。`verify --started-file <json>` 在检查安装与探针后完成状态提交。
 
-停服证据字段为 `schemaVersion: 1`、目标 `home`、`profile`、`manager`、`instanceId`、`stopped: true`、`stoppedAt`；`manager` 支持 `process`、`compose` 或 `systemd`，进程证据还需 `pid`。工具核验实际管理状态，不以锁代替停服。启动证据对应使用 `started: true` 和 `startedAt`。
+停服证据字段为 `schemaVersion: 1`、目标 `home`、`profile`、`manager`、`instanceId`、`stopped: true`、`stoppedAt`；`manager` 支持 `process`、`compose` 或 `systemd`，进程证据还需 `pid`。工具会检查服务的实际状态，不能仅凭锁文件判断服务已停止。启动证据对应使用 `started: true` 和 `startedAt`。
 
 安装先在隔离 profile 预检，保护非受管依赖和用户 Bundle。未完成操作保留 pending：原清单和配置使用 `--resume`；变更修复目标需要 `--recover --data-compatible`，明确确认所选包能读取现有数据。运行环境变化需要 `--rebuild`。`unlock` 仅在本机锁拥有者已退出时移除遗留锁。
 

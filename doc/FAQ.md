@@ -40,7 +40,7 @@ cat .local/data/dsh-web-auth-url.txt
 
 ## 控制台能打开，但模型和插件报 HTTP 403 怎么办？
 
-检查实际访问域名是否进入官方 DSH 的 `trustedHosts`。仅配置 `publicUrl`、`publicOrigin` 不会自动允许公网域名调用控制台 API。在私有 `.local/env.conf` 中填写 `DSH_TRUSTED_HOSTS=["dsh.example.com"]`，将示例域名替换为实际主机名，保留其他设置及已有信任项。旧显式站点 JSON 仍使用 `trustedHosts` 字段；已有站点先让部署入口导入旧文件，不能复制默认模板遮蔽旧配置。值不带协议或路径；需要限定端口时，使用与请求 Host 一致的 `主机名:端口`。
+检查实际访问域名是否进入官方 DSH 的 `trustedHosts`。仅配置 `publicUrl`、`publicOrigin` 不会自动允许公网域名调用控制台 API。在私有 `.local/env.conf` 中填写 `DSH_TRUSTED_HOSTS=["dsh.example.com"]`，将示例域名替换为实际主机名，保留其他设置及已有信任项。旧显式站点 JSON 仍使用 `trustedHosts` 字段；已有站点先让部署入口导入旧文件，不能复制默认模板，使部署入口忽略旧配置。值不带协议或路径；需要限定端口时，使用与请求 Host 一致的 `主机名:端口`。
 
 按正常部署流程应用配置并受控重启，再读取当前认证地址，验证模型、插件及工作区接口。不要修改生成的 Compose 或临时运行文件来代替持久配置。仍返回 403 时检查代理和 Host/Origin 是否一致；不要关闭认证。完整配置示例见 [example FAQ](../plugins/dsh-example/knowledge/guide.md#控制台能打开但模型和插件报-http-403-怎么办)。
 
@@ -64,7 +64,7 @@ bash deploy/scripts/set-api-key.sh --config .local/deployment.json
 
 私有 `.local/env.conf` 中 `DEEPSEEK_API_KEY` 或 `ZHIPU_API_KEY` 非空时，框架只向 DSH 子进程注入相应值，以文件为准，对应密钥在网页只读；DeepSeek 脚本也拒绝覆盖。修改文件后按正常部署流程受控重启。
 
-字段留空表示不添加覆盖，沿用官方来源，不删除存储或清除继承环境值。官方优先级为进程环境 > .credentials.yaml > 工作目录 .env > home .env；如果启动环境仍有同名密钥，网页仍只读。没有环境覆盖时才可沿用网页管理。旧 .env 不必删除。常用配置、默认值及插件配置边界见[统一配置](framework-configuration.md)。
+字段留空表示不添加覆盖，沿用官方来源，不删除存储或清除继承环境值。官方优先级为进程环境 > .credentials.yaml > 工作目录 .env > home .env；如果启动环境仍有同名密钥，网页仍只读。没有环境覆盖时才可沿用网页管理。旧 .env 不必删除。常用配置、默认值及插件各自负责的配置见[统一配置](framework-configuration.md)。
 
 ## 密钥已保存，为什么问答仍然失败？
 

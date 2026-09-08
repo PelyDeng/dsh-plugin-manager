@@ -2,7 +2,9 @@
 
 本目录展示 example、配套 auth 和当前框架的常用站点配置；下方 JSON 是独立集成的兼容模板。在线 main 链接可能领先于安装版本，模板与本页随应用版本交付。JSON 不支持注释，因此模板只保存真实配置字段，逐项备注、是否必填和默认值在下表说明。模板可提交 Git；复制后的实例配置只保存在 `.local/`，不会随源码或归档自动生效。
 
-源码一键部署在 Windows PowerShell 执行根 `.\build.ps1`，macOS/Linux 执行根 `./build.sh`；站点和插件文件自动初始化，无需复制下方模板。站点选项修改 `.local/env.conf`，根 `env.conf` 提供固定非秘密默认值，首次生成的私有文件写入实际平台默认值，已有配置不覆盖。插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值、平台验证边界及恢复说明见[一键部署](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/first-deployment.md)。
+源码一键部署在 Windows PowerShell 执行根 `.\build.ps1`，macOS/Linux 执行根 `./build.sh`；站点和插件文件自动初始化，无需复制下方模板。站点选项修改 `.local/env.conf`，根 `env.conf` 提供固定非秘密默认值，首次生成的私有文件写入实际平台默认值，已有配置不覆盖。
+
+插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值、各平台实际验证情况及恢复说明见[一键部署](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/first-deployment.md)。
 
 ## 文件与使用位置
 
@@ -30,7 +32,7 @@ Docker 模板保持 `/data/dsh-home` 为容器 home，auth 的 `stateDir` 与之
 | --- | --- | --- | --- |
 | `schemaVersion` | 必填 | `1` | 运行配置格式版本，不同于包声明中的版本 3 |
 | `enabled` | 可选 | `true` | false 停用插件，保留持久数据 |
-| `accessMode` | 可选，认证消费者适用 | `authenticated` | authenticated 要求登录与权限；standalone 使用共享本地身份 |
+| `accessMode` | 可选，需要认证的插件适用 | `authenticated` | authenticated 要求登录与权限；standalone 使用共享本地身份 |
 | `config` | 可选 | `{}` | 插件业务参数；省略整个对象也能使用默认值 |
 | `config.routePrefix` | 可选 | `/example` | 非根绝对路由前缀；修改时同步插件声明的 entryPath、healthPath 和前端路由，重新构建验证 |
 | `config.systemPrompt` | 可选 | `""` | 部署补充提示；内置开发者职责和随包知识独立注入，已有配置不自动覆盖 |
@@ -50,7 +52,7 @@ Docker 模板保持 `/data/dsh-home` 为容器 home，auth 的 `stateDir` 与之
 | 字段 | 是否必填 | 默认值 / 示例值 | 说明 |
 | --- | --- | --- | --- |
 | `schemaVersion` | 必填 | `1` | 运行配置格式版本 |
-| `enabled` | 可选 | `true` | 停用前必须没有消费者继续要求认证，否则管理器拒绝停止服务 |
+| `enabled` | 可选 | `true` | 停用前必须没有其他插件继续要求认证，否则管理器拒绝停止服务 |
 | `config` | 可选 | `{}` | auth 服务参数 |
 | `config.stateDir` | 可选 | 默认 `<DSH home>/auth`；模板 `/data/dsh-home/auth` | 存放 auth.sqlite；模板为 Docker 容器路径。本机运行应省略，已有实例不要随意改变以免切换到空账号库 |
 | `config.sessionTtlSeconds` | 可选 | `86400` 秒 | 登录会话有效期，60–2592000 |

@@ -2,27 +2,27 @@
 
 # 独立发布物交付
 
-发布者可以附带最终归档的宿主验证记录，安装时显示已测目标、当前目标与范围差异。旧发布目录继续可用；无记录表示未经随包说明，不等于不兼容。报告生成、导入和状态含义见随包 [VERIFICATION.md](VERIFICATION.md)。
+发布者可以附带最终归档的宿主验证记录，安装时显示已测目标、当前目标与范围差异。旧发布目录继续可用；没有记录表示包内未附测试结果，不等于不兼容。报告生成、导入和状态含义见随包 [VERIFICATION.md](VERIFICATION.md)。
 
-适用于 manager 0.14.2。部署者只需管理工具、匹配的官方 DSH、应用与认证插件各自的发布目录，以及作者提供的配置模板；无需作者源码。以下 `dsh-plugin-manager` 指已安装 CLI，本地工具目录安装时用 `pnpm exec dsh-plugin-manager`。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。
+适用于 manager 0.14.3。部署者只需管理工具、匹配的官方 DSH、应用与认证插件各自的发布目录，以及作者提供的配置模板；无需作者源码。以下 `dsh-plugin-manager` 指已安装 CLI，本地工具目录安装时用 `pnpm exec dsh-plugin-manager`。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。
 
 ## 1. 准备与组合
 
 核对提供方记录的工具、宿主版本及归档 SHA-256；包名不表示已发布到公共 registry。首次安装管理工具：
 
 ```sh
-pnpm add --ignore-workspace /path/to/plugin-manager-0.14.2.tgz
+pnpm add --ignore-workspace /path/to/plugin-manager-0.14.3.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
-宿主应使用应用交付说明所要求的版本及依赖。内置 auth/example 的源码部署消费已有的独立官方源码，记录实际提交；gitlink 是检出参考，构建不自动更新宿主或要求匹配预设提交，准备步骤见[Node CLI 手册](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/getting-started.md#1-准备工具和目录)。运行配置二选一：
+宿主应使用应用交付说明所要求的版本及依赖。内置 auth/example 的源码部署使用已有的独立官方源码，记录实际提交；gitlink 是检出参考，构建不自动更新宿主或要求匹配预设提交，准备步骤见[Node CLI 手册](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/getting-started.md#1-准备工具和目录)。运行配置二选一：
 
 - 源码宿主：在其目录完成安装与构建，设置 `harnessRoot` 为源码根的绝对路径。
 - 已安装宿主：设置 `dshCliJs` 为实际 CLI JS 文件的绝对路径，例如工具目录下 `node_modules/@deepseek-ai/dsh/lib/bin.js`。保留它的锁文件，按应用要求选择版本。
 
 源码版本号不等于相同版本已在 npm 发布。默认 DeepSeek 密钥管理需要官方 `credentials` 服务及 `credentials-local` 存储；旧 SDK 编译依赖不是这项运行能力的保证。管理器不下载或构建宿主。
 
-将每个应用的完整发布目录放到交付根的 `incoming/`。例如 auth、knowledge、sales 分别来自不同作者；这些是目录示意，插件 ID 以各自清单为准。组合完整候选集合：
+将每个应用的完整发布目录放到交付根的 `incoming/`。例如 auth、knowledge、sales 分别来自不同作者；这些是目录示意，插件 ID 以各自清单为准。把本次需要运行的全部插件组合成候选清单：
 
 ```sh
 dsh-plugin-manager compose-release --root /path/to/site --output releases/site-v1 --manifest incoming/auth/manifest.json --manifest incoming/knowledge/manifest.json --manifest incoming/sales/manifest.json
@@ -61,7 +61,7 @@ dsh-plugin-manager compose-release --root /path/to/site --output releases/site-v
 
 将作者声明的业务字段填入 config。销售地址、超时等字段名称及值由销售应用说明定义；管理器不推测。凭据使用作者声明的 runtimeConfig 文件，默认 `<home>/plugins/<id>/env.conf`，格式按作者模板填写；没有声明 runtimeConfig 的应用无需此文件。不要把真实凭据放入发布归档或 Git。可用 `tar -xOf <应用.tgz> package/README.md` 阅读随版本发布的说明，模板路径见包内声明。
 
-auth 的 plugin.json 不接受 accessMode；缺省配置即可提供认证。消费者使用 authenticated 时，候选清单必须包含一个启用的 provider。旧 profile 已安装 auth 但本次未选入，仍会在安装前拒绝。缺少必需 runtimeConfig 文件会提示应用 ID；业务字段缺失由应用加载校验提示具体字段。
+auth 的 plugin.json 不接受 accessMode；缺省配置即可提供认证。应用使用 authenticated 时，候选清单必须包含一个已启用的认证提供者（provider）。旧 profile 已安装 auth 但本次未选入，仍会在安装前拒绝。缺少必需 runtimeConfig 文件会提示应用 ID；业务字段缺失由应用加载校验提示具体字段。
 
 ## 3. 启动与验证
 
@@ -108,7 +108,7 @@ pnpm exec dsh-plugin-manager set-api-key --root /path/to/site --config .local/de
 dsh-plugin-manager compose-release --root /path/to/site --output releases/site-v2 --previous releases/site-v1/manifest.json --manifest incoming/auth/manifest.json --manifest incoming/knowledge/manifest.json --manifest incoming/sales/manifest.json
 ```
 
-previous 保留当前旧归档的相对路径，仅供安装器解析旧 file: 依赖，不加入新候选。保留旧目录供恢复。不要把旧整站清单与同 ID 新包直接叠加；从分项清单重新组合。未选入新集合的受管应用会被撤选，但数据保留。
+previous 保留当前旧归档的相对路径，仅供安装器解析旧 file: 依赖，不加入新候选。保留旧目录供恢复。不要把旧整站清单与同 ID 新包直接叠加；从分项清单重新组合。未选入新清单的受管应用会从本次运行中移除，但数据保留。
 
 先用同一 root/config 执行 stop 停止原实例，再将 deployment.json 的 manifest 改为新清单并执行 start，始终显式 `--plugins all`，避免旧选集过滤新增应用；各实例 enabled=false 仍生效。确认新旧应用均可用、原普通账号仍能登录、授权及业务配置保留。应用自身数据格式升级仍需作者提供迁移/回滚说明，不能仅凭保留文件承诺跨版本兼容。
 
