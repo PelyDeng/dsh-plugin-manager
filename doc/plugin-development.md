@@ -17,16 +17,16 @@
 
 ### 1. 取得并安装工具
 
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者交付的 manager 0.14.1 tgz；需要统一身份时再取得 kit 0.14.1 tgz，按交付 SHA-256 核对文件。已公开归档见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)，目标版本没有附件时按下方源码步骤构建，不假定 npm 已发布。以下命令安装本地归档。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者交付的 manager 0.14.2 tgz；需要统一身份时再取得 kit 0.14.2 tgz，按交付 SHA-256 核对文件。已公开归档见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)，目标版本没有附件时按下方源码步骤构建，不假定 npm 已发布。以下命令安装本地归档。
 
 在工具目录执行，把占位路径替换成实际文件的绝对路径：
 
 ```sh
-pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.14.1.tgz"
+pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.14.2.tgz"
 pnpm exec dsh-plugin-manager --version
 ```
 
-**预期**：输出 manager 0.14.1。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
+**预期**：输出 manager 0.14.2。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
 
 ### 2. 选择示例，建立自己的仓库
 
@@ -46,7 +46,7 @@ pnpm install --ignore-workspace
 统一身份示例，在作者根执行以下命令安装实际 kit 归档，同时生成锁文件：
 
 ```sh
-pnpm add --ignore-workspace --save-dev "/absolute/path/plugin-kit-0.14.1.tgz"
+pnpm add --ignore-workspace --save-dev "/absolute/path/plugin-kit-0.14.2.tgz"
 ```
 
 **预期**：作者根生成自己的 pnpm-lock.yaml，应随源码保存。kit 是构建依赖并内嵌到应用；作者构建需能取得该 tgz，release 运行端不需要它的原始路径。希望从完整聊天应用开始时，见[完整问答应用复制步骤](#复制完整问答应用到独立仓库)。
