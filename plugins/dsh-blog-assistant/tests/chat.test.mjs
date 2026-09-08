@@ -19,6 +19,31 @@ test('language plugin snapshots preserve visible history without adding user bub
   const snapshot={type:'user/message',seq:3,time:3000,data:{id:'language',role:'user',source:{kind:'plugin',plugin:'@deepseek-ai/dsh-system-prompt',form:'snapshot'},content:[{type:'text',text:'当前语言：简体中文'}]}}
   assert.deepEqual(projectChat([...events,snapshot],[],sdk),projectChat(events,[],sdk))
 })
+
+test('saved attempts display authoritative original blocks with a stable partial translation source',()=>{
+  const original='Read the original source carefully and preserve every important detail.'
+  const finalText='已保存的完整可见片段'
+  const events=[
+    {type:'turn/start',seq:0,time:1000,data:{turn:'turn-attempt'}},
+    {type:'assistant/attempt',seq:1,time:2000,data:{turn:'turn-attempt',step:0,stream:[
+      {chunk:{type:'reasoning-delta',index:0,text:'Earlier partial thinking.'}},
+      {chunk:{type:'block-end',index:0,block:{type:'reasoning',text:original}}},
+      {chunk:{type:'text-delta',index:1,text:'较早片段'}},
+      {chunk:{type:'block-end',index:1,block:{type:'text',text:finalText}}},
+      {chunk:{type:'finish',reason:{kind:'error',failure:{code:'MODEL',message:'interrupted fixture'}}}},
+    ]}},
+    {type:'turn/end',seq:2,time:3000,data:{turn:'turn-attempt',reason:{kind:'error'}}},
+  ]
+  const before=structuredClone(events),projection=projectChat(events,[],sdk)
+  assert.equal(projection.messages.length,1)
+  assert.deepEqual(
+    Object.fromEntries(['id','seq','reasoning','text','interrupted','feedback'].map(key=>[key,projection.messages[0][key]])),
+    {id:'attempt-1',seq:1,reasoning:original,text:finalText,interrupted:true,feedback:false},
+  )
+  assert.equal(projection.turns[0].status,'error')
+  assert.deepEqual(events,before,'translation source projection must not rewrite the official event log')
+})
+
 async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=false}={}){
   const root=new Context(),registry=root.plugin(AgentRegistry);await registry
   const runtimeJobs=root.plugin(LocalJobRegistry);await runtimeJobs

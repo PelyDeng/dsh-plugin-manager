@@ -1,4 +1,5 @@
 /** Safe human transcript over official Session surface, stream and token projections. */
+import {BlockAssembler} from '@deepseek-ai/dsh-llm'
 export function projectChat(events,requests,sdk) {
   const messages=[],turns=[],tools=new Map(),requestsByMessage=new Map(requests.filter(r=>r.userMessageId).map(r=>[r.userMessageId,r]))
   let turn=null,stepStart=null,decodeMs=0,outputTokens=0,firstStep=null
@@ -21,7 +22,10 @@ export function projectChat(events,requests,sdk) {
     if(event.type==='llm/retry')messages.push({id:'retry-'+event.seq,role:'status',seq:event.seq,time:event.time,turn:turn?.turn,text:'模型请求失败，正在重试'})
     if(event.type==='assistant/attempt'){
       const stream=sdk.expandAssistantStream(data.stream)
-      const value={id:'attempt-'+event.seq,role:'assistant',seq:event.seq,time:event.time,turn:turn?.turn,text:stream.filter(m=>m.chunk.type==='text-delta').map(m=>m.chunk.text).join(''),reasoning:stream.filter(m=>m.chunk.type==='reasoning-delta').map(m=>m.chunk.text).join(''),interrupted:true,feedback:false}
+      const assembler=new BlockAssembler()
+      for(const {chunk} of stream)assembler.push(chunk)
+      const blocks=assembler.blocks()
+      const value={id:'attempt-'+event.seq,role:'assistant',seq:event.seq,time:event.time,turn:turn?.turn,text:text(blocks),reasoning:reasoning(blocks),interrupted:true,feedback:false}
       if(value.text||value.reasoning)messages.push(value)
       if(turn)turn.attempts++
     }

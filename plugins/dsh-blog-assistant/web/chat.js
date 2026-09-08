@@ -1,5 +1,6 @@
+import {createThinkingTranslations} from './thinking-translation.js'
 import {icon} from './icons.js'
-import {glyph,stat,compactTokens,thinking,updateThinking} from './chat-ui.js'
+import {glyph,stat,compactTokens,thinking} from './chat-ui.js'
 
 export function shouldSendChatEnter(event,{touch=false,composing=false}={}){
   return event.key==='Enter'&&!touch&&!event.shiftKey&&!event.isComposing&&!composing&&event.keyCode!==229
@@ -8,6 +9,7 @@ export function shouldSendChatEnter(event,{touch=false,composing=false}={}){
 export function initChat({api,request,identity,openDraft,renderMarkdown}){
   const $=id=>document.getElementById(id),base=document.body.dataset.base
   const state={id:null,epoch:0,history:null,files:[],feedback:new Map(),feedbackReady:false,stream:null,offset:null,sending:false,stopping:false,uploading:false,liveClock:0,pending:null}
+  const translations=createThinkingTranslations(base)
   const inputs=new Map(),key=`blog-chat:${identity.userId}`
   let refreshTimer,refreshVersion=0,feedbackTarget,fileTarget,composing=false,creating
   const element=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el}
@@ -39,6 +41,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     try{return await pending.promise}finally{if(creating===pending)creating=null}
   }
   async function activate(id){
+    translations.reset()
     inputs.set(state.id??'new',$('chat-input').value)
     state.epoch++;state.stream?.close();state.stream=null;clearTimeout(refreshTimer);state.pending=null;state.sending=false;state.stopping=false;state.id=id;state.history=null;state.files=[];state.feedback.clear();state.feedbackReady=false;state.liveClock=0
     $('chat-feedback-dialog').close();$('chat-file-dialog').close()
@@ -72,7 +75,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     if(wasBusy&&!data.busy)void conversations().catch(error)
   }
   function prose(text){const el=element('div',undefined,'prose qa-prose');el.innerHTML=renderMarkdown(text??'');return el}
-  function reasoning(text,id){const d=thinking(text,{className:'chat-reasoning'});d.dataset.detail=id;return d}
+  function reasoning(text,id){const d=thinking(text,{className:'chat-reasoning'});d.dataset.detail=id;d.dataset.originalText=text;return d}
   function bubble(node,user=false){node.classList.add('qa-message');if(user)node.classList.add('qa-user');const avatar=element('span',undefined,'qa-avatar');avatar.setAttribute('aria-hidden','true');avatar.append(glyph(user?'user':'chat'));const content=element('div',undefined,'qa-bubble');node.append(avatar,content);return content}
   function renderLive(live=state.history?.live,{follow=nearBottom(),scrollTop=$('chat-scroll').scrollTop}={}){
     const box=$('chat-live');box.hidden=!live
@@ -80,7 +83,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
       box.className='chat-message assistant-message qa-message qa-streaming';const content=box.querySelector('.qa-bubble')??bubble(box)
       let thought=box.querySelector('.chat-reasoning'),text=box.querySelector('.chat-live-text'),status=box.querySelector('.chat-stream-status')
       if(!thought){thought=reasoning('','live');content.append(thought)}
-      updateThinking(thought,live.reasoning??'',!!live.text)
+      translations.watch(thought,{text:live.reasoning??'',conversationId:state.id,done:!!live.text})
       if(!text){text=prose('');text.classList.add('chat-live-text');content.append(text)}
       text.innerHTML=renderMarkdown(live.text??'')
       if(!status){status=element('small',undefined,'chat-stream-status');status.setAttribute('role','status');content.append(status)}
@@ -97,12 +100,15 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     fragment.append(tokens,time);return fragment
   }
   function render(){
+    const thoughtScroll=new Map([...$('chat-messages').querySelectorAll('.qa-thinking-body,.qa-thinking-original pre')].map(el=>[el,el.scrollTop]))
     const box=$('chat-messages'),follow=nearBottom(),scrollTop=$('chat-scroll').scrollTop,history=state.history
     const previous=new Map([...box.children].map(n=>[n.dataset.key,n])),nodes=[]
     const focused=document.activeElement,focusKey=focused?.closest('[data-key]')?.dataset.key,focusAction=focused?.dataset.action
     const append=(node,key,value)=>{
       const old=previous.get(key),version=JSON.stringify(value)
       if(old?.dataset.version===version){nodes.push(old);return}
+      const oldThought=old?.querySelector('.chat-reasoning'),newThought=node.querySelector('.chat-reasoning')
+      if(oldThought&&newThought&&oldThought.dataset.originalText===newThought.dataset.originalText){for(const el of oldThought.querySelectorAll('.qa-thinking-body,pre'))thoughtScroll.set(el,el.scrollTop);newThought.replaceWith(oldThought)}
       const opened=new Set([...(old?.matches('details[open]')?[old]:[]),...old?.querySelectorAll('details[open]')??[]].map(d=>d.dataset.detail))
       for(const detail of [...(node.matches('details')?[node]:[]),...node.querySelectorAll('details')])if(opened.has(detail.dataset.detail))detail.open=true
       node.dataset.key=key;node.dataset.version=version;nodes.push(node)
@@ -150,6 +156,9 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     let cursor=box.firstElementChild
     for(const node of nodes){if(node===cursor)cursor=cursor.nextElementSibling;else box.insertBefore(node,cursor)}
     while(cursor){const next=cursor.nextElementSibling;cursor.remove();cursor=next}
+    for(const message of history?.messages??[]){if(message.role!=='assistant'||!message.reasoning)continue;const thought=nodes.find(n=>n.dataset.message===message.id)?.querySelector('.chat-reasoning');if(thought)translations.watch(thought,{text:message.reasoning,conversationId:state.id,sourceId:message.id,done:true})}
+    translations.sweep()
+    for(const [el,top] of thoughtScroll)el.scrollTop=top
     if(focusKey&&focusAction&&document.activeElement!==focused){const replacement=nodes.find(n=>n.dataset.key===focusKey);[...replacement?.querySelectorAll('[data-action]')??[]].find(n=>n.dataset.action===focusAction)?.focus({preventScroll:true})}
     renderLive(state.history?.live,{follow,scrollTop})
   }
