@@ -15,6 +15,7 @@ let dialogPlugin = null
 let dialogPage = 1
 let dialogTrigger = null
 let conversationsUI
+let defaultModelsUI
 const modelCards = [...document.querySelectorAll('[data-model]')].map(element => ({ element, kind: element.dataset.model, epoch: 0, pending: false, status: null }))
 
 function identityChanged() {
@@ -206,7 +207,14 @@ async function showPage(next) {
     conversationsUI ??= createConversationPage(api)
     await conversationsUI.enter()
   } else if (next === 'models') {
-    await Promise.all(modelCards.map(card => loadModel(card)))
+    const credentials = Promise.all(modelCards.map(card => loadModel(card)))
+    if ($('#conversation-models')) {
+      const { createDefaultModels } = await import('./default-model.js')
+      if (version !== pageEpoch || identity !== identityEpoch) return
+      defaultModelsUI ??= createDefaultModels(api)
+      await defaultModelsUI.enter()
+    }
+    await credentials
   } else if (next === 'plugins' || next === 'users') {
     const result = await api('plugins')
     if (version !== pageEpoch || identity !== identityEpoch) return
@@ -228,6 +236,7 @@ function modelControls(card) {
   card.element.setAttribute('aria-busy', String(card.pending))
 }
 function clearModel() {
+  defaultModelsUI?.leave()
   for (const card of modelCards) {
     card.epoch++
     card.status = null

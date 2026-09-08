@@ -19,6 +19,14 @@ export async function fixture({ mode, autoReply = false, persistenceApi = 'handl
     tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
     webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
     agentDefaultModel: { currentSelection: () => ({ provider: 'test', model: 'test' }) },
+    sessionProjections: { restore(_checkpoint, events) {
+      let lastUsed = null, pending = null
+      for (const event of events) {
+        if (event.type === 'model/selection') pending = event.data
+        if (event.type === 'request/header') lastUsed = event.data.header.config
+      }
+      return { checkpoint: { modelSelection: { val: { lastUsed, pending } } } }
+    } },
     sessionPersistence: persistenceApi === 'inspection'
       ? { async inspect(id) { return { events: logs.get(id) ?? [] } } }
       : { async open(id) { return { async read() { return logs.get(id) ?? [] }, async close() {} } } },

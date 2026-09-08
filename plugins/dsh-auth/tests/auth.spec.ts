@@ -96,6 +96,57 @@ describe('provider brand assets', () => {
   })
 })
 
+describe('framework default conversation model', () => {
+  async function modelsFixture() {
+    const f = await httpFixture()
+    let selected: {provider:string;model:string;reasoningEffort?:string} = { provider:'deepseek',model:'old',reasoningEffort:'high' }
+    const writes: unknown[] = []
+    const defaults = { currentSelection: () => selected, saveSelection: async (value: typeof selected) => { writes.push(value); selected = value } }
+    const controller = { modelCatalog: async () => ({groups:[{id:'future',name:'新增服务商',models:[{id:'chat',name:'对话模型'}]}],failures:[{id:'offline',name:'离线服务商',message:'secret internal details'}]}) }
+    const llm = { resolveCallConfig: async (_value:unknown) => ({}) }
+    f.ctx.provide('sessionController',controller)
+    f.ctx.provide('agentDefaultModel',defaults)
+    f.ctx.provide('settings',{replace:async()=>{}})
+    f.ctx.provide('llm',llm)
+    return {...f,defaults,controller,llm,writes}
+  }
+  const path='/auth/api/conversation-model', choice={provider:'future',model:'chat'}
+  it('protects the shared setting and saves a dynamic catalog selection without old reasoning effort', async () => {
+    const f=await modelsFixture()
+    expect((await f.request(path)).status).toBe(401)
+    f.store.create('reader',hash,'user',['demo'])
+    const reader=await f.login('reader'),admin=await f.login()
+    expect((await f.request(path,undefined,reader.cookie)).status).toBe(403)
+    expect((await f.request(path,choice,reader.cookie,reader.result.csrf)).status).toBe(403)
+    expect((await f.request(path,choice,admin.cookie)).status).toBe(403)
+    expect((await f.request(path,choice,admin.cookie,admin.result.csrf,'https://foreign.invalid')).status).toBe(403)
+    const catalog=await (await f.request(path,undefined,admin.cookie)).json()
+    expect(catalog).toMatchObject({writable:true,selected:{model:'old'},groups:[{id:'future'}]})
+    expect(JSON.stringify(catalog)).not.toContain('secret')
+    expect((await f.request(path,{...choice,model:'unknown'},admin.cookie,admin.result.csrf)).status).toBe(400)
+    expect(f.writes).toEqual([])
+    expect(await (await f.request(path,choice,admin.cookie,admin.result.csrf)).json()).toEqual({selected:choice})
+    expect(f.writes).toEqual([choice])
+  })
+  it('rejects unusable routes and detects a host save that did not persist', async () => {
+    const f=await modelsFixture(),admin=await f.login()
+    f.llm.resolveCallConfig=async()=>{throw new Error('private upstream failure')}
+    const unavailable=await f.request(path,choice,admin.cookie,admin.result.csrf)
+    expect(unavailable.status).toBe(400)
+    expect(await unavailable.text()).not.toContain('private')
+    expect(f.writes).toEqual([])
+    f.llm.resolveCallConfig=async()=>({})
+    f.defaults.saveSelection=async()=>{}
+    expect((await f.request(path,choice,admin.cookie,admin.result.csrf)).status).toBe(409)
+  })
+  it('checks revocation again after asynchronous route validation', async () => {
+    const f=await modelsFixture(),admin=await f.login()
+    f.llm.resolveCallConfig=async()=>{f.service.logout(f.service.resolve({headers:{cookie:admin.cookie}} as IncomingMessage)!);return {}}
+    expect((await f.request(path,choice,admin.cookie,admin.result.csrf)).status).toBe(401)
+    expect(f.writes).toEqual([])
+  })
+})
+
 describe('administrator DeepSeek credentials', () => {
   it('shares the protected UI contract with Zhipu without overwriting DeepSeek or accepting arbitrary refs', async () => {
     const f = await httpFixture(), values = new Map<string, string>([['DEEPSEEK_API_KEY', 'sk-original']])

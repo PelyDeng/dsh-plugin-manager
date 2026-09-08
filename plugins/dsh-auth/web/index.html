@@ -60,11 +60,15 @@
           <div class="card narrow"><h2>修改密码</h2><p class="muted">修改后，所有设备上的登录会话均会失效。</p><form id="password-form"><label>当前密码<input name="currentPassword" type="password" autocomplete="current-password" required maxlength="256"></label><label>新密码<input name="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="256" required></label><button class="primary">更新密码</button></form></div>
         </section>
         <section id="page-models" class="page" hidden>
-          <div class="page-heading"><h1>模型设置</h1><p class="muted">统一管理此宿主共享的模型 API 密钥。</p></div>
+          <div class="page-heading"><h1>模型设置</h1><p class="muted">管理新会话默认模型和服务商凭据。</p></div>
+          <div class="model-section-heading"><h2>对话模型</h2><button id="conversation-model-refresh" type="button">刷新模型</button></div>
+          <p id="conversation-model-status" class="muted small" role="status" aria-live="polite"></p>
+          <div id="conversation-models" class="chat-model-grid" role="group" aria-label="对话默认模型"></div>
+          <details class="provider-settings"><summary>服务商 API 密钥<span class="muted small">管理与更换凭据</span></summary>
           <div class="model-grid">
             <article class="card model-card" data-model="deepseek" aria-labelledby="model-deepseek-name">
             <div class="model-heading"><span class="model-emblem" aria-hidden="true"><img src="/auth/deepseek.svg" alt="" width="30" height="30"></span><div><h2 id="model-deepseek-name">DeepSeek</h2><span data-field="status" class="model-status" role="status">正在读取…</span></div><button data-action="refresh" type="button" aria-label="刷新 DeepSeek 配置状态">刷新</button></div>
-            <div class="model-tags" aria-label="模型用途"><span>DeepSeek 默认模型</span></div><p class="muted small model-description">供已接入 DeepSeek 的应用使用。</p>
+            <div class="model-tags" aria-label="模型用途"><span>DeepSeek API</span></div><p class="muted small model-description">供已接入 DeepSeek 的应用使用。</p>
             <form data-action="save"><label for="model-deepseek-key">新 API 密钥</label><div class="model-key-row"><input id="model-deepseek-key" data-field="key" name="apiKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="sk-…" maxlength="4096" required disabled><button data-field="save" class="primary" disabled>保存密钥</button></div></form>
             <p data-field="message" class="model-message" role="status" aria-live="polite"></p><details class="model-details"><summary>凭据详情</summary><p data-field="source" class="muted small"></p><div data-field="fingerprint-row" hidden><span class="muted small">密钥指纹 · SHA-256</span><code data-field="fingerprint" class="model-fingerprint"></code><p class="muted small">指纹用于核对配置，不显示原密钥。</p></div></details></article>
             <article class="card model-card" data-model="zhipu" aria-labelledby="model-zhipu-name">
@@ -73,7 +77,7 @@
             <form data-action="save"><label for="model-zhipu-key">新 API 密钥</label><div class="model-key-row"><input id="model-zhipu-key" data-field="key" name="apiKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="输入智谱开放平台 API Key" maxlength="4096" required disabled><button data-field="save" class="primary" disabled>保存密钥</button></div></form>
             <p data-field="message" class="model-message" role="status" aria-live="polite"></p><details class="model-details"><summary>凭据详情</summary><p data-field="source" class="muted small"></p><div data-field="fingerprint-row" hidden><span class="muted small">密钥指纹 · SHA-256</span><code data-field="fingerprint" class="model-fingerprint"></code><p class="muted small">指纹用于核对配置，不显示原密钥。</p></div></details></article>
           </div>
-          <p class="muted small model-note">密钥由此宿主的官方凭据服务保存，供使用该服务商的应用共享，仅管理员可更换。保存后无需重启，后续请求使用新密钥；正在进行的回答不受影响。已配置不代表密钥有效、模型可用或额度充足。</p>
+          <p class="muted small model-note">密钥由此宿主的官方凭据服务保存，供使用该服务商的应用共享，仅管理员可更换。保存后无需重启，后续请求使用新密钥；正在进行的回答不受影响。已配置不代表密钥有效、模型可用或额度充足。</p></details>
         </section>
         <section id="page-users" class="page" hidden>
           <div class="page-heading"><h1>用户管理 <span id="user-count" class="count">0</span></h1><p class="muted">管理用户账号、角色和访问权限。</p></div>

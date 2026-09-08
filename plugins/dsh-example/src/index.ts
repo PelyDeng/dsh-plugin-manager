@@ -14,7 +14,7 @@ import { projectTurns } from './turns.ts'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { createUserMessage, MessageId, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId, SessionLogOffset, type SessionEvent } from '@deepseek-ai/dsh-session'
-import { AccessError, createAccess, createPluginHttp, createPluginTools, onRevoked, registerPlugin, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, conversationModel, createAccess, createPluginHttp, createPluginTools, onRevoked, registerPlugin, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { registerConversations, conversationArchive, conversationRemover, readConversationEvents, previewPage, hostBusyConversationIds, type PreviewMessage } from '@dsh-plugin-manager/plugin-kit'
 import type { Config } from './config.ts'
 import { HistoryStore, projectHistory } from './history.ts'
@@ -123,8 +123,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     description: manifest.description, displayName: manifest.deepseekPlugin.displayName,
     entryPath: config.routePrefix, permissions: manifest.deepseekPlugin.permissions, tools,
   }))
-  const agentOptions = () => {
-        const selection = ctx.agentDefaultModel.currentSelection()
+  const agentOptions = async (id?: string, eventCount?: number) => {
+    const selection = await conversationModel(ctx, id, eventCount)
         return {
           agentOptions: { provider: selection.provider, model: selection.model },
           setup(agentCtx: Context) {
@@ -283,7 +283,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     store.reserve(id,actor,'分支对话');conversations.set(id,child)
     forks.add(input.conversationId)
     try{
-      child.opening=ctx.agents.create({...agentOptions(),sessionId:SessionId(id),seed,inheritedEventCount:SessionLogOffset(seed.length),meta:{cwd:process.cwd(),parentSession:SessionId(input.conversationId),isSeeded:true}})
+      const options=await agentOptions(input.conversationId,seed.length)
+      access.assert(actor);store.assertOwner(input.conversationId,actor)
+      if(disposed)throw new AccessError(503,'插件正在停止')
+      child.opening=ctx.agents.create({...options,sessionId:SessionId(id),seed,inheritedEventCount:SessionLogOffset(seed.length),meta:{cwd:process.cwd(),parentSession:SessionId(input.conversationId),isSeeded:true}})
       child.handle=await child.opening;delete child.opening
       access.assert(actor);if(disposed||conversations.get(id)!==child)throw new AccessError(503,'插件正在停止')
       store.publish(id);child.busy=false;json(res,{conversationId:id})
@@ -337,7 +340,10 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
     try {
       if (!current.handle) {
-        const options = agentOptions()
+        const options = await agentOptions(input.conversationId ? id : undefined)
+        if (disposed || ended || response.destroyed) { release(id, current); return }
+        access.assert(actor)
+        if (input.conversationId) store.assertOwner(id, actor)
         current.opening = input.conversationId
           ? ctx.agents.resume({ ...options, resumeSessionId: SessionId(id) })
           : ctx.agents.create({ ...options, sessionId: SessionId(id), meta: { cwd: process.cwd() } })
