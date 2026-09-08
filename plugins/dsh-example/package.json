@@ -64,7 +64,8 @@
       "web/thinking-translation.js",
       "web/conversation-history.js",
       "web/media/icon-copy.svg",
-      "skills/dsh-chat-style/SKILL.md"
+      "skills/dsh-chat-style/SKILL.md",
+      "skills/dsh-chat-style/references/conversation-workflows.md"
     ],
     "configuration": {
       "entryId": "example",
