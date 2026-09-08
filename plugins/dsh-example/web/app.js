@@ -4,13 +4,13 @@ import {element,glyph,action,stat,compactTokens,keyboardSend,thinking as makeThi
 
 import {createThinkingTranslations} from './thinking-translation.js'
 
+import {createConversationHistory} from './conversation-history.js'
+
 const $ = id => document.getElementById(id)
 const base = document.body.dataset.base
 const translations=createThinkingTranslations(base)
 const narrow = matchMedia('(max-width: 650px)')
-const historyPanel = $('history-dialog')
-$('history-open').onclick=()=>historyPanel.showModal()
-$('history-close').onclick=()=>historyPanel.close()
+
 for(const node of document.querySelectorAll('[data-glyph]'))node.append(glyph(node.dataset.glyph))
 const focusPrompt=()=>{if(!matchMedia('(pointer:coarse), (max-width:650px)').matches)$('prompt').focus()}
 let feedbackAvailable=false,feedback=new Map()
@@ -20,16 +20,17 @@ async function refreshFeedback(id){const r=await fetch(base+'/history?id='+encod
 let conversationId
 let controller
 let resetAfterStop = false
-let historyOffset = 0
 let loadingHistory = false
+const sidebar=createConversationHistory({mount:document.querySelector('.main'),toggle:$('history-open'),storageKey:base+'-history',currentId:()=>conversationId,newConversation:()=>$('new-chat').click(),openConversation:openHistory,
+ list:async({offset,query})=>{const r=await fetch(base+'/conversations?'+new URLSearchParams({offset,q:query}));const data=await r.json();if(!r.ok)throw Error(data.error??'无法读取历史对话');return data},
+ mutate:input=>post('/conversation-action',input),read:async id=>{const r=await fetch(base+'/history?id='+encodeURIComponent(id)),data=await r.json();if(!r.ok)throw Error(data.error??'无法读取对话');return data},onDeleted:ids=>{if(ids.includes(conversationId))reset()}})
 const setStatus = text => { $('status').textContent = text }
 const notice = text => { $('notice').textContent = text; $('notice').hidden = !text }
 function busy(value) {
+  sidebar.setBusy(value)
   $('send').hidden = value
   $('stop').hidden = !value
   $('prompt').disabled = value
-  $('more-history').disabled = value
-  for (const button of document.querySelectorAll('.history-item')) button.disabled = value
   for (const button of document.querySelectorAll('[data-question]')) button.disabled = value
 }
 function scroll() {
@@ -137,7 +138,7 @@ $('stop').onclick = () => controller?.abort()
 function reset() {
   translations.reset()
   conversationId = undefined
-  $('messages').replaceChildren(); $('welcome').hidden = false; $('prompt').value = ''
+  $('messages').replaceChildren();sidebar.render(); $('welcome').hidden = false; $('prompt').value = ''
   notice(''); setStatus('新对话 · 之前的内容仍在历史中'); focusPrompt()
 }
 $('new-chat').onclick = () => {
@@ -145,27 +146,7 @@ $('new-chat').onclick = () => {
   if (loadingHistory) return
   reset(); void loadHistory()
 }
-async function loadHistory(append = false) {
-  try {
-    const response = await fetch(base + '/conversations?offset=' + (append ? historyOffset : 0))
-    if (!response.ok) throw new Error('无法读取历史，请确认登录和插件权限。')
-    const data = await response.json()
-    if (!append) $('history-list').replaceChildren()
-    for (const item of data.items) {
-      const button = document.createElement('button')
-      button.className = 'history-item' + (item.id === conversationId ? ' selected' : '')
-      button.textContent = item.title || '新对话'; button.title = button.textContent
-      button.disabled = Boolean(controller)
-      button.onclick = () => { void openHistory(item.id) }
-      $('history-list').append(button)
-    }
-    if (!$('history-list').childElementCount) {
-      const empty = document.createElement('p'); empty.className = 'history-empty'; empty.textContent = '还没有对话，试着问一个问题'; $('history-list').append(empty)
-    }
-    historyOffset = data.nextOffset
-    $('more-history').hidden = historyOffset === null
-  } catch (error) { notice(error.message) }
-}
+async function loadHistory(append=false){await sidebar.refresh(append)}
 async function openHistory(id) {
   if (controller || loadingHistory) return
   loadingHistory = true; busy(true); $('stop').hidden = true
@@ -175,7 +156,6 @@ async function openHistory(id) {
     const data = await response.json()
     translations.reset()
     conversationId = data.conversationId
-    historyPanel.close()
     $('messages').replaceChildren(); $('welcome').hidden = true
     feedback=new Map((data.feedback??[]).map(f=>[f.messageId,f]));feedbackAvailable=data.feedbackAvailable
     let turnIndex=0;for (const item of data.messages){const m=message(item.role,item.text,item.reasoning,item.role==='assistant'?data.turns?.[item.turn??turnIndex++]:undefined,item.reasoningSource);if(item.role==='assistant'&&m.meta)m.setTools(m.meta.tools??[])}
@@ -186,7 +166,6 @@ async function openHistory(id) {
   } catch (error) { notice(error.message) }
   finally { loadingHistory = false; busy(false); focusPrompt() }
 }
-$('more-history').onclick = () => { void loadHistory(true) }
 try {
   const response = await fetch(base + '/identity')
   if (!response.ok) throw new Error('无法验证访问状态，请重新登录。')
@@ -195,7 +174,6 @@ try {
   $('knowledge-version').title = '知识摘要标识随包资料内容，不代表远程仓库实时状态'
   $('access-mode').textContent = identity.mode === 'authenticated' ? '已通过身份认证' : '独立体验模式'
   $('auth-link').hidden = identity.mode !== 'authenticated'
-  $('history-label').textContent = identity.mode === 'authenticated' ? '我的历史对话' : '独立模式历史'
   feedbackAvailable=identity.feedbackAvailable
   $('prompt').maxLength = identity.maxMessageChars
   await loadHistory()

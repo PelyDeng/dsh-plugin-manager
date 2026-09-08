@@ -159,9 +159,21 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     if (req.method !== 'GET') throw new AccessError(405, '只支持 GET')
     const offset = Number(new URL(req.url ?? '/', 'http://localhost').searchParams.get('offset') ?? 0)
     if (!Number.isSafeInteger(offset) || offset < 0) throw new AccessError(400, '无效分页参数')
-    const rows = store.list(actor, offset, 31)
+    const query=new URL(req.url??'/','http://localhost').searchParams.get('q')??''
+    if(query.length>120)throw new AccessError(400,'搜索文字过长')
+    const rows = store.list(actor, offset, 31, query.trim())
     json(res, { items: rows.slice(0, 30), nextOffset: rows.length > 30 ? offset + 30 : null })
   } }))
+  ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/conversation-action',handler:async(req,res,actor)=>{
+    const input=await requestBody(req,4000)
+    if(typeof input.operation!=='string'||!Array.isArray(input.ids)||!input.ids.length||input.ids.length>100||input.ids.some(id=>typeof id!=='string'))throw new AccessError(400,'对话操作无效')
+    const ids=input.ids as string[]
+    for(const id of ids){store.assertOwner(id,actor);if(conversations.get(id)?.busy)throw new AccessError(409,'对话仍在回答，请先停止或等待完成')}
+    access.assert(actor)
+    store.mutate(actor,{operation:input.operation,ids,...(typeof input.title==='string'?{title:input.title}:{}),...(typeof input.pinned==='boolean'?{pinned:input.pinned}:{})})
+    if(input.operation==='delete')for(const id of ids){const active=conversations.get(id);if(active)release(id,active)}
+    json(res,{ok:true})
+  }}))
   const readEvents = async (id: string, actor: Actor) => {
     store.assertOwner(id, actor)
     await closings.get(id)

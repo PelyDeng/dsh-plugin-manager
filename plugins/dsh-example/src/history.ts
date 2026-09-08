@@ -13,12 +13,15 @@ export class HistoryStore {
     this.db = new DatabaseSync(path)
     if (path !== ':memory:' && process.platform !== 'win32') chmodSync(path, 0o600)
     const version = this.db.prepare('PRAGMA user_version').get()?.user_version
-    if (version !== 0 && version !== 1) { this.db.close(); throw new Error('Unsupported example history schema') }
+    if (version !== 0 && version !== 1 && version !== 2) { this.db.close(); throw new Error('Unsupported example history schema') }
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY, owner TEXT NOT NULL,
-        title TEXT NOT NULL, updatedAt INTEGER NOT NULL, ready INTEGER NOT NULL DEFAULT 0);
+        title TEXT NOT NULL, updatedAt INTEGER NOT NULL, ready INTEGER NOT NULL DEFAULT 0,
+        pinned INTEGER NOT NULL DEFAULT 0,deletedAt INTEGER);
       CREATE INDEX IF NOT EXISTS history_owner ON conversations(owner,updatedAt DESC,id);
-      PRAGMA user_version=1;`)
+      `)
+    if(version===1)this.db.exec('ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0; ALTER TABLE conversations ADD COLUMN deletedAt INTEGER;')
+    this.db.exec('PRAGMA user_version=2;')
   }
   /** Reserve ownership before creating a DSH session; failed creations stay unpublished. */
   reserve(id: string, actor: Actor, title: string): void {
@@ -26,13 +29,29 @@ export class HistoryStore {
   }
   publish(id: string): void { this.db.prepare('UPDATE conversations SET ready=1,updatedAt=? WHERE id=?').run(Date.now(), id) }
   assertOwner(id: string, actor: Actor): void {
-    if (!this.db.prepare('SELECT 1 FROM conversations WHERE id=? AND owner=? AND ready=1').get(id, actorKey(actor))) {
+    if (!this.db.prepare('SELECT 1 FROM conversations WHERE id=? AND owner=? AND ready=1 AND deletedAt IS NULL').get(id, actorKey(actor))) {
       throw new AccessError(404, '会话不存在或无权访问')
     }
   }
-  list(actor: Actor, offset: number, limit: number): unknown[] {
-    return this.db.prepare('SELECT id,title,updatedAt FROM conversations WHERE owner=? AND ready=1 ORDER BY updatedAt DESC,id LIMIT ? OFFSET ?')
-      .all(actorKey(actor), limit, offset)
+  list(actor: Actor, offset: number, limit: number, query=''): unknown[] {
+    return this.db.prepare('SELECT id,title,updatedAt,pinned FROM conversations WHERE owner=? AND ready=1 AND deletedAt IS NULL AND instr(lower(title),lower(?))>0 ORDER BY pinned DESC,updatedAt DESC,id LIMIT ? OFFSET ?')
+      .all(actorKey(actor), query, limit, offset)
+  }
+  mutate(actor:Actor,input:{operation:string;ids:string[];title?:string;pinned?:boolean}):void {
+    if(!['rename','pin','delete'].includes(input.operation)||!Array.isArray(input.ids)||!input.ids.length||input.ids.length>100||input.ids.some(id=>typeof id!=='string')||new Set(input.ids).size!==input.ids.length)throw new AccessError(400,'对话操作无效')
+    if(input.operation!=='delete'&&input.ids.length!==1)throw new AccessError(400,'请选择一条对话')
+    if(input.operation==='rename'&&(typeof input.title!=='string'||!input.title.trim()||input.title.trim().length>100))throw new AccessError(400,'标题应为 1–100 个字符')
+    if(input.operation==='pin'&&typeof input.pinned!=='boolean')throw new AccessError(400,'置顶参数无效')
+    this.db.exec('BEGIN IMMEDIATE')
+    try{
+      for(const id of input.ids)this.assertOwner(id,actor)
+      for(const id of input.ids){
+        if(input.operation==='rename')this.db.prepare('UPDATE conversations SET title=? WHERE id=?').run(input.title!.trim(),id)
+        if(input.operation==='pin')this.db.prepare('UPDATE conversations SET pinned=? WHERE id=?').run(input.pinned?1:0,id)
+        if(input.operation==='delete')this.db.prepare('UPDATE conversations SET deletedAt=? WHERE id=?').run(Date.now(),id)
+      }
+      this.db.exec('COMMIT')
+    }catch(error){this.db.exec('ROLLBACK');throw error}
   }
   close(): void { this.db.close() }
 }
