@@ -1,29 +1,50 @@
 /** Initialize or update one checkout's site using committed source and saved release inputs. */
 import { createHash, randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
-import { delimiter, dirname, relative, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { buildHostImage, withRegistryAuthentication } from '../../integrations/docker/host-image.mjs';
-import { loadSite, readJson as json, saveJson as save } from './site.mjs';
-import { resolveDeployment } from '../../packages/plugin-manager/src/config.mjs';
 import { buildMessage, buildStep } from './build-output.mjs';
-import { frameworkInput, prepareFrameworkCredentials, rememberFrameworkInput } from '../../packages/plugin-manager/src/framework-credentials.mjs';
 import { commandSpec, normalizeEnvironment } from '../../packages/plugin-manager/src/process.mjs';
 import { inspectDocker, ensureDockerIdentity, assertStoppedCompose } from '../../packages/plugin-manager/src/docker-runtime.mjs';
 import { ensurePrivateDirectory, writePrivateFile } from '../../packages/plugin-manager/src/private-files.mjs';
 import { checkSourceNode } from './platform.mjs';
 import { backupSources, verifySourceBackup } from './backup.mjs';
+import { bootstrapSource, prepareWorkspaceDependencies } from './bootstrap.mjs';
+import { sourceArguments } from './release.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 const immutableImage = value => typeof value === 'string' && /^(?:sha256:[a-f0-9]{64}|\S+@sha256:[a-f0-9]{64})$/.test(value);
+let interruptedChild = false;
 function command(bin, args, options) {
   const cli = commandSpec(bin, { env: options?.env, cwd: options?.cwd });
   const result = spawnSync(cli.command, [...cli.prefix, ...args], { stdio: 'inherit', windowsHide: true, ...options });
+  if (result.signal) interruptedChild = true;
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`${bin} ${args[0]} failed (${result.status ?? result.signal}). ${result.stderr ?? ''}`);
+  if (result.status !== 0) throw Object.assign(new Error(`${bin} ${args[0]} failed (${result.status ?? result.signal}). ${result.stderr ?? ''}`), { signal: result.signal });
   return result.stdout?.trim() ?? '';
+}
+
+const direct = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+let loadSite, json, save, resolveDeployment, frameworkInput, prepareFrameworkCredentials, rememberFrameworkInput;
+let bootstrapError, bootstrapped = false, bootstrapEnv;
+if (!direct || !process.argv.slice(2).includes('--help')) {
+  try {
+    if (direct) {
+      checkSourceNode();
+      sourceArguments(process.argv.slice(2));
+      bootstrapEnv = normalizeEnvironment(process.env);
+      bootstrapped = bootstrapSource(repositoryRoot, process.argv.slice(2), bootstrapEnv, command);
+    }
+    ({ loadSite, readJson: json, saveJson: save } = await import('./site.mjs'));
+    ({ resolveDeployment } = await import('../../packages/plugin-manager/src/config.mjs'));
+    ({ frameworkInput, prepareFrameworkCredentials, rememberFrameworkInput } = await import('../../packages/plugin-manager/src/framework-credentials.mjs'));
+  } catch (error) {
+    if (!direct) throw error;
+    bootstrapError = error;
+  }
 }
 
 /** Require an immutable Linux image for a recoverable container deployment. */
@@ -36,7 +57,7 @@ export function validateBase(reference, info) {
 /** Initialize missing inputs; resume only the saved image, packages and unchanged site preferences. */
 export function release({ root = repositoryRoot, config, resume = false } = {}, execute = command, buildHost = buildHostImage) {
   root = resolve(root);
-  const env = normalizeEnvironment(process.env);
+  const env = normalizeEnvironment(bootstrapped && root === resolve(repositoryRoot) ? bootstrapEnv : process.env);
   // Source releases take their deployment choices from the saved site file.
   for (const key of ['DEPLOYMENT_CONFIG', 'PLUGIN_MANIFEST_FILE', 'DSH_DATA_DIR', 'DSH_HOME', 'DSH_WORKSPACE', 'DSH_AUTH_URL_FILE', 'DSH_DEPLOY_ARTIFACTS', 'DSH_PROFILE', 'DSH_PUBLIC_ORIGIN', 'DSH_PUBLIC_URL', 'DSH_STORE_DIR', 'DSH_OFFLINE_STORE_DIR', 'DSH_CACHE_DIR', 'DSH_OFFLINE_CACHE_DIR']) delete env[key];
   const run = (bin, args, options = {}) => execute(bin, args, { cwd: root, env, ...options });
@@ -103,15 +124,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
   try {
     const cli = resolve(operation, 'tooling/node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs');
     if (!resume) {
-      const pin = json(resolve(root, 'package.json')).packageManager;
-      if (!/^pnpm@[0-9]+\.[0-9]+\.[0-9]+$/.test(pin)) throw new Error('packageManager must pin a pnpm version.');
-      if (probe('pnpm', ['--version']) !== pin.slice(5)) {
-        const tooling = resolve(root, '.local/tooling/pnpm');
-        step('准备构建工具', 'npm', ['install', '--prefix', tooling, '--ignore-scripts', '--no-audit', '--no-fund', pin]);
-        env.PATH = `${resolve(tooling, 'node_modules/.bin')}${delimiter}${env.PATH ?? ''}`;
-        if (capture('pnpm', ['--version']) !== pin.slice(5)) throw new Error('Could not prepare the pinned pnpm version.');
-      }
-      step('安装项目依赖', 'pnpm', ['install', '--frozen-lockfile']);
+      if (!bootstrapped || root !== resolve(repositoryRoot)) prepareWorkspaceDependencies(root, env, execute);
       step('构建 plugin-kit', 'pnpm', ['--filter', '@dsh-plugin-manager/plugin-kit', 'build']);
       step('构建 plugin-manager', 'pnpm', ['--filter', '@dsh-plugin-manager/plugin-manager', 'build']);
       record.managerArchive = resolve(operation, 'plugin-manager.tgz');
@@ -226,11 +239,12 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (direct) {
   try {
     const args = process.argv.slice(2), options = {};
     if (args.includes('--help')) console.log('Windows: .\\build.ps1 [--config <env.conf|site.json>] [--resume]\nmacOS/Linux: ./build.sh [--config <env.conf|site.json>] [--resume]\nFirst run initializes .local/env.conf (legacy JSON remains explicit-compatible); .local/deployment.json and release records are generated.\nRequires Node.js ^22.19 or >=24, npm, Git, local Linux Docker Compose and system tar. pnpm is prepared automatically.');
     else {
+      if (bootstrapError) throw bootstrapError;
       checkSourceNode();
       while (args.length) {
         const flag = args.shift();
@@ -241,5 +255,9 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       release(options);
     }
   } catch (error) { console.error(error.message); process.exitCode = 1; }
-  if (typeof process.send === 'function') process.send({ type: 'source-build-finished', code: process.exitCode ?? 0 }, () => process.disconnect());
+  if (typeof process.send === 'function') {
+    // A signalled descendant may still have children; do not certify lock release.
+    if (interruptedChild) process.disconnect();
+    else process.send({ type: 'source-build-finished', code: process.exitCode ?? 0 }, () => process.disconnect());
+  }
 }
