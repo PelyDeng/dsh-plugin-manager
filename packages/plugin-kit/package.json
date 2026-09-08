@@ -1,6 +1,6 @@
 {
   "name": "@dsh-plugin-manager/plugin-kit",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Optional identity, HTTP and tool integration for DSH plugins",
   "type": "module",
   "license": "Apache-2.0",
@@ -22,6 +22,10 @@
     "./tools": {
       "types": "./dist/tools.d.mts",
       "default": "./dist/tools.mjs"
+    },
+    "./conversations": {
+      "types": "./dist/conversations.d.mts",
+      "default": "./dist/conversations.mjs"
     },
     "./route-path": {
       "types": "./src/route-path.d.mts",
