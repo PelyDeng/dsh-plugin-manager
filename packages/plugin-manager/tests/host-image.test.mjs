@@ -1,7 +1,7 @@
 /** Host preparation uses immutable inputs and never publishes without explicit selection. */
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { buildHostImage, isMissingImage, loadImageConfig, recipeHash, repositoryDigest, withRegistryAuthentication } from '../../../integrations/docker/host-image.mjs';
@@ -11,7 +11,7 @@ import { tarCommand } from '../src/deployment.mjs';
 const directories = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 function fixture() {
-  const root = mkdtempSync(resolve(tmpdir(), 'dsh 中文 host image ')); directories.push(root);
+  const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'dsh 中文 host image '))); directories.push(root);
   mkdirSync(resolve(root, 'deploy'));
   for (const path of ['integrations/docker', 'packages/plugin-kit', 'packages/plugin-manager']) {
     mkdirSync(resolve(root, path), { recursive: true }); writeFileSync(resolve(root, path, 'input.txt'), 'fixture\n');
