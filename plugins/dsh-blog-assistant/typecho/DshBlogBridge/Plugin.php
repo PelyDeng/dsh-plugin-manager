@@ -3,7 +3,7 @@
  * DSH 博客原文与确认提交桥接。使用 Typecho 原生内容组件，分离公开版和保存稿。
  * @package DshBlogBridge
  * @author DPL
- * @version 0.4.0
+ * @version 0.4.1
  * @link https://pelyblog.com/
  */
 if (!defined('__TYPECHO_ROOT_DIR__')) { exit; }
@@ -162,7 +162,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             $this->demand(($engines[$db->getPrefix() . $name] ?? '') === 'InnoDB', 'incompatible', 503);
         }
         $categories = $db->fetchAll($db->select('mid', 'name')->from('table.metas')->where('type = ?', 'category')->order('order', \Typecho\Db::SORT_ASC));
-        return ['protocolVersion' => 1, 'version' => '0.4.0', 'structuredSearch' => true, 'nativeDrafts' => true, 'management' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
+        return ['protocolVersion' => 1, 'version' => '0.4.1', 'structuredSearch' => true, 'nativeDrafts' => true, 'management' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
     }
     private function posts(array $input): array
     {
@@ -173,8 +173,15 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
         $sql = $db->select('cid', 'title', 'type', 'status', 'modified')->from('table.contents')
             ->where('type = ? OR type = ?', 'post', 'post_draft')->where('parent = ?', 0);
         if ($status === 'published') { $sql->where('type = ? AND status = ?', 'post', 'publish'); }
-        elseif ($status === 'draft') { $sql->where('type = ? OR status <> ? OR cid IN (SELECT parent FROM ' . $db->getPrefix() . 'contents WHERE type = ? AND parent > 0)', 'post_draft', 'publish', 'post_draft'); }
-        if ($query !== '') { $sql->where('LOCATE(?, title) > 0 OR LOCATE(?, text) > 0 OR cid IN (SELECT parent FROM ' . $db->getPrefix() . 'contents WHERE type = ? AND parent > 0 AND (LOCATE(?, title) > 0 OR LOCATE(?, text) > 0))', $query, $query, 'post_draft', $query, $query); }
+        // Typecho where() quotes SELECT/FROM as columns; use its parameterized IN list.
+        elseif ($status === 'draft') {
+            $parents = $db->fetchAll($db->select('parent')->from('table.contents')->where('type = ? AND parent > ?', 'post_draft', 0));
+            $sql->where('type = ? OR status <> ? OR cid IN ?', 'post_draft', 'publish', array_column($parents, 'parent') ?: [0]);
+        }
+        if ($query !== '') {
+            $parents = $db->fetchAll($db->select('parent')->from('table.contents')->where('type = ? AND parent > ?', 'post_draft', 0)->where('LOCATE(?, title) > 0 OR LOCATE(?, text) > 0', $query, $query));
+            $sql->where('LOCATE(?, title) > 0 OR LOCATE(?, text) > 0 OR cid IN ?', $query, $query, array_column($parents, 'parent') ?: [0]);
+        }
         $rows = $db->fetchAll($sql->order('modified', \Typecho\Db::SORT_DESC)->offset(($page - 1) * 30)->limit(31));
         $items = [];
         foreach (array_slice($rows, 0, 30) as $row) {

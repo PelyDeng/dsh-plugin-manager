@@ -65,11 +65,12 @@ namespace {
         public function limit($n) { $this->take=$n; return $this; }
         public function offset($n) { $this->skip=$n; return $this; }
         public function rows($values) { $this->values = $values; return $this; }
-        public function where($sql, ...$values) { $this->conditions[] = [$sql, $values]; return $this; }
+        public function where($sql, ...$values) { if (str_contains($sql, 'SELECT ')) throw new \RuntimeException('Typecho where() cannot accept raw subqueries'); $this->conditions[] = [$sql, $values]; return $this; }
         public function matches($row) {
             foreach ($this->conditions as [$sql, $values]) {
-                if(str_starts_with($sql,'type = ? OR status <> ? OR cid IN (SELECT parent')) { $children=\Typecho\Db::$fixture->tables['table.contents']; $hasChild=(bool)array_filter($children,fn($c)=>$c['type']==='post_draft'&&$c['parent']===$row['cid']); if(!($row['type']==='post_draft'||$row['status']!=='publish'||$hasChild))return false;continue; }
-                if (str_contains($sql, 'LOCATE')) { $childMatch=str_contains($sql,'SELECT parent')&&(bool)array_filter(\Typecho\Db::$fixture->tables['table.contents'],fn($c)=>$c['type']==='post_draft'&&$c['parent']===$row['cid']&&(str_contains($c['title'],$values[0])||str_contains($c['text'],$values[1])));if (!str_contains($row['title'], $values[0]) && !str_contains($row['text'], $values[1]) && !$childMatch) return false; continue; }
+                if ($sql === 'type = ? AND parent > ?') { if ($row['type'] !== $values[0] || $row['parent'] <= $values[1]) return false; continue; }
+                if ($sql === 'type = ? OR status <> ? OR cid IN ?') { if (!($row['type'] === $values[0] || $row['status'] !== $values[1] || in_array($row['cid'], $values[2]))) return false; continue; }
+                if (str_contains($sql, 'LOCATE')) { $childMatch=str_contains($sql,'cid IN ?')&&in_array($row['cid'],$values[2]);if (!str_contains($row['title'], $values[0]) && !str_contains($row['text'], $values[1]) && !$childMatch) return false; continue; }
                 preg_match_all('/(?:table\.[a-z_]+\.)?([a-z_]+) (=|<>) \?/', $sql, $matches);
                 $terms = []; foreach ($matches[1] as $i => $key) $terms[] = $matches[2][$i] === '=' ? ($row[$key] ?? null) == $values[$i] : ($row[$key] ?? null) != $values[$i];
                 if (str_contains($sql, ' OR ') ? !in_array(true, $terms, true) : in_array(false, $terms, true)) return false;
