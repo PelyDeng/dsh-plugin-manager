@@ -81,13 +81,7 @@ example、封闭化以及博客的普通文字新会话都使用这个默认模�
 
 博客文章编辑器的专用写作仍使用 `models.text`，首次发送图片可切换至 `models.vision`；已有图片历史的续聊和分支沿用记录中的识图模型。服务商密钥与这些 provider/model 引用分开管理。若把博客 Bundle 注册的模型路由选为框架默认，使用它的站点必须保留该 Bundle；未安装私有插件的公共框架不会因此自动获得私有路由。细节见[博客宿主能力](plugins/dsh-blog-assistant/README.md#宿主能力)和[封闭化对话模型](plugins/dsh-closedoff-assistant/README.md#对话模型)。
 
-### DeepSeek V4.1 Flash 临时模型
-
-[模型声明](private-deploy/models/deepseek-v4.1-flash.json)用于需要参加内测的站点，通过官方 `deepseek-official` 路由访问 `https://api.deepseek.com`。声明不含凭据，不会随构建自动启用，也不改变默认模型。
-
-先用目标站点的官方凭据验证调用，再备份该站点 DSH home 下的 `settings.yaml`。通过官方模型设置，将声明追加到 `llm-deepseek.models`；保留已有条目，原来未自定义目录时保留宿主提供的默认条目。显式模型列表会替换默认目录，不能只写这个临时型号。`inputModalities` 必须包含 `image` 才能启用宿主图片输入。
-
-模型目录由官方设置热加载，无需重启或重建镜像。保存后核对管理页目录和真实模型请求；需要设为普通新会话默认时，再单独选择。此型号包含 `0910` 到期提示，具体截止时刻以提供方为准；到期前应选回长期可用模型，并检查仍记录临时型号的旧会话。临时目录配置发布不改变框架版本。
+DeepSeek V4.1 Flash 临时模型使用公共框架提供的[模型声明](deploy/models/deepseek-v4.1-flash.json)，配置与到期处理见[公共 FAQ](doc/FAQ.md#如何添加-deepseek-v41-flash-临时模型)。
 
 ## 已部署实例的运维
 
