@@ -52,7 +52,7 @@ export function checkCompose(deployment, release, execute = executeDocker, runti
   Object.assign(service, { image, user: `${uid}:${gid}`, restart: 'unless-stopped', init: true, security_opt: ['no-new-privileges:true'], cap_drop: ['ALL'], stop_grace_period: '30s' });
   if (runtime.desktop) service.ports = [{ target: port, published: String(port), host_ip: '127.0.0.1', protocol: 'tcp' }];
   else service.network_mode = 'host';
-  Object.assign(service.environment, { DSH_BIND_HOST: runtime.desktop ? '0.0.0.0' : '127.0.0.1', DSH_PORT: String(port) });
+  Object.assign(service.environment, { DSH_BIND_HOST: '127.0.0.1', DSH_PORT: String(port), ...(runtime.desktop ? { DSH_CONTAINER_LOOPBACK_FORWARD: '1' } : {}) });
   if (image.startsWith('sha256:')) service.pull_policy = 'never';
   const flags = ['rebuild', 'resume'].filter(flag => deployment.options[flag]).map(flag => `--${flag}`);
   if (flags.length) service.command = flags;

@@ -118,7 +118,8 @@ test('Desktop preflight uses bridge and rejects inaccessible mounts before any s
   const generated = checkCompose(f.deployment, f.release, args => { calls.push(args); }, desktop);
   const service = JSON.parse(readFileSync(generated.path, 'utf8')).services.dsh;
   assert.equal(service.network_mode, undefined);
-  assert.equal(service.environment.DSH_BIND_HOST, '0.0.0.0');
+  assert.equal(service.environment.DSH_BIND_HOST, '127.0.0.1');
+  assert.equal(service.environment.DSH_CONTAINER_LOOPBACK_FORWARD, '1');
   assert.deepEqual(service.ports, [{ target: 7902, published: '7902', host_ip: '127.0.0.1', protocol: 'tcp' }]);
   assert.equal(calls.length, 1);
   assert.ok(calls[0].includes('--user'));
