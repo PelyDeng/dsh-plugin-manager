@@ -42,6 +42,12 @@
 组合用 compose-release；--previous 不继承候选，列出全部保留应用，start/apply-compose 显式 --plugins all。说明更新、恢复及数据兼容性，分别报告构建、宿主、授权和真实业务验证。
 ```
 
+## 按需重建插件
+
+```text
+为 <插件ID列表> 选择构建步骤。日常 pnpm build/package --plugins 只处理选中插件；源码部署 build.ps1/build.sh --rebuild-plugins 才会复用其余旧包，保留完整部署选集。先核实 ready 基线、归档、环境、源码与本地传递构建依赖；共享文件含文档变化须全量，不强行复用。恢复只传 --resume；分别验证任务日志、旧包摘要、新清单和服务健康，不把构建通过当业务验收。
+```
+
 ## 安装成功但无法访问
 
 ```text

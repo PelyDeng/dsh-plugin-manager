@@ -26,6 +26,8 @@ Windows 根 `build.ps1` 与 macOS/Linux 根 `build.sh` 调用同一套 Node 更�
 
 ## 会话模型与 example 问答
 
+业务插件可在输入框选择对话模型。kit 与 Auth 共用官方模型目录和默认值，切换委托 `sessionController.selectModel()`。插件先验证会话归属、打开自己的 Agent，并在切换与发送期间保持会话忙碌检查。官方接口记录当前会话选择，同时尝试保存宿主默认值；普通插件用户的选择也会影响后续新会话。kit 不保存第二份配置，管理器不参与运行时模型选择。
+
 新会话模型由官方 `agentDefaultModel` 提供，Auth 为管理员提供查看官方模型目录和保存默认选择的入口。调用 kit 的 `conversationModel()` 前，业务插件须先检查会话是否属于当前用户（owner）。该接口通过官方会话投影，也就是从日志整理出的会话状态，恢复已有对话或分支点使用的模型。读取或投影能力缺失时拒绝继续，不用新的默认模型覆盖旧记录。example 使用此接口，默认值不写进框架 env 或业务历史文件。
 
 example 的代码问答通过 kit 工具授权包装官方工具，只检索构建时生成的公共框架快照；索引随插件归档交付，不在运行时扫描框架或私有插件源码。FAQ、源码参考与业务运行数据分开，回答引用快照路径及行号。部署检索包含稳定的公共 `deploy/build.sh`、`deploy/build.ps1` 及 worker；私有集成可以替换仓库根 build 入口，因此快照不收录根 `build.sh`、`build.ps1`，也不收录 `doc/releases/` 的历史说明。

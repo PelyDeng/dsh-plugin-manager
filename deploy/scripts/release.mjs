@@ -21,8 +21,16 @@ export function sourceArguments(args) {
     seen.add(flag);
     if (flag === '--resume') continue;
     if (flag === '--config' && copy[0] && !copy[0].startsWith('--')) { copy.shift(); continue; }
+    if (flag === '--rebuild-plugins' && copy[0] && !copy[0].startsWith('--')) {
+      const ids = copy.shift().split(',');
+      if (ids.some(id => !/^[a-z][a-z0-9-]*$/.test(id) || ['all', 'none', 'dsh-console'].includes(id)) || new Set(ids).size !== ids.length) {
+        throw new Error('Invalid --rebuild-plugins argument: use distinct plugin IDs separated by commas.');
+      }
+      continue;
+    }
     throw new Error(`Unknown or duplicate argument: ${flag}. Use --help.`);
   }
+  if (seen.has('--resume') && seen.has('--rebuild-plugins')) throw new Error('--resume uses saved artifacts; do not pass --rebuild-plugins.');
   return [...args];
 }
 

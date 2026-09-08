@@ -1,6 +1,6 @@
 # Docker 一键部署
 
-一个完整的仓库检出目录管理一个 Linux 容器站点。Windows 使用根 `build.ps1`，macOS/Linux 使用根 `build.sh`，首次初始化与更新共用同一流程；旧 `bash deploy/build.sh` 继续支持。依赖和镜像在执行脚本的机器构建，不需要先提供旧镜像、发布清单或 Compose。部署直接使用仓库现有的官方宿主源码，不下载、更新、切换它，也不要求它与预设锁定版本一致。
+一个完整的框架仓库检出目录管理一个 Linux 容器站点。Windows 使用根 `build.ps1`，macOS/Linux 使用根 `build.sh`，首次初始化与更新共用同一流程；旧 `bash deploy/build.sh` 继续支持。依赖和镜像在执行脚本的机器构建。默认使用已有官方宿主源码，不下载、更新、切换它，也不要求它与预设锁定版本一致；也可显式提供不可变 `DSH_HOST_IMAGE` / `hostImage`，无需检出未使用的宿主源码。不需要人工准备发布清单或 Compose。
 
 ## 首次部署
 
@@ -18,7 +18,7 @@ Docker 必须运行 Linux 容器，只接受本机 unix/npipe endpoint；远端 
 
 同一 Docker 网络中的其他容器仍属于受信任范围，不能据此认定服务已与公网隔离；原生 Linux 引擎保留 host 网络。macOS 的实际 Docker 站点部署尚未完成真机验收；CI 测试不等同于部署验收。
 
-源码检出阶段使用递归克隆带齐仓库提供的子模块；已有完整源码无需重复克隆。普通 Git 克隆只取得子模块版本引用，实际源码缺失时，部署脚本提示检出不完整，不自行补拉。镜像记录实际使用的源码提交，便于定位构建来源，不会因为它与预设版本不同而拒绝构建。
+使用宿主源码时，检出阶段用递归克隆带齐子模块；已有完整源码无需重复克隆。普通 Git 克隆只取得子模块版本引用，需要构建宿主而实际源码缺失时，脚本提示检出不完整，不自行补拉。镜像记录实际宿主提交，便于定位构建来源，不会因为它与预设版本不同而拒绝全量构建。
 
 默认选中 auth、example，使用本机镜像，监听 `http://127.0.0.1:7902`。构建依赖 npm、基础镜像和 Debian 软件源；本机依赖缓存和 Docker 缓存可以复用。首次完整构建比后续更新耗时更长。受限网络可通过 `.local/env.conf` 的镜像字段配置镜像源；预构建宿主是可选加速，不是初始化前置条件。
 
@@ -65,6 +65,10 @@ Windows 使用 `node deploy/scripts/set-api-key.mjs --config .local/deployment.j
 
 ## 更新与恢复
 
+默认更新重建全部部署插件。只需重建 c 时，可使用 `./build.sh --rebuild-plugins c`，Windows 使用 `.\build.ps1 --rebuild-plugins c`；多个 ID 用逗号分隔。保留站点完整插件选集，其余自动复用当前成功部署的归档。首次部署或来源不完整时先全量构建；共享源码、依赖或文档变化也可能要求全量，具体条件见[按需重建说明](../deploy/README.md#服务器源码发版)。公共组件、镜像和服务重启仍按现有流程执行。
+
+按需复用支持两种宿主来源：未配置 `hostImage` 时要求与基线一致的干净宿主源码；显式不可变 `hostImage` 时以同一镜像摘要和成功记录中的宿主提交核验，不要求宿主源码目录存在。切换宿主来源或缺少可核实身份时先全量构建，不能靠补写发布记录绕过检查。
+
 ```sh
 git pull --ff-only --recurse-submodules
 ./build.sh
@@ -88,7 +92,7 @@ Windows 将最后一行换成 `.\build.ps1`。更新代码时按需同步子模�
 ./build.sh --config .local/env.conf --resume
 ```
 
-Windows 使用 `.\build.ps1 --resume` 或 `.\build.ps1 --config .local/env.conf --resume`。原先显式使用旧 JSON 时，恢复仍传原 JSON。私有操作目录中的 `framework-input.conf` 备存本次 env 原始字节；输入误改时先恢复原文件再 resume，不自动切换来源。
+Windows 使用 `.\build.ps1 --resume` 或 `.\build.ps1 --config .local/env.conf --resume`。恢复不带 `--rebuild-plugins`，使用该次保存的完整清单和镜像。原先显式使用旧 JSON 时，恢复仍传原 JSON。私有操作目录中的 `framework-input.conf` 备存本次 env 原始字节；输入误改时先恢复原文件再 resume，不自动切换来源。
 
 恢复不重建镜像和插件归档，重新核验保存的输入，并交给原管理器恢复安装。源码入口允许管理器在检测到宿主或 Node 等运行环境变化时预检并重装依赖；环境未变化时不会因该许可单独重装。若断电留下进程记录，必须先由 Docker 确认对应容器已停止且其 hostname、profile、home 挂载匹配，才能备存并解除残留记录，pending 保持原样。旧版无 hostname 的运行记录不支持自动解除，需由维护者核实原容器归属后处理。
 

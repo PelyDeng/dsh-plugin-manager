@@ -2,7 +2,7 @@
 
 # @dsh-plugin-manager/plugin-kit
 
-可选的 DSH 插件接入库，通过宿主 Cordis 事件通信，不启动服务。使用 kit 的插件在构建时把它打入自己的安装包。独立作者可将维护者提供的版本化 tgz 安装为开发依赖，例如 `pnpm add --ignore-workspace --save-dev /path/to/plugin-kit-0.14.3.tgz`，再通过构建器内嵌。包名不表示版本已发布到公共 registry。
+可选的 DSH 插件接入库，通过宿主 Cordis 事件通信，不启动服务。使用 kit 的插件在构建时把它打入自己的安装包。独立作者可将维护者提供的版本化 tgz 安装为开发依赖，例如 `pnpm add --ignore-workspace --save-dev /path/to/plugin-kit-0.14.6.tgz`，再通过构建器内嵌。包名不表示版本已发布到公共 registry。
 
 | 导出 | 用途 |
 | --- | --- |
@@ -21,6 +21,8 @@ DSH 类型依赖是可选 peer，由使用相应接口的作者提供；只使�
 kit 提供可选的[会话管理协议](../../doc/conversation-management.md)。插件维护会话所属用户（owner）的索引和活动操作检查，auth 汇总分类、只读预览与批量移除。共用的移除流程先保存 pending 标记，阻止新的写入，调用官方归档并返回逐项结果；包含定时事件时复用宿主已注册的 schedule 投影校验，能力缺失则拒绝清理。
 
 通过 `@dsh-plugin-manager/plugin-kit/models` 导入 `defaultConversationModel(ctx)` 和 `await conversationModel(ctx, id?, eventCount?)`。新会话不传 ID，读取官方默认；恢复前先验证所有权，再传 ID，通过官方 `modelSelection` 投影还原 `pending ?? lastUsed`。
+
+对话选择器通过 `conversationModelCatalog(ctx)` 读取与 Auth 相同的官方目录和默认值。将用户提交交给 `requestedConversationModel(ctx, input)`：`undefined` 沿用会话、`null` 选择当前默认、对象仅接受 `provider/model`。插件先检查归属并打开自己的 Agent，在会话忙碌保护内调用 `selectConversationModel(ctx, sessionId, selected, authorize)`，然后发送消息；`authorize` 在官方调用前后复核权限。切换直接复用官方 `sessionController.selectModel()`，记录会话选择并尝试更新宿主默认值，不需要管理员权限，也不需要前端取得控制台令牌。目录或切换能力缺失时明确报错。可复制 example 的 `web/model-picker.js` 和相应图标，独立打包到业务插件。
 
 分支可传入继承事件数，沿用该位置的模型。无模型使用记录时读取当前默认，持久化读取或投影失败则拒绝恢复。调用方在异步读取后再次检查授权，再将返回的 provider/model 传入 Agent。它不依赖 auth，auth 只是可选的共享设置入口；已运行的 Agent 不受默认变更影响。
 

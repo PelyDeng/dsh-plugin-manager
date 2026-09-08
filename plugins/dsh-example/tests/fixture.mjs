@@ -19,6 +19,17 @@ export async function fixture({ mode, autoReply = false, persistenceApi = 'handl
     tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
     webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } },
     agentDefaultModel: { currentSelection: () => ({ provider: 'test', model: 'test' }) },
+    llm: { async resolveCallConfig(value) { return value } },
+    sessionController: {
+      async modelCatalog() { return { groups: [{ id: 'test', name: '测试服务商', models: [{ id: 'test', name: '测试模型' }, { id: 'second', name: '第二模型' }] }], failures: [] } },
+      async selectModel({sessionId,...selected}) {
+        const handle=handles.find(h=>h.id===sessionId&&!h.disposed)
+        if(!handle)throw Error('Agent must be open')
+        handle.selected=selected;logs.get(sessionId).push({type:'model/selection',data:selected})
+        ctx.agentDefaultModel.currentSelection=()=>selected
+        return {selected}
+      },
+    },
     sessionProjections: { restore(_checkpoint, events) {
       let lastUsed = null, pending = null
       for (const event of events) {

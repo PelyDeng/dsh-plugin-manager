@@ -11,6 +11,16 @@ import { tarCommand } from '../src/state.mjs';
 import { normalizeEnvironment } from '../src/process.mjs';
 
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('selective fresh worker rejects workspace install hooks before the first dependency install', async t => {
+  const f = snapshot(t), path = resolve(f.root, 'plugins/dsh-example/package.json');
+  const pkg = JSON.parse(readFileSync(path)); pkg.scripts.postinstall = 'node forbidden-build.mjs';
+  writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
+  command('git', ['add', '.'], f.root); f.commit();
+  assert.equal(await sourceRelease({ root: f.root, args: ['--rebuild-plugins', 'example'], preflight: f.preflight }), 1);
+  assert.equal(existsSync(f.marker), false);
+  f.absent();
+});
 function command(bin, args, cwd, env) {
   const result = spawnSync(bin, args, { cwd, env, encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
   assert.equal(result.status, 0, result.stderr || result.error?.message);

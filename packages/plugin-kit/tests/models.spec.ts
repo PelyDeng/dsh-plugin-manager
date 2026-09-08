@@ -1,8 +1,25 @@
 import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
-import { conversationModel } from '../src/models.ts'
+import { conversationModel, conversationModelCatalog, requestedConversationModel, selectConversationModel } from '../src/models.ts'
 
 describe('conversation model routing', () => {
+  it('shares only public catalog fields and delegates a checked selection without client effort injection',async()=>{
+    const ctx=new Context(), selected={provider:'p',model:'m'},call=vi.fn(async()=>({selected})),authorize=vi.fn()
+    ctx.provide('agentDefaultModel',{currentSelection:()=>selected})
+    ctx.provide('sessionController',{modelCatalog:async()=>({groups:[{id:'p',name:'P',secret:'hidden',models:[{id:'m',name:'M',secret:'hidden'}]}],failures:[]}),selectModel:call})
+    ctx.provide('llm',{resolveCallConfig:async(v:unknown)=>v})
+    expect(JSON.stringify(await conversationModelCatalog(ctx))).not.toContain('hidden')
+    expect(await requestedConversationModel(ctx,{...selected,reasoningEffort:'untrusted'})).toEqual(selected)
+    await expect(requestedConversationModel(ctx,[])).rejects.toThrow('有效模型')
+    await expect(requestedConversationModel(ctx,{provider:'p',model:'absent'})).rejects.toThrow('目录')
+    expect(await requestedConversationModel(ctx,undefined)).toBeUndefined()
+    expect(await requestedConversationModel(ctx,null)).toEqual(selected)
+    await selectConversationModel(ctx,'owned',selected,authorize)
+    expect(call).toHaveBeenCalledWith({sessionId:'owned',...selected});expect(authorize).toHaveBeenCalledTimes(2)
+    authorize.mockImplementation(()=>{throw Error('revoked')})
+    await expect(selectConversationModel(ctx,'foreign',selected,authorize)).rejects.toThrow('revoked')
+    expect(call).toHaveBeenCalledTimes(1)
+  })
   const original = { provider: 'first', model: 'original', reasoningEffort: 'high' }
   const changed = { provider: 'second', model: 'new' }
   function fixture(state: unknown = { pending: null, lastUsed: original }) {

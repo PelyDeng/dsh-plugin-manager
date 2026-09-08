@@ -1,3 +1,4 @@
+import './model-picker.js'
 import { readEvents } from './stream.js'
 import { renderMarkdown } from './markdown.js'
 import {element,glyph,action,stat,compactTokens,keyboardSend,thinking as makeThinking} from './chat-ui.js'
@@ -17,6 +18,7 @@ let feedbackAvailable=false,feedback=new Map()
 const hint=()=>{$('input-hint').textContent=narrow.matches?'换行继续输入 · 点击箭头发送':'Enter 发送 · Shift+Enter 换行'};hint();narrow.addEventListener('change',hint)
 const post=async(path,data)=>{const r=await fetch(base+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data)}),v=await r.json();if(!r.ok)throw Error(v.error??'操作失败，请重试');return v}
 async function refreshFeedback(id){const r=await fetch(base+'/history?id='+encodeURIComponent(id));if(!r.ok)throw Error('无法读取评价状态');const data=await r.json();if(id===conversationId){feedback=new Map(data.feedback.map(f=>[f.messageId,f]));feedbackAvailable=data.feedbackAvailable}return data}
+const picker=globalThis.createModelPicker({mount:$('model-picker'),iconBase:base+'/media/',load:async id=>{const r=await fetch(base+'/models'+(id?'?conversationId='+encodeURIComponent(id):''),{cache:'no-store'}),v=await r.json();if(!r.ok)throw Error(v.error??'无法读取模型');return v}})
 let conversationId
 let controller
 let resetAfterStop = false
@@ -28,6 +30,7 @@ const setStatus = text => { $('status').textContent = text }
 const notice = text => { $('notice').textContent = text; $('notice').hidden = !text }
 function busy(value) {
   sidebar.setBusy(value)
+  picker.setBusy(value)
   $('send').hidden = value
   $('stop').hidden = !value
   $('prompt').disabled = value
@@ -69,6 +72,7 @@ $('messages').addEventListener('click', async event => {
 })
 async function send(text) {
   if (controller || !text.trim()) return
+  let modelPayload;try{modelPayload=picker.payload()}catch(e){notice(e.message);return}
   notice('')
   $('welcome').hidden = true
   message('user', text)
@@ -83,7 +87,7 @@ async function send(text) {
   try {
     const response = await fetch(base + '/chat', {
       method: 'POST', headers: { 'content-type': 'application/json' }, signal: current.signal,
-      body: JSON.stringify({ message: text, ...(conversationId ? { conversationId } : {}) }),
+      body: JSON.stringify({ message: text, ...modelPayload, ...(conversationId ? { conversationId } : {}) }),
     })
     if (!response.ok) {
       const error = await response.json().catch(() => ({}))
@@ -91,7 +95,7 @@ async function send(text) {
     }
     await readEvents(response, event => {
       const area=$('scroll-area'),top=area.scrollTop,follow=area.scrollHeight-top-area.clientHeight<180
-      if (event.type === 'session') conversationId = event.conversationId
+      if (event.type === 'session') {conversationId = event.conversationId;picker.accept(event.model)}
       if (event.type === 'step') answer.update('')
       if (event.type === 'reasoning' && event.text) {
         answer.setReasoning(answer.reasoning+event.text,false); setStatus('正在思考…'); scroll()
@@ -138,6 +142,7 @@ $('stop').onclick = () => controller?.abort()
 function reset() {
   translations.reset()
   conversationId = undefined
+  void picker.refresh()
   $('messages').replaceChildren();sidebar.render(); $('welcome').hidden = false; $('prompt').value = ''
   notice(''); setStatus('新对话 · 之前的内容仍在历史中'); focusPrompt()
 }
@@ -156,6 +161,7 @@ async function openHistory(id) {
     const data = await response.json()
     translations.reset()
     conversationId = data.conversationId
+    await picker.refresh(conversationId)
     $('messages').replaceChildren(); $('welcome').hidden = true
     feedback=new Map((data.feedback??[]).map(f=>[f.messageId,f]));feedbackAvailable=data.feedbackAvailable
     let turnIndex=0;for (const item of data.messages){const m=message(item.role,item.text,item.reasoning,item.role==='assistant'?data.turns?.[item.turn??turnIndex++]:undefined,item.reasoningSource);if(item.role==='assistant'&&m.meta)m.setTools(m.meta.tools??[])}
@@ -176,7 +182,7 @@ try {
   $('auth-link').hidden = identity.mode !== 'authenticated'
   feedbackAvailable=identity.feedbackAvailable
   $('prompt').maxLength = identity.maxMessageChars
-  await loadHistory()
+  await Promise.all([loadHistory(),picker.refresh()])
 } catch (error) { notice(error.message); $('access-mode').textContent = '连接不可用' }
 
 $('prompt').addEventListener('input',()=>{$('prompt').style.height='auto';$('prompt').style.height=Math.min(140,$('prompt').scrollHeight)+'px'})

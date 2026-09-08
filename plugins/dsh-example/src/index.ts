@@ -16,6 +16,7 @@ import { createUserMessage, MessageId, type StreamChunk } from '@deepseek-ai/dsh
 import { SessionId, SessionLogOffset, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, conversationModel, createAccess, createPluginHttp, createPluginTools, onRevoked, registerPlugin, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { registerConversations, conversationArchive, conversationRemover, readConversationEvents, previewPage, hostBusyConversationIds, type PreviewMessage } from '@dsh-plugin-manager/plugin-kit'
+import { conversationModelCatalog, requestedConversationModel, selectConversationModel, type ConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
 import type { Config } from './config.ts'
 import { HistoryStore, projectHistory } from './history.ts'
 import { loadKnowledge, developerInstructions, reasoningLanguage } from './knowledge.ts'
@@ -57,13 +58,13 @@ async function requestBody(request: IncomingMessage, maxChars: number): Promise<
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new AccessError(400, '无效请求')
   return value as Record<string, unknown>
 }
-async function body(request: IncomingMessage, maxChars: number): Promise<{message:string;conversationId?:string}> {
+async function body(request: IncomingMessage, maxChars: number): Promise<{message:string;conversationId?:string;modelSelection?:unknown}> {
   const value=await requestBody(request,maxChars)
   if (!value || typeof value !== 'object' || !('message' in value) || typeof value.message !== 'string'
     || !value.message.trim() || value.message.length > maxChars) throw new AccessError(400, '请输入有效消息')
   const id = 'conversationId' in value ? value.conversationId : undefined
   if (id !== undefined && (typeof id !== 'string' || !/^example-[0-9a-f-]{36}$/.test(id))) throw new AccessError(400, '会话标识无效')
-  return { message: value.message.trim(), ...(typeof id === 'string' ? { conversationId: id } : {}) }
+  return { message: value.message.trim(), modelSelection: value.modelSelection, ...(typeof id === 'string' ? { conversationId: id } : {}) }
 }
 
 /** Register the page, catalog entry and a login-bound conversation lifecycle. */
@@ -123,8 +124,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     description: manifest.description, displayName: manifest.deepseekPlugin.displayName,
     entryPath: config.routePrefix, permissions: manifest.deepseekPlugin.permissions, tools,
   }))
-  const agentOptions = async (id?: string, eventCount?: number) => {
-    const selection = await conversationModel(ctx, id, eventCount)
+  const agentOptions = async (id?: string, eventCount?: number, requested?: ConversationModel) => {
+    const selection = requested ?? await conversationModel(ctx, id, eventCount)
         return {
           agentOptions: { provider: selection.provider, model: selection.model },
           setup(agentCtx: Context) {
@@ -165,7 +166,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }))
   const assets = [['', 'index.html', 'text/html'], ['/app.js', '../dist/web/app.js', 'text/javascript'],
     ['/stream.js', 'stream.js', 'text/javascript'], ['/style.css', 'style.css', 'text/css'], ['/chat-base.css','chat-base.css','text/css'],
-    ...['copy','check','like','dislike','branch','database','clock','think','api','send','chat','user','stop'].map(n=>[`/media/icon-${n}.svg`,`media/icon-${n}.svg`,'image/svg+xml'] as const),
+    ...['chevron-down','copy','check','like','dislike','branch','database','clock','think','api','send','chat','user','stop'].map(n=>[`/media/icon-${n}.svg`,`media/icon-${n}.svg`,'image/svg+xml'] as const),
     ['/guide.md', '../knowledge/guide.md', 'text/plain'], ['/prompts.md', '../knowledge/prompts.md', 'text/plain']] as const
   for (const [suffix, file, mime] of assets) {
     const content = (await readFile(new URL(`../web/${file}`, import.meta.url), 'utf8')).replaceAll('__BASE__', config.routePrefix)
@@ -179,6 +180,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
   ctx.effect(() => http.registerPublic({ kind: 'exact', path: config.routePrefix + '/ready', handler(_req, res) {
     try { access.ready(); json(res, { ok: true }) } catch { res.writeHead(503); res.end() }
+  } }))
+  ctx.effect(() => http.register({ kind: 'exact', path: config.routePrefix + '/models', handler: async (req, res, actor) => {
+    if (req.method !== 'GET') throw new AccessError(405, '只支持 GET')
+    const id = new URL(req.url ?? '/', 'http://localhost').searchParams.get('conversationId') || undefined
+    if (id) store.assertOwner(id, actor)
+    const catalog = await conversationModelCatalog(ctx)
+    const selected = id ? await conversationModel(ctx, id) : null
+    access.assert(actor); if (id) store.assertOwner(id, actor)
+    json(res, { ...catalog, default: catalog.selected, selected })
   } }))
   ctx.effect(() => http.register({ kind: 'exact', path: config.routePrefix + '/identity', handler(_req, res) {
     json(res, { mode: access.mode, maxMessageChars: config.maxMessageChars, version: manifest.version, knowledgeRevision: knowledge.revision, feedbackAvailable:Boolean(ctx.messageFeedback) })
@@ -298,6 +308,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     access.assert(actor)
     const id = input.conversationId ?? `example-${randomUUID()}`
     if (input.conversationId) store.assertOwner(id, actor)
+    const requested = await requestedConversationModel(ctx, input.modelSelection)
+    access.assert(actor)
     await closings.get(id)
     if (input.conversationId) store.assertOwner(id, actor)
     if (disposed) throw new AccessError(503, '插件正在停止')
@@ -340,7 +352,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     }
     try {
       if (!current.handle) {
-        const options = await agentOptions(input.conversationId ? id : undefined)
+        const options = await agentOptions(input.conversationId ? id : undefined, undefined, requested)
         if (disposed || ended || response.destroyed) { release(id, current); return }
         access.assert(actor)
         if (input.conversationId) store.assertOwner(id, actor)
@@ -354,10 +366,15 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       }
       if (disposed || ended || response.destroyed) { release(id, current); return }
       access.assert(actor)
+      const selected = requested ? await selectConversationModel(ctx, id, requested, () => {
+        access.assert(actor)
+        if (disposed || ended || response.destroyed) throw new AccessError(409, '本次请求已结束')
+        if (input.conversationId) store.assertOwner(id, actor)
+      }) : undefined
       store.publish(id)
       response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
       response.flushHeaders()
-      send({ type: 'session', conversationId: id })
+      send({ type: 'session', conversationId: id, model: selected })
       const sendChunk = (chunk: StreamChunk) => {
         if (chunk.type === 'text-delta') send({ type: 'delta', text: chunk.text })
         if (chunk.type === 'reasoning-delta') send({ type: 'reasoning', text: chunk.text })

@@ -1,19 +1,13 @@
 /** Administrator access to the host-owned catalog and default selection. */
 import type { Context } from '@deepseek-ai/cordis'
 import { AccessError } from '@dsh-plugin-manager/plugin-kit/access'
-import { defaultConversationModel, type ConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
-
-interface ModelCatalog { groups: { id: string; name: string; models: { id: string; name: string }[] }[]; failures: { id: string; name: string }[] }
+import { conversationModelCatalog, defaultConversationModel, type ConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
 
 export async function conversationModels(ctx: Context) {
-  const controller = ctx.get('sessionController') as { modelCatalog?: () => Promise<ModelCatalog> } | undefined
-  if (!controller?.modelCatalog) throw new AccessError(503, '宿主未提供官方模型目录')
-  const catalog = await controller.modelCatalog()
+  const catalog = await conversationModelCatalog(ctx)
   const defaults = ctx.get('agentDefaultModel') as { saveSelection?: unknown } | undefined
   const settings = ctx.get('settings') as { replace?: unknown } | undefined
-  return { groups: catalog.groups.map(group => ({ id: group.id, name: group.name, models: group.models.map(model => ({ id: model.id, name: model.name })) })),
-    failures: catalog.failures.map(group => ({ id: group.id, name: group.name })),
-    selected: defaultConversationModel(ctx), writable: typeof defaults?.saveSelection === 'function' && typeof settings?.replace === 'function' }
+  return { ...catalog, writable: typeof defaults?.saveSelection === 'function' && typeof settings?.replace === 'function' }
 }
 
 export async function saveConversationModel(ctx: Context, input: Record<string, unknown>, authorize: () => void) {
