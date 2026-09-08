@@ -2,7 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { resolveDeployment } from '../../packages/plugin-manager/src/config.mjs';
-import { decodeFrameworkConfig, deploymentFields, readFrameworkConfig, renderFrameworkConfig } from '../../packages/plugin-manager/src/framework-config.mjs';
+import { decodeFrameworkConfig, deploymentFields, imageDefaults, publicDeploymentDefaults, readFrameworkConfig, renderFrameworkConfig } from '../../packages/plugin-manager/src/framework-config.mjs';
 import { loadImageConfig, validateImageConfig } from '../../integrations/docker/host-image.mjs';
 import { ensurePrivateDirectory, writePrivateFile } from '../../packages/plugin-manager/src/private-files.mjs';
 
@@ -65,7 +65,7 @@ function initializeFrameworkSite(root, sitePath, runtimePath, defaults, imagePla
   const known = new Set(deploymentFields.map(([, field]) => field));
   const unknown = Object.keys(preferences).filter(key => !known.has(key));
   if (unknown.length) throw new Error(`Legacy fields require explicit JSON compatibility or migration: ${unknown.join(', ')}.`);
-  const config = previousPath ? { ...defaults, ...preferences } : {};
+  const config = previousPath ? { ...defaults, ...preferences } : { ...publicDeploymentDefaults, ...defaults };
   if (!previousPath && desktop && process.platform === 'darwin' && process.getuid?.() > 0 && process.getgid?.() > 0) {
     config.containerUid = process.getuid(); config.containerGid = process.getgid();
   }
@@ -76,8 +76,10 @@ function initializeFrameworkSite(root, sitePath, runtimePath, defaults, imagePla
     for (const field of ['dataRoot', 'home', 'workspace', 'artifacts', 'authUrlFile', 'profile']) config[field] = current[field];
     config.publicUrl = previous.publicUrl ?? previous.publicOrigin ?? defaults.publicUrl;
     if (!existsSync(legacy) && typeof containerImage === 'string' && containerImage.includes('@sha256:')) config.publishImage = containerImage.split('@')[0];
+  } else {
+    config.authUrlFile = resolve(root, config.dataRoot, 'dsh-web-auth-url.txt');
   }
-  const image = hostImageConfig ? loadImageConfig(root, hostImageConfig) : {};
+  const image = hostImageConfig ? loadImageConfig(root, hostImageConfig) : previousPath ? {} : { ...imageDefaults };
   if (!previousPath && imagePlatform) image.DSH_IMAGE_PLATFORM = imagePlatform;
   const text = renderFrameworkConfig({ config, image, privateInput: true });
   decodeFrameworkConfig(text);

@@ -3,6 +3,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileS
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { assertPublicFrameworkConfig } from '../../../packages/plugin-manager/src/framework-config.mjs';
 
 const directories = ['packages/plugin-manager', 'packages/plugin-kit', 'plugins/dsh-auth', 'plugins/dsh-example', 'scripts', 'deploy', 'integrations', 'examples', 'doc', '.github'];
 const ignored = new Set(['node_modules', 'dist', 'lib', '.local', '.git', 'coverage', 'assets', 'vendor']);
@@ -32,7 +33,7 @@ export function buildReference(root, output) {
   for (const path of ['README.md', 'README.en.md', 'package.json', 'pnpm-workspace.yaml', 'env.conf', 'build.sh', 'build.ps1', 'test-report.sh']) if (existsSync(join(root, path))) {
     if (lstatSync(join(root, path)).isSymbolicLink()) throw new Error('公开源码索引不接受符号链接。');
     const text = readFileSync(join(root, path), 'utf8');
-    if (path === 'env.conf' && text.split(/\r?\n/u).map(line => line.trim()).some(line => line && !line.startsWith('#') && !/^[A-Z][A-Z0-9_]*=$/u.test(line))) throw new Error('公开env.conf只能包含空值，不能将真实配置加入源码索引。');
+    if (path === 'env.conf') assertPublicFrameworkConfig(text);
     files.push({ path, text });
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
