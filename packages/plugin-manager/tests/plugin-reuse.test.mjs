@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { assertSelectiveInstallSafe, preparePluginReuse } from '../../../deploy/scripts/plugin-reuse.mjs';
@@ -13,7 +13,7 @@ const read = path => JSON.parse(readFileSync(path, 'utf8'));
 const save = (path, value) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(value, null, 2) + '\n'); };
 const digest = path => hash(readFileSync(path));
 const environment = { nodeVersion: process.versions.node, platform: process.platform, architecture: process.arch, packageManager: 'pnpm@11.19.0', targetArchitecture: 'amd64', hostImage: null };
-function fixture(t, dependencies = {}, hostImage = null) {
+function fixture(t, dependencies = {}, hostImage = null, prepareInput = () => {}) {
   const buildEnvironment = { ...environment, hostImage };
   const root = mkdtempSync(join(tmpdir(), 'dsh-reuse-'));
   t.after(() => { assert.equal(dirname(root), resolve(tmpdir())); rmSync(root, { recursive: true, force: true }); });
@@ -35,6 +35,7 @@ function fixture(t, dependencies = {}, hostImage = null) {
     writeFileSync(join(directory, 'build.mjs'), 'console.log("fixture");\n');
     writeFileSync(join(directory, 'cordis.patch.yml'), `- insert:\n    - id: fixture-${id}\n      name: fixture-${id}\n`);
   }
+  prepareInput(root);
   const host = join(root, 'deepseek-harness'); initialize(host);
   writeFileSync(join(host, 'host.txt'), 'fixture\n'); gitAt(host, ['add', '.']); gitAt(host, ['commit', '-qm', '宿主基线']);
   const hostCommit = gitAt(host, ['rev-parse', 'HEAD']);
@@ -186,7 +187,67 @@ test('cross-directory renames and mismatched active mounts cannot bypass reuse g
 
 test('file dependencies fail before archive reuse', t => {
   const f = fixture(t, { a: { 'fixture-c': 'file:../c' } });
-  assert.throws(() => f.prepare(), /file\/link/);
+  assert.throws(() => f.prepare(), /file:.*归档/);
+});
+
+function vendorInput(root) {
+  const stage = join(root, '.local/vendor-input'), output = join(root, 'plugins/a/vendor');
+  save(join(stage, 'package/package.json'), { name: 'vendor-fixture', version: '0.1.0', main: 'index.js' });
+  writeFileSync(join(stage, 'package/index.js'), 'module.exports = 1;\n');
+  mkdirSync(output, { recursive: true });
+  execFileSync(tarCommand, ['-czf', join(output, 'fixture.tgz'), '-C', stage, 'package'], { windowsHide: true });
+  copyFileSync(join(output, 'fixture.tgz'), join(output, 'fixture.tar.gz'));
+}
+
+test('unchanged tracked plugin-local vendor archives retain reusable package provenance', t => {
+  const f = fixture(t, { a: { 'vendor-fixture': 'file:vendor/fixture.tgz', 'vendor-second': 'file:./vendor/fixture.tar.gz' } }, null, vendorInput);
+  const result = f.prepare();
+  assert.deepEqual(result.release.plugins.map(p => p.id), ['a', 'b', 'd']);
+  assert.equal(result.builtFrom.find(p => p.id === 'a').builtFromRevision, f.revision);
+  const archive = join(f.root, 'plugins/a/vendor/fixture.tgz'), bytes = readFileSync(archive);
+  writeFileSync(archive, Buffer.concat([bytes, Buffer.from('changed')]));
+  assert.throws(() => f.prepare(), /归档内容.*不一致/);
+  writeFileSync(archive, bytes);
+  const moved = join(f.root, '.local/missing-vendor.tgz'); renameSync(archive, moved);
+  assert.throws(() => f.prepare(), /归档缺失/);
+  renameSync(moved, archive);
+  f.change('plugins/a/vendor/fixture.tgz', Buffer.concat([bytes, Buffer.from('committed change')]));
+  assert.throws(() => f.prepare(), /重建选集之外/);
+});
+
+test('untracked and ignored vendor archives cannot be inherited from a successful record', t => {
+  const f = fixture(t, { a: { 'vendor-fixture': 'file:vendor/fixture.tgz' } });
+  vendorInput(f.root);
+  assert.throws(() => f.prepare(), /已跟踪普通文件/);
+  writeFileSync(join(f.root, '.git/info/exclude'), 'plugins/a/vendor/\n');
+  assert.throws(() => f.prepare(), /已跟踪普通文件/);
+});
+
+test('file dependencies still reject external paths, directories and link dependencies', t => {
+  const f = fixture(t, { a: { 'vendor-fixture': 'file:vendor/fixture.tgz' } }, null, vendorInput);
+  for (const specifier of ['file:../c/vendor.tgz', 'file:vendor', 'link:vendor/fixture.tgz', 'file:vendor/%2e%2e/external.tgz']) {
+    const path = join(f.root, 'plugins/a/package.json'), pkg = read(path);
+    pkg.devDependencies['vendor-fixture'] = specifier;
+    f.change('plugins/a/package.json', JSON.stringify(pkg));
+    f.publish();
+    assert.throws(() => f.prepare(), /file:|link:/);
+  }
+});
+
+test('vendor symlinks do not qualify as tracked ordinary archive inputs', t => {
+  const f = fixture(t, { a: { 'vendor-fixture': 'file:vendor/fixture.tgz' } }, null, vendorInput);
+  const archive = join(f.root, 'plugins/a/vendor/fixture.tgz'), target = join(f.root, '.local/vendor-target.tgz');
+  renameSync(archive, target);
+  try { symlinkSync(target, archive, 'file'); }
+  catch (error) {
+    if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
+    renameSync(target, archive);
+    const vendor = dirname(archive), ordinary = join(f.root, 'plugins/a/vendor-original');
+    renameSync(vendor, ordinary);
+    symlinkSync(ordinary, vendor, 'junction');
+    t.diagnostic('Windows file symlinks require privileges; the equivalent in-plugin junction ancestor is rejected.');
+  }
+  assert.throws(() => f.prepare(), /普通归档|符号链接/);
 });
 
 test('unselected metadata drift fails before archive reuse', t => {

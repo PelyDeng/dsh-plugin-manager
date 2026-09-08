@@ -6,7 +6,7 @@
 
 ## 安装与作者操作
 
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。在工具目录执行 `pnpm add --ignore-workspace /path/to/plugin-manager-0.14.5.tgz`，随后使用 `pnpm exec dsh-plugin-manager`。包名不表示已发布到公共 registry。本 README 随工具版本交付。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。在工具目录执行 `pnpm add --ignore-workspace /path/to/plugin-manager-0.14.6.tgz`，随后使用 `pnpm exec dsh-plugin-manager`。包名不表示已发布到公共 registry。本 README 随工具版本交付。
 
 每个项目操作都须用 `--root` 指定项目根目录；配置、home 和产物使用相对路径时，都从这个目录计算。独立作者包根需有 package.json：有效 name/version、main、files、README、scripts.build/check、官方 dsh.bundle.patch，以及 `deepseekPlugin: { "schemaVersion": 3, "id": "my-plugin" }`。页面、探针、权限、认证与 kit 均不强制要求。构建产物可以由 build 生成。
 

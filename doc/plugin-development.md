@@ -17,16 +17,16 @@
 
 ### 1. 取得并安装工具
 
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者交付的 manager 0.14.5 tgz；需要统一身份时再取得 kit 0.14.5 tgz，按交付 SHA-256 核对文件。已公开归档见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)，目标版本没有附件时按下方源码步骤构建，不假定 npm 已发布。以下命令安装本地归档。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者交付的 manager 0.14.6 tgz；需要统一身份时再取得 kit 0.14.6 tgz，按交付 SHA-256 核对文件。已公开归档见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)，目标版本没有附件时按下方源码步骤构建，不假定 npm 已发布。以下命令安装本地归档。
 
 在工具目录执行，把占位路径替换成实际文件的绝对路径：
 
 ```sh
-pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.14.5.tgz"
+pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.14.6.tgz"
 pnpm exec dsh-plugin-manager --version
 ```
 
-**预期**：输出 manager 0.14.5。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
+**预期**：输出 manager 0.14.6。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
 
 ### 2. 选择示例，建立自己的仓库
 
@@ -46,7 +46,7 @@ pnpm install --ignore-workspace
 统一身份示例，在作者根执行以下命令安装实际 kit 归档，同时生成锁文件：
 
 ```sh
-pnpm add --ignore-workspace --save-dev "/absolute/path/plugin-kit-0.14.5.tgz"
+pnpm add --ignore-workspace --save-dev "/absolute/path/plugin-kit-0.14.6.tgz"
 ```
 
 **预期**：作者根生成自己的 pnpm-lock.yaml，应随源码保存。kit 是构建依赖并内嵌到应用；作者构建需能取得该 tgz，release 运行端不需要它的原始路径。希望从完整聊天应用开始时，见[完整问答应用复制步骤](#复制完整问答应用到独立仓库)。
@@ -105,7 +105,11 @@ pnpm list:plugins
 
 源码部署可用 `./build.sh --rebuild-plugins c` 或 `.\build.ps1 --rebuild-plugins c` 只重建指定插件，并复用其余已启用插件的旧归档；部署选集、复用条件及恢复方式见[部署说明](../deploy/README.md#服务器源码发版)。日常 `pnpm package --plugins c` 只生成 c 的交付清单，不会自动补入其他插件。
 
-可复用插件的构建输入须来自自身目录、受管共享源码，以及 `dependencies`、`devDependencies`、`optionalDependencies` 声明的本地依赖。读取其他插件源码也属于构建依赖，应通过本地包名和标准 `workspace:` 声明；间接依赖变化同样影响复用，匹配本地包名的 peer 依赖也会检查。`file:` / `link:` 路径依赖不提供复用保证，含有这类依赖时须全量构建。example 读取 auth 源码生成索引，因此把 auth 声明为开发依赖。任意脚本读取未声明目录、外部文件或环境产生的输入无法由 Git 差异证明；存在这种输入变化时应全量构建。
+可复用插件的构建输入须来自自身目录、受管共享源码，以及 `dependencies`、`devDependencies`、`optionalDependencies` 声明的本地依赖。读取其他插件源码也属于构建依赖，应通过本地包名和标准 `workspace:` 声明；间接依赖变化同样影响复用，匹配本地包名的 peer 依赖也会检查。example 读取 auth 源码生成索引，因此把 auth 声明为开发依赖。
+
+本地构建归档可声明为 `file:vendor/library-0.1.0.tgz`，但必须位于声明它的插件自身目录内，是已纳入 Git 的常规 `.tgz` / `.tar.gz` 文件。复用时核对旧、新提交中的 Git blob 一致，且磁盘字节与 Git 对象相符；归档及父目录不能是符号链接。跨目录、目录形式、未跟踪或仅在忽略目录中的归档，以及 `link:` 依赖仍不支持复用，须全量构建。这不改变最终发布包不能携带 `file:` 运行依赖的约束：本地归档用于构建，所需代码应内嵌到插件产物。
+
+任意脚本读取未声明目录、外部文件或环境产生的输入无法由 Git 差异证明；存在这种输入变化时应全量构建。
 
 插件构建由显式 build/check/pack 流程执行，不得用依赖安装钩子触发插件构建或修改产物。选择重建前会核验相关安装钩子；不能以“插件没有被选中”为由允许其安装钩子间接重建。
 
