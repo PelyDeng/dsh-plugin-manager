@@ -236,6 +236,8 @@ pnpm exec dsh-plugin-manager compose-release --root <交付根> --output release
 
 ## 来源与进一步阅读
 
+源码仓库的独立测试入口是根目录 `bash test-report.sh`：串联 auth/example 打包、真实宿主与本地模型替身测试、报告交付。先准备已构建的官方 CLI，可用 `--cli` 指定；不调用部署入口、不读取站点 env.conf。每次产物在 `.local/artifacts/test-report-*/`，交付本次 `delivery/`。后续重新打包不自动继承报告；其他业务插件需要自己的测试。完整前置条件和命令见 `packages/plugin-manager/VERIFICATION.md`。
+
 本 FAQ 由框架维护者维护，职责与示例应与下列公开资料及代码核对；在线 main 文档可能领先于安装版本，交付时以随包 README 和知识摘要为准。
 
 - [产品与导航](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/README.md)
