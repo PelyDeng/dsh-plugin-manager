@@ -22,10 +22,10 @@ export function guardTool(tool: ToolDefinition, authorize: ToolAuthorizer): Tool
 /** Mount authorized tools in the current plugin lifecycle and return their catalog entries. */
 export function createPluginTools(ctx: Context, options: { readonly permission: string; readonly authorize: ToolAuthorizer }) {
   return {
-    register(definition: ToolDefinition): ToolDescriptor {
+    register(definition: ToolDefinition, displayName?: string): ToolDescriptor {
       const tool = guardTool(definition, options.authorize)
       ctx.effect(() => ctx.tools.register(tool))
-      return { name: tool.name, description: tool.description, parameters: tool.parameters, permission: options.permission }
+      return { name: tool.name, ...(displayName?.trim() ? { displayName: displayName.trim() } : {}), description: tool.description, parameters: tool.parameters, permission: options.permission }
     },
   }
 }

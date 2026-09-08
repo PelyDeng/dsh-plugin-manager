@@ -104,7 +104,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     if (!agent || disposed || !conversation) throw new AccessError(403, '工具只允许当前示例会话调用。')
     access.assert(conversation.owner)
   } })
-  const tools = framework.tools.map(tool => toolRegistry.register(tool))
+  const toolNames: Record<string, string> = { example_search_framework: '搜索框架', example_read_framework: '读取源码' }
+  const tools = framework.tools.map(tool => toolRegistry.register(tool, toolNames[tool.name]))
   ctx.effect(() => registerPlugin(ctx, {
     id: manifest.deepseekPlugin.id, packageName: manifest.name, version: manifest.version,
     description: manifest.description, displayName: manifest.deepseekPlugin.displayName,

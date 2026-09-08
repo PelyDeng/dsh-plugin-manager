@@ -1,5 +1,5 @@
 /** Independent account UI; server authorization remains authoritative. */
-import { pageTools, pageUsers, highlightParts, localEntry } from './catalog-view.js'
+import { pageTools, pageUsers, highlightParts, localEntry, toolDisplayName } from './catalog-view.js'
 
 const $ = selector => document.querySelector(selector)
 let session = null
@@ -105,7 +105,7 @@ function pluginCard(plugin) {
   const preview = node('div', undefined, 'tool-preview')
   for (const tool of plugin.tools.slice(0, 3)) {
     const row = node('div', undefined, 'preview-row')
-    row.append(node('strong', tool.description || tool.name)); row.title = `${tool.name}：${tool.description}`
+    row.append(node('strong', toolDisplayName(tool))); row.title = tool.description
     preview.append(row)
   }
   if (!plugin.tools.length) preview.append(node('p', '此插件未注册工具。', 'muted small'))
@@ -164,10 +164,10 @@ function renderTools() {
     const summary = node('summary')
     const status = node('span', undefined, 'tool-status')
     status.append(node('span', undefined, 'status-dot enabled'), node('span', '已启用', 'enabled-label'))
-    summary.append(highlight(node('strong', undefined, 'tool-name'), tool.name, query), status, node('span', '⌄', 'tool-chevron'))
+    summary.append(highlight(node('strong', undefined, 'tool-name'), toolDisplayName(tool), query), status, node('span', '⌄', 'tool-chevron'))
     details.append(summary)
     const body = node('div', undefined, 'tool-body')
-    body.append(highlight(node('p', undefined, 'muted'), tool.description, query), node('p', `执行权限：${tool.permission}`, 'muted'), node('div', '参数定义', 'parameter-heading'), highlight(node('pre'), JSON.stringify(tool.parameters, null, 2), query))
+    body.append(highlight(node('p', undefined, 'muted'), `工具编码：${tool.name}`, query), highlight(node('p', undefined, 'muted'), tool.description, query), node('p', `执行权限：${tool.permission}`, 'muted'), node('div', '参数定义', 'parameter-heading'), highlight(node('pre'), JSON.stringify(tool.parameters, null, 2), query))
     details.append(body); return details
   }))
   if (!result.items.length) $('#tool-list').append(node('p', query.trim() ? '没有匹配的工具。试试工具名称、中文说明或参数名。' : '此插件未注册工具。', 'empty'))

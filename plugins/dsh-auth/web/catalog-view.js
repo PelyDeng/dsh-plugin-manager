@@ -1,11 +1,14 @@
 /** Pure catalog operations shared by the browser and focused tests. */
 export const TOOL_PAGE_SIZE = 15
 
-/** Match the displayed tool name, description, or serialized parameters. */
+/** Older third-party plugins may only supply a tool code. */
+export const toolDisplayName = tool => tool.displayName?.trim() || tool.name
+
+/** Match the display name, code, description, or serialized parameters. */
 export function filterTools(tools, query) {
   const needle = query.trim().toLocaleLowerCase()
   if (!needle) return tools
-  return tools.filter(tool => `${tool.name}\n${tool.description}\n${JSON.stringify(tool.parameters, null, 2)}`.toLocaleLowerCase().includes(needle))
+  return tools.filter(tool => `${toolDisplayName(tool)}\n${tool.name}\n${tool.description}\n${JSON.stringify(tool.parameters, null, 2)}`.toLocaleLowerCase().includes(needle))
 }
 
 /** Clamp pagination after a changed search, including an empty result. */
