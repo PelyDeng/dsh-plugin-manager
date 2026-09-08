@@ -6,6 +6,7 @@ import {DatabaseSync} from 'node:sqlite'
 import {mkdtempSync,rmSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
+import {conversationProviders} from '@dsh-plugin-manager/plugin-kit'
 const fixtures=[]
 afterEach(async()=>{for(const f of fixtures.splice(0))await f.close()})
 test('历史按时间和置顶分组；导出仅包含真实问答正文',()=>{
@@ -46,4 +47,20 @@ test('对话操作 HTTP 拒绝未登录、跨用户、外站、忙碌会话，�
  expect((await f.request('/conversation-action',{operation:'delete',ids:[h.id]})).status).toBe(200)
  expect((await f.request('/history?id='+h.id)).status).toBe(404)
  expect((await f.request('/chat',{message:'不得复活',conversationId:h.id})).status).toBe(404)
+})
+
+test('管理预览只读取本人日志；分页预览不启动智能体，移除同步归档并保留原日志',async()=>{
+ const logs=new Map(),f=await fixture({logs});fixtures.push(f)
+ const response=await f.request('/chat',{message:'预览问题'}),h=f.handles[0]
+ f.emit(h,'assistant/message',{message:{id:'answer',content:[{type:'reasoning',text:'思考依据'},{type:'text',text:'预览回答'}]}})
+ f.emit(h,'turn/end',{reason:{kind:'completed'}});await response.text()
+ const provider=conversationProviders(f.ctx).get('example'),alice={namespace:'user',userId:'alice',sessionId:'login-a'},bob={namespace:'user',userId:'bob',sessionId:'login-c'}
+ const before=JSON.stringify(logs.get(h.id)),handles=f.handles.length
+ expect(await provider.preview(alice,h.id)).toMatchObject({messages:[{role:'user',text:'预览问题'},{role:'assistant',text:'预览回答',reasoning:'思考依据'}]})
+ expect(f.handles.length).toBe(handles);expect(JSON.stringify(logs.get(h.id))).toBe(before)
+ await expect(provider.preview(bob,h.id)).rejects.toThrow('会话不存在')
+ expect((await provider.remove(alice,[h.id])).results).toEqual([{id:h.id,status:'removed'}])
+ expect(f.ctx.workspaceRegistry.archivedSessionIds).toContain(h.id);expect(JSON.stringify(logs.get(h.id))).toBe(before)
+ expect((await provider.list(alice,{offset:0,limit:30,q:'',state:''})).total).toBe(0)
+ expect((await provider.remove(alice,[h.id])).results[0].status).toBe('alreadyRemoved')
 })

@@ -209,9 +209,29 @@ try {
   await chat('重新登录后继续追问', alice, personal)
   assert.ok(JSON.stringify(requests.at(-1).messages).includes('个人模式问题'), 'resumed model request must contain previous personal question')
   const modelInput = JSON.stringify(requests.at(-1).messages)
-  for (const text of ['你是 DSH Plugin Manager 开发者接入助手', '第二个应用到底少写什么', 'compose-release', '可复制的开发提示词']) {
+  for (const text of ['你是 DSH Plugin Manager 开发者接入助手', '第二个应用到底少写什么', 'compose-release', '可复制的开发提示词', '会话管理', 'registerConversations']) {
     assert.ok(modelInput.includes(text), `Real DSH model request must contain shipped knowledge: ${text}`)
   }
+  const managementPath = '/auth/api/conversations?pluginId=example'
+  assert.equal((await request(managementPath, undefined, alice)).status, 200)
+  assert.ok((await (await request(managementPath, undefined, alice)).json()).items.some(item => item.id === personal))
+  assert.equal((await (await request(managementPath, undefined, bob)).json()).total, 0)
+  assert.equal((await request('/auth/api/conversations/preview?pluginId=example&id=' + personal, undefined, bob)).status, 404)
+  const callsBeforePreview = requests.length, summariesBefore = await list(alice)
+  const preview = await (await request('/auth/api/conversations/preview?pluginId=example&id=' + personal, undefined, alice)).json()
+  assert.ok(preview.messages.some(message => message.text.includes('个人模式问题')))
+  assert.equal(requests.length, callsBeforePreview, 'preview must not call the model')
+  assert.deepEqual(await list(alice), summariesBefore, 'preview must not touch plugin history')
+  const removed = await (await request('/auth/api/conversations/remove', { pluginId: 'example', ids: [personal] }, alice)).json()
+  assert.deepEqual(removed.results.map(item => item.status), ['removed'], JSON.stringify(removed))
+  assert.equal((await (await request(managementPath, undefined, alice)).json()).total, 0)
+  assert.equal((await request('/example/history?id=' + personal, undefined, alice)).status, 404)
+  assert.equal((await request('/example/chat', { message: '已移除会话不能复活', conversationId: personal }, alice)).status, 404)
+  assert.equal((await (await request('/auth/api/conversations/remove', { pluginId: 'example', ids: [personal] }, alice)).json()).results[0].status, 'alreadyRemoved')
+  await stop(); await start('authenticated'); alice = await login('alice')
+  assert.equal((await (await request(managementPath, undefined, alice)).json()).total, 0)
+  assert.equal((await (await request('/auth/api/conversations/remove', { pluginId: 'example', ids: [personal] }, alice)).json()).results[0].status, 'alreadyRemoved')
+  recordStage(['example', 'auth'], 'conversation-management-preview-archive-restart')
   recordStage(['example', 'auth'], 'example-authenticated')
   const result = { host: verificationIdentity({ command: process.execPath, prefix: [cli], cwd: operation }, { home }).host, hostVersion: run('--version'), realTgz: true, realAuth: true,
     stream: true, standaloneWithoutAuth: true, modeSwitch: 'off-on-off-on', crossUserDenied: true,

@@ -10,9 +10,11 @@
 | `@dsh-plugin-manager/plugin-kit/route-path` | 无宿主依赖的规范路由校验 |
 | `@dsh-plugin-manager/plugin-kit/model-key` | 固定 DeepSeek/智谱凭据校验、状态与 SHA-256 指纹；写入委托给官方 credentials 服务，不接受任意凭据引用 |
 | `@dsh-plugin-manager/plugin-kit/deepseek-key` | 默认 DeepSeek 凭据操作的兼容入口 |
-| `@dsh-plugin-manager/plugin-kit` | 上述访问、HTTP 和工具 API 的统一导出 |
+| `@dsh-plugin-manager/plugin-kit` | 上述 API，以及 `registerConversations`、只读预览、分页查询和官方归档的统一导出 |
 
 DSH 类型依赖是可选 peer，由使用相应接口的作者提供；只使用 access 或 route-path 不会加载工具运行实现。业务插件自行声明实际使用的 DSH/Cordis peer。
+
+kit 0.2.0 增加可选的[会话管理协议](../../doc/conversation-management.md)。插件维护本人 owner 索引和活动操作检查，auth 汇总分类、只读预览与批量移除。共享移除流程持久化 pending 围栏，调用官方归档并返回逐项结果；包含定时事件时复用宿主已注册的 schedule 投影校验，能力缺失则拒绝清理。
 
 工具通过 `createPluginTools(...).register(definition, '中文名称')` 声明简洁的目录显示名，随 `ToolDescriptor.displayName` 交给 auth 展示；`name` 继续作为模型调用编码。名称由各业务插件维护，不改变工具参数、描述或执行权限。未提供显示名的旧插件仍可登记，目录回退显示编码。
 

@@ -1,5 +1,9 @@
 # dsh-auth
 
+## 会话管理
+
+登录后通过左侧“会话管理”按已授权业务插件管理本人对话，支持搜索、日期与状态筛选、分页、右侧只读预览及批量删除。删除同步移除插件历史和官方 DSH 列表，底层记录仍保留；运行中的会话不可删除。完整行为、历史记录兼容及接入契约见[会话管理](../../doc/conversation-management.md)。
+
 通过管理器部署时，本插件按 `configuration.auth: provider` 提供认证，站点 origin 统一配置。实例配置为 `<DSH home>/plugins/auth/plugin.json`，不接受 `accessMode`；其他插件各自决定是否要求认证。配置与部署步骤见管理器包内 DELIVERY.md。
 
 可选统一认证插件，在宿主 WebServer 提供 `/auth` 页面、账号管理与逐插件授权。默认纳入插件选集，不改变业务插件的访问模式，不替代 DSH 官方控制台认证。

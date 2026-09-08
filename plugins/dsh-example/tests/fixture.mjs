@@ -10,6 +10,8 @@ export async function fixture({ mode, autoReply = false, persistenceApi = 'handl
   const actors = { alice: { namespace: 'user', userId: 'alice', sessionId: 'login-a' },
     other: { namespace: 'user', userId: 'alice', sessionId: 'login-b' }, bob: { namespace: 'user', userId: 'bob', sessionId: 'login-c' } }
   const ctx = {
+    get(key) { return this[key] },
+    workspaceRegistry: { archivedSessionIds: [], async archiveSession(id) { if (!logs.has(id)) throw new Error('unknown session'); if (!this.archivedSessionIds.includes(id)) this.archivedSessionIds.push(id) } },
     messageFeedback:feedbackService,
     on(name, listener) { const group = listeners.get(name) ?? new Set(); group.add(listener); listeners.set(name, group); return () => group.delete(listener) },
     emit(name, ...args) { for (const f of [...listeners.get(name) ?? []]) f(...args) },
