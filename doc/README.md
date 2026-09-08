@@ -19,7 +19,7 @@
 2. [内部工作区开发](plugin-development.md#内部工作区开发)——保留 `plugins/*` 扫描、批量任务及 development/link。
 3. [复制完整问答应用](plugin-development.md#复制完整问答应用到独立仓库)——将流式对话、历史与知识示例迁入自己的仓库。
 4. [插件配置规范](plugin-configuration.md)——声明、实例参数和运行配置。
-5. [kit 接口](../packages/plugin-kit/README.md)——接入身份、权限、HTTP 与工具登记。
+5. [kit 接口](../packages/plugin-kit/README.md)——接入身份、权限、HTTP、工具登记及官方会话模型选择。
 6. [聊天风格 skill](../plugins/dsh-example/skills/dsh-chat-style/SKILL.md)——统一聊天视觉、思考预览、流式行为和回答工具栏。
 
 发布版本遵循[开发约定](../AGENTS.md)：功能大改升级次版本并归零补丁号，小改升级补丁号；`1.0.0` 及以上仅在用户明确指定里程碑时使用。公共框架以根 `package.json` 的 `version` 为唯一源，manager、kit、auth、example 使用统一发布版本；定制插件独立版本化。版本设置、文档模板及同步校验见[版本管理](versioning.md)。
@@ -36,7 +36,7 @@
 
 | 需要查什么 | 文档 |
 | --- | --- |
-| 登录、官方控制台认证、模型密钥与首次问答 | [常见问题 FAQ](FAQ.md) |
+| 登录、官方控制台认证、默认模型、模型密钥与首次问答 | [常见问题 FAQ](FAQ.md) |
 | 常用命令与启动排错 | [体验手册速查](getting-started.md#命令速查与求助) |
 | CLI 完整参数与行为 | [管理器参考](../packages/plugin-manager/README.md) |
 | 框架和官方 DSH 的职责 | [架构与包职责](architecture.md) |

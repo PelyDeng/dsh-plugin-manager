@@ -14,7 +14,7 @@ cd dsh-plugin-manager
 
 Windows 将最后一行换成 `.\build.ps1`。在文件资源管理器打开仓库目录，选择“在终端中打开”并使用 PowerShell，即可执行该命令并保留完整输出；也可通过 `build.ps1` 的“使用 PowerShell 运行”菜单启动。需要传参数或查看失败原因时使用终端。在执行策略阻止运行时，可以仅为这一次调用执行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1`，不修改全局执行策略。
 
-Docker 必须运行 Linux 容器，只接受本机 unix/npipe endpoint；远端 context、SSH/TCP endpoint 不属于本入口的部署范围。一次发布固定 Docker endpoint，并记录引擎身份和架构；切换引擎后不能直接继续原 `--resume`。Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge：官方 DSH 仍监听 `127.0.0.1`，容器桥接 IPv4 地址的同端口通过 TCP 转发至它，宿主只向 `127.0.0.1` 发布端口。同 Docker 网络属于信任边界，不表示公网隔离；原生 Linux 引擎保留 host 网络。macOS 流程尚未完成真机验收。
+Docker 必须运行 Linux 容器，只接受本机 unix/npipe endpoint；远端 context、SSH/TCP endpoint 不属于本入口的部署范围。一次发布固定 Docker endpoint，并记录引擎身份和架构；切换引擎后不能直接继续原 `--resume`。Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge：官方 DSH 仍监听 `127.0.0.1`，容器桥接 IPv4 地址的同端口通过 TCP 转发至它，宿主只向 `127.0.0.1` 发布端口。同 Docker 网络属于信任边界，不表示公网隔离；原生 Linux 引擎保留 host 网络。macOS 的实际 Docker 站点部署尚未完成真机验收；CI 测试不等同于部署验收。
 
 源码检出阶段使用递归克隆带齐仓库提供的子模块；已有完整源码无需重复克隆。普通 Git 克隆只取得子模块版本引用，实际源码缺失时，部署脚本提示检出不完整，不自行补拉。镜像记录实际使用的源码提交，便于定位构建来源，不拿它与预设版本作准入比较。
 
@@ -28,7 +28,7 @@ Docker 必须运行 Linux 容器，只接受本机 unix/npipe endpoint；远端 
 
 插件 /auth 登录、官方控制台根路径认证和模型 API 密钥分别管理。根路径提示 `dsh web authentication required; reopen the URL printed by dsh web.` 时，在服务器私有终端读取本次启动生成的 `.local/data/dsh-web-auth-url.txt`，仅在自己的浏览器打开完整地址。自定义路径按生成的 deployment.json 的 authUrlFile 核对；不要分享其中的令牌，详情见 [FAQ](FAQ.md)。
 
-框架模型密钥有两种管理方式：在私有 `.local/env.conf` 填写 `DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` 时，以文件为准，网页只读，修改后受控重启；字段留空时沿用官方凭据，不删除已有值，也不清除继承环境覆盖。
+框架模型密钥有两种管理方式：在私有 `.local/env.conf` 填写 `DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` 时，以文件为准，对应密钥在网页只读，修改后受控重启；字段留空时沿用官方凭据，不删除已有值，也不清除继承环境覆盖。
 
 没有环境覆盖时，管理员完成初始改密后可在 /auth 的“模型设置”管理 DeepSeek 或智谱。页面只返回状态与不可逆指纹，不返回密钥。命令行只支持 DeepSeek，在仓库根执行后隐藏输入：
 
@@ -40,7 +40,7 @@ Windows 使用 `node deploy/scripts/set-api-key.mjs --config .local/deployment.j
 
 密钥不放进命令参数。网页和脚本复用官方凭据服务，保留其他凭据、账号和历史；默认官方文件监听使存储更新无需重启。文件或其他启动环境覆盖时拒绝写入。Compose 脚本核验活动容器与 home，以容器用户执行；独立 CLI 要以数据所有者运行，并指向已安装的兼容官方 CLI。自定义存储或关闭监听时使用当前运行服务的网页入口。
 
-密钥保存不验证模型可用性、不创建路由、不选择默认模型。智谱等提供方需要在同一 DSH 的官方设置或 patch 中配置相应路由和凭据引用。随后在 /example 新建对话验收；详见[统一配置](framework-configuration.md)与[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
+密钥保存不验证模型可用性、不创建路由、不选择默认模型。在同页上方的模型卡片选择新会话默认模型后会自动保存，无需重启；已有对话和分支保留官方记录中的模型选择。智谱等提供方需要在同一 DSH 的官方设置或 patch 中配置相应路由和凭据引用。随后在 /example 新建对话验收；详见[统一配置](framework-configuration.md)与[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
 
 ## 配置归属
 
@@ -66,7 +66,7 @@ git pull --ff-only --recurse-submodules
 ./build.sh
 ```
 
-Windows 将最后一行换成 `.\build.ps1`。更新代码时按需同步子模块；版本选择由源码维护者决定。部署从干净的已提交源码重新构建管理器及选中插件。宿主源码未变化时复用已有宿主层；本地宿主源码更新后构建新的镜像，不因此拒绝部署。镜像与归档准备完成后，先通过 `check-compose` 核验最终挂载和容器用户权限，再停止旧服务、核验原容器及其持久挂载，随后安装并等待健康检查。重复运行沿用已有插件设置和数据，不执行重置。
+Windows 将最后一行换成 `.\build.ps1`。更新代码时按需同步子模块；版本选择由源码维护者决定。部署从干净的已提交源码重新构建管理器及选中插件。宿主源码未变化时复用已有宿主层；本地宿主源码更新后构建新的镜像，不因此拒绝部署。镜像与归档准备完成后，先通过 `check-compose` 核验最终挂载和容器用户权限，再停止旧服务、核验原容器及其持久挂载，随后安装并等待健康检查。重复运行沿用已有插件设置和数据，不执行重置。源码更新不自动创建全量运行数据备份；发布记录、原归档及配置副本不能替代数据备份。需要数据恢复能力时，应在更新前独立备份并验证恢复，保留已有备份。
 
 | 情况 | 行为与处理 |
 | --- | --- |

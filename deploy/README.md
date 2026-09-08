@@ -8,7 +8,7 @@ Windows、macOS、Linux 共用一套源码部署流程。已安装 Node.js、Git
 ./build.sh
 ```
 
-Windows PowerShell 使用 `.\build.ps1`，不需要 Bash；资源管理器中的启动方式见[一键部署](../doc/first-deployment.md)。旧 `bash deploy/build.sh` 及 `deploy/build.ps1` 入口继续支持；参数一致，可使用 `--help`、`--config <文件>`、`--resume`。脚本检查基础软件而不安装它们，pnpm 按仓库锁定版本自动准备。仅接受本机 Docker unix/npipe endpoint，不支持远端或 TCP endpoint、Windows 容器。macOS 流程尚未完成真机验收。
+Windows PowerShell 使用 `.\build.ps1`，不需要 Bash；资源管理器中的启动方式见[一键部署](../doc/first-deployment.md)。旧 `bash deploy/build.sh` 及 `deploy/build.ps1` 入口继续支持；参数一致，可使用 `--help`、`--config <文件>`、`--resume`。脚本检查基础软件而不安装它们，pnpm 按仓库锁定版本自动准备。仅接受本机 Docker unix/npipe endpoint，不支持远端或 TCP endpoint、Windows 容器。macOS 的实际 Docker 站点部署尚未完成真机验收；CI 测试不等同于部署验收。
 
 终端显示各步骤的进度和结果，最右侧显示 `耗时 HH:MM:SS.s`；执行中每 100 毫秒刷新，成功或失败后保留该步骤的实际耗时，不包含补满进度条的动画时间。耗时按每个步骤分别计算。执行中的百分比是等待提示，只有成功后才显示 100%，不表示已处理的数据比例或剩余时间。重定向输出时只记录开始和结果，结果包含最终耗时。
 
@@ -25,7 +25,7 @@ Windows 将最后一行换成 `.\build.ps1`。首次自动创建 `.local/env.con
 
 脚本自动准备锁定的 pnpm，安装依赖，构建和检查管理器及 `plugins` 列出的全部插件，并打包发布清单。需要宿主镜像时直接使用仓库已提供的官方源码构建；源码不完整时提示缺失，不自动拉取，也不要求与预设锁定版本一致。宿主源码未变时复用已有宿主层，安装本次构建的 manager。默认使用本机不可变镜像 ID，仅设置 `publishImage` 时推送镜像仓库。构建记录使用已提交源码，无需分别选择组件版本。
 
-站点插件启停、认证配置及持久数据继续沿用；修改数据路径或 profile 需要显式迁移。
+站点插件启停、认证配置及持久数据继续沿用；修改数据路径或 profile 需要显式迁移。源码更新不自动创建全量运行数据备份；发布产物、操作记录和私有配置副本不代替数据备份。需要数据恢复能力时，在更新前独立备份并验证恢复；已有备份继续保留。
 
 新归档使用内容摘要命名。发布目录同时保留上一份清单引用的已校验归档，供 pnpm 在替换旧依赖引用时解析；部署目标仍只来自新清单，不重新启用已停用的插件。
 
@@ -76,7 +76,7 @@ node deploy/scripts/deployment.mjs start --plugins "auth,example" --manifest .lo
 
 插件如声明 `runtimeConfig`，其配置默认从 `home/plugins/<id>/env.conf` 读取，可由 `instances.<id>.runtimeConfig` 覆盖。配置内容不进入发布包；`configRevision` 由维护者递增以声明需要重新应用的配置。
 
-文件密钥非空时文件优先、网页只读，修改需受控重启；留空沿用官方来源且不删除旧值。无覆盖时，DeepSeek/智谱密钥由管理员在 `/auth` →“模型设置”填写或更换，也可执行 `bash deploy/scripts/set-api-key.sh --config .local/deployment.json` 隐藏输入。Windows 入口为 `node deploy/scripts/set-api-key.mjs --config .local/deployment.json`。脚本仅支持 DeepSeek；网页和脚本共用官方凭据服务，写入选定 home 的 `.credentials.yaml`，无需重启；页面只显示状态与不可逆指纹。脚本不选择模型，不把密钥放入 argv。运行条件、环境只读与问答验证见[首次登录与模型密钥](../doc/first-deployment.md#首次登录与模型密钥)。官方认证地址写入私有 `authUrlFile`，不输出令牌；插件 Auth 登录不会自动完成官方控制台认证，常见提示见 [FAQ](../doc/FAQ.md)。
+文件密钥非空时文件优先、对应密钥在网页只读，修改需受控重启；留空沿用官方来源且不删除旧值。无覆盖时，DeepSeek/智谱密钥由管理员在 `/auth` →“模型设置”填写或更换，也可执行 `bash deploy/scripts/set-api-key.sh --config .local/deployment.json` 隐藏输入。Windows 入口为 `node deploy/scripts/set-api-key.mjs --config .local/deployment.json`。脚本仅支持 DeepSeek；网页和脚本共用官方凭据服务，写入选定 home 的 `.credentials.yaml`，无需重启；页面只显示状态与不可逆指纹。管理员可在同页上方的模型卡片选择新会话默认模型，保存到官方宿主设置且无需重启；已有对话和分支沿用官方记录中的模型选择。脚本不选择模型，不把密钥放入 argv。运行条件、环境只读与问答验证见[首次登录与模型密钥](../doc/first-deployment.md#首次登录与模型密钥)。官方认证地址写入私有 `authUrlFile`，不输出令牌；插件 Auth 登录不会自动完成官方控制台认证，常见提示见 [FAQ](../doc/FAQ.md)。
 
 ## 安装与恢复
 
