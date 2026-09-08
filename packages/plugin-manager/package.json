@@ -1,6 +1,6 @@
 {
   "name": "@dsh-plugin-manager/plugin-manager",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "Package and deploy independent DSH applications with optional shared access management",
   "type": "module",
   "license": "Apache-2.0",

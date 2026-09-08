@@ -77,7 +77,7 @@ Node CLI 路径需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar
 ./build.sh
 ```
 
-Windows PowerShell 使用 `.\build.ps1`，不需要 Bash；macOS/Linux 使用上面的 `./build.sh`。旧 `bash deploy/build.sh` 入口继续支持。仅支持本机 Docker unix/npipe endpoint，拒绝远端或 TCP endpoint、Windows 容器。macOS 流程尚未完成真机验收。
+Windows PowerShell 使用 `.\build.ps1`，不需要 Bash；macOS/Linux 使用上面的 `./build.sh`。旧 `bash deploy/build.sh` 入口继续支持。仅支持本机 Docker unix/npipe endpoint，拒绝远端或 TCP endpoint、Windows 容器。macOS 的实际 Docker 站点部署尚未完成真机验收；CI 测试不等同于部署验收。
 
 脚本生成本机配置、构建宿主及插件并启动，默认访问 `http://127.0.0.1:7902`。文件资源管理器中的运行方法、远程浏览器访问及失败恢复见一键部署文档。
 
@@ -87,7 +87,7 @@ Windows PowerShell 使用 `.\build.ps1`，不需要 Bash；macOS/Linux 使用上
 
 ### 第三步：完成一次问答
 
-运行前核对私有 `.local/env.conf` 的地址与信任域名；根 `env.conf` 已填写固定非秘密默认值，真实站点配置只填私有文件。首次自动生成会写入本机平台默认值，已有配置不覆盖。DeepSeek/智谱密钥非空时文件优先、网页只读，修改需受控重启；留空沿用官方来源且不删除旧值。没有环境覆盖时，管理员可在 `/auth` 的“模型设置”管理两种密钥，写入官方存储默认无需重启；页面只显示状态与不可逆指纹。详见[统一配置](doc/framework-configuration.md)。默认模型选择或其他提供方仍由同一实例的官方模型设置管理。随后在 `/example` 新建对话，确认收到流式回答并能恢复历史。详细操作见[模型准备](packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
+运行前核对私有 `.local/env.conf` 的地址与信任域名；根 `env.conf` 已填写固定非秘密默认值，真实站点配置只填私有文件。首次自动生成会写入本机平台默认值，已有配置不覆盖。DeepSeek/智谱密钥非空时文件优先、对应密钥在网页只读，修改需受控重启；留空沿用官方来源且不删除旧值。没有环境覆盖时，管理员可在 `/auth` 的“模型设置”管理两种密钥，写入官方存储默认无需重启；页面只显示状态与不可逆指纹。详见[统一配置](doc/framework-configuration.md)。管理员可在同页上方的模型卡片选择新会话默认模型，保存到同一实例的官方设置，无需重启；其他提供方的凭据与路由仍在官方设置或 patch 中管理。已有对话和分支保留官方会话记录中的模型选择，不随新默认切换。随后在 `/example` 新建对话，确认收到流式回答并能恢复历史。详细操作见[模型准备](packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
 
 ## 开发自己的插件
 
@@ -128,7 +128,7 @@ pnpm package --plugins "auth,example" --output .local/artifacts/release/plugins
 
 更新时保留原始分项发布目录，替换目标应用后重新组合全部需要保留的应用；沿用实例 home，并按指南备份、停止和启动。两应用演练见[加入第二个应用](doc/getting-started.md#进阶加入第二个应用)。
 
-使用完整源码部署时，更新仓库后仍执行对应平台的根 build 脚本。该入口直接使用已有官方源码，不主动拉取或要求匹配预设版本，默认无需镜像仓库。产物准备后的失败使用原输入加 `--resume`；该选项继续部署，不自动回滚业务数据。配置、源码遗留锁与恢复说明集中在[部署文档](deploy/README.md)。
+使用完整源码部署时，更新仓库后仍执行对应平台的根 build 脚本。该入口直接使用已有官方源码，不主动拉取或要求匹配预设版本，默认无需镜像仓库。产物准备后的失败使用原输入加 `--resume`；该选项继续部署，不自动回滚业务数据。源码更新不自动创建全量运行数据备份；需恢复数据时应事先独立备份并验证恢复。配置、源码遗留锁与恢复说明集中在[部署文档](deploy/README.md)。
 
 ## 常见问题
 

@@ -8,6 +8,7 @@ const direct = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(imp
 if (direct && (process.argv.length !== 4 || process.argv[2] !== '--root' || !process.argv[3] || process.argv[3].startsWith('--'))) throw new Error('用法：build-reference.mjs --root <框架根目录>');
 const frameworkRoot = direct ? resolve(process.argv[3]) : fileURLToPath(new URL('../../../', import.meta.url));
 const { assertPublicFrameworkConfig } = await import(pathToFileURL(join(frameworkRoot, 'packages/plugin-manager/src/framework-config.mjs')).href);
+const { frameworkVersion, versionTemplates } = await import(pathToFileURL(join(frameworkRoot, 'scripts/version.mjs')).href);
 
 const directories = ['packages/plugin-manager', 'packages/plugin-kit', 'plugins/dsh-auth', 'plugins/dsh-example', 'scripts', 'deploy', 'integrations', 'examples', 'doc', '.github'];
 const ignored = new Set(['node_modules', 'dist', 'lib', '.local', '.git', 'coverage', 'assets', 'vendor']);
@@ -17,11 +18,13 @@ const metadata = new Set(['package.json', 'tsconfig.json', 'site.defaults.json',
 export function buildReference(root, output) {
   root = resolve(root);
   if (JSON.parse(readFileSync(join(root, 'package.json'))).name !== 'dsh-plugin-manager-workspace') throw new Error('源码索引需要显式指定框架 workspace 根目录。');
+  frameworkVersion(root);
   const files = [];
   function visit(path) {
     for (const entry of readdirSync(join(root, path), { withFileTypes: true })) {
       if (ignored.has(entry.name)) continue;
       const relative = `${path}/${entry.name}`;
+      if (relative === 'doc/releases') continue;
       if (entry.isSymbolicLink()) throw new Error('公开源码索引不接受符号链接。');
       if (entry.isDirectory()) visit(relative);
       else if (extensions.has(extname(entry.name)) || metadata.has(entry.name)) {
@@ -34,7 +37,8 @@ export function buildReference(root, output) {
     for (let count = 1; count <= parts.length; count++) if (lstatSync(join(root, ...parts.slice(0, count))).isSymbolicLink()) throw new Error('公开源码索引不接受符号链接。');
     visit(path);
   }
-  for (const path of ['README.md', 'README.en.md', 'package.json', 'pnpm-workspace.yaml', 'env.conf', 'build.sh', 'build.ps1', 'test-report.sh']) if (existsSync(join(root, path))) {
+  // Private integrations replace the root build wrappers; index the shared deploy entries instead.
+  for (const path of ['README.md', 'README.en.md', 'package.json', 'pnpm-workspace.yaml', 'env.conf', 'test-report.sh', ...versionTemplates]) if (existsSync(join(root, path))) {
     if (lstatSync(join(root, path)).isSymbolicLink()) throw new Error('公开源码索引不接受符号链接。');
     const text = readFileSync(join(root, path), 'utf8');
     if (path === 'env.conf') assertPublicFrameworkConfig(text);

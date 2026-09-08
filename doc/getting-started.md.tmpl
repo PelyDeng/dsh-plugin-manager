@@ -193,7 +193,7 @@ pnpm exec dsh-plugin-manager health --root "$lab/site" --config .local/deploymen
 
 ![插件账号登录：登录后只能访问获授权的应用](assets/login.png)
 
-管理员可在 `/auth` 的“模型设置”管理 DeepSeek/智谱，写入官方存储默认无需重启。独立工具可显式选用私有 env；对应密钥非空时文件优先、网页只读，修改需受控重启，留空沿用官方来源。默认模型选择及其他提供方在**同一个 home** 的官方模型设置中管理；密钥不要放进 plugin.json、命令参数或截图。操作见[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
+管理员可在 `/auth` 的“模型设置”管理 DeepSeek/智谱，写入官方存储默认无需重启。独立工具可显式选用私有 env；对应密钥非空时文件优先、网页只读，修改需受控重启，留空沿用官方来源。同页默认模型卡片从官方目录选择并保存到**同一个 home** 的官方设置，无需重启；接入共享模型接口的新会话采用该默认，旧会话按持久化记录恢复。其他提供方仍在官方模型设置中管理；密钥不要放进 plugin.json、命令参数或截图。操作见[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
 
 ![官方控制台：设置中的模型页管理提供方凭据，启动环境提供的密钥不能在此覆盖](assets/model-settings.png)
 
@@ -278,4 +278,4 @@ flowchart LR
 
 先区分**安装成功 → 宿主监听 → 应用就绪 → 真实业务完成**。401/303 查登录，403 查授权/origin，503 查启动依赖，404 查路由和启用；探针通过但问答失败，查同 home 的模型。不要用删数据、清 pending 或关闭鉴权试错。
 
-更多问题见随助手发布的[FAQ](../plugins/dsh-example/knowledge/guide.md)；把需求交给其他 AI，复制[五种开发提示词](../plugins/dsh-example/knowledge/prompts.md)。求助提供脱敏错误、命令、目录角色、版本、候选 ID 和认证模式，不提供凭据、Cookie 或客户数据。
+更多问题见随助手发布的[FAQ](../plugins/dsh-example/knowledge/guide.md)；把需求交给其他 AI，复制[开发提示词](../plugins/dsh-example/knowledge/prompts.md)。求助提供脱敏错误、命令、目录角色、版本、候选 ID 和认证模式，不提供凭据、Cookie 或客户数据。

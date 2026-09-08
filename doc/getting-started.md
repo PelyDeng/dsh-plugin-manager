@@ -65,7 +65,7 @@ dsh-lab/
    └─ .local/      deployment.json、data/dsh-home、运行记录
 ```
 
-**取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager 0.14.0、kit 0.14.0 tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。仅消费现成发布物的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
+**取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager 0.14.1、kit 0.14.1 tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。仅消费现成发布物的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
 
 ```sh
 git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin-manager.git framework
@@ -96,11 +96,11 @@ lab="$(dirname "$framework")"
 两个终端后续均使用以下命令；新终端需重新设置这两个变量：
 
 ```sh
-pnpm --filter @dsh-plugin-manager/plugin-manager pack --out "$framework/.local/artifacts/tools/plugin-manager-0.14.0.tgz"
-pnpm --filter @dsh-plugin-manager/plugin-kit pack --out "$framework/.local/artifacts/tools/plugin-kit-0.14.0.tgz"
+pnpm --filter @dsh-plugin-manager/plugin-manager pack --out "$framework/.local/artifacts/tools/plugin-manager-0.14.1.tgz"
+pnpm --filter @dsh-plugin-manager/plugin-kit pack --out "$framework/.local/artifacts/tools/plugin-kit-0.14.1.tgz"
 node -e "for (const p of ['../tools','../site/incoming']) require('fs').mkdirSync(p,{recursive:true})"
 cd ../tools
-pnpm add --ignore-workspace "$framework/.local/artifacts/tools/plugin-manager-0.14.0.tgz"
+pnpm add --ignore-workspace "$framework/.local/artifacts/tools/plugin-manager-0.14.1.tgz"
 pnpm exec dsh-plugin-manager --version
 cd "$framework/deepseek-harness"
 pnpm install --frozen-lockfile
@@ -109,7 +109,7 @@ pnpm dsh --version
 cd "$lab/tools"
 ```
 
-**预期**：tools 中能运行 manager 0.14.0，deepseek-harness 中能运行官方 CLI。宿主使用自身 `packageManager` 与锁文件（当前源码为 pnpm 11.7.0），和框架 pnpm 11.19.0 分开安装。按宿主提示处理必要的依赖构建许可。源码版本由本次检出的 gitlink 决定，不用旧 npm CLI 替代。后文管理器命令均在 tools 目录运行；宿主源码构建步骤与[官方源码说明](https://github.com/deepseek-ai/deepseek-harness/blob/d347e703908d0406b7a7ef80e3a0e594d86b2215/README.md#run-from-source)一致。
+**预期**：tools 中能运行 manager 0.14.1，deepseek-harness 中能运行官方 CLI。宿主使用自身 `packageManager` 与锁文件（当前源码为 pnpm 11.7.0），和框架 pnpm 11.19.0 分开安装。按宿主提示处理必要的依赖构建许可。源码版本由本次检出的 gitlink 决定，不用旧 npm CLI 替代。后文管理器命令均在 tools 目录运行；宿主源码构建步骤与[官方源码说明](https://github.com/deepseek-ai/deepseek-harness/blob/d347e703908d0406b7a7ef80e3a0e594d86b2215/README.md#run-from-source)一致。
 
 ## 2. 打包第一个应用
 
@@ -195,7 +195,7 @@ pnpm exec dsh-plugin-manager health --root "$lab/site" --config .local/deploymen
 
 ![插件账号登录：登录后只能访问获授权的应用](assets/login.png)
 
-管理员可在 `/auth` 的“模型设置”管理 DeepSeek/智谱，写入官方存储默认无需重启。独立工具可显式选用私有 env；对应密钥非空时文件优先、网页只读，修改需受控重启，留空沿用官方来源。默认模型选择及其他提供方在**同一个 home** 的官方模型设置中管理；密钥不要放进 plugin.json、命令参数或截图。操作见[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
+管理员可在 `/auth` 的“模型设置”管理 DeepSeek/智谱，写入官方存储默认无需重启。独立工具可显式选用私有 env；对应密钥非空时文件优先、网页只读，修改需受控重启，留空沿用官方来源。同页默认模型卡片从官方目录选择并保存到**同一个 home** 的官方设置，无需重启；接入共享模型接口的新会话采用该默认，旧会话按持久化记录恢复。其他提供方仍在官方模型设置中管理；密钥不要放进 plugin.json、命令参数或截图。操作见[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
 
 ![官方控制台：设置中的模型页管理提供方凭据，启动环境提供的密钥不能在此覆盖](assets/model-settings.png)
 
@@ -215,7 +215,7 @@ pnpm exec dsh-plugin-manager health --root "$lab/site" --config .local/deploymen
 cd "$framework"
 node -e "const fs=require('fs'); if(fs.existsSync('../second')) throw Error('second 已存在，请换新目录'); fs.cpSync('examples/standalone-kit','../second',{recursive:true})"
 cd ../second
-pnpm add --ignore-workspace --save-dev "$framework/.local/artifacts/tools/plugin-kit-0.14.0.tgz"
+pnpm add --ignore-workspace --save-dev "$framework/.local/artifacts/tools/plugin-kit-0.14.1.tgz"
 cd ../tools
 pnpm exec dsh-plugin-manager list --root "$lab/second" --package .
 pnpm exec dsh-plugin-manager pack --root "$lab/second" --package . --output "$lab/site/incoming/second-v1"
@@ -280,4 +280,4 @@ flowchart LR
 
 先区分**安装成功 → 宿主监听 → 应用就绪 → 真实业务完成**。401/303 查登录，403 查授权/origin，503 查启动依赖，404 查路由和启用；探针通过但问答失败，查同 home 的模型。不要用删数据、清 pending 或关闭鉴权试错。
 
-更多问题见随助手发布的[FAQ](../plugins/dsh-example/knowledge/guide.md)；把需求交给其他 AI，复制[五种开发提示词](../plugins/dsh-example/knowledge/prompts.md)。求助提供脱敏错误、命令、目录角色、版本、候选 ID 和认证模式，不提供凭据、Cookie 或客户数据。
+更多问题见随助手发布的[FAQ](../plugins/dsh-example/knowledge/guide.md)；把需求交给其他 AI，复制[开发提示词](../plugins/dsh-example/knowledge/prompts.md)。求助提供脱敏错误、命令、目录角色、版本、候选 ID 和认证模式，不提供凭据、Cookie 或客户数据。

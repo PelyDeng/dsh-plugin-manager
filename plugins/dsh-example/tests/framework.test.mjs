@@ -1,10 +1,12 @@
 import { expect, test } from 'vitest'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fixture } from './fixture.mjs'
 import { buildReference } from '../scripts/build-reference.mjs'
 import { renderFrameworkConfig } from '../../../packages/plugin-manager/src/framework-config.mjs'
+import { referenceWorkspace } from './reference-fixture.mjs'
+import { versionTemplates } from '../../../scripts/version.mjs'
 
 test('authorized conversations can cite actual source, but cannot read runtime files or act as another Agent', async () => {
   const f = await fixture({ mode: 'authenticated' })
@@ -28,10 +30,9 @@ test('authorized conversations can cite actual source, but cannot read runtime f
 })
 
 test('source snapshot includes all public framework layers and excludes private plugins and runtime configuration', () => {
-  const root = mkdtempSync(join(tmpdir(), 'example-public-reference-'))
+  const root = referenceWorkspace()
   const output = join(root, 'out.json')
   try {
-    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'dsh-plugin-manager-workspace' }))
     for (const name of ['README.md', 'README.en.md']) writeFileSync(join(root, name), 'public')
     for (const path of ['packages/plugin-manager/src', 'packages/plugin-kit/src', 'plugins/dsh-auth/src', 'plugins/dsh-example/src', 'plugins/dsh-blog-assistant/src', 'deploy', '.local']) {
       mkdirSync(join(root, path), { recursive: true }); writeFileSync(join(root, path, 'implementation.mjs'), `// ${path}`)
@@ -39,6 +40,14 @@ test('source snapshot includes all public framework layers and excludes private 
     writeFileSync(join(root, 'plugins/dsh-example', 'config.json'), '{"credential":"private-fixture"}')
     mkdirSync(join(root, '.github/workflows'), { recursive: true })
     writeFileSync(join(root, '.github/workflows/check.yml'), 'name: Public checks')
+    mkdirSync(join(root, 'doc/releases'), { recursive: true })
+    writeFileSync(join(root, 'doc/releases/v0.1.0.md'), 'historical-release-fixture')
+    writeFileSync(join(root, 'doc/unregistered.md.tmpl'), 'unregistered-template-fixture')
+    writeFileSync(join(root, 'plugins/dsh-blog-assistant/private.md.tmpl'), 'private-template-fixture')
+    for (const name of ['build.sh', 'build.ps1']) {
+      writeFileSync(join(root, name), 'private-entry-fixture')
+      writeFileSync(join(root, 'deploy', name), 'shared-public-entry-fixture')
+    }
     writeFileSync(join(root, 'packages/plugin-kit/src/types.d.mts'), 'export type Identity = string')
     const publicTemplate = renderFrameworkConfig()
     writeFileSync(join(root, 'env.conf'), publicTemplate)
@@ -55,6 +64,13 @@ test('source snapshot includes all public framework layers and excludes private 
     expect(value.files.some(file => file.path.startsWith('.local/'))).toBe(false)
     expect(value.files.some(file => file.path === 'env.conf')).toBe(true)
     expect(value.files.some(file => file.path === 'test-report.sh')).toBe(true)
+    for (const path of versionTemplates) expect(value.files.find(file => file.path === path).text).toContain('{{FRAMEWORK_VERSION}}')
+    expect(value.files.some(file => file.path.startsWith('doc/releases/'))).toBe(false)
+    for (const name of ['build.sh', 'build.ps1']) {
+      expect(value.files.some(file => file.path === name)).toBe(false)
+      expect(value.files.find(file => file.path === `deploy/${name}`).text).toBe('shared-public-entry-fixture')
+    }
+    for (const marker of ['historical-release-fixture', 'private-entry-fixture', 'unregistered-template-fixture', 'private-template-fixture']) expect(JSON.stringify(value)).not.toContain(marker)
     writeFileSync(join(root, 'env.conf'), publicTemplate.replace('DEEPSEEK_API_KEY=', 'DEEPSEEK_API_KEY=private-fixture'))
     expect(() => buildReference(root, output)).toThrow('公开env.conf')
     writeFileSync(join(root, 'env.conf'), publicTemplate)
@@ -63,5 +79,5 @@ test('source snapshot includes all public framework layers and excludes private 
     writeFileSync(join(root, 'packages/plugin-manager/src/implementation.mjs'), '// public')
     symlinkSync(join(root, '.local'), join(root, 'scripts'), 'junction')
     expect(() => buildReference(root, output)).toThrow('符号链接')
-  } finally { rmSync(root, { recursive: true, force: true }) }
+  } finally { expect(dirname(root)).toBe(realpathSync.native(tmpdir())); rmSync(root, { recursive: true, force: true }) }
 })

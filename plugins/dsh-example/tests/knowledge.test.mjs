@@ -62,12 +62,12 @@ test('platform entry and configuration questions receive current knowledge plus 
     response = await f.request('/chat', { message: 'Windows、macOS、Linux 怎样运行 build？env.conf 哪些默认值已填？已有配置会被覆盖吗？' })
     const handle = f.handles[0]
     const knowledge = handle.sections.find(section => section.name === 'example:knowledge').text
-    for (const fact of ['build.ps1', 'build.sh', 'DSH_IMAGE_PLATFORM=linux/amd64', '已有配置不覆盖', '手工复制公共模板不探测平台', '同 Docker 网络是信任边界', 'macOS 尚未真机验收']) expect(knowledge).toContain(fact)
+    for (const fact of ['build.ps1', 'build.sh', 'DSH_IMAGE_PLATFORM=linux/amd64', '已有配置不覆盖', '手工复制公共模板不探测平台', '同 Docker 网络是信任边界', 'macOS 尚未完成真实 Docker 部署验收']) expect(knowledge).toContain(fact)
     const execution = { agent: handle.agent, signal: new AbortController().signal }
     const search = f.tools.get('example_search_framework'), read = f.tools.get('example_read_framework')
     for (const [path, expected] of [
-      ['build.ps1', /deploy\/build\.ps1/],
-      ['build.sh', /deploy\/build\.sh/],
+      ['deploy/build.ps1', /scripts\/release\.mjs/],
+      ['deploy/build.sh', /scripts\/release\.mjs/],
       ['env.conf', /DSH_PORT=7902/],
       ['deploy/scripts/site.mjs', /process\.getuid/],
       ['doc/framework-configuration.md', /已有.*不覆盖/],
@@ -91,6 +91,37 @@ test('platform entry and configuration questions receive current knowledge plus 
         expect(content).toMatch(/DSH_IMAGE_PLATFORM="?linux\/amd64"?/)
         expect(content).toMatch(/DEEPSEEK_API_KEY=\s*(?:\n|$)/)
       }
+    }
+  } finally { await response?.body.cancel(); await f.close() }
+})
+
+test('current model, version and CI questions have source evidence in the shipped Agent tools', async () => {
+  const f = await fixture({ mode: 'standalone' })
+  let response
+  try {
+    response = await f.request('/chat', { message: '默认模型如何恢复？统一版本在哪配置，为什么会有六项或八项检查？' })
+    const handle = f.handles[0]
+    const knowledge = handle.sections.find(section => section.name === 'example:knowledge').text
+    for (const fact of ['pending ?? lastUsed', '唯一版本源', '共六组检查', 'build/publish', 'doc/releases/', '读取或投影失败拒绝恢复']) expect(knowledge).toContain(fact)
+    const execution = { agent: handle.agent, signal: new AbortController().signal }
+    const search = f.tools.get('example_search_framework'), read = f.tools.get('example_read_framework')
+    for (const [path, expected] of [
+      ['packages/plugin-kit/src/models.ts', /state\.pending \?\? state\.lastUsed/],
+      ['plugins/dsh-auth/src/models.ts', /saveSelection/],
+      ['scripts/version.mjs', /versionTemplates/],
+      ['.github/workflows/check.yml', /os: \[ubuntu-latest, windows-latest, macos-latest\]/],
+      ['.github/workflows/release.yml', /tags: \['v\*'\]/],
+      ['doc/versioning.md.tmpl', /\{\{FRAMEWORK_VERSION\}\}/],
+    ]) {
+      const hits = JSON.parse(await search.execute({ query: path }, execution))
+      expect(hits.results.some(hit => hit.path === path), path).toBe(true)
+      let content = '', startLine = 1
+      do {
+        const page = JSON.parse(await read.execute({ path, startLine, lines: 100 }, execution))
+        expect(page.content).toMatch(/^\d+:/)
+        content += page.content + '\n'; startLine = page.nextLine
+      } while (startLine !== null)
+      expect(content, path).toMatch(expected)
     }
   } finally { await response?.body.cancel(); await f.close() }
 })

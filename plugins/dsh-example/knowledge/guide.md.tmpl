@@ -1,10 +1,12 @@
 # 开发者接入 FAQ
 
-适用：框架 {{FRAMEWORK_VERSION}}（manager、kit、auth、example 同一发布版本）；宿主以 gitlink 为准。本文是知识快照，不证明远程站点已升级。
+适用：框架 {{FRAMEWORK_VERSION}}（manager、kit、auth、example 同一发布版本）；宿主以实际检出与交付验证记录为准。本文是知识快照，不证明远程站点已升级。
 
 ## 如何统一新会话的默认模型？
 
-Auth“模型设置”单选后保存至官方 `agentDefaultModel` / `settings`，仅影响新会话。插件接入 kit `conversationModel(ctx, id?, eventCount?)`，先核验所有权：无 ID 读默认，有 ID 恢复原模型，分支传继承事件数。读取失败拒绝恢复；硬编码模型不自动改变，专用识图可保留。详见 kit README。
+管理员在 Auth“模型设置”从官方目录单选并保存，通过官方 `agentDefaultModel` / `settings` 持久化，保存默认模型无需重启。先校验模型目录与调用配置，不发送真实模型请求，因此保存成功不证明密钥、额度或网络可用。
+
+插件从 `@dsh-plugin-manager/plugin-kit/models` 导入 `conversationModel(ctx, id?, eventCount?)`：无 ID 读取当前默认；有 ID 时先核验所有权，再从官方持久化事件恢复 `pending ?? lastUsed`，分支传继承事件数。只有没有模型使用记录时才回退当前默认；读取或投影失败拒绝恢复，异步读取后再次检查授权。它不依赖 auth；已运行 Agent、硬编码模型和专用模型不会自动切换。详见 kit README。
 
 ## 如何按插件管理会话，删除前能先预览吗？
 
@@ -42,7 +44,7 @@ DSH_TRUSTED_HOSTS=["dsh.example.com"]
 
 ## 运行内置应用应选择什么宿主？
 
-完整源码部署使用仓库 gitlink 对应的 DeepSeek Harness，并在宿主目录按自己的 packageManager 和锁文件安装、构建。源码版本号不等于同名 npm 包已发布，不能把历史 SDK 依赖版本当作当前运行宿主。Node CLI 可通过部署配置的 harnessRoot 指向已准备的宿主源码目录；已安装的兼容宿主则使用 dshCliJs，二选一。默认密钥管理需要官方 credentials 服务和 credentials-local 存储；具体步骤见图文接入手册。
+源码部署消费已有的独立 DeepSeek Harness 源码，记录实际提交；gitlink 只是检出参考，构建不自动更新宿主或要求匹配预设提交。在宿主目录按自己的 packageManager 和锁文件安装、构建。源码版本号不等于同名 npm 包已发布，不能把历史 SDK 依赖版本当作当前运行宿主。Node CLI 可通过部署配置的 harnessRoot 指向已准备的宿主源码目录；已安装的兼容宿主则使用 dshCliJs，二选一。默认密钥管理需要官方 credentials 服务和 credentials-local 存储；具体步骤见图文接入手册。
 
 ## 第一次如何配置或更换 API 密钥？
 
@@ -58,7 +60,7 @@ API Key不创建模型路由、不选择默认模型，也不验证额度；智�
 
 ## 密钥已填、探针 200，为什么仍不能回答？
 
-在“模型设置”刷新状态和指纹，核对当前实例的 home、`.local/deployment.json` 及是否有遗留 `DSH_HOME`/`DSH_DATA_DIR` 路径覆盖；检查是否显示外部环境只读。然后核对默认模型是否使用已配置且可用的提供方，以及是否仍使用默认 `DEEPSEEK_API_KEY` 引用。写入官方存储默认无需重启，修改框架env需受控重启；改变默认模型后新建对话，旧会话保留创建时的模型选择。根据具体错误检查密钥有效性、余额/配额、限流和服务器网络。健康探针不调用模型，不能证明真实问答成功。
+在“模型设置”刷新状态和指纹，核对当前实例的 home、`.local/deployment.json` 及是否有遗留 `DSH_HOME`/`DSH_DATA_DIR` 路径覆盖；检查是否显示外部环境只读。然后核对默认模型是否使用已配置且可用的提供方，以及是否仍使用默认 `DEEPSEEK_API_KEY` 引用。写入官方存储默认无需重启，修改框架env需受控重启；改变默认模型后新建对话，旧会话按持久化模型记录恢复。根据具体错误检查密钥有效性、余额/配额、限流和服务器网络。健康探针不调用模型，不能证明真实问答成功。
 
 密钥是站点维护者配置的宿主凭据，不是每个 Auth 用户单独提供。更换密钥不清空账号或历史；文件模式重启前应等待正在进行的回答结束。保留 `.local/data`、`.local/artifacts` 和备份，不用删除 `.local` 或空数据初始化排错。模型尚未可用时，首页“阅读 FAQ（无需模型）”仍可直接阅读本页；快捷提问生成回答需要模型。
 
@@ -97,7 +99,7 @@ API Key不创建模型路由、不选择默认模型，也不验证额度；智�
 
 本助手可检索随包 manager、kit、auth、example、部署与集成源码，引用路径和行号。构建快照不含私有业务或真实配置，也不证明生产执行成功。
 
-pack 只记录构建输入；最终 tgz 经测试后，用 `compose-release --verification-report <JSON>` 附加报告。安装时展示宿主、平台和组合的已测、未知或差异，不因版本不同禁止安装，也不把模型替身当真实模型。格式见 manager 的 VERIFICATION.md。
+pack 记录构建输入；最终 tgz 经测试后用 `compose-release --verification-report <JSON>` 附加报告。安装展示已测范围，不把版本差异当作禁止安装或替身当真实模型。格式见 manager VERIFICATION.md。
 
 需要 Node.js `^22.19.0 || >=24`、pnpm 11.19.0、tar。包名不代表公共 npm 已发布；从可信维护者取得 manager/kit tgz并核对摘要，或按作者指南构建明确提交。只有 tgz 不等于完整离线依赖。
 
@@ -124,34 +126,13 @@ list 只读声明，不要求锁文件；check 会先 build；pack 冻结安装�
 
 ## 最小声明是什么？
 
-package.json 至少有 name/version、main、files、scripts.build/check、dsh.bundle.patch、deepseekPlugin.schemaVersion=3 和 id；包内有 README、Bundle 以及构建后的入口。下面仅为接入字段片段，不是完整 package.json：
-
-```json
-{
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
-  "deepseekPlugin": {
-    "schemaVersion": 3, "id": "sales",
-    "entryPath": "/sales", "healthPath": "/sales/ready",
-    "permissions": ["sales:access"],
-    "configuration": { "entryId": "sales", "auth": "consumer" }
-  }
-}
-```
+package.json 至少有 name/version、main、files、scripts.build/check、dsh.bundle.patch、deepseekPlugin.schemaVersion=3 和 id；包内有 README、Bundle 以及构建后的入口。完整字段查 `examples/standalone-kit/package.json`；受保护应用声明 `configuration.auth=consumer`，实现与声明一致的入口、探针和权限。
 
 entryId 对应实际 Cordis patch 条目，不必与插件 ID 相同。healthPath 可省略；提供时实现公开 GET 就绪探针，返回 200 或依赖不可用时 503，不返回秘密、不调用付费模型。无探针的 not-provided 不代表业务就绪。
 
 ## 如何增加页面、Tool 或 Agent？
 
-页面注册到官方 WebServer；需要身份的路由通过 kit，而非普通公开注册。接入核心示意（假设 ctx/config 已由官方插件 apply 提供）：
-
-```ts
-const access = createAccess(ctx, { pluginId: 'sales', mode: config.accessMode, publicOrigin: config.publicOrigin })
-const http = createPluginHttp(ctx, { access, routePrefix: '/sales' })
-ctx.effect(() => http.register({ kind: 'exact', path: '/sales/identity', handler(_req, res, actor) {
-  res.setHeader('content-type', 'application/json')
-  res.end(JSON.stringify({ userId: actor.userId }))
-} }))
-```
+页面注册到官方 WebServer；受保护路由通过 `createAccess`、`createPluginHttp` 注册，业务身份取自 handler 的可信 actor。完整实现查 `examples/standalone-kit`，不能只声明权限而公开注册敏感路由。
 
 import 来自 `@dsh-plugin-manager/plugin-kit`，完整可运行实例见 examples/standalone-kit。Tool 使用官方 ToolDefinition；需要认证时参照 kit/tools 的 createPluginTools/guardTool，声明权限并将工具名加入 Agent 白名单。不要猜测未提供的工具签名，应查当前安装版本导出与示例。Agent 使用官方 ctx.agents 与默认模型选择，systemPrompt.section 注入提示，tools.restrict 限制能力。example 的白名单仅含随包公共源码检索和阅读工具，不能执行命令、读取服务器文件或访问销售系统。
 
@@ -191,7 +172,7 @@ start 前台运行，保留终端；另开工具目录终端执行 health（同 
 
 安装成功、宿主监听、应用探针 200、真实问答完成是四个不同结果。example 问答还需在同一 DSH_HOME 配置官方默认模型与密钥；插件不保存模型密钥，模型失败先查宿主设置。
 
-管理器启动打印认证地址文件位置，默认 `<交付根>/.local/data/dsh-web-auth-url.txt`；仅在本机编辑器读取并访问其中官方控制台地址，不公开 token。“设置”→“模型”管理提供方凭据；默认模型由官方会话输入框的模型选择器保存（先选择工作区），或停服后在同 home/settings.yaml 合并 agent-default-model 分节的 provider/model。两者必须是实际已注册提供方 ID 及其支持的模型 ID，保留其他设置。未由文件或其他环境覆盖的官方 DeepSeek，在工具目录运行 `pnpm exec dsh-plugin-manager set-api-key --root <交付根> --config .local/deployment.json` 隐藏输入密钥，写入该 home/.credentials.yaml，默认宿主热加载，无需重启；也可由管理员在 /auth 的模型设置中更换。新建对话核实。该命令不切换模型；其他提供方按宿主模型设置配置。
+管理员在 `/auth`“模型设置”管理默认模型及 DeepSeek/智谱凭据；默认模型和官方凭据保存默认无需重启，非空 env 密钥覆盖对应凭据并使其只读。其他提供方按同一 DSH home 的官方设置配置。管理器打印官方认证地址文件位置（默认 `<交付根>/.local/data/dsh-web-auth-url.txt`），仅本机读取，不公开 token。独立交付的密钥命令见 manager DELIVERY.md；命令不切换模型。用新对话核实真实调用。
 
 ## 配置在哪里？为什么装了 auth 还提示缺 provider？
 
@@ -247,7 +228,27 @@ Windows PowerShell 用根 `.\build.ps1`，无需 Bash；macOS/Linux 用根 `./bu
 
 首次自动生成私有 `.local/env.conf` 写入实际默认值：镜像架构按 Docker 引擎选 amd64/arm64，macOS 非 root 用户采用当前 UID/GID，Windows/Linux 为 1000。已有配置不覆盖，旧 JSON 导入保留原路径；手工复制公共模板不探测平台，须自行核对 UID/GID、架构和已填 URL。
 
-只支持本机 unix/npipe Docker endpoint 和 Linux 容器。Windows/macOS及 Linux Desktop 用桥接；DSH 保持 `127.0.0.1`，容器桥接地址通过 TCP 转发至它，宿主只向 `127.0.0.1` 发布端口。同 Docker 网络是信任边界，不宣称公网隔离。原生 Linux 用 host 网络。macOS 尚未真机验收；健康、知识检索或模型替身通过不等于真实模型问答通过。具体值和实现可检索 `env.conf`、`deploy/scripts/site.mjs`、`packages/plugin-manager/src/apply-compose.mjs`。
+只支持本机 unix/npipe Docker endpoint 和 Linux 容器。Windows/macOS及 Linux Desktop 用桥接；DSH 保持 `127.0.0.1`，容器桥接地址通过 TCP 转发至它，宿主只向 `127.0.0.1` 发布端口。同 Docker 网络是信任边界，不宣称公网隔离。原生 Linux 用 host 网络。macOS 尚未完成真实 Docker 部署验收；健康、知识检索或模型替身通过不等于真实模型问答通过。具体值和实现可检索 `env.conf`、`deploy/scripts/site.mjs`、`packages/plugin-manager/src/apply-compose.mjs`。
+
+## 框架版本和 GitHub 检查由谁决定？
+
+根 `package.json` 的 `version` 是唯一版本源，manager、kit、auth、example 同步发布；定制插件自行版本化，宿主版本独立记录，不随框架同步。JSON 保留实际版本值，不写变量。框架根运行 `node scripts/version.mjs set <版本>` 同步四个包及登记模板；模板用版本占位符（FRAMEWORK_VERSION，左右各两个花括号），`sync` 生成 Markdown，`check` 只校验。GitHub 不渲染 Markdown 变量。源码见 `scripts/version.mjs`，规则见 `doc/versioning.md`。
+
+`.github/workflows/check.yml` 配置 Windows、macOS、Ubuntu × Node 22/24 共六组检查，验证公共工作区构建、类型、测试和独立归档消费，防止“只在作者仓库能用”。归档类型检查会验证公开声明需要的依赖；kit 子路径让仅用模型接口的作者不必安装工具类型依赖。另有 `.github/workflows/release.yml` 的 build/publish 两个发布任务；同一提交也触发发布流程时可显示八项，不代表多了两个操作系统。数量以该提交实际触发的工作流为准，检查通过不等于生产或真实模型验收。
+
+## 源码问题怎样查证？
+
+先用 `example_search_framework` 搜索完整路径，再用 `example_read_framework` 分页读取实现和调用方，引用仓库相对路径与行号：
+
+| 问题 | 优先阅读 |
+| --- | --- |
+| 默认模型保存、恢复和分支 | `plugins/dsh-auth/src/models.ts`、`packages/plugin-kit/src/models.ts`、`plugins/dsh-example/src/index.ts` |
+| 三平台入口、更新与锁 | `deploy/build.sh`、`deploy/build.ps1`、`deploy/scripts/release.mjs`、`deploy/scripts/build.mjs` |
+| 会话预览与逐项归档 | `packages/plugin-kit/src/conversations.ts`、`doc/conversation-management.md` |
+| 统一版本与自动检查 | `scripts/version.mjs`、`.github/workflows/check.yml`、`.github/workflows/release.yml` |
+| 知识构建与检索边界 | `plugins/dsh-example/scripts/build-reference.mjs`、`plugins/dsh-example/src/framework.ts` |
+
+快照只收公共源码、当前文档和版本脚本登记的 Markdown 模板；不收历史 `doc/releases/`、真实配置、私有插件或宿主源码。根 `build.sh/build.ps1` 可能在集成库被替换，不收录它们；公共部署流程查 `deploy/`，私有入口行为不能据此推断。索引函数校验版本与模板同步，失败不覆盖已有索引；插件 build 的前序清理仍会删除旧 dist。安装新 example 归档后使用其随包知识；在线 main 与生产可能不同，源码证据不证明部署已执行。
 
 ## 能回答哪些问题？哪些不能保证？
 

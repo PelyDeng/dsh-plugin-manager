@@ -2,7 +2,7 @@
 
 # @dsh-plugin-manager/plugin-kit
 
-可选的 DSH 插件接入库，通过宿主 Cordis 事件通信，不启动服务。消费插件在构建时将 kit 内嵌到独立归档。独立作者可将维护者提供的版本化 tgz 安装为开发依赖，例如 `pnpm add --ignore-workspace --save-dev /path/to/plugin-kit-0.14.0.tgz`，再通过构建器内嵌。包名不表示版本已发布到公共 registry。
+可选的 DSH 插件接入库，通过宿主 Cordis 事件通信，不启动服务。消费插件在构建时将 kit 内嵌到独立归档。独立作者可将维护者提供的版本化 tgz 安装为开发依赖，例如 `pnpm add --ignore-workspace --save-dev /path/to/plugin-kit-0.14.1.tgz`，再通过构建器内嵌。包名不表示版本已发布到公共 registry。
 
 | 导出 | 用途 |
 | --- | --- |
@@ -16,11 +16,11 @@
 | `@dsh-plugin-manager/plugin-kit/deepseek-key` | 默认 DeepSeek 凭据操作的兼容入口 |
 | `@dsh-plugin-manager/plugin-kit` | 上述 API 的统一导出 |
 
-DSH 类型依赖是可选 peer，由使用相应接口的作者提供；只使用 access、conversations 或 route-path 不需要工具类型依赖。业务插件自行声明实际使用的 DSH/Cordis peer。
+DSH 类型依赖是可选 peer，由使用相应接口的作者提供；只使用 access、conversations、models 或 route-path 不需要工具类型依赖。业务插件自行声明实际使用的 DSH/Cordis peer。
 
-kit 0.2.0 增加可选的[会话管理协议](../../doc/conversation-management.md)。插件维护本人 owner 索引和活动操作检查，auth 汇总分类、只读预览与批量移除。共享移除流程持久化 pending 围栏，调用官方归档并返回逐项结果；包含定时事件时复用宿主已注册的 schedule 投影校验，能力缺失则拒绝清理。
+kit 提供可选的[会话管理协议](../../doc/conversation-management.md)。插件维护本人 owner 索引和活动操作检查，auth 汇总分类、只读预览与批量移除。共享移除流程持久化 pending 围栏，调用官方归档并返回逐项结果；包含定时事件时复用宿主已注册的 schedule 投影校验，能力缺失则拒绝清理。
 
-根入口导出 `defaultConversationModel(ctx)` 和 `await conversationModel(ctx, id?, eventCount?)`。新会话不传 ID，读取官方默认；恢复前先验证所有权，再传 ID，通过官方 `modelSelection` 投影还原 `pending ?? lastUsed`。分支可传入继承事件数，沿用该位置的模型。无模型使用记录时读取当前默认，持久化读取或投影失败则拒绝恢复。调用方在异步读取后再次检查授权，再将返回的 provider/model 传入 Agent。它不依赖 auth，auth 只是可选的共享设置入口；已运行的 Agent 不受默认变更影响。
+通过 `@dsh-plugin-manager/plugin-kit/models` 导入 `defaultConversationModel(ctx)` 和 `await conversationModel(ctx, id?, eventCount?)`。新会话不传 ID，读取官方默认；恢复前先验证所有权，再传 ID，通过官方 `modelSelection` 投影还原 `pending ?? lastUsed`。分支可传入继承事件数，沿用该位置的模型。无模型使用记录时读取当前默认，持久化读取或投影失败则拒绝恢复。调用方在异步读取后再次检查授权，再将返回的 provider/model 传入 Agent。它不依赖 auth，auth 只是可选的共享设置入口；已运行的 Agent 不受默认变更影响。
 
 工具通过 `createPluginTools(...).register(definition, '中文名称')` 声明简洁的目录显示名，随 `ToolDescriptor.displayName` 交给 auth 展示；`name` 继续作为模型调用编码。名称由各业务插件维护，不改变工具参数、描述或执行权限。未提供显示名的旧插件仍可登记，目录回退显示编码。
 
