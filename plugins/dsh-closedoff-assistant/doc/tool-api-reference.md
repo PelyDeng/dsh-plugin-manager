@@ -7,7 +7,7 @@ kind: "package-reference"
 
 ## 摘要
 
-本文供需要复用封闭化查询能力的 AI、Agent 或集成程序使用。文档以当前插件源码为准，覆盖 37 个只读 Tool、对应 HTTP 地址、参数、统一认证流程、返回值归一化、配置文件和提示词规则。
+本文供需要复用封闭化查询能力的 AI、Agent 或集成程序使用。文档以当前插件源码为准，覆盖 37 个只读 Tool、对应 HTTP 地址、参数、统一认证流程、统一返回格式、配置文件和提示词规则。
 
 本文不会记录真实凭据、token 或生产响应。示例中的 `<业务网关>`、`<客户端 ID>`、`<记录 ID>`、`<车牌号>` 等均为占位符。
 
@@ -235,7 +235,7 @@ curl 'https://<业务网关>/closed-off/comprehensive/getVehicleComprehensivePag
 }
 ```
 
-各接口的 `data` 字段由业务系统拥有。插件按 `src/specs.ts` 中的 `result` 声明当前可确认的列表、对象或内嵌分页对象基数，以及少量分析所需主要字段；对象允许额外字段，已知字段也允许缺省，字段值暂不按旧 DTO 收紧类型。没有对应后端源码、前端直接消费或脱敏实测证据的接口使用 `unknown`，不做伪精确校验。为控制每轮固定提示成本，Native Tool description 最多展示前 6 个字段名；`output.render` 再按标准 envelope、`result.fields` 和登记过的嵌套字段执行 fail-closed 投影，未知附加字段不会进入模型消息。
+各接口的 `data` 字段由业务系统拥有。插件按 `src/specs.ts` 中的 `result` 声明当前可确认的列表、对象或内嵌分页对象基数，以及少量分析所需主要字段；对象允许额外字段，已知字段也允许缺省，字段值暂不按旧 DTO 收紧类型。没有对应后端源码、前端实际使用或脱敏实测证据的接口使用 `unknown`，不猜测结构并据此校验。为控制每轮固定提示成本，Native Tool description 最多展示前 6 个字段名；`output.render` 再按标准 envelope、`result.fields` 和登记过的嵌套字段仅输出明确允许的字段（fail-closed），未知附加字段不会进入模型消息。
 
 DSH Native Agent 收到的 Tool 定义只包含名称、说明和入参，不直接包含 `output.schema`。因此插件从同一个 `result` 声明生成 Tool description 中的“主要返回”提示；`output.schema` 用于运行时结果校验，并可供 PTC 工具 SDK 投影。新增或调整字段时只修改 `src/specs.ts`，不能分别手写两份字段目录。
 
@@ -780,7 +780,7 @@ POST /closed-off/device/page  { "pageIndex": 1, "pageSize": 500 }
 
 ## 通过 DSH 专用页面调用 Agent
 
-如果另一个客户端希望复用“自然语言 → Tool 选择 → 接口调用 → 中文分析”全链路，可以调用专用页面 API。下面以默认 `routePrefix=/closedoff-qa` 为例；修改前缀后应同步替换。
+如果另一个客户端希望复用“自然语言 → Tool 选择 → 接口调用 → 中文分析”的完整流程，可以调用专用页面 API。下面以默认 `routePrefix=/closedoff-qa` 为例；修改前缀后应同步替换。
 
 ### 发起对话
 

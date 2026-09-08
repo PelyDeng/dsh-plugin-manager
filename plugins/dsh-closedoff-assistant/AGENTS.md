@@ -1,6 +1,6 @@
 # dsh-closedoff-assistant 开发约定
 
-本插件的业务实现和开发资源由本目录维护。通用元数据与发布规范遵循仓库根 AGENTS.md；安装、启动和发布入口均位于根 deploy/。
+本插件的业务实现和开发资源由本目录维护。通用元数据与发布规范遵循仓库根 AGENTS.md。私有源码更新使用仓库根 `build.sh` 或 `build.ps1`，由 `private-deploy/` 更新 Gitee 源码并调用公共构建；底层安装、启动和部署命令位于根 `deploy/`。
 
 ## 三维地图与模型校高
 

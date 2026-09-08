@@ -7,7 +7,7 @@ kind: "package-bundle"
 
 ## 摘要
 
-本包是业务适配层，不是第二套 Agent 框架。DSH 保持通用运行时职责，本包通过公开的 Cordis 插件、Tool、Agent、Session 和 Web Server 接口组合业务能力。这个分层使 DSH 上游更新与业务接口变化可以分别处理。
+本包负责把园区接口接到 DSH。DSH 负责运行 Agent、模型和会话，本包通过公开的 Cordis 插件、Tool、Agent、Session 和 Web Server 接口完成业务查询与页面展示。这个分层使 DSH 上游更新与业务接口变化可以分别处理。
 
 ## 组件职责
 
@@ -22,7 +22,7 @@ kind: "package-bundle"
 | `src/agent.ts` | 本包 + DSH | 为专用页面创建或恢复 Agent；限定 persona、模型选择和 Tool allowlist |
 | `src/conversation-store.ts` | 本包 | 持久化账号归属和历史列表摘要，正文继续由 DSH 保存 |
 | `src/web.ts` | 本包 + DSH | 在 `ctx.webServer` 注册静态页面、历史、SSE 对话、回答反馈、会话分支与停止路由 |
-| `src/presentation.ts` | 本包 | 从持久 session event 纯投影出页面历史、卡片和轨迹点 |
+| `src/presentation.ts` | 本包 | 只读取持久 session event，整理成页面历史、卡片和轨迹点 |
 | `src/fences.ts` | 本包 | 解析围栏标绘，向实时页面与历史恢复提供完整边界和不可展示提示 |
 | `web/index.html`、`web/app.css` | 本包 | 定义专用页面的语义骨架和视觉规则，不承载业务事件处理 |
 | `web/app.js` | 本包 | 管理会话、SSE 事件、思考与 Tool 状态、卡片、回答操作和历史恢复 |
@@ -58,7 +58,11 @@ sequenceDiagram
 
 完成回合从持久事件投影最终助手消息 ID、`turn/end` 序号、模型用量、首字延迟、总用时和完成时间。页面据此显示 DSH 风格的回答操作栏。赞/踩通过 `messageFeedback` 服务写入独立 sidecar，不进入模型上下文或会话事件；再次点击当前评价会删除评价。会话分支只允许选择已完成回合，使用截止对应 `turn/end` 的事件前缀创建新的命名空间会话，并记录父会话标识；原会话保持不变。
 
-卡片按固定业务主题聚合并负责可核对事实，模型正文只解释结论、异常、风险和建议；存在结构化结果时，页面确定性移除重复 Markdown 表格。历史投影保留每轮 `turn/end` 的结束原因；`aborted`、`interrupted`、`max-tokens`、`blocked` 和 `error` 使用独立状态提示，即使已有部分正文也明确标记回答未完整结束。只有真正返回 `data`、`empty`、轨迹或媒体结果时才说明上方查询结果已保留，加载和失败占位不计为已返回结果；实时流与历史恢复使用同一映射，且状态提示不会被后续 `done` 清除。没有显式卡片定义的 Tool 只从自身 `result.fields` 按声明顺序生成通用卡片，并使用自己的 Schema 说明作为标签；opaque ID、媒体、标绘配置、轨迹点和嵌套原始数据禁止自动展示。空结果保留在已执行来源的紧凑状态中；接口返回数据但没有安全可展示字段时保留“已返回数据”的事实和专用说明，不生成空卡片，也不把限定时间范围内无数据表述为历史上从未存在。
+卡片按固定业务主题聚合并负责可核对事实，模型正文只解释结论、异常、风险和建议；存在结构化结果时，页面确定性移除重复 Markdown 表格。历史投影保留每轮 `turn/end` 的结束原因；`aborted`、`interrupted`、`max-tokens`、`blocked` 和 `error` 使用独立状态提示，即使已有部分正文也明确标记回答未完整结束。
+
+只有真正返回 `data`、`empty`、轨迹或媒体结果时才说明上方查询结果已保留，加载和失败占位不计为已返回结果；实时流与历史恢复使用同一映射，且状态提示不会被后续 `done` 清除。没有显式卡片定义的 Tool 只从自身 `result.fields` 按声明顺序生成通用卡片，并使用自己的 Schema 说明作为标签；opaque ID、媒体、标绘配置、轨迹点和嵌套原始数据禁止自动展示。
+
+空结果保留在已执行来源的紧凑状态中；接口返回数据但没有安全可展示字段时保留“已返回数据”的事实和专用说明，不生成空卡片，也不把限定时间范围内无数据表述为历史上从未存在。
 
 新会话通过 kit `conversationModel()` 使用官方框架默认模型；恢复与分支通过官方 `sessionProjections.modelSelection` 保留记录中的模型与推理等级，读取失败拒绝恢复。新会话仅在模型声明支持时采用插件 `reasoningEffort`（默认 `low`），否则沿用官方默认，避免向不兼容模型发送推理参数。车辆“所有信息”查询使用明确的八项基础查询清单，并仅在电子运单返回预约 ID 时追加预约详情，避免反复规划或遗漏模块。
 
@@ -72,7 +76,7 @@ sequenceDiagram
 
 `src/presentation.ts` 为高频业务 Tool 保留人工定义的字段选择和主题聚合；其余 Tool 使用上述 `result.fields` 作为唯一通用卡片来源，不遍历运行时对象的未知字段。两种路径都执行相同的脱敏和不可展示字段限制，因此新增 Schema 字段只有在该 Tool 没有人工卡片定义且字段不属于禁止集合时才自动进入页面。
 
-成功、业务失败和传输失败用 `ok` 判别。成功结果允许 `data=null`；业务对象允许增加未知字段，已知字段不设为必填，也不根据当前旧代码猜测值类型。只有后端 Controller/VO、前端直接消费或脱敏实测能够证明 `data` 基数时才使用 `list`、`object` 或 `paged-object`，证据不足的外部微服务接口保留 `unknown`。这使 Schema 能发现列表与对象串位等结构错误，同时不把微服务独立升级误判为 Tool 失败。
+成功、业务失败和传输失败用 `ok` 判别。成功结果允许 `data=null`；业务对象允许增加未知字段，已知字段不设为必填，也不根据当前旧代码猜测值类型。只有后端 Controller/VO、前端实际使用或脱敏实测能够证明 `data` 基数时才使用 `list`、`object` 或 `paged-object`，证据不足的外部微服务接口保留 `unknown`。这使 Schema 能发现列表与对象串位等结构错误，同时不把微服务独立升级误判为 Tool 失败。
 
 白名单分页的身份和联系字段在模型与页面投影前统一脱敏。设备的 `accessAddress` 和 `videoAddress` 仅作为页面播放所需的运行字段，不进入模型结果。
 
@@ -84,19 +88,27 @@ sequenceDiagram
 
 轨迹点不超过 800 个时原样展示；更长轨迹均匀抽样为 800 个点并强制保留首尾点，避免终点和自动取景范围丢失，同时维持既有页面数据量上限。
 
-`closedoff_control_area_page` 和 `closedoff_plotting_config_one` 将完整结果保存在 Tool 展示元数据中，模型只取得业务字段与可展示边界数量，不接收原始标绘 JSON。`src/fences.ts` 同时支持列表接口直接返回的 `plottingConfigData` JSON 字符串、嵌套 `plottingConfigData.plottingData` 和单记录接口的 `plottingData`；标绘可以是图层数组或单对象。仅投影 `WallLayer.fences[].positions` 和 `PolygonLayer.polygons[].positions`，同时接受这两种图层直接保存的 `positions`。围栏使用保存的顶点高程和墙体高度，不套用模型校高偏移；缺少墙体高度时只绘边界线，不推断墙高。不同围栏独立绘制，不连接不同片区；任何无效顶点使对应图形不可展示，页面明确提示涉及的记录数。围栏不做轨迹式抽样，保留完整边界。
+`closedoff_control_area_page` 和 `closedoff_plotting_config_one` 将完整结果保存在 Tool 展示元数据中，模型只取得业务字段与可展示边界数量，不接收原始标绘 JSON。`src/fences.ts` 同时支持列表接口直接返回的 `plottingConfigData` JSON 字符串、嵌套 `plottingConfigData.plottingData` 和单记录接口的 `plottingData`；标绘可以是图层数组或单对象。
+
+仅投影 `WallLayer.fences[].positions` 和 `PolygonLayer.polygons[].positions`，同时接受这两种图层直接保存的 `positions`。围栏使用保存的顶点高程和墙体高度，不套用模型校高偏移；缺少墙体高度时只绘边界线，不推断墙高。不同围栏独立绘制，不连接不同片区；任何无效顶点使对应图形不可展示，页面明确提示涉及的记录数。围栏不做轨迹式抽样，保留完整边界。
 
 实时 `fences` 事件和历史 `fences[callId]` 共用相同的纯投影。页面在园区设施卡片旁显示三维截图，复用轨迹的串行队列、模型校高、自动取景、全屏交互与 PNG 保存。旧历史仅在实际保存了可解析标绘时恢复地图，无法恢复时提示重新查询。接口返回成功不代表浏览器三维资源已经加载成功，模型摘要与页面加载状态分别表达。
 
-问答正文和三维轨迹弹窗共用公共 CesiumJS `1.142.0`、地形服务、3D Tiles、轨迹点和设备组数据，不依赖私有 GIS 封装包。正文轨迹进入串行截图队列，任一时刻最多创建一个临时 Viewer；页面等待自动取景完成，并在同一渲染帧确认 `tileVisible` 后到达 `postRender`，再生成 JPEG 场景截图、替换画布并立即销毁 Viewer。新的设备组数据会使尚未完成的旧任务失效并重新入队，历史恢复也使用同一队列，因此多条轨迹不会同时长期占用 WebGL。正文截图和弹窗根据轨迹、起终点及已筛选设备组计算相同的完整取景范围，使用相同的 `maximumScreenSpaceError = 2` 模型细化精度，并保留设备组图标与名称；起点和终点标记同时显示对应轨迹点的时间，点位没有时间时只显示端点名称。三维弹窗在用户点击“全屏查看”后创建独立的可交互 Viewer；弹窗瓦片就绪后才启用“截图并保存”，保存时短暂锁定相机输入并把当前视角导出为 PNG，不移动相机、不替换画面也不销毁 Viewer。关闭、重绘或重置按 Viewer 代际取消旧保存任务，避免历史瓦片事件修改新 Viewer。
+问答正文和三维轨迹弹窗共用公共 CesiumJS `1.142.0`、地形服务、3D Tiles、轨迹点和设备组数据，不依赖私有 GIS 封装包。正文轨迹进入串行截图队列，任一时刻最多创建一个临时 Viewer；页面等待自动取景完成，并在同一渲染帧确认 `tileVisible` 后到达 `postRender`，再生成 JPEG 场景截图、替换画布并立即销毁 Viewer。
+
+新的设备组数据会使尚未完成的旧任务失效并重新入队，历史恢复也使用同一队列，因此多条轨迹不会同时长期占用 WebGL。正文截图和弹窗根据轨迹、起终点及已筛选设备组计算相同的完整取景范围，使用相同的 `maximumScreenSpaceError = 2` 模型细化精度，并保留设备组图标与名称；起点和终点标记同时显示对应轨迹点的时间，点位没有时间时只显示端点名称。
+
+三维弹窗在用户点击“全屏查看”后创建独立的可交互 Viewer；弹窗瓦片就绪后才启用“截图并保存”，保存时短暂锁定相机输入并把当前视角导出为 PNG，不移动相机、不替换画面也不销毁 Viewer。关闭、重绘或重置按 Viewer 代际取消旧保存任务，避免历史瓦片事件修改新 Viewer。
 
 两个流程都通过 `Cesium3DTileset` 加载模型，根据部署配置沿 tileset 中心的椭球法向设置 `modelMatrix` 高度偏移后再取景。这个顺序保持 `depthTestAgainstTerrain` 开启，同时避免地形与模型高程基准不一致造成的穿模。Fuling 当前以 `60m` 作为浏览器差分校准值；该值只属于当前数据集。页面从本地 Cesium 资源加载 `NaturalEarthII` 底图；该底图不包含园区卫星影像，模型周边的绿色区域需要由业务系统使用的卫星影像图层补齐，不应通过继续抬高模型处理。
 
-两个轨迹视图都在地图旁显示可滚动的设备组名称和摄像头数量，并同时支持点击地图标记或设备组列表打开摄像头详情。页面按 `deviceType = 6` 过滤并展示组内摄像头详情。设备投影保留 `videoAddress` 和 `accessAddress`，页面优先使用后端在 AI 直播可用时写入的 `accessAddress`，没有该值时回退到 `videoAddress`，并通过 `@hy-media/video-player@0.0.37` 播放 WebSocket FLV、HLS 或 MP4。车辆抓拍接口的媒体地址保存在展示元数据中，并通过独立媒体事件或历史投影交给同一播放器；普通卡片、模型正文和播放器信息区都不显示原始地址。设备组数据包含有效流地址时，页面在浏览器空闲时加载并初始化播放器运行资源；视频流连接仍延迟到用户打开摄像头详情。切换摄像头或关闭弹窗会卸载播放器并释放流连接。播放器的原始 npm 包快照由本插件 `vendor/` 版本化保存并仅作为构建依赖；正式插件携带复制后的运行资源。CesiumJS 和播放器运行资源由插件本地提供，地形、3D Tiles、业务影像图层和视频流由配置的外部服务提供。
+两个轨迹视图都在地图旁显示可滚动的设备组名称和摄像头数量，并同时支持点击地图标记或设备组列表打开摄像头详情。页面按 `deviceType = 6` 过滤并展示组内摄像头详情。设备投影保留 `videoAddress` 和 `accessAddress`，页面优先使用后端在 AI 直播可用时写入的 `accessAddress`，没有该值时回退到 `videoAddress`，并通过 `@hy-media/video-player@0.0.37` 播放 WebSocket FLV、HLS 或 MP4。
+
+车辆抓拍接口的媒体地址保存在展示元数据中，并通过独立媒体事件或历史投影交给同一播放器；普通卡片、模型正文和播放器信息区都不显示原始地址。设备组数据包含有效流地址时，页面在浏览器空闲时加载并初始化播放器运行资源；视频流连接仍延迟到用户打开摄像头详情。切换摄像头或关闭弹窗会卸载播放器并释放流连接。播放器的原始 npm 包快照由本插件 `vendor/` 版本化保存并仅作为构建依赖；正式插件携带复制后的运行资源。CesiumJS 和播放器运行资源由插件本地提供，地形、3D Tiles、业务影像图层和视频流由配置的外部服务提供。
 
 ## 持久化和恢复
 
-浏览器只保存符合 `closedoff-web-<UUIDv4>` 的 `conversationId`，本地编号按当前身份分开。服务重启后，历史接口先检查 SQLite 中的归属，再要求 `ConversationManager` 通过 DSH persistence 恢复相同 session，从 durable event log 重建页面。浏览器不能提交任意 DSH session ID，也不能指定未知 ID 创建或认领会话。
+浏览器只保存符合 `closedoff-web-<UUIDv4>` 的 `conversationId`，本地编号按当前身份分开。服务重启后，历史接口先检查 SQLite 中的归属，再要求 `ConversationManager` 通过 DSH persistence 恢复相同 session，从持久保存的事件日志重建页面。浏览器不能提交任意 DSH session ID，也不能指定未知 ID 创建或认领会话。
 
 Agent handle 是进程内资源；销毁 handle 会移除活动对象，不等于删除磁盘 session 日志。专用页面不维护第二套消息表，避免 DSH 日志和业务页面历史不一致。
 

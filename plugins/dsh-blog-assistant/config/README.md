@@ -7,7 +7,7 @@
 `models.text` / `models.vision` 可选，分别指定文字写作和图片资料的 `{provider, model}`。
 模板使用 `blog-zhipu/glm-5.3` 和 `blog-zhipu/glm-5v-turbo`，通过官方 pi-ai 适配器接入智谱普通模型 API。
 API Key 统一在 auth“模型设置 → 智谱 GLM”保存到官方 credentials，不填入此文件。
-旧配置省略 models 时沿用宿主默认模型；含图历史续聊仍需要支持图片的模型。缺少 Key 时明确拒绝调用，不降级。
+旧配置省略 models 时沿用宿主默认模型；继续含图片的历史对话时，仍需使用支持图片的模型。缺少 Key 时会报错，不会悄悄换用其他配置。
 
 正式环境在站点设置指定 `instances.blog.runtimeConfig` 为
 `plugins/dsh-blog-assistant/config/config.json`。管理器将该文件只读挂载，
