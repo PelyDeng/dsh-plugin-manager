@@ -14,6 +14,7 @@ let pageEpoch = 0
 let dialogPlugin = null
 let dialogPage = 1
 let dialogTrigger = null
+let conversationsUI
 const modelCards = [...document.querySelectorAll('[data-model]')].map(element => ({ element, kind: element.dataset.model, epoch: 0, pending: false, status: null }))
 
 function identityChanged() {
@@ -46,6 +47,7 @@ function closeTools() {
 }
 
 function loggedOut() {
+  conversationsUI?.reset()
   identityEpoch++
   pageEpoch++
   session = null
@@ -77,7 +79,7 @@ async function api(path, data, login = false) {
   if (identity !== identityEpoch) throw new DOMException('账号已变化', 'AbortError')
   if (!response.ok) {
     if (response.status === 401 && !login) loggedOut()
-    throw new Error(result.error ?? '请求失败')
+    throw Object.assign(new Error(result.error ?? '请求失败'), { status: response.status })
   }
   return result
 }
@@ -189,6 +191,7 @@ async function showPage(next) {
   const version = ++pageEpoch
   const identity = identityEpoch
   page = next
+  conversationsUI?.leave()
   closeTools()
   clearModel()
   for (const section of document.querySelectorAll('.page')) section.hidden = section.id !== `page-${next}`
@@ -197,7 +200,12 @@ async function showPage(next) {
     if (button.dataset.page === next) button.setAttribute('aria-current', 'page')
     else button.removeAttribute('aria-current')
   }
-  if (next === 'models') {
+  if (next === 'conversations') {
+    const { createConversationPage } = await import('./conversations.js')
+    if (version !== pageEpoch || identity !== identityEpoch) return
+    conversationsUI ??= createConversationPage(api)
+    await conversationsUI.enter()
+  } else if (next === 'models') {
     await Promise.all(modelCards.map(card => loadModel(card)))
   } else if (next === 'plugins' || next === 'users') {
     const result = await api('plugins')

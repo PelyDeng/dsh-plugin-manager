@@ -1,6 +1,6 @@
 {
   "name": "dsh-auth",
-  "version": "0.11.2",
+  "version": "0.12.0",
   "description": "统一管理用户账号、登录会话和插件访问权限。",
   "license": "Apache-2.0",
   "private": true,
@@ -48,6 +48,7 @@
       "web/app.js",
       "web/style.css",
       "web/catalog-view.js",
+      "web/conversations.js",
       "web/icons.svg",
       "web/deepseek.svg",
       "web/zhipu.svg"
@@ -66,7 +67,7 @@
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run && node --test tests/admin.test.mjs tests/model-cards.test.mjs",
-    "check:web": "node --check web/app.js && node --check web/catalog-view.js",
+    "check:web": "node --check web/app.js && node --check web/catalog-view.js && node --check web/conversations.js",
     "check": "pnpm typecheck && pnpm check:web",
     "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
   },

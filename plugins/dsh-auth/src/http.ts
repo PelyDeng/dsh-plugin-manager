@@ -6,6 +6,7 @@ import { posix } from 'node:path'
 import { AccessError, emitRevoked, isAccessError, listPlugins, type Actor } from '@dsh-plugin-manager/plugin-kit/access'
 import { ModelKeyError, modelKeyStatus, setModelKey } from '@dsh-plugin-manager/plugin-kit/model-key'
 import { AuthService, SESSION_COOKIE } from './service.ts'
+import { conversationProviders, conversationQuery, conversationIds } from '@dsh-plugin-manager/plugin-kit'
 import { hashPassword, validatePassword } from './password.ts'
 import { normalizeUsername, type Role } from './store.ts'
 
@@ -94,6 +95,7 @@ export async function createHandler(ctx: Context, service: AuthService, config: 
     ['/auth/login', { file: 'index.html', type: 'text/html; charset=utf-8' }],
     ['/auth/app.js', { file: 'app.js', type: 'text/javascript; charset=utf-8' }],
     ['/auth/catalog-view.js', { file: 'catalog-view.js', type: 'text/javascript; charset=utf-8' }],
+    ['/auth/conversations.js', { file: 'conversations.js', type: 'text/javascript; charset=utf-8' }],
     ['/auth/icons.svg', { file: 'icons.svg', type: 'image/svg+xml' }],
     ['/auth/deepseek.svg', { file: 'deepseek.svg', type: 'image/svg+xml' }],
     ['/auth/zhipu.svg', { file: 'zhipu.svg', type: 'image/svg+xml' }],
@@ -176,6 +178,38 @@ export async function createHandler(ctx: Context, service: AuthService, config: 
           plugins: listPlugins(ctx).filter(plugin => user.role === 'admin' || user.grants.includes(plugin.id)),
           accessTargets: user.role === 'admin' || user.grants.includes(CONSOLE_ACCESS_TARGET.id) ? [CONSOLE_ACCESS_TARGET] : [],
         }); return
+      }
+      if (path === '/auth/api/conversation-plugins' && req.method === 'GET') {
+        service.requirePasswordChanged(actor)
+        const providers = conversationProviders(ctx)
+        const plugins = await Promise.all(listPlugins(ctx).filter(plugin => plugin.id !== 'auth' && service.current(actor).grants.includes(plugin.id)).map(async plugin => {
+          const provider = providers.get(plugin.id)
+          if (!provider) return { id: plugin.id, displayName: plugin.displayName, supported: false }
+          try {
+            const result = await provider.list(actor, { offset: 0, limit: 1, q: '', state: '' })
+            return { id: plugin.id, displayName: plugin.displayName, supported: true, total: result.total }
+          } catch { return { id: plugin.id, displayName: plugin.displayName, supported: true, error: '会话服务暂不可用' } }
+        }))
+        for (const plugin of plugins) service.assertAccess(actor, plugin.id)
+        json(res, 200, { plugins }); return
+      }
+      if (['/auth/api/conversations', '/auth/api/conversations/preview', '/auth/api/conversations/remove'].includes(path)) {
+        const removing = path.endsWith('/remove')
+        if (req.method !== (removing ? 'POST' : 'GET')) throw new AccessError(405, '请求方法不支持')
+        const input = removing ? await body(req) : Object.fromEntries(url.searchParams)
+        const pluginId = text(input, 'pluginId', 160)
+        service.assertAccess(actor, pluginId)
+        const provider = conversationProviders(ctx).get(pluginId)
+        if (!provider) throw new AccessError(503, '该插件暂不支持会话管理')
+        let result: unknown
+        if (removing) result = await provider.remove(actor, conversationIds(input.ids))
+        else if (path.endsWith('/preview')) {
+          const before = url.searchParams.get('before')
+          if (before !== null && (!/^\d+$/.test(before) || !Number.isSafeInteger(Number(before)))) throw new AccessError(400, '预览分页参数无效')
+          result = await provider.preview(actor, text(input, 'id', 160), before === null ? undefined : Number(before))
+        } else result = await provider.list(actor, conversationQuery(url.searchParams))
+        service.assertAccess(actor, pluginId)
+        json(res, 200, result); return
       }
       service.requireAdmin(actor)
       if (['/auth/api/deepseek-key', '/auth/api/model-key/deepseek', '/auth/api/model-key/zhipu'].includes(path)) {

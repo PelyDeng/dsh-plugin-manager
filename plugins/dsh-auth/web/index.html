@@ -27,8 +27,27 @@
         <button data-page="account"><svg class="icon" aria-hidden="true"><use href="/auth/icons.svg#settings"></use></svg>账号设置</button>
         <button data-page="models" data-admin hidden><svg class="icon" aria-hidden="true"><use href="/auth/icons.svg#key"></use></svg>模型设置</button>
         <button data-page="users" data-admin hidden><svg class="icon" aria-hidden="true"><use href="/auth/icons.svg#user"></use></svg>用户管理</button>
+        <button data-page="conversations"><svg class="icon" aria-hidden="true"><use href="/auth/icons.svg#plugins"></use></svg>会话管理</button>
       </nav><p class="sidebar-note" id="greeting"></p></aside>
       <div class="settings-content">
+        <section id="page-conversations" class="page" hidden>
+          <div class="page-heading"><h1>会话管理</h1><p class="muted">管理你在已授权插件中创建的会话。</p></div>
+          <div id="conversation-plugins" class="conversation-plugins" aria-label="按插件分类"></div>
+          <form id="conversation-filters" class="conversation-filters">
+            <label class="conversation-search"><span class="sr-only">搜索会话标题或 ID</span><input name="q" type="search" maxlength="120" placeholder="搜索会话标题或 ID"></label>
+            <label>更新起始日期<input name="from" type="date"></label><label>更新结束日期<input name="to" type="date"></label>
+            <label><span class="sr-only">会话状态</span><select name="state"><option value="">全部状态</option><option value="ready">可清理</option><option value="busy">运行中</option><option value="legacy">仅插件已移除</option><option value="pending">移除中</option><option value="failed">移除未完成</option></select></label>
+            <button type="submit">查询</button><button type="button" id="conversation-refresh">刷新</button>
+          </form>
+          <p id="conversation-notice" role="status" aria-live="polite"></p>
+          <div class="conversation-table-wrap">
+            <div class="conversation-batch"><span id="conversation-count">共 0 条会话</span><span id="conversation-selected">已选择 0 条</span><button class="text-button" id="conversation-clear">清空选择</button><button class="danger" id="conversation-remove" disabled>删除所选（0）</button></div>
+            <table class="conversation-table"><thead><tr><th><input id="conversation-select-page" type="checkbox" aria-label="选择本页可删除的会话"></th><th>会话标题</th><th>最近更新时间</th><th>状态</th><th><span class="sr-only">操作</span></th></tr></thead><tbody id="conversation-rows"></tbody></table>
+            <p id="conversation-empty" class="empty" hidden>暂无会话</p>
+            <div class="pagination conversation-pagination"><span id="conversation-range"></span><label><span class="sr-only">每页条数</span><select id="conversation-limit"><option value="30">每页 30 条</option><option value="50">每页 50 条</option><option value="100">每页 100 条</option></select></label><button id="conversation-prev">上一页</button><span id="conversation-page"></span><button id="conversation-next">下一页</button></div>
+          </div>
+          <p class="muted small conversation-footnote">删除后将从插件历史和 DSH 列表移除，底层记录仍保留。可点击标题预览后再勾选。</p>
+        </section>
         <section id="page-plugins" class="page">
           <div class="page-heading"><h1>插件 <span id="plugin-count" class="count">0</span></h1><p id="plugin-description" class="muted">查看插件信息和已注册工具。</p></div>
           <div id="access-targets" class="access-targets" hidden></div>
@@ -77,5 +96,12 @@
     <div id="tool-list" class="tool-list"></div>
     <div class="pagination"><button id="tool-prev">上一页</button><span id="tool-page" aria-live="polite"></span><button id="tool-next">下一页</button></div>
   </dialog>
+  <dialog id="conversation-preview" class="conversation-drawer" aria-labelledby="conversation-preview-title">
+    <div class="dialog-heading"><div><h2 id="conversation-preview-title">会话预览</h2><p id="conversation-preview-meta" class="muted small"></p></div><button id="conversation-preview-close" class="icon-button" aria-label="关闭会话预览"><svg class="icon" aria-hidden="true"><use href="/auth/icons.svg#close"></use></svg></button></div>
+    <p class="muted small">只读预览，不启动模型或执行任务。</p>
+    <div id="conversation-preview-body" class="conversation-transcript"><button id="conversation-older">加载更早消息</button><p id="conversation-preview-status" role="status" aria-live="polite"></p><div id="conversation-messages"></div></div>
+    <div class="conversation-drawer-footer"><button id="conversation-preview-dismiss">关闭</button><button id="conversation-preview-select" class="primary">选中待删除</button></div>
+  </dialog>
+  <dialog id="conversation-confirm" aria-labelledby="conversation-confirm-title"><h2 id="conversation-confirm-title">删除会话？</h2><p>这些会话将从本插件历史和 DSH 会话列表中移除，底层记录仍保留。当前页面不提供恢复入口。</p><p id="conversation-confirm-plugin" class="muted"></p><ul id="conversation-confirm-items" class="conversation-confirm-items"></ul><p id="conversation-remove-status" role="status" aria-live="polite"></p><div class="conversation-drawer-footer"><button id="conversation-cancel" autofocus>取消</button><button id="conversation-confirm-remove" class="danger">确认删除</button></div></dialog>
 </body>
 </html>

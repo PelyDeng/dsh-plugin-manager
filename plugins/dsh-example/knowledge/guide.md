@@ -1,14 +1,24 @@
 # 开发者接入 FAQ
 
-适用：当前框架的 schema 3 声明与发布交付能力，宿主接口以仓库锁定源码为基线。这是随包知识快照；页面摘要标识内容，在线 main 可能领先于安装版本。
+适用：kit 0.2.0、auth 0.12.0；宿主以 gitlink 为准。本文是知识快照，不证明远程站点已升级。
+
+## 如何按插件管理会话，删除前能先预览吗？
+
+登录 `/auth` 的“会话管理”，按插件分类、标题或 ID、更新时间和状态筛选。只管理本人拥有且仍有插件权限的会话，管理员也不获得他人聊天。
+
+点击标题或“预览”打开只读抽屉，最近 30 条消息可向前加载，思考和工具折叠；不启动模型、不恢复任务、不改更新时间。关闭保留筛选和勾选，“选中待删除”只勾选。
+
+确认后批量移除当前插件所选 1–100 条，底层日志保留，无恢复入口；不释放磁盘或删除业务数据。运行中会话被阻止，失败可重试，“仅插件已移除”的旧记录可补齐官方归档。
+
+开发使用 kit 的 `registerConversations`（protocol 1）提供 list、preview、remove，插件保留 owner 与生命周期，复用官方 `workspaceRegistry.archiveSession`。详情与源码入口见 `doc/conversation-management.md`；勿用 ID 前缀认领用户或让 auth 直读业务库。
 
 ## Auth 登录后，根路径为什么仍提示认证？
 
 `dsh web authentication required; reopen the URL printed by dsh web.` 是官方控制台认证提示，不是模型密钥错误。插件 Auth 账号用于 `/auth` 及已授权应用；官方控制台根路径 `/` 使用自己的启动令牌和浏览器 Cookie；API 密钥用于调用模型。这三者独立，登录插件不会自动登录官方控制台。
 
-普通用户从 `/auth` 进入 `/example` 等应用。需要管理模型的站点维护者，在服务器仓库根的私有终端执行 `cat .local/data/dsh-web-auth-url.txt`，仅在自己的浏览器打开完整地址（含 token）。这是默认位置；自定义 `dataRoot` 或 `authUrlFile` 时按 `.local/deployment.json` 的路径读取。正常情况下校验令牌、设置 Cookie 后跳转回干净的 `/`。
+普通用户从 `/auth` 进入应用。维护者在服务器私有终端读取 `.local/data/dsh-web-auth-url.txt`，在本人浏览器打开完整地址；校验后设置 Cookie 并跳转 `/`。自定义 dataRoot/authUrlFile 时按 `.local/deployment.json` 查路径。
 
-重启后启动令牌会重新生成；旧书签、新浏览器或 Cookie 清理后无法进入时，重新读取当前文件。地址不正确时核对站点 `publicUrl`/`publicOrigin`；完整新地址仍被拒绝时检查代理的查询参数、Host 和 Cookie 转发。不要关闭认证，也不要公开 token 或用它替代普通用户的应用授权。
+重启会更新令牌，旧书签或 Cookie 失效后重新读文件。新地址仍失败时核对 publicUrl/publicOrigin 及代理的查询参数、Host、Cookie 转发。不要关闭认证、公开 token 或拿它替代应用授权。
 
 ## 控制台能打开，但模型和插件报 HTTP 403 怎么办？
 
@@ -50,9 +60,9 @@ API Key不创建模型路由、不选择默认模型，也不验证额度；智�
 
 ## 这个仓库是什么？
 
-基于 DeepSeek Harness 的 AI 应用开发与部署框架。个人开发者和小团队在自己的仓库沿用官方 Cordis 插件、Bundle 和 Agent，复用统一打包、安装、更新、配置与启停；登录及应用授权按需启用。
+基于 DeepSeek Harness 的 AI 应用开发与部署框架。作者沿用官方 Cordis、Bundle 和 Agent，在自己的仓库开发插件；框架提供统一打包、安装、配置、启停及可选认证。
 
-官方 DSH 提供插件加载、服务依赖、Agent、模型、工具及会话运行。本框架补充应用声明、发布物检查与组合、实例配置、受控部署和可选账号/逐应用授权。不修改 DSH 源码才能接入，是这里“无侵入”的含义；作者仍需要编写接入声明和鉴权代码。
+官方 DSH 负责插件、Agent、模型、工具及会话；框架补充声明、交付、配置、部署和可选账号授权。无需修改宿主源码，但作者仍编写接入声明和鉴权代码。
 
 | 模块 | 复用什么 | 不替作者做什么 |
 | --- | --- | --- |
@@ -61,20 +71,15 @@ API Key不创建模型路由、不选择默认模型，也不验证额度；智�
 | dsh-auth | 登录、账号、会话、逐应用授权 | 不替代官方控制台认证，不提供完整企业 SSO |
 | dsh-example | 开发者答疑、流式对话、个人历史和停止生成示例 | 不提供销售查询或知识库检索业务 |
 
-单个个人工具可直接用官方 Bundle。多插件管理或组合交付可复用本框架；安装更新经管理器完成，Auth 页面不提供插件市场或在线升级。作者仍维护声明、宿主兼容性与实例配置，任意社区插件不保证兼容。
+个人工具可直接使用官方 Bundle；多插件交付可用管理器。安装更新走 CLI，auth 不提供插件市场或在线升级。作者维护声明与兼容性，按需接入 kit；任意社区插件不保证直接兼容。
 
 ## 第二个应用到底少写什么？
 
-假设知识库助手已交付，现在新增销售报表助手。
-
-| 场景 | 作者仍写 | 持续复用 |
-| --- | --- | --- |
-| 知识库问答 | 文档导入、检索、引用、文档访问范围、工具和提示词 | auth 账号/登录、kit 身份、manager 配置与交付 |
-| 销售报表 | 销售接口、指标计算、部门/客户权限、图表、工具和提示词 | 同一账号系统和部署命令，新增应用声明与必要接入代码 |
+已有知识库助手再加销售助手，复用 auth 登录、kit 身份和 manager 交付；作者仍写检索/销售接口、指标、图表、工具、提示词及业务数据权限。
 
 模型仅提出查询参数；服务端从可信 actor 取得身份、限定数据范围，不能将模型给出的 userId 当授权依据。应用许可与业务数据许可分别检查。
 
-第二应用复用同一登录。kit 构建内嵌，升级需应用重打包；复制 example 仅方便首次开发。上述业务是设计例子，independent-access-example 只返回身份，没有真实销售查询、图表或节省工时证据。
+第二应用复用同一认证，kit 升级仍需重打包。销售场景只是设计例子；independent-access-example 只返回身份，不证明销售查询、图表或节省工时。
 
 ## 选择哪种接入？
 
@@ -246,9 +251,9 @@ Windows PowerShell 用根 `.\build.ps1`，无需 Bash；macOS/Linux 用根 `./bu
 
 ## 来源与进一步阅读
 
-源码仓库的独立测试入口是根目录 `bash test-report.sh`：串联 auth/example 打包、真实宿主与本地模型替身测试、报告交付。先准备已构建的官方 CLI，可用 `--cli` 指定；不调用部署入口、不读取站点 env.conf。每次产物在 `.local/artifacts/test-report-*/`，交付本次 `delivery/`。后续重新打包不自动继承报告；其他业务插件需要自己的测试。完整前置条件和命令见 `packages/plugin-manager/VERIFICATION.md`。
+根 `bash test-report.sh --cli <已构建官方CLI>` 验证 auth/example 归档、真实宿主和本地模型替身，不读取站点配置或部署。交付 `.local/artifacts/test-report-*/delivery/`；重打包不继承报告，其他插件另测。详见 `packages/plugin-manager/VERIFICATION.md`。
 
-交付以随包 README 与知识摘要为准；以下在线资料可能领先于安装版本。
+在线 main 可能领先，交付以随包 README 和知识摘要为准。
 
 - [产品与导航](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/README.md)
 - [使用与运维 FAQ](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/FAQ.md)

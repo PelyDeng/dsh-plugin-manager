@@ -12,6 +12,7 @@ import { AuthStore, bootstrap, migrateLegacy, ensureDefaultAdministrator } from 
 import { hashPassword, verifyPassword, type PasswordHash } from '../src/password.ts'
 import { AuthService } from '../src/service.ts'
 import { createHandler, safeReturn, validateOrigin } from '../src/http.ts'
+import { registerConversations, type Actor as ConversationActor } from '@dsh-plugin-manager/plugin-kit'
 
 let hash: PasswordHash
 const cleanup: (() => Promise<void> | void)[] = []
@@ -63,6 +64,26 @@ async function httpFixture(initial = false) {
 }
 
 describe('provider brand assets', () => {
+  it('会话列表与预览按用户和插件授权隔离，删除保留 CSRF 与撤权复查', async () => {
+    const f = await httpFixture(), seen: string[] = []
+    f.store.create('reader', hash, 'user', ['demo'])
+    const reader = await f.login('reader'), admin = await f.login()
+    registerConversations(f.ctx, {protocol:1,pluginId:'demo',async list(actor){seen.push(actor.userId);return{items:[],total:1,nextOffset:null}},
+      async preview(actor: ConversationActor){return{messages:[{role:'user',text:actor.userId}],previousBefore:null,total:1}},
+      async remove(actor,ids){f.service.assertAccess(actor,'demo');return{results:ids.map(id=>({id,status:'removed'}))}} })
+    const path='/auth/api/conversations?pluginId=demo'
+    expect((await f.request(path)).status).toBe(401)
+    expect((await f.request(path,undefined,reader.cookie)).status).toBe(200)
+    expect((await f.request(path,undefined,admin.cookie)).status).toBe(200)
+    expect(seen).toEqual([reader.result.user.id,admin.result.user.id])
+    const preview=await f.request('/auth/api/conversations/preview?pluginId=demo&id=known',undefined,reader.cookie)
+    expect(await preview.json()).toMatchObject({messages:[{text:reader.result.user.id}]})
+    expect((await f.request('/auth/api/conversations?pluginId=private',undefined,reader.cookie)).status).toBe(403)
+    expect((await f.request('/auth/api/conversations/remove',{pluginId:'demo',ids:['known']},reader.cookie)).status).toBe(403)
+    expect((await f.request('/auth/api/conversations/remove',{pluginId:'demo',ids:['known']},reader.cookie,reader.result.csrf)).status).toBe(200)
+    expect((await f.request('/auth/api/conversations/remove',{pluginId:'demo',ids:['known','known']},reader.cookie,reader.result.csrf)).status).toBe(400)
+    expect((await f.request('/auth/api/conversations/preview?pluginId=demo&id=known&before=NaN',undefined,reader.cookie)).status).toBe(400)
+  })
   it('serves both packaged SVGs from explicit same-origin routes', async () => {
     const f = await httpFixture()
     for (const provider of ['deepseek', 'zhipu']) {

@@ -15,6 +15,7 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { createUserMessage, MessageId, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId, SessionLogOffset, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, createAccess, createPluginHttp, createPluginTools, onRevoked, registerPlugin, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { registerConversations, conversationArchive, conversationRemover, readConversationEvents, previewPage, hostBusyConversationIds, type PreviewMessage } from '@dsh-plugin-manager/plugin-kit'
 import type { Config } from './config.ts'
 import { HistoryStore, projectHistory } from './history.ts'
 import { loadKnowledge, developerInstructions, reasoningLanguage } from './knowledge.ts'
@@ -76,6 +77,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const store = new HistoryStore(config.historyPath || dshHomePath('plugins', manifest.deepseekPlugin.id, 'history.sqlite'))
   let translations: ReasoningTranslations | undefined
   const closings = new Map<string, Promise<void>>()
+  const forks = new Set<string>()
   let disposed = false
   const release = (id: string, conversation: Conversation) => {
     if (conversations.get(id) === conversation) conversations.delete(id)
@@ -136,6 +138,31 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
           },
         }
   }
+  const busy = (id: string) => !!conversations.get(id)?.busy || forks.has(id) || closings.has(id)
+  const remove = conversationRemover(ctx, { assert: actor => access.assert(actor), store, busy, release: async id => {
+    const active = conversations.get(id)
+    if (active) release(id, active)
+    await closings.get(id)
+  } })
+  if (access.mode === 'authenticated') ctx.effect(() => registerConversations(ctx, {
+    protocol: 1, pluginId: manifest.deepseekPlugin.id,
+    async list(actor, query) {
+      access.assert(actor)
+      return store.managed(actor, query, conversationArchive(ctx).archivedSessionIds,
+        [...hostBusyConversationIds(ctx), ...[...new Set([...conversations.keys(), ...forks, ...closings.keys()])].filter(busy)])
+    },
+    async preview(actor, id, before) {
+      access.assert(actor)
+      if (store.record(actor, id).removalState === 'removed') throw new AccessError(404, '会话已移除')
+      const events = await readConversationEvents(ctx, id) as readonly SessionEvent[]
+      access.assert(actor)
+      if (store.record(actor, id).removalState === 'removed') throw new AccessError(404, '会话已移除')
+      const turns = projectTurns(events)
+      const messages: PreviewMessage[] = projectHistory(events).flatMap(message => [message,
+        ...(message.role === 'assistant' && message.turn !== undefined ? (turns[message.turn]?.tools ?? []).map(tool => ({ role: 'tool' as const, text: `${tool.name} · ${tool.status}` })) : [])])
+      return previewPage(messages, before)
+    }, remove,
+  }))
   const assets = [['', 'index.html', 'text/html'], ['/app.js', '../dist/web/app.js', 'text/javascript'],
     ['/stream.js', 'stream.js', 'text/javascript'], ['/style.css', 'style.css', 'text/css'], ['/chat-base.css','chat-base.css','text/css'],
     ...['copy','check','like','dislike','branch','database','clock','think','api','send','chat','user','stop'].map(n=>[`/media/icon-${n}.svg`,`media/icon-${n}.svg`,'image/svg+xml'] as const),
@@ -169,10 +196,14 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const input=await requestBody(req,4000)
     if(typeof input.operation!=='string'||!Array.isArray(input.ids)||!input.ids.length||input.ids.length>100||input.ids.some(id=>typeof id!=='string'))throw new AccessError(400,'对话操作无效')
     const ids=input.ids as string[]
+    if(input.operation==='delete') {
+      const result = await remove(actor, ids)
+      if(result.results.some(item=>item.status==='failed'||item.status==='blocked')) throw new AccessError(409, '部分会话未移除，请在会话管理中查看并重试')
+      json(res,{ok:true});return
+    }
     for(const id of ids){store.assertOwner(id,actor);if(conversations.get(id)?.busy)throw new AccessError(409,'对话仍在回答，请先停止或等待完成')}
     access.assert(actor)
     store.mutate(actor,{operation:input.operation,ids,...(typeof input.title==='string'?{title:input.title}:{}),...(typeof input.pinned==='boolean'?{pinned:input.pinned}:{})})
-    if(input.operation==='delete')for(const id of ids){const active=conversations.get(id);if(active)release(id,active)}
     json(res,{ok:true})
   }}))
   const readEvents = async (id: string, actor: Actor) => {
@@ -222,6 +253,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const input=await requestBody(req,1024)
     if(typeof input.conversationId!=='string'||typeof input.messageId!=='string'||!['positive','negative'].includes(String(input.rating)))throw new AccessError(400,'反馈参数无效')
     const events=await readEvents(input.conversationId,actor)
+    store.assertOwner(input.conversationId,actor)
     if(!projectTurns(events).some(t=>t.status==='completed'&&t.messageId===input.messageId))throw new AccessError(400,'只能评价已完成的回答')
     if(!ctx.messageFeedback)throw new AccessError(503,'当前宿主未启用回答反馈')
     const sessionId=SessionId(input.conversationId),messageId=MessageId(input.messageId)
@@ -242,18 +274,20 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     store.assertOwner(input.conversationId,actor)
     if(conversations.get(input.conversationId)?.busy)throw new AccessError(409,'请等待当前回答结束')
     const events=await readEvents(input.conversationId,actor)
+    store.assertOwner(input.conversationId,actor)
     if(conversations.get(input.conversationId)?.busy)throw new AccessError(409,'请等待当前回答结束')
     const boundary=events.findIndex(e=>e.seq===input.atSeq&&e.type==='turn/end'&&e.data.reason.kind==='completed')
     if(boundary<0)throw new AccessError(400,'只能从已完成的回合创建分支')
     if(conversations.size+closings.size>=config.maxConversations)throw new AccessError(429,'当前会话较多，请稍后重试')
     const id=`example-${randomUUID()}`,seed=events.slice(0,boundary+1),child:Conversation={owner:actor,busy:true,used:Date.now()}
     store.reserve(id,actor,'分支对话');conversations.set(id,child)
+    forks.add(input.conversationId)
     try{
       child.opening=ctx.agents.create({...agentOptions(),sessionId:SessionId(id),seed,inheritedEventCount:SessionLogOffset(seed.length),meta:{cwd:process.cwd(),parentSession:SessionId(input.conversationId),isSeeded:true}})
       child.handle=await child.opening;delete child.opening
       access.assert(actor);if(disposed||conversations.get(id)!==child)throw new AccessError(503,'插件正在停止')
       store.publish(id);child.busy=false;json(res,{conversationId:id})
-    }catch(error){release(id,child);throw error}
+    }catch(error){release(id,child);throw error}finally{forks.delete(input.conversationId)}
   }}))
   ctx.effect(() => http.register({ kind: 'exact', path: config.routePrefix + '/chat', handler: async (request, response, actor) => {
     const input = await body(request, config.maxMessageChars)
@@ -262,6 +296,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     const id = input.conversationId ?? `example-${randomUUID()}`
     if (input.conversationId) store.assertOwner(id, actor)
     await closings.get(id)
+    if (input.conversationId) store.assertOwner(id, actor)
     if (disposed) throw new AccessError(503, '插件正在停止')
     access.assert(actor)
     let conversation = conversations.get(id)
