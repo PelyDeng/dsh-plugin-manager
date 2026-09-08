@@ -4,6 +4,9 @@ import { createConnection, createServer } from 'node:net';
 import { once } from 'node:events';
 import { containerAddress, forwardContainerLoopback } from '../src/container-forward.mjs';
 
+// macOS does not bind unconfigured 127.0.0.2; IPv6 loopback keeps the same-port listener separate.
+const forwardAddress = process.platform === 'darwin' ? '::1' : '127.0.0.2';
+
 test('container forwarding requires one non-loopback IPv4 address', () => {
   const lo = [{ family: 'IPv4', internal: true, address: '127.0.0.1' }];
   const eth0 = [{ family: 'IPv4', internal: false, address: '192.0.2.4' }];
@@ -22,9 +25,9 @@ test('forwarding preserves a large response after the client half-closes its req
   backend.listen(0, '127.0.0.1'); await once(backend, 'listening');
   t.after(() => new Promise(resolve => backend.close(resolve)));
   const port = backend.address().port;
-  const close = await forwardContainerLoopback(port, '127.0.0.2');
+  const close = await forwardContainerLoopback(port, forwardAddress);
   t.after(close);
-  const client = createConnection({ host: '127.0.0.2', port });
+  const client = createConnection({ host: forwardAddress, port });
   const chunks = [];
   client.on('data', data => chunks.push(data));
   client.end('中文 request'); await once(client, 'close');
@@ -37,9 +40,9 @@ test('forwarding keeps bidirectional connections and closes all sockets with its
   backend.listen(0, '127.0.0.1'); await once(backend, 'listening');
   t.after(() => { for (const socket of accepted) socket.destroy(); backend.close(); });
   const port = backend.address().port;
-  const close = await forwardContainerLoopback(port, '127.0.0.2');
+  const close = await forwardContainerLoopback(port, forwardAddress);
   t.after(close);
-  const client = createConnection({ host: '127.0.0.2', port });
+  const client = createConnection({ host: forwardAddress, port });
   await once(client, 'connect');
   for (const text of ['stream-1', 'stream-2']) {
     const response = once(client, 'data'); client.write(text);
@@ -47,12 +50,12 @@ test('forwarding keeps bidirectional connections and closes all sockets with its
   }
   const disconnected = once(client, 'close');
   await close(); await disconnected;
-  await assert.rejects(new Promise((resolve, reject) => { const socket = createConnection({ host: '127.0.0.2', port }); socket.once('connect', () => { socket.destroy(); resolve(); }); socket.once('error', reject); }), { code: 'ECONNREFUSED' });
+  await assert.rejects(new Promise((resolve, reject) => { const socket = createConnection({ host: forwardAddress, port }); socket.once('connect', () => { socket.destroy(); resolve(); }); socket.once('error', reject); }), { code: 'ECONNREFUSED' });
 });
 
 test('occupied forward listener rejects without taking ownership of the existing listener', async t => {
-  const backend = createServer(); backend.listen(0, '127.0.0.2'); await once(backend, 'listening');
+  const backend = createServer(); backend.listen(0, forwardAddress); await once(backend, 'listening');
   t.after(() => backend.close());
-  await assert.rejects(forwardContainerLoopback(backend.address().port, '127.0.0.2'), { code: 'EADDRINUSE' });
+  await assert.rejects(forwardContainerLoopback(backend.address().port, forwardAddress), { code: 'EADDRINUSE' });
   assert.equal(backend.listening, true);
 });
