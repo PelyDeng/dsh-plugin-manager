@@ -23,7 +23,22 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm check
-      - run: pnpm -r --workspace-concurrency=1 --if-present test
+      - name: Test workspace
+        id: tests
+        shell: bash
+        run: pnpm -r --workspace-concurrency=1 --if-present test 2>&1 | tee "$RUNNER_TEMP/workspace-tests.log"
+      - name: Summarize test failures
+        if: failure() && steps.tests.outcome == 'failure'
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const lines = readFileSync(join(process.env.RUNNER_TEMP, 'workspace-tests.log'), 'utf8').split('\n');
+          const first = lines.findIndex(line => /not ok|✖/.test(line));
+          const excerpt = [...lines.slice(Math.max(0, first - 2), first + 65), ...lines.slice(-90)].join('\n').slice(-14000);
+          console.log('::error::' + excerpt.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A'));
+          JS
       - run: node scripts/check-artifacts.mjs
       - run: node scripts/check-repository.mjs
       - if: runner.os == 'Windows'
