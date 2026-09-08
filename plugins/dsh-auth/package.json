@@ -1,6 +1,6 @@
 {
   "name": "dsh-auth",
-  "version": "0.14.5",
+  "version": "0.14.6",
   "description": "统一管理用户账号、登录会话和插件访问权限。",
   "license": "Apache-2.0",
   "private": true,

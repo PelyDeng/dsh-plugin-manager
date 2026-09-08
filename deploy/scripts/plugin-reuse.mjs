@@ -1,8 +1,8 @@
 /** Reuse only archives bound to the active successful source deployment. */
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 
 const require = createRequire(import.meta.url);
@@ -75,6 +75,25 @@ export function preparePluginReuse({ root, previous, active, site, revision, hos
     for (const path of changes) if (!rebuiltSources.some(p => path.startsWith(`${p.directory}/`))) refuse(`重建选集之外的输入发生变化：${path}`);
     const changedIds = new Set(rebuiltSources.filter(p => changes.some(path => path.startsWith(`${p.directory}/`))).map(p => p.id));
 
+    const checkedArchives = new Set();
+    function verifyLocalArchive(plugin, specifier) {
+      const local = specifier.slice(5).replace(/^\.\//, '');
+      const directory = resolve(root, plugin.directory), archive = resolve(directory, local);
+      if (!/\.(?:tgz|tar\.gz)$/.test(local) || /[%?#]/.test(local) || isAbsolute(local) || /^[A-Za-z]:/.test(local) || local.split(/[\\/]/).some(part => !part || part === '.' || part === '..') || !within(directory, archive)) refuse(`${plugin.id} 的 file: 依赖必须是插件目录内的普通归档`);
+      for (let path = archive; path !== directory; path = dirname(path)) {
+        if (!existsSync(path) || lstatSync(path).isSymbolicLink()) refuse(`${plugin.id} 的 file: 归档缺失或包含符号链接`);
+      }
+      if (!lstatSync(archive).isFile()) refuse(`${plugin.id} 的 file: 依赖不是普通归档文件`);
+      const path = relative(root, archive).split(sep).join('/');
+      if (checkedArchives.has(path)) return;
+      for (const at of [record.revision, revision]) {
+        if (!/^100(?:644|755) blob /.test(git(['ls-tree', at, '--', path]))) refuse(`${plugin.id} 的 file: 归档必须在两次发布源码中均为已跟踪普通文件`);
+      }
+      const before = git(['rev-parse', `${record.revision}:${path}`]), after = git(['rev-parse', `${revision}:${path}`]);
+      if (before !== after || after !== git(['hash-object', '--no-filters', '--', archive])) refuse(`${plugin.id} 的 file: 归档内容与已跟踪构建输入不一致`);
+      checkedArchives.add(path);
+    }
+
     // Dependency declarations are the supported contract; arbitrary script reads are not inferred.
     const byName = new Map(sources.map(p => [p.package, p]));
     for (const plugin of sources) {
@@ -92,7 +111,8 @@ export function preparePluginReuse({ root, previous, active, site, revision, hos
           for (const dependencies of [pkg.dependencies, pkg.devDependencies, pkg.optionalDependencies, pkg.peerDependencies]) {
             for (const [name, specifier] of Object.entries(dependencies ?? {})) {
               if (typeof specifier !== 'string') refuse(`${id} 的依赖声明无效`);
-              if (/^(?:file|link):/.test(specifier)) refuse(`${id} 含不能确认的 file/link 构建依赖`);
+              if (specifier.startsWith('file:')) { verifyLocalArchive(plugin, specifier); continue; }
+              if (specifier.startsWith('link:')) refuse(`${id} 含不能确认的 link: 构建依赖`);
               const dependency = byName.get(name);
               if (dependency) visit(dependency);
               else if (specifier.startsWith('workspace:') && name !== '@dsh-plugin-manager/plugin-kit') refuse(`${id} 含不能确认的 workspace 构建依赖 ${name}`);
