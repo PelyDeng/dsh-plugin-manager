@@ -1,6 +1,31 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {shouldSendChatEnter} from '../web/chat.js'
+import {chatTurns} from '../web/chat-turns.js'
+
+test('one answer per user turn retains tools, final feedback target and exact reasoning source',()=>{
+  const input=[{id:'u1',role:'user',text:'今天有哪些文章'},
+    {id:'a1',role:'assistant',turn:1,text:'正在查找',reasoning:'第一段'},
+    {id:'t1',role:'tool',turn:1,status:'succeeded',name:'blog_search_posts'},
+    {id:'t2',role:'tool',turn:1,status:'failed',name:'blog_list_drafts'},
+    {id:'a2',role:'assistant',turn:1,text:'最终结果',feedback:true,tail:true,forkCut:15}]
+  const before=structuredClone(input),result=chatTurns(input)
+  assert.equal(result.length,2);assert.deepEqual(input,before)
+  assert.equal(result[1].id,'a2');assert.equal(result[1].text,'最终结果');assert.equal(result[1].reasoningSource,'a1');assert.equal(result[1].reasoning,'第一段')
+  assert.deepEqual(result[1].tools.map(t=>t.status),['succeeded','failed']);assert.equal(result[1].steps.length,2)
+  assert.equal(result[1].feedback,true);assert.equal(result[1].forkCut,15)
+  const next=chatTurns([...input,{id:'u2',role:'user',text:'下一题'},{id:'a3',role:'assistant',turn:2,text:'下一答',reasoning:'最新思考'}])
+  assert.equal(next.length,4);assert.equal(next[1].displayKey,result[1].displayKey);assert.equal(next[3].reasoningSource,'a3');assert.equal(next[3].tools.length,0)
+})
+
+test('pending and persisted answers share one stable presentation slot',()=>{
+  const user={id:'u1',role:'user',time:123,turn:0}
+  const pending=chatTurns([user],{busy:true}),saved=chatTurns([user,{id:'a1',role:'assistant',turn:1,text:'结果'}])
+  assert.equal(pending.length,2);assert.equal(pending[1].displayKey,saved[1].displayKey)
+  assert.equal(chatTurns([user]).length,1)
+  const interrupted=chatTurns([user,{id:'attempt-3',role:'assistant',turn:1,text:'部分回答',reasoning:'部分思考',interrupted:true},{id:'a1',role:'assistant',turn:1,text:'完整回答',reasoning:'新的思考'}])
+  assert.equal(interrupted.length,2);assert.equal(interrupted[1].reasoningSource,'a1');assert.equal(interrupted[1].steps[0].interrupted,true)
+})
 
 test('chat keyboard sends only desktop Enter and leaves mobile and multiline input untouched',()=>{
   const enter={key:'Enter',shiftKey:false,isComposing:false,keyCode:13}

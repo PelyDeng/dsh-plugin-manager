@@ -78,7 +78,8 @@ export async function apply(ctx:Context,config:Config){
     let result
     switch(input.action){
       case 'chat-create':result=chat.create(actor,args.requestId);break
-      case 'chat-list':result=chat.list(actor,args.offset??0);break
+      case 'chat-list':result=chat.list(actor,args.offset??0,args.query??'');break
+      case 'chat-update':result=chat.mutate(actor,args);break
       case 'chat-history':result=await chat.history(actor,args.conversationId);break
       case 'chat-send':result=await chat.send(actor,args);break
       case 'chat-stop':result=await chat.stop(actor,args.conversationId);break

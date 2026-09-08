@@ -83,6 +83,46 @@ function complete(handle,id='answer-1'){
   handle.emit('turn/end',{turn,reason:{kind:'completed'}})
 }
 
+test('history actions refuse active and finishing conversations before changing any selected row',async t=>{
+  const f=await fixture(t),idle=f.chat.create(actor,'history-idle')
+  await f.send();await tick()
+  for(const operation of ['rename','pin','delete'])assert.throws(()=>f.chat.mutate(actor,{operation,ids:[f.conversation.id],title:'不应改名',pinned:true}),e=>e.status===409)
+  assert.throws(()=>f.chat.mutate(actor,{operation:'delete',ids:[idle.id,f.conversation.id]}),e=>e.status===409)
+  assert.equal(f.index.get(owner,idle.id).deletedAt,null)
+  const release=f.holdNextFlush(),stopping=f.chat.stop(actor,f.conversation.id);await tick()
+  assert.throws(()=>f.chat.mutate(actor,{operation:'delete',ids:[f.conversation.id]}),e=>e.status===409)
+  release();await stopping
+  assert.deepEqual(f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'保留的历史'}),{ok:true})
+  assert.equal(f.chat.list(actor,0,'保留的历史').items[0].id,f.conversation.id)
+})
+
+test('fork source is protected during historical reads and both source and child remain protected until durable',async t=>{
+  let releaseRead=()=>{};t.after(()=>releaseRead())
+  const f=await fixture(t);await f.send();await tick();complete(f.handles[0]);await tick()
+  const persistence=f.chat.ctx.sessionPersistence,open=persistence.open
+  const readGate=new Promise(r=>{releaseRead=r})
+  persistence.open=async(...args)=>{await readGate;return open(...args)}
+  const pending=f.chat.fork(actor,{conversationId:f.conversation.id,messageId:'answer-1',requestId:'history-fork'})
+  await tick()
+  assert.throws(()=>f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'分支期间'}),e=>e.status===409)
+  const releaseFlush=f.holdNextFlush();releaseRead();await tick()
+  const child=f.chat.list(actor).items.find(c=>c.id!==f.conversation.id)
+  assert.ok(child)
+  for(const id of [f.conversation.id,child.id])assert.throws(()=>f.chat.mutate(actor,{operation:'delete',ids:[id]}),e=>e.status===409)
+  releaseFlush();await pending
+  assert.equal(f.chat.forkSources.size,0)
+  const original=structuredClone(f.handles[0].events);let ended=0,changed=0
+  const unsubscribe=f.chat.subscribe(actor,f.conversation.id,()=>{changed++},()=>{ended++})
+  f.chat.mutate(actor,{operation:'delete',ids:[f.conversation.id]})
+  assert.equal(ended,1);assert.equal(changed,0);unsubscribe()
+  await assert.rejects(f.chat.history(actor,f.conversation.id),e=>e.status===404)
+  assert.throws(()=>f.chat.create(actor,'conversation-123'),e=>e.status===404)
+  assert.deepEqual(f.handles[0].events,original)
+  assert.equal((await f.chat.history(actor,child.id)).messages.at(-1).id,'answer-1')
+  f.chat.mutate(actor,{operation:'delete',ids:[child.id]})
+  assert.throws(()=>f.chat.create(actor,'history-fork'),e=>e.status===404)
+})
+
 test('chat search tools preserve structured dates and return lossless imported draft references',async t=>{
   const f=await fixture(t);f.store.create(owner,{title:'时间检索稿'},{published:{cid:338}})
   let received;f.blog.search=async args=>{received=args;return {items:[],hasMore:false}}
