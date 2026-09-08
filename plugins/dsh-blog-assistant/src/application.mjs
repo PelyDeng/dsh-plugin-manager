@@ -17,7 +17,7 @@ export class BlogApplication {
       case 'save': result=this.store.edit(owner,args.id,args.revision,args.content);break
       case 'apply': result=this.store.applyProposal(owner,args.id,args.revision,args.proposalId,args.fields);break
       case 'discard-proposal': result=this.store.discardProposal(owner,args.id,args.revision,args.proposalId);break
-      case 'articles': result=await this.blog.list(args.query??'',args.page??1);break
+      case 'articles': result=await this.blog.list(args.query??'',args.page??1,undefined,args.status??'published');break
       case 'metadata': result=await this.blog.call('status');break
       case 'import': {
         result=await this.importDraft(actor,args.cid,args.variant);break
@@ -30,6 +30,7 @@ export class BlogApplication {
       case 'task-start': result=await this.jobs.start(actor,{...args,callerId:'web'});break
       case 'task': result=this.jobs.get(actor,args.id);break
       case 'task-cancel': result=this.jobs.cancel(actor,args.id);break
+      case 'prepare-delete': result=await this.prepareDelete(actor,args.cid);break
       case 'prepare': result=await this.prepare(actor,args);break
       case 'confirm': result=await this.confirm(actor,args);break
       case 'reconcile': result=await this.reconcile(actor,args.id);break

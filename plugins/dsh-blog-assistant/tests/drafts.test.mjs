@@ -40,6 +40,7 @@ test('publishing a candidate freezes latest text and tags, applies only after co
   const app=new BlogApplication(s,{assert(){}},blog,null,null,{modelArticle:p=>p})
   const d=s.create('n:u',{title:'文章',text:'原文'}),p=s.propose('n:u',d.id,1,{text:'新正文',tags:['新标签']},[])
   const prepared=await app.call(actor,'prepare',{id:d.id,revision:1,mode:'publish',proposalId:p.id})
+  assert.equal(p.before.text,'原文');assert.equal(p.before.title,d.title);
   assert.equal(prepared.after.text,'新正文');assert.equal(prepared.source,'proposal');assert.equal(writes.length,0);assert.equal(s.get('n:u',d.id).text,'原文')
   await app.call(actor,'confirm',{id:prepared.id,nonce:prepared.nonce})
   assert.equal(writes.length,1);assert.deepEqual(writes[0].content.tags,['新标签']);assert.equal(s.get('n:u',d.id).text,'新正文');assert.equal(s.get('n:u',d.id).proposal,null)

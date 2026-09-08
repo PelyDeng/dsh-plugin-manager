@@ -37,3 +37,14 @@ test('combined draft filters retain ownership, dates, taxonomy, literal wildcard
   const d=store.create('u',{title:'legacy'});const old={...d};delete old.createdAt;store.db.prepare('UPDATE drafts SET data=? WHERE id=?').run(JSON.stringify(old),d.id)
   assert.equal(searchDrafts(store,'u',{dateField:'created',period:'today'},now).unknownDateCount,1)
 })
+
+
+test('library passes status and page to bridge and rejects silently ignored filters',async()=>{
+  let payload
+  const client=new BlogClient({url:'https://example.invalid',username:'u',password:'p'},async(url,options)=>{payload=JSON.parse(options.body);return Response.json({ok:true,data:{items:[],hasMore:false,status:payload.status}})})
+  await client.list('文章',2,undefined,'published')
+  assert.equal(payload.status,'published');assert.equal(payload.page,2);assert.equal(payload.query,'文章')
+  await assert.rejects(client.list('',1,undefined,'other'),/检索参数/)
+  client.fetch=async()=>Response.json({ok:true,data:{items:[],hasMore:false}})
+  await assert.rejects(client.list('',1,undefined,'draft'),/0.3.1/)
+})

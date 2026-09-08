@@ -2,9 +2,10 @@ import DOMPurify from 'dompurify'
 import { renderMarkdown } from './markdown.js'
 import { initChat } from './chat.js'
 import { initLayout } from './layout.js'
+import { articleDiff } from './article-diff.js'
 
 const $=id=>document.getElementById(id), base=document.body.dataset.base
-const S={draft:null,dirty:false,saving:null,tab:'local',page:1,mode:'ai',view:'split',job:null,identity:null,attachments:[],selected:new Set(),prepared:null,metadataReady:false}
+const S={draft:null,dirty:false,saving:null,tab:'remote',page:1,mode:'ai',view:'split',job:null,identity:null,attachments:[],selected:new Set(),prepared:null,metadataReady:false}
 let saveTimer,pollTimer,searchTimer,applying,applyBusy=false,listVersion=0,draftVersion=0,sourceMode='task',sourceSignature='',cursor={start:0,end:0}
 const instructions=new Map()
 const selectAssistantTab=name=>window.dispatchEvent(new CustomEvent('blog:assistant-tab',{detail:name}))
@@ -24,18 +25,60 @@ async function flush(){
   S.saving=(async()=>{while(S.dirty&&S.draft){const id=S.draft.id,payload=content();$('save-state').textContent='保存中…';const result=await api('save',{id,revision:S.draft.revision,content:payload});if(S.draft?.id!==id)return;S.draft=result;S.dirty=JSON.stringify(payload)!==JSON.stringify(content());$('save-state').textContent=S.dirty?'还有修改待保存':'已保存';showProposal()}})()
   try{await S.saving;await loadList()}catch(err){$('save-state').textContent='保存失败 · 内容仍在编辑器';throw err}finally{S.saving=null}
 }
-function fill(draft){if(S.draft)instructions.set(S.draft.id,$('instruction').value);$('instruction').value=instructions.get(draft.id)??'';S.draft=draft;S.dirty=false;$('empty').hidden=true;$('editor').hidden=false;for(const key of ['title','text','slug'])$(key).value=draft[key];$('tags').value=draft.tags.join('，');for(const option of $('categories').options)option.selected=draft.categories.includes(Number(option.value));$('operations').replaceChildren();$('format-label').textContent=draft.format==='html'?'HTML 原文 · 原格式保留':'Markdown 原文';$('save-state').textContent='已保存';$('answer').innerHTML='';delete $('answer').dataset.text;$('task-state').textContent='';S.job=null;$('ask').disabled=false;$('cancel-task').hidden=true;$('answer-empty').hidden=false;$('copy-answer').hidden=true;$('assistant-context').textContent=draft.title||'未命名草稿';$('assistant-context').title=draft.title||'未命名草稿';sourceMode='task';showSources([]);clearTimeout(pollTimer);render();showProposal();sessionStorage.setItem(`blog-draft:${S.identity.userId}`,draft.id);$('library').classList.remove('open');window.dispatchEvent(new Event('blog:draft'))}
-async function openDraft(id){const version=++draftVersion;await flush();const draft=await api('draft',{id});if(version!==draftVersion)return;fill(draft);await Promise.all([loadAttachments(),loadTasks(),loadOperations()]);await loadList()}
+function fill(draft){showCandidate(null);if(S.draft)instructions.set(S.draft.id,$('instruction').value);$('instruction').value=instructions.get(draft.id)??'';S.draft=draft;S.dirty=false;$('empty').hidden=true;$('editor').hidden=false;for(const key of ['title','text','slug'])$(key).value=draft[key];$('tags').value=draft.tags.join('，');for(const option of $('categories').options)option.selected=draft.categories.includes(Number(option.value));$('operations').replaceChildren();$('format-label').textContent=draft.format==='html'?'HTML 原文 · 原格式保留':'Markdown 原文';$('save-state').textContent='已保存';$('answer').innerHTML='';delete $('answer').dataset.text;$('task-state').textContent='';S.job=null;$('ask').disabled=false;$('cancel-task').hidden=true;$('answer-empty').hidden=false;$('copy-answer').hidden=true;$('assistant-context').textContent=draft.title||'未命名草稿';$('assistant-context').title=draft.title||'未命名草稿';sourceMode='task';showSources([]);clearTimeout(pollTimer);render();showProposal();sessionStorage.setItem(`blog-draft:${S.identity.userId}`,draft.id);$('library').classList.remove('open');window.dispatchEvent(new Event('blog:draft'))}
+async function openDraft(id,review){const version=++draftVersion;await flush();const draft=await api('draft',{id});if(version!==draftVersion)return;fill(draft);if(review?.proposal||review?.latest&&draft.proposal)showCandidate(review.latest?draft.proposal:review.proposal);await Promise.all([loadAttachments(),loadTasks(),loadOperations()]);await loadList()}
+function showCandidate(proposal){
+  S.review=proposal;$('candidate-review').hidden=!proposal;document.querySelector('.workspace').classList.toggle('reviewing',!!proposal)
+  if(!proposal){$('editor').hidden=!S.draft;return}
+  $('editor').hidden=true
+  const current=proposal.id===S.draft.proposal?.id,compatible=current&&proposal.baseRevision===S.draft.revision
+  const before=proposal.before??(proposal.baseRevision===S.draft.revision?S.draft:null),comparison=before??S.draft
+  $('review-state').textContent=current?'本次修改 · 尚未发布':'历史修改快照 · 只读'
+  $('review-title').textContent=proposal.fields.title
+  $('review-note').textContent=compatible?'这里展示本次修改后的全文。可先查看修改对比，确认后直接发布；如需继续调整，点击“采用并编辑”。':current?'这份候选生成后，编辑稿已有变化。请对比后合并，避免覆盖新修改。':'这是你点击的那次修改，已不是当前待发布稿。可查看快照，或打开最新稿继续操作。'
+  $('review-edit').disabled=!compatible;$('review-publish').disabled=!compatible;$('review-discard').hidden=!current;$('review-latest').hidden=current
+  const article=$('review-article');article.replaceChildren()
+  const body=document.createElement('div');body.innerHTML=(proposal.before?.format??S.draft.format)==='html'?DOMPurify.sanitize(proposal.fields.text,{USE_PROFILES:{html:true}}):renderMarkdown(proposal.fields.text)
+  const tags=document.createElement('p');tags.className='review-tags';tags.textContent='标签：'+(proposal.fields.tags.join('、')||'无');article.append(body,tags)
+  const changes=$('review-changes');changes.replaceChildren()
+  const add=(tag,text,kind)=>{const el=document.createElement(tag);el.textContent=text;if(kind)el.className='review-diff '+kind;changes.append(el)}
+  add('p',before?'对比本次修改前的文章；绿色为新增，红色为删除。':'历史修改前版本未保存，以下与当前编辑稿比较；绿色为新增，红色为删除。','legend')
+  if(comparison.title!==proposal.fields.title){add('h3','标题');add('p','− '+comparison.title,'removed');add('p','＋ '+proposal.fields.title,'added')}
+  const removed=comparison.tags.filter(t=>!proposal.fields.tags.includes(t)),added=proposal.fields.tags.filter(t=>!comparison.tags.includes(t))
+  if(removed.length||added.length){add('h3','标签');if(removed.length)add('p','− '+removed.join('、'),'removed');if(added.length)add('p','＋ '+added.join('、'),'added')}
+  add('h3','正文')
+  const diff=articleDiff(comparison.text,proposal.fields.text)
+  if(diff.every(row=>row.kind==='same'))add('p','正文未修改','legend')
+  else for(const row of diff){if(row.kind==='same')add('p','… 未改动内容 …','legend');else add('pre',row.lines.map(line=>(row.kind==='added'?'＋ ':'− ')+line).join('\n'),row.kind)}
+  selectReview('article')
+}
+function selectReview(name){for(const button of document.querySelectorAll('[data-review-view]'))button.setAttribute('aria-pressed',String(button.dataset.reviewView===name));$('review-article').hidden=name!=='article';$('review-changes').hidden=name!=='changes';document.querySelector('.review-scroll').scrollTop=0}
 async function createDraft(){const version=++draftVersion;await flush();const draft=await api('create');if(version!==draftVersion)return;S.tab='local';tabs();fill(draft);S.attachments=[];S.selected.clear();showAttachments();await loadList()}
 async function loadList(){const version=++listVersion,tab=S.tab,page=S.page,list=$('article-list');list.setAttribute('aria-busy','true');for(const b of list.querySelectorAll('button'))b.disabled=true;$('more-articles').hidden=true;const query=$('search').value.trim();let items,hasMore=false
   try{if(tab==='local')items=await api('drafts',{query})
-  else{const result=await api('articles',{query,page});items=result.items;hasMore=result.hasMore}}catch(err){if(version!==listVersion)return;list.replaceChildren();const note=document.createElement('p');note.className='muted';note.textContent='文章列表读取失败，请重试。';const retry=document.createElement('button');retry.textContent='重新加载';retry.addEventListener('click',action(loadList));list.append(note,retry);throw err}finally{if(version===listVersion)list.removeAttribute('aria-busy')}
+  else{const result=await api('articles',{query,page,status:$('article-status').value});items=result.items;hasMore=result.hasMore}}catch(err){if(version!==listVersion)return;list.replaceChildren();const note=document.createElement('p');note.className='muted';note.textContent='文章列表读取失败，请重试。';const retry=document.createElement('button');retry.textContent='重新加载';retry.addEventListener('click',action(loadList));list.append(note,retry);throw err}finally{if(version===listVersion)list.removeAttribute('aria-busy')}
   if(version!==listVersion)return;list.replaceChildren();$('more-articles').hidden=!hasMore
-  for(const d of items){const button=document.createElement('button');button.className=`article-row ${S.draft?.id===d.id?'active':''}`;const title=document.createElement('span');title.textContent=d.title||'未命名草稿';const small=document.createElement('small');small.textContent=tab==='local'?new Date(d.updatedAt).toLocaleString('zh-CN'):`${d.hasPublished?'已发布':'草稿'}${d.hasSavedDraft?' · 有保存稿':''}`;button.append(title,small);button.addEventListener('click',action(async()=>{if(tab==='local')await openDraft(d.id);else{await flush();const imported=await api('import',{cid:d.cid,variant:d.hasSavedDraft&&!d.hasPublished?'savedDraft':'published'});S.tab='local';tabs();fill(imported);await Promise.all([loadAttachments(),loadOperations(),loadList()])}}));list.append(button)
-    if(tab==='remote'&&d.hasPublished&&d.hasSavedDraft){const saved=document.createElement('button');saved.textContent='导入该文的保存稿';saved.className='article-row';saved.addEventListener('click',action(async()=>{await flush();const imported=await api('import',{cid:d.cid,variant:'savedDraft'});S.tab='local';tabs();fill(imported);await Promise.all([loadList(),loadAttachments(),loadOperations()])}));list.append(saved)}}
+  for(const d of items){
+    const row=document.createElement('div');row.className='library-item'
+    const open=document.createElement('button');open.className=`article-row ${(tab==='local'?S.draft?.id===d.id:(S.draft?.remote?.published?.cid??S.draft?.remote?.savedDraft?.cid)===d.cid)?'active':''}`
+    const title=document.createElement('span');title.textContent=d.title||'未命名草稿'
+    const badges=document.createElement('span');badges.className='article-badges'
+    const badge=(text,kind)=>{const el=document.createElement('span');el.className='article-badge '+kind;el.textContent=text;badges.append(el)}
+    badge(tab==='local'?'工作台草稿':d.hasPublished?'已发布':'草稿',tab==='remote'&&d.hasPublished?'published':'draft')
+    if(tab==='remote'&&d.hasPublished&&d.hasSavedDraft)badge('有保存稿','saved')
+    open.append(title,badges)
+    if(tab==='local'){const time=document.createElement('small');time.textContent=new Date(d.updatedAt).toLocaleString('zh-CN');open.append(time)}
+    open.addEventListener('click',action(async()=>{if(tab==='local')await openDraft(d.id);else{await flush();const imported=await api('import',{cid:d.cid,variant:d.hasSavedDraft&&!d.hasPublished?'savedDraft':'published'});S.tab='local';tabs();fill(imported);await Promise.all([loadAttachments(),loadOperations(),loadList()])}}));row.append(open)
+    if(tab==='remote'){
+      const remove=document.createElement('button');remove.className='article-delete';remove.textContent='删除';remove.setAttribute('aria-label',`删除文章：${d.title||'未命名草稿'}`)
+      remove.addEventListener('click',action(async()=>{remove.disabled=true;try{await prepareLibraryDelete(d.cid)}finally{remove.disabled=false}}));row.append(remove)
+      if(d.hasPublished&&d.hasSavedDraft){const saved=document.createElement('button');saved.textContent='打开保存稿';saved.className='article-saved';saved.addEventListener('click',action(async()=>{await flush();const imported=await api('import',{cid:d.cid,variant:'savedDraft'});S.tab='local';tabs();fill(imported);await Promise.all([loadList(),loadAttachments(),loadOperations()])}));row.append(saved)}
+    }
+    list.append(row)
+  }
   if(!items.length){const p=document.createElement('p');p.className='muted';p.textContent='还没有匹配的文章';list.append(p)}
 }
-function tabs(){for(const t of ['local','remote'])$(`${t}-tab`).setAttribute('aria-pressed',String(S.tab===t))}
+function tabs(){$('article-status-label').hidden=S.tab!=='remote';for(const t of ['local','remote'])$(`${t}-tab`).setAttribute('aria-pressed',String(S.tab===t))}
 function mode(value){S.mode=value;document.querySelector('.workspace').classList.toggle('manual',value==='manual');$('mode-ai').setAttribute('aria-pressed',String(value==='ai'));$('mode-manual').setAttribute('aria-pressed',String(value==='manual'))}
 function insert(text){if(!S.draft)throw new Error('请先新建或选择草稿');const area=$('text');area.focus();area.setSelectionRange(cursor.start,cursor.end);area.setRangeText(text,cursor.start,cursor.end,'end');cursor={start:area.selectionStart,end:area.selectionEnd};changed()}
 function showSources(sources=[]){const signature=JSON.stringify(sources);if(signature===sourceSignature)return;sourceSignature=signature;$('source-count').textContent=String(sources.length);$('source-summary').textContent=sources.length?`${sources.length} 条来源 · ${sources.filter(s=>s.fetched).length} 条已读原文，${sources.filter(s=>!s.fetched).length} 条仅搜索摘要`:'尚无本次查证来源；启用联网后，真实链接将在这里显示。';const box=$('sources');box.replaceChildren();for(const s of sources){const item=document.createElement('div');item.className='source';const url=safeURL(s.url);const title=document.createElement(url?'a':'span');title.textContent=s.title||s.url;if(url){title.href=url;title.target='_blank';title.rel='noopener noreferrer'}const meta=document.createElement('small');meta.textContent=`${s.fetched?'已抓取原文':'仅搜索摘要'} · ${s.retrievedAt?new Date(s.retrievedAt).toLocaleString('zh-CN'):''}${s.publishedAt?' · 发布于 '+s.publishedAt:''}`;item.append(title,meta);box.append(item)}if(!sources.length){const p=document.createElement('p');p.className='muted';p.textContent='尚无查证来源';box.append(p)}}
@@ -48,8 +91,8 @@ async function loadOperations(){if(!S.draft)return;const draftId=S.draft.id,rows
 let publishBusy=false
 function publishStatus(text,success=false){$('publish-status').textContent=text;$('publish-status').hidden=!text;$('publish-status').dataset.success=String(success)}
 function publishControls(busy){
-  publishBusy=busy;$('confirm-publish').disabled=busy||(!$('consume-label').hidden&&!$('consume-draft').checked)
-  $('confirm-publish').textContent=busy?'正在发布…':'确认发布'
+  publishBusy=busy;$('confirm-publish').classList.toggle('danger',S.prepared?.mode==='delete');$('confirm-publish').disabled=busy||(!$('consume-label').hidden&&!$('consume-draft').checked)
+  $('confirm-publish').textContent=S.prepared?.mode==='delete'?(busy?'正在删除…':'确认删除'):(busy?'正在发布…':'确认发布')
   for(const el of document.querySelectorAll('[data-close="publish-dialog"],#reconcile-publish,#retry-publish'))el.disabled=busy
   $('publish-dialog').setAttribute('aria-busy',String(busy))
 }
@@ -61,11 +104,13 @@ async function prepare(){
     const id=S.draft.id,latest=await api('draft',{id})
     if(S.draft?.id!==id)throw new Error('文章已切换，请重新预览')
     if(latest.revision!==S.draft.revision)throw new Error('文章已在其他窗口修改，请重新打开文章后预览')
+    if(S.review&&S.review.id!==latest.proposal?.id)throw new Error('这份候选已不是最新稿，请打开最新稿后再发布')
     S.draft.proposal=latest.proposal;showProposal()
     if(latest.proposal&&latest.proposal.baseRevision!==latest.revision)throw new Error('候选稿与当前文章有冲突，请先合并或删除候选稿，再预览发布')
     const prepared=await api('prepare',{id,revision:latest.revision,mode:'publish',...(latest.proposal?{proposalId:latest.proposal.id}:{})})
     if(S.draft?.id!==id)throw new Error('文章已切换，请重新预览')
     S.prepared={...prepared,draftId:id}
+    $('delete-targets').hidden=true;$('publish-compare').hidden=false
     $('publish-error').hidden=true;publishStatus('');$('publish-link').hidden=true;$('publish-link').removeAttribute('href')
     $('confirm-publish').hidden=false;$('reconcile-publish').hidden=true;$('retry-publish').hidden=true;$('publish-close').textContent='继续编辑'
     $('publish-heading').textContent=prepared.before?'确认更新公开文章':'确认发布文章'
@@ -75,23 +120,35 @@ async function prepare(){
     $('consume-label').hidden=!prepared.hasSavedDraft;$('consume-draft').checked=false;publishControls(false);$('publish-dialog').showModal()
   }finally{$('publish').disabled=false}
 }
+async function prepareLibraryDelete(cid){
+  if(publishBusy)return
+  await flush()
+  const prepared=await api('prepare-delete',{cid}),selected=S.draft?.remote
+  S.prepared={...prepared,remoteId:cid,operationDraftId:'remote:'+cid,draftId:(selected?.published?.cid??selected?.savedDraft?.cid)===cid?S.draft.id:null}
+  $('publish-error').hidden=true;publishStatus('');$('publish-link').hidden=true;$('publish-link').removeAttribute('href')
+  $('publish-heading').textContent='确认删除博客文章';$('publish-description').textContent=`即将永久删除《${prepared.title}》及下列博客内容和关联评论。图床文件和工作台副本会保留。`
+  $('publish-compare').hidden=true;const targets=$('delete-targets');targets.hidden=false;targets.replaceChildren()
+  for(const article of prepared.deletedArticles){const li=document.createElement('li');li.textContent=`${article.title} · ${article.type==='post_draft'?'保存稿':'博客文章'} · ID ${article.cid}`;targets.append(li)}
+  $('confirm-publish').hidden=false;$('reconcile-publish').hidden=true;$('retry-publish').hidden=true;$('consume-label').hidden=true;$('consume-draft').checked=false;$('publish-close').textContent='取消'
+  publishControls(false);$('publish-dialog').showModal()
+}
 async function published(op,result){
   if(result.status!=='succeeded')throw new Error(result.message??'发布结果待核对，请查询操作回执')
-  publishStatus(op.before?'文章更新成功':'发布成功',true);$('publish-status').focus()
-  $('publish-heading').textContent='发布结果';$('publish-description').textContent=`《${op.title}》已提交到博客，可点击“查看博客文章”核对。`
+  publishStatus(op.mode==='delete'?'文章已删除':op.before?'文章更新成功':'发布成功',true);$('publish-status').focus()
+  $('publish-heading').textContent=op.mode==='delete'?'删除完成':'发布结果';$('publish-description').textContent=op.mode==='delete'?`《${op.title}》已从博客删除，工作台副本和图床文件保留。`:`《${op.title}》已提交到博客，可点击“查看博客文章”核对。`
   $('confirm-publish').hidden=true;$('reconcile-publish').hidden=true;$('retry-publish').hidden=true;$('consume-label').hidden=true;$('publish-close').textContent='完成'
   const href=safeURL(result.result?.url);$('publish-link').hidden=!href;if(href)$('publish-link').href=href
-  try{if(S.draft?.id===op.draftId)await openDraft(op.draftId)}catch(err){notice('发布已成功，但工作台刷新失败：'+err.message,'publish-error')}
+  try{if(S.draft?.id===op.draftId)await openDraft(op.draftId);if(op.mode==='delete'){S.page=1;await loadList()}}catch(err){notice('操作已成功，但列表或工作台刷新失败：'+err.message,'publish-error')}
 }
 async function checkPublishFailure(op,err){
   notice(err,'publish-error');publishStatus('')
   // A lost response may still have written the article. Inspect the receipt before offering a new submission.
   let state
-  try{state=(await api('operations',{draftId:op.draftId})).find(row=>row.id===op.id)?.status}catch{}
+  try{state=(await api('operations',{draftId:op.operationDraftId??op.draftId})).find(row=>row.id===op.id)?.status}catch{}
   $('confirm-publish').hidden=true
   $('reconcile-publish').hidden=['prepared','conflict'].includes(state)
   $('retry-publish').hidden=!['prepared','conflict'].includes(state)
-  if(!$('reconcile-publish').hidden)publishStatus('发布结果待核对，请点击“核对操作结果”，避免重复发布。')
+  if(!$('reconcile-publish').hidden)publishStatus('操作结果待核对，请点击“核对操作结果”，避免重复执行。')
 }
 async function loadAttachments(){if(!S.draft)return;const draftId=S.draft.id,attachments=await api('attachments',{draftId});if(S.draft?.id!==draftId)return;S.attachments=attachments;S.selected=new Set(S.attachments.filter(a=>a.selected!==false&&a.status==='ready').map(a=>a.id));showAttachments()}
 function showAttachments(){$('attachment-count').textContent=String(S.attachments.length);$('attachment-empty').hidden=!!S.attachments.length;const box=$('attachment-list');box.replaceChildren();for(const a of S.attachments){
@@ -123,6 +180,7 @@ for(const b of document.querySelectorAll('button[data-view]'))b.addEventListener
 for(const b of document.querySelectorAll('[data-insert]'))b.addEventListener('click',action(()=>{if(S.draft?.format==='html')throw new Error('当前是 HTML 原文，请直接编辑标签，避免隐式转换格式');const selected=$('text').value.slice(cursor.start,cursor.end);insert({heading:'\n## '+(selected||'小标题')+'\n',bold:'**'+(selected||'重点')+'**',italic:'*'+(selected||'文字')+'*',code:'\n```text\n'+(selected||'代码')+'\n```\n',link:'['+(selected||'链接文字')+'](https://)',list:'\n- '+(selected||'列表项')+'\n'}[b.dataset.insert])}))
 for(const tab of ['local','remote'])$(`${tab}-tab`).addEventListener('click',action(async()=>{S.tab=tab;S.page=1;tabs();await loadList()}))
 $('search').addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{S.page=1;loadList().catch(notice)},300)})
+$('article-status').addEventListener('change',action(async()=>{S.page=1;await loadList()}))
 $('more-articles').addEventListener('click',action(async()=>{S.page++;await loadList()}))
 $('insert-image').addEventListener('click',()=>{if(S.draft)$('image-file').click();else notice('请先选择草稿')})
 $('image-file').addEventListener('change',action(async()=>{const file=$('image-file').files[0];if(!file)return;const draftId=S.draft.id;const r=await request('/upload',{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});if(S.draft?.id!==draftId)throw new Error('图片上传成功，但草稿已切换，请回原草稿插入');insert(S.draft.format==='html'?`<img src="${r.url.replaceAll('"','&quot;')}" alt="">`:`\n![图片说明](${r.url})\n`);$('image-file').value=''}))
@@ -137,7 +195,7 @@ $('apply-proposal').addEventListener('click',action(async()=>{
   applyBusy=true;$('apply-proposal').disabled=true
   try{
   const id=S.draft.id;await flush();if(S.draft?.id!==id)return
-  const before=content(),revision=S.draft.revision,proposalId=S.draft.proposal.id,fields=[...document.querySelectorAll('[name=apply-field]:checked')].map(v=>v.value)
+  const before=content(),revision=S.draft.revision,proposalId=S.review?.id??S.draft.proposal.id,fields=[...document.querySelectorAll('[name=apply-field]:checked')].map(v=>v.value)
   $('apply-proposal').disabled=true
   applying=(async()=>{
     const d=await api('apply',{id,revision,proposalId,fields});if(S.draft?.id!==id)return
@@ -152,31 +210,39 @@ $('apply-proposal').addEventListener('click',action(async()=>{
 }))
 $('discard-proposal').addEventListener('click',action(async()=>{
   if(applyBusy||!S.draft?.proposal)return
+  const targetProposal=S.review?.id??S.draft.proposal.id
   if(!window.confirm('删除当前候选稿？工作台正文和博客文章会保留。'))return
   applyBusy=true;$('discard-proposal').disabled=true
   try{
     const id=S.draft.id;await flush();if(S.draft?.id!==id||!S.draft.proposal)return
     const {revision,proposal}=S.draft
-    applying=(async()=>{const d=await api('discard-proposal',{id,revision,proposalId:proposal.id});if(S.draft?.id===id){S.draft=d;showProposal()}})()
+    if(proposal.id!==targetProposal)throw new Error('候选稿已变化，请打开最新稿后再删除')
+    applying=(async()=>{const d=await api('discard-proposal',{id,revision,proposalId:proposal.id});if(S.draft?.id===id){S.draft=d;showProposal();if(S.review?.id===proposal.id)showCandidate(null)}})()
     try{await applying}finally{applying=null}
     await flush()
   }finally{applyBusy=false;$('discard-proposal').disabled=false;showProposal()}
 }))
 $('insert-proposal').addEventListener('click',action(()=>insert(S.draft.proposal.fields.text)))
+for(const b of document.querySelectorAll('[data-review-view]'))b.addEventListener('click',()=>selectReview(b.dataset.reviewView))
+$('review-back').addEventListener('click',()=>showCandidate(null))
+$('review-latest').addEventListener('click',action(()=>openDraft(S.draft.id,{latest:true})))
+$('review-publish').addEventListener('click',action(prepare))
+$('review-discard').addEventListener('click',()=>{$('discard-proposal').click()})
+$('review-edit').addEventListener('click',()=>{for(const field of document.querySelectorAll('[name=apply-field]'))field.checked=true;$('apply-proposal').click()})
 $('publish').addEventListener('click',action(prepare))
 for(const b of document.querySelectorAll('[data-close]'))b.addEventListener('click',()=>$(b.dataset.close).close())
 $('consume-draft').addEventListener('change',()=>publishControls(publishBusy))
 $('publish-dialog').addEventListener('cancel',e=>{if(publishBusy)e.preventDefault()})
-$('retry-publish').addEventListener('click',action(prepare,'publish-error'))
+$('retry-publish').addEventListener('click',action(()=>S.prepared?.mode==='delete'?prepareLibraryDelete(S.prepared.remoteId):prepare(),'publish-error'))
 $('confirm-publish').addEventListener('click',async()=>{
   if(publishBusy||$('confirm-publish').disabled)return
-  const op=S.prepared;publishControls(true);$('publish-error').hidden=true;publishStatus('正在发布，请稍候…')
+  const op=S.prepared;publishControls(true);$('publish-error').hidden=true;publishStatus(op.mode==='delete'?'正在删除，请稍候…':'正在发布，请稍候…')
   try{await published(op,await api('confirm',{id:op.id,nonce:op.nonce,consumeSavedDraft:$('consume-draft').checked}))}
   catch(err){await checkPublishFailure(op,err)}finally{publishControls(false)}
 })
 $('reconcile-publish').addEventListener('click',async()=>{
   if(publishBusy)return
-  const op=S.prepared;publishControls(true);$('publish-error').hidden=true;publishStatus('正在核对发布结果…')
+  const op=S.prepared;publishControls(true);$('publish-error').hidden=true;publishStatus('正在核对操作结果…')
   try{await published(op,await api('reconcile',{id:op.id}))}
   catch(err){await checkPublishFailure(op,err)}finally{publishControls(false)}
 })
@@ -191,6 +257,6 @@ $('schedule').addEventListener('submit',action(async e=>{e.preventDefault();awai
 document.addEventListener('click',action(async e=>{if(e.target.matches('.copy-code')){const code=e.target.closest('.code-block').querySelector('code');await navigator.clipboard.writeText(code.textContent);e.target.textContent='已复制'}}))
 window.addEventListener('beforeunload',e=>{if(S.dirty){e.preventDefault();e.returnValue=''}})
 async function loadMetadata(){try{const meta=await api('metadata');for(const c of meta.categories){const option=document.createElement('option');option.value=c.id;option.textContent=c.name;option.selected=S.draft?.categories.includes(c.id)??false;$('categories').append(option)}S.metadataReady=true;$('categories').disabled=false;$('category-help').textContent='可多选已有分类'}catch(err){$('category-help').textContent='分类加载失败，保存时保留原分类';notice(err)}}
-async function start(){S.identity=await request('/identity');$('backup-open').hidden=!S.identity.backupAdmin;$('blog-link').href=S.identity.blogUrl;initChat({api,request,identity:S.identity,openDraft,flush,renderMarkdown});void loadMetadata();await loadList();const id=sessionStorage.getItem(`blog-draft:${S.identity.userId}`);if(id)await openDraft(id)}
+async function start(){S.identity=await request('/identity');$('backup-open').hidden=!S.identity.backupAdmin;$('blog-link').href=S.identity.blogUrl;initChat({api,request,identity:S.identity,openDraft,flush,renderMarkdown});void loadMetadata();tabs();await loadList();const id=sessionStorage.getItem(`blog-draft:${S.identity.userId}`);if(id)await openDraft(id)}
 initLayout()
 start().catch(notice)

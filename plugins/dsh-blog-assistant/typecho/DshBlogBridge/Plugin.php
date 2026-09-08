@@ -3,7 +3,7 @@
  * DSH 博客原文与确认提交桥接。使用 Typecho 原生内容组件，分离公开版和保存稿。
  * @package DshBlogBridge
  * @author DPL
- * @version 0.3.0
+ * @version 0.3.1
  * @link https://pelyblog.com/
  */
 if (!defined('__TYPECHO_ROOT_DIR__')) { exit; }
@@ -155,23 +155,26 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             $this->demand(($engines[$db->getPrefix() . $name] ?? '') === 'InnoDB', 'incompatible', 503);
         }
         $categories = $db->fetchAll($db->select('mid', 'name')->from('table.metas')->where('type = ?', 'category')->order('order', \Typecho\Db::SORT_ASC));
-        return ['protocolVersion' => 1, 'version' => '0.3.0', 'structuredSearch' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
+        return ['protocolVersion' => 1, 'version' => '0.3.1', 'structuredSearch' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
     }
     private function posts(array $input): array
     {
-        $query = $input['query'] ?? ''; $page = $input['page'] ?? 1;
+        $query = $input['query'] ?? ''; $page = $input['page'] ?? 1; $status = $input['status'] ?? 'all';
+        $this->demand(in_array($status, ['all','published','draft'], true));
         $this->demand(is_string($query) && mb_strlen($query) <= 200 && is_int($page) && $page > 0 && $page <= 10000);
         $db = $this->bridgeDb;
-        $sql = $db->select('cid', 'title', 'type', 'modified')->from('table.contents')
-            ->where('type = ? OR (type = ? AND parent = ?)', 'post', 'post_draft', 0);
-        if ($query !== '') { $sql->where('title LIKE ? OR text LIKE ?', '%' . $query . '%', '%' . $query . '%'); }
+        $sql = $db->select('cid', 'title', 'type', 'status', 'modified')->from('table.contents')
+            ->where('type = ? OR type = ?', 'post', 'post_draft')->where('parent = ?', 0);
+        if ($status === 'published') { $sql->where('type = ? AND status = ?', 'post', 'publish'); }
+        elseif ($status === 'draft') { $sql->where('type = ? OR status <> ?', 'post_draft', 'publish'); }
+        if ($query !== '') { $sql->where('LOCATE(?, title) > 0 OR LOCATE(?, text) > 0', $query, $query); }
         $rows = $db->fetchAll($sql->order('modified', \Typecho\Db::SORT_DESC)->offset(($page - 1) * 30)->limit(31));
         $items = [];
         foreach (array_slice($rows, 0, 30) as $row) {
             $child = $db->fetchRow($db->select('cid')->from('table.contents')->where('parent = ? AND type = ?', $row['cid'], 'post_draft')->limit(1));
-            $items[] = ['cid' => (int) $row['cid'], 'title' => html_entity_decode($row['title'] ?? '', ENT_QUOTES, 'UTF-8'), 'hasPublished' => $row['type'] === 'post', 'hasSavedDraft' => $row['type'] === 'post_draft' || !!$child, 'modified' => (int) $row['modified']];
+            $items[] = ['cid' => (int) $row['cid'], 'title' => html_entity_decode($row['title'] ?? '', ENT_QUOTES, 'UTF-8'), 'hasPublished' => $row['type'] === 'post' && $row['status'] === 'publish', 'hasSavedDraft' => $row['type'] === 'post_draft' || !!$child, 'modified' => (int) $row['modified']];
         }
-        return ['items' => $items, 'hasMore' => count($rows) > 30];
+        return ['items' => $items, 'status' => $status, 'hasMore' => count($rows) > 30];
     }
     private function searchPosts(array $input): array
     {

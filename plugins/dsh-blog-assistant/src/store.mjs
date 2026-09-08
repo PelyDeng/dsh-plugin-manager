@@ -62,7 +62,7 @@ export class BlogStore {
   propose(owner, id, baseRevision, fields, sources) {
     const draft = this.get(owner, id)
     const candidate = article({ ...draft, ...fields })
-    const proposal = { id: randomUUID(), baseRevision, fields: { title: candidate.title, text: candidate.text, tags: candidate.tags }, sources, createdAt: Date.now() }
+    const proposal = { id: randomUUID(), baseRevision, before:baseRevision===draft.revision?{title:draft.title,text:draft.text,tags:draft.tags,format:draft.format}:null, fields: { title: candidate.title, text: candidate.text, tags: candidate.tags }, sources, createdAt: Date.now() }
     // A proposal is a side record: do not increment the hand-written draft revision.
     draft.proposal = proposal
     this.db.prepare('UPDATE drafts SET data=? WHERE id=? AND owner=?').run(JSON.stringify(draft), id, owner)

@@ -7,6 +7,7 @@ namespace Typecho {
     class Db {
         const WRITE = 2;
         const SORT_ASC = 'ASC';
+        const SORT_DESC = 'DESC';
         public static $fixture;
         public $tables = [], $backup = null, $cleanup = [], $failReceipt = false, $commentsEngine = 'InnoDB';
         public function getPrefix() { return 'typecho_'; }
@@ -31,7 +32,7 @@ namespace Typecho {
         }
         public function fetchAll($q) {
             if ($q === 'SHOW TABLE STATUS') return array_map(fn($name) => ['Name' => 'typecho_' . $name, 'Engine' => $name === 'comments' ? $this->commentsEngine : 'InnoDB'], ['contents','fields','relationships','metas','comments','dsh_blog_receipts']);
-            return array_values(array_filter($this->tables[$q->table] ?? [], fn($r) => $q->matches($r)));
+            return array_slice(array_values(array_filter($this->tables[$q->table] ?? [], fn($r) => $q->matches($r))), $q->skip, $q->take);
         }
         public function fetchRow($q) { return $this->fetchAll($q)[0] ?? null; }
     }
@@ -56,23 +57,26 @@ namespace Widget\Contents\Post {
 }
 namespace {
     class QueryDouble {
-        public $kind, $table, $conditions = [], $values;
+        public $kind, $table, $conditions = [], $values, $skip = 0, $take = null;
         public function __construct($kind) { $this->kind = $kind; }
         public function from($table) { $this->table = $table; return $this; }
         public function join(...$args) { return $this; }
         public function order(...$args) { return $this; }
-        public function limit(...$args) { return $this; }
+        public function limit($n) { $this->take=$n; return $this; }
+        public function offset($n) { $this->skip=$n; return $this; }
         public function rows($values) { $this->values = $values; return $this; }
         public function where($sql, ...$values) { $this->conditions[] = [$sql, $values]; return $this; }
         public function matches($row) {
             foreach ($this->conditions as [$sql, $values]) {
-                preg_match_all('/(?:table\.[a-z_]+\.)?([a-z_]+) = \?/', $sql, $matches);
-                $terms = []; foreach ($matches[1] as $i => $key) $terms[] = ($row[$key] ?? null) == $values[$i];
+                if (str_contains($sql, 'LOCATE')) { if (!str_contains($row['title'], $values[0]) && !str_contains($row['text'], $values[1])) return false; continue; }
+                preg_match_all('/(?:table\.[a-z_]+\.)?([a-z_]+) (=|<>) \?/', $sql, $matches);
+                $terms = []; foreach ($matches[1] as $i => $key) $terms[] = $matches[2][$i] === '=' ? ($row[$key] ?? null) == $values[$i] : ($row[$key] ?? null) != $values[$i];
                 if (str_contains($sql, ' OR ') ? !in_array(true, $terms, true) : in_array(false, $terms, true)) return false;
             }
             return true;
         }
     }
+    if (!function_exists('mb_strlen')) { function mb_strlen($s) { return strlen($s); } }
     define('__TYPECHO_ROOT_DIR__', __DIR__);
     require __DIR__ . '/../typecho/DshBlogBridge/Plugin.php';
     function check($value, $message) { if (!$value) throw new \RuntimeException($message); }
@@ -108,5 +112,21 @@ namespace {
     $changed = $input; $changed['cid'] = 339; rejects($run,$changed,409); check($db->tables === $original,'child draft cannot delete its parent');
     $db->failReceipt = true; rejects($run,$input,0); check($db->tables === $original,'receipt failure rolls deletion back');
     $db->failReceipt = false; $db->commentsEngine = 'MyISAM'; rejects($run,$input,503); check($db->tables === $original,'nontransactional comments block deletion');
+    [$db,$action,$ref] = fixture();
+    $rows = [];
+    for ($i=0;$i<35;$i++) {
+        $rows[] = ['cid'=>1000+$i,'type'=>'post','parent'=>0,'status'=>'publish','title'=>'文章'.$i,'text'=>'100%_正文','modified'=>$i];
+        $rows[] = ['cid'=>2000+$i,'type'=>'post_draft','parent'=>0,'status'=>'draft','title'=>'草稿'.$i,'text'=>'待发布','modified'=>$i];
+    }
+    $rows[] = ['cid'=>3000,'type'=>'post_draft','parent'=>1000,'status'=>'draft','title'=>'关联保存稿','text'=>'修改','modified'=>100];
+    $db->tables['table.contents']=$rows;
+    $list=fn($args)=>$ref->getMethod('posts')->invoke($action,$args);
+    $first=$list(['status'=>'published']);$second=$list(['status'=>'published','page'=>2]);$drafts=$list(['status'=>'draft']);
+    check(count($first['items'])===30 && $first['hasMore'] && count($second['items'])===5 && !$second['hasMore'], 'status filtering must precede pagination');
+    check(array_filter($first['items'],fn($r)=>!$r['hasPublished'])===[] && $first['items'][0]['hasSavedDraft'], 'published badge plus saved draft');
+    check(count($drafts['items'])===30 && array_filter($drafts['items'],fn($r)=>$r['hasPublished'])===[], 'draft filter excludes published roots and child drafts');
+    check(count($list(['status'=>'all','query'=>'%_'])['items'])===30, 'search treats percent and underscore literally');
+    rejects($list,['status'=>'invalid'],400);
+    echo "PASS: library status filters before pagination, saved draft flags, literal search and invalid status (Db double)\n";
     echo "PASS: bridge deletion scope, native cleanup calls, receipt replay, actor/hash conflict, stale version, child ID guard and transactional rollback (Db/widget doubles)\n";
 }

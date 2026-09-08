@@ -24,7 +24,12 @@ export class BlogClient {
     }
     return data.data
   }
-  async list(query = '', page = 1, signal) { invariant(typeof query === 'string' && query.length <= 200 && Number.isSafeInteger(page) && page > 0, '检索参数无效'); return this.call('list', { query, page, pageSize: 30 }, signal) }
+  async list(query = '', page = 1, signal, status = 'all') {
+    invariant(typeof query === 'string' && query.length <= 200 && Number.isSafeInteger(page) && page > 0 && page <= 10000 && ['all','published','draft'].includes(status), '检索参数无效')
+    const result=await this.call('list', {query,page,status,pageSize:30}, signal)
+    invariant(status==='all'||result.status===status,'状态筛选需要 DshBlogBridge 0.3.1 或更新版本，请更新博客桥接扩展',503)
+    return result
+  }
   async get(cid, signal) { invariant(Number.isSafeInteger(cid) && cid > 0, '文章 ID 无效'); return this.call('get', { cid }, signal) }
   async search(input={},signal) {
     const {filters,timeZone,start,end}=normalizeSearch(input)
