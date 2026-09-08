@@ -2,6 +2,10 @@
 
 适用：框架 {{FRAMEWORK_VERSION}}（manager、kit、auth、example 同一发布版本）；宿主以 gitlink 为准。本文是知识快照，不证明远程站点已升级。
 
+## 如何统一新会话的默认模型？
+
+Auth“模型设置”单选后保存至官方 `agentDefaultModel` / `settings`，仅影响新会话。插件接入 kit `conversationModel(ctx, id?, eventCount?)`，先核验所有权：无 ID 读默认，有 ID 恢复原模型，分支传继承事件数。读取失败拒绝恢复；硬编码模型不自动改变，专用识图可保留。详见 kit README。
+
 ## 如何按插件管理会话，删除前能先预览吗？
 
 登录 `/auth` 的“会话管理”，按插件分类、标题或 ID、更新时间和状态筛选。只管理本人拥有且仍有插件权限的会话，管理员也不获得他人聊天。
@@ -22,7 +26,7 @@
 
 ## 控制台能打开，但模型和插件报 HTTP 403 怎么办？
 
-如果通过官方认证地址进入后，页面显示“连接异常”，模型接口（如 `/api/llm/listProviders`）返回 403，先检查公网域名是否加入官方 DSH 的 `trustedHosts`。`publicUrl` 决定认证地址，`publicOrigin` 声明应用访问来源；仅设置它们不会自动允许该域名调用官方控制台 API。
+官方认证后模型接口（如 `/api/llm/listProviders`）仍返回 403，检查公网域名是否加入 DSH `trustedHosts`。`publicUrl` 决定认证地址，`publicOrigin` 声明来源，两者不代替 Host 信任。
 
 在私有 `.local/env.conf` 填写以下字段，保留已有设置。域名仅为示例；旧站点先由部署入口导入配置，显式旧JSON仍使用publicUrl/publicOrigin/trustedHosts字段。
 
@@ -32,9 +36,9 @@ DSH_PUBLIC_ORIGIN=https://dsh.example.com
 DSH_TRUSTED_HOSTS=["dsh.example.com"]
 ```
 
-`trustedHosts` 填主机名，不带 `https://` 或路径；如需限定端口，填写与请求 Host 一致的 `主机名:端口`。保留已有信任项，不使用通配域名或关闭认证。通过仓库正常部署入口应用配置并受控重启；重启后读取当前认证地址，再检查模型、插件和工作区是否可用。真实域名属于站点配置，不写入公共模板。
+`trustedHosts` 填主机名或与 Host 一致的 `主机名:端口`，不带协议、路径，不用通配。保留已有项，通过正常部署入口受控重启，读取新认证地址并检查接口；真实域名不写入公共模板。
 
-403 也可能来自反向代理或 Origin 校验：如果仍失败，核对代理是否正确转发 Host、Cookie，以及请求 Origin 是否与访问地址一致。401 是认证未通过，与这里的 Host 信任检查不同；健康接口 200 不能证明控制台 API 正常。
+仍失败则核对代理转发的 Host、Cookie 和 Origin。401 表示未认证；健康 200 不证明控制台 API 正常。
 
 ## 运行内置应用应选择什么宿主？
 

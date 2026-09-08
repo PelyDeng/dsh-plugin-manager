@@ -221,6 +221,32 @@ test('unload waits for delayed creation and disposes the late Agent', async () =
   expect(f.handles[0].disposed).toBe(true)
 })
 
+test('changing the framework default affects new chats while cold resumes retain their recorded route', async () => {
+  const directory=mkdtempSync(join(tmpdir(),'dsh-example-model-')), created=[]
+  const options={historyPath:join(directory,'history.sqlite'),logs:new Map(),beforeCreate:async options=>{created.push(options.agentOptions)}}
+  let f
+  const complete=async id=>{
+    const response=await f.request('/chat',{message:'hello',...(id?{conversationId:id}:{})})
+    expect(response.status).toBe(200)
+    const handle=f.handles.at(-1)
+    f.emit(handle,'request/header',{header:{config:created.at(-1)}})
+    f.emit(handle,'turn/end',{reason:{kind:'completed'}})
+    await response.text();return handle.id
+  }
+  try {
+    f=await setup(options)
+    const id=await complete()
+    fixtures.splice(fixtures.indexOf(f),1);await f.close()
+    f=await setup(options)
+    f.ctx.agentDefaultModel.currentSelection=()=>({provider:'new-provider',model:'new-model'})
+    await complete(id)
+    await complete()
+    expect(created.map(({provider,model})=>({provider,model}))).toEqual([
+      {provider:'test',model:'test'},{provider:'test',model:'test'},{provider:'new-provider',model:'new-model'},
+    ])
+  } finally { if(fixtures.includes(f)){fixtures.splice(fixtures.indexOf(f),1);await f.close()}rmSync(directory,{recursive:true,force:true}) }
+})
+
 test('a request waiting for old disposal cannot start a new Agent after unload', async () => {
   let release, disposing = false
   const gate = new Promise(resolve => { release = resolve })

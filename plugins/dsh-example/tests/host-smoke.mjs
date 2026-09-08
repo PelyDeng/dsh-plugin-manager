@@ -213,6 +213,24 @@ try {
     assert.ok(modelInput.includes(text), `Real DSH model request must contain shipped knowledge: ${text}`)
   }
   const managementPath = '/auth/api/conversations?pluginId=example'
+  const modelCatalog = await (await request('/auth/api/conversation-model', undefined, admin)).json()
+  assert.equal(modelCatalog.writable, true)
+  const originalModel = modelCatalog.selected
+  const alternate = modelCatalog.groups.find(group => group.id === originalModel.provider)?.models.find(model => model.id !== originalModel.model)
+  assert.ok(alternate, 'the official fixture provider must expose a second model')
+  const changedModel = { provider: originalModel.provider, model: alternate.id }
+  assert.equal((await request('/auth/api/conversation-model', changedModel, alice)).status, 403)
+  assert.equal((await request('/auth/api/conversation-model', changedModel, admin)).status, 200)
+  const freshModelChat = await chat('切换默认后的新会话', alice)
+  assert.equal(requests.at(-1).model, changedModel.model)
+  await stop(); await start('authenticated')
+  assert.deepEqual((await (await request('/auth/api/conversation-model', undefined, admin)).json()).selected, changedModel)
+  await chat('切换默认后的旧会话恢复', alice, personal)
+  assert.equal(requests.at(-1).model, originalModel.model)
+  assert.equal((await request('/auth/api/conversation-model', originalModel, admin)).status, 200)
+  const cleanupModelChat = await (await request('/auth/api/conversations/remove', {pluginId:'example',ids:[freshModelChat]}, alice)).json()
+  assert.equal(cleanupModelChat.results[0].status, 'removed')
+  recordStage(['auth','example'], 'framework-default-model-new-and-resumed')
   assert.equal((await request(managementPath, undefined, alice)).status, 200)
   assert.ok((await (await request(managementPath, undefined, alice)).json()).items.some(item => item.id === personal))
   assert.equal((await (await request(managementPath, undefined, bob)).json()).total, 0)

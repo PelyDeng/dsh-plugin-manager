@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises'
 import { posix } from 'node:path'
 import { AccessError, emitRevoked, isAccessError, listPlugins, type Actor } from '@dsh-plugin-manager/plugin-kit/access'
 import { ModelKeyError, modelKeyStatus, setModelKey } from '@dsh-plugin-manager/plugin-kit/model-key'
+import { conversationModels, saveConversationModel } from './models.ts'
 import { AuthService, SESSION_COOKIE } from './service.ts'
 import { conversationProviders, conversationQuery, conversationIds } from '@dsh-plugin-manager/plugin-kit/conversations'
 import { hashPassword, validatePassword } from './password.ts'
@@ -96,6 +97,7 @@ export async function createHandler(ctx: Context, service: AuthService, config: 
     ['/auth/app.js', { file: 'app.js', type: 'text/javascript; charset=utf-8' }],
     ['/auth/catalog-view.js', { file: 'catalog-view.js', type: 'text/javascript; charset=utf-8' }],
     ['/auth/conversations.js', { file: 'conversations.js', type: 'text/javascript; charset=utf-8' }],
+    ['/auth/default-model.js', { file: 'default-model.js', type: 'text/javascript; charset=utf-8' }],
     ['/auth/icons.svg', { file: 'icons.svg', type: 'image/svg+xml' }],
     ['/auth/deepseek.svg', { file: 'deepseek.svg', type: 'image/svg+xml' }],
     ['/auth/zhipu.svg', { file: 'zhipu.svg', type: 'image/svg+xml' }],
@@ -212,6 +214,14 @@ export async function createHandler(ctx: Context, service: AuthService, config: 
         json(res, 200, result); return
       }
       service.requireAdmin(actor)
+      if (path === '/auth/api/conversation-model') {
+        if (!['GET', 'POST'].includes(req.method ?? '')) throw new AccessError(405, '只支持 GET 或 POST')
+        const result = req.method === 'POST'
+          ? await saveConversationModel(ctx, await body(req), () => service.requireAdmin(actor))
+          : await conversationModels(ctx)
+        service.requireAdmin(actor)
+        json(res, 200, result); return
+      }
       if (['/auth/api/deepseek-key', '/auth/api/model-key/deepseek', '/auth/api/model-key/zhipu'].includes(path)) {
         if (!['GET', 'POST'].includes(req.method ?? '')) throw new AccessError(405, '只支持 GET 或 POST')
         const kind = path.endsWith('/zhipu') ? 'zhipu' : 'deepseek'

@@ -24,6 +24,8 @@ const tick = () => new Promise(resolve => setImmediate(resolve))
 const configured = fingerprint => ({ supported: true, writable: true, configured: true, source: 'file', fingerprint: `SHA-256:${fingerprint}` })
 function fixture() {
   const document = new Element(), requests = []
+  const query = document.querySelector.bind(document)
+  document.querySelector = selector => selector === '#conversation-models' ? null : query(selector)
   const cards = ['deepseek', 'zhipu'].map(kind => { const card = new Element(); card.dataset.model = kind; return card })
   document.querySelectorAll = selector => selector === '[data-model]' ? cards : []
   const context = { document, window: { addEventListener() {} }, DOMException, fetch: (url, options) => new Promise(resolve => {
