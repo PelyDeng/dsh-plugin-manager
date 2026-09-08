@@ -1,6 +1,6 @@
 # Docker 集成
 
-镜像包含仓库提供的官方 DSH 源码构建结果及独立打包的公共 manager，业务插件通过发布目录安装。需要本机 Linux Docker 引擎及 Compose，仅接受 unix/npipe endpoint。原生 Linux 使用 host 网络和回环监听；Windows/macOS 及 Linux Docker Desktop 使用 bridge 网络，容器监听 `0.0.0.0`，端口只映射到宿主 `127.0.0.1`。外部入口由部署者配置代理；macOS 尚未完成真机验收。
+镜像包含仓库提供的官方 DSH 源码构建结果及独立打包的公共 manager，业务插件通过发布目录安装。需要本机 Linux Docker 引擎及 Compose，仅接受 unix/npipe endpoint。原生 Linux 使用 host 网络和回环监听；Windows/macOS 及 Linux Docker Desktop 使用 bridge 网络，DSH 仍监听 `127.0.0.1`。管理器在容器唯一桥接 IPv4 地址的同端口进行 TCP 转发，宿主仅向 `127.0.0.1` 发布端口，连接随 DSH 生命周期清理。同 Docker 网络是信任边界，不能据此声称公网隔离；外部入口由部署者配置代理。macOS 尚未完成真机验收。
 
 管理器构建仅安装根工具链、kit 和 manager 的锁定依赖，使用隔离依赖布局；下游插件的私有 `file:` 构建资源不进入镜像上下文。
 
@@ -10,7 +10,7 @@ bash deploy/scripts/build-host-image.sh --help
 
 Bash 实际构建入口为 `bash deploy/scripts/build-host-image.sh`，Node 入口为 `node deploy/scripts/host-image.mjs`。正式构建读取当前已提交的主仓输入和已有宿主源码提交，不检查其与主仓 gitlink 的版本一致性，也不下载源码；`--working-tree` 用于主仓本地开发验证，禁止发布。普通插件构建不需要这些步骤。
 
-镜像名默认 `dsh-host`，标签由宿主版本、宿主提交与配方摘要构成。默认使用显式项目 root 下已有的 `.local/env.conf`，根 `env.conf` 是公开空模板；也可显式 `--config`。`deploy/config/host-image.conf.example` 仅作为旧独立镜像配置兼容模板。Harbor 缓存仅在明确不存在镜像时允许按配置回退上游，认证、TLS 或网络失败直接终止。`--publish` 独立控制推送，默认只构建。
+镜像名默认 `dsh-host`，标签由宿主版本、宿主提交与配方摘要构成。默认使用显式项目 root 下已有的 `.local/env.conf`，根 `env.conf` 提供受控的非秘密默认值；也可显式 `--config`。公开模板的镜像平台为 `linux/amd64`，源码新站点自动创建私有文件时按 Docker 引擎选择架构；手工复制或独立镜像构建需自行核对。`deploy/config/host-image.conf.example` 仅作为旧独立镜像配置兼容模板。Harbor 缓存仅在明确不存在镜像时允许按配置回退上游，认证、TLS 或网络失败直接终止。`--publish` 独立控制推送，默认只构建。
 
 操作记录默认保存在 `.local/artifacts/<操作 ID>/host-image.json`。`--resume <记录>` 仅用于恢复显式发布，并重新核验本机镜像 ID、标签、平台和目标仓库。
 

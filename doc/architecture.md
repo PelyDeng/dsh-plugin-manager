@@ -16,4 +16,4 @@ example 的代码问答通过 kit 工具授权包装官方工具，只检索构�
 
 标准插件通过 `configuration` 声明 Cordis 配置入口和认证角色，每个实例的 `plugin.json` 控制启用及认证模式。管理器据此生成不可变 patch，通过官方 CLI 同步 Bundle；健康检查读取成功部署状态中的探针声明。框架输入与插件业务配置分别维护，不在插件切换时重复修改。完整规则见[插件运行配置规范](plugin-configuration.md)。
 
-框架人工输入集中在私有 `.local/env.conf`，公开根模板只含空值。管理器继续生成部署文件、Compose和官方patch；插件自己的Schema、plugin.json及runtimeConfig仍独立维护，账号与会话保持原存储。详见[配置范围](framework-configuration.md)。
+框架人工输入集中在私有 `.local/env.conf`，公开根模板包含受控的非秘密默认值，秘密、生成项及部分派生项留空。首次创建私有文件写入实际平台默认值，已有输入不覆盖。管理器继续生成部署文件、Compose和官方patch；插件自己的Schema、plugin.json及runtimeConfig仍独立维护，账号与会话保持原存储。详见[配置范围](framework-configuration.md)。

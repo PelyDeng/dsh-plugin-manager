@@ -14,7 +14,7 @@ cd dsh-plugin-manager
 
 Windows 将最后一行换成 `.\build.ps1`。在文件资源管理器打开仓库目录，选择“在终端中打开”并使用 PowerShell，即可执行该命令并保留完整输出；也可通过 `build.ps1` 的“使用 PowerShell 运行”菜单启动。需要传参数或查看失败原因时使用终端。在执行策略阻止运行时，可以仅为这一次调用执行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1`，不修改全局执行策略。
 
-Docker 必须运行 Linux 容器，只接受本机 unix/npipe endpoint；远端 context、SSH/TCP endpoint 不属于本入口的部署范围。一次发布固定 Docker endpoint，并记录引擎身份和架构；切换引擎后不能直接继续原 `--resume`。Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge 网络和宿主 `127.0.0.1` 端口映射；原生 Linux 引擎保留 host 网络。macOS 流程尚未完成真机验收。
+Docker 必须运行 Linux 容器，只接受本机 unix/npipe endpoint；远端 context、SSH/TCP endpoint 不属于本入口的部署范围。一次发布固定 Docker endpoint，并记录引擎身份和架构；切换引擎后不能直接继续原 `--resume`。Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge：官方 DSH 仍监听 `127.0.0.1`，容器桥接 IPv4 地址的同端口通过 TCP 转发至它，宿主只向 `127.0.0.1` 发布端口。同 Docker 网络属于信任边界，不表示公网隔离；原生 Linux 引擎保留 host 网络。macOS 流程尚未完成真机验收。
 
 源码检出阶段使用递归克隆带齐仓库提供的子模块；已有完整源码无需重复克隆。普通 Git 克隆只取得子模块版本引用，实际源码缺失时，部署脚本提示检出不完整，不自行补拉。镜像记录实际使用的源码提交，便于定位构建来源，不拿它与预设版本作准入比较。
 
@@ -46,14 +46,14 @@ Windows 使用 `node deploy/scripts/set-api-key.mjs --config .local/deployment.j
 
 | 文件 | 用途 | 提交 Git |
 | --- | --- | --- |
-| 根 `env.conf` | 带中文注释的公开空模板，真实值不得填入 | 是，仅空值 |
+| 根 `env.conf` | 带中文注释和固定非秘密默认值的公开模板，真实站点值不得填入 | 是，受控默认值及必要空值 |
 | `.local/env.conf` | 部署者维护的框架运行输入，常用配置排在前面 | 否 |
 | `deploy/config/site.defaults.json` | 源码一键入口的通用默认值 | 是 |
 | `.local/deployment.json`、清单及 Compose | 脚本生成的本次部署输入 | 否 |
 | 各插件 `plugin.json` / runtimeConfig | 插件自己的启停、认证及业务配置 | 否，运行实例私有 |
 | `.local/secrets/`、`.local/artifacts/` | 私有凭据投影、备份和部署记录 | 否 |
 
-首次运行自动创建私有配置；也可在尚无旧配置和数据的新站点先复制空模板再填写。通常只需核对公网 URL、trustedHosts 与所用模型凭据。端口默认 7902、profile 默认 web、插件默认 auth/example。Windows/Linux 新站点的容器 UID/GID 默认 1000；macOS 非 root 用户初始化新站点时采用当前 UID/GID。源码新站点的镜像架构按 Docker 引擎选择 amd64/arm64，已保存或显式提供的设置不自动改写。完整键名与默认规则见[框架统一配置](framework-configuration.md)。
+首次运行自动创建私有配置并填写实际默认值；已有文件不覆盖，旧 JSON 导入保留原文件和解析路径。通常只需核对公网 URL、trustedHosts 与所用模型凭据。端口为 7902、profile 为 web、插件为 auth/example；Windows/Linux 的容器 UID/GID 为 1000，macOS 非 root 用户采用当前 UID/GID；镜像架构按 Docker 引擎选择 amd64/arm64。公开模板填写通用的 UID/GID 1000 和 linux/amd64；手工复制模板不会执行平台探测，须自行核对这些值。秘密、生成项及部分派生项继续留空。完整键名与默认规则见[框架统一配置](framework-configuration.md)。
 
 已有站点没有 env 文件时，优先导入旧 site.json，其次导入 deployment.json，保留原文件和已解析的数据路径。旧 hostImageConfig 的镜像配置一并导入，未知字段拒绝静默丢弃。显式 `--config <旧站点.json>` 仍兼容；生成的 deployment.json 不作为人工站点输入。未完成部署沿用原操作文件，恢复期间不迁移。
 

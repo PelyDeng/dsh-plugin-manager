@@ -2,7 +2,7 @@
 
 本目录展示 example、配套 auth 和当前框架的常用站点配置；下方 JSON 是独立集成的兼容模板。在线 main 链接可能领先于安装版本，模板与本页随应用版本交付。JSON 不支持注释，因此模板只保存真实配置字段，逐项备注、是否必填和默认值在下表说明。模板可提交 Git；复制后的实例配置只保存在 `.local/`，不会随源码或归档自动生效。
 
-源码一键部署在 Windows PowerShell 执行根 `.\build.ps1`，macOS/Linux 执行根 `./build.sh`；站点和插件文件自动初始化，无需复制下方模板。站点选项修改 `.local/env.conf`，根 `env.conf` 只提交空值模板，插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值、平台验证边界及恢复说明见[一键部署](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/first-deployment.md)。
+源码一键部署在 Windows PowerShell 执行根 `.\build.ps1`，macOS/Linux 执行根 `./build.sh`；站点和插件文件自动初始化，无需复制下方模板。站点选项修改 `.local/env.conf`，根 `env.conf` 提供固定非秘密默认值，首次生成的私有文件写入实际平台默认值，已有配置不覆盖。插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值、平台验证边界及恢复说明见[一键部署](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/first-deployment.md)。
 
 ## 文件与使用位置
 

@@ -54,3 +54,43 @@ test('package knowledge and source instructions reach new and resumed Agents wit
     await resumed.body.cancel()
   } finally { await f.close() }
 })
+
+test('platform entry and configuration questions receive current knowledge plus readable source evidence', async () => {
+  const f = await fixture({ mode: 'standalone' })
+  let response
+  try {
+    response = await f.request('/chat', { message: 'Windows、macOS、Linux 怎样运行 build？env.conf 哪些默认值已填？已有配置会被覆盖吗？' })
+    const handle = f.handles[0]
+    const knowledge = handle.sections.find(section => section.name === 'example:knowledge').text
+    for (const fact of ['build.ps1', 'build.sh', 'DSH_IMAGE_PLATFORM=linux/amd64', '已有配置不覆盖', '手工复制公共模板不探测平台', '同 Docker 网络是信任边界', 'macOS 尚未真机验收']) expect(knowledge).toContain(fact)
+    const execution = { agent: handle.agent, signal: new AbortController().signal }
+    const search = f.tools.get('example_search_framework'), read = f.tools.get('example_read_framework')
+    for (const [path, expected] of [
+      ['build.ps1', /deploy\/build\.ps1/],
+      ['build.sh', /deploy\/build\.sh/],
+      ['env.conf', /DSH_PORT=7902/],
+      ['deploy/scripts/site.mjs', /process\.getuid/],
+      ['doc/framework-configuration.md', /已有.*不覆盖/],
+      ['doc/first-deployment.md', /TCP 转发/],
+    ]) {
+      let found, offset = 0
+      do {
+        const page = JSON.parse(await search.execute({ query: path, offset }, execution))
+        found = page.results.find(result => result.path === path)
+        offset = page.nextOffset
+      } while (!found && offset !== null)
+      expect(found, `source search must find ${path}`).toBeDefined()
+      let content = '', startLine = 1
+      do {
+        const page = JSON.parse(await read.execute({ path, startLine, lines: 100 }, execution))
+        content += page.content + '\n'; startLine = page.nextLine
+      } while (startLine !== null)
+      expect(content, path).toMatch(expected)
+      if (path === 'env.conf') {
+        expect(content).toContain('DSH_CONTAINER_UID=1000')
+        expect(content).toMatch(/DSH_IMAGE_PLATFORM="?linux\/amd64"?/)
+        expect(content).toMatch(/DEEPSEEK_API_KEY=\s*(?:\n|$)/)
+      }
+    }
+  } finally { await response?.body.cancel(); await f.close() }
+})

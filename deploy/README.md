@@ -21,7 +21,7 @@ git pull --ff-only --recurse-submodules
 ./build.sh
 ```
 
-Windows 将最后一行换成 `.\build.ps1`。首次自动创建 `.local/env.conf`，采用源码入口默认值；已有站点优先导入旧 site.json，其次导入 deployment.json，保留原文件和解析路径。根 `env.conf` 只提交空模板，真实值只填私有副本，详见[统一配置](../doc/framework-configuration.md)。以后读取私有 env；`.local/deployment.json`、发布清单、Compose 和操作记录均由脚本生成，不需要人工准备，也不提交 Git。完整配置、前置环境和恢复说明见[Docker 一键部署](../doc/first-deployment.md)。
+Windows 将最后一行换成 `.\build.ps1`。首次自动创建 `.local/env.conf` 并写入当前平台的实际默认值；已有文件不覆盖。旧站点优先导入 site.json，其次导入 deployment.json，保留原文件和解析路径。根 `env.conf` 提供固定非秘密默认值，真实站点值只填私有副本；手工复制模板须自行核对 UID/GID 和镜像架构，详见[统一配置](../doc/framework-configuration.md)。以后读取私有 env；`.local/deployment.json`、发布清单、Compose 和操作记录均由脚本生成，不需要人工准备，也不提交 Git。完整配置、前置环境和恢复说明见[Docker 一键部署](../doc/first-deployment.md)。
 
 脚本自动准备锁定的 pnpm，安装依赖，构建和检查管理器及 `plugins` 列出的全部插件，并打包发布清单。需要宿主镜像时直接使用仓库已提供的官方源码构建；源码不完整时提示缺失，不自动拉取，也不要求与预设锁定版本一致。宿主源码未变时复用已有宿主层，安装本次构建的 manager。默认使用本机不可变镜像 ID，仅设置 `publishImage` 时推送镜像仓库。构建记录使用已提交源码，无需分别选择组件版本。
 
@@ -33,7 +33,7 @@ Windows 将最后一行换成 `.\build.ps1`。首次自动创建 `.local/env.con
 
 三平台共用 `.local/source-release.node.lock`，Linux shell 同时沿用可用的 `flock` 兼容旧入口。期间不要并行运行其他管理命令。构建子进程通过 IPC 报告完成、退出码一致且没有中断时释放源码锁，包含正常报告的构建失败；进程被强制中断或无法证明完整结束时保留。遇到遗留锁，先根据其中的主机、PID 和 workerPid 核实本机进程及子进程全部退出，再只清理这个 Node 锁文件；不要删除旧 `source-release.lock`、profile 锁或恢复记录。profile 的 `unlock` 命令不能代替此核查。
 
-原生 Linux 保留 host 网络；Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge 和 `127.0.0.1` 端口映射，容器内部监听 `0.0.0.0`。部署在停服前通过 `check-compose` 核验实际容器用户的挂载访问；若 prepared 后预检失败，修正访问条件并使用原配置加 `--resume`。macOS 新站点采用当前非 root 用户 UID/GID，已保存的配置不自动修改。新站点镜像架构按 Docker 引擎初始化；显式配置及旧站点的架构保持。
+原生 Linux 保留 host 网络；Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge。官方 DSH 保持 `127.0.0.1` 监听，管理器在容器唯一桥接 IPv4 地址的同端口通过 TCP 转发至 DSH；宿主只向 `127.0.0.1` 发布端口。同 Docker 网络属于信任边界，此设置不代表公网隔离。部署在停服前通过 `check-compose` 核验实际容器用户的挂载访问；若 prepared 后预检失败，修正访问条件并使用原配置加 `--resume`。macOS 新站点采用当前非 root 用户 UID/GID，已保存的配置不自动修改。新站点镜像架构按 Docker 引擎初始化；显式配置及旧站点的架构保持。
 
 原生 Linux 保留绝对路径去前导 `/` 的 tar 备份格式；Windows/macOS 和 Docker Desktop 的备份使用 `sources/<序号>` 前缀，并在同目录的 `mounts-*.json` 保存原路径映射。发布记录绑定归档及映射的 SHA-256，嵌套源只归档一次。源码 `deploy/scripts/backup.mjs` 的 `validateSourceBackupRestore(record, { image: record.image })` 可在只读备份挂载和容器 tmpfs 中实际提取，输出内容摘要、权限与链接；这是备份恢复验证，不是数据回滚，也不写原数据。可复制命令与资源要求见[更新与恢复](../doc/first-deployment.md#更新与恢复)。
 
