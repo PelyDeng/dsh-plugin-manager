@@ -80,7 +80,7 @@ describe('host-owned event protocol', () => {
       first.installProvider(ctx, provider())
       expect(second.createAccess(ctx, { mode: 'authenticated', pluginId: 'example', publicOrigin: 'https://example.test' }).resolve(request())).toEqual(user)
     } finally { await rm(directory, { recursive: true, force: true }) }
-  })
+  }, 20_000) // Includes a cold bundler process and disk imports on Windows runners.
   it('recognizes protocol errors across independent package copies', () => {
     const foreign = { code: 'DSH_ACCESS_ERROR', name: 'AccessError', status: 403, message: 'denied' }
     expect(foreign instanceof AccessError).toBe(false)

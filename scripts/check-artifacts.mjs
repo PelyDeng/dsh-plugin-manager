@@ -50,6 +50,8 @@ try {
   runPnpm(['install', '--ignore-scripts', '--no-frozen-lockfile'], consumer);
   writeFileSync(join(consumer, 'check.ts'), "import { actorKey, type Actor } from '@dsh-plugin-manager/plugin-kit/access';\nimport { conversationQuery, type ConversationQuery } from '@dsh-plugin-manager/plugin-kit/conversations';\nconst actor: Actor = {namespace:'standalone',userId:'local'};\nactorKey(actor);\nconst query: ConversationQuery = conversationQuery(new URLSearchParams());\nvoid query;\n");
   runPnpm(['exec', 'tsc', '--strict', '--noEmit', '--types', 'node', '--module', 'NodeNext', '--target', 'ES2022', 'check.ts'], consumer);
+  writeFileSync(join(consumer, 'models.ts'), "import { conversationModel, defaultConversationModel, type ConversationModel } from '@dsh-plugin-manager/plugin-kit/models';\nvoid conversationModel; void defaultConversationModel; const model: ConversationModel={provider:'test',model:'test'}; void model;\n");
+  runPnpm(['exec', 'tsc', '--strict', '--noEmit', '--types', 'node', '--module', 'NodeNext', '--target', 'ES2022', 'models.ts'], consumer);
   assert.equal(existsSync(join(consumer, 'node_modules/@deepseek-ai/dsh-tools')), false);
 
   run(['--input-type=module', '-e', "import {conversationQuery} from '@dsh-plugin-manager/plugin-kit/conversations'; if(conversationQuery(new URLSearchParams()).limit!==30) throw Error('conversation leaf');"], consumer);

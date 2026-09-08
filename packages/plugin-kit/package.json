@@ -27,6 +27,10 @@
       "types": "./dist/conversations.d.mts",
       "default": "./dist/conversations.mjs"
     },
+    "./models": {
+      "types": "./dist/models.d.mts",
+      "default": "./dist/models.mjs"
+    },
     "./route-path": {
       "types": "./src/route-path.d.mts",
       "default": "./src/route-path.mjs"

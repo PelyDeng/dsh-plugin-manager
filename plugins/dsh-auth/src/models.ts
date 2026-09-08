@@ -1,6 +1,7 @@
 /** Administrator access to the host-owned catalog and default selection. */
 import type { Context } from '@deepseek-ai/cordis'
-import { AccessError, defaultConversationModel, type ConversationModel } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError } from '@dsh-plugin-manager/plugin-kit/access'
+import { defaultConversationModel, type ConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
 
 interface ModelCatalog { groups: { id: string; name: string; models: { id: string; name: string }[] }[]; failures: { id: string; name: string }[] }
 

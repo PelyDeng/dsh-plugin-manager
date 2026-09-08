@@ -49,5 +49,5 @@ describe('plugin HTTP registration', () => {
       registrations.reverse().forEach(dispose => dispose())
       await server.dispose()
     }
-  })
+  }, 20_000) // Covers native listener startup, HTTP requests and shutdown on CI.
 })

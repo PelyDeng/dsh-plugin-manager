@@ -2,7 +2,7 @@ import { copyFileSync } from 'node:fs'
 import { defineConfig } from 'tsdown'
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/access.ts', 'src/http.ts', 'src/tools.ts', 'src/conversations.ts', 'src/route-path.mjs'],
+  entry: ['src/index.ts', 'src/access.ts', 'src/http.ts', 'src/tools.ts', 'src/conversations.ts', 'src/models.ts', 'src/route-path.mjs'],
   format: 'esm',
   dts: true,
   clean: true,
