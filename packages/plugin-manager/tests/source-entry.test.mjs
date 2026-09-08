@@ -101,16 +101,16 @@ test('unconfirmed or mismatched completion retains the source lock even without 
   }
 });
 
-test('public platform scripts preserve arguments, working directory and exit status', t => {
+test('public deploy platform scripts preserve arguments, working directory and exit status', t => {
   const f = fixture(t);
   const repo = fileURLToPath(new URL('../../../', import.meta.url));
-  for (const path of ['build.sh', 'build.ps1', 'deploy/build.sh', 'deploy/build.ps1']) {
+  for (const path of ['deploy/build.sh', 'deploy/build.ps1']) {
     mkdirSync(dirname(resolve(f.root, path)), { recursive: true }); copyFileSync(resolve(repo, path), resolve(f.root, path));
   }
   f.put('deploy/scripts/release.mjs', 'console.log(JSON.stringify({args:process.argv.slice(2),cwd:process.cwd()})); process.exitCode=7;');
   const args = ['paths', '--config', '中文 config with spaces.conf', '--home', 'data/home with spaces'];
   const binary = process.platform === 'win32' ? 'powershell.exe' : 'bash';
-  const command = process.platform === 'win32' ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolve(f.root, 'build.ps1'), ...args] : [resolve(f.root, 'build.sh'), ...args];
+  const command = process.platform === 'win32' ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', resolve(f.root, 'deploy/build.ps1'), ...args] : [resolve(f.root, 'deploy/build.sh'), ...args];
   const result = spawnSync(binary, command, { cwd: tmpdir(), encoding: 'utf8', windowsHide: true });
   assert.equal(result.status, 7, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout).args, args);
