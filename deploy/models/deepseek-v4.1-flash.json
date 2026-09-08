@@ -1,0 +1,6 @@
+{
+  "id": "deepseek-v4.1-flash-expires-on-0910",
+  "name": "DeepSeek V4.1 Flash（内测，0910 到期）",
+  "description": "临时内测型号；到期后需手动选择可用模型。",
+  "inputModalities": ["text", "image"]
+}
