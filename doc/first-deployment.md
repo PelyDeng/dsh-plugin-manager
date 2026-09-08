@@ -65,6 +65,8 @@ Windows 使用 `node deploy/scripts/set-api-key.mjs --config .local/deployment.j
 
 ## 更新与恢复
 
+默认更新重建全部部署插件。只需重建 c 时，可使用 `./build.sh --rebuild-plugins c`，Windows 使用 `.\build.ps1 --rebuild-plugins c`；多个 ID 用逗号分隔。保留站点完整插件选集，其余自动复用当前成功部署的归档。首次部署或来源不完整时先全量构建；共享源码、依赖或文档变化也可能要求全量，具体条件见[按需重建说明](../deploy/README.md#服务器源码发版)。公共组件、镜像和服务重启仍按现有流程执行。
+
 ```sh
 git pull --ff-only --recurse-submodules
 ./build.sh
@@ -88,7 +90,7 @@ Windows 将最后一行换成 `.\build.ps1`。更新代码时按需同步子模�
 ./build.sh --config .local/env.conf --resume
 ```
 
-Windows 使用 `.\build.ps1 --resume` 或 `.\build.ps1 --config .local/env.conf --resume`。原先显式使用旧 JSON 时，恢复仍传原 JSON。私有操作目录中的 `framework-input.conf` 备存本次 env 原始字节；输入误改时先恢复原文件再 resume，不自动切换来源。
+Windows 使用 `.\build.ps1 --resume` 或 `.\build.ps1 --config .local/env.conf --resume`。恢复不带 `--rebuild-plugins`，使用该次保存的完整清单和镜像。原先显式使用旧 JSON 时，恢复仍传原 JSON。私有操作目录中的 `framework-input.conf` 备存本次 env 原始字节；输入误改时先恢复原文件再 resume，不自动切换来源。
 
 恢复不重建镜像和插件归档，重新核验保存的输入，并交给原管理器恢复安装。源码入口允许管理器在检测到宿主或 Node 等运行环境变化时预检并重装依赖；环境未变化时不会因该许可单独重装。若断电留下进程记录，必须先由 Docker 确认对应容器已停止且其 hostname、profile、home 挂载匹配，才能备存并解除残留记录，pending 保持原样。旧版无 hostname 的运行记录不支持自动解除，需由维护者核实原容器归属后处理。
 

@@ -95,6 +95,19 @@ test('platform entry and configuration questions receive current knowledge plus 
   } finally { await response?.body.cancel(); await f.close() }
 })
 
+test('selective rebuild questions reach the Agent with deployment and reuse boundaries', async () => {
+  const f = await fixture({ mode: 'standalone' })
+  let response
+  try {
+    response = await f.request('/chat', { message: '只改 C 能只构建 C 吗？也能指定 C、D，其他旧包自动复用吗？' })
+    const knowledge = f.handles[0].sections.find(section => section.name === 'example:knowledge').text
+    for (const fact of ['pnpm build --plugins c', 'pnpm package --plugins c,d', './build.sh --rebuild-plugins c', '.\\build.ps1 --rebuild-plugins c', '省略参数全量构建', '共享已跟踪文件', '传递关系校验', '不得靠安装钩子重建', 'prepared 后失败只用 `--resume`', '不是热更新']) expect(knowledge).toContain(fact)
+    const faq = await f.request('/guide.md')
+    expect(faq.status).toBe(200)
+    expect(await faq.text()).toContain('新清单仍完整')
+  } finally { await response?.body.cancel(); await f.close() }
+})
+
 test('current model, version and CI questions have source evidence in the shipped Agent tools', async () => {
   const f = await fixture({ mode: 'standalone' })
   let response

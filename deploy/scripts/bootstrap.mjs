@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { delimiter, resolve } from 'node:path';
 import { buildStep } from './build-output.mjs';
+import { assertSelectiveInstallSafe } from './plugin-reuse.mjs';
 
 export function sourceDependenciesAvailable(root) {
   try {
@@ -30,6 +31,7 @@ export function prepareWorkspaceDependencies(root, env, execute) {
 
 /** Only a new CLI worker bootstraps; importing release() never performs installation. */
 export function bootstrapSource(root, args, env, execute) {
+  if (args.includes('--rebuild-plugins')) assertSelectiveInstallSafe(root);
   if (sourceDependenciesAvailable(root)) return false;
   if (args.includes('--resume')) throw new Error('Source dependencies are missing for --resume. Restore the original workspace dependencies; saved images, archives and tooling have been retained.');
   const status = execute('git', ['status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=all'], { cwd: root, env, stdio: 'pipe', encoding: 'utf8' });
