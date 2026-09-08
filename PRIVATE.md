@@ -6,13 +6,15 @@
 
 ## 源码一键更新
 
-Windows 在仓库根的 PowerShell 执行 `.\build.ps1`，无需 Bash；macOS/Linux 执行 `./build.sh`，也兼容 `sh build.sh`。在 Windows 文件资源管理器打开仓库目录后，可在地址栏输入 `powershell`，再执行脚本。Node.js（含 npm）、Git、tar 和本机 Linux Docker Compose 须提前可用，脚本不安装系统软件。macOS 尚未完成真机验收，平台范围与配置说明见[公共部署文档](doc/first-deployment.md)。
+Windows 在仓库根的 PowerShell 执行 `.\build.ps1`，无需 Bash；macOS/Linux 执行 `./build.sh`，也兼容 `sh build.sh`。在 Windows 文件资源管理器打开仓库目录后，可在地址栏输入 `powershell`，再执行脚本。Node.js（含 npm）、Git、tar 和本机 Linux Docker Compose 须提前可用，脚本不安装系统软件。平台范围、配置与验收边界见[公共部署文档](doc/first-deployment.md)。
 
-根 [build.sh](build.sh)、[build.ps1](build.ps1) 调用 [私有协调入口](private-deploy/release.mjs)，复用公共 `sourceRelease` 的锁、预检和构建进程。同步回调仅获取 `origin/main` 并允许快进，不访问 GitHub、不生成合并提交、不自动推送、不更新宿主子模块。快进后启动新的 Node 构建进程，读取更新后的框架脚本、packageManager 和 pnpm 锁文件。公共 `deploy/*` 与 upstream 保持一致；直接执行 `deploy/build.ps1` 或 `bash deploy/build.sh` 只构建当前检出代码，不更新 Git。
+根 [build.sh](build.sh)、[build.ps1](build.ps1) 调用 [私有协调入口](private-deploy/release.mjs)，复用公共 `sourceRelease` 的锁、预检和构建进程。同步要求当前检出 `main`，仅获取 `origin/main` 并允许快进；其他分支与 detached HEAD 拒绝更新，不自动切换分支。它不访问 GitHub、不生成合并提交、不自动推送、不更新宿主子模块。快进后启动新的 Node 构建进程，读取更新后的框架脚本、packageManager 和 pnpm 锁文件。公共 `deploy/*` 与 upstream 保持一致；直接执行 `deploy/build.ps1` 或 `bash deploy/build.sh` 执行当前检出的源码部署，不更新 Git。
+
+源码部署会重启服务：构建期间旧服务继续运行，产物准备和挂载预检通过后停止旧容器，核验身份与持久挂载，再重建容器并等待健康检查。停服核验失败时尝试恢复旧服务；安装或启动失败保留原输入与产物，保持配置不变后使用 `--resume`。源码部署不再自动归档运行数据，已有数据、历史备份和操作记录继续保留；`--resume` 继续同一次部署，不自动回滚业务数据。博客插件独立的网站备份功能不受此调整影响。
 
 三平台使用同一 `.local/source-release.node.lock`，连续覆盖私有同步与公共构建；Linux shell 还在外层持有可用的旧 `.local/source-release.lock` flock，期间不再调用公共 shell 入口，避免重复加锁。未取得锁直接退出。正常同步失败或收到匹配完成 IPC 的普通构建失败释放 Node 锁；Git/构建子进程被信号中断或无法确认正常结束时保留。先核实锁中主机、PID、workerPid 及其子进程均已退出，再清理 Node 锁；不要删除旧 flock 文件、profile 锁或恢复记录。
 
-快进前保留 `backup/before-origin-*` 本地分支。`--resume`、`--help` 和管理子命令跳过源码更新；帮助及管理命令也不执行部署环境预检。非法参数在同步前拒绝。未完成部署使用对应平台的根脚本加 `--resume`，保留原输入及归档；不会重新安装工作区依赖，缺失时须先恢复原依赖。更新入口自身时，先确认旧入口及其子进程均已退出，在同一源码锁保护下安全快进到新版，再运行新版入口；不要用旧入口完成首次升级，以免仍按旧规则创建备份分支。
+快进前保留 `backup/before-origin-*` 本地分支。`--resume`、`--help` 和管理子命令跳过源码更新；帮助及管理命令也不执行部署环境预检。非法参数在同步前拒绝。未完成部署不会重新安装工作区依赖，缺失时须先恢复原依赖。需要更换更新入口本身时，先确认旧入口及其子进程均已退出，在同一源码锁保护下快进到新版，再运行新版入口。
 
 工作区改动、未完成 Git 操作、本机未共享到 Gitee 的提交或分支分叉都会阻止更新。将这些修改带回私有集成库，保留并合并、检查后推送 Gitee，再重试。不要在服务器执行强制覆盖、丢弃本地提交，或在 Gitee 网页覆盖同步 GitHub。网络错误显示 Git 原始诊断，源码更新失败时不启动构建或停止服务。
 
@@ -39,15 +41,27 @@ node --test private-deploy/tests/sync-origin.test.mjs
 pnpm package --plugins "auth,closedoff,example" --output .local/artifacts/release/plugins
 ```
 
+涉及博客插件时，将 `blog` 加入构建、检查和打包的插件选集，并执行其 [README](plugins/dsh-blog-assistant/README.md#开发检查) 列出的相关测试。DSH 源码部署不会自动更新博客站点里的 Typecho 桥接扩展；浏览次数不再导致版本冲突需要同时部署当前博客插件及 DshBlogBridge 0.3.2。按插件说明单独备份并更新桥接文件，旧确认卡片必要时重新预览，实际文章内容变化仍会被拒绝。
+
 检查、归档及与改动相关的业务验收完成后，提交集成修改并执行 `git push origin main`。部署者随后运行对应平台的根 build 脚本获取这一版本。Gitee 分支本身不自动证明所有测试通过；发布维护者负责检查，不能把冲突转移回服务器。框架构建、配置和恢复能力见[部署说明](deploy/README.md)。
 
 `plugins/dsh-closedoff-assistant` 是私有定制插件，其 `vendor/` 包含构建播放器所需的版本化归档。该目录不受根 Apache-2.0 许可授权，适用插件 [LICENSE](plugins/dsh-closedoff-assistant/LICENSE)。第三方资源保持各自许可。不得将该目录或包含它的提交推送公共仓库。
 
 `plugins/dsh-blog-assistant` 是个人博客私有插件，适用其 [LICENSE](plugins/dsh-blog-assistant/LICENSE)，只在 Gitee 集成。它通过 auth 使用博客工作台，通过 Typecho 桥接编辑文章，并使用独立 systemd 执行器备份网站。运行凭据源为插件自己的 `config/config.json`；文件不提交、不进入镜像和归档，生产以 `instances.blog.runtimeConfig` 显式引用。安装与使用见[插件说明](plugins/dsh-blog-assistant/README.md)。
 
-首次部署时，从插件模板创建 `.local/secrets/closedoff.env.conf`，在私有 `.local/env.conf` 的 `DSH_INSTANCES` 对象中设置 `closedoff.runtimeConfig` 为该文件路径，保留其他插件引用。业务配置仍由各插件维护。根 `env.conf` 已填写受控的非秘密默认值；首次自动创建私有文件会写入实际平台默认值，已有配置不覆盖，手工复制须核对 UID/GID 和镜像架构。公共默认选集为 auth/example，私有业务插件按需加入 `DSH_PLUGINS`。真实模型密钥仅填写私有副本，非空时文件优先且网页只读，留空沿用官方来源而不删除旧值。配置文件应仅允许服务运行用户读取。不要提前向数据目录写入文件；首次构建由管理器初始化数据目录。真实凭据及运行数据不进入 Git。发布包放在 `.local/artifacts/`。
+公共 example 的问答知识与源码索引只承载公共框架能力，不加入本文件、`private-deploy/`、定制插件源码、内部接口或运行凭据。私有模型路由和业务接入说明保留在本仓库及各私有插件文档中，不能为补齐公共问答而复制到 GitHub。
+
+首次部署时，从插件模板创建 `.local/secrets/closedoff.env.conf`，在私有 `.local/env.conf` 的 `DSH_INSTANCES` 对象中设置 `closedoff.runtimeConfig` 为该文件路径，保留其他插件引用。业务配置仍由各插件维护。根 `env.conf` 已填写受控的非秘密默认值；首次自动创建私有文件会写入实际平台默认值，已有配置不覆盖，手工复制须核对 UID/GID 和镜像架构。公共默认选集为 auth/example，私有业务插件按需加入 `DSH_PLUGINS`。模型密钥写入私有 `.local/env.conf` 或 auth 管理页对应的官方凭据存储；文件项非空时文件优先且网页只读，留空沿用官方来源而不删除旧值。文件凭据更改通过部署后重启生效，不能在 `--resume` 中替换旧操作的凭据。配置文件应仅允许服务运行用户读取。不要提前向数据目录写入文件；首次构建由管理器初始化数据目录。真实凭据及运行数据不进入 Git。发布包放在 `.local/artifacts/`。
 
 宿主子模块锁定 DSH `0.1.3-alpha.1`，以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。
+
+## 默认模型与私有插件
+
+管理员在 auth“模型设置”中从官方宿主模型目录单选默认模型；设置保存到同一 DSH home 的官方设置，无需重启，对随后创建的普通会话生效。模型目录、默认选择和服务商凭据由官方 DSH 提供，框架负责管理员入口及 kit 接入；业务插件负责自己的工具、权限与专用模型用途。保存默认模型不等于已经通过真实模型请求验证。
+
+example、封闭化以及博客的普通文字新会话均接入该默认值。已有模型记录的会话续聊和分支使用对应历史位置的模型，重启或修改默认值不改写这些记录；尚无模型记录时沿用官方默认。缺少宿主模型投影或读取失败会拒绝恢复，不静默换用另一个模型。封闭化的新会话只在所选模型支持时使用插件配置的推理等级，旧会话保留记录中的设置。
+
+博客文章编辑器的专用写作仍使用 `models.text`，首次发送图片可切换至 `models.vision`；已有图片历史的续聊和分支沿用记录中的识图模型。服务商密钥与这些 provider/model 引用分开管理。若把博客 Bundle 注册的模型路由选为框架默认，使用它的站点必须保留该 Bundle；未安装私有插件的公共框架不会因此自动获得私有路由。细节见[博客宿主能力](plugins/dsh-blog-assistant/README.md#宿主能力)和[封闭化对话模型](plugins/dsh-closedoff-assistant/README.md#对话模型)。
 
 ## 已部署实例的运维
 
