@@ -75,6 +75,12 @@ export class BlogStore {
     const patch = Object.fromEntries(fields.map(key => [key, d.proposal.fields[key]]))
     return this.save(owner, id, revision, { ...patch, sources: d.proposal.sources, proposal: null })
   }
+  discardProposal(owner, id, revision, proposalId) {
+    const d=this.get(owner,id)
+    invariant(d.proposal&&d.proposal.id===proposalId,'候选稿已变化，请刷新后再删除',409)
+    const result=this.save(owner,id,revision,{proposal:null})
+    this.record(owner,'discard-proposal',{draftId:id,proposalId});return result
+  }
   jobStart(owner, caller, requestId, input, actor) {
     invariant(/^[\w.-]{1,80}$/.test(caller) && /^[\w-]{8,100}$/.test(requestId), '调用标识无效')
     const old = this.db.prepare('SELECT data,inputHash FROM jobs WHERE owner=? AND caller=? AND requestId=?').get(owner, caller, requestId)

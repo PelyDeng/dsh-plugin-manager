@@ -79,3 +79,6 @@ body[data-view=writing] #quick-new{display:none}
  #metadata-dialog .metadata select,.source-scope-label select{font-size:16px}.keyboard-open .document-summary,.keyboard-open .compose-heading,.keyboard-open .editor-top,.keyboard-open .formatbar .tabs{display:none}.keyboard-open .title-input{font-size:18px}.keyboard-open .editor-footer{padding:6px 0;flex-wrap:nowrap}.keyboard-open .assistant-compose textarea{max-height:80px}.keyboard-open .assistant-dialog[open]{height:var(--app-height);max-height:var(--app-height);margin:0;border-radius:0}
 }
 @media(max-width:360px){.editor-footer{flex-wrap:wrap}.editor-footer #operations-open{padding:5px 4px}.editor-footer #save{padding:5px 5px}.editor-footer button{font-size:10px}.editor-top .tabs button{font-size:11px}.editor-top #metadata-open{font-size:11px}}
+
+#publish-status{padding:12px 14px;border-radius:8px;background:#f3f6fb;color:#36445b;font-weight:600}
+#publish-status[data-success=true]{background:#eef8f1;color:#176737}

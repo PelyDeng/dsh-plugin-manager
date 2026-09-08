@@ -45,7 +45,54 @@ async function loadTasks(){if(!S.draft)return;const draftId=S.draft.id,jobs=awai
 function showJob(){const j=S.job;if(!j)return;const busy=['queued','running'].includes(j.status);$('ask').disabled=busy;$('cancel-task').hidden=!busy;const names={queued:'等待开始',running:'正在整理与写作',succeeded:'本次写作完成',failed:'本次写作未完成',cancelled:'已停止'};$('task-state').textContent=`${names[j.status]??j.status}${j.error?' · '+j.error.message:''}${j.input.research&&!j.sources.some(s=>s.fetched)?' · 未完成原文查证':''}`;const panel=$('assistant-panel-answer'),top=panel.scrollTop,follow=panel.scrollHeight-top-panel.clientHeight<80;if($('answer').dataset.text!==j.text){$('answer').innerHTML=renderMarkdown(j.text||'');$('answer').dataset.text=j.text;}$('answer-empty').hidden=!!j.text||busy;$('copy-answer').hidden=!j.text;panel.scrollTop=follow?panel.scrollHeight:top;renderSources()}
 async function poll(){clearTimeout(pollTimer);const id=S.job?.id;if(!id)return;try{const j=await api('task',{id});if(S.job?.id!==id)return;S.job=j;showJob();if(['queued','running'].includes(j.status))pollTimer=setTimeout(poll,900);else if(S.draft){const d=await api('draft',{id:S.draft.id});if(S.draft?.id===d.id){S.draft.proposal=d.proposal;showProposal()}}}catch(err){notice(err);$('ask').disabled=false}}
 async function loadOperations(){if(!S.draft)return;const draftId=S.draft.id,rows=await api('operations',{draftId});if(S.draft?.id!==draftId)return;const box=$('operations');box.replaceChildren();if(!rows.length){const p=document.createElement('p');p.className='muted';p.textContent='这篇文章还没有发布或同步记录。';box.append(p)}for(const op of rows){const item=document.createElement('div');const status={prepared:'等待确认',running:'提交中',uncertain:'结果待核对',succeeded:'已确认成功',conflict:'版本冲突'};item.textContent=`${op.mode==='publish'?'发布/更新':'同步草稿'} · ${status[op.status]??op.status}`;if(safeURL(op.url)){const link=document.createElement('a');link.href=safeURL(op.url);link.target='_blank';link.rel='noopener';link.textContent=' 查看文章 ↗';item.append(link)}if(['running','uncertain'].includes(op.status)){const b=document.createElement('button');b.textContent='核对回执';b.addEventListener('click',action(async()=>{const r=await api('reconcile',{id:op.id});if(r.status==='uncertain')notice(r.message);await loadOperations()}));item.append(b)}box.append(item)}}
-async function prepare(mode){await flush();if(!S.draft)throw new Error('请先选择草稿');S.prepared=await api('prepare',{id:S.draft.id,revision:S.draft.revision,mode});$('publish-error').hidden=true;$('publish-heading').textContent=mode==='publish'?'确认发布 / 更新公开文章':'确认同步博客草稿';$('publish-description').textContent=`《${S.prepared.title}》 · 本地保存不会自动发布，请核对以下内容。`;$('before-text').textContent=S.prepared.before?`${S.prepared.before.title}\n\n${S.prepared.before.text}`:'尚无公开版本';$('after-text').textContent=`${S.prepared.after.title}\n\n${S.prepared.after.text}\n\n标签：${S.prepared.after.tags.join('、')}`;$('consume-label').hidden=!(mode==='publish'&&S.prepared.hasSavedDraft);$('consume-draft').checked=false;$('publish-dialog').showModal()}
+let publishBusy=false
+function publishStatus(text,success=false){$('publish-status').textContent=text;$('publish-status').hidden=!text;$('publish-status').dataset.success=String(success)}
+function publishControls(busy){
+  publishBusy=busy;$('confirm-publish').disabled=busy||(!$('consume-label').hidden&&!$('consume-draft').checked)
+  $('confirm-publish').textContent=busy?'正在发布…':'确认发布'
+  for(const el of document.querySelectorAll('[data-close="publish-dialog"],#reconcile-publish,#retry-publish'))el.disabled=busy
+  $('publish-dialog').setAttribute('aria-busy',String(busy))
+}
+async function prepare(){
+  if(publishBusy)return
+  $('publish').disabled=true
+  try{
+    await flush();if(!S.draft)throw new Error('请先选择草稿')
+    const id=S.draft.id,latest=await api('draft',{id})
+    if(S.draft?.id!==id)throw new Error('文章已切换，请重新预览')
+    if(latest.revision!==S.draft.revision)throw new Error('文章已在其他窗口修改，请重新打开文章后预览')
+    S.draft.proposal=latest.proposal;showProposal()
+    if(latest.proposal&&latest.proposal.baseRevision!==latest.revision)throw new Error('候选稿与当前文章有冲突，请先合并或删除候选稿，再预览发布')
+    const prepared=await api('prepare',{id,revision:latest.revision,mode:'publish',...(latest.proposal?{proposalId:latest.proposal.id}:{})})
+    if(S.draft?.id!==id)throw new Error('文章已切换，请重新预览')
+    S.prepared={...prepared,draftId:id}
+    $('publish-error').hidden=true;publishStatus('');$('publish-link').hidden=true;$('publish-link').removeAttribute('href')
+    $('confirm-publish').hidden=false;$('reconcile-publish').hidden=true;$('retry-publish').hidden=true;$('publish-close').textContent='继续编辑'
+    $('publish-heading').textContent=prepared.before?'确认更新公开文章':'确认发布文章'
+    $('publish-description').textContent=`《${prepared.title}》 · ${prepared.source==='proposal'?'本次发布最新候选稿，确认成功后同步到工作台':'本次发布当前编辑器已保存的内容'}。请核对正文与标签。`
+    $('before-text').textContent=prepared.before?`${prepared.before.title}\n\n${prepared.before.text}`:'尚无公开版本'
+    $('after-text').textContent=`${prepared.after.title}\n\n${prepared.after.text}\n\n标签：${prepared.after.tags.join('、')}`
+    $('consume-label').hidden=!prepared.hasSavedDraft;$('consume-draft').checked=false;publishControls(false);$('publish-dialog').showModal()
+  }finally{$('publish').disabled=false}
+}
+async function published(op,result){
+  if(result.status!=='succeeded')throw new Error(result.message??'发布结果待核对，请查询操作回执')
+  publishStatus(op.before?'文章更新成功':'发布成功',true);$('publish-status').focus()
+  $('publish-heading').textContent='发布结果';$('publish-description').textContent=`《${op.title}》已提交到博客，可点击“查看博客文章”核对。`
+  $('confirm-publish').hidden=true;$('reconcile-publish').hidden=true;$('retry-publish').hidden=true;$('consume-label').hidden=true;$('publish-close').textContent='完成'
+  const href=safeURL(result.result?.url);$('publish-link').hidden=!href;if(href)$('publish-link').href=href
+  try{if(S.draft?.id===op.draftId)await openDraft(op.draftId)}catch(err){notice('发布已成功，但工作台刷新失败：'+err.message,'publish-error')}
+}
+async function checkPublishFailure(op,err){
+  notice(err,'publish-error');publishStatus('')
+  // A lost response may still have written the article. Inspect the receipt before offering a new submission.
+  let state
+  try{state=(await api('operations',{draftId:op.draftId})).find(row=>row.id===op.id)?.status}catch{}
+  $('confirm-publish').hidden=true
+  $('reconcile-publish').hidden=['prepared','conflict'].includes(state)
+  $('retry-publish').hidden=!['prepared','conflict'].includes(state)
+  if(!$('reconcile-publish').hidden)publishStatus('发布结果待核对，请点击“核对操作结果”，避免重复发布。')
+}
 async function loadAttachments(){if(!S.draft)return;const draftId=S.draft.id,attachments=await api('attachments',{draftId});if(S.draft?.id!==draftId)return;S.attachments=attachments;S.selected=new Set(S.attachments.filter(a=>a.selected!==false&&a.status==='ready').map(a=>a.id));showAttachments()}
 function showAttachments(){$('attachment-count').textContent=String(S.attachments.length);$('attachment-empty').hidden=!!S.attachments.length;const box=$('attachment-list');box.replaceChildren();for(const a of S.attachments){
   const row=document.createElement('div');row.className='attachment-row';const check=document.createElement('input');check.type='checkbox';check.checked=S.selected.has(a.id);check.disabled=a.status!=='ready'||(a.partial&&!a.range);check.setAttribute('aria-label',`本次阅读 ${a.name}`)
@@ -103,10 +150,36 @@ $('apply-proposal').addEventListener('click',action(async()=>{
   await flush();await Promise.all([loadTasks(),loadAttachments(),loadOperations()]);selectAssistantTab('proposal')
   }finally{applyBusy=false;showProposal()}
 }))
+$('discard-proposal').addEventListener('click',action(async()=>{
+  if(applyBusy||!S.draft?.proposal)return
+  if(!window.confirm('删除当前候选稿？工作台正文和博客文章会保留。'))return
+  applyBusy=true;$('discard-proposal').disabled=true
+  try{
+    const id=S.draft.id;await flush();if(S.draft?.id!==id||!S.draft.proposal)return
+    const {revision,proposal}=S.draft
+    applying=(async()=>{const d=await api('discard-proposal',{id,revision,proposalId:proposal.id});if(S.draft?.id===id){S.draft=d;showProposal()}})()
+    try{await applying}finally{applying=null}
+    await flush()
+  }finally{applyBusy=false;$('discard-proposal').disabled=false;showProposal()}
+}))
 $('insert-proposal').addEventListener('click',action(()=>insert(S.draft.proposal.fields.text)))
-$('sync-draft').addEventListener('click',action(()=>prepare('draft')));$('publish').addEventListener('click',action(()=>prepare('publish')))
+$('publish').addEventListener('click',action(prepare))
 for(const b of document.querySelectorAll('[data-close]'))b.addEventListener('click',()=>$(b.dataset.close).close())
-$('confirm-publish').addEventListener('click',action(async()=>{$('confirm-publish').disabled=true;try{await api('confirm',{id:S.prepared.id,nonce:S.prepared.nonce,consumeSavedDraft:$('consume-draft').checked});$('publish-dialog').close();await openDraft(S.draft.id)}finally{$('confirm-publish').disabled=false;await loadOperations()}},'publish-error'))
+$('consume-draft').addEventListener('change',()=>publishControls(publishBusy))
+$('publish-dialog').addEventListener('cancel',e=>{if(publishBusy)e.preventDefault()})
+$('retry-publish').addEventListener('click',action(prepare,'publish-error'))
+$('confirm-publish').addEventListener('click',async()=>{
+  if(publishBusy||$('confirm-publish').disabled)return
+  const op=S.prepared;publishControls(true);$('publish-error').hidden=true;publishStatus('正在发布，请稍候…')
+  try{await published(op,await api('confirm',{id:op.id,nonce:op.nonce,consumeSavedDraft:$('consume-draft').checked}))}
+  catch(err){await checkPublishFailure(op,err)}finally{publishControls(false)}
+})
+$('reconcile-publish').addEventListener('click',async()=>{
+  if(publishBusy)return
+  const op=S.prepared;publishControls(true);$('publish-error').hidden=true;publishStatus('正在核对发布结果…')
+  try{await published(op,await api('reconcile',{id:op.id}))}
+  catch(err){await checkPublishFailure(op,err)}finally{publishControls(false)}
+})
 $('attachment-add').addEventListener('click',()=>{if(S.draft)$('attachment-files').click();else notice('请先新建或选择草稿')})
 $('attachment-files').addEventListener('change',action(async()=>{await flush();const draftId=S.draft.id;$('attachment-add').disabled=true;try{for(const file of $('attachment-files').files){if(file.size>20*1024*1024)throw new Error('单文件不能超过 20 MiB');$('attachment-add').textContent='资料处理中…';await request(`/attachment?draftId=${encodeURIComponent(draftId)}&name=${encodeURIComponent(file.name)}`,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file})}}finally{if(S.draft?.id===draftId)await loadAttachments();$('attachment-files').value='';$('attachment-add').disabled=false;$('attachment-add').textContent='添加资料'}}))
 $('range-save').addEventListener('click',action(async()=>{await api('attachment-select',{...S.attachmentView,selected:true,range:{from:Number($('range-from').value),to:Number($('range-to').value)}});await loadAttachments();$('attachment-dialog').close()},'attachment-error'))

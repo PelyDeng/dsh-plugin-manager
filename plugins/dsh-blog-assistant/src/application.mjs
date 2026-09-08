@@ -16,6 +16,7 @@ export class BlogApplication {
       case 'draft': result=this.store.get(owner,args.id);break
       case 'save': result=this.store.edit(owner,args.id,args.revision,args.content);break
       case 'apply': result=this.store.applyProposal(owner,args.id,args.revision,args.proposalId,args.fields);break
+      case 'discard-proposal': result=this.store.discardProposal(owner,args.id,args.revision,args.proposalId);break
       case 'articles': result=await this.blog.list(args.query??'',args.page??1);break
       case 'metadata': result=await this.blog.call('status');break
       case 'import': {
