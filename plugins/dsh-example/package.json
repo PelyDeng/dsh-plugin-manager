@@ -1,6 +1,6 @@
 {
   "name": "dsh-example",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "DSH Plugin Manager 开发者接入答疑助手与可复制的鉴权对话示例",
   "license": "Apache-2.0",
   "private": true,
@@ -61,6 +61,7 @@
       "examples/deployment.json.example",
       "web/chat-base.css",
       "web/chat-ui.js",
+      "web/thinking-translation.js",
       "web/media/icon-copy.svg",
       "skills/dsh-chat-style/SKILL.md"
     ],

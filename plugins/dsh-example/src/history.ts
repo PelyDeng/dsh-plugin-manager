@@ -38,9 +38,9 @@ export class HistoryStore {
 }
 
 /** Project model reasoning and answer text, retaining durable interrupted output. */
-export function projectHistory(events: readonly SessionEvent[]): { role: 'user' | 'assistant'; text: string; reasoning?: string;turn?:number }[] {
-  const messages: { role: 'user' | 'assistant'; text: string; reasoning?: string;turn?:number }[] = []
-  let answer: { role: 'assistant'; text: string; reasoning?: string;turn?:number } | undefined,turn=-1
+export function projectHistory(events: readonly SessionEvent[]): { role: 'user' | 'assistant'; text: string; reasoning?: string;reasoningSource?:string;turn?:number }[] {
+  const messages: { role: 'user' | 'assistant'; text: string; reasoning?: string;reasoningSource?:string;turn?:number }[] = []
+  let answer: { role: 'assistant'; text: string; reasoning?: string;reasoningSource?:string;turn?:number } | undefined,turn=-1
   const current = () => { if (!answer) { answer = { role: 'assistant', text: '',...(turn<0?{}:{turn}) }; messages.push(answer) } return answer }
   for (const event of events) {
     if(event.type==='turn/start')turn++
@@ -48,11 +48,11 @@ export function projectHistory(events: readonly SessionEvent[]): { role: 'user' 
       messages.push({ role: 'user', text: event.data.content.filter(block => block.type === 'text').map(block => block.text).join('') })
       answer = undefined
     } else if (event.type === 'assistant/chunk' && event.data.chunk.type === 'text-delta') current().text += event.data.chunk.text
-    else if (event.type === 'assistant/chunk' && event.data.chunk.type === 'reasoning-delta') current().reasoning = (current().reasoning ?? '') + event.data.chunk.text
+    else if (event.type === 'assistant/chunk' && event.data.chunk.type === 'reasoning-delta') { current().reasoning = (current().reasoning ?? '') + event.data.chunk.text; delete current().reasoningSource }
     else if (event.type === 'assistant/message') {
       current().text = event.data.message.content.filter(block => block.type === 'text').map(block => block.text).join('')
       const reasoning = event.data.message.content.filter(block => block.type === 'reasoning').map(block => block.text).join('')
-      if (reasoning) current().reasoning = reasoning
+      if (reasoning) { current().reasoning = reasoning; if(event.data.message.id)current().reasoningSource = String(event.data.message.id);else delete current().reasoningSource }
     }
     else if ((event.type as string) === 'assistant/attempt') {
       // Decode the installed runtime's durable format through its public API.
@@ -60,9 +60,12 @@ export function projectHistory(events: readonly SessionEvent[]): { role: 'user' 
       if (!runtime.expandAssistantStream) throw new Error('The DSH runtime cannot read its assistant attempt stream')
       const { stream } = event.data as unknown as { stream: unknown }
       const chunks = runtime.expandAssistantStream(stream)
-      current().text = chunks.map(({ chunk }) => chunk.type === 'text-delta' ? chunk.text : '').join('')
-      const reasoning = chunks.map(({ chunk }) => chunk.type === 'reasoning-delta' ? chunk.text : '').join('')
-      if (reasoning) current().reasoning = reasoning
+      const assembler = new llm.BlockAssembler()
+      for (const {chunk} of chunks) assembler.push(chunk)
+      const blocks = assembler.blocks()
+      current().text = blocks.filter(block => block.type === 'text').map(block => block.text).join('')
+      const reasoning = blocks.filter(block => block.type === 'reasoning').map(block => block.text).join('')
+      if (reasoning) { current().reasoning = reasoning; if(Number.isSafeInteger(event.seq))current().reasoningSource = 'attempt-'+event.seq;else delete current().reasoningSource }
     }
   }
   return messages.filter(message => message.text !== '' || message.reasoning)

@@ -5,16 +5,17 @@ export function stat(name,label,rows){const d=element('details',undefined,'qa-me
 export const compactTokens=n=>Number.isFinite(n)?n>=1000?(n/1000).toFixed(1)+'K':String(n):'—'
 export function keyboardSend(event){return event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.keyCode!==229&&!matchMedia('(pointer:coarse), (max-width:650px)').matches}
 
-// Match the closed-off chat: current nonempty line while streaming, first line at rest.
-export function reasoningLine(text,done=true){const lines=String(text??'').split(/\r?\n/).map(line=>line.trim()).filter(line=>line&&line!=='正在生成…');return (done?lines[0]:lines.at(-1))??'正在生成…'}
+// Keep the latest nonempty line visible during streaming and history playback.
+export function reasoningLine(text,done=true){const lines=String(text??'').split(/\r?\n/).map(line=>line.trim()).filter(line=>line&&line!=='正在生成…');return lines.at(-1)??'正在生成…'}
 export function thinking(text='',{className='',id,done=true}={}){
   const details=element('details',undefined,`qa-thinking ${className}`.trim()),summary=element('summary'),separator=element('span',undefined,'qa-thinking-sep');separator.setAttribute('aria-hidden','true')
   summary.append(glyph('think'),element('span','思考','qa-thinking-title'),separator,element('span',undefined,'qa-thinking-preview'))
+  summary.querySelector('.qa-thinking-preview').append(element('span',undefined,'qa-thinking-preview-text'))
   details.append(summary,element('div',undefined,'qa-thinking-body'));if(id)details.id=id;updateThinking(details,text,done);return details
 }
 export function updateThinking(details,text,done=true){
   const body=details.querySelector('.qa-thinking-body'),follow=body.scrollHeight-body.scrollTop-body.clientHeight<=24
   details.hidden=!text;details.classList.toggle('running',!done)
-  details.querySelector('.qa-thinking-preview').textContent=reasoningLine(text,done);body.textContent=text
+  details.querySelector('.qa-thinking-preview-text').textContent=reasoningLine(text,done);body.textContent=text
   if(details.open&&follow)body.scrollTop=body.scrollHeight
 }

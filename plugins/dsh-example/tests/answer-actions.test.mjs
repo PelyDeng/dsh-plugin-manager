@@ -5,7 +5,7 @@ import {Inject} from '@deepseek-ai/cordis'
 import {inject} from '../src/index.ts'
 
 test('Cordis resolves actual service names instead of dependency group labels',()=>{
- expect(Object.keys(Inject.resolve(inject))).toEqual(['agents','agentDefaultModel','webServer','systemPrompt','tools','sessionPersistence','messageFeedback'])
+ expect(Object.keys(Inject.resolve(inject))).toEqual(['agents','agentDefaultModel','webServer','systemPrompt','tools','sessionPersistence','messageFeedback','llm'])
 })
 
 const events=[
