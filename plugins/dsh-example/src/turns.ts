@@ -18,7 +18,7 @@ export function projectTurns(events: readonly SessionEvent[]) {
       if(firstToken===undefined&&data.stream&&expand)firstToken=expand(data.stream).find(x=>['text-delta','reasoning-delta','tool-call-delta'].includes(x.chunk.type))?.time
     }
     if(event.type==='tool/call')ensure().tools.push({id:String(event.data.callId),name:event.data.name,status:'running'})
-    if(event.type==='tool/result'){const tool=ensure().tools.find(t=>t.id===String(event.data.message.source.callId));if(tool)tool.status=event.data.error?'failed':'succeeded'}
+    if(event.type==='tool/result'){const tool=ensure().tools.find(t=>t.id===String(event.data.message.source.callId));if(tool)tool.status=event.data.error||event.data.message.content.some(block=>block.type==='tool-result'&&block.isError===true)?'failed':'succeeded'}
     if(event.type==='turn/end'){
       const turn=ensure();turn.status=event.data.reason.kind
       if(Number.isFinite(event.time)){turn.completedAt=event.time;if(Number.isFinite(startedAt))turn.runMs=Math.max(0,event.time-startedAt!)}
