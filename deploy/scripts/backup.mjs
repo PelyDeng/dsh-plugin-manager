@@ -102,14 +102,17 @@ const tar = require('node:child_process').spawnSync('tar', ['-xzf', process.argv
 if (tar.error || tar.status !== 0) throw new Error('Backup extraction failed: ' + (tar.error?.message || tar.stderr));
 const entries = [], inodes = new Map();
 function inside(value) { return value === '/restore' || value.startsWith('/restore/'); }
+function inRuntime(value) { return value === '/opt/dsh-runtime' || value.startsWith('/opt/dsh-runtime/'); }
 function visit(directory) {
   for (const name of fs.readdirSync(directory).sort()) {
     const file = path.join(directory, name), stat = fs.lstatSync(file), relative = path.relative('/restore', file);
     const item = { path: relative, mode: stat.mode & 0o7777 };
     if (stat.isSymbolicLink()) {
       const target = fs.readlinkSync(file), resolved = path.resolve(path.dirname(file), target);
-      if (path.isAbsolute(target) || !inside(resolved) || !inside(fs.realpathSync(file))) throw new Error('Unsafe backup link: ' + relative);
-      entries.push({ ...item, type: 'symlink', target });
+      const real = fs.realpathSync(file);
+      const externalRuntime = inRuntime(real) && (inRuntime(resolved) || (!path.isAbsolute(target) && inside(resolved)));
+      if (!externalRuntime && (path.isAbsolute(target) || !inside(resolved) || !inside(real))) throw new Error('Unsafe backup link: ' + relative);
+      entries.push({ ...item, type: 'symlink', target, ...(externalRuntime ? { externalRuntime: true } : {}) });
     } else if (stat.isDirectory()) {
       entries.push({ ...item, type: 'directory' }); visit(file);
     } else if (stat.isFile()) {

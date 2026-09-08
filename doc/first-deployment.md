@@ -95,7 +95,7 @@ Windows 使用 `.\build.ps1 --resume` 或 `.\build.ps1 --config .local/env.conf 
 `--resume` 继续同一次部署，不自动回滚业务数据。原生 Linux 保留原 tar 备份格式；Windows/macOS 和 Docker Desktop 的备份使用 `sources/<序号>` 及 `mounts-*.json` 原路径映射，归档和映射摘要写入发布记录。备份只有落盘并通过清单校验后才标记完成。需要检查可恢复性时，可在原仓库根调用下列 helper，将备份实际提取到临时容器 tmpfs，并输出文件摘要、权限与链接信息；只读挂载备份，不写原数据，不提供自动回滚：
 
 ```sh
-node --input-type=module -e "import {readFileSync} from 'node:fs'; import {validateSourceBackupRestore} from './deploy/scripts/backup.mjs'; const r=JSON.parse(readFileSync(process.argv[1],'utf8')); console.log(JSON.stringify(validateSourceBackupRestore(r,{image:r.image})));" ".local/artifacts/<操作目录>/result.json"
+node --input-type=module -e "import {readFileSync} from 'node:fs'; import {validateSourceBackupRestore} from './deploy/scripts/backup.mjs'; const r=JSON.parse(readFileSync(process.argv[1],'utf8')); console.log(JSON.stringify(validateSourceBackupRestore(r,{image:r.previousRuntime?.containerImage ?? r.image})));" ".local/artifacts/<操作目录>/result.json"
 ```
 
-将示例路径替换为本次发布记录；保留同一 Docker 引擎和记录中的本机不可变镜像。tmpfs 需要容纳实际提取的数据，此验证不证明数据库的业务一致性。真正回滚应由维护者按应用的数据兼容规则停写、备份当前数据后处理。备份保留在每次操作目录，脚本不自动清理；维护者需规划磁盘空间和备份保留周期。
+将示例路径替换为本次发布记录；保留同一 Docker 引擎及备份对应的旧不可变镜像。官方依赖链接只有在该镜像的 `/opt/dsh-runtime` 内可解析时才接受，并以 `externalRuntime: true` 标记；依赖文件来自镜像，不包含在数据备份中。其他越界链接或缺失依赖仍会拒绝。tmpfs 需要容纳实际提取的数据，此验证不证明数据库的业务一致性。真正回滚应由维护者按应用的数据兼容规则停写、备份当前数据后处理。备份保留在每次操作目录，脚本不自动清理；维护者需规划磁盘空间和备份保留周期。

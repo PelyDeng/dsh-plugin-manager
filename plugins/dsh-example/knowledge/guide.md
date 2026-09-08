@@ -232,7 +232,7 @@ pnpm exec dsh-plugin-manager compose-release --root <交付根> --output release
 
 ## Windows、macOS、Linux 怎样构建？默认值从哪里来？
 
-Windows PowerShell 用根 `.\build.ps1`，无需 Bash；macOS/Linux 用根 `./build.sh`。共用 Node 流程，需提前准备 Node.js（含 npm）、Git、tar、本机 Linux Docker Compose；首次安装框架锁定依赖，不安装系统软件、不更新宿主子模块。`--help` 无需工作区依赖，`--resume` 沿用原归档与输入，不重新安装；缺失依赖需恢复原工作区，不能用新归档替换旧操作。普通构建失败可重试；强杀遗留源码锁须确认主机、PID及子进程退出后处理。
+Windows PowerShell 用根 `.\build.ps1`，无需 Bash；macOS/Linux 用根 `./build.sh`。共用 Node 流程，需提前准备 Node.js（含 npm）、Git、tar、本机 Linux Docker Compose；首次安装框架锁定依赖，不安装系统软件、不更新宿主子模块。`--help` 无需工作区依赖，`--resume` 沿用原归档与输入，不重装框架源码工作区依赖；缺失时须恢复原工作区，容器部署依赖仍按环境变化恢复。普通构建失败可重试；强杀遗留源码锁须确认主机、PID及子进程退出后处理。
 
 公开默认值：URL `http://127.0.0.1:7902`、端口 7902、profile web、插件 auth/example、mode release、数据 `.local/data`、产物 `.local/artifacts`、容器 UID/GID 1000、`DSH_IMAGE_PLATFORM=linux/amd64`。origin/home/workspace 等可派生；密钥和生成的镜像/manifest 留空。独立 manager 显式选择 env/JSON，选集留空沿用清单。
 

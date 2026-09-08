@@ -60,6 +60,10 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight } 
     // A killed worker can leave synchronous descendants alive even after its own exit.
     if (code === 130 || code === 143) interrupted ??= code === 130 ? 'SIGINT' : 'SIGTERM';
     return code;
+  } catch (error) {
+    // Private update hooks propagate a terminated subprocess through error.signal.
+    if (typeof error?.signal === 'string' && error.signal) interrupted ??= error.signal;
+    throw error;
   } finally {
     process.off('SIGINT', interrupt); process.off('SIGTERM', terminate);
     if (interrupted || (workerStarted && !confirmed)) {

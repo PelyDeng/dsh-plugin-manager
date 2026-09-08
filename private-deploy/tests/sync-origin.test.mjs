@@ -169,3 +169,13 @@ test('Linux flock continuously covers Git sync and the worker without reacquirin
   const locked = spawnSync('flock', ['-n', '.local/source-release.lock', 'sh', 'build.sh'], { cwd: f.checkout, env: f.env, encoding: 'utf8' });
   assert.notEqual(locked.status, 0); assert.equal(existsSync(f.worker), false);
 });
+
+test('a signalled Git child retains the shared source lock before any worker starts', { skip: process.platform === 'win32' ? 'POSIX child signal reporting is unavailable on Windows.' : false }, t => {
+  const f = entryFixture(t), bin = join(f.root, 'bin'); mkdirSync(bin);
+  writeFileSync(join(bin, 'git'), '#!/bin/sh\nkill -KILL $$\n', { mode: 0o755 });
+  f.env.PATH = `${bin}${delimiter}${process.env.PATH}`;
+  const result = f.run();
+  assert.equal(result.status, 1); assert.equal(existsSync(f.worker), false);
+  assert.equal(existsSync(f.lock), true);
+  assert.equal(JSON.parse(readFileSync(f.lock)).workerPid, undefined);
+});

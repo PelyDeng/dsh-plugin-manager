@@ -35,7 +35,7 @@ Windows 将最后一行换成 `.\build.ps1`。首次自动创建 `.local/env.con
 
 原生 Linux 保留 host 网络；Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge。官方 DSH 保持 `127.0.0.1` 监听，管理器在容器唯一桥接 IPv4 地址的同端口通过 TCP 转发至 DSH；宿主只向 `127.0.0.1` 发布端口。同 Docker 网络属于信任边界，此设置不代表公网隔离。部署在停服前通过 `check-compose` 核验实际容器用户的挂载访问；若 prepared 后预检失败，修正访问条件并使用原配置加 `--resume`。macOS 新站点采用当前非 root 用户 UID/GID，已保存的配置不自动修改。新站点镜像架构按 Docker 引擎初始化；显式配置及旧站点的架构保持。
 
-原生 Linux 保留绝对路径去前导 `/` 的 tar 备份格式；Windows/macOS 和 Docker Desktop 的备份使用 `sources/<序号>` 前缀，并在同目录的 `mounts-*.json` 保存原路径映射。发布记录绑定归档及映射的 SHA-256，嵌套源只归档一次。源码 `deploy/scripts/backup.mjs` 的 `validateSourceBackupRestore(record, { image: record.image })` 可在只读备份挂载和容器 tmpfs 中实际提取，输出内容摘要、权限与链接；这是备份恢复验证，不是数据回滚，也不写原数据。可复制命令与资源要求见[更新与恢复](../doc/first-deployment.md#更新与恢复)。
+原生 Linux 保留绝对路径去前导 `/` 的 tar 备份格式；Windows/macOS 和 Docker Desktop 的备份使用 `sources/<序号>` 前缀，并在同目录的 `mounts-*.json` 保存原路径映射。发布记录绑定归档及映射的 SHA-256，嵌套源只归档一次。源码 `deploy/scripts/backup.mjs` 的 `validateSourceBackupRestore(record, { image: record.previousRuntime?.containerImage ?? record.image })` 可在只读备份挂载和容器 tmpfs 中实际提取，输出内容摘要、权限与链接；官方 `/opt/dsh-runtime` 依赖链接须能在对应的不可变镜像内解析，并标记为外部运行依赖。这是备份恢复验证，不是数据回滚，也不写原数据。可复制命令与资源要求见[更新与恢复](../doc/first-deployment.md#更新与恢复)。
 
 标准插件的日常认证及启停只修改自身 `plugin.json`，然后执行 `apply-compose`；首次站点配置和旧 patch 迁移见[插件运行配置规范](../doc/plugin-configuration.md)。下方 `render-compose` 等基础操作用于自定义集成，不要求日常手工维护多份配置。
 

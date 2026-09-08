@@ -130,3 +130,24 @@ test('real tmpfs restore supports ordinary relative symlinks and hardlinks with 
   assert.equal(original.mode, 0o640); assert.equal(copy.sha256, original.sha256);
   assert.ok(original.hardlinkTo || copy.hardlinkTo);
 });
+
+test('restore identifies immutable host dependencies without following links outside the runtime closure', { skip: !process.env.DSH_TEST_BACKUP_IMAGE }, t => {
+  const f = fixture(t), image = process.env.DSH_TEST_BACKUP_IMAGE;
+  const record = archive(join(f.backupDir, 'runtime-links.tar.gz'), [
+    { name: 'home/runtime', type: '2', link: '/opt/dsh-runtime' },
+    { name: 'home/node_modules/host', type: '2', link: '../runtime' },
+  ]);
+  const result = validateSourceBackupRestore(record, { image });
+  for (const path of ['home/runtime', 'home/node_modules/host']) {
+    const entry = result.entries.find(entry => entry.path === path);
+    assert.equal(entry.externalRuntime, true);
+    assert.equal(entry.type, 'symlink');
+    assert.equal(entry.sha256, undefined);
+  }
+  for (const [index, target] of ['/etc/passwd', '/opt/dsh-runtime/../plugin-manager', '/opt/dsh-runtime-other', '/opt/dsh-runtime/missing-backup-target'].entries()) {
+    const invalid = archive(join(f.backupDir, `runtime-invalid-${index}.tar.gz`), [{ name: 'link', type: '2', link: target }]);
+    assert.throws(() => validateSourceBackupRestore(invalid, { image }));
+  }
+  const chain = archive(join(f.backupDir, 'escaping-chain.tar.gz'), [{ name: 'aa', type: '2', link: 'zz' }, { name: 'zz', type: '2', link: '/etc' }]);
+  assert.throws(() => validateSourceBackupRestore(chain, { image }));
+});
