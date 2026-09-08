@@ -1,9 +1,13 @@
 {
   "name": "dsh-plugin-manager-workspace",
+  "version": "0.13.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.19.0",
   "scripts": {
+    "version:sync": "node scripts/version.mjs sync",
+    "version:check": "node scripts/version.mjs check",
+    "version:set": "node scripts/version.mjs set",
     "build": "node scripts/workspace.mjs build",
     "check": "node scripts/workspace.mjs check",
     "list:plugins": "node scripts/run-plugin-task.mjs list",

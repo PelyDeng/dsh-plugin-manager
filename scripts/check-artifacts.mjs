@@ -7,8 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { runPnpm } from '../packages/plugin-manager/src/run-plugin-task.mjs';
 import { packagePlugins } from '../packages/plugin-manager/src/package-plugins.mjs';
 import { spawnSync } from 'node:child_process';
+import { frameworkVersion } from './version.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+const { version } = frameworkVersion(root);
 const temporary = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh archives with spaces ')));
 const json = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n');
 const run = (args, cwd = temporary) => {
@@ -28,9 +30,13 @@ try {
   const policy = readFileSync(join(root, 'pnpm-workspace.yaml'), 'utf8').replace(/packages:[\s\S]*?nodeLinker:/, 'packages: []\nautoInstallPeers: false\nnodeLinker:');
   writeFileSync(join(consumer, 'pnpm-workspace.yaml'), policy);
   runPnpm(['install', '--ignore-scripts'], consumer);
+  for (const name of ['plugin-kit', 'plugin-manager']) {
+    assert.equal(JSON.parse(readFileSync(join(consumer, 'node_modules/@dsh-plugin-manager', name, 'package.json'))).version, version);
+  }
   assert.equal(existsSync(join(consumer, 'node_modules/@deepseek-ai/cordis')), false);
   assert.equal(existsSync(join(consumer, 'node_modules/@deepseek-ai/dsh-tools')), false);
   const cli = join(consumer, 'node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs');
+  assert.equal(run([cli, '--version']).trim(), version);
   const paths = JSON.parse(run([cli, 'paths', '--root', project]));
   assert.equal(paths.home, join(project, '.local/data/dsh-home'));
   assert.notEqual(spawnSync(process.execPath, [cli, 'paths'], { cwd: consumer }).status, 0);
@@ -92,6 +98,8 @@ try {
   run(['--input-type=module', '-e', "await import('dsh-auth'); await import('dsh-example');"], consumer);
   for (const plugin of plugins) {
     const manifest = JSON.parse(readFileSync(join(consumer, 'node_modules', plugin.package, 'package.json')));
+    assert.equal(plugin.version, version);
+    assert.equal(manifest.version, version);
     assert.ok(!Object.values(manifest.dependencies ?? {}).some(spec => /^(workspace:|file:|link:)/.test(spec)));
     assert.ok(existsSync(join(consumer, 'node_modules', plugin.package, 'web/index.html')));
   }

@@ -22,7 +22,7 @@
 5. [kit 接口](../packages/plugin-kit/README.md)——接入身份、权限、HTTP 与工具登记。
 6. [聊天风格 skill](../plugins/dsh-example/skills/dsh-chat-style/SKILL.md)——统一聊天视觉、思考预览、流式行为和回答工具栏。
 
-发布版本遵循[开发约定](../AGENTS.md)：功能大改升级次版本并归零补丁号，小改升级补丁号；`1.0.0` 及以上仅在用户明确指定里程碑时使用。当前组件版本以各包 `package.json` 和实际交付清单为准。
+发布版本遵循[开发约定](../AGENTS.md)：功能大改升级次版本并归零补丁号，小改升级补丁号；`1.0.0` 及以上仅在用户明确指定里程碑时使用。公共框架以根 `package.json` 的 `version` 为唯一源，manager、kit、auth、example 使用统一发布版本；定制插件独立版本化。版本设置、文档模板及同步校验见[版本管理](versioning.md)。
 
 ## 部署与维护
 
