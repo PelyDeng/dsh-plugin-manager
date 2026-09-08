@@ -251,14 +251,45 @@ test('fork source is protected during historical reads and both source and child
 })
 
 test('chat search tools preserve structured dates and return lossless imported draft references',async t=>{
-  const f=await fixture(t);f.store.create(owner,{title:'时间检索稿'},{published:{cid:338}})
+  const f=await fixture(t),draft=f.store.create(owner,{title:'时间检索稿'},{published:{cid:338}})
+  f.chat.app.applyResult({id:'delete-338',owner,mode:'delete',before:{published:{cid:338}}},{deleted:true})
   let received;f.blog.search=async args=>{received=args;return {items:[],hasMore:false}}
   await f.send();await tick();const agent=f.handles[0].agent
   const args={period:'yesterday',title:'测试',category:'摘抄笔记',page:2}
   await f.tools.get('blog_search_posts').execute(args,{agent});assert.deepEqual(received,args)
   const result=await f.tools.get('blog_list_drafts').execute({title:'时间检索稿'},{agent})
   assert.equal(result.items.length,1);assert.equal(result.items[0].remote.savedDraftCid,null)
+  assert.equal(result.items[0].remote.deleted,true);assert.equal(result.items[0].contentUpdatedAt,draft.contentUpdatedAt)
   assert.deepEqual(result,JSON.parse(JSON.stringify(result)))
+})
+
+test('separate chat operations reuse the same imported version without losing a candidate',async t=>{
+  const f=await fixture(t)
+  f.blog.get=async()=>({published:{cid:338,title:'原文',text:'正文',slug:'338',format:'markdown',tags:[],categories:[]},savedDraft:null,version:'v'})
+  await f.send();await tick()
+  const tool=f.tools.get('blog_select_draft'),args={cid:338,variant:'published'}
+  const first=await tool.execute(args,{agent:f.handles[0].agent})
+  const proposal=f.store.propose(owner,first.draftId,first.revision,{text:'保留候选'},[])
+  complete(f.handles[0]);await tick()
+  await f.send({requestId:'request-second',text:'继续修改该文章'});await tick()
+  const next=await tool.execute(args,{agent:f.handles.at(-1).agent})
+  assert.equal(next.draftId,first.draftId);assert.equal(next.proposalId,proposal.id)
+  assert.equal(f.store.list(owner).length,1)
+})
+
+test('concurrent conversations sharing an import cannot replace each others candidates',async t=>{
+  const f=await fixture(t)
+  f.blog.get=async()=>({published:{cid:338,title:'原文',text:'正文',slug:'338',format:'markdown',tags:[],categories:[]},savedDraft:null,version:'v'})
+  const second=f.chat.create(actor,'conversation-second')
+  await f.send();await f.send({conversationId:second.id,requestId:'request-second'});await tick()
+  const select=f.tools.get('blog_select_draft'),propose=f.tools.get('blog_propose'),args={cid:338,variant:'published'}
+  const a=await select.execute(args,{agent:f.handles[0].agent}),b=await select.execute(args,{agent:f.handles[1].agent})
+  assert.equal(a.draftId,b.draftId)
+  const first=await propose.execute({text:'先完成候选'},{agent:f.handles[0].agent})
+  await assert.rejects(propose.execute({text:'后完成候选'},{agent:f.handles[1].agent}),/候选稿已被其他任务更新/)
+  assert.equal(f.store.get(owner,a.draftId).proposal.id,first.proposalId)
+  const continued=await propose.execute({text:'同一任务继续调整'},{agent:f.handles[0].agent})
+  assert.equal(f.store.get(owner,a.draftId).proposal.id,continued.proposalId)
 })
 
 test('chat starts without an article, preserves native history, resumes and deduplicates network requests',async t=>{

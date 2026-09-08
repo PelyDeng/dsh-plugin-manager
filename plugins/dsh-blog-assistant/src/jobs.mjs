@@ -63,12 +63,13 @@ export class BlogJobs {
         this.bound(b.handle.agent)
         invariant(Object.keys(args).length > 0 && Object.keys(args).every(k => ['title','text','tags'].includes(k)), '候选稿字段无效')
         if(b.chat)return b.chat.propose(b,args)
-        const proposal = store.propose(b.job.owner, b.job.input.draftId, b.job.input.expectedRevision, args, b.sources)
+        const proposal = store.propose(b.job.owner, b.job.input.draftId, b.job.input.expectedRevision, args, b.sources, b.expectedProposalId)
+        b.expectedProposalId=proposal.id
         this.update(b, { proposalId: proposal.id }); return { proposalId: proposal.id, savedAs: 'candidate', requiresUserAction: true }
       }),
     ]
     this.chatTools=[...this.tools,
-      register('blog_list_drafts', '查找草稿','组合搜索当前用户工作台私有草稿；支持标题/正文/分类/标签/日期；不是公开文章。返回筛选条件、日期和分页。',searchParameters,async(a,b,s)=>{invariant(b.chat,'当前任务不提供对话文章选择',403);const result=await this.searchDrafts(b.job.owner,a,s);this.bound(b.handle.agent);return result}),
+      register('blog_list_drafts', '查找草稿','搜索当前用户文章库中“我的草稿”的工作台副本，不是“博客文章”的未发布筛选。支持标题/正文/分类/标签/日期。必须说明remote.deleted原文已删除状态；关联ID不是实时发布状态。modified按内容修改时间；缺失日期计数可能与其他查询重叠，不相加。',searchParameters,async(a,b,s)=>{invariant(b.chat,'当前任务不提供对话文章选择',403);const result=await this.searchDrafts(b.job.owner,a,s);this.bound(b.handle.agent);return result}),
       register('blog_select_draft', '选择文章','选择要编辑的工作台文章，或导入博客文章，或按用户要求建立一篇新文章。三种方式只能选一种。重复新建会返回本轮已创建的文章。',{
         draftId:{type:'string'},cid:{type:'integer'},variant:{type:'string',enum:['published','savedDraft']},newArticle:{type:'boolean'},
       },(a,b,s)=>{invariant(b.chat,'当前任务不提供对话文章选择',403);return b.chat.selectDraft(b,a,s)}),
@@ -108,7 +109,7 @@ export class BlogJobs {
     if (!old) invariant(this.active.size < 4, '当前写作任务较多，请稍后重试', 429)
     const { job, fresh } = this.store.jobStart(ownerKey(actor), request.callerId, request.requestId, input, actor)
     if (fresh) {
-      const b = { job, frozen, sources:[], stopped:false, text:'', handle:null, timer:null, unsub:[], runtimeJobId:null, settle:null, completion:null, abort:new AbortController() }
+      const b = { job, frozen, expectedProposalId:d.proposal?.id??null, sources:[], stopped:false, text:'', handle:null, timer:null, unsub:[], runtimeJobId:null, settle:null, completion:null, abort:new AbortController() }
       b.timer=setTimeout(()=>void this.stop(b,'failed',{code:'timeout',message:'写作超时，已有内容保留'}),this.timeoutMs)
       this.active.set(job.id,b); b.runPromise=this.run(b,d)
     }

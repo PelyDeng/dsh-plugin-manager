@@ -16,7 +16,7 @@ function clearNotice(){for(const id of ['notice','assistant-error','navigation-e
 async function request(path,options={}){const r=await fetch(base+path,{credentials:'same-origin',...options});let data;try{data=await r.json()}catch{throw new Error('服务返回异常，请检查登录状态')}if(!r.ok)throw new Error(data.error??data.message??`请求失败（${r.status}）`);return data}
 const api=(action,args={})=>request('/api',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,args})})
 const action=(fn,target='notice')=>async e=>{try{clearNotice();await fn(e)}catch(err){notice(err,target)}}
-function render(){if(!S.draft)return;$('assistant-context').textContent=$('title').value||'未命名草稿';$('assistant-context').title=$('title').value||'未命名草稿';$('word-count').textContent=`${$('text').value.length.toLocaleString()} 字符`;$('preview').innerHTML=S.draft.format==='html'?DOMPurify.sanitize($('text').value,{USE_PROFILES:{html:true}}):renderMarkdown($('text').value)}
+function render(){if(!S.draft)return;$('remote-state').hidden=!S.draft.remote?.deleted;$('assistant-context').textContent=$('title').value||'未命名草稿';$('assistant-context').title=$('title').value||'未命名草稿';$('word-count').textContent=`${$('text').value.length.toLocaleString()} 字符`;$('preview').innerHTML=S.draft.format==='html'?DOMPurify.sanitize($('text').value,{USE_PROFILES:{html:true}}):renderMarkdown($('text').value)}
 function changed(){if(!S.draft)return;S.dirty=true;$('save-state').textContent='有未保存修改';render();clearTimeout(saveTimer);saveTimer=setTimeout(()=>flush().catch(notice),900)}
 async function flush(){
   if(applying)await applying
@@ -66,8 +66,9 @@ async function loadList(){const version=++listVersion,tab=S.tab,page=S.page,list
     const badge=(text,kind)=>{const el=document.createElement('span');el.className='article-badge '+kind;el.textContent=text;badges.append(el)}
     badge(tab==='local'?'工作台草稿':d.hasPublished?'已发布':'草稿',tab==='remote'&&d.hasPublished?'published':'draft')
     if(tab==='remote'&&d.hasPublished&&d.hasSavedDraft)badge('有保存稿','saved')
+    if(tab==='local'&&d.remote?.deleted)badge('原文已删除','saved')
     open.append(title,badges)
-    if(tab==='local'){const time=document.createElement('small');time.textContent=new Date(d.updatedAt).toLocaleString('zh-CN');open.append(time)}
+    if(tab==='local'){const time=document.createElement('small');time.textContent=Number.isFinite(d.contentUpdatedAt)?(d.contentTimeSource==='legacy-record'?'历史记录更新：':'内容修改：')+new Date(d.contentUpdatedAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}):'内容修改时间未知';open.append(time)}
     open.addEventListener('click',action(async()=>{if(tab==='local')await openDraft(d.id);else{await flush();const imported=await api('import',{cid:d.cid,variant:d.hasSavedDraft&&!d.hasPublished?'savedDraft':'published'});S.tab='local';tabs();fill(imported);await Promise.all([loadAttachments(),loadOperations(),loadList()])}}));row.append(open)
     if(tab==='remote'){
       const remove=document.createElement('button');remove.className='article-delete';remove.textContent='删除';remove.setAttribute('aria-label',`删除文章：${d.title||'未命名草稿'}`)
@@ -78,7 +79,7 @@ async function loadList(){const version=++listVersion,tab=S.tab,page=S.page,list
   }
   if(!items.length){const p=document.createElement('p');p.className='muted';p.textContent='还没有匹配的文章';list.append(p)}
 }
-function tabs(){$('article-status-label').hidden=S.tab!=='remote';for(const t of ['local','remote'])$(`${t}-tab`).setAttribute('aria-pressed',String(S.tab===t))}
+function tabs(){$('library-scope').textContent=S.tab==='local'?'这里保留你的工作台副本；删除博客原文不会删除副本。':'这里查询博客端文章。已发布文章的保存稿显示在主文章的“有保存稿”下；工作台副本请查看“我的草稿”。';$('article-status-label').hidden=S.tab!=='remote';for(const t of ['local','remote'])$(`${t}-tab`).setAttribute('aria-pressed',String(S.tab===t))}
 function mode(value){S.mode=value;document.querySelector('.workspace').classList.toggle('manual',value==='manual');$('mode-ai').setAttribute('aria-pressed',String(value==='ai'));$('mode-manual').setAttribute('aria-pressed',String(value==='manual'))}
 function insert(text){if(!S.draft)throw new Error('请先新建或选择草稿');const area=$('text');area.focus();area.setSelectionRange(cursor.start,cursor.end);area.setRangeText(text,cursor.start,cursor.end,'end');cursor={start:area.selectionStart,end:area.selectionEnd};changed()}
 function showSources(sources=[]){const signature=JSON.stringify(sources);if(signature===sourceSignature)return;sourceSignature=signature;$('source-count').textContent=String(sources.length);$('source-summary').textContent=sources.length?`${sources.length} 条来源 · ${sources.filter(s=>s.fetched).length} 条已读原文，${sources.filter(s=>!s.fetched).length} 条仅搜索摘要`:'尚无本次查证来源；启用联网后，真实链接将在这里显示。';const box=$('sources');box.replaceChildren();for(const s of sources){const item=document.createElement('div');item.className='source';const url=safeURL(s.url);const title=document.createElement(url?'a':'span');title.textContent=s.title||s.url;if(url){title.href=url;title.target='_blank';title.rel='noopener noreferrer'}const meta=document.createElement('small');meta.textContent=`${s.fetched?'已抓取原文':'仅搜索摘要'} · ${s.retrievedAt?new Date(s.retrievedAt).toLocaleString('zh-CN'):''}${s.publishedAt?' · 发布于 '+s.publishedAt:''}`;item.append(title,meta);box.append(item)}if(!sources.length){const p=document.createElement('p');p.className='muted';p.textContent='尚无查证来源';box.append(p)}}

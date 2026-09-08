@@ -66,7 +66,13 @@ export class BlogApplication {
   }
   importSnapshot(actor,{source,remote,variant},cid){
     this.access.assert(actor)
-    const owner=ownerKey(actor),result=this.store.create(owner,{title:source.title,text:source.text,slug:source.slug,format:source.format,tags:source.tags.map(t=>typeof t==='string'?t:t.name),categories:source.categories.map(c=>typeof c==='number'?c:c.id)},{...remote,selectedVariant:variant})
+    const owner=ownerKey(actor)
+    for(const row of this.store.list(owner)){
+      if(row.remote?.deleted||![row.remote?.publishedCid,row.remote?.savedDraftCid].includes(cid))continue
+      const existing=this.store.get(owner,row.id)
+      if(existing.remote.selectedVariant===variant&&sameBlogContent(existing.remote,remote))return existing
+    }
+    const result=this.store.create(owner,{title:source.title,text:source.text,slug:source.slug,format:source.format,tags:source.tags.map(t=>typeof t==='string'?t:t.name),categories:source.categories.map(c=>typeof c==='number'?c:c.id)},{...remote,selectedVariant:variant})
     this.store.record(owner,'import',{draftId:result.id,cid,variant});return result
   }
   async importDraft(actor,cid,variant){return this.importSnapshot(actor,await this.readImport(actor,cid,variant),cid)}

@@ -25,7 +25,7 @@ test('Shanghai midnight resolves today separately from literal keyword and yeste
 })
 test('combined draft filters retain ownership, dates, taxonomy, literal wildcards and pagination',t=>{
   const store=new BlogStore(':memory:');t.after(()=>store.close());const now=Date.parse('2026-09-07T16:00:49Z')
-  for(let i=0;i<32;i++){const d=store.create('u',{title:'Java 日期 '+i,text:'今天说明 100%_ 原文',categories:[7],tags:['后端']},{published:{cid:338}});store.db.prepare('UPDATE drafts SET data=? WHERE id=?').run(JSON.stringify({...d,createdAt:now-86400000,updatedAt:now-100000}),d.id)}
+  for(let i=0;i<32;i++){const d=store.create('u',{title:'Java 日期 '+i,text:'今天说明 100%_ 原文',categories:[7],tags:['后端']},{published:{cid:338}});store.db.prepare('UPDATE drafts SET data=? WHERE id=?').run(JSON.stringify({...d,createdAt:now-86400000,updatedAt:now-100000,contentUpdatedAt:now-100000}),d.id)}
   store.create('other',{title:'不允许泄露'})
   const args={period:'yesterday',title:'Java',content:'100%_',category:'技术',tag:'后端'}
   const r=searchDrafts(store,'u',args,now,[{id:7,name:'技术'}]);assert.equal(r.total,32);assert.equal(r.items.length,30);assert.equal(r.hasMore,true);assert.deepEqual(r,JSON.parse(JSON.stringify(r)))

@@ -311,7 +311,8 @@ export class BlogChat {
     this.jobs.bound(b.handle.agent);invariant(b.draft,'请先选择要编辑的文章')
     const current=this.store.get(b.job.owner,b.draft.id)
     invariant(current.revision===b.draft.revision,'文章已被手动修改，请重新读取当前文章再提出候选',409)
-    const proposal=this.store.propose(b.job.owner,b.draft.id,b.draft.revision,args,b.sources)
+    const proposal=this.store.propose(b.job.owner,b.draft.id,b.draft.revision,args,b.sources,b.draft.proposal?.id??null)
+    b.draft={...b.draft,proposal}
     this.index.result(b.job.owner,b.request,'candidate',this.store.get(b.job.owner,b.draft.id))
     this.update(b,{proposalId:proposal.id})
     return{draftId:b.draft.id,proposalId:proposal.id,savedAs:'candidate',requiresUserAction:true}

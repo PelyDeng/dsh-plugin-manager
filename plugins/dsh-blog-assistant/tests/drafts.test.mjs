@@ -2,6 +2,63 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { BlogStore } from '../src/store.mjs'
 import { BlogApplication } from '../src/application.mjs'
+import { searchDrafts } from '../src/search.mjs'
+
+test('deleted remote copies retain content and deletion state without becoming new writing activity',async t=>{
+  const s=new BlogStore(':memory:');t.after(()=>s.close())
+  const actor={namespace:'n',userId:'u',sessionId:'s'},app=new BlogApplication(s,{assert(){}})
+  const yesterday=Date.parse('2026-09-07T12:00:00+08:00'),today=Date.parse('2026-09-08T12:00:00+08:00')
+  const d=s.create('n:u',{title:'保留副本',text:'未发布修改'},{published:{cid:338},version:'v'})
+  s.db.prepare('UPDATE drafts SET data=? WHERE id=?').run(JSON.stringify({...d,createdAt:yesterday,updatedAt:yesterday,contentUpdatedAt:yesterday}),d.id)
+  app.applyResult({id:'delete-338',owner:'n:u',mode:'delete',before:{published:{cid:338}}},{deleted:true})
+  const saved=s.get('n:u',d.id),listed=s.list('n:u')[0],searched=searchDrafts(s,'n:u',{},today).items[0]
+  assert.equal(saved.text,'未发布修改');assert.equal(saved.remote.deleted,true)
+  assert.equal(listed.remote.deleted,true);assert.equal(searched.remote.deleted,true)
+  assert.equal(listed.contentUpdatedAt,yesterday);assert.equal(searched.localTime.modified,'2026-09-07 12:00:00')
+  assert.equal(searchDrafts(s,'n:u',{period:'today'},today).total,0)
+  await assert.rejects(app.prepare(actor,{id:d.id,revision:saved.revision,mode:'publish'}),/原文已删除/)
+  const edited=s.edit('n:u',d.id,saved.revision,{...saved,text:'删除后继续手写'})
+  assert.ok(edited.contentUpdatedAt>yesterday);assert.equal(edited.remote.deleted,true)
+})
+
+test('legacy deleted copies report unknown content time and missing creation counts are not extra drafts',t=>{
+  const s=new BlogStore(':memory:');t.after(()=>s.close());const now=Date.parse('2026-09-08T12:00:00+08:00')
+  const d=s.create('u',{title:'旧副本'},{savedDraft:{cid:337},deleted:true,deletedAt:now})
+  const legacy={...d,updatedAt:now};delete legacy.createdAt;delete legacy.contentUpdatedAt
+  s.db.prepare('UPDATE drafts SET data=? WHERE id=?').run(JSON.stringify(legacy),d.id)
+  const all=searchDrafts(s,'u',{},now),dated=searchDrafts(s,'u',{period:'today'},now)
+  assert.equal(all.items[0].contentUpdatedAt,null);assert.equal(all.items[0].localTime.modified,null)
+  assert.equal(all.items[0].contentTimeSource,'unknown')
+  assert.equal(dated.total,0);assert.equal(dated.unknownDateCount,1)
+  assert.match(dated.dateNote,/重叠/);assert.match(dated.dateNote,/原文已删除/)
+  assert.deepEqual(all,JSON.parse(JSON.stringify(all)))
+})
+
+test('legacy record time remains labelled as approximate until a real content edit',t=>{
+  const s=new BlogStore(':memory:');t.after(()=>s.close())
+  const d=s.create('u',{title:'旧稿',text:'正文'}),legacy={...d};delete legacy.contentUpdatedAt
+  s.db.prepare('UPDATE drafts SET data=? WHERE id=?').run(JSON.stringify(legacy),d.id)
+  assert.equal(s.list('u')[0].contentTimeSource,'legacy-record')
+  const status=s.save('u',d.id,d.revision,{proposal:null})
+  assert.equal(s.list('u')[0].contentTimeSource,'legacy-record');assert.equal(status.contentUpdatedAt,d.updatedAt)
+  s.edit('u',d.id,status.revision,{...status,text:'实际修改'})
+  assert.equal(s.list('u')[0].contentTimeSource,'content')
+})
+
+test('opening an unchanged remote version reuses the owner draft and preserves edits and candidates',async t=>{
+  const s=new BlogStore(':memory:');t.after(()=>s.close());const actor={namespace:'n',userId:'u',sessionId:'s'}
+  let remote={version:'v1',published:{cid:338,title:'原文',text:'正文',slug:'338',format:'markdown',tags:[],categories:[]},savedDraft:null}
+  const app=new BlogApplication(s,{assert(){}},{get:async()=>structuredClone(remote)})
+  const first=await app.importDraft(actor,338,'published'),edited=s.edit('n:u',first.id,first.revision,{...first,text:'手写未发布'})
+  const p=s.propose('n:u',first.id,edited.revision,{text:'候选'},[])
+  const again=await app.importDraft(actor,338,'published')
+  assert.equal(again.id,first.id);assert.equal(again.text,'手写未发布');assert.equal(again.proposal.id,p.id)
+  assert.equal(s.list('n:u').length,1)
+  const other=await app.importDraft({...actor,userId:'other'},338,'published');assert.notEqual(other.id,first.id)
+  remote={...remote,version:'v2',published:{...remote.published,text:'博客已更新'}}
+  const fresh=await app.importDraft(actor,338,'published');assert.notEqual(fresh.id,first.id)
+  assert.equal(s.get('n:u',first.id).text,'手写未发布');assert.equal(fresh.text,'博客已更新')
+})
 
 test('draft listing is lossless JSON when only one remote variant exists',t=>{
   const s=new BlogStore(':memory:');t.after(()=>s.close())

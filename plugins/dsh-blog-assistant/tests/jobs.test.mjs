@@ -53,3 +53,13 @@ test('image-incompatible model fails before launching a turn',async t=>{
   const f=await fixture(t,{images:true}),job=await f.jobs.start(actor,f.request);await tick()
   assert.equal(f.handles.length,0);assert.match(f.jobs.get(actor,job.id).error.message,/支持图片/)
 })
+test('concurrent editor jobs cannot replace a candidate written after their input was frozen',async t=>{
+  const f=await fixture(t)
+  await f.jobs.start(actor,f.request);await f.jobs.start(actor,{...f.request,requestId:'request-second'});await tick()
+  const tool=f.tools.get('blog_propose')
+  const first=await tool.execute({text:'先完成候选'},{agent:f.handles[0].agent})
+  await assert.rejects(tool.execute({text:'迟到候选'},{agent:f.handles[1].agent}),/候选稿已被其他任务更新/)
+  assert.equal(f.store.get('user:writer',f.draft.id).proposal.id,first.proposalId)
+  const continued=await tool.execute({text:'同任务继续调整'},{agent:f.handles[0].agent})
+  assert.equal(f.store.get('user:writer',f.draft.id).proposal.id,continued.proposalId)
+})

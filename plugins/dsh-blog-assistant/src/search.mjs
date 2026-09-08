@@ -1,4 +1,5 @@
 import { invariant } from './settings.mjs'
+import { draftContentUpdatedAt,draftSummary } from './store.mjs'
 
 export const searchTimeZone='Asia/Shanghai'
 export const searchLocalTime=ms=>Number.isFinite(ms)?new Intl.DateTimeFormat('sv-SE',{timeZone:searchTimeZone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date(ms)):null
@@ -40,12 +41,12 @@ export function searchDrafts(store,owner,input={},now=Date.now(),categories=[]) 
     if(!(contains(d.title,f.query)||contains(d.text,f.query))||!contains(d.title,f.title)||!contains(d.text,f.content))return false
     if(f.category&&!d.categories.some(id=>categoryIds.includes(id)))return false
     if(f.tag&&!d.tags.includes(f.tag))return false
-    const at=f.dateField==='created'?d.createdAt:d.updatedAt
+    const at=f.dateField==='created'?d.createdAt:draftContentUpdatedAt(d)
     if((start!==null||end!==null)&&!Number.isFinite(at)){unknownDateCount++;return false}
     return (start===null||at>=start)&&(end===null||at<end)
   })
-  const timestamp=d=>f.sortBy==='created'?d.createdAt??0:d.updatedAt
+  const timestamp=d=>f.sortBy==='created'?d.createdAt??0:draftContentUpdatedAt(d)??0
   rows.sort((a,b)=>(timestamp(a)-timestamp(b))*(f.order==='asc'?1:-1)||a.id.localeCompare(b.id))
-  const offset=(f.page-1)*30,items=rows.slice(offset,offset+30).map(d=>({id:d.id,title:d.title,revision:d.revision,createdAt:d.createdAt??null,updatedAt:d.updatedAt,status:'workspace-draft',tags:d.tags,categories:d.categories,remote:d.remote?{publishedCid:d.remote.published?.cid??null,savedDraftCid:d.remote.savedDraft?.cid??null}:null}))
-  return {items:items.map(d=>({...d,localTime:{created:searchLocalTime(d.createdAt),modified:searchLocalTime(d.updatedAt)}})),page:f.page,hasMore:offset+30<rows.length,total:rows.length,unknownDateCount,filters:f,timeZone,dateNote:'localTime是上海时间，其他时间戳保留原值。工作台私有草稿；历史记录缺少创建时间时返回null，不推断首次写作日期。同名且没有共同关联ID的草稿不能合并计数。'}
+  const offset=(f.page-1)*30,items=rows.slice(offset,offset+30).map(d=>({...draftSummary(d),status:'workspace-draft'}))
+  return {items:items.map(d=>({...d,localTime:{created:searchLocalTime(d.createdAt),modified:searchLocalTime(d.contentUpdatedAt),deleted:searchLocalTime(d.remote?.deletedAt)}})),page:f.page,hasMore:offset+30<rows.length,total:rows.length,unknownDateCount,filters:f,timeZone,dateNote:'localTime是上海时间。modified筛选和排序使用contentUpdatedAt（工作台内容修改时间）；updatedAt是记录状态更新时间，删除标记不算写作。contentTimeSource为legacy-record时仅沿用旧记录更新时间，不能证明是正文修改；content为已记录的内容时间，unknown为未知。历史缺失时间返回null，不推断创建或修改日期。unknownDateCount是符合其他条件但缺少所选日期字段的记录数，可能与其他查询重叠，不可相加。remote.deleted=true表示原文已删除，保留的是工作台副本；关联ID是历史快照，不能证明原文当前仍存在或已发布。同名且没有共同关联ID的草稿不能合并计数。'}
 }
