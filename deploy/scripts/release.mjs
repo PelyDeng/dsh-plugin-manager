@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { acquireFileLock } from '../../packages/plugin-manager/src/lock.mjs';
+import { acquireSourceLock, sourceLockCommand, sourceRecoveryIdentity } from './source-lock.mjs';
 import { canonical } from '../../packages/plugin-manager/src/state.mjs';
 import { presentBuild } from './build-output.mjs';
 
@@ -30,6 +30,7 @@ export function sourceArguments(args) {
 export async function sourceRelease({ root, args = [], beforeBuild, preflight } = {}) {
   if (!root) throw new Error('Source release requires an explicit repository root.');
   root = canonical(root);
+  if (['doctor', 'unlock-source'].includes(args[0])) return sourceLockCommand(root, args);
   const source = !args[0] || args[0] === 'release' || args[0].startsWith('--');
   if (!source) return runEntry(root, 'deployment.mjs', args);
   const buildArgs = args[0] === 'release' ? args.slice(1) : [...args];
@@ -39,19 +40,21 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight } 
   const prepared = await prepare(root);
   const env = prepared?.env ?? process.env;
   const path = resolve(root, '.local/source-release.node.lock');
-  const unlock = acquireFileLock(path, `源码部署正在执行或上次进程中断；核实本机持锁者及其子进程均已退出后再清理 ${path}，不要删除旧 source-release.lock。`);
+  const recovery = sourceRecoveryIdentity();
+  const unlock = acquireSourceLock(root, `源码部署正在执行或上次进程中断；请运行 build 脚本 doctor 查看 ${path}，再使用 unlock-source 安全解锁。不要删除旧 source-release.lock。`);
   let interrupted, workerStarted = false, finishedCode, confirmed = false;
   const interrupt = () => { interrupted ??= 'SIGINT'; };
   const terminate = () => { interrupted ??= 'SIGTERM'; };
   process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
   try {
+    unlock.update({ recovery });
     if (beforeBuild && !buildArgs.includes('--resume')) await beforeBuild(root, buildArgs, env);
     if (interrupted) return interrupted === 'SIGINT' ? 130 : 143;
     const code = await presentBuild(resolve(root, 'deploy/scripts/build.mjs'), buildArgs, {
       logDirectory: resolve(root, '.local/artifacts/build-logs'), cwd: root, env,
       onSpawn: child => {
         workerStarted = true;
-        unlock.update({ workerPid: child.pid });
+        unlock.update({ workerPid: child.pid, recovery: { ...recovery, ...(process.platform === 'linux' ? { workerGroup: child.pid } : {}) } });
         child.once('exit', (_code, signal) => { if (signal) interrupted ??= signal; });
       },
       onFinished: code => { finishedCode = code; },
@@ -68,7 +71,7 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight } 
     process.off('SIGINT', interrupt); process.off('SIGTERM', terminate);
     if (interrupted || (workerStarted && !confirmed)) {
       unlock.retain();
-      console.error(`无法确认构建进程正常结束，源码锁已保留：${path}。核实持锁者及其子进程均已退出后再清理该文件，然后按发布记录使用 build 脚本或 --resume。`);
+      console.error(`无法确认构建进程正常结束，源码锁已保留：${path}。请运行 build 脚本 doctor 查看原因，再运行 unlock-source 安全解锁；命令会提示使用普通构建或 --resume。`);
     } else unlock();
   }
 }

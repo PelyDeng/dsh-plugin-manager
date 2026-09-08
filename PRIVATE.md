@@ -12,7 +12,9 @@ Windows 在仓库根的 PowerShell 执行 `.\build.ps1`，无需 Bash；macOS/Li
 
 源码部署会重启服务：构建期间旧服务继续运行，产物准备和挂载预检通过后停止旧容器，核验身份与持久挂载，再重建容器并等待健康检查。停服核验失败时尝试恢复旧服务；安装或启动失败保留原输入与产物，保持配置不变后使用 `--resume`。源码部署不再自动归档运行数据，已有数据、历史备份和操作记录继续保留；`--resume` 继续同一次部署，不自动回滚业务数据。博客插件独立的网站备份功能不受此调整影响。
 
-三平台使用同一 `.local/source-release.node.lock`，连续覆盖私有同步与公共构建；Linux shell 还在外层持有可用的旧 `.local/source-release.lock` flock，期间不再调用公共 shell 入口，避免重复加锁。未取得锁直接退出。正常同步失败或收到匹配完成 IPC 的普通构建失败释放 Node 锁；Git/构建子进程被信号中断或无法确认正常结束时保留。先核实锁中主机、PID、workerPid 及其子进程均已退出，再清理 Node 锁；不要删除旧 flock 文件、profile 锁或恢复记录。
+三平台使用同一 `.local/source-release.node.lock`，连续覆盖私有同步与公共构建；Linux shell 还在外层持有可用的旧 `.local/source-release.lock` flock，期间不再调用公共 shell 入口，避免重复加锁。未取得锁直接退出。正常同步失败或收到匹配完成 IPC 的普通构建失败释放 Node 锁；Git/构建子进程被信号中断或无法确认正常结束时保留。
+
+中断后在仓库根执行 `sh build.sh doctor` 查看锁、进程与发布状态，再执行 `sh build.sh unlock-source`。Windows 使用 `.\build.ps1 doctor` 和 `.\build.ps1 unlock-source`。这些命令复用公共恢复实现，不获取 Gitee/GitHub、不做部署环境预检、不启动或停止服务；检查通过后将旧锁备份到 `.local/artifacts/source-lock-recovery/`，并明确提示普通构建或 `--resume`。旧版锁缺少进程组和启动身份、进程仍活跃或核验失败时拒绝自动解锁。Linux 检查受管进程组；Windows 同一次启动中无法证明全部子进程退出时保留锁，核实系统重启后才能自动恢复。平台范围、control 元数据锁及异常处理见[源码锁恢复说明](deploy/README.md)。不要删除旧 flock 文件、profile 锁或恢复记录。
 
 快进前保留 `backup/before-origin-*` 本地分支。`--resume`、`--help` 和管理子命令跳过源码更新；帮助及管理命令也不执行部署环境预检。非法参数在同步前拒绝。未完成部署不会重新安装工作区依赖，缺失时须先恢复原依赖。需要更换更新入口本身时，先确认旧入口及其子进程均已退出，在同一源码锁保护下快进到新版，再运行新版入口。
 

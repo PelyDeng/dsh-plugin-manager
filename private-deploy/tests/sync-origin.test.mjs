@@ -90,7 +90,7 @@ else {
 function entryFixture(t) {
   const f = fixture(t), { checkout, origin, git } = f;
   const files = ['build.sh', 'build.ps1', 'private-deploy/release.mjs', 'private-deploy/sync-origin.mjs',
-    'deploy/scripts/release.mjs', 'deploy/scripts/build-output.mjs',
+    'deploy/scripts/release.mjs', 'deploy/scripts/build-output.mjs', 'deploy/scripts/source-lock.mjs',
     ...['lock', 'state', 'private-files', 'process'].map(name => `packages/plugin-manager/src/${name}.mjs`)];
   for (const file of files) {
     mkdirSync(dirname(join(checkout, file)), { recursive: true });
@@ -143,6 +143,24 @@ test('help and management need no sync or deployment preflight; resume preserves
   assert.equal(readFileSync(pointer, 'utf8'), original);
   assert.equal(readFileSync(join(f.checkout, 'framework.txt'), 'utf8'), 'dirty source preserved');
   assert.equal(existsSync(f.lock), false);
+});
+
+test('root recovery commands bypass source updates and preflight without creating runtime state', t => {
+  const f = entryFixture(t);
+  f.git(f.checkout, 'remote', 'set-url', 'origin', join(f.root, 'missing-origin'));
+  writeFileSync(join(f.checkout, 'deploy/scripts/platform.mjs'), 'throw Error("must not prepare recovery");');
+  for (const args of [['doctor'], ['unlock-source'], ['doctor', '--help'], ['unlock-source', '--help']]) {
+    const result = f.run(...args);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(existsSync(join(f.checkout, '.local')), false);
+  }
+  const invalid = f.run('unlock-source', '--force');
+  assert.equal(invalid.status, 1); assert.match(invalid.stderr, /不提供强制解锁/);
+  mkdirSync(join(f.checkout, '.local'));
+  writeFileSync(f.lock, '{broken-lock');
+  const failed = f.run('unlock-source');
+  assert.equal(failed.status, 1); assert.equal(readFileSync(f.lock, 'utf8'), '{broken-lock');
+  assert.equal(existsSync(f.worker), false);
 });
 
 test('invalid arguments and ordinary sync failures do not build and release the source lock', t => {

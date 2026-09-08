@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { buildHostImage, withRegistryAuthentication } from '../../integrations/docker/host-image.mjs';
 import { buildMessage, buildStep } from './build-output.mjs';
+import { needsSourceResume } from './source-lock.mjs';
 import { commandSpec, normalizeEnvironment } from '../../packages/plugin-manager/src/process.mjs';
 import { inspectDocker, ensureDockerIdentity, assertStoppedCompose } from '../../packages/plugin-manager/src/docker-runtime.mjs';
 import { ensurePrivateDirectory, writePrivateFile } from '../../packages/plugin-manager/src/private-files.mjs';
@@ -85,7 +86,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
   const pointer = resolve(root, '.local/source-release.json');
   const prior = existsSync(pointer) ? json(pointer) : null;
   if (prior && (typeof prior.operation !== 'string' || !resolve(prior.operation).startsWith(resolve(root, '.local/artifacts') + (process.platform === 'win32' ? '\\' : '/')))) throw new Error('Invalid saved operation location.');
-  const interrupted = prior && ['prepared', 'backing-up', 'applying', 'deployment-failed'].includes(prior.status);
+  const interrupted = prior && needsSourceResume(prior.status);
   if (interrupted && !resume) throw new Error('An unfinished deployment is recorded. Keep the site configuration unchanged and run build.ps1 (Windows) or build.sh (macOS/Linux) with --resume.');
   if (resume && !interrupted) throw new Error('No unfinished prepared deployment to resume. Run build.ps1 (Windows) or build.sh (macOS/Linux) normally.');
   const inspect = image => JSON.parse(capture('docker', ['image', 'inspect', image]))[0];
@@ -238,7 +239,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
 if (direct) {
   try {
     const args = process.argv.slice(2), options = {};
-    if (args.includes('--help')) console.log('Windows: .\\build.ps1 [--config <env.conf|site.json>] [--resume]\nmacOS/Linux: ./build.sh [--config <env.conf|site.json>] [--resume]\nFirst run initializes .local/env.conf (legacy JSON remains explicit-compatible); .local/deployment.json and release records are generated.\nRequires Node.js ^22.19 or >=24, npm, Git, local Linux Docker Compose and system tar. pnpm is prepared automatically.');
+    if (args.includes('--help')) console.log('Windows: .\\build.ps1 [--config <env.conf|site.json>] [--resume]\nmacOS/Linux: ./build.sh [--config <env.conf|site.json>] [--resume]\n源码锁恢复：通过 build 脚本运行 doctor（只读诊断）或 unlock-source（安全解锁）；不更新源码、不启动构建。\nFirst run initializes .local/env.conf (legacy JSON remains explicit-compatible); .local/deployment.json and release records are generated.\nRequires Node.js ^22.19 or >=24, npm, Git, local Linux Docker Compose and system tar. pnpm is prepared automatically.');
     else {
       if (bootstrapError) throw bootstrapError;
       checkSourceNode();

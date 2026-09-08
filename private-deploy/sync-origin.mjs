@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { needsSourceResume } from '../deploy/scripts/source-lock.mjs';
 
 /** Called under the checkout deployment lock; never merges GitHub, pushes or updates submodules. */
 export function syncOrigin(root, args = [], env = process.env) {
@@ -11,7 +12,7 @@ export function syncOrigin(root, args = [], env = process.env) {
   const git = (...args) => execFileSync('git', args, { cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true }).trim();
   const entry = process.platform === 'win32' ? '.\\build.ps1' : './build.sh';
   const pointer = resolve(root, '.local/source-release.json');
-  if (existsSync(pointer) && ['prepared', 'backing-up', 'applying', 'deployment-failed'].includes(JSON.parse(readFileSync(pointer, 'utf8')).status)) {
+  if (existsSync(pointer) && needsSourceResume(JSON.parse(readFileSync(pointer, 'utf8')).status)) {
     throw new Error(`存在未完成部署；请使用 ${entry} --resume，不更新源码。`);
   }
   for (const state of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'rebase-merge', 'rebase-apply']) {

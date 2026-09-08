@@ -31,7 +31,20 @@ Windows 将最后一行换成 `.\build.ps1`。首次自动创建 `.local/env.con
 
 构建期间旧服务继续运行。每次发布记录和产物位于 `.local/artifacts/source-release-<提交>-<操作 ID>/`。产物准备完成并通过挂载预检后，停止旧服务、核验容器及挂载，再安装并等待服务健康检查。停服核验失败时尝试恢复旧服务；安装失败保留现场，保持站点配置不变并执行 build 脚本加 `--resume`。恢复使用同一次已验证的镜像和归档，并核验 Docker 引擎身份；`--resume` 继续部署，不自动回滚业务数据。
 
-三平台共用 `.local/source-release.node.lock`，Linux shell 同时沿用可用的 `flock` 兼容旧入口。期间不要并行运行其他管理命令。构建子进程通过 IPC 报告完成、退出码一致且没有中断时释放源码锁，包含正常报告的构建失败；进程被强制中断或无法证明完整结束时保留。遇到遗留锁，先根据其中的主机、PID 和 workerPid 核实本机进程及子进程全部退出，再只清理这个 Node 锁文件；不要删除旧 `source-release.lock`、profile 锁或恢复记录。profile 的 `unlock` 命令不能代替此核查。
+三平台共用 `.local/source-release.node.lock`，Linux shell 同时沿用可用的 `flock` 兼容旧入口。期间不要并行运行其他管理命令。构建子进程通过 IPC 报告完成、退出码一致且没有中断时释放源码锁，包含正常报告的构建失败；进程被强制中断或无法证明完整结束时保留。遇到遗留锁，使用源码锁恢复命令：
+
+```bash
+bash deploy/build.sh doctor
+bash deploy/build.sh unlock-source
+```
+
+Windows 对应 `.\deploy\build.ps1 doctor` 和 `.\deploy\build.ps1 unlock-source`。带有私有根入口的集成仓库使用 `sh build.sh` 或 `.\build.ps1` 加相同子命令。命令从入口解析项目根目录，不依赖当前工作目录；不需要 Docker、pnpm 或宿主源码，不更新 Git、不初始化业务配置，也不自动继续构建。
+
+`doctor` 只读显示源码锁主机、PID、workerPid、进程组、发布状态、保留原因及后续命令。`unlock-source` 在互斥保护下重新核验，将旧锁原文移入 `.local/artifacts/source-lock-recovery/`，再给出普通构建或 `--resume` 命令。`building`、`build-failed`、`ready` 或没有发布记录时使用普通构建；`prepared`、`backing-up`、`applying`、`deployment-failed` 使用 `--resume`。无锁时重复执行不创建目录或备份。诊断有阻塞或解锁失败返回非零退出码。旧 `source-release.lock`、profile 锁、业务数据和发布记录均保留；profile 的 `unlock` 不能代替源码锁恢复。
+
+新版源码锁记录平台、系统启动身份及 Linux 协调进程组/构建进程组。同一 Linux 启动中必须确认主进程、worker 和两个受管进程组全部消失；仍有孤儿子进程、权限不足、外层 flock 被占用、锁损坏或发布状态未知时拒绝解锁。系统启动身份变化能够证明上次启动的进程已全部退出。Windows 可以诊断并在核实重启后解锁；同一次启动中无法完整核验遗留子进程时保留锁。macOS 当前仅提供诊断，不提供自动解锁保证。旧版锁缺少这些身份信息，需要人工核实，不能通过补写字段或强制参数绕过检查。
+
+源码锁创建和解锁共用短时 `.local/source-release.control.lock`，覆盖直接 Node 入口，防止两次恢复或恢复与新构建交错。该锁正常操作后立即释放；若元数据操作被强制终止而留下 control 锁，`doctor` 会报告路径，必须人工核实元数据操作者已经退出后处理，不能按文件年龄自动删除。源码恢复命令不杀进程，不提供 `--force`。
 
 原生 Linux 保留 host 网络；Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge。官方 DSH 保持 `127.0.0.1` 监听，管理器在容器唯一桥接 IPv4 地址的同端口通过 TCP 转发至 DSH；宿主只向 `127.0.0.1` 发布端口。同 Docker 网络属于信任边界，此设置不代表公网隔离。部署在停服前通过 `check-compose` 核验实际容器用户的挂载访问；若 prepared 后预检失败，修正访问条件并使用原配置加 `--resume`。macOS 新站点采用当前非 root 用户 UID/GID，已保存的配置不自动修改。新站点镜像架构按 Docker 引擎初始化；显式配置及旧站点的架构保持。
 
