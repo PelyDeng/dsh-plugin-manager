@@ -16,7 +16,7 @@ export class BlogClient {
         headers: { 'Content-Type': 'application/json', Authorization: `Basic ${Buffer.from(`${this.config.username}:${this.config.password}`).toString('base64')}` },
         body: JSON.stringify({ protocolVersion: 1, action, ...args }),
       })
-    } catch { throw new BlogError(502, action === 'save' ? '提交结果待核对，请查询回执，勿重复创建文章' : '博客连接失败，请检查配置或稍后重试') }
+    } catch { throw new BlogError(502, ['save','delete'].includes(action) ? '操作结果待核对，请查询回执，勿重复执行' : '博客连接失败，请检查配置或稍后重试') }
     const data = await readJSON(response)
     if (!response.ok || data.ok !== true) {
       const messages = { conflict: '博客原文或保存草稿已变化，请重新导入比较', unauthorized: '博客账号鉴权失败', forbidden: '博客账号权限不足', invalid: '博客请求字段无效', missing: '博客文章不存在', incompatible: 'Typecho 扩展未就绪', busy: '博客正在备份或编辑，请稍后重试' }

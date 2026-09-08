@@ -522,5 +522,5 @@ export function createTool(spec: ToolSpec, gateway: ClosedoffGateway, config: Co
 export function registerTools(ctx: Context, gateway: ClosedoffGateway, config: Config, authorize: ToolAuthorizer): readonly ToolDescriptor[] {
   validateToolSpecs()
   const tools = createPluginTools(ctx, { permission: 'closedoff:access', authorize })
-  return TOOL_SPECS.map(spec => tools.register(defineBusinessTool(spec, gateway, config)))
+  return TOOL_SPECS.map(spec => tools.register(defineBusinessTool(spec, gateway, config), spec.displayName))
 }

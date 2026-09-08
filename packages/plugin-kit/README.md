@@ -14,6 +14,8 @@
 
 DSH 类型依赖是可选 peer，由使用相应接口的作者提供；只使用 access 或 route-path 不会加载工具运行实现。业务插件自行声明实际使用的 DSH/Cordis peer。
 
+工具通过 `createPluginTools(...).register(definition, '中文名称')` 声明简洁的目录显示名，随 `ToolDescriptor.displayName` 交给 auth 展示；`name` 继续作为模型调用编码。名称由各业务插件维护，不改变工具参数、描述或执行权限。未提供显示名的旧插件仍可登记，目录回退显示编码。
+
 认证模式不可自动降级。提供者缺失、重复或协议不兼容时拒绝访问。协议版本为 1，通过结构字段识别跨归档的 `AccessError`。`actorKey` 以账号身份生成稳定数据所有者，不使用短期登录 ID。`dsh-console` 是保留授权项，不能作为业务插件 ID。
 
 ```sh

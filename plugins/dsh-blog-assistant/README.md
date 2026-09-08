@@ -6,7 +6,7 @@
 
 从 [配置模板](config/config.example.json) 创建本插件的 `config/config.json`，填入博客和图床地址、账号、密码。实际文件不提交、不进镜像或插件归档。生产站点设置 `instances.blog.runtimeConfig` 指向服务器本插件的该文件；管理器只读挂载后由 `BLOG_CONFIG_PATH` 指明读取路径。
 
-本插件强制 `authenticated`。给需要写作的账号授予 `blog` 插件权限；备份管理另外检查 `backup.allowedUserIds` 中的 auth 稳定用户 ID，空列表拒绝所有交互备份和恢复。模型工具不能发布或恢复网站。配置更改通过管理器重新应用并重启生效。
+本插件强制 `authenticated`。给需要写作的账号授予 `blog` 插件权限；备份管理另外检查 `backup.allowedUserIds` 中的 auth 稳定用户 ID，空列表拒绝所有交互备份和恢复。模型可以准备文章发布、删除确认卡片，但不能自行确认执行或恢复网站。配置更改通过管理器重新应用并重启生效。
 
 管理器认证配置层覆盖 Bundle 默认配置时，插件仍从 `BLOG_CONFIG_PATH` 取得同一凭据文件的路径；显式 `runtimeConfig` 优先。该变量只存路径，不存账号或密码。
 
@@ -67,6 +67,18 @@ AI 工作区使用“回答、候选稿、来源、附件”四个固定页签�
 - PDF/DOCX 在有限内存的可终止 worker 中提取，解析限时 30 秒。扫描 PDF 提示需要 OCR；部分解析明确展示覆盖范围，不能默认声称全文读取。
 - “添加资料”不会公开文件。“插入图片”才上传到配置的图床策略。Lsky 必须开启 API；Token 缓存放在插件运行数据中，不修改其他用户 Token。
 
+## 对话发布与删除
+
+对话提供 `blog_publish_draft`（发布草稿）和 `blog_delete_post`（删除文章）。工具只生成确认卡片，用户核对后直接在原对话点击“确认发布”或“确认删除”，无需切换到博客管理后台。工具调用完成只表示卡片已准备；实际执行结果以卡片的“已发布”“已删除”或“待核对”状态为准。
+
+发布支持工作台 `draftId`、博客保存稿 `cid`，或本轮已选择的文章。发布 AI 候选时传入 `proposalId`，卡片展示该候选的完整内容，确认成功后才同步应用到工作台。存在未应用候选时，若要发布原工作台正文，需明确 `source: draft`；不能把候选误当作当前正文。发布会消费现有博客保存稿时，卡片要求用户勾选确认。候选、工作台修订或博客版本变化均拒绝旧确认；远端提交期间继续手写的内容会保留，已提交快照可从回执核对。
+
+删除仅作用于核对后的博客主文章 ID，永久删除该文章、其博客保存稿及关联评论，并清理分类、标签关系和自定义字段。Typecho 附件解除关联，图床文件及工作台副本保留；被删除文章的当前用户工作台副本标记原文已删除，不能通过旧关联误发布。仅传关联保存稿的子 ID 不会隐式删除其公开主文章。此工具不删除工作台私有草稿。
+
+确认卡片绑定原用户、登录会话、对话及冻结内容，有效期 10 分钟；本轮结束后可确认或取消。确认凭据只通过受保护 HTTP 返回页面，不进入模型工具结果，也不提供模型确认工具。分支不继承可执行卡片。重复点击不重复提交；网络结果不明确时使用“核对操作结果”查询同一回执，不盲目重发。后续对话会收到服务器记录的操作状态。
+
+删除要求 DshBlogBridge 0.3.0，并要求文章、评论、关系、分类、自定义字段和回执表使用 InnoDB。部署需同时更新博客端桥接文件和 DSH 插件；旧扩展会明确提示不支持删除。桥接文件更新前先备份，不修改 Typecho 核心。发布仍复用既有 `save` 协议。
+
 ## Typecho 桥接
 
 将 [DshBlogBridge](typecho/DshBlogBridge/Plugin.php) 安装为 Typecho 插件并启用。启用时创建独立 InnoDB 回执表；不修改 Typecho 核心。接口为 `/action/dsh-blog-bridge`，仅接受固定 JSON 操作和 Typecho 原生账号认证。
@@ -93,7 +105,8 @@ AI 工作区使用“回答、候选稿、来源、附件”四个固定页签�
 pnpm --filter dsh-blog-assistant check
 pnpm --filter dsh-blog-assistant build
 pnpm --filter dsh-blog-assistant test
+pnpm --filter dsh-blog-assistant test:bridge # 需要 PHP CLI
 python3 -m unittest discover -s plugins/dsh-blog-assistant/backup -p 'test_*.py'
 ```
 
-上述检查分别覆盖类型/语法、构建、本地行为及归档边界；不能替代真实宿主、模型、图床上传、定时触发、恢复和浏览器验收。过程记录位于仓库忽略的 `.local/dsh-blog-assistant/docs/`。
+上述检查分别覆盖类型/语法、构建、本地行为及归档边界。`test:bridge` 使用数据库与原生组件替身验证删除、回执重放、冲突和事务回滚；不能替代真实 Typecho/MySQL 集成测试。上述检查也不能替代真实宿主、模型、图床上传、定时触发、恢复和浏览器验收。过程记录位于仓库忽略的 `.local/dsh-blog-assistant/docs/`。

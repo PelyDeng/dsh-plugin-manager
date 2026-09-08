@@ -43,7 +43,7 @@ describe('shared plugin tool registration', () => {
       const tools = createPluginTools(ctx, { permission: 'example:access', authorize: () => { if (!allowed) throw new Error('denied') } })
       registerPlugin(ctx, {
         id: 'example', packageName: 'dsh-example', version: '1.0.0', displayName: '示例', description: '示例插件',
-        permissions: ['example:access'], tools: [tools.register(raw)],
+        permissions: ['example:access'], tools: [tools.register(raw, ' 查询示例 ')],
       })
     })
     await plugin.await()
@@ -51,8 +51,10 @@ describe('shared plugin tool registration', () => {
       const tool = registered.get(raw.name)!
       expect(tool).not.toBe(raw)
       expect(listPlugins(root)[0]?.tools).toEqual([{
-        name: tool.name, description: tool.description, parameters: tool.parameters, permission: 'example:access',
+        name: tool.name, displayName: '查询示例', description: tool.description, parameters: tool.parameters, permission: 'example:access',
       }])
+      expect(tool.name).toBe('example_query')
+      expect(tool).not.toHaveProperty('displayName')
       await expect(tool.execute({}, execution)).resolves.toEqual({ value: 'private' })
       allowed = false
       await expect(tool.execute({}, execution)).rejects.toThrow('denied')

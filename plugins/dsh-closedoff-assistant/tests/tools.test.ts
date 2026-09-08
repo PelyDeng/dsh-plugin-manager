@@ -7,6 +7,7 @@ import { createTool } from '../src/tools.ts'
 
 const deviceSpec: ToolSpec = {
   name: 'closedoff_device_page',
+  displayName: '查询设备',
   desc: 'devices',
   method: 'POST',
   path: '/device/page',
@@ -16,6 +17,7 @@ const deviceSpec: ToolSpec = {
 
 const trackSpec: ToolSpec = {
   name: 'closedoff_vehicle_track',
+  displayName: '车辆轨迹分析',
   desc: 'track',
   method: 'POST',
   path: '/track',
@@ -119,6 +121,7 @@ describe('device tool output', () => {
   it('projects only declared fields and redacts sensitive values for the model', () => {
     const spec: ToolSpec = {
       name: 'closedoff_test_query',
+      displayName: '测试查询',
       desc: 'test',
       method: 'POST',
       path: '/test',

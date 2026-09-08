@@ -1,6 +1,6 @@
 {
   "name": "dsh-blog-assistant",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "个人博客写作、发布、图床与备份助手",
   "license": "UNLICENSED",
   "private": true,
@@ -90,6 +90,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/attachments.test.mjs tests/chat-store.test.mjs tests/chat.test.mjs tests/chat-ui.test.mjs tests/drafts.test.mjs tests/jobs.test.mjs tests/models.test.mjs tests/search.test.mjs",
     "test:host": "node --test tests/http.test.mjs tests/chat-history-native.test.mjs tests/chat-backup-native.test.mjs",
+    "test:bridge": "php -n -l typecho/DshBlogBridge/Plugin.php && php -n tests/bridge.test.php",
     "check": "pnpm typecheck && node --check web/app.js",
     "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
   },

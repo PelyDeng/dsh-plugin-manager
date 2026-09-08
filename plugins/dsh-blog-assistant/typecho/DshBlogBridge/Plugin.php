@@ -3,7 +3,7 @@
  * DSH 博客原文与确认提交桥接。使用 Typecho 原生内容组件，分离公开版和保存稿。
  * @package DshBlogBridge
  * @author DPL
- * @version 0.2.0
+ * @version 0.3.0
  * @link https://pelyblog.com/
  */
 if (!defined('__TYPECHO_ROOT_DIR__')) { exit; }
@@ -52,6 +52,32 @@ class DshBlogBridge_Edit extends \Widget\Contents\Post\Edit
             ->where('parent = ? AND type = ?', $this->cid, 'post_draft')->limit(1));
         return (int) ($row['cid'] ?? 0);
     }
+    /** Use native content cleanup helpers without admin redirects or theme form hooks. */
+    public function removeArticle(): array
+    {
+        $cid = (int) $this->cid;
+        $draft = $this->db->fetchRow($this->db->select('cid')->from('table.contents')
+            ->where('parent = ? AND type = ?', $cid, 'post_draft')->limit(1));
+        $counted = $this->type === 'post' && $this->status === 'publish';
+        if (!$this->allow('edit') || !$this->delete($this->db->sql()->where('cid = ?', $cid))) {
+            throw new DshBlogBridge_Error('conflict', 409);
+        }
+        $this->setCategories($cid, [], $counted, false);
+        $this->setTags($cid, null, $counted, false);
+        $this->db->query($this->db->delete('table.comments')->where('cid = ?', $cid));
+        $this->unAttach($cid);
+        $this->deleteFields($cid);
+        $ids = [$cid];
+        if ($draft) {
+            $draftId = (int) $draft['cid'];
+            $this->deleteDraft($draftId);
+            $this->deleteFields($draftId);
+            $this->unAttach($draftId);
+            $this->db->query($this->db->delete('table.comments')->where('cid = ?', $draftId));
+            $ids[] = $draftId;
+        }
+        return $ids;
+    }
 }
 
 class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInterface
@@ -98,6 +124,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             elseif ($action === 'search') { $data = $this->searchPosts($input); }
             elseif ($action === 'get') { $data = $this->snapshot($this->id($input['cid'] ?? null)); }
             elseif ($action === 'save') { $data = $this->saveArticle($input); }
+            elseif ($action === 'delete') { $data = $this->deleteArticle($input); }
             elseif ($action === 'receipt') { $data = $this->receipt($input); }
             else { throw new DshBlogBridge_Error('invalid', 400); }
             $this->respond(200, ['ok' => true, 'data' => $data]);
@@ -124,11 +151,11 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
         $this->demand(preg_match('/^[a-zA-Z0-9_]+$/', $db->getPrefix()), 'incompatible', 503);
         $tables = $db->fetchAll('SHOW TABLE STATUS'); $engines = [];
         foreach ($tables as $table) { $engines[$table['Name']] = $table['Engine']; }
-        foreach (['contents', 'fields', 'relationships', 'metas', 'dsh_blog_receipts'] as $name) {
+        foreach (['contents', 'fields', 'relationships', 'metas', 'comments', 'dsh_blog_receipts'] as $name) {
             $this->demand(($engines[$db->getPrefix() . $name] ?? '') === 'InnoDB', 'incompatible', 503);
         }
         $categories = $db->fetchAll($db->select('mid', 'name')->from('table.metas')->where('type = ?', 'category')->order('order', \Typecho\Db::SORT_ASC));
-        return ['protocolVersion' => 1, 'version' => '0.2.0', 'structuredSearch' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
+        return ['protocolVersion' => 1, 'version' => '0.3.0', 'structuredSearch' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
     }
     private function posts(array $input): array
     {
@@ -296,5 +323,33 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
         $result = ['cid' => $cid, 'version' => $snapshot['version'], 'snapshot' => $snapshot, 'url' => $mode === 'publish' ? $widget->permalink : null];
         $db->query($db->insert('table.dsh_blog_receipts')->rows(['request_id' => $requestId, 'uid' => $this->bridgeUser->uid, 'input_hash' => $hash, 'result' => json_encode($result, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), 'created_at' => time()]));
         $db->query('COMMIT', \Typecho\Db::WRITE); $this->transaction = false; return $result;
+    }
+    private function deleteArticle(array $input): array
+    {
+        $this->status(); $db = $this->bridgeDb;
+        $cid = $this->id($input['cid'] ?? null);
+        $version = $input['base']['version'] ?? null;
+        $this->demand(is_string($version) && preg_match('/^[a-f0-9]{64}$/', $version));
+        $requestId = $input['requestId'] ?? '';
+        $this->demand(is_string($requestId) && preg_match('/^[a-f0-9-]{36}$/', $requestId));
+        $hash = hash('sha256', json_encode(['delete', $cid, $version], JSON_THROW_ON_ERROR));
+        $db->query('SET TRANSACTION ISOLATION LEVEL SERIALIZABLE', \Typecho\Db::WRITE);
+        $db->query('START TRANSACTION', \Typecho\Db::WRITE); $this->transaction = true;
+        $receipt = $db->fetchRow($db->select()->from('table.dsh_blog_receipts')->where('request_id = ?', $requestId));
+        if ($receipt) {
+            $this->demand((int) $receipt['uid'] === (int) $this->bridgeUser->uid && hash_equals($receipt['input_hash'], $hash), 'conflict', 409);
+            $db->query('COMMIT', \Typecho\Db::WRITE); $this->transaction = false;
+            return json_decode($receipt['result'], true);
+        }
+        $before = $this->snapshot($cid);
+        $this->demand(($before['published']['cid'] ?? $before['savedDraft']['cid']) === $cid, 'conflict', 409);
+        $this->demand(hash_equals($before['version'], $version), 'conflict', 409);
+        $widget = DshBlogBridge_Edit::allocWithAlias($requestId, null, ['cid' => $cid]);
+        $deleted = $widget->removeArticle();
+        foreach ($deleted as $id) { $this->demand($this->row($id) === null, 'incompatible', 503); }
+        $result = ['cid' => $cid, 'deleted' => true, 'deletedCids' => $deleted, 'url' => null, 'snapshot' => null];
+        $db->query($db->insert('table.dsh_blog_receipts')->rows(['request_id' => $requestId, 'uid' => $this->bridgeUser->uid, 'input_hash' => $hash, 'result' => json_encode($result, JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR), 'created_at' => time()]));
+        $db->query('COMMIT', \Typecho\Db::WRITE); $this->transaction = false;
+        return $result;
     }
 }

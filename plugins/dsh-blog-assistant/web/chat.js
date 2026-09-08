@@ -9,6 +9,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
   const $=id=>document.getElementById(id),base=document.body.dataset.base
   const state={id:null,epoch:0,history:null,files:[],feedback:new Map(),feedbackReady:false,stream:null,offset:null,sending:false,stopping:false,uploading:false,liveClock:0,pending:null}
   const inputs=new Map(),key=`blog-chat:${identity.userId}`
+  const operationPending=new Set(),operationErrors=new Map()
   let refreshTimer,refreshVersion=0,feedbackTarget,fileTarget,composing=false,creating
   const element=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el}
   const error=(e,id='chat-error')=>{if(id==='chat-error'&&$('navigation-dialog').open)id='navigation-error';const el=$(id);el.textContent=e.message??String(e);el.hidden=false;el.focus()}
@@ -110,7 +111,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     $('chat-welcome').hidden=!!history?.messages.length
     for(const message of history?.messages??[]){
       const node=element('section',undefined,`chat-message ${message.role}-message`);node.dataset.message=message.id
-      if(message.role==='tool'){const chip=element('span',undefined,`qa-tool ${message.status}`);chip.append(glyph('api'),element('small',`${{blog_search_posts:'查询博客文章',blog_read_post:'读取文章',blog_list_drafts:'查找工作台草稿',blog_select_draft:'选择写作文章',blog_propose:'保存候选稿',blog_web_search:'搜索资料',blog_web_fetch:'阅读网页'}[message.name]??'执行博客工具'} · ${{running:'进行中',succeeded:'完成',failed:'失败',interrupted:'已中断'}[message.status]??message.status}`));node.append(chip);append(node,'message-'+message.id,message);continue}
+      if(message.role==='tool'){const chip=element('span',undefined,`qa-tool ${message.status}`);chip.append(glyph('api'),element('small',`${{blog_search_posts:'查询博客文章',blog_read_post:'读取文章',blog_list_drafts:'查找工作台草稿',blog_select_draft:'选择写作文章',blog_propose:'保存候选稿',blog_web_search:'搜索资料',blog_web_fetch:'阅读网页',blog_publish_draft:'准备发布',blog_delete_post:'准备删除'}[message.name]??'执行博客工具'} · ${{running:'进行中',succeeded:'完成',failed:'失败',interrupted:'已中断'}[message.status]??message.status}`));node.append(chip);append(node,'message-'+message.id,message);continue}
       if(message.role==='status'){node.textContent=message.text;append(node,'message-'+message.id,message);continue}
       const content=bubble(node,message.role==='user')
       if(message.reasoning)content.append(reasoning(message.reasoning,message.id))
@@ -147,11 +148,49 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
       const row=element('section',undefined,'chat-result chat-result-compact'),head=element('div',undefined,'chat-result-head');head.append(element('h3',card.proposal?.fields.title||card.title||'文章候选稿'),button('打开文章',async()=>{const epoch=state.epoch;await openDraft(card.draftId);if(epoch===state.epoch)view(false)}));row.append(head)
       const details=element('details');details.dataset.detail='card-'+card.id;details.append(element('summary',`候选快照 · 基于版本 ${card.revision}`),prose(card.proposal?.fields.text??''),element('small','历史候选快照，当前文章状态以编辑器为准','muted'));row.append(details);append(row,'card-'+card.id,card)
     }
+    for(const op of history?.operations??[])append(operationCard(op),'operation-'+op.id,{op,busy:history.busy,pending:operationPending.has(op.id),error:operationErrors.get(op.id)})
     let cursor=box.firstElementChild
     for(const node of nodes){if(node===cursor)cursor=cursor.nextElementSibling;else box.insertBefore(node,cursor)}
     while(cursor){const next=cursor.nextElementSibling;cursor.remove();cursor=next}
     if(focusKey&&focusAction&&document.activeElement!==focused){const replacement=nodes.find(n=>n.dataset.key===focusKey);[...replacement?.querySelectorAll('[data-action]')??[]].find(n=>n.dataset.action===focusAction)?.focus({preventScroll:true})}
     renderLive(state.history?.live,{follow,scrollTop})
+  }
+  function operationCard(op){
+    const row=element('section',undefined,'chat-result chat-operation'),deleting=op.mode==='delete',pending=operationPending.has(op.id)
+    row.dataset.operation=op.id
+    const label=deleting?'删除文章':'发布草稿'
+    row.append(element('h3',`${label} · ${op.title}`))
+    if(op.mode==='publish'){
+      row.append(element('p',op.source==='proposal'?'发布内容：AI 候选稿（确认后应用并发布）':'发布内容：当前草稿'))
+      const preview=element('details');preview.dataset.detail='operation-preview-'+op.id
+      preview.append(element('summary','查看将发布的完整内容'),prose(op.after?.text),element('p',`标签：${op.after?.tags?.join('、')||'无'}`));row.append(preview)
+    }else{
+      row.append(element('p','确认后永久删除以下博客内容及关联评论。图床文件和工作台副本保留。'))
+      const targets=element('ul');for(const p of op.deletedArticles??[])targets.append(element('li',`${p.title} · ${p.type==='post_draft'?'博客保存稿':'博客文章'} · ID ${p.cid}`));row.append(targets)
+    }
+    const status=element('p',pending?'正在处理…':({prepared:state.history?.busy?'请等待本轮回答完成后确认':op.canConfirm?'请核对内容后确认':'确认已失效，请重新发起操作',running:'执行结果待核对，请查询回执',uncertain:'执行结果待核对，请勿重复操作',succeeded:deleting?'已删除':'已发布',conflict:'文章已变化，请重新核对并发起操作',cancelled:'已取消'})[op.status]??op.status)
+    status.setAttribute('role','status');row.append(status)
+    const href=url(op.result?.url);if(href){const link=element('a','查看博客文章');link.href=href;link.target='_blank';link.rel='noopener noreferrer';row.append(link)}
+    let consent
+    if(op.status==='prepared'&&!deleting&&op.hasSavedDraft){const label=element('label',undefined,'check');consent=element('input');consent.type='checkbox';label.append(consent,document.createTextNode('我确认此次发布会替换现有博客保存稿'));row.append(label)}
+    const act=async operation=>{
+      if(operationPending.has(op.id))return
+      const id=state.id,epoch=state.epoch,consumeSavedDraft=!!consent?.checked
+      operationPending.add(op.id);operationErrors.delete(op.id);render()
+      try{await api('chat-operation',{conversationId:id,id:op.id,nonce:op.nonce,operation,consumeSavedDraft})}
+      catch(e){operationErrors.set(op.id,e.message??String(e))}
+      finally{operationPending.delete(op.id);if(epoch===state.epoch){await refresh();render()}}
+    }
+    const actions=element('div',undefined,'chat-operation-actions')
+    if(op.status==='prepared'){
+      const confirm=button(deleting?'确认删除':'确认发布',()=>act('confirm'));confirm.className='primary'
+      confirm.disabled=pending||!op.canConfirm||!!consent;consent?.addEventListener('change',()=>{confirm.disabled=pending||!op.canConfirm||!consent.checked})
+      const cancel=button('取消',()=>act('cancel'));cancel.disabled=pending||!op.canConfirm;actions.append(confirm,cancel)
+    }
+    if(['running','uncertain'].includes(op.status)){const reconcile=button('核对操作结果',()=>act('reconcile'));reconcile.disabled=pending||state.history?.busy;actions.append(reconcile)}
+    row.append(actions)
+    if(operationErrors.has(op.id)){const error=element('p',operationErrors.get(op.id),'error');error.setAttribute('role','alert');row.append(error)}
+    return row
   }
   async function rate(message,rating){
     const id=state.id,epoch=state.epoch,old=state.feedback.get(message.id)

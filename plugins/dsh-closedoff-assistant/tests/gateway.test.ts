@@ -52,6 +52,7 @@ describe('ClosedoffGateway', () => {
     const gateway = new ClosedoffGateway(config, environment)
     const spec: ToolSpec = {
       name: 'closedoff_vehicle_track',
+      displayName: '车辆轨迹分析',
       desc: 'track',
       method: 'GET',
       path: '/car/carLocation/historyTrack',
@@ -86,6 +87,7 @@ describe('ClosedoffGateway', () => {
     const gateway = new ClosedoffGateway(config, environment)
     const spec: ToolSpec = {
       name: 'closedoff_gate_access_page',
+      displayName: '门禁出入记录',
       desc: 'access records',
       method: 'POST',
       path: '/access',
@@ -121,6 +123,7 @@ describe('ClosedoffGateway', () => {
     const gateway = new ClosedoffGateway(config, environment)
     const spec: ToolSpec = {
       name: 'closedoff_vehicle_track',
+      displayName: '车辆轨迹分析',
       desc: 'track',
       method: 'GET',
       path: '/track',
@@ -148,6 +151,7 @@ describe('ClosedoffGateway', () => {
     const gateway = new ClosedoffGateway(config, environment)
     const spec: ToolSpec = {
       name: 'closedoff_example',
+      displayName: '查询示例',
       desc: 'example',
       method: 'GET',
       path: '/example',

@@ -23,18 +23,18 @@ export class BlogJobs {
     this.models = models; this.bindings = new WeakMap(); this.active = new Map(); this.closed = false
     ctx.effect(()=>ctx.jobs.attachController('blog-workbench'))
     const tools = createPluginTools(ctx, { permission: 'blog:access', authorize: agent => this.bound(agent) })
-    const register = (name, description, parameters, execute) => tools.register(defineTool({
+    const register = (name, displayName, description, parameters, execute) => tools.register(defineTool({
       name, description, parameters, timeoutMs: 45000,
       output: { schema: { type: 'json' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
       execute: (args, execution) => execute(args, this.bound(execution.agent), execution.signal),
-    }))
+    }), displayName)
     this.tools = [
-      register('blog_search_posts', '组合搜索博客标题/正文/分类/标签/日期/状态。不同条件同时满足。今天/昨天用period，不要作为query；query只用于字面内容。返回筛选条件、时间、URL、分页；hasMore时不能断言全部结果。', searchParameters, (a,b,s) => blog.search(a,s)),
-      register('blog_read_post', '读取博客文章原文作为写作资料。', { cid: { type: 'integer', required: true } }, async (a,b,s) => {
+      register('blog_search_posts', '搜索文章', '组合搜索博客标题/正文/分类/标签/日期/状态。不同条件同时满足。今天/昨天用period，不要作为query；query只用于字面内容。返回筛选条件、时间、URL、分页；hasMore时不能断言全部结果。', searchParameters, (a,b,s) => blog.search(a,s)),
+      register('blog_read_post', '读取文章', '读取博客文章原文作为写作资料。', { cid: { type: 'integer', required: true } }, async (a,b,s) => {
         const result = await blog.get(a.cid,s); this.bound(b.handle.agent)
         return { published: this.modelArticle(result.published), savedDraft: this.modelArticle(result.savedDraft) }
       }),
-      register('blog_web_search', '联网搜索资料并记录真实来源。', { query: { type: 'string', required: true } }, async (a,b,s) => {
+      register('blog_web_search', '联网搜索', '联网搜索资料并记录真实来源。', { query: { type: 'string', required: true } }, async (a,b,s) => {
         invariant(b.job.input.research, '当前任务未启用联网查证', 403)
         invariant(typeof a.query === 'string' && a.query.length > 0 && a.query.length <= 500, '搜索词无效')
         const web = ctx.get('web'); invariant(web, '宿主尚未挂载联网服务', 503)
@@ -43,7 +43,7 @@ export class BlogJobs {
         b.sources = [...b.sources, ...sources].filter((v,i,all) => all.findIndex(x => x.url === v.url) === i).slice(0,30)
         this.update(b, { sources: b.sources }); return { sources }
       }),
-      register('blog_web_fetch', '抓取已找到的公开网页原文，记录是否真正读到原文。', { url: { type: 'string', required: true } }, async (a,b,s) => {
+      register('blog_web_fetch', '读取网页', '抓取已找到的公开网页原文，记录是否真正读到原文。', { url: { type: 'string', required: true } }, async (a,b,s) => {
         invariant(b.job.input.research, '当前任务未启用联网查证', 403)
         const web = ctx.get('web'); invariant(web, '宿主尚未挂载联网服务', 503)
         const result = await web.fetch({ url: a.url }, s); this.bound(b.handle.agent)
@@ -53,7 +53,7 @@ export class BlogJobs {
         if (!b.sources.includes(source)) b.sources.push(source)
         this.update(b, { sources: b.sources }); return result
       }),
-      register('blog_propose', '提交标题、正文、标签候选稿，等待用户选择应用；不公开发布。', {
+      register('blog_propose', '生成候选稿', '提交标题、正文、标签候选稿，等待用户选择应用；不公开发布。', {
         title: { type: 'string' }, text: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } },
       }, async (args,b) => {
         this.bound(b.handle.agent)
@@ -64,10 +64,16 @@ export class BlogJobs {
       }),
     ]
     this.chatTools=[...this.tools,
-      register('blog_list_drafts','组合搜索当前用户工作台私有草稿；支持标题/正文/分类/标签/日期；不是公开文章。返回筛选条件、日期和分页。',searchParameters,async(a,b,s)=>{invariant(b.chat,'当前任务不提供对话文章选择',403);const result=await this.searchDrafts(b.job.owner,a,s);this.bound(b.handle.agent);return result}),
-      register('blog_select_draft','选择要编辑的工作台文章，或导入博客文章，或按用户要求建立一篇新文章。三种方式只能选一种。重复新建会返回本轮已创建的文章。',{
+      register('blog_list_drafts', '查找草稿','组合搜索当前用户工作台私有草稿；支持标题/正文/分类/标签/日期；不是公开文章。返回筛选条件、日期和分页。',searchParameters,async(a,b,s)=>{invariant(b.chat,'当前任务不提供对话文章选择',403);const result=await this.searchDrafts(b.job.owner,a,s);this.bound(b.handle.agent);return result}),
+      register('blog_select_draft', '选择文章','选择要编辑的工作台文章，或导入博客文章，或按用户要求建立一篇新文章。三种方式只能选一种。重复新建会返回本轮已创建的文章。',{
         draftId:{type:'string'},cid:{type:'integer'},variant:{type:'string',enum:['published','savedDraft']},newArticle:{type:'boolean'},
       },(a,b,s)=>{invariant(b.chat,'当前任务不提供对话文章选择',403);return b.chat.selectDraft(b,a,s)}),
+      register('blog_publish_draft','发布草稿','为指定工作台草稿或博客保存稿生成发布确认卡片。draftId与cid只能选一种；未传时使用本轮已选文章。发布AI候选必须传proposalId；存在候选但要发布原工作台正文时传source=draft。仅准备预览，不会立即发布；用户在对话卡片确认后执行。',{
+        draftId:{type:'string'},cid:{type:'integer'},proposalId:{type:'string'},source:{type:'string',enum:['draft','proposal']},
+      },(a,b,s)=>{invariant(b.chat,'请在博客对话中发起发布',403);return b.chat.prepareOperation(b,'publish',a,s)}),
+      register('blog_delete_post','删除文章','为博客主文章ID生成删除确认卡片。删除将永久移除博客文章、其保存稿和评论；保留图床文件与工作台副本。先搜索/读取核对目标，不按标题直接删除；用户在对话卡片确认后执行。',{
+        cid:{type:'integer',required:true},
+      },(a,b,s)=>{invariant(b.chat,'请在博客对话中发起删除',403);return b.chat.prepareOperation(b,'delete',a,s)}),
     ]
     this.service = { protocolVersion: BLOG_PROTOCOL_VERSION, capabilities: ['read','research','draft','revise'], start: (actor,request) => this.start(actor,request), get: (actor,id) => this.get(actor,id), cancel: (actor,id) => this.cancel(actor,id) }
     ctx.effect(() => ctx.on(BLOG_SERVICE_EVENT, accept => accept(this.service), { global: true }))

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { article, ownerKey } from './store.mjs'
+import { article, ownerKey, digest } from './store.mjs'
 import { invariant } from './settings.mjs'
 
 export class BlogApplication {
@@ -56,43 +56,85 @@ export class BlogApplication {
     this.store.record(owner,'import',{draftId:result.id,cid,variant});return result
   }
   async importDraft(actor,cid,variant){return this.importSnapshot(actor,await this.readImport(actor,cid,variant),cid)}
-  operation(owner,id) { const row=this.store.db.prepare('SELECT data FROM operations WHERE id=? AND owner=?').get(id,owner);invariant(row,'发布记录不存在',404);return JSON.parse(row.data) }
+  operation(owner,id) { const row=this.store.db.prepare('SELECT data FROM operations WHERE id=? AND owner=?').get(id,owner);invariant(row,'操作记录不存在或无权访问',404);return JSON.parse(row.data) }
   operationSave(id,value) { this.store.db.prepare('UPDATE operations SET data=? WHERE id=?').run(JSON.stringify(value),id) }
-  async prepare(actor,args) {
+  operations(owner) { return this.store.db.prepare('SELECT data FROM operations WHERE owner=? ORDER BY rowid').all(owner).map(row=>JSON.parse(row.data)) }
+  assertPending(owner,draftId,remoteCid,except) {
+    invariant(!this.operations(owner).some(op=>op.id!==except&&['running','uncertain'].includes(op.status)&&(op.draftId===draftId||remoteCid&&(op.before?.published?.cid??op.before?.savedDraft?.cid)===remoteCid)), '同一文章已有提交待核对，不能重复操作',409)
+  }
+  preview(op) {
+    return {id:op.id,nonce:op.nonce,expiresAt:op.expiresAt,mode:op.mode,title:op.title??op.payload.content?.title??'',before:op.before?.published?this.jobs.modelArticle(op.before.published):null,after:op.payload.content??null,hasSavedDraft:!!op.before?.savedDraft,sources:op.sources??[],source:op.proposal?'proposal':'draft',deletedArticles:op.mode==='delete'?[op.before.published,op.before.savedDraft].filter(Boolean).map(p=>({cid:p.cid,title:p.title,type:p.type})):[]}
+  }
+  async prepare(actor,args,signal,chat) {
+    this.access.assert(actor);signal?.throwIfAborted()
     const owner=ownerKey(actor), d=this.store.get(owner,args.id)
     invariant(d.revision===args.revision,'草稿已变化，请重新预览',409)
     invariant(['draft','publish'].includes(args.mode),'目标状态无效')
-    invariant(d.title.trim() && d.text.trim(),'标题和正文不能为空')
-    const pending=this.store.db.prepare('SELECT data FROM operations WHERE owner=? AND draftId=?').all(owner,d.id).some(r=>['running','uncertain'].includes(JSON.parse(r.data).status))
-    invariant(!pending,'有提交结果待核对，完成核对前不能重复发布',409)
+    invariant(!d.remote?.deleted,'博客原文已删除；如需重新发布，请明确创建新文章',409)
+    const proposal=args.proposalId?d.proposal:null
+    if(args.proposalId)invariant(proposal?.id===args.proposalId&&proposal.baseRevision===d.revision,'候选稿已变化，请重新选择并预览',409)
+    const content=article(proposal?{...d,...proposal.fields}:d)
+    invariant(content.title.trim() && content.text.trim(),'标题和正文不能为空')
+    this.assertPending(owner,d.id,d.remote?.published?.cid??d.remote?.savedDraft?.cid)
     let remote=null
     if(d.remote) {
-      remote=await this.blog.get(d.remote.published?.cid??d.remote.savedDraft?.cid)
+      remote=await this.blog.get(d.remote.published?.cid??d.remote.savedDraft?.cid,signal)
       invariant(remote.version===d.remote.version,'博客已被其他窗口修改，请重新导入比较',409)
       remote.selectedVariant=d.remote.selectedVariant??(remote.savedDraft?'savedDraft':'published')
     }
-    this.access.assert(actor)
-    const op={id:randomUUID(),owner,sessionId:actor.sessionId,draftId:d.id,revision:d.revision,mode:args.mode,status:'prepared',nonce:randomUUID(),expiresAt:Date.now()+10*60*1000,createdAt:Date.now(),payload:{content:article(d),base:remote},before:remote}
+    this.access.assert(actor);signal?.throwIfAborted()
+    const op={id:randomUUID(),owner,sessionId:actor.sessionId,draftId:d.id,revision:d.revision,mode:args.mode,status:'prepared',nonce:randomUUID(),expiresAt:Date.now()+10*60*1000,createdAt:Date.now(),title:content.title,payload:{content,base:remote},before:remote,proposal,sources:proposal?.sources??d.sources,...(chat?{chat}:{})}
     this.store.db.prepare('INSERT INTO operations VALUES(?,?,?,?,?)').run(op.id,owner,d.id,d.revision,JSON.stringify(op))
-    return {id:op.id,nonce:op.nonce,expiresAt:op.expiresAt,mode:op.mode,title:d.title,before:remote?.published?this.jobs.modelArticle(remote.published):null,after:article(d),hasSavedDraft:!!remote?.savedDraft,sources:d.sources}
+    return this.preview(op)
   }
-  async confirm(actor,args) {
+  async prepareDelete(actor,cid,signal,chat) {
+    this.access.assert(actor);signal?.throwIfAborted()
+    const status=await this.blog.call('status',{},signal)
+    invariant(status.deleteArticle===true,'博客桥接扩展尚未支持删除，请先更新 DshBlogBridge',503)
+    const remote=await this.blog.get(cid,signal),rootCid=remote.published?.cid??remote.savedDraft?.cid
+    // Deleting a child draft must never silently delete its published parent.
+    invariant(cid===rootCid,'该 ID 是文章的保存稿；删除整篇文章请核对主文章 ID',409)
+    this.access.assert(actor);signal?.throwIfAborted()
+    const owner=ownerKey(actor),draftId=`remote:${rootCid}`
+    this.assertPending(owner,draftId,rootCid)
+    const op={id:randomUUID(),owner,sessionId:actor.sessionId,draftId,revision:0,mode:'delete',status:'prepared',nonce:randomUUID(),expiresAt:Date.now()+10*60*1000,createdAt:Date.now(),title:(remote.published??remote.savedDraft).title,payload:{cid:rootCid,base:remote},before:remote,chat}
+    this.store.db.prepare('INSERT INTO operations VALUES(?,?,?,?,?)').run(op.id,owner,draftId,0,JSON.stringify(op))
+    return this.preview(op)
+  }
+  applyResult(op,result) {
+    if(op.mode==='delete') {
+      const ids=new Set([op.before.published?.cid,op.before.savedDraft?.cid].filter(Boolean))
+      for(const row of this.store.list(op.owner))if(ids.has(row.remote?.publishedCid)||ids.has(row.remote?.savedDraftCid)){
+        const d=this.store.get(op.owner,row.id)
+        if(d.remote?.deleteOperationId!==op.id)this.store.save(op.owner,d.id,d.revision,{remote:{...d.remote,deleted:true,deletedAt:Date.now(),deleteOperationId:op.id}})
+      }
+      return
+    }
+    const d=this.store.get(op.owner,op.draftId)
+    // Keep edits made while the remote request was in flight. The receipt still records success.
+    if(d.revision===op.revision&&(!op.proposal||digest(d.proposal)===digest(op.proposal)))this.store.save(op.owner,d.id,d.revision,{remote:result.snapshot,...(op.proposal?{...op.payload.content,proposal:null,sources:op.sources}: {})})
+  }
+  async confirm(actor,args,conversationId) {
+    this.access.assert(actor)
     const owner=ownerKey(actor),op=this.operation(owner,args.id)
+    if(op.chat)invariant(conversationId===op.chat.conversationId,'请在原对话卡片确认该操作',403)
     if(op.status==='succeeded')return {status:op.status,result:op.result}
     invariant(op.status==='prepared','提交已开始，请查询回执核对结果',409)
     invariant(op.nonce===args.nonce && op.sessionId===actor.sessionId && op.expiresAt>Date.now(),'确认已失效，请重新预览',409)
-    const d=this.store.get(owner,op.draftId);invariant(d.revision===op.revision,'草稿已变化，请重新预览',409)
+    if(op.mode!=='delete') {
+      const d=this.store.get(owner,op.draftId);invariant(d.revision===op.revision,'草稿已变化，请重新预览',409)
+      if(op.proposal)invariant(digest(d.proposal)===digest(op.proposal),'候选稿已变化，请重新预览',409)
+    }
     if(op.before?.savedDraft && op.mode==='publish')invariant(args.consumeSavedDraft===true,'请明确确认发布会消费现有博客保存稿')
     this.access.assert(actor)
-    const otherPending=this.store.db.prepare('SELECT data FROM operations WHERE owner=? AND draftId=? AND id<>?').all(owner,d.id,op.id).some(r=>['running','uncertain'].includes(JSON.parse(r.data).status))
-    invariant(!otherPending,'同一草稿已有提交待核对',409)
+    this.assertPending(owner,op.draftId,op.before?.published?.cid??op.before?.savedDraft?.cid,op.id)
     op.status='running';delete op.nonce;this.operationSave(op.id,op)
-    this.store.record(owner,'submit-before',{operationId:op.id,draftId:d.id,mode:op.mode,snapshot:op.before,content:op.payload.content})
+    this.store.record(owner,'submit-before',{operationId:op.id,draftId:op.draftId,mode:op.mode,snapshot:op.before,content:op.payload.content})
     try {
-      const result=await this.blog.call('save',{requestId:op.id,mode:op.mode,...op.payload})
+      const result=await this.blog.call(op.mode==='delete'?'delete':'save',{requestId:op.id,mode:op.mode,...op.payload})
       op.status='succeeded';op.result=result;this.operationSave(op.id,op)
       this.store.record(owner,'submit-success',{operationId:op.id,version:result.version})
-      this.store.save(owner,d.id,d.revision,{remote:result.snapshot})
+      this.applyResult(op,result)
       this.access.assert(actor);return {status:op.status,result}
     } catch(error) {
       if(op.status==='succeeded')throw error
@@ -101,13 +143,14 @@ export class BlogApplication {
     }
   }
   async reconcile(actor,id) {
+    this.access.assert(actor)
     const owner=ownerKey(actor),op=this.operation(owner,id)
-    if(op.status==='succeeded')return {status:op.status,result:op.result}
+    if(op.status==='succeeded'){this.applyResult(op,op.result);return {status:op.status,result:op.result}}
+    invariant(['running','uncertain'].includes(op.status),'该操作不需要核对回执',409)
     const result=await this.blog.call('receipt',{requestId:op.id});this.access.assert(actor)
     if(result.status==='succeeded') {
       op.status='succeeded';op.result=result.result;this.operationSave(id,op)
-      const draft=this.store.get(owner,op.draftId)
-      if(draft.revision===op.revision)this.store.save(owner,draft.id,draft.revision,{remote:result.result.snapshot})
+      this.applyResult(op,result.result)
       this.store.record(owner,'reconciled',{operationId:id});return {status:op.status,result:op.result}
     }
     return {status:'uncertain',message:'未取得成功回执；本地稿与提交记录已保留，请核对博客后再处理'}

@@ -28,6 +28,7 @@ export interface ToolResultSpec {
 /** One approved remote query and its model-facing selection and analysis guidance. */
 export interface ToolSpec {
   readonly name: `closedoff_${string}`
+  readonly displayName: string
   readonly desc: string
   readonly method: 'GET' | 'POST'
   readonly path: `/${string}`
@@ -52,6 +53,7 @@ function result(dataKind: ToolResultDataKind, ...fields: ToolResultField[]): Too
 export const TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'closedoff_warning_page',
+    displayName: '查询预警报警',
     desc: '预警报警分页查询。问“最近有什么报警/预警”“某车牌相关的报警”“还在持续的报警”等时使用。warningType: 1预警 2报警 3事故 4事件；warningStatus: 0正在持续 1已销警；deviceType: 1车闸 2人闸 3IP广播 4GDS 5报杆箱 6摄像头 7预约屏。未指定时间默认最近一月' + TIME_FMT + PAGE_TIP,
     method: 'POST', path: '/risk-warning/riskWarning/page',
     timeRanges: [{ startKey: 'warningStartTimeBegin', endKey: 'warningStartTimeEnd' }],
@@ -80,6 +82,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_warning_detail',
+    displayName: '预警报警详情',
     desc: '按 ID 查询单条预警报警详情（含处置/派发信息）。先通过 closedoff_warning_page 拿到 id 再查询。',
     method: 'GET', path: '/risk-warning/riskWarning/one',
     result: result('unknown',
@@ -90,6 +93,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_warning_count',
+    displayName: '预警状态统计',
     desc: '按预警状态统计报警数量（按公司/设备类型/模块维度过滤）。',
     method: 'GET', path: '/risk-warning/riskWarning/countByWarningStatus',
     result: result('unknown', ['warningStatus', '处置状态'], ['count', '数量']),
@@ -102,6 +106,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_warning_module_list',
+    displayName: '预警模块列表',
     desc: '预警报警模块列表查询（模块类型/子类型字典）。问“有哪些报警模块/类型”时使用。',
     method: 'GET', path: '/risk-warning/riskWarningModule/getList',
     result: result('unknown',
@@ -111,6 +116,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_warning_count_by_level',
+    displayName: '预警等级统计',
     desc: '按预警报警等级统计数量（红/橙/黄/蓝）。问“各级别报警有多少”时使用。',
     method: 'POST', path: '/risk-warning/riskWarning/countByWarningLevel',
     result: result('unknown',
@@ -120,6 +126,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_reservation_approval_page',
+    displayName: '查询预约审批',
     desc: '预约审批分页查询（企业/园区待审批）。问“今天有哪些待审批预约”“某企业的预约审批进度”“危化车预约待审”时使用。reservationType: 1人员 2普通车 3危化车 4危废车 5货车；status: 0企业待审批 1企业通过 2企业不通过 3园区待审批 4园区通过 5园区不通过 6已过期；approvePageType: 0企业待审批 1企业已审批 2园区待审批 3园区已审批；currentStatus: 0未生效 1生效中 2已过期。未指定时间默认最近一月' + TIME_FMT + PAGE_TIP,
     method: 'POST', path: '/closed-off/reservation/approvalPageV2',
     timeRanges: [{ startKey: 'beginTime', endKey: 'endTime' }],
@@ -144,6 +151,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_reservation_completed_page',
+    displayName: '查询历史预约',
     desc: '已完成/已审批预约分页查询（含历史预约）。参数含义同 closedoff_reservation_approval_page，按 status 过滤不同审批阶段。未指定时间默认最近一月' + TIME_FMT + PAGE_TIP,
     method: 'POST', path: '/closed-off/reservation/completedPageV2',
     timeRanges: [{ startKey: 'beginTime', endKey: 'endTime' }],
@@ -168,6 +176,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_reservation_stats',
+    displayName: '预约审批统计',
     desc: '预约审批统计：今日待审数、今日已完成、平均处理时长、通过率、按类型（人员/普通车/危化车/危废车/货车）的待审数。问“今天预约审批情况”时使用。',
     method: 'GET', path: '/closed-off/reservation/statsV2',
     result: result('object',
@@ -177,6 +186,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_reservation_detail',
+    displayName: '预约详情',
     desc: '预约/车辆授权详情（按 id 查询预约进度信息）。问“某条预约的详情/进度”时使用。先通过审批分页工具拿到 id。',
     method: 'GET', path: '/closed-off/reservation/reservationProgressInfo/{id}', pathParamKey: 'id',
     result: result('list', ['typeCode', '进度类型'], ['time', '发生时间'], ['specificData', '该进度的业务明细']),
@@ -184,6 +194,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_change_record_page',
+    displayName: '预约变更记录',
     desc: '变更记录分页查询（按预约ID查变更记录）。问“某预约的变更记录/变更审批进度”时使用。',
     method: 'POST', path: '/closed-off/changeRecord/pageByReservationId',
     result: result('list',
@@ -194,6 +205,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_today_reservation',
+    displayName: '今日预约统计',
     desc: '今日预约情况统计（人员/普通车/货车等各类数量）。问“今天有多少预约”时使用。companyId 可空，传某企业ID则只看该企业。',
     method: 'GET', path: '/closed-off/parkOverview/todayReservation',
     result: result('object',
@@ -205,6 +217,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_vehicle_track',
+    displayName: '车辆轨迹分析',
     desc: '车辆历史轨迹与沿途设备组分析：返回某车牌在一段时间内的轨迹摘要、按路线先后排列的附近设备组和离散点驻留估算。问“某车今天走过的路线”“经过哪些设备组”“在哪里停留最久”时使用。因数据量大，未指定时间时默认且最多只查询最近 2 天' + TIME_FMT + '。回答时需说明实际查询范围。',
     method: 'GET', path: '/car/carLocation/historyTrack', maxDays: 2,
     timeRanges: [{ startKey: 'startTime', endKey: 'endTime' }],
@@ -217,6 +230,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_vehicle_location_page',
+    displayName: '车辆历史定位',
     desc: '车辆历史定位列表查询：分页返回某时间段有过定位的车辆及类型。问“最近有哪些车在园内活动过”时使用。因数据量大，未指定时间时默认且最多只查询最近 2 天' + TIME_FMT + PAGE_TIP,
     method: 'GET', path: '/car/carLocation/vehiclePage', maxDays: 2,
     timeRanges: [{ startKey: 'startTime', endKey: 'endTime' }],
@@ -231,6 +245,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_vehicle_latest_positions',
+    displayName: '车辆最新位置',
     desc: '所有在园车辆的最新缓存位置列表（车牌/类型/摄像头编码/经纬高），不保证是瞬时实时坐标。只在用户明确询问“现在/当前/是否在园/在哪里”时使用；不要因“最近/历史/所有信息”自动调用。查某车时只分析目标车辆，并说明定位是缓存最新值。',
     method: 'GET', path: '/car/carLocation/latestInfoFromCache',
     result: result('unknown',
@@ -240,6 +255,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_vehicle_stream',
+    displayName: '车辆轨迹视频',
     desc: '车辆历史轨迹视频查询：返回某车牌某时间段抓拍视频流信息。问“某车的轨迹视频/抓拍画面”时使用。因数据量大，未指定时间时默认且最多只查询最近 2 天' + TIME_FMT,
     method: 'GET', path: '/car/carLocation/vehicleStream', maxDays: 2,
     timeRanges: [{ startKey: 'startTime', endKey: 'endTime' }],
@@ -255,6 +271,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_parking_area_page',
+    displayName: '查询停车区',
     desc: '停车区分页查询（含车位总数/已停数）。问“园区有哪些停车区”“重载区情况”时使用。parkingAreaAttribute: 1重载区 2空载区 3普通车' + PAGE_TIP,
     method: 'POST', path: '/hazardous-park/tParkingArea/page',
     result: result('unknown',
@@ -268,6 +285,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_parking_group_page',
+    displayName: '查询停车组',
     desc: '停车组分页查询（含车位总数/已停/待停/火灾危险性分类）。问“某停车区有哪些停车组”“还有多少空位”时使用。fireRisk: 1液化烃 2非烃甲类 3乙类 4丙类 5丁类 6戊类' + PAGE_TIP,
     method: 'POST', path: '/hazardous-park/tParkingGroup/page',
     result: result('unknown',
@@ -283,6 +301,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_parking_space_page',
+    displayName: '查询停车位',
     desc: '停车位分页查询。问“某停车组有哪些车位”“违停车位有哪些”时使用。parkingStatus: 0待停 1已停 2空余 3违停；isItToxic: 0否 1是（毒性物资车位）' + PAGE_TIP,
     method: 'POST', path: '/hazardous-park/tParkingSpace/page',
     result: result('unknown',
@@ -300,6 +319,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_parking_lot_list',
+    displayName: '停车场列表',
     desc: '停车场列表查询。问“园区有哪些停车场”时使用。',
     method: 'GET', path: '/hazardous-park/parkingLot/list',
     result: result('unknown', ['id', '停车场ID'], ['name', '停车场名称']),
@@ -307,6 +327,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_gate_access_page',
+    displayName: '门禁出入记录',
     desc: '门禁/卡口出入记录分页查询（人/车类型、出入园时间）。问“某车什么时候进的园区”“近期的门禁记录”时使用。未指定时间默认最近一月' + TIME_FMT + PAGE_TIP,
     method: 'POST', path: '/hazardous-park/gateAccessRecord/getPage',
     timeRanges: [
@@ -328,6 +349,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_district_page',
+    displayName: '查询设备区域',
     desc: '设备区域（园区道路/区域）分页查询。问“园区有哪些区域/道路”“某主干道信息”时使用' + PAGE_TIP,
     method: 'POST', path: '/closed-off/district/page',
     result: result('list',
@@ -341,6 +363,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_checkpoint_devices',
+    displayName: '出入口设备',
     desc: '授权出入口设备查询（按区域分组的出入口闸机/摄像头）。问“入口有哪些车闸”“出口摄像头”时使用。inOrOut: 1出 2入；deviceType: 1车闸 2人闸 3IP广播 4GDS 5报杆箱 6摄像头',
     method: 'POST', path: '/closed-off/device/getCheckPointDevice',
     result: result('list',
@@ -352,6 +375,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_device_page',
+    displayName: '查询设备',
     desc: '设备分页列表（含设备组 groupId/groupName、设备名称/编号、设备组标绘点位）。仅在用户直接查询设备时使用；车辆轨迹工具会自行取得设备组用于地图和沿途分析，不要重复调用本工具。',
     method: 'POST', path: '/closed-off/device/page',
     result: {
@@ -375,6 +399,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_control_area_stats',
+    displayName: '控制区统计',
     desc: '控制区类型统计：各类型控制区（1核心 2关键 3一般）数量、异常巡检数、报警数。问“各控制区情况/报警分布”时使用。',
     method: 'GET', path: '/closed-off/controlArea/getControlAreaTypeStatistics',
     result: result('list',
@@ -384,6 +409,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_control_area_page',
+    displayName: '查询电子围栏',
     desc: '电子围栏/控制区分页查询（含名称、类型、标绘数据）。问“园区有哪些控制区/电子围栏”“核心控制区有哪些”时使用。controlType: 1核心控制区 2关键控制区 3一般控制区；controlName 支持模糊匹配' + PAGE_TIP,
     method: 'POST', path: '/closed-off/controlArea/page',
     result: result('list',
@@ -397,6 +423,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_plotting_config_one',
+    displayName: '围栏标绘数据',
     desc: '电子围栏三维标绘数据获取（按围栏ID返回标绘JSON）。问“某控制区的围栏标绘/边界数据”时使用。bizDataId 为电子围栏ID（可从 closedoff_control_area_page 结果中获取）。',
     method: 'GET', path: '/system/plottingConfigData/one',
     result: result('object',
@@ -405,6 +432,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_access_record_page',
+    displayName: '人车通行记录',
     desc: '车辆/人员通行记录分页查询（入园/出园时间、设备、类型）。问“某车什么时候进园的”“近期的通行记录”时使用。typeList 数组: 1人 2普通车辆 3危化车 4危废车；inDeviceCode 为必填的入口设备编码，未知时可先用空字符串。未指定时间默认最近一月' + TIME_FMT + PAGE_TIP,
     method: 'POST', path: '/closed-off/accessRecord/page',
     timeRanges: [
@@ -429,6 +457,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_gate_records_by_car',
+    displayName: '车辆出入记录',
     desc: '按车牌查询该车的出入记录（含闸机名称/时间）。问“某车的进出记录”时使用。',
     method: 'GET', path: '/closed-off/accessRecord/getGateRecordsByCarNum',
     result: result('list',
@@ -439,6 +468,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_vehicle_comprehensive_page',
+    displayName: '车辆综合查询',
     desc: '车辆综合查询列表：按关键字分页查车辆（含黑白名单/预约/授权状态 validityStatus: -1否 0白名单 1预约 2黑名单）。问“某车牌的信息”“有哪些危化车”时使用' + PAGE_TIP,
     method: 'POST', path: '/closed-off/comprehensive/getVehicleComprehensivePage',
     result: result('list',
@@ -453,6 +483,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_vehicle_count',
+    displayName: '车辆数量统计',
     desc: '车辆统计：车辆总数、黑名单数、预约数等统计。问“园区共有多少车辆”时使用。',
     method: 'POST', path: '/closed-off/comprehensive/getVehicleCount',
     result: result('list',
@@ -462,6 +493,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_white_page',
+    displayName: '查询白名单',
     desc: '白名单分页查询（人员/车辆）。问“某车牌是否在白名单”“白名单有哪些”时使用。type: 1人 2车（必填）；sourceType: 1个人申请 2企业申请 3园区申请；currentStatus: 0未生效 1生效中 2已过期；companyCheckStatus 固定传 1' + TIME_FMT + PAGE_TIP,
     method: 'POST', path: '/closed-off/white/v2/page',
     result: result('list',
@@ -491,6 +523,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_white_detail',
+    displayName: '白名单详情',
     desc: '白名单详情查询（按 id）。问“某条白名单记录的详情”时使用。先通过 closedoff_white_page 拿到 id。',
     method: 'GET', path: '/closed-off/white/v2/one',
     result: result('object',
@@ -502,6 +535,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_black_page',
+    displayName: '查询黑名单',
     desc: '黑名单分页查询（人员/车辆）。问“某车是否被拉黑”“黑名单有哪些”时使用。参数含义同 closedoff_white_page' + TIME_FMT + PAGE_TIP,
     method: 'POST', path: '/closed-off/black/v2/page',
     result: result('list',
@@ -528,6 +562,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_black_detail',
+    displayName: '黑名单详情',
     desc: '黑名单详情查询（按 id）。问“某条黑名单记录的详情/拉黑原因”时使用。先通过 closedoff_black_page 拿到 id。',
     method: 'GET', path: '/closed-off/black/v2/one',
     result: result('object',
@@ -539,6 +574,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_park_status',
+    displayName: '园区状态总览',
     desc: '园区实时状态总览（在园车辆按类型统计等）。问“园区现在整体情况”“在园车辆”时使用。',
     method: 'GET', path: '/closed-off/overviewV2/parkStatus',
     result: result('object',
@@ -551,6 +587,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_company_base_info_page',
+    displayName: '查询园区企业',
     desc: '园区企业基础信息分页查询（企业ID/名称）。问“园区有哪些企业”“某企业的ID/名称”时使用。',
     method: 'POST', path: '/system/companyBaseInfo/page',
     result: result('unknown', ['id', '企业ID'], ['companyName', '企业名称'], ['companyCode', '企业编码']),
@@ -558,6 +595,7 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   },
   {
     name: 'closedoff_waybill_page',
+    displayName: '查询电子运单',
     desc: '危化品电子运单分页查询（单号/起运地/车牌/企业）。问“某车的电子运单”“某企业的运单”时使用' + PAGE_TIP,
     method: 'POST', path: '/closed-off/reservationGoods/selDigitalWaybillPage',
     result: result('list',

@@ -72,6 +72,7 @@ export async function apply(ctx:Context,config:Config){
       case 'chat-stop':result=await chat.stop(actor,args.conversationId);break
       case 'chat-fork':result=await chat.fork(actor,args);break
       case 'chat-feedback':result=await chat.feedback(actor,args.conversationId,args.operation,args);break
+      case 'chat-operation':result=await chat.operationAction(actor,args);break
       default:result=await app.call(actor,input.action,args)
     }
     json(res,result)

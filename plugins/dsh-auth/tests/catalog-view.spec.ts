@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 // Browser-native module is intentionally plain JavaScript and is tested as shipped.
 // @ts-expect-error The static browser module has no TypeScript declaration file.
-import { filterTools, pageTools, pageUsers, highlightParts, localEntry } from '../web/catalog-view.js'
+import { filterTools, pageTools, pageUsers, highlightParts, localEntry, toolDisplayName } from '../web/catalog-view.js'
 
 const tools = Array.from({ length: 37 }, (_, index) => ({
   name: `demo_tool_${index}`, description: `中文工具说明 ${index}`,
@@ -9,6 +9,15 @@ const tools = Array.from({ length: 37 }, (_, index) => ({
 }))
 
 describe('tool catalog search and pagination', () => {
+  it('displays localized titles while keeping codes searchable and old plugins compatible', () => {
+    const named = { ...tools[0], displayName: ' 搜索文章 ' }
+    expect(toolDisplayName(named)).toBe('搜索文章')
+    expect(filterTools([named, tools[1]], '搜索文章')).toEqual([named])
+    expect(filterTools([named, tools[1]], 'DEMO_TOOL_0')).toEqual([named])
+    expect(toolDisplayName(tools[1])).toBe(tools[1]!.name)
+    expect(toolDisplayName({ ...named, displayName: ' ' })).toBe(named.name)
+  })
+
   it('splits real-sized catalogs into 15, 15, and 7 tools and clamps a changed search', () => {
     expect(pageTools(tools, '', 1).items).toHaveLength(15)
     expect(pageTools(tools, '', 2).items[0]).toBe(tools[15])

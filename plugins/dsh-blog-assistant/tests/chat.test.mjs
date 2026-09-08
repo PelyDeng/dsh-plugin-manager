@@ -58,6 +58,109 @@ function complete(handle,id='answer-1'){
   handle.emit('turn/end',{turn,reason:{kind:'completed'}})
 }
 
+test('publish tool prepares a private confirmation card; candidate is applied only after user confirmation',async t=>{
+  const f=await fixture(t),draft=f.store.create(owner,{title:'测试文章',text:'原文'}),proposal=f.store.propose(owner,draft.id,1,{text:'候选正文'},[])
+  let writes=0
+  f.blog.call=async(action,args)=>{assert.equal(action,'save');assert.equal(args.content.text,'候选正文');writes++;return{cid:338,url:'https://example.test/338',snapshot:{version:'v2',published:{cid:338}}}}
+  await f.send();await tick();const h=f.handles[0]
+  const execute=args=>f.tools.get('blog_publish_draft').execute(args,{agent:h.agent})
+  const args={draftId:draft.id,proposalId:proposal.id},prepared=await execute(args)
+  assert.equal(writes,0);assert.equal(f.store.get(owner,draft.id).text,'原文');assert.equal(prepared.nonce,undefined)
+  assert.equal((await execute(args)).id,prepared.id)
+  let card=(await f.chat.history(actor,f.conversation.id)).operations[0]
+  assert.equal(card.after.text,'候选正文');assert.equal(card.canConfirm,false)
+  await assert.rejects(f.chat.operationAction(actor,{conversationId:f.conversation.id,id:card.id,nonce:card.nonce,operation:'confirm'}),/本轮/)
+  complete(h);await tick();card=(await f.chat.history(actor,f.conversation.id)).operations[0]
+  assert.equal(card.canConfirm,true)
+  const request={conversationId:f.conversation.id,id:card.id,nonce:card.nonce,operation:'confirm'}
+  await assert.rejects(f.chat.operationAction({...actor,userId:'other'},request),/无权/)
+  await assert.rejects(f.chat.operationAction(actor,{...request,nonce:'invented'}),/失效/)
+  await assert.rejects(f.chat.app.confirm(actor,request),/原对话/)
+  assert.equal((await f.chat.operationAction(actor,request)).status,'succeeded')
+  assert.equal((await f.chat.operationAction(actor,request)).status,'succeeded');assert.equal(writes,1)
+  assert.equal(f.store.get(owner,draft.id).text,'候选正文');assert.equal(f.store.get(owner,draft.id).proposal,null)
+  const history=await f.chat.history(actor,f.conversation.id);assert.equal(history.operations[0].status,'succeeded');assert.equal(history.operations[0].nonce,null)
+  await f.send({requestId:'after-publish',text:'刚才发布成功了吗'});await tick()
+  const context=f.handles[1].contexts.find(c=>c.name==='blog:operations')
+  assert.match(context.text,/succeeded/);assert.ok(!context.text.includes(card.nonce))
+  complete(f.handles[1],'answer-2');await tick()
+  const branch=await f.chat.fork(actor,{conversationId:f.conversation.id,messageId:'answer-2',requestId:'publish-fork'})
+  assert.deepEqual((await f.chat.history(actor,branch.id)).operations,[])
+})
+
+test('publishing a blog saved draft requires consumption confirmation and preserves in-flight manual edits',async t=>{
+  const f=await fixture(t),source={cid:339,title:'保存稿',text:'保存稿正文',slug:'saved',format:'markdown',tags:[],categories:[],type:'post_draft'}
+  const remote={version:'v1',published:{...source,cid:338,text:'公开正文',type:'post'},savedDraft:source}
+  f.blog.get=async()=>remote
+  let release,writes=0
+  f.blog.call=async(action,args)=>{assert.equal(action,'save');assert.equal(args.content.text,source.text);writes++;return new Promise(resolve=>{release=()=>resolve({cid:338,snapshot:{version:'v2',published:{...source,cid:338,type:'post'}}})})}
+  await f.send();await tick();const h=f.handles[0]
+  await f.tools.get('blog_publish_draft').execute({cid:338},{agent:h.agent})
+  complete(h);await tick()
+  const card=(await f.chat.history(actor,f.conversation.id)).operations[0],draft=f.store.list(owner)[0]
+  assert.equal(card.after.text,'保存稿正文');assert.equal(card.before.text,'公开正文')
+  const request={conversationId:f.conversation.id,id:card.id,nonce:card.nonce,operation:'confirm'}
+  await assert.rejects(f.chat.operationAction(actor,request),/消费现有博客保存稿/);assert.equal(writes,0)
+  const confirming=f.chat.operationAction(actor,{...request,consumeSavedDraft:true});await tick()
+  await assert.rejects(f.chat.app.prepare(actor,{id:draft.id,revision:1,mode:'publish'}),/提交待核对/)
+  f.store.save(owner,draft.id,1,{text:'请求期间继续手写'})
+  release();assert.equal((await confirming).status,'succeeded');assert.equal(writes,1)
+  assert.equal(f.store.get(owner,draft.id).text,'请求期间继续手写')
+  assert.equal((await f.chat.history(actor,f.conversation.id)).operations[0].after.text,'保存稿正文')
+})
+
+test('confirmation rejects replaced proposals, another conversation, expired cards and revoked actors',async t=>{
+  const f=await fixture(t),draft=f.store.create(owner,{title:'标题',text:'原文'}),proposal=f.store.propose(owner,draft.id,1,{text:'待发布'},[])
+  let writes=0;f.blog.call=async()=>{writes++;throw new Error('must not execute')}
+  await f.send();await tick();const h=f.handles[0]
+  const prepared=await f.tools.get('blog_publish_draft').execute({draftId:draft.id,proposalId:proposal.id},{agent:h.agent})
+  complete(h);await tick()
+  const card=(await f.chat.history(actor,f.conversation.id)).operations[0],request={conversationId:f.conversation.id,id:prepared.id,nonce:card.nonce,operation:'confirm'}
+  const other=f.chat.create(actor,'another-conversation')
+  await assert.rejects(f.chat.operationAction(actor,{...request,conversationId:other.id}),/不属于/)
+  f.store.propose(owner,draft.id,1,{text:'新的候选'},[])
+  await assert.rejects(f.chat.operationAction(actor,request),/候选稿已变化/)
+  const op=f.chat.app.operation(owner,prepared.id);op.expiresAt=0;f.chat.app.operationSave(op.id,op)
+  await assert.rejects(f.chat.operationAction(actor,request),/失效/)
+  f.revoke();await assert.rejects(f.chat.operationAction(actor,request),/revoked/)
+  assert.equal(writes,0)
+})
+
+test('delete confirmation preserves local copies and reconciles an uncertain remote result without another delete',async t=>{
+  const f=await fixture(t),remote={version:'v1',published:{cid:338,title:'删除目标',text:'正文',type:'post'},savedDraft:{cid:339,title:'保存稿',text:'草稿',type:'post_draft'}}
+  const draft=f.store.create(owner,{title:'本地副本',text:'本地正文'},remote);let deletes=0
+  f.blog.get=async()=>remote
+  f.blog.call=async(action,args)=>{
+    if(action==='status')return{deleteArticle:true}
+    if(action==='delete'){assert.equal(args.cid,338);deletes++;throw new Error('response lost')}
+    if(action==='receipt')return{status:'succeeded',result:{cid:338,deleted:true,deletedCids:[338,339],url:null,snapshot:null}}
+    throw new Error(action)
+  }
+  await f.send();await tick();const h=f.handles[0]
+  await assert.rejects(f.tools.get('blog_delete_post').execute({cid:339},{agent:h.agent}),/主文章/)
+  const prepared=await f.tools.get('blog_delete_post').execute({cid:338},{agent:h.agent})
+  assert.equal(deletes,0);assert.equal(prepared.nonce,undefined)
+  complete(h);await tick();const card=(await f.chat.history(actor,f.conversation.id)).operations[0]
+  assert.deepEqual(card.deletedArticles.map(p=>p.cid),[338,339])
+  const request={conversationId:f.conversation.id,id:card.id,nonce:card.nonce,operation:'confirm'}
+  await assert.rejects(f.chat.operationAction(actor,request),/response lost/)
+  await assert.rejects(f.chat.operationAction(actor,request),/查询回执/)
+  assert.equal((await f.chat.operationAction(actor,{...request,operation:'reconcile'})).status,'succeeded')
+  assert.equal(deletes,1);assert.equal(f.store.get(owner,draft.id).text,'本地正文');assert.equal(f.store.get(owner,draft.id).remote.deleted,true)
+  await assert.rejects(f.chat.app.prepare(actor,{id:draft.id,revision:2,mode:'publish'}),/原文已删除/)
+})
+
+test('cancelled cards cannot execute and unsupported bridges never prepare deletion',async t=>{
+  const f=await fixture(t),draft=f.store.create(owner,{title:'标题',text:'正文'})
+  f.blog.call=async()=>({deleteArticle:false})
+  await f.send();await tick();const h=f.handles[0]
+  await assert.rejects(f.tools.get('blog_delete_post').execute({cid:338},{agent:h.agent}),/先更新/)
+  await f.tools.get('blog_publish_draft').execute({draftId:draft.id},{agent:h.agent});complete(h);await tick()
+  const card=(await f.chat.history(actor,f.conversation.id)).operations[0],request={conversationId:f.conversation.id,id:card.id,nonce:card.nonce}
+  assert.equal((await f.chat.operationAction(actor,{...request,operation:'cancel'})).status,'cancelled')
+  await assert.rejects(f.chat.operationAction(actor,{...request,operation:'confirm'}),/查询回执/)
+})
+
 test('chat search tools preserve structured dates and return lossless imported draft references',async t=>{
   const f=await fixture(t);f.store.create(owner,{title:'时间检索稿'},{published:{cid:338}})
   let received;f.blog.search=async args=>{received=args;return {items:[],hasMore:false}}

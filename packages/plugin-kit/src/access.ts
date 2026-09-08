@@ -9,6 +9,8 @@ export type Actor =
 
 export interface ToolDescriptor {
   readonly name: string
+  /** Human-readable catalog title; the model-facing name remains the tool code. */
+  readonly displayName?: string
   readonly description: string
   readonly parameters: unknown
   readonly permission: string

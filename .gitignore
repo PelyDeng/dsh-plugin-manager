@@ -17,7 +17,6 @@ deploy-artifacts/
 !.env.example
 env.conf
 !/env.conf
-deploy/config/*.conf
 !deploy/config/*.conf.example
 *.tgz
 *.log
