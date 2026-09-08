@@ -9,6 +9,8 @@ kind: "package-bundle"
 
 ## 摘要
 
+输入框提供模型选择器，默认展示 Auth 配置，展开后可选择官方目录中的模型。选择在下一条消息发送时生效，回答期间禁用切换；旧对话和分支沿用官方记录。切换复用官方 `sessionController.selectModel()`，也会尝试更新宿主默认值，其他已有会话不随之改变。目录不可用或切换失败时明确提示，用户输入保留。
+
 `dsh-closedoff-assistant` 是独立于 `deepseek-harness` 主仓的 DSH profile bundle。它把封闭化园区接口封装成 37 个只读 Tool，为每个浏览器会话创建独立的 DSH Agent，并在 `/closedoff-qa` 提供面向业务人员的问答页面、可展示思考、工具执行状态、数据卡片与车辆轨迹地图。
 
 本包不修改 DSH 源码。DSH 负责模型、Agent Loop、Tool 调度、会话日志和 Web Server；本包负责业务知识、接口映射、私有业务配置、安全限制以及专用页面。

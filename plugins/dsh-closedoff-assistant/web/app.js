@@ -5,6 +5,7 @@
   var $ = function (s) { return document.querySelector(s); };
   var inner = $('#inner'), input = $('#input'), sendBtn = $('#sendBtn');
   var statusDot = $('#statusDot'), statusText = $('#statusText');
+  var picker = globalThis.createModelPicker({mount:document.getElementById('model-picker'),iconBase:routePath('/assets/'),load:function(id){return businessFetch(routePath('/models')+(id?'?conversationId='+encodeURIComponent(id):'')).then(readJson);}});
   var conversationId = '';
   var storageKey = '';
   var identityKey = '';
@@ -793,11 +794,12 @@
     var epoch = identityEpoch;
     var q = String(text || input.value).trim();
     if (!q) return;
+    var admitted=false,modelPayload;try{modelPayload=picker.payload();}catch(error){setStatus('off',error.message);return;}
     input.value = ''; autoGrow();
     followBottom = true;
     addUser(q);
     var ast = startAssistant();
-    running = true;
+    running = true; picker.setBusy(true);
     sendBtn.disabled = false;
     sendBtn.classList.add('stop'); sendBtn.innerHTML = IC.stop;
     sendBtn.title = '停止回答';
@@ -822,7 +824,7 @@
     businessFetch(routePath('/chat'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ conversationId: conversationId, message: q }),
+      body: JSON.stringify(Object.assign({ conversationId: conversationId, message: q },modelPayload)),
       signal: controller.signal,
     }).then(function (resp) {
       if (epoch !== identityEpoch) throw new Error('登录状态已变化');
@@ -840,13 +842,16 @@
       if (controller.signal.aborted) {
         applyFinishReason(ast, 'aborted');
         renderAnalysis(ast, false);
-      } else renderError(ast, e.message || String(e));
+      } else {
+        if(!admitted&&!input.value){input.value=q;autoGrow();}
+        renderError(ast, e.message || String(e));
+      }
       finishRunning(ast);
     });
 
     function finishRunning(astObj) {
       if (epoch !== identityEpoch) return;
-      running = false;
+      running = false; picker.setBusy(false);
       if (activeChatController === controller) activeChatController = null;
       sendBtn.disabled = false;
       sendBtn.classList.remove('stop'); sendBtn.innerHTML = IC.send;
@@ -896,6 +901,8 @@
       if (epoch !== identityEpoch || controller.signal.aborted) return;
       switch (obj.type) {
         case 'conversation':
+          admitted=true;
+          picker.accept(obj.model);
           conversationId = obj.conversationId;
           localStorage.setItem(storageKey, conversationId);
           break;
@@ -1011,6 +1018,7 @@
   }
 
   function restore() {
+    void picker.refresh(conversationId);
     if (!conversationId) { welcome(); return; }
     var controller = new AbortController();
     activeRestoreController = controller;
@@ -1116,6 +1124,7 @@
     if (activeRestoreController) activeRestoreController.abort();
     activeRestoreController = null;
     conversationId = '';
+    void picker.refresh();
     followBottom = true;
     if (storageKey) localStorage.removeItem(storageKey);
     resetViewState();

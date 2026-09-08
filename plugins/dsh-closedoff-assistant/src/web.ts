@@ -161,6 +161,13 @@ export async function installWeb(ctx: Context, config: Config, manager: Conversa
     },
   }))
   ctx.effect(() => register({
+    kind: 'exact', path: `${config.routePrefix}/models`, handler: async (req, res, actor) => {
+      method(req, 'GET')
+      const id = new URL(req.url ?? '/', 'http://localhost').searchParams.get('conversationId') || undefined
+      respond(actor, res, 200, await manager.models(actor, id))
+    },
+  }))
+  ctx.effect(() => register({
     kind: 'exact', path: `${config.routePrefix}/identity`, handler: (_req, res, actor) => {
       respond(actor, res, 200, { mode: access.mode, key: actorKey(actor), label: actor.namespace === 'standalone' ? '独立模式' : '已登录', authPath: '/auth' })
     },
@@ -350,6 +357,9 @@ export async function installWeb(ctx: Context, config: Config, manager: Conversa
         if (rawId !== undefined && typeof rawId !== 'string') throw new HttpError(400, 'conversationId 必须是字符串')
         const conversation = await manager.open(rawId === '' ? undefined : rawId, true, actor)
         if (conversation === undefined) throw new Error('failed to create business conversation')
+        access.assert(actor)
+        if (active.has(conversation.id) || conversation.active) throw new HttpError(409, '智能体正在回答上一条问题，请稍候或点击停止')
+        const selected = await manager.selectModel(conversation, payload.modelSelection, actor)
         access.assert(actor)
         if (active.has(conversation.id) || conversation.active) throw new HttpError(409, '智能体正在回答上一条问题，请稍候或点击停止')
         active.add(conversation.id)
@@ -589,7 +599,7 @@ export async function installWeb(ctx: Context, config: Config, manager: Conversa
         listeners.add(sink)
         closeStreams.add(finish)
         recheckStreams.add(checkAccess)
-        send({ type: 'conversation', conversationId: conversation.id })
+        send({ type: 'conversation', conversationId: conversation.id, model: selected })
         res.once('close', () => {
           if (!finished) manager.abort(conversation.id)
           finish()

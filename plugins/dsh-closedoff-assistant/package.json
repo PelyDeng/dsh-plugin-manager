@@ -43,6 +43,10 @@
     "healthPath": "/closedoff-qa/ready",
     "verifyFiles": [
       "web/index.html",
+      "web/model-picker.js",
+      "web/assets/model-picker.js",
+      "web/assets/icon-chevron-down.svg",
+      "web/assets/icon-check.svg",
       "web/assets/app.css",
       "web/assets/app.js",
       "web/assets/trajectory.js"

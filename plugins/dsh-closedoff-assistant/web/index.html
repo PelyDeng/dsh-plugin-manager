@@ -32,7 +32,7 @@
       <div class="composer-inner">
         <div class="input-box">
           <textarea id="input" rows="1" placeholder="请输入您的问题，例如：今天有哪些待审批的危化车预约？"></textarea>
-          <div class="hint">Enter 发送 · Shift+Enter 换行 · 智能体会自动调用园区业务接口取数并分析</div>
+          <div id="model-picker"></div><div class="hint">Enter 发送 · Shift+Enter 换行 · 智能体会自动调用园区业务接口取数并分析</div>
         </div>
         <button class="send" id="sendBtn" title="发送"><svg class="ic" viewBox="0 0 24 24"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/></svg></button>
       </div>
@@ -104,6 +104,7 @@
 
 <script>window.CLOSEDOFF_CONFIG = __WEB_CONFIG__;</script>
 <script src="/closedoff-qa/assets/trajectory.js"></script>
+<script src="/closedoff-qa/assets/model-picker.js"></script>
 <script src="/closedoff-qa/assets/app.js"></script>
 </body>
 </html>

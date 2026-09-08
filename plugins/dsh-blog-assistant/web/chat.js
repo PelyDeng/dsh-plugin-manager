@@ -1,3 +1,4 @@
+import './model-picker.js'
 import {managementSummary} from './management.js'
 import {transferredFiles,attachmentName} from './clipboard.js'
 import {createConversationHistory} from './conversation-history.js'
@@ -13,6 +14,7 @@ export function shouldSendChatEnter(event,{touch=false,composing=false}={}){
 export function initChat({api,request,identity,openDraft,renderMarkdown}){
   const $=id=>document.getElementById(id),base=document.body.dataset.base
   const state={id:null,epoch:0,history:null,files:[],feedback:new Map(),feedbackReady:false,stream:null,offset:null,sending:false,stopping:false,uploading:false,liveClock:0,pending:null}
+  const picker=globalThis.createModelPicker({mount:$('chat-model-picker'),iconBase:base+'/media/',load:id=>api('chat-models',{conversationId:id}),onChange:()=>void showImageCapability()})
   const translations=createThinkingTranslations(base)
   const liveBox=$('chat-live'),liveAnchor=document.createComment('live-output');liveBox.before(liveAnchor)
   const inputs=new Map(),key=`blog-chat:${identity.userId}`
@@ -31,7 +33,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
   const formatTime=n=>Number.isFinite(n)?`${(n/1000).toFixed(2)} 秒`:'未提供'
   function view(chat){$('chat-home').hidden=!chat;document.querySelector('.workspace').hidden=chat;document.body.dataset.view=chat?'chat':'writing';$('chat-view').setAttribute('aria-pressed',String(chat));$('writing-view').setAttribute('aria-pressed',String(!chat));window.dispatchEvent(new CustomEvent('blog:view',{detail:{chat}}));if(chat)focusInput()}
   $('chat-view').addEventListener('click',()=>view(true));$('writing-view').addEventListener('click',()=>view(false))
-  function controls(){const busy=state.history?.busy||state.sending;$('chat-send').disabled=!!busy||state.uploading||state.stopping;$('chat-stop').hidden=!state.history?.busy&&!state.stopping;$('chat-stop').disabled=state.stopping;$('chat-stop').setAttribute('aria-label',state.stopping?'正在停止回答':'停止回答');$('chat-add-file').disabled=state.uploading||state.sending;$('chat-state').textContent=state.stopping?'正在停止，保留已生成内容…':state.uploading?'正在上传和解析资料…':busy?'正在回答 · 可随时停止':touchInput()?'换行继续输入 · 点击箭头发送 · 附件保持私有':'Enter 发送 · Shift+Enter 换行 · 附件保持私有'}
+  function controls(){const busy=state.history?.busy||state.sending;picker.setBusy(busy||state.stopping);$('chat-send').disabled=!!busy||state.uploading||state.stopping;$('chat-stop').hidden=!state.history?.busy&&!state.stopping;$('chat-stop').disabled=state.stopping;$('chat-stop').setAttribute('aria-label',state.stopping?'正在停止回答':'停止回答');$('chat-add-file').disabled=state.uploading||state.sending;$('chat-state').textContent=state.stopping?'正在停止，保留已生成内容…':state.uploading?'正在上传和解析资料…':busy?'正在回答 · 可随时停止':touchInput()?'换行继续输入 · 点击箭头发送 · 附件保持私有':'Enter 发送 · Shift+Enter 换行 · 附件保持私有'}
   const sidebar=createConversationHistory({mount:$('chat-home'),toggle:$('workspace-menu'),currentId:()=>state.id,
     newConversation:()=>{void activate(null).catch(error)},openConversation:activate,
     list:args=>api('chat-list',args),mutate:args=>api('chat-update',args),read:id=>api('chat-history',{conversationId:id}),
@@ -52,6 +54,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     $('chat-feedback-dialog').close();$('chat-file-dialog').close()
     $('chat-image-capability').hidden=true;$('chat-input').value=inputs.get(id??'new')??'';$('chat-error').hidden=true;render();renderFiles();controls()
     window.dispatchEvent(new CustomEvent('blog:conversation',{detail:{id}}))
+    await picker.refresh(id)
     if(id){sessionStorage.setItem(key,id);connect();await Promise.all([refresh(),loadFiles()])}else{sessionStorage.removeItem(key);focusInput()}
     if(id!==state.id)return
     sidebar.render()
@@ -256,10 +259,11 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     if(!text.trim())throw new Error('请输入消息')
     state.sending=true;controls();const epoch=state.epoch
     try{
-      const id=await ensureConversation(),input={conversationId:id,text,research:$('chat-research').checked,attachments:state.files.filter(a=>a.selected&&a.status==='ready').map(a=>({id:a.id,version:a.version,range:a.range})),...(retryFrom?{retryFrom}:{})}
+      const id=await ensureConversation(),input={conversationId:id,text,...picker.payload(),research:$('chat-research').checked,attachments:state.files.filter(a=>a.selected&&a.status==='ready').map(a=>({id:a.id,version:a.version,range:a.range})),...(retryFrom?{retryFrom}:{})}
       const fingerprint=JSON.stringify(input)
       if(state.pending?.fingerprint!==fingerprint)state.pending={fingerprint,input:{...input,requestId:crypto.randomUUID()}}
-      await api('chat-send',state.pending.input)
+      const accepted=await api('chat-send',state.pending.input)
+      if(epoch===state.epoch)picker.accept(accepted.model)
       if(epoch!==state.epoch)return
       state.pending=null;if($('chat-input').value===text){$('chat-input').value='';$('chat-input').dispatchEvent(new Event('input'))}inputs.delete(id)
       await Promise.all(input.attachments.map(a=>api('attachment-select',{draftId:id,id:a.id,selected:false,range:a.range})))
@@ -271,7 +275,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     const tip=$('chat-image-capability'),epoch=state.epoch
     if(!state.files.some(a=>a.selected&&a.kind.startsWith('image/'))){tip.hidden=true;return}
     tip.hidden=false;tip.textContent='正在检查图片模型…'
-    try{const result=await api('chat-image-capability',{conversationId:state.id});if(epoch!==state.epoch||!state.files.some(a=>a.selected&&a.kind.startsWith('image/')))return;tip.textContent=result.message;tip.classList.toggle('warning',!result.available||!result.currentSupportsImages)}catch(e){if(epoch===state.epoch)tip.textContent='暂时无法检查图片模型：'+e.message}
+    try{const result=await api('chat-image-capability',{conversationId:state.id,...picker.payload()});if(epoch!==state.epoch||!state.files.some(a=>a.selected&&a.kind.startsWith('image/')))return;tip.textContent=result.message;tip.classList.toggle('warning',!result.available||!result.currentSupportsImages)}catch(e){if(epoch===state.epoch)tip.textContent='暂时无法检查图片模型：'+e.message}
   }
   function renderFiles(){const box=$('chat-files');box.replaceChildren();for(const a of state.files){const row=element('div',undefined,'attachment-row'),label=element('label'),check=element('input');check.type='checkbox';check.checked=a.selected;check.disabled=a.status!=='ready';check.setAttribute('aria-label',`发送 ${a.name}`);check.addEventListener('change',run(async()=>{await api('attachment-select',{draftId:state.id,id:a.id,selected:check.checked,range:a.range});await loadFiles()}));label.append(check,document.createTextNode(a.name));if(a.kind.startsWith('image/')&&a.status==='ready'){const thumb=element('img');thumb.className='chat-attachment-thumbnail';thumb.alt=a.name;thumb.src=`${base}/attachment-download?${new URLSearchParams({draftId:state.id,id:a.id,inline:'1'})}`;row.append(thumb)}row.append(label,element('small',a.range?`${a.range.from}–${a.range.to} ${a.unit}`:a.message??({ready:'已就绪',failed:'解析失败',parsing:'解析中',uploading:'上传中'}[a.status]??a.status)),button('查看',()=>previewFile(a)),button('移除',async()=>{await api('attachment-remove',{draftId:state.id,id:a.id});await loadFiles()}));box.append(row)}}
   async function previewFile(a){
@@ -314,5 +318,5 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
   window.addEventListener('resize',controls)
   void conversations().catch(error)
   controls()
-  const previous=sessionStorage.getItem(key);if(previous)void activate(previous).catch(e=>{error(e);void activate(null)})
+  const previous=sessionStorage.getItem(key);void activate(previous||null).catch(e=>{error(e);void activate(null)})
 }

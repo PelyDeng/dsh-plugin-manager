@@ -39,6 +39,24 @@ function fixture(max = 2, store = new ConversationStore(':memory:')) {
 }
 
 describe('owned business conversation lifecycle', () => {
+  it('selects through the official controller only for the owner and while idle', async () => {
+    const f=fixture(), selected={provider:'deepseek',model:'second'}
+    const selectModel=vi.fn(async (request:unknown)=>{f.defaults.currentSelection=()=>selected;return{selected}})
+    f.services.sessionController={modelCatalog:async()=>({groups:[{id:'deepseek',name:'DeepSeek',models:[{id:'second',name:'第二模型'}]}],failures:[]}),selectModel}
+    f.services.llm={resolveCallConfig:async(value:unknown)=>value}
+    const c=(await f.manager.open(undefined,true,alice))!
+    await expect(f.manager.selectModel(c,selected,bob)).rejects.toThrow('无权')
+    expect(selectModel).not.toHaveBeenCalled()
+    await expect(f.manager.selectModel(c,{provider:'unknown',model:'second'},alice)).rejects.toThrow('目录')
+    expect(c.active).toBe(false)
+    await f.manager.selectModel(c,selected,alice)
+    expect(selectModel).toHaveBeenCalledWith({sessionId:c.id,...selected})
+    expect(f.defaults.currentSelection()).toEqual(selected)
+    f.manager.followup(c,'hello',alice)
+    await expect(f.manager.selectModel(c,selected,alice)).rejects.toThrow('上一条')
+    expect(selectModel).toHaveBeenCalledTimes(1)
+    await expect(f.manager.models(bob,c.id)).rejects.toThrow('无权')
+  })
   it('keeps the recorded model on cold resume and follows the changed default only for a fresh session', async () => {
     const f=fixture(1)
     f.create.mockResolvedValueOnce(handle([{type:'request/header',data:{header:{config:{provider:'deepseek',model:'test',reasoningEffort:'high'}}}}]))

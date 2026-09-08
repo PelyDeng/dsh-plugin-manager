@@ -20,3 +20,6 @@ body[data-view=chat] .chat-home{display:flex}.chat-home>.chat-main{flex:1;min-wi
 .qa-history{border-radius:0;box-shadow:none}@media(max-width:960px){.qa-history{height:var(--app-height)}}
 
 .chat-attachment-thumbnail{width:64px;height:64px;object-fit:contain;border:1px solid #dfe4ee;border-radius:8px;background:white}#chat-image-capability{margin:6px 0;font-size:12px;line-height:1.5}
+
+#chat-model-picker{grid-column:1;grid-row:2;justify-self:end;margin-top:6px;min-width:0}
+.chat-compose-actions :is(#chat-send,#chat-stop){grid-row:1/3}

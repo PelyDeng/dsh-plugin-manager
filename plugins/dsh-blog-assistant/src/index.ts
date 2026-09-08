@@ -48,7 +48,7 @@ export async function apply(ctx:Context,config:Config){
   ctx.effect(()=>async()=>{await translations.close();await chat.close();await jobs.close();await attachments.close();store.close()})
   const manifest=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'))
   ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],tools:jobs.chatTools}))
-  for(const [suffix,file,mime] of [['','web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],['/style.css','web/style.css','text/css'],['/writing.css','web/writing.css','text/css'],['/chat-base.css','web/chat-base.css','text/css'],['/chat-theme.css','web/chat-theme.css','text/css'],...['copy','check','like','dislike','branch','database','clock','think','api','send','user','chat','stop'].map(name=>[`/media/icon-${name}.svg`,`web/media/icon-${name}.svg`,'image/svg+xml']),['/icons.svg','web/icons.svg','image/svg+xml']] as const){
+  for(const [suffix,file,mime] of [['','web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],['/style.css','web/style.css','text/css'],['/writing.css','web/writing.css','text/css'],['/chat-base.css','web/chat-base.css','text/css'],['/chat-theme.css','web/chat-theme.css','text/css'],...['chevron-down','copy','check','like','dislike','branch','database','clock','think','api','send','user','chat','stop'].map(name=>[`/media/icon-${name}.svg`,`web/media/icon-${name}.svg`,'image/svg+xml']),['/icons.svg','web/icons.svg','image/svg+xml']] as const){
     const content=(await readFile(new URL(`../${file}`,import.meta.url),'utf8')).replaceAll('__BASE__',config.routePrefix)
     ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+suffix,surface:suffix?'asset':'page',handler(req,res){if(req.method!=='GET')throw new AccessError(405,'只支持 GET');res.writeHead(200,{'content-type':`${mime}; charset=utf-8`,'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"});res.end(content)}}))
   }
@@ -80,10 +80,11 @@ export async function apply(ctx:Context,config:Config){
     switch(input.action){
       case 'chat-create':result=chat.create(actor,args.requestId);break
       case 'chat-list':result=chat.list(actor,args.offset??0,args.query??'');break
+      case 'chat-models':result=await chat.models(actor,args.conversationId);break
       case 'chat-update':result=await chat.mutate(actor,args);break
       case 'chat-history':result=await chat.history(actor,args.conversationId);break
       case 'chat-send':result=await chat.send(actor,args);break
-      case 'chat-image-capability':result=await chat.imageCapability(actor,args.conversationId);break
+      case 'chat-image-capability':result=await chat.imageCapability(actor,args.conversationId,args.modelSelection);break
       case 'chat-stop':result=await chat.stop(actor,args.conversationId);break
       case 'chat-fork':result=await chat.fork(actor,args);break
       case 'chat-feedback':result=await chat.feedback(actor,args.conversationId,args.operation,args);break

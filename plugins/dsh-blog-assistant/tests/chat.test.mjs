@@ -56,7 +56,11 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
   const ctx={root,jobs:root.jobs,effect:fn=>disposers.push(fn()),on:root.on.bind(root),get(key){return key==='agents'?root.agents:this[key]},
     workspaceRegistry:{archivedSessionIds:archived,async archiveSession(id){assert.ok(saved.has(id));if(!archived.includes(id))archived.push(id)}},
     tools:{register(tool){tools.set(tool.name,tool);return()=>tools.delete(tool.name)}},
-    agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{resolveModelInfo:async()=>({inputModalities:['text']})},
+    agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{resolveModelInfo:async()=>({inputModalities:['text']}),resolveCallConfig:async value=>value},
+    sessionController:{
+      async modelCatalog(){return{groups:[{id:'test',name:'测试',models:[{id:'test',name:'文本模型'}]},{id:'glm-fixture',name:'视觉测试',models:[{id:'vision',name:'视觉模型'}]}],failures:[]}},
+      async selectModel({sessionId,...selected}){const h=handles.findLast(h=>h.agent.id===sessionId&&!h.disposed);assert.ok(h,'Agent must be open');h.emit('model/selection',selected);h.options.agentOptions={...selected};ctx.agentDefaultModel.currentSelection=()=>selected;return{selected}},
+    },
     sessionProjections:{restore(_checkpoint,events){return{checkpoint:{modelSelection:{val:{pending:null,lastUsed:events.findLast(e=>e.type==='request/header')?.data.header.config??null}}}}}},
     sessions:{async flush(session){if(++flushCount===1)await flushGate;if(nextFlushGate){const gate=nextFlushGate;nextFlushGate=null;await gate}saved.set(String(session.id),session.snapshotEvents());headers.set(String(session.id),session.header);return !noPersistence}},
     sessionPersistence:{async stat(id){return headers.has(String(id))?{header:headers.get(String(id))}:undefined},async open(id){assert.ok(saved.has(String(id)));return{header:headers.get(String(id)),read:async()=>saved.get(String(id)),close:async()=>{}}}},
@@ -413,7 +417,7 @@ test('image model survives removed selection, native history reopening and branc
   chat.ctx.llm.resolveModelInfo=async(provider,model)=>{assert.ok(['test','glm-fixture'].includes(provider));return{inputModalities:model==='vision'?['text','image']:['text']}}
   await f.send();await tick();assert.equal(f.handles[0].options.agentOptions.model,'test');complete(f.handles[0],'text-answer');await tick()
   chat.attachments.freeze=()=>[{id:'image-fixture',version:1,name:'image',image:{provider:'fixture',attachmentId:'image'}}]
-  await f.send({requestId:'image-request'});await tick();assert.equal(f.handles[1].options.agentOptions.model,'vision');complete(f.handles[1],'image-answer');await tick()
+  await f.send({requestId:'image-request',modelSelection:{provider:'glm-fixture',model:'vision'}});await tick();assert.equal(f.handles[1].options.agentOptions.model,'vision');complete(f.handles[1],'image-answer');await tick()
   chat.attachments.freeze=()=>[]
   await f.send({requestId:'text-after-image'});await tick();assert.equal(f.handles[2].options.agentOptions.model,'vision');complete(f.handles[2],'continued-answer');await tick()
   const branch=await chat.fork(actor,{conversationId:f.conversation.id,messageId:'continued-answer',requestId:'image-fork'})
@@ -423,7 +427,7 @@ test('image model survives removed selection, native history reopening and branc
   t.after(()=>reopened.close())
   await reopened.send(actor,{conversationId:branch.id,requestId:'reopened-image-followup',text:'继续看前面的图',research:false})
   await tick();assert.equal(f.handles[4].options.agentOptions.model,'vision')
-  assert.equal(chat.ctx.agentDefaultModel.currentSelection().model,'test')
+  assert.equal(chat.ctx.agentDefaultModel.currentSelection().model,'vision')
   complete(f.handles[4],'branch-answer');await tick()
 })
 
@@ -484,10 +488,25 @@ test('unsupported image model blocks submission before request creation and pres
   assert.equal(f.handles.length,0);assert.equal(f.chat.requests(owner,f.conversation.id).length,0)
   f.chat.jobs.models.vision={provider:'vision-provider',model:'vision'}
   f.chat.ctx.llm.resolveModelInfo=async(p,m)=>({inputModalities:m==='vision'?['text','image']:['text']})
-  const fallback=await f.chat.imageCapability(actor,f.conversation.id)
-  assert.equal(fallback.available,true);assert.equal(fallback.currentSupportsImages,false);assert.match(fallback.message,/本次图片将使用.*vision/)
-  await f.send();await tick();assert.equal(f.handles[0].options.agentOptions.model,'vision')
+  assert.equal((await f.chat.imageCapability(actor,f.conversation.id)).available,false)
+  const modelSelection={provider:'glm-fixture',model:'vision'}
+  const selected=await f.chat.imageCapability(actor,f.conversation.id,modelSelection)
+  assert.equal(selected.available,true);assert.match(selected.message,/所选模型支持图片/)
+  await f.send({modelSelection});await tick();assert.equal(f.handles[0].options.agentOptions.model,'vision')
   assert.ok(f.handles[0].message.content.some(c=>c.type==='image'));complete(f.handles[0]);await tick()
+})
+
+test('chat model choices reject foreign owners, stale models and changes during an active answer',async t=>{
+  const f=await fixture(t)
+  assert.deepEqual((await f.chat.models(actor)).default,{provider:'test',model:'test'})
+  await assert.rejects(f.chat.models({...actor,userId:'another'},f.conversation.id),e=>e.status===404)
+  await assert.rejects(f.send({modelSelection:{provider:'test',model:'missing'}}),e=>e.status===400)
+  assert.equal(f.handles.length,0)
+  await f.send({modelSelection:{provider:'test',model:'test'}});await tick()
+  await assert.rejects(f.send({requestId:'concurrent-model',modelSelection:{provider:'glm-fixture',model:'vision'}}),e=>e.status===409)
+  complete(f.handles[0]);await tick()
+  f.chat.ctx.agentDefaultModel.currentSelection=()=>({provider:'glm-fixture',model:'vision'})
+  assert.deepEqual((await f.chat.models(actor,f.conversation.id)).selected,{provider:'test',model:'test'})
 })
 
 

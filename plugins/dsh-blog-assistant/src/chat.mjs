@@ -5,6 +5,7 @@ import {ownerKey,digest} from './store.mjs'
 import {invariant} from './settings.mjs'
 import {persona,reasoningLanguage} from './jobs.mjs'
 import {projectChat} from './chat-history.mjs'
+import {conversationModelCatalog,requestedConversationModel,selectConversationModel} from '@dsh-plugin-manager/plugin-kit/models'
 import {historyHasImages,selectBlogModel} from './models.mjs'
 import {searchContext} from './search.mjs'
 
@@ -159,6 +160,14 @@ export class BlogChat {
     this.access.assert(b.job.actor);b.request=this.index.updateRequest(b.request.id,patch)
     this.emit(b.request.conversationId,{type:'changed'})
   }
+  async models(actor,id){
+    this.access.assert(actor)
+    const c=id?this.index.get(ownerKey(actor),id):null
+    const catalog=await conversationModelCatalog(this.ctx)
+    const selected=c?.ready?await conversationModel(this.ctx,id):null
+    this.access.assert(actor);if(id)this.index.get(ownerKey(actor),id)
+    return {...catalog,default:catalog.selected,selected}
+  }
   async send(actor,args){
     this.access.assert(actor);invariant(!this.closed,'博客助手正在停止',503)
     invariant(typeof args.text==='string'&&args.text.trim()&&args.text.length<=8000,'请输入消息（最多 8000 字符）')
@@ -173,13 +182,18 @@ export class BlogChat {
       invariant(!['queued','running','stopping'].includes(old.status),'原请求尚未结束',409)
       operationId=old.operationId;draftId=old.draftId
     }
-    const input={text:args.text.trim(),research:args.research,attachments:args.attachments??[],retryFrom:args.retryFrom??null,...(operationId?{operationId}:{})}
+    const input={text:args.text.trim(),research:args.research,attachments:args.attachments??[],retryFrom:args.retryFrom??null,...(operationId?{operationId}:{}),...(args.modelSelection!==undefined?{modelSelection:args.modelSelection}:{})}
     // Check duplicate requests before resolving current attachment selection: historical files may have been removed.
     const duplicate=this.store.db.prepare('SELECT id FROM chat_requests WHERE owner=? AND requestId=?').get(owner,args.requestId)
+    const selected=duplicate?undefined:await requestedConversationModel(this.ctx,args.modelSelection)
+    this.access.assert(actor);this.index.get(owner,conversation.id)
+    invariant(!this.closed,'博客助手正在停止',503)
+    invariant(!this.active.has(conversation.id)||this.store.db.prepare('SELECT id FROM chat_requests WHERE owner=? AND requestId=?').get(owner,args.requestId),'此对话正在回答，请稍后再试',409)
+    invariant(!this.forks.has(conversation.id),'分支正在准备，请稍后再试',409)
     invariant(duplicate||this.active.size<4,'当前对话任务较多，请稍后再试',429)
     const frozen=duplicate?null:this.attachments.freeze(actor,conversation.id,input.attachments)
     if(frozen?.some(a=>a.image)){
-      const capability=await this.imageCapability(actor,conversation.id)
+      const capability=await this.imageCapability(actor,conversation.id,args.modelSelection)
       invariant(capability.available,capability.message,422)
       this.access.assert(actor)
       invariant(!this.closed,'博客助手正在停止',503)
@@ -188,41 +202,38 @@ export class BlogChat {
     }
     const {request,fresh}=this.index.start(owner,conversation.id,args.requestId,input)
     if(!fresh)return{id:request.id,status:request.status,conversationId:request.conversationId}
-    const b={chat:this,request,job:{actor,owner,input:{research:input.research}},sources:[],stopped:false,handle:null,live:null,unsub:[],abort:new AbortController(),draft:null}
+    const b={chat:this,request,selected,job:{actor,owner,input:{research:input.research}},sources:[],stopped:false,handle:null,live:null,unsub:[],abort:new AbortController(),draft:null}
     if(draftId)b.draft=this.store.get(owner,draftId)
     b.request=this.index.updateRequest(request.id,{attachments:frozen,draftId})
     this.index.save(owner,conversation.id,{title:conversation.title==='新对话'?input.text.slice(0,60):conversation.title})
     this.active.set(conversation.id,b)
     b.timer=setTimeout(()=>void this.finish(b,'interrupted','回答超时，已保存的内容可以继续'),this.timeoutMs)
     b.runPromise=this.run(b,conversation)
-    return{id:request.id,status:'queued',conversationId:conversation.id}
+    return{id:request.id,status:'queued',conversationId:conversation.id,model:selected}
   }
   options(b,selection){
     return{agentOptions:{provider:selection.provider,model:selection.model},signal:b.abort.signal,
       setup:agentCtx=>{agentCtx.systemPrompt.section({name:'blog:persona',order:600,text:instructions+'\n本轮时间基准：'+JSON.stringify(searchContext())});agentCtx.systemPrompt.section({name:'blog:language',order:10000,text:reasoningLanguage});agentCtx.systemPrompt.context({name:'blog:language',order:10000,text:'当前交互界面的语言是简体中文。'+reasoningLanguage});agentCtx.tools.restrict({allow:this.jobs.chatTools.map(t=>t.name).filter(n=>b.job.input.research||!n.startsWith('blog_web_'))})}}
   }
-  async imageCapability(actor,id){
+  async imageCapability(actor,id,input){
     this.access.assert(actor)
     const conversation=this.index.get(ownerKey(actor),id)
-    const pinned=await conversationModel(this.ctx,conversation.ready?conversation.id:undefined)
-    const history=conversation.ready?await this.persistedEvents(actor,conversation):[]
-    const selected=historyHasImages(history)?pinned:this.jobs.models?.vision??pinned
+    const requested=await requestedConversationModel(this.ctx,input)
+    const pinned=requested??await conversationModel(this.ctx,conversation.ready?conversation.id:undefined)
+    const selected=pinned
     const current=await this.ctx.llm.resolveModelInfo(pinned.provider,pinned.model)
-    const same=selected.provider===pinned.provider&&selected.model===pinned.model
-    const info=same?current:await this.ctx.llm.resolveModelInfo(selected.provider,selected.model)
     this.access.assert(actor)
-    const available=info.inputModalities?.includes('image')===true,currentSupportsImages=current.inputModalities?.includes('image')===true
-    return{available,currentSupportsImages,current:pinned,selected,message:available?(same?'当前模型支持图片':`本次图片将使用已配置的识图模型 ${selected.model}；当前对话模型 ${pinned.model}${currentSupportsImages?'也支持':'不支持'}图片。`):`当前模型 ${selected.model} 未声明支持图片。请移除图片，或在模型设置中选择支持图片的模型并新建对话；也可配置博客识图模型。文件和输入已保留。`}
+    const available=current.inputModalities?.includes('image')===true,currentSupportsImages=available
+    return{available,currentSupportsImages,current:pinned,selected,message:available?'当前所选模型支持图片':`当前模型 ${selected.model} 未声明支持图片。请在输入框的模型选择器中选择支持图片的模型，或移除图片。文件和输入已保留。`}
   }
   async run(b,conversation){
     try{
       this.access.assert(b.job.actor);if(b.stopped)return
       conversation=await this.recover(b.job.actor,conversation)
       const history=conversation.ready?await this.persistedEvents(b.job.actor,conversation):[]
-      const pinned=await conversationModel(this.ctx,conversation.ready?conversation.id:undefined)
-      // Explicitly adding the first image retains the plugin's existing vision routing;
-      // a global default change alone never changes a resumed conversation.
-      const models={text:pinned,vision:historyHasImages(history)?pinned:this.jobs.models?.vision??pinned}
+      const pinned=b.selected??await conversationModel(this.ctx,conversation.ready?conversation.id:undefined)
+      // Chat uses the visible selection; background writing jobs retain their own routing.
+      const models={text:pinned,vision:pinned}
       const selection=await selectBlogModel(this.ctx,models,b.request.attachments.some(a=>a.image)||historyHasImages(history),b.abort.signal)
       const options=this.options(b,selection)
       const setup=options.setup
@@ -236,6 +247,10 @@ export class BlogChat {
       b.opening=conversation.ready?this.ctx.agents.resume({...options,resumeSessionId:SessionId(conversation.id)}):this.ctx.agents.create({...options,sessionId:SessionId(conversation.id),meta:{cwd:process.cwd()}})
       b.handle=await b.opening
       if(b.stopped)return
+      if(b.selected)await selectConversationModel(this.ctx,conversation.id,b.selected,()=>{
+        this.access.assert(b.job.actor);this.index.get(b.job.owner,conversation.id)
+        invariant(!b.stopped&&!this.closed,'本次请求已结束',409)
+      })
       this.access.assert(b.job.actor);this.jobs.bindings.set(b.handle.agent,b)
       await this.durable(b)
       if(b.stopped)return

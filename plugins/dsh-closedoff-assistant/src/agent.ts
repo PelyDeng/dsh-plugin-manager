@@ -11,6 +11,7 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { Config } from './config.ts'
 import { AccessError, conversationModel, conversationArchive, conversationRemover, readConversationEvents, previewPage, hostBusyConversationIds, type ConversationProvider, type PreviewMessage, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { conversationModelCatalog, requestedConversationModel, selectConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
 import { projectHistory } from './presentation.ts'
 import type { ConversationStore, ConversationSummary } from './conversation-store.ts'
 
@@ -218,6 +219,29 @@ export class ConversationManager {
       .finally(() => { this.openings.delete(id) })
     this.openings.set(id, created)
     return created
+  }
+
+  async models(actor: Actor, id?: string) {
+    this.access.assert(actor)
+    if (id) this.store.assertOwner(this.validateId(id), actor)
+    const catalog = await conversationModelCatalog(this.ctx)
+    const selected = id ? await conversationModel(this.ctx, id) : null
+    this.access.assert(actor); if (id) this.store.assertOwner(id, actor)
+    return { ...catalog, default: catalog.selected, selected }
+  }
+
+  async selectModel(conversation: Conversation, input: unknown, actor: Actor) {
+    if (input === undefined) return
+    this.access.assert(actor); this.store.assertOwner(conversation.id, actor)
+    if (conversation.active) throw new AccessError(409, '智能体正在回答上一条问题')
+    conversation.active = true
+    try {
+      const selected = await requestedConversationModel(this.ctx, input)
+      return await selectConversationModel(this.ctx, conversation.id, selected!, () => {
+        this.access.assert(actor); this.store.assertOwner(conversation.id, actor)
+        if (this.disposed) throw new AccessError(503, '插件正在停止')
+      })
+    } finally { conversation.active = false }
   }
 
   /** Add one user message to an active business Agent. */
