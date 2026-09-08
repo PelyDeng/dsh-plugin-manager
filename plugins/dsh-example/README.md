@@ -4,7 +4,7 @@
 
 ## 启动与使用
 
-需要应用交付说明中验证过的官方 DSH、兼容的 manager 和 auth/example 发布目录。先组合完整候选集合，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
+需要应用交付说明中验证过的官方 DSH、兼容的 manager 和 auth/example 发布目录。先把需要运行的全部插件组合成候选清单，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
 
 ```sh
 pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --plugins all
@@ -14,11 +14,11 @@ pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment
 
 默认 authenticated。登录 `/auth`，首次 admin 必须改密；普通账号需要 example 授权，再打开 `/example`。同一个 DSH home 还需官方默认模型与凭据，插件不保存模型密钥。探针成功只说明基本可服务，不证明模型请求成功。
 
-实例配置在 `<home>/plugins/example/plugin.json`。将 accessMode 改为 standalone 后受控重启可独立体验；这是安装级共享历史。enabled 控制停用；停用不删除数据。字段与可复制模板见随包[配置参考](examples/README.md)。
+实例配置在 `<home>/plugins/example/plugin.json`。将 accessMode 改为 standalone 后受控重启可独立体验；同一安装中的用户会共用历史。enabled 控制停用；停用不删除数据。字段与可复制模板见随包[配置参考](examples/README.md)。
 
 ## 聊天界面复用
 
-example 接入 auth 的[会话管理](../../doc/conversation-management.md)：按本人 owner 查询、预览历史、批量移除并同步 DSH 官方归档。旧的插件软删除记录可补齐归档；未完成移除的记录禁止继续发送，允许重试。知识摘要、可复制提示词和源码问答快照同时包含接入方法与删除语义。
+example 接入 auth 的[会话管理](../../doc/conversation-management.md)：按当前用户归属查询、预览历史、批量移除并同步 DSH 官方归档。旧的插件软删除记录可补齐归档；未完成移除的记录禁止继续发送，允许重试。知识摘要、可复制提示词和源码问答快照同时包含接入方法和删除的实际范围。
 
 聊天界面复用随包聊天组件，采用顶栏、蓝色用户气泡、白色回答卡片、右侧快捷提问、独立思考与工具状态区。桌面左侧固定展示历史栏，可收起；手机隐藏辅助区，通过侧滑抽屉读取历史；Enter 换行，发送按钮提交。
 
@@ -44,7 +44,11 @@ example 接入 auth 的[会话管理](../../doc/conversation-management.md)：�
 
 职责、人设、知识与部署者的 config.systemPrompt 通过官方 systemPrompt.section 注入；内置人设随职责进入新建及恢复的 Agent。补充提示默认空；已有配置不会被自动重写。更新插件并重启实例后，后续创建或恢复的 Agent 使用新提示，已有回答不重写。改成其他业务助手时需替换内置职责、知识和建议问题，不能仅设置补充提示。未知版本、私有业务和未提供的 API 应明确待核实。
 
-代码问题通过官方工具协议检索和分页阅读 `dist/framework-reference.json`，回答引用文件路径、行号和快照摘要。索引覆盖公共 manager、kit、auth、example、部署脚本、集成、示例、文档、GitHub 构建发布流程及类型声明；构建时从显式框架根目录生成，随最终 tgz 交付。索引生成函数先只读校验统一版本及文档模板同步，校验失败不覆盖已有索引文件；直接执行插件 build 时，前序构建清理仍会删除旧 dist。收录当前文档及版本脚本登记的 `.md.tmpl`；历史 `doc/releases/` 留在仓库但不进入知识快照。根 `build.sh/build.ps1` 在私有集成库可能被替换，快照只收公共 `deploy/` 入口和实现。运行时没有原仓库依赖，也不读取生产配置、私有插件或官方宿主源码。构建输入上限为 1500 个文件、8 MiB、每行 19000 字符，超限拒绝；工具一次最多读 100 行。两个工具 `example_search_framework` / `example_read_framework` 绑定当前会话 Agent，并执行 example 访问授权。源码只是回答资料，不是执行指令；助手没有命令执行或任意文件访问能力。
+代码问题通过官方工具协议检索和分页阅读 `dist/framework-reference.json`，回答引用文件路径、行号和快照摘要。索引覆盖公共 manager、kit、auth、example、部署脚本、集成、示例、文档、GitHub 构建发布流程及类型声明；构建时从显式框架根目录生成，随最终 tgz 交付。索引生成函数先只读校验统一版本及文档模板同步，校验失败不覆盖已有索引文件；直接执行插件 build 时，前序构建清理仍会删除旧 dist。
+
+收录当前文档及版本脚本登记的 `.md.tmpl`；历史 `doc/releases/` 留在仓库但不进入知识快照。根 `build.sh/build.ps1` 在私有集成库可能被替换，快照只收公共 `deploy/` 入口和实现。运行时没有原仓库依赖，也不读取生产配置、私有插件或官方宿主源码。构建输入上限为 1500 个文件、8 MiB、每行 19000 字符，超限拒绝；工具一次最多读 100 行。
+
+两个工具 `example_search_framework` / `example_read_framework` 绑定当前会话 Agent，并执行 example 访问授权。源码只是回答资料，不是执行指令；助手没有命令执行或任意文件访问能力。
 
 可用“我是外部作者，怎么取得工具？”开始，再追问“增加第二应用时原账号怎样保留？”；也可以让它生成带占位符的开发提示词。给出 OS、版本、目录角色和目标可获得更准确步骤，勿发送真实凭据。
 
@@ -64,6 +68,6 @@ SQLite 只存账号所有者、标题和时间等历史目录；消息正文使�
 
 在包根运行 `pnpm build`、`pnpm check`，行为回归单独运行 `pnpm test`。框架内也可用 `pnpm --filter dsh-example ...`。测试使用隔离数据和 Agent 替身，不证明真实模型回答质量。`tests/host-smoke.mjs` 使用真实官方宿主和 auth/example tgz，但模型 HTTP 是明确标识的本地替身。
 
-框架入口与模型密钥来源见[统一配置](../../doc/framework-configuration.md)。根模板包含固定非秘密默认值，私有 env 维护实际部署参数及可选宿主模型凭据；自动初始化按平台落值，已有文件不覆盖，example 不保存模型密钥。随包 FAQ 和源码索引支持三平台 build 入口、配置默认值、文件只读/空值回退及控制台域名信任的问答；知识注入与检索测试不代表真实模型回答已经验收。
+框架入口与模型密钥来源见[统一配置](../../doc/framework-configuration.md)。根模板包含固定非秘密默认值，私有 env 维护实际部署参数及可选宿主模型凭据；首次初始化按平台填写默认值，已有文件不覆盖，example 不保存模型密钥。随包 FAQ 和源码索引支持三平台 build 入口、配置默认值、文件只读/空值回退及控制台域名信任的问答；知识注入与检索测试不代表真实模型回答已经验收。
 
 历史栏支持按标题搜索（跨分页）、按置顶/今天/昨天/7 天内/30 天内/更早分组、重命名、置顶、多选，以及预览问答正文后复制或下载 Markdown。分享不生成公开链接，不导出思考、附件文件或工具记录。删除经确认后只从当前用户插件历史列表移除，官方日志和文章/附件文件仍按原留存规则保存；删除后无法从页面恢复或继续该会话。生成中的会话须先停止或完成后操作。历史索引自动迁移到 schema 2，持久化置顶与删除标记，既有正文仍在官方会话中。

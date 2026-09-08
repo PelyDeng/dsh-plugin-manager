@@ -63,7 +63,7 @@ dsh-lab/
    └─ .local/      deployment.json、data/dsh-home、运行记录
 ```
 
-**取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager {{FRAMEWORK_VERSION}}、kit {{FRAMEWORK_VERSION}} tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。仅消费现成发布物的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
+**取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager {{FRAMEWORK_VERSION}}、kit {{FRAMEWORK_VERSION}} tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。只安装现成包的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
 
 ```sh
 git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin-manager.git framework
@@ -244,7 +244,7 @@ pnpm exec dsh-plugin-manager stop --root "$lab/site" --config .local/deployment.
 
 **预期**：example 和第二应用同时可用，旧账号、授权与实例配置保留。未授权普通账号访问第二端点应返回 403，获授权后返回当前身份。它不查询销售数据。已安装但不在本次候选的 auth 不能满足依赖；--previous 也不会把它补选回来。
 
-更新某应用时替换其原始分项清单，重新组合**所有**要保留的应用。不要将旧整站清单和同 ID 新包叠加。保留旧目录、一致数据备份和作者迁移说明；存量数据可否回退不是清单能够保证的。
+更新某应用时替换其原始分项清单，重新组合**所有**要保留的应用。不要将旧整站清单和同 ID 新包叠加。保留旧目录、一致数据备份和作者迁移说明；已有数据能否在旧版继续使用，需要按应用的迁移说明确认，清单本身不能保证。
 
 ## 登录、配置与停用
 

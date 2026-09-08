@@ -17,16 +17,16 @@
 
 ### 1. 取得并安装工具
 
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者交付的 manager 0.14.2 tgz；需要统一身份时再取得 kit 0.14.2 tgz，按交付 SHA-256 核对文件。已公开归档见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)，目标版本没有附件时按下方源码步骤构建，不假定 npm 已发布。以下命令安装本地归档。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者交付的 manager 0.14.3 tgz；需要统一身份时再取得 kit 0.14.3 tgz，按交付 SHA-256 核对文件。已公开归档见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)，目标版本没有附件时按下方源码步骤构建，不假定 npm 已发布。以下命令安装本地归档。
 
 在工具目录执行，把占位路径替换成实际文件的绝对路径：
 
 ```sh
-pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.14.2.tgz"
+pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.14.3.tgz"
 pnpm exec dsh-plugin-manager --version
 ```
 
-**预期**：输出 manager 0.14.2。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
+**预期**：输出 manager 0.14.3。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
 
 ### 2. 选择示例，建立自己的仓库
 
@@ -35,7 +35,7 @@ pnpm exec dsh-plugin-manager --version
 | 示例 | 验证能力 |
 | --- | --- |
 | [standalone-plugin](../examples/standalone-plugin/README.md) | 不依赖 kit，官方 Bundle 与受管 release 均可加载 |
-| [standalone-kit](../examples/standalone-kit/README.md) | 独立消费 kit tgz，复用登录及应用授权，返回当前账号身份 |
+| [standalone-kit](../examples/standalone-kit/README.md) | 在独立项目中使用 kit tgz，复用登录及应用授权，返回当前账号身份 |
 
 无 kit 的示例，在作者根执行：
 
@@ -46,7 +46,7 @@ pnpm install --ignore-workspace
 统一身份示例，在作者根执行以下命令安装实际 kit 归档，同时生成锁文件：
 
 ```sh
-pnpm add --ignore-workspace --save-dev "/absolute/path/plugin-kit-0.14.2.tgz"
+pnpm add --ignore-workspace --save-dev "/absolute/path/plugin-kit-0.14.3.tgz"
 ```
 
 **预期**：作者根生成自己的 pnpm-lock.yaml，应随源码保存。kit 是构建依赖并内嵌到应用；作者构建需能取得该 tgz，release 运行端不需要它的原始路径。希望从完整聊天应用开始时，见[完整问答应用复制步骤](#复制完整问答应用到独立仓库)。
@@ -101,7 +101,7 @@ pnpm list:plugins
 | 完整开发回归 | `pnpm test`，先构建再运行测试；CI 单独执行测试步骤 |
 | 构建并交付 | `pnpm package --plugins "auth,example" --output .local/artifacts/release/plugins` |
 
-只交付时直接 package，不需要先重复 build/check。普通构建和测试不要求宿主子模块、模型密钥或 Docker；内部清单 1 保留 development/link，外部单包与组合清单 2 只支持 release。
+按当前改动选择上表中的命令，不必每次全部执行。只交付时直接 package，不需要先重复 build/check。普通构建和测试不要求宿主子模块、模型密钥或 Docker；内部清单 1 保留 development/link，外部单包与组合清单 2 只支持 release。
 
 ### 3. 运行并验证
 
@@ -118,7 +118,7 @@ pnpm list:plugins
 5. FAQ 读取包内 knowledge；源码问答索引在构建时生成。保留框架答疑用途时，把 build 中 `scripts/build-reference.mjs --root ../..` 的 root 改为明确的公共框架源码根路径；只在作者构建机需要该源码。部署时索引随 tgz 携带，不依赖作者目录。改成其他业务应替换 src/knowledge.ts 中职责、两份知识及源码检索能力，不能只改 config.systemPrompt；它仅为补充。
 6. 在作者根执行 `pnpm build`、`pnpm check` 和 `pnpm test`，保存 pnpm-lock.yaml。在工具目录执行 `pnpm exec dsh-plugin-manager pack --root <作者包根> --package . --output <新发布目录>`。只交付无需事先重复 build/check。
 
-部署者只取得整个发布目录及说明。确认 tgz 包含知识、页面、配置模板和入口；作者源码目录不参与 release。kit 更新需每个消费应用更新内嵌版本后重新交付，不能只升级管理器。
+部署者只取得整个发布目录及说明。确认 tgz 包含知识、页面、配置模板和入口；作者源码目录不参与 release。kit 更新需每个使用它的应用更新内嵌版本后重新交付，不能只升级管理器。
 
 ## 交付内容
 

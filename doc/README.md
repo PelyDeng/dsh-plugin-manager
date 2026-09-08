@@ -22,7 +22,7 @@
 5. [kit 接口](../packages/plugin-kit/README.md)——接入身份、权限、HTTP、工具登记及官方会话模型选择。
 6. [聊天风格 skill](../plugins/dsh-example/skills/dsh-chat-style/SKILL.md)——统一聊天视觉、思考预览、流式行为和回答工具栏。
 
-发布版本遵循[开发约定](../AGENTS.md)：功能大改升级次版本并归零补丁号，小改升级补丁号；`1.0.0` 及以上仅在用户明确指定里程碑时使用。公共框架以根 `package.json` 的 `version` 为唯一源，manager、kit、auth、example 使用统一发布版本；定制插件独立版本化。版本设置、文档模板及同步校验见[版本管理](versioning.md)。
+日常开发不修改版本号；发版时统一确定版本，具体遵循[开发约定](../AGENTS.md)：功能大改升级次版本并归零补丁号，小改升级补丁号；`1.0.0` 及以上仅在用户明确指定里程碑时使用。公共框架以根 `package.json` 的 `version` 为唯一源，manager、kit、auth、example 使用统一发布版本；定制插件独立版本化。版本设置、文档模板及同步校验见[版本管理](versioning.md)。
 
 ## 部署与维护
 
@@ -41,6 +41,6 @@
 | CLI 完整参数与行为 | [管理器参考](../packages/plugin-manager/README.md) |
 | 框架和官方 DSH 的职责 | [架构与包职责](architecture.md) |
 | 开发、授权及第二应用问题 | [开发者 FAQ](../plugins/dsh-example/knowledge/guide.md) |
-| 让 AI 协助开发 | [五种可复制开发提示词](../plugins/dsh-example/knowledge/prompts.md) |
+| 让 AI 协助开发 | [可复制的开发提示词](../plugins/dsh-example/knowledge/prompts.md) |
 
 配置入口、默认值、文件密钥只读及旧 JSON 导入见[框架统一配置](framework-configuration.md)。

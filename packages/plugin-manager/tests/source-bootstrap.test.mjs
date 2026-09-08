@@ -26,7 +26,10 @@ function snapshot(t, version = '11.19.0') {
   const archive = resolve(base, 'source.tar');
   command('git', ['archive', '--format=tar', '--output', archive, tree], repository);
   command(tarCommand, ['-xf', 'source.tar', '-C', 'checkout'], base);
-  command('git', ['init', '-q'], root); command('git', ['add', '.'], root);
+  command('git', ['init', '-q'], root);
+  // Detached Git maintenance can still write .git while the fixture is being removed.
+  command('git', ['config', 'maintenance.auto', 'false'], root);
+  command('git', ['add', '.'], root);
   const commit = () => command('git', ['-c', 'user.name=Bootstrap Test', '-c', 'user.email=bootstrap@example.invalid', 'commit', '-qm', '初始化独立验收源码'], root);
   commit();
   const pnpm = `const fs=require('node:fs');if(process.argv[2]==='--version'){console.log(${JSON.stringify(version)});}else{fs.writeFileSync(${JSON.stringify(marker)},JSON.stringify({args:process.argv.slice(2),pin:JSON.parse(fs.readFileSync('package.json')).packageManager,lock:fs.readFileSync('pnpm-lock.yaml','utf8')}));console.error('BOOTSTRAP_INSTALL_REACHED');process.exit(42);}`;

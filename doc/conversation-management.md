@@ -16,9 +16,9 @@
 
 删除意味着**移除插件历史入口并调用 DSH 官方归档**，不永久销毁底层记录、不释放日志磁盘空间。本页没有恢复入口，也不删除博客文章、业务记录、备份或独立分支。
 
-运行中、正在创建分支或存在未完成操作的会话会被阻止。部分成功会逐项报告，未完成项可刷新后重试；网络超时显示结果待核实。官方归档失败不会被降级为成功的插件隐藏。
+运行中、正在创建分支或存在未完成操作的会话不能删除。系统会逐项显示删除结果，未完成项可刷新后重试；网络超时时显示“结果待核实”。即使插件已隐藏这条历史，只要 DSH 官方归档失败，整项删除就仍算未完成。
 
-“仅插件已移除”表示旧版本已隐藏插件历史、但尚未同步官方归档，可在这里补齐清理。“移除未完成”表示状态尚未收敛，保留 owner 证据和禁止写入标记，重试不会重复创建会话。升级不会自动清空这些记录。
+“仅插件已移除”表示旧版本已隐藏插件历史，但尚未完成官方归档，可在这里补做归档。“移除未完成”表示删除流程还没走完：系统保留会话所属用户（owner）的记录，并阻止继续写入。重试不会重复创建会话，升级也不会自动清空这些记录。
 
 官方原生对话、standalone 模式记录及没有可信 owner 的历史不分配给当前账号。插件未接入时显示“未接入”；服务故障显示“暂不可用”，不能当成没有会话。
 
@@ -30,10 +30,10 @@ auth 提供受保护的 `GET /auth/api/conversation-plugins`、`GET /auth/api/co
 
 `list(actor, query)` 返回 `{ items, total, nextOffset }`；query 为 offset、limit、q、from、to、state，时间区间为 `[from,to)`。统一摘要包含 id、title、updatedAt、state、canRemove 及可选 blockedReason，不携带正文。
 
-`preview(actor, id, before?)` 返回 `{ messages, previousBefore, total }`。只读日志通过 `readConversationEvents` 或官方 read handle 获取；用插件现有投影生成用户可见消息，不能回传配置、凭据或原始内部事件。`previewPage` 按消息位置向前分页。查询和返回前都校验权限，不用预览恢复 Agent。
+`preview(actor, id, before?)` 返回 `{ messages, previousBefore, total }`。通过 `readConversationEvents` 或官方只读句柄（read handle）读取日志，再用插件已有的消息转换逻辑（投影）整理成用户可见消息。不能返回配置、凭据或原始内部事件。`previewPage` 按消息位置向前分页。查询和返回前都校验权限，预览不恢复 Agent。
 
-`remove(actor, ids)` 使用 `conversationRemover`，返回逐项 removed、alreadyRemoved、blocked 或 failed。索引适配器提供 `record` 和 `mark`；`record` 包含旧 tombstone 的 owner 证据，普通聊天的 assertOwner 仍必须排除 tombstone 和移除阶段。发送、恢复、分支及其他变更入口共用这份生命周期约束。
+`remove(actor, ids)` 使用 `conversationRemover`，逐项返回 removed、alreadyRemoved、blocked 或 failed。索引适配器提供 `record` 和 `mark`；`record` 也要返回旧删除标记（tombstone）中的用户归属，以便确认谁有权补做归档。普通聊天的 assertOwner 仍须拒绝已标记删除或正在移除的会话。发送、恢复、创建分支及其他修改操作都要遵守这一检查。
 
-移除过程先写入 pending 围栏，释放空闲句柄，等待官方 `ctx.workspaceRegistry.archiveSession`，然后完成插件标记。异常保留可重试状态；两侧存储没有跨库事务。官方服务是宿主的外部依赖，缺失时报告不可用。不得另写官方归档文件、让 auth 扫描业务数据库，或将全局归档集合发给浏览器。
+移除时先写入 pending 标记，阻止新的写入，再释放空闲句柄，等待官方 `ctx.workspaceRegistry.archiveSession` 完成，最后更新插件的删除标记。插件与官方存储不在同一个数据库事务中，出错时须保留进度供重试。归档服务由宿主提供，缺失时报告不可用。不得自行写入官方归档文件、让 auth 扫描业务数据库，或把所有用户的归档列表发给浏览器。
 
 公共实现和可复制示例见 `packages/plugin-kit/src/conversations.ts`、`plugins/dsh-auth/src/http.ts`、`plugins/dsh-example/src/index.ts` 和 `src/history.ts`。各业务插件自行维护 owner 索引、查询 SQL、预览投影与活动任务检查。
