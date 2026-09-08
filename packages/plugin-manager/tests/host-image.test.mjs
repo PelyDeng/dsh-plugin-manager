@@ -11,7 +11,7 @@ import { tarCommand } from '../src/deployment.mjs';
 const directories = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 function fixture() {
-  const root = mkdtempSync(resolve(tmpdir(), 'dsh host image ')); directories.push(root);
+  const root = mkdtempSync(resolve(tmpdir(), 'dsh 中文 host image ')); directories.push(root);
   mkdirSync(resolve(root, 'deploy'));
   for (const path of ['integrations/docker', 'packages/plugin-kit', 'packages/plugin-manager']) {
     mkdirSync(resolve(root, path), { recursive: true }); writeFileSync(resolve(root, path, 'input.txt'), 'fixture\n');
@@ -69,13 +69,14 @@ function engine(root, { pullError = '', pushError = false, wrongLabel = false } 
     images.set(image, item); images.set(item.Id, item); return item;
   };
   const execute = (bin, args, options) => {
-    calls.push({ bin, args, input: options?.input });
+    calls.push({ bin, args, input: options?.input, cwd: options?.cwd });
     if (bin === 'git') return { status: 0, stdout: '' };
     if (bin === tarCommand) {
-      const destination = args[args.indexOf('-C') + 1];
+      const destination = resolve(options?.cwd ?? root, args[args.indexOf('-C') + 1]);
       if (destination.endsWith('harness-source')) writeFileSync(resolve(destination, 'package.json'), JSON.stringify({ packageManager: 'pnpm@11.7.0' }));
       else {
-        for (const path of ['integrations/docker', 'packages/plugin-kit', 'packages/plugin-manager']) cpSync(resolve(root, path), resolve(destination, path), { recursive: true });
+        // Node 22.19's native recursive copy crashes on Unicode paths; the filter keeps this fixture on its JS path.
+        for (const path of ['integrations/docker', 'packages/plugin-kit', 'packages/plugin-manager']) cpSync(resolve(root, path), resolve(destination, path), { recursive: true, filter: () => true });
         for (const file of ['package.json','pnpm-lock.yaml','pnpm-workspace.yaml']) cpSync(resolve(root, file), resolve(destination, file));
       }
       return { status: 0, stdout: '' };
@@ -178,6 +179,12 @@ test('publish failure retains immutable images and resume only publishes, with c
   assert.throws(() => buildHostImage({ root, config: path, publish: true, operationId: 'publishing' }, mock), /push failed/u);
   const resultFile = resolve(root, '.local/artifacts/publishing/host-image.json');
   assert.equal(JSON.parse(readFileSync(resultFile)).status, 'publish-failed');
+  const extraction = mock.calls.find(call => call.bin === tarCommand);
+  const archive = mock.calls.find(call => call.bin === 'git' && call.args.includes('--output'));
+  assert.equal(extraction.cwd, resolve(root, '.local/artifacts/publishing'));
+  assert.ok(extraction.args.every(arg => /^[\x20-\x7e]+$/u.test(arg)), 'tar arguments must not encode the Unicode checkout path');
+  assert.equal(resolve(extraction.cwd, extraction.args[1]), archive.args[archive.args.indexOf('--output') + 1]);
+  assert.equal(resolve(extraction.cwd, extraction.args[extraction.args.indexOf('-C') + 1]), resolve(root, '.local/artifacts/publishing/manager-source'));
   assert.ok(!readFileSync(resultFile, 'utf8').includes('fixture-secret'));
   assert.equal(mock.calls.find(call => call.args.includes('login')).input, 'fixture-secret');
   assert.ok(!mock.calls.some(call => call.args.includes('fixture-secret')));

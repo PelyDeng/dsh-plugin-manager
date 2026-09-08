@@ -6,7 +6,7 @@ import { posix } from 'node:path'
 import { AccessError, emitRevoked, isAccessError, listPlugins, type Actor } from '@dsh-plugin-manager/plugin-kit/access'
 import { ModelKeyError, modelKeyStatus, setModelKey } from '@dsh-plugin-manager/plugin-kit/model-key'
 import { AuthService, SESSION_COOKIE } from './service.ts'
-import { conversationProviders, conversationQuery, conversationIds } from '@dsh-plugin-manager/plugin-kit'
+import { conversationProviders, conversationQuery, conversationIds } from '@dsh-plugin-manager/plugin-kit/conversations'
 import { hashPassword, validatePassword } from './password.ts'
 import { normalizeUsername, type Role } from './store.ts'
 

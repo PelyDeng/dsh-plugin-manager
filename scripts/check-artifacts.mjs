@@ -42,9 +42,11 @@ try {
   kitConsumer.devDependencies = { '@deepseek-ai/cordis': '4.0.2', typescript: '^6.0.3', '@types/node': '^22.20.0' };
   json(join(consumer, 'package.json'), kitConsumer);
   runPnpm(['install', '--ignore-scripts', '--no-frozen-lockfile'], consumer);
-  writeFileSync(join(consumer, 'check.ts'), "import { actorKey, type Actor } from '@dsh-plugin-manager/plugin-kit/access';\nconst actor: Actor = {namespace:'standalone',userId:'local'};\nactorKey(actor);\n");
+  writeFileSync(join(consumer, 'check.ts'), "import { actorKey, type Actor } from '@dsh-plugin-manager/plugin-kit/access';\nimport { conversationQuery, type ConversationQuery } from '@dsh-plugin-manager/plugin-kit/conversations';\nconst actor: Actor = {namespace:'standalone',userId:'local'};\nactorKey(actor);\nconst query: ConversationQuery = conversationQuery(new URLSearchParams());\nvoid query;\n");
   runPnpm(['exec', 'tsc', '--strict', '--noEmit', '--types', 'node', '--module', 'NodeNext', '--target', 'ES2022', 'check.ts'], consumer);
   assert.equal(existsSync(join(consumer, 'node_modules/@deepseek-ai/dsh-tools')), false);
+
+  run(['--input-type=module', '-e', "import {conversationQuery} from '@dsh-plugin-manager/plugin-kit/conversations'; if(conversationQuery(new URLSearchParams()).limit!==30) throw Error('conversation leaf');"], consumer);
 
   const externalAuth = join(temporary, 'external auth'); mkdirSync(externalAuth);
   for (const path of ['src', 'web', 'cordis.patch.yml', 'tsconfig.json', 'tsdown.config.ts']) cpSync(join(root, 'plugins/dsh-auth', path), join(externalAuth, path), { recursive: true });
@@ -69,6 +71,10 @@ try {
   writeFileSync(join(external, 'pnpm-workspace.yaml'), policy);
   runPnpm(['install', '--ignore-scripts'], external);
   runPnpm(['build'], external);
+  const invalidReference = spawnSync(process.execPath, [join(external, 'scripts/build-reference.mjs'), '--root'], { cwd: external, encoding: 'utf8' });
+  assert.notEqual(invalidReference.status, 0);
+  assert.match(invalidReference.stderr, /用法：build-reference\.mjs/u);
+  assert.doesNotMatch(invalidReference.stderr, /ERR_MODULE_NOT_FOUND/);
   run([join(external, 'scripts/build-reference.mjs'), '--root', root], external);
   const reference = JSON.parse(readFileSync(join(external, 'dist/framework-reference.json')));
   assert.ok(reference.files.some(file => file.path === '.github/workflows/check.yml'));
@@ -90,7 +96,7 @@ try {
     assert.ok(existsSync(join(consumer, 'node_modules', plugin.package, 'web/index.html')));
   }
   run(['--input-type=module', '-e', `import { loadRelease } from '@dsh-plugin-manager/plugin-manager'; const release=loadRelease(${JSON.stringify(join(releasePath, 'manifest.json'))}); if(release.plugins.length!==2) throw Error('release');`], consumer);
-  console.log('Archive checks passed: host-free manager and route leaf, minimal access types, external example source, plugin JS/types/assets and source-free release validation.');
+  console.log('Archive checks passed: host-free manager and route leaf, minimal access/conversation types, external auth/example source, plugin JS/types/assets and source-free release validation.');
 } finally {
   assert.equal(dirname(temporary), realpathSync.native(tmpdir()));
   rmSync(temporary, { recursive: true, force: true });

@@ -162,11 +162,10 @@ export function buildHostImage(options = {}, { execute = spawnSync, inspectSourc
     mkdirSync(managerSource); mkdirSync(harnessSource);
     if (options.workingTree) {
       for (const path of managerInputs) cpSync(resolve(root, path), resolve(managerSource, path), { recursive: true, dereference: false, filter: path => !path.split(/[\\/]/).some(part => ['dist','node_modules','coverage'].includes(part)) });
-      cpSync(resolve(root, 'package.json'), resolve(managerSource, 'package.json'));
     } else {
       const archive = resolve(operation, 'manager-source.tar');
       run('git', ['-C', root, 'archive', '--format=tar', '--output', archive, host.repositoryCommit, ...managerInputs]);
-      run(tarCommand, ['-xf', archive, '-C', managerSource]);
+      run(tarCommand, ['-xf', 'manager-source.tar', '-C', 'manager-source'], { cwd: operation });
     }
     // Extract the official tar inside Linux so Windows does not materialize Git symlinks.
     const hostArchive = resolve(harnessSource, 'harness-source.tar');

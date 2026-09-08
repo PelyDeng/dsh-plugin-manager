@@ -25,7 +25,7 @@ function snapshot(t, version = '11.19.0') {
   const tree = command('git', ['write-tree'], repository);
   const archive = resolve(base, 'source.tar');
   command('git', ['archive', '--format=tar', '--output', archive, tree], repository);
-  command(tarCommand, ['-xf', archive, '-C', root], repository);
+  command(tarCommand, ['-xf', 'source.tar', '-C', 'checkout'], base);
   command('git', ['init', '-q'], root); command('git', ['add', '.'], root);
   const commit = () => command('git', ['-c', 'user.name=Bootstrap Test', '-c', 'user.email=bootstrap@example.invalid', 'commit', '-qm', '初始化独立验收源码'], root);
   commit();

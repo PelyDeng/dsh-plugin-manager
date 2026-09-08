@@ -7,12 +7,13 @@
 | `@dsh-plugin-manager/plugin-kit/access` | `createAccess`、身份、认证提供者、运行目录和撤权通知 |
 | `@dsh-plugin-manager/plugin-kit/http` | `createPluginHttp`：受保护路由与显式公开探针 |
 | `@dsh-plugin-manager/plugin-kit/tools` | `createPluginTools`、`guardTool`：执行前后鉴权与工具登记 |
+| `@dsh-plugin-manager/plugin-kit/conversations` | 会话协议、只读预览、分页查询与官方归档；无需工具类型依赖 |
 | `@dsh-plugin-manager/plugin-kit/route-path` | 无宿主依赖的规范路由校验 |
 | `@dsh-plugin-manager/plugin-kit/model-key` | 固定 DeepSeek/智谱凭据校验、状态与 SHA-256 指纹；写入委托给官方 credentials 服务，不接受任意凭据引用 |
 | `@dsh-plugin-manager/plugin-kit/deepseek-key` | 默认 DeepSeek 凭据操作的兼容入口 |
-| `@dsh-plugin-manager/plugin-kit` | 上述 API，以及 `registerConversations`、只读预览、分页查询和官方归档的统一导出 |
+| `@dsh-plugin-manager/plugin-kit` | 上述 API 的统一导出 |
 
-DSH 类型依赖是可选 peer，由使用相应接口的作者提供；只使用 access 或 route-path 不会加载工具运行实现。业务插件自行声明实际使用的 DSH/Cordis peer。
+DSH 类型依赖是可选 peer，由使用相应接口的作者提供；只使用 access、conversations 或 route-path 不需要工具类型依赖。业务插件自行声明实际使用的 DSH/Cordis peer。
 
 kit 0.2.0 增加可选的[会话管理协议](../../doc/conversation-management.md)。插件维护本人 owner 索引和活动操作检查，auth 汇总分类、只读预览与批量移除。共享移除流程持久化 pending 围栏，调用官方归档并返回逐项结果；包含定时事件时复用宿主已注册的 schedule 投影校验，能力缺失则拒绝清理。
 

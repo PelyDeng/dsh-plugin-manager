@@ -1,9 +1,13 @@
 /** Snapshot explicitly selected public framework sources, never the deployer's runtime files. */
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, extname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
-import { assertPublicFrameworkConfig } from '../../../packages/plugin-manager/src/framework-config.mjs';
+
+const direct = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (direct && (process.argv.length !== 4 || process.argv[2] !== '--root' || !process.argv[3] || process.argv[3].startsWith('--'))) throw new Error('用法：build-reference.mjs --root <框架根目录>');
+const frameworkRoot = direct ? resolve(process.argv[3]) : fileURLToPath(new URL('../../../', import.meta.url));
+const { assertPublicFrameworkConfig } = await import(pathToFileURL(join(frameworkRoot, 'packages/plugin-manager/src/framework-config.mjs')).href);
 
 const directories = ['packages/plugin-manager', 'packages/plugin-kit', 'plugins/dsh-auth', 'plugins/dsh-example', 'scripts', 'deploy', 'integrations', 'examples', 'doc', '.github'];
 const ignored = new Set(['node_modules', 'dist', 'lib', '.local', '.git', 'coverage', 'assets', 'vendor']);
@@ -44,8 +48,7 @@ export function buildReference(root, output) {
   return { revision, files: files.length };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (process.argv.length !== 4 || process.argv[2] !== '--root') throw new Error('用法：build-reference.mjs --root <框架根目录>');
+if (direct) {
   const output = fileURLToPath(new URL('../dist/framework-reference.json', import.meta.url));
   console.log(JSON.stringify(buildReference(process.argv[3], output)));
 }
