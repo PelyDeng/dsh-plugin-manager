@@ -70,27 +70,27 @@ export function proveDockerHome(deployment, container, image, execute) {
   return proveMountedSource(deployment.home, home, container, image, execute);
 }
 
-/** Prove every old backup source against stopped containers, before creating a backup. */
+/** Prove the old service identity and persistent mounts before deployment. */
 export function assertStoppedCompose(compose, containerIds, image, execute, runtime) {
   const service = compose?.services?.dsh;
-  if (!service || !Array.isArray(service.volumes) || !Array.isArray(containerIds) || !containerIds.length || new Set(containerIds).size !== containerIds.length || containerIds.some(id => !/^[a-f0-9]{12,64}$/u.test(id))) throw new Error('缺少可核验的旧容器身份，拒绝备份。');
+  if (!service || !Array.isArray(service.volumes) || !Array.isArray(containerIds) || !containerIds.length || new Set(containerIds).size !== containerIds.length || containerIds.some(id => !/^[a-f0-9]{12,64}$/u.test(id))) throw new Error('缺少可核验的旧容器身份，拒绝部署。');
   const inspect = () => {
     const containers = JSON.parse(String(execute(['inspect', ...containerIds], { encoding: 'utf8' })));
-    if (!Array.isArray(containers) || containers.length !== containerIds.length || containerIds.some(id => containers.filter(container => container.Id?.startsWith(id)).length !== 1)) throw new Error('旧容器身份不完整，拒绝备份。');
+    if (!Array.isArray(containers) || containers.length !== containerIds.length || containerIds.some(id => containers.filter(container => container.Id?.startsWith(id)).length !== 1)) throw new Error('旧容器身份不完整，拒绝部署。');
     for (const container of containers) {
-      if (container.State?.Running !== false || container.State?.Restarting !== false || container.Config?.Image !== service.image || container.Config?.Labels?.['com.docker.compose.service'] !== 'dsh') throw new Error('旧容器未完全停止或镜像/服务身份不匹配，拒绝备份。');
-      for (const key of ['DSH_HOME', 'DSH_PROFILE']) if (!service.environment?.[key] || !container.Config.Env?.includes(`${key}=${service.environment[key]}`)) throw new Error('旧容器 home/profile 不匹配，拒绝备份。');
+      if (container.State?.Running !== false || container.State?.Restarting !== false || container.Config?.Image !== service.image || container.Config?.Labels?.['com.docker.compose.service'] !== 'dsh') throw new Error('旧容器未完全停止或镜像/服务身份不匹配，拒绝部署。');
+      for (const key of ['DSH_HOME', 'DSH_PROFILE']) if (!service.environment?.[key] || !container.Config.Env?.includes(`${key}=${service.environment[key]}`)) throw new Error('旧容器 home/profile 不匹配，拒绝部署。');
     }
     return containers;
   };
   const containers = inspect();
   const volumes = service.volumes.filter(volume => !volume.read_only || volume.target?.startsWith('/run/'));
-  if (!volumes.length) throw new Error('旧容器没有持久挂载，拒绝备份。');
+  if (!volumes.length) throw new Error('旧容器没有持久挂载，拒绝部署。');
   for (const container of containers) for (const volume of volumes) {
     const mount = container.Mounts?.find(item => item.Type === 'bind' && item.Destination === volume.target);
-    if (volume.type !== 'bind' || typeof volume.source !== 'string' || !mount || mount.RW !== !Boolean(volume.read_only)) throw new Error('旧容器持久挂载声明不匹配，拒绝备份。');
+    if (volume.type !== 'bind' || typeof volume.source !== 'string' || !mount || mount.RW !== !Boolean(volume.read_only)) throw new Error('旧容器持久挂载声明不匹配，拒绝部署。');
     const source = canonical(volume.source);
-    if (runtime.desktop ? !proveMountedSource(source, volume.target, container, image, execute) : canonical(mount.Source) !== source) throw new Error('旧容器持久挂载来源不匹配，拒绝备份。');
+    if (runtime.desktop ? !proveMountedSource(source, volume.target, container, image, execute) : canonical(mount.Source) !== source) throw new Error('旧容器持久挂载来源不匹配，拒绝部署。');
   }
   inspect();
 }

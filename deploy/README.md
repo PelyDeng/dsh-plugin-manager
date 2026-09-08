@@ -29,17 +29,11 @@ Windows 将最后一行换成 `.\build.ps1`。首次自动创建 `.local/env.con
 
 新归档使用内容摘要命名。发布目录同时保留上一份清单引用的已校验归档，供 pnpm 在替换旧依赖引用时解析；部署目标仍只来自新清单，不重新启用已停用的插件。
 
-构建期间旧服务继续运行。每次记录和备份位于 `.local/artifacts/source-release-<提交>-<操作 ID>/`；备份包含原运行配置、Compose 和停止服务后的持久挂载数据。产物准备前失败不停止服务；产物齐备后的挂载预检或安装失败保留现场，保持站点配置不变并执行 build 脚本加 `--resume`。备份失败恢复旧服务。恢复使用同一次已验证的镜像和归档，并核验 Docker 引擎身份；`--resume` 继续部署，不会把备份覆盖回运行数据。
-
-“备份运行数据”依据旧 Compose 的挂载执行全量 `tar.gz` 备份：包含数据根目录（默认 `.local/data`）中的 DSH 会话、插件持久数据、已安装依赖和插件 store/cache，以及独立挂载的 home、workspace、认证链接和 `/run/` 下的运行配置、插件配置及用户 patch。具体范围以旧 Compose 和备份 `mounts-*.json` 的源路径为准；父子路径重叠时只归档一次。只读插件发布包和离线依赖输入等非 `/run/` 挂载不纳入。备份不扫描整台服务器，也不会额外导出未挂载的外部数据库。
-
-备份文件位于上述操作目录的 `backup/runtime-*.tar.gz`。这一步包括压缩、归档可读性检查及 SHA-256 校验，会多次读取压缩包；大量小文件、较大的依赖缓存、gzip 压缩开销或较慢磁盘都会增加耗时。此时旧服务已停止，备份耗时计入停机窗口。备份包可能包含账号、会话及配置秘密，应按私有数据保存。
+构建期间旧服务继续运行。每次发布记录和产物位于 `.local/artifacts/source-release-<提交>-<操作 ID>/`。产物准备完成并通过挂载预检后，停止旧服务、核验容器及挂载，再安装并等待服务健康检查。停服核验失败时尝试恢复旧服务；安装失败保留现场，保持站点配置不变并执行 build 脚本加 `--resume`。恢复使用同一次已验证的镜像和归档，并核验 Docker 引擎身份；`--resume` 继续部署，不自动回滚业务数据。
 
 三平台共用 `.local/source-release.node.lock`，Linux shell 同时沿用可用的 `flock` 兼容旧入口。期间不要并行运行其他管理命令。构建子进程通过 IPC 报告完成、退出码一致且没有中断时释放源码锁，包含正常报告的构建失败；进程被强制中断或无法证明完整结束时保留。遇到遗留锁，先根据其中的主机、PID 和 workerPid 核实本机进程及子进程全部退出，再只清理这个 Node 锁文件；不要删除旧 `source-release.lock`、profile 锁或恢复记录。profile 的 `unlock` 命令不能代替此核查。
 
 原生 Linux 保留 host 网络；Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge。官方 DSH 保持 `127.0.0.1` 监听，管理器在容器唯一桥接 IPv4 地址的同端口通过 TCP 转发至 DSH；宿主只向 `127.0.0.1` 发布端口。同 Docker 网络属于信任边界，此设置不代表公网隔离。部署在停服前通过 `check-compose` 核验实际容器用户的挂载访问；若 prepared 后预检失败，修正访问条件并使用原配置加 `--resume`。macOS 新站点采用当前非 root 用户 UID/GID，已保存的配置不自动修改。新站点镜像架构按 Docker 引擎初始化；显式配置及旧站点的架构保持。
-
-原生 Linux 保留绝对路径去前导 `/` 的 tar 备份格式；Windows/macOS 和 Docker Desktop 的备份使用 `sources/<序号>` 前缀，并在同目录的 `mounts-*.json` 保存原路径映射。发布记录绑定归档及映射的 SHA-256，嵌套源只归档一次。源码 `deploy/scripts/backup.mjs` 的 `validateSourceBackupRestore(record, { image: record.previousRuntime?.containerImage ?? record.image })` 可在只读备份挂载和容器 tmpfs 中实际提取，输出内容摘要、权限与链接；官方 `/opt/dsh-runtime` 依赖链接须能在对应的不可变镜像内解析，并标记为外部运行依赖。这是备份恢复验证，不是数据回滚，也不写原数据。可复制命令与资源要求见[更新与恢复](../doc/first-deployment.md#更新与恢复)。
 
 标准插件的日常认证及启停只修改自身 `plugin.json`，然后执行 `apply-compose`；首次站点配置和旧 patch 迁移见[插件运行配置规范](../doc/plugin-configuration.md)。下方 `render-compose` 等基础操作用于自定义集成，不要求日常手工维护多份配置。
 

@@ -64,7 +64,7 @@ test('real Docker mount and stopped-home probes use an isolated disposable conta
   assert.deepEqual(readdirSync(home), []);
 });
 
-test('backup proof rejects missing, running, wrong-image and wrong native-source containers', t => {
+test('deployment stop proof rejects missing, running, wrong-image and wrong native-source containers', t => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-stopped-'));
   t.after(() => { assert.equal(dirname(root), resolve(tmpdir())); rmSync(root, { recursive: true, force: true }); });
   const id = 'a'.repeat(64), image = `sha256:${'b'.repeat(64)}`;

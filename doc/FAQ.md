@@ -97,4 +97,4 @@ Compose 部署脚本确认活动容器与 home 后，使用 `docker exec` 以容
 
 ## 旧服务尚未停止，为什么提示使用 --resume 或保留源码锁？
 
-镜像和归档准备完成后会先保存 prepared 记录，再检查挂载权限。因此即使权限预检在停服前失败，也要保持原配置与产物，用对应 build 脚本加 `--resume` 继续。强制中断后遗留的 `.local/source-release.node.lock` 则需要先核实本机持锁者及其子进程全部退出；profile 的 `unlock` 命令不处理源码锁。备份验证只在临时容器中提取，`--resume` 不会回滚业务数据。完整处理顺序见[更新与恢复](first-deployment.md#更新与恢复)。
+镜像和归档准备完成后会先保存 prepared 记录，再检查挂载权限。因此即使权限预检在停服前失败，也要保持原配置与产物，用对应 build 脚本加 `--resume` 继续。强制中断后遗留的 `.local/source-release.node.lock` 则需要先核实本机持锁者及其子进程全部退出；profile 的 `unlock` 命令不处理源码锁。`--resume` 不会回滚业务数据。完整处理顺序见[更新与恢复](first-deployment.md#更新与恢复)。
