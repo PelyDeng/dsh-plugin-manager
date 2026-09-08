@@ -1,6 +1,6 @@
 {
   "name": "dsh-closedoff-assistant",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "封闭化园区业务查询、个人对话历史与可视化助手",
   "license": "UNLICENSED",
   "private": true,

@@ -3,7 +3,7 @@
  * DSH 博客原文与确认提交桥接。使用 Typecho 原生内容组件，分离公开版和保存稿。
  * @package DshBlogBridge
  * @author DPL
- * @version 0.3.2
+ * @version 0.4.0
  * @link https://pelyblog.com/
  */
 if (!defined('__TYPECHO_ROOT_DIR__')) { exit; }
@@ -162,7 +162,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             $this->demand(($engines[$db->getPrefix() . $name] ?? '') === 'InnoDB', 'incompatible', 503);
         }
         $categories = $db->fetchAll($db->select('mid', 'name')->from('table.metas')->where('type = ?', 'category')->order('order', \Typecho\Db::SORT_ASC));
-        return ['protocolVersion' => 1, 'version' => '0.3.2', 'structuredSearch' => true, 'nativeDrafts' => true, 'management' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
+        return ['protocolVersion' => 1, 'version' => '0.4.0', 'structuredSearch' => true, 'nativeDrafts' => true, 'management' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
     }
     private function posts(array $input): array
     {

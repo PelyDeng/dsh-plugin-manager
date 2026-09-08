@@ -79,7 +79,7 @@ example、封闭化以及博客的普通文字新会话都使用这个默认模�
 
 如果宿主无法从会话日志中还原模型选择（缺少模型投影能力），或读取记录失败，就拒绝恢复，不会悄悄换模型。封闭化的新会话只在所选模型支持时使用插件配置的推理等级，旧会话保留记录中的设置。
 
-博客文章编辑器的专用写作仍使用 `models.text`，首次发送图片可切换至 `models.vision`；已有图片历史的续聊和分支沿用记录中的识图模型。服务商密钥与这些 provider/model 引用分开管理。若把博客 Bundle 注册的模型路由选为框架默认，使用它的站点必须保留该 Bundle；未安装私有插件的公共框架不会因此自动获得私有路由。细节见[博客宿主能力](plugins/dsh-blog-assistant/README.md#宿主能力)和[封闭化对话模型](plugins/dsh-closedoff-assistant/README.md#对话模型)。
+博客文章编辑器的专用写作仍使用 `models.text` / `models.vision`。普通对话由用户选择模型，图片提交要求所选模型支持图片；已有会话和分支沿用记录中的模型。服务商密钥与这些 provider/model 引用分开管理。若把博客 Bundle 注册的模型路由选为框架默认，使用它的站点必须保留该 Bundle；未安装私有插件的公共框架不会因此自动获得私有路由。细节见[博客宿主能力](plugins/dsh-blog-assistant/README.md#宿主能力)和[封闭化对话模型](plugins/dsh-closedoff-assistant/README.md#对话模型)。
 
 DeepSeek V4.1 Flash 临时模型使用公共框架提供的[模型声明](deploy/models/deepseek-v4.1-flash.json)，配置与到期处理见[公共 FAQ](doc/FAQ.md#如何添加-deepseek-v41-flash-临时模型)。
 
