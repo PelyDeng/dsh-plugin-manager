@@ -10,7 +10,6 @@ import { commandSpec, normalizeEnvironment } from '../../packages/plugin-manager
 import { inspectDocker, ensureDockerIdentity, assertStoppedCompose } from '../../packages/plugin-manager/src/docker-runtime.mjs';
 import { ensurePrivateDirectory, writePrivateFile } from '../../packages/plugin-manager/src/private-files.mjs';
 import { checkSourceNode } from './platform.mjs';
-import { backupSources, verifySourceBackup } from './backup.mjs';
 import { bootstrapSource, prepareWorkspaceDependencies } from './bootstrap.mjs';
 import { sourceArguments } from './release.mjs';
 import { frameworkVersion } from '../../scripts/version.mjs';
@@ -114,10 +113,10 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
   ensurePrivateDirectory(operation);
   const recordPath = resolve(operation, 'result.json');
   const record = resume ? json(recordPath) : { schemaVersion: 2, operation, revision, hostCommit, sitePath, siteHash: hash(sitePath), status: 'building', previous: active, previousRuntime: previous, runtime };
-  if (resume && (record.schemaVersion !== 2 || record.sitePath !== sitePath || record.siteHash !== hash(sitePath))) throw new Error('Resume requires the original unchanged site configuration. The saved release and backup are retained.');
+  if (resume && (record.schemaVersion !== 2 || record.sitePath !== sitePath || record.siteHash !== hash(sitePath))) throw new Error('Resume requires the original unchanged site configuration. The saved release inputs are retained.');
   if (record.runtime) ensureDockerIdentity(record.runtime, runtime);
   if (!resume && source) {
-    if (record.siteHash !== source.sha256) throw new Error('Framework input changed before its private backup.');
+    if (record.siteHash !== source.sha256) throw new Error('Framework input changed before saving the private release input.');
     writePrivateFile(resolve(operation, 'framework-input.conf'), source.bytes, { flag: 'wx' });
   }
   const persist = () => { save(recordPath, record); save(pointer, { operation, status: record.status }); };
@@ -211,21 +210,15 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
     if (candidate.containerImage !== record.image || resolve(root, candidate.manifest) !== record.manifest) throw new Error('Saved deployment configuration changed.');
     if (resume) step('恢复部署配置', process.execPath, [cli, 'render-compose', '--root', root, '--config', record.candidatePath, '--output', resolve(operation, 'resume-preflight')]);
     if (resume) step('核验容器挂载与权限', process.execPath, [record.runtime ? cli : resolve(root, 'deploy/scripts/deployment.mjs'), 'check-compose', '--root', root, '--config', record.candidatePath]);
-    if (record.backupComplete) verifySourceBackup(record, { image: record.image, desktop: runtime.desktop }, run);
-    if (record.previous && !record.backupComplete) {
-      const backup = resolve(operation, 'backup'); ensurePrivateDirectory(backup);
-      record.backup = backup; record.status = 'backing-up'; persist();
-      save(resolve(backup, 'deployment.json'), record.previousRuntime);
-      save(resolve(backup, 'active-compose.json'), record.previous);
-      copyFileSync(record.previous.path, resolve(backup, 'compose.json'));
+    // Older release records used backupComplete to record the same completed stop phase.
+    if (record.previous && !(record.stopComplete ?? record.backupComplete)) {
       const oldArgs = ['compose', '-p', record.previous.project, '-f', record.previous.path];
       step('停止旧服务', 'docker', [...oldArgs, 'stop', 'dsh']); stopped = true;
-      if (capture('docker', [...oldArgs, 'ps', '--status', 'running', '-q', 'dsh'])) throw new Error('The previous service is still running; backup refused.');
+      if (capture('docker', [...oldArgs, 'ps', '--status', 'running', '-q', 'dsh'])) throw new Error('The previous service is still running; deployment refused.');
       const oldCompose = json(record.previous.path);
       const containerIds = capture('docker', [...oldArgs, 'ps', '-a', '-q', 'dsh']).split(/\s+/).filter(Boolean);
       assertStoppedCompose(oldCompose, containerIds, record.image, (args, options) => run('docker', args, { stdio: 'pipe', encoding: 'utf8', ...options }), runtime);
-      const snapshot = buildStep('备份运行数据', () => backupSources({ compose: oldCompose, backupDir: backup, image: record.image, desktop: runtime.desktop }, run));
-      Object.assign(record, snapshot, { backupComplete: true }); persist();
+      record.stopComplete = true; persist();
     }
     record.status = 'applying'; persist(); installing = true;
     save(runtimePath, candidate);
@@ -234,6 +227,7 @@ export function release({ root = repositoryRoot, config, resume = false } = {}, 
     buildMessage(`发布已完成：${record.revision.slice(0, 12)}\n访问地址：${site.publicUrl}\n发布记录：${recordPath}`);
     return record;
   } catch (error) {
+    if (stopped && !installing) record.stopComplete = false;
     record.status = installing || prepared ? 'deployment-failed' : 'build-failed'; persist();
     if (stopped && !installing) step('恢复旧服务', 'docker', ['compose', '-p', record.previous.project, '-f', record.previous.path, 'up', '-d', '--wait', 'dsh']);
     console.error(`Release failed; inputs retained at ${operation}.${record.status === 'deployment-failed' ? ' Retry the saved deployment using your build script with --resume.' : ' Correct the build error and run your build script again.'}`);
