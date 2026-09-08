@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-manager-workspace",
-  "version": "0.14.4",
+  "version": "0.14.5",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.19.0",

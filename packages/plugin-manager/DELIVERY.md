@@ -4,14 +4,14 @@
 
 发布者可以附带最终归档的宿主验证记录，安装时显示已测目标、当前目标与范围差异。旧发布目录继续可用；没有记录表示包内未附测试结果，不等于不兼容。报告生成、导入和状态含义见随包 [VERIFICATION.md](VERIFICATION.md)。
 
-适用于 manager 0.14.4。部署者只需管理工具、匹配的官方 DSH、应用与认证插件各自的发布目录，以及作者提供的配置模板；无需作者源码。以下 `dsh-plugin-manager` 指已安装 CLI，本地工具目录安装时用 `pnpm exec dsh-plugin-manager`。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。
+适用于 manager 0.14.5。部署者只需管理工具、匹配的官方 DSH、应用与认证插件各自的发布目录，以及作者提供的配置模板；无需作者源码。以下 `dsh-plugin-manager` 指已安装 CLI，本地工具目录安装时用 `pnpm exec dsh-plugin-manager`。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。
 
 ## 1. 准备与组合
 
 核对提供方记录的工具、宿主版本及归档 SHA-256；包名不表示已发布到公共 registry。首次安装管理工具：
 
 ```sh
-pnpm add --ignore-workspace /path/to/plugin-manager-0.14.4.tgz
+pnpm add --ignore-workspace /path/to/plugin-manager-0.14.5.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
