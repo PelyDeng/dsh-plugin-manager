@@ -5,7 +5,7 @@ export function createConversationPage(api) {
   const labels = { ready: '可清理', busy: '运行中', legacy: '仅插件已移除', pending: '移除中', failed: '移除未完成' }
   const form = $('conversation-filters'), drawer = $('conversation-preview'), confirm = $('conversation-confirm')
   let plugins = [], pluginId = '', rows = [], selected = new Set(), offset = 0, total = 0, nextOffset = null
-  let epoch = 0, previewEpoch = 0, active = false, fresh = false, pending = false, preview = null, before = null, trigger = null
+  let epoch = 0, previewEpoch = 0, visit = 0, active = false, fresh = false, pending = false, preview = null, before = null, trigger = null
   const limit = () => Number($('conversation-limit').value)
   const notice = (text = '', error = false) => { $('conversation-notice').textContent = text; $('conversation-notice').classList.toggle('error', error) }
   const plugin = () => plugins.find(p => p.id === pluginId)
@@ -136,19 +136,20 @@ export function createConversationPage(api) {
   $('conversation-confirm-remove').addEventListener('click', async () => {
     if (pending || !fresh || !removalTargets.length) return
     pending = true; controls(); $('conversation-confirm-remove').disabled = true; $('conversation-cancel').disabled = true
-    const current = epoch, ids = removalTargets.map(row => row.id)
+    const current = epoch, currentVisit = visit, ids = removalTargets.map(row => row.id)
     $('conversation-remove-status').textContent = `正在处理 ${ids.length} 条会话…`
     try {
       const result = await api('conversations/remove', { pluginId, ids })
       if (current !== epoch || !active) return
       const failures = result.results.filter(row => !['removed', 'alreadyRemoved'].includes(row.status))
       confirm.close(); pending = false; await enter()
+      if (currentVisit !== visit || !active || !fresh) return
       notice(`已移除 ${ids.length - failures.length} 条，未完成 ${failures.length} 条。${failures.map(row => `${removalTargets.find(r => r.id === row.id)?.title ?? row.id}：${row.message}`).join('；')}`, failures.length > 0)
     } catch (error) {
       if (current === epoch && active) { confirm.close(); selected.clear(); fresh = false; failure(error); notice('结果待核实，请刷新后查看会话状态；未完成项可以重试。', true) }
     } finally { pending = false; $('conversation-confirm-remove').disabled = false; $('conversation-cancel').disabled = false; controls() }
   })
-  function leave() { active = false; epoch++; selected.clear(); fresh = false; closePreview(); if (confirm.open) confirm.close() }
+  function leave() { active = false; epoch++; visit++; selected.clear(); fresh = false; closePreview(); if (confirm.open) confirm.close() }
   function reset() { leave(); rows = []; plugins = []; pluginId = ''; total = 0; offset = 0; nextOffset = null; removalTargets = []; form.reset(); $('conversation-plugins').replaceChildren(); $('conversation-rows').replaceChildren(); $('conversation-confirm-items').replaceChildren(); $('conversation-preview-title').textContent = ''; $('conversation-preview-meta').textContent = ''; notice() }
   return { enter, leave, reset }
 }
