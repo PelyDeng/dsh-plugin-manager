@@ -27,7 +27,7 @@ ZHIPU_API_KEY=
 
 地址不带路径或末尾斜杠，信任项不带协议或路径。自定义端口时同时核对 URL 与反向代理。设置访问地址不会自动添加信任域名；控制台接口 403 的排查见 [FAQ](FAQ.md#控制台能打开但模型和插件报-http-403-怎么办)。
 
-文件按字面量 `KEY=VALUE` 解析，不执行 shell，不展开变量；数组和对象使用单行 JSON，含引号的字符串可用 JSON 字符串表示。重复字段、未知字段或非法类型会拒绝。相对路径从显式项目 root 解析。Linux/macOS 私有输入必须是普通文件且权限为 `0600` 或更严格；Windows 通过 ACL 保护新建的框架私有配置、凭据投影、日志和操作目录。已有用户文件及数据目录不会被递归改权，手工提供的私有输入仍需部署者限制其 ACL。
+文件按字面量 `KEY=VALUE` 解析，不执行 shell，不展开变量；数组和对象使用单行 JSON，含引号的字符串可用 JSON 字符串表示。重复字段、未知字段或非法类型会拒绝。相对路径从明确指定的项目根目录（root）计算。Linux/macOS 私有输入必须是普通文件且权限为 `0600` 或更严格；Windows 通过 ACL 保护新建的框架私有配置、供进程读取的凭据文件、日志和操作目录。已有用户文件及数据目录不会被递归改权，手工提供的私有输入仍需部署者限制其 ACL。
 
 ## 密钥由谁管理
 
@@ -52,7 +52,7 @@ ZHIPU_API_KEY=
 | 镜像 | 平台 `linux/amd64`、基础镜像 `docker.io/library/node:24-bookworm-slim`；Harbor 关闭，上游回退开启 |
 | 保持留空 | 模型密钥、仓库账号密码、生成的镜像/manifest、可选宿主来源；home/workspace/authUrlFile 等从入口与数据根派生 |
 
-模板中的 auth/example 选集用于源码示例站点。独立归档消费按自己的清单调整；留空选集沿用发布清单。手工更改端口不会同步改写已填的 URL，需同时核对。
+模板中的 auth/example 选集用于源码示例站点。部署独立安装包时，按自己的清单调整；留空选集沿用发布清单。手工更改端口不会同步改写已填的 URL，需同时核对。
 
 | 类别 | 字段 |
 | --- | --- |
@@ -66,7 +66,7 @@ ZHIPU_API_KEY=
 
 `DSH_INSTANCES` 仅支持按插件 ID 引用 `settingsFile`、`runtimeConfig` 和 `configRevision`。注册插件的业务参数继续由插件自己的 `plugin.json`、运行配置及 Schema 管理；框架不接管其密钥和业务规则。账号、会话、历史及官方动态模型设置也不迁入此文件。
 
-镜像仓库账号和密码仅用于临时 Docker 登录，不传入 DSH。推送部署镜像时，凭据目标必须与 `DSH_PUBLISH_IMAGE` 的仓库主机一致；未填写凭据时沿用 Docker 已有登录。部署 JSON、Compose 和普通操作记录仅保存模型凭据投影的文件路径与摘要，原值保存在 `.local/secrets/framework-credentials/` 的私有文件中，并以只读挂载提供给容器。备份恢复时须保留这些被引用的原文件，不要手改或清理它们。
+镜像仓库账号和密码仅用于临时 Docker 登录，不传入 DSH。推送部署镜像时，凭据目标必须与 `DSH_PUBLISH_IMAGE` 的仓库主机一致；未填写凭据时沿用 Docker 已有登录。部署 JSON、Compose 和普通操作记录仅保存供容器读取的模型凭据文件路径与摘要，原值保存在 `.local/secrets/framework-credentials/` 的私有文件中，并以只读挂载提供给容器。备份恢复时须保留这些被引用的原文件，不要手改或清理它们。
 
 源码入口自动创建新站点配置时，`DSH_IMAGE_PLATFORM` 按本机 Docker 引擎选择 `linux/amd64` 或 `linux/arm64`，并写入私有文件；Windows/Linux 的容器 UID/GID 为 1000，macOS 非 root 用户采用当前 UID/GID。公共模板和独立镜像入口的通用平台值仍为 `linux/amd64`。已有文件、显式值及旧站点导入值保持，不重新套用新默认值，也不会迁移或递归改权旧数据。Docker endpoint 与引擎身份记录在生成的发布记录中，不能切换引擎后继续原恢复操作。
 
@@ -84,4 +84,4 @@ ZHIPU_API_KEY=
 
 默认入口首次发现没有 `.local/env.conf` 时，优先导入 `.local/site.json`，其次导入 `.local/deployment.json`，保留已解析的数据路径、profile 和原文件。旧 `hostImageConfig` 的镜像字段一并导入，之后以统一文件为准。无法表示的旧字段拒绝自动导入，可以继续显式传原 JSON，不能静默丢弃。
 
-`.local/deployment.json`、清单、Compose 和官方 patch 是生成输入，不替代人工入口。已有未完成部署继续使用原操作记录中的文件，不在恢复期间迁移格式。`--resume` 要求原输入和凭据投影未变化；源码操作目录的 `framework-input.conf` 保存本次 env 原始字节；原文件丢失时从此私有备份恢复到原路径，不用新密钥重建旧操作。配置格式导入不搬迁数据，更换数据路径仍须遵守[正式迁移流程](migration.md)。
+`.local/deployment.json`、清单、Compose 和官方 patch 是生成输入，不替代人工入口。已有未完成部署继续使用原操作记录中的文件，不在恢复期间迁移格式。`--resume` 要求原输入和供进程读取的凭据文件未变化；源码操作目录的 `framework-input.conf` 保存本次 env 原始字节；原文件丢失时从此私有备份恢复到原路径，不用新密钥重建旧操作。配置格式导入不搬迁数据，更换数据路径仍须遵守[正式迁移流程](migration.md)。

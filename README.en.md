@@ -2,9 +2,9 @@
 
 [中文](README.md) · [Visual tour (Chinese)](doc/quick-tour.md) · [Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases) · [Report an issue](https://github.com/PelyDeng/dsh-plugin-manager/issues)
 
-**An AI application development and deployment framework built on DeepSeek Harness, helping individual developers and small teams build their own plugins and manage installation, updates, and operations consistently.**
+**Build your own DeepSeek Harness apps and manage their installation, updates, and configuration in one place.**
 
-Build plugins and AI applications in your own repository using the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) ecosystem: knowledge assistants, reporting assistants, business tools, or agent applications with their own pages. The framework provides shared conventions for integration, packaging, installation, updates, configuration, and lifecycle management. Combine multiple plugins into a deployment for personal use or delivery to teams and customers.
+Build plugins and AI applications in your own repository using the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) ecosystem: knowledge assistants, reporting assistants, business tools, or agent applications with their own pages. The framework packages and installs your plugins, manages their settings, and starts, stops, or updates them. Combine multiple plugins into a deployment for personal use or delivery to teams and customers.
 
 Use official Cordis plugins, Bundles, and Agents without modifying DSH or manager source. Develop and package plugins independently, deploy releases without author source code, and optionally reuse shared login and app access control to reduce repeated development and operational work. Integration requires supported plugin declarations and compatibility verification against the target host version.
 
@@ -17,7 +17,7 @@ Use official Cordis plugins, Bundles, and Agents without modifying DSH or manage
 | Component | Responsibility |
 | --- | --- |
 | Official DeepSeek Harness | Plugin runtime, Bundle composition, Agents, models, and sessions |
-| DSH Plugin Manager | Plugin declarations, packaging, release composition, configuration, installation, and controlled lifecycle |
+| DSH Plugin Manager | Plugin declarations, packaging, release composition, configuration, installation, startup, and shutdown |
 | Optional `dsh-auth` | Accounts, login, and app access grants |
 | Your app | Tools, pages, business rules, and data authorization |
 
@@ -35,7 +35,7 @@ cd dsh-plugin-manager
 ./build.sh
 ```
 
-Use `.\build.ps1` for the last command in Windows PowerShell; Bash is not required on Windows. macOS and Linux use `./build.sh`. The existing `bash deploy/build.sh` entry remains compatible. Only local Docker unix/npipe endpoints are accepted; remote or TCP endpoints and Windows containers are rejected. A real Docker site deployment on macOS has not been validated; CI tests do not establish deployment acceptance.
+Use `.\build.ps1` for the last command in Windows PowerShell; Bash is not required on Windows. macOS and Linux use `./build.sh`. The existing `bash deploy/build.sh` entry remains compatible. Only local Docker unix/npipe endpoints are accepted; remote or TCP endpoints and Windows containers are rejected. A real Docker site deployment on macOS has not been validated; passing CI does not show that a site has been deployed successfully.
 
 1. Open `http://127.0.0.1:7902/auth`, sign in using the initial administrator procedure in the [auth guide](plugins/dsh-auth/README.md), and change the initial password.
 2. Create a regular account and grant it access to `example`.
@@ -62,7 +62,7 @@ pnpm exec dsh-plugin-manager list --root /path/to/author-project --package .
 pnpm exec dsh-plugin-manager pack --root /path/to/author-project --package . --output .local/artifacts/release
 ```
 
-External projects currently support pnpm single-package projects and release deployment. Source-free release composition lets an operator combine archives from multiple authors. Internal `plugins/*` workspaces remain supported. See the [author guide](doc/plugin-development.md).
+External projects currently support pnpm single-package projects and release deployment. Operators can combine packages from several authors without needing their source code. Internal `plugins/*` workspaces remain supported. See the [author guide](doc/plugin-development.md).
 
 ## Update and verify
 
@@ -77,7 +77,7 @@ On Windows, use `.\build.ps1` again. Failures after release inputs are prepared 
 
 The root `package.json` supplies one release version for manager, kit, auth, and example; independent apps and the official host keep their own versions. See [version management](doc/versioning.md).
 
-Host compatibility is verified against specific versions; arbitrary community plugins and host versions are not automatically supported. Use the host requirements in the release notes, and configure your own model provider before starting a conversation.
+Compatibility checks cover specific host versions. Other host versions and community plugins need their own checks. Use the host requirements in the release notes, and configure your own model provider before starting a conversation.
 
 ## Contribute
 
