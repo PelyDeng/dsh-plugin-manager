@@ -4,7 +4,7 @@ DSH 应用接入与交付管理 CLI。独立包和内部 `plugins/*` 共用 buil
 
 ## 安装与作者操作
 
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。在工具目录执行 `pnpm add --ignore-workspace /path/to/plugin-manager-0.3.4.tgz`，随后使用 `pnpm exec dsh-plugin-manager`。包名不表示已发布到公共 registry。本 README 随工具版本交付。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。在工具目录执行 `pnpm add --ignore-workspace /path/to/plugin-manager-0.3.5.tgz`，随后使用 `pnpm exec dsh-plugin-manager`。包名不表示已发布到公共 registry。本 README 随工具版本交付。
 
 每个项目操作要求 `--root`；相对配置、home 和产物路径相对这个根解析。独立作者包根需有 package.json：有效 name/version、main、files、README、scripts.build/check、官方 dsh.bundle.patch，以及 `deepseekPlugin: { "schemaVersion": 3, "id": "my-plugin" }`。页面、探针、权限、认证与 kit 均不强制要求。构建产物可以由 build 生成。
 
@@ -47,6 +47,8 @@ Docker 实例通过 `apply-compose --root <项目根> --config <deployment.json>
 ## 发布物宿主验证
 
 自 0.3.3 起支持可选验证记录及 `compose-release --verification-report <JSON>`。pack 只记录构建输入，测试运行器在最终 tgz 上验证后输出报告；安装提示不新增版本硬门槛。完整流程、报告字段和证据边界见 [VERIFICATION.md](VERIFICATION.md)。
+
+源码仓库提供根入口 `bash test-report.sh`，串联 auth/example 打包、真实宿主与本地模型替身测试、报告交付；需要已构建的官方 CLI，不执行站点部署。具体前置条件和输出目录见上述文档。
 
 ## 框架配置文件
 
