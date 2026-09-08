@@ -2,6 +2,20 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {shouldSendChatEnter} from '../web/chat.js'
 import {chatTurns} from '../web/chat-turns.js'
+import {projectChat} from '../src/chat-history.mjs'
+
+test('tool errors without optional diagnostic metadata stay failed in history and grouped answers',()=>{
+  const events=[{type:'turn/start',seq:0,time:0,data:{turn:1}}]
+  for(const [callId,isError,error] of [['delete',true,undefined],['legacy',false,{code:'FAIL'}],['search',false,undefined]]){
+    events.push({type:'tool/call',seq:events.length,time:1,data:{turn:1,callId,name:callId}})
+    events.push({type:'tool/result',seq:events.length,time:2,data:{turn:1,message:{source:{kind:'tool',callId},content:[{type:'tool-result',isError,content:[{type:'text',text:'PRIVATE-RESULT'}]}]},...(error?{error}:{})}})
+  }
+  const result=projectChat(events,[],{isAppendSurfaceEvent:()=>false})
+  assert.deepEqual(result.messages.map(m=>m.status),['failed','failed','succeeded'])
+  const grouped=chatTurns([{id:'user',role:'user',text:'操作'},...result.messages])
+  assert.deepEqual(grouped[1].tools.map(m=>m.status),['failed','failed','succeeded'])
+  assert.ok(!JSON.stringify(grouped).includes('PRIVATE-RESULT'))
+})
 
 test('one answer per user turn retains tools, final feedback target and exact reasoning source',()=>{
   const input=[{id:'u1',role:'user',text:'今天有哪些文章'},

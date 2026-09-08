@@ -17,7 +17,7 @@ export function projectChat(events,requests,sdk) {
       messages.push(node);tools.set(data.callId,node)
     }
     if(event.type==='tool/result'){
-      const node=tools.get(data.message.source.callId);if(node)node.status=data.error?'failed':'succeeded'
+      const node=tools.get(data.message.source.callId);if(node)node.status=data.error||data.message.content.some(block=>block.type==='tool-result'&&block.isError===true)?'failed':'succeeded'
     }
     if(event.type==='llm/retry')messages.push({id:'retry-'+event.seq,role:'status',seq:event.seq,time:event.time,turn:turn?.turn,text:'模型请求失败，正在重试'})
     if(event.type==='assistant/attempt'){
