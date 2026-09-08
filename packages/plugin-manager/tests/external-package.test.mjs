@@ -86,7 +86,14 @@ test('repository packaging reports build, check and verified pack separately for
   const pack = output => spawnSync(process.execPath, [script, '--root', workspace, '--plugins', 'all', '--output', output], {
     encoding: 'utf8', timeout: 60000, env: { ...process.env, DSH_BUILD_PROGRESS: '1' },
   });
-  const events = result => result.stdout.split(/\r?\n/).filter(line => line.startsWith('DSH_BUILD_PROGRESS ')).map(line => JSON.parse(line.slice('DSH_BUILD_PROGRESS '.length)));
+  const events = result => result.stdout.split(/\r?\n/).filter(line => line.startsWith('DSH_BUILD_PROGRESS ')).map(line => {
+    const event = JSON.parse(line.slice('DSH_BUILD_PROGRESS '.length));
+    if (['done', 'failed'].includes(event.type)) {
+      assert.ok(Number.isFinite(event.elapsedMs) && event.elapsedMs >= 0, 'completed steps include their measured duration');
+    } else assert.equal(event.elapsedMs, undefined);
+    const { elapsedMs, ...identity } = event;
+    return identity;
+  });
   const result = pack('.local/success'); ok(result);
   const labels = ['安装插件依赖', ...['alpha', 'beta'].flatMap(id => ['构建', '检查', '打包'].map(task => `${task}插件 ${id}`))];
   assert.deepEqual(events(result), labels.flatMap(label => [{ type: 'start', label }, { type: 'done', label }]));
