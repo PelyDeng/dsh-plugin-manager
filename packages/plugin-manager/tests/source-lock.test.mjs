@@ -16,12 +16,15 @@ function fixture(t) {
   return { root, put, lock, record };
 }
 
-function oldBootLock(f) {
+function recoveryLock(f) {
   const identity = sourceRecoveryIdentity();
-  assert.ok(identity.bootId, 'native boot identity must be available');
-  // Fixture representing a lock from an earlier boot; not evidence of a real machine reboot.
+  const supported = ['linux', 'win32'].includes(process.platform);
+  if (supported) assert.ok(identity.bootId, 'native boot identity must be available');
+  else assert.equal(identity.bootId, undefined, 'unsupported platforms must not invent a boot identity');
+  // Simulate an earlier boot only where recovery supports a native boot identity.
   f.put('.local/source-release.node.lock', { pid: process.pid, workerPid: process.pid, host: hostname(), createdAt: new Date().toISOString(), token: 'retained-token',
-    recovery: { ...identity, bootId: process.platform === 'linux' ? '00000000-0000-0000-0000-000000000000' : '2000-01-01T00:00:00.000Z' } });
+    recovery: { ...identity, ...(supported ? { bootId: process.platform === 'linux' ? '00000000-0000-0000-0000-000000000000' : '2000-01-01T00:00:00.000Z' } : {}) } });
+  return supported;
 }
 
 test('doctor and recovery help need no preflight, source update, dependencies or local directory', async t => {
@@ -37,12 +40,14 @@ test('doctor and recovery help need no preflight, source update, dependencies or
 
 test('build and recovery share one resume decision and preserve saved inputs', t => {
   const f = fixture(t);
+  f.put('build.sh', '#!/usr/bin/env bash\n'); f.put('build.ps1', '# PowerShell entry\n');
+  const command = process.platform === 'win32' ? '.\\build.ps1' : 'bash build.sh';
   for (const status of ['building', 'build-failed', 'ready', 'prepared', 'backing-up', 'applying', 'deployment-failed']) {
     f.record(status);
     const bytes = readFileSync(resolve(f.root, '.local/source-release.json'));
     const report = inspectSourceLock(f.root);
     assert.equal(report.status, status);
-    assert.equal(report.next.endsWith(' --resume'), needsSourceResume(status));
+    assert.equal(report.next, command + (needsSourceResume(status) ? ' --resume' : ''));
     assert.deepEqual(readFileSync(resolve(f.root, '.local/source-release.json')), bytes);
   }
   f.record('unknown'); assert.match(inspectSourceLock(f.root).reasons.join(), /发布记录无效/);
@@ -72,20 +77,27 @@ test('legacy, foreign-host, malformed and incomplete locks remain untouched', t 
   }
 });
 
-test('verified reboot recovery archives exact lock bytes and preserves every other state file', t => {
-  const f = fixture(t); oldBootLock(f); f.record('deployment-failed');
+test('reboot recovery requires native boot identity and preserves every other state file', t => {
+  const f = fixture(t), supported = recoveryLock(f); f.record('deployment-failed');
   for (const path of ['.local/source-release.lock', '.local/data/profile/lock.json', '.local/data/profile/pending.json']) f.put(path, 'preserve');
   const bytes = readFileSync(f.lock), record = readFileSync(resolve(f.root, '.local/source-release.json'));
-  unlockSource(f.root);
-  assert.equal(existsSync(f.lock), false);
   const directory = resolve(f.root, '.local/artifacts/source-lock-recovery');
-  assert.deepEqual(readFileSync(resolve(directory, readdirSync(directory)[0])), bytes);
+  if (supported) {
+    unlockSource(f.root);
+    assert.equal(existsSync(f.lock), false);
+    assert.deepEqual(readFileSync(resolve(directory, readdirSync(directory)[0])), bytes);
+  } else {
+    assert.match(inspectSourceLock(f.root).reasons.join(), /缺少.*启动身份/);
+    assert.throws(() => unlockSource(f.root), /无法安全解锁/);
+    assert.deepEqual(readFileSync(f.lock), bytes);
+    assert.equal(existsSync(directory), false);
+  }
   assert.deepEqual(readFileSync(resolve(f.root, '.local/source-release.json')), record);
   for (const path of ['.local/source-release.lock', '.local/data/profile/lock.json', '.local/data/profile/pending.json']) assert.equal(readFileSync(resolve(f.root, path), 'utf8'), 'preserve');
 });
 
 test('recovery and new deployments both refuse a held metadata control lock', t => {
-  const f = fixture(t); oldBootLock(f); f.put('.local/source-release.control.lock', 'held');
+  const f = fixture(t); recoveryLock(f); f.put('.local/source-release.control.lock', 'held');
   const bytes = readFileSync(f.lock);
   assert.throws(() => acquireSourceLock(f.root), /元数据/);
   assert.throws(() => unlockSource(f.root), /元数据/);
@@ -94,7 +106,7 @@ test('recovery and new deployments both refuse a held metadata control lock', t 
 });
 
 test('unreadable deployment state and unsafe backup paths prevent mutation', t => {
-  const f = fixture(t); oldBootLock(f); f.put('.local/source-release.json', '{bad json');
+  const f = fixture(t); recoveryLock(f); f.put('.local/source-release.json', '{bad json');
   const bytes = readFileSync(f.lock);
   assert.throws(() => unlockSource(f.root), /无法安全解锁/);
   f.record('building'); f.put('.local/artifacts/source-lock-recovery', 'not a directory');

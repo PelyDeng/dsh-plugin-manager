@@ -76,7 +76,7 @@ function releaseState(root) {
 
 function buildCommand(root) {
   return process.platform === 'win32' ? (existsSync(resolve(root, 'build.ps1')) ? '.\\build.ps1' : '.\\deploy\\build.ps1')
-    : (existsSync(resolve(root, 'build.sh')) ? 'sh build.sh' : 'bash deploy/build.sh');
+    : (existsSync(resolve(root, 'build.sh')) ? 'bash build.sh' : 'bash deploy/build.sh');
 }
 
 /** No time-based expiry and no PID-only recovery: absence of the managed groups is required. */
