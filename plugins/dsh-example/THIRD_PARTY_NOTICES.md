@@ -171,3 +171,7 @@ LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
+
+## DeepSeek Harness UI glyphs
+
+Public UI glyphs retain their original geometry. See [media/LICENSE.txt](web/media/LICENSE.txt) for the upstream attribution and MIT license. Generic account/send outlines follow the product owner supplied reference.

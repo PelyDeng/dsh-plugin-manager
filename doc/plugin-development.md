@@ -15,16 +15,16 @@
 
 ### 1. 取得并安装工具
 
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者交付的 manager 0.3.4 tgz；需要统一身份时再取得 kit 0.1.2 tgz，按交付 SHA-256 核对文件。已公开归档见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)，目标版本没有附件时按下方源码步骤构建，不假定 npm 已发布。以下命令安装本地归档。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者交付的 manager 0.3.5 tgz；需要统一身份时再取得 kit 0.1.2 tgz，按交付 SHA-256 核对文件。已公开归档见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)，目标版本没有附件时按下方源码步骤构建，不假定 npm 已发布。以下命令安装本地归档。
 
 在工具目录执行，把占位路径替换成实际文件的绝对路径：
 
 ```sh
-pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.3.4.tgz"
+pnpm add --ignore-workspace "/absolute/path/plugin-manager-0.3.5.tgz"
 pnpm exec dsh-plugin-manager --version
 ```
 
-**预期**：输出 manager 0.3.4。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
+**预期**：输出 manager 0.3.5。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
 
 ### 2. 选择示例，建立自己的仓库
 
@@ -107,7 +107,7 @@ pnpm list:plugins
 
 ## 复制完整问答应用到独立仓库
 
-复制 `plugins/dsh-example` 中的源码、scripts、web、knowledge、examples、Bundle、README/LICENSE、package.json、tsconfig 与 tsdown 配置；不复制 node_modules、dist、数据库和 .local。选择一个未加入原框架 workspace 的新包根。
+复制 `plugins/dsh-example` 中的源码、scripts、web、knowledge、examples、skills、Bundle、README/LICENSE、package.json、tsconfig 与 tsdown 配置；不复制 node_modules、dist、数据库和 .local。选择一个未加入原框架 workspace 的新包根。问答视觉与交互遵循随包 [聊天风格 skill](../plugins/dsh-example/skills/dsh-chat-style/SKILL.md)，包括折叠思考预览、流式更新和回答工具栏。
 
 1. 在作者 package.json 删除 `@dsh-plugin-manager/plugin-kit` 的 `workspace:*` 开发依赖，再在作者根执行 `pnpm add --ignore-workspace --save-dev <kit-tgz绝对路径>`。保留 tsdown 内嵌 kit，宿主依赖保持 peer。
 2. 删除 scripts.clean 的原仓库相对入口，或换成只清理本包构建目录的实现。不要把数据目录加入清理命令。

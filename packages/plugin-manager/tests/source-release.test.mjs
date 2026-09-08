@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -16,7 +16,8 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 const defaults = JSON.parse(readFileSync(new URL('../../../deploy/config/site.defaults.json', import.meta.url)));
 
 function fixture(t, { fresh = false, fail } = {}) {
-  const root = mkdtempSync(resolve(tmpdir(), 'source-release-'));
+  // Windows runners can expose TEMP through an 8.3 alias; production paths are canonical.
+  const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'source-release-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const put = (path, value) => { path = resolve(root, path); mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value), { mode: 0o600 }); };
   const artifacts = resolve(root, '.local/artifacts');
