@@ -7,7 +7,6 @@ import { createHash } from 'node:crypto';
 import { release, validateBase } from '../../../deploy/scripts/build.mjs';
 import { loadSite } from '../../../deploy/scripts/site.mjs';
 import { renderFrameworkConfig } from '../src/framework-config.mjs';
-import { tarCommand } from '../src/state.mjs';
 
 const hostCommit = 'a'.repeat(40), revision = 'b'.repeat(40);
 const base = `registry.test/dsh@sha256:${'1'.repeat(64)}`, target = `registry.test/dsh@sha256:${'2'.repeat(64)}`;
@@ -69,17 +68,8 @@ function fixture(t, { fresh = false, fail } = {}) {
       return JSON.stringify([{ Id: 'c'.repeat(64), State: { Running: false, Restarting: false }, Config: { Image: service.image, Labels: { 'com.docker.compose.service': 'dsh' }, Env: ['DSH_HOME=/data/dsh-home', 'DSH_PROFILE=web'] }, Mounts: [{ Type: 'bind', Source: runtimeData, Destination: '/data', RW: true }] }]);
     }
     if (bin === 'docker' && args[0] === 'image') return JSON.stringify([images.get(args[2]) ?? builtInfo]);
-    if (bin === 'docker' && args[0] === 'run' && args.includes('tar')) {
-      if (args.includes('-czf')) {
-        const output = args.find(value => value.includes('target=/backup')).match(/source=(.*),target=\/backup/)[1];
-        put(resolve(output, args[args.indexOf('-czf') + 1].split('/').at(-1)), 'backup');
-      }
-      return 'sources/0/\nsources/0/marker.txt\n';
-    }
     if (bin === 'docker' && args.includes('--volumes-from')) return readFileSync(resolve(runtimeData, args.at(-1).slice('/data/'.length)), 'utf8');
     if (bin === 'docker' && args[0] === 'run') return '0.2.3';
-    if (bin === tarCommand && args[0] === '-czf') put(args[1], 'backup');
-    if (bin === tarCommand && args.includes('-tzf')) return runtimeData.replace(/^\/+/, '') + '/marker.txt\n';
     return '';
   };
   const buildHost = () => { calls.push(['build-host']); return { imageId: builtId, resultFile: resolve(artifacts, 'host-image.json') }; };
@@ -126,14 +116,17 @@ test('missing pnpm is prepared locally at the pinned version without changing th
   assert.equal(process.env.PATH, originalPath);
 });
 
-test('legacy update preserves site values, copies old references and backs up before applying', t => {
+test('legacy update preserves data and site values and applies immediately after proving the stop', t => {
   const f = fixture(t);
   assert.equal(release({ root: f.root }, f.execute, f.buildHost).status, 'ready');
   const stop = f.calls.findIndex(call => call.includes('stop'));
   const push = f.calls.findIndex(call => call[0] === 'docker' && call[1] === 'push');
-  const backup = f.calls.findIndex(call => call.includes('-czf'));
   const apply = f.calls.findIndex(call => call.includes('apply-compose'));
-  assert.ok(push < stop && stop < backup && backup < apply);
+  const proof = f.calls.findIndex(call => call[0] === 'docker' && call[1] === 'inspect');
+  assert.ok(push < stop && stop < proof && proof < apply);
+  assert.equal(f.calls.some(call => call.includes('-czf') || call.includes('-tzf')), false);
+  assert.equal(existsSync(resolve(f.result().operation, 'backup')), false);
+  assert.equal(readFileSync(resolve(f.root, 'runtime-data/marker.txt'), 'utf8'), 'retained runtime');
   const updated = JSON.parse(readFileSync(f.config));
   assert.equal(updated.publicOrigin, 'https://example.test');
   assert.equal(updated.containerImage, target);
@@ -147,7 +140,7 @@ test('repeated execution keeps the site file and uses the established deployment
   release({ root: f.root }, f.execute, f.buildHost);
   assert.equal(f.calls.filter(call => call[0] === 'build-host').length, 1);
   assert.equal(readFileSync(resolve(f.root, '.local/env.conf'), 'utf8'), site);
-  assert.ok(f.result().backupComplete);
+  assert.equal(f.result().stopComplete, true);
 });
 
 test('a partial site override uses the same effective paths on repeated deployments', t => {
@@ -246,12 +239,39 @@ test('a new site saves the engine architecture while existing preferences remain
   assert.deepEqual(readFileSync(first.sitePath), bytes);
 });
 
-test('backup failure restarts the unchanged old service', t => {
-  const f = fixture(t, { fail: (bin, args) => args.includes('-czf') });
+test('stop verification failure restarts the unchanged old service and is checked again on resume', t => {
+  let denied = true;
+  const f = fixture(t, { fail: (bin, args) => denied && bin === 'docker' && args[0] === 'inspect' });
   assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
   assert.equal(readFileSync(f.config, 'utf8'), f.original);
   assert.equal(f.calls.some(call => call.includes('apply-compose')), false);
   assert.ok(f.calls.at(-1).includes('up'));
+  assert.equal(f.result().stopComplete, false);
+  denied = false;
+  release({ root: f.root, resume: true }, f.execute, f.buildHost);
+  assert.equal(f.calls.filter(call => call.includes('stop')).length, 2);
+  assert.equal(f.result().status, 'ready');
+});
+
+test('resume accepts older stop records without requiring their archive files or rechecking a replaced container', t => {
+  for (const completed of [false, true]) {
+    let failApply = true;
+    const f = fixture(t, { fail: (bin, args) => failApply && args.includes('apply-compose') });
+    assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
+    const saved = f.result();
+    delete saved.stopComplete;
+    Object.assign(saved, { status: completed ? 'applying' : 'backing-up', backupComplete: completed, backupArchive: '/missing/legacy.tar.gz' });
+    f.put(resolve(saved.operation, 'result.json'), saved);
+    f.put('.local/source-release.json', { operation: saved.operation, status: saved.status });
+    f.put(resolve(saved.operation, 'backup/existing-file'), 'preserve existing files');
+    failApply = false;
+    const before = f.calls.length;
+    assert.equal(release({ root: f.root, resume: true }, f.execute, f.buildHost).status, 'ready');
+    const calls = f.calls.slice(before);
+    assert.equal(calls.some(call => call.includes('stop')), !completed);
+    assert.equal(calls.some(call => call.includes('-czf') || call.includes('-tzf')), false);
+    assert.equal(readFileSync(resolve(saved.operation, 'backup/existing-file'), 'utf8'), 'preserve existing files');
+  }
 });
 
 test('failed first startup resumes the original artifacts without rebuilding or deleting data', t => {

@@ -51,7 +51,7 @@ Windows 使用 `node deploy/scripts/set-api-key.mjs --config .local/deployment.j
 | `deploy/config/site.defaults.json` | 源码一键入口的通用默认值 | 是 |
 | `.local/deployment.json`、清单及 Compose | 脚本生成的本次部署输入 | 否 |
 | 各插件 `plugin.json` / runtimeConfig | 插件自己的启停、认证及业务配置 | 否，运行实例私有 |
-| `.local/secrets/`、`.local/artifacts/` | 私有凭据投影、备份和部署记录 | 否 |
+| `.local/secrets/`、`.local/artifacts/` | 私有凭据投影、产物和部署记录 | 否 |
 
 首次运行自动创建私有配置并填写实际默认值；已有文件不覆盖，旧 JSON 导入保留原文件和解析路径。通常只需核对公网 URL、trustedHosts 与所用模型凭据。端口为 7902、profile 为 web、插件为 auth/example；Windows/Linux 的容器 UID/GID 为 1000，macOS 非 root 用户采用当前 UID/GID；镜像架构按 Docker 引擎选择 amd64/arm64。公开模板填写通用的 UID/GID 1000 和 linux/amd64；手工复制模板不会执行平台探测，须自行核对这些值。秘密、生成项及部分派生项继续留空。完整键名与默认规则见[框架统一配置](framework-configuration.md)。
 
@@ -66,17 +66,17 @@ git pull --ff-only --recurse-submodules
 ./build.sh
 ```
 
-Windows 将最后一行换成 `.\build.ps1`。更新代码时按需同步子模块；版本选择由源码维护者决定。部署从干净的已提交源码重新构建管理器及选中插件。宿主源码未变化时复用已有宿主层；本地宿主源码更新后构建新的镜像，不因此拒绝部署。镜像与归档准备完成后，先通过 `check-compose` 核验最终挂载和容器用户权限，再停止旧服务、核验原容器及其持久挂载、备份原配置与数据，随后安装并等待健康检查。重复运行沿用已有插件设置和数据，不执行重置。
+Windows 将最后一行换成 `.\build.ps1`。更新代码时按需同步子模块；版本选择由源码维护者决定。部署从干净的已提交源码重新构建管理器及选中插件。宿主源码未变化时复用已有宿主层；本地宿主源码更新后构建新的镜像，不因此拒绝部署。镜像与归档准备完成后，先通过 `check-compose` 核验最终挂载和容器用户权限，再停止旧服务、核验原容器及其持久挂载，随后安装并等待健康检查。重复运行沿用已有插件设置和数据，不执行重置。
 
 | 情况 | 行为与处理 |
 | --- | --- |
 | 第一次运行，没有部署记录和数据 | 生成站点文件、构建、初始化、启动 |
-| 存在成功部署记录 | 检查项目与镜像一致性，构建后停服备份并更新 |
+| 存在成功部署记录 | 检查项目与镜像一致性，构建后停服、核验并更新 |
 | 有旧数据但缺少活动部署记录 | 拒绝当作新站点；恢复记录或按迁移流程处理 |
 | 产物准备完成前构建失败 | 旧服务继续运行；正常报错退出后修正错误并重复普通命令 |
 | 产物已标记 prepared，挂载或权限预检失败 | 尚未停止旧服务；修正挂载访问条件、保持原配置与产物不变，然后执行 `--resume` |
-| 备份命令失败 | 不应用新版本，尝试启动原服务；保留备份现场 |
-| 构建完成后断电、安装或启动失败 | 保留同次镜像、归档、配置、备份；配置不变时执行下方恢复命令 |
+| 停服核验失败 | 不应用新版本，尝试启动原服务；保留发布记录 |
+| 构建完成后断电、安装或启动失败 | 保留同次镜像、归档和配置；配置不变时执行下方恢复命令 |
 
 ```sh
 ./build.sh --resume
@@ -92,10 +92,4 @@ Windows 使用 `.\build.ps1 --resume` 或 `.\build.ps1 --config .local/env.conf 
 
 三个平台共用检出目录级 `.local/source-release.node.lock`；Linux shell 同时保留可用的旧 `flock` 互斥。构建子进程通过 IPC 报告完成、退出码一致且没有中断时，才自动释放源码锁，普通构建报错也可正常重试。强制终止、断电或完成证明缺失时保留锁：先核实其中记录的主机、PID、workerPid 及其子进程均已退出，再只清理该 Node 锁文件。不要删除旧 `.local/source-release.lock`、profile 锁或 pending；管理器的 `unlock` 只处理 profile 锁。部署期间仍不要并行操作同一站点的基础管理命令。
 
-`--resume` 继续同一次部署，不自动回滚业务数据。原生 Linux 保留原 tar 备份格式；Windows/macOS 和 Docker Desktop 的备份使用 `sources/<序号>` 及 `mounts-*.json` 原路径映射，归档和映射摘要写入发布记录。备份只有落盘并通过清单校验后才标记完成。需要检查可恢复性时，可在原仓库根调用下列 helper，将备份实际提取到临时容器 tmpfs，并输出文件摘要、权限与链接信息；只读挂载备份，不写原数据，不提供自动回滚：
-
-```sh
-node --input-type=module -e "import {readFileSync} from 'node:fs'; import {validateSourceBackupRestore} from './deploy/scripts/backup.mjs'; const r=JSON.parse(readFileSync(process.argv[1],'utf8')); console.log(JSON.stringify(validateSourceBackupRestore(r,{image:r.previousRuntime?.containerImage ?? r.image})));" ".local/artifacts/<操作目录>/result.json"
-```
-
-将示例路径替换为本次发布记录；保留同一 Docker 引擎及备份对应的旧不可变镜像。官方依赖链接只有在该镜像的 `/opt/dsh-runtime` 内可解析时才接受，并以 `externalRuntime: true` 标记；依赖文件来自镜像，不包含在数据备份中。其他越界链接或缺失依赖仍会拒绝。tmpfs 需要容纳实际提取的数据，此验证不证明数据库的业务一致性。真正回滚应由维护者按应用的数据兼容规则停写、备份当前数据后处理。备份保留在每次操作目录，脚本不自动清理；维护者需规划磁盘空间和备份保留周期。
+`--resume` 继续同一次部署，不自动回滚业务数据。恢复时须保留同一 Docker 引擎、原始输入与不可变镜像。

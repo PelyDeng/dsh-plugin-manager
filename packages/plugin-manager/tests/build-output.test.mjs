@@ -100,12 +100,12 @@ test('long elapsed durations fit narrow terminals and an abrupt worker exit reta
 
 test('elapsed time advances while the synchronous worker is busy and freezes at its measured duration', async t => {
   const f = fixture(t, `
-    buildStep('备份运行数据', () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1100));
+    buildStep('处理发布产物', () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1100));
     buildStep('快速检查', () => {});
     try { buildStep('失败检查', () => { throw new Error('expected'); }); } catch {}
   `, true);
   assert.equal(await f.run(), 0);
-  const frames = [...f.text().matchAll(/正在备份运行数据 [^\r\n]*耗时 (\d+:\d{2}:\d{2}\.\d)/g)];
+  const frames = [...f.text().matchAll(/正在处理发布产物 [^\r\n]*耗时 (\d+:\d{2}:\d{2}\.\d)/g)];
   assert.ok(new Set(frames.map(match => match[1])).size >= 3, 'busy worker must show advancing elapsed time');
   const events = f.log().text.split('\n').filter(line => line.startsWith('DSH_BUILD_PROGRESS ')).map(line => JSON.parse(line.slice(19)));
   for (const event of events.filter(event => ['done', 'failed'].includes(event.type))) {
