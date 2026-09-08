@@ -28,8 +28,8 @@ export const deploymentFields = [
   ['DSH_OFFLINE_STORE_DIR', 'offlineStore', 'string', '已准备的离线store输入目录；容器只读挂载，不修改源。'],
   ['DSH_OFFLINE_CACHE_DIR', 'offlineCache', 'string', '已准备的离线cache输入目录；容器只读挂载，不修改源。'],
   ['DSH_COMPOSE_PROJECT', 'composeProject', 'string', 'Compose项目名，默认dsh-plugins。每站点独占，已有站点不得随意更换。'],
-  ['DSH_CONTAINER_UID', 'containerUid', 'integer', '容器非root用户ID，默认1000；已有数据属主不自动递归修改。'],
-  ['DSH_CONTAINER_GID', 'containerGid', 'integer', '容器非root用户组ID，默认1000；须能读取只读运行输入并访问数据目录。'],
+  ['DSH_CONTAINER_UID', 'containerUid', 'integer', '容器非root用户ID，通用默认1000；自动新站点按平台初始化，macOS采用当前非root用户；显式配置保留，不自动递归修改已有属主。'],
+  ['DSH_CONTAINER_GID', 'containerGid', 'integer', '容器非root用户组ID，通用默认1000；自动新站点按平台初始化，macOS采用当前用户组；显式配置保留，须能访问运行输入与数据。'],
   ['DSH_HOST_IMAGE', 'hostImage', 'string', '可选预构建宿主镜像，必须为不可变仓库@sha256摘要；留空按源码部署流程构建/复用。'],
   ['DSH_PUBLISH_IMAGE', 'publishImage', 'string', '可选部署镜像推送目标：仓库主机/项目/镜像，不含tag。留空仅使用本机镜像。'],
   ['DSH_CONTAINER_IMAGE', 'containerImage', 'string', '仅独立apply-compose输入：不可变镜像ID或仓库摘要。源码一键构建自动生成，必须留空。'],
@@ -48,7 +48,7 @@ export const imageFields = [
   ['REGISTRY_PASSWORD', '', '私密：仓库登录密码；仅用于临时Docker登录，不传给业务宿主、不写入镜像或命令参数。'],
   ['DSH_SOURCE_BASE_IMAGE', 'docker.io/library/node:24-bookworm-slim', '官方源码构建基础镜像；默认docker.io/library/node:24-bookworm-slim。'],
   ['DSH_DEBIAN_MIRROR', 'http://deb.debian.org', 'Debian软件源地址，默认http://deb.debian.org，可按网络情况设置镜像源。'],
-  ['DSH_IMAGE_PLATFORM', 'linux/amd64', '容器构建平台：linux/amd64或linux/arm64，默认linux/amd64。'],
+  ['DSH_IMAGE_PLATFORM', 'linux/amd64', '容器构建平台：linux/amd64或linux/arm64，通用默认linux/amd64；自动新站点按Docker引擎初始化，显式配置保留。'],
 ];
 export const imageDefaults = Object.fromEntries(imageFields.map(([key, value]) => [key, value]));
 export const credentialFields = [
@@ -56,6 +56,13 @@ export const credentialFields = [
   ['ZHIPU_API_KEY', '私密：智谱API Key。非空时文件优先、网页只读；留空不添加覆盖。还需在官方DSH配置相应模型路由。'],
 ];
 export const frameworkKeys = new Set([...deploymentFields, ...imageFields, ...credentialFields].map(([key]) => key));
+
+/** Public, fixed source-site defaults; derived paths and entry-specific choices stay unset. */
+export const publicDeploymentDefaults = {
+  publicUrl: 'http://127.0.0.1:7902', host: '127.0.0.1', port: 7902, profile: 'web', plugins: ['auth', 'example'],
+  mode: 'release', dataRoot: '.local/data', artifacts: '.local/artifacts', dshCli: 'dsh', patches: [], instances: {},
+  offline: false, composeProject: 'dsh-plugins', containerUid: 1000, containerGid: 1000,
+};
 
 export function decodeFrameworkConfig(text) {
   const values = parseLiteralConfig(text, frameworkKeys);
@@ -95,16 +102,17 @@ export function readFrameworkConfig(path) {
   return { ...decodeFrameworkConfig(bytes.toString('utf8')), bytes, sha256: createHash('sha256').update(bytes).digest('hex') };
 }
 
-/** Render the same documented keys for an empty public template or a private migration. */
+/** Public templates spell out fixed defaults; private rendering preserves the supplied resolved input. */
 export function renderFrameworkConfig({ config = {}, image = {}, credentials = {}, privateInput = false } = {}) {
+  if (!privateInput) { config = { ...publicDeploymentDefaults, ...config }; image = { ...imageDefaults, ...image }; }
   const lines = [
-    privateInput ? '# DSH框架私有运行配置' : '# DSH框架配置入口（公开空模板）',
-    privateInput ? '# 此文件可能含凭据，保存在Git忽略目录；不得提交、公开或复制到镜像。' : '# 将运行配置保存在Git忽略的.local/env.conf；不要在此公开模板填写真实值。',
+    privateInput ? '# DSH框架私有运行配置' : '# DSH框架配置入口（公开默认模板）',
+    privateInput ? '# 此文件可能含凭据，保存在Git忽略目录；不得提交、公开或复制到镜像。' : '# 固定公开默认值已填写；真实环境配置和凭据保存在Git忽略的.local/env.conf，不在此修改。',
     '# KEY=VALUE是字面量，不执行shell；复杂值用单行JSON，路径相对显式项目root。',
     '# 留空采用该入口默认行为；修改文件后通过正常部署流程备份并受控重启。',
     '# API空值不是删除；若启动环境有同名密钥，官方仍会优先使用且网页只读。',
     '# 注册插件的业务配置各自维护；账号、授权、会话和历史不是此文件的配置。',
-    '# 通常只需检查前面的访问地址与所用模型凭据；高级项留空即可使用默认行为。',
+    '# 通常只需检查访问地址与所用模型凭据；自动新站点按平台初始化，手工复制模板需核对UID、GID和镜像架构。',
   ];
   const append = (key, comment, value) => {
     lines.push('', `# ${comment}`, `${key}=${value === undefined || value === null || value === '' ? '' : JSON.stringify(value)}`);
@@ -113,9 +121,18 @@ export function renderFrameworkConfig({ config = {}, image = {}, credentials = {
   const primary = new Set(['publicUrl', 'publicOrigin', 'trustedHosts']);
   for (const [key, field, , comment] of deploymentFields.filter(([, field]) => primary.has(field))) append(key, comment, config[field]);
   for (const [key, comment] of credentialFields) append(key, comment, credentials[key]);
-  lines.push('', '# 二、高级部署配置：通常无需填写，改变默认行为或迁移旧站点时使用');
+  lines.push('', '# 二、高级部署配置：固定默认值已填写，派生或按入口选择的字段留空');
   for (const [key, field, , comment] of deploymentFields.filter(([, field]) => !primary.has(field))) append(key, comment, config[field]);
-  lines.push('', '# 三、可选镜像仓库与构建环境：不使用Harbor、不调整构建环境时留空');
+  lines.push('', '# 三、可选镜像仓库与构建环境：公开默认值已填写，仓库凭据始终留空');
   for (const [key, , comment] of imageFields) append(key, comment, image[key]);
   return lines.join('\n') + '\n';
+}
+
+/** One exact allowlist protects both repository checks and the example's public source snapshot. */
+export function assertPublicFrameworkConfig(text) {
+  const values = parseLiteralConfig(text, frameworkKeys);
+  const defaults = parseLiteralConfig(renderFrameworkConfig(), frameworkKeys);
+  if (Object.keys(values).length !== frameworkKeys.size || [...frameworkKeys].some(key => values[key] !== defaults[key])) {
+    throw new Error('公开env.conf只能包含完整受控默认值和空凭据；真实配置必须保存在.local/env.conf，不能进入源码索引。');
+  }
 }

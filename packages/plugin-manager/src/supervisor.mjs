@@ -11,6 +11,7 @@ import { createServer } from 'node:net';
 import { createInterface } from 'node:readline';
 import { hostname } from 'node:os';
 import { frameworkCredentialEnvironment, prepareFrameworkCredentials } from './framework-credentials.mjs';
+import { forwardContainerLoopback } from './container-forward.mjs';
 /** Start one DSH child, keeping startup tokens out of normal logs. */
 export async function supervise(deployment, release) {
   prepareFrameworkCredentials(deployment);
@@ -42,6 +43,7 @@ export async function supervise(deployment, release) {
   let stopped = true;
   let child;
   let server;
+  let closeForward;
   const signals = ['SIGINT', 'SIGTERM']; const stop = () => child?.kill('SIGTERM');
   let exitedResolve;
   const exited = new Promise(resolvePromise => { exitedResolve = resolvePromise; });
@@ -52,6 +54,10 @@ export async function supervise(deployment, release) {
   stopped = false;
   child.once('exit', (code, signal) => { stopped = true; exitedResolve({ code, signal }); });
   child.once('error', error => { stopped = true; exitedResolve({ error }); });
+  if (options.action === 'container-start' && deployment.profile === 'web' && process.env.DSH_CONTAINER_LOOPBACK_FORWARD === '1') {
+    if (host !== '127.0.0.1') fail('容器转发要求官方宿主使用回环监听。');
+    closeForward = await forwardContainerLoopback(Number(port));
+  }
   server = createServer({ allowHalfOpen: true }, socket => {
     let input = '';
     socket.on('data', data => {
@@ -101,6 +107,7 @@ export async function supervise(deployment, release) {
     if (result.error) throw result.error;
     if (result.code && !result.signal) fail(`DSH 退出码 ${result.code}`);
   } finally {
+    await closeForward?.();
     server?.close();
     for (const signal of signals) process.off(signal, stop);
     if (child && !stopped) { child.kill('SIGTERM'); await exited; }

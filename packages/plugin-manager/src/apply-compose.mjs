@@ -2,14 +2,15 @@
 import { chownSync, copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, posix, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { LOCK, OWNER, atomicJSON, canonical, fail, json, within } from './state.mjs';
 import { renderCompose } from './compose.mjs';
 import { resolvePluginSettings } from './plugin-settings.mjs';
 import { assertReleaseMode } from './release.mjs';
+import { inspectDocker, dockerArguments, executeDocker, checkDockerMounts, proveDockerHome, ensureDockerIdentity } from './docker-runtime.mjs';
+import { ensurePrivateDirectory } from './private-files.mjs';
 
 /** Initialize missing settings and perform a controlled restart with readiness checks. */
-export function applyCompose(deployment, release, execute = (args, options = { stdio: 'inherit' }) => execFileSync('docker', args, options)) {
+export function checkCompose(deployment, release, execute = executeDocker, runtime) {
   assertReleaseMode(release, deployment.mode);
   const image = deployment.config.containerImage;
   if (typeof image !== 'string' || !/^(?:sha256:[a-f0-9]{64}|\S+@sha256:[a-f0-9]{64})$/.test(image)) fail('apply-compose 需要 containerImage 不可变镜像 ID 或仓库摘要。');
@@ -18,13 +19,20 @@ export function applyCompose(deployment, release, execute = (args, options = { s
   const settings = resolvePluginSettings(deployment, release);
   const uid = deployment.config.containerUid ?? 1000, gid = deployment.config.containerGid ?? 1000;
   if (![uid, gid].every(value => Number.isSafeInteger(value) && value > 0)) fail('containerUid/containerGid 必须是非 root 正整数。');
+  const port = deployment.config.port ?? 7902;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) fail('容器端口必须是 1 到 65535 的整数。');
+  runtime ??= inspectDocker(execute);
+  ensureDockerIdentity(deployment.config.dockerRuntime, runtime);
+  const active = join(deployment.artifacts, 'active-compose.json');
+  if (existsSync(active)) ensureDockerIdentity(json(active).runtime, runtime);
+  const run = (args, options) => execute(dockerArguments(runtime, args), options);
   const own = path => { if (process.platform !== 'win32' && process.getuid?.() === 0) chownSync(path, uid, gid); };
   const ensureDirectory = path => {
     if (existsSync(path)) return;
     ensureDirectory(dirname(path)); mkdirSync(path); own(path);
   };
   const checkAccess = (path, required) => {
-    if (process.platform === 'win32') return;
+    if (runtime.desktop || process.platform === 'win32') return;
     const info = statSync(path);
     const bits = info.uid === uid ? (info.mode >> 6) : info.gid === gid ? (info.mode >> 3) : info.mode;
     if ((bits & required) !== required) fail(`容器用户 ${uid}:${gid} 无法访问 ${path}；请先调整该路径权限。`);
@@ -36,22 +44,34 @@ export function applyCompose(deployment, release, execute = (args, options = { s
     atomicJSON(file, { schemaVersion: 1, enabled: true, ...(plugin.configuration.auth === 'consumer' ? { accessMode: 'authenticated' } : {}) }); own(file);
   }
   const output = join(deployment.artifacts, randomUUID(), 'compose');
+  ensurePrivateDirectory(output);
   const generated = renderCompose(deployment, release, output);
   own(generated.configPath);
   const compose = json(generated.path);
   const service = compose.services.dsh;
-  Object.assign(service, { image, user: `${uid}:${gid}`, restart: 'unless-stopped', init: true, network_mode: 'host', security_opt: ['no-new-privileges:true'], cap_drop: ['ALL'], stop_grace_period: '30s' });
-  Object.assign(service.environment, { DSH_BIND_HOST: '127.0.0.1', DSH_PORT: String(deployment.config.port ?? 7902) });
+  Object.assign(service, { image, user: `${uid}:${gid}`, restart: 'unless-stopped', init: true, security_opt: ['no-new-privileges:true'], cap_drop: ['ALL'], stop_grace_period: '30s' });
+  if (runtime.desktop) service.ports = [{ target: port, published: String(port), host_ip: '127.0.0.1', protocol: 'tcp' }];
+  else service.network_mode = 'host';
+  Object.assign(service.environment, { DSH_BIND_HOST: '127.0.0.1', DSH_PORT: String(port), ...(runtime.desktop ? { DSH_CONTAINER_LOOPBACK_FORWARD: '1' } : {}) });
   if (image.startsWith('sha256:')) service.pull_policy = 'never';
   const flags = ['rebuild', 'resume'].filter(flag => deployment.options[flag]).map(flag => `--${flag}`);
   if (flags.length) service.command = flags;
   for (const mount of service.volumes) if (existsSync(mount.source)) checkAccess(mount.source, statSync(mount.source).isDirectory() ? 5 : mount.read_only ? 4 : 6);
   atomicJSON(generated.path, compose);
+  if (runtime.desktop) checkDockerMounts(service, run);
+  return { ...generated, project, runtime, status: 'checked' };
+}
+
+export function applyCompose(deployment, release, execute = executeDocker, runtime) {
+  const generated = checkCompose(deployment, release, execute, runtime);
+  runtime = generated.runtime;
+  const { project } = generated, output = dirname(generated.path), image = deployment.config.containerImage;
+  const run = (args, options) => execute(dockerArguments(runtime, args), options);
   const args = ['compose', '-p', project, '-f', generated.path];
-  execute([...args, 'stop', 'dsh']);
+  run([...args, 'stop', 'dsh']);
   const residuals = [LOCK, OWNER].filter(name => existsSync(join(deployment.profileRoot, name)));
   if (residuals.length) {
-    const capture = args => execute(args, { encoding: 'utf8' }).trim();
+    const capture = args => String(run(args, { encoding: 'utf8' })).trim();
     const ids = capture([...args, 'ps', '-a', '-q', 'dsh']).split(/\s+/).filter(Boolean);
     if (!ids.length) fail('缺少旧容器身份，保留残留运行记录；请按恢复文档核实原管理者。');
     const containers = JSON.parse(capture(['inspect', ...ids]));
@@ -61,13 +81,13 @@ export function applyCompose(deployment, release, execute = (args, options = { s
       const home = variables.DSH_HOME;
       if (container.State?.Running !== false || container.State?.Restarting !== false || !home || variables.DSH_PROFILE !== deployment.profile) return false;
       const mount = (container.Mounts ?? []).filter(item => item.Type === 'bind' && (home === item.Destination || home.startsWith(`${item.Destination}/`))).sort((a, b) => b.Destination.length - a.Destination.length)[0];
-      return mount && canonical(resolve(mount.Source, posix.relative(mount.Destination, home))) === deployment.home;
+      return mount && (runtime.desktop ? proveDockerHome(deployment, container, image, run) : canonical(resolve(mount.Source, posix.relative(mount.Destination, home))) === deployment.home);
     });
     for (const name of residuals) {
       const record = json(join(deployment.profileRoot, name));
       if (!record.host || !proven.some(container => container.Config.Hostname === record.host && (name !== OWNER || (record.profile === deployment.profile && container.Config.Env.includes(`DSH_HOME=${record.home}`))))) fail('残留运行记录无法对应已停止的旧容器；保留记录，不自动解除锁。');
     }
-    const saved = join(output, 'stopped-records'); mkdirSync(saved, { mode: 0o700 });
+    const saved = join(output, 'stopped-records'); ensurePrivateDirectory(saved);
     for (const name of residuals) {
       const path = join(deployment.profileRoot, name);
       if (!within(deployment.profileRoot, canonical(path))) fail('运行记录路径越界。');
@@ -75,7 +95,7 @@ export function applyCompose(deployment, release, execute = (args, options = { s
     }
     for (const name of residuals) rmSync(join(deployment.profileRoot, name));
   }
-  execute([...args, 'up', '-d', '--force-recreate', '--wait', '--wait-timeout', '180', 'dsh']);
-  atomicJSON(join(deployment.artifacts, 'active-compose.json'), { schemaVersion: 1, project, path: generated.path, appliedAt: new Date().toISOString() });
+  run([...args, 'up', '-d', '--force-recreate', '--wait', '--wait-timeout', '180', 'dsh']);
+  atomicJSON(join(deployment.artifacts, 'active-compose.json'), { schemaVersion: 1, project, path: generated.path, runtime, appliedAt: new Date().toISOString() });
   return { ...generated, project, status: 'ready' };
 }

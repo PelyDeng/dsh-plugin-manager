@@ -1,6 +1,6 @@
 /** Prepare the shared DSH image; plugin packages remain independent deployment inputs. */
 import { createHash, randomUUID } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { inspectHostSource } from './host-source.mjs';
 import { tarCommand } from '../../packages/plugin-manager/src/state.mjs';
 import { imageDefaults, readFrameworkConfig } from '../../packages/plugin-manager/src/framework-config.mjs';
+import { ensurePrivateDirectory } from '../../packages/plugin-manager/src/private-files.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const managerInputs = ['integrations/docker', 'packages/plugin-kit', 'packages/plugin-manager', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'];
@@ -58,7 +59,7 @@ export function withRegistryAuthentication(config, target, operation, execute = 
   config = validateImageConfig(config);
   if (!config.REGISTRY_USERNAME) return operation([]);
   if (target.split('/')[0] !== config.REGISTRY_HOST) throw new Error('Deployment image registry differs from the configured credential destination.');
-  const auth = mkdtempSync(resolve(tmpdir(), 'dsh-image-auth-'));
+  const auth = ensurePrivateDirectory(resolve(tmpdir(), `dsh-image-auth-${randomUUID()}`));
   const flags = ['--config', auth];
   try {
     loginRegistry(config, (args, settings) => command('docker', [...flags, ...args], settings, execute));
@@ -128,7 +129,7 @@ export function buildHostImage(options = {}, { execute = spawnSync, inspectSourc
   const resultFile = previousPath || resolve(operation, 'host-image.json');
   const state = previous || { schemaVersion: 1, operationId, status: 'preparing', hostCommit: host.commit, repositoryCommit: host.repositoryCommit, platform: config.DSH_IMAGE_PLATFORM, development: Boolean(options.workingTree) };
   atomicJson(resultFile, state);
-  const auth = mkdtempSync(resolve(tmpdir(), 'dsh-image-auth-'));
+  const auth = ensurePrivateDirectory(resolve(tmpdir(), `dsh-image-auth-${randomUUID()}`));
   const run = (bin, args, settings) => command(bin, args, settings, execute);
   const docker = (args, settings) => run('docker', ['--config', auth, ...args], settings);
   const inspect = image => JSON.parse(docker(['image', 'inspect', image]))[0];

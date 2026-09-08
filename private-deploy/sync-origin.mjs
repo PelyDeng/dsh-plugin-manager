@@ -5,15 +5,17 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** Called under the checkout deployment lock; never merges GitHub, pushes or updates submodules. */
-export function syncOrigin(root, args = []) {
+export function syncOrigin(root, args = [], env = process.env) {
   if (args.includes('--resume') || args.includes('--help')) return;
-  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'] }).trim();
+  // Preserve native error.signal so sourceRelease retains its lock after an interrupted Git child.
+  const git = (...args) => execFileSync('git', args, { cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true }).trim();
+  const entry = process.platform === 'win32' ? '.\\build.ps1' : './build.sh';
   const pointer = resolve(root, '.local/source-release.json');
   if (existsSync(pointer) && ['prepared', 'backing-up', 'applying', 'deployment-failed'].includes(JSON.parse(readFileSync(pointer, 'utf8')).status)) {
-    throw new Error('存在未完成部署；请使用 bash build.sh --resume，不更新源码。');
+    throw new Error(`存在未完成部署；请使用 ${entry} --resume，不更新源码。`);
   }
   for (const state of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'rebase-merge', 'rebase-apply']) {
-    if (existsSync(resolve(root, git('rev-parse', '--git-path', state)))) throw new Error('存在未完成的 Git 操作；请先完成，再运行 bash build.sh。');
+    if (existsSync(resolve(root, git('rev-parse', '--git-path', state)))) throw new Error(`存在未完成的 Git 操作；请先完成，再运行 ${entry}。`);
   }
   if (git('status', '--porcelain', '--ignore-submodules=all')) throw new Error('工作区有未提交改动；请先保存并在私有集成库处理，服务尚未停止。');
   if (git('branch', '--show-current') !== 'main') throw new Error('服务器更新要求检出 main 分支。');

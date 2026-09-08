@@ -1,10 +1,11 @@
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { runtimeEnvironment } from './config.mjs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { atomicJSON, canonical, fail, within } from './state.mjs';
 import { resolvePluginSettings } from './plugin-settings.mjs';
 import { assertReleaseMode } from './release.mjs';
 import { containerCredentialsPath, prepareFrameworkCredentials } from './framework-credentials.mjs';
+import { writePrivateFile } from './private-files.mjs';
 /** Produce private Compose overrides with runtime-only configuration mounts. */
 export function renderCompose(deployment, release, outputDirectory) {
   assertReleaseMode(release, deployment.mode);
@@ -23,7 +24,7 @@ export function renderCompose(deployment, release, outputDirectory) {
   const containerAuth = directAuth ? '/run/dsh-auth-url.txt' : `/data/${relative(deployment.dataRoot, deployment.authUrlFile).split(sep).join('/')}`;
   if (directAuth) {
     mkdirSync(dirname(deployment.authUrlFile), { recursive: true });
-    const fd = openSync(deployment.authUrlFile, 'a', 0o600); closeSync(fd);
+    if (!existsSync(deployment.authUrlFile)) writePrivateFile(deployment.authUrlFile, '', { flag: 'wx' });
     if (process.platform !== 'win32') chmodSync(deployment.authUrlFile, 0o600);
     mounts.push({ type: 'bind', source: deployment.authUrlFile, target: containerAuth });
   }

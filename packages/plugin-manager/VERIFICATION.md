@@ -15,6 +15,8 @@ bash test-report.sh --help
 
 该入口在 GitHub 和 Gitee 检出目录中行为一致，不更新 Git、不加载站点 env.conf、不执行部署。需要 Node.js `^22.19.0 || >=24`、框架锁定的 pnpm 和 tar。还需已构建的官方 DSH CLI；递归克隆只取得源码，不等于完成宿主构建。默认 CLI 缺失时，先按官方说明在 `deepseek-harness` 内使用其自身锁定的 pnpm 执行 `pnpm install --frozen-lockfile`、`pnpm run build`，或用 `--cli` 指定现有 CLI。脚本不会自动下载、更新或构建宿主。`--cli` 优先于已有 `DSH_TEST_CLI`，两者的相对路径均以框架仓库根目录为准。
 
+Windows 不使用 Bash 时，在框架根执行 `node scripts/test-report.mjs --root .`，其余参数相同。根 `build.ps1` / `build.sh` 是源码部署入口，不替代这里的验证报告；macOS 构建部署流程尚无真机验收，不能由命令分支或归档测试推导为通过。
+
 脚本先检查宿主可运行，再打包固定的 auth/example、执行下述宿主测试，全部成功才组合交付目录。每次新建 `.local/artifacts/test-report-<随机标识>/`，其中 `candidate/` 是被测归档、`report.json` 是报告、`delivery/` 是包含报告记录的交付清单和原样归档。任何阶段失败均非零退出，保留诊断，不继续后续步骤。测试数据独立保存在 `.local/data/acceptance/`，不清理已有运行数据。默认回环端口18951；占用时可设置 `EXAMPLE_TEST_PORT`，并行运行应使用不同端口。
 
 范围是 auth/example 的真实宿主、归档消费与本地模型替身测试，不是所有业务插件、真实模型、浏览器或生产验收。开发者自己的插件需要自己的业务测试运行器。请交付本次 `delivery/`；随后运行部署构建入口重新打包的归档不自动继承本次报告。仅持有 manager tgz 的独立部署者使用下述 CLI/API，根脚本不包含在工具包中。

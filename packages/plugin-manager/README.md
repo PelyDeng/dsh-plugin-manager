@@ -4,7 +4,7 @@ DSH 应用接入与交付管理 CLI。独立包和内部 `plugins/*` 共用 buil
 
 ## 安装与作者操作
 
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。在工具目录执行 `pnpm add --ignore-workspace /path/to/plugin-manager-0.3.5.tgz`，随后使用 `pnpm exec dsh-plugin-manager`。包名不表示已发布到公共 registry。本 README 随工具版本交付。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。在工具目录执行 `pnpm add --ignore-workspace /path/to/plugin-manager-0.4.0.tgz`，随后使用 `pnpm exec dsh-plugin-manager`。包名不表示已发布到公共 registry。本 README 随工具版本交付。
 
 每个项目操作要求 `--root`；相对配置、home 和产物路径相对这个根解析。独立作者包根需有 package.json：有效 name/version、main、files、README、scripts.build/check、官方 dsh.bundle.patch，以及 `deepseekPlugin: { "schemaVersion": 3, "id": "my-plugin" }`。页面、探针、权限、认证与 kit 均不强制要求。构建产物可以由 build 生成。
 
@@ -37,7 +37,9 @@ pnpm exec dsh-plugin-manager compose-release --root /path/to/site --output relea
 
 支持 configuration 的插件使用 `<DSH home>/plugins/<id>/plugin.json`，例如 `{"schemaVersion":1,"enabled":true,"accessMode":"standalone","config":{}}`。accessMode 仅适用于认证消费者；authenticated 需要合法站点 publicOrigin 和候选清单中唯一、已启用的认证提供者。使用 compose-release 显式组合业务应用与认证插件。认证模式修改需配置加受控重启。
 
-Docker 实例通过 `apply-compose --root <项目根> --config <deployment.json>` 应用配置，接受不可变本机镜像 ID 或 registry 摘要，`--resume` 恢复原操作。`migrate-data` / `migrate-artifacts` 默认仅预览。完整命令参数见 `pnpm exec dsh-plugin-manager --help`；部署细节与示例见[仓库开发分支文档](https://github.com/PelyDeng/dsh-plugin-manager/tree/main/doc)，该链接可能领先于已安装版本。
+Docker 实例通过 `apply-compose --root <项目根> --config <deployment.json>` 应用配置，接受不可变本机镜像 ID 或 registry 摘要，`--resume` 恢复原操作。可先运行 `check-compose` 生成候选文件并检查挂载权限，不停止服务或启动 DSH；`apply-compose` 也会先执行这些检查。仅支持本机 unix/npipe endpoint 的 Linux 引擎；Windows/macOS 与 Linux Docker Desktop 使用 bridge，容器地址通过 TCP 转发到 DSH 的 `127.0.0.1` 同端口，宿主仅向回环地址发布。同 Docker 网络是信任边界，不表示公网隔离；原生 Linux 保留 host 网络。macOS 尚未完成真机验收。
+
+完整源码仓库的根 `build.ps1`（Windows）或 `build.sh`（macOS/Linux）会构建宿主与插件、备份并部署；这两个入口不包含在独立工具 tgz 中。其源码锁与 profile 安装锁用途不同，强制终止时不能用 profile `unlock` 解除源码锁；源码 `--resume` 继续发布，不回滚数据。`migrate-data` / `migrate-artifacts` 默认仅预览。完整命令参数见 `pnpm exec dsh-plugin-manager --help`；部署细节与示例见[仓库开发分支文档](https://github.com/PelyDeng/dsh-plugin-manager/tree/main/doc)，该链接可能领先于已安装版本。
 
 ## 内部批量开发与 API
 

@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 import { release, validateBase } from '../../../deploy/scripts/build.mjs';
 import { loadSite } from '../../../deploy/scripts/site.mjs';
 import { renderFrameworkConfig } from '../src/framework-config.mjs';
+import { tarCommand } from '../src/state.mjs';
 
 const hostCommit = 'a'.repeat(40), revision = 'b'.repeat(40);
 const base = `registry.test/dsh@sha256:${'1'.repeat(64)}`, target = `registry.test/dsh@sha256:${'2'.repeat(64)}`;
@@ -22,6 +23,8 @@ function fixture(t, { fresh = false, fail } = {}) {
   const put = (path, value) => { path = resolve(root, path); mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value), { mode: 0o600 }); };
   const artifacts = resolve(root, '.local/artifacts');
   const config = resolve(root, '.local/deployment.json');
+  const runtimeData = resolve(root, 'runtime-data');
+  put('runtime-data/marker.txt', 'retained runtime');
   put('deploy/config/site.defaults.json', defaults);
   put('package.json', { packageManager: 'pnpm@11.19.0' });
   put('packages/plugin-manager/package.json', { version: '0.2.3' });
@@ -32,7 +35,7 @@ function fixture(t, { fresh = false, fail } = {}) {
     put('.local/artifacts/old/example.tgz', 'old archive');
     put('.local/artifacts/old/manifest.json', { plugins: [{ archive: 'example.tgz', sha256: digest('old archive') }] });
     put('.local/artifacts/active-compose.json', { project: 'site', path: resolve(artifacts, 'previous.json') });
-    put('.local/artifacts/previous.json', { services: { dsh: { image: base, environment: { DSH_PORT: '7902' }, volumes: [{ type: 'bind', source: '/srv/example-data', target: '/data' }] } } });
+    put('.local/artifacts/previous.json', { services: { dsh: { image: base, environment: { DSH_PORT: '7902', DSH_HOME: '/data/dsh-home', DSH_PROFILE: 'web' }, volumes: [{ type: 'bind', source: runtimeData, target: '/data' }] } } });
   }
   const original = existsSync(config) ? readFileSync(config, 'utf8') : null, calls = [];
   const images = new Map([[base, info], [baseId, info]]);
@@ -40,6 +43,11 @@ function fixture(t, { fresh = false, fail } = {}) {
   const execute = (bin, args) => {
     calls.push([bin, ...args]);
     if (fail?.(bin, args)) throw new Error('simulated failure');
+    if (bin === 'docker' && args[0] === 'context') return JSON.stringify('unix:///var/run/docker.sock');
+    if (bin === 'docker' && args[0] === '--host') {
+      if (args[2] === 'info') return JSON.stringify({ OSType: 'linux', ID: 'fixture-engine', Architecture: 'x86_64', OperatingSystem: process.platform === 'linux' ? 'Linux' : 'Docker Desktop' });
+      return 'Docker Compose fixture';
+    }
     if (bin === 'git') return args[0] === '-C' ? args[2] === 'rev-parse' ? hostCommit : '' : args[0] === 'ls-tree' ? `160000 commit ${hostCommit}\tdeepseek-harness` : args[0] === 'rev-parse' ? revision : '';
     if (bin === 'pnpm' && args[0] === '--version') return '11.19.0';
     if (bin === 'pnpm' && args.includes('pack')) put(args.at(-1), 'archive');
@@ -50,13 +58,28 @@ function fixture(t, { fresh = false, fail } = {}) {
     }
     if (bin === process.execPath && args[1] === 'apply-compose') {
       const candidate = JSON.parse(readFileSync(args[args.indexOf('--config') + 1]));
-      put('.local/artifacts/new-compose.json', { services: { dsh: { image: candidate.containerImage, environment: { DSH_PORT: String(candidate.port) }, volumes: [{ type: 'bind', source: '/srv/example-data', target: '/data' }] } } });
+      put('.local/artifacts/new-compose.json', { services: { dsh: { image: candidate.containerImage, environment: { DSH_PORT: String(candidate.port), DSH_HOME: '/data/dsh-home', DSH_PROFILE: 'web' }, volumes: [{ type: 'bind', source: runtimeData, target: '/data' }] } } });
       put('.local/artifacts/active-compose.json', { project: candidate.composeProject, path: resolve(artifacts, 'new-compose.json') });
     }
     if (bin === 'docker' && args[0] === 'tag') images.set(args[2], images.get(args[1]) ?? builtInfo);
+    if (bin === 'docker' && args[0] === 'compose' && args.includes('ps') && args.includes('-a')) return 'c'.repeat(64);
+    if (bin === 'docker' && args[0] === 'inspect') {
+      const active = JSON.parse(readFileSync(resolve(artifacts, 'active-compose.json')));
+      const service = JSON.parse(readFileSync(active.path)).services.dsh;
+      return JSON.stringify([{ Id: 'c'.repeat(64), State: { Running: false, Restarting: false }, Config: { Image: service.image, Labels: { 'com.docker.compose.service': 'dsh' }, Env: ['DSH_HOME=/data/dsh-home', 'DSH_PROFILE=web'] }, Mounts: [{ Type: 'bind', Source: runtimeData, Destination: '/data', RW: true }] }]);
+    }
     if (bin === 'docker' && args[0] === 'image') return JSON.stringify([images.get(args[2]) ?? builtInfo]);
+    if (bin === 'docker' && args[0] === 'run' && args.includes('tar')) {
+      if (args.includes('-czf')) {
+        const output = args.find(value => value.includes('target=/backup')).match(/source=(.*),target=\/backup/)[1];
+        put(resolve(output, args[args.indexOf('-czf') + 1].split('/').at(-1)), 'backup');
+      }
+      return 'sources/0/\nsources/0/marker.txt\n';
+    }
+    if (bin === 'docker' && args.includes('--volumes-from')) return readFileSync(resolve(runtimeData, args.at(-1).slice('/data/'.length)), 'utf8');
     if (bin === 'docker' && args[0] === 'run') return '0.2.3';
-    if (bin === 'tar' && args[0] === '-czf') put(args[1], 'backup');
+    if (bin === tarCommand && args[0] === '-czf') put(args[1], 'backup');
+    if (bin === tarCommand && args.includes('-tzf')) return runtimeData.replace(/^\/+/, '') + '/marker.txt\n';
     return '';
   };
   const buildHost = () => { calls.push(['build-host']); return { imageId: builtId, resultFile: resolve(artifacts, 'host-image.json') }; };
@@ -152,8 +175,79 @@ test('build failure leaves service and deployment inputs unchanged', t => {
   assert.equal(f.calls.some(call => call.includes('stop')), false);
 });
 
+test('generated Docker identity is not imported as a site preference', t => {
+  const f = fixture(t);
+  const previous = JSON.parse(readFileSync(f.config));
+  f.put('.local/deployment.json', { ...previous, dockerRuntime: { endpoint: 'unix:///var/run/docker.sock', id: 'prior-engine' } });
+  const loaded = loadSite(f.root);
+  assert.equal(loaded.site.composeProject, previous.composeProject);
+  assert.equal(Object.hasOwn(loaded.site, 'dockerRuntime'), false);
+  assert.equal(JSON.parse(readFileSync(f.config)).dockerRuntime.id, 'prior-engine');
+});
+
+test('container access failure is detected before stopping the old service', t => {
+  const f = fixture(t, { fail: (bin, args) => args.includes('check-compose') });
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
+  assert.equal(readFileSync(f.config, 'utf8'), f.original);
+  assert.equal(f.calls.some(call => call.includes('stop')), false);
+  assert.equal(f.calls.some(call => call.includes('apply-compose')), false);
+});
+
+test('first access preflight may create settings and fail without preventing resume', t => {
+  let deny = true, f;
+  f = fixture(t, { fresh: true, fail: (bin, args) => {
+    if (deny && args.includes('check-compose')) {
+      f.put('.local/data/dsh-home/plugins/example/plugin.json', { schemaVersion: 1, enabled: true });
+      return true;
+    }
+    return false;
+  } });
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
+  assert.equal(f.result().status, 'deployment-failed');
+  assert.equal(f.calls.some(call => call.includes('stop')), false);
+  deny = false;
+  const result = release({ root: f.root, resume: true }, f.execute, f.buildHost);
+  assert.equal(result.status, 'ready');
+  assert.equal(f.calls.filter(call => call[0] === 'build-host').length, 1);
+  assert.equal(JSON.parse(readFileSync(resolve(f.root, '.local/data/dsh-home/plugins/example/plugin.json'))).enabled, true);
+});
+
+test('legacy unfinished releases use current preflight but keep their original install CLI', t => {
+  let failApply = true;
+  const f = fixture(t, { fresh: true, fail: (bin, args) => failApply && args.includes('apply-compose') });
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
+  const saved = f.result(); delete saved.runtime;
+  f.put(resolve(saved.operation, 'result.json'), saved);
+  failApply = false;
+  const callsBefore = f.calls.length;
+  release({ root: f.root, resume: true }, f.execute, f.buildHost);
+  const calls = f.calls.slice(callsBefore);
+  assert.equal(calls.find(call => call.includes('check-compose'))[1], resolve(f.root, 'deploy/scripts/deployment.mjs'));
+  assert.equal(calls.find(call => call.includes('apply-compose'))[1], resolve(saved.operation, 'tooling/node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs'));
+});
+
+test('resume refuses a different Docker engine without stopping or applying', t => {
+  const f = fixture(t, { fresh: true, fail: (bin, args) => args.includes('apply-compose') });
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
+  const before = f.calls.length;
+  const otherEngine = (bin, args, options) => bin === 'docker' && args.includes('info')
+    ? JSON.stringify({ OSType: 'linux', ID: 'different-engine', Architecture: 'x86_64', OperatingSystem: 'Linux' })
+    : f.execute(bin, args, options);
+  assert.throws(() => release({ root: f.root, resume: true }, otherEngine, f.buildHost), /Docker/);
+  assert.equal(f.calls.slice(before).some(call => call.includes('stop') || call.includes('apply-compose')), false);
+});
+
+test('a new site saves the engine architecture while existing preferences remain unchanged', t => {
+  const f = fixture(t, { fresh: true });
+  const first = loadSite(f.root, undefined, { imagePlatform: 'linux/arm64' });
+  assert.equal(first.source.image.DSH_IMAGE_PLATFORM, 'linux/arm64');
+  const bytes = readFileSync(first.sitePath);
+  assert.equal(loadSite(f.root, undefined, { imagePlatform: 'linux/amd64' }).source.image.DSH_IMAGE_PLATFORM, 'linux/arm64');
+  assert.deepEqual(readFileSync(first.sitePath), bytes);
+});
+
 test('backup failure restarts the unchanged old service', t => {
-  const f = fixture(t, { fail: (bin, args) => bin === 'tar' && args[0] === '-czf' });
+  const f = fixture(t, { fail: (bin, args) => args.includes('-czf') });
   assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
   assert.equal(readFileSync(f.config, 'utf8'), f.original);
   assert.equal(f.calls.some(call => call.includes('apply-compose')), false);

@@ -1,16 +1,17 @@
 #!/bin/sh
-# Private source updates are separate from the upstream framework's build entry.
+# Keep the Linux compatibility lock across private sync and the framework worker.
+# Use deploy/build.sh when only the current checkout should be built without Git sync.
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+command -v node >/dev/null || { printf 'Missing prerequisite: Node.js. See PRIVATE.md.\n' >&2; exit 1; }
+HELP=false
+for argument in "$@"; do [ "$argument" != '--help' ] || HELP=true; done
 case "${1:-}" in
-  --help) ;;
   ''|release|--*)
-    for command in node git flock; do
-      command -v "$command" >/dev/null || { printf 'Missing prerequisite: %s. See PRIVATE.md.\n' "$command" >&2; exit 1; }
-    done
-    mkdir -p "$ROOT/.local"
-    flock -n "$ROOT/.local/source-release.lock" node "$ROOT/private-deploy/sync-origin.mjs" "$@"
+    if [ "$HELP" = false ] && command -v flock >/dev/null; then
+      mkdir -p "$ROOT/.local"
+      exec flock -n "$ROOT/.local/source-release.lock" node "$ROOT/private-deploy/release.mjs" "$@"
+    fi
     ;;
 esac
-# The framework acquires the same lock for its own build and deployment phase.
-exec bash "$ROOT/deploy/build.sh" "$@"
+exec node "$ROOT/private-deploy/release.mjs" "$@"

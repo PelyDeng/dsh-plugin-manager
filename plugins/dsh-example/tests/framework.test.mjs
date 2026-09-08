@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fixture } from './fixture.mjs'
 import { buildReference } from '../scripts/build-reference.mjs'
+import { renderFrameworkConfig } from '../../../packages/plugin-manager/src/framework-config.mjs'
 
 test('authorized conversations can cite actual source, but cannot read runtime files or act as another Agent', async () => {
   const f = await fixture({ mode: 'authenticated' })
@@ -39,7 +40,8 @@ test('source snapshot includes all public framework layers and excludes private 
     mkdirSync(join(root, '.github/workflows'), { recursive: true })
     writeFileSync(join(root, '.github/workflows/check.yml'), 'name: Public checks')
     writeFileSync(join(root, 'packages/plugin-kit/src/types.d.mts'), 'export type Identity = string')
-    writeFileSync(join(root, 'env.conf'), '# 公开空模板\nDEEPSEEK_API_KEY=\n')
+    const publicTemplate = renderFrameworkConfig()
+    writeFileSync(join(root, 'env.conf'), publicTemplate)
     writeFileSync(join(root, 'test-report.sh'), '#!/bin/sh\n')
     buildReference(root, output)
     const value = JSON.parse(readFileSync(output))
@@ -53,9 +55,9 @@ test('source snapshot includes all public framework layers and excludes private 
     expect(value.files.some(file => file.path.startsWith('.local/'))).toBe(false)
     expect(value.files.some(file => file.path === 'env.conf')).toBe(true)
     expect(value.files.some(file => file.path === 'test-report.sh')).toBe(true)
-    writeFileSync(join(root, 'env.conf'), 'DEEPSEEK_API_KEY=private-fixture\n')
-    expect(() => buildReference(root, output)).toThrow('只能包含空值')
-    writeFileSync(join(root, 'env.conf'), 'DEEPSEEK_API_KEY=\n')
+    writeFileSync(join(root, 'env.conf'), publicTemplate.replace('DEEPSEEK_API_KEY=', 'DEEPSEEK_API_KEY=private-fixture'))
+    expect(() => buildReference(root, output)).toThrow('公开env.conf')
+    writeFileSync(join(root, 'env.conf'), publicTemplate)
     writeFileSync(join(root, 'packages/plugin-manager/src/implementation.mjs'), 'x'.repeat(19001))
     expect(() => buildReference(root, output)).toThrow('上限')
     writeFileSync(join(root, 'packages/plugin-manager/src/implementation.mjs'), '// public')

@@ -17,7 +17,7 @@
 
 当前问答界面采用顶部导航、桌面固定历史侧栏与手机抽屉，思考默认折叠并显示预览。实际问答需要自己的模型凭据，操作见[图文导览](quick-tour.md)。
 
-**作者**开发并交出发布目录；**部署者**填写配置、安装和维护；**使用者**登录、打开获授权的应用。只想体验完整源码站点的 Linux Docker 用户，可直接走[一键部署](first-deployment.md)。以下主线使用 Node CLI，Windows PowerShell 与 Bash 均可，不需要 Docker。
+**作者**开发并交出发布目录；**部署者**填写配置、安装和维护；**使用者**登录、打开获授权的应用。只想体验完整源码站点的 Windows、macOS 或 Linux Docker 用户，可直接走[一键部署](first-deployment.md)。以下主线使用 Node CLI，Windows PowerShell 与 Bash 均可，不需要 Docker。
 
 ## 开始前：选择体验路径
 
@@ -63,7 +63,7 @@ dsh-lab/
    └─ .local/      deployment.json、data/dsh-home、运行记录
 ```
 
-**取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager 0.3.5、kit 0.1.2 tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。仅消费现成发布物的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
+**取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager 0.4.0、kit 0.1.2 tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。仅消费现成发布物的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
 
 ```sh
 git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin-manager.git framework
@@ -94,11 +94,11 @@ lab="$(dirname "$framework")"
 两个终端后续均使用以下命令；新终端需重新设置这两个变量：
 
 ```sh
-pnpm --filter @dsh-plugin-manager/plugin-manager pack --out "$framework/.local/artifacts/tools/plugin-manager-0.3.5.tgz"
+pnpm --filter @dsh-plugin-manager/plugin-manager pack --out "$framework/.local/artifacts/tools/plugin-manager-0.4.0.tgz"
 pnpm --filter @dsh-plugin-manager/plugin-kit pack --out "$framework/.local/artifacts/tools/plugin-kit-0.1.2.tgz"
 node -e "for (const p of ['../tools','../site/incoming']) require('fs').mkdirSync(p,{recursive:true})"
 cd ../tools
-pnpm add --ignore-workspace "$framework/.local/artifacts/tools/plugin-manager-0.3.5.tgz"
+pnpm add --ignore-workspace "$framework/.local/artifacts/tools/plugin-manager-0.4.0.tgz"
 pnpm exec dsh-plugin-manager --version
 cd "$framework/deepseek-harness"
 pnpm install --frozen-lockfile
@@ -107,7 +107,7 @@ pnpm dsh --version
 cd "$lab/tools"
 ```
 
-**预期**：tools 中能运行 manager 0.3.5，deepseek-harness 中能运行官方 CLI。宿主使用自身 `packageManager` 与锁文件（当前源码为 pnpm 11.7.0），和框架 pnpm 11.19.0 分开安装。按宿主提示处理必要的依赖构建许可。源码版本由本次检出的 gitlink 决定，不用旧 npm CLI 替代。后文管理器命令均在 tools 目录运行；宿主源码构建步骤与[官方源码说明](https://github.com/deepseek-ai/deepseek-harness/blob/d347e703908d0406b7a7ef80e3a0e594d86b2215/README.md#run-from-source)一致。
+**预期**：tools 中能运行 manager 0.4.0，deepseek-harness 中能运行官方 CLI。宿主使用自身 `packageManager` 与锁文件（当前源码为 pnpm 11.7.0），和框架 pnpm 11.19.0 分开安装。按宿主提示处理必要的依赖构建许可。源码版本由本次检出的 gitlink 决定，不用旧 npm CLI 替代。后文管理器命令均在 tools 目录运行；宿主源码构建步骤与[官方源码说明](https://github.com/deepseek-ai/deepseek-harness/blob/d347e703908d0406b7a7ef80e3a0e594d86b2215/README.md#run-from-source)一致。
 
 ## 2. 打包第一个应用
 

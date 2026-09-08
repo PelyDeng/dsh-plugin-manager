@@ -14,11 +14,11 @@ import { supervise } from './supervisor.mjs';
 import { verifyHealth } from './installation.mjs';
 import { applyPluginSettings, resolvePluginSettings } from './plugin-settings.mjs';
 import { existsSync } from 'node:fs';
-import { applyCompose } from './apply-compose.mjs';
+import { applyCompose, checkCompose } from './apply-compose.mjs';
 /** Public CLI shared by Bash, PowerShell and the container entrypoint. */
 export async function main(args = process.argv.slice(2)) {
   const options = parseArguments([...args]);
-  if (options.help) { console.log('deployment.mjs deploy|start|stop|sync|verify|adopt|paths|health|apply-compose|render-compose|unlock --root <project> --config <env.conf|deployment.json> --plugins all|none|id,... --manifest path --home path --profile web --host-mode owned|external --stopped-file path --started-file path --resume | --recover --data-compatible'); return; }
+  if (options.help) { console.log('deployment.mjs deploy|start|stop|sync|verify|adopt|paths|health|apply-compose|check-compose|render-compose|unlock --root <project> --config <env.conf|deployment.json> --plugins all|none|id,... --manifest path --home path --profile web --host-mode owned|external --stopped-file path --started-file path --resume | --recover --data-compatible'); return; }
   const deployment = resolveDeployment(options);
   if (options.action === 'health') {
     if (existsSync(join(deployment.profileRoot, PENDING))) fail('部署尚未完成。');
@@ -34,11 +34,11 @@ export async function main(args = process.argv.slice(2)) {
     rmSync(path); return;
   }
   if (options.action === 'stop') { await stopOwned(deployment); return; }
-  const allowed = ['deploy', 'start', 'sync', 'verify', 'adopt', 'render-compose', 'apply-compose', 'container-start'];
+  const allowed = ['deploy', 'start', 'sync', 'verify', 'adopt', 'render-compose', 'apply-compose', 'check-compose', 'container-start'];
   if (!allowed.includes(options.action)) fail(`未知操作：${options.action}`);
   if (!['verify', 'render-compose'].includes(options.action)) checkDataSelection(deployment);
   if (!deployment.manifest) {
-    if (['sync', 'verify', 'adopt', 'container-start', 'render-compose', 'apply-compose'].includes(options.action)) fail('该操作需要 --manifest。');
+    if (['sync', 'verify', 'adopt', 'container-start', 'render-compose', 'apply-compose', 'check-compose'].includes(options.action)) fail('该操作需要 --manifest。');
     const state = readState(join(deployment.profileRoot, STATE));
     const selection = deployment.selection ?? (state ? (state.candidates ?? state.plugins.map(plugin => plugin.id)).join(',') || 'none' : undefined);
     const output = join(deployment.artifacts, randomUUID(), 'plugins');
@@ -48,6 +48,7 @@ export async function main(args = process.argv.slice(2)) {
   const candidates = selectRelease(loadRelease(resolve(deployment.root, deployment.manifest)), deployment.selection);
   assertReleaseMode(candidates, deployment.mode);
   if (options.action === 'apply-compose') { console.log(JSON.stringify(applyCompose(deployment, candidates))); return; }
+  if (options.action === 'check-compose') { console.log(JSON.stringify(checkCompose(deployment, candidates))); return; }
   if (options.action === 'render-compose') { console.log(JSON.stringify(renderCompose(deployment, candidates, resolve(deployment.root, options.output ?? join(deployment.artifacts, randomUUID()))))); return; }
   const settings = resolvePluginSettings(deployment, candidates);
   deployment.candidates = candidates.plugins.map(plugin => plugin.id);

@@ -1,8 +1,8 @@
 # 开发者助手配置参考
 
-本目录展示 example、配套 auth 和站点部署的完整常用配置，适用于 manager 0.3.4；下方 JSON 是独立集成的兼容模板。在线 main 链接可能领先于安装版本，模板与本页随应用版本交付。JSON 不支持注释，因此模板只保存真实配置字段，逐项备注、是否必填和默认值在下表说明。模板可提交 Git；复制后的实例配置只保存在 `.local/`，不会随源码或归档自动生效。
+本目录展示 example、配套 auth 和当前框架的常用站点配置；下方 JSON 是独立集成的兼容模板。在线 main 链接可能领先于安装版本，模板与本页随应用版本交付。JSON 不支持注释，因此模板只保存真实配置字段，逐项备注、是否必填和默认值在下表说明。模板可提交 Git；复制后的实例配置只保存在 `.local/`，不会随源码或归档自动生效。
 
-源码一键部署直接运行 `bash deploy/build.sh`，站点和插件文件自动初始化，无需复制下方模板。站点选项修改 `.local/env.conf`，根 `env.conf` 只提交空值模板，插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值及必填性见[一键部署](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/first-deployment.md)。
+源码一键部署在 Windows PowerShell 执行根 `.\build.ps1`，macOS/Linux 执行根 `./build.sh`；站点和插件文件自动初始化，无需复制下方模板。站点选项修改 `.local/env.conf`，根 `env.conf` 提供固定非秘密默认值，首次生成的私有文件写入实际平台默认值，已有配置不覆盖。插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值、平台验证边界及恢复说明见[一键部署](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/first-deployment.md)。
 
 ## 文件与使用位置
 
@@ -18,7 +18,7 @@
 2. 按上表创建目录并复制三份模板，将 manifest 改为实际组合清单。填写真实不可变 `containerImage`；示例中的占位符必须替换，镜像需包含匹配版本的 manager。
 3. 本机演示可保留回环 origin；通过域名访问时同步填写 `publicOrigin`、`publicUrl`、`trustedHosts`，并配置站点反向代理。
 4. 在同一个 DSH home 完成宿主默认模型与凭据配置；这些内容不属于插件模板，不能填写到 `plugin.json`。
-5. Linux Docker 主机在工具目录执行 `pnpm exec dsh-plugin-manager apply-compose --root <交付根> --config .local/deployment.json --plugins all`。无需框架源码或手改 Compose。
+5. 使用本机 Linux Docker 引擎的部署者，在工具目录执行 `pnpm exec dsh-plugin-manager apply-compose --root <交付根> --config .local/deployment.json --plugins all`。当前 manager 会按执行平台处理网络和挂载；可先用 `check-compose` 检查候选配置及权限。无需框架源码或手改 Compose。
 
 Docker 模板保持 `/data/dsh-home` 为容器 home，auth 的 `stateDir` 与之配套。本机直接运行官方宿主时，删除 auth 配置中的 `stateDir`，让其使用实际 `DSH_HOME/auth`；再从工具目录执行 `pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --dsh-cli-js <官方CLI绝对路径> --plugins all`。不要把本机的绝对路径复制进容器配置。
 

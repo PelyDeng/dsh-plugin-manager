@@ -1,7 +1,7 @@
 import { LOCK, OWNER, PENDING, STATE, atomicJSON, canonical, digestPattern, fail, hash, idPattern, json, packageName, readArchive, readOptional, same, synchronizedStopped, within } from './state.mjs';
 import { dirname, join, resolve, sep } from 'node:path';
-import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { hostname } from 'node:os';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { acquireFileLock } from './lock.mjs';
 import { cliRun, externalStopped, hostCLI, observeManager, runtimeIdentity, stopOwned, verificationIdentity } from './process.mjs';
 import { assessVerification, printVerification } from './verification.mjs';
 import { randomUUID } from 'node:crypto';
@@ -61,14 +61,8 @@ export function computeChanges(previous, desired, installed, matches, pending = 
 
 /** A lock is never stolen solely because a timeout elapsed. */
 export function acquireLock(profileRoot) {
-  mkdirSync(profileRoot, { recursive: true });
   const path = join(profileRoot, LOCK);
-  let fd;
-  try { fd = openSync(path, 'wx', 0o600); }
-  catch (error) { if (error.code === 'EEXIST') fail(`profile 正在同步或上次进程中断；检查 ${path} 后显式 unlock。`); throw error; }
-  writeFileSync(fd, `${JSON.stringify({ pid: process.pid, host: hostname(), createdAt: new Date().toISOString() })}\n`);
-  closeSync(fd);
-  return () => rmSync(path);
+  return acquireFileLock(path, `profile 正在同步或上次进程中断；检查 ${path} 后显式 unlock。`);
 }
 
 export function packageManagerArguments(deployment, action) {

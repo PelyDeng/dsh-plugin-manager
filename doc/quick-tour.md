@@ -4,7 +4,7 @@
 
 本页演示启用可选认证后的登录与问答流程：管理员管理账号、应用访问权限和DeepSeek/智谱密钥，普通用户进入已授权的应用。插件开发和安装更新分别见[作者指南](plugin-development.md)与[发布物交付指南](../packages/plugin-manager/DELIVERY.md)。
 
-[开始 Linux Docker 部署](first-deployment.md) · [English introduction](../README.en.md) · [完整 CLI 体验](getting-started.md) · [FAQ](FAQ.md)
+[开始 Docker 部署](first-deployment.md) · [English introduction](../README.en.md) · [完整 CLI 体验](getting-started.md) · [FAQ](FAQ.md)
 
 ## 1. 登录独立的应用门户
 
