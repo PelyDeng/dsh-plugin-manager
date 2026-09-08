@@ -56,6 +56,24 @@ test('resume skips source sync and normal worker failure releases only the Node 
   assert.equal(readFileSync(resolve(f.root, '.local/source-release.lock'), 'utf8'), 'legacy flock inode');
 });
 
+test('private update failures preserve signal evidence without retaining locks for ordinary errors', async t => {
+  for (const signal of [undefined, null, 'SIGKILL', 'SIGTERM']) {
+    const f = fixture(t), error = Object.assign(new Error('private update failed'), { signal });
+    f.put('.local/source-release.lock', 'legacy flock inode');
+    await assert.rejects(sourceRelease({ root: f.root, preflight: f.preflight, beforeBuild: async () => { throw error; } }), value => value === error);
+    assert.equal(existsSync(f.lock), Boolean(signal));
+    if (signal) assert.equal(JSON.parse(readFileSync(f.lock)).workerPid, undefined);
+    assert.equal(readFileSync(resolve(f.root, '.local/source-release.lock'), 'utf8'), 'legacy flock inode');
+  }
+});
+
+test('a signal received during a successful private update prevents the worker and retains its lock', async t => {
+  const f = fixture(t);
+  assert.equal(await sourceRelease({ root: f.root, preflight: f.preflight, beforeBuild: () => { process.emit('SIGTERM'); } }), 143);
+  assert.equal(existsSync(f.lock), true);
+  assert.equal(JSON.parse(readFileSync(f.lock)).workerPid, undefined);
+});
+
 test('interrupted workers retain their source lock and block another deployment', async t => {
   const f = fixture(t);
   f.put('deploy/scripts/build.mjs', 'process.exitCode=130;');
