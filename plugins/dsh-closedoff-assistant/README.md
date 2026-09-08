@@ -17,6 +17,10 @@ kind: "package-bundle"
 
 流式呈现兼容旧版 `assistant/chunk` 与 DSH 0.1.3 的 `agent/assistant-stream`。新版历史使用运行时官方 `expandAssistantStream` 展开 message/attempt 中的记录，保留思考预览、工具提示、失败或取消的部分输出和首 token 时间；瞬时帧不写入持久化事件。开发依赖仍固定在已发布 SDK，版本差异集中在 `src/assistant-stream.ts`。
 
+## 对话模型
+
+新会话使用 auth“模型设置”管理的框架默认模型，已有会话及分支恢复官方记录中的模型；服务重启不改变该规则。默认切换无需重启，模型目录、凭据与设置均由官方 DSH 提供。恢复依赖宿主的 `modelSelection` 投影，缺失或读取失败时明确报错。
+
 ## 会话管理
 
 closedoff 0.4.0 在 authenticated 模式接入 auth 0.12.0 的[会话管理](../../doc/conversation-management.md)。本人对话按插件分类、筛选和分页；只读预览复用现有脱敏消息投影，不恢复 Agent 或查询园区接口。批量移除使用官方归档，底层日志和独立分支保留。

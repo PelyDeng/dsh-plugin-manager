@@ -1,6 +1,6 @@
 import {createUserMessage} from '@deepseek-ai/dsh-llm'
 import {SessionId} from '@deepseek-ai/dsh-session'
-import {onRevoked,conversationArchive,conversationRemover,previewPage,hostBusyConversationIds} from '@dsh-plugin-manager/plugin-kit'
+import {onRevoked,conversationModel,conversationArchive,conversationRemover,previewPage,hostBusyConversationIds} from '@dsh-plugin-manager/plugin-kit'
 import {ownerKey,digest} from './store.mjs'
 import {invariant} from './settings.mjs'
 import {persona,reasoningLanguage} from './jobs.mjs'
@@ -196,7 +196,11 @@ export class BlogChat {
       this.access.assert(b.job.actor);if(b.stopped)return
       conversation=await this.recover(b.job.actor,conversation)
       const history=conversation.ready?await this.persistedEvents(b.job.actor,conversation):[]
-      const selection=await selectBlogModel(this.ctx,this.jobs.models,b.request.attachments.some(a=>a.image)||historyHasImages(history),b.abort.signal)
+      const pinned=await conversationModel(this.ctx,conversation.ready?conversation.id:undefined)
+      // Explicitly adding the first image retains the plugin's existing vision routing;
+      // a global default change alone never changes a resumed conversation.
+      const models={text:pinned,vision:historyHasImages(history)?pinned:this.jobs.models?.vision??pinned}
+      const selection=await selectBlogModel(this.ctx,models,b.request.attachments.some(a=>a.image)||historyHasImages(history),b.abort.signal)
       const options=this.options(b,selection)
       const setup=options.setup
       options.setup=agentCtx=>{
@@ -355,7 +359,8 @@ export class BlogChat {
       check()
       if(recovered.ready)return
       this.beginCreation(owner,c.id)
-      const selection=await selectBlogModel(this.ctx,this.jobs.models,historyHasImages(seed),fork.abort.signal)
+      const pinned=await conversationModel(this.ctx,args.conversationId,seed.length)
+      const selection=await selectBlogModel(this.ctx,{text:pinned,vision:pinned},historyHasImages(seed),fork.abort.signal)
       check()
       const options=this.options(fork,selection)
       const handle=await this.ctx.agents.create({...options,sessionId:SessionId(c.id),seed,inheritedEventCount:seed.length,meta:{cwd:process.cwd(),parentSession:SessionId(args.conversationId),isSeeded:true}})

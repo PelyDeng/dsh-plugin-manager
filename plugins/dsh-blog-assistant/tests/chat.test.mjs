@@ -57,6 +57,7 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
     workspaceRegistry:{archivedSessionIds:archived,async archiveSession(id){assert.ok(saved.has(id));if(!archived.includes(id))archived.push(id)}},
     tools:{register(tool){tools.set(tool.name,tool);return()=>tools.delete(tool.name)}},
     agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{resolveModelInfo:async()=>({inputModalities:['text']})},
+    sessionProjections:{restore(_checkpoint,events){return{checkpoint:{modelSelection:{val:{pending:null,lastUsed:events.findLast(e=>e.type==='request/header')?.data.header.config??null}}}}}},
     sessions:{async flush(session){if(++flushCount===1)await flushGate;if(nextFlushGate){const gate=nextFlushGate;nextFlushGate=null;await gate}saved.set(String(session.id),session.snapshotEvents());headers.set(String(session.id),session.header);return !noPersistence}},
     sessionPersistence:{async stat(id){return headers.has(String(id))?{header:headers.get(String(id))}:undefined},async open(id){assert.ok(saved.has(String(id)));return{header:headers.get(String(id)),read:async()=>saved.get(String(id)),close:async()=>{}}}},
     messageFeedback:Object.fromEntries(['list','put','delete'].map(action=>[action,async request=>{feedbackCalls.push({action,request});return{ok:true,value:action==='list'?{items:[]}:request}}])),
@@ -66,7 +67,7 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
       Object.defineProperty(session,'header',{value:headers.get(String(options.sessionId))??{id:options.sessionId,createdAt:Date.now(),cwd:process.cwd(),...options.meta}})
       headers.set(String(options.sessionId),session.header)
       session.snapshotEvents=()=>[...events]
-      const agent={id:options.sessionId,ctx:scope.ctx,session,options:{},status:'idle',cancel(){handle.cancelled=true},whenIdle:async()=>{},followup(message){handle.message=message;handle.emit('user/message',message);handle.emit('turn/start',{turn:'turn-'+events.length})}}
+      const agent={id:options.sessionId,ctx:scope.ctx,session,options:{},status:'idle',cancel(){handle.cancelled=true},whenIdle:async()=>{},followup(message){handle.message=message;handle.emit('user/message',message);handle.emit('turn/start',{turn:'turn-'+events.length});handle.emit('request/header',{header:{config:options.agentOptions}})}}
       const unregister=root.agents.register(agent)
       const handle={agent,options,events,cancelled:false,disposed:false,emit(type,data){const event={type,data,seq:events.length,time:1000+events.length*100};events.push(event);root.emit('session/event',session,event)},async dispose(){if(handle.disposed)return;handle.disposed=true;await unregister();await scope.dispose()}}
       handle.sections=[];handle.contexts=[];options.setup({systemPrompt:{section(s){handle.sections.push(s)},context(c){handle.contexts.push(c)}},tools:{restrict:rule=>{handle.allowed=rule.allow}}});handles.push(handle);return handle
@@ -379,7 +380,7 @@ test('image model survives removed selection, native history reopening and branc
   const f=await fixture(t),chat=f.chat
   chat.jobs.models={text:{provider:'glm-fixture',model:'text'},vision:{provider:'glm-fixture',model:'vision'}}
   chat.ctx.llm.resolveModelInfo=async(provider,model)=>{assert.equal(provider,'glm-fixture');return{inputModalities:model==='vision'?['text','image']:['text']}}
-  await f.send();await tick();assert.equal(f.handles[0].options.agentOptions.model,'text');complete(f.handles[0],'text-answer');await tick()
+  await f.send();await tick();assert.equal(f.handles[0].options.agentOptions.model,'test');complete(f.handles[0],'text-answer');await tick()
   chat.attachments.freeze=()=>[{id:'image-fixture',version:1,name:'image',image:{provider:'fixture',attachmentId:'image'}}]
   await f.send({requestId:'image-request'});await tick();assert.equal(f.handles[1].options.agentOptions.model,'vision');complete(f.handles[1],'image-answer');await tick()
   chat.attachments.freeze=()=>[]
@@ -393,6 +394,23 @@ test('image model survives removed selection, native history reopening and branc
   await tick();assert.equal(f.handles[4].options.agentOptions.model,'vision')
   assert.equal(chat.ctx.agentDefaultModel.currentSelection().model,'test')
   complete(f.handles[4],'branch-answer');await tick()
+})
+
+test('new text chats follow the framework default while reopening and branching preserve their recorded model',async t=>{
+  const f=await fixture(t),chat=f.chat
+  chat.jobs.models={text:{provider:'dedicated',model:'writing'}}
+  await f.send();await tick();assert.equal(f.handles[0].options.agentOptions.model,'test');complete(f.handles[0]);await tick()
+  chat.ctx.agentDefaultModel.currentSelection=()=>({provider:'new-provider',model:'new-model'})
+  await chat.close()
+  const reopened=new BlogChat(chat.ctx,chat.access,chat.store,chat.index,chat.attachments,chat.jobs,chat.app,chat.sdk,3000)
+  t.after(()=>reopened.close())
+  await reopened.send(actor,{conversationId:f.conversation.id,requestId:'resume-default-model',text:'继续',research:false})
+  await tick();assert.equal(f.handles[1].options.agentOptions.model,'test');complete(f.handles[1],'old-answer');await tick()
+  await reopened.fork(actor,{conversationId:f.conversation.id,messageId:'old-answer',requestId:'model-branch'})
+  assert.equal(f.handles[2].options.agentOptions.model,'test')
+  const fresh=reopened.create(actor,'new-model-conversation')
+  await reopened.send(actor,{conversationId:fresh.id,requestId:'fresh-default-model',text:'新对话',research:false})
+  await tick();assert.equal(f.handles[3].options.agentOptions.model,'new-model');complete(f.handles[3],'new-answer');await tick()
 })
 
 test('history waits for a pending fork checkpoint instead of publishing ready from stat',async t=>{

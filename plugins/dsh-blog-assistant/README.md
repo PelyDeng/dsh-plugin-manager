@@ -24,9 +24,11 @@ blog 0.9.0 接入 auth 0.12.0 的[会话管理](../../doc/conversation-managemen
 
 官方 web Bundle 已提供会话持久化、JSON storage-domain 和 messageFeedback，无需重复装配。博客接口将反馈备注限制为 4000 UTF-8 字节，沿用宿主共享反馈服务的配置，不改变其他应用的备注上限。
 
-模型接入复用官方 `dsh-llm-pi-ai`，Bundle 在已有适配器中声明 `blog-zhipu` 专属路由，使用智谱普通模型 API。管理员从 auth“模型设置 → 智谱 GLM”保存 `ZHIPU_API_KEY`，密钥只写官方 credentials 存储；不复制到博客配置。此密钥为宿主共享凭据，与 DeepSeek 的密钥分别管理。
+模型接入复用官方 `dsh-llm-pi-ai`，Bundle 在已有适配器中声明 `blog-zhipu` 路由，使用智谱普通模型 API。管理员从 auth“模型设置 → 服务商 API 密钥 → 智谱 GLM”保存 `ZHIPU_API_KEY`，密钥只写官方 credentials 存储；不复制到博客配置。此密钥为宿主共享凭据，与 DeepSeek 的密钥分别管理。
 
-博客配置的 `models.text` 和 `models.vision` 只保存 provider/model 引用。模板使用 GLM-5.3 写作、GLM-5V-Turbo 看图；未配置模型引用的旧部署沿用宿主默认模型。含图的本轮附件或已发送历史会选视觉模型，分支和重启后的续聊同样保留该能力。缺少智谱密钥时明确提示配置，不悄悄改用其他模型；其他插件的默认模型不变。GLM-5.3 始终开启思考，路由默认 high；GLM-5V-Turbo 只发送文档支持的思考开关。每次输出上限配置为 8192 Token。
+普通文字新对话通过 kit `conversationModel()` 使用框架默认模型；管理员在 auth 单选模型后立即影响新会话。恢复与分支使用官方持久化模型投影，默认变化不切换旧会话；读取失败则拒绝恢复。需宿主提供已注册 `modelSelection` 的 `sessionProjections`。
+
+`models.text` 保留给文章编辑器的专用写作任务，`models.vision` 用于新增图片时的识图路由，均只保存 provider/model 引用。模板使用 GLM-5.3 写作、GLM-5V-Turbo 看图；发送第一张图片仍可切换到专用识图模型，之后即使取消附件选择、重启或分支，也沿用记录中的识图模型。缺少智谱密钥明确提示，不悄悄替换。GLM-5.3 始终开启思考、路由默认 high；GLM-5V-Turbo 只发送支持的思考开关。每次输出上限为 8192 Token。选为框架默认的博客模型路由要求本 Bundle 保持安装。
 
 AI 任务使用官方 Jobs controller 和真实 Agent owner。文章编辑器的单次写作建立独立 Agent；对话每轮恢复同一官方 Session，并在结束时持久化、释放 Agent。任务结果、幂等请求、候选稿和原用户归属保存在本插件 SQLite 中。服务重启会将未完成任务标记中断，不自动重新调用模型。
 

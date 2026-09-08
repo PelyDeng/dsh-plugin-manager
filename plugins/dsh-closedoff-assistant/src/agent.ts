@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { Config } from './config.ts'
-import { AccessError, conversationArchive, conversationRemover, readConversationEvents, previewPage, hostBusyConversationIds, type ConversationProvider, type PreviewMessage, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, conversationModel, conversationArchive, conversationRemover, readConversationEvents, previewPage, hostBusyConversationIds, type ConversationProvider, type PreviewMessage, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { projectHistory } from './presentation.ts'
 import type { ConversationStore, ConversationSummary } from './conversation-store.ts'
 
@@ -89,12 +89,14 @@ export class ConversationManager {
     agentCtx.tools.restrict({ allow: [...this.toolNames] })
   }
 
-  private options() {
-    const selection = this.ctx.agentDefaultModel.currentSelection()
+  private async options(id?: string, eventCount?: number) {
+    const selection = await conversationModel(this.ctx, id, eventCount)
+    const info = id ? undefined : await this.ctx.llm.resolveModelInfo(selection.provider, selection.model)
+    const effort = info?.reasoning?.efforts.some(effort => effort.id === this.config.reasoningEffort) ? this.config.reasoningEffort : selection.reasoningEffort
     return {
       provider: selection.provider,
       model: selection.model,
-      reasoningEffort: ReasoningEffortId(this.config.reasoningEffort),
+      ...(effort ? { reasoningEffort: ReasoningEffortId(effort) } : {}),
     }
   }
 
@@ -130,10 +132,13 @@ export class ConversationManager {
     try {
       await evicted?.dispose()
       this.access.assert(actor)
+      const options = await this.options()
+      this.access.assert(actor)
+      if (this.disposed) throw new Error('conversation manager is disposed')
       const handle = await this.ctx.agents.create({
         sessionId: SessionId(id),
         meta: { cwd: process.cwd() },
-        agentOptions: this.options(),
+        agentOptions: options,
         setup: agentCtx => this.setup(agentCtx),
       })
       if (this.disposed) {
@@ -162,9 +167,13 @@ export class ConversationManager {
       if (this.disposed) throw new Error('conversation manager is disposed')
       this.access.assert(actor)
       this.store.assertOwner(id,actor)
+      const options = await this.options(id)
+      this.access.assert(actor)
+      this.store.assertOwner(id,actor)
+      if (this.disposed) throw new Error('conversation manager is disposed')
       handle = await this.ctx.agents.resume({
         resumeSessionId: SessionId(id),
-        agentOptions: this.options(),
+        agentOptions: options,
         setup: agentCtx => this.setup(agentCtx),
       })
       if (this.disposed) throw new Error('conversation manager is disposed')
@@ -251,12 +260,16 @@ export class ConversationManager {
     try {
       await evicted?.dispose()
       this.access.assert(actor)
+      const options = await this.options(conversation.id, seed.length)
+      this.access.assert(actor)
+      this.store.assertOwner(conversation.id, actor)
+      if (this.disposed) throw new Error('conversation manager is disposed')
       const handle = await this.ctx.agents.create({
         sessionId: SessionId(id),
         seed,
         inheritedEventCount: SessionLogOffset(seed.length),
         meta: { cwd: process.cwd(), parentSession: SessionId(conversation.id), isSeeded: true },
-        agentOptions: this.options(),
+        agentOptions: options,
         setup: agentCtx => this.setup(agentCtx),
       })
       if (this.disposed) {

@@ -28,6 +28,8 @@ async function fixture(mode: 'standalone' | 'authenticated' = 'authenticated') {
   const cancel = vi.fn()
   const feedback = vi.fn(async () => ({ ok: true, value: { items: [] } }))
   const bus = {
+    get(key: string): unknown { return this[key as keyof typeof this] },
+    llm: {resolveModelInfo:async()=>({reasoning:{efforts:[{id:'low'}]}})},
     on(name: string, listener: Listener) {
       const group = listeners.get(name) ?? new Set<Listener>()
       group.add(listener); listeners.set(name, group)

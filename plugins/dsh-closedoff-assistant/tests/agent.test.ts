@@ -26,14 +26,30 @@ function fixture(max = 2, store = new ConversationStore(':memory:')) {
   const resume = vi.fn(async (_options: unknown): Promise<ReturnType<typeof handle>> => {
     throw Object.assign(new Error('not found'), { name: 'SessionPersistenceNotFoundError' })
   })
-  const services: Record<string, unknown> = {}
-  const ctx = { get: (key: string) => services[key], agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'test' }) }, agents: { create, resume } } as unknown as Context
+  const defaults = { currentSelection: () => ({ provider: 'deepseek', model: 'test' }) }
+  const services: Record<string, unknown> = {
+    agentDefaultModel: defaults,
+    sessionPersistence: { async open(id: string) { const result = create.mock.calls.findIndex(([options]) => (options as {sessionId:string}).sessionId === id); const current=result < 0 ? undefined : await create.mock.results[result]!.value; return {header:{id},read:async()=>current?.agent.session.snapshotEvents()??[],close:async()=>{}} } },
+    sessionProjections: { restore(_checkpoint:unknown,events:{type:string;data:any}[]) { return {checkpoint:{modelSelection:{val:{pending:null,lastUsed:[...events].reverse().find(event=>event.type==='request/header')?.data.header.config??null}}}} } },
+  }
+  const ctx = { get: (key: string) => services[key], agentDefaultModel: defaults, llm: {resolveModelInfo:async()=>({reasoning:{efforts:[{id:'low'}]}})}, agents: { create, resume } } as unknown as Context
   const manager = new ConversationManager(ctx, Config({ maxActiveConversations: max } as Config), 'persona', [], access, store)
   cleanup.push(() => manager.dispose())
-  return { manager, store, create, resume, revoked, services }
+  return { manager, store, create, resume, revoked, services, defaults }
 }
 
 describe('owned business conversation lifecycle', () => {
+  it('keeps the recorded model on cold resume and follows the changed default only for a fresh session', async () => {
+    const f=fixture(1)
+    f.create.mockResolvedValueOnce(handle([{type:'request/header',data:{header:{config:{provider:'deepseek',model:'test',reasoningEffort:'high'}}}}]))
+    const first=(await f.manager.open(undefined,true,alice))!
+    f.defaults.currentSelection=()=>({provider:'new-provider',model:'new-model'})
+    await f.manager.open(undefined,true,alice)
+    f.resume.mockResolvedValueOnce(handle())
+    await f.manager.open(first.id,false,alice)
+    expect(f.create.mock.calls[1]?.[0]).toMatchObject({agentOptions:{provider:'new-provider',model:'new-model'}})
+    expect(f.resume.mock.calls[0]?.[0]).toMatchObject({agentOptions:{provider:'deepseek',model:'test',reasoningEffort:'high'}})
+  })
   it('previews read-only, fences failed removal and retries official archival without resurrecting history',async()=>{
     const {manager,store,create,resume,services}=fixture()
     const c=(await manager.open(undefined,true,alice))!,id=c.id
