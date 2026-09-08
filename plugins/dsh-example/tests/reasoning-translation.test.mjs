@@ -253,3 +253,80 @@ test('native Chinese thoughts do not consume a model request and absent usage st
   expect(await f.run()).toMatchObject({ status: 'native', text: '先检查资料，再组织中文回答。', partial: false })
   expect(f.calls).toHaveLength(1)
 })
+
+test.each(['json', 'fenced json'])('observed %s translation envelope is unwrapped once with every paragraph preserved', async kind => {
+  const text = '\n第一段：核对资料。\n\n第二段：保留代码与路径。\n```json\n{"original":"正文中的示例，不再拆解"}\n```\n'
+  const envelope = JSON.stringify({ original: text })
+  const output = kind === 'json' ? envelope : '```json\r\n' + envelope + '\r\n```'
+  const f = fixture({ chunks: [{ type: 'text-delta', index: 0, text: output }, { type: 'usage', usage }, { type: 'finish', reason: { kind: 'stop' } }] })
+  const originalEvents = structuredClone(f.sources.get(target.conversationId).events)
+  const result = await f.run()
+  expect(result).toMatchObject({ text, cached: false, usage })
+  expect((await f.run()).text).toBe(text)
+  expect(f.calls).toHaveLength(1)
+  expect(f.sources.get(target.conversationId).events).toEqual(originalEvents)
+  expect(JSON.parse(f.calls[0].messages[0].content[0].text)).toEqual({ original: ORIGINAL })
+})
+
+test.each(['json', 'fenced json'])('existing %s cache entries are normalized on return without another model call or rewriting the audit', async kind => {
+  const f = fixture({ partial: true }), first = await f.run()
+  const text = '保留第一段。\n\n保留第二段与换行。\n'
+  const envelope = JSON.stringify({ original: text })
+  const wrapped = kind === 'json' ? envelope : '```json\n' + envelope + '\n```'
+  const row = f.service.db.prepare("SELECT id,data FROM translations WHERE status='translated'").get()
+  const audit = JSON.parse(row.data);audit.result.text = wrapped;delete audit.textNormalized
+  const stored = JSON.stringify(audit)
+  f.service.db.prepare('UPDATE translations SET data=? WHERE id=?').run(stored,row.id)
+  expect(await f.run()).toEqual({ ...first, text, cached: true })
+  expect(f.calls).toHaveLength(1)
+  expect(f.service.db.prepare('SELECT data FROM translations WHERE id=?').get(row.id).data).toBe(stored)
+})
+
+test.each([
+  JSON.stringify({ original: CHINESE, note: '额外字段必须保留' }),
+  JSON.stringify({ original: { text: CHINESE } }),
+  JSON.stringify([{ original: CHINESE }]),
+  '```json\n' + JSON.stringify({ answer: CHINESE }) + '\n```',
+  CHINESE + '\n```json\n' + JSON.stringify({ original: '正文中的示例' }) + '\n```\n继续说明。',
+])('ordinary translated prose or a different JSON shape remains intact: %s', async text => {
+  const f = fixture({ chunks: [{ type: 'text-delta', index: 0, text }, { type: 'finish', reason: { kind: 'stop' } }] })
+  expect((await f.run()).text).toBe(text)
+  const row = f.service.db.prepare("SELECT id,data FROM translations WHERE status='translated'").get()
+  const audit = JSON.parse(row.data);delete audit.textNormalized
+  f.service.db.prepare('UPDATE translations SET data=? WHERE id=?').run(JSON.stringify(audit),row.id)
+  expect((await f.run()).text).toBe(text)
+  expect(f.calls).toHaveLength(1)
+})
+
+test('a translated JSON example inside the envelope is not unwrapped again when read from the new cache', async () => {
+  const text = JSON.stringify({ original: CHINESE })
+  const f = fixture({ chunks: [{ type: 'text-delta', index: 0, text: JSON.stringify({ original: text }) }, { type: 'finish', reason: { kind: 'stop' } }] })
+  expect((await f.run()).text).toBe(text)
+  expect((await f.run()).text).toBe(text)
+  expect(f.calls).toHaveLength(1)
+})
+
+test.each(['json', 'fenced json'])('unescaped title quotes in a new %s envelope fail instead of being stripped or cached as a translation', async kind => {
+  const invalid = '{"original":"核对文章标题"示例文章"，保留标题中的引号。"}'
+  const text = kind === 'json' ? invalid : '```json\n' + invalid + '\n```'
+  const f = fixture({ chunks: [{ type: 'text-delta', index: 0, text }, { type: 'finish', reason: { kind: 'stop' } }] })
+  await expect(f.run()).rejects.toMatchObject({ status: 502 })
+  await expect(f.run()).rejects.toMatchObject({ status: 502 })
+  expect(f.calls).toHaveLength(2)
+  expect(f.service.db.prepare("SELECT COUNT(*) AS count FROM translations WHERE status='translated'").get().count).toBe(0)
+})
+
+test('an old invalid envelope is skipped without rewriting its audit; the replacement becomes the next cache hit', async () => {
+  const f = fixture(), before = structuredClone(f.sources.get(target.conversationId).events)
+  await f.run()
+  const row = f.service.db.prepare("SELECT id,data FROM translations WHERE status='translated'").get()
+  const audit = JSON.parse(row.data);delete audit.textNormalized
+  audit.result.text = '{"original":"核对文章标题"示例文章"，保留标题中的引号。"}'
+  const stored = JSON.stringify(audit)
+  f.service.db.prepare('UPDATE translations SET data=? WHERE id=?').run(stored,row.id)
+  expect(await f.run()).toMatchObject({ text: CHINESE, cached: false })
+  expect(await f.run()).toMatchObject({ text: CHINESE, cached: true })
+  expect(f.calls).toHaveLength(2)
+  expect(f.service.db.prepare('SELECT data FROM translations WHERE id=?').get(row.id).data).toBe(stored)
+  expect(f.sources.get(target.conversationId).events).toEqual(before)
+})
