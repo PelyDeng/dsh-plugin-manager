@@ -3,7 +3,7 @@
  * DSH 博客原文与确认提交桥接。使用 Typecho 原生内容组件，分离公开版和保存稿。
  * @package DshBlogBridge
  * @author DPL
- * @version 0.3.1
+ * @version 0.3.2
  * @link https://pelyblog.com/
  */
 if (!defined('__TYPECHO_ROOT_DIR__')) { exit; }
@@ -155,7 +155,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             $this->demand(($engines[$db->getPrefix() . $name] ?? '') === 'InnoDB', 'incompatible', 503);
         }
         $categories = $db->fetchAll($db->select('mid', 'name')->from('table.metas')->where('type = ?', 'category')->order('order', \Typecho\Db::SORT_ASC));
-        return ['protocolVersion' => 1, 'version' => '0.3.1', 'structuredSearch' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
+        return ['protocolVersion' => 1, 'version' => '0.3.2', 'structuredSearch' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
     }
     private function posts(array $input): array
     {
@@ -254,7 +254,11 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
         $published = $row['type'] === 'post' ? $this->variant($row) : null;
         $draft = $row['type'] === 'post_draft' ? $row : $this->bridgeDb->fetchRow($this->bridgeDb->select()->from('table.contents')->where('parent = ? AND type = ?', $row['cid'], 'post_draft')->limit(1));
         $snapshot = ['published' => $published, 'savedDraft' => $draft ? $this->variant($draft) : null];
-        $snapshot['version'] = hash('sha256', json_encode($snapshot, JSON_THROW_ON_ERROR));
+        // Theme page views change on reads, not article edits. Preserve raw values
+        // in snapshots, but exclude this counter from preview/confirmation versions.
+        $versionData = $snapshot;
+        unset($versionData['published']['raw']['views'], $versionData['savedDraft']['raw']['views']);
+        $snapshot['version'] = hash('sha256', json_encode($versionData, JSON_THROW_ON_ERROR));
         return $snapshot;
     }
     private function receipt(array $input): array

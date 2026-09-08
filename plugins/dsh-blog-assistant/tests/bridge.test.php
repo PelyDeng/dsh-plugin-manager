@@ -127,6 +127,23 @@ namespace {
     check(count($drafts['items'])===30 && array_filter($drafts['items'],fn($r)=>$r['hasPublished'])===[], 'draft filter excludes published roots and child drafts');
     check(count($list(['status'=>'all','query'=>'%_'])['items'])===30, 'search treats percent and underscore literally');
     rejects($list,['status'=>'invalid'],400);
+    [$db,$action,$ref,$input,$run] = fixture();
+    $db->tables['table.contents'][0]['views']=10;
+    $db->tables['table.contents'][1]['views']=3;
+    $base=$ref->getMethod('snapshot')->invoke($action,338);
+    $db->tables['table.contents'][0]['views']=11;
+    $db->tables['table.contents'][1]['views']=4;
+    $current=$ref->getMethod('snapshot')->invoke($action,338);
+    check($base['version']===$current['version'],'view increments must not invalidate article previews');
+    check($current['published']['raw']['views']===11 && $current['savedDraft']['raw']['views']===4,'raw snapshots still retain current view counters');
+    foreach (['title'=>'changed','text'=>'changed','status'=>'private','modified'=>100,'commentsNum'=>1] as $key=>$value) {
+        $original=$db->tables['table.contents'][0];$db->tables['table.contents'][0][$key]=$value;
+        check($ref->getMethod('snapshot')->invoke($action,338)['version']!==$base['version'],'real changes still invalidate previews: '.$key);
+        $db->tables['table.contents'][0]=$original;
+    }
+    $input['base']=$base;
+    check($run($input)['deletedCids']===[338,339],'view increments between preview and confirmation do not block the operation');
+    echo "PASS: view counters excluded from versions, raw counters retained, content and metadata conflicts protected (Db/widget doubles)\n";
     echo "PASS: library status filters before pagination, saved draft flags, literal search and invalid status (Db double)\n";
     echo "PASS: bridge deletion scope, native cleanup calls, receipt replay, actor/hash conflict, stale version, child ID guard and transactional rollback (Db/widget doubles)\n";
 }
