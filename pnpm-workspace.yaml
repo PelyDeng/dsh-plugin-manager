@@ -3,6 +3,8 @@ packages:
   - 'plugins/*'
 nodeLinker: hoisted
 minimumReleaseAgeExclude:
+  - "@deepseek-ai/dsh-session-format-v2-to-v3@0.1.5-alpha.2"
+  - "@deepseek-ai/dsh-session-format-catalog@0.1.5-alpha.2"
   - '@deepseek-ai/dsh-agent-default-model@0.1.5-alpha.2'
   - '@deepseek-ai/dsh-agent@0.1.5-alpha.2'
   - '@deepseek-ai/dsh-attachment@0.1.5-alpha.2'
@@ -34,3 +36,6 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-storage-domain@0.1.5-alpha.2'
   - '@deepseek-ai/dsh-storage@0.1.5-alpha.2'
   - '@deepseek-ai/dsh-token-meter@0.1.5-alpha.2'
+  - '@deepseek-ai/dsh-session-format-v0-to-v1@0.1.5-alpha.2'
+  - '@deepseek-ai/dsh-session-format-v1-to-v2@0.1.5-alpha.2'
+  - '@deepseek-ai/dsh-session-format@0.1.5-alpha.2'
