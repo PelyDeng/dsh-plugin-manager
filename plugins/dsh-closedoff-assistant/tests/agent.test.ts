@@ -29,10 +29,10 @@ function fixture(max = 2, store = new ConversationStore(':memory:')) {
   const defaults = { currentSelection: () => ({ provider: 'deepseek', model: 'test' }) }
   const services: Record<string, unknown> = {
     agentDefaultModel: defaults,
-    sessionPersistence: { async open(id: string) { const result = create.mock.calls.findIndex(([options]) => (options as {sessionId:string}).sessionId === id); const current=result < 0 ? undefined : await create.mock.results[result]!.value; return {header:{id},read:async()=>current?.agent.session.snapshotEvents()??[],close:async()=>{}} } },
+    sessionPersistence: { async open(id: string) { const result = create.mock.calls.findIndex(([options]) => (options as {sessionId:string}).sessionId === id); const current=result < 0 ? undefined : await create.mock.results[result]!.value; return {header:{id},read:async()=>({events:current?.agent.session.snapshotEvents()??[],eventState:"detached"}),close:async()=>{}} } },
     sessionProjections: { restore(_checkpoint:unknown,events:{type:string;data:any}[]) { return {checkpoint:{modelSelection:{val:{pending:null,lastUsed:[...events].reverse().find(event=>event.type==='request/header')?.data.header.config??null}}}} } },
   }
-  const ctx = { get: (key: string) => services[key], agentDefaultModel: defaults, llm: {resolveModelInfo:async()=>({reasoning:{efforts:[{id:'low'}]}})}, agents: { create, resume } } as unknown as Context
+  const ctx = { on: () => () => {}, get: (key: string) => services[key], agentDefaultModel: defaults, llm: {resolveModelInfo:async()=>({reasoning:{efforts:[{id:'low'}]}})}, agents: { create, resume } } as unknown as Context
   const manager = new ConversationManager(ctx, Config({ maxActiveConversations: max } as Config), 'persona', [], access, store)
   cleanup.push(() => manager.dispose())
   return { manager, store, create, resume, revoked, services, defaults }
@@ -73,7 +73,7 @@ describe('owned business conversation lifecycle', () => {
     const c=(await manager.open(undefined,true,alice))!,id=c.id
     const events=[{type:'user/message',seq:0,time:1000,data:{source:{kind:'user'},content:[{type:'text',text:'预览问题'}]}}]
     let closed=0,fail=true;const archived:string[]=[]
-    services.sessionPersistence={async open(_id:string,mode:string){expect(mode).toBe('read');return{header:{id},async read(){return events},async close(){closed++}}}}
+    services.sessionPersistence={async open(_id:string,mode:string){expect(mode).toBe('read');return{header:{id},async read(){return {events,eventState:"detached"}},async close(){closed++}}}}
     services.workspaceRegistry={archivedSessionIds:archived,async archiveSession(value:string){if(fail)throw Error('storage');archived.push(value)}}
     const provider=manager.management(),before=store.record(alice,id)
     expect((await provider.preview(alice,id)).messages).toEqual([{role:'user',text:'预览问题',time:1000}])

@@ -40,14 +40,21 @@ export async function requestedConversationModel(ctx: Context, input: unknown): 
   return selection
 }
 
-/** Caller opens its own Agent and holds its busy guard before selecting. The host also updates its default. */
+/** Caller opens its own Agent and holds its busy guard before selecting. The host also attempts to save its default. */
 export async function selectConversationModel(ctx: Context, sessionId: string, selected: ConversationModel, authorize: () => void): Promise<ConversationModel> {
   const controller = ctx.get('sessionController') as { selectModel?: (request: ConversationModel & { sessionId: string }) => Promise<{ selected: ConversationModel }> } | undefined
   if (!controller?.selectModel) throw new AccessError(503, '宿主未提供会话模型切换能力')
   authorize()
+  const release = ctx.on('internal/dispatch', (mode, name, args) => {
+    if (mode !== 'emit' || name !== 'session/event') return
+    const [session, event] = args as [{ id: string }, { type: string }]
+    // 支持的宿主先调度再提交选择，之后才保存默认模型；此处可在写入前否决。
+    if (session.id === sessionId && event.type === 'model/selection') authorize()
+  }, { global: true })
   let result
   try { result = await controller.selectModel({ sessionId, ...selected }) }
   catch { throw new AccessError(400, '模型切换失败，请刷新后重试') }
+  finally { release() }
   authorize()
   return { ...result.selected }
 }

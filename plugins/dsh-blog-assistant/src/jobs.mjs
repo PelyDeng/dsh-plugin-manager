@@ -142,7 +142,6 @@ export class BlogJobs {
       b.unsub.push(this.ctx.on('session/event', (session,event) => {
         if (String(session.id)!==`blog-${b.job.id}` || b.stopped) return
         try {
-          if (event.type==='assistant/chunk') chunk(event.data.chunk)
           if (event.type==='assistant/message') { b.text=event.data.message.content.filter(v=>v.type==='text').map(v=>v.text).join(''); this.update(b,{text:b.text}) }
           if (event.type==='turn/end') void this.stop(b, event.data.reason.kind==='completed' ? 'succeeded' : 'failed', event.data.reason.kind==='completed' ? null : {code:'model',message:'模型调用未完成，请检查模型配置或重试'})
         } catch { void this.stop(b,'cancelled',{code:'revoked',message:'登录或授权已失效'}) }

@@ -85,7 +85,7 @@ export class BlogChat {
   }
   async persistedEvents(actor,c){
     const handle=await this.ctx.sessionPersistence.open(SessionId(c.id),'read')
-    try{this.assertLifecycle(c,handle.header);const events=await handle.read();this.access.assert(actor);return events}finally{await handle.close()}
+    try{this.assertLifecycle(c,handle.header);const {events}=await handle.read();this.access.assert(actor);return events}finally{await handle.close()}
   }
   async history(actor,id){
     const events=await this.events(actor,id),owner=ownerKey(actor),c=this.index.get(owner,id)

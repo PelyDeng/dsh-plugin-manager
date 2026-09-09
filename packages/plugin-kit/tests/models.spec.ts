@@ -1,6 +1,11 @@
 import { Context } from '@deepseek-ai/cordis'
+import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import { describe, expect, it, vi } from 'vitest'
-import { conversationModel, conversationModelCatalog, requestedConversationModel, selectConversationModel } from '../src/models.ts'
+import { conversationModel, conversationModelCatalog, requestedConversationModel, selectConversationModel, type ConversationModel } from '../src/models.ts'
+
+declare module '@deepseek-ai/dsh-session' {
+  interface SessionEventMap { 'model/selection': ConversationModel }
+}
 
 describe('conversation model routing', () => {
   it('shares only public catalog fields and delegates a checked selection without client effort injection',async()=>{
@@ -23,7 +28,7 @@ describe('conversation model routing', () => {
   const original = { provider: 'first', model: 'original', reasoningEffort: 'high' }
   const changed = { provider: 'second', model: 'new' }
   function fixture(state: unknown = { pending: null, lastUsed: original }) {
-    const ctx = new Context(), close = vi.fn(), read = vi.fn(async () => [])
+    const ctx = new Context(), close = vi.fn(), read = vi.fn(async () => ({ events: [], eventState: 'shared-frozen' }))
     const restore = vi.fn(() => ({ checkpoint: { modelSelection: { val: state } } }))
     ctx.provide('agentDefaultModel', { currentSelection: () => changed })
     ctx.provide('sessionPersistence', { open: vi.fn(async () => ({ header: { id: 'owned' }, read, close })) })
@@ -49,5 +54,76 @@ describe('conversation model routing', () => {
     expect(f.close).toHaveBeenCalledOnce()
     await expect(conversationModel(fixture(undefined).ctx, 'foreign')).rejects.toThrow('标识不匹配')
     await expect(conversationModel(fixture(null).ctx, 'owned')).rejects.toThrow('未注册')
+  })
+
+  async function selectionFixture() {
+    const ctx = new Context(), fiber = await ctx.plugin(SessionStore)
+    const owned = ctx.sessions.create(SessionId('owned')), other = ctx.sessions.create(SessionId('other'))
+    let selectedDefault: ConversationModel = original
+    const resolveCallConfig = vi.fn(async (value: ConversationModel) => value)
+    const saveSelection = vi.fn(async (value: ConversationModel) => { selectedDefault = { ...value } })
+    ctx.provide('sessionController', { async selectModel({ sessionId, ...requested }: ConversationModel & { sessionId: string }) {
+      const selected = await resolveCallConfig(requested)
+      // Official commit order, with the installed SessionStore's real pre-commit dispatch.
+      ctx.sessions.get(SessionId(sessionId))!.append('model/selection', selected)
+      await saveSelection(selected)
+      return { selected }
+    } })
+    return { ctx, fiber, owned, other, resolveCallConfig, saveSelection, defaultSelection: () => selectedDefault }
+  }
+
+  it('vetoes a revoked selection after async routing without touching another session or its newer default', async () => {
+    const f = await selectionFixture()
+    let enter!: () => void, release!: () => void
+    const entered = new Promise<void>(resolve => { enter = resolve })
+    const released = new Promise<void>(resolve => { release = resolve })
+    let revoked = false
+    const authorize = vi.fn(() => { if (revoked) throw new Error('revoked') })
+    f.resolveCallConfig.mockImplementationOnce(async value => { enter(); await released; return value })
+    const pending = selectConversationModel(f.ctx, f.owned.id, changed, authorize)
+    const rejected = expect(pending).rejects.toThrow()
+    try {
+      await entered
+      revoked = true
+      const otherSelection = { provider: 'other', model: 'unrelated' }
+      await expect(selectConversationModel(f.ctx, f.other.id, otherSelection, () => {})).resolves.toEqual(otherSelection)
+      f.owned.append('turn/start', { turn: 1 })
+      const before = f.owned.snapshotEvents()
+      release()
+      await rejected
+      expect(f.owned.snapshotEvents()).toEqual(before)
+      expect(f.other.snapshotEvents().map(event => event.data)).toEqual([otherSelection])
+      expect(f.saveSelection.mock.calls).toEqual([[otherSelection]])
+      expect(f.defaultSelection()).toEqual(otherSelection)
+      expect(authorize).toHaveBeenCalledTimes(2)
+      expect(() => f.owned.append('model/selection', original)).not.toThrow()
+      expect(authorize).toHaveBeenCalledTimes(2)
+    } finally { release(); await pending.catch(() => {}); await f.fiber.dispose() }
+  })
+
+  it('rechecks at commit and after success, then releases the selection guard', async () => {
+    const f = await selectionFixture(), authorize = vi.fn()
+    try {
+      await expect(selectConversationModel(f.ctx, f.owned.id, changed, authorize)).resolves.toEqual(changed)
+      expect(authorize).toHaveBeenCalledTimes(3)
+      expect(f.owned.snapshotEvents().map(event => event.data)).toEqual([changed])
+      expect(f.saveSelection).toHaveBeenCalledExactlyOnceWith(changed)
+      authorize.mockImplementation(() => { throw new Error('revoked later') })
+      expect(() => f.owned.append('model/selection', original)).not.toThrow()
+      expect(authorize).toHaveBeenCalledTimes(3)
+    } finally { await f.fiber.dispose() }
+  })
+
+  it('releases the guard when the controller fails before commit', async () => {
+    const f = await selectionFixture(), authorize = vi.fn()
+    try {
+      f.resolveCallConfig.mockRejectedValueOnce(new Error('private provider failure'))
+      await expect(selectConversationModel(f.ctx, f.owned.id, changed, authorize)).rejects.toThrow('模型切换失败')
+      expect(f.owned.snapshotEvents()).toEqual([])
+      expect(f.saveSelection).not.toHaveBeenCalled()
+      authorize.mockImplementation(() => { throw new Error('revoked later') })
+      expect(() => f.owned.append('model/selection', original)).not.toThrow()
+      expect(authorize).toHaveBeenCalledOnce()
+    } finally { await f.fiber.dispose() }
   })
 })

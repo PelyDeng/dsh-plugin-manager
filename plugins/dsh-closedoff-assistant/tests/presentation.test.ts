@@ -410,13 +410,9 @@ describe('Web projections', () => {
         data: { message: { content: [{ toolCallId: 'lookup-1', content: [{ type: 'text', text: '{"data":[{"reservationId":"abcdef123456"}]}' }] }] } },
       },
       {
-        type: 'assistant/chunk', time: 1,
-        data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: '核对预约ID: abcdef123456。联系电话 13800138000。' } },
-      },
+        type: 'assistant/attempt', time: 1, data: { turn: 1, step: 1, stream: [{ type: 'chunk', time: 1, chunk: { type: 'reasoning-delta', index: 0, text: '核对预约ID: abcdef123456。联系电话 13800138000。' } }] } },
       {
-        type: 'assistant/chunk', time: 2,
-        data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 1, text: '联系电话 13800138000，详情 https://private.invalid/a' } },
-      },
+        type: 'assistant/attempt', time: 2, data: { turn: 1, step: 1, stream: [{ type: 'chunk', time: 2, chunk: { type: 'text-delta', index: 1, text: '联系电话 13800138000，详情 https://private.invalid/a' } }] } },
       { type: 'turn/end', time: 3, data: { reason: { kind: 'completed' } } },
     ] as unknown as SessionEvent[]
 
@@ -447,16 +443,16 @@ describe('Web projections', () => {
 
   it('joins reasoning steps without marking the turn done at an assistant message', () => {
     const active = projectHistory([
-      { type: 'assistant/chunk', time: 1, data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: '第一步。' } } },
+      { type: 'assistant/attempt', time: 1, data: { turn: 1, step: 1, stream: [{ type: 'chunk', time: 1, chunk: { type: 'reasoning-delta', index: 0, text: '第一步。' } }] } },
       { type: 'assistant/message', time: 2, data: { turn: 1, step: 1, message: { content: [{ type: 'reasoning', text: '第一步完成。' }] } } },
-      { type: 'assistant/chunk', time: 3, data: { turn: 1, step: 2, chunk: { type: 'reasoning-delta', index: 0, text: '第二步仍在生成' } } },
+      { type: 'assistant/attempt', time: 3, data: { turn: 1, step: 2, stream: [{ type: 'chunk', time: 3, chunk: { type: 'reasoning-delta', index: 0, text: '第二步仍在生成' } }] } },
     ] as unknown as SessionEvent[])[0]
     expect(active).toMatchObject({ role: 'assistant', thinkingDone: false, thinking: '第一步完成。\n正在生成…' })
 
     const completed = projectHistory([
-      { type: 'assistant/chunk', time: 1, data: { turn: 1, step: 1, chunk: { type: 'reasoning-delta', index: 0, text: '第一步。' } } },
+      { type: 'assistant/attempt', time: 1, data: { turn: 1, step: 1, stream: [{ type: 'chunk', time: 1, chunk: { type: 'reasoning-delta', index: 0, text: '第一步。' } }] } },
       { type: 'assistant/message', time: 2, data: { turn: 1, step: 1, message: { content: [{ type: 'reasoning', text: '第一步完成。' }] } } },
-      { type: 'assistant/chunk', time: 3, data: { turn: 1, step: 2, chunk: { type: 'reasoning-delta', index: 0, text: '第二步完成' } } },
+      { type: 'assistant/attempt', time: 3, data: { turn: 1, step: 2, stream: [{ type: 'chunk', time: 3, chunk: { type: 'reasoning-delta', index: 0, text: '第二步完成' } }] } },
       { type: 'turn/end', time: 4, data: { reason: { kind: 'completed' } } },
     ] as unknown as SessionEvent[])[0]
     expect(completed).toMatchObject({ role: 'assistant', thinkingDone: true, thinking: '第一步完成。\n第二步完成' })
@@ -496,13 +492,14 @@ describe('Web projections', () => {
       { type: 'turn/start', seq: 0, time: 100, data: { turn: 1 } },
       { type: 'user/message', seq: 1, time: 101, data: { source: { kind: 'user' }, content: [{ type: 'text', text: '查询车辆' }] } },
       { type: 'step/start', seq: 2, time: 110, data: { turn: 1, step: 1 } },
-      { type: 'assistant/chunk', seq: 3, time: 120, data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: '查询完成' } } },
+      { type: 'request/header', seq: 3, time: 111, data: { turn: 1, step: 1 } },
       {
         type: 'assistant/message', seq: 4, time: 160,
         data: {
           turn: 1,
           step: 1,
           message: { id: 'message-1', source: { provider: 'deepseek', model: 'test' }, content: [{ type: 'text', text: '查询完成' }] },
+          stream: [{ type: 'chunk', time: 120, chunk: { type: 'text-delta', index: 0, text: '查询完成' } }],
           usage: { inputTokens: 120, outputTokens: 30, totalTokens: 180, cacheReadTokens: 20, cacheWriteTokens: 10, reasoningTokens: 8 },
         },
       },
@@ -537,18 +534,17 @@ describe('Web projections', () => {
       { type: 'turn/start', seq: 0, time: 100, data: { turn: 1 } },
       { type: 'step/start', seq: 1, time: 110, data: { turn: 1, step: 1 } },
       {
-        type: 'assistant/chunk', seq: 2, time: 120,
-        data: { turn: 1, step: 1, chunk: { type: 'usage', usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12, cacheReadTokens: 0, cacheWriteTokens: 0 } } },
-      },
+        type: 'assistant/attempt', seq: 2, time: 120, data: { turn: 1, step: 1, stream: [{ type: 'chunk', time: 120, chunk: { type: 'usage', usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12, cacheReadTokens: 0, cacheWriteTokens: 0 } } }] } },
       { type: 'llm/retry', seq: 3, time: 130, data: { turn: 1, step: 1 } },
       { type: 'llm/retry-started', seq: 4, time: 140, data: { turn: 1, step: 1 } },
-      { type: 'assistant/chunk', seq: 5, time: 150, data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: '完成' } } },
+      { type: 'request/header', seq: 5, time: 141, data: { turn: 1, step: 1 } },
       {
         type: 'assistant/message', seq: 6, time: 160,
         data: {
           turn: 1,
           step: 1,
           message: { id: 'message-2', source: { provider: 'deepseek', model: 'test' }, content: [{ type: 'text', text: '完成' }] },
+          stream: [{ type: 'chunk', time: 150, chunk: { type: 'text-delta', index: 0, text: '完成' } }],
           usage: { inputTokens: 20, outputTokens: 3, totalTokens: 23, cacheReadTokens: 0, cacheWriteTokens: 0 },
         },
       },

@@ -471,7 +471,6 @@ export async function installWeb(ctx: Context, config: Config, manager: Conversa
               }
               break
             }
-            case 'assistant/chunk':
             case 'assistant/live-chunk': {
               const chunk = event.data.chunk
               if (event.data.step === firstStep && firstTokenAt === undefined) {

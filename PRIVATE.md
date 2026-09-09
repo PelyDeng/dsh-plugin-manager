@@ -69,7 +69,9 @@ pnpm package --plugins "auth,closedoff,example" --output .local/artifacts/releas
 
 不要提前向数据目录写入文件；首次构建由管理器初始化数据目录。真实凭据及运行数据不进入 Git。发布包放在 `.local/artifacts/`。
 
-宿主子模块锁定 DSH `0.1.3-alpha.1`，以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。
+宿主子模块锁定 DSH `0.1.5-alpha.2`，以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。
+
+私有根更新入口不更新宿主子模块，也不替换 `DSH_HOST_IMAGE`。宿主升级时显式运行 `git submodule update --init deepseek-harness`，或准备与 gitlink 对应的干净检出并构建新镜像，再更新私有镜像引用。Session V3 的迁移、刷新历史与数据回退约束见[宿主兼容说明](doc/host-compatibility.md)。仅发布现有业务应用时保留 `auth,example,blog,closedoff` 选集，不加入尚未交付的插件。
 
 ## 默认模型与私有插件
 

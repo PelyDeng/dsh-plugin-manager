@@ -4,7 +4,7 @@ import { inspectHostSource } from './host-source.mjs';
 
 const args = process.argv.slice(2);
 if (args.some(arg => arg !== '--working-tree')) throw new Error('Usage: node deploy/scripts/prepare-host.mjs [--working-tree]');
-const host = inspectHostSource(undefined, { formal: !args.includes('--working-tree') });
+const host = inspectHostSource();
 console.log(`Preparing official DSH ${host.commit} with ${host.packageManager}`);
 for (const command of [['install', '--frozen-lockfile'], ['run', 'build']]) {
   const result = spawnSync('corepack', [host.packageManager, ...command], {
@@ -15,4 +15,7 @@ for (const command of [['install', '--frozen-lockfile'], ['run', 'build']]) {
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
-inspectHostSource(undefined, { formal: !args.includes('--working-tree') });
+const prepared = inspectHostSource();
+if (prepared.commit !== host.commit || prepared.packageManager !== host.packageManager) {
+  throw new Error('Host source changed during preparation; discard the build and prepare the selected checkout again.');
+}

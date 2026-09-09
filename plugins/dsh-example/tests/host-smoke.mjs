@@ -267,6 +267,7 @@ try {
   }
 } catch (error) { suiteFailure = error } finally {
   try { await stop() } catch (error) { suiteFailure ??= error }
+  if (suiteFailure) writeFileSync(join(operation, 'host.log'), hostLog, { mode: 0o600 })
   try { model.closeAllConnections(); await new Promise(resolve => model.close(resolve)) } catch (error) { suiteFailure ??= error }
 }
 if (reportPath) writeVerificationReport(resolve(reportPath), stages.map(stage => ({ ...stage, finishedAt: new Date().toISOString(), outcome: suiteFailure ? 'failed' : 'passed' })))

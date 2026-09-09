@@ -25,6 +25,8 @@ git pull --ff-only --recurse-submodules
 
 Windows 将最后一行换成 `.\build.ps1`。首次自动创建 `.local/env.conf` 并写入当前平台的实际默认值；已有文件不覆盖。旧站点优先导入 site.json，其次导入 deployment.json，保留原文件和解析路径。根 `env.conf` 提供固定非秘密默认值，真实站点值只填私有副本；手工复制模板须自行核对 UID/GID 和镜像架构，详见[统一配置](../doc/framework-configuration.md)。
 
+当前宿主为 `0.1.5-alpha.2`。从旧宿主升级时，须检查 Session V3 数据迁移及插件接口；配置了固定 `DSH_HOST_IMAGE` 的站点还须单独更新镜像引用。更新源码不会替换固定镜像，也不能复用旧宿主的按需构建基线。步骤和回退边界见[官方宿主版本与升级](../doc/host-compatibility.md)。
+
 以后读取私有 env；`.local/deployment.json`、发布清单、Compose 和操作记录均由脚本生成，不需要人工准备，也不提交 Git。完整配置、前置环境和恢复说明见[Docker 一键部署](../doc/first-deployment.md)。
 
 脚本自动准备锁定的 pnpm，安装依赖，默认构建管理器、构建并检查 `plugins` 列出的全部插件，再打包发布清单。需要宿主镜像时直接使用仓库已提供的官方源码构建；源码不完整时提示缺失，不自动拉取，也不要求与预设锁定版本一致。宿主源码未变时复用已有宿主层，安装本次构建的 manager。默认使用本机不可变镜像 ID，仅设置 `publishImage` 时推送镜像仓库。构建记录使用已提交源码，无需分别选择组件版本。

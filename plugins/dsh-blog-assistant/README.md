@@ -22,7 +22,9 @@
 
 ## 宿主能力
 
-通过官方 `dsh` profile 运行，不自建第二个宿主。宿主需提供 agents、agentDefaultModel、llm、tools、systemPrompt、webServer、jobs、attachments、sessions、sessionPersistence 和 messageFeedback。最终运行契约以仓库锁定的 DSH `0.1.3-alpha.1` 为准：原文件需要该版本的 `saveFileStream/readFileStream`，历史与用量依赖其公开子路径，不能仅凭较旧开发依赖的类型检查认定可用。
+通过官方 `dsh` profile 运行。宿主需提供 agents、agentDefaultModel、llm、tools、systemPrompt、webServer、jobs、attachments、sessions、sessionPersistence 和 messageFeedback。开发依赖与运行宿主均为 DSH `0.1.5-alpha.2`；附件通过 `saveFileStream/readFileStream` 访问，历史和用量使用官方公开子路径。实时输出订阅 `agent/assistant-stream`，持久历史使用 Session V3 的 message/attempt 流；不再订阅 `assistant/chunk`。
+
+旧会话经官方持久化层转换后读取，不能直接改写日志或沿用升级前缓存的分支序号。生产升级的备份、镜像更新和回退步骤见[宿主兼容说明](../../doc/host-compatibility.md)。
 
 官方 web Bundle 已提供会话持久化、JSON storage-domain 和 messageFeedback，无需重复装配。博客接口将反馈备注限制为 4000 UTF-8 字节，沿用宿主共享反馈服务的配置，不改变其他应用的备注上限。
 
@@ -40,7 +42,7 @@ AI 任务由官方 Jobs controller 管理，并绑定实际执行任务的 Agent
 
 对话附件不要求先创建文章。发送时冻结资料版本及阅读范围；移除待发送选择不删除历史消息中的原件引用。新对话不继承旧资料，分支只继承切点之前的消息与资料。
 
-`pnpm test` 运行可在已发布开发依赖上执行的行为测试；`pnpm test:host` 必须在锁定 DSH 0.1.3 运行环境中运行，覆盖真实公开 SDK 的历史/Token 投影及受保护 HTTP 路由。HTTP 测试使用隔离数据与身份替身，不等于正式浏览器或真实模型验收。
+`pnpm test` 运行可在已发布开发依赖上执行的行为测试；`pnpm test:host` 必须在锁定 DSH 0.1.5-alpha.2 运行环境中运行，覆盖真实公开 SDK 的历史/Token 投影及受保护 HTTP 路由。HTTP 测试使用隔离数据与身份替身，不等于正式浏览器或真实模型验收。
 
 联网查证复用宿主 `web`，需要挂载一个明确的搜索 provider 和抓取 provider。多个未指定默认 provider 的配置会报歧义，不能当作已有联网能力。公开网页抓取应使用官方限制私网地址和重定向的 `web-fetch-http`。来源记录区分搜索摘要和实际抓取原文。
 

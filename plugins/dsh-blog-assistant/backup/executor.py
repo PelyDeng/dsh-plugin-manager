@@ -71,12 +71,12 @@ def load_config(path):
     if origin.scheme!='http' or origin.hostname not in ['127.0.0.1','::1'] or origin.username or origin.password or origin.path:raise ValueError('DSH authorization callback must be a loopback origin')
     sources = [c[k] for k in ['blogRoot','imageRoot','pluginData','attachmentRoot','minioData']]
     if c.get('chat'):
-        for field in ['sessionRoot','storageRoot']:
+        for field in ['sessionRoot']:
             p=pathlib.Path(c['chat'][field])
             if not p.is_absolute() or p==pathlib.Path('/') or any(ch in str(p) for ch in ',\n\r'):raise ValueError('absolute scoped chat root required')
             c['chat'][field]=str(p.resolve());sources.append(str(p.resolve()))
         if not isinstance(c['chat'].get('cwd'),str) or not c['chat']['cwd'].startswith('/'):raise ValueError('explicit host session cwd required')
-        chat_roots=[c['chat']['sessionRoot'],c['chat']['storageRoot'],c['pluginData']]
+        chat_roots=[c['chat']['sessionRoot'],c['pluginData']]
         if any(within(a,b) or within(b,a) for i,a in enumerate(chat_roots) for b in chat_roots[i+1:]):raise ValueError('chat and plugin roots must be disjoint')
     for field in ['stateRoot','backupRoot','restoreRoot']:
         if any(within(c[field], source) or within(source,c[field]) for source in sources): raise ValueError('backup and source roots must be separate')
@@ -207,7 +207,7 @@ class Executor:
         if has_chat and not self.c.get('chat'):raise ChatRestoreError('恢复聊天记录需要先配置官方会话与反馈存储路径')
     def chat_stage(self, operation, work, database=None, snapshot=None, merge=False):
         chat=self.c.get('chat')
-        if not chat:raise ChatRestoreError('请先配置官方会话与反馈存储路径')
+        if not chat:raise ChatRestoreError('请先配置官方会话存储路径')
         if (operation=='export' or merge) and self.service_active('docker',self.c['dshContainer']):raise RuntimeError('chat writers must be stopped before snapshot or merge')
         work=pathlib.Path(work);work.mkdir(mode=0o700)
         helper=pathlib.Path(__file__).resolve().parent/'chat-state.mjs'
@@ -219,9 +219,9 @@ class Executor:
             if not source.exists() or any(ch in str(source) for ch in ',\n\r'):raise ValueError('invalid offline helper mount')
             args.extend(['--mount','type=bind,src='+str(source)+',dst='+target+(',readonly' if readonly else '')])
         mount(work,'/work',False);mount(helper,'/helper/chat-state.mjs')
-        config={'database':'/source/plugin/blog.sqlite','sessionRoot':'/source/sessions','storageRoot':'/source/storage','output':'/work/output','cwd':chat['cwd']}
+        config={'database':'/source/plugin/blog.sqlite','sessionRoot':'/source/sessions','output':'/work/output','cwd':chat['cwd']}
         if operation=='export' or merge:
-            mount(self.c['pluginData'],'/source/plugin');mount(chat['sessionRoot'],'/source/sessions');mount(chat['storageRoot'],'/source/storage')
+            mount(self.c['pluginData'],'/source/plugin');mount(chat['sessionRoot'],'/source/sessions')
         if operation=='stage':
             database=pathlib.Path(database)
             if database.name!='blog.sqlite':raise ValueError('invalid restored chat database')
@@ -415,9 +415,7 @@ class Executor:
             owner=pathlib.Path(chat['sessionRoot']).stat()
             if not dest.parent.exists():dest.parent.mkdir(mode=0o700);os.chown(str(dest.parent),owner.st_uid,owner.st_gid)
             mappings.append((source,dest,owner))
-        if report['feedback']:
-            if report['feedback']!='storage/message_feedback.json':raise ValueError('unexpected feedback medium')
-            mappings.append((output/report['feedback'],pathlib.Path(chat['storageRoot'])/'message_feedback.json',pathlib.Path(chat['storageRoot']).stat()))
+        if report.get('feedback'):raise ValueError('feedback must be restored inside Session logs')
         for source,dest,owner in mappings:
             if not source:continue
             os.chown(str(source),owner.st_uid,owner.st_gid)

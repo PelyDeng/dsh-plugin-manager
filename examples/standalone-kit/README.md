@@ -2,7 +2,7 @@
 
 # 独立鉴权接入示例
 
-复制到自己的仓库，取得维护者提供的 plugin-kit 0.14.7 tgz 与 plugin-manager 0.14.7。该目录故意不引用未发布的 registry 包；先把实际 kit 归档加入开发依赖，生成自己的锁文件：
+复制到自己的仓库，取得维护者提供的 plugin-kit 0.15.0 tgz 与 plugin-manager 0.15.0。该目录故意不引用未发布的 registry 包；先把实际 kit 归档加入开发依赖，生成自己的锁文件：
 
 ```sh
 pnpm add --ignore-workspace --save-dev <kit-tgz绝对路径>

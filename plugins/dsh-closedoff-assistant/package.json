@@ -1,6 +1,6 @@
 {
   "name": "dsh-closedoff-assistant",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "封闭化园区业务查询、个人对话历史与可视化助手",
   "license": "UNLICENSED",
   "private": true,
@@ -39,7 +39,10 @@
     "schemaVersion": 3,
     "id": "closedoff",
     "defaultEnabled": true,
-    "configuration": { "entryId": "closedoff-assistant", "auth": "consumer" },
+    "configuration": {
+      "entryId": "closedoff-assistant",
+      "auth": "consumer"
+    },
     "healthPath": "/closedoff-qa/ready",
     "verifyFiles": [
       "web/index.html",
@@ -80,17 +83,17 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-agent": "0.1.2-alpha.5 || 0.1.3-alpha.1",
-    "@deepseek-ai/dsh-agent-default-model": "0.1.2-alpha.5 || 0.1.3-alpha.1",
-    "@deepseek-ai/dsh-host-webserver": "0.1.2-alpha.5 || 0.1.3-alpha.1",
-    "@deepseek-ai/dsh-llm": "0.1.2-alpha.5 || 0.1.3-alpha.1",
-    "@deepseek-ai/dsh-message-feedback": "0.1.2-alpha.5 || 0.1.3-alpha.1",
-    "@deepseek-ai/dsh-session": "0.1.2-alpha.5 || 0.1.3-alpha.1",
-    "@deepseek-ai/dsh-session-persistence": "0.1.2-alpha.5 || 0.1.3-alpha.1",
-    "@deepseek-ai/dsh-system-prompt": "0.1.2-alpha.5 || 0.1.3-alpha.1",
-    "@deepseek-ai/dsh-token-meter": "0.1.2-alpha.5 || 0.1.3-alpha.1",
-    "@deepseek-ai/dsh-tools": "0.1.2-alpha.5 || 0.1.3-alpha.1",
-    "@deepseek-ai/dsh-home-paths": "0.1.2-alpha.5 || 0.1.3-alpha.1"
+    "@deepseek-ai/dsh-agent": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-host-webserver": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-llm": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-message-feedback": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-session": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-session-persistence": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-token-meter": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-tools": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-home-paths": "0.1.5-alpha.2"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
@@ -133,24 +136,25 @@
   "devDependencies": {
     "@hy-media/video-player": "file:vendor/hy-media-video-player-0.0.37.tgz",
     "@deepseek-ai/cordis": "4.0.2",
-    "@deepseek-ai/dsh-agent": "0.1.2-alpha.5",
-    "@deepseek-ai/dsh-agent-default-model": "0.1.2-alpha.5",
-    "@deepseek-ai/dsh-attachment": "0.1.2-alpha.5",
-    "@deepseek-ai/dsh-host-webserver": "0.1.2-alpha.5",
-    "@deepseek-ai/dsh-llm": "0.1.2-alpha.5",
-    "@deepseek-ai/dsh-message-feedback": "0.1.2-alpha.5",
-    "@deepseek-ai/dsh-session": "0.1.2-alpha.5",
-    "@deepseek-ai/dsh-session-persistence": "0.1.2-alpha.5",
-    "@deepseek-ai/dsh-system-prompt": "0.1.2-alpha.5",
-    "@deepseek-ai/dsh-token-meter": "0.1.2-alpha.5",
-    "@deepseek-ai/dsh-tools": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-agent": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-attachment": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-host-webserver": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-llm": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-message-feedback": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-session": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-session-persistence": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-token-meter": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-tools": "0.1.5-alpha.2",
     "@types/node": "^22.20.0",
     "cesium": "1.142.0",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
     "vue": "3.5.42",
     "vitest": "^4.1.8",
-    "@deepseek-ai/dsh-home-paths": "0.1.2-alpha.5",
-    "@dsh-plugin-manager/plugin-kit": "workspace:*"
+    "@deepseek-ai/dsh-home-paths": "0.1.5-alpha.2",
+    "@dsh-plugin-manager/plugin-kit": "workspace:*",
+    "@deepseek-ai/dsh-command-feedback": "0.1.5-alpha.2"
   }
 }

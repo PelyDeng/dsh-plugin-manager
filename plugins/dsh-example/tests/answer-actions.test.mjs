@@ -11,13 +11,19 @@ test('Cordis resolves actual service names instead of dependency group labels',(
 const events=[
  {type:'turn/start',seq:0,time:1000,data:{turn:1}},
  {type:'step/start',seq:1,time:1050,data:{turn:1,step:1}},
- {type:'assistant/chunk',seq:2,time:1100,data:{chunk:{type:'text-delta',text:'回答'}}},
- {type:'assistant/message',seq:3,time:1400,data:{message:{id:'answer-1',content:[{type:'text',text:'回答'}]}}},
+ {type:'request/header',seq:2,time:1060,data:{header:{}}},
+ {type:'assistant/message',seq:3,time:1400,data:{stream:[{type:'text-chunks',time0:1100,index:0,dt:[],texts:['回答']}],message:{id:'answer-1',content:[{type:'text',text:'回答'}]}}},
  {type:'turn/end',seq:4,time:1500,data:{turn:1,reason:{kind:'completed'}}},
 ]
 test('completed boundaries and observed timings are disclosed without inventing token usage',()=>{
  const [turn]=projectTurns(events);expect(turn).toMatchObject({messageId:'answer-1',branchSeq:4,runMs:500,ttftMs:50,status:'completed'});expect(turn.usage).toBeUndefined()
  expect(projectTurns(events.slice(0,-1))[0].branchSeq).toBeUndefined()
+})
+
+test('interrupted V3 attempts retain the observed first token timing',()=>{
+ const interrupted=events.map(event=>event.type==='assistant/message'?{...event,type:'assistant/attempt',data:{stream:event.data.stream}}:event.type==='turn/end'?{...event,data:{turn:1,reason:{kind:'cancelled'}}}:event)
+ expect(projectTurns(interrupted)[0]).toMatchObject({runMs:500,ttftMs:50,status:'cancelled'})
+ expect(projectTurns(interrupted)[0].branchSeq).toBeUndefined()
 })
 test('feedback and branch use official services behind ownership, final-message and version checks',async()=>{
  const logs=new Map(),rows=new Map();let writes=0,seed

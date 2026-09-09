@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {chatSdk} from '../runtime/chat-sdk.mjs'
 import {projectChat} from '../src/chat-history.mjs'
 
-test('official 0.1.3 surface and token fold preserve multi-step, retries and per-turn accounting',()=>{
+test('official 0.1.5-alpha.2 surface and token fold preserve multi-step, retries and per-turn accounting',()=>{
   const events=[],add=(type,data,surfaceOp)=>{events.push({type,data,time:1000+events.length*100,seq:events.length,...(surfaceOp?{surfaceOp}:{})})}
   const usage={inputTokens:10,outputTokens:4,cacheReadTokens:2,cacheWriteTokens:0,reasoningTokens:1,totalTokens:16}
   const stream=text=>[{type:'chunk',time:950+events.length*100,chunk:{type:'text-delta',text}}]

@@ -4,13 +4,6 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { onAssistantDelta } from '../src/assistant-stream.ts'
 import { projectHistory } from '../src/presentation.ts'
 
-// Decoding is owned and validated by the installed DSH. These fixtures test
-// the plugin's use of that runtime export and original delta timestamps.
-vi.mock('@deepseek-ai/dsh-llm', async importOriginal => ({
-  ...await importOriginal<object>(),
-  expandAssistantStream: (stream: unknown) => stream,
-}))
-
 describe('DSH assistant stream presentation', () => {
   it('routes live attempts by Agent and rejects late frames after replacement or end', () => {
     const on = vi.fn()
@@ -46,9 +39,9 @@ describe('DSH assistant stream presentation', () => {
       { type: reason === 'completed' ? 'assistant/message' : 'assistant/attempt', seq: 2, time: 180, data: {
         turn: 1, step: 1,
         stream: [
-          { time: 120, chunk: { type: 'reasoning-delta', index: 0, text: '查询完成。' } },
-          { time: 130, chunk: { type: 'tool-call-delta', index: 1, id: 'call', name: 'closedoff_vehicle_track', argumentsDelta: '{}' } },
-          { time: 150, chunk: { type: 'text-delta', index: 2, text: '已返回' } },
+          { type: 'chunk', time: 120, chunk: { type: 'reasoning-delta', index: 0, text: '查询完成。' } },
+          { type: 'chunk', time: 130, chunk: { type: 'tool-call-delta', index: 1, id: 'call', name: 'closedoff_vehicle_track', argumentsDelta: '{}' } },
+          { type: 'chunk', time: 150, chunk: { type: 'text-delta', index: 2, text: '已返回' } },
         ],
         ...(reason === 'completed' ? { message: { id: 'answer', source: { provider: 'deepseek', model: 'test' }, content: [{ type: 'text', text: '已返回完整结果' }, { type: 'reasoning', text: '查询完成。' }] } } : {}),
       } },

@@ -154,14 +154,16 @@ interface ConversationSnapshot { events: readonly unknown[]; header?: { id?: str
 export async function readConversationSnapshot(ctx: Context, id: string): Promise<ConversationSnapshot> {
   const persistence = ctx.get('sessionPersistence') as {
     inspect?: (id: string) => Promise<ConversationSnapshot>
-    open?: (id: string, access: 'read') => Promise<{ header?: { id?: string }; inheritedEventCount?: number; read(): Promise<readonly unknown[]>; close(): Promise<void> }>
+    open?: (id: string, access: 'read') => Promise<{ header?: { id?: string }; inheritedEventCount?: number; read(): Promise<{ events: readonly unknown[] }>; close(): Promise<void> }>
   } | undefined
   if (persistence?.inspect) return await persistence.inspect(id)
   if (!persistence?.open) throw new AccessError(503, '当前宿主不支持只读会话预览')
   const handle = await persistence.open(id, 'read')
   try {
     if (handle.header?.id !== undefined && String(handle.header.id) !== id) throw new AccessError(409, '会话持久化标识不匹配')
-    return { events: await handle.read(), ...(handle.header ? { header: handle.header } : {}), inheritedEventCount: handle.inheritedEventCount ?? 0 }
+    const { events } = await handle.read()
+    if (!Array.isArray(events)) throw new AccessError(503, '宿主返回了不兼容的会话读取结果')
+    return { events, ...(handle.header ? { header: handle.header } : {}), inheritedEventCount: handle.inheritedEventCount ?? 0 }
   } finally { await handle.close() }
 }
 

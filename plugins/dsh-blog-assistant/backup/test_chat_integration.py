@@ -15,40 +15,48 @@ import {DatabaseSync} from 'node:sqlite'
 import {readFile} from 'node:fs/promises'
 import {native} from '/helper/chat-state.mjs'
 const cfg=JSON.parse(await readFile('/fixture/ids.json','utf8')),sdk=await native(),ctx=new sdk.Context()
-const cwd='/data/workspace',header=id=>({version:2,id,createdAt:1000,cwd,isSeeded:false})
-const events=[{type:'turn/start',seq:0,time:1001,data:{turn:1}},{type:'turn/end',seq:1,time:1002,data:{turn:1,reason:{kind:'completed'}}}]
-const feedback=note=>({session:{createdAt:1000,cwd},items:[{messageId:'fixture-answer',rating:'positive',version:cfg.version,createdAt:1100,updatedAt:1200,note}]})
+const cwd='/data/workspace',header=id=>({version:3,delegationDepth:0,id,createdAt:1000,cwd,isSeeded:false})
+const events=[
+  {type:'turn/start',data:{turn:1}},
+  {type:'step/start',data:{turn:1,step:1}},
+  {type:'assistant/message',surfaceOp:'append',data:{turn:1,step:1,stream:[],message:{id:'fixture-answer',role:'assistant',source:{kind:'model',provider:'mock',model:'mock'},content:[{type:'text',text:'answer'}]}}},
+  {type:'step/end',data:{turn:1,step:1}},
+  {type:'turn/end',data:{turn:1,reason:{kind:'completed'}}}
+].map((e,seq)=>({...e,seq,time:1001+seq}))
 const db=new DatabaseSync('/fixture/pluginData/blog.sqlite')
 db.exec('CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,owner TEXT,data TEXT)')
 const put=(id,owner,ready)=>{const c={id,owner,requestId:id,createdAt:900,parent:null,ready,...(ready?{sessionCreatedAt:1000}:{})};db.prepare('INSERT OR REPLACE INTO conversations VALUES(?,?,?)').run(id,owner,JSON.stringify(c))}
 await ctx.plugin(sdk.persistence.default,{root:'/fixture/sessions',compression:'zstd'})
-await ctx.plugin(sdk.storage.default);await ctx.plugin(sdk.json,{root:'/fixture/storage'});await ctx.plugin(sdk.domain,{backend:'json'})
-const domain=await ctx.storageDomain.open(sdk.feedback.messageFeedbackDomainSpec),table=domain.table('sessions')
+await ctx.plugin(sdk.session.SessionStore);await ctx.plugin(sdk.feedback.default,{maxNoteBytes:8192})
 const log=async id=>{const h=await ctx.sessionPersistence.create(header(id));try{await h.append(events);await h.flush()}finally{await h.close()}}
+const rate=async(id,note)=>{
+  const h=await ctx.sessionPersistence.open(id,'write')
+  try{const {events}=await h.read();await h.append([{type:'feedback/message-put',seq:events.length,time:1200,data:{sessionId:id,item:{messageId:'fixture-answer',rating:'positive',version:cfg.version,createdAt:1100,updatedAt:1200,note}}}]);await h.flush()}finally{await h.close()}
+}
+const feedback=async id=>{const result=await ctx.messageFeedback.list({sessionId:id});return result.ok?result.value.items:[]}
 try{
   if(process.argv[2]==='init'){
     put(cfg.a,'auth:a',true);put(cfg.b,'auth:b',true);put(cfg.pending,'auth:a',false)
     await log(cfg.a);await log(cfg.b);await log(cfg.other)
-    await table.put(cfg.a,feedback('backup'));await table.put(cfg.other,feedback('other plugin before backup'))
+    await rate(cfg.a,'backup');await rate(cfg.other,'other plugin before backup')
   }else if(process.argv[2]==='mutate'){
     put(cfg.pending,'auth:a',true);put(cfg.later,'auth:b',true)
     await log(cfg.pending);await log(cfg.later)
-    await table.put(cfg.a,feedback('current'));await table.put(cfg.b,feedback('new feedback'))
-    await table.put(cfg.pending,feedback('pending became active'));await table.put(cfg.later,feedback('created later'))
-    await table.put(cfg.other,feedback('KEEP CURRENT OTHER PLUGIN'))
+    await rate(cfg.a,'current');await rate(cfg.b,'new feedback')
+    await rate(cfg.pending,'pending became active');await rate(cfg.later,'created later')
+    await rate(cfg.other,'KEEP CURRENT OTHER PLUGIN')
   }else{
-    const restored=process.argv[2]==='restored'
-    assert.equal(table.get(cfg.a).items[0].note,restored?'backup':'current')
-    assert.equal(table.get(cfg.a).items[0].version,cfg.version)
-    assert.equal(table.get(cfg.other).items[0].note,'KEEP CURRENT OTHER PLUGIN')
-    assert.equal(!!table.get(cfg.b),!restored);assert.equal(!!table.get(cfg.pending),!restored)
+    const restored=process.argv[2]==='restored',a=await feedback(cfg.a),other=await feedback(cfg.other)
+    assert.equal(a[0].note,restored?'backup':'current');assert.equal(a[0].version,cfg.version)
+    assert.equal(other[0].note,'KEEP CURRENT OTHER PLUGIN')
+    assert.equal((await feedback(cfg.b)).length,!restored?1:0)
+    assert.equal((await feedback(cfg.pending)).length,!restored?1:0)
     assert.equal(!!await ctx.sessionPersistence.stat(cfg.pending),!restored)
     assert.equal(!!await ctx.sessionPersistence.stat(cfg.later),!restored)
     assert.equal(!!db.prepare('SELECT id FROM conversations WHERE id=?').get(cfg.later),!restored)
     assert.equal(JSON.parse(db.prepare('SELECT data FROM conversations WHERE id=?').get(cfg.pending).data).ready,!restored)
-    // Retained old directories must not become duplicate official sessions during global listing.
     const listed=await ctx.sessionPersistence.list();assert.equal(listed.length,restored?3:5)
-    const h=await ctx.sessionPersistence.open(cfg.a,'read');try{assert.deepEqual(await h.read(),events)}finally{await h.close()}
+    const h=await ctx.sessionPersistence.open(cfg.a,'read');try{assert.deepEqual((await h.read()).events.slice(0,events.length),events)}finally{await h.close()}
   }
 }finally{db.close();await ctx.fiber.dispose()}
 '''
@@ -90,6 +98,7 @@ def main():
                 baseline=e.perform_backup(rotate=False)
                 assert e.verify(baseline)['chatSessions']==3
                 driver('mutate');driver('current')
+                (root/'storage/message_feedback.json').write_bytes(b'legacy sidecar untouched')
                 feedback_before=(root/'storage/message_feedback.json').read_bytes()
                 def fail(swaps):
                     Executor.apply_swaps(e,swaps)
@@ -105,7 +114,7 @@ def main():
                 result=e.production_restore(baseline,{})
                 assert result['status']=='succeeded'
                 driver('restored')
-                assert (root/'storage/message_feedback.json').stat().st_uid==1000
+                assert (root/'storage/message_feedback.json').read_bytes()==feedback_before
                 for folder in (root/'sessions').iterdir():
                     if folder.name=='.blog-restore':continue
                     for session in folder.iterdir():
