@@ -2,7 +2,7 @@
 
 # 版本管理
 
-公共框架当前版本为 **0.14.7**。根 `package.json` 的 `version` 是唯一版本源，manager、kit、auth、example 使用同一版本，作为一个单元构建、验证和发布。组件的 `package.json`、构建产物和文档中的当前版本都从根版本同步。
+公共框架当前版本为 **0.15.0**。根 `package.json` 的 `version` 是唯一版本源，manager、kit、auth、example 使用同一版本，作为一个单元构建、验证和发布。组件的 `package.json`、构建产物和文档中的当前版本都从根版本同步。
 
 定制插件、独立作者项目和官方 `deepseek-harness` 宿主不属于这个统一发布单元，保留各自的版本及兼容性要求。统一版本不代表第三方插件或任意宿主自动兼容，也不表示远程站点已经升级。
 
@@ -14,7 +14,7 @@
 
 ```sh
 # 设置框架版本，同时同步公共组件与文档；下一次发布替换为目标版本
-node scripts/version.mjs set 0.14.7
+node scripts/version.mjs set 0.15.0
 
 # 根版本已正确时，重新生成公共组件版本字段和文档
 node scripts/version.mjs sync

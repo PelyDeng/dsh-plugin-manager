@@ -40,7 +40,7 @@ export async function fixture({ mode, autoReply = false, persistenceApi = 'handl
     } },
     sessionPersistence: persistenceApi === 'inspection'
       ? { async inspect(id) { return { events: logs.get(id) ?? [] } } }
-      : { async open(id) { return { async read() { return logs.get(id) ?? [] }, async close() {} } } },
+      : { async open(id) { return { async read() { return {events: logs.get(id) ?? [], eventState: "detached"} }, async close() {} } } },
     agents: { async resume(options) { return this.create({ ...options, sessionId: options.resumeSessionId }) }, async create(options) {
       await beforeCreate(options)
       if (!logs.has(options.sessionId)) logs.set(options.sessionId, [...options.seed??[]])
@@ -59,8 +59,7 @@ export async function fixture({ mode, autoReply = false, persistenceApi = 'handl
                   ? { type: 'reasoning-delta', text: reasoning[index] }
                   : { type: 'text-delta', text: text[index - reasoning.length] }
                 index++
-                const event = { type: 'assistant/chunk', data: { chunk } }
-                logs.get(handle.id).push(event); ctx.emit('session/event', { id: handle.id }, event)
+                ctx.emit('agent/assistant-stream', { agent: handle.agent, frame: { type: 'chunk', chunk } })
               }
               else { clearInterval(timer); timers.delete(timer); ctx.emit('session/event', { id: handle.id }, { type: 'turn/end', data: { reason: { kind: 'completed' } } }) }
             }, 35)
@@ -95,6 +94,7 @@ export async function fixture({ mode, autoReply = false, persistenceApi = 'handl
   return {
     origin, ctx, handles, revoked, tools,
     removeProvider() { provider = false; ctx.emit('ecosystem/revoked', {}) },
+    emitDelta(handle, chunk) { ctx.emit('agent/assistant-stream', { agent: handle.agent, frame: { type: 'chunk', chunk } }) },
     emit(handle, type, data) { const event = { type, data }; logs.get(handle.id).push(event); ctx.emit('session/event', { id: handle.id }, event) },
     request(path, data, cookie = 'alice', headers = {}, signal) { return fetch(origin + '/example' + path, {
       ...(signal ? { signal } : {}),

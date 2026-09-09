@@ -6,6 +6,16 @@ import { conversationIds, conversationQuery, conversationRemover, queryConversat
 
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'login' }
 describe('会话管理契约', () => {
+  it('解包 V3 只读结果且总是关闭句柄，不把旧数组误当成事件切片', async () => {
+    const ctx = new Context(), events = Object.freeze([{ type: 'turn/start' }]); let closed = 0
+    let result: unknown = { events, eventState: 'shared-frozen' }
+    ctx.provide('sessionPersistence', { async open() { return { header: { id: 'a' }, async read() { return result }, async close() { closed++ } } } })
+    expect(await readConversationEvents(ctx, 'a')).toBe(events)
+    expect(closed).toBe(1)
+    result = []
+    await expect(readConversationEvents(ctx, 'a')).rejects.toThrow('不兼容')
+    expect(closed).toBe(2)
+  })
   it('校验分页、时间、批量边界，不接受重复或路径 ID', () => {
     for (const params of ['limit=0','limit=101','offset=-1','from=2&to=1','state=deleted','q='+'a'.repeat(121)]) expect(() => conversationQuery(new URLSearchParams(params))).toThrow()
     for (const ids of [[], ['same','same'], ['../data'], Array.from({length:101},(_,i)=>String(i))]) expect(() => conversationIds(ids)).toThrow()

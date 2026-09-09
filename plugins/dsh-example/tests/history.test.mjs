@@ -1,10 +1,5 @@
-import { expect, test, vi } from 'vitest'
+import { expect, test } from 'vitest'
 import { projectHistory } from '../src/history.ts'
-
-vi.mock('@deepseek-ai/dsh-llm', async importOriginal => ({
-  ...await importOriginal(),
-  expandAssistantStream: stream => stream.frames,
-}))
 
 test('runtime language snapshots do not become user bubbles or rewrite prior reasoning', () => {
   const old = { type: 'assistant/message', data: { message: { content: [{ type: 'reasoning', text: 'Earlier English reasoning.' }, { type: 'text', text: '旧回答' }] } } }
@@ -14,10 +9,9 @@ test('runtime language snapshots do not become user bubbles or rewrite prior rea
 
 test('durable attempts restore interrupted reasoning and final messages replace answer deltas', () => {
   const events = [
-    { type: 'assistant/attempt', data: { stream: { frames: [
-      { chunk: { type: 'reasoning-delta', text: '先看' } },
-      { chunk: { type: 'reasoning-delta', text: '条件' } },
-    ] } } },
+    { type: 'assistant/attempt', data: { stream: [
+      { type: 'reasoning-chunks', time0: 1000, index: 0, dt: [20], texts: ['先看', '条件'] },
+    ] } },
   ]
   expect(projectHistory(events)).toEqual([{ role: 'assistant', text: '', reasoning: '先看条件' }])
   events.push({ type: 'assistant/message', data: { message: { content: [

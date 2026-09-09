@@ -82,19 +82,13 @@ export function projectHistory(events: readonly SessionEvent[]): { role: 'user' 
     if (event.type === 'user/message' && event.data.source.kind === 'user') {
       messages.push({ role: 'user', text: event.data.content.filter(block => block.type === 'text').map(block => block.text).join('') })
       answer = undefined
-    } else if (event.type === 'assistant/chunk' && event.data.chunk.type === 'text-delta') current().text += event.data.chunk.text
-    else if (event.type === 'assistant/chunk' && event.data.chunk.type === 'reasoning-delta') { current().reasoning = (current().reasoning ?? '') + event.data.chunk.text; delete current().reasoningSource }
-    else if (event.type === 'assistant/message') {
+    } else if (event.type === 'assistant/message') {
       current().text = event.data.message.content.filter(block => block.type === 'text').map(block => block.text).join('')
       const reasoning = event.data.message.content.filter(block => block.type === 'reasoning').map(block => block.text).join('')
       if (reasoning) { current().reasoning = reasoning; if(event.data.message.id)current().reasoningSource = String(event.data.message.id);else delete current().reasoningSource }
     }
-    else if ((event.type as string) === 'assistant/attempt') {
-      // Decode the installed runtime's durable format through its public API.
-      const runtime = llm as unknown as { expandAssistantStream?: (stream: unknown) => readonly { chunk: llm.StreamChunk }[] }
-      if (!runtime.expandAssistantStream) throw new Error('The DSH runtime cannot read its assistant attempt stream')
-      const { stream } = event.data as unknown as { stream: unknown }
-      const chunks = runtime.expandAssistantStream(stream)
+    else if (event.type === 'assistant/attempt') {
+      const chunks = llm.expandAssistantStream(event.data.stream)
       const assembler = new llm.BlockAssembler()
       for (const {chunk} of chunks) assembler.push(chunk)
       const blocks = assembler.blocks()

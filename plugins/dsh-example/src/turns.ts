@@ -10,12 +10,11 @@ export function projectTurns(events: readonly SessionEvent[]) {
   for(const [i,event] of events.entries()){
     if(event.type==='turn/start'){current=undefined;start=i;startedAt=event.time;firstRequest=undefined;firstToken=undefined;ensure()}
     if(event.type==='step/start'&&firstRequest===undefined)firstRequest=event.time
-    if(event.type==='assistant/chunk'&&firstToken===undefined&&['text-delta','reasoning-delta'].includes(event.data.chunk.type))firstToken=event.time
     if(event.type==='assistant/message'){
       ensure().messageId=event.data.message.id
-      const data=event.data as unknown as {stream?:unknown}
-      const expand=(llm as unknown as {expandAssistantStream?:(s:unknown)=>Array<{time:number;chunk:{type:string}}>}).expandAssistantStream
-      if(firstToken===undefined&&data.stream&&expand)firstToken=expand(data.stream).find(x=>['text-delta','reasoning-delta','tool-call-delta'].includes(x.chunk.type))?.time
+    }
+    if((event.type==='assistant/message'||event.type==='assistant/attempt')&&event.data.stream&&firstToken===undefined){
+      firstToken=llm.expandAssistantStream(event.data.stream).find(x=>['text-delta','reasoning-delta','tool-call-delta'].includes(x.chunk.type))?.time
     }
     if(event.type==='tool/call')ensure().tools.push({id:String(event.data.callId),name:event.data.name,status:'running'})
     if(event.type==='tool/result'){const tool=ensure().tools.find(t=>t.id===String(event.data.message.source.callId));if(tool)tool.status=event.data.error||event.data.message.content.some(block=>block.type==='tool-result'&&block.isError===true)?'failed':'succeeded'}

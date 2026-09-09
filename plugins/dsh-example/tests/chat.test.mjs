@@ -28,8 +28,8 @@ test('standalone works without auth and restricts the Agent to shipped public-so
   const response = await f.request('/chat', { message: '你好' }, '')
   const h = f.handles[0]
   expect(h.allowed).toEqual(['example_search_framework', 'example_read_framework'])
-  f.emit(h, 'assistant/chunk', { chunk: { type: 'text-delta', text: '你' } })
-  f.emit(h, 'assistant/chunk', { chunk: { type: 'text-delta', text: '好' } })
+  f.emitDelta(h, { type: 'text-delta', text: '你' })
+  f.emitDelta(h, { type: 'text-delta', text: '好' })
   f.emit(h, 'assistant/message', { message: { content: [{ type: 'text', text: '你好！' }] } })
   f.emit(h, 'turn/end', { reason: { kind: 'completed' } })
   const events = []
@@ -54,15 +54,14 @@ test('live runtime frames stream only for the request Agent and stop after revoc
   expect(f.handles[0].cancelled).toBe(true)
 })
 
-test.each(['legacy', 'live'])('%s reasoning and answer arrive before completion and history keeps them separate', async mode => {
+test('live reasoning and answer arrive before completion and history keeps them separate', async () => {
   const f = await setup({ mode: 'standalone' })
   const response = await f.request('/chat', { message: '分步计算' }, '')
   const h = f.handles[0], events = []
   const reading = readEvents(response, event => events.push(event))
   const emit = (type, text) => {
     const chunk = { type, text }
-    if (mode === 'live') f.ctx.emit('agent/assistant-stream', { agent: h.agent, frame: { type: 'chunk', chunk } })
-    else f.emit(h, 'assistant/chunk', { chunk })
+    f.ctx.emit('agent/assistant-stream', { agent: h.agent, frame: { type: 'chunk', chunk } })
   }
   emit('reasoning-delta', '先分析'); emit('reasoning-delta', '条件。')
   await expect.poll(() => events.filter(e => e.type === 'reasoning').map(e => e.text).join('')).toBe('先分析条件。')
@@ -81,7 +80,7 @@ test('interrupted reasoning-only output remains visible in durable history', asy
   const f = await setup({ mode: 'standalone' })
   const response = await f.request('/chat', { message: 'q' }, '')
   const h = f.handles[0]
-  f.emit(h, 'assistant/chunk', { chunk: { type: 'reasoning-delta', text: '已分析的部分' } })
+  f.emit(h, 'assistant/attempt', { stream: [{ type: 'reasoning-chunks', time0: 1000, index: 0, dt: [], texts: ['已分析的部分'] }] })
   await response.body.cancel()
   await expect.poll(() => h.disposed).toBe(true)
   const history = await (await f.request('/history?id=' + h.id, undefined, '')).json()
@@ -121,7 +120,7 @@ test('revocation terminates stream, cancels Agent and suppresses late private ou
   const response = await f.request('/chat', { message: 'q' })
   const h = f.handles[0]
   f.revoked.add('login-a'); f.ctx.emit('ecosystem/revoked', {})
-  f.emit(h, 'assistant/chunk', { chunk: { type: 'text-delta', text: 'PRIVATE' } })
+  f.emitDelta(h, { type: 'text-delta', text: 'PRIVATE' })
   expect(await response.text()).not.toContain('PRIVATE')
   expect(h.cancelled).toBe(true); await expect.poll(() => h.disposed).toBe(true)
 })
@@ -131,7 +130,7 @@ test('each delta revalidates auth even if a revocation event was missed', async 
   const response = await f.request('/chat', { message: 'q' })
   const h = f.handles[0]
   f.revoked.add('login-a')
-  f.emit(h, 'assistant/chunk', { chunk: { type: 'text-delta', text: 'PRIVATE' } })
+  f.emitDelta(h, { type: 'text-delta', text: 'PRIVATE' })
   expect(await response.text()).not.toContain('PRIVATE')
   expect(h.cancelled).toBe(true)
 })

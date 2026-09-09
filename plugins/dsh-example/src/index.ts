@@ -225,16 +225,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     let events: readonly SessionEvent[]
     if (active?.handle) events = active.handle.agent.session.snapshotEvents()
     else {
-      // Published hosts expose inspect; the source host used by earlier releases exposes read handles.
-      const persistence = ctx.sessionPersistence as unknown as {
-        inspect?: (id: SessionId) => Promise<{ events: readonly SessionEvent[] }>
-        open?: (id: SessionId, access: 'read') => Promise<{ read(): Promise<readonly SessionEvent[]>; close(): Promise<void> }>
-      }
-      if (persistence.inspect) events = (await persistence.inspect(SessionId(id))).events
-      else if (persistence.open) {
-        const handle = await persistence.open(SessionId(id), 'read')
-        try { events = await handle.read() } finally { await handle.close() }
-      } else throw new AccessError(503, '当前 DSH 不提供受支持的历史读取接口，请核对应用交付的宿主版本。')
+      events = await readConversationEvents(ctx, id) as readonly SessionEvent[]
     }
     access.assert(actor)
     return events
@@ -379,18 +370,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
         if (chunk.type === 'text-delta') send({ type: 'delta', text: chunk.text })
         if (chunk.type === 'reasoning-delta') send({ type: 'reasoning', text: chunk.text })
       }
-      // This runtime event is absent from the published 0.1.2 development types.
-      const onLive = ctx.on.bind(ctx) as (name: 'agent/assistant-stream', listener: (payload: {
-        agent: AgentHandle['agent']
-        frame: { type: 'start' | 'end' } | { type: 'chunk'; chunk: StreamChunk }
-      }) => void) => () => void
-      unsubscribeLive = onLive('agent/assistant-stream', ({ agent, frame }) => {
+      unsubscribeLive = ctx.on('agent/assistant-stream', ({ agent, frame }) => {
         if (agent === current.handle?.agent && frame.type === 'chunk') sendChunk(frame.chunk)
       })
       unsubscribe = ctx.on('session/event', (session, event: SessionEvent) => {
         if (String(session.id) !== id || ended) return
         if(event.type==='step/start')send({type:'step'})
-        if (event.type === 'assistant/chunk') sendChunk(event.data.chunk)
         if (event.type === 'assistant/message') {
           const text = event.data.message.content.filter(block => block.type === 'text').map(block => block.text).join('')
           const reasoning = event.data.message.content.filter(block => block.type === 'reasoning').map(block => block.text).join('')
