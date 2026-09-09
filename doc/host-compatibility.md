@@ -31,6 +31,18 @@ Session 当前格式为 V3。读取旧格式时，官方持久化层先完成迁
 
 生产切换前停止写入，备份整个持久数据目录及私有配置，并核对备份可读。旧镜像和发布清单应保留。V3 已产生新数据后，回退镜像不能代替数据恢复；需要停服并从升级前备份恢复到单独目录，核验后再切换，保留原目录。
 
+## 旧反馈迁移
+
+新版 `messageFeedback` 只读取会话日志中的反馈事件，不自动读取或迁移旧 `storages/message_feedback.json`。保留旧文件不足以让评分和备注继续可见。停写并备份后，可在新宿主运行环境中生成隔离迁移结果：
+
+```sh
+node scripts/stage-legacy-feedback.mjs --runtime /opt/dsh-runtime --sessions /input/sessions --legacy /input/storages/message_feedback.json --output /work/feedback-migration
+```
+
+输入应只读挂载，输出须为不存在的独立目录。脚本用官方格式接口验证日志，核对会话创建身份和反馈对应消息，保留版本与时间戳；已有日志反馈和删除记录优先，避免重放旧评分。生成的 `report.json` 与 `sessions/` 仅用于核验，不会发布到原目录。确认原服务停写、输出完整且旧目录已备份后，按同一数据属主将报告涉及的会话目录切换到迁移结果；不要混入运行中的数据。缺失会话、损坏数据或版本不符会中止，原文件保持不变。
+
+独立备份工具可从管理器 `@dsh-plugin-manager/plugin-manager/session-snapshot` 导入 `restoreSessionSnapshot` 和 `mergeLegacyFeedback`，显式传入官方 catalog 与 V2/V3 codec；管理器不会自行寻找项目根或加载业务数据。
+
 ## 验证范围
 
 升级应分别记录类型与行为测试、独立归档安装、真实宿主加模型替身、容器与生产验收。替身问答不代表真实模型可用，健康检查也不代表浏览器操作完成。框架的 `test-report.sh` 提供 auth/example 的真实宿主及归档验证；私有插件由集成仓库单独检查。

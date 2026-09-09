@@ -34,6 +34,7 @@ try {
     assert.equal(JSON.parse(readFileSync(join(consumer, 'node_modules/@dsh-plugin-manager', name, 'package.json'))).version, version);
   }
   assert.equal(existsSync(join(consumer, 'node_modules/@deepseek-ai/cordis')), false);
+  run(['--input-type=module', '-e', "import {restoreSessionSnapshot,mergeLegacyFeedback} from '@dsh-plugin-manager/plugin-manager/session-snapshot'; if(typeof restoreSessionSnapshot!=='function'||typeof mergeLegacyFeedback!=='function') throw Error('snapshot export');"], consumer);
   assert.equal(existsSync(join(consumer, 'node_modules/@deepseek-ai/dsh-tools')), false);
   const cli = join(consumer, 'node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs');
   assert.equal(run([cli, '--version']).trim(), version);
