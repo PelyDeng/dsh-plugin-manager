@@ -14,7 +14,7 @@ function fixture() {
   writeFileSync(resolve(root, 'package/package.json'), JSON.stringify({ name: '@dsh-plugin-manager/plugin-manager', version: '0.0.1', type: 'module' }));
   writeFileSync(resolve(root, 'package/dist/cli.mjs'), 'import {readFileSync} from "node:fs"; const value=JSON.parse(readFileSync(new URL("../package.json",import.meta.url))); console.log(process.argv[2]==="--version"?value.version:"{}");\n');
   const archive = resolve(root, 'manager.tgz');
-  const result = spawnSync(tarCommand, ['-czf', archive, '-C', root, 'package'], { encoding: 'utf8', windowsHide: true });
+  const result = spawnSync(tarCommand, ['-czf', 'manager.tgz', 'package'], { cwd: root, encoding: 'utf8', windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
   return { root, archive };
 }

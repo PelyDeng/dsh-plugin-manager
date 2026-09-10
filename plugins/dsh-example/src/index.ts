@@ -15,7 +15,7 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { createUserMessage, MessageId, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId, SessionLogOffset, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, conversationModel, createAccess, createPluginHttp, createPluginTools, onRevoked, registerPlugin, type Actor } from '@dsh-plugin-manager/plugin-kit'
-import { registerConversations, conversationArchive, conversationRemover, readConversationEvents, previewPage, hostBusyConversationIds, type PreviewMessage } from '@dsh-plugin-manager/plugin-kit'
+import { registerConversations, registerConversationTitles, conversationArchive, conversationRemover, readConversationEvents, previewPage, hostBusyConversationIds, type PreviewMessage } from '@dsh-plugin-manager/plugin-kit'
 import { conversationModelCatalog, requestedConversationModel, selectConversationModel, type ConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
 import type { Config } from './config.ts'
 import { HistoryStore, projectHistory } from './history.ts'
@@ -34,6 +34,7 @@ interface Conversation {
   busy: boolean
   used: number
   stop?: () => void
+  title?: (title: string, titleSource: string) => void
 }
 
 function json(response: ServerResponse, value: unknown): void {
@@ -80,6 +81,9 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const closings = new Map<string, Promise<void>>()
   const forks = new Set<string>()
   let disposed = false
+  ctx.effect(() => registerConversationTitles(ctx, (id, title, manual, complete) => {
+    if (!disposed && store.syncTitle(id, title, manual, complete)) conversations.get(id)?.title?.(title, manual ? 'manual' : complete ? 'generated' : 'automatic')
+  }))
   const release = (id: string, conversation: Conversation) => {
     if (conversations.get(id) === conversation) conversations.delete(id)
     conversation.stop?.()
@@ -214,6 +218,12 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     for(const id of ids){store.assertOwner(id,actor);if(conversations.get(id)?.busy)throw new AccessError(409,'对话仍在回答，请先停止或等待完成')}
     access.assert(actor)
     store.mutate(actor,{operation:input.operation,ids,...(typeof input.title==='string'?{title:input.title}:{}),...(typeof input.pinned==='boolean'?{pinned:input.pinned}:{})})
+    if (input.operation === 'rename') {
+      const session = conversations.get(ids[0]!)?.handle?.agent.session
+      const titles = ctx.get('sessionTitle') as { rename?(session: unknown, title: string): unknown } | undefined
+      // Persist the manual fence first; never reopen an idle session just to rename it.
+      if (session && titles?.rename) try { titles.rename(session, (input.title as string).trim()) } catch { console.error('example: 宿主标题未同步，手动标题已保留') }
+    }
     json(res,{ok:true})
   }}))
   const readEvents = async (id: string, actor: Actor) => {
@@ -281,7 +291,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
     if(boundary<0)throw new AccessError(400,'只能从已完成的回合创建分支')
     if(conversations.size+closings.size>=config.maxConversations)throw new AccessError(429,'当前会话较多，请稍后重试')
     const id=`example-${randomUUID()}`,seed=events.slice(0,boundary+1),child:Conversation={owner:actor,busy:true,used:Date.now()}
-    store.reserve(id,actor,'分支对话');conversations.set(id,child)
+    store.reserve(id,actor,'分支对话','manual');conversations.set(id,child)
     forks.add(input.conversationId)
     try{
       const options=await agentOptions(input.conversationId,seed.length)
@@ -327,6 +337,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       unsubscribe?.()
       unsubscribeLive?.()
       delete current.stop
+      delete current.title
       current.busy = false
       current.used = Date.now()
       response.off('close', disconnected)
@@ -365,6 +376,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       store.publish(id)
       response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' })
       response.flushHeaders()
+      current.title = (title, titleSource) => send({ type: 'title', conversationId: id, title, titleSource })
       send({ type: 'session', conversationId: id, model: selected })
       const sendChunk = (chunk: StreamChunk) => {
         if (chunk.type === 'text-delta') send({ type: 'delta', text: chunk.text })

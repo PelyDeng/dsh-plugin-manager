@@ -10,8 +10,30 @@ export function historyGroup(item,now=Date.now()){
 }
 export function conversationMarkdown(title,messages){return `# ${String(title||'对话记录').replace(/[\r\n]/g,' ')}\n\n`+messages.filter(m=>['user','assistant'].includes(m.role)&&m.text?.trim()).map(m=>`## ${m.role==='user'?'我':'助手'}\n\n${m.text}`).join('\n\n---\n\n')+'\n'}
 
+// The host may save its first title after the answer stream has closed.
+export function createConversationTitleRefresh({currentId,refresh}){
+  let id,timer,deadline
+  function stop(){clearTimeout(timer);timer=undefined;id=undefined}
+  function active(){return id&&currentId()===id&&Date.now()<deadline}
+  return{
+    start(conversationId){stop();id=conversationId;deadline=Date.now()+65000;void refresh()},
+    observe(items){
+      if(!id)return
+      clearTimeout(timer)
+      if(!active()||items.find(item=>item.id===id)?.titleSource!=='automatic'){stop();return}
+      timer=setTimeout(()=>{if(active())void refresh();else stop()},Math.min(2000,deadline-Date.now()))
+    },
+    title(event){
+      if(event.conversationId!==currentId())return
+      if(event.titleSource==='generated'||event.titleSource==='manual')stop()
+      void refresh()
+    },
+    stop,
+  }
+}
+
 /** Sidebar owns only navigation UI. Hosts provide authenticated list/update/read operations. */
-export function createConversationHistory({mount,toggle,newConversation,openConversation,currentId,list,mutate,read,onDeleted,label='历史对话',storageKey='chat-history'}){
+export function createConversationHistory({mount,toggle,newConversation,openConversation,currentId,list,mutate,read,onDeleted,onRefreshed,label='历史对话',storageKey='chat-history'}){
   const panel=element('dialog',undefined,'qa-history'),heading=element('strong',label),head=element('div',undefined,'qh-head'),tools=element('div',undefined,'qh-head-tools'),search=button('search','搜索对话'),collapse=button('panel','收起历史对话'),create=button('plus','开启新对话',false),searchBox=element('input'),rows=element('div',undefined,'qh-rows'),status=element('p',undefined,'qh-status'),more=element('button','加载更多','qh-more'),batch=element('div',undefined,'qh-batch'),footer=element('p','对话按最近活动时间分组','qh-footer')
   panel.setAttribute('aria-label',label);searchBox.type='search';searchBox.placeholder='搜索对话标题';searchBox.maxLength=120;searchBox.setAttribute('aria-label','搜索对话标题');searchBox.className='qh-search';searchBox.hidden=true
   status.setAttribute('role','status');status.hidden=true;tools.append(search,collapse);head.append(heading,tools);panel.append(head,create,searchBox,batch,status,rows,more,footer);mount.prepend(panel)
@@ -32,7 +54,7 @@ export function createConversationHistory({mount,toggle,newConversation,openConv
   function report(text){status.textContent=text;status.hidden=!text}
   async function refresh(append=false){
     const ticket=++version;loading=true;more.disabled=true;report('')
-    try{const data=await list({offset:append?offset??0:0,query});if(ticket!==version||disposed)return;items=append?[...items,...data.items.filter(i=>!items.some(old=>old.id===i.id))]:data.items;offset=data.nextOffset;for(const id of selected)if(!items.some(i=>i.id===id))selected.delete(id);render()}
+    try{const data=await list({offset:append?offset??0:0,query});if(ticket!==version||disposed)return;items=append?[...items,...data.items.filter(i=>!items.some(old=>old.id===i.id))]:data.items;offset=data.nextOffset;for(const id of selected)if(!items.some(i=>i.id===id))selected.delete(id);render();onRefreshed?.(items)}
     catch(error){if(ticket===version){report(error.message);if(!append){items=[];offset=null;render()}}}
     finally{if(ticket===version){loading=false;more.disabled=false}}
   }

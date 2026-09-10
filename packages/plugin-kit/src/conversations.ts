@@ -32,6 +32,18 @@ export function registerConversations(ctx: Context, provider: ConversationProvid
   if (conversationProviders(ctx).has(provider.pluginId)) throw new Error('会话管理插件重复登记')
   return ctx.on('ecosystem/conversations', accept => accept(provider), { global: true })
 }
+/** Observe trusted host titles for the plugin lifetime, including arrivals after turn/end. */
+export function registerConversationTitles(ctx: Context, accept: (id: string, title: string, manual: boolean, complete: boolean) => void): () => void {
+  return ctx.on('session/event', (session, value) => {
+    const event = value as unknown as { type?: string; data?: { title?: unknown; source?: { kind?: string }; messageSeqs?: unknown } }
+    if (event?.type !== 'session/title') return
+    const data = event.data, source = data?.source?.kind
+    if (source !== 'user' && (!(source === 'fallback' || source === 'provider') || !Array.isArray(data?.messageSeqs) || data.messageSeqs.length !== 1)) return
+    if (typeof data?.title !== 'string' || !session?.id) return
+    const title = [...data.title.replace(/\s+/gu, ' ').trim()].slice(0, 100).join('').trim()
+    if (title) accept(String(session.id), title, source === 'user', source === 'user' || source === 'provider')
+  }, { global: true })
+}
 export function conversationQuery(params: URLSearchParams): ConversationQuery {
   const number = (key: string, fallback?: number) => {
     const raw = params.get(key)

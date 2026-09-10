@@ -21,7 +21,10 @@ jobs:
       - run: npm install --global pnpm@11.19.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
-      - run: node --test scripts/tests/*.test.mjs
+      - name: Test release scripts
+        id: script-tests
+        shell: bash
+        run: node --test --test-reporter=tap scripts/tests/*.test.mjs 2>&1 | tee "$RUNNER_TEMP/script-tests.log"
       - name: Test workspace
         id: tests
         if: runner.os != 'Windows'
@@ -35,13 +38,15 @@ jobs:
           pnpm -r --workspace-concurrency=1 --if-present test 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/workspace-tests.log"
           exit $LASTEXITCODE
       - name: Summarize test failures
-        if: failure() && (steps.tests.outcome == 'failure' || steps.windows-tests.outcome == 'failure')
+        if: failure() && (steps.script-tests.outcome == 'failure' || steps.tests.outcome == 'failure' || steps.windows-tests.outcome == 'failure')
         shell: bash
+        env:
+          TEST_LOG: ${{ steps.script-tests.outcome == 'failure' && 'script-tests.log' || 'workspace-tests.log' }}
         run: |
           node --input-type=module <<'JS'
           import { readFileSync } from 'node:fs';
           import { join } from 'node:path';
-          const lines = readFileSync(join(process.env.RUNNER_TEMP, 'workspace-tests.log'), 'utf8').split('\n');
+          const lines = readFileSync(join(process.env.RUNNER_TEMP, process.env.TEST_LOG), 'utf8').split('\n');
           const first = lines.findIndex(line => /not ok|✖/.test(line));
           const excerpt = [...lines.slice(Math.max(0, first - 2), first + 65), ...lines.slice(-90)].join('\n').slice(-14000);
           console.log('::error::' + excerpt.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A'));
