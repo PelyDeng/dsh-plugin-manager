@@ -17,7 +17,7 @@ test('invalid site configuration fails before preflight or private source update
   t.after(() => { assert.equal(dirname(root), realpathSync.native(tmpdir())); rmSync(root, { recursive: true, force: true }); });
   for (const [config, expected] of [[{ mode: 'development' }, /release 模式/], ['DSH_PLUGIN_SOURCE=source\nDSH_MODE=development\n', /release 模式/], [{ manifest: 'other.json' }, /manifest.*generated/], [{ hostImage: 'runtime:latest' }, /immutable registry digest/]]) {
     const path = resolve(root, typeof config === 'string' ? 'site.conf' : 'site.json');
-    writeFileSync(path, typeof config === 'string' ? config : JSON.stringify({ pluginSource: 'source', ...config }));
+    writeFileSync(path, typeof config === 'string' ? config : JSON.stringify({ pluginSource: 'source', ...config }), { mode: 0o600 });
     const calls = [];
     await assert.rejects(sourceRelease({ root, args: ['--config', path],
       preflight: () => { calls.push('preflight'); return { env: process.env }; },
