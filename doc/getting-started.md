@@ -65,7 +65,7 @@ dsh-lab/
    └─ .local/      deployment.json、data/dsh-home、运行记录
 ```
 
-**取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager 0.15.1、kit 0.15.1 tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。只安装现成包的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
+**取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager 0.15.2、kit 0.15.2 tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。只安装现成包的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
 
 ```sh
 git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin-manager.git framework
@@ -96,11 +96,11 @@ lab="$(dirname "$framework")"
 两个终端后续均使用以下命令；新终端需重新设置这两个变量：
 
 ```sh
-pnpm --filter @dsh-plugin-manager/plugin-manager pack --out "$framework/.local/artifacts/tools/plugin-manager-0.15.1.tgz"
-pnpm --filter @dsh-plugin-manager/plugin-kit pack --out "$framework/.local/artifacts/tools/plugin-kit-0.15.1.tgz"
+pnpm --filter @dsh-plugin-manager/plugin-manager pack --out "$framework/.local/artifacts/tools/plugin-manager-0.15.2.tgz"
+pnpm --filter @dsh-plugin-manager/plugin-kit pack --out "$framework/.local/artifacts/tools/plugin-kit-0.15.2.tgz"
 node -e "for (const p of ['../tools','../site/incoming']) require('fs').mkdirSync(p,{recursive:true})"
 cd ../tools
-pnpm add --ignore-workspace "$framework/.local/artifacts/tools/plugin-manager-0.15.1.tgz"
+pnpm add --ignore-workspace "$framework/.local/artifacts/tools/plugin-manager-0.15.2.tgz"
 pnpm exec dsh-plugin-manager --version
 cd "$framework/deepseek-harness"
 pnpm install --frozen-lockfile
@@ -109,7 +109,7 @@ pnpm dsh --version
 cd "$lab/tools"
 ```
 
-**预期**：tools 中能运行 manager 0.15.1，deepseek-harness 中能运行官方 CLI。宿主使用自身 `packageManager` 与锁文件（当前源码为 pnpm 11.7.0），和框架 pnpm 11.19.0 分开安装。按宿主提示处理必要的依赖构建许可。源码版本由本次检出的 gitlink 决定，不用旧 npm CLI 替代。后文管理器命令均在 tools 目录运行；宿主源码构建步骤与[官方源码说明](https://github.com/deepseek-ai/deepseek-harness/blob/b2e3b2a0125854567a4a5fcba75782e42fe84901/README.md#run-from-source)一致。
+**预期**：tools 中能运行 manager 0.15.2，deepseek-harness 中能运行官方 CLI。宿主使用自身 `packageManager` 与锁文件（当前源码为 pnpm 11.7.0），和框架 pnpm 11.19.0 分开安装。按宿主提示处理必要的依赖构建许可。源码版本由本次检出的 gitlink 决定，不用旧 npm CLI 替代。后文管理器命令均在 tools 目录运行；宿主源码构建步骤与[官方源码说明](https://github.com/deepseek-ai/deepseek-harness/blob/b2e3b2a0125854567a4a5fcba75782e42fe84901/README.md#run-from-source)一致。
 
 ## 2. 打包第一个应用
 
@@ -215,7 +215,7 @@ pnpm exec dsh-plugin-manager health --root "$lab/site" --config .local/deploymen
 cd "$framework"
 node -e "const fs=require('fs'); if(fs.existsSync('../second')) throw Error('second 已存在，请换新目录'); fs.cpSync('examples/standalone-kit','../second',{recursive:true})"
 cd ../second
-pnpm add --ignore-workspace --save-dev "$framework/.local/artifacts/tools/plugin-kit-0.15.1.tgz"
+pnpm add --ignore-workspace --save-dev "$framework/.local/artifacts/tools/plugin-kit-0.15.2.tgz"
 cd ../tools
 pnpm exec dsh-plugin-manager list --root "$lab/second" --package .
 pnpm exec dsh-plugin-manager pack --root "$lab/second" --package . --output "$lab/site/incoming/second-v1"

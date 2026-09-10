@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
 import { resolveDeployment, parseArguments, loadRelease, runtimeEnvironment, computeChanges, synchronize, atomicJSON, finalize, acquireLock, renderCompose, checkDataSelection, verifyReady, adoptLegacy, tarCommand, supervise, prepareOfflineDependencies } from '../src/deployment.mjs';
 import { installedMatches, readState } from '../src/installation.mjs';
 import { verificationSubjects } from '../src/verification.mjs';
@@ -351,6 +352,24 @@ test('unchanged installations still require external stop evidence before owned 
   await assert.rejects(supervise(f.deployment, f.release), /停服证据/);
   assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
   assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-lock')), false);
+});
+
+test('owned startup allows a cold host to take more than ten seconds', { timeout: 30000 }, async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const cliFile = join(f.root, 'cold-host.mjs');
+  writeFileSync(cliFile, `import { createServer } from 'node:http';
+    setTimeout(() => createServer((_req, res) => res.end('ready')).listen(${port}, '127.0.0.1'), 11000);
+    setTimeout(() => process.exit(0), 15000);`);
+  f.deployment.options['dsh-cli-js'] = cliFile;
+  f.deployment.options.port = port;
+  await supervise(f.deployment, f.release);
+  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-pending.json')), false);
+  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
 });
 
 test('configuration revision restarts without reinstall', async t => {

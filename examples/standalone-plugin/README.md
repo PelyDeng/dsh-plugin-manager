@@ -4,7 +4,7 @@
 
 将本目录复制到自己的仓库。它不依赖 kit、不创建 Agent，只在官方 WebServer 注册公开的 `/independent-example/ready` 探针。完整对话可参考框架的 dsh-example；这里验证独立包交付，不模拟模型回答。
 
-需要 Node.js `^22.19.0 || >=24`、pnpm 11.19.0、系统 tar，以及已经安装的 `@dsh-plugin-manager/plugin-manager@0.15.1`。工具可由维护者以 tgz 交付，包名不代表已经公开发布。
+需要 Node.js `^22.19.0 || >=24`、pnpm 11.19.0、系统 tar，以及已经安装的 `@dsh-plugin-manager/plugin-manager@0.15.2`。工具可由维护者以 tgz 交付，包名不代表已经公开发布。
 
 ```sh
 pnpm install --ignore-workspace

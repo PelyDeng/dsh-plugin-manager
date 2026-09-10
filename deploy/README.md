@@ -125,7 +125,7 @@ node deploy/scripts/deployment.mjs start --plugins "auth,example" --manifest .lo
 
 ## 安装与恢复
 
-`start` 安装并监督 DSH 子进程；`stop` 请求原监督进程停止。`sync` 只同步，外部服务需要 `--host-mode external --stopped-file <json>`，并由原管理器重新启动。`verify --started-file <json>` 在检查安装与探针后完成状态提交。
+`start` 安装并监督 DSH 子进程；宿主启动验证在 60 秒的窗口内重试，只有宿主和选中插件的检查都通过后才记录成功。超时或子进程提前退出时保留未完成操作，检查日志后用原清单和配置加 `--resume` 恢复。`stop` 请求原监督进程停止。`sync` 只同步，外部服务需要 `--host-mode external --stopped-file <json>`，并由原管理器重新启动。`verify --started-file <json>` 在检查安装与探针后完成状态提交。
 
 停服证据字段为 `schemaVersion: 1`、目标 `home`、`profile`、`manager`、`instanceId`、`stopped: true`、`stoppedAt`；`manager` 支持 `process`、`compose` 或 `systemd`，进程证据还需 `pid`。工具会检查服务的实际状态，不能仅凭锁文件判断服务已停止。启动证据对应使用 `started: true` 和 `startedAt`。
 
