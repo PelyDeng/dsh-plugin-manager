@@ -18,9 +18,9 @@ Bash 实际构建入口为 `bash deploy/scripts/build-host-image.sh`，Node 入�
 
 ## 配置和运行
 
-使用发行部署包时按其随包 README 放入完整发布目录；管理器和固定宿主镜像信息已提供，不构建作者源码。取得完整源码后，Windows PowerShell 执行根 `.\build.ps1`，macOS/Linux 执行根 `./build.sh`，自动生成配置并构建、启动。以后更新仓库代码后执行同一命令；旧 deploy 目录入口继续支持。默认使用本机镜像，无需 Harbor；配置和恢复见[一键部署](../../doc/first-deployment.md)。下方为配置变更及自定义集成使用的基础命令。
+使用发行部署包时按其随包 README 放入完整发布目录；管理器和固定宿主镜像信息已提供，不构建作者源码。取得完整源码后，Windows PowerShell 执行根 `.\build.ps1`，macOS/Linux 执行根 `./build.sh`，自动生成配置并构建、启动；`deploy/build.ps1` 与 `deploy/build.sh` 转发到同一入口。源码默认使用本机镜像，无需 Harbor。配置修改继续通过原站点 build 应用；原输入失败使用 resume，同包业务配置修正按[恢复说明](../../deploy/README.md#安装与恢复)操作。
 
-一键部署生成 `.local/deployment.json` 后，可通过基础命令单独应用插件 `plugin.json` 的启停和认证设置，见[插件运行配置规范](../../doc/plugin-configuration.md)。自定义集成需要自行提供清单及不可变 `containerImage`，支持本机 `sha256:<ID>` 或仓库 `repo@sha256:<摘要>`。
+下列基础命令供自行编排的独立 CLI 集成使用，不用于绕过站点 build 的记录。自定义集成需要自行提供清单及不可变 `containerImage`，支持本机 `sha256:<ID>` 或仓库 `repo@sha256:<摘要>`。插件启停和认证字段见[插件运行配置规范](../../doc/plugin-configuration.md)。
 
 ```sh
 node deploy/scripts/deployment.mjs apply-compose --config .local/deployment.json

@@ -20,7 +20,7 @@
 
 ## 内部批量开发与 API
 
-省略 `--package` 时保留根锁文件及 `plugins/*` 扫描，支持 `--plugins auth,example`、默认选集、all/none。内部 kit 工作区准备和批量操作保持原行为。
+省略 `--package` 时保留根锁文件及 `plugins/*` 扫描，支持 `--plugins "auth,example"`、默认选集、all/none。逗号分隔的 ID 列表加引号，避免 PowerShell 拆成数组。内部 kit 工作区准备和批量操作保持原行为。
 
 包根导出部署函数，`/catalog` 导出 `readPlugin`、插件发现与选择，`/packaging` 导出打包函数。管理器只读取声明与归档，不导入业务源码。
 ## 发布物宿主验证

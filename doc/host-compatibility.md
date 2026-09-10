@@ -11,7 +11,7 @@ git pull --ff-only
 git submodule update --init deepseek-harness
 ```
 
-普通构建不会下载或切换宿主。宿主使用自己的 `pnpm@11.7.0` 和锁文件，框架使用根 `package.json` 指定的 pnpm。源码构建步骤见[上手指南](getting-started.md)。Docker 构建使用已有的干净宿主检出，并记录提交和镜像身份。
+普通构建不会下载或切换宿主。宿主使用自己的 `pnpm@11.7.0` 和锁文件，框架使用根 `package.json` 指定的 pnpm。源码构建步骤见[源码部署](../deploy/README.md#服务器源码发版)。Docker 构建使用已有的干净宿主检出，并记录提交和镜像身份。
 
 若站点配置了 `DSH_HOST_IMAGE`，更新 gitlink 不会更换这个固定镜像。应先构建新宿主镜像，验证其 `org.opencontainers.image.revision` 和版本标签，再更新站点镜像引用。宿主变化时执行完整构建；`--rebuild-plugins` 不能复用旧宿主基线中的插件归档。具体操作见[部署说明](../deploy/README.md)。
 
@@ -20,6 +20,7 @@ git submodule update --init deepseek-harness
 - 实时输出订阅官方 `agent/assistant-stream`，按 Agent 实例隔离。持久日志使用 `assistant/message` 与 `assistant/attempt` 的 `stream`，通过 `expandAssistantStream()` 展开；不再订阅或自行写入 `assistant/chunk`。example 的中断历史和首 token 时间均来自官方持久流。
 - `SessionHandle.read()` 返回 `{ events, eventState }`，不再直接返回事件数组。kit 在一个入口解包并校验结果，example 复用此入口；业务插件应使用官方类型，避免通过旧的类型断言隐藏接口变化。
 - 模型目录、会话模型选择和历史投影继续使用官方 `sessionController`、`agentDefaultModel` 和 `sessionProjections`。kit 在模型切换前、异步校验后的提交边界和返回后复核权限；提交边界使用 Cordis 的同步 `internal/dispatch`，普通 `session/event` 观察者在事件提交后运行，不能用于阻止写入。
+- 官方 base 已挂载 `session-title` 与 `session-title-first-prompt-llm`，对全新非分支会话的第一条提问发起一次辅助提炼，输入上限 4096 字节、输出上限 64 tokens、超时 60 秒；失败保留回退标题。kit 通过全生命周期 `session/event` 监听结果，不重复调用模型；业务索引与手动改名保护见[自动标题](conversation-management.md#自动标题)。
 - 官方 Web 插件面板使用 `sidebar.panellist` 和 `main`；原 `conversation` Slot 对应 `main` 的 `conversation` key。auth 和 example 使用独立 HTTP 页面，不注册这些 Slot。自定义 Web 面板插件需自行适配。
 - 官方极简 profile 的默认工具有变化，自定义插件应明确注册所需工具，不能依赖旧版默认工具集合。实验性的 Agent Teams 不由框架默认启用。
 

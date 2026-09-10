@@ -15,7 +15,7 @@ pnpm add --ignore-workspace /path/to/plugin-manager-{{FRAMEWORK_VERSION}}.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
-宿主应使用应用交付说明所要求的版本及依赖。内置 auth/example 的源码部署使用已有的独立官方源码，记录实际提交；gitlink 是检出参考，构建不自动更新宿主或要求匹配预设提交，准备步骤见[Node CLI 手册](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/getting-started.md#1-准备工具和目录)。运行配置二选一：
+宿主应使用应用交付说明所要求的版本及依赖，内置 auth/example 的要求见对应版本的[宿主兼容说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v{{FRAMEWORK_VERSION}}/doc/host-compatibility.md)。管理器不自动下载、更新或构建宿主。运行配置二选一：
 
 - 源码宿主：在其目录完成安装与构建，设置 `harnessRoot` 为源码根的绝对路径。
 - 已安装宿主：设置 `dshCliJs` 为实际 CLI JS 文件的绝对路径，例如工具目录下 `node_modules/@deepseek-ai/dsh/lib/bin.js`。保留它的锁文件，按应用要求选择版本。

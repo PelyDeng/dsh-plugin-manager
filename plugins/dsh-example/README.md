@@ -4,25 +4,29 @@
 
 ## 启动与使用
 
-需要应用交付说明中验证过的官方 DSH、兼容的 manager 和 auth/example 发布目录。先把需要运行的全部插件组合成候选清单，再配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
+优先下载同一框架 Release 的部署包和 public-apps，将含 auth/example 的完整发布目录放进站点 `incoming/public-apps`，在部署根运行 `bash build.sh`；Windows 使用 `.\build.ps1`。public-apps 已含 auth，不重复复制 optional/auth。入口负责完整候选、配置及启停，步骤见[随包 FAQ](knowledge/guide.md)。
+
+只安装 manager 的维护者使用随包 DELIVERY.md 手工组合候选，准备经应用验证的官方 DSH，并配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
 
 ```sh
 pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --plugins all
 ```
 
-配置与获取发布物的完整步骤见[图文手册](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/getting-started.md)和 manager 随包 DELIVERY.md；在线 main 可能领先于当前版本。当前框架的完整源码部署在 Windows 使用根 `build.ps1`，macOS/Linux 使用根 `build.sh`，要求本机 Linux Docker Compose。macOS 尚未完成真实 Docker 部署验收；环境与恢复说明以框架部署文档为准。
+登录、源码构建和恢复入口见[随包 FAQ](knowledge/guide.md)。维护者从完整框架源码部署时，也使用根 build，默认 source，要求本机 Linux Docker Compose；部署包默认 archives。macOS 尚未完成真实 Docker 部署验收。需要更多在线资料时使用 FAQ 末尾的固定版本链接；在线 main 可能领先于当前归档。
 
 默认 authenticated。登录 `/auth`，首次 admin 必须改密；普通账号需要 example 授权，再打开 `/example`。同一个 DSH home 还需官方默认模型与凭据，插件不保存模型密钥。探针成功只说明基本可服务，不证明模型请求成功。
 
-实例配置在 `<home>/plugins/example/plugin.json`。将 accessMode 改为 standalone 后受控重启可独立体验；同一安装中的用户会共用历史。enabled 控制停用；停用不删除数据。字段与可复制模板见随包[配置参考](examples/README.md)。
+新 archives 站点的实例配置在 `.local/config/plugins/example/plugin.json`；源码和手工 CLI 默认 `<home>/plugins/example/plugin.json`，已有实例及显式路径原样沿用。按部署输出编辑实际文件，将 accessMode 改为 standalone 后受控重启可独立体验；同一安装中的用户会共用历史。enabled 控制停用；停用不删除数据。字段与可复制模板见随包[配置参考](examples/README.md)。
 
 ## 聊天界面复用
 
 输入框的模型按钮可展开官方模型目录，默认项展示 Auth 当前配置。选择在发送下一条消息时生效，回答期间禁止切换。切换复用官方 `sessionController.selectModel()`，也会尝试更新全局默认值；旧对话与分支保留自己的模型记录，除非用户明确选择其他模型。加载失败可重试，原模型移出目录时提示重新选择。选择器、图标随插件独立打包，不依赖 Auth 前端资源。
 
-example 接入 auth 的[会话管理](../../doc/conversation-management.md)：按当前用户归属查询、预览历史、批量移除并同步 DSH 官方归档。旧的插件软删除记录可补齐归档；未完成移除的记录禁止继续发送，允许重试。知识摘要、可复制提示词和源码问答快照同时包含接入方法和删除的实际范围。
+example 接入 auth 的会话管理：按当前用户归属查询、预览历史、批量移除并同步 DSH 官方归档。旧的插件软删除记录可补齐归档；未完成移除的记录禁止继续发送，允许重试。[随包 FAQ](knowledge/guide.md)、可复制提示词和源码问答快照同时包含接入方法和删除的实际范围。
 
-聊天界面复用随包聊天组件，采用顶栏、蓝色用户气泡、白色回答卡片、右侧快捷提问、独立思考与工具状态区。桌面左侧固定展示历史栏，可收起；手机隐藏辅助区，通过侧滑抽屉读取历史；Enter 换行，发送按钮提交。
+聊天界面复用随包聊天组件，采用顶栏、蓝色用户气泡、白色回答卡片、右侧快捷提问、独立思考与工具状态区。桌面左侧固定展示历史栏，可收起，Enter 发送、Shift+Enter 换行；手机隐藏辅助区，通过侧滑抽屉读取历史，Enter 换行、发送按钮提交。
+
+新会话标题复用官方宿主首句提炼，插件不重复发标题模型请求。标题可能晚于回答结束，页面只为当前新会话有限次刷新历史；手动标题、分支及旧历史受保护。具体时限、标题来源和复制接入要求见[随包 FAQ](knowledge/guide.md)。
 
 思考默认折叠，标题后显示单行预览：生成、结束和历史回放始终显示最新非空行，长行保留末尾，屏幕缩放时自动适配；展开查看完整内容，更新保持用户的展开状态。在每个模型步骤末尾追加独立系统段，明确 reasoning_content 使用简体中文；回答默认中文，代码和必要原文保留；同时通过官方运行上下文记录当前界面语言，帮助旧英文会话切换语言；它是插件快照，不增加用户气泡或改写历史。全局关闭运行上下文时仅保留系统提示约束。
 
@@ -72,6 +76,8 @@ SQLite 只存账号所有者、标题和时间等历史目录；消息正文使�
 
 在包根运行 `pnpm build`、`pnpm check`，行为回归单独运行 `pnpm test`。框架内也可用 `pnpm --filter dsh-example ...`。测试使用隔离数据和 Agent 替身，不证明真实模型回答质量。`tests/host-smoke.mjs` 使用真实官方宿主和 auth/example tgz，但模型 HTTP 是明确标识的本地替身。
 
-框架入口与模型密钥来源见[统一配置](../../doc/framework-configuration.md)。根模板包含固定非秘密默认值，私有 env 维护实际部署参数及可选宿主模型凭据；首次初始化按平台填写默认值，已有文件不覆盖，example 不保存模型密钥。随包 FAQ 和源码索引支持三平台 build 入口、配置默认值、文件只读/空值回退及控制台域名信任的问答；知识注入与检索测试不代表真实模型回答已经验收。
+框架入口与模型密钥来源见[随包 FAQ](knowledge/guide.md)。根模板包含固定非秘密默认值，私有 env 维护实际部署参数及可选宿主模型凭据；首次初始化按平台填写默认值，已有文件不覆盖，example 不保存模型密钥。随包 FAQ 和源码索引支持三平台 build 入口、配置默认值、文件只读/空值回退及控制台域名信任的问答；知识注入与检索测试不代表真实模型回答已经验收。
 
-历史栏支持按标题搜索（跨分页）、按置顶/今天/昨天/7 天内/30 天内/更早分组、重命名、置顶、多选，以及预览问答正文后复制或下载 Markdown。分享不生成公开链接，不导出思考、附件文件或工具记录。删除经确认后只从当前用户插件历史列表移除，官方日志和文章/附件文件仍按原留存规则保存；删除后无法从页面恢复或继续该会话。生成中的会话须先停止或完成后操作。历史索引自动迁移到 schema 2，持久化置顶与删除标记，既有正文仍在官方会话中。
+历史栏支持按标题搜索（跨分页）、按置顶/今天/昨天/7 天内/30 天内/更早分组、重命名、置顶、多选，以及预览问答正文后复制或下载 Markdown。分享不生成公开链接，不导出思考、附件文件或工具记录。删除经确认后移除当前用户的插件历史入口并调用官方归档；不永久删除底层日志或文章/附件文件，未完成归档允许重试。删除后无法从页面恢复或继续该会话，生成中的会话须先停止或完成后操作。
+
+历史索引迁移到 schema 4，保留 owner、置顶、删除/移除标记，并为旧标题写入受自动覆盖保护的 `titleSource=manual`。旧版 example 不接受 schema 4，回退不能只更换插件归档或手工降低数据库版本；升级前停写备份，恢复边界见[随包 FAQ](knowledge/guide.md)。
