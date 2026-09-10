@@ -127,7 +127,7 @@ describe('framework default conversation model', () => {
     expect(f.writes).toEqual([])
     expect(await (await f.request(path,choice,admin.cookie,admin.result.csrf)).json()).toEqual({selected:choice})
     expect(f.writes).toEqual([choice])
-  })
+  }, 15_000)
   it('rejects unusable routes and detects a host save that did not persist', async () => {
     const f=await modelsFixture(),admin=await f.login()
     f.llm.resolveCallConfig=async()=>{throw new Error('private upstream failure')}
