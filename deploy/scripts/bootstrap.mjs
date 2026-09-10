@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { delimiter, resolve } from 'node:path';
 import { buildStep } from './build-output.mjs';
 import { assertSelectiveInstallSafe } from './plugin-reuse.mjs';
+import { readSitePointer, needsSiteResume } from '../../packages/plugin-manager/src/site-record.mjs';
 
 export function sourceDependenciesAvailable(root) {
   try {
@@ -13,7 +14,7 @@ export function sourceDependenciesAvailable(root) {
 }
 
 /** The CLI bootstrap and ordinary source release use exactly the same pinned install. */
-export function prepareWorkspaceDependencies(root, env, execute) {
+export function ensurePinnedPnpm(root, env, execute) {
   const run = (bin, args, options = {}) => execute(bin, args, { cwd: root, env, ...options });
   const capture = (bin, args) => run(bin, args, { stdio: 'pipe', encoding: 'utf8' });
   const pin = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).packageManager;
@@ -26,7 +27,11 @@ export function prepareWorkspaceDependencies(root, env, execute) {
     env.PATH = `${resolve(tooling, 'node_modules/.bin')}${delimiter}${env.PATH ?? ''}`;
     if (capture('pnpm', ['--version']) !== pin.slice(5)) throw new Error('Could not prepare the pinned pnpm version.');
   }
-  buildStep('安装项目依赖', () => run('pnpm', ['install', '--frozen-lockfile']));
+}
+
+export function prepareWorkspaceDependencies(root, env, execute) {
+  ensurePinnedPnpm(root, env, execute);
+  buildStep('安装项目依赖', () => execute('pnpm', ['install', '--frozen-lockfile'], { cwd: root, env }));
 }
 
 /** Only a new CLI worker bootstraps; importing release() never performs installation. */
@@ -36,8 +41,7 @@ export function bootstrapSource(root, args, env, execute) {
   if (args.includes('--resume')) throw new Error('Source dependencies are missing for --resume. Restore the original workspace dependencies; saved images, archives and tooling have been retained.');
   const status = execute('git', ['status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=all'], { cwd: root, env, stdio: 'pipe', encoding: 'utf8' });
   if (status) throw new Error('Commit source changes before release; the checkout must be clean.');
-  const pointer = resolve(root, '.local/source-release.json');
-  if (existsSync(pointer) && ['prepared', 'backing-up', 'applying', 'deployment-failed'].includes(JSON.parse(readFileSync(pointer, 'utf8')).status)) throw new Error('An unfinished deployment is recorded. Use the build script with --resume; source dependencies have not been installed.');
+  if (needsSiteResume(readSitePointer(root)?.status)) throw new Error('An unfinished deployment is recorded. Use the build script with --resume; source dependencies have not been installed.');
   prepareWorkspaceDependencies(root, env, execute);
   if (!sourceDependenciesAvailable(root)) throw new Error('Workspace installation did not provide the plugin-kit package required by the source manager.');
   return true;

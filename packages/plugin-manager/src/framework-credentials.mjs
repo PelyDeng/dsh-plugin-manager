@@ -35,14 +35,14 @@ export function frameworkCredentialEnvironment(deployment) {
 }
 
 /** Materialize only the two model secrets; registry credentials never reach the host. */
-export function prepareFrameworkCredentials(deployment, owner) {
+export function prepareFrameworkCredentials(deployment, owner, { directory: targetDirectory } = {}) {
   const input = inputs.get(deployment);
   if (!input) { frameworkCredentialEnvironment(deployment); return; }
   if (digest(readPrivateConfig(deployment.configPath)) !== input.sha256) throw new Error('框架配置在读取后发生变化；请重新执行，不能混用输入。');
   const credentials = validate(input.credentials);
   const bytes = Object.keys(credentials).length ? Buffer.from(JSON.stringify(credentials) + '\n') : undefined;
   const sha256 = bytes && digest(bytes);
-  const pending = deployment.options.resume && readOptional(join(deployment.profileRoot, PENDING));
+  const pending = !targetDirectory && deployment.options.resume && readOptional(join(deployment.profileRoot, PENDING));
   if (pending) {
     const original = pending.desired?.configurations?.$framework;
     if (original?.sha256 !== sha256) throw new Error('恢复需要原框架凭据配置；不能替换或清除待恢复操作的密钥。');
@@ -57,7 +57,7 @@ export function prepareFrameworkCredentials(deployment, owner) {
     return;
   }
   if (!bytes) return;
-  const directory = join(deployment.root, '.local', 'secrets', 'framework-credentials');
+  const directory = targetDirectory ?? join(deployment.root, '.local', 'secrets', 'framework-credentials');
   if (!within(deployment.root, canonical(directory))) throw new Error('框架私有配置目录不能通过联接跳转到项目外。');
   if (owner && ![owner.uid, owner.gid].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error('凭据挂载需要非root容器UID/GID。');
   ensurePrivateDirectory(directory);

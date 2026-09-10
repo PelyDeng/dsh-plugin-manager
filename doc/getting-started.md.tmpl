@@ -1,281 +1,56 @@
-# 图文体验：启动第一个应用
+# 体验登录、授权与首次问答
 
-先用四步运行 `dsh-example` 开发者接入助手：准备工具、打包、启动、登录与问答。完成后可选做第二应用演练，学习组合不同作者的交付物。第二个示例只返回当前身份；真实销售查询、数据权限和图表需要业务作者实现。
-
-[项目首页](../README.md) · [文档导航](README.md) · [独立作者直接接入](plugin-development.md#独立仓库开发) · [已有发布物直接部署](../packages/plugin-manager/DELIVERY.md)
-
-## 本页导航
-
-- [开始前：选择体验路径](#开始前选择体验路径)
-- [1. 准备工具和目录](#1-准备工具和目录)
-- [2. 打包第一个应用](#2-打包第一个应用)
-- [3. 配置并启动](#3-配置并启动)
-- [4. 登录并体验问答](#4-登录并体验问答)
-- [进阶：加入第二个应用](#进阶加入第二个应用)
-- [登录、配置与停用](#登录配置与停用)
-- [命令速查与求助](#命令速查与求助)
-
-当前问答界面采用顶部导航、桌面固定历史侧栏与手机抽屉，思考默认折叠并显示预览。实际问答需要自己的模型凭据，操作见[图文导览](quick-tour.md)。
-
-**作者**开发并交出发布目录；**部署者**填写配置、安装和维护；**使用者**登录、打开获授权的应用。只想体验完整源码站点的 Windows、macOS 或 Linux Docker 用户，可直接走[一键部署](first-deployment.md)。以下主线使用 Node CLI，Windows PowerShell 与 Bash 均可，不需要 Docker。
-
-## 开始前：选择体验路径
-
-```mermaid
-flowchart LR
-  U[使用者] --> A[auth：登录与应用授权]
-  A --> E[example：开发者答疑]
-  A --> S[第二应用：业务代码]
-  E --> K[可选 kit：可信身份与受保护接口]
-  S --> K
-  K --> H[官方 DSH：插件、Agent、模型、会话]
-  M[manager：清单、配置、安装与启停] --> H
-```
-
-DSH 负责应用运行；本框架提供插件开发接入约定和统一部署管理。只运行一个个人工具时，官方 Bundle 可能更简单；需要统一打包、安装、更新和管理自己的插件，或交付给团队与客户时，可以使用 manager。安装和更新通过 CLI 与部署流程完成，kit 和统一认证按需接入。声明不会自动保护业务接口，可信身份也不等于业务数据授权。
-
-```mermaid
-flowchart LR
-  I[内部 plugins/*] --> B[批量 build/check/pack]
-  X[外部独立 pnpm 单包] --> P[显式 root + package .]
-  B --> R[清单 1：含源码位置]
-  P --> T[清单 2：无源码位置]
-  R --> C[compose-release：完整候选集合]
-  T --> C
-  C --> D[release 部署与更新]
-  R --> V[内部 development/link]
-```
-
-外部路径目前不自动发现多包 workspace、不提供 development/link。内部扫描、默认选集和批量开发继续保留。
+本页聚焦 auth/example 的实际使用。先按[产物一键部署](first-deployment.md)运行站点；手工 Node CLI 部署见随包 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。开发自己的插件直接读[作者指南](plugin-development.md)，不必先构建完整问答应用。
 
 ## 1. 准备工具和目录
 
-**目的**：让工具、作者源码、发布物、运行数据各有位置。需要 Git、Node.js `^22.19.0 || >=24`、pnpm `11.19.0`、系统 `tar`，安装依赖需要可用网络或完整缓存。先运行 `git --version`、`node --version`、`pnpm --version`、`tar --version`。
+普通使用者从框架 **{{FRAMEWORK_VERSION}}** 的发行附件取得部署包和 public-apps.zip。public-apps 中的完整目录同时包含 auth/example；复制到 incoming/public-apps 后，不要再复制 optional/auth，以免重复 ID。
 
-```text
-dsh-lab/
-├─ framework/       本框架源码（内部 auth/example）
-├─ tools/           安装 manager 工具
-├─ second/          外部作者的独立示例
-└─ site/            部署者的交付根
-   ├─ incoming/    作者给的原始发布目录
-   ├─ releases/    组合后的完整站点发布物
-   └─ .local/      deployment.json、data/dsh-home、运行记录
-```
-
-**取得工具**：本教学需要框架源码取得两个示例。先克隆公共仓库到 `framework`，选择交付方说明的提交，再准备工具。已有可信的 manager {{FRAMEWORK_VERSION}}、kit {{FRAMEWORK_VERSION}} tgz 时核对提供方 SHA-256，只跳过工具 build/pack，把包放到同一 tools 产物目录；仍执行目录及变量准备。包名不表示已公开发布到 npm。只安装现成包的部署者直接走 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
+仅维护者从源码准备 manager/kit 时，在框架根安装锁定依赖，再执行：
 
 ```sh
-git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin-manager.git framework
-cd framework
-git rev-parse HEAD
-pnpm install --frozen-lockfile
-node -e "require('fs').mkdirSync('.local/artifacts/tools',{recursive:true})"
-pnpm --filter @dsh-plugin-manager/plugin-manager build
 pnpm --filter @dsh-plugin-manager/plugin-kit build
+pnpm --filter @dsh-plugin-manager/plugin-manager build
+pnpm --filter @dsh-plugin-manager/plugin-manager pack --out .local/artifacts/plugin-manager-{{FRAMEWORK_VERSION}}.tgz
+pnpm --filter @dsh-plugin-manager/plugin-kit pack --out .local/artifacts/plugin-kit-{{FRAMEWORK_VERSION}}.tgz
 ```
 
-记录本次源码提交。初始化后续命令所用变量；路径来自当前目录，不写机器固定路径。
-
-PowerShell（仍在框架根）：
-
-```powershell
-$framework = (Get-Location).Path
-$lab = Split-Path -Parent $framework
-```
-
-Bash（仍在框架根）：
-
-```sh
-framework="$PWD"
-lab="$(dirname "$framework")"
-```
-
-两个终端后续均使用以下命令；新终端需重新设置这两个变量：
-
-```sh
-pnpm --filter @dsh-plugin-manager/plugin-manager pack --out "$framework/.local/artifacts/tools/plugin-manager-{{FRAMEWORK_VERSION}}.tgz"
-pnpm --filter @dsh-plugin-manager/plugin-kit pack --out "$framework/.local/artifacts/tools/plugin-kit-{{FRAMEWORK_VERSION}}.tgz"
-node -e "for (const p of ['../tools','../site/incoming']) require('fs').mkdirSync(p,{recursive:true})"
-cd ../tools
-pnpm add --ignore-workspace "$framework/.local/artifacts/tools/plugin-manager-{{FRAMEWORK_VERSION}}.tgz"
-pnpm exec dsh-plugin-manager --version
-cd "$framework/deepseek-harness"
-pnpm install --frozen-lockfile
-pnpm run build
-pnpm dsh --version
-cd "$lab/tools"
-```
-
-**预期**：tools 中能运行 manager {{FRAMEWORK_VERSION}}，deepseek-harness 中能运行官方 CLI。宿主使用自身 `packageManager` 与锁文件（当前源码为 pnpm 11.7.0），和框架 pnpm 11.19.0 分开安装。按宿主提示处理必要的依赖构建许可。源码版本由本次检出的 gitlink 决定，不用旧 npm CLI 替代。后文管理器命令均在 tools 目录运行；宿主源码构建步骤与[官方源码说明](https://github.com/deepseek-ai/deepseek-harness/blob/b2e3b2a0125854567a4a5fcba75782e42fe84901/README.md#run-from-source)一致。
+这些是工具构建，不启动站点。需要源码部署的维护者见[源码入口](../deploy/README.md#服务器源码发版)。
 
 ## 2. 打包第一个应用
 
-**目的**：继续利用 `plugins/*` 自动扫描。回到框架根：
-
-```sh
-cd "$framework"
-pnpm list:plugins
-pnpm package --plugins "auth,example" --output "$lab/site/incoming/base-v1"
-```
-
-**预期**：输出 `manifest.json` 和 auth/example 的摘要命名 tgz。pack 已执行构建与必要检查，无需事先重复 check。目录非空时改用新名称；不要覆盖现用发布物。完整业务测试单独运行 `pnpm --filter dsh-example test`。
-
-example 的关键位置：
-
-| 文件 | 学什么 |
-| --- | --- |
-| `package.json` + `cordis.patch.yml` | 官方 Bundle、受管 ID、页面与探针、认证角色 |
-| `src/index.ts` | 受保护 HTTP、官方 Agent、流式与会话生命周期 |
-| `src/history.ts` | 可信账号所有者、历史目录与宿主日志恢复 |
-| `src/knowledge.ts` + `knowledge/*.md` | 固定公开知识、职责与摘要，不读任意文件 |
-| `web/` | 提问、停止、历史、建议问题与资料入口 |
-
-复制成自己应用时修改包名、ID、Bundle、路由、权限、会话前缀、提示词段名、知识、页面和测试；详见[作者指南](plugin-development.md)。日常构建/检查不需要模型密钥。
+使用已发布 public-apps 无需再次打包。要修改 example 时按[内部开发](plugin-development.md#内部工作区开发)打包；独立应用使用起步包和作者指南，完成后把完整输出交给部署者。
 
 ## 3. 配置并启动
 
-在 tools 目录组合第一站点；这一步不读取作者源码：
+在部署根执行 `bash build.sh`，Windows 执行 `.\build.ps1`。准备真实必需参数，核对输出地址；更改公网地址需同步 origin、URL 与 trusted hosts。完整配置和更新只在首次部署指南维护。
 
-### 组合发布物
-
-```sh
-cd "$lab/tools"
-pnpm exec dsh-plugin-manager compose-release --root "$lab/site" --output releases/site-v1 --manifest incoming/base-v1/manifest.json
-```
-
-### 填写实例配置
-
-先在 tools 目录执行以下命令创建配置目录：
-
-```sh
-node -e "require('fs').mkdirSync('../site/.local',{recursive:true})"
-```
-
-在 `site/.local/deployment.json` 新建下列文件。唯一必须替换的宿主占位符指向刚构建的 deepseek-harness 目录，Windows JSON 路径使用 `/` 或 `\\`。这是新隔离实例；已有站点不要覆盖配置或更换 home。
-
-```json
-{
-  "manifest": "releases/site-v1/manifest.json",
-  "plugins": "all",
-  "mode": "release",
-  "home": ".local/data/dsh-home",
-  "harnessRoot": "<framework绝对路径>/deepseek-harness",
-  "port": 7902,
-  "publicOrigin": "http://127.0.0.1:7902"
-}
-```
-
-### 启动并检查就绪
-
-```sh
-pnpm exec dsh-plugin-manager start --root "$lab/site" --config .local/deployment.json --plugins all
-```
-
-**预期**：前台启动官方 web profile；保持终端运行，在另一个 tools 终端用同 root/config 执行 `health`。端口冲突时选空闲端口并同步 origin。所有相对部署路径以 site 为根；DSH_HOME 是该 site 下的 `.local/data/dsh-home`，不是 tools 或作者目录。
-
-新终端重新设置第一步的变量后执行：
-
-```sh
-cd "$lab/tools"
-pnpm exec dsh-plugin-manager health --root "$lab/site" --config .local/deployment.json
-```
-
-### 启动失败时
-
-先查看终端中的安装或启动错误，再按[命令速查与求助](#命令速查与求助)检查配置。确认宿主与应用探针通过后，进入下一步。
+![应用目录](assets/app-management.png)
 
 ## 4. 登录并体验问答
 
-**目的**：用普通账号验证授权与实际问答。操作位置是浏览器，启动终端继续保持运行。
+<!-- excerpt:first-login -->
+需要认证的应用先确认已选入并启用 auth，再访问实际站点的 /auth；无认证应用跳过登录。空数据库首次管理员为 admin，初始密码 123456；首次登录按页面强制改密，然后重新登录。此后创建普通账号，为它勾选目标插件授权，再用该普通账号登录。
 
-打开 `http://127.0.0.1:7902/auth`，admin 初始密码为 `123456`，强制改密后重新登录；创建普通账号，授予 example。普通用户打开 `/example`。根路径属于官方控制台，其认证与插件账号不同。
+鉴权起步插件的实际请求为 /independent-access-example/identity，成功返回含 owner 的 JSON；匿名或无该应用授权的账号不应取得身份结果。无 kit 的起步插件请求 /independent-example/ready，成功返回其 README 定义的就绪 JSON。测试身份端点不需要模型。
 
-![插件账号登录：登录后只能访问获授权的应用](assets/login.png)
+已部署 example 时，普通账号打开 /example，新建对话，确认真实流式回答及历史恢复；需要先配置自己的模型。/auth 登录、官方根路径认证和模型 API 密钥分别管理，不能用填模型密钥修复根路径的认证提示。健康检查、登录和真实模型调用分别验证。
+<!-- /excerpt:first-login -->
 
-管理员可在 `/auth` 的“模型设置”管理 DeepSeek/智谱，写入官方存储默认无需重启。独立工具可显式选用私有 env；对应密钥非空时文件优先、网页只读，修改需受控重启，留空沿用官方来源。同页默认模型卡片从官方目录选择并保存到**同一个 home** 的官方设置，无需重启；接入共享模型接口的新会话采用该默认，旧会话按持久化记录恢复。其他提供方仍在官方模型设置中管理；密钥不要放进 plugin.json、命令参数或截图。操作见[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
+![登录页](assets/login.png)
 
-![官方控制台：设置中的模型页管理提供方凭据，启动环境提供的密钥不能在此覆盖](assets/model-settings.png)
-
-**预期**：普通账号可进入 example、提交问题并收到模型回答，历史列表可恢复对话。若页面正常但回答失败，检查同一个 home 的模型与凭据。到这里已完成首次体验；可以转到[作者指南](plugin-development.md)开发自己的应用，或继续下面的两应用演练。
+密钥和默认模型见[框架配置](framework-configuration.md#密钥由谁管理)。图文操作见[图文导览](quick-tour.md)，实际模型报错见 [FAQ](FAQ.md)。
 
 ## 进阶：加入第二个应用
 
-本节沿用前四步的目录、变量和已运行实例。只想独立开发、不需要先部署 example 的作者，可直接使用[独立仓库开发步骤](plugin-development.md#独立仓库开发)。
+新应用的完整发布目录放到 incoming 后再 build，默认全选会发现它；显式选集需要加入其 ID。需要认证的应用确保仍有一个启用的 provider，已有 public-apps 中的 auth 无需重复添加。管理员为普通账号增加新应用授权，再分别验证旧新应用。
 
-### 1. 外部作者交付第二个应用
-
-**目的**：另一个作者只维护自己的仓库，复用身份与交付。下面复制最小鉴权示例，真实入口为 `/independent-access-example/identity`。
-
-在框架根复制公开示例（只创建不存在的 second 目录）：
-
-```sh
-cd "$framework"
-node -e "const fs=require('fs'); if(fs.existsSync('../second')) throw Error('second 已存在，请换新目录'); fs.cpSync('examples/standalone-kit','../second',{recursive:true})"
-cd ../second
-pnpm add --ignore-workspace --save-dev "$framework/.local/artifacts/tools/plugin-kit-{{FRAMEWORK_VERSION}}.tgz"
-cd ../tools
-pnpm exec dsh-plugin-manager list --root "$lab/second" --package .
-pnpm exec dsh-plugin-manager pack --root "$lab/second" --package . --output "$lab/site/incoming/second-v1"
-```
-
-**预期**：独立作者锁文件与构建留在 second，交付目录只含可迁移清单和归档。kit 是构建依赖并内嵌；部署机器不需要它的原 tgz 或作者源码。list 不要求锁文件，pack 要求根锁文件且冻结安装，忽略父 workspace。无鉴权的最小 Bundle 可改用 [standalone-plugin](../examples/standalone-plugin/README.md)。完整聊天应用的独立复制步骤见[作者指南](plugin-development.md#复制完整问答应用到独立仓库)。
-
-### 2. 部署者组合并应用新清单
-
-```mermaid
-flowchart LR
-  A[作者 build/check/pack] --> P[原始 tgz + manifest + 配置说明]
-  P --> C[部署者 compose-release 全部候选]
-  O[previous 现用清单：仅旧归档] --> C
-  C --> V[配置校验 + 官方安装预检]
-  V --> R[同 home 受控启动]
-  R --> H[health + 普通账号真实使用]
-```
-
-在 tools 目录先生成新发布目录，再停止旧实例：
-
-```sh
-pnpm exec dsh-plugin-manager compose-release --root "$lab/site" --output releases/site-v2 --previous releases/site-v1/manifest.json --manifest incoming/base-v1/manifest.json --manifest incoming/second-v1/manifest.json
-pnpm exec dsh-plugin-manager stop --root "$lab/site" --config .local/deployment.json
-```
-
-把 deployment.json 的 manifest 改为 `releases/site-v2/manifest.json`，其余 home、origin 等保持。然后 start（同上一节命令，显式 --plugins all）。原账号重新登录，管理员给普通账号增加 independent-access-example 授权；授权变更会撤销其旧登录，需要重新登录。
-
-**预期**：example 和第二应用同时可用，旧账号、授权与实例配置保留。未授权普通账号访问第二端点应返回 403，获授权后返回当前身份。它不查询销售数据。已安装但不在本次候选的 auth 不能满足依赖；--previous 也不会把它补选回来。
-
-更新某应用时替换其原始分项清单，重新组合**所有**要保留的应用。不要将旧整站清单和同 ID 新包叠加。保留旧目录、一致数据备份和作者迁移说明；已有数据能否在旧版继续使用，需要按应用的迁移说明确认，清单本身不能保证。
+更新按[完整目录替换](first-deployment.md#更新与恢复)操作；手动 CLI 的 previous/manifest 语义见 DELIVERY，不能混用两条流程。
 
 ## 登录、配置与停用
 
-```mermaid
-flowchart LR
-  R[业务请求] --> L{有效登录？}
-  L -- 否 --> N[要求登录]
-  L -- 是 --> P{有应用授权？}
-  P -- 否 --> F[403]
-  P -- 是 --> A[kit 提供可信 actor]
-  A --> B{应用的数据授权}
-  B -- 允许 --> D[仅查询获准业务数据]
-  B -- 拒绝 --> F
-```
-
-实例设置在 `<home>/plugins/<id>/plugin.json`。`enabled:false` 停用，数据保留；认证 consumer 的 `accessMode:standalone` 改为共享体验，不能承诺个人历史。修改后 stop/start；Docker 才用 apply-compose。重新启用需原候选仍包含应用。auth 不接受 accessMode，停用它前要处理仍要求登录的应用。
-
-业务参数放 config，业务凭据按作者 runtimeConfig 模板提供；销售数据范围由应用检查。全部字段只在[配置参考](../plugins/dsh-example/examples/README.md)维护。
+实例 enabled/accessMode 由[插件配置](plugin-configuration.md)定义。普通用户登录不等于拥有全部业务数据，插件仍应验证数据范围。账号、会话、配置和数据沿用原站点，不通过删除 .local 排错。
 
 ## 命令速查与求助
 
-| 目的 | 执行位置与命令 |
-| --- | --- |
-| 内部扫描 | 框架根：`pnpm list:plugins` |
-| 内部日常检查 | 框架根：`pnpm check --plugins example` |
-| 独立检查 | tools：`pnpm exec dsh-plugin-manager check --root <作者根> --package .` |
-| 构建并交付 | 作者用 pack；内部用 pnpm package，均用新输出目录 |
-| 就绪检查 | tools：`pnpm exec dsh-plugin-manager health --root <交付根> --config .local/deployment.json` |
-| 停止 | tools：同上，将 health 换成 stop |
-| 看参数 | tools：`pnpm exec dsh-plugin-manager --help` |
-
-先区分**安装成功 → 宿主监听 → 应用就绪 → 真实业务完成**。401/303 查登录，403 查授权/origin，503 查启动依赖，404 查路由和启用；探针通过但问答失败，查同 home 的模型。不要用删数据、清 pending 或关闭鉴权试错。
-
-更多问题见随助手发布的[FAQ](../plugins/dsh-example/knowledge/guide.md)；把需求交给其他 AI，复制[开发提示词](../plugins/dsh-example/knowledge/prompts.md)。求助提供脱敏错误、命令、目录角色、版本、候选 ID 和认证模式，不提供凭据、Cookie 或客户数据。
+初次部署与更新用 build；原输入暂时失败用 resume；同包业务配置修正用 recover，见[运维入口](../deploy/README.md#安装与恢复)。提问附版本、操作系统、目录角色、脱敏错误和预期结果，不发送配置全文、Cookie、token 或客户数据。

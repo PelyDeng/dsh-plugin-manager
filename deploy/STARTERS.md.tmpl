@@ -1,0 +1,20 @@
+# DSH Plugin Manager {{FRAMEWORK_VERSION}} 作者起步包
+
+选择一个目录复制为自己的项目：
+
+| 目录 | 用途 |
+| --- | --- |
+| standalone-plugin | 无 kit、无认证的公开就绪端点 |
+| standalone-kit | 内嵌 kit，复用登录与应用授权，返回可信账号身份 |
+
+两个目录都带完整源码和 README，可独立复制。鉴权目录中的 vendor/plugin-kit.tgz 是匹配版本的公开构建依赖，已用相对 file 引用；它会内嵌到最终运行产物，部署端不需要作者的 vendor 路径。
+
+<!-- include:author-tools -->
+
+从 Release 起步包复制后，在所选作者目录执行 `pnpm install --ignore-workspace`，保存生成的锁文件，然后按该目录 README 打包并运行一次。先用原名验证成功，再按改名表接入自己的业务。
+
+<!-- include:author-pack -->
+
+新建 DSH 插件从以上目录开始；已有 Node 项目需要符合 Cordis 插件入口与构建契约；非 Node 服务继续独立运行，可由 DSH 插件调用接口，不是把任意应用压成 tgz 就能托管。
+
+固定版本[作者指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v{{FRAMEWORK_VERSION}}/doc/plugin-development.md)和[插件配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v{{FRAMEWORK_VERSION}}/doc/plugin-configuration.md)提供详细说明。正常操作无需读内部状态机或下载整个框架源码。

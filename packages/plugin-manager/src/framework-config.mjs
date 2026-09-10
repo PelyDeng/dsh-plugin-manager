@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
 import { parseLiteralConfig, readPrivateConfig } from './literal-config.mjs';
 
 // Each mapping is shared by parsing, migration and the public Chinese template.
 export const deploymentFields = [
+  ['DSH_PLUGIN_SOURCE', 'pluginSource', 'string', '站点 build 的插件来源：source 构建框架源码，archives 自动读取 incoming。独立 CLI 保持原清单语义。'],
   ['DSH_PUBLIC_URL', 'publicUrl', 'string', '对外访问地址。不带路径或末尾斜杠；本机默认为 http://127.0.0.1:7902，公网部署填写自己的地址。'],
   ['DSH_PUBLIC_ORIGIN', 'publicOrigin', 'string', '认证请求来源。留空沿用 DSH_PUBLIC_URL；认证启用时必须与实际浏览器来源一致。'],
   ['DSH_TRUSTED_HOSTS', 'trustedHosts', 'array', '官方控制台信任主机，JSON数组，例如 ["dsh.example.com"]。公网访问需配置；不带协议或路径，不使用通配符。'],
@@ -64,6 +66,50 @@ export const publicDeploymentDefaults = {
   offline: false, composeProject: 'dsh-plugins', containerUid: 1000, containerGid: 1000,
 };
 
+/** Entry defaults are shared by the source checkout and the standalone deployment bundle. */
+export function siteDefaults(inputKind = 'source') {
+  if (!['source', 'archives'].includes(inputKind)) throw new Error('DSH_PLUGIN_SOURCE 仅支持 source 或 archives。');
+  const { plugins, ...common } = publicDeploymentDefaults;
+  return { ...common, pluginSource: inputKind, ...(inputKind === 'source' ? { plugins } : {}),
+    home: '.local/data/dsh-home', workspace: '.local/data/workspace', publicOrigin: common.publicUrl,
+    publishImage: null, hostImage: null, hostImageConfig: null };
+}
+
+/** Static preferences must be valid before preparing Docker or updating source. */
+export function resolveSiteConfig(root, overrides, { inputKind = 'source', source } = {}) {
+  if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) throw new Error('Site configuration must be a JSON object.');
+  inputKind = overrides.pluginSource ?? inputKind;
+  const defaults = siteDefaults(inputKind);
+  if ('manifest' in overrides || (inputKind === 'source' && 'containerImage' in overrides)) throw new Error('manifest and source containerImage are generated; use hostImage only for a source base.');
+  if (inputKind === 'archives') {
+    for (const field of ['hostImage', 'hostImageConfig', 'publishImage']) if (overrides[field]) throw new Error(`archives 不接受 ${field}；请使用完整运行镜像 containerImage。`);
+    for (const field of ['harnessRoot', 'dshCliJs']) if (overrides[field]) throw new Error(`archives 不使用 ${field}。`);
+    if (overrides.dshCli && overrides.dshCli !== 'dsh') throw new Error('archives 不使用自定义 dshCli。');
+    if (source) for (const [key, value] of Object.entries(source.image)) if (value !== imageDefaults[key] && key !== 'DSH_IMAGE_PLATFORM') throw new Error(`archives 不使用源码镜像配置 ${key}，请清除该设置。`);
+  }
+  const site = { ...defaults, ...overrides };
+  if (site.mode !== 'release') throw new Error('站点容器部署仅支持 release 模式。');
+  if (source) {
+    site.home = overrides.home ?? resolve(root, site.dataRoot, 'dsh-home');
+    site.workspace = overrides.workspace ?? resolve(root, site.dataRoot, 'workspace');
+    site.publicUrl = overrides.publicUrl ?? overrides.publicOrigin ?? `http://127.0.0.1:${site.port}`;
+    site.publicOrigin = overrides.publicOrigin ?? site.publicUrl;
+    if (inputKind === 'source') validateImageConfig(source.image);
+  }
+  if (site.plugins !== undefined && (!Array.isArray(site.plugins) || site.plugins.some(id => typeof id !== 'string' || !/^[a-z0-9][a-z0-9_-]*$/.test(id)) || new Set(site.plugins).size !== site.plugins.length)) throw new Error('plugins must contain unique plugin IDs.');
+  if (!Number.isInteger(site.port) || site.port < 1 || site.port > 65535) throw new Error('port must be an integer from 1 to 65535.');
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(site.composeProject)) throw new Error('Invalid composeProject.');
+  for (const key of ['publicOrigin', 'publicUrl']) {
+    let url;
+    try { url = new URL(site[key]); } catch { throw new Error(`${key} must be an HTTP(S) origin.`); }
+    if (!['http:', 'https:'].includes(url.protocol) || url.origin !== site[key]) throw new Error(`${key} must be an HTTP(S) origin without credentials or a path.`);
+  }
+  if (site.publishImage !== null && (typeof site.publishImage !== 'string' || !/^[a-z0-9][a-z0-9.:-]*\/[a-z0-9][a-z0-9._/-]*$/.test(site.publishImage) || site.publishImage.includes('..'))) throw new Error('publishImage must be null or a registry/repository without a tag.');
+  if (site.hostImage !== null && (typeof site.hostImage !== 'string' || !/^\S+@sha256:[a-f0-9]{64}$/.test(site.hostImage))) throw new Error('hostImage must be null or an immutable registry digest.');
+  if (site.hostImageConfig !== null && typeof site.hostImageConfig !== 'string') throw new Error('hostImageConfig must be null or a configuration path.');
+  return site;
+}
+
 export function decodeFrameworkConfig(text) {
   const values = parseLiteralConfig(text, frameworkKeys);
   const config = {};
@@ -94,6 +140,7 @@ export function decodeFrameworkConfig(text) {
   const image = { ...imageDefaults };
   for (const [key] of imageFields) if (values[key]) image[key] = values[key];
   const credentials = Object.fromEntries(credentialFields.filter(([key]) => values[key]).map(([key]) => [key, values[key]]));
+  if (config.pluginSource !== undefined && !['source', 'archives'].includes(config.pluginSource)) throw new Error('DSH_PLUGIN_SOURCE 仅支持 source 或 archives。');
   return { config, image, credentials };
 }
 
@@ -128,6 +175,15 @@ export function renderFrameworkConfig({ config = {}, image = {}, credentials = {
   return lines.join('\n') + '\n';
 }
 
+/** Concise deployment-bundle template; values and comments have the same owner as parsing. */
+export function renderSiteTemplate(inputKind = 'archives') {
+  if (inputKind === 'source') return renderFrameworkConfig({ config: siteDefaults('source') });
+  const defaults = siteDefaults(inputKind), fields = new Set(['pluginSource', 'publicUrl', 'publicOrigin', 'plugins', 'port', 'profile', 'dataRoot', 'artifacts', 'composeProject', 'containerUid', 'containerGid', 'containerImage', 'offline']);
+  const lines = ['# DSH 插件产物部署配置示例', '# 真实配置由 build 初始化到 .local/env.conf；不要把凭据写入公开模板。', '# KEY=VALUE 是字面量；插件业务参数各自在 .local/config/plugins 下填写。'];
+  for (const [key, field, , comment] of deploymentFields) if (fields.has(field)) lines.push('', `# ${comment}`, `${key}=${defaults[field] == null ? '' : JSON.stringify(defaults[field])}`);
+  return lines.join('\n') + '\n';
+}
+
 /** One exact allowlist protects both repository checks and the example's public source snapshot. */
 export function assertPublicFrameworkConfig(text) {
   const values = parseLiteralConfig(text, frameworkKeys);
@@ -135,4 +191,23 @@ export function assertPublicFrameworkConfig(text) {
   if (Object.keys(values).length !== frameworkKeys.size || [...frameworkKeys].some(key => values[key] !== defaults[key])) {
     throw new Error('公开env.conf只能包含完整受控默认值和空凭据；真实配置必须保存在.local/env.conf，不能进入源码索引。');
   }
+}
+
+/** Validate already-read unified inputs without opening a second configuration source. */
+export function validateImageConfig(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config) || Object.keys(config).some(key => !Object.hasOwn(imageDefaults, key))) throw new Error('Unknown host image configuration field.');
+  config = { ...imageDefaults, ...config };
+  for (const key of ['HARBOR_ENABLED', 'ALLOW_UPSTREAM']) if (!['true', 'false'].includes(config[key])) throw new Error(`${key} must be true or false.`);
+  if (!/^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$/u.test(config.IMAGE_NAME)) throw new Error('IMAGE_NAME must be a lowercase image repository name without a registry, project, or tag.');
+  if (!/^linux\/(amd64|arm64)$/u.test(config.DSH_IMAGE_PLATFORM)) throw new Error('DSH_IMAGE_PLATFORM must be linux/amd64 or linux/arm64.');
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/u.test(config.DSH_SOURCE_BASE_IMAGE)) throw new Error('Invalid DSH_SOURCE_BASE_IMAGE reference.');
+  let mirror;
+  try { mirror = new URL(config.DSH_DEBIAN_MIRROR); } catch { throw new Error('Invalid Debian mirror URL.'); }
+  if (!['http:', 'https:'].includes(mirror.protocol) || mirror.username || mirror.password || /[|\s]/u.test(config.DSH_DEBIAN_MIRROR)) throw new Error('Invalid Debian mirror URL.');
+  if (config.HARBOR_ENABLED === 'true' || config.REGISTRY_USERNAME || config.REGISTRY_PASSWORD) {
+    if (!/^[A-Za-z0-9.-]+(?::[0-9]+)?$/u.test(config.REGISTRY_HOST)) throw new Error('REGISTRY_HOST must be a host with an optional port.');
+    for (const key of ['BASE_PROJECT', 'APP_PROJECT']) if (!/^[a-z0-9][a-z0-9._-]*$/u.test(config[key])) throw new Error(`Invalid ${key}.`);
+    if (Boolean(config.REGISTRY_USERNAME) !== Boolean(config.REGISTRY_PASSWORD)) throw new Error('Supply both registry credentials or neither for anonymous access.');
+  }
+  return config;
 }

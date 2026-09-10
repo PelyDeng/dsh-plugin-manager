@@ -14,12 +14,45 @@ export const versionTemplates = [
   'packages/plugin-manager/DELIVERY.md.tmpl',
   'packages/plugin-kit/README.md.tmpl',
   'doc/getting-started.md.tmpl',
+  'doc/first-deployment.md.tmpl',
   'doc/plugin-development.md.tmpl',
   'doc/versioning.md.tmpl',
   'examples/standalone-kit/README.md.tmpl',
   'examples/standalone-plugin/README.md.tmpl',
   'plugins/dsh-example/knowledge/guide.md.tmpl',
+  'deploy/DEPLOYMENT.md.tmpl',
+  'deploy/STARTERS.md.tmpl',
+  'plugins/dsh-example/examples/README.md.tmpl',
 ];
+
+// Fixed public excerpts only. sync/check owns every rendered document; builds only consume it.
+export const documentationFragments = {
+  'author-tools': 'doc/plugin-development.md.tmpl',
+  'author-pack': 'doc/plugin-development.md.tmpl',
+  'deployment-start': 'doc/first-deployment.md.tmpl',
+  'deployment-update': 'doc/first-deployment.md.tmpl',
+  'site-recovery': 'deploy/README.md',
+  'source-rebuild': 'deploy/README.md',
+  'model-credentials': 'doc/framework-configuration.md',
+  'platform-defaults': 'doc/framework-configuration.md',
+  'first-login': 'doc/getting-started.md.tmpl',
+  'root-auth': 'doc/FAQ.md',
+};
+
+function composeDocumentation(source, read, template) {
+  return source.replace(/<!-- include:([^\s]+) -->/g, (_marker, id) => {
+    if (!Object.hasOwn(documentationFragments, id)) throw new Error(`未知文档片段 ${id}：${template}`);
+    const path = documentationFragments[id];
+    const text = read(path), start = `<!-- excerpt:${id} -->`, end = `<!-- /excerpt:${id} -->`;
+    const from = text.indexOf(start), to = text.indexOf(end);
+    if (from < 0 || to < from || text.indexOf(start, from + start.length) >= 0 || text.indexOf(end, to + end.length) >= 0) {
+      throw new Error(`缺失或重复文档片段 ${id}：${path}`);
+    }
+    const body = text.slice(from + start.length, to).trim();
+    if (!body || body.includes('<!-- include:')) throw new Error(`文档片段为空或包含嵌套引用：${path}#${id}`);
+    return `<!-- Excerpt from ${path}#${id}; edit its source. -->\n${body}`;
+  });
+}
 
 const stableVersion = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 function validateVersion(value) {
@@ -58,7 +91,7 @@ export function frameworkVersion(root, { mode = 'check', version } = {}) {
   for (const template of versionTemplates) {
     const source = read(template);
     if (!source.includes('{{FRAMEWORK_VERSION}}')) throw new Error(`模板缺少 {{FRAMEWORK_VERSION}}：${template}`);
-    const rendered = source.replaceAll('{{FRAMEWORK_VERSION}}', target);
+    const rendered = composeDocumentation(source, read, template).replaceAll('{{FRAMEWORK_VERSION}}', target);
     const unknown = rendered.match(/\{\{[A-Z][A-Z0-9_]*\}\}/);
     if (unknown) throw new Error(`未知版本模板变量 ${unknown[0]}：${template}`);
     planned.set(template.slice(0, -5), `<!-- Generated from ${template} by scripts/version.mjs; edit the template. -->\n\n${rendered.trimEnd()}\n`);

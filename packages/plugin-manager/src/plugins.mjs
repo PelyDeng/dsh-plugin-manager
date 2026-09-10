@@ -3,9 +3,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSyn
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { isPluginPath } from '@dsh-plugin-manager/plugin-kit/route-path';
 import { validateConfiguration } from './plugin-settings.mjs';
-
-
-const reservedVariables = new Set('PATH HOME USER USERNAME PWD OLDPWD IFS ENV SHELL SHELLOPTS CDPATH TMP TEMP TMPDIR COMSPEC PATHEXT SYSTEMROOT WINDIR UID EUID PPID LANG LC_ALL MANIFEST_FILE CATALOG_FILE AUTH_URL_FILE PUBLIC_URL PROFILE_DIR MANAGED_FILE STATE_FILE PACKAGE_DIR VERIFY_BIN NODE_BIN'.split(' '));
+import { environmentName } from './state.mjs';
 
 /** User configuration and deployment state cannot be package resources. */
 export function privatePackagePath(path) {
@@ -23,8 +21,7 @@ function object(value, keys, label) {
 }
 
 function variable(value, label) {
-  requireValue(typeof value === 'string' && /^[A-Z][A-Z0-9_]*$/u.test(value), `${label} 不是有效环境变量名。`);
-  requireValue(!reservedVariables.has(value) && !/^(DSH_|PLUGIN_|PNPM_|NPM_|NODE_|COREPACK_|BASH|LD_|DYLD_|GIT_|DOCKER_|COMPOSE_|REGISTRY_)/u.test(value), `${label} 不得使用进程或部署保留变量。`);
+  requireValue(environmentName(value), `${label} 不是有效环境变量名，或使用了进程或部署保留变量。`);
   return value;
 }
 

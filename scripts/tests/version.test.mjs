@@ -68,3 +68,36 @@ test('CRLF checkout is accepted and the caller supplies the repository root', t 
   }
   assert.deepEqual(frameworkVersion(f.root).changed, []);
 });
+
+test('fixed public excerpts are rendered once and source drift is detected without writing', t => {
+  const f = fixture(t);
+  f.write('doc/plugin-development.md.tmpl', '# 作者 {{FRAMEWORK_VERSION}}\n<!-- excerpt:author-pack -->\n离线打包 {{FRAMEWORK_VERSION}}。\n<!-- /excerpt:author-pack -->\n');
+  f.write('plugins/dsh-example/knowledge/guide.md.tmpl', '# FAQ {{FRAMEWORK_VERSION}}\n<!-- include:author-pack -->\n');
+  frameworkVersion(f.root, { mode: 'sync' });
+  const guide = 'plugins/dsh-example/knowledge/guide.md';
+  assert.match(f.read(guide), /离线打包 0\.13\.0/);
+  assert.doesNotMatch(f.read(guide), /<!-- include:/);
+  const previous = f.read(guide);
+  f.write('doc/plugin-development.md.tmpl', '# 作者 {{FRAMEWORK_VERSION}}\n<!-- excerpt:author-pack -->\n新版步骤。\n<!-- /excerpt:author-pack -->\n');
+  assert.throws(() => frameworkVersion(f.root), /文档未同步/);
+  assert.equal(f.read(guide), previous);
+  frameworkVersion(f.root, { mode: 'sync' });
+  assert.match(f.read(guide), /新版步骤/);
+});
+
+test('unknown, missing, repeated and nested excerpts fail before any output is changed', t => {
+  const f = fixture(t);
+  frameworkVersion(f.root, { mode: 'sync' });
+  const previous = f.read('package.json');
+  for (const id of ['../../.local/env.conf', 'constructor']) {
+    f.write('plugins/dsh-example/knowledge/guide.md.tmpl', `# FAQ {{FRAMEWORK_VERSION}}\n<!-- include:${id} -->\n`);
+    assert.throws(() => frameworkVersion(f.root, { mode: 'set', version: '0.14.0' }), /未知文档片段/);
+    assert.equal(f.read('package.json'), previous);
+  }
+  f.write('plugins/dsh-example/knowledge/guide.md.tmpl', '# FAQ {{FRAMEWORK_VERSION}}\n<!-- include:author-pack -->\n');
+  assert.throws(() => frameworkVersion(f.root), /缺失或重复文档片段/);
+  f.write('doc/plugin-development.md.tmpl', '# 作者 {{FRAMEWORK_VERSION}}\n<!-- excerpt:author-tools -->\n工具。\n<!-- /excerpt:author-tools -->\n<!-- excerpt:author-pack -->\n<!-- include:author-tools -->\n<!-- /excerpt:author-pack -->\n');
+  assert.throws(() => frameworkVersion(f.root), /嵌套引用/);
+  f.write('doc/plugin-development.md.tmpl', '# 作者 {{FRAMEWORK_VERSION}}\n<!-- excerpt:author-pack -->x<!-- /excerpt:author-pack -->\n<!-- excerpt:author-pack -->y<!-- /excerpt:author-pack -->\n');
+  assert.throws(() => frameworkVersion(f.root), /缺失或重复文档片段/);
+});

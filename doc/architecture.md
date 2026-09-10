@@ -8,7 +8,7 @@
 
 ## 源码、安装包和数据放在哪里
 
-根 workspace 包含 `packages/*` 与 `plugins/*`，插件发现器只扫描后者。开发者在独立仓库开发单个包时，用 `--root <作者包根> --package .` 指定它的位置，仍使用相同的任务和归档校验。
+根 workspace 的源码插件发现只扫描 `plugins/*`；产物 build 只扫描站点 incoming 直接子目录的完整发布清单，两者由明确的 source/archives 模式选择。开发者在独立仓库开发单个包时，用 `--root <作者包根> --package .` 指定它的位置，仍使用相同的任务和归档校验。
 
 内部发布清单（格式 1）保留源码目录，支持 development/link；独立发布清单（格式 2）不携带源码目录，只支持 release。官方 `deepseek-harness/` 以可选 Git 子模块（gitlink）记录，使用自己的 workspace 和锁文件。Docker 使用同一构建流程产生的 manager tgz，宿主镜像不内置业务插件。
 
@@ -18,11 +18,11 @@
 
 ## 构建、部署与恢复
 
-Windows 根 `build.ps1` 与 macOS/Linux 根 `build.sh` 调用同一套 Node 更新和构建流程。源码发布锁防止一次更新与部署被其他任务同时修改；profile 锁仍由安装事务管理。两者使用相同的原子文件锁机制，锁文件路径不同。
+Windows 根 `build.ps1` 与 macOS/Linux 根 `build.sh` 只转发到同一站点编排。source 准备源码构建产物，archives 冻结外部完整发布目录；两者交给同一 composer、安装器与状态/恢复实现。manager 不导入业务源码，也不反向依赖仓库 deploy/integrations 路径。源码发布锁防止一次更新与部署被其他任务同时修改；profile 锁仍由安装事务管理。两者使用相同的原子文件锁机制，锁文件路径不同。
 
 构建子进程（worker）通过进程间通信（IPC）报告完成并正常退出后，才释放源码锁；异常终止时保留锁和操作记录。各平台在本机 Linux Docker 上的网络、挂载和私有文件权限差异，由部署辅助程序（helper）处理，不改变 kit 接口、业务插件或官方 profile 协议。
 
-恢复时使用原镜像与归档，不迁移目录，也不自动回滚业务数据。源码更新仍会检查服务是否停止、容器是否属于当前部署、挂载是否正确，但不会自动备份全部运行数据。数据备份与恢复由运维单独安排。
+resume 使用原执行树、镜像、归档与私有配置副本；同包业务配置 recover 形成保留原快照的后续候选。两种操作不迁移目录，也不自动回滚业务数据。源码更新仍会检查服务是否停止、容器是否属于当前部署、挂载是否正确，但不会自动备份全部运行数据。数据备份与恢复由运维单独安排。
 
 发布清单可选的 verification 记录构建输入、归档测试、最终 tgz 的摘要，以及测试过的插件组合。管理器用同一模块处理记录校验、合并、插件选择和安装提示；这些记录不参与事务 desiredHash 的计算，也不改变 kit 或插件声明。测试记录与部署环境标识分开核对；信息不足、无法确认对应关系时，结果标为未知。协议与交付流程见[发布物验证记录](../packages/plugin-manager/VERIFICATION.md)。
 
@@ -41,3 +41,5 @@ example 的代码问答通过 kit 工具授权包装官方工具，只检索构�
 需要手动填写的框架配置集中在私有 `.local/env.conf`。根目录的公开模板只填写固定且不含秘密的默认值；密钥、自动生成项及部分按其他配置推算的值留空。首次创建私有文件时，按实际平台填写默认值，已有配置不覆盖。
 
 管理器据此生成部署文件、Compose 和官方 patch。插件自己的 Schema、plugin.json 及 runtimeConfig 仍独立维护；账号与会话继续使用原存储。详见[配置范围](framework-configuration.md)。
+
+公开正文按主题维护；scripts/version.mjs 的同一 sync/check 按固定来源组合版本文档与 FAQ，example build 消费输出而不另写 guide.md。离线指南与可搜索源码快照分别保留，详见[版本与文档同步](versioning.md)。

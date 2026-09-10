@@ -161,6 +161,15 @@ export async function synchronize(deployment, release, options = {}) {
     validateRecordedPlugins(pending.touched);
     if (typeof pending.operationId !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(pending.operationId)) fail('操作日志标识无效。');
   }
+  const siteRecovery = deployment.config.siteRecovery;
+  const siteOperation = deployment.config.siteOperation ?? siteRecovery?.id;
+  if (siteOperation !== undefined && (typeof siteOperation !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(siteOperation))) fail('站点安装归属标识无效。');
+  if (siteRecovery) {
+    if (!options.freshContainer || siteRecovery.schemaVersion !== 1 || siteRecovery.id !== siteOperation || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(siteRecovery.id)
+      || Object.keys(siteRecovery).some(key => !['schemaVersion', 'id', 'pendingId', 'pendingHash', 'stateHash'].includes(key))) fail('站点配置修复意图无效。');
+    // Persistent Compose configuration describes an intent, never a permanent --recover flag.
+    deployment.options = { ...deployment.options, recover: false, resume: false, 'data-compatible': false };
+  }
   if (deployment.options.recover && deployment.options.resume) fail('--recover 与 --resume 不能同时使用。');
   if (deployment.options.recover && (!pending || !deployment.options['data-compatible'])) fail('--recover 需要未完成部署及 --data-compatible，明确确认目标包能够读取当前持久数据。');
   if (deployment.options['data-compatible'] && !deployment.options.recover) fail('--data-compatible 仅用于 --recover。');
@@ -171,8 +180,17 @@ export async function synchronize(deployment, release, options = {}) {
     : { host: { kind: 'unknown' }, platform: { os: process.platform, architecture: process.arch, nodeVersion: process.versions.node } }, deployment.mode);
   printVerification(verification);
   const patches = (deployment.config.patches ?? []).map(path => canonical(resolve(deployment.root, path)));
-  const desired = { schemaVersion: 2, candidates: deployment.candidates ?? plugins.map(plugin => plugin.id), plugins: plugins.map(statePlugin), configurations: runtime.configurations, patches, environment };
+  const desired = { schemaVersion: 2, candidates: deployment.candidates ?? plugins.map(plugin => plugin.id), plugins: plugins.map(statePlugin), configurations: runtime.configurations, patches, environment,
+    ...(siteOperation ? { siteOperation } : {}) };
   const desiredHash = hash(JSON.stringify(desired));
+  if (siteRecovery) {
+    if (pending?.operationId === siteRecovery.pendingId && hash(JSON.stringify(pending)) === siteRecovery.pendingHash) {
+      deployment.options.recover = true; deployment.options['data-compatible'] = true;
+    } else if (pending?.desiredHash === desiredHash && pending.desired?.siteOperation === siteRecovery.id) deployment.options.resume = true;
+    else if (!pending && previous?.siteOperation === siteRecovery.id && same(previous, desired)) { /* Already consumed and successfully activated. */ }
+    else if (!pending && siteRecovery.pendingId === null && (previous ? hash(JSON.stringify(previous)) : null) === siteRecovery.stateHash) { /* First install after a failure before a pending transaction existed. */ }
+    else fail('站点配置修复意图无法对应当前 pending/受管状态；保留现场。');
+  }
   if (pending && !deployment.options.recover && (!deployment.options.resume || pending.desiredHash !== desiredHash)) fail('存在未完成部署；使用原清单和配置 --resume，或选择修复清单并显式 --recover --data-compatible。');
   const legacy = [join(deployment.profileRoot, '.deepseek-plugin-managed.json'), join(deployment.home, '.managed-dsh-plugins')];
   if (!previous && !pending && legacy.some(existsSync)) fail('发现旧受管候选记录，请先显式迁移并核实包归属。');
@@ -180,7 +198,7 @@ export async function synchronize(deployment, release, options = {}) {
   if (environmentChanged && !deployment.options.rebuild) fail('运行环境已变化；请在目标环境预检后显式 --rebuild。');
   const execute = options.execute ?? cliRun;
     const changes = computeChanges(previous, plugins, profileManifest(deployment.profileRoot), plugin => !environmentChanged && installedMatches(deployment.profileRoot, plugin), pending);
-    const configurationChanged = !previous || !same(previous.candidates, desired.candidates) || !same(previous.configurations, desired.configurations) || !same(previous.patches ?? [], patches) || environmentChanged;
+    const configurationChanged = !previous || !same(previous.candidates, desired.candidates) || !same(previous.configurations, desired.configurations) || !same(previous.patches ?? [], patches) || previous.siteOperation !== desired.siteOperation || environmentChanged;
     if (!changes.add.length && !changes.remove.length && !configurationChanged && !pending) {
       if (options.freshContainer) synchronizedStopped.add(deployment);
       return { changed: false, status: 'installed', activated: 'unknown', plugins: desired.plugins, verification };
@@ -285,7 +303,7 @@ export async function finalize(deployment, release, { running = false, locked = 
       if (!same(pending.desired.plugins.map(item => [item.id, item.sha256]), release.plugins.map(item => [item.id, item.sha256]))) fail('验证清单与待启动操作不一致。');
       const current = runtimeEnvironment(deployment, release.plugins);
       const patches = (deployment.config.patches ?? []).map(path => canonical(resolve(deployment.root, path)));
-      if (!same(pending.desired.configurations, current.configurations) || !same(pending.desired.patches ?? [], patches)) fail('验证配置与待启动操作不一致；不能将旧配置标为已应用。');
+      if (!same(pending.desired.configurations, current.configurations) || !same(pending.desired.patches ?? [], patches) || pending.desired.siteOperation !== (deployment.config.siteOperation ?? deployment.config.siteRecovery?.id)) fail('验证配置与待启动操作不一致；不能将旧配置标为已应用。');
       atomicJSON(join(deployment.profileRoot, STATE), pending.desired);
       rmSync(pendingPath);
     }

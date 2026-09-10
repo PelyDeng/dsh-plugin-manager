@@ -1,107 +1,95 @@
-# Docker 一键部署
+<!-- Generated from doc/first-deployment.md.tmpl by scripts/version.mjs; edit the template. -->
 
-一个完整的框架仓库检出目录管理一个 Linux 容器站点。Windows 使用根 `build.ps1`，macOS/Linux 使用根 `build.sh`，首次初始化与更新共用同一流程；旧 `bash deploy/build.sh` 继续支持。依赖和镜像在执行脚本的机器构建。默认使用已有官方宿主源码，不下载、更新、切换它，也不要求它与预设锁定版本一致；也可显式提供不可变 `DSH_HOST_IMAGE` / `hostImage`，无需检出未使用的宿主源码。不需要人工准备发布清单或 Compose。
+# 插件产物一键部署
+
+把作者交付的标准发布目录放进框架部署包，执行 build 即可部署。部署机器不需要作者源码、kit 或插件构建工具链。本文适用于框架 **0.16.0**；框架源码用户见[源码部署](../deploy/README.md#服务器源码发版)，只安装 manager 的用户见[手工 CLI 交付](../packages/plugin-manager/DELIVERY.md)。
 
 ## 首次部署
 
-需要 Git、Node.js `^22.19 || >=24`（含 npm）、可用的本机 Linux Docker 引擎及 Compose 插件和系统 tar。Windows 不依赖 Bash 或 flock；macOS/Linux 使用系统 Bash。Docker 需要支持多阶段构建与命名构建上下文。脚本自动在需要时安装仓库锁定的 pnpm；不会自动安装系统软件、修改防火墙或创建反向代理。执行用户必须有 Docker 权限。原生 Linux 默认使用容器 UID/GID 1000；macOS 新站点按当前非 root 用户初始化 UID/GID。实际挂载读写在停服前检查，已有目录不自动迁移或放宽权限。
+<!-- excerpt:deployment-start -->
+从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.16.0.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
 
-```sh
-git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin-manager.git
-cd dsh-plugin-manager
-./build.sh
+每个作者交付的是一个完整目录，包含 manifest.json 和它引用的全部 tgz。将它放在部署根的 incoming 直接子目录中：
+
+```text
+dsh-deployment/
+├─ build.ps1 / build.sh
+├─ tools/                       随包管理器，不手改
+├─ framework-runtime.json       固定运行镜像信息，不手改
+├─ optional/auth/               按需使用的认证发布目录
+├─ incoming/
+│  └─ my-plugin/
+│     ├─ manifest.json
+│     └─ my-plugin-<摘要>.tgz
+└─ .local/                      运行后创建，保留配置和数据
 ```
 
-Windows 将最后一行换成 `.\build.ps1`。在文件资源管理器打开仓库目录，选择“在终端中打开”并使用 PowerShell，即可执行该命令并保留完整输出；也可通过 `build.ps1` 的“使用 PowerShell 运行”菜单启动。需要传参数或查看失败原因时使用终端。在执行策略阻止运行时，可以仅为这一次调用执行 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1`，不修改全局执行策略。
+在部署根执行 `bash build.sh`；Windows PowerShell 执行 `.\build.ps1`。普通 zip/tgz 单文件不能代替完整发布目录。需要认证时，将 optional/auth 整个目录复制到 incoming/auth，保留自己的应用。不要删除组合清单中某个归档来挑选插件。
 
-Docker 必须运行 Linux 容器，只接受本机 unix/npipe endpoint；远端 context、SSH/TCP endpoint 不属于本入口的部署范围。一次发布固定 Docker endpoint，并记录引擎身份和架构；切换引擎后不能直接继续原 `--resume`。Windows/macOS 以及 Linux 上的 Docker Desktop 使用 bridge：官方 DSH 仍监听 `127.0.0.1`，容器桥接 IPv4 地址的同端口通过 TCP 转发至它，宿主只向 `127.0.0.1` 发布端口。
+首次自动创建 .local/env.conf。新 archives 站点的可编辑业务配置在 .local/config/plugins/<id>/，错误提示会给出实际文件、插件 ID、已知缺项和下一条命令。填写真实必需参数后再执行同一个 build；已有配置不覆盖。无必需业务配置的最小插件应一次执行完成。业务 Schema 错误可能在加载阶段才发现，不能把模板存在当作配置正确。
 
-同一 Docker 网络中的其他容器仍属于受信任范围，不能据此认定服务已与公网隔离；原生 Linux 引擎保留 host 网络。macOS 的实际 Docker 站点部署尚未完成真机验收；CI 测试不等同于部署验收。
+成功输出访问地址、选中插件、声明探针结果及发布记录。未声明探针的 not-provided 表示未提供业务就绪检查。默认本机地址为 http://127.0.0.1:7902；实际请求和响应还需按插件 README 验证。
+<!-- /excerpt:deployment-start -->
 
-使用宿主源码时，检出阶段用递归克隆带齐子模块；已有完整源码无需重复克隆。普通 Git 克隆只取得子模块版本引用，需要构建宿主而实际源码缺失时，脚本提示检出不完整，不自行补拉。镜像记录实际宿主提交，便于定位构建来源，不会因为它与预设版本不同而拒绝全量构建。
+发行附件见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)。部署包自带可执行 manager，依赖安装仍可能需要网络或完整缓存。镜像含官方 DSH 和匹配 manager；它不包含业务数据，也不保证任意社区插件兼容。
 
-默认选中 auth、example，使用本机镜像，监听 `http://127.0.0.1:7902`。构建依赖 npm、基础镜像和 Debian 软件源；本机依赖缓存和 Docker 缓存可以复用。首次完整构建比后续更新耗时更长。受限网络可通过 `.local/env.conf` 的镜像字段配置镜像源；预构建宿主是可选加速，不是初始化前置条件。
-
-远程浏览器通过 SSH 端口转发访问，或配置反向代理后填写 `DSH_PUBLIC_ORIGIN`、`DSH_PUBLIC_URL`，并在 `DSH_TRUSTED_HOSTS` 加入实际主机名。设置自定义端口时同时调整这两个 URL。首次管理员及密码修改流程见 [auth 说明](../plugins/dsh-auth/README.md)。站点启动和登录不要求模型密钥；实际 AI 对话需按[部署说明](../deploy/README.md#运行配置)配置模型密钥。
-
-本机访问 `http://127.0.0.1:7902/auth` 登录插件账号，`http://127.0.0.1:7902/example` 打开示例；根路径属于官方控制台，使用独立的官方认证地址。
+仅支持本机 unix/npipe Docker endpoint 的 Linux 容器。原生 Linux 使用 host 网络；Docker Desktop 使用 bridge，容器地址的同端口通过 TCP 转发至 DSH 的回环监听，宿主仅向回环发布。macOS 真机或 ARM 镜像未验证时，以该 Release 的明确范围为准；不把 CI 等同于现场部署。
 
 ## 首次登录与模型密钥
 
-插件 /auth 登录、官方控制台根路径认证和模型 API 密钥分别管理。根路径提示 `dsh web authentication required; reopen the URL printed by dsh web.` 时，在服务器私有终端读取本次启动生成的 `.local/data/dsh-web-auth-url.txt`，仅在自己的浏览器打开完整地址。自定义路径按生成的 deployment.json 的 authUrlFile 核对；不要分享其中的令牌，详情见 [FAQ](FAQ.md)。
+无 kit 的起步插件：请求 `/independent-example/ready` 并核对其 README 中的 JSON。带认证的起步插件：先复制 optional/auth，再访问 `/auth` 完成初始管理员改密、重新登录、普通账号授权，最后请求 `/independent-access-example/identity`。详细操作见[首次登录与请求](getting-started.md#4-登录并体验问答)。
 
-框架模型密钥有两种管理方式：在私有 `.local/env.conf` 填写 `DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` 时，以文件为准，对应密钥在网页只读，修改后受控重启；字段留空时沿用官方凭据，不删除已有值，也不清除继承环境覆盖。
-
-没有环境覆盖时，管理员完成初始改密后可在 /auth 的“模型设置”管理 DeepSeek 或智谱。页面只返回状态与不可逆指纹，不返回密钥。命令行只支持 DeepSeek，在仓库根执行后隐藏输入：
-
-```sh
-bash deploy/scripts/set-api-key.sh --config .local/deployment.json
-```
-
-Windows 使用 `node deploy/scripts/set-api-key.mjs --config .local/deployment.json`，无需 Bash。
-
-密钥不放进命令参数。网页和脚本复用官方凭据服务，保留其他凭据、账号和历史；默认官方文件监听使存储更新无需重启。文件或其他启动环境覆盖时拒绝写入。Compose 脚本核验活动容器与 home，以容器用户执行；独立 CLI 要以数据所有者运行，并指向已安装的兼容官方 CLI。自定义存储或关闭监听时使用当前运行服务的网页入口。
-
-密钥保存不验证模型可用性、不创建路由、不选择默认模型。在同页上方的模型卡片选择新会话默认模型后会自动保存，无需重启；已有对话和分支保留官方记录中的模型选择。智谱等提供方需要在同一 DSH 的官方设置或 patch 中配置相应路由和凭据引用。随后在 /example 新建对话验收；详见[统一配置](framework-configuration.md)与[模型准备](../packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
+`/auth` 的账号、官方控制台根路径认证、模型 API 密钥各有用途。需要 AI 问答时再配置模型，见[模型与凭据规则](framework-configuration.md#密钥由谁管理)；仅登录或 identity 请求不需要模型。密钥不放进插件 config 或命令参数。
 
 ## 配置归属
 
-| 文件 | 用途 | 提交 Git |
-| --- | --- | --- |
-| 根 `env.conf` | 带中文注释和固定非秘密默认值的公开模板，真实站点值不得填入 | 是，受控默认值及必要空值 |
-| `.local/env.conf` | 部署者维护的框架运行输入，常用配置排在前面 | 否 |
-| `deploy/config/site.defaults.json` | 源码一键入口的通用默认值 | 是 |
-| `.local/deployment.json`、清单及 Compose | 脚本生成的本次部署输入 | 否 |
-| 各插件 `plugin.json` / runtimeConfig | 插件自己的启停、认证及业务配置 | 否，运行实例私有 |
-| `.local/secrets/`、`.local/artifacts/` | 供进程读取的私有凭据文件、产物和部署记录 | 否 |
+| 位置 | 操作方式 |
+| --- | --- |
+| .local/env.conf | 站点地址、选集等人工输入；真实值不入 Git |
+| .local/config/plugins/<id>/ | 全新 archives 站点的 plugin.json/runtimeConfig，按提示编辑 |
+| 旧站点或显式 instances 路径 | 沿用原位置，不因换入口自动迁移 |
+| .local/deployment.json、artifacts 内清单/Compose/快照 | 自动生成，不手改 |
+| .local/data | 账号、会话、业务数据，沿用与独立备份 |
+| incoming | 完整候选发布目录，框架不自动清空 |
 
-首次运行自动创建私有配置并填写实际默认值；已有文件不覆盖，旧 JSON 导入保留原文件和解析路径。通常只需核对公网 URL、trustedHosts 与所用模型凭据。端口为 7902、profile 为 web、插件为 auth/example；Windows/Linux 的容器 UID/GID 为 1000，macOS 非 root 用户采用当前 UID/GID；镜像架构按 Docker 引擎选择 amd64/arm64。
-
-公开模板填写通用的 UID/GID 1000 和 linux/amd64；手工复制模板不会执行平台探测，须自行核对这些值。密钥、自动生成项及部分按其他配置计算的字段继续留空。完整键名与默认规则见[框架统一配置](framework-configuration.md)。
-
-已有站点没有 env 文件时，优先导入旧 site.json，其次导入 deployment.json，保留原文件和已解析的数据路径。旧 hostImageConfig 的镜像配置一并导入，未知字段拒绝静默丢弃。显式 `--config <旧站点.json>` 仍兼容；生成的 deployment.json 不作为人工站点输入。未完成部署沿用原操作文件，恢复期间不迁移。
-
-相对路径从检出目录解析，一个检出目录只管理一个站点。源码入口以文件为准，不套用基础管理器的环境变量覆盖。`DSH_MANIFEST`、`DSH_CONTAINER_IMAGE` 仅供独立归档部署，源码构建自动生成，必须留空。`DSH_PUBLISH_IMAGE` 可选；填写仓库账号时使用临时 Docker 登录且验证目标主机，留空凭据时沿用 Docker 已有登录。业务配置不集中到框架文件，见[插件配置规范](plugin-configuration.md)。
+公网访问应配置代理或 SSH 转发，并核对 `.local/env.conf` 的 public URL、origin、trusted hosts；自定义端口时同步核对 URL。字段及 source/archives/CLI 默认值差异只在[框架配置](framework-configuration.md)维护。新部署包默认 archives，全新源码检出默认 source，不能把源码模板的 auth/example 默认选集复制到新产物站点。
 
 ## 更新与恢复
 
-默认更新重建全部部署插件。只需重建 c 时，可使用 `./build.sh --rebuild-plugins c`，Windows 使用 `.\build.ps1 --rebuild-plugins c`；多个 ID 用逗号分隔。保留站点完整插件选集，其余自动复用当前成功部署的归档。首次部署或来源不完整时先全量构建；共享源码、依赖或文档变化也可能要求全量，具体条件见[按需重建说明](../deploy/README.md#服务器源码发版)。公共组件、镜像和服务重启仍按现有流程执行。
+<!-- excerpt:deployment-update -->
+incoming 是期望保留的完整集合，不是一次性投递队列。新增插件放一个新的完整目录；更新则整体替换对应目录，保留其他应用。一个清单含多个插件时整体更换，不覆盖合并新旧文件。重复 ID/包名会报错，不自动挑“最新版本”。
 
-按需复用支持两种宿主来源：未配置 `hostImage` 时要求与基线一致的干净宿主源码；显式不可变 `hostImage` 时以同一镜像摘要和成功记录中的宿主提交核验，不要求宿主源码目录存在。切换宿主来源或缺少可核实身份时先全量构建，不能靠补写发布记录绕过检查。
+先在 incoming 外解压并核对新发布目录；停止编辑和并行 build。下面假设 my-plugin 是原目录，incoming 外的 next/my-plugin 是准备好的完整新目录，backups/my-plugin-v1 尚不存在。
 
-```sh
-git pull --ff-only --recurse-submodules
-./build.sh
+Windows PowerShell，在部署根执行：
+
+```powershell
+New-Item -ItemType Directory -Force backups | Out-Null
+Move-Item -LiteralPath incoming/my-plugin -Destination backups/my-plugin-v1
+Move-Item -LiteralPath next/my-plugin -Destination incoming/my-plugin
+.\build.ps1
 ```
 
-Windows 将最后一行换成 `.\build.ps1`。更新代码时按需同步子模块；版本选择由源码维护者决定。部署从干净的已提交源码重新构建管理器及选中插件。宿主源码未变化时复用已有宿主层；本地宿主源码更新后构建新的镜像，不因此拒绝部署。镜像与归档准备完成后，先通过 `check-compose` 核验最终挂载和容器用户权限，再停止旧服务、核验原容器及其持久挂载，随后安装并等待健康检查。重复运行沿用已有插件设置和数据，不执行重置。源码更新不自动创建全量运行数据备份；发布记录、原归档及配置副本不能替代数据备份。需要数据恢复能力时，应在更新前独立备份并验证恢复，保留已有备份。
+Linux，在部署根执行：
 
-| 情况 | 行为与处理 |
+```sh
+mkdir -p backups
+test ! -e backups/my-plugin-v1 && mv incoming/my-plugin backups/my-plugin-v1
+test ! -e incoming/my-plugin && mv next/my-plugin incoming/my-plugin
+bash build.sh
+```
+
+每个命令失败后先修复，不继续执行后续步骤；不要删除原目录或数据来重试。build 在停服前显示新增、更新、保留和停用。移走仍启用的插件产物会拒绝，不等于卸载。停用配置型插件先设 enabled=false 并成功部署，再移走其产物；其他插件用 DSH_PLUGINS 显式列出保留集合。留空选集为全部发现项，[] 才是明确空集合。
+
+框架升级在同一站点 root 替换公开脚本、tools、framework-runtime.json、optional 资源和公开模板；incoming/.local 原样保留。optional/auth 更新不会自动替换 incoming 中正在部署的 auth。未完成操作沿用保存的原工具、镜像和输入，先按恢复流程处理。
+<!-- /excerpt:deployment-update -->
+
+| 情况 | 下一步 |
 | --- | --- |
-| 第一次运行，没有部署记录和数据 | 生成站点文件、构建、初始化、启动 |
-| 存在成功部署记录 | 检查项目与镜像一致性，构建后停服、核验并更新 |
-| 有旧数据但缺少活动部署记录 | 拒绝当作新站点；恢复记录或按迁移流程处理 |
-| 产物准备完成前构建失败 | 旧服务继续运行；正常报错退出后修正错误并重复普通命令 |
-| 产物已标记 prepared，挂载或权限预检失败 | 尚未停止旧服务；修正挂载访问条件、保持原配置与产物不变，然后执行 `--resume` |
-| 停服核验失败 | 不应用新版本，尝试启动原服务；保留发布记录 |
-| 构建完成后断电、安装或启动失败 | 保留同次镜像、归档和配置；配置不变时执行下方恢复命令 |
+| 归档/静态配置检查失败，尚未 prepared | 按错误修复后普通 build |
+| prepared 后临时网络、权限或挂载错误 | 保持原受管配置，`bash build.sh --resume` |
+| 需修改同一个插件包的业务配置 | 修改错误提示指出的原文件，`bash build.sh --recover --data-compatible` |
+| 需要替换错误插件包 | 不属于本次高层快捷恢复；保留现场，查运维指南 |
+| 遗留锁 | 先运行 build doctor，按归属证据解锁；不删状态 |
 
-```sh
-./build.sh --resume
-# 使用过显式站点文件时，恢复仍传入同一个文件：
-./build.sh --config .local/env.conf --resume
-```
-
-Windows 使用 `.\build.ps1 --resume` 或 `.\build.ps1 --config .local/env.conf --resume`。恢复不带 `--rebuild-plugins`，使用该次保存的完整清单和镜像。原先显式使用旧 JSON 时，恢复仍传原 JSON。私有操作目录中的 `framework-input.conf` 备存本次 env 原始字节；输入误改时先恢复原文件再 resume，不自动切换来源。
-
-恢复不重建镜像和插件归档，重新核验保存的输入，并交给原管理器恢复安装。源码入口允许管理器在检测到宿主或 Node 等运行环境变化时预检并重装依赖；环境未变化时不会因该许可单独重装。若断电留下进程记录，必须先由 Docker 确认对应容器已停止且其 hostname、profile、home 挂载匹配，才能备存并解除残留记录，pending 保持原样。旧版无 hostname 的运行记录不支持自动解除，需由维护者核实原容器归属后处理。
-
-不要删除 `.local`、pending 或数据目录来绕过失败；镜像、归档、站点文件已变化时保留现场处理。对新目标包进行数据兼容恢复属于基础管理器的显式运维流程，不由初始化自动推断。
-
-三个平台共用检出目录级 `.local/source-release.node.lock`；Linux shell 同时保留可用的旧 `flock` 互斥。构建子进程通过 IPC 报告完成、退出码一致且没有中断时，才自动释放源码锁，普通构建报错也可正常重试。
-
-强制终止、断电或完成证明缺失时会保留锁。先在仓库根执行 `bash build.sh doctor` 查看状态，再用 `bash build.sh unlock-source` 核验相关进程已经退出，并备份后解除源码锁。Windows 对应命令为 `.\build.ps1 doctor` 和 `.\build.ps1 unlock-source`。旧锁缺少身份信息或无法确认进程已退出时，命令会拒绝解锁，按[源码锁恢复说明](../deploy/README.md)处理。
-
-不要直接删除 Node 锁、旧 `.local/source-release.lock`、profile 锁或 pending；管理器的 `unlock` 只处理 profile 锁。部署期间仍不要并行操作同一站点的基础管理命令。
-
-`--resume` 继续同一次部署，不自动回滚业务数据。恢复时须保留同一 Docker 引擎、原始输入与不可变镜像。
+Windows 将上述 `bash build.sh` 换为 `.\build.ps1`。`--data-compatible` 是部署者明确确认同包可使用现有数据，不是框架证明兼容或自动备份。完整恢复、旧记录与按需重建规则见[部署与管理](../deploy/README.md)。

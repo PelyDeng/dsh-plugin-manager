@@ -6,46 +6,40 @@
 
 ## 安装与作者操作
 
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。在工具目录执行 `pnpm add --ignore-workspace /path/to/plugin-manager-0.15.2.tgz`，随后使用 `pnpm exec dsh-plugin-manager`。包名不表示已发布到公共 registry。本 README 随工具版本交付。
+<!-- Excerpt from doc/plugin-development.md.tmpl#author-tools; edit its source. -->
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.16.0.zip`、`plugin-manager-0.16.0.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.16.0.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
 
-每个项目操作都须用 `--root` 指定项目根目录；配置、home 和产物使用相对路径时，都从这个目录计算。独立作者包根需有 package.json：有效 name/version、main、files、README、scripts.build/check、官方 dsh.bundle.patch，以及 `deepseekPlugin: { "schemaVersion": 3, "id": "my-plugin" }`。页面、探针、权限、认证与 kit 均不强制要求。构建产物可以由 build 生成。
-
-部署和迁移输出使用规范化的完整路径，包括 Windows 8.3 短目录名。迁移仍拒绝通过符号链接或目录联接指定源、目标和备份。
-
-在作者根执行 `pnpm install --ignore-workspace` 并保存 pnpm-lock.yaml，随后在工具目录调用：
+起步 zip 内有 standalone-plugin、standalone-kit；选一个目录复制为自己的作者项目，不复制 node_modules、dist 或 .local。在作者项目以外创建独立工具目录 dsh-tools，在该工具目录安装实际 manager 归档：
 
 ```sh
-pnpm exec dsh-plugin-manager list --root /path/to/author-project --package .
-pnpm exec dsh-plugin-manager pack --root /path/to/author-project --package . --output .local/artifacts/release
+pnpm init
+pnpm add --ignore-workspace /absolute/path/plugin-manager-0.16.0.tgz
+pnpm exec dsh-plugin-manager --version
 ```
 
-`--package` 仅支持 `.`，与 `--plugins` 互斥。list 不执行脚本、不要求锁文件；build/check 使用作者已安装的依赖；pack 冻结安装根锁文件，忽略父 workspace，依次执行一次 build 和 check 后打包。check 本身先执行 build。直接 pack 无需预先 build/check；不使用 prepare/prepack/postpack 重复构建。检查限于声明、交付与启动条件，不注入业务测试。
+将占位路径替换为实际绝对路径，含空格时加引号。以后 pnpm exec dsh-plugin-manager 都在这个工具目录执行，--root 明确指向作者项目。manager 不加入业务运行依赖；工具目录和作者项目各自保存锁文件。
 
-独立包产出清单 2，包含内容摘要命名的 tgz，不携带作者源码目录。额外核对归档时执行 `pnpm exec dsh-plugin-manager verify-package --root <作者根> --package . --archive <tgz>`，不重新构建。Windows 归档校验通过文件句柄读取，支持中文目录且不依赖 tar 的路径编码。
+<!-- Excerpt from doc/plugin-development.md.tmpl#author-pack; edit its source. -->
+在工具目录执行，将作者项目换成实际绝对路径：
+
+```sh
+pnpm exec dsh-plugin-manager list --root /absolute/path/my-plugin --package .
+pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --output .local/artifacts/release/v1
+```
+
+list 只读声明，不要求锁文件；pack 要求作者根的 pnpm-lock.yaml，冻结安装后各执行一次 build/check，再校验并打包，无需事先重复 check。输出必须是新目录或空目录，路径相对作者 root；再次发布用新目录 v2。日常可独立运行 check，它会先 build，完整业务测试另行运行。
+
+交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。
+
+额外归档核对使用 `pnpm exec dsh-plugin-manager verify-package --root <作者根> --package . --archive <tgz>`，不重新构建。独立项目 --package 仅支持 .，与 --plugins 互斥。字段、源码/归档路径继续由既有公开校验负责。
 
 ## 部署现成归档
 
-完整部署、普通账号授权和更新步骤见随包发布的 [DELIVERY.md](DELIVERY.md)。组合命令：
+带 build 的部署包将完整发布目录放进 incoming 后运行根脚本，详情使用其随包 README。管理器 tgz 仍只提供 CLI；手工组合、启动、更新和配置见本包 [DELIVERY.md](DELIVERY.md)，不需要作者源码。
 
-```sh
-pnpm exec dsh-plugin-manager compose-release --root /path/to/site --output releases/site-v1 --manifest incoming/auth/manifest.json --manifest incoming/app/manifest.json
-```
+底层 start/apply-compose/compose-release 语义不变。清单 2 只支持 release，未声明 healthPath 显示 not-provided，不代表业务就绪；运行依赖可能需要网络。独立 CLI 必须指定 --root，不能从工具目录猜站点路径。
 
-更新使用新输出目录并加 `--previous <现用清单>` 保留旧归档；新候选只来自 manifest 输入。完整站点部署显式 `--plugins all`，避免旧配置过滤新增应用。
-
-运行端无需作者源码、Git 或 plugins 目录。启动、健康检查与停止使用 DELIVERY 中的实例配置命令。
-
-清单 2 不支持 development；请求在修改实例前拒绝。内部清单 1 继续支持 release 和原有 development/link。未声明 healthPath 的插件显示 not-provided，不表示业务就绪。依赖安装仍可能需要网络。
-
-支持 configuration 的插件使用 `<DSH home>/plugins/<id>/plugin.json`，例如 `{"schemaVersion":1,"enabled":true,"accessMode":"standalone","config":{}}`。accessMode 仅适用于认证消费者；authenticated 需要合法站点 publicOrigin 和候选清单中唯一、已启用的认证提供者。使用 compose-release 显式组合业务应用与认证插件。认证模式修改需配置加受控重启。
-
-Docker 实例通过 `apply-compose --root <项目根> --config <deployment.json>` 应用配置，接受不可变本机镜像 ID 或 registry 摘要，`--resume` 恢复原操作。可先运行 `check-compose` 生成候选文件并检查挂载权限，不停止服务或启动 DSH；`apply-compose` 也会先执行这些检查。
-
-仅支持本机 unix/npipe endpoint 的 Linux 引擎；Windows/macOS 与 Linux Docker Desktop 使用 bridge，容器地址通过 TCP 转发到 DSH 的 `127.0.0.1` 同端口，宿主仅向回环地址发布。同一 Docker 网络中的其他容器仍属于受信任范围，不能据此认定服务已与公网隔离；原生 Linux 保留 host 网络。macOS 尚未完成真机验收。
-
-完整源码仓库的根 `build.ps1`（Windows）或 `build.sh`（macOS/Linux）会构建宿主与插件并部署；这两个入口不包含在独立工具 tgz 中。其源码锁与 profile 安装锁用途不同，强制终止时不能用 profile `unlock` 解除源码锁；源码 `--resume` 继续发布，不回滚数据。`migrate-data` / `migrate-artifacts` 默认仅预览。
-
-完整命令参数见 `pnpm exec dsh-plugin-manager --help`；部署细节与示例见[仓库开发分支文档](https://github.com/PelyDeng/dsh-plugin-manager/tree/main/doc)，该链接可能领先于已安装版本。
+`release-site --root <站点> [--config <配置>] [--resume | --recover --data-compatible]` 是部署包 build 使用的统一编排入口；普通用户仍运行 build。recover 仅修正同包业务配置，不支持借此替换错误包。源码适配、锁和恢复说明见对应版本的[运维文档](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.0/deploy/README.md)。
 
 ## 内部批量开发与 API
 
@@ -60,4 +54,4 @@ Docker 实例通过 `apply-compose --root <项目根> --config <deployment.json>
 
 ## 框架配置文件
 
-独立 CLI 通过显式 `--root` 和 `--config <env.conf|deployment.json>`（或 `DEPLOYMENT_CONFIG`）选择输入，不扫描作者源码仓库。env 为字面量键值文件；源码入口生成 manifest/containerImage，独立交付需自行提供。非空 `DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` 只注入 DSH，文件优先、网页只读，修改需受控重启；留空不删除官方凭据或清除继承环境覆盖。网页支持两种提供方，set-api-key 命令仅管理 DeepSeek 官方存储。插件的 plugin.json/runtimeConfig 仍各自维护。
+独立 CLI 的字段与默认值见本包 [DELIVERY.md](DELIVERY.md#框架配置文件)。站点 build 自动生成 manifest/Compose，底层 CLI 要求显式输入，不能混用。模型密钥只注入官方 DSH，公开包不含真实配置或数据。

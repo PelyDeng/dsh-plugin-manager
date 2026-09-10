@@ -48,9 +48,17 @@ function run(entry, args, extra = {}) {
   return result.stdout;
 }
 const releases = [];
+const kitPackageName = 'dsh-renamed-access-fixture';
 for (const example of ['standalone-plugin', 'standalone-kit']) {
   const source = join(operation, example); cpSync(join(repo, 'examples', example), source, { recursive: true });
-  if (example === 'standalone-kit') runPnpm(['add', '--ignore-workspace', '--save-dev', kitArchive], source);
+  if (example === 'standalone-kit') {
+    const metadataPath = join(source, 'package.json'), metadata = JSON.parse(readFileSync(metadataPath, 'utf8'));
+    const patchPath = join(source, 'cordis.patch.yml');
+    writeFileSync(patchPath, readFileSync(patchPath, 'utf8').replace(metadata.name, kitPackageName));
+    metadata.name = kitPackageName; metadata.version = '0.2.0';
+    writeFileSync(metadataPath, JSON.stringify(metadata));
+    runPnpm(['add', '--ignore-workspace', '--save-dev', kitArchive], source);
+  }
   else runPnpm(['install', '--ignore-workspace'], source);
   const release = join(operation, `${example}-release`);
   run(manager, ['pack', '--root', source, '--package', '.', '--output', release]);
@@ -117,6 +125,12 @@ try {
   const initial = await login('admin', '123456');
   assert.equal((await request('/auth/api/password', { currentPassword: '123456', newPassword: password }, initial)).status, 200);
   const admin = await login('admin');
+  async function assertCatalogVersion(session, version) {
+    const response = await request('/auth/api/plugins', undefined, session); assert.equal(response.status, 200);
+    const entry = (await response.json()).plugins.find(plugin => plugin.id === 'independent-access-example');
+    assert.ok(entry); assert.equal(entry.packageName, kitPackageName); assert.equal(entry.version, version);
+  }
+  await assertCatalogVersion(admin, '0.2.0');
   assert.equal((await request('/auth/api/users', { username: 'fixture_user', password, role: 'user', grants: [] }, admin)).status, 200);
   const user = await login('fixture_user');
   assert.equal((await request('/independent-access-example/identity', undefined, user)).status, 403);
@@ -133,7 +147,7 @@ try {
   const updatedSource = join(operation, 'standalone-kit');
   renameSync(join(operation, 'standalone-kit-moved'), updatedSource);
   const metadataPath = join(updatedSource, 'package.json');
-  const metadata = JSON.parse(readFileSync(metadataPath)); metadata.version = '0.1.1'; writeFileSync(metadataPath, JSON.stringify(metadata));
+  const metadata = JSON.parse(readFileSync(metadataPath)); metadata.version = '0.2.1'; writeFileSync(metadataPath, JSON.stringify(metadata));
   const updatedRelease = join(operation, 'updated-release');
   run(manager, ['pack','--root',updatedSource,'--package','.','--output',updatedRelease]);
   renameSync(updatedSource, join(operation,'author-removed-again'));
@@ -143,6 +157,7 @@ try {
   renameSync(combined, join(operation, 'combined-history')); cpSync(updatedCombined, combined, { recursive: true });
   await startManaged('site-instance',join(combined,'manifest.json'),'/auth/health',200);
   const returning = await login('fixture_reader');
+  await assertCatalogVersion(returning, '0.2.1');
   assert.equal((await request('/independent-access-example/identity',undefined,returning)).status,200);
   assert.equal(readFileSync(settingsPath,'utf8'),settings);
   assert.equal((await fetch(origin + '/independent-example/ready')).status, 200);

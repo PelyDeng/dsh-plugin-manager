@@ -1,10 +1,6 @@
 import {element,stat,updateThinking} from './chat-ui.js'
-
-// Same conservative prose check as the server; code and links retain their spelling.
-export function needsChineseTranslation(text){
-  const prose=text.replace(/```[\s\S]*?```|`[^`]*`|https?:\/\/\S+/g,'')
-  return (prose.match(/[A-Za-z]/g)??[]).length>=16&&(prose.match(/[A-Za-z]+/g)??[]).length>=4&&(prose.match(/[A-Za-z]/g)??[]).length>(prose.match(/\p{Script=Han}/gu)??[]).length*2
-}
+import {needsChineseTranslation} from '../src/translation-policy.ts'
+export {needsChineseTranslation}
 
 /** Translate only observed saved thoughts; keep original streams and feedback untouched. */
 export function createThinkingTranslations(base){

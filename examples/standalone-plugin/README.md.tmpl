@@ -1,16 +1,21 @@
-# 独立 DSH Bundle 示例
+# 独立 DSH Bundle 起步插件
 
-将本目录复制到自己的仓库。它不依赖 kit、不创建 Agent，只在官方 WebServer 注册公开的 `/independent-example/ready` 探针。完整对话可参考框架的 dsh-example；这里验证独立包交付，不模拟模型回答。
+先用原名跑通再修改。此例不需要 kit 或登录，只注册公开 `/independent-example/ready`；不创建 Agent，不模拟模型回答，也不应返回私密数据。
 
-需要 Node.js `^22.19.0 || >=24`、pnpm 11.19.0、系统 tar，以及已经安装的 `@dsh-plugin-manager/plugin-manager@{{FRAMEWORK_VERSION}}`。工具可由维护者以 tgz 交付，包名不代表已经公开发布。
+## 准备工具
 
-```sh
-pnpm install --ignore-workspace
-dsh-plugin-manager pack --root <本包绝对路径> --package . --output .local/release
-```
+<!-- include:author-tools -->
 
-将 `.local/release` 整个目录交给部署者，其中 manifest.json 记录 tgz 文件及其校验摘要。使用具备 WebServer 的官方 web profile，管理器以 release 模式读取清单并安装。也可通过官方 `dsh plugin --profile web add <tgz>` 安装并重启官方 `dsh web`。包配置不会修改 DSH 源码。未声明认证，此公开探针不得扩展为返回私密数据的接口。
+在本作者目录执行 `pnpm install --ignore-workspace`，保存生成的 pnpm-lock.yaml。该例适用于框架 {{FRAMEWORK_VERSION}} 的打包与部署流程。
 
-开始自己的项目时修改包名、插件 ID、Bundle 行和路由，保持相互一致。提交自己项目的 pnpm-lock.yaml；dist 和 .local 由构建生成，不作为源码提交。
+## 打包并请求
 
-日常开发可单独执行 `dsh-plugin-manager check --root <本包绝对路径> --package .`；直接交付时只需 pack。
+<!-- include:author-pack -->
+
+在独立部署目录中把本次完整发布目录放入 incoming/independent-example，执行 build。访问 `http://127.0.0.1:7902/independent-example/ready`；端口改动时使用实际地址。预期 HTTP 200，响应为 `{"ready":true}`；必须验证实际端点，而非仅看到容器运行。
+
+## 开始自己的业务
+
+修改 package.json 的 name 与 deepseekPlugin.id、cordis.patch.yml 的包引用/条目、src/index.mjs 的插件名和路由，并同步 healthPath。包名用于 npm 安装，ID 用于选集与配置，路由对应实际 HTTP 地址；不要求所有字符串一律相同。
+
+日常改代码 → pack 到新的输出目录 → 整体替换 incoming 对应目录 → build → 再次请求。保留其他应用目录。无需新增部署脚本或把本项目迁入框架仓库；独立作者仍通过官方 DSH profile 运行。

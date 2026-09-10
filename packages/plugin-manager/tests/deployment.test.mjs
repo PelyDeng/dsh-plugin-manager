@@ -221,9 +221,16 @@ test('manifest tampering and unsafe runtime variables are rejected before instal
   const f = fixture(t); const manifest = read(f.release.path);
   manifest.plugins[0].directory = '../outside'; atomicJSON(f.release.path, manifest);
   assert.throws(() => loadRelease(f.release.path), /源码目录/);
-  manifest.plugins[0].directory = 'plugins/alpha'; manifest.plugins[0].runtimeConfig = { variable: 'NODE_OPTIONS' }; atomicJSON(f.release.path, manifest);
-  assert.throws(() => loadRelease(f.release.path), /runtimeConfig/);
-  assert.throws(() => runtimeEnvironment(f.deployment, [{ id: 'x', runtimeConfig: { variable: 'PATH' } }]), /变量/);
+  manifest.plugins[0].directory = 'plugins/alpha';
+  for (const name of ['PATH', 'USERPROFILE', 'NODE_OPTIONS', 'DSH_HOME', 'BASH_ENV', 'PLUGIN_MANIFEST_FILE', 'lowercase', 'INVALID-NAME']) {
+    for (const field of ['runtimeConfig', 'development']) {
+      const spec = field === 'runtimeConfig' ? { variable: name } : { rootVariable: name, patch: 'dev.yml' };
+      manifest.plugins[0][field] = spec; atomicJSON(f.release.path, manifest);
+      assert.throws(() => loadRelease(f.release.path), new RegExp(field), `${field}: ${name}`);
+      assert.throws(() => runtimeEnvironment(f.deployment, [{ id: 'x', [field]: spec }]), /变量/, `${field}: ${name}`);
+      delete manifest.plugins[0][field];
+    }
+  }
 });
 
 test('optional runtime files do not inherit stale process values and config revision is explicit', t => {
@@ -469,4 +476,50 @@ test('Compose maps external home and runtime files independently of the data roo
     const subset = renderCompose(f.deployment, { ...f.release, plugins }, join(f.root, `compose-${plugins.length}`));
     assert.deepEqual(read(subset.configPath).plugins, plugins.map(plugin => plugin.id));
   }
+});
+
+test('ordinary site candidates retain their identity through Compose, pending and successful state', async t => {
+  const f = fixture(t), id = '12345678-1234-1234-1234-123456789012';
+  f.deployment.config.siteOperation = id;
+  const rendered = renderCompose(f.deployment, f.release, join(f.root, 'compose-site'));
+  assert.equal(read(rendered.configPath).siteOperation, id);
+  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  const pendingPath = join(f.deployment.profileRoot, '.deepseek-plugin-pending.json');
+  assert.equal(read(pendingPath).desired.siteOperation, id);
+  f.deployment.config.siteOperation = '22345678-1234-1234-1234-123456789012';
+  await assert.rejects(finalize(f.deployment, f.release, { running: true }), /验证配置与待启动操作不一致/);
+  f.deployment.config.siteOperation = id;
+  await finalize(f.deployment, f.release, { running: true });
+  assert.equal(read(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')).siteOperation, id);
+});
+
+for (const pendingFirst of [false, true]) test(`site configuration recovery intent is consumed once with pending=${pendingFirst}`, async t => {
+  const f = fixture(t);
+  f.deployment.config.siteOperation = '22345678-1234-1234-1234-123456789012';
+  const pendingPath = join(f.deployment.profileRoot, '.deepseek-plugin-pending.json');
+  const statePath = join(f.deployment.profileRoot, '.deepseek-plugin-state.json');
+  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  if (!pendingFirst) await finalize(f.deployment, f.release, { running: true });
+  const pending = existsSync(pendingPath) ? read(pendingPath) : null;
+  const previous = existsSync(statePath) ? read(statePath) : null;
+  const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const id = '12345678-1234-1234-1234-123456789012';
+  f.deployment.config.siteOperation = id;
+  f.deployment.config.siteRecovery = { schemaVersion: 1, id, pendingId: pending?.operationId ?? null, pendingHash: pending ? digest(pending) : null, stateHash: previous ? digest(previous) : null };
+  const options = { execute: f.execute, cli: f.cli, freshContainer: true };
+  const first = await synchronize(f.deployment, f.release, options);
+  assert.equal(first.changed, true);
+  const current = read(pendingPath);
+  assert.equal(current.desired.siteOperation, id);
+  if (pending) assert.equal(current.supersedes, pending.operationId);
+  await synchronize(f.deployment, f.release, options);
+  assert.equal(read(pendingPath).operationId, current.operationId);
+  assert.equal(f.deployment.options.recover, false);
+  assert.equal(f.deployment.options.resume, true);
+  await finalize(f.deployment, f.release, { running: true });
+  assert.equal(read(statePath).siteOperation, id);
+  const restart = await synchronize(f.deployment, f.release, options);
+  assert.equal(restart.changed, false);
+  assert.equal(existsSync(pendingPath), false);
+  assert.equal(f.deployment.options.recover, false);
 });

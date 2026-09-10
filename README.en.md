@@ -1,86 +1,44 @@
 # DSH Plugin Manager
 
-[中文](README.md) · [Visual tour (Chinese)](doc/quick-tour.md) · [Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases) · [Report an issue](https://github.com/PelyDeng/dsh-plugin-manager/issues)
+[中文](README.md) · [Deployment](doc/first-deployment.md) · [Author guide](doc/plugin-development.md) · [Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)
 
-**Build your own DeepSeek Harness apps and manage their installation, updates, and configuration in one place.**
+Build DSH plugins in your own project, deliver a standard release directory, and deploy them through this framework without the author's source code. [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) runs plugins, Agents, models, and conversations. This framework handles packaging, configuration, installation, and operations. Each app remains responsible for its business rules and data access.
 
-Build plugins and AI applications in your own repository using the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) ecosystem: knowledge assistants, reporting assistants, business tools, or agent applications with their own pages. The framework packages and installs your plugins, manages their settings, and starts, stops, or updates them. Combine multiple plugins into a deployment for personal use or delivery to teams and customers.
+This is an independent community project, not an official DeepSeek product.
 
-Use official Cordis plugins, Bundles, and Agents without modifying DSH or manager source. Develop and package plugins independently, deploy releases without author source code, and optionally reuse shared login and app access control to reduce repeated development and operational work. Integration requires supported plugin declarations and compatibility verification against the target host version.
+## Deploy a packaged app
 
-> Unofficial project, independently developed and maintained by community members. This is not a DeepSeek product or endorsement.
+Download `dsh-plugin-manager-deployment-<version>.zip` from the chosen release. Extract it and place each app's complete release directory under `incoming/<app>/`. Keep its `manifest.json` and every referenced `.tgz` together; an arbitrary source ZIP or npm archive is not a supported release directory.
 
-![Developer assistant with suggested questions and personal conversation history](doc/assets/developer-assistant.png)
-
-## Where it fits
-
-| Component | Responsibility |
-| --- | --- |
-| Official DeepSeek Harness | Plugin runtime, Bundle composition, Agents, models, and sessions |
-| DSH Plugin Manager | Plugin declarations, packaging, release composition, configuration, installation, startup, and shutdown |
-| Optional `dsh-auth` | Accounts, login, and app access grants |
-| Your app | Tools, pages, business rules, and data authorization |
-
-For one personal tool, an official Bundle may be enough. This project is useful when you need consistent packaging, installation, updates, and management for your own plugins, or need to deliver several apps to a team or customer. Plugin installation and updates use the manager CLI and deployment workflows; the authentication UI manages accounts and app access grants. App access does not grant access to every business record: each app must still enforce its own data permissions.
-
-## Start with the included apps
-
-The default source deployment includes `dsh-auth` and `dsh-example`, a developer assistant demonstrating streaming chat, personal history, and optional authentication. Its interface and most detailed guides are currently in Chinese.
-
-On Windows, macOS, or Linux, prepare Git, Node.js `^22.19.0 || >=24` with npm, system `tar`, and a working local Linux Docker engine with Compose and named build context support. The deployment script prepares the pinned pnpm version when needed. It does not install system packages, configure a firewall, or set up a reverse proxy.
+Install a supported Node version, system tar, and a local Linux Docker engine with Compose. From the extracted deployment directory:
 
 ```sh
-git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin-manager.git
-cd dsh-plugin-manager
-./build.sh
+bash build.sh
 ```
 
-Use `.\build.ps1` for the last command in Windows PowerShell; Bash is not required on Windows. macOS and Linux use `./build.sh`. The existing `bash deploy/build.sh` entry remains compatible. Only local Docker unix/npipe endpoints are accepted; remote or TCP endpoints and Windows containers are rejected. A real Docker site deployment on macOS has not been validated; passing CI does not show that a site has been deployed successfully.
+On Windows PowerShell, run `.\build.ps1`. Fill in required business configuration when prompted. Apps requiring shared authentication also need the included `optional/auth` directory copied to `incoming/auth`. The example app is not enabled automatically.
 
-1. Open `http://127.0.0.1:7902/auth`, sign in using the initial administrator procedure in the [auth guide](plugins/dsh-auth/README.md), and change the initial password.
-2. Create a regular account and grant it access to `example`.
-3. Check the private `.local/env.conf` URL and trusted hosts. The public root template contains fixed, nonsecret defaults; real site values belong in the private file. First-run initialization writes the local platform defaults and preserves existing configuration. Nonempty DeepSeek/Zhipu keys in the private file take precedence and make those credential fields read-only; apply file changes through a controlled restart. Blank values preserve official credential sources, including inherited environment overrides. Without an override, administrators can manage DeepSeek or Zhipu in **模型设置** (Model settings); updates to the official store normally apply without a restart. The page returns only configuration status and a SHA-256 fingerprint, never the original key. A configured key has not necessarily been validated by the model provider.
-4. In **模型设置**, select a compact model card to set the default for new conversations. The choice is saved through the official host settings without a restart. Existing conversations and branches retain their recorded model selection. Other providers still require their credentials and routes in the official settings or patches.
-5. Open `/example` as the regular user and send a question. Check the streamed answer and restored conversation history.
+The deployment archive includes the manager and fixed runtime image information. Runtime dependencies may still require network access. See the [deployment guide](doc/first-deployment.md) for platform requirements, configuration, verification, and updates. Detailed guides are currently in Chinese.
 
-The listener binds to loopback by default. For a remote server, use an SSH tunnel or configure a reverse proxy and the matching `publicOrigin`/`publicUrl`. The [deployment guide](doc/first-deployment.md) covers prerequisites, URLs, and recovery. First builds require access to package and image sources; model use requires your own provider account and may incur charges.
+## Develop your own app
 
-Authentication at `/auth`, the official console at `/`, and the model API key are separate. An official console authentication error is not an API-key error. See the [FAQ](doc/FAQ.md).
-
-## Develop and distribute your own app
-
-| Starting point | Use it for |
-| --- | --- |
-| [Minimal standalone Bundle](examples/standalone-plugin/README.md) | Packaging and delivery without the kit |
-| [Shared identity example](examples/standalone-kit/README.md) | Login and app access integration |
-| [Full chat app](doc/plugin-development.md#复制完整问答应用到独立仓库) | Streaming, history, and developer knowledge examples |
-
-Install the versioned manager tool archive as described in the [delivery guide](packages/plugin-manager/DELIVERY.md); package names do not imply availability on npm. From the tools directory:
+The `dsh-plugin-manager-starters-<version>.zip` asset contains a minimal public endpoint and a shared-authentication example. Install the matching manager archive in a separate tools directory as described in the [author guide](doc/plugin-development.md), then run from that tools directory:
 
 ```sh
-pnpm exec dsh-plugin-manager list --root /path/to/author-project --package .
-pnpm exec dsh-plugin-manager pack --root /path/to/author-project --package . --output .local/artifacts/release
+pnpm exec dsh-plugin-manager pack --root <absolute-author-project> --package . --output <new-release-directory>
 ```
 
-External projects currently support pnpm single-package projects and release deployment. Operators can combine packages from several authors without needing their source code. Internal `plugins/*` workspaces remain supported. See the [author guide](doc/plugin-development.md).
+The command installs locked dependencies, builds, checks, and packages the plugin. Deliver the entire output directory. The optional kit is bundled inside apps that use it; the manager is not a business runtime dependency.
 
-## Update and verify
+The direct author workflow supports independent pnpm single-package projects. Existing Node apps need a DSH plugin entry and compatible build. Non-Node services can stay independently deployed and be called by a DSH plugin; this framework does not automatically host arbitrary applications.
 
-For an existing source deployment, preserve its checkout, configuration, `.local/data`, `.local/artifacts`, and backups:
+## Source development and advanced operation
 
-```sh
-git pull --ff-only --recurse-submodules
-./build.sh
-```
+- [Source deployment](deploy/README.md): the existing repository build entry and selective rebuild remain supported.
+- [Standalone manager delivery](packages/plugin-manager/DELIVERY.md): explicit release composition and Node/Compose operation without author source.
+- [Try auth and example](doc/getting-started.md), or browse the [visual tour](doc/quick-tour.md).
+- [Configuration and documentation](doc/README.md).
 
-On Windows, use `.\build.ps1` again. Failures after release inputs are prepared require the same build script with `--resume`, including mount preflight failures before the service stops. Resume reuses the saved image and archives; it does not roll back application data. Source updates do not create full runtime-data backups automatically; arrange and verify a separate backup when data recovery is required. An interrupted worker leaves the source lock in place until its owner and descendants are confirmed stopped. Do not delete `.local` or profile state to recover a failed deployment. Follow the [recovery instructions](doc/first-deployment.md#更新与恢复).
+Preserve the site's configuration, data, and release history when updating. Resume reuses saved inputs; correcting business configuration uses the documented controlled recovery path. A new fixed plugin package is outside that shortcut. Never delete state or data to force installation. A successful health check does not prove model or business behavior.
 
-The root `package.json` supplies one release version for manager, kit, auth, and example; independent apps and the official host keep their own versions. See [version management](doc/versioning.md).
-
-Compatibility checks cover specific host versions. Other host versions and community plugins need their own checks. Use the host requirements in the release notes, and configure your own model provider before starting a conversation.
-
-## Contribute
-
-Bug reports should include the commit or release, environment, reproduction steps, and redacted error output. Never share API keys, console authentication URLs, passwords, or customer data. See [CONTRIBUTING](CONTRIBUTING.md), [SECURITY](SECURITY.md), and the [documentation index](doc/README.md).
-
-Repository-owned code is licensed under [Apache-2.0](LICENSE). Third-party components retain their own licenses; see [NOTICE](NOTICE) and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).
+See [CONTRIBUTING](CONTRIBUTING.md), [SECURITY](SECURITY.md), and [LICENSE](LICENSE). Report errors with versions and redacted reproduction steps; never include credentials or customer data.

@@ -1,17 +1,19 @@
 <!-- Generated from packages/plugin-manager/DELIVERY.md.tmpl by scripts/version.mjs; edit the template. -->
 
-# 独立发布物交付
+# 独立 CLI 发布物交付
+
+本文保留只安装 manager 时的手工清单流程。使用带 build 的框架部署包时，阅读随包 README；两条入口的选集和配置生成规则不同。
 
 发布者可以附带最终归档的宿主验证记录，安装时显示已测目标、当前目标与范围差异。旧发布目录继续可用；没有记录表示包内未附测试结果，不等于不兼容。报告生成、导入和状态含义见随包 [VERIFICATION.md](VERIFICATION.md)。
 
-适用于 manager 0.15.2。部署者只需管理工具、匹配的官方 DSH、应用与认证插件各自的发布目录，以及作者提供的配置模板；无需作者源码。以下 `dsh-plugin-manager` 指已安装 CLI，本地工具目录安装时用 `pnpm exec dsh-plugin-manager`。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。
+适用于 manager 0.16.0。部署者只需管理工具、匹配的官方 DSH、应用与认证插件各自的发布目录，以及作者提供的配置模板；无需作者源码。以下 `dsh-plugin-manager` 指已安装 CLI，本地工具目录安装时用 `pnpm exec dsh-plugin-manager`。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。
 
 ## 1. 准备与组合
 
 核对提供方记录的工具、宿主版本及归档 SHA-256；包名不表示已发布到公共 registry。首次安装管理工具：
 
 ```sh
-pnpm add --ignore-workspace /path/to/plugin-manager-0.15.2.tgz
+pnpm add --ignore-workspace /path/to/plugin-manager-0.16.0.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
@@ -83,22 +85,16 @@ dsh-plugin-manager health --root /path/to/site --config .local/deployment.json
 
 ### 问答应用的模型准备
 
-auth 登录和模型凭据是两件事。example 在新建会话时读取同一宿主的 agentDefaultModel；不要把模型密钥放进插件 config。
+<!-- Excerpt from doc/framework-configuration.md#model-credentials; edit its source. -->
+私有 .local/env.conf 中的 DEEPSEEK_API_KEY / ZHIPU_API_KEY 非空时：文件为准，只注入官方DSH子进程，网页只读；改文件后受控部署。留空不添加覆盖、不删除官方凭据、不清除继承环境密钥。没有外部环境覆盖时，管理员可在 /auth 的“模型设置”管理 DeepSeek/智谱，写入官方存储时默认无需重启。
 
-1. 管理器 start 打印“DSH 认证地址已保存至 …”。在本机编辑器打开该私有文件（默认 `<交付根>/.local/data/dsh-web-auth-url.txt`），仅在自己的浏览器访问其中地址；这是官方控制台入口，不能公开粘贴或截图 token。它对应本次启动的 home/profile。
-2. 未由文件或其他环境覆盖的 DeepSeek/智谱密钥可由管理员在 `/auth` →“模型设置”填写或更换；页面仅展示状态与 SHA-256 指纹。其他提供方使用官方控制台左下角“设置”→“模型”。也可在工具目录通过下列命令隐藏输入 `DEEPSEEK_API_KEY`，与网页共用官方凭据写入逻辑；命令不选择模型。
+网页只返回状态与 SHA-256 指纹，不返回原密钥。指纹不能还原密钥；“已配置”不代表余额、网络或调用通过。命令行 set-api-key 只支持 DeepSeek，密钥使用隐藏输入，不放在 argv。在安装 manager 的工具目录使用 `pnpm exec dsh-plugin-manager set-api-key --root <站点根> --config .local/deployment.json`。
 
-```sh
-pnpm exec dsh-plugin-manager set-api-key --root /path/to/site --config .local/deployment.json
-```
+已有源码仓库可使用 `bash deploy/scripts/set-api-key.sh --config .local/deployment.json`；Windows 使用 `node deploy/scripts/set-api-key.mjs --config .local/deployment.json`。这些源码包装器不属于独立起步项目。Compose 核验当前容器与 home 后以实际用户写入；独立 CLI 指向已安装的兼容宿主。默认凭据服务/监听关闭或自定义时，通过当前服务的网页入口管理。
 
-网页直接更新运行中的官方凭据服务；脚本使用已安装宿主的 `credentials-local`，保存到本次 home/.credentials.yaml，默认文件监听会自动热加载，无需重启。保留其他凭据及旧 .env。独立进程部署要求配置 `harnessRoot` 或 `dshCliJs`（后者也可传 `--dsh-cli-js`）并以 home/凭据文件所有者运行；脚本不会下载宿主。Compose 部署自动核验当前容器与 home 并以容器配置用户执行。脚本仅适用于默认凭据路径与开启监听的宿主，自定义服务请使用网页入口。外部进程环境密钥为只读，两入口都拒绝覆盖；调整外部环境需由原服务管理者处理。
+模型默认值由同一宿主的官方 agentDefaultModel 提供；管理员选择新会话默认模型无需重启。已有会话及分支按官方记录恢复，模型选择为 pending ?? lastUsed，读取或投影失败拒绝恢复，不用新默认覆盖旧记录。凭据不会创建提供方路由，健康探针不调用模型；实际问答另验收。
 
-3. 管理员在 `/auth` →“模型设置”的默认模型卡片中，从官方模型目录单选并保存；通过官方 `agentDefaultModel` / `settings` 持久化到本次 home，无需重启。目录与调用配置校验不发送真实模型请求；其他宿主设置仍使用官方控制台。默认值供接入共享模型接口的新会话读取，不强制覆盖硬编码或专用模型。
-
-4. 网页或脚本写入官方存储后默认无需 stop/start；文件密钥非空时网页/脚本只读，修改私有 env 需受控重启。官方存储更新后，在 `/auth` 刷新指纹并在 `/example` 新建对话提问。修改启动配置时，由原管理器受控重启。其他提供方的凭据按该宿主版本的模型设置填写，不能套用默认 DeepSeek 密钥命令。
-
-模型选择以实际控制台为准，不根据文档中的模型名猜可用性；旧会话按持久化事件的模型选择恢复；无模型使用记录才回退当前默认，读取或投影失败则拒绝恢复，改变默认值后用新会话核实。健康探针不调用模型；真实问答失败时检查提供方、凭据、网络及具体模型是否可用。
+官方控制台根路径提示 `dsh web authentication required` 时，在私有本机文件中取得当前启动的认证地址（默认 `<root>/.local/data/dsh-web-auth-url.txt`），只在自己的浏览器使用。它不是模型 API 密钥，不能公开其 token。
 
 ## 4. 新增或升级应用
 
@@ -116,4 +112,6 @@ Docker 部署使用同版本 manager 的宿主镜像，在 deployment.json 补 c
 
 ## 框架配置文件
 
-独立 CLI 通过显式 `--root` 和 `--config <env.conf|deployment.json>`（或 `DEPLOYMENT_CONFIG`）选择输入，不扫描作者源码仓库。env 为字面量键值文件；源码入口生成 manifest/containerImage，独立交付需自行提供。非空 `DEEPSEEK_API_KEY` / `ZHIPU_API_KEY` 只注入 DSH，文件优先、网页只读，修改需受控重启；留空不删除官方凭据或清除继承环境覆盖。网页支持两种提供方，set-api-key 命令仅管理 DeepSeek 官方存储。插件的 plugin.json/runtimeConfig 仍各自维护。
+独立 CLI 通过显式 --root 和 --config 选择 env/JSON，部署者仍提供 manifest 与容器镜像/官方 CLI，不扫描 incoming。env 使用字面量值，不执行 shell；相对路径从 root 计算。plugin.json 和 runtimeConfig 各自维护，生成清单与实例数据不进入归档。
+
+独立 CLI 与站点 build 的 source/archives 不混用。完整字段参考对应版本的[框架配置](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.0/doc/framework-configuration.md)。本文件保留完整手工交付步骤，可脱离仓库阅读。
