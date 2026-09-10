@@ -152,6 +152,13 @@ export function releaseSite({ root, config, resume = false, recover = false, dat
       const release = loadRelease(result.manifest);
       // Remember original editable paths rather than reusing the previous private snapshot paths.
       const successful = !predecessor && prior?.status === 'ready' ? readSiteRecord(root, prior.operation, { status: 'ready' }) : predecessor;
+      // Applying can replace runtimePath before failing; recovery still describes the prior runtime.
+      const current = recover ? predecessor.previousRuntime : previous;
+      const currentFramework = current?.frameworkVersion ?? (!predecessor && current && successful?.schemaVersion === 3 && successful.status === 'ready'
+        && successful.siteOperation === current.siteOperation && successful.image === current.containerImage
+        && successful.manifest === resolve(root, current.manifest ?? '') && successful.candidateHash === hash(originalConfig)
+        ? successful.frameworkVersion ?? successful.manager : undefined);
+      if (currentFramework) record.previousRuntime = { ...current, frameworkVersion: currentFramework };
       if (successful?.siteInstances) site = { ...site, instances: { ...successful.siteInstances, ...(site.instances ?? {}) } };
       if (inputKind === 'archives') {
         const initialized = initializeArchiveSettings(root, site, release, { fresh: !active && !predecessor });
@@ -168,7 +175,7 @@ export function releaseSite({ root, config, resume = false, recover = false, dat
       }
       if (recover && (!same(selectedProof(settings.release), predecessor.selectedPlugins) || !same(settings.release.plugins.map(p => p.id), predecessor.enabledPlugins))) throw new Error('recover 不能改变包、选集或启用状态。');
       const frozen = freezeSiteInputs({ root, operation, site, sitePath, source: sourceInput, release });
-      const candidate = { ...frozen.candidate, ...sitePaths, siteOperation, dockerRuntime: runtime, containerImage: result.image, manifest: relative(root, result.manifest).split('\\').join('/'), ...(context.recoveryIntent ? { siteRecovery: context.recoveryIntent } : {}) };
+      const candidate = { ...frozen.candidate, ...sitePaths, frameworkVersion: result.manager, siteOperation, dockerRuntime: runtime, containerImage: result.image, manifest: relative(root, result.manifest).split('\\').join('/'), ...(context.recoveryIntent ? { siteRecovery: context.recoveryIntent } : {}) };
       record.candidatePath = resolve(operation, 'deployment.json'); saveJson(record.candidatePath, candidate);
       Object.assign(record, { image: result.image, manager: result.manager, manifest: result.manifest, manifestHash: fileHash(result.manifest), candidateHash: fileHash(record.candidatePath),
         inputs: frozen.inputs, inputEnvironment: frozen.environment, siteInstances: site.instances ?? {}, enabledPlugins: frozen.enabled, selectedPlugins: selectedProof(settings.release),
@@ -176,7 +183,7 @@ export function releaseSite({ root, config, resume = false, recover = false, dat
       if ((originalConfig && !readFileSync(runtimePath).equals(originalConfig)) || (!originalConfig && existsSync(runtimePath))) throw new Error('Deployment state changed during preparation.');
       verifySavedTooling(record); verifySiteInputs(record);
       changeSummary(previous?.manifest ? loadRelease(resolve(root, previous.manifest)) : null, settings.release, releases);
-      buildMessage(`框架 ${previous?.frameworkVersion ?? '首次/旧记录'} → ${record.frameworkVersion ?? result.manager}；宿主镜像 ${previous?.containerImage ?? '无'} → ${result.image}`);
+      buildMessage(`框架 ${currentFramework ?? '首次/旧记录'} → ${record.frameworkVersion ?? result.manager}；宿主镜像 ${current?.containerImage ?? '无'} → ${result.image}`);
       persist(); prepared = true;
     }
     const { cli } = verifySavedTooling(record);
