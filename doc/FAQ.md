@@ -18,29 +18,11 @@
 
 ## Auth 登录后为什么根路径仍提示认证？
 
-如果访问根路径 `/` 显示：
+<!-- excerpt:root-auth -->
+根路径出现 `dsh web authentication required`，表示官方控制台需要其自己的启动认证地址。/auth 的插件账号、官方控制台令牌和模型 API 密钥是三种不同凭据。仅使用业务应用时从 /auth 进入已授权应用即可。
 
-```text
-dsh web authentication required; reopen the URL printed by dsh web.
-```
-
-这是官方 DSH 控制台的浏览器认证提示，不能据此判断模型 API 密钥缺失。三种凭据的用途不同：
-
-| 凭据 | 用途 | 使用者 |
-| --- | --- | --- |
-| 插件 Auth 账号与会话 | 登录 `/auth`，按授权进入应用 | 管理员和普通用户 |
-| 官方 DSH 控制台认证地址及 Cookie | 进入根路径 `/` 的官方控制台 | 站点维护者 |
-| 模型提供方 API 密钥 | 让宿主调用模型生成回答 | 站点维护者配置，应用使用 |
-
-只使用应用时，从 `/auth` 打开已授权应用，例如 `/example`。DeepSeek/智谱密钥可由管理员在 `/auth` 的“模型设置”管理；需要访问完整官方控制台时，在服务器仓库根的私有终端读取官方认证地址：
-
-```sh
-cat .local/data/dsh-web-auth-url.txt
-```
-
-在自己的浏览器打开文件中的完整地址，包含 `?token=...`。官方 DSH 校验后设置浏览器 Cookie，并跳转到不带令牌的 `/`。示例是默认路径；如果改过 `dataRoot` 或 `authUrlFile`，按 `.local/deployment.json` 的实际路径读取。文件不存在或为空时检查启动是否完成及日志中的“DSH 认证地址已保存至 …”，不要自行编造令牌。
-
-认证地址具有控制台访问能力，不要发给普通用户、贴入工单或截图分享。Auth 账号权限不会自动授予官方控制台访问权。
+需要官方控制台时，在私有本机文件中读取本次启动生成的认证 URL（默认 .local/data/dsh-web-auth-url.txt；自定义路径看实际输出），仅在自己的浏览器访问。不分享其中 token；填模型 API 密钥不会修复控制台登录，重启后应使用本次的新地址。
+<!-- /excerpt:root-auth -->
 
 ## 官方认证地址为什么会失效？
 
@@ -52,19 +34,11 @@ cat .local/data/dsh-web-auth-url.txt
 
 检查实际访问域名是否进入官方 DSH 的 `trustedHosts`。仅配置 `publicUrl`、`publicOrigin` 不会自动允许公网域名调用控制台 API。在私有 `.local/env.conf` 中填写 `DSH_TRUSTED_HOSTS=["dsh.example.com"]`，将示例域名替换为实际主机名，保留其他设置及已有信任项。旧显式站点 JSON 仍使用 `trustedHosts` 字段；已有站点先让部署入口导入旧文件，不能复制默认模板，使部署入口忽略旧配置。值不带协议或路径；需要限定端口时，使用与请求 Host 一致的 `主机名:端口`。
 
-按正常部署流程应用配置并受控重启，再读取当前认证地址，验证模型、插件及工作区接口。不要修改生成的 Compose 或临时运行文件来代替持久配置。仍返回 403 时检查代理和 Host/Origin 是否一致；不要关闭认证。完整配置示例见 [example FAQ](../plugins/dsh-example/knowledge/guide.md#控制台能打开但模型和插件报-http-403-怎么办)。
+按正常部署流程应用配置并受控重启，再读取当前认证地址，验证模型、插件及工作区接口。不要修改生成的 Compose 或临时运行文件来代替持久配置。仍返回 403 时检查代理和 Host/Origin 是否一致；不要关闭认证。字段和示例见[访问地址配置](framework-configuration.md#首次填写)。
 
 ## 第一次如何在服务器手动录入 DeepSeek API 密钥？
 
-完成首次部署后，在服务器仓库根执行：
-
-```sh
-bash deploy/scripts/set-api-key.sh --config .local/deployment.json
-```
-
-在提示后粘贴密钥并按 Enter，输入不会显示；Ctrl+C 取消。脚本已随仓库提供，无需下载额外脚本或安装新的工具。需要可交互的 SSH 终端；非交互 stdin 只供受信任的密钥管理工具使用，不要把密钥放在 shell 命令中。
-
-也可由管理员在 `/auth` →“模型设置”管理 DeepSeek 或智谱；脚本仅支持 DeepSeek。没有文件或外部环境覆盖时，两者调用官方凭据服务，保存到当前 home 的 `.credentials.yaml`，无需重启；默认宿主自动监听脚本写入，后续请求使用新密钥。此密钥是宿主级配置，不是每个 Auth 用户单独填写，也不放入业务插件配置。脚本的运行条件见[首次登录与模型密钥](first-deployment.md#首次登录与模型密钥)。
+优先由管理员在 /auth 的模型设置填写。交互 CLI、适用宿主和文件覆盖条件集中在[密钥管理规则](framework-configuration.md#密钥由谁管理)。不要将密钥拼入 shell 命令或复制到日志；业务插件 config 不是模型凭据来源。
 
 ## 页面显示的指纹能还原密钥吗？“已配置”代表有效吗？
 
@@ -72,9 +46,7 @@ bash deploy/scripts/set-api-key.sh --config .local/deployment.json
 
 ## 为什么显示外部环境只读？
 
-私有 `.local/env.conf` 中 `DEEPSEEK_API_KEY` 或 `ZHIPU_API_KEY` 非空时，框架只向 DSH 子进程注入相应值，以文件为准，对应密钥在网页只读；DeepSeek 脚本也拒绝覆盖。修改文件后按正常部署流程受控重启。
-
-字段留空表示不添加覆盖，沿用官方来源，不删除存储或清除继承环境值。官方优先级为进程环境 > .credentials.yaml > 工作目录 .env > home .env；如果启动环境仍有同名密钥，网页仍只读。没有环境覆盖时才可沿用网页管理。旧 .env 不必删除。常用配置、默认值及插件各自负责的配置见[统一配置](framework-configuration.md)。
+当前值来自文件或启动环境覆盖。核对实际 .local/env.conf 和原服务管理者配置，按[来源规则](framework-configuration.md#密钥由谁管理)调整后受控应用。不要通过清空官方凭据存储来排错。
 
 ## 密钥已保存，为什么问答仍然失败？
 
@@ -115,8 +87,8 @@ Compose 部署脚本确认活动容器与 home 后，使用 `docker exec` 以容
 
 ## Windows、macOS 和 Linux 的源码部署入口是什么？
 
-在完整仓库根执行 Windows PowerShell 的 `.\build.ps1`，或 macOS/Linux 的 `./build.sh`。Node.js（含 npm）、Git、系统 tar 和本机 Linux Docker Compose 需提前可用，脚本只按需准备框架锁定的 pnpm。Windows 不需要 Bash，旧 deploy 目录入口仍兼容。macOS 的实际 Docker 站点部署尚未完成真机验收，CI 测试不等同于部署验收；具体平台限制和资源管理器中的运行步骤见[一键部署](first-deployment.md)。
+Windows 使用根 build.ps1，macOS/Linux 使用 build.sh。新部署包的默认方式为 archives；框架源码检出保持 source。环境、字段差异见[框架配置](framework-configuration.md)，操作见[首次部署](first-deployment.md)和[源码运维](../deploy/README.md)。
 
 ## 旧服务尚未停止，为什么提示使用 --resume 或保留源码锁？
 
-镜像和归档准备完成后会先保存 prepared 记录，再检查挂载权限。因此即使权限预检在停服前失败，也要保持原配置与产物，用对应 build 脚本加 `--resume` 继续。强制中断后遗留的 `.local/source-release.node.lock` 则需要先核实本机持锁者及其子进程全部退出；profile 的 `unlock` 命令不处理源码锁。`--resume` 不会回滚业务数据。完整处理顺序见[更新与恢复](first-deployment.md#更新与恢复)。
+prepared 后的挂载/权限检查也可能失败，状态不能仅凭“尚未停服”判断。保持原受管输入后用 resume；同包业务参数本身错误则用单独 recover。遗留锁先通过 doctor 核验归属，profile unlock 不能替代站点解锁。完整规则只在[恢复说明](../deploy/README.md#安装与恢复)维护。

@@ -12,6 +12,8 @@ test-results/
 .local/
 data/
 deploy-artifacts/
+/incoming/*
+!/incoming/README.md
 .env
 .env.*
 !.env.example

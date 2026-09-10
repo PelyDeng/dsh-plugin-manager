@@ -21,10 +21,10 @@ test('authorized conversations can cite actual source, but cannot read runtime f
     expect(source.content).toContain('desiredHash')
     expect(source.content).toContain('assessVerification')
     expect(source.nextLine).toBe(225)
-    const page = JSON.parse(await read.execute({ path: 'README.md', lines: 120 }, execution))
+    const page = JSON.parse(await read.execute({ path: 'packages/plugin-manager/src/installation.mjs', lines: 120 }, execution))
     expect(page.content.split('\n')).toHaveLength(100)
     expect(page.nextLine).toBe(101)
-    const next = JSON.parse(await read.execute({ path: 'README.md', startLine: page.nextLine, lines: 105 }, execution))
+    const next = JSON.parse(await read.execute({ path: 'packages/plugin-manager/src/installation.mjs', startLine: page.nextLine, lines: 105 }, execution))
     expect(next.content).toMatch(/^101: /)
     expect(next.content.split('\n').length).toBeLessThanOrEqual(100)
     for (const lines of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {

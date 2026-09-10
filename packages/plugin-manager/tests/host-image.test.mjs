@@ -17,6 +17,8 @@ function fixture() {
     mkdirSync(resolve(root, path), { recursive: true }); writeFileSync(resolve(root, path, 'input.txt'), 'fixture\n');
   }
   writeFileSync(resolve(root, 'integrations/docker/toolchain.Dockerfile'), 'FROM fixture\n');
+  mkdirSync(resolve(root, 'scripts'));
+  writeFileSync(resolve(root, 'scripts/manager-tooling.mjs'), '// shared manager preparation\n');
   writeFileSync(resolve(root, 'package.json'), JSON.stringify({ packageManager: 'pnpm@11.19.0' }));
   writeFileSync(resolve(root, 'pnpm-lock.yaml'), 'fixture lock');
   writeFileSync(resolve(root, 'pnpm-workspace.yaml'), 'packages: []');
@@ -78,6 +80,8 @@ function engine(root, { pullError = '', pushError = false, wrongLabel = false } 
         // Node 22.19's native recursive copy crashes on Unicode paths; the filter keeps this fixture on its JS path.
         for (const path of ['integrations/docker', 'packages/plugin-kit', 'packages/plugin-manager']) cpSync(resolve(root, path), resolve(destination, path), { recursive: true, filter: () => true });
         for (const file of ['package.json','pnpm-lock.yaml','pnpm-workspace.yaml']) cpSync(resolve(root, file), resolve(destination, file));
+        mkdirSync(resolve(destination, 'scripts'), { recursive: true });
+        cpSync(resolve(root, 'scripts/manager-tooling.mjs'), resolve(destination, 'scripts/manager-tooling.mjs'));
       }
       return { status: 0, stdout: '' };
     }

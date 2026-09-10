@@ -1,0 +1,35 @@
+# DSH Plugin Manager {{FRAMEWORK_VERSION}} 部署包
+
+本目录是可独立使用的框架部署包，不需要作者源码或框架 Git 检出。先准备 Node，再按下列步骤部署标准插件产物。运行依赖和固定宿主镜像仍可能需要网络，离线阅读不等于离线安装。
+
+## 放入产物并启动
+
+<!-- include:deployment-start -->
+
+## 配置与平台
+
+<!-- include:platform-defaults -->
+
+站点地址和选集编辑 `.local/env.conf`；全新 archives 插件参数编辑 `.local/config/plugins/<id>/plugin.json` 或所声明的运行文件，以错误提示的实际路径为准。域名部署同时填写 `DSH_PUBLIC_URL`、`DSH_PUBLIC_ORIGIN`、`DSH_TRUSTED_HOSTS`；不自动配置代理。生成的 deployment.json、清单和快照不手改。
+
+## 登录与请求
+
+<!-- include:first-login -->
+
+## 模型凭据
+
+部署包运行不要求 pnpm，启用 auth 时可使用 /auth 的网页管理。下面的 pnpm 命令仅供已另外安装独立 CLI 工具的维护者使用。
+
+<!-- include:model-credentials -->
+
+## 更新插件或框架
+
+<!-- include:deployment-update -->
+
+## 失败后的操作
+
+<!-- include:site-recovery -->
+
+## 进阶资料
+
+本 README 的操作正文来自框架固定公开维护源，由同一文档同步生成。进一步查阅该版本的[配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v{{FRAMEWORK_VERSION}}/doc/framework-configuration.md)、[运维说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v{{FRAMEWORK_VERSION}}/deploy/README.md)及[独立 CLI 指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v{{FRAMEWORK_VERSION}}/packages/plugin-manager/DELIVERY.md)。这些链接不保证比已安装版本更新；本目录 `framework-runtime.json` 记录实际配套运行镜像身份。

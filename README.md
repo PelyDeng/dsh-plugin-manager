@@ -1,166 +1,58 @@
 # DSH Plugin Manager
 
-[English](README.en.md) · [图文导览](doc/quick-tour.md) · [部署指南](doc/first-deployment.md) · [Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases) · [反馈问题](https://github.com/PelyDeng/dsh-plugin-manager/issues)
+[English](README.en.md) · [首次部署](doc/first-deployment.md) · [作者接入](doc/plugin-development.md) · [Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases) · [反馈问题](https://github.com/PelyDeng/dsh-plugin-manager/issues)
 
-**基于 DeepSeek Harness 的 AI 应用开发与部署框架，让个人开发者和小团队开发自己的插件，并统一安装、更新和管理。**
+基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）的插件开发与部署框架。开发者在自己的项目中开发并打包；部署者把完整发布目录放进 `incoming/`，运行框架的 build 脚本即可安装和启动，无需作者源码。
 
-你可以在自己的仓库开发知识库助手、报表助手、业务工具，或带独立页面的 AI 应用，再交给本框架打包、安装和管理。多个应用可以一起部署，供自己使用，也可以交付给团队与客户。应用运行在 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（简称 DSH）上。
+例如，知识库助手和销售报表助手可以独立开发、分别更新，共用官方宿主及可选的账号系统。DSH 负责插件、Agent、模型与会话；本框架负责打包、配置、安装和运维；业务插件仍负责自己的功能与数据权限。声明权限不会自动保护业务接口。
 
-框架沿用官方的 Cordis 插件、Bundle 安装组合和 Agent 智能体机制。按支持的格式声明插件后，无需修改 DSH 或管理器源码；部署者取得打好的包即可运行，不需要作者源码。应用还可以接入统一登录和访问授权。开发者需要确认插件与目标 DSH 版本兼容。
+> 社区维护的非官方项目，不代表 DeepSeek 官方产品或推荐。
 
-> 社区独立维护的非官方项目，不代表 DeepSeek 官方产品或推荐。
+![开发者接入助手](doc/assets/developer-assistant.png)
 
-![开发者接入助手：快捷问题、流式对话与个人历史](doc/assets/developer-assistant.png)
+## 先部署别人交付的插件
 
-已有 Windows、macOS 或 Linux 本机 Docker 环境？从[首次部署](doc/first-deployment.md)开始，完成“登录 → 授权 → 配置模型 → 首次问答”。只想先看效果，请看[图文导览](doc/quick-tour.md)。
+从同一 [Release](https://github.com/PelyDeng/dsh-plugin-manager/releases) 取得 `dsh-plugin-manager-deployment-<版本>.zip`，解压后将完整插件发布目录放入 `incoming/<应用>/`。发布目录包含 `manifest.json` 和它引用的全部 `.tgz`，普通源码压缩包不能代替它。
 
-| 你想做什么 | 从这里开始 |
-| --- | --- |
-| 先运行一个应用，看看登录和问答页面 | [快速体验](#快速体验) |
-| 在自己的仓库开发插件或智能体应用 | [独立仓库开发](doc/plugin-development.md#独立仓库开发) |
-| 在本仓库增加或维护插件 | [内部工作区开发](doc/plugin-development.md#内部工作区开发) |
-| 部署别人交付的插件包 | [发布物交付指南](packages/plugin-manager/DELIVERY.md) |
-
-## 目录
-
-- [项目能力](#项目能力)
-- [界面预览](#界面预览)
-- [与官方 DSH 的关系](#与官方-dsh-的关系)
-- [快速体验](#快速体验)
-- [开发自己的插件](#开发自己的插件)
-- [部署与更新](#部署与更新)
-- [常见问题](#常见问题)
-- [文档与目录](#文档与目录)
-- [贡献与许可](#贡献与许可)
-
-## 项目能力
-
-| 能力 | 解决的问题 |
-| --- | --- |
-| 独立仓库接入 | 作者维护自己的 pnpm 单包项目，通过声明接入，不改管理器名单 |
-| 内部插件扫描 | 自动发现 `plugins/*` 中的插件，选择需要的插件一起构建，无需迁出仓库 |
-| 通用构建与打包 | 按插件声明执行 build、必要 check 和 pack，输出清单与归档 |
-| 发布物组合 | 将多个作者交付的插件包组合成一套站点安装包，release 模式运行时无需作者源码 |
-| 配置与受控启停 | 管理实例配置、安装、启动、停止和已声明的就绪探针 |
-| 可选统一认证 | 复用账号、登录和应用访问授权；业务接口由作者显式接入 kit |
-
-例如，知识库助手和销售报表助手可以共用账号和安装步骤，各自实现检索、接口与页面。用户登录后，各应用仍要检查他可以读取哪些文档或报表。
-
-## 界面预览
-
-内置 `dsh-example` 是开发者接入助手，展示提问、流式回答、个人历史和可选认证的接入方式。
-
-登录、模型设置与问答步骤见[图文导览](doc/quick-tour.md)。实际问答需先配置自己的模型凭据。
-
-## 与官方 DSH 的关系
-
-| 部分 | 负责什么 |
-| --- | --- |
-| 官方 DSH | Cordis 插件运行、Bundle 组合、Agent、模型与会话 |
-| 本框架 | 作者接入约定、发布物组合、配置和交付管理，以及可选基础认证 |
-| 业务插件 | 工具、页面、业务参数、数据授权与业务验收 |
-
-个人只运行一个工具时，直接使用官方 Bundle 可能更简单。需要统一打包、安装、更新和管理自己的插件，或将多个应用交付给团队与客户时，可以复用本框架的管理能力。插件安装和更新通过管理器 CLI 与部署流程完成；认证页面负责账号和应用访问授权。它不承诺所有社区插件或任意宿主版本自动兼容；作者需要说明并验证支持的宿主版本。
-
-## 快速体验
-
-### 第一步：选择运行方式
-
-| 方式 | 适合谁 | 入口 |
-| --- | --- | --- |
-| Node CLI 图文体验 | Windows PowerShell 或 Bash 用户，希望了解打包、登录与运行过程 | [准备工具和目录](doc/getting-started.md#1-准备工具和目录) |
-| Docker 一键部署 | Windows、macOS 或 Linux 用户，希望运行完整源码站点 | [一键部署](doc/first-deployment.md) |
-
-Node CLI 路径需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`，无需 Docker。Docker 源码部署需要完整仓库、Node.js（含 npm）、Git、系统 tar 和可用的本机 Linux Docker 引擎及 Compose；脚本按需准备锁定的 pnpm，不安装系统软件。在仓库根执行：
+准备 Node、本机 Linux Docker 引擎及 Compose、系统 tar。在解压目录执行：
 
 ```sh
-./build.sh
+bash build.sh
 ```
 
-Windows PowerShell 使用 `.\build.ps1`，不需要 Bash；macOS/Linux 使用上面的 `./build.sh`。旧 `bash deploy/build.sh` 入口继续支持。仅支持本机 Docker unix/npipe endpoint，拒绝远端或 TCP endpoint、Windows 容器。macOS 的实际 Docker 站点部署尚未完成真机验收；CI 测试不等同于部署验收。
+Windows PowerShell 使用 `.\build.ps1`。首次按提示填写确实需要的业务配置；需要统一登录时，把随包 `optional/auth` 复制到 `incoming/auth`。框架不会自动启动 example。完整操作、实际请求和目录替换步骤见[首次部署](doc/first-deployment.md)。
 
-脚本生成本机配置、构建宿主及插件并启动，默认访问 `http://127.0.0.1:7902`。文件资源管理器中的运行方法、远程浏览器访问及失败恢复见一键部署文档。
-
-### 第二步：登录并打开示例
-
-访问 `/auth`，完成首次管理员改密，创建普通账号并授予 example 权限，再用普通账号打开 `/example`。完整步骤及截图见[登录并体验问答](doc/getting-started.md#4-登录并体验问答)。
-
-### 第三步：完成一次问答
-
-运行前核对私有 `.local/env.conf` 的地址与信任域名；根 `env.conf` 已填写固定非秘密默认值，真实站点配置只填私有文件。首次自动生成会写入本机平台默认值，已有配置不覆盖。DeepSeek/智谱密钥非空时文件优先、对应密钥在网页只读，修改需受控重启；留空沿用官方来源且不删除旧值。没有环境覆盖时，管理员可在 `/auth` 的“模型设置”管理两种密钥，写入官方存储默认无需重启；页面只显示状态与不可逆指纹。
-
-详见[统一配置](doc/framework-configuration.md)。管理员可在同页上方的模型卡片选择新会话默认模型，保存到同一实例的官方设置，无需重启；其他提供方的凭据与路由仍在官方设置或 patch 中管理。已有对话和分支保留官方会话记录中的模型选择，不随新默认切换。随后在 `/example` 新建对话，确认收到流式回答并能恢复历史。详细操作见[模型准备](packages/plugin-manager/DELIVERY.md#问答应用的模型准备)。
+部署包携带管理器和固定运行镜像信息；运行依赖仍可能需要网络。不同宿主、架构与业务能力须按实际验证范围使用，构建或健康检查不等于业务已经验收。
 
 ## 开发自己的插件
 
-### 独立仓库开发
-
-按[作者指南](doc/plugin-development.md#独立仓库开发)取得管理工具、复制示例、填写声明并保存锁文件。在已安装 manager 的工具目录执行：
-
-```sh
-pnpm exec dsh-plugin-manager list --root /path/to/author-project --package .
-pnpm exec dsh-plugin-manager pack --root /path/to/author-project --package . --output .local/artifacts/release
-```
-
-把路径换成自己的作者根目录；输出路径相对于该根目录。`pack` 冻结安装依赖，依次执行一次 build、一次 check 和打包，交付时无需预先重复执行 build/check。
+从 `dsh-plugin-manager-starters-<版本>.zip` 选一个起步目录：
 
 | 起点 | 适用场景 |
 | --- | --- |
-| [最小独立 Bundle](examples/standalone-plugin/README.md) | 不需要 kit，先验证插件声明与发布物交付 |
-| [统一身份示例](examples/standalone-kit/README.md) | 复用登录和应用授权，读取当前账号身份 |
-| [完整问答应用](doc/plugin-development.md#复制完整问答应用到独立仓库) | 在流式对话、历史和知识示例上开发自己的应用 |
+| [standalone-plugin](examples/standalone-plugin/README.md) | 先跑通公开探针，不需要 kit 或登录 |
+| [standalone-kit](examples/standalone-kit/README.md) | 复用登录、授权和可信账号身份 |
+| [完整问答应用](doc/plugin-development.md#复制完整问答应用到独立仓库) | 开发流式对话、历史和工具应用 |
 
-当前外部入口支持 pnpm 单包项目和 release 部署，不提供外部 workspace 自动发现或 development/link。
-
-### 内部工作区开发
-
-继续在 `plugins/*` 下开发。在本仓库根执行：
+按[作者指南](doc/plugin-development.md)在独立工具目录安装固定版本的 manager，再打包自己的项目：
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm list:plugins
-pnpm package --plugins "auth,example" --output .local/artifacts/release/plugins
+pnpm exec dsh-plugin-manager pack --root <作者项目绝对路径> --package . --output <新的发布目录>
 ```
 
-内部扫描、批量任务及 development/link 均保留。日常构建、检查和测试的选择见[内部开发步骤](doc/plugin-development.md#内部工作区开发)。普通构建和测试不需要初始化宿主子模块、配置模型密钥或启动 Docker。
+pack 执行冻结安装、build、check 和归档校验，交付整个输出目录。当前直接支持独立 pnpm 单包；已有 Node 项目需满足插件入口与构建契约，其他语言服务可继续独立运行，由 DSH 插件调用其接口。
 
-## 部署与更新
+## 其他运行方式
 
-部署别人交付的插件包时，按[发布物交付指南](packages/plugin-manager/DELIVERY.md)完成：**取得各应用的清单和包文件 → 选齐本次要运行的应用 → 填写实例配置 → 启动 → 用普通账号检查功能**。选定的全部应用组成“候选清单”；要求登录的应用还需一同选入认证插件（provider）。运行时无需作者源码。
-
-更新时保留原始分项发布目录，替换目标应用后重新组合全部需要保留的应用；沿用实例 home，并按指南备份、停止和启动。两应用演练见[加入第二个应用](doc/getting-started.md#进阶加入第二个应用)。
-
-使用完整源码部署时，更新仓库后仍执行对应平台的根 build 脚本。该入口直接使用已有官方源码，不主动拉取或要求匹配预设版本，默认无需镜像仓库。产物准备后的失败使用原输入加 `--resume`；该选项继续部署，不自动回滚业务数据。源码更新不自动创建全量运行数据备份；需恢复数据时应事先独立备份并验证恢复。配置、源码遗留锁与恢复说明集中在[部署文档](deploy/README.md)。
-
-## 常见问题
-
-首次登录、官方控制台认证、服务器录入模型密钥及问答排错见 [FAQ](doc/FAQ.md)。
-
-| 问题 | 说明 |
+| 目的 | 入口 |
 | --- | --- |
-| 新插件必须修改 DSH 或管理器源码吗？ | 不需要；按支持的包声明与扩展接口接入 |
-| 写完声明就能保护接口吗？ | 不能；作者需显式接入 kit，业务数据权限也由应用检查 |
-| 包名可以直接从 npm 安装吗？ | 本文包名不代表已经公开发布；先取得版本化工具 tgz |
-| 构建时会运行全部业务测试吗？ | check 只做必要编译、类型或语法检查；完整测试由作者单独运行 |
-| 如何一键生成示例测试报告？ | 准备已构建的官方 CLI 后执行根目录 `bash test-report.sh`，完成 auth/example 打包、宿主测试和报告交付；模型使用本地替身，详见[操作文档](packages/plugin-manager/VERIFICATION.md) |
-| kit 升级后所有应用自动生效吗？ | 不会；kit 打包在各应用内部，使用它的应用需要在发版时更新内嵌版本并重新打包 |
-| 接入或启动遇到问题怎么办？ | 先读[排错入口](doc/getting-started.md#命令速查与求助)和[开发者 FAQ](plugins/dsh-example/knowledge/guide.md) |
+| 从框架源码构建宿主与内置插件 | [源码部署](deploy/README.md#服务器源码发版)，原根 build 脚本与按需重建保持兼容 |
+| 只安装 manager，手动组合并部署发布物 | 随包 [DELIVERY.md](packages/plugin-manager/DELIVERY.md)，不需要作者源码 |
+| 体验 auth/example 的登录与问答 | [体验步骤](doc/getting-started.md)与[图文导览](doc/quick-tour.md) |
+| 查字段、接口和故障 | [文档导航](doc/README.md) |
 
-## 文档与目录
-
-按使用目标查阅[文档导航](doc/README.md)。需要让 AI 协助开发时，可复制[开发提示词](plugins/dsh-example/knowledge/prompts.md)。
-
-| 位置 | 用途 |
-| --- | --- |
-| [packages/plugin-kit](packages/plugin-kit/README.md) | `@dsh-plugin-manager/plugin-kit`：身份、权限、HTTP、工具登记 |
-| [packages/plugin-manager](packages/plugin-manager/README.md) | `@dsh-plugin-manager/plugin-manager`：发现、打包、安装和受控启停 |
-| [plugins/dsh-auth](plugins/dsh-auth/README.md) | 可选账号、登录与插件授权 |
-| [plugins/dsh-example](plugins/dsh-example/README.md) | 开发者答疑、流式对话、历史与可选认证示例 |
-| [integrations/docker](integrations/docker/README.md) | 官方宿主镜像与 Compose 集成 |
-| [deploy](deploy/README.md) | Bash、PowerShell、Node 入口和配置模板 |
-| `.local/data/` | 本机持久数据，不进入 Git |
-| `.local/artifacts/` | 发布归档与恢复记录，不进入 Git |
+配置、持久数据和旧归档应沿用原站点。更新及失败时按[部署与恢复](deploy/README.md)操作；恢复不是业务数据回滚，也不能通过删除 `.local` 重新初始化来排错。
 
 ## 贡献与许可
 
-参见 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)。本仓库自有代码采用 [Apache-2.0](LICENSE)，第三方归属见 [NOTICE](NOTICE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目由社区维护，不是 DeepSeek 官方发布渠道。
+公共库在 `packages/*`，内置业务插件在 `plugins/*`，独立示例在 `examples/*`。依赖方向见[架构](doc/architecture.md)。参见 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)、[Apache-2.0](LICENSE) 和 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

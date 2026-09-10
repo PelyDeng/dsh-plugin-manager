@@ -72,7 +72,7 @@ test('platform entry and configuration questions receive current knowledge plus 
       ['deploy/build.ps1', /scripts\/release\.mjs/],
       ['deploy/build.sh', /scripts\/release\.mjs/],
       ['env.conf', /DSH_PORT=7902/],
-      ['deploy/scripts/site.mjs', /process\.getuid/],
+      ['packages/plugin-manager/src/site-config.mjs', /process\.getuid/],
       ['doc/framework-configuration.md', /已有.*不覆盖/],
       ['doc/first-deployment.md', /TCP 转发/],
     ]) {

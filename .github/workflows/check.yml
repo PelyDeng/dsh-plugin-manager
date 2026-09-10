@@ -18,11 +18,10 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
       - run: node scripts/version.mjs check
-      - run: node --test scripts/tests/version.test.mjs
       - run: npm install --global pnpm@11.19.0
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
       - run: pnpm check
+      - run: node --test scripts/tests/*.test.mjs
       - name: Test workspace
         id: tests
         if: runner.os != 'Windows'

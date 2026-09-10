@@ -48,7 +48,7 @@
 
 ## 每个插件一份运行配置
 
-默认位置为 `<DSH home>/plugins/<插件 ID>/plugin.json`，可用部署配置 `instances.<id>.settingsFile` 指定外部路径。文件不进入 Git、插件包或镜像。首次 `apply-compose` 为缺少配置文件的标准插件创建默认配置，已有文件保持原内容。
+独立 CLI 的默认位置为 `<DSH home>/plugins/<插件 ID>/plugin.json`。全新 archives build 站点把可编辑文件放在 `.local/config/plugins/<插件 ID>/plugin.json` 并自动使用已有 `instances.<id>.settingsFile` 引用；旧实例和显式路径不迁移。文件不进入 Git、插件包或镜像。首次 `apply-compose` 为缺少配置文件的标准插件创建默认配置，已有文件保持原内容。
 
 ```json
 {
@@ -68,7 +68,7 @@
 
 ## 一次配置站点，之后统一应用
 
-源码一键部署以私有 `.local/env.conf` 为框架入口并生成 `.local/deployment.json`；插件业务配置仍各自维护，详见[统一配置](framework-configuration.md)。生成文件保存候选清单和公共参数，不需要手工填写。首次部署及站点字段见[一键部署](first-deployment.md)。以下运行配置仅供自定义管理器集成参考：
+站点 build 以私有 `.local/env.conf` 为入口并生成 `.local/deployment.json`；插件业务配置仍各自维护，详见[统一配置](framework-configuration.md)。生成文件保存候选清单和公共参数，不需要手工填写。首次部署及站点字段见[一键部署](first-deployment.md)。以下运行配置仅供自定义管理器集成参考：
 
 ```json
 {
@@ -82,9 +82,9 @@
 }
 ```
 
-`auth` 和 `example` 默认纳入源码选集。站点 origin 只配置一次；标准插件的认证和配置由管理器自动生成 patch。`patches` 仅保留其他宿主定制，不再手工为这些标准入口重复配置认证。迁移旧实例时应移除对应旧 patch 条目。
+`auth` 和 `example` 只默认纳入 source 选集；archives 默认选 incoming 全部，按需复制 optional/auth。站点 origin 只配置一次；标准插件的认证和配置由管理器自动生成 patch。`patches` 仅保留其他宿主定制，不再手工为这些标准入口重复配置认证。迁移旧实例时应移除对应旧 patch 条目。
 
-修改某个 `plugin.json` 后，在安装了新版管理器的宿主机执行：
+使用站点 build 时，修改实际 plugin.json 后仍运行同一个 build，由快照与恢复规则处理。下面仅供独立 CLI 集成：
 
 ```sh
 dsh-plugin-manager apply-compose --root /path/to/project --config .local/deployment.json

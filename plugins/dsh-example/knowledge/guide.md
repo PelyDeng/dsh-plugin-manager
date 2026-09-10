@@ -2,242 +2,203 @@
 
 # 开发者接入 FAQ
 
-适用：框架 0.15.2（manager、kit、auth、example 同一发布版本）；宿主以实际检出与交付验证记录为准。本文是知识快照，不证明远程站点已升级。
+这是框架 0.16.0 随包指南。模型不可用时仍可在已授权应用中阅读；内容来自发布时固定的公共文档，不扫描部署者机器。在线 main 可能领先，知识不能证明生产状态。
 
 ## 这个框架是做什么的？
 
-它帮助个人开发者和小团队把自己开发的 AI 应用统一打包、安装、更新和管理，也方便交付给团队或客户。应用运行在 DeepSeek Harness（DSH）上。定位和能力以随包 `README.md` 的“项目能力”“与官方 DSH 的关系”为依据。
+假设你想给团队做两个应用：知识库助手和销售报表助手。作者各自在自己的项目里写业务，打包后交给部署者统一运行。DSH 提供插件、Agent、模型和会话；manager 管理产物、配置、安装与启停；可选 auth/kit 提供账号和可信身份。业务权限仍由各应用检查，不因写了声明自动生效。
 
-假设你想给团队做两个应用：知识库助手回答“报销需要哪些材料”，销售报表助手回答“本月销售额是多少”。你负责接入文档和销售接口、编写查询工具与页面；本框架帮你把两个应用打成可安装的包、组合部署，按需共用登录和应用访问授权。以后更新报表助手时，仍按统一交付流程处理，并保留原数据。接入和更新都需要开发、配置与验证，不是输入一句需求就自动完成。
+## 我已经有项目，怎么选入口？
 
-在这个例子里，**官方 DSH** 负责运行插件、调用模型和保存会话；**本框架** 负责应用接入、打包交付和安装管理；**你写的插件** 负责查什么数据、如何展示，以及谁能看哪些文档或报表。登录成功并不代表可以读取全部业务数据。
-
-这里的两个助手是用途举例，并非仓库内置业务。若只想运行一个已有工具，直接使用官方 Bundle 也可能足够。想先体验，可从 `doc/first-deployment.md` 开始；想开发应用，再看 `doc/plugin-development.md`。本框架由社区维护，不是 DeepSeek 官方产品，也不保证任意社区插件自动兼容。
-
-## 如何统一新会话的默认模型？
-
-管理员在 Auth“模型设置”从官方目录单选并保存，通过官方 `agentDefaultModel` / `settings` 持久化，保存默认模型无需重启。先校验模型目录与调用配置，不发送真实模型请求，因此保存成功不证明密钥、额度或网络可用。
-
-插件从 `@dsh-plugin-manager/plugin-kit/models` 导入 `conversationModel(ctx, id?, eventCount?)`：无 ID 读取当前默认；有 ID 时先核验所有权，再从官方持久化事件恢复 `pending ?? lastUsed`，分支传继承事件数。只有没有模型使用记录时才回退当前默认；读取或投影失败拒绝恢复，异步读取后再次检查授权。它不依赖 auth；已运行 Agent、硬编码模型和专用模型不会自动切换。详见 kit README。
-
-## 如何按插件管理会话，删除前能先预览吗？
-
-登录 `/auth` 的“会话管理”，按插件分类、标题或 ID、更新时间和状态筛选。只管理本人拥有且仍有插件权限的会话，管理员也不获得他人聊天。
-
-点击标题或“预览”打开只读抽屉，最近 30 条消息可向前加载，思考和工具折叠；不启动模型、不恢复任务、不改更新时间。关闭保留筛选和勾选，“选中待删除”只勾选。
-
-确认后批量移除当前插件所选 1–100 条，底层日志保留，无恢复入口；不释放磁盘或删除业务数据。运行中会话被阻止，失败可重试，“仅插件已移除”的旧记录可补齐官方归档。
-
-开发使用 kit 的 `registerConversations`（protocol 1）提供 list、preview、remove，插件检查归属和会话状态，复用官方 `workspaceRegistry.archiveSession`。详情与源码入口见 `doc/conversation-management.md`；勿用 ID 前缀认领用户或让 auth 直读业务库。
-
-## Auth 登录后，根路径为什么仍提示认证？
-
-`dsh web authentication required; reopen the URL printed by dsh web.` 是官方控制台认证提示，不是模型密钥错误。插件 Auth 账号用于 `/auth` 及已授权应用；官方控制台根路径 `/` 使用自己的启动令牌和浏览器 Cookie；API 密钥用于调用模型。这三者独立，登录插件不会自动登录官方控制台。
-
-普通用户从 `/auth` 进入应用。维护者在服务器私有终端读取 `.local/data/dsh-web-auth-url.txt`，在本人浏览器打开完整地址；校验后设置 Cookie 并跳转 `/`。自定义 dataRoot/authUrlFile 时按 `.local/deployment.json` 查路径。
-
-重启会更新令牌，旧书签或 Cookie 失效后重新读文件。新地址仍失败时核对 publicUrl/publicOrigin 及代理的查询参数、Host、Cookie 转发。不要关闭认证、公开 token 或拿它替代应用授权。
-
-## 控制台能打开，但模型和插件报 HTTP 403 怎么办？
-
-官方认证后模型接口（如 `/api/llm/listProviders`）仍返回 403，检查公网域名是否加入 DSH `trustedHosts`。`publicUrl` 决定认证地址，`publicOrigin` 声明来源，两者不代替 Host 信任。
-
-在私有 `.local/env.conf` 填写以下字段，保留已有设置。域名仅为示例；旧站点先由部署入口导入配置，显式旧JSON仍使用publicUrl/publicOrigin/trustedHosts字段。
-
-```ini
-DSH_PUBLIC_URL=https://dsh.example.com
-DSH_PUBLIC_ORIGIN=https://dsh.example.com
-DSH_TRUSTED_HOSTS=["dsh.example.com"]
-```
-
-`trustedHosts` 填主机名或与 Host 一致的 `主机名:端口`，不带协议、路径，不用通配。保留已有项，通过正常部署入口受控重启，读取新认证地址并检查接口；真实域名不写入公共模板。
-
-仍失败则核对代理转发的 Host、Cookie 和 Origin。401 表示未认证；健康 200 不证明控制台 API 正常。
-
-## 运行内置应用应选择什么宿主？
-
-可用已有 DeepSeek Harness 源码，或显式不可变 `DSH_HOST_IMAGE` / `hostImage`。按需复用时，源码模式要求与基线一致的干净检出；镜像模式核验同一摘要和旧成功记录的宿主提交，不要求宿主源码存在，最终镜像标签仍须一致。构建不自动下载或更新宿主。Node CLI 的 harnessRoot 指向已构建源码，dshCliJs 指向已安装 CLI，二选一；源码版本不证明 npm 已发布。密钥管理需要官方 credentials/credentials-local。
-
-## 第一次如何配置或更换 API 密钥？
-
-根 env.conf 已填写固定非秘密默认值，真实配置只填 Git 忽略的 .local/env.conf；密钥、仓库账号密码和生成项继续留空。常用地址、信任域名、DeepSeek/智谱密钥排在前面；插件业务配置各自维护。
-
-文件 DEEPSEEK_API_KEY/ZHIPU_API_KEY 非空时，以文件为准，只注入官方DSH子进程，网页只读；修改后正常部署并受控重启。留空不添加覆盖、不删除官方凭据、不清除继承环境密钥。官方来源顺序为进程环境、.credentials.yaml、工作目录.env、home.env；已有环境覆盖时仍只读，没有覆盖时继续网页管理。
-
-管理员完成初始改密后，在 /auth “模型设置”的 DeepSeek 或智谱 GLM 卡片管理对应密钥，桌面每行最多两张、手机单列。页面仅返回状态及 SHA-256 指纹，不返回密钥。脚本仅支持 DeepSeek：在源码仓库执行 `bash deploy/scripts/set-api-key.sh --config .local/deployment.json`，隐藏输入，不将密钥放入参数。独立工具使用 `dsh-plugin-manager set-api-key --root <交付根> --config <部署文件>`，需已安装兼容官方 CLI 及正确数据所有者。文件管理的 DeepSeek 会拒绝脚本写入。
-
-网页与脚本复用官方凭据服务及文件锁，保留其他凭据、账号和历史。写入官方存储时默认无需重启，宿主监听加载；自定义存储或关闭监听时使用网页。Compose脚本确认活动容器/home后以容器用户执行，Linux凭据文件0600。文件覆盖不会导入.credentials.yaml，原值仍需保存在私有文件供宿主调用，不能仅保存指纹。
-
-API Key不创建模型路由、不选择默认模型，也不验证额度；智谱仍需官方路由及ZHIPU_API_KEY引用。旧JSON导入保留原文件与路径；生成deployment/Compose不手改，恢复沿用原env、凭据及发布输入。
-
-## 密钥已填、探针 200，为什么仍不能回答？
-
-在“模型设置”刷新状态和指纹，核对当前实例的 home、`.local/deployment.json` 及是否有遗留 `DSH_HOME`/`DSH_DATA_DIR` 路径覆盖；检查是否显示外部环境只读。然后核对默认模型是否使用已配置且可用的提供方，以及是否仍使用默认 `DEEPSEEK_API_KEY` 引用。写入官方存储默认无需重启，修改框架env需受控重启；改变默认模型后新建对话，旧会话按持久化模型记录恢复。根据具体错误检查密钥有效性、余额/配额、限流和服务器网络。健康探针不调用模型，不能证明真实问答成功。
-
-密钥是站点维护者配置的宿主凭据，不是每个 Auth 用户单独提供。更换密钥不清空账号或历史；文件模式重启前应等待正在进行的回答结束。保留 `.local/data`、`.local/artifacts` 和备份，不用删除 `.local` 或空数据初始化排错。模型尚未可用时，首页“阅读 FAQ（无需模型）”仍可直接阅读本页；快捷提问生成回答需要模型。
-
-## 第二个应用到底少写什么？
-
-例如，已有知识库助手后再开发报表助手，可以复用 auth 登录、kit 提供的可信身份和 manager 的打包交付流程。你仍需实现销售接口、结果展示和报表权限，不必为每个应用另建账号系统。模型给出的 userId 不能作授权依据。kit 升级需重打包；independent-access-example 只验证身份，不证明业务功能。
-
-## 选择哪种接入？
-
-1. **普通官方 Bundle**：只需 DSH 的插件能力，用官方 package.json 的 dsh.bundle.patch 和 Cordis patch；无需 kit/manager。
-2. **受管交付**：保留 Bundle，增加 deepseekPlugin schema 3 声明、build/check 脚本、README 和 files。管理器读取声明，无需维护中央插件名单。
-3. **可选统一认证**：再声明 configuration.auth=consumer，接入 kit 的 createAccess/createPluginHttp 或工具鉴权，并在部署候选集合选入 auth。仅写声明不会获得保护。
-
-内部开发扫描 `<框架根>/plugins/*`。外部支持独立 pnpm 单包：显式 `--root <作者包根> --package .`，只接受 `.`，不能同时传 --plugins；不会自动扫描外部 workspace。外部清单 2 只支持 release，内部清单 1 继续支持 release 和 development/link。页面、Agent、Tool、探针、kit 都不是受管包的必选功能。
+新建 DSH 插件从 standalone-plugin 或 standalone-kit 起步。已有 Node 项目需满足 Cordis 插件入口与构建契约；其他语言服务继续独立运行，可由 DSH 插件调用接口。当前直接打包支持 pnpm 独立单包，不自动扫描外部 workspace，也不提供外部 development/link/HMR。普通 zip、前端 dist、Java jar 不能自动成为可加载插件。
 
 ## 工具从哪里来？
 
-需要 Node.js `^22.19.0 || >=24`、pnpm 11.19.0、tar。包名不代表公共 npm 已发布；从可信维护者取得 manager/kit tgz并核对摘要，或按作者指南构建明确提交。只有 tgz 不等于完整离线依赖。
+<!-- Excerpt from doc/plugin-development.md.tmpl#author-tools; edit its source. -->
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.16.0.zip`、`plugin-manager-0.16.0.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.16.0.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
 
-在独立工具目录安装：`pnpm add --ignore-workspace <manager-tgz绝对路径>`，以后在该目录执行 `pnpm exec dsh-plugin-manager ...`。不要在任意目录假设全局命令可用。作者包根的 package.json、pnpm-lock.yaml 与工具目录分开。
-
-## 内部与外部如何构建交付？
-
-内部：在框架根先 `pnpm install --frozen-lockfile`，执行 `pnpm list:plugins`。交付 auth 和 example：
+起步 zip 内有 standalone-plugin、standalone-kit；选一个目录复制为自己的作者项目，不复制 node_modules、dist 或 .local。在作者项目以外创建独立工具目录 dsh-tools，在该工具目录安装实际 manager 归档：
 
 ```sh
-pnpm package --plugins "auth,example" --output .local/artifacts/release-v1
+pnpm init
+pnpm add --ignore-workspace /absolute/path/plugin-manager-0.16.0.tgz
+pnpm exec dsh-plugin-manager --version
 ```
 
-输出目录必须为空或不存在。日常 `pnpm check --plugins example` 做构建、类型和语法检查；业务回归另行执行 test。省略 --package 保留内部扫描、默认选集和 all/none/指定 ID；根 build/check 的默认范围是 all，源码 package 默认按 defaultEnabled 选取，安装现成清单默认选清单全部。
+将占位路径替换为实际绝对路径，含空格时加引号。以后 pnpm exec dsh-plugin-manager 都在这个工具目录执行，--root 明确指向作者项目。manager 不加入业务运行依赖；工具目录和作者项目各自保存锁文件。
 
-外部：复制 examples/standalone-plugin 或完整 plugins/dsh-example 到独立包根。完整 example 将 kit 的 workspace:* 改为 tgz 并内嵌，删除仅声明框架索引输入的 dsh-auth 开发依赖，替换框架专用脚本和测试；索引显式指定框架源码根。作者根执行 `pnpm install --ignore-workspace` 并提交锁文件；工具目录执行：
+## 如何构建和交付？
+
+<!-- Excerpt from doc/plugin-development.md.tmpl#author-pack; edit its source. -->
+在工具目录执行，将作者项目换成实际绝对路径：
 
 ```sh
-pnpm exec dsh-plugin-manager list --root <作者包根> --package .
-pnpm exec dsh-plugin-manager pack --root <作者包根> --package . --output .local/release-v1
+pnpm exec dsh-plugin-manager list --root /absolute/path/my-plugin --package .
+pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --output .local/artifacts/release/v1
 ```
 
-list 只读声明，不要求锁文件；check 会先 build；pack 冻结安装作者根锁文件，然后各执行一次 build/check 再打包，无需先重复 check。外部任务忽略父 workspace。不要声明 prepare/prepack/postpack 重复构建。发布目录包含 manifest.json 和摘要命名 tgz，一起交付，不能仅移动清单。运行依赖不能带 workspace:/file:/link: 或本机绝对路径；本地 kit 是构建依赖并内嵌。作者源码可以不在部署机器上。
+list 只读声明，不要求锁文件；pack 要求作者根的 pnpm-lock.yaml，冻结安装后各执行一次 build/check，再校验并打包，无需事先重复 check。输出必须是新目录或空目录，路径相对作者 root；再次发布用新目录 v2。日常可独立运行 check，它会先 build，完整业务测试另行运行。
 
-## 只改 C，能只构建 C 或任意多个插件吗？
+交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。
 
-可以。日常 `pnpm build --plugins c` 只选 c；`pnpm package --plugins c,d --output <新目录>` 构建并打包 c、d，清单只包含这两项，不自动补旧包。
-
-源码部署使用 `./build.sh --rebuild-plugins c`；Windows 用 `.\build.ps1 --rebuild-plugins c`，多个 ID 用 `c,d`。站点 `DSH_PLUGINS` / `plugins` 保留 a,b,c,d，c 执行 build/check/pack，其余复用当前成功部署归档，新清单仍完整。省略参数全量构建；不接受空项、重复、all/none 或部署选集之外的 ID。
-
-没有可核实的 ready 基线、构建环境或宿主来源不匹配、旧包缺失/损坏/声明变化时拒绝。未选源码或共享已跟踪文件（kit、锁文件、构建脚本、文档等）变化要求全量。声明的本地构建依赖按传递关系校验；改 auth 要同时重建读取其源码的 example。不得靠安装钩子重建，未声明跨目录或外部输入不能自动判断；不会自动扩大重建选集。
-
-`file:` 构建依赖仅允许插件自身目录内已纳入 Git 的常规 `.tgz` / `.tar.gz`；旧新 blob 与磁盘字节须一致。符号链接、跨目录、目录、未跟踪归档及 `link:` 仍拒绝复用。
-
-manager/kit、镜像、停服安装及健康检查仍执行，不是热更新。prepared 后失败只用 `--resume`，不能同时带重建参数；恢复固定保存的镜像和完整清单，旧验证不代表新组合已通过业务验收。详见 deploy/README.md。
-
-## 最小声明是什么？
-
-package.json 至少有 name/version、main、files、scripts.build/check、dsh.bundle.patch、deepseekPlugin.schemaVersion=3 和 id；包内有 README、Bundle 以及构建后的入口。完整字段查 `examples/standalone-kit/package.json`；受保护应用声明 `configuration.auth=consumer`，实现与声明一致的入口、探针和权限。
-
-entryId 对应实际 Cordis patch 条目，不必与插件 ID 相同。healthPath 可省略；提供时实现公开 GET 就绪探针，返回 200 或依赖不可用时 503，不返回秘密、不调用付费模型。无探针的 not-provided 不代表业务就绪。
-
-## 如何增加页面、Tool 或 Agent？
-
-页面注册到官方 WebServer；受保护路由通过 `createAccess`、`createPluginHttp` 注册，业务身份取自 handler 的可信 actor。完整实现查 `examples/standalone-kit`，不能只声明权限而公开注册敏感路由。
-
-import 来自 `@dsh-plugin-manager/plugin-kit`，完整可运行实例见 examples/standalone-kit。Tool 使用官方 ToolDefinition；需要认证时参照 kit/tools 的 createPluginTools/guardTool，声明权限并将工具名加入 Agent 白名单。不要猜测未提供的工具签名，应查当前安装版本导出与示例。Agent 使用官方 ctx.agents 与默认模型选择，systemPrompt.section 注入提示，tools.restrict 限制能力。example 的白名单仅含随包公共源码检索和阅读工具，不能执行命令、读取服务器文件或访问销售系统。
-
-## 复制 example 需要改哪些名字？
-
-同步修改 npm 包名、deepseekPlugin.id、displayName、entryPath/healthPath、permissions、configuration.entryId、Bundle 的 name/id、默认 routePrefix、会话 ID 前缀及校验正则、systemPrompt section 名、页面建议问题与知识文件、测试。不要复用 example 的历史库。kit 不复制源码，继续通过包名导入并内嵌。
-
-如果改成销售助手，替换两份知识和固定开发者职责提示；config.systemPrompt 只是部署补充，不能单靠它把内置开发者知识变成其他业务。复制时保持官方启动方式，不另写应用服务器 bin。
+作者最低声明：name/version/main/files、dsh.bundle.patch、deepseekPlugin.schemaVersion=3/id、scripts.build/check 和 README。entryId 必须对应实际 Cordis patch 条目。注册名、ID、路由及权限修改关系见起步包 README；完整规范查 doc/plugin-configuration.md。
 
 ## 部署者收到什么，如何启动？
 
-收到各应用完整发布目录、manager 工具及摘要、经应用验证的官方宿主版本/获取方式、公开配置模板和交付说明。使用者无需作者 Git 仓库。把分项归档放在 `<交付根>/incoming/`，在工具目录组合真实示例：
+<!-- Excerpt from doc/first-deployment.md.tmpl#deployment-start; edit its source. -->
+从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.16.0.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
 
-```sh
-pnpm exec dsh-plugin-manager compose-release --root <交付根> --output releases/site-v1 --manifest incoming/base/manifest.json --manifest incoming/second/manifest.json
+每个作者交付的是一个完整目录，包含 manifest.json 和它引用的全部 tgz。将它放在部署根的 incoming 直接子目录中：
+
+```text
+dsh-deployment/
+├─ build.ps1 / build.sh
+├─ tools/                       随包管理器，不手改
+├─ framework-runtime.json       固定运行镜像信息，不手改
+├─ optional/auth/               按需使用的认证发布目录
+├─ incoming/
+│  └─ my-plugin/
+│     ├─ manifest.json
+│     └─ my-plugin-<摘要>.tgz
+└─ .local/                      运行后创建，保留配置和数据
 ```
 
-base 是内部 auth+example 的清单，second 是 independent-access-example 的清单。组合只读取校验并复制归档，不执行作者代码。重复 ID/包名要选择一个版本，不能直接叠加旧整站包和同 ID 新包。
+在部署根执行 `bash build.sh`；Windows PowerShell 执行 `.\build.ps1`。普通 zip/tgz 单文件不能代替完整发布目录。需要认证时，将 optional/auth 整个目录复制到 incoming/auth，保留自己的应用。不要删除组合清单中某个归档来挑选插件。
 
-按 `packages/plugin-manager/DELIVERY.md` 在交付根创建 `.local/deployment.json`：manifest 指向上述清单，home 沿用实例目录，dshCliJs 填已安装官方 CLI 绝对路径，核对 port/publicOrigin。在工具目录执行：
+首次自动创建 .local/env.conf。新 archives 站点的可编辑业务配置在 .local/config/plugins/<id>/，错误提示会给出实际文件、插件 ID、已知缺项和下一条命令。填写真实必需参数后再执行同一个 build；已有配置不覆盖。无必需业务配置的最小插件应一次执行完成。业务 Schema 错误可能在加载阶段才发现，不能把模板存在当作配置正确。
 
-```sh
-pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --plugins all
+成功输出访问地址、选中插件、声明探针结果及发布记录。未声明探针的 not-provided 表示未提供业务就绪检查。默认本机地址为 http://127.0.0.1:7902；实际请求和响应还需按插件 README 验证。
+
+## 如何首次登录并验证实际功能？
+
+<!-- Excerpt from doc/getting-started.md.tmpl#first-login; edit its source. -->
+需要认证的应用先确认已选入并启用 auth，再访问实际站点的 /auth；无认证应用跳过登录。空数据库首次管理员为 admin，初始密码 123456；首次登录按页面强制改密，然后重新登录。此后创建普通账号，为它勾选目标插件授权，再用该普通账号登录。
+
+鉴权起步插件的实际请求为 /independent-access-example/identity，成功返回含 owner 的 JSON；匿名或无该应用授权的账号不应取得身份结果。无 kit 的起步插件请求 /independent-example/ready，成功返回其 README 定义的就绪 JSON。测试身份端点不需要模型。
+
+已部署 example 时，普通账号打开 /example，新建对话，确认真实流式回答及历史恢复；需要先配置自己的模型。/auth 登录、官方根路径认证和模型 API 密钥分别管理，不能用填模型密钥修复根路径的认证提示。健康检查、登录和真实模型调用分别验证。
+
+## Auth 登录后，根路径为什么仍提示认证？
+
+<!-- Excerpt from doc/FAQ.md#root-auth; edit its source. -->
+根路径出现 `dsh web authentication required`，表示官方控制台需要其自己的启动认证地址。/auth 的插件账号、官方控制台令牌和模型 API 密钥是三种不同凭据。仅使用业务应用时从 /auth 进入已授权应用即可。
+
+需要官方控制台时，在私有本机文件中读取本次启动生成的认证 URL（默认 .local/data/dsh-web-auth-url.txt；自定义路径看实际输出），仅在自己的浏览器访问。不分享其中 token；填模型 API 密钥不会修复控制台登录，重启后应使用本次的新地址。
+
+控制台 API 返回 403 时检查 trustedHosts，而不是只改 publicUrl/publicOrigin。域名、端口和信任项应使用同一实际站点；不关闭鉴权或 CSRF 来掩盖问题。
+
+## 第一次如何配置或更换 API 密钥？
+
+<!-- Excerpt from doc/framework-configuration.md#model-credentials; edit its source. -->
+私有 .local/env.conf 中的 DEEPSEEK_API_KEY / ZHIPU_API_KEY 非空时：文件为准，只注入官方DSH子进程，网页只读；改文件后受控部署。留空不添加覆盖、不删除官方凭据、不清除继承环境密钥。没有外部环境覆盖时，管理员可在 /auth 的“模型设置”管理 DeepSeek/智谱，写入官方存储时默认无需重启。
+
+网页只返回状态与 SHA-256 指纹，不返回原密钥。指纹不能还原密钥；“已配置”不代表余额、网络或调用通过。命令行 set-api-key 只支持 DeepSeek，密钥使用隐藏输入，不放在 argv。在安装 manager 的工具目录使用 `pnpm exec dsh-plugin-manager set-api-key --root <站点根> --config .local/deployment.json`。
+
+已有源码仓库可使用 `bash deploy/scripts/set-api-key.sh --config .local/deployment.json`；Windows 使用 `node deploy/scripts/set-api-key.mjs --config .local/deployment.json`。这些源码包装器不属于独立起步项目。Compose 核验当前容器与 home 后以实际用户写入；独立 CLI 指向已安装的兼容宿主。默认凭据服务/监听关闭或自定义时，通过当前服务的网页入口管理。
+
+模型默认值由同一宿主的官方 agentDefaultModel 提供；管理员选择新会话默认模型无需重启。已有会话及分支按官方记录恢复，模型选择为 pending ?? lastUsed，读取或投影失败拒绝恢复，不用新默认覆盖旧记录。凭据不会创建提供方路由，健康探针不调用模型；实际问答另验收。
+
+## 只改 C，能只构建 C 或任意多个插件吗？
+
+<!-- Excerpt from deploy/README.md#source-rebuild; edit its source. -->
+日常 `pnpm build --plugins c` 只构建 c，`pnpm package --plugins c,d --output <新目录>` 只交付 c、d。源码部署使用 `./build.sh --rebuild-plugins c`；Windows 使用 `.\build.ps1 --rebuild-plugins c`，多个 ID 用 c,d。保留站点 a,b,c,d 完整选集，只有指定插件重建，其余复用可核实旧归档，新清单仍完整。省略参数全量构建；不接受空项、重复、all/none 或选集外 ID。
+
+复用需与活动站点对应的 ready 基线、构建环境、宿主来源与旧归档均可核验。共享已跟踪文件、未重建插件或本地构建依赖变化时拒绝；本地依赖按传递关系校验，不得靠安装钩子重建。不会自动扩大选集或静默全量。没有基线时先正常全量构建；archives 成功记录不充当 source 基线，切回 source 首次必须全量。
+
+源码模式要求与基线一致的干净检出；镜像模式核验同一摘要和旧成功记录的宿主提交，不要求宿主源码存在，最终镜像标签仍须一致。插件自身目录内已纳入 Git 的常规 .tgz/.tar.gz 可作 file: 构建输入，旧新 blob 与磁盘字节须一致；符号链接、目录、越界、未跟踪归档及 `link:` 仍拒绝复用。
+
+manager/kit、镜像准备、停服安装和健康检查仍执行，不是热更新。prepared 后失败只用 `--resume` 重试原输入，不带重建参数；需要改同包业务配置时使用单独的 recover 流程。archives 不接受 --rebuild-plugins。
+
+## 第二个应用加入、升级与停用？
+
+<!-- Excerpt from doc/first-deployment.md.tmpl#deployment-update; edit its source. -->
+incoming 是期望保留的完整集合，不是一次性投递队列。新增插件放一个新的完整目录；更新则整体替换对应目录，保留其他应用。一个清单含多个插件时整体更换，不覆盖合并新旧文件。重复 ID/包名会报错，不自动挑“最新版本”。
+
+先在 incoming 外解压并核对新发布目录；停止编辑和并行 build。下面假设 my-plugin 是原目录，incoming 外的 next/my-plugin 是准备好的完整新目录，backups/my-plugin-v1 尚不存在。
+
+Windows PowerShell，在部署根执行：
+
+```powershell
+New-Item -ItemType Directory -Force backups | Out-Null
+Move-Item -LiteralPath incoming/my-plugin -Destination backups/my-plugin-v1
+Move-Item -LiteralPath next/my-plugin -Destination incoming/my-plugin
+.\build.ps1
 ```
 
-start 前台运行，保留终端；另开工具目录终端执行 health（同 root/config）。打开 `/auth` 完成首次改密、普通账号授权，再访问应用。默认模型、密钥与官方控制台认证见前文。安装、监听、探针 200、真实问答是不同结果，须用新对话核实调用。
+Linux，在部署根执行：
+
+```sh
+mkdir -p backups
+test ! -e backups/my-plugin-v1 && mv incoming/my-plugin backups/my-plugin-v1
+test ! -e incoming/my-plugin && mv next/my-plugin incoming/my-plugin
+bash build.sh
+```
+
+每个命令失败后先修复，不继续执行后续步骤；不要删除原目录或数据来重试。build 在停服前显示新增、更新、保留和停用。移走仍启用的插件产物会拒绝，不等于卸载。停用配置型插件先设 enabled=false 并成功部署，再移走其产物；其他插件用 DSH_PLUGINS 显式列出保留集合。留空选集为全部发现项，[] 才是明确空集合。
+
+框架升级在同一站点 root 替换公开脚本、tools、framework-runtime.json、optional 资源和公开模板；incoming/.local 原样保留。optional/auth 更新不会自动替换 incoming 中正在部署的 auth。未完成操作沿用保存的原工具、镜像和输入，先按恢复流程处理。
+
+## 构建或部署失败如何处理？
+
+<!-- Excerpt from deploy/README.md#site-recovery; edit its source. -->
+归档、公共配置结构或认证提供者缺失在停服前报告。插件业务 Schema 可能在加载时才检查；健康通过仍需实际业务请求。保留 .local/data、.local/artifacts、incoming 和用户备份，不通过删除状态重新初始化。
+
+| 情况 | 在站点根执行 |
+| --- | --- |
+| 尚未 prepared 的准备失败 | 修复错误后 `bash build.sh` |
+| prepared 后临时网络、权限或挂载失败 | 原输入不变，`bash build.sh --resume` |
+| 同一插件包的业务配置错误 | 编辑指出的原文件，`bash build.sh --recover --data-compatible` |
+| 遗留站点发布锁 | `bash build.sh doctor` 查看归属，确认进程退出后 `bash build.sh unlock-source` |
+
+Windows 用 `.\build.ps1` 替代 bash build.sh。--resume、--recover、--rebuild-plugins 互斥；--data-compatible 只能随 recover。doctor 只读诊断锁和记录，不要求 Docker/kit，也不是完整的安装环境扫描。
+
+resume 使用保存的工具、镜像、归档和配置副本；原受管配置被修改时拒绝。prepared 前不为新站点创建 data/home，之后即使挂载预检尚未停服就失败，也通过 resume 沿用已记录归属。
+
+recover 只修正新 schema 3 失败操作的 plugin.json.config 或 runtimeConfig，保留包摘要、选集、认证控制字段、镜像、工具和站点路径。--data-compatible 是部署者确认当前包可继续读取现有数据，不是自动备份或兼容证明。新候选保留前序失败快照；再次临时失败用 resume，继续改业务配置则再显式 recover。
+
+需要换修复包、宿主或工具不属于这一高层快捷恢复；保留现场并由维护者核查底层高级修复与数据兼容流程，不自行删锁、改记录或删数据。旧 schema 2 使用其原环境与兼容恢复证据，不能伪造新快照。恢复只继续部署，不回滚业务数据；发布归档和配置副本不能代替独立数据备份。
+
+输入不合法时依错误修复；暂时网络和权限问题不等于包缺陷。业务加载失败也不一定是模型密钥错误，分别查服务 inject 声明、插件参数、授权和提供方错误。提问附版本、操作系统、Node/pnpm、目录角色、脱敏命令与错误、预期/实际结果，不发送完整 env、Cookie、token 或数据库。
 
 ## 配置在哪里？为什么装了 auth 还提示缺 provider？
 
-源码目录存代码；release 目录存 tgz/清单；DSH_HOME 存 profile、插件实例配置和数据；profile 是官方应用组合。明确 root 决定管理器相对路径，不能把它当 DSH_HOME。工具目录安装 manager，和上述目录均可不同。
+<!-- Excerpt from doc/framework-configuration.md#platform-defaults; edit its source. -->
+Windows 使用 build.ps1，Linux/macOS 使用 build.sh。已有配置不覆盖；手工复制公共模板不探测平台。源码公共模板的 DSH_IMAGE_PLATFORM=linux/amd64，source 新站点根据 Docker 引擎初始化架构；Windows/Linux UID/GID 默认 1000，macOS 非 root 用户使用当前 UID/GID。archives 只选发行信息实际提供的镜像架构，未提供的架构拒绝，不回退构建源码。
 
-标准实例设置在 `<home>/plugins/<id>/plugin.json`：`{"schemaVersion":1,"enabled":true,"accessMode":"authenticated","config":{}}`。accessMode 只用于 consumer，auth provider 不填写它。publicOrigin 在站点配置统一设置；业务参数放 config 并由应用 Schema 校验，业务凭据按作者 runtimeConfig 声明放独立 env.conf，不能把密钥塞入公开模板。管理器拒绝缺少必需配置文件；只有应用知道销售接口字段，所以字段缺失可能在插件加载时才报告。
+source 默认 auth/example；archives 默认发现完整 incoming；独立 CLI 使用显式清单，三者不能混用默认选集。新 archives 可编辑插件配置位于 .local/config/plugins/<id>，通过已有 instances 引用；旧记录及显式 settingsFile/runtimeConfig 原样沿用，不自动迁移 home/plugins。
 
-认证要求本次候选集有唯一且启用的 provider。已安装 auth 不等于本次选中 auth；组合必须带它，start 显式 --plugins all，实例 enabled=false 仍生效。缺 provider 会在安装前拒绝；运行时缺认证不会降级为匿名。需认证的插件默认 authenticated；standalone 需要显式修改实例配置并受控重启。
+Docker 只接受本机 Linux 引擎 unix/npipe endpoint。Docker Desktop 使用桥接与 TCP 转发，原生 Linux 使用 host 网络；同 Docker 网络是信任边界，不能据此承诺公网隔离。macOS 尚未完成真实 Docker 部署验收，架构与平台以具体发行验收范围为准。恢复时核对同一引擎，不能切换 endpoint 后沿用原记录。
 
-## 历史、授权和停用会怎样？
+每个实例保留 plugin.json 的 enabled/accessMode/config；业务凭据使用已声明 runtimeConfig，不加入公开归档。认证消费者默认 authenticated，本次候选必须有唯一启用 provider；过去装过 auth 不代表这次已选中。元数据不会保护作者自行注册的路由。停用保留数据，重新启用仍需存在于候选中。
 
-authenticated 模式按可信账号拥有历史；同账号不同登录共享个人历史。SQLite 只保存历史目录，消息正文由 DSH 会话日志持久化。standalone 是安装级共享历史，不能用于承诺每人私有。切换模式保留两套命名空间，不迁移、不合并；沿用同 home 才能继续原数据。退出/撤权取消该登录发起的活动回合，停止按钮断开 SSE 并取消模型工作。
+## 如何增加页面、Tool 或 Agent？
 
-停用在 plugin.json 设 enabled=false，使用原配置受控应用；数据不删除。非 Docker 的 start 运行时先 stop，修改配置后重新 start；Docker 用 apply-compose 受控重建。重新启用仍需清单包含该应用。停用 auth 而其他 consumer 仍要求认证会被拒绝。
+页面使用官方 WebServer；受保护接口从 kit 的 createAccess/createPluginHttp 获得可信 actor。工具按 kit 的 createPluginTools/guardTool 接入，并加入 Agent 白名单。完整签名先查 packages/plugin-kit/README.md 与实际导出，不猜接口。业务账号由可信请求上下文取得，不接受模型生成的 userId。
 
-## 第二个应用加入、升级与回退？
+## 如何复制完整 example？
 
-沿用上文 compose-release 命令，输出新的 releases/site-v2，增加 `--previous releases/site-v1/manifest.json`，并列出所有要保留应用的 --manifest。
+改包名、插件 ID、Bundle、权限、配置 entryId、页面路由、会话前缀/正则、提示词段名、知识和测试。独立包将 kit 改成版本化相对构建输入并内嵌，替换框架专用构建脚本和测试。config.systemPrompt 只是补充，不能只改它就把内置开发者知识变成其他业务；详见 doc/plugin-development.md。
 
---previous 只携带旧归档供旧 file: 依赖解析，不继承旧候选。未选入新清单的受管应用会停用，数据保留。改部署配置 manifest 指向 v2，沿用 home/plugin.json，stop 后 start --plugins all。确认原应用、新应用、普通账号、授权、配置都可用。保留旧发布目录和一致备份；业务数据库跨版本是否可回退由作者说明，不能直接删 pending 或清数据重试。
+## 历史、授权与模型恢复会怎样？
 
-## 常见失败先看什么？
+authenticated 历史按可信账号隔离；standalone 使用安装级共享身份，不能承诺个人私有。切换模式保留两个命名空间，不自动合并或迁移。撤权/退出取消该登录的活动回答。模型读取前仍需核对 owner，分支只读取分支点之前的官方事件。
 
-启动时出现 `fetch failed`，先核对宿主日志与实际运行的框架版本；当前监督进程按 60 秒窗口重试启动验证，超时保留未完成操作，使用原清单和配置加 `--resume` 恢复，不能删数据重试。实现见 `packages/plugin-manager/src/supervisor.mjs`、`deploy/README.md`。
+本人会话管理允许查找、预览与逐项归档，不直接删宿主日志；正文缺失或投影失败须明确报告。具体语义查 doc/conversation-management.md、kit/conversations 与公共应用实现。
 
-如果探针正常但新建对话失败，检查 `ctx.<服务名>` 是否在插件 `inject` 中声明；例如直接调用 `ctx.llm` 必须声明 `llm`。还需分别验证模型、工具和旧历史；不能仅凭 500 判断为密钥错误。作用域与宿主升级检查见 `doc/host-compatibility.md`。
+## 版本、CI 与源码查证
 
-| 现象 | 核实与处理 |
-| --- | --- |
-| 找不到 dsh-plugin-manager | 到安装 manager 的工具目录用 pnpm exec；先 --version/--help |
-| 根目录/锁文件错误 | 外部 root 必须是作者单包根，先在该根 install --ignore-workspace 并保存锁文件 |
-| 发布输出非空 | 用新版本目录；保留现用目录和恢复归档 |
-| 包含 workspace:/file:/link: 运行依赖 | 宿主做 peer，kit 做内嵌开发依赖，重新 pack |
-| 外部 development 不支持 | 用 release；需要 link/HMR 时用原内部开发路径 |
-| 应用入口匿名 303/401 | 登录 /auth；不是“安装失败” |
-| 根路径提示 dsh web authentication required | 官方控制台认证，读取当前私有认证地址；与 API 密钥分开处理 |
-| 登录后 403 | 管理员检查应用授权，重新登录；核对 origin/CSRF，不关闭防护 |
-| 探针 503 | 查缺 provider、插件启动错误和必需服务；不把匿名开放当修复 |
-| 探针成功但模型失败 | 同 home/default model/凭据与模型网络；探针不验证付费调用 |
-| 页面 404 | 核对 entryPath、routePrefix、Bundle 是否加载和实例 enabled |
-| 新应用未出现 | 完整候选清单、--plugins all、实例 enabled、运行模式与实际版本 |
-| 重启后历史变空 | 核对 home、账号、accessMode；不要先删除数据库 |
-| Windows、macOS 与 Linux 差异 | 见下节三平台入口与默认值；路径加引号，PowerShell 用 $env:NAME，Bash 用 export NAME |
-| 宿主升级不兼容 | 查应用交付版本和真实启动/历史验证，保留旧环境；不要只凭 npm 版本判断 |
+根 package.json 是公共框架唯一版本源，manager/kit/auth/example 同步，独立插件与官方宿主单独版本化。scripts/version.mjs 的 sync/check 同时负责固定公开片段和版本文档；不要手改生成 guide.md。Windows/macOS/Linux × Node 22/24 共六组检查，Release 另有 build/publish；数量以该提交实际工作流为准，不代表现场部署通过。
 
-提问时提供：manager/插件/官方 CLI 版本，操作系统与 Node/pnpm，已脱敏命令、执行目录角色、候选 ID、release/development、错误文本、期望与实际结果。不要提供完整 env.conf、Cookie、token、数据库或客户数据。助手没有读取你机器状态，不能声称检查过你的文件。
+源码证据先用 example_search_framework 搜完整路径，再用 example_read_framework 分页阅读实现和调用方，引用路径与行号。快照包含当前公共源码、文档和已登记模板，不收私有配置、业务数据、根私有 build 入口、宿主源码和 doc/releases/ 历史说明。构建时版本/来源校验失败不能截断索引。
 
-## Windows、macOS、Linux 怎样构建？默认值从哪里来？
+模型查 packages/plugin-kit/src/models.ts；源码部署查 deploy/，公共 CLI 查 packages/plugin-manager；版本和 CI 查 scripts/version.mjs 与 .github/workflows。宿主升级查 doc/host-compatibility.md，Session V3 与旧反馈迁移查对应迁移模块。快照中没有的环境和接口明确说未知，不声称已检查用户文件。
 
-Windows PowerShell 用根 `.\build.ps1`，无需 Bash；macOS/Linux 用根 `./build.sh`。共用 Node 流程，需提前准备 Node.js（含 npm）、Git、tar、本机 Linux Docker Compose；首次安装框架锁定依赖，不安装系统软件、不更新宿主子模块。`--help` 无需工作区依赖，`--resume` 沿用原归档与输入，不重装框架源码工作区依赖；缺失时须恢复原工作区，容器部署依赖仍按环境变化恢复。普通构建失败可重试；强杀遗留源码锁须确认主机、PID及子进程退出后处理。
+## 更多离线与验证资料
 
-公开默认值：URL `http://127.0.0.1:7902`、端口 7902、profile web、插件 auth/example、mode release、数据 `.local/data`、产物 `.local/artifacts`、容器 UID/GID 1000、`DSH_IMAGE_PLATFORM=linux/amd64`。origin/home/workspace 等可派生；密钥和生成的镜像/manifest 留空。独立 manager 显式选择 env/JSON，选集留空沿用清单。
+当前包的源码检索与 FAQ 页面用途不同，FAQ 不需要先调用模型。只有两个公共源码阅读工具，没有任意命令、服务器文件读取或私有业务查询能力。
 
-首次自动生成私有 `.local/env.conf` 写入实际默认值：镜像架构按 Docker 引擎选 amd64/arm64，macOS 非 root 用户采用当前 UID/GID，Windows/Linux 为 1000。已有配置不覆盖，旧 JSON 导入保留原路径；手工复制公共模板不探测平台，须自行核对 UID/GID、架构和已填 URL。
+根 test-report.sh 验证最终 auth/example 归档、真实宿主及本地模型替身；不代表真实提供方或生产业务已通过。完整记录见 packages/plugin-manager/VERIFICATION.md。其他插件独立测试，重打包不能沿用旧包验证结果。
 
-只支持本机 unix/npipe Docker endpoint 和 Linux 容器。Windows/macOS及 Linux Desktop 用桥接；DSH 保持 `127.0.0.1`，容器桥接地址通过 TCP 转发至它，宿主只向 `127.0.0.1` 发布端口。同 Docker 网络是信任边界，不宣称公网隔离。原生 Linux 用 host 网络。macOS 尚未完成真实 Docker 部署验收；健康、知识检索或模型替身通过不等于真实模型问答通过。具体值和实现可检索 `env.conf`、`deploy/scripts/site.mjs`、`packages/plugin-manager/src/apply-compose.mjs`。
-
-## 框架版本和 GitHub 检查由谁决定？
-
-根 `package.json` 的 `version` 是唯一版本源，manager、kit、auth、example 同步发布；定制插件自行版本化，宿主版本独立记录，不随框架同步。JSON 保留实际版本值，不写变量。发版时在框架根运行 `node scripts/version.mjs set <版本>` 同步四个包及登记模板；模板用版本占位符（FRAMEWORK_VERSION，左右各两个花括号），`sync` 生成 Markdown，`check` 只校验。GitHub 不渲染 Markdown 变量。源码见 `scripts/version.mjs`，规则见 `doc/versioning.md`。
-
-`.github/workflows/check.yml` 配置 Windows、macOS、Ubuntu × Node 22/24 共六组检查，验证公共工作区构建、类型、测试和独立安装包验证，防止“只在作者仓库能用”。归档类型检查会验证公开声明需要的依赖；kit 子路径让仅用模型接口的作者不必安装工具类型依赖。另有 `.github/workflows/release.yml` 的 build/publish 两个发布任务；同一提交也触发发布流程时可显示八项，不代表多了两个操作系统。数量以该提交实际触发的工作流为准，检查通过不等于生产或真实模型验收。
-
-## 源码问题怎样查证？
-
-先用 `example_search_framework` 搜索完整路径，再用 `example_read_framework` 分页读取实现和调用方，引用仓库相对路径与行号：
-
-模型查 kit/auth 的 models，会话查 kit/conversations 和 doc/conversation-management.md，部署查 deploy/scripts，版本查 scripts/version.mjs，CI 查 .github/workflows，知识索引查 example 的 build-reference.mjs 与 src/framework.ts。
-
-快照只收公共源码、当前文档和版本脚本登记的 Markdown 模板；不收历史 `doc/releases/`、真实配置、私有插件或宿主源码。根 `build.sh/build.ps1` 可能在集成库被替换，不收录它们；公共部署流程查 `deploy/`，私有入口行为不能据此推断。索引函数校验版本与模板同步，失败不覆盖已有索引；插件 build 的前序清理仍会删除旧 dist。安装新 example 归档后使用其随包知识；在线 main 与生产可能不同，源码证据不证明部署已执行。
-
-新增或修改的公开文件在下次构建时重新收录。读取请求超过 100 行会按 100 行分页，用 `nextLine` 继续；不扩大文件访问范围。宿主升级、Session V3、旧反馈及快照恢复查 `doc/host-compatibility.md`、`scripts/stage-legacy-feedback.mjs` 和 `packages/plugin-manager/src/session-snapshot.mjs`。历史栏复用查 `plugins/dsh-example/web/conversation-history.js` 与聊天风格指南；桌面左栏、手机抽屉共用查询与操作，退出或撤权需销毁历史栏并关闭残留窗口。私有插件的接入效果须另行验证。
-
-## 来源与进一步阅读
-
-根 `bash test-report.sh --cli <已构建官方CLI>` 验证 auth/example 归档、真实宿主和本地模型替身，不读取站点配置或部署。交付 `.local/artifacts/test-report-*/delivery/`；重打包不继承报告，其他插件另测。详见 `packages/plugin-manager/VERIFICATION.md`。
-
-在线 main 可能领先，交付以随包 README 和知识摘要为准。
-
-- [文档导航](https://github.com/PelyDeng/dsh-plugin-manager/blob/main/doc/README.md)
-- [可复制 AI 提示词](prompts.md)
+- [固定版本作者指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.0/doc/plugin-development.md)
+- [固定版本部署指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.0/doc/first-deployment.md)
+- [可复制开发提示词](prompts.md)

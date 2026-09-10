@@ -2,7 +2,7 @@
 
 # @dsh-plugin-manager/plugin-kit
 
-可选的 DSH 插件接入库，通过宿主 Cordis 事件通信，不启动服务。使用 kit 的插件在构建时把它打入自己的安装包。独立作者可将维护者提供的版本化 tgz 安装为开发依赖，例如 `pnpm add --ignore-workspace --save-dev /path/to/plugin-kit-0.15.2.tgz`，再通过构建器内嵌。包名不表示版本已发布到公共 registry。
+可选的 DSH 插件接入库，通过宿主 Cordis 事件通信，不启动服务。使用 kit 的插件在构建时把它打入自己的安装包。独立作者可将维护者提供的版本化 tgz 安装为开发依赖，例如 `pnpm add --ignore-workspace --save-dev /path/to/plugin-kit-0.16.0.tgz`，再通过构建器内嵌。包名不表示版本已发布到公共 registry。
 
 | 导出 | 用途 |
 | --- | --- |

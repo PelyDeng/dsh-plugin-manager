@@ -2,9 +2,9 @@
 
 这是基于 DeepSeek Harness 的 AI 应用开发与部署框架。个人开发者和小团队可以在自己的仓库开发各类插件，通过管理器 CLI 和部署流程统一打包、安装、更新与管理，供自己使用或交付给他人。
 
-本页演示启用可选认证后的登录与问答流程：管理员管理账号、应用访问权限、新会话默认模型及 DeepSeek/智谱密钥，普通用户进入已授权的应用。插件开发和安装更新分别见[作者指南](plugin-development.md)与[发布物交付指南](../packages/plugin-manager/DELIVERY.md)。
+本页演示启用可选认证后的登录与问答流程：管理员管理账号、应用访问权限、新会话默认模型及 DeepSeek/智谱密钥，普通用户进入已授权的应用。插件开发和安装更新分别见[作者指南](plugin-development.md)与[产物部署指南](first-deployment.md)。
 
-[开始 Docker 部署](first-deployment.md) · [English introduction](../README.en.md) · [完整 CLI 体验](getting-started.md) · [FAQ](FAQ.md)
+[开始 Docker 部署](first-deployment.md) · [English introduction](../README.en.md) · [登录与问答体验](getting-started.md) · [FAQ](FAQ.md)
 
 ## 1. 登录独立的应用门户
 
@@ -24,7 +24,7 @@
 
 管理员打开“模型设置”，上方用卡片列出官方模型，包含服务商、模型名和模型 ID。点击卡片右上角单选项自动保存新会话默认模型；已选卡片显示“对话默认”。卡片按可用宽度排列，手机单列。保存无需重启，仅影响新会话；已有对话和分支沿用官方记录中的模型选择。
 
-展开下方“服务商 API 密钥”，在 DeepSeek 或智谱 GLM 卡片中管理对应密钥；每张卡片都有自己的状态、刷新和保存按钮。私有 env 中相应密钥非空时该密钥只读，需修改文件并受控重启；留空且无其他环境覆盖时可在网页保存，官方存储更新默认无需重启；页面只显示状态和 SHA-256 指纹，不返回原密钥。指纹用于比较是否更换，不是可还原的加密密钥。
+展开下方“服务商 API 密钥”，在 DeepSeek 或智谱 GLM 卡片中管理对应密钥；每张卡片都有自己的状态、刷新和保存按钮。页面只显示状态和指纹，不返回原密钥；出现只读提示时按[凭据归属规则](framework-configuration.md#密钥由谁管理)处理。
 
 “已配置”表示凭据存在，不代表余额、网络、提供方授权或实际模型调用已经通过。选择默认模型同样不执行付费验证。其他提供方的凭据和路由仍在官方设置或 patch 中管理。服务器也可通过[交互式脚本](first-deployment.md#首次登录与模型密钥)录入；脚本和网页复用同一凭据操作。
 
@@ -38,5 +38,5 @@
 
 - 运行站点：[首次部署及恢复](first-deployment.md)。
 - 写自己的插件：[最小独立 Bundle](../examples/standalone-plugin/README.md)，或[统一身份示例](../examples/standalone-kit/README.md)。
-- 交付现有应用：[部署已打包的应用](../packages/plugin-manager/DELIVERY.md)。
+- 交付现有应用：[部署已打包的应用](first-deployment.md)。
 - 反馈问题：提供版本、复现步骤和脱敏报错，提交到 [Issues](https://github.com/PelyDeng/dsh-plugin-manager/issues)。

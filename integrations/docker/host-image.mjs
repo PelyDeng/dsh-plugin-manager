@@ -7,11 +7,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { inspectHostSource } from './host-source.mjs';
 import { tarCommand } from '../../packages/plugin-manager/src/state.mjs';
-import { imageDefaults, readFrameworkConfig } from '../../packages/plugin-manager/src/framework-config.mjs';
+import { imageDefaults, readFrameworkConfig, validateImageConfig } from '../../packages/plugin-manager/src/framework-config.mjs';
 import { ensurePrivateDirectory } from '../../packages/plugin-manager/src/private-files.mjs';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-export const managerInputs = ['integrations/docker', 'packages/plugin-kit', 'packages/plugin-manager', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'];
+export const managerInputs = ['integrations/docker', 'packages/plugin-kit', 'packages/plugin-manager', 'scripts/manager-tooling.mjs', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml'];
 const defaults = imageDefaults;
 
 /** Parse literal configuration without executing shell code or implicitly opening credentials. */
@@ -19,24 +19,7 @@ export function loadImageConfig(root, filename) {
   return validateImageConfig(filename ? readFrameworkConfig(resolve(root, filename)).image : defaults);
 }
 
-/** Validate already-read unified inputs without opening a second configuration source. */
-export function validateImageConfig(config) {
-  if (!config || typeof config !== 'object' || Array.isArray(config) || Object.keys(config).some(key => !Object.hasOwn(defaults, key))) throw new Error('Unknown host image configuration field.');
-  config = { ...defaults, ...config };
-  for (const key of ['HARBOR_ENABLED', 'ALLOW_UPSTREAM']) if (!['true', 'false'].includes(config[key])) throw new Error(`${key} must be true or false.`);
-  if (!/^[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*$/u.test(config.IMAGE_NAME)) throw new Error('IMAGE_NAME must be a lowercase image repository name without a registry, project, or tag.');
-  if (!/^linux\/(amd64|arm64)$/u.test(config.DSH_IMAGE_PLATFORM)) throw new Error('DSH_IMAGE_PLATFORM must be linux/amd64 or linux/arm64.');
-  if (!/^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/u.test(config.DSH_SOURCE_BASE_IMAGE)) throw new Error('Invalid DSH_SOURCE_BASE_IMAGE reference.');
-  let mirror;
-  try { mirror = new URL(config.DSH_DEBIAN_MIRROR); } catch { throw new Error('Invalid Debian mirror URL.'); }
-  if (!['http:', 'https:'].includes(mirror.protocol) || mirror.username || mirror.password || /[|\s]/u.test(config.DSH_DEBIAN_MIRROR)) throw new Error('Invalid Debian mirror URL.');
-  if (config.HARBOR_ENABLED === 'true' || config.REGISTRY_USERNAME || config.REGISTRY_PASSWORD) {
-    if (!/^[A-Za-z0-9.-]+(?::[0-9]+)?$/u.test(config.REGISTRY_HOST)) throw new Error('REGISTRY_HOST must be a host with an optional port.');
-    for (const key of ['BASE_PROJECT', 'APP_PROJECT']) if (!/^[a-z0-9][a-z0-9._-]*$/u.test(config[key])) throw new Error(`Invalid ${key}.`);
-    if (Boolean(config.REGISTRY_USERNAME) !== Boolean(config.REGISTRY_PASSWORD)) throw new Error('Supply both registry credentials or neither for anonymous access.');
-  }
-  return config;
-}
+export { validateImageConfig };
 
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const readJson = path => JSON.parse(readFileSync(path, 'utf8'));

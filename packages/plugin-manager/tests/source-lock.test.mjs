@@ -12,7 +12,7 @@ function fixture(t) {
   t.after(() => { assert.equal(dirname(root), realpathSync.native(tmpdir())); rmSync(root, { recursive: true, force: true }); });
   const put = (path, value) => { path = resolve(root, path); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value)); };
   const lock = resolve(root, '.local/source-release.node.lock');
-  const record = status => put('.local/source-release.json', { operation: resolve(root, '.local/artifacts/retained'), status });
+  const record = status => { mkdirSync(resolve(root, '.local/artifacts/retained'), { recursive: true }); put('.local/source-release.json', { operation: resolve(root, '.local/artifacts/retained'), status }); };
   return { root, put, lock, record };
 }
 

@@ -2,7 +2,7 @@
 
 # 版本管理
 
-公共框架当前版本为 **0.15.2**。根 `package.json` 的 `version` 是唯一版本源，manager、kit、auth、example 使用同一版本，作为一个单元构建、验证和发布。组件的 `package.json`、构建产物和文档中的当前版本都从根版本同步。
+公共框架当前版本为 **0.16.0**。根 `package.json` 的 `version` 是唯一版本源，manager、kit、auth、example 使用同一版本，作为一个单元构建、验证和发布。组件的 `package.json`、构建产物和文档中的当前版本都从根版本同步。
 
 定制插件、独立作者项目和官方 `deepseek-harness` 宿主不属于这个统一发布单元，保留各自的版本及兼容性要求。统一版本不代表第三方插件或任意宿主自动兼容，也不表示远程站点已经升级。
 
@@ -14,7 +14,7 @@
 
 ```sh
 # 设置框架版本，同时同步公共组件与文档；下一次发布替换为目标版本
-node scripts/version.mjs set 0.15.2
+node scripts/version.mjs set 0.16.0
 
 # 根版本已正确时，重新生成公共组件版本字段和文档
 node scripts/version.mjs sync
@@ -32,3 +32,12 @@ node scripts/version.mjs check
 历史发布说明中的版本、某项功能首次提供的版本，以及 Node.js、pnpm、宿主和协议版本均保留原值，不替换为框架变量。没有当前版本数字的文档直接编辑 `.md`。
 
 CI 只运行同步检查，发现差异时由维护者在本地运行 `sync` 并提交。发布标签使用 `v` 加根框架版本；发布步骤与附件核验见[发布说明](../.github/RELEASING.md)。
+
+
+## 固定文档片段与离线输出
+
+scripts/version.mjs 的 documentationFragments 列出允许复用的公开正文源。源文件用固定 excerpt 标记界定完整片段；已有模板以固定 include 标记引用。只允许这份白名单，不支持任意路径、嵌套引用或运行时联网。
+
+sync 在内存中读取并校验全部片段，再按同一框架版本一次渲染所有输出；缺失/重复片段、未知引用或未知变量先报错，不写半套结果。check 只核对，不修改。example build 只消费同步后的 guide.md 并生成独立源码检索快照，不再次写指南。
+
+deploy/DEPLOYMENT.md 和 STARTERS.md 是发行归档 README 的同步输出；两个独立示例与 example FAQ 同样保留离线可读正文。只有一个生成入口；编辑时修改片段的正文源或消费模板，不手改生成页。无模型阅读入口和鉴权不能因去重移除。

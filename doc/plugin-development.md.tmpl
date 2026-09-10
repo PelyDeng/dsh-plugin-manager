@@ -1,81 +1,75 @@
 # 插件作者接入
 
-本框架支持独立 pnpm 单包与内部 `plugins/*` 批量开发。选择一种开发方式即可，无需先运行内置问答应用，也无需修改 DSH 本体。
+作者在自己的仓库开发和打包，部署者只取得标准发布目录。先选适合自己的入口：
 
-[项目首页](../README.md) · [文档导航](README.md) · [CLI 参数](../packages/plugin-manager/README.md) · [部署者指南](../packages/plugin-manager/DELIVERY.md)
+| 项目情况 | 做法 |
+| --- | --- |
+| 新建 DSH 插件 | 从本页起步包开始，先用原名跑通，再改业务 |
+| 已有 Node 项目 | 调整为官方 Cordis 插件入口，提供 Bundle 和构建产物；不是只添加几个字段就能运行 |
+| 非 Node 服务 | 服务继续独立部署，由一个 DSH 插件调用接口；框架不接管 Java/其他进程 |
 
-## 本页导航
-
-- [独立仓库开发](#独立仓库开发)
-- [内部工作区开发](#内部工作区开发)
-- [复制完整问答应用到独立仓库](#复制完整问答应用到独立仓库)
-- [交付内容](#交付内容)
+直接打包支持独立 pnpm 单包。npm/yarn/monorepo 不承诺同样的一步流程；部署端只认合规发布物，不扫描作者源码。[部署者指南](first-deployment.md)与[配置规范](plugin-configuration.md)分别说明运行和声明。
 
 ## 独立仓库开发
 
 ### 1. 取得并安装工具
 
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 `tar`。准备一个作者仓库之外的工具目录，例如 `dsh-tools`。取得维护者交付的 manager {{FRAMEWORK_VERSION}} tgz；需要统一身份时再取得 kit {{FRAMEWORK_VERSION}} tgz，按交付 SHA-256 核对文件。已公开归档见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)，目标版本没有附件时按下方源码步骤构建，不假定 npm 已发布。以下命令安装本地归档。
+<!-- excerpt:author-tools -->
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-{{FRAMEWORK_VERSION}}.zip`、`plugin-manager-{{FRAMEWORK_VERSION}}.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-{{FRAMEWORK_VERSION}}.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
 
-在工具目录执行，把占位路径替换成实际文件的绝对路径：
+起步 zip 内有 standalone-plugin、standalone-kit；选一个目录复制为自己的作者项目，不复制 node_modules、dist 或 .local。在作者项目以外创建独立工具目录 dsh-tools，在该工具目录安装实际 manager 归档：
 
 ```sh
-pnpm add --ignore-workspace "/absolute/path/plugin-manager-{{FRAMEWORK_VERSION}}.tgz"
+pnpm init
+pnpm add --ignore-workspace /absolute/path/plugin-manager-{{FRAMEWORK_VERSION}}.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
-**预期**：输出 manager {{FRAMEWORK_VERSION}}。保存工具目录的锁文件；后续 `pnpm exec dsh-plugin-manager` 均在这个目录运行，通过 `--root` 指明作者仓库。尚无工具包时，可按[从源码准备工具](getting-started.md#1-准备工具和目录)中的工具 build/pack 步骤取得 tgz；仅打包插件不需要安装官方 CLI 或启动示例。
+将占位路径替换为实际绝对路径，含空格时加引号。以后 pnpm exec dsh-plugin-manager 都在这个工具目录执行，--root 明确指向作者项目。manager 不加入业务运行依赖；工具目录和作者项目各自保存锁文件。
+<!-- /excerpt:author-tools -->
 
-### 2. 选择示例，建立自己的仓库
+附件见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)。已有框架源码的维护者可按[准备工具](getting-started.md#1-准备工具和目录)构建工具；普通作者不用克隆框架。
 
-将选定目录的内容复制到新的作者包根，放在框架 workspace 之外。不要复制 node_modules、dist 或 .local。
+### 2. 先按原名跑通
 
-| 示例 | 验证能力 |
-| --- | --- |
-| [standalone-plugin](../examples/standalone-plugin/README.md) | 不依赖 kit，官方 Bundle 与受管 release 均可加载 |
-| [standalone-kit](../examples/standalone-kit/README.md) | 在独立项目中使用 kit tgz，复用登录及应用授权，返回当前账号身份 |
-
-无 kit 的示例，在作者根执行：
+Release 起步包的两个示例都在作者根执行 `pnpm install --ignore-workspace`。仅从仓库单独复制 standalone-kit 时，先把对应 kit tgz 保存为自己项目的 vendor/plugin-kit.tgz，再在作者根执行：
 
 ```sh
-pnpm install --ignore-workspace
+pnpm add --ignore-workspace --save-dev ./vendor/plugin-kit.tgz
 ```
 
-统一身份示例，在作者根执行以下命令安装实际 kit 归档，同时生成锁文件：
+vendor 是作者选择保存的公开构建输入，不能放真实配置；保留该归档和作者 pnpm-lock.yaml 以便再次构建。kit 内嵌到产物，运行包不能留下作者本地 file/link/workspace 路径。官方宿主实现仍由运行环境提供。
+
+### 3. 构建、检查并交付
+
+<!-- excerpt:author-pack -->
+在工具目录执行，将作者项目换成实际绝对路径：
 
 ```sh
-pnpm add --ignore-workspace --save-dev "/absolute/path/plugin-kit-{{FRAMEWORK_VERSION}}.tgz"
+pnpm exec dsh-plugin-manager list --root /absolute/path/my-plugin --package .
+pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --output .local/artifacts/release/v1
 ```
 
-**预期**：作者根生成自己的 pnpm-lock.yaml，应随源码保存。kit 是构建依赖并内嵌到应用；作者构建需能取得该 tgz，release 运行端不需要它的原始路径。希望从完整聊天应用开始时，见[完整问答应用复制步骤](#复制完整问答应用到独立仓库)。
+list 只读声明，不要求锁文件；pack 要求作者根的 pnpm-lock.yaml，冻结安装后各执行一次 build/check，再校验并打包，无需事先重复 check。输出必须是新目录或空目录，路径相对作者 root；再次发布用新目录 v2。日常可独立运行 check，它会先 build，完整业务测试另行运行。
 
-### 3. 填写声明，实现业务
+交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。
+<!-- /excerpt:author-pack -->
 
-修改包名、插件 ID、Bundle 与路由，保持相互一致；声明和配置字段见[配置规范](plugin-configuration.md)。在工具目录验证能发现自己的单包：
+按[首次部署](first-deployment.md)用真实请求跑通。无 kit 示例请求 `/independent-example/ready`；鉴权示例需 optional/auth、登录与授权后请求 `/independent-access-example/identity`。有了第一次成功后再改名称和业务。
 
-```sh
-pnpm exec dsh-plugin-manager list --root "/absolute/path/my-plugin" --package .
-```
+### 4. 改名与实现业务
 
-**预期**：只列出指定包的插件声明，不依赖框架内部名单。`--package .` 相对于 `--root`；list 不要求锁文件，后续 pack 要求作者根存在锁文件并冻结安装。
+| 修改项 | 位置 | 需要一致的关系 |
+| --- | --- | --- |
+| npm 包名与作者版本 | package.json | 归档身份；独立于框架版本 |
+| 插件 ID | deepseekPlugin.id、src 导出的 name/注册 ID | 用于部署选集和配置目录，不能与已有插件重复 |
+| Bundle 插件名和 entry ID | cordis.patch.yml | 导入实际 npm 包；configuration.entryId 指向可配置条目 |
+| 页面与探针路由 | src、entryPath/healthPath | 声明对应真实地址，不要求它们都与包名相同 |
+| 权限 | permissions、注册信息、访问检查 | 使用同一应用权限；声明本身不保护路由 |
 
-build/check 由作者声明，完成产物构建和不可缺少的启动检查；完整业务测试保留独立 test。需要统一身份时显式接入 kit 的受保护接口，业务数据范围由应用检查。业务配置错误应标明应用 ID 与字段名，不能输出凭据。不要复制框架登录、密码或部署实现。
+最低声明为 package.json 的 name/version/main/files、dsh.bundle.patch、deepseekPlugin schemaVersion=3/id、scripts.build/check 和包内 README。完整字段只在[配置规范](plugin-configuration.md)维护。需要业务参数时用 config 或声明 runtimeConfig；缺项错误包含插件 ID 与字段名，不输出凭据。不要复制框架登录、密码或部署实现。
 
-### 4. 构建、检查并交付
-
-在工具目录执行，将作者根替换成实际绝对路径：
-
-```sh
-pnpm exec dsh-plugin-manager pack --root "/absolute/path/my-plugin" --package . --output .local/artifacts/release/v1
-```
-
-**预期**：在作者根的 `.local/artifacts/release/v1` 生成 manifest.json 和摘要命名 tgz。pack 已依次执行安装、build、check 和打包，无需先重复 build/check。输出目录必须使用新目录或空目录；失败时按对应任务错误修复，若已留下产物则换一个新输出目录重试。
-
-日常开发可单独执行 `pnpm exec dsh-plugin-manager check --root "/absolute/path/my-plugin" --package .`；完整业务测试在作者根按自己的 test 脚本运行，不塞进每次打包的启动检查。
-
-将整个发布目录交给部署者，不能只交 manifest.json。部署者按[交付指南](../packages/plugin-manager/DELIVERY.md)组合与启动；统一身份示例需要把认证 provider 一起选入候选清单，并配置 publicOrigin。两应用的完整演练见[进阶手册](getting-started.md#进阶加入第二个应用)。
-
-当前外部入口仅支持 pnpm 单包及 release；不支持外部 workspace 自动发现或 development/link/HMR。
+后续开发循环：改代码并运行业务测试 → pack 到新的发布目录 → 整体替换 incoming 对应目录 → build → 再请求验证。多个应用保留完整选集，更新与配置错误恢复见部署指南。当前不提供外部 development/link/HMR。
 
 ## 内部工作区开发
 
@@ -134,4 +128,4 @@ pnpm list:plugins
 
 使用说明应提供就绪地址、普通账号操作步骤和所需授权。销售接口、数据范围、Agent 工具和图表属于应用代码，kit 的可信身份不能替代业务数据授权。
 
-交付后的组合、配置、启动和更新统一参考[部署者指南](../packages/plugin-manager/DELIVERY.md)。
+交付后的配置、启动和更新参考[产物部署指南](first-deployment.md)；需要自行组合清单或直接管理宿主时使用[手工 CLI 指南](../packages/plugin-manager/DELIVERY.md)。

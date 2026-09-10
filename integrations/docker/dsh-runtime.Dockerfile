@@ -57,12 +57,8 @@ RUN relative_allow='@deepseek-ai/dsh-subprocess-local@file:packages/subprocess/s
 FROM ${TOOLCHAIN_IMAGE} AS manager-builder
 WORKDIR /app/plugin-manager
 COPY --from=manager-source / /app/plugin-manager/
-# Isolated filtered installation excludes downstream plugin-only file dependencies.
-RUN pnpm --config.node-linker=isolated --config.dedupe-peer-dependents=false \
-        --filter dsh-plugin-manager-workspace --filter @dsh-plugin-manager/plugin-manager... install --frozen-lockfile \
-    && pnpm --config.node-linker=isolated --config.dedupe-peer-dependents=false --filter @dsh-plugin-manager/plugin-kit build \
-    && pnpm --config.node-linker=isolated --config.dedupe-peer-dependents=false --filter @dsh-plugin-manager/plugin-manager build \
-    && pnpm --config.node-linker=isolated --config.dedupe-peer-dependents=false --filter @dsh-plugin-manager/plugin-manager pack --out /tmp/plugin-manager.tgz
+# Local source deployments and this isolated builder share the same preparation.
+RUN node scripts/manager-tooling.mjs --root /app/plugin-manager --archive /tmp/plugin-manager.tgz
 
 FROM ${BASE_IMAGE} AS dsh-runtime
 

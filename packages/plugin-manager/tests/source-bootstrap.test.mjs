@@ -1,7 +1,7 @@
 /** Exercise the real source worker from a complete Git archive without workspace dependencies. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, delimiter, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -11,6 +11,47 @@ import { tarCommand } from '../src/state.mjs';
 import { normalizeEnvironment } from '../src/process.mjs';
 
 const repository = fileURLToPath(new URL('../../../', import.meta.url));
+
+test('invalid site configuration fails before preflight or private source updates', async t => {
+  const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'site-config-preflight-')));
+  t.after(() => { assert.equal(dirname(root), realpathSync.native(tmpdir())); rmSync(root, { recursive: true, force: true }); });
+  for (const [config, expected] of [[{ mode: 'development' }, /release 模式/], ['DSH_PLUGIN_SOURCE=source\nDSH_MODE=development\n', /release 模式/], [{ manifest: 'other.json' }, /manifest.*generated/], [{ hostImage: 'runtime:latest' }, /immutable registry digest/]]) {
+    const path = resolve(root, typeof config === 'string' ? 'site.conf' : 'site.json');
+    writeFileSync(path, typeof config === 'string' ? config : JSON.stringify({ pluginSource: 'source', ...config }));
+    const calls = [];
+    await assert.rejects(sourceRelease({ root, args: ['--config', path],
+      preflight: () => { calls.push('preflight'); return { env: process.env }; },
+      beforeBuild: () => { calls.push('beforeBuild'); throw new Error('private source update reached'); } }), expected);
+    assert.deepEqual(calls, []);
+    assert.equal(existsSync(resolve(root, '.local')), false);
+  }
+});
+
+test('unfinished archive deployment prevents a new source build before its private update', async t => {
+  const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'unfinished-before-update-')));
+  t.after(() => { assert.equal(dirname(root), realpathSync.native(tmpdir())); rmSync(root, { recursive: true, force: true }); });
+  const operation = resolve(root, '.local/artifacts/retained'); mkdirSync(operation, { recursive: true });
+  writeFileSync(resolve(root, 'site.json'), JSON.stringify({ pluginSource: 'source' }));
+  writeFileSync(resolve(operation, 'result.json'), JSON.stringify({ schemaVersion: 3, operation, inputKind: 'archives', status: 'deployment-failed' }));
+  writeFileSync(resolve(root, '.local/source-release.json'), JSON.stringify({ operation, status: 'deployment-failed' }));
+  const calls = [];
+  await assert.rejects(sourceRelease({ root, args: ['--config', 'site.json'],
+    preflight: () => { calls.push('preflight'); return { env: process.env }; },
+    beforeBuild: () => { calls.push('beforeBuild'); throw new Error('private source update reached'); } }), /unfinished.*--resume/);
+  assert.deepEqual(calls, []);
+  assert.equal(existsSync(resolve(root, '.local/source-release.node.lock')), false);
+});
+
+test('site coordinator help and doctor load without installed workspace packages', t => {
+  const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'coordinator-no-dependencies-')));
+  t.after(() => { assert.equal(dirname(root), realpathSync.native(tmpdir())); rmSync(root, { recursive: true, force: true }); });
+  cpSync(resolve(repository, 'packages/plugin-manager/src'), resolve(root, 'src'), { recursive: true });
+  for (const action of ['--help', 'doctor']) {
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', `import { sourceRelease } from './src/site-coordinator.mjs'; process.exitCode = await sourceRelease({ root: process.cwd(), args: [${JSON.stringify(action)}] });`], { cwd: root, encoding: 'utf8', windowsHide: true });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(resolve(root, '.local')), false);
+  }
+});
 
 test('selective fresh worker rejects workspace install hooks before the first dependency install', async t => {
   const f = snapshot(t), path = resolve(f.root, 'plugins/dsh-example/package.json');
@@ -96,15 +137,15 @@ test('source deployment rejects unsynchronized framework versions before install
 test('fresh workers reject malformed arguments, dirty source and pending recovery before installing', async t => {
   const f = snapshot(t);
   const invalid = spawnSync(process.execPath, ['deploy/scripts/build.mjs', '--unknown'], { cwd: f.root, env: f.env, encoding: 'utf8', windowsHide: true });
-  assert.equal(invalid.status, 1); assert.match(invalid.stderr, /Unknown or duplicate argument/); assert.doesNotMatch(invalid.stderr, /ERR_MODULE_NOT_FOUND/);
+  assert.equal(invalid.status, 1); assert.match(invalid.stderr, /Unknown .* argument/); assert.doesNotMatch(invalid.stderr, /ERR_MODULE_NOT_FOUND/);
   appendFileSync(resolve(f.root, 'README.md'), '\nDirty fixture\n');
   assert.equal(await sourceRelease({ root: f.root, preflight: f.preflight }), 1);
   assert.equal(existsSync(f.marker), false);
   command('git', ['add', 'README.md'], f.root); f.commit();
   const pointer = resolve(f.root, '.local/source-release.json'), original = JSON.stringify({ status: 'prepared', operation: 'preserved-operation' });
   writeFileSync(pointer, original);
-  assert.equal(await sourceRelease({ root: f.root, preflight: f.preflight }), 1);
-  assert.equal(await sourceRelease({ root: f.root, args: ['--resume'], preflight: f.preflight }), 1);
+  await assert.rejects(sourceRelease({ root: f.root, preflight: f.preflight }), /发布记录无效/);
+  await assert.rejects(sourceRelease({ root: f.root, args: ['--resume'], preflight: f.preflight }), /发布记录无效/);
   assert.equal(readFileSync(pointer, 'utf8'), original);
   assert.equal(existsSync(f.marker), false); assert.equal(existsSync(resolve(f.root, '.local/source-release.node.lock')), false);
   f.absent();

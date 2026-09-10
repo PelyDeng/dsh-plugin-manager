@@ -1,16 +1,36 @@
-# 独立鉴权接入示例
+# 独立鉴权起步插件
 
-复制到自己的仓库，取得维护者提供的 plugin-kit {{FRAMEWORK_VERSION}} tgz 与 plugin-manager {{FRAMEWORK_VERSION}}。该目录故意不引用未发布的 registry 包；先把实际 kit 归档加入开发依赖，生成自己的锁文件：
+先按原名跑通登录与身份请求，再修改业务。此例复用 kit 返回可信账号标识，不提供聊天或业务数据库。读取业务数据时仍须以该身份检查数据归属，不接受浏览器或模型自行声明的 userId。
+
+## 准备工具与 kit
+
+<!-- include:author-tools -->
+
+Release 起步包已带同版 vendor/plugin-kit.tgz 和相对开发依赖，在本作者目录执行 `pnpm install --ignore-workspace`。仅单独复制仓库示例时，从 Release 取得 `plugin-kit-{{FRAMEWORK_VERSION}}.tgz` 并保存为 vendor/plugin-kit.tgz，再执行：
 
 ```sh
-pnpm add --ignore-workspace --save-dev <kit-tgz绝对路径>
-dsh-plugin-manager pack --root <本包绝对路径> --package . --output .local/release
+pnpm add --ignore-workspace --save-dev ./vendor/plugin-kit.tgz
 ```
 
-kit 内嵌到 dist，作者机器上的 kit tgz 不进入运行依赖。示例端点 `/independent-access-example/identity` 只返回已鉴权的账号标识，不提供聊天或业务数据库。新增数据查询时必须用该身份检查数据归属；不要接受模型或浏览器自行声明的用户身份。
+保存 vendor 中公开的 kit 构建归档与作者 pnpm-lock.yaml。kit 内嵌到 dist，最终运行依赖不保留该 file 路径。
 
-默认要求认证。通过管理器部署时，候选清单必须同时包含一个认证提供者（auth provider）和本应用（consumer），并配置 publicOrigin。已经安装在 profile 中但未出现在候选清单的 auth 不满足此要求。通过 `dsh-plugin-manager compose-release --root <交付根> --output <新目录> --manifest <auth清单> --manifest <本应用清单>` 生成包含全部所需插件的候选清单，再按 manager 包内 DELIVERY.md 部署。
+## 打包、部署与登录
 
-独立演示可通过本插件实例 plugin.json 设置 `accessMode: standalone`，按受控部署流程重新应用；这时返回的是共享本地身份。直接走官方 Bundle 时，使用自己的 patch 提供 accessMode/publicOrigin，不能依靠管理器实例配置自动生效。静态构建通过不代表鉴权已经验收。
+<!-- include:author-pack -->
 
-日常开发可单独执行 `dsh-plugin-manager check --root <本包绝对路径> --package .`；直接交付时只需 pack。
+将本次完整目录放入部署包 incoming/independent-access-example，再将部署包 optional/auth 复制到 incoming/auth；已经存在其他含 auth 的清单时不重复复制。运行 build 后使用实际站点地址：
+
+<!-- include:first-login -->
+
+## 开始自己的业务
+
+| 修改内容 | 位置与关系 |
+| --- | --- |
+| 包名、作者版本 | package.json；归档身份独立于框架版本 |
+| 插件 ID | deepseekPlugin.id、src 的 name 和权限前缀 |
+| 可配置入口 | cordis.patch.yml entry ID 与 configuration.entryId 保持一致 |
+| 路由和权限 | src 中 routePrefix/identity 路径及 permissions，与真实访问检查一致 |
+
+不需要重新实现登录。metadata 声明不自动保护自行注册的路由，应沿用 createAccess/createPluginHttp。需要共享匿名演示时，显式将 plugin.json 的 accessMode 改成 standalone 并受控部署；它返回共享本地身份，不是个人身份。
+
+再次开发按“改代码→pack 新目录→整体替换 incoming 对应目录→build→普通用户请求”验证。更改业务配置导致加载失败时按 build 的 recover 指引处理；需要换修复包不属于同包配置快捷恢复。

@@ -198,10 +198,14 @@ test('duplicate identities and environment variables are rejected across plugins
     writeFileSync(resolve(b, 'dev.yml'), '[]\n');
     assert.throws(() => discoverPlugins(root), /重复/u);
   }
-  for (const name of ['PATH', 'NODE_OPTIONS', 'DSH_HOME', 'BASH_ENV', 'PLUGIN_MANIFEST_FILE']) {
-    const root = fixture(t); const dir = plugin(root, 'a', m => { m.deepseekPlugin.runtimeConfig = { variable: name, template: 'env.conf.example' }; });
-    writeFileSync(resolve(dir, 'env.conf.example'), 'fixture');
-    assert.throws(() => discoverPlugins(root), /保留变量/u);
+  for (const name of ['PATH', 'USERPROFILE', 'NODE_OPTIONS', 'DSH_HOME', 'BASH_ENV', 'PLUGIN_MANIFEST_FILE', 'lowercase', 'INVALID-NAME', '']) {
+    for (const field of ['runtimeConfig', 'development']) {
+      const root = fixture(t); const dir = plugin(root, 'a', m => {
+        m.deepseekPlugin[field] = field === 'runtimeConfig' ? { variable: name } : { rootVariable: name, patch: 'dev.yml' };
+      });
+      writeFileSync(resolve(dir, 'dev.yml'), '[]\n');
+      assert.throws(() => discoverPlugins(root), /有效环境变量名|保留变量/u, `${field}: ${name}`);
+    }
   }
 });
 

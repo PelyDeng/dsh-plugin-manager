@@ -4,6 +4,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { readSiteRecord } from '../../packages/plugin-manager/src/site-record.mjs';
 
 const require = createRequire(import.meta.url);
 const json = path => JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
@@ -52,8 +53,9 @@ export function preparePluginReuse({ root, previous, active, site, revision, hos
     if (!previous?.manifest || !active?.path) refuse('没有当前活动部署');
     const manifest = resolve(root, previous.manifest), operation = dirname(dirname(manifest));
     if (!within(resolve(root, '.local/artifacts'), operation) || operation === resolve(root, '.local/artifacts')) refuse('活动发布路径越界');
-    const sourceRecord = resolve(operation, 'result.json'), record = json(sourceRecord);
-    if (record.schemaVersion !== 2 || record.status !== 'ready' || resolve(record.operation) !== operation || resolve(record.manifest) !== manifest || record.manifestHash !== hash(manifest)) refuse('活动发布记录或清单身份不匹配');
+    const sourceRecord = resolve(operation, 'result.json'), record = readSiteRecord(root, operation, { status: 'ready' });
+    if (record.inputKind === 'archives') refuse('归档部署没有源码复用基线，请先全量构建');
+    if (resolve(record.manifest) !== manifest || record.manifestHash !== hash(manifest)) refuse('活动发布记录或清单身份不匹配');
     if (typeof record.candidatePath !== 'string' || !within(operation, record.candidatePath) || record.candidateHash !== hash(record.candidatePath) || !isDeepStrictEqual(json(record.candidatePath), previous)) refuse('活动部署配置与成功发布不匹配');
     const compose = json(active.path);
     if (!within(resolve(root, site.artifacts), active.path) || active.project !== previous.composeProject || compose.services?.dsh?.image !== record.image || record.image !== previous.containerImage) refuse('活动 Compose 与成功发布镜像不匹配');

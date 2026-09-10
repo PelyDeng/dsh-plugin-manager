@@ -14,7 +14,7 @@ import { renderFrameworkConfig } from '../src/framework-config.mjs';
 const hostCommit = 'a'.repeat(40), revision = 'b'.repeat(40);
 const base = `registry.test/dsh@sha256:${'1'.repeat(64)}`, target = `registry.test/dsh@sha256:${'2'.repeat(64)}`;
 const baseId = `sha256:${'3'.repeat(64)}`, builtId = `sha256:${'4'.repeat(64)}`;
-const info = { Id: baseId, Os: 'linux', Config: { Labels: { 'org.opencontainers.image.revision': hostCommit } } };
+const info = { Id: baseId, Os: 'linux', Architecture: 'amd64', Config: { Labels: { 'org.opencontainers.image.revision': hostCommit } } };
 const digest = value => createHash('sha256').update(value).digest('hex');
 const defaults = JSON.parse(readFileSync(new URL('../../../deploy/config/site.defaults.json', import.meta.url)));
 
@@ -32,16 +32,32 @@ function fixture(t, { fresh = false, fail } = {}) {
   put('packages/plugin-manager/package.json', { version: '0.2.3' });
   put('integrations/docker/manager-update.Dockerfile', 'FROM test');
   put('deepseek-harness/.git', 'fixture git worktree');
+  const archivePlugin = (output, id, version, archive) => {
+    const stage = resolve(root, '.local/staging', `${id}-${version}`, 'package');
+    put(resolve(stage, 'package.json'), { name: id, version, type: 'module', main: 'dist/index.mjs', files: ['dist', 'cordis.patch.yml'],
+      scripts: { build: 'node build.mjs', check: 'node check.mjs' }, dsh: { bundle: { patch: 'cordis.patch.yml' } }, deepseekPlugin: { schemaVersion: 3, id } });
+    put(resolve(stage, 'cordis.patch.yml'), `- insert:\n  - id: ${id}\n    name: ${id}\n`);
+    put(resolve(stage, 'README.md'), id);
+    put(resolve(stage, 'dist/index.mjs'), 'export function apply() {}\n');
+    mkdirSync(output, { recursive: true });
+    const path = resolve(output, archive);
+    const tar = spawnSync('tar', ['-czf', path, '-C', resolve(stage, '..'), 'package'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(tar.status, 0, tar.stderr);
+    const { directory, ...plugin } = readPlugin(stage);
+    return { ...plugin, archive, sha256: digest(readFileSync(path)) };
+  };
+  let oldArchive;
   if (!fresh) {
     put('.local/deployment.json', { containerImage: base, manifest: '.local/artifacts/old/manifest.json', plugins: ['example'], publicOrigin: 'https://example.test', composeProject: 'site' });
-    put('.local/artifacts/old/example.tgz', 'old archive');
-    put('.local/artifacts/old/manifest.json', { plugins: [{ archive: 'example.tgz', sha256: digest('old archive') }] });
+    const old = archivePlugin(resolve(artifacts, 'old'), 'example', '0.2.0', 'example.tgz');
+    oldArchive = readFileSync(resolve(artifacts, 'old/example.tgz'));
+    put('.local/artifacts/old/manifest.json', { schemaVersion: 2, plugins: [old] });
     put('.local/artifacts/active-compose.json', { project: 'site', path: resolve(artifacts, 'previous.json') });
     put('.local/artifacts/previous.json', { services: { dsh: { image: base, environment: { DSH_PORT: '7902', DSH_HOME: '/data/dsh-home', DSH_PROFILE: 'web' }, volumes: [{ type: 'bind', source: runtimeData, target: '/data' }] } } });
   }
   const original = existsSync(config) ? readFileSync(config, 'utf8') : null, calls = [];
   const images = new Map([[base, info], [baseId, info]]);
-  const builtInfo = { ...info, Id: builtId, RepoDigests: [target] };
+  const builtInfo = { ...info, Id: builtId, RepoDigests: [target], Config: { Labels: { ...info.Config.Labels, 'com.dsh-plugin-manager.manager.sha256': digest('saved manager fixture archive') } } };
   const execute = (bin, args) => {
     calls.push([bin, ...args]);
     if (fail?.(bin, args)) throw new Error('simulated failure');
@@ -54,9 +70,9 @@ function fixture(t, { fresh = false, fail } = {}) {
     if (bin === 'pnpm' && args[0] === '--version') return '11.19.0';
     if (bin === 'pnpm' && args.includes('pack')) put(args.at(-1), 'archive');
     if (bin === process.execPath && args[0] === 'scripts/package-plugins.mjs') {
-      const archive = `example-${digest('new archive')}.tgz`;
-      put(resolve(args.at(-1), archive), 'new archive');
-      put(resolve(args.at(-1), 'manifest.json'), { plugins: [{ id: 'example', version: '0.2.1', archive, sha256: digest('new archive') }] });
+      const selected = args[args.indexOf('--plugins') + 1].split(',').filter(id => id !== 'none');
+      const plugins = selected.map(id => archivePlugin(args.at(-1), id, '0.2.1', `${id}-0.2.1.tgz`));
+      put(resolve(args.at(-1), 'manifest.json'), { schemaVersion: 2, plugins });
     }
     if (bin === process.execPath && args[1] === 'apply-compose') {
       const candidate = JSON.parse(readFileSync(args[args.indexOf('--config') + 1]));
@@ -76,19 +92,30 @@ function fixture(t, { fresh = false, fail } = {}) {
     return '';
   };
   const buildHost = () => { calls.push(['build-host']); return { imageId: builtId, resultFile: resolve(artifacts, 'host-image.json') }; };
+  const tooling = ({ output, execute: run }) => {
+    // Build/install behavior has separate real-archive tests; this fixture owns the saved tree.
+    run('pnpm', ['--filter', '@dsh-plugin-manager/plugin-manager', 'build']);
+    const archive = resolve(output, 'plugin-manager.tgz');
+    put(archive, 'saved manager fixture archive');
+    const cli = resolve(output, 'node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs');
+    put(cli, '// saved fixture CLI\n');
+    put(resolve(cli, '../site-release.mjs'), '// saved fixture worker\n');
+    return { archive, sha256: digest(readFileSync(archive)), cli, toolRoot: output };
+  };
   const result = () => { const pointer = JSON.parse(readFileSync(resolve(root, '.local/source-release.json'))); return JSON.parse(readFileSync(resolve(pointer.operation, 'result.json'))); };
-  return { root, config, original, calls, execute, buildHost, result, put };
+  return { root, config, original, calls, execute, buildHost, tooling, result, put, oldArchive };
 }
 
 test('a complete source checkout initializes defaults without fetching official source or using previous artifacts', t => {
   const f = fixture(t, { fresh: true });
-  assert.equal(release({ root: f.root }, f.execute, f.buildHost).status, 'ready');
+  assert.equal(release({ root: f.root }, f.execute, f.buildHost, f.tooling).status, 'ready');
   for (const call of f.calls.filter(call => call[0] === 'pnpm' && call[1] === '--filter' && ['build', 'check', 'test'].includes(call[3]))) {
     const name = call[2].split('/').at(-1);
     const manifest = JSON.parse(readFileSync(new URL(`../../${name}/package.json`, import.meta.url)));
     assert.ok(manifest.scripts[call[3]], `${call[2]} does not declare ${call[3]}`);
   }
   assert.ok(f.calls.some(call => call[0] === 'build-host'));
+  assert.ok(f.calls.some(call => call[0] === 'docker' && call[1] === 'build' && call.includes(`MANAGER_SHA256=${digest('saved manager fixture archive')}`)));
   assert.equal(f.calls.some(call => call[0] === 'git' && call.some(value => ['submodule', 'clone', 'fetch', 'pull'].includes(value))), false);
   assert.equal(f.calls.some(call => call.includes('push') || call.includes('stop') || call.includes('-czf')), false);
   assert.equal(JSON.parse(readFileSync(f.config)).containerImage, builtId);
@@ -97,13 +124,28 @@ test('a complete source checkout initializes defaults without fetching official 
   assert.equal('containerImage' in site, false);
 });
 
+test('a mismatched runtime manager archive is rejected before stopping the service', t => {
+  const f = fixture(t);
+  const execute = (bin, args, options) => {
+    const result = f.execute(bin, args, options);
+    if (bin === 'docker' && args[0] === 'image' && args[2].startsWith('dsh-local/source:')) {
+      const [image] = JSON.parse(result);
+      image.Config.Labels['com.dsh-plugin-manager.manager.sha256'] = '0'.repeat(64);
+      return JSON.stringify([image]);
+    }
+    return result;
+  };
+  assert.throws(() => release({ root: f.root }, execute, f.buildHost, f.tooling), /archive differs from saved tooling/);
+  assert.equal(f.calls.some(call => call.includes('stop') || call.includes('apply-compose')), false);
+});
+
 test('missing source fails without downloading, while a different supplied commit is accepted', t => {
   const f = fixture(t, { fresh: true });
   rmSync(resolve(f.root, 'deepseek-harness/.git'));
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /checkout is incomplete/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /checkout is incomplete/);
   f.put('deepseek-harness/.git', 'fixture git worktree');
   const wrongPin = (bin, args, options) => bin === 'git' && args[0] === '-C' && args[2] === 'rev-parse' ? 'c'.repeat(40) : f.execute(bin, args, options);
-  assert.equal(release({ root: f.root }, wrongPin, f.buildHost).status, 'ready');
+  assert.equal(release({ root: f.root }, wrongPin, f.buildHost, f.tooling).status, 'ready');
   assert.equal(f.calls.some(call => call.includes('submodule') || call.includes('stop')), false);
 });
 
@@ -114,14 +156,14 @@ test('missing pnpm is prepared locally at the pinned version without changing th
     return false;
   } });
   const originalPath = process.env.PATH;
-  release({ root: f.root }, f.execute, f.buildHost);
+  release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   assert.ok(f.calls.some(call => call[0] === 'npm' && call.includes(resolve(f.root, '.local/tooling/pnpm')) && call.includes('pnpm@11.19.0')));
   assert.equal(process.env.PATH, originalPath);
 });
 
 test('legacy update preserves data and site values and applies immediately after proving the stop', t => {
   const f = fixture(t);
-  assert.equal(release({ root: f.root }, f.execute, f.buildHost).status, 'ready');
+  assert.equal(release({ root: f.root }, f.execute, f.buildHost, f.tooling).status, 'ready');
   const stop = f.calls.findIndex(call => call.includes('stop'));
   const push = f.calls.findIndex(call => call[0] === 'docker' && call[1] === 'push');
   const apply = f.calls.findIndex(call => call.includes('apply-compose'));
@@ -133,14 +175,14 @@ test('legacy update preserves data and site values and applies immediately after
   const updated = JSON.parse(readFileSync(f.config));
   assert.equal(updated.publicOrigin, 'https://example.test');
   assert.equal(updated.containerImage, target);
-  assert.equal(readFileSync(resolve(f.root, updated.manifest, '../example.tgz'), 'utf8'), 'old archive');
+  assert.deepEqual(readFileSync(resolve(f.root, updated.manifest, '../example.tgz')), f.oldArchive);
 });
 
 test('repeated execution keeps the site file and uses the established deployment', t => {
   const f = fixture(t, { fresh: true });
-  release({ root: f.root }, f.execute, f.buildHost);
+  release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   const site = readFileSync(resolve(f.root, '.local/env.conf'), 'utf8');
-  release({ root: f.root }, f.execute, f.buildHost);
+  release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   assert.equal(f.calls.filter(call => call[0] === 'build-host').length, 1);
   assert.equal(readFileSync(resolve(f.root, '.local/env.conf'), 'utf8'), site);
   assert.equal(f.result().stopComplete, true);
@@ -192,10 +234,10 @@ for (const hostMode of ['host source', 'registry image']) test(`selective source
     return f.execute(bin, args, options);
   };
   const options = { root: f.root, config: '.local/site.json' };
-  release(options, execute, f.buildHost);
+  release(options, execute, f.buildHost, f.tooling);
   const baseline = f.result(), original = loadRelease(baseline.manifest);
   failApply = true;
-  assert.throws(() => release({ ...options, rebuildPlugins: 'charlie' }, execute, f.buildHost), /selective apply interrupted/);
+  assert.throws(() => release({ ...options, rebuildPlugins: 'charlie' }, execute, f.buildHost, f.tooling), /selective apply interrupted/);
   const partial = f.result(), candidate = loadRelease(partial.manifest);
   assert.deepEqual(packaged, [ids, ['charlie']]);
   assert.deepEqual(counts, { alpha: 1, bravo: 1, charlie: 2, delta: 1 });
@@ -209,21 +251,21 @@ for (const hostMode of ['host source', 'registry image']) test(`selective source
   assert.deepEqual(partial.reused, ['alpha', 'bravo', 'delta']);
   assert.equal(partial.reuseSource, resolve(baseline.operation, 'result.json'));
   failApply = false;
-  release({ ...options, resume: true }, execute, f.buildHost);
+  release({ ...options, resume: true }, execute, f.buildHost, f.tooling);
   assert.equal(f.result().status, 'ready');
   assert.equal(f.result().manifestHash, partial.manifestHash);
   assert.deepEqual(packaged, [ids, ['charlie']]);
-  release({ ...options, rebuildPlugins: 'bravo,delta' }, execute, f.buildHost);
+  release({ ...options, rebuildPlugins: 'bravo,delta' }, execute, f.buildHost, f.tooling);
   assert.deepEqual(packaged.at(-1), ['bravo', 'delta']);
   assert.deepEqual(f.result().reused, ['alpha', 'charlie']);
   assert.equal(f.result().pluginBuilds.find(p => p.id === 'charlie').sha256, candidate.plugins.find(p => p.id === 'charlie').sha256);
   const beforeAll = loadRelease(f.result().manifest);
-  release({ ...options, rebuildPlugins: ids.join(',') }, execute, f.buildHost);
+  release({ ...options, rebuildPlugins: ids.join(',') }, execute, f.buildHost, f.tooling);
   assert.deepEqual(packaged.at(-1), ids);
   for (const plugin of beforeAll.plugins) assert.deepEqual(readFileSync(resolve(f.result().manifest, '..', plugin.archive)), readFileSync(plugin.archivePath));
   const stops = f.calls.filter(call => call.includes('stop')).length;
   dirtyHostAfterPack = true;
-  assert.throws(() => release({ ...options, rebuildPlugins: 'charlie' }, execute, f.buildHost), /Host source or image changed/);
+  assert.throws(() => release({ ...options, rebuildPlugins: 'charlie' }, execute, f.buildHost, f.tooling), /Host source or image changed/);
   assert.equal(f.calls.filter(call => call.includes('stop')).length, stops);
   assert.equal(f.result().status, 'build-failed');
   assert.equal(f.result().hostSourceClean, false);
@@ -232,8 +274,8 @@ for (const hostMode of ['host source', 'registry image']) test(`selective source
 test('a partial site override uses the same effective paths on repeated deployments', t => {
   const f = fixture(t, { fresh: true });
   f.put('.local/site.json', { dataRoot: '.local/data/custom' });
-  release({ root: f.root }, f.execute, f.buildHost);
-  release({ root: f.root }, f.execute, f.buildHost);
+  release({ root: f.root }, f.execute, f.buildHost, f.tooling);
+  release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   assert.equal(f.result().status, 'ready');
   assert.equal(JSON.parse(readFileSync(f.config)).home, resolve(f.root, defaults.home));
   assert.ok(f.calls.filter(call => call.includes('apply-compose')).every(call => call.includes('--rebuild')));
@@ -241,15 +283,15 @@ test('a partial site override uses the same effective paths on repeated deployme
 
 test('changing the established data location is rejected before stopping the service', t => {
   const f = fixture(t, { fresh: true });
-  release({ root: f.root }, f.execute, f.buildHost);
+  release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   f.put('.local/env.conf', renderFrameworkConfig({ config: { ...defaults, home: '.local/data/another-home' } }));
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /explicit migration/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /explicit migration/);
   assert.equal(f.calls.some(call => call.includes('stop')), false);
 });
 
 test('build failure leaves service and deployment inputs unchanged', t => {
   const f = fixture(t, { fail: (bin, args) => bin === 'pnpm' && args.includes('build') });
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
   assert.equal(readFileSync(f.config, 'utf8'), f.original);
   assert.equal(f.calls.some(call => call.includes('stop')), false);
 });
@@ -266,7 +308,7 @@ test('generated Docker identity is not imported as a site preference', t => {
 
 test('container access failure is detected before stopping the old service', t => {
   const f = fixture(t, { fail: (bin, args) => args.includes('check-compose') });
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
   assert.equal(readFileSync(f.config, 'utf8'), f.original);
   assert.equal(f.calls.some(call => call.includes('stop')), false);
   assert.equal(f.calls.some(call => call.includes('apply-compose')), false);
@@ -281,38 +323,41 @@ test('first access preflight may create settings and fail without preventing res
     }
     return false;
   } });
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
   assert.equal(f.result().status, 'deployment-failed');
   assert.equal(f.calls.some(call => call.includes('stop')), false);
   deny = false;
-  const result = release({ root: f.root, resume: true }, f.execute, f.buildHost);
+  const result = release({ root: f.root, resume: true }, f.execute, f.buildHost, f.tooling);
   assert.equal(result.status, 'ready');
   assert.equal(f.calls.filter(call => call[0] === 'build-host').length, 1);
   assert.equal(JSON.parse(readFileSync(resolve(f.root, '.local/data/dsh-home/plugins/example/plugin.json'))).enabled, true);
 });
 
-test('legacy unfinished releases use current preflight but keep their original install CLI', t => {
+test('legacy schema 2 unfinished releases keep their original preflight and install CLI', t => {
   let failApply = true;
   const f = fixture(t, { fresh: true, fail: (bin, args) => failApply && args.includes('apply-compose') });
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
-  const saved = f.result(); delete saved.runtime;
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
+  const saved = f.result();
+  saved.schemaVersion = 2;
+  for (const key of ['runtime', 'inputKind', 'inputs', 'inputEnvironment', 'toolHash']) delete saved[key];
+  rmSync(resolve(saved.toolRoot, 'node_modules/@dsh-plugin-manager/plugin-manager/dist/site-release.mjs'));
   f.put(resolve(saved.operation, 'result.json'), saved);
   failApply = false;
   const callsBefore = f.calls.length;
-  release({ root: f.root, resume: true }, f.execute, f.buildHost);
+  release({ root: f.root, resume: true }, f.execute, f.buildHost, f.tooling);
   const calls = f.calls.slice(callsBefore);
-  assert.equal(calls.find(call => call.includes('check-compose'))[1], resolve(f.root, 'deploy/scripts/deployment.mjs'));
+  assert.equal(calls.find(call => call.includes('check-compose'))[1], resolve(saved.operation, 'tooling/node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs'));
   assert.equal(calls.find(call => call.includes('apply-compose'))[1], resolve(saved.operation, 'tooling/node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs'));
 });
 
 test('resume refuses a different Docker engine without stopping or applying', t => {
   const f = fixture(t, { fresh: true, fail: (bin, args) => args.includes('apply-compose') });
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
   const before = f.calls.length;
   const otherEngine = (bin, args, options) => bin === 'docker' && args.includes('info')
     ? JSON.stringify({ OSType: 'linux', ID: 'different-engine', Architecture: 'x86_64', OperatingSystem: 'Linux' })
     : f.execute(bin, args, options);
-  assert.throws(() => release({ root: f.root, resume: true }, otherEngine, f.buildHost), /Docker/);
+  assert.throws(() => release({ root: f.root, resume: true }, otherEngine, f.buildHost, f.tooling), /Docker/);
   assert.equal(f.calls.slice(before).some(call => call.includes('stop') || call.includes('apply-compose')), false);
 });
 
@@ -328,13 +373,13 @@ test('a new site saves the engine architecture while existing preferences remain
 test('stop verification failure restarts the unchanged old service and is checked again on resume', t => {
   let denied = true;
   const f = fixture(t, { fail: (bin, args) => denied && bin === 'docker' && args[0] === 'inspect' });
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
   assert.equal(readFileSync(f.config, 'utf8'), f.original);
   assert.equal(f.calls.some(call => call.includes('apply-compose')), false);
   assert.ok(f.calls.at(-1).includes('up'));
   assert.equal(f.result().stopComplete, false);
   denied = false;
-  release({ root: f.root, resume: true }, f.execute, f.buildHost);
+  release({ root: f.root, resume: true }, f.execute, f.buildHost, f.tooling);
   assert.equal(f.calls.filter(call => call.includes('stop')).length, 2);
   assert.equal(f.result().status, 'ready');
 });
@@ -343,7 +388,7 @@ test('resume accepts older stop records without requiring their archive files or
   for (const completed of [false, true]) {
     let failApply = true;
     const f = fixture(t, { fail: (bin, args) => failApply && args.includes('apply-compose') });
-    assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
+    assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
     const saved = f.result();
     delete saved.stopComplete;
     Object.assign(saved, { status: completed ? 'applying' : 'backing-up', backupComplete: completed, backupArchive: '/missing/legacy.tar.gz' });
@@ -352,7 +397,7 @@ test('resume accepts older stop records without requiring their archive files or
     f.put(resolve(saved.operation, 'backup/existing-file'), 'preserve existing files');
     failApply = false;
     const before = f.calls.length;
-    assert.equal(release({ root: f.root, resume: true }, f.execute, f.buildHost).status, 'ready');
+    assert.equal(release({ root: f.root, resume: true }, f.execute, f.buildHost, f.tooling).status, 'ready');
     const calls = f.calls.slice(before);
     assert.equal(calls.some(call => call.includes('stop')), !completed);
     assert.equal(calls.some(call => call.includes('-czf') || call.includes('-tzf')), false);
@@ -363,12 +408,12 @@ test('resume accepts older stop records without requiring their archive files or
 test('failed first startup resumes the original artifacts without rebuilding or deleting data', t => {
   let failApply = true;
   const f = fixture(t, { fresh: true, fail: (bin, args) => failApply && args.includes('apply-compose') });
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /simulated failure/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
   const operation = f.result().operation;
   f.put('.local/data/dsh-home/user-data', 'keep me');
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /--resume/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /--resume/);
   failApply = false;
-  release({ root: f.root, resume: true }, f.execute, f.buildHost);
+  release({ root: f.root, resume: true }, f.execute, f.buildHost, f.tooling);
   assert.equal(f.result().operation, operation);
   assert.equal(f.calls.filter(call => call[0] === 'build-host').length, 1);
   assert.ok(f.calls.at(-1).includes('--resume'));
@@ -377,14 +422,14 @@ test('failed first startup resumes the original artifacts without rebuilding or 
 
 test('existing data or a missing explicit site file cannot be treated as a blank installation', t => {
   const f = fixture(t, { fresh: true }); f.put('.local/data/dsh-home/user-data', 'keep me');
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /Existing data/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /Existing data/);
   assert.throws(() => loadSite(f.root, '.local/typo.json'), /does not exist/);
   assert.equal(f.calls.some(call => call.includes('install')), false);
 });
 
 test('tampered previous archives are rejected before stopping', t => {
   const f = fixture(t); f.put('.local/artifacts/old/example.tgz', 'changed');
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost), /Previous archive content/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /包摘要不匹配/);
   assert.equal(f.calls.some(call => call.includes('stop')), false);
 });
 
@@ -397,8 +442,8 @@ test('unified source keeps exact private input backup while generated records co
   const f = fixture(t, { fresh: true });
   const text = renderFrameworkConfig({ credentials: { DEEPSEEK_API_KEY: 'sk-source-private-sentinel' }, privateInput: true });
   f.put('.local/env.conf', text);
-  const result = release({ root: f.root }, f.execute, f.buildHost);
-  assert.equal(readFileSync(resolve(result.operation, 'framework-input.conf'), 'utf8'), text);
+  const result = release({ root: f.root }, f.execute, f.buildHost, f.tooling);
+  assert.equal(readFileSync(result.inputs.find(input => input.kind === 'site').path, 'utf8'), text);
   assert.equal(JSON.stringify(result).includes('private-sentinel'), false);
   assert.equal(readFileSync(f.config, 'utf8').includes('private-sentinel'), false);
   assert.equal(JSON.stringify(f.calls).includes('private-sentinel'), false);

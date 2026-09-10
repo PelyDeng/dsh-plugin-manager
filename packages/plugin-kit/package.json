@@ -1,6 +1,6 @@
 {
   "name": "@dsh-plugin-manager/plugin-kit",
-  "version": "0.15.2",
+  "version": "0.16.0",
   "description": "Optional identity, HTTP and tool integration for DSH plugins",
   "type": "module",
   "license": "Apache-2.0",

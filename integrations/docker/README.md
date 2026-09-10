@@ -18,7 +18,7 @@ Bash 实际构建入口为 `bash deploy/scripts/build-host-image.sh`，Node 入�
 
 ## 配置和运行
 
-取得完整源码后，Windows PowerShell 执行根 `.\build.ps1`，macOS/Linux 执行根 `./build.sh`，自动生成配置并构建、启动。以后更新仓库代码后执行同一命令；旧 deploy 目录入口继续支持。默认使用本机镜像，无需 Harbor；配置和恢复见[一键部署](../../doc/first-deployment.md)。下方为配置变更及自定义集成使用的基础命令。
+使用发行部署包时按其随包 README 放入完整发布目录；管理器和固定宿主镜像信息已提供，不构建作者源码。取得完整源码后，Windows PowerShell 执行根 `.\build.ps1`，macOS/Linux 执行根 `./build.sh`，自动生成配置并构建、启动。以后更新仓库代码后执行同一命令；旧 deploy 目录入口继续支持。默认使用本机镜像，无需 Harbor；配置和恢复见[一键部署](../../doc/first-deployment.md)。下方为配置变更及自定义集成使用的基础命令。
 
 一键部署生成 `.local/deployment.json` 后，可通过基础命令单独应用插件 `plugin.json` 的启停和认证设置，见[插件运行配置规范](../../doc/plugin-configuration.md)。自定义集成需要自行提供清单及不可变 `containerImage`，支持本机 `sha256:<ID>` 或仓库 `repo@sha256:<摘要>`。
 
@@ -30,10 +30,10 @@ node deploy/scripts/deployment.mjs apply-compose --config .local/deployment.json
 
 命令只支持串行执行。Windows/macOS 和 Docker Desktop 通过实际容器挂载探针检查权限；原生 Linux 保留目录和文件权限检查。容器 UID/GID 使用配置值，独立配置缺省为 1000，macOS 源码新站点按当前非 root 用户初始化。已有数据路径不会被递归改权。
 
-源码部署固定并记录本次 Docker 引擎；恢复不能切换 endpoint、引擎身份或架构。产物已经 prepared 后，即使挂载预检尚未停服就失败，也需保持原配置并使用 build 脚本的 `--resume`。源码锁、备份摘要、容器 tmpfs 恢复验证及数据回滚的限制见[更新与恢复](../../doc/first-deployment.md#更新与恢复)。
+站点操作固定 Docker 引擎；来源切换、prepared 后失败与恢复只在[运维说明](../../deploy/README.md#安装与恢复)维护。不能同时使用独立 Compose 和站点 build 接管同一实例。
 
 需要自行编排时可用 `render-compose` 输出覆盖文件，配合 `docker-compose.yml` 和自己的进程管理流程。不得同时用两种流程管理同一实例。
 
 ## 源码发版使用的宿主层
 
-根 build 脚本从现有源码构建缺失的宿主镜像；源码未变时使用 `manager-update.Dockerfile` 复用已有宿主层，安装当前源码打包的 manager。同次发版重新构建全部选定业务插件。增量构建上下文仅包含该 Dockerfile 和 `plugin-manager.tgz`；基底使用不可变本机镜像 ID，`MANAGER_SHA256` 是归档摘要，`FRAMEWORK_REVISION` 是已提交仓库版本。源码新站点按 Docker 引擎初始化 `DSH_IMAGE_PLATFORM`，显式值和旧站点值保持；单独调用镜像构建入口的缺省值仍为 `linux/amd64`。
+根 build 脚本从现有源码构建缺失的宿主镜像；源码未变时使用 `manager-update.Dockerfile` 复用已有宿主层，安装当前源码打包的 manager。默认源码发版重新构建全部选定业务插件；显式 --rebuild-plugins 按运维规则仅重建选中项。archives 不执行插件构建。增量构建上下文仅包含该 Dockerfile 和 `plugin-manager.tgz`；基底使用不可变本机镜像 ID，`MANAGER_SHA256` 是归档摘要，`FRAMEWORK_REVISION` 是已提交仓库版本。源码新站点按 Docker 引擎初始化 `DSH_IMAGE_PLATFORM`，显式值和旧站点值保持；单独调用镜像构建入口的缺省值仍为 `linux/amd64`。

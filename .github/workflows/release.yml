@@ -8,8 +8,83 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  runtime:
+    if: github.repository == 'PelyDeng/dsh-plugin-manager'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.publish-runtime.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate the release identity
+        run: |
+          node scripts/version.mjs check
+          test "$GITHUB_REF_NAME" = "v$(node -p "require('./package.json').version")"
+      - run: npm install --global pnpm@11.19.0
+      - name: Build the shared runtime and the single release manager archive
+        run: |
+          node --input-type=module <<'JS'
+          import { writeFileSync } from 'node:fs';
+          import { buildHostImage } from './integrations/docker/host-image.mjs';
+          import { prepareManagerTooling } from './scripts/manager-tooling.mjs';
+          prepareManagerTooling({ root: process.cwd(), output: '.local/artifacts/github-runtime-tools' });
+          const result = buildHostImage({ root: process.cwd(), operationId: 'github-runtime' });
+          writeFileSync('.local/artifacts/github-runtime-result.json', JSON.stringify(result));
+          JS
+          context="$PWD/.local/artifacts/github-runtime-final"
+          mkdir -p "$context"
+          cp .local/artifacts/github-runtime-tools/plugin-manager.tgz "$context/plugin-manager.tgz"
+          cp integrations/docker/manager-update.Dockerfile "$context/Dockerfile"
+          image_id=$(node -p "require('./.local/artifacts/github-runtime-result.json').imageId")
+          base_image=$(node -p "require('./.local/artifacts/github-runtime-result.json').image")
+          test "$(docker image inspect "$base_image" --format '{{.Id}}')" = "$image_id"
+          manager_hash=$(sha256sum "$context/plugin-manager.tgz" | cut -d ' ' -f 1)
+          docker build --network none --build-arg "RUNTIME_IMAGE=$base_image" \
+            --build-arg "MANAGER_SHA256=$manager_hash" --build-arg "FRAMEWORK_REVISION=$GITHUB_SHA" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --iidfile "$context/image.id" "$context"
+          test "$(docker image inspect "$base_image" --format '{{.Id}}')" = "$image_id"
+      - name: Authenticate the runtime publisher
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_USER: ${{ github.actor }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GH_USER" --password-stdin
+      - name: Publish the immutable runtime and require anonymous access
+        id: publish-runtime
+        run: |
+          image_id=$(cat .local/artifacts/github-runtime-final/image.id)
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}/runtime"
+          tag="$repository:$GITHUB_REF_NAME"
+          docker tag "$image_id" "$tag"
+          docker push "$tag"
+          export RUNTIME_REPOSITORY="$repository"
+          docker image inspect "$tag" > .local/artifacts/github-runtime-inspect.json
+          reference=$(node --input-type=module -e "import fs from 'node:fs'; const [image]=JSON.parse(fs.readFileSync('.local/artifacts/github-runtime-inspect.json')); const digest=image.RepoDigests.find(value=>value.startsWith(process.env.RUNTIME_REPOSITORY+'@sha256:')); if(!digest) throw Error('Published digest missing'); console.log(digest)")
+          anonymous_config=$(mktemp -d)
+          trap 'rm -rf -- "$anonymous_config"' EXIT
+          # A new private GHCR package must be made public before a release can complete.
+          if ! docker --config "$anonymous_config" pull "$reference"; then
+            echo '::error::Runtime is not anonymously pullable. For a first GHCR publication, set the runtime package visibility to Public in GitHub package settings, then rerun this workflow. No release assets were published.'
+            exit 1
+          fi
+          printf 'image=%s\n' "$reference" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-manager
+          path: .local/artifacts/github-runtime-tools/plugin-manager.tgz
+          if-no-files-found: error
+          retention-days: 7
   build:
     if: github.repository == 'PelyDeng/dsh-plugin-manager'
+    needs: runtime
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,7 +95,6 @@ jobs:
         with:
           node-version: 24
       - run: node scripts/version.mjs check
-      - run: node --test scripts/tests/version.test.mjs
       - name: Validate tag and release notes
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -35,40 +109,52 @@ jobs:
           PY
       - run: npm install --global pnpm@11.19.0
       - run: pnpm install --frozen-lockfile
-      - run: pnpm build
       - run: pnpm check
+      - run: node --test scripts/tests/*.test.mjs
       - run: pnpm -r --workspace-concurrency=1 --if-present test
       - run: node scripts/check-artifacts.mjs
       - run: node scripts/check-repository.mjs
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-manager
+          path: .local/artifacts/github-release/runtime-manager
       - name: Package public apps and tools
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+          RUNTIME_IMAGE: ${{ needs.runtime.outputs.image }}
         run: |
           release_root="$PWD/.local/artifacts/github-release"
           mkdir -p "$release_root/upload"
           node scripts/package-plugins.mjs --plugins auth,example --output "$release_root/input"
-          node packages/plugin-manager/dist/cli.mjs compose-release --root "$PWD" --manifest "$release_root/input/manifest.json" --output "$release_root/apps"
-          for package in plugin-manager plugin-kit; do
-            version=$(node -p "require('./packages/$package/package.json').version")
-            pnpm --filter "@dsh-plugin-manager/$package" pack --out "$release_root/upload/$package-$version.tgz"
-          done
-          cp "doc/releases/$RELEASE_TAG.md" "$release_root/apps/README.md"
+          node packages/plugin-manager/dist/cli.mjs compose-release --root "$PWD" --manifest "$release_root/input/manifest.json" --output "$release_root/public-plugins"
+          cp "$release_root/runtime-manager/plugin-manager.tgz" "$release_root/upload/plugin-manager-${RELEASE_TAG#v}.tgz"
+          pnpm --filter '@dsh-plugin-manager/plugin-kit' pack --out "$release_root/upload/plugin-kit-${RELEASE_TAG#v}.tgz"
+          cp "doc/releases/$RELEASE_TAG.md" "$release_root/public-plugins/README.md"
           cp "doc/releases/$RELEASE_TAG.md" "$release_root/upload/release-notes.md"
+          docker pull "$RUNTIME_IMAGE"
+          node scripts/package-deployment.mjs --root "$PWD" \
+            --manager "$release_root/upload/plugin-manager-${RELEASE_TAG#v}.tgz" \
+            --kit "$release_root/upload/plugin-kit-${RELEASE_TAG#v}.tgz" \
+            --auth-manifest "$release_root/public-plugins/manifest.json" \
+            --image "$RUNTIME_IMAGE" --output "$release_root/portable"
+          cp "$release_root/portable/"*.zip "$release_root/upload/"
+          node --input-type=module <<'JS'
+          import { resolve } from 'node:path';
+          import { zipTree } from './scripts/package-deployment.mjs';
+          const root = resolve('.local/artifacts/github-release');
+          zipTree(resolve(root, 'public-plugins'), resolve(root, 'upload', `dsh-plugin-manager-public-apps-${process.env.RELEASE_TAG.slice(1)}.zip`));
+          JS
           python3 - <<'PY'
-          import hashlib, json, os, pathlib, zipfile
+          import hashlib, json, os, pathlib
           root = pathlib.Path('.local/artifacts/github-release')
           version = os.environ['RELEASE_TAG'][1:]
-          manifest = json.loads((root / 'apps/manifest.json').read_text(encoding='utf-8'))
+          manifest = json.loads((root / 'public-plugins/manifest.json').read_text(encoding='utf-8'))
           assert manifest['schemaVersion'] == 2
           assert {p['id'] for p in manifest['plugins']} == {'auth', 'example'}
           assert all(p['version'] == version for p in manifest['plugins']), 'Public apps must match the framework version'
           assert all('directory' not in p for p in manifest['plugins'])
-          with zipfile.ZipFile(root / 'upload' / f'dsh-plugin-manager-public-apps-{version}.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
-              for path in sorted((root / 'apps').iterdir()):
-                  assert path.is_file(), 'Unexpected directory in portable apps'
-                  archive.write(path, 'public-plugins/' + path.name)
           assets = sorted(p for p in (root / 'upload').iterdir() if p.suffix in {'.tgz', '.zip'})
-          assert len(assets) == 3, 'Expected manager, kit and public apps'
+          assert len(assets) == 5, 'Expected manager, kit, public apps, deployment and starters'
           checks = ''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n' for p in assets)
           (root / 'upload/SHA256SUMS.txt').write_text(checks, encoding='utf-8', newline='\n')
           PY
