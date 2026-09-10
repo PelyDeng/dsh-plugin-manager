@@ -6,18 +6,18 @@
 
 发布者可以附带最终归档的宿主验证记录，安装时显示已测目标、当前目标与范围差异。旧发布目录继续可用；没有记录表示包内未附测试结果，不等于不兼容。报告生成、导入和状态含义见随包 [VERIFICATION.md](VERIFICATION.md)。
 
-适用于 manager 0.16.0。部署者只需管理工具、匹配的官方 DSH、应用与认证插件各自的发布目录，以及作者提供的配置模板；无需作者源码。以下 `dsh-plugin-manager` 指已安装 CLI，本地工具目录安装时用 `pnpm exec dsh-plugin-manager`。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。
+适用于 manager 0.16.1。部署者只需管理工具、匹配的官方 DSH、应用与认证插件各自的发布目录，以及作者提供的配置模板；无需作者源码。以下 `dsh-plugin-manager` 指已安装 CLI，本地工具目录安装时用 `pnpm exec dsh-plugin-manager`。需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。
 
 ## 1. 准备与组合
 
 核对提供方记录的工具、宿主版本及归档 SHA-256；包名不表示已发布到公共 registry。首次安装管理工具：
 
 ```sh
-pnpm add --ignore-workspace /path/to/plugin-manager-0.16.0.tgz
+pnpm add --ignore-workspace /path/to/plugin-manager-0.16.1.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
-宿主应使用应用交付说明所要求的版本及依赖，内置 auth/example 的要求见对应版本的[宿主兼容说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.0/doc/host-compatibility.md)。管理器不自动下载、更新或构建宿主。运行配置二选一：
+宿主应使用应用交付说明所要求的版本及依赖，内置 auth/example 的要求见对应版本的[宿主兼容说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.1/doc/host-compatibility.md)。管理器不自动下载、更新或构建宿主。运行配置二选一：
 
 - 源码宿主：在其目录完成安装与构建，设置 `harnessRoot` 为源码根的绝对路径。
 - 已安装宿主：设置 `dshCliJs` 为实际 CLI JS 文件的绝对路径，例如工具目录下 `node_modules/@deepseek-ai/dsh/lib/bin.js`。保留它的锁文件，按应用要求选择版本。
@@ -114,4 +114,4 @@ Docker 部署使用同版本 manager 的宿主镜像，在 deployment.json 补 c
 
 独立 CLI 通过显式 --root 和 --config 选择 env/JSON，部署者仍提供 manifest 与容器镜像/官方 CLI，不扫描 incoming。env 使用字面量值，不执行 shell；相对路径从 root 计算。plugin.json 和 runtimeConfig 各自维护，生成清单与实例数据不进入归档。
 
-独立 CLI 与站点 build 的 source/archives 不混用。完整字段参考对应版本的[框架配置](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.0/doc/framework-configuration.md)。本文件保留完整手工交付步骤，可脱离仓库阅读。
+独立 CLI 与站点 build 的 source/archives 不混用。完整字段参考对应版本的[框架配置](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.1/doc/framework-configuration.md)。本文件保留完整手工交付步骤，可脱离仓库阅读。
