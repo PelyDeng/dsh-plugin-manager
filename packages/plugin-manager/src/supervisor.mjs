@@ -91,7 +91,8 @@ export async function supervise(deployment, release) {
     deployment.baseUrl ??= deployment.profile === 'web' ? `http://127.0.0.1:${port}` : undefined;
     let verified = false;
     let lastError;
-    for (let attempt = 0; attempt < 40 && !stopped; attempt++) {
+    const startupDeadline = performance.now() + 60_000;
+    while (!stopped && performance.now() < startupDeadline) {
       try {
         if (deployment.baseUrl) {
           const response = await fetch(deployment.baseUrl, { signal: AbortSignal.timeout(1000), redirect: 'manual' });
@@ -100,7 +101,7 @@ export async function supervise(deployment, release) {
         await finalize(deployment, release, { running: true, locked: true }); verified = true; break;
       } catch (error) { lastError = error; await new Promise(resolvePromise => setTimeout(resolvePromise, 250)); }
     }
-    if (!verified) { child.kill('SIGTERM'); throw lastError ?? new Error('DSH 在启动验证前退出。'); }
+    if (!verified) { child.kill('SIGTERM'); throw new Error(stopped ? 'DSH 在启动验证前退出。' : 'DSH 在 60 秒内未通过启动验证，请检查宿主日志并使用 --resume 恢复。', { cause: lastError }); }
     startupUnlock(); startupLocked = false;
     process.stdout.write(`${JSON.stringify({ status: 'running', activated: 'unknown', profile: deployment.profile })}\n`);
     const result = await exited;
