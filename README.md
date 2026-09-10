@@ -1,12 +1,62 @@
 # DSH Plugin Manager
 
-[English](README.en.md) · [首次部署](doc/first-deployment.md) · [作者接入](doc/plugin-development.md) · [Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases) · [反馈问题](https://github.com/PelyDeng/dsh-plugin-manager/issues)
+[English](README.en.md) · [为什么使用](#为什么使用) · [首次部署](doc/first-deployment.md) · [作者接入](doc/plugin-development.md) · [Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases) · [反馈问题](https://github.com/PelyDeng/dsh-plugin-manager/issues)
 
-基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）的插件开发与部署框架。开发者在自己的项目中开发并打包；部署者把完整发布目录放进 `incoming/`，运行框架的 build 脚本即可安装和启动，无需作者源码。
+基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）的插件管理与交付框架。用于统一打包、配置、安装和更新自己开发的 DSH 插件，也能接入符合交付规范的第三方插件，并通过插件连接已有项目或服务。
 
-例如，知识库助手和销售报表助手可以独立开发、分别更新，共用官方宿主及可选的账号系统。
+**业务项目独立开发，插件产物统一部署。** 作者在自己的仓库打包；部署者把完整发布目录放入 `incoming/`，执行框架 build 即可安装和启动选中的插件，无需作者源码。
 
 > 社区维护的非官方项目，不代表 DeepSeek 官方产品或推荐。
+
+## 为什么使用
+
+当你基于 DSH 开发了多个业务插件，或需要接收其他团队交付的插件时，除了实现业务，还要处理打包、配置、登录授权、更新和失败恢复。本框架将这些公共工作集中维护，让每个项目沿用同一套交付与运维流程。
+
+| 遇到的问题 | 本框架怎么处理 |
+| --- | --- |
+| 每个插件各写一套打包与部署脚本，交付方式不一致 | 用标准声明和 `pack` 生成完整发布目录，由统一 build 入口部署 |
+| 插件作者与部署者绑在同一份源码仓库，交付时还要解释开发环境 | 外部项目独立维护源码、版本和锁文件；部署端使用产物和配套运行环境 |
+| 多个插件重复实现登录、账号身份和应用授权 | 按需复用 auth 与 kit；业务插件仍负责接口保护和数据权限 |
+| 更新时混入旧文件、漏掉其他插件，难以确认部署内容 | 校验清单、插件身份及归档摘要；显示新增、更新、保留与停用，缺包不自动当作停用 |
+| 配置错误或发布中断后，不清楚该如何继续 | 保留操作记录和输入快照，提供原操作续作与同包业务配置修正的明确入口 |
+
+源码部署也保留按需重建：只重建指定插件，其余归档在通过基线、输入和依赖检查后复用。官方 DSH 继续负责 Agent、模型、会话和插件运行，本框架补充应用交付与运维能力。
+
+## 能接入哪些项目
+
+插件可以来自自己的仓库，也可以由第三方提供。接入方式取决于项目形态，不能把“外部项目接入”理解为任意程序包都能直接托管。
+
+| 你已有的项目 | 如何接入 |
+| --- | --- |
+| 自己开发的 DSH 插件 | 在框架 `plugins/*` 中开发，或放在独立仓库；按本框架规范声明、构建和打包 |
+| 第三方 DSH 插件或官方 Bundle | 确认宿主兼容性并满足管理器声明、构建和发布物规范；已有合规完整发布目录可直接交付部署 |
+| 普通 Node.js 项目 | 改造或封装为官方 Cordis 插件，提供 Bundle、插件入口和构建产物，再使用相同流程打包 |
+| Java、Python 或已有 HTTP 服务 | 服务保持独立部署，由一个 DSH 插件调用其接口；框架管理这个适配插件，外部服务继续按原方式运维 |
+
+当前直接打包支持独立 pnpm 单包。已有项目的适配步骤、最低声明和构建约束见[作者接入](doc/plugin-development.md)；普通源码 ZIP 或任意 npm tgz 不能代替标准发布目录。
+
+## 场景示例：让多个项目在 DSH 中协同使用
+
+假设团队已有文档检索服务、销售报表接口和订单系统，可以自研一个知识库助手，接入第三方提供的报表插件，再编写一个订单查询适配插件。用户在 DSH 中使用这些插件，已有服务继续在原环境运行：
+
+```mermaid
+flowchart LR
+    U["用户"] --> K
+    U --> R
+    U --> O
+    subgraph DSH["官方 DSH 中运行的插件"]
+        K["自研知识库助手"]
+        R["第三方报表插件"]
+        O["订单查询适配插件"]
+    end
+    K -->|检索资料| D["文档检索服务"]
+    R -->|查询统计| S["销售报表接口"]
+    O -->|调用接口| B["已有 Java / Python 业务服务"]
+```
+
+例如，用户可以向对应插件提问“查找报销制度”“汇总本月销售额”或“查询订单进度”。这些业务工具需由插件作者实现；框架提供统一交付方式，DSH 提供 Agent 与模型能力，接入 auth/kit 的插件还可共用登录和授权。
+
+三个插件可以拥有各自的仓库与版本，交付后由同一站点管理。更新其中一个时整体替换它的发布目录，并保留其他插件产物；如果多个插件由同一清单交付，则整体更新该清单对应的目录。
 
 ## 架构与部署流程
 
@@ -32,8 +82,6 @@ DSH 负责插件运行、Agent、模型与会话。manager 负责打包、配置
 
 业务插件负责自己的功能与数据权限，声明权限不会自动保护业务接口。各部分的依赖方向和配置归属见[架构说明](doc/architecture.md)。
 
-![开发者接入助手](doc/assets/developer-assistant.png)
-
 ## 先部署别人交付的插件
 
 从同一 [Release](https://github.com/PelyDeng/dsh-plugin-manager/releases) 取得 `dsh-plugin-manager-deployment-<版本>.zip`，解压后将完整插件发布目录放入 `incoming/<应用>/`。发布目录包含 `manifest.json` 和它引用的全部 `.tgz`，普通源码压缩包不能代替它。
@@ -57,6 +105,15 @@ Windows PowerShell 使用 `.\build.ps1`。首次按提示填写确实需要的�
 | [standalone-plugin](examples/standalone-plugin/README.md) | 先跑通公开探针，不需要 kit 或登录 |
 | [standalone-kit](examples/standalone-kit/README.md) | 复用登录、授权和可信账号身份 |
 | [完整问答应用](doc/plugin-development.md#复制完整问答应用到独立仓库) | 开发流式对话、历史和工具应用 |
+
+随包 example 是开发者接入助手，可先体验框架问答、流式回答、会话历史与工具调用，再按指南复制为自己的问答应用。
+
+<details>
+<summary>查看 example 开发者接入助手界面</summary>
+
+![开发者接入助手](doc/assets/developer-assistant.png)
+
+</details>
 
 按[作者指南](doc/plugin-development.md)在独立工具目录安装固定版本的 manager，再打包自己的项目：
 
