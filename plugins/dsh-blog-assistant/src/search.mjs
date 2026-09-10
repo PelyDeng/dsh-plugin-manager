@@ -14,6 +14,7 @@ export const searchParameters={
   dateField:{type:'string',enum:['created','modified'],description:'默认 modified（写作/修改活动）；created 为文章设定时间，不能当成首次写作证据'},
   status:{type:'string',enum:['all','published','draft'],description:'博客的全部/已公开/未公开稿；工作台内容始终属于私有草稿'},
   page:{type:'integer',description:'从1开始；hasMore=true时仍有更多结果'},
+  pageSize:{type:'integer',description:'每页1至100条，默认30；以返回的实际pageSize为准，续页保持相同大小'},
   sortBy:{type:'string',enum:['created','modified']},order:{type:'string',enum:['asc','desc']},
 }
 export function normalizeSearch(input={},now=Date.now()) {
@@ -23,6 +24,7 @@ export function normalizeSearch(input={},now=Date.now()) {
   for(const key of ['query','title','content','category','tag']){const v=input[key]??'';invariant(typeof v==='string'&&v.length<=200,`${key} 检索条件无效`);f[key]=v.trim()}
   for(const [key,values,fallback] of [['dateField',['created','modified'],'modified'],['status',['all','published','draft'],'all'],['sortBy',['created','modified'],'modified'],['order',['asc','desc'],'desc']]){f[key]=input[key]??fallback;invariant(values.includes(f[key]),`${key} 检索条件无效`)}
   f.page=input.page??1;invariant(Number.isSafeInteger(f.page)&&f.page>0&&f.page<=10000,'页码无效')
+  f.pageSize=input.pageSize===undefined?30:input.pageSize;invariant(Number.isSafeInteger(f.pageSize)&&f.pageSize>=1&&f.pageSize<=100,'每页条数应为1至100的整数')
   f.dateFrom=input.dateFrom??'';f.dateTo=input.dateTo??''
   if(input.period!==undefined){invariant(['today','yesterday'].includes(input.period)&&!f.dateFrom&&!f.dateTo,'相对日期与日期范围不能混用');f.dateFrom=f.dateTo=searchContext(now)[input.period]}
   const date=value=>{invariant(typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&value>='2000-01-01','日期应为2000年起的有效 YYYY-MM-DD');const ms=Date.parse(value+'T00:00:00+08:00');invariant(Number.isFinite(ms)&&day(ms)===value,'日期无效');return ms}
@@ -47,6 +49,6 @@ export function searchDrafts(store,owner,input={},now=Date.now(),categories=[]) 
   })
   const timestamp=d=>f.sortBy==='created'?d.createdAt??0:draftContentUpdatedAt(d)??0
   rows.sort((a,b)=>(timestamp(a)-timestamp(b))*(f.order==='asc'?1:-1)||a.id.localeCompare(b.id))
-  const offset=(f.page-1)*30,items=rows.slice(offset,offset+30).map(d=>({...draftSummary(d),status:'workspace-draft'}))
-  return {items:items.map(d=>({...d,localTime:{created:searchLocalTime(d.createdAt),modified:searchLocalTime(d.contentUpdatedAt),deleted:searchLocalTime(d.remote?.deletedAt)}})),page:f.page,hasMore:offset+30<rows.length,total:rows.length,unknownDateCount,filters:f,timeZone,dateNote:'localTime是上海时间。modified筛选和排序使用contentUpdatedAt（工作台内容修改时间）；updatedAt是记录状态更新时间，删除标记不算写作。contentTimeSource为legacy-record时仅沿用旧记录更新时间，不能证明是正文修改；content为已记录的内容时间，unknown为未知。历史缺失时间返回null，不推断创建或修改日期。unknownDateCount是符合其他条件但缺少所选日期字段的记录数，可能与其他查询重叠，不可相加。remote.deleted=true表示原文已删除，保留的是工作台副本；关联ID是历史快照，不能证明原文当前仍存在或已发布。同名且没有共同关联ID的草稿不能合并计数。'}
+  const offset=(f.page-1)*f.pageSize,items=rows.slice(offset,offset+f.pageSize).map(d=>({...draftSummary(d),status:'workspace-draft'}))
+  return {items:items.map(d=>({...d,localTime:{created:searchLocalTime(d.createdAt),modified:searchLocalTime(d.contentUpdatedAt),deleted:searchLocalTime(d.remote?.deletedAt)}})),page:f.page,pageSize:f.pageSize,hasMore:offset+f.pageSize<rows.length,total:rows.length,unknownDateCount,filters:f,timeZone,dateNote:'localTime是上海时间。modified筛选和排序使用contentUpdatedAt（工作台内容修改时间）；updatedAt是记录状态更新时间，删除标记不算写作。contentTimeSource为legacy-record时仅沿用旧记录更新时间，不能证明是正文修改；content为已记录的内容时间，unknown为未知。历史缺失时间返回null，不推断创建或修改日期。unknownDateCount是符合其他条件但缺少所选日期字段的记录数，可能与其他查询重叠，不可相加。remote.deleted=true表示原文已删除，保留的是工作台副本；关联ID是历史快照，不能证明原文当前仍存在或已发布。同名且没有共同关联ID的草稿不能合并计数。'}
 }

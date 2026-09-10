@@ -1,7 +1,7 @@
 import {invariant} from './settings.mjs'
 import {normalizeSearch,searchParameters} from './search.mjs'
 
-const {page,sortBy,order,...searchFilters}=searchParameters
+const {page,pageSize,sortBy,order,...searchFilters}=searchParameters
 const filters={type:'object',additionalProperties:false,description:'组合条件；默认仅已公开文章。category/tag 精确名称，categoryId/tagId 可消除同名歧义。',properties:{...searchFilters,
   status:{type:'string',enum:['all','published','draft'],description:'默认published（post/publish）；all包含保存稿，draft包含保存稿及非公开状态。'},
   categoryId:{type:'integer'},tagId:{type:'integer'},includeDescendants:{type:'boolean',description:'分类筛选是否包含全部子级，默认 false'},
@@ -39,6 +39,6 @@ export function normalizeReport(report,input={},now=Date.now()){
     if(param.type==='integer')invariant(Number.isSafeInteger(value)&&value>=1&&value<=(key==='pageSize'?500:10000),`${key}统计参数无效`)
     options[key]=value
   }
-  const {page:_,sortBy:__,order:___,...base}=normalized.filters
+  const {page:_,sortBy:__,order:___,pageSize:____,...base}=normalized.filters
   return {report,...options,filters:{...base,...Object.fromEntries(Object.entries({categoryId,tagId,includeDescendants,missing,hasSavedDraft}).filter(([,v])=>v!==undefined))},start:normalized.start===null?null:normalized.start/1000,end:normalized.end===null?null:normalized.end/1000,timeZone:normalized.timeZone}
 }

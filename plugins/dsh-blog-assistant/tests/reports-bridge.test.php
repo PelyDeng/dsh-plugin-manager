@@ -86,6 +86,16 @@ namespace {
     do{$part=$ref->getMethod('searchPosts')->invoke($action,['status'=>'all','page'=>++$oldCalls]);$old[]=$part;}while($part['hasMore']);
     $oldQueries=count($db->queries);$oldBytes=strlen(json_encode($old,JSON_UNESCAPED_UNICODE));
     check($oldCalls===5&&array_sum(array_map(fn($p)=>count($p['items']),$old))===146,'baseline must reproduce 5 pages and 146 versions');
+    $search=fn($args=[])=>$ref->getMethod('searchPosts')->invoke($action,['status'=>'all']+$args);
+    $searchPages=[];$searchIds=[];$searchPage=0;
+    do{$part=$search(['page'=>++$searchPage,'pageSize'=>50]);$searchPages[]=$part;$searchIds=array_merge($searchIds,array_column($part['items'],'cid'));}while($part['hasMore']);
+    check(array_map(fn($p)=>count($p['items']),$searchPages)===[50,50,46],'search pageSize 50 must return three complete pages');
+    $baselineSearchIds=[];foreach($old as $part)$baselineSearchIds=array_merge($baselineSearchIds,array_column($part['items'],'cid'));
+    check($searchIds===$baselineSearchIds&&count(array_unique($searchIds))===146,'search pages preserve every version in the same stable order without duplicates');
+    check(array_column($searchPages,'pageSize')===[50,50,50]&&array_column($searchPages,'page')===[1,2,3]&&array_column($searchPages,'hasMore')===[true,true,false],'search returns its effective page size and continuation');
+    check(array_map(fn($p)=>count($p['items']),$old)===[30,30,30,30,26]&&array_column($old,'pageSize')===[30,30,30,30,30],'search retains a default page size of 30');
+    foreach([1,100] as $size){$first=$search(['pageSize'=>$size]);$last=$search(['page'=>(int)ceil(146/$size),'pageSize'=>$size]);check(count($first['items'])===$size&&$first['pageSize']===$size&&$first['hasMore'],'search accepts pageSize boundary '.$size);check(!$last['hasMore']&&array_column($last['items'],'cid')===array_slice($baselineSearchIds,((int)ceil(146/$size)-1)*$size),'search boundary last page has the correct offset');}
+    foreach([0,101,'50',50.5,null,true,false,[]] as $invalid)rejects(fn()=>$search(['pageSize'=>$invalid]),400);
     $db->queries=[];$all=$run('overview',['filters'=>['status'=>'all']]);
     check($all['totals']['articleCount']===145&&$all['totals']['versionCount']===146&&$all['totals']['publishedArticles']===145&&$all['totals']['savedDraftVersions']===1,'root dedup and draft versions');
     check(count($db->queries)===5,'overview uses 5 batch SELECTs regardless of article count');

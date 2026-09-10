@@ -236,12 +236,14 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
     }
     private function searchPosts(array $input): array
     {
+        $pageSize = array_key_exists('pageSize', $input) ? $input['pageSize'] : 30;
+        $this->demand(is_int($pageSize) && $pageSize >= 1 && $pageSize <= 100);
         $db = $this->bridgeDb;
         [$sql, $page, $sortBy, $order] = $this->searchQuery($input);
         $direction = $order === 'asc' ? \Typecho\Db::SORT_ASC : \Typecho\Db::SORT_DESC;
-        $rows = $db->fetchAll($sql->order('table.contents.' . $sortBy, $direction)->order('table.contents.cid', $direction)->offset(($page - 1) * 30)->limit(31));
+        $rows = $db->fetchAll($sql->order('table.contents.' . $sortBy, $direction)->order('table.contents.cid', $direction)->offset(($page - 1) * $pageSize)->limit($pageSize + 1));
         $items = [];
-        foreach (array_slice($rows, 0, 30) as $row) {
+        foreach (array_slice($rows, 0, $pageSize) as $row) {
             $published = $row['type'] === 'post' && $row['status'] === 'publish';
             $metas = $db->fetchAll($db->select('table.metas.mid','table.metas.name','table.metas.type')->from('table.metas')
                 ->join('table.relationships','table.relationships.mid = table.metas.mid')->where('table.relationships.cid = ?', $row['cid']));
@@ -258,7 +260,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
                 'createdAt' => gmdate('c', (int) $row['created']), 'modifiedAt' => gmdate('c', (int) $row['modified']),
                 'tags' => $tags, 'categories' => $categories, 'url' => $url];
         }
-        return ['items' => $items, 'page' => $page, 'hasMore' => count($rows) > 30,
+        return ['items' => $items, 'page' => $page, 'pageSize' => $pageSize, 'hasMore' => count($rows) > $pageSize,
             'dateNote' => 'created是Typecho设定的文章时间，modified是该版本最近修改时间；保存稿单独返回，不等于已发布。'];
     }
     private function row(int $cid): ?array

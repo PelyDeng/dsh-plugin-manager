@@ -9,12 +9,13 @@ test('report filters normalize Shanghai dates and preserve explicit scope withou
   assert.equal(r.filters.status,'published');assert.equal(r.filters.dateFrom,'2026-09-08');assert.equal(r.end-r.start,86400)
   assert.equal(r.start,Date.parse('2026-09-07T16:00:00Z')/1000);assert.equal(r.filters.tag,'后端')
   assert.equal(r.filters.categoryId,7);assert.equal(r.filters.includeDescendants,true);assert.equal(r.filters.hasSavedDraft,false)
-  assert.equal(r.filters.page,undefined);assert.equal(r.filters.sortBy,undefined);assert.equal(r.filters.period,undefined)
+  assert.equal(r.filters.page,undefined);assert.equal(r.filters.pageSize,undefined);assert.equal(r.filters.sortBy,undefined);assert.equal(r.filters.period,undefined)
+  const paged=normalizeReport('catalog',{pageSize:500});assert.equal(paged.pageSize,500);assert.equal(paged.filters.pageSize,undefined)
   for(const report of reportTools)assert.equal(normalizeReport(report.report,{filters:{status:'all'}}).filters.status,'all')
 })
 test('report validation rejects unsupported filters, invalid pages and ambiguous names before transport',async()=>{
   const client=new BlogClient(config,()=>assert.fail('invalid queries must not reach the bridge'))
-  for(const args of [{action:'save'},{constructor:'x'},{filters:{constructor:'x'}},{filters:[]},{filters:{page:2}},
+  for(const args of [{action:'save'},{constructor:'x'},{filters:{constructor:'x'}},{filters:[]},{filters:{page:2}},{filters:{pageSize:50}},
     {pageSize:0},{pageSize:501},{page:1.1},{groupBy:'unknown'},{filters:{categoryId:'1'}},{filters:{categoryId:1,category:'技术'}},
     {filters:{tagId:1,tag:'后端'}},{filters:{includeDescendants:true}},{filters:{hasSavedDraft:'true'}},{filters:{missing:'all'}},
     {filters:{dateFrom:'2026-02-30'}},{filters:{period:'today',dateTo:'2026-09-08'}},{filters:{title:['x']}}])await assert.rejects(client.report('catalog',args))

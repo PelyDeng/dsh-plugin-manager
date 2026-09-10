@@ -13,6 +13,40 @@ test('remote search transports typed ranges and resolves native relative links',
   assert.equal(r.items[0].localTime.modified,'2026-09-07 19:12:17')
 })
 
+test('search accepts the observed pageSize argument and preserves bounded pagination',async()=>{
+  const rows=Array.from({length:61},(_,i)=>({cid:i+1,title:'二叉树 '+i})),calls=[]
+  const client=new BlogClient({url:'https://blog.example',username:'fixture',password:'fixture'},async(_url,options)=>{
+    const p=JSON.parse(options.body);calls.push(p);const offset=(p.page-1)*p.pageSize
+    return Response.json({ok:true,data:{items:rows.slice(offset,offset+p.pageSize),page:p.page,pageSize:p.pageSize,hasMore:offset+p.pageSize<rows.length}})
+  })
+  const first=await client.search({query:'二叉树',pageSize:50}),last=await client.search({query:'二叉树',pageSize:50,page:2})
+  assert.equal(first.items.length,50);assert.equal(first.pageSize,50);assert.equal(first.filters.pageSize,50);assert.equal(first.hasMore,true)
+  assert.equal(last.items.length,11);assert.equal(last.hasMore,false);assert.equal(last.pageSize,50)
+  assert.deepEqual([...first.items,...last.items].map(r=>r.cid),rows.map(r=>r.cid));assert.equal(calls.length,2)
+  assert.equal(calls[0].action,'search');assert.equal(calls[0].query,'二叉树');assert.equal(calls[0].pageSize,50)
+  assert.equal(normalizeSearch().filters.pageSize,30)
+  for(const pageSize of [1,100])assert.equal(normalizeSearch({pageSize}).filters.pageSize,pageSize)
+  for(const pageSize of [0,101,1.5,'50',null,true,[],NaN])await assert.rejects(client.search({pageSize}),/每页条数/)
+  assert.equal(calls.length,2,'invalid sizes never reach the bridge')
+})
+
+test('legacy search reports its actual fixed page size without extra requests or missing rows',async()=>{
+  const rows=Array.from({length:61},(_,i)=>({cid:i+1})),calls=[]
+  const client=new BlogClient({url:'https://blog.example',username:'fixture',password:'fixture'},async(_url,options)=>{
+    const p=JSON.parse(options.body);calls.push(p);const offset=(p.page-1)*30
+    return Response.json({ok:true,data:{items:rows.slice(offset,offset+30),page:p.page,hasMore:offset+30<rows.length}})
+  })
+  const pages=[]
+  for(let page=1;page<=3;page++)pages.push(await client.search({query:'二叉树',pageSize:50,page}))
+  assert.deepEqual(pages.map(p=>p.items.length),[30,30,1]);assert.deepEqual(pages.map(p=>p.hasMore),[true,true,false])
+  for(const p of pages){assert.equal(p.pageSize,30);assert.equal(p.filters.pageSize,30);assert.match(p.pageSizeNote,/30/)}
+  assert.deepEqual(pages.flatMap(p=>p.items.map(r=>r.cid)),rows.map(r=>r.cid));assert.equal(calls.length,3)
+  for(const pageSize of [0,101,'30',null]){
+    client.fetch=async()=>Response.json({ok:true,data:{items:[],pageSize,hasMore:false}})
+    await assert.rejects(client.search(),e=>e.status===502&&/分页/.test(e.message))
+  }
+})
+
 test('Shanghai midnight resolves today separately from literal keyword and yesterday',()=>{
   const now=Date.parse('2026-09-07T16:00:49Z')
   assert.equal(searchContext(now).today,'2026-09-08')
@@ -31,6 +65,10 @@ test('combined draft filters retain ownership, dates, taxonomy, literal wildcard
   const r=searchDrafts(store,'u',args,now,[{id:7,name:'技术'}]);assert.equal(r.total,32);assert.equal(r.items.length,30);assert.equal(r.hasMore,true);assert.deepEqual(r,JSON.parse(JSON.stringify(r)))
   assert.equal(r.items[0].localTime.modified,'2026-09-07 23:59:09')
   assert.equal(searchDrafts(store,'u',{...args,page:2},now,[{id:7,name:'技术'}]).items.length,2)
+  const pages=Array.from({length:4},(_,i)=>searchDrafts(store,'u',{...args,page:i+1,pageSize:10},now,[{id:7,name:'技术'}]))
+  assert.deepEqual(pages.map(p=>p.items.length),[10,10,10,2]);assert.deepEqual(pages.map(p=>p.hasMore),[true,true,true,false])
+  assert.ok(pages.every(p=>p.pageSize===10&&p.filters.pageSize===10&&p.total===32))
+  assert.equal(new Set(pages.flatMap(p=>p.items.map(d=>d.id))).size,32)
   assert.equal(searchDrafts(store,'u',{period:'today'},now).total,0)
   assert.equal(searchDrafts(store,'u',{...args,category:'未知'},now,[]).total,0)
   assert.equal(searchDrafts(store,'u',{status:'published'},now).total,0)

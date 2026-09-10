@@ -45,8 +45,11 @@ export class BlogClient {
   async search(input={},signal) {
     const {filters,timeZone,start,end}=normalizeSearch(input)
     const result=await this.call('search',{...filters,start:start===null?null:start/1000,end:end===null?null:end/1000},signal)
+    // Older search bridges always paginate by 30 and omit pageSize.
+    const pageSize=Object.hasOwn(result,'pageSize')?result.pageSize:30
+    invariant(Number.isSafeInteger(pageSize)&&pageSize>=1&&pageSize<=100,'博客返回了无效分页大小',502)
     const items=result.items.map(item=>{const row={...item,localTime:{created:searchLocalTime(item.created*1000),modified:searchLocalTime(item.modified*1000)}};if(!item.url)return row;const url=new URL(item.url,this.config.url);invariant(['https:','http:'].includes(url.protocol),'博客返回了无效文章链接',502);return {...row,url:url.href}})
-    return {...result,items,filters,timeZone,clock:searchContext(),dateNote:'localTime是上海时间，其他时间戳保留原值。created是Typecho设定的文章时间，不是首次创建或首次发布的证据；modified是该版本最近修改时间。'}
+    return {...result,items,pageSize,filters:{...filters,pageSize},...(pageSize!==filters.pageSize?{pageSizeNote:`当前桥接器实际每页返回至多 ${pageSize} 条；续页使用此 pageSize，并依据 hasMore 判断是否结束。`}:{}),timeZone,clock:searchContext(),dateNote:'localTime是上海时间，其他时间戳保留原值。created是Typecho设定的文章时间，不是首次创建或首次发布的证据；modified是该版本最近修改时间。'}
   }
 }
 
