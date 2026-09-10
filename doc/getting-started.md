@@ -6,15 +6,15 @@
 
 ## 1. 准备工具和目录
 
-普通使用者从框架 **0.16.1** 的发行附件取得部署包和 public-apps.zip。public-apps 中的完整目录同时包含 auth/example；复制到 incoming/public-apps 后，不要再复制 optional/auth，以免重复 ID。
+普通使用者从框架 **0.16.2** 的发行附件取得部署包和 public-apps.zip。public-apps 中的完整目录同时包含 auth/example；复制到 incoming/public-apps 后，不要再复制 optional/auth，以免重复 ID。
 
 仅维护者从源码准备 manager/kit 时，在框架根安装锁定依赖，再执行：
 
 ```sh
 pnpm --filter @dsh-plugin-manager/plugin-kit build
 pnpm --filter @dsh-plugin-manager/plugin-manager build
-pnpm --filter @dsh-plugin-manager/plugin-manager pack --out .local/artifacts/plugin-manager-0.16.1.tgz
-pnpm --filter @dsh-plugin-manager/plugin-kit pack --out .local/artifacts/plugin-kit-0.16.1.tgz
+pnpm --filter @dsh-plugin-manager/plugin-manager pack --out .local/artifacts/plugin-manager-0.16.2.tgz
+pnpm --filter @dsh-plugin-manager/plugin-kit pack --out .local/artifacts/plugin-kit-0.16.2.tgz
 ```
 
 这些是工具构建，不启动站点。需要源码部署的维护者见[源码入口](../deploy/README.md#服务器源码发版)。
