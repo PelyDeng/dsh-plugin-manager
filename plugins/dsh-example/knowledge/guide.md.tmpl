@@ -72,9 +72,15 @@ authenticated 历史按可信账号隔离；standalone 使用安装级共享身�
 
 本人会话管理允许查找、预览与逐项归档，不直接删宿主日志；正文缺失或投影失败须明确报告。具体语义查 doc/conversation-management.md、kit/conversations 与公共应用实现。
 
+新对话标题复用官方宿主的首句提炼，插件不重复发标题请求；宿主辅助请求仍有模型用量。标题可能晚于回答结束：当前新会话先刷新历史，仍为 automatic 时每 2 秒刷新，最多 65 秒；取得生成标题、手动改名、切换或新建会话后停止。后来提问不会反复改名。
+
+通过 kit 的 registerConversationTitles(ctx, accept) 在插件生命周期接收 (id,title,manual,complete)，只更新已有 owner、已就绪、未删除且未在移除中的记录。example 的 schema 4 titleSource 保存 automatic/generated/manual；旧历史和分支按 manual 保护，自动结果不能覆盖手动标题，但可信宿主 user 再次改名可以生效。旧版 example 会拒绝 schema 4，回退不能只换旧包或手改数据库版本；先停写备份，按一致备份恢复。接入、迁移和事件过滤查 doc/conversation-management.md。
+
 ## 版本、CI 与源码查证
 
-根 package.json 是公共框架唯一版本源，manager/kit/auth/example 同步，独立插件与官方宿主单独版本化。scripts/version.mjs 的 sync/check 同时负责固定公开片段和版本文档；不要手改生成 guide.md。Windows/macOS/Linux × Node 22/24 共六组检查，Release 另有 build/publish；数量以该提交实际工作流为准，不代表现场部署通过。
+根 package.json 是公共框架唯一版本源，manager/kit/auth/example 同步，独立插件与官方宿主单独版本化。scripts/version.mjs 的 sync/check 同时负责固定公开片段和版本文档；不要手改生成 guide.md。Windows/macOS/Linux × Node 22/24 共六组检查，Release 另有 runtime、build/publish；数量以该提交实际工作流为准，不代表现场部署通过。
+
+Release 的 runtime 构建并发布固定宿主/manager 镜像，检查匿名拉取；build 复用同一 manager，输出 manager/kit tgz、public-apps/deployment/starters ZIP 五个产物及 SHA256SUMS.txt。普通 main 推送不发布 Release，也不部署服务器；细节查 .github/RELEASING.md 和实际工作流。
 
 源码证据先用 example_search_framework 搜完整路径，再用 example_read_framework 分页阅读实现和调用方，引用路径与行号。快照包含当前公共源码、文档和已登记模板，不收私有配置、业务数据、根私有 build 入口、宿主源码和 doc/releases/ 历史说明。构建时版本/来源校验失败不能截断索引。
 

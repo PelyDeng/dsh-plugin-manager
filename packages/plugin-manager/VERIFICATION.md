@@ -1,6 +1,6 @@
 # 发布物验证记录
 
-manager 0.3.3 在发布清单 1/2 顶层接受可选 `verification`。旧清单继续安装；旧管理器可能忽略该字段。插件声明仍为 schema 3，验证信息不写入 tgz，也不改变已测包的字节。
+自 manager 0.3.3 起，发布清单 1/2 顶层接受可选 `verification`。旧清单继续安装；旧管理器可能忽略该字段。插件声明仍为 schema 3，验证信息不写入 tgz，也不改变已测包的字节。
 
 ## 生成和交付
 
@@ -28,7 +28,7 @@ Windows 不使用 Bash 时，在框架根执行 `node scripts/test-report.mjs --
 在框架根目录打包 auth/example，显式运行测试，再将报告附到新的发布目录：
 
 ```sh
-pnpm package --plugins auth,example --output .local/artifacts/candidate
+pnpm package --plugins "auth,example" --output .local/artifacts/candidate
 node plugins/dsh-example/tests/host-smoke.mjs .local/artifacts/candidate --report .local/artifacts/example-host-report.json
 node packages/plugin-manager/src/cli.mjs compose-release --root . --manifest .local/artifacts/candidate/manifest.json --verification-report .local/artifacts/example-host-report.json --output .local/artifacts/delivery
 ```

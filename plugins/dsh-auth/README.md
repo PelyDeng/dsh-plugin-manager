@@ -4,9 +4,9 @@
 
 登录后通过左侧“会话管理”按已授权业务插件管理本人对话，支持搜索、日期与状态筛选、分页、右侧只读预览及批量删除。删除同步移除插件历史和官方 DSH 列表，底层记录仍保留；运行中的会话不可删除。完整行为、旧历史如何处理，以及插件如何接入见[会话管理](../../doc/conversation-management.md)。
 
-通过管理器部署时，本插件按 `configuration.auth: provider` 提供认证，站点 origin 统一配置。实例配置为 `<DSH home>/plugins/auth/plugin.json`，不接受 `accessMode`；其他插件各自决定是否要求认证。配置与部署步骤见管理器包内 DELIVERY.md。
+通过管理器部署时，本插件按 `configuration.auth: provider` 提供认证，站点 origin 统一配置。新 archives 站点的配置为 `.local/config/plugins/auth/plugin.json`；源码和手工 CLI 默认 `<DSH home>/plugins/auth/plugin.json`，已有实例及显式路径原样沿用。配置不接受 `accessMode`；其他插件各自决定是否要求认证。按部署包随附指南操作，独立 CLI 的手工步骤见管理器包内 DELIVERY.md。
 
-可选统一认证插件，在宿主 WebServer 提供 `/auth` 页面、账号管理与逐插件授权。默认包含在所选插件中，不改变业务插件的访问模式，不替代 DSH 官方控制台认证。
+可选统一认证插件，在宿主 WebServer 提供 `/auth` 页面、账号管理与逐插件授权。源码默认选集包含 auth；archives 只部署 incoming 中的完整候选，需要认证时显式提供 auth，已有 public-apps 已含 auth 时不重复添加。不改变业务插件的访问模式，也不替代 DSH 官方控制台认证。
 
 管理员可以管理账号，自动拥有已加载插件和控制台权限。普通用户需要逐项授权。账号角色、密码、启停或授权变化会撤销该用户登录会话；最后一个有效管理员不能被停用或降级。
 

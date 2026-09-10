@@ -36,7 +36,7 @@ pnpm --filter @dsh-plugin-manager/plugin-kit pack --out .local/artifacts/plugin-
 
 鉴权起步插件的实际请求为 /independent-access-example/identity，成功返回含 owner 的 JSON；匿名或无该应用授权的账号不应取得身份结果。无 kit 的起步插件请求 /independent-example/ready，成功返回其 README 定义的就绪 JSON。测试身份端点不需要模型。
 
-已部署 example 时，普通账号打开 /example，新建对话，确认真实流式回答及历史恢复；需要先配置自己的模型。/auth 登录、官方根路径认证和模型 API 密钥分别管理，不能用填模型密钥修复根路径的认证提示。健康检查、登录和真实模型调用分别验证。
+已部署 example 时，普通账号打开 /example；尚未配置模型可点击“阅读 FAQ（无需模型）”，指南仍需应用授权，但不创建 Agent 或调用模型。配置自己的模型后新建对话，确认真实流式回答及历史恢复。/auth 登录、官方根路径认证和模型 API 密钥分别管理，不能用填模型密钥修复根路径的认证提示。健康检查、登录和真实模型调用分别验证。
 <!-- /excerpt:first-login -->
 
 ![登录页](assets/login.png)

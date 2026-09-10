@@ -4,7 +4,7 @@
 
 ## 服务器源码发版
 
-Windows 使用根 `.\build.ps1`，macOS/Linux 使用 `bash build.sh`；旧 deploy 目录入口继续支持。完整源码检出默认 source，使用已有官方宿主源码和锁定依赖，不自动克隆、拉取或切换宿主。需 Node.js `^22.19.0 || >=24`、npm、Git、tar、本机 Linux Docker 与 Compose；脚本只按需准备锁定 pnpm，不安装系统软件。
+Windows 使用根 `.\build.ps1`，macOS/Linux 使用 `bash build.sh`；`deploy/build.ps1` 与 `deploy/build.sh` 转发到同一入口。完整源码检出默认 source，使用已有官方宿主源码和锁定依赖，不自动克隆、拉取或切换宿主。需 Node.js `^22.19.0 || >=24`、npm、Git、tar、本机 Linux Docker 与 Compose；脚本只按需准备锁定 pnpm，不安装系统软件。
 
 ```sh
 git clone --recurse-submodules https://github.com/PelyDeng/dsh-plugin-manager.git
@@ -19,7 +19,7 @@ bash build.sh
 ### 按需重建
 
 <!-- excerpt:source-rebuild -->
-日常 `pnpm build --plugins c` 只构建 c，`pnpm package --plugins c,d --output <新目录>` 只交付 c、d。源码部署使用 `./build.sh --rebuild-plugins c`；Windows 使用 `.\build.ps1 --rebuild-plugins c`，多个 ID 用 c,d。保留站点 a,b,c,d 完整选集，只有指定插件重建，其余复用可核实旧归档，新清单仍完整。省略参数全量构建；不接受空项、重复、all/none 或选集外 ID。
+日常 `pnpm build --plugins c` 只构建 c，`pnpm package --plugins "c,d" --output <新目录>` 只交付 c、d。源码部署使用 `./build.sh --rebuild-plugins c`；Windows 使用 `.\build.ps1 --rebuild-plugins c`，多个 ID 使用 `.\build.ps1 --rebuild-plugins "c,d"`，Bash 同样可加引号。所有逗号分隔选集都加引号，避免 PowerShell 将其拆成数组。保留站点 a,b,c,d 完整选集，只有指定插件重建，其余复用可核实旧归档，新清单仍完整。省略参数全量构建；不接受空项、重复、all/none 或选集外 ID。
 
 复用需与活动站点对应的 ready 基线、构建环境、宿主来源与旧归档均可核验。共享已跟踪文件、未重建插件或本地构建依赖变化时拒绝；本地依赖按传递关系校验，不得靠安装钩子重建。不会自动扩大选集或静默全量。没有基线时先正常全量构建；archives 成功记录不充当 source 基线，切回 source 首次必须全量。
 
@@ -32,7 +32,7 @@ manager/kit、镜像准备、停服安装和健康检查仍执行，不是热更
 
 终端显示阶段、实际耗时和日志路径；运行中的百分比仅为等待提示。重定向输出只记录开始及结果，详细日志在 `.local/artifacts/build-logs/`。失败后保留实际错误，不用进度百分比推断已完成的数据比例。
 
-站点发布锁保护来源准备与部署；profile 安装锁保护安装事务，职责不同。保留 source-release.node.lock/control.lock 与 Linux flock 兼容路径。worker 报告完成且正常退出才释放外层锁，强制终止时保留证据。源码 beforeBuild hook 仅在正常 source 构建触发，archives/resume/recover 均不更新源码。
+站点发布锁保护来源准备与部署；profile 安装锁保护安装事务，职责不同。保留 source-release.node.lock/control.lock 与 Linux flock 兼容路径。worker 报告完成且正常退出才释放外层锁，强制终止时保留证据。源码 beforeBuild hook 仅在正常 source 构建触发，archives/resume/recover 均不更新源码。入口先校验模式、静态字段及未完成操作，再允许 hook 准备源码；非法配置或尚需恢复的操作不会触发私有源码同步。帮助和 doctor 使用轻量入口，不先安装框架依赖或启动 Docker。
 
 ## 运行配置
 
@@ -57,6 +57,8 @@ Windows 用 `.\build.ps1` 替代 bash build.sh。--resume、--recover、--rebuil
 resume 使用保存的工具、镜像、归档和配置副本；原受管配置被修改时拒绝。prepared 前不为新站点创建 data/home，之后即使挂载预检尚未停服就失败，也通过 resume 沿用已记录归属。
 
 recover 只修正新 schema 3 失败操作的 plugin.json.config 或 runtimeConfig，保留包摘要、选集、认证控制字段、镜像、工具和站点路径。--data-compatible 是部署者确认当前包可继续读取现有数据，不是自动备份或兼容证明。新候选保留前序失败快照；再次临时失败用 resume，继续改业务配置则再显式 recover。
+
+恢复会核对安装状态和 pending 是否确属前序站点候选；仅包名和摘要相同不足以接管另一操作。尚未写出 pending 时也须与保存的前序状态证据一致，不能手工替换状态或把其他站点的记录移入当前目录。
 
 需要换修复包、宿主或工具不属于这一高层快捷恢复；保留现场并由维护者核查底层高级修复与数据兼容流程，不自行删锁、改记录或删数据。旧 schema 2 使用其原环境与兼容恢复证据，不能伪造新快照。恢复只继续部署，不回滚业务数据；发布归档和配置副本不能代替独立数据备份。
 <!-- /excerpt:site-recovery -->

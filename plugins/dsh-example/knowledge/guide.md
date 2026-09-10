@@ -76,7 +76,7 @@ dsh-deployment/
 
 鉴权起步插件的实际请求为 /independent-access-example/identity，成功返回含 owner 的 JSON；匿名或无该应用授权的账号不应取得身份结果。无 kit 的起步插件请求 /independent-example/ready，成功返回其 README 定义的就绪 JSON。测试身份端点不需要模型。
 
-已部署 example 时，普通账号打开 /example，新建对话，确认真实流式回答及历史恢复；需要先配置自己的模型。/auth 登录、官方根路径认证和模型 API 密钥分别管理，不能用填模型密钥修复根路径的认证提示。健康检查、登录和真实模型调用分别验证。
+已部署 example 时，普通账号打开 /example；尚未配置模型可点击“阅读 FAQ（无需模型）”，指南仍需应用授权，但不创建 Agent 或调用模型。配置自己的模型后新建对话，确认真实流式回答及历史恢复。/auth 登录、官方根路径认证和模型 API 密钥分别管理，不能用填模型密钥修复根路径的认证提示。健康检查、登录和真实模型调用分别验证。
 
 ## Auth 登录后，根路径为什么仍提示认证？
 
@@ -101,7 +101,7 @@ dsh-deployment/
 ## 只改 C，能只构建 C 或任意多个插件吗？
 
 <!-- Excerpt from deploy/README.md#source-rebuild; edit its source. -->
-日常 `pnpm build --plugins c` 只构建 c，`pnpm package --plugins c,d --output <新目录>` 只交付 c、d。源码部署使用 `./build.sh --rebuild-plugins c`；Windows 使用 `.\build.ps1 --rebuild-plugins c`，多个 ID 用 c,d。保留站点 a,b,c,d 完整选集，只有指定插件重建，其余复用可核实旧归档，新清单仍完整。省略参数全量构建；不接受空项、重复、all/none 或选集外 ID。
+日常 `pnpm build --plugins c` 只构建 c，`pnpm package --plugins "c,d" --output <新目录>` 只交付 c、d。源码部署使用 `./build.sh --rebuild-plugins c`；Windows 使用 `.\build.ps1 --rebuild-plugins c`，多个 ID 使用 `.\build.ps1 --rebuild-plugins "c,d"`，Bash 同样可加引号。所有逗号分隔选集都加引号，避免 PowerShell 将其拆成数组。保留站点 a,b,c,d 完整选集，只有指定插件重建，其余复用可核实旧归档，新清单仍完整。省略参数全量构建；不接受空项、重复、all/none 或选集外 ID。
 
 复用需与活动站点对应的 ready 基线、构建环境、宿主来源与旧归档均可核验。共享已跟踪文件、未重建插件或本地构建依赖变化时拒绝；本地依赖按传递关系校验，不得靠安装钩子重建。不会自动扩大选集或静默全量。没有基线时先正常全量构建；archives 成功记录不充当 source 基线，切回 source 首次必须全量。
 
@@ -156,6 +156,8 @@ resume 使用保存的工具、镜像、归档和配置副本；原受管配置�
 
 recover 只修正新 schema 3 失败操作的 plugin.json.config 或 runtimeConfig，保留包摘要、选集、认证控制字段、镜像、工具和站点路径。--data-compatible 是部署者确认当前包可继续读取现有数据，不是自动备份或兼容证明。新候选保留前序失败快照；再次临时失败用 resume，继续改业务配置则再显式 recover。
 
+恢复会核对安装状态和 pending 是否确属前序站点候选；仅包名和摘要相同不足以接管另一操作。尚未写出 pending 时也须与保存的前序状态证据一致，不能手工替换状态或把其他站点的记录移入当前目录。
+
 需要换修复包、宿主或工具不属于这一高层快捷恢复；保留现场并由维护者核查底层高级修复与数据兼容流程，不自行删锁、改记录或删数据。旧 schema 2 使用其原环境与兼容恢复证据，不能伪造新快照。恢复只继续部署，不回滚业务数据；发布归档和配置副本不能代替独立数据备份。
 
 输入不合法时依错误修复；暂时网络和权限问题不等于包缺陷。业务加载失败也不一定是模型密钥错误，分别查服务 inject 声明、插件参数、授权和提供方错误。提问附版本、操作系统、Node/pnpm、目录角色、脱敏命令与错误、预期/实际结果，不发送完整 env、Cookie、token 或数据库。
@@ -185,9 +187,15 @@ authenticated 历史按可信账号隔离；standalone 使用安装级共享身�
 
 本人会话管理允许查找、预览与逐项归档，不直接删宿主日志；正文缺失或投影失败须明确报告。具体语义查 doc/conversation-management.md、kit/conversations 与公共应用实现。
 
+新对话标题复用官方宿主的首句提炼，插件不重复发标题请求；宿主辅助请求仍有模型用量。标题可能晚于回答结束：当前新会话先刷新历史，仍为 automatic 时每 2 秒刷新，最多 65 秒；取得生成标题、手动改名、切换或新建会话后停止。后来提问不会反复改名。
+
+通过 kit 的 registerConversationTitles(ctx, accept) 在插件生命周期接收 (id,title,manual,complete)，只更新已有 owner、已就绪、未删除且未在移除中的记录。example 的 schema 4 titleSource 保存 automatic/generated/manual；旧历史和分支按 manual 保护，自动结果不能覆盖手动标题，但可信宿主 user 再次改名可以生效。旧版 example 会拒绝 schema 4，回退不能只换旧包或手改数据库版本；先停写备份，按一致备份恢复。接入、迁移和事件过滤查 doc/conversation-management.md。
+
 ## 版本、CI 与源码查证
 
-根 package.json 是公共框架唯一版本源，manager/kit/auth/example 同步，独立插件与官方宿主单独版本化。scripts/version.mjs 的 sync/check 同时负责固定公开片段和版本文档；不要手改生成 guide.md。Windows/macOS/Linux × Node 22/24 共六组检查，Release 另有 build/publish；数量以该提交实际工作流为准，不代表现场部署通过。
+根 package.json 是公共框架唯一版本源，manager/kit/auth/example 同步，独立插件与官方宿主单独版本化。scripts/version.mjs 的 sync/check 同时负责固定公开片段和版本文档；不要手改生成 guide.md。Windows/macOS/Linux × Node 22/24 共六组检查，Release 另有 runtime、build/publish；数量以该提交实际工作流为准，不代表现场部署通过。
+
+Release 的 runtime 构建并发布固定宿主/manager 镜像，检查匿名拉取；build 复用同一 manager，输出 manager/kit tgz、public-apps/deployment/starters ZIP 五个产物及 SHA256SUMS.txt。普通 main 推送不发布 Release，也不部署服务器；细节查 .github/RELEASING.md 和实际工作流。
 
 源码证据先用 example_search_framework 搜完整路径，再用 example_read_framework 分页阅读实现和调用方，引用路径与行号。快照包含当前公共源码、文档和已登记模板，不收私有配置、业务数据、根私有 build 入口、宿主源码和 doc/releases/ 历史说明。构建时版本/来源校验失败不能截断索引。
 

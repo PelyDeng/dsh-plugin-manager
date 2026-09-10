@@ -107,7 +107,7 @@ pnpm list:plugins
 
 ### 3. 运行并验证
 
-首次运行按[配置并启动](getting-started.md#3-配置并启动)操作；开发模式及管理参数见[部署命令](../deploy/README.md)。示例默认要求登录，候选选入 auth、example 并配置公开 origin。安装现成清单默认选择其中全部插件，也可通过 `--plugins` 限定。
+首次运行按[配置并启动](getting-started.md#3-配置并启动)操作。站点 build 仅支持 release；底层 CLI 的 development 与管理参数见[字段参考](framework-configuration.md#独立-cli-字段参考)。示例默认要求登录，候选选入 auth、example 并配置公开 origin。安装现成清单默认选择其中全部插件，也可通过 `--plugins` 限定。
 
 ## 复制完整问答应用到独立仓库
 
@@ -121,6 +121,8 @@ pnpm list:plugins
 6. 在作者根执行 `pnpm build`、`pnpm check` 和 `pnpm test`，保存 pnpm-lock.yaml。在工具目录执行 `pnpm exec dsh-plugin-manager pack --root <作者包根> --package . --output <新发布目录>`。只交付无需事先重复 build/check。
 
 部署者只取得整个发布目录及说明。确认 tgz 包含知识、页面、配置模板和入口；作者源码目录不参与 release。kit 更新需每个使用它的应用更新内嵌版本后重新交付，不能只升级管理器。
+
+复制时保留[自动标题](conversation-management.md#自动标题)的全生命周期监听、owner 检查和手动标题保护；前端复用有界历史刷新。宿主已经提炼首句，业务插件不再另发标题请求。沿用历史数据库时核对 schema 4 的升级与回退边界。
 
 ## 交付内容
 

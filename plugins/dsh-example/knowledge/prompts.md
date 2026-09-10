@@ -27,6 +27,7 @@
 ```text
 用公开 example 开发 <业务>，包名 <包名>、ID <插件ID>、路由 /<路由>。复用 Agent、流式输出、停止、历史和 kit 鉴权，owner 来自可信 actor；替换知识、工具、提示词及身份命名。
 用 kit/models 的 conversationModel 读取默认或恢复历史，读取前后鉴权，分支传继承事件数。独立包将 kit workspace:* 改为版本化 tgz 并内嵌，替换框架专用脚本与测试。验证匿名拒绝、账号隔离、授权、停止和恢复；standalone 不承诺个人隔离，未测真实模型须说明。
+通过 kit 的 registerConversationTitles 复用宿主首句标题，监听持续到插件释放；保留 owner、删除、手动与分支标题保护，可信 user 再次改名可生效。验证回答结束后的晚到标题和有界历史刷新，插件不重复发标题模型请求。
 ```
 
 ## 现有项目接入
