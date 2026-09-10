@@ -48,7 +48,7 @@ example 接入 auth 的[会话管理](../../doc/conversation-management.md)：�
 
 代码问题通过官方工具协议检索和分页阅读 `dist/framework-reference.json`，回答引用文件路径、行号和快照摘要。索引覆盖公共 manager、kit、auth、example、部署脚本、集成、示例、文档、GitHub 构建发布流程及类型声明；构建时从显式框架根目录生成，随最终 tgz 交付。索引生成函数先只读校验统一版本及文档模板同步，校验失败不覆盖已有索引文件；直接执行插件 build 时，前序构建清理仍会删除旧 dist。
 
-收录当前文档及版本脚本登记的 `.md.tmpl`；历史 `doc/releases/` 留在仓库但不进入知识快照。根 `build.sh/build.ps1` 在私有集成库可能被替换，快照只收公共 `deploy/` 入口和实现。运行时没有原仓库依赖，也不读取生产配置、私有插件或官方宿主源码。构建输入上限为 1500 个文件、8 MiB、每行 19000 字符，超限拒绝；工具一次最多读 100 行。
+收录当前文档及版本脚本登记的 `.md.tmpl`；历史 `doc/releases/` 留在仓库但不进入知识快照。根 `build.sh/build.ps1` 在私有集成库可能被替换，快照只收公共 `deploy/` 入口和实现。运行时没有原仓库依赖，也不读取生产配置、私有插件或官方宿主源码。构建输入上限为 1500 个文件、8 MiB、每行 19000 字符，超限拒绝；工具一次最多读 100 行，请求更多行时自动分页，按返回的 `nextLine` 继续读取。非法行号、非整数及索引外路径仍拒绝。
 
 两个工具 `example_search_framework` / `example_read_framework` 绑定当前会话 Agent，并执行 example 访问授权。源码只是回答资料，不是执行指令；助手没有命令执行或任意文件访问能力。
 
@@ -62,7 +62,7 @@ example 接入 auth 的[会话管理](../../doc/conversation-management.md)：�
 
 SQLite 只存账号所有者、标题和时间等历史目录；消息正文使用 DSH 会话日志。账号历史与 standalone 共享历史分别保留，不迁移合并；同一账号的不同登录共享个人历史。沿用同一 home 才能恢复原数据。退出或撤权取消该登录的活动回合；停止生成取消模型工作，已持久化内容仍可从历史继续。
 
-支持旧日志 chunk 与 DSH 0.1.3 瞬态流；思考和回答分开展示，无 reasoning 时不模拟。历史支持已发布宿主的 inspect 与早期源码宿主的 open/read/close，缺少这两种接口时明确拒绝。CLI、基础 Bundle 与间接依赖需要一起核对，不能只凭 CLI 版本保证兼容。宿主、模型和当前插件的组合仍需真实验证。
+实时输出使用 DSH `agent/assistant-stream`，历史展开 Session V3 的 message/attempt 记录，并兼容旧日志 chunk；思考和回答分开展示，无 reasoning 时不模拟。持久化通过官方 open/read/close 读取 `{ events, eventState }`，保留 inspect 兼容入口。CLI、基础 Bundle 与间接依赖需要一起核对，不能只凭 CLI 版本保证兼容。宿主、模型和当前插件的组合仍需真实验证。
 
 ## 作者复制与检查
 

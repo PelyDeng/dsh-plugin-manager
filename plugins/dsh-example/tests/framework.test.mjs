@@ -21,6 +21,15 @@ test('authorized conversations can cite actual source, but cannot read runtime f
     expect(source.content).toContain('desiredHash')
     expect(source.content).toContain('assessVerification')
     expect(source.nextLine).toBe(225)
+    const page = JSON.parse(await read.execute({ path: 'README.md', lines: 120 }, execution))
+    expect(page.content.split('\n')).toHaveLength(100)
+    expect(page.nextLine).toBe(101)
+    const next = JSON.parse(await read.execute({ path: 'README.md', startLine: page.nextLine, lines: 105 }, execution))
+    expect(next.content).toMatch(/^101: /)
+    expect(next.content.split('\n').length).toBeLessThanOrEqual(100)
+    for (const lines of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      await expect(read.execute({ path: 'README.md', lines }, execution)).rejects.toThrow(/无效|invalid arguments/)
+    }
     await expect(read.execute({ path: '../../.local/site.json' }, execution)).rejects.toThrow('不在随包')
     await expect(read.execute({ path: 'plugins/dsh-blog-assistant/config/config.json' }, execution)).rejects.toThrow('不在随包')
     await expect(read.execute({ path: 'package.json' }, { ...execution, agent: {} })).rejects.toThrow('当前示例会话')

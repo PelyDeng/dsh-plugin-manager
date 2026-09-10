@@ -57,7 +57,7 @@ const model = createServer(async (req, res) => {
     const toolResults = value.messages.slice(lastUser + 1).filter(message => message.role === 'tool')
     if (toolResults.length < 2) {
       const name = toolResults.length ? 'example_read_framework' : 'example_search_framework'
-      const args = toolResults.length ? { path: 'packages/plugin-manager/src/verification.mjs', startLine: 1, lines: 40 } : { query: 'verificationSubjects' }
+      const args = toolResults.length ? { path: 'packages/plugin-manager/src/verification.mjs', startLine: 1, lines: 120 } : { query: 'verificationSubjects' }
       res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `reference_${toolResults.length}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: 'tool_calls' }] })}\n\n`)
       res.end('data: [DONE]\n\n'); return
     }
@@ -169,6 +169,7 @@ try {
   const toolMessages = requests.slice(toolRequestStart).flatMap(request => request.messages).filter(message => message.role === 'tool')
   assert.ok(toolMessages.some(message => JSON.stringify(message).includes('packages/plugin-manager/src/verification.mjs')), 'real Agent must receive source search results')
   assert.ok(toolMessages.some(message => JSON.stringify(message).includes('verificationSubjects')), 'real Agent must receive source content')
+  assert.ok(toolMessages.some(message => String(message.content).includes('"nextLine":101')), 'oversized source reads must return the first page and continuation')
   assert.deepEqual(await list(bob), [])
   assert.equal((await request('/example/history?id=' + personal, undefined, bob)).status, 404)
   const catalog = await (await request('/auth/api/plugins', undefined, alice)).json()

@@ -45,6 +45,8 @@ node scripts/stage-legacy-feedback.mjs --runtime /opt/dsh-runtime --sessions /in
 
 ## 验证范围
 
+插件通过 `ctx.<服务名>` 直接访问宿主服务时，须在导出的 `inject` 中声明；可选服务通过 `ctx.get()` 检查是否可用。测试服务应由独立的 Cordis 插件提供，再用被测插件的实际 `inject` 加载消费方；普通对象替身或根上下文提供服务会漏掉注入作用域错误。新建对话、读取旧历史和业务工具调用应分别验收，ready 成功不能替代这些检查。
+
 升级应分别记录类型与行为测试、独立归档安装、真实宿主加模型替身、容器与生产验收。替身问答不代表真实模型可用，健康检查也不代表浏览器操作完成。框架的 `test-report.sh` 提供 auth/example 的真实宿主及归档验证；私有插件由集成仓库单独检查。
 
 依据：[官方发布说明](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.5-alpha.2)、[V2 到 V3 迁移规范](https://github.com/deepseek-ai/deepseek-harness/blob/b2e3b2a0125854567a4a5fcba75782e42fe84901/packages/session/session-format-v2-to-v3/README.zh.md)、[官方 JSONL 持久化语义](https://github.com/deepseek-ai/deepseek-harness/blob/b2e3b2a0125854567a4a5fcba75782e42fe84901/packages/session/session-persistence-jsonl/README.zh.md)。
