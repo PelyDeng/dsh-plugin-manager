@@ -1,5 +1,5 @@
 /** Durable accounts and same-origin HTTP authorization regressions. */
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { Context } from '@deepseek-ai/cordis'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -13,6 +13,9 @@ import { hashPassword, verifyPassword, type PasswordHash } from '../src/password
 import { AuthService } from '../src/service.ts'
 import { createHandler, safeReturn, validateOrigin } from '../src/http.ts'
 import { registerConversations, type Actor as ConversationActor } from '@dsh-plugin-manager/plugin-kit'
+
+// Real SQLite, HTTP and scrypt use a bounded per-test budget on slower runners.
+vi.setConfig({ testTimeout: 15_000 })
 
 let hash: PasswordHash
 const cleanup: (() => Promise<void> | void)[] = []
@@ -127,7 +130,7 @@ describe('framework default conversation model', () => {
     expect(f.writes).toEqual([])
     expect(await (await f.request(path,choice,admin.cookie,admin.result.csrf)).json()).toEqual({selected:choice})
     expect(f.writes).toEqual([choice])
-  }, 15_000)
+  })
   it('rejects unusable routes and detects a host save that did not persist', async () => {
     const f=await modelsFixture(),admin=await f.login()
     f.llm.resolveCallConfig=async()=>{throw new Error('private upstream failure')}
@@ -203,16 +206,15 @@ describe('administrator DeepSeek credentials', () => {
     expect(value).toBe('sk-second-fixture')
     expect(writes).toEqual(['DEEPSEEK_API_KEY', 'DEEPSEEK_API_KEY'])
   })
-  // These HTTP checks retain real scrypt work; bound each scenario separately on slower CI runners.
   it('requires the initial password change before reading or writing credentials', async () => {
     const f = await httpFixture(true), admin = await f.login('admin', '123456')
     expect((await f.request('/auth/api/deepseek-key', undefined, admin.cookie)).status).toBe(403)
     expect((await f.request('/auth/api/deepseek-key', { apiKey: 'sk-fixture' }, admin.cookie, admin.result.csrf)).status).toBe(403)
-  }, 10_000)
+  })
   it('refuses a missing credential service after administrator login', async () => {
     const ready = await httpFixture(), owner = await ready.login()
     expect(await (await ready.request('/auth/api/deepseek-key', undefined, owner.cookie)).json()).toMatchObject({ supported: false, writable: false })
-  }, 10_000)
+  })
   it('rechecks a revoked administrator after asynchronous credential reads before writing', async () => {
     const f = await httpFixture(), admin = await f.login()
     let writes = 0
