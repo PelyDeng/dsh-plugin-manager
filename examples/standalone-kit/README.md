@@ -7,19 +7,19 @@
 ## 准备工具与 kit
 
 <!-- Excerpt from doc/plugin-development.md.tmpl#author-tools; edit its source. -->
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.16.0.zip`、`plugin-manager-0.16.0.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.16.0.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.16.1.zip`、`plugin-manager-0.16.1.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.16.1.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
 
 起步 zip 内有 standalone-plugin、standalone-kit；选一个目录复制为自己的作者项目，不复制 node_modules、dist 或 .local。在作者项目以外创建独立工具目录 dsh-tools，在该工具目录安装实际 manager 归档：
 
 ```sh
 pnpm init
-pnpm add --ignore-workspace /absolute/path/plugin-manager-0.16.0.tgz
+pnpm add --ignore-workspace /absolute/path/plugin-manager-0.16.1.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
 将占位路径替换为实际绝对路径，含空格时加引号。以后 pnpm exec dsh-plugin-manager 都在这个工具目录执行，--root 明确指向作者项目。manager 不加入业务运行依赖；工具目录和作者项目各自保存锁文件。
 
-Release 起步包已带同版 vendor/plugin-kit.tgz 和相对开发依赖，在本作者目录执行 `pnpm install --ignore-workspace`。仅单独复制仓库示例时，从 Release 取得 `plugin-kit-0.16.0.tgz` 并保存为 vendor/plugin-kit.tgz，再执行：
+Release 起步包已带同版 vendor/plugin-kit.tgz 和相对开发依赖，在本作者目录执行 `pnpm install --ignore-workspace`。仅单独复制仓库示例时，从 Release 取得 `plugin-kit-0.16.1.tgz` 并保存为 vendor/plugin-kit.tgz，再执行：
 
 ```sh
 pnpm add --ignore-workspace --save-dev ./vendor/plugin-kit.tgz

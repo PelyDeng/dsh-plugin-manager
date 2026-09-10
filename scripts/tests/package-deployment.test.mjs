@@ -41,7 +41,7 @@ test('runtime metadata requires the exact manager archive, immutable image and a
   assert.throws(() => runtimeFromImage(image, version, managerHash, execute), /identity/);
 });
 
-function fixture(t) {
+function fixture(t, { withExample = false } = {}) {
   const parent = realpathSync(tmpdir()), base = realpathSync(mkdtempSync(join(parent, 'dsh-release-package-')));
   t.after(() => { assert.equal(dirname(base), parent); rmSync(base, { recursive: true, force: true }); });
   const root = join(base, 'framework'); mkdirSync(root);
@@ -62,7 +62,13 @@ function fixture(t) {
   const kit = archive('kit', { 'dist/index.mjs': 'export const fixture = true;\n' }, { name: '@dsh-plugin-manager/plugin-kit', main: 'dist/index.mjs' });
   const auth = archive('auth', { 'dist/index.mjs': 'export function apply() {}\n', 'README.md': 'Authentication fixture\n', 'cordis.patch.yml': '[]\n' }, { name: 'dsh-auth', deepseekPlugin: { schemaVersion: 3, id: 'auth', configuration: { entryId: 'auth', auth: 'provider' } } });
   const authManifest = join(base, 'auth-manifest.json');
-  json(authManifest, { schemaVersion: 2, plugins: [{ id: 'auth', package: 'dsh-auth', version, archive: 'auth.tgz', sha256: hash(readFileSync(auth)), configuration: { entryId: 'auth', auth: 'provider' }, verifyFiles: ['package.json', 'dist/index.mjs', 'README.md', 'cordis.patch.yml'] }] });
+  const plugins = [{ id: 'auth', package: 'dsh-auth', version, archive: 'auth.tgz', sha256: hash(readFileSync(auth)), configuration: { entryId: 'auth', auth: 'provider' }, verifyFiles: ['package.json', 'dist/index.mjs', 'README.md', 'cordis.patch.yml'] }];
+  if (withExample) {
+    const example = archive('example', { 'dist/index.mjs': 'export function apply() {}\n', 'README.md': 'Conversation fixture\n', 'cordis.patch.yml': '[]\n' }, { name: 'dsh-example', deepseekPlugin: { schemaVersion: 3, id: 'example', configuration: { entryId: 'example', auth: 'consumer' } } });
+    plugins.push({ id: 'example', package: 'dsh-example', version, archive: 'example.tgz', sha256: hash(readFileSync(example)), configuration: { entryId: 'example', auth: 'consumer' }, verifyFiles: ['package.json', 'dist/index.mjs', 'README.md', 'cordis.patch.yml'] });
+  }
+  const verification = withExample ? { schemaVersion: 1, builds: plugins.map(plugin => ({ pluginId: plugin.id, archiveSha256: plugin.sha256, nodeVersion: '22.19.0', packageManagerVersion: '11.19.0' })), runs: [] } : undefined;
+  json(authManifest, { schemaVersion: 2, plugins, ...(verification ? { verification } : {}) });
   return { root, manager, kit, authManifest, images: [image], output: join(root, '.local/output') };
 }
 
@@ -95,6 +101,20 @@ test('deployment contains installed tools and optional auth; starters copy indep
   assert.equal(spawnSync(process.execPath, [cli, '--version'], { encoding: 'utf8', cwd: moved }).stdout.trim(), version);
   assert.match(readFileSync(join(moved, 'build.sh'), 'utf8'), /flock -n[\s\S]*release-site --root/);
   assert.throws(() => assembleDeployment(options, { inspectRuntime: () => runtime }), /new or empty/);
+});
+
+test('a verified auth and example release produces optional auth with only its own build record', t => {
+  const options = fixture(t, { withExample: true });
+  const input = readFileSync(options.authManifest);
+  const source = JSON.parse(input);
+  const result = assembleDeployment(options, { inspectRuntime: () => runtime });
+  const optionalRoot = join(result.deployment, 'optional/auth');
+  const optional = JSON.parse(readFileSync(join(optionalRoot, 'manifest.json')));
+  assert.deepEqual(optional.plugins.map(plugin => plugin.id), ['auth']);
+  assert.deepEqual(optional.verification.builds, [source.verification.builds[0]]);
+  assert.equal(hash(readFileSync(join(optionalRoot, optional.plugins[0].archive))), source.plugins[0].sha256);
+  assert.equal(existsSync(join(optionalRoot, source.plugins[1].archive)), false);
+  assert.deepEqual(readFileSync(options.authManifest), input);
 });
 
 test('mismatched tool versions and repeated runtime platforms fail before staging a deployment', t => {

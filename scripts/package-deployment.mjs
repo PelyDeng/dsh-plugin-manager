@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { verifyPackage } from '../packages/plugin-manager/src/verify-package.mjs';
 import { composeReleases } from '../packages/plugin-manager/src/compose-release.mjs';
 import { loadRelease } from '../packages/plugin-manager/src/release.mjs';
+import { selectVerification } from '../packages/plugin-manager/src/verification.mjs';
 import { renderSiteTemplate } from '../packages/plugin-manager/src/framework-config.mjs';
 import { hash, readArchive } from '../packages/plugin-manager/src/state.mjs';
 import { installManagerArchive } from './manager-tooling.mjs';
@@ -112,7 +113,7 @@ export function assembleDeployment({ root, manager, kit, authManifest, images, o
   copyPublic(join(root, 'deploy/DEPLOYMENT.md'), join(deployment, 'README.md'));
   copyPublic(join(root, 'incoming/README.md'), join(deployment, 'incoming/README.md'));
   copyPublic(join(root, 'LICENSE'), join(deployment, 'LICENSE'));
-  composeReleases([{ ...authRelease, plugins: [auth] }], join(deployment, 'optional/auth'));
+  composeReleases([{ ...authRelease, plugins: [auth], verification: selectVerification(authRelease.verification, [auth]) }], join(deployment, 'optional/auth'));
   copyPublic(join(root, 'deploy/STARTERS.md'), join(starters, 'README.md'));
   copyPublic(join(root, 'LICENSE'), join(starters, 'LICENSE'));
   for (const name of ['standalone-plugin', 'standalone-kit']) {
