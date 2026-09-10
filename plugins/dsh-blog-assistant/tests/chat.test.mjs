@@ -85,6 +85,25 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
   const conversation=chat.create(actor,'conversation-123')
   return{root,store,index,chat,handles,tools,blog,feedbackCalls,conversation,releaseOpen,releaseFlush,holdNextFlush(){let release;nextFlushGate=new Promise(r=>{release=r});releaseGates.push(release);return release},revoke(){revoked=true},send:(extra={})=>chat.send(actor,{conversationId:conversation.id,requestId:'request-123',text:'看看博客最近情况',research:true,...extra})}
 }
+
+test('official first-prompt titles update after the answer closes and never overwrite a manual name',async t=>{
+  const f=await fixture(t)
+  await f.send();await tick()
+  const h=f.handles[0]
+  h.emit('turn/end',{turn:'title-test',reason:{kind:'completed'}})
+  await tick()
+  assert.equal(f.chat.active.size,0)
+  const data={title:'博客近况与文章整理',messageSeqs:[0],source:{kind:'provider',provider:'first-prompt-llm'}}
+  h.emit('session/title',data)
+  assert.equal(f.chat.list(actor,0,'博客近况').items[0].title,data.title)
+  f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'我的博客备忘'})
+  h.emit('session/title',{...data,title:'迟到的自动标题'})
+  assert.equal(f.index.get(owner,f.conversation.id).title,'我的博客备忘')
+  h.emit('session/title',{title:'宿主再次手动更名',messageSeqs:[],source:{kind:'user'}})
+  assert.equal(f.index.get(owner,f.conversation.id).title,'宿主再次手动更名')
+  f.root.emit('session/event',{id:'another-plugin-session'},{type:'session/title',data})
+  assert.equal(f.chat.list(actor,0,'').items.length,1)
+})
 function complete(handle,id='answer-1'){
   const turn=handle.events.findLast(e=>e.type==='turn/start').data.turn
   handle.emit('assistant/message',{turn,message:{id,role:'assistant',source:{model:'test',provider:'test'},content:[{type:'text',text:'已查询博客'}]},stream:[]})

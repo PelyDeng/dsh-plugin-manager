@@ -8,6 +8,7 @@ import { AccessError, queryConversationIndex, type ConversationRecord, type Conv
 export interface ConversationSummary {
   id: string
   title: string
+  titleSource: 'automatic' | 'generated' | 'manual'
   createdAt: number
   updatedAt: number
   pinned: number
@@ -22,7 +23,7 @@ export class ConversationStore {
     this.db = new DatabaseSync(path)
     if (path !== ':memory:' && process.platform !== 'win32') chmodSync(path, 0o600)
     const version = this.db.prepare('PRAGMA user_version').get()?.user_version
-    if (version !== 0 && version !== 1 && version !== 2 && version !== 3) {
+    if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4) {
       this.db.close()
       throw new Error('Unsupported closedoff ownership schema version')
     }
@@ -40,14 +41,15 @@ export class ConversationStore {
     try {
       if (Number(version) < 2) this.db.exec("ALTER TABLE conversations ADD COLUMN deletedAt INTEGER; ALTER TABLE conversations ADD COLUMN removalState TEXT NOT NULL DEFAULT '';")
       if (Number(version) < 3) this.db.exec('ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;')
-      this.db.exec("UPDATE conversations SET removalState='failed' WHERE removalState='pending'; PRAGMA user_version=3; COMMIT;")
+      if (Number(version) < 4) this.db.exec("ALTER TABLE conversations ADD COLUMN title_source TEXT NOT NULL DEFAULT 'manual';")
+      this.db.exec("UPDATE conversations SET removalState='failed' WHERE removalState='pending'; PRAGMA user_version=4; COMMIT;")
     } catch(error) { this.db.exec('ROLLBACK'); this.db.close(); throw error }
   }
 
   /** Reserve an immutable owner for a fresh server-generated id. */
   reserve(id: string, actor: Actor): void {
     const now = Date.now()
-    this.db.prepare('INSERT INTO conversations(id,owner_namespace,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)')
+    this.db.prepare("INSERT INTO conversations(id,owner_namespace,owner_id,created_at,updated_at,title_source) VALUES(?,?,?,?,?,'automatic')")
       .run(id, actor.namespace, actor.userId, now, now)
   }
 
@@ -66,12 +68,18 @@ export class ConversationStore {
   /** Update a history summary after an accepted user message. */
   touch(id: string, title?: string): void {
     this.db.prepare("UPDATE conversations SET updated_at=?, title=CASE WHEN title='' THEN ? ELSE title END WHERE id=? AND ready=1")
-      .run(Date.now(), title?.slice(0, 80) ?? '', id)
+      .run(Date.now(), Array.from(title?.replace(/\s+/g, ' ').trim() ?? '').slice(0, 80).join(''), id)
+  }
+
+  /** Only trusted user renames may replace a manual name; title changes do not reorder history. */
+  syncTitle(id: string, title: string, manual = false, complete = false): boolean {
+    return this.db.prepare("UPDATE conversations SET title=?,title_source=? WHERE id=? AND ready=1 AND deletedAt IS NULL AND removalState='' AND (title_source='automatic' OR ?=1)")
+      .run(title, manual ? 'manual' : complete ? 'generated' : 'automatic', id, manual ? 1 : 0).changes > 0
   }
 
   /** Page through one owner's ready records without loading other users' logs. */
   list(actor: Actor, offset: number, limit: number, query = ''): ConversationSummary[] {
-    return this.db.prepare(`SELECT id, title, created_at AS createdAt, updated_at AS updatedAt, pinned
+    return this.db.prepare(`SELECT id, title, title_source AS titleSource, created_at AS createdAt, updated_at AS updatedAt, pinned
       FROM conversations WHERE owner_namespace=? AND owner_id=? AND ready=1 AND deletedAt IS NULL AND removalState='' AND instr(lower(title),lower(?))>0
       ORDER BY pinned DESC, updated_at DESC, id LIMIT ? OFFSET ?`)
       .all(actor.namespace, actor.userId, query, limit, offset) as unknown as ConversationSummary[]
@@ -83,7 +91,7 @@ export class ConversationStore {
     if (input.operation === 'rename' && (typeof input.title !== 'string' || !input.title.trim() || input.title.trim().length > 100)) throw new AccessError(400, '标题应为 1–100 个字符')
     if (input.operation === 'pin' && typeof input.pinned !== 'boolean') throw new AccessError(400, '置顶参数无效')
     this.assertOwner(input.ids[0]!, actor)
-    if (input.operation === 'rename') this.db.prepare('UPDATE conversations SET title=? WHERE id=?').run(input.title!.trim(), input.ids[0]!)
+    if (input.operation === 'rename') this.db.prepare("UPDATE conversations SET title=?,title_source='manual' WHERE id=?").run(input.title!.trim(), input.ids[0]!)
     else this.db.prepare('UPDATE conversations SET pinned=? WHERE id=?').run(input.pinned ? 1 : 0, input.ids[0]!)
   }
 

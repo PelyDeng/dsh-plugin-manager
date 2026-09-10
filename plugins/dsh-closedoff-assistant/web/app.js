@@ -19,6 +19,29 @@ import {createConversationHistory} from './conversation-history.js';
   var followBottom = true;
   var activeChatController = null;
   var activeRestoreController = null;
+  var titleRefresh;
+
+  function stopTitleRefresh() {
+    if (titleRefresh) clearTimeout(titleRefresh.timer);
+    titleRefresh = undefined;
+  }
+  function startTitleRefresh(id) {
+    stopTitleRefresh();
+    var pending = titleRefresh = { id: id, epoch: identityEpoch, until: Date.now() + 65000 };
+    function tick() {
+      if (titleRefresh !== pending) return;
+      if (conversationId !== id || identityEpoch !== pending.epoch || !identityReady || Date.now() >= pending.until) { stopTitleRefresh(); return; }
+      Promise.resolve(sidebar && sidebar.refresh()).finally(function () {
+        if (titleRefresh === pending) pending.timer = setTimeout(tick, 2000);
+      });
+    }
+    pending.timer = setTimeout(tick, 2000);
+  }
+  function acceptTitleList(data) {
+    var current = titleRefresh && data.items.find(function (item) { return item.id === titleRefresh.id; });
+    if (current && current.titleSource !== 'automatic') stopTitleRefresh();
+    return data;
+  }
 
   // 工具中文名称（业务人员可读）
   var TOOL_LABELS = {
@@ -582,6 +605,7 @@ import {createConversationHistory} from './conversation-history.js';
 
   function openConversation(id) {
     if (running || !identityReady) return;
+    stopTitleRefresh();
     if (activeRestoreController) activeRestoreController.abort();
     activeRestoreController = null;
     conversationId = id;
@@ -795,7 +819,7 @@ import {createConversationHistory} from './conversation-history.js';
 
   function send(text) {
     if (running || !identityReady) return;
-    var epoch = identityEpoch;
+    var epoch = identityEpoch, freshConversation = !conversationId;
     var q = String(text || input.value).trim();
     if (!q) return;
     var admitted=false,modelPayload;try{modelPayload=picker.payload();}catch(error){setStatus('off',error.message);return;}
@@ -908,6 +932,7 @@ import {createConversationHistory} from './conversation-history.js';
           admitted=true;
           picker.accept(obj.model);
           conversationId = obj.conversationId;
+          if (freshConversation) startTitleRefresh(conversationId);
           if (sidebar) void sidebar.refresh();
           localStorage.setItem(storageKey, conversationId);
           break;
@@ -1122,11 +1147,13 @@ import {createConversationHistory} from './conversation-history.js';
   }
 
   window.addEventListener('pagehide', function () {
+    stopTitleRefresh();
     trajectory.dispose();
   });
 
   function startFreshConversation() {
     if (running || !identityReady) return;
+    stopTitleRefresh();
     if (activeRestoreController) activeRestoreController.abort();
     activeRestoreController = null;
     conversationId = '';
@@ -1156,6 +1183,7 @@ import {createConversationHistory} from './conversation-history.js';
   });
 
   function clearPrivateView() {
+    stopTitleRefresh();
     identityEpoch += 1;
     identityReady = false;
     if (activeChatController) activeChatController.abort();
@@ -1210,8 +1238,8 @@ import {createConversationHistory} from './conversation-history.js';
     sidebar = createConversationHistory({
       mount: $('.main'), toggle: $('#historyBtn'), currentId: function () { return conversationId; },
       newConversation: startFreshConversation, openConversation: openConversation,
-      list: function (args) { return businessFetch(routePath('/conversations?offset=') + args.offset + '&q=' + encodeURIComponent(args.query)).then(readJson); },
-      mutate: function (args) { return postJson(routePath('/conversation-action'), args); },
+      list: function (args) { return businessFetch(routePath('/conversations?offset=') + args.offset + '&q=' + encodeURIComponent(args.query)).then(readJson).then(acceptTitleList); },
+      mutate: function (args) { return postJson(routePath('/conversation-action'), args).then(function (result) { if (args.operation === 'rename' && args.ids.indexOf(conversationId) >= 0) stopTitleRefresh(); return result; }); },
       read: function (id) { return businessFetch(routePath('/history?conversationId=') + encodeURIComponent(id)).then(readJson).then(function (data) { return { messages: data.history }; }); },
       onDeleted: function (ids) { if (ids.indexOf(conversationId) >= 0) startFreshConversation(); },
       storageKey: 'closedoff-history:' + identityKey,

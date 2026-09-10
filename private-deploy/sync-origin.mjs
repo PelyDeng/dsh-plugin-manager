@@ -10,7 +10,7 @@ export function syncOrigin(root, args = [], env = process.env) {
   if (args.includes('--resume') || args.includes('--help')) return;
   // Preserve native error.signal so sourceRelease retains its lock after an interrupted Git child.
   const git = (...args) => execFileSync('git', args, { cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true }).trim();
-  const entry = process.platform === 'win32' ? '.\\build.ps1' : './build.sh';
+  const entry = process.platform === 'win32' ? '.\\build.ps1' : 'bash build.sh';
   const pointer = resolve(root, '.local/source-release.json');
   if (existsSync(pointer) && needsSourceResume(JSON.parse(readFileSync(pointer, 'utf8')).status)) {
     throw new Error(`存在未完成部署；请使用 ${entry} --resume，不更新源码。`);

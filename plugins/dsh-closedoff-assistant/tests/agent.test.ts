@@ -33,13 +33,29 @@ function fixture(max = 2, store = new ConversationStore(':memory:')) {
     sessionPersistence: { async open(id: string) { const result = create.mock.calls.findIndex(([options]) => (options as {sessionId:string}).sessionId === id); const current=result < 0 ? undefined : await create.mock.results[result]!.value; return {header:{id},read:async()=>({events:current?.agent.session.snapshotEvents()??[],eventState:"detached"}),close:async()=>{}} } },
     sessionProjections: { restore(_checkpoint:unknown,events:{type:string;data:any}[]) { return {checkpoint:{modelSelection:{val:{pending:null,lastUsed:[...events].reverse().find(event=>event.type==='request/header')?.data.header.config??null}}}} } },
   }
-  const ctx = { on: () => () => {}, get: (key: string) => services[key], agentDefaultModel: defaults, llm: {resolveModelInfo:async()=>({reasoning:{efforts:[{id:'low'}]}})}, agents: { create, resume } } as unknown as Context
+  const titleListeners = new Set<(session: unknown, event: unknown) => void>()
+  const ctx = { on: (name: string, listener: (session: unknown, event: unknown) => void) => { if (name === 'session/event') titleListeners.add(listener); return () => { titleListeners.delete(listener) } }, get: (key: string) => services[key], agentDefaultModel: defaults, llm: {resolveModelInfo:async()=>({reasoning:{efforts:[{id:'low'}]}})}, agents: { create, resume } } as unknown as Context
   const manager = new ConversationManager(ctx, Config({ maxActiveConversations: max } as Config), 'persona', [], access, store)
   cleanup.push(() => manager.dispose())
-  return { manager, store, create, resume, revoked, services, defaults }
+  return { manager, store, create, resume, revoked, services, defaults, emitTitle(id: string, data: unknown) { for (const listener of titleListeners) listener({ id }, { type: 'session/title', data }) } }
 }
 
 describe('owned business conversation lifecycle', () => {
+  it('accepts a first-prompt title after the turn and protects manual names and unrelated sessions', async () => {
+    const f = fixture(), c = (await f.manager.open(undefined, true, alice))!
+    f.manager.followup(c, '帮我查最近一辆车的轨迹', alice)
+    f.manager.finish(c.id)
+    const data = { title: '车辆近期轨迹查询', messageSeqs: [0], source: { kind: 'provider', provider: 'first-prompt-llm' } }
+    f.emitTitle(c.id, data)
+    expect(f.manager.list(alice, 0, 30)[0]).toMatchObject({ title: data.title, titleSource: 'generated' })
+    await f.manager.update(alice, { operation: 'rename', ids: [c.id], title: '我的车辆记录' })
+    f.emitTitle(c.id, { ...data, title: '迟到的标题' })
+    expect(f.manager.list(alice, 0, 30)[0]?.title).toBe('我的车辆记录')
+    f.emitTitle(c.id, { title: '宿主再次手动更名', messageSeqs: [], source: { kind: 'user' } })
+    expect(f.manager.list(alice, 0, 30)[0]?.title).toBe('宿主再次手动更名')
+    f.emitTitle('another-plugin-session', data)
+    expect(f.manager.list(alice, 0, 30)).toHaveLength(1)
+  })
   it('shares an in-flight removal between the sidebar and central conversation management', async () => {
     const f = fixture(), c = (await f.manager.open(undefined, true, alice))!
     let release!: () => void

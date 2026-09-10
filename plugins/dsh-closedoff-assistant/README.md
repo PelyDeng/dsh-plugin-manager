@@ -5,11 +5,9 @@ kind: "package-bundle"
 
 # DSH 封闭化管理智能助手
 
-通过插件管理器部署时，遵循[插件运行配置规范](../../doc/plugin-configuration.md)。在 `<DSH home>/plugins/closedoff/plugin.json` 中用 `enabled` 启停插件，用 `accessMode: authenticated|standalone` 切换认证；默认要求登录。修改后执行同一 `apply-compose` 命令，站点 origin、健康检查和挂载由管理器统一处理。`env.conf` 保留为业务配置，不因认证切换改写。以下直接 Bundle 配置方式适用于自行启动宿主的场景。
+新站点优先使用[产物一键部署](../../doc/first-deployment.md)，已有 Gitee 源码服务器使用[私有更新入口](../../PRIVATE.md#源码一键更新)。插件的 `plugin.json` 管理启停和认证，业务 `env.conf` 独立保存；填写位置以 build 输出或已有实例引用为准，规则见[插件运行配置](../../doc/plugin-configuration.md)。默认要求登录。
 
 ## 摘要
-
-输入框提供模型选择器，默认展示 Auth 配置，展开后可选择官方目录中的模型。选择在下一条消息发送时生效，回答期间禁用切换；旧对话和分支沿用官方记录。切换复用官方 `sessionController.selectModel()`，也会尝试更新宿主默认值，其他已有会话不随之改变。目录不可用或切换失败时明确提示，用户输入保留。
 
 `dsh-closedoff-assistant` 是独立于 `deepseek-harness` 主仓的 DSH profile bundle。它把封闭化园区接口封装成 37 个只读 Tool，为每个浏览器会话创建独立的 DSH Agent，并在 `/closedoff-qa` 提供面向业务人员的问答页面、可展示思考、工具执行状态、数据卡片与车辆轨迹地图。
 
@@ -23,15 +21,19 @@ kind: "package-bundle"
 
 新会话使用 auth“模型设置”管理的框架默认模型，已有会话及分支恢复官方记录中的模型；服务重启不改变该规则。默认切换无需重启，模型目录、凭据与设置均由官方 DSH 提供。恢复依赖宿主的 `modelSelection` 投影，缺失或读取失败时明确报错。
 
+输入框可选择官方目录中的模型，下一条消息发送时生效，回答期间不能切换。选择复用官方 `sessionController.selectModel()`，也会尝试更新宿主默认值，其他已有会话不随之改变。目录不可用或切换失败时保留用户输入并显示原因。
+
 ## 会话管理
 
 桌面左侧常驻历史栏，与博客助手使用同一套历史组件；可收起、搜索标题、按最近活动时间分组、置顶、重命名、导出 Markdown 及多选删除。手机通过顶部“历史对话”打开抽屉。点击历史恢复问答，回答期间须先停止才能切换或新建。
 
-删除复用既有会话归档流程，不删除园区业务数据或官方日志；导出仅包含问答正文。退出、账号切换或权限失效会清空侧栏及打开的导出窗口。索引升级至 schema 3，只增加置顶字段并保留旧标题、归属及删除状态。
+第一条消息发出后先显示首句占位，再同步官方宿主生成的简短标题，不额外调用模型。标题可能晚于回答到达，侧栏在短时间内自动刷新；生成失败时保留首句。用户手动改名后，迟到的自动结果不会覆盖；随后在官方宿主再次手动更名仍会同步。旧历史不自动重命名。
+
+删除复用既有会话归档流程，不删除园区业务数据或官方日志；导出仅包含问答正文。退出、账号切换或权限失效会清空侧栏及打开的导出窗口。
 
 closedoff 在 authenticated 模式接入 auth 的[会话管理](../../doc/conversation-management.md)。本人对话按插件分类、筛选和分页；只读预览使用已有的脱敏消息转换逻辑，不恢复 Agent 或查询园区接口。批量移除使用官方归档，底层日志和独立分支保留。
 
-运行、恢复与分支创建中的记录不可移除；失败项禁止继续发送，允许刷新重试。owner 索引自动迁移至 schema 3，重启后 pending 转为可重试的 failed；旧数据不认领给新账号，standalone 历史不进入个人管理列表。
+运行、恢复与分支创建中的记录不可移除；失败项禁止继续发送，允许刷新重试。重启后 pending 转为可重试的 failed；旧数据不认领给新账号，standalone 历史不进入个人管理列表。索引 schema 4 保存标题来源并保留旧标题、归属、置顶与删除状态；从 schema 2/3 自动迁移，回退旧插件前须恢复兼容的数据备份，不能只替换代码。
 
 ## 目录
 
@@ -93,16 +95,16 @@ flowchart LR
 ```powershell
 Set-Location '<dsh-plugin-manager-gitee 仓库目录>'
 pnpm install --frozen-lockfile
-pnpm check
+pnpm check --plugins closedoff
 ```
 
-`pnpm build` 会生成 `dist/`，把 `web/app.css`、`web/trajectory.js`、`web/app.js` 以及固定为 `1.142.0` 的公共 CesiumJS 浏览器资源、设备组标记图片、DSH Think/API 图标和 `@hy-media/video-player@0.0.37` 运行资源复制到 `web/assets/`。`index.html` 只保留语义页面骨架，主交互由 `app.js` 管理，轨迹三维、自动截图队列、全屏截图和摄像头播放器由 `trajectory.js` 统一管理。轨迹地图和视频播放器均不使用公网 CDN。
+根 `check --plugins closedoff` 会先构建插件，再执行类型、前端语法和行为检查；只构建时使用 `pnpm build --plugins closedoff`。构建生成 `dist/`，并把页面源码、固定为 `1.142.0` 的公共 CesiumJS、设备组标记图片、DSH 图标和 `@hy-media/video-player@0.0.37` 运行资源复制到 `web/assets/`。`index.html` 保留页面骨架，`app.js` 管理主交互，`trajectory.js` 管理地图、截图和摄像头播放器。轨迹地图和视频播放器均不使用公网 CDN。
 
 `@hy-media/video-player@0.0.37` 的版本化 npm 包快照保存在本插件的 `vendor/`，本包通过相对 `file:` 开发依赖安装，不再访问原私有 npm 源。CesiumJS 和其余公开依赖仍从公共 npm 源安装。正式插件 `.tgz` 携带复制到 `web/assets/` 的播放器运行资源，不依赖仓库外目录。
 
 ## 安装到 DSH
 
-已安装 `dsh` 命令时，在本包目录执行：
+以下用于手工维护 DSH profile；build 站点的安装由管理器自动完成。已安装 `dsh` 命令时，在已构建的本包目录执行：
 
 ```powershell
 dsh plugin --profile web add .
@@ -122,7 +124,7 @@ pnpm dsh plugin --profile web add "file:$pluginRoot"
 
 ## 配置业务参数
 
-业务配置保存网关地址和两阶段认证参数。首次部署前，在私有仓库根创建独立配置文件，避免提前向空数据目录写入内容：
+业务配置保存网关地址和两阶段认证参数。全新产物站点按 build 提示填写自动生成的 runtimeConfig 文件。源码站点和下文 Node 开发环境可在私有仓库根创建独立文件，避免提前向空数据目录写入内容：
 
 ```powershell
 New-Item -ItemType Directory -Force .local/secrets | Out-Null
@@ -162,12 +164,7 @@ Node 开发或独立运行时，可在仓库根新建 `.local/closedoff.deployme
 
 浏览器必须能直接访问目标服务，目标服务也必须允许跨域读取。更换数据集或定位采样策略时必须重新标定高度、设备组距离和驻留间隔，不能照搬当前默认值。
 
-推荐通过仓库统一启动脚本启动；脚本从运行配置映射解析文件位置，再把路径传给开发或正式安装的插件：
-
-```powershell
-Set-Location '<dsh-plugin-manager-gitee 仓库目录>'
-.\deploy\scripts\start.ps1 -Plugins auth,closedoff -Config .local/closedoff.deployment.json -Mode development
-```
+服务器部署执行所选部署方式的 build 脚本。本地 Node 开发使用下一节的统一启动脚本，它从运行配置解析业务文件路径。
 
 直接运行已经安装的 profile 时，设置的只是配置文件路径，正式值仍从文件读取：
 
@@ -180,7 +177,7 @@ dsh --profile web
 
 ## 开发模式与正式模式
 
-本包通过仓库统一启动脚本切换模式。切换前先停止当前 DSH 服务，然后在仓库根目录执行：
+以下为本地 Node 宿主的 development/release 模式，不是服务器 source/archives 来源选项。切换前先停止该开发实例的 DSH 服务，然后在仓库根目录执行：
 
 ```powershell
 # 开发模式：link 安装并加载 HMR patch
@@ -210,15 +207,9 @@ HMR 会释放旧插件注册的路由、Agent 和正在响应的 SSE 流，开�
 
 ## 开发与升级
 
-需要生成安装包或验证源码改动时，在本插件目录按需执行：
+构建和检查使用[本地构建](#本地构建)的命令。开发 link 安装在重新构建后生效；手工快照安装须更新包并重启。交付归档在仓库根执行 `pnpm package --plugins closedoff`，认证站点还需交付 auth，完整选集和部署步骤见[私有集成说明](../../PRIVATE.md#本地集成公共更新)。
 
-```powershell
-pnpm build
-pnpm check
-dsh plugin --profile web add .
-```
-
-如果 profile 使用的是本地 link，按“开发模式与正式模式”启动后重新构建即可；如果安装结果是复制快照，再执行一次 `add .` 并重启。版本发布前更新 `package.json` 版本，在主仓执行 `pnpm check --plugins closedoff`，提交源文件、文档和 lockfile，真实 `env.conf` 留在用户配置目录，不提交 `dist/`、`web/assets/` 等生成物。播放器升级时更新 本插件 `vendor/` 下的快照和本包 `file:` 依赖，确认没有有效引用后删除旧快照。
+仅在发版时按版本规则更新本插件 `package.json`，提交源文件、文档与必要锁文件；真实 `env.conf` 留在用户配置目录，不提交 `dist/`、`web/assets/` 等生成物。播放器升级时更新本插件 `vendor/` 快照和对应 `file:` 依赖，确认没有有效引用后再移除旧快照。
 
 DSH 上游升级时，先在单独测试 profile 中安装本包并运行 `--dump-default-config` 或启动冒烟；只有 DSH 插件 API、session event、bundle patch 或 Web Server API 改变时才需要调整本包。正常业务 Tool 增减只修改本包。
 

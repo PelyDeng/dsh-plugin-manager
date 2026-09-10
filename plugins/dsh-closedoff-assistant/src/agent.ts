@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { Config } from './config.ts'
-import { AccessError, conversationModel, conversationArchive, conversationRemover, readConversationEvents, previewPage, hostBusyConversationIds, type ConversationProvider, type PreviewMessage, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, conversationModel, conversationArchive, conversationRemover, readConversationEvents, previewPage, hostBusyConversationIds, registerConversationTitles, type ConversationProvider, type PreviewMessage, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { conversationModelCatalog, requestedConversationModel, selectConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
 import { projectHistory } from './presentation.ts'
 import type { ConversationStore, ConversationSummary } from './conversation-store.ts'
@@ -38,6 +38,7 @@ export class ConversationManager {
   private disposed = false
   private readonly identities = new WeakMap<object, Actor>()
   private provider?: ConversationProvider
+  private readonly stopTitles: () => void
 
   constructor(
     private readonly ctx: Context,
@@ -46,7 +47,11 @@ export class ConversationManager {
     private readonly toolNames: readonly string[],
     private readonly access: Access,
     private readonly store: ConversationStore,
-  ) {}
+  ) {
+    this.stopTitles = registerConversationTitles(ctx, (id, title, manual, complete) => {
+      if (!this.disposed) this.store.syncTitle(id, title, manual, complete)
+    })
+  }
 
   /** Reuse the same ownership fence as send, resume and branch. */
   management(): ConversationProvider {
@@ -383,6 +388,7 @@ export class ConversationManager {
   /** Stop every owned Agent before this plugin unloads. */
   async dispose(): Promise<void> {
     this.disposed = true
+    this.stopTitles()
     await Promise.allSettled([...this.openings.values()])
     const handles = [...this.conversations.values()].map(conversation => conversation.handle)
     this.conversations.clear()

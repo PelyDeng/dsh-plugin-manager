@@ -5,6 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { syncOrigin } from '../sync-origin.mjs';
+import { fileHash, toolTreeIdentity } from '../../packages/plugin-manager/src/site-record.mjs';
 
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'dsh 私有同步 with spaces '));
@@ -90,14 +91,14 @@ else {
 function entryFixture(t) {
   const f = fixture(t), { checkout, origin, git } = f;
   const files = ['build.sh', 'build.ps1', 'private-deploy/release.mjs', 'private-deploy/sync-origin.mjs',
-    'deploy/scripts/release.mjs', 'deploy/scripts/build-output.mjs', 'deploy/scripts/source-lock.mjs',
-    ...['lock', 'state', 'private-files', 'process'].map(name => `packages/plugin-manager/src/${name}.mjs`)];
+    'deploy/scripts/release.mjs', 'deploy/scripts/build-output.mjs', 'deploy/scripts/source-lock.mjs'];
   for (const file of files) {
     mkdirSync(dirname(join(checkout, file)), { recursive: true });
     cpSync(new URL('../../' + file, import.meta.url), join(checkout, file));
   }
+  cpSync(new URL('../../packages/plugin-manager/src', import.meta.url), join(checkout, 'packages/plugin-manager/src'), { recursive: true, filter: () => true });
   // Exercise the real private coordinator and public locks without requiring Docker or installation.
-  writeFileSync(join(checkout, 'deploy/scripts/platform.mjs'), `export function prepareSourceRelease(root) { return { env: { ...process.env, PRIVATE_PREPARED_ROOT: root } }; }`);
+  writeFileSync(join(checkout, 'packages/plugin-manager/src/site-platform.mjs'), `export function prepareSiteRelease(root) { return { env: { ...process.env, PRIVATE_PREPARED_ROOT: root } }; }`);
   writeFileSync(join(checkout, 'deploy/scripts/build.mjs'), workerSource('old'));
   writeFileSync(join(checkout, 'deploy/scripts/deployment.mjs'), `console.log(JSON.stringify(process.argv.slice(2))); process.exitCode = 5;`);
   git(checkout, 'add', 'build.sh', 'build.ps1', 'private-deploy', 'deploy', 'packages');
@@ -137,18 +138,39 @@ test('help and management need no sync or deployment preflight; resume preserves
   assert.equal(management.status, 5, management.stderr); assert.deepEqual(JSON.parse(management.stdout), args);
   assert.equal(existsSync(f.lock), false); assert.equal(existsSync(f.worker), false);
   mkdirSync(join(f.checkout, '.local'), { recursive: true });
-  const pointer = join(f.checkout, '.local/source-release.json'), original = JSON.stringify({ status: 'prepared', operation: 'preserved' });
+  const operation = join(f.checkout, '.local/artifacts/preserved'), toolRoot = join(operation, 'tooling');
+  const managerArchive = join(toolRoot, 'plugin-manager.tgz'), dist = join(toolRoot, 'node_modules/@dsh-plugin-manager/plugin-manager/dist');
+  mkdirSync(dist, { recursive: true });
+  writeFileSync(managerArchive, 'saved original tool archive');
+  writeFileSync(join(dist, 'cli.mjs'), '// saved CLI');
+  writeFileSync(join(dist, 'site-release.mjs'), workerSource('saved-recovery'));
+  writeFileSync(join(operation, 'result.json'), JSON.stringify({ schemaVersion: 3, operation, status: 'prepared', inputKind: 'source',
+    toolRoot, managerArchive, managerHash: fileHash(managerArchive), toolHash: toolTreeIdentity(toolRoot), sitePath: join(f.checkout, '.local/env.conf') }));
+  const pointer = join(f.checkout, '.local/source-release.json'), original = JSON.stringify({ status: 'prepared', operation });
   writeFileSync(pointer, original);
   assert.equal(f.run('--resume').status, 0);
+  assert.equal(JSON.parse(readFileSync(f.worker)).label, 'saved-recovery');
+  assert.equal(f.run('--recover', '--data-compatible').status, 0);
   assert.equal(readFileSync(pointer, 'utf8'), original);
   assert.equal(readFileSync(join(f.checkout, 'framework.txt'), 'utf8'), 'dirty source preserved');
+  assert.equal(existsSync(f.lock), false);
+});
+
+test('archive input starts the shared worker without fetching the private source', t => {
+  const f = entryFixture(t);
+  f.git(f.checkout, 'remote', 'set-url', 'origin', join(f.root, 'missing-origin'));
+  mkdirSync(join(f.checkout, '.local'), { recursive: true });
+  writeFileSync(join(f.checkout, '.local/env.conf'), 'DSH_PLUGIN_SOURCE="archives"\n', { mode: 0o600 });
+  const result = f.run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(readFileSync(f.worker)).label, 'old');
   assert.equal(existsSync(f.lock), false);
 });
 
 test('root recovery commands bypass source updates and preflight without creating runtime state', t => {
   const f = entryFixture(t);
   f.git(f.checkout, 'remote', 'set-url', 'origin', join(f.root, 'missing-origin'));
-  writeFileSync(join(f.checkout, 'deploy/scripts/platform.mjs'), 'throw Error("must not prepare recovery");');
+  writeFileSync(join(f.checkout, 'packages/plugin-manager/src/site-platform.mjs'), 'throw Error("must not prepare recovery");');
   for (const args of [['doctor'], ['unlock-source'], ['doctor', '--help'], ['unlock-source', '--help']]) {
     const result = f.run(...args);
     assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -167,7 +189,7 @@ test('invalid arguments and ordinary sync failures do not build and release the 
   const f = entryFixture(t);
   f.git(f.checkout, 'remote', 'set-url', 'origin', join(f.root, 'missing-origin'));
   const invalid = f.run('--unsupported');
-  assert.equal(invalid.status, 1); assert.match(invalid.stderr, /Unknown or duplicate argument/);
+  assert.equal(invalid.status, 1); assert.match(invalid.stderr, /Unknown .* argument/);
   const failed = f.run();
   assert.equal(failed.status, 1); assert.equal(existsSync(f.worker), false); assert.equal(existsSync(f.lock), false);
 });

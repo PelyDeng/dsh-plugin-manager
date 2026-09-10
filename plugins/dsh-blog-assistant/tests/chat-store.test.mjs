@@ -4,6 +4,36 @@ import {BlogStore,ownerKey} from '../src/store.mjs'
 import {ChatStore} from '../src/chat-store.mjs'
 import {BlogAttachments} from '../src/attachments.mjs'
 
+test('host titles complete new conversations without replacing manual, legacy or removed history',()=>{
+  const store=new BlogStore(':memory:'),chats=new ChatStore(store),owner='user:alice'
+  try{
+    const c=chats.create(owner,'title-conversation')
+    assert.equal(chats.syncTitle(c.id,'尚未创建'),false)
+    chats.save(owner,c.id,{ready:true,title:'首句占位'})
+    const updated=chats.get(owner,c.id).updatedAt
+    assert.equal(chats.syncTitle(c.id,'首句回退'),true)
+    assert.equal(chats.syncTitle(c.id,'博客文章分类整理',false,true),true)
+    assert.equal(chats.get(owner,c.id).titleSource,'generated')
+    assert.equal(chats.get(owner,c.id).updatedAt,updated)
+    assert.equal(chats.syncTitle(c.id,'迟到的回退'),false)
+    assert.equal(chats.syncTitle(c.id,'官方手动标题',true,true),true)
+    chats.mutate(owner,{operation:'rename',ids:[c.id],title:'新对话'})
+    assert.equal(chats.syncTitle(c.id,'迟到的自动标题',false,true),false)
+    assert.equal(chats.get(owner,c.id).title,'新对话')
+    assert.equal(chats.syncTitle(c.id,'再次在宿主手动更名',true,true),true)
+    assert.equal(chats.get(owner,c.id).title,'再次在宿主手动更名')
+    assert.equal(chats.syncTitle(c.id,'随后到达的自动标题',false,true),false)
+    const legacy=chats.create(owner,'legacy-conversation',{ready:true,title:'旧索引标题'})
+    store.db.prepare("UPDATE conversations SET data=json_remove(data,'$.titleSource') WHERE id=?").run(legacy.id)
+    assert.equal(chats.syncTitle(legacy.id,'不能覆盖旧记录',false,true),false)
+    const removed=chats.create(owner,'removed-conversation',{ready:true})
+    chats.mark(owner,removed.id,'removed')
+    assert.equal(chats.syncTitle(removed.id,'不能复活已删除记录',false,true),false)
+    assert.equal(chats.syncTitle(removed.id,'手动事件也不能复活',true,true),false)
+    assert.equal(chats.syncTitle('another-plugin-session','无关会话',false,true),false)
+  }finally{store.close()}
+})
+
 test('a conversation owns attachments before any article exists; sent references survive removal and stay private',async()=>{
   const store=new BlogStore(':memory:'),chats=new ChatStore(store),actor={namespace:'user',userId:'alice',sessionId:'login-a'},owner=ownerKey(actor)
   const conversation=chats.create(owner,'create-chat-001')

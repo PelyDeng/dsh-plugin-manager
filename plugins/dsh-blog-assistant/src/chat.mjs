@@ -1,6 +1,6 @@
 import {createUserMessage} from '@deepseek-ai/dsh-llm'
 import {SessionId} from '@deepseek-ai/dsh-session'
-import {onRevoked,conversationModel,conversationArchive,conversationRemover,previewPage,hostBusyConversationIds} from '@dsh-plugin-manager/plugin-kit'
+import {onRevoked,conversationModel,conversationArchive,conversationRemover,previewPage,hostBusyConversationIds,registerConversationTitles} from '@dsh-plugin-manager/plugin-kit'
 import {ownerKey,digest} from './store.mjs'
 import {invariant} from './settings.mjs'
 import {persona,reasoningLanguage} from './jobs.mjs'
@@ -28,6 +28,7 @@ export class BlogChat {
   constructor(ctx,access,store,index,attachments,jobs,app,sdk,timeoutMs=240000){
     Object.assign(this,{ctx,access,store,index,attachments,jobs,app,sdk,timeoutMs})
     this.active=new Map();this.forks=new Map();this.forkSources=new Map();this.listeners=new Map();this.closed=false
+    ctx.effect(()=>registerConversationTitles(ctx,(id,title,manual,complete)=>{if(!this.closed&&index.syncTitle(id,title,manual,complete))this.emit(id,{type:'changed'})}))
     const recheck=()=>{for(const b of this.active.values())try{access.assert(b.job.actor)}catch{void this.finish(b,'interrupted','登录或授权已失效')}for(const fork of this.forks.values())try{access.assert(fork.actor)}catch{fork.abort.abort()}}
     ctx.effect(()=>onRevoked(ctx,recheck))
     ctx.effect(()=>{const timer=setInterval(recheck,1000);timer.unref();return()=>clearInterval(timer)})
@@ -205,7 +206,7 @@ export class BlogChat {
     const b={chat:this,request,selected,job:{actor,owner,input:{research:input.research}},sources:[],stopped:false,handle:null,live:null,unsub:[],abort:new AbortController(),draft:null}
     if(draftId)b.draft=this.store.get(owner,draftId)
     b.request=this.index.updateRequest(request.id,{attachments:frozen,draftId})
-    this.index.save(owner,conversation.id,{title:conversation.title==='新对话'?input.text.slice(0,60):conversation.title})
+    this.index.save(owner,conversation.id,{title:conversation.titleSource==='automatic'&&conversation.title==='新对话'?Array.from(input.text.replace(/\s+/g,' ')).slice(0,60).join(''):conversation.title})
     this.active.set(conversation.id,b)
     b.timer=setTimeout(()=>void this.finish(b,'interrupted','回答超时，已保存的内容可以继续'),this.timeoutMs)
     b.runPromise=this.run(b,conversation)

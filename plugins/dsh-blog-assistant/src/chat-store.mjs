@@ -22,7 +22,7 @@ export class ChatStore {
     this.id(requestId)
     const old=this.db.prepare('SELECT data FROM conversations WHERE owner=? AND requestId=?').get(owner,requestId)
     if(old)return this.get(owner,JSON.parse(old.data).id)
-    const value={id:'blog-chat-'+randomUUID(),owner,requestId,title:'新对话',ready:false,pinned:false,deletedAt:null,createdAt:Date.now(),updatedAt:Date.now(),parent:null,attachments:[],...initial}
+    const value={id:'blog-chat-'+randomUUID(),owner,requestId,title:'新对话',titleSource:initial.title?'manual':'automatic',ready:false,pinned:false,deletedAt:null,createdAt:Date.now(),updatedAt:Date.now(),parent:null,attachments:[],...initial}
     this.db.prepare('INSERT INTO conversations VALUES(?,?,?,?,?)').run(value.id,owner,requestId,value.updatedAt,JSON.stringify(value));return value
   }
   get(owner,id){const value=this.record(owner,id);invariant(!value.deletedAt&&!value.removalState,'对话不存在或无权访问',404);return value}
@@ -31,6 +31,11 @@ export class ChatStore {
   managed(owner,query,archived,busy){return queryConversationIndex(this.db,"SELECT id,json_extract(data,'$.title') AS title,updated AS updatedAt,json_extract(data,'$.deletedAt') AS deletedAt,COALESCE(json_extract(data,'$.removalState'),'') AS removalState FROM conversations WHERE owner=? AND json_extract(data,'$.ready')=1",[owner],query,archived,busy)}
   pendingOperations(){return this.db.prepare("SELECT DISTINCT json_extract(data,'$.chat.conversationId') AS id FROM operations WHERE json_extract(data,'$.status') IN ('running','uncertain') OR (json_extract(data,'$.status')='prepared' AND json_extract(data,'$.expiresAt')>?)").all(Date.now()).map(row=>row.id).filter(Boolean)}
   save(owner,id,patch){const old=this.get(owner,id),value={...old,...patch,id,owner,updatedAt:Date.now()};this.db.prepare('UPDATE conversations SET updated=?,data=? WHERE id=? AND owner=?').run(value.updatedAt,JSON.stringify(value),id,owner);return value}
+  /** Automatic titles preserve manual names; trusted user renames can update them again. */
+  syncTitle(id,title,manual=false,complete=false){
+    return this.db.prepare("UPDATE conversations SET data=json_set(data,'$.title',?,'$.titleSource',?) WHERE id=? AND json_extract(data,'$.ready')=1 AND json_extract(data,'$.deletedAt') IS NULL AND COALESCE(json_extract(data,'$.removalState'),'')='' AND (json_extract(data,'$.titleSource')='automatic' OR ?=1)")
+      .run(title,manual?'manual':complete?'generated':'automatic',id,manual?1:0).changes>0
+  }
   list(owner,offset=0,query=''){
     invariant(Number.isSafeInteger(offset)&&offset>=0,'分页参数无效')
     invariant(typeof query==='string'&&query.length<=120,'搜索文字应不超过 120 个字符')
@@ -46,7 +51,7 @@ export class ChatStore {
     try{
       const items=input.ids.map(id=>this.get(owner,id))
       for(const item of items)assertIdle(item.id)
-      const patch=input.operation==='rename'?{title:input.title.trim()}:input.operation==='pin'?{pinned:input.pinned}:{deletedAt:Date.now()}
+      const patch=input.operation==='rename'?{title:input.title.trim(),titleSource:'manual'}:input.operation==='pin'?{pinned:input.pinned}:{deletedAt:Date.now()}
       for(const item of items)this.db.prepare('UPDATE conversations SET data=? WHERE id=? AND owner=?').run(JSON.stringify({...item,...patch}),item.id,owner)
       this.db.exec('COMMIT')
     }catch(error){this.db.exec('ROLLBACK');throw error}

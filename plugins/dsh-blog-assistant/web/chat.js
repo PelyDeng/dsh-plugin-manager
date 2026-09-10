@@ -78,9 +78,9 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     const data=await api('chat-history',{conversationId:id})
     if(epoch!==state.epoch||version!==refreshVersion)return
     if(data.busy&&clock!==state.liveClock)data.live=state.history?.live??data.live
-    const wasBusy=state.history?.busy;state.history=data;render();controls()
+    const wasBusy=state.history?.busy,titleChanged=state.history?.conversation?.title!==data.conversation?.title;state.history=data;render();controls()
     if(!data.busy){const feedback=await api('chat-feedback',{conversationId:id,operation:'list'});if(epoch!==state.epoch||version!==refreshVersion)return;if(feedback.ok){state.feedback=new Map(feedback.value.items.map(i=>[i.messageId,i]));state.feedbackReady=true;render()}}
-    if(wasBusy&&!data.busy)void conversations().catch(error)
+    if(titleChanged||wasBusy&&!data.busy)void conversations().catch(error)
   }
   function prose(text){const el=element('div',undefined,'prose qa-prose');el.innerHTML=renderMarkdown(text??'');return el}
   function reasoning(text,id){const d=thinking(text,{className:'chat-reasoning'});d.dataset.detail=id;d.dataset.originalText=text;return d}
