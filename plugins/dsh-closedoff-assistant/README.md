@@ -25,9 +25,13 @@ kind: "package-bundle"
 
 ## 会话管理
 
+桌面左侧常驻历史栏，与博客助手使用同一套历史组件；可收起、搜索标题、按最近活动时间分组、置顶、重命名、导出 Markdown 及多选删除。手机通过顶部“历史对话”打开抽屉。点击历史恢复问答，回答期间须先停止才能切换或新建。
+
+删除复用既有会话归档流程，不删除园区业务数据或官方日志；导出仅包含问答正文。退出、账号切换或权限失效会清空侧栏及打开的导出窗口。索引升级至 schema 3，只增加置顶字段并保留旧标题、归属及删除状态。
+
 closedoff 在 authenticated 模式接入 auth 的[会话管理](../../doc/conversation-management.md)。本人对话按插件分类、筛选和分页；只读预览使用已有的脱敏消息转换逻辑，不恢复 Agent 或查询园区接口。批量移除使用官方归档，底层日志和独立分支保留。
 
-运行、恢复与分支创建中的记录不可移除；失败项禁止继续发送，允许刷新重试。owner 索引自动迁移至 schema 2，重启后 pending 转为可重试的 failed；旧数据不认领给新账号，standalone 历史不进入个人管理列表。
+运行、恢复与分支创建中的记录不可移除；失败项禁止继续发送，允许刷新重试。owner 索引自动迁移至 schema 3，重启后 pending 转为可重试的 failed；旧数据不认领给新账号，standalone 历史不进入个人管理列表。
 
 ## 目录
 
@@ -217,6 +221,8 @@ dsh plugin --profile web add .
 如果 profile 使用的是本地 link，按“开发模式与正式模式”启动后重新构建即可；如果安装结果是复制快照，再执行一次 `add .` 并重启。版本发布前更新 `package.json` 版本，在主仓执行 `pnpm check --plugins closedoff`，提交源文件、文档和 lockfile，真实 `env.conf` 留在用户配置目录，不提交 `dist/`、`web/assets/` 等生成物。播放器升级时更新 本插件 `vendor/` 下的快照和本包 `file:` 依赖，确认没有有效引用后删除旧快照。
 
 DSH 上游升级时，先在单独测试 profile 中安装本包并运行 `--dump-default-config` 或启动冒烟；只有 DSH 插件 API、session event、bundle patch 或 Web Server API 改变时才需要调整本包。正常业务 Tool 增减只修改本包。
+
+`tests/agent.test.ts` 使用真实 Cordis 作用域验证新建对话的服务注入；`llm` 必须包含在插件导出的 `inject` 中。浏览器历史栏可运行 `node tests/history-browser.mjs`，需要当前环境已安装 Playwright 及浏览器；可通过 `DSH_TEST_PLAYWRIGHT` 指定其模块入口、`DSH_TEST_BROWSER=msedge` 使用已安装的 Edge、`DSH_TEST_OUTPUT` 指定截图目录。该检查使用真实页面和 HTTP 替身，不访问模型或园区服务，正式验收仍需发送真实问题并检查工具结果。
 
 业务前后端升级后还应重新核对 `src/specs.ts` 的 `result`：先确认接口的 `data` 是列表、对象、内嵌分页对象还是未定结构，再核对模型分析所需字段。对象允许服务端增加字段，已知字段也不要求每条记录都存在；没有源码或脱敏响应证据的接口保持 `unknown`，不能按接口名猜测并收紧。
 

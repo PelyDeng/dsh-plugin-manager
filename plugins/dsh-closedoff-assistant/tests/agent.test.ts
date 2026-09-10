@@ -1,10 +1,11 @@
-import type { Context } from '@deepseek-ai/cordis'
+import { Context } from '@deepseek-ai/cordis'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ConversationManager } from '../src/agent.ts'
 import { ConversationStore } from '../src/conversation-store.ts'
 import { Config } from '../src/config.ts'
+import { inject } from '../src/index.ts'
 
 const alice: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-1' }
 const otherLogin: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-2' }
@@ -39,6 +40,38 @@ function fixture(max = 2, store = new ConversationStore(':memory:')) {
 }
 
 describe('owned business conversation lifecycle', () => {
+  it('shares an in-flight removal between the sidebar and central conversation management', async () => {
+    const f = fixture(), c = (await f.manager.open(undefined, true, alice))!
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const archive = vi.fn(async () => { await gate })
+    f.services.workspaceRegistry = { archivedSessionIds: [], archiveSession: archive }
+    const pending = f.manager.management().remove(alice, [c.id])
+    try {
+      await vi.waitFor(() => expect(archive).toHaveBeenCalledOnce())
+      await expect(f.manager.update(alice, { operation: 'delete', ids: [c.id] })).rejects.toMatchObject({ status: 409 })
+      expect(archive).toHaveBeenCalledOnce()
+    } finally { release(); await pending }
+    expect(f.store.record(alice, c.id).removalState).toBe('removed')
+  })
+  it('opens a fresh conversation inside the declared Cordis service scope', async () => {
+    const root = new Context(), store = new ConversationStore(':memory:')
+    const access: Access = { mode: 'authenticated', ready() {}, resolve: () => alice, assert() {} }
+    const create = vi.fn(async () => handle())
+    await root.plugin(ctx => {
+      for (const key of new Set([...inject, 'llm'])) ctx.provide(key, {})
+      ctx.set('agents', { create })
+      ctx.set('agentDefaultModel', { currentSelection: () => ({ provider: 'deepseek', model: 'test' }) })
+      ctx.set('llm', { resolveCallConfig: async (value: unknown) => value, resolveModelInfo: async () => ({ reasoning: { efforts: [{ id: 'low' }] } }) })
+    })
+    let manager: ConversationManager
+    try {
+      await root.plugin({ inject, apply(ctx: Context) { manager = new ConversationManager(ctx, Config({} as Config), 'persona', [], access, store) } })
+      const conversation = await manager!.open(undefined, true, alice)
+      expect(conversation?.id).toMatch(/^closedoff-web-/)
+      expect(create).toHaveBeenCalledOnce()
+    } finally { if (manager!) await manager.dispose(); else store.close(); await root.fiber.dispose() }
+  })
   it('selects through the official controller only for the owner and while idle', async () => {
     const f=fixture(), selected={provider:'deepseek',model:'second'}
     const selectModel=vi.fn(async (request:unknown)=>{f.defaults.currentSelection=()=>selected;return{selected}})

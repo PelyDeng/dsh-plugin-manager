@@ -179,8 +179,20 @@ export async function installWeb(ctx: Context, config: Config, manager: Conversa
       const offset = Number(params.get('offset') ?? '0')
       const limit = Number(params.get('limit') ?? '30')
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new HttpError(400, '历史分页参数无效')
-      const items = manager.list(actor, offset, limit + 1)
+      const query = params.get('q') ?? ''
+      if (query.length > 120) throw new HttpError(400, '搜索文字过长')
+      const items = manager.list(actor, offset, limit + 1, query.trim())
       respond(actor, res, 200, { items: items.slice(0, limit), nextOffset: items.length > limit ? offset + limit : null })
+    },
+  }))
+
+  ctx.effect(() => register({
+    kind: 'exact', path: `${config.routePrefix}/conversation-action`, handler: async (req, res, actor) => {
+      method(req, 'POST')
+      const input = await body(req, 24000)
+      if (typeof input.operation !== 'string' || !Array.isArray(input.ids) || input.ids.some(id => typeof id !== 'string')) throw new HttpError(400, '对话操作无效')
+      await manager.update(actor, { operation: input.operation, ids: input.ids as string[], ...(typeof input.title === 'string' ? { title: input.title } : {}), ...(typeof input.pinned === 'boolean' ? { pinned: input.pinned } : {}) })
+      respond(actor, res, 200, { ok: true })
     },
   }))
 
@@ -223,7 +235,7 @@ export async function installWeb(ctx: Context, config: Config, manager: Conversa
         access.assert(actor)
         res.writeHead(200, {
           'content-type': ASSET_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
-          'cache-control': suffix === 'app.css' || suffix === 'trajectory.js' || suffix === 'app.js'
+          'cache-control': ['app.css', 'trajectory.js', 'app.js', 'conversation-history.js', 'chat-ui.js', 'chat-base.css'].includes(suffix)
             ? 'no-cache'
             : 'public, max-age=31536000, immutable',
         })

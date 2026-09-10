@@ -37,6 +37,7 @@ export class ConversationManager {
   private pendingOpens = 0
   private disposed = false
   private readonly identities = new WeakMap<object, Actor>()
+  private provider?: ConversationProvider
 
   constructor(
     private readonly ctx: Context,
@@ -49,8 +50,9 @@ export class ConversationManager {
 
   /** Reuse the same ownership fence as send, resume and branch. */
   management(): ConversationProvider {
+    if (this.provider) return this.provider
     const busy = (id: string) => !!this.conversations.get(id)?.active || this.openings.has(id) || this.forks.has(id)
-    return { protocol:1, pluginId:'closedoff', list:async(actor,query)=>{
+    return this.provider = { protocol:1, pluginId:'closedoff', list:async(actor,query)=>{
       this.access.assert(actor)
       return this.store.managed(actor,query,conversationArchive(this.ctx).archivedSessionIds,[...hostBusyConversationIds(this.ctx),...[...new Set([...this.conversations.keys(),...this.openings.keys(),...this.forks])].filter(busy)])
     }, preview:async(actor,id,before)=>{
@@ -352,9 +354,25 @@ export class ConversationManager {
   }
 
   /** Return a single owner's bounded history page. */
-  list(actor: Actor, offset: number, limit: number): ConversationSummary[] {
+  list(actor: Actor, offset: number, limit: number, query = ''): ConversationSummary[] {
     this.access.assert(actor)
-    return this.store.list(actor, offset, limit)
+    return this.store.list(actor, offset, limit, query)
+  }
+
+  async update(actor: Actor, input: { operation: string; ids: string[]; title?: string; pinned?: boolean }): Promise<void> {
+    this.access.assert(actor)
+    if (!Array.isArray(input.ids) || !input.ids.length || input.ids.length > 100 || input.ids.some(id => typeof id !== 'string') || new Set(input.ids).size !== input.ids.length) throw new AccessError(400, '对话操作无效')
+    for (const id of input.ids) this.validateId(id)
+    if (input.operation === 'delete') {
+      const result = await this.management().remove(actor, input.ids)
+      if (result.results.some(item => item.status === 'failed' || item.status === 'blocked')) throw new AccessError(409, '部分会话未移除，请在会话管理中查看并重试')
+      return
+    }
+    for (const id of input.ids) {
+      this.store.assertOwner(id, actor)
+      if (this.conversations.get(id)?.active || this.openings.has(id) || this.forks.has(id)) throw new AccessError(409, '请等待回答完成或先停止')
+    }
+    this.store.mutate(actor, input)
   }
 
   /** Read the durable in-memory log of an active or resumed conversation. */

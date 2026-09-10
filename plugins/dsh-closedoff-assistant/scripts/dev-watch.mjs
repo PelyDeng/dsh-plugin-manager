@@ -57,7 +57,7 @@ const sourceWatcher = watch(resolve(root, 'src'), { recursive: true }, () => {
 })
 const webWatcher = watch(webRoot, (_event, filename) => {
   const source = String(filename).toLowerCase()
-  if (!['index.html', 'app.css', 'trajectory.js', 'app.js'].includes(source)) return
+  if (!['index.html', 'app.css', 'trajectory.js', 'app.js', 'conversation-history.js', 'chat-ui.js', 'chat-base.css'].includes(source)) return
   dirtyWebSources.add(source)
   clearTimeout(webTimer)
   webTimer = setTimeout(() => void (async () => {

@@ -79,6 +79,23 @@ async function fixture(mode: 'standalone' | 'authenticated' = 'authenticated') {
 }
 
 describe('HTTP authentication and conversation ownership', () => {
+  it('searches, pins and renames only owned idle sidebar conversations', async () => {
+    const { request, actors, manager } = await fixture()
+    const actor = actors.get('alice')!, first = (await manager.open(undefined, true, actor))!, second = (await manager.open(undefined, true, actor))!
+    const action = (data: unknown, cookie = 'alice') => request('/closedoff-qa/conversation-action', cookie, data)
+    expect((await action({ operation: 'rename', ids: [first.id], title: '园区概览' })).status).toBe(200)
+    expect((await action({ operation: 'pin', ids: [first.id], pinned: true })).status).toBe(200)
+    const list = await (await request('/closedoff-qa/conversations?q=' + encodeURIComponent('园区'))).json()
+    expect(list.items).toEqual([expect.objectContaining({ id: first.id, title: '园区概览', pinned: 1 })])
+    expect((await action({ operation: 'rename', ids: [first.id], title: '越权' }, 'bob')).status).toBe(404)
+    expect((await action({ operation: 'rename', ids: [first.id], title: ' ' })).status).toBe(400)
+    expect((await action({ operation: 'pin', ids: [first.id, second.id], pinned: true })).status).toBe(400)
+    first.active = true
+    expect((await action({ operation: 'rename', ids: [first.id], title: '忙碌' })).status).toBe(409)
+    first.active = false
+    expect((await action({ operation: 'rename', ids: [first.id], title: '拒绝' }, '')).status).toBe(401)
+    expect((await request('/closedoff-qa/conversation-action', 'alice', { operation: 'pin', ids: [first.id], pinned: false }, { origin: 'https://foreign.test' })).status).toBe(403)
+  })
   it('redirects the page, rejects anonymous APIs and validates mutation origin', async () => {
     const { request } = await fixture()
     expect((await request('/closedoff-qa', '')).status).toBe(303)

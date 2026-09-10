@@ -10,6 +10,7 @@ export interface ConversationSummary {
   title: string
   createdAt: number
   updatedAt: number
+  pinned: number
 }
 
 /** Persists ownership before creating a DSH session; incomplete rows stay inaccessible. */
@@ -21,7 +22,7 @@ export class ConversationStore {
     this.db = new DatabaseSync(path)
     if (path !== ':memory:' && process.platform !== 'win32') chmodSync(path, 0o600)
     const version = this.db.prepare('PRAGMA user_version').get()?.user_version
-    if (version !== 0 && version !== 1 && version !== 2) {
+    if (version !== 0 && version !== 1 && version !== 2 && version !== 3) {
       this.db.close()
       throw new Error('Unsupported closedoff ownership schema version')
     }
@@ -37,8 +38,9 @@ export class ConversationStore {
     `)
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      if (version !== 2) this.db.exec("ALTER TABLE conversations ADD COLUMN deletedAt INTEGER; ALTER TABLE conversations ADD COLUMN removalState TEXT NOT NULL DEFAULT '';")
-      this.db.exec("UPDATE conversations SET removalState='failed' WHERE removalState='pending'; PRAGMA user_version=2; COMMIT;")
+      if (Number(version) < 2) this.db.exec("ALTER TABLE conversations ADD COLUMN deletedAt INTEGER; ALTER TABLE conversations ADD COLUMN removalState TEXT NOT NULL DEFAULT '';")
+      if (Number(version) < 3) this.db.exec('ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;')
+      this.db.exec("UPDATE conversations SET removalState='failed' WHERE removalState='pending'; PRAGMA user_version=3; COMMIT;")
     } catch(error) { this.db.exec('ROLLBACK'); this.db.close(); throw error }
   }
 
@@ -68,11 +70,21 @@ export class ConversationStore {
   }
 
   /** Page through one owner's ready records without loading other users' logs. */
-  list(actor: Actor, offset: number, limit: number): ConversationSummary[] {
-    return this.db.prepare(`SELECT id, title, created_at AS createdAt, updated_at AS updatedAt
-      FROM conversations WHERE owner_namespace=? AND owner_id=? AND ready=1 AND deletedAt IS NULL AND removalState=''
-      ORDER BY updated_at DESC, id LIMIT ? OFFSET ?`)
-      .all(actor.namespace, actor.userId, limit, offset) as unknown as ConversationSummary[]
+  list(actor: Actor, offset: number, limit: number, query = ''): ConversationSummary[] {
+    return this.db.prepare(`SELECT id, title, created_at AS createdAt, updated_at AS updatedAt, pinned
+      FROM conversations WHERE owner_namespace=? AND owner_id=? AND ready=1 AND deletedAt IS NULL AND removalState='' AND instr(lower(title),lower(?))>0
+      ORDER BY pinned DESC, updated_at DESC, id LIMIT ? OFFSET ?`)
+      .all(actor.namespace, actor.userId, query, limit, offset) as unknown as ConversationSummary[]
+  }
+
+  /** Sidebar metadata changes never rewrite the official session log. */
+  mutate(actor: Actor, input: { operation: string; ids: string[]; title?: string; pinned?: boolean }): void {
+    if (!['rename', 'pin'].includes(input.operation) || input.ids.length !== 1) throw new AccessError(400, '请选择一条对话')
+    if (input.operation === 'rename' && (typeof input.title !== 'string' || !input.title.trim() || input.title.trim().length > 100)) throw new AccessError(400, '标题应为 1–100 个字符')
+    if (input.operation === 'pin' && typeof input.pinned !== 'boolean') throw new AccessError(400, '置顶参数无效')
+    this.assertOwner(input.ids[0]!, actor)
+    if (input.operation === 'rename') this.db.prepare('UPDATE conversations SET title=? WHERE id=?').run(input.title!.trim(), input.ids[0]!)
+    else this.db.prepare('UPDATE conversations SET pinned=? WHERE id=?').run(input.pinned ? 1 : 0, input.ids[0]!)
   }
 
   record(actor: Actor, id: string): ConversationRecord {

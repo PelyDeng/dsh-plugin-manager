@@ -28,6 +28,7 @@ export const name = 'closedoff-assistant'
 export const inject = [
   'agents',
   'agentDefaultModel',
+  'llm',
   'messageFeedback',
   'sessionPersistence',
   'systemPrompt',

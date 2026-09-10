@@ -16,14 +16,6 @@
   [hidden] { display: none !important; }
   .account-label { color: var(--text-dim); font-size: 13px; }
   a.btn { text-decoration: none; }
-  .history-dialog { margin: auto; width: min(600px, 92vw); max-height: 80vh; padding: 22px; border: 1px solid var(--line); border-radius: 14px; color: var(--text); background: var(--panel); }
-  .history-dialog::backdrop { background: rgba(20, 30, 50, .35); }
-  .history-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-  .history-head h2 { font-size: 19px; }
-  #historyStatus { margin: 14px 0; color: var(--text-dim); }
-  .history-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
-  .history-item { display: flex; flex-direction: column; gap: 6px; text-align: left; cursor: pointer; padding: 13px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); }
-  .history-item time { font-size: 12px; color: var(--text-dim); }
   @media (max-width: 850px) { header { flex-wrap: wrap; gap: 8px !important; } .account-label { margin-left: auto; } }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; overflow: hidden; }

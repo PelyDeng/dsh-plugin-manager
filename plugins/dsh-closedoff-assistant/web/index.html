@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>封闭化管理智能助手</title>
 <link rel="stylesheet" href="/closedoff-qa/assets/app.css">
+<link rel="stylesheet" href="/closedoff-qa/assets/chat-base.css">
 <link rel="stylesheet" href="/closedoff-qa/assets/cesium/Widgets/widgets.css?v=1.142.0">
 <link rel="stylesheet" href="/closedoff-qa/assets/video-player/style.css?v=0.0.37">
 </head>
@@ -68,13 +69,6 @@
   </aside>
 </div>
 
-<dialog id="historyDialog" class="history-dialog" aria-labelledby="historyTitle">
-  <div class="history-head"><h2 id="historyTitle">我的历史对话</h2><button class="btn" id="historyClose" type="button" aria-label="关闭历史对话">关闭</button></div>
-  <p id="historyStatus" role="status" aria-live="polite"></p>
-  <div id="historyList" class="history-list"></div>
-  <button class="btn" id="historyMore" type="button" hidden>加载更多</button>
-</dialog>
-
 <div id="modal3d" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal3dTitle" style="display:none">
   <div class="modal">
     <div class="modal-head"><span id="modal3dTitle">三维轨迹</span><button id="modal3dClose" class="modal-close" type="button" aria-label="关闭三维轨迹">×</button></div>
@@ -105,6 +99,6 @@
 <script>window.CLOSEDOFF_CONFIG = __WEB_CONFIG__;</script>
 <script src="/closedoff-qa/assets/trajectory.js"></script>
 <script src="/closedoff-qa/assets/model-picker.js"></script>
-<script src="/closedoff-qa/assets/app.js"></script>
+<script type="module" src="/closedoff-qa/assets/app.js"></script>
 </body>
 </html>

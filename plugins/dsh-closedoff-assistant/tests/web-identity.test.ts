@@ -28,20 +28,20 @@ function jsonFixture() {
     document: { createElement: () => ({ append() {}, addEventListener() {} }) },
   })
   runInContext(between('  function readJson(', '  function rejectAccess('), scope)
-  runInContext(between('  function businessFetch(', '  function loadHistory('), scope)
+  runInContext(between('  function businessFetch(', '  function initHistory('), scope)
   return { scope, response, rows, release: (data: unknown) => release(data) }
 }
 
 describe('account switch discards late private responses', () => {
-  it('does not render history whose JSON arrives after private state was cleared', async () => {
+  it('rejects sidebar history whose JSON arrives after private state was cleared', async () => {
     const fixture = jsonFixture()
-    runInContext(between('  function loadHistory(', "  $('#historyBtn').addEventListener"), fixture.scope)
-    runInContext('loadHistory(false)', fixture.scope)
+    const result = runInContext("businessFetch('/closedoff-qa/conversations').then(readJson)", fixture.scope) as Promise<unknown>
+    const rejected = expect(result).rejects.toThrow('登录状态已变化')
     await vi.waitFor(() => expect(fixture.response.json).toHaveBeenCalledOnce())
     fixture.scope.identityEpoch += 1
     fixture.rows.length = 0
     fixture.release({ items: [{ id: 'old-private', title: 'old private title', updatedAt: Date.now() }], nextOffset: null })
-    await settled()
+    await rejected
     expect(fixture.rows).toEqual([])
   })
 

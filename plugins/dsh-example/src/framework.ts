@@ -32,13 +32,14 @@ export async function loadFramework() {
     },
   }), defineTool({
     name: 'example_read_framework',
-    description: '按检索结果的准确路径和行号读取随包公共源码。不能读取服务器文件、凭据或私有插件；超过一页时继续指定 startLine。',
+    description: '按检索结果的准确路径和行号读取随包公共源码。每页最多 100 行，lines 超过 100 时自动分页；使用返回的 nextLine 作为 startLine 继续读取。不能读取服务器文件、凭据或私有插件。',
     parameters: { path: { type: 'string', required: true }, startLine: { type: 'integer' }, lines: { type: 'integer' } },
     output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] },
     async execute({ path, startLine = 1, lines = 100 }) {
       const source = files.get(path)
       if (!source) throw new Error('此路径不在随包公共源码索引中，请先检索。')
-      if (!Number.isSafeInteger(startLine) || startLine < 1 || !Number.isSafeInteger(lines) || lines < 1 || lines > 100) throw new Error('行号或读取数量无效，每次最多 100 行。')
+      if (!Number.isSafeInteger(startLine) || startLine < 1 || !Number.isSafeInteger(lines) || lines < 1) throw new Error('行号或读取数量无效，必须是正整数。')
+      lines = Math.min(lines, 100)
       const selected: string[] = []; let size = 0
       for (let index = startLine - 1; index < Math.min(source.length, startLine - 1 + lines); index++) {
         const text = `${index + 1}: ${source[index]}`

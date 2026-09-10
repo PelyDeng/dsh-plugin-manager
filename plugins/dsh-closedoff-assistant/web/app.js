@@ -1,3 +1,5 @@
+import {createConversationHistory} from './conversation-history.js';
+
 (function () {
   var APP_CONFIG = window.CLOSEDOFF_CONFIG;
   if (!APP_CONFIG || !APP_CONFIG.routePrefix || !APP_CONFIG.map) throw new Error('封闭化页面配置缺失');
@@ -10,7 +12,7 @@
   var storageKey = '';
   var identityKey = '';
   var identityReady = false;
-  var historyOffset = 0;
+  var sidebar;
   var identityEpoch = 0;
   var responseEpochs = new WeakMap();
   var running = false;
@@ -579,9 +581,11 @@
   }
 
   function openConversation(id) {
+    if (running || !identityReady) return;
     if (activeRestoreController) activeRestoreController.abort();
     activeRestoreController = null;
     conversationId = id;
+    if (sidebar) sidebar.render();
     localStorage.setItem(storageKey, conversationId);
     followBottom = true;
     resetViewState();
@@ -799,7 +803,7 @@
     followBottom = true;
     addUser(q);
     var ast = startAssistant();
-    running = true; picker.setBusy(true);
+    running = true; picker.setBusy(true); if (sidebar) sidebar.setBusy(true);
     sendBtn.disabled = false;
     sendBtn.classList.add('stop'); sendBtn.innerHTML = IC.stop;
     sendBtn.title = '停止回答';
@@ -851,7 +855,7 @@
 
     function finishRunning(astObj) {
       if (epoch !== identityEpoch) return;
-      running = false; picker.setBusy(false);
+      running = false; picker.setBusy(false); if (sidebar) { sidebar.setBusy(false); void sidebar.refresh(); }
       if (activeChatController === controller) activeChatController = null;
       sendBtn.disabled = false;
       sendBtn.classList.remove('stop'); sendBtn.innerHTML = IC.send;
@@ -904,6 +908,7 @@
           admitted=true;
           picker.accept(obj.model);
           conversationId = obj.conversationId;
+          if (sidebar) void sidebar.refresh();
           localStorage.setItem(storageKey, conversationId);
           break;
         case 'delta':
@@ -1121,9 +1126,11 @@
   });
 
   function startFreshConversation() {
+    if (running || !identityReady) return;
     if (activeRestoreController) activeRestoreController.abort();
     activeRestoreController = null;
     conversationId = '';
+    if (sidebar) sidebar.render();
     void picker.refresh();
     followBottom = true;
     if (storageKey) localStorage.removeItem(storageKey);
@@ -1157,8 +1164,7 @@
     conversationId = '';
     resetViewState();
     inner.innerHTML = '';
-    $('#historyList').replaceChildren();
-    $('#historyDialog').close();
+    if (sidebar) { sidebar.dispose(); sidebar = null; }
   }
 
   function readJson(response) {
@@ -1200,33 +1206,18 @@
     });
   }
 
-  function loadHistory(append) {
-    var epoch = identityEpoch;
-    if (!append) { historyOffset = 0; $('#historyList').replaceChildren(); }
-    $('#historyStatus').textContent = '正在加载历史…';
-    $('#historyMore').disabled = true;
-    businessFetch(routePath('/conversations?offset=') + historyOffset).then(readJson).then(function (result) {
-      if (epoch !== identityEpoch) return;
-      result.items.forEach(function (item) {
-        var button = document.createElement('button');
-        button.type = 'button'; button.className = 'history-item';
-        var title = document.createElement('span'); title.textContent = item.title || '新对话';
-        var time = document.createElement('time'); time.dateTime = new Date(item.updatedAt).toISOString(); time.textContent = new Date(item.updatedAt).toLocaleString();
-        button.append(title, time);
-        button.addEventListener('click', function () { if (running) return; $('#historyDialog').close(); openConversation(item.id); });
-        $('#historyList').appendChild(button);
-      });
-      historyOffset = result.nextOffset;
-      $('#historyMore').hidden = historyOffset === null;
-      $('#historyStatus').textContent = $('#historyList').children.length ? '选择一段对话继续查看或提问。' : '还没有历史对话。';
-    }).catch(function (error) { if (epoch === identityEpoch) $('#historyStatus').textContent = error.message; }).finally(function () { if (epoch === identityEpoch) $('#historyMore').disabled = false; });
+  function initHistory() {
+    sidebar = createConversationHistory({
+      mount: $('.main'), toggle: $('#historyBtn'), currentId: function () { return conversationId; },
+      newConversation: startFreshConversation, openConversation: openConversation,
+      list: function (args) { return businessFetch(routePath('/conversations?offset=') + args.offset + '&q=' + encodeURIComponent(args.query)).then(readJson); },
+      mutate: function (args) { return postJson(routePath('/conversation-action'), args); },
+      read: function (id) { return businessFetch(routePath('/history?conversationId=') + encodeURIComponent(id)).then(readJson).then(function (data) { return { messages: data.history }; }); },
+      onDeleted: function (ids) { if (ids.indexOf(conversationId) >= 0) startFreshConversation(); },
+      storageKey: 'closedoff-history:' + identityKey,
+    });
+    void sidebar.refresh();
   }
-  $('#historyBtn').addEventListener('click', function () {
-    if (!identityReady || running) return;
-    $('#historyDialog').showModal(); loadHistory(false);
-  });
-  $('#historyClose').addEventListener('click', function () { $('#historyDialog').close(); });
-  $('#historyMore').addEventListener('click', function () { loadHistory(true); });
   $('#logoutBtn').addEventListener('click', function () {
     $('#logoutBtn').disabled = true;
     fetch('/auth/api/session', { cache: 'no-store' }).then(readJson).then(function (session) {
@@ -1248,6 +1239,7 @@
     localStorage.removeItem('dsh_closedoff_conversationId');
     conversationId = localStorage.getItem(storageKey) || '';
     identityReady = true;
+    initHistory();
     $('#currentUser').textContent = identity.label;
     $('#accountLink').hidden = $('#logoutBtn').hidden = identity.mode !== 'authenticated';
     if (identity.mode === 'authenticated') fetch('/auth/api/session', { cache: 'no-store' }).then(readJson).then(function (session) {
