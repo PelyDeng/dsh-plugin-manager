@@ -24,8 +24,9 @@ function fixture(t) {
     put('stage/package/package.json', { name: 'fixture-alpha', version: '0.1.0', type: 'module', main: 'index.js', dsh: { bundle: { patch: 'cordis.patch.yml' } }, deepseekPlugin: { schemaVersion: 3, id: 'alpha', configuration: { entryId: 'alpha' } } });
     put('stage/package/index.js', `export const value = '${content}';`); put('stage/package/cordis.patch.yml', '{}\n');
     mkdirSync(output, { recursive: true });
-    const archive = resolve(output, 'alpha.tgz'), tar = spawnSync(tarCommand, ['-czf', archive, '-C', dirname(stage), 'package']);
+    const archive = resolve(output, 'alpha.tgz'), tar = spawnSync(tarCommand, ['-czf', '-', 'package'], { cwd: dirname(stage), windowsHide: true });
     assert.equal(tar.status, 0, tar.stderr?.toString());
+    writeFileSync(archive, tar.stdout);
     put(resolve(output, 'manifest.json'), { schemaVersion: 1, plugins: [{ id: 'alpha', package: 'fixture-alpha', version: '0.1.0', directory: 'plugins/alpha', archive: 'alpha.tgz', sha256: fileHash(archive), verifyFiles: ['package.json', 'index.js', 'cordis.patch.yml'], configuration: { entryId: 'alpha' } }] });
   };
   pack();
