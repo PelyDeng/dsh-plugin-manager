@@ -2,7 +2,7 @@
 
 # @dsh-plugin-manager/plugin-kit
 
-可选的 DSH 插件接入库，通过宿主 Cordis 事件通信，不启动服务。使用 kit 的插件在构建时把它打入自己的安装包。独立作者可将维护者提供的版本化 tgz 安装为开发依赖，例如 `pnpm add --ignore-workspace --save-dev /path/to/plugin-kit-0.16.1.tgz`，再通过构建器内嵌。包名不表示版本已发布到公共 registry。
+可选的 DSH 插件接入库，通过宿主 Cordis 事件通信，不启动服务。使用 kit 的插件在构建时把它打入自己的安装包。独立作者可将维护者提供的版本化 tgz 安装为开发依赖，例如 `pnpm add --ignore-workspace --save-dev /path/to/plugin-kit-0.16.2.tgz`，再通过构建器内嵌。包名不表示版本已发布到公共 registry。
 
 | 导出 | 用途 |
 | --- | --- |
@@ -18,9 +18,9 @@
 
 DSH 类型依赖是可选 peer，由使用相应接口的作者提供；只使用 access、conversations、models 或 route-path 不需要工具类型依赖。业务插件自行声明实际使用的 DSH/Cordis peer。
 
-kit 提供可选的[会话管理协议](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.1/doc/conversation-management.md)。插件维护会话所属用户（owner）的索引和活动操作检查，auth 汇总分类、只读预览与批量移除。共用的移除流程先保存 pending 标记，阻止新的写入，调用官方归档并返回逐项结果；包含定时事件时复用宿主已注册的 schedule 投影校验，能力缺失则拒绝清理。
+kit 提供可选的[会话管理协议](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/doc/conversation-management.md)。插件维护会话所属用户（owner）的索引和活动操作检查，auth 汇总分类、只读预览与批量移除。共用的移除流程先保存 pending 标记，阻止新的写入，调用官方归档并返回逐项结果；包含定时事件时复用宿主已注册的 schedule 投影校验，能力缺失则拒绝清理。
 
-`registerConversationTitles(ctx, (id, title, manual, complete) => { ... })` 在插件生命周期内接收可信宿主标题，返回取消监听函数。调用方维护自己的 owner、删除状态和标题来源，保护手动标题并接收回答结束后的结果；无需再实现标题模型调用。事件筛选、回调含义及 example 的有界刷新见[自动标题](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.1/doc/conversation-management.md#自动标题)。
+`registerConversationTitles(ctx, (id, title, manual, complete) => { ... })` 在插件生命周期内接收可信宿主标题，返回取消监听函数。调用方维护自己的 owner、删除状态和标题来源，保护手动标题并接收回答结束后的结果；无需再实现标题模型调用。事件筛选、回调含义及 example 的有界刷新见[自动标题](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/doc/conversation-management.md#自动标题)。
 
 通过 `@dsh-plugin-manager/plugin-kit/models` 导入 `defaultConversationModel(ctx)` 和 `await conversationModel(ctx, id?, eventCount?)`。新会话不传 ID，读取官方默认；恢复前先验证所有权，再传 ID，通过官方 `modelSelection` 投影还原 `pending ?? lastUsed`。
 

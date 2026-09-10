@@ -17,13 +17,13 @@
 ### 1. 取得并安装工具
 
 <!-- excerpt:author-tools -->
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.16.1.zip`、`plugin-manager-0.16.1.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.16.1.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.16.2.zip`、`plugin-manager-0.16.2.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.16.2.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
 
 起步 zip 内有 standalone-plugin、standalone-kit；选一个目录复制为自己的作者项目，不复制 node_modules、dist 或 .local。在作者项目以外创建独立工具目录 dsh-tools，在该工具目录安装实际 manager 归档：
 
 ```sh
 pnpm init
-pnpm add --ignore-workspace /absolute/path/plugin-manager-0.16.1.tgz
+pnpm add --ignore-workspace /absolute/path/plugin-manager-0.16.2.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 

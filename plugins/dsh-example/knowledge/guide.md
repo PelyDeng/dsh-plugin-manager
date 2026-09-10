@@ -2,7 +2,7 @@
 
 # 开发者接入 FAQ
 
-这是框架 0.16.1 随包指南。模型不可用时仍可在已授权应用中阅读；内容来自发布时固定的公共文档，不扫描部署者机器。在线 main 可能领先，知识不能证明生产状态。
+这是框架 0.16.2 随包指南。模型不可用时仍可在已授权应用中阅读；内容来自发布时固定的公共文档，不扫描部署者机器。在线 main 可能领先，知识不能证明生产状态。
 
 ## 这个框架是做什么的？
 
@@ -15,13 +15,13 @@
 ## 工具从哪里来？
 
 <!-- Excerpt from doc/plugin-development.md.tmpl#author-tools; edit its source. -->
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.16.1.zip`、`plugin-manager-0.16.1.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.16.1.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.16.2.zip`、`plugin-manager-0.16.2.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.16.2.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
 
 起步 zip 内有 standalone-plugin、standalone-kit；选一个目录复制为自己的作者项目，不复制 node_modules、dist 或 .local。在作者项目以外创建独立工具目录 dsh-tools，在该工具目录安装实际 manager 归档：
 
 ```sh
 pnpm init
-pnpm add --ignore-workspace /absolute/path/plugin-manager-0.16.1.tgz
+pnpm add --ignore-workspace /absolute/path/plugin-manager-0.16.2.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
@@ -46,7 +46,7 @@ list 只读声明，不要求锁文件；pack 要求作者根的 pnpm-lock.yaml�
 ## 部署者收到什么，如何启动？
 
 <!-- Excerpt from doc/first-deployment.md.tmpl#deployment-start; edit its source. -->
-从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.16.1.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
+从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.16.2.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
 
 每个作者交付的是一个完整目录，包含 manifest.json 和它引用的全部 tgz。将它放在部署根的 incoming 直接子目录中：
 
@@ -207,6 +207,6 @@ Release 的 runtime 构建并发布固定宿主/manager 镜像，检查匿名拉
 
 根 test-report.sh 验证最终 auth/example 归档、真实宿主及本地模型替身；不代表真实提供方或生产业务已通过。完整记录见 packages/plugin-manager/VERIFICATION.md。其他插件独立测试，重打包不能沿用旧包验证结果。
 
-- [固定版本作者指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.1/doc/plugin-development.md)
-- [固定版本部署指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.1/doc/first-deployment.md)
+- [固定版本作者指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/doc/plugin-development.md)
+- [固定版本部署指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/doc/first-deployment.md)
 - [可复制开发提示词](prompts.md)

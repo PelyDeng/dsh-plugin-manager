@@ -1,13 +1,13 @@
 <!-- Generated from deploy/DEPLOYMENT.md.tmpl by scripts/version.mjs; edit the template. -->
 
-# DSH Plugin Manager 0.16.1 部署包
+# DSH Plugin Manager 0.16.2 部署包
 
 本目录是可独立使用的框架部署包，不需要作者源码或框架 Git 检出。先准备 Node，再按下列步骤部署标准插件产物。运行依赖和固定宿主镜像仍可能需要网络，离线阅读不等于离线安装。
 
 ## 放入产物并启动
 
 <!-- Excerpt from doc/first-deployment.md.tmpl#deployment-start; edit its source. -->
-从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.16.1.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
+从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.16.2.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
 
 每个作者交付的是一个完整目录，包含 manifest.json 和它引用的全部 tgz。将它放在部署根的 incoming 直接子目录中：
 
@@ -116,4 +116,4 @@ recover 只修正新 schema 3 失败操作的 plugin.json.config 或 runtimeConf
 
 ## 进阶资料
 
-本 README 的操作正文来自框架固定公开维护源，由同一文档同步生成。进一步查阅该版本的[配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.1/doc/framework-configuration.md)、[运维说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.1/deploy/README.md)及[独立 CLI 指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.1/packages/plugin-manager/DELIVERY.md)。这些链接不保证比已安装版本更新；本目录 `framework-runtime.json` 记录实际配套运行镜像身份。
+本 README 的操作正文来自框架固定公开维护源，由同一文档同步生成。进一步查阅该版本的[配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/doc/framework-configuration.md)、[运维说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/deploy/README.md)及[独立 CLI 指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/packages/plugin-manager/DELIVERY.md)。这些链接不保证比已安装版本更新；本目录 `framework-runtime.json` 记录实际配套运行镜像身份。

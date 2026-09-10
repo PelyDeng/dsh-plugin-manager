@@ -1,6 +1,6 @@
 <!-- Generated from deploy/STARTERS.md.tmpl by scripts/version.mjs; edit the template. -->
 
-# DSH Plugin Manager 0.16.1 作者起步包
+# DSH Plugin Manager 0.16.2 作者起步包
 
 选择一个目录复制为自己的项目：
 
@@ -12,13 +12,13 @@
 两个目录都带完整源码和 README，可独立复制。鉴权目录中的 vendor/plugin-kit.tgz 是匹配版本的公开构建依赖，已用相对 file 引用；它会内嵌到最终运行产物，部署端不需要作者的 vendor 路径。
 
 <!-- Excerpt from doc/plugin-development.md.tmpl#author-tools; edit its source. -->
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.16.1.zip`、`plugin-manager-0.16.1.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.16.1.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.16.2.zip`、`plugin-manager-0.16.2.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.16.2.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
 
 起步 zip 内有 standalone-plugin、standalone-kit；选一个目录复制为自己的作者项目，不复制 node_modules、dist 或 .local。在作者项目以外创建独立工具目录 dsh-tools，在该工具目录安装实际 manager 归档：
 
 ```sh
 pnpm init
-pnpm add --ignore-workspace /absolute/path/plugin-manager-0.16.1.tgz
+pnpm add --ignore-workspace /absolute/path/plugin-manager-0.16.2.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
@@ -40,4 +40,4 @@ list 只读声明，不要求锁文件；pack 要求作者根的 pnpm-lock.yaml�
 
 新建 DSH 插件从以上目录开始；已有 Node 项目需要符合 Cordis 插件入口与构建契约；非 Node 服务继续独立运行，可由 DSH 插件调用接口，不是把任意应用压成 tgz 就能托管。
 
-固定版本[作者指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.1/doc/plugin-development.md)和[插件配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.1/doc/plugin-configuration.md)提供详细说明。正常操作无需读内部状态机或下载整个框架源码。
+固定版本[作者指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/doc/plugin-development.md)和[插件配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/doc/plugin-configuration.md)提供详细说明。正常操作无需读内部状态机或下载整个框架源码。
