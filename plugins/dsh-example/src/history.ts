@@ -13,7 +13,7 @@ export class HistoryStore {
     this.db = new DatabaseSync(path)
     if (path !== ':memory:' && process.platform !== 'win32') chmodSync(path, 0o600)
     const version = this.db.prepare('PRAGMA user_version').get()?.user_version
-    if (version !== 0 && version !== 1 && version !== 2 && version !== 3) { this.db.close(); throw new Error('Unsupported example history schema') }
+    if (version !== 0 && version !== 1 && version !== 2 && version !== 3 && version !== 4) { this.db.close(); throw new Error('Unsupported example history schema') }
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY, owner TEXT NOT NULL,
         title TEXT NOT NULL, updatedAt INTEGER NOT NULL, ready INTEGER NOT NULL DEFAULT 0,
@@ -23,13 +23,21 @@ export class HistoryStore {
     this.db.exec('BEGIN IMMEDIATE')
     try {
       if(version===1)this.db.exec('ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0; ALTER TABLE conversations ADD COLUMN deletedAt INTEGER;')
-      if (version !== 3) this.db.exec("ALTER TABLE conversations ADD COLUMN removalState TEXT NOT NULL DEFAULT '';")
-      this.db.exec("UPDATE conversations SET removalState='failed' WHERE removalState='pending'; PRAGMA user_version=3; COMMIT;")
+      if (version !== 3 && version !== 4) this.db.exec("ALTER TABLE conversations ADD COLUMN removalState TEXT NOT NULL DEFAULT '';")
+      if (version !== 4) this.db.exec("ALTER TABLE conversations ADD COLUMN titleSource TEXT NOT NULL DEFAULT 'manual';")
+      this.db.exec("UPDATE conversations SET removalState='failed' WHERE removalState='pending'; PRAGMA user_version=4; COMMIT;")
     } catch (error) { this.db.exec('ROLLBACK'); this.db.close(); throw error }
   }
   /** Reserve ownership before creating a DSH session; failed creations stay unpublished. */
-  reserve(id: string, actor: Actor, title: string): void {
-    this.db.prepare('INSERT INTO conversations(id,owner,title,updatedAt) VALUES(?,?,?,?)').run(id, actorKey(actor), title.slice(0, 80), Date.now())
+  reserve(id: string, actor: Actor, title: string, titleSource: 'automatic' | 'manual' = 'automatic'): void {
+    this.db.prepare('INSERT INTO conversations(id,owner,title,updatedAt,titleSource) VALUES(?,?,?,?,?)').run(id, actorKey(actor), [...title.replace(/\s+/gu, ' ').trim()].slice(0, 100).join('').trim(), Date.now(), titleSource)
+  }
+  /** Host events update existing ownership only; completed and manual titles fence later automation. */
+  syncTitle(id: string, title: string, manual: boolean, complete: boolean): boolean {
+    const normalized = [...title.replace(/\s+/gu, ' ').trim()].slice(0, 100).join('').trim()
+    if (!normalized) return false
+    return this.db.prepare("UPDATE conversations SET title=?,titleSource=? WHERE id=? AND owner!='' AND ready=1 AND deletedAt IS NULL AND removalState='' AND (titleSource='automatic' OR ?=1)")
+      .run(normalized, manual ? 'manual' : complete ? 'generated' : 'automatic', id, manual ? 1 : 0).changes > 0
   }
   publish(id: string): void { this.db.prepare('UPDATE conversations SET ready=1,updatedAt=? WHERE id=?').run(Date.now(), id) }
   assertOwner(id: string, actor: Actor): void {
@@ -38,7 +46,7 @@ export class HistoryStore {
     }
   }
   list(actor: Actor, offset: number, limit: number, query=''): unknown[] {
-    return this.db.prepare("SELECT id,title,updatedAt,pinned FROM conversations WHERE owner=? AND ready=1 AND deletedAt IS NULL AND removalState='' AND instr(lower(title),lower(?))>0 ORDER BY pinned DESC,updatedAt DESC,id LIMIT ? OFFSET ?")
+    return this.db.prepare("SELECT id,title,titleSource,updatedAt,pinned FROM conversations WHERE owner=? AND ready=1 AND deletedAt IS NULL AND removalState='' AND instr(lower(title),lower(?))>0 ORDER BY pinned DESC,updatedAt DESC,id LIMIT ? OFFSET ?")
       .all(actorKey(actor), query, limit, offset)
   }
   record(actor: Actor, id: string): ConversationRecord {
@@ -56,13 +64,13 @@ export class HistoryStore {
   mutate(actor:Actor,input:{operation:string;ids:string[];title?:string;pinned?:boolean}):void {
     if(!['rename','pin','delete'].includes(input.operation)||!Array.isArray(input.ids)||!input.ids.length||input.ids.length>100||input.ids.some(id=>typeof id!=='string')||new Set(input.ids).size!==input.ids.length)throw new AccessError(400,'对话操作无效')
     if(input.operation!=='delete'&&input.ids.length!==1)throw new AccessError(400,'请选择一条对话')
-    if(input.operation==='rename'&&(typeof input.title!=='string'||!input.title.trim()||input.title.trim().length>100))throw new AccessError(400,'标题应为 1–100 个字符')
+    if(input.operation==='rename'&&(typeof input.title!=='string'||!input.title.trim()||[...input.title.trim()].length>100))throw new AccessError(400,'标题应为 1–100 个字符')
     if(input.operation==='pin'&&typeof input.pinned!=='boolean')throw new AccessError(400,'置顶参数无效')
     this.db.exec('BEGIN IMMEDIATE')
     try{
       for(const id of input.ids)this.assertOwner(id,actor)
       for(const id of input.ids){
-        if(input.operation==='rename')this.db.prepare('UPDATE conversations SET title=? WHERE id=?').run(input.title!.trim(),id)
+        if(input.operation==='rename')this.db.prepare("UPDATE conversations SET title=?,titleSource='manual' WHERE id=?").run(input.title!.trim(),id)
         if(input.operation==='pin')this.db.prepare('UPDATE conversations SET pinned=? WHERE id=?').run(input.pinned?1:0,id)
         if(input.operation==='delete')this.db.prepare('UPDATE conversations SET deletedAt=? WHERE id=?').run(Date.now(),id)
       }

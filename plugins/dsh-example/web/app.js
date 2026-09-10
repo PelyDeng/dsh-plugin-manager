@@ -5,7 +5,7 @@ import {element,glyph,action,stat,compactTokens,keyboardSend,thinking as makeThi
 
 import {createThinkingTranslations} from './thinking-translation.js'
 
-import {createConversationHistory} from './conversation-history.js'
+import {createConversationHistory,createConversationTitleRefresh} from './conversation-history.js'
 
 const $ = id => document.getElementById(id)
 const base = document.body.dataset.base
@@ -25,7 +25,8 @@ let resetAfterStop = false
 let loadingHistory = false
 const sidebar=createConversationHistory({mount:document.querySelector('.main'),toggle:$('history-open'),storageKey:base+'-history',currentId:()=>conversationId,newConversation:()=>$('new-chat').click(),openConversation:openHistory,
  list:async({offset,query})=>{const r=await fetch(base+'/conversations?'+new URLSearchParams({offset,q:query}));const data=await r.json();if(!r.ok)throw Error(data.error??'无法读取历史对话');return data},
- mutate:input=>post('/conversation-action',input),read:async id=>{const r=await fetch(base+'/history?id='+encodeURIComponent(id)),data=await r.json();if(!r.ok)throw Error(data.error??'无法读取对话');return data},onDeleted:ids=>{if(ids.includes(conversationId))reset()}})
+ mutate:async input=>{const result=await post('/conversation-action',input);if(input.operation==='rename'&&input.ids.includes(conversationId))titleRefresh.stop();return result},read:async id=>{const r=await fetch(base+'/history?id='+encodeURIComponent(id)),data=await r.json();if(!r.ok)throw Error(data.error??'无法读取对话');return data},onDeleted:ids=>{if(ids.includes(conversationId))reset()},onRefreshed:items=>titleRefresh.observe(items)})
+const titleRefresh=createConversationTitleRefresh({currentId:()=>conversationId,refresh:()=>sidebar.refresh()})
 const setStatus = text => { $('status').textContent = text }
 const notice = text => { $('notice').textContent = text; $('notice').hidden = !text }
 function busy(value) {
@@ -95,7 +96,8 @@ async function send(text) {
     }
     await readEvents(response, event => {
       const area=$('scroll-area'),top=area.scrollTop,follow=area.scrollHeight-top-area.clientHeight<180
-      if (event.type === 'session') {conversationId = event.conversationId;picker.accept(event.model)}
+      if (event.type === 'session') {const first=!conversationId;conversationId = event.conversationId;picker.accept(event.model);if(first&&!resetAfterStop)titleRefresh.start(conversationId)}
+      if (event.type === 'title') titleRefresh.title(event)
       if (event.type === 'step') answer.update('')
       if (event.type === 'reasoning' && event.text) {
         answer.setReasoning(answer.reasoning+event.text,false); setStatus('正在思考…'); scroll()
@@ -140,6 +142,7 @@ $('prompt').addEventListener('keydown', event => {
 for (const button of document.querySelectorAll('[data-question]')) button.onclick = () => { void send(button.dataset.question) }
 $('stop').onclick = () => controller?.abort()
 function reset() {
+  titleRefresh.stop()
   translations.reset()
   conversationId = undefined
   void picker.refresh()
@@ -147,6 +150,7 @@ function reset() {
   notice(''); setStatus('新对话 · 之前的内容仍在历史中'); focusPrompt()
 }
 $('new-chat').onclick = () => {
+  titleRefresh.stop()
   if (controller) { resetAfterStop = true; controller.abort(); return }
   if (loadingHistory) return
   reset(); void loadHistory()
@@ -154,6 +158,7 @@ $('new-chat').onclick = () => {
 async function loadHistory(append=false){await sidebar.refresh(append)}
 async function openHistory(id) {
   if (controller || loadingHistory) return
+  titleRefresh.stop()
   loadingHistory = true; busy(true); $('stop').hidden = true
   try {
     const response = await fetch(base + '/history?id=' + encodeURIComponent(id))
