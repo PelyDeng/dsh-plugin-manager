@@ -45,3 +45,26 @@ test('stale package versions and generated docs reject snapshot replacement with
     }
   } finally { expect(dirname(root)).toBe(realpathSync.native(tmpdir())); rmSync(root, { recursive: true, force: true }) }
 })
+
+test('rebuilding discovers new public documents and refreshes edits without adding private plugins', () => {
+  const root = referenceWorkspace()
+  try {
+    const output = join(root, 'reference.json')
+    buildReference(root, output)
+    const before = JSON.parse(readFileSync(output))
+    const path = 'doc/new-feature.md'
+    writeFileSync(join(root, path), 'public feature first revision')
+    mkdirSync(join(root, 'plugins/private-fixture'))
+    writeFileSync(join(root, 'plugins/private-fixture/index.ts'), 'private-source-sentinel')
+    buildReference(root, output)
+    const added = JSON.parse(readFileSync(output))
+    expect(added.files.find(file => file.path === path).text).toBe('public feature first revision')
+    expect(added.revision).not.toBe(before.revision)
+    writeFileSync(join(root, path), 'public feature updated revision')
+    buildReference(root, output)
+    const updated = JSON.parse(readFileSync(output))
+    expect(updated.files.find(file => file.path === path).text).toBe('public feature updated revision')
+    expect(updated.revision).not.toBe(added.revision)
+    expect(JSON.stringify(updated)).not.toContain('private-source-sentinel')
+  } finally { expect(dirname(root)).toBe(realpathSync.native(tmpdir())); rmSync(root, { recursive: true, force: true }) }
+})

@@ -41,6 +41,9 @@ test('package knowledge and source instructions reach new and resumed Agents wit
     for (const handle of f.handles) {
       expect(handle.sections.find(s => s.name === 'example:knowledge').text).toBe(`知识摘要 ${revision}\n\n${text}`)
       expect(handle.sections.find(s => s.name === 'example:developer').text).toContain('不能编造命令')
+      expect(handle.sections.find(s => s.name === 'example:developer').text).toContain('先读随包 README.md')
+      expect(handle.sections.find(s => s.name === 'example:developer').text).toContain('具体例子')
+      expect(handle.sections.find(s => s.name === 'example:knowledge').text).toContain('假设你想给团队做两个应用')
       expect(handle.sections.find(s => s.name === 'example:persona').text).toBe('请优先给出 PowerShell 示例。')
       const language = handle.sections.find(s => s.name === 'example:language')
       expect(language.text).toContain('reasoning_content')
@@ -127,6 +130,12 @@ test('current model, version and CI questions have source evidence in the shippe
       ['.github/workflows/check.yml', /os: \[ubuntu-latest, windows-latest, macos-latest\]/],
       ['.github/workflows/release.yml', /tags: \['v\*'\]/],
       ['doc/versioning.md.tmpl', /\{\{FRAMEWORK_VERSION\}\}/],
+      ['README.md', /知识库助手和销售报表助手/],
+      ['doc/host-compatibility.md', /inject/],
+      ['packages/plugin-manager/src/supervisor.mjs', /startupDeadline/],
+      ['packages/plugin-manager/src/session-snapshot.mjs', /restoreSessionSnapshot/],
+      ['scripts/stage-legacy-feedback.mjs', /mergeLegacyFeedback/],
+      ['plugins/dsh-example/web/conversation-history.js', /dialogs\.clear/],
     ]) {
       const hits = JSON.parse(await search.execute({ query: path }, execution))
       expect(hits.results.some(hit => hit.path === path), path).toBe(true)

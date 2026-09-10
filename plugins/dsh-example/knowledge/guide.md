@@ -4,6 +4,16 @@
 
 适用：框架 0.15.2（manager、kit、auth、example 同一发布版本）；宿主以实际检出与交付验证记录为准。本文是知识快照，不证明远程站点已升级。
 
+## 这个框架是做什么的？
+
+它帮助个人开发者和小团队把自己开发的 AI 应用统一打包、安装、更新和管理，也方便交付给团队或客户。应用运行在 DeepSeek Harness（DSH）上。定位和能力以随包 `README.md` 的“项目能力”“与官方 DSH 的关系”为依据。
+
+假设你想给团队做两个应用：知识库助手回答“报销需要哪些材料”，销售报表助手回答“本月销售额是多少”。你负责接入文档和销售接口、编写查询工具与页面；本框架帮你把两个应用打成可安装的包、组合部署，按需共用登录和应用访问授权。以后更新报表助手时，仍按统一交付流程处理，并保留原数据。接入和更新都需要开发、配置与验证，不是输入一句需求就自动完成。
+
+在这个例子里，**官方 DSH** 负责运行插件、调用模型和保存会话；**本框架** 负责应用接入、打包交付和安装管理；**你写的插件** 负责查什么数据、如何展示，以及谁能看哪些文档或报表。登录成功并不代表可以读取全部业务数据。
+
+这里的两个助手是用途举例，并非仓库内置业务。若只想运行一个已有工具，直接使用官方 Bundle 也可能足够。想先体验，可从 `doc/first-deployment.md` 开始；想开发应用，再看 `doc/plugin-development.md`。本框架由社区维护，不是 DeepSeek 官方产品，也不保证任意社区插件自动兼容。
+
 ## 如何统一新会话的默认模型？
 
 管理员在 Auth“模型设置”从官方目录单选并保存，通过官方 `agentDefaultModel` / `settings` 持久化，保存默认模型无需重启。先校验模型目录与调用配置，不发送真实模型请求，因此保存成功不证明密钥、额度或网络可用。
@@ -58,7 +68,7 @@ DSH_TRUSTED_HOSTS=["dsh.example.com"]
 
 网页与脚本复用官方凭据服务及文件锁，保留其他凭据、账号和历史。写入官方存储时默认无需重启，宿主监听加载；自定义存储或关闭监听时使用网页。Compose脚本确认活动容器/home后以容器用户执行，Linux凭据文件0600。文件覆盖不会导入.credentials.yaml，原值仍需保存在私有文件供宿主调用，不能仅保存指纹。
 
-API Key不创建模型路由、不选择默认模型，也不验证额度；智谱需要在同一宿主的官方设置或patch配置路由和ZHIPU_API_KEY引用。已有site.json/deployment.json自动导入时保留原文件与路径；生成deployment/Compose不手改，恢复保留原 env 及凭据文件，不能用新密钥恢复旧操作。
+API Key不创建模型路由、不选择默认模型，也不验证额度；智谱仍需官方路由及ZHIPU_API_KEY引用。旧JSON导入保留原文件与路径；生成deployment/Compose不手改，恢复沿用原env、凭据及发布输入。
 
 ## 密钥已填、探针 200，为什么仍不能回答？
 
@@ -66,24 +76,9 @@ API Key不创建模型路由、不选择默认模型，也不验证额度；智�
 
 密钥是站点维护者配置的宿主凭据，不是每个 Auth 用户单独提供。更换密钥不清空账号或历史；文件模式重启前应等待正在进行的回答结束。保留 `.local/data`、`.local/artifacts` 和备份，不用删除 `.local` 或空数据初始化排错。模型尚未可用时，首页“阅读 FAQ（无需模型）”仍可直接阅读本页；快捷提问生成回答需要模型。
 
-## 这个仓库是什么？
-
-基于 DeepSeek Harness 的 AI 应用开发与部署框架。作者沿用官方 Cordis、Bundle 和 Agent，在自己的仓库开发插件；框架提供统一打包、安装、配置、启停及可选认证。
-
-官方 DSH 负责插件、Agent、模型、工具及会话；框架补充声明、交付、配置、部署和可选账号授权。无需修改宿主源码，但作者仍编写接入声明和鉴权代码。
-
-| 模块 | 复用什么 | 不替作者做什么 |
-| --- | --- | --- |
-| plugin-manager | 内外包发现、build/check/pack、清单组合、安装、配置与启停 | 不执行业务开发，不是插件市场或代码沙箱 |
-| plugin-kit | 可信身份、受保护 HTTP、工具鉴权和应用登记 | 不自动保护绕过 kit 的路由，不判断部门数据范围 |
-| dsh-auth | 登录、账号、会话、逐应用授权 | 不替代官方控制台认证，不提供完整企业 SSO |
-| dsh-example | 开发者答疑、流式对话、个人历史和停止生成示例 | 不提供销售查询或知识库检索业务 |
-
-个人工具可直接使用官方 Bundle；多插件交付可用管理器。安装更新走 CLI，auth 不提供插件市场或在线升级。作者维护声明与兼容性，按需接入 kit；任意社区插件不保证直接兼容。
-
 ## 第二个应用到底少写什么？
 
-复用 auth 登录、kit 身份和 manager 交付；业务接口与数据权限仍由作者实现。模型给出的 userId 不能作授权依据。kit 升级需重打包；independent-access-example 只验证身份，不证明业务功能。
+例如，已有知识库助手后再开发报表助手，可以复用 auth 登录、kit 提供的可信身份和 manager 的打包交付流程。你仍需实现销售接口、结果展示和报表权限，不必为每个应用另建账号系统。模型给出的 userId 不能作授权依据。kit 升级需重打包；independent-access-example 只验证身份，不证明业务功能。
 
 ## 选择哪种接入？
 
@@ -94,10 +89,6 @@ API Key不创建模型路由、不选择默认模型，也不验证额度；智�
 内部开发扫描 `<框架根>/plugins/*`。外部支持独立 pnpm 单包：显式 `--root <作者包根> --package .`，只接受 `.`，不能同时传 --plugins；不会自动扫描外部 workspace。外部清单 2 只支持 release，内部清单 1 继续支持 release 和 development/link。页面、Agent、Tool、探针、kit 都不是受管包的必选功能。
 
 ## 工具从哪里来？
-
-本助手可检索随包 manager、kit、auth、example、部署与集成源码，引用路径和行号。构建快照不含私有业务或真实配置，也不证明生产执行成功。
-
-pack 记录构建输入；最终 tgz 经测试后用 `compose-release --verification-report <JSON>` 附加报告。安装展示已测范围，不把版本差异当作禁止安装或替身当真实模型。格式见 manager VERIFICATION.md。
 
 需要 Node.js `^22.19.0 || >=24`、pnpm 11.19.0、tar。包名不代表公共 npm 已发布；从可信维护者取得 manager/kit tgz并核对摘要，或按作者指南构建明确提交。只有 tgz 不等于完整离线依赖。
 
@@ -162,27 +153,13 @@ pnpm exec dsh-plugin-manager compose-release --root <交付根> --output release
 
 base 是内部 auth+example 的清单，second 是 independent-access-example 的清单。组合只读取校验并复制归档，不执行作者代码。重复 ID/包名要选择一个版本，不能直接叠加旧整站包和同 ID 新包。
 
-在交付根创建 .local/deployment.json，示意如下；dshCliJs 必须替换成已安装官方 CLI 绝对路径：
-
-```json
-{
-  "manifest": "releases/site-v1/manifest.json", "plugins": "all", "mode": "release",
-  "home": ".local/data/dsh-home", "dshCliJs": "<官方CLI绝对路径>",
-  "port": 7902, "publicOrigin": "http://127.0.0.1:7902"
-}
-```
-
-在工具目录执行：
+按 `packages/plugin-manager/DELIVERY.md` 在交付根创建 `.local/deployment.json`：manifest 指向上述清单，home 沿用实例目录，dshCliJs 填已安装官方 CLI 绝对路径，核对 port/publicOrigin。在工具目录执行：
 
 ```sh
 pnpm exec dsh-plugin-manager start --root <交付根> --config .local/deployment.json --plugins all
 ```
 
-start 前台运行，保留终端；另开工具目录终端执行 health（同 root/config）。打开 origin/auth，首次 admin 使用初始密码 123456，强制改密后重新登录；创建普通账号并授予 example/第二应用权限，再访问 /example 或第二应用入口。官方控制台有另一套认证地址；不要把它的 token 发到公开提问中。
-
-安装成功、宿主监听、应用探针 200、真实问答完成是四个不同结果。example 问答还需在同一 DSH_HOME 配置官方默认模型与密钥；插件不保存模型密钥，模型失败先查宿主设置。
-
-默认模型、密钥及官方控制台认证见前文对应问题；独立交付命令见 manager DELIVERY.md。沿用同一 DSH home，用新对话核实真实调用。
+start 前台运行，保留终端；另开工具目录终端执行 health（同 root/config）。打开 `/auth` 完成首次改密、普通账号授权，再访问应用。默认模型、密钥与官方控制台认证见前文。安装、监听、探针 200、真实问答是不同结果，须用新对话核实调用。
 
 ## 配置在哪里？为什么装了 auth 还提示缺 provider？
 
@@ -200,15 +177,15 @@ authenticated 模式按可信账号拥有历史；同账号不同登录共享个
 
 ## 第二个应用加入、升级与回退？
 
-在工具目录组合新目录，输入所有要保留的应用：
-
-```sh
-pnpm exec dsh-plugin-manager compose-release --root <交付根> --output releases/site-v2 --previous releases/site-v1/manifest.json --manifest incoming/base/manifest.json --manifest incoming/second/manifest.json
-```
+沿用上文 compose-release 命令，输出新的 releases/site-v2，增加 `--previous releases/site-v1/manifest.json`，并列出所有要保留应用的 --manifest。
 
 --previous 只携带旧归档供旧 file: 依赖解析，不继承旧候选。未选入新清单的受管应用会停用，数据保留。改部署配置 manifest 指向 v2，沿用 home/plugin.json，stop 后 start --plugins all。确认原应用、新应用、普通账号、授权、配置都可用。保留旧发布目录和一致备份；业务数据库跨版本是否可回退由作者说明，不能直接删 pending 或清数据重试。
 
 ## 常见失败先看什么？
+
+启动时出现 `fetch failed`，先核对宿主日志与实际运行的框架版本；当前监督进程按 60 秒窗口重试启动验证，超时保留未完成操作，使用原清单和配置加 `--resume` 恢复，不能删数据重试。实现见 `packages/plugin-manager/src/supervisor.mjs`、`deploy/README.md`。
+
+如果探针正常但新建对话失败，检查 `ctx.<服务名>` 是否在插件 `inject` 中声明；例如直接调用 `ctx.llm` 必须声明 `llm`。还需分别验证模型、工具和旧历史；不能仅凭 500 判断为密钥错误。作用域与宿主升级检查见 `doc/host-compatibility.md`。
 
 | 现象 | 核实与处理 |
 | --- | --- |
@@ -253,6 +230,8 @@ Windows PowerShell 用根 `.\build.ps1`，无需 Bash；macOS/Linux 用根 `./bu
 模型查 kit/auth 的 models，会话查 kit/conversations 和 doc/conversation-management.md，部署查 deploy/scripts，版本查 scripts/version.mjs，CI 查 .github/workflows，知识索引查 example 的 build-reference.mjs 与 src/framework.ts。
 
 快照只收公共源码、当前文档和版本脚本登记的 Markdown 模板；不收历史 `doc/releases/`、真实配置、私有插件或宿主源码。根 `build.sh/build.ps1` 可能在集成库被替换，不收录它们；公共部署流程查 `deploy/`，私有入口行为不能据此推断。索引函数校验版本与模板同步，失败不覆盖已有索引；插件 build 的前序清理仍会删除旧 dist。安装新 example 归档后使用其随包知识；在线 main 与生产可能不同，源码证据不证明部署已执行。
+
+新增或修改的公开文件在下次构建时重新收录。读取请求超过 100 行会按 100 行分页，用 `nextLine` 继续；不扩大文件访问范围。宿主升级、Session V3、旧反馈及快照恢复查 `doc/host-compatibility.md`、`scripts/stage-legacy-feedback.mjs` 和 `packages/plugin-manager/src/session-snapshot.mjs`。历史栏复用查 `plugins/dsh-example/web/conversation-history.js` 与聊天风格指南；桌面左栏、手机抽屉共用查询与操作，退出或撤权需销毁历史栏并关闭残留窗口。私有插件的接入效果须另行验证。
 
 ## 来源与进一步阅读
 
