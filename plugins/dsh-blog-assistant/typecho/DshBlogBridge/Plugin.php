@@ -9,6 +9,7 @@
 if (!defined('__TYPECHO_ROOT_DIR__')) { exit; }
 
 require_once __DIR__ . '/Management.php';
+require_once __DIR__ . '/Reports.php';
 
 class DshBlogBridge_Plugin implements \Typecho\Plugin\PluginInterface
 {
@@ -85,6 +86,7 @@ class DshBlogBridge_Edit extends \Widget\Contents\Post\Edit
 class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInterface
 {
     use DshBlogBridge_Management;
+    use DshBlogBridge_Reports;
     private $bridgeDb;
     private $bridgeUser;
     private $transaction = false;
@@ -125,6 +127,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             if ($action === 'status') { $data = $this->status(); }
             elseif ($action === 'list') { $data = $this->posts($input); }
             elseif ($action === 'search') { $data = $this->searchPosts($input); }
+            elseif ($action === 'report') { $data = $this->report($input); }
             elseif ($action === 'get') { $data = $this->snapshot($this->id($input['cid'] ?? null)); }
             elseif ($action === 'save') { $data = $this->saveArticle($input); }
             elseif ($action === 'delete') { $data = $this->deleteArticle($input); }
@@ -152,7 +155,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
         $response->respond();
     }
     private function id($value): int { $this->demand(is_int($value) && $value > 0); return $value; }
-    private function status(): array
+    private function transactionalStorage(): void
     {
         $db = $this->bridgeDb;
         $this->demand(preg_match('/^[a-zA-Z0-9_]+$/', $db->getPrefix()), 'incompatible', 503);
@@ -161,8 +164,13 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
         foreach (['contents', 'fields', 'relationships', 'metas', 'comments', 'dsh_blog_receipts'] as $name) {
             $this->demand(($engines[$db->getPrefix() . $name] ?? '') === 'InnoDB', 'incompatible', 503);
         }
+    }
+    private function status(): array
+    {
+        $db = $this->bridgeDb;
+        $this->transactionalStorage();
         $categories = $db->fetchAll($db->select('mid', 'name')->from('table.metas')->where('type = ?', 'category')->order('order', \Typecho\Db::SORT_ASC));
-        return ['protocolVersion' => 1, 'version' => '0.4.1', 'structuredSearch' => true, 'nativeDrafts' => true, 'management' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
+        return ['protocolVersion' => 1, 'version' => '0.4.1', 'structuredSearch' => true, 'reports' => 1, 'nativeDrafts' => true, 'management' => true, 'deleteArticle' => true, 'categories' => array_map(function ($r) { return ['id' => (int) $r['mid'], 'name' => $r['name']]; }, $categories), 'losslessRaw' => true];
     }
     private function posts(array $input): array
     {
@@ -190,7 +198,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
         }
         return ['items' => $items, 'status' => $status, 'hasMore' => count($rows) > 30];
     }
-    private function searchPosts(array $input): array
+    private function searchQuery(array $input, string $columns = 'DISTINCT table.contents.*'): array
     {
         $db = $this->bridgeDb;
         $f = [];
@@ -208,7 +216,7 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
         $this->demand(in_array($order, ['asc','desc'], true) && in_array($status, ['all','published','draft'], true));
         $this->demand(($start === null || (is_int($start) && $start >= 0)) && ($end === null || (is_int($end) && $end >= 0)));
         $this->demand($start === null || $end === null || $start < $end);
-        $sql = $db->select('DISTINCT table.contents.*')->from('table.contents')->where('table.contents.type = ? OR table.contents.type = ?', 'post', 'post_draft');
+        $sql = $db->select($columns)->from('table.contents')->where('table.contents.type = ? OR table.contents.type = ?', 'post', 'post_draft');
         if ($status === 'published') { $sql->where('table.contents.type = ? AND status = ?', 'post', 'publish'); }
         elseif ($status === 'draft') { $sql->where('table.contents.type = ? OR status <> ?', 'post_draft', 'publish'); }
         // LOCATE uses literal substrings: user '%' and '_' are not SQL wildcards.
@@ -224,6 +232,12 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
         }
         if ($start !== null) { $sql->where('table.contents.' . $dateField . ' >= ?', $start); }
         if ($end !== null) { $sql->where('table.contents.' . $dateField . ' < ?', $end); }
+        return [$sql, $page, $sortBy, $order];
+    }
+    private function searchPosts(array $input): array
+    {
+        $db = $this->bridgeDb;
+        [$sql, $page, $sortBy, $order] = $this->searchQuery($input);
         $direction = $order === 'asc' ? \Typecho\Db::SORT_ASC : \Typecho\Db::SORT_DESC;
         $rows = $db->fetchAll($sql->order('table.contents.' . $sortBy, $direction)->order('table.contents.cid', $direction)->offset(($page - 1) * 30)->limit(31));
         $items = [];

@@ -520,3 +520,47 @@ test('conversation management tool prepares a card without nonce and executes on
   await f.chat.operationAction(actor,{conversationId:f.conversation.id,id:card.id,nonce:card.nonce,operation:'confirm'})
   assert.equal(writes,1)
 })
+
+test('chat taxonomy tools support category/tag reads and all writes through versioned user confirmation',async t=>{
+  for(const kind of ['category','tag'])for(const operation of ['create','update','delete'])await t.test(`${kind} ${operation}`,async t=>{
+    const f=await fixture(t),calls=[];let writes=0
+    const item={id:4,name:'原名称',slug:'original',parent:0,count:2},version='taxonomy-v1'
+    f.blog.call=async(action,input)=>{
+      calls.push({action,input})
+      if(action==='manage-list')return{items:[item],hasMore:false}
+      if(action==='manage-get')return{item,version,impact:{relatedCount:2}}
+      if(action==='manage-preview'){if(operation!=='create')assert.equal(input.version,version);return{input,title:'测试'+kind,impact:{relatedCount:2}}}
+      assert.equal(action,'manage-write');writes++;return{id:4,kind}
+    }
+    await f.send();await tick();const execution={agent:f.handles[0].agent}
+    for(const name of ['blog_manage_list','blog_manage_get','blog_manage_change'])assert.ok(f.handles[0].allowed.includes(name),`${name} must be available in chat`)
+    const list=await f.tools.get('blog_manage_list').execute({kind,page:1,query:'原名称'},execution)
+    const detail=await f.tools.get('blog_manage_get').execute({kind,id:list.items[0].id},execution)
+    const args={kind,operation,...(operation==='create'?{}:{id:detail.item.id,version:detail.version}),...(operation==='delete'?{}:{fields:{name:'新名称',...(kind==='category'?{parent:8}:{})}})}
+    const result=await f.tools.get('blog_manage_change').execute(args,execution)
+    assert.equal(result.requiresUserAction,true);assert.equal(result.nonce,undefined);assert.equal(writes,0)
+    complete(f.handles[0]);await tick();const card=(await f.chat.history(actor,f.conversation.id)).operations[0]
+    assert.equal(card.management.kind,kind);assert.equal(card.management.operation,operation)
+    await f.chat.operationAction(actor,{conversationId:f.conversation.id,id:card.id,nonce:card.nonce,operation:'confirm'})
+    assert.equal(writes,1);assert.deepEqual(calls.at(-1).input.fields,args.fields)
+  })
+})
+
+test('all five report tools are available in chat and read without preparing mutations',async t=>{
+  const f=await fixture(t),calls=[]
+  f.blog.report=async(mode,args,signal)=>{calls.push({mode,args});return {reportVersion:1,report:mode,complete:true,totals:{articleCount:145,versionCount:146}}}
+  f.blog.call=async()=>assert.fail('reports must not use a write or ordinary list')
+  await f.send();await tick();const h=f.handles[0]
+  for(const [name,mode] of [['blog_get_statistics','overview'],['blog_taxonomy_statistics','taxonomy'],['blog_group_articles','catalog'],['blog_activity_statistics','timeline'],['blog_query_article_titles','ranking']]){
+    assert.ok(h.allowed.includes(name));const args={filters:{status:'all'}},result=await f.tools.get(name).execute(args,{agent:h.agent})
+    assert.equal(result.report,mode);assert.deepEqual(calls.at(-1),{mode,args})
+  }
+  assert.equal(calls.length,5);assert.deepEqual((await f.chat.history(actor,f.conversation.id)).operations,[])
+  f.revoke();await assert.rejects(f.tools.get('blog_get_statistics').execute({},{agent:h.agent}),/revoked/);assert.equal(calls.length,5)
+})
+test('report results are withheld when access expires during the request',async t=>{
+  const f=await fixture(t),entered=Promise.withResolvers(),gate=Promise.withResolvers()
+  f.blog.report=async()=>{entered.resolve();return gate.promise}
+  await f.send();await tick();const h=f.handles[0],result=f.tools.get('blog_group_articles').execute({},{agent:h.agent})
+  const rejected=assert.rejects(result,/revoked/);await entered.promise;f.revoke();gate.resolve({complete:true,groups:[{name:'private'}]});await rejected
+})

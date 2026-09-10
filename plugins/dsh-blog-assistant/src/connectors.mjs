@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { BlogError, invariant, readJSON } from './settings.mjs'
 import { digest } from './store.mjs'
 import { normalizeSearch,searchContext,searchLocalTime } from './search.mjs'
+import {normalizeReport} from './reports.mjs'
 
 const requestSignal = signal => signal ? AbortSignal.any([signal, AbortSignal.timeout(45000)]) : AbortSignal.timeout(45000)
 export class BlogClient {
@@ -19,10 +20,20 @@ export class BlogClient {
     } catch { throw new BlogError(502, ['save','delete','manage-write'].includes(action) ? '操作结果待核对，请查询回执，勿重复执行' : '博客连接失败，请检查配置或稍后重试') }
     const data = await readJSON(response)
     if (!response.ok || data.ok !== true) {
-      const messages = { 'default-category':'请先将其他分类设为默认分类，再删除当前分类', conflict: '博客原文或保存草稿已变化，请重新导入比较', unauthorized: '博客账号鉴权失败', forbidden: '博客账号权限不足', invalid: '博客请求字段无效', missing: '博客文章不存在', incompatible: 'Typecho 扩展未就绪', busy: '博客正在备份或编辑，请稍后重试' }
+      const messages = { 'invalid-hierarchy':'分类层级存在循环，请先修复分类父子关系再统计', 'report-too-large':'统计范围过大，请按日期、分类或标签缩小范围；未返回部分结果，不能据此报告全站总数', 'default-category':'请先将其他分类设为默认分类，再删除当前分类', conflict: '博客原文或保存草稿已变化，请重新导入比较', unauthorized: '博客账号鉴权失败', forbidden: '博客账号权限不足', invalid: '博客请求字段无效', missing: '博客文章不存在', incompatible: 'Typecho 扩展未就绪', busy: '博客正在备份或编辑，请稍后重试' }
       throw new BlogError(response.status >= 400 && response.status < 600 ? response.status : 502, messages[data.code] ?? 'Typecho 扩展请求失败')
     }
     return data.data
+  }
+  async report(kind,input={},signal) {
+    const request=normalizeReport(kind,input)
+    let result
+    try { result=await this.call('report',request,signal) } catch(error) {
+      if(error.status===400&&error.message==='博客请求字段无效')throw new BlogError(503,'此查询需要支持 reports=1 的 DshBlogBridge，请先更新博客桥接器；不要回退为逐页拉取后手工统计')
+      throw error
+    }
+    invariant(result?.reportVersion===1&&result.report===kind&&result.complete===true,'博客桥接器尚不支持可靠汇总，请更新 DshBlogBridge；不要用分页结果推算总数',503)
+    return {...result,filters:request.filters,timeZone:request.timeZone,clock:searchContext()}
   }
   async list(query = '', page = 1, signal, status = 'all') {
     invariant(typeof query === 'string' && query.length <= 200 && Number.isSafeInteger(page) && page > 0 && page <= 10000 && ['all','published','draft'].includes(status), '检索参数无效')

@@ -37,3 +37,17 @@ test('read-only connector actions cannot be replaced by fields supplied in argum
   await blog.call('manage-list',{action:'manage-write',protocolVersion:999,kind:'comment'})
   assert.equal(body.action,'manage-list');assert.equal(body.protocolVersion,1)
 })
+
+test('category navigation retains ancestors across pages and excludes descendants from parent choices',async()=>{
+  const {readTaxonomy,categoryPath,parentChoices}=await import('../web/management.js')
+  const rows=[{id:3,parent:0,name:'摘抄笔记'},{id:5,parent:3,name:'算法小抄'},{id:9,parent:5,name:'排序'},{id:35,parent:0,name:'开发工具'}]
+  const calls=[],api=async(action,args)=>{calls.push(args);return{items:rows.slice((args.page-1)*2,args.page*2),hasMore:args.page===1}}
+  const items=await readTaxonomy(api,'category')
+  assert.equal(items.length,4);assert.deepEqual(calls.map(c=>c.page),[1,2]);assert.ok(calls.every(c=>c.query===''))
+  assert.deepEqual(categoryPath(items,9).map(item=>item.id),[3,5,9])
+  assert.deepEqual(parentChoices(items,3).map(item=>item.id),[35])
+  assert.deepEqual(parentChoices(items,5).map(item=>item.id),[3,35])
+  assert.equal(await readTaxonomy(api,'category',()=>false),null)
+  const cyclic=[{id:1,parent:2},{id:2,parent:1}]
+  assert.equal(categoryPath(cyclic,1).length,2)
+})

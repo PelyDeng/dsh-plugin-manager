@@ -96,4 +96,82 @@ body[data-view=writing] #quick-new{display:none}
 
 #confirm-publish.danger{background:#b42332;border-color:#b42332;color:white}
 
-.blog-management{width:min(900px,94vw)}.blog-management>div{display:flex;gap:10px;flex-wrap:wrap;margin-block:12px}.blog-management>div:has(.management-row){display:block}.management-row{border-bottom:1px solid var(--border,#ddd);padding:12px 0}.management-row p{white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto}.management-row button{margin-right:8px}dialog form>label{display:grid;gap:6px;margin-block:12px}dialog form textarea{min-height:120px}
+dialog form>label{display:grid;gap:6px;margin-block:12px}dialog form textarea{min-height:120px}
+
+/* Taxonomy workspace: hierarchy and tag cloud share the existing management APIs. */
+.blog-management{width:min(1320px,calc(100vw - 48px));max-width:1320px;height:min(880px,calc(var(--app-height) - 64px));max-height:calc(var(--app-height) - 32px);padding:0;border-radius:18px;background:#f7f9fc;color:#243248}
+.blog-management[open]{display:flex;flex-direction:column}
+.blog-management .dialog-head>button{flex-shrink:0;white-space:nowrap}.blog-management .dialog-head{padding:26px 30px 20px;margin:0;background:#fff;align-items:flex-start;position:static}
+.blog-management h2{font-size:23px;letter-spacing:-.4px;color:#1e2d45}
+.management-subtitle{margin-top:7px;font-size:13px;color:#69778b}
+.management-tabs{display:flex;gap:28px;padding:0 30px;background:#fff;border-bottom:1px solid var(--line)}
+.management-tabs button{border:0;border-radius:0;border-bottom:3px solid transparent;padding:12px 0;color:#657187;background:transparent}
+.management-tabs button[aria-pressed=true]{border-bottom-color:#4176e6;color:#315fb9;font-weight:600}
+.management-toolbar{display:flex;align-items:center;gap:10px;padding:24px 30px 16px;flex-wrap:wrap}
+.management-toolbar input[type=search]{width:290px;margin:0;height:40px;background:#fff}
+.management-toolbar select{max-width:180px;height:40px}
+.management-toolbar>input[type=number]{width:180px}
+.management-toolbar .management-primary{margin-left:auto}
+.blog-management .management-primary,.management-confirm button:first-of-type{background:#386bd4;border-color:#386bd4;color:#fff;font-weight:500}
+.blog-management .management-primary:hover,.management-confirm button:first-of-type:hover{background:#2e5fbe}
+.management-context{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:0 30px 15px;min-height:30px;font-size:13px;color:#53637c}
+.management-breadcrumbs{display:flex;align-items:center;flex-wrap:wrap;gap:4px;min-width:0}
+.management-breadcrumbs button{border:0;background:none;padding:3px 6px;min-height:28px;color:#62728c;max-width:100%;overflow-wrap:anywhere;text-align:left}
+.management-breadcrumbs button[aria-current=page]{color:#284879;font-weight:600;background:#e9effa;border-radius:5px}
+.breadcrumb-separator{transform:rotate(-90deg);width:14px;height:14px;color:#8a97a9}
+.management-body{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:20px;flex:1;min-height:0;padding:0 30px 6px}
+.management-body.comments{display:block;overflow:auto}
+.management-list{background:#fff;border:1px solid #e3e8f0;border-radius:12px;min-width:0;overflow:auto;overscroll-behavior:contain}
+.management-editor{background:#fff;border:1px solid #e3e8f0;border-radius:12px;padding:22px;min-width:0;overflow:auto;overscroll-behavior:contain}
+.management-editor h3{font-size:19px;margin:5px 0 16px;color:#243959}
+.management-eyebrow{font-size:11px;font-weight:500;letter-spacing:.4px;color:#667b9b;overflow-wrap:anywhere}
+.management-editor form{display:flex;flex-direction:column;gap:15px}
+.management-editor label{display:flex;flex-direction:column;gap:7px;font-size:13px;font-weight:500;color:#40516c}
+.management-editor input,.management-editor textarea,.management-editor select{display:block;width:100%;font-weight:400;font-size:13px;background:#fff;border-color:#dce3ed;padding:9px 10px;border-radius:7px}
+.management-editor .management-checkbox{flex-direction:row;align-items:center;justify-content:space-between;font-weight:400}
+.management-editor input[type=checkbox]{width:16px}
+.management-field-help{font-size:11px;line-height:1.6;color:#718098;margin-top:-10px}
+.management-editor-actions{display:flex;gap:8px;border-top:1px solid #edf0f5;padding-top:18px;margin-top:2px}
+.management-editor-actions .management-primary{flex:1}
+.blog-management .management-danger{color:#a44248;border-color:#eed9dc;background:#fff;align-self:flex-start;font-size:12px;min-height:30px;padding:4px 9px}
+.blog-management .management-danger:hover{background:#fff3f4}
+.management-table{width:100%;border-collapse:collapse;font-size:13px;text-align:left}
+.management-table th{position:sticky;top:0;background:#f9fbfd;border-bottom:1px solid #e5eaf2;padding:13px 16px;font-size:11px;font-weight:500;color:#728099;white-space:nowrap;z-index:1}
+.management-table td{padding:17px 16px;border-bottom:1px solid #edf0f5;vertical-align:middle}
+.management-table tr:last-child td{border-bottom:0}
+.management-table tbody tr:hover{background:#fafcff}
+.management-table th:first-child{width:32%}
+.management-table th:nth-child(2){width:20%}
+.blog-management .management-category-name{border:0;background:none;color:#305caa;font-weight:500;font-size:14px;justify-content:flex-start;text-align:left;min-height:28px;padding:0;overflow-wrap:anywhere}
+.management-category-name .icon{width:18px;height:18px;color:#7694c5}
+.management-path{display:block;max-width:230px;color:#8490a2;font-size:11px;line-height:1.6;margin:4px 0 0 26px;overflow-wrap:anywhere}
+.management-slug{color:#6c7d96;overflow-wrap:anywhere;max-width:180px;font-size:12px}
+.blog-management .management-link{border:0;background:none;color:#4671b5;font-size:12px;min-height:28px;padding:2px 0;white-space:nowrap}
+.blog-management .management-link:hover,.blog-management .management-category-name:hover{color:#244d97;text-decoration:underline}
+.blog-management .management-link[aria-pressed=true]{font-weight:600;color:#244d97;text-decoration:underline}
+.management-count{display:inline-block;min-width:25px;text-align:center;background:#edf3fb;color:#5274a7;border-radius:10px;padding:1px 7px;font-size:11px}
+.management-tag-cloud{display:flex;flex-wrap:wrap;align-content:flex-start;align-items:center;gap:6px 10px;padding:22px}
+.blog-management .management-tag{font-size:var(--tag-size);border:1px solid transparent;padding:4px 6px;min-height:34px;line-height:1.5;gap:7px;max-width:100%;text-align:left;color:#425671;background:transparent;border-radius:6px}
+.management-tag>span{overflow-wrap:anywhere;min-width:0}
+.management-tag small{font-size:10px;color:#8998ad;align-self:flex-start;margin-top:3px}
+.blog-management .management-tag:hover{background:#f1f5fc;color:#315faa;border-color:#dce6f8}
+.blog-management .management-tag[aria-pressed=true]{background:#fff4c6;color:#745a19;border-color:#ebd98e}
+.management-tag[aria-pressed=true] small{color:#8c752e}
+.management-empty{padding:50px 24px;text-align:center;color:#7d8ba0;font-size:13px;line-height:1.9}
+.management-editor>.management-empty{padding:50px 0}
+.management-list>.management-empty+button{display:flex;margin:0 auto 30px}
+.management-hint{font-size:12px;font-weight:400;color:#748198}
+.management-footnote{padding:12px 30px 18px;font-size:11px;color:#7d8ba0}
+.management-error:not([hidden]){padding:10px 14px;background:#fff0f1;border:1px solid #f0d7da;border-radius:8px;color:#a03b47;font-size:13px}
+.blog-management> .management-error{margin:12px 30px 0}
+.management-pager{display:flex;justify-content:center;align-items:center;gap:16px;padding:16px 24px 0}
+.management-row{padding:18px 24px;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
+.management-row h3{margin:0 0 8px}.management-row p{margin-bottom:12px}.management-row button{margin-right:8px}
+.management-confirm{max-width:560px}.management-confirm h2{margin-bottom:16px}.management-confirm pre{padding:16px;background:#f7f9fc;border:1px solid var(--line);border-radius:10px;font-family:inherit;font-size:13px;line-height:1.9}.management-confirm>button{margin:12px 8px 0 0}
+@media(max-width:1100px){.management-body{grid-template-columns:minmax(0,1fr) 270px;gap:14px}.management-table th,.management-table td{padding:13px 10px}.management-table th:nth-child(3),.management-table td:nth-child(3){display:none}.management-tag-cloud{gap:8px;padding:18px}}
+@media(max-width:800px){.blog-management{width:calc(100vw - 20px);height:calc(var(--app-height) - 24px);max-height:calc(var(--app-height) - 24px);padding:0}.blog-management .dialog-head{padding:18px 18px 14px}.blog-management h2{font-size:20px}.management-subtitle{font-size:12px}.management-tabs{padding:0 18px;gap:24px}.management-tabs button{font-size:13px}.management-toolbar{padding:16px 18px 12px;gap:8px}.management-toolbar input[type=search]{width:auto;flex:1;min-width:130px;font-size:16px}.management-toolbar select{font-size:14px;max-width:155px}.management-toolbar .management-primary{margin-left:auto}.management-context{margin:0 18px 12px;flex-wrap:wrap}.management-body{display:block;overflow:auto;padding:0 18px 6px}.management-list,.management-editor{overflow:visible}.management-editor{margin-top:16px;padding:18px}.management-editor>.management-empty{padding:16px 0}.management-editor input,.management-editor textarea,.management-editor select{font-size:16px}.management-table th,.management-table td{padding:12px 8px}.management-table th:first-child{width:38%}.management-table .management-path{display:none}.management-table th:nth-child(4),.management-table td:nth-child(4){display:none}.management-table .management-category-name{font-size:13px}.management-tag-cloud{padding:16px;gap:7px}.management-footnote{padding:10px 18px 14px}.management-hint{font-size:11px}.management-confirm{max-width:calc(100vw - 24px)}.blog-management> .management-error{margin:10px 18px 0}}
+.management-editor form>label{margin:0}.management-editor form textarea{min-height:76px}.management-editor form{gap:12px}.management-editor-actions{position:sticky;bottom:0;background:#fff;padding-bottom:4px}
+
+.management-description summary{font-size:12px;color:#718098;min-height:30px}.management-description[open] label{margin-top:8px}
+.management-row p{white-space:pre-wrap;max-height:160px;overflow:auto}
+@media(max-width:800px){.blog-management .management-tag,.blog-management .management-link,.blog-management .management-category-name{min-height:44px}}
