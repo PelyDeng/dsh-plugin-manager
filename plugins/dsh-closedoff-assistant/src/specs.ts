@@ -107,11 +107,10 @@ export const TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'closedoff_warning_module_list',
     displayName: '预警模块列表',
-    desc: '预警报警模块列表查询（模块类型/子类型字典）。问“有哪些报警模块/类型”时使用。',
+    desc: '预警报警模块字典查询。问“有哪些报警模块/类型”时使用。无分页参数，返回本次接口提供的模块列表；列表条数是模块条数，不是报警数量。id、name、code 均为字符串，分别表示字典记录标识、模块名称和模块编码。',
     method: 'GET', path: '/risk-warning/riskWarningModule/getList',
-    result: result('unknown',
-      ['moduleType', '模块类型'], ['moduleTypeName', '模块名称'],
-      ['subModuleType', '子类型'], ['subModuleTypeName', '子类型名称']),
+    result: result('list',
+      ['id', '模块字典记录ID'], ['name', '模块名称'], ['code', '模块编码']),
     params: [],
   },
   {

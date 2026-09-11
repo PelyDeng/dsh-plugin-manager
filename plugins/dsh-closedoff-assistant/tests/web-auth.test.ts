@@ -29,7 +29,8 @@ async function fixture(mode: 'standalone' | 'authenticated' = 'authenticated') {
   const feedback = vi.fn(async () => ({ ok: true, value: { items: [] } }))
   const bus = {
     get(key: string): unknown { return this[key as keyof typeof this] },
-    llm: {resolveModelInfo:async()=>({reasoning:{efforts:[{id:'low'}]}})},
+    llm: {resolveModelInfo:async()=>({reasoning:{efforts:[{id:'low'}]}}),resolveCallConfig:async(value:unknown)=>value},
+    sessionController: { modelCatalog: vi.fn(async () => ({ groups: [{ id: 'test', name: 'Test', models: [{ id: 'test', name: 'Test' }] }], failures: [] })) },
     on(name: string, listener: Listener) {
       const group = listeners.get(name) ?? new Set<Listener>()
       group.add(listener); listeners.set(name, group)
@@ -41,7 +42,7 @@ async function fixture(mode: 'standalone' | 'authenticated' = 'authenticated') {
     webServer: { register(route: Route) { routes.set(route.path, route); return () => { routes.delete(route.path) } } },
     messageFeedback: { list: feedback, put: vi.fn(), delete: vi.fn() },
     agentDefaultModel: { currentSelection: () => ({ provider: 'test', model: 'test' }) },
-    agents: { create: vi.fn(async () => ({ agent: { cancel, followup: vi.fn(), session: { snapshotEvents: () => [] } }, dispose: vi.fn(async () => undefined) })) },
+    agents: { create: vi.fn(async () => ({ agent: { cancel, followup: vi.fn(), whenIdle: vi.fn(async () => {}), session: { snapshotEvents: () => [] } }, dispose: vi.fn(async () => undefined) })) },
   }
   const ctx = Object.assign(bus, { root: bus }) as unknown as Context
   const removeProvider = installProvider(ctx, {
@@ -95,6 +96,34 @@ describe('HTTP authentication and conversation ownership', () => {
     first.active = false
     expect((await action({ operation: 'rename', ids: [first.id], title: '拒绝' }, '')).status).toBe(401)
     expect((await request('/closedoff-qa/conversation-action', 'alice', { operation: 'pin', ids: [first.id], pinned: false }, { origin: 'https://foreign.test' })).status).toBe(403)
+  })
+  it('reports a removed cached model as an SSE error without dispatching a followup', async () => {
+    const { request, actors, manager, bus } = await fixture()
+    const c = (await manager.open(undefined, true, actors.get('alice')!))!
+    bus.sessionController.modelCatalog.mockResolvedValueOnce({ groups: [], failures: [] })
+    const response = await request('/closedoff-qa/chat', 'alice', { conversationId: c.id, message: '不可派发' })
+    expect(response.status).toBe(200)
+    expect(await response.text()).toContain('该模型不在当前目录中')
+    expect(c.handle.agent.followup).not.toHaveBeenCalled()
+    expect(c.active).toBe(false)
+  })
+  it('stopping during catalog await prevents the later HTTP continuation from calling the Agent', async () => {
+    const { request, actors, manager, bus } = await fixture()
+    const c = (await manager.open(undefined, true, actors.get('alice')!))!
+    const catalog = await bus.sessionController.modelCatalog()
+    let release!: (value: typeof catalog) => void
+    bus.sessionController.modelCatalog.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const response = await request('/closedoff-qa/chat', 'alice', { conversationId: c.id, message: '等待目录' })
+    const reader = response.body!.getReader()
+    await reader.read()
+    expect(c.active).toBe(true)
+    expect((await request('/closedoff-qa/stop', 'alice', { conversationId: c.id })).status).toBe(200)
+    release(catalog)
+    let remaining = ''
+    for (;;) { const chunk = await reader.read(); if (chunk.done) break; remaining += new TextDecoder().decode(chunk.value) }
+    expect(remaining).toContain('本轮操作已停止')
+    expect(c.handle.agent.followup).not.toHaveBeenCalled()
+    expect(c.active).toBe(false)
   })
   it('redirects the page, rejects anonymous APIs and validates mutation origin', async () => {
     const { request } = await fixture()

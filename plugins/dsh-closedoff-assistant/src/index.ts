@@ -18,6 +18,7 @@ import { Config as ConfigSchema, type Config as PluginConfig } from './config.ts
 import { loadEnvConf } from './env.ts'
 import { ClosedoffGateway } from './gateway.ts'
 import { registerTools, TOOL_NAMES } from './tools.ts'
+import { createClosedoffParticipant } from './participant.ts'
 import { installWeb } from './web.ts'
 
 export { ConfigSchema as Config }
@@ -49,6 +50,8 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   const access = createAccess(ctx, { mode: config.accessMode, pluginId: 'closedoff', publicOrigin: config.publicOrigin })
   const store = new ConversationStore(dshHomePath('plugins', 'closedoff', 'conversations.sqlite'))
   const manager = new ConversationManager(ctx, config, persona, TOOL_NAMES, access, store)
+  const participant = createClosedoffParticipant(ctx, config, manager, access)
+  ctx.on('pirate/participants', accept => accept(participant), { global: true })
   if(access.mode==='authenticated')ctx.effect(()=>registerConversations(ctx,manager.management()))
 
   ctx.effect(() => () => manager.dispose())

@@ -175,11 +175,30 @@ describe('Web projections', () => {
     expect(JSON.stringify(payload)).not.toContain('must-not-render')
   })
 
+  it('shows warning module names and codes while keeping dictionary ids and unknown fields out of cards', () => {
+    const payload = extractCards('closedoff_warning_module_list', JSON.stringify({
+      data: [
+        { id: 'module-fixture-1', name: '车辆报警', code: 'vehicle-fixture', secret: 'must-not-render' },
+        { id: 'module-fixture-2', name: '人员报警', code: 'person-fixture' },
+      ],
+    }))
+
+    expect(payload).toMatchObject({
+      group: 'risk', sourceLabel: '报警模块列表', state: 'data', count: 2, shown: 2, note: '',
+      cards: [
+        { title: '车辆报警', titleKey: 'name', fields: [{ k: '模块编码', v: 'vehicle-fixture', tone: '' }] },
+        { title: '人员报警', titleKey: 'name', fields: [{ k: '模块编码', v: 'person-fixture', tone: '' }] },
+      ],
+    })
+    expect(JSON.stringify(payload)).not.toContain('module-fixture-')
+    expect(JSON.stringify(payload)).not.toContain('must-not-render')
+  })
+
   it('renders informative cards for common statistics and control-area queries', () => {
     const cases = [
       ['closedoff_control_area_page', { data: [{ controlName: '核心罐区', controlType: '1', remarks: '重点巡检' }] }],
       ['closedoff_control_area_stats', { data: [{ controlType: 1, controlAreaCount: 3, abnormalInspectionCount: 1, alarmCount: 2 }] }],
-      ['closedoff_warning_module_list', { data: [{ moduleType: 'vehicle', moduleTypeName: '车辆报警', subModuleType: 'speed', subModuleTypeName: '超速' }] }],
+      ['closedoff_warning_module_list', { data: [{ id: 'module-fixture', name: '车辆报警', code: 'vehicle-fixture' }] }],
       ['closedoff_reservation_stats', { data: { todayPending: 4, todayCompleted: 12, avgProcessMinutes: 8, passRate: '92%' } }],
     ] as const
 

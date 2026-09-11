@@ -92,7 +92,7 @@
   "scripts": {
     "build": "tsdown && tsdown --config tsdown.web.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/native-drafts.test.mjs tests/management.test.mjs tests/clipboard.test.mjs tests/attachments.test.mjs tests/chat-store.test.mjs tests/chat.test.mjs tests/chat-ui.test.mjs tests/article-diff.test.mjs tests/drafts.test.mjs tests/jobs.test.mjs tests/models.test.mjs tests/search.test.mjs tests/reports.test.mjs",
+    "test": "node --test tests/participant.test.mjs tests/native-drafts.test.mjs tests/management.test.mjs tests/clipboard.test.mjs tests/attachments.test.mjs tests/chat-store.test.mjs tests/chat.test.mjs tests/chat-ui.test.mjs tests/article-diff.test.mjs tests/drafts.test.mjs tests/jobs.test.mjs tests/models.test.mjs tests/search.test.mjs tests/reports.test.mjs",
     "test:host": "node --test tests/http.test.mjs tests/chat-history-native.test.mjs tests/chat-backup-native.test.mjs",
     "test:bridge": "php -n -l typecho/DshBlogBridge/Plugin.php && php -n tests/management-bridge.test.php",
     "test:reports": "php tests/reports-bridge.test.php",
@@ -106,6 +106,7 @@
     "yauzl": "3.4.0"
   },
   "peerDependencies": {
+    "dsh-pirate-command": ">=0.1.0 <1",
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/dsh-agent": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-agent-default-model": "0.1.5-alpha.2",
@@ -122,6 +123,9 @@
     "@deepseek-ai/dsh-tools": "0.1.5-alpha.2"
   },
   "peerDependenciesMeta": {
+    "dsh-pirate-command": {
+      "optional": true
+    },
     "@deepseek-ai/dsh-token-meter": {
       "optional": true
     },
@@ -166,6 +170,7 @@
     }
   },
   "devDependencies": {
+    "dsh-pirate-command": "workspace:*",
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/dsh-agent": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-agent-default-model": "0.1.5-alpha.2",

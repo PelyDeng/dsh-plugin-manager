@@ -145,6 +145,32 @@ describe('device tool output', () => {
     expect(text).not.toContain('drop-me')
   })
 
+  it('preserves warning module dictionary fields without inventing pagination or alarm counts', () => {
+    const spec = TOOL_SPECS.find(item => item.name === 'closedoff_warning_module_list')!
+    const tool = createTool(spec, {} as ClosedoffGateway, config, () => {})
+    const data = [
+      { id: 'module-fixture-1', name: '车辆报警', code: 'vehicle-fixture' },
+      { id: 'module-fixture-2', name: '人员报警', code: 'person-fixture' },
+    ]
+    const value = {
+      api: spec.path, ok: true, elapsedMs: 2,
+      data: data.map(row => ({ ...row, secret: 'must-not-reach-model' })),
+    }
+    const rendered = tool.output.render({}, value)
+    const text = rendered[0]?.type === 'text' ? rendered[0].text : ''
+
+    expect(validateJsonSchemaValue(tool.output.schema, value)).toEqual([])
+    expect(JSON.parse(text)).toEqual({ api: spec.path, ok: true, elapsedMs: 2, data })
+    expect(text).not.toContain('must-not-reach-model')
+    expect(spec.result.dataKind).toBe('list')
+    expect(spec.params).toEqual([])
+    expect(tool.description).toContain('无分页参数')
+    expect(tool.description).toContain('模块条数，不是报警数量')
+    const schema = JSON.stringify(tool.output.schema)
+    for (const label of ['模块字典记录ID', '模块名称', '模块编码']) expect(schema).toContain(label)
+    for (const key of ['moduleType', 'moduleTypeName', 'subModuleType', 'subModuleTypeName']) expect(schema).not.toContain(`"${key}"`)
+  })
+
   it('gives the model a concise readable track summary and preserves full presentation data', () => {
     const tool = createTool(trackSpec, {} as ClosedoffGateway, config, () => {})
     const value = {

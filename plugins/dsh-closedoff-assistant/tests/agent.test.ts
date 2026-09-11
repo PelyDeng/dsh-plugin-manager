@@ -16,7 +16,7 @@ const cleanup: (() => Promise<void>)[] = []
 afterEach(async () => { for (const close of cleanup.splice(0)) await close() })
 
 function handle(events: unknown[] = []) {
-  return { agent: { followup: vi.fn(), cancel: vi.fn(), session: { snapshotEvents: () => events } }, dispose: vi.fn(async () => undefined) }
+  return { agent: { followup: vi.fn(), cancel: vi.fn(), whenIdle: vi.fn(async () => {}), session: { snapshotEvents: () => events } }, dispose: vi.fn(async () => undefined) }
 }
 function fixture(max = 2, store = new ConversationStore(':memory:')) {
   const revoked = new Set<string>()
@@ -30,11 +30,16 @@ function fixture(max = 2, store = new ConversationStore(':memory:')) {
   const defaults = { currentSelection: () => ({ provider: 'deepseek', model: 'test' }) }
   const services: Record<string, unknown> = {
     agentDefaultModel: defaults,
+    sessionController: { modelCatalog: vi.fn(async () => ({ groups: [
+      { id: 'deepseek', name: 'DeepSeek', models: [{ id: 'test', name: 'Test' }, { id: 'second', name: 'Second' }] },
+      { id: 'new-provider', name: 'New', models: [{ id: 'new-model', name: 'New' }] },
+    ], failures: [] })) },
+    llm: { resolveModelInfo: async () => ({ reasoning: { efforts: [{ id: 'low' }] } }), resolveCallConfig: vi.fn(async (value: unknown) => value) },
     sessionPersistence: { async open(id: string) { const result = create.mock.calls.findIndex(([options]) => (options as {sessionId:string}).sessionId === id); const current=result < 0 ? undefined : await create.mock.results[result]!.value; return {header:{id},read:async()=>({events:current?.agent.session.snapshotEvents()??[],eventState:"detached"}),close:async()=>{}} } },
     sessionProjections: { restore(_checkpoint:unknown,events:{type:string;data:any}[]) { return {checkpoint:{modelSelection:{val:{pending:null,lastUsed:[...events].reverse().find(event=>event.type==='request/header')?.data.header.config??null}}}} } },
   }
   const titleListeners = new Set<(session: unknown, event: unknown) => void>()
-  const ctx = { on: (name: string, listener: (session: unknown, event: unknown) => void) => { if (name === 'session/event') titleListeners.add(listener); return () => { titleListeners.delete(listener) } }, get: (key: string) => services[key], agentDefaultModel: defaults, llm: {resolveModelInfo:async()=>({reasoning:{efforts:[{id:'low'}]}})}, agents: { create, resume } } as unknown as Context
+  const ctx = { on: (name: string, listener: (session: unknown, event: unknown) => void) => { if (name === 'session/event') titleListeners.add(listener); return () => { titleListeners.delete(listener) } }, get: (key: string) => services[key], agentDefaultModel: defaults, llm: services.llm, agents: { create, resume } } as unknown as Context
   const manager = new ConversationManager(ctx, Config({ maxActiveConversations: max } as Config), 'persona', [], access, store)
   cleanup.push(() => manager.dispose())
   return { manager, store, create, resume, revoked, services, defaults, emitTitle(id: string, data: unknown) { for (const listener of titleListeners) listener({ id }, { type: 'session/title', data }) } }
@@ -43,8 +48,9 @@ function fixture(max = 2, store = new ConversationStore(':memory:')) {
 describe('owned business conversation lifecycle', () => {
   it('accepts a first-prompt title after the turn and protects manual names and unrelated sessions', async () => {
     const f = fixture(), c = (await f.manager.open(undefined, true, alice))!
-    f.manager.followup(c, '帮我查最近一辆车的轨迹', alice)
+    await f.manager.followup(c, '帮我查最近一辆车的轨迹', alice)
     f.manager.finish(c.id)
+    await vi.waitFor(() => expect(c.active).toBe(false))
     const data = { title: '车辆近期轨迹查询', messageSeqs: [0], source: { kind: 'provider', provider: 'first-prompt-llm' } }
     f.emitTitle(c.id, data)
     expect(f.manager.list(alice, 0, 30)[0]).toMatchObject({ title: data.title, titleSource: 'generated' })
@@ -75,9 +81,10 @@ describe('owned business conversation lifecycle', () => {
     const access: Access = { mode: 'authenticated', ready() {}, resolve: () => alice, assert() {} }
     const create = vi.fn(async () => handle())
     await root.plugin(ctx => {
-      for (const key of new Set([...inject, 'llm'])) ctx.provide(key, {})
+      for (const key of new Set([...inject, 'llm', 'sessionController'])) ctx.provide(key, {})
       ctx.set('agents', { create })
       ctx.set('agentDefaultModel', { currentSelection: () => ({ provider: 'deepseek', model: 'test' }) })
+      ctx.set('sessionController', { modelCatalog: async () => ({ groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'test', name: '测试模型' }] }], failures: [] }) })
       ctx.set('llm', { resolveCallConfig: async (value: unknown) => value, resolveModelInfo: async () => ({ reasoning: { efforts: [{ id: 'low' }] } }) })
     })
     let manager: ConversationManager
@@ -88,10 +95,163 @@ describe('owned business conversation lifecycle', () => {
       expect(create).toHaveBeenCalledOnce()
     } finally { if (manager!) await manager.dispose(); else store.close(); await root.fiber.dispose() }
   })
+  it('rejects defaults and historical models outside the Auth catalog before create or resume', async () => {
+    const invalid = fixture()
+    invalid.defaults.currentSelection = () => ({ provider: 'missing', model: 'missing' })
+    await expect(invalid.manager.open(undefined, true, alice)).rejects.toThrow('目录')
+    expect(invalid.create).not.toHaveBeenCalled()
+    const f = fixture(1)
+    f.create.mockResolvedValueOnce(handle([{ type: 'request/header', data: { header: { config: { provider: 'deepseek', model: 'test', reasoningEffort: 'high' } } } }]))
+    const first = (await f.manager.open(undefined, true, alice))!
+    await f.manager.open(undefined, true, alice)
+    f.services.sessionController = { modelCatalog: async () => ({ groups: [], failures: [] }) }
+    await expect(f.manager.open(first.id, false, alice)).rejects.toThrow('目录')
+    expect(f.resume).not.toHaveBeenCalled()
+  })
+  it('rechecks cached handles against the current directory and route without dispatching', async () => {
+    const f = fixture()
+    const c = (await f.manager.open(undefined, true, alice))!
+    const controller = f.services.sessionController
+    f.services.sessionController = { modelCatalog: async () => ({ groups: [], failures: [] }) }
+    expect(await f.manager.open(c.id, false, alice)).toBe(c)
+    await expect(f.manager.followup(c, '不能派发', alice)).rejects.toThrow('目录')
+    f.services.sessionController = controller
+    f.services.llm = { resolveCallConfig: async () => { throw new Error('unavailable') } }
+    await expect(f.manager.followup(c, '不能派发', alice)).rejects.toThrow('路由')
+    expect(c.handle.agent.followup).not.toHaveBeenCalled()
+    expect(c.active).toBe(false)
+  })
+  it('keeps creation effort and model before the first log without selecting or changing the default', async () => {
+    const f = fixture()
+    const selectModel = vi.fn()
+    Object.assign(f.services.sessionController as object, { selectModel })
+    const c = (await f.manager.open(undefined, true, alice))!
+    expect(f.create.mock.calls[0]?.[0]).toMatchObject({ agentOptions: { provider: 'deepseek', model: 'test', reasoningEffort: 'low' } })
+    f.defaults.currentSelection = () => ({ provider: 'new-provider', model: 'new-model' })
+    expect((await f.manager.models(alice, c.id)).selected).toEqual({ provider: 'deepseek', model: 'test', reasoningEffort: 'low' })
+    await f.manager.followup(c, '沿用创建选项', alice)
+    expect(selectModel).not.toHaveBeenCalled()
+    expect(f.defaults.currentSelection()).toEqual({ provider: 'new-provider', model: 'new-model' })
+  })
+  it('updates the no-log fallback after an explicit model selection', async () => {
+    const f = fixture(), selected = { provider: 'deepseek', model: 'second' }
+    Object.assign(f.services.sessionController as object, { selectModel: async () => ({ selected }) })
+    const c = (await f.manager.open(undefined, true, alice))!
+    await f.manager.selectModel(c, selected, alice)
+    f.defaults.currentSelection = () => ({ provider: 'new-provider', model: 'new-model' })
+    expect((await f.manager.models(alice, c.id)).selected).toEqual(selected)
+    await f.manager.followup(c, '沿用显式选择', alice)
+    expect(c.handle.agent.followup).toHaveBeenCalledOnce()
+  })
+  it('uses the official projection once model history exists and rejects an evicted handle', async () => {
+    const f = fixture(1)
+    f.create.mockResolvedValueOnce(handle([{ type: 'request/header', data: { header: { config: { provider: 'deepseek', model: 'second', reasoningEffort: 'high' } } } }]))
+    const c = (await f.manager.open(undefined, true, alice))!
+    expect((await f.manager.models(alice, c.id)).selected).toEqual({ provider: 'deepseek', model: 'second', reasoningEffort: 'high' })
+    await f.manager.open(undefined, true, alice)
+    await expect(f.manager.followup(c, '过期句柄', alice)).rejects.toThrow('已关闭')
+    expect(() => f.manager.retainTurn(c, alice)).toThrow('已关闭')
+    expect(c.handle.agent.followup).not.toHaveBeenCalled()
+  })
+  it('reserves before catalog await, rejects concurrent sends, and invalidates cancelled continuations precisely', async () => {
+    const f = fixture(), c = (await f.manager.open(undefined, true, alice))!
+    const controller = f.services.sessionController as { modelCatalog: () => Promise<unknown> }
+    let release!: (value: unknown) => void
+    const catalog = vi.fn(() => new Promise(resolve => { release = resolve }))
+    f.services.sessionController = { modelCatalog: catalog }
+    const old = f.manager.followup(c, '旧等待', alice)
+    const rejected = expect(old).rejects.toThrow('已停止')
+    expect(c.active).toBe(true)
+    await expect(f.manager.followup(c, '并发请求', otherLogin)).rejects.toThrow('上一条')
+    await vi.waitFor(() => expect(catalog).toHaveBeenCalledOnce())
+    f.manager.cancel(c.id, alice)
+    f.services.sessionController = controller
+    await f.manager.followup(c, '新一轮', otherLogin)
+    release(await controller.modelCatalog())
+    await rejected
+    expect(c.handle.agent.followup).toHaveBeenCalledOnce()
+    expect(c.active, '旧等待的catch不能清除新回合').toBe(true)
+    expect(() => f.manager.authorizeAgent(c.handle.agent)).not.toThrow()
+  })
+  it('rechecks the original login and disposed manager after catalog await', async () => {
+    for (const action of ['revoke', 'dispose']) {
+      const f = fixture(), c = (await f.manager.open(undefined, true, alice))!
+      const controller = f.services.sessionController as { modelCatalog: () => Promise<unknown> }
+      let release!: (value: unknown) => void
+      const catalog = vi.fn(() => new Promise(resolve => { release = resolve }))
+      f.services.sessionController = { modelCatalog: catalog }
+      const pending = f.manager.followup(c, '迟到目录', alice)
+      const rejected = expect(pending).rejects.toThrow(action === 'revoke' ? '退出登录' : '停止')
+      await vi.waitFor(() => expect(catalog).toHaveBeenCalledOnce())
+      if (action === 'revoke') { f.revoked.add(alice.sessionId); f.manager.revokeInvalid() }
+      else { await f.manager.dispose(); cleanup.pop() }
+      release(await controller.modelCatalog())
+      await rejected
+      expect(c.handle.agent.followup).not.toHaveBeenCalled()
+    }
+  })
+  it('waits for the new driver after synchronous turn/end instead of consuming an earlier idle promise', async () => {
+    const f = fixture(), c = (await f.manager.open(undefined, true, alice))!
+    const agent = c.handle.agent as unknown as ReturnType<typeof handle>['agent']
+    let retire!: () => void
+    agent.whenIdle.mockImplementationOnce(() => new Promise<void>(resolve => { retire = resolve }))
+    agent.followup.mockImplementationOnce(() => {
+      f.manager.cancel(c.id, alice)
+      expect(c.active, '真正派发中的同步取消必须等driver空闲').toBe(true)
+      f.manager.finish(c.id)
+      expect(agent.whenIdle).not.toHaveBeenCalled()
+    })
+    await f.manager.followup(c, '同步结束事件', alice)
+    expect(agent.whenIdle).toHaveBeenCalledOnce()
+    expect(c.active).toBe(true)
+    retire()
+    await vi.waitFor(() => expect(c.active).toBe(false))
+  })
+  it('opens a business Agent through the declared Cordis service boundary', async () => {
+    const root = new Context()
+    const resolveModelInfo = vi.fn(async () => ({ reasoning: { efforts: [{ id: 'low' }] } }))
+    const create = vi.fn(async () => handle())
+    const services: Record<string, unknown> = {
+      agentDefaultModel: { currentSelection: () => ({ provider: 'deepseek', model: 'test' }) },
+      llm: { resolveModelInfo, resolveCallConfig: async (value: unknown) => value }, agents: { create },
+      sessionController: { modelCatalog: async () => ({ groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'test', name: 'Test' }] }], failures: [] }) },
+    }
+    const provider = root.plugin(ctx => {
+      for (const key of new Set([...inject, 'llm', 'sessionController'])) ctx.provide(key, (services[key] ?? {}) as never)
+    })
+    await provider.await()
+    let manager!: ConversationManager
+    const plugin = root.plugin({ inject, apply(ctx: Context) {
+      const access: Access = { mode: 'authenticated', ready() {}, resolve: () => alice, assert() {} }
+      manager = new ConversationManager(ctx, Config({} as Config), 'persona', [], access, new ConversationStore(':memory:'))
+    } })
+    await plugin.await()
+    try {
+      const conversation = await manager.open(undefined, true, alice)
+      expect(conversation?.id).toMatch(/^closedoff-web-/)
+      expect(resolveModelInfo).toHaveBeenCalledWith('deepseek', 'test')
+      expect(create).toHaveBeenCalledOnce()
+    } finally { await manager.dispose(); await plugin.dispose(); await provider.dispose() }
+  })
+  it('keeps a delegated turn busy after the HTTP turn/end listener until its owner releases it', async () => {
+    const { manager } = fixture()
+    const conversation = (await manager.open(undefined, true, alice))!
+    const release = manager.retainTurn(conversation, alice)
+    await manager.followup(conversation, '协作查询', alice)
+    manager.finish(conversation.id)
+    expect(conversation.active).toBe(true)
+    await expect(manager.followup(conversation, '不能提前续发', otherLogin)).rejects.toThrow('上一条')
+    expect(() => manager.retainTurn(conversation, otherLogin)).toThrow('上一条')
+    release()
+    await vi.waitFor(() => expect(conversation.active).toBe(false))
+    await manager.followup(conversation, '下一轮', otherLogin)
+    release()
+    expect(conversation.active).toBe(true)
+  })
   it('selects through the official controller only for the owner and while idle', async () => {
     const f=fixture(), selected={provider:'deepseek',model:'second'}
     const selectModel=vi.fn(async (request:unknown)=>{f.defaults.currentSelection=()=>selected;return{selected}})
-    f.services.sessionController={modelCatalog:async()=>({groups:[{id:'deepseek',name:'DeepSeek',models:[{id:'second',name:'第二模型'}]}],failures:[]}),selectModel}
+    f.services.sessionController={modelCatalog:async()=>({groups:[{id:'deepseek',name:'DeepSeek',models:[{id:'test',name:'测试模型'},{id:'second',name:'第二模型'}]}],failures:[]}),selectModel}
     f.services.llm={resolveCallConfig:async(value:unknown)=>value}
     const c=(await f.manager.open(undefined,true,alice))!
     await expect(f.manager.selectModel(c,selected,bob)).rejects.toThrow('无权')
@@ -101,7 +261,7 @@ describe('owned business conversation lifecycle', () => {
     await f.manager.selectModel(c,selected,alice)
     expect(selectModel).toHaveBeenCalledWith({sessionId:c.id,...selected})
     expect(f.defaults.currentSelection()).toEqual(selected)
-    f.manager.followup(c,'hello',alice)
+    await f.manager.followup(c,'hello',alice)
     await expect(f.manager.selectModel(c,selected,alice)).rejects.toThrow('上一条')
     expect(selectModel).toHaveBeenCalledTimes(1)
     await expect(f.manager.models(bob,c.id)).rejects.toThrow('无权')
@@ -187,6 +347,7 @@ describe('owned business conversation lifecycle', () => {
     resume.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
     const pending = manager.open(unknownId, false, alice)
     await expect(manager.open(unknownId, false, bob)).rejects.toMatchObject({ status: 404 })
+    await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce())
     release(handle())
     await expect(pending).resolves.toBeDefined()
   })
@@ -198,22 +359,23 @@ describe('owned business conversation lifecycle', () => {
     resume.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
     const pending = manager.open(unknownId, false, alice)
     await expect(manager.open(secondId, false, alice)).rejects.toThrow('active conversation limit 1')
-    expect(resume).toHaveBeenCalledOnce()
+    await vi.waitFor(() => expect(resume).toHaveBeenCalledOnce())
     release(handle())
     await expect(pending).resolves.toBeDefined()
   })
   it('does not rebind an active Agent to a different login session', async () => {
     const { manager, revoked } = fixture()
     const conversation = (await manager.open(undefined, true, alice))!
-    manager.followup(conversation, 'first', alice)
+    await manager.followup(conversation, 'first', alice)
     await manager.open(conversation.id, false, otherLogin)
-    expect(() => manager.followup(conversation, 'second', otherLogin)).toThrow('上一条')
+    await expect(manager.followup(conversation, 'second', otherLogin)).rejects.toThrow('上一条')
     revoked.add('alice-1')
     expect(() => manager.authorizeAgent(conversation.handle.agent)).toThrow('已退出')
     manager.revokeInvalid()
     expect(conversation.handle.agent.cancel).toHaveBeenCalledOnce()
     manager.finish(conversation.id)
-    manager.followup(conversation, 'new turn', otherLogin)
+    await vi.waitFor(() => expect(conversation.active).toBe(false))
+    await manager.followup(conversation, 'new turn', otherLogin)
     expect(() => manager.authorizeAgent(conversation.handle.agent)).not.toThrow()
     expect(() => manager.authorizeAgent(undefined)).toThrow('可信用户')
     expect(() => manager.authorizeAgent({})).toThrow('可信用户')

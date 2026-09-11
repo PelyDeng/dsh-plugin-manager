@@ -11,6 +11,10 @@ export function shouldSendChatEnter(event,{touch=false,composing=false}={}){
   return event.key==='Enter'&&!touch&&!event.shiftKey&&!event.isComposing&&!composing&&event.keyCode!==229
 }
 
+export function chatConversationTarget(search,previous=null){
+  return new URLSearchParams(search).get('conversationId')||previous||null
+}
+
 export function initChat({api,request,identity,openDraft,renderMarkdown}){
   const $=id=>document.getElementById(id),base=document.body.dataset.base
   const state={id:null,epoch:0,history:null,files:[],feedback:new Map(),feedbackReady:false,stream:null,offset:null,sending:false,stopping:false,uploading:false,liveClock:0,pending:null}
@@ -39,24 +43,33 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     list:args=>api('chat-list',args),mutate:args=>api('chat-update',args),read:id=>api('chat-history',{conversationId:id}),
     onDeleted:async ids=>{if(ids.includes(state.id))await activate(null)},storageKey:'blog-history:'+identity.userId})
   async function conversations(append=false){await sidebar.refresh(append)}
+  function syncConversationUrl(id){
+    const url=new URL(window.location.href)
+    if(id)url.searchParams.set('conversationId',id);else url.searchParams.delete('conversationId')
+    window.history.replaceState(window.history.state,'',url)
+  }
   async function ensureConversation(){
     if(state.id)return state.id
     const epoch=state.epoch
     if(creating?.epoch===epoch)return creating.promise
     const pending={epoch,promise:null};creating=pending
-    pending.promise=(async()=>{const c=await api('chat-create',{requestId:crypto.randomUUID()});if(epoch!==state.epoch)throw new Error('对话已切换，请在当前对话重试');state.id=c.id;sessionStorage.setItem(key,c.id);connect();void conversations().catch(error);return c.id})()
+    pending.promise=(async()=>{const c=await api('chat-create',{requestId:crypto.randomUUID()});if(epoch!==state.epoch)throw new Error('对话已切换，请在当前对话重试');state.id=c.id;sessionStorage.setItem(key,c.id);syncConversationUrl(c.id);connect();void conversations().catch(error);return c.id})()
     try{return await pending.promise}finally{if(creating===pending)creating=null}
   }
   async function activate(id){
     translations.reset()
     inputs.set(state.id??'new',$('chat-input').value)
-    state.epoch++;state.stream?.close();state.stream=null;clearTimeout(refreshTimer);state.pending=null;state.sending=false;state.stopping=false;state.id=id;state.history=null;state.files=[];state.feedback.clear();state.feedbackReady=false;state.liveClock=0
+    const epoch=++state.epoch
+    state.stream?.close();state.stream=null;clearTimeout(refreshTimer);state.pending=null;state.sending=false;state.stopping=false;state.id=id;state.history=null;state.files=[];state.feedback.clear();state.feedbackReady=false;state.liveClock=0
+    syncConversationUrl(id)
+    if(!id)sessionStorage.removeItem(key)
     $('chat-feedback-dialog').close();$('chat-file-dialog').close()
     $('chat-image-capability').hidden=true;$('chat-input').value=inputs.get(id??'new')??'';$('chat-error').hidden=true;render();renderFiles();controls()
     window.dispatchEvent(new CustomEvent('blog:conversation',{detail:{id}}))
     await picker.refresh(id)
-    if(id){sessionStorage.setItem(key,id);connect();await Promise.all([refresh(),loadFiles()])}else{sessionStorage.removeItem(key);focusInput()}
-    if(id!==state.id)return
+    if(epoch!==state.epoch)return
+    if(id){sessionStorage.setItem(key,id);connect();await Promise.all([refresh(),loadFiles()])}else focusInput()
+    if(epoch!==state.epoch)return
     sidebar.render()
   }
   function connect(){
@@ -318,5 +331,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
   window.addEventListener('resize',controls)
   void conversations().catch(error)
   controls()
-  const previous=sessionStorage.getItem(key);void activate(previous||null).catch(e=>{error(e);void activate(null)})
+  const target=chatConversationTarget(window.location.search,sessionStorage.getItem(key))
+  if(new URLSearchParams(window.location.search).has('conversationId'))view(true)
+  void activate(target).catch(e=>{error(e);void activate(null)})
 }

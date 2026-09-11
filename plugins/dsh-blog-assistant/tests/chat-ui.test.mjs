@@ -1,8 +1,54 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {shouldSendChatEnter} from '../web/chat.js'
+import {readFileSync} from 'node:fs'
+import {createContext,runInContext} from 'node:vm'
+import {chatConversationTarget,shouldSendChatEnter} from '../web/chat.js'
 import {chatTurns} from '../web/chat-turns.js'
 import {projectChat} from '../src/chat-history.mjs'
+
+test('deep links follow switching, new conversations and deletion without changing other URL or history state',async()=>{
+  const source=readFileSync(new URL('../web/chat.js',import.meta.url),'utf8')
+  const block=source.slice(source.indexOf('  const sidebar=createConversationHistory('),source.indexOf('  function connect()'))
+  assert.ok(block.startsWith('  const sidebar='))
+  let href='https://example.invalid/blog?from=pirate&conversationId=chat-a&keep=1#answer',options,modelRefresh=async()=>{},connects=0
+  const saved=new Map(),historyState={scroll:17,external:{keep:true}},node={value:'',close(){},hidden:false}
+  const browser={location:{get href(){return href}},history:{state:historyState,replaceState(state,_title,url){assert.equal(state,historyState);href=String(url)}},dispatchEvent(){}}
+  const state={id:'chat-a',epoch:0,feedback:new Map()}
+  const scope=createContext({URL,crypto:globalThis.crypto,window:browser,state,key:'blog-chat:alice',identity:{userId:'alice'},
+    sessionStorage:{setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)},
+    createConversationHistory:value=>{options=value;return{refresh:async()=>{},render(){}}},$:()=>node,
+    inputs:new Map(),translations:{reset(){}},clearTimeout(){},refreshTimer:null,creating:null,
+    CustomEvent:class{},picker:{refresh:(...args)=>modelRefresh(...args)},api:async()=>({id:'chat-c'}),
+    connect(){connects++},refresh:async()=>{},loadFiles:async()=>{},render(){},renderFiles(){},controls(){},focusInput(){},error(error){throw error}})
+  runInContext(block,scope)
+  const expectTarget=id=>{
+    const url=new URL(href)
+    assert.equal(state.id,id)
+    assert.equal(chatConversationTarget(url.search,saved.get('blog-chat:alice')),id)
+    assert.equal(url.pathname,'/blog');assert.equal(url.searchParams.get('from'),'pirate')
+    assert.equal(url.searchParams.get('keep'),'1');assert.equal(url.hash,'#answer')
+    assert.equal(browser.history.state,historyState)
+  }
+  await options.openConversation('chat-b');expectTarget('chat-b')
+  // The real new-conversation callback deliberately does not return activate's promise.
+  options.newConversation();await new Promise(resolve=>setImmediate(resolve));expectTarget(null)
+  assert.equal(new URL(href).searchParams.has('conversationId'),false)
+  assert.equal(await runInContext('ensureConversation()',scope),'chat-c');expectTarget('chat-c')
+  await options.onDeleted(['chat-b']);expectTarget('chat-c')
+  await options.onDeleted(['chat-c']);expectTarget(null)
+  assert.equal(new URL(href).searchParams.has('conversationId'),false)
+  await options.openConversation('chat-b');expectTarget('chat-b')
+  const waiting=[]
+  modelRefresh=()=>new Promise(resolve=>waiting.push(resolve))
+  const late=options.openConversation('chat-b'),fresh=runInContext('activate(null)',scope)
+  expectTarget(null)
+  waiting[1]();await fresh;expectTarget(null)
+  waiting[0]();await late;expectTarget(null)
+  const beforeConnects=connects,older=options.openConversation('chat-b'),newer=options.openConversation('chat-b')
+  waiting[2]();await older
+  assert.equal(saved.has('blog-chat:alice'),false);assert.equal(connects,beforeConnects)
+  waiting[3]();await newer;expectTarget('chat-b')
+})
 
 test('tool errors without optional diagnostic metadata stay failed in history and grouped answers',()=>{
   const events=[{type:'turn/start',seq:0,time:0,data:{turn:1}}]

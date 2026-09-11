@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { createContext, runInContext } from 'node:vm'
 import { describe, expect, it, vi } from 'vitest'
 
-const source = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8')
+const source = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 function between(start: string, end: string): string {
   const first = source.indexOf(start)
   const last = source.indexOf(end, first + start.length)
@@ -11,6 +11,64 @@ function between(start: string, end: string): string {
   return source.slice(first, last)
 }
 const settled = () => new Promise<void>(resolve => setImmediate(resolve))
+
+describe('已验证身份下的会话深链接', () => {
+  const linked = 'closedoff-web-01234567-89ab-4cde-8fab-0123456789ab'
+  const choose = between('    var linkedConversation =', '    identityReady = true;')
+  it('选择有效业务会话参数，由原 history 接口继续校验归属，不写入本机归属', () => {
+    const scope = createContext({ URLSearchParams, window: { location: { search: '?conversationId=' + linked } },
+      localStorage: { getItem: () => 'saved-session' }, storageKey: 'dsh_closedoff_conversationId:user:alice', conversationId: '' })
+    runInContext(choose, scope)
+    expect(scope.conversationId).toBe(linked)
+  })
+  it('拒绝其他命名空间和非 UUID 参数，沿用当前身份历史', () => {
+    for (const value of ['foreign-session', 'closedoff-web-anything', '//other.invalid']) {
+      const scope = createContext({ URLSearchParams, window: { location: { search: '?conversationId=' + encodeURIComponent(value) } },
+        localStorage: { getItem: () => 'saved-session' }, storageKey: 'dsh_closedoff_conversationId:user:alice', conversationId: '' })
+      runInContext(choose, scope)
+      expect(scope.conversationId).toBe('saved-session')
+    }
+  })
+  it('切换、新建、收到新 ID 与删除当前会话同步深链，保留其它 URL 和 history state', () => {
+    const other = 'closedoff-web-11234567-89ab-4cde-8fab-0123456789ab'
+    const created = 'closedoff-web-21234567-89ab-4cde-8fab-0123456789ab'
+    let href = 'https://example.invalid/closedoff-qa?from=pirate&conversationId=' + linked + '&keep=1#answer'
+    const saved = new Map<string, string>(), historyState = { scroll: 17, external: { keep: true } }
+    const browser = { location: { get href() { return href }, get search() { return new URL(href).search } },
+      history: { state: historyState, replaceState(state: unknown, _title: string, url: URL) { expect(state).toBe(historyState); href = String(url) } } }
+    let options!: { openConversation(id: string): void; newConversation(): void; onDeleted(ids: string[]): void }
+    const scope = createContext({ URL, URLSearchParams, window: browser, conversationId: linked,
+      localStorage: { setItem: (key: string, value: string) => saved.set(key, value), getItem: (key: string) => saved.get(key), removeItem: (key: string) => saved.delete(key) },
+      storageKey: 'dsh_closedoff_conversationId:user:alice', identityKey: 'user:alice', identityReady: true,
+      identityEpoch: 0, epoch: 0, controller: new AbortController(), running: false, titleRefresh: undefined,
+      activeRestoreController: null, followBottom: true, inner: { innerHTML: '' }, admitted: false, freshConversation: false,
+      picker: { refresh() {}, accept() {} }, resetViewState() {}, restore() {}, welcome() {}, $: () => ({}),
+      createConversationHistory(value: typeof options) { options = value; return { refresh() {}, render() {} } },
+    })
+    runInContext(between('  function stopTitleRefresh(', '  function startTitleRefresh('), scope)
+    runInContext(between('  function openConversation(', '  function bindAnswerActions('), scope)
+    runInContext(between('  function startFreshConversation(', "  $('#newBtn')"), scope)
+    runInContext(between('  function initHistory(', "  $('#logoutBtn')"), scope)
+    runInContext(between('    function handleEvent(', '\n  }\n\n  function autoGrow('), scope)
+    runInContext('initHistory()', scope)
+    const expectTarget = (id: string) => {
+      const url = new URL(href)
+      expect(scope.conversationId).toBe(id)
+      expect(url.searchParams.get('conversationId') || '').toBe(id)
+      expect(url.pathname).toBe('/closedoff-qa'); expect(url.searchParams.get('from')).toBe('pirate')
+      expect(url.searchParams.get('keep')).toBe('1'); expect(url.hash).toBe('#answer')
+      expect(browser.history.state).toBe(historyState)
+      runInContext(choose, scope); expect(scope.conversationId).toBe(id)
+    }
+    options.openConversation(other); expectTarget(other)
+    options.newConversation(); expectTarget('')
+    expect(new URL(href).searchParams.has('conversationId')).toBe(false)
+    scope.created = created; runInContext("handleEvent({type:'conversation',conversationId:created}, {})", scope); expectTarget(created)
+    options.onDeleted([other]); expectTarget(created)
+    options.onDeleted([created]); expectTarget('')
+    expect(new URL(href).searchParams.has('conversationId')).toBe(false)
+  })
+})
 
 function jsonFixture() {
   let release!: (data: unknown) => void

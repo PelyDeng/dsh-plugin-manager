@@ -1,0 +1,424 @@
+{
+  "source": "当前美术素材规范与提示词.md",
+  "sourceSha256": "036594d5a9f6c1249dc39270fad82965d660982ee7f6bee9846289811de02b12",
+  "audioSource": "当前音频素材规范与提示词.md",
+  "audioSourceSha256": "a9b8606847407df4f6fbbed01f25579ba7677f67303bc137c13c1be02431fa02",
+  "count": 52,
+  "imageCount": 46,
+  "audioCount": 6,
+  "generatedBy": "../tools/export_prompts.py",
+  "assets": [
+    {
+      "id": "pearl-layout-reference",
+      "category": "ships",
+      "file": "ships/pearl-layout-reference.txt",
+      "placeholders": [],
+      "sha256": "166c6c494d71043a72d35913fe6ccafd970cfe4a38fc460850a4575f9499c0a7"
+    },
+    {
+      "id": "pearl-hull-deck",
+      "category": "ships",
+      "file": "ships/pearl-hull-deck.txt",
+      "placeholders": [],
+      "sha256": "2e528431f27d1f10644dc6ff350b9cb20361089f7602cfb422ef4ebc017feff9"
+    },
+    {
+      "id": "pearl-front-rail",
+      "category": "ships",
+      "file": "ships/pearl-front-rail.txt",
+      "placeholders": [],
+      "sha256": "e65e159244203285cf39728cb9b4346318264d739d14b93677d224e75216ee1f"
+    },
+    {
+      "id": "pearl-mast-fore",
+      "category": "ships",
+      "file": "ships/pearl-mast-fore.txt",
+      "placeholders": [],
+      "sha256": "c312be81b1a7db7c14b5a26f630f1fa0cf7bffb4c81d93e69ac0ffa04291a3af"
+    },
+    {
+      "id": "pearl-mast-main",
+      "category": "ships",
+      "file": "ships/pearl-mast-main.txt",
+      "placeholders": [],
+      "sha256": "accbe4c08dfa2884aa353feb671751a368dd8a837f773beb55f3559ef8b79e6d"
+    },
+    {
+      "id": "pearl-mast-aft",
+      "category": "ships",
+      "file": "ships/pearl-mast-aft.txt",
+      "placeholders": [],
+      "sha256": "e9e36f4be5f3db9bdac4abaf6ee546ef39a8acccbad096ff31f299279c166ebe"
+    },
+    {
+      "id": "rival-ship",
+      "category": "ships",
+      "file": "ships/rival-ship.txt",
+      "placeholders": [],
+      "sha256": "20fb9525be349ce8f8d6089eaffb1d234ae71b11086669232c42c601cfd8a4c9"
+    },
+    {
+      "id": "rival-damage-stages",
+      "category": "ships",
+      "file": "ships/rival-damage-stages.txt",
+      "placeholders": [],
+      "sha256": "e342a0649dd79b90c8c3420de3b03f337a5adab6767a7f8ac840a1d4bf9c11ac"
+    },
+    {
+      "id": "cannon-recoil",
+      "category": "ships",
+      "file": "ships/cannon-recoil.txt",
+      "placeholders": [],
+      "sha256": "163a6e20d7471dea47bae50bf0ee6c427ef052c8717532495aae1c631f93ec1b"
+    },
+    {
+      "id": "deck-props",
+      "category": "ships",
+      "file": "ships/deck-props.txt",
+      "placeholders": [
+        "[PROP]"
+      ],
+      "sha256": "b7f62ecbcfd792305dc2925a870930d427c9c720d4106443fe0252a76aeddfe2"
+    },
+    {
+      "id": "figurehead-states",
+      "category": "ships",
+      "file": "ships/figurehead-states.txt",
+      "placeholders": [],
+      "sha256": "75e4d24eafba345e7a489579bf0b17c60f9ff6b330753d4235523e41207b6058"
+    },
+    {
+      "id": "jack-turnaround",
+      "category": "characters",
+      "file": "characters/jack-turnaround.txt",
+      "placeholders": [],
+      "sha256": "806cfe34097f81842cb5f3f20696057d4fca8438cec2efd126c658983022fc23"
+    },
+    {
+      "id": "jack-walk",
+      "category": "characters",
+      "file": "characters/jack-walk.txt",
+      "placeholders": [
+        "[DIRECTION]",
+        "[WALK POSE]"
+      ],
+      "sha256": "1b4f1745533da9206f63a99fd67304d114587e26b5b02b1afe1e9effe8ee298c"
+    },
+    {
+      "id": "jack-gestures",
+      "category": "characters",
+      "file": "characters/jack-gestures.txt",
+      "placeholders": [
+        "[DIRECTION]",
+        "[GESTURE]"
+      ],
+      "sha256": "86cb4240640918e7eee745a192c35ba7b831447a3e21afafa36b90a48f0ec9e2"
+    },
+    {
+      "id": "jack-tasks",
+      "category": "characters",
+      "file": "characters/jack-tasks.txt",
+      "placeholders": [
+        "[DIRECTION]",
+        "[TASK POSE]"
+      ],
+      "sha256": "68b56cd84548a269e9620b13452274a1ec2b007d5ee958ba5d3f6d3522bddfec"
+    },
+    {
+      "id": "barbossa-turnaround",
+      "category": "characters",
+      "file": "characters/barbossa-turnaround.txt",
+      "placeholders": [],
+      "sha256": "7502526ff5e595213bec06c201c68ef36de6532ba350779521a33a1d06895622"
+    },
+    {
+      "id": "barbossa-walk",
+      "category": "characters",
+      "file": "characters/barbossa-walk.txt",
+      "placeholders": [
+        "[DIRECTION]",
+        "[WALK POSE]"
+      ],
+      "sha256": "c4fdb69b6c9aa12a4060b83ca47f33743c82ba6600a9530f5b8850db0b5e81b7"
+    },
+    {
+      "id": "barbossa-gestures",
+      "category": "characters",
+      "file": "characters/barbossa-gestures.txt",
+      "placeholders": [
+        "[DIRECTION]",
+        "[GESTURE]"
+      ],
+      "sha256": "7b9d43e3fa0796b3e39aefe0f8db4c280fb6c53fbab7f05c5bdf235d771cb95c"
+    },
+    {
+      "id": "barbossa-tasks",
+      "category": "characters",
+      "file": "characters/barbossa-tasks.txt",
+      "placeholders": [
+        "[DIRECTION]",
+        "[TASK POSE]"
+      ],
+      "sha256": "5bae2ea9a59bfcaae2543458f1323e342e694b0c7948d71a46bc5068a9f3d901"
+    },
+    {
+      "id": "elizabeth-turnaround",
+      "category": "characters",
+      "file": "characters/elizabeth-turnaround.txt",
+      "placeholders": [
+        "[DIRECTION]"
+      ],
+      "sha256": "f6a8dcb605e112ccf877fe3fdeda662ae774626185d08f0ce81d9f7adc24685d"
+    },
+    {
+      "id": "elizabeth-walk",
+      "category": "characters",
+      "file": "characters/elizabeth-walk.txt",
+      "placeholders": [
+        "[DIRECTION]",
+        "[WALK POSE]"
+      ],
+      "sha256": "c38f5c740e911c6b386c3389f06bc11dd85b9f96671e6f3d60d0b326b87030af"
+    },
+    {
+      "id": "elizabeth-gestures",
+      "category": "characters",
+      "file": "characters/elizabeth-gestures.txt",
+      "placeholders": [
+        "[DIRECTION]",
+        "[GESTURE]"
+      ],
+      "sha256": "35438088be4d35a30a2d3e84c604e08803bff09ec5882c68334b34b1f8306f3a"
+    },
+    {
+      "id": "elizabeth-tasks",
+      "category": "characters",
+      "file": "characters/elizabeth-tasks.txt",
+      "placeholders": [
+        "[DIRECTION]",
+        "[TASK POSE]"
+      ],
+      "sha256": "52dbdd6f82ca217d6b94fafa65bedbbaa8c6c498657a55e78058701b42961c79"
+    },
+    {
+      "id": "monkey-actions",
+      "category": "characters",
+      "file": "characters/monkey-actions.txt",
+      "placeholders": [],
+      "sha256": "aef73a14bd799715a26f20c1f58ca955e7eab5eea7fa1b1f06d353e5ca7e8e63"
+    },
+    {
+      "id": "enemy-crew",
+      "category": "characters",
+      "file": "characters/enemy-crew.txt",
+      "placeholders": [
+        "[CREW VARIANT]",
+        "[POSE]"
+      ],
+      "sha256": "93b26465f44fd90bbba59a46fb6c1d03e264b6abcda534cac940d4d928467b70"
+    },
+    {
+      "id": "env-ocean-day",
+      "category": "environment",
+      "file": "environment/env-ocean-day.txt",
+      "placeholders": [],
+      "sha256": "3cb4c7ddcf05da91c02e040f48942ceb7321dd09768e06b1260f46507a212920"
+    },
+    {
+      "id": "env-ocean-storm",
+      "category": "environment",
+      "file": "environment/env-ocean-storm.txt",
+      "placeholders": [],
+      "sha256": "8f9e0a4ebae79f0a6d670af1c3a033bb6e1d77f16366ae85bb4a3ca84ee7c1d3"
+    },
+    {
+      "id": "env-ocean-moon",
+      "category": "environment",
+      "file": "environment/env-ocean-moon.txt",
+      "placeholders": [],
+      "sha256": "319e9b09fc6e16dc00a8b464457a850c0cb9ba1bfad95bc6f9ed4cc12bc7a184"
+    },
+    {
+      "id": "water-displacement",
+      "category": "environment",
+      "file": "environment/water-displacement.txt",
+      "placeholders": [],
+      "sha256": "1874257bd311bf615f7c36960c0e687e1c73b33da6ef2bdf1feeac7ac5d6890c"
+    },
+    {
+      "id": "sea-foam-cycle",
+      "category": "environment",
+      "file": "environment/sea-foam-cycle.txt",
+      "placeholders": [],
+      "sha256": "fc19c9a01b99ce1ee4d0f2b2dd91165738f57bb7a9d0f543ffafcdc4fbcc0f1e"
+    },
+    {
+      "id": "fog-ribbons",
+      "category": "environment",
+      "file": "environment/fog-ribbons.txt",
+      "placeholders": [],
+      "sha256": "b43c3a163e8244e462c3b9249b7d930859209857f06da2717e6fbc705d8953b5"
+    },
+    {
+      "id": "weather-lightning",
+      "category": "environment",
+      "file": "environment/weather-lightning.txt",
+      "placeholders": [],
+      "sha256": "394a807ca72be6a5367c23b4586c750238dd3093e3a7d200cc2574e9f07fc6b3"
+    },
+    {
+      "id": "weather-rain",
+      "category": "environment",
+      "file": "environment/weather-rain.txt",
+      "placeholders": [],
+      "sha256": "bbe773714adc60e78ba670420036f70e736df598159726bd83c6be5b9ba2e16a"
+    },
+    {
+      "id": "cannonball",
+      "category": "effects",
+      "file": "effects/cannonball.txt",
+      "placeholders": [],
+      "sha256": "be2478a2a4e2638c69d7580c756caae32ed217d9c3c8a196bdc6a6c6f69aaa91"
+    },
+    {
+      "id": "muzzle-flash",
+      "category": "effects",
+      "file": "effects/muzzle-flash.txt",
+      "placeholders": [],
+      "sha256": "a5ee551d1129c6070b7ac7ec72cc0594ec5ec771ba764ba9b207b65acf137a13"
+    },
+    {
+      "id": "cannon-smoke",
+      "category": "effects",
+      "file": "effects/cannon-smoke.txt",
+      "placeholders": [],
+      "sha256": "accaa237650f6fb5621aef721ebaffd5c44bfa842fa48ec4a5051b75f452e4ed"
+    },
+    {
+      "id": "water-splash",
+      "category": "effects",
+      "file": "effects/water-splash.txt",
+      "placeholders": [],
+      "sha256": "96b6854c12abddc9463b2855d798f52d38719d4fc1fb3deae18ab1387c2de12a"
+    },
+    {
+      "id": "wood-impact",
+      "category": "effects",
+      "file": "effects/wood-impact.txt",
+      "placeholders": [],
+      "sha256": "79bf2b86b183d0e5294a1d77c8dd683bab5ab35981ad9f792872d16fe6935fc0"
+    },
+    {
+      "id": "hull-damage",
+      "category": "effects",
+      "file": "effects/hull-damage.txt",
+      "placeholders": [],
+      "sha256": "524548ea046a85be1799db015ee1b8838ca132cfa8c2fb7b07ee34072627c97b"
+    },
+    {
+      "id": "deck-fire",
+      "category": "effects",
+      "file": "effects/deck-fire.txt",
+      "placeholders": [],
+      "sha256": "a16321b39699c0db3b9798552d42902f430e350d8a4b8bae8f5cac66a9f6dab1"
+    },
+    {
+      "id": "battle-explosion",
+      "category": "effects",
+      "file": "effects/battle-explosion.txt",
+      "placeholders": [],
+      "sha256": "99fd3395674cadedb3892eaee979a7a22a44b21ad7ca9c15f423cb003685c30d"
+    },
+    {
+      "id": "magic-pulse",
+      "category": "effects",
+      "file": "effects/magic-pulse.txt",
+      "placeholders": [],
+      "sha256": "f3f85659a2fcb65a37bda28c26668a0cc6ce1d3e342ee798cd73b7885c0caf21"
+    },
+    {
+      "id": "task-tokens",
+      "category": "ui",
+      "file": "ui/task-tokens.txt",
+      "placeholders": [
+        "[TOKEN]"
+      ],
+      "sha256": "dc4873bf2b696366daf6e3c41851938fcc63f6aeaf3ef9e78c743d3af90a3dbe"
+    },
+    {
+      "id": "compass-parts",
+      "category": "ui",
+      "file": "ui/compass-parts.txt",
+      "placeholders": [
+        "[PART]"
+      ],
+      "sha256": "71d384be4f289c387500ff06bb64315412bd9e984b09939ffc0651b923b8797f"
+    },
+    {
+      "id": "parchment-panels",
+      "category": "ui",
+      "file": "ui/parchment-panels.txt",
+      "placeholders": [],
+      "sha256": "319242ede9f7858fedb02c04625067559033f5f870b28bd779e854f9c8fbbd3b"
+    },
+    {
+      "id": "speech-bubble-parts",
+      "category": "ui",
+      "file": "ui/speech-bubble-parts.txt",
+      "placeholders": [],
+      "sha256": "5998826b7e7be13c1e2c23f23ea171e3b4a4538f3f4a1a8308d73a45486e460d"
+    },
+    {
+      "id": "audio-ambient-sea",
+      "category": "audio",
+      "file": "audio/audio-ambient-sea.txt",
+      "placeholders": [],
+      "sha256": "ede88750cbe95e8ad2419b5e93d0d67bcbca696ff70fa4966fd20c3ba82ad60b"
+    },
+    {
+      "id": "audio-ambient-details",
+      "category": "audio",
+      "file": "audio/audio-ambient-details.txt",
+      "placeholders": [
+        "[CUE]"
+      ],
+      "sha256": "44b7f01f9b9b7b92ca0cdb58cbb077e7cdbf689bbc291415d0e0dad440291f02"
+    },
+    {
+      "id": "audio-battle-cues",
+      "category": "audio",
+      "file": "audio/audio-battle-cues.txt",
+      "placeholders": [
+        "[CUE]"
+      ],
+      "sha256": "b570ba52c4af9ac46a2de1f889ff1101002941da3c22c495164a4e67308b3123"
+    },
+    {
+      "id": "audio-token-cues",
+      "category": "audio",
+      "file": "audio/audio-token-cues.txt",
+      "placeholders": [
+        "[CUE]"
+      ],
+      "sha256": "eae7bad441e6db4e5681557680db9851603a737f37cbdcc38105e129845be3ea"
+    },
+    {
+      "id": "audio-scene-music",
+      "category": "audio",
+      "file": "audio/audio-scene-music.txt",
+      "placeholders": [
+        "[CUE]"
+      ],
+      "sha256": "d70a235421de36b0e3b691bfa095c3c545ec5ab4c8710a7cd905b492a2acaa80"
+    },
+    {
+      "id": "audio-character-reactions",
+      "category": "audio",
+      "file": "audio/audio-character-reactions.txt",
+      "placeholders": [
+        "[CUE]"
+      ],
+      "sha256": "e8ab32f174fc81364301010e05aa9179dbef2db68d6f961665302630a7dd41d4"
+    }
+  ]
+}

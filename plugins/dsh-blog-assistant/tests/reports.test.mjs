@@ -27,6 +27,38 @@ test('every report travels in one bounded read request and retains paging and au
   for(const definition of reportTools){const result=await client.report(definition.report,{filters:{status:'all'}},controller.signal);assert.deepEqual(result.totals,{articleCount:145,versionCount:146});assert.equal(result.hasMore,true);assert.equal(result.timeZone,'Asia/Shanghai')}
   assert.equal(calls.length,5);assert.ok(calls.every(c=>c.action==='report'&&c.protocolVersion===1&&c.filters.status==='all'))
 })
+test('published report distinguishes a saved-draft marker from counted versions and keeps original evidence',async()=>{
+  const data={reportVersion:1,report:'ranking',complete:true,scope:{status:'published',articleUnit:'distinct rootCid',versionUnit:'cid'},
+    totals:{articleCount:145,versionCount:145,publishedArticles:145,savedDraftVersions:0,statusVersions:{publish:145}},
+    note:'文章数按 rootCid 去重，版本数包含匹配的保存稿。',page:1,pageSize:1,totalItems:145,hasMore:true,items:[{cid:1,title:'Fixture',hasSavedDraft:true}]}
+  let calls=0
+  const client=new BlogClient(config,async(_url,options)=>{calls++;const request=JSON.parse(options.body);assert.equal(request.action,'report');assert.equal(request.filters.status,'published');return Response.json({ok:true,data})})
+  const result=await client.report('ranking',{page:1,pageSize:1})
+  assert.equal(calls,1)
+  for(const key of Object.keys(data))assert.deepEqual(result[key],data[key],key)
+  assert.match(result.countScopeNote,/本次统计计入保存稿版本 0 个/)
+  assert.match(result.countScopeNote,/hasSavedDraft.*不代表该稿件版本已计入 totals/)
+  assert.match(result.countScopeNote,/不表示已读取全部明细.*hasMore/)
+})
+test('all-scope report explains the actual saved-draft count without inferring it from version or article counts',async()=>{
+  for(const totals of [{articleCount:8,versionCount:8,savedDraftVersions:0},{articleCount:8,versionCount:10,savedDraftVersions:3}]){
+    const data={reportVersion:1,report:'overview',complete:true,scope:{status:'all'},totals}
+    const client=new BlogClient(config,async()=>Response.json({ok:true,data}))
+    const result=await client.report('overview',{filters:{status:'all'}})
+    assert.deepEqual(result.totals,data.totals)
+    assert.ok(result.countScopeNote.includes(`本次统计计入保存稿版本 ${totals.savedDraftVersions} 个`))
+  }
+})
+test('missing or invalid saved-draft counts stay unknown even when published scope or equal totals suggest zero',async()=>{
+  for(const value of [undefined,null,'0',-1,0.5]){
+    const totals={articleCount:145,versionCount:145,...(value===undefined?{}:{savedDraftVersions:value})}
+    const client=new BlogClient(config,async()=>Response.json({ok:true,data:{reportVersion:1,report:'ranking',complete:true,scope:{status:'published'},totals}}))
+    const result=await client.report('ranking')
+    assert.deepEqual(result.totals,totals)
+    assert.match(result.countScopeNote,/无法确认/)
+    assert.doesNotMatch(result.countScopeNote,/本次统计计入保存稿版本 0 个/)
+  }
+})
 test('unsupported, incomplete and oversized reports never trigger expensive search fallback',async()=>{
   for(const data of [{},{reportVersion:1,report:'catalog',complete:false},{reportVersion:1,report:'overview',complete:true}]){
     let calls=0;const client=new BlogClient(config,async()=>{calls++;return Response.json({ok:true,data})})

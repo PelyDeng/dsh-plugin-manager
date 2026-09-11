@@ -293,7 +293,7 @@ DSH Native Agent 收到的 Tool 定义只包含名称、说明和入参，不直
 | 1 | `closedoff_warning_page` | POST | `/risk-warning/riskWarning/page` | 预警、报警、事故、事件分页记录 |
 | 2 | `closedoff_warning_detail` | GET | `/risk-warning/riskWarning/one` | 单条预警及处置、派发详情 |
 | 3 | `closedoff_warning_count` | GET | `/risk-warning/riskWarning/countByWarningStatus` | 按状态过滤后的报警数量 |
-| 4 | `closedoff_warning_module_list` | GET | `/risk-warning/riskWarningModule/getList` | 报警模块及子类型字典 |
+| 4 | `closedoff_warning_module_list` | GET | `/risk-warning/riskWarningModule/getList` | 模块字典记录（id、name、code） |
 | 5 | `closedoff_warning_count_by_level` | POST | `/risk-warning/riskWarning/countByWarningLevel` | 红、橙、黄、蓝等级数量 |
 | 6 | `closedoff_reservation_approval_page` | POST | `/closed-off/reservation/approvalPageV2` | 待审批及各阶段预约分页 |
 | 7 | `closedoff_reservation_completed_page` | POST | `/closed-off/reservation/completedPageV2` | 已完成、已审批预约分页 |

@@ -10,6 +10,7 @@ import {BlogJobs} from '../src/jobs.mjs'
 import {BlogChat} from '../src/chat.mjs'
 import {BlogApplication} from '../src/application.mjs'
 import {projectChat} from '../src/chat-history.mjs'
+import {createBlogParticipant} from '../src/participant.ts'
 
 const actor={namespace:'user',userId:'writer',sessionId:'login'},owner='user:writer'
 const tick=()=>new Promise(r=>setTimeout(r,10))
@@ -58,7 +59,7 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
     tools:{register(tool){tools.set(tool.name,tool);return()=>tools.delete(tool.name)}},
     agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{resolveModelInfo:async()=>({inputModalities:['text']}),resolveCallConfig:async value=>value},
     sessionController:{
-      async modelCatalog(){return{groups:[{id:'test',name:'测试',models:[{id:'test',name:'文本模型'}]},{id:'glm-fixture',name:'视觉测试',models:[{id:'vision',name:'视觉模型'}]}],failures:[]}},
+      async modelCatalog(){return{groups:[{id:'test',name:'测试',models:[{id:'test',name:'文本模型'}]},{id:'glm-fixture',name:'视觉测试',models:[{id:'vision',name:'视觉模型'}]},{id:'new-provider',name:'新默认',models:[{id:'new-model',name:'新模型'}]}],failures:[]}},
       async selectModel({sessionId,...selected}){const h=handles.findLast(h=>h.agent.id===sessionId&&!h.disposed);assert.ok(h,'Agent must be open');h.emit('model/selection',selected);h.options.agentOptions={...selected};ctx.agentDefaultModel.currentSelection=()=>selected;return{selected}},
     },
     sessionProjections:{restore(_checkpoint,events){return{checkpoint:{modelSelection:{val:{pending:null,lastUsed:events.findLast(e=>e.type==='request/header')?.data.header.config??null}}}}}},
@@ -73,7 +74,7 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
       session.snapshotEvents=()=>[...events]
       const agent={id:options.sessionId,ctx:scope.ctx,session,options:{},status:'idle',cancel(){handle.cancelled=true},whenIdle:async()=>{},followup(message){handle.message=message;handle.emit('user/message',message);handle.emit('turn/start',{turn:'turn-'+events.length});handle.emit('request/header',{header:{config:options.agentOptions}})}}
       const unregister=root.agents.register(agent)
-      const handle={agent,options,events,cancelled:false,disposed:false,emit(type,data){const event={type,data,seq:events.length,time:1000+events.length*100};events.push(event);root.emit('session/event',session,event)},async dispose(){if(handle.disposed)return;handle.disposed=true;await unregister();await scope.dispose()}}
+      const handle={agent,options,events,cancelled:false,disposed:false,emit(type,data){const event={type,data,seq:events.length,time:1000+events.length*100};root.emit('session/event',session,event);events.push(event)},async dispose(){if(handle.disposed)return;handle.disposed=true;await unregister();await scope.dispose()}}
       handle.sections=[];handle.contexts=[];options.setup({systemPrompt:{section(s){handle.sections.push(s)},context(c){handle.contexts.push(c)}},tools:{restrict:rule=>{handle.allowed=rule.allow}}});handles.push(handle);return handle
     },async resume(options){return this.create({...options,sessionId:options.resumeSessionId,seed:saved.get(String(options.resumeSessionId))})}},
   }
@@ -83,7 +84,9 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
   const chat=new BlogChat(ctx,access,store,index,attachments,jobs,app,sdk,3000)
   t.after(async()=>{releaseOpen?.();releaseFlush?.();for(const release of releaseGates)release();await chat.close();await jobs.close();for(const dispose of disposers.reverse())await dispose?.();store.close();await runtimeJobs.dispose();await registry.dispose()})
   const conversation=chat.create(actor,'conversation-123')
-  return{root,store,index,chat,handles,tools,blog,feedbackCalls,conversation,releaseOpen,releaseFlush,holdNextFlush(){let release;nextFlushGate=new Promise(r=>{release=r});releaseGates.push(release);return release},revoke(){revoked=true},send:(extra={})=>chat.send(actor,{conversationId:conversation.id,requestId:'request-123',text:'看看博客最近情况',research:true,...extra})}
+  return{root,store,index,chat,handles,tools,blog,feedbackCalls,conversation,releaseOpen,releaseFlush,
+    holdModel(method){const target=method==='resolveCallConfig'?ctx.llm:ctx.sessionController,original=target[method],entered=Promise.withResolvers(),gate=Promise.withResolvers();releaseGates.push(gate.resolve);target[method]=async(...args)=>{entered.resolve();await gate.promise;return original.apply(target,args)};return{entered:entered.promise,release:gate.resolve}},
+    holdNextFlush(){let release;nextFlushGate=new Promise(r=>{release=r});releaseGates.push(release);return release},revoke(){revoked=true},send:(extra={})=>chat.send(actor,{conversationId:conversation.id,requestId:'request-123',text:'看看博客最近情况',research:true,...extra})}
 }
 
 test('official first-prompt titles update after the answer closes and never overwrite a manual name',async t=>{
@@ -103,6 +106,22 @@ test('official first-prompt titles update after the answer closes and never over
   assert.equal(f.index.get(owner,f.conversation.id).title,'宿主再次手动更名')
   f.root.emit('session/event',{id:'another-plugin-session'},{type:'session/title',data})
   assert.equal(f.chat.list(actor,0,'').items.length,1)
+})
+
+test('sending after model validation preserves titles changed while validation was waiting',async t=>{
+  for(const source of ['manual','provider'])await t.test(source,async t=>{
+    const f=await fixture(t)
+    await f.send();await tick();complete(f.handles[0]);await tick()
+    const gate=f.holdModel('resolveCallConfig')
+    const sending=f.send({requestId:'title-after-validation',modelSelection:{provider:'glm-fixture',model:'vision'}})
+    await gate.entered
+    const title=source==='manual'?'等待选模时手动保存的标题':'迟到的官方博客标题'
+    if(source==='manual')f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title})
+    else f.handles[0].emit('session/title',{title,messageSeqs:[0],source:{kind:'provider',provider:'first-prompt-llm'}})
+    assert.equal(f.chat.list(actor,0,'').items[0].title,title)
+    gate.release();await sending;await tick()
+    assert.equal(f.chat.list(actor,0,'').items[0].title,title)
+  })
 })
 function complete(handle,id='answer-1'){
   const turn=handle.events.findLast(e=>e.type==='turn/start').data.turn
@@ -292,12 +311,29 @@ test('separate chat operations reuse the same imported version without losing a 
   await f.send();await tick()
   const tool=f.tools.get('blog_select_draft'),args={cid:338,variant:'published'}
   const first=await tool.execute(args,{agent:f.handles[0].agent})
+  assert.deepEqual(first,JSON.parse(JSON.stringify(first)),'selected draft without an explicit comment setting must remain lossless JSON')
   const proposal=f.store.propose(owner,first.draftId,first.revision,{text:'保留候选'},[])
   complete(f.handles[0]);await tick()
   await f.send({requestId:'request-second',text:'继续修改该文章'});await tick()
   const next=await tool.execute(args,{agent:f.handles.at(-1).agent})
+  assert.deepEqual(next,JSON.parse(JSON.stringify(next)))
   assert.equal(next.draftId,first.draftId);assert.equal(next.proposalId,proposal.id)
   assert.equal(f.store.list(owner).length,1)
+})
+
+test('article tools preserve explicit false and omit unavailable optional values',async t=>{
+  const f=await fixture(t),draft=f.store.create(owner,{allowComment:false})
+  await f.send();await tick();const execution={agent:f.handles[0].agent}
+  const selected=await f.tools.get('blog_select_draft').execute({draftId:draft.id},execution)
+  assert.equal(selected.allowComment,false);assert.deepEqual(selected,JSON.parse(JSON.stringify(selected)))
+  for(const allowComment of [undefined,0]){
+    f.blog.get=async()=>({published:{cid:338,title:'原文',text:'正文',format:'markdown',tags:[],categories:[],...(allowComment===undefined?{}:{raw:{allowComment}})},savedDraft:null})
+    const read=await f.tools.get('blog_read_post').execute({cid:338},execution)
+    assert.deepEqual(read,JSON.parse(JSON.stringify(read)))
+    assert.equal(Object.hasOwn(read.published,'allowComment'),allowComment!==undefined)
+    if(allowComment!==undefined)assert.equal(read.published.allowComment,false)
+    assert.equal(Object.hasOwn(read.published,'url'),false)
+  }
 })
 
 test('concurrent conversations sharing an import cannot replace each others candidates',async t=>{
@@ -369,7 +405,7 @@ test('feedback checks owner and completed message before the official service; b
 })
 
 test('stop during Agent creation waits for that handle and does not release the conversation early',async t=>{
-  const f=await fixture(t,{delayedOpen:true});await f.send();await tick()
+  const f=await fixture(t,{delayedOpen:true}),original=await f.send();await tick()
   let stopped=false;const stopping=f.chat.stop(actor,f.conversation.id).then(()=>{stopped=true})
   await tick();assert.equal(stopped,false)
   await assert.rejects(f.send({requestId:'request-456'}),/对话|上一轮/)
@@ -377,6 +413,28 @@ test('stop during Agent creation waits for that handle and does not release the 
   assert.equal(f.chat.active.size,0)
   assert.equal(f.index.get(owner,f.conversation.id).ready,true)
   await f.send({requestId:'request-after-stop'});await tick();assert.equal(f.handles[1].options.resumeSessionId,f.conversation.id)
+  await f.chat.settleAccepted(actor,f.conversation.id,original.id)
+  assert.equal(f.chat.active.size,1);assert.equal(f.handles[1].cancelled,false);assert.equal(f.handles[1].disposed,false)
+})
+
+test('participant revocation waits for original Agent creation and durability before rejecting',async t=>{
+  const f=await fixture(t,{delayedOpen:true,delayedFlush:true})
+  const participant=createBlogParticipant({access:f.chat.access,chat:f.chat,index:f.index,store:f.store,routePrefix:'/blog'})
+  let settled=false
+  const running=participant.run({actor,missionId:'mission-revoked',requestId:'request-revoked',message:'查询博客',signal:new AbortController().signal,onProgress(){}})
+  const rejected=assert.rejects(running,/revoked/).then(()=>{settled=true})
+  await tick()
+  const [conversationId,b]=[...f.chat.active.entries()][0]
+  await f.chat.settleAccepted({...actor,userId:'another-user'},conversationId,b.request.id)
+  assert.equal(b.stopped,false)
+  f.revoke();f.chat.emit(conversationId,{type:'changed'})
+  await tick()
+  assert.equal(settled,false);assert.equal(f.chat.active.size,1);assert.equal(f.handles.length,0)
+  f.releaseOpen();await tick()
+  assert.equal(settled,false);assert.equal(f.handles[0].disposed,false);assert.equal(f.handles[0].message,undefined)
+  f.releaseFlush();await rejected
+  assert.equal(f.chat.active.size,0);assert.equal(f.index.request(owner,b.request.id).status,'interrupted')
+  assert.equal(f.handles[0].disposed,true);assert.equal(f.chat.listeners.size,0)
 })
 
 test('stopping during first durability checkpoint never follows up or registers a new Job',async t=>{
@@ -539,6 +597,83 @@ test('conversation management tool prepares a card without nonce and executes on
   await f.chat.operationAction(actor,{conversationId:f.conversation.id,id:card.id,nonce:card.nonce,operation:'confirm'})
   assert.equal(writes,1)
 })
+
+test('default, resumed history and fork keep valid reasoning effort without changing the default',async t=>{
+  const f=await fixture(t),pinned={provider:'test',model:'test',reasoningEffort:'high'}
+  f.chat.ctx.agentDefaultModel.currentSelection=()=>pinned
+  await f.send();await tick();assert.deepEqual(f.handles[0].options.agentOptions,pinned);complete(f.handles[0]);await tick()
+  const current={provider:'glm-fixture',model:'vision',reasoningEffort:'low'}
+  f.chat.ctx.agentDefaultModel.currentSelection=()=>current
+  await f.send({requestId:'reasoning-resume'});await tick();assert.deepEqual(f.handles[1].options.agentOptions,pinned);complete(f.handles[1],'reasoning-answer');await tick()
+  await f.chat.fork(actor,{conversationId:f.conversation.id,messageId:'reasoning-answer',requestId:'reasoning-fork'})
+  assert.deepEqual(f.handles[2].options.agentOptions,pinned)
+  assert.deepEqual(f.chat.ctx.agentDefaultModel.currentSelection(),current)
+  assert.ok(f.handles.every(h=>!h.events.some(e=>e.type==='model/selection')))
+  await f.send({requestId:'reasoning-explicit',modelSelection:{provider:'glm-fixture',model:'vision'}});await tick()
+  assert.deepEqual(f.handles[3].options.agentOptions,{provider:'glm-fixture',model:'vision'})
+  assert.deepEqual(f.chat.ctx.agentDefaultModel.currentSelection(),{provider:'glm-fixture',model:'vision'})
+});
+
+test('removed defaults and restored historical models fail before Agent creation with no fallback',async t=>{
+  const f=await fixture(t)
+  f.chat.ctx.agentDefaultModel.currentSelection=()=>({provider:'test',model:'removed'})
+  const invalid=await f.send();await tick()
+  assert.equal(f.handles.length,0);assert.match(f.index.request(owner,invalid.id).message,/不在当前目录/)
+  f.chat.ctx.agentDefaultModel.currentSelection=()=>({provider:'test',model:'test'})
+  await f.send({requestId:'valid-before-removal'});await tick();complete(f.handles[0]);await tick()
+  f.chat.ctx.sessionController.modelCatalog=async()=>({groups:[{id:'glm-fixture',name:'Vision',models:[{id:'vision',name:'Vision'}]}],failures:[]})
+  const current={provider:'glm-fixture',model:'vision'};f.chat.ctx.agentDefaultModel.currentSelection=()=>current
+  const restored=await f.send({requestId:'removed-history'});await tick()
+  assert.equal(f.handles.length,1);assert.match(f.index.request(owner,restored.id).message,/不在当前目录/)
+  await assert.rejects(f.chat.fork(actor,{conversationId:f.conversation.id,messageId:'answer-1',requestId:'removed-history-fork'}),/不在当前目录/)
+  assert.equal(f.handles.length,1);assert.deepEqual(f.chat.ctx.agentDefaultModel.currentSelection(),current)
+});
+
+for(const method of ['modelCatalog','resolveCallConfig'])test(`revocation during ${method} prevents an implicit Agent start`,async t=>{
+  const f=await fixture(t),gate=f.holdModel(method),sent=await f.send(),b=f.chat.active.get(f.conversation.id)
+  await gate.entered;f.revoke();gate.release();await b.runPromise
+  assert.equal(f.handles.length,0);assert.equal(f.index.request(owner,sent.id).status,'failed')
+  assert.deepEqual(f.chat.ctx.agentDefaultModel.currentSelection(),{provider:'test',model:'test'})
+});
+
+test('a concurrent turn that starts during explicit route validation retains the busy guard',async t=>{
+  const f=await fixture(t),gate=f.holdModel('resolveCallConfig')
+  const pending=f.send({modelSelection:{provider:'glm-fixture',model:'vision'}})
+  const rejected=assert.rejects(pending,/正在回答/)
+  await gate.entered;await f.send({requestId:'concurrent-turn'});gate.release();await rejected;await tick()
+  assert.equal(f.handles.length,1);assert.equal(f.handles[0].options.agentOptions.model,'test')
+  assert.equal(f.handles[0].events.filter(e=>e.type==='model/selection').length,0)
+});
+
+test('revocation inside official selection prevents session log and default writes before followup',async t=>{
+  const f=await fixture(t),gate=f.holdModel('selectModel')
+  await f.send({modelSelection:{provider:'glm-fixture',model:'vision'}});await gate.entered
+  const b=f.chat.active.get(f.conversation.id),h=f.handles[0],otherDefault={provider:'test',model:'test',reasoningEffort:'low'}
+  f.chat.ctx.agentDefaultModel.currentSelection=()=>otherDefault
+  f.revoke();gate.release();await b.runPromise
+  assert.equal(h.events.some(e=>e.type==='model/selection'),false)
+  assert.deepEqual(f.chat.ctx.agentDefaultModel.currentSelection(),otherDefault)
+  assert.equal(h.message,undefined);assert.equal(h.disposed,true)
+  assert.doesNotThrow(()=>f.root.emit('session/event',h.agent.session,{type:'model/selection',data:{provider:'test',model:'test'}}),'selection guard must be disposed after rejection')
+});
+
+test('participant uses the same validated default and blocks an unroutable model before a native turn',async t=>{
+  const f=await fixture(t)
+  f.chat.ctx.llm.resolveCallConfig=async()=>{throw new Error('fixture route unavailable')}
+  const participant=createBlogParticipant({access:f.chat.access,chat:f.chat,index:f.index,store:f.store,routePrefix:'/blog'})
+  const result=await participant.run({actor,missionId:'route-blocked-mission',requestId:'route-blocked-request',message:'查询博客',signal:new AbortController().signal,onProgress(){}})
+  assert.equal(result.status,'failed');assert.equal(f.handles.length,0)
+  assert.equal(f.chat.listeners.size,0);assert.deepEqual(f.chat.ctx.agentDefaultModel.currentSelection(),{provider:'test',model:'test'})
+});
+
+test('fork model lookup rechecks the original actor before creating its Agent',async t=>{
+  const f=await fixture(t);await f.send();await tick();complete(f.handles[0]);await tick()
+  const gate=f.holdModel('resolveCallConfig')
+  const pending=f.chat.fork(actor,{conversationId:f.conversation.id,messageId:'answer-1',requestId:'fork-revoked-route'})
+  const rejected=assert.rejects(pending,/revoked/)
+  await gate.entered;f.revoke();gate.release();await rejected
+  assert.equal(f.handles.length,1);assert.equal(f.chat.forks.size,0);assert.equal(f.chat.forkSources.size,0)
+});
 
 test('chat taxonomy tools support category/tag reads and all writes through versioned user confirmation',async t=>{
   for(const kind of ['category','tag'])for(const operation of ['create','update','delete'])await t.test(`${kind} ${operation}`,async t=>{

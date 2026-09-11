@@ -25,6 +25,12 @@ import {createConversationHistory} from './conversation-history.js';
     if (titleRefresh) clearTimeout(titleRefresh.timer);
     titleRefresh = undefined;
   }
+  function syncConversationUrl(id) {
+    var url = new URL(window.location.href);
+    if (id) url.searchParams.set('conversationId', id);
+    else url.searchParams.delete('conversationId');
+    window.history.replaceState(window.history.state, '', url);
+  }
   function startTitleRefresh(id) {
     stopTitleRefresh();
     var pending = titleRefresh = { id: id, epoch: identityEpoch, until: Date.now() + 65000 };
@@ -609,6 +615,7 @@ import {createConversationHistory} from './conversation-history.js';
     if (activeRestoreController) activeRestoreController.abort();
     activeRestoreController = null;
     conversationId = id;
+    syncConversationUrl(conversationId);
     if (sidebar) sidebar.render();
     localStorage.setItem(storageKey, conversationId);
     followBottom = true;
@@ -932,6 +939,7 @@ import {createConversationHistory} from './conversation-history.js';
           admitted=true;
           picker.accept(obj.model);
           conversationId = obj.conversationId;
+          syncConversationUrl(conversationId);
           if (freshConversation) startTitleRefresh(conversationId);
           if (sidebar) void sidebar.refresh();
           localStorage.setItem(storageKey, conversationId);
@@ -1157,6 +1165,7 @@ import {createConversationHistory} from './conversation-history.js';
     if (activeRestoreController) activeRestoreController.abort();
     activeRestoreController = null;
     conversationId = '';
+    syncConversationUrl(conversationId);
     if (sidebar) sidebar.render();
     void picker.refresh();
     followBottom = true;
@@ -1265,7 +1274,9 @@ import {createConversationHistory} from './conversation-history.js';
     identityKey = identity.key;
     storageKey = 'dsh_closedoff_conversationId:' + identity.key;
     localStorage.removeItem('dsh_closedoff_conversationId');
-    conversationId = localStorage.getItem(storageKey) || '';
+    var linkedConversation = new URLSearchParams(window.location.search).get('conversationId') || '';
+    conversationId = /^closedoff-web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(linkedConversation)
+      ? linkedConversation : localStorage.getItem(storageKey) || '';
     identityReady = true;
     initHistory();
     $('#currentUser').textContent = identity.label;

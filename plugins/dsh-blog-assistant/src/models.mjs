@@ -1,4 +1,5 @@
 import {invariant} from './settings.mjs'
+import {defaultConversationModel,requestedConversationModel} from '@dsh-plugin-manager/plugin-kit/models'
 
 export function historyHasImages(events){
   return events.some(event=>event.type==='user/message'&&event.data.content?.some(part=>part.type==='image'))
@@ -6,8 +7,9 @@ export function historyHasImages(events){
 
 /** Select once before Agent creation; image history must keep a capable model. */
 export async function selectBlogModel(ctx,models,hasImages,signal){
-  const selected=(hasImages?models?.vision:models?.text)??models?.text??ctx.agentDefaultModel.currentSelection()
-  const selection={provider:selected.provider,model:selected.model}
+  signal?.throwIfAborted()
+  const selected=(hasImages?models?.vision:models?.text)??models?.text??defaultConversationModel(ctx)
+  const selection={provider:selected.provider,model:selected.model,...(selected.reasoningEffort===undefined?{}:{reasoningEffort:selected.reasoningEffort})}
   if(selection.provider==='blog-zhipu'){
     const credentials=ctx.get('credentials')
     invariant(typeof credentials?.describe==='function','宿主未提供官方模型凭据服务',503)
@@ -15,6 +17,9 @@ export async function selectBlogModel(ctx,models,hasImages,signal){
     signal?.throwIfAborted()
     invariant(status.configured,'请先在“账号与应用 → 模型设置 → 智谱 GLM”中配置 API Key',422)
   }
+  // 只验证目录与路由；隐式恢复保留原推理强度，不提交选择或改写宿主默认。
+  await requestedConversationModel(ctx,selection)
+  signal?.throwIfAborted()
   if(hasImages){
     const info=await ctx.llm.resolveModelInfo(selection.provider,selection.model,signal)
     invariant(info.inputModalities?.includes('image'),'当前模型未声明支持图片，请切换到支持图片的模型再试',422)

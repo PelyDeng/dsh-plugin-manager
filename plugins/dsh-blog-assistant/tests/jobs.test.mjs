@@ -11,24 +11,27 @@ const tick=()=>new Promise(r=>setTimeout(r,5)),actor={namespace:'user',userId:'w
 async function fixture(t,{delayedIdle=false,images=false}={}) {
   const root=new Context();const agentPlugin=root.plugin(AgentRegistry);await agentPlugin;const jobsPlugin=root.plugin(LocalJobRegistry);await jobsPlugin
   const store=new BlogStore(':memory:'),draft=store.create('user:writer'),handles=[],tools=new Map(),disposers=[]
-  let revoked=false,releaseIdle
+  let revoked=false,releaseIdle;const releaseGates=[]
   const access={assert(a){assert.ok(!revoked&&a.sessionId==='login','revoked')}}
-  const ctx={root,jobs:root.jobs,get(name){return name==='web'?{search:async()=>({sources:[{url:'https://example.com'}]})}:undefined},
+  const ctx={root,jobs:root.jobs,get(name){return name==='web'?{search:async()=>({sources:[{url:'https://example.com'}]})}:this[name]},
     effect(fn){disposers.push(fn())},on:root.on.bind(root),tools:{register(tool){tools.set(tool.name,tool);return()=>tools.delete(tool.name)}},
-    agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{resolveModelInfo:async()=>({inputModalities:['text']})},
+    agentDefaultModel:{currentSelection:()=>({provider:'test',model:'test'})},llm:{resolveModelInfo:async()=>({inputModalities:['text']}),resolveCallConfig:async selection=>selection},
+    sessionController:{async modelCatalog(){return{groups:[{id:'test',name:'Test',models:[{id:'test',name:'Test'}]}],failures:[]}},selectModel(){assert.fail('article jobs must not change the default')}},
     agents:{async create(options){
       const scope=root.plugin(()=>{});let idle=Promise.resolve()
       const agent={id:options.sessionId,ctx:scope.ctx,session:Session.create(SessionId(options.sessionId)),options:{},status:'idle',cancel(){handle.cancelled=true},whenIdle(){return idle},followup(message){handle.message=message;if(delayedIdle)idle=new Promise(r=>{releaseIdle=r})}}
       const unregister=root.agents.register(agent)
-      const handle={agent,cancelled:false,disposed:false,async dispose(){handle.disposed=true;await unregister();await scope.dispose()}}
+      const handle={agent,options,cancelled:false,disposed:false,async dispose(){handle.disposed=true;await unregister();await scope.dispose()}}
       handle.sections=[];handle.contexts=[];options.setup({systemPrompt:{section(s){handle.sections.push(s)},context(c){handle.contexts.push(c)}},tools:{restrict(rule){handle.allowed=rule.allow}}});handles.push(handle);return handle
     }},
   }
   const attachments={freeze:()=>images?[{id:'a',version:1,name:'image',image:{attachmentId:'x'}}]:[{id:'a',version:1,name:'private.txt',range:null,unit:'行',units:[{number:1,text:'READ-MARKER-829'}]}]}
   const jobs=new BlogJobs(ctx,access,store,{list:async()=>({items:[]})},attachments,1000)
-  t.after(async()=>{releaseIdle?.();await jobs.close();for(const dispose of disposers.reverse())await dispose?.();store.close();await jobsPlugin.dispose();await agentPlugin.dispose()})
+  t.after(async()=>{releaseIdle?.();for(const release of releaseGates)release();await jobs.close();for(const dispose of disposers.reverse())await dispose?.();store.close();await jobsPlugin.dispose();await agentPlugin.dispose()})
   const request={callerId:'router',requestId:'request-123',draftId:draft.id,expectedRevision:1,instruction:'read attachment',research:true}
-  return {root,jobs,store,draft,handles,tools,request,access,release(){releaseIdle?.()},revoke(){revoked=true;jobs.recheck()}}
+  return {root,ctx,jobs,store,draft,handles,tools,request,access,
+    holdModel(method){const target=method==='resolveCallConfig'?ctx.llm:ctx.sessionController,original=target[method],entered=Promise.withResolvers(),gate=Promise.withResolvers();releaseGates.push(gate.resolve);target[method]=async(...args)=>{entered.resolve();await gate.promise;return original.apply(target,args)};return{entered:entered.promise,release:gate.resolve}},
+    release(){releaseIdle?.()},revoke({recheck=true}={}){revoked=true;if(recheck)jobs.recheck()}}
 }
 test('official Jobs owns settlement, reports completion and isolates the exact Agent owner',async t=>{
   const f=await fixture(t),job=await f.jobs.start(actor,f.request);await tick()
@@ -62,4 +65,33 @@ test('concurrent editor jobs cannot replace a candidate written after their inpu
   assert.equal(f.store.get('user:writer',f.draft.id).proposal.id,first.proposalId)
   const continued=await tool.execute({text:'同任务继续调整'},{agent:f.handles[0].agent})
   assert.equal(f.store.get('user:writer',f.draft.id).proposal.id,continued.proposalId)
+})
+
+test('configured article models retain reasoning effort and validate without changing the default',async t=>{
+  const f=await fixture(t),selected={provider:'test',model:'test',reasoningEffort:'high'}
+  f.jobs.models={text:selected};await f.jobs.start(actor,f.request);await tick()
+  assert.deepEqual(f.handles[0].options.agentOptions,selected)
+  assert.deepEqual(f.ctx.agentDefaultModel.currentSelection(),{provider:'test',model:'test'})
+})
+
+test('article jobs reject removed configured models and failed routes without falling back',async t=>{
+  const f=await fixture(t);f.jobs.models={text:{provider:'test',model:'removed'}}
+  const removed=await f.jobs.start(actor,f.request);await tick()
+  assert.equal(f.handles.length,0);assert.match(f.jobs.get(actor,removed.id).error.message,/不在当前目录/)
+  f.jobs.models={};f.ctx.llm.resolveCallConfig=async()=>{throw new Error('fixture route unavailable')}
+  const unroutable=await f.jobs.start(actor,{...f.request,requestId:'unroutable'});await tick()
+  assert.equal(f.handles.length,0);assert.match(f.jobs.get(actor,unroutable.id).error.message,/路由当前不可用/)
+})
+
+for(const method of ['modelCatalog','resolveCallConfig'])test(`article actor is rechecked after ${method} without relying on the revocation timer`,async t=>{
+  const f=await fixture(t),gate=f.holdModel(method),job=await f.jobs.start(actor,f.request),b=f.jobs.active.get(job.id)
+  await gate.entered;f.revoke({recheck:false});gate.release();await b.runPromise
+  assert.equal(f.handles.length,0);assert.equal(f.jobs.active.size,0)
+  assert.equal(f.store.jobGet('user:writer',job.id).status,'failed')
+})
+
+test('cancelling an article job during model validation never starts a late Agent',async t=>{
+  const f=await fixture(t),gate=f.holdModel('resolveCallConfig'),job=await f.jobs.start(actor,f.request),b=f.jobs.active.get(job.id)
+  await gate.entered;f.jobs.cancel(actor,job.id);gate.release();await b.runPromise
+  assert.equal(f.handles.length,0);assert.equal(f.jobs.get(actor,job.id).status,'cancelled')
 })

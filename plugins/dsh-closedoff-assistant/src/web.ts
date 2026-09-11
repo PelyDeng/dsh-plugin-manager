@@ -450,10 +450,11 @@ export async function installWeb(ctx: Context, config: Config, manager: Conversa
           listeners.delete(sink)
           if (listeners.size === 0) waiters.delete(conversation.id)
           active.delete(conversation.id)
-          closeStreams.delete(finish)
+          closeStreams.delete(close)
           recheckStreams.delete(checkAccess)
           if (!res.writableEnded) res.end()
         }
+        const close = () => { manager.abort(conversation.id); finish() }
         const timeout = setTimeout(() => manager.abort(conversation.id), config.turnTimeoutMs)
         const checkAccess = () => {
           try { access.assert(actor) } catch {
@@ -608,7 +609,7 @@ export async function installWeb(ctx: Context, config: Config, manager: Conversa
           }
         }
         listeners.add(sink)
-        closeStreams.add(finish)
+        closeStreams.add(close)
         recheckStreams.add(checkAccess)
         send({ type: 'conversation', conversationId: conversation.id, model: selected })
         res.once('close', () => {
@@ -616,8 +617,10 @@ export async function installWeb(ctx: Context, config: Config, manager: Conversa
           finish()
         })
         try {
-          manager.followup(conversation, message, actor)
+          if (finished) return
+          await manager.followup(conversation, message, actor)
         } catch (caught: unknown) {
+          send({ type: 'error', message: redactVisibleText(caught instanceof Error ? caught.message : '消息发送失败，请重试') })
           finish()
           throw caught
         }

@@ -1,0 +1,12 @@
+- insert:
+    - id: pirate-command
+      name: dsh-pirate-command
+      config:
+        accessMode: !!js process.env.DSH_ACCESS_MODE ?? 'authenticated'
+        publicOrigin: !!js process.env.DSH_PUBLIC_ORIGIN ?? ''
+        routePrefix: /pirate
+        historyPath: ''
+        turnTimeoutMs: 600000
+        authRecheckMs: 1000
+        maxActiveMissions: 16
+        maxMessageChars: 8000

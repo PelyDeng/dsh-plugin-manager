@@ -138,7 +138,6 @@ const LABELS: Record<string, string> = {
   commonCarNum: '普通车预约', commonTruckNum: '普通货车预约', hazardousCarNum: '危化车预约',
   hazardousWasteCarNum: '危废车预约', pendingApprovalNum: '待审批', submittedNum: '已提交',
   device_id: '查询标识', start_time: '开始时间', time_len: '时长',
-  moduleType: '模块类型', moduleTypeName: '模块名称', subModuleType: '子类型', subModuleTypeName: '子类型名称',
   todayPending: '今日待审', todayCompleted: '今日已完成', avgProcessMinutes: '平均处理分钟', passRate: '通过率',
   controlName: '控制区', controlType: '控制区类型', controlAreaCount: '控制区数量',
   abnormalInspectionCount: '异常巡检', alarmCount: '报警数量',
@@ -147,7 +146,7 @@ const LABELS: Record<string, string> = {
 const TITLE_KEYS = new Set([
   'carNum', 'carNumb', 'vehicleNo', 'realName', 'userName', 'name', 'deviceName', 'groupName', 'title', 'address',
   'companyName', 'parkingAreaName', 'parkingGroupName', 'districtName',
-  'typeCode', 'moduleTypeName', 'subModuleTypeName', 'controlName',
+  'typeCode', 'controlName',
 ])
 
 const TOOL_FIELDS: Partial<Record<string, readonly string[]>> = {
@@ -179,7 +178,6 @@ const TOOL_FIELDS: Partial<Record<string, readonly string[]>> = {
   closedoff_warning_page: [
     'title', 'warningType', 'warningLevel', 'warningStatus', 'warningStartTime', 'companyName', 'deviceName', 'carNum',
   ],
-  closedoff_warning_module_list: ['moduleTypeName', 'moduleType', 'subModuleTypeName', 'subModuleType'],
   closedoff_waybill_page: [
     'waybillNumber', 'electronicWaybill', 'startingPoint', 'carNumb', 'trailerLicensePlate', 'companyName', 'realName',
   ],

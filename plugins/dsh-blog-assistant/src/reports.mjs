@@ -10,7 +10,7 @@ const filters={type:'object',additionalProperties:false,description:'组合条�
 }}
 const paging={page:{type:'integer',description:'从1开始，按返回的 hasMore 决定是否继续'},pageSize:{type:'integer',description:'每页1至500条，默认500；统计总数不受分页影响'}}
 export const reportTools=[
-  {name:'blog_get_statistics',label:'统计博客概况',report:'overview',description:'统计文章、版本、公开状态、保存稿、缺分类/标签及评论审核状态。只返回程序计算的数字，不拉取标题。问有多少篇、待处理多少、博客概况时优先使用；articleCount按rootCid去重，versionCount包含保存稿。',parameters:{filters}},
+  {name:'blog_get_statistics',label:'统计博客概况',report:'overview',description:'统计文章、版本、公开状态、保存稿、缺分类/标签及评论审核状态。只返回程序计算的数字，不拉取标题。问有多少篇、待处理多少、博客概况时优先使用；articleCount按rootCid去重，versionCount仅计算匹配当前筛选的版本；计入的保存稿数量以totals.savedDraftVersions为准，缺失不能当作0。',parameters:{filters}},
   {name:'blog_taxonomy_statistics',label:'统计分类与标签',report:'taxonomy',description:'查询分类树或标签及文章分布。返回完整路径、父级、直接关联文章数、含子级去重数；不依赖Typecho缓存count。空分类/标签指当前筛选范围没有匹配文章；组间可能重叠，不能相加。',parameters:{kind:{type:'string',enum:['category','tag']},emptyOnly:{type:'boolean'},...paging,filters}},
   {name:'blog_group_articles',label:'按维度整理文章标题',report:'catalog',description:'一次整理按分类、标签、年月或不分组的精简标题目录，已计算每组文章数及全局去重总数。需要“按分类整理博客并列标题”时直接用它，不再遍历普通搜索页手工分组。默认公开文章、分类分组、每页500条分组关联；有hasMore才续页。',parameters:{groupBy:{type:'string',enum:['category','tag','month','year','none']},...paging,filters}},
   {name:'blog_activity_statistics',label:'统计写作时间分布',report:'timeline',description:'按上海时区日/月/年统计所选版本的时间分布。默认modified，只代表各版本最后修改时间，不是修改次数；created是文章设定时间，不代表首次发布。无记录的时间桶不返回；需要总数无需拉取文章。',parameters:{groupBy:{type:'string',enum:['day','month','year']},...paging,filters}},

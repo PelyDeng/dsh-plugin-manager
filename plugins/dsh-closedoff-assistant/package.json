@@ -85,6 +85,7 @@
     "@deepseek-ai/schemastery": "3.18.2"
   },
   "peerDependencies": {
+    "dsh-pirate-command": "^0.1.0",
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/dsh-agent": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-agent-default-model": "0.1.5-alpha.2",
@@ -99,6 +100,7 @@
     "@deepseek-ai/dsh-home-paths": "0.1.5-alpha.2"
   },
   "peerDependenciesMeta": {
+    "dsh-pirate-command": { "optional": true },
     "@deepseek-ai/cordis": {
       "optional": true
     },
@@ -137,6 +139,7 @@
     }
   },
   "devDependencies": {
+    "dsh-pirate-command": "workspace:*",
     "@hy-media/video-player": "file:vendor/hy-media-video-player-0.0.37.tgz",
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/dsh-agent": "0.1.5-alpha.2",

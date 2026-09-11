@@ -33,7 +33,10 @@ export class BlogClient {
       throw error
     }
     invariant(result?.reportVersion===1&&result.report===kind&&result.complete===true,'博客桥接器尚不支持可靠汇总，请更新 DshBlogBridge；不要用分页结果推算总数',503)
-    return {...result,filters:request.filters,timeZone:request.timeZone,clock:searchContext()}
+    const saved=result.totals?.savedDraftVersions
+    const savedNote=Number.isSafeInteger(saved)&&saved>=0?`本次统计计入保存稿版本 ${saved} 个。`:'本次未返回有效的 savedDraftVersions，是否计入保存稿版本无法确认，不能将缺失按 0 解释。'
+    const countScopeNote=`totals 只统计当前筛选范围，articleCount 按 rootCid 去重，versionCount 是匹配的版本数。${savedNote}hasSavedDraft 和 articlesWithSavedDraft 标记文章有保存稿或独立草稿，不代表该稿件版本已计入 totals。complete=true 表示汇总计算完整，不表示已读取全部明细；明细是否还有下一页以 hasMore 为准。`
+    return {...result,filters:request.filters,timeZone:request.timeZone,clock:searchContext(),countScopeNote}
   }
   async list(query = '', page = 1, signal, status = 'all') {
     invariant(typeof query === 'string' && query.length <= 200 && Number.isSafeInteger(page) && page > 0 && page <= 10000 && ['all','published','draft'].includes(status), '检索参数无效')

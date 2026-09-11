@@ -1,0 +1,1 @@
+Use a flat, uniform chroma magenta background, RGB 255, 0, 255, including empty gaps within the silhouette. No checkerboard, gradient, background texture, external ground shadow or magenta light reflected onto the object. Preserve complete silhouettes and clean edges. This is a chroma-key source candidate for later extraction, not a finished transparent asset.

@@ -11,7 +11,7 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type { Config } from './config.ts'
 import { AccessError, conversationModel, conversationArchive, conversationRemover, readConversationEvents, previewPage, hostBusyConversationIds, registerConversationTitles, type ConversationProvider, type PreviewMessage, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
-import { conversationModelCatalog, requestedConversationModel, selectConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
+import { conversationModelCatalog, requestedConversationModel, selectConversationModel, type ConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
 import { projectHistory } from './presentation.ts'
 import type { ConversationStore, ConversationSummary } from './conversation-store.ts'
 
@@ -29,11 +29,16 @@ export interface Conversation {
   active: boolean
 }
 
+interface PendingTurn { pending: boolean; dispatching: boolean; cancelled: boolean; finishRequested: boolean }
+
 /** Creates or resumes namespaced business Agents and owns their handles. */
 export class ConversationManager {
   private readonly conversations = new Map<string, Conversation>()
   private readonly openings = new Map<string, Promise<Conversation | undefined>>()
   private readonly forks = new Set<string>()
+  private readonly heldTurns = new Map<string, { turn?: PendingTurn }>()
+  private readonly turns = new WeakMap<Conversation, PendingTurn>()
+  private readonly initialModels = new WeakMap<Conversation, ConversationModel>()
   private pendingOpens = 0
   private disposed = false
   private readonly identities = new WeakMap<object, Actor>()
@@ -88,6 +93,29 @@ export class ConversationManager {
     return value
   }
 
+  /** 协作进度和成果仍按原会话主人及发起登录复核。 */
+  assertConversation(id: string, actor: Actor): void {
+    if (this.disposed) throw new AccessError(503, '插件正在停止')
+    this.access.assert(actor)
+    this.store.assertOwner(this.validateId(id), actor)
+  }
+
+  /** 协作调用在宿主 whenIdle 后释放，期间沿用 active 的并发及移除围栏。 */
+  retainTurn(conversation: Conversation, actor: Actor): () => void {
+    this.assertCurrent(conversation, actor)
+    if (conversation.active || this.heldTurns.has(conversation.id)) throw new AccessError(409, '智能体正在回答上一条问题')
+    const held: { turn?: PendingTurn } = {}
+    this.heldTurns.set(conversation.id, held)
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      if (this.heldTurns.get(conversation.id) !== held) return
+      this.heldTurns.delete(conversation.id)
+      if (this.turns.get(conversation) === held.turn || !this.turns.has(conversation)) this.finish(conversation.id)
+    }
+  }
+
   private setup(agentCtx: Context): void {
     agentCtx.systemPrompt.section({
       name: 'closedoff-assistant:persona',
@@ -99,6 +127,7 @@ export class ConversationManager {
 
   private async options(id?: string, eventCount?: number) {
     const selection = await conversationModel(this.ctx, id, eventCount)
+    await requestedConversationModel(this.ctx, selection)
     const info = id ? undefined : await this.ctx.llm.resolveModelInfo(selection.provider, selection.model)
     const effort = info?.reasoning?.efforts.some(effort => effort.id === this.config.reasoningEffort) ? this.config.reasoningEffort : selection.reasoningEffort
     return {
@@ -108,8 +137,9 @@ export class ConversationManager {
     }
   }
 
-  private publish(id: string, handle: AgentHandle): Conversation {
+  private publish(id: string, handle: AgentHandle, options: ConversationModel): Conversation {
     const conversation = { id, handle, lastUsedAt: Date.now(), active: false }
+    this.initialModels.set(conversation, { ...options })
     this.conversations.set(id, conversation)
     return conversation
   }
@@ -159,7 +189,7 @@ export class ConversationManager {
       } catch (error) { await handle.dispose(); throw error }
       this.pendingOpens -= 1
       reserved = false
-      return this.publish(id, handle)
+      return this.publish(id, handle, options)
     } finally {
       if (reserved) this.pendingOpens -= 1
     }
@@ -189,7 +219,7 @@ export class ConversationManager {
       this.store.assertOwner(id,actor)
       this.pendingOpens -= 1
       reserved = false
-      const conversation = this.publish(id, handle)
+      const conversation = this.publish(id, handle, options)
       published = true
       return conversation
     } catch (error: unknown) {
@@ -232,41 +262,78 @@ export class ConversationManager {
     this.access.assert(actor)
     if (id) this.store.assertOwner(this.validateId(id), actor)
     const catalog = await conversationModelCatalog(this.ctx)
-    const selected = id ? await conversationModel(this.ctx, id) : null
+    const cached = id ? this.conversations.get(id) : undefined
+    const selected = cached ? await this.effectiveModel(cached) : id ? await conversationModel(this.ctx, id) : null
     this.access.assert(actor); if (id) this.store.assertOwner(id, actor)
     return { ...catalog, default: catalog.selected, selected }
   }
 
   async selectModel(conversation: Conversation, input: unknown, actor: Actor) {
     if (input === undefined) return
-    this.access.assert(actor); this.store.assertOwner(conversation.id, actor)
+    this.assertCurrent(conversation, actor)
     if (conversation.active) throw new AccessError(409, '智能体正在回答上一条问题')
+    const turn = { pending: true, dispatching: false, cancelled: false, finishRequested: false }
+    this.turns.set(conversation, turn)
     conversation.active = true
     try {
       const selected = await requestedConversationModel(this.ctx, input)
-      return await selectConversationModel(this.ctx, conversation.id, selected!, () => {
-        this.access.assert(actor); this.store.assertOwner(conversation.id, actor)
-        if (this.disposed) throw new AccessError(503, '插件正在停止')
+      const result = await selectConversationModel(this.ctx, conversation.id, selected!, () => {
+        this.assertCurrent(conversation, actor)
+        if (turn.cancelled || this.turns.get(conversation) !== turn) throw new AccessError(409, '本轮操作已停止')
       })
-    } finally { conversation.active = false }
+      this.initialModels.set(conversation, { ...result })
+      return result
+    } finally {
+      if (this.turns.get(conversation) === turn) { this.turns.delete(conversation); conversation.active = false }
+    }
+  }
+
+  private assertCurrent(conversation: Conversation, actor: Actor): void {
+    this.assertConversation(conversation.id, actor)
+    if (this.conversations.get(conversation.id) !== conversation) throw new AccessError(409, '会话已关闭，请重新打开')
+  }
+
+  private effectiveModel(conversation: Conversation): Promise<ConversationModel> {
+    // 首次模型日志写入前保留创建选项；已有记录交给宿主投影恢复。
+    if (!this.events(conversation).some(event => String(event.type) === 'model/selection' || event.type === 'request/header')) {
+      const initial = this.initialModels.get(conversation)
+      if (initial) return Promise.resolve(initial)
+    }
+    return conversationModel(this.ctx, conversation.id)
   }
 
   /** Add one user message to an active business Agent. */
-  followup(conversation: Conversation, text: string, actor: Actor): void {
-    this.access.assert(actor)
-    this.store.assertOwner(conversation.id, actor)
+  async followup(conversation: Conversation, text: string, actor: Actor): Promise<void> {
+    this.assertCurrent(conversation, actor)
     if (conversation.active) throw new AccessError(409, '智能体正在回答上一条问题')
+    const turn = { pending: true, dispatching: false, cancelled: false, finishRequested: false }
+    this.turns.set(conversation, turn)
+    const held = this.heldTurns.get(conversation.id)
+    if (held) held.turn = turn
     this.identities.set(conversation.handle.agent, actor)
     conversation.lastUsedAt = Date.now()
     conversation.active = true
     try {
-      conversation.handle.agent.followup(createUserMessage({
-        content: [{ type: 'text', text }],
-        source: { kind: 'user' },
-      }))
+      await requestedConversationModel(this.ctx, await this.effectiveModel(conversation))
+      this.assertCurrent(conversation, actor)
+      if (turn.cancelled || this.turns.get(conversation) !== turn) throw new AccessError(409, '本轮操作已停止')
+      turn.pending = false
+      turn.dispatching = true
+      try {
+        conversation.handle.agent.followup(createUserMessage({
+          content: [{ type: 'text', text }],
+          source: { kind: 'user' },
+        }))
+      } finally { turn.dispatching = false }
       this.store.touch(conversation.id, text)
+      if (turn.finishRequested) this.finish(conversation.id)
     } catch (error: unknown) {
-      conversation.active = false
+      if (this.turns.get(conversation) === turn) {
+        if (turn.pending) {
+          this.turns.delete(conversation)
+          conversation.active = this.heldTurns.has(conversation.id)
+        } else { this.abort(conversation.id); this.finish(conversation.id) }
+      }
       throw error
     }
   }
@@ -313,7 +380,7 @@ export class ConversationManager {
       } catch (error) { await handle.dispose(); throw error }
       this.pendingOpens -= 1
       reserved = false
-      return this.publish(id, handle)
+      return this.publish(id, handle, options)
     } finally {
       this.forks.delete(conversation.id)
       if (reserved) this.pendingOpens -= 1
@@ -322,10 +389,19 @@ export class ConversationManager {
 
   /** Mark a finished or disconnected turn as eligible for LRU eviction. */
   finish(id: string): void {
+    if (this.heldTurns.has(id)) return
     const conversation = this.conversations.get(id)
     if (conversation === undefined) return
-    conversation.active = false
-    conversation.lastUsedAt = Date.now()
+    const turn = this.turns.get(conversation)
+    if (turn?.pending || turn?.dispatching) { turn.finishRequested = true; return }
+    if (!turn) { conversation.active = false; return }
+    // 同步 followup 可能发出 turn/end；必须等它返回后再取得当前 driver 的空闲承诺。
+    void conversation.handle.agent.whenIdle().then(() => {
+      if (this.conversations.get(id) !== conversation || this.turns.get(conversation) !== turn || this.heldTurns.has(id)) return
+      this.turns.delete(conversation)
+      conversation.active = false
+      conversation.lastUsedAt = Date.now()
+    }, () => { /* 宿主未确认空闲时保留占用。 */ })
   }
 
   /** Cancel only the active operation for one business Agent. */
@@ -338,6 +414,11 @@ export class ConversationManager {
   /** Cancel already-admitted work on timeout, disconnect or authorization revocation. */
   abort(id: string): void {
     const conversation = this.conversations.get(id)
+    const turn = conversation && this.turns.get(conversation)
+    if (turn) {
+      turn.cancelled = true
+      if (turn.pending) { this.turns.delete(conversation!); conversation!.active = this.heldTurns.has(id) }
+    }
     conversation?.handle.agent.cancel({ kind: 'user' })
   }
 

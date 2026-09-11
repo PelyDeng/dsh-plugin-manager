@@ -1,0 +1,3 @@
+Create ONE blank parchment panel decoration with a flat front-facing readable center and restrained aged edges. No perspective tilt. Target canvas 768 by 512, ample empty interior and restrained brass or dark-wood accents only at the edge. No lettering, map diagram, portraits, scene, shadows outside the panel or extra panels. Preserve a clear center suitable for application-rendered text.
+
+Deliver the isolated asset as a PNG with a genuine alpha channel if your tool supports it. Background pixels must be transparent, including open gaps inside the silhouette. Do not draw a checkerboard. No added floor, scenery or external ground shadow. Preserve the complete silhouette with safe padding. Keep object self-shading.
