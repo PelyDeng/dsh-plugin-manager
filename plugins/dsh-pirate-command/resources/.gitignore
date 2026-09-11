@@ -8,3 +8,4 @@
 !prompts/**
 !tools/
 !tools/export_prompts.py
+!tools/audit_prompts.mjs

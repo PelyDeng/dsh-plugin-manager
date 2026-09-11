@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """从图像、音频各自的规范正文导出提示词；不调用生成服务，也不删除文件。"""
 from pathlib import Path
 import hashlib
@@ -168,14 +168,18 @@ for category, keys in CATEGORIES.items():
 
 folder = ROOT / "prompts/shared"
 folder.mkdir(exist_ok=True)
+shared_rows = {}
 for key, body in shared.items():
-    write_text(folder / f"{key}.txt", body + "\n")
-manifest = {"source": SOURCE.name, "sourceSha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest(), "audioSource": AUDIO_SOURCE.name, "audioSourceSha256": hashlib.sha256(AUDIO_SOURCE.read_bytes()).hexdigest(), "count": len(rows), "imageCount": len(rows)-len(CATEGORIES["audio"]), "audioCount": len(CATEGORIES["audio"]), "generatedBy": "../tools/export_prompts.py", "referenceSets": reference_sets, "assets": rows}
+    target = folder / f"{key}.txt"
+    content = body + "\n"
+    write_text(target, content)
+    shared_rows[key] = {"file": target.relative_to(ROOT / "prompts").as_posix(), "sha256": hashlib.sha256(content.encode()).hexdigest()}
+manifest = {"source": SOURCE.name, "sourceSha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest(), "audioSource": AUDIO_SOURCE.name, "audioSourceSha256": hashlib.sha256(AUDIO_SOURCE.read_bytes()).hexdigest(), "count": len(rows), "imageCount": len(rows)-len(CATEGORIES["audio"]), "audioCount": len(CATEGORIES["audio"]), "generatedBy": "../tools/export_prompts.py", "referenceSets": reference_sets, "shared": shared_rows, "assets": rows}
 write_text(ROOT / "prompts/index.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
 
 intro = """# 分类提示词
 
-先读 [美术规范](当前美术素材规范与提示词.md)、[音频规范](当前音频素材规范与提示词.md) 和 [项目资源入口](../README.md)。本目录 TXT 从两类各自的规范正文导出，不另行维护设计；修改规范后，在插件根目录运行 `python resources/tools/export_prompts.py` 更新。脚本不调用任何生成接口。
+先读 [美术规范](当前美术素材规范与提示词.md)、[音频规范](当前音频素材规范与提示词.md) 和 [项目资源入口](../README.md)。本目录 TXT 从两类各自的规范正文导出，不另行维护设计；修改规范后，在插件根目录运行 `python resources/tools/export_prompts.py` 更新，再运行 `node resources/tools/audit_prompts.mjs` 校验。两个脚本都不调用任何生成接口。
 
 `index.json` 的 `status` 含义：`active` 表示当前合同可制作但生成结果仍需验收；`processing` 表示素材/动作仍在补齐或复核流程；`reference` 表示已采纳母版状态说明，不要提交生成；`inactive` 表示缺少批准前置条件。
 

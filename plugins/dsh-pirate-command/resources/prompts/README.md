@@ -1,6 +1,6 @@
 # 分类提示词
 
-先读 [美术规范](当前美术素材规范与提示词.md)、[音频规范](当前音频素材规范与提示词.md) 和 [项目资源入口](../README.md)。本目录 TXT 从两类各自的规范正文导出，不另行维护设计；修改规范后，在插件根目录运行 `python resources/tools/export_prompts.py` 更新。脚本不调用任何生成接口。
+先读 [美术规范](当前美术素材规范与提示词.md)、[音频规范](当前音频素材规范与提示词.md) 和 [项目资源入口](../README.md)。本目录 TXT 从两类各自的规范正文导出，不另行维护设计；修改规范后，在插件根目录运行 `python resources/tools/export_prompts.py` 更新，再运行 `node resources/tools/audit_prompts.mjs` 校验。两个脚本都不调用任何生成接口。
 
 `index.json` 的 `status` 含义：`active` 表示当前合同可制作但生成结果仍需验收；`processing` 表示素材/动作仍在补齐或复核流程；`reference` 表示已采纳母版状态说明，不要提交生成；`inactive` 表示缺少批准前置条件。
 

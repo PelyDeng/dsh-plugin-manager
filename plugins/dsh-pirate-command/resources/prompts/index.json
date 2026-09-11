@@ -374,6 +374,24 @@
       }
     ]
   },
+  "shared": {
+    "style-prefix": {
+      "file": "shared/style-prefix.txt",
+      "sha256": "538f221d184ae5b8eb4066f15b945807cf11791309ad033dc2709278bbe72652"
+    },
+    "alpha-suffix": {
+      "file": "shared/alpha-suffix.txt",
+      "sha256": "ee91c2c1fa6e583f0a15116aca6afe34f1a15999174f5d55cc0c9a8ab7afdbef"
+    },
+    "chroma-suffix": {
+      "file": "shared/chroma-suffix.txt",
+      "sha256": "5fbcc90c925fc6847b8b2e15bfefb79a43c209693729680d6a1ec8025efebde0"
+    },
+    "character-frame-template": {
+      "file": "shared/character-frame-template.txt",
+      "sha256": "12db53cc12fef5b533d33ba29a3b67ed103f8c3d3a1a07f66d1f663674874b09"
+    }
+  },
   "assets": [
     {
       "id": "pearl-layout-reference",
