@@ -32,7 +32,7 @@ pnpm exec dsh-plugin-manager --version
 将占位路径替换为实际绝对路径，含空格时加引号。以后 pnpm exec dsh-plugin-manager 都在这个工具目录执行，--root 明确指向作者项目。manager 不加入业务运行依赖；工具目录和作者项目各自保存锁文件。
 <!-- /excerpt:author-tools -->
 
-附件见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)。已有框架源码的维护者可按[准备工具](getting-started.md#1-准备工具和目录)构建工具；普通作者不用克隆框架。
+附件见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)。普通作者不用克隆框架；需要维护框架源码站点时再阅读[源码部署](../deploy/README.md#服务器源码发版)。
 
 ### 2. 先按原名跑通
 
