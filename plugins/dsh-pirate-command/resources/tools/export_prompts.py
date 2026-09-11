@@ -75,6 +75,79 @@ placeholder_values = {
     "audio-scene-music": {"[CUE]": ["idle_sailing", "dispatch", "working", "aggregation", "victory_musicbox", "failure_low_clarinet", "waiting_neutral", "partial_neutral"]},
     "audio-character-reactions": {"[CUE]": ["monkey_alarm", "captain_sigh"]},
 }
+
+reference_sets = {
+    "style": [{"path": "references/战斗构图.png", "purposes": ["style"]}],
+    "pearlAlignment": [{"path": "processed/ships/pearl-yaw-v02/ship-candidate-v02.png", "purposes": ["identity", "alignment"]}],
+    "rivalAlignment": [{"path": "processed/ships/enemy-separated-despill-v02/enemy-empty-despill-native-v02.png", "purposes": ["identity", "alignment"]}],
+    "barbossaIdentity": [{"path": "processed/characters/barbossa-standing-v01/barbossa-sw-stand-v01.png", "purposes": ["identity", "alignment"]}],
+    "elizabethIdentity": [
+        {"path": "processed/characters/elizabeth-directions-v01/elizabeth-sw-stand-v02.png", "purposes": ["identity", "alignment"], "appliesTo": {"[DIRECTION]": "SW"}},
+        {"path": "processed/characters/elizabeth-directions-v01/elizabeth-nw-stand-v03.png", "purposes": ["identity", "alignment"], "appliesTo": {"[DIRECTION]": "NW"}},
+        {"path": "processed/characters/elizabeth-directions-v01/elizabeth-ne-stand-v02.png", "purposes": ["identity", "alignment"], "appliesTo": {"[DIRECTION]": "NE"}},
+        {"path": "processed/characters/elizabeth-directions-v01/elizabeth-se-stand-v03.png", "purposes": ["identity", "alignment"], "appliesTo": {"[DIRECTION]": "SE"}},
+    ],
+    "swWalkPose": [{"path": "references/characters/sw-walk-pose-guide-v01/contact-sheet.png", "purposes": ["pose"]}],
+    "enemyIdentity": [
+        {"path": "processed/characters/enemy-crew-v01/enemy-crew-v01-master.png", "purposes": ["identity", "alignment"], "appliesTo": {"[CREW VARIANT]": "red bandanna"}},
+        {"path": "processed/characters/enemy-beige-chroma-v02/enemy-beige-se-master-v02.png", "purposes": ["identity", "alignment"], "appliesTo": {"[CREW VARIANT]": "beige bandanna"}},
+        {"path": "processed/characters/enemy-tricorne-chroma-v02/enemy-tricorne-se-master-v02.png", "purposes": ["identity", "alignment"], "appliesTo": {"[CREW VARIANT]": "dark-brown tricorne without a plume"}},
+    ],
+    "enemyPose": [
+        {"path": "processed/characters/enemy-tricorne-command-v01/enemy-tricorne-command-master-v01.png", "purposes": ["pose"], "appliesTo": {"[POSE]": "tricorne command"}},
+        {"path": "processed/characters/enemy-beige-brace-v01/enemy-beige-brace-master-v01.png", "purposes": ["pose"], "appliesTo": {"[POSE]": "beige brace"}},
+    ],
+    "chartTable": [{"path": "processed/ships/chart-table-v01/chart-table-candidate-v01.png", "purposes": ["identity", "alignment"], "appliesTo": {"[PROP]": "chart table with blank map"}}],
+    "figureheadIdentity": [{"path": "processed/ships/figurehead-v01/figurehead-candidate-v01.png", "purposes": ["identity", "alignment"]}],
+    "seaDayMaster": [{"path": "sources/environment/sea-background.png", "purposes": ["identity", "alignment"]}],
+    "stormIdentity": [{"path": "sources/environment/sea-storm-v01.png", "purposes": ["identity"]}],
+    "moonIdentity": [{"path": "sources/environment/sea-moon-v01.png", "purposes": ["identity"]}],
+    "foamIdentity": [{"path": "processed/environment/sea-foam-v01.png", "purposes": ["identity", "alignment"]}],
+    "lightningIdentity": [{"path": "processed/environment/lightning-bolt-v01/lightning-bolt-candidate-v01.png", "purposes": ["identity", "alignment"]}],
+    "rainIdentity": [{"path": "processed/environment/rain-streaks-v01/rain-streaks-candidate-v01.png", "purposes": ["identity", "alignment"]}],
+    "smokeIdentity": [{"path": "processed/effects/cannon-smoke-cycle-v03/cannon-smoke-cycle-v03-512-atlas.png", "purposes": ["identity", "pose"]}],
+    "splashIdentity": [{"path": "processed/effects/water-splash-cycle-v02/water-splash-cycle-atlas-candidate-v02.png", "purposes": ["identity", "pose"]}],
+    "deckFireIdentity": [{"path": "processed/effects/deck-fire-cycle-v01/deck-fire-cycle-atlas-candidate-v01.png", "purposes": ["identity", "pose"]}],
+    "hullDamageIdentity": [{"path": "processed/effects/hull-damage-v01/hull-damage-candidate-v01.png", "purposes": ["identity", "alignment"]}],
+    "taskTokenIdentity": [
+        {"path": "processed/ui/dispatch-coins-v01/dispatch-apple-coin-candidate-v01.png", "purposes": ["identity", "alignment"], "appliesTo": {"[TOKEN]": "silver coin with an apple emblem"}},
+        {"path": "processed/ui/dispatch-coins-v01/dispatch-feather-coin-candidate-v01.png", "purposes": ["identity", "alignment"], "appliesTo": {"[TOKEN]": "silver coin with a feather emblem"}},
+        {"path": "processed/ui/return-tokens-v01/return-scroll-v01-candidate.png", "purposes": ["identity", "alignment"], "appliesTo": {"[TOKEN]": "rolled parchment with a restrained orange ribbon"}},
+        {"path": "processed/ui/return-tokens-v01/return-bottle-v01-candidate.png", "purposes": ["identity", "alignment"], "appliesTo": {"[TOKEN]": "small manuscript bottle with a subtle purple glint"}},
+    ],
+    "compassIdentity": [
+        {"path": "processed/ui/compass-base-v01.png", "purposes": ["identity", "alignment"], "appliesTo": {"[PART]": "base"}},
+        {"path": "processed/ui/compass-needle-v01.png", "purposes": ["identity", "alignment"], "appliesTo": {"[PART]": "needle"}},
+        {"path": "processed/ui/compass-states-v01/compass-lid-v01.png", "purposes": ["identity", "alignment"], "appliesTo": {"[PART]": "lid"}},
+        {"path": "processed/ui/compass-states-v01/compass-base-damaged-v01.png", "purposes": ["identity", "alignment"], "appliesTo": {"[PART]": "damaged-base"}},
+        {"path": "processed/ui/compass-states-v01/compass-needle-tip-broken-v01.png", "purposes": ["identity", "alignment"], "appliesTo": {"[PART]": "broken-tip"}},
+        {"path": "processed/ui/compass-states-v01/compass-needle-stem-broken-v01.png", "purposes": ["identity", "alignment"], "appliesTo": {"[PART]": "broken-stem"}},
+    ],
+    "monkeyIdentity": [
+        {"path": "processed/characters/monkey-standing-v01/monkey-sw-sit-v01.png", "purposes": ["identity", "alignment"]},
+        {"path": "processed/characters/monkey-alarm-v01/monkey-sw-alarm-v01.png", "purposes": ["pose"]},
+    ],
+}
+asset_references = {
+    "pearl-layout-reference": ["pearlAlignment"],
+    "pearl-hull-deck": ["style", "pearlAlignment"], "pearl-front-rail": ["style", "pearlAlignment"],
+    "pearl-mast-fore": ["style", "pearlAlignment"], "pearl-mast-main": ["style", "pearlAlignment"], "pearl-mast-aft": ["style", "pearlAlignment"],
+    "rival-ship": ["rivalAlignment"], "rival-foreground": ["rivalAlignment"], "rival-damage-stages": ["style", "rivalAlignment"],
+    "cannon-recoil": ["style", "pearlAlignment"], "deck-props": ["style", "pearlAlignment", "chartTable"], "figurehead-states": ["figureheadIdentity"],
+    "barbossa-turnaround": ["style", "barbossaIdentity"], "barbossa-walk": ["style", "barbossaIdentity"],
+    "barbossa-gestures": ["style", "barbossaIdentity"], "barbossa-tasks": ["style", "barbossaIdentity"],
+    "elizabeth-turnaround": ["style", "elizabethIdentity"], "elizabeth-walk": ["style", "elizabethIdentity", "swWalkPose"],
+    "elizabeth-gestures": ["style", "elizabethIdentity"], "elizabeth-tasks": ["style", "elizabethIdentity"],
+    "monkey-actions": ["monkeyIdentity"], "enemy-crew": ["style", "enemyIdentity", "enemyPose"],
+    "env-ocean-day": ["style", "seaDayMaster"], "env-ocean-storm": ["seaDayMaster", "stormIdentity"], "env-ocean-moon": ["seaDayMaster", "moonIdentity"],
+    "sea-foam-cycle": ["pearlAlignment", "foamIdentity"], "weather-lightning": ["lightningIdentity"], "weather-rain": ["rainIdentity"],
+    "cannon-smoke": ["smokeIdentity"], "water-splash": ["splashIdentity"], "hull-damage": ["hullDamageIdentity"], "deck-fire": ["deckFireIdentity"],
+    "task-tokens": ["taskTokenIdentity"], "compass-parts": ["compassIdentity"],
+}
+for items in reference_sets.values():
+    for item in items: assert (ROOT / item["path"]).is_file(), "missing reference: " + item["path"]
+for names in asset_references.values():
+    assert set(names) <= set(reference_sets), "unknown reference set: " + ",".join(set(names) - set(reference_sets))
 rows = []
 for category, keys in CATEGORIES.items():
     folder = ROOT / "prompts" / category
@@ -91,13 +164,13 @@ for category, keys in CATEGORIES.items():
         found_placeholders = sorted(set(re.findall(r"\[[A-Z][A-Z ]*\]", content)))
         status = "inactive" if key in non_generative and key not in reference_only else "reference" if key in reference_only else "processing" if key in processing else "active"
         allowed = {name: placeholder_values[key][name] for name in found_placeholders if key in placeholder_values and name in placeholder_values[key]}
-        rows.append({"id": key, "category": category, "file": target.relative_to(ROOT / "prompts").as_posix(), "status": status, "placeholders": found_placeholders, "allowedValues": allowed, "sha256": hashlib.sha256(content.encode()).hexdigest()})
+        rows.append({"id": key, "category": category, "file": target.relative_to(ROOT / "prompts").as_posix(), "status": status, "placeholders": found_placeholders, "allowedValues": allowed, "referenceSets": asset_references.get(key, []), "sha256": hashlib.sha256(content.encode()).hexdigest()})
 
 folder = ROOT / "prompts/shared"
 folder.mkdir(exist_ok=True)
 for key, body in shared.items():
     write_text(folder / f"{key}.txt", body + "\n")
-manifest = {"source": SOURCE.name, "sourceSha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest(), "audioSource": AUDIO_SOURCE.name, "audioSourceSha256": hashlib.sha256(AUDIO_SOURCE.read_bytes()).hexdigest(), "count": len(rows), "imageCount": len(rows)-len(CATEGORIES["audio"]), "audioCount": len(CATEGORIES["audio"]), "generatedBy": "../tools/export_prompts.py", "assets": rows}
+manifest = {"source": SOURCE.name, "sourceSha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest(), "audioSource": AUDIO_SOURCE.name, "audioSourceSha256": hashlib.sha256(AUDIO_SOURCE.read_bytes()).hexdigest(), "count": len(rows), "imageCount": len(rows)-len(CATEGORIES["audio"]), "audioCount": len(CATEGORIES["audio"]), "generatedBy": "../tools/export_prompts.py", "referenceSets": reference_sets, "assets": rows}
 write_text(ROOT / "prompts/index.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
 
 intro = """# 分类提示词
@@ -106,7 +179,7 @@ intro = """# 分类提示词
 
 `index.json` 的 `status` 含义：`active` 表示当前合同可制作但生成结果仍需验收；`processing` 表示素材/动作仍在补齐或复核流程；`reference` 表示已采纳母版状态说明，不要提交生成；`inactive` 表示缺少批准前置条件。
 
-每个 TXT 本身就是完整复制用提示词，不再手工拼接共同前缀或交付后缀；船只与角色已包含共同风格前缀，环境、特效和 UI 的正文自带适用风格、机位或背景要求。海天不套透明背景，UI 和数据纹理不套船体透视。audio 类只输出声音正文，不添加图像风格或 alpha 后缀。含方括号的项目需先按 `index.json` 的 `allowedValues` 填入一个具体动作、方向、物件或声音，不能保留占位符或自造值；`status` 为 `inactive` 或 `reference` 的 TXT 不要提交生成。
+每个 TXT 本身就是完整复制用提示词，不再手工拼接共同前缀或交付后缀；船只与角色已包含共同风格前缀，环境、特效和 UI 的正文自带适用风格、机位或背景要求。海天不套透明背景，UI 和数据纹理不套船体透视。audio 类只输出声音正文，不添加图像风格或 alpha 后缀。含方括号的项目需先按 `index.json` 的 `allowedValues` 填入一个具体动作、方向、物件或声音，不能保留占位符或自造值；`status` 为 `inactive` 或 `reference` 的 TXT 不要提交生成。`referenceSets` 按路径和用途绑定当前母版、姿态或成品参考，`appliesTo` 说明仅在该占位符取值时适用。
 
 炮烟 `cannon-smoke` 和水花 `water-splash` 默认带 [色键候选后缀](shared/chroma-suffix.txt)，与当前采纳的制作流程一致；输出仍需去底和实景复核。其他透明素材默认带 [透明后缀](shared/alpha-suffix.txt)；若工具不能真实导出 alpha，用 [色键候选后缀](shared/chroma-suffix.txt) 完整替换 TXT 末段。两类后缀不能并列放在同一次请求中，色键图也不能当作最终透明成品。
 

@@ -7,6 +7,373 @@
   "imageCount": 47,
   "audioCount": 6,
   "generatedBy": "../tools/export_prompts.py",
+  "referenceSets": {
+    "style": [
+      {
+        "path": "references/战斗构图.png",
+        "purposes": [
+          "style"
+        ]
+      }
+    ],
+    "pearlAlignment": [
+      {
+        "path": "processed/ships/pearl-yaw-v02/ship-candidate-v02.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ]
+      }
+    ],
+    "rivalAlignment": [
+      {
+        "path": "processed/ships/enemy-separated-despill-v02/enemy-empty-despill-native-v02.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ]
+      }
+    ],
+    "barbossaIdentity": [
+      {
+        "path": "processed/characters/barbossa-standing-v01/barbossa-sw-stand-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ]
+      }
+    ],
+    "elizabethIdentity": [
+      {
+        "path": "processed/characters/elizabeth-directions-v01/elizabeth-sw-stand-v02.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[DIRECTION]": "SW"
+        }
+      },
+      {
+        "path": "processed/characters/elizabeth-directions-v01/elizabeth-nw-stand-v03.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[DIRECTION]": "NW"
+        }
+      },
+      {
+        "path": "processed/characters/elizabeth-directions-v01/elizabeth-ne-stand-v02.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[DIRECTION]": "NE"
+        }
+      },
+      {
+        "path": "processed/characters/elizabeth-directions-v01/elizabeth-se-stand-v03.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[DIRECTION]": "SE"
+        }
+      }
+    ],
+    "swWalkPose": [
+      {
+        "path": "references/characters/sw-walk-pose-guide-v01/contact-sheet.png",
+        "purposes": [
+          "pose"
+        ]
+      }
+    ],
+    "enemyIdentity": [
+      {
+        "path": "processed/characters/enemy-crew-v01/enemy-crew-v01-master.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[CREW VARIANT]": "red bandanna"
+        }
+      },
+      {
+        "path": "processed/characters/enemy-beige-chroma-v02/enemy-beige-se-master-v02.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[CREW VARIANT]": "beige bandanna"
+        }
+      },
+      {
+        "path": "processed/characters/enemy-tricorne-chroma-v02/enemy-tricorne-se-master-v02.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[CREW VARIANT]": "dark-brown tricorne without a plume"
+        }
+      }
+    ],
+    "enemyPose": [
+      {
+        "path": "processed/characters/enemy-tricorne-command-v01/enemy-tricorne-command-master-v01.png",
+        "purposes": [
+          "pose"
+        ],
+        "appliesTo": {
+          "[POSE]": "tricorne command"
+        }
+      },
+      {
+        "path": "processed/characters/enemy-beige-brace-v01/enemy-beige-brace-master-v01.png",
+        "purposes": [
+          "pose"
+        ],
+        "appliesTo": {
+          "[POSE]": "beige brace"
+        }
+      }
+    ],
+    "chartTable": [
+      {
+        "path": "processed/ships/chart-table-v01/chart-table-candidate-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[PROP]": "chart table with blank map"
+        }
+      }
+    ],
+    "figureheadIdentity": [
+      {
+        "path": "processed/ships/figurehead-v01/figurehead-candidate-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ]
+      }
+    ],
+    "seaDayMaster": [
+      {
+        "path": "sources/environment/sea-background.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ]
+      }
+    ],
+    "stormIdentity": [
+      {
+        "path": "sources/environment/sea-storm-v01.png",
+        "purposes": [
+          "identity"
+        ]
+      }
+    ],
+    "moonIdentity": [
+      {
+        "path": "sources/environment/sea-moon-v01.png",
+        "purposes": [
+          "identity"
+        ]
+      }
+    ],
+    "foamIdentity": [
+      {
+        "path": "processed/environment/sea-foam-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ]
+      }
+    ],
+    "lightningIdentity": [
+      {
+        "path": "processed/environment/lightning-bolt-v01/lightning-bolt-candidate-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ]
+      }
+    ],
+    "rainIdentity": [
+      {
+        "path": "processed/environment/rain-streaks-v01/rain-streaks-candidate-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ]
+      }
+    ],
+    "smokeIdentity": [
+      {
+        "path": "processed/effects/cannon-smoke-cycle-v03/cannon-smoke-cycle-v03-512-atlas.png",
+        "purposes": [
+          "identity",
+          "pose"
+        ]
+      }
+    ],
+    "splashIdentity": [
+      {
+        "path": "processed/effects/water-splash-cycle-v02/water-splash-cycle-atlas-candidate-v02.png",
+        "purposes": [
+          "identity",
+          "pose"
+        ]
+      }
+    ],
+    "deckFireIdentity": [
+      {
+        "path": "processed/effects/deck-fire-cycle-v01/deck-fire-cycle-atlas-candidate-v01.png",
+        "purposes": [
+          "identity",
+          "pose"
+        ]
+      }
+    ],
+    "hullDamageIdentity": [
+      {
+        "path": "processed/effects/hull-damage-v01/hull-damage-candidate-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ]
+      }
+    ],
+    "taskTokenIdentity": [
+      {
+        "path": "processed/ui/dispatch-coins-v01/dispatch-apple-coin-candidate-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[TOKEN]": "silver coin with an apple emblem"
+        }
+      },
+      {
+        "path": "processed/ui/dispatch-coins-v01/dispatch-feather-coin-candidate-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[TOKEN]": "silver coin with a feather emblem"
+        }
+      },
+      {
+        "path": "processed/ui/return-tokens-v01/return-scroll-v01-candidate.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[TOKEN]": "rolled parchment with a restrained orange ribbon"
+        }
+      },
+      {
+        "path": "processed/ui/return-tokens-v01/return-bottle-v01-candidate.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[TOKEN]": "small manuscript bottle with a subtle purple glint"
+        }
+      }
+    ],
+    "compassIdentity": [
+      {
+        "path": "processed/ui/compass-base-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[PART]": "base"
+        }
+      },
+      {
+        "path": "processed/ui/compass-needle-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[PART]": "needle"
+        }
+      },
+      {
+        "path": "processed/ui/compass-states-v01/compass-lid-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[PART]": "lid"
+        }
+      },
+      {
+        "path": "processed/ui/compass-states-v01/compass-base-damaged-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[PART]": "damaged-base"
+        }
+      },
+      {
+        "path": "processed/ui/compass-states-v01/compass-needle-tip-broken-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[PART]": "broken-tip"
+        }
+      },
+      {
+        "path": "processed/ui/compass-states-v01/compass-needle-stem-broken-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ],
+        "appliesTo": {
+          "[PART]": "broken-stem"
+        }
+      }
+    ],
+    "monkeyIdentity": [
+      {
+        "path": "processed/characters/monkey-standing-v01/monkey-sw-sit-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ]
+      },
+      {
+        "path": "processed/characters/monkey-alarm-v01/monkey-sw-alarm-v01.png",
+        "purposes": [
+          "pose"
+        ]
+      }
+    ]
+  },
   "assets": [
     {
       "id": "pearl-layout-reference",
@@ -15,6 +382,9 @@
       "status": "reference",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "pearlAlignment"
+      ],
       "sha256": "29fc341959e2f71f89394747b151e4043e0cb6a4f35b0398d8ccad3bd0333aad"
     },
     {
@@ -24,6 +394,10 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "style",
+        "pearlAlignment"
+      ],
       "sha256": "2e528431f27d1f10644dc6ff350b9cb20361089f7602cfb422ef4ebc017feff9"
     },
     {
@@ -33,6 +407,10 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "style",
+        "pearlAlignment"
+      ],
       "sha256": "e65e159244203285cf39728cb9b4346318264d739d14b93677d224e75216ee1f"
     },
     {
@@ -42,6 +420,10 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "style",
+        "pearlAlignment"
+      ],
       "sha256": "c312be81b1a7db7c14b5a26f630f1fa0cf7bffb4c81d93e69ac0ffa04291a3af"
     },
     {
@@ -51,6 +433,10 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "style",
+        "pearlAlignment"
+      ],
       "sha256": "accbe4c08dfa2884aa353feb671751a368dd8a837f773beb55f3559ef8b79e6d"
     },
     {
@@ -60,6 +446,10 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "style",
+        "pearlAlignment"
+      ],
       "sha256": "e9e36f4be5f3db9bdac4abaf6ee546ef39a8acccbad096ff31f299279c166ebe"
     },
     {
@@ -69,6 +459,9 @@
       "status": "reference",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "rivalAlignment"
+      ],
       "sha256": "830043ed3a99147cc69a062be8d18cdae435b93c721fed487e1657b5aa3316b9"
     },
     {
@@ -78,6 +471,9 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "rivalAlignment"
+      ],
       "sha256": "5faca5828888c1f42772764650630dbb9861cebfcf53f00d13da0897b8cb58e3"
     },
     {
@@ -87,6 +483,10 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "style",
+        "rivalAlignment"
+      ],
       "sha256": "2c4d7ce0c01b8f64199f625acd1b55b5d10bf99956aa2a728007e34501b7d6e8"
     },
     {
@@ -96,6 +496,10 @@
       "status": "active",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "style",
+        "pearlAlignment"
+      ],
       "sha256": "163a6e20d7471dea47bae50bf0ee6c427ef052c8717532495aae1c631f93ec1b"
     },
     {
@@ -119,6 +523,11 @@
           "small ship lantern"
         ]
       },
+      "referenceSets": [
+        "style",
+        "pearlAlignment",
+        "chartTable"
+      ],
       "sha256": "b7f62ecbcfd792305dc2925a870930d427c9c720d4106443fe0252a76aeddfe2"
     },
     {
@@ -128,6 +537,9 @@
       "status": "active",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "figureheadIdentity"
+      ],
       "sha256": "75e4d24eafba345e7a489579bf0b17c60f9ff6b330753d4235523e41207b6058"
     },
     {
@@ -137,6 +549,7 @@
       "status": "inactive",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "167032083fb9809eb17a75a1779f5210f79959b836c2c5c3e1fe5aa331cc2fc4"
     },
     {
@@ -146,6 +559,7 @@
       "status": "inactive",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "33aec1c1ecb909551b181704bc9619767934563109a12d42cd7e0270414594bc"
     },
     {
@@ -155,6 +569,7 @@
       "status": "inactive",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "d971f662286e2642afc04add6062677f6c2a0e582fc73a78b06d98c75588fd86"
     },
     {
@@ -164,6 +579,7 @@
       "status": "inactive",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "cd7292f8dea39c0c00c75c7048357e86f62c8364097f7664222b819411a6516b"
     },
     {
@@ -173,6 +589,10 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "style",
+        "barbossaIdentity"
+      ],
       "sha256": "7502526ff5e595213bec06c201c68ef36de6532ba350779521a33a1d06895622"
     },
     {
@@ -195,6 +615,10 @@
           "Walking in place, right leg supports the body while the left leg passes underneath the hips."
         ]
       },
+      "referenceSets": [
+        "style",
+        "barbossaIdentity"
+      ],
       "sha256": "c4fdb69b6c9aa12a4060b83ca47f33743c82ba6600a9530f5b8850db0b5e81b7"
     },
     {
@@ -218,6 +642,10 @@
           "stopped with a calm neutral posture"
         ]
       },
+      "referenceSets": [
+        "style",
+        "barbossaIdentity"
+      ],
       "sha256": "7b9d43e3fa0796b3e39aefe0f8db4c280fb6c53fbab7f05c5bdf235d771cb95c"
     },
     {
@@ -240,6 +668,10 @@
           "a brief disappointed reaction"
         ]
       },
+      "referenceSets": [
+        "style",
+        "barbossaIdentity"
+      ],
       "sha256": "5bae2ea9a59bfcaae2543458f1323e342e694b0c7948d71a46bc5068a9f3d901"
     },
     {
@@ -258,6 +690,10 @@
           "SE"
         ]
       },
+      "referenceSets": [
+        "style",
+        "elizabethIdentity"
+      ],
       "sha256": "f6a8dcb605e112ccf877fe3fdeda662ae774626185d08f0ce81d9f7adc24685d"
     },
     {
@@ -283,6 +719,11 @@
           "Walking in place, right leg supports the body while the left leg passes underneath the hips."
         ]
       },
+      "referenceSets": [
+        "style",
+        "elizabethIdentity",
+        "swWalkPose"
+      ],
       "sha256": "c38f5c740e911c6b386c3389f06bc11dd85b9f96671e6f3d60d0b326b87030af"
     },
     {
@@ -309,6 +750,10 @@
           "stopped with a calm neutral posture"
         ]
       },
+      "referenceSets": [
+        "style",
+        "elizabethIdentity"
+      ],
       "sha256": "35438088be4d35a30a2d3e84c604e08803bff09ec5882c68334b34b1f8306f3a"
     },
     {
@@ -334,6 +779,10 @@
           "a thoughtful disappointed reaction"
         ]
       },
+      "referenceSets": [
+        "style",
+        "elizabethIdentity"
+      ],
       "sha256": "52dbdd6f82ca217d6b94fafa65bedbbaa8c6c498657a55e78058701b42961c79"
     },
     {
@@ -343,6 +792,9 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "monkeyIdentity"
+      ],
       "sha256": "aef73a14bd799715a26f20c1f58ca955e7eab5eea7fa1b1f06d353e5ca7e8e63"
     },
     {
@@ -366,6 +818,11 @@
           "beige brace"
         ]
       },
+      "referenceSets": [
+        "style",
+        "enemyIdentity",
+        "enemyPose"
+      ],
       "sha256": "93b26465f44fd90bbba59a46fb6c1d03e264b6abcda534cac940d4d928467b70"
     },
     {
@@ -375,6 +832,10 @@
       "status": "active",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "style",
+        "seaDayMaster"
+      ],
       "sha256": "3cb4c7ddcf05da91c02e040f48942ceb7321dd09768e06b1260f46507a212920"
     },
     {
@@ -384,6 +845,10 @@
       "status": "active",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "seaDayMaster",
+        "stormIdentity"
+      ],
       "sha256": "8f9e0a4ebae79f0a6d670af1c3a033bb6e1d77f16366ae85bb4a3ca84ee7c1d3"
     },
     {
@@ -393,6 +858,10 @@
       "status": "active",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "seaDayMaster",
+        "moonIdentity"
+      ],
       "sha256": "319e9b09fc6e16dc00a8b464457a850c0cb9ba1bfad95bc6f9ed4cc12bc7a184"
     },
     {
@@ -402,6 +871,7 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "1874257bd311bf615f7c36960c0e687e1c73b33da6ef2bdf1feeac7ac5d6890c"
     },
     {
@@ -411,6 +881,10 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "pearlAlignment",
+        "foamIdentity"
+      ],
       "sha256": "fc19c9a01b99ce1ee4d0f2b2dd91165738f57bb7a9d0f543ffafcdc4fbcc0f1e"
     },
     {
@@ -420,6 +894,7 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "b43c3a163e8244e462c3b9249b7d930859209857f06da2717e6fbc705d8953b5"
     },
     {
@@ -429,6 +904,9 @@
       "status": "active",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "lightningIdentity"
+      ],
       "sha256": "394a807ca72be6a5367c23b4586c750238dd3093e3a7d200cc2574e9f07fc6b3"
     },
     {
@@ -438,6 +916,9 @@
       "status": "active",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "rainIdentity"
+      ],
       "sha256": "baff67552a7415ebe27ca7e0eaa47d73a90e07faba93eddb9d857bc612da7f61"
     },
     {
@@ -447,6 +928,7 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "be2478a2a4e2638c69d7580c756caae32ed217d9c3c8a196bdc6a6c6f69aaa91"
     },
     {
@@ -456,6 +938,7 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "a5ee551d1129c6070b7ac7ec72cc0594ec5ec771ba764ba9b207b65acf137a13"
     },
     {
@@ -465,6 +948,9 @@
       "status": "active",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "smokeIdentity"
+      ],
       "sha256": "accaa237650f6fb5621aef721ebaffd5c44bfa842fa48ec4a5051b75f452e4ed"
     },
     {
@@ -474,6 +960,9 @@
       "status": "active",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "splashIdentity"
+      ],
       "sha256": "96b6854c12abddc9463b2855d798f52d38719d4fc1fb3deae18ab1387c2de12a"
     },
     {
@@ -483,6 +972,7 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "79bf2b86b183d0e5294a1d77c8dd683bab5ab35981ad9f792872d16fe6935fc0"
     },
     {
@@ -492,6 +982,9 @@
       "status": "active",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "hullDamageIdentity"
+      ],
       "sha256": "524548ea046a85be1799db015ee1b8838ca132cfa8c2fb7b07ee34072627c97b"
     },
     {
@@ -501,6 +994,9 @@
       "status": "active",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [
+        "deckFireIdentity"
+      ],
       "sha256": "327ce8c889028ed43dc9a2a46e58b0cce67efc9e3a3a67b211f90edac8dfb6f3"
     },
     {
@@ -510,6 +1006,7 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "99fd3395674cadedb3892eaee979a7a22a44b21ad7ca9c15f423cb003685c30d"
     },
     {
@@ -519,6 +1016,7 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "f3f85659a2fcb65a37bda28c26668a0cc6ce1d3e342ee798cd73b7885c0caf21"
     },
     {
@@ -537,6 +1035,9 @@
           "small manuscript bottle with a subtle purple glint"
         ]
       },
+      "referenceSets": [
+        "taskTokenIdentity"
+      ],
       "sha256": "dc4873bf2b696366daf6e3c41851938fcc63f6aeaf3ef9e78c743d3af90a3dbe"
     },
     {
@@ -557,6 +1058,9 @@
           "broken-stem"
         ]
       },
+      "referenceSets": [
+        "compassIdentity"
+      ],
       "sha256": "71d384be4f289c387500ff06bb64315412bd9e984b09939ffc0651b923b8797f"
     },
     {
@@ -566,6 +1070,7 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "319242ede9f7858fedb02c04625067559033f5f870b28bd779e854f9c8fbbd3b"
     },
     {
@@ -583,6 +1088,7 @@
           "no tail"
         ]
       },
+      "referenceSets": [],
       "sha256": "364faaea1fb09cdedae1e1a99d1abe18e19b1a2ca186630f584f47ab10e7d3f4"
     },
     {
@@ -592,6 +1098,7 @@
       "status": "processing",
       "placeholders": [],
       "allowedValues": {},
+      "referenceSets": [],
       "sha256": "ede88750cbe95e8ad2419b5e93d0d67bcbca696ff70fa4966fd20c3ba82ad60b"
     },
     {
@@ -608,6 +1115,7 @@
           "distant_gull"
         ]
       },
+      "referenceSets": [],
       "sha256": "44b7f01f9b9b7b92ca0cdb58cbb077e7cdbf689bbc291415d0e0dad440291f02"
     },
     {
@@ -627,6 +1135,7 @@
           "splash"
         ]
       },
+      "referenceSets": [],
       "sha256": "b570ba52c4af9ac46a2de1f889ff1101002941da3c22c495164a4e67308b3123"
     },
     {
@@ -646,6 +1155,7 @@
           "hourglass"
         ]
       },
+      "referenceSets": [],
       "sha256": "eae7bad441e6db4e5681557680db9851603a737f37cbdcc38105e129845be3ea"
     },
     {
@@ -668,6 +1178,7 @@
           "partial_neutral"
         ]
       },
+      "referenceSets": [],
       "sha256": "d70a235421de36b0e3b691bfa095c3c545ec5ab4c8710a7cd905b492a2acaa80"
     },
     {
@@ -684,6 +1195,7 @@
           "captain_sigh"
         ]
       },
+      "referenceSets": [],
       "sha256": "e8ab32f174fc81364301010e05aa9179dbef2db68d6f961665302630a7dd41d4"
     }
   ]
