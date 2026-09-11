@@ -1,4 +1,4 @@
-# 黑珍珠号资源入口
+﻿# 黑珍珠号资源入口
 
 本目录集中保存黑珍珠号 Agent 指挥台的素材与提示词。项目做什么、角色分工、视觉要求、开发规则及新资源采纳归档规则，统一读插件根目录的 [AGENTS.md](../AGENTS.md)。
 
@@ -13,12 +13,14 @@
 | 项目说明与协作要求 | [AGENTS.md](../AGENTS.md) |
 | 当前有哪些素材、哪些仍缺 | [资源清单](资源清单.md) |
 | 提示词状态与取值 | [分类索引](prompts/README.md)与 [index.json](prompts/index.json)：53 项提示词含 `status`、`allowedValues` 和 `referenceSets`；`inactive/reference` 不提交生成，`processing` 只按索引绑定的当前母版、姿态或成品参考制作；修改后运行 `node resources/tools/audit_prompts.mjs` 校验 |
+| 美术生成工具边界 | GLM-5.3 是文本模型；GLM-5V-Turbo 可看图输出文字评审，不能生成最终 PNG。最终素材请使用支持参考图、蒙版、同画布编辑和真实 alpha/色键导出的专用图像工具，并用确定性脚本校验尺寸与锚点 |
 | 最近安装包与验证范围 | [195731 四包归档与安装](../../../.local/dsh-pirate-command/host-integration/preparations/20260911-195731-mobile-scene-joint/installed-verification.json)：Pirate `4d250d3c`（DjOeAn9k/BflD）+ 固定 Auth `9fdce84f`、Blog `edbd3ae4`、Closedoff `f377f818`，615 个安装文件逐字节一致，并已通过[五视口浏览器验收](../../../.local/dsh-pirate-command/docs/验收/20260911-200229-DjOeAn9k新包安装与窄屏场景浏览器验收.md)；旧 Ch619 包保留[封闭化真实协作](../../../.local/dsh-pirate-command/docs/验收/20260911-123507-封闭化真实协作与新包页面验收.md)与[双业务联合只读](../../../.local/dsh-pirate-command/docs/验收/20260911-195219-双业务真实联合只读与原页面验收.md)证据 |
 | 最新窄屏构建验收 | `index-DjOeAn9k.js` 已进入 `4d250d3c` 新包并通过[安装与五视口浏览器验收](../../../.local/dsh-pirate-command/docs/验收/20260911-200229-DjOeAn9k新包安装与窄屏场景浏览器验收.md)：竖屏按完整船体填宽并保留首尾桅顶、颠簸船底余量，横屏保留原缩放定位；几何边界由 46 项场景聚焦测试、安装字节与运行由 85 项浏览器检查分别证明 |
 | 当前包本地任务流 | [80 项浏览器检查](../../../.local/dsh-pirate-command/docs/验收/20260911-204500-DjOeAn9k当前包本地任务流浏览器验收.md)已在 `4d250d3c` 包内完成模型选择、双业务替身派单、waiting/completed 混合、成果链接、追问不重派、键盘罗盘、面板开合、岗位切换、历史恢复、模型刷新、长错误滚动、桌面和窄屏控件可达、减少动态、音效开启与新协作清理；真实模型/业务仍另有边界 |
 | 当前包恢复浏览器验收 | [68 项恢复检查](../../../.local/dsh-pirate-command/docs/验收/20260911-211500-DjOeAn9k当前包68项恢复浏览器验收.md)：ACK 丢失、原请求重试、断线重连、宿主重启 interrupted、显式继续、401/403/404 与有界路由重试均在 `4d250d3c` 包内通过；身份/模型/业务仍为本地替身 |
 | 当前包真实只读联合 | [DjOeAn9k 双业务真实只读验收](../../../.local/dsh-pirate-command/docs/验收/20260911-214000-DjOeAn9k当前包双业务真实只读联合验收.md)：6 次真实模型、1 次博客 ranking、3 次封闭化网关请求，业务写入 0；39 项技术检查与父语义复核通过 | 不覆盖博客写入/发布、封闭化其他工具、完整海战或全部素材 |
 | 当前包博客确认发布链 | [47 项本地替身浏览器检查](../../../.local/dsh-pirate-command/docs/验收/20260911-215500-DjOeAn9k当前包博客发布确认本地替身验收.md)：候选、原生确认、一次本地发布、刷新恢复与原 Agent 读回通过；真实模型/业务请求 0 | 不证明真实 Typecho 写入、公网文章发布或生产副作用 |
+| 真实 Typecho 写入回滚 | [18 项真实写入验收](../../../.local/dsh-pirate-command/docs/验收/20260911-223000-DjOeAn9k真实Typecho写入发布回滚验收.md)：10 次桥接调用完成空稿、标记正文、发布、公开页读取与删除；模型请求 0，未注册外联 0 | 桥接回执、服务器日志或缓存可能留痕；不覆盖 SEO、邮件、feed、评论、附件或管理写入 |
 | 当前本地前端与验证边界 | 先看[资源清单的接入与验证范围](资源清单.md#当前接入与验证范围)，分别列出本地场景、官方宿主安装包及真实业务证据；版本与限制在该处维护 |
 | 最近的访问清理与原插件会话修复 | [模型目录拒权清理](../../../.local/dsh-pirate-command/docs/验收/20260911-074839-模型目录拒绝访问清理验收.md)、[两原插件会话深链同步](../../../.local/dsh-pirate-command/docs/验收/20260911-074339-原插件会话深链同步修复.md)及[原会话提前入口](../../../.local/dsh-pirate-command/docs/验收/20260911-083251-原会话提前回跳与停止后保留验收.md)已进入旧 085923 并保留在[当前组合](../../../.local/dsh-pirate-command/host-integration/preparations/20260911-123404/combination-final-summary.json)；旧专项不计为本次重新验收 |
 | 最近一次真实博客只读验收 | [修正后两页复验](../../../.local/dsh-pirate-command/docs/验收/20260911-065354-博客统计修正真实两页复验.md)：新博客 0c9c 包，6 次真实模型、2 次元数据查询；原工具及两个 Agent 均正确区分本次保存稿计数 0 与关联标记。船长有一条不适用于满页结果的分页提醒，保留为措辞限制；写入、封闭化和完整业务终验未通过该专项 |
