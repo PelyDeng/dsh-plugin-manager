@@ -174,7 +174,7 @@ for key, body in shared.items():
     content = body + "\n"
     write_text(target, content)
     shared_rows[key] = {"file": target.relative_to(ROOT / "prompts").as_posix(), "sha256": hashlib.sha256(content.encode()).hexdigest()}
-manifest = {"source": SOURCE.name, "sourceSha256": hashlib.sha256(SOURCE.read_bytes()).hexdigest(), "audioSource": AUDIO_SOURCE.name, "audioSourceSha256": hashlib.sha256(AUDIO_SOURCE.read_bytes()).hexdigest(), "count": len(rows), "imageCount": len(rows)-len(CATEGORIES["audio"]), "audioCount": len(CATEGORIES["audio"]), "generatedBy": "../tools/export_prompts.py", "referenceSets": reference_sets, "shared": shared_rows, "assets": rows}
+manifest = {"source": SOURCE.name, "sourceSha256": hashlib.sha256(SOURCE.read_bytes().replace(b"\r\n", b"\n")).hexdigest(), "audioSource": AUDIO_SOURCE.name, "audioSourceSha256": hashlib.sha256(AUDIO_SOURCE.read_bytes().replace(b"\r\n", b"\n")).hexdigest(), "count": len(rows), "imageCount": len(rows)-len(CATEGORIES["audio"]), "audioCount": len(CATEGORIES["audio"]), "generatedBy": "../tools/export_prompts.py", "referenceSets": reference_sets, "shared": shared_rows, "assets": rows}
 write_text(ROOT / "prompts/index.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
 
 intro = """# 分类提示词

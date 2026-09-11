@@ -11,6 +11,7 @@ const statuses = new Set(['active', 'reference', 'inactive', 'processing'])
 const purposes = new Set(['style', 'identity', 'alignment', 'pose'])
 const opaque = new Set(['env-ocean-day', 'env-ocean-storm', 'env-ocean-moon', 'water-displacement'])
 const errors = []
+const localAssetWorkArea = fs.existsSync(path.join(resourcesRoot, 'sources')) || fs.existsSync(path.join(resourcesRoot, 'processed'))
 const sha = value => createHash('sha256').update(value).digest('hex')
 const shaFile = file => sha(fs.readFileSync(file))
 
@@ -43,8 +44,8 @@ if (index.audioCount !== index.assets?.filter(asset => asset.category === 'audio
 if (index.generatedBy !== '../tools/export_prompts.py') errors.push('index.generatedBy is stale')
 const sourcePath = confinedPath(root, index.source, 'source')
 const audioSourcePath = confinedPath(root, index.audioSource, 'audioSource')
-if (sourcePath && shaFile(sourcePath) !== index.sourceSha256) errors.push('sourceSha256 does not match current art source')
-if (audioSourcePath && shaFile(audioSourcePath) !== index.audioSourceSha256) errors.push('audioSourceSha256 does not match current audio source')
+if (sourcePath && sha(fs.readFileSync(sourcePath, 'utf8').replaceAll('\r\n', '\n')) !== index.sourceSha256) errors.push('sourceSha256 does not match current art source')
+if (audioSourcePath && sha(fs.readFileSync(audioSourcePath, 'utf8').replaceAll('\r\n', '\n')) !== index.audioSourceSha256) errors.push('audioSourceSha256 does not match current audio source')
 
 const ids = new Set()
 const files = new Set()
@@ -82,7 +83,7 @@ for (const asset of index.assets ?? []) {
       }
       paths.add(item.path)
       const referencePath = confinedPath(resourcesRoot, item.path, label)
-      if (!referencePath || !fs.existsSync(referencePath) || !fs.statSync(referencePath).isFile()) errors.push(`${label}: missing reference ${item.path}`)
+      if (localAssetWorkArea && (!referencePath || !fs.existsSync(referencePath) || !fs.statSync(referencePath).isFile())) errors.push(`${label}: missing reference ${item.path}`)
       if (!Array.isArray(item.purposes) || !item.purposes.length || item.purposes.some(purpose => !purposes.has(purpose))) errors.push(`${label}: invalid purposes for ${item.path}`)
       for (const [name, value] of Object.entries(item.appliesTo ?? {})) {
         if (!asset.placeholders.includes(name) || !asset.allowedValues?.[name]?.includes(value)) errors.push(`${label}: invalid appliesTo ${name}=${value}`)

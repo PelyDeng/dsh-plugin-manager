@@ -12,7 +12,7 @@
 | --- | --- |
 | 项目说明与协作要求 | [AGENTS.md](../AGENTS.md) |
 | 当前有哪些素材、哪些仍缺 | [资源清单](资源清单.md) |
-| 提示词状态与取值 | [分类索引](prompts/README.md)与 [index.json](prompts/index.json)：53 项提示词含 `status`、`allowedValues` 和 `referenceSets`；`inactive/reference` 不提交生成，`processing` 只按索引绑定的当前母版、姿态或成品参考制作；修改后运行 `node resources/tools/audit_prompts.mjs` 校验 |
+| 提示词状态与取值 | [分类索引](prompts/README.md)与 [index.json](prompts/index.json)：53 项提示词含 `status`、`allowedValues` 和 `referenceSets`；`inactive/reference` 不提交生成，`processing` 只按索引绑定的当前母版、姿态或成品参考制作；本地资源工作区运行 `node resources/tools/audit_prompts.mjs` 会同时校验参考图存在，干净源码检出则只校验提示词合同与索引 |
 | 美术生成工具边界 | GLM-5.3 是文本模型；GLM-5V-Turbo 可看图输出文字评审，不能生成最终 PNG。最终素材请使用支持参考图、蒙版、同画布编辑和真实 alpha/色键导出的专用图像工具，并用确定性脚本校验尺寸与锚点 |
 | 最近安装包与验证范围 | [195731 四包归档与安装](../../../.local/dsh-pirate-command/host-integration/preparations/20260911-195731-mobile-scene-joint/installed-verification.json)：Pirate `4d250d3c`（DjOeAn9k/BflD）+ 固定 Auth `9fdce84f`、Blog `edbd3ae4`、Closedoff `f377f818`，615 个安装文件逐字节一致，并已通过[五视口浏览器验收](../../../.local/dsh-pirate-command/docs/验收/20260911-200229-DjOeAn9k新包安装与窄屏场景浏览器验收.md)；旧 Ch619 包保留[封闭化真实协作](../../../.local/dsh-pirate-command/docs/验收/20260911-123507-封闭化真实协作与新包页面验收.md)与[双业务联合只读](../../../.local/dsh-pirate-command/docs/验收/20260911-195219-双业务真实联合只读与原页面验收.md)证据 |
 | 最新窄屏构建验收 | `index-DjOeAn9k.js` 已进入 `4d250d3c` 新包并通过[安装与五视口浏览器验收](../../../.local/dsh-pirate-command/docs/验收/20260911-200229-DjOeAn9k新包安装与窄屏场景浏览器验收.md)：竖屏按完整船体填宽并保留首尾桅顶、颠簸船底余量，横屏保留原缩放定位；几何边界由 46 项场景聚焦测试、安装字节与运行由 85 项浏览器检查分别证明 |
