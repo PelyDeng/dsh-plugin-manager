@@ -31,7 +31,7 @@ test('authorized conversations can cite actual source, but cannot read runtime f
       await expect(read.execute({ path: 'README.md', lines }, execution)).rejects.toThrow(/无效|invalid arguments/)
     }
     await expect(read.execute({ path: '../../.local/site.json' }, execution)).rejects.toThrow('不在随包')
-    await expect(read.execute({ path: 'plugins/dsh-blog-assistant/config/config.json' }, execution)).rejects.toThrow('不在随包')
+    await expect(read.execute({ path: 'plugins/custom-private-app/config/config.json' }, execution)).rejects.toThrow('不在随包')
     await expect(read.execute({ path: 'package.json' }, { ...execution, agent: {} })).rejects.toThrow('当前示例会话')
     f.revoked.add('login-a')
     await expect(search.execute({ query: 'hello' }, execution)).rejects.toThrow('撤销')
@@ -43,7 +43,7 @@ test('source snapshot includes all public framework layers and excludes private 
   const output = join(root, 'out.json')
   try {
     for (const name of ['README.md', 'README.en.md']) writeFileSync(join(root, name), 'public')
-    for (const path of ['packages/plugin-manager/src', 'packages/plugin-kit/src', 'plugins/dsh-auth/src', 'plugins/dsh-example/src', 'plugins/dsh-blog-assistant/src', 'deploy', '.local']) {
+    for (const path of ['packages/plugin-manager/src', 'packages/plugin-kit/src', 'plugins/dsh-auth/src', 'plugins/dsh-example/src', 'plugins/custom-private-app/src', 'deploy', '.local']) {
       mkdirSync(join(root, path), { recursive: true }); writeFileSync(join(root, path, 'implementation.mjs'), `// ${path}`)
     }
     writeFileSync(join(root, 'plugins/dsh-example', 'config.json'), '{"credential":"private-fixture"}')
@@ -52,7 +52,7 @@ test('source snapshot includes all public framework layers and excludes private 
     mkdirSync(join(root, 'doc/releases'), { recursive: true })
     writeFileSync(join(root, 'doc/releases/v0.1.0.md'), 'historical-release-fixture')
     writeFileSync(join(root, 'doc/unregistered.md.tmpl'), 'unregistered-template-fixture')
-    writeFileSync(join(root, 'plugins/dsh-blog-assistant/private.md.tmpl'), 'private-template-fixture')
+    writeFileSync(join(root, 'plugins/custom-private-app/private.md.tmpl'), 'private-template-fixture')
     for (const name of ['build.sh', 'build.ps1']) {
       writeFileSync(join(root, name), 'private-entry-fixture')
       writeFileSync(join(root, 'deploy', name), 'shared-public-entry-fixture')
@@ -68,7 +68,7 @@ test('source snapshot includes all public framework layers and excludes private 
     expect(value.files.some(file => file.path === 'plugins/dsh-auth/src/implementation.mjs')).toBe(true)
     expect(value.files.some(file => file.path === '.github/workflows/check.yml')).toBe(true)
     expect(value.files.some(file => file.path === 'packages/plugin-kit/src/types.d.mts')).toBe(true)
-    expect(JSON.stringify(value)).not.toContain('dsh-blog-assistant')
+    expect(JSON.stringify(value)).not.toContain('custom-private-app')
     expect(JSON.stringify(value)).not.toContain('private-fixture')
     expect(value.files.some(file => file.path.startsWith('.local/'))).toBe(false)
     expect(value.files.some(file => file.path === 'env.conf')).toBe(true)
