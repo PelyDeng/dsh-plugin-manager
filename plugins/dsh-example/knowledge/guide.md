@@ -39,7 +39,7 @@ pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --
 
 list 只读声明，不要求锁文件；pack 要求作者根的 pnpm-lock.yaml，冻结安装后各执行一次 build/check，再校验并打包，无需事先重复 check。输出必须是新目录或空目录，路径相对作者 root；再次发布用新目录 v2。日常可独立运行 check，它会先 build，完整业务测试另行运行。
 
-交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。
+交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。CLI 会在 pack 成功后输出这些下一步，交付时以整个目录为单位，不单独抽走 tgz。
 
 作者最低声明：name/version/main/files、dsh.bundle.patch、deepseekPlugin.schemaVersion=3/id、scripts.build/check 和 README。entryId 必须对应实际 Cordis patch 条目。注册名、ID、路由及权限修改关系见起步包 README；完整规范查 doc/plugin-configuration.md。
 

@@ -11,8 +11,8 @@ import { validateVerification } from './verification.mjs';
 export function packagePlugins(root, requested, output, packageDirectory, step = (_label, run) => run()) {
   const selected = sourcePlugins(root, requested, packageDirectory);
   const single = packageDirectory !== undefined;
-  if (single && !existsSync(resolve(root, 'pnpm-lock.yaml'))) throw new Error('独立包打包需要包根 pnpm-lock.yaml。');
-  if (existsSync(output) && readdirSync(output).length) throw new Error('发布目录必须不存在或为空；不会覆盖旧操作产物。');
+  if (single && !existsSync(resolve(root, 'pnpm-lock.yaml'))) throw new Error('独立包打包需要包根 pnpm-lock.yaml。请在作者项目根执行 pnpm install --ignore-workspace 生成锁文件后重试。');
+  if (existsSync(output) && readdirSync(output).length) throw new Error('发布目录必须不存在或为空；不会覆盖旧操作产物。请换一个新的发布目录（例如 v2）后重试。');
   mkdirSync(output, { recursive: true });
   if (selected.length) step('安装插件依赖', () => runPnpm(['install', '--frozen-lockfile', ...(single ? ['--ignore-workspace'] : [])], root));
   preparePluginDependencies(root, selected, step);
@@ -49,6 +49,8 @@ export function main(argv = process.argv.slice(2), step) {
   if (!options.root) throw new Error('必须显式指定 --root 项目根目录。');
   const root = resolve(options.root);
   const output = resolve(root, options.output ?? `.local/artifacts/${randomUUID()}/plugins`);
-  packagePlugins(root, options.plugins, output, options.package, step);
+  const manifest = packagePlugins(root, options.plugins, output, options.package, step);
   console.log(`插件产物：${output}`);
+  console.log(`交付插件：${manifest.plugins.map(plugin => plugin.id).join(',') || 'none'}`);
+  console.log('下一步：交付整个发布目录（manifest.json 和全部 tgz）；部署者放入 incoming/<应用目录> 后执行 build，并请求插件声明的 healthPath。');
 }
