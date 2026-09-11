@@ -6,18 +6,9 @@
 
 普通使用者从框架 **{{FRAMEWORK_VERSION}}** 的发行附件取得部署包和 public-apps.zip。public-apps 中的完整目录同时包含 auth/example；复制到 incoming/public-apps 后，不要再复制 optional/auth，以免重复 ID。
 
-仅维护者从源码准备 manager/kit 时，在框架根安装锁定依赖，再执行：
+部署包已经带 manager 和运行镜像信息；本页不构建 manager、kit 或作者源码。需要维护框架源码站点的维护者直接阅读[源码入口](../deploy/README.md#服务器源码发版)。
 
-```sh
-pnpm --filter @dsh-plugin-manager/plugin-kit build
-pnpm --filter @dsh-plugin-manager/plugin-manager build
-pnpm --filter @dsh-plugin-manager/plugin-manager pack --out .local/artifacts/plugin-manager-{{FRAMEWORK_VERSION}}.tgz
-pnpm --filter @dsh-plugin-manager/plugin-kit pack --out .local/artifacts/plugin-kit-{{FRAMEWORK_VERSION}}.tgz
-```
-
-这些是工具构建，不启动站点。需要源码部署的维护者见[源码入口](../deploy/README.md#服务器源码发版)。
-
-## 2. 打包第一个应用
+## 2. 取得第一个应用
 
 使用已发布 public-apps 无需再次打包。要修改 example 时按[内部开发](plugin-development.md#内部工作区开发)打包；独立应用使用起步包和作者指南，完成后把完整输出交给部署者。
 

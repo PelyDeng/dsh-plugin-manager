@@ -46,6 +46,15 @@ function run(root, ...args) {
 }
 function ok(result) { assert.equal(result.status, 0, result.stdout + result.stderr); }
 
+test('CLI help separates author, deployer, and maintainer entries', () => {
+  const result = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8', timeout: 30000 });
+  ok(result);
+  for (const heading of ['插件作者：', '部署者：', '维护者：']) assert.match(result.stdout, new RegExp(heading));
+  assert.match(result.stdout, /pack\s+生成完整发布目录/u);
+  assert.match(result.stdout, /release-site\s+部署包 build 使用的站点发布入口/u);
+  assert.match(result.stdout, /container-start\s+完整运行镜像容器入口/u);
+});
+
 test('runPnpm forwards captured pack diagnostics on failure and keeps successful pack output quiet', t => {
   const { base, root, manifest } = fixture(t);
   manifest.scripts.prepack = 'node prepack.mjs';
@@ -133,10 +142,13 @@ test('a single package builds once and packs a source-free release without touch
   writeFileSync(join(base, 'pnpm-workspace.yaml'), "packages:\n  - '*'\n");
   writeFileSync(join(base, 'pnpm-lock.yaml'), 'parent-lock-must-not-be-used\n');
   const output = join(root, '.local/release');
-  assert.throws(() => packagePlugins(root, undefined, output, '.'), /pnpm-lock/);
+  assert.throws(() => packagePlugins(root, undefined, output, '.'), /pnpm-lock\.yaml。请在作者项目根执行 pnpm install --ignore-workspace/u);
   assert.equal(existsSync(output), false);
   writeFileSync(join(root, 'pnpm-lock.yaml'), lock);
-  ok(run(root, 'pack', '--root', root, '--package', '.', '--output', '.local/release'));
+  const packedRun = run(root, 'pack', '--root', root, '--package', '.', '--output', '.local/release');
+  ok(packedRun);
+  assert.match(packedRun.stdout, /交付插件：fixture/u);
+  assert.match(packedRun.stdout, /下一步：交付整个发布目录.*incoming/u);
   assert.equal(readFileSync(join(root, 'tasks'), 'utf8'), 'build\ncheck\n');
   assert.equal(readFileSync(join(base, 'pnpm-lock.yaml'), 'utf8'), 'parent-lock-must-not-be-used\n');
   assert.equal(existsSync(join(base, 'node_modules')), false);
@@ -169,6 +181,7 @@ test('a single package builds once and packs a source-free release without touch
     const result = run(root, action, '--root', base, '--home', 'data/home', '--artifacts', 'artifacts', '--manifest', releasePath, '--mode', 'development');
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /仅支持 release/);
+    assert.doesNotMatch(result.stderr, /兼容提示：未提供 --manifest/u);
   }
   assert.equal(existsSync(deployment.dataRoot), false);
   assert.equal(existsSync(deployment.artifacts), false);
@@ -184,6 +197,17 @@ test('a single package builds once and packs a source-free release without touch
   const bytes = readFileSync(relocated.plugins[0].archivePath);
   writeFileSync(relocated.plugins[0].archivePath, Buffer.concat([bytes, Buffer.from('tampered')]));
   assert.throws(() => loadRelease(join(delivered, 'manifest.json')), /摘要/);
+});
+
+test('legacy source deployment warns before the manifest fallback fails', t => {
+  const { root } = fixture(t);
+  const plugin = join(root, 'plugins', 'incomplete');
+  mkdirSync(plugin, { recursive: true });
+  json(join(plugin, 'package.json'), { name: 'incomplete', version: '0.0.0' });
+  const result = run(root, 'deploy', '--root', root, '--home', 'data/home', '--artifacts', 'artifacts', '--plugins', 'incomplete');
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /兼容提示：未提供 --manifest/u);
+  assert.equal(existsSync(join(root, 'artifacts')), false);
 });
 
 test('failed builds and unsafe output selections never produce a success manifest', t => {

@@ -42,6 +42,7 @@ export async function main(args = process.argv.slice(2)) {
     const state = readState(join(deployment.profileRoot, STATE));
     const selection = deployment.selection ?? (state ? (state.candidates ?? state.plugins.map(plugin => plugin.id)).join(',') || 'none' : undefined);
     const output = join(deployment.artifacts, randomUUID(), 'plugins');
+    console.warn('兼容提示：未提供 --manifest，将从当前源码自动生成发布包。外部部署建议使用 pack 输出的完整发布目录；该兼容路径将在后续版本收紧。');
     packagePlugins(deployment.root, Array.isArray(selection) ? selection.join(',') || 'none' : selection, output);
     deployment.manifest = join(output, 'manifest.json');
   }

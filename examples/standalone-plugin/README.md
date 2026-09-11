@@ -33,7 +33,7 @@ pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --
 
 list 只读声明，不要求锁文件；pack 要求作者根的 pnpm-lock.yaml，冻结安装后各执行一次 build/check，再校验并打包，无需事先重复 check。输出必须是新目录或空目录，路径相对作者 root；再次发布用新目录 v2。日常可独立运行 check，它会先 build，完整业务测试另行运行。
 
-交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。
+交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。CLI 会在 pack 成功后输出这些下一步，交付时以整个目录为单位，不单独抽走 tgz。
 
 在独立部署目录中把本次完整发布目录放入 incoming/independent-example，执行 build。访问 `http://127.0.0.1:7902/independent-example/ready`；端口改动时使用实际地址。预期 HTTP 200，响应为 `{"ready":true}`；必须验证实际端点，而非仅看到容器运行。
 

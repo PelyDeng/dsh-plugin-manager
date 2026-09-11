@@ -12,6 +12,8 @@
 
 直接打包支持独立 pnpm 单包。npm/yarn/monorepo 不承诺同样的一步流程；部署端只认合规发布物，不扫描作者源码。[部署者指南](first-deployment.md)与[配置规范](plugin-configuration.md)分别说明运行和声明。
 
+作者主路径只需要 `list`、`check`、`pack` 和 `verify-package`。其中 `pack` 会冻结安装并执行 build/check，这是交付前最后一道检查；站点部署、恢复和迁移由部署者按对应文档处理。
+
 ## 独立仓库开发
 
 ### 1. 取得并安装工具
@@ -30,7 +32,7 @@ pnpm exec dsh-plugin-manager --version
 将占位路径替换为实际绝对路径，含空格时加引号。以后 pnpm exec dsh-plugin-manager 都在这个工具目录执行，--root 明确指向作者项目。manager 不加入业务运行依赖；工具目录和作者项目各自保存锁文件。
 <!-- /excerpt:author-tools -->
 
-附件见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)。已有框架源码的维护者可按[准备工具](getting-started.md#1-准备工具和目录)构建工具；普通作者不用克隆框架。
+附件见 [GitHub Releases](https://github.com/PelyDeng/dsh-plugin-manager/releases)。普通作者不用克隆框架；需要维护框架源码站点时再阅读[源码部署](../deploy/README.md#服务器源码发版)。
 
 ### 2. 先按原名跑通
 
@@ -54,7 +56,7 @@ pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --
 
 list 只读声明，不要求锁文件；pack 要求作者根的 pnpm-lock.yaml，冻结安装后各执行一次 build/check，再校验并打包，无需事先重复 check。输出必须是新目录或空目录，路径相对作者 root；再次发布用新目录 v2。日常可独立运行 check，它会先 build，完整业务测试另行运行。
 
-交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。
+交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。CLI 会在 pack 成功后输出这些下一步，交付时以整个目录为单位，不单独抽走 tgz。
 <!-- /excerpt:author-pack -->
 
 按[首次部署](first-deployment.md)用真实请求跑通。无 kit 示例请求 `/independent-example/ready`；鉴权示例需 optional/auth、登录与授权后请求 `/independent-access-example/identity`。有了第一次成功后再改名称和业务。

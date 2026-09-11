@@ -2,12 +2,20 @@
 
 [项目首页](../README.md) · [English](../README.en.md)
 
-## 第一次使用
+## 按角色选择入口
 
-1. [插件产物一键部署](first-deployment.md)：下载部署包，放完整插件目录，运行 build。
-2. [独立作者接入](plugin-development.md)：取得起步包与工具，开发和打包自己的插件。
-3. [登录、授权与问答体验](getting-started.md)：使用 auth/example 验证实际功能。
-4. [图文导览](quick-tour.md)：查看页面与操作效果。
+| 角色 | 先做 | 入口 |
+| --- | --- | --- |
+| 插件作者 | 从 starter 跑通 `list / check / pack`，交付完整发布目录 | [独立作者接入](plugin-development.md) |
+| 部署者 | 把完整发布目录放入 `incoming`，执行 build 并请求实际端点 | [插件产物一键部署](first-deployment.md) |
+| 站点维护者 | 处理源码发版、按需复用、恢复和迁移 | [部署与管理](../deploy/README.md) |
+
+第一次使用不需要读完所有文档。作者先看起步包 README；部署者只处理发布目录，不需要作者源码；恢复和高级配置属于维护路径。
+
+## 体验与导览
+
+1. [登录、授权与问答体验](getting-started.md)：使用 auth/example 验证实际功能。
+2. [图文导览](quick-tour.md)：查看页面与操作效果。
 
 ## 开发插件
 
