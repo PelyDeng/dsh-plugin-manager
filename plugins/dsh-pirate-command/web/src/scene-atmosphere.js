@@ -68,6 +68,34 @@ export function rippleReflection(reflection, time, reduced, tint = 0xffffff) {
   });
 }
 
+export function createFogEffects(scene, images, ribbons = []) {
+  // 雾条在海面之上、船体之后；位置与节奏来自资源清单，不在运行时生成业务含义。
+  const container = scene.add.container();
+  const layers = (ribbons.length ? ribbons : [{ key: images['fog-ribbon'], x: 220, y: 240, width: 430, height: 180, alpha: .22, speed: .006, offset: 0 }])
+    .filter(spec => images[spec.key])
+    .map(spec => {
+      const image = scene.add.image(spec.x, spec.y, spec.key, '__BASE')
+        .setOrigin(.5, 320 / 512)
+        .setDisplaySize(spec.width, spec.height)
+        .setAlpha(spec.alpha);
+      container.add(image);
+      return { image, baseX: spec.x, ...spec };
+    });
+  return { container, layers, time: 0 };
+}
+
+export function updateFogEffects(effects, { delta, storm = 0, reduced = false }) {
+  if (!effects.layers.length) return;
+  if (reduced) return;
+  effects.time += Math.min(50, Math.max(0, delta));
+  effects.layers.forEach(layer => {
+    const phase = effects.time / 1000 * layer.speed + layer.offset;
+    const drift = Math.sin(phase) * 20;
+    const fade = .88 + .12 * Math.sin(phase + 1);
+    layer.image.setX(layer.baseX + drift).setAlpha(layer.alpha * (.86 + storm * .14) * fade);
+  });
+}
+
 export function createStormEffects(scene, images) {
   // 闪电位于海天之上、船只之后；雨线用固定数量的透明图组覆盖场景。
   const sky=scene.add.container(), rain=scene.add.container().setDepth(10);

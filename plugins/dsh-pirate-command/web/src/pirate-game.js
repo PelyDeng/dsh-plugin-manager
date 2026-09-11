@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { ACTOR_FOR_CREW, createSceneEventFeed, previewText } from './scene-events.js';
-import { weatherForPhase, stepAtmosphere, createSeaLayer, createReflection, rippleReflection, createStormEffects, resetStormEffects, updateStormEffects } from './scene-atmosphere.js';
+import { weatherForPhase, stepAtmosphere, createSeaLayer, createReflection, rippleReflection, createStormEffects, resetStormEffects, updateStormEffects, createFogEffects, updateFogEffects } from './scene-atmosphere.js';
 import { TaskSignals } from './task-signals.js';
 import { createSceneAudio } from './scene-audio.js';
 import { createShipDamage } from './scene-damage.js';
@@ -35,6 +35,7 @@ export function createPirateGame(host, handlers={}) {
       this.stormFx=createStormEffects(this,manifest.images);
       this.lit=[];
       this.world=this.add.container();
+      this.fogEffects=createFogEffects(this,manifest.images,manifest.fogRibbons);this.world.add(this.fogEffects.container);
       this.shipLayout=manifest.shipLayout;
       const {x:shipX,y:shipY,scale:shipScale,wake}=this.shipLayout;
       this.shipReflectionGroup=this.add.container(shipX,shipY).setScale(shipScale);this.world.add(this.shipReflectionGroup);
@@ -328,6 +329,7 @@ export function createPirateGame(host, handlers={}) {
       this.syncMuzzleLayers();
       this.shipReflectionGroup.y=this.ship.y;this.shipReflectionGroup.rotation=this.ship.rotation;
       this.updateAtmosphere(delta,reduced);
+      updateFogEffects(this.fogEffects,{delta,storm:this.atmosphere.storm,reduced});
       updateStormEffects(this.stormFx,{width:this.scale.width,height:this.scale.height,delta,phase:state.phase,storm:this.atmosphere.storm,active:this.perform,reduced});
       rippleReflection(this.shipReflection,t,reduced);rippleReflection(this.enemyReflection,t,reduced,this.atmosphere.tint);
       this.wake.setPosition(this.shipLayout.wake.x+Math.sin(t*.45)*4,this.shipLayout.wake.y+Math.sin(t*.7)*3).setAlpha(.65+Math.sin(t*.9)*.12);
@@ -381,6 +383,7 @@ export function createPirateGame(host, handlers={}) {
       host.dataset.coinFlights=String(this.taskSignals.flights.filter(flight=>flight.kind==='coin').length);host.dataset.returnFlights=String(this.taskSignals.flights.filter(flight=>flight.kind==='return').length);
       host.dataset.collectedTokens=[...this.taskSignals.collected].map(([id,item])=>id+':'+item.stage).join(',');
       host.dataset.rainActive=String(this.stormFx.rain.visible&&this.stormFx.drops.length>0);host.dataset.rainDrift=this.stormFx.time.toFixed(0);
+      host.dataset.fogRibbons=JSON.stringify(this.fogEffects.layers.map(layer=>({key:layer.key,x:layer.image.x,y:layer.image.y,width:layer.image.displayWidth,height:layer.image.displayHeight,alpha:layer.image.alpha})));
       host.dataset.lightningAlpha=(this.stormFx.bolt?.alpha||0).toFixed(3);
     }
   }

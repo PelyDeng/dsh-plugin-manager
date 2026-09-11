@@ -51,7 +51,8 @@
     "deck-fire": "deck-fire-cycle-v01.png",
     "hull-damage": "hull-damage-v01.png",
     "figurehead": "figurehead-candidate-v01.png",
-    "figurehead-eye": "figurehead-eye-glow-v01.png"
+    "figurehead-eye": "figurehead-eye-glow-v01.png",
+    "fog-ribbon": "fog-ribbon-v01.png"
   },
   "enemyCrew": [
     { "key": "enemy-tricorne", "displayFoot": [73.20441988950276, 191.4364640883978], "bodyHeight": 32, "poses": { "command": "enemy-tricorne-command" } },
@@ -468,5 +469,10 @@
       "key": "figurehead",
       "eye": "figurehead-eye"
     }
-  }
+  },
+  "fogRibbons": [
+    { "key": "fog-ribbon", "x": 220, "y": 240, "width": 430, "height": 180, "alpha": 0.22, "speed": 0.035, "offset": 0 },
+    { "key": "fog-ribbon", "x": 820, "y": 325, "width": 560, "height": 230, "alpha": 0.18, "speed": 0.028, "offset": 2 },
+    { "key": "fog-ribbon", "x": 1420, "y": 520, "width": 480, "height": 210, "alpha": 0.15, "speed": 0.032, "offset": 4 }
+  ]
 }

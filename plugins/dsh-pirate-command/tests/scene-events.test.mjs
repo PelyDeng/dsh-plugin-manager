@@ -265,13 +265,14 @@ function display(x = 0, y = 0) {
   for (const method of ['setCrop', 'setAngle', 'setFlipX', 'setFlipY', 'setBlendMode']) object[method] = function () { return this; };
   return object;
 }
-async function sceneFixture({ jack = false, signals = false, storm = false, damage = false, details = false, shotEffects = false, enemyPoses = false } = {}) {
+async function sceneFixture({ jack = false, signals = false, storm = false, damage = false, details = false, shotEffects = false, enemyPoses = false, fog = false } = {}) {
   let scene;
   const sceneManifest=JSON.parse(readFileSync(new URL('../web/public/assets/manifest.json', import.meta.url), 'utf8'));
   const manifest = { images: {'enemy-foreground':sceneManifest.images['enemy-foreground']}, enemyCrew:sceneManifest.enemyCrew, shipLayout: sceneManifest.shipLayout, characters: { barbossa: {}, elizabeth: {}, ...(jack ? { jack: {} } : {}) }, cannon: { muzzle: [0, 0] } };
   manifest.enemyCrew=manifest.enemyCrew.map((asset,index)=>({...asset,poses:enemyPoses?(index===0?{command:'enemy-tricorne-command'}:index===2?{coverEars:'enemy-beige-cover-ears'}:undefined):undefined}));
   if(shotEffects)manifest.occlusion=sceneManifest.occlusion;
   if(storm)Object.assign(manifest.images,{'weather-rain':'rain.png','weather-lightning':'lightning.png'});
+  if(fog){manifest.images['fog-ribbon']=sceneManifest.images['fog-ribbon'];manifest.fogRibbons=sceneManifest.fogRibbons;}
   if(damage)manifest.damage={scar:'scar',fire:'fire',spots:[{x:700,y:845,size:100,fire:[565,680]},{x:1200,y:835,size:100,fire:[1130,795]}]};
   if(details)manifest.shipDetails={figurehead:{key:'statue',eye:'eye',x:155,y:443,size:200},projection:{x:550,y:323,fontSize:15,angle:17}};
   if(shotEffects)manifest.shotEffects={
@@ -330,6 +331,23 @@ const assigned = [event(1, 'thinking', 'jack'),
   event(3, 'commanding'), event(4, 'working')];
 const returned = [...assigned, { seq: 5, role: 'closedoff', type: 'message', text: '公开返回正文' },
   event(6, 'returning'), { seq: 7, role: 'closedoff', type: 'artifact', text: '成果标题不能覆盖正文' }];
+
+test('海雾素材按清单挂载并漂移，减少动态时保持静止',async()=>{
+  const {api,scene,host,advance}=await sceneFixture({fog:true});
+  assert.equal(scene.fogEffects.layers.length,3);
+  assert.ok(scene.world.list.includes(scene.fogEffects.container));
+  advance(50);
+  const initial=JSON.parse(host.dataset.fogRibbons);
+  assert.deepEqual(initial.map(item=>item.key),['fog-ribbon','fog-ribbon','fog-ribbon']);
+  assert.ok(initial.every(item=>item.width>0&&item.height>0&&item.alpha>0));
+  advance(3200);
+  const moving=JSON.parse(host.dataset.fogRibbons);
+  assert.ok(moving.some((item,index)=>Math.abs(item.x-initial[index].x)>=1),'雾条应缓慢漂移');
+  api.setReducedMotion(true);
+  const frozen=JSON.parse(host.dataset.fogRibbons);
+  advance(3200);
+  assert.deepEqual(JSON.parse(host.dataset.fogRibbons),frozen);
+});
 
 test('竖屏构图填满可用船宽，并为完整首尾桅顶和颠簸船底保留屏幕余量',async()=>{
   const {scene}=await sceneFixture();
