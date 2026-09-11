@@ -6,3 +6,5 @@
 !资源变更记录.md
 !prompts/
 !prompts/**
+!tools/
+!tools/export_prompts.py
