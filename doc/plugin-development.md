@@ -75,6 +75,38 @@ list 只读声明，不要求锁文件；pack 要求作者根的 pnpm-lock.yaml�
 
 后续开发循环：改代码并运行业务测试 → pack 到新的发布目录 → 整体替换 incoming 对应目录 → build → 再请求验证。多个应用保留完整选集，更新与配置错误恢复见部署指南。当前不提供外部 development/link/HMR。
 
+### 5. 给工具打分类标签
+
+工具用 kit 的 `createPluginTools` 登记，第三个参数是**分类标签**，由插件自己填写：
+
+```js
+const tools = createPluginTools(ctx, { permission: 'my-plugin:access', authorize })
+tools.register(definition, '查询订单', '订单管理')   // 第三项就是分类
+```
+
+分类有两个用途。一是认证页面按标签分组展示，让使用者看清一个插件提供什么。二是**限制某个
+Agent 只能调用自己标签下的工具** —— 宿主用 `toolsForCategory(全部条目, 本分类)` 算出「本分类
++ 通用工具」的名单，再在**该 Agent 的 agent 作用域**里用 `tools.restrict({ allow })` 应用：
+
+```js
+// 必须在 agent 的 setup（agent.ctx）里做。插件级限制会波及所有 Agent，宿主会直接拒绝：
+// tools.restrict() requires a scoped context (agent.ctx)
+agentCtx.tools.restrict({ allow: toolsForCategory(allTools, '订单管理') })
+```
+
+约定好的公共工具集使用固定标签 `通用工具`（kit 导出的 `UNIVERSAL_TOOL_CATEGORY`），任何
+Agent 都能调用。四条容易写错的边界：
+
+- **通用集必须并进来**，否则 Agent 连公共工具都调不了；
+- **未分类的工具不自动放行**。不传分类的旧插件照常工作，但不参与这套限制 —— 顺手放行会让
+  限制形同虚设；
+- **`allow` 只认宿主全局注册的工具名**。把本 Agent 作用域里刚注册的局部工具写进 allow 会以
+  `names unknown global tool` 失败；局部工具本来就只对该 Agent 可见，不必列入；
+- **不要拿空数组去 restrict**。`allow: []` 会遮蔽全部工具（包括该 Agent 自己的），目录读不到
+  时宁可不施加限制。
+
+`category` 是可选字段，不填不影响工具可用。
+
 ## 内部工作区开发
 
 ### 1. 安装依赖并扫描插件
