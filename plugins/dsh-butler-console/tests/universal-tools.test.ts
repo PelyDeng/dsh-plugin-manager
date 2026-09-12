@@ -91,11 +91,18 @@ describe('管家的通用工具可见性', () => {
     expect(universalToolNames(catalogContext([]))).toEqual([])
   })
 
-  it('允许列表最终包含派活工具', () => {
-    // 派活工具是管家自己的，始终可见；通用工具是额外增加的。
-    const allow = ['butler_plan', ...universalToolNames(catalogContext(catalog))]
-    expect(allow).toContain('butler_plan')
+  it('允许列表只列全局工具，不含派活工具', () => {
+    /**
+     * 派活工具**不在** allow 里，这不是遗漏。
+     *
+     * `restrict` 的 allow 只认宿主全局注册的工具，而 `butler_plan` 是管家注册在自己 agent
+     * 作用域里的局部工具 —— 写进 allow 会以 `names unknown global tool "butler_plan"` 直接
+     * 失败（真实宿主验收抓到过这个，表现为整轮对话只回一条笼统的失败）。局部工具本来就只对
+     * 这个 Agent 可见，不必列入 allow。
+     */
+    const allow = universalToolNames(catalogContext(catalog))
     expect(allow).toContain('common_weather')
+    expect(allow).not.toContain('butler_plan')
     expect(allow).not.toContain('closedoff_vehicle_track')
   })
 })

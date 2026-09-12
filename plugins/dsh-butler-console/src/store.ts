@@ -232,6 +232,22 @@ export class TaskStore {
       VALUES(?,?,?,?,?)`).run(id, actor.namespace, actor.userId, now, now)
   }
 
+  /**
+   * 为「打开一个会话」登记归属，新会话就地创建。
+   *
+   * 与 {@link assertOwner} 的区别在于**新会话应该被接受**：会话 id 由页面在客户端生成，
+   * 首次发消息时库里还没有这条记录。若先断言归属再创建，新会话会被判成「不存在」而拒绝 ——
+   * 这正是页面第一次发消息开不出会话的原因。
+   *
+   * 已经属于他人时不泄露存在性：与 {@link assertOwner} 返回同样的错误。
+   */
+  openOrReserveConversation(id: string, actor: Actor): void {
+    const now = Date.now()
+    this.db.prepare(`INSERT OR IGNORE INTO conversations(id, owner_namespace, owner_id, created_at, updated_at)
+      VALUES(?,?,?,?,?)`).run(id, actor.namespace, actor.userId, now, now)
+    this.assertOwner(id, actor)
+  }
+
   /** 校验会话归属。未知、他人或已删除的会话返回同一个结果，不泄露存在性。 */
   assertOwner(conversationId: string, actor: Actor): void {
     const row = this.db.prepare('SELECT 1 FROM conversations WHERE id=? AND owner_namespace=? AND owner_id=?')

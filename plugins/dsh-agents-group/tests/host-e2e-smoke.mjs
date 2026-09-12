@@ -83,9 +83,40 @@ const modelRequests = []
 const model = createServer(async (req, res) => {
   const chunks = []
   for await (const chunk of req) chunks.push(chunk)
-  try { modelRequests.push(JSON.parse(Buffer.concat(chunks).toString('utf8'))) } catch { /* 非 JSON 请求不记录 */ }
+  let payload
+  try {
+    payload = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    modelRequests.push(payload)
+  } catch { /* 非 JSON 请求不记录 */ }
   res.writeHead(200, { 'content-type': 'text/event-stream' })
   res.write('data: {"choices":[{"delta":{"role":"assistant","content":null}}]}\n\n')
+
+  /**
+   * 第一次调用先要一个通用工具，之后才给最终答复。
+   *
+   * 这样这一轮真的会走完「模型要工具 → 宿主执行 → 结果回模型 → 出答复」。只要管家拿得到
+   * `common_weather`，它就会出现在工具清单里，替身才可能提出这个调用 —— 断言因此验的是
+   * **工具真的可用**，而不只是「清单里出现过这个名字」。
+   */
+  const toolResults = (payload?.messages ?? []).filter(message => message?.role === 'tool')
+  if (toolResults.length === 0) {
+    res.write(`data: ${JSON.stringify({
+      choices: [{
+        delta: {
+          tool_calls: [{
+            index: 0,
+            id: 'weather_1',
+            type: 'function',
+            function: { name: 'common_weather', arguments: JSON.stringify({ location: '重庆', days: 1 }) },
+          }],
+        },
+        finish_reason: 'tool_calls',
+      }],
+    })}\n\n`)
+    res.end('data: [DONE]\n\n')
+    return
+  }
+
   for (const text of ['收到。', '这是本地替身模型的回答。']) {
     if (res.destroyed) return
     await delay(60)
@@ -217,25 +248,25 @@ try {
   record('管家 /chat 接受一轮对话', chatResponse.status === 200, `实际 ${chatResponse.status}`)
   if (chatResponse.status === 200) {
     // 把 SSE 读完，确认这一轮真的跑到了模型调用。
-    await chatResponse.text()
+    const streamText = await chatResponse.text()
+    // 流里出现 error 事件就说明这一轮没跑完，直接把它显示出来，不要只看状态码。
+    const streamError = /"type":"error","message":"([^"]*)"/u.exec(streamText)?.[1]
+    record('这一轮没有报错', streamError === undefined, streamError ?? '无 error 事件')
     for (let i = 0; i < 100 && modelRequests.length === 0; i += 1) await delay(100)
 
     const request = modelRequests.at(-1)
     /**
-     * 整轮模型调用是**本验收的已知边界**，不是产品缺陷。
+     * 整轮模型调用确实跑起来了：宿主、群组、管家、模型替身四段连上了。
      *
-     * 管家要求会话归属当前登录用户（`assertOwner` 按 owner 校验），而这个脚本没有走登录
-     * 流程，因此新建会话会被拒、这一轮走不到模型。要覆盖它需要在脚本里接入 auth 的用户
-     * 创建与登录（参考 `plugins/dsh-example/tests/host-smoke.mjs` 的 authenticated 段）。
-     *
-     * 所以这里如实记录边界，而不是留一条永远红的断言：跑出 0 次是预期内的，跑出请求则
-     * 顺带核查工具清单。
+     * 工具清单的核查取决于**替身是否主动发起工具调用**（它的脚本分支决定）。要求工具调用是
+     * 更强的验证，等替身的分支落实后再把它改成硬断言；在那之前先记录事实，不用一条永远红的
+     * 断言掩盖真实信号。
      */
-    record('整轮模型调用需要登录（本验收未覆盖）', true, `替身收到 ${modelRequests.length} 次请求`)
+    record('整轮对话跑到了模型调用', request !== undefined, `替身收到 ${modelRequests.length} 次请求`)
     if (request !== undefined) {
       // OpenAI 兼容格式：tools[].function.name。
       const names = (request.tools ?? []).map(tool => tool?.function?.name ?? tool?.name).filter(name => typeof name === 'string')
-      record('管家把工具清单交给了模型', names.length > 0, names.join('、') || '（空）')
+      record('模型请求里带上了工具清单', names.length > 0, names.length > 0 ? names.join('、') : '（本轮替身未要求工具调用）')
       record('工具清单里有 common_weather（通用工具）', names.includes('common_weather'), names.join('、'))
       record('工具清单里有 butler_plan（派活工具）', names.includes('butler_plan'), names.join('、'))
       // 成员名单进系统提示词：管家据此知道能派给谁。
@@ -255,8 +286,8 @@ try {
 
 const failed = results.filter(item => !item.ok)
 console.log(`\n  共 ${results.length} 项，通过 ${results.length - failed.length}，失败 ${failed.length}`)
-if (failure !== undefined || failed.length > 0) {
-  console.log(`  诊断目录：${operation}`)
-  process.exit(1)
-}
+// 宿主日志始终落盘：挂载期或请求期的错误只出现在宿主输出里，不留下来就只能靠猜。
+writeFileSync(join(operation, 'host.log'), hostLog)
+console.log(`  宿主日志与诊断：${operation}`)
+if (failure !== undefined || failed.length > 0) process.exit(1)
 console.log('  群组 + 管家真实宿主端到端验收通过。')

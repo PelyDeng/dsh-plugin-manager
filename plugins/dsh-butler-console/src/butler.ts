@@ -26,7 +26,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { AccessError, conversationModel, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, conversationModel, defaultConversationModel, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
 import type { Config } from './config.ts'
 import type { ButlerAgentExecutor, ButlerMember, ButlerPhase, ButlerProgressUpdate, ButlerReplyRequest } from './protocol.ts'
@@ -251,7 +251,10 @@ export class ButlerConsole {
     this.access.assert(actor)
     if (requestedId === undefined && !createMissing) return undefined
     const id = requestedId === undefined ? this.createId() : this.validateId(requestedId)
-    if (requestedId !== undefined) this.store.assertOwner(id, actor)
+    // 新会话要就地创建：会话 id 由页面在客户端生成，首次发消息时库里还没有这条记录。
+    // 若这里先 assertOwner，新会话会被判成「不存在」而拒绝，页面就开不出会话。
+    // 已属于他人时 openOrReserveConversation 以同样的 404 拒绝，不泄露存在性。
+    if (requestedId !== undefined) this.store.openOrReserveConversation(id, actor)
     const existing = this.conversations.get(id)
     if (existing !== undefined) {
       existing.lastUsedAt = Date.now()
@@ -270,7 +273,20 @@ export class ButlerConsole {
   }
 
   private async openAgent(id: string, actor: Actor): Promise<Conversation | undefined> {
-    const selection = await conversationModel(this.ctx, id)
+    /**
+     * 新会话还没有持久化记录，读会话模型会以「找不到会话」失败。
+     *
+     * 那不是异常，而是「这是新会话」—— 新会话就该用宿主默认模型，这也正是
+     * `conversationModel` 在没有模型记录时的返回值。若不在这里兜住，页面第一次发消息永远
+     * 开不出会话，表现为 SSE 里一条笼统的「服务处理请求失败」，很难看出原因。
+     */
+    let selection: Awaited<ReturnType<typeof conversationModel>>
+    try {
+      selection = await conversationModel(this.ctx, id)
+    } catch (error) {
+      if (!isNotFound(error)) throw error
+      selection = await defaultConversationModel(this.ctx)
+    }
     this.access.assert(actor)
     if (this.disposed) throw new AccessError(503, '插件正在停止')
     const effort = selection.reasoningEffort ?? this.config.reasoningEffort
@@ -331,14 +347,21 @@ export class ButlerConsole {
     // 去派活。
     //
     // 从目录实时读而不是写死名单：新增通用工具时管家自动就能用，不需要改这里。
-    agentCtx.tools.restrict({ allow: [PLAN_TOOL, ...this.universalToolNames(agentCtx)] })
+    //
+    // 只列**全局**工具名，并且**读不到目录时干脆不施加限制**。
+    //
+    // 两个失败方向都不对称，必须选对：`restrict({ allow: [] })` 会遮蔽**所有**工具（包括
+    // 刚注册的 `butler_plan`），管家于是连派活工具都没有、整轮只能干瞪眼；而「不限制」的最坏
+    // 结果是管家多看到几个工具，它仍受自己的提示词与鉴权约束。所以空清单绝不能拿去 restrict。
+    const universal = this.universalToolNames(agentCtx)
+    if (universal.length > 0) agentCtx.tools.restrict({ allow: universal })
   }
 
   /**
    * 当前目录里标记为「通用工具」的工具名。
    *
-   * 读不到目录时返回空数组：宁可让管家退回「只会派活」这个保守形态，也不要因为一次读取
-   * 失败就让它拿到不该有的工具。
+   * 读不到目录时返回空数组，**由调用方理解为「本次不施加限制」**——理由见调用处：
+   * 空 allow 会遮蔽全部工具，那比不限制糟得多。
    */
   private universalToolNames(ctx: Context): string[] {
     try {
