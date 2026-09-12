@@ -1,6 +1,6 @@
 {
   "name": "dsh-butler-console",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "DSH 管家工作台：统一对话入口、任务拆解与子 Agent 调度状态页",
   "license": "UNLICENSED",
   "private": true,
