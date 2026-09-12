@@ -123,6 +123,70 @@ describe('地点解析', () => {
   })
 })
 
+describe('行政区划写法的兼容', () => {
+  /** 数据源按专名匹配：带后缀查不到，去后缀才命中。 */
+  function stubByQuery(map: Record<string, unknown>) {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
+      const url = new URL(String(input))
+      const name = url.searchParams.get('name') ?? ''
+      calls.push(name)
+      return { ok: true, status: 200, json: async () => map[name] ?? {} } as unknown as Response
+    }))
+    return calls
+  }
+
+  it('「重庆市」查不到时自动去掉后缀重试', async () => {
+    // 真实数据源的行为：带行政后缀零结果，去掉才命中。
+    const calls = stubByQuery({
+      重庆: { results: [{ name: '重庆', latitude: 29.56, longitude: 106.55, admin1: '重庆市', country: '中国', country_code: 'CN', timezone: 'Asia/Shanghai' }] },
+    })
+    const place = await resolvePlace('重庆市')
+    expect(calls).toContain('重庆市')
+    expect(calls).toContain('重庆')
+    expect(place.latitude).toBeCloseTo(29.56)
+    // 按原样命中时不该多话；这里是去后缀才命中的，所以提示标准写法。
+    expect(place.standardName).toBe('重庆')
+  })
+
+  it('原样就能命中时不提示标准写法', async () => {
+    stubByQuery({
+      浦东新区: { results: [{ name: '浦东新区', latitude: 31.22, longitude: 121.54, admin1: '上海市', country: '中国', country_code: 'CN' }] },
+    })
+    const place = await resolvePlace('浦东新区')
+    expect(place.standardName).toBeUndefined()
+  })
+
+  it('region 也容忍后缀差异', async () => {
+    // 使用者写「北京市」，数据里是「北京」；不该因此判为不匹配。
+    stubByQuery({
+      朝阳: { results: [{ name: '朝阳', latitude: 39.92, longitude: 116.44, admin1: '北京', country: '中国', country_code: 'CN' }] },
+    })
+    const place = await resolvePlace('朝阳区', { region: '北京市' })
+    expect(place.latitude).toBeCloseTo(39.92)
+  })
+
+  it('查省级时回退到省会，并如实说明不是全省数据', async () => {
+    // 数据源没有省级条目，这是它的固有限制；回退必须带口径说明，否则等于骗人。
+    const calls = stubByQuery({
+      成都: { results: [{ name: '成都', latitude: 30.57, longitude: 104.07, admin1: '四川', admin2: '成都市', country: '中国', country_code: 'CN' }] },
+    })
+    const place = await resolvePlace('四川省')
+    expect(calls).toContain('四川')
+    expect(calls).toContain('成都')
+    expect(place.name).toBe('成都')
+    expect(place.assumption).toContain('省会')
+    expect(place.assumption).toContain('四川省')
+    // 已经有口径说明了，不再叠一条标准写法提示。
+    expect(place.standardName).toBeUndefined()
+  })
+
+  it('未知省份仍然明确报错，不回退到别的地方', async () => {
+    stubByQuery({})
+    await expect(resolvePlace('不存在的省')).rejects.toThrow(/没有找到/)
+  })
+})
+
 describe('预报查询', () => {
   const place: ResolvedPlace = { name: '重庆市', region: '重庆市 中国', latitude: 29.56, longitude: 106.55, timezone: 'Asia/Shanghai' }
 

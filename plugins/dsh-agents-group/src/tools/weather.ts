@@ -17,12 +17,20 @@ export const WEATHER_TOOL_NAME = 'common_weather'
  *
  * 支持按省、市、区县名查询。重名行政区（例如多个「朝阳区」）用 `region` 参数限定，
  * 避免静默落到同名异地 —— 那是这类查询最容易出的错。
+ *
+ * 描述里写清数据源的两条真实限制，让模型知道什么时候该提示使用者，而不是硬答：
+ * 省级只给省会、数据源不覆盖所有市辖区。
  */
 export const weatherTool = defineTool({
   name: WEATHER_TOOL_NAME,
-  description: '查询中国各省、市、区县的当前天气与未来几天预报。地点填城市或区县名；同名行政区用 region 限定。',
+  description: [
+    '查询中国各地的当前天气与未来几天预报。地点填城市名；带「市」「省」「区」等后缀也能识别。',
+    '两条数据源限制要在答复里如实说明：查某个省时给的是省会的情况（不是全省）；',
+    '数据源只收录城镇、不覆盖全部市辖区，个别区县（例如部分直辖市下辖区）查不到。',
+    '同名地区较多时用 region 指定上级行政区，例如 region=北京市。',
+  ].join(''),
   parameters: {
-    location: { type: 'string', required: true, description: '地点名称，例如「重庆市」「朝阳区」「浦东新区」。' },
+    location: { type: 'string', required: true, description: '地点名称，例如「重庆」「成都市」「渝北区」「浦东新区」。' },
     region: { type: 'string', description: '用于消歧的上级行政区，例如「北京市」或「四川省」。同名区县较多时建议填写。' },
     days: { type: 'integer', description: '预报天数，1 到 7，默认 3。' },
   },
