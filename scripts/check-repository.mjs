@@ -15,7 +15,10 @@ assert.equal(ignoredTracked.length, 0, `Ignored files tracked by Git:\n${ignored
 const deleted = new Set(execFileSync('git', ['ls-files', '--deleted', '-z'], { cwd: root, encoding: 'utf8' }).split('\0'));
 const files = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(name => name && !deleted.has(name));
 const vendorArchives = new Set();
-for (const name of files.filter(name => /^plugins\/[^/]+\/package.json$/.test(name))) {
+// 声明来源包括插件自身的清单，以及插件内嵌套子包的清单（例如群组插件的 agents/* 与
+// packages/*）。子包同样可能携带 vendor 归档，只扫顶层会把它误判为未声明。
+const manifestPattern = /^plugins\/[^/]+\/(?:[^/]+\/)*package\.json$/;
+for (const name of files.filter(name => manifestPattern.test(name))) {
   const manifest = JSON.parse(readFileSync(resolve(root, name), 'utf8'));
   for (const spec of Object.values(manifest.devDependencies ?? {})) {
     if (typeof spec === 'string' && /^file:(?:\.\/)?vendor\/[a-zA-Z0-9._-]+\.tgz$/.test(spec)) {
