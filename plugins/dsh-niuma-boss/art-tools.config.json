@@ -2,7 +2,8 @@
   "pixellab": {
     "apiKey": "192d3f09-145e-4c94-b923-2fbf1280310c",
     "mcpUrl": "https://api.pixellab.ai/mcp",
-    "generationBudgetUsd": 5
+    "generationBudgetUsd": 5,
+    "subscriptionGenerationsBudget": 5000
   },
   "pixelorama": {
     "executablePath": "E:/B_其他工具/Pixelorama素材修复/Pixelorama-Windows-64bit/Pixelorama.exe"
