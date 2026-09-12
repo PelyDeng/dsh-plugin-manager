@@ -27,7 +27,7 @@ export function siteArguments(args) {
   while (copy.length) {
     const flag = copy.shift(), key = flag?.slice(2);
     if (!flag?.startsWith('--') || Object.hasOwn(options, key)) throw new Error(`Unknown or duplicate argument: ${flag}. Use --help.`);
-    if (['resume', 'recover', 'data-compatible', 'skip-plugin-check', 'help'].includes(key)) options[key] = true;
+    if (['resume', 'recover', 'data-compatible', 'skip-plugin-check', 'verify-plugin-check', 'help'].includes(key)) options[key] = true;
     else if (['root', 'config', 'rebuild-plugins'].includes(key) && copy[0] && !copy[0].startsWith('--')) options[key] = copy.shift();
     else throw new Error(`Unknown or missing argument: ${flag}. Use --help.`);
   }

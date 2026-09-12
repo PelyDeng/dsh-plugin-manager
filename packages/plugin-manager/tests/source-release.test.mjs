@@ -71,8 +71,9 @@ function fixture(t, { fresh = false, fail } = {}) {
     if (bin === 'pnpm' && args.includes('pack')) put(args.at(-1), 'archive');
     if (bin === process.execPath && args[0] === 'scripts/package-plugins.mjs') {
       const selected = args[args.indexOf('--plugins') + 1].split(',').filter(id => id !== 'none');
-      const plugins = selected.map(id => archivePlugin(args.at(-1), id, '0.2.1', `${id}-0.2.1.tgz`));
-      put(resolve(args.at(-1), 'manifest.json'), { schemaVersion: 2, plugins });
+      const output = args[args.indexOf('--output') + 1];
+      const plugins = selected.map(id => archivePlugin(output, id, '0.2.1', `${id}-0.2.1.tgz`));
+      put(resolve(output, 'manifest.json'), { schemaVersion: 2, plugins });
     }
     if (bin === process.execPath && args[1] === 'apply-compose') {
       const candidate = JSON.parse(readFileSync(args[args.indexOf('--config') + 1]));
@@ -212,7 +213,7 @@ for (const hostMode of ['host source', 'registry image']) test(`selective source
     if (bin === 'git' && args[0] === 'show') return readFileSync(resolve(f.root, args[1].slice(args[1].indexOf(':') + 1)), 'utf8');
     if (bin === process.execPath && args[0] === 'scripts/package-plugins.mjs') {
       const selected = args[args.indexOf('--plugins') + 1].split(','); packaged.push(selected);
-      const output = args.at(-1), plugins = [];
+      const output = args[args.indexOf('--output') + 1], plugins = [];
       for (const id of selected) {
         counts[id]++;
         const stage = `.local/staging/${id}/package`, source = JSON.parse(readFileSync(resolve(f.root, `plugins/${id}/package.json`)));

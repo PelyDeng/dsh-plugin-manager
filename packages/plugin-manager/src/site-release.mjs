@@ -62,10 +62,12 @@ function changeSummary(before, after, sources = []) {
 }
 
 /** Preparation is the only adapter boundary; everything after it uses the same state machine. */
-export function releaseSite({ root, config, resume = false, recover = false, dataCompatible = false, rebuildPlugins, skipPluginCheck = false, inputKind = 'archives' } = {}, execute = command, adapter) {
+export function releaseSite({ root, config, resume = false, recover = false, dataCompatible = false, rebuildPlugins, skipPluginCheck = true, verifyPluginCheck = false, inputKind = 'archives' } = {}, execute = command, adapter) {
   if (!root) throw new Error('站点部署必须提供 --root。');
   root = canonical(root);
-  siteArguments([...(resume ? ['--resume'] : []), ...(recover ? ['--recover'] : []), ...(dataCompatible ? ['--data-compatible'] : []), ...(skipPluginCheck ? ['--skip-plugin-check'] : []), ...(rebuildPlugins === undefined ? [] : ['--rebuild-plugins', rebuildPlugins])]);
+  // 插件检查默认不做（见 packagePlugins 说明）；--skip-plugin-check 保留为兼容形式，
+  // 与默认同义，真正把检查要回来的是 --verify-plugin-check。
+  siteArguments([...(resume ? ['--resume'] : []), ...(recover ? ['--recover'] : []), ...(dataCompatible ? ['--data-compatible'] : []), ...(verifyPluginCheck ? ['--verify-plugin-check'] : []), ...(rebuildPlugins === undefined ? [] : ['--rebuild-plugins', rebuildPlugins])]);
   const pointer = sitePointer(root), prior = readSitePointer(root), interrupted = prior && needsSiteResume(prior.status);
   if (interrupted && !resume && !recover) throw new Error('An unfinished deployment is recorded. Keep the site configuration unchanged and use --resume; for business configuration changes use --recover --data-compatible.');
   if ((resume || recover) && !interrupted) throw new Error('No unfinished prepared deployment to resume or recover.');
@@ -85,7 +87,10 @@ export function releaseSite({ root, config, resume = false, recover = false, dat
   if (predecessor && site.pluginSource !== undefined && site.pluginSource !== inputKind) throw new Error('未完成操作不能更改输入模式。');
   inputKind = site.pluginSource ?? inputKind;
   if (inputKind === 'archives' && rebuildPlugins !== undefined) throw new Error('--rebuild-plugins 仅用于 source。');
-  if (inputKind === 'archives' && skipPluginCheck) throw new Error('--skip-plugin-check 仅用于 source：归档部署不构建插件，本来就不跑插件检查。');
+  if (inputKind === 'archives' && verifyPluginCheck) throw new Error('--verify-plugin-check 仅用于 source：归档部署不构建插件。');
+  // 只有 source 才构建插件；这里定下最终语义，再交给适配层。
+  // 默认跳过检查（见 packagePlugins 说明），--verify-plugin-check 把它要回来。
+  skipPluginCheck = inputKind !== 'archives' && !verifyPluginCheck;
   const resolvedSite = resolveDeployment({ root, config: sitePath, 'data-root': site.dataRoot, home: site.home, workspace: site.workspace, artifacts: site.artifacts, profile: site.profile }, {});
   const sitePaths = Object.fromEntries(['dataRoot', 'home', 'workspace', 'authUrlFile', 'artifacts', 'profile'].map(field => [field, resolvedSite[field]]));
   if (predecessor?.schemaVersion === 3 && !same(predecessor.sitePaths, sitePaths)) throw new Error('原持久路径的实际位置已变化；恢复原路径后重试，不会自动迁移。');
@@ -225,7 +230,7 @@ export function releaseSite({ root, config, resume = false, recover = false, dat
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try { const options = siteArguments(process.argv.slice(2)); releaseSite({ root: options.root, config: options.config, resume: options.resume, recover: options.recover, dataCompatible: options['data-compatible'], rebuildPlugins: options['rebuild-plugins'], skipPluginCheck: options['skip-plugin-check'] }); }
+  try { const options = siteArguments(process.argv.slice(2)); releaseSite({ root: options.root, config: options.config, resume: options.resume, recover: options.recover, dataCompatible: options['data-compatible'], rebuildPlugins: options['rebuild-plugins'], verifyPluginCheck: options['verify-plugin-check'] }); }
   catch (error) { console.error(error.message); process.exitCode = 1; }
   if (typeof process.send === 'function') {
     if (interruptedChild) process.disconnect();

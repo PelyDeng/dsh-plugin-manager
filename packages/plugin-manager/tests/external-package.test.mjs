@@ -77,7 +77,7 @@ test('runPnpm forwards captured pack diagnostics on failure and keeps successful
   assert.ok(existsSync(join(base, 'success.tgz')));
 });
 
-test('repository packaging reports build, check and verified pack separately for each discovered plugin', t => {
+test('repository packaging reports build and verified pack separately, skipping the check by default', t => {
   const { base, root, manifest } = fixture(t);
   const workspace = join(base, 'workspace');
   mkdirSync(join(workspace, 'plugins'), { recursive: true });
@@ -92,7 +92,7 @@ test('repository packaging reports build, check and verified pack separately for
     writeFileSync(join(pluginRoot, 'cordis.patch.yml'), `- insert:\n    - id: ${id}\n      name: ${id}\n`);
   }
   const script = fileURLToPath(new URL('../../../scripts/package-plugins.mjs', import.meta.url));
-  const pack = output => spawnSync(process.execPath, [script, '--root', workspace, '--plugins', 'all', '--output', output], {
+  const pack = (output, ...flags) => spawnSync(process.execPath, [script, '--root', workspace, '--plugins', 'all', '--output', output, ...flags], {
     encoding: 'utf8', timeout: 60000, env: { ...process.env, DSH_BUILD_PROGRESS: '1' },
   });
   const events = result => result.stdout.split(/\r?\n/).filter(line => line.startsWith('DSH_BUILD_PROGRESS ')).map(line => {
@@ -103,13 +103,24 @@ test('repository packaging reports build, check and verified pack separately for
     const { elapsedMs, ...identity } = event;
     return identity;
   });
+  const tasks = id => readFileSync(join(workspace, 'plugins', id, 'tasks'), 'utf8');
+
+  // 默认跳过插件检查：进度里没有「检查插件」，fixture 的 check.mjs 也没被执行。
   const result = pack('.local/success'); ok(result);
-  const labels = ['安装插件依赖', ...['alpha', 'beta'].flatMap(id => ['构建', '检查', '打包'].map(task => `${task}插件 ${id}`))];
-  assert.deepEqual(events(result), labels.flatMap(label => [{ type: 'start', label }, { type: 'done', label }]));
+  const skipped = ['安装插件依赖', ...['alpha', 'beta'].flatMap(id => ['构建', '打包'].map(task => `${task}插件 ${id}`))];
+  assert.deepEqual(events(result), skipped.flatMap(label => [{ type: 'start', label }, { type: 'done', label }]));
   assert.equal(read(join(workspace, '.local/success/manifest.json')).plugins.length, 2);
-  for (const id of ['alpha', 'beta']) assert.equal(readFileSync(join(workspace, 'plugins', id, 'tasks'), 'utf8'), 'build\ncheck\n');
+  for (const id of ['alpha', 'beta']) assert.equal(tasks(id), 'build\n');
+
+  // 显式要回检查时才真的跑：进度与标记都多出「检查」一步（标记是追加的，两次构建都在）。
+  const verified = pack('.local/verified', '--verify-plugin-check'); ok(verified);
+  const checked = ['安装插件依赖', ...['alpha', 'beta'].flatMap(id => ['构建', '检查', '打包'].map(task => `${task}插件 ${id}`))];
+  assert.deepEqual(events(verified), checked.flatMap(label => [{ type: 'start', label }, { type: 'done', label }]));
+  for (const id of ['alpha', 'beta']) assert.equal(tasks(id), 'build\nbuild\ncheck\n');
+
+  // 检查失败时不得产出成功清单，并且停在失败那一步。
   writeFileSync(join(workspace, 'plugins/beta/check.mjs'), 'process.exitCode = 8;\n');
-  const failure = pack('.local/failure');
+  const failure = pack('.local/failure', '--verify-plugin-check');
   assert.notEqual(failure.status, 0);
   assert.deepEqual(events(failure).at(-1), { type: 'failed', label: '检查插件 beta' });
   assert.equal(events(failure).some(event => event.label === '打包插件 beta'), false);
@@ -145,11 +156,12 @@ test('a single package builds once and packs a source-free release without touch
   assert.throws(() => packagePlugins(root, undefined, output, '.'), /pnpm-lock\.yaml。请在作者项目根执行 pnpm install --ignore-workspace/u);
   assert.equal(existsSync(output), false);
   writeFileSync(join(root, 'pnpm-lock.yaml'), lock);
+  // 默认跳过插件检查，所以标记里只有构建；这一步由 --verify-plugin-check 显式要回来。
   const packedRun = run(root, 'pack', '--root', root, '--package', '.', '--output', '.local/release');
   ok(packedRun);
   assert.match(packedRun.stdout, /交付插件：fixture/u);
   assert.match(packedRun.stdout, /下一步：交付整个发布目录.*incoming/u);
-  assert.equal(readFileSync(join(root, 'tasks'), 'utf8'), 'build\ncheck\n');
+  assert.equal(readFileSync(join(root, 'tasks'), 'utf8'), 'build\n');
   assert.equal(readFileSync(join(base, 'pnpm-lock.yaml'), 'utf8'), 'parent-lock-must-not-be-used\n');
   assert.equal(existsSync(join(base, 'node_modules')), false);
   const releasePath = join(output, 'manifest.json');
@@ -163,7 +175,8 @@ test('a single package builds once and packs a source-free release without touch
   assert.equal(packed.plugins[0].defaultEnabled, false);
   assert.deepEqual(packed.plugins[0].development, manifest.deepseekPlugin.development);
   ok(run(root, 'verify-package', '--root', root, '--package', '.', '--archive', join('.local/release', packed.plugins[0].archive)));
-  assert.equal(readFileSync(join(root, 'tasks'), 'utf8'), 'build\ncheck\n');
+  // verify-package 只读校验，不会执行插件的 check 脚本。
+  assert.equal(readFileSync(join(root, 'tasks'), 'utf8'), 'build\n');
   assert.notEqual(run(root, 'verify-package', root, join(output, packed.plugins[0].archive), base, '--package', '.').status, 0);
 
   for (const extra of [{ directory: '.' }, { source: root }, { development: { rootVariable: 'TAMPERED_ROOT', patch: 'dev.yml' } }]) {
@@ -216,7 +229,8 @@ test('failed builds and unsafe output selections never produce a success manifes
   assert.throws(() => packagePlugins(root, undefined, root, '.'), /发布目录/);
   manifest.scripts.check = 'node -e "process.exit(1)"'; json(join(root, 'package.json'), manifest);
   const output = join(root, '.local/failed');
-  assert.throws(() => packagePlugins(root, undefined, output, '.'), /失败/);
+  // 显式要回检查（默认跳过，见 packagePlugins 说明），让这一步的失败真的发生。
+  assert.throws(() => packagePlugins(root, undefined, output, '.', undefined, { skipCheck: false }), /失败/);
   assert.equal(existsSync(join(output, 'manifest.json')), false);
   assert.deepEqual(readdirSync(output), []);
 });

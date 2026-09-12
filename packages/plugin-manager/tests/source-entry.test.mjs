@@ -25,12 +25,16 @@ test('source argument validation rejects unsupported, duplicate and missing opti
   assert.throws(() => sourceArguments(['--rebuild-plugins', 'alpha', '--rebuild-plugins', 'beta']), /argument/);
 });
 
-test('skip-plugin-check is a value-less switch that composes with resume and rejects duplicates', () => {
+test('plugin-check switches are value-less, reject duplicates and compose with resume', () => {
+  // 检查默认跳过，--verify-plugin-check 是把它要回来的那个开关。
+  assert.deepEqual(sourceArguments(['--verify-plugin-check']), ['--verify-plugin-check']);
+  assert.deepEqual(sourceArguments(['--verify-plugin-check', '--resume']), ['--verify-plugin-check', '--resume']);
+  assert.throws(() => sourceArguments(['--verify-plugin-check', '--verify-plugin-check']), /argument/);
+  // 兼容形式仍然接受（与默认同义），同样不能被重复。
   assert.deepEqual(sourceArguments(['--skip-plugin-check']), ['--skip-plugin-check']);
-  assert.deepEqual(sourceArguments(['--skip-plugin-check', '--resume']), ['--skip-plugin-check', '--resume']);
   assert.throws(() => sourceArguments(['--skip-plugin-check', '--skip-plugin-check']), /argument/);
-  // 它不参与「互斥」那一组：跳过检查与恢复原操作并不冲突。
-  assert.deepEqual(sourceArguments(['--skip-plugin-check', '--recover', '--data-compatible']), ['--skip-plugin-check', '--recover', '--data-compatible']);
+  // 它们不参与「互斥」那一组：是否跑检查与恢复原操作并不冲突。
+  assert.deepEqual(sourceArguments(['--verify-plugin-check', '--recover', '--data-compatible']), ['--verify-plugin-check', '--recover', '--data-compatible']);
 });
 
 test('partial build selection reaches the private update and fresh worker under the source lock', async t => {

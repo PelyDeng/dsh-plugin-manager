@@ -97,25 +97,24 @@ test('selection and arguments reject empty, repeated and unknown values', t => {
 });
 
 test('value-less switches parse only when declared, and still reject pairing forms', () => {
-  assert.deepEqual(parseOptions(['--plugins', 'a', '--skip-plugin-check'], ['plugins'], ['skip-plugin-check']), { 'skip-plugin-check': true, plugins: 'a' });
+  assert.deepEqual(parseOptions(['--plugins', 'a', '--verify-plugin-check'], ['plugins'], ['verify-plugin-check']), { 'verify-plugin-check': true, plugins: 'a' });
   assert.deepEqual(parseOptions(['--plugins', 'a'], ['plugins']), { plugins: 'a' });
   // 未声明的开关不能悄悄变成键；声明过也不接受重复。
-  for (const args of [['--plugins', 'a', '--skip-plugin-check'], ['plugins', 'a', 'skip-plugin-check']]) assert.throws(() => parseOptions(args, ['plugins']));
-  assert.throws(() => parseOptions(['--skip-plugin-check', '--skip-plugin-check'], ['plugins'], ['skip-plugin-check']));
+  for (const args of [['--plugins', 'a', '--verify-plugin-check'], ['plugins', 'a', 'verify-plugin-check']]) assert.throws(() => parseOptions(args, ['plugins']));
+  assert.throws(() => parseOptions(['--verify-plugin-check', '--verify-plugin-check'], ['plugins'], ['verify-plugin-check']));
 });
 
-test('skipping the plugin check builds the archive without running the check script', t => {
+test('the plugin check is skipped by default and only runs when explicitly requested', t => {
   const root = fixture(t);
   plugin(root, 'skip');
   const directory = resolve(root, 'plugins/plugin-skip');
-  const skipped = resolve(root, 'release-skipped');
-  const manifest = packagePlugins(root, 'skip', skipped, undefined, undefined, { skipCheck: true });
+  // 默认跳过：fixture 的 check 脚本会写出 checked 标记，标记不出现即证明它没被执行。
+  const manifest = packagePlugins(root, 'skip', resolve(root, 'release-default'));
   assert.equal(manifest.plugins.length, 1);
   assert.equal(existsSync(resolve(directory, 'checked')), false);
   assert.equal(existsSync(resolve(directory, 'dist/index.mjs')), true);
-  // 同一插件再走默认路径时必须真的跑了 check，否则上面的断言可能只是脚本从未生效。
-  const checked = resolve(root, 'release-checked');
-  packagePlugins(root, 'skip', checked);
+  // 显式要回来时才真的跑 check，否则上面的断言可能只是脚本从未生效。
+  packagePlugins(root, 'skip', resolve(root, 'release-verified'), undefined, undefined, { skipCheck: false });
   assert.equal(existsSync(resolve(directory, 'checked')), true);
 });
 
@@ -289,8 +288,11 @@ test('the package pipeline builds once, checks that build, and writes a portable
   writeFileSync(resolve(dir, 'check.mjs'), "import{appendFileSync}from'node:fs';import{value}from'./dist/index.mjs';if(value!==1)throw Error('build missing');appendFileSync('trace','check\\n');\n");
   writeFileSync(resolve(dir, 'env.conf'), 'TEST_PRIVATE_VALUE=not-published\n');
   const output = resolve(root, 'output with spaces');
+  // 默认跳过插件检查，所以只有构建痕迹；再显式要回检查时才多出 check。
   const manifest = packagePlugins(root, 'all', output);
-  assert.equal(readFileSync(resolve(dir, 'trace'), 'utf8'), 'build\ncheck\n');
+  assert.equal(readFileSync(resolve(dir, 'trace'), 'utf8'), 'build\n');
+  packagePlugins(root, 'all', resolve(root, 'checked-output'), undefined, undefined, { skipCheck: false });
+  assert.equal(readFileSync(resolve(dir, 'trace'), 'utf8'), 'build\nbuild\ncheck\n');
   assert.equal(manifest.plugins[0].archive, `a-${manifest.plugins[0].sha256}.tgz`);
   assert.match(manifest.plugins[0].sha256, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.plugins[0].directory, 'plugins/plugin-a');
