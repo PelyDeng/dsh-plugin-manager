@@ -11,6 +11,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import { agentResource } from '@dsh-agents-group/common'
 import { registerPlugin,registerConversations,AccessError,type Access,type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import type { ProtectedRoute } from '@dsh-plugin-manager/plugin-kit/http'
 import { loadSettings } from './settings.mjs'
@@ -72,6 +73,14 @@ function json(res:ServerResponse,data:unknown){res.writeHead(200,{'content-type'
 async function body(req:IncomingMessage,max:number){const chunks:Buffer[]=[];let size=0;for await(const b of req){const chunk=Buffer.from(b);size+=chunk.length;if(size>max)throw new AccessError(413,'请求超过大小限制');chunks.push(chunk)}return Buffer.concat(chunks)}
 
 /**
+ * 子包资源定位。
+ *
+ * 源码被打进群组 dist 后，代码与资源的相对位置在开发与发布两种形态下不同；解析统一交给
+ * common 的 `agentResource`，这里不写死 `../` 层数（写死了换布局会静默错位）。
+ */
+const blogResource = (relative: string): URL => agentResource(import.meta.url, 'blog', relative)
+
+/**
  * 装载博客工作台，返回群组用于卸载的释放函数与本次注册的工具条目。
  *
  * `access` 与 `http` 由群组注入：一个 Agent 只应有一套鉴权实例。业务逻辑未作改动。
@@ -89,15 +98,16 @@ export async function mount(mountContext:AgentMountContext):Promise<{dispose():P
   const attachments=new BlogAttachments(ctx,access,store,(owner:string,id:string)=>conversations.assertScope(owner,id))
   const jobs=new BlogJobs(ctx,access,store,blog,attachments,config.turnTimeoutMs,settings.models,mountContext.category)
   const app=new BlogApplication(store,access,blog,images,backups,jobs,attachments)
-  const {chatSdk}=await import(new URL('../runtime/chat-sdk.mjs',import.meta.url).href)
+  const {chatSdk}=await import(blogResource('runtime/chat-sdk.mjs').href)
   const chat=new BlogChat(ctx,access,store,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)
   ctx.effect(()=>registerBlogParticipant(ctx,{access,chat,index:conversations,store,routePrefix:config.routePrefix}))
   ctx.effect(()=>registerConversations(ctx,chat.provider))
   const translations=new ReasoningTranslations({ctx,pluginId:'blog',path:join(root,'reasoning-translations.sqlite'),access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
-  const manifest=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'))
+  const manifest=JSON.parse(await readFile(blogResource('package.json'),'utf8'))
   ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],tools:jobs.chatTools}))
   for(const [suffix,file,mime] of [['','web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],['/style.css','web/style.css','text/css'],['/writing.css','web/writing.css','text/css'],['/chat-base.css','web/chat-base.css','text/css'],['/chat-theme.css','web/chat-theme.css','text/css'],...['chevron-down','copy','check','like','dislike','branch','database','clock','think','api','send','user','chat','stop'].map(name=>[`/media/icon-${name}.svg`,`web/media/icon-${name}.svg`,'image/svg+xml']),['/icons.svg','web/icons.svg','image/svg+xml']] as const){
-    const content=(await readFile(new URL(`../${file}`,import.meta.url),'utf8')).replaceAll('__BASE__',config.routePrefix)
+    // `file` 已是相对子包根的路径（web/... 或 dist/web/...），直接相对 agentRoot 解析。
+    const content=(await readFile(blogResource(file),'utf8')).replaceAll('__BASE__',config.routePrefix)
     ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+suffix,surface:suffix?'asset':'page',handler(req,res){if(req.method!=='GET')throw new AccessError(405,'只支持 GET');res.writeHead(200,{'content-type':`${mime}; charset=utf-8`,'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"});res.end(content)}}))
   }
   // 存活与就绪探针由群组统一提供（/agents/health、/agents/ready 与 /agents/blog/ready），

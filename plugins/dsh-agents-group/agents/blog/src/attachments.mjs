@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { Worker } from 'node:worker_threads'
+import { agentResource } from '@dsh-agents-group/common'
 import { onRevoked } from '@dsh-plugin-manager/plugin-kit'
 import { invariant } from './settings.mjs'
 import { ownerKey } from './store.mjs'
@@ -56,7 +57,7 @@ export class BlogAttachments {
   }
   async parse(job,bytes) {
     return new Promise((resolve,reject)=>{
-      const worker=new Worker(new URL('../runtime/parse-document.mjs',import.meta.url),{workerData:{bytes,kind:job.a.kind},resourceLimits:{maxOldGenerationSizeMb:192,maxYoungGenerationSizeMb:32,stackSizeMb:4}});job.worker=worker
+      const worker=new Worker(agentResource(import.meta.url,'blog','runtime/parse-document.mjs'),{workerData:{bytes,kind:job.a.kind},resourceLimits:{maxOldGenerationSizeMb:192,maxYoungGenerationSizeMb:32,stackSizeMb:4}});job.worker=worker
       let settled=false
       const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);job.abort.signal.removeEventListener('abort',cancel);error?reject(error):resolve(value)}
       const cancel=()=>{void worker.terminate();finish(new Error('cancelled'))}

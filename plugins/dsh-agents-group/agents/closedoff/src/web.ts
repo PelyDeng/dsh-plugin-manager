@@ -3,8 +3,8 @@
 import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
+import { agentResource, agentResourcePath } from '@dsh-agents-group/common'
 import { MessageId } from '@deepseek-ai/dsh-llm/brand'
 import type {} from '@deepseek-ai/dsh-message-feedback'
 import { SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
@@ -145,7 +145,7 @@ export async function installWeb(
   access: Access,
   http: ReturnType<typeof createPluginHttp>,
 ): Promise<void> {
-  const sourceHtml = await readFile(new URL('../web/index.html', import.meta.url), 'utf8')
+  const sourceHtml = await readFile(agentResource(import.meta.url, 'closedoff', 'web/index.html'), 'utf8')
   const webConfig = JSON.stringify({
     routePrefix: config.routePrefix,
     map: {
@@ -156,7 +156,7 @@ export async function installWeb(
     },
   }).replaceAll('<', '\\u003c')
   const html = sourceHtml.replaceAll('/closedoff-qa', config.routePrefix).replace('__WEB_CONFIG__', webConfig)
-  const webAssetRoot = fileURLToPath(new URL('../web/assets/', import.meta.url))
+  const webAssetRoot = agentResourcePath(import.meta.url, 'closedoff', 'web/assets/')
   const webAssetPath = `${config.routePrefix}/assets`
   const waiters = new Map<string, Set<EventSink>>()
   const active = new Set<string>()

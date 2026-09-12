@@ -3,6 +3,7 @@
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { parseEnv } from 'node:util'
+import { agentResource } from '@dsh-agents-group/common'
 
 /** Credentials for the gateway's two authentication stages. */
 export interface CredentialPayload {
@@ -57,9 +58,14 @@ export function parseEnvConf(content: string): ClosedoffEnvironment {
   }
 }
 
-/** Load env.conf beside the plugin, or from the path supplied by the start script. */
+/**
+ * Load env.conf beside the plugin, or from the path supplied by the start script.
+ *
+ * 默认路径交给 common 的 `agentResource` 解析：源码被打进群组 dist 后，代码与资源的相对
+ * 位置在开发与发布两种形态下不同，写死 `../` 层数会静默错位。
+ */
 export async function loadEnvConf(
-  source: string | URL = process.env.CLOSEDOFF_ENV_CONF ?? new URL('../env.conf', import.meta.url),
+  source: string | URL = process.env.CLOSEDOFF_ENV_CONF ?? agentResource(import.meta.url, 'closedoff', 'env.conf'),
 ): Promise<ClosedoffEnvironment> {
   try {
     return parseEnvConf(await readFile(source, 'utf8'))

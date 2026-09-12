@@ -17,6 +17,7 @@
   },
   "files": [
     "dist/",
+    "agents/",
     "config/group.example.json",
     "cordis.patch.yml",
     "README.md",

@@ -9,6 +9,7 @@
  */
 
 export * from './weather.ts'
+export * from './agent-resources.ts'
 
 /** 包版本，用于确认内联生效（构建后不应依赖外部解析）。 */
 export const COMMON_VERSION = '0.1.0'

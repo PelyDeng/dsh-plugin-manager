@@ -21,6 +21,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import { agentResource } from '@dsh-agents-group/common'
 import { createPluginHttp, onRevoked, registerPlugin, registerConversations, type Access, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import { ConversationManager } from './agent.ts'
 import { ConversationStore } from './conversation-store.ts'
@@ -111,13 +112,21 @@ async function loadEnvironment(groupConfigPath: string | undefined): Promise<Ret
   return loadEnvConf()
 }
 
+/**
+ * 子包资源定位。
+ *
+ * 源码被打进群组 dist 后，代码与资源的相对位置在开发与发布两种形态下不同；解析统一交给
+ * common 的 `agentResource`，这里不写死 `../` 层数（写死了换布局会静默错位）。
+ */
+const agentResourceUrl = (relative: string): URL => agentResource(import.meta.url, 'closedoff', relative)
+
 /** 装载封闭化助手，返回群组用于卸载的释放函数与本次注册的工具条目。 */
 export async function mount(context: AgentMountContext): Promise<{ dispose(): Promise<void>; tools: readonly ToolDescriptor[] }> {
   const { ctx, access, http, groupConfigPath } = context
   const config: PluginConfig = { ...schemaDefaults(), ...context.config }
 
   const [personaText, environment] = await Promise.all([
-    readFile(new URL('../persona.txt', import.meta.url), 'utf8'),
+    readFile(agentResourceUrl('persona.txt'), 'utf8'),
     loadEnvironment(groupConfigPath),
   ])
   const persona = personaText.trim()
@@ -133,7 +142,7 @@ export async function mount(context: AgentMountContext): Promise<{ dispose(): Pr
   if (access.mode === 'authenticated') ctx.effect(() => registerConversations(ctx, manager.management()))
 
   const tools = registerTools(ctx, gateway, config, agent => manager.authorizeAgent(agent), context.category)
-  const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
+  const manifest = JSON.parse(await readFile(agentResourceUrl('package.json'), 'utf8')) as {
     name: string; version: string; description: string
   }
   ctx.effect(() => registerPlugin(ctx, {
