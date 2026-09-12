@@ -26,6 +26,36 @@ export interface ToolDescriptor {
   readonly category?: string
 }
 
+/**
+ * 插件分类标签的权威定义。
+ *
+ * 与 {@link ToolDescriptor.category} 是**两层不同的东西**，别混：
+ * - 工具分类描述「工具属于哪个 Agent 的业务范围」，用于工具可见性限制（例如 `通用工具`）。
+ * - 插件分类描述「这个插件在认证页面属于哪一组」，用于目录页的分组展示与管家端的成员过滤。
+ *
+ * 名字由插件自己在 `deepseekPlugin.category` 里声明，管理器原样透传到目录；这个列表只固定
+ * **展示顺序**，不限制取值范围 —— 第三方插件写别的名字也能正常工作，只是排在已知分类之后。
+ */
+export const pluginCategoryLabels = {
+  'system-default': '系统默认',
+  'universal-tools': '通用/工具',
+  'agents': '智能体',
+  'web-services': '网页服务',
+} as const
+
+export type PluginCategory = keyof typeof pluginCategoryLabels
+
+/** 已知分类的展示顺序；未列出的分类排在它们之后。 */
+export const pluginCategoryOrder: readonly PluginCategory[] = ['system-default', 'universal-tools', 'agents', 'web-services']
+
+/**
+ * 声明为「智能体」的插件分类。
+ *
+ * 管家端只把这一类插件当成可对话的成员：目录里其余插件（认证、控制台、工具集）不是人，
+ * 不该出现在成员名单里。
+ */
+export const AGENT_PLUGIN_CATEGORY: PluginCategory = 'agents'
+
 export interface PluginDescriptor {
   readonly id: string
   readonly packageName: string
@@ -35,6 +65,12 @@ export interface PluginDescriptor {
   readonly entryPath?: string
   readonly permissions: readonly string[]
   readonly tools: readonly ToolDescriptor[]
+  /**
+   * 插件分类标签，由插件自己在清单里声明，认证页面据此分组展示。
+   *
+   * 可选：不填的插件在认证页面归入「未分类」并排在最后，管家端也不把它当成成员。
+   */
+  readonly category?: string
 }
 
 /** A provider validates the original login session on every access, including background tools. */
@@ -50,15 +86,7 @@ export interface Revocation {
   readonly sessionId?: string
 }
 
-interface CatalogEntry { readonly protocol: number; readonly plugin: PluginDescriptor }
-
-declare module '@deepseek-ai/cordis' {
-  interface Events {
-    'ecosystem/catalog': (accept: (entry: CatalogEntry) => void) => void
-    'ecosystem/providers': (accept: (provider: AuthProvider) => void) => void
-    'ecosystem/revoked': (scope: Revocation) => void
-  }
-}
+/** Cordis 事件通道的类型增强只有一处声明，见 events.ts 的说明。 */
 
 /** An expected HTTP authentication or authorization rejection. */
 export class AccessError extends Error {
@@ -121,7 +149,7 @@ export function installProvider(ctx: Context, provider: AuthProvider): () => voi
 
 /** Read the current catalog; it includes live registrations, never secrets or deployment config. */
 export function listPlugins(ctx: Context): PluginDescriptor[] {
-  const entries: CatalogEntry[] = []
+  const entries: (import('./events.ts').CatalogEntry)[] = []
   ctx.root.emit('ecosystem/catalog', entry => { entries.push(entry) })
   if (entries.some(entry => entry.protocol !== 1)) throw new Error('插件目录协议版本不兼容')
   const ids = new Set<string>()

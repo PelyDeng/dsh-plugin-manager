@@ -55,6 +55,7 @@
       "web/zhipu.svg"
     ],
     "displayName": "统一认证",
+    "category": "system-default",
     "entryPath": "/auth",
     "permissions": [
       "auth:manage"

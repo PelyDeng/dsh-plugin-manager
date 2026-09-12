@@ -29,10 +29,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const handler = await createHandler(ctx, service, config)
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
     name: string; version: string; description: string
-    deepseekPlugin: { id: string; displayName: string; entryPath: string; permissions: string[] }
+    deepseekPlugin: { id: string; displayName: string; entryPath: string; permissions: string[]; category?: string }
   }
   registerPlugin(ctx, { id: manifest.deepseekPlugin.id, packageName: manifest.name, version: manifest.version, description: manifest.description,
-    displayName: manifest.deepseekPlugin.displayName, entryPath: manifest.deepseekPlugin.entryPath, permissions: manifest.deepseekPlugin.permissions, tools: [] })
+    displayName: manifest.deepseekPlugin.displayName, entryPath: manifest.deepseekPlugin.entryPath, permissions: manifest.deepseekPlugin.permissions,
+    ...(manifest.deepseekPlugin.category === undefined ? {} : { category: manifest.deepseekPlugin.category }), tools: [] })
   const uninstall = installProvider(ctx, service)
   ctx.effect(() => () => { uninstall(); service.close() })
   ctx.effect(() => ctx.webServer.register({ kind: 'prefix', path: '/auth', handler }))

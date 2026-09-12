@@ -42,6 +42,55 @@ export function groupToolsByCategory(tools, uncategorized = '未分类') {
 /** 工具所属分类的显示标签；未分类时返回 undefined，调用方据此决定是否渲染标签。 */
 export const toolCategory = tool => typeof tool?.category === 'string' && tool.category.trim() !== '' ? tool.category.trim() : undefined
 
+/**
+ * 插件分类标签的权威顺序与中文名。
+ *
+ * 与工具分类是两层：这里描述「插件在目录页属于哪一组」。名字由插件清单里的
+ * `deepseekPlugin.category` 声明，管理器透传到目录；这个表只固定**展示顺序**，
+ * 不限制取值范围 —— 第三方插件写别的名字也照常显示，只是排在已知分类之后。
+ */
+export const PLUGIN_CATEGORY_ORDER = ['system-default', 'universal-tools', 'agents', 'web-services']
+export const PLUGIN_CATEGORY_LABELS = {
+  'system-default': '系统默认',
+  'universal-tools': '通用/工具',
+  'agents': '智能体',
+  'web-services': '网页服务',
+}
+const PLUGIN_CATEGORY_FALLBACK = '未分类'
+
+/** 一个插件的分类显示名；未声明时归入「未分类」。 */
+export function pluginCategoryLabel(plugin, uncategorized = PLUGIN_CATEGORY_FALLBACK) {
+  const key = typeof plugin?.category === 'string' ? plugin.category.trim() : ''
+  return PLUGIN_CATEGORY_LABELS[key] ?? (key === '' ? uncategorized : key)
+}
+
+/**
+ * 按插件分类分组，并给出稳定的展示顺序。
+ *
+ * 已知分类按 {@link PLUGIN_CATEGORY_ORDER} 排列，未声明的排到「未分类」，
+ * 其余自定义分类按**首次出现顺序**插在两者之间 —— 顺序稳定，不随搜索变化。
+ * 空分类不返回，避免页面上出现一个没有内容的标题。
+ */
+export function groupPluginsByCategory(plugins, uncategorized = PLUGIN_CATEGORY_FALLBACK) {
+  const groups = new Map()
+  for (const plugin of plugins) {
+    const key = typeof plugin?.category === 'string' ? plugin.category.trim() : ''
+    const label = key === '' ? uncategorized : PLUGIN_CATEGORY_LABELS[key] ?? key
+    const list = groups.get(label)
+    if (list) list.push(plugin)
+    else groups.set(label, [plugin])
+  }
+  const rank = label => {
+    if (label === uncategorized) return PLUGIN_CATEGORY_ORDER.length + 1
+    const index = PLUGIN_CATEGORY_ORDER.findIndex(key => PLUGIN_CATEGORY_LABELS[key] === label)
+    return index === -1 ? PLUGIN_CATEGORY_ORDER.length : index
+  }
+  return [...groups]
+    .map(([label, items], index) => ({ label, plugins: items, rank: rank(label), index }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map(({ label, plugins: items }) => ({ label, plugins: items }))
+}
+
 /** Return literal text runs; callers use text nodes and mark elements, never HTML. */
 export function highlightParts(value, query) {
   const text = String(value)

@@ -19,7 +19,7 @@ export function loadRelease(manifestPath) {
     if (!Array.isArray(plugin.verifyFiles) || plugin.verifyFiles.some(file => typeof file !== 'string' || isAbsolute(file) || file.split(/[\\/]/).includes('..'))) fail('verifyFiles 无效。');
     if (manifest.schemaVersion === 1) {
       if (typeof plugin.directory !== 'string' || !/^plugins\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(plugin.directory)) fail('插件源码目录必须位于 plugins/ 下一级。');
-    } else if (Object.keys(plugin).some(key => !['id', 'package', 'version', 'displayName', 'description', 'entryPath', 'permissions', 'defaultEnabled', 'runtimeConfig', 'configuration', 'development', 'healthPath', 'verifyFiles', 'archive', 'sha256'].includes(key))) {
+    } else if (Object.keys(plugin).some(key => !['id', 'package', 'version', 'displayName', 'description', 'entryPath', 'permissions', 'category', 'defaultEnabled', 'runtimeConfig', 'configuration', 'development', 'healthPath', 'verifyFiles', 'archive', 'sha256'].includes(key))) {
       fail('发布清单 2 不接受源码目录或未知字段。');
     }
     if (plugin.healthPath !== undefined && (typeof plugin.healthPath !== 'string' || !/^\/[a-zA-Z0-9_~./-]*$/.test(plugin.healthPath) || plugin.healthPath.startsWith('//') || plugin.healthPath.split('/').includes('..'))) fail('healthPath 无效。');

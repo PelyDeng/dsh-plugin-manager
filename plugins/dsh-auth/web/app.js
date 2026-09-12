@@ -1,5 +1,5 @@
 /** Independent account UI; server authorization remains authoritative. */
-import { pageTools, pageUsers, highlightParts, localEntry, toolDisplayName, toolCategory } from './catalog-view.js'
+import { pageTools, pageUsers, highlightParts, localEntry, toolDisplayName, toolCategory, groupPluginsByCategory } from './catalog-view.js'
 
 const $ = selector => document.querySelector(selector)
 let session = null
@@ -91,6 +91,47 @@ async function perform(action, button) {
   finally { if (button) button.disabled = false }
 }
 
+/**
+ * 插件行的图标：用显示名的首字做字母标，底色按 id 稳定取色。
+ *
+ * 插件描述里没有任何图标信息，凭空发明一个图标只会误导；首字母标既稳定又能帮眼睛
+ * 定位，且不引入新的资源依赖。
+ */
+const ACCENT_COLORS = ['#3370ff', '#7f5af0', '#0f9d58', '#e8710a', '#c5221f', '#0b7285']
+function monogramOf(name) {
+  const text = String(name ?? '').trim()
+  if (text === '') return '·'
+  const first = [...text][0]
+  return /[a-z]/iu.test(first) ? first.toLocaleUpperCase() : first
+}
+function accentOf(key) {
+  const text = String(key ?? '')
+  let hash = 0
+  for (const char of text) hash = (hash * 31 + char.codePointAt(0)) % 997
+  return ACCENT_COLORS[hash % ACCENT_COLORS.length]
+}
+
+/** 只支持 GET 的静态资源用内联 SVG，避免为一个图标再加一个文件与一次请求。 */
+function iconButton(className, label, path) {
+  const button = node('button', undefined, className)
+  button.type = 'button'
+  button.title = label
+  button.setAttribute('aria-label', label)
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('aria-hidden', 'true')
+  const shape = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+  shape.setAttribute('d', path)
+  shape.setAttribute('fill', 'none')
+  shape.setAttribute('stroke', 'currentColor')
+  shape.setAttribute('stroke-width', '2')
+  shape.setAttribute('stroke-linecap', 'round')
+  shape.setAttribute('stroke-linejoin', 'round')
+  svg.append(shape)
+  button.append(svg)
+  return button
+}
+
 function toolButton(text, plugin) {
   const button = node('button', text, 'text-button')
   button.addEventListener('click', () => openTools(plugin, button))
@@ -98,37 +139,60 @@ function toolButton(text, plugin) {
 }
 
 function pluginCard(plugin) {
-  const card = node('article', undefined, 'card plugin-card')
-  const toolbar = node('div', undefined, 'card-toolbar')
-  toolbar.append(node('span', `${plugin.tools.length} 个工具`, 'badge'), toolButton('查看插件工具', plugin))
-  card.append(toolbar, node('h2', plugin.displayName), node('p', plugin.description, 'muted plugin-description'))
-  const meta = node('p', `${plugin.packageName} · v${plugin.version}`, 'plugin-meta')
-  meta.title = `${plugin.packageName} · v${plugin.version}`
-  card.append(meta)
+  const row = node('article', undefined, 'plugin-row')
+  row.style.setProperty('--accent', accentOf(plugin.id))
+
+  const monogram = node('div', monogramOf(plugin.displayName), 'plugin-monogram')
+  monogram.setAttribute('aria-hidden', 'true')
+
+  const body = node('div', undefined, 'plugin-row-body')
+  body.append(node('h3', plugin.displayName, 'plugin-row-name'), node('p', plugin.description, 'muted plugin-description'))
+
   const preview = node('div', undefined, 'tool-preview')
   for (const tool of plugin.tools.slice(0, 3)) {
-    const row = node('div', undefined, 'preview-row')
-    row.append(node('strong', toolDisplayName(tool))); row.title = tool.description
-    preview.append(row)
+    const item = node('span', toolDisplayName(tool), 'preview-row')
+    item.title = tool.description
+    preview.append(item)
   }
-  if (!plugin.tools.length) preview.append(node('p', '此插件未注册工具。', 'muted small'))
-  card.append(preview)
-  const footer = node('div', undefined, 'card-footer')
+  if (!plugin.tools.length) preview.append(node('span', '此插件未注册工具', 'muted small'))
+  body.append(preview)
+
+  const meta = node('div', undefined, 'plugin-row-meta')
+  const facts = node('p', `${plugin.packageName} · v${plugin.version}`, 'plugin-meta')
+  facts.title = `${plugin.packageName} · v${plugin.version}`
+  meta.append(facts, node('span', `${plugin.tools.length} 个工具`, 'badge'))
+
+  const actions = node('div', undefined, 'plugin-row-actions')
   const entry = localEntry(plugin.entryPath)
-  if (entry === '/auth') footer.append(node('span', '当前页面', 'muted small'))
+  if (entry === '/auth') actions.append(node('span', '当前页面', 'muted small'))
   else if (entry && session.user.grants.includes(plugin.id)) {
-    const link = node('a', '打开插件', 'button'); link.href = entry; footer.append(link)
-  } else footer.append(node('span', '未获访问授权', 'muted small'))
-  footer.append(toolButton('查看工具详情', plugin))
-  card.append(footer)
-  return card
+    const link = node('a', '打开插件', 'button'); link.href = entry; actions.append(link)
+  } else actions.append(node('span', '未获访问授权', 'muted small'))
+  const toggle = iconButton('icon-button plugin-row-toggle', '查看插件工具', 'M9 18l6-6-6-6')
+  toggle.addEventListener('click', () => openTools(plugin, toggle))
+  actions.append(toggle)
+
+  row.append(monogram, body, meta, actions)
+  return row
+}
+
+function pluginSection(group) {
+  const section = node('section', undefined, 'plugin-section')
+  const header = node('div', undefined, 'plugin-section-head')
+  header.append(node('h2', group.label, 'plugin-section-title'), node('span', `${group.plugins.length} 个`, 'plugin-section-count'))
+  const grid = node('div', undefined, 'plugin-grid')
+  grid.append(...group.plugins.map(pluginCard))
+  section.append(header, grid)
+  return section
 }
 
 function renderPlugins() {
   const query = $('#plugin-search').value.trim().toLocaleLowerCase()
   const visible = catalog.filter(plugin => `${plugin.displayName}\n${plugin.description}\n${plugin.packageName}`.toLocaleLowerCase().includes(query))
   $('#plugin-count').textContent = String(catalog.length)
-  $('#plugins').replaceChildren(...visible.map(pluginCard))
+  // 按插件分类分区展示：分类顺序与中文名由 catalog-view 固定，空分组不渲染。
+  const groups = groupPluginsByCategory(visible)
+  $('#plugins').replaceChildren(...groups.map(pluginSection))
   if (!visible.length) $('#plugins').append(node('p', query ? '没有匹配的插件，请尝试其他关键词。' : '尚未获得插件授权，请联系管理员。', 'empty'))
 }
 
