@@ -77,11 +77,29 @@ export interface ButlerDispatchResult {
 /** 管家事件名。与管家插件的 `BUTLER_EXECUTORS_EVENT` 必须一致。 */
 export const BUTLER_EXECUTORS_EVENT = 'butler/executors'
 
-declare module '@deepseek-ai/cordis' {
-  interface Events {
-    // 管家插件声明同一事件；两边靠事件名与字段对齐，不互相导入源码。
-    'butler/executors': (accept: (executor: ButlerAgentExecutor) => void) => void
-  }
+/**
+ * 本模块认知的事件映射。
+ *
+ * **不要**用 `declare module '@deepseek-ai/cordis'` 重塑 `butler/executors`：那是管家的事件，
+ * 两边各写一份同名类型会在 `exactOptionalPropertyTypes` 下互不兼容，让同时编译两个插件的
+ * 仓库报错。契约靠事件名与字段对齐，运行时由真实宿主验收与跨插件契约测试证明。
+ *
+ * 所以这里只在自己的命名空间里描述签名，调用方用 {@link onButlerExecutors} 订阅。
+ */
+export interface ButlerEvents {
+  'butler/executors': (accept: (executor: ButlerAgentExecutor) => void) => void
+}
+
+/**
+ * 订阅管家的执行入口收集事件，交出本插件要登记的入口。
+ *
+ * 收在这一处，避免每个调用点各自做类型断言。
+ */
+export function onButlerExecutors(
+  ctx: { on(name: string, listener: (accept: (executor: ButlerAgentExecutor) => void) => void, options: { global: boolean }): () => void },
+  executor: ButlerAgentExecutor,
+): () => void {
+  return ctx.on(BUTLER_EXECUTORS_EVENT, accept => accept(executor), { global: true })
 }
 
 /** 参与者状态到管家状态的映射。四种状态一一对应，不做归并。 */

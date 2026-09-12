@@ -15,7 +15,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createAccess, createPluginHttp, createPluginTools, registerPlugin, UNIVERSAL_TOOL_CATEGORY, toolsForCategory } from '@dsh-plugin-manager/plugin-kit'
 import * as common from '@dsh-agents-group/common'
 import { assertUniqueManifests, AGENT_MANIFESTS, type AgentManifest } from './agents/registry.ts'
-import { BUTLER_EXECUTORS_EVENT, executorFor } from './butler-bridge.ts'
+import { executorFor, onButlerExecutors } from './butler-bridge.ts'
 import { agentConfig, Config as ConfigSchema, isAgentEnabled, type Config as PluginConfig } from './config.ts'
 import { mountAgents, readiness, type AgentMount } from './host.ts'
 import { weatherTool } from './tools/weather.ts'
@@ -137,7 +137,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   for (const agent of mounted) {
     if (agent.participant === undefined) continue
     const executor = executorFor(agent.manifest, agent.participant)
-    ctx.effect(() => ctx.on(BUTLER_EXECUTORS_EVENT, accept => accept(executor), { global: true }))
+    ctx.effect(() => onButlerExecutors(ctx, executor))
   }
 
   // 群组卸载时按装载逆序释放，保证后起的先关。
