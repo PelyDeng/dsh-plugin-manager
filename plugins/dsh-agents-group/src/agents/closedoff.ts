@@ -29,8 +29,11 @@ export const closedoffErrorHandler = renderHttpError
  */
 export const mountClosedoff: AgentMount = async context => {
   const manifest = context.manifest
-  const entryPath = endpointsOf(manifest, context.config.routePrefix).entryPath
-  const defaults = { ...(ClosedoffConfigSchema.meta.default as PluginConfig) }
+  // 第三个参数不能漏：它决定该 Agent 的访问模式（强制认证的 Agent 永远是 authenticated）。
+  const entryPath = endpointsOf(manifest, context.config.routePrefix, context.config.accessMode).entryPath
+  // 让 Schema 自己解析空对象拿到默认值：`Config.meta.default` 是空对象，依赖它会让所有
+  // 未在部署 patch 里显式配置的字段变成 undefined。
+  const defaults = ClosedoffConfigSchema({} as PluginConfig)
   const config: PluginConfig = {
     ...defaults,
     ...(context.agentConfig as Partial<PluginConfig>),

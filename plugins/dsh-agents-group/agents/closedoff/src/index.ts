@@ -73,9 +73,17 @@ export interface AgentMountContext {
   readonly groupConfigPath?: string
 }
 
-/** Schema 默认值。用它做底座，避免把默认值再手写一遍导致两处漂移。 */
+/**
+ * Schema 默认值。用它做底座，避免把默认值再手写一遍导致两处漂移。
+ *
+ * **不能**用 `ConfigSchema.meta.default`：schemastery 不会把 `Schema.object` 计算出的默认值
+ * 放进那里，实测它是空对象（键数 0）。依赖它会让所有未显式配置的字段变成 `undefined`，
+ * 例如 `maxActiveConversations` 会让活跃会话上限校验拿到 undefined。
+ *
+ * 让 Schema 自己解析空对象即可拿到应用默认值后的完整配置。
+ */
 function schemaDefaults(): PluginConfig {
-  return { ...(ConfigSchema.meta.default as PluginConfig) }
+  return ConfigSchema({} as PluginConfig)
 }
 
 /**

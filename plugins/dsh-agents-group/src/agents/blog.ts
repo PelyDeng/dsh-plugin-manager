@@ -46,7 +46,9 @@ function materializeSettings(groupConfigPath: string | undefined): string | unde
 /** 装载博客工作台。 */
 export const mountBlog: AgentMount = async context => {
   const entryPath = endpointsOf(context.manifest, context.config.routePrefix, context.config.accessMode).entryPath
-  const defaults = { ...(BlogConfigSchema.meta.default as PluginConfig) }
+  // 让 Schema 自己解析空对象拿到默认值：`Config.meta.default` 是空对象，依赖它会让所有
+  // 未在部署 patch 里显式配置的字段变成 undefined。
+  const defaults = BlogConfigSchema({} as PluginConfig)
   const settingsPath = materializeSettings(context.groupConfigPath)
   const config: PluginConfig = {
     ...defaults,

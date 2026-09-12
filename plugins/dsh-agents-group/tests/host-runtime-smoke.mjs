@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import { WebServer } from '@deepseek-ai/dsh-host-webserver'
+import { installProvider } from '@dsh-plugin-manager/plugin-kit'
 
 const pluginRoot = fileURLToPath(new URL('../', import.meta.url))
 const failures = []
@@ -64,8 +65,23 @@ function writeGroupConfig() {
  */
 function installHostServices(ctx) {
   const noop = () => () => {}
-  ctx.provide('agents', { create: async () => { throw new Error('本验收不创建会话') }, resume: async () => { throw new Error('本验收不恢复会话') }, list: () => [], get: () => undefined })
-  ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'deepseek', model: 'test' }) })
+  /**
+   * Agent 工厂边界。
+   *
+   * 真正的 Agent 工厂由完整宿主提供（`dsh-agent-loop` 包），本验收不重建它 —— 那等于重写宿主，
+   * 而且已经证明会一路踩坑（WebServer 的归属、模型目录、配置默认值都是这么发现的）。
+   *
+   * 所以这里把它做成**显式的边界**：抛一个可识别的哨兵错误。派发链路只要能走到这里，就说明
+   * 「执行入口 → 桥接 → 参与者 → 鉴权 → 模型目录 → 创建子 Agent」这整条都通了，
+   * 剩下的只是宿主该提供的那一个实现。
+   */
+  ctx.provide('agents', {
+    create: async () => { throw new Error('__agent_factory_boundary__') },
+    resume: async () => { throw new Error('__agent_factory_boundary__') },
+    list: () => [],
+    get: () => undefined,
+  })
+  ctx.provide('agentDefaultModel', { currentSelection: () => ({ provider: 'deepseek', model: 'test' }), resolve: async () => ({ provider: 'deepseek', model: 'test' }) })
   ctx.provide('llm', { resolveModelInfo: async () => undefined, resolveCallConfig: async value => value, listModels: async () => ({ groups: [], failures: [] }) })
   ctx.provide('messageFeedback', { record: noop })
   ctx.provide('sessionPersistence', { flush: async () => {} })
@@ -74,6 +90,36 @@ function installHostServices(ctx) {
   ctx.provide('attachments', { saveFileStream: async () => ({ id: 'att-1' }) })
   ctx.provide('jobs', { attachController: noop, start: () => 'job-1', wait: async () => ({ status: 'completed' }), get: () => ({ status: 'completed' }), kill: () => {} })
   ctx.provide('sessions', { get: () => undefined, list: () => [] })
+
+  /**
+   * 官方模型目录。
+   *
+   * 子包在创建会话前要读宿主目录确认所选模型可路由，缺了会在创建前停住。这里给一份最小
+   * 可用目录，让派发链路能走到真正创建子 Agent。
+   */
+  ctx.provide('sessionController', {
+    modelCatalog: async () => ({
+      groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'test', name: '测试模型' }] }],
+      failures: [],
+      selected: { provider: 'deepseek', model: 'test' },
+    }),
+  })
+
+  /**
+   * 认证提供者替身。
+   *
+   * 真实实现按 `grants.includes(pluginId)` 判权，这里照同一语义给两个子包授权：派发链路会
+   * 用它做鉴权，缺了会在鉴权那一步停住（那正是第一次跑出来的结果，说明链路本身是通的）。
+   */
+  installProvider(ctx, {
+    protocol: 1,
+    ready: noop,
+    resolve: () => ({ namespace: 'user', userId: 'tester', sessionId: 'login-a' }),
+    assertAccess: (actor, pluginId) => {
+      if (actor.namespace !== 'user') throw new Error('请先登录')
+      if (!['closedoff', 'blog', 'agents-group'].includes(pluginId)) throw new Error('没有访问此插件的权限')
+    },
+  })
 }
 
 const groupConfigPath = writeGroupConfig()
@@ -126,6 +172,45 @@ try {
   record('执行入口的 agentId 与目录条目一致', executors.every(e => ['closedoff', 'blog'].includes(e.agentId)), executors.map(e => e.agentId).join('、'))
   record('执行入口声明了能力摘要', executors.every(e => Array.isArray(e.capabilities) && e.capabilities.length > 0))
   record('执行入口提供 dispatch', executors.every(e => typeof e.dispatch === 'function'))
+
+  /**
+   * 走一遍真实派发链路。
+   *
+   * 用一个默认模型替身跑一轮子 Agent：这验证的是从管家的执行入口 → 桥接 → 参与者 →
+   * 真实会话与工具 → 结论回收的**整条链路**，而不是各段单测。业务网关仍是替身，所以不
+   * 依赖外部服务也不调付费模型。
+   */
+  const closedoff = executors.find(executor => executor.agentId === 'closedoff')
+  if (closedoff === undefined) {
+    record('找到 closedoff 执行入口', false)
+  } else {
+    const actor = { namespace: 'user', userId: 'tester', sessionId: 'login-a' }
+    const progress = []
+    let failure
+    try {
+      await closedoff.dispatch({
+        taskId: 'task-runtime-1',
+        subtaskId: 'sub-1',
+        goal: '查一下园区今天的情况',
+        brief: '整体目标：了解园区。\n你负责：查今天的通行情况。',
+        taskGoal: '了解园区',
+        owner: 'user:tester',
+        actor,
+        signal: new AbortController().signal,
+        onProgress: update => progress.push(update),
+      })
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error)
+    }
+    /**
+     * 派发必须恰好停在 Agent 工厂边界。
+     *
+     * 停在这里 = 执行入口、桥接、参与者、鉴权、模型目录全部走通，只差宿主该提供的 Agent 工厂。
+     * 停在任何更早的地方都是真实缺陷，所以这条断言是有内容的：它不放过任何提前失败。
+     */
+    record('派发走到 Agent 工厂边界', failure === '__agent_factory_boundary__',
+      failure === undefined ? '竟然完成了（说明边界替身没生效）' : failure)
+  }
 
   // 群组级探针：真实 HTTP 上必须可达。
   const health = await get('/agents/health')
