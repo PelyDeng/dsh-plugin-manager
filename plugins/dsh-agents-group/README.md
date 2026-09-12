@@ -73,6 +73,45 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
 
 探针：群组级 `/agents/health`、`/agents/ready`（正文列出每个 Agent 的状态），
 以及每个 Agent 自己的 `/agents/<id>/ready`。子包不再注册探针。
+
+## 工具分类与可见性限制
+
+每个 Agent **只能调用属于自己标签的工具，外加约定好的通用工具集**。这条限制是硬限制，用
+`tools.restrict` 实现 —— 只在认证页面隐藏分类拦不住模型直接调用工具名。
+
+| 概念 | 值 | 说明 |
+| --- | --- | --- |
+| 通用工具标签 | `通用工具` | 由 kit 的 `UNIVERSAL_TOOL_CATEGORY` 定义，每个 Agent 都能调 |
+| 封闭化标签 | `封闭化园区` | 与清单里的 `category` 一致 |
+| 博客标签 | `博客工作台` | 同上 |
+
+**分类只有一个权威来源。** 子包注册工具用的标签由群组从 `AGENT_MANIFESTS[i].category`
+注入（`AgentMountContext.category`），子包不自己写字符串。两处各写一份会漂移，而漂移的后果是
+**该 Agent 的工具全部对它自己不可见**，且这种失效在界面上完全看不出来。
+
+可见性列表由 `toolsForCategory(全部条目, 本分类)` 算出，规则是「本分类 + 通用集」。两个容易
+写错的地方：通用集必须并进来（否则 Agent 连天气都查不了）；**未分类的工具不自动放行** ——
+把它们悄悄塞给每个 Agent 会让限制形同虚设。
+
+子包装载时必须在返回值里如实带上 `tools`，群组靠它算限制；漏报会让对应工具对该 Agent 不可见。
+
+## 通用工具
+
+通用工具是约定好的公共集，不依赖任何单一 Agent 的业务数据、也不需要额外凭据，所以可以安全地
+全局可见。当前一个：
+
+| 工具 | 说明 |
+| --- | --- |
+| `common_weather` | 按省、市、区县名查询当前天气与 1–7 天预报 |
+
+数据源是 Open-Meteo，**不需要 API Key** —— 群组因此不必引入凭据管理，也就没有密钥泄漏面。
+重名行政区（例如多个「朝阳区」）用 `region` 参数限定；限定后没有匹配时明确报错，而不是退回
+任意一个，因为静默落到同名异地是这类查询最容易出的错。
+
+新增通用工具只需在 `src/tools/` 写定义、在群组 `apply()` 里注册并传
+`UNIVERSAL_TOOL_CATEGORY`：所有 Agent 与管家都会自动获得它，不需要改它们的代码（管家是按
+标签从目录实时筛选的）。
+
 ## 新增一个 Agent 的步骤
 
 1. 建子包 `agents/<id>/`，包名 `@dsh-agents-group/<id>`，**不要声明 `deepseekPlugin`**
@@ -82,8 +121,10 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
    用 `context.access` 做访问校验、`context.http` 注册路由、`registerPlugin()` 登记目录条目、
    `registerConversations()` 注册会话管理 provider。**id、路径、权限都从
    `endpointsOf()` 取，不要手写。**
-4. 在 `src/index.ts` 的 `loadAgent()` 里加一个 `case`。
-5. 跑 `pnpm install`（写入 workspace 锁）、`pnpm check --plugins "agents-group"`、`pnpm test`。
+4. 子包注册工具时用 `context.category` 作为分类标签，并在 `mount()` 返回值里带上 `tools`。
+   两者都漏不得：漏了分类，该 Agent 的工具会全部对它自己不可见。
+5. 在 `src/index.ts` 的 `loadAgent()` 里加一个 `case`。
+6. 跑 `pnpm install`（写入 workspace 锁）、`pnpm check --plugins "agents-group"`、`pnpm test`。
 
 ## 配置
 
