@@ -26,7 +26,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { AccessError, conversationModel, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, conversationModel, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
 import type { Config } from './config.ts'
 import type { ButlerAgentExecutor, ButlerMember, ButlerPhase, ButlerProgressUpdate, ButlerReplyRequest } from './protocol.ts'
@@ -324,7 +324,31 @@ export class ButlerConsole {
       text: () => this.rosterText(sessionId),
     })
     agentCtx.tools.register(this.planTool(sessionId))
-    agentCtx.tools.restrict({ allow: [PLAN_TOOL] })
+    // 管家能直接调用的工具：派活工具 + 目录里的通用工具。
+    //
+    // 通用工具是约定好的公共集（分类标签 `通用工具`），任何智能体都能调。管家需要它们
+    // 才能直接处理那些「不需要专业智能体」的问题（例如查天气），而不是为了不必要的小事
+    // 去派活。
+    //
+    // 从目录实时读而不是写死名单：新增通用工具时管家自动就能用，不需要改这里。
+    agentCtx.tools.restrict({ allow: [PLAN_TOOL, ...this.universalToolNames(agentCtx)] })
+  }
+
+  /**
+   * 当前目录里标记为「通用工具」的工具名。
+   *
+   * 读不到目录时返回空数组：宁可让管家退回「只会派活」这个保守形态，也不要因为一次读取
+   * 失败就让它拿到不该有的工具。
+   */
+  private universalToolNames(ctx: Context): string[] {
+    try {
+      return listPlugins(ctx)
+        .flatMap(plugin => plugin.tools)
+        .filter(tool => tool.category === UNIVERSAL_TOOL_CATEGORY)
+        .map(tool => tool.name)
+    } catch {
+      return []
+    }
   }
 
   /**
