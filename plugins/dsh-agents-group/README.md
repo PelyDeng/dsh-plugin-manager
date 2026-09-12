@@ -131,10 +131,16 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
    用 `context.access` 做访问校验、`context.http` 注册路由、`registerPlugin()` 登记目录条目、
    `registerConversations()` 注册会话管理 provider。**id、路径、权限都从
    `endpointsOf()` 取，不要手写。**
-4. 子包注册工具时用 `context.category` 作为分类标签，并在 `mount()` 返回值里带上 `tools`。
-   两者都漏不得：漏了分类，该 Agent 的工具会全部对它自己不可见。
+4. 子包在 `mount()` 的返回值里必须带上两样东西，**漏一样都会静默失效**：
+   - `tools`：本次注册的工具条目，用 `context.category` 作为分类标签。漏了分类，该 Agent
+     的工具会全部对它自己不可见。
+   - `participant`：协作参与者（`AgentParticipant`）。群组把它桥接成管家的执行入口；漏了
+     这位 Agent 在管家名单里会变成「不可调度」，管家于是不会把专业活派给它。
 5. 在 `src/index.ts` 的 `loadAgent()` 里加一个 `case`。
 6. 跑 `pnpm install`（写入 workspace 锁）、`pnpm check --plugins "agents-group"`、`pnpm test`。
+7. **打包一次并检查归档**（`pnpm package --plugins "agents-group"`）：子包在运行时读取的文件
+   （人格文件、`runtime/`、`web/`）必须都在归档里。这一步不能省 —— 「不入库」与「不随包发布」
+   是两件事，而漏文件的后果是装载期直接抛错、站点起不来。
 
 ## 配置
 
