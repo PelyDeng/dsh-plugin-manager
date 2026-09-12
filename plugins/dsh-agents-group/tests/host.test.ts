@@ -83,6 +83,7 @@ describe('就绪判定', () => {
     entryPath: '/agents/x',
     healthPath: '/agents/x/ready',
     permission: 'x:access',
+    accessMode: 'standalone',
     dispose: async () => {},
   }
 

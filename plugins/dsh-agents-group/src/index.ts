@@ -40,6 +40,11 @@ export const inject = [
   'sessionPersistence',
   'systemPrompt',
   'tools',
+  // 以下三项只有部分子包需要（博客用到），但群组统一声明：
+  // 少声明会让子包在运行时才发现缺能力。
+  'attachments',
+  'jobs',
+  'sessions',
 ] as const
 
 /**
@@ -51,7 +56,7 @@ export const inject = [
 async function loadAgent(manifest: AgentManifest): Promise<AgentMount | undefined> {
   switch (manifest.id) {
     case 'closedoff': return (await import('./agents/closedoff.ts')).mountClosedoff
-    // P2: case 'blog': return (await import('./agents/blog.ts')).mountBlog
+    case 'blog': return (await import('./agents/blog.ts')).mountBlog
     default: return undefined
   }
 }

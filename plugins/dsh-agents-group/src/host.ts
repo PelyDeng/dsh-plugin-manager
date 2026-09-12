@@ -19,6 +19,8 @@ export interface MountedAgent {
   readonly entryPath: string
   readonly healthPath: string
   readonly permission: string
+  /** 该 Agent 需要的访问模式。 */
+  readonly accessMode: 'standalone' | 'authenticated'
   /** 装载失败时的可读原因；正常时为 undefined。 */
   readonly failure?: string
   dispose(): Promise<void>
@@ -75,13 +77,14 @@ export async function mountAgents(
 ): Promise<MountedAgent[]> {
   const mounted: MountedAgent[] = []
   for (const manifest of manifests) {
-    const endpoints = endpointsOf(manifest, shared.config.routePrefix)
+    const endpoints = endpointsOf(manifest, shared.config.routePrefix, shared.config.accessMode)
     const base = {
       manifest,
       id: endpoints.id,
       entryPath: endpoints.entryPath,
       healthPath: endpoints.healthPath,
       permission: endpoints.permission,
+      accessMode: endpoints.accessMode,
     }
     try {
       const mount = await loader(manifest)
@@ -90,8 +93,10 @@ export async function mountAgents(
         continue
       }
       // 每个 Agent 用自己的 pluginId 建访问校验器：授权粒度就是条目 id。
+      // 访问模式取端点推导的结果：强制认证的 Agent 即使在 standalone 群里也用
+      // authenticated，这样它报的是「认证不可用」，而不是被误判成装载失败。
       const access = createAccess(ctx, {
-        mode: shared.config.accessMode,
+        mode: endpoints.accessMode,
         pluginId: endpoints.id,
         publicOrigin: shared.config.publicOrigin,
       })

@@ -5,7 +5,7 @@ import { BlogStore, ownerKey } from '../src/store.mjs'
 import { ChatStore } from '../src/chat-store.mjs'
 import { createBlogParticipant, registerBlogParticipant } from '../src/participant.ts'
 import { chatConversationTarget } from '../web/chat.js'
-import { renderMarkdown } from '../../dsh-pirate-command/web/src/markdown.js'
+import { renderMarkdown } from '../../../../dsh-pirate-command/web/src/markdown.js'
 
 const actor = Object.freeze({ namespace: 'user', userId: 'writer', sessionId: 'login-a' })
 

@@ -1,7 +1,7 @@
 {
-  "name": "dsh-blog-assistant",
+  "name": "@dsh-agents-group/blog",
   "version": "0.12.5",
-  "description": "个人博客写作、发布、图床与备份助手",
+  "description": "博客工作台：写作、发布、图床与备份助手（智能体群组的子包）",
   "license": "UNLICENSED",
   "private": true,
   "type": "module",
@@ -12,19 +12,14 @@
       "types": "./dist/index.d.mts",
       "default": "./dist/index.mjs"
     },
-    "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json",
     "./protocol": {
-      "default": "./dist/protocol.mjs",
-      "types": "./dist/protocol.d.mts"
+      "types": "./dist/protocol.d.mts",
+      "default": "./dist/protocol.mjs"
     }
   },
   "files": [
     "dist/",
-    "web/index.html",
-    "web/style.css",
-    "web/icons.svg",
-    "web/ICONS-LICENSE.txt",
+    "web/",
     "config/config.example.json",
     "config/README.md",
     "backup/archive.py",
@@ -35,60 +30,13 @@
     "backup/README.md",
     "runtime/",
     "typecho/",
-    "cordis.patch.yml",
     "README.md",
-    "LICENSE",
-    "APACHE-2.0.txt",
-    "web/chat-base.css",
-    "web/chat-theme.css",
-    "web/media/",
-    "web/writing.css"
+    "APACHE-2.0.txt"
   ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
   "packageManager": "pnpm@11.19.0",
-  "dsh": {
-    "bundle": {
-      "patch": "./cordis.patch.yml"
-    }
-  },
-  "deepseekPlugin": {
-    "runtimeConfig": {
-      "variable": "BLOG_CONFIG_PATH",
-      "required": true,
-      "template": "config/config.example.json"
-    },
-    "defaultEnabled": false,
-    "id": "blog",
-    "permissions": [
-      "blog:access"
-    ],
-    "healthPath": "/blog/ready",
-    "entryPath": "/blog",
-    "configuration": {
-      "entryId": "blog",
-      "auth": "consumer"
-    },
-    "verifyFiles": [
-      "dist/web/app.js",
-      "web/index.html",
-      "web/media/icon-chevron-down.svg",
-      "web/media/icon-check.svg",
-      "web/style.css",
-      "config/config.example.json",
-      "typecho/DshBlogBridge/Plugin.php",
-      "typecho/DshBlogBridge/Action.php",
-      "typecho/DshBlogBridge/Management.php",
-      "typecho/DshBlogBridge/Reports.php",
-      "web/chat-base.css",
-      "web/chat-theme.css",
-      "web/media/icon-copy.svg",
-      "web/writing.css"
-    ],
-    "displayName": "博客工作台",
-    "schemaVersion": 3
-  },
   "scripts": {
     "build": "tsdown && tsdown --config tsdown.web.config.ts",
     "typecheck": "tsc --noEmit",
@@ -97,7 +45,7 @@
     "test:bridge": "php -n -l typecho/DshBlogBridge/Plugin.php && php -n tests/management-bridge.test.php",
     "test:reports": "php tests/reports-bridge.test.php",
     "check": "pnpm typecheck && node --check web/app.js",
-    "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
+    "clean": "node ../../../../scripts/clean-plugin.mjs dist coverage"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "3.18.2",
@@ -106,12 +54,10 @@
     "yauzl": "3.4.0"
   },
   "peerDependencies": {
-    "dsh-pirate-command": ">=0.1.0 <1",
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/dsh-agent": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-agent-default-model": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-attachment": "0.1.5-alpha.2",
-    "@deepseek-ai/dsh-home-paths": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-host-webserver": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-jobs": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-llm": "0.1.5-alpha.2",
@@ -119,28 +65,9 @@
     "@deepseek-ai/dsh-session": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-session-persistence": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-system-prompt": "0.1.5-alpha.2",
-    "@deepseek-ai/dsh-token-meter": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-tools": "0.1.5-alpha.2"
   },
   "peerDependenciesMeta": {
-    "dsh-pirate-command": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-token-meter": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-message-feedback": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-session-persistence": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-jobs": {
-      "optional": true
-    },
-    "@deepseek-ai/dsh-attachment": {
-      "optional": true
-    },
     "@deepseek-ai/cordis": {
       "optional": true
     },
@@ -150,13 +77,25 @@
     "@deepseek-ai/dsh-agent-default-model": {
       "optional": true
     },
+    "@deepseek-ai/dsh-attachment": {
+      "optional": true
+    },
     "@deepseek-ai/dsh-host-webserver": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-jobs": {
       "optional": true
     },
     "@deepseek-ai/dsh-llm": {
       "optional": true
     },
+    "@deepseek-ai/dsh-message-feedback": {
+      "optional": true
+    },
     "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session-persistence": {
       "optional": true
     },
     "@deepseek-ai/dsh-system-prompt": {
@@ -164,35 +103,29 @@
     },
     "@deepseek-ai/dsh-tools": {
       "optional": true
-    },
-    "@deepseek-ai/dsh-home-paths": {
-      "optional": true
     }
   },
   "devDependencies": {
-    "dsh-pirate-command": "workspace:*",
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/dsh-agent": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-agent-default-model": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-attachment": "0.1.5-alpha.2",
-    "@deepseek-ai/dsh-home-paths": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-host-webserver": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-jobs": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-jobs-local": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-llm": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-message-feedback": "0.1.5-alpha.2",
-    "@deepseek-ai/dsh-scope": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-session": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-session-persistence": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-system-prompt": "0.1.5-alpha.2",
-    "@deepseek-ai/dsh-token-meter": "0.1.5-alpha.2",
     "@deepseek-ai/dsh-tools": "0.1.5-alpha.2",
+    "@dsh-agents-group/common": "workspace:*",
     "@dsh-plugin-manager/plugin-kit": "workspace:*",
     "@types/node": "^22.20.0",
     "dompurify": "3.4.14",
+    "dsh-pirate-command": "workspace:*",
     "markdown-it": "15.0.1",
     "tsdown": "^0.22.2",
-    "typescript": "^6.0.3",
-    "@deepseek-ai/dsh-command-feedback": "0.1.5-alpha.2"
+    "typescript": "^6.0.3"
   }
 }

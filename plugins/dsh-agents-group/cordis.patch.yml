@@ -2,8 +2,43 @@
 # 每个字段都必须有 Schema 默认值：管理器的 patch 会整体替换 config，不做逐字段合并。
 #
 # 各 Agent 自己的部署字段写在 agents.<id>.config 下，由该 Agent 的 Schema 校验。
-# 原独立插件的 cordis.patch.yml 里的字段原样搬到这里，环境变量名保持不变，
+# 原独立插件 cordis.patch.yml 里的字段原样搬到这里，环境变量名保持不变，
 # 这样现有部署脚本不用改。
+
+# 博客的模型路由：复用官方适配器，为博客注册智谱 provider。
+# 这一段原先在 dsh-blog-assistant 的 patch 里；合并后由群组统一注册。
+# 注意 provider 注册是宿主全局的，所以封闭化的模型目录里也会出现这两个条目，
+# 按设计由群组的模型白名单（agents.<id>.models）在应用层收窄。
+- id: llm-pi-ai
+  config:
+    providers:
+      blog-zhipu:
+        displayName: 博客智谱
+        api: openai-completions
+        baseURL: https://open.bigmodel.cn/api/paas/v4
+        apiKeyEnv: ZHIPU_API_KEY
+        reasoning: high
+        compat:
+          thinkingFormat: zai
+          maxTokensField: max_tokens
+        models:
+          - id: glm-5.3
+            name: GLM-5.3
+            input: [text]
+            contextWindow: 1000000
+            maxTokens: 8192
+            reasoningEfforts: { low: low, high: high, max: max }
+            compat:
+              supportsReasoningEffort: true
+          - id: glm-5v-turbo
+            name: GLM-5V-Turbo
+            input: [text, image]
+            contextWindow: 200000
+            maxTokens: 8192
+            reasoningEfforts: { off: null, high: high }
+            compat:
+              supportsReasoningEffort: false
+
 - insert:
     - id: agents-group
       name: dsh-agents-group
@@ -24,3 +59,9 @@
               tilesetHeight: !!js Number(process.env.CLOSEDOFF_TILESET_HEIGHT ?? 60)
               trackDeviceRadiusMeters: !!js Number(process.env.CLOSEDOFF_TRACK_DEVICE_RADIUS_METERS ?? 100)
               trackDwellMaxGapSeconds: !!js Number(process.env.CLOSEDOFF_TRACK_DWELL_MAX_GAP_SECONDS ?? 300)
+          blog:
+            enabled: true
+            config:
+              turnTimeoutMs: !!js Number(process.env.BLOG_TURN_TIMEOUT_MS ?? 240000)
+            # 博客常用智谱路由；封闭化看不到它（在 closedoff 一侧 deny）。
+            # 留空表示不过滤，与迁移前一致。

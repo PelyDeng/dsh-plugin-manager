@@ -11,7 +11,8 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { createAccess,createPluginHttp,registerPlugin,registerConversations,AccessError } from '@dsh-plugin-manager/plugin-kit'
+import { registerPlugin,registerConversations,AccessError,type Access,type Actor } from '@dsh-plugin-manager/plugin-kit'
+import type { ProtectedRoute } from '@dsh-plugin-manager/plugin-kit/http'
 import { loadSettings } from './settings.mjs'
 import { BlogStore } from './store.mjs'
 import { BlogClient,ImageClient,BackupClient } from './connectors.mjs'
@@ -25,17 +26,56 @@ import {selectBlogModel} from './models.mjs'
 import {ReasoningTranslations,reasoningOriginal} from './reasoning-translation.ts'
 import type { Config } from './config.ts'
 export { Config } from './config.ts'
+/** 同 closedoff 的约定：适配层需要类型名 `PluginConfig`。 */
+export type { Config as PluginConfig } from './config.ts'
 export const name='blog'
+
+/**
+ * 本子包需要宿主提供的服务。
+ *
+ * 列出它是为了让「这个 Agent 依赖哪些宿主能力」保持可读；群组在装载前统一等待这些服务。
+ * `attachments`、`jobs`、`sessions` 也在其中，缺任何一个都会让装载失败。
+ */
 export const inject=['agents','agentDefaultModel','webServer','systemPrompt','tools','attachments','jobs','llm','sessions','sessionPersistence','messageFeedback'] as const
+
+/** 本子包只用到 Actor 的这两个字段（备份授权端点用）。 */
+interface ActorLike { readonly userId?:string; readonly sessionId?:string }
+
+/** 群组注入给子包的东西。只依赖这个最小接口，不依赖群组内部实现。 */
+export interface AgentMountContext {
+  readonly ctx: Context
+  /** 已绑定本 Agent 的 pluginId 与授权范围的访问校验器。 */
+  readonly access: Access
+  /**
+   * 只允许注册本 Agent 前缀下路由的 HTTP 注册器。
+   *
+   * 直接复用 kit 的 `ProtectedRoute`：路由契约不该在各子包里各写一份，写偏了会在
+   * 类型层看不出来、运行时才以「actor 缺字段」的形式炸掉。
+   */
+  readonly http: {
+    register(route: ProtectedRoute): () => void
+  }
+  /** 群组解析后的完整配置。 */
+  readonly config: Config
+  /** 群组级配置文件的路径；存在时业务凭据从它的 `blog` 小节读取。 */
+  readonly groupConfigPath?: string
+}
 
 function json(res:ServerResponse,data:unknown){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(data))}
 async function body(req:IncomingMessage,max:number){const chunks:Buffer[]=[];let size=0;for await(const b of req){const chunk=Buffer.from(b);size+=chunk.length;if(size>max)throw new AccessError(413,'请求超过大小限制');chunks.push(chunk)}return Buffer.concat(chunks)}
-export async function apply(ctx:Context,config:Config){
-  if(config.accessMode!=='authenticated')throw new Error('博客工作台必须接入 auth')
+
+/**
+ * 装载博客工作台，返回群组用于卸载的释放函数。
+ *
+ * `access` 与 `http` 由群组注入：一个 Agent 只应有一套鉴权实例。业务逻辑未作改动。
+ */
+export async function mount(mountContext:AgentMountContext):Promise<{dispose():Promise<void>}>{
+  const {ctx,access,http}=mountContext
+  const config=mountContext.config
+  // 不再在这里断言 accessMode：群组会为强制认证的 Agent 建 authenticated 的 access。
+  // 若把群组配成 standalone，它会以「认证不可用」如实报错，而不是被误判成装载失败。
   const settings=loadSettings(config.runtimeConfig||process.env.BLOG_CONFIG_PATH||'')
   const root=config.dataPath||dshHomePath('plugins','blog')
-  const access=createAccess(ctx,{pluginId:'blog',mode:'authenticated',publicOrigin:config.publicOrigin})
-  const http=createPluginHttp(ctx,{access,routePrefix:config.routePrefix})
   const store=new BlogStore(join(root,'blog.sqlite'))
   const blog=new BlogClient(settings.blog),images=new ImageClient(settings.image,join(root,'image-token.json')),backups=new BackupClient(settings.backup,access)
   const conversations=new ChatStore(store)
@@ -47,15 +87,16 @@ export async function apply(ctx:Context,config:Config){
   ctx.effect(()=>registerBlogParticipant(ctx,{access,chat,index:conversations,store,routePrefix:config.routePrefix}))
   ctx.effect(()=>registerConversations(ctx,chat.provider))
   const translations=new ReasoningTranslations({ctx,pluginId:'blog',path:join(root,'reasoning-translations.sqlite'),access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
-  ctx.effect(()=>async()=>{await translations.close();await chat.close();await jobs.close();await attachments.close();store.close()})
   const manifest=JSON.parse(await readFile(new URL('../package.json',import.meta.url),'utf8'))
   ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],tools:jobs.chatTools}))
   for(const [suffix,file,mime] of [['','web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],['/style.css','web/style.css','text/css'],['/writing.css','web/writing.css','text/css'],['/chat-base.css','web/chat-base.css','text/css'],['/chat-theme.css','web/chat-theme.css','text/css'],...['chevron-down','copy','check','like','dislike','branch','database','clock','think','api','send','user','chat','stop'].map(name=>[`/media/icon-${name}.svg`,`web/media/icon-${name}.svg`,'image/svg+xml']),['/icons.svg','web/icons.svg','image/svg+xml']] as const){
     const content=(await readFile(new URL(`../${file}`,import.meta.url),'utf8')).replaceAll('__BASE__',config.routePrefix)
     ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+suffix,surface:suffix?'asset':'page',handler(req,res){if(req.method!=='GET')throw new AccessError(405,'只支持 GET');res.writeHead(200,{'content-type':`${mime}; charset=utf-8`,'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"});res.end(content)}}))
   }
-  ctx.effect(()=>http.registerPublic({kind:'exact',path:config.routePrefix+'/ready',handler(_req,res){try{access.ready();json(res,{ok:true})}catch{res.writeHead(503);res.end()}}}))
-  ctx.effect(()=>http.registerPublic({kind:'exact',path:config.routePrefix+'/backup-authorize',handler:async(req,res)=>{
+  // 存活与就绪探针由群组统一提供（/agents/health、/agents/ready 与 /agents/blog/ready），
+  // 这里不再注册：容器级探针是群组的职责，重复一份还会因前缀来源不同而冲突。
+  // `/backup-authorize` 不是探针而是业务端点（systemd 执行器用它换授权），所以保留。
+  ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/backup-authorize',handler:async(req,res)=>{
     const expected=settings.backup.token?`Bearer ${settings.backup.token}`:''
     const supplied=req.headers.authorization??''
     if(req.method!=='POST'||!expected||!timingSafeEqual(createHash('sha256').update(expected).digest(),createHash('sha256').update(supplied).digest())){res.writeHead(403);res.end();return}
@@ -133,4 +174,11 @@ export async function apply(ctx:Context,config:Config){
     const inline=query.get('inline')==='1'&&record.status==='ready'&&record.image&&['image/png','image/jpeg','image/webp','image/gif'].includes(record.kind)
     res.writeHead(200,{'content-type':inline?record.kind:'application/octet-stream','content-disposition':`${inline?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name)}`,'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"});res.end(file.bytes)
   }}))
+
+  return {
+    dispose: async () => {
+      // 释放顺序与创建相反，与迁移前保持一致。
+      await translations.close(); await chat.close(); await jobs.close(); await attachments.close(); store.close()
+    },
+  }
 }

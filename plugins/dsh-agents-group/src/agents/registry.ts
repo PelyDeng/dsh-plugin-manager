@@ -20,6 +20,14 @@ export interface AgentManifest {
   readonly category: string
   /** 一句话自述。 */
   readonly description: string
+  /**
+   * 该 Agent 是否强制要求认证。
+   *
+   * 有些 Agent 的业务前提就是「必须有可信身份」（例如博客要按用户隔离草稿与附件）。
+   * 这类 Agent 在群组跑 standalone 时不是「装载失败」，而是「按设计不可用」：
+   * 页面会明确报认证不可用，而不是被误判成崩溃。
+   */
+  readonly requiresAuthentication?: boolean
 }
 
 /**
@@ -35,6 +43,15 @@ export const AGENT_MANIFESTS: readonly AgentManifest[] = [
     category: '封闭化园区',
     description: '园区封闭化业务查询、车辆轨迹与设备数据分析',
   },
+  {
+    id: 'blog',
+    displayName: '博客智能体',
+    directory: 'blog',
+    category: '博客工作台',
+    description: '博客写作、发布、图床与备份',
+    // 博客按用户隔离草稿、附件与备份，业务前提是必须有可信身份。
+    requiresAuthentication: true,
+  },
 ]
 
 /**
@@ -49,14 +66,21 @@ export interface AgentEndpoints {
   readonly entryPath: string
   readonly healthPath: string
   readonly permission: string
+  /** 该 Agent 需要的访问模式：强制认证的 Agent 永远是 authenticated。 */
+  readonly accessMode: 'standalone' | 'authenticated'
 }
 
-export function endpointsOf(manifest: AgentManifest, routePrefix: string): AgentEndpoints {
+export function endpointsOf(
+  manifest: AgentManifest,
+  routePrefix: string,
+  groupAccessMode: 'standalone' | 'authenticated' = 'authenticated',
+): AgentEndpoints {
   return {
     id: manifest.id,
     entryPath: `${routePrefix}/${manifest.id}`,
     healthPath: `${routePrefix}/${manifest.id}/ready`,
     permission: `${manifest.id}:access`,
+    accessMode: manifest.requiresAuthentication === true ? 'authenticated' : groupAccessMode,
   }
 }
 

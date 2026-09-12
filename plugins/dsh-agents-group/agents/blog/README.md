@@ -2,7 +2,7 @@
 
 私有 DSH 业务插件，入口 `/blog`。通过 auth 授权后直接对话、查询博客、分析资料或写作；文章编辑视图提供手动编辑、候选合并和确认发布。博客端为 Typecho 1.2.1，图床端为 Lsky Pro 2.1 的固定存储策略。
 
-新站点使用[产物一键部署](../../doc/first-deployment.md)，交付完整博客发布目录并保留 auth；已有 Gitee 源码服务器使用[私有更新入口](../../PRIVATE.md#源码一键更新)。框架部署不会自动更新 Typecho 桥接扩展，桥接要求见[查找与编辑文章](#查找与编辑文章)。
+新站点使用[产物一键部署](../../../../doc/first-deployment.md)，交付完整博客发布目录并保留 auth；已有 Gitee 源码服务器使用[私有更新入口](../../../../PRIVATE.md#源码一键更新)。框架部署不会自动更新 Typecho 桥接扩展，桥接要求见[查找与编辑文章](#查找与编辑文章)。
 
 对话与文章编辑器共用“自然表达、思路清晰的编辑”人设：默认用简单易懂的中文，减少空泛术语、口号和模板化开头结尾，以具体观点、事实和例子组织段落。改稿保留作者原意和个人语气，遵循本次修改范围。
 
@@ -12,7 +12,7 @@
 
 ## 会话管理
 
-在 auth 的[会话管理](../../doc/conversation-management.md)中，可以查询、预览和批量移除自己的博客对话。预览只读取并整理用户可见的消息，不调用模型、不操作文章，也不恢复对话任务。旧版本中仅从列表隐藏的对话，可以在这里补做 DSH 官方归档；日志、文章、编辑恢复数据、附件和备份仍保留。
+在 auth 的[会话管理](../../../../doc/conversation-management.md)中，可以查询、预览和批量移除自己的博客对话。预览只读取并整理用户可见的消息，不调用模型、不操作文章，也不恢复对话任务。旧版本中仅从列表隐藏的对话，可以在这里补做 DSH 官方归档；日志、文章、编辑恢复数据、附件和备份仍保留。
 
 对话正在回答、保存本轮记录或创建分支时，不能清理。存在有效的待确认文章操作，或操作仍处于 running/uncertain（执行中/结果不明确）状态时，也会阻止清理。归档未完成时保留用户归属记录并禁止继续写入，可在会话管理刷新后重试；管理页不会自动取消业务操作。
 
@@ -24,13 +24,13 @@
 
 管理器认证配置层覆盖 Bundle 默认配置时，插件仍从 `BLOG_CONFIG_PATH` 取得同一凭据文件的路径；显式 `runtimeConfig` 优先。该变量只存路径，不存账号或密码。
 
-离线源码构建前需准备本插件依赖的包内容和 registry 元数据；部署完整归档不构建博客源码。pnpm 11 的已有可写 store 使用 SQLite 索引，仅复制只读包文件不会更新索引，应在独立临时项目中用 pnpm 预热目标 store，不覆盖 `index.db`。失败操作按[框架恢复规则](../../deploy/README.md#安装与恢复)继续。
+离线源码构建前需准备本插件依赖的包内容和 registry 元数据；部署完整归档不构建博客源码。pnpm 11 的已有可写 store 使用 SQLite 索引，仅复制只读包文件不会更新索引，应在独立临时项目中用 pnpm 预热目标 store，不覆盖 `index.db`。失败操作按[框架恢复规则](../../../../deploy/README.md#安装与恢复)继续。
 
 ## 宿主能力
 
 通过官方 `dsh` profile 运行。宿主需提供 agents、agentDefaultModel、llm、tools、systemPrompt、webServer、jobs、attachments、sessions、sessionPersistence 和 messageFeedback。开发依赖与运行宿主均为 DSH `0.1.5-alpha.2`；附件通过 `saveFileStream/readFileStream` 访问，历史和用量使用官方公开子路径。实时输出订阅 `agent/assistant-stream`，持久历史使用 Session V3 的 message/attempt 流；不再订阅 `assistant/chunk`。
 
-旧会话经官方持久化层转换后读取，不能直接改写日志或沿用升级前缓存的分支序号。生产升级的备份、镜像更新和回退步骤见[宿主兼容说明](../../doc/host-compatibility.md)。
+旧会话经官方持久化层转换后读取，不能直接改写日志或沿用升级前缓存的分支序号。生产升级的备份、镜像更新和回退步骤见[宿主兼容说明](../../../../doc/host-compatibility.md)。
 
 官方 web Bundle 已提供会话持久化、JSON storage-domain 和 messageFeedback，无需重复装配。博客接口将反馈备注限制为 4000 UTF-8 字节，沿用宿主共享反馈服务的配置，不改变其他应用的备注上限。
 
@@ -199,7 +199,7 @@ pnpm --filter dsh-blog-assistant test:reports # 需要 PHP CLI 和 PDO_SQLite
 python3 -m unittest discover -s plugins/dsh-blog-assistant/backup -p 'test_*.py'
 ```
 
-按改动选择必要检查；这些命令分别检查类型与语法、构建、本地行为、Typecho 桥接及备份执行器。交付包在仓库根执行 `pnpm package --plugins blog`；它另行执行构建、检查和归档校验，输出完整发布目录。认证站点须同时保留 auth，私有完整选集见[集成说明](../../PRIVATE.md#本地集成公共更新)。`test:bridge` 使用数据库和原生组件的替身，检查删除、回执重放、冲突与事务回滚。
+按改动选择必要检查；这些命令分别检查类型与语法、构建、本地行为、Typecho 桥接及备份执行器。交付包在仓库根执行 `pnpm package --plugins blog`；它另行执行构建、检查和归档校验，输出完整发布目录。认证站点须同时保留 auth，私有完整选集见[集成说明](../../../../PRIVATE.md#本地集成公共更新)。`test:bridge` 使用数据库和原生组件的替身，检查删除、回执重放、冲突与事务回滚。
 
 `test:reports` 在内存 SQLite 中实际执行筛选、关联及汇总查询，覆盖保存稿去重、分类后代、组合条件、上海日期、评论排行、目录分页、范围上限和返回体积。默认使用测试查询构造器；设置 `TYPECHO_QUERY_DIR` 指向 Typecho 1.2.1 的 `var/Typecho/Db/`（含 `Query.php`、`Adapter.php`）可改用原生查询构造器。测试不会下载源码；MySQL 事务命令与表引擎检查使用替身，不能作为真实 MySQL 并发快照验收。
 
