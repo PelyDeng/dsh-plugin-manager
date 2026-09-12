@@ -45,6 +45,7 @@
     "verifyFiles": [
       "config/group.example.json",
       "agents/closedoff/persona.txt",
+      "agents/closedoff/web/index.html",
       "agents/blog/runtime/chat-sdk.mjs"
     ],
     "configuration": {
