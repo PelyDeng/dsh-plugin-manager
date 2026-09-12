@@ -86,7 +86,7 @@ export function readPlugin(root) {
     && !meta.healthPath.startsWith('//') && !meta.healthPath.split('/').some(part => part === '.' || part === '..')), `${label}.healthPath 无效。`);
   requireValue(meta.displayName === undefined || (typeof meta.displayName === 'string' && meta.displayName.trim().length > 0), `${label}.displayName 必须是非空文本。`);
   requireValue(meta.entryPath === undefined || isPluginPath(meta.entryPath), `${label}.entryPath 必须是规范的非根插件路由。`);
-  // 插件分类只用于认证页面分组与管家端成员过滤；取值不设枚举，第三方插件可以自定义。
+  // 插件分类只用于认证页面分组与牛马大总管端成员过滤；取值不设枚举，第三方插件可以自定义。
   requireValue(meta.category === undefined || (typeof meta.category === 'string' && meta.category.trim().length > 0 && meta.category.trim().length <= 40), `${label}.category 必须是不超过 40 字的非空文本。`);
   const permissions = meta.permissions ?? [];
   requireValue(Array.isArray(permissions) && permissions.every(permission => typeof permission === 'string'
