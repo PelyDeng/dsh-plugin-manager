@@ -44,7 +44,8 @@
     ],
     "verifyFiles": [
       "config/group.example.json",
-      "src/agents/registry.ts"
+      "agents/closedoff/persona.txt",
+      "agents/blog/runtime/chat-sdk.mjs"
     ],
     "configuration": {
       "entryId": "agents-group",

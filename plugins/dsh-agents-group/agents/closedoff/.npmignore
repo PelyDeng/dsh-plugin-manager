@@ -1,0 +1,24 @@
+# 发布时忽略什么。
+#
+# 为什么不直接沿用 .gitignore：**web/assets/ 是构建产物、不入库，但必须随包发布**。
+# 没有 .npmignore 时 npm 会沿用 .gitignore，于是那 448 个 Cesium 资源被一起排除，
+# 部署后三维地图的静态资源全部 404。所以这里显式排除「不该发布的」，不再依赖 .gitignore。
+node_modules/
+dist/
+.tmp/
+*.log
+req_*.json
+res_*.json
+token.txt
+.credentials.yaml
+.env
+.env.*
+# 源码与开发资源不随包发布：运行时用的是群组 dist 里内联的产物。
+src/
+tests/
+doc/
+dev/
+scripts/
+tsconfig.json
+tsdown.config.ts
+vitest.config.ts

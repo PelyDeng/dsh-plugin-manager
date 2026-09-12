@@ -1,0 +1,13 @@
+# 发布时忽略什么。
+#
+# 没有 .npmignore 时 npm 会沿用 .gitignore；这里显式列出，避免仓库的忽略规则（例如
+# __pycache__/）与发布内容的需求混在一起看不清。
+node_modules/
+.tmp/
+*.log
+__pycache__/
+# 源码与开发资源不随包发布：运行时用的是群组 dist 里内联的产物。
+src/
+tests/
+tsconfig.json
+tsdown.config.ts
