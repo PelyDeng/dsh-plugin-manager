@@ -1,5 +1,5 @@
 /** Independent account UI; server authorization remains authoritative. */
-import { pageTools, pageUsers, highlightParts, localEntry, toolDisplayName } from './catalog-view.js'
+import { pageTools, pageUsers, highlightParts, localEntry, toolDisplayName, toolCategory } from './catalog-view.js'
 
 const $ = selector => document.querySelector(selector)
 let session = null
@@ -168,6 +168,9 @@ function renderTools() {
     const status = node('span', undefined, 'tool-status')
     status.append(node('span', undefined, 'status-dot enabled'), node('span', '已启用', 'enabled-label'))
     summary.append(highlight(node('strong', undefined, 'tool-name'), toolDisplayName(tool), query), status, node('span', '⌄', 'tool-chevron'))
+    // 分类标签由插件自己填写；未分类时不渲染标签，老插件的外观保持不变。
+    const category = toolCategory(tool)
+    if (category) summary.insertBefore(highlight(node('span', category, 'tool-category'), category, query), status)
     details.append(summary)
     const body = node('div', undefined, 'tool-body')
     body.append(highlight(node('p', undefined, 'muted'), `工具编码：${tool.name}`, query), highlight(node('p', undefined, 'muted'), tool.description, query), node('p', `执行权限：${tool.permission}`, 'muted'), node('div', '参数定义', 'parameter-heading'), highlight(node('pre'), JSON.stringify(tool.parameters, null, 2), query))

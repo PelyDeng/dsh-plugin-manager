@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 // Browser-native module is intentionally plain JavaScript and is tested as shipped.
 // @ts-expect-error The static browser module has no TypeScript declaration file.
-import { filterTools, pageTools, pageUsers, highlightParts, localEntry, toolDisplayName } from '../web/catalog-view.js'
+import { filterTools, groupToolsByCategory, pageTools, pageUsers, highlightParts, localEntry, toolCategory, toolDisplayName } from '../web/catalog-view.js'
 
 const tools = Array.from({ length: 37 }, (_, index) => ({
   name: `demo_tool_${index}`, description: `中文工具说明 ${index}`,
@@ -61,4 +61,44 @@ it('paginates user cards and searches identities or localized roles', () => {
   expect(pageUsers(users, '管理员').items.map((user: { id: string }) => user.id)).toEqual(['id-0'])
   expect(pageUsers(users, 'PERSON-13').items.map((user: { id: string }) => user.id)).toEqual(['id-13'])
   expect(pageUsers(users, 'missing', 3)).toMatchObject({ page: 1, pages: 0, total: 0, items: [] })
+})
+
+describe('工具分类分组', () => {
+  const categorized = [
+    { name: 'a', category: '封闭化园区' },
+    { name: 'b', category: '博客工作台' },
+    { name: 'c', category: '通用工具' },
+    { name: 'd', category: '封闭化园区' },
+  ]
+
+  it('按标签分组，组内保持原顺序', () => {
+    const groups = groupToolsByCategory(categorized)
+    expect(groups.map(group => group.label)).toEqual(['封闭化园区', '博客工作台', '通用工具'])
+    expect(groups[0]!.tools.map(tool => tool.name)).toEqual(['a', 'd'])
+  })
+
+  it('未分类的工具归入「未分类」并排在最后', () => {
+    const groups = groupToolsByCategory([{ name: 'x' }, { name: 'a', category: '甲' }, { name: 'y', category: '  ' }])
+    expect(groups.map(group => group.label)).toEqual(['甲', '未分类'])
+    expect(groups[1]!.tools.map(tool => tool.name)).toEqual(['x', 'y'])
+  })
+
+  it('全部未分类时只有一个分组，顺序不变', () => {
+    // 老插件不填分类也要照常展示，不能因此打乱顺序或凭空多出分组。
+    const groups = groupToolsByCategory(tools)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]!.label).toBe('未分类')
+    expect(groups[0]!.tools).toEqual(tools)
+  })
+
+  it('空列表得到空分组', () => {
+    expect(groupToolsByCategory([])).toEqual([])
+  })
+
+  it('分类标签去除首尾空白，空白视为未分类', () => {
+    expect(toolCategory({ category: '  甲  ' })).toBe('甲')
+    expect(toolCategory({ category: '   ' })).toBeUndefined()
+    expect(toolCategory({})).toBeUndefined()
+    expect(toolCategory({ category: 42 })).toBeUndefined()
+  })
 })

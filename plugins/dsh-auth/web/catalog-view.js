@@ -19,6 +19,29 @@ export function pageTools(tools, query, requestedPage = 1) {
   return { items: matches.slice((page - 1) * TOOL_PAGE_SIZE, page * TOOL_PAGE_SIZE), total: matches.length, pages, page }
 }
 
+/**
+ * 按分类标签给工具分组。
+ *
+ * 标签由各插件自己填写（`ToolDescriptor.category`），可能缺省 —— 老插件不填也要照常
+ * 工作，所以未分类的工具统一归入「未分类」并排在最后。两组内部都保持原有顺序，
+ * 这样搜索结果的相对顺序不会因为分组而变化。
+ */
+export function groupToolsByCategory(tools, uncategorized = '未分类') {
+  const groups = new Map()
+  for (const tool of tools) {
+    const label = tool?.category?.trim() || uncategorized
+    const list = groups.get(label)
+    if (list) list.push(tool)
+    else groups.set(label, [tool])
+  }
+  const named = [...groups].filter(([label]) => label !== uncategorized)
+  const rest = groups.get(uncategorized)
+  return [...named.map(([label, items]) => ({ label, tools: items })), ...(rest ? [{ label: uncategorized, tools: rest }] : [])]
+}
+
+/** 工具所属分类的显示标签；未分类时返回 undefined，调用方据此决定是否渲染标签。 */
+export const toolCategory = tool => typeof tool?.category === 'string' && tool.category.trim() !== '' ? tool.category.trim() : undefined
+
 /** Return literal text runs; callers use text nodes and mark elements, never HTML. */
 export function highlightParts(value, query) {
   const text = String(value)
