@@ -34,12 +34,12 @@ if len(classified) != len(set(classified)) or set(classified) != set(assets):
 
 opaque = {"env-ocean-day", "env-ocean-storm", "env-ocean-moon", "water-displacement"}
 chroma = {"cannon-smoke", "water-splash"}
-non_generative = {"jack-turnaround", "jack-walk", "jack-gestures", "jack-tasks", "pearl-layout-reference", "rival-ship"}
-reference_only = {"pearl-layout-reference", "rival-ship"}
+non_generative = {"jack-turnaround", "jack-walk", "pearl-layout-reference", "rival-ship"}
+reference_only = {"pearl-layout-reference", "rival-ship", "jack-turnaround", "jack-walk"}
 processing = {
     "pearl-hull-deck", "pearl-front-rail", "pearl-mast-fore", "pearl-mast-main", "pearl-mast-aft",
     "rival-foreground", "rival-damage-stages",
-    "barbossa-turnaround", "barbossa-walk", "barbossa-gestures", "barbossa-tasks",
+    "barbossa-turnaround", "barbossa-walk", "jack-gestures", "jack-tasks", "barbossa-gestures", "barbossa-tasks",
     "elizabeth-walk", "elizabeth-gestures", "elizabeth-tasks", "monkey-actions", "enemy-crew",
     "water-displacement", "sea-foam-cycle", "fog-ribbons", "cannonball", "muzzle-flash",
     "wood-impact", "battle-explosion", "magic-pulse", "parchment-panels", "speech-bubble-parts",
@@ -60,7 +60,9 @@ placeholder_values = {
     "deck-props": {"[PROP]": ["chart table with blank map", "ship wheel on pedestal", "closed wooden barrel", "coiled rope", "small wooden crate", "handheld telescope", "paper and quill with ink pot", "small stack of iron cannonballs", "small ship lantern"]},
     "barbossa-walk": {"[DIRECTION]": ["SW"], "[WALK POSE]": walk_poses},
     "barbossa-gestures": {"[DIRECTION]": ["SW"], "[GESTURE]": gestures},
+    "jack-gestures": {"[DIRECTION]": ["SW"], "[GESTURE]": gestures},
     "barbossa-tasks": {"[DIRECTION]": ["SW"], "[TASK POSE]": ["looking through a handheld telescope", "presenting one rolled parchment", "a small satisfied nod", "a brief disappointed reaction"]},
+    "jack-tasks": {"[DIRECTION]": ["SW"], "[TASK POSE]": ["examining a small compass thoughtfully", "pointing outward while giving a calm command", "leaning slightly toward the approved separate chart table", "a restrained cheerful completion gesture"]},
     "elizabeth-turnaround": {"[DIRECTION]": ["SW", "NW", "NE", "SE"]},
     "elizabeth-walk": {"[DIRECTION]": ["SW", "NW", "NE", "SE"], "[WALK POSE]": walk_poses},
     "elizabeth-gestures": {"[DIRECTION]": ["SW", "NW", "NE", "SE"], "[GESTURE]": gestures},
@@ -81,6 +83,7 @@ reference_sets = {
     "pearlAlignment": [{"path": "processed/ships/pearl-yaw-v02/ship-candidate-v02.png", "purposes": ["identity", "alignment"]}],
     "rivalAlignment": [{"path": "processed/ships/enemy-separated-despill-v02/enemy-empty-despill-native-v02.png", "purposes": ["identity", "alignment"]}],
     "barbossaIdentity": [{"path": "processed/characters/barbossa-standing-v01/barbossa-sw-stand-v01.png", "purposes": ["identity", "alignment"]}],
+    "jackIdentity": [{"path": "processed/characters/jack-standing-v01/jack-sw-stand-v01.png", "purposes": ["identity", "alignment"]}],
     "elizabethIdentity": [
         {"path": "processed/characters/elizabeth-directions-v01/elizabeth-sw-stand-v02.png", "purposes": ["identity", "alignment"], "appliesTo": {"[DIRECTION]": "SW"}},
         {"path": "processed/characters/elizabeth-directions-v01/elizabeth-nw-stand-v03.png", "purposes": ["identity", "alignment"], "appliesTo": {"[DIRECTION]": "NW"}},
@@ -135,6 +138,7 @@ asset_references = {
     "rival-ship": ["rivalAlignment"], "rival-foreground": ["rivalAlignment"], "rival-damage-stages": ["style", "rivalAlignment"],
     "cannon-recoil": ["style", "pearlAlignment"], "deck-props": ["style", "pearlAlignment", "chartTable"], "figurehead-states": ["figureheadIdentity"],
     "barbossa-turnaround": ["style", "barbossaIdentity"], "barbossa-walk": ["style", "barbossaIdentity"],
+    "jack-turnaround": ["jackIdentity"], "jack-walk": ["jackIdentity"], "jack-gestures": ["style", "jackIdentity"], "jack-tasks": ["style", "jackIdentity"],
     "barbossa-gestures": ["style", "barbossaIdentity"], "barbossa-tasks": ["style", "barbossaIdentity"],
     "elizabeth-turnaround": ["style", "elizabethIdentity"], "elizabeth-walk": ["style", "elizabethIdentity", "swWalkPose"],
     "elizabeth-gestures": ["style", "elizabethIdentity"], "elizabeth-tasks": ["style", "elizabethIdentity"],

@@ -26,8 +26,8 @@
 | ships | [figurehead-states](ships/figurehead-states.txt) | 按正文附参考图 |
 | characters | [jack-turnaround](characters/jack-turnaround.txt) | 按正文附参考图 |
 | characters | [jack-walk](characters/jack-walk.txt) | 按正文附参考图 |
-| characters | [jack-gestures](characters/jack-gestures.txt) | 按正文附参考图 |
-| characters | [jack-tasks](characters/jack-tasks.txt) | 按正文附参考图 |
+| characters | [jack-gestures](characters/jack-gestures.txt) | [DIRECTION], [GESTURE] |
+| characters | [jack-tasks](characters/jack-tasks.txt) | [DIRECTION], [TASK POSE] |
 | characters | [barbossa-turnaround](characters/barbossa-turnaround.txt) | 按正文附参考图 |
 | characters | [barbossa-walk](characters/barbossa-walk.txt) | [DIRECTION], [WALK POSE] |
 | characters | [barbossa-gestures](characters/barbossa-gestures.txt) | [DIRECTION], [GESTURE] |

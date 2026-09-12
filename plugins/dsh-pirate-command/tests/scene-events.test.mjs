@@ -265,14 +265,17 @@ function display(x = 0, y = 0) {
   for (const method of ['setCrop', 'setAngle', 'setFlipX', 'setFlipY', 'setBlendMode']) object[method] = function () { return this; };
   return object;
 }
-async function sceneFixture({ jack = false, signals = false, storm = false, damage = false, details = false, shotEffects = false, enemyPoses = false, fog = false } = {}) {
+async function sceneFixture({ jack = false, signals = false, storm = false, damage = false, details = false, shotEffects = false, enemyPoses = false, fog = false, companions = false, newShotArt = false } = {}) {
   let scene;
   const sceneManifest=JSON.parse(readFileSync(new URL('../web/public/assets/manifest.json', import.meta.url), 'utf8'));
-  const manifest = { images: {'enemy-foreground':sceneManifest.images['enemy-foreground']}, enemyCrew:sceneManifest.enemyCrew, shipLayout: sceneManifest.shipLayout, characters: { barbossa: {}, elizabeth: {}, ...(jack ? { jack: {} } : {}) }, cannon: { muzzle: [0, 0] } };
+  const manifest = { images: {'enemy-foreground':sceneManifest.images['enemy-foreground']}, enemyCrew:sceneManifest.enemyCrew, shipLayout: sceneManifest.shipLayout, characters: { barbossa: {}, elizabeth: {}, ...(jack ? { jack: sceneManifest.characters.jack } : {}) }, cannon: { muzzle: [0, 0] } };
   manifest.enemyCrew=manifest.enemyCrew.map((asset,index)=>({...asset,poses:enemyPoses?(index===0?{command:'enemy-tricorne-command'}:index===2?{coverEars:'enemy-beige-cover-ears'}:undefined):undefined}));
   if(shotEffects)manifest.occlusion=sceneManifest.occlusion;
   if(storm)Object.assign(manifest.images,{'weather-rain':'rain.png','weather-lightning':'lightning.png'});
   if(fog){manifest.images['fog-ribbon']=sceneManifest.images['fog-ribbon'];manifest.fogRibbons=sceneManifest.fogRibbons;}
+  if(companions){manifest.images['monkey-sit']=sceneManifest.images['monkey-sit'];manifest.companions=sceneManifest.companions;}
+  if(newShotArt){manifest.images.cannonball=sceneManifest.images.cannonball;manifest.images['muzzle-flash']=sceneManifest.images['muzzle-flash'];}
+  if(jack)manifest.images.jack=sceneManifest.images.jack;
   if(damage)manifest.damage={scar:'scar',fire:'fire',spots:[{x:700,y:845,size:100,fire:[565,680]},{x:1200,y:835,size:100,fire:[1130,795]}]};
   if(details)manifest.shipDetails={figurehead:{key:'statue',eye:'eye',x:155,y:443,size:200},projection:{x:550,y:323,fontSize:15,angle:17}};
   if(shotEffects)manifest.shotEffects={
@@ -332,6 +335,24 @@ const assigned = [event(1, 'thinking', 'jack'),
 const returned = [...assigned, { seq: 5, role: 'closedoff', type: 'message', text: '公开返回正文' },
   event(6, 'returning'), { seq: 7, role: 'closedoff', type: 'artifact', text: '成果标题不能覆盖正文' }];
 
+test('Jack六帧素材接入角色协议，行走和交谈使用有效帧',async()=>{
+  const {api,scene,host}=await sceneFixture({jack:true});
+  const jack=scene.actor('jack');
+  assert.ok(jack);
+  assert.equal(jack.asset.frames.length,6);
+  assert.deepEqual(jack.asset.frames.map(frame=>frame.name),['stand','walk1','walk2','walk3','walk4','talk']);
+  assert.ok(jack.asset.frames.every(frame=>frame.footY===448));
+  api.sync({id:'mission-jack-art',state:'running'},[
+    {seq:1,role:'jack',type:'message',text:'巴博萨：检查新素材'},
+    event(2,'commanding'),event(3,'working')
+  ]);
+  const frames=new Set();
+  for(let step=0;step<80;step++){scene.update(scene.now+50,50);if(jack.moving)frames.add(jack.sprite.frame);}
+  assert.ok([...frames].every(frame=>[1,2,3,4].includes(frame)),'行走只能使用四个步态帧');
+  jack.bubble='新素材';scene.update(scene.now+50,50);
+  assert.equal(jack.sprite.frame,5,'气泡使用交谈帧');
+});
+
 test('海雾素材按清单挂载并漂移，减少动态时保持静止',async()=>{
   const {api,scene,host,advance}=await sceneFixture({fog:true});
   assert.equal(scene.fogEffects.layers.length,3);
@@ -347,6 +368,32 @@ test('海雾素材按清单挂载并漂移，减少动态时保持静止',async(
   const frozen=JSON.parse(host.dataset.fogRibbons);
   advance(3200);
   assert.deepEqual(JSON.parse(host.dataset.fogRibbons),frozen);
+});
+
+test('静态猴子作为氛围伴随层挂载且不进入业务角色协议',async()=>{
+  const {scene,host}=await sceneFixture({companions:true});
+  assert.equal(scene.companions.length,1);
+  const monkey=scene.companions[0];
+  assert.equal(monkey.texture.key,'monkey-sit');
+  assert.equal(monkey.parentContainer,scene.ship);
+  assert.ok(scene.ship.list.includes(monkey));
+  assert.ok(!scene.actors.some(actor=>actor.id==='monkey'));
+  scene.update(scene.now+50,50);
+  const values=JSON.parse(host.dataset.companions);
+  assert.deepEqual(values,[{key:'monkey-sit',x:1145,y:640,depth:640,width:36,height:36}]);
+});
+
+test('独立炮弹和炮口闪光替换旧混合图且保持炮口锚点',async()=>{
+  const {scene,host}=await sceneFixture({newShotArt:true});
+  scene.fire(0,false);
+  const shot=scene.balls[0],flash=scene.fx.find(f=>f.frame===2);
+  assert.equal(shot.obj.key,'cannonball');
+  assert.equal(shot.obj.frame,'__BASE');
+  assert.equal(flash.obj.key,'muzzle-flash');
+  assert.equal(flash.obj.originX,.5);
+  assert.equal(flash.obj.originY,.703125);
+  scene.update(scene.now+50,50);
+  assert.equal(JSON.parse(host.dataset.shotEffectPhases).length,0,'静态闪光不伪装成四相位序列');
 });
 
 test('竖屏构图填满可用船宽，并为完整首尾桅顶和颠簸船底保留屏幕余量',async()=>{

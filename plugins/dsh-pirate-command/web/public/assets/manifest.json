@@ -52,12 +52,43 @@
     "hull-damage": "hull-damage-v01.png",
     "figurehead": "figurehead-candidate-v01.png",
     "figurehead-eye": "figurehead-eye-glow-v01.png",
-    "fog-ribbon": "fog-ribbon-v01.png"
+    "fog-ribbon": "fog-ribbon-v01.png",
+    "jack": "jack-runtime-v01.png",
+    "cannonball": "cannonball-v01.png",
+    "muzzle-flash": "muzzle-flash-v01.png",
+    "monkey-sit": "monkey-sw-sit-v01.png"
   },
   "enemyCrew": [
-    { "key": "enemy-tricorne", "displayFoot": [73.20441988950276, 191.4364640883978], "bodyHeight": 32, "poses": { "command": "enemy-tricorne-command" } },
-    { "key": "enemy-red", "displayFoot": [181.21546961325967, 219.61325966850828], "bodyHeight": 32 },
-    { "key": "enemy-beige", "displayFoot": [244.47513812154696, 227.6243093922652], "bodyHeight": 34, "poses": { "coverEars": "enemy-beige-cover-ears" } }
+    {
+      "key": "enemy-tricorne",
+      "displayFoot": [
+        73.20441988950276,
+        191.4364640883978
+      ],
+      "bodyHeight": 32,
+      "poses": {
+        "command": "enemy-tricorne-command"
+      }
+    },
+    {
+      "key": "enemy-red",
+      "displayFoot": [
+        181.21546961325967,
+        219.61325966850828
+      ],
+      "bodyHeight": 32
+    },
+    {
+      "key": "enemy-beige",
+      "displayFoot": [
+        244.47513812154696,
+        227.6243093922652
+      ],
+      "bodyHeight": 34,
+      "poses": {
+        "coverEars": "enemy-beige-cover-ears"
+      }
+    }
   ],
   "taskSignals": {
     "table": {
@@ -242,6 +273,74 @@
           "footY": 243
         }
       ]
+    },
+    "jack": {
+      "displayWidth": 182.04444444444445,
+      "displayHeight": 182.04444444444445,
+      "visualHeight": 128,
+      "frameHeight": 512,
+      "frames": [
+        {
+          "name": "stand",
+          "rect": [
+            0,
+            0,
+            512,
+            512
+          ],
+          "footY": 448
+        },
+        {
+          "name": "walk1",
+          "rect": [
+            512,
+            0,
+            512,
+            512
+          ],
+          "footY": 448
+        },
+        {
+          "name": "walk2",
+          "rect": [
+            1024,
+            0,
+            512,
+            512
+          ],
+          "footY": 448
+        },
+        {
+          "name": "walk3",
+          "rect": [
+            0,
+            512,
+            512,
+            512
+          ],
+          "footY": 448
+        },
+        {
+          "name": "walk4",
+          "rect": [
+            512,
+            512,
+            512,
+            512
+          ],
+          "footY": 448
+        },
+        {
+          "name": "talk",
+          "rect": [
+            1024,
+            512,
+            512,
+            512
+          ],
+          "footY": 448
+        }
+      ]
     }
   },
   "cannon": {
@@ -253,14 +352,70 @@
   "shotEffects": {
     "smoke": {
       "key": "cannon-smoke-cycle",
-      "frames": [[0, 0, 256, 256], [256, 0, 256, 256], [512, 0, 256, 256], [768, 0, 256, 256]],
-      "origin": [0.5, 0.703125],
+      "frames": [
+        [
+          0,
+          0,
+          256,
+          256
+        ],
+        [
+          256,
+          0,
+          256,
+          256
+        ],
+        [
+          512,
+          0,
+          256,
+          256
+        ],
+        [
+          768,
+          0,
+          256,
+          256
+        ]
+      ],
+      "origin": [
+        0.5,
+        0.703125
+      ],
       "size": 96
     },
     "splash": {
       "key": "water-splash-cycle",
-      "frames": [[0, 0, 256, 256], [256, 0, 256, 256], [512, 0, 256, 256], [768, 0, 256, 256]],
-      "origin": [0.5, 0.78125],
+      "frames": [
+        [
+          0,
+          0,
+          256,
+          256
+        ],
+        [
+          256,
+          0,
+          256,
+          256
+        ],
+        [
+          512,
+          0,
+          256,
+          256
+        ],
+        [
+          768,
+          0,
+          256,
+          256
+        ]
+      ],
+      "origin": [
+        0.5,
+        0.78125
+      ],
       "size": 96
     }
   },
@@ -471,8 +626,48 @@
     }
   },
   "fogRibbons": [
-    { "key": "fog-ribbon", "x": 220, "y": 240, "width": 430, "height": 180, "alpha": 0.22, "speed": 0.035, "offset": 0 },
-    { "key": "fog-ribbon", "x": 820, "y": 325, "width": 560, "height": 230, "alpha": 0.18, "speed": 0.028, "offset": 2 },
-    { "key": "fog-ribbon", "x": 1420, "y": 520, "width": 480, "height": 210, "alpha": 0.15, "speed": 0.032, "offset": 4 }
+    {
+      "key": "fog-ribbon",
+      "x": 220,
+      "y": 240,
+      "width": 430,
+      "height": 180,
+      "alpha": 0.22,
+      "speed": 0.035,
+      "offset": 0
+    },
+    {
+      "key": "fog-ribbon",
+      "x": 820,
+      "y": 325,
+      "width": 560,
+      "height": 230,
+      "alpha": 0.18,
+      "speed": 0.028,
+      "offset": 2
+    },
+    {
+      "key": "fog-ribbon",
+      "x": 1420,
+      "y": 520,
+      "width": 480,
+      "height": 210,
+      "alpha": 0.15,
+      "speed": 0.032,
+      "offset": 4
+    }
+  ],
+  "companions": [
+    {
+      "key": "monkey-sit",
+      "x": 1145,
+      "y": 640,
+      "displayHeight": 36,
+      "origin": [
+        0.5,
+        0.875
+      ],
+      "flipX": false
+    }
   ]
 }

@@ -65,6 +65,10 @@ export function createPirateGame(host, handlers={}) {
       for(const layer of manifest.occlusion||[]){
         const image=this.add.image(0,0,layer.key).setOrigin(0).setDepth(layer.depth);this.ship.add(image);this.lit.push(image);
       }
+      this.companions=(manifest.companions||[]).filter(spec=>manifest.images[spec.key]).map(spec=>{
+        const image=this.add.image(spec.x,spec.y,spec.key,'__BASE').setOrigin(...spec.origin||[.5,.875]).setDisplaySize(spec.displayHeight,spec.displayHeight).setDepth(spec.y);
+        if(spec.flipX)image.setFlipX(true);this.ship.add(image);this.lit.push(image);return image;
+      });
       this.guns=[];
       for(const [x,y] of this.shipLayout.guns){
         const obj=this.add.image(x,y,'cannon').setDisplaySize(96,96).setOrigin(.67,.70).setDepth(y);
@@ -256,10 +260,11 @@ export function createPirateGame(host, handlers={}) {
     }
     makeFx(frame,x,y,width,height,life=900,alpha=1,container=this.projectiles){
       const sequence=frame===1?manifest.shotEffects?.smoke:frame===3?manifest.shotEffects?.splash:null;
+      const muzzle=frame===2&&manifest.images['muzzle-flash']?{key:'muzzle-flash',origin:[.5,.703125]}:null;
       if(sequence)width=height=sequence.size;
-      const origin=sequence?.origin||[.5,frame===3?.9:.5];
-      const obj=this.add.image(x,y,sequence?.key||'fx',sequence?0:frame).setOrigin(...origin).setDisplaySize(width,height).setAlpha(alpha);container.add(obj);
-      this.fx.push({obj,frame,sequence,phaseIndex:sequence?0:null,start:this.now,life,width,height,alpha,x,y});return obj;
+      const origin=muzzle?.origin||sequence?.origin||[.5,frame===3?.9:.5];
+      const obj=this.add.image(x,y,muzzle?.key||sequence?.key||'fx',muzzle||sequence?0:frame).setOrigin(...origin).setDisplaySize(width,height).setAlpha(alpha);container.add(obj);
+      this.fx.push({obj,frame,sequence,muzzle,phaseIndex:sequence?0:null,start:this.now,life,width,height,alpha,x,y});return obj;
     }
     fire(index,hit=false){
       const gun=this.guns[index];gun.last=this.now;
@@ -270,8 +275,9 @@ export function createPirateGame(host, handlers={}) {
       const end=this.pointOn(this.enemy,localEnd.x,localEnd.y);
       this.makeFx(2,start.x,start.y,70,70,150,1,gun.muzzleFx);
       this.makeFx(1,start.x,start.y,52,42,1450,.7,gun.muzzleFx);
-      const obj=this.add.image(start.x,start.y,'fx',0).setDisplaySize(16,16);this.projectiles.add(obj);
-      this.balls.push({obj,start,end,localEnd,born:this.now,duration:1000+Math.random()*250,hit});
+      const projectileKey=manifest.images.cannonball?'cannonball':'fx';
+      const obj=this.add.image(start.x,start.y,projectileKey,projectileKey==='fx'?0:undefined).setDisplaySize(16,16);this.projectiles.add(obj);
+      this.balls.push({obj,projectileKey,start,end,localEnd,born:this.now,duration:1000+Math.random()*250,hit});
       sound('cannon');
     }
     fireEnemy(){
@@ -358,6 +364,8 @@ export function createPirateGame(host, handlers={}) {
           // 各帧已表现扩张与回落；固定画布、接触点，只在尾段淡出，不循环。
           f.phaseIndex=Math.min(f.sequence.frames.length-1,Math.floor(p*f.sequence.frames.length));
           f.obj.setFrame(f.phaseIndex).setAlpha(f.alpha*Math.min(1,(1-p)/.3));
+        }else if(f.muzzle){
+          f.obj.setAlpha(f.alpha*(1-p)).setDisplaySize(f.width*(1+p*.25),f.height*(1+p*.2));
         }else{
           f.obj.setAlpha(f.alpha*(1-p));
           if(f.frame===1)f.obj.setDisplaySize(f.width*(1+p*1.2),f.height*(1+p*1.1)).setPosition(f.x-p*28,f.y-p*22);
@@ -384,6 +392,7 @@ export function createPirateGame(host, handlers={}) {
       host.dataset.collectedTokens=[...this.taskSignals.collected].map(([id,item])=>id+':'+item.stage).join(',');
       host.dataset.rainActive=String(this.stormFx.rain.visible&&this.stormFx.drops.length>0);host.dataset.rainDrift=this.stormFx.time.toFixed(0);
       host.dataset.fogRibbons=JSON.stringify(this.fogEffects.layers.map(layer=>({key:layer.key,x:layer.image.x,y:layer.image.y,width:layer.image.displayWidth,height:layer.image.displayHeight,alpha:layer.image.alpha})));
+      host.dataset.companions=JSON.stringify(this.companions.map(image=>({key:image.texture.key,x:image.x,y:image.y,depth:image.depth,width:image.displayWidth,height:image.displayHeight})));
       host.dataset.lightningAlpha=(this.stormFx.bolt?.alpha||0).toFixed(3);
     }
   }

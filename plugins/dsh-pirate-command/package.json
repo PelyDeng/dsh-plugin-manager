@@ -1,6 +1,6 @@
 {
   "name": "dsh-pirate-command",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "黑珍珠号多智能体指挥台",
   "license": "UNLICENSED",
   "private": true,

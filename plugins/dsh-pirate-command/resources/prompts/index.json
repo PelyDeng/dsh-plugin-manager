@@ -1,6 +1,6 @@
 {
   "source": "当前美术素材规范与提示词.md",
-  "sourceSha256": "6b2b400b2b729586948cfa13b50e841f6d1b2a069aea08544979f6d4815dfe59",
+  "sourceSha256": "1857abae9a7fbe9f7376b7129f3f7380f1dcdd93de625903ab11a31cb7727898",
   "audioSource": "当前音频素材规范与提示词.md",
   "audioSourceSha256": "a9b8606847407df4f6fbbed01f25579ba7677f67303bc137c13c1be02431fa02",
   "count": 53,
@@ -37,6 +37,15 @@
     "barbossaIdentity": [
       {
         "path": "processed/characters/barbossa-standing-v01/barbossa-sw-stand-v01.png",
+        "purposes": [
+          "identity",
+          "alignment"
+        ]
+      }
+    ],
+    "jackIdentity": [
+      {
+        "path": "processed/characters/jack-standing-v01/jack-sw-stand-v01.png",
         "purposes": [
           "identity",
           "alignment"
@@ -564,41 +573,78 @@
       "id": "jack-turnaround",
       "category": "characters",
       "file": "characters/jack-turnaround.txt",
-      "status": "inactive",
+      "status": "reference",
       "placeholders": [],
       "allowedValues": {},
-      "referenceSets": [],
-      "sha256": "167032083fb9809eb17a75a1779f5210f79959b836c2c5c3e1fe5aa331cc2fc4"
+      "referenceSets": [
+        "jackIdentity"
+      ],
+      "sha256": "3c8b64b690408c6ef356549d7c13e2b68ce3c6e6035c6241d34296563b044106"
     },
     {
       "id": "jack-walk",
       "category": "characters",
       "file": "characters/jack-walk.txt",
-      "status": "inactive",
+      "status": "reference",
       "placeholders": [],
       "allowedValues": {},
-      "referenceSets": [],
-      "sha256": "33aec1c1ecb909551b181704bc9619767934563109a12d42cd7e0270414594bc"
+      "referenceSets": [
+        "jackIdentity"
+      ],
+      "sha256": "e97929eea8a84f780f6b19462215edae9f27ff4cee9e53bd1b2e0e968b33a9d1"
     },
     {
       "id": "jack-gestures",
       "category": "characters",
       "file": "characters/jack-gestures.txt",
-      "status": "inactive",
-      "placeholders": [],
-      "allowedValues": {},
-      "referenceSets": [],
-      "sha256": "d971f662286e2642afc04add6062677f6c2a0e582fc73a78b06d98c75588fd86"
+      "status": "processing",
+      "placeholders": [
+        "[DIRECTION]",
+        "[GESTURE]"
+      ],
+      "allowedValues": {
+        "[DIRECTION]": [
+          "SW"
+        ],
+        "[GESTURE]": [
+          "Stationary friendly conversation, a small explanatory hand gesture, feet planted, no written speech bubble.",
+          "idle gentle breathing",
+          "alert and attentive",
+          "waiting patiently",
+          "stopped with a calm neutral posture"
+        ]
+      },
+      "referenceSets": [
+        "style",
+        "jackIdentity"
+      ],
+      "sha256": "a378bde877d6eb3c5fb9abc1535b546d6ebfdde75c6a0ef101a88ddf69acb059"
     },
     {
       "id": "jack-tasks",
       "category": "characters",
       "file": "characters/jack-tasks.txt",
-      "status": "inactive",
-      "placeholders": [],
-      "allowedValues": {},
-      "referenceSets": [],
-      "sha256": "cd7292f8dea39c0c00c75c7048357e86f62c8364097f7664222b819411a6516b"
+      "status": "processing",
+      "placeholders": [
+        "[DIRECTION]",
+        "[TASK POSE]"
+      ],
+      "allowedValues": {
+        "[DIRECTION]": [
+          "SW"
+        ],
+        "[TASK POSE]": [
+          "examining a small compass thoughtfully",
+          "pointing outward while giving a calm command",
+          "leaning slightly toward the approved separate chart table",
+          "a restrained cheerful completion gesture"
+        ]
+      },
+      "referenceSets": [
+        "style",
+        "jackIdentity"
+      ],
+      "sha256": "e044efcc275d91dd26992c7b2fedf919eb9dfb6bad83c4689716074d7c7d4240"
     },
     {
       "id": "barbossa-turnaround",
