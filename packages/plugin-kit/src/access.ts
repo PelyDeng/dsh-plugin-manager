@@ -14,6 +14,16 @@ export interface ToolDescriptor {
   readonly description: string
   readonly parameters: unknown
   readonly permission: string
+  /**
+   * 工具分类标签，由注册该工具的插件自己填写。
+   *
+   * 用途有两个：认证页面按标签分组展示；宿主侧按标签决定某个 Agent 能看见哪些工具
+   * （例如「只允许调用属于自己标签的工具，外加约定好的通用工具集」）。
+   *
+   * 这是**可选**字段：已有插件不填也能正常工作，此时它在认证页面归入「未分类」，
+   * 并且不参与按标签的可见性限制。通用工具集使用固定标签 `通用工具`。
+   */
+  readonly category?: string
 }
 
 export interface PluginDescriptor {

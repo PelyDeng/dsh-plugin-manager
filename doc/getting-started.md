@@ -6,7 +6,7 @@
 
 ## 1. 准备工具和目录
 
-普通使用者从框架 **0.16.2** 的发行附件取得部署包和 public-apps.zip。public-apps 中的完整目录同时包含 auth/example；复制到 incoming/public-apps 后，不要再复制 optional/auth，以免重复 ID。
+普通使用者从框架 **0.16.3** 的发行附件取得部署包和 public-apps.zip。public-apps 中的完整目录同时包含 auth/example；复制到 incoming/public-apps 后，不要再复制 optional/auth，以免重复 ID。
 
 部署包已经带 manager 和运行镜像信息；本页不构建 manager、kit 或作者源码。需要维护框架源码站点的维护者直接阅读[源码入口](../deploy/README.md#服务器源码发版)。
 

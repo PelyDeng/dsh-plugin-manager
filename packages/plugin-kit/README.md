@@ -2,13 +2,13 @@
 
 # @dsh-plugin-manager/plugin-kit
 
-可选的 DSH 插件接入库，通过宿主 Cordis 事件通信，不启动服务。使用 kit 的插件在构建时把它打入自己的安装包。独立作者可将维护者提供的版本化 tgz 安装为开发依赖，例如 `pnpm add --ignore-workspace --save-dev /path/to/plugin-kit-0.16.2.tgz`，再通过构建器内嵌。包名不表示版本已发布到公共 registry。
+可选的 DSH 插件接入库，通过宿主 Cordis 事件通信，不启动服务。使用 kit 的插件在构建时把它打入自己的安装包。独立作者可将维护者提供的版本化 tgz 安装为开发依赖，例如 `pnpm add --ignore-workspace --save-dev /path/to/plugin-kit-0.16.3.tgz`，再通过构建器内嵌。包名不表示版本已发布到公共 registry。
 
 | 导出 | 用途 |
 | --- | --- |
 | `@dsh-plugin-manager/plugin-kit/access` | `createAccess`、身份、认证提供者、运行目录和撤权通知 |
 | `@dsh-plugin-manager/plugin-kit/http` | `createPluginHttp`：受保护路由与显式公开探针 |
-| `@dsh-plugin-manager/plugin-kit/tools` | `createPluginTools`、`guardTool`：执行前后鉴权与工具登记 |
+| `@dsh-plugin-manager/plugin-kit/tools` | `createPluginTools`、`guardTool`、`toolsForCategory`：执行前后鉴权、工具登记与按分类取可见工具 |
 | `@dsh-plugin-manager/plugin-kit/conversations` | 会话协议、只读预览、分页查询、官方归档与标题事件监听；无需工具类型依赖 |
 | `@dsh-plugin-manager/plugin-kit/models` | 官方默认模型及会话模型恢复；无需工具类型依赖 |
 | `@dsh-plugin-manager/plugin-kit/route-path` | 无宿主依赖的规范路由校验 |
@@ -18,9 +18,9 @@
 
 DSH 类型依赖是可选 peer，由使用相应接口的作者提供；只使用 access、conversations、models 或 route-path 不需要工具类型依赖。业务插件自行声明实际使用的 DSH/Cordis peer。
 
-kit 提供可选的[会话管理协议](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/doc/conversation-management.md)。插件维护会话所属用户（owner）的索引和活动操作检查，auth 汇总分类、只读预览与批量移除。共用的移除流程先保存 pending 标记，阻止新的写入，调用官方归档并返回逐项结果；包含定时事件时复用宿主已注册的 schedule 投影校验，能力缺失则拒绝清理。
+kit 提供可选的[会话管理协议](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.3/doc/conversation-management.md)。插件维护会话所属用户（owner）的索引和活动操作检查，auth 汇总分类、只读预览与批量移除。共用的移除流程先保存 pending 标记，阻止新的写入，调用官方归档并返回逐项结果；包含定时事件时复用宿主已注册的 schedule 投影校验，能力缺失则拒绝清理。
 
-`registerConversationTitles(ctx, (id, title, manual, complete) => { ... })` 在插件生命周期内接收可信宿主标题，返回取消监听函数。调用方维护自己的 owner、删除状态和标题来源，保护手动标题并接收回答结束后的结果；无需再实现标题模型调用。事件筛选、回调含义及 example 的有界刷新见[自动标题](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/doc/conversation-management.md#自动标题)。
+`registerConversationTitles(ctx, (id, title, manual, complete) => { ... })` 在插件生命周期内接收可信宿主标题，返回取消监听函数。调用方维护自己的 owner、删除状态和标题来源，保护手动标题并接收回答结束后的结果；无需再实现标题模型调用。事件筛选、回调含义及 example 的有界刷新见[自动标题](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.3/doc/conversation-management.md#自动标题)。
 
 通过 `@dsh-plugin-manager/plugin-kit/models` 导入 `defaultConversationModel(ctx)` 和 `await conversationModel(ctx, id?, eventCount?)`。新会话不传 ID，读取官方默认；恢复前先验证所有权，再传 ID，通过官方 `modelSelection` 投影还原 `pending ?? lastUsed`。
 
@@ -33,6 +33,8 @@ kit 提供可选的[会话管理协议](https://github.com/PelyDeng/dsh-plugin-m
 分支可传入继承事件数，沿用该位置的模型。无模型使用记录时读取当前默认，持久化读取或投影失败则拒绝恢复。调用方在异步读取后再次检查授权，再将返回的 provider/model 和已有推理强度传入 Agent；`reasoningEffort` 按官方 `ReasoningEffortId` 转换。它不依赖 auth，auth 只是可选的共享设置入口；已运行的 Agent 不受默认变更影响。
 
 工具通过 `createPluginTools(...).register(definition, '中文名称')` 声明简洁的目录显示名，随 `ToolDescriptor.displayName` 交给 auth 展示；`name` 继续作为模型调用编码。名称由各业务插件维护，不改变工具参数、描述或执行权限。未提供显示名的旧插件仍可登记，目录回退显示编码。
+
+第三个参数是**工具分类标签**，由注册该工具的插件自己填写，随 `ToolDescriptor.category` 交给 auth 按标签分组展示。标签同时是可见性依据：`toolsForCategory(descriptors, 本分类)` 返回「本分类的工具 + 通用工具」，调用方在 Agent 的 setup 里用 `tools.restrict({ allow })` 应用它，该 Agent 就只能调用属于自己标签的工具。约定好的通用工具集使用固定标签 `通用工具`（导出常量 `UNIVERSAL_TOOL_CATEGORY`），每个 Agent 都可见。不传分类的工具不参与这套限制，因此既有插件不受影响。
 
 认证模式不可自动降级。提供者缺失、重复或协议不兼容时拒绝访问。协议版本为 1，通过错误对象的字段识别不同安装包抛出的 `AccessError`。`actorKey` 以账号身份生成稳定数据所有者，不使用短期登录 ID。`dsh-console` 是保留授权项，不能作为业务插件 ID。
 
