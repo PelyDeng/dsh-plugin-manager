@@ -53,7 +53,7 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
 ### 2. `AGENT_MANIFESTS` 是唯一的名单
 
 `src/agents/registry.ts` 里那份静态数组就是群组认识的全部 Agent。新增一个 Agent 只需要
-在这里加一条，**管家（dsh-butler-console）那边不用改** —— 管家按「一个 Agent 一个执行
+在这里加一条，**牛马大总管（dsh-butler-console）那边不用改** —— 牛马大总管按「一个 Agent 一个执行
 入口」工作，两条条目天然被识别成两个成员。
 
 用静态清单而不是扫描目录：构建产物要可树摇、类型要可检查、装载顺序要确定，动态扫描在
@@ -119,7 +119,7 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
 如实报错，比静默给一个别处的天气安全得多。
 
 新增通用工具只需在 `src/tools/` 写定义、在群组 `apply()` 里注册并传
-`UNIVERSAL_TOOL_CATEGORY`：所有 Agent 与管家都会自动获得它，不需要改它们的代码（管家是按
+`UNIVERSAL_TOOL_CATEGORY`：所有 Agent 与牛马大总管都会自动获得它，不需要改它们的代码（牛马大总管是按
 标签从目录实时筛选的）。
 
 ## 新增一个 Agent 的步骤
@@ -134,8 +134,8 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
 4. 子包在 `mount()` 的返回值里必须带上两样东西，**漏一样都会静默失效**：
    - `tools`：本次注册的工具条目，用 `context.category` 作为分类标签。漏了分类，该 Agent
      的工具会全部对它自己不可见。
-   - `participant`：协作参与者（`AgentParticipant`）。群组把它桥接成管家的执行入口；漏了
-     这位 Agent 在管家名单里会变成「不可调度」，管家于是不会把专业活派给它。
+   - `participant`：协作参与者（`AgentParticipant`）。群组把它桥接成牛马大总管的执行入口；漏了
+     这位 Agent 在牛马大总管名单里会变成「不可调度」，牛马大总管于是不会把专业活派给它。
 5. 在 `src/index.ts` 的 `loadAgent()` 里加一个 `case`。
 6. 跑 `pnpm install`（写入 workspace 锁）、`pnpm check --plugins "agents-group"`、`pnpm test`。
 7. **打包一次并检查归档**（`pnpm package --plugins "agents-group"`）：子包在运行时读取的文件

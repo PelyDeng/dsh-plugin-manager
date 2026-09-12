@@ -1,14 +1,14 @@
 /**
- * 管家工作台插件的入口。
+ * 牛马大总管插件的入口。
  *
  * 它做三件事：
  *
  * 1. 在插件目录里登记自己，让页面和别的插件知道有这个应用。
- * 2. 打开一个管家 Agent，负责理解目标、拆解任务和汇总。
+ * 2. 打开一个牛马大总管 Agent，负责理解目标、拆解任务和汇总。
  * 3. 提供工作台页面、SSE 接口和只读就绪探针。
  *
  * 子 Agent 不由这里创建：每个业务插件在自己的生命周期里向 `butler/executors`
- * 登记执行入口，管家据此把子任务交给它们。
+ * 登记执行入口，牛马大总管据此把子任务交给它们。
  */
 
 import { readFile } from 'node:fs/promises'
@@ -50,7 +50,7 @@ export const inject = [
   'webServer',
 ] as const
 
-/** 装载工作台索引、管家会话、调度入口发现和页面。 */
+/** 装载工作台索引、牛马大总管会话、调度入口发现和页面。 */
 export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   const [personaText, manifestText] = await Promise.all([
     readFile(new URL('../persona.txt', import.meta.url), 'utf8'),
@@ -89,7 +89,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     tools: [],
   }))
 
-  // 管家会话的事件只用于填充当前轮次；其他插件的会话事件在这里被忽略。
+  // 牛马大总管会话的事件只用于填充当前轮次；其他插件的会话事件在这里被忽略。
   ctx.on('session/event', (session, event) => { console_.observe(session, event) })
 
   await installWeb(ctx, config, console_, access)

@@ -1,9 +1,9 @@
 /**
- * 把子包的参与者桥接成管家的执行入口。
+ * 把子包的参与者桥接成牛马大总管的执行入口。
  *
  * 两个协议的字段几乎一一对应，所以这一层只做翻译，不做任何业务决定：
  *
- * | 管家 | 参与者 |
+ * | 牛马大总管 | 参与者 |
  * | --- | --- |
  * | `taskId` / `subtaskId` | `missionId` / `requestId` |
  * | `brief`（含 `goal`） | `message` |
@@ -12,7 +12,7 @@
  * | `completed` / `waiting` / `cancelled` / `failed` | `succeeded` / `waiting_user` / `cancelled` / `failed` |
  *
  * 为什么需要这一层：`AgentParticipant` 是给协作页面用的（一轮活怎么跑、拿到什么结论），
- * `ButlerAgentExecutor` 是给管家用的（派活、收结论、追问）。两者描述的是同一件事，
+ * `ButlerAgentExecutor` 是给牛马大总管用的（派活、收结论、追问）。两者描述的是同一件事，
  * 但归属不同插件，所以由群组在中间翻译，双方都不必知道对方的存在。
  */
 
@@ -20,10 +20,10 @@ import type { AgentParticipant } from 'dsh-pirate-command/protocol'
 import type { AgentManifest } from './agents/registry.ts'
 
 /**
- * 管家的执行入口契约。
+ * 牛马大总管的执行入口契约。
  *
  * 与 `plugins/dsh-butler-console/src/protocol.ts` 的 `ButlerAgentExecutor` 形状一致，
- * 但不导入它的类型：管家是独立插件，群组不该编译期依赖它的源码。契约靠**事件名与字段**
+ * 但不导入它的类型：牛马大总管是独立插件，群组不该编译期依赖它的源码。契约靠**事件名与字段**
  * 对齐，并由真实宿主运行时验收实际验证（而不是只靠类型）。
  */
 export interface ButlerAgentExecutor {
@@ -74,13 +74,13 @@ export interface ButlerDispatchResult {
   readonly question?: string
 }
 
-/** 管家事件名。与管家插件的 `BUTLER_EXECUTORS_EVENT` 必须一致。 */
+/** 牛马大总管事件名。与牛马大总管插件的 `BUTLER_EXECUTORS_EVENT` 必须一致。 */
 export const BUTLER_EXECUTORS_EVENT = 'butler/executors'
 
 /**
  * 本模块认知的事件映射。
  *
- * **不要**用 `declare module '@deepseek-ai/cordis'` 重塑 `butler/executors`：那是管家的事件，
+ * **不要**用 `declare module '@deepseek-ai/cordis'` 重塑 `butler/executors`：那是牛马大总管的事件，
  * 两边各写一份同名类型会在 `exactOptionalPropertyTypes` 下互不兼容，让同时编译两个插件的
  * 仓库报错。契约靠事件名与字段对齐，运行时由真实宿主验收与跨插件契约测试证明。
  *
@@ -91,7 +91,7 @@ export interface ButlerEvents {
 }
 
 /**
- * 订阅管家的执行入口收集事件，交出本插件要登记的入口。
+ * 订阅牛马大总管的执行入口收集事件，交出本插件要登记的入口。
  *
  * 收在这一处，避免每个调用点各自做类型断言。
  */
@@ -102,7 +102,7 @@ export function onButlerExecutors(
   return ctx.on(BUTLER_EXECUTORS_EVENT, accept => accept(executor), { global: true })
 }
 
-/** 参与者状态到管家状态的映射。四种状态一一对应，不做归并。 */
+/** 参与者状态到牛马大总管状态的映射。四种状态一一对应，不做归并。 */
 function toButlerStatus(status: string): ButlerDispatchResult['status'] {
   switch (status) {
     case 'completed': return 'succeeded'
@@ -115,7 +115,7 @@ function toButlerStatus(status: string): ButlerDispatchResult['status'] {
 /**
  * 进度形态转换。
  *
- * 参与者上报的是 `ParticipantProgress`（阶段 + 可选文本/工具/增量），管家要的是
+ * 参与者上报的是 `ParticipantProgress`（阶段 + 可选文本/工具/增量），牛马大总管要的是
  * `ButlerProgressUpdate`。只搬真实存在的字段，不替参与者编造阶段 —— 编造会让页面显示
  * 一个没发生过的协作环节。
  */
@@ -139,7 +139,7 @@ const asProgressFields = (update: unknown): Record<string, unknown> =>
 /**
  * 把一位参与者包成执行入口。
  *
- * 能力摘要取清单里的分类与自述：管家用它决定把子任务派给谁，所以必须是插件自己声明的，
+ * 能力摘要取清单里的分类与自述：牛马大总管用它决定把子任务派给谁，所以必须是插件自己声明的，
  * 不能由群组代写。
  */
 export function executorFor(manifest: AgentManifest, participant: AgentParticipant): ButlerAgentExecutor {
@@ -163,7 +163,7 @@ export function executorFor(manifest: AgentManifest, participant: AgentParticipa
         status: toButlerStatus(result.status),
         summary: result.text,
         conversationId: result.conversationId,
-        // 参与者的 `text` 同时承载「阶段性成果」与「等待回答的问题」，而管家把两者分开。
+        // 参与者的 `text` 同时承载「阶段性成果」与「等待回答的问题」，而牛马大总管把两者分开。
         // 没有单独的 question 字段可用时，如实留空而不是把成果当作问题重复一遍。
       }
     },

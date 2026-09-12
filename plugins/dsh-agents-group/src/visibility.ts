@@ -3,8 +3,8 @@
  *
  * 分工是刻意的：**群组只算规则，应用限制是子包的事**。宿主要求 `tools.restrict` 只能落在
  * agent 作用域里（宿主原话：`requires a scoped context (agent.ctx): a context-global
- * restriction would mask every agent`）—— 插件级限制会波及所有 Agent，包括管家自己的，
- * 而管家需要 `butler_plan` 才能派活。
+ * restriction would mask every agent`）—— 插件级限制会波及所有 Agent，包括牛马大总管自己的，
+ * 而牛马大总管需要 `butler_plan` 才能派活。
  *
  * 所以群组把算好的 allow 列表注入子包（`AgentMountContext.allowedTools`），子包创建 Agent 时
  * 在自己的 `setup(agentCtx)` 里应用。这个模块只负责「算什么」，不碰限制的施加时机。

@@ -161,14 +161,14 @@ try {
   const get = async path => { const r = await fetch(origin + path, { redirect: 'manual' }); return { status: r.status, text: await r.text(), headers: r.headers } }
 
   /**
-   * 管家的执行入口必须真的登记了。
+   * 牛马大总管的执行入口必须真的登记了。
    *
-   * 没有这一步，管家的成员名单恒为空，它每轮收到的提示词是「没有能接活的成员，这一轮只能
+   * 没有这一步，牛马大总管的成员名单恒为空，它每轮收到的提示词是「没有能接活的成员，这一轮只能
    * 你自己回答」，于是「协调对应智能体」完全不通。这条断言就是那次修复的固化。
    */
   const executors = []
   root.emit('butler/executors', executor => executors.push(executor))
-  record('向管家登记了执行入口', executors.length === 2, `实际 ${executors.length} 个：${executors.map(e => e.agentId).join('、')}`)
+  record('向牛马大总管登记了执行入口', executors.length === 2, `实际 ${executors.length} 个：${executors.map(e => e.agentId).join('、')}`)
   record('执行入口的 agentId 与目录条目一致', executors.every(e => ['closedoff', 'blog'].includes(e.agentId)), executors.map(e => e.agentId).join('、'))
   record('执行入口声明了能力摘要', executors.every(e => Array.isArray(e.capabilities) && e.capabilities.length > 0))
   record('执行入口提供 dispatch', executors.every(e => typeof e.dispatch === 'function'))
@@ -176,7 +176,7 @@ try {
   /**
    * 走一遍真实派发链路。
    *
-   * 用一个默认模型替身跑一轮子 Agent：这验证的是从管家的执行入口 → 桥接 → 参与者 →
+   * 用一个默认模型替身跑一轮子 Agent：这验证的是从牛马大总管的执行入口 → 桥接 → 参与者 →
    * 真实会话与工具 → 结论回收的**整条链路**，而不是各段单测。业务网关仍是替身，所以不
    * 依赖外部服务也不调付费模型。
    */

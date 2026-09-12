@@ -1,5 +1,5 @@
 /**
- * 管家群聊前端。
+ * 牛马大总管群聊前端。
  *
  * 数据来源有三处，各管一件事：
  *
@@ -30,7 +30,7 @@ const STATE_TEXT = {
 /** 协同链路：页面上的每一步都能追到一次真实事件。 */
 const RAIL_STEPS = [
   { key: 'ask', label: '老板发话' },
-  { key: 'parse', label: '管家听懂' },
+  { key: 'parse', label: '牛马大总管听懂' },
   { key: 'dispatch', label: '派活' },
   { key: 'work', label: '牛马干活' },
   { key: 'sum', label: '交差' },
@@ -184,16 +184,16 @@ function userMessage(text, time) {
   append(msg)
 }
 
-/** 管家发言。带着 bowtie 身份，和成员区分开。 */
+/** 牛马大总管发言。带着 bowtie 身份，和成员区分开。 */
 function butlerMessage(text, time) {
   const msg = make('div', 'msg msg--butler')
   const avatar = make('div', 'avatar avatar--sm')
   avatar.style.background = '#3d3630'
-  avatar.appendChild(make('span', null, '管'))
+  avatar.appendChild(make('span', null, '牛'))
   msg.appendChild(avatar)
   const col = make('div', 'msg__col')
   const head = make('div', 'msg__head')
-  head.appendChild(make('span', 'msg__name', '管家'))
+  head.appendChild(make('span', 'msg__name', '牛马大总管'))
   head.appendChild(make('span', 'msg__tag', '负责听你说人话'))
   col.appendChild(head)
   col.appendChild(make('div', 'bubble', text))
@@ -515,7 +515,7 @@ function renderWelcome() {
   clear(el.thread)
   const box = make('div', 'welcome')
   box.appendChild(make('h2', null, '老板，今天想干点啥？'))
-  box.appendChild(make('p', null, '把活说清楚就行。管家先听懂，再替你把人喊来，你只管收结果。'))
+  box.appendChild(make('p', null, '把活说清楚就行。牛马大总管先听懂，再替你把人喊来，你只管收结果。'))
   const list = make('div', 'welcome__list')
   for (const text of SUGGESTIONS) {
     const item = make('button', 'welcome__item', text)
@@ -540,7 +540,7 @@ function setBusy(on) {
   el.input.disabled = on
   el.stop.hidden = !on
   el.topStatus.textContent = on ? '正在处理' : '已上线'
-  el.hint.textContent = on ? '管家正在安排，稍等' : '管家先听明白，再替你把人喊来'
+  el.hint.textContent = on ? '牛马大总管正在安排，稍等' : '牛马大总管先听明白，再替你把人喊来'
 }
 
 function newConversationId() {
@@ -861,7 +861,7 @@ async function refreshPanels() {
 /**
  * 左栏列表。
  *
- * 会话标题与预览来自管家会话记录：标题由宿主首句标题服务生成，预览取该会话最近一条
+ * 会话标题与预览来自牛马大总管会话记录：标题由宿主首句标题服务生成，预览取该会话最近一条
  * 任务的目标或汇总，所以每行都能看出「这次派的是什么活」。
  */
 async function refreshChatList() {

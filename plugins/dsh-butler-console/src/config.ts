@@ -1,6 +1,6 @@
 import Schema from '@deepseek-ai/schemastery'
 
-/** 管家工作台的部署配置。字段名与 `cordis.patch.yml`、管理器生成的 patch 保持一致。 */
+/** 牛马大总管的部署配置。字段名与 `cordis.patch.yml`、管理器生成的 patch 保持一致。 */
 export interface Config {
   accessMode: 'standalone' | 'authenticated'
   publicOrigin: string
@@ -9,7 +9,7 @@ export interface Config {
   routePrefix: string
   /** 单个子任务的最长执行时间，超时按失败处理并中止子 Agent。 */
   subtaskTimeoutMs: number
-  /** 一次管家回答的最长时间。 */
+  /** 一次牛马大总管回答的最长时间。 */
   turnTimeoutMs: number
   /** 单条用户消息字符数上限。 */
   maxMessageChars: number
@@ -21,7 +21,7 @@ export interface Config {
   maxRequestBodyBytes: number
   /** 成员头像大小上限。 */
   maxAvatarBytes: number
-  /** 同时保留的管家会话数。 */
+  /** 同时保留的牛马大总管会话数。 */
   maxActiveConversations: number
   /** 运行历史每页条数上限。 */
   maxHistoryPageSize: number

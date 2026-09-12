@@ -173,7 +173,7 @@ export async function mount(context: AgentMountContext): Promise<{
     description: manifest.description,
     entryPath: config.routePrefix,
     permissions: ['closedoff:access'],
-    // 子包没有独立的 deepseekPlugin 声明，分类在推导点直接声明：它是管家可以对话的成员。
+    // 子包没有独立的 deepseekPlugin 声明，分类在推导点直接声明：它是牛马大总管可以对话的成员。
     category: 'agents',
     tools,
   }))
@@ -183,7 +183,7 @@ export async function mount(context: AgentMountContext): Promise<{
   return {
     // 群组据此算「本分类 + 通用」的工具可见性限制，所以如实返回全部已注册工具。
     tools,
-    // 参与者交给群组桥接成管家的执行入口：管家按「一个 Agent 一个执行入口」工作，
+    // 参与者交给群组桥接成牛马大总管的执行入口：牛马大总管按「一个 Agent 一个执行入口」工作，
     // 而参与者已经实现了「派一轮活、拿回结论」的全部逻辑，桥接只做字段翻译。
     participant,
     dispose: async () => {

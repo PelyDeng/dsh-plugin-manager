@@ -1,5 +1,5 @@
 /**
- * 管家任务计划的纯数据模型与状态机。
+ * 牛马大总管任务计划的纯数据模型与状态机。
  *
  * 状态取值与设计文档第 4 节一致，页面、存储和后端事件共用同一套值，不在别处另造。
  * 这里不依赖 Cordis、HTTP 或数据库，因此可以被单独测试。
@@ -15,7 +15,7 @@ export type SubtaskState =
   | 'failed'
   | 'cancelled'
 
-/** 整个管家任务的状态。 */
+/** 整个牛马大总管任务的状态。 */
 export type TaskState = 'queued' | 'running' | 'waiting_user' | 'summarizing' | 'completed' | 'failed' | 'cancelled'
 
 /** 子任务或任务是否已经结束，结束时不再接受新的状态事件。 */
@@ -84,7 +84,7 @@ export function assertTaskTransition(from: TaskState, to: TaskState): TaskState 
   return to
 }
 
-/** 管家生成的一个子任务。 */
+/** 牛马大总管生成的一个子任务。 */
 export interface Subtask {
   /** 计划内稳定编号，从 1 开始，供页面和时间线引用。 */
   readonly id: string
@@ -92,7 +92,7 @@ export interface Subtask {
   readonly goal: string
   /** 目标 Agent 的注册 id；调度前无法确定时为空字符串。 */
   readonly agentId: string
-  /** 调度前由管家写下的选择理由，便于用户理解为什么派给这个 Agent。 */
+  /** 调度前由牛马大总管写下的选择理由，便于用户理解为什么派给这个 Agent。 */
   readonly reason: string
   state: SubtaskState
   /** 最近一次状态变化的时间戳，用于计算耗时。 */
@@ -105,11 +105,11 @@ export interface Subtask {
   error: string
 }
 
-/** 管家生成的一份任务计划。 */
+/** 牛马大总管生成的一份任务计划。 */
 export interface TaskPlan {
   /** 计划面向用户的目标摘要，通常等于用户原话的收敛表达。 */
   readonly goal: string
-  /** 管家用于拆分任务的说明，可空。 */
+  /** 牛马大总管用于拆分任务的说明，可空。 */
   readonly note: string
   readonly subtasks: readonly Subtask[]
 }

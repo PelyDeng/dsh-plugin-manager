@@ -102,7 +102,7 @@ function fakeHost() {
         // 记录插件级 restrict 调用。
         //
         // 群组**不应该**走到这里：宿主要求 restrict 只能落在 agent 作用域里，插件级限制会
-        // 波及所有 Agent（包括管家自己，它需要 butler_plan）。群组改为把 allow 列表通过
+        // 波及所有 Agent（包括牛马大总管自己，它需要 butler_plan）。群组改为把 allow 列表通过
         // `allowedToolsOf` 注入子包、由子包在 agent 作用域内应用。保留这条记录是为了让
         // 「误在插件级做限制」这件事有迹可循，而不是变成静默的越权。
         restrictions.push(rule)
@@ -256,7 +256,7 @@ describe('群组端到端挂载', () => {
      * 群组**不该**自己调用 `ctx.tools.restrict`。
      *
      * 宿主要求 restrict 只能落在 agent 作用域里（`requires a scoped context (agent.ctx)`）：
-     * 插件级限制会波及所有 Agent，包括管家自己的 —— 而管家需要 `butler_plan`。所以群组的职责
+     * 插件级限制会波及所有 Agent，包括牛马大总管自己的 —— 而牛马大总管需要 `butler_plan`。所以群组的职责
      * 只到「算出 allow 列表并通过 `allowedToolsOf` 注入子包」，应用限制是子包在 agent 作用域里
      * 的事。
      *

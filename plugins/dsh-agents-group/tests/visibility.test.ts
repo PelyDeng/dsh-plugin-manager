@@ -6,7 +6,7 @@
  * 就是越权。所以逐条钉住。
  *
  * 另外守住一条职责边界：群组只算规则，**不**在这里施加限制 —— 宿主要求 restrict 落在 agent
- * 作用域里，插件级限制会波及包括管家在内的所有 Agent。
+ * 作用域里，插件级限制会波及包括牛马大总管在内的所有 Agent。
  */
 
 import { describe, expect, it } from 'vitest'

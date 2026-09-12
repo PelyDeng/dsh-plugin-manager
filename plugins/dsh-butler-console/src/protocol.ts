@@ -1,9 +1,9 @@
 /**
- * 管家与子 Agent 之间的最小调度协议。
+ * 牛马大总管与子 Agent 之间的最小调度协议。
  *
  * 设计边界（见 `.local/agent-console/docs/设计/` 的方向稿）：
  *
- * - 管家只负责理解目标、拆解、分发和汇总。 * - 管家不决定子 Agent 用什么工具，也不创建子 Agent 的会话。
+ * - 牛马大总管只负责理解目标、拆解、分发和汇总。 * - 牛马大总管不决定子 Agent 用什么工具，也不创建子 Agent 的会话。
  * - 每个子 Agent 由它自己所属的插件注册一个 executor；那个插件负责创建、
  *   驱动和释放自己的 Agent，并决定它能看到哪些工具。
  *
@@ -22,8 +22,8 @@ export interface ButlerAgentExecutor {
   /**
    * 这位成员能接哪些类型的活，例如 `['园区数据查询', '车辆轨迹']`。
    *
-   * 管家把这份说明写进自己的提示词，用来决定把子任务派给谁；也因此新增插件只要声明
-   * 能力就会被自动识别，管家侧不需要改代码。留空表示「什么都能接」，管家会按子任务
+   * 牛马大总管把这份说明写进自己的提示词，用来决定把子任务派给谁；也因此新增插件只要声明
+   * 能力就会被自动识别，牛马大总管侧不需要改代码。留空表示「什么都能接」，牛马大总管会按子任务
    * 语义自行判断。
    */
   readonly capabilities?: readonly string[]
@@ -31,21 +31,21 @@ export interface ButlerAgentExecutor {
    * 执行一个子任务。
    *
    * 实现方负责创建或复用自己的 Agent、驱动它跑完这一轮，并在 settle 时返回
-   * 结论。抛出的错误会被管家裁剪成用户可读的失败摘要，不要把内部路径或
+   * 结论。抛出的错误会被牛马大总管裁剪成用户可读的失败摘要，不要把内部路径或
    * 凭据放进错误消息。
    */
   dispatch(request: ButlerDispatchRequest): Promise<ButlerDispatchResult>
   /**
    * 接收用户对一次 `waiting_user` 子任务的回复。
    *
-   * 可选：不实现时管家会在页面上说明「这位成员不接受中途回复」，用户只能等它跑完或
+   * 可选：不实现时牛马大总管会在页面上说明「这位成员不接受中途回复」，用户只能等它跑完或
    * 重新表述。实现方拿到的 `text` 已经裁剪过，`decideByAgent` 为 true 表示用户让你
    * 自己拿主意。
    */
   reply?(request: ButlerReplyRequest): Promise<ButlerDispatchResult>
 }
 
-/** 管家交给执行方的一次子任务。 */
+/** 牛马大总管交给执行方的一次子任务。 */
 export interface ButlerDispatchRequest {
   /** 本次任务的标识，便于执行方在自己的历史里串联。 */
   readonly taskId: string
@@ -56,7 +56,7 @@ export interface ButlerDispatchRequest {
   /**
    * 发给子 Agent 的完整简报：整体目标、它负责的部分和产出要求。
    *
-   * 管家在这里只写“做什么”，不写“用哪个工具怎么做”。执行方可以原样使用，也可以
+   * 牛马大总管在这里只写“做什么”，不写“用哪个工具怎么做”。执行方可以原样使用，也可以
    * 按自己的业务改写。
    */
   readonly brief: string
@@ -78,7 +78,7 @@ export interface ButlerDispatchRequest {
    * 两者用途不同。
    */
   readonly actor: Actor
-  /** 子任务进度上报。执行方可以不调用，管家会按派发和结束补全时间线。 */
+  /** 子任务进度上报。执行方可以不调用，牛马大总管会按派发和结束补全时间线。 */
   readonly onProgress?: (update: ButlerProgressUpdate) => void
   /** 用户取消、超时或插件卸载时中止。执行方应尽快释放自己的 Agent。 */
   readonly signal: AbortSignal
@@ -166,7 +166,7 @@ export interface ButlerMember {
   readonly online: boolean
   /** 本地配色；没配过时为空字符串，由前端按 agentId 稳定推导。 */
   readonly accent: string
-  /** 执行入口声明的能力，管家据此决定派谁。 */
+  /** 执行入口声明的能力，牛马大总管据此决定派谁。 */
   readonly capabilities: readonly string[]
 }
 

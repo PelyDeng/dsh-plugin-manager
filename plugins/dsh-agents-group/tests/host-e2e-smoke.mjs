@@ -1,5 +1,5 @@
 /**
- * 群组 + 管家的真实宿主端到端验收。
+ * 群组 + 牛马大总管的真实宿主端到端验收。
  *
  * 与 `host-runtime-smoke.mjs` 的分工：那个用**假上下文 + 真实 WebServer**验路由与装配；这个
  * 用**真实 DSH 宿主 + 真实归档 + CLI 安装**验发布形态下整条链路真的能工作。两者都要：前者能
@@ -9,8 +9,8 @@
  * 按 `plugins/dsh-example/tests/host-smoke.mjs` 的同一模式：只有模型 HTTP 端点是本地替身，
  * 不调付费 API。
  *
- * 断言的核心是**管家的成员名单**：`online: true` 表示该 Agent 登记了执行入口。这正是
- * 「管家能协调对应智能体」这条需求的落点 —— 名单为空时管家甚至不会做计划。
+ * 断言的核心是**牛马大总管的成员名单**：`online: true` 表示该 Agent 登记了执行入口。这正是
+ * 「牛马大总管能协调对应智能体」这条需求的落点 —— 名单为空时牛马大总管甚至不会做计划。
  *
  * 运行前提：宿主 CLI 已构建（`deepseek-harness/apps/cli/lib/bin.js`），且已打包：
  *   pnpm package --plugins "agents-group,butler"
@@ -94,7 +94,7 @@ const model = createServer(async (req, res) => {
   /**
    * 第一次调用先要一个通用工具，之后才给最终答复。
    *
-   * 这样这一轮真的会走完「模型要工具 → 宿主执行 → 结果回模型 → 出答复」。只要管家拿得到
+   * 这样这一轮真的会走完「模型要工具 → 宿主执行 → 结果回模型 → 出答复」。只要牛马大总管拿得到
    * `common_weather`，它就会出现在工具清单里，替身才可能提出这个调用 —— 断言因此验的是
    * **工具真的可用**，而不只是「清单里出现过这个名字」。
    */
@@ -214,38 +214,38 @@ try {
   for (const [label, path] of [
     ['群组存活探针', '/agents/health'],
     ['群组就绪探针', '/agents/ready'],
-    ['管家存活探针', '/butler/health'],
-    ['管家就绪探针', '/butler/ready'],
+    ['牛马大总管存活探针', '/butler/health'],
+    ['牛马大总管就绪探针', '/butler/ready'],
   ]) {
     const response = await fetch(origin + path, { redirect: 'manual' })
     // 就绪探针在没有 auth 提供者时返回 503 是正确行为；这里只要求它可达。
     record(`${label} ${path} 可达`, [200, 503].includes(response.status), `实际 ${response.status}`)
   }
 
-  // ---- 关键断言：管家的成员名单真的接上了派活链路 ----
+  // ---- 关键断言：牛马大总管的成员名单真的接上了派活链路 ----
   const membersResponse = await fetch(`${origin}/butler/members`, { redirect: 'manual' })
-  record('管家成员端点可读', membersResponse.status === 200, `实际 ${membersResponse.status}`)
+  record('牛马大总管成员端点可读', membersResponse.status === 200, `实际 ${membersResponse.status}`)
   const members = membersResponse.status === 200 ? (await membersResponse.json()).items ?? [] : []
   const byId = new Map(members.map(member => [member.agentId, member]))
   record('成员名单含 closedoff 与 blog', byId.has('closedoff') && byId.has('blog'), `实际 ${members.map(m => m.agentId).join('、') || '（空）'}`)
-  // online 即 card.dispatchable：为 true 说明该 Agent 登记了执行入口，管家才敢派活。
+  // online 即 card.dispatchable：为 true 说明该 Agent 登记了执行入口，牛马大总管才敢派活。
   record('closedoff 在线（登记了执行入口）', byId.get('closedoff')?.online === true, `online=${String(byId.get('closedoff')?.online)}`)
   record('blog 在线（登记了执行入口）', byId.get('blog')?.online === true, `online=${String(byId.get('blog')?.online)}`)
-  record('成员带能力摘要，供管家选人', (byId.get('closedoff')?.capabilities ?? []).length > 0,
+  record('成员带能力摘要，供牛马大总管选人', (byId.get('closedoff')?.capabilities ?? []).length > 0,
     JSON.stringify(byId.get('closedoff')?.capabilities ?? []))
 
-  // ---- 关键断言：管家能调用通用工具 ----
+  // ---- 关键断言：牛马大总管能调用通用工具 ----
   //
-  // 管家按分类标签从插件目录筛选通用工具（`UNIVERSAL_TOOL_CATEGORY`），不写死工具名。验证它
-  // 真的拿得到，最权威的地方是**模型请求里的工具清单** —— 那正是管家这一轮实际能用什么。
+  // 牛马大总管按分类标签从插件目录筛选通用工具（`UNIVERSAL_TOOL_CATEGORY`），不写死工具名。验证它
+  // 真的拿得到，最权威的地方是**模型请求里的工具清单** —— 那正是牛马大总管这一轮实际能用什么。
   // `/butler/agents` 只给 toolCount，看不到工具名，所以这里驱动一轮真实对话再读替身收到的请求。
   const chatResponse = await fetch(`${origin}/butler/chat`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', origin },
-    // 会话 id 由客户端生成，格式是 butler-web-<uuid v4>；管家按正则校验，空串会被 400 拒绝。
+    // 会话 id 由客户端生成，格式是 butler-web-<uuid v4>；牛马大总管按正则校验，空串会被 400 拒绝。
     body: JSON.stringify({ conversationId: `butler-web-${randomUUID()}`, message: '重庆今天天气怎么样？' }),
   })
-  record('管家 /chat 接受一轮对话', chatResponse.status === 200, `实际 ${chatResponse.status}`)
+  record('牛马大总管 /chat 接受一轮对话', chatResponse.status === 200, `实际 ${chatResponse.status}`)
   if (chatResponse.status === 200) {
     // 把 SSE 读完，确认这一轮真的跑到了模型调用。
     const streamText = await chatResponse.text()
@@ -256,7 +256,7 @@ try {
 
     const request = modelRequests.at(-1)
     /**
-     * 整轮模型调用确实跑起来了：宿主、群组、管家、模型替身四段连上了。
+     * 整轮模型调用确实跑起来了：宿主、群组、牛马大总管、模型替身四段连上了。
      *
      * 工具清单的核查取决于**替身是否主动发起工具调用**（它的脚本分支决定）。要求工具调用是
      * 更强的验证，等替身的分支落实后再把它改成硬断言；在那之前先记录事实，不用一条永远红的
@@ -269,7 +269,7 @@ try {
       record('模型请求里带上了工具清单', names.length > 0, names.length > 0 ? names.join('、') : '（本轮替身未要求工具调用）')
       record('工具清单里有 common_weather（通用工具）', names.includes('common_weather'), names.join('、'))
       record('工具清单里有 butler_plan（派活工具）', names.includes('butler_plan'), names.join('、'))
-      // 成员名单进系统提示词：管家据此知道能派给谁。
+      // 成员名单进系统提示词：牛马大总管据此知道能派给谁。
       const prompt = JSON.stringify(request.messages ?? [])
       record('系统提示词里出现可调度成员 closedoff', prompt.includes('closedoff'))
       record('系统提示词里出现可调度成员 blog', prompt.includes('blog'))
@@ -290,4 +290,4 @@ console.log(`\n  共 ${results.length} 项，通过 ${results.length - failed.le
 writeFileSync(join(operation, 'host.log'), hostLog)
 console.log(`  宿主日志与诊断：${operation}`)
 if (failure !== undefined || failed.length > 0) process.exit(1)
-console.log('  群组 + 管家真实宿主端到端验收通过。')
+console.log('  群组 + 牛马大总管真实宿主端到端验收通过。')

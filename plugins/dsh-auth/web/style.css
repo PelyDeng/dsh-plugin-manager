@@ -33,7 +33,7 @@ body:has(#conversation-preview[open]){overflow:hidden}.conversation-mobile-time{
 .plugin-section .plugin-card{background:var(--soft)}
 #plugins>.empty{width:100%}
 /* 插件页改用紧凑行式：一行一个插件，名称/说明/工具预览/元信息/操作各占一段。
-   比卡片网格更适合「一眼比较版本与工具数」，也与管家成员列表的观感一致。
+   比卡片网格更适合「一眼比较版本与工具数」，也与牛马大总管成员列表的观感一致。
    旧的 .plugin-card 规则留在原处不影响（已无元素使用该类）。 */
 .plugin-section .plugin-grid{display:flex;flex-direction:column;gap:0;background:#fff;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
 .plugin-row{display:flex;align-items:center;gap:14px;padding:14px 16px;border-top:1px solid var(--line);min-width:0}

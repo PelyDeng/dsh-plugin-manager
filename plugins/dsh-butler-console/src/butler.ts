@@ -1,9 +1,9 @@
 /**
- * 管家 Agent：理解目标、生成任务计划、按计划调度子 Agent、汇总结果。
+ * 牛马大总管 Agent：理解目标、生成任务计划、按计划调度子 Agent、汇总结果。
  *
  * 职责边界（与设计文档一致）：
  *
- * - 管家自己只带一个 `butler_plan` 工具，用来把计划交回宿主。它不决定子 Agent
+ * - 牛马大总管自己只带一个 `butler_plan` 工具，用来把计划交回宿主。它不决定子 Agent
  *   调用什么工具，也不创建子 Agent 的会话。
  * - 每个子任务交给对应插件登记的 executor；由那个插件创建和驱动自己的 Agent。
  * - 子任务状态只在真实事件上迁移：派发前是 `queued`，交给 executor 后是
@@ -11,9 +11,9 @@
  *
  * 一轮完整对话由三段组成，中间的状态都来自真实事件：
  *
- * 1. 理解与拆解：管家回答，需要调度时调用 `butler_plan` 交回计划。
+ * 1. 理解与拆解：牛马大总管回答，需要调度时调用 `butler_plan` 交回计划。
  * 2. 调度：按计划顺序把子任务交给各插件登记的 executor。
- * 3. 汇总：把子任务结果交回给管家，由它输出最终回答。
+ * 3. 汇总：把子任务结果交回给牛马大总管，由它输出最终回答。
  */
 
 import { randomUUID } from 'node:crypto'
@@ -110,7 +110,7 @@ function summaryTextOf(event: ButlerInnerEvent): string | null {
   return event.type === 'summary_text' ? event.text : null
 }
 
-/** 一次管家的已打开会话。 */
+/** 一次牛马大总管的已打开会话。 */
 interface Conversation {
   readonly id: string
   readonly handle: AgentHandle
@@ -148,7 +148,7 @@ interface Turn {
 /** 子任务执行结论，供汇总阶段使用。 */
 interface SubtaskOutcome {
   readonly state: SubtaskState
-  /** 交给管家汇总时使用的结果正文。 */
+  /** 交给牛马大总管汇总时使用的结果正文。 */
   readonly report: string
 }
 
@@ -238,15 +238,15 @@ function briefFor(taskGoal: string, subtaskGoal: string): string {
 }
 
 /**
- * 管家会话与调度器。
+ * 牛马大总管会话与调度器。
  *
- * 一个实例对应一个已打开的管家会话；会话之间互不影响，各自的计划、子任务和取消
+ * 一个实例对应一个已打开的牛马大总管会话；会话之间互不影响，各自的计划、子任务和取消
  * 相互独立。
  */
 export class ButlerConsole {
   private readonly conversations = new Map<string, Conversation>()
   private readonly openings = new Map<string, Promise<Conversation | undefined>>()
-  /** 管家会话的当前轮次；事件到达时由 `observe()` 填充。 */
+  /** 牛马大总管会话的当前轮次；事件到达时由 `observe()` 填充。 */
   private readonly turns = new Map<string, Turn>()
   /** 每个会话的中止控制器，用户按停止时触发。 */
   private readonly aborts = new Map<string, AbortController>()
@@ -269,7 +269,7 @@ export class ButlerConsole {
 
   /** 校验浏览器传来的会话 id，避免用它去寻址别的 DSH 会话。 */
   validateId(value: string): string {
-    if (!CONVERSATION_ID.test(value)) throw new AccessError(400, '不是管家工作台的会话标识')
+    if (!CONVERSATION_ID.test(value)) throw new AccessError(400, '不是牛马大总管的会话标识')
     return value
   }
 
@@ -278,7 +278,7 @@ export class ButlerConsole {
   }
 
   /**
-   * 打开或创建管家会话。
+   * 打开或创建牛马大总管会话。
    *
    * 对话正文由 DSH 官方会话日志承载；本插件只在工作台索引里登记归属和标题，不
    * 复制一份对话内容。
@@ -359,17 +359,17 @@ export class ButlerConsole {
   }
 
   /**
-   * 管家自己的提示词与工具。
+   * 牛马大总管自己的提示词与工具。
    *
-   * 子 Agent 的提示词和工具不在这里配置：那是各自插件的事。这里只限制管家自己
-   * 能看到什么，避免管家绕过计划直接执行业务操作。
+   * 子 Agent 的提示词和工具不在这里配置：那是各自插件的事。这里只限制牛马大总管自己
+   * 能看到什么，避免牛马大总管绕过计划直接执行业务操作。
    *
    * `sessionId` 由创建处闭包传入，而不是从 agentCtx 上读 `agent.id`：这样不依赖
    * 宿主对 Context 的类型扩展，行为也更明确。
    */
   private setup(agentCtx: Context, sessionId: string): void {
     agentCtx.systemPrompt.section({ name: 'butler:persona', order: 600, text: this.persona })
-    // 在场名单每次组装时重新求值：新插件装上来、旧插件卸下去，管家下一轮就知道，
+    // 在场名单每次组装时重新求值：新插件装上来、旧插件卸下去，牛马大总管下一轮就知道，
     // 不需要重启也不需要改代码。
     agentCtx.systemPrompt.section({
       name: 'butler:roster',
@@ -377,19 +377,19 @@ export class ButlerConsole {
       text: () => this.rosterText(sessionId),
     })
     agentCtx.tools.register(this.planTool(sessionId))
-    // 管家能直接调用的工具：派活工具 + 目录里的通用工具。
+    // 牛马大总管能直接调用的工具：派活工具 + 目录里的通用工具。
     //
-    // 通用工具是约定好的公共集（分类标签 `通用工具`），任何智能体都能调。管家需要它们
+    // 通用工具是约定好的公共集（分类标签 `通用工具`），任何智能体都能调。牛马大总管需要它们
     // 才能直接处理那些「不需要专业智能体」的问题（例如查天气），而不是为了不必要的小事
     // 去派活。
     //
-    // 从目录实时读而不是写死名单：新增通用工具时管家自动就能用，不需要改这里。
+    // 从目录实时读而不是写死名单：新增通用工具时牛马大总管自动就能用，不需要改这里。
     //
     // 只列**全局**工具名，并且**读不到目录时干脆不施加限制**。
     //
     // 两个失败方向都不对称，必须选对：`restrict({ allow: [] })` 会遮蔽**所有**工具（包括
-    // 刚注册的 `butler_plan`），管家于是连派活工具都没有、整轮只能干瞪眼；而「不限制」的最坏
-    // 结果是管家多看到几个工具，它仍受自己的提示词与鉴权约束。所以空清单绝不能拿去 restrict。
+    // 刚注册的 `butler_plan`），牛马大总管于是连派活工具都没有、整轮只能干瞪眼；而「不限制」的最坏
+    // 结果是牛马大总管多看到几个工具，它仍受自己的提示词与鉴权约束。所以空清单绝不能拿去 restrict。
     const universal = this.universalToolNames(agentCtx)
     if (universal.length > 0) agentCtx.tools.restrict({ allow: universal })
   }
@@ -415,7 +415,7 @@ export class ButlerConsole {
    * 渲染「当前可调度成员」名单。
    *
    * 名单来自插件目录，能力来自各执行入口自己的声明。没有可调度成员时明确写出来，
-   * 让管家知道这次只能自己回答，而不是硬凑一个不存在的成员。
+   * 让牛马大总管知道这次只能自己回答，而不是硬凑一个不存在的成员。
    */
   private rosterText(sessionId: string): string {
     const turn = this.turns.get(sessionId)
@@ -601,7 +601,7 @@ export class ButlerConsole {
     for (const conversationId of [...this.aborts.keys()]) this.abort(conversationId)
   }
 
-  /** 中止一轮：先中止子任务，再取消管家自己这一轮。 */
+  /** 中止一轮：先中止子任务，再取消牛马大总管自己这一轮。 */
   private abort(conversationId: string): void {
     this.aborts.get(conversationId)?.abort()
     this.conversations.get(conversationId)?.handle.agent.cancel({ kind: 'user' })
@@ -620,9 +620,9 @@ export class ButlerConsole {
     if ([...text].length > this.config.maxMessageChars) throw new AccessError(400, `消息过长，最多 ${this.config.maxMessageChars} 个字符`)
     this.validateId(conversationId)
     const conversation = await this.open(conversationId, true, actor)
-    if (conversation === undefined) throw new AccessError(500, '无法打开管家会话')
+    if (conversation === undefined) throw new AccessError(500, '无法打开牛马大总管会话')
     this.access.assert(actor)
-    if (conversation.active) throw new AccessError(409, '管家正在处理上一条消息，请先停止或等待完成')
+    if (conversation.active) throw new AccessError(409, '牛马大总管正在处理上一条消息，请先停止或等待完成')
 
     conversation.active = true
     conversation.lastUsedAt = Date.now()
@@ -640,12 +640,12 @@ export class ButlerConsole {
       }
       if (planning.outcome.kind === 'failed') {
         if (planning.text !== '') yield { type: 'chat', role: 'butler', text: planning.text, time: Date.now() }
-        yield { type: 'error', message: `管家回答失败：${planning.outcome.message}`, time: Date.now() }
+        yield { type: 'error', message: `牛马大总管回答失败：${planning.outcome.message}`, time: Date.now() }
         return
       }
       const plan = planning.plans.at(-1)
       if (plan === undefined) {
-        // 不需要调度：管家已经直接回答了。
+        // 不需要调度：牛马大总管已经直接回答了。
         yield { type: 'chat', role: 'butler', text: planning.text, time: Date.now() }
         return
       }
@@ -731,7 +731,7 @@ export class ButlerConsole {
   }
 
   /**
-   * 跑管家的一轮并收集结果。
+   * 跑牛马大总管的一轮并收集结果。
    *
    * 先注册记录再投递消息，避免第一轮的事件早于监听建立；`abort` 触发时按取消
    * 收尾，不让调用方无限等待。
@@ -772,7 +772,7 @@ export class ButlerConsole {
   /**
    * 会话事件入口，由 `index.ts` 注册到 `ctx.on('session/event')`。
    *
-   * 只处理属于管家自己的会话；其他插件的会话事件一律忽略。
+   * 只处理属于牛马大总管自己的会话；其他插件的会话事件一律忽略。
    */
   observe(session: { id?: unknown }, event: SessionEvent): void {
     const turn = this.turns.get(String(session?.id ?? ''))
@@ -930,7 +930,7 @@ export class ButlerConsole {
   /**
    * 把用户对一次 `waiting_user` 子任务的回复交回原执行方。
    *
-   * 与 `dispatch` 分开：`dispatch` 是派活，这里是补话。管家不参与执行方的内部处理，
+   * 与 `dispatch` 分开：`dispatch` 是派活，这里是补话。牛马大总管不参与执行方的内部处理，
    * 只负责把话转过去、把结果和状态带回来。
    */
   async *submitReply(input: {
@@ -1030,7 +1030,7 @@ export class ButlerConsole {
   }
 
   /**
-   * 汇总：把子任务结果交回给管家，由它输出最终回答。
+   * 汇总：把子任务结果交回给牛马大总管，由它输出最终回答。
    *
    * 汇总轮也是真实的一轮：它有自己的 `turn/end`，失败或取消时如实上报，而不是用
    * 一段模板文本冒充汇总结果。

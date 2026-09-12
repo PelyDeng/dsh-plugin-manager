@@ -11,9 +11,9 @@
  *
  * ## 为什么只列「智能体」分类
  *
- * 目录里同时有认证、控制台、工具集这类插件，它们不是可以对话的对象。管家页面是
+ * 目录里同时有认证、控制台、工具集这类插件，它们不是可以对话的对象。牛马大总管页面是
  * 成员名单，不是插件清单，所以只收 `category` 声明为「智能体」的插件。分类取自
- * 插件自己的清单声明，所以新增一个 Agent 只要声明分类就会自动出现，管家侧不用改。
+ * 插件自己的清单声明，所以新增一个 Agent 只要声明分类就会自动出现，牛马大总管侧不用改。
  */
 
 import type { Context } from '@deepseek-ai/cordis'
@@ -37,13 +37,13 @@ export interface AgentCard {
   readonly permissions: readonly string[]
   /** 该 Agent 登记的工具数量，用于说明它的能力规模。 */
   readonly toolCount: number
-  /** 是否登记了调度执行入口；为 false 时管家不会把子任务派给它。 */
+  /** 是否登记了调度执行入口；为 false 时牛马大总管不会把子任务派给它。 */
   readonly dispatchable: boolean
   /**
    * 执行入口自己声明能接的活。
    *
    * 与 `description` 分开：`description` 是插件的自我介绍，这个是**可派活的边界**，
-   * 管家按它决定把子任务交给谁。新增插件只要声明就会被自动纳入，管家侧无需改代码。
+   * 牛马大总管按它决定把子任务交给谁。新增插件只要声明就会被自动纳入，牛马大总管侧无需改代码。
    */
   readonly capabilities: readonly string[]
 }
@@ -101,7 +101,7 @@ export function listAgentCards(ctx: Context): AgentCard[] {
 /**
  * 规整执行方声明的能力。
  *
- * 去空白、去空项、去重并限量，避免把一段失控的长文本塞进管家的提示词里。
+ * 去空白、去空项、去重并限量，避免把一段失控的长文本塞进牛马大总管的提示词里。
  */
 function normalizeCapabilities(value: readonly string[] | undefined): readonly string[] {
   if (value === undefined) return []

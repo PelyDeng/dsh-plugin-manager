@@ -1,11 +1,11 @@
 /**
- * 管家对通用工具的可见性测试。
+ * 牛马大总管对通用工具的可见性测试。
  *
- * 管家本来只带 `butler_plan`，只负责派活。按产品要求它还要能直接处理「不需要专业智能体」
+ * 牛马大总管本来只带 `butler_plan`，只负责派活。按产品要求它还要能直接处理「不需要专业智能体」
  * 的问题，所以它的可见工具集是「派活工具 + 目录里的通用工具」。
  *
  * 这里锁住的是筛选规则本身：只有分类标签为「通用工具」的才会被放行，别家智能体的专业工具
- * 一律不放行 —— 那正是「管家不替成员干专业活」的边界。
+ * 一律不放行 —— 那正是「牛马大总管不替成员干专业活」的边界。
  */
 
 import { describe, expect, it } from 'vitest'
@@ -43,7 +43,7 @@ function catalogContext(entries: readonly { id: string; tools: readonly FakeTool
   } as unknown as Context
 }
 
-/** 与管家实现同一口径：从目录里挑出通用工具名。 */
+/** 与牛马大总管实现同一口径：从目录里挑出通用工具名。 */
 function universalToolNames(ctx: Context): string[] {
   return listPlugins(ctx)
     .flatMap(plugin => plugin.tools)
@@ -51,7 +51,7 @@ function universalToolNames(ctx: Context): string[] {
     .map(tool => tool.name)
 }
 
-describe('管家的通用工具可见性', () => {
+describe('牛马大总管的通用工具可见性', () => {
   const catalog = [
     { id: 'agents-group-tools', tools: [
       { name: 'common_weather', category: '通用工具' },
@@ -64,7 +64,7 @@ describe('管家的通用工具可见性', () => {
     { id: 'blog', tools: [
       { name: 'blog_search_posts', category: '博客工作台' },
     ] },
-    // 老插件不填分类：它不参与这套约定，也不该被管家直接调用。
+    // 老插件不填分类：它不参与这套约定，也不该被牛马大总管直接调用。
     { id: 'legacy', tools: [{ name: 'legacy_query' }] },
   ]
 
@@ -76,7 +76,7 @@ describe('管家的通用工具可见性', () => {
 
   it('不放行任何智能体的专业工具', () => {
     const names = universalToolNames(catalogContext(catalog))
-    // 这是边界：管家替成员干专业活容易答错，而且老板要的是那个领域的准确结果。
+    // 这是边界：牛马大总管替成员干专业活容易答错，而且老板要的是那个领域的准确结果。
     expect(names).not.toContain('closedoff_vehicle_track')
     expect(names).not.toContain('closedoff_warning_page')
     expect(names).not.toContain('blog_search_posts')
@@ -87,7 +87,7 @@ describe('管家的通用工具可见性', () => {
     expect(universalToolNames(catalogContext(catalog))).not.toContain('legacy_query')
   })
 
-  it('目录为空时得到空清单，管家退回只会派活', () => {
+  it('目录为空时得到空清单，牛马大总管退回只会派活', () => {
     expect(universalToolNames(catalogContext([]))).toEqual([])
   })
 
@@ -95,7 +95,7 @@ describe('管家的通用工具可见性', () => {
     /**
      * 派活工具**不在** allow 里，这不是遗漏。
      *
-     * `restrict` 的 allow 只认宿主全局注册的工具，而 `butler_plan` 是管家注册在自己 agent
+     * `restrict` 的 allow 只认宿主全局注册的工具，而 `butler_plan` 是牛马大总管注册在自己 agent
      * 作用域里的局部工具 —— 写进 allow 会以 `names unknown global tool "butler_plan"` 直接
      * 失败（真实宿主验收抓到过这个，表现为整轮对话只回一条笼统的失败）。局部工具本来就只对
      * 这个 Agent 可见，不必列入 allow。

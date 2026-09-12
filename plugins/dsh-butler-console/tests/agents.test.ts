@@ -19,7 +19,7 @@ interface FakePlugin {
   permissions?: string[]
   tools?: unknown[]
   /**
-   * 插件分类。管家只把「智能体」分类当成可对话成员，所以夹具默认就声明成智能体；
+   * 插件分类。牛马大总管只把「智能体」分类当成可对话成员，所以夹具默认就声明成智能体；
    * 要表达「不该出现在成员名单里」的插件时显式传别的分类。
    */
   category?: string | undefined
@@ -147,7 +147,7 @@ describe('能力声明：新增 Agent 靠它被自动识别', () => {
     expect(listAgentCards(ctx)[0]?.capabilities).toEqual(['园区数据查询', '车辆轨迹'])
   })
 
-  it('没声明能力时为空数组，管家自行按语义判断', () => {
+  it('没声明能力时为空数组，牛马大总管自行按语义判断', () => {
     const ctx = fakeContext([{ id: 'blog' }], [executor('blog')])
     expect(listAgentCards(ctx)[0]?.capabilities).toEqual([])
   })
@@ -164,7 +164,7 @@ describe('能力声明：新增 Agent 靠它被自动识别', () => {
     expect(caps).toContain('车辆轨迹')
   })
 
-  it('新增的插件带上能力就会被纳入可调度集合，管家侧无需改代码', () => {
+  it('新增的插件带上能力就会被纳入可调度集合，牛马大总管侧无需改代码', () => {
     const before = listAgentCards(fakeContext([{ id: 'closedoff' }], [executor('closedoff', ['园区数据查询'])]))
     const after = listAgentCards(fakeContext(
       [{ id: 'closedoff' }, { id: 'newcomer' }],

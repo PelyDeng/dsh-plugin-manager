@@ -107,7 +107,7 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   const app=new BlogApplication(store,access,blog,images,backups,jobs,attachments)
   const {chatSdk}=await import(blogResource('runtime/chat-sdk.mjs').href)
   const chat=new BlogChat(ctx,access,store,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)
-  // 显式创建参与者再注册：群组要把同一个实例桥接成管家的执行入口，
+  // 显式创建参与者再注册：群组要把同一个实例桥接成牛马大总管的执行入口，
   // 而 registerBlogParticipant 只在内部创建、不交出来。
   const participant=createBlogParticipant({access,chat,index:conversations,store,routePrefix:config.routePrefix})
   ctx.effect(()=>ctx.on('pirate/participants',accept=>accept(participant),{global:true}))
@@ -205,7 +205,7 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   return {
     // 群组据此算「本分类 + 通用」的工具可见性限制，所以如实返回全部已注册工具。
     tools: jobs.chatTools,
-    // 参与者交给群组桥接成管家的执行入口。
+    // 参与者交给群组桥接成牛马大总管的执行入口。
     participant,
     dispose: async () => {
       // 释放顺序与创建相反，与迁移前保持一致。

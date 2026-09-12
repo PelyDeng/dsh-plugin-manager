@@ -1,5 +1,5 @@
 /**
- * 管家工作台的 HTTP 与 SSE 接口。
+ * 牛马大总管工作台的 HTTP 与 SSE 接口。
  *
  * 所有受保护路由都经过 kit 的 `createPluginHttp`，因此每次访问都会重新核对登录
  * 身份；只有 `/health` 和 `/ready` 是公开探针。

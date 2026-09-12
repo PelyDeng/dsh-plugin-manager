@@ -162,7 +162,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
    * > tools.restrict() requires a scoped context (agent.ctx): a context-global restriction
    * > would mask every agent
    *
-   * 它说得对 —— 插件级限制会波及所有 Agent，包括管家自己的（管家需要 butler_plan）。限制只能
+   * 它说得对 —— 插件级限制会波及所有 Agent，包括牛马大总管自己的（牛马大总管需要 butler_plan）。限制只能
    * 落在**各 Agent 自己的 agent 上下文**里，所以这里把结果注入子包（`allowedToolsOf`），
    * 由子包创建 Agent 时在 agent 作用域内应用。
    *
@@ -190,10 +190,10 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   }, loadAgent)
 
   /**
-   * 把各 Agent 的参与者登记为管家的执行入口。
+   * 把各 Agent 的参与者登记为牛马大总管的执行入口。
    *
-   * 没有这一步，管家的成员名单恒为空，它每轮收到的提示词是「现在没有能接活的成员，这一轮
-   * 只能你自己回答，不要调用 butler_plan」—— 于是「协调对应智能体」这条完全不通，管家
+   * 没有这一步，牛马大总管的成员名单恒为空，它每轮收到的提示词是「现在没有能接活的成员，这一轮
+   * 只能你自己回答，不要调用 butler_plan」—— 于是「协调对应智能体」这条完全不通，牛马大总管
    * 连计划都不会做。业务插件本身没问题，缺的就是这段桥接。
    *
    * 按清单顺序登记，且只登记装载成功的：装载失败的 Agent 不该出现在可调度名单里。

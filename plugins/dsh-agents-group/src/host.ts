@@ -24,7 +24,7 @@ export interface MountedAgent {
   readonly accessMode: 'standalone' | 'authenticated'
   /** 该 Agent 注册的工具条目。群组据此算「本分类 + 通用」的可见性限制。 */
   readonly tools: readonly ToolDescriptor[]
-  /** 该 Agent 的协作参与者；装载失败时为 undefined。群组据此桥接管家的执行入口。 */
+  /** 该 Agent 的协作参与者；装载失败时为 undefined。群组据此桥接牛马大总管的执行入口。 */
   readonly participant?: AgentParticipant
   /** 装载失败时的可读原因；正常时为 undefined。 */
   readonly failure?: string
@@ -81,8 +81,8 @@ export type AgentMount = (context: AgentMountContext) => Promise<{
   /**
    * 该 Agent 的协作参与者。
    *
-   * 群组把它桥接成管家的执行入口 —— 参与者已经实现了「派一轮活、拿回结论」，桥接只做字段
-   * 翻译。漏报会让该 Agent 在管家的名单里变成「不可调度」，管家于是不会把专业活派给它。
+   * 群组把它桥接成牛马大总管的执行入口 —— 参与者已经实现了「派一轮活、拿回结论」，桥接只做字段
+   * 翻译。漏报会让该 Agent 在牛马大总管的名单里变成「不可调度」，牛马大总管于是不会把专业活派给它。
    */
   participant: AgentParticipant
 }>

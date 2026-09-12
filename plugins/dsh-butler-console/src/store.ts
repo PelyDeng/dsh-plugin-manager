@@ -1,8 +1,8 @@
 /**
- * 管家工作台的持久化索引。
+ * 牛马大总管工作台的持久化索引。
  *
- * 这里只保存管家自己的工作台数据：会话归属、任务计划、子任务状态和运行历史。
- * 管家与用户的对话正文仍然存放在 DSH 官方会话日志里，本文件不复制一份，也不改写
+ * 这里只保存牛马大总管自己的工作台数据：会话归属、任务计划、子任务状态和运行历史。
+ * 牛马大总管与用户的对话正文仍然存放在 DSH 官方会话日志里，本文件不复制一份，也不改写
  * 宿主日志。
  */
 
@@ -93,7 +93,7 @@ export interface HistoryQuery {
 const STORE_ERROR = '工作台数据不可用，请稍后重试'
 
 /**
- * 管家工作台的 SQLite 索引。
+ * 牛马大总管工作台的 SQLite 索引。
  *
  * 所有查询都按 owner 过滤：会话和任务属于登录用户，不因为知道 id 就能读到。
  */
@@ -225,7 +225,7 @@ export class TaskStore {
       .run(Date.now(), actor.namespace, actor.userId, agentId)
   }
 
-  /** 为用户登记一个管家会话；重复登记不改变已有归属。 */
+  /** 为用户登记一个牛马大总管会话；重复登记不改变已有归属。 */
   reserveConversation(id: string, actor: Actor): void {
     const now = Date.now()
     this.db.prepare(`INSERT OR IGNORE INTO conversations(id, owner_namespace, owner_id, created_at, updated_at)

@@ -5,7 +5,7 @@
  * 装载顺序要确定，动态扫描在打包后不可靠。
  *
  * 新增一个 Agent 只需要在这里加一条 —— 这是群组唯一的「名单」，
- * 管家（dsh-butler-console）那边不用改。
+ * 牛马大总管（dsh-butler-console）那边不用改。
  */
 
 /** 一个 Agent 的静态身份。路径与权限由 id 推导，避免手写不一致。 */
@@ -33,7 +33,7 @@ export interface AgentManifest {
 /**
  * 当前群组内的 Agent。
  *
- * 每迁入一个 Agent 就在这里加一条 —— 这是群组唯一的名单，管家侧不用改。
+ * 每迁入一个 Agent 就在这里加一条 —— 这是群组唯一的名单，牛马大总管侧不用改。
  */
 export const AGENT_MANIFESTS: readonly AgentManifest[] = [
   {
