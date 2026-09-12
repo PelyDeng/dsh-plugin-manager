@@ -18,6 +18,7 @@
   "files": [
     "dist/",
     "web/",
+    "persona.txt",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -42,6 +43,7 @@
       "butler:access"
     ],
     "verifyFiles": [
+      "persona.txt",
       "web/index.html",
       "web/style.css",
       "web/app.js",
