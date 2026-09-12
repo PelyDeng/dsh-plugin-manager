@@ -88,7 +88,7 @@ test('apply generates one complete Compose document and preserves existing setti
   const result = applyCompose(f.deployment, f.release, args => calls.push(args.slice(2)), { endpoint: 'unix:///var/run/docker.sock', id: 'settings-test', desktop: false, architecture: 'amd64' });
   assert.equal(readFileSync(file, 'utf8'), before);
   assert.ok(existsSync(join(f.deployment.home, 'plugins/identity/plugin.json')));
-  assert.deepEqual(calls.map(args => args.slice(5)), [['stop', 'dsh'], ['up', '-d', '--force-recreate', '--wait', '--wait-timeout', '90', 'dsh']]);
+  assert.deepEqual(calls.map(args => args.slice(5)), [['stop', 'dsh'], ['up', '-d', '--force-recreate', '--wait', '--wait-timeout', '180', 'dsh']]);
   const compose = JSON.parse(readFileSync(result.path));
   assert.equal(compose.services.dsh.image, f.deployment.config.containerImage);
   assert.equal(compose.services.dsh.environment.DSH_BIND_HOST, '127.0.0.1');
