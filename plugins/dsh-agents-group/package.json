@@ -37,6 +37,7 @@
     "id": "agents-group",
     "defaultEnabled": false,
     "displayName": "智能体群组",
+    "category": "web-services",
     "entryPath": "/agents",
     "healthPath": "/agents/health",
     "permissions": [

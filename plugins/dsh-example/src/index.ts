@@ -126,7 +126,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   ctx.effect(() => registerPlugin(ctx, {
     id: manifest.deepseekPlugin.id, packageName: manifest.name, version: manifest.version,
     description: manifest.description, displayName: manifest.deepseekPlugin.displayName,
-    entryPath: config.routePrefix, permissions: manifest.deepseekPlugin.permissions, tools,
+    entryPath: config.routePrefix, permissions: manifest.deepseekPlugin.permissions,
+    ...(manifest.deepseekPlugin.category === undefined ? {} : { category: manifest.deepseekPlugin.category }), tools,
   }))
   const agentOptions = async (id?: string, eventCount?: number, requested?: ConversationModel) => {
     const selection = requested ?? await conversationModel(ctx, id, eventCount)

@@ -173,6 +173,8 @@ export async function mount(context: AgentMountContext): Promise<{
     description: manifest.description,
     entryPath: config.routePrefix,
     permissions: ['closedoff:access'],
+    // 子包没有独立的 deepseekPlugin 声明，分类在推导点直接声明：它是管家可以对话的成员。
+    category: 'agents',
     tools,
   }))
   ctx.effect(() => onRevoked(ctx, () => manager.revokeInvalid()))

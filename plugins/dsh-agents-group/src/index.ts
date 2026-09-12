@@ -79,7 +79,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     name: string
     version: string
     description: string
-    deepseekPlugin: { id: string; displayName: string; permissions: string[] }
+    deepseekPlugin: { id: string; displayName: string; permissions: string[]; category?: string }
   }
 
   assertUniqueManifests(AGENT_MANIFESTS)
@@ -98,6 +98,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     description: manifest.description,
     entryPath: config.routePrefix,
     permissions: manifest.deepseekPlugin.permissions,
+    ...(manifest.deepseekPlugin.category === undefined ? {} : { category: manifest.deepseekPlugin.category }),
     tools: [],
   }))
 
@@ -147,6 +148,9 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     description: '每个智能体都能调用的公共工具集',
     entryPath: config.routePrefix,
     permissions: manifest.deepseekPlugin.permissions,
+    // 「通用工具」是跨 Agent 的公共工具集，不隶属任何单个 Agent，所以不跟随群组的
+    // 「网页服务」分类，而是单独归入「通用/工具」。
+    category: 'universal-tools',
     tools: universalDescriptors,
   }))
 

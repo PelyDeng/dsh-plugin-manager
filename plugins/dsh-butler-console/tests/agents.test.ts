@@ -18,6 +18,11 @@ interface FakePlugin {
   entryPath?: string
   permissions?: string[]
   tools?: unknown[]
+  /**
+   * 插件分类。管家只把「智能体」分类当成可对话成员，所以夹具默认就声明成智能体；
+   * 要表达「不该出现在成员名单里」的插件时显式传别的分类。
+   */
+  category?: string | undefined
 }
 
 /**
@@ -42,6 +47,7 @@ function fakeContext(plugins: readonly FakePlugin[], executors: readonly ButlerA
                 entryPath: plugin.entryPath ?? `/${plugin.id}`,
                 permissions: plugin.permissions ?? [],
                 tools: plugin.tools ?? [],
+                category: plugin.category === undefined ? 'agents' : plugin.category,
               },
             })
           }
@@ -72,6 +78,22 @@ describe('已接入 Agent 列表', () => {
     ])
     // 目录按 id 排序返回，顺序由 kit 决定，这里与实现保持一致。
     expect(listAgentCards(ctx).map(card => card.id)).toEqual(['blog', 'closedoff'])
+  })
+
+  it('只收「智能体」分类，认证/控制台/工具集这类插件不算成员', () => {
+    const ctx = fakeContext([
+      { id: 'closedoff', category: 'agents' },
+      { id: 'blog', category: 'agents' },
+      { id: 'auth', category: 'system-default' },
+      { id: 'universal', category: 'universal-tools' },
+      { id: 'butler', category: 'web-services' },
+    ])
+    expect(listAgentCards(ctx).map(card => card.id)).toEqual(['blog', 'closedoff'])
+  })
+
+  it('分类带空白也按声明处理，不会被误判成智能体', () => {
+    const ctx = fakeContext([{ id: 'auth', category: ' system-default ' }, { id: 'blog', category: ' agents ' }])
+    expect(listAgentCards(ctx).map(card => card.id)).toEqual(['blog'])
   })
 
   it('保留名称、版本、入口和工具数量等展示字段', () => {

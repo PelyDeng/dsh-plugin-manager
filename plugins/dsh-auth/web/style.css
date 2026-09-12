@@ -22,3 +22,44 @@ body:has(#conversation-preview[open]){overflow:hidden}.conversation-mobile-time{
 
 /* Model routes are compact; provider credentials are secondary disclosure content. */
 .model-section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.model-section-heading h2{margin:0;font-size:16px}.model-section-heading button{min-height:34px;padding:6px 10px}.chat-model-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin:16px 0 24px}.chat-model-card{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:5px;padding:16px;border:1px solid var(--line);border-radius:12px;cursor:pointer;min-width:0;background:#fff}.chat-model-card:hover{border-color:#a2aab8}.chat-model-card.is-default{border-color:#5269ba;background:#f6f8ff;box-shadow:0 0 0 1px #5269ba}.chat-model-card>input{position:absolute;right:12px;top:12px;min-height:0;width:17px;height:17px;margin:0;accent-color:#5269ba}.chat-model-card>span:first-of-type,.chat-model-card>strong{max-width:calc(100% - 24px);overflow-wrap:anywhere}.chat-model-card>strong{font-size:15px}.model-id{font-size:11px;color:#89909d;overflow-wrap:anywhere}.default-model-badge{font-size:11px;color:#697386;margin-top:5px}.is-default .default-model-badge{color:#425da8;font-weight:600}.chat-model-card:has(input:focus-visible){outline:2px solid #5269ba;outline-offset:3px}.chat-model-card:has(input:disabled){cursor:default}.provider-settings{border-top:1px solid var(--line);padding-top:4px}.provider-settings>summary{cursor:pointer;font-size:14px;padding:14px 0}.provider-settings>summary>span{margin-left:12px}.provider-settings .model-note{margin-top:12px}.provider-settings .model-grid{gap:12px}@media(max-width:540px){.chat-model-grid{grid-template-columns:1fr;gap:10px}.chat-model-card{padding:14px}.provider-settings>summary>span{display:none}}
+/* 插件页按分类分区展示：外层容器纵向堆叠分区，卡片网格下沉到分区内部。
+   分区标题给出中文分类名与数量，卡片沿用原有外观但底色略浅，让分组读起来是分组的。 */
+#plugins.plugin-grid{display:flex;flex-direction:column;gap:26px}
+.plugin-section{display:flex;flex-direction:column;gap:10px}
+.plugin-section-head{display:flex;align-items:baseline;gap:10px;padding:0 2px}
+.plugin-section-title{margin:0;font-size:14px;line-height:22px;font-weight:600;color:#3d4046}
+.plugin-section-count{font-size:12px;color:var(--muted)}
+.plugin-section .plugin-grid{gap:12px}
+.plugin-section .plugin-card{background:var(--soft)}
+#plugins>.empty{width:100%}
+/* 插件页改用紧凑行式：一行一个插件，名称/说明/工具预览/元信息/操作各占一段。
+   比卡片网格更适合「一眼比较版本与工具数」，也与管家成员列表的观感一致。
+   旧的 .plugin-card 规则留在原处不影响（已无元素使用该类）。 */
+.plugin-section .plugin-grid{display:flex;flex-direction:column;gap:0;background:#fff;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.plugin-row{display:flex;align-items:center;gap:14px;padding:14px 16px;border-top:1px solid var(--line);min-width:0}
+.plugin-row:first-child{border-top:0}
+.plugin-row:hover{background:var(--soft)}
+.plugin-monogram{flex:none;width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:600;color:#fff;background:var(--accent,#3370ff)}
+.plugin-row-body{flex:1 1 auto;min-width:0}
+.plugin-row-name{margin:0 0 3px;font-size:14px;line-height:22px;font-weight:600}
+.plugin-row .plugin-description{margin:0 0 6px;font-size:12px;line-height:18px;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+.plugin-row .tool-preview{display:flex;flex-wrap:wrap;gap:4px;min-height:0}
+.plugin-row .preview-row{font-size:11px;line-height:18px;padding:0 6px;border-radius:4px;background:#f1f2f4;color:#62666e;max-width:12em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plugin-row-meta{flex:none;display:flex;align-items:center;gap:8px;width:210px;justify-content:flex-end}
+.plugin-row-meta .plugin-meta{margin:0;font-size:11px;color:#93969d;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plugin-row-actions{flex:none;display:flex;align-items:center;gap:8px;min-width:120px;justify-content:flex-end}
+.plugin-row-actions .button{font-size:12px;padding:5px 10px;min-height:30px}
+.plugin-row-toggle{width:30px;height:30px;min-height:30px;padding:0;border-color:transparent;color:#8f949d}
+.plugin-row-toggle:hover{color:#3d4046;background:var(--soft)}
+.plugin-row-toggle svg{width:16px;height:16px}
+@media(max-width:960px){
+  .plugin-row{flex-wrap:wrap;gap:10px}
+  .plugin-row-body{flex-basis:calc(100% - 52px)}
+  .plugin-row-meta{width:auto;order:3;justify-content:flex-start}
+  .plugin-row-actions{order:4;margin-left:auto}
+}
+@media(max-width:540px){
+  .plugin-row{padding:12px;gap:8px}
+  .plugin-row .plugin-description{-webkit-line-clamp:2}
+  .plugin-row-actions .button{font-size:11px;padding:4px 8px;min-height:28px}
+}

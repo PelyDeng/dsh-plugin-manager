@@ -62,7 +62,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     name: string
     version: string
     description: string
-    deepseekPlugin: { id: string; displayName: string; permissions: string[] }
+    deepseekPlugin: { id: string; displayName: string; permissions: string[]; category?: string }
   }
 
   const access = createAccess(ctx, {
@@ -85,6 +85,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     description: manifest.description,
     entryPath: config.routePrefix,
     permissions: manifest.deepseekPlugin.permissions,
+    ...(manifest.deepseekPlugin.category === undefined ? {} : { category: manifest.deepseekPlugin.category }),
     tools: [],
   }))
 

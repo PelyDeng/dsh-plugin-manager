@@ -114,7 +114,7 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   ctx.effect(()=>registerConversations(ctx,chat.provider))
   const translations=new ReasoningTranslations({ctx,pluginId:'blog',path:join(root,'reasoning-translations.sqlite'),access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
   const manifest=JSON.parse(await readFile(blogResource('package.json'),'utf8'))
-  ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],tools:jobs.chatTools}))
+  ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],category:'agents',tools:jobs.chatTools}))
   for(const [suffix,file,mime] of [['','web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],['/style.css','web/style.css','text/css'],['/writing.css','web/writing.css','text/css'],['/chat-base.css','web/chat-base.css','text/css'],['/chat-theme.css','web/chat-theme.css','text/css'],...['chevron-down','copy','check','like','dislike','branch','database','clock','think','api','send','user','chat','stop'].map(name=>[`/media/icon-${name}.svg`,`web/media/icon-${name}.svg`,'image/svg+xml']),['/icons.svg','web/icons.svg','image/svg+xml']] as const){
     // `file` 已是相对子包根的路径（web/... 或 dist/web/...），直接相对 agentRoot 解析。
     const content=(await readFile(blogResource(file),'utf8')).replaceAll('__BASE__',config.routePrefix)

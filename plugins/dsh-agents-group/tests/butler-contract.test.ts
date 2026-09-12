@@ -21,14 +21,22 @@ const manifests: AgentManifest[] = [
   { id: 'blog', displayName: '博客智能体', directory: 'blog', category: '博客工作台', description: '写作、发布、图床与备份' },
 ]
 
-/** 只实现这两个模块实际用到的事件通道。 */
+/**
+ * 只实现这两个模块实际用到的事件通道。
+ *
+ * 目录条目默认补上「智能体」分类：管家只把这一类插件当成可对话成员，本测试关心的
+ * 是跨插件契约（群组的 Agent 能否被管家列成可调度成员），不是分类过滤本身。
+ */
 function fakeContext(executors: readonly unknown[], plugins: readonly unknown[] = []): Context {
   return {
     root: {
       emit(name: string, accept: (value: unknown) => void) {
         if (name === BUTLER_EXECUTORS_EVENT) { for (const executor of executors) accept(executor); return }
         if (name === 'ecosystem/catalog') {
-          for (const plugin of plugins) accept({ protocol: 1, plugin })
+          for (const plugin of plugins) {
+            const entry = plugin as { category?: string }
+            accept({ protocol: 1, plugin: { ...entry, category: entry.category ?? 'agents' } })
+          }
         }
       },
     },

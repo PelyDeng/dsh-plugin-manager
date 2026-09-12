@@ -36,7 +36,8 @@
     "schemaVersion": 3,
     "id": "butler",
     "defaultEnabled": true,
-    "displayName": "管家工作台",
+    "displayName": "牛马聊天群",
+    "category": "web-services",
     "entryPath": "/butler",
     "healthPath": "/butler/ready",
     "permissions": [

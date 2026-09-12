@@ -50,7 +50,7 @@ export function readPlugin(root) {
   const meta = manifest.deepseekPlugin;
   const label = `${packageLabel}/package.json#deepseekPlugin`;
   requireValue(meta && meta.schemaVersion === 3, `${label}.schemaVersion 仅支持 3；旧 env 声明请迁移为 runtimeConfig，并从 files 移除用户配置。`);
-  object(meta, ['schemaVersion', 'id', 'defaultEnabled', 'runtimeConfig', 'configuration', 'healthPath', 'verifyFiles', 'development', 'displayName', 'entryPath', 'permissions'], label);
+  object(meta, ['schemaVersion', 'id', 'defaultEnabled', 'runtimeConfig', 'configuration', 'healthPath', 'verifyFiles', 'development', 'displayName', 'entryPath', 'permissions', 'category'], label);
   validateConfiguration(meta.configuration, label);
   requireValue(typeof meta.id === 'string' && /^[a-z][a-z0-9-]*$/u.test(meta.id) && !['all', 'none', 'dsh-console'].includes(meta.id), `${label}.id 无效或为保留字。`);
   requireValue(typeof manifest.name === 'string' && /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(manifest.name), `${packageLabel} 包名无效。`);
@@ -86,6 +86,8 @@ export function readPlugin(root) {
     && !meta.healthPath.startsWith('//') && !meta.healthPath.split('/').some(part => part === '.' || part === '..')), `${label}.healthPath 无效。`);
   requireValue(meta.displayName === undefined || (typeof meta.displayName === 'string' && meta.displayName.trim().length > 0), `${label}.displayName 必须是非空文本。`);
   requireValue(meta.entryPath === undefined || isPluginPath(meta.entryPath), `${label}.entryPath 必须是规范的非根插件路由。`);
+  // 插件分类只用于认证页面分组与管家端成员过滤；取值不设枚举，第三方插件可以自定义。
+  requireValue(meta.category === undefined || (typeof meta.category === 'string' && meta.category.trim().length > 0 && meta.category.trim().length <= 40), `${label}.category 必须是不超过 40 字的非空文本。`);
   const permissions = meta.permissions ?? [];
   requireValue(Array.isArray(permissions) && permissions.every(permission => typeof permission === 'string'
     && new RegExp(`^${meta.id}:[a-z][a-z0-9-]*$`, 'u').test(permission)) && new Set(permissions).size === permissions.length,
@@ -97,7 +99,7 @@ export function readPlugin(root) {
   requireValue(!verifyFiles.some(privatePackagePath), `${packageLabel} 的公开资源不得指向用户配置或部署数据。`);
   return { id: meta.id, package: manifest.name, version: manifest.version,
     displayName: meta.displayName ?? manifest.name, description: manifest.description, entryPath: meta.entryPath, permissions,
-    defaultEnabled: meta.defaultEnabled ?? true, runtimeConfig, configuration: meta.configuration, development, healthPath: meta.healthPath, verifyFiles };
+    category: meta.category?.trim(), defaultEnabled: meta.defaultEnabled ?? true, runtimeConfig, configuration: meta.configuration, development, healthPath: meta.healthPath, verifyFiles };
 }
 
 /** Return all declared plugins in stable id order; malformed declarations fail before work starts. */

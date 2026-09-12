@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 // Browser-native module is intentionally plain JavaScript and is tested as shipped.
 // @ts-expect-error The static browser module has no TypeScript declaration file.
-import { filterTools, groupToolsByCategory, pageTools, pageUsers, highlightParts, localEntry, toolCategory, toolDisplayName } from '../web/catalog-view.js'
+import { filterTools, groupPluginsByCategory, groupToolsByCategory, pageTools, pageUsers, highlightParts, localEntry, toolCategory, toolDisplayName } from '../web/catalog-view.js'
 
 const tools = Array.from({ length: 37 }, (_, index) => ({
   name: `demo_tool_${index}`, description: `中文工具说明 ${index}`,
@@ -104,5 +104,41 @@ describe('工具分类分组', () => {
     expect(toolCategory({ category: '   ' })).toBeUndefined()
     expect(toolCategory({})).toBeUndefined()
     expect(toolCategory({ category: 42 })).toBeUndefined()
+  })
+})
+
+describe('plugin catalog grouping', () => {
+  const rows = (...items: readonly (readonly [string, string | undefined])[]) =>
+    groupPluginsByCategory(items.map(([id, category]) => ({ id, category }))).map(group => ({ label: group.label, ids: group.plugins.map(plugin => plugin.id) }))
+
+  it('按固定顺序展示四个分类：系统默认、通用/工具、智能体、网页服务', () => {
+    // 输入顺序刻意打乱，输出顺序必须由分类决定，不随目录返回顺序变化。
+    expect(rows(['butler', 'web-services'], ['example', 'agents'], ['tools', 'universal-tools'], ['auth', 'system-default'], ['blog', 'agents'])).toEqual([
+      { label: '系统默认', ids: ['auth'] },
+      { label: '通用/工具', ids: ['tools'] },
+      { label: '智能体', ids: ['example', 'blog'] },
+      { label: '网页服务', ids: ['butler'] },
+    ])
+  })
+
+  it('未知分类排在已知分类之后，未声明分类排最后', () => {
+    expect(rows(['x', 'unknown-thing'], ['auth', 'system-default'], ['legacy', undefined], ['y', 'another'])).toEqual([
+      { label: '系统默认', ids: ['auth'] },
+      { label: 'unknown-thing', ids: ['x'] },
+      { label: 'another', ids: ['y'] },
+      { label: '未分类', ids: ['legacy'] },
+    ])
+  })
+
+  it('空白分类视为未分类；空分类不产生标题', () => {
+    expect(rows(['a', '   '], ['b', ''])).toEqual([{ label: '未分类', ids: ['a', 'b'] }])
+    expect(groupPluginsByCategory([])).toEqual([])
+  })
+
+  it('分组不改变组内原有顺序，搜索后仍保持稳定', () => {
+    const plugins = [{ id: 'm1', category: 'agents' }, { id: 'm2', category: 'agents' }, { id: 'a1', category: 'system-default' }]
+    expect(groupPluginsByCategory(plugins).map(group => group.plugins.map(plugin => plugin.id))).toEqual([['a1'], ['m1', 'm2']])
+    // 搜索收窄后再分组，同组内相对顺序保持不变。
+    expect(groupPluginsByCategory(plugins.filter(plugin => plugin.id !== 'm1')).map(group => group.plugins.map(plugin => plugin.id))).toEqual([['a1'], ['m2']])
   })
 })

@@ -21,6 +21,7 @@
     "schemaVersion": 3,
     "id": "pirate",
     "displayName": "黑珍珠号指挥台",
+    "category": "web-services",
     "entryPath": "/pirate",
     "healthPath": "/pirate/ready",
     "defaultEnabled": false,

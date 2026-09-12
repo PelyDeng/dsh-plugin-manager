@@ -8,10 +8,16 @@
  *    插件名。
  * 2. 调度入口（本插件的 `butler/executors` 事件）说明哪些应用愿意并且能够接收
  *    子任务。目录里有但没登记执行入口的应用照样展示，只是标记为不可调度。
+ *
+ * ## 为什么只列「智能体」分类
+ *
+ * 目录里同时有认证、控制台、工具集这类插件，它们不是可以对话的对象。管家页面是
+ * 成员名单，不是插件清单，所以只收 `category` 声明为「智能体」的插件。分类取自
+ * 插件自己的清单声明，所以新增一个 Agent 只要声明分类就会自动出现，管家侧不用改。
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { listPlugins } from '@dsh-plugin-manager/plugin-kit'
+import { AGENT_PLUGIN_CATEGORY, listPlugins } from '@dsh-plugin-manager/plugin-kit'
 import { BUTLER_EXECUTORS_EVENT, type ButlerAgentExecutor } from './protocol.ts'
 
 /** 页面上一张 Agent 卡片需要的全部信息，全部来自真实声明或注册，不含配置值。 */
@@ -66,28 +72,30 @@ export function agentCard(ctx: Context, id: string): AgentCard | undefined {
 }
 
 /**
- * 列出全部已接入 Agent。
+ * 列出全部已接入 Agent（只含声明为「智能体」分类的插件）。
  *
  * 目录读取失败时直接抛出：宁可在页面上显示“读取失败”，也不要退化成一份写死的
  * 名单，那样用户会以为三个插件就是全部。
  */
 export function listAgentCards(ctx: Context): AgentCard[] {
   const executors = collectExecutors(ctx)
-  return listPlugins(ctx).map(plugin => {
-    const executor = executors.get(plugin.id)
-    return {
-      id: plugin.id,
-      displayName: plugin.displayName,
-      packageName: plugin.packageName,
-      version: plugin.version,
-      description: plugin.description,
-      entryPath: plugin.entryPath ?? '',
-      permissions: plugin.permissions,
-      toolCount: plugin.tools.length,
-      dispatchable: executor !== undefined,
-      capabilities: normalizeCapabilities(executor?.capabilities),
-    }
-  })
+  return listPlugins(ctx)
+    .filter(plugin => plugin.category?.trim() === AGENT_PLUGIN_CATEGORY)
+    .map(plugin => {
+      const executor = executors.get(plugin.id)
+      return {
+        id: plugin.id,
+        displayName: plugin.displayName,
+        packageName: plugin.packageName,
+        version: plugin.version,
+        description: plugin.description,
+        entryPath: plugin.entryPath ?? '',
+        permissions: plugin.permissions,
+        toolCount: plugin.tools.length,
+        dispatchable: executor !== undefined,
+        capabilities: normalizeCapabilities(executor?.capabilities),
+      }
+    })
 }
 
 /**
