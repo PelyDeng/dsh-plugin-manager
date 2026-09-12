@@ -130,7 +130,9 @@ test('current model, version and CI questions have source evidence in the shippe
       ['.github/workflows/check.yml', /os: \[ubuntu-latest, windows-latest, macos-latest\]/],
       ['.github/workflows/release.yml', /tags: \['v\*'\]/],
       ['doc/versioning.md.tmpl', /\{\{FRAMEWORK_VERSION\}\}/],
-      ['README.md', /知识库助手和销售报表助手/],
+      // README 按角色重构过（原「知识库助手和销售报表助手」一节已并入按角色的入口），
+      // 断言新结构下同样稳定的表述：框架定位 + 「先选择你的角色」入口。
+      ['README.md', /插件交付与运维框架[\s\S]*先选择你的角色/],
       ['doc/host-compatibility.md', /inject/],
       ['packages/plugin-manager/src/supervisor.mjs', /startupDeadline/],
       ['packages/plugin-manager/src/session-snapshot.mjs', /restoreSessionSnapshot/],
