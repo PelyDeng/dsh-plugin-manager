@@ -25,6 +25,14 @@ test('source argument validation rejects unsupported, duplicate and missing opti
   assert.throws(() => sourceArguments(['--rebuild-plugins', 'alpha', '--rebuild-plugins', 'beta']), /argument/);
 });
 
+test('skip-plugin-check is a value-less switch that composes with resume and rejects duplicates', () => {
+  assert.deepEqual(sourceArguments(['--skip-plugin-check']), ['--skip-plugin-check']);
+  assert.deepEqual(sourceArguments(['--skip-plugin-check', '--resume']), ['--skip-plugin-check', '--resume']);
+  assert.throws(() => sourceArguments(['--skip-plugin-check', '--skip-plugin-check']), /argument/);
+  // 它不参与「互斥」那一组：跳过检查与恢复原操作并不冲突。
+  assert.deepEqual(sourceArguments(['--skip-plugin-check', '--recover', '--data-compatible']), ['--skip-plugin-check', '--recover', '--data-compatible']);
+});
+
 test('partial build selection reaches the private update and fresh worker under the source lock', async t => {
   const f = fixture(t), args = ['--rebuild-plugins', 'alpha,charlie'];
   f.put('deploy/scripts/build.mjs', 'import {writeFileSync} from "node:fs"; writeFileSync("selection.json", JSON.stringify(process.argv.slice(2))); process.send({type:"source-build-finished",code:0});');

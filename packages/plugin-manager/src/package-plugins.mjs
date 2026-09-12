@@ -8,7 +8,7 @@ import { verifyBuildPackage } from './verify-package.mjs';
 import { validateVerification } from './verification.mjs';
 
 /** Write one manifest after archive validation; step wraps each synchronous task for progress display. */
-export function packagePlugins(root, requested, output, packageDirectory, step = (_label, run) => run()) {
+export function packagePlugins(root, requested, output, packageDirectory, step = (_label, run) => run(), { skipCheck = false } = {}) {
   const selected = sourcePlugins(root, requested, packageDirectory);
   const single = packageDirectory !== undefined;
   if (single && !existsSync(resolve(root, 'pnpm-lock.yaml'))) throw new Error('独立包打包需要包根 pnpm-lock.yaml。请在作者项目根执行 pnpm install --ignore-workspace 生成锁文件后重试。');
@@ -18,7 +18,8 @@ export function packagePlugins(root, requested, output, packageDirectory, step =
   preparePluginDependencies(root, selected, step);
   const plugins = [];
   for (const plugin of selected) {
-    runPluginTask(root, plugin, 'check', step);
+    // 'build' 走的是同一条「构建 + 打包」路径，只是不再追加开发期的检查步骤。
+    runPluginTask(root, plugin, skipCheck ? 'build' : 'check', step);
     step(`打包插件 ${plugin.id}`, () => {
       const destination = resolve(output, `${plugin.id}.tgz`);
       runPnpm([...(single ? ['--ignore-workspace'] : []), 'pack', '--json', '--out', destination], resolve(root, plugin.directory ?? '.'), { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 32 * 1024 * 1024 });
@@ -45,11 +46,11 @@ export function packagePlugins(root, requested, output, packageDirectory, step =
 }
 
 export function main(argv = process.argv.slice(2), step) {
-  const options = parseOptions(argv, ['root', 'plugins', 'output', 'package']);
+  const options = parseOptions(argv, ['root', 'plugins', 'output', 'package'], ['skip-plugin-check']);
   if (!options.root) throw new Error('必须显式指定 --root 项目根目录。');
   const root = resolve(options.root);
   const output = resolve(root, options.output ?? `.local/artifacts/${randomUUID()}/plugins`);
-  const manifest = packagePlugins(root, options.plugins, output, options.package, step);
+  const manifest = packagePlugins(root, options.plugins, output, options.package, step, { skipCheck: options['skip-plugin-check'] === true });
   console.log(`插件产物：${output}`);
   console.log(`交付插件：${manifest.plugins.map(plugin => plugin.id).join(',') || 'none'}`);
   console.log('下一步：交付整个发布目录（manifest.json 和全部 tgz）；部署者放入 incoming/<应用目录> 后执行 build，并请求插件声明的 healthPath。');

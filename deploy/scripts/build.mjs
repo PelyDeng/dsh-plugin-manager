@@ -34,7 +34,7 @@ export function release({ root = repositoryRoot, ...options } = {}, execute = co
 if (direct) {
   try {
     const options = siteArguments(process.argv.slice(2));
-    if (options.help) console.log('Windows: .\\build.ps1 [--config <env.conf>] [--rebuild-plugins <id,...> | --resume | --recover --data-compatible]\nLinux/macOS: bash build.sh [相同参数]\nsource 构建源码；archives 读取 incoming 完整发布目录。doctor 只读诊断锁；unlock-source 安全解锁。');
+    if (options.help) console.log('Windows: .\\build.ps1 [--config <env.conf>] [--rebuild-plugins <id,...> | --skip-plugin-check | --resume | --recover --data-compatible]\nLinux/macOS: bash build.sh [相同参数]\nsource 构建源码；archives 读取 incoming 完整发布目录。--skip-plugin-check 跳过插件检查（CI 已跑过时使用，产物不变）。doctor 只读诊断锁；unlock-source 安全解锁。');
     else {
       frameworkVersion(repositoryRoot);
       const file = resolve(repositoryRoot, options.config ?? '.local/env.conf');
@@ -50,7 +50,7 @@ if (direct) {
         const { bootstrapSource } = await import('./bootstrap.mjs');
         bootstrapSource(repositoryRoot, process.argv.slice(2), normalizeEnvironment(process.env), command);
         await loadSource();
-        release({ config: options.config, resume: options.resume, recover: options.recover, dataCompatible: options['data-compatible'], rebuildPlugins: options['rebuild-plugins'] });
+        release({ config: options.config, resume: options.resume, recover: options.recover, dataCompatible: options['data-compatible'], rebuildPlugins: options['rebuild-plugins'], skipPluginCheck: options['skip-plugin-check'] });
       }
     }
   } catch (error) { console.error(error.message); process.exitCode = 1; }
