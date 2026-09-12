@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url));
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -94,6 +94,29 @@ test('selection and arguments reject empty, repeated and unknown values', t => {
   const result = run(['scripts/plugins.mjs', '--root', emptyRoot]);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { plugins: [], selected: [] });
+});
+
+test('value-less switches parse only when declared, and still reject pairing forms', () => {
+  assert.deepEqual(parseOptions(['--plugins', 'a', '--skip-plugin-check'], ['plugins'], ['skip-plugin-check']), { 'skip-plugin-check': true, plugins: 'a' });
+  assert.deepEqual(parseOptions(['--plugins', 'a'], ['plugins']), { plugins: 'a' });
+  // 未声明的开关不能悄悄变成键；声明过也不接受重复。
+  for (const args of [['--plugins', 'a', '--skip-plugin-check'], ['plugins', 'a', 'skip-plugin-check']]) assert.throws(() => parseOptions(args, ['plugins']));
+  assert.throws(() => parseOptions(['--skip-plugin-check', '--skip-plugin-check'], ['plugins'], ['skip-plugin-check']));
+});
+
+test('skipping the plugin check builds the archive without running the check script', t => {
+  const root = fixture(t);
+  plugin(root, 'skip');
+  const directory = resolve(root, 'plugins/plugin-skip');
+  const skipped = resolve(root, 'release-skipped');
+  const manifest = packagePlugins(root, 'skip', skipped, undefined, undefined, { skipCheck: true });
+  assert.equal(manifest.plugins.length, 1);
+  assert.equal(existsSync(resolve(directory, 'checked')), false);
+  assert.equal(existsSync(resolve(directory, 'dist/index.mjs')), true);
+  // 同一插件再走默认路径时必须真的跑了 check，否则上面的断言可能只是脚本从未生效。
+  const checked = resolve(root, 'release-checked');
+  packagePlugins(root, 'skip', checked);
+  assert.equal(existsSync(resolve(directory, 'checked')), true);
 });
 
 test('optional metadata and deployment-only settings do not block build, pack or release consumption', t => {

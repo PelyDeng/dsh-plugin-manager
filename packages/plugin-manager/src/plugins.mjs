@@ -171,14 +171,21 @@ export function sourcePlugins(root, requested, packageDirectory) {
 }
 
 /** Parse repository options once for every CLI consumer. */
-export function parseOptions(args, allowed = ['root', 'plugins', 'format']) {
+export function parseOptions(args, allowed = ['root', 'plugins', 'format'], boolean = []) {
   if (args[0] === '--') args = args.slice(1);
   const options = {};
-  for (let index = 0; index < args.length; index += 2) {
-    const name = args[index].slice(2);
-    requireValue(args[index].startsWith('--') && allowed.includes(name) && !Object.hasOwn(options, name)
-      && args[index + 1] && !args[index + 1].startsWith('--'), `无效或重复参数：${args[index]}。`);
-    options[name] = args[index + 1];
+  const rest = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const name = args[index].startsWith('--') ? args[index].slice(2) : null;
+    // 无值开关单独成项；其余参数仍是严格的 --name value 成对形式。
+    if (name !== null && boolean.includes(name) && !Object.hasOwn(options, name)) { options[name] = true; continue; }
+    rest.push(args[index]);
+  }
+  for (let index = 0; index < rest.length; index += 2) {
+    const name = rest[index].slice(2);
+    requireValue(rest[index].startsWith('--') && allowed.includes(name) && !Object.hasOwn(options, name)
+      && rest[index + 1] && !rest[index + 1].startsWith('--'), `无效或重复参数：${rest[index]}。`);
+    options[name] = rest[index + 1];
   }
   return options;
 }

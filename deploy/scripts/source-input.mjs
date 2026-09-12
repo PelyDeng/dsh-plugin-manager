@@ -36,13 +36,15 @@ export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareMan
         ...(context.source.reuse ? { rebuilt, reused: context.source.reuse.builtFrom.map(p => p.id), reuseSource: context.source.reuse.sourceRecord } : {}) };
     },
     prepare(context) {
-      const { root, site, operation, record, env, execute, run, step, capture, probe, inspect, previous, sourceInput } = context;
+      const { root, site, operation, record, env, execute, run, step, capture, probe, inspect, previous, sourceInput, skipPluginCheck } = context;
       const { git, host, rebuilt, reuse } = context.source;
       if (sourceInput) validateImageConfig(sourceInput.image);
       prepareWorkspaceDependencies(root, env, execute);
       const tools = this.prepareTools(context);
       Object.assign(record, { managerArchive: tools.archive, managerHash: tools.sha256, toolRoot: tools.toolRoot });
-      run(process.execPath, ['scripts/package-plugins.mjs', '--plugins', rebuilt.join(',') || 'none', '--output', resolve(operation, 'fresh')]);
+      // 插件检查是开发期门禁：CI 已对同一提交跑过，部署时再对每个插件重复一次 pnpm typecheck
+      // 只是把发布拖长（实测 5 个插件约 56 秒）。跳过它不改变产物，只改变谁来担这道校验。
+      run(process.execPath, ['scripts/package-plugins.mjs', '--plugins', rebuilt.join(',') || 'none', '--output', resolve(operation, 'fresh'), ...(skipPluginCheck ? ['--skip-plugin-check'] : [])]);
       const fresh = loadRelease(resolve(operation, 'fresh/manifest.json'));
       if (fresh.plugins.length !== rebuilt.length || fresh.plugins.some(p => !rebuilt.includes(p.id))) throw new Error('Built plugin archives differ from the requested selection.');
       const old = previous?.manifest ? loadRelease(resolve(root, previous.manifest)) : undefined;

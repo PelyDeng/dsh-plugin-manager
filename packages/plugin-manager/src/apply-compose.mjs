@@ -95,7 +95,10 @@ export function applyCompose(deployment, release, execute = executeDocker, runti
     }
     for (const name of residuals) rmSync(join(deployment.profileRoot, name));
   }
-  run([...args, 'up', '-d', '--force-recreate', '--wait', '--wait-timeout', '180', 'dsh']);
+  // 这个超时只在**失败**时体现价值：宿主正常起停实测约 51 秒可应答、57 秒被 Docker 判为
+  // healthy，180 秒意味着一个起不来的容器要让部署者白等三分钟才看到失败。90 秒仍有约 58%
+  // 余量，而失败反馈快一倍。启动确实更慢的宿主会在这里如实超时，不会把问题藏起来。
+  run([...args, 'up', '-d', '--force-recreate', '--wait', '--wait-timeout', '90', 'dsh']);
   atomicJSON(join(deployment.artifacts, 'active-compose.json'), { schemaVersion: 1, project, path: generated.path, runtime, appliedAt: new Date().toISOString() });
   return { ...generated, project, status: 'ready' };
 }
