@@ -6,8 +6,9 @@ DSH 生态里的智能体群组。多个业务智能体合在一个插件项目�
 这样做的目的：不再为每个新智能体单独维护一个插件项目，同时不牺牲「谁能访问哪个智能体」
 这条权限边界。
 
-> 当前状态：**P0 骨架**。群组本身、探针、子包机制与失败隔离已就绪，业务智能体尚未迁入
-> （`src/agents/registry.ts` 的清单还是空的）。迁移按实施计划 P1/P2 进行。
+> 当前状态：**两个业务智能体已迁入**（封闭化、博客），各自页面与授权独立。群组根
+> `/agents` 的总览页尚未实现；模型白名单与工具分类分组也待做（见实施计划 P3–P5）。
+> 尚未在真实宿主做端到端验证。
 
 ## 目录结构
 
@@ -24,8 +25,8 @@ plugins/dsh-agents-group/
 │   ├── config.ts            # 群组 Config Schema
 │   └── agents/
 │       ├── registry.ts      # ★ Agent 静态清单与端点推导
-│       ├── closedoff.ts     # P1：封闭化的装载适配层
-│       └── blog.ts          # P2：博客的装载适配层
+│       ├── closedoff.ts     # 封闭化的装载适配层
+│       └── blog.ts          # 博客的装载适配层
 ├── agents/                  # ★ 各 Agent 的实体，独立 pnpm 子包
 │   ├── closedoff/           # @dsh-agents-group/closedoff
 │   └── blog/                # @dsh-agents-group/blog
@@ -58,6 +59,20 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
 用静态清单而不是扫描目录：构建产物要可树摇、类型要可检查、装载顺序要确定，动态扫描在
 打包后不可靠。
 
+## 当前群组里的 Agent
+
+| id | 显示名 | 页面 | 权限 | 说明 |
+| --- | --- | --- | --- | --- |
+| `closedoff` | 封闭化管理智能助手 | `/agents/closedoff` | `closedoff:access` | 园区业务查询、车辆轨迹、三维可视化 |
+| `blog` | 博客智能体 | `/agents/blog` | `blog:access` | 写作、发布、图床、备份；**强制认证** |
+
+`blog` 在清单里标了 `requiresAuthentication`：它的业务前提是必须可信身份（按用户隔离草稿、
+附件与备份），所以即使在 standalone 模式的群里也会拿到 `authenticated` 的访问校验。缺提供者时
+它照常挂载、路由照常注册，请求时才以「认证服务不可用」失败 —— 这样运维能看出是谁在那儿，
+而不是子包凭空消失。
+
+探针：群组级 `/agents/health`、`/agents/ready`（正文列出每个 Agent 的状态），
+以及每个 Agent 自己的 `/agents/<id>/ready`。子包不再注册探针。
 ## 新增一个 Agent 的步骤
 
 1. 建子包 `agents/<id>/`，包名 `@dsh-agents-group/<id>`，**不要声明 `deepseekPlugin`**
