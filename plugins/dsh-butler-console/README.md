@@ -1,0 +1,151 @@
+# 管家工作台（dsh-butler-console）
+
+DSH 生态里的智能体群聊。你当老板，管家负责听懂你的目标、把活拆开、在群里 @ 对应的
+成员，各成员自己干活并实时把进度和结果说出来，最后管家汇总交差。
+
+界面参考飞书群聊的形态，但画风是手绘涂鸦：奶油纸底、歪边框、贴纸和小涂鸦。做成这样
+是有意的 —— 这是个「我说了算」的地方，不该长得像公司内部工具。
+
+## 群里有什么
+
+- **左栏**：派活记录。会话标题取用户的第一句提问（由宿主首句标题服务生成），每行还带
+  最新一条消息预览，所以一眼能看出这次派的是什么活。可搜索、可切换。
+- **中栏**：群聊。你的话右对齐，管家和每位成员各占一个气泡，头像与名字颜色区分身份。
+  顶部一条协同链路：`老板发话 → 管家听懂 → 派活 → 牛马干活 → 交差`。
+- **右栏**：牛马档案。给每位成员改外号、换头像、挑配色；下面是状态计数与最近的失败记录。
+- 窄屏下右栏收成抽屉、左栏收成侧边栏，主要流程仍然可用。
+
+页面不做服务器发布、插件安装和版本升级 —— 那些归 DSH Plugin Manager。
+
+## 职责边界
+
+| 角色 | 负责 | 不负责 |
+| --- | --- | --- |
+| 管家 | 听懂、拆解、分发、汇总 | 决定成员用什么工具 |
+| 成员（子 Agent） | 自己完成任务、自己调用工具、自己输出进度 | 决定别人怎么做 |
+| 本插件 | 展示状态、保存历史、转发回复 | 改写宿主会话日志 |
+
+边界在代码里是强制的：管家只注册了一个 `butler_plan` 工具，并用
+`tools.restrict({ allow: ['butler_plan'] })` 把自己能看到的东西限死，因此它没有能力
+绕过计划去执行任何业务操作，也没有创建或释放成员 Agent 的代码路径。
+
+## 怎么接一个新成员
+
+**这是本插件最重要的扩展点：新增 Agent 不需要改本插件的代码。**
+
+名单每次都从插件目录（kit 的 `ecosystem/catalog`）实时读，所以插件装上就出现。能不能
+接活、能接什么活，由插件自己声明：
+
+```ts
+import type { ButlerAgentExecutor } from 'dsh-butler-console'
+
+ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecutor) => void) => {
+  accept({
+    protocol: 1,
+    agentId: 'closedoff',                       // 必须与 deepseekPlugin.id 一致
+    capabilities: ['园区数据查询', '车辆轨迹'],   // 管家据此决定把什么活派给你
+    async dispatch(request) {
+      request.onProgress?.({ stage: '翻资料', phase: 'tool', tool: '查询通行记录' })
+      const answer = await runMyOwnAgent(request.brief, {
+        signal: request.signal,
+        onText: chunk => request.onProgress?.({ delta: chunk, stage: '说话' }),
+      })
+      return { status: 'succeeded', summary: answer, conversationId: 'closedoff-web-…' }
+    },
+    // 可选：想被中途追问就实现它
+    async reply(request) {
+      return { status: 'succeeded', summary: await answerFollowUp(request.text) }
+    },
+  })
+}, { global: true }))
+```
+
+要点：
+
+- `capabilities` 会写进管家的提示词，所以管家**只在你声明的范围内派活**，不会猜。
+- 没声明 `capabilities` 就表示「什么都能接」，管家按子任务语义自行判断。
+- `delta` 是**增量**：页面按到达顺序追加到同一条气泡里，不要每次发整段。
+- `needsReply: true` 让子任务进入 `waiting_user`，页面上就会出现回复框；用户回的内容
+  会通过 `reply()` 交回给你。
+- 没有登记执行入口的插件照样出现在右栏，只是标记为不在场，管家不会给它派活。
+
+## 右侧「外号」为什么不改插件身份
+
+右栏的昵称、头像、配色是**本地显示别名**：只覆盖你自己页面上的显示，按登录用户存储。
+插件声明的 `displayName` 与 `id` 始终以次要文字保留在每个配置项下方（`插件声明：xxx`），
+所以「页面上这个外号对应哪个插件」永远可追溯，也不会因为给某个 Agent 改名而破坏
+「名单来自插件声明、不硬编码」这条约束。
+
+## 配置
+
+配置由管理器按实例 `plugin.json` 生成；字段全部有默认值，未配置时按默认运行。
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `accessMode` | `authenticated` | `standalone` 仅用于本机调试 |
+| `publicOrigin` | 空 | 认证模式必填，HTTP(S) origin，不带路径 |
+| `routePrefix` | `/butler` | 页面与接口前缀 |
+| `subtaskTimeoutMs` | 300000 | 单个子任务超时，超时中止并释放成员 |
+| `turnTimeoutMs` | 600000 | 单轮上限 |
+| `maxMessageChars` | 8000 | 单条消息字符数上限 |
+| `maxResultChars` | 8000 | 单个子任务结果写回页面的字符数上限 |
+| `maxSubtasks` | 6 | 一次计划允许的子任务数 |
+| `maxAvatarBytes` | 262144 | 成员头像大小上限 |
+| `maxRequestBodyBytes` | 65536 | 请求体上限 |
+| `maxActiveConversations` | 32 | 同时保留的会话数 |
+| `maxHistoryPageSize` | 30 | 历史每页条数上限 |
+
+## 接口
+
+除公开探针外，所有路由每次访问都重新核对登录身份。
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| GET | `/butler/health`、`/butler/ready` | 存活与就绪探针，公开 |
+| GET | `/butler` | 群聊页面 |
+| POST | `/butler/chat` | 派活，SSE 事件流 |
+| POST | `/butler/reply` | 回应正在等你的成员，SSE 事件流 |
+| POST | `/butler/stop` | 喊停当前这一轮 |
+| GET | `/butler/members` | 群成员（含别名与能力声明） |
+| POST | `/butler/members/alias` | 保存外号与配色；空值恢复默认 |
+| POST/DELETE | `/butler/members/avatar` | 上传或删除成员头像 |
+| GET | `/butler/members/avatar` | 读取成员头像，按登录用户鉴权 |
+| GET | `/butler/overview` | 状态计数与最近失败 |
+| GET | `/butler/conversations` | 派活记录 |
+| GET | `/butler/history` | 运行历史分页 |
+| GET | `/butler/task` | 单次任务的完整记录 |
+| GET | `/butler/models` | 宿主模型目录 |
+
+`/butler/chat` 与 `/butler/reply` 的 SSE 事件类型：`conversation`、`user`、`chat`、
+`plan`、`subtask`、`subtask_delta`、`summary`、`error`，以 `[DONE]` 结束。
+
+## 状态语义
+
+子任务状态：`queued`、`dispatched`、`running`、`waiting_user`、`succeeded`、`failed`、
+`cancelled`；任务状态另含 `summarizing`、`completed`。合法迁移定义在 `src/task-model.ts`，
+非法迁移会被拒绝。
+
+页面上的每个状态都能追到一次真实事件：`plan` 事件点上「管家听懂」，「派活」来自
+`subtask.dispatched`，「牛马干活」来自 `subtask.running` 或执行方上报的
+`phase: 'tool'`，「交差」来自汇总轮结束。状态先写库再上报，刷新后重建结果一致。
+
+进程异常退出时，上次遗留的执行中任务会在下次启动收敛为失败，不会永远转圈。
+
+## 数据放在哪里
+
+工作台索引在 DSH home 下的 `plugins/butler/butler.sqlite`：会话归属、任务计划、子任务
+状态、成员别名与头像。管家与用户的对话正文仍然存放在 DSH 官方会话日志里，本插件不复制
+一份，也不改写宿主日志。
+
+## 本地开发
+
+```sh
+pnpm install                      # 首次新增插件后需要，用于写入 workspace 锁
+pnpm list:plugins                 # 应看到 butler 一行
+pnpm build --plugins "butler"
+pnpm check --plugins "butler"
+pnpm test --filter dsh-butler-console
+```
+
+纳入源码部署选集时，在私有 `.local/env.conf` 的 `DSH_PLUGINS` 里加入 `butler`（不要改
+公开的根 `env.conf`）。发版到服务器需要用户明确要求后才执行。

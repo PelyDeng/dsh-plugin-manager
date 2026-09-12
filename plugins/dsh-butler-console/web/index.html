@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>当老板的第一天 · 管家群聊</title>
+<link rel="stylesheet" href="/butler/assets/style.css">
+</head>
+<body data-drawer="closed" data-sidebar="closed">
+<div class="shell">
+
+  <header class="topbar">
+    <button type="button" class="btn btn--ghost sidebar-toggle" id="sidebar-toggle" aria-label="打开派活记录" aria-expanded="false">☰</button>
+    <span class="topbar__crown" aria-hidden="true">👑</span>
+    <h1>当老板的第一天</h1>
+    <span class="topbar__status"><span class="dot dot--online" aria-hidden="true"></span><span id="top-status">已上线</span></span>
+    <span class="spacer"></span>
+    <span class="identity" id="identity"></span>
+    <button type="button" class="btn btn--ghost drawer-toggle" id="drawer-toggle" aria-label="打开牛马档案" aria-expanded="false">🐮</button>
+  </header>
+
+  <div class="columns">
+
+    <aside class="column column--left paper" aria-label="派活记录">
+      <div class="left__top">
+        <h2 class="section-title">我的派活记录</h2>
+        <div class="left__brandline" id="crew-line">—</div>
+        <button type="button" class="btn btn--primary" id="new-chat">＋ 派活</button>
+        <label class="visually-hidden" for="chat-search">搜索派活记录</label>
+        <input type="search" id="chat-search" placeholder="找找派过什么活" autocomplete="off"
+               style="padding:5px 9px;border:1.5px solid var(--bt-line);border-radius:var(--bt-wobble-sm);background:#fff;font-size:13px;">
+      </div>
+      <div class="left__list" id="chat-list"></div>
+      <div class="crew">
+        <h2 class="section-title">我的牛马</h2>
+        <div class="crew__faces" id="crew-faces"></div>
+        <div class="crew__line" id="crew-note">—</div>
+      </div>
+    </aside>
+
+    <main class="column column--center paper" aria-label="牛马调度群">
+      <div class="center__head">
+        <h2>牛马调度群</h2>
+        <span class="center__sub" id="group-sub">—</span>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn--tiny btn--ghost" id="stop-button" hidden>喊停</button>
+      </div>
+      <div class="rail" id="rail" role="group" aria-label="协同进度"></div>
+      <div class="thread" id="thread"></div>
+      <form class="composer" id="composer">
+        <div class="composer__box">
+          <label class="visually-hidden" for="message-input">老板您说，要干点啥</label>
+          <textarea id="message-input" rows="1" placeholder="老板您说，要干点啥？" autocomplete="off"></textarea>
+          <div class="composer__actions">
+            <button type="submit" class="send" id="send-button" aria-label="派活">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 8h10M9 4.5 12.8 8 9 11.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="composer__hint">
+          <span id="composer-hint">管家先听明白，再替你把人喊来</span>
+          <span id="composer-count"></span>
+        </div>
+      </form>
+    </main>
+
+    <aside class="column column--right" id="drawer" aria-label="牛马档案">
+      <section class="paper">
+        <div class="panel">
+          <h2 class="section-title">牛马档案</h2>
+          <p class="panel__note">改个外号、换张脸，只在你这儿生效，不影响插件自己声明的身份。</p>
+          <div id="member-list"></div>
+        </div>
+      </section>
+
+      <section class="paper">
+        <div class="panel">
+          <h2 class="section-title">现在在干嘛</h2>
+          <div class="metrics" id="metrics"></div>
+          <div id="status-list"></div>
+        </div>
+      </section>
+
+      <section class="paper">
+        <div class="panel">
+          <h2 class="section-title">最近的翻车现场</h2>
+          <div id="failure-list"></div>
+        </div>
+      </section>
+
+      <div class="motto" id="motto"></div>
+    </aside>
+  </div>
+</div>
+<div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+
+<script type="module" src="/butler/assets/app.js"></script>
+</body>
+</html>
