@@ -64,35 +64,39 @@ it('paginates user cards and searches identities or localized roles', () => {
 })
 
 describe('工具分类分组', () => {
-  const categorized = [
+  /** 浏览器模块是纯 JavaScript，测试夹具需要显式类型，否则回调参数会隐式 any。 */
+  const categorized: { name: string; category?: string }[] = [
     { name: 'a', category: '封闭化园区' },
     { name: 'b', category: '博客工作台' },
     { name: 'c', category: '通用工具' },
     { name: 'd', category: '封闭化园区' },
   ]
+  /** 该导入没有类型声明，函数返回值是 any；这里补上结构，供断言使用。 */
+  const groups = (input: readonly { name: string; category?: string }[]): { label: string; tools: { name: string }[] }[] =>
+    groupToolsByCategory(input) as { label: string; tools: { name: string }[] }[]
 
   it('按标签分组，组内保持原顺序', () => {
-    const groups = groupToolsByCategory(categorized)
-    expect(groups.map(group => group.label)).toEqual(['封闭化园区', '博客工作台', '通用工具'])
-    expect(groups[0]!.tools.map(tool => tool.name)).toEqual(['a', 'd'])
+    const result = groups(categorized)
+    expect(result.map(group => group.label)).toEqual(['封闭化园区', '博客工作台', '通用工具'])
+    expect(result[0]!.tools.map(tool => tool.name)).toEqual(['a', 'd'])
   })
 
   it('未分类的工具归入「未分类」并排在最后', () => {
-    const groups = groupToolsByCategory([{ name: 'x' }, { name: 'a', category: '甲' }, { name: 'y', category: '  ' }])
-    expect(groups.map(group => group.label)).toEqual(['甲', '未分类'])
-    expect(groups[1]!.tools.map(tool => tool.name)).toEqual(['x', 'y'])
+    const result = groups([{ name: 'x' }, { name: 'a', category: '甲' }, { name: 'y', category: '  ' }])
+    expect(result.map(group => group.label)).toEqual(['甲', '未分类'])
+    expect(result[1]!.tools.map(tool => tool.name)).toEqual(['x', 'y'])
   })
 
   it('全部未分类时只有一个分组，顺序不变', () => {
     // 老插件不填分类也要照常展示，不能因此打乱顺序或凭空多出分组。
-    const groups = groupToolsByCategory(tools)
-    expect(groups).toHaveLength(1)
-    expect(groups[0]!.label).toBe('未分类')
-    expect(groups[0]!.tools).toEqual(tools)
+    const result = groups(tools)
+    expect(result).toHaveLength(1)
+    expect(result[0]!.label).toBe('未分类')
+    expect(result[0]!.tools).toEqual(tools)
   })
 
   it('空列表得到空分组', () => {
-    expect(groupToolsByCategory([])).toEqual([])
+    expect(groups([])).toEqual([])
   })
 
   it('分类标签去除首尾空白，空白视为未分类', () => {
