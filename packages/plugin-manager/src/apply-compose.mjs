@@ -95,10 +95,12 @@ export function applyCompose(deployment, release, execute = executeDocker, runti
     }
     for (const name of residuals) rmSync(join(deployment.profileRoot, name));
   }
-  // 这个超时只在**失败**时体现价值：宿主正常起停实测约 51 秒可应答、57 秒被 Docker 判为
-  // healthy，180 秒意味着一个起不来的容器要让部署者白等三分钟才看到失败。90 秒仍有约 58%
-  // 余量，而失败反馈快一倍。启动确实更慢的宿主会在这里如实超时，不会把问题藏起来。
-  run([...args, 'up', '-d', '--force-recreate', '--wait', '--wait-timeout', '90', 'dsh']);
+  // 保持 180 秒。曾经按实测的 57 秒启动收紧到 90 秒，但在真实部署里造成过一次误判：
+  // 那次重建超过了 90 秒（`application not healthy after 1m30s`），而容器随后自行健康、
+  // 服务完全正常——首次启动要装插件依赖，比稳态重启慢得多。
+  // 这个值只在失败时起作用：收紧换来的是「失败早 90 秒看到」，代价却是一次完整重跑
+  // （约 9 分钟）加一次不必要的服务中断。收益远小于代价，所以不收紧。
+  run([...args, 'up', '-d', '--force-recreate', '--wait', '--wait-timeout', '180', 'dsh']);
   atomicJSON(join(deployment.artifacts, 'active-compose.json'), { schemaVersion: 1, project, path: generated.path, runtime, appliedAt: new Date().toISOString() });
   return { ...generated, project, status: 'ready' };
 }
