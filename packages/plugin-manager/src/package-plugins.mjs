@@ -7,8 +7,15 @@ import { preparePluginDependencies, runPluginTask, runPnpm } from './run-plugin-
 import { verifyBuildPackage } from './verify-package.mjs';
 import { validateVerification } from './verification.mjs';
 
-/** Write one manifest after archive validation; step wraps each synchronous task for progress display. */
-export function packagePlugins(root, requested, output, packageDirectory, step = (_label, run) => run(), { skipCheck = false } = {}) {
+/**
+ * 构建并打包选中的插件。
+ *
+ * `skipCheck` 默认为 **true**：插件检查（`pnpm typecheck` 等）是开发期门禁，仓库的
+ * CI 与 `pnpm check` 已会在同一提交上跑它；日常构建再对每个插件重复一次只是把反馈
+ * 拖长（实测 5 个插件约 56 秒），且不改变任何产物。需要在本机确认检查时用
+ * `--verify-plugin-check` 显式要回来。
+ */
+export function packagePlugins(root, requested, output, packageDirectory, step = (_label, run) => run(), { skipCheck = true } = {}) {
   const selected = sourcePlugins(root, requested, packageDirectory);
   const single = packageDirectory !== undefined;
   if (single && !existsSync(resolve(root, 'pnpm-lock.yaml'))) throw new Error('独立包打包需要包根 pnpm-lock.yaml。请在作者项目根执行 pnpm install --ignore-workspace 生成锁文件后重试。');
@@ -46,11 +53,13 @@ export function packagePlugins(root, requested, output, packageDirectory, step =
 }
 
 export function main(argv = process.argv.slice(2), step) {
-  const options = parseOptions(argv, ['root', 'plugins', 'output', 'package'], ['skip-plugin-check']);
+  // 默认跳过插件检查（见 packagePlugins 说明）；--verify-plugin-check 把它要回来。
+  const options = parseOptions(argv, ['root', 'plugins', 'output', 'package'], ['skip-plugin-check', 'verify-plugin-check']);
   if (!options.root) throw new Error('必须显式指定 --root 项目根目录。');
   const root = resolve(options.root);
   const output = resolve(root, options.output ?? `.local/artifacts/${randomUUID()}/plugins`);
-  const manifest = packagePlugins(root, options.plugins, output, options.package, step, { skipCheck: options['skip-plugin-check'] === true });
+  const skipCheck = options['verify-plugin-check'] === true ? false : true;
+  const manifest = packagePlugins(root, options.plugins, output, options.package, step, { skipCheck });
   console.log(`插件产物：${output}`);
   console.log(`交付插件：${manifest.plugins.map(plugin => plugin.id).join(',') || 'none'}`);
   console.log('下一步：交付整个发布目录（manifest.json 和全部 tgz）；部署者放入 incoming/<应用目录> 后执行 build，并请求插件声明的 healthPath。');

@@ -31,7 +31,7 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight, d
   const buildArgs = args[0] === 'release' ? args.slice(1) : [...args];
   if (buildArgs.includes('--help')) {
     if (existsSync(resolve(root, 'deploy/scripts/build.mjs'))) return runEntry(root, 'build.mjs', ['--help']);
-    console.log('build [--config <env.conf>] [--skip-plugin-check] [--resume | --recover --data-compatible]\n产物放入 incoming/<发布目录>/；首次自动创建 .local/env.conf。--skip-plugin-check 跳过插件检查（CI 已跑过时使用，产物不变）。'); return 0;
+    console.log('build [--config <env.conf>] [--verify-plugin-check] [--resume | --recover --data-compatible]\n产物放入 incoming/<发布目录>/；首次自动创建 .local/env.conf。插件检查默认跳过（CI 已跑过，产物不变），要本机确认时加 --verify-plugin-check。'); return 0;
   }
   const options = siteArguments(buildArgs);
   const saved = readSitePointer(root);
