@@ -25,9 +25,20 @@ DSH 生态里的智能体群聊。你当老板，管家负责听懂你的目标�
 | 成员（子 Agent） | 自己完成任务、自己调用工具、自己输出进度 | 决定别人怎么做 |
 | 本插件 | 展示状态、保存历史、转发回复 | 改写宿主会话日志 |
 
-边界在代码里是强制的：管家只注册了一个 `butler_plan` 工具，并用
-`tools.restrict({ allow: ['butler_plan'] })` 把自己能看到的东西限死，因此它没有能力
-绕过计划去执行任何业务操作，也没有创建或释放成员 Agent 的代码路径。
+边界在代码里是强制的：管家只注册一个 `butler_plan` 工具，不创建也不释放成员 Agent —— 成员
+由各自插件在收到派单时创建，管家没有那条代码路径。
+
+它能直接调用的工具只有**通用工具**（分类标签 `通用工具` 的公共集，例如天气查询），所以它没有
+能力绕过计划去执行任何业务查询。这段限制有三条不显然的约束，写错都会让管家整轮失效：
+
+- **只能限制全局工具名**。`butler_plan` 注册在本 Agent 作用域里，把它写进
+  `restrict({ allow })` 会以 `names unknown global tool` 直接失败；局部工具本来就只对这个
+  Agent 可见，不必列入。
+- **不能拿空 allow 去限制**。`allow: []` 会遮蔽**所有**工具，连 `butler_plan` 都没有，管家于是
+  连计划都提交不了。目录读不到时宁可不施加限制 —— 最坏是多看到几个工具，仍受提示词与鉴权约束。
+- **必须在 agent 作用域里限制**。插件级 `restrict` 会波及所有 Agent，宿主直接拒绝。
+
+从目录实时读而不是写死名单：新增通用工具时管家自动就能用，不需要改这里。
 
 ## 怎么接一个新成员
 
@@ -109,6 +120,7 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | GET | `/butler/members` | 群成员（含别名与能力声明） |
 | POST | `/butler/members/alias` | 保存外号与配色；空值恢复默认 |
 | POST/DELETE | `/butler/members/avatar` | 上传或删除成员头像 |
+| GET | `/butler/members/avatar?agentId=` | 读取成员头像；按当前登录用户鉴权，不能靠猜 id 读到别人的 |
 | GET | `/butler/members/avatar` | 读取成员头像，按登录用户鉴权 |
 | GET | `/butler/overview` | 状态计数与最近失败 |
 | GET | `/butler/conversations` | 派活记录 |
