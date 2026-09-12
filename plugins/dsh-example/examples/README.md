@@ -2,11 +2,11 @@
 
 # 开发者助手配置参考
 
-本目录维护 example 与配套 auth 的业务配置，适用于框架 0.16.2。下方 JSON 保留独立 CLI 集成的兼容模板，站点 build 不需要复制它。模板与本页随应用版本交付。JSON 不支持注释，因此模板只保存真实配置字段，逐项备注、是否必填和默认值在下表说明。模板可提交 Git；复制后的实例配置只保存在 `.local/`，不会随源码或归档自动生效。
+本目录维护 example 与配套 auth 的业务配置，适用于框架 0.16.3。下方 JSON 保留独立 CLI 集成的兼容模板，站点 build 不需要复制它。模板与本页随应用版本交付。JSON 不支持注释，因此模板只保存真实配置字段，逐项备注、是否必填和默认值在下表说明。模板可提交 Git；复制后的实例配置只保存在 `.local/`，不会随源码或归档自动生效。
 
 站点 build 在 Windows PowerShell 执行根 `.\build.ps1`，macOS/Linux 执行根 `./build.sh`；站点和插件文件按实际模式初始化，无需复制下方模板。新 archives 站点可编辑文件在 .local/config/plugins/<id>，已有站点和显式路径不迁移。站点选项修改 `.local/env.conf`，根 `env.conf` 提供固定非秘密默认值，首次生成的私有文件写入实际平台默认值，已有配置不覆盖。
 
-插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值、各平台实际验证情况及恢复说明见[一键部署](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/doc/first-deployment.md)。
+插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值、各平台实际验证情况及恢复说明见[一键部署](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.3/doc/first-deployment.md)。
 
 ## 文件与使用位置
 
@@ -62,12 +62,12 @@ Docker 模板保持 `/data/dsh-home` 为容器 home，auth 的 `stateDir` 与之
 | `config.lockSeconds` | 可选 | `30` 秒 | 达到失败限制后的锁定时长，1–3600 |
 | `publicOrigin` | 使用认证时条件必填 | 来自站点配置 | 由管理器注入；不重复写入 auth 的 config |
 
-auth 是认证提供者，没有 `accessMode` 配置。账号、密码和逐用户插件授权通过 auth 管理功能维护，不在模板中预置。详见 [auth 使用说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/plugins/dsh-auth/README.md)。
+auth 是认证提供者，没有 `accessMode` 配置。账号、密码和逐用户插件授权通过 auth 管理功能维护，不在模板中预置。详见 [auth 使用说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.3/plugins/dsh-auth/README.md)。
 
 ## 通用配置与声明
 
 上面的 JSON 是可离线复制的独立 CLI 示例，不是 build 的人工输入。必须把 manifest、镜像摘要和站点地址换成实际值；保留 home 和实例映射才能沿用原数据。显式部署 root 决定相对路径，不能相对模板文件计算。
 
-框架字段、默认值和优先级统一在[配置参考](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/doc/framework-configuration.md#独立-cli-字段参考)维护；包声明与 enabled/accessMode/runtimeConfig 语义统一在[插件规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.2/doc/plugin-configuration.md)维护，不在本例重复整套通用字段表。
+框架字段、默认值和优先级统一在[配置参考](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.3/doc/framework-configuration.md#独立-cli-字段参考)维护；包声明与 enabled/accessMode/runtimeConfig 语义统一在[插件规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.16.3/doc/plugin-configuration.md)维护，不在本例重复整套通用字段表。
 
 本应用实际声明见随包 [package.json](../package.json)：npm 包 dsh-example，插件 ID/entryId 为 example，页面 /example、探针 /example/ready，权限 example:access，认证角色 consumer。它使用官方模型凭据，没有业务 runtimeConfig 文件。新增业务配置或开发 patch 时先实现读取/加载能力，再填写声明；元数据不会代替实现。

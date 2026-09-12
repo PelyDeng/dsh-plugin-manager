@@ -2,12 +2,12 @@
 
 # 插件产物一键部署
 
-把作者交付的标准发布目录放进框架部署包，执行 build 即可部署。部署机器不需要作者源码、kit 或插件构建工具链，也不负责修复作者包；缺包或清单不完整时联系作者重新 pack。本文适用于框架 **0.16.2**；框架源码用户见[源码部署](../deploy/README.md#服务器源码发版)，只安装 manager 的用户见[手工 CLI 交付](../packages/plugin-manager/DELIVERY.md)。
+把作者交付的标准发布目录放进框架部署包，执行 build 即可部署。部署机器不需要作者源码、kit 或插件构建工具链，也不负责修复作者包；缺包或清单不完整时联系作者重新 pack。本文适用于框架 **0.16.3**；框架源码用户见[源码部署](../deploy/README.md#服务器源码发版)，只安装 manager 的用户见[手工 CLI 交付](../packages/plugin-manager/DELIVERY.md)。
 
 ## 首次部署
 
 <!-- excerpt:deployment-start -->
-从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.16.2.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
+从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.16.3.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
 
 每个作者交付的是一个完整目录，包含 manifest.json 和它引用的全部 tgz。将它放在部署根的 incoming 直接子目录中：
 

@@ -6,7 +6,7 @@
 | --- | --- |
 | `@dsh-plugin-manager/plugin-kit/access` | `createAccess`、身份、认证提供者、运行目录和撤权通知 |
 | `@dsh-plugin-manager/plugin-kit/http` | `createPluginHttp`：受保护路由与显式公开探针 |
-| `@dsh-plugin-manager/plugin-kit/tools` | `createPluginTools`、`guardTool`：执行前后鉴权与工具登记 |
+| `@dsh-plugin-manager/plugin-kit/tools` | `createPluginTools`、`guardTool`、`toolsForCategory`：执行前后鉴权、工具登记与按分类取可见工具 |
 | `@dsh-plugin-manager/plugin-kit/conversations` | 会话协议、只读预览、分页查询、官方归档与标题事件监听；无需工具类型依赖 |
 | `@dsh-plugin-manager/plugin-kit/models` | 官方默认模型及会话模型恢复；无需工具类型依赖 |
 | `@dsh-plugin-manager/plugin-kit/route-path` | 无宿主依赖的规范路由校验 |
@@ -31,6 +31,8 @@ kit 提供可选的[会话管理协议](https://github.com/PelyDeng/dsh-plugin-m
 分支可传入继承事件数，沿用该位置的模型。无模型使用记录时读取当前默认，持久化读取或投影失败则拒绝恢复。调用方在异步读取后再次检查授权，再将返回的 provider/model 和已有推理强度传入 Agent；`reasoningEffort` 按官方 `ReasoningEffortId` 转换。它不依赖 auth，auth 只是可选的共享设置入口；已运行的 Agent 不受默认变更影响。
 
 工具通过 `createPluginTools(...).register(definition, '中文名称')` 声明简洁的目录显示名，随 `ToolDescriptor.displayName` 交给 auth 展示；`name` 继续作为模型调用编码。名称由各业务插件维护，不改变工具参数、描述或执行权限。未提供显示名的旧插件仍可登记，目录回退显示编码。
+
+第三个参数是**工具分类标签**，由注册该工具的插件自己填写，随 `ToolDescriptor.category` 交给 auth 按标签分组展示。标签同时是可见性依据：`toolsForCategory(descriptors, 本分类)` 返回「本分类的工具 + 通用工具」，调用方在 Agent 的 setup 里用 `tools.restrict({ allow })` 应用它，该 Agent 就只能调用属于自己标签的工具。约定好的通用工具集使用固定标签 `通用工具`（导出常量 `UNIVERSAL_TOOL_CATEGORY`），每个 Agent 都可见。不传分类的工具不参与这套限制，因此既有插件不受影响。
 
 认证模式不可自动降级。提供者缺失、重复或协议不兼容时拒绝访问。协议版本为 1，通过错误对象的字段识别不同安装包抛出的 `AccessError`。`actorKey` 以账号身份生成稳定数据所有者，不使用短期登录 ID。`dsh-console` 是保留授权项，不能作为业务插件 ID。
 
