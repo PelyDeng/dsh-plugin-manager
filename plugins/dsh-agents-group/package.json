@@ -1,6 +1,6 @@
 {
   "name": "dsh-agents-group",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "DSH 智能体群组：统一分包管理多个智能体，共享公共组件，各自独立页面与授权",
   "license": "UNLICENSED",
   "private": true,
@@ -62,7 +62,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "pnpm --filter @dsh-agents-group/closedoff run build && pnpm --filter @dsh-agents-group/blog run build && tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check": "pnpm typecheck",
