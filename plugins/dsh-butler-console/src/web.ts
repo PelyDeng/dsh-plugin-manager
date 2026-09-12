@@ -283,6 +283,10 @@ export async function installWeb(
    * 直接收图片字节而不是 multipart：页面用 FileReader 读出来发过来就够了，省掉一个
    * 解析器。类型与大小在这里核验，不信任客户端声明的 content-type。
    */
+  // 成员头像：读取走 GET，设置走 POST，清除走 DELETE。
+  //
+  // 三种方法合成**一个** exact 路由：宿主的 WebServer 要求 (kind, path) 唯一，同一路径注册
+  // 两次会以 `webserver: duplicate exact route` 直接让插件装载失败、站点起不来。
   ctx.effect(() => register({
     kind: 'exact',
     path: `${config.routePrefix}/members/avatar`,
@@ -292,6 +296,19 @@ export async function installWeb(
         if (target === '') throw new HttpError(400, '缺少 agentId')
         console_.clearAvatar(actor, target)
         respond(actor, response, 200, { items: console_.members(actor) })
+        return
+      }
+      // 读取头像：按当前登录用户鉴权，不能靠猜 id 读到别人的头像。
+      if (request.method === 'GET') {
+        const agentId = new URL(request.url ?? '/', 'http://localhost').searchParams.get('agentId')?.trim() ?? ''
+        const found = agentId === '' ? undefined : console_.avatar(actor, agentId)
+        if (found === undefined) throw new HttpError(404, '没有设置头像')
+        response.writeHead(200, {
+          'content-type': found.contentType,
+          'cache-control': 'private, max-age=60',
+          'content-length': String(found.bytes.byteLength),
+        })
+        response.end(Buffer.from(found.bytes))
         return
       }
       method(request, 'POST')
@@ -304,24 +321,6 @@ export async function installWeb(
       if (!matchesImageSignature(bytes, declared)) throw new HttpError(415, '文件内容与图片格式不符')
       console_.setAvatar(actor, agentId, bytes, contentType)
       respond(actor, response, 200, { items: console_.members(actor) })
-    },
-  }))
-
-  // 读取成员头像。按当前登录用户鉴权，不能靠猜 id 读到别人的头像。
-  ctx.effect(() => register({
-    kind: 'exact',
-    path: `${config.routePrefix}/members/avatar`,
-    handler: (request, response, actor) => {
-      method(request, 'GET')
-      const agentId = new URL(request.url ?? '/', 'http://localhost').searchParams.get('agentId')?.trim() ?? ''
-      const found = agentId === '' ? undefined : console_.avatar(actor, agentId)
-      if (found === undefined) throw new HttpError(404, '没有设置头像')
-      response.writeHead(200, {
-        'content-type': found.contentType,
-        'cache-control': 'private, max-age=60',
-        'content-length': String(found.bytes.byteLength),
-      })
-      response.end(Buffer.from(found.bytes))
     },
   }))
 

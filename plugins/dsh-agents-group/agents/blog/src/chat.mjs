@@ -215,7 +215,7 @@ export class BlogChat {
   }
   options(b,selection){
     return{agentOptions:{...selection},signal:b.abort.signal,
-      setup:agentCtx=>{agentCtx.systemPrompt.section({name:'blog:persona',order:600,text:instructions+'\n本轮时间基准：'+JSON.stringify(searchContext())});agentCtx.systemPrompt.section({name:'blog:language',order:10000,text:reasoningLanguage});agentCtx.systemPrompt.context({name:'blog:language',order:10000,text:'当前交互界面的语言是简体中文。'+reasoningLanguage});agentCtx.tools.restrict({allow:this.jobs.chatTools.map(t=>t.name).filter(n=>b.job.input.research||!n.startsWith('blog_web_'))})}}
+      setup:agentCtx=>{agentCtx.systemPrompt.section({name:'blog:persona',order:600,text:instructions+'\n本轮时间基准：'+JSON.stringify(searchContext())});agentCtx.systemPrompt.section({name:'blog:language',order:10000,text:reasoningLanguage});agentCtx.systemPrompt.context({name:'blog:language',order:10000,text:'当前交互界面的语言是简体中文。'+reasoningLanguage});agentCtx.tools.restrict({allow:this.jobs.toolNamesFor(b.job.input.research)})}}
   }
   async imageCapability(actor,id,input){
     this.access.assert(actor)

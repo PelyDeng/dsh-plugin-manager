@@ -52,6 +52,13 @@ export class ConversationManager {
     private readonly toolNames: readonly string[],
     private readonly access: Access,
     private readonly store: ConversationStore,
+    /**
+     * 本 Agent 能用的工具名（本分类 + 通用集）。
+     *
+     * 由群组注入，在 agent 作用域内应用。宿主不允许在插件上下文里做工具限制，所以必须落到
+     * 各 Agent 自己的 setup（见 `setup`）。默认回落到自己的工具名，保持既有行为。
+     */
+    private readonly allowedTools: () => readonly string[] = () => toolNames,
   ) {
     this.stopTitles = registerConversationTitles(ctx, (id, title, manual, complete) => {
       if (!this.disposed) this.store.syncTitle(id, title, manual, complete)
@@ -122,7 +129,9 @@ export class ConversationManager {
       order: 600,
       text: this.persona,
     })
-    agentCtx.tools.restrict({ allow: [...this.toolNames] })
+    // 只允许调用属于本 Agent 标签的工具，外加约定好的通用集。在 agent 作用域里限制 ——
+    // 插件级限制会波及所有 Agent，宿主会直接拒绝。
+    agentCtx.tools.restrict({ allow: [...this.allowedTools()] })
   }
 
   private async options(id?: string, eventCount?: number) {

@@ -77,21 +77,21 @@ describe('已接入 Agent 列表', () => {
   it('保留名称、版本、入口和工具数量等展示字段', () => {
     const ctx = fakeContext([{
       id: 'closedoff',
-      packageName: 'dsh-closedoff-assistant',
+      packageName: 'dsh-agents-group',
       version: '0.6.1',
       displayName: '封闭化园区助手',
       description: '园区业务查询',
-      entryPath: '/closedoff-qa',
+      entryPath: '/agents/closedoff',
       permissions: ['closedoff:access'],
       tools: [{ name: 'closedoff_vehicle_track' }, { name: 'closedoff_vehicle_stream' }, { name: 'closedoff_device_page' }],
     }])
     expect(listAgentCards(ctx)[0]).toEqual({
       id: 'closedoff',
       displayName: '封闭化园区助手',
-      packageName: 'dsh-closedoff-assistant',
+      packageName: 'dsh-agents-group',
       version: '0.6.1',
       description: '园区业务查询',
-      entryPath: '/closedoff-qa',
+      entryPath: '/agents/closedoff',
       permissions: ['closedoff:access'],
       toolCount: 3,
       dispatchable: false,

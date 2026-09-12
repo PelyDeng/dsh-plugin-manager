@@ -137,6 +137,9 @@ test('current model, version and CI questions have source evidence in the shippe
       ['packages/plugin-manager/src/supervisor.mjs', /startupDeadline/],
       ['packages/plugin-manager/src/session-snapshot.mjs', /restoreSessionSnapshot/],
       ['scripts/stage-legacy-feedback.mjs', /mergeLegacyFeedback/],
+      // 工具分类标签与「本分类 + 通用工具」的可见性计算：宿主据此限制某个 Agent 能调用哪些
+      // 工具，是问答里最容易被问到的新接口，所以断言示例真能读到它的实现。
+      ['packages/plugin-kit/src/tools.ts', /export function toolsForCategory[\s\S]*UNIVERSAL_TOOL_CATEGORY/],
       ['plugins/dsh-example/web/conversation-history.js', /dialogs\.clear/],
     ]) {
       const hits = JSON.parse(await search.execute({ query: path }, execution))

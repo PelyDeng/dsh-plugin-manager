@@ -16,6 +16,7 @@ import { createAccess, createPluginHttp, createPluginTools, registerPlugin, UNIV
 import * as common from '@dsh-agents-group/common'
 import { assertUniqueManifests, AGENT_MANIFESTS, type AgentManifest } from './agents/registry.ts'
 import { executorFor, onButlerExecutors } from './butler-bridge.ts'
+import { allowedToolsFor as allowedToolsForAgent } from './visibility.ts'
 import { agentConfig, Config as ConfigSchema, isAgentEnabled, type Config as PluginConfig } from './config.ts'
 import { mountAgents, readiness, type AgentMount } from './host.ts'
 import { weatherTool } from './tools/weather.ts'
@@ -110,6 +111,64 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     if (handler !== undefined) mountedErrorHandlers.set(item.id, handler)
   }
 
+  /**
+   * 群组级探针用的访问校验器与 HTTP 注册器。
+   *
+   * 用正式的 createAccess，而不是手写一个空 assert —— 空实现会让探针绕过认证状态检查，
+   * 那是真实缺陷不是简化。
+   */
+  const groupAccess = createAccess(ctx, {
+    mode: config.accessMode,
+    pluginId: manifest.deepseekPlugin.id,
+    publicOrigin: config.publicOrigin,
+  })
+  const groupHttp = createPluginHttp(ctx, { access: groupAccess, routePrefix: config.routePrefix })
+
+  /**
+   * 注册群组的通用工具。
+   *
+   * 通用工具是约定好的公共集：每个 Agent 都能调。它们与业务工具的关键差别是不依赖任何
+   * 单一 Agent 的业务数据、也不需要额外凭据，所以可以安全地全局可见。
+   *
+   * 鉴权沿用群组的 access：通用工具不接受匿名调用，认证服务不可用时直接失败。
+   *
+   * 必须在装载子包**之前**注册：子包创建 Agent 时要拿它的名字进 allow 列表。
+   */
+  const universalTools = createPluginTools(ctx, {
+    permission: manifest.deepseekPlugin.permissions[0] ?? `${manifest.deepseekPlugin.id}:access`,
+    authorize: () => groupAccess.ready(),
+  })
+  const universalDescriptors = [universalTools.register(weatherTool, '天气查询', UNIVERSAL_TOOL_CATEGORY)]
+  ctx.effect(() => registerPlugin(ctx, {
+    id: `${manifest.deepseekPlugin.id}-tools`,
+    packageName: manifest.name,
+    version: manifest.version,
+    displayName: '通用工具',
+    description: '每个智能体都能调用的公共工具集',
+    entryPath: config.routePrefix,
+    permissions: manifest.deepseekPlugin.permissions,
+    tools: universalDescriptors,
+  }))
+
+  /**
+   * 每个 Agent 的工具可见性：**只允许调用属于自己标签的工具，外加通用集**。
+   *
+   * 群组只算规则，**不在这里**调用 `ctx.tools.restrict`。宿主明确拒绝在插件上下文里做限制：
+   *
+   * > tools.restrict() requires a scoped context (agent.ctx): a context-global restriction
+   * > would mask every agent
+   *
+   * 它说得对 —— 插件级限制会波及所有 Agent，包括管家自己的（管家需要 butler_plan）。限制只能
+   * 落在**各 Agent 自己的 agent 上下文**里，所以这里把结果注入子包（`allowedToolsOf`），
+   * 由子包创建 Agent 时在 agent 作用域内应用。
+   *
+   * 取值时机在 dispatch 阶段（子包那时才创建 Agent），所以闭包读 `mounted` 是安全的。
+   */
+  const allowedToolsFor = (agentId: string): readonly string[] => {
+    const agent = mounted.find(item => item.id === agentId)
+    return allowedToolsForAgent(agent?.manifest, universalDescriptors, agent?.tools ?? [])
+  }
+
   const mounted = await mountAgents(ctx, enabled, {
     config: {
       routePrefix: config.routePrefix,
@@ -118,6 +177,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     },
     // 各 Agent 自己的部署字段来自 agents.<id>.config；群组不重复描述子包的字段。
     agentConfigOf: agentId => agentConfig(config, agentId).config,
+    allowedToolsOf: agentId => allowedToolsFor(agentId),
     // 各 Agent 自己的错误分类；返回 undefined 时由群组用通用兜底。
     onErrorOf: agentId => mountedErrorHandlers.get(agentId),
     // 群组唯一的一份业务配置文件；各子包从自己的小节读凭据。
@@ -142,50 +202,6 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
 
   // 群组卸载时按装载逆序释放，保证后起的先关。
   ctx.effect(() => () => Promise.allSettled([...mounted].reverse().map(agent => agent.dispose())))
-
-  // 群组级探针。用正式的 createAccess，而不是手写一个空 assert ——
-  // 空实现会让探针绕过认证状态检查，那是真实缺陷不是简化。
-  const groupAccess = createAccess(ctx, {
-    mode: config.accessMode,
-    pluginId: manifest.deepseekPlugin.id,
-    publicOrigin: config.publicOrigin,
-  })
-  const groupHttp = createPluginHttp(ctx, { access: groupAccess, routePrefix: config.routePrefix })
-
-  /**
-   * 注册群组的通用工具。
-   *
-   * 通用工具是约定好的公共集：每个 Agent 都能调。它们与业务工具的关键差别是不依赖任何
-   * 单一 Agent 的业务数据、也不需要额外凭据，所以可以安全地全局可见。
-   *
-   * 鉴权沿用群组的 access：通用工具不接受匿名调用，认证服务不可用时直接失败。
-   */
-  const universalTools = createPluginTools(ctx, {
-    permission: manifest.deepseekPlugin.permissions[0] ?? `${manifest.deepseekPlugin.id}:access`,
-    authorize: () => groupAccess.ready(),
-  })
-  const universalDescriptors = [universalTools.register(weatherTool, '天气查询', UNIVERSAL_TOOL_CATEGORY)]
-  ctx.effect(() => registerPlugin(ctx, {
-    id: `${manifest.deepseekPlugin.id}-tools`,
-    packageName: manifest.name,
-    version: manifest.version,
-    displayName: '通用工具',
-    description: '每个智能体都能调用的公共工具集',
-    entryPath: config.routePrefix,
-    permissions: manifest.deepseekPlugin.permissions,
-    tools: universalDescriptors,
-  }))
-
-  /**
-   * 每个 Agent 的工具可见性：**只允许调用属于自己标签的工具，外加通用集**。
-   *
-   * 用 `tools.restrict` 做硬限制，而不是只在认证页面隐藏分类 —— 后者拦不住模型直接调用
-   * 工具名。分类由各子包自己填写，群组不替它们决定。
-   */
-  const allDescriptors = [...universalDescriptors, ...mounted.flatMap(agent => agent.tools)]
-  for (const agent of mounted) {
-    ctx.effect(() => ctx.tools.restrict({ allow: toolsForCategory(allDescriptors, agent.manifest.category) }))
-  }
 
   ctx.effect(() => groupHttp.registerPublic({
     kind: 'exact',

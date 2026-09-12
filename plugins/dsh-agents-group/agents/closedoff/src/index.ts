@@ -69,6 +69,13 @@ export interface AgentMountContext {
    * 本 Agent 的工具全部对其不可见，且这种失效在界面上完全看不出来。
    */
   readonly category: string
+  /**
+   * 本 Agent 能用的工具名（本分类 + 通用集），由群组注入。
+   *
+   * 必须在**创建 Agent 时**（agent 作用域内）用它做 `agentCtx.tools.restrict` —— 宿主不允许
+   * 在插件上下文里限制工具，那样会波及所有 Agent。惰性取值：创建 Agent 的时刻晚于通用工具注册。
+   */
+  readonly allowedTools: () => readonly string[]
   /** 群组级配置文件的路径；存在时业务凭据从它的 `closedoff` 小节读取。 */
   readonly groupConfigPath?: string
 }
@@ -149,7 +156,7 @@ export async function mount(context: AgentMountContext): Promise<{
   // 数据路径保持 plugins/closedoff 不变：本次不迁移数据，旧记录仍可读，
   // 同时它也是回滚到旧插件时的保险。
   const store = new ConversationStore(dshHomePath('plugins', 'closedoff', 'conversations.sqlite'))
-  const manager = new ConversationManager(ctx, config, persona, TOOL_NAMES, access, store)
+  const manager = new ConversationManager(ctx, config, persona, TOOL_NAMES, access, store, context.allowedTools)
   const participant = createClosedoffParticipant(ctx, config, manager, access)
   ctx.effect(() => ctx.on('pirate/participants', accept => accept(participant), { global: true }))
   if (access.mode === 'authenticated') ctx.effect(() => registerConversations(ctx, manager.management()))

@@ -175,7 +175,7 @@ Docker 只接受本机 Linux 引擎 unix/npipe endpoint。Docker Desktop 使用�
 
 ## 如何增加页面、Tool 或 Agent？
 
-页面使用官方 WebServer；受保护接口从 kit 的 createAccess/createPluginHttp 获得可信 actor。工具按 kit 的 createPluginTools/guardTool 接入，并加入 Agent 白名单。完整签名先查 packages/plugin-kit/README.md 与实际导出，不猜接口。业务账号由可信请求上下文取得，不接受模型生成的 userId。
+页面使用官方 WebServer；受保护接口从 kit 的 createAccess/createPluginHttp 获得可信 actor。工具按 kit 的 createPluginTools/guardTool 接入，并加入 Agent 白名单。`createPluginTools().register(定义, 显示名, 分类)` 的第三个参数是**工具分类标签**，由注册方自己填写：它既用于认证页面按标签分组展示，也是宿主按标签限制可见范围的依据 —— `toolsForCategory(条目, 本分类)` 返回「本分类 + 通用工具」，调用方在 Agent 的 setup 里用 `tools.restrict({ allow })` 应用它，该 Agent 就只能调用自己标签下的工具。约定好的公共集用固定标签 `通用工具`（kit 导出的 `UNIVERSAL_TOOL_CATEGORY`），每个 Agent 都能调。不传分类的工具不参与这套限制，既有插件不受影响。完整签名先查 packages/plugin-kit/README.md 与实际导出，不猜接口。业务账号由可信请求上下文取得，不接受模型生成的 userId。
 
 ## 如何复制完整 example？
 

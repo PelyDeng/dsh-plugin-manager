@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "pluginConfig": "/absolute/project/plugins/dsh-blog-assistant/config/config.json",
+  "pluginConfig": "/absolute/project/plugins/dsh-agents-group/agents/blog/config/config.json",
   "stateRoot": "/absolute/private/blog-backup-state",
   "backupRoot": "/absolute/private/blog-backups",
   "restoreRoot": "/absolute/private/blog-restores",

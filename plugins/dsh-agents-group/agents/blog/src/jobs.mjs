@@ -27,11 +27,25 @@ export const persona = `你是个人博客的写作助手，也是一位表达�
 提交候选后用中文简述改动和查证状况。`
 
 export class BlogJobs {
-  constructor(ctx, access, store, blog, attachments, timeoutMs = 240000, models = {}, category = '') {
+  /**
+   * @param {unknown} ctx
+   * @param {unknown} access
+   * @param {unknown} store
+   * @param {unknown} blog
+   * @param {unknown} attachments
+   * @param {number} [timeoutMs]
+   * @param {unknown} [models]
+   * @param {string} [category]
+   * @param {(() => readonly string[]) | undefined} [allowedTools]
+   */
+  constructor(ctx, access, store, blog, attachments, timeoutMs = 240000, models = {}, category = '', allowedTools = undefined) {
     this.ctx = ctx; this.access = access; this.store = store; this.blog = blog; this.attachments = attachments; this.timeoutMs = timeoutMs
     // 分类由群组从清单注入：这是唯一权威来源，子包不自己写字符串，否则两处漂移
     // 会让本 Agent 的工具全部不可见，而那种失效在界面上看不出来。
     this.category = category
+    // 本 Agent 能用的工具名（本分类 + 通用集），同样由群组注入。宿主不允许在插件上下文里
+    // 限制工具，所以真正的限制落在下面各 Agent 自己的 setup 里（agent 作用域）。
+    this.allowedTools = allowedTools
     this.models = models; this.bindings = new WeakMap(); this.active = new Map(); this.closed = false
     ctx.effect(()=>ctx.jobs.attachController('blog-workbench'))
     const tools = createPluginTools(ctx, { permission: 'blog:access', authorize: agent => this.bound(agent) })
@@ -95,6 +109,19 @@ export class BlogJobs {
         cid:{type:'integer',required:true},
       },(a,b,s)=>{invariant(b.chat,'请在博客对话中发起删除',403);return b.chat.prepareOperation(b,'delete',a,s)}),
     ]
+    /**
+     * 本 Agent 实际能用的工具名：本分类 + 通用集，再按本轮是否需要联网收窄。
+     *
+     * 只在这里算一次，供各 Agent 的 setup 使用 —— 宿主要求限制落在 agent 作用域，而 agent
+     * 的 setup 需要一份确定的名单。`research=false` 时剔除联网工具，那是原本就有的行为。
+     */
+    this.toolNamesFor = (research) => {
+      const injected = this.allowedTools?.()
+      const names = Array.isArray(injected) && injected.length > 0
+        ? injected.filter(name => this.chatTools.some(tool => tool.name === name))
+        : this.chatTools.map(tool => tool.name)
+      return research ? names : names.filter(name => !name.startsWith('blog_web_'))
+    }
     this.service = { protocolVersion: BLOG_PROTOCOL_VERSION, capabilities: ['read','research','draft','revise'], start: (actor,request) => this.start(actor,request), get: (actor,id) => this.get(actor,id), cancel: (actor,id) => this.cancel(actor,id) }
     ctx.effect(() => ctx.on(BLOG_SERVICE_EVENT, accept => accept(this.service), { global: true }))
     ctx.effect(() => onRevoked(ctx, () => this.recheck()))
@@ -138,7 +165,7 @@ export class BlogJobs {
       check()
       const handle = await this.ctx.agents.create({
         sessionId: SessionId(`blog-${b.job.id}`), meta:{cwd:process.cwd()}, agentOptions:{...selection},signal:b.abort.signal,
-        setup: agentCtx => { agentCtx.systemPrompt.section({name:'blog:persona',order:600,text:persona}); agentCtx.systemPrompt.section({name:'blog:language',order:10000,text:reasoningLanguage});agentCtx.systemPrompt.context({name:'blog:language',order:10000,text:'当前交互界面的语言是简体中文。'+reasoningLanguage}); agentCtx.tools.restrict({allow:this.tools.map(t=>t.name).filter(n=>b.job.input.research || !n.startsWith('blog_web_'))}) },
+        setup: agentCtx => { agentCtx.systemPrompt.section({name:'blog:persona',order:600,text:persona}); agentCtx.systemPrompt.section({name:'blog:language',order:10000,text:reasoningLanguage});agentCtx.systemPrompt.context({name:'blog:language',order:10000,text:'当前交互界面的语言是简体中文。'+reasoningLanguage}); agentCtx.tools.restrict({allow:this.toolNamesFor(b.job.input.research)}) },
       })
       b.handle = handle
       if (b.stopped) { await handle.dispose(); return }

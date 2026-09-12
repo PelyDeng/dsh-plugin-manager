@@ -1,5 +1,5 @@
 ---
-description: "dsh-closedoff-assistant 与 DSH 核心能力、业务网关和专用页面之间的职责与数据流。"
+description: "封闭化助手（智能体群组子包）与 DSH 核心能力、业务网关和专用页面之间的职责与数据流。"
 kind: "package-bundle"
 ---
 

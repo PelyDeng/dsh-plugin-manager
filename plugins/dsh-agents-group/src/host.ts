@@ -40,10 +40,17 @@ export interface AgentMountContext {
    * 该 Agent 的工具分类标签。
    *
    * 由群组从清单注入，子包注册工具时原样使用。**分类只有这一个权威来源** —— 子包自己
-   * 再写一份字符串就会与清单漂移，而漂移的后果是「该 Agent 的工具全部不可见」，
-   * 且这种失效在界面上完全看不出来。
+   * 再写一份字符串就会与清单漂移，而漂移的后果是「该 Agent 的工具全部不可见」，   * 且这种失效在界面上完全看不出来。
    */
   readonly category: string
+  /**
+   * 该 Agent 能用的工具名（本分类 + 通用集）。
+   *
+   * **惰性**：函数体内取值，因为子包创建 Agent 的时刻晚于群组注册通用工具。子包必须在
+   * 自己创建 Agent 时（agent 作用域内）用它做 `agentCtx.tools.restrict({ allow })`，
+   * 不能在插件上下文里限制 —— 宿主会拒绝那样做。
+   */
+  readonly allowedTools: () => readonly string[]
   readonly config: {
     readonly routePrefix: string
     readonly publicOrigin: string
@@ -89,9 +96,21 @@ export type AgentMount = (context: AgentMountContext) => Promise<{
 export async function mountAgents(
   ctx: Context,
   manifests: readonly AgentManifest[],
-  shared: Omit<AgentMountContext, 'ctx' | 'access' | 'http' | 'agentConfig' | 'manifest' | 'category'> & {
+  shared: Omit<AgentMountContext, 'ctx' | 'access' | 'http' | 'agentConfig' | 'manifest' | 'category' | 'allowedTools'> & {
     /** 按 Agent id 取它自己的部署字段。 */
     readonly agentConfigOf: (agentId: string) => Record<string, unknown>
+    /**
+     * 该 Agent 能用的工具名（本分类 + 通用集）。
+     *
+     * 群组算好后注入，子包在**自己创建 Agent 时的 agent 作用域**里应用它。不能由群组在插件
+     * 上下文里直接 `ctx.tools.restrict` —— 宿主明确拒绝那种写法：
+     *
+     * > tools.restrict() requires a scoped context (agent.ctx): a context-global restriction
+     * > would mask every agent
+     *
+     * 惰性求值：子包在 dispatch 时才创建 Agent，那时通用工具已经注册完毕。
+     */
+    readonly allowedToolsOf?: (agentId: string) => readonly string[]
     /**
      * 该 Agent 自己的 HTTP 错误处理。
      *
@@ -137,6 +156,8 @@ export async function mountAgents(
         ctx,
         manifest,
         category: manifest.category,
+        // 惰性包装：真实取值发生在子包创建 Agent 时，那时通用工具已注册。
+        allowedTools: () => shared.allowedToolsOf?.(manifest.id) ?? [],
         config: shared.config,
         agentConfig: shared.agentConfigOf(manifest.id),
         access,

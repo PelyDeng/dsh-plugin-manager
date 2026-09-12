@@ -99,7 +99,12 @@ function fakeHost() {
         return () => {}
       },
       restrict: (rule: { allow?: readonly string[]; deny?: readonly string[] }) => {
-        // 记录每一次限制：这是「只允许调自己标签的工具」的落点。
+        // 记录插件级 restrict 调用。
+        //
+        // 群组**不应该**走到这里：宿主要求 restrict 只能落在 agent 作用域里，插件级限制会
+        // 波及所有 Agent（包括管家自己，它需要 butler_plan）。群组改为把 allow 列表通过
+        // `allowedToolsOf` 注入子包、由子包在 agent 作用域内应用。保留这条记录是为了让
+        // 「误在插件级做限制」这件事有迹可循，而不是变成静默的越权。
         restrictions.push(rule)
         return () => {}
       },
@@ -238,7 +243,7 @@ describe('群组端到端挂载', () => {
     } as never))).rejects.toThrow(/publicOrigin/u)
   }, 30000)
 
-  it('注册了通用工具，且每个 Agent 的可见性限制含通用集', async () => {
+  it('注册了通用工具，且群组不在插件级做工具限制', async () => {
     const host = fakeHost()
     writeGroupConfig()
     installProvider(host.ctx)
@@ -247,47 +252,29 @@ describe('群组端到端挂载', () => {
     // 通用工具真的注册了，而且是「通用工具」分类。
     expect(host.registeredTools).toContain('common_weather')
 
-    // 每个就绪的 Agent 一条限制。
-    expect(host.restrictions.length).toBeGreaterThanOrEqual(2)
-    for (const rule of host.restrictions) {
-      // 通用集必须并进来，否则 Agent 连天气都查不了。
-      expect(rule.allow, '每个 Agent 都应能看到通用工具').toContain('common_weather')
-    }
+    /**
+     * 群组**不该**自己调用 `ctx.tools.restrict`。
+     *
+     * 宿主要求 restrict 只能落在 agent 作用域里（`requires a scoped context (agent.ctx)`）：
+     * 插件级限制会波及所有 Agent，包括管家自己的 —— 而管家需要 `butler_plan`。所以群组的职责
+     * 只到「算出 allow 列表并通过 `allowedToolsOf` 注入子包」，应用限制是子包在 agent 作用域里
+     * 的事。
+     *
+     * 这条断言守的就是这个边界：一旦有人在群组里图省事直接 restrict，会先在这里失败。
+     */
+    expect(host.restrictions, '群组不应在插件级设置工具限制').toEqual([])
   }, 30000)
 
-  it('封闭化的可见性含自己的工具但不含博客的工具', async () => {
+  it('可见性规则的算式由独立模块覆盖，这里只守「群组不越界」', async () => {
     const host = fakeHost()
     writeGroupConfig()
     installProvider(host.ctx)
     await applyGroup(host.ctx, groupConfig())
 
-    // 先看清实际注册了哪些工具，避免用错前缀写出一条永远为真的断言。
-    expect(host.registeredTools.length, `已注册工具：${host.registeredTools.join(', ')}`).toBeGreaterThan(0)
-    const closedoffTools = host.registeredTools.filter(name => name.startsWith('closedoff'))
-    const blogTools = host.registeredTools.filter(name => name.startsWith('blog'))
-    expect(closedoffTools.length, `封闭化工具：${host.registeredTools.join(', ')}`).toBeGreaterThan(0)
-    expect(blogTools.length, `博客工具：${host.registeredTools.join(', ')}`).toBeGreaterThan(0)
-
-    const closedoffRule = host.restrictions.find(rule => rule.allow?.includes(closedoffTools[0]!))
-    expect(closedoffRule, '应当存在封闭化的工具限制').toBeDefined()
-    expect(closedoffRule?.allow).toContain('common_weather')
-    // 这是「只能调自己标签的工具」的核心：不能拿到别的 Agent 的专业工具。
-    expect(closedoffRule?.allow?.some(name => blogTools.includes(name))).toBe(false)
+    // 取值函数只在装载时被注入子包、不会留在假上下文里，所以规则本身由
+    // tests/visibility.test.ts 覆盖；这里确认注册与路由仍然正常。
+    expect(host.registeredTools).toContain('common_weather')
+    expect(host.routes.map(route => route.path)).toContain('/agents/closedoff')
   }, 30000)
 
-  it('博客的可见性含自己的工具与通用集', async () => {
-    const host = fakeHost()
-    writeGroupConfig()
-    installProvider(host.ctx)
-    await applyGroup(host.ctx, groupConfig())
-
-    const closedoffTools = host.registeredTools.filter(name => name.startsWith('closedoff'))
-    const blogTools = host.registeredTools.filter(name => name.startsWith('blog'))
-    expect(blogTools.length, `已注册工具：${host.registeredTools.join(', ')}`).toBeGreaterThan(0)
-
-    const blogRule = host.restrictions.find(rule => rule.allow?.includes(blogTools[0]!))
-    expect(blogRule, '应当存在博客的工具限制').toBeDefined()
-    expect(blogRule?.allow).toContain('common_weather')
-    expect(blogRule?.allow?.some(name => closedoffTools.includes(name))).toBe(false)
-  }, 30000)
 })

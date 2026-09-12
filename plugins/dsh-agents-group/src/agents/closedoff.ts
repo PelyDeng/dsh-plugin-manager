@@ -48,6 +48,7 @@ export const mountClosedoff: AgentMount = async context => {
     http: context.http,
     config,
     category: context.category,
+    allowedTools: context.allowedTools,
     ...(context.groupConfigPath === undefined ? {} : { groupConfigPath: context.groupConfigPath }),
   })
 

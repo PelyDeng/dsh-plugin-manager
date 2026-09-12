@@ -172,7 +172,7 @@ AI 工作区使用“回答、候选稿、来源、附件”四个固定页签�
 
 ## 后续智能体协作
 
-公开导出 `dsh-blog-assistant/protocol`，协议版本 1。受信任的同宿主插件通过 `blog-assistant/service` 发现 `start/get/cancel`，传入原用户的有效 Actor。请求包括 callerId、requestId、草稿修订、指令、联网选项及冻结的附件选择；相同用户和调用方的 requestId 不重复执行，相同标识不能换输入。
+公开导出 `@dsh-agents-group/blog/protocol`（本子包的 `src/protocol.ts`），协议版本 1。受信任的同宿主插件通过 `blog-assistant/service` 发现 `start/get/cancel`，传入原用户的有效 Actor。请求包括 callerId、requestId、草稿修订、指令、联网选项及冻结的附件选择；相同用户和调用方的 requestId 不重复执行，相同标识不能换输入。
 
 `blog-assistant/task` 事件只通知任务标识，不携带内容。读取内容时，调用方必须再次携带有效 Actor 调用 get；原会话失效时，正在运行的任务会取消。这个协议供其他插件调用博客任务，不负责判断用户意图或分派其他智能体，也不能跳过工作台的发布确认。
 
@@ -191,18 +191,19 @@ AI 工作区使用“回答、候选稿、来源、附件”四个固定页签�
 ## 开发检查
 
 ```sh
-pnpm --filter dsh-blog-assistant check
-pnpm --filter dsh-blog-assistant build
-pnpm --filter dsh-blog-assistant test
-pnpm --filter dsh-blog-assistant test:bridge # 需要 PHP CLI
-pnpm --filter dsh-blog-assistant test:reports # 需要 PHP CLI 和 PDO_SQLite
-python3 -m unittest discover -s plugins/dsh-blog-assistant/backup -p 'test_*.py'
+# 群组内的子包：包名是 @dsh-agents-group/blog
+pnpm --filter @dsh-agents-group/blog check
+pnpm --filter @dsh-agents-group/blog build
+pnpm --filter @dsh-agents-group/blog test
+pnpm --filter @dsh-agents-group/blog test:bridge # 需要 PHP CLI
+pnpm --filter @dsh-agents-group/blog test:reports # 需要 PHP CLI 和 PDO_SQLite
+python3 -m unittest discover -s plugins/dsh-agents-group/agents/blog/backup -p 'test_*.py'
 ```
 
-按改动选择必要检查；这些命令分别检查类型与语法、构建、本地行为、Typecho 桥接及备份执行器。交付包在仓库根执行 `pnpm package --plugins blog`；它另行执行构建、检查和归档校验，输出完整发布目录。认证站点须同时保留 auth，私有完整选集见[集成说明](../../../../PRIVATE.md#本地集成公共更新)。`test:bridge` 使用数据库和原生组件的替身，检查删除、回执重放、冲突与事务回滚。
+按改动选择必要检查；这些命令分别检查类型与语法、构建、本地行为、Typecho 桥接及备份执行器。**发布走群组，不单独发布本子包**：在仓库根执行 `pnpm package --plugins agents-group`，它另行执行构建、检查和归档校验，输出完整发布目录。认证站点须同时保留 auth，私有完整选集见[集成说明](../../../../PRIVATE.md#本地集成公共更新)。`test:bridge` 使用数据库和原生组件的替身，检查删除、回执重放、冲突与事务回滚。
 
 `test:reports` 在内存 SQLite 中实际执行筛选、关联及汇总查询，覆盖保存稿去重、分类后代、组合条件、上海日期、评论排行、目录分页、范围上限和返回体积。默认使用测试查询构造器；设置 `TYPECHO_QUERY_DIR` 指向 Typecho 1.2.1 的 `var/Typecho/Db/`（含 `Query.php`、`Adapter.php`）可改用原生查询构造器。测试不会下载源码；MySQL 事务命令与表引擎检查使用替身，不能作为真实 MySQL 并发快照验收。
 
-这些检查通过后，仍不能据此认定真实 Typecho/MySQL、宿主、模型、图床上传、定时触发、恢复或浏览器操作都正常；需要验收哪一项，就单独记录该项的实际结果。过程记录放在 Git 忽略的 `.local/dsh-blog-assistant/docs/`。
+这些检查通过后，仍不能据此认定真实 Typecho/MySQL、宿主、模型、图床上传、定时触发、恢复或浏览器操作都正常；需要验收哪一项，就单独记录该项的实际结果。过程记录放在 Git 忽略的 `.local/dsh-agents-group/docs/`。
 
 中文译文接口 `POST /blog/reasoning-translation` 按当前身份读取所属会话的精确消息（或持久化 attempt）原文。成功结果按用户、会话、消息与原文摘要缓存，命中缓存仍校验权限。插件数据目录下 `reasoning-translations.sqlite` 保存派生译文与独立调用记录，现有停写备份的 `plugin-data.tar.gz` 一并收录；原官方会话日志不变。原文超过 32,000 字符、90 秒超时或模型未正常完成时保留原文并显示可重试错误。同一用户最多两条翻译并行，无需单独配置密钥。

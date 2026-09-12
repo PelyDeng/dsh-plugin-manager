@@ -1,6 +1,8 @@
-# dsh-closedoff-assistant 开发约定
+# 封闭化助手（智能体群组子包）开发约定
 
-本插件的业务实现和开发资源由本目录维护。通用元数据与发布规范遵循仓库根 AGENTS.md。私有源码更新使用仓库根 `build.sh` 或 `build.ps1`，由 `private-deploy/` 更新 Gitee 源码并调用公共构建；底层安装、启动和部署命令位于根 `deploy/`。
+本子包的业务实现和开发资源由本目录维护。通用元数据与发布规范遵循仓库根 `AGENTS.md`，群组的职责边界与新增 Agent 的步骤遵循群组 `README.md`。私有源码更新使用仓库根 `build.sh` 或 `build.ps1`，由 `private-deploy/` 更新 Gitee 源码并调用公共构建；底层安装、启动和部署命令位于根 `deploy/`。
+
+本子包**没有独立的插件声明与发布入口**：目录条目、页面前缀与授权标识都由群组推导，构建与打包通过 `--plugins agents-group` 完成。改动业务实现时不要引入独立的 `deepseekPlugin` 声明。
 
 ## 三维地图与模型校高
 

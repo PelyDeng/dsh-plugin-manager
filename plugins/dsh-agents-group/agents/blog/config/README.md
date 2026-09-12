@@ -10,8 +10,8 @@ API Key 统一在 auth“模型设置 → 智谱 GLM”保存到官方 credentia
 旧配置省略 models 时沿用宿主默认模型；继续含图片的历史对话时，仍需使用支持图片的模型。缺少 Key 时会报错，不会悄悄换用其他配置。
 
 正式环境在站点设置指定 `instances.blog.runtimeConfig` 为
-`plugins/dsh-blog-assistant/config/config.json`。管理器将该文件只读挂载，
-插件从 `BLOG_CONFIG_PATH` 指定路径解析 JSON；该变量只传路径，不传密码。
+`plugins/dsh-agents-group/agents/blog/config/config.json`。管理器将该文件只读挂载，
+插件从群组级配置的 `blog` 小节解析 JSON；该位置只放配置，不放密码以外的业务数据。
 不需要、也不读取另一份 env.conf 凭据。更改后通过管理器重启生效。
 
 实际文件不提交 Git、不进插件包或镜像。Linux 建议目录 750、文件 640，

@@ -39,7 +39,7 @@ kind: "package-reference"
 
 ## 配置文件与源码位置
 
-以下地址均相对于 `dsh-closedoff-assistant/` 插件包根目录：
+以下地址均相对于群组包根 `plugins/dsh-agents-group/agents/closedoff/`：
 
 | 文件 | 用途 |
 | --- | --- |
@@ -100,26 +100,35 @@ CLOSEDOFF_USERNAME=<阶段二用户名>
 
 ```yaml
 - insert:
-    - id: closedoff-assistant
-      name: dsh-closedoff-assistant
+    - id: agents-group
+      name: dsh-agents-group
       config:
-        terrainUrl: https://<地形服务>/
-        tilesetUrl: https://<三维瓦片服务>/tileset.json
-        tilesetHeight: 60
-        trackDeviceRadiusMeters: 100
-        trackDwellMaxGapSeconds: 300
-        routePrefix: /closedoff-qa
-        requestTimeoutMs: 20000
-        toolTimeoutMs: 45000
-        turnTimeoutMs: 480000
-        maxPageSize: 500
-        maxQueryRangeDays: 30
-        maxRequestBodyBytes: 65536
-        maxResponseBodyBytes: 2097152
-        maxActiveConversations: 50
+        accessMode: authenticated
+        publicOrigin: https://<站点 origin>
+        routePrefix: /agents
+        agents:
+          closedoff:
+            enabled: true
+            config:
+              terrainUrl: https://<地形服务>/
+              tilesetUrl: https://<三维瓦片服务>/tileset.json
+              tilesetHeight: 60
+              trackDeviceRadiusMeters: 100
+              trackDwellMaxGapSeconds: 300
+              requestTimeoutMs: 20000
+              toolTimeoutMs: 45000
+              turnTimeoutMs: 480000
+              maxPageSize: 500
+              maxQueryRangeDays: 30
+              maxRequestBodyBytes: 65536
+              maxResponseBodyBytes: 2097152
+              maxActiveConversations: 50
 ```
 
-实际包中的 `cordis.patch.yml` 只显式设置地图、轨迹筛选和 `routePrefix`；其余字段使用 `src/config.ts` 默认值。
+`routePrefix` 属于**群组**，不要再写 `/closedoff-qa`：本子包的页面地址由群组从它的 id 推导，
+最终是 `/agents/closedoff`。本子包自己的字段写在 `agents.closedoff.config` 下。实际包中的
+`cordis.patch.yml` 只显式设置地图与轨迹筛选，其余字段用 `src/config.ts` 的默认值 ——
+注意默认值来自 Schema 解析，不是 `Schema.meta.default`（后者是空对象）。
 
 ## 两阶段认证
 
