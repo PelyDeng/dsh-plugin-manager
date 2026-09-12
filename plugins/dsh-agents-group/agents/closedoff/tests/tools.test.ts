@@ -53,7 +53,8 @@ describe('device tool output', () => {
   it('builds a specific output contract for every approved Tool', () => {
     const tools = TOOL_SPECS.map(spec => createTool(spec, {} as ClosedoffGateway, config, () => {}))
 
-    expect(tools).toHaveLength(37)
+    // 数量与名字唯一性由 specs.test.ts 断言（一次覆盖 37 个且名字不重复）；
+    // 这里再断言一次数量没有额外保护，只多一处改动时要跟着改的地方。
     expect(tools.every(tool => 'oneOf' in tool.output.schema)).toBe(true)
     expect(tools.every(tool => tool.description.includes('当前'))).toBe(true)
   })
