@@ -23,6 +23,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { agentResource } from '@dsh-agents-group/common'
 import { createPluginHttp, onRevoked, registerPlugin, registerConversations, type Access, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
+import type { AgentParticipant } from 'dsh-pirate-command/protocol'
 import { ConversationManager } from './agent.ts'
 import { ConversationStore } from './conversation-store.ts'
 import { Config as ConfigSchema, type Config as PluginConfig } from './config.ts'
@@ -120,8 +121,12 @@ async function loadEnvironment(groupConfigPath: string | undefined): Promise<Ret
  */
 const agentResourceUrl = (relative: string): URL => agentResource(import.meta.url, 'closedoff', relative)
 
-/** 装载封闭化助手，返回群组用于卸载的释放函数与本次注册的工具条目。 */
-export async function mount(context: AgentMountContext): Promise<{ dispose(): Promise<void>; tools: readonly ToolDescriptor[] }> {
+/** 装载封闭化助手，返回群组用于卸载的释放函数、工具条目与参与者。 */
+export async function mount(context: AgentMountContext): Promise<{
+  dispose(): Promise<void>
+  tools: readonly ToolDescriptor[]
+  participant: AgentParticipant
+}> {
   const { ctx, access, http, groupConfigPath } = context
   const config: PluginConfig = { ...schemaDefaults(), ...context.config }
 
@@ -161,6 +166,9 @@ export async function mount(context: AgentMountContext): Promise<{ dispose(): Pr
   return {
     // 群组据此算「本分类 + 通用」的工具可见性限制，所以如实返回全部已注册工具。
     tools,
+    // 参与者交给群组桥接成管家的执行入口：管家按「一个 Agent 一个执行入口」工作，
+    // 而参与者已经实现了「派一轮活、拿回结论」的全部逻辑，桥接只做字段翻译。
+    participant,
     dispose: async () => {
       // 会话与存储由本子包负责释放；注册的路由随 ctx 作用域回收。
       await manager.dispose()

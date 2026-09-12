@@ -9,6 +9,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createAccess, createPluginHttp, type Access, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
+import type { AgentParticipant } from 'dsh-pirate-command/protocol'
 import type * as common from '@dsh-agents-group/common'
 import { endpointsOf, type AgentManifest } from './agents/registry.ts'
 
@@ -23,6 +24,8 @@ export interface MountedAgent {
   readonly accessMode: 'standalone' | 'authenticated'
   /** 该 Agent 注册的工具条目。群组据此算「本分类 + 通用」的可见性限制。 */
   readonly tools: readonly ToolDescriptor[]
+  /** 该 Agent 的协作参与者；装载失败时为 undefined。群组据此桥接管家的执行入口。 */
+  readonly participant?: AgentParticipant
   /** 装载失败时的可读原因；正常时为 undefined。 */
   readonly failure?: string
   dispose(): Promise<void>
@@ -68,6 +71,13 @@ export type AgentMount = (context: AgentMountContext) => Promise<{
    * 漏报会让对应工具对该 Agent 不可见，而那在界面上看不出来。
    */
   tools: readonly ToolDescriptor[]
+  /**
+   * 该 Agent 的协作参与者。
+   *
+   * 群组把它桥接成管家的执行入口 —— 参与者已经实现了「派一轮活、拿回结论」，桥接只做字段
+   * 翻译。漏报会让该 Agent 在管家的名单里变成「不可调度」，管家于是不会把专业活派给它。
+   */
+  participant: AgentParticipant
 }>
 
 /**
@@ -134,7 +144,7 @@ export async function mountAgents(
         common: shared.common,
         ...(shared.groupConfigPath === undefined ? {} : { groupConfigPath: shared.groupConfigPath }),
       })
-      mounted.push({ ...base, tools: instance.tools, dispose: instance.dispose })
+      mounted.push({ ...base, tools: instance.tools, participant: instance.participant, dispose: instance.dispose })
     } catch (error) {
       // 只标记这一个 Agent 失败，群组继续服务其他 Agent。
       // 连栈一起记：只记 message 会让这类问题在运维时无从定位。

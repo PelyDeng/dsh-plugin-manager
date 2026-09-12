@@ -46,7 +46,15 @@ async function mount(loader: (m: AgentManifest) => Promise<AgentMount | undefine
 }
 
 /** 一个什么都不做的装载函数，用来表达「子包正常起来了」。 */
-const okMount: AgentMount = async () => ({ dispose: async () => {}, tools: [] })
+const okMount: AgentMount = async () => ({
+  dispose: async () => {},
+  tools: [],
+  participant: {
+    protocol: 1, id: 'closedoff', displayName: 'x', description: '',
+    assertAccess: () => {},
+    run: async () => ({ status: 'completed', conversationId: 'c', text: '' }),
+  } as never,
+})
 
 describe('装载失败隔离', () => {
   it('一个 Agent 抛错时，其他 Agent 照常装载', async () => {

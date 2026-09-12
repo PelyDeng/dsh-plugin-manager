@@ -123,6 +123,9 @@ importers:
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.1
+      dsh-pirate-command:
+        specifier: workspace:*
+        version: link:../dsh-pirate-command
       tsdown:
         specifier: ^0.22.2
         version: 0.22.14(typescript@6.0.3)

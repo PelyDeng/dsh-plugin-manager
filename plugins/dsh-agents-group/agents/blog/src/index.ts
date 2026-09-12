@@ -22,7 +22,8 @@ import { BlogApplication } from './application.mjs'
 import { BlogAttachments, MAX_ATTACHMENT_BYTES } from './attachments.mjs'
 import { ChatStore } from './chat-store.mjs'
 import { BlogChat } from './chat.mjs'
-import { registerBlogParticipant } from './participant.ts'
+import { createBlogParticipant } from './participant.ts'
+import type { AgentParticipant } from 'dsh-pirate-command/protocol'
 import {selectBlogModel} from './models.mjs'
 import {ReasoningTranslations,reasoningOriginal} from './reasoning-translation.ts'
 import type { Config } from './config.ts'
@@ -85,7 +86,11 @@ const blogResource = (relative: string): URL => agentResource(import.meta.url, '
  *
  * `access` 与 `http` 由群组注入：一个 Agent 只应有一套鉴权实例。业务逻辑未作改动。
  */
-export async function mount(mountContext:AgentMountContext):Promise<{dispose():Promise<void>;tools:readonly ToolDescriptor[]}>{
+export async function mount(mountContext:AgentMountContext):Promise<{
+  dispose():Promise<void>
+  tools:readonly ToolDescriptor[]
+  participant:AgentParticipant
+}>{
   const {ctx,access,http}=mountContext
   const config=mountContext.config
   // 不再在这里断言 accessMode：群组会为强制认证的 Agent 建 authenticated 的 access。
@@ -100,7 +105,10 @@ export async function mount(mountContext:AgentMountContext):Promise<{dispose():P
   const app=new BlogApplication(store,access,blog,images,backups,jobs,attachments)
   const {chatSdk}=await import(blogResource('runtime/chat-sdk.mjs').href)
   const chat=new BlogChat(ctx,access,store,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)
-  ctx.effect(()=>registerBlogParticipant(ctx,{access,chat,index:conversations,store,routePrefix:config.routePrefix}))
+  // 显式创建参与者再注册：群组要把同一个实例桥接成管家的执行入口，
+  // 而 registerBlogParticipant 只在内部创建、不交出来。
+  const participant=createBlogParticipant({access,chat,index:conversations,store,routePrefix:config.routePrefix})
+  ctx.effect(()=>ctx.on('pirate/participants',accept=>accept(participant),{global:true}))
   ctx.effect(()=>registerConversations(ctx,chat.provider))
   const translations=new ReasoningTranslations({ctx,pluginId:'blog',path:join(root,'reasoning-translations.sqlite'),access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
   const manifest=JSON.parse(await readFile(blogResource('package.json'),'utf8'))
@@ -195,6 +203,8 @@ export async function mount(mountContext:AgentMountContext):Promise<{dispose():P
   return {
     // 群组据此算「本分类 + 通用」的工具可见性限制，所以如实返回全部已注册工具。
     tools: jobs.chatTools,
+    // 参与者交给群组桥接成管家的执行入口。
+    participant,
     dispose: async () => {
       // 释放顺序与创建相反，与迁移前保持一致。
       await translations.close(); await chat.close(); await jobs.close(); await attachments.close(); store.close()

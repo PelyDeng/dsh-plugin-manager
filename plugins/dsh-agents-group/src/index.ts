@@ -15,6 +15,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createAccess, createPluginHttp, createPluginTools, registerPlugin, UNIVERSAL_TOOL_CATEGORY, toolsForCategory } from '@dsh-plugin-manager/plugin-kit'
 import * as common from '@dsh-agents-group/common'
 import { assertUniqueManifests, AGENT_MANIFESTS, type AgentManifest } from './agents/registry.ts'
+import { BUTLER_EXECUTORS_EVENT, executorFor } from './butler-bridge.ts'
 import { agentConfig, Config as ConfigSchema, isAgentEnabled, type Config as PluginConfig } from './config.ts'
 import { mountAgents, readiness, type AgentMount } from './host.ts'
 import { weatherTool } from './tools/weather.ts'
@@ -123,6 +124,21 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     ...(runtimeConfigPath === '' ? {} : { groupConfigPath: runtimeConfigPath }),
     common,
   }, loadAgent)
+
+  /**
+   * 把各 Agent 的参与者登记为管家的执行入口。
+   *
+   * 没有这一步，管家的成员名单恒为空，它每轮收到的提示词是「现在没有能接活的成员，这一轮
+   * 只能你自己回答，不要调用 butler_plan」—— 于是「协调对应智能体」这条完全不通，管家
+   * 连计划都不会做。业务插件本身没问题，缺的就是这段桥接。
+   *
+   * 按清单顺序登记，且只登记装载成功的：装载失败的 Agent 不该出现在可调度名单里。
+   */
+  for (const agent of mounted) {
+    if (agent.participant === undefined) continue
+    const executor = executorFor(agent.manifest, agent.participant)
+    ctx.effect(() => ctx.on(BUTLER_EXECUTORS_EVENT, accept => accept(executor), { global: true }))
+  }
 
   // 群组卸载时按装载逆序释放，保证后起的先关。
   ctx.effect(() => () => Promise.allSettled([...mounted].reverse().map(agent => agent.dispose())))

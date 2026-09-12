@@ -114,6 +114,19 @@ try {
 
   const get = async path => { const r = await fetch(origin + path, { redirect: 'manual' }); return { status: r.status, text: await r.text(), headers: r.headers } }
 
+  /**
+   * 管家的执行入口必须真的登记了。
+   *
+   * 没有这一步，管家的成员名单恒为空，它每轮收到的提示词是「没有能接活的成员，这一轮只能
+   * 你自己回答」，于是「协调对应智能体」完全不通。这条断言就是那次修复的固化。
+   */
+  const executors = []
+  root.emit('butler/executors', executor => executors.push(executor))
+  record('向管家登记了执行入口', executors.length === 2, `实际 ${executors.length} 个：${executors.map(e => e.agentId).join('、')}`)
+  record('执行入口的 agentId 与目录条目一致', executors.every(e => ['closedoff', 'blog'].includes(e.agentId)), executors.map(e => e.agentId).join('、'))
+  record('执行入口声明了能力摘要', executors.every(e => Array.isArray(e.capabilities) && e.capabilities.length > 0))
+  record('执行入口提供 dispatch', executors.every(e => typeof e.dispatch === 'function'))
+
   // 群组级探针：真实 HTTP 上必须可达。
   const health = await get('/agents/health')
   record('存活探针 /agents/health 返回 200', health.status === 200, `实际 ${health.status}`)

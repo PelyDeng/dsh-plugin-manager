@@ -3,14 +3,15 @@
  *
  * 设计边界（见 `.local/agent-console/docs/设计/` 的方向稿）：
  *
- * - 管家只负责理解目标、拆解、分发和汇总。
- * - 管家不决定子 Agent 用什么工具，也不创建子 Agent 的会话。
+ * - 管家只负责理解目标、拆解、分发和汇总。 * - 管家不决定子 Agent 用什么工具，也不创建子 Agent 的会话。
  * - 每个子 Agent 由它自己所属的插件注册一个 executor；那个插件负责创建、
  *   驱动和释放自己的 Agent，并决定它能看到哪些工具。
  *
  * 因此这里只约定“派什么活、什么时候算完成”这一层，不暴露任何工具、模型或
  * 提示词细节。协议通过 Cordis 事件总线传输，插件之间不需要互相导入源码。
  */
+
+import type { Actor } from '@dsh-plugin-manager/plugin-kit'
 
 /** 插件目录里为子 Agent 声明的能力摘要之外的执行入口。 */
 export interface ButlerAgentExecutor {
@@ -66,6 +67,17 @@ export interface ButlerDispatchRequest {
    * `actorKey` 一致。执行方用它做数据归属，不要用它做长期存储的主键。
    */
   readonly owner: string
+  /**
+   * 发起这次协作的完整身份。
+   *
+   * `owner` 不足以鉴权：它是单向压出来的键，**丢失了 sessionId**，而且没有接口能从它反推回
+   * `Actor`（kit 的 `Access.resolve` 只接受 HTTP 请求）。执行方要用原始用户身份、自己的权限
+   * 和会话，所以必须拿到完整身份，而不是从字符串重建 —— 重建写错就是越权。
+   *
+   * 与 `owner` 并存而不是替换：`owner` 是插件做数据归属用的稳定键，`actor` 是鉴权用的身份，
+   * 两者用途不同。
+   */
+  readonly actor: Actor
   /** 子任务进度上报。执行方可以不调用，管家会按派发和结束补全时间线。 */
   readonly onProgress?: (update: ButlerProgressUpdate) => void
   /** 用户取消、超时或插件卸载时中止。执行方应尽快释放自己的 Agent。 */
@@ -131,6 +143,8 @@ export interface ButlerReplyRequest {
   /** 用户选择「你看着办」时为 true，执行方自行决定，不必再追问。 */
   readonly decideByAgent: boolean
   readonly owner: string
+  /** 完整身份，理由同 `ButlerDispatchRequest.actor`。 */
+  readonly actor: Actor
   readonly onProgress?: (update: ButlerProgressUpdate) => void
   readonly signal: AbortSignal
 }

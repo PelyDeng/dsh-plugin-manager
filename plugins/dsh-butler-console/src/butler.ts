@@ -818,6 +818,8 @@ export class ButlerConsole {
         brief: briefFor(input.taskGoal, input.goal),
         taskGoal: input.taskGoal,
         owner: `${input.actor.namespace}:${input.actor.userId}`,
+        // 完整身份交给执行方鉴权：owner 丢掉了 sessionId，无法反推回 Actor。
+        actor: input.actor,
         signal: controller.signal,
         onProgress,
       })
@@ -921,6 +923,8 @@ export class ButlerConsole {
       text: clip(input.text, this.config.maxMessageChars),
       decideByAgent: input.decideByAgent,
       owner: `${input.actor.namespace}:${input.actor.userId}`,
+      // 完整身份交给执行方鉴权：owner 丢掉了 sessionId，无法反推回 Actor。
+      actor: input.actor,
       signal: controller.signal,
       onProgress,
     }
