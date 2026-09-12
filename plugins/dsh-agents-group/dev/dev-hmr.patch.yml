@@ -1,0 +1,19 @@
+# 群组级开发模式。
+#
+# 合并成一个插件后，development.rootVariable 全局只能有一个（管理器校验变量名唯一），
+# 所以这里用同一个开发根覆盖全部 Agent，各自指向自己的 dist。
+# 改哪个子包、重建哪个，对应的模块就会被重载，不需要重启服务。
+- id: hmr
+  disabled: false
+  config:
+    root: !!js [
+      process.env.AGENTS_GROUP_DEV_ROOT + '/agents/closedoff/dist',
+      process.env.AGENTS_GROUP_DEV_ROOT + '/agents/blog/dist',
+      process.env.AGENTS_GROUP_DEV_ROOT + '/dist'
+    ]
+    ignored: ['**/node_modules', '**/.*']
+    debounce: 100
+
+- insert:
+    - id: agents-group-dev-hmr-observer
+      name: ./scripts/hmr-observer.mjs

@@ -1,6 +1,10 @@
 packages:
   - 'packages/*'
   - 'plugins/*'
+  # 群组插件内部的子包：每个 Agent 一个，另有共享组件包。
+  # 它们不带 deepseekPlugin，因此不会被管理器当成独立插件。
+  - 'plugins/*/agents/*'
+  - 'plugins/*/packages/*'
 nodeLinker: hoisted
 minimumReleaseAgeExclude:
   - "@deepseek-ai/dsh-session-format-v2-to-v3@0.1.5-alpha.2"

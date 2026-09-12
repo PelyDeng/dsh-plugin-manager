@@ -1,0 +1,21 @@
+{
+  "name": "@dsh-agents-group/common",
+  "version": "0.1.0",
+  "description": "智能体群组内部的共享组件包；不对外发布",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node -e \"console.log('common 由群组产物内联，无需单独构建')\"",
+    "check": "pnpm typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

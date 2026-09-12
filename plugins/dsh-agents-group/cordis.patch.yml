@@ -1,0 +1,14 @@
+# 直接使用官方 Bundle 的完整默认配置；管理器部署时由 plugin.json 生成的 settings patch 覆盖。
+# 每个字段都必须有 Schema 默认值：管理器的 patch 会整体替换 config，不做逐字段合并。
+- insert:
+    - id: agents-group
+      name: dsh-agents-group
+      config:
+        # 可选，默认 authenticated；standalone 仅用于本机调试。
+        accessMode: !!js process.env.DSH_ACCESS_MODE ?? 'authenticated'
+        # authenticated 模式条件必填：HTTP(S) origin，无路径或尾斜杠。
+        publicOrigin: !!js process.env.DSH_PUBLIC_ORIGIN ?? ''
+        # 群组根前缀。各 Agent 的实际页面是它的子路径，例如 /agents/closedoff-qa。
+        routePrefix: /agents
+        # 各 Agent 的业务配置由群组级 runtimeConfig 文件提供，这里只放非敏感覆盖。
+        agents: {}
