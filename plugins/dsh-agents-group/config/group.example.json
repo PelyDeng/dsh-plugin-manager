@@ -1,5 +1,13 @@
 {
-  "$comment": "复制为实际配置文件，用 AGENTS_GROUP_CONFIG 指向它。敏感凭据只放这里，不要写进 Git。",
-  "closedoff": {},
+  "$comment": "群组唯一的业务配置模板。复制为实际文件并用 AGENTS_GROUP_CONFIG 指向它；敏感凭据只放这里，不要写进 Git。各 Agent 从自己的小节读取，字段名与该 Agent 原有的环境变量一致。",
+  "closedoff": {
+    "CLOSEDOFF_BASE_URL": "https://your-gateway.example/",
+    "CLOSEDOFF_OPEN_CLIENT_ID": "REPLACE_ME",
+    "CLOSEDOFF_OPEN_CLIENT_SECRET": "REPLACE_ME",
+    "CLOSEDOFF_APP_CODE": "REPLACE_ME",
+    "CLOSEDOFF_APP_CLIENT_ID": "REPLACE_ME",
+    "CLOSEDOFF_APP_CLIENT_SECRET": "REPLACE_ME",
+    "CLOSEDOFF_USERNAME": "REPLACE_ME"
+  },
   "blog": {}
 }

@@ -134,7 +134,10 @@ describe('HTTP authentication and conversation ownership', () => {
     for (const path of ['/identity', '/conversations', '/history']) expect((await request('/closedoff-qa' + path, '')).status).toBe(401)
     expect((await request('/closedoff-qa/chat', 'alice', { message: 'q' }, { origin: 'https://foreign.test' })).status).toBe(403)
     expect((await request('/closedoff-qa/conversations?limit=100000')).status).toBe(400)
-    expect((await request('/closedoff-qa/health', '')).status).toBe(200)
+    // 存活与就绪探针由群组统一提供（/agents/health、/agents/ready 与 /agents/<id>/ready）。
+    // 子包不再注册自己的探针：容器级探针是群组的职责，重复一份还会因前缀来源不同而冲突。
+    expect((await request('/closedoff-qa/health', '')).status).toBe(404)
+    expect((await request('/closedoff-qa/ready', '')).status).toBe(404)
   })
   it('rejects every foreign conversation operation before reading history or feedback', async () => {
     const { request, actors, manager, feedback, cancel } = await fixture()
@@ -178,13 +181,11 @@ describe('HTTP authentication and conversation ownership', () => {
     const authenticated = await fixture()
     authenticated.removeProvider()
     expect((await authenticated.request('/closedoff-qa/history')).status).toBe(503)
-    expect((await authenticated.request('/closedoff-qa/ready', '')).status).toBe(503)
-    expect((await authenticated.request('/closedoff-qa/health', '')).status).toBe(200)
+    // 探针归群组所有；这里只确认业务接口在认证不可用时的失败关闭行为。
     const standalone = await fixture('standalone')
     standalone.removeProvider()
     expect((await standalone.request('/closedoff-qa', '')).status).toBe(200)
     expect((await standalone.request('/closedoff-qa/conversations', '')).status).toBe(200)
-    expect((await standalone.request('/closedoff-qa/ready', '')).status).toBe(200)
     expect(() => standalone.manager.authorizeAgent(undefined)).not.toThrow()
   })
 })

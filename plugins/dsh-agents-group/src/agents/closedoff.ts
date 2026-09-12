@@ -8,6 +8,7 @@
 import { Config as ClosedoffConfigSchema, mount, type PluginConfig } from '../../agents/closedoff/src/index.ts'
 import { renderHttpError } from '../../agents/closedoff/src/web.ts'
 import type { AgentMount } from '../host.ts'
+import { endpointsOf } from './registry.ts'
 
 /**
  * 封闭化助手自己的 HTTP 错误渲染。
@@ -22,13 +23,18 @@ export const closedoffErrorHandler = renderHttpError
  *
  * 配置合并顺序：子包 Schema 默认值 → 群组配置的 `agents.closedoff.config` →
  * 群组注入的公共字段。公共字段放最后，因为它们由群组权威提供，不接受子包覆盖。
+ *
+ * 注意 `routePrefix` 用的是**该 Agent 自己的页面前缀**，不是群组根。它与路由注册、目录
+ * 条目、探针地址出自同一处推导（`endpointsOf`），避免出现「路由挂在 A 而子包以为是 B」。
  */
 export const mountClosedoff: AgentMount = async context => {
+  const manifest = context.manifest
+  const entryPath = endpointsOf(manifest, context.config.routePrefix).entryPath
   const defaults = { ...(ClosedoffConfigSchema.meta.default as PluginConfig) }
   const config: PluginConfig = {
     ...defaults,
     ...(context.agentConfig as Partial<PluginConfig>),
-    routePrefix: context.config.routePrefix,
+    routePrefix: entryPath,
     publicOrigin: context.config.publicOrigin,
     accessMode: context.config.accessMode,
   }

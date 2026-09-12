@@ -153,6 +153,29 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     },
   }))
 
+  /**
+   * 每个 Agent 一条就绪探针，地址就是它目录条目声明的 `healthPath`。
+   *
+   * 由群组注册而不是子包自己注册：容器级探针是群组的职责，而且子包只知道自己 config 里的
+   * 前缀，与注入的页面前缀可能不一致。声明与实现由同一处产生，才不会对不上。
+   */
+  for (const agent of mounted) {
+    ctx.effect(() => groupHttp.registerPublic({
+      kind: 'exact',
+      path: agent.healthPath,
+      handler: (_request, response) => {
+        const ok = agent.failure === undefined
+        response.writeHead(ok ? 200 : 503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
+        response.end(JSON.stringify({
+          ok,
+          id: agent.id,
+          entryPath: agent.entryPath,
+          ...(agent.failure === undefined ? {} : { error: agent.failure }),
+        }))
+      },
+    }))
+  }
+
   if (mounted.some(agent => agent.failure !== undefined)) {
     const failed = mounted.filter(agent => agent.failure !== undefined).map(agent => agent.id)
     console.warn(`agents-group: 以下 Agent 未就绪：${failed.join('、')}`)

@@ -27,6 +27,8 @@ export interface MountedAgent {
 /** 装载一个 Agent 需要的东西。共享对象在群组生命周期内复用。 */
 export interface AgentMountContext {
   readonly ctx: Context
+  /** 该 Agent 的清单项。适配层用它推导自己的页面前缀等标识。 */
+  readonly manifest: AgentManifest
   readonly config: {
     readonly routePrefix: string
     readonly publicOrigin: string
@@ -58,7 +60,7 @@ export type AgentMount = (context: AgentMountContext) => Promise<{
 export async function mountAgents(
   ctx: Context,
   manifests: readonly AgentManifest[],
-  shared: Omit<AgentMountContext, 'ctx' | 'access' | 'http' | 'agentConfig'> & {
+  shared: Omit<AgentMountContext, 'ctx' | 'access' | 'http' | 'agentConfig' | 'manifest'> & {
     /** 按 Agent id 取它自己的部署字段。 */
     readonly agentConfigOf: (agentId: string) => Record<string, unknown>
     /**
@@ -101,6 +103,7 @@ export async function mountAgents(
       })
       const instance = await mount({
         ctx,
+        manifest,
         config: shared.config,
         agentConfig: shared.agentConfigOf(manifest.id),
         access,
@@ -111,8 +114,9 @@ export async function mountAgents(
       mounted.push({ ...base, dispose: instance.dispose })
     } catch (error) {
       // 只标记这一个 Agent 失败，群组继续服务其他 Agent。
+      // 连栈一起记：只记 message 会让这类问题在运维时无从定位。
       const message = error instanceof Error ? error.message : String(error)
-      console.error(`agents-group: ${manifest.id} 装载失败：${message}`)
+      console.error(`agents-group: ${manifest.id} 装载失败：${message}`, error instanceof Error ? error.stack : '')
       mounted.push({ ...base, failure: message, dispose: async () => {} })
     }
   }

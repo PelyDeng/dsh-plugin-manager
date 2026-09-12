@@ -173,15 +173,10 @@ export async function installWeb(
     access.assert(actor)
     json(res, status, value)
   }
-  const { register, registerPublic } = http
-  ctx.effect(() => registerPublic({
-    kind: 'exact', path: `${config.routePrefix}/health`, handler: (_req, res) => json(res, 200, { ok: true }),
-  }))
-  ctx.effect(() => registerPublic({
-    kind: 'exact', path: `${config.routePrefix}/ready`, handler: (req, res) => {
-      try { method(req, 'GET'); access.ready(); json(res, 200, { ok: true }) } catch (caught: unknown) { error(res, caught) }
-    },
-  }))
+  const { register } = http
+  // 存活与就绪探针由群组统一提供（/agents/health、/agents/ready，以及每个 Agent 的
+  // /agents/<id>/ready）。子包这里不再注册：容器级探针是群组的职责，各 Agent 重复一份
+  // 不但冗余，而且它的前缀来自自己的 config，与注入的页面前缀天然不一致。
   ctx.effect(() => register({
     kind: 'exact', path: `${config.routePrefix}/models`, handler: async (req, res, actor) => {
       method(req, 'GET')

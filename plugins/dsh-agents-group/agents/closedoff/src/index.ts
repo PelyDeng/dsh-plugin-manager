@@ -72,23 +72,33 @@ function schemaDefaults(): PluginConfig {
 /**
  * 加载业务凭据。
  *
- * 优先群组级配置文件的 `closedoff` 小节；没有就回落到旧来源（`CLOSEDOFF_ENV_CONF`
- * 或包内 `env.conf`），这样切换过程不会因为配置文件搬家而中断。
+ * 优先群组级配置文件（JSON）里的 `closedoff` 小节。该小节写成同名环境变量的键值对
+ * 或 `KEY=VALUE` 文本都接受，两者都交给原有的 `parseEnvConf` 校验 —— 这样校验规则
+ * 只有一份，不会因为换了配置文件就把必填、HTTPS、占位符等检查漏掉。
+ *
+ * 没有群组配置时回落到旧来源（`CLOSEDOFF_ENV_CONF` 或包内 `env.conf`），
+ * 这样切换过程不会因为配置文件搬家而中断。
  */
 async function loadEnvironment(groupConfigPath: string | undefined): Promise<ReturnType<typeof parseEnvConf>> {
   if (groupConfigPath !== undefined && groupConfigPath !== '') {
+    let raw: string
     try {
-      const raw = JSON.parse(await readFile(groupConfigPath, 'utf8')) as Record<string, unknown>
-      const section = raw.closedoff
-      if (section !== undefined && section !== null) {
-        // 群组配置里该小节写成 KEY=VALUE 文本，直接复用原有的解析与校验逻辑。
-        const text = typeof section === 'string' ? section : Object.entries(section as Record<string, unknown>)
-          .map(([key, value]) => `${key}=${String(value)}`).join('\n')
-        if (text.trim() !== '') return parseEnvConf(text)
-      }
+      raw = await readFile(groupConfigPath, 'utf8')
     } catch (cause: unknown) {
-      // 只有「文件不存在」才回落到旧来源；格式错误要如实抛出，不能静默换源。
-      if (!(cause instanceof Error) || !('code' in cause) || cause.code !== 'ENOENT') throw cause
+      // 只有「文件不存在」才回落到旧来源；读得到但内容有问题要如实抛出。
+      if (cause instanceof Error && 'code' in cause && cause.code === 'ENOENT') return loadEnvConf()
+      throw cause
+    }
+    const document = JSON.parse(raw) as Record<string, unknown>
+    const section = document.closedoff
+    if (section !== undefined && section !== null) {
+      const text = typeof section === 'string'
+        ? section
+        : Object.entries(section as Record<string, unknown>)
+          .filter(([, value]) => typeof value === 'string' || typeof value === 'number')
+          .map(([key, value]) => `${key}=${String(value)}`)
+          .join('\n')
+      if (text.trim() !== '') return parseEnvConf(text)
     }
   }
   return loadEnvConf()
