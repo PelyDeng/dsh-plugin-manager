@@ -519,8 +519,9 @@ export function createTool(spec: ToolSpec, gateway: ClosedoffGateway, config: Co
 }
 
 /** Register approved queries through the common owner and return their actual catalog entries. */
-export function registerTools(ctx: Context, gateway: ClosedoffGateway, config: Config, authorize: ToolAuthorizer): readonly ToolDescriptor[] {
+export function registerTools(ctx: Context, gateway: ClosedoffGateway, config: Config, authorize: ToolAuthorizer, category: string): readonly ToolDescriptor[] {
   validateToolSpecs()
   const tools = createPluginTools(ctx, { permission: 'closedoff:access', authorize })
-  return TOOL_SPECS.map(spec => tools.register(defineBusinessTool(spec, gateway, config), spec.displayName))
+  // 分类由群组从清单注入：这是唯一权威来源，子包不自己写字符串，否则两处漂移会让本 Agent 的工具全部不可见
+  return TOOL_SPECS.map(spec => tools.register(defineBusinessTool(spec, gateway, config), spec.displayName, category))
 }

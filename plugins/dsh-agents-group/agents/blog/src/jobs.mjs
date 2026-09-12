@@ -27,8 +27,11 @@ export const persona = `你是个人博客的写作助手，也是一位表达�
 提交候选后用中文简述改动和查证状况。`
 
 export class BlogJobs {
-  constructor(ctx, access, store, blog, attachments, timeoutMs = 240000, models = {}) {
+  constructor(ctx, access, store, blog, attachments, timeoutMs = 240000, models = {}, category = '') {
     this.ctx = ctx; this.access = access; this.store = store; this.blog = blog; this.attachments = attachments; this.timeoutMs = timeoutMs
+    // 分类由群组从清单注入：这是唯一权威来源，子包不自己写字符串，否则两处漂移
+    // 会让本 Agent 的工具全部不可见，而那种失效在界面上看不出来。
+    this.category = category
     this.models = models; this.bindings = new WeakMap(); this.active = new Map(); this.closed = false
     ctx.effect(()=>ctx.jobs.attachController('blog-workbench'))
     const tools = createPluginTools(ctx, { permission: 'blog:access', authorize: agent => this.bound(agent) })
@@ -36,7 +39,7 @@ export class BlogJobs {
       name, description, parameters, timeoutMs: 45000,
       output: { schema: { type: 'json' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
       execute: (args, execution) => execute(args, this.bound(execution.agent), execution.signal),
-    }), displayName)
+    }), displayName, this.category)
     this.tools = [
       ...reportTools.map(tool=>register(tool.name,tool.label,tool.description,tool.parameters,async(a,b,s)=>{const result=await blog.report(tool.report,a,s);this.bound(b.handle.agent);return result})),
       register('blog_manage_list','查询分类标签评论','分页查询分类(category)、标签(tag)或评论(comment)。query 按名称或链接别名搜索分类/标签，返回 id、name、slug、parent、count。分类 parent=0 为顶级，其他值为父分类 ID；完整层级须读完所有页再按 parent 组织，不能把当前页当作完整树。标签没有父子层级。评论可按文章cid与审核状态筛选；hasMore=true 时继续翻页，page 从 1 开始。',{kind:{type:'string',enum:['category','tag','comment'],required:true},page:{type:'integer'},query:{type:'string'},cid:{type:'integer'},status:{type:'string',enum:['all','approved','waiting','spam']}},(a,b,s)=>blog.call('manage-list',a,s)),

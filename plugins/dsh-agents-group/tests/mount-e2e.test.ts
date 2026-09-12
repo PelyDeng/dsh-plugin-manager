@@ -65,6 +65,9 @@ function fakeHost() {
   const provided = new Map<string, unknown>()
   const catalog: unknown[] = []
   const conversations: unknown[] = []
+  /** 全局注册的工具名，以及每一次 restrict 规则。 */
+  const registeredTools: string[] = []
+  const restrictions: { allow?: readonly string[]; deny?: readonly string[] }[] = []
 
   const emit = (name: string, accept: (value: unknown) => void) => {
     if (name === 'ecosystem/providers') return
@@ -89,7 +92,18 @@ function fakeHost() {
     // 子包在挂载期会用到这几个服务；给最小替身即可，不需要真实实现。
     llm: { resolveModelInfo: async () => undefined, resolveCallConfig: async (v: unknown) => v },
     agents: { list: () => [], get: () => undefined },
-    tools: { register: () => () => {}, restrict: () => () => {} },
+    tools: {
+      register: (tool: { name: string }) => {
+        // 记录全局注册的工具：分类限制算的就是这些名字。
+        registeredTools.push(tool.name)
+        return () => {}
+      },
+      restrict: (rule: { allow?: readonly string[]; deny?: readonly string[] }) => {
+        // 记录每一次限制：这是「只允许调自己标签的工具」的落点。
+        restrictions.push(rule)
+        return () => {}
+      },
+    },
     // 博客用到作业运行时与附件服务：挂载期只注册控制器，不真正跑任务。
     jobs: {
       attachController: () => () => {},
@@ -101,7 +115,7 @@ function fakeHost() {
     attachments: { saveFileStream: async () => ({ id: 'att-1' }) },
   } as unknown as Context
 
-  return { ctx, routes, effects, catalog, conversations, listeners, provided }
+  return { ctx, routes, effects, catalog, conversations, listeners, provided, registeredTools, restrictions }
 }
 
 /**
@@ -222,5 +236,58 @@ describe('群组端到端挂载', () => {
       routePrefix: '/agents',
       authRecheckMs: 100,
     } as never))).rejects.toThrow(/publicOrigin/u)
+  }, 30000)
+
+  it('注册了通用工具，且每个 Agent 的可见性限制含通用集', async () => {
+    const host = fakeHost()
+    writeGroupConfig()
+    installProvider(host.ctx)
+    await applyGroup(host.ctx, groupConfig())
+
+    // 通用工具真的注册了，而且是「通用工具」分类。
+    expect(host.registeredTools).toContain('common_weather')
+
+    // 每个就绪的 Agent 一条限制。
+    expect(host.restrictions.length).toBeGreaterThanOrEqual(2)
+    for (const rule of host.restrictions) {
+      // 通用集必须并进来，否则 Agent 连天气都查不了。
+      expect(rule.allow, '每个 Agent 都应能看到通用工具').toContain('common_weather')
+    }
+  }, 30000)
+
+  it('封闭化的可见性含自己的工具但不含博客的工具', async () => {
+    const host = fakeHost()
+    writeGroupConfig()
+    installProvider(host.ctx)
+    await applyGroup(host.ctx, groupConfig())
+
+    // 先看清实际注册了哪些工具，避免用错前缀写出一条永远为真的断言。
+    expect(host.registeredTools.length, `已注册工具：${host.registeredTools.join(', ')}`).toBeGreaterThan(0)
+    const closedoffTools = host.registeredTools.filter(name => name.startsWith('closedoff'))
+    const blogTools = host.registeredTools.filter(name => name.startsWith('blog'))
+    expect(closedoffTools.length, `封闭化工具：${host.registeredTools.join(', ')}`).toBeGreaterThan(0)
+    expect(blogTools.length, `博客工具：${host.registeredTools.join(', ')}`).toBeGreaterThan(0)
+
+    const closedoffRule = host.restrictions.find(rule => rule.allow?.includes(closedoffTools[0]!))
+    expect(closedoffRule, '应当存在封闭化的工具限制').toBeDefined()
+    expect(closedoffRule?.allow).toContain('common_weather')
+    // 这是「只能调自己标签的工具」的核心：不能拿到别的 Agent 的专业工具。
+    expect(closedoffRule?.allow?.some(name => blogTools.includes(name))).toBe(false)
+  }, 30000)
+
+  it('博客的可见性含自己的工具与通用集', async () => {
+    const host = fakeHost()
+    writeGroupConfig()
+    installProvider(host.ctx)
+    await applyGroup(host.ctx, groupConfig())
+
+    const closedoffTools = host.registeredTools.filter(name => name.startsWith('closedoff'))
+    const blogTools = host.registeredTools.filter(name => name.startsWith('blog'))
+    expect(blogTools.length, `已注册工具：${host.registeredTools.join(', ')}`).toBeGreaterThan(0)
+
+    const blogRule = host.restrictions.find(rule => rule.allow?.includes(blogTools[0]!))
+    expect(blogRule, '应当存在博客的工具限制').toBeDefined()
+    expect(blogRule?.allow).toContain('common_weather')
+    expect(blogRule?.allow?.some(name => closedoffTools.includes(name))).toBe(false)
   }, 30000)
 })

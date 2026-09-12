@@ -21,7 +21,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { createPluginHttp, onRevoked, registerPlugin, registerConversations, type Access } from '@dsh-plugin-manager/plugin-kit'
+import { createPluginHttp, onRevoked, registerPlugin, registerConversations, type Access, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import { ConversationManager } from './agent.ts'
 import { ConversationStore } from './conversation-store.ts'
 import { Config as ConfigSchema, type Config as PluginConfig } from './config.ts'
@@ -60,6 +60,13 @@ export interface AgentMountContext {
   readonly http: ReturnType<typeof createPluginHttp>
   /** 群组解析后的完整配置：Schema 默认值 + 部署覆盖 + 群组注入的公共字段。 */
   readonly config: PluginConfig
+  /**
+   * 本 Agent 的工具分类标签，由群组从清单注入。
+   *
+   * 子包注册工具时原样使用，**不要自己写字符串**：两处各写一份会漂移，而漂移的后果是
+   * 本 Agent 的工具全部对其不可见，且这种失效在界面上完全看不出来。
+   */
+  readonly category: string
   /** 群组级配置文件的路径；存在时业务凭据从它的 `closedoff` 小节读取。 */
   readonly groupConfigPath?: string
 }
@@ -104,8 +111,8 @@ async function loadEnvironment(groupConfigPath: string | undefined): Promise<Ret
   return loadEnvConf()
 }
 
-/** 装载封闭化助手，返回群组用于卸载的释放函数。 */
-export async function mount(context: AgentMountContext): Promise<{ dispose(): Promise<void> }> {
+/** 装载封闭化助手，返回群组用于卸载的释放函数与本次注册的工具条目。 */
+export async function mount(context: AgentMountContext): Promise<{ dispose(): Promise<void>; tools: readonly ToolDescriptor[] }> {
   const { ctx, access, http, groupConfigPath } = context
   const config: PluginConfig = { ...schemaDefaults(), ...context.config }
 
@@ -125,7 +132,7 @@ export async function mount(context: AgentMountContext): Promise<{ dispose(): Pr
   ctx.effect(() => ctx.on('pirate/participants', accept => accept(participant), { global: true }))
   if (access.mode === 'authenticated') ctx.effect(() => registerConversations(ctx, manager.management()))
 
-  const tools = registerTools(ctx, gateway, config, agent => manager.authorizeAgent(agent))
+  const tools = registerTools(ctx, gateway, config, agent => manager.authorizeAgent(agent), context.category)
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
     name: string; version: string; description: string
   }
@@ -143,6 +150,8 @@ export async function mount(context: AgentMountContext): Promise<{ dispose(): Pr
   await installWeb(ctx, config, manager, access, http)
 
   return {
+    // 群组据此算「本分类 + 通用」的工具可见性限制，所以如实返回全部已注册工具。
+    tools,
     dispose: async () => {
       // 会话与存储由本子包负责释放；注册的路由随 ctx 作用域回收。
       await manager.dispose()

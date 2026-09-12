@@ -1,0 +1,8 @@
+# 群组自身的构建产物。
+# 子包各有自己的 .gitignore（agents/*/.gitignore）负责它们目录内的产物；
+# 这一层只管群组根，避免群组根的产物被当成源码纳入仓库或门禁检查。
+node_modules/
+dist/
+web/assets/
+.tmp/
+*.log

@@ -11,7 +11,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { registerPlugin,registerConversations,AccessError,type Access,type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { registerPlugin,registerConversations,AccessError,type Access,type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import type { ProtectedRoute } from '@dsh-plugin-manager/plugin-kit/http'
 import { loadSettings } from './settings.mjs'
 import { BlogStore } from './store.mjs'
@@ -57,6 +57,13 @@ export interface AgentMountContext {
   }
   /** 群组解析后的完整配置。 */
   readonly config: Config
+  /**
+   * 本 Agent 的工具分类标签，由群组从清单注入。
+   *
+   * 子包注册工具时原样使用，**不要自己写字符串**：两处各写一份会漂移，而漂移的后果是
+   * 本 Agent 的工具全部对其不可见，且这种失效在界面上完全看不出来。
+   */
+  readonly category: string
   /** 群组级配置文件的路径；存在时业务凭据从它的 `blog` 小节读取。 */
   readonly groupConfigPath?: string
 }
@@ -65,11 +72,11 @@ function json(res:ServerResponse,data:unknown){res.writeHead(200,{'content-type'
 async function body(req:IncomingMessage,max:number){const chunks:Buffer[]=[];let size=0;for await(const b of req){const chunk=Buffer.from(b);size+=chunk.length;if(size>max)throw new AccessError(413,'请求超过大小限制');chunks.push(chunk)}return Buffer.concat(chunks)}
 
 /**
- * 装载博客工作台，返回群组用于卸载的释放函数。
+ * 装载博客工作台，返回群组用于卸载的释放函数与本次注册的工具条目。
  *
  * `access` 与 `http` 由群组注入：一个 Agent 只应有一套鉴权实例。业务逻辑未作改动。
  */
-export async function mount(mountContext:AgentMountContext):Promise<{dispose():Promise<void>}>{
+export async function mount(mountContext:AgentMountContext):Promise<{dispose():Promise<void>;tools:readonly ToolDescriptor[]}>{
   const {ctx,access,http}=mountContext
   const config=mountContext.config
   // 不再在这里断言 accessMode：群组会为强制认证的 Agent 建 authenticated 的 access。
@@ -80,7 +87,7 @@ export async function mount(mountContext:AgentMountContext):Promise<{dispose():P
   const blog=new BlogClient(settings.blog),images=new ImageClient(settings.image,join(root,'image-token.json')),backups=new BackupClient(settings.backup,access)
   const conversations=new ChatStore(store)
   const attachments=new BlogAttachments(ctx,access,store,(owner:string,id:string)=>conversations.assertScope(owner,id))
-  const jobs=new BlogJobs(ctx,access,store,blog,attachments,config.turnTimeoutMs,settings.models)
+  const jobs=new BlogJobs(ctx,access,store,blog,attachments,config.turnTimeoutMs,settings.models,mountContext.category)
   const app=new BlogApplication(store,access,blog,images,backups,jobs,attachments)
   const {chatSdk}=await import(new URL('../runtime/chat-sdk.mjs',import.meta.url).href)
   const chat=new BlogChat(ctx,access,store,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)
@@ -176,6 +183,8 @@ export async function mount(mountContext:AgentMountContext):Promise<{dispose():P
   }}))
 
   return {
+    // 群组据此算「本分类 + 通用」的工具可见性限制，所以如实返回全部已注册工具。
+    tools: jobs.chatTools,
     dispose: async () => {
       // 释放顺序与创建相反，与迁移前保持一致。
       await translations.close(); await chat.close(); await jobs.close(); await attachments.close(); store.close()

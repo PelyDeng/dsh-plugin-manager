@@ -6,9 +6,9 @@
  *
  * 抽取原则：**只抽真正重复且稳定的东西**。closedoff 以 TypeScript 为主、blog 以
  * `.mjs` 为主，技术栈并不一致，先不要设计「Agent 基类」——抽象错了比不抽象更贵。
- *
- * P0 阶段先把包建起来并打通内联，实际内容随 P1/P2 迁移时按需要补。
  */
+
+export * from './weather.ts'
 
 /** 包版本，用于确认内联生效（构建后不应依赖外部解析）。 */
 export const COMMON_VERSION = '0.1.0'

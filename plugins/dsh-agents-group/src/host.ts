@@ -8,7 +8,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { createAccess, createPluginHttp, type Access } from '@dsh-plugin-manager/plugin-kit'
+import { createAccess, createPluginHttp, type Access, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import type * as common from '@dsh-agents-group/common'
 import { endpointsOf, type AgentManifest } from './agents/registry.ts'
 
@@ -21,6 +21,8 @@ export interface MountedAgent {
   readonly permission: string
   /** 该 Agent 需要的访问模式。 */
   readonly accessMode: 'standalone' | 'authenticated'
+  /** 该 Agent 注册的工具条目。群组据此算「本分类 + 通用」的可见性限制。 */
+  readonly tools: readonly ToolDescriptor[]
   /** 装载失败时的可读原因；正常时为 undefined。 */
   readonly failure?: string
   dispose(): Promise<void>
@@ -31,6 +33,14 @@ export interface AgentMountContext {
   readonly ctx: Context
   /** 该 Agent 的清单项。适配层用它推导自己的页面前缀等标识。 */
   readonly manifest: AgentManifest
+  /**
+   * 该 Agent 的工具分类标签。
+   *
+   * 由群组从清单注入，子包注册工具时原样使用。**分类只有这一个权威来源** —— 子包自己
+   * 再写一份字符串就会与清单漂移，而漂移的后果是「该 Agent 的工具全部不可见」，
+   * 且这种失效在界面上完全看不出来。
+   */
+  readonly category: string
   readonly config: {
     readonly routePrefix: string
     readonly publicOrigin: string
@@ -51,6 +61,13 @@ export interface AgentMountContext {
 /** 一个 Agent 子包对外暴露的装载函数。 */
 export type AgentMount = (context: AgentMountContext) => Promise<{
   dispose(): Promise<void>
+  /**
+   * 本次装载注册的工具条目。
+   *
+   * 群组用它算「本分类 + 通用」的可见性限制，所以子包必须如实返回**全部**已注册工具；
+   * 漏报会让对应工具对该 Agent 不可见，而那在界面上看不出来。
+   */
+  tools: readonly ToolDescriptor[]
 }>
 
 /**
@@ -62,7 +79,7 @@ export type AgentMount = (context: AgentMountContext) => Promise<{
 export async function mountAgents(
   ctx: Context,
   manifests: readonly AgentManifest[],
-  shared: Omit<AgentMountContext, 'ctx' | 'access' | 'http' | 'agentConfig' | 'manifest'> & {
+  shared: Omit<AgentMountContext, 'ctx' | 'access' | 'http' | 'agentConfig' | 'manifest' | 'category'> & {
     /** 按 Agent id 取它自己的部署字段。 */
     readonly agentConfigOf: (agentId: string) => Record<string, unknown>
     /**
@@ -89,7 +106,7 @@ export async function mountAgents(
     try {
       const mount = await loader(manifest)
       if (mount === undefined) {
-        mounted.push({ ...base, failure: '子包未提供装载入口', dispose: async () => {} })
+        mounted.push({ ...base, tools: [], failure: '子包未提供装载入口', dispose: async () => {} })
         continue
       }
       // 每个 Agent 用自己的 pluginId 建访问校验器：授权粒度就是条目 id。
@@ -109,6 +126,7 @@ export async function mountAgents(
       const instance = await mount({
         ctx,
         manifest,
+        category: manifest.category,
         config: shared.config,
         agentConfig: shared.agentConfigOf(manifest.id),
         access,
@@ -116,13 +134,13 @@ export async function mountAgents(
         common: shared.common,
         ...(shared.groupConfigPath === undefined ? {} : { groupConfigPath: shared.groupConfigPath }),
       })
-      mounted.push({ ...base, dispose: instance.dispose })
+      mounted.push({ ...base, tools: instance.tools, dispose: instance.dispose })
     } catch (error) {
       // 只标记这一个 Agent 失败，群组继续服务其他 Agent。
       // 连栈一起记：只记 message 会让这类问题在运维时无从定位。
       const message = error instanceof Error ? error.message : String(error)
       console.error(`agents-group: ${manifest.id} 装载失败：${message}`, error instanceof Error ? error.stack : '')
-      mounted.push({ ...base, failure: message, dispose: async () => {} })
+      mounted.push({ ...base, tools: [], failure: message, dispose: async () => {} })
     }
   }
   return mounted

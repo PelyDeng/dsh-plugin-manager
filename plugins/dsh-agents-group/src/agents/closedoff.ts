@@ -44,8 +44,9 @@ export const mountClosedoff: AgentMount = async context => {
     access: context.access,
     http: context.http,
     config,
+    category: context.category,
     ...(context.groupConfigPath === undefined ? {} : { groupConfigPath: context.groupConfigPath }),
   })
 
-  return { dispose: instance.dispose }
+  return { tools: instance.tools, dispose: instance.dispose }
 }

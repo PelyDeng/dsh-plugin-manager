@@ -12,11 +12,12 @@
 import { readFile } from 'node:fs/promises'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { createAccess, createPluginHttp, registerPlugin } from '@dsh-plugin-manager/plugin-kit'
+import { createAccess, createPluginHttp, createPluginTools, registerPlugin, UNIVERSAL_TOOL_CATEGORY, toolsForCategory } from '@dsh-plugin-manager/plugin-kit'
 import * as common from '@dsh-agents-group/common'
 import { assertUniqueManifests, AGENT_MANIFESTS, type AgentManifest } from './agents/registry.ts'
 import { agentConfig, Config as ConfigSchema, isAgentEnabled, type Config as PluginConfig } from './config.ts'
 import { mountAgents, readiness, type AgentMount } from './host.ts'
+import { weatherTool } from './tools/weather.ts'
 
 export { ConfigSchema as Config }
 export type { PluginConfig }
@@ -134,6 +135,41 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     publicOrigin: config.publicOrigin,
   })
   const groupHttp = createPluginHttp(ctx, { access: groupAccess, routePrefix: config.routePrefix })
+
+  /**
+   * 注册群组的通用工具。
+   *
+   * 通用工具是约定好的公共集：每个 Agent 都能调。它们与业务工具的关键差别是不依赖任何
+   * 单一 Agent 的业务数据、也不需要额外凭据，所以可以安全地全局可见。
+   *
+   * 鉴权沿用群组的 access：通用工具不接受匿名调用，认证服务不可用时直接失败。
+   */
+  const universalTools = createPluginTools(ctx, {
+    permission: manifest.deepseekPlugin.permissions[0] ?? `${manifest.deepseekPlugin.id}:access`,
+    authorize: () => groupAccess.ready(),
+  })
+  const universalDescriptors = [universalTools.register(weatherTool, '天气查询', UNIVERSAL_TOOL_CATEGORY)]
+  ctx.effect(() => registerPlugin(ctx, {
+    id: `${manifest.deepseekPlugin.id}-tools`,
+    packageName: manifest.name,
+    version: manifest.version,
+    displayName: '通用工具',
+    description: '每个智能体都能调用的公共工具集',
+    entryPath: config.routePrefix,
+    permissions: manifest.deepseekPlugin.permissions,
+    tools: universalDescriptors,
+  }))
+
+  /**
+   * 每个 Agent 的工具可见性：**只允许调用属于自己标签的工具，外加通用集**。
+   *
+   * 用 `tools.restrict` 做硬限制，而不是只在认证页面隐藏分类 —— 后者拦不住模型直接调用
+   * 工具名。分类由各子包自己填写，群组不替它们决定。
+   */
+  const allDescriptors = [...universalDescriptors, ...mounted.flatMap(agent => agent.tools)]
+  for (const agent of mounted) {
+    ctx.effect(() => ctx.tools.restrict({ allow: toolsForCategory(allDescriptors, agent.manifest.category) }))
+  }
 
   ctx.effect(() => groupHttp.registerPublic({
     kind: 'exact',
