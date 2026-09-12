@@ -3,11 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net'
 import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { AccessError, createAccess, emitRevoked, installProvider, onRevoked, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, createAccess, createPluginHttp, emitRevoked, installProvider, onRevoked, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ConversationManager } from '../src/agent.ts'
 import { ConversationStore } from '../src/conversation-store.ts'
 import { Config } from '../src/config.ts'
-import { installWeb } from '../src/web.ts'
+import { installWeb, renderHttpError } from '../src/web.ts'
 
 type Route = { kind: string; path: string; handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }
 // The test bus hosts multiple event signatures and forwards the original argument tuple unchanged.
@@ -64,7 +64,10 @@ async function fixture(mode: 'standalone' | 'authenticated' = 'authenticated') {
   const config = Config({ accessMode: mode, publicOrigin: origin, authRecheckMs: 100 } as Config)
   const manager = new ConversationManager(ctx, config, 'persona', [], access, store)
   onRevoked(ctx, () => manager.revokeInvalid())
-  await installWeb(ctx, config, manager, access)
+  // installWeb 现在接收注入的 HTTP 注册器（由群组创建）。这里按群组的真实做法构造：
+  // 带上本子包自己的错误渲染器，否则参数校验失败会被报成 500，前端无法区分输错和服务故障。
+  const http = createPluginHttp(ctx, { access, routePrefix: config.routePrefix, onError: renderHttpError })
+  await installWeb(ctx, config, manager, access, http)
   cleanup.push(async () => {
     for (const dispose of effects.reverse()) dispose()
     await manager.dispose()

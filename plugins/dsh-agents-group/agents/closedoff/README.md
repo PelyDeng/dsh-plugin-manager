@@ -5,7 +5,7 @@ kind: "package-bundle"
 
 # DSH 封闭化管理智能助手
 
-新站点优先使用[产物一键部署](../../doc/first-deployment.md)，已有 Gitee 源码服务器使用[私有更新入口](../../PRIVATE.md#源码一键更新)。插件的 `plugin.json` 管理启停和认证，业务 `env.conf` 独立保存；填写位置以 build 输出或已有实例引用为准，规则见[插件运行配置](../../doc/plugin-configuration.md)。默认要求登录。
+新站点优先使用[产物一键部署](../../../../doc/first-deployment.md)，已有 Gitee 源码服务器使用[私有更新入口](../../../../PRIVATE.md#源码一键更新)。插件的 `plugin.json` 管理启停和认证，业务 `env.conf` 独立保存；填写位置以 build 输出或已有实例引用为准，规则见[插件运行配置](../../../../doc/plugin-configuration.md)。默认要求登录。
 
 ## 摘要
 
@@ -15,7 +15,7 @@ kind: "package-bundle"
 
 支持明确选择的独立运行和统一认证模式。启用认证后，页面通过 `/auth` 登录，全部业务 API 和工具要求 `closedoff:access`，历史对话按账号隔离；不安装 auth 时可使用独立模式。身份、存储及旧数据规则见 [认证与个人历史](doc/architecture.md#认证与个人历史)。
 
-实时输出使用官方 `agent/assistant-stream`，历史使用 `expandAssistantStream` 展开 Session V3 的 message/attempt 记录，保留思考预览、工具提示、失败或取消的部分输出和首 token 时间。瞬时帧不写入持久日志，开发依赖与运行宿主均固定为 `0.1.5-alpha.2`。旧会话由官方持久化接口转换，升级和回退约束见[宿主兼容说明](../../doc/host-compatibility.md)。
+实时输出使用官方 `agent/assistant-stream`，历史使用 `expandAssistantStream` 展开 Session V3 的 message/attempt 记录，保留思考预览、工具提示、失败或取消的部分输出和首 token 时间。瞬时帧不写入持久日志，开发依赖与运行宿主均固定为 `0.1.5-alpha.2`。旧会话由官方持久化接口转换，升级和回退约束见[宿主兼容说明](../../../../doc/host-compatibility.md)。
 
 ## 对话模型
 
@@ -37,7 +37,7 @@ kind: "package-bundle"
 
 `/closedoff-qa?conversationId=closedoff-web-<UUIDv4>` 可打开指定会话。页面先验证身份，历史接口再校验会话主人；链接本身不授予访问权限。自定义 `routePrefix` 时使用对应入口路径。切换、新建或删除当前会话会同步地址中的 `conversationId`；刷新后恢复当前会话，或保持新会话入口。
 
-closedoff 在 authenticated 模式接入 auth 的[会话管理](../../doc/conversation-management.md)。本人对话按插件分类、筛选和分页；只读预览使用已有的脱敏消息转换逻辑，不恢复 Agent 或查询园区接口。批量移除使用官方归档，底层日志和独立分支保留。
+closedoff 在 authenticated 模式接入 auth 的[会话管理](../../../../doc/conversation-management.md)。本人对话按插件分类、筛选和分页；只读预览使用已有的脱敏消息转换逻辑，不恢复 Agent 或查询园区接口。批量移除使用官方归档，底层日志和独立分支保留。
 
 运行、恢复与分支创建中的记录不可移除；失败项禁止继续发送，允许刷新重试。重启后 pending 转为可重试的 failed；旧数据不认领给新账号，standalone 历史不进入个人管理列表。索引 schema 4 保存标题来源并保留旧标题、归属、置顶与删除状态；从 schema 2/3 自动迁移，回退旧插件前须恢复兼容的数据备份，不能只替换代码。
 
@@ -213,7 +213,7 @@ HMR 会释放旧插件注册的路由、Agent 和正在响应的 SSE 流，开�
 
 ## 开发与升级
 
-构建和检查使用[本地构建](#本地构建)的命令。开发 link 安装在重新构建后生效；手工快照安装须更新包并重启。交付归档在仓库根执行 `pnpm package --plugins closedoff`，认证站点还需交付 auth，完整选集和部署步骤见[私有集成说明](../../PRIVATE.md#本地集成公共更新)。
+构建和检查使用[本地构建](#本地构建)的命令。开发 link 安装在重新构建后生效；手工快照安装须更新包并重启。交付归档在仓库根执行 `pnpm package --plugins closedoff`，认证站点还需交付 auth，完整选集和部署步骤见[私有集成说明](../../../../PRIVATE.md#本地集成公共更新)。
 
 仅在发版时按版本规则更新本插件 `package.json`，提交源文件、文档与必要锁文件；真实 `env.conf` 留在用户配置目录，不提交 `dist/`、`web/assets/` 等生成物。播放器升级时更新本插件 `vendor/` 快照和对应 `file:` 依赖，确认没有有效引用后再移除旧快照。
 

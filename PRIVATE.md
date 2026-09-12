@@ -55,13 +55,13 @@ pnpm package --plugins "auth,closedoff,example,blog"
 
 检查、归档及相关业务验收完成后，只暂存任务文件，运行 `git diff --cached --check` 并提交集成修改。推送前刷新 origin，核实当前提交包含最新 origin/main，再执行 `git push origin HEAD:main` 并核对远端 SHA；不使用强制推送。部署者随后运行根 build 获取这个集成版本，不能把合并冲突转移到服务器。
 
-`plugins/dsh-closedoff-assistant` 是私有定制插件，其 `vendor/` 包含构建播放器所需的版本化归档。该目录不受根 Apache-2.0 许可授权，适用插件 [LICENSE](plugins/dsh-closedoff-assistant/LICENSE)。第三方资源保持各自许可。不得将该目录或包含它的提交推送公共仓库。
+封闭化智能体已并入[智能体群组](plugins/dsh-agents-group/README.md)，源码在 `plugins/dsh-agents-group/agents/closedoff/`，其 `vendor/` 包含构建播放器所需的版本化归档。该目录不受根 Apache-2.0 许可授权，适用群组的 [LICENSE](plugins/dsh-agents-group/LICENSE)。第三方资源保持各自许可。不得将该目录或包含它的提交推送公共仓库。
 
 `plugins/dsh-blog-assistant` 是个人博客私有插件，适用其 [LICENSE](plugins/dsh-blog-assistant/LICENSE)，只在 Gitee 集成。它通过 auth 使用博客工作台，通过 Typecho 桥接编辑文章，并使用独立 systemd 执行器备份网站。运行凭据源为插件自己的 `config/config.json`；文件不提交、不进入镜像和归档，生产以 `instances.blog.runtimeConfig` 显式引用。安装与使用见[插件说明](plugins/dsh-blog-assistant/README.md)。
 
 公共 example 的问答知识与源码索引只承载公共框架能力，不加入本文件、`private-deploy/`、定制插件源码、内部接口或运行凭据。私有模型路由和业务接入说明保留在本仓库及各私有插件文档中，不能为补齐公共问答而复制到 GitHub。
 
-首次配置分别按[封闭化业务参数](plugins/dsh-closedoff-assistant/README.md#配置业务参数)和[博客配置](plugins/dsh-blog-assistant/README.md#配置)填写。现有实例沿用原 `runtimeConfig` 引用。站点来源、选集、模型凭据优先级及入口默认值统一见[框架配置](doc/framework-configuration.md)。
+首次配置分别按[封闭化业务参数](plugins/dsh-agents-group/agents/closedoff/README.md#配置业务参数)和[博客配置](plugins/dsh-blog-assistant/README.md#配置)填写。现有实例沿用原 `runtimeConfig` 引用。站点来源、选集、模型凭据优先级及入口默认值统一见[框架配置](doc/framework-configuration.md)。
 
 宿主子模块锁定 DSH `0.1.5-alpha.2`，以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。
 
@@ -69,9 +69,9 @@ pnpm package --plugins "auth,closedoff,example,blog"
 
 ## 默认模型与私有插件
 
-三个应用的普通新会话使用框架默认模型，旧会话和分支沿用官方模型记录；各自输入框的选择器可以显式切换。模型选择、首句自动标题及手动命名行为分别见[博客对话](plugins/dsh-blog-assistant/README.md#对话与历史)和[封闭化对话](plugins/dsh-closedoff-assistant/README.md#对话模型)。
+三个应用的普通新会话使用框架默认模型，旧会话和分支沿用官方模型记录；各自输入框的选择器可以显式切换。模型选择、首句自动标题及手动命名行为分别见[博客对话](plugins/dsh-blog-assistant/README.md#对话与历史)和[封闭化对话](plugins/dsh-agents-group/agents/closedoff/README.md#对话模型)。
 
-博客文章编辑器的专用写作仍使用 `models.text` / `models.vision`。普通对话由用户选择模型，图片提交要求所选模型支持图片；已有会话和分支沿用记录中的模型。服务商密钥与这些 provider/model 引用分开管理。若把博客 Bundle 注册的模型路由选为框架默认，使用它的站点必须保留该 Bundle；未安装私有插件的公共框架不会因此自动获得私有路由。细节见[博客宿主能力](plugins/dsh-blog-assistant/README.md#宿主能力)和[封闭化对话模型](plugins/dsh-closedoff-assistant/README.md#对话模型)。
+博客文章编辑器的专用写作仍使用 `models.text` / `models.vision`。普通对话由用户选择模型，图片提交要求所选模型支持图片；已有会话和分支沿用记录中的模型。服务商密钥与这些 provider/model 引用分开管理。若把博客 Bundle 注册的模型路由选为框架默认，使用它的站点必须保留该 Bundle；未安装私有插件的公共框架不会因此自动获得私有路由。细节见[博客宿主能力](plugins/dsh-blog-assistant/README.md#宿主能力)和[封闭化对话模型](plugins/dsh-agents-group/agents/closedoff/README.md#对话模型)。
 
 DeepSeek V4.1 Flash 临时模型使用公共框架提供的[模型声明](deploy/models/deepseek-v4.1-flash.json)，配置与到期处理见[公共 FAQ](doc/FAQ.md#如何添加-deepseek-v41-flash-临时模型)。
 

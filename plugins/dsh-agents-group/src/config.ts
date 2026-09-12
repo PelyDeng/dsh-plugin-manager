@@ -5,6 +5,13 @@ export interface AgentConfig {
   /** 是否装载这个 Agent。关闭时它的页面与条目都不出现。 */
   enabled: boolean
   /**
+   * 该 Agent 自己的配置字段。
+   *
+   * 群组不重复描述子包的字段：各子包有自己的 Schema，迁移时把原 `cordis.patch.yml`
+   * 的字段原样搬到这里即可。群组只负责把它交给子包，由子包自己校验。
+   */
+  config: Record<string, unknown>
+  /**
    * 模型白名单。留空表示不过滤，行为与迁移前一致。
    *
    * 宿主的模型目录是全局扁平的、没有 scope 机制，所以只能在这里按 Agent 收窄。
@@ -29,6 +36,8 @@ export interface Config {
 
 const agentSchema: Schema<AgentConfig> = Schema.object({
   enabled: Schema.boolean().default(true),
+  // 子包字段种类由各 Agent 自己决定，这里不能写成封闭对象，否则新增字段会被拒。
+  config: Schema.dict(Schema.any()).default({}),
   models: Schema.object({
     allow: Schema.array(Schema.string()).default([]),
     deny: Schema.array(Schema.string()).default([]),
@@ -46,5 +55,14 @@ export const Config: Schema<Config> = Schema.object({
 
 /** 取一个 Agent 的配置；未声明时返回默认值，而不是 undefined。 */
 export function agentConfig(config: Config, agentId: string): AgentConfig {
-  return config.agents[agentId] ?? { enabled: true, models: { allow: [], deny: [] } }
+  return config.agents[agentId] ?? { enabled: true, config: {}, models: { allow: [], deny: [] } }
+}
+
+/**
+ * 该 Agent 是否启用。
+ *
+ * 默认启用：没在配置里写过的 Agent 应该照常工作，否则新增 Agent 会「装了但不出现」。
+ */
+export function isAgentEnabled(config: Config, agentId: string): boolean {
+  return config.agents[agentId]?.enabled ?? true
 }

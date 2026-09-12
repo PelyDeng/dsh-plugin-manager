@@ -8,7 +8,10 @@ const packageJson = JSON.parse(readFileSync(fileURLToPath(new URL('../package.js
   devDependencies?: Record<string, string>
 }
 const copyAssets = readFileSync(fileURLToPath(new URL('../scripts/copy-web-assets.mjs', import.meta.url)), 'utf8')
-const cordisPatch = readFileSync(fileURLToPath(new URL('../cordis.patch.yml', import.meta.url)), 'utf8')
+// 部署配置搬到群组级 patch 了：群组只有一个 runtimeConfig、一行 Bundle 配置，
+// 本子包的字段放在群组的 agents.closedoff.config 下。这条断言守的契约不变 ——
+// 「tileset 高度仍然可以通过部署环境变量覆盖」，只是声明的位置换了。
+const cordisPatch = readFileSync(fileURLToPath(new URL('../../../cordis.patch.yml', import.meta.url)), 'utf8')
 const snapshotQueueStart = web.indexOf('  function queueTrajectorySnapshot(')
 const snapshotQueueEnd = web.indexOf('  function redrawTrack(', snapshotQueueStart)
 const snapshotQueueSource = web.slice(snapshotQueueStart, snapshotQueueEnd)

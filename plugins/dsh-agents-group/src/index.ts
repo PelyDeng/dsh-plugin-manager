@@ -15,7 +15,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createAccess, createPluginHttp, registerPlugin } from '@dsh-plugin-manager/plugin-kit'
 import * as common from '@dsh-agents-group/common'
 import { assertUniqueManifests, AGENT_MANIFESTS, type AgentManifest } from './agents/registry.ts'
-import { Config as ConfigSchema, type Config as PluginConfig } from './config.ts'
+import { agentConfig, Config as ConfigSchema, isAgentEnabled, type Config as PluginConfig } from './config.ts'
 import { mountAgents, readiness, type AgentMount } from './host.ts'
 
 export { ConfigSchema as Config }
@@ -25,20 +25,42 @@ export type { AgentManifest, AgentEndpoints } from './agents/registry.ts'
 
 export const name = 'agents-group'
 
-export const inject = ['webServer'] as const
+/**
+ * 群组需要宿主提供的服务。
+ *
+ * 群组自身只用到 `webServer`；但装载的子包会用到 agents、llm、会话持久化等，
+ * 所以在群组这一层一并声明 —— 少声明会让子包在运行时才发现缺能力。
+ */
+export const inject = [
+  'webServer',
+  'agents',
+  'agentDefaultModel',
+  'llm',
+  'messageFeedback',
+  'sessionPersistence',
+  'systemPrompt',
+  'tools',
+] as const
 
 /**
  * 按清单装载一个 Agent 子包。
  *
- * P0 阶段清单为空，所以这里只返回 undefined；P1/P2 会把 closedoff、blog 的装载函数
- * 接进来。用显式 switch 而不是动态 import：构建产物要能静态分析，打包后动态路径不可靠。
+ * 用显式 switch 而不是按 id 拼动态路径：构建产物要能静态分析，打包后动态路径不可靠。
+ * 每个 Agent 同时提供自己的 HTTP 错误处理 —— 只有它知道哪些错误是可预期的。
  */
 async function loadAgent(manifest: AgentManifest): Promise<AgentMount | undefined> {
   switch (manifest.id) {
-    // P1: case 'closedoff': return (await import('./agents/closedoff.ts')).mount
-    // P2: case 'blog':      return (await import('./agents/blog.ts')).mount
-    default:
-      return undefined
+    case 'closedoff': return (await import('./agents/closedoff.ts')).mountClosedoff
+    // P2: case 'blog': return (await import('./agents/blog.ts')).mountBlog
+    default: return undefined
+  }
+}
+
+/** 取一个 Agent 的错误渲染函数；没有提供时由群组用通用兜底。 */
+async function errorHandlerOf(agentId: string) {
+  switch (agentId) {
+    case 'closedoff': return (await import('./agents/closedoff.ts')).closedoffErrorHandler
+    default: return undefined
   }
 }
 
@@ -54,6 +76,10 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
 
   assertUniqueManifests(AGENT_MANIFESTS)
 
+  // 群组只有一个 runtimeConfig（管理器要求变量名全局唯一），各 Agent 的凭据从它的
+  // 对应小节读取。变量未设置时留空，子包回落到自己的旧来源，切换期不会中断。
+  const runtimeConfigPath = (process.env.AGENTS_GROUP_CONFIG ?? '').trim()
+
   // 群组自身登记为一条目录条目。注意它的权限命名空间必须是自己（agents-group:*）,
   // 而各 Agent 的授权标识在各自的条目上 —— 包 id 与授权标识是两层，别混。
   ctx.effect(() => registerPlugin(ctx, {
@@ -67,12 +93,28 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     tools: [],
   }))
 
-  const mounted = await mountAgents(ctx, AGENT_MANIFESTS, {
+  // 被显式关闭的 Agent 不装载：它的页面与目录条目都不应出现。
+  const enabled = AGENT_MANIFESTS.filter(item => isAgentEnabled(config, item.id))
+
+  // 各 Agent 的错误渲染函数要先取好，装载时按 id 注入。
+  const mountedErrorHandlers = new Map<string, (response: import('node:http').ServerResponse, error: unknown) => void>()
+  for (const item of enabled) {
+    const handler = await errorHandlerOf(item.id)
+    if (handler !== undefined) mountedErrorHandlers.set(item.id, handler)
+  }
+
+  const mounted = await mountAgents(ctx, enabled, {
     config: {
       routePrefix: config.routePrefix,
       publicOrigin: config.publicOrigin,
       accessMode: config.accessMode,
     },
+    // 各 Agent 自己的部署字段来自 agents.<id>.config；群组不重复描述子包的字段。
+    agentConfigOf: agentId => agentConfig(config, agentId).config,
+    // 各 Agent 自己的错误分类；返回 undefined 时由群组用通用兜底。
+    onErrorOf: agentId => mountedErrorHandlers.get(agentId),
+    // 群组唯一的一份业务配置文件；各子包从自己的小节读凭据。
+    ...(runtimeConfigPath === '' ? {} : { groupConfigPath: runtimeConfigPath }),
     common,
   }, loadAgent)
 

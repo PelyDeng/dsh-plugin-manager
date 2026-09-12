@@ -71,12 +71,23 @@ function json(res: ServerResponse, status: number, value: unknown): void {
   res.end(JSON.stringify(value))
 }
 
-function error(res: ServerResponse, caught: unknown): void {
+/**
+ * 把子包抛出的错误渲染成响应。
+ *
+ * 导出给群组注入到 HTTP 注册器上：只有本子包知道哪些错误是可预期的（参数校验失败应当
+ * 400、鉴权失败应当 401/403）。用通用的 500 兜底会让前端无法区分「用户输错了」和
+ * 「服务炸了」。
+ */
+export function renderHttpError(res: ServerResponse, caught: unknown): void {
   const expected = caught instanceof HttpError || isAccessError(caught)
-  const status = expected ? caught.status : 500
+  const status = expected ? (caught as HttpError).status : 500
   if (!expected) console.error('closedoff-assistant web request failed', caught)
-  const message = expected ? caught.message : '服务处理请求失败'
+  const message = expected ? (caught as Error).message : '服务处理请求失败'
   json(res, status, { error: message })
+}
+
+function error(res: ServerResponse, caught: unknown): void {
+  renderHttpError(res, caught)
 }
 
 function textBlocks(content: readonly unknown[]): string {
@@ -121,8 +132,19 @@ const ASSET_TYPES: Record<string, string> = {
 
 type EventSink = (event: SessionEvent | { type: 'assistant/live-chunk'; time: number; data: AssistantDelta }) => void
 
-/** Register the page, asset, chat, history, and cancellation routes. */
-export async function installWeb(ctx: Context, config: Config, manager: ConversationManager, access: Access): Promise<void> {
+/**
+ * Register the page, asset, chat, history, and cancellation routes.
+ *
+ * `http` 由群组注入（已经绑定好该 Agent 的访问校验与页面前缀），不再在这里创建：
+ * 迁移进群组后，一个 Agent 只应有一套鉴权实例，重复创建会带来不一致的隐患。
+ */
+export async function installWeb(
+  ctx: Context,
+  config: Config,
+  manager: ConversationManager,
+  access: Access,
+  http: ReturnType<typeof createPluginHttp>,
+): Promise<void> {
   const sourceHtml = await readFile(new URL('../web/index.html', import.meta.url), 'utf8')
   const webConfig = JSON.stringify({
     routePrefix: config.routePrefix,
@@ -151,7 +173,7 @@ export async function installWeb(ctx: Context, config: Config, manager: Conversa
     access.assert(actor)
     json(res, status, value)
   }
-  const { register, registerPublic } = createPluginHttp(ctx, { access, routePrefix: config.routePrefix, onError: error })
+  const { register, registerPublic } = http
   ctx.effect(() => registerPublic({
     kind: 'exact', path: `${config.routePrefix}/health`, handler: (_req, res) => json(res, 200, { ok: true }),
   }))

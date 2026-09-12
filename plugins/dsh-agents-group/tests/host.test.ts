@@ -25,6 +25,8 @@ const noAccess = () => ({
 const shared = {
   config: { routePrefix: '/agents', publicOrigin: '', accessMode: 'standalone' as const },
   common: {} as typeof common,
+  // 各 Agent 自己的部署字段；测试里不关心，统一给空对象。
+  agentConfigOf: () => ({}),
 }
 
 const manifests: AgentManifest[] = [

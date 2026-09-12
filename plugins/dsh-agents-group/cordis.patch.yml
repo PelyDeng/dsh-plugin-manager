@@ -1,5 +1,9 @@
 # 直接使用官方 Bundle 的完整默认配置；管理器部署时由 plugin.json 生成的 settings patch 覆盖。
 # 每个字段都必须有 Schema 默认值：管理器的 patch 会整体替换 config，不做逐字段合并。
+#
+# 各 Agent 自己的部署字段写在 agents.<id>.config 下，由该 Agent 的 Schema 校验。
+# 原独立插件的 cordis.patch.yml 里的字段原样搬到这里，环境变量名保持不变，
+# 这样现有部署脚本不用改。
 - insert:
     - id: agents-group
       name: dsh-agents-group
@@ -8,7 +12,15 @@
         accessMode: !!js process.env.DSH_ACCESS_MODE ?? 'authenticated'
         # authenticated 模式条件必填：HTTP(S) origin，无路径或尾斜杠。
         publicOrigin: !!js process.env.DSH_PUBLIC_ORIGIN ?? ''
-        # 群组根前缀。各 Agent 的实际页面是它的子路径，例如 /agents/closedoff-qa。
+        # 群组根前缀。各 Agent 的实际页面是它的子路径，例如 /agents/closedoff。
         routePrefix: /agents
-        # 各 Agent 的业务配置由群组级 runtimeConfig 文件提供，这里只放非敏感覆盖。
-        agents: {}
+        agents:
+          closedoff:
+            enabled: true
+            config:
+              reasoningEffort: !!js process.env.CLOSEDOFF_REASONING_EFFORT ?? 'low'
+              terrainUrl: !!js process.env.CLOSEDOFF_TERRAIN_URL ?? 'https://hyzhmodel.scshyzh.cn:50068/Models/ChongQing/Terrain/ChongQing_all'
+              tilesetUrl: !!js process.env.CLOSEDOFF_TILESET_URL ?? 'https://hyzhmodel.scshyzh.cn:50068/Models/ChongQing/Fuling/Models/B3DM/tileset.json'
+              tilesetHeight: !!js Number(process.env.CLOSEDOFF_TILESET_HEIGHT ?? 60)
+              trackDeviceRadiusMeters: !!js Number(process.env.CLOSEDOFF_TRACK_DEVICE_RADIUS_METERS ?? 100)
+              trackDwellMaxGapSeconds: !!js Number(process.env.CLOSEDOFF_TRACK_DWELL_MAX_GAP_SECONDS ?? 300)

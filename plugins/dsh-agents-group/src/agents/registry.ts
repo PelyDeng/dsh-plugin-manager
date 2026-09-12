@@ -25,10 +25,17 @@ export interface AgentManifest {
 /**
  * 当前群组内的 Agent。
  *
- * P0 阶段为空：骨架先证明「空群组能装上、探针可用、切回旧插件可回滚」，
- * 业务迁移在 P1/P2 逐步加进来。
+ * 每迁入一个 Agent 就在这里加一条 —— 这是群组唯一的名单，管家侧不用改。
  */
-export const AGENT_MANIFESTS: readonly AgentManifest[] = []
+export const AGENT_MANIFESTS: readonly AgentManifest[] = [
+  {
+    id: 'closedoff',
+    displayName: '封闭化管理智能助手',
+    directory: 'closedoff',
+    category: '封闭化园区',
+    description: '园区封闭化业务查询、车辆轨迹与设备数据分析',
+  },
+]
 
 /**
  * 由清单推导出的运行时标识。

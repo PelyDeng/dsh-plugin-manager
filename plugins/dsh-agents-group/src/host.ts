@@ -32,10 +32,14 @@ export interface AgentMountContext {
     readonly publicOrigin: string
     readonly accessMode: 'standalone' | 'authenticated'
   }
+  /** 该 Agent 自己的部署字段；来自群组配置的 `agents.<id>.config`。 */
+  readonly agentConfig: Record<string, unknown>
   /** 该 Agent 自己的访问校验器（按自己的 pluginId 授权）。 */
   readonly access: Access
   /** 一个只允许注册该 Agent 前缀下路由的 HTTP 注册器。 */
   readonly http: ReturnType<typeof createPluginHttp>
+  /** 群组级配置文件的路径，子包从这里取自己的业务凭据。 */
+  readonly groupConfigPath?: string
   /** 群组级的公共组件包。各 Agent 从这里取共享能力，不要各自复制。 */
   readonly common: typeof common
 }
@@ -54,7 +58,17 @@ export type AgentMount = (context: AgentMountContext) => Promise<{
 export async function mountAgents(
   ctx: Context,
   manifests: readonly AgentManifest[],
-  shared: Omit<AgentMountContext, 'ctx' | 'access' | 'http'>,
+  shared: Omit<AgentMountContext, 'ctx' | 'access' | 'http' | 'agentConfig'> & {
+    /** 按 Agent id 取它自己的部署字段。 */
+    readonly agentConfigOf: (agentId: string) => Record<string, unknown>
+    /**
+     * 该 Agent 自己的 HTTP 错误处理。
+     *
+     * 必须由子包提供：只有它知道哪些错误是可预期的（例如参数校验失败应当 400）。
+     * 用通用的 500 兜底会让本该是 400 的响应变成 500，前端无法区分。
+     */
+    readonly onErrorOf?: (agentId: string) => ((response: import('node:http').ServerResponse, error: unknown) => void) | undefined
+  },
   loader: (manifest: AgentManifest) => Promise<AgentMount | undefined>,
 ): Promise<MountedAgent[]> {
   const mounted: MountedAgent[] = []
@@ -79,16 +93,21 @@ export async function mountAgents(
         pluginId: endpoints.id,
         publicOrigin: shared.config.publicOrigin,
       })
+      const onError = shared.onErrorOf?.(manifest.id)
       const http = createPluginHttp(ctx, {
         access,
         routePrefix: endpoints.entryPath,
-        onError: (response, caught) => {
-          const message = caught instanceof Error ? caught.message : '请求处理失败'
-          response.writeHead(500, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
-          response.end(JSON.stringify({ error: message }))
-        },
+        ...(onError === undefined ? {} : { onError }),
       })
-      const instance = await mount({ ...shared, ctx, access, http })
+      const instance = await mount({
+        ctx,
+        config: shared.config,
+        agentConfig: shared.agentConfigOf(manifest.id),
+        access,
+        http,
+        common: shared.common,
+        ...(shared.groupConfigPath === undefined ? {} : { groupConfigPath: shared.groupConfigPath }),
+      })
       mounted.push({ ...base, dispose: instance.dispose })
     } catch (error) {
       // 只标记这一个 Agent 失败，群组继续服务其他 Agent。
