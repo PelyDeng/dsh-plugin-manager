@@ -23,7 +23,7 @@ import type {} from '@deepseek-ai/dsh-tools'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { agentResource } from '@dsh-agents-group/common'
 import { createPluginHttp, onRevoked, registerPlugin, registerConversations, type Access, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
-import type { AgentParticipant } from 'dsh-pirate-command/protocol'
+import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
 import { ConversationManager } from './agent.ts'
 import { ConversationStore } from './conversation-store.ts'
 import { Config as ConfigSchema, type Config as PluginConfig } from './config.ts'
@@ -157,8 +157,8 @@ export async function mount(context: AgentMountContext): Promise<{
   // 同时它也是回滚到旧插件时的保险。
   const store = new ConversationStore(dshHomePath('plugins', 'closedoff', 'conversations.sqlite'))
   const manager = new ConversationManager(ctx, config, persona, TOOL_NAMES, access, store, context.allowedTools)
+  // 群组直接把这个实例桥接成牛马大总管的执行入口，不再经过额外的发现事件。
   const participant = createClosedoffParticipant(ctx, config, manager, access)
-  ctx.effect(() => ctx.on('pirate/participants', accept => accept(participant), { global: true }))
   if (access.mode === 'authenticated') ctx.effect(() => registerConversations(ctx, manager.management()))
 
   const tools = registerTools(ctx, gateway, config, agent => manager.authorizeAgent(agent), context.category)

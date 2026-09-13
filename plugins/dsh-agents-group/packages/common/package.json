@@ -16,6 +16,7 @@
     "check": "pnpm typecheck"
   },
   "devDependencies": {
+    "@dsh-plugin-manager/plugin-kit": "workspace:*",
     "typescript": "^6.0.3"
   }
 }

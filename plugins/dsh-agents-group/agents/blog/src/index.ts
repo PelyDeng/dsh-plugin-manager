@@ -23,7 +23,7 @@ import { BlogAttachments, MAX_ATTACHMENT_BYTES } from './attachments.mjs'
 import { ChatStore } from './chat-store.mjs'
 import { BlogChat } from './chat.mjs'
 import { createBlogParticipant } from './participant.ts'
-import type { AgentParticipant } from 'dsh-pirate-command/protocol'
+import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
 import {selectBlogModel} from './models.mjs'
 import {ReasoningTranslations,reasoningOriginal} from './reasoning-translation.ts'
 import type { Config } from './config.ts'
@@ -107,10 +107,8 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   const app=new BlogApplication(store,access,blog,images,backups,jobs,attachments)
   const {chatSdk}=await import(blogResource('runtime/chat-sdk.mjs').href)
   const chat=new BlogChat(ctx,access,store,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)
-  // 显式创建参与者再注册：群组要把同一个实例桥接成牛马大总管的执行入口，
-  // 而 registerBlogParticipant 只在内部创建、不交出来。
+  // 群组直接把这个实例桥接成牛马大总管的执行入口，不再经过额外的发现事件。
   const participant=createBlogParticipant({access,chat,index:conversations,store,routePrefix:config.routePrefix})
-  ctx.effect(()=>ctx.on('pirate/participants',accept=>accept(participant),{global:true}))
   ctx.effect(()=>registerConversations(ctx,chat.provider))
   const translations=new ReasoningTranslations({ctx,pluginId:'blog',path:join(root,'reasoning-translations.sqlite'),access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
   const manifest=JSON.parse(await readFile(blogResource('package.json'),'utf8'))

@@ -1,6 +1,6 @@
-/** 海盗指挥台只委派业务回合，不获取原始工具结果或内部推理。 */
+/** 协作入口只委派业务回合，不获取原始工具结果或模型内部推理。 */
 import type { Context } from '@deepseek-ai/cordis'
-import type { AgentParticipant, ParticipantProgress, ParticipantResult } from 'dsh-pirate-command/protocol'
+import type { AgentParticipant, ParticipantProgress, ParticipantResult } from '../../../packages/common/src/participant.ts'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import type { ConversationManager } from './agent.ts'
 import { onAssistantDelta, type AssistantDelta } from './assistant-stream.ts'

@@ -1,6 +1,5 @@
-import type { Context } from '@deepseek-ai/cordis'
 import type { Actor } from '@dsh-plugin-manager/plugin-kit'
-import type { AgentParticipant, ParticipantRequest, ParticipantResult } from 'dsh-pirate-command/protocol'
+import type { AgentParticipant, ParticipantRequest, ParticipantResult } from '../../../packages/common/src/participant.ts'
 import type { BlogChat } from './chat.mjs'
 import type { ChatStore } from './chat-store.mjs'
 import type { BlogStore } from './store.mjs'
@@ -36,6 +35,9 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
   routePrefix: string
 }): AgentParticipant {
   invariant(/^\/(?!\/)[^?#\\]*$/.test(routePrefix), '博客入口路径无效', 503)
+  // 表名与两个请求前缀沿用协作入口改名前的写法：它们是**持久标识** —— 表里有线上数据、
+  // 请求前缀参与幂等去重，改名要迁移老库，还可能让升级窗口内的重试变成两次投递。
+  // 内部噪音不值得用这个代价换，所以只在代码与文档里换新说法。
   store.db.exec(`CREATE TABLE IF NOT EXISTS pirate_blog_conversations (
     owner TEXT NOT NULL, missionId TEXT NOT NULL, conversationId TEXT NOT NULL,
     PRIMARY KEY(owner,missionId), UNIQUE(owner,conversationId))`)
@@ -181,10 +183,4 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
       }
     },
   }
-}
-
-export function registerBlogParticipant(ctx: Context, options: Parameters<typeof createBlogParticipant>[0]) {
-  const participant = createBlogParticipant(options)
-  // 海盗插件可选：类型引用在构建时消除，博客运行不依赖其包或代码。
-  return ctx.on('pirate/participants', accept => accept(participant), { global: true })
 }

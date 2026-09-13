@@ -16,7 +16,7 @@
  * 但归属不同插件，所以由群组在中间翻译，双方都不必知道对方的存在。
  */
 
-import type { AgentParticipant } from 'dsh-pirate-command/protocol'
+import type { AgentParticipant } from '../packages/common/src/participant.ts'
 import type { AgentManifest } from './agents/registry.ts'
 
 /**

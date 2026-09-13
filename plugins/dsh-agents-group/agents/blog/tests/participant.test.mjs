@@ -3,9 +3,9 @@ import assert from 'node:assert/strict'
 import { setImmediate as tick } from 'node:timers/promises'
 import { BlogStore, ownerKey } from '../src/store.mjs'
 import { ChatStore } from '../src/chat-store.mjs'
-import { createBlogParticipant, registerBlogParticipant } from '../src/participant.ts'
+import { createBlogParticipant } from '../src/participant.ts'
 import { chatConversationTarget } from '../web/chat.js'
-import { renderMarkdown } from '../../../../dsh-pirate-command/web/src/markdown.js'
+import { renderMarkdown } from '../web/markdown.js'
 
 const actor = Object.freeze({ namespace: 'user', userId: 'writer', sessionId: 'login-a' })
 
@@ -423,7 +423,7 @@ test('long responses preserve status and disclose omissions within the collabora
     }
     f.complete(id, answer)
     const result = await running
-    assert.ok(result.text.length <= 64000, 'must fit the existing pirate event storage limit')
+    assert.ok(result.text.length <= 64000, '转交正文不超过参与者自己的上限')
     assert.equal(result.status, body === null ? 'completed' : 'waiting')
     assert.equal(result.artifacts[0].path, '/blog?conversationId=' + encodeURIComponent(id))
     if (fullCandidate) {
@@ -456,15 +456,6 @@ test('subscription revocation while running rejects instead of leaking a later a
   await assert.rejects(running, /登录或授权已失效/)
   assert.equal(f.active.size, 0)
   assert.equal(f.listeners.size, 0)
-})
-
-test('registration only exposes a discovery event and needs no pirate runtime service', t => {
-  const f = fixture(t); let event, provider
-  const dispose = () => {}
-  const returned = registerBlogParticipant({ on(name, handler, options) {
-    event = name; assert.equal(options.global, true); handler(value => { provider = value }); return dispose
-  } }, { access: f.access, chat: f.chat, index: f.index, store: f.store, routePrefix: '/blog' })
-  assert.equal(event, 'pirate/participants'); assert.equal(provider.id, 'blog'); assert.equal(returned, dispose)
 })
 
 test('native chat deep links select the requested conversation over a previous local conversation', () => {

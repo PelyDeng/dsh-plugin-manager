@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentParticipant } from 'dsh-pirate-command/protocol'
+import type { AgentParticipant } from '@dsh-agents-group/common'
 import { executorFor, BUTLER_EXECUTORS_EVENT } from '../src/butler-bridge.ts'
 import type { AgentManifest } from '../src/agents/registry.ts'
 

@@ -9,7 +9,14 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import { createAccess, createPluginHttp, type Access, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
-import type { AgentParticipant } from 'dsh-pirate-command/protocol'
+/**
+ * 协作契约按**源码相对路径**引入，不走包名。
+ *
+ * `@dsh-agents-group/common` 只提供源码、不产出声明文件；打包器生成声明时按包名找不到
+ * `.d.ts`，会把契约类型当成「没有这个导出」直接报错。相对路径是源码图里的普通模块，
+ * 声明生成能正常跟随；运行时的 `agentResource` 等仍按包名引入（它们会被内联进产物）。
+ */
+import type { AgentParticipant } from '../packages/common/src/participant.ts'
 import type * as common from '@dsh-agents-group/common'
 import { endpointsOf, type AgentManifest } from './agents/registry.ts'
 

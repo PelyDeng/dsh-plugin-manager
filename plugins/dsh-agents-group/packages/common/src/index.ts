@@ -10,6 +10,19 @@
 
 export * from './weather.ts'
 export * from './agent-resources.ts'
+/**
+ * 协作契约显式列出，而不是 `export *`：这个模块**只有类型**（外加一个版本常量），
+ * 打包器在生成声明时会把纯类型转发丢掉，子包构建就会报 `AgentParticipant is not exported`。
+ */
+export { PARTICIPANT_PROTOCOL } from './participant.ts'
+export type {
+  AgentParticipant,
+  ParticipantArtifact,
+  ParticipantProgress,
+  ParticipantRequest,
+  ParticipantResult,
+  ParticipantStatus,
+} from './participant.ts'
 
 /** 包版本，用于确认内联生效（构建后不应依赖外部解析）。 */
 export const COMMON_VERSION = '0.1.0'
