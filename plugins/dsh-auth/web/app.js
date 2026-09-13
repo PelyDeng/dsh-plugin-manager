@@ -138,15 +138,29 @@ function toolButton(text, plugin) {
   return button
 }
 
+/**
+ * 一张插件卡片。
+ *
+ * 紧凑卡片而不是整行：一段分区里最多三张并排，名称与版本同排、说明两行封顶、工具名只列前三个，
+ * 其余数量由底部的徽标交代。底部用 `margin-top:auto` 贴住卡片下沿，所以同一行的按钮始终对齐，
+ * 不会因为说明或工具名换行而错位。
+ */
 function pluginCard(plugin) {
-  const row = node('article', undefined, 'plugin-row')
-  row.style.setProperty('--accent', accentOf(plugin.id))
+  const card = node('article', undefined, 'plugin-card')
+  card.style.setProperty('--accent', accentOf(plugin.id))
 
   const monogram = node('div', monogramOf(plugin.displayName), 'plugin-monogram')
   monogram.setAttribute('aria-hidden', 'true')
 
-  const body = node('div', undefined, 'plugin-row-body')
-  body.append(node('h3', plugin.displayName, 'plugin-row-name'), node('p', plugin.description, 'muted plugin-description'))
+  const head = node('div', undefined, 'plugin-card-head')
+  const title = node('div', undefined, 'plugin-card-title')
+  const facts = node('p', `${plugin.packageName} · v${plugin.version}`, 'plugin-meta')
+  facts.title = `${plugin.packageName} · v${plugin.version}`
+  title.append(node('h3', plugin.displayName, 'plugin-name'), facts)
+  head.append(monogram, title)
+
+  const body = node('div', undefined, 'plugin-card-body')
+  body.append(node('p', plugin.description, 'muted plugin-description'))
 
   const preview = node('div', undefined, 'tool-preview')
   for (const tool of plugin.tools.slice(0, 3)) {
@@ -157,23 +171,21 @@ function pluginCard(plugin) {
   if (!plugin.tools.length) preview.append(node('span', '此插件未注册工具', 'muted small'))
   body.append(preview)
 
-  const meta = node('div', undefined, 'plugin-row-meta')
-  const facts = node('p', `${plugin.packageName} · v${plugin.version}`, 'plugin-meta')
-  facts.title = `${plugin.packageName} · v${plugin.version}`
-  meta.append(facts, node('span', `${plugin.tools.length} 个工具`, 'badge'))
-
-  const actions = node('div', undefined, 'plugin-row-actions')
+  const foot = node('div', undefined, 'plugin-card-foot')
+  foot.append(node('span', `${plugin.tools.length} 个工具`, 'badge'))
+  const actions = node('div', undefined, 'plugin-card-actions')
   const entry = localEntry(plugin.entryPath)
   if (entry === '/auth') actions.append(node('span', '当前页面', 'muted small'))
   else if (entry && session.user.grants.includes(plugin.id)) {
     const link = node('a', '打开插件', 'button'); link.href = entry; actions.append(link)
   } else actions.append(node('span', '未获访问授权', 'muted small'))
-  const toggle = iconButton('icon-button plugin-row-toggle', '查看插件工具', 'M9 18l6-6-6-6')
+  const toggle = iconButton('icon-button plugin-card-toggle', '查看插件工具', 'M9 18l6-6-6-6')
   toggle.addEventListener('click', () => openTools(plugin, toggle))
   actions.append(toggle)
+  foot.append(actions)
 
-  row.append(monogram, body, meta, actions)
-  return row
+  card.append(head, body, foot)
+  return card
 }
 
 function pluginSection(group) {
