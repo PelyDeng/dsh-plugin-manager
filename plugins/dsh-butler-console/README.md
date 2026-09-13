@@ -132,8 +132,11 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | GET | `/butler/task` | 单次任务的完整记录 |
 | GET | `/butler/models` | 宿主模型目录 |
 
-`/butler/chat` 与 `/butler/reply` 的 SSE 事件类型：`conversation`、`user`、`chat`、
+`/butler/chat` 与 `/butler/reply` 的 SSE 事件类型：`conversation`、`user`、`chat`、`chat_delta`、
 `plan`、`subtask`、`subtask_delta`、`subtask_thinking`、`summary`、`error`，以 `[DONE]` 结束。
+
+牛马大总管自己的发言也是边收边上的：`chat_delta` 开一条气泡并逐段追加，回合结束时到达的
+`chat` 用它落定后的正文**替换**预览，所以被重试掉的那一版不会留在页面上。
 
 ## 状态语义
 

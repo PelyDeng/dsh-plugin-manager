@@ -82,6 +82,8 @@ const state = {
   abort: null,
   /** 子任务 id → 该成员当前的气泡与状态节点，供流式增量原地更新。 */
   bubbles: new Map(),
+  /** 大总管正在流式发言的那条气泡；落定的 `chat` 收它。 */
+  butlerSpeech: null,
   /** 子任务 id → 等待中的提问卡，收到回复后移除。 */
   asks: new Map(),
   taskId: null,
@@ -184,7 +186,11 @@ function userMessage(text, time) {
   append(msg)
 }
 
-/** 牛马大总管发言。带着 bowtie 身份，和成员区分开。 */
+/**
+ * 牛马大总管发言。带着 bowtie 身份，和成员区分开。
+ *
+ * 返回句柄：`chat_delta` 用它原地续写同一条气泡，落定的 `chat` 再用最终正文替换预览。
+ */
 function butlerMessage(text, time) {
   const msg = make('div', 'msg msg--butler')
   const avatar = make('div', 'avatar avatar--sm')
@@ -196,10 +202,47 @@ function butlerMessage(text, time) {
   head.appendChild(make('span', 'msg__name', '牛马大总管'))
   head.appendChild(make('span', 'msg__tag', '负责听你说人话'))
   col.appendChild(head)
-  col.appendChild(make('div', 'bubble', text))
+  const bubble = make('div', 'bubble')
+  const body = make('span', null, text)
+  const caret = make('span', 'caret')
+  caret.hidden = true
+  bubble.appendChild(body)
+  bubble.appendChild(caret)
+  col.appendChild(bubble)
   if (time) col.appendChild(make('div', 'msg__meta', formatTime(time)))
   msg.appendChild(col)
   append(msg)
+  return { msg, bubble, body, caret }
+}
+
+/** 大总管正在说的那条气泡：第一条增量开它，落定的 `chat` 收它。 */
+function butlerSpeech() {
+  if (state.butlerSpeech === null) {
+    const view = butlerMessage('')
+    view.caret.hidden = false
+    state.butlerSpeech = { ...view, text: '' }
+  }
+  return state.butlerSpeech
+}
+
+function butlerDelta(text) {
+  const speech = butlerSpeech()
+  speech.text += text
+  speech.body.textContent = speech.text
+}
+
+/**
+ * 落定的发言。
+ *
+ * 有正在流的那条就替换它的正文并收起光标 —— 重试过的那一版不会留在页面上；
+ * 没有（例如直接回答、历史恢复）就照旧新起一条。
+ */
+function butlerSettle(text, time) {
+  const speech = state.butlerSpeech
+  state.butlerSpeech = null
+  if (speech === null) { butlerMessage(text, time); return }
+  speech.body.textContent = text
+  speech.caret.hidden = true
 }
 
 /** 计划贴纸：拆解结果，每条带 @ 句柄。 */
@@ -348,11 +391,16 @@ function handleEvent(event) {
       return
 
     case 'user':
+      state.butlerSpeech = null
       userMessage(event.text, event.time)
       break
 
     case 'chat':
-      butlerMessage(event.text, event.time)
+      butlerSettle(event.text, event.time)
+      break
+
+    case 'chat_delta':
+      butlerDelta(event.text)
       break
 
     case 'plan': {
@@ -361,6 +409,8 @@ function handleEvent(event) {
       state.asks.clear()
       setRail('parse', 'done')
       setRail('dispatch', 'active')
+      // 计划贴纸是新的一条消息：先收掉可能还开着的大总管气泡，别把两段话并到一条里。
+      state.butlerSpeech = null
       butlerMessage('收到老板，这活我拆成三份，已经喊人了。')
       append(planNote(event))
       break

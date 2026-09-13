@@ -91,6 +91,8 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
 
   // 牛马大总管会话的事件只用于填充当前轮次；其他插件的会话事件在这里被忽略。
   ctx.on('session/event', (session, event) => { console_.observe(session, event) })
+  // 它自己的回答也要边收边上：实时帧只转发它自己会话的正文增量，其余一律忽略。
+  ctx.on('agent/assistant-stream', ({ agent, frame }) => { console_.observeStream(agent, frame) })
 
   await installWeb(ctx, config, console_, access)
 }

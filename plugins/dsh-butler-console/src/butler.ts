@@ -19,6 +19,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
+import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
@@ -47,6 +48,13 @@ export interface ButlerMemberCard extends ButlerMember {
 export type ButlerEvent =
   | { readonly type: 'user'; readonly text: string; readonly time: number }
   | { readonly type: 'chat'; readonly role: 'butler'; readonly text: string; readonly time: number }
+  /**
+   * 牛马大总管自己发言的增量片段。
+   *
+   * 与 `chat` 配对：`chat_delta` 开一条气泡并逐段追加，回合结束时到达的 `chat` 用它落定后的
+   * 正文**替换**预览（重试过的那一版就不会留在页面上）。
+   */
+  | { readonly type: 'chat_delta'; readonly role: 'butler'; readonly text: string; readonly time: number }
   | {
     readonly type: 'plan'
     readonly taskId: string
@@ -307,6 +315,8 @@ export class ButlerConsole {
   private readonly turns = new Map<string, Turn>()
   /** 每个会话的中止控制器，用户按停止时触发。 */
   private readonly aborts = new Map<string, AbortController>()
+  /** 每个正在进行的大总管回合的正文增量出口：`sessionId` → 写进当前事件流。 */
+  private readonly deltas = new Map<string, (text: string) => void>()
   /**
    * 正在等待用户回话的子任务：`taskId:subtaskId` → 该子任务的执行方。
    *
@@ -689,8 +699,13 @@ export class ButlerConsole {
     yield { type: 'user', text, time: Date.now() }
 
     try {
-      // 第一段：理解与拆解。
-      const planning = await this.runTurn(conversation, text, abort.signal)
+      // 第一段：理解与拆解。它自己的话边收边上：回合还没结束就把增量发给页面。
+      const speech = progressQueue()
+      const planningTurn = this.runTurn(conversation, text, abort.signal,
+        delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }))
+      void planningTurn.then(() => speech.settle(), () => speech.settle())
+      for await (const event of speech.drain()) yield event
+      const planning = await planningTurn
       if (planning.outcome.kind === 'cancelled') {
         yield { type: 'summary', taskId: '', text: '', state: 'cancelled', error: '已停止', time: Date.now() }
         return
@@ -797,6 +812,7 @@ export class ButlerConsole {
     conversation: Conversation,
     text: string,
     signal: AbortSignal,
+    onDelta?: (text: string) => void,
   ): Promise<{ outcome: TurnOutcome; text: string; plans: readonly PlanSubmission[] }> {
     const sessionId = String(conversation.handle.agent.session.id)
     const turn: Turn = {
@@ -805,6 +821,7 @@ export class ButlerConsole {
       plans: [], text: '', done: false, outcome: { kind: 'cancelled' }, resolve: () => {},
     }
     this.turns.set(sessionId, turn)
+    if (onDelta !== undefined) this.deltas.set(sessionId, onDelta)
     const finished = new Promise<TurnOutcome>(resolve => {
       turn.resolve = outcome => {
         if (turn.done) return
@@ -825,7 +842,22 @@ export class ButlerConsole {
       return { outcome: { kind: 'failed', message: visibleError(error, 500) }, text: turn.text, plans: turn.plans }
     } finally {
       this.turns.delete(sessionId)
+      this.deltas.delete(sessionId)
     }
+  }
+
+  /**
+   * 宿主实时帧入口，由 `index.ts` 注册到 `ctx.on('agent/assistant-stream')`。
+   *
+   * 只转发牛马大总管当前回合的正文增量：其他插件 Agent 的帧、推理与工具参数都不进页面。
+   * 一次回合里可能有多次尝试（重试会换 attemptId），这里不做尝试级区分 —— 落定的 `chat`
+   * 会用最终正文替换整条预览，被重试掉的那一版不会留在页面上。
+   */
+  observeStream(agent: { session?: { id?: unknown } } | undefined, frame: AssistantStreamFrame): void {
+    if (frame.type !== 'chunk' || frame.chunk.type !== 'text-delta') return
+    const text = frame.chunk.text
+    if (text === '') return
+    this.deltas.get(String(agent?.session?.id ?? ''))?.(text)
   }
 
   /**
@@ -1132,7 +1164,12 @@ export class ButlerConsole {
       ...lines,
       '请基于这些结果给出最终回答，直接回答我的目标，不要重复子任务清单，也不要提到这份指令。',
     ].join('\n')
-    const outcome = await this.runTurn(conversation, prompt, signal)
+    const speech = progressQueue()
+    const summaryTurn = this.runTurn(conversation, prompt, signal,
+      delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }))
+    void summaryTurn.then(() => speech.settle(), () => speech.settle())
+    for await (const event of speech.drain()) yield event
+    const outcome = await summaryTurn
     if (outcome.outcome.kind === 'cancelled') {
       yield { type: 'summary_text', text: '' }
       return
