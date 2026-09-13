@@ -2,12 +2,13 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { buildHostImage, withRegistryAuthentication, validateImageConfig } from '../../integrations/docker/host-image.mjs';
-import { prepareManagerTooling } from '../../scripts/manager-tooling.mjs';
+import { installManagerArchive, prepareManagerTooling } from '../../scripts/manager-tooling.mjs';
 import { prepareWorkspaceDependencies } from './bootstrap.mjs';
 import { assertSelectiveInstallSafe, preparePluginReuse } from './plugin-reuse.mjs';
+import { resolveToolingReuse } from './tooling-reuse.mjs';
 import { composeReleases } from '../../packages/plugin-manager/src/compose-release.mjs';
 import { loadRelease } from '../../packages/plugin-manager/src/release.mjs';
-import { buildStep } from '../../packages/plugin-manager/src/site-output.mjs';
+import { buildMessage, buildStep } from '../../packages/plugin-manager/src/site-output.mjs';
 import { fileHash, readSiteJson } from '../../packages/plugin-manager/src/site-record.mjs';
 
 export function validateBase(reference, info) {
@@ -19,7 +20,16 @@ export function validateBase(reference, info) {
 export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareManagerTooling } = {}) {
   return {
     prepareTools(context) {
-      return tooling({ root: context.root, output: resolve(context.operation, 'tooling'), execute: context.execute, env: context.env });
+      const output = resolve(context.operation, 'tooling');
+      const reuse = context.source.toolingReuse;
+      if (!reuse) {
+        buildMessage(`管理器工具：重新构建（${context.source.toolingReason}）`);
+        return tooling({ root: context.root, output, execute: context.execute, env: context.env });
+      }
+      // 输入没变：归档内容与重新构建一致，只做一次安装与版本核验（1.2s vs 18.6s 的重新构建）。
+      buildMessage('管理器工具：复用上一次成功发布的归档（构建输入未变化）');
+      const version = readSiteJson(resolve(context.root, 'packages/plugin-manager/package.json')).version;
+      return installManagerArchive({ archive: reuse.archive, output, version, execute: context.execute, env: context.env });
     },
     inspect(context) {
       const { root, capture, site, runtime, rebuildPlugins, previous, active } = context;
@@ -32,8 +42,10 @@ export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareMan
       const rebuilt = rebuildPlugins === undefined ? site.plugins : rebuildPlugins.split(',');
       if (rebuildPlugins !== undefined) assertSelectiveInstallSafe(root);
       const selection = rebuildPlugins === undefined ? null : preparePluginReuse({ root, previous, active, site, revision, hostCommit, buildEnvironment, rebuilt, git });
-      context.source = { git, host, rebuilt, reuse: selection?.release.plugins.length ? selection : null };
+      const tooling_ = resolveToolingReuse({ root, git, revision });
+      context.source = { git, host, rebuilt, reuse: selection?.release.plugins.length ? selection : null, toolingReuse: tooling_.reuse, toolingReason: tooling_.reason };
       return { revision, hostCommit, hostSourceCommit: hostCommit, hostSourceClean: Boolean(hostCommit) && git(['-C', host, 'status', '--porcelain', '--untracked-files=normal']) === '', buildEnvironment,
+        managerInputs: tooling_.inputs,
         ...(context.source.reuse ? { rebuilt, reused: context.source.reuse.builtFrom.map(p => p.id), reuseSource: context.source.reuse.sourceRecord } : {}) };
     },
     prepare(context) {
