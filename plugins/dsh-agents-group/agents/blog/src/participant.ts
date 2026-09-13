@@ -76,6 +76,27 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
       const path = routePrefix.replace(/\/$/, '') + '?conversationId=' + encodeURIComponent(conversationId)
       let turnId: string | undefined, wake: (() => void) | undefined, closed = false, updates = 0
       let unsubscribe = () => {}, lastStatus = '', stopPromise: Promise<unknown> | undefined
+      /**
+       * 已经把多少实时正文交给协作入口。
+       *
+       * 博客的实时通道给的是**本步累积**的正文，不是增量；每一步结束还会清空重来。
+       * 所以这里自己算增量：同一段只发新增部分，换段就从头追加，页面看到的是这一轮
+       * 完整发言，而不是每步各来一份。
+       */
+      let sentLive = ''
+      const forwardLive = (event: unknown) => {
+        if (signal.aborted) return
+        if (typeof event !== 'object' || event === null || (event as { type?: unknown }).type !== 'live') return
+        const live = (event as { live?: { text?: unknown } | null }).live
+        const text = typeof live?.text === 'string' ? live.text : ''
+        if (text === '') { sentLive = ''; return }
+        const next = text.startsWith(sentLive) ? text.slice(sentLive.length) : text
+        sentLive = text
+        if (next === '') return
+        // 增量只是呈现数据：上报失败（授权或协作已失效）时由主循环按真实回合状态收尾，
+        // 不因为一条增量把订阅拆掉。
+        try { request.onProgress({ kind: 'delta', delta: next }) } catch { /* 主循环会复核授权与回合状态。 */ }
+      }
       const notify = () => { updates++; wake?.(); wake = undefined }
       const stopOwned = async () => {
         if (!turnId) return
@@ -91,7 +112,7 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
       }
       signal.addEventListener('abort', abort, { once: true })
       try {
-        unsubscribe = chat.subscribe(actor, conversationId, () => notify(), () => { closed = true; notify() })
+        unsubscribe = chat.subscribe(actor, conversationId, (event: unknown) => { forwardLive(event); notify() }, () => { closed = true; notify() })
         assertBound()
         signal.throwIfAborted()
         request.onProgress({ kind: 'status', text: '博客会话已连接', conversationId,

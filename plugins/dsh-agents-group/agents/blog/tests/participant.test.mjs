@@ -167,6 +167,28 @@ test('emits one bound native conversation link before sending and preserves its 
   assert.deepEqual(result.artifacts, [artifact])
 })
 
+test('成员发言按增量转给协作入口：同段只发新增，换段从头追加', async t => {
+  const f = fixture(t); f.auto = false
+  const progress = []
+  const running = f.provider().run(input({ onProgress: value => progress.push(value) }))
+  await tick()
+  const id = [...f.active.keys()][0]
+  const live = text => { for (const listener of [...f.listeners]) if (listener.id === id) listener.send({ type: 'live', live: { text, reasoning: 'PRIVATE_LIVE_REASONING' } }) }
+  live('先看资料。')
+  live('先看资料。再核对来源。')
+  // 这一步结束，下一步的实时正文重新累积：增量继续追加，不重发已经发过的字。
+  live('')
+  live('结论是甲稿更完整。')
+  f.complete(id, '结论是甲稿更完整。')
+  const result = await running
+  const deltas = progress.filter(value => value.kind === 'delta').map(value => value.delta)
+  assert.equal(result.status, 'completed')
+  assert.deepEqual(deltas, ['先看资料。', '再核对来源。', '结论是甲稿更完整。'])
+  assert.equal(deltas.join(''), '先看资料。再核对来源。结论是甲稿更完整。')
+  assert.ok(progress.filter(value => value.kind === 'delta').every(value => value.conversationId === undefined))
+  assert.doesNotMatch(JSON.stringify(progress), /PRIVATE_LIVE_REASONING/)
+})
+
 test('cancel or revoke before initial progress emits no conversation link or request', async t => {
   for (const action of ['cancel', 'revoke']) {
     const f = fixture(t), controller = new AbortController(), progress = []
