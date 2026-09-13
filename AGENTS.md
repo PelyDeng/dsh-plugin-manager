@@ -14,7 +14,7 @@
 - 状态、锁和恢复规则只有一个实现；停写证据与锁分别核验，保护非受管依赖和用户 patch。
 - 官方 `deepseek-harness` 子模块保持独立依赖树和锁定版本。普通构建不修改或下载宿主源码。
 - 按改动选择必要检查，不把构建、类型检查和全套测试作为每次修改的固定步骤；发版时再执行所需构建、行为测试和独立安装包验证。真实宿主、模型替身、容器、浏览器和生产验证分别记录，不将跳过报告为通过。
-- 框架支持按需构建单个或任意多个插件：日常使用 `pnpm build --plugins "<ID列表>"`，打包使用 `pnpm package --plugins "<ID列表>"`；源码部署使用 `build.ps1` / `build.sh --rebuild-plugins "<ID列表>"` 重建选中插件并复用其余已启用插件的旧归档，ID 用逗号分隔并加引号，避免 PowerShell 拆成数组，完整部署选集不变。默认仍全量构建；缺少可核实成功基线、共享输入变化或依赖检查不通过时不得强行复用。构建依赖须声明：插件目录与声明的 `workspace:` 依赖之外的读取（框架文档、`scripts`、`deploy` 一类）要写进 `deepseekPlugin.buildInputs`，省略该字段时复用按保守口径判断；原输入恢复用 `--resume`，新 schema 3 同包业务配置修正用 `--recover --data-compatible`，两者不与重建参数混用，具体约束见 `deploy/README.md`。
+- 框架支持按需构建单个或任意多个插件：日常使用 `pnpm build --plugins "<ID列表>"`，打包使用 `pnpm package --plugins "<ID列表>"`；源码部署使用 `build.ps1` / `build.sh --rebuild-plugins "<ID列表>"` 重建选中插件并复用其余已启用插件的旧归档，ID 用逗号分隔并加引号，避免 PowerShell 拆成数组，完整部署选集不变；不想自己算选集就写 `--rebuild-plugins auto`，由判定按同一套规则迭代出重建集（判不出可靠基线时整套重建，点名选集被拒时判定会一次给出补全后的完整命令）。默认仍全量构建；缺少可核实成功基线、共享输入变化或依赖检查不通过时不得强行复用。构建依赖须声明：插件目录与声明的 `workspace:` 依赖之外的读取（框架文档、`scripts`、`deploy` 一类）要写进 `deepseekPlugin.buildInputs`，省略该字段时复用按保守口径判断；原输入恢复用 `--resume`，新 schema 3 同包业务配置修正用 `--recover --data-compatible`，两者不与重建参数混用，具体约束见 `deploy/README.md`。
 - 按需复用同时支持干净宿主源码和显式不可变 `hostImage`：前者核验检出身份，后者核验固定镜像摘要及成功记录的宿主提交，不要求未使用的宿主源码存在；两者均校验最终镜像身份，不为复用下载宿主源码或改写旧记录。
 - 插件自身目录内已纳入 Git 的常规 `.tgz` / `.tar.gz` 可作为 `file:` 构建输入；复用须核对旧新 blob 与磁盘字节一致，并拒绝符号链接、目录、越界、未跟踪归档及 `link:`。私有 vendor 资源只保留在私有仓库，公共测试使用自造归档。
 - 含当前框架版本的文档以相邻 `.md.tmpl` 为编辑源，使用 `{{FRAMEWORK_VERSION}}`；运行 `node scripts/version.mjs sync` 更新已提交的 `.md`。历史版本与功能起始版本不替换。CI 只校验同步状态，不改写文件；完整规则见 [doc/versioning.md](doc/versioning.md)。
