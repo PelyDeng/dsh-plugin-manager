@@ -15,6 +15,9 @@ export interface AssistantDelta {
 export function onAssistantDelta(ctx: Context, receive: (sessionId: string, delta: AssistantDelta) => void): void {
   const attempts = new WeakMap<Agent, { attemptId: string; revision: number; step: number }>()
   ctx.on('agent/assistant-stream', ({ agent, frame }) => {
+    // `frame` 缺失时直接返回：不区分事件名的替身会把别的通道也送进来，那种载荷没有帧，
+    // 读 `frame.type` 会抛错并让整条回合失败。
+    if (frame === undefined) return
     if (frame.type === 'start') {
       attempts.set(agent, { attemptId: frame.attemptId, revision: frame.revision, step: frame.step })
       return

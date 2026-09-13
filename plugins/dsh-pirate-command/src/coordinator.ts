@@ -259,7 +259,11 @@ export class PirateCoordinator {
             || !progress.conversationId.trim())) throw new Error('会话入口必须同时提供已核验的业务会话标识')
           if (progress.conversationId) this.store.link(run.actor, run.mission.id, run.mission.runId, role, progress.conversationId)
           if (artifact) recordArtifact(artifact)
-          if (progress.text) this.store.add(run.actor, run.mission.id, { type: progress.kind, role, text: progress.text }, run.mission.runId)
+          // `delta` 是边收边显示的正文增量，不是一条独立事件：它没有正文，也不该进
+          // 协作事件流，否则会把同一段回答按增量记成很多条记录。只落盘状态与消息。
+          if (progress.kind !== 'delta' && progress.text) {
+            this.store.add(run.actor, run.mission.id, { type: progress.kind, role, text: progress.text }, run.mission.runId)
+          }
         },
       })
       this.assert(run); participant.assertAccess(run.actor); signal.throwIfAborted()

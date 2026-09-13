@@ -41,21 +41,47 @@ function fixture(routePrefix = '/closedoff-qa') {
     abort: vi.fn(),
     finish: vi.fn(() => { conversation.active = false }),
   }
-  const ctx = { effect: (effect: () => () => Promise<void>) => { disposers.push(effect()) }, on: (_name: string, listener: (session: { id: string }, event: SessionEvent) => void) => {
-    listeners.add(listener)
-    return () => { listeners.delete(listener) }
-  } } as unknown as Context
+  /**
+   * 按事件名分别记录订阅。
+   *
+   * 插件还会在生命周期内注册别的常驻通道（例如 `agent/assistant-stream`，用于把模型
+   * 增量转给牛马大总管）。那些订阅不该在回合结束时消失，也不该被「回合结束后没有遗留
+   * 会话订阅」这条断言算进去 —— 所以断言只看 `session/event`。
+   */
+  const byEvent = new Map<string, Set<(session: { id: string }, event: SessionEvent) => void>>()
+  const ctx = {
+    effect: (effect: () => () => Promise<void>) => { disposers.push(effect()) },
+    on: (name: string, listener: (session: { id: string }, event: SessionEvent) => void) => {
+      const group = byEvent.get(name) ?? new Set<(session: { id: string }, event: SessionEvent) => void>()
+      group.add(listener)
+      byEvent.set(name, group)
+      return () => { group.delete(listener) }
+    },
+  } as unknown as Context
+  const sessionListeners = () => byEvent.get('session/event') ?? new Set<(session: { id: string }, event: SessionEvent) => void>()
   const config = Config({ routePrefix, turnTimeoutMs: 10_000, authRecheckMs: 100 } as Config)
   const participant = createClosedoffParticipant(ctx, config, manager as unknown as ConversationManager, access)
   const controller = new AbortController()
   const onProgress = vi.fn()
   const request = { actor, missionId: 'mission-1', requestId: 'request-1', message: '查询通行记录', signal: controller.signal, onProgress }
+  /**
+   * 按事件名投递，和真实 Cordis 一致：`on(name, listener)` 只收该名字的事件。
+   *
+   * 早期版本把任何事件广播给所有监听器，于是「插件另开一条常驻通道」会被误当成
+   * 遗留订阅，也无法真实检验增量转发（帧会被当作会话事件送进来）。
+   */
+  const dispatch = (name: string, sessionId: string, payload: unknown) => {
+    for (const listener of [...(byEvent.get(name) ?? [])]) {
+      ;(listener as unknown as (session: { id: string }, value: unknown) => void)({ id: sessionId }, payload)
+    }
+  }
+  /** 会话事件（`session/event` 通道）。 */
   function emit(type: string, data: unknown, sessionId = id) {
-    for (const listener of [...listeners]) listener({ id: sessionId }, { type, data, time: Date.now(), seq: 1 } as SessionEvent)
+    dispatch('session/event', sessionId, { type, data, time: Date.now(), seq: 1 } as SessionEvent)
   }
   const end = (kind = 'completed') => emit('turn/end', { reason: { kind } })
-  return { participant, request, manager, controller, onProgress, conversation, listeners, emit, end,
-    revoke: () => { revoked = true }, dispose: async () => { listeners.clear(); for (const close of disposers) await close() } }
+  return { participant, request, manager, controller, onProgress, conversation, listeners: { get size() { return sessionListeners().size } }, emit, end,
+    revoke: () => { revoked = true }, dispose: async () => { byEvent.clear(); for (const close of disposers) await close() } }
 }
 
 describe('封闭化协作适配', () => {
@@ -342,4 +368,5 @@ describe('封闭化协作适配', () => {
     expect(f.conversation.active).toBe(false)
     await expect(f.participant.run(f.request)).rejects.toMatchObject({ status: 503 })
   })
+
 })

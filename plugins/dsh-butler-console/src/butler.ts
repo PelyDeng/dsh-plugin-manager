@@ -219,6 +219,24 @@ function describeThrown(error: unknown): string {
   return ''
 }
 
+/**
+ * 取出一段可写进日志的错误栈，并抹掉本机绝对路径。
+ *
+ * 只用于服务端日志：宿主与插件的部署路径、账号名等不该出现在日志里，但文件名与行号
+ * 是定位问题的关键，所以保留相对形态。
+ */
+export function stackOf(error: unknown): string {
+  if (error === null || error === undefined) return '（无抛出物）'
+  const raw = error instanceof Error
+    ? (error.stack ?? `${error.name}: ${error.message}`)
+    : describeThrown(error)
+  return (raw === '' ? '（无栈信息）' : raw)
+    .replace(/[A-Za-z]:\\[^\s)]+/gu, '…')
+    .replace(/\/(?:data|home|Users|opt|srv|var)\/[^\s):]+/gu, '…')
+    .replace(/\b(?:sk|pk)-[A-Za-z0-9_-]{8,}\b/gu, '（凭据）')
+    .slice(0, 4000)
+}
+
 export function visibleError(error: unknown, limit: number): string {
   const cleaned = describeThrown(error)
     .replace(/[A-Za-z]:\\[^\s，。；]+/gu, '（本机路径）')
@@ -763,6 +781,8 @@ export class ButlerConsole {
       const outcome = await finished
       return { outcome, text: turn.text, plans: turn.plans }
     } catch (error) {
+      // 同子任务失败：给用户的是裁剪过的一句话，栈单独进日志，否则线上只有一句话可查。
+      console.error(`butler-console: 一轮失败：${visibleError(error, 500)}\n${stackOf(error)}`)
       return { outcome: { kind: 'failed', message: visibleError(error, 500) }, text: turn.text, plans: turn.plans }
     } finally {
       this.turns.delete(sessionId)
@@ -917,6 +937,10 @@ export class ButlerConsole {
         ? (timedOut ? `超过 ${Math.round(this.config.subtaskTimeoutMs / 1000)} 秒没干完，已叫停` : '已停止')
         : visibleError(error, this.config.maxResultChars)
       const state: SubtaskState = stopped ? 'cancelled' : 'failed'
+      // 失败只留下「给用户看的一句话」时，服务端也就没有别的东西可查：页面上只有一句
+      // TypeError，日志里什么都没有，定位只能靠猜。这里把栈单独写进日志（脱敏后），
+      // 用户看到的文案不变。
+      if (!stopped) console.error(`butler-console: 子任务执行失败（${agentId}）：${detail}\n${stackOf(error)}`)
       this.store.setSubtaskState(taskId, subtaskId, state, { error: detail })
       for (const pending of drain()) yield pending
       yield emit(state, detail)
