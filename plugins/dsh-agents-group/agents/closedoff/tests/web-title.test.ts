@@ -8,10 +8,14 @@ it('refreshes only the first pending title and stops after generation, manual na
   vi.useFakeTimers()
   const refresh = vi.fn(async () => undefined)
   const state = { identityEpoch: 1, identityReady: true, conversationId: 'current', sidebar: { refresh }, setTimeout, clearTimeout, Date, Promise }
-  const start = webApp.indexOf('  function stopTitleRefresh()')
-  const end = webApp.indexOf('  function resultKey(', start)
-  expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start)
-  const watcher = runInNewContext(`var titleRefresh; ${webApp.slice(start, end)}; ({ start: startTitleRefresh, accept: acceptTitleList })`, state)
+  // 按函数名逐个取出来跑：标题刷新块夹在别的接线中间，按位置切片会连别人的代码一起带进 vm。
+  const block = ['stopTitleRefresh', 'syncConversationUrl', 'startTitleRefresh', 'acceptTitleList'].map(name => {
+    const start = webApp.indexOf(`  function ${name}(`)
+    const end = start < 0 ? -1 : webApp.indexOf('\n  }\n', start)
+    if (start < 0 || end < 0) throw new Error(`没有找到 ${name} 的实现`)
+    return webApp.slice(start, end + 4)
+  }).join('\n')
+  const watcher = runInNewContext(`var titleRefresh; ${block}; ({ start: startTitleRefresh, accept: acceptTitleList })`, state)
 
   watcher.start('current')
   await vi.advanceTimersByTimeAsync(2000)

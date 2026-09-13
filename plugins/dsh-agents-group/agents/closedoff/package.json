@@ -28,7 +28,7 @@
     "build": "tsdown && node scripts/copy-web-assets.mjs",
     "build:web": "node scripts/copy-web-assets.mjs",
     "dev": "node scripts/dev-watch.mjs",
-    "check:web": "node --check web/trajectory.js && node --check web/app.js && node --check web/render-text.js && node --check web/format.js && node --check web/labels.js",
+    "check:web": "node --check web/trajectory.js && node --check web/app.js && node --check web/render-text.js && node --check web/format.js && node --check web/labels.js && node --check web/cards.js",
     "typecheck": "tsc --noEmit",
     "test": "pnpm build:web && vitest run && node --test tests/page-layout.node.mjs",
     "check": "pnpm typecheck && pnpm check:web",

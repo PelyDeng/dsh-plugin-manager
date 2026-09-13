@@ -12,4 +12,5 @@ export const webApp = read('app.js')
 export const webLabels = read('labels.js')
 export const webRenderText = read('render-text.js')
 export const webFormat = read('format.js')
-export const webSource = `${webHtml}\n${webStyles}\n${webTrajectory}\n${webApp}\n${webLabels}\n${webRenderText}\n${webFormat}`
+export const webCards = read('cards.js')
+export const webSource = `${webHtml}\n${webStyles}\n${webTrajectory}\n${webApp}\n${webLabels}\n${webRenderText}\n${webFormat}\n${webCards}`
