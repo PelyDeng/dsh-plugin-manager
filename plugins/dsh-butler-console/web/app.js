@@ -862,14 +862,18 @@ function renderCrew() {
   clear(el.crewFaces)
   for (const member of state.members) {
     const face = avatarNode(member.agentId, 'sm')
-    face.title = `${member.displayName}（@${member.agentId}）`
+    // 在场与在忙是两件事：在场只说「登记了执行入口」，手上有没有活看 busy。
+    const working = member.busy === null ? '' : ` · ${STATE_TEXT[member.busy.state] ?? '在忙'}`
+    face.title = `${member.displayName}（@${member.agentId}）${working}`
     el.crewFaces.appendChild(face)
   }
   const online = state.members.filter(member => member.online).length
+  const busy = state.members.filter(member => member.busy !== null).length
   const total = state.members.length
-  el.crewLine.textContent = `${total} 个牛马 · ${online} 个能干活`
-  el.crewNote.textContent = `共 ${total} 位，${online} 位在场`
-  el.groupSub.textContent = `${total} 位成员 · ${online} 位在场`
+  const working = busy > 0 ? ` · ${busy} 位在忙` : ''
+  el.crewLine.textContent = `${total} 个牛马 · ${online} 个能干活${working}`
+  el.crewNote.textContent = `共 ${total} 位，${online} 位在场${working}`
+  el.groupSub.textContent = `${total} 位成员 · ${online} 位在场${working}`
 }
 
 function renderMetrics(counts) {

@@ -63,6 +63,14 @@ export interface ButlerMember {
   readonly accent: string
   /** 执行入口声明的能力，牛马大总管据此决定派谁。 */
   readonly capabilities: readonly string[]
+  /**
+   * 此刻占着的活；空闲时为 `null`。
+   *
+   * **`online` 不等于可派活**，三件事要分开看：登记了执行入口（`online`）、当前用户有授权
+   * （本插件判不了，由执行方自己鉴权）、以及这位成员是不是闲着（这里）。状态取子任务状态，
+   * 所以「在干活」与「等着用户回话」也分得开。
+   */
+  readonly busy: { readonly taskId: string; readonly subtaskId: string; readonly state: string } | null
 }
 
 /**

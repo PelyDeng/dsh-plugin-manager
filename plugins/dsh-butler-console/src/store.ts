@@ -436,8 +436,37 @@ export class TaskStore {
     return { items, total, nextOffset: next < total ? next : null }
   }
 
-  /** 用户的全局状态计数，用于右栏指标卡。 */
-  counts(actor: Actor): TaskCounts {
+  /**
+   * 该用户的任务里，每位成员此刻占着的活。
+   *
+   * 只查当前用户自己的任务：占用排的是他自己的活，看别人的任务既没用也越界。
+   *
+   * `queued` **不算占用** —— 那是计划里还没派出去的步骤，成员并没有接手。真正占住一位
+   * 成员的是「已派出、正在干、或等着他回话」这三类，与游戏侧 `claim` 的
+   * `one-subtask-per-staff` 是同一组状态。
+   */
+  busy(actor: Actor): Map<string, { taskId: string; subtaskId: string; state: SubtaskState }> {
+    const rows = this.db.prepare(`SELECT s.agent_id AS agentId, s.task_id AS taskId, s.id AS subtaskId, s.state AS state
+      FROM subtasks s JOIN tasks t ON t.id = s.task_id
+      WHERE t.owner_namespace=? AND t.owner_id=?
+        AND s.state IN ('dispatched','running','waiting_user')
+      ORDER BY s.seq`).all(actor.namespace, actor.userId) as unknown as {
+        readonly agentId: string
+        readonly taskId: string
+        readonly subtaskId: string
+        readonly state: SubtaskState
+      }[]
+    const busy = new Map<string, { taskId: string; subtaskId: string; state: SubtaskState }>()
+    for (const row of rows) {
+      // 同一位成员出现多条时留最先派出的那条：占用从派发那一刻起算，后来的顶不掉它。
+      if (!busy.has(row.agentId)) {
+        busy.set(row.agentId, { taskId: row.taskId, subtaskId: row.subtaskId, state: row.state })
+      }
+    }
+    return busy
+  }
+
+  /** 用户的全局状态计数，用于右栏指标卡。 */  counts(actor: Actor): TaskCounts {
     const rows = this.db.prepare(`SELECT state, count(*) AS total FROM tasks
       WHERE owner_namespace=? AND owner_id=? GROUP BY state`)
       .all(actor.namespace, actor.userId) as unknown as { state: TaskState; total: number }[]

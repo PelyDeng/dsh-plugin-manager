@@ -726,6 +726,7 @@ export class ButlerConsole {
   members(actor: Actor): ButlerMemberCard[] {
     this.access.assert(actor)
     const aliases = this.store.aliases(actor)
+    const busy = this.store.busy(actor)
     return listAgentCards(this.ctx).map(card => {
       const alias = aliases.get(card.id)
       return {
@@ -738,6 +739,7 @@ export class ButlerConsole {
         description: card.description,
         version: card.version,
         toolCount: card.toolCount,
+        busy: busy.get(card.id) ?? null,
       }
     })
   }

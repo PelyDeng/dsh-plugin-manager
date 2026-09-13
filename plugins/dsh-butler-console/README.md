@@ -126,7 +126,7 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | GET | `/butler/events` | **只读**订阅一个会话最近一轮的事件，可多入口同时观察 |
 | POST | `/butler/reply` | 回应正在等你的成员，SSE 事件流 |
 | POST | `/butler/stop` | 喊停当前这一轮，可带 `taskId` 精确到某个任务 |
-| GET | `/butler/members` | 群成员（含别名与能力声明） |
+| GET | `/butler/members` | 群成员（含别名、能力声明与当前占用 `busy`） |
 | POST | `/butler/members/alias` | 保存外号与配色；空值恢复默认 |
 | POST/DELETE | `/butler/members/avatar` | 上传或删除成员头像 |
 | GET | `/butler/members/avatar?agentId=` | 读取成员头像；按当前登录用户鉴权，不能靠猜 id 读到别人的 |
