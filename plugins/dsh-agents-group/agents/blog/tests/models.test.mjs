@@ -5,7 +5,7 @@ import {selectBlogModel} from '../src/models.mjs'
 function fixture(){
   const ctx={get(name){return this[name]},
     agentDefaultModel:{currentSelection:()=>({provider:'default',model:'default'})},
-    sessionController:{async modelCatalog(){return{groups:[{id:'default',name:'Default',models:[{id:'default',name:'Default'}]},{id:'blog-zhipu',name:'GLM',models:[{id:'text',name:'Text'},{id:'vision',name:'Vision'}]}],failures:[]}},selectModel(){assert.fail('validation must not submit a selection')}},
+    sessionController:{async modelCatalog(){return{groups:[{id:'default',name:'Default',models:[{id:'default',name:'Default'}]},{id:'zhipu',name:'GLM',models:[{id:'text',name:'Text'},{id:'vision',name:'Vision'}]}],failures:[]}},selectModel(){assert.fail('validation must not submit a selection')}},
     llm:{resolveCallConfig:async selection=>selection},
   }
   return ctx
@@ -16,7 +16,7 @@ test('text and image selections share credential readiness and never silently fa
   const ctx=fixture()
   ctx.credentials={describe:async ref=>{assert.equal(ref,'ZHIPU_API_KEY');return{configured}}}
   ctx.llm.resolveModelInfo=async(provider,model)=>{lookups.push({provider,model});return{inputModalities:model==='vision'?['text','image']:['text']}}
-  const models={text:{provider:'blog-zhipu',model:'text'},vision:{provider:'blog-zhipu',model:'vision'}}
+  const models={text:{provider:'zhipu',model:'text'},vision:{provider:'zhipu',model:'vision'}}
   assert.deepEqual(await selectBlogModel(ctx,models,false),models.text)
   assert.deepEqual(await selectBlogModel(ctx,models,true),models.vision)
   configured=false

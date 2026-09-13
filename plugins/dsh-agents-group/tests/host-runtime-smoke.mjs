@@ -47,8 +47,8 @@ function writeGroupConfig() {
     blog: {
       schemaVersion: 1,
       models: {
-        text: { provider: 'blog-zhipu', model: 'glm-5.3' },
-        vision: { provider: 'blog-zhipu', model: 'glm-5v-turbo' },
+        text: { provider: 'zhipu', model: 'glm-5.3' },
+        vision: { provider: 'zhipu', model: 'glm-5v-turbo' },
       },
       blog: { url: 'https://blog.test', username: 'tester', password: 'secret' },
       image: { url: 'https://image.test', username: 'tester', password: 'secret', strategyId: 2, maxBytes: 1048576 },

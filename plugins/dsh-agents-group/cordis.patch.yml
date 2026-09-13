@@ -5,15 +5,15 @@
 # 原独立插件 cordis.patch.yml 里的字段原样搬到这里，环境变量名保持不变，
 # 这样现有部署脚本不用改。
 
-# 博客的模型路由：复用官方适配器，为博客注册智谱 provider。
-# 这一段原先在博客独立插件的 patch 里；合并成群组后由群组统一注册。
-# 注意 provider 注册是宿主全局的，所以封闭化的模型目录里也会出现这两个条目，
-# 按设计由群组的模型白名单（agents.<id>.models）在应用层收窄。
+# 智谱的模型路由：复用官方 pi-ai 适配器，注册成**通用** provider。
+# provider 注册在宿主层是全局的，所以智能体群组、牛马聊天群、示例助手都能直接选它；
+# 谁把它当默认由各自的配置决定（博客的默认写在群组配置的 blog.models 里）。
+# 模型设置里的“智谱”分组与 GLM 视觉模型都来自这一处注册。
 - id: llm-pi-ai
   config:
     providers:
-      blog-zhipu:
-        displayName: 博客智谱
+      zhipu:
+        displayName: 智谱
         api: openai-completions
         baseURL: https://open.bigmodel.cn/api/paas/v4
         apiKeyEnv: ZHIPU_API_KEY

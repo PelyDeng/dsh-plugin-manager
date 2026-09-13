@@ -34,7 +34,7 @@
 
 官方 web Bundle 已提供会话持久化、JSON storage-domain 和 messageFeedback，无需重复装配。博客接口将反馈备注限制为 4000 UTF-8 字节，沿用宿主共享反馈服务的配置，不改变其他应用的备注上限。
 
-模型接入复用官方 `dsh-llm-pi-ai`，Bundle 在已有适配器中声明 `blog-zhipu` 路由，使用智谱普通模型 API。管理员从 auth“模型设置 → 服务商 API 密钥 → 智谱 GLM”保存 `ZHIPU_API_KEY`，密钥只写官方 credentials 存储；不复制到博客配置。此密钥为宿主共享凭据，与 DeepSeek 的密钥分别管理。
+模型接入复用官方 `dsh-llm-pi-ai`。智谱是宿主层注册的**通用路由**（provider id `zhipu`），任何应用都能在模型选择器里选它，博客只是把它作为默认值。管理员从 auth“模型设置 → 智谱”保存 `ZHIPU_API_KEY`，密钥只写官方 credentials 存储；不复制到博客配置。此密钥为宿主共享凭据，与 DeepSeek 的密钥分别管理。
 
 普通文字新对话通过 kit `conversationModel()` 使用框架默认模型；管理员在 auth 选择模型后，新会话立即使用新默认值。继续旧对话或创建分支时，从官方会话记录中还原原来使用的模型，不随默认值变化而切换；读取失败则拒绝恢复。这需要宿主的 `sessionProjections` 已注册 `modelSelection`，用来从日志整理模型选择。
 
