@@ -964,4 +964,3 @@ export function createTrajectoryView(options) {
       showGroup: showGroupPopup,
     };
   }
-
