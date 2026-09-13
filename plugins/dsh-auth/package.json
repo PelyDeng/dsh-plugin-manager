@@ -42,6 +42,7 @@
     "id": "auth",
     "defaultEnabled": true,
     "healthPath": "/auth/health",
+    "buildInputs": [],
     "verifyFiles": [
       "dist/store.mjs",
       "web/index.html",

@@ -50,7 +50,7 @@ export function readPlugin(root) {
   const meta = manifest.deepseekPlugin;
   const label = `${packageLabel}/package.json#deepseekPlugin`;
   requireValue(meta && meta.schemaVersion === 3, `${label}.schemaVersion 仅支持 3；旧 env 声明请迁移为 runtimeConfig，并从 files 移除用户配置。`);
-  object(meta, ['schemaVersion', 'id', 'defaultEnabled', 'runtimeConfig', 'configuration', 'healthPath', 'verifyFiles', 'development', 'displayName', 'entryPath', 'permissions', 'category'], label);
+  object(meta, ['schemaVersion', 'id', 'defaultEnabled', 'runtimeConfig', 'configuration', 'healthPath', 'verifyFiles', 'development', 'displayName', 'entryPath', 'permissions', 'category', 'buildInputs'], label);
   validateConfiguration(meta.configuration, label);
   requireValue(typeof meta.id === 'string' && /^[a-z][a-z0-9-]*$/u.test(meta.id) && !['all', 'none', 'dsh-console'].includes(meta.id), `${label}.id 无效或为保留字。`);
   requireValue(typeof manifest.name === 'string' && /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(manifest.name), `${packageLabel} 包名无效。`);
@@ -97,6 +97,15 @@ export function readPlugin(root) {
   const verifyFiles = [...new Set(['package.json', 'README.md', main, patch, ...(runtimeConfig?.template ? [runtimeConfig.template] : []),
     ...(meta.verifyFiles ?? []).map(file => pluginFile(root, file, `${label}.verifyFiles`))])];
   requireValue(!verifyFiles.some(privatePackagePath), `${packageLabel} 的公开资源不得指向用户配置或部署数据。`);
+  // 构建输入的完整声明：按需复用时用它判断「这次改动要不要重建这个插件」。路径相对于仓库根，
+  // 指向插件目录之外（插件目录本身与声明的包依赖不需要列）。缺这个字段时，复用会退回保守判断。
+  // 只核验形状：这些路径只用来把「可能的变化」算进构建输入，多列只会多重建，不会少重建；
+  // 未跟踪的路径在 Git 树里查不到，因此也不构成漏判。
+  requireValue(meta.buildInputs === undefined || (Array.isArray(meta.buildInputs) && meta.buildInputs.length <= 200
+    && meta.buildInputs.every(input => typeof input === 'string' && /^[a-zA-Z0-9_.-][a-zA-Z0-9._/-]*$/u.test(input)
+      && !input.split('/').some(part => part === '' || part === '.' || part === '..'))),
+  `${label}.buildInputs 必须是仓库根目录下的相对路径列表；不需要列插件目录本身与已声明的包依赖。`);
+  requireValue(meta.buildInputs === undefined || new Set(meta.buildInputs).size === meta.buildInputs.length, `${label}.buildInputs 不得重复。`);
   return { id: meta.id, package: manifest.name, version: manifest.version,
     displayName: meta.displayName ?? manifest.name, description: manifest.description, entryPath: meta.entryPath, permissions,
     category: meta.category?.trim(), defaultEnabled: meta.defaultEnabled ?? true, runtimeConfig, configuration: meta.configuration, development, healthPath: meta.healthPath, verifyFiles };
@@ -126,6 +135,11 @@ export function discoverPlugins(root) {
     }
     requireValue(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(entry.name), `插件目录名称无效：${entry.name}。`);
     plugins.push({ ...readPlugin(pluginRoot), directory: `plugins/${entry.name}` });
+    // 声明指向仓库根，只有在这里才知道根目录，所以存在性在这一层核验：写错路径当场失败，
+    // 而不是等到复用判定时把一次真实变化当成无关变化。
+    for (const input of manifest.deepseekPlugin.buildInputs ?? []) {
+      requireValue(existsSync(resolve(root, input)), `${entry.name}/package.json#deepseekPlugin.buildInputs 指向不存在的路径：${input}。`);
+    }
   }
   for (const field of ['id', 'package']) {
     const seen = new Set();

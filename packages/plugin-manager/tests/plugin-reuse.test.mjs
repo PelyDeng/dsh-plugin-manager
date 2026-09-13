@@ -13,7 +13,7 @@ const read = path => JSON.parse(readFileSync(path, 'utf8'));
 const save = (path, value) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, JSON.stringify(value, null, 2) + '\n'); };
 const digest = path => hash(readFileSync(path));
 const environment = { nodeVersion: process.versions.node, platform: process.platform, architecture: process.arch, packageManager: 'pnpm@11.19.0', targetArchitecture: 'amd64', hostImage: null };
-function fixture(t, dependencies = {}, hostImage = null, prepareInput = () => {}) {
+function fixture(t, dependencies = {}, hostImage = null, prepareInput = () => {}, buildInputs = {}) {
   const buildEnvironment = { ...environment, hostImage };
   const root = mkdtempSync(join(tmpdir(), 'dsh-reuse-'));
   t.after(() => { assert.equal(dirname(root), resolve(tmpdir())); rmSync(root, { recursive: true, force: true }); });
@@ -29,7 +29,7 @@ function fixture(t, dependencies = {}, hostImage = null, prepareInput = () => {}
   writeFileSync(join(root, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
   for (const id of ['a', 'b', 'c', 'd']) {
     const directory = join(root, 'plugins', id); mkdirSync(join(directory, 'dist'), { recursive: true });
-    save(join(directory, 'package.json'), { name: `fixture-${id}`, version: '0.1.0', type: 'module', main: './dist/index.mjs', files: ['dist', 'cordis.patch.yml', 'README.md'], scripts: { build: 'node build.mjs', check: 'node --check dist/index.mjs' }, dsh: { bundle: { patch: './cordis.patch.yml' } }, deepseekPlugin: { schemaVersion: 3, id }, ...(dependencies[id] ? { devDependencies: dependencies[id] } : {}) });
+    save(join(directory, 'package.json'), { name: `fixture-${id}`, version: '0.1.0', type: 'module', main: './dist/index.mjs', files: ['dist', 'cordis.patch.yml', 'README.md'], scripts: { build: 'node build.mjs', check: 'node --check dist/index.mjs' }, dsh: { bundle: { patch: './cordis.patch.yml' } }, deepseekPlugin: { schemaVersion: 3, id, ...(buildInputs[id] === undefined ? {} : { buildInputs: buildInputs[id] }) }, ...(dependencies[id] ? { devDependencies: dependencies[id] } : {}) });
     writeFileSync(join(directory, 'README.md'), `Fixture ${id}\n`);
     writeFileSync(join(directory, 'dist/index.mjs'), 'export function apply() {}\n');
     writeFileSync(join(directory, 'build.mjs'), 'console.log("fixture");\n');
@@ -131,7 +131,8 @@ test('environment, host changes and unrelated tracked inputs require full rebuil
   assert.throws(() => f.prepare(), /宿主源码/);
   writeFileSync(join(f.host, 'host.txt'), 'fixture\n');
   f.change('pnpm-lock.yaml', 'lockfileVersion: changed\n');
-  assert.throws(() => f.prepare(), /选集之外/);
+  // 锁文件属于仓库级共享构建输入：解析结果可能变，任何复用都要重建。
+  assert.throws(() => f.prepare(), /a 依赖的共享构建输入.*pnpm-lock\.yaml/);
 });
 
 test('an unchanged immutable host image permits reuse without an unused source checkout', t => {
@@ -182,7 +183,7 @@ test('cross-directory renames and mismatched active mounts cannot bypass reuse g
   compose.services.dsh.volumes[0].source = dirname(f.prior.manifest); save(f.prior.active.path, compose);
   renameSync(join(f.root, 'plugins/a/dist/index.mjs'), join(f.root, 'plugins/c/moved.mjs'));
   f.change('plugins/c/README.md', 'Moved source\n');
-  assert.throws(() => f.prepare(), /选集之外.*plugins\/a/);
+  assert.throws(() => f.prepare(), /a 自身发生变化：plugins\/a\/dist\/index\.mjs/);
 });
 
 test('file dependencies fail before archive reuse', t => {
@@ -212,7 +213,7 @@ test('unchanged tracked plugin-local vendor archives retain reusable package pro
   assert.throws(() => f.prepare(), /归档缺失/);
   renameSync(moved, archive);
   f.change('plugins/a/vendor/fixture.tgz', Buffer.concat([bytes, Buffer.from('committed change')]));
-  assert.throws(() => f.prepare(), /重建选集之外/);
+  assert.throws(() => f.prepare(), /a 的 file: 归档内容与已跟踪构建输入不一致/);
 });
 
 test('untracked and ignored vendor archives cannot be inherited from a successful record', t => {
@@ -268,4 +269,70 @@ test('installation lifecycle and hooks are rejected without executing package sc
   }
   writeFileSync(join(f.root, '.pnpmfile.cjs'), 'throw Error("must not run");');
   assert.throws(() => assertSelectiveInstallSafe(f.root), /hooks/);
+});
+
+// 复用判定按「构建输入」而不是「除重建选集以外的任何变化」：声明过的插件只在自身目录、
+// 声明的依赖、仓库级共享输入与 buildInputs 列出的路径变化时重建。
+const helperPackage = root => {
+  const directory = join(root, 'packages/helper'); mkdirSync(directory, { recursive: true });
+  save(join(directory, 'package.json'), { name: 'fixture-helper', version: '0.1.0', type: 'module', main: 'index.mjs' });
+  writeFileSync(join(directory, 'index.mjs'), 'export const value = 1;\n');
+};
+const documentFile = root => {
+  const directory = join(root, 'doc'); mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, 'notes.md'), '框架说明\n');
+};
+
+test('declared plugins reuse archives across changes they do not read', t => {
+  const f = fixture(t, {}, null, root => { helperPackage(root); documentFile(root); }, { a: [], b: [], c: [], d: [] });
+  f.change('doc/notes.md', '改过的框架说明\n');
+  const first = f.prepare(['c']);
+  assert.deepEqual(first.release.plugins.map(p => p.id), ['a', 'b', 'd']);
+  // 没被任何插件依赖的工作区包也一样：改动它不触发重建。
+  f.publish(['c'], first);
+  f.change('packages/helper/index.mjs', 'export const value = 2;\n');
+  const second = f.prepare(['c']);
+  assert.deepEqual(second.release.plugins.map(p => p.id), ['a', 'b', 'd']);
+});
+
+test('a changed dependency package rebuilds its consumers and leaves the rest reusable', t => {
+  const f = fixture(t, { a: { 'fixture-helper': 'workspace:*' } }, null, helperPackage, { a: [], b: [], c: [], d: [] });
+  f.change('packages/helper/index.mjs', 'export const value = 2;\n');
+  assert.throws(() => f.prepare(['c']), /a 依赖的 fixture-helper 发生变化：packages\/helper\/index\.mjs/);
+  // 同一个变化对不依赖它的插件不算输入：把它们一起放进重建选集即可复用其余产物。
+  const result = f.prepare(['a', 'c']);
+  assert.deepEqual(result.release.plugins.map(p => p.id), ['b', 'd']);
+});
+
+test('declared extra inputs are judged per plugin, and a typo cannot widen reuse', t => {
+  const f = fixture(t, {}, null, documentFile, { a: ['doc'], b: [], c: [], d: [] });
+  f.change('doc/notes.md', '改过的框架说明\n');
+  assert.throws(() => f.prepare(['c']), /a 声明的构建输入 doc 发生变化：doc\/notes\.md/);
+  const result = f.prepare(['a', 'c']);
+  assert.deepEqual(result.release.plugins.map(p => p.id), ['b', 'd']);
+});
+
+test('a plugin without the declaration keeps the conservative verdict', t => {
+  const f = fixture(t, {}, null, documentFile);
+  f.change('doc/notes.md', '改过的框架说明\n');
+  assert.throws(() => f.prepare(['c']), /c 未声明|a 未声明 deepseekPlugin\.buildInputs，重建选集之外的变化无法确认与它无关：doc\/notes\.md/);
+});
+
+test('a workspace dependency that resolves nowhere is refused instead of ignored', t => {
+  const f = fixture(t, { a: { 'ghost-package': 'workspace:*' } }, null, () => {}, { a: [] });
+  assert.throws(() => f.prepare(), /a 含不能确认的 workspace 构建依赖 ghost-package/);
+});
+
+test('a same-named package inside a plugin does not shadow the real workspace package', t => {
+  // 深层的同名副本只该是插件自己的文件；真实依赖仍要指向 packages/ 下那一份。
+  const f = fixture(t, { a: { '@dsh-plugin-manager/plugin-kit': 'workspace:*' } }, null, root => {
+    const directory = join(root, 'packages/plugin-kit'); mkdirSync(directory, { recursive: true });
+    save(join(directory, 'package.json'), { name: '@dsh-plugin-manager/plugin-kit', version: '0.1.0', type: 'module', main: 'index.mjs' });
+    writeFileSync(join(directory, 'index.mjs'), 'export const kit = 1;\n');
+    const copy = join(root, 'plugins/a/fixtures/plugin-kit'); mkdirSync(copy, { recursive: true });
+    save(join(copy, 'package.json'), { name: '@dsh-plugin-manager/plugin-kit', version: '0.1.0', type: 'module', main: 'index.mjs' });
+    writeFileSync(join(copy, 'index.mjs'), 'export const kit = 1;\n');
+  }, { a: [] });
+  f.change('packages/plugin-kit/index.mjs', 'export const kit = 2;\n');
+  assert.throws(() => f.prepare(['c']), /a 依赖的 @dsh-plugin-manager\/plugin-kit 发生变化：packages\/plugin-kit\/index\.mjs/);
 });

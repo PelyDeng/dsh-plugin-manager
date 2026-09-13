@@ -21,7 +21,7 @@ bash build.sh
 <!-- excerpt:source-rebuild -->
 日常 `pnpm build --plugins c` 只构建 c，`pnpm package --plugins "c,d" --output <新目录>` 只交付 c、d。源码部署使用 `./build.sh --rebuild-plugins c`；Windows 使用 `.\build.ps1 --rebuild-plugins c`，多个 ID 使用 `.\build.ps1 --rebuild-plugins "c,d"`，Bash 同样可加引号。所有逗号分隔选集都加引号，避免 PowerShell 将其拆成数组。保留站点 a,b,c,d 完整选集，只有指定插件重建，其余复用可核实旧归档，新清单仍完整。省略参数全量构建；不接受空项、重复、all/none 或选集外 ID。
 
-复用需与活动站点对应的 ready 基线、构建环境、宿主来源与旧归档均可核验。共享已跟踪文件、未重建插件或本地构建依赖变化时拒绝；本地依赖按传递关系校验，不得靠安装钩子重建。不会自动扩大选集或静默全量。没有基线时先正常全量构建；archives 成功记录不充当 source 基线，切回 source 首次必须全量。
+复用需与活动站点对应的 ready 基线、构建环境、宿主来源与旧归档均可核验。判定按「改动落在哪些插件的构建输入里」：插件目录、它声明的 `workspace:` 依赖（含间接依赖）、仓库级共享输入（`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.npmrc`、`.gitattributes`），以及清单 `deepseekPlugin.buildInputs` 列出的路径；落在这些之外的变化不再阻塞复用。没声明 `buildInputs` 的插件读取范围未知，仍要求改动全部落在本次重建的插件目录内。本地依赖按传递关系校验，不得靠安装钩子重建。不会自动扩大选集或静默全量。没有基线时先正常全量构建；archives 成功记录不充当 source 基线，切回 source 首次必须全量。
 
 源码模式要求与基线一致的干净检出；镜像模式核验同一摘要和旧成功记录的宿主提交，不要求宿主源码存在，最终镜像标签仍须一致。插件自身目录内已纳入 Git 的常规 .tgz/.tar.gz 可作 file: 构建输入，旧新 blob 与磁盘字节须一致；符号链接、目录、越界、未跟踪归档及 `link:` 仍拒绝复用。
 
