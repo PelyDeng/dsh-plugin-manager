@@ -10,6 +10,25 @@ import { commandSpec, normalizeEnvironment } from '../packages/plugin-manager/sr
 const isolated = ['--config.node-linker=isolated', '--config.dedupe-peer-dependents=false'];
 export const managerToolInputs = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'packages/plugin-kit', 'packages/plugin-manager'];
 
+/**
+ * 管理器工具构建输入的哈希：上面每个路径下所有已跟踪文件的 Git 对象号。
+ *
+ * 输入没变时，上一次成功发布的管理器归档可以直接复用：构建一次实测 18.6 秒（pnpm 安装 +
+ * kit 与 manager 两次构建 + 打包），而复用只需按摘要核验再安装一次（约 1.2 秒）。
+ *
+ * 哈希取自 Git 树而不是工作区：内容一致、不受时间戳影响，也不把未跟踪文件算成输入。
+ */
+export function managerToolInputsHash(git, revision) {
+  const entries = [];
+  for (const record of git(['ls-tree', '-r', '-z', revision, '--', ...managerToolInputs]).split('\0')) {
+    if (!record) continue;
+    const separator = record.indexOf('\t');
+    const [, type, object] = record.slice(0, separator).split(' ');
+    if (type === 'blob') entries.push(`${record.slice(separator + 1)}\0${object}`);
+  }
+  return createHash('sha256').update(entries.sort().join('\n')).digest('hex');
+}
+
 function command(bin, args, options) {
   const cli = commandSpec(bin, options);
   const result = spawnSync(cli.command, [...cli.prefix, ...args], { windowsHide: true, stdio: 'inherit', ...options });
