@@ -126,6 +126,7 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | GET | `/butler/events` | **只读**订阅一个会话最近一轮的事件，可多入口同时观察 |
 | GET | `/butler/transcript` | 按当前登录身份读对话正文（用户原话与管家答复），分页可续 |
 | POST | `/butler/reply` | 回应正在等你的成员，SSE 事件流 |
+| POST | `/butler/supplement` | 补充或修改**当前这一轮**的目标，SSE 事件流 |
 | POST | `/butler/stop` | 喊停当前这一轮，可带 `taskId` 精确到某个任务 |
 | GET | `/butler/members` | 群成员（含别名、能力声明与当前占用 `busy`） |
 | POST | `/butler/members/alias` | 保存外号与配色；空值恢复默认 |
@@ -175,6 +176,31 @@ GET /butler/transcript?conversationId=…&after=0&limit=50
 `method_not_allowed`、`conflict`、`payload_too_large`、`unsupported_media_type`、`internal_error`、
 `unavailable`），所以永远不会是空码。同一类失败在不同接口上给同一个码：两个入口都撞上「上一轮
 还没完」时，客户端只需要认 `run_busy` 一个。
+
+### 三个入口各管一件事
+
+| 入口 | 什么时候用 | 不做什么 |
+| --- | --- | --- |
+| `POST /chat` | 开一个**新的**管家回合 | 不修改已经存在的任务 |
+| `POST /reply` | 回答指定成员提出的问题 | 不改目标 |
+| `POST /supplement` | 修改或追加**当前**任务的目标 | 不新建任务 |
+
+```http
+POST /butler/supplement
+{"taskId":"butler-task-…","text":"标题再短一点，其余照旧","requestId":"req-x","expectVersion":2}
+→ 200 text/event-stream
+```
+
+`taskId` 必填：没有它就只能靠「最近一轮」猜，而补话与补目标混在一起正是要避免的。`expectVersion` 是并发依据——两个入口同时改同一轮时，后提交的那个会被拒（`409 version_conflict`），而不是让两份补充互相覆盖。
+
+处理分两步，从事件流能看出来：
+
+1. 先发一条 `input` 事件（含版本号与原文）——**话收到了**；
+2. 处理完再发后续的 `chat`／`plan`／`subtask`／`summary`。
+
+「只改表达」还是「改了范围」由牛马大总管判断：前者按新表达重新给结论、不重复派活；后者把新活**追加到同一个任务**里，编号接着原有的往下排。运行中提出补充不会打断正在跑的那一轮，它会等那一轮跑到安全点。
+
+任务已经结束时返回 `409 task_already_finished`，消息里说明「改目标请用 `/chat` 开新的一轮」——**不自动创建新任务**，那是老板的决定。
 
 ### 执行与观察是分开的
 
@@ -242,7 +268,7 @@ GET /butler/transcript?conversationId=…&after=0&limit=50
 状态、材料引用、成员别名与头像。牛马大总管与用户的对话正文仍然存放在 DSH 官方会话日志里，本插件不复制
 一份，也不改写宿主日志。
 
-数据结构版本目前是 **3**：v2 给子任务加了材料引用与原会话两列，v3 加了写请求的幂等占用表。旧库在启动时就地增列增表，已有数据不动，迁移在一个事务里且版本号最后才写；
+数据结构版本目前是 **4**：v2 给子任务加了材料引用与原会话两列，v3 加了写请求的幂等占用表，v4 加了输入版本（`tasks` 两列）与 `task_inputs` 表。旧库在启动时就地增列增表，已有数据不动，迁移在一个事务里且版本号最后才写；
 但**旧版本代码读到新版本会拒绝启动**，所以回滚插件版本之前要先把库降回去，不能直接换回旧包。
 
 ## 本地开发

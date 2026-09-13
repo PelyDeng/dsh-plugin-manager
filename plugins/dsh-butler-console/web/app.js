@@ -406,6 +406,16 @@ function handleEvent(event) {
       butlerDelta(event.text)
       break
 
+    case 'input': {
+      // 老板改了目标。先留一行痕迹，随后的派活与汇总照旧走原来的分支。
+      state.taskId = event.taskId
+      append(make('p', 'msg__meta',
+        event.source === 'supplement'
+          ? `补充已收到（第 ${event.version} 版）：${event.text}`
+          : event.text))
+      break
+    }
+
     case 'plan': {
       state.taskId = event.taskId
       state.bubbles.clear()

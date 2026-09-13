@@ -17,11 +17,12 @@ import { isTerminal, type SubtaskState, type TaskState } from './task-model.ts'
  *
  * 2：子任务增加 `artifacts`（材料引用）与 `conversation_id`（原会话）。
  * 3：新增 `requests` 表，把写请求的幂等占用**在执行前**落库。
+ * 4：任务增加输入版本两列，新增 `task_inputs` 表，记录每一次被接受的需求与补充。
  *
  * 升级只增列、增表，不动已有数据；但**旧代码读到新版本会拒绝启动**，所以回滚插件版本之前
  * 要先把库降回去，不能直接换回旧包。
  */
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 /**
  * 能从这些旧版本就地升上来。
@@ -29,7 +30,7 @@ const SCHEMA_VERSION = 3
  * 不在这张表里的版本（比当前新、或者来历不明）一律拒绝启动：拿错版本的结构去读写，
  * 比起不来严重得多。
  */
-const MIGRATABLE_VERSIONS: readonly number[] = [1, 2]
+const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3]
 
 /** 侧栏里的一条会话。 */
 export interface ConversationSummary {
@@ -61,10 +62,32 @@ export interface TaskRecord {
   readonly note: string
   readonly summary: string
   readonly error: string
+  /**
+   * 已接受的需求版本，从 1 开始。
+   *
+   * 第一条需求就是版本 1，之后每接受一条补充加一。**接受不等于处理完成**：汇总前要
+   * `acceptedVersion === processedVersion` 才算处理到了最新输入。
+   */
+  readonly acceptedVersion: number
+  /** 管家已经处理到的版本。 */
+  readonly processedVersion: number
   readonly createdAt: number
   readonly updatedAt: number
   readonly finishedAt: number | null
   readonly subtasks: readonly SubtaskRecord[]
+}
+
+/**
+ * 一次被接受的需求或补充。
+ *
+ * 原文留着：汇总要能核对「最新一条到底说了什么」，只存一个版本号是不够的。
+ */
+export interface TaskInput {
+  readonly version: number
+  readonly text: string
+  /** `chat` 是最初那条需求，`supplement` 是后来的补充。 */
+  readonly source: 'chat' | 'supplement'
+  readonly createdAt: number
 }
 
 /** 一条子任务记录。 */
@@ -170,6 +193,8 @@ export class TaskStore {
         note TEXT NOT NULL DEFAULT '',
         summary TEXT NOT NULL DEFAULT '',
         error TEXT NOT NULL DEFAULT '',
+        accepted_version INTEGER NOT NULL DEFAULT 1,
+        processed_version INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         finished_at INTEGER
@@ -219,6 +244,14 @@ export class TaskStore {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (owner_namespace, owner_id, kind, request_id)
       );
+      CREATE TABLE IF NOT EXISTS task_inputs (
+        task_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        text TEXT NOT NULL,
+        source TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (task_id, version)
+      );
     `)
     // 版本号**最后**才写：迁移中途失败时它不该已经前移，否则下次启动会跳过迁移、
     // 直接去查一个还不存在的列。
@@ -242,6 +275,13 @@ export class TaskStore {
         this.db.exec(`
           ALTER TABLE subtasks ADD COLUMN artifacts TEXT NOT NULL DEFAULT '';
           ALTER TABLE subtasks ADD COLUMN conversation_id TEXT NOT NULL DEFAULT '';
+        `)
+      }
+      if (from <= 3) {
+        // 老任务没有输入版本这回事，一律按「只有最初那条需求」算。
+        this.db.exec(`
+          ALTER TABLE tasks ADD COLUMN accepted_version INTEGER NOT NULL DEFAULT 1;
+          ALTER TABLE tasks ADD COLUMN processed_version INTEGER NOT NULL DEFAULT 1;
         `)
       }
       this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
@@ -355,7 +395,12 @@ export class TaskStore {
       .all(actor.namespace, actor.userId, limit) as unknown as ConversationSummary[]
   }
 
-  /** 写入一份新计划。任务与全部子任务在同一个事务里落盘，避免出现半个计划。 */
+  /**
+   * 写入一份新计划。任务与全部子任务在同一个事务里落盘，避免出现半个计划。
+   *
+   * 开头那条需求就是**版本 1**，与它一起写进 `task_inputs`：输入历史要完整，不能只有
+   * 后来的补充、没有最初那句。
+   */
   createTask(input: {
     id: string
     conversationId: string
@@ -373,6 +418,8 @@ export class TaskStore {
         input.id, input.conversationId, input.actor.namespace, input.actor.userId,
         input.goal, 'running', input.note, now, now,
       )
+      this.db.prepare(`INSERT INTO task_inputs(task_id,version,text,source,created_at) VALUES(?,1,?,?,?)`)
+        .run(input.id, input.goal, 'chat', now)
       const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state)
         VALUES(?,?,?,?,?,?,?)`)
       input.subtasks.forEach((subtask, index) => {
@@ -437,6 +484,7 @@ export class TaskStore {
   /** 读取一条任务的完整记录；不存在或不属于该用户时返回 undefined。 */
   task(actor: Actor, id: string): TaskRecord | undefined {
     const row = this.db.prepare(`SELECT id,conversation_id AS conversationId,goal,state,note,summary,error,
+        accepted_version AS acceptedVersion,processed_version AS processedVersion,
         created_at AS createdAt,updated_at AS updatedAt,finished_at AS finishedAt
       FROM tasks WHERE id=? AND owner_namespace=? AND owner_id=?`)
       .get(id, actor.namespace, actor.userId)
@@ -493,7 +541,7 @@ export class TaskStore {
       FROM subtasks s JOIN tasks t ON t.id = s.task_id
       WHERE t.owner_namespace=? AND t.owner_id=?
         AND s.state IN ('dispatched','running','waiting_user')
-      ORDER BY s.seq`).all(actor.namespace, actor.userId) as unknown as {
+      ORDER BY s.started_at, s.task_id, s.id`).all(actor.namespace, actor.userId) as unknown as {
         readonly agentId: string
         readonly taskId: string
         readonly subtaskId: string
@@ -501,12 +549,86 @@ export class TaskStore {
       }[]
     const busy = new Map<string, { taskId: string; subtaskId: string; state: SubtaskState }>()
     for (const row of rows) {
-      // 同一位成员出现多条时留最先派出的那条：占用从派发那一刻起算，后来的顶不掉它。
+      // 同一位成员出现多条时留**最早派出去**的那条：占用从派发那一刻起算，后来的顶不掉它。
+      // 排序按 `started_at` 而不是 `seq` —— 两条不同任务里的子任务 seq 都可能从 1 开始，
+      // 按 seq 排等于没排。
       if (!busy.has(row.agentId)) {
         busy.set(row.agentId, { taskId: row.taskId, subtaskId: row.subtaskId, state: row.state })
       }
     }
     return busy
+  }
+
+  /**
+   * 接受一条新的需求或补充，返回新版本号。
+   *
+   * **版本递增与原文落库在同一个事务里**：只加版本不存原文，汇总时就无从核对「最新那条
+   * 到底说了什么」；只存原文不加版本，又表达不了「处理到哪儿了」。
+   *
+   * 递增读的是库里的当前值而不是调用方传来的：两次补充几乎同时到达时，谁先谁后由这里
+   * 定，不由客户端定。
+   */
+  addInput(actor: Actor, taskId: string, text: string, source: 'chat' | 'supplement'): number {
+    const now = Date.now()
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.db.prepare(`SELECT accepted_version AS acceptedVersion FROM tasks
+        WHERE id=? AND owner_namespace=? AND owner_id=?`)
+        .get(taskId, actor.namespace, actor.userId) as unknown as { acceptedVersion: number } | undefined
+      if (row === undefined) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
+      const next = row.acceptedVersion + 1
+      this.db.prepare('UPDATE tasks SET accepted_version=?, updated_at=? WHERE id=?').run(next, now, taskId)
+      this.db.prepare('INSERT INTO task_inputs(task_id,version,text,source,created_at) VALUES(?,?,?,?,?)')
+        .run(taskId, next, text, source, now)
+      this.db.exec('COMMIT')
+      return next
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /** 一条任务收到过的全部需求与补充，按版本排序。 */
+  inputs(taskId: string): TaskInput[] {
+    return this.db.prepare(`SELECT version,text,source,created_at AS createdAt
+      FROM task_inputs WHERE task_id=? ORDER BY version`).all(taskId) as unknown as TaskInput[]
+  }
+
+  /** 把处理进度追平到某个版本。 */
+  setProcessedVersion(taskId: string, version: number): void {
+    // 只往前追：回调乱序或者重放时不可能把已经处理过的输入退回未处理。
+    this.db.prepare(`UPDATE tasks SET processed_version=?, updated_at=?
+      WHERE id=? AND processed_version < ?`).run(version, Date.now(), taskId, version)
+  }
+
+  /**
+   * 往一个已经存在的任务追加子任务，返回它们的编号。
+   *
+   * 补充改了范围时用：新活是**同一个任务**里多出来的步骤，不是另开一轮 —— 分开之后
+   * 「这一轮的最终结论」就没人给得出了。
+   *
+   * 编号接着现有的往下排，不复用也不跳号。
+   */
+  appendSubtasks(actor: Actor, taskId: string, subtasks: readonly NewSubtask[]): string[] {
+    const record = this.task(actor, taskId)
+    if (record === undefined) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
+    const start = record.subtasks.reduce((max, item) => Math.max(max, item.seq), 0)
+    const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state)
+      VALUES(?,?,?,?,?,?,?)`)
+    const ids: string[] = []
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      subtasks.forEach((subtask, index) => {
+        insert.run(taskId, subtask.id, start + index + 1, subtask.goal, subtask.agentId, subtask.reason, 'queued')
+        ids.push(subtask.id)
+      })
+      this.db.prepare('UPDATE tasks SET updated_at=? WHERE id=?').run(Date.now(), taskId)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+    return ids
   }
 
   /** 用户的全局状态计数，用于右栏指标卡。 */  counts(actor: Actor): TaskCounts {

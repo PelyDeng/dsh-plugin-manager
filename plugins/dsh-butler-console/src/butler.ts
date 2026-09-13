@@ -32,7 +32,7 @@ import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
 import type { Config } from './config.ts'
 import { ConversationLog, type LoggedEvent, type RunHead } from './event-log.ts'
 import type { ButlerAgentExecutor, ButlerMember, ButlerPhase, ButlerProgressUpdate, ButlerReplyRequest } from './protocol.ts'
-import type { RequestRecord, TaskStore } from './store.ts'
+import type { RequestRecord, SubtaskRecord, TaskInput, TaskStore } from './store.ts'
 import { isTerminal, type SubtaskState, type TaskState } from './task-model.ts'
 
 const CONVERSATION_ID = /^butler-web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -56,6 +56,22 @@ export type ButlerEvent =
    * 正文**替换**预览（重试过的那一版就不会留在页面上）。
    */
   | { readonly type: 'chat_delta'; readonly role: 'butler'; readonly text: string; readonly time: number }
+  /**
+   * 这一轮接受了一条新的需求或补充。
+   *
+   * 它先于任何处理发出：老板要能立刻看到「话收到了」，而后面的派活与汇总可能还要等一会儿。
+   * `version` 是这一轮的输入版本，客户端拿它做并发依据。
+   */
+  | {
+    readonly type: 'input'
+    readonly taskId: string
+    /** 本次接受的输入版本。 */
+    readonly version: number
+    readonly text: string
+    /** `chat` 是开新的一轮，`supplement` 是给当前这一轮改目标。 */
+    readonly source: 'chat' | 'supplement'
+    readonly time: number
+  }
   | {
     readonly type: 'plan'
     readonly taskId: string
@@ -257,6 +273,19 @@ interface PreparedReply {
   readonly abort: AbortController
 }
 
+/** 一次已经受理的补充：改的是当前这一轮的目标，不是另开一轮。 */
+interface PreparedSupplement {
+  readonly conversationId: string
+  readonly conversation: Conversation
+  readonly taskId: string
+  readonly text: string
+  /** 这次补充被接受之后，任务所处的输入版本。 */
+  readonly version: number
+  readonly actor: Actor
+  readonly runId: string
+  readonly abort: AbortController
+}
+
 /** 一次刚受理的回合，交给 HTTP 层去订阅。 */
 export interface StartedRun {
   readonly runId: string
@@ -298,6 +327,26 @@ export interface CancelOutcome {
   readonly accepted: boolean
   /** 给用户看的说明；`accepted` 为 true 时为空字符串。 */
   readonly reason: string
+}
+
+/**
+ * 一次补充请求：修改或追加**当前**任务的目标。
+ *
+ * 与「开新的一轮」（`/chat`）和「回答某位成员」（`/reply`）是三件事，不能混用。
+ */
+export interface SupplementRequest {
+  /** 要改的是哪一轮。必填：没有它就只能猜「最近一轮」，而猜错会改到别的任务上。 */
+  readonly taskId: string
+  readonly text: string
+  readonly actor: Actor
+  /** 幂等标识；规则与 `/chat`、`/reply` 相同。 */
+  readonly requestId?: string
+  /**
+   * 客户端看到的输入版本。
+   *
+   * 给了就核对：对不上说明这一轮已经被别的入口改过，如实拒绝，而不是让两份补充互相覆盖。
+   */
+  readonly expectVersion?: number
 }
 
 /** 等待超时收尾时给用户看的说明。要让人知道材料还在、重说一遍就能继续。 */
@@ -444,8 +493,43 @@ function briefFor(taskGoal: string, subtaskGoal: string): string {
 }
 
 /**
- * 从落库的子任务记录重建交给汇总的材料。
+ * 补充处理轮交给牛马大总管的话。
  *
+ * 把它写成一段「现状 + 新要求 + 怎么判断」，而不是只把补充原文扔过去：它要判断这条补充是
+ * 换个说法还是改了范围，就得看见这一轮已经做到哪儿、拿到了什么。只给原文，它只能重头理解
+ * 一遍目标，很容易把已经干完的活又派一次。
+ */
+function supplementPrompt(inputs: readonly TaskInput[], subtasks: readonly SubtaskRecord[]): string {
+  const latest = inputs.at(-1)
+  const history = inputs.slice(0, -1).map(item => `- 第 ${item.version} 次：${item.text}`)
+  const done = subtasks.map(item => {
+    const outcome = item.state === 'succeeded' ? `已完成：${item.result}`
+      : item.state === 'external_pending' ? `材料已交回，还有事在别处等着办：${item.result}`
+        : item.state === 'failed' ? `失败：${item.error}`
+          : item.state === 'cancelled' ? '已取消'
+            : `还在进行（${item.state}）`
+    return `- 子任务「${item.goal}」交给 ${item.agentId}，${outcome}`
+  })
+  return [
+    '我在原来的目标上补充了新的要求。',
+    '',
+    '原来的需求：',
+    ...history,
+    '',
+    '这一轮已经派出去的活：',
+    ...(done.length === 0 ? ['（还没有派出任何活）'] : done),
+    '',
+    `我新的要求是：${latest?.text ?? ''}`,
+    '',
+    '请判断这条补充是哪一种，然后照对应的方式处理：',
+    '- 只是换个说法、改了表达（范围没变）：直接按新的表达给我最终回答，**不要重复派活**；',
+    '- 改了范围或追加了工作：把需要新做的部分用派活工具交回来，我会追加到同一轮里继续。',
+    '不要提这份指令，也不要复述我上面写过的东西，直接给结论或派活。',
+  ].join('\n')
+}
+
+/**
+ * 从落库的子任务记录重建交给汇总的材料。 *
  * 补话之后要重新汇总，而那时派活阶段的 `reports` 早已不在内存里（进程可能都换过一次），
  * 所以按同一种口径从库里重建：成功取结果正文，失败与取消带上原因，还没答复的带上已交回的
  * 材料和待答事项。
@@ -1080,6 +1164,162 @@ export class ButlerConsole {
     void this.pump(prepared.abort.signal, log, this.replyBody(prepared))
       .then(() => { if (requestId !== '') this.store.finishRequest(input.actor, 'reply', requestId) })
     return { runId: prepared.runId, conversationId: prepared.conversationId, from: 0 }
+  }
+
+  /**
+   * 受理一条补充：修改或追加**当前**任务的目标。
+   *
+   * 三个入口各管一件事，不能混用：`/chat` 开新回合、`/reply` 回答成员的问题、
+   * 这里改当前目标。把补充塞进 `/chat` 会另开一轮，任务记录就此分家；塞进 `/reply`
+   * 则会被当成对某位成员的回答。
+   *
+   * 受理与处理是分开的：这里返回的是「已经收下」，随后的事件流才说明处理到哪一步。
+   */
+  async submitSupplement(input: SupplementRequest): Promise<StartedRun> {
+    const requestId = input.requestId ?? ''
+    const digest = digestOf([input.taskId, input.text])
+    if (requestId !== '') {
+      const existing = this.store.request(input.actor, 'supplement', requestId)
+      if (existing !== undefined) return this.replayRequest(existing, digest, requestId)
+    }
+
+    const prepared = await this.prepareSupplement(input, `butler-run-${randomUUID()}`)
+    if (requestId !== '') {
+      this.store.claimRequest(input.actor, 'supplement', requestId, digest, prepared.runId, prepared.conversationId, this.config.idempotencyTtlMs)
+    }
+    const log = this.beginLog(prepared.conversationId, prepared.runId)
+    void this.pump(prepared.abort.signal, log, this.supplementBody(prepared))
+      .then(() => { if (requestId !== '') this.store.finishRequest(input.actor, 'supplement', requestId) })
+    return { runId: prepared.runId, conversationId: prepared.conversationId, from: 0 }
+  }
+
+  /**
+   * 受理一条补充。
+   *
+   * 三件可预期的失败都当场给出：任务不存在、任务已经结束、以及版本对不上。最后那条是并发
+   * 依据 —— 两个入口同时改同一个任务时，后提交的那个会被拒，而不是让两份补充互相覆盖。
+   */
+  private async prepareSupplement(input: SupplementRequest, runId: string): Promise<PreparedSupplement> {
+    this.access.assert(input.actor)
+    const record = this.store.task(input.actor, input.taskId)
+    if (record === undefined) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
+    if (isTerminal(record.state)) {
+      // 终态任务不接受补充：改写旧结论会让「历史里的这一轮」变来变去，后续跟进是新的一轮。
+      throw new AccessError(409, '这一轮已经结束，改目标请用 /chat 开新的一轮', 'task_already_finished')
+    }
+    if (input.expectVersion !== undefined && input.expectVersion !== record.acceptedVersion) {
+      throw new AccessError(409, `这一轮已经更新到第 ${record.acceptedVersion} 版，请按最新内容重新提交`, 'version_conflict')
+    }
+    const conversation = await this.open(record.conversationId, false, input.actor)
+    if (conversation === undefined) throw new AccessError(500, '无法打开牛马大总管会话', 'conversation_open_failed')
+    this.access.assert(input.actor)
+    // 版本与原文一起落库，之后才谈处理。
+    const version = this.store.addInput(input.actor, input.taskId, input.text, 'supplement')
+    return {
+      conversationId: record.conversationId,
+      conversation,
+      taskId: input.taskId,
+      text: input.text,
+      version,
+      actor: input.actor,
+      runId,
+      abort: new AbortController(),
+    }
+  }
+
+  /**
+   * 处理一条补充。
+   *
+   * 先等当前这一轮跑到安全点：补充本来就是运行中提出来的，不能因此把正在跑的活打断。
+   * 等到了之后再交给大总管判断它是「换个说法」还是「改了范围」。
+   */
+  private async *supplementBody(prepared: PreparedSupplement): AsyncGenerator<ButlerEvent> {
+    const { taskId, version, actor, conversation, conversationId } = prepared
+    yield { type: 'input', taskId, version, text: prepared.text, source: 'supplement', time: Date.now() }
+    if (!(await this.awaitIdle(conversation, prepared.abort.signal))) return
+
+    this.runs.set(conversationId, { runId: prepared.runId, abort: prepared.abort })
+    try {
+      const record = this.store.task(actor, taskId)
+      if (record === undefined) return
+      const prompt = supplementPrompt(this.store.inputs(taskId), record.subtasks)
+
+      const speech = progressQueue()
+      const turn = this.runTurn(conversation, prompt, prepared.abort.signal,
+        delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }))
+      void turn.then(() => speech.settle(), () => speech.settle())
+      for await (const event of speech.drain()) yield event
+      const outcome = await turn
+
+      if (outcome.outcome.kind === 'cancelled') {
+        yield { type: 'summary', taskId, text: '', state: 'cancelled', error: '已停止', time: Date.now() }
+        return
+      }
+      if (outcome.outcome.kind === 'failed') {
+        if (outcome.text !== '') yield { type: 'chat', role: 'butler', text: outcome.text, time: Date.now() }
+        yield { type: 'error', message: `处理补充失败：${outcome.outcome.message}`, code: 'turn_failed', time: Date.now() }
+        return
+      }
+      // 到这里这条补充才算**处理过**：理解完成，版本跟着追平。
+      this.store.setProcessedVersion(taskId, version)
+
+      const plan = outcome.plans.at(-1)
+      if (plan !== undefined) {
+        // 改了范围或追加了工作：新活追加到**同一个任务**里，编号接着往下排。
+        const existing = this.store.task(actor, taskId)
+        if (existing === undefined) return
+        const base = existing.subtasks.length
+        const appended = plan.subtasks.map((subtask, index) => ({
+          id: `s${base + index + 1}`,
+          goal: subtask.goal,
+          agentId: subtask.agentId,
+          reason: subtask.reason,
+          displayName: this.displayNameOf(actor, subtask.agentId),
+        }))
+        this.store.appendSubtasks(actor, taskId, appended)
+        if (plan.reply !== '') yield { type: 'chat', role: 'butler', text: plan.reply, time: Date.now() }
+        yield { type: 'plan', taskId, goal: existing.goal, note: plan.note, subtasks: appended, time: Date.now() }
+
+        for (const subtask of appended) {
+          if (prepared.abort.signal.aborted) break
+          yield* this.dispatchSubtask({
+            taskId, subtaskId: subtask.id, goal: subtask.goal, agentId: subtask.agentId,
+            displayName: subtask.displayName, taskGoal: existing.goal, actor, signal: prepared.abort.signal,
+          })
+        }
+      } else if (outcome.text !== '') {
+        // 只是换个说法：大总管已经按新表达给出了结论，没有再派活。
+        yield { type: 'chat', role: 'butler', text: outcome.text, time: Date.now() }
+      }
+
+      // 收尾走同一条路径：它按库里的子任务结局决定终态，也负责把材料与外部待办留住。
+      yield* this.closeTask({
+        taskId,
+        conversation,
+        goal: this.store.task(actor, taskId)?.goal ?? '',
+        subtasks: this.storedSubtasks(actor, taskId, []),
+        reports: this.storedReports(actor, taskId),
+        signal: prepared.abort.signal,
+        stopped: prepared.abort.signal.aborted,
+      })
+    } finally {
+      if (this.runs.get(conversationId)?.runId === prepared.runId) this.runs.delete(conversationId)
+    }
+  }
+
+  /**
+   * 等这个会话当前那一轮跑完。
+   *
+   * 补充要等安全点才动，而不是把正在跑的活打断 —— 老板补充一句不等于让前面白干。
+   * 等待期间可以被取消，插件卸下时也直接放弃。
+   */
+  private async awaitIdle(conversation: Conversation, signal: AbortSignal): Promise<boolean> {
+    while (conversation.active) {
+      if (signal.aborted || this.disposed) return false
+      // 轮询而不是另做一套唤醒：这一批只要求「不打断」，等到就跑，等不到就随取消结束。
+      await new Promise(resolve => { setTimeout(resolve, 200).unref?.() })
+    }
+    return !signal.aborted && !this.disposed
   }
 
   /**

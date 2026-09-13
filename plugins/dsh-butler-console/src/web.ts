@@ -689,6 +689,47 @@ export async function installWeb(
   }))
 
   /**
+   * 补充当前这一轮的目标。
+   *
+   * 与 `/chat`（开新的一轮）、`/reply`（回答成员的问题）是三件事：把补充塞进 `/chat` 会另开
+   * 一轮，任务记录就此分家；塞进 `/reply` 会被当成对某位成员的回答。这里改的是**当前这一轮**，
+   * 新活追加到同一个任务里。
+   *
+   * `expectVersion` 是并发依据：两个入口同时改同一轮时，后提交的那个会被拒，而不是让两份
+   * 补充互相覆盖。
+   */
+  ctx.effect(() => register({
+    kind: 'exact',
+    path: `${config.routePrefix}/supplement`,
+    handler: async (request, response, actor) => {
+      method(request, 'POST')
+      const payload = await body(request, config.maxRequestBodyBytes)
+      const taskId = stringField(payload, 'taskId', 80)
+      const text = stringField(payload, 'text', config.maxMessageChars).trim()
+      if (text === '') throw new HttpError(400, '补充内容不能为空', 'message_empty')
+      const requestId = stringField(payload, 'requestId', 120, false).trim()
+      const expectVersion = payload.expectVersion === undefined
+        ? undefined
+        : integerField(payload, 'expectVersion', 0, Number.MAX_SAFE_INTEGER)
+
+      access.assert(actor)
+      const started = await console_.submitSupplement({
+        taskId,
+        text,
+        actor,
+        ...(requestId === '' ? {} : { requestId }),
+        ...(expectVersion === undefined ? {} : { expectVersion }),
+      })
+      if (reportUnknownRun(actor, response, started)) return
+      await streamRun({
+        response,
+        after: started.from,
+        watch: signal => console_.watch(started.conversationId, actor, started.from, signal),
+      })
+    },
+  }))
+
+  /**
    * 对话主入口。
    *
    * 用 POST 带 SSE 响应体而不是 EventSource：请求要带 JSON 正文，响应要能被随时中断。
