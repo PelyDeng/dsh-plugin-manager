@@ -1,0 +1,113 @@
+{
+  "/closedoff-qa/identity": {
+    "key": "page-probe-identity"
+  },
+  "/closedoff-qa/models": {
+    "groups": [
+      {
+        "id": "deepseek",
+        "name": "DeepSeek",
+        "models": [
+          {
+            "id": "deepseek-chat",
+            "name": "DeepSeek 对话"
+          }
+        ]
+      }
+    ],
+    "default": {
+      "provider": "deepseek",
+      "model": "deepseek-chat"
+    },
+    "selected": null
+  },
+  "/closedoff-qa/conversations": {
+    "items": [],
+    "total": 0
+  },
+  "/closedoff-qa/stop": {
+    "stopped": true
+  },
+  "/closedoff-qa/chat": {
+    "status": 200,
+    "headers": {
+      "content-type": "text/event-stream; charset=utf-8"
+    },
+    "body": "data: {\"type\":\"conversation\",\"conversationId\":\"closedoff-web-12345678-1234-4123-8123-123456789012\",\"model\":{\"provider\":\"deepseek\",\"model\":\"deepseek-chat\"}}\n\ndata: {\"type\":\"thinking_snapshot\",\"text\":\"先按园区与企业过滤，再取最近一条。\",\"done\":false}\n\ndata: {\"type\":\"tool_start\",\"callId\":\"call-1\",\"name\":\"closedoff_warning_page\",\"presentation\":{\"tool\":\"closedoff_warning_page\",\"group\":\"risk\",\"variant\":\"records\",\"sourceLabel\":\"预警报警\"}}\n\ndata: {\"type\":\"cards\",\"callId\":\"call-1\",\"payload\":{\"tool\":\"closedoff_warning_page\",\"group\":\"risk\",\"variant\":\"records\",\"sourceLabel\":\"预警报警\",\"state\":\"data\",\"count\":1,\"shown\":1,\"note\":\"\",\"cards\":[{\"title\":\"报警记录\",\"fields\":[{\"k\":\"预警等级\",\"v\":\"红\",\"tone\":\"red\"},{\"k\":\"所属企业\",\"v\":\"某化工企业\",\"tone\":\"\"},{\"k\":\"报警时间\",\"v\":\"2026-09-13 08:00\",\"tone\":\"\"}]}]}}\n\ndata: {\"type\":\"tool_end\",\"callId\":\"call-1\",\"status\":\"ok\"}\n\ndata: {\"type\":\"delta\",\"text\":\"今天有 1 条报警，来自某企业。\"}\n\ndata: {\"type\":\"done\",\"reason\":\"completed\",\"meta\":{\"messageId\":\"probe-message-2\",\"usage\":{\"inputTokens\":1200,\"outputTokens\":64,\"totalTokens\":1264},\"runMs\":2100,\"ttftMs\":320,\"completedAt\":1700000005000}}\n\n"
+  },
+  "/closedoff-qa/history": {
+    "history": [
+      {
+        "role": "user",
+        "text": "查一下今天的预警报警"
+      },
+      {
+        "role": "assistant",
+        "messageId": "probe-message-1",
+        "text": "今天有 1 条报警，来自某企业。",
+        "thinking": "先按园区与企业过滤，再取最近一条。",
+        "thinkingDone": true,
+        "finishReason": "completed",
+        "tools": [
+          {
+            "callId": "call-1",
+            "name": "closedoff_warning_page",
+            "status": "ok",
+            "time": 1700000000000,
+            "durMs": 820
+          }
+        ],
+        "cards": {
+          "call-1": {
+            "tool": "closedoff_warning_page",
+            "group": "risk",
+            "variant": "records",
+            "sourceLabel": "预警报警",
+            "state": "data",
+            "count": 1,
+            "shown": 1,
+            "note": "",
+            "cards": [
+              {
+                "title": "报警记录",
+                "fields": [
+                  {
+                    "k": "预警等级",
+                    "v": "红",
+                    "tone": "red"
+                  },
+                  {
+                    "k": "所属企业",
+                    "v": "某化工企业",
+                    "tone": ""
+                  },
+                  {
+                    "k": "报警时间",
+                    "v": "2026-09-13 08:00",
+                    "tone": ""
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "feedback": []
+  },
+  "/auth/api/session": {
+    "user": {
+      "id": "u-1",
+      "username": "page-probe",
+      "role": "admin",
+      "mustChangePassword": false,
+      "enabled": true,
+      "grants": [
+        "closedoff"
+      ]
+    },
+    "csrf": "page-probe-csrf",
+    "consoleAccess": false,
+    "accessTargets": []
+  }
+}

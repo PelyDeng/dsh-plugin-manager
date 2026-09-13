@@ -234,11 +234,13 @@ export async function installWeb(
         if (local.startsWith('..') || isAbsolute(local)) throw new HttpError(404, '资源不存在')
         const content = await readFile(file)
         access.assert(actor)
+        // 页面自己写的脚本与样式都按文件名直接引用（`./cards.js`、`/assets/app.css`），没有内容
+        // 指纹，所以必须让浏览器回源核验：漏一个就会出现「新 app.js 配旧模块」的混跑。子目录里
+        // 随包发布的第三方资源（Cesium、定制播放器）才用长缓存。
+        const firstParty = !suffix.includes('/')
         res.writeHead(200, {
           'content-type': ASSET_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
-          'cache-control': ['app.css', 'trajectory.js', 'app.js', 'conversation-history.js', 'chat-ui.js', 'chat-base.css'].includes(suffix)
-            ? 'no-cache'
-            : 'public, max-age=31536000, immutable',
+          'cache-control': firstParty ? 'no-cache' : 'public, max-age=31536000, immutable',
         })
         res.end(content)
       } catch (caught: unknown) {

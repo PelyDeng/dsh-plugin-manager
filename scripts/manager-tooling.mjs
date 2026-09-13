@@ -10,6 +10,25 @@ import { commandSpec, normalizeEnvironment } from '../packages/plugin-manager/sr
 const isolated = ['--config.node-linker=isolated', '--config.dedupe-peer-dependents=false'];
 export const managerToolInputs = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'packages/plugin-kit', 'packages/plugin-manager'];
 
+/**
+ * 管理器工具构建输入的哈希：上面每个路径下所有已跟踪文件的 Git 对象号。
+ *
+ * 输入没变时，上一次成功发布的管理器归档可以直接复用：构建一次实测 18.6 秒（pnpm 安装 +
+ * kit 与 manager 两次构建 + 打包），而复用只需按摘要核验再安装一次（约 1.2 秒）。
+ *
+ * 哈希取自 Git 树而不是工作区：内容一致、不受时间戳影响，也不把未跟踪文件算成输入。
+ */
+export function managerToolInputsHash(git, revision) {
+  const entries = [];
+  for (const record of git(['ls-tree', '-r', '-z', revision, '--', ...managerToolInputs]).split('\0')) {
+    if (!record) continue;
+    const separator = record.indexOf('\t');
+    const [, type, object] = record.slice(0, separator).split(' ');
+    if (type === 'blob') entries.push(`${record.slice(separator + 1)}\0${object}`);
+  }
+  return createHash('sha256').update(entries.sort().join('\n')).digest('hex');
+}
+
 function command(bin, args, options) {
   const cli = commandSpec(bin, options);
   const result = spawnSync(cli.command, [...cli.prefix, ...args], { windowsHide: true, stdio: 'inherit', ...options });
@@ -55,12 +74,26 @@ export function installManagerArchive({ archive, output, version, execute = comm
   return { archive: installedArchive, sha256: createHash('sha256').update(bytes).digest('hex'), cli, toolRoot: output };
 }
 
-/** A real installation produces the same self-contained tooling layout as the deployment zip. */
-export function prepareManagerTooling({ root, output, execute = command, env = normalizeEnvironment(process.env) }) {
+/**
+ * A real installation produces the same self-contained tooling layout as the deployment zip.
+ *
+ * `archive` 传入一个已核验的归档时跳过重建：把它装进本次的工具目录并做同样的版本与入口
+ * 核验（1.2 秒 vs 重建的 18.6 秒）。归档的内容身份由调用方核验（见 `deploy/scripts/tooling-reuse.mjs`），
+ * 这里返回的 `sha256` 是实际安装内容重新算出来的摘要，调用方据此再核对一次。
+ */
+export function prepareManagerTooling({ root, output, execute = command, env = normalizeEnvironment(process.env), archive: reused } = {}) {
   if (!root || !output) throw new Error('Manager tooling requires explicit root and output paths.');
   root = resolve(root); output = resolve(output);
   if (existsSync(output) && readdirSync(output).length) throw new Error(`工具输出目录必须为空：${output}`);
   mkdirSync(output, { recursive: true });
+  const version = JSON.parse(readFileSync(resolve(root, 'packages/plugin-manager/package.json'))).version;
+  if (reused !== undefined) {
+    const source = resolve(reused);
+    if (!existsSync(source) || !lstatSync(source).isFile() || lstatSync(source).isSymbolicLink()) throw new Error('复用的管理器归档必须是普通文件。');
+    const installed = resolve(output, 'plugin-manager.tgz');
+    copyFileSync(source, installed);
+    return installManagerArchive({ archive: installed, output, version, execute, env });
+  }
   const parent = realpathSync(tmpdir());
   const source = realpathSync(mkdtempSync(resolve(parent, 'dsh-manager-source-')));
   const archive = resolve(output, 'plugin-manager.tgz');
@@ -74,7 +107,6 @@ export function prepareManagerTooling({ root, output, execute = command, env = n
       },
     });
     buildManagerArchive({ root: source, archive, execute, env });
-    const version = JSON.parse(readFileSync(resolve(root, 'packages/plugin-manager/package.json'))).version;
     return installManagerArchive({ archive, output, version, execute, env });
   } finally {
     if (dirname(source) !== parent || !source.startsWith(resolve(parent, 'dsh-manager-source-'))) throw new Error('Unsafe temporary tooling cleanup path.');

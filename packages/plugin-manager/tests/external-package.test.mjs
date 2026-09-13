@@ -78,13 +78,15 @@ test('runPnpm forwards captured pack diagnostics on failure and keeps successful
 });
 
 test('repository packaging reports build and verified pack separately, skipping the check by default', t => {
+  // 三个插件：并发 1 时顺序确定，正好用来验证「失败后不再派发」——中间那个失败，最后一个不该出现。
+  const FIXTURE_PLUGINS = ['alpha', 'beta', 'gamma'];
   const { base, root, manifest } = fixture(t);
   const workspace = join(base, 'workspace');
   mkdirSync(join(workspace, 'plugins'), { recursive: true });
   json(join(workspace, 'package.json'), { private: true, packageManager: 'pnpm@11.19.0' });
   writeFileSync(join(workspace, 'pnpm-workspace.yaml'), "packages:\n  - 'plugins/*'\n");
-  writeFileSync(join(workspace, 'pnpm-lock.yaml'), lock + '  plugins/alpha: {}\n  plugins/beta: {}\n');
-  for (const id of ['alpha', 'beta']) {
+  writeFileSync(join(workspace, 'pnpm-lock.yaml'), lock + '  plugins/alpha: {}\n  plugins/beta: {}\n  plugins/gamma: {}\n');
+  for (const id of FIXTURE_PLUGINS) {
     const pluginRoot = join(workspace, 'plugins', id);
     mkdirSync(pluginRoot);
     for (const file of readdirSync(root)) copyFileSync(join(root, file), join(pluginRoot, file));
@@ -134,27 +136,28 @@ test('repository packaging reports build and verified pack separately, skipping 
   const result = pack('.local/success'); ok(result);
   const skipped = fold(events(result));
   assert.deepEqual(skipped.open, []);
-  assert.deepEqual([...skipped.finished].sort(), ['done 安装插件依赖', ...['alpha', 'beta'].flatMap(id => [`done 构建插件 ${id}`, `done 打包插件 ${id}`])].sort());
-  assert.ok(skipped.peak > 1, '两个插件的构建确实同时进行，而不是排队');
-  for (const id of ['alpha', 'beta']) assert.ok(skipped.index(`构建插件 ${id}`) < skipped.index(`打包插件 ${id}`), `${id} 先构建后打包`);
-  assert.equal(read(join(workspace, '.local/success/manifest.json')).plugins.length, 2);
-  for (const id of ['alpha', 'beta']) assert.equal(tasks(id), 'build\n');
+  assert.deepEqual([...skipped.finished].sort(), ['done 安装插件依赖', ...FIXTURE_PLUGINS.flatMap(id => [`done 构建插件 ${id}`, `done 打包插件 ${id}`])].sort());
+  assert.ok(skipped.peak > 1, '多个插件的构建确实同时进行，而不是排队');
+  for (const id of FIXTURE_PLUGINS) assert.ok(skipped.index(`构建插件 ${id}`) < skipped.index(`打包插件 ${id}`), `${id} 先构建后打包`);
+  assert.equal(read(join(workspace, '.local/success/manifest.json')).plugins.length, FIXTURE_PLUGINS.length);
+  for (const id of FIXTURE_PLUGINS) assert.equal(tasks(id), 'build\n');
 
   // 显式要回检查时才真的跑：进度与标记都多出「检查」一步（标记是追加的，两次构建都在）。
   const verified = pack('.local/verified', '--verify-plugin-check'); ok(verified);
   const checked = fold(events(verified));
   assert.deepEqual(checked.open, []);
-  assert.deepEqual([...checked.finished].sort(), ['done 安装插件依赖', ...['alpha', 'beta'].flatMap(id => [`done 构建插件 ${id}`, `done 检查插件 ${id}`, `done 打包插件 ${id}`])].sort());
-  for (const id of ['alpha', 'beta']) assert.equal(tasks(id), 'build\nbuild\ncheck\n');
+  assert.deepEqual([...checked.finished].sort(), ['done 安装插件依赖', ...FIXTURE_PLUGINS.flatMap(id => [`done 构建插件 ${id}`, `done 检查插件 ${id}`, `done 打包插件 ${id}`])].sort());
+  for (const id of FIXTURE_PLUGINS) assert.equal(tasks(id), 'build\nbuild\ncheck\n');
 
-  // 检查失败时不得产出成功清单：失败之后不再派发新阶段，也不再打包那个插件。
+  // 检查失败时不得产出成功清单：已经派发的插件跑完，还没派发的插件一步都不启动。
+  // 用并发 1 让顺序确定：alpha 正常跑完，beta 的检查失败，gamma 不该出现任何阶段。
   writeFileSync(join(workspace, 'plugins/beta/check.mjs'), 'process.exitCode = 8;\n');
-  const failure = pack('.local/failure', '--verify-plugin-check');
+  const failure = pack('.local/failure', '--verify-plugin-check', '--concurrency', '1');
   assert.notEqual(failure.status, 0);
   const failed = events(failure);
   const failureIndex = failed.findIndex(event => event.type === 'failed' && event.label === '检查插件 beta');
   assert.ok(failureIndex >= 0, '失败的那一步被如实报告');
-  assert.equal(failed.slice(failureIndex).some(event => event.type === 'start'), false, '失败后不再派发新的阶段');
+  assert.equal(failed.some(event => event.label?.endsWith('插件 gamma')), false, '失败后不再派发新的插件');
   assert.equal(failed.some(event => event.label === '打包插件 beta'), false);
   assert.equal(existsSync(join(workspace, '.local/failure/manifest.json')), false);
 });

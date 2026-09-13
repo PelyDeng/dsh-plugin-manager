@@ -5,9 +5,10 @@ import { buildHostImage, withRegistryAuthentication, validateImageConfig } from 
 import { prepareManagerTooling } from '../../scripts/manager-tooling.mjs';
 import { prepareWorkspaceDependencies } from './bootstrap.mjs';
 import { assertSelectiveInstallSafe, preparePluginReuse } from './plugin-reuse.mjs';
+import { resolveToolingReuse } from './tooling-reuse.mjs';
 import { composeReleases } from '../../packages/plugin-manager/src/compose-release.mjs';
 import { loadRelease } from '../../packages/plugin-manager/src/release.mjs';
-import { buildStep } from '../../packages/plugin-manager/src/site-output.mjs';
+import { buildMessage, buildStep } from '../../packages/plugin-manager/src/site-output.mjs';
 import { fileHash, readSiteJson } from '../../packages/plugin-manager/src/site-record.mjs';
 
 export function validateBase(reference, info) {
@@ -19,7 +20,13 @@ export function validateBase(reference, info) {
 export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareManagerTooling } = {}) {
   return {
     prepareTools(context) {
-      return tooling({ root: context.root, output: resolve(context.operation, 'tooling'), execute: context.execute, env: context.env });
+      const output = resolve(context.operation, 'tooling');
+      const reuse = context.source.toolingReuse;
+      buildMessage(reuse ? '管理器工具：复用活动部署的归档（构建输入未变化）' : `管理器工具：重新构建（${context.source.toolingReason}）`);
+      const tools = tooling({ root: context.root, output, execute: context.execute, env: context.env, ...(reuse ? { archive: reuse.archive } : {}) });
+      // 归档在核验与安装之间被换掉时，装出来的摘要就对不上；以实际安装内容为准再核一次。
+      if (reuse && tools.sha256 !== reuse.sha256) throw new Error('复用的管理器归档与核验摘要不一致；请重试发布。');
+      return tools;
     },
     inspect(context) {
       const { root, capture, site, runtime, rebuildPlugins, previous, active } = context;
@@ -29,11 +36,18 @@ export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareMan
       const hostCommit = existsSync(resolve(host, '.git')) ? git(['-C', host, 'rev-parse', 'HEAD']) : undefined;
       const buildEnvironment = { nodeVersion: process.versions.node, platform: process.platform, architecture: process.arch,
         packageManager: readSiteJson(resolve(root, 'package.json')).packageManager, targetArchitecture: runtime.architecture, hostImage: site.hostImage ?? null };
-      const rebuilt = rebuildPlugins === undefined ? site.plugins : rebuildPlugins.split(',');
+      // `--rebuild-plugins auto` 把重建集交给判定自己算：拿不到可靠基线时它退回整套重建，
+      // 所以打包选集一律以判定交回的集合为准，而不是运维写下的那一串。
+      const auto = rebuildPlugins === 'auto';
+      const requested = rebuildPlugins === undefined || auto ? site.plugins : rebuildPlugins.split(',');
       if (rebuildPlugins !== undefined) assertSelectiveInstallSafe(root);
-      const selection = rebuildPlugins === undefined ? null : preparePluginReuse({ root, previous, active, site, revision, hostCommit, buildEnvironment, rebuilt, git });
-      context.source = { git, host, rebuilt, reuse: selection?.release.plugins.length ? selection : null };
+      const selection = rebuildPlugins === undefined ? null : preparePluginReuse({ root, previous, active, site, revision, hostCommit, buildEnvironment, ...(auto ? { auto: true } : { rebuilt: requested }), git });
+      const rebuilt = selection?.rebuilt ?? requested;
+      if (selection?.reuseUnavailable) buildMessage(`按需复用不可用（${selection.reuseUnavailable}），本次重建全部插件`);
+      const tooling_ = resolveToolingReuse({ root, git, revision, previous, active });
+      context.source = { git, host, rebuilt, reuse: selection?.release.plugins.length ? selection : null, toolingReuse: tooling_.reuse, toolingReason: tooling_.reason };
       return { revision, hostCommit, hostSourceCommit: hostCommit, hostSourceClean: Boolean(hostCommit) && git(['-C', host, 'status', '--porcelain', '--untracked-files=normal']) === '', buildEnvironment,
+        managerInputs: tooling_.inputs,
         ...(context.source.reuse ? { rebuilt, reused: context.source.reuse.builtFrom.map(p => p.id), reuseSource: context.source.reuse.sourceRecord } : {}) };
     },
     prepare(context) {

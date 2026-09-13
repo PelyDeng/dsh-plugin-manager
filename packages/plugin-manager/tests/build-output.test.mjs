@@ -37,9 +37,9 @@ test('successful builds show stages and summary while retaining noisy tool outpu
     assert.match(f.text(), new RegExp(`${label}已完成[^\\n]+耗时 \\d+:\\d{2}:\\d{2}\\.\\d\\n`));
   }
   assert.ok(f.text().includes('发布已完成\n访问地址：https://example.test\n'));
-  // 阶段耗时表跟在最后：时间花在哪不必再回头 grep 进度行。
+  // 阶段耗时表跟在最后：时间花在哪不必再回头 grep 进度行；每行带开始时刻，间隙一眼可见。
   assert.ok(f.text().indexOf('各阶段耗时') > f.text().indexOf('发布已完成'), 'summary comes after the release record');
-  assert.match(f.text(), /各阶段耗时（含进程启动）：\n  构建示例插件 +00:00:\d{2}\.\d\n  准备镜像 +00:00:\d{2}\.\d\n  相加（逐项） +00:00:\d{2}\.\d\n  墙钟（首末阶段之间） +00:00:\d{2}\.\d\n$/);
+  assert.match(f.text(), /各阶段耗时（含进程启动；方括号为开始时刻）：\n  \d{2}:\d{2}:\d{2}  构建示例插件 +00:00:\d{2}\.\d\n  \d{2}:\d{2}:\d{2}  准备镜像 +00:00:\d{2}\.\d\n  相加（逐项） +00:00:\d{2}\.\d\n  墙钟（首末阶段之间） +00:00:\d{2}\.\d\n$/);
   assert.doesNotMatch(f.text(), /估算|compiler-detail|tool-warning|DSH_BUILD_PROGRESS|\x1b|\r/);
   assert.match(f.log().text, /compiler-detail/);
   assert.match(f.log().text, /tool-warning/);

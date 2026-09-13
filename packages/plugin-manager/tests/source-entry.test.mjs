@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { sourceArguments, sourceRelease } from '../../../deploy/scripts/release.mjs';
+import { loadPresenter } from '../src/site-coordinator.mjs';
 import { acquireFileLock } from '../src/lock.mjs';
 
 function fixture(t) {
@@ -19,8 +20,10 @@ function fixture(t) {
 test('source argument validation rejects unsupported, duplicate and missing options', () => {
   assert.deepEqual(sourceArguments(['--config', '中文 with spaces.conf', '--resume']), ['--config', '中文 with spaces.conf', '--resume']);
   assert.deepEqual(sourceArguments(['--rebuild-plugins', 'alpha,charlie']), ['--rebuild-plugins', 'alpha,charlie']);
+  // `auto` 是哨兵值：重建集由判定自己算，因此只能单独出现。
+  assert.deepEqual(sourceArguments(['--rebuild-plugins', 'auto']), ['--rebuild-plugins', 'auto']);
   for (const args of [['--config'], ['--config', '--resume'], ['--resume', '--resume'], ['--unknown'], ['other']]) assert.throws(() => sourceArguments(args), /argument/);
-  for (const value of ['', 'all', 'none', 'dsh-console', 'alpha,alpha', 'alpha,', 'Alpha', 'alpha beta', '../alpha']) assert.throws(() => sourceArguments(['--rebuild-plugins', value]), /argument/);
+  for (const value of ['', 'all', 'none', 'dsh-console', 'auto,alpha', 'alpha,auto', 'alpha,alpha', 'alpha,', 'Alpha', 'alpha beta', '../alpha']) assert.throws(() => sourceArguments(['--rebuild-plugins', value]), /argument/);
   assert.throws(() => sourceArguments(['--resume', '--rebuild-plugins', 'alpha']), /--resume/);
   assert.throws(() => sourceArguments(['--rebuild-plugins', 'alpha', '--rebuild-plugins', 'beta']), /argument/);
 });
@@ -45,6 +48,22 @@ test('partial build selection reaches the private update and fresh worker under 
   assert.ok(updated);
   assert.deepEqual(JSON.parse(readFileSync(resolve(f.root, 'selection.json'))), args);
   await assert.rejects(sourceRelease({ root: f.root, args: ['--rebuild-plugins', 'alpha,alpha'], beforeBuild: () => { throw new Error('must not sync'); } }), /argument/);
+});
+
+test('the presenter is loaded after the source sync so one release uses one revision', async t => {
+  const f = fixture(t);
+  f.put('deploy/scripts/build.mjs', 'process.send({type:"source-build-finished",code:0});');
+  const order = [];
+  const presenter = async () => { order.push('presenter'); return async () => { order.push('present'); return 0; }; };
+  assert.equal(await sourceRelease({ root: f.root, preflight: f.preflight, beforeBuild: () => { order.push('sync'); }, presenter }), 0);
+  // 协调器在快进之前就被静态引入，展示端必须等同步之后再加载，否则一次发布里跑的是上一版代码。
+  assert.deepEqual(order, ['sync', 'presenter', 'present']);
+});
+
+test('every presenter load re-reads the file instead of reusing a cached copy', async () => {
+  const first = await loadPresenter(), second = await loadPresenter();
+  assert.equal(typeof first, 'function');
+  assert.notEqual(first, second, '两次加载必须是两个模块实例：缓存里的旧副本会带来一版的滞后');
 });
 
 test('help and explicit management retain their routes without preflight, lock or source updates', async t => {

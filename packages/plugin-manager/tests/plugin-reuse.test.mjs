@@ -336,3 +336,50 @@ test('a same-named package inside a plugin does not shadow the real workspace pa
   f.change('packages/plugin-kit/index.mjs', 'export const kit = 2;\n');
   assert.throws(() => f.prepare(['c']), /a 依赖的 @dsh-plugin-manager\/plugin-kit 发生变化：packages\/plugin-kit\/index\.mjs/);
 });
+
+test('a refusal names every plugin that has to be added, not just the first one', t => {
+  const f = fixture(t, { a: { 'fixture-helper': 'workspace:*' } }, null, root => { helperPackage(root); documentFile(root); }, { a: [], b: ['doc'], c: [], d: [] });
+  // 两个插件都得重建：a 依赖的工作区包变了，b 自己声明了 doc。提示要一次给全，运维不用失败两次。
+  f.change('packages/helper/index.mjs', 'export const value = 2;\n');
+  f.change('doc/notes.md', '改过的框架说明\n');
+  assert.throws(() => f.prepare(['c']), /请改用 --rebuild-plugins "a,b,c"/);
+  const result = f.prepare(['a', 'b', 'c']);
+  assert.deepEqual(result.release.plugins.map(p => p.id), ['d']);
+});
+
+test('auto computes the rebuild set from the verdict instead of failing the release', t => {
+  const f = fixture(t, { a: { 'fixture-helper': 'workspace:*' } }, null, helperPackage, { a: [], b: [], c: [], d: [] });
+  f.change('packages/helper/index.mjs', 'export const value = 2;\n');
+  const result = f.prepare([], { auto: true, rebuilt: undefined });
+  assert.deepEqual(result.rebuilt, ['a']);
+  assert.deepEqual(result.release.plugins.map(p => p.id), ['b', 'c', 'd']);
+  assert.equal(result.reuseUnavailable, undefined);
+});
+
+test('auto reuses everything when nothing any plugin reads changed', t => {
+  const f = fixture(t, {}, null, documentFile, { a: [], b: [], c: [], d: [] });
+  f.change('doc/notes.md', '改过的框架说明\n');
+  const result = f.prepare([], { auto: true, rebuilt: undefined });
+  assert.deepEqual(result.rebuilt, []);
+  assert.deepEqual(result.release.plugins.map(p => p.id), ['a', 'b', 'c', 'd']);
+});
+
+test('auto rebuilds every plugin whose inputs it cannot confirm, and never refuses on that ground', t => {
+  const f = fixture(t, {}, null, documentFile);
+  // 四个插件都没声明 buildInputs：保守判定下它们全都要重建，自动模式据此给出选集而不是报错。
+  f.change('doc/notes.md', '改过的框架说明\n');
+  assert.throws(() => f.prepare(['c']), /未声明 deepseekPlugin\.buildInputs/);
+  const result = f.prepare([], { auto: true, rebuilt: undefined });
+  assert.deepEqual(result.rebuilt, ['a', 'b', 'c', 'd']);
+  assert.deepEqual(result.release.plugins, []);
+});
+
+test('auto falls back to rebuilding everything when no baseline can be verified', t => {
+  const f = fixture(t);
+  const result = f.prepare([], { auto: true, rebuilt: undefined, previous: null, active: null });
+  assert.deepEqual(result.rebuilt, ['a', 'b', 'c', 'd']);
+  assert.deepEqual(result.release.plugins, []);
+  assert.match(result.reuseUnavailable, /没有当前活动部署/);
+  // 点名合集时仍然照旧拒绝：自动模式的退让只属于它自己。
+  assert.throws(() => f.prepare(['c'], { previous: null, active: null }), /活动部署/);
+});

@@ -8,5 +8,11 @@ function read(name: string): string {
 export const webHtml = read('index.html')
 export const webStyles = read('app.css')
 export const webTrajectory = read('trajectory.js')
+export const webTrajectoryData = read('trajectory-data.js')
+export const webTrajectoryCamera = read('trajectory-camera.js')
 export const webApp = read('app.js')
-export const webSource = `${webHtml}\n${webStyles}\n${webTrajectory}\n${webApp}`
+export const webLabels = read('labels.js')
+export const webRenderText = read('render-text.js')
+export const webFormat = read('format.js')
+export const webCards = read('cards.js')
+export const webSource = `${webHtml}\n${webStyles}\n${webTrajectory}\n${webTrajectoryData}\n${webTrajectoryCamera}\n${webApp}\n${webLabels}\n${webRenderText}\n${webFormat}\n${webCards}`
