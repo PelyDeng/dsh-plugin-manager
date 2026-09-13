@@ -20,11 +20,12 @@ import { isTerminal, type SubtaskState, type TaskState } from './task-model.ts'
  * 4：任务增加输入版本两列，新增 `task_inputs` 表，记录每一次被接受的需求与补充。
  * 5：子任务增加 `logical_id`（同一目标的稳定标识）与 `supersedes`（替代了哪一条尝试）。
  * 6：子任务增加 `depends_on`（前置目标的标识列表）。
+ * 7：子任务增加 `requires_external_action`（这一步是否真的需要外部动作已经办完）。
  *
  * 升级只增列、增表，不动已有数据；但**旧代码读到新版本会拒绝启动**，所以回滚插件版本之前
  * 要先把库降回去，不能直接换回旧包。
  */
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 7
 
 /**
  * 能从这些旧版本就地升上来。
@@ -32,7 +33,7 @@ const SCHEMA_VERSION = 6
  * 不在这张表里的版本（比当前新、或者来历不明）一律拒绝启动：拿错版本的结构去读写，
  * 比起不来严重得多。
  */
-const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5]
+const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6]
 
 /** 侧栏里的一条会话。 */
 export interface ConversationSummary {
@@ -112,6 +113,8 @@ export interface SubtaskRecord {
    * 并如实说明「前提没有满足」—— 不伪造一次员工报错。
    */
   readonly dependsOn: readonly string[]
+  /** 这一步是否真的需要外部动作（采用、确认、发布）已经办完；由计划声明。 */
+  readonly requiresExternalAction: boolean
   readonly goal: string
   readonly agentId: string
   readonly reason: string
@@ -166,6 +169,8 @@ export interface NewSubtask {
   readonly supersedes?: string
   /** 前置目标的标识；不传表示没有前置。 */
   readonly dependsOn?: readonly string[]
+  /** 这一步是否真的需要外部动作（采用、确认、发布）已经办完；不传按不需要算。 */
+  readonly requiresExternalAction?: boolean
 }
 
 /** 运行历史查询条件。 */
@@ -251,6 +256,7 @@ export class TaskStore {
         logical_id TEXT NOT NULL DEFAULT '',
         supersedes TEXT NOT NULL DEFAULT '',
         depends_on TEXT NOT NULL DEFAULT '',
+        requires_external_action INTEGER NOT NULL DEFAULT 0,
         started_at INTEGER,
         finished_at INTEGER,
         PRIMARY KEY (task_id, id)
@@ -331,6 +337,11 @@ export class TaskStore {
       if (from <= 5) {
         // 老任务没有依赖关系：已有的子任务一律按「没有前置」算。
         this.db.exec(`ALTER TABLE subtasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT ''`)
+      }
+      if (from <= 6) {
+        // 老任务没有「这一步是否真的等外部动作」的声明，一律按不需要算 —— 与加这一列之前的
+        // 行为一致（那时只认前置成功），不会让旧任务凭空多等或凭空放行。
+        this.db.exec(`ALTER TABLE subtasks ADD COLUMN requires_external_action INTEGER NOT NULL DEFAULT 0`)
       }
       this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
       this.db.exec('COMMIT')
@@ -468,13 +479,14 @@ export class TaskStore {
       )
       this.db.prepare(`INSERT INTO task_inputs(task_id,version,text,source,created_at) VALUES(?,1,?,?,?)`)
         .run(input.id, input.goal, 'chat', now)
-      const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on)
-        VALUES(?,?,?,?,?,?,?,?,?,?)`)
+      const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on,requires_external_action)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
       input.subtasks.forEach((subtask, index) => {
         // 没给目标标识就按顺序分配：首次计划里一条子任务就是一个目标。
         insert.run(
           input.id, subtask.id, index + 1, subtask.goal, subtask.agentId, subtask.reason, 'queued',
           subtask.logicalId ?? `g${index + 1}`, subtask.supersedes ?? '', JSON.stringify(subtask.dependsOn ?? []),
+          subtask.requiresExternalAction === true ? 1 : 0,
         )
       })
       this.db.exec('COMMIT')
@@ -543,17 +555,20 @@ export class TaskStore {
     if (row === undefined) return undefined
     const rows = this.db.prepare(`SELECT id,seq,goal,logical_id AS logicalId,supersedes,depends_on AS dependsOnRaw,
         agent_id AS agentId,reason,state,result,error,
-        artifacts,conversation_id AS subtaskConversationId,started_at AS startedAt,finished_at AS finishedAt
-      FROM subtasks WHERE task_id=? ORDER BY seq`).all(id) as unknown as (Omit<SubtaskRecord, 'artifacts' | 'conversationId' | 'dependsOn'> & {
+        artifacts,conversation_id AS subtaskConversationId,started_at AS startedAt,finished_at AS finishedAt,
+        requires_external_action AS requiresExternalActionRaw
+      FROM subtasks WHERE task_id=? ORDER BY seq`).all(id) as unknown as (Omit<SubtaskRecord, 'artifacts' | 'conversationId' | 'dependsOn' | 'requiresExternalAction'> & {
         readonly artifacts: string
         readonly subtaskConversationId: string
         readonly dependsOnRaw: string
+        readonly requiresExternalActionRaw: number
       })[]
-    const subtasks = rows.map(({ artifacts, subtaskConversationId, dependsOnRaw, ...rest }) => ({
+    const subtasks = rows.map(({ artifacts, subtaskConversationId, dependsOnRaw, requiresExternalActionRaw, ...rest }) => ({
       ...rest,
       artifacts: parseArtifacts(artifacts),
       conversationId: subtaskConversationId,
       dependsOn: parseDependsOn(dependsOnRaw),
+      requiresExternalAction: requiresExternalActionRaw === 1,
     }))
     return { ...(row as unknown as Omit<TaskRecord, 'subtasks'>), subtasks }
   }
@@ -626,15 +641,28 @@ export class TaskStore {
    *
    * 递增读的是库里的当前值而不是调用方传来的：两次补充几乎同时到达时，谁先谁后由这里
    * 定，不由客户端定。
+   *
+   * 版本核验与「任务还能不能改」也在**同一个事务里**复核一遍，不接受调用方在事务外先查过
+   * 的结论：受理前要打开会话，那是一段异步窗口，任务可能就在这期间被别人收尾了。放在事务
+   * 外查等于用旧结论写新数据 —— 实测两个客户端同时带 `expectVersion:1` 提交，两次都会被
+   * 接受，版本一路涨到 3；终态任务也能在这段窗口里被塞进一条补充。
+   *
+   * @param expectedVersion 调用方认为的当前版本；对不上就拒（并发依据）。不传表示不校验。
    */
-  addInput(actor: Actor, taskId: string, text: string, source: 'chat' | 'supplement'): number {
+  addInput(actor: Actor, taskId: string, text: string, source: 'chat' | 'supplement', expectedVersion?: number): number {
     const now = Date.now()
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      const row = this.db.prepare(`SELECT accepted_version AS acceptedVersion FROM tasks
+      const row = this.db.prepare(`SELECT accepted_version AS acceptedVersion, state AS state FROM tasks
         WHERE id=? AND owner_namespace=? AND owner_id=?`)
-        .get(taskId, actor.namespace, actor.userId) as unknown as { acceptedVersion: number } | undefined
+        .get(taskId, actor.namespace, actor.userId) as unknown as { acceptedVersion: number; state: TaskState } | undefined
       if (row === undefined) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
+      if (isTerminal(row.state)) {
+        throw new AccessError(409, '这一轮已经结束，改目标请用 /chat 开新的一轮', 'task_already_finished')
+      }
+      if (expectedVersion !== undefined && expectedVersion !== row.acceptedVersion) {
+        throw new AccessError(409, `这一轮已经更新到第 ${row.acceptedVersion} 版，请按最新内容重新提交`, 'version_conflict')
+      }
       const next = row.acceptedVersion + 1
       this.db.prepare('UPDATE tasks SET accepted_version=?, updated_at=? WHERE id=?').run(next, now, taskId)
       this.db.prepare('INSERT INTO task_inputs(task_id,version,text,source,created_at) VALUES(?,?,?,?,?)')
@@ -645,6 +673,18 @@ export class TaskStore {
       this.db.exec('ROLLBACK')
       throw error
     }
+  }
+
+  /**
+   * 这一轮接受与处理到的输入版本。
+   *
+   * 收尾前要拿它核对「最新接受的输入都处理完了」：只按某个回合开始时的版本记账，
+   * 中途进来的补充会被漏掉，任务却已经报成完成。
+   */
+  inputVersions(taskId: string): { accepted: number; processed: number } | undefined {
+    const row = this.db.prepare(`SELECT accepted_version AS accepted, processed_version AS processed
+      FROM tasks WHERE id=?`).get(taskId) as unknown as { accepted: number; processed: number } | undefined
+    return row
   }
 
   /** 一条任务收到过的全部需求与补充，按版本排序。 */
@@ -677,8 +717,8 @@ export class TaskStore {
       .map(item => Number.parseInt(item.logicalId.replace(/^g/u, ''), 10))
       .filter(value => Number.isSafeInteger(value))
       .reduce((max, value) => Math.max(max, value), 0)
-    const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on)
-      VALUES(?,?,?,?,?,?,?,?,?,?)`)
+    const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on,requires_external_action)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
     const ids: string[] = []
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -686,6 +726,7 @@ export class TaskStore {
         insert.run(
           taskId, subtask.id, start + index + 1, subtask.goal, subtask.agentId, subtask.reason, 'queued',
           subtask.logicalId ?? `g${nextLogical + index + 1}`, subtask.supersedes ?? '', JSON.stringify(subtask.dependsOn ?? []),
+          subtask.requiresExternalAction === true ? 1 : 0,
         )
         ids.push(subtask.id)
       })
@@ -753,24 +794,59 @@ export class TaskStore {
   }
 
   /**
-   * 占住一个 `requestId`，**在执行之前**落库。
+   * 占住一个 `requestId`，**在执行之前**落库，并原子地决出唯一胜者。
    *
    * 这是整件事的关键：只在结束时记结果的话，「受理了、跑了一半、进程没了」这一段在库里
    * 什么都没有，重启后同一个请求会被当成新的一次再跑一遍 —— 而那些可能带外部副作用的活
    * 正是最不该重跑的。先占位就没有这个窗口。
    *
-   * 顺手清掉过期记录，表不会只涨不消。过期判定与内存版同源（`idempotencyTtlMs`）。
+   * 「先查有没有、再写占位」是两步，两个并发请求会双双通过查询、后写的覆盖先写的，同一次
+   * 提交于是被调度两遍 —— 实测就是这样。所以判定与写入必须在**同一个事务**里完成：已经
+   * 有人占过就原样返回那条记录，调用方据此给回原凭据，绝不第二次执行。
+   *
+   * 顺带清掉过期记录，**只清已完成的**：`claimed` 意味着「可能已经执行过、结果不明」，
+   * 它是防重的唯一依据，按时间清掉等于把那次请求放行重跑。运行中的活超过 TTL 也很正常
+   * （模型跑十几分钟很常见），不能按时间判它已经死了。
+   *
+   * @returns 赢了返回 `undefined`；已经有人占过则返回那条既有记录。
    */
-  claimRequest(actor: Actor, kind: string, requestId: string, digest: string, runId: string, conversationId: string, ttlMs: number): void {
+  claimRequest(actor: Actor, kind: string, requestId: string, digest: string, runId: string, conversationId: string, ttlMs: number): RequestRecord | undefined {
     const now = Date.now()
-    this.db.prepare(`DELETE FROM requests WHERE owner_namespace=? AND owner_id=? AND updated_at < ?`)
-      .run(actor.namespace, actor.userId, now - ttlMs)
-    this.db.prepare(`INSERT INTO requests(owner_namespace,owner_id,kind,request_id,digest,state,run_id,conversation_id,created_at,updated_at)
-      VALUES(?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(owner_namespace,owner_id,kind,request_id) DO UPDATE SET
-        digest=excluded.digest, state=excluded.state, run_id=excluded.run_id,
-        conversation_id=excluded.conversation_id, updated_at=excluded.updated_at`)
-      .run(actor.namespace, actor.userId, kind, requestId, digest, 'claimed', runId, conversationId, now, now)
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.prepare(`DELETE FROM requests
+        WHERE owner_namespace=? AND owner_id=? AND state='finished' AND updated_at < ?`)
+        .run(actor.namespace, actor.userId, now - ttlMs)
+      const existing = this.db.prepare(`SELECT kind,digest,state,run_id AS runId,
+          conversation_id AS conversationId,updated_at AS updatedAt
+        FROM requests WHERE owner_namespace=? AND owner_id=? AND kind=? AND request_id=?`)
+        .get(actor.namespace, actor.userId, kind, requestId) as unknown as RequestRecord | undefined
+      if (existing !== undefined) {
+        this.db.exec('COMMIT')
+        return existing
+      }
+      this.db.prepare(`INSERT INTO requests(owner_namespace,owner_id,kind,request_id,digest,state,run_id,conversation_id,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`)
+        .run(actor.namespace, actor.userId, kind, requestId, digest, 'claimed', runId, conversationId, now, now)
+      this.db.exec('COMMIT')
+      return undefined
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /**
+   * 把受理阶段才知道的会话与轮次标识补进占位记录。
+   *
+   * 占位必须早于一切副作用落下（否则并发同 `requestId` 会各自产生副作用），但会话标识要
+   * 等受理完成才有。期间的重放会读到空标识，按「结果不明」如实回答；补上之后重放就能
+   * 找到那一轮的事件了。
+   */
+  bindRequest(actor: Actor, kind: string, requestId: string, runId: string, conversationId: string): void {
+    this.db.prepare(`UPDATE requests SET run_id=?, conversation_id=?, updated_at=?
+      WHERE owner_namespace=? AND owner_id=? AND kind=? AND request_id=? AND conversation_id=''`)
+      .run(runId, conversationId, Date.now(), actor.namespace, actor.userId, kind, requestId)
   }
 
   /** 标记这一轮已经跑完。 */

@@ -33,7 +33,7 @@ import type { Config } from './config.ts'
 import { ConversationLog, type LoggedEvent, type RunHead } from './event-log.ts'
 import type { ButlerAgentExecutor, ButlerMember, ButlerPhase, ButlerProgressUpdate, ButlerReplyRequest } from './protocol.ts'
 import type { RequestRecord, SubtaskRecord, TaskInput, TaskStore } from './store.ts'
-import { isTerminal, type SubtaskState, type TaskState } from './task-model.ts'
+import { isTerminal, dependencyVerdict, type SubtaskState, type TaskState } from './task-model.ts'
 
 const CONVERSATION_ID = /^butler-web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const PLAN_TOOL = 'butler_plan'
@@ -210,8 +210,10 @@ interface PlannedSubtask {
   readonly logicalId?: string
   /** 替代哪一条子任务；首次尝试不填。 */
   readonly supersedes?: string
-  /** 前置目标标识；只有它们都成功了才派这一步。 */
+  /** 前置目标标识；派这一步之前按就绪表逐个核验。 */
   readonly dependsOn?: readonly string[]
+  /** 这一步是否真的需要外部动作已经办完；不填按「材料够用」算。 */
+  readonly requiresExternalAction?: boolean
 }
 
 interface PlanSubmission {
@@ -829,7 +831,11 @@ export class ButlerConsole {
               dependsOn: {
                 type: 'array',
                 items: { type: 'string' },
-                description: '前置的目标标识（例如 g1）。只有前置都成功之后才派这一步；前置失败、取消、还在等人回话或带着外部待办时，这一步不会派出去，而是如实记下「前提没有满足」。不填表示没有前置。只能引用这一轮里已经存在的目标，或者本次计划中排在它前面的目标。',
+                description: '前置的目标标识（例如 g1）。派这一步之前逐个核验：前置还没结束（含等人回话）就留在队列里等，不判失败；前置失败、取消或被替代才不派，并如实记下缺失的前提。不填表示没有前置。只能引用这一轮里已经存在的目标，或者本次计划中排在它前面的目标。',
+              },
+              requiresExternalAction: {
+                type: 'boolean',
+                description: '这一步是否真的需要外部动作（在原页面采用、确认、发布）已经办完。默认 false：前置交了材料就可以拿材料继续干。当前置带着「外部待办」时这条才起作用 —— 填 true 表示这一步要的是已经办完的结果（例如「报道一下已经发布的版本」），材料本身不够用；不填表示材料够用（例如「拿候选稿写个摘要」）。',
               },
             },
           },
@@ -873,6 +879,7 @@ export class ButlerConsole {
           logicalId?: unknown
           supersedes?: unknown
           dependsOn?: unknown
+          requiresExternalAction?: unknown
         }[]) {
           const goal = typeof item.goal === 'string' ? clip(item.goal, 2000) : ''
           const agentId = typeof item.agentId === 'string' ? item.agentId.trim() : ''
@@ -921,6 +928,8 @@ export class ButlerConsole {
             ...(logicalId === '' ? {} : { logicalId }),
             ...(supersedes === '' ? {} : { supersedes }),
             ...(dependsOn.length === 0 ? {} : { dependsOn }),
+            // 只在真的声明了 true 时才带上：没声明按「材料够用」算，与加这个字段之前一致。
+            ...(item.requiresExternalAction === true ? { requiresExternalAction: true } : {}),
           })
           if (logicalId !== '') known.add(logicalId)
         }
@@ -1180,6 +1189,7 @@ export class ButlerConsole {
         ...(subtask.logicalId === undefined ? {} : { logicalId: subtask.logicalId }),
         ...(subtask.supersedes === undefined ? {} : { supersedes: subtask.supersedes }),
         ...(subtask.dependsOn === undefined ? {} : { dependsOn: subtask.dependsOn }),
+        ...(subtask.requiresExternalAction === true ? { requiresExternalAction: true } : {}),
       }))
       this.store.createTask({ id: taskId, conversationId, actor, goal: text, note: plan.note, subtasks })
       yield { type: 'plan', taskId, goal: text, note: plan.note, subtasks, time: Date.now() }
@@ -1198,6 +1208,7 @@ export class ButlerConsole {
           taskId, subtaskId: subtask.id, goal: subtask.goal, agentId: subtask.agentId,
           displayName: subtask.displayName, taskGoal: text, actor, signal: abort.signal,
           ...(subtask.dependsOn === undefined ? {} : { dependsOn: subtask.dependsOn }),
+          ...(subtask.requiresExternalAction === true ? { requiresExternalAction: true } : {}),
         })) {
           yield event
         }
@@ -1248,12 +1259,21 @@ export class ButlerConsole {
       if (existing !== undefined) return this.replayRequest(existing, digest, requestId)
     }
 
-    const turn = await this.prepareTurn(conversationId, message, actor, `butler-run-${randomUUID()}`)
-    // 受理成功之后才占位：占用先于执行，但晚于校验 —— 校验失败的那次根本没开始跑，
-    // 留下一笔「结果不明」会把一件没发生过的执行报成需要恢复的状态。
+    const runId = `butler-run-${randomUUID()}`
     if (requestId !== '') {
-      this.store.claimRequest(actor, 'chat', requestId, digest, turn.runId, turn.conversationId, this.config.idempotencyTtlMs)
+      // 占位早于受理：受理本身就会开任务、开会话，两个并发提交各开一份就不是「同一次请求」了。
+      const winner = this.store.claimRequest(actor, 'chat', requestId, digest, runId, '', this.config.idempotencyTtlMs)
+      if (winner !== undefined) return this.replayRequest(winner, digest, requestId)
     }
+    let turn: PreparedTurn
+    try {
+      turn = await this.prepareTurn(conversationId, message, actor, runId)
+    } catch (error) {
+      // 受理没成功（会话打不开、参数不合法）：撤掉占位，同一个 requestId 还能再提交。
+      if (requestId !== '') this.store.releaseRequest(actor, 'chat', requestId)
+      throw error
+    }
+    if (requestId !== '') this.store.bindRequest(actor, 'chat', requestId, turn.runId, turn.conversationId)
     const log = this.beginLog(turn.conversationId, turn.runId)
     void this.pump(turn.abort.signal, log, this.turnBody(turn))
       .then(() => { if (requestId !== '') this.store.finishRequest(actor, 'chat', requestId) })
@@ -1276,10 +1296,19 @@ export class ButlerConsole {
       if (existing !== undefined) return this.replayRequest(existing, digest, requestId)
     }
 
-    const prepared = this.prepareReply(input, `butler-run-${randomUUID()}`)
+    const runId = `butler-run-${randomUUID()}`
     if (requestId !== '') {
-      this.store.claimRequest(input.actor, 'reply', requestId, digest, prepared.runId, prepared.conversationId, this.config.idempotencyTtlMs)
+      const winner = this.store.claimRequest(input.actor, 'reply', requestId, digest, runId, '', this.config.idempotencyTtlMs)
+      if (winner !== undefined) return this.replayRequest(winner, digest, requestId)
     }
+    let prepared: PreparedReply
+    try {
+      prepared = this.prepareReply(input, runId)
+    } catch (error) {
+      if (requestId !== '') this.store.releaseRequest(input.actor, 'reply', requestId)
+      throw error
+    }
+    if (requestId !== '') this.store.bindRequest(input.actor, 'reply', requestId, prepared.runId, prepared.conversationId)
     const log = this.beginLog(prepared.conversationId, prepared.runId)
     void this.pump(prepared.abort.signal, log, this.replyBody(prepared))
       .then(() => { if (requestId !== '') this.store.finishRequest(input.actor, 'reply', requestId) })
@@ -1303,10 +1332,24 @@ export class ButlerConsole {
       if (existing !== undefined) return this.replayRequest(existing, digest, requestId)
     }
 
-    const prepared = await this.prepareSupplement(input, `butler-run-${randomUUID()}`)
+    const runId = `butler-run-${randomUUID()}`
     if (requestId !== '') {
-      this.store.claimRequest(input.actor, 'supplement', requestId, digest, prepared.runId, prepared.conversationId, this.config.idempotencyTtlMs)
+      // 占位排在**一切副作用之前**：受理会写输入、开一轮，两个并发提交各写一条就没有
+      // 「同一次提交」可言了。判定与写入在存储层是同一个事务，所以并发时只有一个能赢，
+      // 输的那个连输入都不会写。
+      const winner = this.store.claimRequest(input.actor, 'supplement', requestId, digest, runId, '', this.config.idempotencyTtlMs)
+      if (winner !== undefined) return this.replayRequest(winner, digest, requestId)
     }
+    let prepared: PreparedSupplement
+    try {
+      prepared = await this.prepareSupplement(input, runId)
+    } catch (error) {
+      // 受理本身没成功（版本对不上、任务已结束、会话打不开）：撤掉占位。留着它会让同一个
+      // requestId 再提交时被当成「结果不明」，把一个根本没开始的执行报成待恢复的状态。
+      if (requestId !== '') this.store.releaseRequest(input.actor, 'supplement', requestId)
+      throw error
+    }
+    if (requestId !== '') this.store.bindRequest(input.actor, 'supplement', requestId, prepared.runId, prepared.conversationId)
     const log = this.beginLog(prepared.conversationId, prepared.runId)
     void this.pump(prepared.abort.signal, log, this.supplementBody(prepared))
       .then(() => { if (requestId !== '') this.store.finishRequest(input.actor, 'supplement', requestId) })
@@ -1318,6 +1361,10 @@ export class ButlerConsole {
    *
    * 三件可预期的失败都当场给出：任务不存在、任务已经结束、以及版本对不上。最后那条是并发
    * 依据 —— 两个入口同时改同一个任务时，后提交的那个会被拒，而不是让两份补充互相覆盖。
+   *
+   * 这里的检查只是**快速失败**（省掉一次打开会话）。真正算数的是 `addInput` 事务里的那次
+   * 复核：受理要打开会话，那是一段异步窗口，任务可能就在这期间被别人收尾，或者另一个入口
+   * 已经改到了下一版。事务外查过的结论不能拿来写数据。
    */
   private async prepareSupplement(input: SupplementRequest, runId: string): Promise<PreparedSupplement> {
     this.access.assert(input.actor)
@@ -1333,8 +1380,8 @@ export class ButlerConsole {
     const conversation = await this.open(record.conversationId, false, input.actor)
     if (conversation === undefined) throw new AccessError(500, '无法打开牛马大总管会话', 'conversation_open_failed')
     this.access.assert(input.actor)
-    // 版本与原文一起落库，之后才谈处理。
-    const version = this.store.addInput(input.actor, input.taskId, input.text, 'supplement')
+    // 版本与原文一起落库，之后才谈处理。核验也在同一个事务里再走一遍。
+    const version = this.store.addInput(input.actor, input.taskId, input.text, 'supplement', input.expectVersion)
     return {
       conversationId: record.conversationId,
       conversation,
@@ -1362,6 +1409,15 @@ export class ButlerConsole {
     try {
       const record = this.store.task(actor, taskId)
       if (record === undefined) return
+      /**
+       * 等空闲的这段时间里，这条补充可能已经被处理掉了。
+       *
+       * 补单一进来就会起一个回合，它要等当前这一轮跑到安全点；等的过程中老板可能又改了一次
+       * （那一轮会把这条一起处理），或者这一轮已经收尾。这时再处理一遍等于把同一句话喂两遍
+       * 模型，还会把已经写好的终态再写一次。
+       */
+      const handled = this.store.inputVersions(taskId)
+      if (isTerminal(record.state) || (handled !== undefined && handled.processed >= version)) return
       const prompt = supplementPrompt(this.store.inputs(taskId), record.subtasks)
 
       const speech = progressQueue()
@@ -1382,7 +1438,10 @@ export class ButlerConsole {
         return
       }
       // 到这里这条补充才算**处理过**：理解完成，版本跟着追平。
-      this.store.setProcessedVersion(taskId, version)
+      //
+      // 追平到「读取输入时已包含的版本」，而不是受理时那个版本号：受理之后、读取之前进来的
+      // 补充也在这份 prompt 里，只记自己那一版会把它留成「已接受未处理」，让它再被处理一遍。
+      this.store.setProcessedVersion(taskId, this.store.inputVersions(taskId)?.accepted ?? version)
 
       const plan = outcome.plans.at(-1)
       if (plan !== undefined) {
@@ -1401,6 +1460,7 @@ export class ButlerConsole {
           ...(subtask.logicalId === undefined ? {} : { logicalId: subtask.logicalId }),
           ...(subtask.supersedes === undefined ? {} : { supersedes: subtask.supersedes }),
           ...(subtask.dependsOn === undefined ? {} : { dependsOn: subtask.dependsOn }),
+          ...(subtask.requiresExternalAction === true ? { requiresExternalAction: true } : {}),
         }))
         this.store.appendSubtasks(actor, taskId, appended)
         if (plan.reply !== '') yield { type: 'chat', role: 'butler', text: plan.reply, time: Date.now() }
@@ -1412,6 +1472,7 @@ export class ButlerConsole {
             taskId, subtaskId: subtask.id, goal: subtask.goal, agentId: subtask.agentId,
             displayName: subtask.displayName, taskGoal: existing.goal, actor, signal: prepared.abort.signal,
             ...(subtask.dependsOn === undefined ? {} : { dependsOn: subtask.dependsOn }),
+            ...(subtask.requiresExternalAction === true ? { requiresExternalAction: true } : {}),
           })
         }
       } else if (outcome.text !== '') {
@@ -1781,8 +1842,10 @@ export class ButlerConsole {
     taskGoal: string
     actor: Actor
     signal: AbortSignal
-    /** 前置目标标识；只有它们都成功了才派这一步。 */
+    /** 前置目标标识；按就绪表逐个核验后才派这一步。 */
     dependsOn?: readonly string[]
+    /** 这一步是否真的需要外部动作（采用、确认、发布）已经办完；不传按不需要算。 */
+    requiresExternalAction?: boolean
   }): AsyncGenerator<ButlerEvent, SubtaskOutcome> {
     const { taskId, subtaskId, agentId, displayName, signal } = input
     const emit = (
@@ -1814,21 +1877,43 @@ export class ButlerConsole {
     const progress = progressQueue()
 
     /**
-     * 前置没满足就不派。
+     * 前置没就绪就不派 —— 按就绪表逐条核验，结论只有「派」「等」「判失败」三种。
      *
-     * 只有前置**成功**才算满足：失败、取消、还在等人回话、或者带着外部待办，都不足以支撑
-     * 下一步。这时不派活，也不编一个员工报错 —— 如实说明「前提没有满足」，并在 error 里写明
-     * 是哪一个前置、它当时是什么状态。
+     * 之前这里只认「前置成功」，其余一律判失败：前置还在等人回话、或者交了材料只是外部还没
+     * 办完时，这一步会被判成「干不成」，而员工其实连机会都没有 —— 那是在替员工报告一次
+     * 并不存在的失败。现在按既定机制分三种处理，判定本身是纯函数（`dependencyVerdict`），
+     * 与游戏侧的就绪表同一张。
      */
     if (input.dependsOn !== undefined && input.dependsOn.length > 0) {
       const record = this.store.task(input.actor, taskId)
       const current = effectiveSubtasks(record?.subtasks ?? [])
-      const unmet = input.dependsOn.map(logicalId => {
+      const waiting: string[] = []
+      const blocked: string[] = []
+      for (const logicalId of input.dependsOn) {
         const attempt = current.find(candidate => candidate.logicalId === logicalId)
-        return attempt === undefined ? `${logicalId}（找不到这条前置）` : attempt.state === 'succeeded' ? '' : `${logicalId}（${attempt.state}）`
-      }).filter(text => text !== '')
-      if (unmet.length > 0) {
-        const detail = `前置没有完成，这一步不派了：${unmet.join('、')}`
+        if (attempt === undefined) {
+          blocked.push(`${logicalId}（找不到这条前置）`)
+          continue
+        }
+        const verdict = dependencyVerdict({
+          upstream: attempt.state,
+          // 交回的材料算不算「可用」：有正文或有可点开的材料引用就算有。
+          materialsReady: attempt.result !== '' || attempt.artifacts.length > 0,
+          requiresExternalAction: input.requiresExternalAction === true,
+        })
+        if (verdict === 'wait') waiting.push(`${logicalId}（${attempt.state}）`)
+        else if (verdict === 'fail') blocked.push(`${logicalId}（${attempt.state}）`)
+      }
+      if (waiting.length > 0 && blocked.length === 0) {
+        // 前置还没终结：这一步留在队列里，不占员工，也不判失败。等前置有结果之后由收尾
+        // （或补话后的重新核验）再走一遍；这一轮会按上游的真实状态结账。
+        const detail = `等前置有结果：${waiting.join('、')}`
+        this.store.setSubtaskState(taskId, subtaskId, 'queued')
+        yield emit('queued', detail)
+        return { state: 'queued', report: `【${displayName}】还没派：${detail}` }
+      }
+      if (blocked.length > 0) {
+        const detail = `前置没有完成，这一步不派了：${blocked.join('、')}`
         this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
         yield emit('failed', detail)
         return { state: 'failed', report: `【${displayName}】失败：${detail}` }
@@ -2217,6 +2302,30 @@ export class ButlerConsole {
     // 谁也没法改对方的判断。之前这种情况落在 `completed`，用户看到的是「活干完了」。
     else taskState = 'partial'
 
+    /**
+     * 还有已接受但没处理的输入时，这一轮**不算完**。
+     *
+     * 老板刚改的目标不能因为「旧范围跑完了」就被丢掉：这一轮先不说结论，交给那条输入自己的
+     * 回合收尾。取消和故障可以带着未处理的输入结束（它们没有宣称成功），但「完成」和
+     * 「部分完成」不行 —— 那等于告诉他活干完了。
+     *
+     * 这个屏障是必需的而不是保险：受理补充与收尾是两条异步路径，受理会在打开会话那里让出
+     * 执行权，旧范围正好在这段时间跑完的情况是能构造出来的。
+     */
+    const versions = this.store.inputVersions(taskId)
+    const pendingInput = versions !== undefined && versions.accepted > versions.processed
+    const undispatched = subtasks.filter(item => item.state === 'queued').length
+    if (!stopped && pendingInput && (taskState === 'completed' || taskState === 'partial')) {
+      yield {
+        type: 'chat', role: 'butler',
+        text: '老板又补了一句，这一轮先不结账 —— 等新的说法处理完再给你结论。',
+        time: Date.now(),
+      }
+      return
+    }
+    // 还留在队列里的步骤（前置没就绪）同样不能算完成：它们根本没跑过。
+    if (!stopped && undispatched > 0 && taskState === 'completed') taskState = 'partial'
+
     if (waiting > 0 && !stopped) {
       const message = `有 ${waiting} 位成员在等你回话，回完再给你汇总。`
       this.store.setTaskState(taskId, 'waiting_user', { summary: reports.join('\n\n') })
@@ -2269,7 +2378,47 @@ export class ButlerConsole {
    * 会话句柄找不到时把 `conversation` 留空交给 `closeTask`：它照常写下终态与材料，
    * 只是不跑汇总那一轮。宁可这一次没有结论，也不能把任务永远留在「等人回话」。
    */
+  /**
+   * 把队列里已经就绪的步骤派出去。
+   *
+   * 依赖在**派单前**核验，而不是计划生成时定死：前置可能还在跑、还在等人回话、或者交了
+   * 材料而外面还没办完。之前因为「前置还没终结」留在队列里的步骤，等前置有结果之后要接得
+   * 上 —— 补话那条路径收尾前走一遍这里，就是机制里说的「派单前重新核验条件」。
+   *
+   * 还在等前置的就保持队列状态直接返回：不空转，也不占用员工。
+   */
+  private async *drainQueue(input: {
+    taskId: string
+    actor: Actor
+    goal: string
+    signal: AbortSignal
+  }): AsyncGenerator<ButlerEvent> {
+    for (;;) {
+      const record = this.store.task(input.actor, input.taskId)
+      if (record === undefined) return
+      const next = record.subtasks.find(item => item.state === 'queued')
+      if (next === undefined) return
+      if (input.signal.aborted) return
+      yield* this.dispatchSubtask({
+        taskId: input.taskId, subtaskId: next.id, goal: next.goal, agentId: next.agentId,
+        displayName: this.displayNameOf(input.actor, next.agentId), taskGoal: input.goal,
+        actor: input.actor, signal: input.signal,
+        ...(next.dependsOn.length === 0 ? {} : { dependsOn: next.dependsOn }),
+        ...(next.requiresExternalAction ? { requiresExternalAction: true } : {}),
+      })
+      const after = this.store.task(input.actor, input.taskId)?.subtasks.find(item => item.id === next.id)
+      // 派完还是排队中，说明前置仍未就绪：到此为止，等下一次核验。
+      if (after === undefined || after.state === 'queued') return
+    }
+  }
+
   private async *closeAfterReply(prepared: PreparedReply): AsyncGenerator<ButlerEvent> {
+    const before = this.store.task(prepared.actor, prepared.taskId)
+    if (before === undefined) return
+    // 有人回完话之后，之前「前置还没终结」而留在队列里的步骤可能就绪了：先核验再派。
+    yield* this.drainQueue({
+      taskId: before.id, actor: prepared.actor, goal: before.goal, signal: prepared.abort.signal,
+    })
     const record = this.store.task(prepared.actor, prepared.taskId)
     if (record === undefined) return
     if (record.subtasks.some(item => !isTerminal(item.state))) return

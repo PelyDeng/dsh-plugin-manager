@@ -10,6 +10,7 @@ import {
   assertTaskTransition,
   canTransitionSubtask,
   canTransitionTask,
+  dependencyVerdict,
   isTerminal,
   StateTransitionError,
   type SubtaskState,
@@ -100,6 +101,61 @@ describe('任务状态机', () => {
 
   it('非法任务迁移抛出错误', () => {
     expect(() => assertTaskTransition('completed', 'running')).toThrow(StateTransitionError)
+  })
+})
+
+/**
+ * 依赖就绪判定。
+ *
+ * 逐行照游戏侧 `design/02-机制/task_protocol.yaml#scheduling.ready_rules` 那张表驱动 ——
+ * 两边各写一份实现迟早会分家，所以这张表本身就是判据：表变了，这里跟着红。
+ */
+describe('依赖就绪判定与既定就绪表一致', () => {
+  const rows: readonly {
+    readonly upstream: 'succeeded' | 'external_pending' | 'unfinished' | 'failed_or_cancelled'
+    readonly materialsReady: boolean
+    readonly requiresExternalAction: boolean
+    readonly action: 'dispatch' | 'wait' | 'fail'
+  }[] = [
+    { upstream: 'succeeded', materialsReady: true, requiresExternalAction: false, action: 'dispatch' },
+    { upstream: 'succeeded', materialsReady: false, requiresExternalAction: false, action: 'fail' },
+    { upstream: 'external_pending', materialsReady: true, requiresExternalAction: false, action: 'dispatch' },
+    { upstream: 'external_pending', materialsReady: true, requiresExternalAction: true, action: 'fail' },
+    { upstream: 'external_pending', materialsReady: false, requiresExternalAction: false, action: 'fail' },
+    { upstream: 'unfinished', materialsReady: false, requiresExternalAction: false, action: 'wait' },
+    { upstream: 'unfinished', materialsReady: true, requiresExternalAction: false, action: 'wait' },
+    { upstream: 'unfinished', materialsReady: false, requiresExternalAction: true, action: 'wait' },
+    { upstream: 'unfinished', materialsReady: true, requiresExternalAction: true, action: 'wait' },
+    { upstream: 'failed_or_cancelled', materialsReady: false, requiresExternalAction: false, action: 'fail' },
+  ]
+
+  /** 表里的三种上游归并到本模块的状态取值：unfinished 覆盖四个「还没终结」的状态。 */
+  const statesOf = (upstream: string): readonly SubtaskState[] => {
+    if (upstream === 'unfinished') return ['queued', 'dispatched', 'running', 'waiting_user']
+    if (upstream === 'failed_or_cancelled') return ['failed', 'cancelled']
+    return [upstream as SubtaskState]
+  }
+
+  it('表里每一行都对得上', () => {
+    for (const row of rows) {
+      for (const upstream of statesOf(row.upstream)) {
+        expect(
+          dependencyVerdict({
+            upstream, materialsReady: row.materialsReady, requiresExternalAction: row.requiresExternalAction,
+          }),
+          `${row.upstream}/${upstream} materialsReady=${String(row.materialsReady)} requiresExternalAction=${String(row.requiresExternalAction)}`,
+        ).toBe(row.action)
+      }
+    }
+  })
+
+  it('上游还没终结时始终等待，不看另外两个事实', () => {
+    // 「还没轮到」和「干不成」是两件事：这一步没派出去，员工就没有失败可言。
+    for (const materialsReady of [true, false]) {
+      for (const requiresExternalAction of [true, false]) {
+        expect(dependencyVerdict({ upstream: 'waiting_user', materialsReady, requiresExternalAction })).toBe('wait')
+      }
+    }
   })
 })
 

@@ -145,8 +145,20 @@ async function fixture(options: { maxConversationEvents?: number; assertOwner?: 
     task: vi.fn(() => undefined),
     setSubtaskState: vi.fn(),
     request: (who: Actor, kind: string, id: string) => requests.get(requestKey(who, kind, id)),
+    // 唯一胜者语义：已经有人占过就把那条记录交回去，本次不算赢（真实存储在同一个事务里判）。
     claimRequest: (who: Actor, kind: string, id: string, digest: string, runId: string, conversationId: string) => {
-      requests.set(requestKey(who, kind, id), { kind, digest, state: 'claimed', runId, conversationId })
+      const key = requestKey(who, kind, id)
+      const existing = requests.get(key)
+      if (existing !== undefined) return existing
+      requests.set(key, { kind, digest, state: 'claimed', runId, conversationId })
+      return undefined
+    },
+    bindRequest: (who: Actor, kind: string, id: string, runId: string, conversationId: string) => {
+      const found = requests.get(requestKey(who, kind, id))
+      if (found !== undefined && found.conversationId === '') {
+        found.runId = runId
+        found.conversationId = conversationId
+      }
     },
     finishRequest: (who: Actor, kind: string, id: string) => {
       const found = requests.get(requestKey(who, kind, id))
