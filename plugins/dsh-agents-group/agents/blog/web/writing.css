@@ -40,6 +40,13 @@ body[data-view=writing] #quick-new{display:none}
 .assistant-panels h3{font-size:14px;margin:0 0 8px}.panel-empty{padding:24px 4px;color:var(--muted);font-size:13px;line-height:1.8}.panel-empty h3{color:var(--qa-text)}
 .panel-intro{margin-bottom:14px}.panel-intro p{font-size:12px;color:var(--muted)}
 #answer{max-height:none;overflow:visible;font-size:14px;line-height:1.8}.assistant #copy-answer{font-size:12px;margin-top:14px}
+.assistant-thinking{margin:0 0 14px;border-left:2px solid var(--line);padding-left:12px}
+.assistant-thinking summary{cursor:pointer;font-size:12px;color:var(--muted);min-height:30px;display:flex;align-items:center;gap:6px;list-style:none}
+.assistant-thinking summary::-webkit-details-marker{display:none}
+.assistant-thinking summary:before{content:"▸";font-size:10px;line-height:1}
+.assistant-thinking[open] summary{margin-bottom:6px}
+.assistant-thinking pre{max-height:260px;overflow:auto;font-size:12px;line-height:1.7;margin:0 0 8px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--muted)}
+@media(prefers-reduced-motion:no-preference){.assistant-thinking summary:before{transition:transform .12s ease}.assistant-thinking[open] summary:before{transform:rotate(90deg)}}
 #assistant-panel-proposal{padding:0;overflow:hidden}
 #proposal{height:100%;display:flex;flex-direction:column;border:0;padding:0;margin:0}
 #proposal-empty{padding:24px 18px}.proposal-content{flex:1;min-height:0;overflow:auto;padding:16px 18px}

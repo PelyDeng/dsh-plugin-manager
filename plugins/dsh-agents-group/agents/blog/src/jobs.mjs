@@ -151,7 +151,7 @@ export class BlogJobs {
     if (!old) invariant(this.active.size < 4, '当前写作任务较多，请稍后重试', 429)
     const { job, fresh } = this.store.jobStart(ownerKey(actor), request.callerId, request.requestId, input, actor)
     if (fresh) {
-      const b = { job, frozen, expectedProposalId:d.proposal?.id??null, sources:[], stopped:false, text:'', handle:null, timer:null, unsub:[], runtimeJobId:null, settle:null, completion:null, abort:new AbortController() }
+      const b = { job, frozen, expectedProposalId:d.proposal?.id??null, sources:[], stopped:false, text:'', thinking:'', liveReasoning:'', handle:null, timer:null, unsub:[], runtimeJobId:null, settle:null, completion:null, abort:new AbortController() }
       b.timer=setTimeout(()=>void this.stop(b,'failed',{code:'timeout',message:'写作超时，已有内容保留'}),this.timeoutMs)
       this.active.set(job.id,b); b.runPromise=this.run(b,d)
     }
@@ -176,12 +176,31 @@ export class BlogJobs {
       // A registered waiter consumes the completion before tool-jobs can wake the model.
       b.completion=this.observe(b)
       this.update(b,{status:'running'})
-      const chunk = c => { if (c.type === 'text-delta') { b.text += c.text; this.update(b,{text:b.text}) } }
+      // Reasoning and per-step narration fold into one cumulative thinking snapshot (complete-
+      // coverage semantics, same contract as the butler channel): the answer pane keeps only the
+      // final text, the collapsible thinking pane carries the whole process trail.
+      const foldStep = (reasoning, text) => {
+        if (reasoning) b.thinking += reasoning.trimEnd() + '\n\n'
+        if (text) b.thinking += text.trimEnd() + '\n\n'
+        if (b.thinking.length > 60000) b.thinking = '……（更早的思考已省略）\n\n' + b.thinking.slice(-60000)
+      }
+      const thinkingView = () => b.thinking + b.liveReasoning
+      const chunk = c => {
+        if (c.type === 'text-delta') { b.text += c.text; this.update(b,{text:b.text}) }
+        if (c.type === 'reasoning-delta') { b.liveReasoning += c.text; this.update(b,{thinking:thinkingView()}) }
+      }
       b.unsub.push(this.ctx.on('agent/assistant-stream', ({agent,frame}) => { if (agent===handle.agent && frame.type==='chunk' && !b.stopped) { try {chunk(frame.chunk)} catch {void this.stop(b,'cancelled')} } }))
       b.unsub.push(this.ctx.on('session/event', (session,event) => {
         if (String(session.id)!==`blog-${b.job.id}` || b.stopped) return
         try {
-          if (event.type==='assistant/message') { b.text=event.data.message.content.filter(v=>v.type==='text').map(v=>v.text).join(''); this.update(b,{text:b.text}) }
+          if (event.type==='assistant/message') {
+            const m=event.data.message
+            b.text=m.content.filter(v=>v.type==='text').map(v=>v.text).join('')
+            const reasoning=typeof m.reasoning==='string'&&m.reasoning?m.reasoning:b.liveReasoning
+            b.liveReasoning=''
+            foldStep(reasoning, b.text)
+            this.update(b,{text:b.text,thinking:thinkingView()})
+          }
           if (event.type==='turn/end') void this.stop(b, event.data.reason.kind==='completed' ? 'succeeded' : 'failed', event.data.reason.kind==='completed' ? null : {code:'model',message:'模型调用未完成，请检查模型配置或重试'})
         } catch { void this.stop(b,'cancelled',{code:'revoked',message:'登录或授权已失效'}) }
       }))
@@ -199,7 +218,7 @@ export class BlogJobs {
       let snapshot
       do {snapshot=await this.ctx.jobs.wait(b.runtimeJobId,this.timeoutMs+60000,b.handle.agent)} while(['running','stopping'].includes(snapshot.status))
       const status={completed:'succeeded',killed:'cancelled',failed:'failed'}[snapshot.status]
-      b.job=this.store.jobUpdate(b.job.id,{status,error:b.error??null,text:b.text,sources:b.sources})
+      b.job=this.store.jobUpdate(b.job.id,{status,error:b.error??null,text:b.text,thinking:this.finalThinking(b),sources:b.sources})
       try{this.access.assert(b.job.actor);this.ctx.root.emit(BLOG_TASK_EVENT,{protocolVersion:1,taskId:b.job.id,updatedAt:b.job.updatedAt})}catch{}
     } finally {this.active.delete(b.job.id);await b.handle.dispose().catch(()=>{})}
   }
@@ -209,7 +228,13 @@ export class BlogJobs {
     b.stopped=true;b.error=error;b.abort.abort();clearTimeout(b.timer);for(const off of b.unsub)off()
     if(b.handle){this.bindings.delete(b.handle.agent);if(status!=='succeeded')b.handle.agent.cancel({kind:'user'});await b.handle.agent.whenIdle()}
     if(b.settle && b.runtimeJobId)b.settle({status:{succeeded:'completed',cancelled:'killed',failed:'failed'}[status],detail:error?.code})
-    else {this.active.delete(b.job.id);this.store.jobUpdate(b.job.id,{status,error,text:b.text,sources:b.sources});await b.handle?.dispose().catch(()=>{})}
+    else {this.active.delete(b.job.id);this.store.jobUpdate(b.job.id,{status,error,text:b.text,thinking:this.finalThinking(b),sources:b.sources});await b.handle?.dispose().catch(()=>{})}
+  }
+  // The last step's text is the answer; drop its duplicate from the persisted thinking trail.
+  finalThinking(b) {
+    const answer=(b.text??'').trim()
+    if(answer && b.thinking.endsWith(answer+'\n\n')) b.thinking=b.thinking.slice(0,b.thinking.length-answer.length-2).trimEnd()
+    return b.thinking
   }
   cancel(actor,id) { this.access.assert(actor);this.store.jobGet(ownerKey(actor),id);const b=this.active.get(id);if(b?.runtimeJobId)this.ctx.jobs.kill(b.runtimeJobId,b.handle.agent,'user');else if(b)void this.stop(b,'cancelled');return this.get(actor,id) }
   async close(){this.closed=true;const active=[...this.active.values()];await Promise.all(active.map(b=>this.stop(b,'failed',{code:'interrupted',message:'服务正在停止'})));await Promise.all(active.map(b=>b.runPromise));await Promise.all(active.map(b=>b.completion))}
