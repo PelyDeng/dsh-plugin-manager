@@ -9,7 +9,7 @@ it('refreshes only the first pending title and stops after generation, manual na
   const refresh = vi.fn(async () => undefined)
   const state = { identityEpoch: 1, identityReady: true, conversationId: 'current', sidebar: { refresh }, setTimeout, clearTimeout, Date, Promise }
   const start = webApp.indexOf('  function stopTitleRefresh()')
-  const end = webApp.indexOf('  // 工具中文名称', start)
+  const end = webApp.indexOf('  function resultKey(', start)
   expect(start).toBeGreaterThan(0); expect(end).toBeGreaterThan(start)
   const watcher = runInNewContext(`var titleRefresh; ${webApp.slice(start, end)}; ({ start: startTitleRefresh, accept: acceptTitleList })`, state)
 

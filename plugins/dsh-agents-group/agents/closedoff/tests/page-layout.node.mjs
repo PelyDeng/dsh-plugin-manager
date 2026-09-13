@@ -5,8 +5,9 @@
  * 后者会走到工具卡片渲染（`.cards-block` / `.mini-card` / `.mc-row`），这也是后续拆分
  * app.js 卡片层时的安全网。
  *
- * 页面脚本是构建产物（`web/assets` 由 `pnpm build` 生成），产物缺失时明确跳过并说明原因，
- * 不假装通过；先 `pnpm build` 再跑就能覆盖到。
+ * 页面脚本是构建产物（`web/assets` 由 `pnpm build:web` 生成），`pnpm test` 会先跑这一步。
+ * 产物缺失属于构建问题，直接失败；机器上没有可用 Chromium 时才记成跳过（TAP 里显示 SKIP），
+ * 两者都不假装通过。
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,16 +21,13 @@ const conversation = 'closedoff-web-12345678-1234-4123-8123-123456789012';
 
 async function probe(t, options) {
   const assets = `${pluginRoot}web/assets`;
-  if (!existsSync(`${assets}/app.js`)) {
-    t.diagnostic(`跳过：页面产物不存在（先运行 pnpm --filter @dsh-agents-group/closedoff run build），当前缺少 ${assets}/app.js`);
-    return null;
-  }
+  assert.ok(existsSync(`${assets}/app.js`), `页面产物不存在，先运行 pnpm --filter @dsh-agents-group/closedoff run build:web（缺少 ${assets}/app.js）`);
   const result = await probePage({
     root: pluginRoot, prefix: '/closedoff-qa', mount: [`/closedoff-qa/assets=${assets}`],
     replace: [`__WEB_CONFIG__=${here}page-config.json`],
     stub: `${here}page-stub.json`, probe: `${here}page-probe.js`, settle: '1500', ...options,
   });
-  if (result.skipped) { t.diagnostic(`跳过：${result.reason}`); return null; }
+  if (result.skipped) { t.skip(`没有可用浏览器：${result.reason}`); return null; }
   return result;
 }
 
