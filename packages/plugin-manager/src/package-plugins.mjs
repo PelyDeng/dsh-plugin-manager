@@ -5,7 +5,7 @@ import { availableParallelism } from 'node:os';
 import { resolve } from 'node:path';
 import { parseOptions, sourcePlugins } from './plugins.mjs';
 import { runPnpmAsync } from './pnpm.mjs';
-import { preparePluginDependencies, replayPluginOutput, runPluginTaskAsync, runPnpm } from './run-plugin-task.mjs';
+import { preparePluginDependencies, replayPluginOutput, runPluginTaskAsync, runPnpm, USAGE } from './run-plugin-task.mjs';
 import { verifyBuildPackage } from './verify-package.mjs';
 import { validateVerification } from './verification.mjs';
 
@@ -95,6 +95,8 @@ export async function packagePlugins(root, requested, output, packageDirectory, 
 }
 
 export async function main(argv = process.argv.slice(2), step) {
+  // 帮助与用法放在解析参数之前：查用法不该先备好项目根。
+  if (argv.includes('--help')) { console.log(USAGE); return; }
   // 默认跳过插件检查（见 packagePlugins 说明）；--verify-plugin-check 把它要回来。
   const options = parseOptions(argv, ['root', 'plugins', 'output', 'package', 'concurrency'], ['skip-plugin-check', 'verify-plugin-check']);
   if (!options.root) throw new Error('必须显式指定 --root 项目根目录。');
