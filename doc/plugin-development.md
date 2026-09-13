@@ -131,6 +131,20 @@ pnpm list:plugins
 
 按当前改动选择上表中的命令，不必每次全部执行。只交付时直接 package，不需要先重复 build/check。普通构建和测试不要求宿主子模块、模型密钥或 Docker；内部清单 1 保留 development/link，外部单包与组合清单 2 只支持 release。
 
+### 页面怎么回归
+
+插件的页面代码是浏览器原生模块，没有 jsdom 能覆盖的执行环境，所以布局改动最容易只能靠人眼。仓库提供的做法是**真的把页面跑起来量一遍**：`scripts/web-page-probe.mjs` 起静态服务、按桩文件顶掉接口、用无头 Chromium 在多个视口宽度下执行你写的探针表达式，再把结果打回来。
+
+```bash
+node scripts/web-page-probe.mjs --root plugins/dsh-auth --prefix /auth \
+  --stub plugins/dsh-auth/tests/page-stub.json --probe plugins/dsh-auth/tests/page-probe.js \
+  --widths 1150,860,640
+```
+
+探针就是一段返回可序列化值的表达式，能直接读 DOM（样例量的是每行卡片数、同一行卡片头部与页脚的位置差、是否横向溢出、说明渲染了几行）。`plugins/dsh-auth/tests/page-layout.test.mjs` 把这些量变成断言，`pnpm test` 里就会跑：宽视口必须出现三张一行、窄视口回落单列、任何宽度都不许出现错位或横向溢出。没有可用 Chromium 时工具会明确打印跳过（可用 `CHROME_PATH` 或 `--browser` 指定，`--require-browser` 让跳过变成失败），不把跳过当通过。
+
+需要人眼看图时用同一个静态服务加 `--screenshot` 即可；探针与桩文件都放在插件的 `tests/` 下随源码维护，不需要额外依赖。
+
 打包会并行构建与打包多个插件：插件之间没有依赖，同时最多 4 个（`pnpm package --concurrency <n>` 可调整，1 表示逐个进行）。依赖安装与共享依赖准备先单线做完，再进入并行阶段；日志按插件 ID 加前缀以便分辨，交付清单里的插件顺序仍按选集，与并发无关。
 
 源码部署可用 `./build.sh --rebuild-plugins c` 或 `.\build.ps1 --rebuild-plugins c` 只重建指定插件，并复用其余已启用插件的旧归档；部署选集、复用条件及恢复方式见[部署说明](../deploy/README.md#服务器源码发版)。日常 `pnpm package --plugins c` 只生成 c 的交付清单，不会自动补入其他插件。

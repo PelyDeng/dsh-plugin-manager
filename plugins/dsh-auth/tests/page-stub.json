@@ -1,0 +1,45 @@
+{
+  "/auth/api/session": {
+    "user": {
+      "id": "u-1",
+      "username": "page-probe",
+      "role": "admin",
+      "mustChangePassword": false,
+      "enabled": true,
+      "grants": ["auth", "example", "agents-group", "blog", "closedoff", "butler", "third-party"]
+    },
+    "csrf": "page-probe-csrf",
+    "consoleAccess": true,
+    "accessTargets": [
+      {
+        "id": "console",
+        "displayName": "DSH 控制台",
+        "description": "访问 DSH 官方控制台。仍须通过官方认证，可能涉及宿主设置和全部 DSH 会话。",
+        "entryPath": "/console"
+      }
+    ]
+  },
+  "/auth/api/plugins": {
+    "plugins": [
+      { "id": "auth", "category": "system-default", "displayName": "统一认证", "packageName": "dsh-auth", "version": "0.16.3", "description": "统一账号登录、会话与插件访问授权。", "entryPath": "/auth", "tools": [] },
+      { "id": "tools", "category": "universal-tools", "displayName": "通用工具", "packageName": "dsh-agents-group", "version": "0.2.1", "description": "每个智能体都能调用的公共工具集。", "entryPath": "", "tools": [{ "name": "common_weather", "displayName": "天气查询", "description": "查询城市天气" }] },
+      { "id": "blog", "category": "agents", "displayName": "博客智能体", "packageName": "@dsh-agents-group/blog", "version": "0.2.1", "description": "博客工作台：写作、发布、图床与备份助手（智能体群组的子包）。", "entryPath": "/agents/blog", "tools": [{ "name": "blog_statistics_overview", "displayName": "统计数据概况", "description": "统计文章与草稿" }] },
+      { "id": "closedoff", "category": "agents", "displayName": "封闭化管理智能助手", "packageName": "@dsh-agents-group/closedoff", "version": "0.2.1", "description": "封闭化园区业务查询、个人对话历史与可视化助手（智能体群组的子包）。", "entryPath": "/agents/closedoff", "tools": [{ "name": "closedoff_warning_page", "displayName": "查询预警报警", "description": "" }, { "name": "closedoff_warning_detail", "displayName": "预警报警详情", "description": "" }] },
+      { "id": "example", "category": "agents", "displayName": "开发者接入助手", "packageName": "dsh-example", "version": "0.16.3", "description": "框架开发者接入智能助手与可复制的鉴权授权示例。", "entryPath": "/example", "tools": [{ "name": "example_query", "displayName": "示例查询", "description": "" }] },
+      { "id": "agents-group", "category": "web-services", "displayName": "智能体群组", "packageName": "dsh-agents-group", "version": "0.2.1", "description": "统一分包管理多个智能体，共享公共组件，各自独立页面与授权。", "entryPath": "/agents", "tools": [] },
+      { "id": "butler", "category": "web-services", "displayName": "牛马聊天群", "packageName": "dsh-butler-console", "version": "0.1.1", "description": "统一对话入口、任务拆解与子 Agent 调度状态页。", "entryPath": "/butler", "tools": [] },
+      { "id": "third-party", "category": "agents", "displayName": "一个名字特别长的第三方插件用来压排版对齐", "packageName": "@some-vendor/very-long-plugin-package-name-here", "version": "12.34.567", "description": "说明也写得非常长，长到必须被截断，否则同一行的卡片高度与按钮位置就会参差不齐，而这正是要检查的错位问题。", "entryPath": "/third-party", "tools": [{ "name": "a_very_long_tool_code_for_layout", "displayName": "工具名也特别长的一个工具条目", "description": "" }] }
+    ],
+    "accessTargets": [
+      {
+        "id": "console",
+        "displayName": "DSH 控制台",
+        "description": "访问 DSH 官方控制台。仍须通过官方认证，可能涉及宿主设置和全部 DSH 会话。",
+        "entryPath": "/console"
+      }
+    ]
+  },
+  "/auth/api/users": { "users": [] },
+  "/auth/api/logout": {},
+  "/auth/api/password": {}
+}
