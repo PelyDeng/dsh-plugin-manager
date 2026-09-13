@@ -1,1 +1,0 @@
-Reference status: CURRENT MASTER ADOPTED. The SW stand / walk1-4 / talk sheet is wired into runtime as the minimum playable loop. Do not regenerate this sheet. Future work must derive additional directions one frame at a time from the approved SW master, then rebuild and revalidate the complete sheet; one direction is not four-direction natural walking.

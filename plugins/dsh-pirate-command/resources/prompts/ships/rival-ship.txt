@@ -1,1 +1,0 @@
-Reference status: CURRENT MASTER ADOPTED. The rival empty-ship despill v02 master is the current 1448 by 1086, origin (0,0) baseline. Do not regenerate the complete ship or submit this TXT to an image tool. Use it only as the identity and alignment reference for damage variants, crew placement and same-canvas foreground extraction.

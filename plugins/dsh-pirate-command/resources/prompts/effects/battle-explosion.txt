@@ -1,3 +1,0 @@
-Create ONE isolated restrained local orange burst for a small pirate naval impact, readable warm core and modest outer wisps, no giant fireball. Use a 512 by 512 canvas with impact point at (256,320), generous padding. No ship, people, injury, sea, flying weapon, labels or scene. For later cooling frames keep the same impact point and transition into a small gray puff.
-
-Deliver the isolated asset as a PNG with a genuine alpha channel if your tool supports it. Background pixels must be transparent, including open gaps inside the silhouette. Do not draw a checkerboard. No added floor, scenery or external ground shadow. Preserve the complete silhouette with safe padding. Keep object self-shading.

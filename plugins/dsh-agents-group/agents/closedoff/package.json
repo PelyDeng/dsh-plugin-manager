@@ -84,7 +84,6 @@
     "@dsh-plugin-manager/plugin-kit": "workspace:*",
     "@types/node": "^22.20.0",
     "cesium": "1.142.0",
-    "dsh-pirate-command": "workspace:*",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8",

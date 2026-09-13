@@ -1,3 +1,0 @@
-Create ONE isolated small burst of wooden splinters and a few warm sparks from a local pirate-ship hull impact. Refined readable game VFX. Use a 512 by 512 canvas with impact point at (256,320), generous margin and complete fragments. No ship surface, people, injury, fireball, cannonball, smoke backdrop or text. Use an effect-only reference. Later frames must keep the same impact point while fragments spread and fall away.
-
-Deliver the isolated asset as a PNG with a genuine alpha channel if your tool supports it. Background pixels must be transparent, including open gaps inside the silhouette. Do not draw a checkerboard. No added floor, scenery or external ground shadow. Preserve the complete silhouette with safe padding. Keep object self-shading.

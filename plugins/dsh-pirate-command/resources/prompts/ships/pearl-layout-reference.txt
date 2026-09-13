@@ -1,1 +1,0 @@
-Reference status: CURRENT MASTER ADOPTED. The Black Pearl v02 master is the current pixel-geometry baseline. Do not regenerate the complete ship or submit this TXT to an image tool. Active ship work must use same-canvas layer extraction from v02 and revalidate navigation, cannons, props, occlusion and hull placement after any deliberate master change.

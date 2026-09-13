@@ -10,7 +10,7 @@ test('deep links follow switching, new conversations and deletion without changi
   const source=readFileSync(new URL('../web/chat.js',import.meta.url),'utf8')
   const block=source.slice(source.indexOf('  const sidebar=createConversationHistory('),source.indexOf('  function connect()'))
   assert.ok(block.startsWith('  const sidebar='))
-  let href='https://example.invalid/blog?from=pirate&conversationId=chat-a&keep=1#answer',options,modelRefresh=async()=>{},connects=0
+  let href='https://example.invalid/blog?from=entry&conversationId=chat-a&keep=1#answer',options,modelRefresh=async()=>{},connects=0
   const saved=new Map(),historyState={scroll:17,external:{keep:true}},node={value:'',close(){},hidden:false}
   const browser={location:{get href(){return href}},history:{state:historyState,replaceState(state,_title,url){assert.equal(state,historyState);href=String(url)}},dispatchEvent(){}}
   const state={id:'chat-a',epoch:0,feedback:new Map()}
@@ -25,7 +25,7 @@ test('deep links follow switching, new conversations and deletion without changi
     const url=new URL(href)
     assert.equal(state.id,id)
     assert.equal(chatConversationTarget(url.search,saved.get('blog-chat:alice')),id)
-    assert.equal(url.pathname,'/blog');assert.equal(url.searchParams.get('from'),'pirate')
+    assert.equal(url.pathname,'/blog');assert.equal(url.searchParams.get('from'),'entry')
     assert.equal(url.searchParams.get('keep'),'1');assert.equal(url.hash,'#answer')
     assert.equal(browser.history.state,historyState)
   }

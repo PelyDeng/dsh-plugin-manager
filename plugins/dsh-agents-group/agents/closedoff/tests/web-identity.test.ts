@@ -32,7 +32,7 @@ describe('已验证身份下的会话深链接', () => {
   it('切换、新建、收到新 ID 与删除当前会话同步深链，保留其它 URL 和 history state', () => {
     const other = 'closedoff-web-11234567-89ab-4cde-8fab-0123456789ab'
     const created = 'closedoff-web-21234567-89ab-4cde-8fab-0123456789ab'
-    let href = 'https://example.invalid/closedoff-qa?from=pirate&conversationId=' + linked + '&keep=1#answer'
+    let href = 'https://example.invalid/closedoff-qa?from=entry&conversationId=' + linked + '&keep=1#answer'
     const saved = new Map<string, string>(), historyState = { scroll: 17, external: { keep: true } }
     const browser = { location: { get href() { return href }, get search() { return new URL(href).search } },
       history: { state: historyState, replaceState(state: unknown, _title: string, url: URL) { expect(state).toBe(historyState); href = String(url) } } }
@@ -55,7 +55,7 @@ describe('已验证身份下的会话深链接', () => {
       const url = new URL(href)
       expect(scope.conversationId).toBe(id)
       expect(url.searchParams.get('conversationId') || '').toBe(id)
-      expect(url.pathname).toBe('/closedoff-qa'); expect(url.searchParams.get('from')).toBe('pirate')
+      expect(url.pathname).toBe('/closedoff-qa'); expect(url.searchParams.get('from')).toBe('entry')
       expect(url.searchParams.get('keep')).toBe('1'); expect(url.hash).toBe('#answer')
       expect(browser.history.state).toBe(historyState)
       runInContext(choose, scope); expect(scope.conversationId).toBe(id)
