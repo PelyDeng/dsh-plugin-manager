@@ -79,16 +79,64 @@ export interface AgentReplyRequest {
   readonly signal: AbortSignal
 }
 
+/**
+ * 一次派活的结论状态。
+ *
+ * `waiting_user` 与 `external_pending` 都是「这一轮没跑完」，但等的东西不一样，不能混用：
+ *
+ * - `waiting_user`：等着用户在这里补一句话才能继续。协调方会给出回复入口，任务停在等待。
+ * - `external_pending`：材料已经交回，剩下的事在**别处**办（去原页面采用、确认或发布）。
+ *   这一轮可以结束，用户可以去开新任务；但那件事没有办完，所以也**不是**成功。
+ */
+export type AgentExecutionStatus =
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'waiting_user'
+  | 'external_pending'
+
+/**
+ * 执行方交回的一份材料。
+ *
+ * 只带位置，不带内容：正文由执行方自己的页面负责呈现与鉴权，协调方只做定位，
+ * 不复制一份可能已经过期的副本。
+ */
+export interface AgentArtifact {
+  /** 给用户看的标题，例如「在博客查看并采用候选稿」。 */
+  readonly title: string
+  /** 材料所在位置，只允许本站插件内的路径，由执行方核验归属后提供。 */
+  readonly path: string
+  /** 材料种类，由执行方自己定义（例如 `draft`、`confirmation`）。 */
+  readonly kind: string
+}
+
+/**
+ * 材料已交回、还有事在别处等着办。
+ *
+ * 这份声明是协调方判定 `external_pending` 的**唯一依据**：没有它，协调方不会因为
+ * 「结果里带着材料」就自行推断这一轮可以在外部收尾。
+ */
+export interface AgentExternalPending {
+  /** 在等什么、由谁处理。这句会直接显示给用户。 */
+  readonly reason: string
+  /** 外部处理完之后可以做什么，可空。 */
+  readonly next?: string
+}
+
 /** 一次派活的结论。 */
 export interface AgentExecutionResult {
   /** `succeeded` 表示拿到了可用结果；其余按失败、取消或等待处理。 */
-  readonly status: 'succeeded' | 'failed' | 'cancelled' | 'waiting_user'
+  readonly status: AgentExecutionStatus
   /** 最终回答，或失败时给用户看的短说明。 */
   readonly summary: string
   /** 执行方实际使用的会话标识，便于用户跳到那个页面继续追问。 */
   readonly conversationId?: string
   /** `waiting_user` 时要显示的问题；与 `summary` 分开，后者是已拿到的阶段性成果。 */
   readonly question?: string
+  /** 本轮交回的材料。 */
+  readonly artifacts?: readonly AgentArtifact[]
+  /** `external_pending` 时必填，理由见 {@link AgentExternalPending}。 */
+  readonly externalPending?: AgentExternalPending
 }
 
 /** 协调方登记的单个执行入口。 */

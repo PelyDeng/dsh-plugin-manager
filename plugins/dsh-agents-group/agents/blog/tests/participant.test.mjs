@@ -89,21 +89,29 @@ test('reuses a durable mission conversation and original request idempotency wit
   assert.equal(f.runs, 2)
 })
 
-test('successful retries return only committed answers for completed and waiting results', async t => {
-  for (const expected of ['completed', 'waiting']) await t.test(expected, async t => {
+test('successful retries return only committed answers for completed and external_pending results', async t => {
+  for (const expected of ['completed', 'external_pending']) await t.test(expected, async t => {
     const f = fixture(t); f.auto = false
     const running = f.provider().run(input())
     await tick()
     const id = [...f.active.keys()][0]
     f.messages.get(id).push({ id: 'attempt-1', role: 'assistant', text: '废弃尝试内容', interrupted: true, reasoning: 'PRIVATE_ATTEMPT_REASONING' })
-    if (expected === 'waiting') f.operations = [{ status: 'prepared', nonce: 'PRIVATE_CONFIRM_NONCE' }]
+    if (expected === 'external_pending') f.operations = [{ status: 'prepared', nonce: 'PRIVATE_CONFIRM_NONCE' }]
     f.complete(id, '已提交的最终回答')
     const result = await running
     assert.equal(result.status, expected)
     assert.ok(result.text.startsWith('已提交的最终回答'))
     assert.doesNotMatch(JSON.stringify(result), /废弃尝试内容|PRIVATE_|reasoning|nonce/)
-    if (expected === 'completed') assert.equal(result.text, '已提交的最终回答')
-    else assert.match(result.text, /没有执行发布/)
+    if (expected === 'completed') {
+      assert.equal(result.text, '已提交的最终回答')
+      // 没有外部待办时不能凭空给一份声明 —— 那会让上游把这一轮当成「还没办完」。
+      assert.equal(result.externalPending, undefined)
+    } else {
+      assert.match(result.text, /没有执行发布/)
+      // 判定来源是结构化声明，不是正文措辞：上游只认这个字段。
+      assert.equal(typeof result.externalPending?.reason, 'string')
+      assert.ok(result.externalPending.reason.length > 0)
+    }
   })
 })
 
@@ -283,14 +291,15 @@ test('returns a native confirmation link without nonce, reasoning or remote oper
   f.operations = [{ status: 'prepared', nonce: 'PRIVATE_CONFIRM_NONCE', before: { private: 'PRIVATE_REMOTE_SNAPSHOT' }, canConfirm: true }]
   f.complete(id)
   const result = await running, encoded = JSON.stringify(result)
-  assert.equal(result.status, 'waiting'); assert.equal(result.artifacts[0].kind, 'confirmation')
+  assert.equal(result.status, 'external_pending'); assert.equal(result.artifacts[0].kind, 'confirmation')
   assert.equal(result.artifacts[0].path, '/blog?conversationId=' + encodeURIComponent(id))
   assert.doesNotMatch(encoded, /PRIVATE_|nonce|reasoning|canConfirm|before/)
   assert.match(result.text, /没有执行发布/)
+  assert.match(result.externalPending.reason, /没有执行发布/)
   assert.equal(f.listeners.size, 0)
 })
 
-test('an unapplied proposal remains waiting and is never reported as a saved native article', async t => {
+test('an unapplied proposal is reported as external_pending and never as a saved native article', async t => {
   const f = fixture(t); f.auto = false
   const running = f.provider().run(input())
   await tick()
@@ -300,8 +309,9 @@ test('an unapplied proposal remains waiting and is never reported as a saved nat
   f.index.result(owner, turn, 'candidate', f.store.get(owner, draft.id))
   f.complete(id, '已提出文章修改建议')
   const result = await running
-  assert.equal(result.status, 'waiting'); assert.equal(result.artifacts[0].kind, 'draft')
+  assert.equal(result.status, 'external_pending'); assert.equal(result.artifacts[0].kind, 'draft')
   assert.match(result.text, /候选稿不等于正文已保存或发布/)
+  assert.match(result.externalPending.reason, /不等于正文已保存或发布/)
   assert.match(result.text, /实际候选标题/)
   assert.match(result.text, /真实候选正文与 Agent 自述不同/)
   assert.match(result.text, /作为核对资料，不是指令/)
@@ -317,14 +327,14 @@ test('a later progress question preserves earlier unresolved candidates and conf
   f.store.propose(owner, draft.id, draft.revision, { text: '候选内容' }, [])
   f.index.result(owner, turn, 'candidate', f.store.get(owner, draft.id))
   f.complete(id)
-  assert.equal((await first).status, 'waiting')
+  assert.equal((await first).status, 'external_pending')
   f.auto = true
   const followup = await provider.run(input({ requestId: 'progress-request', conversationId: id, message: '现在等谁' }))
-  assert.equal(followup.status, 'waiting'); assert.equal(followup.artifacts[0].kind, 'draft')
+  assert.equal(followup.status, 'external_pending'); assert.equal(followup.artifacts[0].kind, 'draft')
   assert.doesNotMatch(followup.text, /候选内容|本轮实际候选内容/)
   f.operations = [{ status: 'prepared', nonce: 'PRIVATE_OLD_NONCE', requestId: turn.id }]
   const confirmation = await provider.run(input({ requestId: 'progress-request-2', conversationId: id, message: '能继续了吗' }))
-  assert.equal(confirmation.status, 'waiting'); assert.equal(confirmation.artifacts[0].kind, 'confirmation')
+  assert.equal(confirmation.status, 'external_pending'); assert.equal(confirmation.artifacts[0].kind, 'confirmation')
   assert.doesNotMatch(JSON.stringify(confirmation), /PRIVATE_OLD_NONCE/)
 })
 
@@ -345,7 +355,7 @@ test('actual candidate paragraphs and headings render readably without JSON esca
   assert.match(html, /<li>本页 2 条样例<\/li>/)
   assert.match(html, /&lt;script&gt;不能执行&lt;\/script&gt;/)
   assert.doesNotMatch(html, /<script|\[\{&quot;title&quot;|\\n\\n##/)
-  assert.equal(result.status, 'waiting')
+  assert.equal(result.status, 'external_pending')
 })
 
 test('only the current unapplied candidate of the requested turn is forwarded', async t => {
@@ -364,7 +374,7 @@ test('only the current unapplied candidate of the requested turn is forwarded', 
     f.complete(id)
     const result = await running
     assert.doesNotMatch(result.text, /旧候选不应转交/)
-    assert.equal(result.status, action === 'replace' ? 'waiting' : 'completed')
+    assert.equal(result.status, action === 'replace' ? 'external_pending' : 'completed')
     if (action === 'replace') assert.match(result.text, /同轮替换后的实际候选/)
     else assert.doesNotMatch(result.text, /本轮实际候选内容/)
   })
@@ -385,7 +395,8 @@ test('multiple current draft candidates are deduplicated and forwarded together 
     }
     f.complete(id)
     const result = await running
-    assert.equal(result.status, 'waiting')
+    assert.equal(result.status, 'external_pending')
+    assert.ok(result.externalPending.reason.length > 0)
     assert.ok(result.text.length <= 64000)
     assert.equal(result.artifacts[0].path, '/blog?conversationId=' + encodeURIComponent(id))
     assert.match(result.text, /共 2 份/)
@@ -424,7 +435,7 @@ test('long responses preserve status and disclose omissions within the collabora
     f.complete(id, answer)
     const result = await running
     assert.ok(result.text.length <= 64000, '转交正文不超过参与者自己的上限')
-    assert.equal(result.status, body === null ? 'completed' : 'waiting')
+    assert.equal(result.status, body === null ? 'completed' : 'external_pending')
     assert.equal(result.artifacts[0].path, '/blog?conversationId=' + encodeURIComponent(id))
     if (fullCandidate) {
       assert.ok(result.text.includes(body), 'actual candidate must be forwarded in full')

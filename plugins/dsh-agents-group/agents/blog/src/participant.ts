@@ -153,8 +153,11 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
               const proposal = store.get(owner, result.draftId).proposal
               if (proposal?.id === result.proposal.id) currentCandidates.set(result.draftId, { title: proposal.fields.title, text: proposal.fields.text })
             }
-            const waiting = confirmation || candidate
-            const status = turn.status === 'succeeded' ? (waiting ? 'waiting' : 'completed')
+            // 这两种「没跑完」要分开报：材料已经交回、剩下的事在博客里办（采用候选稿、核对操作），
+            // 与等着用户在协作通道里补一句话，是两件不同的事。前者这一轮可以结束、也能开新活，
+            // 但那件事并没有办完，所以绝不能报成 `completed`。
+            const external = confirmation || candidate
+            const status = turn.status === 'succeeded' ? (external ? 'external_pending' : 'completed')
               : turn.status === 'interrupted' && signal.aborted ? 'cancelled' : 'failed'
             const unfinished = status === 'cancelled' ? '本轮已停止，尚未完成；保留已生成的内容。'
               : status === 'failed' ? '博客本轮未完成，请在原对话查看并继续。' : ''
@@ -165,6 +168,11 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
               status, conversationId, text: publicResultText(text, [unfinished, note], [...currentCandidates.values()]),
               artifacts: [{ kind: confirmation ? 'confirmation' : candidate ? 'draft' : 'conversation',
                 title: confirmation ? '在博客核对并确认' : candidate ? '在博客查看并采用候选稿' : '查看博客原对话', path }],
+              // 声明里的理由是给用户看的原话，与 `text` 里那句同源，不另编一份。
+              ...(external ? { externalPending: {
+                reason: note,
+                next: '在博客里采用或确认之后，可以再派一轮继续处理后续。',
+              } } : {}),
             }
           }
           if (!signal.aborted && turn.status !== lastStatus) {

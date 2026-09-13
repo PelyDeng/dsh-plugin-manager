@@ -18,12 +18,32 @@ import type { Actor } from '@dsh-plugin-manager/plugin-kit'
  */
 export const PARTICIPANT_PROTOCOL = 1
 
-export type ParticipantStatus = 'completed' | 'waiting' | 'cancelled' | 'failed'
+/**
+ * 一轮协作的结论状态。
+ *
+ * `waiting` 与 `external_pending` 都是「没跑完」，但不能混：前者等着用户在这里补一句话，
+ * 后者是材料已经交回、剩下的事在别处办。合并成一个值之后，群组就没有依据告诉牛马大总管
+ * 「这一轮能不能结束、能不能开新活」，只能靠猜。
+ */
+export type ParticipantStatus = 'completed' | 'waiting' | 'cancelled' | 'failed' | 'external_pending'
 export interface ParticipantArtifact {
   readonly title: string
   /** 只允许本站插件内的路径，由发布方经过权限检查后提供。 */
   readonly path: string
   readonly kind: 'conversation' | 'draft' | 'confirmation' | 'report'
+}
+
+/**
+ * 材料已交回、还有事在别处等着办。
+ *
+ * 与 `status: 'waiting'` 的区别是「等谁」：这里等的是用户在**原页面**采用、确认或发布，
+ * 不是在当前这条协作通道里补一句话。所以这一轮可以结束，但也不能算成功。
+ */
+export interface ParticipantExternalPending {
+  /** 在等什么、由谁处理。这句会直接显示给用户。 */
+  readonly reason: string
+  /** 外部处理完之后可以做什么，可空。 */
+  readonly next?: string
 }
 export interface ParticipantProgress {
   readonly kind: 'status' | 'message' | 'delta' | 'thinking'
@@ -63,6 +83,15 @@ export interface ParticipantResult {
   readonly conversationId: string
   readonly text: string
   readonly artifacts?: readonly ParticipantArtifact[]
+  /**
+   * `status: 'waiting'` 时要用户回答的问题。
+   *
+   * 与 `text` 分开：`text` 是已经拿到的阶段性成果，这个是等着用户回话的那一句。缺了它，
+   * 群组会给用户一个没有问题的「等待」，用户不知道该回什么。
+   */
+  readonly question?: string
+  /** `status: 'external_pending'` 时**必须**给出，理由见 {@link ParticipantExternalPending}。 */
+  readonly externalPending?: ParticipantExternalPending
 }
 export interface AgentParticipant {
   readonly protocol: typeof PARTICIPANT_PROTOCOL

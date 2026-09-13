@@ -9,14 +9,19 @@
  * | `brief`（含 `goal`） | `message` |
  * | `actor` | `actor`（原样传，不从 `owner` 字符串重建） |
  * | `onProgress` | `onProgress`（形态转换） |
- * | `completed` / `waiting` / `cancelled` / `failed` | `succeeded` / `waiting_user` / `cancelled` / `failed` |
+ * | `succeeded` / `waiting_user` / `external_pending` / `cancelled` / `failed` | `completed` / `waiting` / `external_pending` / `cancelled` / `failed` |
+ * | `artifacts` / `externalPending` / `question` | 同名字段原样透传 |
  *
  * 为什么需要这一层：`AgentParticipant` 是给协作页面用的（一轮活怎么跑、拿到什么结论），
  * `ButlerAgentExecutor` 是给牛马大总管用的（派活、收结论、追问）。两者描述的是同一件事，
  * 但归属不同插件，所以由群组在中间翻译，双方都不必知道对方的存在。
+ *
+ * 这一层只翻译，**不做业务判断**：状态是什么就报什么，声明缺了就不传，绝不从 `text` 的措辞
+ * 里推断「它大概是想结束这一轮」。
  */
 
 import type {
+  AgentArtifact,
   AgentDispatchRequest,
   AgentExecutionPhase,
   AgentExecutionProgress,
@@ -24,7 +29,7 @@ import type {
   AgentExecutor,
   AgentReplyRequest,
 } from '@dsh-plugin-manager/plugin-kit'
-import type { AgentParticipant } from '../packages/common/src/participant.ts'
+import type { AgentParticipant, ParticipantArtifact, ParticipantResult } from '../packages/common/src/participant.ts'
 import type { AgentManifest } from './agents/registry.ts'
 
 /**
@@ -79,13 +84,43 @@ export function onButlerExecutors(
   return ctx.on(BUTLER_EXECUTORS_EVENT, accept => accept(executor), { global: true })
 }
 
-/** 参与者状态到牛马大总管状态的映射。四种状态一一对应，不做归并。 */
+/** 参与者状态到牛马大总管状态的映射。五种状态一一对应，不做归并。 */
 function toButlerStatus(status: string): ButlerDispatchResult['status'] {
   switch (status) {
     case 'completed': return 'succeeded'
     case 'waiting': return 'waiting_user'
+    case 'external_pending': return 'external_pending'
     case 'cancelled': return 'cancelled'
+    // 认不出来的状态按失败处理：当成成功会把一次没跑完的活报成成果。
     default: return 'failed'
+  }
+}
+
+/**
+ * 材料的字段映射。
+ *
+ * 参与者的 `kind` 是它自己的有限集合，协调方的 `kind` 是开放的字符串；这里原样搬过去，
+ * 不替对方归并成几类 —— 分类的含义只有发布方清楚。
+ */
+function toButlerArtifacts(artifacts: readonly ParticipantArtifact[]): AgentArtifact[] {
+  return artifacts.map(artifact => ({ title: artifact.title, path: artifact.path, kind: artifact.kind }))
+}
+
+/**
+ * 结论的公共部分：状态、正文、会话、材料，以及两种等待原因各自的声明。
+ *
+ * **不解析 `text` 猜状态。** 参与者说 `external_pending` 就是 `external_pending`，说
+ * `waiting` 就是 `waiting_user`；缺声明时宁可少传一个字段，也不从文案里推断「它大概是想
+ * 让我结束这一轮」。协调方那边同样是「没有明确声明就不动」。
+ */
+function toButlerResult(result: ParticipantResult): ButlerDispatchResult {
+  return {
+    status: toButlerStatus(result.status),
+    summary: result.text,
+    conversationId: result.conversationId,
+    ...(result.question === undefined ? {} : { question: result.question }),
+    ...(result.artifacts === undefined ? {} : { artifacts: toButlerArtifacts(result.artifacts) }),
+    ...(result.externalPending === undefined ? {} : { externalPending: result.externalPending }),
   }
 }
 
@@ -138,13 +173,7 @@ export function executorFor(manifest: AgentManifest, participant: AgentParticipa
         signal: request.signal,
         onProgress: update => request.onProgress?.(toButlerProgress(asProgressFields(update))),
       })
-      return {
-        status: toButlerStatus(result.status),
-        summary: result.text,
-        conversationId: result.conversationId,
-        // 参与者的 `text` 同时承载「阶段性成果」与「等待回答的问题」，而牛马大总管把两者分开。
-        // 没有单独的 question 字段可用时，如实留空而不是把成果当作问题重复一遍。
-      }
+      return toButlerResult(result)
     },
     async reply(request) {
       // 参与者的追问走同一条 run：它按 conversationId 续发，不需要另一套协议。
@@ -156,11 +185,7 @@ export function executorFor(manifest: AgentManifest, participant: AgentParticipa
         signal: request.signal,
         onProgress: update => request.onProgress?.(toButlerProgress(asProgressFields(update))),
       })
-      return {
-        status: toButlerStatus(result.status),
-        summary: result.text,
-        conversationId: result.conversationId,
-      }
+      return toButlerResult(result)
     },
   }
 }

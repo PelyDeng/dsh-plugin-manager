@@ -120,6 +120,65 @@ describe('执行入口的字段翻译', () => {
     expect((await executor.dispatch(request())).status).toBe('failed')
   })
 
+  it('两种「没跑完」各自对应，不合并', async () => {
+    // 等着用户补一句话，和材料已交回、剩下的事在别处办，是两件不同的事：
+    // 前者必须等回话，后者可以结束这一轮。合并之后上游只能靠猜。
+    const asking = executorFor(manifest, stubParticipant({ status: 'waiting', question: '用上周还是本周的数据？' }))
+    const asked = await asking.dispatch(request())
+    expect(asked.status).toBe('waiting_user')
+    expect(asked.question).toBe('用上周还是本周的数据？')
+
+    const external = executorFor(manifest, stubParticipant({
+      status: 'external_pending',
+      externalPending: { reason: '候选稿已交回，须在原页面采用', next: '采用之后可以再派一轮' },
+    }))
+    const pending = await external.dispatch(request())
+    expect(pending.status).toBe('external_pending')
+    expect(pending.externalPending).toEqual({ reason: '候选稿已交回，须在原页面采用', next: '采用之后可以再派一轮' })
+  })
+
+  it('旧版本参与者只说 waiting 时，仍然按等着回话处理', async () => {
+    // 旧的子包没有 external_pending 这个值，也没有声明字段。它说 waiting 就是等着回话，
+    // 不能因为结果里带着材料就自行升级成「外部待办」。
+    const executor = executorFor(manifest, stubParticipant({
+      status: 'waiting',
+      artifacts: [{ kind: 'draft', title: '查看候选稿', path: '/blog?conversationId=c' }],
+    }))
+    const result = await executor.dispatch(request())
+    expect(result.status).toBe('waiting_user')
+    expect(result.externalPending).toBeUndefined()
+  })
+
+  it('材料引用原样带过去，不归并种类', async () => {
+    const artifacts = [
+      { kind: 'confirmation', title: '在博客核对并确认', path: '/blog?conversationId=c' },
+      { kind: 'report', title: '查看本周报表', path: '/blog/report?id=7' },
+    ] as const
+    const executor = executorFor(manifest, stubParticipant({ status: 'external_pending', artifacts: [...artifacts], externalPending: { reason: '等确认' } }))
+    const result = await executor.dispatch(request())
+    expect(result.artifacts).toEqual([...artifacts])
+  })
+
+  it('参与者没给声明时，桥接不替它编一份', async () => {
+    const executor = executorFor(manifest, stubParticipant({ status: 'external_pending' }))
+    // 一路透传到上游，由上游按「声明缺失」处理；这一层只做翻译，不补字段。
+    expect((await executor.dispatch(request())).externalPending).toBeUndefined()
+  })
+
+  it('reply 路径同样透传材料与声明', async () => {
+    const executor = executorFor(manifest, stubParticipant({
+      status: 'external_pending',
+      artifacts: [{ kind: 'draft', title: '查看候选稿', path: '/blog?conversationId=c' }],
+      externalPending: { reason: '还在等采用' },
+    }))
+    const result = await executor.reply?.({
+      taskId: 'task-1', subtaskId: 'sub-1', text: '再改一版', decideByAgent: false,
+      owner: 'user:alice', actor, signal: new AbortController().signal,
+    })
+    expect(result?.status).toBe('external_pending')
+    expect(result?.externalPending?.reason).toBe('还在等采用')
+  })
+
   it('结论与会话 id 原样带回', async () => {
     const executor = executorFor(manifest, stubParticipant({ text: '今天 12 辆', conversationId: 'conv-9' }))
     const result = await executor.dispatch(request())
