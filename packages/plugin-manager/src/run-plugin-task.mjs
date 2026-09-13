@@ -2,15 +2,43 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseOptions, sourcePlugins } from './plugins.mjs';
-import { runPnpm } from './pnpm.mjs';
+import { runPnpm, runPnpmAsync } from './pnpm.mjs';
 export { runPnpm } from './pnpm.mjs';
+
+const TASK_LABELS = { build: '构建', check: '检查', clean: '清理' };
+const tasks = action => (action === 'check' ? ['build', 'check'] : [action]);
+const taskLabel = (task, plugin) => `${TASK_LABELS[task]}插件 ${plugin.id}`;
+const taskArgs = (plugin, task) => [...(plugin.directory === undefined ? ['--ignore-workspace'] : []), 'run', task];
+
+/**
+ * 回放被捕获的构建输出，按插件加前缀。
+ *
+ * 并行构建时几个插件的输出会同时产生，原样写出会互相穿插；加了前缀，日志里每一行都能看出
+ * 属于哪个插件，也不用为每个插件单独开日志文件。
+ */
+export function replayPluginOutput(id, { stdout = '', stderr = '' } = {}) {
+  const prefix = `[${id}] `;
+  for (const [text, write] of [[stdout, line => process.stdout.write(line)], [stderr, line => process.stderr.write(line)]]) {
+    if (!text.trim()) continue;
+    for (const line of text.split('\n')) if (line) write(`${prefix}${line}\n`);
+  }
+}
 
 /** Execute build once before checks; step optionally wraps each synchronous task for progress display. */
 export function runPluginTask(root, plugin, action, step = (_label, run) => run()) {
-  for (const task of action === 'check' ? ['build', 'check'] : [action]) {
+  for (const task of tasks(action)) {
     console.log(`[${plugin.id}] pnpm ${task}`);
-    step(`${({ build: '构建', check: '检查', clean: '清理' })[task]}插件 ${plugin.id}`, () =>
-      runPnpm([...(plugin.directory === undefined ? ['--ignore-workspace'] : []), 'run', task], resolve(root, plugin.directory ?? '.')));
+    step(taskLabel(task, plugin), () => runPnpm(taskArgs(plugin, task), resolve(root, plugin.directory ?? '.')));
+  }
+}
+
+/** 与 {@link runPluginTask} 同一条路径，但走异步进程，好让调用方并行调度多个插件。 */
+export async function runPluginTaskAsync(root, plugin, action, step = (_label, run) => run()) {
+  for (const task of tasks(action)) {
+    console.log(`[${plugin.id}] pnpm ${task}`);
+    await step(taskLabel(task, plugin), async () => {
+      replayPluginOutput(plugin.id, await runPnpmAsync(taskArgs(plugin, task), resolve(root, plugin.directory ?? '.')));
+    });
   }
 }
 

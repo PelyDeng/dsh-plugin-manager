@@ -46,7 +46,7 @@ export async function main(args = process.argv.slice(2)) {
     process.exitCode = await sourceRelease({ root: options.root, args: route ? [route, ...forwarded] : forwarded, defaultInputKind: 'archives' });
   }
   else if (['list', 'build', 'check', 'clean'].includes(action)) (await import('./run-plugin-task.mjs')).main(args);
-  else if (action === 'pack') (await import('./package-plugins.mjs')).main(rest);
+  else if (action === 'pack') await (await import('./package-plugins.mjs')).main(rest);
   else if (action === 'compose-release') (await import('./compose-release.mjs')).main(rest);
   else if (action === 'catalog') (await import('./plugins.mjs')).main(rest);
   else if (action === 'verify-package') (await import('./verify-package.mjs')).main(rest);
