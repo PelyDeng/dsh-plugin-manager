@@ -68,6 +68,16 @@ function fixture(t) {
   return { root, put, pack, calls, execute, record, setFramework, setFail: value => { fail = value; } };
 }
 
+test('a release renders and checks the container configuration in one pass before stopping', t => {
+  const f = fixture(t);
+  f.setFail(null);
+  assert.equal(releaseSite({ root: f.root }, f.execute).status, 'ready');
+  // check-compose 内部先渲染再核验，已是 render 那一步的超集；再单独渲染一次等于把同一份
+  // 清单加载与渲染做两遍，还会在每次操作里留下一个没人读的 preflight 目录。
+  const compose = f.calls.map(call => call[2]).filter(action => ['render-compose', 'check-compose', 'apply-compose'].includes(action));
+  assert.deepEqual(compose, ['check-compose', 'apply-compose']);
+});
+
 for (const priorKind of ['current', 'schema3 archives', 'schema3 source', 'mismatched image', 'mismatched candidate', 'mismatched operation', 'mismatched manifest', 'schema2']) test(`framework summary identifies a ${priorKind} deployment before preflight`, t => {
   const f = fixture(t), messages = [];
   t.mock.method(console, 'log', message => messages.push(message));

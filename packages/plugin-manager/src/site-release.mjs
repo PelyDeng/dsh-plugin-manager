@@ -224,7 +224,9 @@ export function releaseSite({ root, config, resume = false, recover = false, dat
       if (!same(record.sitePaths, Object.fromEntries(Object.keys(sitePaths).map(field => [field, savedDeployment[field]])))) throw new Error('冻结候选的持久路径发生变化，保留现场。');
     }
     materializeSiteDefaults(record);
-    step(resume ? '恢复部署配置' : '准备部署配置', process.execPath, [cli, 'render-compose', '--root', root, '--config', record.candidatePath, '--output', resolve(operation, `preflight-${randomUUID()}`)]);
+    // `check-compose` 内部先渲染再核验，本身就是渲染那一步的超集（配置、patch、凭据、权限、
+    // 挂载、镜像身份都查），而且同样发生在停旧服务之前；再单独跑一次 render 只是把同一份
+    // 渲染与清单加载做两遍，并在每次操作里留下一个没人读的 preflight 目录。
     step('核验容器挂载与权限', process.execPath, [cli, 'check-compose', '--root', root, '--config', record.candidatePath]);
     verifySiteInputs(record);
     if (record.previous && !(record.stopComplete ?? record.backupComplete)) {

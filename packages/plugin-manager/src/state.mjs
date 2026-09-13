@@ -1,7 +1,8 @@
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { isDeepStrictEqual } from 'node:util';
 export const nativeTar = join(process.env.SystemRoot ?? process.env.SYSTEMROOT ?? '/', 'System32', 'tar.exe');
 
@@ -17,6 +18,29 @@ export function readArchive(archive, args, maxBuffer = 32 * 1024 * 1024) {
     if (result.status !== 0) throw new Error(`无法读取插件归档。${result.stderr.toString('utf8').trim()}`);
     return result.stdout;
   } finally { closeSync(fd); }
+}
+
+/**
+ * 一次解压取出名单里的成员，返回读取器；用完调用 `close` 删除私有临时目录。
+ *
+ * 逐个成员各跑一次 `tar -xzOf` 时，每次都要把整包从头解压一遍：4 个插件合计 60 个校验
+ * 文件，`loadRelease` 因此固定花掉约 12 秒，而一次发布要加载三遍。改成一次解压。
+ *
+ * 调用方必须先核验成员名（落在 `package/` 内、不含 `..` 与反斜杠、不是私密路径）并拒绝
+ * 包内的符号链接与硬链接；本函数只按名单取成员，不整包落盘。
+ */
+export function openArchiveMembers(archive, members) {
+  const directory = mkdtempSync(join(tmpdir(), 'dsh-members-'));
+  try {
+    readArchive(archive, ['-xzf', '-', '-C', directory, ...members]);
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
+  return {
+    read: member => readFileSync(join(directory, ...member.split('/'))),
+    close: () => rmSync(directory, { recursive: true, force: true }),
+  };
 }
 
 export const STATE = '.deepseek-plugin-state.json';
