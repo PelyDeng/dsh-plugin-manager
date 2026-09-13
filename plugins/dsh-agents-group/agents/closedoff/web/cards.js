@@ -2,9 +2,9 @@
  * 结果卡片层：把工具返回的业务数据渲染成「结果分组 + 卡片」，并维护一份按
  * 「回答 + 工具调用」复合键的缓存。
  *
- * 页面是经典脚本，卡片层另外要用到页面的几件事：元素构造 `el`、结论渲染 `renderAnalysis`、
+ * 卡片层不读全局，另外要用到页面的几件事：元素构造 `el`、结论渲染 `renderAnalysis`、
  * 滚动到底 `scrollBottom`，以及轨迹视图（它创建在卡片层之后，所以交进来的是取用函数而不是
- * 快照）。它们由 app.js 在 createCards 时传入，卡片层不读全局。
+ * 快照）。它们由 app.js 在 createCards 时传入。
  *
  * 对外只有这些入口：复合键 `key`、缓存 `put`／`get`／`drop`／`reset`，以及工具行与卡片的
  * 渲染函数；`updateSectionState`／`appendFieldList`／`renderSummaryCard` 仍是内部实现。
