@@ -2318,7 +2318,7 @@ export class ButlerConsole {
     if (!stopped && pendingInput && (taskState === 'completed' || taskState === 'partial')) {
       yield {
         type: 'chat', role: 'butler',
-        text: '老板又补了一句，这一轮先不结账 —— 等新的说法处理完再给你结论。',
+        text: '老大又补了一句，这一轮先不结账 —— 等新的说法处理完再给你结论。',
         time: Date.now(),
       }
       return
@@ -2376,7 +2376,7 @@ export class ButlerConsole {
       this.store.setTaskState(taskId, 'running')
       yield {
         type: 'chat', role: 'butler',
-        text: '老板又补了一句，刚那份结论先当草稿 —— 等新的说法处理完再给你结论。',
+        text: '老大又补了一句，刚那份结论先当草稿 —— 等新的说法处理完再给你结论。',
         time: Date.now(),
       }
       return
