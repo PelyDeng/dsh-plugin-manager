@@ -332,6 +332,21 @@ describe('封闭化协作适配', () => {
     expect(published).not.toContain('bd7f5c2e-91aa-4f30-9c31-8ee0a5d0c001')
   })
 
+  it('没有边界字符的内容压到边界或回合结束才发布，不发可能被改写的片段', async () => {
+    const f = fixture()
+    const pending = f.participant.run(f.request)
+    await vi.waitFor(() => expect(f.manager.followup).toHaveBeenCalledOnce())
+    f.stream({ type: 'start', attemptId: 'a', revision: 1, turn: 1, step: 1 })
+    f.stream({ type: 'chunk', attemptId: 'a', revision: 2, index: 0, time: 120, chunk: { type: 'text-delta', index: 0, text: '{"data":{"total":12' } })
+    // 这一段里没有任何边界字符：先发出去就可能被后续增量改写成别的脱敏结果，所以压住不发。
+    expect(f.deltas()).toEqual([])
+    f.stream({ type: 'chunk', attemptId: 'a', revision: 3, index: 1, time: 130, chunk: { type: 'text-delta', index: 0, text: '}}' } })
+    f.emit('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: '{"data":{"total":12}}' }] } })
+    f.end()
+    expect(await pending).toMatchObject({ status: 'completed', text: '{"data":{"total":12}}' })
+    expect(f.deltas().map(value => value.delta).join('')).toBe('{"data":{"total":12}}')
+  })
+
   it('会话打开期间取消、撤权或卸载后，迟到会话不发链接或接续', async () => {
     for (const action of ['cancel', 'revoke', 'close']) {
       const f = fixture()

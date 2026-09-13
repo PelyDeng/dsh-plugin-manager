@@ -46,7 +46,8 @@ function publishedLength(text: string): number {
  * 把一轮回答的正文增量交给协作入口。
  *
  * 发布的是与最终正文同一套脱敏结果，并且只发布不会再被后续增量改写的部分 —— 先发后改
- * 就得撤回，页面上的字会来回跳。回合结束补发剩余正文。
+ * 就得撤回，页面上的字会来回跳。代价是整段没有边界字符的内容（例如一串 JSON）会等到
+ * 下一个边界或回合结束才出现：宁可以整段出现，也不发布可能被改写的片段。回合结束补发剩余正文。
  */
 export function createVisibleStream(publish: (text: string) => void) {
   let raw = ''
