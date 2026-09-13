@@ -276,7 +276,7 @@ function memberMessage(agentId, handle) {
     footer,
     body: '',
     progress: null,
-    think: { node: think, preview: thinkPreview, body: thinkBody, text: '' },
+    think: { node: think, preview: thinkPreview, body: thinkBody },
   }
   state.bubbles.set(handle, view)
   return view
@@ -290,7 +290,6 @@ function memberMessage(agentId, handle) {
  */
 function setThinking(view, thinking) {
   if (view === undefined) return
-  view.think.text = thinking
   view.think.node.hidden = false
   view.think.body.textContent = thinking
   const lines = thinking.split('\n').map(line => line.trim()).filter(line => line !== '')
