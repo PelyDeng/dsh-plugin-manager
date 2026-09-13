@@ -17,7 +17,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { actorKey, createPluginHttp, isAccessError, onRevoked, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { conversationModelCatalog } from '@dsh-plugin-manager/plugin-kit/models'
 import { listAgentCards } from './agents.ts'
-import type { ButlerConsole, RunWatch, StartedRun } from './butler.ts'
+import { TRANSCRIPT_MAX_ITEMS, type ButlerConsole, type RunWatch, type StartedRun } from './butler.ts'
 import type { Config } from './config.ts'
 import { canResume } from './event-log.ts'
 
@@ -181,6 +181,16 @@ function cursorField(value: string): number {
   if (text === '') return 0
   const parsed = Number(text)
   if (!Number.isSafeInteger(parsed) || parsed < 0) throw new HttpError(400, '字段 after 必须是从 0 开始的整数', 'invalid_field')
+  return parsed
+}
+
+/** 解析对话正文的每页条数；缺省一页 50。 */
+function transcriptLimit(value: string | null): number {
+  if (value === null || value.trim() === '') return 50
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > TRANSCRIPT_MAX_ITEMS) {
+    throw new HttpError(400, `字段 limit 必须是 1 到 ${TRANSCRIPT_MAX_ITEMS} 之间的整数`, 'invalid_field')
+  }
   return parsed
 }
 
@@ -507,6 +517,28 @@ export async function installWeb(
     handler: (request, response, actor) => {
       method(request, 'GET')
       respond(actor, response, 200, console_.overview(actor))
+    },
+  }))
+
+  /**
+   * 对话正文：按当前登录身份读出这段会话里用户可见的消息。
+   *
+   * 第二入口要能拿到老板的原话与管家的答复才真的接得上；只有任务级摘要，跨入口继续处理
+   * 就没有依据。正文**不另存一份** —— 它本来就是 DSH 官方会话日志的内容，这里只是鉴权后
+   * 读出来；日志不存在或读不到时如实报错，不拿任务摘要冒充一段完整对话。
+   */
+  ctx.effect(() => register({
+    kind: 'exact',
+    path: `${config.routePrefix}/transcript`,
+    handler: async (request, response, actor) => {
+      method(request, 'GET')
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams
+      const conversationId = (params.get('conversationId') ?? '').trim()
+      if (conversationId === '') throw new HttpError(400, '缺少 conversationId', 'missing_field')
+      const after = cursorField(params.get('after') ?? '')
+      const limit = transcriptLimit(params.get('limit'))
+      access.assert(actor)
+      respond(actor, response, 200, await console_.transcript(conversationId, actor, after, limit))
     },
   }))
 

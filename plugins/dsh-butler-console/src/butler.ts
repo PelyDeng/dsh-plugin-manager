@@ -23,7 +23,7 @@ import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
-import type {} from '@deepseek-ai/dsh-session-persistence'
+import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
@@ -305,6 +305,42 @@ const WAITING_EXPIRED = '等太久了，这次等待已经过期；材料都还�
 
 /** 等待超时后任务级的失败说明，比子任务那句短。 */
 const WAITING_EXPIRED_TASK = '等用户回话超时，材料保留'
+
+/**
+ * 读对话正文时往前多读多少个事件，用来重建「这条消息属于第几回合」。
+ *
+ * `assistant/message` 自带回合号，`user/message` 不带 —— 它的回合得从前面那条
+ * `turn/start` 推出来。翻页从回合中间开始时，不往前看一段就认不出归属，而往前读的成本
+ * 只是一个回合的事件量。
+ */
+const TRANSCRIPT_LEAD_EVENTS = 200
+
+/** 一次最多返回多少条对话；也是 `/transcript` 的 `limit` 上限。 */
+export const TRANSCRIPT_MAX_ITEMS = 200
+
+/** 对话里的一条用户可见消息。 */
+export interface TranscriptItem {
+  /** 事件序号：稳定标识，也是翻页游标。 */
+  readonly seq: number
+  /** DSH 的消息标识，跨表示形式稳定。 */
+  readonly messageId: string
+  /** `butler` 就是牛马大总管自己的答复。 */
+  readonly role: 'user' | 'butler'
+  readonly text: string
+  readonly time: number
+  /** 这条消息属于第几回合；认不出来时为 null（只在往前看不着的边界上出现）。 */
+  readonly turn: number | null
+  /** 这一轮被中途打断，正文是已经流出的那部分。 */
+  readonly interrupted?: true
+}
+
+/** 一页对话正文。 */
+export interface TranscriptPage {
+  readonly conversationId: string
+  readonly items: readonly TranscriptItem[]
+  /** 下一页的游标；没有更多时为 null。 */
+  readonly nextAfter: number | null
+}
 
 /** 请求指纹：把参与判定的字段压成一个稳定的摘要。 */
 function digestOf(parts: readonly string[]): string {
@@ -1103,6 +1139,111 @@ export class ButlerConsole {
     if (timer === undefined) return
     clearTimeout(timer)
     this.waitingTimers.delete(key)
+  }
+
+  /**
+   * 读一段对话正文。
+   *
+   * 正文**不在这里另存一份**：它一直是 DSH 官方会话日志的内容，这里只是按当前登录身份
+   * 鉴权之后读出来。第二入口需要老板的原话和管家的答复才能真的接着处理，光有任务级摘要
+   * 不够 —— 那也是这个接口存在的理由。
+   *
+   * 只返回用户可见的东西：真人输入的用户消息与已提交的助手答复。注入的上下文、系统提示词、
+   * 工具调用与未提交的尝试都不出声，推理内容同样不出。
+   *
+   * 日志不存在或读不到时**如实报错**，不拿任务摘要冒充一段完整对话：那会让客户端以为
+   * 自己看到的是全部。
+   */
+  async transcript(conversationId: string, actor: Actor, after: number, limit: number): Promise<TranscriptPage> {
+    this.access.assert(actor)
+    const id = this.validateId(conversationId)
+    this.store.assertOwner(id, actor)
+
+    let handle: SessionHandle
+    try {
+      // 只读打开：不取写所有权，因此跟正在跑的那一轮并存，也不会影响它。
+      handle = await this.ctx.sessionPersistence.open(SessionId(id), 'read')
+    } catch (error) {
+      if (isNotFound(error)) {
+        throw new AccessError(404, '这次会话还没有可读的对话正文', 'transcript_not_found')
+      }
+      console.error(`butler-console: 读取对话正文失败：${visibleError(error, 300)}\n${stackOf(error)}`)
+      throw new AccessError(503, '对话正文暂时读不到', 'transcript_unavailable')
+    }
+
+    try {
+      // 往前多读一段只为重建回合号；真正返回的仍是 seq >= after 的那些。
+      const lead = Math.max(0, after - TRANSCRIPT_LEAD_EVENTS)
+      const want = (after - lead) + limit * 8
+      const { events } = await handle.read(lead, want)
+      const { items, cursor, full } = this.readTranscript(events, after, limit)
+      // 「还有没有下一页」要看两件事：这一页是不是被 limit 截断的，以及事件本身读完了没有。
+      // 只看事件数会误判 —— 日志很短但 limit 更小时，明明还有可见消息却报到底了。
+      const exhausted = events.length < want && !full
+      return { conversationId: id, items, nextAfter: exhausted ? null : cursor }
+    } finally {
+      await handle.close()
+    }
+  }
+
+  /**
+   * 从一段事件里挑出用户可见的消息。
+   *
+   * `after` 之前的只用来认回合号，不进结果 —— 翻页从回合中间开始时，没有那一段就认不出
+   * 这条消息属于哪一轮。游标始终往前走，即使这一段里一条可见消息都没有，客户端也不会
+   * 卡在同一个位置反复读。
+   *
+   * `full` 表示这一页是被 `limit` 截断的：后面还有可见消息，调用方不能当成读完了。
+   */
+  private readTranscript(
+    events: readonly SessionEvent[],
+    after: number,
+    limit: number,
+  ): { items: TranscriptItem[]; cursor: number; full: boolean } {
+    const items: TranscriptItem[] = []
+    let turn: number | null = null
+    let cursor = after
+    let full = false
+
+    for (const event of events) {
+      if (event.type === 'turn/start') {
+        turn = event.data.turn
+        continue
+      }
+      if (event.type !== 'user/message' && event.type !== 'assistant/message') continue
+      // 认回合号用的那一段不进结果，但它已经把 turn 记下来了。
+      if (event.seq < after) continue
+      if (items.length >= limit) { full = true; break }
+
+      const item = this.transcriptItem(event, turn)
+      if (item !== null) items.push(item)
+      cursor = event.seq + 1
+    }
+
+    return { items, cursor, full }
+  }
+
+  /** 把一条会话事件翻译成对话正文里的条目；不是用户可见内容时返回 null。 */
+  private transcriptItem(
+    event: SessionEvent<'user/message'> | SessionEvent<'assistant/message'>,
+    turn: number | null,
+  ): TranscriptItem | null {
+    if (event.type === 'user/message') {
+      // 只认真人输入。注入的上下文、文件变更通知、目标续跑也都是 user 角色，但它们是
+      // 宿主塞给模型的背景，出现在对话正文里会让人以为老板说过这些话。
+      if (event.data.source.kind !== 'user') return null
+      const text = textOf(event.data.content)
+      if (text.trim() === '') return null
+      return { seq: event.seq, messageId: String(event.data.id), role: 'user', text, time: event.time, turn }
+    }
+    // 只取已提交的助手答复；`assistant/attempt` 是没进过历史面的尝试，不该出现在对话里。
+    const text = textOf(event.data.message.content)
+    if (text.trim() === '') return null
+    return {
+      seq: event.seq, messageId: String(event.data.message.id), role: 'butler',
+      text, time: event.time, turn: event.data.turn,
+      ...(event.data.interrupted === true ? { interrupted: true as const } : {}),
+    }
   }
 
   /**

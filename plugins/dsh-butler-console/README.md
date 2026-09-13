@@ -124,6 +124,7 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | GET | `/butler` | 群聊页面 |
 | POST | `/butler/chat` | 派活，SSE 事件流 |
 | GET | `/butler/events` | **只读**订阅一个会话最近一轮的事件，可多入口同时观察 |
+| GET | `/butler/transcript` | 按当前登录身份读对话正文（用户原话与管家答复），分页可续 |
 | POST | `/butler/reply` | 回应正在等你的成员，SSE 事件流 |
 | POST | `/butler/stop` | 喊停当前这一轮，可带 `taskId` 精确到某个任务 |
 | GET | `/butler/members` | 群成员（含别名、能力声明与当前占用 `busy`） |
@@ -143,6 +144,22 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 
 牛马大总管自己的发言也是边收边上的：`chat_delta` 开一条气泡并逐段追加，回合结束时到达的
 `chat` 用它落定后的正文**替换**预览，所以被重试掉的那一版不会留在页面上。
+
+### 对话正文从哪儿读
+
+`/butler/task` 只给任务级记录，跨入口接着处理还需要老板的原话与管家的答复，所以有 `/butler/transcript`：
+
+```http
+GET /butler/transcript?conversationId=…&after=0&limit=50
+→ {"conversationId":"butler-web-…","items":[
+     {"seq":3,"messageId":"msg-…","role":"user","text":"帮我写一篇…","time":1757…,"turn":1},
+     {"seq":5,"messageId":"msg-…","role":"butler","text":"我先让博客起一版。","time":1757…,"turn":1}
+   ],"nextAfter":6}
+```
+
+正文**不另存一份** —— 它一直存在 DSH 官方会话日志里，这里只是按当前登录身份读出来。只出用户可见的内容：真人输入的用户消息与已提交的助手答复；注入的上下文、系统提示词、工具调用、没进过历史面的尝试都不出声。`seq` 是翻页游标，`messageId` 是稳定标识，`turn` 是回合号（`user/message` 自己不带，服务端从前面那条 `turn/start` 推出来，所以翻页从回合中间开始也认得）。
+
+读不到时如实报错：`transcript_not_found`（官方日志里没有这段会话）、`transcript_unavailable`（暂时读不动）。**不拿任务摘要冒充一段完整对话** —— 那会让调用方以为看到的就是全部。
 
 ### 失败都带一个稳定的码
 
