@@ -136,6 +136,10 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
      的工具会全部对它自己不可见。
    - `participant`：协作参与者（`AgentParticipant`）。群组把它桥接成牛马大总管的执行入口；漏了
      这位 Agent 在牛马大总管名单里会变成「不可调度」，牛马大总管于是不会把专业活派给它。
+     参与者的进度由 `src/butler-bridge.ts` 翻译：状态正文从 `text` 改名成对方必读的 `stage`
+     （少了它对方会拿 undefined 去压平空白，整轮子任务当场失败），`delta` 与 `thinking` 原样搬。
+     两边靠**字段名**对齐、不互相导入源码，所以改任一侧的字段都要同时改桥接与
+     `tests/butler-progress-contract.test.ts`。
 5. 在 `src/index.ts` 的 `loadAgent()` 里加一个 `case`。
 6. 跑 `pnpm install`（写入 workspace 锁）、`pnpm check --plugins "agents-group"`、`pnpm test`。
 7. **打包一次并检查归档**（`pnpm package --plugins "agents-group"`）：子包在运行时读取的文件

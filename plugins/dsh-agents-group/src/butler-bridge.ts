@@ -57,10 +57,17 @@ export interface ButlerReplyRequest {
   readonly signal: AbortSignal
 }
 
+/**
+ * 牛马大总管的进度契约。
+ *
+ * 与 `plugins/dsh-butler-console/src/protocol.ts` 的 `ButlerProgressUpdate` 字段一一对齐，
+ * 但不导入它的类型：牛马大总管是独立插件，群组不该编译期依赖它的源码。契约靠**字段名**
+ * 对齐，所以这里只声明对方真正读取的字段 —— 多写一个对方不读的字段（例如 `text`）会让人
+ * 以为它有用，少写一个对方必读的字段（例如 `stage`）会让整轮子任务在对方那里抛错。
+ */
 export interface ButlerProgressUpdate {
-  readonly kind: string
-  readonly stage?: string
-  readonly text?: string
+  /** 页面显示的状态行。对方按必填读取，所以这里也必填。 */
+  readonly stage: string
   readonly phase?: string
   readonly tool?: string
   readonly delta?: string
@@ -117,17 +124,18 @@ function toButlerStatus(status: string): ButlerDispatchResult['status'] {
 /**
  * 进度形态转换。
  *
- * 参与者上报的是 `ParticipantProgress`（阶段 + 可选文本/工具/增量），牛马大总管要的是
- * `ButlerProgressUpdate`。只搬真实存在的字段，不替参与者编造阶段 —— 编造会让页面显示
- * 一个没发生过的协作环节。
+ * 参与者上报的是 `ParticipantProgress`（`text` 是状态或消息正文，外加可选工具与增量），
+ * 牛马大总管要的是 `ButlerProgressUpdate`（`stage` 是状态行）。所以这里做一次**改名**：
+ * `text` → `stage`，并保证它一定是字符串 —— 对方拿它去压平空白，缺字段会直接抛
+ * `Cannot read properties of undefined`，把整轮子任务打成失败（线上出现过）。参与者没给
+ * 正文时给空串：对方自己会把空状态行显示成「干活中」，这里不替它编一个没发生过的阶段。
  */
 function toButlerProgress(progress: Record<string, unknown>): ButlerProgressUpdate {
   const text = typeof progress.text === 'string' ? progress.text : undefined
   const tool = typeof progress.tool === 'string' ? progress.tool : undefined
   const phase = typeof progress.phase === 'string' ? progress.phase : undefined
   return {
-    kind: typeof progress.kind === 'string' ? progress.kind : 'status',
-    ...(text === undefined ? {} : { text }),
+    stage: text ?? '',
     ...(tool === undefined ? {} : { tool }),
     ...(phase === undefined ? {} : { phase }),
     ...(typeof progress.delta === 'string' ? { delta: progress.delta } : {}),

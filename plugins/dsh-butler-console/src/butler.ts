@@ -913,11 +913,14 @@ export class ButlerConsole {
      * - `needsReply` 让子任务进入 `waiting_user`，页面据此给出回复入口。
      */
     const onProgress = (update: ButlerProgressUpdate) => {
+      // `stage` 是另一个插件的事件载荷：这里按跨插件边界处理，缺了按空状态行显示，不拿它
+      // 直接去压平空白 —— 一个展示字段缺值不该把整轮子任务打成 TypeError 失败。
+      const stage = update.stage ?? ''
       if (update.needsReply === true) {
         this.store.setSubtaskState(taskId, subtaskId, 'waiting_user')
-        progress.push(emit('waiting_user', clip(update.detail ?? update.stage, 300), {
+        progress.push(emit('waiting_user', clip(update.detail ?? stage, 300), {
           phase: 'waiting_user',
-          question: clip(update.detail ?? update.stage, 500),
+          question: clip(update.detail ?? stage, 500),
         }))
         return
       }
@@ -929,7 +932,7 @@ export class ButlerConsole {
       }
       const streamed = update.delta !== undefined || update.thinking !== undefined
       if (streamed && update.detail === undefined && update.tool === undefined) return
-      const detail = clip(update.detail ? `${update.stage} · ${update.detail}` : update.stage, 300)
+      const detail = clip(update.detail ? (stage === '' ? update.detail : `${stage} · ${update.detail}`) : stage, 300)
       if (!running) {
         running = true
         this.store.setSubtaskState(taskId, subtaskId, 'running')
@@ -1036,6 +1039,8 @@ export class ButlerConsole {
     const controller = new AbortController()
     const progress = progressQueue()
     const onProgress = (update: ButlerProgressUpdate) => {
+      // 理由同 `dispatchSubtask`：`stage` 来自另一个插件，缺值按空状态行处理。
+      const stage = update.stage ?? ''
       if (update.delta !== undefined && update.delta !== '') {
         progress.push({ type: 'subtask_delta', taskId: input.taskId, id: input.subtaskId, agentId, delta: update.delta, time: Date.now() })
         return
@@ -1047,7 +1052,7 @@ export class ButlerConsole {
       if (update.detail === undefined && update.tool === undefined) return
       progress.push({
         type: 'subtask', taskId: input.taskId, id: input.subtaskId, state: 'running', agentId, displayName,
-        detail: clip(update.detail ? `${update.stage} · ${update.detail}` : update.stage, 300),
+        detail: clip(update.detail ? (stage === '' ? update.detail : `${stage} · ${update.detail}`) : stage, 300),
         ...(update.phase === undefined ? {} : { phase: update.phase }),
         ...(update.tool === undefined ? {} : { tool: update.tool }),
         time: Date.now(),

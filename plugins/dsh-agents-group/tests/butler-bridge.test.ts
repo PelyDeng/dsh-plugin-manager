@@ -147,9 +147,11 @@ describe('执行入口的进度转换', () => {
     return received
   }
 
-  it('搬真实存在的字段', async () => {
+  it('搬真实存在的字段，并把状态正文改名成对方读的 stage', async () => {
     const received = await capture({ kind: 'status', text: '正在查询', tool: 'closedoff_vehicle_track', phase: 'tool' })
-    expect(received[0]).toMatchObject({ text: '正在查询', tool: 'closedoff_vehicle_track', phase: 'tool' })
+    // 牛马大总管读的是 `stage`：正文留在 `text` 里等于没报，对方还会拿 undefined 去压平空白。
+    expect(received[0]).toMatchObject({ stage: '正在查询', tool: 'closedoff_vehicle_track', phase: 'tool' })
+    expect(received[0]).not.toHaveProperty('text')
   })
 
   it('缺的字段不凭空补，也不留 undefined 键', async () => {
@@ -162,21 +164,22 @@ describe('执行入口的进度转换', () => {
 
   it('正文增量原样搬过去，页面才有东西可追加', async () => {
     const received = await capture({ kind: 'delta', delta: '今天共有 ', conversationId: 'conv-1' })
-    expect(received[0]).toMatchObject({ kind: 'delta', delta: '今天共有 ' })
-    // 增量不带正文：把它当消息写下来会把同一段回答记成很多条。
-    expect(received[0]).not.toHaveProperty('text')
+    expect(received[0]).toMatchObject({ delta: '今天共有 ' })
+    // 增量不带状态正文：把它当状态写下来会把同一段回答记成很多条。
+    expect(received[0]).toMatchObject({ stage: '' })
   })
 
   it('思考快照原样搬过去，仍然是覆盖语义而不是增量', async () => {
     const received = await capture({ kind: 'thinking', thinking: '先看今天的通行记录。\n正在生成…' })
-    expect(received[0]).toMatchObject({ kind: 'thinking', thinking: '先看今天的通行记录。\n正在生成…' })
-    expect(received[0]).not.toHaveProperty('text')
+    expect(received[0]).toMatchObject({ thinking: '先看今天的通行记录。\n正在生成…' })
     expect(received[0]).not.toHaveProperty('delta')
   })
 
-  it('kind 缺失时回落到 status，不写 undefined', async () => {
-    const received = await capture({ text: 'x' })
-    expect(received[0]).toMatchObject({ kind: 'status' })
+  it('没有状态正文时 stage 是空串，不写 undefined', async () => {
+    const received = await capture({ kind: 'status' })
+    // 空状态行由对方显示成「干活中」；这里不替它编一个没发生过的阶段。
+    expect(received[0]).toMatchObject({ stage: '' })
+    expect(JSON.stringify(received[0])).not.toContain('undefined')
   })
 
   it('没有 onProgress 时不上报，也不崩', async () => {
