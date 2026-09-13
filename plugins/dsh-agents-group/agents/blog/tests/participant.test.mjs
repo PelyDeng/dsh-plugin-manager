@@ -175,7 +175,7 @@ test('emits one bound native conversation link before sending and preserves its 
   assert.deepEqual(result.artifacts, [artifact])
 })
 
-test('成员发言按增量转给协作入口：同段只发新增，换段整段追加且不重复', async t => {
+test('过程按思考上报：完整覆盖，换段整段追加且不重复', async t => {
   const f = fixture(t); f.auto = false
   const progress = []
   const running = f.provider().run(input({ onProgress: value => progress.push(value) }))
@@ -185,20 +185,27 @@ test('成员发言按增量转给协作入口：同段只发新增，换段整�
   const live = value => { for (const listener of [...f.listeners]) if (listener.id === id) listener.send({ type: 'live', live: value }) }
   live({ text: '先看资料。', reasoning: 'PRIVATE_LIVE_REASONING' })
   live({ text: '先看资料。再核对来源。', reasoning: 'PRIVATE_LIVE_REASONING' })
-  // 下一步重新累积：它不以已发布内容开头，整段追加；页面不该丢掉或重复这段开头。
+  // 下一步重新累积：它不以已发布内容开头，整段追加；过程里不该丢掉这一段的开头。
   live({ text: '结论是甲稿更完整。', reasoning: 'PRIVATE_LIVE_REASONING' })
   live({ text: '结论是甲稿更完整。建议先改标题。', reasoning: 'PRIVATE_LIVE_REASONING' })
   f.complete(id, '结论是甲稿更完整。建议先改标题。')
   const result = await running
-  const deltas = progress.filter(value => value.kind === 'delta').map(value => value.delta)
+  const shots = progress.filter(value => value.kind === 'thinking').map(value => value.thinking)
   assert.equal(result.status, 'completed')
-  assert.deepEqual(deltas, ['先看资料。', '再核对来源。', '结论是甲稿更完整。', '建议先改标题。'])
-  assert.equal(deltas.join(''), '先看资料。再核对来源。结论是甲稿更完整。建议先改标题。')
-  assert.ok(progress.filter(value => value.kind === 'delta').every(value => value.conversationId === undefined))
+  // 思考是**完整覆盖**语义：每条都是到目前为止的全量，页面直接替换整行。
+  assert.deepEqual(shots, [
+    '先看资料。',
+    '先看资料。再核对来源。',
+    '先看资料。再核对来源。结论是甲稿更完整。',
+    '先看资料。再核对来源。结论是甲稿更完整。建议先改标题。',
+  ])
+  // 过程不再按正文发：一旦当正文，气泡里就全是「让我先看看…」，真正的答案被埋在最后。
+  assert.equal(progress.filter(value => value.kind === 'delta').length, 0)
+  assert.ok(progress.filter(value => value.kind === 'thinking').every(value => value.conversationId === undefined))
   assert.doesNotMatch(JSON.stringify(progress), /PRIVATE_LIVE_REASONING/)
 })
 
-test('只带推理的分片把正文基准归零，不重发已经发过的正文', async t => {
+test('只带推理的分片把正文基准归零，下一步的叙述整段保留', async t => {
   const f = fixture(t); f.auto = false
   const progress = []
   const running = f.provider().run(input({ onProgress: value => progress.push(value) }))
@@ -211,10 +218,50 @@ test('只带推理的分片把正文基准归零，不重发已经发过的正�
   live({ text: '今天共有 12 辆车入园。', reasoning: '换一步再看。' })
   f.complete(id, '今天共有 12 辆车入园。')
   await running
-  const deltas = progress.filter(value => value.kind === 'delta').map(value => value.delta)
-  // 归零后这一条整段发；没有归零的话它会被当成「只多了后半段」，页面上的字就缺了开头。
-  assert.deepEqual(deltas, ['今天共有 ', '今天共有 12 辆车入园。'])
-  assert.equal(deltas.join(''), '今天共有 今天共有 12 辆车入园。')
+  const shots = progress.filter(value => value.kind === 'thinking').map(value => value.thinking)
+  // 归零后这一步整段进快照；没有归零的话它会被当成「只多了后半段」，展开时开头就缺了。
+  assert.deepEqual(shots, ['今天共有 ', '今天共有 今天共有 12 辆车入园。'])
+})
+
+test('交回的正文只取该回合最后一条，过程叙述不拼进材料', async t => {
+  const f = fixture(t); f.auto = false
+  const running = f.provider().run(input({ onProgress: () => {} }))
+  await tick()
+  const id = [...f.active.keys()][0]
+  const turn = f.active.get(id)
+  // 真机上一轮的形态：每一步的正文后面都跟着一次工具调用（「让我先看看…」），
+  // 只有最后一条是答案。实测 7 条消息里 6 条是过程叙述，1 条 3890 字才是答案。
+  f.messages.set(id, [
+    { id: 'user-1', role: 'user', requestId: turn.id, text: 'DSH 插件接入要准备哪些声明文件？' },
+    { id: 'step-1', role: 'assistant', text: '让我先探索代码仓库中的插件相关代码和文档。' },
+    { id: 'tool-1', role: 'tool', name: 'blog_search_posts' },
+    { id: 'step-2', role: 'assistant', text: '找到了相关文章！让我读取这篇关于 DSH 插件开发框架的文章：' },
+    { id: 'tool-2', role: 'tool', name: 'blog_read_post' },
+    { id: 'answer', role: 'assistant', text: '## 声明文件清单\n\n- `package.json`\n- `plugin.json`', tail: true },
+  ])
+  f.index.updateRequest(turn.id, { status: 'succeeded' }); f.active.delete(id); f.emit(id)
+  const result = await running
+  assert.equal(result.status, 'completed')
+  assert.equal(result.text, '## 声明文件清单\n\n- `package.json`\n- `plugin.json`')
+  assert.doesNotMatch(result.text, /让我先探索|让我读取/)
+})
+
+test('没有 tail（本轮没跑完）时保留全部已生成内容，不丢东西', async t => {
+  const f = fixture(t); f.auto = false
+  const running = f.provider().run(input({ onProgress: () => {} }))
+  await tick()
+  const id = [...f.active.keys()][0]
+  const turn = f.active.get(id)
+  f.messages.set(id, [
+    { id: 'user-1', role: 'user', requestId: turn.id, text: '写一篇园区安全博客' },
+    { id: 'step-1', role: 'assistant', text: '先看资料。' },
+    { id: 'step-2', role: 'assistant', text: '还没写完的回答片段' },
+  ])
+  f.index.updateRequest(turn.id, { status: 'interrupted' }); f.active.delete(id); f.emit(id)
+  const result = await running
+  assert.equal(result.status, 'failed')
+  assert.match(result.text, /先看资料。/)
+  assert.match(result.text, /还没写完的回答片段/)
 })
 
 test('cancel or revoke before initial progress emits no conversation link or request', async t => {

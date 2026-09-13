@@ -118,9 +118,15 @@ function formatTime(value) {
   return `${date.getMonth() + 1}-${String(date.getDate()).padStart(2, '0')} ${clock}`
 }
 
-function formatElapsed(from) {
+/**
+ * 已经过的时间。
+ *
+ * `to` 要给「结束时刻」，不能只按当前时间算：那样做完的活会一直往上加——隔十几分钟再打开，
+ * 一个真实的 57 秒会被显示成 12 分钟。只有还在跑的时候才用当前时间。
+ */
+function formatElapsed(from, to = Date.now()) {
   if (!from) return ''
-  const seconds = Math.max(0, Math.round((Date.now() - from) / 1000))
+  const seconds = Math.max(0, Math.round((to - from) / 1000))
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
 }
 
@@ -545,7 +551,7 @@ function handleSubtask(event) {
       view.progress.fill.style.width = '100%'
       view.progress.label.textContent = '搞定'
     }
-    view.footer.appendChild(make('div', 'msg__meta', `耗时 ${formatElapsed(view.startedAt)}`))
+    view.footer.appendChild(make('div', 'msg__meta', `耗时 ${formatElapsed(view.startedAt, event.time)}`))
     return
   }
 
@@ -1123,7 +1129,7 @@ function renderTaskRecord(record) {
     if (subtask.state === 'succeeded') {
       view.bubble.classList.add('bubble--done')
       if (subtask.finishedAt && subtask.startedAt) {
-        view.footer.appendChild(make('div', 'msg__meta', `耗时 ${formatElapsed(subtask.startedAt)}`))
+        view.footer.appendChild(make('div', 'msg__meta', `耗时 ${formatElapsed(subtask.startedAt, subtask.finishedAt)}`))
       }
     }
     if (subtask.state === 'failed') view.bubble.classList.add('bubble--fail')

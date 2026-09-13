@@ -79,14 +79,19 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
       let turnId: string | undefined, wake: (() => void) | undefined, closed = false, updates = 0
       let unsubscribe = () => {}, lastStatus = '', stopPromise: Promise<unknown> | undefined
       /**
-       * 已经把多少实时正文交给协作入口。
+       * 已经把多少实时内容交给协作入口。
        *
        * 博客的实时通道给的是**本步累积**的正文，不是增量，而且清空重来时不单独发一条：
        * 新一轮的累积不再以已发布内容开头时整段追加。空正文只出现在只带推理的片段里，
-       * 那种片段同时说明本步正文还是空的，基准跟着归零。判断都靠前缀，页面看到的是
-       * 这一轮完整发言。
+       * 那种片段同时说明本步正文还是空的，基准跟着归零。判断都靠前缀。
+       *
+       * 这条通道上跑的是**过程**：每一步的正文后面都跟着一次工具调用（「让我先看看…」），
+       * 只有该回合最后一条才是答案（见收尾处按 `tail` 取正文）。所以按**思考**上报：
+       * 页面折成一行、要细节时展开，而不是让过程把气泡灌满。思考是完整覆盖语义，
+       * 上报的因此是累计值 `process`，不是这一步的增量。
        */
       let sentLive = ''
+      let process = ''
       const forwardLive = (event: unknown) => {
         if (signal.aborted) return
         if (typeof event !== 'object' || event === null || (event as { type?: unknown }).type !== 'live') return
@@ -96,9 +101,10 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
         const next = text.startsWith(sentLive) ? text.slice(sentLive.length) : text
         sentLive = text
         if (next === '') return
-        // 增量只是呈现数据：上报失败（授权或协作已失效）时由主循环按真实回合状态收尾，
-        // 不因为一条增量把订阅拆掉。
-        try { request.onProgress({ kind: 'delta', delta: next }) } catch { /* 主循环会复核授权与回合状态。 */ }
+        process += next
+        // 上报只是呈现数据：失败（授权或协作已失效）时由主循环按真实回合状态收尾，
+        // 不因为一条思考把订阅拆掉。
+        try { request.onProgress({ kind: 'thinking', thinking: process }) } catch { /* 主循环会复核授权与回合状态。 */ }
       }
       const notify = () => { updates++; wake?.(); wake = undefined }
       const stopOwned = async () => {
@@ -141,9 +147,22 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
             invariant(start >= 0 || turn.status !== 'succeeded', '无法核验本轮博客回答，请查看原对话', 409)
             const tail = start < 0 ? [] : history.messages.slice(start + 1)
             const next = tail.findIndex(message => message.role === 'user')
-            const text = (next < 0 ? tail : tail.slice(0, next))
+            const said = (next < 0 ? tail : tail.slice(0, next))
               .filter(message => turn.status !== 'succeeded' || !('interrupted' in message && message.interrupted))
-              .flatMap(message => message.role === 'assistant' && 'text' in message && typeof message.text === 'string' ? [message.text] : []).join('\n\n')
+              .flatMap(message => message.role === 'assistant' && 'text' in message && typeof message.text === 'string' ? [message] : [])
+            /**
+             * 交回的正文只取**该回合最后一条**，不把过程叙述一起拼进来。
+             *
+             * 每一步的正文（「让我先看看…」「找到了相关文章！」）后面都跟着一次工具调用，
+             * 拼进来会让交回的材料大半是过程，真正的答案埋在最后：实测一轮 7 条消息里
+             * 6 条是过程叙述，只有最后 1 条 3890 字是答案。
+             *
+             * 哪一条算数由会话投影标出（`tail`：该回合最后一条未被中断、且有正文的
+             * assistant 消息），不是自然语言判断。没有 `tail`（例如本轮被停止）时保留
+             * 全部已生成内容，不丢东西。
+             */
+            const final = said.filter(message => 'tail' in message && message.tail === true).at(-1)
+            const text = final !== undefined ? final.text : said.map(message => message.text).join('\n\n')
             const confirmation = history.operations.some((operation: { status: string }) => ['prepared', 'running', 'uncertain', 'conflict'].includes(operation.status))
             const candidate = history.results.some(result => result.kind === 'candidate'
               && result.proposal?.id && store.get(owner, result.draftId).proposal?.id === result.proposal.id)
