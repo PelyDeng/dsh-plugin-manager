@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolveToolingReuse } from '../../../deploy/scripts/tooling-reuse.mjs';
 import { managerToolInputsHash } from '../../../scripts/manager-tooling.mjs';
@@ -32,28 +32,36 @@ function fixture(t) {
   const commit = message => { git(['add', '.']); git(['commit', '-qm', message]); return git(['rev-parse', 'HEAD']); };
   const revision = commit('基线');
 
-  // 上一次成功发布：工具归档 + 记录里的输入哈希与摘要。
+  // 当前活动部署：它的清单与 Compose 决定基线操作目录，记录里写明输入哈希与归档摘要。
   const bytes = Buffer.from('fixture manager archive\n');
   const operation = join(root, '.local/artifacts/release-1');
   const archive = join(operation, 'tooling/plugin-manager.tgz');
+  const manifest = join(operation, 'plugins/manifest.json');
   mkdirSync(dirname(archive), { recursive: true });
+  mkdirSync(dirname(manifest), { recursive: true });
   writeFileSync(archive, bytes);
-  save(join(root, '.local/source-release.json'), { schemaVersion: 3, operation, status: 'ready' });
+  save(manifest, { schemaVersion: 2, plugins: [] });
+  const active = { project: 'fixture', path: join(root, '.local/runtime/compose-1.json') };
+  save(active.path, { services: { dsh: {} } });
   save(join(operation, 'result.json'), { schemaVersion: 3, operation, status: 'ready', inputKind: 'source',
     managerArchive: archive, managerHash: digest(bytes), managerInputs: managerToolInputsHash(git, revision) });
-  return { root, archive, bytes, git, revision,
-    resolve: () => resolveToolingReuse({ root, git, revision: git(['rev-parse', 'HEAD']) }),
-    commit,
-    reset: () => git(['checkout', '--', '.']),
+  const previous = { manifest: relative(root, manifest).split('\\').join('/'), composeProject: 'fixture' };
+  return { root, archive, bytes, git, revision, active, previous,
+    resolve: (overrides = {}) => resolveToolingReuse({ root, git, revision: git(['rev-parse', 'HEAD']), previous, active, ...overrides }),
+    commit: message => { git(['add', '.']); git(['commit', '-qm', message]); return git(['rev-parse', 'HEAD']); },
   };
 }
 
-test('unchanged manager inputs reuse the verified archive of the last successful release', t => {
+test('unchanged manager inputs reuse the verified archive of the active deployment', t => {
   const f = fixture(t);
   const decision = f.resolve();
   assert.equal(decision.inputs, managerToolInputsHash(f.git, f.revision));
   assert.equal(decision.reuse.sha256, digest(f.bytes));
-  assert.equal(f.readFile?.(decision.reuse.archive) ?? readFileSync(decision.reuse.archive).equals(f.bytes), true);
+  assert.ok(readFileSync(decision.reuse.archive).equals(f.bytes));
+  // 没有活动部署（首次发布）就没有基线。
+  assert.match(f.resolve({ active: null }).reason, /没有当前活动部署/u);
+  assert.match(f.resolve({ previous: null }).reason, /没有当前活动部署/u);
+  assert.match(f.resolve({ previous: { manifest: '../outside/manifest.json' } }).reason, /越界/u);
 });
 
 test('changes outside the manager inputs keep the archive reusable', t => {
@@ -107,9 +115,4 @@ test('a missing, damaged or unrecorded baseline cannot be reused', t => {
   save(recordPath, original);
   appendFileSync(recordPath, '\n');
   assert.ok(f.resolve().reuse, `记录内容不受无关格式影响时仍可复用：${f.resolve().reason}`);
-
-  save(join(f.root, '.local/source-release.json'), { schemaVersion: 3, operation: join(f.root, '.local/artifacts/missing'), status: 'ready' });
-  assert.match(f.resolve().reason, /记录不可用/u);
-  rmSync(join(f.root, '.local/source-release.json'));
-  assert.match(f.resolve().reason, /没有上一次发布记录/u);
 });

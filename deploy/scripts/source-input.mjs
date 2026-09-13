@@ -2,7 +2,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { buildHostImage, withRegistryAuthentication, validateImageConfig } from '../../integrations/docker/host-image.mjs';
-import { installManagerArchive, prepareManagerTooling } from '../../scripts/manager-tooling.mjs';
+import { prepareManagerTooling } from '../../scripts/manager-tooling.mjs';
 import { prepareWorkspaceDependencies } from './bootstrap.mjs';
 import { assertSelectiveInstallSafe, preparePluginReuse } from './plugin-reuse.mjs';
 import { resolveToolingReuse } from './tooling-reuse.mjs';
@@ -22,14 +22,11 @@ export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareMan
     prepareTools(context) {
       const output = resolve(context.operation, 'tooling');
       const reuse = context.source.toolingReuse;
-      if (!reuse) {
-        buildMessage(`管理器工具：重新构建（${context.source.toolingReason}）`);
-        return tooling({ root: context.root, output, execute: context.execute, env: context.env });
-      }
-      // 输入没变：归档内容与重新构建一致，只做一次安装与版本核验（1.2s vs 18.6s 的重新构建）。
-      buildMessage('管理器工具：复用上一次成功发布的归档（构建输入未变化）');
-      const version = readSiteJson(resolve(context.root, 'packages/plugin-manager/package.json')).version;
-      return installManagerArchive({ archive: reuse.archive, output, version, execute: context.execute, env: context.env });
+      buildMessage(reuse ? '管理器工具：复用活动部署的归档（构建输入未变化）' : `管理器工具：重新构建（${context.source.toolingReason}）`);
+      const tools = tooling({ root: context.root, output, execute: context.execute, env: context.env, ...(reuse ? { archive: reuse.archive } : {}) });
+      // 归档在核验与安装之间被换掉时，装出来的摘要就对不上；以实际安装内容为准再核一次。
+      if (reuse && tools.sha256 !== reuse.sha256) throw new Error('复用的管理器归档与核验摘要不一致；请重试发布。');
+      return tools;
     },
     inspect(context) {
       const { root, capture, site, runtime, rebuildPlugins, previous, active } = context;
@@ -42,7 +39,7 @@ export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareMan
       const rebuilt = rebuildPlugins === undefined ? site.plugins : rebuildPlugins.split(',');
       if (rebuildPlugins !== undefined) assertSelectiveInstallSafe(root);
       const selection = rebuildPlugins === undefined ? null : preparePluginReuse({ root, previous, active, site, revision, hostCommit, buildEnvironment, rebuilt, git });
-      const tooling_ = resolveToolingReuse({ root, git, revision });
+      const tooling_ = resolveToolingReuse({ root, git, revision, previous, active });
       context.source = { git, host, rebuilt, reuse: selection?.release.plugins.length ? selection : null, toolingReuse: tooling_.reuse, toolingReason: tooling_.reason };
       return { revision, hostCommit, hostSourceCommit: hostCommit, hostSourceClean: Boolean(hostCommit) && git(['-C', host, 'status', '--porcelain', '--untracked-files=normal']) === '', buildEnvironment,
         managerInputs: tooling_.inputs,
