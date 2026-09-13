@@ -49,7 +49,7 @@ describe('web asset modules', () => {
 
   it('copies every module the page imports, so the revalidation rule covers them all', () => {
     // 页面模块之间用相对路径互相引用；漏拷一个或挪进子目录，都会让上面那条规则失效。
-    const imported = [...`${webApp}\n${webCards}`.matchAll(/from '\.\/([\w-]+\.js)'/g)].map(match => match[1])
+    const imported = [...`${webApp}\n${webCards}\n${webTrajectory}`.matchAll(/from '\.\/([\w-]+\.js)'/g)].map(match => match[1])
     expect(imported.length).toBeGreaterThan(0)
     for (const name of new Set(imported)) {
       expect(name).not.toContain('/')

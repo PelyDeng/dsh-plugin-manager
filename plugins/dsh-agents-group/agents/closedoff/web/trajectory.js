@@ -5,6 +5,9 @@
  * `createTrajectoryView({ mapConfig, routePath, icons, el, escapeHtml, scrollBottom })`。
  * 自己写的辅助函数之间用模块内作用域，不再挂全局。
  */
+import {vt, vh, fmtDT, groupDevCount, geoPoint, fencePoints} from './trajectory-data.js';
+import {createCameraModal} from './trajectory-camera.js';
+
 export function createTrajectoryView(options) {
     var MAP_CONFIG = options.mapConfig;
     var routePath = options.routePath;
@@ -23,28 +26,7 @@ export function createTrajectoryView(options) {
     var pendingDownloadUrls = [];
 
   // 点位取值（兼容 {lon,lat,h,t} 与 {longitude,latitude,height,pointTime}）
-  function vlon(p) { return p.lon !== undefined ? +p.lon : +p.longitude; }
-  function vlat(p) { return p.lat !== undefined ? +p.lat : +p.latitude; }
-  function vh(p) { return p.h !== undefined ? +p.h : (+p.height || 0); }
-  function vt(p) { return p.t !== undefined ? p.t : p.pointTime; }
-  function fmtDT(v) {
-    if (!v) return '';
-    var n = typeof v === 'number' ? v : (+v);
-    if (!isNaN(n) && n > 1e11) { var d = new Date(n); function p(x){return (x<10?'0':'')+x} return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds()); }
-    return String(v);
-  }
 
-  function groupDevCount(cams) { var n = 0; for (var i = 0; i < cams.length; i++) n += (cams[i].devices ? cams[i].devices.length : 0); return n; }
-
-  function camerasFor(group) { return (group.devices || []).filter(function (device) { return Number(device.deviceType) === 6; }); }
-  var cameraModalPreviousFocus = null;
-  var cameraModalGroup = null;
-  var cameraModalCameras = [];
-  var cameraModalSelected = null;
-  var cameraPlayerPromise = null;
-  var cameraPlayerPrewarmScheduled = false;
-  var cameraPlayerApp = null;
-  var cameraPlayerRenderId = 0;
   var modal3dPreviousFocus = null;
 
   function trapModalFocus(event, overlay) {
@@ -57,216 +39,14 @@ export function createTrajectoryView(options) {
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
   }
 
-  function cameraOnline(camera) { return Number(camera.status) === 1; }
-  function cameraName(camera) { return camera.name || camera.code || camera.cameraCode || '未命名摄像头'; }
-  function destroyCameraPlayer() {
-    cameraPlayerRenderId += 1;
-    if (cameraPlayerApp) {
-      cameraPlayerApp.unmount();
-      cameraPlayerApp = null;
-    }
-  }
-
-  function loadCameraPlayer() {
-    if (window.Vue && window.hyVideoPlayer && window.JessibucaPro) return Promise.resolve();
-    if (!cameraPlayerPromise) {
-      cameraPlayerPromise = loadScript(routePath('/assets/video-player/vue.global.prod.js?v=3.5.42'))
-        .then(function () { return loadScript(routePath('/assets/video-player/plugin/jessibuca/jessibuca-pro.js?v=0.0.37')); })
-        .then(function () { return loadScript(routePath('/assets/video-player/index.umd.cjs?v=0.0.37')); })
-        .then(function () {
-          if (!window.Vue || !window.hyVideoPlayer || !window.JessibucaPro) throw new Error('定制播放器资源未正确初始化');
-        })
-        .catch(function (error) { cameraPlayerPromise = null; throw error; });
-    }
-    return cameraPlayerPromise;
-  }
-
-  function scheduleCameraPlayerPrewarm(cams) {
-    if (cameraPlayerPrewarmScheduled) return;
-    var hasPlayableCamera = cams.some(function (group) {
-      return camerasFor(group).some(function (camera) {
-        return Boolean(camera.accessAddress || camera.videoAddress);
-      });
-    });
-    if (!hasPlayableCamera) return;
-    cameraPlayerPrewarmScheduled = true;
-    var run = function () { loadCameraPlayer().catch(function () {}); };
-    if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 2000 });
-    else window.setTimeout(run, 600);
-  }
-
-  function closeCameraModal() {
-    var overlay = document.getElementById('cameraModal');
-    if (!overlay || overlay.style.display === 'none') return;
-    overlay.style.display = 'none';
-    destroyCameraPlayer();
-    if (cameraModalPreviousFocus && cameraModalPreviousFocus.focus) cameraModalPreviousFocus.focus({ preventScroll: true });
-  }
-
-  function renderCameraInfo(camera) {
-    var info = document.getElementById('cameraInfo');
-    info.innerHTML = '';
-    var rows = camera.capture ? [
-      ['抓拍开始', camera.startTime || '--'],
-      ['片段时长', camera.timeLength || '--'],
-      ['设备编号', camera.deviceId || '--'],
-      ['媒体地址', '已隐藏'],
-    ] : [
-      ['设备编码', camera.code || '--'],
-      ['摄像机编码', camera.cameraCode || '--'],
-      ['设备 IP', camera.deviceIp || '--'],
-      ['视频地址', camera.hideAddress ? '已隐藏' : (camera.accessAddress || camera.videoAddress || '--')],
-      ['所属设备组', cameraModalGroup.groupName || '--'],
-      ['最后心跳', fmtDT(camera.lastHeartbeatTime) || '--'],
-      ['运行状态', cameraOnline(camera) ? '在线' : '离线'],
-    ];
-    rows.forEach(function (row, index) {
-      var wrap = el('div', 'camera-info-row');
-      var dt = document.createElement('dt'); dt.textContent = row[0];
-      var dd = document.createElement('dd'); dd.textContent = row[1];
-      if (!camera.capture && index === rows.length - 1 && cameraOnline(camera)) dd.className = 'ok';
-      wrap.appendChild(dt); wrap.appendChild(dd); info.appendChild(wrap);
-    });
-  }
-
-  function renderCameraPreview(camera) {
-    var preview = document.getElementById('cameraPreview');
-    destroyCameraPlayer();
-    preview.innerHTML = '';
-    var stream = camera.accessAddress || camera.videoAddress || '';
-    var state = el('div', 'camera-preview-state');
-    var title = el('div', 'camera-preview-title'); title.textContent = cameraName(camera);
-    var copy = el('div', 'camera-preview-copy');
-    copy.textContent = camera.capture
-      ? (stream ? '正在加载抓拍视频…' : '当前抓拍片段未返回可用的视频地址。')
-      : (stream ? '正在加载园区定制播放器…' : '当前摄像头未返回可用的视频地址。');
-    state.appendChild(title); state.appendChild(copy); preview.appendChild(state);
-    if (!stream) return;
-    var renderId = cameraPlayerRenderId;
-    loadCameraPlayer().then(function () {
-      if (renderId !== cameraPlayerRenderId || camera !== cameraModalSelected) return;
-      preview.innerHTML = '';
-      var host = document.createElement('div');
-      host.className = 'camera-player-host';
-      preview.appendChild(host);
-      cameraPlayerApp = window.Vue.createApp({
-        render: function () {
-          return window.Vue.h(window.hyVideoPlayer.hyVideoPlayer, {
-            url: stream,
-            autoPlay: true,
-            isAi: true,
-            controlAutoHide: true,
-            resUrl: routePath('/assets/video-player/plugin/jessibuca'),
-            configOperates: { ai: true, ptz: false, close: false, fullscreen: true, screenshot: true, record: false, zoom: true },
-          });
-        },
-      });
-      cameraPlayerApp.provide('hyPlayerGconfig', {
-        isDev: false,
-        resUrl: routePath('/assets/video-player/plugin/jessibuca'),
-        isAi: false,
-      });
-      cameraPlayerApp.mount(host);
-    }).catch(function (error) {
-      if (renderId !== cameraPlayerRenderId || camera !== cameraModalSelected) return;
-      preview.innerHTML = '';
-      var failed = el('div', 'camera-preview-state');
-      failed.appendChild(el('div', 'camera-preview-title', esc(cameraName(camera))));
-      failed.appendChild(el('div', 'camera-preview-copy', '定制播放器加载失败，请检查本地播放器资源。'));
-      preview.appendChild(failed);
-      console.error('camera player load failed', error);
-    });
-  }
-
-  function selectCamera(camera) {
-    cameraModalSelected = camera;
-    document.getElementById('cameraSelectedName').textContent = camera.capture ? '抓拍片段' : '摄像头 - ' + cameraName(camera);
-    var status = document.getElementById('cameraSelectedStatus');
-    status.className = 'camera-online' + (cameraOnline(camera) ? ' ok' : '');
-    status.textContent = camera.capture ? '' : (cameraOnline(camera) ? '● 在线' : '● 离线');
-    renderCameraPreview(camera); renderCameraInfo(camera);
-    if (!camera.capture) renderCameraChoices();
-  }
-
-  function cameraChoice(camera, className) {
-    var button = document.createElement('button');
-    button.type = 'button'; button.className = className + (camera === cameraModalSelected ? ' active' : ''); button._camera = camera;
-    if (camera === cameraModalSelected) button.setAttribute('aria-current', 'true');
-    var dot = el('span', 'camera-status-dot' + (cameraOnline(camera) ? ' online' : ''));
-    if (className === 'camera-list-item') {
-      button.appendChild(dot); button.appendChild(el('span', 'camera-item-name', esc(cameraName(camera))));
-    } else {
-      button.appendChild(el('span', 'camera-thumb-name', esc(cameraName(camera))));
-      var status = el('span', 'camera-thumb-status'); status.appendChild(dot); status.appendChild(document.createTextNode(cameraOnline(camera) ? '在线' : '离线')); button.appendChild(status);
-    }
-    button.onclick = function () { selectCamera(this._camera); };
-    return button;
-  }
-
-  function renderCameraChoices() {
-    var query = document.getElementById('cameraSearch').value.trim().toLowerCase();
-    var visible = cameraModalCameras.filter(function (camera) { return (cameraName(camera) + ' ' + (camera.code || '') + ' ' + (camera.cameraCode || '')).toLowerCase().indexOf(query) >= 0; });
-    var list = document.getElementById('cameraList'); list.innerHTML = '';
-    if (!visible.length) list.appendChild(el('div', 'camera-list-empty', '没有匹配的摄像头'));
-    visible.forEach(function (camera) { list.appendChild(cameraChoice(camera, 'camera-list-item')); });
-    var strip = document.getElementById('cameraStrip'); strip.innerHTML = '';
-    cameraModalCameras.forEach(function (camera) { strip.appendChild(cameraChoice(camera, 'camera-thumb')); });
-  }
-
-  function showGroupPopup(group) {
-    var overlay = document.getElementById('cameraModal');
-    cameraModalPreviousFocus = document.activeElement;
-    cameraModalGroup = group;
-    cameraModalCameras = camerasFor(group);
-    cameraModalSelected = cameraModalCameras[0] || null;
-    overlay.classList.toggle('capture-mode', Boolean(group.captureMode));
-    document.getElementById('cameraModalTitle').textContent = group.captureMode ? '车辆抓拍视频' : (group.groupName || '设备组') + ' 的摄像头';
-    var online = cameraModalCameras.filter(cameraOnline).length;
-    document.getElementById('cameraStats').innerHTML = group.captureMode ? '' : '<span>摄像头 <strong>' + cameraModalCameras.length + '</strong></span><span class="online">在线 <strong>' + online + '</strong></span>';
-    var search = document.getElementById('cameraSearch'); search.value = ''; search.oninput = renderCameraChoices;
-    overlay.style.display = 'flex';
-    if (cameraModalSelected) selectCamera(cameraModalSelected);
-    else {
-      document.getElementById('cameraList').innerHTML = '<div class="camera-list-empty">该设备组下没有摄像头</div>';
-      document.getElementById('cameraStrip').innerHTML = '';
-      document.getElementById('cameraSelectedName').textContent = '暂无摄像头';
-      document.getElementById('cameraSelectedStatus').textContent = '';
-      document.getElementById('cameraPreview').innerHTML = '<div class="camera-preview-state"><div class="camera-preview-title">暂无摄像头</div><div class="camera-preview-copy">该设备组只包含其他类型设备，本弹窗按要求不予展示。</div></div>';
-      document.getElementById('cameraInfo').innerHTML = '';
-    }
-    document.getElementById('cameraModalClose').focus({ preventScroll: true });
-  }
-
-  document.getElementById('cameraModalClose').onclick = closeCameraModal;
-  document.getElementById('cameraModal').onclick = function (event) { if (event.target === this) closeCameraModal(); };
-  document.getElementById('cameraModal').onkeydown = function (event) {
-    if (event.key === 'Escape') { event.stopPropagation(); closeCameraModal(); return; }
-    trapModalFocus(event, this);
-  };
-
-  function renderGroupList(container, cams) {
-    if (!container) return;
-    container.innerHTML = '';
-    var head = el('div', 'legend-head');
-    head.appendChild(el('div', 'legend-title', IC.camera + ' 设备组 <small>点击查看摄像头</small>'));
-    head.appendChild(el('span', 'legend-total', String(cams.length)));
-    container.appendChild(head);
-    if (!cams.length) { container.appendChild(el('div', 'legend-empty', '正在等待设备组标绘数据…')); return; }
-    scheduleCameraPlayerPrewarm(cams);
-    var list = el('div', 'legend-list');
-    for (var i = 0; i < cams.length; i++) {
-      var group = cams[i];
-      var item = document.createElement('button');
-      item.type = 'button'; item.className = 'lg-item'; item._group = group;
-      item.title = '查看 ' + (group.groupName || '设备组') + ' 的摄像头';
-      item.appendChild(el('span', 'lg-no', String(i + 1).padStart(2, '0')));
-      item.appendChild(el('span', 'lg-name', esc(group.groupName || '设备组')));
-      item.appendChild(el('span', 'lg-count', camerasFor(group).length + ' 路'));
-      item.onclick = function () { showGroupPopup(this._group); };
-      list.appendChild(item);
-    }
-    container.appendChild(list);
-  }
+  var camera = createCameraModal({
+    el: el,
+    escapeHtml: esc,
+    icons: IC,
+    routePath: routePath,
+    loadScript: loadScript,
+    trapModalFocus: trapModalFocus,
+  });
 
   var cesiumPromise = null;
   function loadCesium() {
@@ -280,15 +60,6 @@ export function createTrajectoryView(options) {
         .catch(function (error) { cesiumPromise = null; throw error; });
     }
     return cesiumPromise;
-  }
-
-  function degree(value, latitude) {
-    var limit = latitude ? Math.PI / 2 + 0.01 : Math.PI + 0.01;
-    return Math.abs(value) <= limit ? value * 180 / Math.PI : value;
-  }
-
-  function geoPoint(p) {
-    return { lon: degree(vlon(p), false), lat: degree(vlat(p), true), h: vh(p), t: fmtDT(vt(p)) };
   }
 
   function mapStatus(container, text, failed, retry) {
@@ -516,7 +287,7 @@ export function createTrajectoryView(options) {
       var entity = picked && picked.id;
       var group = entity && groupsByEntity[entity.id];
       if (!group) return;
-      showGroupPopup(group);
+      camera.showGroup(group);
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
   }
 
@@ -837,7 +608,7 @@ export function createTrajectoryView(options) {
       r.cap.textContent = '轨迹示意图（三维场景截图） · ' + r.pts.length + ' 个点位' + (cams.length ? (' · 轨迹 ' + MAP_CONFIG.trackDeviceRadiusMeters + ' 米内设备组 ' + cams.length + ' 个' + (dc ? (' · 设备 ' + dc + ' 个') : '') + ' · 点击侧栏名称查看摄像头') : '') + ' · ' + fmtDT(vt(r.pts[0])) + ' ~ ' + fmtDT(vt(r.pts[r.pts.length - 1]));
     }
     if (r.legend) {
-      renderGroupList(r.legend, cams);
+      camera.renderGroupList(r.legend, cams);
     }
   }
 
@@ -883,13 +654,13 @@ export function createTrajectoryView(options) {
     container._captureStatus = captureStatus;
     overlay.style.display = 'flex';
     if (fences) renderFenceList(legend, fences);
-    else renderGroupList(legend, cams || []);
+    else camera.renderGroupList(legend, cams || []);
     mountMap(container, pts, cams || [], callId, true, false, undefined, fences);
 
     function close() {
       overlay.style.display = 'none';
       cancelMap(container);
-      closeCameraModal();
+      camera.close();
       if (modal3dPreviousFocus && modal3dPreviousFocus.focus) modal3dPreviousFocus.focus({ preventScroll: true });
     }
     document.getElementById('modal3dClose').onclick = close;
@@ -905,9 +676,7 @@ export function createTrajectoryView(options) {
       var section;
       if (payload.geometries.length) {
         fenceData[cacheKey] = payload.geometries;
-        trackData[cacheKey] = payload.geometries.flatMap(function (fence) {
-          return fence.positions.map(function (p) { return { lon: p[0], lat: p[1], h: p[2] }; });
-        });
+        trackData[cacheKey] = fencePoints(payload.geometries);
         section = renderTrajectory(cacheKey, callId, bubble);
       } else {
         section = el('section', 'trajectory-result result-source');
@@ -933,7 +702,7 @@ export function createTrajectoryView(options) {
     }
 
     function reset() {
-      closeCameraModal();
+      camera.close();
       var modal = document.getElementById('modal3d');
       if (modal) modal.style.display = 'none';
       var modalMap = document.getElementById('modal3dCanvas');
@@ -961,6 +730,6 @@ export function createTrajectoryView(options) {
       reset: reset,
       setCameras: setCameras,
       setTrack: setTrack,
-      showGroup: showGroupPopup,
+      showGroup: camera.showGroup,
     };
   }
