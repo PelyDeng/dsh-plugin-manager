@@ -104,12 +104,26 @@ test('selective rebuild questions reach the Agent with deployment and reuse boun
   try {
     response = await f.request('/chat', { message: '只改 C 能只构建 C 吗？也能指定 C、D，其他旧包自动复用吗？' })
     const knowledge = f.handles[0].sections.find(section => section.name === 'example:knowledge').text
-    for (const fact of ['pnpm build --plugins c', 'pnpm package --plugins "c,d"', './build.sh --rebuild-plugins c', '.\\build.ps1 --rebuild-plugins c', '省略参数全量构建', '共享已跟踪文件', '传递关系校验', '不得靠安装钩子重建', 'prepared 后失败只用 `--resume`', '不是热更新']) expect(knowledge).toContain(fact)
+    for (const fact of ['pnpm build --plugins c', 'pnpm package --plugins "c,d"', './build.sh --rebuild-plugins c', '.\\build.ps1 --rebuild-plugins c', '省略参数全量构建', '--rebuild-plugins auto', '仓库级共享输入', '传递关系校验', '不得靠安装钩子重建', 'prepared 后失败只用 `--resume`', '不是热更新']) expect(knowledge).toContain(fact)
     for (const fact of ['源码模式要求与基线一致的干净检出', '镜像模式核验同一摘要和旧成功记录的宿主提交', '不要求宿主源码存在', '最终镜像标签仍须一致']) expect(knowledge).toContain(fact)
     for (const fact of ['插件自身目录内已纳入 Git', '旧新 blob 与磁盘字节须一致', '未跟踪归档及 `link:` 仍拒绝复用']) expect(knowledge).toContain(fact)
     const faq = await f.request('/guide.md')
     expect(faq.status).toBe(200)
     expect(await faq.text()).toContain('新清单仍完整')
+  } finally { await response?.body.cancel(); await f.close() }
+})
+
+test('page regression questions reach the Agent with the shipped tool and its fixtures', async () => {
+  const f = await fixture({ mode: 'standalone' })
+  let response
+  try {
+    response = await f.request('/chat', { message: '插件的页面改完怎么回归？构建产物和宿主注入的配置怎么办？' })
+    const knowledge = f.handles[0].sections.find(section => section.name === 'example:knowledge').text
+    for (const fact of ['scripts/web-page-probe.mjs', '--stub', '--probe', '--widths', '--mount', '--replace', '--require-browser', '真正的 SKIP']) expect(knowledge).toContain(fact)
+    // 随包 FAQ 里也要有这一问，模型不可用时用户自己也能读到同样的做法。
+    const faq = await f.request('/guide.md')
+    expect(faq.status).toBe(200)
+    expect(await faq.text()).toContain('## 插件的页面怎么改、怎么测？')
   } finally { await response?.body.cancel(); await f.close() }
 })
 
