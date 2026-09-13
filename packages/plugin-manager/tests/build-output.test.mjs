@@ -36,7 +36,10 @@ test('successful builds show stages and summary while retaining noisy tool outpu
     assert.ok(f.text().includes(`${label}已完成 [====================] 100%`));
     assert.match(f.text(), new RegExp(`${label}已完成[^\\n]+耗时 \\d+:\\d{2}:\\d{2}\\.\\d\\n`));
   }
-  assert.ok(f.text().endsWith('发布已完成\n访问地址：https://example.test\n'));
+  assert.ok(f.text().includes('发布已完成\n访问地址：https://example.test\n'));
+  // 阶段耗时表跟在最后：时间花在哪不必再回头 grep 进度行。
+  assert.ok(f.text().indexOf('各阶段耗时') > f.text().indexOf('发布已完成'), 'summary comes after the release record');
+  assert.match(f.text(), /各阶段耗时（含进程启动）：\n  构建示例插件 +00:00:\d{2}\.\d\n  准备镜像 +00:00:\d{2}\.\d\n  合计 +00:00:\d{2}\.\d\n$/);
   assert.doesNotMatch(f.text(), /估算|compiler-detail|tool-warning|DSH_BUILD_PROGRESS|\x1b|\r/);
   assert.match(f.log().text, /compiler-detail/);
   assert.match(f.log().text, /tool-warning/);
@@ -92,7 +95,8 @@ test('long elapsed durations fit narrow terminals and an abrupt worker exit reta
   assert.equal(await f.run(), 8);
   assert.match(f.text(), /耗时 01:01:01\.2\n/);
   assert.match(f.text(), /耗时 00:00:00\.\d\n/);
-  for (const line of f.text().split(/\r|\n/).filter(line => line.includes('耗时'))) {
+  // 只看进度行（带百分比条）：末尾的阶段耗时表是另一种输出，不参与这条宽度约束。
+  for (const line of f.text().split(/\r|\n/).filter(line => /\d+%/.test(line))) {
     const visible = line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
     assert.equal([...visible].reduce((sum, char) => sum + (/[\p{Script=Han}（）]/u.test(char) ? 2 : 1), 0), 39);
   }
