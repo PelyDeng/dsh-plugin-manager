@@ -289,6 +289,12 @@ interface IdempotencyRecord {
 /** 内存里最多留多少条幂等记录；超了就丢最旧的，避免被刷爆。 */
 const MAX_IDEMPOTENCY_RECORDS = 1000
 
+/** 等待超时收尾时给用户看的说明。要让人知道材料还在、重说一遍就能继续。 */
+const WAITING_EXPIRED = '等太久了，这次等待已经过期；材料都还在，重新描述你的目标就能接着办。'
+
+/** 等待超时后任务级的失败说明，比子任务那句短。 */
+const WAITING_EXPIRED_TASK = '等用户回话超时，材料保留'
+
 /** 请求指纹：把参与判定的字段压成一个稳定的摘要。 */
 function digestOf(parts: readonly string[]): string {
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
@@ -405,7 +411,11 @@ function reportOf(subtask: {
 }): string {
   switch (subtask.state) {
     case 'succeeded': return subtask.result
-    case 'failed': return `【${subtask.agentId}】失败：${subtask.error}`
+    // 失败也把已经交回的材料带上。超时就是一个例子：成员把候选稿交回来了，只是用户一直
+    // 没回话 —— 只说「失败：超时」会让人以为材料也丢了。
+    case 'failed': return subtask.result === ''
+      ? `【${subtask.agentId}】失败：${subtask.error}`
+      : `【${subtask.agentId}】失败：${subtask.error}；已交回的材料：${subtask.result}`
     case 'cancelled': return `【${subtask.agentId}】${subtask.error === '' ? '已停止' : subtask.error}`
     case 'external_pending': return `【${subtask.agentId}】材料已交回，还有事在别处等着办：${subtask.result}`
     default: return `【${subtask.agentId}】交回材料，还等着答复：${subtask.result}`
@@ -453,6 +463,13 @@ export class ButlerConsole {
    * 而不是假装还能回复。
    */
   private readonly waiting = new Map<string, WaitingMember>()
+  /**
+   * 正在等待用户回话的子任务上的闹钟：`taskId:subtaskId` → 定时器。
+   *
+   * 用户回话、任务被取消、插件卸载时都要撤掉：留在那里会让一次早就结束的等待在很久
+   * 以后把状态改成超时失败。
+   */
+  private readonly waitingTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private disposed = false
 
   constructor(
@@ -1060,8 +1077,68 @@ export class ButlerConsole {
     }
   }
 
-  /** 在会话上开一份新的事件日志，覆盖它的上一轮。 */
-  private beginLog(conversationId: string, runId: string): ConversationLog<ButlerEvent> {
+  /**
+   * 给一次「等用户回话」上闹钟。
+   *
+   * 等待不是终态，所以 `subtaskTimeoutMs` 那个只管执行的定时器已经撤了；不另起一个的话，
+   * 没人回话的等待会永远挂在那里 —— 计数只增不减，用户下次进来看到一条不知道自己还要
+   * 不要回的任务。
+   */
+  private scheduleWaitingTimeout(taskId: string, subtaskId: string, displayName: string, actor: Actor): void {
+    const key = `${taskId}:${subtaskId}`
+    this.clearWaitingTimeout(key)
+    const conversationId = this.store.task(actor, taskId)?.conversationId ?? ''
+    // 查不到会话就不上闹钟：超时收尾要按会话归属写回去，无从下手时宁可不动。
+    if (conversationId === '') return
+    const timer = setTimeout(
+      () => { this.expireWaiting(key, taskId, subtaskId, displayName, actor) },
+      this.config.waitingTimeoutMs,
+    )
+    // 别让一个等待中的闹钟把进程钉住不退出。
+    timer.unref?.()
+    this.waitingTimers.set(key, timer)
+  }
+
+  /** 撤掉一次等待的闹钟；没有时什么都不做。 */
+  private clearWaitingTimeout(key: string): void {
+    const timer = this.waitingTimers.get(key)
+    if (timer === undefined) return
+    clearTimeout(timer)
+    this.waitingTimers.delete(key)
+  }
+
+  /**
+   * 一次等待到点了：如实收成超时失败，材料全部保留。
+   *
+   * 状态在这里**重新读一遍**，不凭上闹钟那一刻的印象：这中间用户可能已经回过话、成员也
+   * 已经接着干完了，那时这次等待早就不是「等着」，什么都不该做。
+   *
+   * 全终结时把这一轮也收掉，但**不跑汇总轮** —— 没有人在看，而且用户随时可能开始新一轮，
+   * 跟它抢同一个会话句柄只会让两边都出错。逐项结局与材料都在库里，下次进来读得到。
+   */
+  private expireWaiting(key: string, taskId: string, subtaskId: string, displayName: string, actor: Actor): void {
+    this.waitingTimers.delete(key)
+    // `dispose()` 会撤掉所有闹钟，这里是竞态下的第二道：插件已经卸下之后不该再往库里写。
+    if (this.disposed) return
+    const record = this.store.task(actor, taskId)
+    const subtask = record?.subtasks.find(item => item.id === subtaskId)
+    if (record === undefined || subtask === undefined || subtask.state !== 'waiting_user') return
+
+    this.waiting.delete(key)
+    // 只写 error，不碰 result：材料是这位成员已经交回的东西，超时不该把它抹掉。
+    this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: WAITING_EXPIRED })
+    console.warn(`butler-console: ${displayName} 的等待超过 ${Math.round(this.config.waitingTimeoutMs / 1000)} 秒没有回音，已按超时收尾（任务 ${taskId}）`)
+
+    const after = this.store.task(actor, taskId)
+    if (after === undefined || after.subtasks.some(item => !isTerminal(item.state))) return
+    const failed = after.subtasks.filter(item => item.state === 'failed').length
+    this.store.setTaskState(taskId, failed === after.subtasks.length ? 'failed' : 'completed', {
+      summary: this.storedReports(actor, taskId).join('\n\n'),
+      error: WAITING_EXPIRED_TASK,
+    })
+  }
+
+  /** 在会话上开一份新的事件日志，覆盖它的上一轮。 */  private beginLog(conversationId: string, runId: string): ConversationLog<ButlerEvent> {
     const log = new ConversationLog<ButlerEvent>(this.config.maxConversationEvents)
     log.begin(runId)
     this.logs.set(conversationId, log)
@@ -1317,6 +1394,8 @@ export class ButlerConsole {
         })
         // 记下等待上下文，用户回复时据此把话交回同一位成员。
         this.waiting.set(`${taskId}:${subtaskId}`, { executor, agentId, displayName })
+        // 等待不是终态，执行的定时器已经撤了，这里另起一个等回话的。
+        this.scheduleWaitingTimeout(taskId, subtaskId, displayName, input.actor)
         yield emit('waiting_user', question, {
           phase: 'waiting_user',
           question,
@@ -1408,6 +1487,8 @@ export class ButlerConsole {
     if (subtask.state !== 'waiting_user') throw new AccessError(409, '这位成员当前没有在等你回话')
 
     this.store.setSubtaskState(input.taskId, input.subtaskId, 'running')
+    // 用户回话了，这次等待的闹钟就该撤掉 —— 留着它到点会把一个正在跑的活的结局改成超时。
+    this.clearWaitingTimeout(`${input.taskId}:${input.subtaskId}`)
     const abort = new AbortController()
     this.runs.set(record.conversationId, { runId, abort })
     return {
@@ -1708,6 +1789,9 @@ export class ButlerConsole {
     this.disposed = true
     for (const run of this.runs.values()) run.abort.abort()
     this.runs.clear()
+    // 等待中的闹钟也要撤：留在那里会在插件已经卸下之后去写库。
+    for (const timer of this.waitingTimers.values()) clearTimeout(timer)
+    this.waitingTimers.clear()
     await Promise.allSettled([...this.openings.values()])
     const handles = [...this.conversations.values()].map(conversation => conversation.handle)
     this.conversations.clear()

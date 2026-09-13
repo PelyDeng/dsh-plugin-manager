@@ -58,6 +58,9 @@ async function dispatchOnce(executor: ButlerAgentExecutor) {
   const access = { mode: 'authenticated', ready() {}, resolve: () => actor, assert() {} } as unknown as Access
   const config = {
     subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000, maxConversationEvents: 200,
+    // 真实值而不是留空：留空时 `setTimeout(fn, undefined)` 会立刻触发，测试结束、库关掉之后
+    // 那个闹钟才醒过来写库。
+    waitingTimeoutMs: 600_000,
   } as Config
   const console_ = new ButlerConsole(context(executor), config, access, store, '')
   const agent = { session: { id: conversationId }, followup: vi.fn(), cancel: vi.fn(), dispose: vi.fn(async () => {}) }

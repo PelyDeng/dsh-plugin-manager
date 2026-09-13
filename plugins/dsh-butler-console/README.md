@@ -101,6 +101,7 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | `publicOrigin` | 空 | 认证模式必填，HTTP(S) origin，不带路径 |
 | `routePrefix` | `/butler` | 页面与接口前缀 |
 | `subtaskTimeoutMs` | 300000 | 单个子任务超时，超时中止并释放成员 |
+| `waitingTimeoutMs` | 600000 | 等用户回话的最长时间；到点按超时收尾，材料保留 |
 | `turnTimeoutMs` | 600000 | 单轮上限 |
 | `maxMessageChars` | 8000 | 单条消息字符数上限 |
 | `maxResultChars` | 8000 | 单个子任务结果写回页面的字符数上限 |
@@ -119,6 +120,7 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
 | GET | `/butler/health`、`/butler/ready` | 存活与就绪探针，公开 |
+| GET | `/butler/identity` | 当前登录身份，以及 `routePrefix` 与 `contractVersion`（供第二客户端发现入口） |
 | GET | `/butler` | 群聊页面 |
 | POST | `/butler/chat` | 派活，SSE 事件流 |
 | GET | `/butler/events` | **只读**订阅一个会话最近一轮的事件，可多入口同时观察 |
@@ -172,8 +174,12 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 
 | 状态 | 在等什么 | 这一轮 |
 | --- | --- | --- |
-| `waiting_user` | 用户在**这里**补一句话 | 停住等回复，不补就进行不下去 |
+| `waiting_user` | 用户在**这里**补一句话 | 停住等回复；超过 `waitingTimeoutMs` 按超时收尾 |
 | `external_pending` | 用户去**别处**办（原页面采用、确认、发布） | 到此结束，可以开新活；**不是成功** |
+
+等回话是有期限的：没人回话的等待会一直占着「等你回话」的计数与那位成员，用户下次进来还会
+看到一条不知道自己要不要回的任务。到点把它收成超时失败，**材料一个字不丢**，重新描述目标
+就能接着办。有终态的 `external_pending` 不设期限 —— 那是等外面的事，不是等人。
 
 判定来源只有一个：成员返回的结构化声明 `externalPending`。管家**不解析正文措辞**，也不因为
 「结果里带着材料」就自行把这一轮当成可以在外部收尾。声明缺失或没写清在等什么时记

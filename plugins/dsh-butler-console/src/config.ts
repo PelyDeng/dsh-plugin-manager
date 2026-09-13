@@ -9,6 +9,14 @@ export interface Config {
   routePrefix: string
   /** 单个子任务的最长执行时间，超时按失败处理并中止子 Agent。 */
   subtaskTimeoutMs: number
+  /**
+   * 等用户回话的最长时间。
+   *
+   * 没人回话的等待不能永远挂着：它一直占着「等你回话」的计数，也一直占着那位成员，
+   * 而用户下次进来看到的是一条不知道自己还要不要回的任务。到点按超时收尾，材料保留，
+   * 重新描述目标就能继续。默认 10 分钟，与游戏侧 `butler_timeouts.awaiting_ms` 对齐。
+   */
+  waitingTimeoutMs: number
   /** 一次牛马大总管回答的最长时间。 */
   turnTimeoutMs: number
   /** 单条用户消息字符数上限。 */
@@ -50,6 +58,7 @@ export const Config: Schema<Config> = Schema.object({
   reasoningEffort: Schema.string().pattern(/^(?:off|low|high|max)$/).default('low'),
   routePrefix: Schema.string().pattern(/^\/[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9-]*)*$/).default('/butler'),
   subtaskTimeoutMs: Schema.natural().min(1000).max(1800000).default(300000),
+  waitingTimeoutMs: Schema.natural().min(60000).max(86400000).default(600000),
   turnTimeoutMs: Schema.natural().min(1000).max(3600000).default(600000),
   maxMessageChars: Schema.natural().min(1).max(32000).default(8000),
   maxResultChars: Schema.natural().min(100).max(64000).default(8000),

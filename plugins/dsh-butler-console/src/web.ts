@@ -29,6 +29,15 @@ class HttpError extends Error {
   }
 }
 
+/**
+ * 对外 HTTP 契约的版本号。
+ *
+ * **加字段不升版本**（老客户端忽略即可）；语义变化、字段改名或删除才 +1。`/identity` 会把它
+ * 连同 `routePrefix` 一起返回，第二客户端据此发现入口，不必硬编码 `/butler` —— 那是部署配置，
+ * 换个部署就可能不一样。
+ */
+export const CONTRACT_VERSION = 1
+
 function method(request: IncomingMessage, expected: string): void {
   if (request.method !== expected) throw new HttpError(405, `只支持 ${expected}`)
 }
@@ -324,6 +333,9 @@ export async function installWeb(
   }))
 
   // 身份：页面用它显示当前登录状态，不返回凭据。
+  //
+  // 顺带回答「入口在哪、契约是哪一版」：`routePrefix` 是部署配置，第二客户端不该把它写死；
+  // 两个字段都是新增的，老客户端忽略即可。
   ctx.effect(() => register({
     kind: 'exact',
     path: `${config.routePrefix}/identity`,
@@ -334,6 +346,8 @@ export async function installWeb(
         key: actorKey(actor),
         label: actor.namespace === 'standalone' ? '独立模式' : '已登录',
         authPath: '/auth',
+        routePrefix: config.routePrefix,
+        contractVersion: CONTRACT_VERSION,
       })
     },
   }))

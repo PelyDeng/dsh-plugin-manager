@@ -36,6 +36,8 @@ export type {
   ButlerDispatchResult,
   ButlerProgressUpdate,
 } from './protocol.ts'
+/** 对外 HTTP 契约的版本号；`/identity` 也会返回它。 */
+export { CONTRACT_VERSION } from './web.ts'
 
 /** Cordis 插件名，与 `cordis.patch.yml` 里的 id 和包名保持一致的关系。 */
 export const name = 'butler'

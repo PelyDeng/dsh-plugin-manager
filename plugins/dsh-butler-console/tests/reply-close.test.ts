@@ -51,11 +51,12 @@ function context(executor: ButlerAgentExecutor): Context {
  * `planTool` 是牛马大总管真正会调用的那个派活工具：从 `setup()` 里取出来手动执行，
  * 而不是绕过它直接往内部计划表里塞数据 —— 这样「模型给出计划」这一步也走的是真代码。
  */
-async function fixture(executor: ButlerAgentExecutor) {
+async function fixture(executor: ButlerAgentExecutor, options: { waitingTimeoutMs?: number } = {}) {
   const store = new TaskStore(':memory:')
   const access = { mode: 'authenticated', ready() {}, resolve: () => actor, assert() {} } as unknown as Access
   const config = {
     subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000, maxConversationEvents: 200,
+    waitingTimeoutMs: options.waitingTimeoutMs ?? 600_000,
   } as Config
   const console_ = new ButlerConsole(context(executor), config, access, store, '')
 
@@ -226,6 +227,51 @@ describe('补话之后这一轮要能收尾', () => {
     expect(f.store.task(actor, taskId)!.state).toBe('waiting_user')
     // 没有跑汇总轮：followup 仍然只有最初那一次。
     expect(f.agent.followup).toHaveBeenCalledTimes(1)
+
+    f.store.close()
+  })
+})
+
+describe('没人回话的等待不能永远挂着', () => {
+  const waiting = (): ButlerAgentExecutor => ({
+    protocol: 1,
+    agentId: 'blog',
+    capabilities: ['写作'],
+    dispatch: async () => ({ status: 'waiting_user', summary: '两份候选稿都在这里', question: '采用哪一版？' }),
+    reply: async () => ({ status: 'succeeded', summary: '已按第二版定稿。' }),
+  })
+
+  it('到点收成超时失败，材料一个字都不丢', async () => {
+    const f = await fixture(waiting(), { waitingTimeoutMs: 40 })
+    const taskId = await dispatchUntilWaiting(f)
+
+    await until(() => f.store.task(actor, taskId)!.subtasks[0]!.state === 'failed', '等待超时')
+
+    const record = f.store.task(actor, taskId)!
+    // 子任务：失败 + 说明，但材料（result）原样留着 —— 超时不该把员工交回的东西抹掉。
+    expect(record.subtasks[0]!.result).toBe('两份候选稿都在这里')
+    expect(record.subtasks[0]!.error).toContain('已经过期')
+    // 任务：唯一一位成员超时，这一轮也随之收尾，不再挂着占位。
+    expect(record.state).toBe('failed')
+    expect(record.summary).toContain('两份候选稿都在这里')
+    expect(record.finishedAt).not.toBeNull()
+
+    f.store.close()
+  })
+
+  it('用户回话之后闹钟就撤了，不会把一个已经跑完的活改成超时', async () => {
+    const f = await fixture(waiting(), { waitingTimeoutMs: 60 })
+    const taskId = await dispatchUntilWaiting(f)
+    // 在超时之前回话，成员接着干完。
+    await f.console_.startReply({ taskId, subtaskId: 's1', text: '采用第二版', decideByAgent: false, actor })
+    await until(() => f.agent.followup.mock.calls.length === 2, '汇总轮开始')
+    f.endTurn()
+    await until(() => f.store.task(actor, taskId)!.state === 'completed', '任务收尾')
+
+    // 等过原来的超时点：状态必须还是完成，没有被那次等待的闹钟改回去。
+    await new Promise(resolve => setTimeout(resolve, 100))
+    expect(f.store.task(actor, taskId)!.state).toBe('completed')
+    expect(f.store.task(actor, taskId)!.subtasks[0]!.state).toBe('succeeded')
 
     f.store.close()
   })

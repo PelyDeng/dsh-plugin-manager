@@ -283,8 +283,7 @@ describe('/events 是只读订阅', () => {
     ])
   })
 
-  it('会话不存在时按同一种 404 拒绝，不泄露存在性', async () => {
-    const f = await fixture({ assertOwner: () => { throw new AccessError(404, '会话不存在或无权访问') } })
+  it('会话不存在时按同一种 404 拒绝，不泄露存在性', async () => {    const f = await fixture({ assertOwner: () => { throw new AccessError(404, '会话不存在或无权访问') } })
     const denied = f.call('GET', `/butler/events?conversationId=${conversationId}`)
     await denied.pending
     expect(denied.response.status).toBe(404)
@@ -402,6 +401,20 @@ describe('重复提交只执行一次', () => {
 
     f.endTurn()
     await other.pending
+  })
+})
+
+describe('第二客户端发现入口', () => {
+  it('/identity 交出路由前缀与契约版本，不必把 /butler 写死', async () => {
+    const f = await fixture()
+    const identity = f.call('GET', '/butler/identity')
+    await identity.pending
+    const payload = JSON.parse(identity.response.text) as Record<string, unknown>
+    // 前缀是部署配置，换个部署就可能不一样；客户端据此拼后续请求。
+    expect(payload.routePrefix).toBe('/butler')
+    expect(payload.contractVersion).toBe(1)
+    // 原有字段一个不少：这是加法，不是替换。
+    expect(payload).toMatchObject({ mode: 'authenticated', key: 'user:alice', authPath: '/auth' })
   })
 })
 
