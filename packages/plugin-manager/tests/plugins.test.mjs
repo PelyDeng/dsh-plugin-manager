@@ -65,6 +65,24 @@ test('public plugins declare the build inputs that selective reuse has to watch'
   for (const input of ['doc', 'deploy', 'packages/plugin-manager', 'scripts']) assert.ok(declared('example').includes(input), `example 必须声明 ${input}`);
 });
 
+test('a known confusing failure gets a hint without changing the failure itself', t => {
+  const root = fixture(t);
+  const directory = plugin(root, 'hinted');
+  // 真实形态：同一个包被两条路径解析，同一份 declare module 被加载两次。
+  writeFileSync(resolve(directory, 'check.mjs'), 'console.error("src/index.ts(12,3): error TS2717: Subsequent property declarations must have the same type."); process.exitCode = 2;\n');
+  const result = spawnSync(process.execPath, [resolve(repositoryRoot, 'packages/plugin-manager/src/cli.mjs'), 'check', '--root', root, '--plugins', 'hinted'], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0, '失败仍然是失败');
+  assert.match(result.stderr, /TS2717/u, '原始报错照旧输出');
+  assert.match(result.stderr, /已知问题提示/u);
+  assert.match(result.stderr, /两条路径解析/u);
+  // 无关失败不加提示，免得噪声盖过真正的报错。
+  writeFileSync(resolve(directory, 'check.mjs'), 'console.error("src/index.ts(3,1): error TS2304: Cannot find name \'x\'."); process.exitCode = 2;\n');
+  const plain = spawnSync(process.execPath, [resolve(repositoryRoot, 'packages/plugin-manager/src/cli.mjs'), 'check', '--root', root, '--plugins', 'hinted'], { encoding: 'utf8' });
+  assert.notEqual(plain.status, 0);
+  assert.match(plain.stderr, /TS2304/u);
+  assert.doesNotMatch(plain.stderr, /已知问题提示/u);
+});
+
 test('a dropped-in second plugin is listed, selected, checked, built and packed without lifecycle hooks', t => {
   const root = fixture(t);
   plugin(root, 'z', m => { m.deepseekPlugin.defaultEnabled = false; });

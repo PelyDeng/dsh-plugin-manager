@@ -16,7 +16,20 @@ function spec(args, cwd, env) {
 function failure(args, result, captured) {
   if (captured.stdout?.length) process.stdout.write(captured.stdout);
   if (captured.stderr?.length) process.stderr.write(captured.stderr);
-  return result.error ?? new Error(`pnpm ${args[0]} 失败，退出码 ${result.status ?? result.signal}。`);
+  const error = result.error ?? new Error(`pnpm ${args[0]} 失败，退出码 ${result.status ?? result.signal}。`);
+  // 调用方据此识别已知报错形态并给出提示，不必再跑一遍。
+  error.captured = { stdout: String(captured.stdout ?? ''), stderr: String(captured.stderr ?? '') };
+  return error;
+}
+
+/** 同步但捕获输出：需要在失败时看懂报错的任务（检查一类）用它，成功的任务照旧继承 stdio。 */
+export function runPnpmCaptured(args, cwd, options = {}) {
+  const env = normalizeEnvironment(options.env ?? process.env);
+  const { command, prefix } = spec(args, cwd, env);
+  const result = spawnSync(command, [...prefix, ...args], { cwd, env, shell: false, windowsHide: true, encoding: 'utf8', maxBuffer: options.maxBuffer ?? 32 * 1024 * 1024, ...options });
+  const captured = { stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  if (result.error || result.status !== 0) throw failure(args, result, captured);
+  return captured;
 }
 
 /** Run pnpm without a command shell; forward captured diagnostics only on failure. */
