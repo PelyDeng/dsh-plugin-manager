@@ -16,71 +16,39 @@
  * 但归属不同插件，所以由群组在中间翻译，双方都不必知道对方的存在。
  */
 
+import type {
+  AgentDispatchRequest,
+  AgentExecutionPhase,
+  AgentExecutionProgress,
+  AgentExecutionResult,
+  AgentExecutor,
+  AgentReplyRequest,
+} from '@dsh-plugin-manager/plugin-kit'
 import type { AgentParticipant } from '../packages/common/src/participant.ts'
 import type { AgentManifest } from './agents/registry.ts'
 
 /**
  * 牛马大总管的执行入口契约。
  *
- * 与 `plugins/dsh-butler-console/src/protocol.ts` 的 `ButlerAgentExecutor` 形状一致，
- * 但不导入它的类型：牛马大总管是独立插件，群组不该编译期依赖它的源码。契约靠**事件名与字段**
- * 对齐，并由真实宿主运行时验收实际验证（而不是只靠类型）。
- */
-export interface ButlerAgentExecutor {
-  readonly protocol: 1
-  readonly agentId: string
-  readonly capabilities?: readonly string[]
-  dispatch(request: ButlerDispatchRequest): Promise<ButlerDispatchResult>
-  reply?(request: ButlerReplyRequest): Promise<ButlerDispatchResult>
-}
-
-export interface ButlerDispatchRequest {
-  readonly taskId: string
-  readonly subtaskId: string
-  readonly goal: string
-  readonly brief: string
-  readonly taskGoal: string
-  readonly owner: string
-  readonly actor: { readonly namespace: 'standalone'; readonly userId: 'local' } | { readonly namespace: 'user'; readonly userId: string; readonly sessionId: string }
-  readonly onProgress?: (update: ButlerProgressUpdate) => void
-  readonly signal: AbortSignal
-}
-
-export interface ButlerReplyRequest {
-  readonly taskId: string
-  readonly subtaskId: string
-  readonly text: string
-  readonly decideByAgent: boolean
-  readonly owner: string
-  readonly actor: ButlerDispatchRequest['actor']
-  readonly onProgress?: (update: ButlerProgressUpdate) => void
-  readonly signal: AbortSignal
-}
-
-/**
- * 牛马大总管的进度契约。
+ * 形状来自 kit 的 `execution.ts`，调度方（牛马大总管）和这里导入的是同一份定义，所以字段名
+ * 对不上是**编译错误**而不是线上故障。历史上双方各写一份接口，靠人眼对齐字段名，结果协调方
+ * 读 `stage`、这里发 `text`，第一条进度就让整轮子任务抛 `TypeError`，而两侧类型检查全绿。
  *
- * 与 `plugins/dsh-butler-console/src/protocol.ts` 的 `ButlerProgressUpdate` 字段一一对齐，
- * 但不导入它的类型：牛马大总管是独立插件，群组不该编译期依赖它的源码。契约靠**字段名**
- * 对齐，所以这里只声明对方真正读取的字段 —— 多写一个对方不读的字段（例如 `text`）会让人
- * 以为它有用，少写一个对方必读的字段（例如 `stage`）会让整轮子任务在对方那里抛错。
+ * 事件名仍由调度方声明（`BUTLER_EXECUTORS_EVENT`），那是它自己的事，这里只按名订阅。
  */
-export interface ButlerProgressUpdate {
-  /** 页面显示的状态行。对方按必填读取，所以这里也必填。 */
-  readonly stage: string
-  readonly phase?: string
-  readonly tool?: string
-  readonly delta?: string
-  /** 可展示的思考快照（完整覆盖，不是增量）；与 `delta` 一样只在有值时出现。 */
-  readonly thinking?: string
-  readonly detail?: string
-}
+export type ButlerAgentExecutor = AgentExecutor
 
-export interface ButlerDispatchResult {
-  readonly status: 'succeeded' | 'failed' | 'cancelled' | 'waiting_user'
-  readonly summary: string
-  readonly conversationId?: string
-  readonly question?: string
+export type ButlerDispatchRequest = AgentDispatchRequest
+
+export type ButlerReplyRequest = AgentReplyRequest
+
+export type ButlerProgressUpdate = AgentExecutionProgress
+
+export type ButlerDispatchResult = AgentExecutionResult
+
+/** 参与者的链路环节是自由字符串，只有落在 kit 的固定集合里才上报给协调方。 */
+function toPhase(value: unknown): AgentExecutionPhase | undefined {
+  return (['analyzing', 'tool', 'waiting_user'] as const).find(phase => phase === value)
 }
 
 /** 牛马大总管事件名。与牛马大总管插件的 `BUTLER_EXECUTORS_EVENT` 必须一致。 */
@@ -124,16 +92,16 @@ function toButlerStatus(status: string): ButlerDispatchResult['status'] {
 /**
  * 进度形态转换。
  *
- * 参与者上报的是 `ParticipantProgress`（`text` 是状态或消息正文，外加可选工具与增量），
- * 牛马大总管要的是 `ButlerProgressUpdate`（`stage` 是状态行）。所以这里做一次**改名**：
- * `text` → `stage`，并保证它一定是字符串 —— 对方拿它去压平空白，缺字段会直接抛
+ * 参与者上报的是 `ParticipantProgress`（`text` 是状态或消息正文，外加可选增量），协调方要的
+ * 是 kit 的 `AgentExecutionProgress`（`stage` 是状态行）。所以这里做一次**改名**：`text` → `stage`，
+ * 并保证它一定是字符串 —— 对方拿它去压平空白，缺字段会直接抛
  * `Cannot read properties of undefined`，把整轮子任务打成失败（线上出现过）。参与者没给
  * 正文时给空串：对方自己会把空状态行显示成「干活中」，这里不替它编一个没发生过的阶段。
  */
 function toButlerProgress(progress: Record<string, unknown>): ButlerProgressUpdate {
   const text = typeof progress.text === 'string' ? progress.text : undefined
   const tool = typeof progress.tool === 'string' ? progress.tool : undefined
-  const phase = typeof progress.phase === 'string' ? progress.phase : undefined
+  const phase = toPhase(progress.phase)
   return {
     stage: text ?? '',
     ...(tool === undefined ? {} : { tool }),
