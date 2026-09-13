@@ -16,7 +16,7 @@
  * 3. 汇总：把子任务结果交回给牛马大总管，由它输出最终回答。
  */
 
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
@@ -264,6 +264,27 @@ export interface CancelOutcome {
   readonly reason: string
 }
 
+/**
+ * 一次已经受理过的请求，供重复提交原样返回。
+ *
+ * 只留在内存里，所以它挡的是网络重试、连点两次这一类秒级重复；进程重启之后的重复提交
+ * 会真的再执行一次。要挡住后者得把这张表落库并升级数据结构版本，代价与收益需要单独定。
+ */
+interface IdempotencyRecord {
+  /** 请求指纹。同一个 `requestId` 换了正文要能认出来并拒绝，而不是当成同一次。 */
+  readonly digest: string
+  readonly result: StartedRun
+  readonly at: number
+}
+
+/** 内存里最多留多少条幂等记录；超了就丢最旧的，避免被刷爆。 */
+const MAX_IDEMPOTENCY_RECORDS = 1000
+
+/** 请求指纹：把参与判定的字段压成一个稳定的摘要。 */
+function digestOf(parts: readonly string[]): string {
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
+}
+
 /** 从助手消息里取可见文本。 */
 function textOf(content: readonly unknown[]): string {
   let result = ''
@@ -406,6 +427,13 @@ export class ButlerConsole {
    * 而不是各自重跑一遍任务。
    */
   private readonly logs = new Map<string, ConversationLog<ButlerEvent>>()
+  /**
+   * 已经受理过的写请求：`身份:类型:requestId` → 首次的结果。
+   *
+   * 双入口同时操作、或者一次提交被网络重试，都可能把同一条需求送两次。没有这张表时
+   * 第二次会被当成新的一轮，轻则重复派活，重则两个入口各跑一遍。
+   */
+  private readonly idempotent = new Map<string, IdempotencyRecord>()
   /** 每个正在进行的大总管回合的正文增量出口：`sessionId` → 写进当前事件流。 */
   private readonly deltas = new Map<string, (text: string) => void>()
   /**
@@ -944,26 +972,92 @@ export class ButlerConsole {
    *
    * 返回的是受理凭据而不是结果。提交方随后用 `watch()` 订阅；订阅断了只表示不再读，
    * 与这一轮是否继续执行无关 —— 关掉页面不再等于取消。
+   *
+   * 带了 `requestId` 时重复提交会拿回首次的凭据，不会真的再跑一轮。同一身份、同一类型下
+   * 的 `requestId` 一旦用在别的请求上就直接拒绝：那多半是客户端把 id 生成错了，
+   * 静默当成同一次会让两条不同的需求合成一条。
    */
-  async start(conversationId: string, message: string, actor: Actor): Promise<StartedRun> {
+  async start(conversationId: string, message: string, actor: Actor, requestId = ''): Promise<StartedRun> {
+    const key = this.idempotencyKey(actor, 'chat', requestId)
+    const digest = digestOf([conversationId, message])
+    const seen = this.replay(key, requestId, digest)
+    if (seen !== undefined) return seen
+
     const turn = await this.prepareTurn(conversationId, message, actor, `butler-run-${randomUUID()}`)
     const log = this.beginLog(turn.conversationId, turn.runId)
     void this.pump(turn.abort.signal, log, this.turnBody(turn))
-    return { runId: turn.runId, conversationId: turn.conversationId, from: 0 }
+    const started: StartedRun = { runId: turn.runId, conversationId: turn.conversationId, from: 0 }
+    this.remember(key, requestId, digest, started)
+    return started
   }
 
-  /** 受理一次补话并在后台执行。 */
+  /** 受理一次补话并在后台执行。幂等规则同 {@link start}。 */
   async startReply(input: {
     taskId: string
     subtaskId: string
     text: string
     decideByAgent: boolean
     actor: Actor
+    requestId?: string
   }): Promise<StartedRun> {
+    const requestId = input.requestId ?? ''
+    const key = this.idempotencyKey(input.actor, 'reply', requestId)
+    const digest = digestOf([input.taskId, input.subtaskId, input.text, String(input.decideByAgent)])
+    const seen = this.replay(key, requestId, digest)
+    if (seen !== undefined) return seen
+
     const prepared = this.prepareReply(input, `butler-run-${randomUUID()}`)
     const log = this.beginLog(prepared.conversationId, prepared.runId)
     void this.pump(prepared.abort.signal, log, this.replyBody(prepared))
-    return { runId: prepared.runId, conversationId: prepared.conversationId, from: 0 }
+    const started: StartedRun = { runId: prepared.runId, conversationId: prepared.conversationId, from: 0 }
+    this.remember(key, requestId, digest, started)
+    return started
+  }
+
+  /**
+   * 重复提交时确认那一轮还能重放。
+   *
+   * 事件日志只留最近一轮，被下一轮覆盖之后就没有「原来的结果」可给了。这时如实说明，
+   * 而不是交回一轮新的事件让调用方以为那是自己那次提交的产物。
+   */
+  assertReplayable(started: StartedRun, actor: Actor): void {
+    this.access.assert(actor)
+    const head = this.logs.get(started.conversationId)?.head()
+    if (head === undefined || head === null || head.runId !== started.runId) {
+      throw new AccessError(409, '这次提交已经处理过，那一轮也已经结束，无法再回放它的过程')
+    }
+  }
+
+  /** 幂等记录的键；没有 `requestId` 时返回空串，调用方据此跳过整条路径。 */
+  private idempotencyKey(actor: Actor, kind: string, requestId: string): string {
+    return requestId === '' ? '' : `${actor.namespace}:${actor.userId}:${kind}:${requestId}`
+  }
+
+  /** 命中已受理的请求时返回首次结果；同一个 id 换了正文则拒绝。 */
+  private replay(key: string, requestId: string, digest: string): StartedRun | undefined {
+    if (key === '') return undefined
+    const seen = this.idempotent.get(key)
+    if (seen === undefined) return undefined
+    if (seen.digest !== digest) {
+      throw new AccessError(409, `requestId ${requestId} 已经用在另一次请求上，换一个再提交`)
+    }
+    return seen.result
+  }
+
+  /** 记下一次受理，并顺手清掉过期记录。 */
+  private remember(key: string, requestId: string, digest: string, result: StartedRun): void {
+    if (key === '') return
+    const now = Date.now()
+    for (const [existing, record] of this.idempotent) {
+      if (now - record.at > this.config.idempotencyTtlMs) this.idempotent.delete(existing)
+    }
+    this.idempotent.set(key, { digest, result, at: now })
+    // 表按时间清理之后仍可能被一次性刷满，超出上限时丢最旧的（Map 保持插入顺序）。
+    while (this.idempotent.size > MAX_IDEMPOTENCY_RECORDS) {
+      const oldest = this.idempotent.keys().next()
+      if (oldest.done === true) break
+      this.idempotent.delete(oldest.value)
+    }
   }
 
   /** 在会话上开一份新的事件日志，覆盖它的上一轮。 */

@@ -33,6 +33,13 @@ export interface Config {
    * 频繁收到「请重取快照」，太大则白白占内存。
    */
   maxConversationEvents: number
+  /**
+   * 写请求的幂等记录保留多久。
+   *
+   * 挡的是网络重试和连点两次这类秒级重复，所以按时间清理就够；记录只在内存里，
+   * 进程重启后失效。
+   */
+  idempotencyTtlMs: number
 }
 
 /** Cordis 配置 schema。默认值与设计文档第 2 节的能力范围一致。 */
@@ -52,4 +59,5 @@ export const Config: Schema<Config> = Schema.object({
   maxActiveConversations: Schema.natural().min(1).max(500).default(32),
   maxHistoryPageSize: Schema.natural().min(1).max(100).default(30),
   maxConversationEvents: Schema.natural().min(50).max(20000).default(2000),
+  idempotencyTtlMs: Schema.natural().min(1000).max(86400000).default(600000),
 })

@@ -165,6 +165,33 @@ describe('补话之后这一轮要能收尾', () => {
     f.store.close()
   })
 
+  it('同一个 requestId 重复补话只送达一次', async () => {
+    const reply = vi.fn(async () => ({ status: 'succeeded' as const, summary: '已按第二版定稿。' }))
+    const executor: ButlerAgentExecutor = {
+      protocol: 1,
+      agentId: 'blog',
+      capabilities: ['写作'],
+      dispatch: async () => ({ status: 'waiting_user', summary: '两份候选稿', question: '采用哪一版？' }),
+      reply,
+    }
+    const f = await fixture(executor)
+    const taskId = await dispatchUntilWaiting(f)
+    const request = { taskId, subtaskId: 's1', text: '采用第二版', decideByAgent: false, actor, requestId: 'reply-1' }
+
+    const first = await f.console_.startReply(request)
+    await until(() => f.agent.followup.mock.calls.length === 2, '汇总轮开始')
+    f.endTurn()
+    await until(() => f.store.task(actor, taskId)!.state === 'completed', '任务收尾')
+
+    // 重试拿到的是同一轮。若没有幂等，这一步会因为在不是 waiting_user 的子任务上补话而报错，
+    // 客户端于是把一次成功的补话误判成失败。
+    const retry = await f.console_.startReply(request)
+    expect(retry.runId).toBe(first.runId)
+    expect(reply).toHaveBeenCalledTimes(1)
+
+    f.store.close()
+  })
+
   it('还有人没答复时不收尾，任务继续停在等人回话', async () => {
     let round = 0
     const executor: ButlerAgentExecutor = {

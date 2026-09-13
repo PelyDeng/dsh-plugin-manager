@@ -552,7 +552,11 @@ export async function installWeb(
       if (!decideByAgent && text === '') throw new HttpError(400, '请先写点内容，或者让它自己拿主意')
 
       access.assert(actor)
-      const started = await console_.startReply({ taskId, subtaskId, text, decideByAgent, actor })
+      const started = await console_.startReply({
+        taskId, subtaskId, text, decideByAgent, actor,
+        requestId: stringField(payload, 'requestId', 120, false).trim(),
+      })
+      console_.assertReplayable(started, actor)
       await streamRun({
         response,
         after: started.from,
@@ -594,7 +598,9 @@ export async function installWeb(
 
       access.assert(actor)
       // 受理与执行分开：这一步之后谁断线都不影响这一轮继续跑完。
-      const started = await console_.start(conversationId, message, actor)
+      // `requestId` 让重试拿到同一轮，而不是把同一条需求再派一次。
+      const started = await console_.start(conversationId, message, actor, stringField(payload, 'requestId', 120, false).trim())
+      console_.assertReplayable(started, actor)
       await streamRun({
         response,
         after: started.from,

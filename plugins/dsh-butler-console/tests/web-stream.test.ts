@@ -333,6 +333,78 @@ describe('/events 是只读订阅', () => {
   })
 })
 
+describe('重复提交只执行一次', () => {
+  it('带同一个 requestId 重试，拿回同一轮而不是再派一次', async () => {
+    const f = await fixture()
+    const body = { conversationId, message: '看看今天园区的情况', requestId: 'req-1' }
+
+    const first = f.call('POST', '/butler/chat', body)
+    await until(() => first.response.text.includes('"type":"user"'), '第一轮已经开始')
+
+    // 网络重试：同一个 requestId 再提交一遍。
+    const retry = f.call('POST', '/butler/chat', body)
+    await until(() => retry.response.text.includes('"type":"user"'), '重试拿到了同一轮')
+
+    expect(f.agent.followup).toHaveBeenCalledTimes(1)
+    const runIdOf = (call: Call) => call.response.events().find(event => event.type === 'run')?.runId
+    expect(runIdOf(retry)).toBe(runIdOf(first))
+
+    f.endTurn()
+    await Promise.all([first.pending, retry.pending])
+  })
+
+  it('同一个 requestId 换了正文就拒绝，不悄悄当成同一次', async () => {
+    const f = await fixture()
+    const first = f.call('POST', '/butler/chat', { conversationId, message: '看看今天园区的情况', requestId: 'req-2' })
+    await until(() => first.response.text.includes('"type":"user"'), '第一轮已经开始')
+
+    const conflict = f.call('POST', '/butler/chat', { conversationId, message: '改查危化车', requestId: 'req-2' })
+    await conflict.pending
+    expect(conflict.response.status).toBe(409)
+    expect(String(JSON.parse(conflict.response.text).error)).toContain('req-2')
+    // 第二条需求没有被当成新一轮执行。
+    expect(f.agent.followup).toHaveBeenCalledTimes(1)
+
+    f.endTurn()
+    await first.pending
+  })
+
+  it('不带 requestId 时维持原样：每次提交都是新的一轮', async () => {
+    const f = await fixture()
+    const chat = await startTurn(f)
+    f.endTurn()
+    await chat.pending
+
+    const second = f.call('POST', '/butler/chat', { conversationId, message: '看看今天园区的情况' })
+    await until(() => second.response.text.includes('"type":"user"'), '第二轮已经开始')
+    expect(f.agent.followup).toHaveBeenCalledTimes(2)
+
+    f.endTurn()
+    await second.pending
+  })
+
+  it('原来的那一轮已经被新的一轮覆盖时，如实说无法回放', async () => {
+    const f = await fixture()
+    const body = { conversationId, message: '看看今天园区的情况', requestId: 'req-3' }
+    const first = f.call('POST', '/butler/chat', body)
+    await until(() => first.response.text.includes('"type":"user"'), '第一轮已经开始')
+    f.endTurn()
+    await first.pending
+
+    // 会话上又开了一轮：事件日志只留最近一轮，旧的那次已经没得回放了。
+    const other = f.call('POST', '/butler/chat', { conversationId, message: '换个活' })
+    await until(() => other.response.text.includes('"type":"user"'), '新一轮已经开始')
+
+    const retry = f.call('POST', '/butler/chat', body)
+    await retry.pending
+    expect(retry.response.status).toBe(409)
+    expect(String(JSON.parse(retry.response.text).error)).toContain('已经结束')
+
+    f.endTurn()
+    await other.pending
+  })
+})
+
 describe('/stop 说清楚它到底停没停', () => {
   it('有正在跑的一轮时受理，并如实报告已受理', async () => {
     const f = await fixture()

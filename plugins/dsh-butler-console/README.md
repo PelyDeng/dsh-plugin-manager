@@ -110,6 +110,7 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | `maxActiveConversations` | 32 | 同时保留的会话数 |
 | `maxHistoryPageSize` | 30 | 历史每页条数上限 |
 | `maxConversationEvents` | 2000 | 每个会话最多保留的事件条数，供断线续传与第二个入口回放 |
+| `idempotencyTtlMs` | 600000 | 写请求的幂等记录保留多久；记录只在内存里 |
 
 ## 接口
 
@@ -156,6 +157,10 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 `/butler/stop` 接受可选的 `taskId`：只有当前这一轮确实在跑那个任务时才中止，旧任务迟到的
 取消请求不会碰到该会话随后开的新任务。响应里的 `accepted` 只表示中止请求已经发出，
 执行方是否真的停下要看后续状态。
+
+`/butler/chat` 与 `/butler/reply` 接受可选的 `requestId`：同一登录身份下重复提交同一个 id
+只会执行一次，重试拿回的是同一轮的凭据；同一个 id 换了正文则返回 `409`。不带 `requestId` 时
+每次提交都是新的一轮。这份记录只在内存里、默认保留十分钟，挡的是网络重试与连点两次。
 
 ## 状态语义
 
