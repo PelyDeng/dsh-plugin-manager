@@ -131,6 +131,7 @@ pnpm list:plugins
 
 ### 页面怎么回归
 
+<!-- excerpt:author-page-test -->
 插件的页面代码是浏览器原生模块，没有 jsdom 能覆盖的执行环境，所以布局改动最容易只能靠人眼。仓库提供的做法是**真的把页面跑起来量一遍**：`scripts/web-page-probe.mjs` 起静态服务、按桩文件顶掉接口、用无头 Chromium 在多个视口宽度下执行你写的探针表达式，再把结果打回来。
 
 ```bash
@@ -139,9 +140,12 @@ node scripts/web-page-probe.mjs --root plugins/dsh-auth --prefix /auth \
   --widths 1150,860,640
 ```
 
-探针就是一段返回可序列化值的表达式，能直接读 DOM（样例量的是每行卡片数、同一行卡片头部与页脚的位置差、是否横向溢出、说明渲染了几行）。`plugins/dsh-auth/tests/page-layout.test.mjs` 把这些量变成断言，`pnpm test` 里就会跑：宽视口必须出现三张一行、窄视口回落单列、任何宽度都不许出现错位或横向溢出。没有可用 Chromium 时工具会明确打印跳过（可用 `CHROME_PATH` 或 `--browser` 指定，`--require-browser` 让跳过变成失败），不把跳过当通过。
+探针就是一段返回可序列化值的表达式，能直接读 DOM（样例量的是每行卡片数、同一行卡片头部与页脚的位置差、是否横向溢出、说明渲染了几行）。`plugins/dsh-auth/tests/page-layout.test.mjs` 把这些量变成断言，`pnpm test` 里就会跑：宽视口必须出现三张一行、窄视口回落单列、任何宽度都不许出现错位或横向溢出。
 
-需要人眼看图时用同一个静态服务加 `--screenshot` 即可；探针与桩文件都放在插件的 `tests/` 下随源码维护，不需要额外依赖。
+页面 HTML 与构建产物不在同一目录时：用 `--dir <目录>` 换掉页面目录（默认 `<root>/web`），用 `--mount <路径=目录>` 把产物目录挂到宿主约定的资源前缀下；HTML 里有待宿主替换的占位配置时，用 `--replace <词=文件>` 在返回前换成该文件内容。探针与桩文件放在插件的 `tests/` 下随源码维护，不需要额外依赖。加 `--json` 只输出结果，便于脚本消费。
+
+**断言要守住两条底线**：产物缺失属于构建问题，应当直接失败并给出该跑的命令；只有机器上确实没有可用 Chromium 时才允许跳过（`CHROME_PATH`／`--browser` 指定，`--require-browser` 把跳过变成失败），而且跳过在测试里必须记成真正的 SKIP，不能算通过。
+<!-- /excerpt:author-page-test -->
 
 打包会并行构建与打包多个插件：插件之间没有依赖，同时最多 4 个（`pnpm package --concurrency <n>` 可调整，1 表示逐个进行）。依赖安装与共享依赖准备先单线做完，再进入并行阶段；日志按插件 ID 加前缀以便分辨，交付清单里的插件顺序仍按选集，与并发无关。
 

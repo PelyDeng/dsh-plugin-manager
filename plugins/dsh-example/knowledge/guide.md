@@ -179,6 +179,25 @@ Docker 只接受本机 Linux 引擎 unix/npipe endpoint。Docker Desktop 使用�
 
 页面使用官方 WebServer；受保护接口从 kit 的 createAccess/createPluginHttp 获得可信 actor。工具按 kit 的 createPluginTools/guardTool 接入，并加入 Agent 白名单。`createPluginTools().register(定义, 显示名, 分类)` 的第三个参数是**工具分类标签**，由注册方自己填写：它既用于认证页面按标签分组展示，也是宿主按标签限制可见范围的依据 —— `toolsForCategory(条目, 本分类)` 返回「本分类 + 通用工具」，调用方在 Agent 的 setup 里用 `tools.restrict({ allow })` 应用它，该 Agent 就只能调用自己标签下的工具。约定好的公共集用固定标签 `通用工具`（kit 导出的 `UNIVERSAL_TOOL_CATEGORY`），每个 Agent 都能调。不传分类的工具不参与这套限制，既有插件不受影响。完整签名先查 packages/plugin-kit/README.md 与实际导出，不猜接口。业务账号由可信请求上下文取得，不接受模型生成的 userId。
 
+## 插件的页面怎么改、怎么测？
+
+<!-- Excerpt from doc/plugin-development.md.tmpl#author-page-test; edit its source. -->
+插件的页面代码是浏览器原生模块，没有 jsdom 能覆盖的执行环境，所以布局改动最容易只能靠人眼。仓库提供的做法是**真的把页面跑起来量一遍**：`scripts/web-page-probe.mjs` 起静态服务、按桩文件顶掉接口、用无头 Chromium 在多个视口宽度下执行你写的探针表达式，再把结果打回来。
+
+```bash
+node scripts/web-page-probe.mjs --root plugins/dsh-auth --prefix /auth \
+  --stub plugins/dsh-auth/tests/page-stub.json --probe plugins/dsh-auth/tests/page-probe.js \
+  --widths 1150,860,640
+```
+
+探针就是一段返回可序列化值的表达式，能直接读 DOM（样例量的是每行卡片数、同一行卡片头部与页脚的位置差、是否横向溢出、说明渲染了几行）。`plugins/dsh-auth/tests/page-layout.test.mjs` 把这些量变成断言，`pnpm test` 里就会跑：宽视口必须出现三张一行、窄视口回落单列、任何宽度都不许出现错位或横向溢出。
+
+页面 HTML 与构建产物不在同一目录时：用 `--dir <目录>` 换掉页面目录（默认 `<root>/web`），用 `--mount <路径=目录>` 把产物目录挂到宿主约定的资源前缀下；HTML 里有待宿主替换的占位配置时，用 `--replace <词=文件>` 在返回前换成该文件内容。探针与桩文件放在插件的 `tests/` 下随源码维护，不需要额外依赖。加 `--json` 只输出结果，便于脚本消费。
+
+**断言要守住两条底线**：产物缺失属于构建问题，应当直接失败并给出该跑的命令；只有机器上确实没有可用 Chromium 时才允许跳过（`CHROME_PATH`／`--browser` 指定，`--require-browser` 把跳过变成失败），而且跳过在测试里必须记成真正的 SKIP，不能算通过。
+
+私有页面若依赖宿主注入的配置或构建产物，就按上面两种做法（`--replace`／`--mount`）把夹具补齐再改；跳过必须是真正的 SKIP，产物缺失要当构建问题直接失败。
+
 ## 如何复制完整 example？
 
 改包名、插件 ID、Bundle、权限、配置 entryId、页面路由、会话前缀/正则、提示词段名、知识和测试。独立包将 kit 改成版本化相对构建输入并内嵌，替换框架专用构建脚本和测试。config.systemPrompt 只是补充，不能只改它就把内置开发者知识变成其他业务；详见 doc/plugin-development.md。

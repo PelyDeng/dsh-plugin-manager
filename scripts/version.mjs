@@ -29,6 +29,7 @@ export const versionTemplates = [
 export const documentationFragments = {
   'author-tools': 'doc/plugin-development.md.tmpl',
   'author-pack': 'doc/plugin-development.md.tmpl',
+  'author-page-test': 'doc/plugin-development.md.tmpl',
   'deployment-start': 'doc/first-deployment.md.tmpl',
   'deployment-update': 'doc/first-deployment.md.tmpl',
   'site-recovery': 'deploy/README.md',

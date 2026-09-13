@@ -62,6 +62,12 @@
 
 页面使用官方 WebServer；受保护接口从 kit 的 createAccess/createPluginHttp 获得可信 actor。工具按 kit 的 createPluginTools/guardTool 接入，并加入 Agent 白名单。`createPluginTools().register(定义, 显示名, 分类)` 的第三个参数是**工具分类标签**，由注册方自己填写：它既用于认证页面按标签分组展示，也是宿主按标签限制可见范围的依据 —— `toolsForCategory(条目, 本分类)` 返回「本分类 + 通用工具」，调用方在 Agent 的 setup 里用 `tools.restrict({ allow })` 应用它，该 Agent 就只能调用自己标签下的工具。约定好的公共集用固定标签 `通用工具`（kit 导出的 `UNIVERSAL_TOOL_CATEGORY`），每个 Agent 都能调。不传分类的工具不参与这套限制，既有插件不受影响。完整签名先查 packages/plugin-kit/README.md 与实际导出，不猜接口。业务账号由可信请求上下文取得，不接受模型生成的 userId。
 
+## 插件的页面怎么改、怎么测？
+
+<!-- include:author-page-test -->
+
+私有页面若依赖宿主注入的配置或构建产物，就按上面两种做法（`--replace`／`--mount`）把夹具补齐再改；跳过必须是真正的 SKIP，产物缺失要当构建问题直接失败。
+
 ## 如何复制完整 example？
 
 改包名、插件 ID、Bundle、权限、配置 entryId、页面路由、会话前缀/正则、提示词段名、知识和测试。独立包将 kit 改成版本化相对构建输入并内嵌，替换框架专用构建脚本和测试。config.systemPrompt 只是补充，不能只改它就把内置开发者知识变成其他业务；详见 doc/plugin-development.md。

@@ -101,6 +101,10 @@ Windows 使用根 build.ps1，macOS/Linux 使用 build.sh。新部署包的默�
 
 prepared 后的挂载/权限检查也可能失败，状态不能仅凭“尚未停服”判断。保持原受管输入后用 resume；同包业务参数本身错误则用单独 recover。遗留锁先通过 doctor 核验归属，profile unlock 不能替代站点解锁。完整规则只在[恢复说明](../deploy/README.md#安装与恢复)维护。
 
+## 只改了一个插件，怎么只重建它？
+
+源码部署用 `./build.sh --rebuild-plugins c`（Windows：`.\build.ps1 --rebuild-plugins c`，多个 ID 用引号包起来，如 `"c,d"`），被点名的插件重建，其余继续用上一次成功发布且可核实的归档。不想自己算集合就写 `--rebuild-plugins auto`：重建集由判定按「改动落在哪些插件的构建输入里」算出来，算不出可靠基线时整套重建，而不是让发布失败。判定拒绝点名选集时会把全部原因和补全后的完整命令一次给出（`--rebuild-plugins "a,b,c"`）。规则、拒绝条件与 `buildInputs` 声明方式见[部署与管理](../deploy/README.md#服务器源码发版)。
+
 ## 类型检查报 TS2717，说同一个属性被声明了两次？
 
 那是「同一个包被两条路径解析」的症状：TypeScript 按解析到的路径区分模块身份，kit 的事件通道声明（`src/events.ts` 里的 `declare module '@deepseek-ai/cordis'`）一旦被加载两次，就会报 TS2717，而两个类型看起来完全一样。做法是让每个事件通道只在 kit 的 `src/events.ts` 里声明一次，谁需要就导入那个模块；新增通道也加在那里，不要在别的文件里重复写。`pnpm check` 与打包遇到这个报错时会直接给出这条提示。
