@@ -9,6 +9,14 @@ import { readEventStream } from './stream.js'
 const config = globalThis.__BUTLER_CONFIG__ ?? {}
 export const ROUTE_PREFIX = config.routePrefix ?? '/butler'
 
+/**
+ * 历史分页一次取多少条。
+ *
+ * 上限是服务端配置，页面只跟着它走：写死一个比上限大的数会直接被服务端按参数无效拒掉，
+ * 而页面上只会显示一句「读取记录失败」——错误离原因太远。
+ */
+export const HISTORY_PAGE_SIZE = config.historyPageSize ?? 30
+
 /** 一次接口调用失败。带上状态码，页面据此区分未登录和真正的服务错误。 */
 export class ApiError extends Error {
   constructor(status, message) {
@@ -41,10 +49,11 @@ export const api = {
   members: () => request('/members'),
   overview: () => request('/overview'),
   conversations: () => request('/conversations'),
-  history: ({ offset = 0, limit = 40, keyword = '', state = '' } = {}) => {
+  history: ({ offset = 0, limit = HISTORY_PAGE_SIZE, keyword = '', state = '', conversationId = '' } = {}) => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
     if (keyword !== '') params.set('q', keyword)
     if (state !== '') params.set('state', state)
+    if (conversationId !== '') params.set('conversationId', conversationId)
     return request(`/history?${params.toString()}`)
   },
   task: id => request(`/task?id=${encodeURIComponent(id)}`),

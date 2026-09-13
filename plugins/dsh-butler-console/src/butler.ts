@@ -1009,12 +1009,24 @@ export class ButlerConsole {
   }
 
   /** 运行历史分页。 */
-  history(actor: Actor, query: { offset: number; limit: number; keyword: string; state: string }) {
+  history(actor: Actor, query: {
+    offset: number
+    limit: number
+    keyword: string
+    state: string
+    /** 只取某个会话的活；省略表示全部会话。 */
+    conversationId?: string
+  }) {
     this.access.assert(actor)
     if (!Number.isSafeInteger(query.offset) || query.offset < 0
       || !Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > this.config.maxHistoryPageSize
       || query.keyword.length > 120) throw new AccessError(400, '历史查询参数无效', 'history_query_invalid')
-    return this.store.history(actor, query)
+    const conversationId = query.conversationId ?? ''
+    if (conversationId === '') return this.store.history(actor, query)
+    // 会话 id 形状不对就当场拒掉；归属也一起核，别人拿不到存在性，也不会拿它去寻址别的会话。
+    this.validateId(conversationId)
+    this.store.assertOwner(conversationId, actor)
+    return this.store.history(actor, { ...query, conversationId })
   }
 
   /** 一条任务的完整记录。 */

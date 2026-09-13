@@ -217,7 +217,15 @@ export async function installWeb(
   const sourceHtml = await readFile(new URL('../web/index.html', import.meta.url), 'utf8')
   // 页面里的 `/butler/...` 是包内默认前缀，部署改前缀时一并替换。
   // 配置注到 head 里而不是替换占位符：index.html 因此可以被浏览器直接打开预览。
-  const injection = `<script>globalThis.__BUTLER_CONFIG__=${JSON.stringify({ routePrefix: config.routePrefix }).replaceAll('<', '\\u003c')};</script>`
+  //
+  // `historyPageSize` 一并注进去，页面就不必猜服务端的上限：它曾经写死 40，而默认上限是 30，
+  // 于是左栏每次拉历史都被服务端按 `history_query_invalid` 拒掉，页面只显示「读取记录失败」。
+  // 上限是部署配置，唯一的来源只能是服务端。
+  const pageConfig = {
+    routePrefix: config.routePrefix,
+    historyPageSize: config.maxHistoryPageSize,
+  }
+  const injection = `<script>globalThis.__BUTLER_CONFIG__=${JSON.stringify(pageConfig).replaceAll('<', '\\u003c')};</script>`
   const html = sourceHtml
     .replaceAll('/butler', config.routePrefix)
     .replace('</head>', `${injection}</head>`)
@@ -409,8 +417,8 @@ export async function installWeb(
 
   // 身份：页面用它显示当前登录状态，不返回凭据。
   //
-  // 顺带回答「入口在哪、契约是哪一版」：`routePrefix` 是部署配置，第二客户端不该把它写死；
-  // 两个字段都是新增的，老客户端忽略即可。
+  // 顺带回答「入口在哪、契约是哪一版、分页上限是多少」：这些是部署配置，第二客户端不该把它写死；
+  // 三个字段都是新增的，老客户端忽略即可。
   ctx.effect(() => register({
     kind: 'exact',
     path: `${config.routePrefix}/identity`,
@@ -423,6 +431,7 @@ export async function installWeb(
         authPath: '/auth',
         routePrefix: config.routePrefix,
         contractVersion: CONTRACT_VERSION,
+        historyPageSize: config.maxHistoryPageSize,
       })
     },
   }))
@@ -568,6 +577,7 @@ export async function installWeb(
         limit: Number(params.get('limit') ?? '30'),
         keyword: (params.get('q') ?? '').trim(),
         state,
+        conversationId: (params.get('conversationId') ?? '').trim(),
       }))
     },
   }))

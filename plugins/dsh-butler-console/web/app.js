@@ -1031,7 +1031,7 @@ async function refreshPanels() {
  */
 async function refreshChatList() {
   try {
-    const [conversations, history] = await Promise.all([api.conversations(), api.history({ limit: 40 })])
+    const [conversations, history] = await Promise.all([api.conversations(), api.history()])
     const byConversation = new Map()
     for (const task of history.items) {
       if (!byConversation.has(task.conversationId)) byConversation.set(task.conversationId, task)
@@ -1044,8 +1044,10 @@ async function refreshChatList() {
       }
     })
     renderChatList(items, el.chatSearch.value.trim().toLowerCase())
-  } catch {
-    el.chatList.replaceChildren(make('p', 'empty', '读取记录失败'))
+  } catch (error) {
+    // 把服务端给的原因一并显示：只说「读取记录失败」，排查时等于什么都没有。
+    const reason = error instanceof Error ? error.message : ''
+    el.chatList.replaceChildren(make('p', 'empty', reason === '' ? '读取记录失败' : `读取记录失败：${reason}`))
   }
 }
 
@@ -1060,8 +1062,10 @@ async function openConversation(id) {
   state.asks.clear()
   resetRail()
   try {
-    const page = await api.history({ limit: 40 })
-    const mine = page.items.filter(task => task.conversationId === id).reverse()
+    // 按会话取，不在页面上筛：会话一多，更早的那个就会落在第一页之外，
+    // 打开它只会看到欢迎语 —— 记录明明在库里，只是没被取到。
+    const page = await api.history({ conversationId: id })
+    const mine = page.items.slice().reverse()
     if (mine.length === 0) {
       renderWelcome()
       return
@@ -1071,8 +1075,9 @@ async function openConversation(id) {
       renderTaskRecord(record)
     }
     el.thread.scrollTop = el.thread.scrollHeight
-  } catch {
-    renderWelcome()
+  } catch (error) {
+    // 拉不到就如实说，不装成「这里没派过活」——那样看起来像记录丢了。
+    append(make('p', 'error-line', error instanceof Error ? error.message : '打不开这个会话'))
   }
   void refreshChatList()
 }

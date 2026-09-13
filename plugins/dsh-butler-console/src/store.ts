@@ -175,6 +175,13 @@ export interface HistoryQuery {
   readonly keyword: string
   /** 空字符串表示不按状态过滤。 */
   readonly state: string
+  /**
+   * 只取某个会话的活；省略或空串表示不按会话过滤。
+   *
+   * 打开历史会话时按会话取，而不是「拉一页再在页面上筛」：会话一多，更早的那个
+   * 就会落在第一页之外，页面把它显示成没派过活 —— 记录明明在库里，只是没被取到。
+   */
+  readonly conversationId?: string
 }
 
 const STORE_ERROR = '工作台数据不可用，请稍后重试'
@@ -562,6 +569,10 @@ export class TaskStore {
     if (query.state !== '') {
       filters.push('t.state=?')
       values.push(query.state)
+    }
+    if (query.conversationId !== undefined && query.conversationId !== '') {
+      filters.push('t.conversation_id=?')
+      values.push(query.conversationId)
     }
     const where = filters.join(' AND ')
     const total = Number(this.db.prepare(`SELECT count(*) AS total FROM tasks t WHERE ${where}`).get(...values)?.total ?? 0)
