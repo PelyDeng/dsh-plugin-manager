@@ -10,6 +10,7 @@ import { ensurePrivateDirectory, writePrivateFile } from './private-files.mjs';
 import { canonical, hash, STATE, PENDING, same } from './state.mjs';
 import { resolveDeployment } from './config.mjs';
 import { loadRelease, selectRelease } from './release.mjs';
+import { verificationStats } from './verify-package.mjs';
 import { composeReleases } from './compose-release.mjs';
 import { readState } from './installation.mjs';
 import { resolvePluginSettings } from './plugin-settings.mjs';
@@ -216,6 +217,8 @@ export function releaseSite({ root, config, resume = false, recover = false, dat
     const { cli } = verifySavedTooling(record);
     if (!immutableImage(record.image) || fileHash(record.manifest) !== record.manifestHash || fileHash(record.candidatePath) !== record.candidateHash) throw new Error('Saved release inputs changed; the deployment is retained for inspection.');
     buildStep('加载并核验发布清单', () => loadRelease(record.manifest)); context.inspect(record.image); buildStep('核验站点输入', () => verifySiteInputs(record));
+    const verification = verificationStats();
+    if (verification.reused) buildMessage(`清单核验：解包核验 ${verification.inspected} 次，按内容摘要复用 ${verification.reused} 次（同一份归档在本次发布里只解包一次）`);
     const candidate = readSiteJson(record.candidatePath);
     if (candidate.containerImage !== record.image || resolve(root, candidate.manifest) !== record.manifest) throw new Error('Saved deployment configuration changed.');
     if (record.schemaVersion === 3) {

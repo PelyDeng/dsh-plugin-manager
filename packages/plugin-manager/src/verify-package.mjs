@@ -4,8 +4,50 @@ import { resolve, relative } from 'node:path';
 import { discoverPlugins, privatePackagePath, parseOptions, sourcePlugins } from './plugins.mjs';
 import { openArchiveMembers, readArchive } from './state.mjs';
 
-/** Return the verified manifest without leaving extracted files behind. */
-export function verifyPackage(plugin, archive) {
+/**
+ * 已核验归档的复用表：内容摘要 → 身份键 → 包内清单。
+ *
+ * 核验一个归档要跑三遍 tar（列表、类型、成员），24MB 的插件包约 3 秒；而一次发布里同一份
+ * 归档会被核验好几遍——上一次发布的清单、本次合并后的清单、复用判定各读一次。归档是内容
+ * 寻址的，调用方**先核对摘要**再把它传进来，所以命中就说明是同一份字节，判定结论必然相同。
+ * 只有成功结论入表，失败照样全量重跑；身份键里带上插件声明的包名、版本与 verifyFiles，
+ * 因为这些字段参与判定。条目只存包内清单这种小对象，不存归档字节。
+ */
+const verified = new Map();
+const CACHE_LIMIT = 64;
+let inspected = 0, reused = 0;
+
+/** 诊断用：本条进程里真正解包核验过几次、命中复用几次。 */
+export function verificationStats() {
+  return { inspected, reused, cached: verified.size };
+}
+
+const identityOf = plugin => JSON.stringify([plugin.package, plugin.version, plugin.verifyFiles]);
+
+/**
+ * 核验发布包，返回包内 `package.json`。
+ *
+ * `options.sha256` 传归档内容摘要时才启用复用表：调用方必须先核对摘要与归档字节一致。
+ * 不给摘要时每次全量核验（构建期校验就是这么调的）。
+ */
+export function verifyPackage(plugin, archive, options = {}) {
+  const identity = options.sha256 === undefined ? undefined : identityOf(plugin);
+  if (identity !== undefined) {
+    const cached = verified.get(options.sha256)?.get(identity);
+    if (cached !== undefined) { reused += 1; return structuredClone(cached); }
+  }
+  inspected += 1;
+  const packed = inspectPackage(plugin, archive);
+  if (identity !== undefined) {
+    if (!verified.has(options.sha256) && verified.size >= CACHE_LIMIT) verified.delete(verified.keys().next().value);
+    const byIdentity = verified.get(options.sha256) ?? new Map();
+    byIdentity.set(identity, packed);
+    verified.set(options.sha256, byIdentity);
+  }
+  return packed;
+}
+
+function inspectPackage(plugin, archive) {
   const entries = readArchive(archive, ['-tzf', '-']).toString('utf8').trim().split(/\r?\n/u);
   const seen = new Set();
   for (const entry of entries) {

@@ -15,7 +15,8 @@ export function loadRelease(manifestPath) {
     ids.add(plugin.id); names.add(plugin.package);
     if (typeof plugin.archive !== 'string' || isAbsolute(plugin.archive) || !within(dirname(path), resolve(dirname(path), plugin.archive))) fail(`插件 ${plugin.id} 产物路径越界。`);
     const archive = resolve(dirname(path), plugin.archive);
-    if (!digestPattern.test(plugin.sha256) || hash(readFileSync(archive)) !== plugin.sha256) fail(`插件 ${plugin.id} 包摘要不匹配。`);
+    const sha256 = hash(readFileSync(archive));
+    if (!digestPattern.test(plugin.sha256) || sha256 !== plugin.sha256) fail(`插件 ${plugin.id} 包摘要不匹配。`);
     if (!Array.isArray(plugin.verifyFiles) || plugin.verifyFiles.some(file => typeof file !== 'string' || isAbsolute(file) || file.split(/[\\/]/).includes('..'))) fail('verifyFiles 无效。');
     if (manifest.schemaVersion === 1) {
       if (typeof plugin.directory !== 'string' || !/^plugins\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(plugin.directory)) fail('插件源码目录必须位于 plugins/ 下一级。');
@@ -25,7 +26,8 @@ export function loadRelease(manifestPath) {
     if (plugin.healthPath !== undefined && (typeof plugin.healthPath !== 'string' || !/^\/[a-zA-Z0-9_~./-]*$/.test(plugin.healthPath) || plugin.healthPath.startsWith('//') || plugin.healthPath.split('/').includes('..'))) fail('healthPath 无效。');
     if (plugin.runtimeConfig && (!environmentName(plugin.runtimeConfig.variable) || (plugin.runtimeConfig.required !== undefined && typeof plugin.runtimeConfig.required !== 'boolean'))) fail('runtimeConfig 无效。');
     if (plugin.development && (!environmentName(plugin.development.rootVariable) || typeof plugin.development.patch !== 'string' || isAbsolute(plugin.development.patch) || plugin.development.patch.split(/[\\/]/).includes('..'))) fail('development 无效。');
-    const packed = verifyPackage(plugin, archive);
+    // 摘要刚核对过，交给核验：同一份归档在同一次发布里会被核验多遍，这样只解包一次。
+    const packed = verifyPackage(plugin, archive, { sha256 });
     validateConfiguration(plugin.configuration, plugin.id);
     if (!same(plugin.configuration, packed.deepseekPlugin?.configuration)) fail(`${plugin.id}: configuration 与包内声明不一致。`);
     const packedRuntime = packed.deepseekPlugin?.runtimeConfig;
