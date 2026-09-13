@@ -132,6 +132,8 @@ export interface TaskCounts {
   readonly waitingUser: number
   /** 材料已交回、还有事在别处等着办。与「等人回话」分开计数：等的东西不一样。 */
   readonly externalPending: number
+  /** 一部分成、一部分没成。与「已交差」分开：那是后端给的结论，不是界面数出来的。 */
+  readonly partial: number
   readonly failed: number
   readonly completed: number
   readonly queued: number
@@ -694,6 +696,7 @@ export class TaskStore {
       running: pick('running', 'summarizing'),
       waitingUser: pick('waiting_user'),
       externalPending: pick('external_pending'),
+      partial: pick('partial'),
       failed: pick('failed'),
       completed: pick('completed'),
       queued: pick('queued'),

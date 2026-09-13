@@ -29,6 +29,7 @@ export type TaskState =
   | 'waiting_user'
   | 'summarizing'
   | 'external_pending'
+  | 'partial'
   | 'completed'
   | 'failed'
   | 'cancelled'
@@ -36,7 +37,7 @@ export type TaskState =
 /** 子任务或任务是否已经结束，结束时不再接受新的状态事件。 */
 export function isTerminal(state: SubtaskState | TaskState): boolean {
   return state === 'succeeded' || state === 'failed' || state === 'cancelled'
-    || state === 'completed' || state === 'external_pending'
+    || state === 'completed' || state === 'external_pending' || state === 'partial'
 }
 
 /**
@@ -59,10 +60,11 @@ const SUBTASK_TRANSITIONS: Readonly<Record<SubtaskState, readonly SubtaskState[]
 
 const TASK_TRANSITIONS: Readonly<Record<TaskState, readonly TaskState[]>> = {
   queued: ['running', 'cancelled', 'failed'],
-  running: ['waiting_user', 'summarizing', 'external_pending', 'completed', 'failed', 'cancelled'],
-  waiting_user: ['running', 'summarizing', 'external_pending', 'completed', 'failed', 'cancelled'],
-  summarizing: ['external_pending', 'completed', 'failed', 'cancelled'],
+  running: ['waiting_user', 'summarizing', 'external_pending', 'partial', 'completed', 'failed', 'cancelled'],
+  waiting_user: ['running', 'summarizing', 'external_pending', 'partial', 'completed', 'failed', 'cancelled'],
+  summarizing: ['external_pending', 'partial', 'completed', 'failed', 'cancelled'],
   external_pending: [],
+  partial: [],
   completed: [],
   failed: [],
   cancelled: [],

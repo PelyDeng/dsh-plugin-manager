@@ -21,6 +21,7 @@ const STATE_TEXT = {
   running: '在干活',
   waiting_user: '等着你回话',
   external_pending: '待外部处理',
+  partial: '部分完成',
   succeeded: '交差了',
   failed: '翻车了',
   cancelled: '不干了',
@@ -608,6 +609,7 @@ function summaryCard(event) {
       : event.state === 'cancelled' ? '已喊停'
         // 「待外部处理」不是「办完了」：材料在这，那件事还在外面等着。
         : event.state === 'external_pending' ? '材料交回了，还有事在外面等着'
+          : event.state === 'partial' ? '有些活没干成，成果在这儿'
           : '还等你回话'
   card.appendChild(make('div', 'summary__title', title))
   card.appendChild(make('p', 'summary__body', event.text || event.error || '（没什么好说的）'))
@@ -892,6 +894,7 @@ function renderMetrics(counts) {
     { label: '在干活', value: counts.running },
     { label: '等你回话', value: counts.waitingUser },
     { label: '待外部处理', value: counts.externalPending },
+    { label: '部分完成', value: counts.partial },
     { label: '翻车', value: counts.failed },
     { label: '已交差', value: counts.completed },
   ]

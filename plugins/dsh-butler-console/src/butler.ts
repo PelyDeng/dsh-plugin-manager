@@ -1625,8 +1625,9 @@ export class ButlerConsole {
 
     const after = this.store.task(actor, taskId)
     if (after === undefined || after.subtasks.some(item => !isTerminal(item.state))) return
-    const failed = after.subtasks.filter(item => item.state === 'failed').length
-    this.store.setTaskState(taskId, failed === after.subtasks.length ? 'failed' : 'completed', {
+    const active = effectiveSubtasks(after.subtasks)
+    const failed = active.filter(item => item.state === 'failed').length
+    this.store.setTaskState(taskId, failed === 0 ? 'completed' : failed === active.length ? 'failed' : 'partial', {
       summary: this.storedReports(actor, taskId).join('\n\n'),
       error: WAITING_EXPIRED_TASK,
     })
@@ -2198,8 +2199,11 @@ export class ButlerConsole {
     if (stopped) taskState = 'cancelled'
     else if (failed === 0) taskState = 'completed'
     else if (failed === subtasks.length) taskState = 'failed'
-    // 部分失败仍算交付：有可用结果就照常汇总，失败数单独写在 error 里。
-    else taskState = 'completed'
+    // 一部分成、一部分败：有可用成果，但这一轮并没有全部完成。
+    //
+    // 这个结论**由后端统一给出**，不让两个界面各自去数子任务 —— 那样迟早会不一致，而且
+    // 谁也没法改对方的判断。之前这种情况落在 `completed`，用户看到的是「活干完了」。
+    else taskState = 'partial'
 
     if (waiting > 0 && !stopped) {
       const message = `有 ${waiting} 位成员在等你回话，回完再给你汇总。`

@@ -264,6 +264,65 @@ describe('聚合只看有效尝试', () => {
   })
 })
 
+describe('部分完成的结论由后端统一给出', () => {
+  /** 两条互不依赖的活，各自成败可控。 */
+  async function twoWork(executor: ButlerAgentExecutor) {
+    const f = await fixture(executor)
+    await f.console_.start(conversationId, '写两篇', actor)
+    await until(() => f.agent.followup.mock.calls.length >= 1, '开始理解')
+    await f.planTool.execute(plan([
+      { goal: '甲', agentId: 'blog', reason: '' },
+      { goal: '乙', agentId: 'blog', reason: '' },
+    ]), run)
+    f.endTurn()
+    await until(() => f.tasks().length === 1, '任务落库')
+    const taskId = f.tasks()[0]!.id
+    let released = false
+    await until(() => {
+      const state = f.store.task(actor, taskId)!.state
+      if (state === 'summarizing' && !released) { released = true; f.endTurn(); return false }
+      return state !== 'running' && state !== 'summarizing'
+    }, '这一轮收尾')
+    return { f, taskId }
+  }
+
+  it('一条成、一条败给的是 partial，不是「活干完了」', async () => {
+    const { f, taskId } = await twoWork(executorByGoal({ 乙: { status: 'failed', summary: '乙炸了' } }))
+    const record = f.store.task(actor, taskId)!
+    expect(record.state).toBe('partial')
+    // 失败的那条仍然如实写着，用户能看出差在哪儿。
+    expect(record.subtasks.map(item => item.state)).toEqual(['succeeded', 'failed'])
+    expect(record.finishedAt).not.toBeNull()
+    // 计数也分开：partial 不该混进「已交差」。
+    expect(f.store.counts(actor).partial).toBe(1)
+    expect(f.store.counts(actor).completed).toBe(0)
+    f.store.close()
+  })
+
+  it('有一条还在等人回话时不收尾，也就谈不上 partial', async () => {
+    const { f, taskId } = await twoWork(executorByGoal({
+      乙: { status: 'waiting_user', summary: '候选稿' },
+    }))
+    expect(f.store.task(actor, taskId)!.state).toBe('waiting_user')
+    f.store.close()
+  })
+
+  it('全部失败仍然是 failed，不降一级说成「部分完成」', async () => {
+    const { f, taskId } = await twoWork(executorByGoal({
+      甲: { status: 'failed', summary: '甲炸了' },
+      乙: { status: 'failed', summary: '乙炸了' },
+    }))
+    expect(f.store.task(actor, taskId)!.state).toBe('failed')
+    f.store.close()
+  })
+
+  it('全部成功仍然是 completed', async () => {
+    const { f, taskId } = await twoWork(executorByGoal({}))
+    expect(f.store.task(actor, taskId)!.state).toBe('completed')
+    f.store.close()
+  })
+})
+
 describe('依赖：只有前置成功才派下一步', () => {
   /** 一步依赖另一步的计划。 */
   const chained = () => plan([
