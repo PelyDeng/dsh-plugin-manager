@@ -99,17 +99,24 @@ function timedLine(text, elapsedMs, output) {
 /**
  * 各阶段耗时表：日志末尾自带归因，不必再回头 grep 进度行。
  *
+ * 每行带开始时刻：阶段之间的间隙（文件复制、镜像打标一类没有被计时的部分）由此一眼可见，
+ * 不必再靠「墙钟减去相加」去猜。
+ *
  * 两行合计都给：逐项相加是「工具自己花了多少时间」，并行阶段互相重叠时它会大于墙钟；
- * 墙钟是「这次发布等了多久」，阶段之间还有没被计时的间隙（文件复制、镜像打标一类），
- * 所以它也可能大于相加。只给一个数，另一个看起来就像算错了。
+ * 墙钟是「这次发布等了多久」，阶段之间还有间隙，所以它也可能大于相加。只给一个数，
+ * 另一个看起来就像算错了。
  */
 function stageSummary(stages, { wallMs = 0 } = {}) {
   const width = Math.max(...stages.map(stage => textWidth(stage.label)));
   const cell = label => label + ' '.repeat(Math.max(2, width - textWidth(label) + 2));
   const total = stages.reduce((sum, stage) => sum + Math.max(0, stage.elapsedMs), 0);
+  const clock = startedAt => {
+    const date = new Date(startedAt);
+    return [date.getHours(), date.getMinutes(), date.getSeconds()].map(value => String(value).padStart(2, '0')).join(':');
+  };
   return [
-    '各阶段耗时（含进程启动）：',
-    ...stages.map(stage => `  ${cell(stage.label)}${duration(stage.elapsedMs)}${stage.ok ? '' : '（失败）'}`),
+    '各阶段耗时（含进程启动；方括号为开始时刻）：',
+    ...stages.map(stage => `  ${stage.startedAt === undefined ? '--:--:--' : clock(stage.startedAt)}  ${cell(stage.label)}${duration(stage.elapsedMs)}${stage.ok ? '' : '（失败）'}`),
     `  ${cell('相加（逐项）')}${duration(total)}`,
     `  ${cell('墙钟（首末阶段之间）')}${duration(wallMs)}`,
   ].join('\n');
@@ -192,7 +199,7 @@ export async function presentBuild(entry, args, { logDirectory, output = process
     stage.finishedMs = Number.isFinite(event.elapsedMs) ? Math.max(0, event.elapsedMs) : event.receivedAt - stage.startedAt;
     lastFinish = event.receivedAt;
     const ok = event.type === 'done';
-    stages.push({ label: stage.label, elapsedMs: elapsed(stage), ok });
+    stages.push({ label: stage.label, elapsedMs: elapsed(stage), ok, startedAt: stage.startedAt });
     // 补满动画只在这一阶段是最后一个时做：还有阶段在跑时，动画会盖住它们的进度。
     if (ok && output.isTTY && !active.size) {
       settling = true;

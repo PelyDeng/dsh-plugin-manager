@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireSourceLock, sourceLockCommand, sourceRecoveryIdentity } from './site-lock.mjs';
 import { canonical } from './state.mjs';
-import { buildStep, presentBuild } from './site-output.mjs';
+import { buildStep } from './site-output.mjs';
 import { siteArguments, readSitePointer, readSiteRecord, verifySavedTooling, needsSiteResume } from './site-record.mjs';
 import { readFrameworkConfig, resolveSiteConfig } from './framework-config.mjs';
 
@@ -21,8 +21,24 @@ export function sourceArguments(args) {
   return [...args];
 }
 
+/**
+ * 加载展示端。
+ *
+ * 必须等到源码同步之后再加载：私有入口是**静态**引入公共协调器的，所以协调器（连同它静态
+ * 引入的展示端）在快进检出之前就进了模块缓存 —— 一次发布里展示端跑的会是上一版代码，新加的
+ * 进度行与汇总表要等下一次发布才看得见。
+ *
+ * 所以这里按需动态加载，并带一次性查询串：即使别的模块已缓存过旧副本，读到的也是快进后的
+ * 文件。展示端与阶段上报之间的协议没有版本依赖：旧副本照常发事件，新副本照常展示。
+ */
+export async function loadPresenter() {
+  const url = new URL('./site-output.mjs', import.meta.url);
+  url.searchParams.set('presenter', `${process.pid}-${Date.now()}`);
+  return (await import(url.href)).presentBuild;
+}
+
 /** beforeBuild runs under the same lock; the build worker loads updated source afterwards. */
-export async function sourceRelease({ root, args = [], beforeBuild, preflight, defaultInputKind = 'source' } = {}) {
+export async function sourceRelease({ root, args = [], beforeBuild, preflight, presenter = loadPresenter, defaultInputKind = 'source' } = {}) {
   if (!root) throw new Error('Source release requires an explicit repository root.');
   root = canonical(root);
   if (['doctor', 'unlock-source'].includes(args[0])) return sourceLockCommand(root, args);
@@ -62,7 +78,9 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight, d
     if (recoveryRecord?.schemaVersion === 3) entry = verifySavedTooling(recoveryRecord).worker;
     else if (recoveryRecord || !existsSync(entry)) entry = fileURLToPath(new URL('./site-release.mjs', import.meta.url));
     if (entry !== resolve(root, 'deploy/scripts/build.mjs')) workerArgs.push('--root', root);
-    const code = await presentBuild(entry, workerArgs, {
+    // 同步之后才加载展示端：这一次发布就用快进后的代码渲染进度与汇总。
+    const present = await presenter();
+    const code = await present(entry, workerArgs, {
       logDirectory: resolve(root, '.local/artifacts/build-logs'), cwd: root, env,
       onSpawn: child => {
         workerStarted = true;
