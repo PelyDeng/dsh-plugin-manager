@@ -7,7 +7,8 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { discoverPlugins, parseOptions, pluginRecord, selectPlugins, sourcePlugins } from '../src/plugins.mjs';
-import { packagePlugins } from '../src/package-plugins.mjs';
+import { packagePlugins, main as packMain } from '../src/package-plugins.mjs';
+import { main as taskMain } from '../src/run-plugin-task.mjs';
 import { verifyBuildPackage as verifyPackage } from '../src/verify-package.mjs';
 import { loadRelease } from '../src/release.mjs';
 import { resolveDeployment, runtimeEnvironment } from '../src/config.mjs';
@@ -112,6 +113,22 @@ test('value-less switches parse only when declared, and still reject pairing for
   // 未声明的开关不能悄悄变成键；声明过也不接受重复。
   for (const args of [['--plugins', 'a', '--verify-plugin-check'], ['plugins', 'a', 'verify-plugin-check']]) assert.throws(() => parseOptions(args, ['plugins']));
   assert.throws(() => parseOptions(['--verify-plugin-check', '--verify-plugin-check'], ['plugins'], ['verify-plugin-check']));
+});
+
+test('--help prints the flags without requiring a project root', async () => {
+  // 帮助要先于参数解析：查用法不该先备好项目根。
+  const lines = [];
+  const original = console.log;
+  console.log = line => lines.push(line);
+  try {
+    await packMain(['--help']);
+    taskMain(['build', '--help']);
+  } finally { console.log = original; }
+  const usage = lines.join('\n');
+  for (const token of ['build', 'check', 'clean', 'list', 'pack', '--plugins', '--output', '--concurrency', '--verify-plugin-check']) {
+    assert.ok(usage.includes(token), `用法里应列出 ${token}`);
+  }
+  assert.doesNotMatch(usage, /必须显式指定 --root/u);
 });
 
 test('the plugin check is skipped by default and only runs when explicitly requested', async t => {

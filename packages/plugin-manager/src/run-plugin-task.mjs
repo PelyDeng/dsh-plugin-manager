@@ -52,8 +52,21 @@ export function preparePluginDependencies(root, plugins, step = (_label, run) =>
   if (needsKit) step('准备插件共享依赖', () => runPnpm(['--filter', '@dsh-plugin-manager/plugin-kit', 'build'], root));
 }
 
+/** 各命令的用法：帮助不该要求先有项目根，所以放在解析参数之前。 */
+export const USAGE = [
+  'build  [--root <项目根>] [--plugins <ID列表>] [--package <独立包目录>]',
+  'check  [--root <项目根>] [--plugins <ID列表>] [--package <独立包目录>]',
+  'clean  [--root <项目根>] [--plugins <ID列表>]',
+  'list   [--root <项目根>] [--plugins <ID列表>] [--package <独立包目录>]',
+  'pack   [--root <项目根>] [--plugins <ID列表>] [--output <新目录>] [--concurrency <正整数>] [--verify-plugin-check]',
+  '',
+  '--plugins 省略表示全部；逗号分隔的 ID 列表要加引号，避免 PowerShell 拆成数组。',
+  'pack 默认跳过插件检查（CI 已跑过，产物不变），要本机确认时加 --verify-plugin-check。',
+].join('\n');
+
 export function main(argv = process.argv.slice(2)) {
   const [action, ...args] = argv;
+  if (argv.includes('--help')) { console.log(USAGE); return; }
   if (!['build', 'check', 'clean', 'list'].includes(action)) throw new Error('任务必须是 build、check、clean 或 list。');
   const options = parseOptions(args, ['root', 'plugins', ...(action === 'clean' ? [] : ['package'])]);
   if (!options.root) throw new Error('必须显式指定 --root 项目根目录。');
