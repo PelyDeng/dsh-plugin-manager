@@ -7,6 +7,7 @@ import { prepareWorkspaceDependencies } from './bootstrap.mjs';
 import { assertSelectiveInstallSafe, preparePluginReuse } from './plugin-reuse.mjs';
 import { composeReleases } from '../../packages/plugin-manager/src/compose-release.mjs';
 import { loadRelease } from '../../packages/plugin-manager/src/release.mjs';
+import { buildStep } from '../../packages/plugin-manager/src/site-output.mjs';
 import { fileHash, readSiteJson } from '../../packages/plugin-manager/src/site-record.mjs';
 
 export function validateBase(reference, info) {
@@ -40,16 +41,16 @@ export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareMan
       const { git, host, rebuilt, reuse } = context.source;
       if (sourceInput) validateImageConfig(sourceInput.image);
       prepareWorkspaceDependencies(root, env, execute);
-      const tools = this.prepareTools(context);
+      const tools = buildStep('准备管理器工具', () => this.prepareTools(context));
       Object.assign(record, { managerArchive: tools.archive, managerHash: tools.sha256, toolRoot: tools.toolRoot });
       // 插件检查是开发期门禁：CI 已对同一提交跑过，部署时再对每个插件重复一次 pnpm typecheck
       // 只是把发布拖长（实测 5 个插件约 56 秒）。跳过它不改变产物，只改变谁来担这道校验。
       run(process.execPath, ['scripts/package-plugins.mjs', '--plugins', rebuilt.join(',') || 'none', '--output', resolve(operation, 'fresh'), ...(skipPluginCheck ? ['--skip-plugin-check'] : [])]);
-      const fresh = loadRelease(resolve(operation, 'fresh/manifest.json'));
+      const fresh = buildStep('加载并核验发布清单', () => loadRelease(resolve(operation, 'fresh/manifest.json')));
       if (fresh.plugins.length !== rebuilt.length || fresh.plugins.some(p => !rebuilt.includes(p.id))) throw new Error('Built plugin archives differ from the requested selection.');
-      const old = previous?.manifest ? loadRelease(resolve(root, previous.manifest)) : undefined;
+      const old = previous?.manifest ? buildStep('加载并核验发布清单', () => loadRelease(resolve(root, previous.manifest))) : undefined;
       const manifest = resolve(operation, 'plugins/manifest.json');
-      composeReleases(reuse ? [reuse.release, fresh] : [fresh], dirname(manifest), old);
+      buildStep('组装发布清单与归档', () => composeReleases(reuse ? [reuse.release, fresh] : [fresh], dirname(manifest), old));
       record.pluginBuilds = readSiteJson(manifest).plugins.map(plugin => reuse?.builtFrom.find(p => p.id === plugin.id) ?? { id: plugin.id, sha256: plugin.sha256, builtFromRevision: record.revision });
       let baseReference = site.hostImage ?? previous?.containerImage, base;
       if (baseReference) {

@@ -169,14 +169,14 @@ export function releaseSite({ root, config, resume = false, recover = false, dat
         context.recoveryIntent = { schemaVersion: 1, id: siteOperation, pendingId: pending?.operationId ?? null, pendingHash, stateHash };
       } else if (inputKind === 'source') {
         if (!adapter) throw new Error('source 模式必须由框架源码入口提供源码准备。');
-        Object.assign(record, adapter.inspect(context));
+        Object.assign(record, buildStep('检查源码与宿主身份', () => adapter.inspect(context)));
         persist(); result = adapter.prepare(context);
       } else {
         releases = discoverArchives(root);
         if (!releases.some(item => item.plugins.length) && !(Array.isArray(site.plugins) && site.plugins.length === 0)) throw new Error('incoming 中没有完整发布目录；请放入 manifest.json 及其引用的全部 tgz。空目录不会卸载插件。');
         result = prepareArchives(context, releases);
       }
-      const release = loadRelease(result.manifest);
+      const release = buildStep('加载并核验发布清单', () => loadRelease(result.manifest));
       // Remember original editable paths rather than reusing the previous private snapshot paths.
       const successful = !predecessor && prior?.status === 'ready' ? readSiteRecord(root, prior.operation, { status: 'ready' }) : predecessor;
       // Applying can replace runtimePath before failing; recovery still describes the prior runtime.
@@ -201,21 +201,21 @@ export function releaseSite({ root, config, resume = false, recover = false, dat
         for (const id of previouslyEnabled) if (!present.has(id)) throw new Error(`仍启用的插件 ${id} 缺少产物；请恢复完整目录，停用请显式设置 DSH_PLUGINS。`);
       }
       if (recover && (!same(selectedProof(settings.release), predecessor.selectedPlugins) || !same(settings.release.plugins.map(p => p.id), predecessor.enabledPlugins))) throw new Error('recover 不能改变包、选集或启用状态。');
-      const frozen = freezeSiteInputs({ root, operation, site, sitePath, source: sourceInput, release });
+      const frozen = buildStep('冻结站点输入', () => freezeSiteInputs({ root, operation, site, sitePath, source: sourceInput, release }));
       const candidate = { ...frozen.candidate, ...sitePaths, frameworkVersion: result.manager, siteOperation, dockerRuntime: runtime, containerImage: result.image, manifest: relative(root, result.manifest).split('\\').join('/'), ...(context.recoveryIntent ? { siteRecovery: context.recoveryIntent } : {}) };
       record.candidatePath = resolve(operation, 'deployment.json'); saveJson(record.candidatePath, candidate);
       Object.assign(record, { image: result.image, manager: result.manager, manifest: result.manifest, manifestHash: fileHash(result.manifest), candidateHash: fileHash(record.candidatePath),
         inputs: frozen.inputs, inputEnvironment: frozen.environment, siteInstances: site.instances ?? {}, enabledPlugins: frozen.enabled, selectedPlugins: selectedProof(settings.release),
-        plugins: release.plugins.map(({ id, version }) => ({ id, version })), toolHash: toolTreeIdentity(record.toolRoot), status: 'prepared' });
+        plugins: release.plugins.map(({ id, version }) => ({ id, version })), toolHash: buildStep('核验工具树身份', () => toolTreeIdentity(record.toolRoot)), status: 'prepared' });
       if ((originalConfig && !readFileSync(runtimePath).equals(originalConfig)) || (!originalConfig && existsSync(runtimePath))) throw new Error('Deployment state changed during preparation.');
-      verifySavedTooling(record); verifySiteInputs(record);
+      buildStep('核验已保存工具', () => verifySavedTooling(record)); buildStep('核验站点输入', () => verifySiteInputs(record));
       changeSummary(previous?.manifest ? loadRelease(resolve(root, previous.manifest)) : null, settings.release, releases);
       buildMessage(`框架 ${currentFramework ?? '首次/旧记录'} → ${record.frameworkVersion ?? result.manager}；宿主镜像 ${current?.containerImage ?? '无'} → ${result.image}`);
       persist(); prepared = true;
     }
     const { cli } = verifySavedTooling(record);
     if (!immutableImage(record.image) || fileHash(record.manifest) !== record.manifestHash || fileHash(record.candidatePath) !== record.candidateHash) throw new Error('Saved release inputs changed; the deployment is retained for inspection.');
-    loadRelease(record.manifest); context.inspect(record.image); verifySiteInputs(record);
+    buildStep('加载并核验发布清单', () => loadRelease(record.manifest)); context.inspect(record.image); buildStep('核验站点输入', () => verifySiteInputs(record));
     const candidate = readSiteJson(record.candidatePath);
     if (candidate.containerImage !== record.image || resolve(root, candidate.manifest) !== record.manifest) throw new Error('Saved deployment configuration changed.');
     if (record.schemaVersion === 3) {
@@ -223,12 +223,12 @@ export function releaseSite({ root, config, resume = false, recover = false, dat
       const savedDeployment = resolveDeployment({ root, config: record.candidatePath }, {});
       if (!same(record.sitePaths, Object.fromEntries(Object.keys(sitePaths).map(field => [field, savedDeployment[field]])))) throw new Error('冻结候选的持久路径发生变化，保留现场。');
     }
-    materializeSiteDefaults(record);
+    buildStep('写入站点默认配置', () => materializeSiteDefaults(record));
     // `check-compose` 内部先渲染再核验，本身就是渲染那一步的超集（配置、patch、凭据、权限、
     // 挂载、镜像身份都查），而且同样发生在停旧服务之前；再单独跑一次 render 只是把同一份
     // 渲染与清单加载做两遍，并在每次操作里留下一个没人读的 preflight 目录。
     step('核验容器挂载与权限', process.execPath, [cli, 'check-compose', '--root', root, '--config', record.candidatePath]);
-    verifySiteInputs(record);
+    buildStep('核验站点输入', () => verifySiteInputs(record));
     if (record.previous && !(record.stopComplete ?? record.backupComplete)) {
       const oldArgs = ['compose', '-p', record.previous.project, '-f', record.previous.path];
       step('停止旧服务', 'docker', [...oldArgs, 'stop', 'dsh']); stopped = true;
