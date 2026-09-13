@@ -18,11 +18,12 @@ import { isTerminal, type SubtaskState, type TaskState } from './task-model.ts'
  * 2：子任务增加 `artifacts`（材料引用）与 `conversation_id`（原会话）。
  * 3：新增 `requests` 表，把写请求的幂等占用**在执行前**落库。
  * 4：任务增加输入版本两列，新增 `task_inputs` 表，记录每一次被接受的需求与补充。
+ * 5：子任务增加 `logical_id`（同一目标的稳定标识）与 `supersedes`（替代了哪一条尝试）。
  *
  * 升级只增列、增表，不动已有数据；但**旧代码读到新版本会拒绝启动**，所以回滚插件版本之前
  * 要先把库降回去，不能直接换回旧包。
  */
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 
 /**
  * 能从这些旧版本就地升上来。
@@ -30,7 +31,7 @@ const SCHEMA_VERSION = 4
  * 不在这张表里的版本（比当前新、或者来历不明）一律拒绝启动：拿错版本的结构去读写，
  * 比起不来严重得多。
  */
-const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3]
+const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3, 4]
 
 /** 侧栏里的一条会话。 */
 export interface ConversationSummary {
@@ -94,6 +95,15 @@ export interface TaskInput {
 export interface SubtaskRecord {
   readonly id: string
   readonly seq: number
+  /**
+   * 这条尝试对应的**目标**标识。
+   *
+   * 同一个目标重做几次，几次尝试共用它 —— 结论按目标算，不按尝试算，否则「重试成功」
+   * 会被前面那次已经作废的失败拉低。
+   */
+  readonly logicalId: string
+  /** 替代了哪一条尝试；首次尝试为空字符串。 */
+  readonly supersedes: string
   readonly goal: string
   readonly agentId: string
   readonly reason: string
@@ -140,6 +150,10 @@ export interface NewSubtask {
   readonly goal: string
   readonly agentId: string
   readonly reason: string
+  /** 目标标识；不传时由存储层按顺序分配（`g1`、`g2`…）。 */
+  readonly logicalId?: string
+  /** 替代了哪一条尝试；首次尝试不传。 */
+  readonly supersedes?: string
 }
 
 /** 运行历史查询条件。 */
@@ -215,6 +229,8 @@ export class TaskStore {
         error TEXT NOT NULL DEFAULT '',
         artifacts TEXT NOT NULL DEFAULT '',
         conversation_id TEXT NOT NULL DEFAULT '',
+        logical_id TEXT NOT NULL DEFAULT '',
+        supersedes TEXT NOT NULL DEFAULT '',
         started_at INTEGER,
         finished_at INTEGER,
         PRIMARY KEY (task_id, id)
@@ -283,6 +299,14 @@ export class TaskStore {
           ALTER TABLE tasks ADD COLUMN accepted_version INTEGER NOT NULL DEFAULT 1;
           ALTER TABLE tasks ADD COLUMN processed_version INTEGER NOT NULL DEFAULT 1;
         `)
+      }
+      if (from <= 4) {
+        this.db.exec(`
+          ALTER TABLE subtasks ADD COLUMN logical_id TEXT NOT NULL DEFAULT '';
+          ALTER TABLE subtasks ADD COLUMN supersedes TEXT NOT NULL DEFAULT '';
+        `)
+        // 老数据没有目标标识，把每一条子任务各自当成一个目标（它本来就是只跑过一次的尝试）。
+        this.db.exec(`UPDATE subtasks SET logical_id = 'g' || seq WHERE logical_id = ''`)
       }
       this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
       this.db.exec('COMMIT')
@@ -420,10 +444,14 @@ export class TaskStore {
       )
       this.db.prepare(`INSERT INTO task_inputs(task_id,version,text,source,created_at) VALUES(?,1,?,?,?)`)
         .run(input.id, input.goal, 'chat', now)
-      const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state)
-        VALUES(?,?,?,?,?,?,?)`)
+      const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes)
+        VALUES(?,?,?,?,?,?,?,?,?)`)
       input.subtasks.forEach((subtask, index) => {
-        insert.run(input.id, subtask.id, index + 1, subtask.goal, subtask.agentId, subtask.reason, 'queued')
+        // 没给目标标识就按顺序分配：首次计划里一条子任务就是一个目标。
+        insert.run(
+          input.id, subtask.id, index + 1, subtask.goal, subtask.agentId, subtask.reason, 'queued',
+          subtask.logicalId ?? `g${index + 1}`, subtask.supersedes ?? '',
+        )
       })
       this.db.exec('COMMIT')
     } catch (error) {
@@ -489,7 +517,7 @@ export class TaskStore {
       FROM tasks WHERE id=? AND owner_namespace=? AND owner_id=?`)
       .get(id, actor.namespace, actor.userId)
     if (row === undefined) return undefined
-    const rows = this.db.prepare(`SELECT id,seq,goal,agent_id AS agentId,reason,state,result,error,
+    const rows = this.db.prepare(`SELECT id,seq,goal,logical_id AS logicalId,supersedes,agent_id AS agentId,reason,state,result,error,
         artifacts,conversation_id AS subtaskConversationId,started_at AS startedAt,finished_at AS finishedAt
       FROM subtasks WHERE task_id=? ORDER BY seq`).all(id) as unknown as (Omit<SubtaskRecord, 'artifacts' | 'conversationId'> & {
         readonly artifacts: string
@@ -613,13 +641,21 @@ export class TaskStore {
     const record = this.task(actor, taskId)
     if (record === undefined) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
     const start = record.subtasks.reduce((max, item) => Math.max(max, item.seq), 0)
-    const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state)
-      VALUES(?,?,?,?,?,?,?)`)
+    // 新目标的标识从现有最大值往下排，不与已有的撞号。
+    const nextLogical = record.subtasks
+      .map(item => Number.parseInt(item.logicalId.replace(/^g/u, ''), 10))
+      .filter(value => Number.isSafeInteger(value))
+      .reduce((max, value) => Math.max(max, value), 0)
+    const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes)
+      VALUES(?,?,?,?,?,?,?,?,?)`)
     const ids: string[] = []
     this.db.exec('BEGIN IMMEDIATE')
     try {
       subtasks.forEach((subtask, index) => {
-        insert.run(taskId, subtask.id, start + index + 1, subtask.goal, subtask.agentId, subtask.reason, 'queued')
+        insert.run(
+          taskId, subtask.id, start + index + 1, subtask.goal, subtask.agentId, subtask.reason, 'queued',
+          subtask.logicalId ?? `g${nextLogical + index + 1}`, subtask.supersedes ?? '',
+        )
         ids.push(subtask.id)
       })
       this.db.prepare('UPDATE tasks SET updated_at=? WHERE id=?').run(Date.now(), taskId)

@@ -206,6 +206,10 @@ interface PlannedSubtask {
   readonly goal: string
   readonly agentId: string
   readonly reason: string
+  /** 目标标识；沿用旧目标时由模型给出，新目标留空由管家分配。 */
+  readonly logicalId?: string
+  /** 替代哪一条子任务；首次尝试不填。 */
+  readonly supersedes?: string
 }
 
 interface PlanSubmission {
@@ -221,6 +225,13 @@ type TurnOutcome = { readonly kind: 'completed' } | { readonly kind: 'failed'; r
 interface Turn {
   /** 这一轮开始时在场且可调度的成员，用于渲染动态名单。 */
   readonly members: readonly AgentCard[]
+  /**
+   * 这一轮改的是哪个任务、它已有哪些尝试。
+   *
+   * 只有补充轮才有：新的一轮还没有任务，也就谈不上「替代某一条旧尝试」。派活工具用它校验
+   * `supersedes`，让模型当场拿到错误并改正，而不是等计划落库之后才发现指向了不存在的东西。
+   */
+  readonly context?: { readonly taskId: string; readonly subtasks: readonly SubtaskRecord[] }
   plans: PlanSubmission[]
   text: string
   done: boolean
@@ -529,6 +540,19 @@ function supplementPrompt(inputs: readonly TaskInput[], subtasks: readonly Subta
 }
 
 /**
+ * 当前有效的尝试：每个目标只留一条。
+ *
+ * `supersedes` 链上没有被别人替代的那条就是有效尝试。被替代掉的失败留在历史里、也照常显示，
+ * 但不参与结论 —— 否则「重试成功了」会被前面那次已经作废的失败拉成「部分完成」。
+ *
+ * 每条尝试最多被替代一次（替代关系不分叉），所以「谁被替代过」用一个集合就够。
+ */
+export function effectiveSubtasks(subtasks: readonly SubtaskRecord[]): readonly SubtaskRecord[] {
+  const superseded = new Set(subtasks.map(item => item.supersedes).filter(id => id !== ''))
+  return subtasks.filter(item => !superseded.has(item.id))
+}
+
+/**
  * 从落库的子任务记录重建交给汇总的材料。 *
  * 补话之后要重新汇总，而那时派活阶段的 `reports` 早已不在内存里（进程可能都换过一次），
  * 所以按同一种口径从库里重建：成功取结果正文，失败与取消带上原因，还没答复的带上已交回的
@@ -798,6 +822,8 @@ export class ButlerConsole {
               goal: { type: 'string', required: true, description: '交给子 Agent 的完整目标，要自带必要上下文，不要用“同上”“继续”这类指代。' },
               agentId: { type: 'string', required: true, description: '目标 Agent 的 id，只能从本轮可调度的 Agent 列表中选择。' },
               reason: { type: 'string', description: '为什么把这个子任务派给这个 Agent。' },
+              logicalId: { type: 'string', description: '同一个目标重做时沿用原来的目标标识（例如 g1）。新目标不要填，管家会分配。' },
+              supersedes: { type: 'string', description: '替代哪一条尝试：填它原来的子任务 id（s1、s2…）。只在这个新尝试取代同一个目标的旧尝试时才填；旧尝试必须已经结束。' },
             },
           },
         },
@@ -819,17 +845,51 @@ export class ButlerConsole {
         if (turn === undefined || turn.done) throw new Error('这一轮已经结束，计划未被接受')
         const available = new Set(this.dispatchableAgents().map(card => card.id))
         const subtasks: PlannedSubtask[] = []
-        for (const item of args.subtasks as readonly { goal?: unknown; agentId?: unknown; reason?: unknown }[]) {
+        for (const item of args.subtasks as readonly {
+          goal?: unknown
+          agentId?: unknown
+          reason?: unknown
+          logicalId?: unknown
+          supersedes?: unknown
+        }[]) {
           const goal = typeof item.goal === 'string' ? clip(item.goal, 2000) : ''
           const agentId = typeof item.agentId === 'string' ? item.agentId.trim() : ''
           if (goal === '') throw new Error('子任务缺少目标')
           if (!available.has(agentId)) {
             throw new Error(`Agent ${agentId === '' ? '（空）' : agentId} 不能接收子任务。本轮可调度的是：${[...available].join('、') || '（没有）'}`)
           }
-          subtasks.push({ goal, agentId, reason: clip(typeof item.reason === 'string' ? item.reason : '', 300) })
+          let logicalId = typeof item.logicalId === 'string' ? item.logicalId.trim() : ''
+          const supersedes = typeof item.supersedes === 'string' ? item.supersedes.trim() : ''
+          if (supersedes !== '') {
+            const known = turn.context?.subtasks
+            if (known === undefined) throw new Error('这一轮还没有可以替代的旧尝试，不要填 supersedes')
+            const target = known.find(candidate => candidate.id === supersedes)
+            if (target === undefined) throw new Error(`要替代的子任务 ${supersedes} 不在这一轮里`)
+            if (!isTerminal(target.state)) {
+              throw new Error(`子任务 ${supersedes} 还没有结束（${target.state}），不能替代它`)
+            }
+            // 替代必须是同一个目标的新尝试：换个目标就该用新的标识，否则两条不相干的活会
+            // 被算成一条，聚合时互相顶掉。
+            if (logicalId !== '' && logicalId !== target.logicalId) {
+              throw new Error(`子任务 ${supersedes} 属于目标 ${target.logicalId}，不能改成 ${logicalId}；要换目标请用新的标识并去掉 supersedes`)
+            }
+            logicalId = target.logicalId
+          }
+          subtasks.push({
+            goal, agentId, reason: clip(typeof item.reason === 'string' ? item.reason : '', 300),
+            ...(logicalId === '' ? {} : { logicalId }),
+            ...(supersedes === '' ? {} : { supersedes }),
+          })
         }
         if (subtasks.length === 0) throw new Error('计划里至少要有一个子任务')
         if (subtasks.length > this.config.maxSubtasks) throw new Error(`一次最多派发 ${this.config.maxSubtasks} 个子任务`)
+        // 同一次计划里同一个目标只能有一条有效尝试：两条会互相替代，聚合时谁也不算数。
+        const claimed = new Set<string>()
+        for (const subtask of subtasks) {
+          if (subtask.logicalId === undefined) continue
+          if (claimed.has(subtask.logicalId)) throw new Error(`计划里目标 ${subtask.logicalId} 出现了不止一次，请合成一条`)
+          claimed.add(subtask.logicalId)
+        }
         turn.plans.push({ reply: clip(args.reply, 4000), note: clip(args.note ?? '', 1000), subtasks })
         return { accepted: true, subtasks: subtasks.length }
       },
@@ -1246,7 +1306,8 @@ export class ButlerConsole {
 
       const speech = progressQueue()
       const turn = this.runTurn(conversation, prompt, prepared.abort.signal,
-        delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }))
+        delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
+        { taskId, subtasks: record.subtasks })
       void turn.then(() => speech.settle(), () => speech.settle())
       for await (const event of speech.drain()) yield event
       const outcome = await turn
@@ -1275,6 +1336,10 @@ export class ButlerConsole {
           agentId: subtask.agentId,
           reason: subtask.reason,
           displayName: this.displayNameOf(actor, subtask.agentId),
+          // 目标标识与替代关系要原样带进库：聚合按它们判断「哪条尝试算数」，
+          // 漏掉的话重做的活会被当成一个新目标，旧的失败继续拉低结论。
+          ...(subtask.logicalId === undefined ? {} : { logicalId: subtask.logicalId }),
+          ...(subtask.supersedes === undefined ? {} : { supersedes: subtask.supersedes }),
         }))
         this.store.appendSubtasks(actor, taskId, appended)
         if (plan.reply !== '') yield { type: 'chat', role: 'butler', text: plan.reply, time: Date.now() }
@@ -1558,17 +1623,22 @@ export class ButlerConsole {
    *
    * 先注册记录再投递消息，避免第一轮的事件早于监听建立；`abort` 触发时按取消
    * 收尾，不让调用方无限等待。
+   *
+   * `context` 只在补充轮传：那一轮改的是某个已存在的任务，派活工具要靠它核对「替代的是哪一条
+   * 旧尝试」。新的一轮还没有任务，传不了也不该传。
    */
   private async runTurn(
     conversation: Conversation,
     text: string,
     signal: AbortSignal,
     onDelta?: (text: string) => void,
+    context?: { readonly taskId: string; readonly subtasks: readonly SubtaskRecord[] },
   ): Promise<{ outcome: TurnOutcome; text: string; plans: readonly PlanSubmission[] }> {
     const sessionId = String(conversation.handle.agent.session.id)
     const turn: Turn = {
       // 名单在组装提示词时读取，所以这里取的是「这一轮开始时」的在场情况。
       members: listAgentCards(this.ctx),
+      ...(context === undefined ? {} : { context }),
       plans: [], text: '', done: false, outcome: { kind: 'cancelled' }, resolve: () => {},
     }
     this.turns.set(sessionId, turn)
@@ -1994,10 +2064,11 @@ export class ButlerConsole {
   }
 
   /**
-   * 收尾时要用的子任务结局，以库里的记录为准。
+   * 收尾时要用的子任务结局，以库里的记录为准，**只取当前有效的尝试**。
    *
-   * 库里查不到时回落到计划里的那几项、并按「未跑完」处理：宁可把一轮当成没跑成，
-   * 也不要凭内存里的旧状态给它写一个偏乐观的终态。
+   * 库里的记录也照样留在历史与详情里；这里少的是那些已经被替代掉的尝试 —— 它们的失败不该
+   * 再参与这一轮的结论。库里查不到时回落到计划里的那几项、并按「未跑完」处理：宁可把一轮
+   * 当成没跑成，也不要凭内存里的旧状态给它写一个偏乐观的终态。
    */
   private storedSubtasks(
     actor: Actor,
@@ -2008,14 +2079,15 @@ export class ButlerConsole {
     if (record === undefined) {
       return planned.map(item => ({ ...item, state: 'cancelled' as SubtaskState }))
     }
-    return record.subtasks.map(item => ({
+    return effectiveSubtasks(record.subtasks).map(item => ({
       id: item.id, goal: item.goal, agentId: item.agentId, state: item.state,
     }))
   }
 
-  /** 收尾时要交给汇总的材料，同样从库里重建。 */
+  /** 收尾时要交给汇总的材料，同样从库里重建、同样只看有效尝试。 */
   private storedReports(actor: Actor, taskId: string): string[] {
-    return this.store.task(actor, taskId)?.subtasks.map(reportOf) ?? []
+    const record = this.store.task(actor, taskId)
+    return record === undefined ? [] : effectiveSubtasks(record.subtasks).map(reportOf)
   }
 
   /**
@@ -2111,14 +2183,16 @@ export class ButlerConsole {
     const record = this.store.task(prepared.actor, prepared.taskId)
     if (record === undefined) return
     if (record.subtasks.some(item => !isTerminal(item.state))) return
+    // 只看有效尝试：被替代掉的旧尝试不该参与这一轮的结论。
+    const effective = effectiveSubtasks(record.subtasks)
     yield* this.closeTask({
       taskId: record.id,
       conversation: this.conversations.get(prepared.conversationId),
       goal: record.goal,
-      subtasks: record.subtasks.map(item => ({
+      subtasks: effective.map(item => ({
         id: item.id, goal: item.goal, agentId: item.agentId, state: item.state,
       })),
-      reports: record.subtasks.map(reportOf),
+      reports: effective.map(reportOf),
       signal: prepared.abort.signal,
       stopped: prepared.abort.signal.aborted,
     })
