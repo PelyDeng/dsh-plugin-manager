@@ -38,6 +38,8 @@ const USAGE = [
   '  --prefix </路径>     页面挂载前缀，默认 /（auth 页面用 /auth）',
   '  --page <路径>        要打开的页面，默认 <prefix>/（即 index.html）',
   '  --stub <文件.json>   未命中文件的请求按它回应：路径 → 响应体，或 {status, headers, body}',
+  '  --replace <词=文件>  服务 HTML 前把 <词> 全部换成该文件的内容（宿主注入的页面配置就是这样塞进去的）',
+  '  --mount <路径=目录>  额外挂载一个静态目录（例如需要构建产物的 /插件前缀/assets）',
   '  --probe <文件.js>    注入页面的表达式源码，结果写进标题栏；不传则只报告页面是否可打开',
   '  --widths <列表>      视口宽度，逗号分隔，默认 1150,860,640',
   '  --height <像素>      视口高度，默认 1600',
@@ -52,6 +54,7 @@ const USAGE = [
 function parse(argv) {
   const options = { widths: '1150,860,640', height: '1600', settle: '500', budget: '4000' };
   const flags = new Set(['require-browser', 'json', 'help']);
+  const repeatable = new Set(['replace', 'mount']);
   while (argv.length) {
     const key = argv.shift();
     if (!key.startsWith('--')) throw new Error(`未知参数：${key}`);
@@ -59,9 +62,17 @@ function parse(argv) {
     if (flags.has(name)) { options[name] = true; continue; }
     const value = argv.shift();
     if (value === undefined || value.startsWith('--')) throw new Error(`${key} 需要一个值。`);
-    options[name] = value;
+    if (repeatable.has(name)) options[name] = [...(options[name] ?? []), value];
+    else options[name] = value;
   }
   return options;
+}
+
+/** `词=值` 形式：值可能是文件路径（--replace）或目录（--mount）。 */
+function pair(value, label) {
+  const cut = value.indexOf('=');
+  if (cut <= 0 || cut === value.length - 1) throw new Error(`${label} 需要「左=右」形式，收到：${value}`);
+  return [value.slice(0, cut), value.slice(cut + 1)];
 }
 
 /** 找一个能用的 Chromium：显式路径 → CHROME_PATH → Playwright 缓存 → PATH → macOS 应用。 */
@@ -91,15 +102,20 @@ export function findBrowser(explicit) {
 }
 
 /** 静态目录 + 桩接口。返回 { close, origin }。 */
-function serve({ directory, prefix, stub, probe, settle }) {
+function serve({ directory, prefix, stub, probe, settle, mounts = [], replacements = [] }) {
   const root = resolve(directory);
   const base = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+  // 最长前缀优先：`/p/assets` 要盖过 `/p`，否则资源会从页面目录里找不到。
+  const table = [...mounts.map(([path, dir]) => [path.endsWith('/') ? path.slice(0, -1) : path, resolve(dir)]), [base, root]]
+    .sort((left, right) => right[0].length - left[0].length);
   const server = createServer((request, response) => {
     const path = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname);
-    if (!path.startsWith(base + '/') && path !== base) { respond(response, 404, { 'content-type': 'application/json' }, JSON.stringify({ error: '前缀之外', path })); return; }
-    const relative = path === base ? 'index.html' : path.slice(base.length + 1);
-    const file = resolve(root, relative === '' ? 'index.html' : relative);
-    if (!file.startsWith(root + sep) || !existsSync(file) || !statSync(file).isFile()) {
+    const mount = table.find(([mountPath]) => path === mountPath || path.startsWith(`${mountPath}/`));
+    if (!mount) { respond(response, 404, { 'content-type': 'application/json' }, JSON.stringify({ error: '没有挂载这个路径', path })); return; }
+    const [mountPath, mountRoot] = mount;
+    const relative = path === mountPath ? 'index.html' : path.slice(mountPath.length + 1);
+    const file = resolve(mountRoot, relative === '' ? 'index.html' : relative);
+    if (!file.startsWith(mountRoot + sep) || !existsSync(file) || !statSync(file).isFile()) {
       const entry = stub?.[path];
       if (entry === undefined) { respond(response, 404, { 'content-type': 'application/json' }, JSON.stringify({ error: '缺少桩', path })); return; }
       const { status = 200, headers = {}, body } = entry !== null && typeof entry === 'object' && 'body' in entry ? entry : { body: entry };
@@ -108,9 +124,10 @@ function serve({ directory, prefix, stub, probe, settle }) {
     }
     const type = TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream';
     const bytes = readFileSync(file);
-    if (type.startsWith('text/html') && probe !== undefined) {
-      const injected = inject(bytes.toString('utf8'), probe, settle);
-      respond(response, 200, { 'content-type': type }, injected);
+    if (type.startsWith('text/html') && (probe !== undefined || replacements.length)) {
+      let html = bytes.toString('utf8');
+      for (const [token, text] of replacements) html = html.split(token).join(text);
+      respond(response, 200, { 'content-type': type }, probe === undefined ? html : inject(html, probe, settle));
       return;
     }
     respond(response, 200, { 'content-type': type }, bytes);
@@ -164,11 +181,21 @@ export async function probePage(options) {
   const stubPath = options.stub && resolve(options.stub);
   const stub = stubPath ? JSON.parse(readFileSync(stubPath, 'utf8')) : undefined;
   const probe = options.probe ? readFileSync(resolve(options.probe), 'utf8') : undefined;
+  const mounts = (options.mount ?? []).map(value => {
+    const [path, dir] = pair(value, '--mount');
+    if (!existsSync(resolve(dir))) throw new Error(`--mount 的目录不存在：${dir}`);
+    return [path, dir];
+  });
+  const replacements = (options.replace ?? []).map(value => {
+    const [token, file] = pair(value, '--replace');
+    if (!existsSync(resolve(file))) throw new Error(`--replace 的文件不存在：${file}`);
+    return [token, readFileSync(resolve(file), 'utf8').trim()];
+  });
   const widths = String(options.widths).split(',').map(value => Number(value.trim())).filter(value => Number.isFinite(value) && value > 0);
   if (!widths.length) throw new Error('--widths 至少要有一个正整数。');
   const browser = findBrowser(options.browser);
   if (!browser) return { skipped: true, reason: '没有找到 Chromium：设置 CHROME_PATH、安装 Playwright 浏览器，或用 --browser 指定。' };
-  const server = await serve({ directory, prefix, stub, probe, settle: options.settle });
+  const server = await serve({ directory, prefix, stub, probe, settle: options.settle, mounts, replacements });
   try {
     const page = options.page ?? `${prefix.endsWith('/') ? prefix : `${prefix}/`}`;
     const results = [];
