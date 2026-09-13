@@ -124,6 +124,8 @@ interface Fixture {
   agent: { followup: ReturnType<typeof vi.fn> }
   call: (method: 'GET' | 'POST', path: string, payload?: unknown) => Call
   endTurn: () => void
+  /** 让大总管这一轮以失败收场，用来验证流内的错误事件。 */
+  failTurn: () => void
   store: TaskStore
 }
 
@@ -194,7 +196,12 @@ async function fixture(options: { maxConversationEvents?: number; assertOwner?: 
   const endTurn = () => {
     console_.observe({ id: conversationId }, { type: 'turn/end', data: { reason: { kind: 'completed' } } } as never)
   }
-  return { console_, agent, call, endTurn, store }
+  const failTurn = () => {
+    console_.observe({ id: conversationId }, {
+      type: 'turn/end', data: { reason: { kind: 'error', error: new Error('模型调用失败') } },
+    } as never)
+  }
+  return { console_, agent, call, endTurn, failTurn, store }
 }
 
 /** 提交一轮并等到它开始跑。 */
@@ -415,6 +422,88 @@ describe('第二客户端发现入口', () => {
     expect(payload.contractVersion).toBe(1)
     // 原有字段一个不少：这是加法，不是替换。
     expect(payload).toMatchObject({ mode: 'authenticated', key: 'user:alice', authPath: '/auth' })
+  })
+})
+
+describe('失败都带一个稳定的码', () => {
+  it('入参错误给的是具体码，不只是 HTTP 状态', async () => {
+    const f = await fixture()
+    const missing = f.call('POST', '/butler/stop', {})
+    await missing.pending
+    expect(missing.response.status).toBe(400)
+    expect(JSON.parse(missing.response.text)).toMatchObject({ code: 'missing_field' })
+
+    const bad = f.call('GET', `/butler/events?conversationId=${conversationId}&after=-3`)
+    await bad.pending
+    expect(JSON.parse(bad.response.text)).toMatchObject({ code: 'invalid_field' })
+  })
+
+  it('同一类失败在不同接口上给同一个码', async () => {
+    const f = await fixture()
+    // 两个入口都可能撞上「上一轮还没完」，客户端只需要认一个码。
+    const chat = await startTurn(f)
+    const busy = f.call('POST', '/butler/chat', { conversationId, message: '再来一个' })
+    await busy.pending
+    expect(busy.response.status).toBe(409)
+    expect(JSON.parse(busy.response.text)).toMatchObject({ code: 'run_busy' })
+
+    f.endTurn()
+    await chat.pending
+  })
+
+  it('幂等冲突与「那一轮已经过去」是两个码，客户端能分开处理', async () => {
+    const f = await fixture()
+    const body = { conversationId, message: '看看今天园区的情况', requestId: 'req-code' }
+    const first = f.call('POST', '/butler/chat', body)
+    await until(() => first.response.text.includes('"type":"user"'), '第一轮已经开始')
+
+    const conflict = f.call('POST', '/butler/chat', { ...body, message: '换了个说法' })
+    await conflict.pending
+    expect(JSON.parse(conflict.response.text)).toMatchObject({ code: 'idempotency_conflict' })
+
+    f.endTurn()
+    await first.pending
+
+    // 原来的那一轮被下一轮覆盖之后再重试：是另一种情况，给另一个码。
+    const other = f.call('POST', '/butler/chat', { conversationId, message: '换个活' })
+    await until(() => other.response.text.includes('"type":"user"'), '新一轮已经开始')
+    const gone = f.call('POST', '/butler/chat', body)
+    await gone.pending
+    expect(JSON.parse(gone.response.text)).toMatchObject({ code: 'replay_gone' })
+
+    f.endTurn()
+    await other.pending
+  })
+
+  it('插件自己给的码优先；没给时按状态兜底，绝不出现空码', async () => {
+    // 替身抛的 AccessError 没带业务码，走的是按状态归类的兜底路径。
+    const bare = await fixture({ assertOwner: () => { throw new AccessError(404, '会话不存在或无权访问') } })
+    const denied = bare.call('GET', `/butler/events?conversationId=${conversationId}`)
+    await denied.pending
+    expect(JSON.parse(denied.response.text)).toMatchObject({ code: 'not_found' })
+
+    const forbidden = await fixture({ assertOwner: () => { throw new AccessError(403, '来源不受信任') } })
+    const blocked = forbidden.call('GET', `/butler/events?conversationId=${conversationId}`)
+    await blocked.pending
+    expect(JSON.parse(blocked.response.text)).toMatchObject({ code: 'forbidden' })
+
+    // 而真实存储的归属校验带了具体码：同一个 404，客户端能分清是会话还是任务。
+    const f = await fixture()
+    const task = f.call('GET', '/butler/task?id=butler-task-nope')
+    await task.pending
+    expect(JSON.parse(task.response.text)).toMatchObject({ code: 'task_not_found' })
+  })
+
+  it('流已经开出去之后的错误同样带码，不必让客户端去猜', async () => {
+    const f = await fixture()
+    const chat = await startTurn(f)
+    f.failTurn()
+    await chat.pending
+
+    const error = chat.response.events().find(event => event.type === 'error')
+    expect(error).toMatchObject({ code: 'turn_failed' })
+    // 文案仍然给人看，两边都在。
+    expect(String(error?.message)).toContain('失败')
   })
 })
 

@@ -21,12 +21,54 @@ import type { ButlerConsole, RunWatch } from './butler.ts'
 import type { Config } from './config.ts'
 import { canResume } from './event-log.ts'
 
+/**
+ * 只按 HTTP 语义给出的兜底码。
+ *
+ * 具体业务码由抛出处给出（例如 `missing_field`、`run_busy`）；给不出时用这些，
+ * 客户端至少还能按类别分支。**客户端一律按 `code` 分支，不要解析 `error` 的文案** ——
+ * 文案是给人看的，会改；错误码不是。
+ */
+const STATUS_CODES: Record<number, string> = {
+  400: 'invalid_request',
+  401: 'unauthorized',
+  403: 'forbidden',
+  404: 'not_found',
+  405: 'method_not_allowed',
+  409: 'conflict',
+  413: 'payload_too_large',
+  415: 'unsupported_media_type',
+  429: 'too_many_requests',
+  500: 'internal_error',
+  503: 'unavailable',
+}
+
 /** 一次可预期的请求错误；其余异常统一按 500 处理且不暴露内部细节。 */
 class HttpError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+    /** 稳定错误码，缺省按 HTTP 状态归类。 */
+    readonly errorCode: string = STATUS_CODES[status] ?? 'error',
+  ) {
     super(message)
     this.name = 'HttpError'
   }
+}
+
+/**
+ * 把一次失败归类成一个稳定的错误码。
+ *
+ * 三种来源依次降级：本插件自己给的业务码、kit 的 `AccessError` 带的业务码、以及按状态
+ * 归类的兜底码。最后那种一定给得出东西，所以客户端永远有码可判。
+ */
+function errorCodeOf(caught: unknown, status: number): string {
+  if (caught instanceof HttpError) return caught.errorCode
+  // `reason` 是加法字段：跨独立打包的旧副本里可能没有，所以按值检查而不是相信类型。
+  if (isAccessError(caught) && typeof (caught as { reason?: unknown }).reason === 'string') {
+    const reason = (caught as { reason: string }).reason
+    if (reason !== '') return reason
+  }
+  return STATUS_CODES[status] ?? 'error'
 }
 
 /**
@@ -39,7 +81,7 @@ class HttpError extends Error {
 export const CONTRACT_VERSION = 1
 
 function method(request: IncomingMessage, expected: string): void {
-  if (request.method !== expected) throw new HttpError(405, `只支持 ${expected}`)
+  if (request.method !== expected) throw new HttpError(405, `只支持 ${expected}`, 'method_not_allowed')
 }
 
 function json(response: ServerResponse, status: number, value: unknown): void {
@@ -49,22 +91,22 @@ function json(response: ServerResponse, status: number, value: unknown): void {
 
 async function body(request: IncomingMessage, limit: number): Promise<Record<string, unknown>> {
   const contentType = request.headers['content-type'] ?? ''
-  if (!contentType.toLowerCase().startsWith('application/json')) throw new HttpError(415, 'Content-Type 必须是 application/json')
+  if (!contentType.toLowerCase().startsWith('application/json')) throw new HttpError(415, 'Content-Type 必须是 application/json', 'unsupported_media_type')
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array)
     size += buffer.length
-    if (size > limit) throw new HttpError(413, '请求体过大')
+    if (size > limit) throw new HttpError(413, '请求体过大', 'payload_too_large')
     chunks.push(buffer)
   }
   let parsed: unknown
   try {
     parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'))
   } catch {
-    throw new HttpError(400, '请求体不是有效 JSON')
+    throw new HttpError(400, '请求体不是有效 JSON', 'invalid_body')
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new HttpError(400, '请求体必须是 JSON 对象')
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new HttpError(400, '请求体必须是 JSON 对象', 'invalid_body')
   return parsed as Record<string, unknown>
 }
 
@@ -83,16 +125,16 @@ const AVATAR_TYPES: Record<string, string> = {
  */
 async function rawBody(request: IncomingMessage, limit: number): Promise<Buffer> {
   const declared = Number(request.headers['content-length'] ?? '0')
-  if (Number.isFinite(declared) && declared > limit) throw new HttpError(413, '图片太大了')
+  if (Number.isFinite(declared) && declared > limit) throw new HttpError(413, '图片太大了', 'payload_too_large')
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array)
     size += buffer.length
-    if (size > limit) throw new HttpError(413, '图片太大了')
+    if (size > limit) throw new HttpError(413, '图片太大了', 'payload_too_large')
     chunks.push(buffer)
   }
-  if (size === 0) throw new HttpError(400, '没有收到图片内容')
+  if (size === 0) throw new HttpError(400, '没有收到图片内容', 'invalid_body')
   return Buffer.concat(chunks)
 }
 
@@ -116,11 +158,11 @@ function matchesImageSignature(bytes: Buffer, declared: string): boolean {
 function stringField(input: Record<string, unknown>, name: string, max: number, required = true): string {
   const value = input[name]
   if (value === undefined || value === null) {
-    if (required) throw new HttpError(400, `缺少字段 ${name}`)
+    if (required) throw new HttpError(400, `缺少字段 ${name}`, 'missing_field')
     return ''
   }
-  if (typeof value !== 'string') throw new HttpError(400, `字段 ${name} 必须是字符串`)
-  if (value.length > max) throw new HttpError(400, `字段 ${name} 过长`)
+  if (typeof value !== 'string') throw new HttpError(400, `字段 ${name} 必须是字符串`, 'invalid_field')
+  if (value.length > max) throw new HttpError(400, `字段 ${name} 过长`, 'invalid_field')
   return value
 }
 
@@ -128,7 +170,7 @@ function integerField(input: Record<string, unknown>, name: string, fallback: nu
   const value = input[name]
   if (value === undefined || value === null) return fallback
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0 || value > max) {
-    throw new HttpError(400, `字段 ${name} 无效`)
+    throw new HttpError(400, `字段 ${name} 无效`, 'invalid_field')
   }
   return value
 }
@@ -138,7 +180,7 @@ function cursorField(value: string): number {
   const text = value.trim()
   if (text === '') return 0
   const parsed = Number(text)
-  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new HttpError(400, '字段 after 必须是从 0 开始的整数')
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new HttpError(400, '字段 after 必须是从 0 开始的整数', 'invalid_field')
   return parsed
 }
 
@@ -177,7 +219,11 @@ export async function installWeb(
       const known = caught instanceof HttpError || isAccessError(caught)
       const status = known ? (caught as HttpError).status : 500
       if (!known) console.error('butler web request failed', caught)
-      json(response, status, { error: known ? (caught as Error).message : '服务处理请求失败' })
+      // `error` 是给人看的，`code` 是给客户端分支用的；两个都在，谁也不用去猜另一个。
+      json(response, status, {
+        error: known ? (caught as Error).message : '服务处理请求失败',
+        code: errorCodeOf(caught, status),
+      })
     },
   })
 
@@ -267,7 +313,7 @@ export async function installWeb(
       // 通道自己坏了不能静默：读者会以为「任务没动静」，而其实是流断了。
       if (!closed) {
         console.error('butler events stream failed', caught)
-        send({ type: 'error', message: '事件流中断，请重新打开页面' })
+        send({ type: 'error', message: '事件流中断，请重新打开页面', code: 'stream_broken' })
       }
     }
     done()
@@ -313,15 +359,15 @@ export async function installWeb(
       method(request, 'GET')
       const url = new URL(request.url ?? '/', 'http://localhost')
       const suffix = decodeURIComponent(url.pathname.slice(`${config.routePrefix}/assets`.length)).replace(/^\/+/, '')
-      if (suffix === '') throw new HttpError(404, '资源不存在')
+      if (suffix === '') throw new HttpError(404, '资源不存在', 'asset_not_found')
       const file = resolve(assetRoot, suffix)
       const local = relative(assetRoot, file)
-      if (local.startsWith('..') || isAbsolute(local)) throw new HttpError(404, '资源不存在')
+      if (local.startsWith('..') || isAbsolute(local)) throw new HttpError(404, '资源不存在', 'asset_not_found')
       let content: Buffer
       try {
         content = await readFile(file)
       } catch {
-        throw new HttpError(404, '资源不存在')
+        throw new HttpError(404, '资源不存在', 'asset_not_found')
       }
       access.assert(actor)
       response.writeHead(200, {
@@ -380,9 +426,9 @@ export async function installWeb(
       method(request, 'POST')
       const payload = await body(request, config.maxRequestBodyBytes)
       const agentId = stringField(payload, 'agentId', 60).trim()
-      if (agentId === '') throw new HttpError(400, '缺少 agentId')
+      if (agentId === '') throw new HttpError(400, '缺少 agentId', 'missing_field')
       // 只允许给目录里真实存在的成员起别名，避免写出永远不显示的死配置。
-      if (!listAgentCards(ctx).some(card => card.id === agentId)) throw new HttpError(404, '没有这个成员')
+      if (!listAgentCards(ctx).some(card => card.id === agentId)) throw new HttpError(404, '没有这个成员', 'member_not_found')
       console_.setAlias(actor, agentId, stringField(payload, 'displayName', 24, false), stringField(payload, 'accent', 9, false))
       respond(actor, response, 200, { items: console_.members(actor) })
     },
@@ -404,7 +450,7 @@ export async function installWeb(
     handler: async (request, response, actor) => {
       if (request.method === 'DELETE') {
         const target = new URL(request.url ?? '/', 'http://localhost').searchParams.get('agentId')?.trim() ?? ''
-        if (target === '') throw new HttpError(400, '缺少 agentId')
+        if (target === '') throw new HttpError(400, '缺少 agentId', 'missing_field')
         console_.clearAvatar(actor, target)
         respond(actor, response, 200, { items: console_.members(actor) })
         return
@@ -413,7 +459,7 @@ export async function installWeb(
       if (request.method === 'GET') {
         const agentId = new URL(request.url ?? '/', 'http://localhost').searchParams.get('agentId')?.trim() ?? ''
         const found = agentId === '' ? undefined : console_.avatar(actor, agentId)
-        if (found === undefined) throw new HttpError(404, '没有设置头像')
+        if (found === undefined) throw new HttpError(404, '没有设置头像', 'avatar_not_found')
         response.writeHead(200, {
           'content-type': found.contentType,
           'cache-control': 'private, max-age=60',
@@ -424,12 +470,12 @@ export async function installWeb(
       }
       method(request, 'POST')
       const agentId = new URL(request.url ?? '/', 'http://localhost').searchParams.get('agentId')?.trim() ?? ''
-      if (agentId === '' || !listAgentCards(ctx).some(card => card.id === agentId)) throw new HttpError(404, '没有这个成员')
+      if (agentId === '' || !listAgentCards(ctx).some(card => card.id === agentId)) throw new HttpError(404, '没有这个成员', 'member_not_found')
       const declared = (request.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase() ?? ''
       const contentType = AVATAR_TYPES[declared]
-      if (contentType === undefined) throw new HttpError(415, '头像只支持 PNG / JPEG / WebP')
+      if (contentType === undefined) throw new HttpError(415, '头像只支持 PNG / JPEG / WebP', 'unsupported_media_type')
       const bytes = await rawBody(request, config.maxAvatarBytes)
-      if (!matchesImageSignature(bytes, declared)) throw new HttpError(415, '文件内容与图片格式不符')
+      if (!matchesImageSignature(bytes, declared)) throw new HttpError(415, '文件内容与图片格式不符', 'unsupported_media_type')
       console_.setAvatar(actor, agentId, bytes, contentType)
       respond(actor, response, 200, { items: console_.members(actor) })
     },
@@ -464,7 +510,7 @@ export async function installWeb(
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams
       const state = params.get('state') ?? ''
       if (!['', 'queued', 'running', 'waiting_user', 'summarizing', 'external_pending', 'completed', 'failed', 'cancelled'].includes(state)) {
-        throw new HttpError(400, '状态筛选值无效')
+        throw new HttpError(400, '状态筛选值无效', 'history_query_invalid')
       }
       respond(actor, response, 200, console_.history(actor, {
         offset: Number(params.get('offset') ?? '0'),
@@ -482,7 +528,7 @@ export async function installWeb(
     handler: (request, response, actor) => {
       method(request, 'GET')
       const id = new URL(request.url ?? '/', 'http://localhost').searchParams.get('id') ?? ''
-      if (id === '') throw new HttpError(400, '缺少任务 id')
+      if (id === '') throw new HttpError(400, '缺少任务 id', 'missing_field')
       respond(actor, response, 200, console_.task(actor, id))
     },
   }))
@@ -528,7 +574,7 @@ export async function installWeb(
       method(request, 'GET')
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams
       const conversationId = (params.get('conversationId') ?? '').trim()
-      if (conversationId === '') throw new HttpError(400, '缺少 conversationId')
+      if (conversationId === '') throw new HttpError(400, '缺少 conversationId', 'missing_field')
 
       if (params.get('probe') === '1') {
         respond(actor, response, 200, { run: console_.watch(conversationId, actor, 0)?.head ?? null })
@@ -563,7 +609,7 @@ export async function installWeb(
       const subtaskId = stringField(payload, 'subtaskId', 40)
       const decideByAgent = payload.decideByAgent === true
       const text = decideByAgent ? '' : stringField(payload, 'text', config.maxMessageChars).trim()
-      if (!decideByAgent && text === '') throw new HttpError(400, '请先写点内容，或者让它自己拿主意')
+      if (!decideByAgent && text === '') throw new HttpError(400, '请先写点内容，或者让它自己拿主意', 'reply_text_missing')
 
       access.assert(actor)
       const started = await console_.startReply({
@@ -607,7 +653,7 @@ export async function installWeb(
       method(request, 'POST')
       const payload = await body(request, config.maxRequestBodyBytes)
       const message = stringField(payload, 'message', config.maxMessageChars).trim()
-      if (message === '') throw new HttpError(400, '消息不能为空')
+      if (message === '') throw new HttpError(400, '消息不能为空', 'message_empty')
       const conversationId = stringField(payload, 'conversationId', 200)
 
       access.assert(actor)

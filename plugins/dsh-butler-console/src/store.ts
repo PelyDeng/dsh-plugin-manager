@@ -291,7 +291,7 @@ export class TaskStore {
   assertOwner(conversationId: string, actor: Actor): void {
     const row = this.db.prepare('SELECT 1 FROM conversations WHERE id=? AND owner_namespace=? AND owner_id=?')
       .get(conversationId, actor.namespace, actor.userId)
-    if (row === undefined) throw new AccessError(404, '会话不存在或无权访问')
+    if (row === undefined) throw new AccessError(404, '会话不存在或无权访问', 'conversation_not_found')
   }
 
   /** 记录一条用户消息，首条消息决定会话标题。 */

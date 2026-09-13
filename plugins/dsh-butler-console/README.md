@@ -144,6 +144,21 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 牛马大总管自己的发言也是边收边上的：`chat_delta` 开一条气泡并逐段追加，回合结束时到达的
 `chat` 用它落定后的正文**替换**预览，所以被重试掉的那一版不会留在页面上。
 
+### 失败都带一个稳定的码
+
+普通响应是 `{"error":"…","code":"…"}`；流已经开出去之后再出错，用含义相同的 `error` 事件带 `code`。
+
+客户端按 `code` 分支，**不要解析 `error` 的文案** —— 文案是给人看的、会改，码不是。常见的有：
+`missing_field`、`invalid_field`、`message_empty`、`reply_text_missing`、`run_busy`、
+`idempotency_conflict`、`replay_gone`、`waiting_expired`、`not_waiting`、`task_not_found`、
+`subtask_not_found`、`conversation_not_found`、`conversation_invalid`、`member_not_found`、
+`history_query_invalid`、`plugin_stopping`、`turn_failed`、`stream_broken`。
+
+抛出处没给具体码时按 HTTP 状态兜底（`invalid_request`、`unauthorized`、`forbidden`、`not_found`、
+`method_not_allowed`、`conflict`、`payload_too_large`、`unsupported_media_type`、`internal_error`、
+`unavailable`），所以永远不会是空码。同一类失败在不同接口上给同一个码：两个入口都撞上「上一轮
+还没完」时，客户端只需要认 `run_busy` 一个。
+
 ### 执行与观察是分开的
 
 提交之后，任务在服务端跑，事件写进该会话的事件日志，`/chat` 那条连接只是众多观察者之一。

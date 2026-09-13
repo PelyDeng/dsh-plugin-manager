@@ -126,7 +126,17 @@ export type ButlerEvent =
     readonly time: number
   }
   | { readonly type: 'summary'; readonly taskId: string; readonly text: string; readonly state: TaskState; readonly error: string; readonly time: number }
-  | { readonly type: 'error'; readonly message: string; readonly time: number }
+  | {
+    readonly type: 'error'
+    readonly message: string
+    /**
+     * 稳定错误码，与 HTTP 响应体里的 `code` 同一套含义。
+     *
+     * 流已经开出去之后再出错只能用事件表达；带上码，客户端才不必去解析 `message`。
+     */
+    readonly code?: string
+    readonly time: number
+  }
 
 /**
  * 只在编排内部传递、不直接发给页面的值。
@@ -482,7 +492,7 @@ export class ButlerConsole {
 
   /** 校验浏览器传来的会话 id，避免用它去寻址别的 DSH 会话。 */
   validateId(value: string): string {
-    if (!CONVERSATION_ID.test(value)) throw new AccessError(400, '不是牛马大总管的会话标识')
+    if (!CONVERSATION_ID.test(value)) throw new AccessError(400, '不是牛马大总管的会话标识', 'conversation_invalid')
     return value
   }
 
@@ -497,7 +507,7 @@ export class ButlerConsole {
    * 复制一份对话内容。
    */
   async open(requestedId: string | undefined, createMissing: boolean, actor: Actor): Promise<Conversation | undefined> {
-    if (this.disposed) throw new AccessError(503, '插件正在停止')
+    if (this.disposed) throw new AccessError(503, '插件正在停止', 'plugin_stopping')
     this.access.assert(actor)
     if (requestedId === undefined && !createMissing) return undefined
     const id = requestedId === undefined ? this.createId() : this.validateId(requestedId)
@@ -538,7 +548,7 @@ export class ButlerConsole {
       selection = await defaultConversationModel(this.ctx)
     }
     this.access.assert(actor)
-    if (this.disposed) throw new AccessError(503, '插件正在停止')
+    if (this.disposed) throw new AccessError(503, '插件正在停止', 'plugin_stopping')
     const effort = selection.reasoningEffort ?? this.config.reasoningEffort
     const agentOptions = {
       provider: selection.provider,
@@ -564,7 +574,7 @@ export class ButlerConsole {
     this.access.assert(actor)
     if (this.disposed) {
       await handle.dispose()
-      throw new AccessError(503, '插件正在停止')
+      throw new AccessError(503, '插件正在停止', 'plugin_stopping')
     }
     const conversation: Conversation = { id, handle, active: false, lastUsedAt: Date.now() }
     this.conversations.set(id, conversation)
@@ -786,7 +796,7 @@ export class ButlerConsole {
     this.access.assert(actor)
     if (!Number.isSafeInteger(query.offset) || query.offset < 0
       || !Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > this.config.maxHistoryPageSize
-      || query.keyword.length > 120) throw new AccessError(400, '历史查询参数无效')
+      || query.keyword.length > 120) throw new AccessError(400, '历史查询参数无效', 'history_query_invalid')
     return this.store.history(actor, query)
   }
 
@@ -794,7 +804,7 @@ export class ButlerConsole {
   task(actor: Actor, id: string) {
     this.access.assert(actor)
     const record = this.store.task(actor, id)
-    if (record === undefined) throw new AccessError(404, '任务不存在或无权访问')
+    if (record === undefined) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
     return record
   }
 
@@ -820,7 +830,7 @@ export class ButlerConsole {
     this.store.assertOwner(id, actor)
     if (taskId !== '') {
       const record = this.store.task(actor, taskId)
-      if (record === undefined || record.conversationId !== id) throw new AccessError(404, '任务不存在或无权访问')
+      if (record === undefined || record.conversationId !== id) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
     }
     const active = this.runs.get(id)
     if (active === undefined) return { accepted: false, reason: '现在没有正在执行的一轮' }
@@ -878,13 +888,13 @@ export class ButlerConsole {
   private async prepareTurn(conversationId: string, message: string, actor: Actor, runId: string): Promise<PreparedTurn> {
     this.access.assert(actor)
     const text = message.trim()
-    if (text === '') throw new AccessError(400, '消息不能为空')
-    if ([...text].length > this.config.maxMessageChars) throw new AccessError(400, `消息过长，最多 ${this.config.maxMessageChars} 个字符`)
+    if (text === '') throw new AccessError(400, '消息不能为空', 'message_empty')
+    if ([...text].length > this.config.maxMessageChars) throw new AccessError(400, `消息过长，最多 ${this.config.maxMessageChars} 个字符`, 'message_too_long')
     this.validateId(conversationId)
     const conversation = await this.open(conversationId, true, actor)
-    if (conversation === undefined) throw new AccessError(500, '无法打开牛马大总管会话')
+    if (conversation === undefined) throw new AccessError(500, '无法打开牛马大总管会话', 'conversation_open_failed')
     this.access.assert(actor)
-    if (conversation.active) throw new AccessError(409, '牛马大总管正在处理上一条消息，请先停止或等待完成')
+    if (conversation.active) throw new AccessError(409, '牛马大总管正在处理上一条消息，请先停止或等待完成', 'run_busy')
 
     conversation.active = true
     conversation.lastUsedAt = Date.now()
@@ -918,7 +928,7 @@ export class ButlerConsole {
       }
       if (planning.outcome.kind === 'failed') {
         if (planning.text !== '') yield { type: 'chat', role: 'butler', text: planning.text, time: Date.now() }
-        yield { type: 'error', message: `牛马大总管回答失败：${planning.outcome.message}`, time: Date.now() }
+        yield { type: 'error', message: `牛马大总管回答失败：${planning.outcome.message}`, code: 'turn_failed', time: Date.now() }
         return
       }
       const plan = planning.plans.at(-1)
@@ -1043,7 +1053,7 @@ export class ButlerConsole {
     this.access.assert(actor)
     const head = this.logs.get(started.conversationId)?.head()
     if (head === undefined || head === null || head.runId !== started.runId) {
-      throw new AccessError(409, '这次提交已经处理过，那一轮也已经结束，无法再回放它的过程')
+      throw new AccessError(409, '这次提交已经处理过，那一轮也已经结束，无法再回放它的过程', 'replay_gone')
     }
   }
 
@@ -1058,7 +1068,7 @@ export class ButlerConsole {
     const seen = this.idempotent.get(key)
     if (seen === undefined) return undefined
     if (seen.digest !== digest) {
-      throw new AccessError(409, `requestId ${requestId} 已经用在另一次请求上，换一个再提交`)
+      throw new AccessError(409, `requestId ${requestId} 已经用在另一次请求上，换一个再提交`, 'idempotency_conflict')
     }
     return seen.result
   }
@@ -1169,7 +1179,7 @@ export class ButlerConsole {
     } catch (error) {
       // 编排本身已经把大多数失败转成了事件；走到这里说明是编排之外的问题（例如写库失败）。
       console.error(`butler-console: 一轮执行中断：${visibleError(error, 500)}\n${stackOf(error)}`)
-      log.push({ type: 'error', message: visibleError(error, 500), time: Date.now() })
+      log.push({ type: 'error', message: visibleError(error, 500), code: 'internal_error', time: Date.now() })
       state = 'failed'
     } finally {
       log.finish(state)
@@ -1479,14 +1489,14 @@ export class ButlerConsole {
     this.access.assert(input.actor)
     const waiting = this.waiting.get(`${input.taskId}:${input.subtaskId}`)
     const record = this.store.task(input.actor, input.taskId)
-    if (record === undefined) throw new AccessError(404, '任务不存在或无权访问')
+    if (record === undefined) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
     const subtask = record.subtasks.find(item => item.id === input.subtaskId)
-    if (subtask === undefined) throw new AccessError(404, '这个子任务不存在')
+    if (subtask === undefined) throw new AccessError(404, '这个子任务不存在', 'subtask_not_found')
     if (waiting === undefined) {
       // 服务重启后等待上下文会丢，但状态还在；这时如实说明而不是假装能回复。
-      throw new AccessError(409, `${subtask.agentId} 的这次等待已经失效，请重新描述你的目标`)
+      throw new AccessError(409, `${subtask.agentId} 的这次等待已经失效，请重新描述你的目标`, 'waiting_expired')
     }
-    if (subtask.state !== 'waiting_user') throw new AccessError(409, '这位成员当前没有在等你回话')
+    if (subtask.state !== 'waiting_user') throw new AccessError(409, '这位成员当前没有在等你回话', 'not_waiting')
 
     this.store.setSubtaskState(input.taskId, input.subtaskId, 'running')
     // 用户回话了，这次等待的闹钟就该撤掉 —— 留着它到点会把一个正在跑的活的结局改成超时。
