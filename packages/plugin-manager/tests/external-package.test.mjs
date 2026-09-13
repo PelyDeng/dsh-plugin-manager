@@ -103,27 +103,57 @@ test('repository packaging reports build and verified pack separately, skipping 
     const { elapsedMs, ...identity } = event;
     return identity;
   });
+  /**
+   * 把事件流折成「每个阶段各自开始、各自结束」。
+   *
+   * 插件是并行的，所以阶段之间的先后不再固定；能固定的是：每个阶段有自己的 `id`，
+   * `start` 与 `done` 必须配对，同一个插件内部仍按构建 → 检查 → 打包的顺序。
+   */
+  const fold = list => {
+    const open = new Map(), finished = [];
+    let peak = 0;
+    for (const event of list) {
+      assert.equal(typeof event.id, 'string', 'each stage carries an id so overlapping stages stay distinct');
+      if (event.type === 'start') {
+        assert.equal(open.has(event.id), false, 'a stage starts once');
+        open.set(event.id, event.label);
+      } else {
+        assert.equal(open.get(event.id), event.label, 'a stage finishes under its own id');
+        open.delete(event.id);
+        finished.push(`${event.type === 'done' ? 'done' : 'failed'} ${event.label}`);
+      }
+      peak = Math.max(peak, open.size);
+    }
+    return { open: [...open.values()], finished, peak, index: label => finished.findIndex(entry => entry.endsWith(` ${label}`)) };
+  };
   const tasks = id => readFileSync(join(workspace, 'plugins', id, 'tasks'), 'utf8');
 
   // 默认跳过插件检查：进度里没有「检查插件」，fixture 的 check.mjs 也没被执行。
   const result = pack('.local/success'); ok(result);
-  const skipped = ['安装插件依赖', ...['alpha', 'beta'].flatMap(id => ['构建', '打包'].map(task => `${task}插件 ${id}`))];
-  assert.deepEqual(events(result), skipped.flatMap(label => [{ type: 'start', label }, { type: 'done', label }]));
+  const skipped = fold(events(result));
+  assert.deepEqual(skipped.open, []);
+  assert.deepEqual([...skipped.finished].sort(), ['done 安装插件依赖', ...['alpha', 'beta'].flatMap(id => [`done 构建插件 ${id}`, `done 打包插件 ${id}`])].sort());
+  assert.ok(skipped.peak > 1, '两个插件的构建确实同时进行，而不是排队');
+  for (const id of ['alpha', 'beta']) assert.ok(skipped.index(`构建插件 ${id}`) < skipped.index(`打包插件 ${id}`), `${id} 先构建后打包`);
   assert.equal(read(join(workspace, '.local/success/manifest.json')).plugins.length, 2);
   for (const id of ['alpha', 'beta']) assert.equal(tasks(id), 'build\n');
 
   // 显式要回检查时才真的跑：进度与标记都多出「检查」一步（标记是追加的，两次构建都在）。
   const verified = pack('.local/verified', '--verify-plugin-check'); ok(verified);
-  const checked = ['安装插件依赖', ...['alpha', 'beta'].flatMap(id => ['构建', '检查', '打包'].map(task => `${task}插件 ${id}`))];
-  assert.deepEqual(events(verified), checked.flatMap(label => [{ type: 'start', label }, { type: 'done', label }]));
+  const checked = fold(events(verified));
+  assert.deepEqual(checked.open, []);
+  assert.deepEqual([...checked.finished].sort(), ['done 安装插件依赖', ...['alpha', 'beta'].flatMap(id => [`done 构建插件 ${id}`, `done 检查插件 ${id}`, `done 打包插件 ${id}`])].sort());
   for (const id of ['alpha', 'beta']) assert.equal(tasks(id), 'build\nbuild\ncheck\n');
 
-  // 检查失败时不得产出成功清单，并且停在失败那一步。
+  // 检查失败时不得产出成功清单：失败之后不再派发新阶段，也不再打包那个插件。
   writeFileSync(join(workspace, 'plugins/beta/check.mjs'), 'process.exitCode = 8;\n');
   const failure = pack('.local/failure', '--verify-plugin-check');
   assert.notEqual(failure.status, 0);
-  assert.deepEqual(events(failure).at(-1), { type: 'failed', label: '检查插件 beta' });
-  assert.equal(events(failure).some(event => event.label === '打包插件 beta'), false);
+  const failed = events(failure);
+  const failureIndex = failed.findIndex(event => event.type === 'failed' && event.label === '检查插件 beta');
+  assert.ok(failureIndex >= 0, '失败的那一步被如实报告');
+  assert.equal(failed.slice(failureIndex).some(event => event.type === 'start'), false, '失败后不再派发新的阶段');
+  assert.equal(failed.some(event => event.label === '打包插件 beta'), false);
   assert.equal(existsSync(join(workspace, '.local/failure/manifest.json')), false);
 });
 
@@ -153,7 +183,7 @@ test('a single package builds once and packs a source-free release without touch
   writeFileSync(join(base, 'pnpm-workspace.yaml'), "packages:\n  - '*'\n");
   writeFileSync(join(base, 'pnpm-lock.yaml'), 'parent-lock-must-not-be-used\n');
   const output = join(root, '.local/release');
-  assert.throws(() => packagePlugins(root, undefined, output, '.'), /pnpm-lock\.yaml。请在作者项目根执行 pnpm install --ignore-workspace/u);
+  await assert.rejects(() => packagePlugins(root, undefined, output, '.'), /pnpm-lock\.yaml。请在作者项目根执行 pnpm install --ignore-workspace/u);
   assert.equal(existsSync(output), false);
   writeFileSync(join(root, 'pnpm-lock.yaml'), lock);
   // 默认跳过插件检查，所以标记里只有构建；这一步由 --verify-plugin-check 显式要回来。
@@ -223,26 +253,26 @@ test('legacy source deployment warns before the manifest fallback fails', t => {
   assert.equal(existsSync(join(root, 'artifacts')), false);
 });
 
-test('failed builds and unsafe output selections never produce a success manifest', t => {
+test('failed builds and unsafe output selections never produce a success manifest', async t => {
   const { root, manifest } = fixture(t);
   writeFileSync(join(root, 'pnpm-lock.yaml'), lock);
-  assert.throws(() => packagePlugins(root, undefined, root, '.'), /发布目录/);
+  await assert.rejects(() => packagePlugins(root, undefined, root, '.'), /发布目录/);
   manifest.scripts.check = 'node -e "process.exit(1)"'; json(join(root, 'package.json'), manifest);
   const output = join(root, '.local/failed');
   // 显式要回检查（默认跳过，见 packagePlugins 说明），让这一步的失败真的发生。
-  assert.throws(() => packagePlugins(root, undefined, output, '.', undefined, { skipCheck: false }), /失败/);
+  await assert.rejects(() => packagePlugins(root, undefined, output, '.', undefined, { skipCheck: false }), /失败/);
   assert.equal(existsSync(join(output, 'manifest.json')), false);
   assert.deepEqual(readdirSync(output), []);
 });
 
-test('compose releases from archives, reject conflicts before output, retain source independence', t => {
+test('compose releases from archives, reject conflicts before output, retain source independence', async t => {
   const { base, root, manifest } = fixture(t);
   writeFileSync(join(root, 'pnpm-lock.yaml'), lock);
-  const first = join(base, 'first'); packagePlugins(root, undefined, first, '.');
+  const first = join(base, 'first'); await packagePlugins(root, undefined, first, '.');
   manifest.name = 'second-fixture'; manifest.deepseekPlugin.id = 'second';
   manifest.deepseekPlugin.development.rootVariable = 'SECOND_SOURCE';
   json(join(root, 'package.json'), manifest);
-  const second = join(base, 'second'); packagePlugins(root, undefined, second, '.');
+  const second = join(base, 'second'); await packagePlugins(root, undefined, second, '.');
   const path1 = join(first, 'manifest.json'), path2 = join(second, 'manifest.json');
   for (const path of [path1, path2]) {
     const value = read(path);

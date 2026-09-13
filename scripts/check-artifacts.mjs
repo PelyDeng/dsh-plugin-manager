@@ -69,7 +69,7 @@ try {
   assert.equal(existsSync(join(externalAuth, 'node_modules/@deepseek-ai/dsh-tools')), false);
 
   const releasePath = join(temporary, 'release');
-  packagePlugins(root, 'auth,example', releasePath);
+  await packagePlugins(root, 'auth,example', releasePath);
   const original = JSON.parse(readFileSync(join(root, 'plugins/dsh-example/package.json')));
   const external = join(temporary, 'external example'); mkdirSync(external);
   for (const path of ['src', 'web', 'knowledge', 'scripts', 'cordis.patch.yml', 'tsconfig.json', 'tsdown.config.ts', 'tsdown.web.config.ts']) cpSync(join(root, 'plugins/dsh-example', path), join(external, path), { recursive: true });
