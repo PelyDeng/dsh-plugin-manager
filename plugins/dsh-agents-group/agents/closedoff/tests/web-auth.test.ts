@@ -1,5 +1,7 @@
 /** Real HTTP requests with local fake Agents: no model or business gateway is contacted. */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
+import { existsSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import type { AddressInfo } from 'node:net'
 import type { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -187,5 +189,21 @@ describe('HTTP authentication and conversation ownership', () => {
     expect((await standalone.request('/closedoff-qa', '')).status).toBe(200)
     expect((await standalone.request('/closedoff-qa/conversations', '')).status).toBe(200)
     expect(() => standalone.manager.authorizeAgent(undefined)).not.toThrow()
+  })
+
+  // 页面模块按文件名直接引用、没有内容指纹：长缓存会让回访浏览器跑「新 app.js + 旧 cards.js」。
+  // 这里对真实响应头取证；`pnpm test` 会先跑 build:web 生成 web/assets。
+  it.skipIf(!existsSync(fileURLToPath(new URL('../web/assets/cards.js', import.meta.url))))('revalidates first-party page modules and still long-caches vendored bundles', async () => {
+    const { request } = await fixture()
+    for (const asset of ['cards.js', 'app.js', 'app.css', 'labels.js', 'format.js', 'render-text.js', 'model-picker.js', 'trajectory.js']) {
+      const response = await request(`/closedoff-qa/assets/${asset}`)
+      expect(response.status, asset).toBe(200)
+      expect(response.headers.get('cache-control'), asset).toBe('no-cache')
+    }
+    const vendored = await request('/closedoff-qa/assets/video-player/vue.global.prod.js')
+    expect(vendored.status).toBe(200)
+    expect(vendored.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+    // 认证仍然在读取文件之后、写响应之前生效：未登录拿不到内容。
+    expect((await request('/closedoff-qa/assets/cards.js', '')).status).toBe(401)
   })
 })

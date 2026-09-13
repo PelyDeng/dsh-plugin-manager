@@ -1,14 +1,18 @@
-(function (global) {
-  'use strict';
-
-  function createTrajectoryView(options) {
+/**
+ * 轨迹视图：设备组弹窗、抓拍/摄像头预览、二维与三维轨迹渲染。
+ *
+ * 页面模块（`type="module"`），由 app.js 在创建卡片层之后导入并创建：
+ * `createTrajectoryView({ mapConfig, routePath, icons, el, escapeHtml, scrollBottom })`。
+ * 自己写的辅助函数之间用模块内作用域，不再挂全局。
+ */
+export function createTrajectoryView(options) {
     var MAP_CONFIG = options.mapConfig;
     var routePath = options.routePath;
     var IC = options.icons;
     var el = options.el;
     var esc = options.escapeHtml;
     var scrollBottom = options.scrollBottom;
-    global.CESIUM_BASE_URL = routePath('/assets/cesium/');
+    window.CESIUM_BASE_URL = routePath('/assets/cesium/');
     var DEVICE_GROUP_MARKER = routePath('/assets/cesium/device-group-marker.png');
     var trackData = {};
     var trackVehicles = {};
@@ -961,5 +965,3 @@
     };
   }
 
-  global.ClosedoffTrajectory = { create: createTrajectoryView };
-})(window);

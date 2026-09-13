@@ -5,6 +5,7 @@ import {answerText, compactDuration, compactTokens, exactTokens, summaryDuration
 
 import { GROUP_LABELS, GROUP_ORDER, IC, TOOL_LABELS } from './labels.js';
 import {createCards} from './cards.js';
+import {createTrajectoryView} from './trajectory.js';
 (function () {
   var APP_CONFIG = window.CLOSEDOFF_CONFIG;
   if (!APP_CONFIG || !APP_CONFIG.routePrefix || !APP_CONFIG.map) throw new Error('封闭化页面配置缺失');
@@ -82,8 +83,7 @@ import {createCards} from './cards.js';
     return e;
   }
 
-  if (!window.ClosedoffTrajectory) throw new Error('轨迹视图模块缺失');
-  trajectory = window.ClosedoffTrajectory.create({
+  trajectory = createTrajectoryView({
     mapConfig: APP_CONFIG.map,
     routePath: routePath,
     icons: IC,
