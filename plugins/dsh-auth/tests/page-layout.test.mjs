@@ -3,7 +3,7 @@
  *
  * 插件页是浏览器原生模块，vitest/jsdom 覆盖不到布局；这条用例用 `scripts/web-page-probe.mjs`
  * 起静态服务 + 桩接口 + 无头 Chromium，把「一行最多三张、同一行不参差、说明两行封顶、
- * 不横向溢出」变成可重复的断言。没有可用 Chromium 时工具会明确报告跳过，用例也照此记录，
+ * 不横向溢出」变成可重复的断言。没有可用 Chromium 时用例记成跳过（TAP 里显示 SKIP），
  * 不把跳过当成通过。
  */
 import test from 'node:test';
@@ -21,7 +21,7 @@ test('auth catalog page keeps its grid rules at every breakpoint', async t => {
     widths: '1150,860,640', settle: '1200',
   });
   if (result.skipped) {
-    t.diagnostic(`跳过：${result.reason}`);
+    t.skip(`没有可用浏览器：${result.reason}`);
     return;
   }
   const byWidth = new Map(result.results.map(entry => [entry.width, entry.value]));
