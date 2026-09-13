@@ -23,7 +23,7 @@ bash build.sh
 
 复用需与活动站点对应的 ready 基线、构建环境、宿主来源与旧归档均可核验。判定按「改动落在哪些插件的构建输入里」：插件目录、它声明的 `workspace:` 依赖（含间接依赖）、仓库级共享输入（`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.npmrc`、`.gitattributes`），以及清单 `deepseekPlugin.buildInputs` 列出的路径；落在这些之外的变化不再阻塞复用。没声明 `buildInputs` 的插件读取范围未知，仍要求改动全部落在本次重建的插件目录内。本地依赖按传递关系校验，不得靠安装钩子重建。不会自动扩大选集或静默全量。没有基线时先正常全量构建；archives 成功记录不充当 source 基线，切回 source 首次必须全量。
 
-管理器工具归档也按输入复用：`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`packages/plugin-kit`、`packages/plugin-manager` 的已跟踪内容没变、且上一次成功发布记录里的归档摘要仍与磁盘一致时，直接复用那份归档再安装一次（省掉 18.6 秒的 pnpm 重建）；任何一条核验不过就照常重新构建，并在日志里写明原因（例如「管理器构建输入已变化」）。
+管理器工具归档也按输入复用：`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`packages/plugin-kit`、`packages/plugin-manager` 的已跟踪内容没变、且**活动部署**记录里的归档摘要仍与磁盘一致时，直接复用那份归档再安装一次（省掉 18.6 秒的 pnpm 重建）；任何一条核验不过就照常重新构建，并在日志里写明原因（例如「管理器构建输入已变化」）。基线取活动部署而不是最近一次操作记录，因为后者可能正是失败的那次。
 
 源码模式要求与基线一致的干净检出；镜像模式核验同一摘要和旧成功记录的宿主提交，不要求宿主源码存在，最终镜像标签仍须一致。插件自身目录内已纳入 Git 的常规 .tgz/.tar.gz 可作 file: 构建输入，旧新 blob 与磁盘字节须一致；符号链接、目录、越界、未跟踪归档及 `link:` 仍拒绝复用。
 
