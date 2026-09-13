@@ -11,7 +11,7 @@ function fixture(t, source, isTTY = false, columns = 100) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const entry = resolve(root, 'build.mjs');
   const module = new URL('../../../deploy/scripts/build-output.mjs', import.meta.url).href;
-  writeFileSync(entry, `import { buildStep, buildMessage } from ${JSON.stringify(module)};\n${source}\n`);
+  writeFileSync(entry, `import { buildStep, buildMessage, startStage } from ${JSON.stringify(module)};\n${source}\n`);
   let text = '';
   return {
     root, entry, module,
@@ -128,6 +128,39 @@ test('a failure outside a step does not reuse the previous successful step perce
   assert.match(f.text(), /准备工具已完成 \[====================\] 100%/);
   assert.match(f.text(), /构建发布失败（退出码 9）\n/);
   assert.doesNotMatch(f.text(), /构建发布已完成/);
+});
+
+test('stage data can overlap, so parallel packaging shows one line per running stage and sums wall clock', async t => {
+  const f = fixture(t, `
+    const first = startStage('打包插件 blog');
+    const second = startStage('打包插件 closedoff');
+    await new Promise(resolve => setTimeout(resolve, 900));
+    first.done();
+    await new Promise(resolve => setTimeout(resolve, 400));
+    second.done();
+  `, true);
+  assert.equal(await f.run(), 0);
+  // 两条进度行同时在屏幕上：一行写完换行后紧接着重画另一行。
+  assert.match(f.text(), /正在打包插件 blog[^\n]*\n\r\x1b\[2K正在打包插件 closedoff[^\n]*\n/);
+  for (const label of ['打包插件 blog', '打包插件 closedoff']) {
+    assert.match(f.text(), new RegExp(`${label}已完成 \\[====================\\] 100% +耗时 \\d+:\\d{2}:\\d{2}\\.\\d\\n`));
+  }
+  // 两个阶段各自计时，但真实花掉的是重叠后的墙钟时间，表里必须这么报。
+  const total = f.text().match(/总计（阶段并行，按墙钟计）\s+(\d+):(\d{2}):(\d{2})\.(\d)\n/);
+  assert.ok(total, 'overlapping stages report wall clock instead of a sum');
+  assert.ok(Number(total[3]) >= 1, `wall clock covers both stages, got ${total[0]}`);
+  assert.doesNotMatch(f.text(), /合计/);
+  for (const line of f.text().split(/\r|\n/).filter(line => /\d+%/.test(line))) {
+    const visible = line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
+    assert.equal([...visible].reduce((sum, char) => sum + (/[\p{Script=Han}（）]/u.test(char) ? 2 : 1), 0), 99);
+  }
+});
+
+test('an unfinished stage is named when the worker dies inside it', async t => {
+  const f = fixture(t, `buildStep('异常退出', () => process.exit(8));`);
+  assert.equal(await f.run(), 8);
+  assert.match(f.text(), /异常退出失败（退出码 8）/);
+  assert.doesNotMatch(f.text(), /构建发布失败/);
 });
 
 test('termination reaches a synchronous tool and the presenter retains the signal exit code', { skip: process.platform === 'win32' }, async t => {

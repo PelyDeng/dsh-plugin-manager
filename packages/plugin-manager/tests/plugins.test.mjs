@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
-import { discoverPlugins, parseOptions, pluginRecord, selectPlugins } from '../src/plugins.mjs';
+import { discoverPlugins, parseOptions, pluginRecord, selectPlugins, sourcePlugins } from '../src/plugins.mjs';
 import { packagePlugins } from '../src/package-plugins.mjs';
 import { verifyBuildPackage as verifyPackage } from '../src/verify-package.mjs';
 import { loadRelease } from '../src/release.mjs';
@@ -104,21 +104,21 @@ test('value-less switches parse only when declared, and still reject pairing for
   assert.throws(() => parseOptions(['--verify-plugin-check', '--verify-plugin-check'], ['plugins'], ['verify-plugin-check']));
 });
 
-test('the plugin check is skipped by default and only runs when explicitly requested', t => {
+test('the plugin check is skipped by default and only runs when explicitly requested', async t => {
   const root = fixture(t);
   plugin(root, 'skip');
   const directory = resolve(root, 'plugins/plugin-skip');
   // 默认跳过：fixture 的 check 脚本会写出 checked 标记，标记不出现即证明它没被执行。
-  const manifest = packagePlugins(root, 'skip', resolve(root, 'release-default'));
+  const manifest = await packagePlugins(root, 'skip', resolve(root, 'release-default'));
   assert.equal(manifest.plugins.length, 1);
   assert.equal(existsSync(resolve(directory, 'checked')), false);
   assert.equal(existsSync(resolve(directory, 'dist/index.mjs')), true);
   // 显式要回来时才真的跑 check，否则上面的断言可能只是脚本从未生效。
-  packagePlugins(root, 'skip', resolve(root, 'release-verified'), undefined, undefined, { skipCheck: false });
+  await packagePlugins(root, 'skip', resolve(root, 'release-verified'), undefined, undefined, { skipCheck: false });
   assert.equal(existsSync(resolve(directory, 'checked')), true);
 });
 
-test('optional metadata and deployment-only settings do not block build, pack or release consumption', t => {
+test('optional metadata and deployment-only settings do not block build, pack or release consumption', async t => {
   const root = fixture(t);
   plugin(root, 'minimal', m => {
     delete m.description;
@@ -126,7 +126,7 @@ test('optional metadata and deployment-only settings do not block build, pack or
     m.deepseekPlugin.runtimeConfig = { variable: 'MINIMAL_CONFIG' };
   });
   const output = resolve(root, 'release');
-  packagePlugins(root, 'minimal', output);
+  await packagePlugins(root, 'minimal', output);
   const release = loadRelease(resolve(output, 'manifest.json'));
   const [result] = release.plugins;
   assert.equal(result.healthPath, undefined);
@@ -281,7 +281,7 @@ test('runtime templates are checked without needing a user configuration file', 
   assert.ok(!discoverPlugins(root)[0].verifyFiles.includes('env.conf'));
 });
 
-test('the package pipeline builds once, checks that build, and writes a portable manifest', t => {
+test('the package pipeline builds once, checks that build, and writes a portable manifest', async t => {
   const root = fixture(t);
   const dir = plugin(root, 'a');
   writeFileSync(resolve(dir, 'build.mjs'), "import{mkdirSync,writeFileSync,appendFileSync}from'node:fs';mkdirSync('dist',{recursive:true});writeFileSync('dist/index.mjs','export const value=1;\\n');appendFileSync('trace','build\\n');\n");
@@ -289,24 +289,60 @@ test('the package pipeline builds once, checks that build, and writes a portable
   writeFileSync(resolve(dir, 'env.conf'), 'TEST_PRIVATE_VALUE=not-published\n');
   const output = resolve(root, 'output with spaces');
   // 默认跳过插件检查，所以只有构建痕迹；再显式要回检查时才多出 check。
-  const manifest = packagePlugins(root, 'all', output);
+  const manifest = await packagePlugins(root, 'all', output);
   assert.equal(readFileSync(resolve(dir, 'trace'), 'utf8'), 'build\n');
-  packagePlugins(root, 'all', resolve(root, 'checked-output'), undefined, undefined, { skipCheck: false });
+  await packagePlugins(root, 'all', resolve(root, 'checked-output'), undefined, undefined, { skipCheck: false });
   assert.equal(readFileSync(resolve(dir, 'trace'), 'utf8'), 'build\nbuild\ncheck\n');
   assert.equal(manifest.plugins[0].archive, `a-${manifest.plugins[0].sha256}.tgz`);
   assert.match(manifest.plugins[0].sha256, /^[a-f0-9]{64}$/u);
   assert.equal(manifest.plugins[0].directory, 'plugins/plugin-a');
   assert.equal(readFileSync(resolve(output, 'manifest.json'), 'utf8').includes(root), false);
   writeFileSync(resolve(dir, 'README.md'), 'Updated bytes at the same version\n');
-  const updated = packagePlugins(root, 'all', resolve(root, 'updated-output'));
+  const updated = await packagePlugins(root, 'all', resolve(root, 'updated-output'));
   assert.equal(updated.plugins[0].version, manifest.plugins[0].version);
   assert.notEqual(updated.plugins[0].archive, manifest.plugins[0].archive);
   assert.match(spawnSync('tar', ['-xOf', resolve(root, 'updated-output', updated.plugins[0].archive), 'package/README.md'], { encoding: 'utf8' }).stdout, /Updated bytes/);
-  assert.throws(() => packagePlugins(root, 'all', output), /为空/u);
-  assert.deepEqual(packagePlugins(root, 'none', resolve(root, 'empty')).plugins, []);
+  await assert.rejects(() => packagePlugins(root, 'all', output), /为空/u);
+  assert.deepEqual((await packagePlugins(root, 'none', resolve(root, 'empty'))).plugins, []);
   mkdirSync(resolve(root, 'leak/package'), { recursive: true });
   writeFileSync(resolve(root, 'leak/package/env.conf'), 'TEST_PRIVATE_VALUE=not-published\n');
   const bad = spawnSync('tar', ['-czf', resolve(root, 'private.tgz'), '-C', resolve(root, 'leak'), 'package/env.conf'], { encoding: 'utf8' });
   assert.equal(bad.status, 0, bad.stderr);
   assert.throws(() => verifyPackage(root, discoverPlugins(root)[0], resolve(root, 'private.tgz')), /私密/u);
+});
+
+// 每个插件的构建各写一行开始/结束，中间停一下，用它看两个插件的构建区间是否重叠。
+function traced(root, id, trace, pauseMs) {
+  const directory = plugin(root, id);
+  writeFileSync(resolve(directory, 'build.mjs'), "import{mkdirSync,writeFileSync,appendFileSync}from'node:fs';\n"
+    + "import{setTimeout as wait}from'node:timers/promises';\n"
+    + `appendFileSync(${JSON.stringify(trace)},'start ${id}\\n');\n`
+    + `await wait(${pauseMs});\n`
+    + "mkdirSync('dist',{recursive:true});writeFileSync('dist/index.mjs','export function apply() {}\\n');\n"
+    + `appendFileSync(${JSON.stringify(trace)},'end ${id}\\n');\n`);
+  return directory;
+}
+
+test('plugins build in parallel by default and the manifest keeps the selection order', async t => {
+  const root = fixture(t);
+  const trace = resolve(root, 'trace');
+  traced(root, 'a', trace, 700); traced(root, 'b', trace, 700);
+  const selected = sourcePlugins(root, 'all').map(plugin => plugin.id);
+  const manifest = await packagePlugins(root, 'all', resolve(root, 'parallel'));
+  // 一个插件还没结束，另一个已经开始：这就是并行，而不是排队。
+  assert.deepEqual(readFileSync(trace, 'utf8').trim().split('\n').map(line => line.split(' ')[0]), ['start', 'start', 'end', 'end']);
+  // 并发不改变交付顺序：manifest 仍按选集顺序写，部署方的对比才有意义。
+  assert.deepEqual(manifest.plugins.map(plugin => plugin.id), selected);
+  assert.equal(manifest.plugins.length, 2);
+});
+
+test('concurrency 1 keeps packaging serial and rejects values that are not a positive integer', async t => {
+  const root = fixture(t);
+  const trace = resolve(root, 'trace');
+  traced(root, 'a', trace, 150); traced(root, 'b', trace, 150);
+  await packagePlugins(root, 'all', resolve(root, 'serial'), undefined, undefined, { concurrency: 1 });
+  assert.deepEqual(readFileSync(trace, 'utf8').trim().split('\n'), ['start a', 'end a', 'start b', 'end b']);
+  for (const concurrency of [0, -1, 1.5, Number.NaN]) {
+    await assert.rejects(() => packagePlugins(root, 'none', resolve(root, `reject-${String(concurrency)}`), undefined, undefined, { concurrency }), /并发数必须是正整数/u);
+  }
 });

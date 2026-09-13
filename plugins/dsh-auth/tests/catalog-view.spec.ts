@@ -108,8 +108,11 @@ describe('工具分类分组', () => {
 })
 
 describe('plugin catalog grouping', () => {
+  // 被测模块是纯 JavaScript、没有声明文件，导入进来是 any；这里按它的实际返回形状收窄，
+  // 否则回调参数在 strict 下都成了隐式 any。
+  type Grouped = { readonly label: string; readonly plugins: readonly { readonly id: string }[] }
   const rows = (...items: readonly (readonly [string, string | undefined])[]) =>
-    groupPluginsByCategory(items.map(([id, category]) => ({ id, category }))).map(group => ({ label: group.label, ids: group.plugins.map(plugin => plugin.id) }))
+    (groupPluginsByCategory(items.map(([id, category]) => ({ id, category }))) as Grouped[]).map(group => ({ label: group.label, ids: group.plugins.map(plugin => plugin.id) }))
 
   it('按固定顺序展示四个分类：系统默认、通用/工具、智能体、网页服务', () => {
     // 输入顺序刻意打乱，输出顺序必须由分类决定，不随目录返回顺序变化。
@@ -137,8 +140,8 @@ describe('plugin catalog grouping', () => {
 
   it('分组不改变组内原有顺序，搜索后仍保持稳定', () => {
     const plugins = [{ id: 'm1', category: 'agents' }, { id: 'm2', category: 'agents' }, { id: 'a1', category: 'system-default' }]
-    expect(groupPluginsByCategory(plugins).map(group => group.plugins.map(plugin => plugin.id))).toEqual([['a1'], ['m1', 'm2']])
+    expect((groupPluginsByCategory(plugins) as Grouped[]).map(group => group.plugins.map(plugin => plugin.id))).toEqual([['a1'], ['m1', 'm2']])
     // 搜索收窄后再分组，同组内相对顺序保持不变。
-    expect(groupPluginsByCategory(plugins.filter(plugin => plugin.id !== 'm1')).map(group => group.plugins.map(plugin => plugin.id))).toEqual([['a1'], ['m2']])
+    expect((groupPluginsByCategory(plugins.filter(plugin => plugin.id !== 'm1')) as Grouped[]).map(group => group.plugins.map(plugin => plugin.id))).toEqual([['a1'], ['m2']])
   })
 })
