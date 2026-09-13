@@ -47,7 +47,7 @@
 
 ### 声明构建输入，让按需复用能精确判断
 
-源码部署默认全量构建；`--rebuild-plugins <ID列表>` 只重建点名的插件，其余复用上一次成功发布的归档（判定与拒绝规则见[部署说明](../deploy/README.md#服务器源码发版)）。判定依据是「这次改动落在哪些插件的构建输入里」，而插件目录本身与它声明的包依赖（`dependencies`、`devDependencies`、`optionalDependencies`、`peerDependencies` 里的 `workspace:` 依赖）是自动识别的。
+源码部署默认全量构建；`--rebuild-plugins <ID列表>` 只重建点名的插件，其余复用上一次成功发布的归档（判定与拒绝规则见[部署说明](../deploy/README.md#服务器源码发版)）。判定依据是「这次改动落在哪些插件的构建输入里」，而插件目录本身与它声明的包依赖（`dependencies`、`devDependencies`、`optionalDependencies`、`peerDependencies` 里的 `workspace:` 依赖）是自动识别的。不想自己点名时用 `--rebuild-plugins auto`：重建集由同一套判定算出来，判不出来就整套重建。
 
 问题出在插件读取**没有通过包依赖声明**的文件：它可能读仓库里的文档、脚本或框架源码。这类读取框架无法推断，所以：
 
