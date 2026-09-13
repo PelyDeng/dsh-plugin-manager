@@ -54,6 +54,16 @@ test('public auth and example are discovered independently from library packages
   assert.ok(plugins.every(plugin => plugin.verifyFiles.includes('cordis.patch.yml')));
 });
 
+test('public plugins declare the build inputs that selective reuse has to watch', () => {
+  const declared = id => {
+    const plugin = discoverPlugins(repositoryRoot).find(entry => entry.id === id);
+    return JSON.parse(readFileSync(resolve(repositoryRoot, plugin.directory, 'package.json'), 'utf8')).deepseekPlugin.buildInputs;
+  };
+  // auth 只构建自己目录里的源码；example 会快照框架公开文件，不声明就会退回全量重建。
+  assert.deepEqual(declared('auth'), []);
+  for (const input of ['doc', 'deploy', 'packages/plugin-manager', 'scripts']) assert.ok(declared('example').includes(input), `example 必须声明 ${input}`);
+});
+
 test('a dropped-in second plugin is listed, selected, checked, built and packed without lifecycle hooks', t => {
   const root = fixture(t);
   plugin(root, 'z', m => { m.deepseekPlugin.defaultEnabled = false; });
@@ -196,6 +206,12 @@ test('malformed declarations fail before any task runs', t => {
     m => { m.deepseekPlugin.runtimeConfig = { variable: 'EXAMPLE_ENV', template: 'missing.example' }; },
     m => { m.deepseekPlugin.configuration = { auth: 'consumer' }; },
     m => { m.deepseekPlugin.development = { rootVariable: 'EXAMPLE_ROOT' }; },
+    // 构建输入声明：形状与存在性都要挡住，写错的路径会让复用把真实变化当成无关变化。
+    m => { m.deepseekPlugin.buildInputs = 'doc'; }, m => { m.deepseekPlugin.buildInputs = ['../doc']; },
+    m => { m.deepseekPlugin.buildInputs = ['/doc']; }, m => { m.deepseekPlugin.buildInputs = ['doc//x']; },
+    m => { m.deepseekPlugin.buildInputs = ['doc', 'doc']; }, m => { m.deepseekPlugin.buildInputs = ['doc/./x']; },
+    m => { m.deepseekPlugin.buildInputs = [42]; }, m => { m.deepseekPlugin.buildInputs = ['a\\b']; },
+    m => { m.deepseekPlugin.buildInputs = ['no-such-directory']; },
     m => { delete m.deepseekPlugin; },
   ];
   for (const [index, change] of cases.entries()) {

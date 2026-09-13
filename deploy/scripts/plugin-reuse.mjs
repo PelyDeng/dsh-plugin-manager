@@ -39,6 +39,110 @@ export function assertSelectiveInstallSafe(root) {
   }
 }
 
+/**
+ * 仓库级共享构建输入：依赖解析与检出字节由这几份决定，每个插件的构建都读同一份。
+ * 插件自己的目录与它声明的依赖之外，只有这些文件算「所有插件的输入」。
+ */
+const SHARED_INPUTS = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc', '.gitattributes'];
+const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'];
+
+/** 整棵树的「路径 → Git 对象号」：同一路径的内容变没变，比对对象号即可，不必读文件。 */
+function trackedFiles(git, revision) {
+  const files = new Map();
+  for (const record of git(['ls-tree', '-r', '-z', revision]).split('\0')) {
+    if (!record) continue;
+    const separator = record.indexOf('\t');
+    const [, type, object] = record.slice(0, separator).split(' ');
+    if (type === 'blob') files.set(record.slice(separator + 1), object);
+  }
+  return files;
+}
+
+const directoryOf = path => {
+  const cut = path.lastIndexOf('/');
+  return cut < 0 ? '.' : path.slice(0, cut);
+};
+
+/**
+ * 工作区包索引：包名 → 目录。
+ *
+ * 路径浅的优先：`packages/plugin-kit` 是工作区包，`plugins/x/fixtures/plugin-kit` 只是插件里
+ * 的同名副本。反过来解析会把真实依赖漏出构建输入，那正是「复用了旧产物」最危险的方向。
+ */
+function workspacePackages(files, read) {
+  const packages = new Map();
+  const manifests = [...files.keys()].filter(path => path === 'package.json' || path.endsWith('/package.json'))
+    .sort((left, right) => left.split('/').length - right.split('/').length || left.localeCompare(right));
+  for (const path of manifests) {
+    let manifest;
+    try { manifest = JSON.parse(read(path)); } catch { continue; }
+    if (typeof manifest?.name !== 'string' || !manifest.name || packages.has(manifest.name)) continue;
+    packages.set(manifest.name, { directory: directoryOf(path), path });
+  }
+  return packages;
+}
+
+const isSafeInput = value => typeof value === 'string' && /^[a-zA-Z0-9_.-][a-zA-Z0-9._/-]*$/u.test(value)
+  && !value.split('/').some(part => part === '' || part === '.' || part === '..');
+
+/**
+ * 一个插件在一个提交上的构建输入。
+ *
+ * 构成：插件目录内的全部已跟踪文件，加上目录内各份清单声明、且能解析到本仓库的依赖目录
+ * （含间接依赖），加上仓库级共享输入，再加上清单里 `deepseekPlugin.buildInputs` 显式声明的
+ * 路径。`buildInputs` 缺席时返回 `declared: false`：声明以外的读取无法确认，调用方据此退回
+ * 「除重建选集以外的变化都算它的输入」这一保守口径。
+ */
+function pluginInputs({ git, revision, files, packages, plugin, verifyLocalArchive }) {
+  const read = path => git(['show', `${revision}:${path}`]);
+  const inputs = new Map(), directories = new Set([plugin.directory]), queue = [plugin.directory];
+  const add = (path, owner) => { if (!inputs.has(path)) inputs.set(path, owner); };
+  const own = JSON.parse(read(`${plugin.directory}/package.json`));
+  const declared = own?.deepseekPlugin?.buildInputs;
+  // 声明形状不对就当成没声明：宁可退回保守口径，也不猜作者想说什么。
+  const extras = Array.isArray(declared) && declared.every(isSafeInput) ? declared : undefined;
+  for (const path of files.keys()) {
+    if (path.startsWith(`${plugin.directory}/`)) add(path, 'self');
+    for (const extra of extras ?? []) if (path === extra || path.startsWith(`${extra}/`)) add(path, `declared:${extra}`);
+  }
+  for (const path of SHARED_INPUTS) if (files.has(path)) add(path, 'shared');
+  while (queue.length) {
+    const directory = queue.shift();
+    for (const [path, object] of files) {
+      if (path !== 'package.json' && !path.endsWith('/package.json')) continue;
+      if (directory !== '.' ? !path.startsWith(`${directory}/`) : path !== 'package.json') continue;
+      if (!object) continue;
+      const manifest = JSON.parse(read(path));
+      for (const field of DEPENDENCY_FIELDS) {
+        for (const [name, specifier] of Object.entries(manifest?.[field] ?? {})) {
+          if (typeof specifier !== 'string') throw new Error(`${plugin.id} 的依赖声明无效`);
+          if (specifier.startsWith('link:')) throw new Error(`${plugin.id} 含不能确认的 link: 构建依赖`);
+          if (specifier.startsWith('file:')) { verifyLocalArchive(plugin, directoryOf(path), specifier); continue; }
+          const dependency = packages.get(name);
+          if (dependency) {
+            if (directories.has(dependency.directory)) continue;
+            directories.add(dependency.directory);
+            queue.push(dependency.directory);
+            for (const nested of files.keys()) if (nested.startsWith(`${dependency.directory}/`)) add(nested, `dependency:${name}`);
+            continue;
+          }
+          if (specifier.startsWith('workspace:')) throw new Error(`${plugin.id} 含不能确认的 workspace 构建依赖 ${name}`);
+        }
+      }
+    }
+  }
+  return { declared: extras !== undefined, inputs };
+}
+
+/** 变化路径属于插件的哪一类输入：只影响提示怎么写。 */
+function inputReason(owner) {
+  if (owner === 'self') return '自身发生变化';
+  if (owner === 'shared') return '依赖的共享构建输入（依赖解析或检出字节）发生变化';
+  if (owner?.startsWith('dependency:')) return `依赖的 ${owner.slice('dependency:'.length)} 发生变化`;
+  if (owner?.startsWith('declared:')) return `声明的构建输入 ${owner.slice('declared:'.length)} 发生变化`;
+  return '构建输入发生变化';
+}
+
 /** Synchronous lazy loading lets bootstrap import the install guard before kit exists. */
 export function preparePluginReuse({ root, previous, active, site, revision, hostCommit, buildEnvironment, rebuilt, git }) {
   const { discoverPlugins } = require('../../packages/plugin-manager/src/plugins.mjs');
@@ -72,15 +176,12 @@ export function preparePluginReuse({ root, previous, active, site, revision, hos
       if (!existsSync(resolve(host, '.git')) || git(['-C', host, 'rev-parse', 'HEAD']) !== hostCommit || git(['-C', host, 'status', '--porcelain', '--untracked-files=normal'])) refuse('宿主源码缺失、变化或未提交');
     }
     git(['cat-file', '-e', `${record.revision}^{commit}`]);
-    const changes = git(['diff', '--name-only', '-z', '--no-renames', record.revision, revision, '--']).split('\0').filter(Boolean);
     const rebuiltSources = sources.filter(p => selected.has(p.id));
-    for (const path of changes) if (!rebuiltSources.some(p => path.startsWith(`${p.directory}/`))) refuse(`重建选集之外的输入发生变化：${path}`);
-    const changedIds = new Set(rebuiltSources.filter(p => changes.some(path => path.startsWith(`${p.directory}/`))).map(p => p.id));
 
     const checkedArchives = new Set();
-    function verifyLocalArchive(plugin, specifier) {
+    function verifyLocalArchive(plugin, base, specifier) {
       const local = specifier.slice(5).replace(/^\.\//, '');
-      const directory = resolve(root, plugin.directory), archive = resolve(directory, local);
+      const directory = resolve(root, plugin.directory), archive = resolve(root, base, local);
       if (!/\.(?:tgz|tar\.gz)$/.test(local) || /[%?#]/.test(local) || isAbsolute(local) || /^[A-Za-z]:/.test(local) || local.split(/[\\/]/).some(part => !part || part === '.' || part === '..') || !within(directory, archive)) refuse(`${plugin.id} 的 file: 依赖必须是插件目录内的普通归档`);
       for (let path = archive; path !== directory; path = dirname(path)) {
         if (!existsSync(path) || lstatSync(path).isSymbolicLink()) refuse(`${plugin.id} 的 file: 归档缺失或包含符号链接`);
@@ -96,35 +197,29 @@ export function preparePluginReuse({ root, previous, active, site, revision, hos
       checkedArchives.add(path);
     }
 
-    // Dependency declarations are the supported contract; arbitrary script reads are not inferred.
-    const byName = new Map(sources.map(p => [p.package, p]));
-    for (const plugin of sources) {
-      const path = `${plugin.directory}/package.json`;
-      if (git(['ls-tree', '--name-only', record.revision, '--', path])) byName.set(JSON.parse(git(['show', `${record.revision}:${path}`])).name, plugin);
-    }
+    // Dependency declarations are the supported contract; arbitrary script reads are not inferred,
+    // so a plugin that does not declare its extra inputs keeps the conservative verdict.
+    const trees = { [record.revision]: trackedFiles(git, record.revision), [revision]: trackedFiles(git, revision) };
+    const packages = Object.fromEntries(Object.entries(trees).map(([at, files]) => [at, workspacePackages(files, path => git(['show', `${at}:${path}`]))]));
+    const changed = [...new Set([...trees[record.revision].keys(), ...trees[revision].keys()])]
+      .filter(path => trees[record.revision].get(path) !== trees[revision].get(path)).sort();
     for (const id of reused) {
-      const visited = new Set();
-      const visit = plugin => {
-        if (visited.has(plugin.id)) return;
-        visited.add(plugin.id);
-        if (changedIds.has(plugin.id)) refuse(`${id} 依赖本次变化的插件 ${plugin.id}，请一起重建`);
-        for (const at of [record.revision, revision]) {
-          const pkg = JSON.parse(git(['show', `${at}:${plugin.directory}/package.json`]));
-          for (const dependencies of [pkg.dependencies, pkg.devDependencies, pkg.optionalDependencies, pkg.peerDependencies]) {
-            for (const [name, specifier] of Object.entries(dependencies ?? {})) {
-              if (typeof specifier !== 'string') refuse(`${id} 的依赖声明无效`);
-              if (specifier.startsWith('file:')) { verifyLocalArchive(plugin, specifier); continue; }
-              if (specifier.startsWith('link:')) refuse(`${id} 含不能确认的 link: 构建依赖`);
-              const dependency = byName.get(name);
-              if (dependency) visit(dependency);
-              else if (specifier.startsWith('workspace:') && name !== '@dsh-plugin-manager/plugin-kit') refuse(`${id} 含不能确认的 workspace 构建依赖 ${name}`);
-            }
-          }
-        }
-      };
       const plugin = sources.find(p => p.id === id);
       if (!plugin) refuse(`目标插件 ${id} 缺少源码声明`);
-      visit(plugin);
+      const inputs = new Map();
+      let declared = true;
+      for (const at of [record.revision, revision]) {
+        const state = pluginInputs({ git, revision: at, files: trees[at], packages: packages[at], plugin, verifyLocalArchive });
+        declared = declared && state.declared;
+        // 并集：任一提交上算它的输入，就按输入对待。
+        for (const [path, owner] of state.inputs) if (!inputs.has(path)) inputs.set(path, owner);
+      }
+      for (const path of changed) {
+        const owner = inputs.get(path);
+        if (owner) refuse(`${id} ${inputReason(owner)}：${path}`);
+        // 没声明构建输入的插件，读取范围无法确认：重建选集之外的任何变化都按它的输入对待。
+        if (!declared && !rebuiltSources.some(p => path.startsWith(`${p.directory}/`))) refuse(`${id} 未声明 deepseekPlugin.buildInputs，重建选集之外的变化无法确认与它无关：${path}`);
+      }
     }
     const old = loadRelease(manifest), release = selectRelease(old, reused);
     if (!Array.isArray(record.pluginBuilds) || record.pluginBuilds.length !== old.plugins.length || new Set(record.pluginBuilds.map(p => p.id)).size !== record.pluginBuilds.length) refuse('缺少完整插件构建来源');

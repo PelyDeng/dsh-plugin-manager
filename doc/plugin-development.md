@@ -135,7 +135,9 @@ pnpm list:plugins
 
 源码部署可用 `./build.sh --rebuild-plugins c` 或 `.\build.ps1 --rebuild-plugins c` 只重建指定插件，并复用其余已启用插件的旧归档；部署选集、复用条件及恢复方式见[部署说明](../deploy/README.md#服务器源码发版)。日常 `pnpm package --plugins c` 只生成 c 的交付清单，不会自动补入其他插件。
 
-可复用插件的构建输入须来自自身目录、受管共享源码，以及 `dependencies`、`devDependencies`、`optionalDependencies` 声明的本地依赖。读取其他插件源码也属于构建依赖，应通过本地包名和标准 `workspace:` 声明；间接依赖变化同样影响复用，匹配本地包名的 peer 依赖也会检查。example 读取 auth 源码生成索引，因此把 auth 声明为开发依赖。
+可复用插件的构建输入来自自身目录、`dependencies`、`devDependencies`、`optionalDependencies`、`peerDependencies` 里声明的本地依赖（`workspace:` 按包名解析，含间接依赖），加上仓库级共享输入（`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.npmrc`、`.gitattributes`）。读取其他插件源码也属于构建依赖，应通过本地包名和标准 `workspace:` 声明；example 读取 auth 源码生成索引，因此把 auth 声明为开发依赖。改动落在这些之外时，插件可以直接复用旧归档。
+
+构建还会读取没有通过包依赖声明的文件（例如框架公开文档、`scripts`、`deploy`），这是框架推断不出来的，所以要在 `deepseekPlugin.buildInputs` 里逐项声明（仓库根目录下的相对路径，目录或文件；空数组表示不读插件目录与包依赖之外的任何文件）。**省略这个字段时**读取范围视为未知：只有本次改动全部落在被重建的插件目录内才允许复用它。example 会快照框架公开文件，因此声明了 `doc`、`deploy`、`scripts`、`packages/plugin-manager` 等；字段与判定规则见[插件配置](plugin-configuration.md#声明构建输入让按需复用能精确判断)与[部署说明](../deploy/README.md#服务器源码发版)。
 
 本地构建归档可声明为 `file:vendor/library-0.1.0.tgz`，但必须位于声明它的插件自身目录内，是已纳入 Git 的常规 `.tgz` / `.tar.gz` 文件。复用时核对旧、新提交中的 Git blob 一致，且磁盘字节与 Git 对象相符；归档及父目录不能是符号链接。跨目录、目录形式、未跟踪或仅在忽略目录中的归档，以及 `link:` 依赖仍不支持复用，须全量构建。这不改变最终发布包不能携带 `file:` 运行依赖的约束：本地归档用于构建，所需代码应内嵌到插件产物。
 
