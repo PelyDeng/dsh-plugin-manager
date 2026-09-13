@@ -19,11 +19,12 @@ import { isTerminal, type SubtaskState, type TaskState } from './task-model.ts'
  * 3：新增 `requests` 表，把写请求的幂等占用**在执行前**落库。
  * 4：任务增加输入版本两列，新增 `task_inputs` 表，记录每一次被接受的需求与补充。
  * 5：子任务增加 `logical_id`（同一目标的稳定标识）与 `supersedes`（替代了哪一条尝试）。
+ * 6：子任务增加 `depends_on`（前置目标的标识列表）。
  *
  * 升级只增列、增表，不动已有数据；但**旧代码读到新版本会拒绝启动**，所以回滚插件版本之前
  * 要先把库降回去，不能直接换回旧包。
  */
-const SCHEMA_VERSION = 5
+const SCHEMA_VERSION = 6
 
 /**
  * 能从这些旧版本就地升上来。
@@ -31,7 +32,7 @@ const SCHEMA_VERSION = 5
  * 不在这张表里的版本（比当前新、或者来历不明）一律拒绝启动：拿错版本的结构去读写，
  * 比起不来严重得多。
  */
-const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3, 4]
+const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5]
 
 /** 侧栏里的一条会话。 */
 export interface ConversationSummary {
@@ -104,6 +105,13 @@ export interface SubtaskRecord {
   readonly logicalId: string
   /** 替代了哪一条尝试；首次尝试为空字符串。 */
   readonly supersedes: string
+  /**
+   * 前置目标的标识；空数组表示没有前置。
+   *
+   * 只在**前置成功**时才派这一步。前置失败、取消、还在等人回话、或者带着外部待办时都不派，
+   * 并如实说明「前提没有满足」—— 不伪造一次员工报错。
+   */
+  readonly dependsOn: readonly string[]
   readonly goal: string
   readonly agentId: string
   readonly reason: string
@@ -154,6 +162,8 @@ export interface NewSubtask {
   readonly logicalId?: string
   /** 替代了哪一条尝试；首次尝试不传。 */
   readonly supersedes?: string
+  /** 前置目标的标识；不传表示没有前置。 */
+  readonly dependsOn?: readonly string[]
 }
 
 /** 运行历史查询条件。 */
@@ -231,6 +241,7 @@ export class TaskStore {
         conversation_id TEXT NOT NULL DEFAULT '',
         logical_id TEXT NOT NULL DEFAULT '',
         supersedes TEXT NOT NULL DEFAULT '',
+        depends_on TEXT NOT NULL DEFAULT '',
         started_at INTEGER,
         finished_at INTEGER,
         PRIMARY KEY (task_id, id)
@@ -307,6 +318,10 @@ export class TaskStore {
         `)
         // 老数据没有目标标识，把每一条子任务各自当成一个目标（它本来就是只跑过一次的尝试）。
         this.db.exec(`UPDATE subtasks SET logical_id = 'g' || seq WHERE logical_id = ''`)
+      }
+      if (from <= 5) {
+        // 老任务没有依赖关系：已有的子任务一律按「没有前置」算。
+        this.db.exec(`ALTER TABLE subtasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT ''`)
       }
       this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
       this.db.exec('COMMIT')
@@ -444,13 +459,13 @@ export class TaskStore {
       )
       this.db.prepare(`INSERT INTO task_inputs(task_id,version,text,source,created_at) VALUES(?,1,?,?,?)`)
         .run(input.id, input.goal, 'chat', now)
-      const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes)
-        VALUES(?,?,?,?,?,?,?,?,?)`)
+      const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`)
       input.subtasks.forEach((subtask, index) => {
         // 没给目标标识就按顺序分配：首次计划里一条子任务就是一个目标。
         insert.run(
           input.id, subtask.id, index + 1, subtask.goal, subtask.agentId, subtask.reason, 'queued',
-          subtask.logicalId ?? `g${index + 1}`, subtask.supersedes ?? '',
+          subtask.logicalId ?? `g${index + 1}`, subtask.supersedes ?? '', JSON.stringify(subtask.dependsOn ?? []),
         )
       })
       this.db.exec('COMMIT')
@@ -517,16 +532,19 @@ export class TaskStore {
       FROM tasks WHERE id=? AND owner_namespace=? AND owner_id=?`)
       .get(id, actor.namespace, actor.userId)
     if (row === undefined) return undefined
-    const rows = this.db.prepare(`SELECT id,seq,goal,logical_id AS logicalId,supersedes,agent_id AS agentId,reason,state,result,error,
+    const rows = this.db.prepare(`SELECT id,seq,goal,logical_id AS logicalId,supersedes,depends_on AS dependsOnRaw,
+        agent_id AS agentId,reason,state,result,error,
         artifacts,conversation_id AS subtaskConversationId,started_at AS startedAt,finished_at AS finishedAt
-      FROM subtasks WHERE task_id=? ORDER BY seq`).all(id) as unknown as (Omit<SubtaskRecord, 'artifacts' | 'conversationId'> & {
+      FROM subtasks WHERE task_id=? ORDER BY seq`).all(id) as unknown as (Omit<SubtaskRecord, 'artifacts' | 'conversationId' | 'dependsOn'> & {
         readonly artifacts: string
         readonly subtaskConversationId: string
+        readonly dependsOnRaw: string
       })[]
-    const subtasks = rows.map(({ artifacts, subtaskConversationId, ...rest }) => ({
+    const subtasks = rows.map(({ artifacts, subtaskConversationId, dependsOnRaw, ...rest }) => ({
       ...rest,
       artifacts: parseArtifacts(artifacts),
       conversationId: subtaskConversationId,
+      dependsOn: parseDependsOn(dependsOnRaw),
     }))
     return { ...(row as unknown as Omit<TaskRecord, 'subtasks'>), subtasks }
   }
@@ -646,15 +664,15 @@ export class TaskStore {
       .map(item => Number.parseInt(item.logicalId.replace(/^g/u, ''), 10))
       .filter(value => Number.isSafeInteger(value))
       .reduce((max, value) => Math.max(max, value), 0)
-    const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes)
-      VALUES(?,?,?,?,?,?,?,?,?)`)
+    const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on)
+      VALUES(?,?,?,?,?,?,?,?,?,?)`)
     const ids: string[] = []
     this.db.exec('BEGIN IMMEDIATE')
     try {
       subtasks.forEach((subtask, index) => {
         insert.run(
           taskId, subtask.id, start + index + 1, subtask.goal, subtask.agentId, subtask.reason, 'queued',
-          subtask.logicalId ?? `g${nextLogical + index + 1}`, subtask.supersedes ?? '',
+          subtask.logicalId ?? `g${nextLogical + index + 1}`, subtask.supersedes ?? '', JSON.stringify(subtask.dependsOn ?? []),
         )
         ids.push(subtask.id)
       })
@@ -781,6 +799,21 @@ function parseArtifacts(raw: string): readonly AgentArtifact[] {
       const candidate = item as Partial<AgentArtifact>
       return typeof candidate.title === 'string' && typeof candidate.path === 'string' && typeof candidate.kind === 'string'
     })
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 解析落库的前置目标标识。
+ *
+ * 与材料引用同理：一条脏记录不该让整个任务详情读不出来，解析失败按「没有前置」处理。
+ */
+function parseDependsOn(raw: string): readonly string[] {
+  if (raw === '') return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
   } catch {
     return []
   }

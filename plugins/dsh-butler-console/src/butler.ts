@@ -210,6 +210,8 @@ interface PlannedSubtask {
   readonly logicalId?: string
   /** 替代哪一条子任务；首次尝试不填。 */
   readonly supersedes?: string
+  /** 前置目标标识；只有它们都成功了才派这一步。 */
+  readonly dependsOn?: readonly string[]
 }
 
 interface PlanSubmission {
@@ -824,6 +826,11 @@ export class ButlerConsole {
               reason: { type: 'string', description: '为什么把这个子任务派给这个 Agent。' },
               logicalId: { type: 'string', description: '同一个目标重做时沿用原来的目标标识（例如 g1）。新目标不要填，管家会分配。' },
               supersedes: { type: 'string', description: '替代哪一条尝试：填它原来的子任务 id（s1、s2…）。只在这个新尝试取代同一个目标的旧尝试时才填；旧尝试必须已经结束。' },
+              dependsOn: {
+                type: 'array',
+                items: { type: 'string' },
+                description: '前置的目标标识（例如 g1）。只有前置都成功之后才派这一步；前置失败、取消、还在等人回话或带着外部待办时，这一步不会派出去，而是如实记下「前提没有满足」。不填表示没有前置。只能引用这一轮里已经存在的目标，或者本次计划中排在它前面的目标。',
+              },
             },
           },
         },
@@ -845,12 +852,27 @@ export class ButlerConsole {
         if (turn === undefined || turn.done) throw new Error('这一轮已经结束，计划未被接受')
         const available = new Set(this.dispatchableAgents().map(card => card.id))
         const subtasks: PlannedSubtask[] = []
+        // 前置只能指向这一轮里已有的目标，或者本次计划中排在它前面的目标 —— 这样依赖天然
+        // 无环，也天然有序，不必再跑一遍环检测。
+        const known = new Set<string>((turn.context?.subtasks ?? []).map(item => item.logicalId))
+        /**
+         * 新目标的标识**在这里就分配**，不留给存储层。
+         *
+         * 因为同一个计划里后面的项要能依赖前面的项：如果标识要等落库时才知道，校验这一步
+         * 就看不见它，`dependsOn` 里的 `g1` 会被当成「不存在」。分配规则与存储层一致 ——
+         * 从现有最大值往后排。
+         */
+        let nextLogical = (turn.context?.subtasks ?? [])
+          .map(item => Number.parseInt(item.logicalId.replace(/^g/u, ''), 10))
+          .filter(value => Number.isSafeInteger(value))
+          .reduce((max, value) => Math.max(max, value), 0)
         for (const item of args.subtasks as readonly {
           goal?: unknown
           agentId?: unknown
           reason?: unknown
           logicalId?: unknown
           supersedes?: unknown
+          dependsOn?: unknown
         }[]) {
           const goal = typeof item.goal === 'string' ? clip(item.goal, 2000) : ''
           const agentId = typeof item.agentId === 'string' ? item.agentId.trim() : ''
@@ -861,9 +883,9 @@ export class ButlerConsole {
           let logicalId = typeof item.logicalId === 'string' ? item.logicalId.trim() : ''
           const supersedes = typeof item.supersedes === 'string' ? item.supersedes.trim() : ''
           if (supersedes !== '') {
-            const known = turn.context?.subtasks
-            if (known === undefined) throw new Error('这一轮还没有可以替代的旧尝试，不要填 supersedes')
-            const target = known.find(candidate => candidate.id === supersedes)
+            const attempts = turn.context?.subtasks
+            if (attempts === undefined) throw new Error('这一轮还没有可以替代的旧尝试，不要填 supersedes')
+            const target = attempts.find(candidate => candidate.id === supersedes)
             if (target === undefined) throw new Error(`要替代的子任务 ${supersedes} 不在这一轮里`)
             if (!isTerminal(target.state)) {
               throw new Error(`子任务 ${supersedes} 还没有结束（${target.state}），不能替代它`)
@@ -874,12 +896,33 @@ export class ButlerConsole {
               throw new Error(`子任务 ${supersedes} 属于目标 ${target.logicalId}，不能改成 ${logicalId}；要换目标请用新的标识并去掉 supersedes`)
             }
             logicalId = target.logicalId
+          } else if (logicalId === '') {
+            // 新目标：**在这里就分配标识**，不留给存储层。同一个计划里后面的项要能依赖前面的项，
+            // 而依赖校验就发生在下面几行 —— 标识要等落库时才知道的话，`dependsOn` 里的 `g1`
+            // 会被当成「不存在」。分配规则与存储层一致：从现有最大值往后排。
+            do { nextLogical += 1 } while (known.has(`g${nextLogical}`))
+            logicalId = `g${nextLogical}`
+          }
+          const dependsOn = Array.isArray(item.dependsOn)
+            ? [...new Set(item.dependsOn
+              .filter((value): value is string => typeof value === 'string')
+              .map(value => value.trim())
+              .filter(value => value !== ''))]
+            : []
+          // 先查自依赖：它看起来像「引用了一个还不存在的目标」，报错会指向错误的方向。
+          if (logicalId !== '' && dependsOn.includes(logicalId)) throw new Error('不能把自己当作前置')
+          for (const dependency of dependsOn) {
+            if (!known.has(dependency)) {
+              throw new Error(`前置目标 ${dependency} 不在这一轮里；只能引用已有的目标，或本次计划中排在它前面的目标`)
+            }
           }
           subtasks.push({
             goal, agentId, reason: clip(typeof item.reason === 'string' ? item.reason : '', 300),
             ...(logicalId === '' ? {} : { logicalId }),
             ...(supersedes === '' ? {} : { supersedes }),
+            ...(dependsOn.length === 0 ? {} : { dependsOn }),
           })
+          if (logicalId !== '') known.add(logicalId)
         }
         if (subtasks.length === 0) throw new Error('计划里至少要有一个子任务')
         if (subtasks.length > this.config.maxSubtasks) throw new Error(`一次最多派发 ${this.config.maxSubtasks} 个子任务`)
@@ -1121,6 +1164,10 @@ export class ButlerConsole {
         agentId: subtask.agentId,
         reason: subtask.reason,
         displayName: this.displayNameOf(actor, subtask.agentId),
+        // 目标标识与依赖要落库：前者决定聚合按谁算，后者决定这一步该不该派。
+        ...(subtask.logicalId === undefined ? {} : { logicalId: subtask.logicalId }),
+        ...(subtask.supersedes === undefined ? {} : { supersedes: subtask.supersedes }),
+        ...(subtask.dependsOn === undefined ? {} : { dependsOn: subtask.dependsOn }),
       }))
       this.store.createTask({ id: taskId, conversationId, actor, goal: text, note: plan.note, subtasks })
       yield { type: 'plan', taskId, goal: text, note: plan.note, subtasks, time: Date.now() }
@@ -1138,6 +1185,7 @@ export class ButlerConsole {
         for await (const event of this.dispatchSubtask({
           taskId, subtaskId: subtask.id, goal: subtask.goal, agentId: subtask.agentId,
           displayName: subtask.displayName, taskGoal: text, actor, signal: abort.signal,
+          ...(subtask.dependsOn === undefined ? {} : { dependsOn: subtask.dependsOn }),
         })) {
           yield event
         }
@@ -1340,6 +1388,7 @@ export class ButlerConsole {
           // 漏掉的话重做的活会被当成一个新目标，旧的失败继续拉低结论。
           ...(subtask.logicalId === undefined ? {} : { logicalId: subtask.logicalId }),
           ...(subtask.supersedes === undefined ? {} : { supersedes: subtask.supersedes }),
+          ...(subtask.dependsOn === undefined ? {} : { dependsOn: subtask.dependsOn }),
         }))
         this.store.appendSubtasks(actor, taskId, appended)
         if (plan.reply !== '') yield { type: 'chat', role: 'butler', text: plan.reply, time: Date.now() }
@@ -1350,6 +1399,7 @@ export class ButlerConsole {
           yield* this.dispatchSubtask({
             taskId, subtaskId: subtask.id, goal: subtask.goal, agentId: subtask.agentId,
             displayName: subtask.displayName, taskGoal: existing.goal, actor, signal: prepared.abort.signal,
+            ...(subtask.dependsOn === undefined ? {} : { dependsOn: subtask.dependsOn }),
           })
         }
       } else if (outcome.text !== '') {
@@ -1718,6 +1768,8 @@ export class ButlerConsole {
     taskGoal: string
     actor: Actor
     signal: AbortSignal
+    /** 前置目标标识；只有它们都成功了才派这一步。 */
+    dependsOn?: readonly string[]
   }): AsyncGenerator<ButlerEvent, SubtaskOutcome> {
     const { taskId, subtaskId, agentId, displayName, signal } = input
     const emit = (
@@ -1747,6 +1799,28 @@ export class ButlerConsole {
      * 攒到子任务结束再一次性补发等于没有流式。
      */
     const progress = progressQueue()
+
+    /**
+     * 前置没满足就不派。
+     *
+     * 只有前置**成功**才算满足：失败、取消、还在等人回话、或者带着外部待办，都不足以支撑
+     * 下一步。这时不派活，也不编一个员工报错 —— 如实说明「前提没有满足」，并在 error 里写明
+     * 是哪一个前置、它当时是什么状态。
+     */
+    if (input.dependsOn !== undefined && input.dependsOn.length > 0) {
+      const record = this.store.task(input.actor, taskId)
+      const current = effectiveSubtasks(record?.subtasks ?? [])
+      const unmet = input.dependsOn.map(logicalId => {
+        const attempt = current.find(candidate => candidate.logicalId === logicalId)
+        return attempt === undefined ? `${logicalId}（找不到这条前置）` : attempt.state === 'succeeded' ? '' : `${logicalId}（${attempt.state}）`
+      }).filter(text => text !== '')
+      if (unmet.length > 0) {
+        const detail = `前置没有完成，这一步不派了：${unmet.join('、')}`
+        this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
+        yield emit('failed', detail)
+        return { state: 'failed', report: `【${displayName}】失败：${detail}` }
+      }
+    }
 
     const executor: ButlerAgentExecutor | undefined = resolveExecutor(this.ctx, agentId)
     if (executor === undefined) {

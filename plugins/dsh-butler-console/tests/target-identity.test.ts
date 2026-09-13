@@ -1,11 +1,14 @@
 /**
- * 目标标识与替代。
+ * 目标标识、替代与依赖。
  *
- * 一轮里的「目标」和「尝试」是两回事：同一个目标可能做两次（第一次失败、换个人重做），
- * 而结论该按**目标**算，不是按尝试算。少了这层区分，「重试成功了」会被前面那次已经作废的
- * 失败拉成「部分完成」—— 用户看到的是一个没人能解释的结论。
+ * 三件事都属于「谁该跑、结论按谁算」这层编排语义，放在一起测：
  *
- * 这里锁住：标识怎么分配、替代关系怎么校验、以及聚合时哪些尝试算数。
+ * - **目标标识**：一轮里的「目标」和「尝试」是两回事。同一个目标可能做两次（第一次失败、
+ *   换个人重做），而结论该按目标算 —— 少了这层区分，「重试成功了」会被前面那次已经作废的
+ *   失败拉成「部分完成」。
+ * - **替代**：新尝试沿用旧目标的标识并指向被替代的那条。
+ * - **依赖**：只有前置**成功**才派下一步；前置失败、取消、还在等人回话、带着外部待办时都不派，
+ *   如实说明「前提没有满足」，而不是伪造一次员工报错。
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
@@ -44,19 +47,29 @@ function context(executor: ButlerAgentExecutor): Context {
 
 /** 按目标给不同结论：这样才能造出「一条成功、一条还在等」的组合。 */
 function executorByGoal(byGoal: Record<string, { status: string; summary: string }>): ButlerAgentExecutor {
+  const calls: string[] = []
   return {
     protocol: 1,
     agentId: 'blog',
     capabilities: ['写作'],
     dispatch: async request => {
+      calls.push(request.goal)
       const found = byGoal[request.goal]
       if (found === undefined) return { status: 'succeeded', summary: `${request.goal} 做好了` }
-      return found.status === 'waiting_user'
-        ? { status: 'waiting_user', summary: found.summary, question: '采用哪一版？' }
-        : { status: 'succeeded', summary: found.summary }
+      if (found.status === 'waiting_user') {
+        return { status: 'waiting_user', summary: found.summary, question: '采用哪一版？' }
+      }
+      if (found.status === 'failed') return { status: 'failed', summary: found.summary }
+      return { status: 'succeeded', summary: found.summary }
     },
-  }
+    // 测试用：看某一步到底有没有被派出去。
+    ...({ dispatched: calls } as object),
+  } as ButlerAgentExecutor
 }
+
+/** 某一步有没有真的派出去。 */
+const dispatched = (executor: ButlerAgentExecutor): readonly string[] =>
+  ((executor as unknown as { dispatched?: readonly string[] }).dispatched) ?? []
 
 async function fixture(executor: ButlerAgentExecutor) {
   const store = new TaskStore(':memory:')
@@ -230,7 +243,7 @@ describe('替代：同一目标的新尝试', () => {
 
 describe('聚合只看有效尝试', () => {
   const subtask = (id: string, logicalId: string, supersedes: string, state: string): SubtaskRecord => ({
-    id, seq: Number(id.slice(1)), logicalId, supersedes, goal: id, agentId: 'blog', reason: '',
+    id, seq: Number(id.slice(1)), logicalId, supersedes, dependsOn: [], goal: id, agentId: 'blog', reason: '',
     state: state as SubtaskRecord['state'], result: '', error: '', artifacts: [], conversationId: '',
     startedAt: null, finishedAt: null,
   })
@@ -248,5 +261,133 @@ describe('聚合只看有效尝试', () => {
   it('没有替代关系时原样返回', () => {
     const attempts = [subtask('s1', 'g1', '', 'succeeded'), subtask('s2', 'g2', '', 'failed')]
     expect(effectiveSubtasks(attempts).map(item => item.id)).toEqual(['s1', 's2'])
+  })
+})
+
+describe('依赖：只有前置成功才派下一步', () => {
+  /** 一步依赖另一步的计划。 */
+  const chained = () => plan([
+    { goal: '甲', agentId: 'blog', reason: '写作' },
+    { goal: '乙', agentId: 'blog', reason: '写作', dependsOn: ['g1'] },
+  ])
+
+  async function startWith(executor: ButlerAgentExecutor) {
+    const f = await fixture(executor)
+    await f.console_.start(conversationId, '先甲后乙', actor)
+    await until(() => f.agent.followup.mock.calls.length >= 1, '大总管开始理解')
+    await f.planTool.execute(chained(), run)
+    f.endTurn()
+    await until(() => f.tasks().length === 1, '任务落库')
+    const taskId = f.tasks()[0]!.id
+    // 子任务都终结之后还会跑一轮汇总，那一轮也要放掉才会落到终态。
+    let released = false
+    await until(() => {
+      const state = f.store.task(actor, taskId)!.state
+      if (state === 'summarizing' && !released) { released = true; f.endTurn(); return false }
+      return state !== 'running' && state !== 'summarizing'
+    }, '这一轮收尾')
+    return { f, taskId }
+  }
+
+  it('前置成功时下一步照常派出去', async () => {
+    const executor = executorByGoal({})
+    const { f, taskId } = await startWith(executor)
+    expect(dispatched(executor)).toEqual(['甲', '乙'])
+    expect(f.store.task(actor, taskId)!.subtasks.map(item => item.state)).toEqual(['succeeded', 'succeeded'])
+    f.store.close()
+  })
+
+  it('前置失败时下一步不派，并说清是哪一条没成', async () => {
+    const executor = executorByGoal({ 甲: { status: 'failed', summary: '甲炸了' } })
+    const { f, taskId } = await startWith(executor)
+
+    // 关键：乙根本没有被派出去 —— 不该让员工去做一件前提不成立的事。
+    expect(dispatched(executor)).toEqual(['甲'])
+    const second = f.store.task(actor, taskId)!.subtasks[1]!
+    expect(second.state).toBe('failed')
+    expect(second.error).toContain('前置没有完成')
+    expect(second.error).toContain('g1')
+    expect(second.error).toContain('failed')
+    f.store.close()
+  })
+
+  it('前置还在等人回话时同样不派', async () => {
+    const executor = executorByGoal({ 甲: { status: 'waiting_user', summary: '候选稿' } })
+    const { f, taskId } = await startWith(executor)
+
+    expect(dispatched(executor)).toEqual(['甲'])
+    const second = f.store.task(actor, taskId)!.subtasks[1]!
+    expect(second.state).toBe('failed')
+    expect(second.error).toContain('waiting_user')
+    f.store.close()
+  })
+
+  it('前置带着外部待办时也不派：那件事还没办完', async () => {
+    const executor: ButlerAgentExecutor = {
+      protocol: 1, agentId: 'blog', capabilities: ['写作'],
+      dispatch: async request => (request.goal === '甲'
+        ? { status: 'external_pending', summary: '候选稿已交回', externalPending: { reason: '等你采用' } }
+        : { status: 'succeeded', summary: '乙做好了' }),
+    }
+    const { f, taskId } = await startWith(executor)
+    const second = f.store.task(actor, taskId)!.subtasks[1]!
+    expect(second.state).toBe('failed')
+    expect(second.error).toContain('external_pending')
+    f.store.close()
+  })
+
+  it('依赖关系落库，能读出前置是哪一条', async () => {
+    const f = await fixture(executorByGoal({}))
+    await f.console_.start(conversationId, '先甲后乙', actor)
+    await until(() => f.agent.followup.mock.calls.length >= 1, '开始理解')
+    await f.planTool.execute(chained(), run)
+    f.endTurn()
+    await until(() => f.tasks().length === 1, '任务落库')
+    const taskId = f.tasks()[0]!.id
+    let released = false
+    await until(() => {
+      const state = f.store.task(actor, taskId)!.state
+      if (state === 'summarizing' && !released) { released = true; f.endTurn(); return false }
+      return state !== 'running' && state !== 'summarizing'
+    }, '这一轮收尾')
+    const record = f.store.task(actor, taskId)!
+    expect(record.subtasks[0]!.dependsOn).toEqual([])
+    expect(record.subtasks[1]!.dependsOn).toEqual(['g1'])
+    f.store.close()
+  })
+
+  it('引用不存在的目标、或把自己当前置，都在派活那一刻被拒', async () => {
+    const f = await fixture(executorByGoal({}))
+    await f.console_.start(conversationId, '先甲后乙', actor)
+    await until(() => f.agent.followup.mock.calls.length >= 1, '开始理解')
+
+    await expect(f.planTool.execute(plan([
+      { goal: '甲', agentId: 'blog', reason: '', dependsOn: ['g9'] },
+    ]), run)).rejects.toThrow(/g9 不在这一轮里/u)
+
+    await expect(f.planTool.execute(plan([
+      { goal: '甲', agentId: 'blog', reason: '', logicalId: 'g1', dependsOn: ['g1'] },
+    ]), run)).rejects.toThrow(/不能把自己当作前置/u)
+    f.endTurn()
+    f.store.close()
+  })
+
+  it('只能依赖排在它前面的目标，环因此不可能出现', async () => {
+    const f = await fixture(executorByGoal({}))
+    await f.console_.start(conversationId, '先甲后乙', actor)
+    await until(() => f.agent.followup.mock.calls.length >= 1, '开始理解')
+    // 第二条依赖第一条的标识：合法。
+    await expect(f.planTool.execute(plan([
+      { goal: '甲', agentId: 'blog', reason: '', logicalId: 'g1' },
+      { goal: '乙', agentId: 'blog', reason: '', logicalId: 'g2', dependsOn: ['g1'] },
+    ]), run)).resolves.toMatchObject({ accepted: true })
+
+    // 第一条依赖后面那条：那时它还不存在。
+    await expect(f.planTool.execute(plan([
+      { goal: '丙', agentId: 'blog', reason: '', logicalId: 'g3', dependsOn: ['g4'] },
+      { goal: '丁', agentId: 'blog', reason: '', logicalId: 'g4' },
+    ]), run)).rejects.toThrow(/g4 不在这一轮里/u)
+    f.endTurn()
+    f.store.close()
   })
 })
