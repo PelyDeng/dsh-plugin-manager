@@ -7,7 +7,8 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 import { discoverPlugins, parseOptions, pluginRecord, selectPlugins, sourcePlugins } from '../src/plugins.mjs';
-import { packagePlugins } from '../src/package-plugins.mjs';
+import { packagePlugins, main as packMain } from '../src/package-plugins.mjs';
+import { main as taskMain } from '../src/run-plugin-task.mjs';
 import { verifyBuildPackage as verifyPackage } from '../src/verify-package.mjs';
 import { loadRelease } from '../src/release.mjs';
 import { resolveDeployment, runtimeEnvironment } from '../src/config.mjs';
@@ -52,6 +53,16 @@ test('public auth and example are discovered independently from library packages
   assert.ok(!plugins.some(plugin => plugin.package.startsWith('@dsh-plugin-manager/')));
   assert.ok(['auth', 'example'].every(id => selectPlugins(plugins).some(plugin => plugin.id === id)));
   assert.ok(plugins.every(plugin => plugin.verifyFiles.includes('cordis.patch.yml')));
+});
+
+test('public plugins declare the build inputs that selective reuse has to watch', () => {
+  const declared = id => {
+    const plugin = discoverPlugins(repositoryRoot).find(entry => entry.id === id);
+    return JSON.parse(readFileSync(resolve(repositoryRoot, plugin.directory, 'package.json'), 'utf8')).deepseekPlugin.buildInputs;
+  };
+  // auth 只构建自己目录里的源码；example 会快照框架公开文件，不声明就会退回全量重建。
+  assert.deepEqual(declared('auth'), []);
+  for (const input of ['doc', 'deploy', 'packages/plugin-manager', 'scripts']) assert.ok(declared('example').includes(input), `example 必须声明 ${input}`);
 });
 
 test('a dropped-in second plugin is listed, selected, checked, built and packed without lifecycle hooks', t => {
@@ -102,6 +113,22 @@ test('value-less switches parse only when declared, and still reject pairing for
   // 未声明的开关不能悄悄变成键；声明过也不接受重复。
   for (const args of [['--plugins', 'a', '--verify-plugin-check'], ['plugins', 'a', 'verify-plugin-check']]) assert.throws(() => parseOptions(args, ['plugins']));
   assert.throws(() => parseOptions(['--verify-plugin-check', '--verify-plugin-check'], ['plugins'], ['verify-plugin-check']));
+});
+
+test('--help prints the flags without requiring a project root', async () => {
+  // 帮助要先于参数解析：查用法不该先备好项目根。
+  const lines = [];
+  const original = console.log;
+  console.log = line => lines.push(line);
+  try {
+    await packMain(['--help']);
+    taskMain(['build', '--help']);
+  } finally { console.log = original; }
+  const usage = lines.join('\n');
+  for (const token of ['build', 'check', 'clean', 'list', 'pack', '--plugins', '--output', '--concurrency', '--verify-plugin-check']) {
+    assert.ok(usage.includes(token), `用法里应列出 ${token}`);
+  }
+  assert.doesNotMatch(usage, /必须显式指定 --root/u);
 });
 
 test('the plugin check is skipped by default and only runs when explicitly requested', async t => {
@@ -196,6 +223,12 @@ test('malformed declarations fail before any task runs', t => {
     m => { m.deepseekPlugin.runtimeConfig = { variable: 'EXAMPLE_ENV', template: 'missing.example' }; },
     m => { m.deepseekPlugin.configuration = { auth: 'consumer' }; },
     m => { m.deepseekPlugin.development = { rootVariable: 'EXAMPLE_ROOT' }; },
+    // 构建输入声明：形状与存在性都要挡住，写错的路径会让复用把真实变化当成无关变化。
+    m => { m.deepseekPlugin.buildInputs = 'doc'; }, m => { m.deepseekPlugin.buildInputs = ['../doc']; },
+    m => { m.deepseekPlugin.buildInputs = ['/doc']; }, m => { m.deepseekPlugin.buildInputs = ['doc//x']; },
+    m => { m.deepseekPlugin.buildInputs = ['doc', 'doc']; }, m => { m.deepseekPlugin.buildInputs = ['doc/./x']; },
+    m => { m.deepseekPlugin.buildInputs = [42]; }, m => { m.deepseekPlugin.buildInputs = ['a\\b']; },
+    m => { m.deepseekPlugin.buildInputs = ['no-such-directory']; },
     m => { delete m.deepseekPlugin; },
   ];
   for (const [index, change] of cases.entries()) {

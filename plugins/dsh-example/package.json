@@ -46,6 +46,19 @@
     "permissions": [
       "example:access"
     ],
+    "buildInputs": [
+      "packages/plugin-manager",
+      "scripts",
+      "deploy",
+      "integrations",
+      "examples",
+      "doc",
+      ".github",
+      "README.md",
+      "README.en.md",
+      "env.conf",
+      "test-report.sh"
+    ],
     "verifyFiles": [
       "knowledge/guide.md",
       "knowledge/prompts.md",

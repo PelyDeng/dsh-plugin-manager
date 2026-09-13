@@ -5,7 +5,7 @@ import { availableParallelism } from 'node:os';
 import { resolve } from 'node:path';
 import { parseOptions, sourcePlugins } from './plugins.mjs';
 import { runPnpmAsync } from './pnpm.mjs';
-import { preparePluginDependencies, replayPluginOutput, runPluginTaskAsync, runPnpm } from './run-plugin-task.mjs';
+import { preparePluginDependencies, replayPluginOutput, runPluginTaskAsync, runPnpm, USAGE } from './run-plugin-task.mjs';
 import { verifyBuildPackage } from './verify-package.mjs';
 import { validateVerification } from './verification.mjs';
 
@@ -13,12 +13,13 @@ import { validateVerification } from './verification.mjs';
  * 并行打包的默认并发数。
  *
  * 每个插件各自起一个 pnpm + 打包器进程，彼此不共享文件；并发能把「一个接一个等进程启动」
- * 的等待压掉大半。上限取 3：再多也是几个进程抢同一个模块存储与磁盘，收益很小，而每个
- * 打包进程都要几百 MB 内存。单核机器退到 1，与逐个打包的行为一致。
+ * 的等待压掉大半。上限取 4 是实测结果：4 个插件（auth、example、butler、agents-group）在
+ * 88 核服务器上，逐个打包 97.4s，并发 3 是 70.9s，并发 4 是 62.3s，并发 6 回到 63.0s ——
+ * 再高已经没有收益，只剩更多内存与磁盘争用。核数少时退到 `核数 - 1`，单核机器与逐个打包一致。
  */
 function defaultConcurrency() {
   const cpus = typeof availableParallelism === 'function' ? availableParallelism() : 2;
-  return Math.max(1, Math.min(3, cpus - 1));
+  return Math.max(1, Math.min(4, cpus - 1));
 }
 
 /**
@@ -94,6 +95,8 @@ export async function packagePlugins(root, requested, output, packageDirectory, 
 }
 
 export async function main(argv = process.argv.slice(2), step) {
+  // 帮助与用法放在解析参数之前：查用法不该先备好项目根。
+  if (argv.includes('--help')) { console.log(USAGE); return; }
   // 默认跳过插件检查（见 packagePlugins 说明）；--verify-plugin-check 把它要回来。
   const options = parseOptions(argv, ['root', 'plugins', 'output', 'package', 'concurrency'], ['skip-plugin-check', 'verify-plugin-check']);
   if (!options.root) throw new Error('必须显式指定 --root 项目根目录。');

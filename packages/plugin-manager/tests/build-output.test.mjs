@@ -39,7 +39,7 @@ test('successful builds show stages and summary while retaining noisy tool outpu
   assert.ok(f.text().includes('发布已完成\n访问地址：https://example.test\n'));
   // 阶段耗时表跟在最后：时间花在哪不必再回头 grep 进度行。
   assert.ok(f.text().indexOf('各阶段耗时') > f.text().indexOf('发布已完成'), 'summary comes after the release record');
-  assert.match(f.text(), /各阶段耗时（含进程启动）：\n  构建示例插件 +00:00:\d{2}\.\d\n  准备镜像 +00:00:\d{2}\.\d\n  合计 +00:00:\d{2}\.\d\n$/);
+  assert.match(f.text(), /各阶段耗时（含进程启动）：\n  构建示例插件 +00:00:\d{2}\.\d\n  准备镜像 +00:00:\d{2}\.\d\n  相加（逐项） +00:00:\d{2}\.\d\n  墙钟（首末阶段之间） +00:00:\d{2}\.\d\n$/);
   assert.doesNotMatch(f.text(), /估算|compiler-detail|tool-warning|DSH_BUILD_PROGRESS|\x1b|\r/);
   assert.match(f.log().text, /compiler-detail/);
   assert.match(f.log().text, /tool-warning/);
@@ -145,11 +145,11 @@ test('stage data can overlap, so parallel packaging shows one line per running s
   for (const label of ['打包插件 blog', '打包插件 closedoff']) {
     assert.match(f.text(), new RegExp(`${label}已完成 \\[====================\\] 100% +耗时 \\d+:\\d{2}:\\d{2}\\.\\d\\n`));
   }
-  // 两个阶段各自计时，但真实花掉的是重叠后的墙钟时间，表里必须这么报。
-  const total = f.text().match(/总计（阶段并行，按墙钟计）\s+(\d+):(\d{2}):(\d{2})\.(\d)\n/);
-  assert.ok(total, 'overlapping stages report wall clock instead of a sum');
+  // 两个阶段各自计时，但真实花掉的是重叠后的墙钟时间：两行都报，墙钟必须覆盖两者。
+  const total = f.text().match(/墙钟（首末阶段之间）\s+(\d+):(\d{2}):(\d{2})\.(\d)\n/);
+  assert.ok(total, 'the summary reports wall clock');
   assert.ok(Number(total[3]) >= 1, `wall clock covers both stages, got ${total[0]}`);
-  assert.doesNotMatch(f.text(), /合计/);
+  assert.match(f.text(), /相加（逐项） +00:00:0[12]\.\d\n/);
   for (const line of f.text().split(/\r|\n/).filter(line => /\d+%/.test(line))) {
     const visible = line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
     assert.equal([...visible].reduce((sum, char) => sum + (/[\p{Script=Han}（）]/u.test(char) ? 2 : 1), 0), 99);
@@ -161,6 +161,32 @@ test('an unfinished stage is named when the worker dies inside it', async t => {
   assert.equal(await f.run(), 8);
   assert.match(f.text(), /异常退出失败（退出码 8）/);
   assert.doesNotMatch(f.text(), /构建发布失败/);
+});
+
+test('stage ids that collide across reporting processes still count as concurrent stages', async t => {
+  // 一次发布里有多个进程各自上报，计数器都从 1 开始：实测 16 个阶段里有 6 组撞号。
+  // 下面两组事件就是真实流里的形态 —— 后半段是记录下来的到达顺序。
+  const stream = [
+    // 撞号的这两步同时在进行：只按 id 归并会把前一个阶段吞掉，完成行挂到后一个的名字上。
+    ['start', 'stage-3', '构建插件 auth'],
+    ['start', 'stage-3', '准备部署配置'],
+    ['done', 'stage-3', '构建插件 auth'],
+    ['done', 'stage-3', '准备部署配置'],
+    // 记录自真实发布：构建 worker 与打包子进程交替上报。
+    ['start', 'stage-1', '安装插件依赖'], ['done', 'stage-1', '安装插件依赖'],
+    ['start', 'stage-4', '构建插件 agents-group'], ['start', 'stage-5', '构建插件 example'],
+    ['start', 'stage-2', '构建部署镜像'], ['done', 'stage-4', '构建插件 agents-group'],
+    ['done', 'stage-5', '构建插件 example'], ['done', 'stage-2', '构建部署镜像'],
+  ];
+  const f = fixture(t, `for (const [type, id, label] of ${JSON.stringify(stream)}) console.log('DSH_BUILD_PROGRESS ' + JSON.stringify({ type, id, label, ...(type === 'start' ? {} : { elapsedMs: 1000 }) }));`);
+  assert.equal(await f.run(), 0);
+  // 撞号的阶段各有一条属于自己的完成行，谁也不吞掉谁。
+  for (const label of ['构建插件 auth', '准备部署配置', '安装插件依赖', '构建插件 agents-group', '构建插件 example', '构建部署镜像']) {
+    assert.equal((f.text().match(new RegExp(`${label}已完成`, 'g')) ?? []).length, 1, `${label} keeps exactly one completion`);
+  }
+  // 撞号的两步是并行的：汇总里逐项相加与墙钟都在，重叠的阶段不会被算成两次串行。
+  assert.match(f.text(), /相加（逐项） +00:00:\d{2}\.\d\n/);
+  assert.match(f.text(), /墙钟（首末阶段之间） +00:00:\d{2}\.\d\n/);
 });
 
 test('termination reaches a synchronous tool and the presenter retains the signal exit code', { skip: process.platform === 'win32' }, async t => {
