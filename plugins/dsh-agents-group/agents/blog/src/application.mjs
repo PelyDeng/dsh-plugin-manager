@@ -78,7 +78,7 @@ export class BlogApplication {
     await this.confirm(actor,{id:op.id,nonce:op.nonce})
     return this.store.get(op.owner,op.draftId)
   }
-  async createBlogDraft(actor,requestId,existing) {
+  async createBlogDraft(actor,requestId,existing,content) {
     this.access.assert(actor)
     invariant(typeof requestId==='string'&&/^[\w:-]{8,160}$/.test(requestId),'新建草稿需要有效请求标识')
     const owner=ownerKey(actor),prior=this.operations(owner).find(op=>op.creationKey===requestId)
@@ -88,14 +88,21 @@ export class BlogApplication {
     const concurrent=this.operations(owner).find(op=>op.creationKey===requestId)
     if(concurrent)return this.commitBlogDraft(actor,concurrent)
     const d=existing??this.store.create(owner)
-    const preview=await this.prepare(actor,{id:d.id,revision:d.revision,mode:'draft',content:article(d),nativeSave:true,detached:true,creationKey:requestId})
+    const preview=await this.prepare(actor,{id:d.id,revision:d.revision,mode:'draft',content:content??article(d),nativeSave:true,detached:true,creationKey:requestId})
     const op=this.operation(owner,preview.id);op.creationKey=requestId;op.legacyRemote=d.remote;this.operationSave(op.id,op)
     return this.commitBlogDraft(actor,op)
   }
   async saveBlogDraft(actor,args,clearProposal=false) {
     this.access.assert(actor)
     const owner=ownerKey(actor),d=this.store.get(owner,args.id),content=article(args.content)
-    invariant(d.blogNative,'旧版内容需要先迁移到博客草稿',409)
+    if(!d.blogNative) {
+      // First save on a pre-upgrade draft migrates it in place: the frozen migration receipt
+      // creates the blog draft with the editor content, and a stale receipt replay is topped
+      // up by a normal save so newer edits are never lost.
+      const saved=await this.createBlogDraft(actor,'migration:'+d.id,d,content)
+      if(digest(article(saved))===digest(content))return saved
+      return this.saveBlogDraft(actor,{...args,id:saved.id,revision:saved.revision,content},clearProposal)
+    }
     const prior=this.operations(owner).findLast(op=>op.nativeSave&&op.draftId===d.id&&op.revision===args.revision&&digest(op.payload.content)===digest(content)&&!!op.clearProposal===clearProposal)
     if(prior)return this.commitBlogDraft(actor,prior)
     invariant(d.revision===args.revision,'文章已在其他窗口修改，请保留输入后重新打开',409)

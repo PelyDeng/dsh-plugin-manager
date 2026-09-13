@@ -63,6 +63,33 @@ test('migration retains blank, duplicate, linked and deleted copies as distinct 
   assert.equal((await f.app.call(actor,'migrate-drafts')).items.length,0)
   assert.equal(f.app.legacyDrafts('test:other').length,1)
 })
+test('saving a legacy draft migrates it in place with the editor content',async t=>{
+  const f=fixture(t),legacy=f.store.create(owner,{title:'旧稿',text:'旧文'})
+  const saved=await f.app.call(actor,'save',{id:legacy.id,revision:legacy.revision,content:{...article(legacy),text:'编辑器内容'}})
+  assert.ok(saved.blogNative);assert.equal(saved.remote.savedDraft.text,'编辑器内容')
+  assert.equal(f.writes.length,1);assert.equal(f.writes[0].content.text,'编辑器内容')
+  const stored=f.store.get(owner,legacy.id)
+  assert.equal(stored.id,legacy.id);assert.deepEqual(stored.legacyRemote,legacy.remote)
+  assert.equal(f.app.legacyDrafts(owner).length,0)
+})
+test('a lost legacy save retries the frozen migration receipt and still lands newer edits',async t=>{
+  const f=fixture(t),legacy=f.store.create(owner,{title:'旧稿',text:'旧文'})
+  const args={id:legacy.id,revision:legacy.revision,content:{...article(legacy),text:'第一版'}}
+  f.loseNextResponse()
+  await assert.rejects(f.app.call(actor,'save',args),/lost/)
+  const again=await f.app.call(actor,'save',args)
+  assert.ok(again.blogNative);assert.equal(again.remote.savedDraft.text,'第一版')
+  assert.equal(f.records.size,1);assert.equal(f.writes[0].requestId,f.writes[1].requestId)
+  const newer=await f.app.call(actor,'save',{...args,revision:again.revision,content:{...args.content,text:'第二版'}})
+  assert.equal(newer.text,'第二版');assert.equal(f.store.get(owner,legacy.id).text,'第二版')
+})
+test('saving an unchanged linked legacy copy keeps the original article untouched',async t=>{
+  const f=fixture(t);f.records.set(339,{version:'old',published:{cid:339,title:'原文',text:'公开原文',slug:'',format:'markdown',tags:[],categories:[]},savedDraft:null})
+  const legacy=f.store.create(owner,{title:'副本',text:'公开原文'},{published:{cid:339}})
+  const saved=await f.app.call(actor,'save',{id:legacy.id,revision:legacy.revision,content:article(legacy)})
+  assert.ok(saved.blogNative);assert.deepEqual(saved.legacyRemote,{published:{cid:339}})
+  assert.equal(f.records.get(339).published.text,'公开原文');assert.equal(f.records.size,2);assert.equal(f.writes.length,1)
+})
 test('AI proposals remain separate suggestions until selected fields are saved to the blog',async t=>{
   const f=fixture(t),d=await f.app.call(actor,'create',{requestId:'proposal-new'})
   const p=f.store.propose(owner,d.id,d.revision,{title:'AI 标题',text:'AI 正文'},[]),before=f.writes.length

@@ -1,6 +1,6 @@
 {
   "name": "@dsh-agents-group/blog",
-  "version": "0.12.6",
+  "version": "0.12.7",
   "description": "博客工作台：写作、发布、图床与备份助手（智能体群组的子包）",
   "license": "UNLICENSED",
   "private": true,
