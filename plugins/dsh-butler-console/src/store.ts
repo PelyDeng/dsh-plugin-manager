@@ -16,10 +16,20 @@ import { isTerminal, type SubtaskState, type TaskState } from './task-model.ts'
  * 工作台索引的数据结构版本。
  *
  * 2：子任务增加 `artifacts`（材料引用）与 `conversation_id`（原会话）。
- * 升级只增列、不动已有数据；但**旧代码读到新版本会拒绝启动**，所以回滚插件版本之前要先把
- * 库降回去，不能直接换回旧包。
+ * 3：新增 `requests` 表，把写请求的幂等占用**在执行前**落库。
+ *
+ * 升级只增列、增表，不动已有数据；但**旧代码读到新版本会拒绝启动**，所以回滚插件版本之前
+ * 要先把库降回去，不能直接换回旧包。
  */
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
+
+/**
+ * 能从这些旧版本就地升上来。
+ *
+ * 不在这张表里的版本（比当前新、或者来历不明）一律拒绝启动：拿错版本的结构去读写，
+ * 比起不来严重得多。
+ */
+const MIGRATABLE_VERSIONS: readonly number[] = [1, 2]
 
 /** 侧栏里的一条会话。 */
 export interface ConversationSummary {
@@ -86,6 +96,21 @@ export interface TaskCounts {
   readonly queued: number
 }
 
+/** 一条写请求的幂等记录。 */
+export interface RequestRecord {
+  readonly kind: string
+  /** 请求指纹：同一个 id 换了正文要能认出来并拒绝。 */
+  readonly digest: string
+  /**
+   * `claimed`：已经受理，但还没有任何终态证据 —— 进程在这里断掉的话，这一次的结果
+   * **不明**，绝不能重跑。`finished`：这一轮已经跑完了。
+   */
+  readonly state: 'claimed' | 'finished'
+  readonly runId: string
+  readonly conversationId: string
+  readonly updatedAt: number
+}
+
 /** 新建任务时写入的一份计划。 */
 export interface NewSubtask {
   readonly id: string
@@ -118,7 +143,7 @@ export class TaskStore {
     this.db = new DatabaseSync(path)
     if (path !== ':memory:' && process.platform !== 'win32') chmodSync(path, 0o600)
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version ?? 0)
-    if (version !== 0 && version !== 1 && version !== SCHEMA_VERSION) {
+    if (version !== 0 && version !== SCHEMA_VERSION && !MIGRATABLE_VERSIONS.includes(version)) {
       this.db.close()
       throw new Error(`不支持的工作台数据结构版本：${version}`)
     }
@@ -181,26 +206,44 @@ export class TaskStore {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (owner_namespace, owner_id, agent_id)
       );
+      CREATE TABLE IF NOT EXISTS requests (
+        owner_namespace TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        request_id TEXT NOT NULL,
+        digest TEXT NOT NULL,
+        state TEXT NOT NULL,
+        run_id TEXT NOT NULL DEFAULT '',
+        conversation_id TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_namespace, owner_id, kind, request_id)
+      );
     `)
     // 版本号**最后**才写：迁移中途失败时它不该已经前移，否则下次启动会跳过迁移、
     // 直接去查一个还不存在的列。
-    if (version === 1) this.migrateFromV1()
+    if (version !== 0 && version !== SCHEMA_VERSION) this.migrate(version)
     else if (version === 0) this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
   }
 
   /**
-   * v1 → v2：子任务补上材料引用与原会话两列。
+   * 把旧库升到当前版本。
    *
-   * 只增列，不动任何已有数据。整体放在一个事务里：中途失败时版本号也不会前移，
-   * 不会留下「表改了一半、版本还以为没改」的状态。
+   * 新表由上面那句 `CREATE TABLE IF NOT EXISTS` 建（对旧库同样有效），需要单独补的只有
+   * 加不出来的**列**：`CREATE TABLE IF NOT EXISTS` 对已存在的表是空操作。
+   *
+   * 整体放在一个事务里，中途失败时版本号也不会前移，不会留下「改了一半、版本还以为没改」
+   * 的状态。只增列增表，不动任何已有数据。
    */
-  private migrateFromV1(): void {
+  private migrate(from: number): void {
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      this.db.exec(`
-        ALTER TABLE subtasks ADD COLUMN artifacts TEXT NOT NULL DEFAULT '';
-        ALTER TABLE subtasks ADD COLUMN conversation_id TEXT NOT NULL DEFAULT '';
-      `)
+      if (from <= 1) {
+        this.db.exec(`
+          ALTER TABLE subtasks ADD COLUMN artifacts TEXT NOT NULL DEFAULT '';
+          ALTER TABLE subtasks ADD COLUMN conversation_id TEXT NOT NULL DEFAULT '';
+        `)
+      }
       this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
       this.db.exec('COMMIT')
     } catch (error) {
@@ -505,8 +548,61 @@ export class TaskStore {
     return Number(changed)
   }
 
-  /** 关闭索引；不删除任何用户数据。 */
-  close(): void {
+  /**
+   * 读一条写请求的幂等记录；没有受理过时返回 undefined。
+   *
+   * 记录在**执行前**就写下了，所以它能回答两种问法：这一轮跑完了吗（`finished`），
+   * 还是受理之后就没有下文（`claimed`）。
+   */
+  request(actor: Actor, kind: string, requestId: string): RequestRecord | undefined {
+    const row = this.db.prepare(`SELECT kind,digest,state,run_id AS runId,
+        conversation_id AS conversationId,updated_at AS updatedAt
+      FROM requests WHERE owner_namespace=? AND owner_id=? AND kind=? AND request_id=?`)
+      .get(actor.namespace, actor.userId, kind, requestId) as unknown as RequestRecord | undefined
+    return row
+  }
+
+  /**
+   * 占住一个 `requestId`，**在执行之前**落库。
+   *
+   * 这是整件事的关键：只在结束时记结果的话，「受理了、跑了一半、进程没了」这一段在库里
+   * 什么都没有，重启后同一个请求会被当成新的一次再跑一遍 —— 而那些可能带外部副作用的活
+   * 正是最不该重跑的。先占位就没有这个窗口。
+   *
+   * 顺手清掉过期记录，表不会只涨不消。过期判定与内存版同源（`idempotencyTtlMs`）。
+   */
+  claimRequest(actor: Actor, kind: string, requestId: string, digest: string, runId: string, conversationId: string, ttlMs: number): void {
+    const now = Date.now()
+    this.db.prepare(`DELETE FROM requests WHERE owner_namespace=? AND owner_id=? AND updated_at < ?`)
+      .run(actor.namespace, actor.userId, now - ttlMs)
+    this.db.prepare(`INSERT INTO requests(owner_namespace,owner_id,kind,request_id,digest,state,run_id,conversation_id,created_at,updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(owner_namespace,owner_id,kind,request_id) DO UPDATE SET
+        digest=excluded.digest, state=excluded.state, run_id=excluded.run_id,
+        conversation_id=excluded.conversation_id, updated_at=excluded.updated_at`)
+      .run(actor.namespace, actor.userId, kind, requestId, digest, 'claimed', runId, conversationId, now, now)
+  }
+
+  /** 标记这一轮已经跑完。 */
+  finishRequest(actor: Actor, kind: string, requestId: string): void {
+    this.db.prepare(`UPDATE requests SET state='finished', updated_at=?
+      WHERE owner_namespace=? AND owner_id=? AND kind=? AND request_id=?`)
+      .run(Date.now(), actor.namespace, actor.userId, kind, requestId)
+  }
+
+  /**
+   * 撤掉一次占位。
+   *
+   * 只在「受理本身失败了」时用（参数不合法、上一轮还没完）：那次请求根本没有开始执行，
+   * 留着记录会让同一个 `requestId` 再提交时被当成「结果不明」，把一个没发生过的执行
+   * 报成需要恢复的状态。
+   */
+  releaseRequest(actor: Actor, kind: string, requestId: string): void {
+    this.db.prepare(`DELETE FROM requests WHERE owner_namespace=? AND owner_id=? AND kind=? AND request_id=?`)
+      .run(actor.namespace, actor.userId, kind, requestId)
+  }
+
+  /** 关闭索引；不删除任何用户数据。 */  close(): void {
     try { this.db.close() } catch { /* 已关闭时重复调用是安全的。 */ }
   }
 }

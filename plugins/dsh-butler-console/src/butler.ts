@@ -32,7 +32,7 @@ import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
 import type { Config } from './config.ts'
 import { ConversationLog, type LoggedEvent, type RunHead } from './event-log.ts'
 import type { ButlerAgentExecutor, ButlerMember, ButlerPhase, ButlerProgressUpdate, ButlerReplyRequest } from './protocol.ts'
-import type { TaskStore } from './store.ts'
+import type { RequestRecord, TaskStore } from './store.ts'
 import { isTerminal, type SubtaskState, type TaskState } from './task-model.ts'
 
 const CONVERSATION_ID = /^butler-web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -267,6 +267,23 @@ export interface StartedRun {
    * 不必先读头部再猜位置。
    */
   readonly from: number
+  /**
+   * 这是一次重复提交，而且原来那一轮**没有可回放的记录**。
+   *
+   * 两种情况都会这样：那一轮早就结束了（事件日志被下一轮覆盖），或者受理之后进程就没了
+   * （结果不明）。两种都**不会重新执行** —— 调用方应当拿 `runId`／`conversationId` 去读
+   * 任务快照，而不是再跑一遍。
+   */
+  readonly unknown?: boolean
+  /**
+   * `unknown` 为 true 时的错误码。
+   *
+   * 两个码对客户端的含义不同：`run_already_finished` 是「那一轮跑完了，去读快照就有结果」；
+   * `run_result_unknown` 是「受理过但结果不明，不会重跑，快照里可能什么都没有」。
+   */
+  readonly unknownCode?: 'run_already_finished' | 'run_result_unknown'
+  /** `unknown` 为 true 时给用户看的说明。 */
+  readonly message?: string
 }
 
 /** 一份可订阅的观察：这一轮的头部信息加上按游标读取的事件流。 */
@@ -282,22 +299,6 @@ export interface CancelOutcome {
   /** 给用户看的说明；`accepted` 为 true 时为空字符串。 */
   readonly reason: string
 }
-
-/**
- * 一次已经受理过的请求，供重复提交原样返回。
- *
- * 只留在内存里，所以它挡的是网络重试、连点两次这一类秒级重复；进程重启之后的重复提交
- * 会真的再执行一次。要挡住后者得把这张表落库并升级数据结构版本，代价与收益需要单独定。
- */
-interface IdempotencyRecord {
-  /** 请求指纹。同一个 `requestId` 换了正文要能认出来并拒绝，而不是当成同一次。 */
-  readonly digest: string
-  readonly result: StartedRun
-  readonly at: number
-}
-
-/** 内存里最多留多少条幂等记录；超了就丢最旧的，避免被刷爆。 */
-const MAX_IDEMPOTENCY_RECORDS = 1000
 
 /** 等待超时收尾时给用户看的说明。要让人知道材料还在、重说一遍就能继续。 */
 const WAITING_EXPIRED = '等太久了，这次等待已经过期；材料都还在，重新描述你的目标就能接着办。'
@@ -457,13 +458,6 @@ export class ButlerConsole {
    * 而不是各自重跑一遍任务。
    */
   private readonly logs = new Map<string, ConversationLog<ButlerEvent>>()
-  /**
-   * 已经受理过的写请求：`身份:类型:requestId` → 首次的结果。
-   *
-   * 双入口同时操作、或者一次提交被网络重试，都可能把同一条需求送两次。没有这张表时
-   * 第二次会被当成新的一轮，轻则重复派活，重则两个入口各跑一遍。
-   */
-  private readonly idempotent = new Map<string, IdempotencyRecord>()
   /** 每个正在进行的大总管回合的正文增量出口：`sessionId` → 写进当前事件流。 */
   private readonly deltas = new Map<string, (text: string) => void>()
   /**
@@ -1002,22 +996,28 @@ export class ButlerConsole {
    * 返回的是受理凭据而不是结果。提交方随后用 `watch()` 订阅；订阅断了只表示不再读，
    * 与这一轮是否继续执行无关 —— 关掉页面不再等于取消。
    *
-   * 带了 `requestId` 时重复提交会拿回首次的凭据，不会真的再跑一轮。同一身份、同一类型下
-   * 的 `requestId` 一旦用在别的请求上就直接拒绝：那多半是客户端把 id 生成错了，
-   * 静默当成同一次会让两条不同的需求合成一条。
+   * 带了 `requestId` 时：受理之后、执行之前先把这个占用**落库**，所以进程哪怕在下一毫秒
+   * 就没了，重启后同一个请求也会被认出「受理过」，而不是再跑一遍。同一身份、同一类型下的
+   * `requestId` 一旦用在别的请求上就直接拒绝：那多半是客户端把 id 生成错了，静默当成同一次
+   * 会让两条不同的需求合成一条。
    */
   async start(conversationId: string, message: string, actor: Actor, requestId = ''): Promise<StartedRun> {
-    const key = this.idempotencyKey(actor, 'chat', requestId)
     const digest = digestOf([conversationId, message])
-    const seen = this.replay(key, requestId, digest)
-    if (seen !== undefined) return seen
+    if (requestId !== '') {
+      const existing = this.store.request(actor, 'chat', requestId)
+      if (existing !== undefined) return this.replayRequest(existing, digest, requestId)
+    }
 
     const turn = await this.prepareTurn(conversationId, message, actor, `butler-run-${randomUUID()}`)
+    // 受理成功之后才占位：占用先于执行，但晚于校验 —— 校验失败的那次根本没开始跑，
+    // 留下一笔「结果不明」会把一件没发生过的执行报成需要恢复的状态。
+    if (requestId !== '') {
+      this.store.claimRequest(actor, 'chat', requestId, digest, turn.runId, turn.conversationId, this.config.idempotencyTtlMs)
+    }
     const log = this.beginLog(turn.conversationId, turn.runId)
     void this.pump(turn.abort.signal, log, this.turnBody(turn))
-    const started: StartedRun = { runId: turn.runId, conversationId: turn.conversationId, from: 0 }
-    this.remember(key, requestId, digest, started)
-    return started
+      .then(() => { if (requestId !== '') this.store.finishRequest(actor, 'chat', requestId) })
+    return { runId: turn.runId, conversationId: turn.conversationId, from: 0 }
   }
 
   /** 受理一次补话并在后台执行。幂等规则同 {@link start}。 */
@@ -1030,62 +1030,48 @@ export class ButlerConsole {
     requestId?: string
   }): Promise<StartedRun> {
     const requestId = input.requestId ?? ''
-    const key = this.idempotencyKey(input.actor, 'reply', requestId)
     const digest = digestOf([input.taskId, input.subtaskId, input.text, String(input.decideByAgent)])
-    const seen = this.replay(key, requestId, digest)
-    if (seen !== undefined) return seen
+    if (requestId !== '') {
+      const existing = this.store.request(input.actor, 'reply', requestId)
+      if (existing !== undefined) return this.replayRequest(existing, digest, requestId)
+    }
 
     const prepared = this.prepareReply(input, `butler-run-${randomUUID()}`)
+    if (requestId !== '') {
+      this.store.claimRequest(input.actor, 'reply', requestId, digest, prepared.runId, prepared.conversationId, this.config.idempotencyTtlMs)
+    }
     const log = this.beginLog(prepared.conversationId, prepared.runId)
     void this.pump(prepared.abort.signal, log, this.replyBody(prepared))
-    const started: StartedRun = { runId: prepared.runId, conversationId: prepared.conversationId, from: 0 }
-    this.remember(key, requestId, digest, started)
-    return started
+      .then(() => { if (requestId !== '') this.store.finishRequest(input.actor, 'reply', requestId) })
+    return { runId: prepared.runId, conversationId: prepared.conversationId, from: 0 }
   }
 
   /**
-   * 重复提交时确认那一轮还能重放。
+   * 同一个 `requestId` 又来了：给原凭据，**绝不重跑**。
    *
-   * 事件日志只留最近一轮，被下一轮覆盖之后就没有「原来的结果」可给了。这时如实说明，
-   * 而不是交回一轮新的事件让调用方以为那是自己那次提交的产物。
+   * 三种情形，调用方能分清：
+   *
+   * - 同进程内还记得这一轮 → 正常重放事件，客户端能看到完整过程；
+   * - 那一轮已经结束（事件日志被下一轮覆盖）→ 标 `unknown`，说明结果去读快照；
+   * - 受理过但没有任何终态证据（进程在这里断过）→ 同样标 `unknown`，并说明**不会重跑**。
+   *
+   * 后两种都不会重新执行：那些可能带外部副作用的活正是最不该重跑的，宁可让用户去看一眼
+   * 快照，也不能悄悄再派一次。
    */
-  assertReplayable(started: StartedRun, actor: Actor): void {
-    this.access.assert(actor)
-    const head = this.logs.get(started.conversationId)?.head()
-    if (head === undefined || head === null || head.runId !== started.runId) {
-      throw new AccessError(409, '这次提交已经处理过，那一轮也已经结束，无法再回放它的过程', 'replay_gone')
-    }
-  }
-
-  /** 幂等记录的键；没有 `requestId` 时返回空串，调用方据此跳过整条路径。 */
-  private idempotencyKey(actor: Actor, kind: string, requestId: string): string {
-    return requestId === '' ? '' : `${actor.namespace}:${actor.userId}:${kind}:${requestId}`
-  }
-
-  /** 命中已受理的请求时返回首次结果；同一个 id 换了正文则拒绝。 */
-  private replay(key: string, requestId: string, digest: string): StartedRun | undefined {
-    if (key === '') return undefined
-    const seen = this.idempotent.get(key)
-    if (seen === undefined) return undefined
-    if (seen.digest !== digest) {
+  private replayRequest(existing: RequestRecord, digest: string, requestId: string): StartedRun {
+    if (existing.digest !== digest) {
       throw new AccessError(409, `requestId ${requestId} 已经用在另一次请求上，换一个再提交`, 'idempotency_conflict')
     }
-    return seen.result
-  }
-
-  /** 记下一次受理，并顺手清掉过期记录。 */
-  private remember(key: string, requestId: string, digest: string, result: StartedRun): void {
-    if (key === '') return
-    const now = Date.now()
-    for (const [existing, record] of this.idempotent) {
-      if (now - record.at > this.config.idempotencyTtlMs) this.idempotent.delete(existing)
-    }
-    this.idempotent.set(key, { digest, result, at: now })
-    // 表按时间清理之后仍可能被一次性刷满，超出上限时丢最旧的（Map 保持插入顺序）。
-    while (this.idempotent.size > MAX_IDEMPOTENCY_RECORDS) {
-      const oldest = this.idempotent.keys().next()
-      if (oldest.done === true) break
-      this.idempotent.delete(oldest.value)
+    const started: StartedRun = { runId: existing.runId, conversationId: existing.conversationId, from: 0 }
+    if (this.logs.get(existing.conversationId)?.head()?.runId === existing.runId) return started
+    const finished = existing.state === 'finished'
+    return {
+      ...started,
+      unknown: true,
+      unknownCode: finished ? 'run_already_finished' : 'run_result_unknown',
+      message: finished
+        ? '这次提交已经处理过，那一轮也已经结束；结果请读任务快照。'
+        : '这次提交已经受理过，但执行结果不明（服务在这里重启过）；不会重新执行，请读任务快照确认，或另起一轮。',
     }
   }
 

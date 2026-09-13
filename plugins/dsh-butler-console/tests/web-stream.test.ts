@@ -131,11 +131,28 @@ interface Fixture {
 
 /** 装好插件：真路由 + 真会话，只有宿主与存储是替身。 */
 async function fixture(options: { maxConversationEvents?: number; assertOwner?: () => void } = {}): Promise<Fixture> {
+  /**
+   * 幂等记录在这里用一张内存表顶上。
+   *
+   * 本文件测的是 HTTP 层怎么用它（同一个 id 给回原凭据、冲突怎么拒），**跨重启的持久化**
+   * 另有一组用真实索引的测试（见 `external-pending.test.ts` 与 `idempotency.test.ts`）。
+   */
+  const requests = new Map<string, { kind: string; digest: string; state: string; runId: string; conversationId: string }>()
+  const requestKey = (who: Actor, kind: string, id: string) => `${who.userId}:${kind}:${id}`
   const store = {
     touchConversation: vi.fn(),
     assertOwner: vi.fn(options.assertOwner ?? (() => {})),
     task: vi.fn(() => undefined),
     setSubtaskState: vi.fn(),
+    request: (who: Actor, kind: string, id: string) => requests.get(requestKey(who, kind, id)),
+    claimRequest: (who: Actor, kind: string, id: string, digest: string, runId: string, conversationId: string) => {
+      requests.set(requestKey(who, kind, id), { kind, digest, state: 'claimed', runId, conversationId })
+    },
+    finishRequest: (who: Actor, kind: string, id: string) => {
+      const found = requests.get(requestKey(who, kind, id))
+      if (found !== undefined) found.state = 'finished'
+    },
+    releaseRequest: (who: Actor, kind: string, id: string) => { requests.delete(requestKey(who, kind, id)) },
   } as unknown as TaskStore
   const access = {
     mode: 'authenticated',
@@ -464,12 +481,16 @@ describe('失败都带一个稳定的码', () => {
     f.endTurn()
     await first.pending
 
-    // 原来的那一轮被下一轮覆盖之后再重试：是另一种情况，给另一个码。
+    // 原来的那一轮被下一轮覆盖之后再重试：事件没了，但那一轮是跑完的，给的是另一个码。
     const other = f.call('POST', '/butler/chat', { conversationId, message: '换个活' })
     await until(() => other.response.text.includes('"type":"user"'), '新一轮已经开始')
     const gone = f.call('POST', '/butler/chat', body)
     await gone.pending
-    expect(JSON.parse(gone.response.text)).toMatchObject({ code: 'replay_gone' })
+    const payload = JSON.parse(gone.response.text) as { code: string; runId?: string; conversationId?: string }
+    expect(payload.code).toBe('run_already_finished')
+    // 原凭据要带回来：客户端拿它去读任务快照，否则无从下手。
+    expect(payload.conversationId).toBe(conversationId)
+    expect(typeof payload.runId).toBe('string')
 
     f.endTurn()
     await other.pending

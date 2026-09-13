@@ -17,7 +17,7 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { actorKey, createPluginHttp, isAccessError, onRevoked, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { conversationModelCatalog } from '@dsh-plugin-manager/plugin-kit/models'
 import { listAgentCards } from './agents.ts'
-import type { ButlerConsole, RunWatch } from './butler.ts'
+import type { ButlerConsole, RunWatch, StartedRun } from './butler.ts'
 import type { Config } from './config.ts'
 import { canResume } from './event-log.ts'
 
@@ -230,6 +230,25 @@ export async function installWeb(
   const respond = (actor: Actor, response: ServerResponse, status: number, value: unknown) => {
     access.assert(actor)
     json(response, status, value)
+  }
+
+  /**
+   * 重复提交但原来那一轮没有可回放的记录时，如实回答，**不重跑**。
+   *
+   * 响应里带上原凭据：客户端要拿 `conversationId` 去读任务快照，拿 `runId` 去对上自己那一次
+   * 提交。丢开凭据只说一句「已经处理过了」，客户端就无从下手了。
+   *
+   * @returns 是否已经作答（true 时调用方应当直接返回，不要再开事件流）。
+   */
+  const reportUnknownRun = (actor: Actor, response: ServerResponse, started: StartedRun): boolean => {
+    if (started.unknown !== true) return false
+    respond(actor, response, 409, {
+      error: started.message ?? '这次提交的结果不明，不会重新执行',
+      code: started.unknownCode ?? 'run_result_unknown',
+      runId: started.runId,
+      conversationId: started.conversationId,
+    })
+    return true
   }
 
   /**
@@ -616,7 +635,7 @@ export async function installWeb(
         taskId, subtaskId, text, decideByAgent, actor,
         requestId: stringField(payload, 'requestId', 120, false).trim(),
       })
-      console_.assertReplayable(started, actor)
+      if (reportUnknownRun(actor, response, started)) return
       await streamRun({
         response,
         after: started.from,
@@ -660,7 +679,7 @@ export async function installWeb(
       // 受理与执行分开：这一步之后谁断线都不影响这一轮继续跑完。
       // `requestId` 让重试拿到同一轮，而不是把同一条需求再派一次。
       const started = await console_.start(conversationId, message, actor, stringField(payload, 'requestId', 120, false).trim())
-      console_.assertReplayable(started, actor)
+      if (reportUnknownRun(actor, response, started)) return
       await streamRun({
         response,
         after: started.from,
