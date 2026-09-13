@@ -131,7 +131,7 @@ pnpm list:plugins
 
 按当前改动选择上表中的命令，不必每次全部执行。只交付时直接 package，不需要先重复 build/check。普通构建和测试不要求宿主子模块、模型密钥或 Docker；内部清单 1 保留 development/link，外部单包与组合清单 2 只支持 release。
 
-打包会并行构建与打包多个插件：插件之间没有依赖，同时最多 3 个（`pnpm package --concurrency <n>` 可调整，1 表示逐个进行）。依赖安装与共享依赖准备先单线做完，再进入并行阶段；日志按插件 ID 加前缀以便分辨，交付清单里的插件顺序仍按选集，与并发无关。
+打包会并行构建与打包多个插件：插件之间没有依赖，同时最多 4 个（`pnpm package --concurrency <n>` 可调整，1 表示逐个进行）。依赖安装与共享依赖准备先单线做完，再进入并行阶段；日志按插件 ID 加前缀以便分辨，交付清单里的插件顺序仍按选集，与并发无关。
 
 源码部署可用 `./build.sh --rebuild-plugins c` 或 `.\build.ps1 --rebuild-plugins c` 只重建指定插件，并复用其余已启用插件的旧归档；部署选集、复用条件及恢复方式见[部署说明](../deploy/README.md#服务器源码发版)。日常 `pnpm package --plugins c` 只生成 c 的交付清单，不会自动补入其他插件。
 
