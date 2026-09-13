@@ -93,6 +93,20 @@ export type ButlerEvent =
     readonly delta: string
     readonly time: number
   }
+  /**
+   * 成员可展示的思考快照。
+   *
+   * 覆盖语义：页面用它替换该成员气泡里的思考行，而不是追加。空快照不下发，
+   * 页面据最后一条是否还在更新判断思考是否结束。
+   */
+  | {
+    readonly type: 'subtask_thinking'
+    readonly taskId: string
+    readonly id: string
+    readonly agentId: string
+    readonly thinking: string
+    readonly time: number
+  }
   | { readonly type: 'summary'; readonly taskId: string; readonly text: string; readonly state: TaskState; readonly error: string; readonly time: number }
   | { readonly type: 'error'; readonly message: string; readonly time: number }
 
@@ -894,6 +908,7 @@ export class ButlerConsole {
      * 把执行方的一次进度上报翻译成页面事件。
      *
      * - `delta` 走独立的 `subtask_delta` 事件：页面按增量追加，不重绘整条气泡。
+     * - `thinking` 走 `subtask_thinking`，是覆盖语义的完整快照，页面替换思考行。
      * - `phase` 只改链路，不改状态文字。
      * - `needsReply` 让子任务进入 `waiting_user`，页面据此给出回复入口。
      */
@@ -909,7 +924,11 @@ export class ButlerConsole {
       if (update.delta !== undefined && update.delta !== '') {
         progress.push({ type: 'subtask_delta', taskId, id: subtaskId, agentId, delta: update.delta, time: Date.now() })
       }
-      if (update.delta !== undefined && update.detail === undefined && update.tool === undefined) return
+      if (update.thinking !== undefined && update.thinking !== '') {
+        progress.push({ type: 'subtask_thinking', taskId, id: subtaskId, agentId, thinking: update.thinking, time: Date.now() })
+      }
+      const streamed = update.delta !== undefined || update.thinking !== undefined
+      if (streamed && update.detail === undefined && update.tool === undefined) return
       const detail = clip(update.detail ? `${update.stage} · ${update.detail}` : update.stage, 300)
       if (!running) {
         running = true
@@ -1019,6 +1038,10 @@ export class ButlerConsole {
     const onProgress = (update: ButlerProgressUpdate) => {
       if (update.delta !== undefined && update.delta !== '') {
         progress.push({ type: 'subtask_delta', taskId: input.taskId, id: input.subtaskId, agentId, delta: update.delta, time: Date.now() })
+        return
+      }
+      if (update.thinking !== undefined && update.thinking !== '') {
+        progress.push({ type: 'subtask_thinking', taskId: input.taskId, id: input.subtaskId, agentId, thinking: update.thinking, time: Date.now() })
         return
       }
       if (update.detail === undefined && update.tool === undefined) return

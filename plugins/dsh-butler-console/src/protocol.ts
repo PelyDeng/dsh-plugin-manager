@@ -107,6 +107,13 @@ export interface ButlerProgressUpdate {
    * 传增量而不是整段：群聊里成员是边说边出字的，整段覆盖会让气泡内容来回跳。
    */
   readonly delta?: string
+  /**
+   * 可展示的思考快照，用于让老板看见成员在想什么。
+   *
+   * 与 {@link delta} 相反，它是**完整覆盖**的最新快照：页面替换显示，不追加。内容由执行方
+   * 自己脱敏，只放稳定语句与公开信息，不放模型原始推理与内部标识。
+   */
+  readonly thinking?: string
   /** 正在调用的工具名，用于「正在翻阅资料：xxx」这类展示。 */
   readonly tool?: string
   /**

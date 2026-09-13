@@ -96,6 +96,18 @@ function fixture(routePrefix = '/closedoff-qa') {
     dispatch('session/event', sessionId, { type, data, time: Date.now(), seq: 1 } as SessionEvent)
   }
   /**
+   * 工具结果事件。
+   *
+   * 参与者和业务页面都从 `message.content[].content` 取结果正文、从 `meta` 取结构化值，
+   * 所以夹具按真实形状给：`meta` 之外的字段不是这条事件的一部分。
+   */
+  function toolResult(resultText = '', meta: unknown = {}, sessionId = id) {
+    emit('tool/result', {
+      message: { content: [{ content: resultText === '' ? [] : [{ type: 'text', text: resultText }] }] },
+      meta,
+    }, sessionId)
+  }
+  /**
    * 模型实时增量（`agent/assistant-stream` 通道）。
    *
    * 这条通道的载荷是**一个** `{ agent, frame }`（与会话事件的 `(session, event)` 不同），
@@ -109,9 +121,12 @@ function fixture(routePrefix = '/closedoff-qa') {
   }
   const end = (kind = 'completed') => emit('turn/end', { reason: { kind } })
   const deltas = () => onProgress.mock.calls
-    .map(([value]) => value as { kind?: string; delta?: string; conversationId?: string })
+    .map(([value]) => value as { kind?: string; delta?: string; thinking?: string; conversationId?: string })
     .filter(value => value.kind === 'delta')
-  return { participant, request, manager, controller, onProgress, conversation, listeners: { get size() { return sessionListeners().size } }, emit, stream, deltas, end,
+  const thinkings = () => onProgress.mock.calls
+    .map(([value]) => value as { kind?: string; thinking?: string })
+    .filter(value => value.kind === 'thinking')
+  return { participant, request, manager, controller, onProgress, conversation, listeners: { get size() { return sessionListeners().size } }, emit, stream, toolResult, deltas, thinkings, end,
     revoke: () => { revoked = true }, dispose: async () => { byEvent.clear(); for (const close of disposers) await close() } }
 }
 
@@ -180,7 +195,7 @@ describe('封闭化协作适配', () => {
     } })
     await vi.waitFor(() => expect(f.manager.followup).toHaveBeenCalledOnce())
     f.emit('tool/call', { name: 'closedoff_query' })
-    f.emit('tool/result', {})
+    f.toolResult()
     f.emit('assistant/message', { message: { content: [{ type: 'text', text: '查询结果' }] } })
     f.end()
     const result = await pending
@@ -257,6 +272,66 @@ describe('封闭化协作适配', () => {
     expect(published).not.toMatch(/token=|abc123|api\/data/)
   })
 
+  it('推理整理成稳定语句快照：压住没写完的尾巴，且不混进正文增量', async () => {
+    const f = fixture()
+    const pending = f.participant.run(f.request)
+    await vi.waitFor(() => expect(f.manager.followup).toHaveBeenCalledOnce())
+    f.stream({ type: 'start', attemptId: 'a', revision: 1, turn: 1, step: 1 })
+    f.stream({ type: 'chunk', attemptId: 'a', revision: 2, index: 0, time: 120, chunk: { type: 'reasoning-delta', index: 0, text: '先看今天的通行记录。还没写完的一段' } })
+    // 快照边收边上，但只到句末为止；没写完的那段不发布，替换成「正在生成…」。
+    await vi.waitFor(() => expect(f.thinkings().length).toBeGreaterThan(0))
+    expect(f.thinkings().at(-1)?.thinking).toBe('先看今天的通行记录。\n正在生成…')
+    f.stream({ type: 'chunk', attemptId: 'a', revision: 3, index: 1, time: 130, chunk: { type: 'text-delta', index: 0, text: '今天共有 12 辆车入园。' } })
+    f.emit('assistant/message', { turn: 1, step: 1, message: { content: [
+      { type: 'reasoning', text: '先看今天的通行记录。' },
+      { type: 'text', text: '今天共有 12 辆车入园。' },
+    ] } })
+    f.end()
+    expect(await pending).toMatchObject({ status: 'completed', text: '今天共有 12 辆车入园。' })
+    // 覆盖语义：最后一份是完整快照（尾巴也放开），不是把片段拼起来。
+    expect(f.thinkings().at(-1)?.thinking).toBe('先看今天的通行记录。还没写完的一段')
+    // 推理只走思考通道：正文增量里不能混进去。
+    expect(f.deltas().map(value => value.delta).join('')).toBe('今天共有 12 辆车入园。')
+    expect(JSON.stringify(f.deltas())).not.toContain('先看今天')
+  })
+
+  it('被废弃尝试的推理不留在思考快照里', async () => {
+    const f = fixture()
+    const pending = f.participant.run(f.request)
+    await vi.waitFor(() => expect(f.manager.followup).toHaveBeenCalledOnce())
+    f.stream({ type: 'start', attemptId: 'a', revision: 1, turn: 1, step: 1 })
+    f.stream({ type: 'chunk', attemptId: 'a', revision: 2, index: 0, time: 120, chunk: { type: 'reasoning-delta', index: 0, text: '这一版思路要作废。' } })
+    await vi.waitFor(() => expect(f.thinkings().at(-1)?.thinking).toContain('这一版思路要作废。'))
+    const published = f.thinkings().length
+    // 提供方中断：这一轮尝试被废弃，它的推理也不再算数。
+    f.emit('assistant/attempt', { turn: 1, step: 1, stream: [
+      { type: 'text-chunks', time0: 1, index: 0, dt: [], texts: ['废弃尝试'] },
+    ] })
+    f.stream({ type: 'start', attemptId: 'b', revision: 3, turn: 1, step: 2 })
+    f.stream({ type: 'chunk', attemptId: 'b', revision: 4, index: 0, time: 140, chunk: { type: 'reasoning-delta', index: 0, text: '换成先查通行记录。' } })
+    f.emit('assistant/message', { turn: 1, step: 2, message: { content: [{ type: 'text', text: '已核对。' }] } })
+    f.end()
+    expect(await pending).toMatchObject({ status: 'completed' })
+    expect(f.thinkings().at(-1)?.thinking).toBe('换成先查通行记录。')
+    // 已经发出去的那一份收不回来；要保证的是废弃之后不再把它算进快照。
+    expect(f.thinkings().slice(published).every(value => !value.thinking?.includes('这一版思路要作废'))).toBe(true)
+  })
+
+  it('工具结果里的业务主键不进思考快照', async () => {
+    const f = fixture()
+    const pending = f.participant.run(f.request)
+    await vi.waitFor(() => expect(f.manager.followup).toHaveBeenCalledOnce())
+    f.stream({ type: 'start', attemptId: 'a', revision: 1, turn: 1, step: 1 })
+    f.toolResult(JSON.stringify({ data: { reservationId: 'bd7f5c2e-91aa-4f30-9c31-8ee0a5d0c001' } }))
+    f.stream({ type: 'chunk', attemptId: 'a', revision: 2, index: 0, time: 120, chunk: { type: 'reasoning-delta', index: 0, text: '这条预约 bd7f5c2e-91aa-4f30-9c31-8ee0a5d0c001 是重点。' } })
+    f.emit('assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: '已核对。' }] } })
+    f.end()
+    expect(await pending).toMatchObject({ status: 'completed' })
+    const published = f.thinkings().map(value => value.thinking).join('\n')
+    expect(published).toContain('[内部标识已隐藏]')
+    expect(published).not.toContain('bd7f5c2e-91aa-4f30-9c31-8ee0a5d0c001')
+  })
+
   it('会话打开期间取消、撤权或卸载后，迟到会话不发链接或接续', async () => {
     for (const action of ['cancel', 'revoke', 'close']) {
       const f = fixture()
@@ -285,8 +360,8 @@ describe('封闭化协作适配', () => {
     expect(f.onProgress).toHaveBeenCalledWith({ kind: 'status', text: '封闭化智能体已接单。', conversationId: id,
       conversationArtifact: { kind: 'conversation', title: '查看封闭化会话', path: '/closedoff-qa?conversationId=' + id } })
     f.emit('assistant/chunk', { chunk: { type: 'reasoning-delta', text: '不得对外返回的内部推理' } })
-    f.emit('tool/result', { meta: { token: '不应外传的原始字段' } })
-    f.emit('assistant/message', { message: { content: [
+    f.toolResult('', { token: '不应外传的原始字段' })
+    f.emit('assistant/message', { turn: 1, step: 1, message: { content: [
       { type: 'reasoning', text: '不得对外返回的内部推理' },
       { type: 'text', text: '查询完成，联系 13800138000，查看 https://private.invalid/stream' },
       { type: 'tool-call', name: 'internal_tool', arguments: { token: '不应外传' } },
@@ -381,7 +456,7 @@ describe('封闭化协作适配', () => {
     expect(f.manager.abort).toHaveBeenCalledWith(id)
     expect(f.conversation.active).toBe(true)
     const count = f.onProgress.mock.calls.length
-    f.emit('tool/result', {})
+    f.toolResult()
     f.emit('assistant/message', { message: { content: [{ type: 'text', text: '迟到成果' }] } })
     expect(f.onProgress).toHaveBeenCalledTimes(count)
     await expect(f.participant.run({ ...f.request, signal: new AbortController().signal, conversationId: id })).rejects.toMatchObject({ status: 409 })

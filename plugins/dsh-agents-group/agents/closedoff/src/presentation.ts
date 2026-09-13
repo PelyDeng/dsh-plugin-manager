@@ -413,6 +413,26 @@ function escapePattern(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/** 会话事件里的正文块：同一段文字无论出现在回答、工具结果还是思考里都按同一口径取。 */
+export function textBlocks(content: readonly unknown[]): string {
+  let result = ''
+  for (const block of content) {
+    if (typeof block === 'object' && block !== null && 'type' in block && block.type === 'text'
+      && 'text' in block && typeof block.text === 'string') result += block.text
+  }
+  return result
+}
+
+/** 同 {@link textBlocks}，取推理块。 */
+export function reasoningBlocks(content: readonly unknown[]): string {
+  let result = ''
+  for (const block of content) {
+    if (typeof block === 'object' && block !== null && 'type' in block && block.type === 'reasoning'
+      && 'text' in block && typeof block.text === 'string') result += block.text
+  }
+  return result
+}
+
 /** Project a safe reasoning snapshot without releasing an unstable streaming tail. */
 export function projectReasoning(raw: string, releaseTail: boolean, opaqueValues: readonly string[] = []): string {
   let visible = raw

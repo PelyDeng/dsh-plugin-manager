@@ -11,8 +11,8 @@ export interface ParticipantArtifact {
   readonly kind: 'conversation' | 'draft' | 'confirmation' | 'report'
 }
 export interface ParticipantProgress {
-  readonly kind: 'status' | 'message' | 'delta'
-  /** 状态或消息正文；`delta` 类型不带正文，只用 {@link delta} 传递增量。 */
+  readonly kind: 'status' | 'message' | 'delta' | 'thinking'
+  /** 状态或消息正文；`delta` 与 `thinking` 类型不带正文，分别只用各自的专用字段。 */
   readonly text?: string
   /**
    * 流式正文增量，只在 `kind: 'delta'` 时出现。
@@ -21,6 +21,13 @@ export interface ParticipantProgress {
    * 面向用户的正文增量，不发送模型内部推理。
    */
   readonly delta?: string
+  /**
+   * 可展示的思考快照，只在 `kind: 'thinking'` 时出现。
+   *
+   * 是**完整覆盖**的最新快照，不是增量：消费方替换显示。生产者必须先按业务自己的口径
+   * 脱敏，并且只发布稳定语句，不发布原始推理增量 —— 推理原文与内部标识都不外传。
+   */
+  readonly thinking?: string
   /** 获得业务会话标识后尽早交回；页面刷新不会丢失已开始的业务会话引用。 */
   readonly conversationId?: string
   /** 原插件核验归属后提供，须与 conversationId 同条返回；只表示可打开会话，不表示业务完成。 */

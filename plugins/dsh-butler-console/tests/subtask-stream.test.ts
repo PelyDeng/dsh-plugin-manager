@@ -109,6 +109,9 @@ function reporter(request: { onProgress?: (update: ButlerProgressUpdate) => void
 const deltasOf = (events: readonly ButlerEvent[]) =>
   events.filter(event => event.type === 'subtask_delta').map(event => event.delta)
 
+const thoughtsOf = (events: readonly ButlerEvent[]) =>
+  events.filter(event => event.type === 'subtask_thinking').map(event => event.thinking)
+
 describe('子任务的进度事件实时到达页面', () => {
   it('执行方一上报就产出增量，不等 dispatch 返回', async () => {
     let release!: () => void
@@ -147,6 +150,27 @@ describe('子任务的进度事件实时到达页面', () => {
     for await (const event of dispatchSubtask(input)) events.push(event)
     expect(deltasOf(events)).toEqual(['已经查到的部分：'])
     expect(events.at(-1)).toMatchObject({ type: 'subtask', state: 'failed' })
+  })
+
+  it('思考快照走覆盖事件，同样边到边产出且不再多出状态文字', async () => {
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const { dispatchSubtask } = consoleFor(executor(async request => {
+      const report = reporter(request)
+      report({ stage: '正在思考', thinking: '先看今天的通行记录。\n正在生成…' })
+      await gate
+      report({ stage: '正在思考', thinking: '先看今天的通行记录。' })
+      return { status: 'succeeded', summary: '今天共有 12 辆车入园。' }
+    }))
+    const events: ButlerEvent[] = []
+    const running = (async () => { for await (const event of dispatchSubtask(input)) events.push(event) })()
+    await settle()
+    // 第一份快照在 dispatch 返回前就到了；后续快照是替换，不是追加。
+    expect(thoughtsOf(events)).toEqual(['先看今天的通行记录。\n正在生成…'])
+    release()
+    await running
+    expect(thoughtsOf(events)).toEqual(['先看今天的通行记录。\n正在生成…', '先看今天的通行记录。'])
+    expect(events.filter(event => event.type === 'subtask' && event.state === 'running')).toHaveLength(0)
   })
 
   it('工具与阶段状态照旧走 running，只有 delta 走增量事件', async () => {

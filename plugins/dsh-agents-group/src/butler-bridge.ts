@@ -64,6 +64,8 @@ export interface ButlerProgressUpdate {
   readonly phase?: string
   readonly tool?: string
   readonly delta?: string
+  /** 可展示的思考快照（完整覆盖，不是增量）；与 `delta` 一样只在有值时出现。 */
+  readonly thinking?: string
   readonly detail?: string
 }
 
@@ -129,6 +131,7 @@ function toButlerProgress(progress: Record<string, unknown>): ButlerProgressUpda
     ...(tool === undefined ? {} : { tool }),
     ...(phase === undefined ? {} : { phase }),
     ...(typeof progress.delta === 'string' ? { delta: progress.delta } : {}),
+    ...(typeof progress.thinking === 'string' ? { thinking: progress.thinking } : {}),
   }
 }
 

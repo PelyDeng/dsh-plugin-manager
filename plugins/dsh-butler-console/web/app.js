@@ -240,6 +240,17 @@ function memberMessage(agentId, handle) {
   col.appendChild(head)
 
   const bubble = make('div', 'bubble')
+  // 思考行：默认收起，只有执行方真的上报了快照才出现；正文照旧在它下面。
+  const think = make('details', 'think')
+  think.hidden = true
+  const thinkSummary = make('summary', 'think__summary')
+  thinkSummary.appendChild(make('span', 'think__title', '思考'))
+  const thinkPreview = make('span', 'think__preview')
+  thinkSummary.appendChild(thinkPreview)
+  const thinkBody = make('div', 'think__body')
+  think.appendChild(thinkSummary)
+  think.appendChild(thinkBody)
+  bubble.appendChild(think)
   const text = make('span')
   const caret = make('span', 'caret')
   caret.hidden = true
@@ -265,9 +276,27 @@ function memberMessage(agentId, handle) {
     footer,
     body: '',
     progress: null,
+    think: { node: think, preview: thinkPreview, body: thinkBody, text: '' },
   }
   state.bubbles.set(handle, view)
   return view
+}
+
+/**
+ * 成员的可展示思考。
+ *
+ * 快照是**覆盖**语义：整行文本被替换，不做追加。默认收起，摘要行只留最新一行预览，
+ * 免得长推理把气泡撑开、把正文挤下去。
+ */
+function setThinking(view, thinking) {
+  if (view === undefined) return
+  view.think.text = thinking
+  view.think.node.hidden = false
+  view.think.body.textContent = thinking
+  const lines = thinking.split('\n').map(line => line.trim()).filter(line => line !== '')
+  const latest = lines.length === 0 ? '' : lines[lines.length - 1]
+  view.think.preview.textContent = latest
+  view.think.preview.hidden = latest === ''
 }
 
 function ensureProgress(view) {
@@ -353,6 +382,10 @@ function handleEvent(event) {
       progress.fill.style.width = `${progress.value}%`
       break
     }
+
+    case 'subtask_thinking':
+      setThinking(state.bubbles.get(event.id), event.thinking)
+      break
 
     case 'summary':
       resetRail()

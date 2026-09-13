@@ -220,3 +220,27 @@ test('船员未返回会话标识便失败，已留存业务摘要仍受原插�
     assert.equal((await f.request('/mission?id=' + mission.id)).status, 403)
   } finally { await f.close() }
 })
+
+test('增量与思考快照不进协作事件流，逐条记录会把一段回答记成很多条', async () => {
+  const f = await fixture({ providers: [{ id: 'closedoff', async run(request) {
+    request.onProgress({ kind: 'status', text: '正在查询', conversationId: 'stream-owned' })
+    request.onProgress({ kind: 'delta', delta: '今天共有 ' })
+    request.onProgress({ kind: 'delta', delta: '12 辆车入园。' })
+    request.onProgress({ kind: 'thinking', thinking: '先看通行记录。' })
+    return { status: 'completed', conversationId: 'stream-owned', text: '今天共有 12 辆车入园。' }
+  } }], model: async ({ assign }) => {
+    await assign([{ crew: 'closedoff', message: '查询通行记录' }])
+    return '已经核对完成。'
+  } })
+  try {
+    const { mission } = await (await f.request('/message', { message: '查询', requestId: randomUUID() })).json()
+    const result = await f.settled(mission.id)
+    const serialized = JSON.stringify(result.events)
+    assert.equal(result.mission.state, 'completed')
+    assert.ok(result.events.some(event => event.text === '正在查询'))
+    // 正文与思考都以结果正文的形式出现在协作事件里，但不允许按每条增量各记一条。
+    assert.equal(result.events.some(event => event.type === 'delta' || event.type === 'thinking'), false)
+    assert.equal(result.events.filter(event => event.text === '12 辆车入园。').length, 0)
+    assert.equal(serialized.includes('先看通行记录。'), false)
+  } finally { await f.close() }
+})

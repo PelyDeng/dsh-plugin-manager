@@ -76,6 +76,8 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 - `capabilities` 会写进牛马大总管的提示词，所以牛马大总管**只在你声明的范围内派活**，不会猜。
 - 没声明 `capabilities` 就表示「什么都能接」，牛马大总管按子任务语义自行判断。
 - `delta` 是**增量**：页面按到达顺序追加到同一条气泡里，不要每次发整段。
+- `thinking` 是**完整覆盖**的可展示思考快照：页面用它替换该成员气泡里的思考行（默认收起，
+  摘要只留最后一行）。内容由执行方自己脱敏，只放稳定语句与公开信息，不放原始推理与内部标识。
 - 进度是**上报即产出**：`dispatch`／`reply` 还没返回，事件就已经送到页面，成员边干边出字；不需要为了流式去改返回时机。
 - `needsReply: true` 让子任务进入 `waiting_user`，页面上就会出现回复框；用户回的内容
   会通过 `reply()` 交回给你。
@@ -130,7 +132,7 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | GET | `/butler/models` | 宿主模型目录 |
 
 `/butler/chat` 与 `/butler/reply` 的 SSE 事件类型：`conversation`、`user`、`chat`、
-`plan`、`subtask`、`subtask_delta`、`summary`、`error`，以 `[DONE]` 结束。
+`plan`、`subtask`、`subtask_delta`、`subtask_thinking`、`summary`、`error`，以 `[DONE]` 结束。
 
 ## 状态语义
 

@@ -25,6 +25,8 @@ import {
   filterDeviceGroupsNearTrack,
   gatewayResultFailed,
   projectHistory,
+  reasoningBlocks,
+  textBlocks,
   turnUsageSummary,
   presentationDescriptor,
   projectReasoning,
@@ -88,24 +90,6 @@ export function renderHttpError(res: ServerResponse, caught: unknown): void {
 
 function error(res: ServerResponse, caught: unknown): void {
   renderHttpError(res, caught)
-}
-
-function textBlocks(content: readonly unknown[]): string {
-  let result = ''
-  for (const block of content) {
-    if (typeof block === 'object' && block !== null && 'type' in block && block.type === 'text'
-      && 'text' in block && typeof block.text === 'string') result += block.text
-  }
-  return result
-}
-
-function reasoningBlocks(content: readonly unknown[]): string {
-  let result = ''
-  for (const block of content) {
-    if (typeof block === 'object' && block !== null && 'type' in block && block.type === 'reasoning'
-      && 'text' in block && typeof block.text === 'string') result += block.text
-  }
-  return result
 }
 
 function presentationValue(meta: unknown): unknown {

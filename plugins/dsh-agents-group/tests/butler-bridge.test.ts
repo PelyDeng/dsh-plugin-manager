@@ -167,6 +167,13 @@ describe('执行入口的进度转换', () => {
     expect(received[0]).not.toHaveProperty('text')
   })
 
+  it('思考快照原样搬过去，仍然是覆盖语义而不是增量', async () => {
+    const received = await capture({ kind: 'thinking', thinking: '先看今天的通行记录。\n正在生成…' })
+    expect(received[0]).toMatchObject({ kind: 'thinking', thinking: '先看今天的通行记录。\n正在生成…' })
+    expect(received[0]).not.toHaveProperty('text')
+    expect(received[0]).not.toHaveProperty('delta')
+  })
+
   it('kind 缺失时回落到 status，不写 undefined', async () => {
     const received = await capture({ text: 'x' })
     expect(received[0]).toMatchObject({ kind: 'status' })
