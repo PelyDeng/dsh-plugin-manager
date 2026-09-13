@@ -10,10 +10,58 @@
  * 所有用户可见文本都用 textContent 写入，不使用 innerHTML，避免把模型输出当成标记解析。
  */
 
-import { ApiError, api, avatarUrl, chat, events, reply, uploadAvatar } from './api.js'
+import { ApiError, api, avatarUrl, chat, events, reply, uploadAvatar, ROUTE_PREFIX } from './api.js'
 
 /** 成员配色：按 agentId 稳定取色，所以同一个插件每次都是同一个颜色。 */
 const PALETTE = ['#4d96ff', '#2ec4a6', '#ff6b57', '#9b5de5', '#ffb703', '#e8709a']
+
+/**
+ * 默认涂鸦头像：已知插件映射到 web/media/avatars/ 下的生成素材；上传过头像的用户看不到它们。
+ * 没有映射的成员退回首字配色圆，页面不因为多接了一个插件就缺图。
+ */
+const DEFAULT_AVATAR_FILES = new Map([
+  ['butler', 'avatar-butler.png'],
+  ['blog', 'avatar-blog.png'],
+  ['closedoff', 'avatar-closedoff.png'],
+  ['example', 'avatar-example.png'],
+  ['__boss__', 'avatar-boss.png'],
+])
+
+function defaultAvatarUrl(agentId) {
+  const file = DEFAULT_AVATAR_FILES.get(String(agentId))
+  return file === undefined ? null : `${ROUTE_PREFIX}/assets/media/avatars/${file}`
+}
+
+/** 内置头像清单：预生成的 15 个涂鸦形象，设置页里一键换上。 */
+const BUILTIN_AVATARS = [
+  { file: 'builtin-01.png', label: '柴犬' },
+  { file: 'builtin-02.png', label: '猫咪' },
+  { file: 'builtin-03.png', label: '熊猫' },
+  { file: 'builtin-04.png', label: '兔子' },
+  { file: 'builtin-05.png', label: '青蛙' },
+  { file: 'builtin-06.png', label: '小鸡' },
+  { file: 'builtin-07.png', label: '猫头鹰' },
+  { file: 'builtin-08.png', label: '机器人' },
+  { file: 'builtin-09.png', label: '云朵' },
+  { file: 'builtin-10.png', label: '太阳' },
+  { file: 'builtin-11.png', label: '咖啡' },
+  { file: 'builtin-12.png', label: '书本' },
+  { file: 'builtin-13.png', label: '信封' },
+  { file: 'builtin-14.png', label: '蜗牛' },
+  { file: 'builtin-15.png', label: '草莓' },
+]
+
+/** 换内置头像 = 把那张图当作上传头像交给现有接口，服务端逻辑零改动。 */
+async function applyBuiltinAvatar(agentId, file) {
+  try {
+    const response = await fetch(`${ROUTE_PREFIX}/assets/media/avatars/builtin/${file}`)
+    if (!response.ok) throw new Error('内置头像读取失败')
+    const blob = await response.blob()
+    await applyAvatar(agentId, new File([blob], file, { type: 'image/png' }))
+  } catch (error) {
+    window.alert(error instanceof Error && error.message ? error.message : '没换上，再试一次')
+  }
+}
 
 const STATE_TEXT = {
   queued: '排队中',
@@ -31,12 +79,40 @@ const STATE_TEXT = {
 
 /** 协同链路：页面上的每一步都能追到一次真实事件。 */
 const RAIL_STEPS = [
-  { key: 'ask', label: '老板发话' },
-  { key: 'parse', label: '牛马大总管听懂' },
+  { key: 'ask', label: '说个活' },
+  { key: 'parse', label: '总管听懂' },
   { key: 'dispatch', label: '派活' },
   { key: 'work', label: '牛马干活' },
   { key: 'sum', label: '交差' },
 ]
+
+/** 链路徽章里的小图标：纯静态标记，不含任何用户数据。 */
+const SVG_NS = 'http://www.w3.org/2000/svg'
+
+const RAIL_ICON_PATHS = {
+  ask: '<path d="M2.5 6.8 9 3.4 9 12.6 2.5 9.4 Z" fill="currentColor"/><path d="M11 6.1 C 12.4 6.7, 12.4 9.3, 11 9.9 M4.6 9.9 5.3 13.2 7.1 12.8 6.4 10.4" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>',
+  parse: '<path d="M3 4.6 C 3 3.4, 3.9 2.6, 5 2.6 L 11 2.6 C 12.1 2.6, 13 3.4, 13 4.6 L 13 8.4 C 13 9.5, 12.1 10.4, 11 10.4 L 8.4 10.4 6 12.6 6.1 10.4 L 5 10.4 C 3.9 10.4, 3 9.5, 3 8.4 Z" fill="currentColor"/>',
+  dispatch: '<rect x="4.2" y="3.2" width="7.6" height="10" rx="1.4" fill="currentColor"/><rect x="6" y="1.8" width="4" height="2.8" rx="1" fill="currentColor"/><path d="M6 7 10 7 M6 9.4 9.2 9.4" stroke="#fff" stroke-width="1.2" stroke-linecap="round"/>',
+  work: '<circle cx="8" cy="8" r="3" fill="currentColor"/><path d="M8 1.8 8 3.4 M8 12.6 8 14.2 M1.8 8 3.4 8 M12.6 8 14.2 8 M3.6 3.6 4.7 4.7 M11.3 11.3 12.4 12.4 M12.4 3.6 11.3 4.7 M4.7 11.3 3.6 12.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>',
+  sum: '<path d="M3.5 8.6 6.6 11.6 12.6 4.8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+}
+
+/** 静态涂鸦小件（都是固定标记，不含用户数据），集中一处方便核对。 */
+const DOODLE_PATHS = {
+  /** 使用者头像：简笔人脸 + 领带。 */
+  bossFace: '<circle cx="12" cy="8.6" r="4.4" fill="#fff" stroke="#3d3630" stroke-width="1.6"/><path d="M10.4 8.2 10.4 8.3 M13.6 8.2 13.6 8.3" stroke="#3d3630" stroke-width="1.8" stroke-linecap="round"/><path d="M10.6 10.4 C 11.4 11, 12.6 11, 13.4 10.4" fill="none" stroke="#3d3630" stroke-width="1.2" stroke-linecap="round"/><path d="M5.2 20.4 C 6.6 16.8, 9 15.2, 12 15.2 C 15 15.2, 17.4 16.8, 18.8 20.4 Z" fill="#fff" stroke="#3d3630" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 15.4 10.9 16.9 12 19.2 13.1 16.9 Z" fill="#ff6b57" stroke="#3d3630" stroke-width="1"/>',
+  /** 链路条之间的歪箭头。 */
+  railArrow: '<path d="M1.5 6.5 C 6 5.4, 11 5.7, 20.5 6.2 M16.5 2.6 C 18.2 4, 19.7 5.2, 21.8 6.2 C 19.8 7.2, 18.2 8.4, 16.6 10" fill="none" stroke="#b9ad9c" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+}
+
+/** 造一个内联 SVG 小件；markup 是固定常量，见 DOODLE_PATHS / RAIL_ICON_PATHS。 */
+function doodleSvg(markup, className) {
+  const svg = document.createElementNS(SVG_NS, 'svg')
+  if (className) svg.setAttribute('class', className)
+  svg.setAttribute('aria-hidden', 'true')
+  svg.innerHTML = markup
+  return svg
+}
 
 const SUGGESTIONS = [
   '整理一篇园区封闭化管理介绍，再给点博客发布建议',
@@ -55,6 +131,7 @@ const el = {
   composer: document.getElementById('composer'),
   input: document.getElementById('message-input'),
   send: document.getElementById('send-button'),
+  at: document.getElementById('at-button'),
   stop: document.getElementById('stop-button'),
   hint: document.getElementById('composer-hint'),
   count: document.getElementById('composer-count'),
@@ -65,6 +142,10 @@ const el = {
   crewNote: document.getElementById('crew-note'),
   groupSub: document.getElementById('group-sub'),
   memberList: document.getElementById('member-list'),
+  settingsButton: document.getElementById('settings-button'),
+  settingsBack: document.getElementById('settings-back'),
+  settings: document.getElementById('settings'),
+  settingsMembers: document.getElementById('settings-members'),
   metrics: document.getElementById('metrics'),
   statusList: document.getElementById('status-list'),
   failureList: document.getElementById('failure-list'),
@@ -93,7 +174,7 @@ const state = {
   taskId: null,
   /** 当前任务的链路状态。 */
   rail: { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' },
-  openMember: null,
+  settingsOpen: false,
 }
 
 /* ── 小工具 ───────────────────────────────────────────────────────────── */
@@ -125,8 +206,11 @@ function formatTime(value) {
  * 一个真实的 57 秒会被显示成 12 分钟。只有还在跑的时候才用当前时间。
  */
 function formatElapsed(from, to = Date.now()) {
-  if (!from) return ''
-  const seconds = Math.max(0, Math.round((to - from) / 1000))
+  // 实时流里是毫秒数，历史记录里是 ISO 字符串；直接相减会得到 NaN。
+  const start = new Date(from).getTime()
+  const end = new Date(to).getTime()
+  if (!from || Number.isNaN(start) || Number.isNaN(end)) return ''
+  const seconds = Math.max(0, Math.round((end - start) / 1000))
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`
 }
 
@@ -149,19 +233,23 @@ function declaredNameOf(agentId) {
   return member?.declaredName ?? agentId
 }
 
-/** 成员头像：上传过就用图片，否则用首字加配色。 */
+/** 成员头像：上传过就用图片，失败或没上传时落到默认涂鸦，最后才是首字配色圆。 */
 function avatarNode(agentId, size = '') {
   const node = make('div', `avatar${size ? ` avatar--${size}` : ''}`)
   node.style.background = accentOf(agentId)
   const stamp = state.avatarStamps.get(agentId)
-  if (stamp !== undefined) {
-    const image = document.createElement('img')
-    image.alt = ''
-    image.src = avatarUrl(agentId, stamp)
-    // 图片加载失败时退回首字，不让头像位空着。
-    image.addEventListener('error', () => { image.remove() })
-    node.appendChild(image)
-  }
+  const defaultUrl = defaultAvatarUrl(agentId)
+  const image = document.createElement('img')
+  image.alt = ''
+  image.addEventListener('error', () => {
+    // 上传图的加载失败先落到默认涂鸦；默认图也没有才退回首字。
+    if (image.dataset.fallback === 'default' || defaultUrl === null) { image.remove(); return }
+    image.dataset.fallback = 'default'
+    image.src = defaultUrl
+  })
+  if (stamp !== undefined) image.src = avatarUrl(agentId, stamp)
+  else if (defaultUrl !== null) image.src = defaultUrl
+  if (image.getAttribute('src') !== null) node.appendChild(image)
   node.appendChild(make('span', null, [...displayNameOf(agentId)][0] ?? '?'))
   return node
 }
@@ -192,7 +280,16 @@ function userMessage(text, time) {
   col.appendChild(make('div', 'bubble', text))
   col.appendChild(make('div', 'msg__meta', formatTime(time)))
   msg.appendChild(col)
-  msg.appendChild(avatarNode('__boss__', 'sm')).style.background = '#3d3630'
+  const boss = make('div', 'avatar avatar--sm avatar--boss')
+  boss.appendChild(doodleSvg(DOODLE_PATHS.bossFace))
+  const bossImage = document.createElement('img')
+  bossImage.alt = ''
+  bossImage.src = defaultAvatarUrl('__boss__')
+  // 加载成功就盖过简笔 SVG；失败时 SVG 留着兜底。
+  bossImage.addEventListener('load', () => { boss.querySelector('svg')?.remove() })
+  bossImage.addEventListener('error', () => { bossImage.remove() })
+  boss.appendChild(bossImage)
+  msg.appendChild(boss)
   append(msg)
 }
 
@@ -203,13 +300,20 @@ function userMessage(text, time) {
  */
 function butlerMessage(text, time) {
   const msg = make('div', 'msg msg--butler')
-  const avatar = make('div', 'avatar avatar--sm')
-  avatar.style.background = '#3d3630'
+  const avatar = make('div', 'avatar avatar--sm avatar--butler')
+  const butlerImage = document.createElement('img')
+  butlerImage.alt = ''
+  butlerImage.src = defaultAvatarUrl('butler')
+  // 默认涂鸦缺席时（资源没带上）退回「牛」字，不让头像位空着。
+  butlerImage.addEventListener('error', () => { butlerImage.remove() })
+  avatar.appendChild(butlerImage)
   avatar.appendChild(make('span', null, '牛'))
   msg.appendChild(avatar)
   const col = make('div', 'msg__col')
   const head = make('div', 'msg__head')
-  head.appendChild(make('span', 'msg__name', '牛马大总管'))
+  const name = make('span', 'msg__name', '牛马大总管')
+  name.style.color = 'var(--bt-mint)'
+  head.appendChild(name)
   head.appendChild(make('span', 'msg__tag', '负责听你说人话'))
   col.appendChild(head)
   const bubble = make('div', 'bubble')
@@ -371,10 +475,14 @@ function ensureProgress(view) {
 function renderRail() {
   clear(el.rail)
   RAIL_STEPS.forEach((step, index) => {
-    if (index > 0) el.rail.appendChild(make('span', 'rail__arrow', '→'))
+    if (index > 0) el.rail.appendChild(doodleSvg(DOODLE_PATHS.railArrow, 'rail__arrow'))
     const node = make('span', 'rail__step')
     node.dataset.state = step.key === 'ask' ? 'done' : (state.rail[step.key] ?? 'idle')
-    node.appendChild(make('span', null, step.label))
+    node.dataset.key = step.key
+    const badge = make('span', 'rail__badge')
+    badge.appendChild(doodleSvg(RAIL_ICON_PATHS[step.key] ?? ''))
+    node.appendChild(badge)
+    node.appendChild(make('span', 'rail__label', step.label))
     el.rail.appendChild(node)
   })
 }
@@ -388,6 +496,15 @@ function setRail(key, value) {
 
 function resetRail() {
   state.rail = { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' }
+  renderRail()
+}
+
+/** 按任务结果推进链路条：实时汇总与历史回放共用一套语义，避免两种口径。 */
+function applySummaryRail(taskState) {
+  if (taskState === 'completed') state.rail = { parse: 'done', dispatch: 'done', work: 'done', sum: 'done' }
+  else if (taskState === 'waiting_user' || taskState === 'external_pending' || taskState === 'partial') state.rail = { parse: 'done', dispatch: 'done', work: 'active', sum: 'idle' }
+  else if (taskState === 'failed' || taskState === 'cancelled') state.rail = { parse: 'done', dispatch: 'done', work: 'done', sum: 'idle' }
+  else state.rail = { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' }
   renderRail()
 }
 
@@ -414,7 +531,7 @@ function handleEvent(event) {
       break
 
     case 'input': {
-      // 老板改了目标。先留一行痕迹，随后的派活与汇总照旧走原来的分支。
+      // 使用者改了目标。先留一行痕迹，随后的派活与汇总照旧走原来的分支。
       state.taskId = event.taskId
       append(make('p', 'msg__meta',
         event.source === 'supplement'
@@ -431,7 +548,7 @@ function handleEvent(event) {
       setRail('dispatch', 'active')
       // 计划贴纸是新的一条消息：先收掉可能还开着的大总管气泡，别把两段话并到一条里。
       state.butlerSpeech = null
-      butlerMessage('收到老板，这活我拆成三份，已经喊人了。')
+      butlerMessage('收到！这活我拆成三份，已经喊人了。')
       append(planNote(event))
       break
     }
@@ -457,9 +574,8 @@ function handleEvent(event) {
       break
 
     case 'summary':
-      resetRail()
-      if (event.state === 'completed') setRail('sum', 'done')
-      else if (event.state === 'waiting_user' || event.state === 'external_pending') setRail('work', 'active')
+      // 汇总是这一轮的定论：链路条按最终状态推进，已走过的步骤保持点亮。
+      applySummaryRail(event.state)
       for (const view of state.bubbles.values()) view.caret.hidden = true
       append(summaryCard(event))
       state.bubbles.clear()
@@ -579,7 +695,7 @@ function askCard(view, event) {
   input.placeholder = '补充点什么…'
   row.appendChild(input)
 
-  const send = make('button', 'btn btn--tiny btn--amber', '我来说')
+  const send = make('button', 'btn btn--tiny btn--primary', '我来说')
   send.type = 'button'
   const decide = make('button', 'btn btn--tiny', '你看着办')
   decide.type = 'button'
@@ -610,7 +726,7 @@ function askCard(view, event) {
 function summaryCard(event) {
   const card = make('div', 'summary')
   card.dataset.state = event.state
-  const title = event.state === 'completed' ? '老板，活干完了'
+  const title = event.state === 'completed' ? '活干完了！'
     : event.state === 'failed' ? '这次翻车了'
       : event.state === 'cancelled' ? '已喊停'
         // 「待外部处理」不是「办完了」：材料在这，那件事还在外面等着。
@@ -628,7 +744,13 @@ function summaryCard(event) {
 function renderWelcome() {
   clear(el.thread)
   const box = make('div', 'welcome')
-  box.appendChild(make('h2', null, '老板，今天想干点啥？'))
+  const mascot = document.createElement('img')
+  mascot.className = 'welcome__mascot'
+  mascot.alt = ''
+  mascot.src = `${ROUTE_PREFIX}/assets/media/avatars/mascot-welcome.png`
+  mascot.addEventListener('error', () => { mascot.remove() })
+  box.appendChild(mascot)
+  box.appendChild(make('h2', null, '今天想干点啥？'))
   box.appendChild(make('p', null, '把活说清楚就行。牛马大总管先听懂，再替你把人喊来，你只管收结果。'))
   const list = make('div', 'welcome__list')
   for (const text of SUGGESTIONS) {
@@ -779,6 +901,7 @@ async function finishTurn() {
 
 /* ── 右栏 ─────────────────────────────────────────────────────────────── */
 
+/** 右栏的紧凑成员行：只看是谁、在不在场；改名换脸去设置页。 */
 function renderMembers() {
   clear(el.memberList)
   if (state.members.length === 0) {
@@ -786,9 +909,32 @@ function renderMembers() {
     return
   }
   for (const member of state.members) {
-    const card = make('div', 'member')
-    card.dataset.open = String(state.openMember === member.agentId)
+    const row = make('div', 'member member--compact')
+    row.appendChild(avatarNode(member.agentId, 'sm'))
+    const col = make('div', 'member__col')
+    col.appendChild(make('div', 'member__name', member.displayName))
+    col.appendChild(make('div', 'member__declared', member.declaredName))
+    row.appendChild(col)
+    row.appendChild(make('span', 'spacer'))
+    row.appendChild(make('span', `dot dot--${member.online ? 'online' : 'queued'}`))
+    row.title = `${member.displayName}（@${member.agentId}）`
+    el.memberList.appendChild(row)
+  }
+}
 
+/* ── 设置页 ───────────────────────────────────────────────────────────── */
+
+/** 设置页里的成员卡：外号、配色、头像集中在这张卡上编辑。 */
+function renderSettingsMembers() {
+  clear(el.settingsMembers)
+  if (state.members.length === 0) {
+    el.settingsMembers.appendChild(make('p', 'empty', '还没有能派活的成员。'))
+    return
+  }
+  for (const member of state.members) {
+    const card = make('div', 'set-card')
+
+    const head = make('div', 'set-card__head')
     const avatarWrap = make('div', 'member__avatar')
     avatarWrap.appendChild(avatarNode(member.agentId, 'lg'))
     const camera = make('span', 'member__camera', '📷')
@@ -804,75 +950,85 @@ function renderMembers() {
     })
     avatarWrap.appendChild(camera)
     avatarWrap.appendChild(picker)
-    card.appendChild(avatarWrap)
+    head.appendChild(avatarWrap)
 
-    const body = make('div')
-    const head = make('div', 'member__head')
-    const titles = make('div')
-    titles.style.minWidth = '0'
+    const titles = make('div', 'set-card__titles')
     titles.appendChild(make('div', 'member__name', member.displayName))
     titles.appendChild(make('div', 'member__declared', `插件声明：${member.declaredName}`))
     head.appendChild(titles)
-    head.appendChild(make('span', 'spacer'))
-    head.appendChild(make('span', `dot dot--${member.online ? 'online' : 'queued'}`))
-    head.appendChild(make('span', 'member__chev', state.openMember === member.agentId ? '▴' : '▾'))
-    body.appendChild(head)
+    card.appendChild(head)
 
-    if (member.capabilities.length > 0) {
-      const caps = make('div', 'member__caps')
-      for (const cap of member.capabilities) caps.appendChild(make('span', 'member__cap', cap))
-      body.appendChild(caps)
+    const nameField = make('div', 'field')
+    nameField.appendChild(make('label', null, '外号'))
+    const nameInput = document.createElement('input')
+    nameInput.type = 'text'
+    nameInput.maxLength = 24
+    nameInput.value = member.displayName
+    nameInput.placeholder = member.declaredName
+    nameField.appendChild(nameInput)
+    card.appendChild(nameField)
+
+    const colorField = make('div', 'field')
+    colorField.appendChild(make('label', null, '配色'))
+    const swatches = make('div', 'swatches')
+    for (const color of PALETTE) {
+      const swatch = make('button', 'swatch')
+      swatch.type = 'button'
+      swatch.style.background = color
+      swatch.setAttribute('aria-pressed', String(accentOf(member.agentId).toLowerCase() === color))
+      swatch.title = color
+      swatch.addEventListener('click', () => { void applyAlias(member.agentId, nameInput.value, color) })
+      swatches.appendChild(swatch)
     }
+    colorField.appendChild(swatches)
+    card.appendChild(colorField)
 
-    if (state.openMember === member.agentId) {
-      const form = make('div', 'member__body')
-      const nameField = make('div', 'field')
-      nameField.appendChild(make('label', null, '外号'))
-      const nameInput = document.createElement('input')
-      nameInput.type = 'text'
-      nameInput.maxLength = 24
-      nameInput.value = member.displayName
-      nameInput.placeholder = member.declaredName
-      nameField.appendChild(nameInput)
-      form.appendChild(nameField)
-
-      const colorField = make('div', 'field')
-      colorField.appendChild(make('label', null, '配色'))
-      const swatches = make('div', 'swatches')
-      for (const color of PALETTE) {
-        const swatch = make('button', 'swatch')
-        swatch.type = 'button'
-        swatch.style.background = color
-        swatch.setAttribute('aria-pressed', String(accentOf(member.agentId).toLowerCase() === color))
-        swatch.title = color
-        swatch.addEventListener('click', () => { void applyAlias(member.agentId, nameInput.value, color) })
-        swatches.appendChild(swatch)
-      }
-      colorField.appendChild(swatches)
-      form.appendChild(colorField)
-
-      const actions = make('div', 'ask__row')
-      const save = make('button', 'btn btn--tiny btn--primary', '保存')
-      save.type = 'button'
-      save.addEventListener('click', () => { void applyAlias(member.agentId, nameInput.value) })
-      actions.appendChild(save)
-      if (state.avatarStamps.has(member.agentId)) {
-        const reset = make('button', 'btn btn--tiny btn--ghost', '删掉头像')
-        reset.type = 'button'
-        reset.addEventListener('click', () => { void applyClearAvatar(member.agentId) })
-        actions.appendChild(reset)
-      }
-      form.appendChild(actions)
-      body.appendChild(form)
+    const builtinField = make('div', 'field')
+    builtinField.appendChild(make('label', null, '内置头像'))
+    const strip = make('div', 'builtin-strip')
+    for (const item of BUILTIN_AVATARS) {
+      const pick = make('button', 'builtin-strip__item')
+      pick.type = 'button'
+      pick.title = item.label
+      const thumb = document.createElement('img')
+      thumb.alt = item.label
+      thumb.loading = 'lazy'
+      thumb.src = `${ROUTE_PREFIX}/assets/media/avatars/builtin/${item.file}`
+      pick.appendChild(thumb)
+      pick.addEventListener('click', () => { void applyBuiltinAvatar(member.agentId, item.file) })
+      strip.appendChild(pick)
     }
+    builtinField.appendChild(strip)
+    card.appendChild(builtinField)
 
-    card.appendChild(body)
-    card.addEventListener('click', event => {
-      if (event.target.closest('input,button')) return
-      state.openMember = state.openMember === member.agentId ? null : member.agentId
-      renderMembers()
-    })
-    el.memberList.appendChild(card)
+    const actions = make('div', 'set-card__actions')
+    const save = make('button', 'btn btn--tiny btn--primary', '保存')
+    save.type = 'button'
+    save.addEventListener('click', () => { void applyAlias(member.agentId, nameInput.value) })
+    actions.appendChild(save)
+    if (state.avatarStamps.has(member.agentId)) {
+      const reset = make('button', 'btn btn--tiny btn--ghost', '删掉头像')
+      reset.type = 'button'
+      reset.addEventListener('click', () => { void applyClearAvatar(member.agentId) })
+      actions.appendChild(reset)
+    }
+    card.appendChild(actions)
+
+    el.settingsMembers.appendChild(card)
+  }
+}
+
+/** 打开/关闭设置页：关掉时右栏紧凑行要用最新数据重画。 */
+function setOpenSettings(open) {
+  state.settingsOpen = open
+  document.body.dataset.settings = open ? 'open' : 'closed'
+  el.settingsButton.setAttribute('aria-expanded', String(open))
+  el.settings.hidden = !open
+  if (open) {
+    renderSettingsMembers()
+  } else {
+    renderMembers()
+    el.input.focus()
   }
 }
 
@@ -918,7 +1074,16 @@ function renderStatuses() {
     const row = make('div', 'status-row')
     row.appendChild(avatarNode(member.agentId, 'sm'))
     row.appendChild(make('span', 'status-row__name', member.displayName))
-    row.appendChild(make('span', 'status-row__state', member.online ? '待命' : '不在场'))
+    // 有活报活的状态，没活只报在不在场。
+    const stateText = member.busy === null
+      ? (member.online ? '待命' : '不在场')
+      : (STATE_TEXT[member.busy.state] ?? '在忙')
+    const stateCell = make('span', 'status-row__state', stateText)
+    const dotClass = member.busy === null
+      ? (member.online ? 'online' : 'queued')
+      : (member.busy.state ?? 'queued')
+    stateCell.prepend(make('span', `dot dot--${dotClass}`))
+    row.appendChild(stateCell)
     el.statusList.appendChild(row)
   }
 }
@@ -973,6 +1138,7 @@ async function applyAlias(agentId, displayName, accent) {
     renderMembers()
     renderCrew()
     renderStatuses()
+    if (state.settingsOpen) renderSettingsMembers()
   } catch (error) {
     window.alert(error instanceof Error ? error.message : '没保存成功')
   }
@@ -985,6 +1151,7 @@ async function applyAvatar(agentId, file) {
     state.avatarStamps.set(agentId, Date.now())
     renderMembers()
     renderCrew()
+    if (state.settingsOpen) renderSettingsMembers()
   } catch (error) {
     window.alert(error instanceof Error ? error.message : '头像没换上')
   }
@@ -997,6 +1164,7 @@ async function applyClearAvatar(agentId) {
     state.avatarStamps.delete(agentId)
     renderMembers()
     renderCrew()
+    if (state.settingsOpen) renderSettingsMembers()
   } catch (error) {
     window.alert(error instanceof Error ? error.message : '没删掉')
   }
@@ -1011,7 +1179,8 @@ async function refreshPanels() {
     for (const member of members.items) {
       if (!state.avatarStamps.has(member.agentId)) state.avatarStamps.set(member.agentId, 1)
     }
-    renderMembers()
+    // 设置页开着时不重画右栏成员卡，免得把没保存的外号冲掉。
+    if (!state.settingsOpen) renderMembers()
     renderCrew()
     renderMetrics(overview.counts)
     renderStatuses()
@@ -1144,9 +1313,11 @@ function renderTaskRecord(record) {
     text: record.summary,
     error: record.error,
   }))
+  // 历史回放也要让链路条反映这一轮走到哪了，与实时汇总共用同一套语义。
+  applySummaryRail(record.state)
 }
 
-/* ── 老板语录 ─────────────────────────────────────────────────────────── */
+/* ── 座右铭 ─────────────────────────────────────────────────────────── */
 
 function renderMotto() {
   clear(el.motto)
@@ -1219,7 +1390,21 @@ function bind() {
     if (state.conversationId) void api.stop(state.conversationId).catch(() => {})
   })
 
+  // 在光标处插一个 @：派活时点名成员用的，不是装饰。
+  el.at?.addEventListener('click', () => {
+    const start = el.input.selectionStart ?? el.input.value.length
+    const end = el.input.selectionEnd ?? start
+    el.input.value = el.input.value.slice(0, start) + '@' + el.input.value.slice(end)
+    el.input.setSelectionRange(start + 1, start + 1)
+    el.input.focus()
+    autosize()
+  })
+
   el.newChat.addEventListener('click', openNewChat)
+
+  // 设置页开关：右上角齿轮进，左上角「回群聊」出。
+  el.settingsButton.addEventListener('click', () => setOpenSettings(!state.settingsOpen))
+  el.settingsBack.addEventListener('click', () => setOpenSettings(false))
 
   let searchTimer = 0
   el.chatSearch.addEventListener('input', () => {
