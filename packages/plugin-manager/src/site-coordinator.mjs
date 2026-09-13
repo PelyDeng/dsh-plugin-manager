@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { acquireSourceLock, sourceLockCommand, sourceRecoveryIdentity } from './site-lock.mjs';
 import { canonical } from './state.mjs';
-import { presentBuild } from './site-output.mjs';
+import { buildStep, presentBuild } from './site-output.mjs';
 import { siteArguments, readSitePointer, readSiteRecord, verifySavedTooling, needsSiteResume } from './site-record.mjs';
 import { readFrameworkConfig, resolveSiteConfig } from './framework-config.mjs';
 
@@ -45,7 +45,7 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight, d
   resolveSiteConfig(root, config, { inputKind, source: framework });
   if (inputKind === 'archives' && options['rebuild-plugins']) throw new Error('--rebuild-plugins 仅用于 source；archives 请替换完整发布目录。');
   const prepare = preflight ?? (await import('./site-platform.mjs')).prepareSiteRelease;
-  const prepared = await prepare(root, { inputKind, recovery: Boolean(recoveryRecord) });
+  const prepared = await buildStep('准备站点运行时', () => prepare(root, { inputKind, recovery: Boolean(recoveryRecord) }));
   const env = prepared?.env ?? process.env;
   const path = resolve(root, '.local/source-release.node.lock');
   const recovery = sourceRecoveryIdentity();
@@ -56,7 +56,7 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight, d
   process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
   try {
     unlock.update({ recovery });
-    if (beforeBuild && inputKind === 'source' && !options.resume && !options.recover) await beforeBuild(root, buildArgs, env);
+    if (beforeBuild && inputKind === 'source' && !options.resume && !options.recover) await buildStep('同步 Gitee 集成版本', () => beforeBuild(root, buildArgs, env));
     if (interrupted) return interrupted === 'SIGINT' ? 130 : 143;
     let entry = resolve(root, 'deploy/scripts/build.mjs'), workerArgs = [...buildArgs];
     if (recoveryRecord?.schemaVersion === 3) entry = verifySavedTooling(recoveryRecord).worker;
