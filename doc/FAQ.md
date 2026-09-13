@@ -100,3 +100,11 @@ Windows 使用根 build.ps1，macOS/Linux 使用 build.sh。新部署包的默�
 ## 旧服务尚未停止，为什么提示使用 --resume 或保留源码锁？
 
 prepared 后的挂载/权限检查也可能失败，状态不能仅凭“尚未停服”判断。保持原受管输入后用 resume；同包业务参数本身错误则用单独 recover。遗留锁先通过 doctor 核验归属，profile unlock 不能替代站点解锁。完整规则只在[恢复说明](../deploy/README.md#安装与恢复)维护。
+
+## 类型检查报 TS2717，说同一个属性被声明了两次？
+
+那是「同一个包被两条路径解析」的症状：TypeScript 按解析到的路径区分模块身份，kit 的事件通道声明（`src/events.ts` 里的 `declare module '@deepseek-ai/cordis'`）一旦被加载两次，就会报 TS2717，而两个类型看起来完全一样。做法是让每个事件通道只在 kit 的 `src/events.ts` 里声明一次，谁需要就导入那个模块；新增通道也加在那里，不要在别的文件里重复写。`pnpm check` 与打包遇到这个报错时会直接给出这条提示。
+
+## 打包报 MISSING_EXPORT，说某个类型没有导出？
+
+源码型内部包（只有 `src`、不产出声明文件）被按包名导入时，打包器找不到 `index.d.ts`，就把「没有这个导出」当成事实。把这类导入改成源码相对路径（例如 `../packages/common/src/participant.ts`），或者让该包像 kit 一样产出声明文件并在 `package.json` 里声明 `types`。打包与检查失败时同样会给出这条提示。

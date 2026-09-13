@@ -2,7 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseOptions, sourcePlugins } from './plugins.mjs';
-import { runPnpm, runPnpmAsync } from './pnpm.mjs';
+import { diagnoseToolFailure } from './build-diagnostics.mjs';
+import { runPnpm, runPnpmAsync, runPnpmCaptured } from './pnpm.mjs';
 export { runPnpm } from './pnpm.mjs';
 
 const TASK_LABELS = { build: '构建', check: '检查', clean: '清理' };
@@ -24,11 +25,32 @@ export function replayPluginOutput(id, { stdout = '', stderr = '' } = {}) {
   }
 }
 
+/** 失败时补上「已知形态 → 怎么办」的提示；没有命中就保持原样。 */
+function withDiagnosis(id, error) {
+  const hint = diagnoseToolFailure(`${error?.captured?.stdout ?? ''}\n${error?.captured?.stderr ?? ''}`);
+  if (hint) process.stderr.write(`[${id}] 已知问题提示：\n${hint.split('\n').map(line => `[${id}] ${line}`).join('\n')}\n`);
+  return error;
+}
+
 /** Execute build once before checks; step optionally wraps each synchronous task for progress display. */
 export function runPluginTask(root, plugin, action, step = (_label, run) => run()) {
   for (const task of tasks(action)) {
     console.log(`[${plugin.id}] pnpm ${task}`);
-    step(taskLabel(task, plugin), () => runPnpm(taskArgs(plugin, task), resolve(root, plugin.directory ?? '.')));
+    // 检查这一步输出少、但对报错的可读性要求最高：捕获后再回放，好在失败时补提示。
+    // 构建与清理保持继承 stdio，长任务的过程输出不该被吞到最后一次性打印。
+    if (task !== 'check') {
+      step(taskLabel(task, plugin), () => runPnpm(taskArgs(plugin, task), resolve(root, plugin.directory ?? '.')));
+      continue;
+    }
+    step(taskLabel(task, plugin), () => {
+      try {
+        const captured = runPnpmCaptured(taskArgs(plugin, task), resolve(root, plugin.directory ?? '.'));
+        replayPluginOutput(plugin.id, captured);
+      } catch (error) {
+        replayPluginOutput(plugin.id, error.captured);
+        throw withDiagnosis(plugin.id, error);
+      }
+    });
   }
 }
 
@@ -37,7 +59,12 @@ export async function runPluginTaskAsync(root, plugin, action, step = (_label, r
   for (const task of tasks(action)) {
     console.log(`[${plugin.id}] pnpm ${task}`);
     await step(taskLabel(task, plugin), async () => {
-      replayPluginOutput(plugin.id, await runPnpmAsync(taskArgs(plugin, task), resolve(root, plugin.directory ?? '.')));
+      try {
+        replayPluginOutput(plugin.id, await runPnpmAsync(taskArgs(plugin, task), resolve(root, plugin.directory ?? '.')));
+      } catch (error) {
+        // pnpm 层已经把捕获到的输出原样转发过，这里只补提示。
+        throw withDiagnosis(plugin.id, error);
+      }
     });
   }
 }
