@@ -62,7 +62,9 @@ const TASK_TRANSITIONS: Readonly<Record<TaskState, readonly TaskState[]>> = {
   queued: ['running', 'cancelled', 'failed'],
   running: ['waiting_user', 'summarizing', 'external_pending', 'partial', 'completed', 'failed', 'cancelled'],
   waiting_user: ['running', 'summarizing', 'external_pending', 'partial', 'completed', 'failed', 'cancelled'],
-  summarizing: ['external_pending', 'partial', 'completed', 'failed', 'cancelled'],
+  // `summarizing` 可以回到 `running`：汇总跑到一半又进来一条补充时，这份结论作废，任务回到
+  // 执行中，由那条补充自己的回合继续 —— 停在「在写总结」会让大家以为还有人在写。
+  summarizing: ['running', 'external_pending', 'partial', 'completed', 'failed', 'cancelled'],
   external_pending: [],
   partial: [],
   completed: [],

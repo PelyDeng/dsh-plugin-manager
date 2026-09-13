@@ -510,6 +510,47 @@ export class TaskStore {
   }
 
   /**
+   * 写下「这一轮干完了」的终态，**并与输入版本核对放在同一个事务里**。
+   *
+   * 只在收尾开始前核对一次是不够的：汇总那一轮是异步的，跑到一半又进来一条补充时，那份
+   * 结论已经不算数了 —— 它总结的是**旧范围**。写入与核对必须原子完成，否则旧结论会盖在
+   * 「还有一条新说法没处理」上面，任务报成完成、新目标被丢掉。
+   *
+   * 只对宣称成功的终态（`completed` / `partial`）设这道关卡：取消与失败没有宣称成功，
+   * 可以带着未处理的输入结束 —— 那一轮的输入留给后续处理。
+   *
+   * @returns 写成功返回 `true`；还有已接受未处理的输入时**什么都不写**并返回 `false`。
+   */
+  commitTaskState(id: string, state: TaskState, patch: { note?: string; summary?: string; error?: string } = {}): boolean {
+    if (state !== 'completed' && state !== 'partial') {
+      this.setTaskState(id, state, patch)
+      return true
+    }
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.db.prepare(`SELECT accepted_version AS accepted, processed_version AS processed
+        FROM tasks WHERE id=?`).get(id) as unknown as { accepted: number; processed: number } | undefined
+      if (row === undefined || row.accepted > row.processed) {
+        this.db.exec('ROLLBACK')
+        return false
+      }
+      this.db.prepare(`UPDATE tasks SET state=?, updated_at=?,
+          note=COALESCE(?,note), summary=COALESCE(?,summary), error=COALESCE(?,error),
+          finished_at=COALESCE(finished_at,?)
+        WHERE id=?`).run(
+        state, Date.now(),
+        patch.note ?? null, patch.summary ?? null, patch.error ?? null,
+        Date.now(), id,
+      )
+      this.db.exec('COMMIT')
+      return true
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+
+  /**
    * 更新子任务状态。`startedAt` 在首次进入执行态时写入，之后保持不变。
    *
    * `artifacts` 与 `conversationId` 只在传了的时候覆盖：状态事件是多次上报的，后面那些

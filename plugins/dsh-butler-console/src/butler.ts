@@ -2364,7 +2364,23 @@ export class ButlerConsole {
       summaryText = reports.length === 0 ? '这次没有拿到可用的子任务结果。' : reports.join('\n\n')
     }
     const error = failed === 0 ? '' : `${failed} 个子任务失败`
-    this.store.setTaskState(taskId, taskState, { summary: summaryText, error })
+    /**
+     * 汇总跑完再核一次输入版本，而且**核对与写入在同一个事务里**。
+     *
+     * 开头那道屏障只挡得住「开始汇总时就已经有未处理输入」的情况。汇总这一轮本身是异步的，
+     * 正好在它跑的这段时间里进来的补充，只能在这里拦下来 —— 那份结论是按**旧范围**总结的，
+     * 写下去就等于用旧结论盖住新目标，还把任务报成完成。
+     */
+    if (!this.store.commitTaskState(taskId, taskState, { summary: summaryText, error })) {
+      // 结论作废，但它已经边流边出现在页面上了：如实说明它只是草稿，不冒充最终答复。
+      this.store.setTaskState(taskId, 'running')
+      yield {
+        type: 'chat', role: 'butler',
+        text: '老板又补了一句，刚那份结论先当草稿 —— 等新的说法处理完再给你结论。',
+        time: Date.now(),
+      }
+      return
+    }
     yield { type: 'summary', taskId, text: summaryText, state: taskState, error, time: Date.now() }
   }
 

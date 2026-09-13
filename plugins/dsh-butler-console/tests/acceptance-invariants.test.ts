@@ -187,4 +187,40 @@ describe('收尾的输入屏障', () => {
     })) { /* 同上。 */ }
     expect(f.task().state).toBe('cancelled')
   })
+
+  it('汇总跑到一半进来的补充，让这份结论作废（写入与核对同事务）', async () => {
+    const f = fixture()
+    f.store.setSubtaskState('task-invariants', 's1', 'dispatched')
+    f.store.setSubtaskState('task-invariants', 's1', 'succeeded', { result: '旧范围结果' })
+    /**
+     * 汇总那一轮是异步的：这里用替身把「跑到一半」这一刻撑开，让补充正好落在这段窗口里。
+     * 只在汇总开始前核对是不够的 —— 那份结论按旧范围总结，写下去就等于用旧结论盖住新目标。
+     */
+    const console_ = f.service as unknown as {
+      summarize: (...args: unknown[]) => AsyncGenerator<unknown>
+      closeTask: (input: unknown) => AsyncGenerator<unknown>
+    }
+    console_.summarize = async function* () {
+      expect(f.task().state).toBe('summarizing')
+      await Promise.resolve()
+      f.store.addInput(actor, 'task-invariants', '改成上周', 'supplement', 1)
+      yield { type: 'chat', role: 'butler', text: '按旧范围写的结论', time: Date.now() }
+    }
+    const events: { type?: string; text?: string }[] = []
+    for await (const event of console_.closeTask({
+      taskId: 'task-invariants', conversation: { id: conversationId }, goal: '原来的目标',
+      subtasks: f.task().subtasks, reports: ['旧范围结果'],
+      signal: new AbortController().signal, stopped: false,
+    })) events.push(event as { type?: string })
+    const task = f.task()
+    expect({
+      terminal: ['completed', 'partial', 'external_pending'].includes(task.state),
+      accepted: task.acceptedVersion, processed: task.processedVersion,
+    }).toEqual({ terminal: false, accepted: 2, processed: 1 })
+    // 结论不冒充最终答复：没有 summary 事件，只有一句「先当草稿」。
+    expect(events.some(event => event.type === 'summary')).toBe(false)
+    expect(events.some(event => event.type === 'chat' && (event.text ?? '').includes('先当草稿'))).toBe(true)
+    // 任务回到执行中，由那条补充自己的回合继续 —— 停在「在写总结」等于骗人。
+    expect(task.state).toBe('running')
+  })
 })
