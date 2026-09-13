@@ -39,7 +39,7 @@ test('successful builds show stages and summary while retaining noisy tool outpu
   assert.ok(f.text().includes('发布已完成\n访问地址：https://example.test\n'));
   // 阶段耗时表跟在最后：时间花在哪不必再回头 grep 进度行。
   assert.ok(f.text().indexOf('各阶段耗时') > f.text().indexOf('发布已完成'), 'summary comes after the release record');
-  assert.match(f.text(), /各阶段耗时（含进程启动）：\n  构建示例插件 +00:00:\d{2}\.\d\n  准备镜像 +00:00:\d{2}\.\d\n  合计 +00:00:\d{2}\.\d\n$/);
+  assert.match(f.text(), /各阶段耗时（含进程启动）：\n  构建示例插件 +00:00:\d{2}\.\d\n  准备镜像 +00:00:\d{2}\.\d\n  相加（逐项） +00:00:\d{2}\.\d\n  墙钟（首末阶段之间） +00:00:\d{2}\.\d\n$/);
   assert.doesNotMatch(f.text(), /估算|compiler-detail|tool-warning|DSH_BUILD_PROGRESS|\x1b|\r/);
   assert.match(f.log().text, /compiler-detail/);
   assert.match(f.log().text, /tool-warning/);
@@ -145,11 +145,11 @@ test('stage data can overlap, so parallel packaging shows one line per running s
   for (const label of ['打包插件 blog', '打包插件 closedoff']) {
     assert.match(f.text(), new RegExp(`${label}已完成 \\[====================\\] 100% +耗时 \\d+:\\d{2}:\\d{2}\\.\\d\\n`));
   }
-  // 两个阶段各自计时，但真实花掉的是重叠后的墙钟时间，表里必须这么报。
-  const total = f.text().match(/总计（阶段并行，按墙钟计）\s+(\d+):(\d{2}):(\d{2})\.(\d)\n/);
-  assert.ok(total, 'overlapping stages report wall clock instead of a sum');
+  // 两个阶段各自计时，但真实花掉的是重叠后的墙钟时间：两行都报，墙钟必须覆盖两者。
+  const total = f.text().match(/墙钟（首末阶段之间）\s+(\d+):(\d{2}):(\d{2})\.(\d)\n/);
+  assert.ok(total, 'the summary reports wall clock');
   assert.ok(Number(total[3]) >= 1, `wall clock covers both stages, got ${total[0]}`);
-  assert.doesNotMatch(f.text(), /合计/);
+  assert.match(f.text(), /相加（逐项） +00:00:0[12]\.\d\n/);
   for (const line of f.text().split(/\r|\n/).filter(line => /\d+%/.test(line))) {
     const visible = line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
     assert.equal([...visible].reduce((sum, char) => sum + (/[\p{Script=Han}（）]/u.test(char) ? 2 : 1), 0), 99);
@@ -184,9 +184,9 @@ test('stage ids that collide across reporting processes still count as concurren
   for (const label of ['构建插件 auth', '准备部署配置', '安装插件依赖', '构建插件 agents-group', '构建插件 example', '构建部署镜像']) {
     assert.equal((f.text().match(new RegExp(`${label}已完成`, 'g')) ?? []).length, 1, `${label} keeps exactly one completion`);
   }
-  // 撞号的两步是并行的，汇总必须按墙钟报，而不是把互不重叠的耗时相加。
-  assert.match(f.text(), /总计（阶段并行，按墙钟计）/);
-  assert.doesNotMatch(f.text(), /合计/);
+  // 撞号的两步是并行的：汇总里逐项相加与墙钟都在，重叠的阶段不会被算成两次串行。
+  assert.match(f.text(), /相加（逐项） +00:00:\d{2}\.\d\n/);
+  assert.match(f.text(), /墙钟（首末阶段之间） +00:00:\d{2}\.\d\n/);
 });
 
 test('termination reaches a synchronous tool and the presenter retains the signal exit code', { skip: process.platform === 'win32' }, async t => {
