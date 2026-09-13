@@ -1,0 +1,14 @@
+{
+  "/closedoff-qa/identity": { "key": "page-probe-identity" },
+  "/closedoff-qa/models": { "models": [], "default": null },
+  "/closedoff-qa/conversations": { "items": [], "total": 0 },
+  "/closedoff-qa/history": { "history": [], "conversationId": "probe-conversation" },
+  "/closedoff-qa/stop": { "stopped": true },
+  "/closedoff-qa/chat": { "accepted": false },
+  "/auth/api/session": {
+    "user": { "id": "u-1", "username": "page-probe", "role": "admin", "mustChangePassword": false, "enabled": true, "grants": ["closedoff"] },
+    "csrf": "page-probe-csrf",
+    "consoleAccess": false,
+    "accessTargets": []
+  }
+}

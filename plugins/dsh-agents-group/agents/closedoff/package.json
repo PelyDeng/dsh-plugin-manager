@@ -29,7 +29,7 @@
     "dev": "node scripts/dev-watch.mjs",
     "check:web": "node --check web/trajectory.js && node --check web/app.js",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run && node --test tests/page-layout.test.mjs",
     "check": "pnpm typecheck && pnpm check:web",
     "clean": "node ../../../../scripts/clean-plugin.mjs dist web/assets"
   },
