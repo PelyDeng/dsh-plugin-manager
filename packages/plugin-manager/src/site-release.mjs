@@ -1,7 +1,7 @@
 /** One site operation for source and archive inputs, including saved-tool recovery. */
 import { randomUUID } from 'node:crypto';
 import { cpSync, existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { commandSpec, normalizeEnvironment } from './process.mjs';
@@ -20,6 +20,26 @@ import { initializeArchiveSettings, freezeSiteInputs, verifySiteInputs, material
 import { buildStep, buildMessage } from './site-output.mjs';
 
 let interruptedChild = false;
+
+/**
+ * 说明这一轮实际执行的是哪份管理工具。
+ *
+ * 发布可能由**当前源码**执行，也可能由发布目录里安装好的**工具快照**执行（快照由
+ * `scripts/manager-tooling.mjs` 打包并安装）。两者行为不同却看不出区别，曾出现「源码明明
+ * 改了、这轮却按旧行为跑」的困惑，所以这里把它打出来。
+ */
+export function describeTooling(modulePath, record) {
+  const cli = resolve(fileURLToPath(modulePath));
+  const toolRoot = typeof record?.toolRoot === 'string' ? resolve(record.toolRoot) : null;
+  const snapshot = toolRoot !== null && cli.startsWith(`${toolRoot}${sep}`);
+  return [
+    `执行工具：${snapshot ? `工具快照 ${toolRoot}` : '当前源码检出'}`,
+    `工具入口：${cli}`,
+    ...(toolRoot === null ? [] : [`工具目录：${toolRoot}`]),
+    ...(typeof record?.managerHash === 'string' ? [`工具归档摘要：${record.managerHash.slice(0, 16)}…`] : []),
+  ].join('\n');
+}
+
 function command(bin, args, options) {
   const cli = commandSpec(bin, { env: options?.env, cwd: options?.cwd });
   const result = spawnSync(cli.command, [...cli.prefix, ...args], { stdio: 'inherit', windowsHide: true, ...options });
@@ -115,6 +135,7 @@ export function releaseSite({ root, config, resume = false, recover = false, dat
   let record = resume ? predecessor : { schemaVersion: 3, inputKind, operation, siteOperation, sitePath, sitePaths, siteHash: fileHash(sitePath), status: 'building', previous: active, previousRuntime: previous,
     ...(!existsSync(resolve(resolvedSite.profileRoot, PENDING)) ? { previousStateHash: initialState ? hash(JSON.stringify(initialState)) : null } : {}), runtime };
   context.record = record;
+  buildMessage(describeTooling(import.meta.url, record));
   const recordPath = resolve(operation, 'result.json');
   const persist = (publish = true) => { saveJson(recordPath, record); if (publish) saveJson(pointer, { operation, status: record.status }); };
   if (!recover) persist();

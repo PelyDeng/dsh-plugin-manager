@@ -3,13 +3,32 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, symlinkSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { hash, tarCommand } from '../src/state.mjs';
 import { discoverArchives, validateRuntimeIndex } from '../src/site-archives.mjs';
-import { releaseSite } from '../src/site-release.mjs';
+import { releaseSite, describeTooling } from '../src/site-release.mjs';
 import { fileHash, readSitePointer, readSiteRecord, verifySavedTooling } from '../src/site-record.mjs';
 
 const image = `registry.test/runtime@sha256:${'a'.repeat(64)}`, hostCommit = 'b'.repeat(40);
+
+test('发布日志能分辨这轮跑的是源码还是工具快照', t => {
+  const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'tooling-origin-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const toolRoot = resolve(root, 'operation/tooling');
+  const installed = resolve(toolRoot, 'node_modules/@dsh-plugin-manager/plugin-manager/dist/site-release.mjs');
+  mkdirSync(dirname(installed), { recursive: true });
+  writeFileSync(installed, 'export {};');
+  const snapshot = describeTooling(pathToFileURL(installed).href, { toolRoot, managerHash: 'a'.repeat(64) });
+  assert.match(snapshot, /执行工具：工具快照/);
+  assert.match(snapshot, /工具归档摘要：a{16}…/);
+  const source = describeTooling(pathToFileURL(resolve(root, 'packages/plugin-manager/src/site-release.mjs')).href, { toolRoot, managerHash: 'b'.repeat(64) });
+  assert.match(source, /执行工具：当前源码检出/);
+  // 老记录没有 toolRoot 时只说来源，不编造目录与摘要。
+  const legacy = describeTooling(pathToFileURL(installed).href, { schemaVersion: 2 });
+  assert.match(legacy, /执行工具：当前源码检出/);
+  assert.doesNotMatch(legacy, /工具目录|工具归档摘要/);
+});
 const entry = ['node', '/opt/plugin-manager/node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs', 'container-start', '--root', '/opt/plugin-project'];
 function fixture(t) {
   const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'site archives 中文 ')));
