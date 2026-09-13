@@ -1,4 +1,4 @@
-import { LOCK, OWNER, PENDING, STATE, atomicJSON, canonical, digestPattern, fail, hash, idPattern, json, packageName, readArchive, readOptional, same, synchronizedStopped, within } from './state.mjs';
+import { LOCK, OWNER, PENDING, STATE, atomicJSON, canonical, digestPattern, fail, hash, idPattern, json, openArchiveMembers, packageName, readOptional, same, synchronizedStopped, within } from './state.mjs';
 import { dirname, join, resolve, sep } from 'node:path';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { acquireFileLock } from './lock.mjs';
@@ -29,14 +29,20 @@ export function installedMatches(root, plugin) {
   if (anchoredSpec(root, manifest.dependencies[plugin.package]) !== reference) return false;
   const packageRoot = join(root, 'node_modules', plugin.package);
   if (!existsSync(join(packageRoot, 'package.json'))) return false;
-  for (const file of plugin.verifyFiles) {
+  const files = plugin.verifyFiles.filter(file => file !== 'package.json');
+  for (const file of files) {
     const target = join(packageRoot, file);
     if (!existsSync(target) || !within(packageRoot, target) || !statSync(target).isFile()) return false;
-    let expected;
-    try { expected = readArchive(plugin.archivePath, ['-xzOf', '-', `package/${file}`], statSync(target).size + 1024 * 1024); }
-    catch { return false; } // An unreadable archive cannot verify the installed file.
-    if (!readFileSync(target).equals(expected)) return false;
   }
+  // 一次解压取出全部待校验成员：逐个成员各跑一次 tar 会把整包重解压 N 遍。
+  let packed;
+  try { packed = openArchiveMembers(plugin.archivePath, files.map(file => `package/${file}`)); }
+  catch { return false; } // An unreadable archive cannot verify the installed file.
+  try {
+    for (const file of files) {
+      if (!readFileSync(join(packageRoot, file)).equals(packed.read(`package/${file}`))) return false;
+    }
+  } finally { packed.close(); }
   return true;
 }
 
