@@ -167,26 +167,46 @@ test('emits one bound native conversation link before sending and preserves its 
   assert.deepEqual(result.artifacts, [artifact])
 })
 
-test('成员发言按增量转给协作入口：同段只发新增，换段从头追加', async t => {
+test('成员发言按增量转给协作入口：同段只发新增，换段整段追加且不重复', async t => {
   const f = fixture(t); f.auto = false
   const progress = []
   const running = f.provider().run(input({ onProgress: value => progress.push(value) }))
   await tick()
   const id = [...f.active.keys()][0]
-  const live = text => { for (const listener of [...f.listeners]) if (listener.id === id) listener.send({ type: 'live', live: { text, reasoning: 'PRIVATE_LIVE_REASONING' } }) }
-  live('先看资料。')
-  live('先看资料。再核对来源。')
-  // 这一步结束，下一步的实时正文重新累积：增量继续追加，不重发已经发过的字。
-  live('')
-  live('结论是甲稿更完整。')
-  f.complete(id, '结论是甲稿更完整。')
+  // 通道只在分片到达时发事件，累积值就是本步到目前的完整正文（见 chat.mjs 的 agent/assistant-stream 订阅）。
+  const live = value => { for (const listener of [...f.listeners]) if (listener.id === id) listener.send({ type: 'live', live: value }) }
+  live({ text: '先看资料。', reasoning: 'PRIVATE_LIVE_REASONING' })
+  live({ text: '先看资料。再核对来源。', reasoning: 'PRIVATE_LIVE_REASONING' })
+  // 下一步重新累积：它不以已发布内容开头，整段追加；页面不该丢掉或重复这段开头。
+  live({ text: '结论是甲稿更完整。', reasoning: 'PRIVATE_LIVE_REASONING' })
+  live({ text: '结论是甲稿更完整。建议先改标题。', reasoning: 'PRIVATE_LIVE_REASONING' })
+  f.complete(id, '结论是甲稿更完整。建议先改标题。')
   const result = await running
   const deltas = progress.filter(value => value.kind === 'delta').map(value => value.delta)
   assert.equal(result.status, 'completed')
-  assert.deepEqual(deltas, ['先看资料。', '再核对来源。', '结论是甲稿更完整。'])
-  assert.equal(deltas.join(''), '先看资料。再核对来源。结论是甲稿更完整。')
+  assert.deepEqual(deltas, ['先看资料。', '再核对来源。', '结论是甲稿更完整。', '建议先改标题。'])
+  assert.equal(deltas.join(''), '先看资料。再核对来源。结论是甲稿更完整。建议先改标题。')
   assert.ok(progress.filter(value => value.kind === 'delta').every(value => value.conversationId === undefined))
   assert.doesNotMatch(JSON.stringify(progress), /PRIVATE_LIVE_REASONING/)
+})
+
+test('只带推理的分片把正文基准归零，不重发已经发过的正文', async t => {
+  const f = fixture(t); f.auto = false
+  const progress = []
+  const running = f.provider().run(input({ onProgress: value => progress.push(value) }))
+  await tick()
+  const id = [...f.active.keys()][0]
+  const live = value => { for (const listener of [...f.listeners]) if (listener.id === id) listener.send({ type: 'live', live: value }) }
+  live({ text: '今天共有 ', reasoning: '' })
+  // 下一条只带推理：正文是空的，说明这一步的正文还没开始，基准跟着归零。
+  live({ text: '', reasoning: '换一步再看。' })
+  live({ text: '今天共有 12 辆车入园。', reasoning: '换一步再看。' })
+  f.complete(id, '今天共有 12 辆车入园。')
+  await running
+  const deltas = progress.filter(value => value.kind === 'delta').map(value => value.delta)
+  // 归零后这一条整段发；没有归零的话它会被当成「只多了后半段」，页面上的字就缺了开头。
+  assert.deepEqual(deltas, ['今天共有 ', '今天共有 12 辆车入园。'])
+  assert.equal(deltas.join(''), '今天共有 今天共有 12 辆车入园。')
 })
 
 test('cancel or revoke before initial progress emits no conversation link or request', async t => {

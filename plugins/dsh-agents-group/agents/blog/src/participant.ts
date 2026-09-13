@@ -79,9 +79,10 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
       /**
        * 已经把多少实时正文交给协作入口。
        *
-       * 博客的实时通道给的是**本步累积**的正文，不是增量；每一步结束还会清空重来。
-       * 所以这里自己算增量：同一段只发新增部分，换段就从头追加，页面看到的是这一轮
-       * 完整发言，而不是每步各来一份。
+       * 博客的实时通道给的是**本步累积**的正文，不是增量，而且清空重来时不单独发一条：
+       * 新一轮的累积不再以已发布内容开头时整段追加。空正文只出现在只带推理的片段里，
+       * 那种片段同时说明本步正文还是空的，基准跟着归零。判断都靠前缀，页面看到的是
+       * 这一轮完整发言。
        */
       let sentLive = ''
       const forwardLive = (event: unknown) => {
@@ -89,7 +90,7 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
         if (typeof event !== 'object' || event === null || (event as { type?: unknown }).type !== 'live') return
         const live = (event as { live?: { text?: unknown } | null }).live
         const text = typeof live?.text === 'string' ? live.text : ''
-        if (text === '') { sentLive = ''; return }
+        // 累积值不以已发布内容开头（换段，或只带推理的片段把正文清空）就整段追加。
         const next = text.startsWith(sentLive) ? text.slice(sentLive.length) : text
         sentLive = text
         if (next === '') return
