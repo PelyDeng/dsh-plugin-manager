@@ -20,8 +20,10 @@ function fixture(t) {
 test('source argument validation rejects unsupported, duplicate and missing options', () => {
   assert.deepEqual(sourceArguments(['--config', '中文 with spaces.conf', '--resume']), ['--config', '中文 with spaces.conf', '--resume']);
   assert.deepEqual(sourceArguments(['--rebuild-plugins', 'alpha,charlie']), ['--rebuild-plugins', 'alpha,charlie']);
+  // `auto` 是哨兵值：重建集由判定自己算，因此只能单独出现。
+  assert.deepEqual(sourceArguments(['--rebuild-plugins', 'auto']), ['--rebuild-plugins', 'auto']);
   for (const args of [['--config'], ['--config', '--resume'], ['--resume', '--resume'], ['--unknown'], ['other']]) assert.throws(() => sourceArguments(args), /argument/);
-  for (const value of ['', 'all', 'none', 'dsh-console', 'alpha,alpha', 'alpha,', 'Alpha', 'alpha beta', '../alpha']) assert.throws(() => sourceArguments(['--rebuild-plugins', value]), /argument/);
+  for (const value of ['', 'all', 'none', 'dsh-console', 'auto,alpha', 'alpha,auto', 'alpha,alpha', 'alpha,', 'Alpha', 'alpha beta', '../alpha']) assert.throws(() => sourceArguments(['--rebuild-plugins', value]), /argument/);
   assert.throws(() => sourceArguments(['--resume', '--rebuild-plugins', 'alpha']), /--resume/);
   assert.throws(() => sourceArguments(['--rebuild-plugins', 'alpha', '--rebuild-plugins', 'beta']), /argument/);
 });

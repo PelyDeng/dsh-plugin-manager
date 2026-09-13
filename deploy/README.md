@@ -19,9 +19,9 @@ bash build.sh
 ### 按需重建
 
 <!-- excerpt:source-rebuild -->
-日常 `pnpm build --plugins c` 只构建 c，`pnpm package --plugins "c,d" --output <新目录>` 只交付 c、d。源码部署使用 `./build.sh --rebuild-plugins c`；Windows 使用 `.\build.ps1 --rebuild-plugins c`，多个 ID 使用 `.\build.ps1 --rebuild-plugins "c,d"`，Bash 同样可加引号。所有逗号分隔选集都加引号，避免 PowerShell 将其拆成数组。保留站点 a,b,c,d 完整选集，只有指定插件重建，其余复用可核实旧归档，新清单仍完整。省略参数全量构建；不接受空项、重复、all/none 或选集外 ID。
+日常 `pnpm build --plugins c` 只构建 c，`pnpm package --plugins "c,d" --output <新目录>` 只交付 c、d。源码部署使用 `./build.sh --rebuild-plugins c`；Windows 使用 `.\build.ps1 --rebuild-plugins c`，多个 ID 使用 `.\build.ps1 --rebuild-plugins "c,d"`，Bash 同样可加引号。所有逗号分隔选集都加引号，避免 PowerShell 将其拆成数组。保留站点 a,b,c,d 完整选集，只有指定插件重建，其余复用可核实旧归档，新清单仍完整。省略参数全量构建；不接受空项、重复、all/none 或选集外 ID。**不想点名就用 `--rebuild-plugins auto`**：重建集由判定自己算，判不出来时退回整套重建而不是让发布失败；点名选集时判定拒绝会一次给出补全后的完整命令（`--rebuild-plugins "a,b,c"`），不用失败一次补一个。
 
-复用需与活动站点对应的 ready 基线、构建环境、宿主来源与旧归档均可核验。判定按「改动落在哪些插件的构建输入里」：插件目录、它声明的 `workspace:` 依赖（含间接依赖）、仓库级共享输入（`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.npmrc`、`.gitattributes`），以及清单 `deepseekPlugin.buildInputs` 列出的路径；落在这些之外的变化不再阻塞复用。没声明 `buildInputs` 的插件读取范围未知，仍要求改动全部落在本次重建的插件目录内。本地依赖按传递关系校验，不得靠安装钩子重建。不会自动扩大选集或静默全量。没有基线时先正常全量构建；archives 成功记录不充当 source 基线，切回 source 首次必须全量。
+复用需与活动站点对应的 ready 基线、构建环境、宿主来源与旧归档均可核验。判定按「改动落在哪些插件的构建输入里」：插件目录、它声明的 `workspace:` 依赖（含间接依赖）、仓库级共享输入（`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.npmrc`、`.gitattributes`），以及清单 `deepseekPlugin.buildInputs` 列出的路径；落在这些之外的变化不再阻塞复用。没声明 `buildInputs` 的插件读取范围未知，仍要求改动全部落在本次重建的插件目录内。本地依赖按传递关系校验，不得靠安装钩子重建。点名选集时不会自动扩大选集或静默全量；`auto` 是显式要求扩容的形态，它按同一套判定迭代出重建集，判定拿不到可靠基线（没有活动部署、宿主或记录对不上、声明无法核验）时整套重建并在日志里说明原因。没有基线时先正常全量构建；archives 成功记录不充当 source 基线，切回 source 首次必须全量。
 
 管理器工具归档也按输入复用：`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`packages/plugin-kit`、`packages/plugin-manager` 的已跟踪内容没变、且**活动部署**记录里的归档摘要仍与磁盘一致时，直接复用那份归档再安装一次（省掉 18.6 秒的 pnpm 重建）；任何一条核验不过就照常重新构建，并在日志里写明原因（例如「管理器构建输入已变化」）。基线取活动部署而不是最近一次操作记录，因为后者可能正是失败的那次。
 

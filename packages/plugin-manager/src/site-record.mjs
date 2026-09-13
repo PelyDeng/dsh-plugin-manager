@@ -33,7 +33,9 @@ export function siteArguments(args) {
   }
   if (options['rebuild-plugins']) {
     const ids = options['rebuild-plugins'].split(',');
-    if (ids.some(id => !/^[a-z][a-z0-9-]*$/.test(id) || ['all', 'none', 'dsh-console'].includes(id)) || new Set(ids).size !== ids.length) throw new Error('Invalid --rebuild-plugins argument: use distinct plugin IDs separated by commas.');
+    // `auto` 是哨兵值：重建集由判定自己算，因此必须单独出现。
+    const auto = ids.length === 1 && ids[0] === 'auto';
+    if (!auto && (ids.some(id => !/^[a-z][a-z0-9-]*$/.test(id) || ['all', 'none', 'auto', 'dsh-console'].includes(id)) || new Set(ids).size !== ids.length)) throw new Error('Invalid --rebuild-plugins argument: use distinct plugin IDs separated by commas, or auto.');
   }
   if ([options.resume, options.recover, options['rebuild-plugins']].filter(Boolean).length > 1) throw new Error('--resume、--recover 与 --rebuild-plugins 不能同时使用。');
   if (Boolean(options.recover) !== Boolean(options['data-compatible'])) throw new Error('--recover 必须与 --data-compatible 一起使用。');

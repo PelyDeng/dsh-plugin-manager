@@ -11,7 +11,16 @@ const json = path => JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''
 const hash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 const commitPattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const imagePattern = /^(?:sha256:[a-f0-9]{64}|\S+@sha256:[a-f0-9]{64})$/;
-const refuse = reason => { throw new Error(`不能复用插件产物：${reason}。请执行不带 --rebuild-plugins 的全量构建。`); };
+const refuse = reason => {
+  const error = new Error(`不能复用插件产物：${reason}。请执行不带 --rebuild-plugins 的全量构建。`);
+  // 自动模式要把「为什么复用不了」原样报出去，而不是再解析一遍自己的提示文案。
+  error.reuseReason = reason;
+  throw error;
+};
+/** 判定拒绝时把「补哪些插件就能复用」一并给出：重建集由判定自己算，不该让运维猜。 */
+const refuseSelection = (reasons, suggestion) => {
+  throw new Error(`不能复用插件产物：${reasons.join('；')}。请改用 --rebuild-plugins "${suggestion}"（补进这些插件后其余产物仍可复用），或用 --rebuild-plugins auto 让判定自己补全。`);
+};
 
 /** This pre-install guard deliberately has no kit or workspace dependency. */
 export function assertSelectiveInstallSafe(root) {
@@ -143,16 +152,28 @@ function inputReason(owner) {
   return '构建输入发生变化';
 }
 
-/** Synchronous lazy loading lets bootstrap import the install guard before kit exists. */
-export function preparePluginReuse({ root, previous, active, site, revision, hostCommit, buildEnvironment, rebuilt, git }) {
+/**
+ * 复用活动部署的插件归档。
+ *
+ * `rebuilt` 是运维点名的重建集；`auto` 是它的替代形态：由判定自己算——先假定全部复用，把
+ * 「按输入判定不能复用」的插件逐轮补进选集，直到没有插件被拒。依赖目录本身就在消费者的输入
+ * 闭包里，所以影响传播不需要另做图分析，补进被判定的那一个即可。判定拿不到可靠基线（没有活动
+ * 部署、宿主或记录对不上、声明无法核验）时不报错，直接整套重建：那本来就是不带参数时的路径，
+ * 而复用只是省时间，不能因为省不了就把发布挡住。
+ */
+export function preparePluginReuse({ root, previous, active, site, revision, hostCommit, buildEnvironment, rebuilt, git, auto = false }) {
+  // Synchronous lazy loading lets bootstrap import the install guard before kit exists.
   const { discoverPlugins } = require('../../packages/plugin-manager/src/plugins.mjs');
   const { loadRelease, selectRelease } = require('../../packages/plugin-manager/src/release.mjs');
   const { within } = require('../../packages/plugin-manager/src/state.mjs');
-  const sources = discoverPlugins(root), selected = new Set(rebuilt);
-  if (!Array.isArray(rebuilt) || !rebuilt.length || selected.size !== rebuilt.length || rebuilt.some(id => !site.plugins.includes(id) || !sources.some(p => p.id === id))) refuse('重建选集无效');
-  const reused = site.plugins.filter(id => !selected.has(id));
+  const sources = discoverPlugins(root);
+  /** 整套重建：清单里没有可复用归档，与不带 --rebuild-plugins 的结果一致。 */
+  const full = reason => ({ release: { schemaVersion: 2, plugins: [] }, sourceRecord: null, builtFrom: [], rebuilt: [...site.plugins], ...(reason ? { reuseUnavailable: reason } : {}) });
+  if (auto) {
+    if (rebuilt !== undefined && (!Array.isArray(rebuilt) || rebuilt.length)) refuse('自动重建集不能与点名的插件列表同时使用');
+  } else if (!Array.isArray(rebuilt) || !rebuilt.length || new Set(rebuilt).size !== rebuilt.length || rebuilt.some(id => !site.plugins.includes(id) || !sources.some(p => p.id === id))) refuse('重建选集无效');
   assertSelectiveInstallSafe(root);
-  if (!reused.length) return { release: { schemaVersion: 2, plugins: [] }, sourceRecord: null, builtFrom: [] };
+  if (!auto && site.plugins.every(id => rebuilt.includes(id))) return full();
   try {
     if (!previous?.manifest || !active?.path) refuse('没有当前活动部署');
     const manifest = resolve(root, previous.manifest), operation = dirname(dirname(manifest));
@@ -176,7 +197,6 @@ export function preparePluginReuse({ root, previous, active, site, revision, hos
       if (!existsSync(resolve(host, '.git')) || git(['-C', host, 'rev-parse', 'HEAD']) !== hostCommit || git(['-C', host, 'status', '--porcelain', '--untracked-files=normal'])) refuse('宿主源码缺失、变化或未提交');
     }
     git(['cat-file', '-e', `${record.revision}^{commit}`]);
-    const rebuiltSources = sources.filter(p => selected.has(p.id));
 
     const checkedArchives = new Set();
     function verifyLocalArchive(plugin, base, specifier) {
@@ -203,24 +223,63 @@ export function preparePluginReuse({ root, previous, active, site, revision, hos
     const packages = Object.fromEntries(Object.entries(trees).map(([at, files]) => [at, workspacePackages(files, path => git(['show', `${at}:${path}`]))]));
     const changed = [...new Set([...trees[record.revision].keys(), ...trees[revision].keys()])]
       .filter(path => trees[record.revision].get(path) !== trees[revision].get(path)).sort();
-    for (const id of reused) {
-      const plugin = sources.find(p => p.id === id);
-      if (!plugin) refuse(`目标插件 ${id} 缺少源码声明`);
-      const inputs = new Map();
-      let declared = true;
-      for (const at of [record.revision, revision]) {
-        const state = pluginInputs({ git, revision: at, files: trees[at], packages: packages[at], plugin, verifyLocalArchive });
-        declared = declared && state.declared;
-        // 并集：任一提交上算它的输入，就按输入对待。
-        for (const [path, owner] of state.inputs) if (!inputs.has(path)) inputs.set(path, owner);
+
+    // 输入闭包与重建集无关，按插件算一次就够：自动模式要反复问同一个插件。
+    const inputStates = new Map();
+    const inputState = plugin => {
+      if (!inputStates.has(plugin.id)) {
+        const inputs = new Map();
+        let declared = true;
+        for (const at of [record.revision, revision]) {
+          const state = pluginInputs({ git, revision: at, files: trees[at], packages: packages[at], plugin, verifyLocalArchive });
+          declared = declared && state.declared;
+          // 并集：任一提交上算它的输入，就按输入对待。
+          for (const [path, owner] of state.inputs) if (!inputs.has(path)) inputs.set(path, owner);
+        }
+        inputStates.set(plugin.id, { inputs, declared });
       }
+      return inputStates.get(plugin.id);
+    };
+    /** 在给定重建集下这个插件能否复用：能复用返回 null，否则返回原因。 */
+    const reuseVerdict = (plugin, selectedIds) => {
+      const { inputs, declared } = inputState(plugin);
+      const rebuiltDirectories = sources.filter(p => selectedIds.has(p.id)).map(p => `${p.directory}/`);
       for (const path of changed) {
         const owner = inputs.get(path);
-        if (owner) refuse(`${id} ${inputReason(owner)}：${path}`);
+        if (owner) return `${plugin.id} ${inputReason(owner)}：${path}`;
         // 没声明构建输入的插件，读取范围无法确认：重建选集之外的任何变化都按它的输入对待。
-        if (!declared && !rebuiltSources.some(p => path.startsWith(`${p.directory}/`))) refuse(`${id} 未声明 deepseekPlugin.buildInputs，重建选集之外的变化无法确认与它无关：${path}`);
+        if (!declared && !rebuiltDirectories.some(directory => path.startsWith(directory))) return `${plugin.id} 未声明 deepseekPlugin.buildInputs，重建选集之外的变化无法确认与它无关：${path}`;
       }
+      return null;
+    };
+    const missingSource = id => sources.some(p => p.id === id) ? null : `目标插件 ${id} 缺少源码声明`;
+    const selected = new Set(auto ? [] : rebuilt);
+    if (auto) {
+      for (;;) {
+        const reusedIds = site.plugins.filter(id => !selected.has(id));
+        const blocking = [];
+        for (const id of reusedIds) {
+          const missing = missingSource(id);
+          if (missing) refuse(missing);
+          const reason = reuseVerdict(sources.find(p => p.id === id), selected);
+          if (reason) blocking.push(id);
+        }
+        if (!blocking.length) break;
+        for (const id of blocking) selected.add(id);
+      }
+    } else {
+      const blockingIds = new Set(), blockingReasons = [];
+      for (const id of site.plugins.filter(id => !selected.has(id))) {
+        const missing = missingSource(id);
+        if (missing) refuse(missing);
+        const reason = reuseVerdict(sources.find(p => p.id === id), selected);
+        if (reason) { blockingIds.add(id); blockingReasons.push(reason); }
+      }
+      // 一次把话说完：告诉运维补哪几个插件就能继续复用，而不是让他失败一次补一个。
+      if (blockingIds.size) refuseSelection(blockingReasons, site.plugins.filter(id => selected.has(id) || blockingIds.has(id)).join(','));
     }
+    const reused = site.plugins.filter(id => !selected.has(id));
+    if (!reused.length) return full();
     const old = loadRelease(manifest), release = selectRelease(old, reused);
     if (!Array.isArray(record.pluginBuilds) || record.pluginBuilds.length !== old.plugins.length || new Set(record.pluginBuilds.map(p => p.id)).size !== record.pluginBuilds.length) refuse('缺少完整插件构建来源');
     for (const plugin of old.plugins) {
@@ -234,9 +293,14 @@ export function preparePluginReuse({ root, previous, active, site, revision, hos
       const { archive, archivePath, sha256, directory: _directory, ...packed } = plugin;
       if (!isDeepStrictEqual(packed, expected)) refuse(`${plugin.id} 的源码声明与旧归档不一致`);
     }
-    return { release, previousRelease: old, sourceRecord, hostCommit: record.hostCommit, builtFrom: record.pluginBuilds.filter(p => reused.includes(p.id)).map(p => ({ ...p })) };
+    return { release, previousRelease: old, sourceRecord, hostCommit: record.hostCommit, builtFrom: record.pluginBuilds.filter(p => reused.includes(p.id)).map(p => ({ ...p })), rebuilt: [...selected] };
   } catch (error) {
-    if (error.message.startsWith('不能复用插件产物：')) throw error;
+    if (error.message.startsWith('不能复用插件产物：')) {
+      // 自动模式不因为「判不了」挡住发布：退回整套重建，本身就是不带参数的路径。
+      if (auto) return full(error.reuseReason ?? error.message);
+      throw error;
+    }
+    if (auto) return full(`旧发布或构建输入无法核验（${error.message}）`);
     refuse(`旧发布或构建输入无法核验（${error.message}）`);
   }
 }

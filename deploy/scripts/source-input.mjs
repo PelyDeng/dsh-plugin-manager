@@ -36,9 +36,14 @@ export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareMan
       const hostCommit = existsSync(resolve(host, '.git')) ? git(['-C', host, 'rev-parse', 'HEAD']) : undefined;
       const buildEnvironment = { nodeVersion: process.versions.node, platform: process.platform, architecture: process.arch,
         packageManager: readSiteJson(resolve(root, 'package.json')).packageManager, targetArchitecture: runtime.architecture, hostImage: site.hostImage ?? null };
-      const rebuilt = rebuildPlugins === undefined ? site.plugins : rebuildPlugins.split(',');
+      // `--rebuild-plugins auto` 把重建集交给判定自己算：拿不到可靠基线时它退回整套重建，
+      // 所以打包选集一律以判定交回的集合为准，而不是运维写下的那一串。
+      const auto = rebuildPlugins === 'auto';
+      const requested = rebuildPlugins === undefined || auto ? site.plugins : rebuildPlugins.split(',');
       if (rebuildPlugins !== undefined) assertSelectiveInstallSafe(root);
-      const selection = rebuildPlugins === undefined ? null : preparePluginReuse({ root, previous, active, site, revision, hostCommit, buildEnvironment, rebuilt, git });
+      const selection = rebuildPlugins === undefined ? null : preparePluginReuse({ root, previous, active, site, revision, hostCommit, buildEnvironment, ...(auto ? { auto: true } : { rebuilt: requested }), git });
+      const rebuilt = selection?.rebuilt ?? requested;
+      if (selection?.reuseUnavailable) buildMessage(`按需复用不可用（${selection.reuseUnavailable}），本次重建全部插件`);
       const tooling_ = resolveToolingReuse({ root, git, revision, previous, active });
       context.source = { git, host, rebuilt, reuse: selection?.release.plugins.length ? selection : null, toolingReuse: tooling_.reuse, toolingReason: tooling_.reason };
       return { revision, hostCommit, hostSourceCommit: hostCommit, hostSourceClean: Boolean(hostCommit) && git(['-C', host, 'status', '--porcelain', '--untracked-files=normal']) === '', buildEnvironment,

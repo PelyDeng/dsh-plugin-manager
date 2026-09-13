@@ -34,7 +34,7 @@ export function release({ root = repositoryRoot, ...options } = {}, execute = co
 if (direct) {
   try {
     const options = siteArguments(process.argv.slice(2));
-    if (options.help) console.log('Windows: .\\build.ps1 [--config <env.conf>] [--rebuild-plugins <id,...> | --verify-plugin-check | --resume | --recover --data-compatible]\nLinux/macOS: bash build.sh [相同参数]\nsource 构建源码；archives 读取 incoming 完整发布目录。插件检查默认跳过（CI 已跑过，产物不变），要本机确认时加 --verify-plugin-check。doctor 只读诊断锁；unlock-source 安全解锁。');
+    if (options.help) console.log('Windows: .\\build.ps1 [--config <env.conf>] [--rebuild-plugins <id,...|auto> | --verify-plugin-check | --resume | --recover --data-compatible]\nLinux/macOS: bash build.sh [相同参数]\nsource 构建源码；archives 读取 incoming 完整发布目录。插件检查默认跳过（CI 已跑过，产物不变），要本机确认时加 --verify-plugin-check。--rebuild-plugins 点名只重建这些插件、其余复用上次成功发布的归档；写 auto 则由判定自己算重建集（判不了就整套重建）。doctor 只读诊断锁；unlock-source 安全解锁。');
     else {
       frameworkVersion(repositoryRoot);
       const file = resolve(repositoryRoot, options.config ?? '.local/env.conf');
