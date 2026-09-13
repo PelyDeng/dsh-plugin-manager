@@ -76,6 +76,7 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 - `capabilities` 会写进牛马大总管的提示词，所以牛马大总管**只在你声明的范围内派活**，不会猜。
 - 没声明 `capabilities` 就表示「什么都能接」，牛马大总管按子任务语义自行判断。
 - `delta` 是**增量**：页面按到达顺序追加到同一条气泡里，不要每次发整段。
+- 进度是**上报即产出**：`dispatch`／`reply` 还没返回，事件就已经送到页面，成员边干边出字；不需要为了流式去改返回时机。
 - `needsReply: true` 让子任务进入 `waiting_user`，页面上就会出现回复框；用户回的内容
   会通过 `reply()` 交回给你。
 - 没有登记执行入口的插件照样出现在右栏，只是标记为不在场，牛马大总管不会给它派活。

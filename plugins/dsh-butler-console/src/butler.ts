@@ -110,6 +110,31 @@ function summaryTextOf(event: ButlerInnerEvent): string | null {
   return event.type === 'summary_text' ? event.text : null
 }
 
+/**
+ * 执行期间到达的进度事件。
+ *
+ * 执行方是在 `await dispatch/reply` 期间回调 `onProgress` 的，而生成器只能在自己体内
+ * `yield`，所以用「队列 + 唤醒」把回调推入和生成器产出接起来：事件一到就产出，页面才
+ * 看得见成员边说边出字；攒到子任务结束再一次性补发等于没有流式。
+ */
+function progressQueue() {
+  const queued: ButlerEvent[] = []
+  let wake: (() => void) | undefined
+  let settled = false
+  const notify = () => { const resume = wake; wake = undefined; resume?.() }
+  return {
+    push(event: ButlerEvent) { queued.push(event); notify() },
+    /** 执行已经结束：队列排空后产出随之结束。 */
+    settle() { settled = true; notify() },
+    async *drain(): AsyncGenerator<ButlerEvent> {
+      while (queued.length > 0 || !settled) {
+        if (queued.length === 0) { await new Promise<void>(resolve => { wake = resolve }); continue }
+        yield queued.shift()!
+      }
+    },
+  }
+}
+
 /** 一次牛马大总管的已打开会话。 */
 interface Conversation {
   readonly id: string
@@ -839,9 +864,14 @@ export class ButlerConsole {
       ...(extra.question === undefined ? {} : { question: extra.question }),
       time: Date.now(),
     })
-    /** 执行期间积压的进度事件；settle 后按顺序补发，保证顺序与产生顺序一致。 */
-    const progress: ButlerEvent[] = []
-    const drain = (): ButlerEvent[] => progress.splice(0, progress.length)
+    /**
+     * 执行期间到达的进度事件。
+     *
+     * 执行方是在 `dispatch` 的 await 期间回调 `onProgress` 的，而生成器只能在自己体内
+     * `yield`，所以用队列加唤醒把两者接起来：事件一到就产出，页面才看得见成员边说边出字；
+     * 攒到子任务结束再一次性补发等于没有流式。
+     */
+    const progress = progressQueue()
 
     const executor: ButlerAgentExecutor | undefined = resolveExecutor(this.ctx, agentId)
     if (executor === undefined) {
@@ -891,7 +921,7 @@ export class ButlerConsole {
       }))
     }
     try {
-      const result = await executor.dispatch({
+      const execution = executor.dispatch({
         taskId,
         subtaskId,
         goal: input.goal,
@@ -903,17 +933,19 @@ export class ButlerConsole {
         signal: controller.signal,
         onProgress,
       })
+      // 结束通知只负责让产出停下来；执行本身的结果与失败仍由下面的 await 决定。
+      void execution.then(() => progress.settle(), () => progress.settle())
+      for await (const event of progress.drain()) yield event
+      const result = await execution
       if (result.status === 'cancelled' || signal.aborted || timedOut) {
         const detail = timedOut ? `超过 ${Math.round(this.config.subtaskTimeoutMs / 1000)} 秒没干完，已叫停` : '已停止'
         this.store.setSubtaskState(taskId, subtaskId, 'cancelled', { error: detail })
-        for (const pending of drain()) yield pending
         yield emit('cancelled', detail)
         return { state: 'cancelled', report: `【${displayName}】${detail}` }
       }
       if (result.status === 'failed') {
         const detail = clip(result.summary === '' ? `${displayName} 没干成这活` : result.summary, this.config.maxResultChars)
         this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
-        for (const pending of drain()) yield pending
         yield emit('failed', detail)
         return { state: 'failed', report: `【${displayName}】失败：${detail}` }
       }
@@ -922,13 +954,11 @@ export class ButlerConsole {
         this.store.setSubtaskState(taskId, subtaskId, 'waiting_user')
         // 记下等待上下文，用户回复时据此把话交回同一位成员。
         this.waiting.set(`${taskId}:${subtaskId}`, { executor, agentId, displayName })
-        for (const pending of drain()) yield pending
         yield emit('waiting_user', question, { phase: 'waiting_user', question })
         return { state: 'waiting_user', report: `【${displayName}】等着你回话：${question}` }
       }
       const summary = clip(result.summary, this.config.maxResultChars)
       this.store.setSubtaskState(taskId, subtaskId, 'succeeded', { result: summary })
-      for (const pending of drain()) yield pending
       yield emit('succeeded', summary)
       return { state: 'succeeded', report: summary }
     } catch (error) {
@@ -942,7 +972,6 @@ export class ButlerConsole {
       // 用户看到的文案不变。
       if (!stopped) console.error(`butler-console: 子任务执行失败（${agentId}）：${detail}\n${stackOf(error)}`)
       this.store.setSubtaskState(taskId, subtaskId, state, { error: detail })
-      for (const pending of drain()) yield pending
       yield emit(state, detail)
       return { state, report: `【${displayName}】${stopped ? detail : `失败：${detail}`}` }
     } finally {
@@ -986,14 +1015,14 @@ export class ButlerConsole {
     }
 
     const controller = new AbortController()
-    const deltas: ButlerEvent[] = []
+    const progress = progressQueue()
     const onProgress = (update: ButlerProgressUpdate) => {
       if (update.delta !== undefined && update.delta !== '') {
-        deltas.push({ type: 'subtask_delta', taskId: input.taskId, id: input.subtaskId, agentId, delta: update.delta, time: Date.now() })
+        progress.push({ type: 'subtask_delta', taskId: input.taskId, id: input.subtaskId, agentId, delta: update.delta, time: Date.now() })
         return
       }
       if (update.detail === undefined && update.tool === undefined) return
-      deltas.push({
+      progress.push({
         type: 'subtask', taskId: input.taskId, id: input.subtaskId, state: 'running', agentId, displayName,
         detail: clip(update.detail ? `${update.stage} · ${update.detail}` : update.stage, 300),
         ...(update.phase === undefined ? {} : { phase: update.phase }),
@@ -1022,8 +1051,10 @@ export class ButlerConsole {
         }
         return
       }
-      const result = await executor.reply(request)
-      for (const event of deltas.splice(0, deltas.length)) yield event
+      const execution = executor.reply(request)
+      void execution.then(() => progress.settle(), () => progress.settle())
+      for await (const event of progress.drain()) yield event
+      const result = await execution
       if (result.status === 'waiting_user') {
         const question = clip(result.question ?? result.summary, 500)
         this.store.setSubtaskState(input.taskId, input.subtaskId, 'waiting_user')
