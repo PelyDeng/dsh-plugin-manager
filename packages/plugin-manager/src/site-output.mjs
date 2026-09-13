@@ -57,6 +57,18 @@ function timedLine(text, elapsedMs, output) {
   return text + ' '.repeat(Math.max(2, (output.columns || 80) - 1 - textWidth(text) - textWidth(right))) + right;
 }
 
+/** 各阶段耗时表：日志末尾自带归因，不必再回头 grep 进度行。 */
+function stageSummary(stages) {
+  const width = Math.max(...stages.map(stage => textWidth(stage.label)));
+  const cell = label => label + ' '.repeat(Math.max(2, width - textWidth(label) + 2));
+  const total = stages.reduce((sum, stage) => sum + Math.max(0, stage.elapsedMs), 0);
+  return [
+    '各阶段耗时（含进程启动）：',
+    ...stages.map(stage => `  ${cell(stage.label)}${duration(stage.elapsedMs)}${stage.ok ? '' : '（失败）'}`),
+    `  ${cell('合计')}${duration(total)}`,
+  ].join('\n');
+}
+
 /** Run a build entry with live progress; return its exit code after closing its log. */
 export async function presentBuild(entry, args, { logDirectory, output = process.stdout, env = process.env, cwd, onSpawn, onFinished } = {}) {
   const privateDirectory = ensurePrivateDirectory(resolve(logDirectory, `build-${Date.now()}-${randomUUID()}`));
@@ -65,6 +77,8 @@ export async function presentBuild(entry, args, { logDirectory, output = process
   let active = '', frame = 0, percent = 0, started = 0, settling = false, finishedMs;
   let presentation = Promise.resolve();
   const tail = [];
+  /** 每个已完成（或已失败）阶段的耗时，末尾汇总成一张表。 */
+  const stages = [];
   const clear = () => { if (output.isTTY) output.write('\r\x1b[2K'); };
   const line = text => { clear(); output.write(`${text}\n`); };
   const bar = (animate = false) => {
@@ -81,6 +95,7 @@ export async function presentBuild(entry, args, { logDirectory, output = process
       if (output.isTTY) draw(); else line(timedLine(`正在${active} ${bar()}`, 0, output));
     } else if (event.type === 'done') {
       finishedMs = Number.isFinite(event.elapsedMs) ? Math.max(0, event.elapsedMs) : event.receivedAt - started;
+      stages.push({ label: event.label, elapsedMs: elapsed(), ok: true });
       settling = true;
       // Animate only the display; the build process continues without waiting.
       if (output.isTTY) {
@@ -94,6 +109,7 @@ export async function presentBuild(entry, args, { logDirectory, output = process
       percent = 100; line(timedLine(`${event.label}已完成 ${bar()}`, elapsed(), output)); active = ''; settling = false;
     } else if (event.type === 'failed') {
       finishedMs = Number.isFinite(event.elapsedMs) ? Math.max(0, event.elapsedMs) : event.receivedAt - started;
+      stages.push({ label: event.label, elapsedMs: elapsed(), ok: false });
       line(timedLine(`${event.label}失败 ${bar()}`, elapsed(), output)); active = '';
     } else if (event.type === 'message') line(event.label);
   };
@@ -160,6 +176,8 @@ export async function presentBuild(entry, args, { logDirectory, output = process
       if (tail.length) line(tail.join('\n'));
       line(`完整日志：${log}`);
     }
+    // 汇总放在最后：发布记录、失败原因都在上面，接着就是「时间花在哪」。
+    if (stages.length) line(stageSummary(stages));
     return code;
   } finally {
     clearInterval(timer); clear(); closeSync(fd);
