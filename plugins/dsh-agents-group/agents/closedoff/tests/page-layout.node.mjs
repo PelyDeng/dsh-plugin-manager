@@ -1,9 +1,9 @@
 /**
  * 封闭化助手页面的回归：真的把页面跑起来（静态服务 + 桩接口 + 注入宿主配置 + 无头 Chromium）。
  *
- * 两个场景：没有 conversationId 时的欢迎页，以及带上 conversationId 时恢复出来的对话 ——
- * 后者会走到工具卡片渲染（`.cards-block` / `.mini-card` / `.mc-row`），这也是后续拆分
- * app.js 卡片层时的安全网。
+ * 三个场景：没有 conversationId 时的欢迎页、带上 conversationId 时恢复出来的对话，以及
+ * **真的发一次提问**走完整条流式分支（工具行 → 卡片 → 回答 → 收尾）。前两个覆盖首屏与历史
+ * 恢复，第三个覆盖流式对话，也是拆分 app.js 卡片层时的安全网。
  *
  * 页面脚本是构建产物（`web/assets` 由 `pnpm build:web` 生成），`pnpm test` 会先跑这一步。
  * 产物缺失属于构建问题，直接失败；机器上没有可用 Chromium 时才记成跳过（TAP 里显示 SKIP），
@@ -54,6 +54,33 @@ test('a restored conversation renders its tool card at every width', async t => 
     assert.equal(value.miniCards, 1, `视口 ${width} 卡片没有渲染`);
     assert.equal(value.firstCardRows, 3, `视口 ${width} 卡片字段行数不对：${value.cardText}`);
     assert.ok(value.cardText.includes('预警等级') && value.cardText.includes('某化工企业'), `视口 ${width} 卡片内容不对：${value.cardText}`);
+    assert.equal(value.pageOverflow, false, `视口 ${width} 出现横向溢出`);
+  }
+});
+
+test('a live question streams the tool row, the card and the answer', async t => {
+  const result = await probe(t, {
+    widths: '1280,860,640', probe: `${here}page-stream-probe.js`, settle: '1200', budget: '8000',
+  });
+  if (!result) return;
+  for (const { width, value } of result.results) {
+    assert.equal(value.error, undefined, `视口 ${width}: ${value.error}`);
+    assert.equal(value.ready, true, `视口 ${width} 页面没有进入就绪状态：${value.statusText}`);
+    assert.equal(value.finished, true, `视口 ${width} 回答没有收完（状态停在「${value.statusText}」）`);
+    assert.equal(value.userBubbles, 1, `视口 ${width} 提问没有渲染出来`);
+    assert.ok(value.askText.includes('预警报警'), `视口 ${width} 提问内容不对：${value.askText}`);
+    assert.equal(value.toolChips, 1, `视口 ${width} 工具行没有渲染`);
+    assert.ok(value.chipLabel.includes('预警'), `视口 ${width} 工具中文名不对：${value.chipLabel}`);
+    assert.equal(value.chipStatus, '已完成', `视口 ${width} 工具行状态不对：${value.chipStatus}`);
+    assert.ok(value.chipChrono.startsWith('·'), `视口 ${width} 工具行没有显示耗时：${value.chipChrono}`);
+    assert.ok(value.thinkingText.includes('过滤'), `视口 ${width} 思考过程没有渲染：${value.thinkingText}`);
+    assert.equal(value.cardsBlocks, 1, `视口 ${width} 卡片块没有渲染`);
+    assert.deepEqual(value.sectionTitles, ['风险'], `视口 ${width} 结果分组不对：${value.sectionTitles}`);
+    assert.equal(value.miniCards, 1, `视口 ${width} 卡片没有渲染`);
+    assert.equal(value.firstCardRows, 3, `视口 ${width} 卡片字段行数不对：${value.cardText}`);
+    assert.ok(value.cardText.includes('预警等级') && value.cardText.includes('某化工企业'), `视口 ${width} 卡片内容不对：${value.cardText}`);
+    assert.ok(value.answerText.includes('1 条报警'), `视口 ${width} 回答正文不对：${value.answerText}`);
+    assert.equal(value.actionsHidden, false, `视口 ${width} 回答操作没有出现`);
     assert.equal(value.pageOverflow, false, `视口 ${width} 出现横向溢出`);
   }
 });
