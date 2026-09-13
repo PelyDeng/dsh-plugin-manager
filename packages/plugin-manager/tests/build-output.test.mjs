@@ -163,6 +163,32 @@ test('an unfinished stage is named when the worker dies inside it', async t => {
   assert.doesNotMatch(f.text(), /构建发布失败/);
 });
 
+test('stage ids that collide across reporting processes still count as concurrent stages', async t => {
+  // 一次发布里有多个进程各自上报，计数器都从 1 开始：实测 16 个阶段里有 6 组撞号。
+  // 下面两组事件就是真实流里的形态 —— 后半段是记录下来的到达顺序。
+  const stream = [
+    // 撞号的这两步同时在进行：只按 id 归并会把前一个阶段吞掉，完成行挂到后一个的名字上。
+    ['start', 'stage-3', '构建插件 auth'],
+    ['start', 'stage-3', '准备部署配置'],
+    ['done', 'stage-3', '构建插件 auth'],
+    ['done', 'stage-3', '准备部署配置'],
+    // 记录自真实发布：构建 worker 与打包子进程交替上报。
+    ['start', 'stage-1', '安装插件依赖'], ['done', 'stage-1', '安装插件依赖'],
+    ['start', 'stage-4', '构建插件 agents-group'], ['start', 'stage-5', '构建插件 example'],
+    ['start', 'stage-2', '构建部署镜像'], ['done', 'stage-4', '构建插件 agents-group'],
+    ['done', 'stage-5', '构建插件 example'], ['done', 'stage-2', '构建部署镜像'],
+  ];
+  const f = fixture(t, `for (const [type, id, label] of ${JSON.stringify(stream)}) console.log('DSH_BUILD_PROGRESS ' + JSON.stringify({ type, id, label, ...(type === 'start' ? {} : { elapsedMs: 1000 }) }));`);
+  assert.equal(await f.run(), 0);
+  // 撞号的阶段各有一条属于自己的完成行，谁也不吞掉谁。
+  for (const label of ['构建插件 auth', '准备部署配置', '安装插件依赖', '构建插件 agents-group', '构建插件 example', '构建部署镜像']) {
+    assert.equal((f.text().match(new RegExp(`${label}已完成`, 'g')) ?? []).length, 1, `${label} keeps exactly one completion`);
+  }
+  // 撞号的两步是并行的，汇总必须按墙钟报，而不是把互不重叠的耗时相加。
+  assert.match(f.text(), /总计（阶段并行，按墙钟计）/);
+  assert.doesNotMatch(f.text(), /合计/);
+});
+
 test('termination reaches a synchronous tool and the presenter retains the signal exit code', { skip: process.platform === 'win32' }, async t => {
   for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
     const f = fixture(t, `
