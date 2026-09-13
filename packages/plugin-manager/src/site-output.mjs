@@ -99,19 +99,19 @@ function timedLine(text, elapsedMs, output) {
 /**
  * 各阶段耗时表：日志末尾自带归因，不必再回头 grep 进度行。
  *
- * 并行阶段的耗时互相重叠，逐项相加会大于实际花掉的时间，所以那种情况报墙钟时间。
+ * 两行合计都给：逐项相加是「工具自己花了多少时间」，并行阶段互相重叠时它会大于墙钟；
+ * 墙钟是「这次发布等了多久」，阶段之间还有没被计时的间隙（文件复制、镜像打标一类），
+ * 所以它也可能大于相加。只给一个数，另一个看起来就像算错了。
  */
-function stageSummary(stages, { overlapped = false, wallMs = 0 } = {}) {
+function stageSummary(stages, { wallMs = 0 } = {}) {
   const width = Math.max(...stages.map(stage => textWidth(stage.label)));
   const cell = label => label + ' '.repeat(Math.max(2, width - textWidth(label) + 2));
   const total = stages.reduce((sum, stage) => sum + Math.max(0, stage.elapsedMs), 0);
-  const sum = overlapped
-    ? `  ${cell('总计（阶段并行，按墙钟计）')}${duration(wallMs)}`
-    : `  ${cell('合计')}${duration(total)}`;
   return [
     '各阶段耗时（含进程启动）：',
     ...stages.map(stage => `  ${cell(stage.label)}${duration(stage.elapsedMs)}${stage.ok ? '' : '（失败）'}`),
-    sum,
+    `  ${cell('相加（逐项）')}${duration(total)}`,
+    `  ${cell('墙钟（首末阶段之间）')}${duration(wallMs)}`,
   ].join('\n');
 }
 
@@ -133,7 +133,7 @@ export async function presentBuild(entry, args, { logDirectory, output = process
    * `id`，按标签归一，行为与单线时一致。
    */
   const active = new Map();
-  let drawnLines = 0, maxConcurrent = 0, firstStart, lastFinish;
+  let drawnLines = 0, firstStart, lastFinish;
   const stageKey = event => `${typeof event.id === 'string' && event.id ? event.id : 'label'}::${event.label}`;
   /**
    * 擦掉当前进度块。
@@ -181,7 +181,6 @@ export async function presentBuild(entry, args, { logDirectory, output = process
     if (event.type === 'start') {
       const stage = { label: event.label, startedAt: event.receivedAt, percent: 0, frame: 0, finishedMs: undefined };
       active.set(stageKey(event), stage);
-      maxConcurrent = Math.max(maxConcurrent, active.size);
       firstStart ??= event.receivedAt;
       if (output.isTTY) draw(); else line(stageLine(stage, false));
       return;
@@ -277,12 +276,7 @@ export async function presentBuild(entry, args, { logDirectory, output = process
       line(`完整日志：${log}`);
     }
     // 汇总放在最后：发布记录、失败原因都在上面，接着就是「时间花在哪」。
-    if (stages.length) {
-      line(stageSummary(stages, {
-        overlapped: maxConcurrent > 1,
-        wallMs: (lastFinish ?? closedAt) - (firstStart ?? closedAt),
-      }));
-    }
+    if (stages.length) line(stageSummary(stages, { wallMs: (lastFinish ?? closedAt) - (firstStart ?? closedAt) }));
     return code;
   } finally {
     clearInterval(timer); eraseBlock(); closeSync(fd);

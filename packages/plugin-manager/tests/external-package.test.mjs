@@ -92,8 +92,10 @@ test('repository packaging reports build and verified pack separately, skipping 
     writeFileSync(join(pluginRoot, 'cordis.patch.yml'), `- insert:\n    - id: ${id}\n      name: ${id}\n`);
   }
   const script = fileURLToPath(new URL('../../../scripts/package-plugins.mjs', import.meta.url));
+  // 每轮都是一次完整打包（安装 + 构建 + 打包）：测试文件之间并行跑，机器忙时 60s 会被打满，
+  // 超时会被误判成打包失败，所以留出两倍余量。
   const pack = (output, ...flags) => spawnSync(process.execPath, [script, '--root', workspace, '--plugins', 'all', '--output', output, ...flags], {
-    encoding: 'utf8', timeout: 60000, env: { ...process.env, DSH_BUILD_PROGRESS: '1' },
+    encoding: 'utf8', timeout: 120000, env: { ...process.env, DSH_BUILD_PROGRESS: '1' },
   });
   const events = result => result.stdout.split(/\r?\n/).filter(line => line.startsWith('DSH_BUILD_PROGRESS ')).map(line => {
     const event = JSON.parse(line.slice('DSH_BUILD_PROGRESS '.length));
