@@ -10,7 +10,7 @@
  * 所有用户可见文本都用 textContent 写入，不使用 innerHTML，避免把模型输出当成标记解析。
  */
 
-import { ApiError, api, avatarUrl, chat, reply, uploadAvatar } from './api.js'
+import { ApiError, api, avatarUrl, chat, events, reply, uploadAvatar } from './api.js'
 
 /** 成员配色：按 agentId 稳定取色，所以同一个插件每次都是同一个颜色。 */
 const PALETTE = ['#4d96ff', '#2ec4a6', '#ff6b57', '#9b5de5', '#ffb703', '#e8709a']
@@ -44,6 +44,8 @@ const SUGGESTIONS = [
 
 const MOTTO_KEY = 'butler.motto'
 const DEFAULT_MOTTO = '打工是不可能打工的，但派活可以'
+/** 上次用过的会话。刷新后要拿它去问「这一轮还在跑吗」。 */
+const CONVERSATION_KEY = 'butler.conversationId'
 
 const el = {
   thread: document.getElementById('thread'),
@@ -634,7 +636,58 @@ function newConversationId() {
 }
 
 function rememberConversation(id) {
-  try { localStorage.setItem('butler.conversationId', id) } catch { /* 隐私模式下忽略。 */ }
+  try { localStorage.setItem(CONVERSATION_KEY, id) } catch { /* 隐私模式下忽略。 */ }
+}
+
+function recallConversation() {
+  try { return localStorage.getItem(CONVERSATION_KEY) } catch { return null /* 隐私模式下当作没有。 */ }
+}
+
+/**
+ * 刷新或重新打开页面时，接上正在跑的那一轮。
+ *
+ * 关掉页面不再等于取消任务（见服务端 `/events` 的说明），所以「活还在干，页面得能看」
+ * 是这套语义的另一半。先问一句有没有在跑的一轮：没有就直接返回，什么都不改 ——
+ * 历史照旧由左栏按需渲染，不在这里抢界面，也不为一个没在跑的任务白拉整轮事件。
+ *
+ * 确认在跑之后才接管中栏，从这一轮的第一条事件重放回来并继续跟随。
+ */
+async function resumeLiveTurn() {
+  const conversationId = recallConversation()
+  if (conversationId === null || conversationId === '' || state.streaming) return
+
+  let head
+  try {
+    head = await api.eventsHead(conversationId)
+  } catch {
+    return
+  }
+  if (head === null || head.state !== 'running') return
+
+  const controller = new AbortController()
+  state.conversationId = conversationId
+  state.abort = controller
+  clear(el.thread)
+  threadInner()
+  state.bubbles.clear()
+  state.asks.clear()
+  resetRail()
+  setBusy(true)
+  try {
+    for await (const event of events({ conversationId, after: 0, signal: controller.signal })) {
+      if (event.type === 'run') continue
+      if (event.type === 'reset') {
+        // 这一轮太长，开头的事件已经滚出窗口：补不回来了，如实说明而不是假装从头发过。
+        append(make('p', 'error-line', '这一轮的早期进度已经过期，只接上了后半段；完整状态看右栏。'))
+        continue
+      }
+      handleEvent(event)
+    }
+  } catch (error) {
+    reportFailure(error, '接上正在跑的任务失败')
+  } finally {
+    finishTurn()
+  }
 }
 
 async function sendMessage(text) {
@@ -1169,6 +1222,8 @@ async function main() {
   // 右栏状态会随别的会话变化，低频轮询即可；流式期间不打断。
   setInterval(() => { if (!state.streaming) void refreshPanels() }, 15000)
   el.input.focus()
+  // 不 await：它要跟到那一轮结束，不能把页面启动卡在这里。
+  void resumeLiveTurn()
 }
 
 void main()

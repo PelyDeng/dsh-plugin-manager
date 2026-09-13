@@ -94,9 +94,53 @@ export async function* chat({ conversationId, message, signal }) {
   yield* postStream('/chat', { conversationId, message }, signal)
 }
 
-/** 回应一位正在等你的成员。 */
+/**
+ * 回应一位正在等你的成员。
+ *
+ * 与 `/chat` 一样：受理之后执行在后台跑，这条连接只是「我在这里看着」。
+ */
 export async function* reply({ taskId, subtaskId, text, decideByAgent, signal }) {
   yield* postStream('/reply', { taskId, subtaskId, text, decideByAgent }, signal)
+}
+
+/**
+ * 只读订阅一个会话最近一轮的事件。
+ *
+ * 它不启动任何执行，所以刷新页面、或者第二个入口想看同一轮，用它接上即可，
+ * 不会把任务重跑一遍。不传 `after` 表示只看从现在开始的新事件；传了就以它为游标续传。
+ */
+export async function* events({ conversationId, after, signal }) {
+  const params = new URLSearchParams({ conversationId })
+  if (after !== undefined) params.set('after', String(after))
+  yield* eventStream(`/events?${params.toString()}`, signal)
+}
+
+/**
+ * 只问「这个会话现在有没有在跑的一轮」。
+ *
+ * 接上一轮之前先问一句，可以避免为一个根本没在跑的任务把整轮事件重新拉一遍。
+ * 返回 `null` 表示没有可观察的一轮。
+ */
+export async function eventsHead(conversationId) {
+  const { run } = await request(`/events?conversationId=${encodeURIComponent(conversationId)}&probe=1`)
+  return run ?? null
+}
+
+async function* eventStream(path, signal) {
+  const response = await fetch(`${ROUTE_PREFIX}${path}`, {
+    credentials: 'same-origin',
+    headers: { accept: 'text/event-stream' },
+    signal,
+  })
+  if (!response.ok) {
+    let text = `请求失败（HTTP ${response.status}）`
+    try {
+      const parsed = await response.json()
+      if (typeof parsed?.error === 'string' && parsed.error !== '') text = parsed.error
+    } catch { /* 保留通用提示。 */ }
+    throw new ApiError(response.status, text)
+  }
+  yield* readEventStream(response, signal)
 }
 
 async function* postStream(path, payload, signal) {

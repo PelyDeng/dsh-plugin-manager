@@ -17,8 +17,9 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { actorKey, createPluginHttp, isAccessError, onRevoked, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { conversationModelCatalog } from '@dsh-plugin-manager/plugin-kit/models'
 import { listAgentCards } from './agents.ts'
-import type { ButlerConsole } from './butler.ts'
+import type { ButlerConsole, RunWatch } from './butler.ts'
 import type { Config } from './config.ts'
+import { canResume } from './event-log.ts'
 
 /** 一次可预期的请求错误；其余异常统一按 500 处理且不暴露内部细节。 */
 class HttpError extends Error {
@@ -123,6 +124,15 @@ function integerField(input: Record<string, unknown>, name: string, fallback: nu
   return value
 }
 
+/** 解析事件游标。必须是 0 或正整数；空白按「从头」处理。 */
+function cursorField(value: string): number {
+  const text = value.trim()
+  if (text === '') return 0
+  const parsed = Number(text)
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new HttpError(400, '字段 after 必须是从 0 开始的整数')
+  return parsed
+}
+
 const ASSET_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
@@ -165,6 +175,93 @@ export async function installWeb(
   const respond = (actor: Actor, response: ServerResponse, status: number, value: unknown) => {
     access.assert(actor)
     json(response, status, value)
+  }
+
+  /**
+   * 把一条观察写进 SSE 响应。
+   *
+   * 提交、补话、只读订阅三条路径共用这一段：它们对「怎么发」的要求完全一样，区别只在
+   * 从哪一轮、从哪个游标开始。**连接关闭只会结束这一次观察**，后台那一轮该跑还是跑。
+   *
+   * `watch` 收一个中止信号而不是现成的事件流，因为「客户端断线」这件事要在建流的那一刻
+   * 就接上：否则断开之后这条响应会一直等到下一个事件才醒过来。
+   */
+  const streamRun = async (input: {
+    readonly response: ServerResponse
+    readonly after: number
+    readonly watch: (signal: AbortSignal) => RunWatch | undefined
+    readonly preamble?: Record<string, unknown>
+  }): Promise<void> => {
+    const { response, after, watch, preamble } = input
+    response.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+      // 反向代理默认会缓冲响应体，那会把整条流攒成一坨再发，边收边上就不发生了。
+      'x-accel-buffering': 'no',
+    })
+    const detached = new AbortController()
+    let closed = false
+    const send = (value: unknown) => {
+      if (closed || response.writableEnded || response.destroyed) return
+      response.write(`data: ${JSON.stringify(value)}\n\n`)
+    }
+    const done = () => {
+      if (closed) return
+      response.write('data: [DONE]\n\n')
+      response.end()
+    }
+    response.once('close', () => {
+      closed = true
+      // 叫醒还在等事件的订阅：断线只该结束这一次观察，不该让响应挂在内存里。
+      detached.abort()
+    })
+    if (preamble !== undefined) send(preamble)
+
+    const ready = watch(detached.signal)
+    if (ready === undefined) {
+      // 没有可观察的一轮：如实说明，让调用方自己决定是等还是去读历史。
+      send({ type: 'run', runId: '', state: 'idle', startedAt: 0, finishedAt: null, taskId: '' })
+      done()
+      return
+    }
+
+    const { head, events } = ready
+    // 游标落在窗口之前：中间的事件确实已经没了，如实要求重取快照，不假装补齐。
+    if (!canResume(head, after)) {
+      send({
+        type: 'reset',
+        runId: head.runId,
+        seq: head.seq,
+        windowStart: head.windowStart,
+        reason: '这一轮的早期事件已经滚出窗口，请重新获取任务快照',
+      })
+      done()
+      return
+    }
+
+    send({
+      type: 'run',
+      runId: head.runId,
+      state: head.state,
+      startedAt: head.startedAt,
+      finishedAt: head.finishedAt,
+      taskId: head.taskId,
+    })
+    try {
+      for await (const logged of events) {
+        if (closed) break
+        // 每条都带游标：客户端断线后从这里接着要，才知道自己读到哪儿了。
+        send({ ...logged.event, seq: logged.seq, runId: logged.runId })
+      }
+    } catch (caught) {
+      // 通道自己坏了不能静默：读者会以为「任务没动静」，而其实是流断了。
+      if (!closed) {
+        console.error('butler events stream failed', caught)
+        send({ type: 'error', message: '事件流中断，请重新打开页面' })
+      }
+    }
+    done()
   }
 
   ctx.effect(() => registerPublic({
@@ -377,6 +474,9 @@ export async function installWeb(
   }))
 
   // 停止当前这一轮。
+  //
+  // `taskId` 可选：给了就只中止这一轮确实在跑那个任务的情况，旧任务迟到的取消请求
+  // 不会碰到该会话随后开的新任务。`accepted` 只表示中止请求发出去了，不代表执行已停。
   ctx.effect(() => register({
     kind: 'exact',
     path: `${config.routePrefix}/stop`,
@@ -384,15 +484,60 @@ export async function installWeb(
       method(request, 'POST')
       const payload = await body(request, config.maxRequestBodyBytes)
       const conversationId = stringField(payload, 'conversationId', 200)
-      console_.cancel(conversationId, actor)
-      respond(actor, response, 200, { ok: true })
+      const taskId = stringField(payload, 'taskId', 80, false).trim()
+      const outcome = console_.cancel(conversationId, actor, taskId)
+      respond(actor, response, 200, {
+        ok: true,
+        accepted: outcome.accepted,
+        ...(outcome.reason === '' ? {} : { reason: outcome.reason }),
+      })
+    },
+  }))
+
+  /**
+   * 只读订阅：观察一个会话最近一轮的事件。
+   *
+   * 与 `/chat` 的区别是它**不启动任何执行**，所以第二个入口可以拿它跟同一轮，
+   * 不会把任务重跑一遍。断线只是这一个观察者不再读，其他观察者和执行都不受影响。
+   *
+   * `after` 是上一次收到的最后一条事件的 `seq`。不传表示只看从现在开始的新事件；
+   * 传了但已经滚出窗口时，会收到一条 `reset`，要求重新取任务快照 —— 中间的事件
+   * 确实没有了，不假装补齐。
+   *
+   * 带 `probe=1` 时只回答「现在有没有在跑的一轮」，用 JSON 而不是事件流。想接上一轮
+   * 之前先问一句，可以避免为一个根本没在跑的任务把整轮事件重新拉一遍。
+   */
+  ctx.effect(() => register({
+    kind: 'exact',
+    path: `${config.routePrefix}/events`,
+    handler: async (request, response, actor) => {
+      method(request, 'GET')
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams
+      const conversationId = (params.get('conversationId') ?? '').trim()
+      if (conversationId === '') throw new HttpError(400, '缺少 conversationId')
+
+      if (params.get('probe') === '1') {
+        respond(actor, response, 200, { run: console_.watch(conversationId, actor, 0)?.head ?? null })
+        return
+      }
+
+      const requested = params.get('after')
+      access.assert(actor)
+      // 先取一次头部才知道「现在」在哪；这个探测用的生成器没有被消费，不会执行。
+      const probe = console_.watch(conversationId, actor, 0)
+      const after = requested === null ? (probe?.head.seq ?? 0) : cursorField(requested)
+      await streamRun({
+        response,
+        after,
+        watch: signal => console_.watch(conversationId, actor, after, signal),
+      })
     },
   }))
 
   /**
    * 回应一位正在等你的成员。
    *
-   * 与 `/chat` 一样走 SSE：回复之后那位成员会继续流式输出，页面接着往同一个气泡里追加。
+   * 与 `/chat` 一样：受理走一遍校验，执行在后台跑，连接只负责把事件推给这个观察者。
    */
   ctx.effect(() => register({
     kind: 'exact',
@@ -407,36 +552,12 @@ export async function installWeb(
       if (!decideByAgent && text === '') throw new HttpError(400, '请先写点内容，或者让它自己拿主意')
 
       access.assert(actor)
-      response.writeHead(200, {
-        'content-type': 'text/event-stream; charset=utf-8',
-        'cache-control': 'no-cache',
-        connection: 'keep-alive',
+      const started = await console_.startReply({ taskId, subtaskId, text, decideByAgent, actor })
+      await streamRun({
+        response,
+        after: started.from,
+        watch: signal => console_.watch(started.conversationId, actor, started.from, signal),
       })
-      let closed = false
-      const send = (value: unknown) => {
-        if (closed || response.writableEnded || response.destroyed) return
-        response.write(`data: ${JSON.stringify(value)}\n\n`)
-      }
-      response.once('close', () => { closed = true })
-      try {
-        for await (const event of console_.submitReply({ taskId, subtaskId, text, decideByAgent, actor })) {
-          if (closed) break
-          send(event)
-        }
-        if (!closed) {
-          response.write('data: [DONE]\n\n')
-          response.end()
-        }
-      } catch (caught) {
-        const known = caught instanceof HttpError || isAccessError(caught)
-        if (!known) console.error('butler reply failed', caught)
-        if (!response.headersSent) {
-          json(response, known ? (caught as HttpError).status : 500, { error: known ? (caught as Error).message : '服务处理请求失败' })
-          return
-        }
-        send({ type: 'error', message: known ? (caught as Error).message : '服务处理请求失败' })
-        if (!response.writableEnded) response.end()
-      }
     },
   }))
 
@@ -455,8 +576,11 @@ export async function installWeb(
   /**
    * 对话主入口。
    *
-   * 用 POST 带 SSE 响应体而不是 EventSource：请求要带 JSON 正文，响应要能被用户
-   * 随时中断。断开连接时立即中止这一轮，不留后台任务。
+   * 用 POST 带 SSE 响应体而不是 EventSource：请求要带 JSON 正文，响应要能被随时中断。
+   *
+   * 但**中断连接不再等于取消这一轮**：提交之后任务由后台继续跑，事件进会话日志。
+   * 关掉页面、切到另一个入口、断网，都只是这个观察者不再读；想真停下来要显式调
+   * `/stop`。这样「游戏里派了活就关页面」才不会把活掐掉。
    */
   ctx.effect(() => register({
     kind: 'exact',
@@ -469,44 +593,14 @@ export async function installWeb(
       const conversationId = stringField(payload, 'conversationId', 200)
 
       access.assert(actor)
-      response.writeHead(200, {
-        'content-type': 'text/event-stream; charset=utf-8',
-        'cache-control': 'no-cache',
-        connection: 'keep-alive',
+      // 受理与执行分开：这一步之后谁断线都不影响这一轮继续跑完。
+      const started = await console_.start(conversationId, message, actor)
+      await streamRun({
+        response,
+        after: started.from,
+        watch: signal => console_.watch(started.conversationId, actor, started.from, signal),
+        preamble: { type: 'conversation', conversationId: started.conversationId },
       })
-      let closed = false
-      const send = (value: unknown) => {
-        if (closed || response.writableEnded || response.destroyed) return
-        response.write(`data: ${JSON.stringify(value)}\n\n`)
-      }
-      response.once('close', () => {
-        if (closed) return
-        closed = true
-        // 用户关掉页面或点停止：立刻中止这一轮，不继续消耗模型额度。
-        try { console_.cancel(conversationId, actor) } catch { /* 会话可能已经不属于这个登录，忽略。 */ }
-      })
-
-      try {
-        // 先告诉页面会话 id，新建会话时前端据此更新地址和左栏。
-        send({ type: 'conversation', conversationId })
-        for await (const event of console_.send(conversationId, message, actor)) {
-          if (closed) break
-          send(event)
-        }
-        if (!closed) {
-          response.write('data: [DONE]\n\n')
-          response.end()
-        }
-      } catch (caught) {
-        const known = caught instanceof HttpError || isAccessError(caught)
-        if (!known) console.error('butler chat failed', caught)
-        if (!response.headersSent) {
-          json(response, known ? (caught as HttpError).status : 500, { error: known ? (caught as Error).message : '服务处理请求失败' })
-          return
-        }
-        send({ type: 'error', message: known ? (caught as Error).message : '服务处理请求失败' })
-        if (!response.writableEnded) response.end()
-      }
     },
   }))
 

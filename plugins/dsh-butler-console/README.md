@@ -109,6 +109,7 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | `maxRequestBodyBytes` | 65536 | 请求体上限 |
 | `maxActiveConversations` | 32 | 同时保留的会话数 |
 | `maxHistoryPageSize` | 30 | 历史每页条数上限 |
+| `maxConversationEvents` | 2000 | 每个会话最多保留的事件条数，供断线续传与第二个入口回放 |
 
 ## 接口
 
@@ -119,8 +120,9 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | GET | `/butler/health`、`/butler/ready` | 存活与就绪探针，公开 |
 | GET | `/butler` | 群聊页面 |
 | POST | `/butler/chat` | 派活，SSE 事件流 |
+| GET | `/butler/events` | **只读**订阅一个会话最近一轮的事件，可多入口同时观察 |
 | POST | `/butler/reply` | 回应正在等你的成员，SSE 事件流 |
-| POST | `/butler/stop` | 喊停当前这一轮 |
+| POST | `/butler/stop` | 喊停当前这一轮，可带 `taskId` 精确到某个任务 |
 | GET | `/butler/members` | 群成员（含别名与能力声明） |
 | POST | `/butler/members/alias` | 保存外号与配色；空值恢复默认 |
 | POST/DELETE | `/butler/members/avatar` | 上传或删除成员头像 |
@@ -134,9 +136,26 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 
 `/butler/chat` 与 `/butler/reply` 的 SSE 事件类型：`conversation`、`user`、`chat`、`chat_delta`、
 `plan`、`subtask`、`subtask_delta`、`subtask_thinking`、`summary`、`error`，以 `[DONE]` 结束。
+`/butler/events` 还会先给一条 `run`（这一轮的头部）；游标接不上时给 `reset`。
 
 牛马大总管自己的发言也是边收边上的：`chat_delta` 开一条气泡并逐段追加，回合结束时到达的
 `chat` 用它落定后的正文**替换**预览，所以被重试掉的那一版不会留在页面上。
+
+### 执行与观察是分开的
+
+提交之后，任务在服务端跑，事件写进该会话的事件日志，`/chat` 那条连接只是众多观察者之一。
+
+- **关掉页面不等于取消。** 断开连接只结束这一次观察；想停下来要显式调 `/stop`。
+- **同一轮可以被多方同时观察。** `/butler/events?conversationId=…` 是只读的，新增观察者不会
+  重跑任务；第二个入口、刷新后的页面都用它接上。
+- **每条事件都带 `seq`**，会话内从 1 单调递增。带着上次收到的 `seq` 用 `?after=` 续传。
+  游标已经滚出窗口时返回 `reset`，这时应当重新读 `/butler/task?id=` 取快照 —— 中间的事件
+  确实没有了，接口不会假装补齐。
+- 不传 `after` 表示只看从现在开始的新事件。
+
+`/butler/stop` 接受可选的 `taskId`：只有当前这一轮确实在跑那个任务时才中止，旧任务迟到的
+取消请求不会碰到该会话随后开的新任务。响应里的 `accepted` 只表示中止请求已经发出，
+执行方是否真的停下要看后续状态。
 
 ## 状态语义
 

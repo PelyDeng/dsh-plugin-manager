@@ -25,6 +25,14 @@ export interface Config {
   maxActiveConversations: number
   /** 运行历史每页条数上限。 */
   maxHistoryPageSize: number
+  /**
+   * 每个会话最多保留的事件条数。
+   *
+   * 事件日志是「关掉页面再打开还能接上」和「两个入口同时观察同一轮」的依据，所以它必须
+   * 活到一轮结束之后。逐字增量很密（一次长回答可能上千条），窗口太小会让晚来的观察者
+   * 频繁收到「请重取快照」，太大则白白占内存。
+   */
+  maxConversationEvents: number
 }
 
 /** Cordis 配置 schema。默认值与设计文档第 2 节的能力范围一致。 */
@@ -43,4 +51,5 @@ export const Config: Schema<Config> = Schema.object({
   maxAvatarBytes: Schema.natural().min(4096).max(2097152).default(262144),
   maxActiveConversations: Schema.natural().min(1).max(500).default(32),
   maxHistoryPageSize: Schema.natural().min(1).max(100).default(30),
+  maxConversationEvents: Schema.natural().min(50).max(20000).default(2000),
 })

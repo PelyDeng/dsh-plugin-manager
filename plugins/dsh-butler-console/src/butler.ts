@@ -30,6 +30,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import { AccessError, conversationModel, defaultConversationModel, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
 import type { Config } from './config.ts'
+import { ConversationLog, type LoggedEvent, type RunHead } from './event-log.ts'
 import type { ButlerAgentExecutor, ButlerMember, ButlerPhase, ButlerProgressUpdate, ButlerReplyRequest } from './protocol.ts'
 import type { TaskStore } from './store.ts'
 import type { SubtaskState, TaskState } from './task-model.ts'
@@ -206,6 +207,63 @@ interface WaitingMember {
   readonly displayName: string
 }
 
+/**
+ * 一次已经受理、准备执行的回合。
+ *
+ * 校验和执行分开写，是为了让「提交」这一步能同步拿到 `400`／`409` 这类可预期的失败。
+ * 如果校验也挪进后台，页面与游戏侧只会看到一条 SSE 错误，分不清是自己参数写错了、
+ * 还是前一轮还没跑完、还是服务本身坏了。
+ */
+interface PreparedTurn {
+  readonly conversationId: string
+  readonly conversation: Conversation
+  readonly text: string
+  readonly actor: Actor
+  readonly runId: string
+  readonly abort: AbortController
+}
+
+/** 一次已经受理的补话。 */
+interface PreparedReply {
+  readonly conversationId: string
+  readonly taskId: string
+  readonly subtaskId: string
+  readonly text: string
+  readonly decideByAgent: boolean
+  readonly actor: Actor
+  readonly executor: ButlerAgentExecutor
+  readonly agentId: string
+  readonly displayName: string
+  readonly runId: string
+  readonly abort: AbortController
+}
+
+/** 一次刚受理的回合，交给 HTTP 层去订阅。 */
+export interface StartedRun {
+  readonly runId: string
+  /** 这一轮挂在哪个会话上；补话的会话要从任务记录里反查，调用方拿不到。 */
+  readonly conversationId: string
+  /**
+   * 订阅起点。新的一轮从 seq 1 开始计数，所以用 0 就能拿到这一轮的全部事件，
+   * 不必先读头部再猜位置。
+   */
+  readonly from: number
+}
+
+/** 一份可订阅的观察：这一轮的头部信息加上按游标读取的事件流。 */
+export interface RunWatch {
+  readonly head: RunHead
+  readonly events: AsyncGenerator<LoggedEvent<ButlerEvent>>
+}
+
+/** 取消请求的处理结果。 */
+export interface CancelOutcome {
+  /** 是否真的中止了一轮。`false` 表示这次取消没有对象，不是错误。 */
+  readonly accepted: boolean
+  /** 给用户看的说明；`accepted` 为 true 时为空字符串。 */
+  readonly reason: string
+}
+
 /** 从助手消息里取可见文本。 */
 function textOf(content: readonly unknown[]): string {
   let result = ''
@@ -313,8 +371,20 @@ export class ButlerConsole {
   private readonly openings = new Map<string, Promise<Conversation | undefined>>()
   /** 牛马大总管会话的当前轮次；事件到达时由 `observe()` 填充。 */
   private readonly turns = new Map<string, Turn>()
-  /** 每个会话的中止控制器，用户按停止时触发。 */
-  private readonly aborts = new Map<string, AbortController>()
+  /**
+   * 每个会话当前正在执行的一轮：`conversationId` → 轮次。
+   *
+   * 执行已经不再挂在某条 HTTP 连接上，所以「谁在跑」必须自己记：用户按停止、
+   * 登录被撤销、插件卸载都要靠这份记录找到该中止的那一轮。
+   */
+  private readonly runs = new Map<string, { readonly runId: string; readonly abort: AbortController }>()
+  /**
+   * 每个会话最近一轮的事件日志，供 `/events` 回放与跟随。
+   *
+   * 新的一轮开始时覆盖旧的。关掉页面再打开、或者第二个入口要观察同一轮，都从这里读，
+   * 而不是各自重跑一遍任务。
+   */
+  private readonly logs = new Map<string, ConversationLog<ButlerEvent>>()
   /** 每个正在进行的大总管回合的正文增量出口：`sessionId` → 写进当前事件流。 */
   private readonly deltas = new Map<string, (text: string) => void>()
   /**
@@ -656,31 +726,78 @@ export class ButlerConsole {
     return { counts: this.store.counts(actor), failures: this.store.recentFailures(actor, 5) }
   }
 
-  /** 用户按下停止。 */
-  cancel(conversationId: string, actor: Actor): void {
+  /**
+   * 用户按下停止。
+   *
+   * `taskId` 可选。给了就只中止「这一轮确实在跑那个任务」的情况：旧任务迟到的取消
+   * 请求不该碰到该会话随后开的新任务，所以对不上时如实返回「已经不在执行」，
+   * 而不是顺手把当前这一轮也掐掉。
+   *
+   * `accepted` 只表示中止请求已经发出去。执行方是不是真的停下，要等它自己以
+   * `cancelled` 收尾或超时兜底，页面状态也到那一步才改。
+   */
+  cancel(conversationId: string, actor: Actor, taskId = ''): CancelOutcome {
     this.access.assert(actor)
-    this.store.assertOwner(this.validateId(conversationId), actor)
-    this.abort(conversationId)
+    const id = this.validateId(conversationId)
+    this.store.assertOwner(id, actor)
+    if (taskId !== '') {
+      const record = this.store.task(actor, taskId)
+      if (record === undefined || record.conversationId !== id) throw new AccessError(404, '任务不存在或无权访问')
+    }
+    const active = this.runs.get(id)
+    if (active === undefined) return { accepted: false, reason: '现在没有正在执行的一轮' }
+    if (taskId !== '') {
+      // 必须严格对上。当前这一轮还在理解阶段（日志里还没有 taskId）时也算对不上：
+      // 那多半是另一个新任务刚起步，拿旧任务的取消去掐它才是真的误伤。
+      const current = this.logs.get(id)?.head()?.taskId ?? ''
+      if (current !== taskId) return { accepted: false, reason: '这个任务已经不在执行了' }
+    }
+    this.abort(id)
+    return { accepted: true, reason: '' }
   }
 
   /** 中止所有正在跑的会话；登录被撤销和插件卸载时使用。 */
   cancelAll(): void {
-    for (const conversationId of [...this.aborts.keys()]) this.abort(conversationId)
+    for (const conversationId of [...this.runs.keys()]) this.abort(conversationId)
   }
 
-  /** 中止一轮：先中止子任务，再取消牛马大总管自己这一轮。 */
+  /** 中止一轮：先中止执行方，再取消牛马大总管自己这一轮。 */
   private abort(conversationId: string): void {
-    this.aborts.get(conversationId)?.abort()
+    this.runs.get(conversationId)?.abort.abort()
     this.conversations.get(conversationId)?.handle.agent.cancel({ kind: 'user' })
   }
 
   /**
-   * 处理一条用户消息，按发生顺序产出页面事件。
+   * 观察一个会话最近一轮的事件流。
    *
-   * 串行调度：计划本身表达的是先后关系，而且并行会让右栏状态难以解释。需要并行
-   * 时再作为独立改动引入。
+   * 只读：不启动任何执行，也不会让正在跑的任务重跑一遍。新增观察者只影响它自己
+   * 那一条流，断线也只是它不再读。
+   *
+   * `signal` 只用来结束**这次观察**（客户端断开时立刻收摊，不必等下一个事件），
+   * 与任务本身是否继续无关。
+   *
+   * 返回 `undefined` 表示这个会话还没有可以观察的一轮，由调用方决定是提示
+   * 「现在没有任务」还是等下一轮。
    */
-  async *send(conversationId: string, message: string, actor: Actor): AsyncGenerator<ButlerEvent> {
+  watch(conversationId: string, actor: Actor, after: number, signal?: AbortSignal): RunWatch | undefined {
+    this.access.assert(actor)
+    const id = this.validateId(conversationId)
+    this.store.assertOwner(id, actor)
+    const log = this.logs.get(id)
+    if (log === undefined) return undefined
+    const head = log.head()
+    if (head === null) return undefined
+    // 头部与事件流在同一个同步块里取：分成两次调用时若换了轮次，订阅会跟到别的任务上。
+    return { head, events: log.follow(head.runId, after, signal) }
+  }
+
+  /**
+   * 受理一条用户消息：做完所有可预期的校验，把这一轮登记为「正在执行」。
+   *
+   * 到这一步为止的失败都是同步可见的（参数不对、上一轮还没完、会话不属于这个登录），
+   * 调用方能直接给出 `400`／`409`，不必让用户去一条 SSE 流里找原因。
+   */
+  private async prepareTurn(conversationId: string, message: string, actor: Actor, runId: string): Promise<PreparedTurn> {
     this.access.assert(actor)
     const text = message.trim()
     if (text === '') throw new AccessError(400, '消息不能为空')
@@ -695,7 +812,18 @@ export class ButlerConsole {
     conversation.lastUsedAt = Date.now()
     this.store.touchConversation(conversationId, actor, text)
     const abort = new AbortController()
-    this.aborts.set(conversationId, abort)
+    this.runs.set(conversationId, { runId, abort })
+    return { conversationId, conversation, text, actor, runId, abort }
+  }
+
+  /**
+   * 跑完一轮，按发生顺序产出事件。
+   *
+   * 串行调度：计划本身表达的是先后关系，而且并行会让右栏状态难以解释。需要并行
+   * 时再作为独立改动引入。
+   */
+  private async *turnBody(turn: PreparedTurn): AsyncGenerator<ButlerEvent> {
+    const { conversation, conversationId, text, actor, abort } = turn
     yield { type: 'user', text, time: Date.now() }
 
     try {
@@ -798,7 +926,77 @@ export class ButlerConsole {
     } finally {
       conversation.active = false
       conversation.lastUsedAt = Date.now()
-      this.aborts.delete(conversationId)
+      // 只在自己还是当前那一轮时才清：同一会话上的补话会换一轮，别把新记录删掉。
+      if (this.runs.get(conversationId)?.runId === turn.runId) this.runs.delete(conversationId)
+    }
+  }
+
+  /** 直接跑一轮，把事件产出给调用方。不经过事件日志，供内部编排与测试使用。 */
+  async *send(conversationId: string, message: string, actor: Actor): AsyncGenerator<ButlerEvent> {
+    yield* this.turnBody(await this.prepareTurn(conversationId, message, actor, `butler-run-${randomUUID()}`))
+  }
+
+  /**
+   * 受理一轮并在后台执行，事件写进会话日志。
+   *
+   * 返回的是受理凭据而不是结果。提交方随后用 `watch()` 订阅；订阅断了只表示不再读，
+   * 与这一轮是否继续执行无关 —— 关掉页面不再等于取消。
+   */
+  async start(conversationId: string, message: string, actor: Actor): Promise<StartedRun> {
+    const turn = await this.prepareTurn(conversationId, message, actor, `butler-run-${randomUUID()}`)
+    const log = this.beginLog(turn.conversationId, turn.runId)
+    void this.pump(turn.abort.signal, log, this.turnBody(turn))
+    return { runId: turn.runId, conversationId: turn.conversationId, from: 0 }
+  }
+
+  /** 受理一次补话并在后台执行。 */
+  async startReply(input: {
+    taskId: string
+    subtaskId: string
+    text: string
+    decideByAgent: boolean
+    actor: Actor
+  }): Promise<StartedRun> {
+    const prepared = this.prepareReply(input, `butler-run-${randomUUID()}`)
+    const log = this.beginLog(prepared.conversationId, prepared.runId)
+    void this.pump(prepared.abort.signal, log, this.replyBody(prepared))
+    return { runId: prepared.runId, conversationId: prepared.conversationId, from: 0 }
+  }
+
+  /** 在会话上开一份新的事件日志，覆盖它的上一轮。 */
+  private beginLog(conversationId: string, runId: string): ConversationLog<ButlerEvent> {
+    const log = new ConversationLog<ButlerEvent>(this.config.maxConversationEvents)
+    log.begin(runId)
+    this.logs.set(conversationId, log)
+    return log
+  }
+
+  /**
+   * 把一轮的事件搬进日志。
+   *
+   * 订阅者断线走不到这里，所以后台执行自己得保证两件事：事件一条不漏地进日志，
+   * 以及无论成功、失败还是抛出，这一轮都必须落到一个终态。少了后者，`/events` 的
+   * 读者会永远等在一个不会再产出事件的流上。
+   */
+  private async pump(
+    signal: AbortSignal,
+    log: ConversationLog<ButlerEvent>,
+    events: AsyncGenerator<ButlerEvent>,
+  ): Promise<void> {
+    let state: 'finished' | 'cancelled' | 'failed' = 'finished'
+    try {
+      for await (const event of events) {
+        if (event.type === 'plan') log.setTaskId(event.taskId)
+        log.push(event)
+      }
+      if (signal.aborted) state = 'cancelled'
+    } catch (error) {
+      // 编排本身已经把大多数失败转成了事件；走到这里说明是编排之外的问题（例如写库失败）。
+      console.error(`butler-console: 一轮执行中断：${visibleError(error, 500)}\n${stackOf(error)}`)
+      log.push({ type: 'error', message: visibleError(error, 500), time: Date.now() })
+      state = 'failed'
+    } finally {
+      log.finish(state)
     }
   }
 
@@ -1035,21 +1233,21 @@ export class ButlerConsole {
   }
 
   /**
-   * 把用户对一次 `waiting_user` 子任务的回复交回原执行方。
+   * 受理一次对 `waiting_user` 子任务的补话。
    *
-   * 与 `dispatch` 分开：`dispatch` 是派活，这里是补话。牛马大总管不参与执行方的内部处理，
-   * 只负责把话转过去、把结果和状态带回来。
+   * 校验、状态迁移与登记都在这里完成，理由同 `prepareTurn`：`404`／`409` 要能在
+   * 提交那一刻就返回。补话同样登记到会话上，因此 `/stop` 也能中止它 —— 之前它用的是
+   * 一个没人拿得到的局部控制器，喊停对补话是没有效果的。
    */
-  async *submitReply(input: {
+  private prepareReply(input: {
     taskId: string
     subtaskId: string
     text: string
     decideByAgent: boolean
     actor: Actor
-  }): AsyncGenerator<ButlerEvent, void> {
+  }, runId: string): PreparedReply {
     this.access.assert(input.actor)
-    const key = `${input.taskId}:${input.subtaskId}`
-    const waiting = this.waiting.get(key)
+    const waiting = this.waiting.get(`${input.taskId}:${input.subtaskId}`)
     const record = this.store.task(input.actor, input.taskId)
     if (record === undefined) throw new AccessError(404, '任务不存在或无权访问')
     const subtask = record.subtasks.find(item => item.id === input.subtaskId)
@@ -1060,30 +1258,55 @@ export class ButlerConsole {
     }
     if (subtask.state !== 'waiting_user') throw new AccessError(409, '这位成员当前没有在等你回话')
 
-    const { executor, agentId, displayName } = waiting
     this.store.setSubtaskState(input.taskId, input.subtaskId, 'running')
+    const abort = new AbortController()
+    this.runs.set(record.conversationId, { runId, abort })
+    return {
+      conversationId: record.conversationId,
+      taskId: input.taskId,
+      subtaskId: input.subtaskId,
+      text: input.text,
+      decideByAgent: input.decideByAgent,
+      actor: input.actor,
+      executor: waiting.executor,
+      agentId: waiting.agentId,
+      displayName: waiting.displayName,
+      runId,
+      abort,
+    }
+  }
+
+  /**
+   * 把用户的回复交回原执行方，按发生顺序产出事件。
+   *
+   * 与 `dispatch` 分开：`dispatch` 是派活，这里是补话。牛马大总管不参与执行方的内部处理，
+   * 只负责把话转过去、把结果和状态带回来。
+   */
+  private async *replyBody(prepared: PreparedReply): AsyncGenerator<ButlerEvent> {
+    const { taskId, subtaskId, agentId, displayName } = prepared
+    const key = `${taskId}:${subtaskId}`
     yield {
-      type: 'subtask', taskId: input.taskId, id: input.subtaskId, state: 'running',
-      agentId, displayName, detail: input.decideByAgent ? '你让它自己拿主意' : `你说：${clip(input.text, 200)}`,
+      type: 'subtask', taskId, id: subtaskId, state: 'running',
+      agentId, displayName,
+      detail: prepared.decideByAgent ? '你让它自己拿主意' : `你说：${clip(prepared.text, 200)}`,
       phase: 'analyzing', time: Date.now(),
     }
 
-    const controller = new AbortController()
     const progress = progressQueue()
     const onProgress = (update: ButlerProgressUpdate) => {
       // 理由同 `dispatchSubtask`：`stage` 来自另一个插件，缺值按空状态行处理。
       const stage = update.stage ?? ''
       if (update.delta !== undefined && update.delta !== '') {
-        progress.push({ type: 'subtask_delta', taskId: input.taskId, id: input.subtaskId, agentId, delta: update.delta, time: Date.now() })
+        progress.push({ type: 'subtask_delta', taskId, id: subtaskId, agentId, delta: update.delta, time: Date.now() })
         return
       }
       if (update.thinking !== undefined && update.thinking !== '') {
-        progress.push({ type: 'subtask_thinking', taskId: input.taskId, id: input.subtaskId, agentId, thinking: update.thinking, time: Date.now() })
+        progress.push({ type: 'subtask_thinking', taskId, id: subtaskId, agentId, thinking: update.thinking, time: Date.now() })
         return
       }
       if (update.detail === undefined && update.tool === undefined) return
       progress.push({
-        type: 'subtask', taskId: input.taskId, id: input.subtaskId, state: 'running', agentId, displayName,
+        type: 'subtask', taskId, id: subtaskId, state: 'running', agentId, displayName,
         detail: clip(update.detail ? (stage === '' ? update.detail : `${stage} · ${update.detail}`) : stage, 300),
         ...(update.phase === undefined ? {} : { phase: update.phase }),
         ...(update.tool === undefined ? {} : { tool: update.tool }),
@@ -1091,57 +1314,68 @@ export class ButlerConsole {
       })
     }
     const request: ButlerReplyRequest = {
-      taskId: input.taskId,
-      subtaskId: input.subtaskId,
-      text: clip(input.text, this.config.maxMessageChars),
-      decideByAgent: input.decideByAgent,
-      owner: `${input.actor.namespace}:${input.actor.userId}`,
+      taskId,
+      subtaskId,
+      text: clip(prepared.text, this.config.maxMessageChars),
+      decideByAgent: prepared.decideByAgent,
+      owner: `${prepared.actor.namespace}:${prepared.actor.userId}`,
       // 完整身份交给执行方鉴权：owner 丢掉了 sessionId，无法反推回 Actor。
-      actor: input.actor,
-      signal: controller.signal,
+      actor: prepared.actor,
+      signal: prepared.abort.signal,
       onProgress,
     }
     try {
-      if (executor.reply === undefined) {
+      if (prepared.executor.reply === undefined) {
         const detail = `${displayName} 不接受中途回话，等它跑完或者重新描述你的目标`
-        this.store.setSubtaskState(input.taskId, input.subtaskId, 'failed', { error: detail })
+        this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
         yield {
-          type: 'subtask', taskId: input.taskId, id: input.subtaskId, state: 'failed',
+          type: 'subtask', taskId, id: subtaskId, state: 'failed',
           agentId, displayName, detail, time: Date.now(),
         }
         return
       }
-      const execution = executor.reply(request)
+      const execution = prepared.executor.reply(request)
       void execution.then(() => progress.settle(), () => progress.settle())
       for await (const event of progress.drain()) yield event
       const result = await execution
       if (result.status === 'waiting_user') {
         const question = clip(result.question ?? result.summary, 500)
-        this.store.setSubtaskState(input.taskId, input.subtaskId, 'waiting_user')
+        this.store.setSubtaskState(taskId, subtaskId, 'waiting_user')
         yield {
-          type: 'subtask', taskId: input.taskId, id: input.subtaskId, state: 'waiting_user',
+          type: 'subtask', taskId, id: subtaskId, state: 'waiting_user',
           agentId, displayName, detail: question, phase: 'waiting_user', question, time: Date.now(),
         }
         return
       }
       if (result.status === 'succeeded') {
         const summary = clip(result.summary, this.config.maxResultChars)
-        this.store.setSubtaskState(input.taskId, input.subtaskId, 'succeeded', { result: summary })
+        this.store.setSubtaskState(taskId, subtaskId, 'succeeded', { result: summary })
         this.waiting.delete(key)
-        yield { type: 'subtask', taskId: input.taskId, id: input.subtaskId, state: 'succeeded', agentId, displayName, detail: summary, time: Date.now() }
+        yield { type: 'subtask', taskId, id: subtaskId, state: 'succeeded', agentId, displayName, detail: summary, time: Date.now() }
         return
       }
       const detail = clip(result.summary === '' ? `${displayName} 没接上这活` : result.summary, this.config.maxResultChars)
       const state: SubtaskState = result.status === 'cancelled' ? 'cancelled' : 'failed'
-      this.store.setSubtaskState(input.taskId, input.subtaskId, state, { error: detail })
+      this.store.setSubtaskState(taskId, subtaskId, state, { error: detail })
       this.waiting.delete(key)
-      yield { type: 'subtask', taskId: input.taskId, id: input.subtaskId, state, agentId, displayName, detail, time: Date.now() }
+      yield { type: 'subtask', taskId, id: subtaskId, state, agentId, displayName, detail, time: Date.now() }
     } catch (error) {
       const detail = visibleError(error, this.config.maxResultChars)
-      this.store.setSubtaskState(input.taskId, input.subtaskId, 'failed', { error: detail })
+      this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
       this.waiting.delete(key)
-      yield { type: 'subtask', taskId: input.taskId, id: input.subtaskId, state: 'failed', agentId, displayName, detail, time: Date.now() }
+      yield { type: 'subtask', taskId, id: subtaskId, state: 'failed', agentId, displayName, detail, time: Date.now() }
     }
+  }
+
+  /** 直接跑一次补话，把事件产出给调用方。不经过事件日志，供内部与测试使用。 */
+  async *submitReply(input: {
+    taskId: string
+    subtaskId: string
+    text: string
+    decideByAgent: boolean
+    actor: Actor
+  }): AsyncGenerator<ButlerEvent, void> {
+    yield* this.replyBody(this.prepareReply(input, `butler-run-${randomUUID()}`))
   }
 
   /**
@@ -1187,12 +1421,14 @@ export class ButlerConsole {
   /** 停止时释放全部 Agent；不删除任何用户数据。 */
   async dispose(): Promise<void> {
     this.disposed = true
-    for (const abort of this.aborts.values()) abort.abort()
-    this.aborts.clear()
+    for (const run of this.runs.values()) run.abort.abort()
+    this.runs.clear()
     await Promise.allSettled([...this.openings.values()])
     const handles = [...this.conversations.values()].map(conversation => conversation.handle)
     this.conversations.clear()
     this.turns.clear()
+    // 事件日志只活在内存里，停止后没有读者：清掉比留一堆不会再被读的缓冲干净。
+    this.logs.clear()
     await Promise.allSettled(handles.map(handle => handle.dispose()))
   }
 }
