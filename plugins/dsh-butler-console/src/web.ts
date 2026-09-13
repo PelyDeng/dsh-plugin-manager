@@ -449,7 +449,7 @@ export async function installWeb(
       method(request, 'GET')
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams
       const state = params.get('state') ?? ''
-      if (!['', 'queued', 'running', 'waiting_user', 'summarizing', 'completed', 'failed', 'cancelled'].includes(state)) {
+      if (!['', 'queued', 'running', 'waiting_user', 'summarizing', 'external_pending', 'completed', 'failed', 'cancelled'].includes(state)) {
         throw new HttpError(400, '状态筛选值无效')
       }
       respond(actor, response, 200, console_.history(actor, {

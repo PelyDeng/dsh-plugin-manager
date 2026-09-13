@@ -9,10 +9,17 @@
 import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
-import { AccessError, type Actor } from '@dsh-plugin-manager/plugin-kit'
-import type { SubtaskState, TaskState } from './task-model.ts'
+import { AccessError, type Actor, type AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
+import { isTerminal, type SubtaskState, type TaskState } from './task-model.ts'
 
-const SCHEMA_VERSION = 1
+/**
+ * 工作台索引的数据结构版本。
+ *
+ * 2：子任务增加 `artifacts`（材料引用）与 `conversation_id`（原会话）。
+ * 升级只增列、不动已有数据；但**旧代码读到新版本会拒绝启动**，所以回滚插件版本之前要先把
+ * 库降回去，不能直接换回旧包。
+ */
+const SCHEMA_VERSION = 2
 
 /** 侧栏里的一条会话。 */
 export interface ConversationSummary {
@@ -60,6 +67,10 @@ export interface SubtaskRecord {
   readonly state: SubtaskState
   readonly result: string
   readonly error: string
+  /** 员工交回的材料引用；没有可点开的位置时为空数组。 */
+  readonly artifacts: readonly AgentArtifact[]
+  /** 员工在别处用的会话标识，便于用户回到原页面继续；没拿到时为空字符串。 */
+  readonly conversationId: string
   readonly startedAt: number | null
   readonly finishedAt: number | null
 }
@@ -68,6 +79,8 @@ export interface SubtaskRecord {
 export interface TaskCounts {
   readonly running: number
   readonly waitingUser: number
+  /** 材料已交回、还有事在别处等着办。与「等人回话」分开计数：等的东西不一样。 */
+  readonly externalPending: number
   readonly failed: number
   readonly completed: number
   readonly queued: number
@@ -105,7 +118,7 @@ export class TaskStore {
     this.db = new DatabaseSync(path)
     if (path !== ':memory:' && process.platform !== 'win32') chmodSync(path, 0o600)
     const version = Number(this.db.prepare('PRAGMA user_version').get()?.user_version ?? 0)
-    if (version !== 0 && version !== SCHEMA_VERSION) {
+    if (version !== 0 && version !== 1 && version !== SCHEMA_VERSION) {
       this.db.close()
       throw new Error(`不支持的工作台数据结构版本：${version}`)
     }
@@ -150,6 +163,8 @@ export class TaskStore {
         state TEXT NOT NULL,
         result TEXT NOT NULL DEFAULT '',
         error TEXT NOT NULL DEFAULT '',
+        artifacts TEXT NOT NULL DEFAULT '',
+        conversation_id TEXT NOT NULL DEFAULT '',
         started_at INTEGER,
         finished_at INTEGER,
         PRIMARY KEY (task_id, id)
@@ -166,8 +181,32 @@ export class TaskStore {
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (owner_namespace, owner_id, agent_id)
       );
-      PRAGMA user_version = ${SCHEMA_VERSION};
     `)
+    // 版本号**最后**才写：迁移中途失败时它不该已经前移，否则下次启动会跳过迁移、
+    // 直接去查一个还不存在的列。
+    if (version === 1) this.migrateFromV1()
+    else if (version === 0) this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+  }
+
+  /**
+   * v1 → v2：子任务补上材料引用与原会话两列。
+   *
+   * 只增列，不动任何已有数据。整体放在一个事务里：中途失败时版本号也不会前移，
+   * 不会留下「表改了一半、版本还以为没改」的状态。
+   */
+  private migrateFromV1(): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.exec(`
+        ALTER TABLE subtasks ADD COLUMN artifacts TEXT NOT NULL DEFAULT '';
+        ALTER TABLE subtasks ADD COLUMN conversation_id TEXT NOT NULL DEFAULT '';
+      `)
+      this.db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
   }
 
   /**
@@ -305,7 +344,7 @@ export class TaskStore {
 
   /** 更新任务状态；`finishedAt` 只在结束态写入一次。 */
   setTaskState(id: string, state: TaskState, patch: { note?: string; summary?: string; error?: string } = {}): void {
-    const terminal = state === 'completed' || state === 'failed' || state === 'cancelled'
+    const terminal = isTerminal(state)
     this.db.prepare(`UPDATE tasks SET state=?, updated_at=?,
         note=COALESCE(?,note), summary=COALESCE(?,summary), error=COALESCE(?,error),
         finished_at=CASE WHEN ?=1 THEN COALESCE(finished_at,?) ELSE finished_at END
@@ -316,23 +355,36 @@ export class TaskStore {
     )
   }
 
-  /** 更新子任务状态。`startedAt` 在首次进入执行态时写入，之后保持不变。 */
+  /**
+   * 更新子任务状态。`startedAt` 在首次进入执行态时写入，之后保持不变。
+   *
+   * `artifacts` 与 `conversationId` 只在传了的时候覆盖：状态事件是多次上报的，后面那些
+   * 没带材料的上报不该把先前交回的材料擦掉。
+   */
   setSubtaskState(
     taskId: string,
     subtaskId: string,
     state: SubtaskState,
-    patch: { result?: string; error?: string } = {},
+    patch: {
+      result?: string
+      error?: string
+      artifacts?: readonly AgentArtifact[]
+      conversationId?: string
+    } = {},
   ): void {
     const now = Date.now()
     const started = state === 'dispatched' || state === 'running'
-    const terminal = state === 'succeeded' || state === 'failed' || state === 'cancelled'
+    const terminal = isTerminal(state)
     this.db.prepare(`UPDATE subtasks SET state=?,
         result=COALESCE(?,result), error=COALESCE(?,error),
+        artifacts=COALESCE(?,artifacts), conversation_id=COALESCE(?,conversation_id),
         started_at=CASE WHEN ?=1 THEN COALESCE(started_at,?) ELSE started_at END,
         finished_at=CASE WHEN ?=1 THEN COALESCE(finished_at,?) ELSE finished_at END
       WHERE task_id=? AND id=?`).run(
       state,
       patch.result ?? null, patch.error ?? null,
+      patch.artifacts === undefined ? null : JSON.stringify(patch.artifacts),
+      patch.conversationId === undefined || patch.conversationId === '' ? null : patch.conversationId,
       started ? 1 : 0, now,
       terminal ? 1 : 0, now,
       taskId, subtaskId,
@@ -346,9 +398,17 @@ export class TaskStore {
       FROM tasks WHERE id=? AND owner_namespace=? AND owner_id=?`)
       .get(id, actor.namespace, actor.userId)
     if (row === undefined) return undefined
-    const subtasks = this.db.prepare(`SELECT id,seq,goal,agent_id AS agentId,reason,state,result,error,
-        started_at AS startedAt,finished_at AS finishedAt
-      FROM subtasks WHERE task_id=? ORDER BY seq`).all(id) as unknown as SubtaskRecord[]
+    const rows = this.db.prepare(`SELECT id,seq,goal,agent_id AS agentId,reason,state,result,error,
+        artifacts,conversation_id AS subtaskConversationId,started_at AS startedAt,finished_at AS finishedAt
+      FROM subtasks WHERE task_id=? ORDER BY seq`).all(id) as unknown as (Omit<SubtaskRecord, 'artifacts' | 'conversationId'> & {
+        readonly artifacts: string
+        readonly subtaskConversationId: string
+      })[]
+    const subtasks = rows.map(({ artifacts, subtaskConversationId, ...rest }) => ({
+      ...rest,
+      artifacts: parseArtifacts(artifacts),
+      conversationId: subtaskConversationId,
+    }))
     return { ...(row as unknown as Omit<TaskRecord, 'subtasks'>), subtasks }
   }
 
@@ -369,7 +429,7 @@ export class TaskStore {
     const items = this.db.prepare(`SELECT t.id AS id, t.conversation_id AS conversationId, t.goal AS goal, t.state AS state,
         t.created_at AS createdAt, t.updated_at AS updatedAt,
         (SELECT count(*) FROM subtasks s WHERE s.task_id=t.id) AS subtaskTotal,
-        (SELECT count(*) FROM subtasks s WHERE s.task_id=t.id AND s.state IN ('succeeded','failed','cancelled')) AS subtaskDone
+        (SELECT count(*) FROM subtasks s WHERE s.task_id=t.id AND s.state IN ('succeeded','failed','cancelled','external_pending')) AS subtaskDone
       FROM tasks t WHERE ${where} ORDER BY t.created_at DESC, t.id LIMIT ? OFFSET ?`)
       .all(...values, query.limit, query.offset) as unknown as TaskSummary[]
     const next = query.offset + items.length
@@ -385,6 +445,7 @@ export class TaskStore {
     return {
       running: pick('running', 'summarizing'),
       waitingUser: pick('waiting_user'),
+      externalPending: pick('external_pending'),
       failed: pick('failed'),
       completed: pick('completed'),
       queued: pick('queued'),
@@ -418,6 +479,27 @@ export class TaskStore {
   /** 关闭索引；不删除任何用户数据。 */
   close(): void {
     try { this.db.close() } catch { /* 已关闭时重复调用是安全的。 */ }
+  }
+}
+
+/**
+ * 解析落库的材料引用。
+ *
+ * 库里存的是 JSON 文本。一条脏记录不该让整个任务详情读不出来，所以解析失败按「没有材料」
+ * 处理 —— 详情页少一行链接，比整页报错好。逐条校验字段，避免把半个对象交给页面去渲染。
+ */
+function parseArtifacts(raw: string): readonly AgentArtifact[] {
+  if (raw === '') return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((item): item is AgentArtifact => {
+      if (typeof item !== 'object' || item === null) return false
+      const candidate = item as Partial<AgentArtifact>
+      return typeof candidate.title === 'string' && typeof candidate.path === 'string' && typeof candidate.kind === 'string'
+    })
+  } catch {
+    return []
   }
 }
 

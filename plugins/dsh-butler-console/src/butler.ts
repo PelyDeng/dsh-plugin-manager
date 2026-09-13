@@ -27,7 +27,7 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { AccessError, conversationModel, defaultConversationModel, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, conversationModel, defaultConversationModel, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor, type AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
 import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
 import type { Config } from './config.ts'
 import { ConversationLog, type LoggedEvent, type RunHead } from './event-log.ts'
@@ -87,6 +87,15 @@ export type ButlerEvent =
     readonly tool?: string
     /** 等待用户回答的问题；只在 `waiting_user` 时有值。 */
     readonly question?: string
+    /** 成员交回的材料引用；没有可点开的位置时不带这个字段。 */
+    readonly artifacts?: readonly AgentArtifact[]
+    /**
+     * 外部待办；只在 `external_pending` 时有值。
+     *
+     * 它是成员的结构化声明，不是从正文措辞里推断出来的 —— 客户端据此显示「待外部处理」，
+     * 而**不是**「已完成」。
+     */
+    readonly pending?: { readonly reason: string; readonly next?: string }
     readonly time: number
   }
   /**
@@ -398,6 +407,7 @@ function reportOf(subtask: {
     case 'succeeded': return subtask.result
     case 'failed': return `【${subtask.agentId}】失败：${subtask.error}`
     case 'cancelled': return `【${subtask.agentId}】${subtask.error === '' ? '已停止' : subtask.error}`
+    case 'external_pending': return `【${subtask.agentId}】材料已交回，还有事在别处等着办：${subtask.result}`
     default: return `【${subtask.agentId}】交回材料，还等着答复：${subtask.result}`
   }
 }
@@ -913,13 +923,9 @@ export class ButlerConsole {
       yield { type: 'plan', taskId, goal: text, note: plan.note, subtasks, time: Date.now() }
 
       // 第二段：按顺序调度。
-      const reports: string[] = []
-      /** 每个子任务最后落在哪个状态；收尾时据此决定这一轮的终态。 */
-      const settled = new Map<string, SubtaskState>()
       for (const subtask of subtasks) {
         if (abort.signal.aborted) {
           this.store.setSubtaskState(taskId, subtask.id, 'cancelled', { error: '已停止' })
-          settled.set(subtask.id, 'cancelled')
           yield {
             type: 'subtask', taskId, id: subtask.id, state: 'cancelled',
             agentId: subtask.agentId, displayName: subtask.displayName, detail: '已停止', time: Date.now(),
@@ -931,26 +937,20 @@ export class ButlerConsole {
           displayName: subtask.displayName, taskGoal: text, actor, signal: abort.signal,
         })) {
           yield event
-          if (event.type !== 'subtask' || event.id !== subtask.id) continue
-          // 后到的覆盖先到的：同一个子任务的状态事件是按顺序发的，最后那条就是结局。
-          //
-          // 这里**不能**只记终结态。`waiting_user` 不是终结态，但它同样是这一轮调度的结局；
-          // 漏掉它会让收尾把「等人回话」当成「被取消」，任务于是被判成取消。
-          settled.set(subtask.id, event.state)
-          if (event.state === 'succeeded') reports.push(event.detail)
-          // 等着回话的成员也要把材料带进来：这一轮此刻的结论就是「材料在这，等你定」。
-          // 少了它，任务摘要会是空的 —— 材料在子任务上，但任务级记录里什么都没有。
-          if (event.state === 'waiting_user') reports.push(`【${subtask.displayName}】${event.detail}`)
         }
       }
 
-      // 第三段：汇总与收尾。补话之后也会走到同一段，所以它只认子任务结局，不认结果从哪来。
+      // 第三段：汇总与收尾。
+      //
+      // 子任务结局与汇总材料都**从库里重建**，而不是在循环里边跑边攒：补话那条路径上
+      // 内存里早已没有这一轮的累积值（进程可能都换过一次），两条路径用同一个口径才不会
+      // 出现「派活时汇总内容对、补话后汇总内容少一半」这种只在某条路径上复现的偏差。
       yield* this.closeTask({
         taskId,
         conversation,
         goal: text,
-        subtasks: subtasks.map(item => ({ ...item, state: settled.get(item.id) ?? 'cancelled' })),
-        reports,
+        subtasks: this.storedSubtasks(actor, taskId, subtasks),
+        reports: this.storedReports(actor, taskId),
         signal: abort.signal,
         stopped: abort.signal.aborted,
       })
@@ -1197,12 +1197,20 @@ export class ButlerConsole {
     const emit = (
       state: SubtaskState,
       detail: string,
-      extra: { phase?: ButlerPhase; tool?: string; question?: string } = {},
+      extra: {
+        phase?: ButlerPhase
+        tool?: string
+        question?: string
+        artifacts?: readonly AgentArtifact[]
+        pending?: { readonly reason: string; readonly next?: string }
+      } = {},
     ): ButlerEvent => ({
       type: 'subtask', taskId, id: subtaskId, state, agentId, displayName, detail,
       ...(extra.phase === undefined ? {} : { phase: extra.phase }),
       ...(extra.tool === undefined ? {} : { tool: extra.tool }),
       ...(extra.question === undefined ? {} : { question: extra.question }),
+      ...(extra.artifacts === undefined ? {} : { artifacts: extra.artifacts }),
+      ...(extra.pending === undefined ? {} : { pending: extra.pending }),
       time: Date.now(),
     })
     /**
@@ -1304,11 +1312,51 @@ export class ButlerConsole {
         // 等待表里：页面刷新还看得见，进程一重启就只剩任务级那一句追问，材料本身没了。
         this.store.setSubtaskState(taskId, subtaskId, 'waiting_user', {
           result: clip(result.summary, this.config.maxResultChars),
+          ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+          ...(result.conversationId === undefined ? {} : { conversationId: result.conversationId }),
         })
         // 记下等待上下文，用户回复时据此把话交回同一位成员。
         this.waiting.set(`${taskId}:${subtaskId}`, { executor, agentId, displayName })
-        yield emit('waiting_user', question, { phase: 'waiting_user', question })
+        yield emit('waiting_user', question, {
+          phase: 'waiting_user',
+          question,
+          ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+        })
         return { state: 'waiting_user', report: `【${displayName}】等着你回话：${question}` }
+      }
+      if (result.status === 'external_pending') {
+        // 判定来源只有一个：员工给出的结构化声明。**不从正文措辞里猜**，也不因为
+        // 「结果里带着材料」就自行把这一轮当成可以在外部收尾 —— 那正是要避免的混用。
+        const reason = typeof result.externalPending?.reason === 'string' ? result.externalPending.reason.trim() : ''
+        if (reason === '') {
+          // 声明了自己有外部待办却没说清在等什么，属于「返回不满足协作契约」。
+          // 猜一个理由会让界面显示一件没发生过的外部事项，所以如实按失败收，材料仍然保留。
+          const detail = clip(`${displayName} 说还有外部待办，但没说明在等什么`, this.config.maxResultChars)
+          this.store.setSubtaskState(taskId, subtaskId, 'failed', {
+            error: detail,
+            result: clip(result.summary, this.config.maxResultChars),
+            ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+          })
+          if (!signal.aborted) console.warn(`butler-console: 子任务 ${taskId}:${subtaskId}（${agentId}）声明 external_pending 但没有给出理由`)
+          yield emit('failed', detail, { ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }) })
+          return { state: 'failed', report: `【${displayName}】失败：${detail}` }
+        }
+        // 材料与原始执行状态一起留下。待办理由也写进材料里：那是用户最需要看到的一句
+        // （「要去哪儿办什么」），只留在事件里的话，刷新之后任务详情就只剩一段正文，
+        // 看不出还等着谁做什么。
+        this.store.setSubtaskState(taskId, subtaskId, 'external_pending', {
+          result: clip(`${result.summary}\n\n外部待办：${reason}`, this.config.maxResultChars),
+          ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+          ...(result.conversationId === undefined ? {} : { conversationId: result.conversationId }),
+        })
+        yield emit('external_pending', reason, {
+          ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+          pending: {
+            reason,
+            ...(result.externalPending?.next === undefined ? {} : { next: result.externalPending.next }),
+          },
+        })
+        return { state: 'external_pending', report: `【${displayName}】${clip(result.summary, this.config.maxResultChars)}\n外部待办：${reason}` }
       }
       const summary = clip(result.summary, this.config.maxResultChars)
       this.store.setSubtaskState(taskId, subtaskId, 'succeeded', { result: summary })
@@ -1486,6 +1534,31 @@ export class ButlerConsole {
   }
 
   /**
+   * 收尾时要用的子任务结局，以库里的记录为准。
+   *
+   * 库里查不到时回落到计划里的那几项、并按「未跑完」处理：宁可把一轮当成没跑成，
+   * 也不要凭内存里的旧状态给它写一个偏乐观的终态。
+   */
+  private storedSubtasks(
+    actor: Actor,
+    taskId: string,
+    planned: readonly { readonly id: string; readonly goal: string; readonly agentId: string }[],
+  ): { id: string; goal: string; agentId: string; state: SubtaskState }[] {
+    const record = this.store.task(actor, taskId)
+    if (record === undefined) {
+      return planned.map(item => ({ ...item, state: 'cancelled' as SubtaskState }))
+    }
+    return record.subtasks.map(item => ({
+      id: item.id, goal: item.goal, agentId: item.agentId, state: item.state,
+    }))
+  }
+
+  /** 收尾时要交给汇总的材料，同样从库里重建。 */
+  private storedReports(actor: Actor, taskId: string): string[] {
+    return this.store.task(actor, taskId)?.subtasks.map(reportOf) ?? []
+  }
+
+  /**
    * 汇总并给这一轮写下终态。
    *
    * 派活那一轮和补话之后都会走到这里，所以它只认「子任务各自到了什么状态」和「已经拿到
@@ -1513,6 +1586,7 @@ export class ButlerConsole {
     const { taskId, conversation, goal, subtasks, reports, signal } = input
     const failed = subtasks.filter(item => item.state === 'failed').length
     const waiting = subtasks.filter(item => item.state === 'waiting_user').length
+    const external = subtasks.filter(item => item.state === 'external_pending').length
     const stopped = input.stopped || subtasks.some(item => item.state === 'cancelled')
     let taskState: TaskState
     if (stopped) taskState = 'cancelled'
@@ -1526,6 +1600,23 @@ export class ButlerConsole {
       this.store.setTaskState(taskId, 'waiting_user', { summary: reports.join('\n\n') })
       if (reports.length > 0) yield { type: 'chat', role: 'butler', text: message, time: Date.now() }
       yield { type: 'summary', taskId, text: message, state: 'waiting_user', error: '', time: Date.now() }
+      return
+    }
+
+    /**
+     * 材料已交回、剩下的事在别处办。
+     *
+     * 这里**不跑汇总轮**：这一轮的目标并没有达成，让大总管「总结一下完成情况」很容易说出
+     * 「已交付」这类结论，而实际上那件事还在外面等着。所以只如实留下材料与外部待办，
+     * 状态写 `external_pending`，本轮到此结束、随后就能开新活。后续跟进是新任务。
+     *
+     * 等用户回话优先于外部待办：有人等着补一句话时，用户还没法把这一轮放下去开新活。
+     */
+    if (external > 0 && !stopped) {
+      const message = `材料已经交回，还有 ${external} 件事要在外面办完。这一轮到此为止，想继续可以新开一轮。`
+      const error = failed === 0 ? '' : `${failed} 个子任务失败`
+      this.store.setTaskState(taskId, 'external_pending', { summary: reports.join('\n\n'), error })
+      yield { type: 'summary', taskId, text: message, state: 'external_pending', error, time: Date.now() }
       return
     }
 
@@ -1572,7 +1663,6 @@ export class ButlerConsole {
       stopped: prepared.abort.signal.aborted,
     })
   }
-
   /**
    * 汇总：把子任务结果交回给牛马大总管，由它输出最终回答。
    *

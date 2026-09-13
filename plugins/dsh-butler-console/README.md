@@ -164,21 +164,39 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 
 ## 状态语义
 
-子任务状态：`queued`、`dispatched`、`running`、`waiting_user`、`succeeded`、`failed`、
-`cancelled`；任务状态另含 `summarizing`、`completed`。合法迁移定义在 `src/task-model.ts`，
-非法迁移会被拒绝。
+子任务状态：`queued`、`dispatched`、`running`、`waiting_user`、`external_pending`、
+`succeeded`、`failed`、`cancelled`；任务状态另含 `summarizing`、`completed`。合法迁移定义在
+`src/task-model.ts`，非法迁移会被拒绝。
+
+`waiting_user` 与 `external_pending` 是两种不同的「没办完」，不合并：
+
+| 状态 | 在等什么 | 这一轮 |
+| --- | --- | --- |
+| `waiting_user` | 用户在**这里**补一句话 | 停住等回复，不补就进行不下去 |
+| `external_pending` | 用户去**别处**办（原页面采用、确认、发布） | 到此结束，可以开新活；**不是成功** |
+
+判定来源只有一个：成员返回的结构化声明 `externalPending`。管家**不解析正文措辞**，也不因为
+「结果里带着材料」就自行把这一轮当成可以在外部收尾。声明缺失或没写清在等什么时记
+`protocol_error` 式的失败并保留材料，而不是替它编一个外部事项。
+
+成员交回的材料（正文、`artifacts` 引用、原会话标识）与待办理由一起落在子任务记录上，
+`/butler/task` 读得到。
 
 页面上的每个状态都能追到一次真实事件：`plan` 事件点上「牛马大总管听懂」，「派活」来自
 `subtask.dispatched`，「牛马干活」来自 `subtask.running` 或执行方上报的
 `phase: 'tool'`，「交差」来自汇总轮结束。状态先写库再上报，刷新后重建结果一致。
 
 进程异常退出时，上次遗留的执行中任务会在下次启动收敛为失败，不会永远转圈。
+`external_pending` 是终态，不会被这次收敛改写。
 
 ## 数据放在哪里
 
 工作台索引在 DSH home 下的 `plugins/butler/butler.sqlite`：会话归属、任务计划、子任务
-状态、成员别名与头像。牛马大总管与用户的对话正文仍然存放在 DSH 官方会话日志里，本插件不复制
+状态、材料引用、成员别名与头像。牛马大总管与用户的对话正文仍然存放在 DSH 官方会话日志里，本插件不复制
 一份，也不改写宿主日志。
+
+数据结构版本目前是 **2**（子任务增加材料引用与原会话两列）。旧库在启动时就地增列，已有数据不动；
+但**旧版本代码读到新版本会拒绝启动**，所以回滚插件版本之前要先把库降回去，不能直接换回旧包。
 
 ## 本地开发
 

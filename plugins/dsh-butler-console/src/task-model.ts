@@ -11,29 +11,47 @@ export type SubtaskState =
   | 'dispatched'
   | 'running'
   | 'waiting_user'
+  | 'external_pending'
   | 'succeeded'
   | 'failed'
   | 'cancelled'
 
-/** 整个牛马大总管任务的状态。 */
-export type TaskState = 'queued' | 'running' | 'waiting_user' | 'summarizing' | 'completed' | 'failed' | 'cancelled'
+/**
+ * 整个牛马大总管任务的状态。
+ *
+ * `external_pending` 与 `waiting_user` 是两种不同的「没办完」：前者是材料已经交回、剩下的事
+ * 在别处办（去原页面采用、确认或发布），本轮到此结束、可以开新活；后者是等着用户在这里补
+ * 一句话，不补就进行不下去。前者**不是**成功 —— 那件事没有办完。
+ */
+export type TaskState =
+  | 'queued'
+  | 'running'
+  | 'waiting_user'
+  | 'summarizing'
+  | 'external_pending'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
 
 /** 子任务或任务是否已经结束，结束时不再接受新的状态事件。 */
 export function isTerminal(state: SubtaskState | TaskState): boolean {
-  return state === 'succeeded' || state === 'failed' || state === 'cancelled' || state === 'completed'
+  return state === 'succeeded' || state === 'failed' || state === 'cancelled'
+    || state === 'completed' || state === 'external_pending'
 }
 
 /**
  * 允许的状态迁移表。表里没有的迁移一律拒绝，避免前端渲染出来的状态和真实执行脱节。
  *
  * - `waiting_user` 可以继续执行，也可以被取消或被判定失败。
+ * - `external_pending` 是终态：材料已经交回，这一轮到此为止，后续跟进是新任务。
  * - 结束态之间不能互相迁移，重试是新建子任务，不是改写旧状态。
  */
 const SUBTASK_TRANSITIONS: Readonly<Record<SubtaskState, readonly SubtaskState[]>> = {
   queued: ['dispatched', 'cancelled', 'failed'],
-  dispatched: ['running', 'waiting_user', 'succeeded', 'failed', 'cancelled'],
-  running: ['waiting_user', 'succeeded', 'failed', 'cancelled'],
-  waiting_user: ['running', 'dispatched', 'succeeded', 'failed', 'cancelled'],
+  dispatched: ['running', 'waiting_user', 'external_pending', 'succeeded', 'failed', 'cancelled'],
+  running: ['waiting_user', 'external_pending', 'succeeded', 'failed', 'cancelled'],
+  waiting_user: ['running', 'dispatched', 'external_pending', 'succeeded', 'failed', 'cancelled'],
+  external_pending: [],
   succeeded: [],
   failed: [],
   cancelled: [],
@@ -41,9 +59,10 @@ const SUBTASK_TRANSITIONS: Readonly<Record<SubtaskState, readonly SubtaskState[]
 
 const TASK_TRANSITIONS: Readonly<Record<TaskState, readonly TaskState[]>> = {
   queued: ['running', 'cancelled', 'failed'],
-  running: ['waiting_user', 'summarizing', 'completed', 'failed', 'cancelled'],
-  waiting_user: ['running', 'summarizing', 'completed', 'failed', 'cancelled'],
-  summarizing: ['completed', 'failed', 'cancelled'],
+  running: ['waiting_user', 'summarizing', 'external_pending', 'completed', 'failed', 'cancelled'],
+  waiting_user: ['running', 'summarizing', 'external_pending', 'completed', 'failed', 'cancelled'],
+  summarizing: ['external_pending', 'completed', 'failed', 'cancelled'],
+  external_pending: [],
   completed: [],
   failed: [],
   cancelled: [],

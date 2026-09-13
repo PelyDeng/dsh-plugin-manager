@@ -20,6 +20,7 @@ const STATE_TEXT = {
   dispatched: '刚收到活',
   running: '在干活',
   waiting_user: '等着你回话',
+  external_pending: '待外部处理',
   succeeded: '交差了',
   failed: '翻车了',
   cancelled: '不干了',
@@ -441,7 +442,7 @@ function handleEvent(event) {
     case 'summary':
       resetRail()
       if (event.state === 'completed') setRail('sum', 'done')
-      else if (event.state === 'waiting_user') setRail('work', 'active')
+      else if (event.state === 'waiting_user' || event.state === 'external_pending') setRail('work', 'active')
       for (const view of state.bubbles.values()) view.caret.hidden = true
       append(summaryCard(event))
       state.bubbles.clear()
@@ -463,7 +464,7 @@ function handleSubtask(event) {
   view.status.textContent = STATE_TEXT[event.state] ?? event.state
   view.status.style.color =
     event.state === 'failed' ? 'var(--bt-error)'
-      : event.state === 'waiting_user' ? 'var(--bt-warn)'
+      : event.state === 'waiting_user' || event.state === 'external_pending' ? 'var(--bt-warn)'
         : event.state === 'succeeded' ? 'var(--bt-ok)'
           : 'var(--bt-ink-soft)'
 
@@ -513,6 +514,15 @@ function handleSubtask(event) {
     if (view.body === '') view.text.textContent = event.question ?? event.detail
     setRail('work', 'active')
     askCard(view, event)
+    return
+  }
+
+  if (event.state === 'external_pending') {
+    // 材料交回来了，但还有事在外面办。这里**不给回复入口**：要办的事不在这一页，
+    // 让用户在这里写一句话并不能把候选稿采用掉。也不显示成「搞定」。
+    view.bubble.classList.add('bubble--wait')
+    if (view.body === '') view.text.textContent = event.detail
+    view.footer.appendChild(make('div', 'msg__meta', '待外部处理，办好之后可以新开一轮'))
     return
   }
 
@@ -586,7 +596,9 @@ function summaryCard(event) {
   const title = event.state === 'completed' ? '老板，活干完了'
     : event.state === 'failed' ? '这次翻车了'
       : event.state === 'cancelled' ? '已喊停'
-        : '还等你回话'
+        // 「待外部处理」不是「办完了」：材料在这，那件事还在外面等着。
+        : event.state === 'external_pending' ? '材料交回了，还有事在外面等着'
+          : '还等你回话'
   card.appendChild(make('div', 'summary__title', title))
   card.appendChild(make('p', 'summary__body', event.text || event.error || '（没什么好说的）'))
   if (event.error && event.text) card.appendChild(make('div', 'msg__meta', event.error))
@@ -865,6 +877,7 @@ function renderMetrics(counts) {
   const tiles = [
     { label: '在干活', value: counts.running },
     { label: '等你回话', value: counts.waitingUser },
+    { label: '待外部处理', value: counts.externalPending },
     { label: '翻车', value: counts.failed },
     { label: '已交差', value: counts.completed },
   ]

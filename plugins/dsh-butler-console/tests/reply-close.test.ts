@@ -125,9 +125,10 @@ describe('成员交回材料但还等着答复', () => {
     expect(subtask.state).toBe('waiting_user')
     // 关键：材料在库里，不只在事件流里。
     expect(subtask.result).toBe('候选稿第一版与第二版都已交回，等你确认采用哪一版。')
-    // 任务级摘要留下的是「等你定什么」。全部成员都在等待时，之前这里会是空的 ——
-    // 一份材料都没有的等待记录，读起来像是任务什么都没做。
-    expect(f.store.task(actor, taskId)!.summary).toContain('采用第一版还是第二版')
+    // 任务级摘要从子任务记录重建，所以这一轮交回的材料在这里也读得到。
+    // 全部成员都在等待时，之前这里会是空的 —— 一份材料都没有的等待记录，读起来像是
+    // 这一轮什么都没做。
+    expect(f.store.task(actor, taskId)!.summary).toContain('候选稿第一版与第二版都已交回')
 
     f.store.close()
   })
