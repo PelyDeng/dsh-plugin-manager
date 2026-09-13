@@ -33,7 +33,7 @@ import type { Config } from './config.ts'
 import { ConversationLog, type LoggedEvent, type RunHead } from './event-log.ts'
 import type { ButlerAgentExecutor, ButlerMember, ButlerPhase, ButlerProgressUpdate, ButlerReplyRequest } from './protocol.ts'
 import type { TaskStore } from './store.ts'
-import type { SubtaskState, TaskState } from './task-model.ts'
+import { isTerminal, type SubtaskState, type TaskState } from './task-model.ts'
 
 const CONVERSATION_ID = /^butler-web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const PLAN_TOOL = 'butler_plan'
@@ -358,6 +358,27 @@ function briefFor(taskGoal: string, subtaskGoal: string): string {
     '只完成你负责的这一部分，不要代替其他 Agent 回答。',
     '如果缺少必要信息，直接说明缺什么，不要编造。',
   ].join('\n')
+}
+
+/**
+ * 从落库的子任务记录重建交给汇总的材料。
+ *
+ * 补话之后要重新汇总，而那时派活阶段的 `reports` 早已不在内存里（进程可能都换过一次），
+ * 所以按同一种口径从库里重建：成功取结果正文，失败与取消带上原因，还没答复的带上已交回的
+ * 材料和待答事项。
+ */
+function reportOf(subtask: {
+  readonly state: SubtaskState
+  readonly agentId: string
+  readonly result: string
+  readonly error: string
+}): string {
+  switch (subtask.state) {
+    case 'succeeded': return subtask.result
+    case 'failed': return `【${subtask.agentId}】失败：${subtask.error}`
+    case 'cancelled': return `【${subtask.agentId}】${subtask.error === '' ? '已停止' : subtask.error}`
+    default: return `【${subtask.agentId}】交回材料，还等着答复：${subtask.result}`
+  }
 }
 
 /**
@@ -865,17 +886,16 @@ export class ButlerConsole {
 
       // 第二段：按顺序调度。
       const reports: string[] = []
-      let failed = 0
-      let cancelled = 0
-      let waitingForUser = 0
+      /** 每个子任务最后落在哪个状态；收尾时据此决定这一轮的终态。 */
+      const settled = new Map<string, SubtaskState>()
       for (const subtask of subtasks) {
         if (abort.signal.aborted) {
           this.store.setSubtaskState(taskId, subtask.id, 'cancelled', { error: '已停止' })
+          settled.set(subtask.id, 'cancelled')
           yield {
             type: 'subtask', taskId, id: subtask.id, state: 'cancelled',
             agentId: subtask.agentId, displayName: subtask.displayName, detail: '已停止', time: Date.now(),
           }
-          cancelled += 1
           continue
         }
         for await (const event of this.dispatchSubtask({
@@ -884,45 +904,28 @@ export class ButlerConsole {
         })) {
           yield event
           if (event.type !== 'subtask' || event.id !== subtask.id) continue
+          // 后到的覆盖先到的：同一个子任务的状态事件是按顺序发的，最后那条就是结局。
+          //
+          // 这里**不能**只记终结态。`waiting_user` 不是终结态，但它同样是这一轮调度的结局；
+          // 漏掉它会让收尾把「等人回话」当成「被取消」，任务于是被判成取消。
+          settled.set(subtask.id, event.state)
           if (event.state === 'succeeded') reports.push(event.detail)
-          if (event.state === 'failed') failed += 1
-          if (event.state === 'cancelled') cancelled += 1
-          if (event.state === 'waiting_user') waitingForUser += 1
+          // 等着回话的成员也要把材料带进来：这一轮此刻的结论就是「材料在这，等你定」。
+          // 少了它，任务摘要会是空的 —— 材料在子任务上，但任务级记录里什么都没有。
+          if (event.state === 'waiting_user') reports.push(`【${subtask.displayName}】${event.detail}`)
         }
       }
 
-      // 第三段：汇总。
-      const stopped = abort.signal.aborted || cancelled > 0
-      let taskState: TaskState
-      if (stopped) taskState = 'cancelled'
-      else if (failed === 0) taskState = 'completed'
-      else if (failed === subtasks.length) taskState = 'failed'
-      else taskState = 'completed'
-      // 有人还在等用户回话时任务不算收尾：不跑汇总轮，状态停在「等人回话」。
-      if (waitingForUser > 0 && !stopped) {
-        const message = `有 ${waitingForUser} 位成员在等你回话，回完再给你汇总。`
-        this.store.setTaskState(taskId, 'waiting_user', { summary: reports.join('\n\n') })
-        if (reports.length > 0) yield { type: 'chat', role: 'butler', text: message, time: Date.now() }
-        yield { type: 'summary', taskId, text: message, state: 'waiting_user', error: '', time: Date.now() }
-        return
-      }
-      let summaryText = ''
-      if (!stopped) {
-        this.store.setTaskState(taskId, 'summarizing')
-        for await (const event of this.summarize(conversation, text, subtasks, reports, abort.signal)) {
-          const inner = summaryTextOf(event)
-          if (inner !== null) summaryText = inner
-          else yield event as ButlerEvent
-        }
-      }
-      if (summaryText === '') {
-        summaryText = reports.length === 0
-          ? '这次没有拿到可用的子任务结果。'
-          : reports.join('\n\n')
-      }
-      const error = failed === 0 ? '' : `${failed} 个子任务失败`
-      this.store.setTaskState(taskId, taskState, { summary: summaryText, error })
-      yield { type: 'summary', taskId, text: summaryText, state: taskState, error, time: Date.now() }
+      // 第三段：汇总与收尾。补话之后也会走到同一段，所以它只认子任务结局，不认结果从哪来。
+      yield* this.closeTask({
+        taskId,
+        conversation,
+        goal: text,
+        subtasks: subtasks.map(item => ({ ...item, state: settled.get(item.id) ?? 'cancelled' })),
+        reports,
+        signal: abort.signal,
+        stopped: abort.signal.aborted,
+      })
     } finally {
       conversation.active = false
       conversation.lastUsedAt = Date.now()
@@ -1203,7 +1206,11 @@ export class ButlerConsole {
       }
       if (result.status === 'waiting_user') {
         const question = clip(result.question ?? result.summary, 500)
-        this.store.setSubtaskState(taskId, subtaskId, 'waiting_user')
+        // 材料先落库再上报。之前这里只写了状态，员工交回的东西只活在事件流和进程内的
+        // 等待表里：页面刷新还看得见，进程一重启就只剩任务级那一句追问，材料本身没了。
+        this.store.setSubtaskState(taskId, subtaskId, 'waiting_user', {
+          result: clip(result.summary, this.config.maxResultChars),
+        })
         // 记下等待上下文，用户回复时据此把话交回同一位成员。
         this.waiting.set(`${taskId}:${subtaskId}`, { executor, agentId, displayName })
         yield emit('waiting_user', question, { phase: 'waiting_user', question })
@@ -1340,7 +1347,10 @@ export class ButlerConsole {
       const result = await execution
       if (result.status === 'waiting_user') {
         const question = clip(result.question ?? result.summary, 500)
-        this.store.setSubtaskState(taskId, subtaskId, 'waiting_user')
+        // 与派活时同理：材料先落库，刷新和重启之后都还找得回来。
+        this.store.setSubtaskState(taskId, subtaskId, 'waiting_user', {
+          result: clip(result.summary, this.config.maxResultChars),
+        })
         yield {
           type: 'subtask', taskId, id: subtaskId, state: 'waiting_user',
           agentId, displayName, detail: question, phase: 'waiting_user', question, time: Date.now(),
@@ -1352,6 +1362,7 @@ export class ButlerConsole {
         this.store.setSubtaskState(taskId, subtaskId, 'succeeded', { result: summary })
         this.waiting.delete(key)
         yield { type: 'subtask', taskId, id: subtaskId, state: 'succeeded', agentId, displayName, detail: summary, time: Date.now() }
+        yield* this.closeAfterReply(prepared)
         return
       }
       const detail = clip(result.summary === '' ? `${displayName} 没接上这活` : result.summary, this.config.maxResultChars)
@@ -1359,11 +1370,13 @@ export class ButlerConsole {
       this.store.setSubtaskState(taskId, subtaskId, state, { error: detail })
       this.waiting.delete(key)
       yield { type: 'subtask', taskId, id: subtaskId, state, agentId, displayName, detail, time: Date.now() }
+      yield* this.closeAfterReply(prepared)
     } catch (error) {
       const detail = visibleError(error, this.config.maxResultChars)
       this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
       this.waiting.delete(key)
       yield { type: 'subtask', taskId, id: subtaskId, state: 'failed', agentId, displayName, detail, time: Date.now() }
+      yield* this.closeAfterReply(prepared)
     }
   }
 
@@ -1376,6 +1389,94 @@ export class ButlerConsole {
     actor: Actor
   }): AsyncGenerator<ButlerEvent, void> {
     yield* this.replyBody(this.prepareReply(input, `butler-run-${randomUUID()}`))
+  }
+
+  /**
+   * 汇总并给这一轮写下终态。
+   *
+   * 派活那一轮和补话之后都会走到这里，所以它只认「子任务各自到了什么状态」和「已经拿到
+   * 哪些结果」，不关心结果是怎么来的 —— 补话路径上的材料是从库里重建的，不是内存里那份。
+   *
+   * 只要还有子任务在等用户回话，任务就不算收尾：不跑汇总轮，状态停在 `waiting_user`，
+   * 等补话那条路径把最后一位成员送走之后再回来调一次。
+   */
+  private async *closeTask(input: {
+    readonly taskId: string
+    /** 汇总要用的牛马大总管会话；拿不到时跳过汇总，仍然把终态落下。 */
+    readonly conversation: Conversation | undefined
+    readonly goal: string
+    readonly subtasks: readonly {
+      readonly id: string
+      readonly goal: string
+      readonly agentId: string
+      readonly state: SubtaskState
+    }[]
+    readonly reports: readonly string[]
+    readonly signal: AbortSignal
+    /** 这一轮是否已经被喊停。子任务里有取消的同样按停止处理。 */
+    readonly stopped: boolean
+  }): AsyncGenerator<ButlerEvent> {
+    const { taskId, conversation, goal, subtasks, reports, signal } = input
+    const failed = subtasks.filter(item => item.state === 'failed').length
+    const waiting = subtasks.filter(item => item.state === 'waiting_user').length
+    const stopped = input.stopped || subtasks.some(item => item.state === 'cancelled')
+    let taskState: TaskState
+    if (stopped) taskState = 'cancelled'
+    else if (failed === 0) taskState = 'completed'
+    else if (failed === subtasks.length) taskState = 'failed'
+    // 部分失败仍算交付：有可用结果就照常汇总，失败数单独写在 error 里。
+    else taskState = 'completed'
+
+    if (waiting > 0 && !stopped) {
+      const message = `有 ${waiting} 位成员在等你回话，回完再给你汇总。`
+      this.store.setTaskState(taskId, 'waiting_user', { summary: reports.join('\n\n') })
+      if (reports.length > 0) yield { type: 'chat', role: 'butler', text: message, time: Date.now() }
+      yield { type: 'summary', taskId, text: message, state: 'waiting_user', error: '', time: Date.now() }
+      return
+    }
+
+    let summaryText = ''
+    if (!stopped && conversation !== undefined) {
+      this.store.setTaskState(taskId, 'summarizing')
+      for await (const event of this.summarize(conversation, goal, subtasks, reports, signal)) {
+        const inner = summaryTextOf(event)
+        if (inner !== null) summaryText = inner
+        else yield event as ButlerEvent
+      }
+    }
+    if (summaryText === '') {
+      summaryText = reports.length === 0 ? '这次没有拿到可用的子任务结果。' : reports.join('\n\n')
+    }
+    const error = failed === 0 ? '' : `${failed} 个子任务失败`
+    this.store.setTaskState(taskId, taskState, { summary: summaryText, error })
+    yield { type: 'summary', taskId, text: summaryText, state: taskState, error, time: Date.now() }
+  }
+
+  /**
+   * 补话之后看看这一轮能不能收尾了。
+   *
+   * 全部子任务都终结时才汇总：之前这里什么都不做，于是老板答复完最后一位成员、那位成员也
+   * 干完了，任务却永远停在「等人回话」，拿不到应有的结论。还有人在等、或者还有活没派完时
+   * 保持原样，任务继续停在 `waiting_user`，等下一次补话。
+   *
+   * 会话句柄找不到时把 `conversation` 留空交给 `closeTask`：它照常写下终态与材料，
+   * 只是不跑汇总那一轮。宁可这一次没有结论，也不能把任务永远留在「等人回话」。
+   */
+  private async *closeAfterReply(prepared: PreparedReply): AsyncGenerator<ButlerEvent> {
+    const record = this.store.task(prepared.actor, prepared.taskId)
+    if (record === undefined) return
+    if (record.subtasks.some(item => !isTerminal(item.state))) return
+    yield* this.closeTask({
+      taskId: record.id,
+      conversation: this.conversations.get(prepared.conversationId),
+      goal: record.goal,
+      subtasks: record.subtasks.map(item => ({
+        id: item.id, goal: item.goal, agentId: item.agentId, state: item.state,
+      })),
+      reports: record.subtasks.map(reportOf),
+      signal: prepared.abort.signal,
+      stopped: prepared.abort.signal.aborted,
+    })
   }
 
   /**
