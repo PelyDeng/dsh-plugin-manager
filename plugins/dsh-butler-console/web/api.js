@@ -56,7 +56,7 @@ export const api = {
     if (conversationId !== '') params.set('conversationId', conversationId)
     return request(`/history?${params.toString()}`)
   },
-  task: id => request(`/task?id=${encodeURIComponent(id)}`),
+  task: (id, signal) => request(`/task?id=${encodeURIComponent(id)}`, signal === undefined ? {} : { signal }),
   stop: (conversationId, signal) => request('/stop', { method: 'POST', body: JSON.stringify({ conversationId }), signal }),
   setAlias: (agentId, displayName, accent) =>
     request('/members/alias', { method: 'POST', body: JSON.stringify({ agentId, displayName, accent }) }),
@@ -98,18 +98,21 @@ export async function uploadAvatar(agentId, file) {
  *
  * 用 POST + SSE 而不是 EventSource：请求要带 JSON 正文。中断时由调用方 abort，
  * 服务端会在连接断开时中止这一轮。
+ * `requestId` 是提交幂等身份（S07）：同一次提交的每次重试复用同一个 ID，
+ * 服务端据此认出「同一句话」而不是再派一遍活。
  */
-export async function* chat({ conversationId, message, signal }) {
-  yield* postStream('/chat', { conversationId, message }, signal)
+export async function* chat({ conversationId, message, requestId, signal }) {
+  yield* postStream('/chat', { conversationId, message, ...(requestId === undefined ? {} : { requestId }) }, signal)
 }
 
 /**
- * 回应一位正在等你的成员。
+ * 回应一位正在等待的成员。
  *
  * 与 `/chat` 一样：受理之后执行在后台跑，这条连接只是「我在这里看着」。
+ * `requestId` 幂等语义同 {@link chat}；改了措辞就是新的一次回话，要换新 ID。
  */
-export async function* reply({ taskId, subtaskId, text, decideByAgent, signal }) {
-  yield* postStream('/reply', { taskId, subtaskId, text, decideByAgent }, signal)
+export async function* reply({ taskId, subtaskId, text, decideByAgent, requestId, signal }) {
+  yield* postStream('/reply', { taskId, subtaskId, text, decideByAgent, ...(requestId === undefined ? {} : { requestId }) }, signal)
 }
 
 /**
@@ -130,8 +133,8 @@ export async function* events({ conversationId, after, signal }) {
  * 接上一轮之前先问一句，可以避免为一个根本没在跑的任务把整轮事件重新拉一遍。
  * 返回 `null` 表示没有可观察的一轮。
  */
-export async function eventsHead(conversationId) {
-  const { run } = await request(`/events?conversationId=${encodeURIComponent(conversationId)}&probe=1`)
+export async function eventsHead(conversationId, signal) {
+  const { run } = await request(`/events?conversationId=${encodeURIComponent(conversationId)}&probe=1`, signal === undefined ? {} : { signal })
   return run ?? null
 }
 

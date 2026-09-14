@@ -31,7 +31,7 @@ import { AccessError, conversationModel, defaultConversationModel, listPlugins, 
 import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
 import type { Config } from './config.ts'
 import { ConversationLog, type LoggedEvent, type RunHead } from './event-log.ts'
-import type { ButlerAgentExecutor, ButlerMember, ButlerPhase, ButlerProgressUpdate, ButlerReplyRequest } from './protocol.ts'
+import type { ButlerAgentExecutor, ButlerDispatchResult, ButlerMember, ButlerPhase, ButlerProgressUpdate, ButlerReplyRequest } from './protocol.ts'
 import type { RequestRecord, SubtaskRecord, TaskInput, TaskStore } from './store.ts'
 import { isTerminal, dependencyVerdict, type SubtaskState, type TaskState } from './task-model.ts'
 
@@ -56,6 +56,13 @@ export type ButlerEvent =
    * 正文**替换**预览（重试过的那一版就不会留在页面上）。
    */
   | { readonly type: 'chat_delta'; readonly role: 'butler'; readonly text: string; readonly time: number }
+  /**
+   * 模型重试开始：当前预览作废，下一段增量从新气泡起头（方案 S08）。
+   *
+   * 旧尝试的迟到帧不再转发，预览也不再把两次尝试的正文拼在一起——重试掉的那一版
+   * 不该留在页面上，更不该和新版混成一句。
+   */
+  | { readonly type: 'chat_reset'; readonly time: number }
   /**
    * 这一轮接受了一条新的需求或补充。
    *
@@ -255,6 +262,8 @@ interface WaitingMember {
   readonly executor: ButlerAgentExecutor
   readonly agentId: string
   readonly displayName: string
+  /** 该成员原业务会话：进度早期上报或结果落库的引用，续问时沿它续接（G01/G02）。 */
+  readonly conversationId?: string
 }
 
 /**
@@ -284,6 +293,8 @@ interface PreparedReply {
   readonly executor: ButlerAgentExecutor
   readonly agentId: string
   readonly displayName: string
+  /** 成员原业务会话引用：来自早期上报或结果落库，交给执行方续接（可为空）。 */
+  readonly memberConversationId?: string
   readonly runId: string
   readonly abort: AbortController
 }
@@ -629,6 +640,10 @@ export class ButlerConsole {
   private readonly logs = new Map<string, ConversationLog<ButlerEvent>>()
   /** 每个正在进行的大总管回合的正文增量出口：`sessionId` → 写进当前事件流。 */
   private readonly deltas = new Map<string, (text: string) => void>()
+  /** 每个会话当前采用的流式尝试（宿主帧的 attemptId）：旧尝试的迟到帧按它丢弃（S08）。 */
+  private readonly streamAttempts = new Map<string, unknown>()
+  /** 尝试切换时通知回合回调重置预览（发出 chat_reset）。 */
+  private readonly deltaResets = new Map<string, () => void>()
   /**
    * 正在等待用户回话的子任务：`taskId:subtaskId` → 该子任务的执行方。
    *
@@ -1181,7 +1196,8 @@ export class ButlerConsole {
       // 第一段：理解与拆解。它自己的话边收边上：回合还没结束就把增量发给页面。
       const speech = progressQueue()
       const planningTurn = this.runTurn(conversation, text, abort.signal,
-        delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }))
+        delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
+        () => speech.push({ type: 'chat_reset', time: Date.now() }))
       void planningTurn.then(() => speech.settle(), () => speech.settle())
       for await (const event of speech.drain()) yield event
       const planning = await planningTurn
@@ -1449,6 +1465,7 @@ export class ButlerConsole {
       const speech = progressQueue()
       const turn = this.runTurn(conversation, prompt, prepared.abort.signal,
         delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
+        () => speech.push({ type: 'chat_reset', time: Date.now() }),
         { taskId, subtasks: record.subtasks })
       void turn.then(() => speech.settle(), () => speech.settle())
       for await (const event of speech.drain()) yield event
@@ -1793,6 +1810,7 @@ export class ButlerConsole {
     text: string,
     signal: AbortSignal,
     onDelta?: (text: string) => void,
+    onReset?: () => void,
     context?: { readonly taskId: string; readonly subtasks: readonly SubtaskRecord[] },
   ): Promise<{ outcome: TurnOutcome; text: string; plans: readonly PlanSubmission[] }> {
     const sessionId = String(conversation.handle.agent.session.id)
@@ -1804,6 +1822,7 @@ export class ButlerConsole {
     }
     this.turns.set(sessionId, turn)
     if (onDelta !== undefined) this.deltas.set(sessionId, onDelta)
+    if (onReset !== undefined) this.deltaResets.set(sessionId, onReset)
     const finished = new Promise<TurnOutcome>(resolve => {
       turn.resolve = outcome => {
         if (turn.done) return
@@ -1825,6 +1844,8 @@ export class ButlerConsole {
     } finally {
       this.turns.delete(sessionId)
       this.deltas.delete(sessionId)
+      this.deltaResets.delete(sessionId)
+      this.streamAttempts.delete(sessionId)
     }
   }
 
@@ -1842,10 +1863,23 @@ export class ButlerConsole {
       const chunk = frame.chunk as { type?: unknown; text?: unknown }
       console.debug('butler-stream host-frame', { kind: String(chunk.type), len: typeof chunk.text === 'string' ? chunk.text.length : 0 })
     }
+    const sessionKey = String(agent?.session?.id ?? '')
+    if (sessionKey === '') return
+    // 尝试隔离（S08）：`start` 宣告新尝试；旧尝试的迟到帧按当前尝试丢弃，预览重置。
+    if (frame.type === 'start') {
+      if (this.streamAttempts.get(sessionKey) !== frame.attemptId) {
+        this.streamAttempts.set(sessionKey, frame.attemptId)
+        this.deltaResets.get(sessionKey)?.()
+      }
+      return
+    }
     if (frame.type !== 'chunk' || frame.chunk.type !== 'text-delta') return
+    const current = this.streamAttempts.get(sessionKey)
+    if (current !== undefined && current !== frame.attemptId) return
+    if (current === undefined) this.streamAttempts.set(sessionKey, frame.attemptId)
     const text = frame.chunk.text
     if (text === '') return
-    this.deltas.get(String(agent?.session?.id ?? ''))?.(text)
+    this.deltas.get(sessionKey)?.(text)
   }
 
   /**
@@ -1869,6 +1903,51 @@ export class ButlerConsole {
           ? { kind: 'failed', message: visibleError(reason.error, 500) }
           : { kind: 'cancelled' })
     }
+  }
+
+  /**
+   * 成员结果的统一落库（G04）：派发与续问共用同一套状态矩阵，每种合法状态都把正文、
+   * 原会话、材料与待办声明写全。
+   *
+   * 之前两条路径各写一份且都有缺：reply 的 `external_pending` 落成 `failed`，成功分支
+   * 只写 summary 丢掉材料与会话；dispatch 的成功分支同样丢引用。事件上报由调用方按
+   * 各自的展示差异发出，落库口径只有这一份。
+   */
+  private applyMemberResult(taskId: string, subtaskId: string, result: ButlerDispatchResult): void {
+    const max = this.config.maxResultChars
+    const artifacts = result.artifacts === undefined ? {} : { artifacts: result.artifacts }
+    const conversation = result.conversationId === undefined || result.conversationId === ''
+      ? {}
+      : { conversationId: result.conversationId }
+    if (result.status === 'succeeded') {
+      this.store.setSubtaskState(taskId, subtaskId, 'succeeded', { result: clip(result.summary, max), ...artifacts, ...conversation })
+      return
+    }
+    if (result.status === 'waiting_user') {
+      this.store.setSubtaskState(taskId, subtaskId, 'waiting_user', { result: clip(result.summary, max), ...artifacts, ...conversation })
+      return
+    }
+    if (result.status === 'external_pending') {
+      const reason = typeof result.externalPending?.reason === 'string' ? result.externalPending.reason.trim() : ''
+      if (reason === '') {
+        // 声明了外部待办却没说明在等什么，按「返回不满足协作契约」收：猜一个理由等于
+        // 给用户显示一件没发生过的外部事项。材料仍然保留。
+        this.store.setSubtaskState(taskId, subtaskId, 'failed', {
+          error: '说还有外部待办，但没说明在等什么',
+          result: clip(result.summary, max), ...artifacts, ...conversation,
+        })
+        return
+      }
+      this.store.setSubtaskState(taskId, subtaskId, 'external_pending', {
+        result: clip(`${result.summary}\n\n外部待办：${reason}`, max), ...artifacts, ...conversation,
+      })
+      return
+    }
+    const cancelled = result.status === 'cancelled'
+    // 失败/取消只写 error，result 由 COALESCE 保留先前交回的阶段性成果。
+    this.store.setSubtaskState(taskId, subtaskId, cancelled ? 'cancelled' : 'failed', {
+      error: cancelled && clip(result.summary, max) === '' ? '已停止' : clip(result.summary, max),
+    })
   }
 
   /**
@@ -1980,6 +2059,8 @@ export class ButlerConsole {
     let timedOut = false
     const timer = setTimeout(() => { timedOut = true; controller.abort() }, this.config.subtaskTimeoutMs)
     let running = false
+    // 迄今见过的原业务会话引用（G01/G02）：进度早期上报优先，结果兜底；等待登记与续问都沿它。
+    let memberConversationId: string | undefined
     /**
      * 把执行方的一次进度上报翻译成页面事件。
      *
@@ -1992,8 +2073,19 @@ export class ButlerConsole {
       // `stage` 是另一个插件的事件载荷：这里按跨插件边界处理，缺了按空状态行显示，不拿它
       // 直接去压平空白 —— 一个展示字段缺值不该把整轮子任务打成 TypeError 失败。
       const stage = update.stage ?? ''
+      // 早期引用（G02）：拿到业务会话就落库，不等 final——final 前失败或进程重启，任务
+      // 记录里仍找得回原会话，不需要重新派活去补。引用只表示可找到，不表示业务完成。
+      if (update.conversationId !== undefined && update.conversationId !== '') {
+        memberConversationId ??= update.conversationId
+        this.store.setSubtaskState(taskId, subtaskId, 'running', {
+          conversationId: update.conversationId,
+          ...(update.conversationArtifact === undefined ? {} : { artifacts: [update.conversationArtifact] }),
+        })
+      }
       if (update.needsReply === true) {
-        this.store.setSubtaskState(taskId, subtaskId, 'waiting_user')
+        this.store.setSubtaskState(taskId, subtaskId, 'waiting_user', {
+          ...(update.conversationId === undefined || update.conversationId === '' ? {} : { conversationId: update.conversationId }),
+        })
         progress.push(emit('waiting_user', clip(update.detail ?? stage, 300), {
           phase: 'waiting_user',
           question: clip(update.detail ?? stage, 500),
@@ -2035,6 +2127,7 @@ export class ButlerConsole {
       void execution.then(() => progress.settle(), () => progress.settle())
       for await (const event of progress.drain()) yield event
       const result = await execution
+      if (result.conversationId !== undefined && result.conversationId !== '') memberConversationId = result.conversationId
       if (result.status === 'cancelled' || signal.aborted || timedOut) {
         const detail = timedOut ? `超过 ${Math.round(this.config.subtaskTimeoutMs / 1000)} 秒没干完，已叫停` : '已停止'
         this.store.setSubtaskState(taskId, subtaskId, 'cancelled', { error: detail })
@@ -2043,21 +2136,19 @@ export class ButlerConsole {
       }
       if (result.status === 'failed') {
         const detail = clip(result.summary === '' ? `${displayName} 没干成这活` : result.summary, this.config.maxResultChars)
-        this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
+        this.applyMemberResult(taskId, subtaskId, result)
         yield emit('failed', detail)
         return { state: 'failed', report: `【${displayName}】失败：${detail}` }
       }
       if (result.status === 'waiting_user') {
         const question = clip(result.question ?? result.summary, 500)
-        // 材料先落库再上报。之前这里只写了状态，员工交回的东西只活在事件流和进程内的
-        // 等待表里：页面刷新还看得见，进程一重启就只剩任务级那一句追问，材料本身没了。
-        this.store.setSubtaskState(taskId, subtaskId, 'waiting_user', {
-          result: clip(result.summary, this.config.maxResultChars),
-          ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
-          ...(result.conversationId === undefined ? {} : { conversationId: result.conversationId }),
+        // 落库走统一矩阵（G04）：正文、原会话与材料一次写全，刷新和重启都找得回。
+        this.applyMemberResult(taskId, subtaskId, result)
+        // 记下等待上下文，用户回复时据此把话交回同一位成员；带上原会话引用供续问（G01）。
+        this.waiting.set(`${taskId}:${subtaskId}`, {
+          executor, agentId, displayName,
+          ...(memberConversationId === undefined ? {} : { conversationId: memberConversationId }),
         })
-        // 记下等待上下文，用户回复时据此把话交回同一位成员。
-        this.waiting.set(`${taskId}:${subtaskId}`, { executor, agentId, displayName })
         // 等待不是终态，执行的定时器已经撤了，这里另起一个等回话的。
         this.scheduleWaitingTimeout(taskId, subtaskId, displayName, input.actor)
         yield emit('waiting_user', question, {
@@ -2071,27 +2162,15 @@ export class ButlerConsole {
         // 判定来源只有一个：员工给出的结构化声明。**不从正文措辞里猜**，也不因为
         // 「结果里带着材料」就自行把这一轮当成可以在外部收尾 —— 那正是要避免的混用。
         const reason = typeof result.externalPending?.reason === 'string' ? result.externalPending.reason.trim() : ''
+        this.applyMemberResult(taskId, subtaskId, result)
         if (reason === '') {
-          // 声明了自己有外部待办却没说清在等什么，属于「返回不满足协作契约」。
-          // 猜一个理由会让界面显示一件没发生过的外部事项，所以如实按失败收，材料仍然保留。
-          const detail = clip(`${displayName} 说还有外部待办，但没说明在等什么`, this.config.maxResultChars)
-          this.store.setSubtaskState(taskId, subtaskId, 'failed', {
-            error: detail,
-            result: clip(result.summary, this.config.maxResultChars),
-            ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
-          })
           if (!signal.aborted) console.warn(`butler-console: 子任务 ${taskId}:${subtaskId}（${agentId}）声明 external_pending 但没有给出理由`)
+          const detail = clip(`${displayName} 说还有外部待办，但没说明在等什么`, this.config.maxResultChars)
           yield emit('failed', detail, { ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }) })
           return { state: 'failed', report: `【${displayName}】失败：${detail}` }
         }
-        // 材料与原始执行状态一起留下。待办理由也写进材料里：那是用户最需要看到的一句
-        // （「要去哪儿办什么」），只留在事件里的话，刷新之后任务详情就只剩一段正文，
-        // 看不出还等着谁做什么。
-        this.store.setSubtaskState(taskId, subtaskId, 'external_pending', {
-          result: clip(`${result.summary}\n\n外部待办：${reason}`, this.config.maxResultChars),
-          ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
-          ...(result.conversationId === undefined ? {} : { conversationId: result.conversationId }),
-        })
+        // 待办理由随结果落库（applyMemberResult）：只留在事件里的话，刷新之后任务详情
+        // 就只剩一段正文，看不出还等着谁做什么。
         yield emit('external_pending', reason, {
           ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
           pending: {
@@ -2102,7 +2181,7 @@ export class ButlerConsole {
         return { state: 'external_pending', report: `【${displayName}】${clip(result.summary, this.config.maxResultChars)}\n外部待办：${reason}` }
       }
       const summary = clip(result.summary, this.config.maxResultChars)
-      this.store.setSubtaskState(taskId, subtaskId, 'succeeded', { result: summary })
+      this.applyMemberResult(taskId, subtaskId, result)
       yield emit('succeeded', summary)
       return { state: 'succeeded', report: summary }
     } catch (error) {
@@ -2165,6 +2244,10 @@ export class ButlerConsole {
     this.clearWaitingTimeout(`${input.taskId}:${input.subtaskId}`)
     const abort = new AbortController()
     this.runs.set(record.conversationId, { runId, abort })
+    // 原成员会话引用（G01）：等待登记里的早期上报优先，库里落的结果引用兜底。
+    // 交给执行方沿它续接；没有引用时不编造，由执行方按自己的规则处理。
+    const memberConversationId = waiting.conversationId
+      ?? (subtask.conversationId === '' ? undefined : subtask.conversationId)
     return {
       conversationId: record.conversationId,
       taskId: input.taskId,
@@ -2175,6 +2258,7 @@ export class ButlerConsole {
       executor: waiting.executor,
       agentId: waiting.agentId,
       displayName: waiting.displayName,
+      ...(memberConversationId === undefined ? {} : { memberConversationId }),
       runId,
       abort,
     }
@@ -2198,9 +2282,18 @@ export class ButlerConsole {
       }
 
       const progress = progressQueue()
+      let latestConversationId = prepared.memberConversationId
       const onProgress = (update: ButlerProgressUpdate) => {
         // 理由同 `dispatchSubtask`：`stage` 来自另一个插件，缺值按空状态行处理。
         const stage = update.stage ?? ''
+        // 早期引用同派发路径（G02）：续问期间拿到会话也尽早落库。
+        if (update.conversationId !== undefined && update.conversationId !== '') {
+          latestConversationId ??= update.conversationId
+          this.store.setSubtaskState(taskId, subtaskId, 'running', {
+            conversationId: update.conversationId,
+            ...(update.conversationArtifact === undefined ? {} : { artifacts: [update.conversationArtifact] }),
+          })
+        }
         if (update.delta !== undefined && update.delta !== '') {
           progress.push({ type: 'subtask_delta', taskId, id: subtaskId, agentId, delta: update.delta, time: Date.now() })
           return
@@ -2221,8 +2314,11 @@ export class ButlerConsole {
       const request: ButlerReplyRequest = {
         taskId,
         subtaskId,
+        // 续问的幂等身份（G01）：runId 在同一次受理（含重试）内稳定，新的回话自然换新 ID。
+        requestId: prepared.runId,
         text: clip(prepared.text, this.config.maxMessageChars),
         decideByAgent: prepared.decideByAgent,
+        ...(prepared.memberConversationId === undefined ? {} : { conversationId: prepared.memberConversationId }),
         owner: `${prepared.actor.namespace}:${prepared.actor.userId}`,
         // 完整身份交给执行方鉴权：owner 丢掉了 sessionId，无法反推回 Actor。
         actor: prepared.actor,
@@ -2243,30 +2339,47 @@ export class ButlerConsole {
         void execution.then(() => progress.settle(), () => progress.settle())
         for await (const event of progress.drain()) yield event
         const result = await execution
+        if (result.conversationId !== undefined && result.conversationId !== '') latestConversationId = result.conversationId
+        // 落库走与派发同一份结果矩阵（G04）：每种合法状态都写全正文、原会话与材料。
+        this.applyMemberResult(taskId, subtaskId, result)
         if (result.status === 'waiting_user') {
           const question = clip(result.question ?? result.summary, 500)
-          // 与派活时同理：材料先落库，刷新和重启之后都还找得回来。
-          this.store.setSubtaskState(taskId, subtaskId, 'waiting_user', {
-            result: clip(result.summary, this.config.maxResultChars),
+          // 回话又引出新的等待：重新登记等待上下文与闹钟，用户可以继续回话。
+          this.waiting.set(key, {
+            executor: prepared.executor, agentId, displayName,
+            ...(latestConversationId === undefined ? {} : { conversationId: latestConversationId }),
           })
+          this.scheduleWaitingTimeout(taskId, subtaskId, displayName, prepared.actor)
           yield {
             type: 'subtask', taskId, id: subtaskId, state: 'waiting_user',
             agentId, displayName, detail: question, phase: 'waiting_user', question, time: Date.now(),
           }
           return
         }
+        this.waiting.delete(key)
         if (result.status === 'succeeded') {
           const summary = clip(result.summary, this.config.maxResultChars)
-          this.store.setSubtaskState(taskId, subtaskId, 'succeeded', { result: summary })
-          this.waiting.delete(key)
           yield { type: 'subtask', taskId, id: subtaskId, state: 'succeeded', agentId, displayName, detail: summary, time: Date.now() }
+          yield* this.closeAfterReply(prepared)
+          return
+        }
+        if (result.status === 'external_pending') {
+          const reason = typeof result.externalPending?.reason === 'string' ? result.externalPending.reason.trim() : ''
+          const detail = reason === ''
+            ? clip(`${displayName} 说还有外部待办，但没说明在等什么`, this.config.maxResultChars)
+            : reason
+          const failed = reason === ''
+          yield {
+            type: 'subtask', taskId, id: subtaskId, state: failed ? 'failed' : 'external_pending',
+            agentId, displayName, detail, time: Date.now(),
+            ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+            ...(!failed && result.externalPending?.next !== undefined ? { pending: { reason, next: result.externalPending.next } } : {}),
+          }
           yield* this.closeAfterReply(prepared)
           return
         }
         const detail = clip(result.summary === '' ? `${displayName} 没接上这活` : result.summary, this.config.maxResultChars)
         const state: SubtaskState = result.status === 'cancelled' ? 'cancelled' : 'failed'
-        this.store.setSubtaskState(taskId, subtaskId, state, { error: detail })
-        this.waiting.delete(key)
         yield { type: 'subtask', taskId, id: subtaskId, state, agentId, displayName, detail, time: Date.now() }
         yield* this.closeAfterReply(prepared)
       } catch (error) {
@@ -2533,7 +2646,8 @@ export class ButlerConsole {
     ].join('\n')
     const speech = progressQueue()
     const summaryTurn = this.runTurn(conversation, prompt, signal,
-      delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }))
+      delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
+      () => speech.push({ type: 'chat_reset', time: Date.now() }))
     void summaryTurn.then(() => speech.settle(), () => speech.settle())
     for await (const event of speech.drain()) yield event
     const outcome = await summaryTurn

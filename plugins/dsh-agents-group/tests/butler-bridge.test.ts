@@ -37,7 +37,20 @@ function stubParticipant(result: Partial<Awaited<ReturnType<AgentParticipant['ru
       onRun?.(request)
       return { status: 'completed', conversationId: 'conv-1', text: '查到了', ...result }
     }),
+    // 默认带续问入口：G01 之后 reply 是显式能力，桥接按它暴露；
+    // 验证「没有 reply」的用例用 stubParticipantWithoutReply。
+    reply: vi.fn(async (request: never) => {
+      onRun?.(request)
+      return { status: 'completed', conversationId: 'conv-1', text: '续上了', ...result }
+    }),
   } as unknown as AgentParticipant
+}
+
+/** 不实现续问的参与者：桥接不应替它暴露 reply。 */
+function stubParticipantWithoutReply(): AgentParticipant {
+  const stub = { ...stubParticipant() } as { reply?: unknown }
+  delete stub.reply
+  return stub as unknown as AgentParticipant
 }
 
 const request = (overrides: Record<string, unknown> = {}) => ({
@@ -69,14 +82,75 @@ describe('执行入口的身份传递', () => {
     expect(seen.actor?.sessionId).toBe('login-a')
   })
 
-  it('reply 路径同样传完整身份', async () => {
-    let seen: { actor?: unknown } = {}
-    const executor = executorFor(manifest, stubParticipant({}, value => { seen = value as { actor?: unknown } }))
+  it('reply 路径同样传完整身份，且续问身份与会话分开（G01）', async () => {
+    let seen: Record<string, unknown> = {}
+    const executor = executorFor(manifest, stubParticipant({}, value => { seen = value as Record<string, unknown> }))
     await executor.reply?.({
-      taskId: 'task-1', subtaskId: 'sub-1', text: '用上周的数据',
+      taskId: 'task-1', subtaskId: 'sub-1', requestId: 'reply-run-9', text: '用上周的数据',
+      conversationId: 'member-conv-7',
       decideByAgent: false, owner: 'user:alice', actor, signal: new AbortController().signal,
     })
     expect(seen.actor).toEqual(actor)
+    // requestId 是这一次回话的幂等身份，不再复用子任务 ID；原会话沿它续接。
+    expect(seen.requestId).toBe('reply-run-9')
+    expect(seen.requestId).not.toBe(seen.missionId)
+    expect(seen.conversationId).toBe('member-conv-7')
+  })
+
+  it('旧调用方缺 requestId 时明确拒绝，不回落子任务 ID（G01 防撞键）', async () => {
+    let seen: Record<string, unknown> | undefined
+    const executor = executorFor(manifest, stubParticipant({}, value => { seen = value as Record<string, unknown> }))
+    await expect(executor.reply?.({
+      taskId: 'task-1', subtaskId: 'sub-1', requestId: '', text: '缺身份的回话',
+      decideByAgent: false, owner: 'user:alice', actor, signal: new AbortController().signal,
+    } as unknown as Parameters<NonNullable<typeof executor.reply>>[0])).rejects.toThrow(/幂等身份/)
+    // 回落会让同一子任务多次回话撞键：这里必须保证参与者根本没被调用。
+    expect(seen).toBeUndefined()
+  })
+
+  it('纯空白的 requestId（空格、制表符）同样拒绝，参与者未被调用', async () => {
+    let seen: Record<string, unknown> | undefined
+    const executor = executorFor(manifest, stubParticipant({}, value => { seen = value as Record<string, unknown> }))
+    for (const blank of ['   ', '\t', ' \t ']) {
+      await expect(executor.reply?.({
+        taskId: 'task-1', subtaskId: 'sub-1', requestId: blank, text: '空白身份的回话',
+        decideByAgent: false, owner: 'user:alice', actor, signal: new AbortController().signal,
+      })).rejects.toThrow(/幂等身份/)
+    }
+    expect(seen).toBeUndefined()
+  })
+
+  it('参与者没实现 reply 就不暴露续问入口', () => {
+    const executor = executorFor(manifest, stubParticipantWithoutReply())
+    expect(executor.reply).toBeUndefined()
+  })
+
+  it('协议版本或身份不一致的参与者直接拒绝包装（G03）', () => {
+    const wrongProtocol = { ...stubParticipant(), protocol: 2 } as unknown as AgentParticipant
+    expect(() => executorFor(manifest, wrongProtocol)).toThrow(/协议版本不兼容/)
+    const wrongId = { ...stubParticipant(), id: 'someone-else' } as unknown as AgentParticipant
+    expect(() => executorFor(manifest, wrongId)).toThrow(/身份与清单不一致/)
+  })
+
+  it('进度里的早期会话引用原样透传（G02）', async () => {
+    let seen: Record<string, unknown> | undefined
+    const participant = {
+      protocol: 1, id: 'closedoff', displayName: '替身', description: '替身',
+      assertAccess() {},
+      async run(request: { onProgress?: (update: unknown) => void }) {
+        request.onProgress?.({
+          kind: 'status', text: '开工', conversationId: 'member-conv-7',
+          conversationArtifact: { kind: 'conversation', title: '查看原会话', path: '/agents/blog?conversationId=member-conv-7' },
+        })
+        return { status: 'completed', conversationId: 'member-conv-7', text: '办好了' }
+      },
+    } as unknown as AgentParticipant
+    const executor = executorFor(manifest, participant)
+    await executor.dispatch({ ...request(), onProgress: update => { seen = update as unknown as Record<string, unknown> } })
+    expect(seen?.conversationId).toBe('member-conv-7')
+    expect(seen?.conversationArtifact).toEqual({
+      kind: 'conversation', title: '查看原会话', path: '/agents/blog?conversationId=member-conv-7',
+    })
   })
 })
 
@@ -172,7 +246,7 @@ describe('执行入口的字段翻译', () => {
       externalPending: { reason: '还在等采用' },
     }))
     const result = await executor.reply?.({
-      taskId: 'task-1', subtaskId: 'sub-1', text: '再改一版', decideByAgent: false,
+      taskId: 'task-1', subtaskId: 'sub-1', requestId: 'reply-run-2', text: '再改一版', decideByAgent: false,
       owner: 'user:alice', actor, signal: new AbortController().signal,
     })
     expect(result?.status).toBe('external_pending')

@@ -63,6 +63,7 @@ export function agentConfig(config: Config, agentId: string): AgentConfig {
  *
  * 默认启用：没在配置里写过的 Agent 应该照常工作，否则新增 Agent 会「装了但不出现」。
  */
-export function isAgentEnabled(config: Config, agentId: string): boolean {
-  return config.agents[agentId]?.enabled ?? true
+export function isAgentEnabled(config: Config, agentId: string, defaultEnabled?: boolean): boolean {
+  // 默认开关由清单给：验收成员（verificationOnly）默认关，普通成员默认开。
+  return config.agents[agentId]?.enabled ?? defaultEnabled ?? true
 }

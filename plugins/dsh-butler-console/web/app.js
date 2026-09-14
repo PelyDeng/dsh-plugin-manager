@@ -169,6 +169,13 @@ const state = {
   viewToken: 0,
   /** 发送时预渲染、等服务端回放确认的那条用户消息；失败时用它恢复草稿。 */
   pendingUser: null,
+  /** 本轮事件消费进度：seq 用于断线重订的游标，taskId 用于 reset 后取快照。 */
+  lastSeq: 0,
+  lastRunTaskId: '',
+  /** 本轮受理的 runId：重订时的预期对象（S06 不混轮次）。 */
+  lastRunId: '',
+  /** 上一条落定的大总管正文：汇总卡与之相同时不再重复整段（S12）。 */
+  lastChatText: '',
   /** 子任务 id → 该成员当前的气泡与状态节点，供流式增量原地更新。 */
   bubbles: new Map(),
   /** 大总管正在流式发言的那条气泡；落定的 `chat` 收它。 */
@@ -559,10 +566,18 @@ function handleEvent(event) {
 
     case 'chat':
       butlerSettle(event.text, event.time)
+      // 落定正文记下来：汇总与之相同就不再整段重复（S12）。
+      state.lastChatText = event.text
       break
 
     case 'chat_delta':
       butlerDelta(event.text)
+      break
+
+    case 'chat_reset':
+      // 模型重试开始（S08）：当前预览作废，下一段增量从新气泡起头，
+      // 两次尝试的正文不拼在一起。
+      state.butlerSpeech = null
       break
 
     case 'input': {
@@ -595,7 +610,8 @@ function handleEvent(event) {
 
     case 'subtask_delta': {
       const view = state.bubbles.get(event.id)
-      if (view === undefined) break
+      // 终态之后不再追加（S08）：迟到帧不把已校准的结论再改掉。
+      if (view === undefined || view.terminal === true) break
       view.body += event.delta
       view.text.textContent = view.body
       view.caret.hidden = false
@@ -613,7 +629,11 @@ function handleEvent(event) {
       // 汇总是这一轮的定论：链路条按最终状态推进，已走过的步骤保持点亮。
       applySummaryRail(event.state)
       for (const view of state.bubbles.values()) view.caret.hidden = true
-      append(summaryCard(event))
+      // 正文只展示一次（S12）：总结气泡已经承载的正文，汇总卡不再整段重复；
+      // 历史回放没有对应气泡时（renderTaskRecord），卡片照常承载。
+      append(summaryCard(event.text !== '' && event.text === state.lastChatText
+        ? { ...event, text: '' }
+        : event))
       state.bubbles.clear()
       state.asks.clear()
       break
@@ -638,6 +658,11 @@ function handleSubtask(event) {
           : 'var(--bt-ink-soft)'
 
   if (event.state === 'dispatched') {
+    // 新一次尝试从头开始（S08）：同一子任务重派时清掉上次的预览与终态标记，
+    // 旧尝试的迟到增量不串进新版。
+    view.body = ''
+    view.text.textContent = ''
+    view.terminal = false
     view.bubble.appendChild(make('div', 'typing')).appendChild(make('i'))
     const typing = view.bubble.querySelector('.typing')
     typing.appendChild(make('i'))
@@ -697,7 +722,11 @@ function handleSubtask(event) {
 
   if (event.state === 'succeeded') {
     view.bubble.classList.add('bubble--done')
-    if (view.body === '') view.text.textContent = event.detail
+    view.terminal = true
+    // 终态正文是权威结论（S09）：增量预览无论收到多少，成功那一刻按它校准，
+    // 丢段或重试残留的预览不会一直留在页面上。
+    view.text.textContent = event.detail ?? view.body
+    view.body = view.text.textContent
     if (view.progress !== null) {
       view.progress.value = 100
       view.progress.fill.style.width = '100%'
@@ -708,6 +737,7 @@ function handleSubtask(event) {
   }
 
   if (event.state === 'failed' || event.state === 'cancelled') {
+    view.terminal = true
     // classList.add('') 会抛 TypeError（取消态没样式类）：错误文本曾因此漏进线程。
     if (event.state === 'failed') view.bubble.classList.add('bubble--fail')
     if (view.body === '') view.text.textContent = event.detail
@@ -742,13 +772,21 @@ function askCard(view, event) {
   view.footer.appendChild(card)
 
   const lock = locked => { for (const node of [send, decide, input]) node.disabled = locked }
+  // 回话的幂等身份（S07）：同一次回话（含失败后原样重试）复用同一个 ID；用户改了
+  // 措辞就是新的一次回话，换新 ID——服务端按 ID 去重，重试不会把同一句话送两遍。
+  let replyRequestId = null
+  let lastTriedText = null
   const submit = async (text, decideByAgent) => {
     if (state.streaming) return
     // 空文本不提交（方案 I03）：「你看着办」是显式语义，单独走按钮。
     if (!decideByAgent && text === '') { input.focus(); return }
+    if (replyRequestId === null || lastTriedText !== text) {
+      replyRequestId = newConversationId()
+      lastTriedText = text
+    }
     lock(true)
     const note = card.appendChild(make('div', 'msg__meta', '正在送出回话…'))
-    await runReply({ taskId: event.taskId, subtaskId: event.id, text, decideByAgent }, {
+    await runReply({ taskId: event.taskId, subtaskId: event.id, text, decideByAgent, requestId: replyRequestId }, {
       // 受理成功才收起卡片；之前失败都在卡内恢复，输入不丢。
       onAccepted: () => {
         card.remove()
@@ -786,7 +824,8 @@ function summaryCard(event) {
           : event.state === 'partial' ? '有些活没干成，成果在这儿'
           : '还等你回话'
   card.appendChild(make('div', 'summary__title', title))
-  card.appendChild(make('p', 'summary__body', event.text || event.error || '（没什么好说的）'))
+  // 正文去重后为空（总结气泡已承载）时不显示占位——那会像「没有结论」。
+  if (event.text || event.error) card.appendChild(make('p', 'summary__body', event.text || event.error))
   if (event.error && event.text) card.appendChild(make('div', 'msg__meta', event.error))
   return card
 }
@@ -886,18 +925,9 @@ async function resumeLiveTurn() {
   state.asks.clear()
   resetRail()
   setBusy(true)
+  // 只读订阅接续：reset 时按快照校准并从窗口头续订，断线有界重订（S05/S06）。
   try {
-    for await (const event of events({ conversationId, after: 0, signal: controller.signal })) {
-      if (event.type === 'run') continue
-      traceEvent('receive', event)
-      if (event.type === 'reset') {
-        // 这一轮太长，开头的事件已经滚出窗口：补不回来了，如实说明而不是假装从头发过。
-        append(make('p', 'error-line', '这一轮的早期进度已经过期，只接上了后半段；完整状态看右栏。'))
-        continue
-      }
-      handleEvent(event)
-      if (streamTraceEnabled) requestAnimationFrame(() => traceEvent('draw', event))
-    }
+    await followUntilTerminal(conversationId, { from: 0, expectedRunId: head.runId, signal: controller.signal })
   } catch (error) {
     reportFailure(error, '接上正在跑的任务失败')
   } finally {
@@ -905,7 +935,7 @@ async function resumeLiveTurn() {
   }
 }
 
-async function sendMessage(text) {
+async function sendMessage(text, reuseRequestId) {
   const trimmed = text.trim()
   if (trimmed === '' || state.streaming) return
   const fresh = state.conversationId === null
@@ -916,44 +946,50 @@ async function sendMessage(text) {
     clear(el.thread)
     threadInner()
   }
-  // 回合级状态每轮都换新：链路条不能带着上一轮的进度开跑。
+  // 回合级状态每轮都换新：链路条不能带着上一轮的进度开跑，runId 也要清——
+  // 新请求未收到回执就断流时，不能还顶着上一轮的身份去跟随（B 轮会接错 A 轮）。
   state.bubbles.clear()
   state.asks.clear()
+  state.lastSeq = 0
+  state.lastRunTaskId = ''
+  state.lastRunId = ''
   resetRail()
   setRail('parse', 'active')
   setBusy(true)
   state.abort = new AbortController()
+  // 提交幂等身份（S07）：同一次提交的重试复用，新的提交换新 ID——服务端按它认出
+  // 「同一句话」，重试不会把活再派一遍。
+  const requestId = reuseRequestId ?? newConversationId()
   el.input.value = ''
   autosize()
   // 提交内容先就地呈现，配一行「正在发送」：受理与否是服务端事实，客户端不编（方案 S03）。
   const bubble = userMessage(trimmed, Date.now())
   const note = append(make('p', 'msg__meta', '正在发送…'))
   state.pendingUser = { text: trimmed, bubble }
+  let sawTerminal = false
   try {
-    for await (const event of chat({ conversationId: state.conversationId, message: trimmed, signal: state.abort.signal })) {
-      traceEvent('receive', event)
-      // 受理确认只把占位从「发送中」推进到「理解中」；正文、计划或异常到达前不撤掉
-      // 占位——conversation 是元事件，不能当「已经有内容」的信号（方案 S03）。
-      if (event.type === 'conversation') {
-        note.textContent = '正在理解目标…'
-      } else if (event.type !== 'user') {
-        note.remove()
-      }
-      handleEvent(event)
-      if (streamTraceEnabled) requestAnimationFrame(() => traceEvent('draw', event))
+    for await (const event of chat({ conversationId: state.conversationId, message: trimmed, requestId, signal: state.abort.signal })) {
+      if (event.type === 'summary') sawTerminal = true
+      consumeTurnEvent(event, note)
     }
     state.pendingUser = null
     if (note.isConnected) note.remove()
+    // 连接自然结束但终态没来（S06）：断连窗口里可能已收尾或仍在跑，跟到终态为止。
+    if (!sawTerminal && state.abort.signal.aborted === false) {
+      await followUntilTerminal(state.conversationId, { from: state.lastSeq, expectedRunId: state.lastRunId, signal: state.abort.signal })
+    }
   } catch (error) {
     if (note.isConnected) note.remove()
     if (state.pendingUser !== null) {
-      // 还没受理就失败了：草稿回到输入框（用户后来打过字就不覆盖），并给出重试入口。
+      // 还没受理就失败了：草稿回到输入框（用户后来打过字就不覆盖），并给出重试入口；
+      // 重试复用同一个 requestId，不会把活再派一遍。
       state.pendingUser = null
       if (el.input.value.trim() === '') { el.input.value = trimmed; autosize() }
-      retryEntry(trimmed, error instanceof Error && error.message ? error.message : '没送出去', bubble)
+      retryEntry(trimmed, error instanceof Error && error.message ? error.message : '没送出去', bubble, requestId)
     } else {
-      // 已受理后连接断掉：这一轮还在服务端跑，如实报错，不冒充停止也不自动重发。
+      // 已受理后连接断掉：这一轮还在服务端跑，重订事件流跟到终态，不自动重发。
       reportFailure(error, '发送失败')
+      await followUntilTerminal(state.conversationId, { from: state.lastSeq, expectedRunId: state.lastRunId, signal: state.abort.signal })
     }
     scrollIfFollowing()
   } finally {
@@ -961,8 +997,8 @@ async function sendMessage(text) {
   }
 }
 
-/** 提交失败后的重试入口：撤掉失败的痕迹，原样重发同一句话。 */
-function retryEntry(text, message, staleBubble) {
+/** 提交失败后的重试入口：撤掉失败的痕迹，原样重发同一句话（同一幂等身份）。 */
+function retryEntry(text, message, staleBubble, requestId) {
   const row = make('div', 'error-line error-line--retry')
   row.appendChild(make('span', null, `${message}。`))
   const button = make('button', 'btn btn--tiny', '重试')
@@ -970,7 +1006,7 @@ function retryEntry(text, message, staleBubble) {
   button.addEventListener('click', () => {
     staleBubble?.remove()
     row.remove()
-    void sendMessage(text)
+    void sendMessage(text, requestId)
   })
   row.appendChild(button)
   append(row)
@@ -979,21 +1015,32 @@ function retryEntry(text, message, staleBubble) {
 async function runReply(input, hooks = {}) {
   setBusy(true)
   state.abort = new AbortController()
+  // 与 sendMessage 同一套回合重置：runId 不清会让新一轮回话顶着上一轮的身份。
+  state.lastSeq = 0
+  state.lastRunId = ''
   let accepted = false
+  let sawTerminal = false
   try {
     for await (const event of reply({ ...input, signal: state.abort.signal })) {
+      if (event.type === 'summary') sawTerminal = true
       traceEvent('receive', event)
       if (!accepted) {
         accepted = true
         // 受理确认：请示卡到这一步才收起，之前失败都还能改（方案 I03）。
         hooks.onAccepted?.()
       }
-      handleEvent(event)
-      if (streamTraceEnabled) requestAnimationFrame(() => traceEvent('draw', event))
+      consumeTurnEvent(event)
+    }
+    // 与提交同一条恢复路径（S06）：没看到终态就跟到终态。
+    if (!sawTerminal && accepted && state.abort.signal.aborted === false && state.conversationId !== null) {
+      await followUntilTerminal(state.conversationId, { from: state.lastSeq, expectedRunId: state.lastRunId, signal: state.abort.signal })
     }
   } catch (error) {
     reportFailure(error, '回复没送出去')
     if (!accepted) hooks.onRejected?.(error)
+    else if (state.conversationId !== null && state.abort.signal.aborted === false) {
+      await followUntilTerminal(state.conversationId, { from: state.lastSeq, expectedRunId: state.lastRunId, signal: state.abort.signal })
+    }
   } finally {
     finishTurn()
   }
@@ -1006,6 +1053,187 @@ function reportFailure(error, fallback) {
     return
   }
   append(make('p', 'error-line', error instanceof Error && error.message ? error.message : fallback))
+}
+
+/* ── 恢复一致性（B 批 S05/S06/S09/S12）────────────────────────────────── */
+
+/**
+ * 消费一条本轮事件：更新游标与任务标识，正文/汇总按现有分发渲染。
+ * 三条流（提交、回话、只读接续）共用，保证断线重订时游标口径只有一份。
+ */
+function consumeTurnEvent(event, note) {
+  traceEvent('receive', event)
+  if (event.type === 'run') {
+    // 新一轮开始：seq 空间按轮重置，游标跟着归零；runId 是断线重订的「预期对象」，
+    // 必须在消费回执时记下——没有它，重订无法证明跟随的还是原受理的那一轮。
+    state.lastSeq = 0
+    state.lastRunId = event.runId
+    if (event.taskId) state.lastRunTaskId = event.taskId
+  }
+  if (event.seq !== undefined) state.lastSeq = event.seq
+  if (event.type === 'subtask' && event.taskId) state.lastRunTaskId = event.taskId
+  if (event.type === 'plan' && event.taskId) state.lastRunTaskId = event.taskId
+  if (note !== null && note !== undefined) {
+    // 受理确认只推进占位；正文、计划或异常到达才撤（方案 S03）。run/reset 是流元事件，
+    // 不代表「已经有内容」——B 批曾让 run 误撤占位，退回了 A 批修过的行为。
+    if (event.type === 'conversation') note.textContent = '正在理解目标…'
+    else if (event.type !== 'user' && event.type !== 'run' && event.type !== 'reset') note.remove()
+  }
+  handleEvent(event)
+  if (streamTraceEnabled) requestAnimationFrame(() => traceEvent('draw', event))
+}
+
+/**
+ * 按服务端快照校准终态（S06/S09）：断连期间这轮可能已经收尾，权威结论在任务记录里。
+ * 快照只在没消费到 summary 时补一张终态卡，不重放整条线程（那会重复已显示的内容）。
+ * 读取挂调用方的截止信号：整个恢复过程共用一个硬期限。
+ */
+async function calibrateFromSnapshot(conversationId, stop) {
+  try {
+    if (state.lastRunTaskId === '') return
+    const record = await api.task(state.lastRunTaskId, stop)
+    if (record.conversationId !== conversationId) return
+    if (!['completed', 'failed', 'cancelled', 'partial'].includes(record.state)) return
+    applySummaryRail(record.state)
+    append(summaryCard({ state: record.state, text: record.summary, error: record.error }))
+    scrollIfFollowing()
+  } catch { /* 快照拿不到就保持现状：已有内容不因校准失败而清空。 */ }
+}
+
+/**
+ * 按快照**重建**一轮还在跑的任务（S05 reset 校准）。
+ *
+ * 之前这里只处理终态：运行中的快照直接返回，随后却把游标推进到窗口头——尚未恢复的
+ * 成员状态、正文和引用全被跳过。现在运行中同样重建：线程按快照重画，等待中的成员
+ * 重新拿到回复入口，游标以重建时点之后的窗口头为准（快照读取到重订之间存在极小的
+ * 事件窗口，由随后的事件逐步覆盖，不假装无缝）。读取同样挂截止信号。
+ */
+async function rebuildFromSnapshot(conversationId, stop) {
+  try {
+    if (state.lastRunTaskId === '') return null
+    const record = await api.task(state.lastRunTaskId, stop)
+    if (record.conversationId !== conversationId) return null
+    state.viewToken += 1
+    clear(el.thread)
+    threadInner()
+    state.bubbles.clear()
+    state.asks.clear()
+    resetRail()
+    renderTaskRecord(record, { liveResume: true })
+    el.thread.scrollTop = el.thread.scrollHeight
+    return record
+  } catch {
+    append(make('p', 'error-line', '按快照重建失败；已收到的内容保留，终态以右栏为准。'))
+    return null
+  }
+}
+
+/**
+ * 只读跟随一轮事件直到终态（S05/S06）：断线重订、reset 后按快照重建再从窗口头续订、
+ * 无终态结束时按运行状态选择重订或按快照补终态卡。全部复用现有 /events 与 /task 接口。
+ *
+ * 不混轮次：跟随对象由 `expectedRunId` **预先指定**（本轮 run 头的消费回执或恢复探测）。
+ * 没有回执时不跟随——探测到的「当前最新一轮」无法证明属于原提交，归属未知就如实
+ * 说明，不把别人的轮次接进本次视图。重放的旧 seq 直接丢弃；快照读取失败不推进游标，
+ * 保留原位按预算重试。
+ * 硬期限：订阅、探测、快照读取与退避共用同一个截止信号（AbortSignal.any 组合调用方
+ * 取消与剩余期限），悬挂中的任何一步到期即中止，退避可被截止提前唤醒；预算（2s 起、
+ * 封顶 4s、最多 4 次、总长 120s）耗尽后如实放弃，不无限重试。
+ */
+async function followUntilTerminal(conversationId, { from, expectedRunId, signal }) {
+  let after = from
+  if (expectedRunId === undefined || expectedRunId === '') {
+    // 归属未知（例如提交流断在 run 头之前）：明确说明并按快照尽量收尾，
+    // 不用「当前最新一轮」冒充原受理。
+    append(make('p', 'msg__meta', '这次提交的受理回执没有收到，无法确认还在跑的那一轮是否属于它；结果请以右栏任务记录为准。'))
+    return
+  }
+  const followedRunId = expectedRunId
+  const deadline = Date.now() + 120000
+  let reconnects = 0
+  const giveUp = () => { append(make('p', 'error-line', '这一轮的后续跟不上了；已收到的内容保留，终态以右栏为准。')) }
+  // 可中断退避：截止或取消提前唤醒；进入时信号已取消则立即退出，不空等计时器。
+  // timer 先声明再赋值：done 可能被同步调度器立即调用，不能踩到初始化之前。
+  const backoff = stop => new Promise(resolve => {
+    if (stop.aborted) { resolve(); return }
+    let timer
+    const done = () => { clearTimeout(timer); stop.removeEventListener('abort', done); resolve() }
+    timer = setTimeout(done, Math.min(1000 * 2 ** reconnects, 4000))
+    stop.addEventListener('abort', done, { once: true })
+  })
+  for (;;) {
+    let sawTerminal = false
+    let sawReset = false
+    // 截止信号：每轮按剩余期限重建，取消与到期都能中断订阅、探测与快照读取。
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) { giveUp(); return }
+    const timeout = AbortSignal.timeout(remaining)
+    const stop = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+    try {
+      for await (const event of events({ conversationId, after, signal: stop })) {
+        if (event.type === 'run') {
+          // 轮次边界：与预期不符（服务端已换轮）立即按快照收尾，不消费新轮任何事件。
+          if (event.runId !== followedRunId) {
+            await calibrateFromSnapshot(conversationId, stop)
+            return
+          }
+          state.lastSeq = 0
+          if (event.taskId) state.lastRunTaskId = event.taskId
+          continue
+        }
+        if (event.type === 'reset') {
+          // 滚出窗口的事件补不回来：按快照重建（运行中同样重建），再从窗口头续订。
+          sawReset = true
+          continue
+        }
+        // 不混轮次：别的轮次的重放事件不应用；同一轮内重放的旧序号直接丢弃。
+        if (event.runId !== undefined && event.runId !== followedRunId) continue
+        if (event.seq !== undefined) {
+          if (after > 0 && event.seq <= after) continue
+          after = event.seq
+        }
+        if (event.type === 'summary') sawTerminal = true
+        consumeTurnEvent(event)
+      }
+      if (sawTerminal) return
+      const head = await eventsHead(conversationId, stop)
+      if (head === null || head.state !== 'running') {
+        // 连接自然结束但没看到终态：终态多半在断连窗口里发生，按快照补结论（S06）。
+        await calibrateFromSnapshot(conversationId, stop)
+        return
+      }
+      if (head.runId !== followedRunId) {
+        // 跟随的那一轮已被新的一轮接替：按快照收尾，不把新轮内容混进本次视图。
+        await rebuildFromSnapshot(conversationId, stop)
+        return
+      }
+      if (sawReset) {
+        // 重建要用快照：任务标识从探测头部取——reset 流本身不带 run 头（浏览器实测发现），
+        // 刷新接续时 lastRunTaskId 还是空，不补这一步重建会空转。
+        if (head.taskId) state.lastRunTaskId = head.taskId
+        const rebuilt = await rebuildFromSnapshot(conversationId, stop)
+        // 快照读取失败不推进游标：保留原位，本轮按预算退避后重试重建（重订还会得到
+        // reset，重建再次尝试）；只有重建成功才对齐到探测头部的窗口位置。重建成功后
+        // 从 head.seq 续订——探测与重建之间产生的事件 seq 必然更大，续订会带上，
+        // 不丢也不重复重放（head.seq 之前的事件不重放）。
+        if (rebuilt !== null) after = head.seq
+      }
+    } catch (error) {
+      if (signal?.aborted) return
+      if (error?.name === 'AbortError') {
+        if (timeout.aborted) { giveUp(); return }
+        continue
+      }
+    }
+    // 自然 EOF 后仍在跑（或断线）：同一份退避预算，不因「流正常结束」就零等待重连。
+    reconnects += 1
+    if (reconnects >= 4 || Date.now() > deadline) {
+      giveUp()
+      return
+    }
+    await backoff(stop)
+    if (stop.aborted && !signal?.aborted) { giveUp(); return }
+  }
 }
 
 async function finishTurn() {
@@ -1408,7 +1636,10 @@ async function openTask(id) {
  * 刷新页面后走这条路径，所以显示的状态与数据库里的一致；原始对话正文由宿主的会话日志
  * 承载，这里只重建任务维度能确定的部分。
  */
-function renderTaskRecord(record) {
+function renderTaskRecord(record, opts = {}) {
+  /** `liveResume`：从快照接续一轮还在跑的任务（S05 reset 校准），不是历史回放。 */
+  const liveResume = opts.liveResume === true
+  const terminalRecord = ['completed', 'failed', 'cancelled', 'partial'].includes(record.state)
   userMessage(record.goal, record.createdAt)
   butlerMessage(record.note ? `我按这个思路拆的：${record.note}` : '我按下面的方式拆了任务。', record.createdAt)
   append(planNote({
@@ -1424,6 +1655,7 @@ function renderTaskRecord(record) {
       : (subtask.result || STATE_TEXT[subtask.state] || '')
     view.text.textContent = text
     view.body = text
+    if (['succeeded', 'failed', 'cancelled', 'external_pending'].includes(subtask.state)) view.terminal = true
     if (subtask.state === 'succeeded') {
       view.bubble.classList.add('bubble--done')
       if (subtask.finishedAt && subtask.startedAt) {
@@ -1433,15 +1665,23 @@ function renderTaskRecord(record) {
     if (subtask.state === 'failed') view.bubble.classList.add('bubble--fail')
     if (subtask.state === 'waiting_user') {
       view.bubble.classList.add('bubble--wait')
-      // 历史里的等待无法直接回复（进程已重启），只提示重新描述目标。
-      view.footer.appendChild(make('div', 'msg__meta', '这次等待已经过去了，重新说一遍目标就能再接上'))
+      if (liveResume) {
+        // 快照接续的等待是活的：等待上下文仍在服务端，重新给回复入口而不是宣告过期。
+        askCard(view, { taskId: record.id, id: subtask.id, question: subtask.result || '需要你补充点信息', detail: subtask.result ?? '' })
+      } else {
+        // 历史里的等待无法直接回复（进程已重启），只提示重新描述目标。
+        view.footer.appendChild(make('div', 'msg__meta', '这次等待已经过去了，重新说一遍目标就能再接上'))
+      }
     }
   }
-  append(summaryCard({
-    state: record.state,
-    text: record.summary,
-    error: record.error,
-  }))
+  // 运行中的快照没有定论：终态卡只在终态或历史回放时出现，否则链路条如实反映进行中。
+  if (terminalRecord || !liveResume) {
+    append(summaryCard({
+      state: record.state,
+      text: record.summary,
+      error: record.error,
+    }))
+  }
   // 历史回放也要让链路条反映这一轮走到哪了，与实时汇总共用同一套语义。
   applySummaryRail(record.state)
 }
