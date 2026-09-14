@@ -52,18 +52,6 @@ const BUILTIN_AVATARS = [
   { file: 'builtin-15.png', label: '草莓' },
 ]
 
-/** 换内置头像 = 把那张图当作上传头像交给现有接口，服务端逻辑零改动。 */
-async function applyBuiltinAvatar(agentId, file) {
-  try {
-    const response = await fetch(`${ROUTE_PREFIX}/assets/media/avatars/builtin/${file}`)
-    if (!response.ok) throw new Error('内置头像读取失败')
-    const blob = await response.blob()
-    await applyAvatar(agentId, new File([blob], file, { type: 'image/png' }))
-  } catch (error) {
-    window.alert(error instanceof Error && error.message ? error.message : '没换上，再试一次')
-  }
-}
-
 const STATE_TEXT = {
   queued: '排队中',
   dispatched: '刚收到活',
@@ -158,6 +146,11 @@ const el = {
   drawerToggle: document.getElementById('drawer-toggle'),
   backdrop: document.getElementById('drawer-backdrop'),
   jumpLatest: document.getElementById('jump-latest'),
+  srStatus: document.getElementById('sr-status'),
+  leftPanel: document.getElementById('left-panel'),
+  rightPanel: document.getElementById('drawer'),
+  settingsTitle: document.getElementById('settings-title'),
+  settingsLive: document.getElementById('settings-live-note'),
 }
 
 const state = {
@@ -235,6 +228,17 @@ function make(tag, className, text) {
   if (className) node.className = className
   if (text !== undefined && text !== null) node.textContent = String(text)
   return node
+}
+
+/**
+ * 关键状态播报（方案 6.2）：写入专门的礼貌 live 区域，只报提交、等待、停止和收尾
+ * 这类有意义的变化；正文增量绝不进这里，避免逐 token 打断屏幕阅读器。
+ */
+function announce(text) {
+  if (text === '') return
+  el.srStatus.textContent = ''
+  // 清空后下一轮任务再写，保证同名变化也能再次触发播报。
+  nextFrame(() => { el.srStatus.textContent = text })
 }
 
 function clear(node) {
@@ -640,6 +644,8 @@ function memberMessage(agentId, handle) {
     /** 流式已写进 DOM 的前缀长度基准：与 `body` 同步重置（S08 重派）。 */
     rendered: '',
     framePending: false,
+    /** 是否还在执行态：等待/终态置 false，在途增量帧回调据此放弃写入。 */
+    live: true,
     progress: null,
     think: { node: think, preview: thinkPreview, body: thinkBody },
   }
@@ -667,53 +673,106 @@ function ensureProgress(view) {
   if (view.progress !== null) return view.progress
   const wrap = make('div', 'progress')
   const track = make('div', 'progress__track')
-  const fill = make('div', 'progress__fill')
-  fill.style.width = '12%'
+  const fill = make('div', 'progress__fill progress__fill--indeterminate')
   track.appendChild(fill)
   const label = make('span', 'progress__label', '')
   wrap.appendChild(track)
   wrap.appendChild(label)
   view.footer.appendChild(wrap)
-  view.progress = { wrap, fill, label, value: 12 }
+  view.progress = { wrap, fill, label }
   return view.progress
+}
+
+/**
+ * 成员离开执行态时收掉动态痕迹（方案 I06）：工具行改过去式、进度条停住并给出
+ * 该状态的说法。等待与终态都不再呈现「还在算」的样子。
+ */
+function settleMemberDynamics(view, state) {
+  // 离开执行态：在途的增量帧回调到此为止（等待中光标复亮的根因）。
+  view.live = false
+  const line = view.bubble.querySelector('.tool-line')
+  if (line !== null && line.classList.contains('tool-line--past') === false) {
+    const name = line.querySelector('.tool-line__name')?.textContent ?? ''
+    clear(line)
+    line.classList.add('tool-line--past')
+    line.appendChild(make('span', null, '翻过资料：'))
+    line.appendChild(make('span', 'tool-line__name', name))
+  }
+  if (view.progress === null) return
+  view.progress.fill.classList.remove('progress__fill--indeterminate')
+  const label = PROGRESS_SETTLE_TEXT[state]
+  if (label !== undefined) view.progress.label.textContent = label
+  if (state === 'waiting_user' || state === 'external_pending') view.progress.fill.style.width = '100%'
+  // 失败/取消不再展示「进行中」的填充条：收掉宽度，只留状态文字。
+  if (state === 'failed' || state === 'cancelled') view.progress.fill.style.width = '0%'
+}
+
+/** 离开执行态后进度条与工具行的静态说法；undefined 表示保持现状。 */
+const PROGRESS_SETTLE_TEXT = {
+  waiting_user: '等你回话',
+  external_pending: '待外部处理',
+  failed: '没干成',
+  cancelled: '不干了',
+  succeeded: '搞定',
 }
 
 /* ── 中栏：链路条 ─────────────────────────────────────────────────────── */
 
+/**
+ * 链路条结构只建一次，状态变化只改 `data-state`（方案 6.1）。
+ *
+ * 整体重建会让未变化的 active 徽章重新起播动画——「进行中」的转动被打断重来的观感
+ * 就是这么来的。节点按 key 缓存，更新走 `applyRailStates` 一条路。
+ */
+const railNodes = new Map()
+
 function renderRail() {
-  clear(el.rail)
-  RAIL_STEPS.forEach((step, index) => {
-    if (index > 0) el.rail.appendChild(doodleSvg(DOODLE_PATHS.railArrow, 'rail__arrow'))
-    const node = make('span', 'rail__step')
-    node.dataset.state = step.key === 'ask' ? 'done' : (state.rail[step.key] ?? 'idle')
-    node.dataset.key = step.key
-    const badge = make('span', 'rail__badge')
-    badge.appendChild(doodleSvg(RAIL_ICON_PATHS[step.key] ?? ''))
-    node.appendChild(badge)
-    node.appendChild(make('span', 'rail__label', step.label))
-    el.rail.appendChild(node)
-  })
+  if (el.rail.childElementCount === 0) {
+    RAIL_STEPS.forEach((step, index) => {
+      if (index > 0) el.rail.appendChild(doodleSvg(DOODLE_PATHS.railArrow, 'rail__arrow'))
+      const node = make('span', 'rail__step')
+      node.dataset.key = step.key
+      const badge = make('span', 'rail__badge')
+      badge.appendChild(doodleSvg(RAIL_ICON_PATHS[step.key] ?? ''))
+      node.appendChild(badge)
+      node.appendChild(make('span', 'rail__label', step.label))
+      el.rail.appendChild(node)
+      railNodes.set(step.key, node)
+    })
+  }
+  applyRailStates()
+}
+
+/** 只更新各步状态：`ask` 恒为 done，其余跟 state.rail。 */
+function applyRailStates() {
+  for (const [key, node] of railNodes) node.dataset.state = key === 'ask' ? 'done' : (state.rail[key] ?? 'idle')
 }
 
 function setRail(key, value) {
   if (key === 'ask') return
   if (state.rail[key] === value) return
   state.rail[key] = value
-  renderRail()
+  applyRailStates()
 }
 
 function resetRail() {
   state.rail = { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' }
-  renderRail()
+  applyRailStates()
 }
 
-/** 按任务结果推进链路条：实时汇总与历史回放共用一套语义，避免两种口径。 */
+/**
+ * 按任务结果推进链路条：实时汇总与历史回放共用一套语义，避免两种口径。
+ *
+ * 等待不是执行（方案 6.1「等待仍旋转」的纠正）：waiting_user/external_pending 用静态的
+ * `waiting` 态（琥珀、不转），partial 收在 `partial` 态；转动只留给真正执行中的 active。
+ */
 function applySummaryRail(taskState) {
   if (taskState === 'completed') state.rail = { parse: 'done', dispatch: 'done', work: 'done', sum: 'done' }
-  else if (taskState === 'waiting_user' || taskState === 'external_pending' || taskState === 'partial') state.rail = { parse: 'done', dispatch: 'done', work: 'active', sum: 'idle' }
+  else if (taskState === 'waiting_user' || taskState === 'external_pending') state.rail = { parse: 'done', dispatch: 'done', work: 'waiting', sum: 'idle' }
+  else if (taskState === 'partial') state.rail = { parse: 'done', dispatch: 'done', work: 'done', sum: 'partial' }
   else if (taskState === 'failed' || taskState === 'cancelled') state.rail = { parse: 'done', dispatch: 'done', work: 'done', sum: 'idle' }
   else state.rail = { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' }
-  renderRail()
+  applyRailStates()
 }
 
 /* ── 中栏：事件分发 ───────────────────────────────────────────────────── */
@@ -784,19 +843,21 @@ function handleEvent(event) {
     case 'subtask_delta': {
       const view = state.bubbles.get(event.id)
       // 终态之后不再追加（S08）：迟到帧不把已校准的结论再改掉。
-      if (view === undefined || view.terminal === true) break
+      if (view === undefined || view.terminal === true || view.live === false) break
       view.body += event.delta
       // 按帧合并（I12）：增量先累积，一帧只写一次 DOM、推进一次进度。
       if (view.framePending === true) break
       view.framePending = true
       scheduleFrame(() => {
         view.framePending = false
-        if (view.terminal === true) return
+        // terminal（已校准）或 live=false（已离开执行态，如等待）都不再写：
+        // 迟到帧会把刚收起的光标重新点亮（浏览器验证发现的等待态复亮）。
+        if (view.terminal === true || view.live === false) return
         appendPreviewText(view.text, view, view.body)
         view.caret.hidden = false
-        const progress = ensureProgress(view)
-        progress.value = Math.min(92, progress.value + 4)
-        progress.fill.style.width = `${progress.value}%`
+        // 不确定指示（复核 3）：增量不再换算百分比——没有可信分母不显示伪精度，
+        // 真实阶段由工具行文字表达。
+        ensureProgress(view)
       })
       break
     }
@@ -809,6 +870,8 @@ function handleEvent(event) {
       // 汇总是这一轮的定论：链路条按最终状态推进，已走过的步骤保持点亮。
       applySummaryRail(event.state)
       for (const view of state.bubbles.values()) view.caret.hidden = true
+      announce(`这一轮${
+        event.state === 'completed' ? '干完了' : event.state === 'failed' ? '没干成' : event.state === 'cancelled' ? '已喊停' : event.state === 'partial' ? '部分完成' : event.state === 'waiting_user' ? '还等你回话' : '待外部处理'}`)
       // 正文只展示一次（S12）：总结气泡已经承载的正文，汇总卡不再整段重复；
       // 历史回放没有对应气泡时（renderTaskRecord），卡片照常承载。
       append(summaryCard(event.text !== '' && event.text === state.lastChatText
@@ -844,6 +907,7 @@ function handleSubtask(event) {
     view.rendered = ''
     view.text.textContent = ''
     view.terminal = false
+    view.live = true
     view.bubble.appendChild(make('div', 'typing')).appendChild(make('i'))
     const typing = view.bubble.querySelector('.typing')
     typing.appendChild(make('i'))
@@ -882,12 +946,16 @@ function handleSubtask(event) {
     return
   }
 
+  // 到不了 running 往下的都是「不再执行」的状态：光标收起，动态痕迹一次清完（方案 I06）。
   view.caret.hidden = true
+  settleMemberDynamics(view, event.state)
 
   if (event.state === 'waiting_user') {
     view.bubble.classList.add('bubble--wait')
     if (view.body === '') view.text.textContent = event.question ?? event.detail
-    setRail('work', 'active')
+    // 等你回话不是在计算：链路条给静态的等待态，不再转圈（方案 6.1）。
+    setRail('work', 'waiting')
+    announce(`${displayNameOf(event.agentId)} 等你回话`)
     askCard(view, event)
     return
   }
@@ -898,6 +966,7 @@ function handleSubtask(event) {
     view.bubble.classList.add('bubble--wait')
     if (view.body === '') view.text.textContent = event.detail
     view.footer.appendChild(make('div', 'msg__meta', '待外部处理，办好之后可以新开一轮'))
+    announce(`${displayNameOf(event.agentId)} 交回材料，还有事待外部处理`)
     return
   }
 
@@ -910,7 +979,7 @@ function handleSubtask(event) {
     stabilizeViewport(() => {
       view.text = settleMarkdown(view.text, finalText)
       if (view.progress !== null) {
-        view.progress.value = 100
+        view.progress.fill.classList.remove('progress__fill--indeterminate')
         view.progress.fill.style.width = '100%'
         view.progress.label.textContent = '搞定'
       }
@@ -927,6 +996,7 @@ function handleSubtask(event) {
     if (event.state === 'failed') view.bubble.classList.add('bubble--fail')
     if (view.body === '') view.text.textContent = event.detail
     else view.bubble.appendChild(make('div', 'msg__meta', event.detail))
+    announce(event.state === 'failed' ? `${displayNameOf(event.agentId)} 没干成：${event.detail ?? '原因不明'}` : `${displayNameOf(event.agentId)} 的活已取消`)
     return
   }
 }
@@ -1059,6 +1129,9 @@ function setBusy(on) {
   // 只锁发送不锁输入（I02/C 批预编辑）：执行中可以写下一句，输入法组合不受影响；
   // 这句草稿也不会被异步完成、恢复或视图切换清掉——清空只发生在真正送出的那次提交。
   el.hint.textContent = on ? '正在处理；下一句可以先写好，这轮完事再发' : '牛马大总管先听明白，再替你把人喊来'
+  // 执行中进设置页的提示随状态同步（方案 I18）。
+  el.settingsLive.hidden = !(state.settingsOpen && on)
+  el.settingsLive.textContent = state.settingsOpen && on ? '有活正在跑：回群聊可查看进度或喊停' : ''
 }
 
 function newConversationId() {
@@ -1273,7 +1346,10 @@ function consumeTurnEvent(event, note) {
   if (note !== null && note !== undefined) {
     // 受理确认只推进占位；正文、计划或异常到达才撤（方案 S03）。run/reset 是流元事件，
     // 不代表「已经有内容」——B 批曾让 run 误撤占位，退回了 A 批修过的行为。
-    if (event.type === 'conversation') note.textContent = '正在理解目标…'
+    if (event.type === 'conversation') {
+      note.textContent = '正在理解目标…'
+      announce('已受理，正在安排')
+    }
     else if (event.type !== 'user' && event.type !== 'run' && event.type !== 'reset') note.remove()
   }
   handleEvent(event)
@@ -1439,7 +1515,15 @@ async function finishTurn() {
   state.abort = null
   await refreshPanels()
   void refreshChatList()
-  el.input.focus()
+  // 异步结束不抢焦点（方案 I05）：只在用户仍停留在会话区域时回到输入框；
+  // 正在设置页、开着抽屉或选着字，都保持他现在的位置。
+  const active = document.activeElement
+  const inConversationArea = active === null || active === document.body
+    || el.composer.contains(active) || el.thread.contains(active) || el.rail.contains(active)
+  const selection = document.getSelection()
+  const selecting = selection !== null && !selection.isCollapsed
+  if (!state.settingsOpen && document.body.dataset.drawer !== 'open' && document.body.dataset.sidebar !== 'open'
+    && !selecting && inConversationArea) el.input.focus()
 }
 
 /* ── 右栏 ─────────────────────────────────────────────────────────────── */
@@ -1467,111 +1551,257 @@ function renderMembers() {
 
 /* ── 设置页 ───────────────────────────────────────────────────────────── */
 
-/** 设置页里的成员卡：外号、配色、头像集中在这张卡上编辑。 */
+/**
+ * 设置卡片的局部视图（方案 I14/I15/I16）：外号与配色是**草稿**，显式保存才提交；
+ * 头像上传是独立动作。每张卡自带状态行（未保存 / 保存中 / 已保存 / 失败），保存或换脸
+ * 只更新自己这张卡，不再整页重建——其他卡里没保存的输入不会被冲掉。
+ */
+const settingsCards = new Map()
+
 function renderSettingsMembers() {
   clear(el.settingsMembers)
+  settingsCards.clear()
   if (state.members.length === 0) {
     el.settingsMembers.appendChild(make('p', 'empty', '还没有能派活的成员。'))
     return
   }
-  for (const member of state.members) {
-    const card = make('div', 'set-card')
+  for (const member of state.members) el.settingsMembers.appendChild(buildSettingsCard(member))
+}
 
-    const head = make('div', 'set-card__head')
-    const avatarWrap = make('div', 'member__avatar')
-    avatarWrap.appendChild(avatarNode(member.agentId, 'lg'))
-    const camera = make('span', 'member__camera', '📷')
-    camera.title = '换张脸'
-    const picker = document.createElement('input')
-    picker.type = 'file'
-    picker.accept = 'image/png,image/jpeg,image/webp'
-    picker.className = 'visually-hidden'
-    camera.addEventListener('click', () => picker.click())
-    picker.addEventListener('change', () => {
-      const file = picker.files?.[0]
-      if (file) void applyAvatar(member.agentId, file)
-    })
-    avatarWrap.appendChild(camera)
-    avatarWrap.appendChild(picker)
-    head.appendChild(avatarWrap)
+/** 卡内状态行：kind 决定配色，文本给人看。 */
+function setCardStatus(view, kind, text) {
+  view.status.dataset.kind = kind
+  view.status.textContent = text
+  view.status.hidden = text === ''
+}
 
-    const titles = make('div', 'set-card__titles')
-    titles.appendChild(make('div', 'member__name', member.displayName))
-    titles.appendChild(make('div', 'member__declared', `插件声明：${member.declaredName}`))
-    head.appendChild(titles)
-    card.appendChild(head)
+/**
+ * 草稿变更：递增版本号（保存回包按它核对），状态行如实回落到「未保存」——
+ * 包括刚显示「已保存/失败」之后再次编辑的情况（复核 1）；保存中不打断文案。
+ */
+function markCardDirty(view) {
+  view.draftVersion += 1
+  view.dirty = true
+  if (view.status.dataset.kind !== 'busy') setCardStatus(view, 'dirty', '有未保存的改动')
+}
 
-    const nameField = make('div', 'field')
-    nameField.appendChild(make('label', null, '外号'))
-    const nameInput = document.createElement('input')
-    nameInput.type = 'text'
-    nameInput.maxLength = 24
-    nameInput.value = member.displayName
-    nameInput.placeholder = member.declaredName
-    nameField.appendChild(nameInput)
-    card.appendChild(nameField)
-
-    const colorField = make('div', 'field')
-    colorField.appendChild(make('label', null, '配色'))
-    const swatches = make('div', 'swatches')
-    for (const color of PALETTE) {
-      const swatch = make('button', 'swatch')
-      swatch.type = 'button'
-      swatch.style.background = color
-      swatch.setAttribute('aria-pressed', String(accentOf(member.agentId).toLowerCase() === color))
-      swatch.title = color
-      swatch.addEventListener('click', () => { void applyAlias(member.agentId, nameInput.value, color) })
-      swatches.appendChild(swatch)
+/** 保存一张卡的外号与配色：按**提交时的草稿版本**确认（复核 1）。 */
+async function saveMemberCard(agentId) {
+  const view = settingsCards.get(agentId)
+  if (view === undefined || view.busy) return
+  // 只提交发起那一刻的草稿；保存期间用户继续编辑不中断、也不会被回包吞掉。
+  const submittedName = view.nameInput.value
+  const submittedAccent = view.pendingAccent ?? accentOf(agentId)
+  const submittedVersion = view.draftVersion
+  view.busy = true
+  view.save.disabled = true
+  setCardStatus(view, 'busy', '保存中…可以先继续改')
+  try {
+    const result = await api.setAlias(agentId, submittedName, submittedAccent)
+    state.members = result.items
+    view.save.disabled = false
+    // 基线更新到已提交的那版：标题跟提交值对齐。
+    view.titles.replaceChildren(
+      make('div', 'member__name', displayNameOf(agentId)),
+      make('div', 'member__declared', `插件声明：${declaredNameOf(agentId)}`),
+    )
+    if (view.draftVersion === submittedVersion) {
+      // 回包时草稿还停在提交版本：这次保存覆盖了全部改动，状态干净。
+      view.pendingAccent = null
+      view.dirty = false
+      for (const [color, swatch] of view.swatches) swatch.setAttribute('aria-pressed', String(submittedAccent.toLowerCase() === color))
+      setCardStatus(view, 'ok', '已保存')
+      announce(`已保存 ${displayNameOf(agentId)} 的设置`)
+    } else {
+      // 保存期间又改了：刚提交的已存上，但新改动仍是未保存草稿（配色草稿保留）；
+      // 色块选中态跟**当前草稿**对齐，不能被提交值覆盖（复核 1：选中态与草稿不一致）。
+      view.dirty = true
+      const draftAccent = view.pendingAccent ?? accentOf(agentId)
+      for (const [color, swatch] of view.swatches) swatch.setAttribute('aria-pressed', String(draftAccent.toLowerCase() === color))
+      setCardStatus(view, 'dirty', '刚提交的已存上；之后的新改动还没保存')
     }
-    colorField.appendChild(swatches)
-    card.appendChild(colorField)
-
-    const builtinField = make('div', 'field')
-    builtinField.appendChild(make('label', null, '内置头像'))
-    const strip = make('div', 'builtin-strip')
-    for (const item of BUILTIN_AVATARS) {
-      const pick = make('button', 'builtin-strip__item')
-      pick.type = 'button'
-      pick.title = item.label
-      const thumb = document.createElement('img')
-      thumb.alt = item.label
-      thumb.loading = 'lazy'
-      thumb.src = `${ROUTE_PREFIX}/assets/media/avatars/builtin/${item.file}`
-      pick.appendChild(thumb)
-      pick.addEventListener('click', () => { void applyBuiltinAvatar(member.agentId, item.file) })
-      strip.appendChild(pick)
-    }
-    builtinField.appendChild(strip)
-    card.appendChild(builtinField)
-
-    const actions = make('div', 'set-card__actions')
-    const save = make('button', 'btn btn--tiny btn--primary', '保存')
-    save.type = 'button'
-    save.addEventListener('click', () => { void applyAlias(member.agentId, nameInput.value) })
-    actions.appendChild(save)
-    if (state.avatarStamps.has(member.agentId)) {
-      const reset = make('button', 'btn btn--tiny btn--ghost', '删掉头像')
-      reset.type = 'button'
-      reset.addEventListener('click', () => { void applyClearAvatar(member.agentId) })
-      actions.appendChild(reset)
-    }
-    card.appendChild(actions)
-
-    el.settingsMembers.appendChild(card)
+    // 右栏与头像栏的公共投影照旧重画：它们不在设置页里，没有草稿可丢。
+    renderMembers()
+    renderCrew()
+    renderStatuses()
+  } catch (error) {
+    view.save.disabled = false
+    setCardStatus(view, 'error', `没保存成功：${error instanceof Error && error.message ? error.message : '网络异常'}；改动还在，再试一次`)
+  } finally {
+    view.busy = false
   }
 }
 
-/** 打开/关闭设置页：关掉时右栏紧凑行要用最新数据重画。 */
+/** 头像上传/删除/内置换脸共用：卡内状态 + 本卡头像位刷新，不重建列表。 */
+async function runAvatarAction(agentId, action, doing, done) {
+  const view = settingsCards.get(agentId)
+  if (view !== undefined) setCardStatus(view, 'busy', doing)
+  try {
+    await action()
+    if (view !== undefined) {
+      view.avatarSlot.replaceChildren(avatarNode(agentId, 'lg'))
+      setCardStatus(view, 'ok', done)
+    }
+    renderMembers()
+    renderCrew()
+    announce(done)
+  } catch (error) {
+    if (view !== undefined) {
+      setCardStatus(view, 'error', `${done}没成：${error instanceof Error && error.message ? error.message : '再试一次'}`)
+    }
+  }
+}
+
+function buildSettingsCard(member) {
+  const agentId = member.agentId
+  const card = make('div', 'set-card')
+  card.dataset.agentId = agentId
+
+  const head = make('div', 'set-card__head')
+  const avatarWrap = make('div', 'member__avatar')
+  const avatarSlot = make('div', 'member__avatar-slot')
+  avatarSlot.appendChild(avatarNode(agentId, 'lg'))
+  // 相机是按钮不是贴纸（方案 I16）：键盘可达、有名字。
+  const camera = make('button', 'member__camera', '📷')
+  camera.type = 'button'
+  camera.title = '换张脸'
+  camera.setAttribute('aria-label', `给 ${displayNameOf(agentId)} 换头像`)
+  const picker = document.createElement('input')
+  picker.type = 'file'
+  picker.accept = 'image/png,image/jpeg,image/webp'
+  picker.className = 'visually-hidden'
+  picker.setAttribute('aria-hidden', 'true')
+  picker.tabIndex = -1
+  camera.addEventListener('click', () => picker.click())
+  picker.addEventListener('change', () => {
+    const file = picker.files?.[0]
+    if (file) void runAvatarAction(agentId, async () => {
+      await uploadAvatar(agentId, file)
+      state.avatarStamps.set(agentId, Date.now())
+    }, '上传中…', '头像已更新')
+    picker.value = ''
+  })
+  avatarWrap.appendChild(avatarSlot)
+  avatarWrap.appendChild(camera)
+  avatarWrap.appendChild(picker)
+  head.appendChild(avatarWrap)
+
+  const titles = make('div', 'set-card__titles')
+  titles.appendChild(make('div', 'member__name', member.displayName))
+  titles.appendChild(make('div', 'member__declared', `插件声明：${member.declaredName}`))
+  head.appendChild(titles)
+  card.appendChild(head)
+
+  // 外号输入与 label 关联（方案 I16）：读屏点「外号」就能落进输入框。
+  const nameField = make('div', 'field')
+  const nameLabel = make('label', null, '外号')
+  const nameInput = document.createElement('input')
+  nameInput.type = 'text'
+  nameInput.maxLength = 24
+  nameInput.id = `alias-${agentId}`
+  nameInput.value = member.displayName
+  nameInput.placeholder = member.declaredName
+  nameLabel.setAttribute('for', nameInput.id)
+  nameField.appendChild(nameLabel)
+  nameField.appendChild(nameInput)
+  card.appendChild(nameField)
+
+  // 配色只改草稿（方案 I15）：点选高亮未保存状态，与外号一起显式保存，
+  // 不再携带未保存的外号立即提交。
+  const colorField = make('div', 'field')
+  const colorLabel = make('label', null, '配色')
+  colorField.appendChild(colorLabel)
+  const swatches = make('div', 'swatches')
+  const swatchViews = new Map()
+  for (const color of PALETTE) {
+    const swatch = make('button', 'swatch')
+    swatch.type = 'button'
+    swatch.style.background = color
+    swatch.setAttribute('aria-pressed', String(accentOf(agentId).toLowerCase() === color))
+    swatch.title = color
+    swatch.addEventListener('click', () => {
+      view.pendingAccent = color
+      for (const [each, node] of swatchViews) node.setAttribute('aria-pressed', String(each === color))
+      markCardDirty(view)
+    })
+    swatchViews.set(color, swatch)
+    swatches.appendChild(swatch)
+  }
+  colorField.appendChild(swatches)
+  card.appendChild(colorField)
+
+  const builtinField = make('div', 'field')
+  const builtinLabel = make('label', null, '内置头像')
+  builtinField.appendChild(builtinLabel)
+  const strip = make('div', 'builtin-strip')
+  for (const item of BUILTIN_AVATARS) {
+    const pick = make('button', 'builtin-strip__item')
+    pick.type = 'button'
+    pick.title = item.label
+    pick.setAttribute('aria-label', `换上${item.label}头像`)
+    const thumb = document.createElement('img')
+    thumb.alt = ''
+    thumb.loading = 'lazy'
+    thumb.src = `${ROUTE_PREFIX}/assets/media/avatars/builtin/${item.file}`
+    pick.appendChild(thumb)
+    pick.addEventListener('click', () => {
+      void runAvatarAction(agentId, async () => {
+        const response = await fetch(`${ROUTE_PREFIX}/assets/media/avatars/builtin/${item.file}`)
+        if (!response.ok) throw new Error('内置头像读取失败')
+        const blob = await response.blob()
+        await uploadAvatar(agentId, new File([blob], item.file, { type: 'image/png' }))
+        state.avatarStamps.set(agentId, Date.now())
+      }, '换头像中…', '头像已更新')
+    })
+    strip.appendChild(pick)
+  }
+  builtinField.appendChild(strip)
+  card.appendChild(builtinField)
+
+  const actions = make('div', 'set-card__actions')
+  const save = make('button', 'btn btn--tiny btn--primary', '保存')
+  save.type = 'button'
+  save.addEventListener('click', () => { void saveMemberCard(agentId) })
+  actions.appendChild(save)
+  if (state.avatarStamps.has(agentId)) {
+    const reset = make('button', 'btn btn--tiny btn--ghost', '删掉头像')
+    reset.type = 'button'
+    reset.addEventListener('click', () => { void runAvatarAction(agentId, async () => {
+      await api.clearAvatar(agentId)
+      state.avatarStamps.delete(agentId)
+    }, '删除中…', '头像已删掉，用回默认') })
+    actions.appendChild(reset)
+  }
+  card.appendChild(actions)
+
+  const status = make('div', 'set-card__status')
+  status.dataset.kind = ''
+  card.appendChild(status)
+
+  const view = { card, agentId, nameInput, titles, swatches: swatchViews, save, status, avatarSlot, pendingAccent: null, dirty: false, busy: false, draftVersion: 0 }
+  nameInput.addEventListener('input', () => markCardDirty(view))
+  settingsCards.set(agentId, view)
+  return card
+}
+
+/**
+ * 打开/关闭设置页（方案 I18）：页面切换，不是模态——焦点落到标题上（返回按钮也行，
+ * 标题更稳），关闭时送回齿轮按钮，不误抢焦点到主输入。执行中进来时给出「回群聊」
+ * 提示：停止入口在被隐藏的三栏里，这条路得留着。
+ */
 function setOpenSettings(open) {
   state.settingsOpen = open
   document.body.dataset.settings = open ? 'open' : 'closed'
   el.settingsButton.setAttribute('aria-expanded', String(open))
   el.settings.hidden = !open
+  el.settingsLive.hidden = !(open && state.streaming)
+  el.settingsLive.textContent = open && state.streaming ? '有活正在跑：回群聊可查看进度或喊停' : ''
   if (open) {
     renderSettingsMembers()
+    el.settingsTitle.focus()
   } else {
     renderMembers()
-    el.input.focus()
+    el.settingsButton.focus()
   }
 }
 
@@ -1674,44 +1904,8 @@ function renderChatList(items, keyword) {
 
 /* ── 右栏操作 ─────────────────────────────────────────────────────────── */
 
-async function applyAlias(agentId, displayName, accent) {
-  try {
-    const result = await api.setAlias(agentId, displayName, accent ?? accentOf(agentId))
-    state.members = result.items
-    renderMembers()
-    renderCrew()
-    renderStatuses()
-    if (state.settingsOpen) renderSettingsMembers()
-  } catch (error) {
-    window.alert(error instanceof Error ? error.message : '没保存成功')
-  }
-}
-
-async function applyAvatar(agentId, file) {
-  try {
-    const result = await uploadAvatar(agentId, file)
-    state.members = result.items
-    state.avatarStamps.set(agentId, Date.now())
-    renderMembers()
-    renderCrew()
-    if (state.settingsOpen) renderSettingsMembers()
-  } catch (error) {
-    window.alert(error instanceof Error ? error.message : '头像没换上')
-  }
-}
-
-async function applyClearAvatar(agentId) {
-  try {
-    const result = await api.clearAvatar(agentId)
-    state.members = result.items
-    state.avatarStamps.delete(agentId)
-    renderMembers()
-    renderCrew()
-    if (state.settingsOpen) renderSettingsMembers()
-  } catch (error) {
-    window.alert(error instanceof Error ? error.message : '没删掉')
-  }
-}
+/* 设置保存与头像操作在设置卡内局部处理（saveMemberCard / runAvatarAction），
+ * 不再走整页重建；右栏常规刷新由 refreshPanels 负责。 */
 
 /* ── 数据刷新 ─────────────────────────────────────────────────────────── */
 
@@ -2204,6 +2398,7 @@ function bind() {
       .catch(() => {
         el.topStatus.textContent = '停止请求失败'
         append(make('p', 'error-line', '停止请求没送到，可以再试一次；取消不能回滚已经发生的操作。'))
+        announce('停止请求没送到，可以再试一次')
         scheduleFollowScroll()
       })
       .finally(() => { el.stop.disabled = !state.streaming })
@@ -2253,19 +2448,100 @@ function bind() {
     searchTimer = setTimeout(() => { void refreshChatList() }, 200)
   })
 
-  const setDrawer = open => {
-    document.body.dataset.drawer = open ? 'open' : 'closed'
-    el.drawerToggle.setAttribute('aria-expanded', String(open))
-    el.backdrop.hidden = !open
-  }
-  el.drawerToggle.addEventListener('click', () => setDrawer(document.body.dataset.drawer !== 'open'))
-  el.backdrop.addEventListener('click', () => setDrawer(false))
+  /* ── 窄屏抽屉（方案 I17）：一次只开一个、共享遮罩、Escape 关闭、焦点进入与返回 ── */
 
-  el.sidebarToggle.addEventListener('click', () => {
-    const open = document.body.dataset.sidebar !== 'open'
-    document.body.dataset.sidebar = open ? 'open' : 'closed'
-    el.sidebarToggle.setAttribute('aria-expanded', String(open))
+  const centerColumn = document.querySelector('.column--center')
+
+  /**
+   * 按断点与开合状态结算面板的键盘可达性（复核 2）。
+   *
+   * 两条规则叠加：**自身离屏**（窄屏断点下该栏平时移出屏幕，关闭即离屏）与
+   * **被另一抽屉的遮罩盖住**（如 1000px 开右抽屉时，常驻的左栏是背景）。
+   * 离屏或属于背景都 inert，Tab 才不会落进看不见或被盖住的控件；桌面无抽屉
+   * 打开时两栏常驻可达。
+   */
+  const applyOverlayInert = () => {
+    const drawerOpen = document.body.dataset.drawer === 'open'
+    const sidebarOpen = document.body.dataset.sidebar === 'open'
+    const drawerNarrow = window.matchMedia('(max-width: 1200px)').matches
+    const sidebarNarrow = window.matchMedia('(max-width: 880px)').matches
+    el.rightPanel.inert = drawerNarrow && !drawerOpen
+    el.leftPanel.inert = (sidebarNarrow && !sidebarOpen) || (drawerNarrow && drawerOpen)
+    centerColumn.inert = (drawerNarrow && drawerOpen) || (sidebarNarrow && sidebarOpen)
+  }
+
+  let drawerReturnFocus = null
+  let sidebarReturnFocus = null
+
+  const setDrawer = open => {
+    if (open) {
+      // 先记住真正的触发按钮，再互斥关另一侧——那一侧静默收起，不回焦点、不清遮罩
+      // （复核 2：否则焦点会被另一侧的关闭动作抢走，返回到错误的按钮）。
+      drawerReturnFocus = document.activeElement
+      if (document.body.dataset.sidebar === 'open') {
+        document.body.dataset.sidebar = 'closed'
+        el.sidebarToggle.setAttribute('aria-expanded', 'false')
+        sidebarReturnFocus = null
+      }
+      document.body.dataset.drawer = 'open'
+      el.drawerToggle.setAttribute('aria-expanded', 'true')
+      applyOverlayInert()
+      el.backdrop.hidden = false
+      el.rightPanel.focus()
+    } else {
+      document.body.dataset.drawer = 'closed'
+      el.drawerToggle.setAttribute('aria-expanded', 'false')
+      applyOverlayInert()
+      // 遮罩是否还亮着取决于另一侧是否开着（共享遮罩）。
+      el.backdrop.hidden = document.body.dataset.sidebar !== 'open'
+      // 焦点送回开门的那颗按钮，绝不留在屏外控件上。
+      drawerReturnFocus?.focus?.()
+      drawerReturnFocus = null
+    }
+  }
+
+  const setSidebar = open => {
+    if (open) {
+      sidebarReturnFocus = document.activeElement
+      if (document.body.dataset.drawer === 'open') {
+        document.body.dataset.drawer = 'closed'
+        el.drawerToggle.setAttribute('aria-expanded', 'false')
+        drawerReturnFocus = null
+      }
+      document.body.dataset.sidebar = 'open'
+      el.sidebarToggle.setAttribute('aria-expanded', 'true')
+      applyOverlayInert()
+      el.backdrop.hidden = false
+      el.leftPanel.focus()
+    } else {
+      document.body.dataset.sidebar = 'closed'
+      el.sidebarToggle.setAttribute('aria-expanded', 'false')
+      applyOverlayInert()
+      el.backdrop.hidden = document.body.dataset.drawer !== 'open'
+      sidebarReturnFocus?.focus?.()
+      sidebarReturnFocus = null
+    }
+  }
+
+  el.drawerToggle.addEventListener('click', () => setDrawer(document.body.dataset.drawer !== 'open'))
+  el.sidebarToggle.addEventListener('click', () => setSidebar(document.body.dataset.sidebar !== 'open'))
+  el.backdrop.addEventListener('click', () => {
+    if (document.body.dataset.drawer === 'open') setDrawer(false)
+    else if (document.body.dataset.sidebar === 'open') setSidebar(false)
   })
+
+  // Escape 依次收起浮层：设置页 → 右抽屉 → 左抽屉；输入法组合期间不抢键。
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.isComposing) return
+    if (state.settingsOpen) { event.preventDefault(); setOpenSettings(false); return }
+    if (document.body.dataset.drawer === 'open') { event.preventDefault(); setDrawer(false); return }
+    if (document.body.dataset.sidebar === 'open') { event.preventDefault(); setSidebar(false) }
+  })
+
+  // 初始化与跨断点都重新结算：关闭时离屏面板拦在键盘外，跨回桌面放开常驻栏。
+  applyOverlayInert()
+  window.matchMedia('(max-width: 1200px)').addEventListener('change', applyOverlayInert)
+  window.matchMedia('(max-width: 880px)').addEventListener('change', applyOverlayInert)
 }
 
 /* ── 启动 ─────────────────────────────────────────────────────────────── */

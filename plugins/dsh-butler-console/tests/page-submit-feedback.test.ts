@@ -167,7 +167,9 @@ describe('B 批恢复一致性守卫（S05–S09/S12）', () => {
 
   it('重派重置预览、终态后不再追加、成功按权威正文校准并落成受控 Markdown（S08/S09/C 批）', () => {
     expect(source).toMatch(/view\.terminal = false/u)
-    expect(source).toMatch(/view\.terminal === true\) break/u)
+    // 迟到帧双重放弃：终态（已校准）或已离开执行态（等待中光标复亮的根因）。
+    expect(source).toMatch(/view\.terminal === true \|\| view\.live === false\) break/u)
+    expect(source).toMatch(/if \(view\.terminal === true \|\| view\.live === false\) return/u)
     expect(source).toMatch(/const finalText = event\.detail \?\? view\.body/u)
     expect(source).toMatch(/settleMarkdown\(view\.text, finalText\)/u)
     // 模型重试隔离：旧尝试帧丢弃 + chat_reset 重置预览。
@@ -559,5 +561,220 @@ describe('C 批「内容可读与历史阅读」守卫', () => {
     expect(historyState.conversationId).toBe('conv-b')
     expect(historyState.transcriptBefore).toBe(50)
     expect(historyState.entries).toEqual([])
+  })
+})
+
+describe('D 批「交互和动效收尾」守卫', () => {
+  const styleSource = readFileSync(fileURLToPath(new URL('../web/style.css', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+  const htmlSource = readFileSync(fileURLToPath(new URL('../web/index.html', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+
+  it('等待与部分结束不再伪装执行中（I06/6.1）：链路条静态等待态，工具行改过去式，进度收口', () => {
+    const apply = pick('applySummaryRail')
+    expect(apply).toContain("work: 'waiting'")
+    expect(apply).toContain("sum: 'partial'")
+    expect(apply).not.toMatch(/waiting_user.*work: 'active'/u)
+    expect(styleSource).toMatch(/\.rail__step\[data-state="waiting"\] \.rail__badge \{ background: var\(--bt-warn\)/u)
+    // 自旋只留给 active。
+    expect(styleSource).toMatch(/data-state="active"\] \.rail__badge::after/u)
+    expect(styleSource).not.toMatch(/data-state="waiting"\] \.rail__badge::after/u)
+    // 链路条结构只建一次：状态更新不再清空重建（动画不会被打断重播）。
+    const render = pick('renderRail')
+    expect(render).toContain('el.rail.childElementCount === 0')
+    expect(render).not.toContain('clear(el.rail)')
+    // 工具行过去式与进度状态文字（状态文字在 PROGRESS_SETTLE_TEXT 常量表里）。
+    const settle = pick('settleMemberDynamics')
+    expect(settle).toContain('tool-line--past')
+    expect(source).toContain("'等你回话'")
+    expect(source).toContain("'没干成'")
+    expect(source).toContain("PROGRESS_SETTLE_TEXT")
+    expect(settle).toContain("state === 'failed' || state === 'cancelled'")
+  })
+
+  it('设置按成员局部保存（I14/I15/I16）：草稿不丢、配色不立即提交、无阻塞弹窗、语义完整', () => {
+    // 保存走卡内 saveMemberCard，只更新本卡基线，不再整页重建。
+    expect(source).toContain('async function saveMemberCard')
+    const save = pick('saveMemberCard')
+    expect(save).toContain('view.titles.replaceChildren')
+    expect(save).toContain('改动还在，再试一次')
+    // 配色点选只改草稿（不再携带未保存外号立即 applyAlias）。
+    const swatchBlock = source.slice(source.indexOf('// 配色只改草稿'), source.indexOf('const builtinField'))
+    expect(swatchBlock).toContain('view.pendingAccent = color')
+    expect(swatchBlock).toContain('markCardDirty(view)')
+    expect(swatchBlock).not.toContain('api.setAlias')
+    // 无阻塞弹窗；外号 label 关联输入；相机是按钮。
+    expect(source).not.toContain('window.alert')
+    expect(source).toMatch(/nameLabel\.setAttribute\('for', nameInput\.id\)/u)
+    expect(source).toMatch(/make\('button', 'member__camera'/u)
+    // 卡内状态行存在。
+    expect(source).toContain('set-card__status')
+  })
+
+  it('保存中继续编辑不被回包吞掉：按提交版本确认，新草稿保留（复核 1 行为测试）', async () => {
+    const noop = () => {}
+    const makeView = () => {
+      const pressed = new Map([['#111111', 'true'], ['#222222', 'false']])
+      const swatches = new Map()
+      for (const color of pressed.keys()) swatches.set(color, { setAttribute: (name: string, value: string) => { if (name === 'aria-pressed') pressed.set(color, value) } })
+      return {
+        agentId: 'blog',
+        nameInput: { value: '新外号' },
+        pendingAccent: '#111111',
+        dirty: true,
+        busy: false,
+        draftVersion: 3,
+        save: { disabled: false },
+        status: { dataset: { kind: 'dirty' }, textContent: '有未保存的改动', hidden: false },
+        titles: { replaceChildren: noop },
+        swatches,
+        pressed,
+      }
+    }
+    const submitted: { name?: string; accent?: string }[] = []
+    let resolveSave: ((value: { items: unknown[] }) => void) | undefined
+    const api = {
+      setAlias: async (_agentId: string, displayName: string, accent: string) => {
+        submitted.push({ name: displayName, accent })
+        return new Promise(resolve => { resolveSave = resolve })
+      },
+    }
+    const state = { members: [] }
+    const cards = new Map()
+    const save = Function('settingsCards', 'api', 'state', 'accentOf', 'displayNameOf', 'declaredNameOf',
+      'renderMembers', 'renderCrew', 'renderStatuses', 'announce', 'setCardStatus', 'make',
+      `${pick('setCardStatus')}\n${pick('saveMemberCard')} return saveMemberCard`,
+    )(cards, api, state, () => '#000000', () => '名字', () => '声明', noop, noop, noop, noop,
+      Function(`${pick('setCardStatus')}\nreturn setCardStatus`)(), () => ({})) as
+      (agentId: string) => Promise<void>
+
+    const view = makeView()
+    cards.set('blog', view)
+    // 发起保存；请求在途时继续编辑外号与配色。
+    const pending = save('blog')
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+    expect(submitted).toEqual([{ name: '新外号', accent: '#111111' }])
+    view.nameInput.value = '更新外号'
+    view.pendingAccent = '#222222'
+    const markDirty = Function('setCardStatus', `${pick('markCardDirty')} return markCardDirty`)(
+      Function(`${pick('setCardStatus')}\nreturn setCardStatus`)(),
+    ) as (view: unknown) => void
+    markDirty(view)
+    resolveSave!({ items: [] })
+    await pending
+    // 回包只确认提交版本：新草稿保留、状态如实显示还有未保存改动。
+    expect(view.nameInput.value).toBe('更新外号')
+    expect(view.pendingAccent).toBe('#222222')
+    expect(view.dirty).toBe(true)
+    expect(view.status.dataset.kind).toBe('dirty')
+    expect(view.status.textContent).toContain('还没保存')
+    // 色块选中态跟**当前草稿**对齐：蓝选中、红（提交值）不再选中（复核 1：选中态不被提交值覆盖）。
+    expect(view.pressed.get('#222222')).toBe('true')
+    expect(view.pressed.get('#111111')).toBe('false')
+  })
+
+  it('保存成功后再次编辑：状态行从「已保存」回到「有未保存的改动」（复核 1 行为测试）', async () => {
+    const noop = () => {}
+    const view = {
+      agentId: 'blog',
+      nameInput: { value: '新外号' },
+      pendingAccent: null,
+      dirty: true,
+      busy: false,
+      draftVersion: 1,
+      save: { disabled: false },
+      status: { dataset: { kind: 'dirty' }, textContent: '有未保存的改动', hidden: false },
+      titles: { replaceChildren: noop },
+      swatches: new Map([['#111111', { setAttribute: noop }]]),
+    }
+    const state = { members: [] }
+    const save = Function('settingsCards', 'api', 'state', 'accentOf', 'displayNameOf', 'declaredNameOf',
+      'renderMembers', 'renderCrew', 'renderStatuses', 'announce', 'setCardStatus', 'make',
+      `${pick('setCardStatus')}\n${pick('saveMemberCard')} return saveMemberCard`,
+    )(new Map([['blog', view]]), { setAlias: async () => ({ items: [] }) }, state, () => '#000000', () => '名字', () => '声明',
+      noop, noop, noop, noop, Function(`${pick('setCardStatus')}\nreturn setCardStatus`)(), () => ({})) as
+      (agentId: string) => Promise<void>
+    await save('blog')
+    expect(view.status.dataset.kind).toBe('ok')
+    expect(view.dirty).toBe(false)
+    expect(view.pendingAccent).toBeNull()
+    // 保存成功后再次编辑：不再卡在「已保存」。
+    view.nameInput.value = '又改了'
+    Function('setCardStatus', `${pick('markCardDirty')} return markCardDirty`)(
+      Function(`${pick('setCardStatus')}\nreturn setCardStatus`)(),
+    )(view)
+    expect(view.dirty).toBe(true)
+    expect(view.status.dataset.kind).toBe('dirty')
+    expect(view.status.textContent).toBe('有未保存的改动')
+    expect(view.draftVersion).toBe(2)
+  })
+
+  it('假进度已移除（复核 3）：增量不再换算百分比，改用不确定指示与真实阶段文字', () => {
+    const deltaCase = source.slice(source.indexOf("case 'subtask_delta'"), source.indexOf("case 'subtask_thinking'"))
+    expect(deltaCase).not.toContain('Math.min(92')
+    expect(deltaCase).not.toContain('+ 4')
+    expect(deltaCase).not.toContain('progress.value')
+    expect(source).not.toMatch(/progress\.value/u)
+    // 不确定指示：创建时挂类，终态/等待收口时摘掉并给真实状态文字。
+    expect(source).toMatch(/progress__fill progress__fill--indeterminate/u)
+    const settle = pick('settleMemberDynamics')
+    expect(settle).toContain("classList.remove('progress__fill--indeterminate')")
+    expect(source).toMatch(/classList\.remove\('progress__fill--indeterminate'\)\s*\n\s*view\.progress\.fill\.style\.width = '100%'/u)
+    expect(styleSource).toContain('@keyframes bt-progress-slide')
+    expect(styleSource).toMatch(/\.progress__fill--indeterminate \{[\s\S]*?animation: none/u)
+  })
+
+  it('抽屉一次只开一个、共享遮罩、Escape 收起、焦点进出与 inert（I17，复核 2 关闭态收口）', () => {
+    // 开抽屉：先记住真正的触发按钮，再静默关另一侧（不回焦点、不清遮罩）。
+    const drawerBlock = source.slice(source.indexOf('const setDrawer = open =>'), source.indexOf('const setSidebar = open =>'))
+    const sidebarBlock = source.slice(source.indexOf('const setSidebar = open =>'), source.indexOf('el.drawerToggle.addEventListener'))
+    expect(drawerBlock.indexOf('drawerReturnFocus = document.activeElement')).toBeLessThan(drawerBlock.indexOf("dataset.sidebar === 'open'"))
+    expect(drawerBlock).toContain('sidebarReturnFocus = null')
+    expect(sidebarBlock.indexOf('sidebarReturnFocus = document.activeElement')).toBeLessThan(sidebarBlock.indexOf("dataset.drawer === 'open'"))
+    expect(sidebarBlock).toContain('drawerReturnFocus = null')
+    // 焦点进入面板、关闭返回触发按钮；共享遮罩随另一侧状态显隐。
+    expect(drawerBlock).toContain('el.rightPanel.focus()')
+    expect(sidebarBlock).toContain('el.leftPanel.focus()')
+    expect(drawerBlock).toMatch(/drawerReturnFocus\?\.focus\?\.\(\)/u)
+    expect(sidebarBlock).toMatch(/sidebarReturnFocus\?\.focus\?\.\(\)/u)
+    expect(drawerBlock).toContain("el.backdrop.hidden = document.body.dataset.sidebar !== 'open'")
+    const escapeBlock = source.slice(source.indexOf('// Escape 依次收起浮层'), source.indexOf('// 初始化与跨断点都重新结算'))
+    expect(escapeBlock).toContain('state.settingsOpen')
+    expect(escapeBlock).toContain("dataset.drawer === 'open'")
+    expect(escapeBlock).toContain("dataset.sidebar === 'open'")
+    // 关闭即离屏、离屏即 inert（窄屏）；左栏还要算上「被右抽屉遮罩盖住的背景」
+    // （复核 2：1000px 开右抽屉时常驻左栏不可达）；桌面无抽屉打开时全放开。
+    const inert = source.slice(source.indexOf('const applyOverlayInert'), source.indexOf('let drawerReturnFocus'))
+    expect(inert).toContain('el.rightPanel.inert = drawerNarrow && !drawerOpen')
+    expect(inert).toContain("el.leftPanel.inert = (sidebarNarrow && !sidebarOpen) || (drawerNarrow && drawerOpen)")
+    expect(inert).toContain('centerColumn.inert = (drawerNarrow && drawerOpen) || (sidebarNarrow && sidebarOpen)')
+    expect(source).toMatch(/\/\/ 初始化与跨断点都重新结算[\s\S]*?applyOverlayInert\(\)/u)
+    // 共享遮罩：左右任一打开都显示（CSS，此前只支持右抽屉）。
+    expect(styleSource).toMatch(/body\[data-drawer="open"\] \.drawer-backdrop,[\s\S]*?body\[data-sidebar="open"\] \.drawer-backdrop \{ display: block; \}/u)
+  })
+
+  it('焦点不抢（I05/I18）：finishTurn 条件回焦，设置页焦点进出与执行中提示', () => {
+    const finish = pick('finishTurn')
+    expect(finish).toContain('!state.settingsOpen')
+    expect(finish).toContain('!selecting')
+    expect(finish).toContain('inConversationArea')
+    const settings = pick('setOpenSettings')
+    expect(settings).toContain('el.settingsTitle.focus()')
+    expect(settings).toContain('el.settingsButton.focus()')
+    expect(settings).toContain('有活正在跑')
+    expect(settings).not.toContain('el.input.focus()')
+  })
+
+  it('关键状态播报走独立 live 区域（6.2），reduced-motion 显式关掉无限循环（6.1）', () => {
+    expect(htmlSource).toMatch(/id="sr-status" role="status" aria-live="polite"/u)
+    expect(source).toContain('function announce')
+    const announceBody = pick('announce')
+    expect(announceBody).toContain('el.srStatus')
+    // 正文增量不进播报：announce 只在受理、等待、终态、停止失败等处调用。
+    const deltaCase = source.slice(source.indexOf("case 'subtask_delta'"), source.indexOf("case 'subtask_thinking'"))
+    expect(deltaCase).not.toContain('announce(')
+    const reduced = styleSource.slice(styleSource.indexOf('@media (prefers-reduced-motion'))
+    expect(reduced).toMatch(/animation: none !important/u)
+    // 设置页可聚焦容器存在。
+    expect(htmlSource).toContain('id="settings-title" tabindex="-1"')
+    expect(htmlSource).toContain('id="left-panel" tabindex="-1"')
   })
 })

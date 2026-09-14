@@ -24,7 +24,7 @@
 
   <div class="columns">
 
-    <aside class="column column--left paper" aria-label="派活记录">
+    <aside class="column column--left paper" id="left-panel" tabindex="-1" aria-label="派活记录">
       <div class="left__top">
         <div class="brand">
           <svg class="brand__badge" viewBox="0 0 34 32" aria-hidden="true">
@@ -102,7 +102,7 @@
       </form>
     </main>
 
-    <aside class="column column--right" id="drawer" aria-label="牛马档案">
+    <aside class="column column--right" id="drawer" tabindex="-1" aria-label="牛马档案">
       <section class="paper">
         <div class="panel">
           <h2 class="section-title">牛马档案</h2>
@@ -133,13 +133,17 @@
   <section class="settings paper" id="settings" hidden aria-label="设置">
     <div class="settings__head">
       <button type="button" class="btn" id="settings-back">← 回群聊</button>
-      <h2 class="settings__title">设置</h2>
+      <h2 class="settings__title" id="settings-title" tabindex="-1">设置</h2>
       <span class="settings__note">改个外号、换张脸、挑个配色，只在你这儿生效，不影响插件自己声明的身份。</span>
+      <!-- 执行中进设置：停止入口被页面切换挡住了，这里给出路（方案 I18）。 -->
+      <span class="settings__live" id="settings-live-note" hidden></span>
     </div>
     <div class="settings__grid" id="settings-members"></div>
   </section>
 </div>
 <div class="drawer-backdrop" id="drawer-backdrop" hidden></div>
+<!-- 关键状态播报（方案 6.2）：只报提交/等待/停止/收尾，正文不进这里。 -->
+<div class="visually-hidden" id="sr-status" role="status" aria-live="polite"></div>
 
 <script type="module" src="/butler/assets/app.js"></script>
 </body>

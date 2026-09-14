@@ -297,7 +297,13 @@ textarea:focus-visible,
 .rail__label { font-size: 11px; line-height: 1.2; color: var(--bt-ink-faint); white-space: nowrap; }
 
 .rail__step[data-state="done"] .rail__badge,
-.rail__step[data-state="active"] .rail__badge { border-color: transparent; color: #fff; }
+.rail__step[data-state="active"] .rail__badge,
+.rail__step[data-state="waiting"] .rail__badge,
+.rail__step[data-state="partial"] .rail__badge { border-color: transparent; color: #fff; }
+
+/* 等待与部分结束不是执行中（方案 6.1「等待仍旋转」的纠正）：静态底色，不转圈。 */
+.rail__step[data-state="waiting"] .rail__badge { background: var(--bt-warn); }
+.rail__step[data-state="partial"] .rail__badge { background: var(--bt-warn); }
 
 .rail__step[data-key="ask"][data-state="done"] .rail__badge,
 .rail__step[data-key="ask"][data-state="active"] .rail__badge { background: var(--bt-coral); }
@@ -322,7 +328,9 @@ textarea:focus-visible,
 @keyframes bt-spin { to { transform: rotate(360deg); } }
 
 .rail__step[data-state="done"] .rail__label,
-.rail__step[data-state="active"] .rail__label { color: var(--bt-ink-soft); font-weight: 700; }
+.rail__step[data-state="active"] .rail__label,
+.rail__step[data-state="waiting"] .rail__label,
+.rail__step[data-state="partial"] .rail__label { color: var(--bt-ink-soft); font-weight: 700; }
 
 .rail__arrow {
   flex: none; width: 22px; height: 12px; margin-top: 9px;
@@ -415,10 +423,22 @@ textarea:focus-visible,
   opacity: 0.92;
   transition: width 240ms ease;
 }
+/* 不确定指示（复核 3）：没有可信分母就不显示伪百分比，让一段短条来回滑；
+ * 真实阶段由工具行文字表达，终态文字由进度标签收口。 */
+.progress__fill--indeterminate {
+  width: 34%;
+  animation: bt-progress-slide 1.6s ease-in-out infinite;
+}
+@keyframes bt-progress-slide {
+  0% { margin-left: -34%; }
+  100% { margin-left: 100%; }
+}
 .progress__label { font-size: 12.5px; color: var(--bt-ink-soft); font-family: var(--bt-hand); font-weight: 700; }
 
 .tool-line { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 12px; color: var(--bt-ink-soft); }
 .tool-line__name { font-family: var(--bt-mono); font-size: 11.5px; }
+/* 终态后的工具行改过去式（方案 I06）：淡出「正在做」的口吻，不再冒充进行中。 */
+.tool-line--past { color: var(--bt-ink-faint); }
 
 /* 成员的可展示思考：默认收起，摘要行只留最新一行预览。 */
 .think {
@@ -690,12 +710,15 @@ textarea:focus-visible,
   position: absolute; right: -3px; bottom: -3px;
   width: 19px; height: 19px;
   display: grid; place-items: center;
+  padding: 0; font: inherit; line-height: 1;
   background: #fff; color: var(--bt-ink);
   border-radius: 50%; font-size: 10.5px;
   border: 1.6px solid var(--bt-stroke);
   box-shadow: 1px 1px 0 #00000018;
   cursor: pointer;
 }
+.member__camera:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 1px; }
+.member__avatar-slot { display: grid; place-items: center; }
 
 .member__name { font-size: 12.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .member__declared { font-size: 10.5px; color: var(--bt-ink-faint); font-family: var(--bt-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -856,6 +879,17 @@ body[data-settings="open"] .settings {
 .set-card__titles .member__declared { font-size: 11px; }
 .set-card__actions { display: flex; gap: 8px; }
 
+/* 卡内状态行（方案 I14）：未保存 / 保存中 / 已保存 / 失败，同一位置换文案不换布局。 */
+.set-card__status { min-height: 16px; font-size: 12px; color: var(--bt-ink-soft); }
+.set-card__status[data-kind="ok"] { color: var(--bt-ok); }
+.set-card__status[data-kind="error"] { color: var(--bt-error); }
+.set-card__status[data-kind="busy"] { color: var(--bt-ink-faint); }
+
+/* 执行中进设置页的提示（方案 I18）：跟在说明后面，不占新行。 */
+.settings__live { font-size: 12px; font-weight: 700; color: var(--bt-warn); }
+.settings__title:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 3px; }
+.column--left:focus-visible, .column--right:focus-visible { outline: none; }
+
 .field input {
   padding: 5px 9px;
   border: 1.5px solid var(--bt-line);
@@ -887,7 +921,9 @@ body[data-settings="open"] .settings {
   .drawer-toggle { display: inline-flex; }
 
   .drawer-backdrop { position: fixed; inset: 0; z-index: 30; background: #3d363033; }
-  body[data-drawer="open"] .drawer-backdrop { display: block; }
+  /* 共享遮罩（复核 2）：左右任一抽屉打开都亮，关闭即隐。 */
+  body[data-drawer="open"] .drawer-backdrop,
+  body[data-sidebar="open"] .drawer-backdrop { display: block; }
 }
 
 @media (max-width: 880px) {
@@ -915,6 +951,11 @@ body[data-settings="open"] .settings {
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  /* 无限循环的动效显式关掉（方案 6.1）：0.001ms 只是看不见，浏览器仍在跑计时。 */
+  .caret, .typing i, .rail__step[data-state="active"] .rail__badge::after,
+  .progress__fill--indeterminate { animation: none !important; }
+  /* 关掉动画后不确定条停在轨道里，静态可见即可。 */
+  .progress__fill--indeterminate { margin-left: 33%; }
 }
 
 /* 提交失败的重试行（A 批 S03）：错误说明和重试按钮排在同一行。 */
