@@ -393,6 +393,9 @@ const TRANSCRIPT_LEAD_EVENTS = 200
 /** 一次最多返回多少条对话；也是 `/transcript` 的 `limit` 上限。 */
 export const TRANSCRIPT_MAX_ITEMS = 200
 
+/** 尾读模式的扫描块大小：会话日志只有正向读取原语，整段扫过去再取末尾。 */
+const TRANSCRIPT_SCAN_CHUNK = 512
+
 /** 对话里的一条用户可见消息。 */
 export interface TranscriptItem {
   /** 事件序号：稳定标识，也是翻页游标。 */
@@ -413,8 +416,10 @@ export interface TranscriptItem {
 export interface TranscriptPage {
   readonly conversationId: string
   readonly items: readonly TranscriptItem[]
-  /** 下一页的游标；没有更多时为 null。 */
+  /** 正读下一页的游标；没有更多时为 null。 */
   readonly nextAfter: number | null
+  /** 往更早翻页的游标（尾读模式）：本页最早一条之前还有内容时给出，否则为 null。 */
+  readonly prevBefore: number | null
 }
 
 /** 请求指纹：把参与判定的字段压成一个稳定的摘要。 */
@@ -1627,7 +1632,13 @@ export class ButlerConsole {
    * 日志不存在或读不到时**如实报错**，不拿任务摘要冒充一段完整对话：那会让客户端以为
    * 自己看到的是全部。
    */
-  async transcript(conversationId: string, actor: Actor, after: number, limit: number): Promise<TranscriptPage> {
+  async transcript(
+    conversationId: string,
+    actor: Actor,
+    after: number,
+    limit: number,
+    options: { before?: number; tail?: boolean } = {},
+  ): Promise<TranscriptPage> {
     this.access.assert(actor)
     const id = this.validateId(conversationId)
     this.store.assertOwner(id, actor)
@@ -1645,6 +1656,10 @@ export class ButlerConsole {
     }
 
     try {
+      // 尾读模式（C 批历史阅读）：先取最新一页，再按 before 往更早翻。
+      if (options.tail === true || options.before !== undefined) {
+        return await this.readTranscriptTail(handle, id, options.before, limit)
+      }
       // 往前多读一段只为重建回合号；真正返回的仍是 seq >= after 的那些。
       const lead = Math.max(0, after - TRANSCRIPT_LEAD_EVENTS)
       const want = (after - lead) + limit * 8
@@ -1653,9 +1668,50 @@ export class ButlerConsole {
       // 「还有没有下一页」要看两件事：这一页是不是被 limit 截断的，以及事件本身读完了没有。
       // 只看事件数会误判 —— 日志很短但 limit 更小时，明明还有可见消息却报到底了。
       const exhausted = events.length < want && !full
-      return { conversationId: id, items, nextAfter: exhausted ? null : cursor }
+      return { conversationId: id, items, nextAfter: exhausted ? null : cursor, prevBefore: null }
     } finally {
       await handle.close()
+    }
+  }
+
+  /**
+   * 从日志尾部读一页（C 批历史阅读）：`before` 给出时只收该序号之前的内容。
+   *
+   * 会话日志只有正向读取原语，「先看最新、往更早翻」只能分块扫过去再取末尾——成本随
+   * 日志长度线性，换来的是不动宿主接口。回合号在扫描中跨块累积维护，翻页从回合中间
+   * 开始也认得出归属。`prevBefore` 是本页最早一条的 seq：还有更早内容时给客户端续翻。
+   */
+  private async readTranscriptTail(
+    handle: SessionHandle,
+    id: string,
+    before: number | undefined,
+    limit: number,
+  ): Promise<TranscriptPage> {
+    const collected: TranscriptItem[] = []
+    let offset = 0
+    let turn: number | null = null
+    for (;;) {
+      const { events } = await handle.read(offset, TRANSCRIPT_SCAN_CHUNK)
+      let reached = false
+      for (const event of events) {
+        if (event.type === 'turn/start') turn = event.data.turn
+        if (before !== undefined && event.seq >= before) { reached = true; break }
+        if (event.type === 'user/message' || event.type === 'assistant/message') {
+          const item = this.transcriptItem(event, turn)
+          if (item !== null) collected.push(item)
+        }
+      }
+      if (reached || events.length < TRANSCRIPT_SCAN_CHUNK) break
+      offset += events.length
+    }
+    const items = collected.slice(-limit)
+    const hasOlder = collected.length > items.length
+    const earliest = items[0]
+    return {
+      conversationId: id,
+      items,
+      nextAfter: null,
+      prevBefore: hasOlder && earliest !== undefined ? earliest.seq : null,
     }
   }
 

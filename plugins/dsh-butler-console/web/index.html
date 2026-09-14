@@ -63,7 +63,11 @@
         </button>
       </div>
       <div class="rail" id="rail" role="group" aria-label="协同进度"></div>
-      <div class="thread" id="thread"></div>
+      <div class="thread-wrap">
+        <div class="thread" id="thread"></div>
+        <!-- 跟随暂停时出现（C 批 I11）：点一下回到最新并恢复跟随。 -->
+        <button type="button" class="jump-latest" id="jump-latest" hidden>↓ 回到最新</button>
+      </div>
       <form class="composer" id="composer">
         <div class="composer__box">
           <svg class="composer__cup" viewBox="0 0 26 24" aria-hidden="true">

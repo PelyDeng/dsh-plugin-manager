@@ -10,7 +10,8 @@
  * 所有用户可见文本都用 textContent 写入，不使用 innerHTML，避免把模型输出当成标记解析。
  */
 
-import { ApiError, api, avatarUrl, chat, events, eventsHead, reply, uploadAvatar, ROUTE_PREFIX } from './api.js'
+import { ApiError, api, avatarUrl, chat, events, eventsHead, reply, uploadAvatar, ROUTE_PREFIX, TRANSCRIPT_PAGE_SIZE } from './api.js'
+import { renderMarkdownInto } from './markdown.js'
 
 /** 成员配色：按 agentId 稳定取色，所以同一个插件每次都是同一个颜色。 */
 const PALETTE = ['#4d96ff', '#2ec4a6', '#ff6b57', '#9b5de5', '#ffb703', '#e8709a']
@@ -156,6 +157,7 @@ const el = {
   sidebarToggle: document.getElementById('sidebar-toggle'),
   drawerToggle: document.getElementById('drawer-toggle'),
   backdrop: document.getElementById('drawer-backdrop'),
+  jumpLatest: document.getElementById('jump-latest'),
 }
 
 const state = {
@@ -186,6 +188,22 @@ const state = {
   /** 当前任务的链路状态。 */
   rail: { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' },
   settingsOpen: false,
+  /** 滚动跟随（I11）：用户上滚或选字时暂停，「回到最新」恢复；跟随判断在 DOM 增长前做。 */
+  following: true,
+  selecting: false,
+}
+
+/**
+ * 历史阅读的翻页状态（I10）：会话 id + 两个游标（对话正文 seq、任务 offset）。
+ * 「加载更早记录」时核对会话与视图代次，旧回包不写进新会话（I09）。
+ */
+const historyState = {
+  conversationId: null,
+  transcriptBefore: null,
+  taskOffset: null,
+  loading: false,
+  /** 已加载的历史条目（全局时间序，带节点引用）：翻页去重与定位插入的依据（复核 1）。 */
+  entries: [],
 }
 
 /**
@@ -301,9 +319,126 @@ function append(node) {
   return node
 }
 
+/* ── 滚动跟随（I11）与绘制帧合并（I12）────────────────────────────────── */
+
+function distanceFromBottom() {
+  return el.thread.scrollHeight - el.thread.scrollTop - el.thread.clientHeight
+}
+
+function updateJumpLatest() {
+  el.jumpLatest.hidden = state.following
+}
+
+/** 新视图接管时恢复跟随：从欢迎页、别的会话或快照重建切过来都贴底。 */
+function resetFollowing() {
+  state.following = true
+  updateJumpLatest()
+}
+
 function scrollIfFollowing() {
-  const near = el.thread.scrollHeight - el.thread.scrollTop - el.thread.clientHeight
-  if (near < 140) el.thread.scrollTop = el.thread.scrollHeight
+  if (state.following && !state.selecting) {
+    // 同样要挂程序化标记：滚动事件是异步投递的，事件晚到时正文可能已经又长了，
+    // 不标记会把我们自己的贴底误判成用户上滚（浏览器实测发现的竞态）。
+    programmaticScroll = true
+    el.thread.scrollTop = el.thread.scrollHeight
+    noteStabilize({ branch: 'follow-write', top: Math.round(el.thread.scrollTop) })
+    nextFrame(() => { programmaticScroll = false })
+  }
+}
+
+/**
+ * 下一绘制帧。页面不可见时 rAF 会停摆（浏览器实测：后台窗格里永不回调），
+ * 用 250ms 计时器兜底——帧合并在可见时照常走 rAF，不可见时退化为有界定时写入，
+ * 程序化滚动标记也不会因停摆而滞留、误吞用户回前台后的第一次滚动。
+ */
+function nextFrame(callback) {
+  if (typeof globalThis.requestAnimationFrame !== 'function') { setTimeout(callback, 0); return }
+  let done = false
+  const run = () => { if (done) return; done = true; clearTimeout(timer); callback() }
+  const timer = setTimeout(run, 250)
+  globalThis.requestAnimationFrame(run)
+}
+
+/** 自己写 scrollTop 不算用户滚动：跟随判定只认用户的手。 */
+let programmaticScroll = false
+function scrollToBottom() {
+  programmaticScroll = true
+  el.thread.scrollTop = el.thread.scrollHeight
+  nextFrame(() => { programmaticScroll = false })
+}
+
+/**
+ * 改动可能移动内容的 DOM 时钉住视口（I11）：Markdown 落定、大表格出现、旧页插入之后，
+ * 用户正在看的内容停在原地。跟随中（新内容追加在底部）则直接贴底。
+ *
+ * 锚点是**用户正在看的内容**（视口上沿起第一个还露着的节点），不是被改的节点：
+ * 上方节点向下增高时它自己的 top 不变，锚在被改节点上会整屏漂移（复核 2 的几何替身：
+ * 上方消息增高 400px 未补偿）。锚定可见内容后按锚点位移补偿滚动。
+ * `forceAnchor` 用于前插旧内容：加载旧页永远保持阅读位置（I10），不因跟随状态跳回底部。
+ *
+ * `?trace=stabilize` 打开时把每次调用（分支、锚点位移、补偿量）记到
+ * `globalThis.__butlerStabilizeTrace`，供浏览器验证对账；不记录正文。
+ */
+const stabilizeTraceEnabled = new URLSearchParams(location.search).get('trace') === 'stabilize'
+const stabilizeTrace = []
+globalThis.__butlerStabilizeTrace = stabilizeTrace
+function noteStabilize(record) {
+  if (!stabilizeTraceEnabled) return
+  stabilizeTrace.push({ t: Math.round(performance.now()), ...record })
+  if (stabilizeTrace.length > 200) stabilizeTrace.shift()
+}
+
+function stabilizeViewport(mutate, opts = {}) {
+  const thread = el.thread
+  if (!opts.forceAnchor && state.following && !state.selecting) {
+    noteStabilize({ branch: 'following' })
+    mutate()
+    scrollToBottom()
+    return
+  }
+  const base = thread.getBoundingClientRect()
+  const topOf = node => node.getBoundingClientRect().top - base.top + thread.scrollTop
+  let anchor = null
+  for (const child of threadInner().children) {
+    if (child.classList?.contains('history-head')) continue
+    // 底边超过视口上沿的第一个节点：在视口内或延伸进视口，就是用户看的内容。
+    if (topOf(child) + child.getBoundingClientRect().height > thread.scrollTop) { anchor = child; break }
+  }
+  const before = anchor === null ? thread.scrollTop : topOf(anchor)
+  mutate()
+  if (anchor === null) {
+    noteStabilize({ branch: 'anchor', anchor: null })
+    return
+  }
+  const after = topOf(anchor)
+  if (after !== before) {
+    programmaticScroll = true
+    thread.scrollTop += after - before
+    nextFrame(() => { programmaticScroll = false })
+  }
+  noteStabilize({ branch: 'anchor', shift: Math.round(after - before), top: Math.round(thread.scrollTop), following: state.following })
+}
+
+const frameJobs = []
+let frameScheduled = false
+
+/** 每绘制帧合并一次 DOM 写入与一次滚动测量（I12）：增量正文不再逐 token 全量重建，
+ * 也不为每个事件读布局。终态落定在回调里自查 terminal，迟到帧不覆盖已校准的结论。
+ */
+function scheduleFrame(job) {
+  frameJobs.push(job)
+  if (frameScheduled) return
+  frameScheduled = true
+  nextFrame(() => {
+    frameScheduled = false
+    for (const run of frameJobs.splice(0, frameJobs.length)) run()
+    scrollIfFollowing()
+  })
+}
+
+/** 追加内容后安排一次跟随滚动：与同帧的增量写在一起，只测一次布局。 */
+function scheduleFollowScroll() {
+  scheduleFrame(() => {})
 }
 
 /* ── 中栏：消息 ───────────────────────────────────────────────────────── */
@@ -369,28 +504,63 @@ function butlerSpeech() {
   if (state.butlerSpeech === null) {
     const view = butlerMessage('')
     view.caret.hidden = false
-    state.butlerSpeech = { ...view, text: '' }
+    state.butlerSpeech = { ...view, text: '', rendered: '' }
   }
   return state.butlerSpeech
+}
+
+/**
+ * 流式增量写正文：只追加新后缀，不整体替换 textContent。
+ *
+ * 整体替换会销毁文本节点——用户正在选的字、正要复制的那段会随着下一帧消失
+ * （浏览器实测发现）。只有追加不了（重置、前缀变了）才整体重建。
+ */
+function appendPreviewText(node, book, text) {
+  if (book.rendered !== undefined && text.startsWith(book.rendered) && node.firstChild !== null) {
+    if (text.length > book.rendered.length) node.appendChild(document.createTextNode(text.slice(book.rendered.length)))
+  } else {
+    node.textContent = text
+  }
+  book.rendered = text
 }
 
 function butlerDelta(text) {
   const speech = butlerSpeech()
   speech.text += text
-  speech.body.textContent = speech.text
+  // 按帧合并（I12）：正文累积在内存里，一帧只写一次 DOM；气泡已被落定收走就不再写。
+  if (speech.framePending === true) return
+  speech.framePending = true
+  scheduleFrame(() => {
+    speech.framePending = false
+    if (state.butlerSpeech !== speech) return
+    appendPreviewText(speech.body, speech, speech.text)
+  })
+}
+
+/** 落定正文换受控 Markdown（方案 5.4）：预览是纯文本，终态统一排版。 */
+function settleMarkdown(plainNode, text) {
+  const body = make('div', 'md')
+  renderMarkdownInto(body, text)
+  plainNode.replaceWith(body)
+  return body
 }
 
 /**
  * 落定的发言。
  *
  * 有正在流的那条就替换它的正文并收起光标 —— 重试过的那一版不会留在页面上；
- * 没有（例如直接回答、历史恢复）就照旧新起一条。
+ * 没有（例如直接回答、历史恢复）就照旧新起一条。落定走受控 Markdown（C 批），
+ * 布局变化不抢阅读位置（I11）。
  */
 function butlerSettle(text, time) {
   const speech = state.butlerSpeech
   state.butlerSpeech = null
-  if (speech === null) { butlerMessage(text, time); return }
-  speech.body.textContent = text
+  if (speech === null) {
+    const view = butlerMessage('', time)
+    stabilizeViewport(() => { settleMarkdown(view.body, text) })
+    return
+  }
+  stabilizeViewport(() => { settleMarkdown(speech.body, text) })
   speech.caret.hidden = true
 }
 
@@ -467,6 +637,9 @@ function memberMessage(agentId, handle) {
     caret,
     footer,
     body: '',
+    /** 流式已写进 DOM 的前缀长度基准：与 `body` 同步重置（S08 重派）。 */
+    rendered: '',
+    framePending: false,
     progress: null,
     think: { node: think, preview: thinkPreview, body: thinkBody },
   }
@@ -613,11 +786,18 @@ function handleEvent(event) {
       // 终态之后不再追加（S08）：迟到帧不把已校准的结论再改掉。
       if (view === undefined || view.terminal === true) break
       view.body += event.delta
-      view.text.textContent = view.body
-      view.caret.hidden = false
-      const progress = ensureProgress(view)
-      progress.value = Math.min(92, progress.value + 4)
-      progress.fill.style.width = `${progress.value}%`
+      // 按帧合并（I12）：增量先累积，一帧只写一次 DOM、推进一次进度。
+      if (view.framePending === true) break
+      view.framePending = true
+      scheduleFrame(() => {
+        view.framePending = false
+        if (view.terminal === true) return
+        appendPreviewText(view.text, view, view.body)
+        view.caret.hidden = false
+        const progress = ensureProgress(view)
+        progress.value = Math.min(92, progress.value + 4)
+        progress.fill.style.width = `${progress.value}%`
+      })
       break
     }
 
@@ -645,7 +825,7 @@ function handleEvent(event) {
     default:
       break
   }
-  scrollIfFollowing()
+  scheduleFollowScroll()
 }
 
 function handleSubtask(event) {
@@ -661,6 +841,7 @@ function handleSubtask(event) {
     // 新一次尝试从头开始（S08）：同一子任务重派时清掉上次的预览与终态标记，
     // 旧尝试的迟到增量不串进新版。
     view.body = ''
+    view.rendered = ''
     view.text.textContent = ''
     view.terminal = false
     view.bubble.appendChild(make('div', 'typing')).appendChild(make('i'))
@@ -723,16 +904,20 @@ function handleSubtask(event) {
   if (event.state === 'succeeded') {
     view.bubble.classList.add('bubble--done')
     view.terminal = true
-    // 终态正文是权威结论（S09）：增量预览无论收到多少，成功那一刻按它校准，
-    // 丢段或重试残留的预览不会一直留在页面上。
-    view.text.textContent = event.detail ?? view.body
-    view.body = view.text.textContent
-    if (view.progress !== null) {
-      view.progress.value = 100
-      view.progress.fill.style.width = '100%'
-      view.progress.label.textContent = '搞定'
-    }
-    view.footer.appendChild(make('div', 'msg__meta', `耗时 ${formatElapsed(view.startedAt, event.time)}`))
+    // 终态正文是权威结论（S09）：成功那一刻按它校准并落成受控 Markdown（C 批）——
+    // 丢段或重试残留的预览不会留在页面上；落定前后的布局变化不抢阅读位置（I11）。
+    const finalText = event.detail ?? view.body
+    stabilizeViewport(() => {
+      view.text = settleMarkdown(view.text, finalText)
+      if (view.progress !== null) {
+        view.progress.value = 100
+        view.progress.fill.style.width = '100%'
+        view.progress.label.textContent = '搞定'
+      }
+      // 耗时行也是这次落定的一部分：一并收进钉扎范围，别在补偿之后又顶开视口。
+      view.footer.appendChild(make('div', 'msg__meta', `耗时 ${formatElapsed(view.startedAt, event.time)}`))
+    })
+    view.body = finalText
     return
   }
 
@@ -825,7 +1010,12 @@ function summaryCard(event) {
           : '还等你回话'
   card.appendChild(make('div', 'summary__title', title))
   // 正文去重后为空（总结气泡已承载）时不显示占位——那会像「没有结论」。
-  if (event.text || event.error) card.appendChild(make('p', 'summary__body', event.text || event.error))
+  // 汇总正文与错误信息都走受控 Markdown（C 批）；同帧排版，不逐字重建。
+  if (event.text || event.error) {
+    const body = make('div', 'summary__body md')
+    renderMarkdownInto(body, event.text || event.error)
+    card.appendChild(body)
+  }
   if (event.error && event.text) card.appendChild(make('div', 'msg__meta', event.error))
   return card
 }
@@ -864,10 +1054,11 @@ function renderWelcome() {
 function setBusy(on) {
   state.streaming = on
   el.send.disabled = on
-  el.input.disabled = on
   el.stop.hidden = !on
   el.topStatus.textContent = on ? '正在处理' : '已上线'
-  el.hint.textContent = on ? '牛马大总管正在安排，稍等' : '牛马大总管先听明白，再替你把人喊来'
+  // 只锁发送不锁输入（I02/C 批预编辑）：执行中可以写下一句，输入法组合不受影响；
+  // 这句草稿也不会被异步完成、恢复或视图切换清掉——清空只发生在真正送出的那次提交。
+  el.hint.textContent = on ? '正在处理；下一句可以先写好，这轮完事再发' : '牛马大总管先听明白，再替你把人喊来'
 }
 
 function newConversationId() {
@@ -924,6 +1115,7 @@ async function resumeLiveTurn() {
   state.bubbles.clear()
   state.asks.clear()
   resetRail()
+  resetFollowing()
   setBusy(true)
   // 只读订阅接续：reset 时按快照校准并从窗口头续订，断线有界重订（S05/S06）。
   try {
@@ -946,6 +1138,9 @@ async function sendMessage(text, reuseRequestId) {
     clear(el.thread)
     threadInner()
   }
+  // 无论换不换视图，提交就回到跟随：用户发出的话和这一轮的回复要出现在眼前，
+  // 不能沿用上次读完历史留下的暂停状态（浏览器复验发现的缺口）。
+  resetFollowing()
   // 回合级状态每轮都换新：链路条不能带着上一轮的进度开跑，runId 也要清——
   // 新请求未收到回执就断流时，不能还顶着上一轮的身份去跟随（B 轮会接错 A 轮）。
   state.bubbles.clear()
@@ -991,7 +1186,7 @@ async function sendMessage(text, reuseRequestId) {
       reportFailure(error, '发送失败')
       await followUntilTerminal(state.conversationId, { from: state.lastSeq, expectedRunId: state.lastRunId, signal: state.abort.signal })
     }
-    scrollIfFollowing()
+    scheduleFollowScroll()
   } finally {
     finishTurn()
   }
@@ -1015,9 +1210,11 @@ function retryEntry(text, message, staleBubble, requestId) {
 async function runReply(input, hooks = {}) {
   setBusy(true)
   state.abort = new AbortController()
-  // 与 sendMessage 同一套回合重置：runId 不清会让新一轮回话顶着上一轮的身份。
+  // 与 sendMessage 同一套回合重置：runId 不清会让新一轮回话顶着上一轮的身份；
+  // 回话也回到跟随，用户要看到成员接下来的答复。
   state.lastSeq = 0
   state.lastRunId = ''
+  resetFollowing()
   let accepted = false
   let sawTerminal = false
   try {
@@ -1096,7 +1293,7 @@ async function calibrateFromSnapshot(conversationId, stop) {
     if (!['completed', 'failed', 'cancelled', 'partial'].includes(record.state)) return
     applySummaryRail(record.state)
     append(summaryCard({ state: record.state, text: record.summary, error: record.error }))
-    scrollIfFollowing()
+    scheduleFollowScroll()
   } catch { /* 快照拿不到就保持现状：已有内容不因校准失败而清空。 */ }
 }
 
@@ -1120,7 +1317,8 @@ async function rebuildFromSnapshot(conversationId, stop) {
     state.asks.clear()
     resetRail()
     renderTaskRecord(record, { liveResume: true })
-    el.thread.scrollTop = el.thread.scrollHeight
+    resetFollowing()
+    scrollToBottom()
     return record
   } catch {
     append(make('p', 'error-line', '按快照重建失败；已收到的内容保留，终态以右栏为准。'))
@@ -1571,7 +1769,207 @@ async function refreshChatList() {
   }
 }
 
-/** 打开一个历史会话：把它的任务按先后重建成消息流。 */
+/** 历史条目的时间锚点：对话用消息时间，任务用收尾时间（摘要属于结局）。 */
+function timeOf(value) {
+  const at = new Date(value).getTime()
+  return Number.isNaN(at) ? 0 : at
+}
+
+/**
+ * 历史条目的全局比较规则（初次加载与分页共用）。
+ *
+ * 先按时间；同刻的对话按事件序号**数值**比较——字符串比较会把 `t:10` 排到 `t:2`
+ * 前面（复核 2）；任务按收尾时间锚定、属于结局，同刻排在对话之后，再按 id 决胜。
+ */
+function compareHistoryEntries(a, b) {
+  if (a.at !== b.at) return a.at - b.at
+  const seqOf = entry => entry.kind === 'task' ? Number.POSITIVE_INFINITY : Number(entry.id.slice(2))
+  const left = seqOf(a)
+  const right = seqOf(b)
+  if (Number.isNaN(left) || Number.isNaN(right)) return a.id < b.id ? -1 : 1
+  if (left !== right) return left - right
+  return a.id < b.id ? -1 : 1
+}
+
+/**
+ * 把一页对话正文与一页任务摘要合成按时间排序的展示序列（纯数据，不碰 DOM）。
+ *
+ * 任务是摘要不是对话（S13）：在序列里以 `task` 出现，渲染成明确标注的摘要卡；
+ * 被打断的管家答复标出来，不冒充完整结论。条目带稳定标识（事件序号 / 任务 id），
+ * 供跨页去重与定位插入（复核 1）。
+ */
+function mergeHistoryEntries(transcriptItems, taskItems) {
+  const entries = []
+  for (const item of transcriptItems ?? []) {
+    entries.push({
+      id: `t:${item.seq}`,
+      at: timeOf(item.time),
+      interrupted: item.interrupted === true,
+      kind: item.role,
+      text: item.text,
+      time: item.time,
+    })
+  }
+  for (const task of taskItems ?? []) {
+    entries.push({ id: `task:${task.id}`, at: timeOf(task.updatedAt ?? task.createdAt), kind: 'task', task })
+  }
+  entries.sort(compareHistoryEntries)
+  return entries
+}
+
+/**
+ * 把新页条目并入全局序列并给出定位插入计划（纯数据，复核 1）。
+ *
+ * 正文与任务的分页时间范围会交叉：只排新页再整体前插得不到全局时间序
+ * （复核例：前插后成为 [800,100,900,1000]）。这里按稳定标识去重后用与初次加载
+ * 同一套比较规则全局排序（幂等），新条目降序逐一「插到后继节点之前」——降序保证
+ * 处理到某条时，比它晚的新条目都已就位，后继一定有节点可参照。
+ */
+function planHistoryInsertion(existing, fresh) {
+  const known = new Map(existing.map(entry => [entry.id, entry]))
+  const additions = []
+  for (const entry of fresh) {
+    if (known.has(entry.id)) continue
+    known.set(entry.id, entry)
+    additions.push(entry)
+  }
+  const merged = [...existing, ...additions].sort(compareHistoryEntries)
+  const position = new Map(merged.map((entry, index) => [entry.id, index]))
+  const insertions = additions
+    .slice()
+    .sort((a, b) => -compareHistoryEntries(a, b))
+    .map(entry => {
+      const index = position.get(entry.id) ?? 0
+      return { entry, beforeId: merged[index + 1]?.id ?? null }
+    })
+  return { merged, insertions }
+}
+
+/** 历史里的任务摘要卡：明确标成「任务摘要」，点开看完整记录，不冒充逐条对话。 */
+function taskSummaryCard(task) {
+  const card = make('button', 'task-card')
+  card.type = 'button'
+  card.dataset.state = task.state
+  const head = make('div', 'task-card__head')
+  head.appendChild(make('span', 'task-card__badge', '任务摘要'))
+  head.appendChild(make('span', 'task-card__state', STATE_TEXT[task.state] ?? task.state))
+  head.appendChild(make('span', 'task-card__time', formatTime(task.updatedAt)))
+  card.appendChild(head)
+  card.appendChild(make('div', 'task-card__goal', task.goal))
+  card.appendChild(make('div', 'task-card__meta', `${formatTime(task.createdAt)} 派活 · ${task.subtaskDone}/${task.subtaskTotal} 项收尾`))
+  card.addEventListener('click', () => { void openTask(task.id) })
+  return card
+}
+
+/**
+ * 创建一个历史条目的节点。打断标注收进消息内部（不另起游离节点），
+ * 整个条目是一个节点，才能被定位插入整体搬移（复核 1）。
+ */
+function createHistoryNode(entry) {
+  if (entry.kind === 'user') return userMessage(entry.text, entry.time)
+  if (entry.kind === 'butler') {
+    const view = butlerMessage('', entry.time)
+    settleMarkdown(view.body, entry.text)
+    if (entry.interrupted) view.msg.lastElementChild.appendChild(make('div', 'msg__meta', '这一轮被打断，正文是已流出的部分'))
+    return view.msg
+  }
+  return append(taskSummaryCard(entry.task))
+}
+
+/** 按时间正序创建历史节点；创建即追加，并记到条目上供后续翻页定位。 */
+function renderHistorySlice(entries) {
+  for (const entry of entries) entry.node = createHistoryNode(entry)
+}
+
+/** 「加载更早记录」入口：两个游标都到底后换成分界说明；失败保留重试。 */
+function updateLoadEarlier(error) {
+  const control = threadInner().querySelector('.history-head')
+  if (control === null) return
+  clear(control)
+  if (historyState.transcriptBefore === null && historyState.taskOffset === null) {
+    control.appendChild(make('span', 'history-head__note', '没有更早的记录了'))
+    return
+  }
+  const button = make('button', 'btn btn--tiny history-head__more', historyState.loading ? '正在读取…' : '加载更早记录')
+  button.type = 'button'
+  button.disabled = historyState.loading
+  button.addEventListener('click', () => { void loadEarlier() })
+  control.appendChild(button)
+  if (error !== undefined && error !== null) {
+    control.appendChild(make('span', 'history-head__error',
+      `读取更早记录失败：${error instanceof Error && error.message ? error.message : '网络异常'}，可以重试`))
+  }
+}
+
+/**
+ * 加载一页更早的记录，按全局时间序定位插入（I10，复核 1）。
+ *
+ * 正文与任务分页范围交叉，新页条目可能要插到已显示内容中间而不是整体垫在最上面；
+ * 插入与分界控件的更新（按钮换「没有更早」会改布局，复核 3）都在锚点保护内，
+ * 加载旧页永远保持阅读位置。回包后核对视图代次与会话 id，旧回包不写进新会话（I09）；
+ * **释放加载锁同样核对归属**（复核 3）——切走后旧请求的结束不得把新会话的加载状态解锁。
+ */
+async function loadEarlier() {
+  const id = historyState.conversationId
+  if (historyState.loading || id === null) return
+  if (historyState.transcriptBefore === null && historyState.taskOffset === null) { updateLoadEarlier(); return }
+  const token = state.viewToken
+  historyState.loading = true
+  // 归属核对的口径：视图代次与会话都还是发起时的那一个，回包/解锁才属于这次请求。
+  const stillOwns = () => token === state.viewToken && id === historyState.conversationId
+  let failure = null
+  try {
+    updateLoadEarlier()
+    const [page, tasks] = await Promise.all([
+      historyState.transcriptBefore === null
+        ? Promise.resolve(null)
+        : api.transcript({ conversationId: id, before: historyState.transcriptBefore, limit: TRANSCRIPT_PAGE_SIZE }),
+      // 任务分页数沿用服务端注入的默认（分页上限只有一个来源），不在这里写死。
+      historyState.taskOffset === null
+        ? Promise.resolve(null)
+        : api.history({ conversationId: id, offset: historyState.taskOffset }),
+    ])
+    if (!stillOwns()) return
+    const plan = planHistoryInsertion(historyState.entries, mergeHistoryEntries(page?.items, tasks?.items))
+    const inner = threadInner()
+    const nodeOf = new Map(plan.merged.map(entry => [entry.id, entry.node]))
+    stabilizeViewport(() => {
+      // 降序插入：处理到某条时，比它晚的条目（旧有或已插入的新条目）都已有节点。
+      // 创建后必须同步写回索引，否则更早条目找不到刚插入的后继，只能落在末尾（复核 1）。
+      for (const { entry, beforeId } of plan.insertions) {
+        entry.node = createHistoryNode(entry)
+        nodeOf.set(entry.id, entry.node)
+        const successor = beforeId === null ? null : nodeOf.get(beforeId)
+        if (successor !== undefined && successor !== null && successor.isConnected) inner.insertBefore(entry.node, successor)
+        // 后继为空（它是最新一条）或尚未连接：留在创建时的追加位置，即线程末尾，同样正确。
+      }
+      if (page !== null) historyState.transcriptBefore = page.prevBefore
+      if (tasks !== null) historyState.taskOffset = tasks.nextOffset
+      // 游标与分界控件一并收进锚点保护：到底换文案也是布局变化（复核 3）。
+      historyState.loading = false
+      updateLoadEarlier()
+    }, { forceAnchor: true })
+    historyState.entries = plan.merged
+    return
+  } catch (error) {
+    if (stillOwns()) failure = error
+  }
+  // 失败路径：解锁与错误提示同样在锚点保护内更新。
+  if (stillOwns()) {
+    stabilizeViewport(() => {
+      historyState.loading = false
+      updateLoadEarlier(failure)
+    }, { forceAnchor: true })
+  }
+}
+
+/**
+ * 打开一个历史会话（C 批历史阅读）。
+ *
+ * 真实对话来自官方会话日志的 transcript（不另存副本）；任务只给明确标注的摘要卡（S13）。
+ * 先取对话与任务的最新一页，「加载更早记录」往更早翻。所有 await 后核对视图代次（I09）；
+ * 对话正文读不到时如实说明，不拿任务摘要冒充完整对话。
+ */
 async function openConversation(id) {
   if (state.streaming) return
   // 视图代次：先点 A 再点 B、A 响应更晚时，只显示 B，旧回包不许写入（方案 I09）。
@@ -1583,28 +1981,46 @@ async function openConversation(id) {
   state.bubbles.clear()
   state.asks.clear()
   resetRail()
-  append(make('p', 'msg__meta', '正在读取记录…'))
-  try {
-    // 按会话取，不在页面上筛：会话一多，更早的那个就会落在第一页之外，
-    // 打开它只会看到欢迎语 —— 记录明明在库里，只是没被取到。
-    const page = await api.history({ conversationId: id })
-    if (token !== state.viewToken) return
-    const mine = page.items.slice().reverse()
-    if (mine.length === 0) {
-      renderWelcome()
-      return
-    }
-    for (const task of mine) {
-      const record = await api.task(task.id)
-      if (token !== state.viewToken) return
-      renderTaskRecord(record)
-    }
-    el.thread.scrollTop = el.thread.scrollHeight
-  } catch (error) {
-    if (token !== state.viewToken) return
-    // 拉不到就如实说，不装成「这里没派过活」——那样看起来像记录丢了。
-    append(make('p', 'error-line', error instanceof Error ? error.message : '打不开这个会话'))
+  resetFollowing()
+  historyState.conversationId = id
+  historyState.transcriptBefore = null
+  historyState.taskOffset = null
+  historyState.loading = false
+  historyState.entries = []
+  const placeholder = append(make('p', 'msg__meta', '正在读取记录…'))
+  let transcript = null
+  let taskPage = null
+  let transcriptError = null
+  let taskError = null
+  ;[transcript, taskPage] = await Promise.all([
+    api.transcript({ conversationId: id, tail: true, limit: TRANSCRIPT_PAGE_SIZE })
+      .catch(error => { transcriptError = error; return null }),
+    // 任务分页数沿用服务端注入的默认（分页上限只有一个来源），不在这里写死。
+    api.history({ conversationId: id, offset: 0 })
+      .catch(error => { taskError = error; return null }),
+  ])
+  if (token !== state.viewToken) return
+  placeholder.remove()
+  const head = make('div', 'history-head')
+  threadInner().prepend(head)
+  if (transcriptError !== null) {
+    append(make('p', 'error-line', `对话正文读不到：${transcriptError instanceof Error && transcriptError.message ? transcriptError.message : '网络异常'}；下面只有任务摘要。`))
   }
+  if (taskError !== null) {
+    append(make('p', 'error-line', `任务记录读不到：${taskError instanceof Error && taskError.message ? taskError.message : '网络异常'}`))
+  }
+  const entries = mergeHistoryEntries(transcript?.items, taskPage?.items)
+  if (entries.length === 0 && transcriptError === null && taskError === null) {
+    renderWelcome()
+    return
+  }
+  renderHistorySlice(entries)
+  // 记入全局序列：后续「加载更早记录」据此去重与定位插入（复核 1）。
+  historyState.entries = entries
+  historyState.transcriptBefore = transcript?.prevBefore ?? null
+  historyState.taskOffset = taskPage?.nextOffset ?? null
+  updateLoadEarlier()
+  scrollToBottom()
   void refreshChatList()
 }
 
@@ -1622,8 +2038,9 @@ async function openTask(id) {
     threadInner()
     state.bubbles.clear()
     resetRail()
+    resetFollowing()
     renderTaskRecord(record)
-    el.thread.scrollTop = el.thread.scrollHeight
+    scrollToBottom()
   } catch (error) {
     if (token !== state.viewToken) return
     append(make('p', 'error-line', error instanceof Error ? error.message : '打不开这条记录'))
@@ -1653,7 +2070,12 @@ function renderTaskRecord(record, opts = {}) {
     const text = subtask.state === 'failed' || subtask.state === 'cancelled'
       ? (subtask.error || '没干成')
       : (subtask.result || STATE_TEXT[subtask.state] || '')
-    view.text.textContent = text
+    // 成员终稿与实时同口径（C 批）：成功/待外部的结果走受控 Markdown；失败与状态占位保持纯文本。
+    if (subtask.state !== 'failed' && subtask.state !== 'cancelled' && subtask.result) {
+      view.text = settleMarkdown(view.text, text)
+    } else {
+      view.text.textContent = text
+    }
     view.body = text
     if (['succeeded', 'failed', 'cancelled', 'external_pending'].includes(subtask.state)) view.terminal = true
     if (subtask.state === 'succeeded') {
@@ -1732,10 +2154,15 @@ function openNewChat() {
   state.viewToken += 1
   state.conversationId = null
   state.taskId = null
+  historyState.conversationId = null
+  historyState.transcriptBefore = null
+  historyState.taskOffset = null
+  historyState.entries = []
   clear(el.thread)
   threadInner()
   state.bubbles.clear()
   resetRail()
+  resetFollowing()
   renderWelcome()
   void refreshChatList()
   el.input.focus()
@@ -1772,14 +2199,36 @@ function bind() {
         }
         el.topStatus.textContent = '已上线'
         append(make('p', 'msg__meta', `没有停止：${outcome.reason || '这一轮已经不在执行'}`))
-        scrollIfFollowing()
+        scheduleFollowScroll()
       })
       .catch(() => {
         el.topStatus.textContent = '停止请求失败'
         append(make('p', 'error-line', '停止请求没送到，可以再试一次；取消不能回滚已经发生的操作。'))
-        scrollIfFollowing()
+        scheduleFollowScroll()
       })
       .finally(() => { el.stop.disabled = !state.streaming })
+  })
+
+  // 滚动跟随只认用户的手（I11）：上滚离开底部就暂停跟随并露出「回到最新」，
+  // 回到底部自动恢复；选字复制期间不强拉滚动。
+  el.thread.addEventListener('scroll', () => {
+    if (programmaticScroll) { noteStabilize({ branch: 'scroll-event', ignored: 'programmatic', top: Math.round(el.thread.scrollTop) }); return }
+    const distance = distanceFromBottom()
+    if (distance > 160) state.following = false
+    else if (distance < 40) state.following = true
+    noteStabilize({ branch: 'scroll-event', distance: Math.round(distance), following: state.following })
+    updateJumpLatest()
+  }, { passive: true })
+
+  el.jumpLatest.addEventListener('click', () => {
+    state.following = true
+    updateJumpLatest()
+    scrollToBottom()
+  })
+
+  document.addEventListener('selectionchange', () => {
+    const selection = document.getSelection()
+    state.selecting = selection !== null && !selection.isCollapsed && el.thread.contains(selection.anchorNode)
   })
 
   // 在光标处插一个 @：派活时点名成员用的，不是装饰。

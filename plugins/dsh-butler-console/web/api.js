@@ -17,6 +17,13 @@ export const ROUTE_PREFIX = config.routePrefix ?? '/butler'
  */
 export const HISTORY_PAGE_SIZE = config.historyPageSize ?? 30
 
+/**
+ * 对话正文一页取多少条。
+ *
+ * 与服务端缺省一致（上限 200）：历史阅读先取最新一页，再按 `before` 游标往更早翻。
+ */
+export const TRANSCRIPT_PAGE_SIZE = 50
+
 /** 一次接口调用失败。带上状态码，页面据此区分未登录和真正的服务错误。 */
 export class ApiError extends Error {
   constructor(status, message) {
@@ -55,6 +62,18 @@ export const api = {
     if (state !== '') params.set('state', state)
     if (conversationId !== '') params.set('conversationId', conversationId)
     return request(`/history?${params.toString()}`)
+  },
+  /**
+   * 对话正文（C 批历史阅读）：官方会话日志里的真人输入与已提交答复，不另存副本。
+   * `tail: true` 取最新一页；`before` 取该序号之前更早的一页；两者互斥。响应里的
+   * `prevBefore` 为 null 表示没有更早的了。
+   */
+  transcript: ({ conversationId, after, before, tail = false, limit = TRANSCRIPT_PAGE_SIZE, signal } = {}) => {
+    const params = new URLSearchParams({ conversationId, limit: String(limit) })
+    if (after !== undefined) params.set('after', String(after))
+    if (before !== undefined) params.set('before', String(before))
+    if (tail) params.set('tail', '1')
+    return request(`/transcript?${params.toString()}`, signal === undefined ? {} : { signal })
   },
   task: (id, signal) => request(`/task?id=${encodeURIComponent(id)}`, signal === undefined ? {} : { signal }),
   stop: (conversationId, signal) => request('/stop', { method: 'POST', body: JSON.stringify({ conversationId }), signal }),

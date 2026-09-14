@@ -21,29 +21,50 @@ describe('视图切换的异步归属（I09）', () => {
   it('先点 A 再点 B、A 响应更晚时，只渲染 B 的记录', async () => {
     const rendered: string[] = []
     const state = { streaming: false, viewToken: 0, conversationId: null, bubbles: { clear() {} }, asks: { clear() {} } }
-    const el = { thread: { scrollTop: 0, scrollHeight: 0 } }
-    const recordOf = (id: string) => ({ id, conversationId: `conv-${id}` })
+    const el = { thread: {}, jumpLatest: { hidden: false } }
+    const historyState = { conversationId: null, transcriptBefore: null, taskOffset: null, loading: false }
     const api = {
-      // A 的历史回包故意晚到：这正是乱序场景。
-      history: async ({ conversationId }: { conversationId: string }) => {
+      // A 的对话正文回包故意晚到：这正是乱序场景。
+      transcript: async ({ conversationId }: { conversationId: string }) => {
         if (conversationId === 'conv-a') await new Promise(resolve => { setTimeout(resolve, 30) })
-        return { items: [{ id: `task-${conversationId}` }] }
+        return { items: [{ seq: 1, role: 'butler', text: `t-${conversationId}`, time: 1 }], prevBefore: null }
       },
-      task: async (id: string) => recordOf(id),
+      history: async () => ({ items: [], nextOffset: null }),
     }
     const noop = () => {}
+    // mergeHistoryEntries 与 timeOf 用真实源码：合并排序本身就是被测行为的一部分。
     const openConversation = Function(
-      'state', 'el', 'api', 'make', 'append', 'clear', 'threadInner', 'resetRail',
-      'renderWelcome', 'renderTaskRecord', 'rememberConversation', 'refreshChatList',
-      `${pick('openConversation')} return openConversation`,
-    )(state, el, api, noop, noop, noop, noop, noop, noop, (record: { id: string }) => { rendered.push(record.id) }, noop, noop) as
+      'state', 'el', 'api', 'historyState', 'make', 'append', 'clear', 'threadInner', 'resetRail',
+      'resetFollowing', 'renderWelcome', 'renderHistorySlice', 'rememberConversation', 'refreshChatList',
+      'updateLoadEarlier', 'scrollToBottom', 'TRANSCRIPT_PAGE_SIZE',
+      `${pick('timeOf')}\n${pick('compareHistoryEntries')}\n${pick('mergeHistoryEntries')}\n${pick('openConversation')} return openConversation`,
+    )(state, el, api, historyState,
+      () => ({ remove() {} }), (node: unknown) => node, noop, () => ({ prepend: noop }), noop,
+      noop, noop,
+      (entries: { text?: string }[]) => { rendered.push(entries.map(entry => entry.text ?? '').join('|')) },
+      noop, noop, noop, noop, 50) as
       (id: string) => Promise<void>
 
     const first = openConversation('conv-a')
     const second = openConversation('conv-b')
     await Promise.all([first, second])
 
-    expect(rendered).toEqual(['task-conv-b'])
+    expect(rendered).toEqual(['t-conv-b'])
+  })
+
+  it('历史合并按时间排序，任务摘要标注为 task 不冒充对话（S13/C 批）', () => {
+    const merge = Function(`${pick('timeOf')}\n${pick('compareHistoryEntries')}\n${pick('mergeHistoryEntries')}\nreturn mergeHistoryEntries`)() as
+      (transcript: unknown[], tasks: unknown[]) => { at: number; kind: string; interrupted?: boolean }[]
+    const entries = merge(
+      [
+        { seq: 9, role: 'butler', text: '第二回合答复', time: 9000, interrupted: true },
+        { seq: 3, role: 'user', text: '第一句', time: 3000 },
+      ],
+      [{ id: 'task-1', updatedAt: '1970-01-01T00:00:06Z', createdAt: '1970-01-01T00:00:05Z' }],
+    )
+    expect(entries.map(entry => entry.kind)).toEqual(['user', 'task', 'butler'])
+    expect(entries.map(entry => entry.at)).toEqual([3000, 6000, 9000])
+    expect(entries[2]!.interrupted).toBe(true)
   })
 })
 
@@ -144,10 +165,11 @@ describe('B 批恢复一致性守卫（S05–S09/S12）', () => {
     expect(source).toMatch(/event\.seq <= after\) continue/u)
   })
 
-  it('重派重置预览、终态后不再追加、成功按权威正文校准（S08/S09）', () => {
+  it('重派重置预览、终态后不再追加、成功按权威正文校准并落成受控 Markdown（S08/S09/C 批）', () => {
     expect(source).toMatch(/view\.terminal = false/u)
     expect(source).toMatch(/view\.terminal === true\) break/u)
-    expect(source).toMatch(/view\.text\.textContent = event\.detail \?\? view\.body/u)
+    expect(source).toMatch(/const finalText = event\.detail \?\? view\.body/u)
+    expect(source).toMatch(/settleMarkdown\(view\.text, finalText\)/u)
     // 模型重试隔离：旧尝试帧丢弃 + chat_reset 重置预览。
     expect(source).toContain("case 'chat_reset'")
   })
@@ -288,5 +310,254 @@ describe('恢复链路边界（复核轮代码核对发现的两个缺口）', (
     await run('conversation-1', { from: state.lastSeq, expectedRunId: state.lastRunId, signal: new AbortController().signal })
     expect(subscribed).toBe(false)
     expect(noted).toContain('受理回执没有收到')
+  })
+})
+
+describe('C 批「内容可读与历史阅读」守卫', () => {
+  it('输入预编辑（I02）：执行中只锁发送，不再禁用输入框', () => {
+    const setBusyBody = pick('setBusy')
+    expect(setBusyBody).not.toContain('el.input.disabled')
+    expect(setBusyBody).toContain('el.send.disabled')
+    expect(setBusyBody).toContain('下一句可以先写好')
+    // 发送守卫仍在：执行中提交直接返回，不误发。
+    expect(source).toMatch(/if \(trimmed === '' \|\| state\.streaming\) return/u)
+  })
+
+  it('按帧合并（I12）：增量走 scheduleFrame，事件分发尾部不再逐事件滚动', () => {
+    const deltaCase = source.slice(source.indexOf("case 'subtask_delta'"), source.indexOf("case 'subtask_thinking'"))
+    expect(deltaCase).toContain('scheduleFrame')
+    expect(source).toMatch(/function butlerDelta[\s\S]*?scheduleFrame/u)
+    expect(source).toMatch(/default:\n      break\n  \}\n  scheduleFollowScroll\(\)/u)
+  })
+
+  it('滚动跟随（I11）：上滚/选字暂停跟随，「回到最新」恢复；插入与落定钉住视口', () => {
+    expect(source).toContain('function stabilizeViewport')
+    expect(source).toMatch(/distance > 160\) state\.following = false/u)
+    expect(source).toContain("el.jumpLatest.addEventListener('click'")
+    expect(source).toContain('selectionchange')
+    const earlier = pick('loadEarlier')
+    expect(earlier).toContain('planHistoryInsertion(historyState.entries')
+    expect(earlier).toContain('stabilizeViewport(()')
+  })
+
+  it('历史阅读（I10/S13）：会话视图用 transcript 尾读，任务只给标注的摘要卡', () => {
+    const openBody = pick('openConversation')
+    expect(openBody).toContain('api.transcript({ conversationId: id, tail: true')
+    expect(openBody).toContain('对话正文读不到')
+    expect(source).toContain("make('span', 'task-card__badge', '任务摘要')")
+    // 任务摘要卡点开的是完整记录，不再把任务重建成逐条对话。
+    expect(openBody).not.toContain('renderTaskRecord')
+  })
+
+  it('受控 Markdown（方案 5.4）：管家、成员、汇总落定走 renderMarkdownInto', () => {
+    expect(source).toContain("import { renderMarkdownInto } from './markdown.js'")
+    expect(source).toMatch(/function settleMarkdown/u)
+    expect(source).toMatch(/renderMarkdownInto\(body, event\.text \|\| event\.error\)/u)
+    // 模型正文不回退到 innerHTML：唯一的 innerHTML 是固定 SVG 常量。
+    const htmlAssignments = source.match(/innerHTML = [^=]/gu) ?? []
+    expect(htmlAssignments).toHaveLength(1)
+  })
+
+  it('翻页按稳定标识去重并定位插入，全局保持时间序（复核 1）', () => {
+    const merge = Function(`${pick('timeOf')}\n${pick('compareHistoryEntries')}\n${pick('mergeHistoryEntries')}\nreturn mergeHistoryEntries`)() as
+      (transcript: unknown[], tasks: unknown[]) => { id: string; at: number }[]
+    const planInsertion = Function(`${pick('timeOf')}\n${pick('compareHistoryEntries')}\n${pick('mergeHistoryEntries')}\n${pick('planHistoryInsertion')}\nreturn planHistoryInsertion`)() as
+      (existing: { id: string; at: number }[], fresh: { id: string; at: number }[]) =>
+        { merged: { id: string; at: number }[]; insertions: { entry: { id: string; at: number }; beforeId: string | null }[] }
+    // 已显示：seq 1000 的对话。新页正文 seq 800/900，另有任务 100——任务页与正文页的
+    // 时间范围交叉，只排新页再整体前插会得到 [800,100,900,1000]（复核例）。
+    const existing = merge([{ seq: 1000, role: 'butler', text: '最新', time: 1000 }], [])
+    const fresh = merge(
+      [{ seq: 800, role: 'user', text: 'a', time: 800 }, { seq: 900, role: 'user', text: 'b', time: 900 }],
+      [{ id: 'task-old', updatedAt: 100, createdAt: 100 }],
+    )
+    const { merged, insertions } = planInsertion(existing, fresh)
+    expect(merged.map(entry => entry.at)).toEqual([100, 800, 900, 1000])
+    // 降序插入：先插 900（落在 1000 之前），再 800（落在 900 之前），再 100（落在 800 之前）。
+    expect(insertions.map(item => [item.entry.at, item.beforeId])).toEqual([[900, 't:1000'], [800, 't:900'], [100, 't:800']])
+    // 重复到达的条目按稳定标识去重，不重复插入。
+    const again = planInsertion(merged, fresh)
+    expect(again.insertions).toEqual([])
+    expect(again.merged.map(entry => entry.at)).toEqual([100, 800, 900, 1000])
+  })
+
+  it('上方内容增高按可见锚点补偿；被改的就是可见节点时不滚动（复核 2 几何替身）', () => {
+    // 几何替身：视口 scrollTop=500、高 400。head 顶部分界；above 完全在视口上方
+    // （20..420）；seen 是用户正在看的（620..820）。
+    const tops = { head: 0, above: 20, seen: 620 }
+    const heights = { head: 20, above: 400, seen: 200 }
+    const thread = {
+      scrollTop: 500,
+      clientHeight: 400,
+      getBoundingClientRect: () => ({ top: 0 }),
+    }
+    const el = { thread, jumpLatest: { hidden: false } }
+    const node = (name: keyof typeof tops) => ({
+      classList: { contains: (value: string) => value === 'history-head' && name === 'head' },
+      getBoundingClientRect: () => ({ top: tops[name] - thread.scrollTop, height: heights[name] }),
+    })
+    const inner = { children: [node('head'), node('above'), node('seen')] }
+    const state = { following: false, selecting: false }
+    const stabilize = Function('el', 'state', 'threadInner', 'nextFrame', 'noteStabilize',
+      `${pick('stabilizeViewport')} return stabilizeViewport`)(el, state, () => inner, () => {}, () => {}) as
+      (mutate: () => void) => void
+    // 上方节点向下增高 400px：它自身的 top 不变，但把用户看的内容整体推下去——
+    // 锚在被改节点上会漏掉这 400px，锚在可见内容上必须补偿。
+    stabilize(() => { heights.above += 400; tops.seen += 400 })
+    expect(thread.scrollTop).toBe(900)
+    // 被改的就是可见节点自身（向下长高）：锚点 top 不变，不该滚动。
+    stabilize(() => { heights.seen += 100 })
+    expect(thread.scrollTop).toBe(900)
+  })
+
+  it('加载更早记录：游标推进、全局序列就位，旧回包不推进也不渲染（I09/I10）', async () => {
+    const rendered: { text?: string; task?: { id: string } }[] = []
+    type HistoryFixture = {
+      conversationId: string | null
+      transcriptBefore: number | null
+      taskOffset: number | null
+      loading: boolean
+      entries: { id: string; at: number; kind?: string; node?: { id: string; isConnected: boolean } }[]
+    }
+    type FixtureApi = {
+      transcript: () => Promise<{ items: unknown[]; prevBefore: number | null }>
+      history: () => Promise<{ items: unknown[]; nextOffset: number | null }>
+    }
+    const state = { viewToken: 0 }
+    const historyState: HistoryFixture = { conversationId: 'conv-1', transcriptBefore: 8, taskOffset: 30, loading: false, entries: [] }
+    const api: FixtureApi = {
+      transcript: async () => ({ items: [{ seq: 3, role: 'user', text: '旧对话', time: 3 }], prevBefore: null }),
+      history: async () => ({ items: [{ id: 'older-task', updatedAt: 5 }], nextOffset: null }),
+    }
+    const noop = () => {}
+    // 跟踪式容器：断言实际插入后的节点顺序，而不只验证计划（复核 1 的要求）。
+    const makeInner = () => {
+      const children: { id: string }[] = []
+      return {
+        children,
+        querySelector: () => null,
+        appendChild(node: { id: string }) { children.push(node); return node },
+        insertBefore(node: { id: string }, ref: { id: string }) {
+          // 与 DOM 同语义：insertBefore 是搬移，先移出原位置再插入。
+          const existing = children.indexOf(node)
+          if (existing !== -1) children.splice(existing, 1)
+          const index = children.indexOf(ref)
+          children.splice(index === -1 ? children.length : index, 0, node)
+          return node
+        },
+      }
+    }
+    const inner = makeInner()
+    const build = (ownState: { viewToken: number }, ownHistory: HistoryFixture, ownApi: FixtureApi, sink: (entry: unknown) => void, ownInner = inner) => Function(
+      'state', 'historyState', 'api', 'updateLoadEarlier', 'threadInner', 'stabilizeViewport',
+      'createHistoryNode', 'planHistoryInsertion', 'TRANSCRIPT_PAGE_SIZE',
+      `${pick('timeOf')}\n${pick('compareHistoryEntries')}\n${pick('mergeHistoryEntries')}\n${pick('planHistoryInsertion')}\n${pick('loadEarlier')} return loadEarlier`,
+    )(ownState, ownHistory, ownApi, noop, () => ownInner, (mutate: () => void) => { mutate() },
+      (entry: { id: string }) => {
+        sink(entry)
+        const node = { id: entry.id, isConnected: true }
+        // 与真实 createHistoryNode 同语义：创建即追加到线程，插入逻辑只负责搬移。
+        ownInner.appendChild(node)
+        return node
+      },
+      Function(`${pick('timeOf')}\n${pick('compareHistoryEntries')}\n${pick('mergeHistoryEntries')}\n${pick('planHistoryInsertion')}\nreturn planHistoryInsertion`)(), 50) as
+      () => Promise<void>
+
+    await build(state, historyState, api, entry => { rendered.push(entry as { text?: string; task?: { id: string } }) })()
+    // 创建按时间降序（先建晚的，才能各自参照后继落位）；DOM 顺序由 insertBefore 决定。
+    expect(rendered.map(entry => entry.text ?? entry.task?.id)).toEqual(['older-task', '旧对话'])
+    // 实际插入后的节点顺序就是全局时间序（复核 1：不只验证计划）。
+    expect(inner.children.map(node => node.id)).toEqual(['t:3', 'task:older-task'])
+    // 全局序列按时间就位，两个游标都到底。
+    expect(historyState.entries.map(entry => entry.at)).toEqual([3, 5])
+    expect(historyState.transcriptBefore).toBeNull()
+    expect(historyState.taskOffset).toBeNull()
+    expect(historyState.loading).toBe(false)
+
+    // 复核 1 的复现场景：已在页面上 1 条（old），新页 4 条（seq 7..10）时间都更晚。
+    // 节点索引同步修复前，最早的 7 找不到刚插入的后继，会落到末尾（old,8,9,10,7）。
+    const reproState = { viewToken: 3 }
+    const repro = { conversationId: 'conv-r', transcriptBefore: 100, taskOffset: null, loading: false, entries: [{ id: 't:old', at: 50, kind: 'butler', node: { id: 't:old', isConnected: true } }] }
+    const reproInner = makeInner()
+    reproInner.appendChild({ id: 't:old' })
+    const reproApi: FixtureApi = {
+      transcript: async () => ({ items: [7, 8, 9, 10].map(seq => ({ seq, role: 'user' as const, text: `第${seq}句`, time: seq * 10 })), prevBefore: null }),
+      history: async () => ({ items: [], nextOffset: null }),
+    }
+    await build(reproState, repro, reproApi, () => {}, reproInner)()
+    expect(reproInner.children.map(node => node.id)).toEqual(['t:old', 't:7', 't:8', 't:9', 't:10'])
+
+    // 旧回包到达时视图已切走：不渲染、不推进游标。
+    const staleState = { viewToken: 7 }
+    const stale = { conversationId: 'conv-2', transcriptBefore: 99, taskOffset: 60, loading: false, entries: [] as HistoryFixture['entries'] }
+    const staleApi = {
+      transcript: async () => { staleState.viewToken = 8; return { items: [{ seq: 1, role: 'user', text: '过期', time: 1 }], prevBefore: 1 } },
+      history: async () => ({ items: [], nextOffset: 50 }),
+    }
+    const staleRender: unknown[] = []
+    await build(staleState, stale, staleApi, entry => { staleRender.push(entry) })()
+    expect(staleRender).toHaveLength(0)
+    expect(stale.transcriptBefore).toBe(99)
+    expect(stale.taskOffset).toBe(60)
+  })
+
+  it('同刻条目按数值序号排序，任务排同刻对话之后；初次加载与分页共用规则（复核 2）', () => {
+    const merge = Function(`${pick('timeOf')}\n${pick('compareHistoryEntries')}\n${pick('mergeHistoryEntries')}\nreturn mergeHistoryEntries`)() as
+      (transcript: unknown[], tasks: unknown[]) => { id: string; at: number }[]
+    const planInsertion = Function(`${pick('timeOf')}\n${pick('compareHistoryEntries')}\n${pick('mergeHistoryEntries')}\n${pick('planHistoryInsertion')}\nreturn planHistoryInsertion`)() as
+      (existing: { id: string; at: number }[], fresh: { id: string; at: number }[]) => { merged: { id: string }[] }
+    // 同一时刻的对话按 seq 数值排：t:2 在 t:10 前（字符串比较会倒置）。
+    const sameTime = merge(
+      [{ seq: 10, role: 'butler', text: '十', time: 5 }, { seq: 2, role: 'user', text: '二', time: 5 }, { seq: 1, role: 'user', text: '一', time: 5 }],
+      [],
+    )
+    expect(sameTime.map(entry => entry.id)).toEqual(['t:1', 't:2', 't:10'])
+    // 任务锚定收尾时刻，同刻排在对话之后。
+    const withTask = merge([{ seq: 4, role: 'user', text: 'x', time: 9 }], [{ id: 'same-at', updatedAt: 9, createdAt: 9 }])
+    expect(withTask.map(entry => entry.id)).toEqual(['t:4', 'task:same-at'])
+    // 分页合并走同一套比较规则。
+    const paged = planInsertion(
+      [{ id: 't:1', at: 5 }],
+      merge([{ seq: 10, role: 'user', text: '十', time: 5 }, { seq: 2, role: 'user', text: '二', time: 5 }], []),
+    )
+    expect(paged.merged.map(entry => entry.id)).toEqual(['t:1', 't:2', 't:10'])
+  })
+
+  it('旧分页请求的结束不解除新请求的加载锁（复核 3）', async () => {
+    const state = { viewToken: 1 }
+    const historyState = { conversationId: 'conv-a', transcriptBefore: 50, taskOffset: null, loading: false, entries: [] }
+    let release: (() => void) | undefined
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const api = {
+      transcript: async () => {
+        await gate
+        // A 的回包到达前，用户已切到 B：B 重置了共享状态并自己发起加载（loading=true）。
+        historyState.conversationId = 'conv-b'
+        historyState.loading = true
+        state.viewToken = 2
+        return { items: [], prevBefore: null }
+      },
+      history: async () => ({ items: [], nextOffset: null }),
+    }
+    const noop = () => {}
+    const inner = { querySelector: () => null, insertBefore: noop, appendChild: noop }
+    const loadA = Function(
+      'state', 'historyState', 'api', 'updateLoadEarlier', 'threadInner', 'stabilizeViewport',
+      'createHistoryNode', 'planHistoryInsertion', 'TRANSCRIPT_PAGE_SIZE',
+      `${pick('timeOf')}\n${pick('compareHistoryEntries')}\n${pick('mergeHistoryEntries')}\n${pick('planHistoryInsertion')}\n${pick('loadEarlier')} return loadEarlier`,
+    )(state, historyState, api, noop, () => inner, (mutate: () => void) => { mutate() },
+      () => ({ isConnected: true }),
+      Function(`${pick('timeOf')}\n${pick('compareHistoryEntries')}\n${pick('mergeHistoryEntries')}\n${pick('planHistoryInsertion')}\nreturn planHistoryInsertion`)(), 50) as
+      () => Promise<void>
+    const pending = loadA()
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+    expect(historyState.loading).toBe(true)
+    release!()
+    await pending
+    // A 的结束不碰 B 的加载状态，也不写 B 的游标与序列。
+    expect(historyState.loading).toBe(true)
+    expect(historyState.conversationId).toBe('conv-b')
+    expect(historyState.transcriptBefore).toBe(50)
+    expect(historyState.entries).toEqual([])
   })
 })
