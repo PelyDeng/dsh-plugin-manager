@@ -1,0 +1,1939 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://niuma-boss.invalid/design/rules_schema.json",
+  "title": "牛马-老板 · 设计资产校验 Schema",
+  "description": "结构Schema在$defs.targets；x-checks描述检查意图。validate-design.py核验引用、状态图与验收样例，不证明真实执行。",
+  "version": 3,
+  "$defs": {
+    "ref": {
+      "type": "string",
+      "pattern": "^(npc_rules|balance_params|map_rules|interaction_rules|agent_fsm|task_protocol|event_schema)\\.(yaml|json)#[A-Za-z0-9_.\\[\\]-]+$",
+      "description": "跨文件引用，形如 balance_params.yaml#interaction.interact_radius_tiles。checks.refs-resolve 会逐条求值，解析不到就是错误。"
+    },
+    "exit": {
+      "type": "object",
+      "required": [
+        "on",
+        "to"
+      ],
+      "properties": {
+        "on": {
+          "type": "string",
+          "minLength": 1,
+          "description": "触发事件名。"
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "description": "目标状态，必须存在于同一状态机（并行机内为同一区域）。"
+        },
+        "guard": {
+          "type": "string",
+          "description": "守卫条件。"
+        },
+        "reason": {
+          "type": "string",
+          "description": "转移到终态时填写的失败原因，取值见 task_protocol.yaml#failure_taxonomy。"
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "fsmState": {
+      "type": "object",
+      "required": [
+        "description",
+        "exits"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "terminal": {
+          "type": "boolean"
+        },
+        "exits": {
+          "type": "array",
+          "minItems": 1,
+          "description": "非终态必须有出口。这就是「没有只进不出的状态」的强制点，空数组即校验失败。",
+          "items": {
+            "$ref": "#/$defs/exit"
+          }
+        }
+      }
+    },
+    "simpleMachine": {
+      "type": "object",
+      "required": [
+        "kind",
+        "description",
+        "initial",
+        "rest_states",
+        "states"
+      ],
+      "properties": {
+        "kind": {
+          "const": "simple"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "initial": {
+          "type": "string"
+        },
+        "rest_states": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "timeout_source": {
+          "$ref": "#/$defs/ref"
+        },
+        "states": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/fsmState"
+          }
+        }
+      }
+    },
+    "parallelRegion": {
+      "type": "object",
+      "required": [
+        "description",
+        "initial",
+        "rest_states",
+        "states"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "initial": {
+          "type": "string"
+        },
+        "rest_states": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "states": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/fsmState"
+          }
+        }
+      }
+    },
+    "parallelMachine": {
+      "type": "object",
+      "required": [
+        "kind",
+        "description",
+        "regions"
+      ],
+      "properties": {
+        "kind": {
+          "const": "parallel"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "regions": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/parallelRegion"
+          }
+        }
+      }
+    },
+    "invariant": {
+      "type": "object",
+      "required": [
+        "id",
+        "statement"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "statement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "enforced_by": {
+          "type": "string"
+        }
+      }
+    },
+    "targets": {
+      "agent_fsm.yaml": {
+        "type": "object",
+        "required": [
+          "version",
+          "checks",
+          "machines",
+          "invariants"
+        ],
+        "properties": {
+          "version": {
+            "const": 2
+          },
+          "checks": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "required": [
+                "id",
+                "rule"
+              ]
+            }
+          },
+          "machines": {
+            "type": "object",
+            "required": [
+              "butler",
+              "staff"
+            ],
+            "properties": {
+              "butler": {
+                "$ref": "#/$defs/parallelMachine"
+              },
+              "staff": {
+                "$ref": "#/$defs/parallelMachine"
+              }
+            }
+          },
+          "invariants": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/invariant"
+            }
+          }
+        }
+      },
+      "task_protocol.yaml": {
+        "type": "object",
+        "required": [
+          "version",
+          "task",
+          "subtask",
+          "claim",
+          "retry",
+          "failure_taxonomy",
+          "events_out",
+          "result_mapping",
+          "aggregation",
+          "scheduling",
+          "supplements",
+          "examples"
+        ],
+        "properties": {
+          "version": {
+            "const": 2
+          },
+          "task": {
+            "type": "object",
+            "required": [
+              "states",
+              "terminal",
+              "initial",
+              "transitions",
+              "invariants",
+              "input_versions"
+            ],
+            "properties": {
+              "states": {
+                "type": "object",
+                "minProperties": 1
+              },
+              "terminal": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "initial": {
+                "type": "string"
+              },
+              "transitions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "on",
+                    "from",
+                    "to"
+                  ],
+                  "properties": {
+                    "on": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "guard": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "invariants": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/invariant"
+                }
+              },
+              "input_versions": {
+                "type": "object",
+                "required": [
+                  "acceptedVersion",
+                  "processedVersion",
+                  "currentGoals",
+                  "unmetGoals",
+                  "terminal_guard"
+                ]
+              }
+            }
+          },
+          "subtask": {
+            "type": "object",
+            "required": [
+              "states",
+              "terminal",
+              "initial",
+              "transitions",
+              "metadata"
+            ],
+            "properties": {
+              "states": {
+                "type": "object",
+                "minProperties": 1
+              },
+              "terminal": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "initial": {
+                "type": "string"
+              },
+              "transitions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "on",
+                    "from",
+                    "to"
+                  ],
+                  "properties": {
+                    "on": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      ]
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "guard": {
+                      "type": "string"
+                    },
+                    "note": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "required": [
+                  "logicalId",
+                  "inputVersion",
+                  "dependsOn",
+                  "retryOf",
+                  "supersedes",
+                  "inputRefs"
+                ]
+              }
+            }
+          },
+          "claim": {
+            "type": "object",
+            "required": [
+              "rules"
+            ],
+            "properties": {
+              "rules": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/invariant"
+                }
+              }
+            }
+          },
+          "retry": {
+            "type": "object",
+            "required": [
+              "max_attempts",
+              "retryable_reasons",
+              "non_retryable_reasons",
+              "rules"
+            ],
+            "properties": {
+              "max_attempts": {
+                "$ref": "#/$defs/ref"
+              },
+              "retryable_reasons": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "non_retryable_reasons": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "rules": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/invariant"
+                }
+              }
+            }
+          },
+          "failure_taxonomy": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "reason",
+                "meaning",
+                "user_text"
+              ]
+            }
+          },
+          "events_out": {
+            "type": "object",
+            "required": [
+              "emitted"
+            ],
+            "properties": {
+              "emitted": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "aggregation": {
+            "type": "object",
+            "required": [
+              "rows",
+              "direct_reply"
+            ],
+            "properties": {
+              "rows": {
+                "type": "array",
+                "minItems": 8,
+                "maxItems": 8,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "has_failure",
+                    "has_success",
+                    "has_external",
+                    "outcome"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "has_failure": {
+                      "type": "boolean"
+                    },
+                    "has_success": {
+                      "type": "boolean"
+                    },
+                    "has_external": {
+                      "type": "boolean"
+                    },
+                    "outcome": {
+                      "enum": [
+                        "completed",
+                        "external_pending",
+                        "partial",
+                        "failed"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "result_mapping": {
+            "type": "object",
+            "required": [
+              "succeeded",
+              "failed",
+              "cancelled",
+              "waiting_user"
+            ]
+          },
+          "scheduling": {
+            "type": "object",
+            "required": [
+              "ready_rules",
+              "default_action",
+              "dependency_rules"
+            ],
+            "properties": {
+              "default_action": {
+                "const": "fail"
+              },
+              "ready_rules": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "upstream",
+                    "materialsReady",
+                    "requiresExternalAction",
+                    "action"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "upstream": {
+                      "enum": [
+                        "succeeded",
+                        "external_pending",
+                        "unfinished",
+                        "failed_or_cancelled"
+                      ]
+                    },
+                    "materialsReady": {
+                      "type": "boolean"
+                    },
+                    "requiresExternalAction": {
+                      "type": "boolean"
+                    },
+                    "action": {
+                      "enum": [
+                        "dispatch",
+                        "wait",
+                        "fail"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "interaction_rules.yaml": {
+        "type": "object",
+        "required": [
+          "version",
+          "principles",
+          "targets",
+          "global_entry",
+          "triggers",
+          "conflicts",
+          "rendezvous",
+          "timeouts"
+        ],
+        "properties": {
+          "version": {
+            "const": 4
+          },
+          "principles": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/$defs/invariant"
+            }
+          },
+          "proximity": {
+            "type": "object",
+            "required": [
+              "interact_radius_tiles",
+              "hint_radius_tiles",
+              "walk_away_tiles"
+            ],
+            "properties": {
+              "interact_radius_tiles": {
+                "$ref": "#/$defs/ref"
+              },
+              "hint_radius_tiles": {
+                "$ref": "#/$defs/ref"
+              },
+              "walk_away_tiles": {
+                "$ref": "#/$defs/ref"
+              }
+            }
+          },
+          "targets": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "can_dispatch",
+                "effect"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "reachable_via": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "can_dispatch": {
+                  "type": "boolean"
+                },
+                "effect": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "label": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "global_entry": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "target",
+                "always_available"
+              ],
+              "properties": {
+                "target": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "triggers": {
+            "type": "array",
+            "minItems": 3,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "priority",
+                "when",
+                "prompt",
+                "suppress",
+                "requires"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                },
+                "priority": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1000
+                },
+                "when": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "prompt": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "action": {
+                  "type": "string"
+                },
+                "suppress": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "note": {
+                  "type": "string"
+                },
+                "requires": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          },
+          "conflicts": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "pair",
+                "resolution"
+              ],
+              "properties": {
+                "pair": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "resolution": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "rendezvous": {
+            "type": "object",
+            "required": [
+              "kinds",
+              "default_kind",
+              "arrival_radius_tiles"
+            ],
+            "properties": {
+              "kinds": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "meaning"
+                  ]
+                }
+              },
+              "default_kind": {
+                "type": "string"
+              },
+              "arrival_radius_tiles": {
+                "$ref": "#/$defs/ref"
+              }
+            }
+          },
+          "timeouts": {
+            "type": "object",
+            "required": [
+              "walk_to_rendezvous_ms",
+              "stay_at_rendezvous_ms",
+              "return_to_post_ms"
+            ]
+          },
+          "enforcement": {
+            "type": "object",
+            "minProperties": 1
+          }
+        }
+      },
+      "map_rules.yaml": {
+        "type": "object",
+        "required": [
+          "version",
+          "coordinate_system",
+          "maps",
+          "map_data",
+          "collision",
+          "pathfinding",
+          "anchors",
+          "posts",
+          "poi",
+          "rendering",
+          "extension",
+          "buildings",
+          "connections",
+          "map_transition",
+          "world_lifecycle"
+        ],
+        "properties": {
+          "version": {
+            "const": 2
+          },
+          "coordinate_system": {
+            "type": "object",
+            "required": [
+              "tile_size_px",
+              "character_cell_px",
+              "foot_anchor",
+              "scale",
+              "pixel_perfect"
+            ],
+            "properties": {
+              "tile_size_px": {
+                "type": "integer",
+                "minimum": 8
+              },
+              "character_cell_px": {
+                "type": "object",
+                "required": [
+                  "width",
+                  "height"
+                ]
+              },
+              "pixel_perfect": {
+                "const": true
+              }
+            }
+          },
+          "maps": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "regions",
+                "adjacency"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                },
+                "regions": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "name",
+                      "purpose"
+                    ]
+                  }
+                },
+                "adjacency": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "from",
+                      "to"
+                    ]
+                  }
+                },
+                "workstations": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "id",
+                      "region",
+                      "occupant"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "region": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "occupant": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "id": {
+                        "const": "office"
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "workstations"
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          "map_data": {
+            "type": "object",
+            "required": [
+              "runtime_format",
+              "layers"
+            ]
+          },
+          "collision": {
+            "type": "object",
+            "required": [
+              "model",
+              "character_footprint",
+              "rules"
+            ]
+          },
+          "pathfinding": {
+            "type": "object",
+            "required": [
+              "algorithm",
+              "neighbours",
+              "diagonal",
+              "rationale",
+              "failure"
+            ],
+            "properties": {
+              "neighbours": {
+                "const": 4
+              },
+              "diagonal": {
+                "const": "禁止"
+              },
+              "replan": {
+                "type": "object",
+                "properties": {
+                  "trigger": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "anchors": {
+            "type": "object",
+            "required": [
+              "kinds",
+              "rules"
+            ]
+          },
+          "posts": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "region",
+                "occupant"
+              ]
+            }
+          },
+          "poi": {
+            "type": "object",
+            "required": [
+              "items",
+              "selection"
+            ],
+            "properties": {
+              "selection": {
+                "type": "string",
+                "minLength": 1
+              },
+              "items": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "region",
+                    "weight"
+                  ]
+                }
+              }
+            }
+          },
+          "rendering": {
+            "type": "object",
+            "required": [
+              "y_sort",
+              "camera"
+            ]
+          },
+          "extension": {
+            "type": "object",
+            "minProperties": 1
+          },
+          "buildings": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "kind",
+                "name",
+                "maps"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "kind": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "maps": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                }
+              }
+            }
+          },
+          "connections": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "from",
+                "to",
+                "bidirectional",
+                "readiness"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "bidirectional": {
+                  "type": "boolean"
+                },
+                "readiness": {
+                  "enum": [
+                    "pending_layout",
+                    "enabled",
+                    "disabled"
+                  ]
+                },
+                "from": {
+                  "type": "object",
+                  "required": [
+                    "map_id",
+                    "entry_id"
+                  ]
+                },
+                "to": {
+                  "type": "object",
+                  "required": [
+                    "map_id",
+                    "entry_id"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "balance_params.yaml": {
+        "type": "object",
+        "required": [
+          "version",
+          "movement",
+          "autonomous",
+          "interaction",
+          "pathfinding",
+          "butler_timeouts",
+          "staff_timeouts",
+          "subtask",
+          "task",
+          "retry",
+          "text",
+          "concurrency",
+          "performance"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "movement": {
+            "type": "object",
+            "required": [
+              "boss_walk_tiles_per_sec",
+              "staff_walk_tiles_per_sec",
+              "staff_return_tiles_per_sec"
+            ],
+            "properties": {
+              "boss_walk_tiles_per_sec": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "staff_walk_tiles_per_sec": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "staff_return_tiles_per_sec": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            }
+          },
+          "autonomous": {
+            "type": "object",
+            "required": [
+              "min_idle_ms",
+              "max_idle_ms"
+            ],
+            "properties": {
+              "min_idle_ms": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_idle_ms": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "interaction": {
+            "type": "object",
+            "required": [
+              "interact_radius_tiles",
+              "hint_radius_tiles",
+              "walk_away_tiles",
+              "arrival_radius_tiles",
+              "rendezvous_slot_count",
+              "interact_key"
+            ],
+            "properties": {
+              "interact_radius_tiles": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "hint_radius_tiles": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "walk_away_tiles": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "arrival_radius_tiles": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "rendezvous_slot_count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "interact_key": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "pathfinding": {
+            "type": "object",
+            "required": [
+              "replan_distance_tiles",
+              "max_expanded_nodes"
+            ],
+            "properties": {
+              "replan_distance_tiles": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "max_expanded_nodes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "butler_timeouts": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "staff_timeouts": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "subtask": {
+            "type": "object",
+            "required": [
+              "timeout_ms",
+              "max_per_task",
+              "max_concurrent"
+            ],
+            "properties": {
+              "timeout_ms": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_per_task": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_concurrent": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "task": {
+            "type": "object",
+            "required": [
+              "timeout_ms",
+              "max_running"
+            ],
+            "properties": {
+              "max_running": {
+                "const": 1
+              }
+            }
+          },
+          "retry": {
+            "type": "object",
+            "required": [
+              "max_attempts",
+              "backoff_ms"
+            ],
+            "properties": {
+              "max_attempts": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "text": {
+            "type": "object",
+            "required": [
+              "max_bubble_chars",
+              "max_result_chars",
+              "max_message_chars",
+              "delta_flush_ms",
+              "bubble_default_ms"
+            ],
+            "properties": {
+              "delta_flush_ms": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "concurrency": {
+            "type": "object",
+            "required": [
+              "staff_count",
+              "max_active_staff_sessions"
+            ],
+            "properties": {
+              "staff_count": {
+                "const": 3
+              }
+            }
+          },
+          "performance": {
+            "type": "object",
+            "required": [
+              "target_fps",
+              "min_fps",
+              "ai_request_blocks_loop"
+            ],
+            "properties": {
+              "ai_request_blocks_loop": {
+                "const": false
+              }
+            }
+          }
+        }
+      },
+      "event_schema.json": {
+        "type": "object",
+        "required": [
+          "$schema",
+          "$defs",
+          "oneOf"
+        ],
+        "properties": {
+          "$schema": {
+            "const": "https://json-schema.org/draft/2020-12/schema"
+          },
+          "oneOf": {
+            "type": "array",
+            "minItems": 1
+          }
+        }
+      },
+      "npc_rules.yaml": {
+        "type": "object",
+        "required": [
+          "version",
+          "profiles",
+          "definition",
+          "movement",
+          "fsm",
+          "dialogue",
+          "lifecycle",
+          "examples",
+          "roster",
+          "preview"
+        ],
+        "properties": {
+          "version": {
+            "const": 1
+          },
+          "profiles": {
+            "type": "object",
+            "required": [
+              "local",
+              "explorer"
+            ],
+            "properties": {
+              "local": {
+                "type": "object",
+                "required": [
+                  "fixed_origin_required",
+                  "cross_map",
+                  "rule"
+                ],
+                "properties": {
+                  "fixed_origin_required": {
+                    "const": true
+                  },
+                  "cross_map": {
+                    "const": false
+                  },
+                  "rule": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "explorer": {
+                "type": "object",
+                "required": [
+                  "fixed_origin_required",
+                  "cross_map",
+                  "rule"
+                ],
+                "properties": {
+                  "fixed_origin_required": {
+                    "const": false
+                  },
+                  "cross_map": {
+                    "const": true
+                  },
+                  "rule": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          },
+          "examples": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "status",
+                "profile",
+                "name",
+                "personality",
+                "speech_style",
+                "speech_examples",
+                "dialogue_mode",
+                "initial_placement",
+                "allowed_maps",
+                "interrupted_response"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                },
+                "status": {
+                  "enum": [
+                    "design_example",
+                    "confirmed"
+                  ]
+                },
+                "profile": {
+                  "enum": [
+                    "local",
+                    "explorer"
+                  ]
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "personality": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "speech_style": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "speech_examples": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "dialogue_mode": {
+                  "enum": [
+                    "authored_lines",
+                    "model_chat",
+                    "unavailable"
+                  ]
+                },
+                "initial_placement": {
+                  "type": "object",
+                  "required": [
+                    "map_id",
+                    "region"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "map_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "region": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "allowed_maps": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "duty_origin": {
+                  "type": "object",
+                  "required": [
+                    "map_id",
+                    "region"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "map_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "region": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "activity_region": {
+                  "type": "object",
+                  "required": [
+                    "map_id",
+                    "region"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "map_id": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "region": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "interrupted_response": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "workplace": {
+                  "type": "object",
+                  "required": [
+                    "post_id",
+                    "workstation_id"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "post_id": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    },
+                    "workstation_id": {
+                      "type": "string",
+                      "pattern": "^[a-z][a-z0-9_]*$"
+                    }
+                  }
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "profile": {
+                        "const": "local"
+                      }
+                    }
+                  },
+                  "then": {
+                    "required": [
+                      "duty_origin",
+                      "activity_region"
+                    ]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "profile": {
+                        "const": "explorer"
+                      }
+                    }
+                  },
+                  "then": {
+                    "not": {
+                      "anyOf": [
+                        {
+                          "required": [
+                            "duty_origin"
+                          ]
+                        },
+                        {
+                          "required": [
+                            "activity_region"
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "fsm": {
+            "type": "object",
+            "required": [
+              "initial",
+              "states",
+              "transitions",
+              "guards"
+            ],
+            "properties": {
+              "states": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "transitions": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "from",
+                    "on",
+                    "to"
+                  ],
+                  "properties": {
+                    "from": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "on": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "to": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "roster": {
+            "type": "array",
+            "minItems": 4,
+            "maxItems": 4,
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/targets/npc_rules.yaml/properties/examples/items"
+                },
+                {
+                  "required": [
+                    "workplace"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "confirmed"
+                    },
+                    "profile": {
+                      "const": "local"
+                    },
+                    "dialogue_mode": {
+                      "const": "authored_lines"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "preview": {
+            "type": "object",
+            "required": [
+              "required",
+              "poses",
+              "autonomy",
+              "scope"
+            ],
+            "properties": {
+              "required": {
+                "type": "string",
+                "minLength": 1
+              },
+              "poses": {
+                "type": "string",
+                "minLength": 1
+              },
+              "autonomy": {
+                "type": "string",
+                "minLength": 1
+              },
+              "scope": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$comment": "本文件自身由 $defs.targets 描述各目标文件，而不是描述自己。用法：读取 $defs.targets[文件名] 作为该文件的 schema。",
+  "x-checks": {
+    "description": "跨文件检查。纯 JSON Schema 表达不了，需要小脚本执行。每条都对应需求里点名的某一类风险。",
+    "fsm-targets-exist": {
+      "risk": "状态死锁",
+      "statement": "每条出口的 to 必须在同一状态机内存在；并行机内必须在同一区域内，不允许跨区域跳转。",
+      "on_error": "指出是哪个状态机的哪个状态、哪条出口指向了不存在的目标。"
+    },
+    "fsm-initial-exists": {
+      "risk": "状态死锁",
+      "statement": "每台状态机与每个并行区域的 initial 必须指向已定义的状态。",
+      "on_error": "指出缺失的 initial 目标。"
+    },
+    "fsm-rest-exists": {
+      "risk": "状态死锁",
+      "statement": "rest_states 里每一项都必须是已定义的状态。",
+      "on_error": "指出缺失的静息态。"
+    },
+    "fsm-rest-reachable": {
+      "risk": "状态死锁",
+      "statement": "从每个状态出发都存在一条有向路径到达该状态机（或区域）的某个静息态。",
+      "on_error": "列出无法回到静息态的状态。这是「卡住」的严格定义。"
+    },
+    "fsm-cancel-path": {
+      "risk": "状态死锁",
+      "statement": "非静息态有取消、失败、超时或业务终态出口；work不使用本地计时生成结果。",
+      "on_error": "列出只能靠正常流程离开的状态。这类状态在异常路径下就是死锁点。"
+    },
+    "subtask-terminal-bounded": {
+      "risk": "任务丢失",
+      "statement": "subtask.transitions 覆盖了全部非终态，且每个非终态都存在到达某个 terminal 状态的路径。",
+      "on_error": "列出走不到终态的子任务状态，以及没有任何入边的孤儿状态。"
+    },
+    "task-terminal-after-children": {
+      "risk": "任务丢失",
+      "statement": "终态只能经 all_subtasks_terminal_and_reply_done 或 cleanup_done 进入；重复取消保持 stopping。",
+      "on_error": "指出存在不保证子任务已终结就能进入任务终态的转移。"
+    },
+    "events-have-schemas": {
+      "risk": "任务丢失",
+      "statement": "协议输出事件与 Schema 支持的 type 常量或枚举一致。",
+      "on_error": "列出既没有事件格式、也没有显式豁免的事件名。没有格式的事件会在表现层被静默丢弃。"
+    },
+    "trigger-priority-unique": {
+      "risk": "对话触发冲突",
+      "statement": "interaction_rules.yaml#triggers 的 priority 两两不同。",
+      "on_error": "列出优先级重复的触发器。重复即表示冲突时没有确定赢家。"
+    },
+    "trigger-suppress-known": {
+      "risk": "对话触发冲突",
+      "statement": "suppress 里引用的每个触发器 id 都必须存在，且未被自己 suppress。",
+      "on_error": "列出指向不存在触发器或自引用的条目。"
+    },
+    "trigger-cover-conflicts": {
+      "risk": "对话触发冲突",
+      "statement": "conflicts 里成对出现的触发器，至少要有一方在 suppress 里列了另一方，或有明确 resolution 说明它们为何互斥。",
+      "on_error": "列出声明了冲突但没有任何机制处理的组合。"
+    },
+    "claim-immutable": {
+      "risk": "任务抢占",
+      "statement": "subtask.transitions 中不存在从 dispatched 或更靠后的状态退回 planned 的转移；归属在 dispatched 时锁定，之后不可改变。",
+      "on_error": "指出可能改变归属的转移。"
+    },
+    "one-subtask-per-staff": {
+      "risk": "任务抢占",
+      "statement": "work互斥只管投影，保留后端唯一占用、派单校验与未知执行隔离；运行原子性另验。",
+      "on_error": "指出 work 区域缺失或被误用为 simple 机。"
+    },
+    "concurrency-consistent": {
+      "risk": "任务抢占",
+      "statement": "balance_params.yaml#concurrency.staff_count 等于 3，且 balance_params.yaml#subtask.max_concurrent 不大于它。",
+      "on_error": "指出并发上限与员工数不一致。"
+    },
+    "refs-resolve": {
+      "risk": "契约失效",
+      "statement": "所有形如 <文件>#<路径> 的引用都能在目标文件里求值成功。",
+      "on_error": "列出解析失败的引用及其所在文件与键。改数值时最容易漏掉这里。"
+    },
+    "hysteresis": {
+      "risk": "交互抖动",
+      "statement": "balance_params.yaml#interaction.walk_away_tiles 严格大于 interact_radius_tiles。",
+      "on_error": "相等或更小会让老板站在边界上时提示反复闪。"
+    },
+    "names-canonical": {
+      "risk": "术语漂移",
+      "statement": "业务状态与字段不使用mission/job或中文牛马标识；claim是既有防抢占分组，不是接单事件。",
+      "on_error": "列出违规出现的位置。标识符漂移会让代码和文档对不上。"
+    },
+    "executor-terminal-coverage": {
+      "risk": "任务丢失",
+      "statement": "无进度也可成功、等待、失败或取消；回复返回dispatched。"
+    },
+    "external-outcome": {
+      "risk": "虚假成功",
+      "statement": "博客waiting_user映射external_pending，聚合区分待办和成功。"
+    },
+    "prompt-scenarios": {
+      "risk": "交互冲突",
+      "statement": "按requires与priority验证验收输入。"
+    },
+    "map-references": {
+      "risk": "地图断链",
+      "statement": "区域、连接、工位、兴趣点与会合枚举有效；office和cafe分别与无所属建筑的street双向连接，当前仍未启用且没有室内直连，普通与探险NPC约束不混用。"
+    },
+    "event-examples": {
+      "risk": "契约失效",
+      "statement": "事件和请求实例用JSON Schema验证；消费端忽略未知类型的行为另验。"
+    },
+    "world-npc": {
+      "risk": "跨图和角色范围",
+      "statement": "正式普通职员roster与两个examples分开；物理工位和普通workplace不扩充5核心posts，三位特殊NPC仍是staff。岗位路径不得越界，探险NPC无永久出生地。"
+    },
+    "effective-attempts": {
+      "risk": "错误结论",
+      "statement": "替代与重试链唯一无环，同目标同任务，按当前有效尝试聚合；未满足目标不得被旧结果充当完成。"
+    },
+    "dependency-rules": {
+      "risk": "错误派单",
+      "statement": "依赖就绪条件表不重复，待外部发布不能当作已完成前置操作。"
+    }
+  },
+  "x-validationPlan": {
+    "description": "执行顺序。schema 先跑，结构不过就没有必要跑跨文件检查。",
+    "steps": [
+      {
+        "order": 1,
+        "files": [
+          "agent_fsm.yaml",
+          "task_protocol.yaml",
+          "interaction_rules.yaml",
+          "map_rules.yaml",
+          "balance_params.yaml",
+          "npc_rules.yaml"
+        ],
+        "against": "$defs.targets.<文件名>",
+        "loader": "YAML 解析为 JSON 后校验"
+      },
+      {
+        "order": 2,
+        "files": [
+          "event_schema.json"
+        ],
+        "against": "$defs.targets.event_schema.json",
+        "note": "另外用元 schema 校验它自身是合法的 JSON Schema"
+      },
+      {
+        "order": 3,
+        "files": [
+          "全部"
+        ],
+        "checks": [
+          "refs-resolve",
+          "hysteresis",
+          "names-canonical"
+        ]
+      },
+      {
+        "order": 4,
+        "files": [
+          "agent_fsm.yaml"
+        ],
+        "checks": [
+          "fsm-targets-exist",
+          "fsm-initial-exists",
+          "fsm-rest-exists",
+          "fsm-rest-reachable",
+          "fsm-cancel-path"
+        ]
+      },
+      {
+        "order": 5,
+        "files": [
+          "task_protocol.yaml",
+          "event_schema.json"
+        ],
+        "checks": [
+          "subtask-terminal-bounded",
+          "task-terminal-after-children",
+          "events-have-schemas",
+          "claim-immutable"
+        ]
+      },
+      {
+        "order": 6,
+        "files": [
+          "interaction_rules.yaml"
+        ],
+        "checks": [
+          "trigger-priority-unique",
+          "trigger-suppress-known",
+          "trigger-cover-conflicts"
+        ]
+      },
+      {
+        "order": 7,
+        "files": [
+          "agent_fsm.yaml",
+          "balance_params.yaml"
+        ],
+        "checks": [
+          "one-subtask-per-staff",
+          "concurrency-consistent"
+        ]
+      },
+      {
+        "order": 8,
+        "files": [
+          "验收场景.json"
+        ],
+        "checks": [
+          "executor-terminal-coverage",
+          "external-outcome",
+          "prompt-scenarios",
+          "map-references",
+          "event-examples"
+        ]
+      },
+      {
+        "order": 9,
+        "files": [
+          "npc_rules.yaml",
+          "map_rules.yaml",
+          "task_protocol.yaml"
+        ],
+        "checks": [
+          "world-npc",
+          "effective-attempts",
+          "dependency-rules"
+        ]
+      }
+    ]
+  }
+}

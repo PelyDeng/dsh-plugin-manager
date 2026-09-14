@@ -32,7 +32,7 @@ import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
 import type { Config } from './config.ts'
 import { ConversationLog, type LoggedEvent, type RunHead } from './event-log.ts'
 import type { ButlerAgentExecutor, ButlerDispatchResult, ButlerMember, ButlerPhase, ButlerProgressUpdate, ButlerReplyRequest } from './protocol.ts'
-import type { RequestRecord, SubtaskRecord, TaskInput, TaskStore } from './store.ts'
+import type { ButlerInputRef, ButlerInputRefsKind, ButlerMemberReturn, RequestRecord, SubtaskRecord, TaskInput, TaskStore } from './store.ts'
 import { isTerminal, dependencyVerdict, type SubtaskState, type TaskState } from './task-model.ts'
 
 const CONVERSATION_ID = /^butler-web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -514,6 +514,55 @@ export function visibleError(error: unknown, limit: number): string {
 }
 
 /** 子任务简报：把整体目标、这个子任务和产出要求一起交给子 Agent。 */
+/**
+ * 派单 message 的管家本地保守上限（字符）。
+ *
+ * 依据：参考博客成员入口的实际接收检查（`plugins/dsh-agents-group/agents/blog/src/participant.ts`：
+ * `request.message.length <= 8000`）。**不是**成员能力协商机制，也不代表其它成员或模型的容量；
+ * 其它成员若有更低限制，仍以其入口的实际检查为准。超限一律不派单，不截断后继续。
+ */
+const DISPATCH_MESSAGE_LIMIT = 8000
+
+/**
+ * 协作返回的内部留存：原文照录 + 结构化外部待办。
+ *
+ * 页面展示用的 `result` 仍按 `maxResultChars` 裁剪；这里保存的是**未裁剪**的协作返回原文，
+ * 供下游构建材料快照。只复用权威声明，不推断"未采用/未发布"，也不从正文反解析。
+ */
+function memberReturnOf(result: ButlerDispatchResult): ButlerMemberReturn {
+  const reason = typeof result.externalPending?.reason === 'string' ? result.externalPending.reason.trim() : ''
+  const next = typeof result.externalPending?.next === 'string' ? result.externalPending.next.trim() : ''
+  return {
+    protocol: 1,
+    text: result.summary ?? '',
+    ...(reason === '' ? {} : { externalPending: { reason, ...(next === '' ? {} : { next }) } }),
+  }
+}
+
+/**
+ * 派单简报：在原有说明之后接上**可用材料**段。
+ *
+ * 正文照录上游协作返回原文；位置型材料只给出位置并注明需在执行方页面打开（不宣称员工已取得）；
+ * 外部待办照录上游权威声明。内容全部来自派单时固定的快照，不重读可变上游。
+ */
+function dispatchBrief(taskGoal: string, subtaskGoal: string, refs: readonly ButlerInputRef[]): string {
+  const lines = [briefFor(taskGoal, subtaskGoal)]
+  if (refs.length > 0) {
+    lines.push('', '可用材料（来自上游，原文照录）：')
+    for (const ref of refs) {
+      lines.push(`【${ref.logicalId}】${ref.text}`)
+      for (const artifact of ref.artifacts) {
+        lines.push(`（位置型材料：${artifact.title}（${artifact.kind}）${artifact.path}；需在执行方页面打开，归属由执行方核验）`)
+      }
+      if (ref.externalPending !== undefined) {
+        const next = ref.externalPending.next === undefined ? '' : `；处理后可做：${ref.externalPending.next}`
+        lines.push(`（上游外部待办：${ref.externalPending.reason}${next}）`)
+      }
+    }
+  }
+  return lines.join('\n')
+}
+
 function briefFor(taskGoal: string, subtaskGoal: string): string {
   return [
     `整体目标：${taskGoal}`,
@@ -1079,12 +1128,21 @@ export class ButlerConsole {
     return this.store.history(actor, { ...query, conversationId })
   }
 
-  /** 一条任务的完整记录。 */
+  /** 一条任务的完整记录。对外只给既有公开字段，管家内部的派单材料不进任何响应。 */
   task(actor: Actor, id: string) {
     this.access.assert(actor)
     const record = this.store.task(actor, id)
     if (record === undefined) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
-    return record
+    // `inputRefs`/`inputRefsState`（派单材料原文、来源快照与「为什么是这个值」）和
+    // `memberReturn`（协作返回原文）是管家内部数据：原文长度不受页面展示摘要边界约束，
+    // 序列化进 HTTP/SSE 就等于把内部材料漏到对外响应里。
+    // 内部派单、依赖判定与恢复照旧读 `store.task` 的完整记录，不受这里裁剪影响。
+    return {
+      ...record,
+      subtasks: record.subtasks.map(({
+        inputRefs: _inputRefs, inputRefsState: _inputRefsState, memberReturn: _memberReturn, ...rest
+      }) => rest),
+    }
   }
 
   /** 右栏状态摘要。 */
@@ -1976,11 +2034,11 @@ export class ButlerConsole {
       ? {}
       : { conversationId: result.conversationId }
     if (result.status === 'succeeded') {
-      this.store.setSubtaskState(taskId, subtaskId, 'succeeded', { result: clip(result.summary, max), ...artifacts, ...conversation })
+      this.store.setSubtaskState(taskId, subtaskId, 'succeeded', { result: clip(result.summary, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation })
       return
     }
     if (result.status === 'waiting_user') {
-      this.store.setSubtaskState(taskId, subtaskId, 'waiting_user', { result: clip(result.summary, max), ...artifacts, ...conversation })
+      this.store.setSubtaskState(taskId, subtaskId, 'waiting_user', { result: clip(result.summary, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation })
       return
     }
     if (result.status === 'external_pending') {
@@ -1990,12 +2048,12 @@ export class ButlerConsole {
         // 给用户显示一件没发生过的外部事项。材料仍然保留。
         this.store.setSubtaskState(taskId, subtaskId, 'failed', {
           error: '说还有外部待办，但没说明在等什么',
-          result: clip(result.summary, max), ...artifacts, ...conversation,
+          result: clip(result.summary, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation,
         })
         return
       }
       this.store.setSubtaskState(taskId, subtaskId, 'external_pending', {
-        result: clip(`${result.summary}\n\n外部待办：${reason}`, max), ...artifacts, ...conversation,
+        result: clip(`${result.summary}\n\n外部待办：${reason}`, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation,
       })
       return
     }
@@ -2003,6 +2061,7 @@ export class ButlerConsole {
     // 失败/取消只写 error，result 由 COALESCE 保留先前交回的阶段性成果。
     this.store.setSubtaskState(taskId, subtaskId, cancelled ? 'cancelled' : 'failed', {
       error: cancelled && clip(result.summary, max) === '' ? '已停止' : clip(result.summary, max),
+      memberReturn: memberReturnOf(result),
     })
   }
 
@@ -2062,9 +2121,31 @@ export class ButlerConsole {
      * 并不存在的失败。现在按既定机制分三种处理，判定本身是纯函数（`dependencyVerdict`），
      * 与游戏侧的就绪表同一张。
      */
-    if (input.dependsOn !== undefined && input.dependsOn.length > 0) {
-      const record = this.store.task(input.actor, taskId)
-      const current = effectiveSubtasks(record?.subtasks ?? [])
+    // 派单材料快照：首次派单固定下来，之后不再改写（无依赖时为 `[]`）。
+    //
+    // **只有「确实还没派出去过」才允许首次固定**。另外两种一律拒绝派单：
+    // - `unknown`：这一步派出过，但库里没留下材料（旧版本记录）—— 拿此刻的上游结果补一份
+    //   来源等于伪造历史，材料到底是不是当时发出去的那份无从证明；
+    // - `damaged`：已固定的快照读不出来（数据损坏）—— 损坏值写不回库，员工收到的材料会和
+    //   库里记的对不上，宁可停下来说清楚。
+    // 已固定的合法快照则沿用库里的那一份：材料已经随派单 message 发出去过，此刻再按上游当前
+    // 状态重算，会让库里的来源与员工实际收到的东西对不上。
+    const record = this.store.task(input.actor, taskId)
+    const current = effectiveSubtasks(record?.subtasks ?? [])
+    const self = current.find(candidate => candidate.id === subtaskId)
+    // 读不到这条记录就无从证明「还没派过」：按未知拒绝，不猜。
+    const snapshotState: ButlerInputRefsKind = self?.inputRefsState ?? 'unknown'
+    if (snapshotState === 'unknown' || snapshotState === 'damaged') {
+      const detail = snapshotState === 'unknown'
+        ? '这一步之前派出过，但没有留下材料快照（旧记录未留存）：来源未知，不重新派单，也不补造历史'
+        : '这一步已固定的材料快照读不出来（数据损坏）：不重新派单，原记录保持不动'
+      this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
+      yield emit('failed', detail)
+      return { state: 'failed', report: `【${displayName}】失败：${detail}` }
+    }
+    const fixed = self?.inputRefs
+    const inputRefs: ButlerInputRef[] = fixed === undefined ? [] : [...fixed]
+    if (fixed === undefined && input.dependsOn !== undefined && input.dependsOn.length > 0) {
       const waiting: string[] = []
       const blocked: string[] = []
       for (const logicalId of input.dependsOn) {
@@ -2081,6 +2162,28 @@ export class ButlerConsole {
         })
         if (verdict === 'wait') waiting.push(`${logicalId}（${attempt.state}）`)
         else if (verdict === 'fail') blocked.push(`${logicalId}（${attempt.state}）`)
+        else {
+          // 材料来源：上游该次有效尝试必须留下**协作返回原文**才可交付。旧记录没有留存
+          // （memberReturn 为 undefined）即未知；只有位置型材料不构成可消费材料 —— 两种情况
+          // 都不派单，也绝不拿裁剪过的展示摘要顶替。
+          const source = attempt.memberReturn
+          if (source === undefined || source.text.trim() === '') {
+            const why = source === undefined
+              ? '上游协作返回未知（旧记录未留存材料）'
+              : attempt.artifacts.length > 0 ? '上游只提供页面位置，下游无法消费' : '上游协作返回为空'
+            blocked.push(`${logicalId}（${why}）`)
+          }
+          else {
+            inputRefs.push({
+              subtaskId: attempt.id,
+              logicalId: attempt.logicalId,
+              state: attempt.state,
+              text: source.text,
+              artifacts: [...attempt.artifacts],
+              ...(source.externalPending === undefined ? {} : { externalPending: { ...source.externalPending } }),
+            })
+          }
+        }
       }
       if (waiting.length > 0 && blocked.length === 0) {
         // 前置还没终结：这一步留在队列里，不占员工，也不判失败。等前置有结果之后由收尾
@@ -2098,6 +2201,15 @@ export class ButlerConsole {
       }
     }
 
+    // 容量：按**完整派单 message** 计（整体目标、本步、材料原文、位置来源、外部待办全部计入）。
+    // 超限一律不派单，也不静默或显式截断后继续；由老板缩小范围后走既有「新尝试」规则。
+    const brief = dispatchBrief(input.taskGoal, input.goal, inputRefs)
+    if (brief.length > DISPATCH_MESSAGE_LIMIT) {
+      const detail = `派单材料超过成员接收上限（${brief.length} > ${DISPATCH_MESSAGE_LIMIT} 字符），已停止派单，请缩小范围后重试`
+      this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
+      yield emit('failed', detail)
+      return { state: 'failed', report: `【${displayName}】失败：${detail}` }
+    }
     const executor: ButlerAgentExecutor | undefined = resolveExecutor(this.ctx, agentId)
     if (executor === undefined) {
       const detail = `${displayName} 现在不在场，接不了这活`
@@ -2106,7 +2218,7 @@ export class ButlerConsole {
       return { state: 'failed', report: `【${displayName}】${detail}` }
     }
 
-    this.store.setSubtaskState(taskId, subtaskId, 'dispatched')
+    this.store.setSubtaskState(taskId, subtaskId, 'dispatched', { inputRefs })
     yield emit('dispatched', `已把活交给 ${displayName}`, { phase: 'analyzing' })
 
     const controller = new AbortController()
@@ -2171,7 +2283,7 @@ export class ButlerConsole {
         taskId,
         subtaskId,
         goal: input.goal,
-        brief: briefFor(input.taskGoal, input.goal),
+        brief,
         taskGoal: input.taskGoal,
         owner: `${input.actor.namespace}:${input.actor.userId}`,
         // 完整身份交给执行方鉴权：owner 丢掉了 sessionId，无法反推回 Actor。

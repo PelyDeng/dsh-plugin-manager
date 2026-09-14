@@ -1,0 +1,253 @@
+# 任务生命周期与交付规则。老板同时只有一轮任务，归属在派单时锁定。
+version: 2
+
+task:
+  description: 老板经牛马大总管开启的一轮协作；外部待办与游戏本轮是否结束分开记录。
+  states:
+    running: { description: 理解、派单、等待员工或汇总 }
+    stopping: { description: 取消或超时收尾，先终结子任务 }
+    completed: { description: 本轮目标已完成，牛马大总管已给出真实结论 }
+    external_pending: { description: 本轮材料已交付，仍有外部采用或确认；允许开新任务，不表示发布成功 }
+    partial: { description: 当前目标有可用成果或外部待办，同时仍有未完成部分 }
+    failed: { description: 没有可用成果，或汇总失败无法形成有效交付 }
+    cancelled: { description: 老板取消本轮，保留已产生的材料和外部待办 }
+  terminal: [completed, external_pending, partial, failed, cancelled]
+  initial: running
+  transitions:
+    - { on: all_subtasks_terminal_and_reply_done, from: running, to: completed, guard: aggregation 得出 completed }
+    - { on: all_subtasks_terminal_and_reply_done, from: running, to: external_pending, guard: aggregation 得出 external_pending }
+    - { on: all_subtasks_terminal_and_reply_done, from: running, to: partial, guard: aggregation 得出 partial }
+    - { on: all_subtasks_terminal_and_reply_done, from: running, to: failed, guard: aggregation 得出 failed }
+    - { on: boss.cancel, from: running, to: stopping, note: 保存 stopReason=user_cancel，发出中止请求 }
+    - { on: boss.cancel, from: stopping, to: stopping, note: 重复取消幂等，不跳过子任务收尾 }
+    - { on: timeout, from: running, to: stopping, note: 保存 stopReason=timeout }
+    - { on: turn.failed, from: running, to: stopping, note: 保存 stopReason=turn_failed，不遗留子任务 }
+    - { on: cleanup_done, from: stopping, to: cancelled, guard: stopReason=user_cancel，所有子任务已终结 }
+    - { on: cleanup_done, from: stopping, to: partial, guard: stopReason 非 user_cancel，子任务已终结且有成果或外部待办 }
+    - { on: cleanup_done, from: stopping, to: failed, guard: stopReason 非 user_cancel，子任务已终结且没有可用材料 }
+  cleanup:
+    timeout_ms: balance_params.yaml#butler_timeouts.cancelled_cleanup_ms
+    on_deadline: 将仍未终结子任务记为取消或超时失败，先持久化再触发 cleanup_done；未证明执行已停的员工保持隔离占用。
+  input_versions:
+    acceptedVersion: 从 1 开始；每次接受新输入原子递增并保留原文，重复 requestId 不递增。
+    processedVersion: 牛马大总管已处理到的输入版本；完成目标、分工及结果适用性核对后才更新，不因收到输入就追平。
+    currentGoals: processedVersion 对应仍须完成的 logicalId 列表；只有老板明确撤回的目标才移出，原需求和旧结果仍保留。
+    unmetGoals: currentGoals 中没有适用尝试的目标，逐项保存 logicalId 和 reason；额度不足、入口不可用或旧结果不适用均不能隐去。
+    terminal_guard: 正常汇总提交与接受输入原子互斥；仅 acceptedVersion=processedVersion、所有子任务终结、当前目标逐项有结论时可结束。终态已提交后，携带旧 taskId 的补充拒绝并保留草稿；只有老板明确作为新任务提交才创建，不能回写旧任务或自动将旧草稿派成新活。
+  invariants:
+    - { id: one-running-task, statement: 同一老板最多一个 running 或 stopping 任务；原子判定和创建，不靠前端按钮保证。 }
+    - { id: terminal-after-children, statement: 所有进入任务终态的路径均要求子任务已终结。 }
+    - { id: terminal-persisted-first, statement: 结果和终态先持久化，再发事件；刷新可恢复一致状态。 }
+    - { id: terminal-immutable, statement: 终态不被迟到事件或外部确认改写；后续跟进是新任务。 }
+    - { id: process-accepted-input-before-terminal, statement: running 中接受的补充必须处理后再汇总；停止路径保留尚未处理的输入并明确未执行，不把取消说成处理完成。 }
+    - { id: restart-reconciles, statement: 重启将遗留任务及未终结子任务记为 orphaned 失败并保留已有成果；旧执行停止证据单独核验。 }
+
+subtask:
+  description: 牛马大总管指定一个执行者承担的一次尝试，无员工抢单和独立 accepted 回调；计划尚未派出时不占用员工。
+  metadata:
+    logicalId: 同一轮目标的稳定标识，重试或替代仍沿用；新增独立目标使用新标识。
+    inputVersion: 创建该尝试时已处理的输入版本；派出后不改写请求或原版本。
+    dependsOn: 前置目标的 logicalId 列表，默认为空；引用限同一 task，不允许自依赖或环。
+    retryOf: 自动重试时填写前一次 subtaskId；仅引用同 task、同 logicalId 的已终结失败尝试。
+    supersedes: 替代的前一次 subtaskId；重试同时填写并与 retryOf 相同。引用同 task、同 logicalId，旧尝试必须先终结；每个目标至多一条无环且不分叉的尝试链。
+    inputRefs: 派出时固定实际使用的上游 subtaskId 与 resultRef；只引用当前身份可访问的真实结果，不用员工私聊、动画或猜测补足材料。
+  states:
+    planned: { description: 尚未派出, owner: null }
+    dispatched: { description: 已派出但未收到可选进度, owner: 锁定的员工 }
+    executing: { description: 收到真实进度，尚未返回, owner: 锁定的员工 }
+    waiting_user: { description: 有明确问题和可用 reply，需要本轮文本补充, owner: 锁定的员工 }
+    succeeded: { description: 取得本轮可用结果 }
+    external_pending: { description: 返回材料或未决操作，后续要在外部页面处理；本子任务终结但不表示业务成功 }
+    failed: { description: 执行失败或返回无法解释 }
+    cancelled: { description: 本轮已取消，保留已有材料 }
+  terminal: [succeeded, external_pending, failed, cancelled]
+  initial: planned
+  transitions:
+    - { on: butler.assign, from: planned, to: dispatched, guard: 依赖按 scheduling 就绪、入口和已知授权满足、员工空闲未隔离、并发有余量 }
+    - { on: executor.reported, from: dispatched, to: executing, note: 首次真实进度；不声称知道精确开始时间 }
+    - { on: result.ok, from: [dispatched, executing], to: succeeded }
+    - { on: result.external_pending, from: [dispatched, executing], to: external_pending }
+    - { on: needs_user_input, from: [dispatched, executing], to: waiting_user, guard: 有非空问题且 reply 可用，明确属于文本补充 }
+    - { on: boss.reply, from: waiting_user, to: dispatched, note: 新 replyRequestId；会话归属沿用，不重发原任务；发 subtask.reply_started 而非重复派单事件 }
+    - { on: result.error, from: [planned, dispatched, executing, waiting_user], to: failed }
+    - { on: result.cancelled, from: [dispatched, executing], to: cancelled }
+    - { on: boss.cancel, from: [planned, dispatched, executing, waiting_user], to: cancelled }
+    - { on: timeout, from: [planned, dispatched, executing, waiting_user], to: failed, reason: timeout }
+    - { on: staff.unavailable, from: [dispatched, executing, waiting_user], to: failed, reason: staff_unavailable }
+    - { on: task.aborted, from: [planned, dispatched, executing, waiting_user], to: cancelled }
+    - { on: plan.replaced, from: [planned, dispatched, executing, waiting_user], to: cancelled, note: 需求变更使旧尝试失效；保留原请求与材料，外部执行未确认停止仍隔离 }
+
+scheduling:
+  assignment: 牛马大总管根据职责、真实执行入口、授权与容量选择指定执行者；NPC 身份、所在建筑或性格不自动产生业务权限。只有接入并授权的执行者可派活。
+  parallel: 无依赖且目标互不冲突时可同时派给不同空闲执行者；按 balance_params.yaml 的本轮上限和并发上限检查。
+  planned_wait: 后续依赖步骤留在 planned，不占用员工；派单前重新核验条件。同一员工的多个步骤显式串联 dependsOn，前一步终结并解除隔离后才可派下一步，不把忙员工塞进抢单队列。
+  ready_rules:
+    - { upstream: succeeded, materialsReady: true, requiresExternalAction: false, action: dispatch }
+    - { upstream: succeeded, materialsReady: false, requiresExternalAction: false, action: fail }
+    - { upstream: external_pending, materialsReady: true, requiresExternalAction: false, action: dispatch }
+    - { upstream: external_pending, materialsReady: true, requiresExternalAction: true, action: fail }
+    - { upstream: external_pending, materialsReady: false, requiresExternalAction: false, action: fail }
+    - { upstream: unfinished, materialsReady: false, requiresExternalAction: false, action: wait }
+    - { upstream: unfinished, materialsReady: true, requiresExternalAction: false, action: wait }
+    - { upstream: unfinished, materialsReady: false, requiresExternalAction: true, action: wait }
+    - { upstream: unfinished, materialsReady: true, requiresExternalAction: true, action: wait }
+    - { upstream: failed_or_cancelled, materialsReady: false, requiresExternalAction: false, action: fail }
+  default_action: fail
+  dependency_rules:
+    - 就绪表逐个依赖核对，全部通过才可派单；无依赖直接核验入口与容量。上游尚未终结时始终等待，不因途中已有部分材料就提前失败或派单；unfinished 包括牛马大总管已决定且额度允许的安全重试，仍受本轮和 planned 截止时间约束。
+    - external_pending 只有本轮已交回的完整材料足以支持下游目标且不依赖外部操作时才可用；在 inputRefs 记录材料来源和未采用、未发布等真实状态，不能宣称外部操作已成功。
+    - 上游失败后先按 retry 决定是否还有本轮恢复机会；不能恢复则将尚未派出的依赖步骤以 result.error 结束，说明没有执行及缺失的前提，不伪造员工报错或一直等待。
+    - 上游有效尝试被替代时，使用旧 inputRefs 的下游不能直接参与当前成功判定。已派出的 inputRefs 不变；受影响目标先标 unmetGoals，必要时终结旧下游并另建使用当前材料的新尝试。仅改表达而不替代上游时，仍可复用原有适用结果。
+    - 下游材料只取最新有效尝试，保留来源、范围、正文或引用；超出员工可接收内容时明确缺失并停止或经老板缩小范围，不能悄悄截断为完整结果。
+  limit: 所有 planned、已终结、重试和替代尝试都计入 balance_params.yaml#subtask.max_per_task；额度耗尽不删除历史腾名额。无法安排的当前目标写入 unmetGoals，汇总明确本轮未完成，只有老板之后再安排才开新任务。
+
+supplements:
+  classification:
+    - { kind: expression, meaning: 只改语气、顺序或输出表达，不改变事实范围与业务目标, action: 复用仍适用的真实结果，按新表达汇总 }
+    - { kind: scope, meaning: 改时间、对象、条件、目标或新增工作, action: 核对现有结果适用性后保留、追加或替代，不把补充只附在旧总结后 }
+  rules:
+    - 老板补充先由牛马大总管理解；只有确实缺少决定后续工作所需的信息才追问。对 waiting_user 的定向答复走 boss.reply，不以补充重新发送原请求。
+    - 仅改表达也须更新 processedVersion；旧 inputVersion 的结果只有范围仍适用才可继续使用。已返回材料不能覆盖新的范围，例如“昨天”结果不等于“上周”。
+    - 追加独立目标使用新 logicalId；替代目标沿用 logicalId、另建 subtaskId 并填写 supersedes。旧终态不改写；若旧尝试仍执行则先结束旧尝试并请求停止，未有停止证据不能对该执行者发新活。
+    - 尚未登记为子任务的草案可更新；已登记的 planned 目标或依赖若要改变，也须先终结旧尝试再建替代。已发事件、简报和 inputRefs 不原地改写。老板撤回目标时停止其未完成尝试、保留记录，剩余目标照常核验。
+    - 需求已经变更但没有适用新尝试时，将目标写入 unmetGoals；旧结果仍可查阅，但不得参与当前成功判定。新尝试有效后移出 unmetGoals。
+    - 汇总中接受补充立即回 understanding；必要时重新派单。旧汇总只能作为草稿，必须在处理完最新版本后重算结果，不能丢掉已经接受的补充。
+
+result_mapping:
+  succeeded: result.ok
+  failed: result.error
+  cancelled: result.cancelled
+  waiting_user:
+    blog: result.external_pending
+    other_with_question_and_reply: needs_user_input
+    otherwise: result.error
+  rules:
+    - 不解析 summary 的措辞猜状态。blog 映射依据当前 participant 将未采用候选或未决操作返回 waiting 的已核实行为；外部插件变化后须重新核对。
+    - 保存 executorStatus 原值、summary、conversationId，以及实际存在的材料引用；没有资料不编造候选正文，没有 question 不编问题。
+    - blog 的 external_pending 显示“待外部处理”，保留未完成事项；原页面定位未经验证时仍保留会话标识与说明，不造链接。
+    - 无法解释的返回记 protocol_error 并保留原说明；权限拒绝使用 rejected_by_policy，不编可用结果。
+    - reply 的参数与幂等传递须在架构阶段核验；未支持前不能展示可提交的文本回复入口。
+
+aggregation:
+  description: 所有子任务终结并处理完最新输入后，先按当前目标选有效结果，再用下表互斥匹配。历史失败保留，成功重试已替代的旧失败不使本轮降为 partial。
+  selection:
+    goal_source: currentGoals
+    attempt_choice: supersedes 链中没有后继的尝试；同一 logicalId 必须唯一，链中每次替代都经后端原子确认，不以时间戳猜“最后一次”。
+    excluded: 已撤回目标、被 supersedes 替代的历史尝试、unmetGoals 对应的不适用旧结果。
+    unmet: 当前目标无适用尝试则必须列入 unmetGoals 并计 has_failure；不能因没有创建子任务就当成直接答复成功。
+    history: 被替代失败、旧范围材料、取消原因与每次依赖引用全部保留；历史有失败不等于当前目标没完成。
+  rows:
+    - { has_failure: true, has_success: false, has_external: false, outcome: failed }
+    - { has_failure: true, has_success: true, has_external: false, outcome: partial }
+    - { has_failure: true, has_success: false, has_external: true, outcome: partial }
+    - { has_failure: true, has_success: true, has_external: true, outcome: partial }
+    - { has_failure: false, has_success: false, has_external: true, outcome: external_pending }
+    - { has_failure: false, has_success: true, has_external: true, outcome: external_pending }
+    - { has_failure: false, has_success: true, has_external: false, outcome: completed }
+    - { has_failure: false, has_success: false, has_external: false, outcome: failed }
+  direct_reply: 没有需员工执行的 currentGoals 且没有 unmetGoals 时，真实有效的牛马大总管答复才可 completed；空答复或失败不能因空集判成功。无需派单的原目标及真实答复仍写入本轮记录。
+  flags: 只对当前有效尝试计算：has_failure 指 failed/cancelled 或 unmetGoals 非空，has_success 指 succeeded，has_external 指 external_pending。取消整轮另按 stopReason 收尾。
+  external_followup: 本轮终态保存材料与外部待办，释放本轮并发名额；外部操作不自动改写本轮。老板之后经牛马大总管新开跟进任务。
+
+examples:
+  description: 以下是契约数据与时序样例，resultRef 仅作样例标识，不是实际执行证据；均在同一任务内。
+  sequential:
+    input: 查已授权使用的园区记录，再据此整理博客候选稿。
+    acceptedVersion: 1
+    processedVersion: 1
+    currentGoals: [records, draft]
+    unmetGoals: []
+    attempts:
+      - { subtaskId: st-01, logicalId: records, staffId: closedoff, inputVersion: 1, dependsOn: [], outcome: succeeded }
+      - { subtaskId: st-02, logicalId: draft, staffId: blog, inputVersion: 1, dependsOn: [records], inputRefs: [{ subtaskId: st-01, resultRef: records-result }], outcome: external_pending }
+    timeline:
+      - 牛马大总管先登记 st-01 与 st-02；只派 st-01，st-02 保持 planned，不占 blog。
+      - st-01 真实返回后核对资料范围与下游访问权限，把可用材料写入 st-02 的 inputRefs 和实际简报，再派给 blog。
+      - blog 交回真实候选及 waiting_user，映射为 st-02.external_pending；本轮保留候选与外部采用、发布事项，允许开新任务。
+    expected: external_pending
+  changed_scope:
+    input: 先要求查昨天，后在汇总中补充改为查上周。
+    acceptedVersion: 2
+    processedVersion: 2
+    currentGoals: [records]
+    unmetGoals: []
+    attempts:
+      - { subtaskId: st-01, logicalId: records, staffId: closedoff, inputVersion: 1, dependsOn: [], outcome: succeeded }
+      - { subtaskId: st-02, logicalId: records, staffId: closedoff, inputVersion: 2, dependsOn: [], supersedes: st-01, outcome: succeeded }
+    timeline:
+      - 接受第二句时原子递增 acceptedVersion，牛马大总管从 aggregating 回 understanding，不提交“昨天”的旧总结。
+      - 核对 st-01 的昨天结果不能回答上周，保留 st-01，另建 st-02 替代并查询上周；若 st-01 尚未停止，则先结束并核验停止，不能立即复用同一执行者。
+      - 处理完新范围才令 processedVersion=2；st-02 真实成功后汇总。若额度不足不能创建 st-02，则 records 写入 unmetGoals，本轮 failed，旧 st-01 不顶替。
+    expected: completed
+  successful_retry:
+    acceptedVersion: 1
+    processedVersion: 1
+    currentGoals: [records]
+    unmetGoals: []
+    attempts:
+      - { subtaskId: st-01, logicalId: records, staffId: closedoff, inputVersion: 1, dependsOn: [], outcome: failed, reason: timeout }
+      - { subtaskId: st-02, logicalId: records, staffId: closedoff, inputVersion: 1, dependsOn: [], retryOf: st-01, supersedes: st-01, outcome: succeeded }
+    timeline:
+      - st-01 超时终结；确认旧执行停止且工作为安全只读，核对重试次数、本轮额度和截止时间，才创建 st-02。
+      - st-02 真实成功后，records 的当前尝试为 st-02；st-01 的超时记录保留在历史中，最终显示完成，不显示部分完成。
+    expected: completed
+
+claim:
+  description: 后端派单与占用的唯一规则；员工在地图上不代表可派。
+  rules:
+    - { id: ownership-locked-at-dispatch, statement: dispatched 时原子锁定员工归属，终态不能换人；换人须结束旧子任务另建。 }
+    - { id: one-subtask-per-staff, statement: 同一执行者最多一个 dispatched/executing/waiting_user 子任务；planned 尚未归属、不占员工。占用与未知执行隔离一起检查。 }
+    - { id: validate-before-dispatch, statement: 入口、已知授权、占用、隔离及并发先检查；失败即给牛马大总管明确拒绝，不落非法派单。 }
+    - { id: no-queueing, statement: 不向忙碌或隔离执行者派单或挂抢单队列；预先串联的依赖步骤仅留在计划，依赖就绪后由牛马大总管重新核验并指定派单。 }
+    - { id: butler-only-assignment, statement: 任务只经牛马大总管分析后指定执行者，员工和普通 NPC 不自主认领；建筑和地图切换不改变任务归属或执行权限。 }
+    - { id: single-dispatch, statement: 同一子任务不得重复 dispatch；reply 不是重新派单。 }
+    - { id: execution-isolation, statement: 取消或超时只结束账本不证明外部执行停止；收到 Promise 结束或可核验停止证据才解除隔离，迟到结果不推进新任务。 }
+
+retry:
+  description: 只重试已证明停止且安全重复的失败；不对潜在外部副作用盲重试。
+  max_attempts: balance_params.yaml#retry.max_attempts
+  retryable_reasons: [timeout, staff_unavailable]
+  non_retryable_reasons: [result.error, cancelled, rejected_by_policy, protocol_error, external_pending]
+  rules:
+    - { id: bounded, statement: 含首次次数不超过上限；重试也计入每轮子任务上限，不能无限建新编号。 }
+    - { id: new-subtask-on-retry, statement: 新子任务沿用 logicalId，同时填写 retryOf 和 supersedes；旧终态不变，换人也不能抹掉旧失败。有效新尝试按当前目标聚合，不累计已替代失败。 }
+    - { id: safe-repeat-only, statement: 只有明确为只读或有已核实幂等保障、旧执行确认停止的工作可自动重试；其它失败交代原因后由老板重新安排。 }
+    - { id: no-retry-after-cancel, statement: stopping 或终态任务不新建重试。 }
+
+failure_taxonomy:
+  - { reason: timeout, meaning: 超过时限, user_text: 这次等得太久，已结束等待，实际执行是否停止另行核验。 }
+  - { reason: staff_unavailable, meaning: 执行入口或会话不可用, user_text: 这位员工暂时接不了活。 }
+  - { reason: result.error, meaning: 执行失败或前置条件不成立；未派出时明确没有执行及具体缺失条件, user_text: 这部分没完成，已有材料保留。 }
+  - { reason: orphaned, meaning: 重启遗留任务, user_text: 上次运行中断了，已有材料保留。 }
+  - { reason: rejected_by_policy, meaning: 权限或策略拒绝, user_text: 当前身份不能执行这件事。 }
+  - { reason: protocol_error, meaning: 返回不满足协作契约, user_text: 返回内容无法按当前协议处理，请查看原说明。 }
+
+events_out:
+  description: 事件只记录真实业务状态和公开文本；位置、报到不发给后端。
+  emitted:
+    - task.started
+    - task.stopping
+    - subtask.planned
+    - subtask.dispatched
+    - subtask.executing
+    - subtask.waiting_user
+    - subtask.reply_started
+    - subtask.output_delta
+    - subtask.succeeded
+    - subtask.external_pending
+    - subtask.failed
+    - subtask.cancelled
+    - task.summarizing
+    - butler.message
+    - butler.needs_input
+    - task.completed
+    - task.external_pending
+    - task.partial
+    - task.failed
+    - task.cancelled
+
+replay:
+  ownership: taskId、subtaskId、原会话与请求幂等键均绑定可信登录身份；前端不提交owner或actor替换归属。
+  retention: 页面事件窗口可限量，但完整材料与终态保留；after早于窗口或出现seq缺口时明确要求重取快照，不静默丢事件。
+  late_result: 已终结任务的迟到事件不变更结论或新任务；真实停止证据可独立解除旧执行隔离。
+  idempotency: 同身份同requestId同正文返回原结果；同ID换正文拒绝。不同回复必须新ID，任务开始与补充接受均按原子状态判定。

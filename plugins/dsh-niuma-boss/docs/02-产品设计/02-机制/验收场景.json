@@ -1,0 +1,1346 @@
+{
+  "description": "仅验证设计数据、图上可达性与规则表，不代替真实宿主、模型、地图、浏览器验收。",
+  "paths": [
+    {
+      "name": "没有进度直接成功",
+      "machine": "subtask",
+      "start": "planned",
+      "steps": [
+        [
+          "butler.assign",
+          "dispatched"
+        ],
+        [
+          "result.ok",
+          "succeeded"
+        ]
+      ]
+    },
+    {
+      "name": "博客候选待外部处理",
+      "machine": "subtask",
+      "start": "dispatched",
+      "steps": [
+        [
+          "result.external_pending",
+          "external_pending"
+        ]
+      ]
+    },
+    {
+      "name": "无进度先问再答",
+      "machine": "subtask",
+      "start": "dispatched",
+      "steps": [
+        [
+          "needs_user_input",
+          "waiting_user"
+        ],
+        [
+          "boss.reply",
+          "dispatched"
+        ],
+        [
+          "result.ok",
+          "succeeded"
+        ]
+      ]
+    },
+    {
+      "name": "重复取消不跳收尾",
+      "machine": "task",
+      "start": "running",
+      "steps": [
+        [
+          "boss.cancel",
+          "stopping"
+        ],
+        [
+          "boss.cancel",
+          "stopping"
+        ],
+        [
+          "cleanup_done",
+          "cancelled"
+        ]
+      ]
+    },
+    {
+      "name": "员工未到先结束",
+      "machine": "staff.locomotion",
+      "start": "moving",
+      "steps": [
+        [
+          "subtask.terminal",
+          "returning"
+        ],
+        [
+          "arrived_at_post",
+          "at_post"
+        ]
+      ]
+    },
+    {
+      "name": "工作结束不等演出",
+      "machine": "staff.work",
+      "start": "assigned",
+      "steps": [
+        [
+          "subtask.terminal",
+          "free"
+        ]
+      ]
+    },
+    {
+      "name": "员工文字补充",
+      "machine": "staff.work",
+      "start": "running",
+      "steps": [
+        [
+          "subtask.waiting_user",
+          "waiting_user"
+        ],
+        [
+          "subtask.reply_started",
+          "assigned"
+        ]
+      ]
+    },
+    {
+      "name": "牛马大总管在外接活回位",
+      "machine": "butler.locomotion",
+      "start": "roaming",
+      "steps": [
+        [
+          "duty_assigned",
+          "returning"
+        ],
+        [
+          "arrived_at_post",
+          "at_post"
+        ]
+      ]
+    },
+    {
+      "name": "汇总时补充改范围",
+      "machine": "butler.duty",
+      "start": "aggregating",
+      "steps": [
+        [
+          "boss.supplement",
+          "understanding"
+        ],
+        [
+          "plan.dispatched",
+          "awaiting"
+        ]
+      ]
+    },
+    {
+      "name": "等回复时员工全终结",
+      "machine": "butler.duty",
+      "start": "blocked",
+      "steps": [
+        [
+          "all_subtasks_terminal",
+          "aggregating"
+        ]
+      ]
+    },
+    {
+      "name": "依赖返回后重新指定派单",
+      "machine": "butler.duty",
+      "start": "awaiting",
+      "steps": [
+        [
+          "dependency.changed",
+          "understanding"
+        ],
+        [
+          "plan.dispatched",
+          "awaiting"
+        ]
+      ]
+    },
+    {
+      "name": "地图加载成功",
+      "machine": "map",
+      "start": "stable",
+      "steps": [
+        [
+          "begin_transfer",
+          "loading"
+        ],
+        [
+          "transfer_succeeded",
+          "stable"
+        ]
+      ]
+    },
+    {
+      "name": "地图加载失败留原图",
+      "machine": "map",
+      "start": "stable",
+      "steps": [
+        [
+          "begin_transfer",
+          "loading"
+        ],
+        [
+          "transfer_failed",
+          "stable"
+        ]
+      ]
+    },
+    {
+      "name": "地图取消",
+      "machine": "map",
+      "start": "loading",
+      "steps": [
+        [
+          "transfer_cancelled",
+          "stable"
+        ]
+      ]
+    },
+    {
+      "name": "NPC交流与恢复",
+      "machine": "npc",
+      "start": "unloaded",
+      "steps": [
+        [
+          "map_activated_valid",
+          "idle"
+        ],
+        [
+          "local_target_selected",
+          "moving"
+        ],
+        [
+          "dialogue_started",
+          "talking"
+        ],
+        [
+          "dialogue_finished",
+          "idle"
+        ]
+      ]
+    },
+    {
+      "name": "探险NPC到隐藏地图",
+      "machine": "npc",
+      "start": "moving",
+      "steps": [
+        [
+          "enabled_portal_reached",
+          "transferring"
+        ],
+        [
+          "transfer_succeeded_hidden",
+          "unloaded"
+        ]
+      ]
+    },
+    {
+      "name": "NPC转图失败",
+      "machine": "npc",
+      "start": "transferring",
+      "steps": [
+        [
+          "transfer_failed",
+          "idle"
+        ]
+      ]
+    },
+    {
+      "name": "NPC对白时卸载地图",
+      "machine": "npc",
+      "start": "talking",
+      "steps": [
+        [
+          "map_unloaded",
+          "unloaded"
+        ]
+      ]
+    },
+    {
+      "name": "理解补充期间回答员工问题",
+      "machine": "butler.duty",
+      "start": "understanding",
+      "steps": [
+        [
+          "needs_user_input",
+          "blocked"
+        ],
+        [
+          "boss.reply",
+          "understanding"
+        ]
+      ]
+    }
+  ],
+  "aggregation": [
+    {
+      "name": "仅博客待办",
+      "children": [
+        "external_pending"
+      ],
+      "expected": "external_pending"
+    },
+    {
+      "name": "成功加外部待办",
+      "children": [
+        "succeeded",
+        "external_pending"
+      ],
+      "expected": "external_pending"
+    },
+    {
+      "name": "查询成功",
+      "children": [
+        "succeeded"
+      ],
+      "expected": "completed"
+    },
+    {
+      "name": "成功加失败",
+      "children": [
+        "succeeded",
+        "failed"
+      ],
+      "expected": "partial"
+    },
+    {
+      "name": "仅失败",
+      "children": [
+        "failed"
+      ],
+      "expected": "failed"
+    },
+    {
+      "name": "材料加失败",
+      "children": [
+        "external_pending",
+        "failed"
+      ],
+      "expected": "partial"
+    },
+    {
+      "name": "没有产出不算成功",
+      "children": [],
+      "expected": "failed"
+    }
+  ],
+  "prompts": [
+    {
+      "name": "输入框保焦点",
+      "facts": {
+        "input_open": true,
+        "input_focused": true,
+        "butler_near": true,
+        "staff_near": true,
+        "staff_can_talk": true
+      },
+      "expected": "dialogue_typing"
+    },
+    {
+      "name": "失焦不抢输入",
+      "facts": {
+        "input_open": true,
+        "input_focused": false,
+        "poi_near": true
+      },
+      "expected": "dialogue_closing"
+    },
+    {
+      "name": "在途补充",
+      "facts": {
+        "task_running": true,
+        "butler_near": true
+      },
+      "expected": "supplement_hint"
+    },
+    {
+      "name": "收尾不接新活",
+      "facts": {
+        "task_stopping": true,
+        "butler_near": true
+      },
+      "expected": "butler_busy_hint"
+    },
+    {
+      "name": "牛马大总管优先于闲聊",
+      "facts": {
+        "butler_idle": true,
+        "butler_near": true,
+        "staff_near": true,
+        "staff_can_talk": true
+      },
+      "expected": "butler_idle_hint"
+    },
+    {
+      "name": "员工无通道只看名牌",
+      "facts": {
+        "staff_near": true
+      },
+      "expected": "staff_busy_nametag"
+    },
+    {
+      "name": "通道就绪才能搭话",
+      "facts": {
+        "staff_near": true,
+        "staff_can_talk": true,
+        "poi_near": true
+      },
+      "expected": "staff_talk_hint"
+    },
+    {
+      "name": "场景互动",
+      "facts": {
+        "poi_near": true
+      },
+      "expected": "poi_hint"
+    },
+    {
+      "name": "不在范围没有提示",
+      "facts": {},
+      "expected": null
+    },
+    {
+      "name": "就近牛马大总管回答员工问题",
+      "facts": {
+        "task_running": true,
+        "staff_reply_pending": true,
+        "butler_near": true
+      },
+      "expected": "butler_reply_hint"
+    },
+    {
+      "name": "收尾时待答问题不抢入口",
+      "facts": {
+        "task_stopping": true,
+        "staff_reply_pending": true,
+        "butler_near": true
+      },
+      "expected": "butler_busy_hint"
+    },
+    {
+      "name": "咖啡店NPC可交谈",
+      "facts": {
+        "npc_near": true,
+        "npc_can_talk": true
+      },
+      "expected": "npc_talk_hint"
+    },
+    {
+      "name": "NPC无通道只看名牌",
+      "facts": {
+        "npc_near": true,
+        "npc_can_talk": false
+      },
+      "expected": "npc_status_hint"
+    },
+    {
+      "name": "建筑入口",
+      "facts": {
+        "portal_near": true
+      },
+      "expected": "portal_hint"
+    },
+    {
+      "name": "切图中不触发就近交互",
+      "facts": {
+        "map_loading": true,
+        "portal_near": true,
+        "npc_near": true,
+        "npc_can_talk": true
+      },
+      "expected": null
+    },
+    {
+      "name": "切图时常驻输入保焦点",
+      "facts": {
+        "map_loading": true,
+        "input_open": true,
+        "input_focused": true
+      },
+      "expected": "dialogue_typing"
+    },
+    {
+      "name": "预写对白独占交互",
+      "facts": {
+        "dialogue_open": true,
+        "input_open": false,
+        "portal_near": true,
+        "npc_near": true,
+        "npc_can_talk": true
+      },
+      "expected": "dialogue_panel"
+    }
+  ],
+  "events": [
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "task.started",
+      "payload": {
+        "message": "查询博客旧文"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "task.stopping",
+      "payload": {
+        "reason": "user_cancel"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "subtask.planned",
+      "subtaskId": "st-01",
+      "payload": {
+        "staffId": "blog",
+        "goal": "查找旧文",
+        "logicalId": "draft",
+        "inputVersion": 1,
+        "dependsOn": []
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "subtask.dispatched",
+      "subtaskId": "st-01",
+      "payload": {
+        "staffId": "blog",
+        "rendezvous": "butler",
+        "inputRefs": []
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "subtask.executing",
+      "subtaskId": "st-01",
+      "payload": {
+        "staffId": "blog"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "subtask.waiting_user",
+      "subtaskId": "st-01",
+      "payload": {
+        "staffId": "closedoff",
+        "question": "查询哪个园区？"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "subtask.output_delta",
+      "subtaskId": "st-01",
+      "payload": {
+        "staffId": "closedoff",
+        "delta": "查询范围："
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "subtask.succeeded",
+      "subtaskId": "st-01",
+      "payload": {
+        "staffId": "closedoff",
+        "summary": "本次范围内没有匹配记录"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "subtask.external_pending",
+      "subtaskId": "st-01",
+      "payload": {
+        "staffId": "blog",
+        "summary": "候选准备好，尚未采用",
+        "executorStatus": "waiting_user",
+        "nextAction": "到博客原页面核对",
+        "conversationId": "blog-123"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "subtask.failed",
+      "subtaskId": "st-01",
+      "payload": {
+        "staffId": "closedoff",
+        "reason": "protocol_error"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "subtask.cancelled",
+      "subtaskId": "st-01",
+      "payload": {
+        "staffId": "closedoff"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "task.summarizing",
+      "payload": {}
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "butler.message",
+      "payload": {
+        "delta": "本轮材料如下"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "butler.needs_input",
+      "payload": {
+        "question": "具体查什么？"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "task.completed",
+      "payload": {
+        "summary": "本轮实际结论"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "task.partial",
+      "payload": {
+        "summary": "本轮实际结论"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "task.failed",
+      "payload": {
+        "summary": "本轮实际结论"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "task.cancelled",
+      "payload": {
+        "summary": "本轮实际结论"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "task.external_pending",
+      "payload": {
+        "summary": "材料已交付，等待外部处理",
+        "pendingActions": [
+          {
+            "subtaskId": "st-01",
+            "description": "在博客原页面采用候选"
+          }
+        ]
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "subtask.reply_started",
+      "subtaskId": "st-01",
+      "payload": {
+        "staffId": "closedoff",
+        "requestId": "12345678-1234-4234-8234-123456789abc"
+      }
+    }
+  ],
+  "invalid_events": [
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "subtask.external_pending",
+      "subtaskId": "st-01",
+      "payload": {
+        "staffId": "blog",
+        "summary": "材料",
+        "executorStatus": "waiting_user"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "task.external_pending",
+      "payload": {
+        "summary": "材料"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "subtask.failed",
+      "subtaskId": "st-01",
+      "payload": {
+        "staffId": "blog",
+        "reason": "made_up"
+      }
+    },
+    {
+      "seq": 1,
+      "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+      "at": "2026-09-12T15:00:00Z",
+      "type": "unknown.event",
+      "payload": {
+        "message": "开始"
+      }
+    }
+  ],
+  "requests": [
+    {
+      "route": "POST /niuma/message",
+      "body": {
+        "requestId": "12345678-1234-4234-8234-123456789abc",
+        "message": "查旧文"
+      }
+    },
+    {
+      "route": "POST /niuma/reply",
+      "body": {
+        "requestId": "12345678-1234-4234-8234-123456789abc",
+        "taskId": "niuma-12345678-1234-1234-1234-123456789abc",
+        "subtaskId": "st-01",
+        "text": "查询甲园区"
+      }
+    },
+    {
+      "route": "POST /niuma/cancel",
+      "body": {
+        "requestId": "12345678-1234-4234-8234-123456789abc",
+        "taskId": "niuma-12345678-1234-1234-1234-123456789abc"
+      }
+    },
+    {
+      "route": "GET /niuma/task",
+      "body": {
+        "id": "niuma-12345678-1234-1234-1234-123456789abc",
+        "after": 0
+      }
+    }
+  ],
+  "runtime_acceptance": [
+    "老板从地图与常驻入口派同类任务，单任务原子约束与重复提交幂等真实生效。",
+    "员工派单时抢占自主活动，真实查询/候选出自授权插件；没有progress或delta也能正确收尾。",
+    "博客材料交回后本轮external_pending，可开新活，材料与未完成事项仍可查看；未发布不能出现成功发布提示。",
+    "原页面定位、权限失效、reply归属和新回复ID按实际宿主验证；接入未验证时禁用相应操作。",
+    "独立闲聊通道不提供任何业务工具，夹带工作只引导牛马大总管；忙碌/无通道/失权员工不能输入。",
+    "两次取消、超时、不理signal、重启和迟到结果不丢任务、不改旧终态、不重复产生外部副作用。",
+    "真实地图验证office—street—cafe双向往返、碰撞、工位可达、会合槽位不重叠、模型请求期间帧率；办公楼与咖啡店不得一步直达，图连通检查不能代替实际地图测试。",
+    "办公楼/咖啡店真实入口与返程、切图成功/失败/取消、老板外出仍可派活，员工不跨图伪报到；探险NPC跨图不带走镜头。",
+    "岗位NPC完整路径受附近活动区限制；探险NPC无固定出生地，离屏冻结后恢复同一身份和最后合法位置。",
+    "预写对白无自由输入、模型对白须独立无业务工具通道；两者共用交互占用，关闭/走远/切图后迟到回复不进入其它NPC会话。",
+    "查询后写稿的材料与依赖真实可追溯；改范围和安全重试按有效目标聚合，未处理补充不被旧汇总覆盖。"
+  ],
+  "invalid_requests": [
+    {
+      "route": "POST /niuma/message",
+      "body": {
+        "requestId": "not-uuid",
+        "message": "查询"
+      }
+    },
+    {
+      "route": "POST /niuma/message",
+      "body": {
+        "requestId": "12345678-1234-4234-8234-123456789abc",
+        "message": "字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字字"
+      }
+    },
+    {
+      "route": "POST /niuma/message",
+      "body": {
+        "requestId": "12345678-1234-4234-8234-123456789abc",
+        "message": "查询",
+        "owner": "other-user"
+      }
+    }
+  ],
+  "logical_goals": [
+    {
+      "acceptedVersion": 1,
+      "processedVersion": 1,
+      "currentGoals": [
+        "records"
+      ],
+      "unmetGoals": [
+        {
+          "logicalId": "records",
+          "reason": "新范围没有适用尝试，旧结果仅供查阅"
+        }
+      ],
+      "attempts": [
+        {
+          "subtaskId": "st-01",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "succeeded"
+        }
+      ],
+      "expected": "failed"
+    },
+    {
+      "acceptedVersion": 1,
+      "processedVersion": 1,
+      "currentGoals": [
+        "records",
+        "extra"
+      ],
+      "unmetGoals": [
+        {
+          "logicalId": "extra",
+          "reason": "本轮额度不足"
+        }
+      ],
+      "attempts": [
+        {
+          "subtaskId": "st-01",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "succeeded"
+        }
+      ],
+      "expected": "partial"
+    },
+    {
+      "acceptedVersion": 1,
+      "processedVersion": 1,
+      "currentGoals": [
+        "records",
+        "draft"
+      ],
+      "unmetGoals": [],
+      "attempts": [
+        {
+          "subtaskId": "st-01",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "failed"
+        },
+        {
+          "subtaskId": "st-02",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "succeeded",
+          "retryOf": "st-01",
+          "supersedes": "st-01"
+        },
+        {
+          "subtaskId": "st-03",
+          "logicalId": "draft",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "failed"
+        }
+      ],
+      "expected": "partial"
+    },
+    {
+      "acceptedVersion": 1,
+      "processedVersion": 1,
+      "currentGoals": [
+        "records"
+      ],
+      "unmetGoals": [],
+      "attempts": [
+        {
+          "subtaskId": "st-01",
+          "logicalId": "removed",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "failed"
+        },
+        {
+          "subtaskId": "st-02",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "succeeded"
+        }
+      ],
+      "expected": "completed"
+    }
+  ],
+  "invalid_logical_goals": [
+    {
+      "acceptedVersion": 1,
+      "processedVersion": 1,
+      "currentGoals": [
+        "records"
+      ],
+      "unmetGoals": [],
+      "attempts": [
+        {
+          "subtaskId": "st-01",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "failed",
+          "supersedes": "st-02"
+        },
+        {
+          "subtaskId": "st-02",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "succeeded",
+          "supersedes": "st-01"
+        }
+      ],
+      "expected": "completed"
+    },
+    {
+      "acceptedVersion": 1,
+      "processedVersion": 1,
+      "currentGoals": [
+        "records"
+      ],
+      "unmetGoals": [],
+      "attempts": [
+        {
+          "subtaskId": "st-01",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "failed"
+        },
+        {
+          "subtaskId": "st-02",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "succeeded",
+          "supersedes": "st-01"
+        },
+        {
+          "subtaskId": "st-03",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "succeeded",
+          "supersedes": "st-01"
+        }
+      ],
+      "expected": "completed"
+    },
+    {
+      "acceptedVersion": 2,
+      "processedVersion": 1,
+      "currentGoals": [
+        "records"
+      ],
+      "unmetGoals": [],
+      "attempts": [
+        {
+          "subtaskId": "st-01",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "succeeded"
+        }
+      ],
+      "expected": "completed"
+    },
+    {
+      "acceptedVersion": 1,
+      "processedVersion": 1,
+      "currentGoals": [
+        "records",
+        "draft"
+      ],
+      "unmetGoals": [],
+      "attempts": [
+        {
+          "subtaskId": "st-01",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [
+            "draft"
+          ],
+          "outcome": "succeeded"
+        },
+        {
+          "subtaskId": "st-02",
+          "logicalId": "draft",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [
+            "records"
+          ],
+          "outcome": "succeeded"
+        }
+      ],
+      "expected": "completed"
+    },
+    {
+      "acceptedVersion": 2,
+      "processedVersion": 2,
+      "currentGoals": [
+        "records",
+        "draft"
+      ],
+      "unmetGoals": [],
+      "attempts": [
+        {
+          "subtaskId": "st-01",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "succeeded"
+        },
+        {
+          "subtaskId": "st-02",
+          "logicalId": "draft",
+          "staffId": "blog",
+          "inputVersion": 1,
+          "dependsOn": [
+            "records"
+          ],
+          "outcome": "succeeded",
+          "inputRefs": [
+            {
+              "subtaskId": "st-01",
+              "resultRef": "yesterday"
+            }
+          ]
+        },
+        {
+          "subtaskId": "st-03",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 2,
+          "dependsOn": [],
+          "outcome": "succeeded",
+          "supersedes": "st-01"
+        }
+      ],
+      "expected": "completed"
+    },
+    {
+      "acceptedVersion": 2,
+      "processedVersion": 2,
+      "currentGoals": [
+        "records",
+        "draft"
+      ],
+      "unmetGoals": [],
+      "attempts": [
+        {
+          "subtaskId": "st-01",
+          "logicalId": "records",
+          "staffId": "closedoff",
+          "inputVersion": 1,
+          "dependsOn": [],
+          "outcome": "succeeded"
+        },
+        {
+          "subtaskId": "st-02",
+          "logicalId": "draft",
+          "staffId": "blog",
+          "inputVersion": 1,
+          "dependsOn": [
+            "records"
+          ],
+          "outcome": "succeeded"
+        }
+      ],
+      "expected": "completed"
+    }
+  ],
+  "dependency_rules": [
+    {
+      "facts": {
+        "upstream": "succeeded",
+        "materialsReady": true,
+        "requiresExternalAction": false
+      },
+      "expected": "dispatch"
+    },
+    {
+      "facts": {
+        "upstream": "succeeded",
+        "materialsReady": false,
+        "requiresExternalAction": false
+      },
+      "expected": "fail"
+    },
+    {
+      "facts": {
+        "upstream": "external_pending",
+        "materialsReady": true,
+        "requiresExternalAction": false
+      },
+      "expected": "dispatch"
+    },
+    {
+      "facts": {
+        "upstream": "external_pending",
+        "materialsReady": true,
+        "requiresExternalAction": true
+      },
+      "expected": "fail"
+    },
+    {
+      "facts": {
+        "upstream": "external_pending",
+        "materialsReady": false,
+        "requiresExternalAction": false
+      },
+      "expected": "fail"
+    },
+    {
+      "facts": {
+        "upstream": "unfinished",
+        "materialsReady": false,
+        "requiresExternalAction": false
+      },
+      "expected": "wait"
+    },
+    {
+      "facts": {
+        "upstream": "failed_or_cancelled",
+        "materialsReady": false,
+        "requiresExternalAction": false
+      },
+      "expected": "fail"
+    },
+    {
+      "facts": {
+        "upstream": "unfinished",
+        "materialsReady": true,
+        "requiresExternalAction": true
+      },
+      "expected": "wait"
+    }
+  ],
+  "npc_movement": [
+    {
+      "name": "岗位区内路径（合成格）",
+      "profile": "local",
+      "from_map": "cafe",
+      "to_map": "cafe",
+      "allowed_maps": [
+        "cafe"
+      ],
+      "allowed_cells": [
+        "a",
+        "b"
+      ],
+      "path": [
+        "a",
+        "b"
+      ],
+      "connection_enabled": false,
+      "expected": true
+    },
+    {
+      "name": "终点在内但路径越界",
+      "profile": "local",
+      "from_map": "cafe",
+      "to_map": "cafe",
+      "allowed_maps": [
+        "cafe"
+      ],
+      "allowed_cells": [
+        "a",
+        "b"
+      ],
+      "path": [
+        "a",
+        "outside",
+        "b"
+      ],
+      "connection_enabled": false,
+      "expected": false
+    },
+    {
+      "name": "岗位NPC不能进入街道",
+      "profile": "local",
+      "from_map": "cafe",
+      "to_map": "street",
+      "allowed_maps": [
+        "street",
+        "cafe"
+      ],
+      "allowed_cells": [
+        "a",
+        "b"
+      ],
+      "path": [
+        "a",
+        "b"
+      ],
+      "connection_enabled": true,
+      "expected": false
+    },
+    {
+      "name": "探险办公楼到街道（假设连接已启用）",
+      "profile": "explorer",
+      "from_map": "office",
+      "to_map": "street",
+      "allowed_maps": [
+        "office",
+        "street",
+        "cafe"
+      ],
+      "allowed_cells": [
+        "a",
+        "b"
+      ],
+      "path": [
+        "a",
+        "b"
+      ],
+      "connection_enabled": true,
+      "expected": true
+    },
+    {
+      "name": "探险入口停用",
+      "profile": "explorer",
+      "from_map": "office",
+      "to_map": "street",
+      "allowed_maps": [
+        "office",
+        "street",
+        "cafe"
+      ],
+      "allowed_cells": [
+        "a",
+        "b"
+      ],
+      "path": [
+        "a",
+        "b"
+      ],
+      "connection_enabled": false,
+      "expected": false
+    },
+    {
+      "name": "探险街道到咖啡店（假设连接已启用）",
+      "profile": "explorer",
+      "from_map": "street",
+      "to_map": "cafe",
+      "allowed_maps": ["office", "street", "cafe"],
+      "allowed_cells": [],
+      "path": [],
+      "connection_enabled": true,
+      "expected": true
+    },
+    {
+      "name": "探险咖啡店返回街道（假设连接已启用）",
+      "profile": "explorer",
+      "from_map": "cafe",
+      "to_map": "street",
+      "allowed_maps": ["office", "street", "cafe"],
+      "allowed_cells": [],
+      "path": [],
+      "connection_enabled": true,
+      "expected": true
+    },
+    {
+      "name": "探险街道返回办公楼（假设连接已启用）",
+      "profile": "explorer",
+      "from_map": "street",
+      "to_map": "office",
+      "allowed_maps": ["office", "street", "cafe"],
+      "allowed_cells": [],
+      "path": [],
+      "connection_enabled": true,
+      "expected": true
+    },
+    {
+      "name": "探险不能跳过街道直达咖啡店",
+      "profile": "explorer",
+      "from_map": "office",
+      "to_map": "cafe",
+      "allowed_maps": ["office", "street", "cafe"],
+      "allowed_cells": [],
+      "path": [],
+      "connection_enabled": true,
+      "expected": false
+    },
+    {
+      "name": "探险地图未许可",
+      "profile": "explorer",
+      "from_map": "cafe",
+      "to_map": "unknown",
+      "allowed_maps": [
+        "cafe"
+      ],
+      "allowed_cells": [
+        "a",
+        "b"
+      ],
+      "path": [
+        "a",
+        "b"
+      ],
+      "connection_enabled": true,
+      "expected": false
+    }
+  ]
+}

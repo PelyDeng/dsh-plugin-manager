@@ -1,0 +1,215 @@
+# 位置与业务各自推进；本文件是设计契约，不是游戏运行实现。
+version: 2
+checks:
+  - { id: no-sink, rule: 所有非静息状态存在出口 }
+  - { id: targets-exist, rule: 出口目标在同一区域存在 }
+  - { id: rest-reachable, rule: 所有状态可达静息态 }
+  - { id: cancel-or-timeout, rule: 非静息态有取消、失败、超时或业务终态出口 }
+  - { id: region-exclusive, rule: 每个区域同时只有一个状态，不代替后端占用校验 }
+
+machines:
+  butler:
+    kind: parallel
+    description: 可自主活动的牛马大总管；有任务回工位，但处理不等走路。
+    allowed_locomotion:
+      idle: [at_post, roaming, returning]
+      listening: [at_post, standing]
+      understanding: [at_post, returning]
+      awaiting: [at_post, returning]
+      aggregating: [at_post, returning]
+      blocked: [at_post, returning]
+      failed: [at_post, returning]
+      cancelled: [at_post, returning]
+    cross_region_rules:
+      - { id: roaming-only-when-idle, statement: 仅 duty=idle 可开始自主活动。 }
+      - { id: on-duty-returns-to-post, statement: 进入处理职责时，若不在工位则进入 returning；不直接跳坐标，职责和回位并行。 }
+      - { id: listening-stands-still, statement: 就近打开新任务输入时就地站定；取消输入或走远恢复职责 idle 并回位。常驻面板不受牛马大总管距离影响。 }
+      - { id: findability, statement: 所有就近距离按牛马大总管当前位置计算，常驻入口不依赖位置。 }
+    regions:
+      locomotion:
+        description: 位置与移动，使用地图本身寻路。
+        initial: at_post
+        rest_states: [at_post]
+        timeout_source: balance_params.yaml#butler_timeouts
+        states:
+          at_post:
+            description: 位于固定工位，是否忙碌另看 duty。
+            exits:
+              - { on: idle_behavior_chosen, to: roaming, guard: duty.idle }
+              - { on: duty_assigned, to: at_post }
+          roaming:
+            description: 空闲时在地图规则允许的活动范围内走动。
+            exits:
+              - { on: boss_engaged, to: standing, guard: duty.listening }
+              - { on: duty_assigned, to: returning }
+              - { on: idle_behavior_done, to: returning }
+              - { on: path_blocked, to: returning }
+              - { on: timeout, to: returning }
+          standing:
+            description: 只在未派活的就近输入过程中站定。
+            exits:
+              - { on: duty_assigned, to: returning }
+              - { on: boss_left, to: returning }
+              - { on: boss.cancel_input, to: returning }
+              - { on: timeout, to: returning, note: 同时结束未提交输入，保留草稿 }
+          returning:
+            description: 正回工位，可以同时处理任务，不承诺已到。
+            exits:
+              - { on: arrived_at_post, to: at_post }
+              - { on: duty_assigned, to: returning }
+              - { on: boss_engaged, to: standing, guard: duty.listening }
+              - { on: timeout, to: at_post, note: 仅表现安全归位，不结束任务 }
+      duty:
+        description: 牛马大总管的职责；业务结果只来自后端。
+        initial: idle
+        rest_states: [idle]
+        timeout_source: balance_params.yaml#butler_timeouts
+        states:
+          idle:
+            description: 没有活动任务。
+            exits:
+              - { on: boss.open_dialogue, to: listening }
+              - { on: boss.speak, to: understanding, note: 常驻入口提交也可直接进入 }
+          listening:
+            description: 等新任务输入，不创建任务。
+            exits:
+              - { on: boss.speak, to: understanding }
+              - { on: boss.cancel_input, to: idle }
+              - { on: boss.walk_away, to: idle, note: 仅就近入口 }
+              - { on: timeout, to: idle, note: 未提交草稿保留，不创建任务 }
+          understanding:
+            description: 理解新目标、补充或依赖变化；核对最新输入版本、旧结果适用性及分工，不丢弃仍在执行的其它子任务。
+            exits:
+              - { on: plan.dispatched, to: awaiting }
+              - { on: plan.waiting_dependencies, to: awaiting, note: 仍有可恢复前置步骤；后继仅在 planned，不占员工 }
+              - { on: agent.reply, to: aggregating, note: 可以没有子任务直接答复 }
+              - { on: boss.supplement, to: understanding }
+              - { on: needs_user_input, to: blocked }
+              - { on: boss.cancel, to: cancelled }
+              - { on: turn.failed, to: failed }
+              - { on: timeout, to: failed }
+          awaiting:
+            description: 等待员工或计划内的前置步骤；外部待办也是子任务终态。
+            exits:
+              - { on: all_subtasks_terminal, to: aggregating }
+              - { on: boss.supplement, to: understanding }
+              - { on: dependency.changed, to: understanding, note: 前置结果已返回、失败或被替代，牛马大总管决定派下一步、重试或明确后继未完成 }
+              - { on: needs_user_input, to: blocked }
+              - { on: boss.cancel, to: cancelled }
+              - { on: turn.failed, to: failed }
+              - { on: timeout, to: failed }
+          aggregating:
+            description: 按当前目标的有效尝试汇总，保留历史失败与外部待办。
+            exits:
+              - { on: task.terminal, to: idle, guard: 最新已接受输入已处理、所有子任务终结、当前目标逐项有结论 }
+              - { on: boss.supplement, to: understanding, note: 汇总草稿作废，处理补充后必要时重新派单；终态提交前原子核对输入版本 }
+              - { on: boss.cancel, to: cancelled }
+              - { on: turn.failed, to: failed }
+              - { on: timeout, to: failed }
+          blocked:
+            description: 牛马大总管需要信息或某员工等文本回复；记录 blocked_origin 及具体问题，后台子任务仍可继续。
+            exits:
+              - { on: boss.supplement, to: understanding, note: 通用补充由牛马大总管理解；仅定向回答员工问题使用 boss.reply }
+              - { on: boss.reply, to: understanding, guard: 有有效员工问题且 acceptedVersion 大于 processedVersion, note: 先接受定向回复，牛马大总管继续处理尚未完成的补充 }
+              - { on: boss.reply, to: awaiting, guard: 有有效员工问题且 acceptedVersion 等于 processedVersion }
+              - { on: dependency.changed, to: understanding, guard: 存在关联员工工作, note: 先处理可推进分支；未答问题仍保留，若仍需答复再进入 blocked }
+              - { on: all_subtasks_terminal, to: aggregating, guard: acceptedVersion 等于 processedVersion 且不存在仍需老板回答的牛马大总管问题, note: 等回复员工已超时或终结时，不继续等待过期员工问题 }
+              - { on: boss.cancel, to: cancelled }
+              - { on: turn.failed, to: failed }
+              - { on: timeout, to: failed }
+          failed:
+            description: 失败收尾，任务未终结前不允许新任务。
+            exits:
+              - { on: task.terminal, to: idle }
+              - { on: timeout, to: idle, note: 后端先执行任务协议的收尾兜底并持久化终态 }
+          cancelled:
+            description: 取消收尾，所有子任务先终结。
+            exits:
+              - { on: task.terminal, to: idle }
+              - { on: timeout, to: idle, note: 后端先执行任务协议的收尾兜底并持久化终态 }
+
+  staff:
+    kind: parallel
+    description: 业务执行者的位置与工作分开；当前包括三名员工，今后 NPC 只有具备已授权执行入口才使用 work。普通 NPC 不因加入场景就进入任务状态机。
+    regions:
+      locomotion:
+        description: 无任务且未隔离时才可自主活动；任务结束不补播报到。
+        initial: at_post
+        rest_states: [at_post]
+        states:
+          at_post:
+            description: 在自己工位。
+            exits:
+              - { on: idle_behavior_chosen, to: roaming, guard: work.free_and_unleased }
+              - { on: subtask.dispatched, to: moving }
+          roaming:
+            description: 在职责允许的兴趣点或路上，不能越过地图规则中的活动边界。
+            exits:
+              - { on: subtask.dispatched, to: moving }
+              - { on: idle_behavior_done, to: returning }
+              - { on: path_blocked, to: returning }
+              - { on: timeout, to: returning }
+          moving:
+            description: 去会合点，执行不等移动。
+            exits:
+              - { on: arrived, to: at_rendezvous }
+              - { on: subtask.terminal, to: returning }
+              - { on: path_unreachable, to: at_rendezvous, note: 就地等待，显示未到位，不谎称已经报到 }
+              - { on: timeout, to: at_rendezvous, note: 就地等待，不影响业务 }
+          at_rendezvous:
+            description: 原地等待区域；是否真的到达须看位置，状态名不证明报到。
+            exits:
+              - { on: subtask.terminal, to: returning }
+              - { on: dismissed, to: returning }
+              - { on: timeout, to: returning }
+          returning:
+            description: 回工位，已有新派单可转向。
+            exits:
+              - { on: arrived_at_post, to: at_post }
+              - { on: subtask.dispatched, to: moving }
+              - { on: timeout, to: at_post }
+      work:
+        description: 后端子任务在页面的投影，动画与本地计时不能生成成功或交差。
+        initial: free
+        rest_states: [free]
+        states:
+          free:
+            description: 没有非终态子任务；仍要检查外部执行是否隔离。
+            exits:
+              - { on: subtask.dispatched, to: assigned }
+          assigned:
+            description: 已派出但未收到进度。
+            exits:
+              - { on: subtask.executing, to: running }
+              - { on: subtask.waiting_user, to: waiting_user }
+              - { on: subtask.terminal, to: free }
+          running:
+            description: 收到实际进度，不能推断已完成。
+            exits:
+              - { on: subtask.output_delta, to: speaking }
+              - { on: subtask.waiting_user, to: waiting_user }
+              - { on: subtask.terminal, to: free }
+          speaking:
+            description: 正文增量展示，不延迟任务终态。
+            exits:
+              - { on: output.done, to: running }
+              - { on: subtask.waiting_user, to: waiting_user }
+              - { on: subtask.terminal, to: free }
+          waiting_user:
+            description: 等待明确文本补充，不同于待外部处理终态。
+            exits:
+              - { on: subtask.reply_started, to: assigned }
+              - { on: subtask.terminal, to: free }
+
+event_projection:
+  subtask.terminal: [subtask.succeeded, subtask.external_pending, subtask.failed, subtask.cancelled]
+  task.terminal: [task.completed, task.external_pending, task.partial, task.failed, task.cancelled]
+  rule: 上述是区域内事件别名，不另发假的业务事件。终态先持久化，再更新work和locomotion；外部未知执行隔离仍由后端保留。reply_started只更新work，不重复触发派单走位。
+
+invariants:
+  - { id: staff-single-subtask, statement: 同一执行者最多一个已派出且未终结子任务；计划中的依赖步骤不占员工，后端仍检查隔离占用。, enforced_by: task_protocol.yaml#claim }
+  - { id: no-animation-driven-business, statement: work 只消费真实业务事件，不用本地 timeout 生成业务终态。, enforced_by: work 的出口事件与任务协议映射 }
+  - { id: terminal-releases-presentation, statement: 任意 work 非静息状态收到终态立即 free，不等待交差动画。, enforced_by: 每个 work 状态有 subtask.terminal 到 free }
+  - { id: butler-absence-never-blocks, statement: 常驻入口不依赖位置，职责处理不等回位。, enforced_by: interaction_rules.yaml#global_entry }
+  - { id: accepted-supplement-replans, statement: 等待和汇总阶段接受补充均回 understanding；处理完输入版本与当前目标前不提交正常终态。, enforced_by: task_protocol.yaml#task.input_versions }
+  - { id: scene-change-preserves-work, statement: 老板换图或卸载场景不取消任务、不释放执行隔离；再次显示角色时从真实任务快照恢复 work，寻路和出场仍按当前地图规则。, enforced_by: task_protocol.yaml#claim }

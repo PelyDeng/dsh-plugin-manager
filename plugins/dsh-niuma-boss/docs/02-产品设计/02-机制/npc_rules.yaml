@@ -1,0 +1,170 @@
+# 普通场景NPC的当前设计契约；三位特殊NPC（业务员工）仍使用staff协议，不在此扩业务权限。
+version: 1
+
+scope: 本轮办公楼翻新新增4名正式普通职员，交付其素材、四向坐姿、性格小动作与职责附近可见自主走动预览；制作和验收进行中。旧咖啡岗位与探险NPC仍为设计示例并保留。普通NPC没有业务工具或员工任务，真实DSH接入与模型对白仍待后续验证。
+
+profiles:
+  local:
+    fixed_origin_required: true
+    cross_map: false
+    rule: 围绕职责对应的出生点或岗位在附近区域活动；目标与整条路径都必须落在本人的 activity_region 内，不等于固定站立。
+  explorer:
+    fixed_origin_required: false
+    cross_map: true
+    rule: 没有固定出生地，按 allowed_maps 与已启用连接跨图活动；当前放置位置不是永久出生地，不强迫返乡，也不跳过碰撞和可达性。
+
+definition:
+  required: [id, profile, name, personality, speech_style, interrupted_response, speech_examples, dialogue_mode, initial_placement, allowed_maps]
+  local_required: [duty_origin, activity_region]
+  explorer_forbidden: [duty_origin, activity_region]
+  dialogue_modes: [authored_lines, model_chat, unavailable]
+  identity: id 在世界内稳定唯一，不与 boss、butler 或员工ID重名；重新加载、跨图和改变显示名不能创建第二个人。
+  placement: initial_placement 只用于首次进入世界；它引用地图与区域，具体首放格见美术作者数据。运行时仍须校验合法性，之后保存 current_map 与最后合法位置。当前位置不等于永久出生地。
+  local_bounds: duty_origin 与 activity_region 须位于同一地图；allowed_maps 只含该地图。示例具体格集合已在作者地图给出，运行时须按职责附近的有限可走域核验，不默认整个建筑或整张地图，也不把一个示例的格数当作所有NPC的公共半径。
+  explorer_bounds: allowed_maps 至少包含初始地图；未授权地图、停用入口或不连通路径均不可通行。探险只是活动许可，不是业务工具或全地图传送权限。
+  voice: 每个NPC独立写性格、表达习惯和至少一句示例；profile 只决定活动边界，不决定人格，也不保证具备任何真实业务能力。
+  roster: roster为本轮已授权命名的4名普通职员；examples继续只放设计示例，二者身份不能相互替换。普通职员workplace关联作者工位，不加入核心posts或staff派单表。
+
+preview:
+  required: 本轮必须提供普通职员可见的职责域自主活动预览，不能只交角色文档或静态名牌。
+  poses: 提供四向站立、行走、坐姿与8帧性格小动作；起身后再行走，坐姿不得沿地面滑动，不要求每帧持有道具。
+  autonomy: 普通职员围绕自己的workplace在作者数据给定的有限活动域内选点，走动和停留能看见；整条路径不越界、不到阻挡格，不因老板靠近扩大活动域。
+  scope: 该预览不调用模型、业务工具或DSH派单，不作为真实游戏运行已接入的证明；四向坐姿与小动作不改变业务终态或等待时间。
+
+movement:
+  choose_target: local 仅从自己的 activity_region 选点并限制整条路径；explorer 只沿可达地图连接选点，使用 map_rules.yaml 的碰撞、入口与切图规则。
+  boundary: local 即使能在区域外绕路到达区域内目标也拒绝该路径；边界外有兴趣点、老板或其他NPC不构成越界理由。
+  unreachable: 丢弃当前不可达目标，在最后合法位置待机；不穿墙、不扩大职责区域、不立即无穷重试。
+  invalid_position: 恢复时只在当前许可域内选合法点；local 可以回职责原点，explorer 不凭空增设出生地；没有合法点则保持 unloaded 并给出原因。
+  talking: 已开始就近搭话时暂停自主走动和跨图；结束后再选择活动，不为接待老板走出职责范围。
+
+fsm:
+  initial: unloaded
+  states: [unloaded, idle, moving, talking, transferring]
+  transitions:
+    - { from: unloaded, on: map_activated_valid, to: idle }
+    - { from: unloaded, on: placement_invalid, to: unloaded }
+    - { from: idle, on: local_target_selected, to: moving }
+    - { from: moving, on: target_reached, to: idle }
+    - { from: moving, on: path_unreachable, to: idle }
+    - { from: moving, on: movement_budget_exhausted, to: idle }
+    - { from: idle, on: dialogue_started, to: talking }
+    - { from: moving, on: dialogue_started, to: talking }
+    - { from: talking, on: dialogue_finished, to: idle }
+    - { from: talking, on: dialogue_interrupted, to: idle }
+    - { from: moving, on: enabled_portal_reached, to: transferring }
+    - { from: transferring, on: transfer_succeeded_visible, to: idle }
+    - { from: transferring, on: transfer_succeeded_hidden, to: unloaded }
+    - { from: transferring, on: transfer_failed, to: idle }
+    - { from: transferring, on: transfer_timeout_or_cancel, to: idle }
+    - { from: idle, on: map_unloaded, to: unloaded }
+    - { from: moving, on: map_unloaded, to: unloaded }
+    - { from: talking, on: map_unloaded, to: unloaded }
+    - { from: transferring, on: map_unloaded, to: unloaded }
+  guards:
+    dialogue_started: 同图在场、处于交互范围、当前无其它输入占用且对应对白通道可用；只打开被明确选中的NPC，不按同名替换对象。
+    enabled_portal_reached: 只允许 explorer，目标地图属于 allowed_maps 且连接已启用；local 不允许进入 transferring。
+    transfer_failed: 失败、取消或超时只撤销未提交转图，回源地图最后合法位置；不把失败当成走到了目的地。
+    map_unloaded: 保存最后已提交地图与合法位置；撤销未完成移动或转图、释放预约并关闭就近搭话。下次加载按保存状态校验，不重跑出生演出。
+
+dialogue:
+  entry: 就近搭话统一走 interaction_rules.yaml 的目标、优先级和焦点规则；远图NPC不提供就近提示。
+  authored_lines: 可播放该人物已经写定的场景对白，但明确属于场景文本，不假装实时模型回答或真实业务结果。
+  model_chat: 只有独立、已授权、无业务工具的NPC对白通道通过接入验证后才允许自然语言提交；人物档案不等于通道已存在。
+  unavailable: 名牌和状态可展示，不提供自然语言输入；不回退到员工 dispatch、reply 或未授权模型调用。
+  interruption: 老板走远、主动关闭、NPC离场、地图卸载或通道失效时结束就近会话并保留未发送草稿；不影响牛马大总管任务，迟到回复不得弹到其他NPC或另一张地图。
+  response_binding: 每轮对白绑定老板归属、npcId 和对白会话标识；接受回复前核对对象、归属、通道和会话仍有效，不把公共人物设定当作共享私人会话许可。
+  work_request: 业务工作请求交回牛马大总管；普通NPC不创建或认领子任务，不挪用员工工具，不替老板采用候选、发布或确认外部操作。
+  service_interaction: 只开放明确声明并已实现的场景服务；真实系统操作必须有独立能力依据与授权设计，不能借“咖啡店服务”绕过牛马大总管或确认。购买、货币、物品和服务功能目前均未定义。
+
+lifecycle:
+  hidden: 未在老板当前地图显示的NPC保存身份与最后合法位置，暂停逐帧走动和自动对白；本轮不引入离屏世界模拟。
+  explorer_transfer: 探险NPC沿已验证入口完成一次跨图时只更改自己的地图归属，不带走老板或镜头；目标不在前台则进入 unloaded，之后该图激活再恢复活动。
+  load_failure: 目标地图不可加载或落点非法时保留源图归属；源图也已卸载则保持 unloaded，不复制角色或擅自换地图。
+  service_absent: NPC未在场或服务通道不可用时明确显示不可用；不由另一NPC悄悄接手，不启动后台业务。
+  business_isolation: NPC数量、搭话与活动不占员工任务或会话名额；牛马大总管任务继续依据后端真实事件推进。
+
+roster:
+  - id: npc_hr
+    status: confirmed
+    profile: local
+    name: 沈禾
+    personality: 从容细致，愿意等对方把一句话说完；喜欢把不同颜色的夹子排整齐，但不替别人猜答案。
+    speech_style: 语速舒缓，先接住明确的信息，再补一句短回应；温和而不绕弯。
+    interrupted_response: 放下手边可选的文件夹，停住记录动作，先听新一句；对方离开后继续整理桌边。
+    speech_examples: [这页先留白，你说完我再记。, 真正要办的工作交给牛马大总管，我这里只聊楼里的事。]
+    dialogue_mode: authored_lines
+    initial_placement: { map_id: office, region: hr }
+    allowed_maps: [office]
+    duty_origin: { map_id: office, region: hr }
+    activity_region: { map_id: office, region: hr }
+    workplace: { post_id: npc_hr_post, workstation_id: hr_01 }
+  - id: npc_recruiter
+    status: confirmed
+    profile: local
+    name: 顾言
+    personality: 好奇而有分寸，爱听具体细节；脑子里问题不少，但会忍住一次只问一件。
+    speech_style: 句子短而轻快，善用一个小问题接话，不把聊天变成连环盘问。
+    interrupted_response: 收住准备说出的下一问，空手点一下桌面再听；不坚持问完原来的问题。
+    speech_examples: [我先问一个小问题，看看它会不会长大。, 要查资料或安排工作，找牛马大总管；我不替他开单。]
+    dialogue_mode: authored_lines
+    initial_placement: { map_id: office, region: hr }
+    allowed_maps: [office]
+    duty_origin: { map_id: office, region: hr }
+    activity_region: { map_id: office, region: hr }
+    workplace: { post_id: npc_recruiter_post, workstation_id: hr_02 }
+  - id: npc_admin
+    status: confirmed
+    profile: local
+    name: 陆小周
+    personality: 务实利落，看到小物件歪了会顺手摆正；忙完会退半步检查，也容得下一点无伤大雅的凌乱。
+    speech_style: 先说眼前情况，短句收尾，偶尔拿办公室的小物件开个轻巧玩笑。
+    interrupted_response: 停下整理或扶眼镜的动作，先把手边物品放稳再回应，不演完整套动作才理人。
+    speech_examples: [东西都在。少的那支笔，多半正在开会。, 楼里的摆放我能聊，业务安排还是交给牛马大总管。]
+    dialogue_mode: authored_lines
+    initial_placement: { map_id: office, region: admin }
+    allowed_maps: [office]
+    duty_origin: { map_id: office, region: admin }
+    activity_region: { map_id: office, region: admin }
+    workplace: { post_id: npc_admin_post, workstation_id: admin_01 }
+  - id: npc_reception
+    status: confirmed
+    profile: local
+    name: 唐可
+    personality: 友善醒目，喜欢帮人弄清该往哪里走；记得身边的小变化，但不会追着离开的人继续讲。
+    speech_style: 方位和目标说清楚，少绕路，末尾偶尔带一句关于楼里陈设的小玩笑。
+    interrupted_response: 收回指路手势，转向正在说话的人；对方离开便留在前台职责附近。
+    speech_examples: [看中文牌子就能找到。鱼缸那边暂时不接待。, 要交代工作直接找牛马大总管，不用先在我这里登记。]
+    dialogue_mode: authored_lines
+    initial_placement: { map_id: office, region: reception }
+    allowed_maps: [office]
+    duty_origin: { map_id: office, region: reception }
+    activity_region: { map_id: office, region: reception }
+    workplace: { post_id: npc_reception_post, workstation_id: reception_01 }
+
+# 供校验使用的设计示例，不是正式普通职员，也不因本轮4人获准而改成正式身份。
+examples:
+  - id: sample_cafe_keeper
+    status: design_example
+    profile: local
+    name: 咖啡店岗位NPC（设计示例）
+    personality: 热心，有点爱操心，看到杯子歪了会顺手摆正。
+    speech_style: 先接住对方的话，再用身边的小事打趣；不替老板做业务决定。
+    interrupted_response: 把手里的杯子先放稳，听完新一句再接话；老板离开便继续照看柜台。
+    speech_examples: [坐会儿？这张椅子今天还没接过需求。]
+    dialogue_mode: unavailable
+    initial_placement: { map_id: cafe, region: cafe_counter }
+    allowed_maps: [cafe]
+    duty_origin: { map_id: cafe, region: cafe_counter }
+    activity_region: { map_id: cafe, region: cafe_counter }
+  - id: sample_explorer
+    status: design_example
+    profile: explorer
+    name: 探险NPC（设计示例）
+    personality: 好奇，喜欢看看门后有什么，也愿意承认自己没去过。
+    speech_style: 句子直接，常从见到的具体东西起话题；不把听说当成查证。
+    interrupted_response: 停下正在指的方向，先听对方说；老板离开就继续自己的路线。
+    speech_examples: [我刚看了那扇门。门后还是门，路线倒挺有层次。]
+    dialogue_mode: unavailable
+    initial_placement: { map_id: office, region: corridor }
+    allowed_maps: [office, street, cafe]

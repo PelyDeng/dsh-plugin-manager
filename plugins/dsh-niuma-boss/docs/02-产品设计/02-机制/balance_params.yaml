@@ -1,0 +1,117 @@
+# 速度、距离、冷却、时长与并发上限。
+#
+# 这里只放数字，不放规则。规则在 agent_fsm.yaml / task_protocol.yaml / interaction_rules.yaml，
+# 它们通过 <文件>#<路径> 引用本文件的键。改数值不需要动规则，改语义才需要。
+#
+# 所有距离以格为单位（1 格 = map_rules.yaml 的 tile_size_px），所有速度以格/秒为单位。
+# 用格而不是像素，是为了换 tile 尺寸或改缩放时不用重算。
+
+version: 1
+
+# 角色移动。速度必须与行走动画的步频匹配，不允许用"滑行"凑位移。
+movement:
+  boss_walk_tiles_per_sec: 4.0
+  staff_walk_tiles_per_sec: 3.0
+  staff_return_tiles_per_sec: 2.5
+  butler_walk_tiles_per_sec: 3.0
+  butler_return_tiles_per_sec: 3.0
+  note: 员工回工位比去干活慢一点，体感上像"下班溜达"
+
+# 自主活动。没有任务的员工按这些时长自己找事做。
+autonomous:
+  min_idle_ms: 1500
+  max_idle_ms: 6000
+  roam_chance: 0.6
+  chat_chance: 0.25
+  note: 两个员工在同一房间且都空闲时才有概率搭话；搭话不承载业务，不影响任务
+
+# 交互范围与按键。
+interaction:
+  interact_radius_tiles: 1.5
+  hint_radius_tiles: 3.0
+  # 走远判定必须大于交互半径，否则老板站在边界上会让提示反复闪。
+  walk_away_tiles: 3.5
+  arrival_radius_tiles: 1.5
+  rendezvous_slot_count: 4
+  interact_key: E
+  interact_key_alt: [Space, Enter]
+
+# 寻路。
+pathfinding:
+  replan_distance_tiles: 1
+  max_expanded_nodes: 4096
+  note: max_expanded_nodes 是单次寻路的硬上限，超过就按失败处理，防止大地图卡帧
+
+# 牛马大总管各状态的上限。到点触发 agent_fsm.yaml 里对应的 timeout 出口。
+butler_timeouts:
+  listening_ms: 660000
+  understanding_ms: 180000
+  awaiting_ms: 600000
+  aggregating_ms: 180000
+  blocked_ms: 300000
+  failed_notice_ms: 4000
+  cancelled_cleanup_ms: 15000
+  # 自主活动。牛马大总管和员工一样会走动，所以也要有这几个上限。
+  roaming_ms: 20000
+  return_to_post_ms: 15000
+  # 与未提交输入的 listening_ms 同时到期，保留草稿；不绑定执行等待时长。
+  standing_max_ms: 660000
+
+# 员工各阶段的上限。
+staff_timeouts:
+  # 走到会合点。超时显示未到位并就地等待，不改变业务结果。
+  walk_to_rendezvous_ms: 20000
+  # 停在会合点等人看结果。超时就先回工位，不永远杵着。
+  stay_at_rendezvous_ms: 600000
+  # 走回工位。超时直接归位。
+  return_to_post_ms: 15000
+  # 单次自主活动的上限。
+  roaming_ms: 20000
+
+# 任务与子任务。
+subtask:
+  # 从 planned 到终态的整段上限，补充或重试不重置本轮总截止时间。
+  timeout_ms: 300000
+  # 一次任务最多拆出多少个子任务。
+  max_per_task: 4
+  # 同时可以有几个子任务在跑。等于员工数就是全上线，超过没有意义。
+  max_concurrent: 3
+
+task:
+  # 整轮任务的上限。到点进入 stopping。
+  timeout_ms: 600000
+  # 同一时刻只允许一个任务，见 task_protocol.yaml。
+  max_running: 1
+
+retry:
+  # 含首次。2 表示最多重试 1 次。
+  max_attempts: 2
+  backoff_ms: 2000
+
+# 文本展示。
+text:
+  # 气泡里最多显示多少字，超出截断并给省略号；完整正文在对话栏里。
+  max_bubble_chars: 60
+  # 页面摘要预览上限；完整结果单独保存与访问，截断须标记，不丢弃全文或把片段称完整候选。
+  max_result_chars: 8000
+  # 老板单次输入的字符上限。
+  max_message_chars: 2000
+  # 增量文本的合并刷新间隔，避免每个 token 都触发一次排版。
+  delta_flush_ms: 60
+  # 气泡默认停留时长。
+  bubble_default_ms: 4000
+  bubble_min_ms: 1500
+  bubble_max_ms: 12000
+
+# 并发与容量。
+concurrency:
+  staff_count: 3
+  max_active_staff_sessions: 3
+  max_history_events_per_task: 2000
+
+# 性能目标。数值用于验收，不作为硬性降级阈值。
+performance:
+  target_fps: 60
+  min_fps: 30
+  # 网络异步等待，寻路与排版受预算限制，不能用同步阻塞占用渲染主循环。
+  ai_request_blocks_loop: false

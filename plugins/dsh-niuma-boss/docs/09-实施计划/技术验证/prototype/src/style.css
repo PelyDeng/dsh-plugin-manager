@@ -1,0 +1,16 @@
+:root { font-family: system-ui, sans-serif; color: #10263c; background: #dbe9f4; }
+* { box-sizing: border-box; }
+body { margin: 0; overflow: hidden; }
+.shell { position: relative; width: 100vw; height: 100dvh; }
+.game { position: absolute; inset: 0; }
+.hud { position: absolute; inset: 12px 12px auto; display: grid; gap: 8px; padding: 12px; border: 1px solid #7da5c7; border-radius: 10px; background: rgb(244 250 255 / 92%); box-shadow: 0 8px 30px rgb(25 57 86 / 20%); }
+header, .metrics { display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; }
+.metrics { font-size: 12px; justify-content: start; }
+label { display: grid; grid-template-columns: auto minmax(12rem, 1fr); align-items: center; gap: 8px; }
+input { min-height: 40px; border: 1px solid #557d9e; border-radius: 6px; padding: 8px 10px; font: inherit; }
+output { font-size: 13px; }
+details { max-height: 11rem; overflow: auto; }
+pre { margin: 6px 0 0; font-size: 11px; }
+.portrait .hud { inset: auto 8px 8px; }
+.portrait .metrics span:nth-child(n+4), .portrait details { display: none; }
+@media (max-width: 520px) { .hud { padding: 8px; } label { grid-template-columns: 1fr; } }

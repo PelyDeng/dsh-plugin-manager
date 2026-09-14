@@ -1,0 +1,280 @@
+# 交互触发、发话入口、跑过来、站位与超时。
+#
+# 首要职责是防「对话触发条件冲突」：老板站在牛马大总管跟前时往往同时满足好几个触发条件
+# （可以派活、牛马大总管正忙、有补充在等、旁边还站着两个员工）。这里给所有触发器定一个全序优先级，
+# 并规定同一时刻只有一个提示生效——不合并、不并列、不各自弹一个框。
+#
+# 老板发话有两条目的完全不同的路，不要混：
+#   派活 → 只能对牛马大总管，会产生任务（走近牛马大总管，或用页面上的「发布任务」入口）
+#   搭话 → 只能对员工，不产生任务、不派活（走近员工）
+# 数值不写死在这里，引用 balance_params.yaml。
+
+version: 4
+
+principles:
+  - id: single-prompt
+    statement: 同一时刻只有一个就近交互提示处于生效状态，界面上只显示一个。
+  - id: total-order
+    statement: triggers 的优先级是全序，不存在两个触发器优先级相同；冲突时高优先级生效，低优先级静默让位。
+  - id: task-only-via-butler
+    statement: 产生任务的派活只能对牛马大总管发起。员工不接受老板直接派的活。
+  - id: small-talk-is-not-work
+    statement: 走近员工只能搭话，搭话不产生任务、不进任务账、不影响正在跑的任务。
+  - id: no-mode-stealing
+    statement: 已经打开的输入框不能被其它触发器抢走焦点或自动关闭（只有老板取消或走远才关）。
+  - id: butler-may-roam
+    statement: >
+      牛马大总管和员工一样会在楼里自主活动，不在工位是常态。所有与牛马大总管相关的提示都按「他当时在哪」
+      判定距离，不假设他站在工位。找不到牛马大总管不会阻塞派活——「发布任务」是常驻入口
+      （见 global_entry），走过去只是演出。
+  - id: butler-returns-to-post-on-duty
+    statement: >
+      牛马大总管接下活之后会走回自己工位——「有活就回工位」是他的岗位纪律。老板要接着交代就去工位找他；
+      「发布任务」入口一直开着，不依赖他站在哪。唯一的例外是老板正在说话而活还没接下来，
+      此时他站定不走。依据是 agent_fsm.yaml 的 cross_region_rules.on-duty-returns-to-post
+      与 cross_region_rules.listening-stands-still。
+
+proximity:
+  interact_radius_tiles: balance_params.yaml#interaction.interact_radius_tiles
+  hint_radius_tiles: balance_params.yaml#interaction.hint_radius_tiles
+  walk_away_tiles: balance_params.yaml#interaction.walk_away_tiles
+
+# 两个发话对象。能力不同，界面文案也必须不同，避免玩家以为走近员工也能派活。
+targets:
+  - id: butler
+    reachable_via: [walk_up, task_panel]
+    can_dispatch: true
+    effect: 产生任务或补充当前任务
+    label: 派活
+  - id: staff
+    reachable_via: [walk_up]
+    can_dispatch: false
+    effect: 只有这一轮对话，不产生任务
+    label: 搭话
+  - id: npc
+    reachable_via: [walk_up]
+    can_dispatch: false
+    effect: 与当前地图的普通NPC交流或查看其职责说明，不创建业务任务；三位特殊NPC沿用staff交互规则
+    label: 交谈
+
+# 常驻入口。不需要老板移动到任何位置。
+global_entry:
+  - id: task_panel
+    name: 发布任务
+    target: butler
+    always_available: true
+    why: 老板不想走过去时也能立刻派活；走过去说仍然保留，因为那是这个游戏的核心动作和演出
+    behavior:
+      no_running_task: 打开输入框，提交后开一个新任务
+      running_task: 打开输入框，提交后作为当前任务的补充，与 supplement_hint 等价
+      blocked: 牛马大总管处于 blocked 时，输入框的提示语改为「回答牛马大总管」
+      stopping: 显示正在收尾，保留草稿，不提交新任务或补充。
+      waiting_staff: 与就近牛马大总管入口共用 butler_input：选择同一问题并绑定 taskId/subtaskId，走 reply；不把回复当补充或新任务。
+      external_pending: 本轮已经结束，展示材料与外部待办，可以开启新任务；原页面确认不在此输入框完成。
+    does_not_bypass:
+      - 仍然只有一个任务，补充不新建任务
+      - 仍然受 balance_params.yaml#text.max_message_chars 限制
+      - 不因为不用走过去就跳过鉴权或幂等校验
+
+triggers:
+  # 从高到低。数值越大优先级越高，只用于排序，不代表时间。
+  - id: dialogue_typing
+    priority: 100
+    when: 输入框已打开且焦点在输入框
+    prompt: 输入框
+    requires: { input_open: true, input_focused: true }
+    suppress: [butler_idle_hint, butler_busy_hint, supplement_hint, staff_talk_hint, staff_busy_nametag, poi_hint]
+
+  - id: dialogue_closing
+    priority: 90
+    when: 输入框已打开但已失去焦点
+    prompt: 继续输入
+    requires: { input_open: true, input_focused: false }
+    suppress: [butler_idle_hint, butler_busy_hint, supplement_hint, staff_talk_hint, staff_busy_nametag, poi_hint]
+
+  - id: supplement_hint
+    priority: 80
+    when: 任务为 running 且未 stopping，老板在牛马大总管当前位置 interact_radius 内
+    requires: { input_open: false, map_loading: false, task_running: true, task_stopping: false, staff_reply_pending: false, butler_near: true }
+    prompt: 补充一句
+    action: 调用 butler_input 共用判定，普通补充走 message，牛马大总管自身追问沿用当前任务
+    suppress: [butler_busy_hint, butler_idle_hint, staff_talk_hint, staff_busy_nametag, poi_hint]
+    note: 补充不新建任务，见 task_protocol.yaml 的 task.invariants.one-running-task。
+
+  - id: butler_busy_hint
+    priority: 70
+    when: 任务为 stopping，老板在牛马大总管当前位置 interact_radius 内
+    requires: { input_open: false, map_loading: false, task_stopping: true, butler_near: true }
+    prompt: 正在收尾
+    action: 只提示，不提供入口
+    suppress: [staff_talk_hint, staff_busy_nametag, poi_hint]
+
+  - id: butler_idle_hint
+    priority: 60
+    when: 牛马大总管处于 idle，且老板在牛马大总管 interact_radius 内
+    requires: { input_open: false, map_loading: false, task_running: false, task_stopping: false, butler_idle: true, butler_near: true }
+    prompt: 派活
+    action: 打开输入框，目标为牛马大总管
+    suppress: [staff_talk_hint, staff_busy_nametag, poi_hint]
+
+  - id: staff_talk_hint
+    priority: 50
+    when: 老板靠近空闲员工，且该员工已授权的独立无业务工具搭话通道可用
+    requires: { input_open: false, map_loading: false, staff_near: true, staff_can_talk: true }
+    prompt: 搭话
+    action: 打开输入框，目标为这个员工；这一轮对话不产生任务
+    suppress: [poi_hint]
+
+  - id: staff_busy_nametag
+    priority: 45
+    when: 老板靠近员工但其忙碌、未授权、无搭话通道或接口不可用
+    requires: { input_open: false, map_loading: false, staff_near: true, staff_can_talk: false }
+    prompt: 员工名牌与真实可用状态
+    action: 只读展示，不给输入入口
+    suppress: [poi_hint]
+    note: 员工忙时不接受搭话。不排队、不打断，与 task_protocol.yaml 的 no-queueing 一致。
+
+  - id: poi_hint
+    priority: 20
+    when: 老板在某个兴趣点的 hint_radius 内
+    requires: { input_open: false, map_loading: false, poi_near: true }
+    prompt: 场景互动
+    action: 按兴趣点自己的定义，首版可以是纯演出
+    suppress: []
+
+  - id: butler_reply_hint
+    priority: 85
+    when: 老板靠近牛马大总管，当前任务有员工等待文本回复且任务未收尾
+    requires: { input_open: false, map_loading: false, task_running: true, task_stopping: false, staff_reply_pending: true, butler_near: true }
+    prompt: 回答员工的问题
+    action: 调用 butler_input，共用问题选择和回复校验，不新建任务
+    suppress: [supplement_hint, butler_idle_hint, staff_talk_hint, staff_busy_nametag, npc_talk_hint, npc_status_hint, portal_hint, poi_hint]
+
+  - id: npc_talk_hint
+    priority: 40
+    when: 普通NPC在当前地图可交互范围内，声明的对白通道当前可用
+    requires: { input_open: false, map_loading: false, npc_near: true, npc_can_talk: true }
+    prompt: 交谈
+    action: 锁定此NPC及当前地图。authored_lines 打开无自由输入的对白面板，model_chat 通道有效才开输入框；两者不触发员工派单。
+    suppress: [portal_hint, poi_hint]
+
+  - id: npc_status_hint
+    priority: 35
+    when: 普通NPC在当前地图范围内，但对白未配置、占用或通道不可用
+    requires: { input_open: false, map_loading: false, npc_near: true, npc_can_talk: false }
+    prompt: NPC名牌与职责
+    action: 只读说明，不模拟模型回答，不自动转交别的NPC
+    suppress: [portal_hint, poi_hint]
+
+  - id: portal_hint
+    priority: 30
+    when: 老板靠近当前地图的建筑出入口
+    requires: { input_open: false, map_loading: false, portal_near: true }
+    prompt: 查看或进入建筑
+    action: 入口已启用且目标可用才开始切图；否则说明不可进入的原因，仍留在原图
+    suppress: [poi_hint]
+
+  - id: dialogue_panel
+    priority: 95
+    when: 场景预写对白面板已打开，没有自由输入框
+    requires: { dialogue_open: true, input_open: false }
+    prompt: 继续或关闭对白
+    action: 只操作已绑定NPC的对白面板；关闭前不打开其他目标
+    suppress: [butler_reply_hint, supplement_hint, butler_idle_hint, butler_busy_hint, staff_talk_hint, staff_busy_nametag, npc_talk_hint, npc_status_hint, portal_hint, poi_hint]
+
+conflicts:
+  - pair: [supplement_hint, butler_busy_hint]
+    resolution: supplement 只对应 running 且非 stopping，busy 只对应 stopping；输入草稿不能改变任务状态。
+  - pair: [butler_idle_hint, butler_busy_hint]
+    resolution: 互斥。牛马大总管不可能既 idle 又在忙。
+  - pair: [staff_talk_hint, staff_busy_nametag]
+    resolution: 按同一员工的 staff_can_talk 二选一；空闲还须检查授权和独立通道。
+  - pair: [staff_talk_hint, butler_idle_hint]
+    resolution: 老板同时站在牛马大总管和一个空闲员工旁边时，牛马大总管的提示赢——派活比搭话重要。
+  - pair: [poi_hint, staff_talk_hint]
+    resolution: 搭话赢。兴趣点是氛围，不抢注意力。
+  - pair: [task_panel, 任意就近提示]
+    resolution: 不冲突。task_panel 是常驻入口，不是就近提示；它只在就近提示都没打开输入框时响应点击。
+
+small_talk:
+  description: 走近员工之后这段对话的性质。
+  does:
+    - 员工用自己的语气回话，可以说自己在忙什么、对刚才那件活的看法、吐槽两句
+  does_not:
+    - 不产生任务
+    - 不产生子任务
+    - 不写进任务账
+    - 不影响正在跑的任务
+  if_actually_a_task:
+    behavior: 员工把活推回牛马大总管
+    example: 「这件事交牛马大总管安排。」
+    rationale: >
+      需求里「所有任务只对牛马大总管说」是核心体验之一。留一个偷偷接活的口子，牛马大总管就不再是唯一入口，
+      任务账也会漏记。把话推回去比默默接活更符合设定，也更好笑。
+  while_task_running:
+    behavior: 可对未参与任务的空闲员工搭话，但须通道可用；正在干活或等待业务回复的员工只显示状态。
+    note: 与「补充」区分——补充是发给牛马大总管的，搭话是发给员工的。
+
+hotkey:
+  key: balance_params.yaml#interaction.interact_key
+  scope: 老板位于某个可交互对象的 interact_radius 内时有效
+  behavior: 等价于当前生效的那个就近提示的 action
+  out_of_range: 不打开输入框，只给一次轻微反馈，不弹错误框
+  note: 快捷键不是「随时随地找牛马大总管」。随时随地派活走 task_panel。
+
+rendezvous:
+  description: 员工接单后走到哪里干活。会合点是语义目标，坐标由表现层解析，见 adr/0002。
+  kinds:
+    - id: butler
+      meaning: 到牛马大总管附近
+      chosen_when: 子任务是「来汇报、来讨论、来领活」
+    - id: boss
+      meaning: 到老板附近
+      chosen_when: 子任务是「当面跟老板说清楚」
+    - id: workstation
+      meaning: 留在或回到自己工位
+      chosen_when: 子任务不需要跟人打交道，安静干活即可
+  default_kind: butler
+  arrival_radius_tiles: balance_params.yaml#interaction.arrival_radius_tiles
+
+slots:
+  description: 多个员工同时到同一个会合点时不能叠在一起。
+  rule: 以会合点为中心，按派单事件 seq、staffId 顺序选不同槽位；预约槽位释放与实际身体占用分开，不能在还没走开的角色身上放另一个人。
+  capacity: balance_params.yaml#interaction.rendezvous_slot_count
+  release: 员工离开会合点或子任务终结时释放槽位。
+  overflow: 槽位用尽时不排队、不叠加，员工停在最近的一个可用站位，仍算报到。
+
+timeouts:
+  walk_to_rendezvous_ms: balance_params.yaml#staff_timeouts.walk_to_rendezvous_ms
+  stay_at_rendezvous_ms: balance_params.yaml#staff_timeouts.stay_at_rendezvous_ms
+  return_to_post_ms: balance_params.yaml#staff_timeouts.return_to_post_ms
+  rules:
+    - id: timeout-never-blocks
+      statement: 三个超时到点都只是把员工推进到下一个状态，不产生失败提示；员工的失败只由子任务终态决定。
+    - id: walk-timeout
+      statement: 走到会合点超时就地等待并显示未到位；不谎称已经报到，业务照常推进。
+
+enforcement:
+  description: 哪些约束由谁保证。写清楚是为了不假装前端限制是安全边界。
+  proximity: 表现层判定「老板是否在范围内」，后端不校验。这是单机本地游戏。
+  idempotency: 后端用 requestId 保证同一句话不会开两个任务。
+  one_task: 后端保证同一时刻只有一个任务。
+  no_staff_dispatch: 目标设计不向老板提供员工直接派活接口；独立搭话通道必须禁用业务工具，现有 dispatch/reply 不作为替代。
+
+selection:
+  rule: 先按 requires 判定候选，再取最高 priority；同类多个对象按距离、稳定对象 id 依次排序，只开一个输入框。
+  focus: 输入框持有交互对象；输入时方向键、空格、回车及中文输入法确认不得同时触发地图动作，IME composing 时回车不提交。
+  walk_away: 仅就近入口按 walk_away_tiles 关输入并保留草稿；常驻 task_panel 不受角色位置影响。
+  lost_access: 目标失权或通道消失时禁用提交并保留草稿，给出原因，不转发到别的员工。
+  submission: 提交前重新核对 taskId、对象、授权及状态；终态任务的旧草稿不自动变新任务，明确提示重新选择。
+  supplement: 新补充附输入版本，汇总提交前核对版本；不会丢弃已接受内容，也不声称即时重启员工回合。
+  map_scope: 所有 near 事实只比较当前地图对象；加载目标地图期间隐藏就近提示，常驻牛马大总管入口继续可用。
+  npc_switch: 切图或NPC离开可交流范围时关闭其会话视图并保留草稿；迟到回复只归原NPC记录，不跳进新地图的其它对话。
+  session_owner: 输入框和无输入的场景对白共用唯一交互会话；dialogue_open覆盖二者。其他目标和常驻入口的点击不抢占已打开会话，先由老板关闭或明确切换；任务状态与正文仍持续更新。
+
+butler_input:
+  shared_by: [walk_up, task_panel]
+  precedence: [stopping, waiting_staff, butler_question, supplement, new_task]
+  waiting_staff: staff_reply_pending表示有问题待处理，不意味着reply已经可用。两入口显示相同问题列表；单题自动定位，多题按产生序号/子任务ID排列并让老板选择，不把一句回复广播给多员工。
+  submit: 问题、reply能力、授权与任务版本重新核验，绑定同一taskId/subtaskId发reply。入口未实现或已失效时禁用提交并解释，不能退回普通message造成假续聊。
+  supplements_while_waiting: 老板明确选择“补充任务要求”时仍可走message，牛马大总管重新理解；与回答某题是两个操作。两入口功能一致。

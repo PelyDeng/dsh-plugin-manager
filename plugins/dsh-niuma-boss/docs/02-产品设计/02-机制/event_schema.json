@@ -1,0 +1,907 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://niuma-boss.invalid/design/event_schema.json",
+  "title": "牛马-老板 · 后端事件与前端请求格式",
+  "description": "任务协作后端的事件与请求格式；不承载地图切换或NPC对白通道。根schema严格校验已知任务事件，消费端先忽略未知type。地图几何由表现层负责，报到不决定业务终态。NPC模型对白需独立授权通道，接入设计另行定义，不挪用员工任务接口。",
+  "$defs": {
+    "taskId": {
+      "type": "string",
+      "pattern": "^niuma-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "一轮任务的标识。前缀固定为 niuma-，便于日志里一眼认出来。"
+    },
+    "subtaskId": {
+      "type": "string",
+      "pattern": "^st-[0-9]{2}$",
+      "description": "任务内唯一，从 st-01 起。只在所属任务内有意义。"
+    },
+    "staffId": {
+      "type": "string",
+      "enum": [
+        "example",
+        "closedoff",
+        "blog"
+      ],
+      "description": "三个员工，取值必须与员工所在插件的 id 一致。人格、能力、外观由各自插件决定，不写进本协议。"
+    },
+    "rendezvousKind": {
+      "type": "string",
+      "enum": [
+        "butler",
+        "boss",
+        "workstation"
+      ],
+      "description": "语义会合点。后端只发这个，坐标由表现层解析，见 adr/0002 与 map_rules.yaml#anchors。"
+    },
+    "isoTime": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1
+    },
+    "failureReason": {
+      "type": "string",
+      "enum": [
+        "timeout",
+        "staff_unavailable",
+        "result.error",
+        "orphaned",
+        "rejected_by_policy",
+        "protocol_error"
+      ],
+      "description": "与 task_protocol.yaml#failure_taxonomy 一一对应。"
+    },
+    "taskOutcome": {
+      "type": "string",
+      "enum": [
+        "completed",
+        "external_pending",
+        "partial",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "subtaskOutcome": {
+      "type": "string",
+      "enum": [
+        "succeeded",
+        "external_pending",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "envelope": {
+      "type": "object",
+      "required": [
+        "seq",
+        "taskId",
+        "at",
+        "type",
+        "payload"
+      ],
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "任务内单调递增。表现层用 after=<seq> 增量拉取，断线重连后靠它续上，不丢事件。"
+        },
+        "taskId": {
+          "$ref": "#/$defs/taskId"
+        },
+        "subtaskId": {
+          "$ref": "#/$defs/subtaskId"
+        },
+        "at": {
+          "$ref": "#/$defs/isoTime"
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "payload": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "event.task.started": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "task.started"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "message"
+              ],
+              "properties": {
+                "message": {
+                  "$ref": "#/$defs/nonEmptyText",
+                  "description": "老板的原话，原样保留。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.subtask.planned": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "required": [
+            "subtaskId"
+          ],
+          "properties": {
+            "type": {
+              "const": "subtask.planned"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "staffId",
+                "goal",
+                "logicalId",
+                "inputVersion",
+                "dependsOn"
+              ],
+              "properties": {
+                "staffId": {
+                  "$ref": "#/$defs/staffId"
+                },
+                "goal": {
+                  "$ref": "#/$defs/nonEmptyText",
+                  "description": "一句话的子任务目标，给玩家看的。"
+                },
+                "logicalId": {
+                  "$ref": "#/$defs/logicalId"
+                },
+                "inputVersion": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "dependsOn": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "retryOf": {
+                  "$ref": "#/$defs/subtaskId"
+                },
+                "supersedes": {
+                  "$ref": "#/$defs/subtaskId"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.subtask.dispatched": {
+      "description": "表现层收到这个事件就让员工出发。这是唯一一个允许表现层「乐观」的时点——因为派单本身就是真实的。",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "required": [
+            "subtaskId"
+          ],
+          "properties": {
+            "type": {
+              "const": "subtask.dispatched"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "staffId",
+                "rendezvous"
+              ],
+              "properties": {
+                "staffId": {
+                  "$ref": "#/$defs/staffId"
+                },
+                "rendezvous": {
+                  "$ref": "#/$defs/rendezvousKind"
+                },
+                "brief": {
+                  "type": "string",
+                  "description": "发给员工的完整简报，用于界面上展开看「派了什么活」。"
+                },
+                "inputRefs": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "subtaskId",
+                      "resultRef"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "subtaskId": {
+                        "$ref": "#/$defs/subtaskId"
+                      },
+                      "resultRef": {
+                        "$ref": "#/$defs/resultRef"
+                      }
+                    }
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.subtask.executing": {
+      "description": "首次收到可选执行进度；不证明精确开始时刻，无进度也可直接返回终态。",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "required": [
+            "subtaskId"
+          ],
+          "properties": {
+            "type": {
+              "const": "subtask.executing"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "staffId"
+              ],
+              "properties": {
+                "staffId": {
+                  "$ref": "#/$defs/staffId"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.subtask.waiting_user": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "required": [
+            "subtaskId"
+          ],
+          "properties": {
+            "type": {
+              "const": "subtask.waiting_user"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "staffId",
+                "question"
+              ],
+              "properties": {
+                "staffId": {
+                  "$ref": "#/$defs/staffId"
+                },
+                "question": {
+                  "$ref": "#/$defs/nonEmptyText",
+                  "description": "员工要问老板的问题，界面据此给出回复入口。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ],
+      "description": "明确为文本补充且有可用 reply；博客待外部操作使用 external_pending。"
+    },
+    "event.subtask.output_delta": {
+      "description": "增量文本，按到达顺序追加到同一条气泡里。不要发整段，否则气泡内容会来回跳。",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "required": [
+            "subtaskId"
+          ],
+          "properties": {
+            "type": {
+              "const": "subtask.output_delta"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "staffId",
+                "delta"
+              ],
+              "properties": {
+                "staffId": {
+                  "$ref": "#/$defs/staffId"
+                },
+                "delta": {
+                  "$ref": "#/$defs/nonEmptyText"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.subtask.succeeded": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "required": [
+            "subtaskId"
+          ],
+          "properties": {
+            "type": {
+              "const": "subtask.succeeded"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "staffId",
+                "summary"
+              ],
+              "properties": {
+                "staffId": {
+                  "$ref": "#/$defs/staffId"
+                },
+                "summary": {
+                  "$ref": "#/$defs/nonEmptyText"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.subtask.failed": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "required": [
+            "subtaskId"
+          ],
+          "properties": {
+            "type": {
+              "const": "subtask.failed"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "staffId",
+                "reason"
+              ],
+              "properties": {
+                "staffId": {
+                  "$ref": "#/$defs/staffId"
+                },
+                "reason": {
+                  "$ref": "#/$defs/failureReason"
+                },
+                "summary": {
+                  "type": "string",
+                  "description": "给老板看的短说明，可空。"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.subtask.cancelled": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "required": [
+            "subtaskId"
+          ],
+          "properties": {
+            "type": {
+              "const": "subtask.cancelled"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "staffId"
+              ],
+              "properties": {
+                "staffId": {
+                  "$ref": "#/$defs/staffId"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.task.summarizing": {
+      "description": "全部子任务已到终态，牛马大总管开始汇总。表现层据此把注意力切回牛马大总管。",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "task.summarizing"
+            },
+            "payload": {
+              "type": "object",
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.butler.message": {
+      "description": "牛马大总管公开正文的真实增量；员工正文与搭话不受这条事件限制。",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "butler.message"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "delta"
+              ],
+              "properties": {
+                "delta": {
+                  "$ref": "#/$defs/nonEmptyText"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.task.terminal": {
+      "description": "任务终态共用一个 payload 形状，由 type 区分。终态先落盘再发这个事件，见 task_protocol.yaml。",
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "task.completed",
+                "task.external_pending",
+                "task.partial",
+                "task.failed",
+                "task.cancelled"
+              ]
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "summary"
+              ],
+              "properties": {
+                "summary": {
+                  "type": "string",
+                  "description": "牛马大总管的最终交代。失败或取消时说明原因和已完成的部分。"
+                },
+                "pendingActions": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "subtaskId",
+                      "description"
+                    ],
+                    "properties": {
+                      "subtaskId": {
+                        "$ref": "#/$defs/subtaskId"
+                      },
+                      "description": {
+                        "$ref": "#/$defs/nonEmptyText"
+                      },
+                      "conversationId": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "currentGoals": {
+                  "type": "array",
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "unmetGoals": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "logicalId",
+                      "reason"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "logicalId": {
+                        "$ref": "#/$defs/logicalId"
+                      },
+                      "reason": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  }
+                },
+                "acceptedVersion": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "processedVersion": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "task.external_pending"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "required": [
+                  "pendingActions"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "event.subtask.external_pending": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "required": [
+            "subtaskId"
+          ],
+          "properties": {
+            "type": {
+              "const": "subtask.external_pending"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "staffId": {
+                  "$ref": "#/$defs/staffId"
+                },
+                "summary": {
+                  "$ref": "#/$defs/nonEmptyText"
+                },
+                "executorStatus": {
+                  "const": "waiting_user"
+                },
+                "nextAction": {
+                  "$ref": "#/$defs/nonEmptyText"
+                },
+                "conversationId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "staffId",
+                "summary",
+                "executorStatus",
+                "nextAction"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.butler.needs_input": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "butler.needs_input"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "question": {
+                  "$ref": "#/$defs/nonEmptyText"
+                }
+              },
+              "required": [
+                "question"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.task.stopping": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "task.stopping"
+            },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "user_cancel",
+                    "timeout",
+                    "turn_failed"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "event.subtask.reply_started": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/envelope"
+        },
+        {
+          "required": [
+            "subtaskId"
+          ],
+          "properties": {
+            "type": {
+              "const": "subtask.reply_started"
+            },
+            "payload": {
+              "type": "object",
+              "required": [
+                "staffId",
+                "requestId"
+              ],
+              "properties": {
+                "staffId": {
+                  "$ref": "#/$defs/staffId"
+                },
+                "requestId": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        }
+      ]
+    },
+    "logicalId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resultRef": {
+      "type": "string",
+      "minLength": 1,
+      "description": "同任务内授权材料的稳定引用，不能当任意文件路径或外部URL执行。"
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/event.task.started"
+    },
+    {
+      "$ref": "#/$defs/event.subtask.planned"
+    },
+    {
+      "$ref": "#/$defs/event.subtask.dispatched"
+    },
+    {
+      "$ref": "#/$defs/event.subtask.executing"
+    },
+    {
+      "$ref": "#/$defs/event.subtask.waiting_user"
+    },
+    {
+      "$ref": "#/$defs/event.subtask.output_delta"
+    },
+    {
+      "$ref": "#/$defs/event.subtask.succeeded"
+    },
+    {
+      "$ref": "#/$defs/event.subtask.failed"
+    },
+    {
+      "$ref": "#/$defs/event.subtask.cancelled"
+    },
+    {
+      "$ref": "#/$defs/event.task.summarizing"
+    },
+    {
+      "$ref": "#/$defs/event.butler.message"
+    },
+    {
+      "$ref": "#/$defs/event.task.terminal"
+    },
+    {
+      "$ref": "#/$defs/event.subtask.external_pending"
+    },
+    {
+      "$ref": "#/$defs/event.butler.needs_input"
+    },
+    {
+      "$ref": "#/$defs/event.task.stopping"
+    },
+    {
+      "$ref": "#/$defs/event.subtask.reply_started"
+    }
+  ],
+  "$comment": "以下是表现层发给后端的请求。它们不是事件，放在同一文件是为了让两侧的契约一起看。",
+  "x-requests": {
+    "POST /niuma/message": {
+      "description": "提交时明确新任务或当前任务补充；若省略taskId但已有活动任务，拒绝并返回冲突，不静默把新要求附到别人的任务。",
+      "type": "object",
+      "required": [
+        "requestId",
+        "message"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "幂等键。重试必须复用同一个 requestId，避免同一句话开两个任务。"
+        },
+        "message": {
+          "$ref": "#/$defs/nonEmptyText",
+          "maxLength": 2000
+        },
+        "taskId": {
+          "$ref": "#/$defs/taskId",
+          "description": "省略表示新任务；给出表示补充当前任务。"
+        }
+      },
+      "additionalProperties": false
+    },
+    "POST /niuma/reply": {
+      "description": "回答正在waiting_user的子任务；必须有明确问题、可用回复入口与可信原会话归属。每次不同回复使用新的requestId，重试同一句复用原ID。",
+      "type": "object",
+      "required": [
+        "requestId",
+        "taskId",
+        "subtaskId",
+        "text"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "taskId": {
+          "$ref": "#/$defs/taskId"
+        },
+        "subtaskId": {
+          "$ref": "#/$defs/subtaskId"
+        },
+        "text": {
+          "$ref": "#/$defs/nonEmptyText",
+          "maxLength": 2000
+        },
+        "decideByAgent": {
+          "type": "boolean",
+          "description": "仅当执行方已验证支持时可提交；当前桥接未转发此字段，不展示此选项，不能把它当外部发布确认。"
+        }
+      },
+      "additionalProperties": false
+    },
+    "POST /niuma/cancel": {
+      "description": "老板喊停当前任务。",
+      "type": "object",
+      "required": [
+        "requestId",
+        "taskId"
+      ],
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "taskId": {
+          "$ref": "#/$defs/taskId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GET /niuma/task": {
+      "description": "增量拉取事件。参数 id 与 after；after 缺省从 0 开始。",
+      "type": "object",
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/taskId"
+        },
+        "after": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "x-omitted-from-requests": {
+    "bossTile": "请求里不带老板坐标。后端不需要几何，见 adr/0002。",
+    "proximityProof": "「老板是否站在牛马大总管旁边」由表现层判定，不发给后端。这是单机本地游戏，后端信任前端；如果将来变成服务端权威，这里需要补一个可验证的距离声明，而不是相信前端传的布尔值。"
+  },
+  "x-version": 3,
+  "x-omitted-by-design": {
+    "coordinates": "任何事件都不带坐标。位置是表现层的事。",
+    "arrival": "没有 subtask.arrived / reported 事件。报到是表现层的动作，后端不参与。",
+    "acceptance": "没有 subtask.accepted。员工接入协议里不存在「我接下了」这个回调，硬造一个会让界面显示没发生过的环节，见 staff_integration.md 缺口 1。归属改在 dispatched 时锁定。",
+    "animation": "没有动画时长、播放进度之类的字段。动画不能反向驱动业务状态。",
+    "internalReasoning": "没有模型的思考过程。事件只承载已公开的内容。"
+  }
+}

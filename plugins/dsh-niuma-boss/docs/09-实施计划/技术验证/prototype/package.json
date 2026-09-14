@@ -1,0 +1,47 @@
+{
+  "name": "dsh-niuma-boss-tech-validation",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "dist/index.mjs",
+  "exports": { ".": "./dist/index.mjs", "./cordis.patch.yml": "./cordis.patch.yml", "./package.json": "./package.json" },
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "files": [
+    "dist/",
+    "README.md",
+    "cordis.patch.yml"
+  ],
+  "deepseekPlugin": {
+    "schemaVersion": 3,
+    "id": "niuma-boss",
+    "defaultEnabled": false,
+    "entryPath": "/niuma-boss",
+    "healthPath": "/niuma-boss/ready",
+    "verifyFiles": ["dist/index.html", "dist/generated/office.runtime.json"],
+    "configuration": { "entryId": "niuma-boss", "auth": "consumer" },
+    "permissions": [
+      "niuma-boss:access"
+    ]
+  },
+  "scripts": {
+    "check": "pnpm check:validation",
+    "prepare-assets": "node scripts/prepare-assets.mjs",
+    "build": "pnpm prepare-assets && vue-tsc --noEmit && vite build && node ../../../../../../node_modules/tsdown/dist/run.mjs --config tsdown.config.ts",
+    "check:validation": "node --experimental-transform-types --disable-warning=ExperimentalWarning scripts/check.mjs",
+    "serve": "node scripts/server.mjs",
+    "pack:check": "pnpm pack --pack-destination .artifacts && node scripts/package-check.mjs"
+  },
+  "devDependencies": {
+    "@dsh-plugin-manager/plugin-kit": "file:../../../../../../packages/plugin-kit",
+    "easystarjs": "0.4.4",
+    "phaser": "4.2.1",
+    "pinia": "4.0.3",
+    "vue": "3.5.42",
+    "@vitejs/plugin-vue": "6.0.8",
+    "free-tex-packer-core": "0.3.9",
+    "typescript": "6.0.3",
+    "vite": "8.3.0",
+    "vue-tsc": "3.3.11"
+  }
+}
