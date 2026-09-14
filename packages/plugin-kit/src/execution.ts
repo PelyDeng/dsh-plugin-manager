@@ -41,6 +41,15 @@ export interface AgentExecutionProgress {
   readonly thinking?: string
   /** 声明需要用户补充信息；协调方据此进入等待状态并给出回复入口。 */
   readonly needsReply?: boolean
+  /**
+   * 执行方的业务会话标识，获得后**尽早**随进度交回。
+   *
+   * 协调方落库后，业务已开始、final 前失败或进程重启时仍能找回原会话引用；它只表示
+   * 「能打开那个会话」，不表示业务完成。须与 `conversationArtifact` 同条上报。
+   */
+  readonly conversationId?: string
+  /** 原插件核验归属后提供的会话材料定位，与 `conversationId` 同条交回。 */
+  readonly conversationArtifact?: AgentArtifact & { readonly kind: 'conversation' }
 }
 
 /** 发起一次派活的请求。 */
@@ -70,9 +79,26 @@ export interface AgentDispatchRequest {
 export interface AgentReplyRequest {
   readonly taskId: string
   readonly subtaskId: string
+  /**
+   * 本次回复的幂等身份：同一次受理（含其重试）复用同一 ID，新的回复用新 ID。
+   *
+   * 与 `subtaskId` 是两回事：后者标识子任务，前者标识「这一次回话」。执行方按它去重，
+   * 同 ID 不同内容应拒绝，避免重试把同一句话派两遍。
+   *
+   * **必填，缺失即拒绝**：本仓库公共侧当前没有 `reply` 的实现方或消费方（已核对
+   * example/doc/integrations），但这只是仓库内的核对事实，不推断为外部没有未审计的
+   * 使用者；任何实现都不应接受缺失的 requestId 或用其他字段伪造幂等身份——回落会
+   * 让同一子任务的多次回话撞同一个键。
+   */
+  readonly requestId: string
   readonly text: string
   /** 用户选择「你看着办」时为 true，执行方自行决定，不必再追问。 */
   readonly decideByAgent: boolean
+  /**
+   * 该成员原业务会话：来自协调方落库的早期引用，执行方沿它续接，不再新建会话。
+   * 没有引用时缺省，由执行方按自己的规则处理。
+   */
+  readonly conversationId?: string
   readonly owner: string
   readonly actor: Actor
   readonly onProgress?: (update: AgentExecutionProgress) => void
