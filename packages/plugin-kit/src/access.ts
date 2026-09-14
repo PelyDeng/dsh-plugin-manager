@@ -90,8 +90,19 @@ export interface Revocation {
 
 /** An expected HTTP authentication or authorization rejection. */
 export class AccessError extends Error {
+  /**
+   * 跨独立打包副本识别用的类别标识。
+   *
+   * **不要拿它当业务错误码**：同一份代码可能在宿主里被加载两次，`instanceof` 认不出来，
+   * 所以用它来判断「这是不是一个访问错误」。具体是哪一种错误看 {@link reason}。
+   */
   readonly code = 'DSH_ACCESS_ERROR'
-  constructor(readonly status: number, message: string) {
+  /**
+   * 业务错误码，由抛出方按自己的对外契约给出，客户端据此分支。
+   *
+   * 缺省为空串：没给出时调用方应当按 `status` 归类，而不是去解析 `message` 的文案。
+   */
+  constructor(readonly status: number, message: string, readonly reason = '') {
     super(message)
     this.name = 'AccessError'
   }
