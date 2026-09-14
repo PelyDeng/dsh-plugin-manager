@@ -10,6 +10,7 @@ import { composeReleases } from '../../packages/plugin-manager/src/compose-relea
 import { loadRelease } from '../../packages/plugin-manager/src/release.mjs';
 import { buildMessage, buildStep } from '../../packages/plugin-manager/src/site-output.mjs';
 import { fileHash, readSiteJson } from '../../packages/plugin-manager/src/site-record.mjs';
+import { formatLayerReport, layerReport } from './layer-count.mjs';
 
 export function validateBase(reference, info) {
   if (typeof reference !== 'string' || !/^(?:sha256:[a-f0-9]{64}|\S+@sha256:[a-f0-9]{64})$/.test(reference)) throw new Error('Host image must be an immutable image ID or registry digest.');
@@ -84,6 +85,9 @@ export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareMan
         baseReference = built.imageId; base = inspect(baseReference); record.hostBuild = built.resultFile;
       }
       validateBase(baseReference, base);
+      // 层数只报数不改行为：阈值要按本机实际驱动与层预算校准，先拿到真实数字。
+      const engineInfo = probe('docker', ['version', '--format', '{{.Server.Version}}'])?.stdout?.trim() ?? null;
+      const driver = probe('docker', ['info', '--format', '{{.Driver}}'])?.stdout?.trim() ?? null;
       const baseTag = `dsh-local/source-base:${base.Id.slice(7)}`;
       run('docker', ['tag', base.Id, baseTag]);
       const imageContext = resolve(operation, 'image'); mkdirSync(imageContext);
@@ -93,6 +97,10 @@ export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareMan
       step('构建部署镜像', 'docker', ['build', '--network', 'none', '--build-arg', `RUNTIME_IMAGE=${baseTag}`, '--build-arg', `MANAGER_SHA256=${tools.sha256}`, '--build-arg', `FRAMEWORK_REVISION=${record.revision}`, '--tag', image, imageContext]);
       if (inspect(baseTag).Id !== base.Id) throw new Error('The base image changed during construction.');
       const info = inspect(image); validateBase(info.Id, info);
+      const baseCount = layerReport(base, { driver, engine: engineInfo }).layers;
+      const imageCount = layerReport(info, { driver, engine: engineInfo, base: baseCount }).layers;
+      record.layers = { base: baseCount, image: imageCount, added: baseCount === null || imageCount === null ? null : imageCount - baseCount, driver, engine: engineInfo };
+      buildMessage(`镜像层数：${formatLayerReport({ base: { layers: baseCount }, image: { layers: imageCount, added: record.layers.added }, driver, engine: engineInfo })}`);
       if (info.Config?.Labels?.['com.dsh-plugin-manager.manager.sha256'] !== tools.sha256) throw new Error('Built manager archive differs from saved tooling.');
       record.hostCommit = info.Config?.Labels?.['org.opencontainers.image.revision'];
       const manager = readSiteJson(resolve(root, 'packages/plugin-manager/package.json')).version;
