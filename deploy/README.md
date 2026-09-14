@@ -2,6 +2,8 @@
 
 部署已经打好的插件，优先使用[产物一键部署](../doc/first-deployment.md)。本文维护源码构建、按需复用和站点恢复规则；只安装 manager 时的手工 CLI 操作保留在其随包 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
 
+产物合规是**交付前**的事，不在部署时重复检查：作者打包后执行 `dsh-plugin-manager verify-release --release <发布目录>`（只读、可进 CI，退出码 0 表示合规）自检清单格式、产物摘要、包结构与元数据一致性，再把整个发布目录交给部署者。作者与部署者的分工和产物约定见[框架配置](../doc/framework-configuration.md)与[一键部署](../doc/first-deployment.md)。
+
 ## 服务器源码发版
 
 Windows 使用根 `.\build.ps1`，macOS/Linux 使用 `bash build.sh`；`deploy/build.ps1` 与 `deploy/build.sh` 转发到同一入口。完整源码检出默认 source，使用已有官方宿主源码和锁定依赖，不自动克隆、拉取或切换宿主。需 Node.js `^22.19.0 || >=24`、npm、Git、tar、本机 Linux Docker 与 Compose；脚本只按需准备锁定 pnpm，不安装系统软件。
