@@ -1,0 +1,281 @@
+# 地图、区域、寻路与碰撞。
+#
+# 本文件规定地图语义与运行约束。具体区域格集合、家具、碰撞、岗位与入口见第三阶段作者数据，
+# 构建期再转译为运行时 JSON。后端只处理「去牛马大总管那儿」这类语义会合点，
+# 几何留在表现层；换地图不改状态机与协议，理由见 adr/0002。
+
+version: 2
+
+coordinate_system:
+  tile_size_px: 32
+  character_cell_px: { width: 32, height: 48 }
+  origin: 左上角为原点
+  axes: { x: 向右为正, y: 向下为正 }
+  foot_anchor: 角色坐标指的是脚底中心点，不是精灵图左上角
+  scale:
+    mode: 整数倍自适应
+    allowed: [1, 2, 3, 4]
+    rule: 永远不使用非整数倍缩放，宁可留黑边
+  pixel_perfect: true
+
+# 街道与咖啡店沿用已通过版本；办公楼白色科技风翻新与4名普通职员预览制作中，见 03-美术/README.md。
+buildings:
+  - { id: office_building, kind: office, name: 办公楼, maps: [office] }
+  - { id: cafe_building, kind: cafe, name: 咖啡店, maps: [cafe] }
+
+maps:
+  - id: office
+    name: 现代职场办公楼
+    building_id: office_building
+    floors: 1
+    description: 42×30格（1344×960px）的白色简约科技风办公楼，翻新进行中。偏东主通路与横向支路形成非对称分区；访客从东南前台到东侧洽谈室，不穿开发工位。街道出入口保持不变。
+    regions:
+
+      - id: boss_office
+        name: 老板办公室
+        purpose: 老板出生的地方，也是老板待得最久的地方
+        contains: [白色老板桌, 老板椅, 电脑, 玻璃隔断, 中文办公室招牌]
+
+      - id: dev
+        name: 开发部
+        purpose: 西侧中部9个开发工位，example、closedoff、blog三位特殊NPC在此工作，其余6席为空席
+        contains: [9套开发工位与椅子, 电脑, 白板, 搞笑绿植, 中文开发部招牌]
+
+      - id: meeting
+        name: 洽谈室
+        purpose: 东侧靠访客通路的洽谈空间
+        contains: [洽谈桌椅, 玻璃隔断, 中文洽谈室招牌]
+
+      - id: restroom
+        name: 卫生间
+        purpose: 东北后场侧路进入的服务空间
+        contains: [洗手台, 卫生间隔间, 中文卫生间招牌]
+
+      - id: hr
+        name: 人事部
+        purpose: 北侧中部2个人事工位，沈禾与顾言在各自职责附近活动
+        contains: [2套人事工位与椅子, 低柜, 中文人事部招牌]
+
+      - id: admin
+        name: 行政区
+        purpose: 南侧中部的行政工位与附近活动空间
+        contains: [行政工位, 椅子, 低柜, 中文行政招牌]
+
+      - id: reception
+        name: 前台
+        purpose: 东南入口的接待与访客分流空间
+        contains: [前台工位, 椅子, 中文公司招牌, 部门指引]
+
+      - id: commons
+        name: 公共区
+        purpose: 西南休憩区与可停留的共享节点
+        contains: [书架, 鱼缸, 装饰绿植, 饮水机, 自动贩卖机, 休息沙发, 咖啡机]
+
+      - id: corridor
+        name: 走廊
+        purpose: 偏东主通路与横向支路，连接工作区和封闭房间，避免访客穿过开发桌组
+        contains: [门, 中文部门招牌, 装饰绿植]
+
+    adjacency:
+      # 前台公共面和主通路共同分流，不按四个相同象限切房。
+      - { from: reception, to: corridor, via: 前台后方主通路 }
+      - { from: reception, to: meeting, via: 访客洽谈通路 }
+      - { from: reception, to: admin, via: 前台行政通路 }
+      - { from: boss_office, to: corridor, via: 老板办公室的门 }
+      - { from: dev, to: corridor, via: 开发部的门 }
+      - { from: hr, to: corridor, via: 人事部的门 }
+      - { from: restroom, to: corridor, via: 卫生间侧通路 }
+      - { from: commons, to: corridor, via: 敞开的通道 }
+    entries:
+      - { id: office_to_street, region: reception }
+    # 职员工位；老板桌椅沿用boss_post单独定位。空席不创建人物或任务。
+    workstations:
+      - { id: dev_01, region: dev, occupant: example }
+      - { id: dev_02, region: dev, occupant: closedoff }
+      - { id: dev_03, region: dev, occupant: blog }
+      - { id: dev_04, region: dev, occupant: null }
+      - { id: dev_05, region: dev, occupant: null }
+      - { id: dev_06, region: dev, occupant: null }
+      - { id: dev_07, region: dev, occupant: null }
+      - { id: dev_08, region: dev, occupant: null }
+      - { id: dev_09, region: dev, occupant: null }
+      - { id: hr_01, region: hr, occupant: npc_hr }
+      - { id: hr_02, region: hr, occupant: npc_recruiter }
+      - { id: admin_01, region: admin, occupant: npc_admin }
+      - { id: reception_01, region: reception, occupant: npc_reception }
+
+  - id: cafe
+    name: 咖啡店
+    building_id: cafe_building
+    floors: 1
+    description: 咖啡店包含柜台、座位与入口，已有 Tiled 作者布局；运行时加载与交互仍待实现。
+    regions:
+      - { id: cafe_entrance, name: 入口区, purpose: 出入与站立缓冲, contains: [门, 指示牌] }
+      - { id: cafe_counter, name: 柜台区, purpose: 咖啡店岗位NPC的职责活动范围, contains: [柜台, 咖啡设备] }
+      - { id: cafe_seating, name: 座位区, purpose: 老板与NPC在店内走动和搭话, contains: [座位, 店内装饰] }
+    adjacency:
+      - { from: cafe_entrance, to: cafe_counter, via: 柜台旁通道 }
+      - { from: cafe_entrance, to: cafe_seating, via: 座位旁通道 }
+    entries:
+      - { id: cafe_to_street, region: cafe_entrance }
+
+  - id: street
+    name: 现代商业街
+    kind: outdoor
+    description: 繁荣市区的现代商业街，作者画布为40×30格（1280×960px），无所属建筑。办公楼和咖啡店通过各自门前入口进入；其它写字楼、商场与商铺只作外观陈设，不提供进入或业务功能。
+    regions:
+      - { id: office_frontage, name: 办公楼门前, purpose: 办公楼出入与站立缓冲, contains: [办公楼立面, 办公楼入口] }
+      - { id: cafe_frontage, name: 咖啡店门前, purpose: 咖啡店出入与站立缓冲, contains: [咖啡店立面, 咖啡店入口] }
+      - { id: street_walkway, name: 街道人行通道, purpose: 连接门前区域与商业立面附近的可走空间, contains: [人行道, 道路表现, 路边陈设] }
+      - { id: commercial_frontage, name: 商业立面附近, purpose: 其它仅外观建筑附近的人行域, contains: [写字楼立面, 商场立面, 商铺立面] }
+    adjacency:
+      - { from: office_frontage, to: street_walkway, via: 办公楼门前人行道 }
+      - { from: cafe_frontage, to: street_walkway, via: 咖啡店门前人行道 }
+      - { from: commercial_frontage, to: street_walkway, via: 商业立面前人行道 }
+    entries:
+      - { id: street_to_office, region: office_frontage }
+      - { id: street_to_cafe, region: cafe_frontage }
+
+connections:
+  # 办公楼与咖啡店分别经街道往返，不设直连；作者布局和运行时往返通过后才可启用。
+  - id: office_street
+    from: { map_id: office, entry_id: office_to_street }
+    to: { map_id: street, entry_id: street_to_office }
+    bidirectional: true
+    readiness: pending_layout
+  - id: cafe_street
+    from: { map_id: cafe, entry_id: cafe_to_street }
+    to: { map_id: street, entry_id: street_to_cafe }
+    bidirectional: true
+    readiness: pending_layout
+connection_rules:
+  endpoint: 两端必须引用已存在的地图与入口；入口的触发格、到达格及退回格均须可站立。
+  enable: 只有两端地图资产、可达路径、到达格和返程都通过验证才启用；pending_layout 只参与设计引用检查，静态作者布局通过不代替运行时往返验收。
+  return: 双向连接共用一份连接声明。地图不得用可进入但没有可用返程的入口困住老板。
+
+# 地图数据格式。运行时不依赖 Tiled。
+map_data:
+  runtime_format: JSON
+  layers:
+    - { id: ground, collidable: false, description: 地板 }
+    - { id: furniture, collidable: true, description: 家具与设备，参与 Y-Sort }
+    - { id: collision, collidable: true, visible: false, description: 墙体与不可见阻挡 }
+    - { id: decoration, collidable: false, description: 贴地装饰 }
+    - { id: overhead, collidable: false, description: 覆盖在角色之上的门框、吊灯等 }
+  authoring:
+    source: Tiled 或其他编辑器导出后转换为运行时 JSON
+    rule: 运行时只读运行时 JSON；转换是构建期的事，不在游戏里解析 TMJ
+  required_geometry:
+    map: 每张地图须给出尺寸、完整碰撞和区域格集合；区域、工位、兴趣点、入口的引用均绑定 map_id。
+    entries: 连接启用前补齐触发格、到达格、退回格；到达格不直接落在返程触发格上，离开触发区后才可再次穿门。
+    optional_anchors: 仅为实际存在的角色提供岗位或锚点；咖啡店不因接入世界而必须创建员工工位，探险NPC也不要求永久出生点。
+
+collision:
+  model: 栅格
+  blocking_tiles: 在 collision 层或 collidable 的 furniture 层上
+  character_footprint: 1 格（32×32），以脚底中心对齐
+  rules:
+    - id: no-clip
+      statement: 角色中心点不得进入阻挡格；斜向不得穿过两个对角阻挡格之间的缝隙。
+    - id: spawn-valid
+      statement: 已声明的出生点、单次放置点、工位、会合锚点和入口落点加载时须位于非阻挡格；无效则拒绝激活目标地图，保留原图安全位置并说明原因。
+
+pathfinding:
+  algorithm: A*
+  grid: 与 collision 层同分辨率
+  neighbours: 4
+  heuristic: manhattan
+  diagonal: 禁止
+  rationale: 角色只有四向行走动画。允许斜向会让角色在斜线上没有对应帧，只能靠旋转或镜像掩盖，视觉上是错的。
+  agents: 牛马大总管、3名特殊NPC（业务员工）及当前地图的普通NPC均受寻路和碰撞约束；老板直接控制。普通NPC数量不占staff会话或子任务名额。
+  replan:
+    trigger: 目标格移动超过 balance_params.yaml#pathfinding.replan_distance_tiles 格
+    rule: 目标在小范围内抖动时不重算路径，避免每帧重算
+  failure:
+    behavior: 业务员工发出 path_unreachable、就地等待并显示未到位；普通NPC清除不可达目标并在其合法活动域内待机。干活或结果表现仍由真实业务事件决定。
+    rationale: 寻路失败绝不能把状态机卡在 moving，见 agent_fsm.yaml 的 moving 出口
+  congestion:
+    rule: 员工之间互相视为软阻挡：可以穿过正在自主活动的员工，但不得穿过正在报到的员工。
+
+anchors:
+  description: 会合点的落点。后端只发语义 kind，由表现层在这里解析成具体格子，见 adr/0002。
+  kinds:
+    - id: butler
+      resolve_to: 牛马大总管当前格的相邻可站立格中最近的一个
+    - id: boss
+      resolve_to: 老板当前格的相邻可站立格中最近的一个
+    - id: workstation
+      resolve_to: 该员工自己的工位格
+  rules:
+    - id: always-standable
+      statement: 解析结果必须是可站立格；若相邻格全部被占，退到以目标为中心、半径 arrival_radius_tiles 内的最近可站立格。
+    - id: never-on-top
+      statement: 会合点不得解析成牛马大总管或老板脚下的那一格，避免角色重叠。
+    - id: map-aware
+      statement: 先核对语义对象所在地图与员工活动域，再解析格子。当前牛马大总管与员工活动域为 office；老板在外图时 boss 会合目标不可达，不换成外图同坐标或伪造报到，业务照常推进。
+
+# 角色没有活干时待的地方。**这是常驻点，不是固定位置** —— 牛马大总管和员工都会自主活动离开工位。
+posts:
+  - { id: boss_post, map_id: office, region: boss_office, occupant: boss }
+  - { id: butler_post, map_id: office, region: boss_office, occupant: butler, note: 老板办公室门外靠门那一格。牛马大总管会去茶水间等处活动，找不到他是常态；派活有「发布任务」常驻入口兜底，不依赖他站在工位 }
+  # 工位与员工身份绑定。员工身份见 adr/0001，改动只需改这里，不影响状态机。
+  - { id: example_post, map_id: office, region: dev, occupant: example, workstation_id: dev_01, note: 开发者接入助手，特殊NPC，业务执行入口仍延期 }
+  - { id: closedoff_post, map_id: office, region: dev, occupant: closedoff, workstation_id: dev_02 }
+  - { id: blog_post, map_id: office, region: dev, occupant: blog, workstation_id: dev_03 }
+  # 普通职员岗位只在npc_rules.roster.workplace记录，不进入核心posts或staff派单表。
+
+# 自主活动的目标点。员工没活时会去这些地方，让画面不是静止的。
+poi:
+  selection: 按 weight 加权随机；同一个兴趣点不被两个员工同时占用
+  items:
+    - { id: water_cooler, map_id: office, region: commons, name: 饮水机, weight: 3 }
+    - { id: coffee_machine, map_id: office, region: commons, name: 咖啡机, weight: 3 }
+    - { id: sofa, map_id: office, region: commons, name: 休息沙发, weight: 2 }
+    - { id: vending, map_id: office, region: commons, name: 自动贩卖机, weight: 2 }
+    - { id: whiteboard, map_id: office, region: dev, name: 白板, weight: 1 }
+    - { id: plant, map_id: office, region: dev, name: 搞笑绿植, weight: 2 }
+    - { id: bookshelf, map_id: office, region: commons, name: 书架, weight: 1 }
+    - { id: aquarium, map_id: office, region: commons, name: 鱼缸, weight: 1 }
+
+rendering:
+  y_sort:
+    rule: 角色与 furniture 层里的可遮挡物按脚底 y 排序，y 相同按 x
+    note: 让员工走到桌子后面时被挡住下半身，走前面时挡住桌子
+  camera:
+    follow: boss
+    clamp: 不超出地图边界
+    rounding: 相机位置取整，保持像素完美
+  lighting_shadow_particles:
+    allowed: true
+    note: 动态光照、阴影、粒子、天气都属于表现层，可以随时增删，不影响任何规则文件
+
+map_transition:
+  states: [stable, loading]
+  transitions:
+    - { from: stable, on: begin_transfer, to: loading }
+    - { from: loading, on: transfer_succeeded, to: stable }
+    - { from: loading, on: transfer_failed, to: stable }
+    - { from: loading, on: transfer_cancelled, to: stable }
+    - { from: loading, on: transfer_timeout, to: stable }
+  eligible_actors: [boss, explorer_npc]
+  staff_activity_maps: [office]
+  start: stable 时只有已启用连接可发起切换；保存原地图与最后合法位置进入 loading，暂不响应第二次入口触发。
+  success: 目标资产、入口、活动许可与到达格校验成功后，一次提交该角色的 map_id 与位置并回到 stable；同一角色只存在于一张地图。仅 actor=boss 切换前台地图与镜头；探险NPC不带走老板或镜头。
+  failure: 加载失败、超时、用户取消切图或目标落点不可达时回到 stable，保留原图最后合法位置与返程；给出原因，不自动重试或跳到另一张地图。
+  reversal: 返程使用同一连接反向入口并执行相同校验，不依靠重新出生；连接停用时不把已在场角色移到失效入口。
+  task_continuity: 切图不新建、取消或暂停业务任务；牛马大总管常驻派活入口、当前任务正文与定向回复在全部地图和 loading 中保持可用，仍受原任务状态、授权与幂等限制。
+  dialogue: 开始切图先结束就近搭话、保留未发送草稿；输入焦点未释放时不能因方向键、空格或回车误触入口。
+  isolation: 地图位置、连接和碰撞由表现层管理，不新增给业务后端的像素几何字段。
+
+world_lifecycle:
+  active_map: 老板所在地图是前台地图；其余地图只保留角色身份、最后合法位置与必要状态，不逐帧演出。
+  unload: 清理该图提示、气泡、路径与站位预约，结束就近搭话；未显示地图不能继续弹出附近提示。真实任务继续，结果进入常驻正文。
+  reload: 按稳定角色ID恢复最后合法位置，重新校验地图、活动域与碰撞；无效时仅选本角色许可域内的合法恢复点，无点则保持未在场并报告，不放进墙里。
+  offscreen_staff: 办公楼不在前台时，员工状态仍由真实业务事件更新；不补播卸载期间的行走或伪造报到，回图后直接展示最新事实。
+  offscreen_npc: 普通NPC的卸载、转图和对白处理见 npc_rules.yaml；不在场的普通NPC不承担后台业务，也不计入员工并发。三位特殊NPC仍按staff规则处理业务状态。
+
+extension:
+  new_region: 在所属地图的 regions 增加区域，并通过 adjacency 接入该图的可达空间；不要求新建筑复制办公楼的走廊布局。
+  new_map: 增加所属建筑（室外图可不归属建筑）、地图与入口连接，验证往返和角色许可；按实际角色提供锚点，不要求每张地图都有固定NPC出生点或员工工位。
+  new_npc: 普通NPC按 npc_rules.yaml 定义身份、性格、对白通道和 local 或 explorer 活动边界；不能因为摆了人物就宣称已有业务能力，特殊业务NPC仍按staff协议接入。
+  rule: 地图扩展不更改牛马大总管派单、业务结果和任务唯一性；NPC活动状态与员工业务状态分别定义。

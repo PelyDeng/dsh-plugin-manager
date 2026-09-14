@@ -1,0 +1,6 @@
+dist/
+web/
+public/generated/
+coverage/
+.artifacts/
+__pycache__/

@@ -58,6 +58,14 @@ function consoleFor(executor: ButlerAgentExecutor) {
   const states: string[] = []
   const store = {
     setSubtaskState: vi.fn((_taskId: string, _subtaskId: string, state: string) => { states.push(state) }),
+    // 派单前要核验这条子任务有没有已固定的材料快照；本文件不涉及派单材料，
+    // 按「排队中、还没派出去过」算 —— 也就是唯一允许首次固定的那一种。
+    task: vi.fn(() => ({
+      subtasks: [{
+        id: 's1', supersedes: '', state: 'queued', startedAt: null,
+        inputRefs: undefined, inputRefsState: 'unfixed',
+      }],
+    })),
   } as unknown as TaskStore
   const access = { mode: 'authenticated', ready() {}, resolve: () => undefined, assert() {} } as unknown as Access
   const config = { subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000 } as Config

@@ -1,0 +1,5 @@
+# 仅供第四阶段技术验证归档核验，不加入站点启用集合。
+- insert:
+    - id: niuma-boss
+      name: dsh-niuma-boss-tech-validation
+      config: {}

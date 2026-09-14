@@ -11,6 +11,8 @@ test-results/
 *.tsbuildinfo
 .idea/
 .local/
+plugins/dsh-niuma-boss/docs/04-资源/美术资源包/
+plugins/dsh-niuma-boss/docs/08-工具与研究/MCP评估记录/
 data/
 deploy-artifacts/
 /incoming/*
@@ -30,3 +32,10 @@ Desktop.ini
 *.swp
 *.swo
 *~
+# 牛马-老板第四阶段技术验证的本地依赖、缓存和生成物
+/plugins/dsh-niuma-boss/docs/09-实施计划/技术验证/prototype/node_modules/
+/plugins/dsh-niuma-boss/docs/09-实施计划/技术验证/prototype/public/generated/
+/plugins/dsh-niuma-boss/docs/09-实施计划/技术验证/prototype/dist/
+/plugins/dsh-niuma-boss/docs/09-实施计划/技术验证/prototype/.artifacts/
+/plugins/dsh-niuma-boss/docs/09-实施计划/技术验证/evidence/
+/plugins/dsh-niuma-boss/docs/09-实施计划/技术验证/prototype/.browser-cache/

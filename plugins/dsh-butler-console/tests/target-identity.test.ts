@@ -275,6 +275,7 @@ describe('聚合只看有效尝试', () => {
     goal: id, agentId: 'blog', reason: '',
     state: state as SubtaskRecord['state'], result: '', error: '', artifacts: [], conversationId: '',
     startedAt: null, finishedAt: null,
+    inputRefs: undefined, inputRefsState: 'unfixed', memberReturn: undefined,
   })
 
   it('被替代掉的那条不算数，链末端的尝试才算', () => {

@@ -58,6 +58,13 @@ const SUBTASK_TRANSITIONS: Readonly<Record<SubtaskState, readonly SubtaskState[]
   cancelled: [],
 }
 
+/**
+ * 全部子任务状态取值（就是迁移表的键，不另造一份）。
+ *
+ * 回读持久化数据时用它核验取值：库里出现表外的状态说明这份记录不是本版本写的，按未知处理。
+ */
+export const SUBTASK_STATES: readonly SubtaskState[] = Object.keys(SUBTASK_TRANSITIONS) as SubtaskState[]
+
 const TASK_TRANSITIONS: Readonly<Record<TaskState, readonly TaskState[]>> = {
   queued: ['running', 'cancelled', 'failed'],
   running: ['waiting_user', 'summarizing', 'external_pending', 'partial', 'completed', 'failed', 'cancelled'],

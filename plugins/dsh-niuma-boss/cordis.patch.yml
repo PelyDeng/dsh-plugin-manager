@@ -1,0 +1,12 @@
+# 直接使用官方 Bundle 的完整默认配置；管理器部署时由 plugin.json 生成的 settings patch 覆盖。
+# 每个字段都必须有 Schema 默认值：管理器的 patch 会整体替换 config，不做逐字段合并。
+- insert:
+    - id: niuma-boss
+      name: dsh-niuma-boss
+      config:
+        # 可选，默认 authenticated；standalone 允许匿名访问，仅用于本机调试。
+        accessMode: !!js process.env.DSH_ACCESS_MODE ?? 'authenticated'
+        # authenticated 模式条件必填：HTTP(S) origin，无路径或尾斜杠。
+        publicOrigin: !!js process.env.DSH_PUBLIC_ORIGIN ?? ''
+        # 可选，默认 /niuma-boss；与包内 entryPath、healthPath 及前端保持一致。
+        routePrefix: /niuma-boss
