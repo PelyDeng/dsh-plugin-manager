@@ -62,7 +62,7 @@
     "build": "tsdown && tsdown --config tsdown.web.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && node --check web/app.js && node --check web/api.js && node --check web/stream.js",
+    "check": "pnpm typecheck && node --check web/app.js && node --check web/api.js && node --check web/stream.js && node --check web/markdown.js",
     "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
   },
   "dependencies": {
@@ -125,6 +125,7 @@
     "@deepseek-ai/dsh-tools": "0.1.5-alpha.2",
     "@dsh-plugin-manager/plugin-kit": "workspace:*",
     "@types/node": "^22.20.0",
+    "markdown-it": "15.0.1",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8"

@@ -30,6 +30,7 @@ import type {
   AgentReplyRequest,
 } from '@dsh-plugin-manager/plugin-kit'
 import type { AgentParticipant, ParticipantArtifact, ParticipantResult } from '../packages/common/src/participant.ts'
+import { PARTICIPANT_PROTOCOL } from '@dsh-agents-group/common'
 import type { AgentManifest } from './agents/registry.ts'
 
 /**
@@ -137,13 +138,27 @@ function toButlerProgress(progress: Record<string, unknown>): ButlerProgressUpda
   const text = typeof progress.text === 'string' ? progress.text : undefined
   const tool = typeof progress.tool === 'string' ? progress.tool : undefined
   const phase = toPhase(progress.phase)
+  // 原业务会话引用原样透传（G02）：获得即上报，协调方尽早落库——final 前失败或进程
+  // 重启时，任务记录里仍找得回原会话，不需要重新派活去补。
+  const conversationId = typeof progress.conversationId === 'string' ? progress.conversationId : undefined
+  const conversationArtifact = isConversationArtifact(progress.conversationArtifact)
   return {
     stage: text ?? '',
     ...(tool === undefined ? {} : { tool }),
     ...(phase === undefined ? {} : { phase }),
     ...(typeof progress.delta === 'string' ? { delta: progress.delta } : {}),
     ...(typeof progress.thinking === 'string' ? { thinking: progress.thinking } : {}),
+    ...(conversationId === undefined ? {} : { conversationId }),
+    ...(conversationArtifact === undefined ? {} : { conversationArtifact }),
   }
+}
+
+/** 会话材料定位按字段类型核验后才透传；缺字段的声明整条不传，不让坏数据混进协调方。 */
+function isConversationArtifact(value: unknown): ButlerProgressUpdate['conversationArtifact'] {
+  if (typeof value !== 'object' || value === null) return undefined
+  const artifact = value as { title?: unknown; path?: unknown; kind?: unknown }
+  if (typeof artifact.title !== 'string' || typeof artifact.path !== 'string' || artifact.kind !== 'conversation') return undefined
+  return { title: artifact.title, path: artifact.path, kind: 'conversation' }
 }
 
 /** 参与者的进度上报是结构化对象，字段按需读取。 */
@@ -153,11 +168,23 @@ const asProgressFields = (update: unknown): Record<string, unknown> =>
 /**
  * 把一位参与者包成执行入口。
  *
+ * 先核验内部契约（G03）：协议版本与身份不一致的参与者**不包装**——把不兼容协议硬包成
+ * 1 再派活，比让它缺席更难查。核验失败只影响该成员，调用方跳过登记并清理本次资源。
+ *
  * 能力摘要取清单里的分类与自述：牛马大总管用它决定把子任务派给谁，所以必须是插件自己声明的，
- * 不能由群组代写。
+ * 不能由群组代写。续问入口只在参与者**显式实现** `reply` 时暴露（G01）：不因「存在通用 run」
+ * 推断可以续问。
  */
 export function executorFor(manifest: AgentManifest, participant: AgentParticipant): ButlerAgentExecutor {
+  if (participant.protocol !== PARTICIPANT_PROTOCOL) {
+    throw new Error(`参与者协议版本不兼容：期望 ${PARTICIPANT_PROTOCOL}，${manifest.id} 报告 ${String(participant.protocol)}`)
+  }
+  if (participant.id !== manifest.id) {
+    throw new Error(`参与者身份与清单不一致：清单 ${manifest.id}，参与者 ${participant.id}`)
+  }
   const capabilities = [manifest.category, manifest.description].filter(part => part.trim() !== '')
+  // 续问入口：参与者显式实现了 reply 才暴露（G01）。提为 const 以便闭包内保持收窄。
+  const participantReply = participant.reply
   return {
     protocol: 1,
     agentId: manifest.id,
@@ -175,17 +202,28 @@ export function executorFor(manifest: AgentManifest, participant: AgentParticipa
       })
       return toButlerResult(result)
     },
-    async reply(request) {
-      // 参与者的追问走同一条 run：它按 conversationId 续发，不需要另一套协议。
-      const result = await participant.run({
-        actor: request.actor,
-        missionId: request.taskId,
-        requestId: request.subtaskId,
-        message: request.text,
-        signal: request.signal,
-        onProgress: update => request.onProgress?.(toButlerProgress(asProgressFields(update))),
-      })
-      return toButlerResult(result)
-    },
+    // 参与者没实现 reply 就不暴露续问：协调方会如实显示「不接受中途回话」。
+    ...(participantReply === undefined ? {} : {
+      async reply(request) {
+        // 续问身份（G01）：requestId 是这一次回话的幂等身份（同次重试复用、新回话换新 ID），
+        // 与子任务 ID 分开；conversationId 是协调方落库的原会话引用，沿它续接不再新建。
+        // 缺失或空白（含空格、制表符等纯空白）时**明确拒绝**而不是回落子任务 ID——回落
+        // 会让同一子任务的多次回话撞同一个幂等键（第二次被判异文冲突、同文错误命中旧
+        // 结论），正是 G01 要消除的。
+        if (typeof request.requestId !== 'string' || request.requestId.trim() === '') {
+          throw new Error('续问缺少本次回话的幂等身份（requestId）；调用方需要按新契约升级，桥接不伪造身份')
+        }
+        const result = await participantReply({
+          actor: request.actor,
+          missionId: request.taskId,
+          requestId: request.requestId,
+          message: request.text,
+          ...(request.conversationId === undefined ? {} : { conversationId: request.conversationId }),
+          signal: request.signal,
+          onProgress: update => request.onProgress?.(toButlerProgress(asProgressFields(update))),
+        })
+        return toButlerResult(result)
+      },
+    }),
   }
 }

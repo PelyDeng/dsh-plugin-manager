@@ -102,4 +102,12 @@ export interface AgentParticipant {
   /** 每次列出、运行和读取结果都重新检查原插件权限。 */
   assertAccess(actor: Actor): void
   run(request: ParticipantRequest): Promise<ParticipantResult>
+  /**
+   * 续问：沿原业务会话把用户的话交给同一位成员。
+   *
+   * **只有实现了它才暴露续问能力**——群组不因为「存在通用 run」就推断可以续问。
+   * 请求里的 `conversationId` 是协调方落库的原会话引用，`requestId` 是这一次回话的
+   * 幂等身份：同一次回话的重试复用同一 ID，新的回话用新 ID；同 ID 不同内容应拒绝。
+   */
+  reply?(request: ParticipantRequest): Promise<ParticipantResult>
 }

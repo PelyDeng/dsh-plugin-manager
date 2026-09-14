@@ -60,6 +60,7 @@ async function loadAgent(manifest: AgentManifest): Promise<AgentMount | undefine
   switch (manifest.id) {
     case 'closedoff': return (await import('./agents/closedoff.ts')).mountClosedoff
     case 'blog': return (await import('./agents/blog.ts')).mountBlog
+    case 'verify-doll': return (await import('./agents/verify-doll.ts')).mountVerifyDoll
     default: return undefined
   }
 }
@@ -103,7 +104,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   }))
 
   // 被显式关闭的 Agent 不装载：它的页面与目录条目都不应出现。
-  const enabled = AGENT_MANIFESTS.filter(item => isAgentEnabled(config, item.id))
+  const enabled = AGENT_MANIFESTS.filter(item => isAgentEnabled(config, item.id, item.verificationOnly === true ? false : undefined))
 
   // 各 Agent 的错误渲染函数要先取好，装载时按 id 注入。
   const mountedErrorHandlers = new Map<string, (response: import('node:http').ServerResponse, error: unknown) => void>()
@@ -197,10 +198,29 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
    * 连计划都不会做。业务插件本身没问题，缺的就是这段桥接。
    *
    * 按清单顺序登记，且只登记装载成功的：装载失败的 Agent 不该出现在可调度名单里。
+   * 桥接核验失败（协议版本或身份不一致）同样只跳过**这一个**成员并记日志：把不兼容
+   * 的参与者硬包成可调用的入口，比让它缺席更难查；其他成员不受影响。
    */
   for (const agent of mounted) {
     if (agent.participant === undefined) continue
-    const executor = executorFor(agent.manifest, agent.participant)
+    let executor
+    try {
+      executor = executorFor(agent.manifest, agent.participant)
+    } catch (error) {
+      console.error(`agents-group: ${agent.id} 的参与者未通过桥接核验，已跳过登记：${error instanceof Error ? error.message : String(error)}`)
+      // 核验失败不是「少一个执行入口」就完事：该成员已挂载的资源要释放，就绪状态要
+      // 如实标失败——留着会既占资源又在探针里假装正常（方案 G03）。
+      const reason = `参与者未通过桥接核验：${error instanceof Error ? error.message : String(error)}`
+      const index = mounted.indexOf(agent)
+      if (index >= 0) {
+        // 标失败时把参与者一并摘掉（exactOptionalPropertyTypes 不接受显式 undefined）。
+        const { participant: _orphan, ...rest } = agent
+        void _orphan
+        mounted[index] = { ...rest, tools: [], failure: reason }
+      }
+      await agent.dispose().catch(() => {})
+      continue
+    }
     ctx.effect(() => onButlerExecutors(ctx, executor))
   }
 

@@ -24,10 +24,15 @@ export interface AgentManifest {
    * 该 Agent 是否强制要求认证。
    *
    * 有些 Agent 的业务前提就是「必须有可信身份」（例如博客要按用户隔离草稿与附件）。
-   * 这类 Agent 在群组跑 standalone 时不是「装载失败」，而是「按设计不可用」：
-   * 页面会明确报认证不可用，而不是被误判成崩溃。
+   * 这类 Agent 在群组跑 standalone 时不是「装载失败」，而是「按设计不可用」：页面会
+   * 明确报认证不可用，而不是被误判成崩溃。
    */
   readonly requiresAuthentication?: boolean
+  /**
+   * 仅用于验收的成员：默认不装载，部署配置显式 `agents.<id>.enabled = true` 才进入
+   * 运行环境。验收娃娃这类成员不该出现在普通站点的名单里。
+   */
+  readonly verificationOnly?: true
 }
 
 /**
@@ -51,6 +56,15 @@ export const AGENT_MANIFESTS: readonly AgentManifest[] = [
     description: '博客写作、发布、图床与备份',
     // 博客按用户隔离草稿、附件与备份，业务前提是必须有可信身份。
     requiresAuthentication: true,
+  },
+  {
+    id: 'verify-doll',
+    displayName: '验收娃娃',
+    directory: 'verify-doll',
+    category: '接入验收',
+    description: '最小接入验收成员：等待、续问与幂等语义（G06 活样例）',
+    // 仅验收用：默认不装载，部署配置显式 enabled 才进入运行环境。
+    verificationOnly: true,
   },
 ]
 

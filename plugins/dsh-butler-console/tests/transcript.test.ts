@@ -153,6 +153,49 @@ describe('对话正文的分页', () => {
   })
 })
 
+describe('尾读分页（C 批历史阅读：先看最新一页，再往更早翻）', () => {
+  it('tail 取日志末尾一页；还有更早内容时给 prevBefore', async () => {
+    const console_ = fixture(log)
+    const page = await console_.transcript(conversationId, actor, 0, 2, { tail: true })
+    expect(page.items.map(item => item.seq)).toEqual([8, 9])
+    expect(page.items.map(item => item.turn)).toEqual([2, 2])
+    expect(page.nextAfter).toBeNull()
+    expect(page.prevBefore).toBe(8)
+  })
+
+  it('tail 一页能装下全部时 prevBefore 为 null（到底了）', async () => {
+    const page = await fixture(log).transcript(conversationId, actor, 0, 50, { tail: true })
+    expect(page.items.map(item => item.seq)).toEqual([3, 5, 8, 9])
+    expect(page.prevBefore).toBeNull()
+  })
+
+  it('before 按游标往更早翻，直到没有更早的', async () => {
+    const console_ = fixture(log)
+    const older = await console_.transcript(conversationId, actor, 0, 2, { before: 8 })
+    expect(older.items.map(item => item.seq)).toEqual([3, 5])
+    expect(older.prevBefore).toBeNull()
+    // limit 更小时游标给到本页最早一条（排他边界：下一页取 seq < 它），继续翻能拿到剩下的。
+    const one = await console_.transcript(conversationId, actor, 0, 1, { before: 8 })
+    expect(one.items.map(item => item.seq)).toEqual([5])
+    expect(one.prevBefore).toBe(5)
+    const last = await console_.transcript(conversationId, actor, 0, 5, { before: one.prevBefore! })
+    expect(last.items.map(item => item.seq)).toEqual([3])
+    expect(last.prevBefore).toBeNull()
+  })
+
+  it('before 早于任何可见消息时给空页，不报错不卡游标', async () => {
+    const page = await fixture(log).transcript(conversationId, actor, 0, 10, { before: 3 })
+    expect(page.items).toEqual([])
+    expect(page.prevBefore).toBeNull()
+  })
+
+  it('注入上下文与未提交尝试在尾读里同样被滤掉', async () => {
+    const page = await fixture(log).transcript(conversationId, actor, 0, 50, { tail: true })
+    expect(JSON.stringify(page)).not.toContain('AGENTS.md')
+    expect(JSON.stringify(page)).not.toContain('被重试掉')
+  })
+})
+
 describe('读不到时如实报错', () => {
   it('官方日志里没有这段会话时明确说没有，不拿摘要冒充', async () => {
     const console_ = fixture([], { missingSession: true })

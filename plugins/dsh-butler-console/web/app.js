@@ -10,7 +10,8 @@
  * 所有用户可见文本都用 textContent 写入，不使用 innerHTML，避免把模型输出当成标记解析。
  */
 
-import { ApiError, api, avatarUrl, chat, events, reply, uploadAvatar, ROUTE_PREFIX } from './api.js'
+import { ApiError, api, avatarUrl, chat, events, eventsHead, reply, uploadAvatar, ROUTE_PREFIX, TRANSCRIPT_PAGE_SIZE } from './api.js'
+import { renderMarkdownInto } from './markdown.js'
 
 /** 成员配色：按 agentId 稳定取色，所以同一个插件每次都是同一个颜色。 */
 const PALETTE = ['#4d96ff', '#2ec4a6', '#ff6b57', '#9b5de5', '#ffb703', '#e8709a']
@@ -50,18 +51,6 @@ const BUILTIN_AVATARS = [
   { file: 'builtin-14.png', label: '蜗牛' },
   { file: 'builtin-15.png', label: '草莓' },
 ]
-
-/** 换内置头像 = 把那张图当作上传头像交给现有接口，服务端逻辑零改动。 */
-async function applyBuiltinAvatar(agentId, file) {
-  try {
-    const response = await fetch(`${ROUTE_PREFIX}/assets/media/avatars/builtin/${file}`)
-    if (!response.ok) throw new Error('内置头像读取失败')
-    const blob = await response.blob()
-    await applyAvatar(agentId, new File([blob], file, { type: 'image/png' }))
-  } catch (error) {
-    window.alert(error instanceof Error && error.message ? error.message : '没换上，再试一次')
-  }
-}
 
 const STATE_TEXT = {
   queued: '排队中',
@@ -156,6 +145,12 @@ const el = {
   sidebarToggle: document.getElementById('sidebar-toggle'),
   drawerToggle: document.getElementById('drawer-toggle'),
   backdrop: document.getElementById('drawer-backdrop'),
+  jumpLatest: document.getElementById('jump-latest'),
+  srStatus: document.getElementById('sr-status'),
+  leftPanel: document.getElementById('left-panel'),
+  rightPanel: document.getElementById('drawer'),
+  settingsTitle: document.getElementById('settings-title'),
+  settingsLive: document.getElementById('settings-live-note'),
 }
 
 const state = {
@@ -165,6 +160,17 @@ const state = {
   avatarStamps: new Map(),
   streaming: false,
   abort: null,
+  /** 视图代次：所有会话切换入口共用，异步回包先核对它，旧响应不许写进新视图。 */
+  viewToken: 0,
+  /** 发送时预渲染、等服务端回放确认的那条用户消息；失败时用它恢复草稿。 */
+  pendingUser: null,
+  /** 本轮事件消费进度：seq 用于断线重订的游标，taskId 用于 reset 后取快照。 */
+  lastSeq: 0,
+  lastRunTaskId: '',
+  /** 本轮受理的 runId：重订时的预期对象（S06 不混轮次）。 */
+  lastRunId: '',
+  /** 上一条落定的大总管正文：汇总卡与之相同时不再重复整段（S12）。 */
+  lastChatText: '',
   /** 子任务 id → 该成员当前的气泡与状态节点，供流式增量原地更新。 */
   bubbles: new Map(),
   /** 大总管正在流式发言的那条气泡；落定的 `chat` 收它。 */
@@ -175,7 +181,45 @@ const state = {
   /** 当前任务的链路状态。 */
   rail: { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' },
   settingsOpen: false,
+  /** 滚动跟随（I11）：用户上滚或选字时暂停，「回到最新」恢复；跟随判断在 DOM 增长前做。 */
+  following: true,
+  selecting: false,
 }
+
+/**
+ * 历史阅读的翻页状态（I10）：会话 id + 两个游标（对话正文 seq、任务 offset）。
+ * 「加载更早记录」时核对会话与视图代次，旧回包不写进新会话（I09）。
+ */
+const historyState = {
+  conversationId: null,
+  transcriptBefore: null,
+  taskOffset: null,
+  loading: false,
+  /** 已加载的历史条目（全局时间序，带节点引用）：翻页去重与定位插入的依据（复核 1）。 */
+  entries: [],
+}
+
+/**
+ * 流式诊断（方案 S01）：地址带 `?trace=stream` 打开。
+ *
+ * 只记录层级、事件类型、序号与本机单调时间，不记录正文、推理内容或凭据；跨机器时间
+ * 不可直接相减。服务端对应观测点由 `BUTLER_STREAM_DEBUG=1` 打开，两边对同一轮 runId
+ * 才能拼出「宿主帧 → 应用写出 → 客户端接收 → 绘制」四段。
+ */
+const streamTraceEnabled = new URLSearchParams(location.search).get('trace') === 'stream'
+const streamTrace = []
+function traceEvent(layer, event) {
+  if (!streamTraceEnabled) return
+  const record = {
+    t: Math.round(performance.now()), layer, type: event.type,
+    seq: event.seq ?? null, runId: event.runId ?? null,
+    len: typeof event.text === 'string' ? event.text.length : typeof event.delta === 'string' ? event.delta.length : null,
+  }
+  streamTrace.push(record)
+  console.debug('[butler-stream]', layer, record.type, `seq=${record.seq} len=${record.len} t=${record.t}`)
+  if (streamTrace.length > 2000) streamTrace.shift()
+}
+globalThis.__butlerStreamTrace = streamTrace
 
 /* ── 小工具 ───────────────────────────────────────────────────────────── */
 
@@ -184,6 +228,17 @@ function make(tag, className, text) {
   if (className) node.className = className
   if (text !== undefined && text !== null) node.textContent = String(text)
   return node
+}
+
+/**
+ * 关键状态播报（方案 6.2）：写入专门的礼貌 live 区域，只报提交、等待、停止和收尾
+ * 这类有意义的变化；正文增量绝不进这里，避免逐 token 打断屏幕阅读器。
+ */
+function announce(text) {
+  if (text === '') return
+  el.srStatus.textContent = ''
+  // 清空后下一轮任务再写，保证同名变化也能再次触发播报。
+  nextFrame(() => { el.srStatus.textContent = text })
 }
 
 function clear(node) {
@@ -265,11 +320,129 @@ function threadInner() {
 
 function append(node) {
   threadInner().appendChild(node)
+  return node
+}
+
+/* ── 滚动跟随（I11）与绘制帧合并（I12）────────────────────────────────── */
+
+function distanceFromBottom() {
+  return el.thread.scrollHeight - el.thread.scrollTop - el.thread.clientHeight
+}
+
+function updateJumpLatest() {
+  el.jumpLatest.hidden = state.following
+}
+
+/** 新视图接管时恢复跟随：从欢迎页、别的会话或快照重建切过来都贴底。 */
+function resetFollowing() {
+  state.following = true
+  updateJumpLatest()
 }
 
 function scrollIfFollowing() {
-  const near = el.thread.scrollHeight - el.thread.scrollTop - el.thread.clientHeight
-  if (near < 140) el.thread.scrollTop = el.thread.scrollHeight
+  if (state.following && !state.selecting) {
+    // 同样要挂程序化标记：滚动事件是异步投递的，事件晚到时正文可能已经又长了，
+    // 不标记会把我们自己的贴底误判成用户上滚（浏览器实测发现的竞态）。
+    programmaticScroll = true
+    el.thread.scrollTop = el.thread.scrollHeight
+    noteStabilize({ branch: 'follow-write', top: Math.round(el.thread.scrollTop) })
+    nextFrame(() => { programmaticScroll = false })
+  }
+}
+
+/**
+ * 下一绘制帧。页面不可见时 rAF 会停摆（浏览器实测：后台窗格里永不回调），
+ * 用 250ms 计时器兜底——帧合并在可见时照常走 rAF，不可见时退化为有界定时写入，
+ * 程序化滚动标记也不会因停摆而滞留、误吞用户回前台后的第一次滚动。
+ */
+function nextFrame(callback) {
+  if (typeof globalThis.requestAnimationFrame !== 'function') { setTimeout(callback, 0); return }
+  let done = false
+  const run = () => { if (done) return; done = true; clearTimeout(timer); callback() }
+  const timer = setTimeout(run, 250)
+  globalThis.requestAnimationFrame(run)
+}
+
+/** 自己写 scrollTop 不算用户滚动：跟随判定只认用户的手。 */
+let programmaticScroll = false
+function scrollToBottom() {
+  programmaticScroll = true
+  el.thread.scrollTop = el.thread.scrollHeight
+  nextFrame(() => { programmaticScroll = false })
+}
+
+/**
+ * 改动可能移动内容的 DOM 时钉住视口（I11）：Markdown 落定、大表格出现、旧页插入之后，
+ * 用户正在看的内容停在原地。跟随中（新内容追加在底部）则直接贴底。
+ *
+ * 锚点是**用户正在看的内容**（视口上沿起第一个还露着的节点），不是被改的节点：
+ * 上方节点向下增高时它自己的 top 不变，锚在被改节点上会整屏漂移（复核 2 的几何替身：
+ * 上方消息增高 400px 未补偿）。锚定可见内容后按锚点位移补偿滚动。
+ * `forceAnchor` 用于前插旧内容：加载旧页永远保持阅读位置（I10），不因跟随状态跳回底部。
+ *
+ * `?trace=stabilize` 打开时把每次调用（分支、锚点位移、补偿量）记到
+ * `globalThis.__butlerStabilizeTrace`，供浏览器验证对账；不记录正文。
+ */
+const stabilizeTraceEnabled = new URLSearchParams(location.search).get('trace') === 'stabilize'
+const stabilizeTrace = []
+globalThis.__butlerStabilizeTrace = stabilizeTrace
+function noteStabilize(record) {
+  if (!stabilizeTraceEnabled) return
+  stabilizeTrace.push({ t: Math.round(performance.now()), ...record })
+  if (stabilizeTrace.length > 200) stabilizeTrace.shift()
+}
+
+function stabilizeViewport(mutate, opts = {}) {
+  const thread = el.thread
+  if (!opts.forceAnchor && state.following && !state.selecting) {
+    noteStabilize({ branch: 'following' })
+    mutate()
+    scrollToBottom()
+    return
+  }
+  const base = thread.getBoundingClientRect()
+  const topOf = node => node.getBoundingClientRect().top - base.top + thread.scrollTop
+  let anchor = null
+  for (const child of threadInner().children) {
+    if (child.classList?.contains('history-head')) continue
+    // 底边超过视口上沿的第一个节点：在视口内或延伸进视口，就是用户看的内容。
+    if (topOf(child) + child.getBoundingClientRect().height > thread.scrollTop) { anchor = child; break }
+  }
+  const before = anchor === null ? thread.scrollTop : topOf(anchor)
+  mutate()
+  if (anchor === null) {
+    noteStabilize({ branch: 'anchor', anchor: null })
+    return
+  }
+  const after = topOf(anchor)
+  if (after !== before) {
+    programmaticScroll = true
+    thread.scrollTop += after - before
+    nextFrame(() => { programmaticScroll = false })
+  }
+  noteStabilize({ branch: 'anchor', shift: Math.round(after - before), top: Math.round(thread.scrollTop), following: state.following })
+}
+
+const frameJobs = []
+let frameScheduled = false
+
+/** 每绘制帧合并一次 DOM 写入与一次滚动测量（I12）：增量正文不再逐 token 全量重建，
+ * 也不为每个事件读布局。终态落定在回调里自查 terminal，迟到帧不覆盖已校准的结论。
+ */
+function scheduleFrame(job) {
+  frameJobs.push(job)
+  if (frameScheduled) return
+  frameScheduled = true
+  nextFrame(() => {
+    frameScheduled = false
+    for (const run of frameJobs.splice(0, frameJobs.length)) run()
+    scrollIfFollowing()
+  })
+}
+
+/** 追加内容后安排一次跟随滚动：与同帧的增量写在一起，只测一次布局。 */
+function scheduleFollowScroll() {
+  scheduleFrame(() => {})
 }
 
 /* ── 中栏：消息 ───────────────────────────────────────────────────────── */
@@ -291,6 +464,7 @@ function userMessage(text, time) {
   boss.appendChild(bossImage)
   msg.appendChild(boss)
   append(msg)
+  return msg
 }
 
 /**
@@ -334,28 +508,63 @@ function butlerSpeech() {
   if (state.butlerSpeech === null) {
     const view = butlerMessage('')
     view.caret.hidden = false
-    state.butlerSpeech = { ...view, text: '' }
+    state.butlerSpeech = { ...view, text: '', rendered: '' }
   }
   return state.butlerSpeech
+}
+
+/**
+ * 流式增量写正文：只追加新后缀，不整体替换 textContent。
+ *
+ * 整体替换会销毁文本节点——用户正在选的字、正要复制的那段会随着下一帧消失
+ * （浏览器实测发现）。只有追加不了（重置、前缀变了）才整体重建。
+ */
+function appendPreviewText(node, book, text) {
+  if (book.rendered !== undefined && text.startsWith(book.rendered) && node.firstChild !== null) {
+    if (text.length > book.rendered.length) node.appendChild(document.createTextNode(text.slice(book.rendered.length)))
+  } else {
+    node.textContent = text
+  }
+  book.rendered = text
 }
 
 function butlerDelta(text) {
   const speech = butlerSpeech()
   speech.text += text
-  speech.body.textContent = speech.text
+  // 按帧合并（I12）：正文累积在内存里，一帧只写一次 DOM；气泡已被落定收走就不再写。
+  if (speech.framePending === true) return
+  speech.framePending = true
+  scheduleFrame(() => {
+    speech.framePending = false
+    if (state.butlerSpeech !== speech) return
+    appendPreviewText(speech.body, speech, speech.text)
+  })
+}
+
+/** 落定正文换受控 Markdown（方案 5.4）：预览是纯文本，终态统一排版。 */
+function settleMarkdown(plainNode, text) {
+  const body = make('div', 'md')
+  renderMarkdownInto(body, text)
+  plainNode.replaceWith(body)
+  return body
 }
 
 /**
  * 落定的发言。
  *
  * 有正在流的那条就替换它的正文并收起光标 —— 重试过的那一版不会留在页面上；
- * 没有（例如直接回答、历史恢复）就照旧新起一条。
+ * 没有（例如直接回答、历史恢复）就照旧新起一条。落定走受控 Markdown（C 批），
+ * 布局变化不抢阅读位置（I11）。
  */
 function butlerSettle(text, time) {
   const speech = state.butlerSpeech
   state.butlerSpeech = null
-  if (speech === null) { butlerMessage(text, time); return }
-  speech.body.textContent = text
+  if (speech === null) {
+    const view = butlerMessage('', time)
+    stabilizeViewport(() => { settleMarkdown(view.body, text) })
+    return
+  }
+  stabilizeViewport(() => { settleMarkdown(speech.body, text) })
   speech.caret.hidden = true
 }
 
@@ -432,6 +641,11 @@ function memberMessage(agentId, handle) {
     caret,
     footer,
     body: '',
+    /** 流式已写进 DOM 的前缀长度基准：与 `body` 同步重置（S08 重派）。 */
+    rendered: '',
+    framePending: false,
+    /** 是否还在执行态：等待/终态置 false，在途增量帧回调据此放弃写入。 */
+    live: true,
     progress: null,
     think: { node: think, preview: thinkPreview, body: thinkBody },
   }
@@ -459,53 +673,106 @@ function ensureProgress(view) {
   if (view.progress !== null) return view.progress
   const wrap = make('div', 'progress')
   const track = make('div', 'progress__track')
-  const fill = make('div', 'progress__fill')
-  fill.style.width = '12%'
+  const fill = make('div', 'progress__fill progress__fill--indeterminate')
   track.appendChild(fill)
   const label = make('span', 'progress__label', '')
   wrap.appendChild(track)
   wrap.appendChild(label)
   view.footer.appendChild(wrap)
-  view.progress = { wrap, fill, label, value: 12 }
+  view.progress = { wrap, fill, label }
   return view.progress
+}
+
+/**
+ * 成员离开执行态时收掉动态痕迹（方案 I06）：工具行改过去式、进度条停住并给出
+ * 该状态的说法。等待与终态都不再呈现「还在算」的样子。
+ */
+function settleMemberDynamics(view, state) {
+  // 离开执行态：在途的增量帧回调到此为止（等待中光标复亮的根因）。
+  view.live = false
+  const line = view.bubble.querySelector('.tool-line')
+  if (line !== null && line.classList.contains('tool-line--past') === false) {
+    const name = line.querySelector('.tool-line__name')?.textContent ?? ''
+    clear(line)
+    line.classList.add('tool-line--past')
+    line.appendChild(make('span', null, '翻过资料：'))
+    line.appendChild(make('span', 'tool-line__name', name))
+  }
+  if (view.progress === null) return
+  view.progress.fill.classList.remove('progress__fill--indeterminate')
+  const label = PROGRESS_SETTLE_TEXT[state]
+  if (label !== undefined) view.progress.label.textContent = label
+  if (state === 'waiting_user' || state === 'external_pending') view.progress.fill.style.width = '100%'
+  // 失败/取消不再展示「进行中」的填充条：收掉宽度，只留状态文字。
+  if (state === 'failed' || state === 'cancelled') view.progress.fill.style.width = '0%'
+}
+
+/** 离开执行态后进度条与工具行的静态说法；undefined 表示保持现状。 */
+const PROGRESS_SETTLE_TEXT = {
+  waiting_user: '等你回话',
+  external_pending: '待外部处理',
+  failed: '没干成',
+  cancelled: '不干了',
+  succeeded: '搞定',
 }
 
 /* ── 中栏：链路条 ─────────────────────────────────────────────────────── */
 
+/**
+ * 链路条结构只建一次，状态变化只改 `data-state`（方案 6.1）。
+ *
+ * 整体重建会让未变化的 active 徽章重新起播动画——「进行中」的转动被打断重来的观感
+ * 就是这么来的。节点按 key 缓存，更新走 `applyRailStates` 一条路。
+ */
+const railNodes = new Map()
+
 function renderRail() {
-  clear(el.rail)
-  RAIL_STEPS.forEach((step, index) => {
-    if (index > 0) el.rail.appendChild(doodleSvg(DOODLE_PATHS.railArrow, 'rail__arrow'))
-    const node = make('span', 'rail__step')
-    node.dataset.state = step.key === 'ask' ? 'done' : (state.rail[step.key] ?? 'idle')
-    node.dataset.key = step.key
-    const badge = make('span', 'rail__badge')
-    badge.appendChild(doodleSvg(RAIL_ICON_PATHS[step.key] ?? ''))
-    node.appendChild(badge)
-    node.appendChild(make('span', 'rail__label', step.label))
-    el.rail.appendChild(node)
-  })
+  if (el.rail.childElementCount === 0) {
+    RAIL_STEPS.forEach((step, index) => {
+      if (index > 0) el.rail.appendChild(doodleSvg(DOODLE_PATHS.railArrow, 'rail__arrow'))
+      const node = make('span', 'rail__step')
+      node.dataset.key = step.key
+      const badge = make('span', 'rail__badge')
+      badge.appendChild(doodleSvg(RAIL_ICON_PATHS[step.key] ?? ''))
+      node.appendChild(badge)
+      node.appendChild(make('span', 'rail__label', step.label))
+      el.rail.appendChild(node)
+      railNodes.set(step.key, node)
+    })
+  }
+  applyRailStates()
+}
+
+/** 只更新各步状态：`ask` 恒为 done，其余跟 state.rail。 */
+function applyRailStates() {
+  for (const [key, node] of railNodes) node.dataset.state = key === 'ask' ? 'done' : (state.rail[key] ?? 'idle')
 }
 
 function setRail(key, value) {
   if (key === 'ask') return
   if (state.rail[key] === value) return
   state.rail[key] = value
-  renderRail()
+  applyRailStates()
 }
 
 function resetRail() {
   state.rail = { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' }
-  renderRail()
+  applyRailStates()
 }
 
-/** 按任务结果推进链路条：实时汇总与历史回放共用一套语义，避免两种口径。 */
+/**
+ * 按任务结果推进链路条：实时汇总与历史回放共用一套语义，避免两种口径。
+ *
+ * 等待不是执行（方案 6.1「等待仍旋转」的纠正）：waiting_user/external_pending 用静态的
+ * `waiting` 态（琥珀、不转），partial 收在 `partial` 态；转动只留给真正执行中的 active。
+ */
 function applySummaryRail(taskState) {
   if (taskState === 'completed') state.rail = { parse: 'done', dispatch: 'done', work: 'done', sum: 'done' }
-  else if (taskState === 'waiting_user' || taskState === 'external_pending' || taskState === 'partial') state.rail = { parse: 'done', dispatch: 'done', work: 'active', sum: 'idle' }
+  else if (taskState === 'waiting_user' || taskState === 'external_pending') state.rail = { parse: 'done', dispatch: 'done', work: 'waiting', sum: 'idle' }
+  else if (taskState === 'partial') state.rail = { parse: 'done', dispatch: 'done', work: 'done', sum: 'partial' }
   else if (taskState === 'failed' || taskState === 'cancelled') state.rail = { parse: 'done', dispatch: 'done', work: 'done', sum: 'idle' }
   else state.rail = { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' }
-  renderRail()
+  applyRailStates()
 }
 
 /* ── 中栏：事件分发 ───────────────────────────────────────────────────── */
@@ -517,17 +784,32 @@ function handleEvent(event) {
       rememberConversation(event.conversationId)
       return
 
-    case 'user':
+    case 'user': {
+      // 发送时已经预渲染过同一条：受理回放对得上就不重复画。对不上（历史回放、
+      // 其他入口）照常渲染。任务数量与派发事实只由 plan 与 subtask 事件表达。
+      if (state.pendingUser !== null && state.pendingUser.text === event.text) {
+        state.pendingUser = null
+        break
+      }
       state.butlerSpeech = null
       userMessage(event.text, event.time)
       break
+    }
 
     case 'chat':
       butlerSettle(event.text, event.time)
+      // 落定正文记下来：汇总与之相同就不再整段重复（S12）。
+      state.lastChatText = event.text
       break
 
     case 'chat_delta':
       butlerDelta(event.text)
+      break
+
+    case 'chat_reset':
+      // 模型重试开始（S08）：当前预览作废，下一段增量从新气泡起头，
+      // 两次尝试的正文不拼在一起。
+      state.butlerSpeech = null
       break
 
     case 'input': {
@@ -547,8 +829,9 @@ function handleEvent(event) {
       setRail('parse', 'done')
       setRail('dispatch', 'active')
       // 计划贴纸是新的一条消息：先收掉可能还开着的大总管气泡，别把两段话并到一条里。
+      // 这里不替大总管编话：拆了几份、派给谁、有没有喊到人，由下面的计划贴纸和后续
+      // subtask 事件按服务端事实呈现（方案 S02）。
       state.butlerSpeech = null
-      butlerMessage('收到！这活我拆成三份，已经喊人了。')
       append(planNote(event))
       break
     }
@@ -559,13 +842,23 @@ function handleEvent(event) {
 
     case 'subtask_delta': {
       const view = state.bubbles.get(event.id)
-      if (view === undefined) break
+      // 终态之后不再追加（S08）：迟到帧不把已校准的结论再改掉。
+      if (view === undefined || view.terminal === true || view.live === false) break
       view.body += event.delta
-      view.text.textContent = view.body
-      view.caret.hidden = false
-      const progress = ensureProgress(view)
-      progress.value = Math.min(92, progress.value + 4)
-      progress.fill.style.width = `${progress.value}%`
+      // 按帧合并（I12）：增量先累积，一帧只写一次 DOM、推进一次进度。
+      if (view.framePending === true) break
+      view.framePending = true
+      scheduleFrame(() => {
+        view.framePending = false
+        // terminal（已校准）或 live=false（已离开执行态，如等待）都不再写：
+        // 迟到帧会把刚收起的光标重新点亮（浏览器验证发现的等待态复亮）。
+        if (view.terminal === true || view.live === false) return
+        appendPreviewText(view.text, view, view.body)
+        view.caret.hidden = false
+        // 不确定指示（复核 3）：增量不再换算百分比——没有可信分母不显示伪精度，
+        // 真实阶段由工具行文字表达。
+        ensureProgress(view)
+      })
       break
     }
 
@@ -577,7 +870,13 @@ function handleEvent(event) {
       // 汇总是这一轮的定论：链路条按最终状态推进，已走过的步骤保持点亮。
       applySummaryRail(event.state)
       for (const view of state.bubbles.values()) view.caret.hidden = true
-      append(summaryCard(event))
+      announce(`这一轮${
+        event.state === 'completed' ? '干完了' : event.state === 'failed' ? '没干成' : event.state === 'cancelled' ? '已喊停' : event.state === 'partial' ? '部分完成' : event.state === 'waiting_user' ? '还等你回话' : '待外部处理'}`)
+      // 正文只展示一次（S12）：总结气泡已经承载的正文，汇总卡不再整段重复；
+      // 历史回放没有对应气泡时（renderTaskRecord），卡片照常承载。
+      append(summaryCard(event.text !== '' && event.text === state.lastChatText
+        ? { ...event, text: '' }
+        : event))
       state.bubbles.clear()
       state.asks.clear()
       break
@@ -589,7 +888,7 @@ function handleEvent(event) {
     default:
       break
   }
-  scrollIfFollowing()
+  scheduleFollowScroll()
 }
 
 function handleSubtask(event) {
@@ -602,6 +901,13 @@ function handleSubtask(event) {
           : 'var(--bt-ink-soft)'
 
   if (event.state === 'dispatched') {
+    // 新一次尝试从头开始（S08）：同一子任务重派时清掉上次的预览与终态标记，
+    // 旧尝试的迟到增量不串进新版。
+    view.body = ''
+    view.rendered = ''
+    view.text.textContent = ''
+    view.terminal = false
+    view.live = true
     view.bubble.appendChild(make('div', 'typing')).appendChild(make('i'))
     const typing = view.bubble.querySelector('.typing')
     typing.appendChild(make('i'))
@@ -640,12 +946,16 @@ function handleSubtask(event) {
     return
   }
 
+  // 到不了 running 往下的都是「不再执行」的状态：光标收起，动态痕迹一次清完（方案 I06）。
   view.caret.hidden = true
+  settleMemberDynamics(view, event.state)
 
   if (event.state === 'waiting_user') {
     view.bubble.classList.add('bubble--wait')
     if (view.body === '') view.text.textContent = event.question ?? event.detail
-    setRail('work', 'active')
+    // 等你回话不是在计算：链路条给静态的等待态，不再转圈（方案 6.1）。
+    setRail('work', 'waiting')
+    announce(`${displayNameOf(event.agentId)} 等你回话`)
     askCard(view, event)
     return
   }
@@ -656,25 +966,37 @@ function handleSubtask(event) {
     view.bubble.classList.add('bubble--wait')
     if (view.body === '') view.text.textContent = event.detail
     view.footer.appendChild(make('div', 'msg__meta', '待外部处理，办好之后可以新开一轮'))
+    announce(`${displayNameOf(event.agentId)} 交回材料，还有事待外部处理`)
     return
   }
 
   if (event.state === 'succeeded') {
     view.bubble.classList.add('bubble--done')
-    if (view.body === '') view.text.textContent = event.detail
-    if (view.progress !== null) {
-      view.progress.value = 100
-      view.progress.fill.style.width = '100%'
-      view.progress.label.textContent = '搞定'
-    }
-    view.footer.appendChild(make('div', 'msg__meta', `耗时 ${formatElapsed(view.startedAt, event.time)}`))
+    view.terminal = true
+    // 终态正文是权威结论（S09）：成功那一刻按它校准并落成受控 Markdown（C 批）——
+    // 丢段或重试残留的预览不会留在页面上；落定前后的布局变化不抢阅读位置（I11）。
+    const finalText = event.detail ?? view.body
+    stabilizeViewport(() => {
+      view.text = settleMarkdown(view.text, finalText)
+      if (view.progress !== null) {
+        view.progress.fill.classList.remove('progress__fill--indeterminate')
+        view.progress.fill.style.width = '100%'
+        view.progress.label.textContent = '搞定'
+      }
+      // 耗时行也是这次落定的一部分：一并收进钉扎范围，别在补偿之后又顶开视口。
+      view.footer.appendChild(make('div', 'msg__meta', `耗时 ${formatElapsed(view.startedAt, event.time)}`))
+    })
+    view.body = finalText
     return
   }
 
   if (event.state === 'failed' || event.state === 'cancelled') {
-    view.bubble.classList.add(event.state === 'failed' ? 'bubble--fail' : '')
+    view.terminal = true
+    // classList.add('') 会抛 TypeError（取消态没样式类）：错误文本曾因此漏进线程。
+    if (event.state === 'failed') view.bubble.classList.add('bubble--fail')
     if (view.body === '') view.text.textContent = event.detail
     else view.bubble.appendChild(make('div', 'msg__meta', event.detail))
+    announce(event.state === 'failed' ? `${displayNameOf(event.agentId)} 没干成：${event.detail ?? '原因不明'}` : `${displayNameOf(event.agentId)} 的活已取消`)
     return
   }
 }
@@ -704,12 +1026,35 @@ function askCard(view, event) {
   card.appendChild(row)
   view.footer.appendChild(card)
 
+  const lock = locked => { for (const node of [send, decide, input]) node.disabled = locked }
+  // 回话的幂等身份（S07）：同一次回话（含失败后原样重试）复用同一个 ID；用户改了
+  // 措辞就是新的一次回话，换新 ID——服务端按 ID 去重，重试不会把同一句话送两遍。
+  let replyRequestId = null
+  let lastTriedText = null
   const submit = async (text, decideByAgent) => {
     if (state.streaming) return
-    card.remove()
-    state.asks.delete(event.id)
-    view.bubble.classList.remove('bubble--wait')
-    await runReply({ taskId: event.taskId, subtaskId: event.id, text, decideByAgent })
+    // 空文本不提交（方案 I03）：「你看着办」是显式语义，单独走按钮。
+    if (!decideByAgent && text === '') { input.focus(); return }
+    if (replyRequestId === null || lastTriedText !== text) {
+      replyRequestId = newConversationId()
+      lastTriedText = text
+    }
+    lock(true)
+    const note = card.appendChild(make('div', 'msg__meta', '正在送出回话…'))
+    await runReply({ taskId: event.taskId, subtaskId: event.id, text, decideByAgent, requestId: replyRequestId }, {
+      // 受理成功才收起卡片；之前失败都在卡内恢复，输入不丢。
+      onAccepted: () => {
+        card.remove()
+        state.asks.delete(event.id)
+        view.bubble.classList.remove('bubble--wait')
+      },
+      onRejected: error => {
+        note.remove()
+        lock(false)
+        card.appendChild(make('div', 'error-line', `${error instanceof Error && error.message ? error.message : '没送出去'}；输入还在，改一下再试。`))
+        input.focus()
+      },
+    })
   }
 
   send.addEventListener('click', () => { void submit(input.value.trim(), false) })
@@ -734,7 +1079,13 @@ function summaryCard(event) {
           : event.state === 'partial' ? '有些活没干成，成果在这儿'
           : '还等你回话'
   card.appendChild(make('div', 'summary__title', title))
-  card.appendChild(make('p', 'summary__body', event.text || event.error || '（没什么好说的）'))
+  // 正文去重后为空（总结气泡已承载）时不显示占位——那会像「没有结论」。
+  // 汇总正文与错误信息都走受控 Markdown（C 批）；同帧排版，不逐字重建。
+  if (event.text || event.error) {
+    const body = make('div', 'summary__body md')
+    renderMarkdownInto(body, event.text || event.error)
+    card.appendChild(body)
+  }
   if (event.error && event.text) card.appendChild(make('div', 'msg__meta', event.error))
   return card
 }
@@ -773,10 +1124,14 @@ function renderWelcome() {
 function setBusy(on) {
   state.streaming = on
   el.send.disabled = on
-  el.input.disabled = on
   el.stop.hidden = !on
   el.topStatus.textContent = on ? '正在处理' : '已上线'
-  el.hint.textContent = on ? '牛马大总管正在安排，稍等' : '牛马大总管先听明白，再替你把人喊来'
+  // 只锁发送不锁输入（I02/C 批预编辑）：执行中可以写下一句，输入法组合不受影响；
+  // 这句草稿也不会被异步完成、恢复或视图切换清掉——清空只发生在真正送出的那次提交。
+  el.hint.textContent = on ? '正在处理；下一句可以先写好，这轮完事再发' : '牛马大总管先听明白，再替你把人喊来'
+  // 执行中进设置页的提示随状态同步（方案 I18）。
+  el.settingsLive.hidden = !(state.settingsOpen && on)
+  el.settingsLive.textContent = state.settingsOpen && on ? '有活正在跑：回群聊可查看进度或喊停' : ''
 }
 
 function newConversationId() {
@@ -808,15 +1163,24 @@ async function resumeLiveTurn() {
   const conversationId = recallConversation()
   if (conversationId === null || conversationId === '' || state.streaming) return
 
+  // 探测有网络往返：等回包的这段时间里用户可能已经打开了别的会话或发起了新消息。
+  // 先记下当前视图代次，回包后复核——不是当前视图就不接管（方案 I09）。
+  const tokenAtProbe = state.viewToken
   let head
   try {
-    head = await api.eventsHead(conversationId)
-  } catch {
+    head = await eventsHead(conversationId)
+  } catch (error) {
+    if (tokenAtProbe !== state.viewToken) return
+    // 接续检查失败不能静默吞掉（方案 S04）：用户会以为一切正常，其实连不上。
+    append(make('p', 'error-line', `接续检查失败：${error instanceof Error ? error.message : '网络异常'}；刷新页面可重试`))
     return
   }
   if (head === null || head.state !== 'running') return
+  if (tokenAtProbe !== state.viewToken || state.streaming) return
 
   const controller = new AbortController()
+  // 接管视图：作废之前还在路上的历史读取回包，它们的结论属于旧视图。
+  state.viewToken += 1
   state.conversationId = conversationId
   state.abort = controller
   clear(el.thread)
@@ -824,17 +1188,11 @@ async function resumeLiveTurn() {
   state.bubbles.clear()
   state.asks.clear()
   resetRail()
+  resetFollowing()
   setBusy(true)
+  // 只读订阅接续：reset 时按快照校准并从窗口头续订，断线有界重订（S05/S06）。
   try {
-    for await (const event of events({ conversationId, after: 0, signal: controller.signal })) {
-      if (event.type === 'run') continue
-      if (event.type === 'reset') {
-        // 这一轮太长，开头的事件已经滚出窗口：补不回来了，如实说明而不是假装从头发过。
-        append(make('p', 'error-line', '这一轮的早期进度已经过期，只接上了后半段；完整状态看右栏。'))
-        continue
-      }
-      handleEvent(event)
-    }
+    await followUntilTerminal(conversationId, { from: 0, expectedRunId: head.runId, signal: controller.signal })
   } catch (error) {
     reportFailure(error, '接上正在跑的任务失败')
   } finally {
@@ -842,42 +1200,117 @@ async function resumeLiveTurn() {
   }
 }
 
-async function sendMessage(text) {
+async function sendMessage(text, reuseRequestId) {
   const trimmed = text.trim()
   if (trimmed === '' || state.streaming) return
-  if (state.conversationId === null) state.conversationId = newConversationId()
-
-  clear(el.thread)
-  threadInner()
-  resetRail()
+  const fresh = state.conversationId === null
+  if (fresh) state.conversationId = newConversationId()
+  // 同一会话的新回合追加在原线程后面；只有第一次发送（或欢迎页还在）才换新视图（方案 I01）。
+  if (fresh || el.thread.querySelector('.welcome') !== null) {
+    state.viewToken += 1
+    clear(el.thread)
+    threadInner()
+  }
+  // 无论换不换视图，提交就回到跟随：用户发出的话和这一轮的回复要出现在眼前，
+  // 不能沿用上次读完历史留下的暂停状态（浏览器复验发现的缺口）。
+  resetFollowing()
+  // 回合级状态每轮都换新：链路条不能带着上一轮的进度开跑，runId 也要清——
+  // 新请求未收到回执就断流时，不能还顶着上一轮的身份去跟随（B 轮会接错 A 轮）。
   state.bubbles.clear()
   state.asks.clear()
+  state.lastSeq = 0
+  state.lastRunTaskId = ''
+  state.lastRunId = ''
+  resetRail()
   setRail('parse', 'active')
   setBusy(true)
   state.abort = new AbortController()
+  // 提交幂等身份（S07）：同一次提交的重试复用，新的提交换新 ID——服务端按它认出
+  // 「同一句话」，重试不会把活再派一遍。
+  const requestId = reuseRequestId ?? newConversationId()
   el.input.value = ''
   autosize()
-
+  // 提交内容先就地呈现，配一行「正在发送」：受理与否是服务端事实，客户端不编（方案 S03）。
+  const bubble = userMessage(trimmed, Date.now())
+  const note = append(make('p', 'msg__meta', '正在发送…'))
+  state.pendingUser = { text: trimmed, bubble }
+  let sawTerminal = false
   try {
-    for await (const event of chat({ conversationId: state.conversationId, message: trimmed, signal: state.abort.signal })) {
-      handleEvent(event)
+    for await (const event of chat({ conversationId: state.conversationId, message: trimmed, requestId, signal: state.abort.signal })) {
+      if (event.type === 'summary') sawTerminal = true
+      consumeTurnEvent(event, note)
+    }
+    state.pendingUser = null
+    if (note.isConnected) note.remove()
+    // 连接自然结束但终态没来（S06）：断连窗口里可能已收尾或仍在跑，跟到终态为止。
+    if (!sawTerminal && state.abort.signal.aborted === false) {
+      await followUntilTerminal(state.conversationId, { from: state.lastSeq, expectedRunId: state.lastRunId, signal: state.abort.signal })
     }
   } catch (error) {
-    reportFailure(error, '发送失败，再试一次？')
+    if (note.isConnected) note.remove()
+    if (state.pendingUser !== null) {
+      // 还没受理就失败了：草稿回到输入框（用户后来打过字就不覆盖），并给出重试入口；
+      // 重试复用同一个 requestId，不会把活再派一遍。
+      state.pendingUser = null
+      if (el.input.value.trim() === '') { el.input.value = trimmed; autosize() }
+      retryEntry(trimmed, error instanceof Error && error.message ? error.message : '没送出去', bubble, requestId)
+    } else {
+      // 已受理后连接断掉：这一轮还在服务端跑，重订事件流跟到终态，不自动重发。
+      reportFailure(error, '发送失败')
+      await followUntilTerminal(state.conversationId, { from: state.lastSeq, expectedRunId: state.lastRunId, signal: state.abort.signal })
+    }
+    scheduleFollowScroll()
   } finally {
     finishTurn()
   }
 }
 
-async function runReply({ taskId, subtaskId, text, decideByAgent }) {
+/** 提交失败后的重试入口：撤掉失败的痕迹，原样重发同一句话（同一幂等身份）。 */
+function retryEntry(text, message, staleBubble, requestId) {
+  const row = make('div', 'error-line error-line--retry')
+  row.appendChild(make('span', null, `${message}。`))
+  const button = make('button', 'btn btn--tiny', '重试')
+  button.type = 'button'
+  button.addEventListener('click', () => {
+    staleBubble?.remove()
+    row.remove()
+    void sendMessage(text, requestId)
+  })
+  row.appendChild(button)
+  append(row)
+}
+
+async function runReply(input, hooks = {}) {
   setBusy(true)
   state.abort = new AbortController()
+  // 与 sendMessage 同一套回合重置：runId 不清会让新一轮回话顶着上一轮的身份；
+  // 回话也回到跟随，用户要看到成员接下来的答复。
+  state.lastSeq = 0
+  state.lastRunId = ''
+  resetFollowing()
+  let accepted = false
+  let sawTerminal = false
   try {
-    for await (const event of reply({ taskId, subtaskId, text, decideByAgent, signal: state.abort.signal })) {
-      handleEvent(event)
+    for await (const event of reply({ ...input, signal: state.abort.signal })) {
+      if (event.type === 'summary') sawTerminal = true
+      traceEvent('receive', event)
+      if (!accepted) {
+        accepted = true
+        // 受理确认：请示卡到这一步才收起，之前失败都还能改（方案 I03）。
+        hooks.onAccepted?.()
+      }
+      consumeTurnEvent(event)
+    }
+    // 与提交同一条恢复路径（S06）：没看到终态就跟到终态。
+    if (!sawTerminal && accepted && state.abort.signal.aborted === false && state.conversationId !== null) {
+      await followUntilTerminal(state.conversationId, { from: state.lastSeq, expectedRunId: state.lastRunId, signal: state.abort.signal })
     }
   } catch (error) {
-    reportFailure(error, '回复没送出去，再试一次？')
+    reportFailure(error, '回复没送出去')
+    if (!accepted) hooks.onRejected?.(error)
+    else if (state.conversationId !== null && state.abort.signal.aborted === false) {
+      await followUntilTerminal(state.conversationId, { from: state.lastSeq, expectedRunId: state.lastRunId, signal: state.abort.signal })
+    }
   } finally {
     finishTurn()
   }
@@ -885,10 +1318,196 @@ async function runReply({ taskId, subtaskId, text, decideByAgent }) {
 
 function reportFailure(error, fallback) {
   if (error?.name === 'AbortError') {
-    append(make('p', 'error-line', '已喊停。'))
+    // 连接被本地中断只说明「不再观察」，不等于任务停了；终态以服务端事件为准。
+    append(make('p', 'error-line', '连接已中断，这一轮是否结束以右栏状态为准。'))
     return
   }
   append(make('p', 'error-line', error instanceof Error && error.message ? error.message : fallback))
+}
+
+/* ── 恢复一致性（B 批 S05/S06/S09/S12）────────────────────────────────── */
+
+/**
+ * 消费一条本轮事件：更新游标与任务标识，正文/汇总按现有分发渲染。
+ * 三条流（提交、回话、只读接续）共用，保证断线重订时游标口径只有一份。
+ */
+function consumeTurnEvent(event, note) {
+  traceEvent('receive', event)
+  if (event.type === 'run') {
+    // 新一轮开始：seq 空间按轮重置，游标跟着归零；runId 是断线重订的「预期对象」，
+    // 必须在消费回执时记下——没有它，重订无法证明跟随的还是原受理的那一轮。
+    state.lastSeq = 0
+    state.lastRunId = event.runId
+    if (event.taskId) state.lastRunTaskId = event.taskId
+  }
+  if (event.seq !== undefined) state.lastSeq = event.seq
+  if (event.type === 'subtask' && event.taskId) state.lastRunTaskId = event.taskId
+  if (event.type === 'plan' && event.taskId) state.lastRunTaskId = event.taskId
+  if (note !== null && note !== undefined) {
+    // 受理确认只推进占位；正文、计划或异常到达才撤（方案 S03）。run/reset 是流元事件，
+    // 不代表「已经有内容」——B 批曾让 run 误撤占位，退回了 A 批修过的行为。
+    if (event.type === 'conversation') {
+      note.textContent = '正在理解目标…'
+      announce('已受理，正在安排')
+    }
+    else if (event.type !== 'user' && event.type !== 'run' && event.type !== 'reset') note.remove()
+  }
+  handleEvent(event)
+  if (streamTraceEnabled) requestAnimationFrame(() => traceEvent('draw', event))
+}
+
+/**
+ * 按服务端快照校准终态（S06/S09）：断连期间这轮可能已经收尾，权威结论在任务记录里。
+ * 快照只在没消费到 summary 时补一张终态卡，不重放整条线程（那会重复已显示的内容）。
+ * 读取挂调用方的截止信号：整个恢复过程共用一个硬期限。
+ */
+async function calibrateFromSnapshot(conversationId, stop) {
+  try {
+    if (state.lastRunTaskId === '') return
+    const record = await api.task(state.lastRunTaskId, stop)
+    if (record.conversationId !== conversationId) return
+    if (!['completed', 'failed', 'cancelled', 'partial'].includes(record.state)) return
+    applySummaryRail(record.state)
+    append(summaryCard({ state: record.state, text: record.summary, error: record.error }))
+    scheduleFollowScroll()
+  } catch { /* 快照拿不到就保持现状：已有内容不因校准失败而清空。 */ }
+}
+
+/**
+ * 按快照**重建**一轮还在跑的任务（S05 reset 校准）。
+ *
+ * 之前这里只处理终态：运行中的快照直接返回，随后却把游标推进到窗口头——尚未恢复的
+ * 成员状态、正文和引用全被跳过。现在运行中同样重建：线程按快照重画，等待中的成员
+ * 重新拿到回复入口，游标以重建时点之后的窗口头为准（快照读取到重订之间存在极小的
+ * 事件窗口，由随后的事件逐步覆盖，不假装无缝）。读取同样挂截止信号。
+ */
+async function rebuildFromSnapshot(conversationId, stop) {
+  try {
+    if (state.lastRunTaskId === '') return null
+    const record = await api.task(state.lastRunTaskId, stop)
+    if (record.conversationId !== conversationId) return null
+    state.viewToken += 1
+    clear(el.thread)
+    threadInner()
+    state.bubbles.clear()
+    state.asks.clear()
+    resetRail()
+    renderTaskRecord(record, { liveResume: true })
+    resetFollowing()
+    scrollToBottom()
+    return record
+  } catch {
+    append(make('p', 'error-line', '按快照重建失败；已收到的内容保留，终态以右栏为准。'))
+    return null
+  }
+}
+
+/**
+ * 只读跟随一轮事件直到终态（S05/S06）：断线重订、reset 后按快照重建再从窗口头续订、
+ * 无终态结束时按运行状态选择重订或按快照补终态卡。全部复用现有 /events 与 /task 接口。
+ *
+ * 不混轮次：跟随对象由 `expectedRunId` **预先指定**（本轮 run 头的消费回执或恢复探测）。
+ * 没有回执时不跟随——探测到的「当前最新一轮」无法证明属于原提交，归属未知就如实
+ * 说明，不把别人的轮次接进本次视图。重放的旧 seq 直接丢弃；快照读取失败不推进游标，
+ * 保留原位按预算重试。
+ * 硬期限：订阅、探测、快照读取与退避共用同一个截止信号（AbortSignal.any 组合调用方
+ * 取消与剩余期限），悬挂中的任何一步到期即中止，退避可被截止提前唤醒；预算（2s 起、
+ * 封顶 4s、最多 4 次、总长 120s）耗尽后如实放弃，不无限重试。
+ */
+async function followUntilTerminal(conversationId, { from, expectedRunId, signal }) {
+  let after = from
+  if (expectedRunId === undefined || expectedRunId === '') {
+    // 归属未知（例如提交流断在 run 头之前）：明确说明并按快照尽量收尾，
+    // 不用「当前最新一轮」冒充原受理。
+    append(make('p', 'msg__meta', '这次提交的受理回执没有收到，无法确认还在跑的那一轮是否属于它；结果请以右栏任务记录为准。'))
+    return
+  }
+  const followedRunId = expectedRunId
+  const deadline = Date.now() + 120000
+  let reconnects = 0
+  const giveUp = () => { append(make('p', 'error-line', '这一轮的后续跟不上了；已收到的内容保留，终态以右栏为准。')) }
+  // 可中断退避：截止或取消提前唤醒；进入时信号已取消则立即退出，不空等计时器。
+  // timer 先声明再赋值：done 可能被同步调度器立即调用，不能踩到初始化之前。
+  const backoff = stop => new Promise(resolve => {
+    if (stop.aborted) { resolve(); return }
+    let timer
+    const done = () => { clearTimeout(timer); stop.removeEventListener('abort', done); resolve() }
+    timer = setTimeout(done, Math.min(1000 * 2 ** reconnects, 4000))
+    stop.addEventListener('abort', done, { once: true })
+  })
+  for (;;) {
+    let sawTerminal = false
+    let sawReset = false
+    // 截止信号：每轮按剩余期限重建，取消与到期都能中断订阅、探测与快照读取。
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) { giveUp(); return }
+    const timeout = AbortSignal.timeout(remaining)
+    const stop = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+    try {
+      for await (const event of events({ conversationId, after, signal: stop })) {
+        if (event.type === 'run') {
+          // 轮次边界：与预期不符（服务端已换轮）立即按快照收尾，不消费新轮任何事件。
+          if (event.runId !== followedRunId) {
+            await calibrateFromSnapshot(conversationId, stop)
+            return
+          }
+          state.lastSeq = 0
+          if (event.taskId) state.lastRunTaskId = event.taskId
+          continue
+        }
+        if (event.type === 'reset') {
+          // 滚出窗口的事件补不回来：按快照重建（运行中同样重建），再从窗口头续订。
+          sawReset = true
+          continue
+        }
+        // 不混轮次：别的轮次的重放事件不应用；同一轮内重放的旧序号直接丢弃。
+        if (event.runId !== undefined && event.runId !== followedRunId) continue
+        if (event.seq !== undefined) {
+          if (after > 0 && event.seq <= after) continue
+          after = event.seq
+        }
+        if (event.type === 'summary') sawTerminal = true
+        consumeTurnEvent(event)
+      }
+      if (sawTerminal) return
+      const head = await eventsHead(conversationId, stop)
+      if (head === null || head.state !== 'running') {
+        // 连接自然结束但没看到终态：终态多半在断连窗口里发生，按快照补结论（S06）。
+        await calibrateFromSnapshot(conversationId, stop)
+        return
+      }
+      if (head.runId !== followedRunId) {
+        // 跟随的那一轮已被新的一轮接替：按快照收尾，不把新轮内容混进本次视图。
+        await rebuildFromSnapshot(conversationId, stop)
+        return
+      }
+      if (sawReset) {
+        // 重建要用快照：任务标识从探测头部取——reset 流本身不带 run 头（浏览器实测发现），
+        // 刷新接续时 lastRunTaskId 还是空，不补这一步重建会空转。
+        if (head.taskId) state.lastRunTaskId = head.taskId
+        const rebuilt = await rebuildFromSnapshot(conversationId, stop)
+        // 快照读取失败不推进游标：保留原位，本轮按预算退避后重试重建（重订还会得到
+        // reset，重建再次尝试）；只有重建成功才对齐到探测头部的窗口位置。重建成功后
+        // 从 head.seq 续订——探测与重建之间产生的事件 seq 必然更大，续订会带上，
+        // 不丢也不重复重放（head.seq 之前的事件不重放）。
+        if (rebuilt !== null) after = head.seq
+      }
+    } catch (error) {
+      if (signal?.aborted) return
+      if (error?.name === 'AbortError') {
+        if (timeout.aborted) { giveUp(); return }
+        continue
+      }
+    }
+    // 自然 EOF 后仍在跑（或断线）：同一份退避预算，不因「流正常结束」就零等待重连。
+    reconnects += 1
+    if (reconnects >= 4 || Date.now() > deadline) {
+      giveUp()
+      return
+    }
+    await backoff(stop)
+    if (stop.aborted && !signal?.aborted) { giveUp(); return }
+  }
 }
 
 async function finishTurn() {
@@ -896,7 +1515,15 @@ async function finishTurn() {
   state.abort = null
   await refreshPanels()
   void refreshChatList()
-  el.input.focus()
+  // 异步结束不抢焦点（方案 I05）：只在用户仍停留在会话区域时回到输入框；
+  // 正在设置页、开着抽屉或选着字，都保持他现在的位置。
+  const active = document.activeElement
+  const inConversationArea = active === null || active === document.body
+    || el.composer.contains(active) || el.thread.contains(active) || el.rail.contains(active)
+  const selection = document.getSelection()
+  const selecting = selection !== null && !selection.isCollapsed
+  if (!state.settingsOpen && document.body.dataset.drawer !== 'open' && document.body.dataset.sidebar !== 'open'
+    && !selecting && inConversationArea) el.input.focus()
 }
 
 /* ── 右栏 ─────────────────────────────────────────────────────────────── */
@@ -924,111 +1551,257 @@ function renderMembers() {
 
 /* ── 设置页 ───────────────────────────────────────────────────────────── */
 
-/** 设置页里的成员卡：外号、配色、头像集中在这张卡上编辑。 */
+/**
+ * 设置卡片的局部视图（方案 I14/I15/I16）：外号与配色是**草稿**，显式保存才提交；
+ * 头像上传是独立动作。每张卡自带状态行（未保存 / 保存中 / 已保存 / 失败），保存或换脸
+ * 只更新自己这张卡，不再整页重建——其他卡里没保存的输入不会被冲掉。
+ */
+const settingsCards = new Map()
+
 function renderSettingsMembers() {
   clear(el.settingsMembers)
+  settingsCards.clear()
   if (state.members.length === 0) {
     el.settingsMembers.appendChild(make('p', 'empty', '还没有能派活的成员。'))
     return
   }
-  for (const member of state.members) {
-    const card = make('div', 'set-card')
+  for (const member of state.members) el.settingsMembers.appendChild(buildSettingsCard(member))
+}
 
-    const head = make('div', 'set-card__head')
-    const avatarWrap = make('div', 'member__avatar')
-    avatarWrap.appendChild(avatarNode(member.agentId, 'lg'))
-    const camera = make('span', 'member__camera', '📷')
-    camera.title = '换张脸'
-    const picker = document.createElement('input')
-    picker.type = 'file'
-    picker.accept = 'image/png,image/jpeg,image/webp'
-    picker.className = 'visually-hidden'
-    camera.addEventListener('click', () => picker.click())
-    picker.addEventListener('change', () => {
-      const file = picker.files?.[0]
-      if (file) void applyAvatar(member.agentId, file)
-    })
-    avatarWrap.appendChild(camera)
-    avatarWrap.appendChild(picker)
-    head.appendChild(avatarWrap)
+/** 卡内状态行：kind 决定配色，文本给人看。 */
+function setCardStatus(view, kind, text) {
+  view.status.dataset.kind = kind
+  view.status.textContent = text
+  view.status.hidden = text === ''
+}
 
-    const titles = make('div', 'set-card__titles')
-    titles.appendChild(make('div', 'member__name', member.displayName))
-    titles.appendChild(make('div', 'member__declared', `插件声明：${member.declaredName}`))
-    head.appendChild(titles)
-    card.appendChild(head)
+/**
+ * 草稿变更：递增版本号（保存回包按它核对），状态行如实回落到「未保存」——
+ * 包括刚显示「已保存/失败」之后再次编辑的情况（复核 1）；保存中不打断文案。
+ */
+function markCardDirty(view) {
+  view.draftVersion += 1
+  view.dirty = true
+  if (view.status.dataset.kind !== 'busy') setCardStatus(view, 'dirty', '有未保存的改动')
+}
 
-    const nameField = make('div', 'field')
-    nameField.appendChild(make('label', null, '外号'))
-    const nameInput = document.createElement('input')
-    nameInput.type = 'text'
-    nameInput.maxLength = 24
-    nameInput.value = member.displayName
-    nameInput.placeholder = member.declaredName
-    nameField.appendChild(nameInput)
-    card.appendChild(nameField)
-
-    const colorField = make('div', 'field')
-    colorField.appendChild(make('label', null, '配色'))
-    const swatches = make('div', 'swatches')
-    for (const color of PALETTE) {
-      const swatch = make('button', 'swatch')
-      swatch.type = 'button'
-      swatch.style.background = color
-      swatch.setAttribute('aria-pressed', String(accentOf(member.agentId).toLowerCase() === color))
-      swatch.title = color
-      swatch.addEventListener('click', () => { void applyAlias(member.agentId, nameInput.value, color) })
-      swatches.appendChild(swatch)
+/** 保存一张卡的外号与配色：按**提交时的草稿版本**确认（复核 1）。 */
+async function saveMemberCard(agentId) {
+  const view = settingsCards.get(agentId)
+  if (view === undefined || view.busy) return
+  // 只提交发起那一刻的草稿；保存期间用户继续编辑不中断、也不会被回包吞掉。
+  const submittedName = view.nameInput.value
+  const submittedAccent = view.pendingAccent ?? accentOf(agentId)
+  const submittedVersion = view.draftVersion
+  view.busy = true
+  view.save.disabled = true
+  setCardStatus(view, 'busy', '保存中…可以先继续改')
+  try {
+    const result = await api.setAlias(agentId, submittedName, submittedAccent)
+    state.members = result.items
+    view.save.disabled = false
+    // 基线更新到已提交的那版：标题跟提交值对齐。
+    view.titles.replaceChildren(
+      make('div', 'member__name', displayNameOf(agentId)),
+      make('div', 'member__declared', `插件声明：${declaredNameOf(agentId)}`),
+    )
+    if (view.draftVersion === submittedVersion) {
+      // 回包时草稿还停在提交版本：这次保存覆盖了全部改动，状态干净。
+      view.pendingAccent = null
+      view.dirty = false
+      for (const [color, swatch] of view.swatches) swatch.setAttribute('aria-pressed', String(submittedAccent.toLowerCase() === color))
+      setCardStatus(view, 'ok', '已保存')
+      announce(`已保存 ${displayNameOf(agentId)} 的设置`)
+    } else {
+      // 保存期间又改了：刚提交的已存上，但新改动仍是未保存草稿（配色草稿保留）；
+      // 色块选中态跟**当前草稿**对齐，不能被提交值覆盖（复核 1：选中态与草稿不一致）。
+      view.dirty = true
+      const draftAccent = view.pendingAccent ?? accentOf(agentId)
+      for (const [color, swatch] of view.swatches) swatch.setAttribute('aria-pressed', String(draftAccent.toLowerCase() === color))
+      setCardStatus(view, 'dirty', '刚提交的已存上；之后的新改动还没保存')
     }
-    colorField.appendChild(swatches)
-    card.appendChild(colorField)
-
-    const builtinField = make('div', 'field')
-    builtinField.appendChild(make('label', null, '内置头像'))
-    const strip = make('div', 'builtin-strip')
-    for (const item of BUILTIN_AVATARS) {
-      const pick = make('button', 'builtin-strip__item')
-      pick.type = 'button'
-      pick.title = item.label
-      const thumb = document.createElement('img')
-      thumb.alt = item.label
-      thumb.loading = 'lazy'
-      thumb.src = `${ROUTE_PREFIX}/assets/media/avatars/builtin/${item.file}`
-      pick.appendChild(thumb)
-      pick.addEventListener('click', () => { void applyBuiltinAvatar(member.agentId, item.file) })
-      strip.appendChild(pick)
-    }
-    builtinField.appendChild(strip)
-    card.appendChild(builtinField)
-
-    const actions = make('div', 'set-card__actions')
-    const save = make('button', 'btn btn--tiny btn--primary', '保存')
-    save.type = 'button'
-    save.addEventListener('click', () => { void applyAlias(member.agentId, nameInput.value) })
-    actions.appendChild(save)
-    if (state.avatarStamps.has(member.agentId)) {
-      const reset = make('button', 'btn btn--tiny btn--ghost', '删掉头像')
-      reset.type = 'button'
-      reset.addEventListener('click', () => { void applyClearAvatar(member.agentId) })
-      actions.appendChild(reset)
-    }
-    card.appendChild(actions)
-
-    el.settingsMembers.appendChild(card)
+    // 右栏与头像栏的公共投影照旧重画：它们不在设置页里，没有草稿可丢。
+    renderMembers()
+    renderCrew()
+    renderStatuses()
+  } catch (error) {
+    view.save.disabled = false
+    setCardStatus(view, 'error', `没保存成功：${error instanceof Error && error.message ? error.message : '网络异常'}；改动还在，再试一次`)
+  } finally {
+    view.busy = false
   }
 }
 
-/** 打开/关闭设置页：关掉时右栏紧凑行要用最新数据重画。 */
+/** 头像上传/删除/内置换脸共用：卡内状态 + 本卡头像位刷新，不重建列表。 */
+async function runAvatarAction(agentId, action, doing, done) {
+  const view = settingsCards.get(agentId)
+  if (view !== undefined) setCardStatus(view, 'busy', doing)
+  try {
+    await action()
+    if (view !== undefined) {
+      view.avatarSlot.replaceChildren(avatarNode(agentId, 'lg'))
+      setCardStatus(view, 'ok', done)
+    }
+    renderMembers()
+    renderCrew()
+    announce(done)
+  } catch (error) {
+    if (view !== undefined) {
+      setCardStatus(view, 'error', `${done}没成：${error instanceof Error && error.message ? error.message : '再试一次'}`)
+    }
+  }
+}
+
+function buildSettingsCard(member) {
+  const agentId = member.agentId
+  const card = make('div', 'set-card')
+  card.dataset.agentId = agentId
+
+  const head = make('div', 'set-card__head')
+  const avatarWrap = make('div', 'member__avatar')
+  const avatarSlot = make('div', 'member__avatar-slot')
+  avatarSlot.appendChild(avatarNode(agentId, 'lg'))
+  // 相机是按钮不是贴纸（方案 I16）：键盘可达、有名字。
+  const camera = make('button', 'member__camera', '📷')
+  camera.type = 'button'
+  camera.title = '换张脸'
+  camera.setAttribute('aria-label', `给 ${displayNameOf(agentId)} 换头像`)
+  const picker = document.createElement('input')
+  picker.type = 'file'
+  picker.accept = 'image/png,image/jpeg,image/webp'
+  picker.className = 'visually-hidden'
+  picker.setAttribute('aria-hidden', 'true')
+  picker.tabIndex = -1
+  camera.addEventListener('click', () => picker.click())
+  picker.addEventListener('change', () => {
+    const file = picker.files?.[0]
+    if (file) void runAvatarAction(agentId, async () => {
+      await uploadAvatar(agentId, file)
+      state.avatarStamps.set(agentId, Date.now())
+    }, '上传中…', '头像已更新')
+    picker.value = ''
+  })
+  avatarWrap.appendChild(avatarSlot)
+  avatarWrap.appendChild(camera)
+  avatarWrap.appendChild(picker)
+  head.appendChild(avatarWrap)
+
+  const titles = make('div', 'set-card__titles')
+  titles.appendChild(make('div', 'member__name', member.displayName))
+  titles.appendChild(make('div', 'member__declared', `插件声明：${member.declaredName}`))
+  head.appendChild(titles)
+  card.appendChild(head)
+
+  // 外号输入与 label 关联（方案 I16）：读屏点「外号」就能落进输入框。
+  const nameField = make('div', 'field')
+  const nameLabel = make('label', null, '外号')
+  const nameInput = document.createElement('input')
+  nameInput.type = 'text'
+  nameInput.maxLength = 24
+  nameInput.id = `alias-${agentId}`
+  nameInput.value = member.displayName
+  nameInput.placeholder = member.declaredName
+  nameLabel.setAttribute('for', nameInput.id)
+  nameField.appendChild(nameLabel)
+  nameField.appendChild(nameInput)
+  card.appendChild(nameField)
+
+  // 配色只改草稿（方案 I15）：点选高亮未保存状态，与外号一起显式保存，
+  // 不再携带未保存的外号立即提交。
+  const colorField = make('div', 'field')
+  const colorLabel = make('label', null, '配色')
+  colorField.appendChild(colorLabel)
+  const swatches = make('div', 'swatches')
+  const swatchViews = new Map()
+  for (const color of PALETTE) {
+    const swatch = make('button', 'swatch')
+    swatch.type = 'button'
+    swatch.style.background = color
+    swatch.setAttribute('aria-pressed', String(accentOf(agentId).toLowerCase() === color))
+    swatch.title = color
+    swatch.addEventListener('click', () => {
+      view.pendingAccent = color
+      for (const [each, node] of swatchViews) node.setAttribute('aria-pressed', String(each === color))
+      markCardDirty(view)
+    })
+    swatchViews.set(color, swatch)
+    swatches.appendChild(swatch)
+  }
+  colorField.appendChild(swatches)
+  card.appendChild(colorField)
+
+  const builtinField = make('div', 'field')
+  const builtinLabel = make('label', null, '内置头像')
+  builtinField.appendChild(builtinLabel)
+  const strip = make('div', 'builtin-strip')
+  for (const item of BUILTIN_AVATARS) {
+    const pick = make('button', 'builtin-strip__item')
+    pick.type = 'button'
+    pick.title = item.label
+    pick.setAttribute('aria-label', `换上${item.label}头像`)
+    const thumb = document.createElement('img')
+    thumb.alt = ''
+    thumb.loading = 'lazy'
+    thumb.src = `${ROUTE_PREFIX}/assets/media/avatars/builtin/${item.file}`
+    pick.appendChild(thumb)
+    pick.addEventListener('click', () => {
+      void runAvatarAction(agentId, async () => {
+        const response = await fetch(`${ROUTE_PREFIX}/assets/media/avatars/builtin/${item.file}`)
+        if (!response.ok) throw new Error('内置头像读取失败')
+        const blob = await response.blob()
+        await uploadAvatar(agentId, new File([blob], item.file, { type: 'image/png' }))
+        state.avatarStamps.set(agentId, Date.now())
+      }, '换头像中…', '头像已更新')
+    })
+    strip.appendChild(pick)
+  }
+  builtinField.appendChild(strip)
+  card.appendChild(builtinField)
+
+  const actions = make('div', 'set-card__actions')
+  const save = make('button', 'btn btn--tiny btn--primary', '保存')
+  save.type = 'button'
+  save.addEventListener('click', () => { void saveMemberCard(agentId) })
+  actions.appendChild(save)
+  if (state.avatarStamps.has(agentId)) {
+    const reset = make('button', 'btn btn--tiny btn--ghost', '删掉头像')
+    reset.type = 'button'
+    reset.addEventListener('click', () => { void runAvatarAction(agentId, async () => {
+      await api.clearAvatar(agentId)
+      state.avatarStamps.delete(agentId)
+    }, '删除中…', '头像已删掉，用回默认') })
+    actions.appendChild(reset)
+  }
+  card.appendChild(actions)
+
+  const status = make('div', 'set-card__status')
+  status.dataset.kind = ''
+  card.appendChild(status)
+
+  const view = { card, agentId, nameInput, titles, swatches: swatchViews, save, status, avatarSlot, pendingAccent: null, dirty: false, busy: false, draftVersion: 0 }
+  nameInput.addEventListener('input', () => markCardDirty(view))
+  settingsCards.set(agentId, view)
+  return card
+}
+
+/**
+ * 打开/关闭设置页（方案 I18）：页面切换，不是模态——焦点落到标题上（返回按钮也行，
+ * 标题更稳），关闭时送回齿轮按钮，不误抢焦点到主输入。执行中进来时给出「回群聊」
+ * 提示：停止入口在被隐藏的三栏里，这条路得留着。
+ */
 function setOpenSettings(open) {
   state.settingsOpen = open
   document.body.dataset.settings = open ? 'open' : 'closed'
   el.settingsButton.setAttribute('aria-expanded', String(open))
   el.settings.hidden = !open
+  el.settingsLive.hidden = !(open && state.streaming)
+  el.settingsLive.textContent = open && state.streaming ? '有活正在跑：回群聊可查看进度或喊停' : ''
   if (open) {
     renderSettingsMembers()
+    el.settingsTitle.focus()
   } else {
     renderMembers()
-    el.input.focus()
+    el.settingsButton.focus()
   }
 }
 
@@ -1131,44 +1904,8 @@ function renderChatList(items, keyword) {
 
 /* ── 右栏操作 ─────────────────────────────────────────────────────────── */
 
-async function applyAlias(agentId, displayName, accent) {
-  try {
-    const result = await api.setAlias(agentId, displayName, accent ?? accentOf(agentId))
-    state.members = result.items
-    renderMembers()
-    renderCrew()
-    renderStatuses()
-    if (state.settingsOpen) renderSettingsMembers()
-  } catch (error) {
-    window.alert(error instanceof Error ? error.message : '没保存成功')
-  }
-}
-
-async function applyAvatar(agentId, file) {
-  try {
-    const result = await uploadAvatar(agentId, file)
-    state.members = result.items
-    state.avatarStamps.set(agentId, Date.now())
-    renderMembers()
-    renderCrew()
-    if (state.settingsOpen) renderSettingsMembers()
-  } catch (error) {
-    window.alert(error instanceof Error ? error.message : '头像没换上')
-  }
-}
-
-async function applyClearAvatar(agentId) {
-  try {
-    const result = await api.clearAvatar(agentId)
-    state.members = result.items
-    state.avatarStamps.delete(agentId)
-    renderMembers()
-    renderCrew()
-    if (state.settingsOpen) renderSettingsMembers()
-  } catch (error) {
-    window.alert(error instanceof Error ? error.message : '没删掉')
-  }
-}
+/* 设置保存与头像操作在设置卡内局部处理（saveMemberCard / runAvatarAction），
+ * 不再走整页重建；右栏常规刷新由 refreshPanels 负责。 */
 
 /* ── 数据刷新 ─────────────────────────────────────────────────────────── */
 
@@ -1226,9 +1963,211 @@ async function refreshChatList() {
   }
 }
 
-/** 打开一个历史会话：把它的任务按先后重建成消息流。 */
+/** 历史条目的时间锚点：对话用消息时间，任务用收尾时间（摘要属于结局）。 */
+function timeOf(value) {
+  const at = new Date(value).getTime()
+  return Number.isNaN(at) ? 0 : at
+}
+
+/**
+ * 历史条目的全局比较规则（初次加载与分页共用）。
+ *
+ * 先按时间；同刻的对话按事件序号**数值**比较——字符串比较会把 `t:10` 排到 `t:2`
+ * 前面（复核 2）；任务按收尾时间锚定、属于结局，同刻排在对话之后，再按 id 决胜。
+ */
+function compareHistoryEntries(a, b) {
+  if (a.at !== b.at) return a.at - b.at
+  const seqOf = entry => entry.kind === 'task' ? Number.POSITIVE_INFINITY : Number(entry.id.slice(2))
+  const left = seqOf(a)
+  const right = seqOf(b)
+  if (Number.isNaN(left) || Number.isNaN(right)) return a.id < b.id ? -1 : 1
+  if (left !== right) return left - right
+  return a.id < b.id ? -1 : 1
+}
+
+/**
+ * 把一页对话正文与一页任务摘要合成按时间排序的展示序列（纯数据，不碰 DOM）。
+ *
+ * 任务是摘要不是对话（S13）：在序列里以 `task` 出现，渲染成明确标注的摘要卡；
+ * 被打断的管家答复标出来，不冒充完整结论。条目带稳定标识（事件序号 / 任务 id），
+ * 供跨页去重与定位插入（复核 1）。
+ */
+function mergeHistoryEntries(transcriptItems, taskItems) {
+  const entries = []
+  for (const item of transcriptItems ?? []) {
+    entries.push({
+      id: `t:${item.seq}`,
+      at: timeOf(item.time),
+      interrupted: item.interrupted === true,
+      kind: item.role,
+      text: item.text,
+      time: item.time,
+    })
+  }
+  for (const task of taskItems ?? []) {
+    entries.push({ id: `task:${task.id}`, at: timeOf(task.updatedAt ?? task.createdAt), kind: 'task', task })
+  }
+  entries.sort(compareHistoryEntries)
+  return entries
+}
+
+/**
+ * 把新页条目并入全局序列并给出定位插入计划（纯数据，复核 1）。
+ *
+ * 正文与任务的分页时间范围会交叉：只排新页再整体前插得不到全局时间序
+ * （复核例：前插后成为 [800,100,900,1000]）。这里按稳定标识去重后用与初次加载
+ * 同一套比较规则全局排序（幂等），新条目降序逐一「插到后继节点之前」——降序保证
+ * 处理到某条时，比它晚的新条目都已就位，后继一定有节点可参照。
+ */
+function planHistoryInsertion(existing, fresh) {
+  const known = new Map(existing.map(entry => [entry.id, entry]))
+  const additions = []
+  for (const entry of fresh) {
+    if (known.has(entry.id)) continue
+    known.set(entry.id, entry)
+    additions.push(entry)
+  }
+  const merged = [...existing, ...additions].sort(compareHistoryEntries)
+  const position = new Map(merged.map((entry, index) => [entry.id, index]))
+  const insertions = additions
+    .slice()
+    .sort((a, b) => -compareHistoryEntries(a, b))
+    .map(entry => {
+      const index = position.get(entry.id) ?? 0
+      return { entry, beforeId: merged[index + 1]?.id ?? null }
+    })
+  return { merged, insertions }
+}
+
+/** 历史里的任务摘要卡：明确标成「任务摘要」，点开看完整记录，不冒充逐条对话。 */
+function taskSummaryCard(task) {
+  const card = make('button', 'task-card')
+  card.type = 'button'
+  card.dataset.state = task.state
+  const head = make('div', 'task-card__head')
+  head.appendChild(make('span', 'task-card__badge', '任务摘要'))
+  head.appendChild(make('span', 'task-card__state', STATE_TEXT[task.state] ?? task.state))
+  head.appendChild(make('span', 'task-card__time', formatTime(task.updatedAt)))
+  card.appendChild(head)
+  card.appendChild(make('div', 'task-card__goal', task.goal))
+  card.appendChild(make('div', 'task-card__meta', `${formatTime(task.createdAt)} 派活 · ${task.subtaskDone}/${task.subtaskTotal} 项收尾`))
+  card.addEventListener('click', () => { void openTask(task.id) })
+  return card
+}
+
+/**
+ * 创建一个历史条目的节点。打断标注收进消息内部（不另起游离节点），
+ * 整个条目是一个节点，才能被定位插入整体搬移（复核 1）。
+ */
+function createHistoryNode(entry) {
+  if (entry.kind === 'user') return userMessage(entry.text, entry.time)
+  if (entry.kind === 'butler') {
+    const view = butlerMessage('', entry.time)
+    settleMarkdown(view.body, entry.text)
+    if (entry.interrupted) view.msg.lastElementChild.appendChild(make('div', 'msg__meta', '这一轮被打断，正文是已流出的部分'))
+    return view.msg
+  }
+  return append(taskSummaryCard(entry.task))
+}
+
+/** 按时间正序创建历史节点；创建即追加，并记到条目上供后续翻页定位。 */
+function renderHistorySlice(entries) {
+  for (const entry of entries) entry.node = createHistoryNode(entry)
+}
+
+/** 「加载更早记录」入口：两个游标都到底后换成分界说明；失败保留重试。 */
+function updateLoadEarlier(error) {
+  const control = threadInner().querySelector('.history-head')
+  if (control === null) return
+  clear(control)
+  if (historyState.transcriptBefore === null && historyState.taskOffset === null) {
+    control.appendChild(make('span', 'history-head__note', '没有更早的记录了'))
+    return
+  }
+  const button = make('button', 'btn btn--tiny history-head__more', historyState.loading ? '正在读取…' : '加载更早记录')
+  button.type = 'button'
+  button.disabled = historyState.loading
+  button.addEventListener('click', () => { void loadEarlier() })
+  control.appendChild(button)
+  if (error !== undefined && error !== null) {
+    control.appendChild(make('span', 'history-head__error',
+      `读取更早记录失败：${error instanceof Error && error.message ? error.message : '网络异常'}，可以重试`))
+  }
+}
+
+/**
+ * 加载一页更早的记录，按全局时间序定位插入（I10，复核 1）。
+ *
+ * 正文与任务分页范围交叉，新页条目可能要插到已显示内容中间而不是整体垫在最上面；
+ * 插入与分界控件的更新（按钮换「没有更早」会改布局，复核 3）都在锚点保护内，
+ * 加载旧页永远保持阅读位置。回包后核对视图代次与会话 id，旧回包不写进新会话（I09）；
+ * **释放加载锁同样核对归属**（复核 3）——切走后旧请求的结束不得把新会话的加载状态解锁。
+ */
+async function loadEarlier() {
+  const id = historyState.conversationId
+  if (historyState.loading || id === null) return
+  if (historyState.transcriptBefore === null && historyState.taskOffset === null) { updateLoadEarlier(); return }
+  const token = state.viewToken
+  historyState.loading = true
+  // 归属核对的口径：视图代次与会话都还是发起时的那一个，回包/解锁才属于这次请求。
+  const stillOwns = () => token === state.viewToken && id === historyState.conversationId
+  let failure = null
+  try {
+    updateLoadEarlier()
+    const [page, tasks] = await Promise.all([
+      historyState.transcriptBefore === null
+        ? Promise.resolve(null)
+        : api.transcript({ conversationId: id, before: historyState.transcriptBefore, limit: TRANSCRIPT_PAGE_SIZE }),
+      // 任务分页数沿用服务端注入的默认（分页上限只有一个来源），不在这里写死。
+      historyState.taskOffset === null
+        ? Promise.resolve(null)
+        : api.history({ conversationId: id, offset: historyState.taskOffset }),
+    ])
+    if (!stillOwns()) return
+    const plan = planHistoryInsertion(historyState.entries, mergeHistoryEntries(page?.items, tasks?.items))
+    const inner = threadInner()
+    const nodeOf = new Map(plan.merged.map(entry => [entry.id, entry.node]))
+    stabilizeViewport(() => {
+      // 降序插入：处理到某条时，比它晚的条目（旧有或已插入的新条目）都已有节点。
+      // 创建后必须同步写回索引，否则更早条目找不到刚插入的后继，只能落在末尾（复核 1）。
+      for (const { entry, beforeId } of plan.insertions) {
+        entry.node = createHistoryNode(entry)
+        nodeOf.set(entry.id, entry.node)
+        const successor = beforeId === null ? null : nodeOf.get(beforeId)
+        if (successor !== undefined && successor !== null && successor.isConnected) inner.insertBefore(entry.node, successor)
+        // 后继为空（它是最新一条）或尚未连接：留在创建时的追加位置，即线程末尾，同样正确。
+      }
+      if (page !== null) historyState.transcriptBefore = page.prevBefore
+      if (tasks !== null) historyState.taskOffset = tasks.nextOffset
+      // 游标与分界控件一并收进锚点保护：到底换文案也是布局变化（复核 3）。
+      historyState.loading = false
+      updateLoadEarlier()
+    }, { forceAnchor: true })
+    historyState.entries = plan.merged
+    return
+  } catch (error) {
+    if (stillOwns()) failure = error
+  }
+  // 失败路径：解锁与错误提示同样在锚点保护内更新。
+  if (stillOwns()) {
+    stabilizeViewport(() => {
+      historyState.loading = false
+      updateLoadEarlier(failure)
+    }, { forceAnchor: true })
+  }
+}
+
+/**
+ * 打开一个历史会话（C 批历史阅读）。
+ *
+ * 真实对话来自官方会话日志的 transcript（不另存副本）；任务只给明确标注的摘要卡（S13）。
+ * 先取对话与任务的最新一页，「加载更早记录」往更早翻。所有 await 后核对视图代次（I09）；
+ * 对话正文读不到时如实说明，不拿任务摘要冒充完整对话。
+ */
 async function openConversation(id) {
   if (state.streaming) return
+  // 视图代次：先点 A 再点 B、A 响应更晚时，只显示 B，旧回包不许写入（方案 I09）。
+  const token = ++state.viewToken
   state.conversationId = id
   rememberConversation(id)
   clear(el.thread)
@@ -1236,39 +2175,68 @@ async function openConversation(id) {
   state.bubbles.clear()
   state.asks.clear()
   resetRail()
-  try {
-    // 按会话取，不在页面上筛：会话一多，更早的那个就会落在第一页之外，
-    // 打开它只会看到欢迎语 —— 记录明明在库里，只是没被取到。
-    const page = await api.history({ conversationId: id })
-    const mine = page.items.slice().reverse()
-    if (mine.length === 0) {
-      renderWelcome()
-      return
-    }
-    for (const task of mine) {
-      const record = await api.task(task.id)
-      renderTaskRecord(record)
-    }
-    el.thread.scrollTop = el.thread.scrollHeight
-  } catch (error) {
-    // 拉不到就如实说，不装成「这里没派过活」——那样看起来像记录丢了。
-    append(make('p', 'error-line', error instanceof Error ? error.message : '打不开这个会话'))
+  resetFollowing()
+  historyState.conversationId = id
+  historyState.transcriptBefore = null
+  historyState.taskOffset = null
+  historyState.loading = false
+  historyState.entries = []
+  const placeholder = append(make('p', 'msg__meta', '正在读取记录…'))
+  let transcript = null
+  let taskPage = null
+  let transcriptError = null
+  let taskError = null
+  ;[transcript, taskPage] = await Promise.all([
+    api.transcript({ conversationId: id, tail: true, limit: TRANSCRIPT_PAGE_SIZE })
+      .catch(error => { transcriptError = error; return null }),
+    // 任务分页数沿用服务端注入的默认（分页上限只有一个来源），不在这里写死。
+    api.history({ conversationId: id, offset: 0 })
+      .catch(error => { taskError = error; return null }),
+  ])
+  if (token !== state.viewToken) return
+  placeholder.remove()
+  const head = make('div', 'history-head')
+  threadInner().prepend(head)
+  if (transcriptError !== null) {
+    append(make('p', 'error-line', `对话正文读不到：${transcriptError instanceof Error && transcriptError.message ? transcriptError.message : '网络异常'}；下面只有任务摘要。`))
   }
+  if (taskError !== null) {
+    append(make('p', 'error-line', `任务记录读不到：${taskError instanceof Error && taskError.message ? taskError.message : '网络异常'}`))
+  }
+  const entries = mergeHistoryEntries(transcript?.items, taskPage?.items)
+  if (entries.length === 0 && transcriptError === null && taskError === null) {
+    renderWelcome()
+    return
+  }
+  renderHistorySlice(entries)
+  // 记入全局序列：后续「加载更早记录」据此去重与定位插入（复核 1）。
+  historyState.entries = entries
+  historyState.transcriptBefore = transcript?.prevBefore ?? null
+  historyState.taskOffset = taskPage?.nextOffset ?? null
+  updateLoadEarlier()
+  scrollToBottom()
   void refreshChatList()
 }
 
 async function openTask(id) {
+  // 与 openConversation 同一保护（方案 I08）：右栏失败记录也是换视图入口，
+  // 执行中切换会替换全局会话与线程，不能没有守卫。
+  if (state.streaming) return
+  const token = ++state.viewToken
   try {
     const record = await api.task(id)
+    if (token !== state.viewToken) return
     state.conversationId = record.conversationId
     rememberConversation(record.conversationId)
     clear(el.thread)
     threadInner()
     state.bubbles.clear()
     resetRail()
+    resetFollowing()
     renderTaskRecord(record)
-    el.thread.scrollTop = el.thread.scrollHeight
+    scrollToBottom()
   } catch (error) {
+    if (token !== state.viewToken) return
     append(make('p', 'error-line', error instanceof Error ? error.message : '打不开这条记录'))
   }
 }
@@ -1279,7 +2247,10 @@ async function openTask(id) {
  * 刷新页面后走这条路径，所以显示的状态与数据库里的一致；原始对话正文由宿主的会话日志
  * 承载，这里只重建任务维度能确定的部分。
  */
-function renderTaskRecord(record) {
+function renderTaskRecord(record, opts = {}) {
+  /** `liveResume`：从快照接续一轮还在跑的任务（S05 reset 校准），不是历史回放。 */
+  const liveResume = opts.liveResume === true
+  const terminalRecord = ['completed', 'failed', 'cancelled', 'partial'].includes(record.state)
   userMessage(record.goal, record.createdAt)
   butlerMessage(record.note ? `我按这个思路拆的：${record.note}` : '我按下面的方式拆了任务。', record.createdAt)
   append(planNote({
@@ -1293,8 +2264,14 @@ function renderTaskRecord(record) {
     const text = subtask.state === 'failed' || subtask.state === 'cancelled'
       ? (subtask.error || '没干成')
       : (subtask.result || STATE_TEXT[subtask.state] || '')
-    view.text.textContent = text
+    // 成员终稿与实时同口径（C 批）：成功/待外部的结果走受控 Markdown；失败与状态占位保持纯文本。
+    if (subtask.state !== 'failed' && subtask.state !== 'cancelled' && subtask.result) {
+      view.text = settleMarkdown(view.text, text)
+    } else {
+      view.text.textContent = text
+    }
     view.body = text
+    if (['succeeded', 'failed', 'cancelled', 'external_pending'].includes(subtask.state)) view.terminal = true
     if (subtask.state === 'succeeded') {
       view.bubble.classList.add('bubble--done')
       if (subtask.finishedAt && subtask.startedAt) {
@@ -1304,15 +2281,23 @@ function renderTaskRecord(record) {
     if (subtask.state === 'failed') view.bubble.classList.add('bubble--fail')
     if (subtask.state === 'waiting_user') {
       view.bubble.classList.add('bubble--wait')
-      // 历史里的等待无法直接回复（进程已重启），只提示重新描述目标。
-      view.footer.appendChild(make('div', 'msg__meta', '这次等待已经过去了，重新说一遍目标就能再接上'))
+      if (liveResume) {
+        // 快照接续的等待是活的：等待上下文仍在服务端，重新给回复入口而不是宣告过期。
+        askCard(view, { taskId: record.id, id: subtask.id, question: subtask.result || '需要你补充点信息', detail: subtask.result ?? '' })
+      } else {
+        // 历史里的等待无法直接回复（进程已重启），只提示重新描述目标。
+        view.footer.appendChild(make('div', 'msg__meta', '这次等待已经过去了，重新说一遍目标就能再接上'))
+      }
     }
   }
-  append(summaryCard({
-    state: record.state,
-    text: record.summary,
-    error: record.error,
-  }))
+  // 运行中的快照没有定论：终态卡只在终态或历史回放时出现，否则链路条如实反映进行中。
+  if (terminalRecord || !liveResume) {
+    append(summaryCard({
+      state: record.state,
+      text: record.summary,
+      error: record.error,
+    }))
+  }
   // 历史回放也要让链路条反映这一轮走到哪了，与实时汇总共用同一套语义。
   applySummaryRail(record.state)
 }
@@ -1359,12 +2344,19 @@ function autosize() {
 
 function openNewChat() {
   if (state.streaming) return
+  // 换新视图同样作废在途回包（方案 I09）。
+  state.viewToken += 1
   state.conversationId = null
   state.taskId = null
+  historyState.conversationId = null
+  historyState.transcriptBefore = null
+  historyState.taskOffset = null
+  historyState.entries = []
   clear(el.thread)
   threadInner()
   state.bubbles.clear()
   resetRail()
+  resetFollowing()
   renderWelcome()
   void refreshChatList()
   el.input.focus()
@@ -1386,8 +2378,52 @@ function bind() {
   })
 
   el.stop.addEventListener('click', () => {
-    state.abort?.abort()
-    if (state.conversationId) void api.stop(state.conversationId).catch(() => {})
+    // 停止对象绑定点击那一刻的会话（方案 I04/I08）：浏览对象后来怎么切，都不改变这次
+    // 停止发给谁。先发停止请求、继续观察终态；不在本地断流冒充「已停止」。
+    const conversationId = state.conversationId
+    if (conversationId === null || el.stop.disabled) return
+    el.stop.disabled = true
+    el.topStatus.textContent = '正在请求停止'
+    el.hint.textContent = '停止请求已发出，结果以这一轮的最终状态为准'
+    api.stop(conversationId, AbortSignal.timeout(10000))
+      .then(outcome => {
+        if (outcome.accepted) {
+          // 服务端已接受中止：终态由随后的 summary 事件落定，这里不再多说。
+          return
+        }
+        el.topStatus.textContent = '已上线'
+        append(make('p', 'msg__meta', `没有停止：${outcome.reason || '这一轮已经不在执行'}`))
+        scheduleFollowScroll()
+      })
+      .catch(() => {
+        el.topStatus.textContent = '停止请求失败'
+        append(make('p', 'error-line', '停止请求没送到，可以再试一次；取消不能回滚已经发生的操作。'))
+        announce('停止请求没送到，可以再试一次')
+        scheduleFollowScroll()
+      })
+      .finally(() => { el.stop.disabled = !state.streaming })
+  })
+
+  // 滚动跟随只认用户的手（I11）：上滚离开底部就暂停跟随并露出「回到最新」，
+  // 回到底部自动恢复；选字复制期间不强拉滚动。
+  el.thread.addEventListener('scroll', () => {
+    if (programmaticScroll) { noteStabilize({ branch: 'scroll-event', ignored: 'programmatic', top: Math.round(el.thread.scrollTop) }); return }
+    const distance = distanceFromBottom()
+    if (distance > 160) state.following = false
+    else if (distance < 40) state.following = true
+    noteStabilize({ branch: 'scroll-event', distance: Math.round(distance), following: state.following })
+    updateJumpLatest()
+  }, { passive: true })
+
+  el.jumpLatest.addEventListener('click', () => {
+    state.following = true
+    updateJumpLatest()
+    scrollToBottom()
+  })
+
+  document.addEventListener('selectionchange', () => {
+    const selection = document.getSelection()
+    state.selecting = selection !== null && !selection.isCollapsed && el.thread.contains(selection.anchorNode)
   })
 
   // 在光标处插一个 @：派活时点名成员用的，不是装饰。
@@ -1412,19 +2448,100 @@ function bind() {
     searchTimer = setTimeout(() => { void refreshChatList() }, 200)
   })
 
-  const setDrawer = open => {
-    document.body.dataset.drawer = open ? 'open' : 'closed'
-    el.drawerToggle.setAttribute('aria-expanded', String(open))
-    el.backdrop.hidden = !open
-  }
-  el.drawerToggle.addEventListener('click', () => setDrawer(document.body.dataset.drawer !== 'open'))
-  el.backdrop.addEventListener('click', () => setDrawer(false))
+  /* ── 窄屏抽屉（方案 I17）：一次只开一个、共享遮罩、Escape 关闭、焦点进入与返回 ── */
 
-  el.sidebarToggle.addEventListener('click', () => {
-    const open = document.body.dataset.sidebar !== 'open'
-    document.body.dataset.sidebar = open ? 'open' : 'closed'
-    el.sidebarToggle.setAttribute('aria-expanded', String(open))
+  const centerColumn = document.querySelector('.column--center')
+
+  /**
+   * 按断点与开合状态结算面板的键盘可达性（复核 2）。
+   *
+   * 两条规则叠加：**自身离屏**（窄屏断点下该栏平时移出屏幕，关闭即离屏）与
+   * **被另一抽屉的遮罩盖住**（如 1000px 开右抽屉时，常驻的左栏是背景）。
+   * 离屏或属于背景都 inert，Tab 才不会落进看不见或被盖住的控件；桌面无抽屉
+   * 打开时两栏常驻可达。
+   */
+  const applyOverlayInert = () => {
+    const drawerOpen = document.body.dataset.drawer === 'open'
+    const sidebarOpen = document.body.dataset.sidebar === 'open'
+    const drawerNarrow = window.matchMedia('(max-width: 1200px)').matches
+    const sidebarNarrow = window.matchMedia('(max-width: 880px)').matches
+    el.rightPanel.inert = drawerNarrow && !drawerOpen
+    el.leftPanel.inert = (sidebarNarrow && !sidebarOpen) || (drawerNarrow && drawerOpen)
+    centerColumn.inert = (drawerNarrow && drawerOpen) || (sidebarNarrow && sidebarOpen)
+  }
+
+  let drawerReturnFocus = null
+  let sidebarReturnFocus = null
+
+  const setDrawer = open => {
+    if (open) {
+      // 先记住真正的触发按钮，再互斥关另一侧——那一侧静默收起，不回焦点、不清遮罩
+      // （复核 2：否则焦点会被另一侧的关闭动作抢走，返回到错误的按钮）。
+      drawerReturnFocus = document.activeElement
+      if (document.body.dataset.sidebar === 'open') {
+        document.body.dataset.sidebar = 'closed'
+        el.sidebarToggle.setAttribute('aria-expanded', 'false')
+        sidebarReturnFocus = null
+      }
+      document.body.dataset.drawer = 'open'
+      el.drawerToggle.setAttribute('aria-expanded', 'true')
+      applyOverlayInert()
+      el.backdrop.hidden = false
+      el.rightPanel.focus()
+    } else {
+      document.body.dataset.drawer = 'closed'
+      el.drawerToggle.setAttribute('aria-expanded', 'false')
+      applyOverlayInert()
+      // 遮罩是否还亮着取决于另一侧是否开着（共享遮罩）。
+      el.backdrop.hidden = document.body.dataset.sidebar !== 'open'
+      // 焦点送回开门的那颗按钮，绝不留在屏外控件上。
+      drawerReturnFocus?.focus?.()
+      drawerReturnFocus = null
+    }
+  }
+
+  const setSidebar = open => {
+    if (open) {
+      sidebarReturnFocus = document.activeElement
+      if (document.body.dataset.drawer === 'open') {
+        document.body.dataset.drawer = 'closed'
+        el.drawerToggle.setAttribute('aria-expanded', 'false')
+        drawerReturnFocus = null
+      }
+      document.body.dataset.sidebar = 'open'
+      el.sidebarToggle.setAttribute('aria-expanded', 'true')
+      applyOverlayInert()
+      el.backdrop.hidden = false
+      el.leftPanel.focus()
+    } else {
+      document.body.dataset.sidebar = 'closed'
+      el.sidebarToggle.setAttribute('aria-expanded', 'false')
+      applyOverlayInert()
+      el.backdrop.hidden = document.body.dataset.drawer !== 'open'
+      sidebarReturnFocus?.focus?.()
+      sidebarReturnFocus = null
+    }
+  }
+
+  el.drawerToggle.addEventListener('click', () => setDrawer(document.body.dataset.drawer !== 'open'))
+  el.sidebarToggle.addEventListener('click', () => setSidebar(document.body.dataset.sidebar !== 'open'))
+  el.backdrop.addEventListener('click', () => {
+    if (document.body.dataset.drawer === 'open') setDrawer(false)
+    else if (document.body.dataset.sidebar === 'open') setSidebar(false)
   })
+
+  // Escape 依次收起浮层：设置页 → 右抽屉 → 左抽屉；输入法组合期间不抢键。
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || event.isComposing) return
+    if (state.settingsOpen) { event.preventDefault(); setOpenSettings(false); return }
+    if (document.body.dataset.drawer === 'open') { event.preventDefault(); setDrawer(false); return }
+    if (document.body.dataset.sidebar === 'open') { event.preventDefault(); setSidebar(false) }
+  })
+
+  // 初始化与跨断点都重新结算：关闭时离屏面板拦在键盘外，跨回桌面放开常驻栏。
+  applyOverlayInert()
+  window.matchMedia('(max-width: 1200px)').addEventListener('change', applyOverlayInert)
+  window.matchMedia('(max-width: 880px)').addEventListener('change', applyOverlayInert)
 }
 
 /* ── 启动 ─────────────────────────────────────────────────────────────── */

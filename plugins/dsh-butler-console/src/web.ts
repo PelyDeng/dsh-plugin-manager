@@ -296,6 +296,15 @@ export async function installWeb(
     let closed = false
     const send = (value: unknown) => {
       if (closed || response.writableEnded || response.destroyed) return
+      // 流式诊断（方案 S01）：HTTP **写出**点，与应用入队（butler.ts pump）区分开，两者
+      // 的间隔就是队列与连接造成的滞留。时间为服务端墙钟。
+      if (process.env.BUTLER_STREAM_DEBUG === '1' && typeof value === 'object' && value !== null) {
+        const logged = value as { type?: unknown; seq?: unknown; runId?: unknown }
+        console.debug('butler-stream server-write', {
+          type: String(logged.type ?? ''), seq: logged.seq ?? null, runId: logged.runId ?? null,
+          len: JSON.stringify(value).length, t: Date.now(),
+        })
+      }
       response.write(`data: ${JSON.stringify(value)}\n\n`)
     }
     const done = () => {
@@ -388,7 +397,10 @@ export async function installWeb(
     },
   }))
 
-  // 静态资源：web/ 下的文件，打包后与 dist/ 同级。
+  // 静态资源：web/ 下的文件，打包后与 dist/ 同级。入口脚本 app.js 例外：浏览器不解析
+  // 裸包名（markdown-it 等依赖），走 tsdown.web 的打包产物 dist/web/app.js——与
+  // dsh-example 服务 dist/web 入口是同一模式。
+  const entryBundle = fileURLToPath(new URL('../dist/web/app.js', import.meta.url))
   ctx.effect(() => register({
     kind: 'prefix',
     path: `${config.routePrefix}/assets`,
@@ -397,9 +409,14 @@ export async function installWeb(
       const url = new URL(request.url ?? '/', 'http://localhost')
       const suffix = decodeURIComponent(url.pathname.slice(`${config.routePrefix}/assets`.length)).replace(/^\/+/, '')
       if (suffix === '') throw new HttpError(404, '资源不存在', 'asset_not_found')
-      const file = resolve(assetRoot, suffix)
-      const local = relative(assetRoot, file)
-      if (local.startsWith('..') || isAbsolute(local)) throw new HttpError(404, '资源不存在', 'asset_not_found')
+      let file: string
+      if (suffix === 'app.js') {
+        file = entryBundle
+      } else {
+        file = resolve(assetRoot, suffix)
+        const local = relative(assetRoot, file)
+        if (local.startsWith('..') || isAbsolute(local)) throw new HttpError(404, '资源不存在', 'asset_not_found')
+      }
       let content: Buffer
       try {
         content = await readFile(file)
@@ -546,8 +563,15 @@ export async function installWeb(
       if (conversationId === '') throw new HttpError(400, '缺少 conversationId', 'missing_field')
       const after = cursorField(params.get('after') ?? '')
       const limit = transcriptLimit(params.get('limit'))
+      // 尾读模式（C 批历史阅读）：tail 取最新一页，before 取该序号之前更早的一页；两者互斥。
+      const tail = params.get('tail') === '1'
+      const beforeText = params.get('before')
+      if (tail && beforeText !== null) throw new HttpError(400, 'tail 与 before 不能同时使用', 'invalid_field')
+      const options: { before?: number; tail?: boolean } = {}
+      if (tail) options.tail = true
+      if (beforeText !== null) options.before = cursorField(beforeText)
       access.assert(actor)
-      respond(actor, response, 200, await console_.transcript(conversationId, actor, after, limit))
+      respond(actor, response, 200, await console_.transcript(conversationId, actor, after, limit, options))
     },
   }))
 

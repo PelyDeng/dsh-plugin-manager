@@ -297,7 +297,13 @@ textarea:focus-visible,
 .rail__label { font-size: 11px; line-height: 1.2; color: var(--bt-ink-faint); white-space: nowrap; }
 
 .rail__step[data-state="done"] .rail__badge,
-.rail__step[data-state="active"] .rail__badge { border-color: transparent; color: #fff; }
+.rail__step[data-state="active"] .rail__badge,
+.rail__step[data-state="waiting"] .rail__badge,
+.rail__step[data-state="partial"] .rail__badge { border-color: transparent; color: #fff; }
+
+/* 等待与部分结束不是执行中（方案 6.1「等待仍旋转」的纠正）：静态底色，不转圈。 */
+.rail__step[data-state="waiting"] .rail__badge { background: var(--bt-warn); }
+.rail__step[data-state="partial"] .rail__badge { background: var(--bt-warn); }
 
 .rail__step[data-key="ask"][data-state="done"] .rail__badge,
 .rail__step[data-key="ask"][data-state="active"] .rail__badge { background: var(--bt-coral); }
@@ -322,17 +328,25 @@ textarea:focus-visible,
 @keyframes bt-spin { to { transform: rotate(360deg); } }
 
 .rail__step[data-state="done"] .rail__label,
-.rail__step[data-state="active"] .rail__label { color: var(--bt-ink-soft); font-weight: 700; }
+.rail__step[data-state="active"] .rail__label,
+.rail__step[data-state="waiting"] .rail__label,
+.rail__step[data-state="partial"] .rail__label { color: var(--bt-ink-soft); font-weight: 700; }
 
 .rail__arrow {
   flex: none; width: 22px; height: 12px; margin-top: 9px;
   background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 12'%3E%3Cpath d='M1.5 6.5 C 6 5.4, 11 5.7, 20.5 6.2 M16.5 2.6 C 18.2 4, 19.7 5.2, 21.8 6.2 C 19.8 7.2, 18.2 8.4, 16.6 10' fill='none' stroke='%23b9ad9c' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center / contain;
 }
 
+/* 滚动容器外包一层：给「回到最新」一个不随内容滚动的定位锚（C 批 I11）。 */
+.thread-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
 .thread {
   flex: 1; min-height: 0; overflow-y: auto;
   padding: 4px 16px 12px;
   display: flex; flex-direction: column; gap: 14px;
+  /* 视口钉扎由应用自己做（stabilizeViewport）：关掉浏览器原生 scroll anchoring，
+     避免两套锚定互相改写 scrollTop（浏览器实测发现的静默漂移来源）。 */
+  overflow-anchor: none;
 }
 
 .thread__inner {
@@ -409,10 +423,22 @@ textarea:focus-visible,
   opacity: 0.92;
   transition: width 240ms ease;
 }
+/* 不确定指示（复核 3）：没有可信分母就不显示伪百分比，让一段短条来回滑；
+ * 真实阶段由工具行文字表达，终态文字由进度标签收口。 */
+.progress__fill--indeterminate {
+  width: 34%;
+  animation: bt-progress-slide 1.6s ease-in-out infinite;
+}
+@keyframes bt-progress-slide {
+  0% { margin-left: -34%; }
+  100% { margin-left: 100%; }
+}
 .progress__label { font-size: 12.5px; color: var(--bt-ink-soft); font-family: var(--bt-hand); font-weight: 700; }
 
 .tool-line { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 12px; color: var(--bt-ink-soft); }
 .tool-line__name { font-family: var(--bt-mono); font-size: 11.5px; }
+/* 终态后的工具行改过去式（方案 I06）：淡出「正在做」的口吻，不再冒充进行中。 */
+.tool-line--past { color: var(--bt-ink-faint); }
 
 /* 成员的可展示思考：默认收起，摘要行只留最新一行预览。 */
 .think {
@@ -504,7 +530,81 @@ textarea:focus-visible,
 .summary[data-state="cancelled"] { border-left-color: var(--bt-ink-faint); background: #00000008; }
 .summary[data-state="waiting_user"] { border-left-color: var(--bt-warn); background: var(--bt-warn-bg); }
 .summary__title { font-family: var(--bt-hand); font-size: 13.5px; font-weight: 700; margin-bottom: 4px; }
-.summary__body { margin: 0; font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.summary__body { margin: 0 0 4px; font-size: 13.5px; }
+.summary__body.md { white-space: normal; overflow-wrap: anywhere; }
+
+/* ── 受控 Markdown（C 批）：标签由渲染器白名单固定，文本只进文本节点 ────── */
+.md { font-size: 13.5px; line-height: 1.65; white-space: normal; overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 8px; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
+  margin: 10px 0 6px; font-family: var(--bt-hand); font-weight: 700; line-height: 1.4;
+}
+.md h1 { font-size: 18px; }
+.md h2 { font-size: 16px; }
+.md h3, .md h4, .md h5, .md h6 { font-size: 14.5px; }
+.md ul, .md ol { margin: 0 0 8px; padding-left: 20px; }
+.md li { margin: 2px 0; }
+.md blockquote {
+  margin: 0 0 8px; padding: 2px 12px;
+  border-left: 3px solid var(--bt-line); color: var(--bt-ink-soft);
+}
+.md code { font-family: var(--bt-mono); font-size: 12px; background: #0000000a; border-radius: 4px; padding: 1px 5px; }
+.md pre.md-code {
+  margin: 0 0 8px; padding: 0; background: #f6f1e6;
+  border: 1.5px solid var(--bt-line); border-radius: 10px; overflow-x: auto;
+}
+.md pre.md-code > code {
+  display: block; padding: 8px 12px; background: none; font-size: 12px; line-height: 1.6;
+  white-space: pre; overflow-wrap: normal;
+}
+/* 大表格横向滚动：区域可聚焦，键盘也能滚进去看全（方案 5.4）。 */
+.md .table-scroll {
+  overflow-x: auto; margin: 0 0 10px;
+  border: 1.5px solid var(--bt-line); border-radius: 10px;
+}
+.md .table-scroll:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 1px; }
+.md table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
+.md th, .md td { border-bottom: 1px solid var(--bt-line); padding: 5px 10px; text-align: left; }
+.md tbody tr:last-child th, .md tbody tr:last-child td { border-bottom: none; }
+.md th { font-family: var(--bt-hand); font-weight: 700; background: #faf6ec; }
+.md hr { border: none; border-top: 1.5px dashed var(--bt-line); margin: 8px 0; }
+
+/* ── 历史阅读（C 批 I10/S13）────────────────────────────────────────── */
+
+/* 加载更早记录：线程顶部的分界入口。 */
+.history-head { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 2px 0 4px; }
+.history-head__note { font-size: 11.5px; color: var(--bt-ink-faint); }
+.history-head__error { font-size: 11.5px; color: var(--bt-error); }
+
+/* 任务摘要卡：明确是「摘要」不是对话；点开看完整记录。 */
+.task-card {
+  display: block; width: 100%; text-align: left; font: inherit; color: inherit;
+  background: var(--bt-card); border: 1.5px dashed var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm); padding: 8px 12px; cursor: pointer;
+}
+.task-card:hover { background: #00000005; }
+.task-card[data-state="failed"] { border-color: var(--bt-error); background: var(--bt-error-bg); }
+.task-card[data-state="waiting_user"], .task-card[data-state="external_pending"] { border-color: var(--bt-warn); background: var(--bt-warn-bg); }
+.task-card[data-state="completed"] { border-color: var(--bt-ok); }
+.task-card__head { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--bt-ink-faint); }
+.task-card__badge {
+  font-family: var(--bt-hand); font-weight: 700; font-size: 11px; color: #8a6100;
+  border: 1px solid var(--bt-amber); border-radius: 999px; padding: 0 8px;
+}
+.task-card__goal { font-size: 13px; margin-top: 3px; font-weight: 600; }
+.task-card__meta { font-size: 11px; color: var(--bt-ink-faint); margin-top: 3px; }
+
+/* 回到最新：跟随暂停时浮在线程右下角。 */
+.jump-latest {
+  position: absolute; right: 18px; bottom: 10px; z-index: 5;
+  background: var(--bt-card); border: 1.5px solid var(--bt-stroke); border-radius: 999px;
+  padding: 4px 12px; font-family: var(--bt-hand); font-size: 12px; font-weight: 700; color: var(--bt-ink);
+  box-shadow: 1px 2px 0 #00000018; cursor: pointer;
+}
+.jump-latest:hover { transform: translate(-1px, -1px); box-shadow: 2px 3px 0 #00000018; }
+.jump-latest[hidden] { display: none; }
 
 .welcome { max-width: 520px; margin: 4vh auto 0; text-align: center; }
 .welcome__mascot { width: 132px; height: auto; margin: 0 auto 6px; display: block; }
@@ -610,12 +710,15 @@ textarea:focus-visible,
   position: absolute; right: -3px; bottom: -3px;
   width: 19px; height: 19px;
   display: grid; place-items: center;
+  padding: 0; font: inherit; line-height: 1;
   background: #fff; color: var(--bt-ink);
   border-radius: 50%; font-size: 10.5px;
   border: 1.6px solid var(--bt-stroke);
   box-shadow: 1px 1px 0 #00000018;
   cursor: pointer;
 }
+.member__camera:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 1px; }
+.member__avatar-slot { display: grid; place-items: center; }
 
 .member__name { font-size: 12.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .member__declared { font-size: 10.5px; color: var(--bt-ink-faint); font-family: var(--bt-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -776,6 +879,17 @@ body[data-settings="open"] .settings {
 .set-card__titles .member__declared { font-size: 11px; }
 .set-card__actions { display: flex; gap: 8px; }
 
+/* 卡内状态行（方案 I14）：未保存 / 保存中 / 已保存 / 失败，同一位置换文案不换布局。 */
+.set-card__status { min-height: 16px; font-size: 12px; color: var(--bt-ink-soft); }
+.set-card__status[data-kind="ok"] { color: var(--bt-ok); }
+.set-card__status[data-kind="error"] { color: var(--bt-error); }
+.set-card__status[data-kind="busy"] { color: var(--bt-ink-faint); }
+
+/* 执行中进设置页的提示（方案 I18）：跟在说明后面，不占新行。 */
+.settings__live { font-size: 12px; font-weight: 700; color: var(--bt-warn); }
+.settings__title:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 3px; }
+.column--left:focus-visible, .column--right:focus-visible { outline: none; }
+
 .field input {
   padding: 5px 9px;
   border: 1.5px solid var(--bt-line);
@@ -807,7 +921,9 @@ body[data-settings="open"] .settings {
   .drawer-toggle { display: inline-flex; }
 
   .drawer-backdrop { position: fixed; inset: 0; z-index: 30; background: #3d363033; }
-  body[data-drawer="open"] .drawer-backdrop { display: block; }
+  /* 共享遮罩（复核 2）：左右任一抽屉打开都亮，关闭即隐。 */
+  body[data-drawer="open"] .drawer-backdrop,
+  body[data-sidebar="open"] .drawer-backdrop { display: block; }
 }
 
 @media (max-width: 880px) {
@@ -835,4 +951,14 @@ body[data-settings="open"] .settings {
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  /* 无限循环的动效显式关掉（方案 6.1）：0.001ms 只是看不见，浏览器仍在跑计时。 */
+  .caret, .typing i, .rail__step[data-state="active"] .rail__badge::after,
+  .progress__fill--indeterminate { animation: none !important; }
+  /* 关掉动画后不确定条停在轨道里，静态可见即可。 */
+  .progress__fill--indeterminate { margin-left: 33%; }
+}
+
+/* 提交失败的重试行（A 批 S03）：错误说明和重试按钮排在同一行。 */
+.error-line--retry {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
