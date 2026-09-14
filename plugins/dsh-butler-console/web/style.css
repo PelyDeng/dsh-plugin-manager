@@ -836,3 +836,8 @@ body[data-settings="open"] .settings {
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
+
+/* 提交失败的重试行（A 批 S03）：错误说明和重试按钮排在同一行。 */
+.error-line--retry {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}

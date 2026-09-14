@@ -57,7 +57,7 @@ export const api = {
     return request(`/history?${params.toString()}`)
   },
   task: id => request(`/task?id=${encodeURIComponent(id)}`),
-  stop: conversationId => request('/stop', { method: 'POST', body: JSON.stringify({ conversationId }) }),
+  stop: (conversationId, signal) => request('/stop', { method: 'POST', body: JSON.stringify({ conversationId }), signal }),
   setAlias: (agentId, displayName, accent) =>
     request('/members/alias', { method: 'POST', body: JSON.stringify({ agentId, displayName, accent }) }),
   clearAvatar: agentId =>

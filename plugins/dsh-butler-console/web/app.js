@@ -10,7 +10,7 @@
  * 所有用户可见文本都用 textContent 写入，不使用 innerHTML，避免把模型输出当成标记解析。
  */
 
-import { ApiError, api, avatarUrl, chat, events, reply, uploadAvatar, ROUTE_PREFIX } from './api.js'
+import { ApiError, api, avatarUrl, chat, events, eventsHead, reply, uploadAvatar, ROUTE_PREFIX } from './api.js'
 
 /** 成员配色：按 agentId 稳定取色，所以同一个插件每次都是同一个颜色。 */
 const PALETTE = ['#4d96ff', '#2ec4a6', '#ff6b57', '#9b5de5', '#ffb703', '#e8709a']
@@ -165,6 +165,10 @@ const state = {
   avatarStamps: new Map(),
   streaming: false,
   abort: null,
+  /** 视图代次：所有会话切换入口共用，异步回包先核对它，旧响应不许写进新视图。 */
+  viewToken: 0,
+  /** 发送时预渲染、等服务端回放确认的那条用户消息；失败时用它恢复草稿。 */
+  pendingUser: null,
   /** 子任务 id → 该成员当前的气泡与状态节点，供流式增量原地更新。 */
   bubbles: new Map(),
   /** 大总管正在流式发言的那条气泡；落定的 `chat` 收它。 */
@@ -176,6 +180,28 @@ const state = {
   rail: { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' },
   settingsOpen: false,
 }
+
+/**
+ * 流式诊断（方案 S01）：地址带 `?trace=stream` 打开。
+ *
+ * 只记录层级、事件类型、序号与本机单调时间，不记录正文、推理内容或凭据；跨机器时间
+ * 不可直接相减。服务端对应观测点由 `BUTLER_STREAM_DEBUG=1` 打开，两边对同一轮 runId
+ * 才能拼出「宿主帧 → 应用写出 → 客户端接收 → 绘制」四段。
+ */
+const streamTraceEnabled = new URLSearchParams(location.search).get('trace') === 'stream'
+const streamTrace = []
+function traceEvent(layer, event) {
+  if (!streamTraceEnabled) return
+  const record = {
+    t: Math.round(performance.now()), layer, type: event.type,
+    seq: event.seq ?? null, runId: event.runId ?? null,
+    len: typeof event.text === 'string' ? event.text.length : typeof event.delta === 'string' ? event.delta.length : null,
+  }
+  streamTrace.push(record)
+  console.debug('[butler-stream]', layer, record.type, `seq=${record.seq} len=${record.len} t=${record.t}`)
+  if (streamTrace.length > 2000) streamTrace.shift()
+}
+globalThis.__butlerStreamTrace = streamTrace
 
 /* ── 小工具 ───────────────────────────────────────────────────────────── */
 
@@ -265,6 +291,7 @@ function threadInner() {
 
 function append(node) {
   threadInner().appendChild(node)
+  return node
 }
 
 function scrollIfFollowing() {
@@ -291,6 +318,7 @@ function userMessage(text, time) {
   boss.appendChild(bossImage)
   msg.appendChild(boss)
   append(msg)
+  return msg
 }
 
 /**
@@ -517,10 +545,17 @@ function handleEvent(event) {
       rememberConversation(event.conversationId)
       return
 
-    case 'user':
+    case 'user': {
+      // 发送时已经预渲染过同一条：受理回放对得上就不重复画。对不上（历史回放、
+      // 其他入口）照常渲染。任务数量与派发事实只由 plan 与 subtask 事件表达。
+      if (state.pendingUser !== null && state.pendingUser.text === event.text) {
+        state.pendingUser = null
+        break
+      }
       state.butlerSpeech = null
       userMessage(event.text, event.time)
       break
+    }
 
     case 'chat':
       butlerSettle(event.text, event.time)
@@ -547,8 +582,9 @@ function handleEvent(event) {
       setRail('parse', 'done')
       setRail('dispatch', 'active')
       // 计划贴纸是新的一条消息：先收掉可能还开着的大总管气泡，别把两段话并到一条里。
+      // 这里不替大总管编话：拆了几份、派给谁、有没有喊到人，由下面的计划贴纸和后续
+      // subtask 事件按服务端事实呈现（方案 S02）。
       state.butlerSpeech = null
-      butlerMessage('收到！这活我拆成三份，已经喊人了。')
       append(planNote(event))
       break
     }
@@ -672,7 +708,8 @@ function handleSubtask(event) {
   }
 
   if (event.state === 'failed' || event.state === 'cancelled') {
-    view.bubble.classList.add(event.state === 'failed' ? 'bubble--fail' : '')
+    // classList.add('') 会抛 TypeError（取消态没样式类）：错误文本曾因此漏进线程。
+    if (event.state === 'failed') view.bubble.classList.add('bubble--fail')
     if (view.body === '') view.text.textContent = event.detail
     else view.bubble.appendChild(make('div', 'msg__meta', event.detail))
     return
@@ -704,12 +741,27 @@ function askCard(view, event) {
   card.appendChild(row)
   view.footer.appendChild(card)
 
+  const lock = locked => { for (const node of [send, decide, input]) node.disabled = locked }
   const submit = async (text, decideByAgent) => {
     if (state.streaming) return
-    card.remove()
-    state.asks.delete(event.id)
-    view.bubble.classList.remove('bubble--wait')
-    await runReply({ taskId: event.taskId, subtaskId: event.id, text, decideByAgent })
+    // 空文本不提交（方案 I03）：「你看着办」是显式语义，单独走按钮。
+    if (!decideByAgent && text === '') { input.focus(); return }
+    lock(true)
+    const note = card.appendChild(make('div', 'msg__meta', '正在送出回话…'))
+    await runReply({ taskId: event.taskId, subtaskId: event.id, text, decideByAgent }, {
+      // 受理成功才收起卡片；之前失败都在卡内恢复，输入不丢。
+      onAccepted: () => {
+        card.remove()
+        state.asks.delete(event.id)
+        view.bubble.classList.remove('bubble--wait')
+      },
+      onRejected: error => {
+        note.remove()
+        lock(false)
+        card.appendChild(make('div', 'error-line', `${error instanceof Error && error.message ? error.message : '没送出去'}；输入还在，改一下再试。`))
+        input.focus()
+      },
+    })
   }
 
   send.addEventListener('click', () => { void submit(input.value.trim(), false) })
@@ -808,15 +860,24 @@ async function resumeLiveTurn() {
   const conversationId = recallConversation()
   if (conversationId === null || conversationId === '' || state.streaming) return
 
+  // 探测有网络往返：等回包的这段时间里用户可能已经打开了别的会话或发起了新消息。
+  // 先记下当前视图代次，回包后复核——不是当前视图就不接管（方案 I09）。
+  const tokenAtProbe = state.viewToken
   let head
   try {
-    head = await api.eventsHead(conversationId)
-  } catch {
+    head = await eventsHead(conversationId)
+  } catch (error) {
+    if (tokenAtProbe !== state.viewToken) return
+    // 接续检查失败不能静默吞掉（方案 S04）：用户会以为一切正常，其实连不上。
+    append(make('p', 'error-line', `接续检查失败：${error instanceof Error ? error.message : '网络异常'}；刷新页面可重试`))
     return
   }
   if (head === null || head.state !== 'running') return
+  if (tokenAtProbe !== state.viewToken || state.streaming) return
 
   const controller = new AbortController()
+  // 接管视图：作废之前还在路上的历史读取回包，它们的结论属于旧视图。
+  state.viewToken += 1
   state.conversationId = conversationId
   state.abort = controller
   clear(el.thread)
@@ -828,12 +889,14 @@ async function resumeLiveTurn() {
   try {
     for await (const event of events({ conversationId, after: 0, signal: controller.signal })) {
       if (event.type === 'run') continue
+      traceEvent('receive', event)
       if (event.type === 'reset') {
         // 这一轮太长，开头的事件已经滚出窗口：补不回来了，如实说明而不是假装从头发过。
         append(make('p', 'error-line', '这一轮的早期进度已经过期，只接上了后半段；完整状态看右栏。'))
         continue
       }
       handleEvent(event)
+      if (streamTraceEnabled) requestAnimationFrame(() => traceEvent('draw', event))
     }
   } catch (error) {
     reportFailure(error, '接上正在跑的任务失败')
@@ -845,39 +908,92 @@ async function resumeLiveTurn() {
 async function sendMessage(text) {
   const trimmed = text.trim()
   if (trimmed === '' || state.streaming) return
-  if (state.conversationId === null) state.conversationId = newConversationId()
-
-  clear(el.thread)
-  threadInner()
-  resetRail()
+  const fresh = state.conversationId === null
+  if (fresh) state.conversationId = newConversationId()
+  // 同一会话的新回合追加在原线程后面；只有第一次发送（或欢迎页还在）才换新视图（方案 I01）。
+  if (fresh || el.thread.querySelector('.welcome') !== null) {
+    state.viewToken += 1
+    clear(el.thread)
+    threadInner()
+  }
+  // 回合级状态每轮都换新：链路条不能带着上一轮的进度开跑。
   state.bubbles.clear()
   state.asks.clear()
+  resetRail()
   setRail('parse', 'active')
   setBusy(true)
   state.abort = new AbortController()
   el.input.value = ''
   autosize()
-
+  // 提交内容先就地呈现，配一行「正在发送」：受理与否是服务端事实，客户端不编（方案 S03）。
+  const bubble = userMessage(trimmed, Date.now())
+  const note = append(make('p', 'msg__meta', '正在发送…'))
+  state.pendingUser = { text: trimmed, bubble }
   try {
     for await (const event of chat({ conversationId: state.conversationId, message: trimmed, signal: state.abort.signal })) {
+      traceEvent('receive', event)
+      // 受理确认只把占位从「发送中」推进到「理解中」；正文、计划或异常到达前不撤掉
+      // 占位——conversation 是元事件，不能当「已经有内容」的信号（方案 S03）。
+      if (event.type === 'conversation') {
+        note.textContent = '正在理解目标…'
+      } else if (event.type !== 'user') {
+        note.remove()
+      }
       handleEvent(event)
+      if (streamTraceEnabled) requestAnimationFrame(() => traceEvent('draw', event))
     }
+    state.pendingUser = null
+    if (note.isConnected) note.remove()
   } catch (error) {
-    reportFailure(error, '发送失败，再试一次？')
+    if (note.isConnected) note.remove()
+    if (state.pendingUser !== null) {
+      // 还没受理就失败了：草稿回到输入框（用户后来打过字就不覆盖），并给出重试入口。
+      state.pendingUser = null
+      if (el.input.value.trim() === '') { el.input.value = trimmed; autosize() }
+      retryEntry(trimmed, error instanceof Error && error.message ? error.message : '没送出去', bubble)
+    } else {
+      // 已受理后连接断掉：这一轮还在服务端跑，如实报错，不冒充停止也不自动重发。
+      reportFailure(error, '发送失败')
+    }
+    scrollIfFollowing()
   } finally {
     finishTurn()
   }
 }
 
-async function runReply({ taskId, subtaskId, text, decideByAgent }) {
+/** 提交失败后的重试入口：撤掉失败的痕迹，原样重发同一句话。 */
+function retryEntry(text, message, staleBubble) {
+  const row = make('div', 'error-line error-line--retry')
+  row.appendChild(make('span', null, `${message}。`))
+  const button = make('button', 'btn btn--tiny', '重试')
+  button.type = 'button'
+  button.addEventListener('click', () => {
+    staleBubble?.remove()
+    row.remove()
+    void sendMessage(text)
+  })
+  row.appendChild(button)
+  append(row)
+}
+
+async function runReply(input, hooks = {}) {
   setBusy(true)
   state.abort = new AbortController()
+  let accepted = false
   try {
-    for await (const event of reply({ taskId, subtaskId, text, decideByAgent, signal: state.abort.signal })) {
+    for await (const event of reply({ ...input, signal: state.abort.signal })) {
+      traceEvent('receive', event)
+      if (!accepted) {
+        accepted = true
+        // 受理确认：请示卡到这一步才收起，之前失败都还能改（方案 I03）。
+        hooks.onAccepted?.()
+      }
       handleEvent(event)
+      if (streamTraceEnabled) requestAnimationFrame(() => traceEvent('draw', event))
     }
   } catch (error) {
-    reportFailure(error, '回复没送出去，再试一次？')
+    reportFailure(error, '回复没送出去')
+    if (!accepted) hooks.onRejected?.(error)
   } finally {
     finishTurn()
   }
@@ -885,7 +1001,8 @@ async function runReply({ taskId, subtaskId, text, decideByAgent }) {
 
 function reportFailure(error, fallback) {
   if (error?.name === 'AbortError') {
-    append(make('p', 'error-line', '已喊停。'))
+    // 连接被本地中断只说明「不再观察」，不等于任务停了；终态以服务端事件为准。
+    append(make('p', 'error-line', '连接已中断，这一轮是否结束以右栏状态为准。'))
     return
   }
   append(make('p', 'error-line', error instanceof Error && error.message ? error.message : fallback))
@@ -1229,6 +1346,8 @@ async function refreshChatList() {
 /** 打开一个历史会话：把它的任务按先后重建成消息流。 */
 async function openConversation(id) {
   if (state.streaming) return
+  // 视图代次：先点 A 再点 B、A 响应更晚时，只显示 B，旧回包不许写入（方案 I09）。
+  const token = ++state.viewToken
   state.conversationId = id
   rememberConversation(id)
   clear(el.thread)
@@ -1236,10 +1355,12 @@ async function openConversation(id) {
   state.bubbles.clear()
   state.asks.clear()
   resetRail()
+  append(make('p', 'msg__meta', '正在读取记录…'))
   try {
     // 按会话取，不在页面上筛：会话一多，更早的那个就会落在第一页之外，
     // 打开它只会看到欢迎语 —— 记录明明在库里，只是没被取到。
     const page = await api.history({ conversationId: id })
+    if (token !== state.viewToken) return
     const mine = page.items.slice().reverse()
     if (mine.length === 0) {
       renderWelcome()
@@ -1247,10 +1368,12 @@ async function openConversation(id) {
     }
     for (const task of mine) {
       const record = await api.task(task.id)
+      if (token !== state.viewToken) return
       renderTaskRecord(record)
     }
     el.thread.scrollTop = el.thread.scrollHeight
   } catch (error) {
+    if (token !== state.viewToken) return
     // 拉不到就如实说，不装成「这里没派过活」——那样看起来像记录丢了。
     append(make('p', 'error-line', error instanceof Error ? error.message : '打不开这个会话'))
   }
@@ -1258,8 +1381,13 @@ async function openConversation(id) {
 }
 
 async function openTask(id) {
+  // 与 openConversation 同一保护（方案 I08）：右栏失败记录也是换视图入口，
+  // 执行中切换会替换全局会话与线程，不能没有守卫。
+  if (state.streaming) return
+  const token = ++state.viewToken
   try {
     const record = await api.task(id)
+    if (token !== state.viewToken) return
     state.conversationId = record.conversationId
     rememberConversation(record.conversationId)
     clear(el.thread)
@@ -1269,6 +1397,7 @@ async function openTask(id) {
     renderTaskRecord(record)
     el.thread.scrollTop = el.thread.scrollHeight
   } catch (error) {
+    if (token !== state.viewToken) return
     append(make('p', 'error-line', error instanceof Error ? error.message : '打不开这条记录'))
   }
 }
@@ -1359,6 +1488,8 @@ function autosize() {
 
 function openNewChat() {
   if (state.streaming) return
+  // 换新视图同样作废在途回包（方案 I09）。
+  state.viewToken += 1
   state.conversationId = null
   state.taskId = null
   clear(el.thread)
@@ -1386,8 +1517,29 @@ function bind() {
   })
 
   el.stop.addEventListener('click', () => {
-    state.abort?.abort()
-    if (state.conversationId) void api.stop(state.conversationId).catch(() => {})
+    // 停止对象绑定点击那一刻的会话（方案 I04/I08）：浏览对象后来怎么切，都不改变这次
+    // 停止发给谁。先发停止请求、继续观察终态；不在本地断流冒充「已停止」。
+    const conversationId = state.conversationId
+    if (conversationId === null || el.stop.disabled) return
+    el.stop.disabled = true
+    el.topStatus.textContent = '正在请求停止'
+    el.hint.textContent = '停止请求已发出，结果以这一轮的最终状态为准'
+    api.stop(conversationId, AbortSignal.timeout(10000))
+      .then(outcome => {
+        if (outcome.accepted) {
+          // 服务端已接受中止：终态由随后的 summary 事件落定，这里不再多说。
+          return
+        }
+        el.topStatus.textContent = '已上线'
+        append(make('p', 'msg__meta', `没有停止：${outcome.reason || '这一轮已经不在执行'}`))
+        scrollIfFollowing()
+      })
+      .catch(() => {
+        el.topStatus.textContent = '停止请求失败'
+        append(make('p', 'error-line', '停止请求没送到，可以再试一次；取消不能回滚已经发生的操作。'))
+        scrollIfFollowing()
+      })
+      .finally(() => { el.stop.disabled = !state.streaming })
   })
 
   // 在光标处插一个 @：派活时点名成员用的，不是装饰。

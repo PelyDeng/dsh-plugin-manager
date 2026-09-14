@@ -296,6 +296,15 @@ export async function installWeb(
     let closed = false
     const send = (value: unknown) => {
       if (closed || response.writableEnded || response.destroyed) return
+      // 流式诊断（方案 S01）：HTTP **写出**点，与应用入队（butler.ts pump）区分开，两者
+      // 的间隔就是队列与连接造成的滞留。时间为服务端墙钟。
+      if (process.env.BUTLER_STREAM_DEBUG === '1' && typeof value === 'object' && value !== null) {
+        const logged = value as { type?: unknown; seq?: unknown; runId?: unknown }
+        console.debug('butler-stream server-write', {
+          type: String(logged.type ?? ''), seq: logged.seq ?? null, runId: logged.runId ?? null,
+          len: JSON.stringify(value).length, t: Date.now(),
+        })
+      }
       response.write(`data: ${JSON.stringify(value)}\n\n`)
     }
     const done = () => {

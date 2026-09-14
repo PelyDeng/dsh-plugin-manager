@@ -602,25 +602,18 @@ export class ButlerConsole {
 
   /**
    * 同会话执行互斥：每个会话同一时刻只有一个受理在执行（chat 的回合、对等待成员的回话、
-   * 补充的处理）。`runId` 是释放凭据——收尾时核对它，旧执行清不掉新执行的占用。`kind`
-   * 里只有「turn」允许被回话接管：等待中的成员本来就靠用户回话送走，其余并存一律拒绝。
-   * 页面各自持有的 streaming 标记只是反馈，不能当互斥依据。
+   * 补充的处理）。`runId` 是释放凭据——收尾时核对它，旧执行清不掉新执行的占用。接管一律
+   * 不允许：回合还活着时回话会换掉运行引用和事件日志，把在跑的活变成不可停止，所以回话
+   * 要等回合收尾（或先停止）。页面各自持有的 streaming 标记只是反馈，不能当互斥依据。
    */
   private readonly claims = new Map<string, { readonly runId: string; readonly kind: 'turn' | 'reply' | 'supplement' }>()
 
   /** 受理时同步占住执行权；拿不到返回 false，由调用方按 409 拒绝。 */
   private claimNow(conversationId: string, runId: string, kind: 'reply' | 'supplement'): boolean {
     const holder = this.claims.get(conversationId)
-    if (holder === undefined || holder.runId === runId) {
-      this.claims.set(conversationId, { runId, kind })
-      return true
-    }
-    // 活着的回合可以被回话接管：等待中的成员本来就靠用户回话送走。其余并存一律拒绝。
-    if (kind === 'reply' && holder.kind === 'turn') {
-      this.claims.set(conversationId, { runId, kind })
-      return true
-    }
-    return false
+    if (holder !== undefined && holder.runId !== runId) return false
+    this.claims.set(conversationId, { runId, kind })
+    return true
   }
 
   /** 收尾释放自己的占用；不是自己的 runId 就不动。 */
@@ -1765,6 +1758,15 @@ export class ButlerConsole {
       for await (const event of events) {
         if (event.type === 'plan') log.setTaskId(event.taskId)
         log.push(event)
+        // 流式诊断（方案 S01）：应用事件**入队**点，入队后记录才能拿到本条的 runId 与 seq。
+        // 与宿主帧、HTTP 写出（web.ts）、客户端接收/绘制对同一轮 runId。时间为服务端墙钟，
+        // 与客户端 performance.now 不可直接相减。
+        if (process.env.BUTLER_STREAM_DEBUG === '1') {
+          const head = log.head()
+          console.debug('butler-stream server-enqueue', {
+            type: event.type, runId: head?.runId ?? '', seq: head?.seq ?? null, t: Date.now(),
+          })
+        }
       }
       if (signal.aborted) state = 'cancelled'
     } catch (error) {
@@ -1834,6 +1836,12 @@ export class ButlerConsole {
    * 会用最终正文替换整条预览，被重试掉的那一版不会留在页面上。
    */
   observeStream(agent: { session?: { id?: unknown } } | undefined, frame: AssistantStreamFrame): void {
+    // 流式诊断（方案 S01）：BUTLER_STREAM_DEBUG=1 时记录宿主帧的类型与长度——正文、推理与
+    // 工具参数在这里区分开。不记录内容本身，跨机器时间不可直接相减。
+    if (process.env.BUTLER_STREAM_DEBUG === '1' && frame.type === 'chunk') {
+      const chunk = frame.chunk as { type?: unknown; text?: unknown }
+      console.debug('butler-stream host-frame', { kind: String(chunk.type), len: typeof chunk.text === 'string' ? chunk.text.length : 0 })
+    }
     if (frame.type !== 'chunk' || frame.chunk.type !== 'text-delta') return
     const text = frame.chunk.text
     if (text === '') return
@@ -2143,9 +2151,13 @@ export class ButlerConsole {
     if (subtask.state !== 'waiting_user') throw new AccessError(409, '这位成员当前没有在等你回话', 'not_waiting')
     // 同会话执行互斥：两个标签分别回复同一会话的两张请示卡时，后到的在这里拒绝——
     // 再往下就要改子任务状态、换运行引用和事件日志，放进去会把前一次回复变成不可停止。
-    // 活着的回合可以接管（等待中的成员靠回话送走），回复/补充的执行之间互斥。
+    // 回合还活着同样拒绝：接管会覆盖运行引用与日志，把在跑的活变成不可停止；等它收尾
+    // 或先停止再回复。
     if (!this.claimNow(record.conversationId, runId, 'reply')) {
-      throw new AccessError(409, '这个会话已有一次回话或补充在执行，等它完成或先停止', 'conversation_busy')
+      const holder = this.claims.get(record.conversationId)
+      throw new AccessError(409, holder?.kind === 'turn'
+        ? '这一轮还在执行，等它收尾或先停止再回复'
+        : '这个会话已有一次回话或补充在执行，等它完成或先停止', 'conversation_busy')
     }
 
     this.store.setSubtaskState(input.taskId, input.subtaskId, 'running')

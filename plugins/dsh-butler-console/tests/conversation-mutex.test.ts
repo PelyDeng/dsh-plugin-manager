@@ -7,7 +7,7 @@
  *
  * 1. 同会话两次回话并发提交，后到的被 409 拒绝，且不改子任务状态；
  * 2. 回话执行中新回合被 409 拒绝，不能挤掉在跑的回话；
- * 3. 活着的回合可以被回话接管（等待中的成员靠回话送走），回合收尾清不掉回话的占用；
+ * 3. 回合还活着时回话同样被 409 拒绝——接管会覆盖运行引用与日志；收尾后恢复受理；
  * 4. 补充在回话执行期间受理后等执行权，回话结束后继续处理，不会丢成「已接受未处理」。
  */
 import { describe, expect, it, vi } from 'vitest'
@@ -197,7 +197,7 @@ describe('同会话执行互斥', () => {
     await untilAsync(() => f.acceptedNewTurn(), '回话结束后新回合可受理')
   })
 
-  it('活着的回合可被回话接管，回合收尾清不掉回话的占用', async () => {
+  it('回合还活着时回话被 409 拒绝，收尾后恢复受理', async () => {
     const f = await fixture()
     // s1 立刻停在等待；s2 卡住，让回合一直活着。
     f.waitDispatch('s1')
@@ -207,18 +207,19 @@ describe('同会话执行互斥', () => {
     await until(() => (f.store.task(actor, taskId)?.subtasks.some(item => item.state === 'waiting_user')) === true, 's1 停在等待')
     await until(() => f.isActive(), 's2 没派完，回合还活着')
 
-    // 回合活着时回话可以接管执行权（等待中的成员靠回话送走），不被 409 拒绝。
+    // 回合活着时回话不允许接管执行权：接管会覆盖运行引用和事件日志，把在跑的活变成
+    // 不可停止。状态与等待上下文都不动。
+    await expect(f.console_.startReply({ taskId, subtaskId: 's1', text: '听第一版的', decideByAgent: false, actor }))
+      .rejects.toThrow(/这一轮还在执行/)
+    expect(f.store.task(actor, taskId)!.subtasks[0]!.state).toBe('waiting_user')
+
+    // 放开 s2：回合走到收尾，执行权释放，回话恢复受理。
+    gate.resolve({ status: 'waiting_user', summary: 's2 的材料', question: 's2 怎么办？' })
+    await until(() => !f.isActive(), '回合收尾')
     const held = f.holdReply('s1')
     await expect(f.console_.startReply({ taskId, subtaskId: 's1', text: '听第一版的', decideByAgent: false, actor }))
       .resolves.toHaveProperty('runId')
-    await until(() => f.store.task(actor, taskId)!.subtasks[0]!.state === 'running', '回话接管后送走等待')
-
-    // 放开 s2：回合走到收尾。回合的收尾只能清自己的占用，清不掉回话的。
-    gate.resolve({ status: 'waiting_user', summary: 's2 的材料', question: 's2 怎么办？' })
-    await until(() => !f.isActive(), '回合收尾')
-    await expect(f.console_.start(conversationId, '再派个新活', actor)).rejects.toThrow(/还有一次执行没有结束/)
-
-    // 回话收尾释放占用之后，新回合恢复受理。
+    await until(() => f.store.task(actor, taskId)!.subtasks[0]!.state === 'running', '回话开始执行')
     held.resolve({ status: 'succeeded', summary: '定了' })
     await until(() => f.store.task(actor, taskId)!.subtasks[0]!.state === 'succeeded', '回话收尾')
     await untilAsync(() => f.acceptedNewTurn(), '回话结束后新回合可受理')
