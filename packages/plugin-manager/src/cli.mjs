@@ -13,6 +13,7 @@ export async function main(args = process.argv.slice(2)) {
   list / build / check / clean    发现和验证插件源码
   pack                            生成完整发布目录
   verify-package                  校验已生成的插件归档
+  verify-release                  只读校验完整发布目录，可在 CI 或交付前独立运行
 
 部署者：
   release-site                    部署包 build 使用的站点发布入口
@@ -51,6 +52,7 @@ export async function main(args = process.argv.slice(2)) {
   else if (action === 'compose-release') (await import('./compose-release.mjs')).main(rest);
   else if (action === 'catalog') (await import('./plugins.mjs')).main(rest);
   else if (action === 'verify-package') (await import('./verify-package.mjs')).main(rest);
+  else if (action === 'verify-release') process.exitCode = (await import('./verify-release.mjs')).main(rest);
   else if (action === 'check-records') (await import('./check-records.mjs')).main(rest);
   else if (action === 'set-api-key') await (await import('./set-api-key.mjs')).main(rest);
   else if (['migrate-data', 'migrate-artifacts'].includes(action)) {
