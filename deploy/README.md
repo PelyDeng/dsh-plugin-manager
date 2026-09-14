@@ -44,6 +44,10 @@ manager/kit、镜像准备、停服安装和健康检查仍执行，不是热更
 
 source/archives 切换须无未完成操作，核验原 home/profile/引擎/归属及旧归档。已有实例 settingsFile/runtimeConfig 原样沿用，不自动迁移。数据路径调整按[迁移流程](../doc/migration.md)处理。
 
+插件配置、环境变量和 patch 都在容器启动时读取，改完需要一次受控重启才会生效。改哪一层、几层之间谁覆盖谁、环境变量按什么顺序取值，只在[框架配置](../doc/framework-configuration.md#插件配置与环境变量的生效路径)维护；插件字段本身见[插件运行配置](../doc/plugin-configuration.md)。此处只保留操作口径：日常改 `.local/env.conf`、`instances.<id>.settingsFile` 与插件的 `runtimeConfig` 文件，改完按下面的正常流程重新发布。
+
+插件归档按内容哈希命名，profile 以 `file:` 引用它们，由部署流程一起改写。不要单独替换归档目录或手工改 profile；中断后的恢复按下一节的入口处理。
+
 ## 安装与恢复
 
 <!-- excerpt:site-recovery -->

@@ -95,6 +95,50 @@ build 只允许 release。source 禁止手填 manifest/containerImage；archives
 
 `.local/deployment.json`、清单、Compose 和官方 patch 是生成输入，不替代人工入口。已有未完成部署继续使用原操作记录中的文件，不在恢复期间迁移格式。`--resume` 要求原输入和供进程读取的凭据文件未变化；源码操作目录的 `framework-input.conf` 保存本次 env 原始字节；原文件丢失时从此私有备份恢复到原路径。新 schema 3 同包业务配置错误使用受控 recover 生成新候选，不改旧快照；工具/镜像/站点环境变动不属于该快捷路径。配置格式导入不搬迁数据，更换数据路径仍须遵守[正式迁移流程](migration.md)。
 
+## 插件配置与环境变量的生效路径
+
+插件行为有三类输入，落点不同、优先级不同。改错落点最常见的现象是"配置写了却不生效"，或在下次发布后失效。
+
+### 1. 插件配置：patch 与 settings 层
+
+管理器把插件配置渲染成一串官方 patch，按顺序追加到已有 patch 之后，由 supervisor 逐个传给宿主 CLI 的 `--patch`。
+
+| 落点 | 内容 | 覆盖语义 |
+| --- | --- | --- |
+| 站点配置 `patches` 列出的文件 | 使用者自己写的宿主 patch | 按声明顺序前置 |
+| `instances.<id>.settingsFile`（默认 `<home>/plugins/<id>/plugin.json`）的 `config` | 该插件业务配置，管理器生成为**最后一层** patch | 同一 entry 的 `config` **整块替换**，不做深合并 |
+
+两点必须记清：
+
+- **整块替换**是同一 entry 内 `config` 的行为，不是"所有 patch 都无效"。不同 entry、同一 entry 的其它键仍按各自语义生效；只写 `config` 的一部分会丢掉同 entry 中未写的字段。
+- patch 的 `id` 是**配置树中的 `entry.id`**，由插件 manifest 的 `configuration.entryId` 声明。它既不是 npm 包名，也不总等于插件注册名（`entry.id` 可以与注册 `name` 不同）。宿主报错只会提到 entry id，因此接入新插件时先确认它的 `entryId`。
+
+### 2. 环境变量：继承环境优先于文件
+
+宿主进程的变量按下列顺序取值，**只为尚未定义的变量赋值**，因此越靠前优先级越高：
+
+1. 继承的进程环境（容器里即 Docker/Compose 传给容器的环境变量）；
+2. 工作目录的项目 `.env`；
+3. DSH home 下的 `.env`。
+
+由此可以判断常见误解：
+
+- **Docker 环境变量是生效的**，只要它真的进到了容器进程；"框架默认渲染的 Compose 是否提供某个变量"是另一个问题，与优先级无关。
+- 反过来，写在工作区 `.env` 的变量在容器内也生效，因为容器的工作目录就是该工作区。
+- 变量已在继承环境中定义时，写在 `.env` 里的同值不会覆盖它。
+
+### 3. `runtimeConfig` 是文件，不是环境变量
+
+`instances.<id>.runtimeConfig`（默认 `<home>/plugins/<id>/env.conf`）是给**插件自己读**的配置文件；它的路径通过声明的环境变量传给插件，不会自动变成任意 `process.env` 字段。要让某个值出现在 `process.env`，按第 2 条选择落点。
+
+### 4. 何时需要重启
+
+插件配置、环境变量与 patch 内容都在**容器启动时**读取。改完这些输入后需要一次受控重启（按部署流程停旧服务、重新应用并启动），运行中的容器不会自动拾取新值；只改业务数据文件、不动上述输入时无需重启。
+
+### 5. 归档引用：部署后不要单独更新插件目录
+
+发布把插件归档以**内容哈希**命名，profile 的 `package.json` 以 `file:` 绝对路径钉住这些归档。归档集合与 profile 引用由部署流程一起改写。只替换归档目录而不重新部署，会让 profile 指向不存在的归档，容器安装阶段直接失败。中断后要恢复，用原输入 `--resume`，或按 `deploy/README.md` 的故障定位入口处理，不要手工改 profile。
+
 ## 独立 CLI 字段参考
 
 以下路径相对于 `--root` 指定的仓库根目录，不相对于模板目录。已配置的 CLI 或环境变量可覆盖同名部署选项，应用示例前应核对当前 shell 的 `DSH_*`、`PLUGIN_MANIFEST_FILE` 和 `DEPLOYMENT_CONFIG`。

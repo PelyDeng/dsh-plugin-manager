@@ -73,7 +73,7 @@
 
 - `enabled` 默认 true，控制该实例是否运行插件；false 会从受管 profile 移除该插件，保留数据。插件仍须存在于部署候选清单，才能通过此开关重新启用。
 - `accessMode` 仅适用于认证消费者，默认 `authenticated`。`standalone` 关闭该插件认证，其他插件不变；共享历史与个人历史仍分别保留，不迁移或合并。
-- `config` 是插件自己的 Cordis Config 参数，由插件 Schema 校验。`accessMode` 放在顶层；`publicOrigin` 由站点部署配置统一提供，禁止在 `config` 中重复定义。
+- `config` 是插件自己的 Cordis Config 参数，由插件 Schema 校验。`accessMode` 放在顶层；`publicOrigin` 由站点部署配置统一提供，禁止在 `config` 中重复定义。同一 entry 的 `config` 由管理器生成为最后一层 patch，**整块替换**同 entry 的既有配置：只写部分字段会丢掉其余字段，改动时先读回现有值。[生效路径与优先级](framework-configuration.md#插件配置与环境变量的生效路径)
 - 存在的文件必须声明 `schemaVersion: 1`，未知顶层字段、非法类型及非法模式在部署前报错。缺失文件使用安全默认值。
 
 业务凭据继续使用插件声明的 `runtimeConfig` 文件（如 `env.conf`），不会因为认证开关被合并、打印或重新写入。修改认证只编辑 `plugin.json` 的 `accessMode`。
