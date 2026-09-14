@@ -18,6 +18,7 @@ export async function main(args = process.argv.slice(2)) {
   release-site                    部署包 build 使用的站点发布入口
   deploy / start / stop / sync    底层安装与运行操作
   health / verify                 读取部署记录并检查状态
+  check-records                   只读核对发布记录与现场，判定漂移类别并给出对账计划
   apply-compose / check-compose / render-compose
   container-start                  完整运行镜像容器入口（通常由镜像 ENTRYPOINT 调用）
 
@@ -50,6 +51,7 @@ export async function main(args = process.argv.slice(2)) {
   else if (action === 'compose-release') (await import('./compose-release.mjs')).main(rest);
   else if (action === 'catalog') (await import('./plugins.mjs')).main(rest);
   else if (action === 'verify-package') (await import('./verify-package.mjs')).main(rest);
+  else if (action === 'check-records') (await import('./check-records.mjs')).main(rest);
   else if (action === 'set-api-key') await (await import('./set-api-key.mjs')).main(rest);
   else if (['migrate-data', 'migrate-artifacts'].includes(action)) {
     const { migrateData, parseMigrationArguments } = await import('./migrate-data.mjs');
