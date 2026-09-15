@@ -172,6 +172,21 @@ async function measure({ browser, url, width, height, budget }) {
   return JSON.parse(decode(match[1]));
 }
 
+/**
+ * 在指定宽度下量一次，必要时重试。
+ *
+ * 无头 Chromium 在负载高的机器上偶尔会在注入脚本执行前就 dump DOM（拿不到探针结果），
+ * 而页面本身没有报错。这种偶发只影响「等多久」，所以这里重试一次并放宽虚拟时间预算；
+ * 页面真的坏了（探针抛错、缺少桩）两次都会失败，不会把失败变成通过。
+ */
+async function measureWithRetry({ browser, url, width, height, budget }) {
+  const first = await measure({ browser, url, width, height, budget });
+  if (first.error === undefined) return first;
+  const second = await measure({ browser, url, width, height, budget: budget * 2 });
+  if (second.error === undefined) return second;
+  return { error: `${second.error}（已重试一次，虚拟时间预算 ${budget * 2} 毫秒）` };
+}
+
 export async function probePage(options) {
   const root = options.root && resolve(options.root);
   if (!root) throw new Error('必须指定 --root <插件根>。');
@@ -199,7 +214,7 @@ export async function probePage(options) {
   try {
     const page = options.page ?? `${prefix.endsWith('/') ? prefix : `${prefix}/`}`;
     const results = [];
-    for (const width of widths) results.push({ width, value: await measure({ browser, url: `${server.origin}${page}`, width, height: Number(options.height) || 1600, budget: Number(options.budget) || 4000 }) });
+    for (const width of widths) results.push({ width, value: await measureWithRetry({ browser, url: `${server.origin}${page}`, width, height: Number(options.height) || 1600, budget: Number(options.budget) || 4000 }) });
     return { browser, results };
   } finally { server.close(); }
 }
