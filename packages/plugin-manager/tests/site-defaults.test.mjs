@@ -33,7 +33,7 @@ test('a new site adopts the current non-root user as its container user, and exi
   // 已有站点沿用自己记录的值，初始化逻辑不改写它。
   const other = fixture(t);
   mkdirSync(join(other, '.local'), { recursive: true });
-  writeFileSync(join(other, '.local/env.conf'), 'DSH_CONTAINER_UID=1234\nDSH_CONTAINER_GID=1234\n');
+  writeFileSync(join(other, '.local/env.conf'), 'DSH_CONTAINER_UID=1234\nDSH_CONTAINER_GID=1234\n', { mode: 0o600 });
   assert.equal(readFrameworkConfig(loadSite(other, undefined, { imagePlatform: 'linux/amd64' }).sitePath).config.containerUid, 1234);
 });
 

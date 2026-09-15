@@ -1,7 +1,7 @@
 /** 公开构建视图必须只含公开输入，并带一份可安装的匹配锁文件。 */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -12,7 +12,7 @@ import { packagePlugins } from '../src/package-plugins.mjs';
 const repository = fileURLToPath(new URL('../../..', import.meta.url));
 
 function build(t) {
-  const base = mkdtempSync(join(tmpdir(), 'dsh-build-view-'));
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-build-view-')));
   t.after(() => { assert.equal(dirname(base), resolve(tmpdir())); rmSync(base, { recursive: true, force: true }); });
   const output = join(base, 'view');
   return { base, output, result: createPublicBuildView({ root: repository, output }) };
@@ -98,7 +98,7 @@ test('安装与构建可以只发生在视图内：源码树没有依赖也不�
 });
 
 test('交付的公开构建输入优先：元数据逐字节使用，不按现场生成或裁剪', t => {
-  const base = mkdtempSync(join(tmpdir(), 'dsh-build-inputs-'));
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-build-inputs-')));
   t.after(() => { assert.equal(dirname(base), resolve(tmpdir())); rmSync(base, { recursive: true, force: true }); });
   // 发行包树：公开材料 + tools/builtin-build 元数据；根锁故意带上 external importer 以示区别。
   const root = join(base, 'release');
@@ -129,7 +129,7 @@ test('交付的公开构建输入优先：元数据逐字节使用，不按现�
 });
 
 test('含 plugins/external 的私有树缺少交付材料时拒绝，不再现场裁剪', t => {
-  const base = mkdtempSync(join(tmpdir(), 'dsh-build-private-'));
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-build-private-')));
   t.after(() => { assert.equal(dirname(base), resolve(tmpdir())); rmSync(base, { recursive: true, force: true }); });
   const root = join(base, 'private');
   mkdirSync(join(root, 'plugins/external/one'), { recursive: true });
@@ -175,7 +175,7 @@ test('公开范围判定不能被 BOM、引号键或显式键旁路', t => {
     assert.deepEqual(workspaceGlobs(`${key}\n  - 'packages/*'\n  - 'plugins/builtin/*'\n`), [], key);
   }
   // 端到端：一个 BOM 字节不能让非公开范围蒙混过关，空集合也不能让白名单判定恒真。
-  const base = mkdtempSync(join(tmpdir(), 'dsh-build-workspace-'));
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-build-workspace-')));
   t.after(() => { assert.equal(dirname(base), resolve(tmpdir())); rmSync(base, { recursive: true, force: true }); });
   const root = join(base, 'private');
   mkdirSync(join(root, 'plugins/builtin/two'), { recursive: true });
@@ -195,7 +195,7 @@ test('公开范围判定不能被 BOM、引号键或显式键旁路', t => {
 });
 
 test('交付输入含私有 workspace 的锁时必须拒绝', t => {
-  const base = mkdtempSync(join(tmpdir(), 'dsh-build-private-lock-'));
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-build-private-lock-')));
   t.after(() => { assert.equal(dirname(base), resolve(tmpdir())); rmSync(base, { recursive: true, force: true }); });
   const root = join(base, 'private');
   mkdirSync(join(root, 'plugins/builtin/two'), { recursive: true });
@@ -211,7 +211,7 @@ test('交付输入含私有 workspace 的锁时必须拒绝', t => {
 });
 
 test('私有集成检出的交付物被改过时，站点视图拒绝生成', t => {
-  const base = mkdtempSync(join(tmpdir(), 'dsh-build-delivered-record-'));
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-build-delivered-record-')));
   t.after(() => { assert.equal(dirname(base), resolve(tmpdir())); rmSync(base, { recursive: true, force: true }); });
   const root = join(base, 'private');
   mkdirSync(join(root, 'plugins/external/one'), { recursive: true });
@@ -254,7 +254,7 @@ test('私有集成检出的交付物被改过时，站点视图拒绝生成', t 
 });
 
 test('交付目录或交付文件是符号链接时拒绝', t => {
-  const base = mkdtempSync(join(tmpdir(), 'dsh-build-symlink-'));
+  const base = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-build-symlink-')));
   t.after(() => { assert.equal(dirname(base), resolve(tmpdir())); rmSync(base, { recursive: true, force: true }); });
   const root = join(base, 'private');
   mkdirSync(join(root, 'plugins/external/one'), { recursive: true });
