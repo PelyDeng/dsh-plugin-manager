@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { writeFileSync, rmSync, statSync, openSync, readSync, closeSync } from 'node:fs';
+import { existsSync, writeFileSync, rmSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { join, posix, resolve } from 'node:path';
 import { canonical, within } from './state.mjs';
 
@@ -78,6 +78,9 @@ export function sameOrWithinLocation(outer, inner) {
 
 function proveMountedSource(source, target, container, image, execute) {
   const probe = (script, path) => String(execute(['run', '--rm', '--pull', 'never', '--network', 'none', '--volumes-from', `${container.Id}:ro`, '--entrypoint', 'node', image, '-e', script, path], { encoding: 'utf8' }));
+  // 宿主目录不存在就直接判定证明失败：这里是「证明」，不该把 ENOENT 抛给调用方，而应由上层给出
+  // 统一的拒绝诊断（站点流程在此之前已核对持久目录存在）。
+  if (!existsSync(source)) return false;
   if (statSync(source).isFile()) {
     const hash = hashFile(source);
     return probe(hashFileScript, target) === hash && hashFile(source) === hash;

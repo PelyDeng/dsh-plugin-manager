@@ -57,9 +57,10 @@ test('real Docker mount and stopped-home probes use an isolated disposable conta
   const container = JSON.parse(run(['inspect', id], { encoding: 'utf8' }))[0];
   assert.equal(proveDockerHome({ home }, container, image, run), true);
   const binding = { dataRoot: root, home, workspace: join(root, 'workspace'), artifacts: join(root, 'artifacts'), profile: 'web' };
-  assertStoppedBinding([id], binding, run, runtime);
+  // Desktop 的挂载证明要起一次性容器：必须显式传本次已核验的镜像，不能用旧容器的镜像。
+  assertStoppedBinding([id], binding, run, runtime, image);
   // 容器内 home 必须通过实际挂载映射回绑定的 home；换了绑定目录即拒绝。
-  assert.throws(() => assertStoppedBinding([id], { ...binding, home: join(root, 'other-home') }, run, runtime), /不一致/);
+  assert.throws(() => assertStoppedBinding([id], { ...binding, home: join(root, 'other-home') }, run, runtime, image), /不一致/);
   assert.deepEqual(readdirSync(home), []);
 });
 
