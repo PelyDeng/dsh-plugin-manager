@@ -4,7 +4,7 @@
 
 ## 启动与使用
 
-优先下载同一框架 Release 的部署包和 public-apps，将含 auth/example 的完整发布目录放进站点 `incoming/public-apps`，在部署根运行 `bash build.sh`；Windows 使用 `.\build.ps1`。public-apps 已含 auth，不重复复制 optional/auth。入口负责完整候选、配置及启停，步骤见[随包 FAQ](knowledge/guide.md)。
+优先下载同一框架 Release 的部署包，在部署根运行 `bash build.sh`；Windows 使用 `.\build.ps1`。随包公开构建视图会构建内置 auth 与 example，它们已在候选里；public-apps 与 optional/auth 是同一批插件，不要再放进 incoming。入口负责完整候选、配置及启停，步骤见[随包 FAQ](knowledge/guide.md)。
 
 只安装 manager 的维护者使用随包 DELIVERY.md 手工组合候选，准备经应用验证的官方 DSH，并配置同一实例的 home、CLI、port 和 publicOrigin。管理工具安装在 tools 目录时，从该目录执行：
 

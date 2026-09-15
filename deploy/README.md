@@ -1,6 +1,6 @@
 # 部署与管理
 
-部署已经打好的插件，优先使用[产物一键部署](../doc/first-deployment.md)。本文维护源码构建、按需复用和站点恢复规则；只安装 manager 时的手工 CLI 操作保留在其随包 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
+部署已经打好的插件，优先使用[产物一键部署](../doc/first-deployment.md)。本文维护源码构建、固定全量内置构建与站点重试规则；只安装 manager 时的手工 CLI 操作保留在其随包 [DELIVERY](../packages/plugin-manager/DELIVERY.md)。
 
 产物合规是**交付前**的事，不在部署时重复检查：作者打包后执行 `dsh-plugin-manager verify-release --release <发布目录>`（只读、可进 CI，退出码 0 表示合规）自检清单格式、产物摘要、包结构与元数据一致性，再把整个发布目录交给部署者。类型检查用 `check`，归档与源码一致用 `verify-package`；pack 只构建、打包并做内容寻址，不附赠任何检查。作者与部署者的分工和产物约定见[框架配置](../doc/framework-configuration.md)与[一键部署](../doc/first-deployment.md)。
 
@@ -16,7 +16,7 @@ bash build.sh
 
 后续自行确认更新源码，再运行同一 build。源码操作使用已提交输入；正常全量构建准备 manager、选中业务插件和宿主镜像，不要求宿主等于预设 gitlink，但记录实际提交。仅指定 publishImage 时推送镜像；默认使用本机不可变镜像 ID。宿主升级约束见[兼容说明](../doc/host-compatibility.md)。
 
-首次创建 .local/env.conf，已有文件不覆盖；旧 JSON 导入保留解析后的数据路径。源码默认启用 auth/example，精简部署包默认 archives 并发现 incoming 全集。显式改为 archives 后，不构建 plugins/*；源码树中缺少工具时只准备 manager 工具依赖。两种模式不混合输入，字段规则见[框架配置](../doc/framework-configuration.md)。
+首次创建 .local/env.conf，已有文件不覆盖；旧 JSON 导入保留解析后的数据路径。两种入口都构建全部内置插件（archives 用随包公开构建视图），DSH_PLUGINS 决定运行选集、留空即全部候选；incoming 只放外部作者的完整发布目录。源码树中缺少工具时只准备 manager 工具依赖。两种模式不混合输入，字段规则见[框架配置](../doc/framework-configuration.md)。
 
 ### 内置构建与外部产物
 
@@ -38,7 +38,7 @@ bash build.sh
 
 一次发布里同一份发布清单会被加载多遍（上一次发布的清单、复用判定、合并后的清单）。部署读路径只做操作边界检查：清单可解析、身份唯一、路径与归档成员不越界、实际包名与版本来自归档本身；完整合规校验（清单与包内元数据一致、verifyFiles 完备性、exports 等）由作者侧 verify-release 承担，不在这里重复。作者摘要写错不阻断安装，内部寻址与记录用归档实际字节摘要；损坏或被换掉的包在按字节读取时直接失败，不会被旧的「摘要比对」掩盖。
 
-站点发布锁保护来源准备与部署；profile 安装锁保护安装事务，职责不同。保留 source-release.node.lock/control.lock 与 Linux flock 兼容路径。worker 报告完成且正常退出才释放外层锁，强制终止时保留证据。源码 beforeBuild hook 仅在正常 source 构建触发，archives/resume/recover 均不更新源码。入口先校验模式、静态字段及未完成操作，再允许 hook 准备源码；非法配置或尚需恢复的操作不会触发私有源码同步。帮助和 doctor 使用轻量入口，不先安装框架依赖或启动 Docker。
+站点发布锁保护来源准备与部署；profile 安装锁保护安装事务，职责不同。保留 source-release.node.lock/control.lock 与 Linux flock 兼容路径。worker 报告完成且正常退出才释放外层锁，强制终止时保留证据。源码 beforeBuild hook 仅在正常 source 构建触发，archives 不更新源码。入口先校验模式、静态字段及未完成操作，再允许 hook 准备源码；非法配置或尚需恢复的操作不会触发私有源码同步。帮助和 doctor 使用轻量入口，不先安装框架依赖或启动 Docker。
 
 ## 运行配置
 
@@ -52,7 +52,7 @@ source/archives 切换须无未完成操作，核验原 home/profile/引擎/归�
 
 ## 安装与重试
 
-<!-- excerpt:site-recovery -->
+<!-- excerpt:install-retry -->
 归档、公共配置结构或认证提供者缺失在停服前报告。插件业务 Schema 可能在加载时才检查；健康通过仍需实际业务请求。保留 .local/data、.local/artifacts、incoming 和用户备份，不通过删除状态重新初始化。
 
 | 情况 | 操作 |
@@ -66,8 +66,8 @@ source/archives 切换须无未完成操作，核验原 home/profile/引擎/归�
 Windows 用 `.\build.ps1` 替代 bash build.sh。doctor 只读诊断锁和记录，不要求 Docker/kit，也不是完整的安装环境扫描。`dsh-plugin-manager check-records --root <站点根> --config <env.conf|deployment.json>` 只读对比上一次发布记录、活动 Compose、镜像、容器与 profile 证据，报告现场差异与需要人工核实的项；它不写状态、不动容器，旧记录只作诊断、不阻断普通 build，收敛仍须显式执行。
 
 受管授权集合（profile 状态 schema 3）承接部分失败：add 写一半失败后授权已持久保留，普通 build 重新求差并修复，不要求 pending 或同一包版本；remove 完成后才移除授权，遗留的精确受管 Bundle 会被清理，模板与非受管内容不变。换修复包、宿主或工具直接准备新的完整输入再 build；不自行删锁、改记录或删数据。恢复只收敛部署，不回滚业务数据；发布归档和配置副本不能代替独立数据备份。
-<!-- /excerpt:site-recovery -->
+<!-- /excerpt:install-retry -->
 
-站点 build 由 manager 的 release-site 编排，仓库 source 准备仅作为输入适配；底层 start/apply-compose/compose-release 保持独立语义。独立 CLI 的 pending 修复仍由唯一安装器执行，不拿 profile unlock 处理外层站点锁。
+站点 build 由 manager 的 release-site 编排，仓库 source 准备仅作为输入适配；底层 start/apply-compose/compose-release 保持独立语义。底层 start/apply-compose/compose-release 保持独立语义；旧 pending 记录只由 `migrate-site` 做一次性导入，不在 install 路径消费，也不拿 profile unlock 处理外层站点锁。
 
-挂载、引擎身份、旧归档 previous 路径及非受管依赖/用户 patch 保护均保留。更新镜像或工具时保留未完成操作的执行树；不能用当前工具替代原工具继续安装。镜像和平台差异见 [Docker 集成](../integrations/docker/README.md)。
+挂载、引擎身份、旧归档 previous 路径及非受管依赖/用户 patch 保护均保留。失败或中断保留操作目录作为证据，但该记录不决定下一步命令：修正输入后直接重跑普通 build，工具与镜像按新输入重新准备。镜像和平台差异见 [Docker 集成](../integrations/docker/README.md)。

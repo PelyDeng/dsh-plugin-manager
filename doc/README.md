@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | 插件作者 | 从 starter 跑通 `list / check / pack`，交付完整发布目录 | [独立作者接入](plugin-development.md) |
 | 部署者 | 把完整发布目录放入 `incoming`，执行 build 并请求实际端点 | [插件产物一键部署](first-deployment.md) |
-| 站点维护者 | 处理源码发版、按需复用、恢复和迁移 | [部署与管理](../deploy/README.md) |
+| 站点维护者 | 处理源码发版、锁与记录诊断、失败重试和迁移 | [部署与管理](../deploy/README.md) |
 
 第一次使用不需要读完所有文档。作者先看起步包 README；部署者只处理发布目录，不需要作者源码；恢复和高级配置属于维护路径。
 
@@ -28,8 +28,8 @@
 
 ## 部署与维护
 
-- [框架配置与默认值](framework-configuration.md)：站点参数、来源模式和凭据规则。
-- [源码部署与恢复](../deploy/README.md)：按需构建、锁、resume 和同包配置 recover。
+- [框架配置与默认值](framework-configuration.md)：站点参数、入口固定的 source/archives 形态与凭据规则。
+- [源码部署与失败收敛](../deploy/README.md)：按需构建、锁、失败后重跑普通 build 与一次性站点迁移。
 - [独立 CLI 交付](../packages/plugin-manager/DELIVERY.md)：手工清单组合、Node/Compose 操作；随工具包可离线阅读。
 - [Docker 镜像与网络](../integrations/docker/README.md)
 - [数据与产物迁移](migration.md)

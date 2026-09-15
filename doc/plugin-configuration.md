@@ -80,7 +80,7 @@
 }
 ```
 
-`auth` 和 `example` 只默认纳入 source 选集；archives 默认选 incoming 全部，按需复制 optional/auth。站点 origin 只配置一次；标准插件的认证和配置由管理器自动生成 patch。`patches` 仅保留其他宿主定制，不再手工为这些标准入口重复配置认证。迁移旧实例时应移除对应旧 patch 条目。
+`auth` 和 `example` 由内置构建产出，两种入口的候选都包含它们：archives 站点用随包公开源码材料构建同一批内置插件，再与 incoming 的完整发布目录合并，`DSH_PLUGINS` 决定启用哪些。站点 origin 只配置一次；标准插件的认证和配置由管理器自动生成 patch。`patches` 仅保留其他宿主定制，不再手工为这些标准入口重复配置认证。迁移旧实例时应移除对应旧 patch 条目。
 
 使用站点 build 时，修改实际 plugin.json 后仍运行同一个 build，由快照与恢复规则处理。下面仅供独立 CLI 集成：
 

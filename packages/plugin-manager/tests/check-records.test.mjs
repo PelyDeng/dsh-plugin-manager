@@ -76,7 +76,7 @@ test('构建计时只读读出最慢阶段，缺失或越界都不报错、不�
   const f = fixture(t);
   const timingPath = join(f.operation, 'timings.json');
   write(timingPath, { schemaVersion: 1, buildId: 'build-1', startedAt: '2026-01-01T00:00:00.000Z', finishedAt: '2026-01-01T00:10:00.000Z',
-    wallMs: 600000, sumMs: 900000, overlapMs: 300000, exitCode: 0, status: 'ready', environment: { frameworkVersion: '0.18.0', inputKind: 'source' },
+    wallMs: 600000, sumMs: 900000, overlapMs: 300000, exitCode: 0, status: 'ready', environment: { frameworkVersion: '0.19.0', inputKind: 'source' },
     stages: [{ id: 'stage-1-1', label: '构建运行镜像', elapsedMs: 500000, status: 'done' }, { id: 'stage-1-2', label: '构建内置插件', elapsedMs: 9000, status: 'done' }] });
   const recordPath = join(f.operation, 'result.json');
   const record = JSON.parse(readFileSync(recordPath, 'utf8'));
@@ -94,7 +94,7 @@ test('构建计时只读读出最慢阶段，缺失或越界都不报错、不�
   assert.equal(timings.buildId, 'build-1');
   assert.equal(timings.stagesTotal, 2);
   assert.equal(timings.slowestLimit, 5);
-  assert.equal(timings.environment.frameworkVersion, '0.18.0');
+  assert.equal(timings.environment.frameworkVersion, '0.19.0');
   assert.equal(readdirSync(f.root, { recursive: true }).length, before, '只读诊断不得写文件');
   assert.doesNotMatch(JSON.stringify(report), REMOVED_VOCABULARY);
   // 路径越界与文件损坏都只报缺失：老记录与删掉计时的构建不该让诊断失败。

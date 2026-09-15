@@ -10,9 +10,9 @@
 
 | 角色 | 你要做的事 | 先看 | 不需要先处理 |
 | --- | --- | --- | --- |
-| 插件作者 | 编写、检查、打包插件 | [作者指南](doc/plugin-development.md) 和起步包 README | 站点恢复、数据迁移、服务器源码发版 |
+| 插件作者 | 编写、检查、打包插件 | [作者指南](doc/plugin-development.md) 和起步包 README | 站点迁移、服务器源码发版 |
 | 部署者 | 安装、更新、验证插件 | [产物部署指南](doc/first-deployment.md) | 插件源码、作者构建工具链 |
-| 站点维护者 | 维护源码站点、恢复失败发布、迁移数据 | [部署与管理](deploy/README.md) | 每个业务插件的内部实现 |
+| 站点维护者 | 维护源码站点、失败后重跑普通 build、迁移数据 | [部署与管理](deploy/README.md) | 每个业务插件的内部实现 |
 
 第一次使用不必读完所有文档。先完成下面两条最短路径之一，再按需要进入高级文档。
 
@@ -22,7 +22,7 @@
 
 1. 从同一版本 [Release](https://github.com/PelyDeng/dsh-plugin-manager/releases) 下载 `dsh-plugin-manager-deployment-<版本>.zip` 并解压。
 2. 把每个应用的完整发布目录放入 `incoming/<应用>/`。
-3. 需要统一登录且发布目录未包含 auth 时，把随包 `optional/auth` 复制为 `incoming/auth`。
+3. 内置 auth、example 由本次构建产出（archives 用随包公开构建视图），已经在候选里；`incoming/` 只放外部作者的完整发布目录。把随包的 `optional/auth` 或 `public-apps`（同一批插件）再放进去会因插件 id 重复被组合清单拒绝。
 4. 在部署根执行：
 
    ```sh
@@ -63,7 +63,7 @@ pnpm exec dsh-plugin-manager list --root /absolute/path/my-plugin --package .
 pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --output .local/artifacts/release/v1
 ```
 
-`pack` 会冻结安装、执行 build/check、校验归档并生成 `manifest.json`。交付整个输出目录，不要单独抽走 tgz。当前直接支持独立 pnpm 单包；npm、yarn 或 monorepo 不承诺相同的一步流程。
+`pack` 只做构建、打包与内容寻址（归档按实际字节摘要命名），不附赠检查：类型检查用 `check`，归档与源码一致用 `verify-package`，交付目录合规用 `verify-release`，三件事分别执行，完成后生成 `manifest.json`。交付整个输出目录，不要单独抽走 tgz。当前直接支持独立 pnpm 单包；npm、yarn 或 monorepo 不承诺相同的一步流程。
 
 ## 可以接入什么
 
@@ -88,7 +88,7 @@ pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --
 flowchart LR
     A["作者独立项目"] -->|pack| B["完整发布目录<br/>manifest + tgz"]
     B --> C["incoming / archives"]
-    D["框架源码站点"] -->|source 构建或复用| E["插件归档"]
+    D["框架源码站点"] -->|source 固定全量构建| E["插件归档"]
     C --> F["manager 统一校验、配置、安装与恢复"]
     E --> F
     F --> G["官方 DSH profile"]
@@ -104,7 +104,7 @@ DSH 负责 Agent、模型、会话和插件运行。manager 负责打包、配�
 | 体验 auth/example 登录和问答 | [登录与问答](doc/getting-started.md) · [图文导览](doc/quick-tour.md) |
 | 查插件声明和实例配置 | [插件配置规范](doc/plugin-configuration.md) · [kit 文档](packages/plugin-kit/README.md) |
 | 手工组合清单或直接管理宿主 | [独立 CLI 交付](packages/plugin-manager/DELIVERY.md) |
-| 源码发版、按需复用、resume/recover | [部署与管理](deploy/README.md) |
+| 源码发版、固定全量构建、失败后重跑普通 build | [部署与管理](deploy/README.md) |
 | 查站点字段、凭据和默认值 | [框架配置](doc/framework-configuration.md) |
 | 查故障和验证边界 | [FAQ](doc/FAQ.md) · [宿主兼容](doc/host-compatibility.md) · [验证记录](packages/plugin-manager/VERIFICATION.md) |
 | 查全部文档 | [文档导航](doc/README.md) |

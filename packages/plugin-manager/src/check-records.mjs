@@ -134,7 +134,6 @@ function deploymentEvidence(root, deployment) {
     home: relativeTo(root, deployment.home),
     project: deployment.config.composeProject ?? null,
     configuredImage: deployment.config.containerImage ?? null,
-    pluginSource: null,
     hostImage: deployment.config.hostImage ?? null,
     records: { lock: existsSync(resolve(profileRoot, LOCK)), owner: existsSync(resolve(profileRoot, OWNER)),
       state: existsSync(resolve(profileRoot, STATE)) ? readSiteJson(resolve(profileRoot, STATE)).schemaVersion : null },
@@ -235,7 +234,7 @@ export function checkRecords(deployment, execute = (args, options) => spawnSync(
   };
 }
 
-/** CLI entry: same project inputs as check-compose, with the same read-only contract. */
+/** CLI entry: same project inputs as apply-compose, with the same read-only contract. */
 export function main(args = process.argv.slice(2)) {
   if (args.includes('--help')) {
     console.log('check-records：只读对比上一次发布记录、活动 Compose、镜像、容器与 profile 证据，报告现场差异与需人工核实项。\n用法：check-records --root <站点目录> --config <env.conf|deployment.json> [--artifacts <目录>] [--compose-project <名称>]\n旧记录只作诊断：失败指针、旧容器与旧镜像都不阻断下一次普通 build。');

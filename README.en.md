@@ -10,9 +10,9 @@ This is an independent community project, not an official DeepSeek product or re
 
 | Role | What you do | Start here | You do not need first |
 | --- | --- | --- | --- |
-| Plugin author | Write, check, and package a plugin | [Author guide](doc/plugin-development.md) and starter README | Site recovery, migration, and server source releases |
+| Plugin author | Write, check, and package a plugin | [Author guide](doc/plugin-development.md) and starter README | Site migration and server source releases |
 | Deployer | Install, update, and verify packaged apps | [Deployment guide](doc/first-deployment.md) | Plugin source and author build tooling |
-| Site maintainer | Maintain source deployments, recover releases, migrate data | [Deployment and operations](deploy/README.md) | Each app's internal implementation |
+| Site maintainer | Maintain source deployments, rerun builds after failure, migrate data | [Deployment and operations](deploy/README.md) | Each app's internal implementation |
 
 Most task guides linked from this page are currently written in Chinese; the commands and release artifacts use the same versions documented there.
 
@@ -22,7 +22,7 @@ Use this path when an author provides a complete release directory containing `m
 
 1. Download and extract `dsh-plugin-manager-deployment-<version>.zip` from one [Release](https://github.com/PelyDeng/dsh-plugin-manager/releases).
 2. Put each app's complete release directory under `incoming/<app>/`.
-3. If shared authentication is required and the release does not already include auth, copy the bundled `optional/auth` directory to `incoming/auth`.
+3. The built-in auth and example plugins are produced by the build itself (the archives entry builds them from the packaged public view) and are already candidates. Use `incoming/` only for complete external author release directories: adding the bundled `optional/auth` or `public-apps` (the same plugin ids) is rejected as a duplicate id.
 4. From the extracted deployment directory, run:
 
    ```sh
@@ -32,7 +32,7 @@ Use this path when an author provides a complete release directory containing `m
    On Windows PowerShell, run `.\build.ps1`.
 5. Open the address reported by build and request the actual endpoint documented by the plugin README.
 
-The deployment machine needs Node.js, system tar, and a local Linux Docker engine with Compose. An arbitrary source ZIP, single npm archive, or frontend-only dist bundle is not a standard release directory. See the [deployment guide](doc/first-deployment.md) for configuration, updates, and recovery.
+The deployment machine needs Node.js, system tar, and a local Linux Docker engine with Compose. An arbitrary source ZIP, single npm archive, or frontend-only dist bundle is not a standard release directory. See the [deployment guide](doc/first-deployment.md) for configuration, updates, and what to do after a failure.
 
 ## Develop your own app
 
@@ -63,7 +63,7 @@ pnpm exec dsh-plugin-manager list --root /absolute/path/my-plugin --package .
 pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --output .local/artifacts/release/v1
 ```
 
-`pack` installs locked dependencies, runs build/check, verifies the archive, and writes `manifest.json`. Deliver the entire output directory; do not extract only its tgz files. The direct workflow supports an independent pnpm single package. npm, yarn, and monorepo layouts are not promised the same one-step path.
+`pack` installs locked dependencies, builds and packs with content addressing, and writes `manifest.json`; it does not run checks. Use `check` for type checks, `verify-package` for archive/source consistency, and `verify-release` for release-directory compliance. Deliver the entire output directory; do not extract only its tgz files. The direct workflow supports an independent pnpm single package. npm, yarn, and monorepo layouts are not promised the same one-step path.
 
 ## What can be integrated
 
@@ -89,7 +89,7 @@ pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --
 | Try auth/example login and chat | [Getting started](doc/getting-started.md) · [Visual tour](doc/quick-tour.md) |
 | Plugin declarations and instance configuration | [Configuration](doc/plugin-configuration.md) · [kit](packages/plugin-kit/README.md) |
 | Manual release composition or host management | [Standalone CLI delivery](packages/plugin-manager/DELIVERY.md) |
-| Source releases, selective reuse, resume/recover | [Deployment and operations](deploy/README.md) |
+| Source releases, selective reuse, rerunning an ordinary build after failure | [Deployment and operations](deploy/README.md) |
 | Site fields, credentials, and defaults | [Framework configuration](doc/framework-configuration.md) |
 | Troubleshooting and verification boundaries | [FAQ](doc/FAQ.md) · [Host compatibility](doc/host-compatibility.md) · [Verification](packages/plugin-manager/VERIFICATION.md) |
 | All documentation | [Documentation index](doc/README.md) |

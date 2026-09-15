@@ -77,9 +77,9 @@ export function installManagerArchive({ archive, output, version, execute = comm
 /**
  * A real installation produces the same self-contained tooling layout as the deployment zip.
  *
- * `archive` 传入一个已核验的归档时跳过重建：把它装进本次的工具目录并做同样的版本与入口
- * 核验（1.2 秒 vs 重建的 18.6 秒）。归档的内容身份由调用方核验（见 `deploy/scripts/tooling-reuse.mjs`），
- * 这里返回的 `sha256` 是实际安装内容重新算出来的摘要，调用方据此再核对一次。
+ * `archive` 传入一个已核验的归档时跳过重建：把它装进本次的工具目录并做同样的版本与入口核验。
+ * 当前源码发布路径不传它（`deploy/scripts/source-input.mjs` 每次按本次输入重建工具）；归档的身份由
+ * 调用方核验，这里返回的 `sha256` 是实际安装内容重新算出来的摘要，调用方据此再核对一次。
  */
 export function prepareManagerTooling({ root, output, execute = command, env = normalizeEnvironment(process.env), archive: reused } = {}) {
   if (!root || !output) throw new Error('Manager tooling requires explicit root and output paths.');
