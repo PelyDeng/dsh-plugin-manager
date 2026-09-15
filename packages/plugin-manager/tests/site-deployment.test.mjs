@@ -188,7 +188,7 @@ test('the archive cache root follows the resolved artifacts root instead of a fi
   const f = fixture(t);
   // 自定义 artifacts 根：迁移保全 file: 引用时按绑定的 artifacts 换算，发布必须落到同一个位置，
   // 否则换容器后挂载的是另一个目录，历史引用会失效（设计 4.2、5.1、6.2）。
-  f.put('.local/site.json', { artifacts: 'deploy-artifacts' });
+  f.put('.local/site.json', { containerUid: process.getuid?.() ?? 1000, containerGid: process.getgid?.() ?? 1000, artifacts: 'deploy-artifacts' });
   f.setFail(null);
   const record = releaseSite({ root: f.root }, f.execute);
   assert.equal(record.status, 'ready');
