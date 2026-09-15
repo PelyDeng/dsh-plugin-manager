@@ -1,6 +1,6 @@
 # @dsh-plugin-manager/plugin-manager
 
-用于打包、安装和管理 DSH 应用的命令行工具（CLI）。独立包和内部 `plugins/*` 共用 build → check → pack，通过官方 DSH CLI 安装 Bundle、配置并受控启停。kit 和基础认证可选；管理声明不会自动保护业务路由。
+用于打包、安装和管理 DSH 应用的命令行工具（CLI）。独立包和内部 `plugins/builtin/*` 共用 build → check → pack，通过官方 DSH CLI 安装 Bundle、配置并受控启停。kit 和基础认证可选；管理声明不会自动保护业务路由。
 
 ## 安装与作者操作
 
@@ -16,11 +16,11 @@
 
 底层 start/apply-compose/compose-release 语义不变。清单 2 只支持 release，未声明 healthPath 显示 not-provided，不代表业务就绪；运行依赖可能需要网络。独立 CLI 必须指定 --root，不能从工具目录猜站点路径。
 
-`release-site --root <站点> [--config <配置>] [--resume | --recover --data-compatible]` 是部署包 build 使用的统一编排入口；普通用户仍运行 build。recover 仅修正同包业务配置，不支持借此替换错误包。源码适配、锁和恢复说明见对应版本的[运维文档](https://github.com/PelyDeng/dsh-plugin-manager/blob/v{{FRAMEWORK_VERSION}}/deploy/README.md)。
+`release-site --root <站点> [--config <配置>]` 是部署包 build 使用的统一编排入口；普通用户仍运行 build。内置插件固定全量构建，外部产物来自 incoming；失败后直接重新运行普通 build。旧站点升级用 `migrate-site` 一次性迁移。源码适配、锁和重试说明见对应版本的[运维文档](https://github.com/PelyDeng/dsh-plugin-manager/blob/v{{FRAMEWORK_VERSION}}/deploy/README.md)。
 
 ## 内部批量开发与 API
 
-省略 `--package` 时保留根锁文件及 `plugins/*` 扫描，支持 `--plugins "auth,example"`、默认选集、all/none。逗号分隔的 ID 列表加引号，避免 PowerShell 拆成数组。内部 kit 工作区准备和批量操作保持原行为。
+省略 `--package` 时保留根锁文件及 `plugins/builtin/*` 扫描，支持 `--plugins "auth,example"`、默认选集、all/none。逗号分隔的 ID 列表加引号，避免 PowerShell 拆成数组。内部 kit 工作区准备和批量操作保持原行为。
 
 包根导出部署函数，`/catalog` 导出 `readPlugin`、插件发现与选择，`/packaging` 导出打包函数。管理器只读取声明与归档，不导入业务源码。
 ## 发布物宿主验证

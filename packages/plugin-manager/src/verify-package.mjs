@@ -47,7 +47,8 @@ export function verifyPackage(plugin, archive, options = {}) {
   return packed;
 }
 
-function inspectPackage(plugin, archive) {
+/** 归档成员的边界检查：落在包内、不含 `..`、不是私密路径、没有重复、没有链接。返回成员集合。 */
+function archiveMembers(archive) {
   const entries = readArchive(archive, ['-tzf', '-']).toString('utf8').trim().split(/\r?\n/u);
   const seen = new Set();
   for (const entry of entries) {
@@ -58,6 +59,24 @@ function inspectPackage(plugin, archive) {
   if (readArchive(archive, ['-tzvf', '-']).toString('utf8').split(/\r?\n/u).some(line => /^[lh]/u.test(line))) {
     throw new Error('发布包不得包含符号链接或硬链接。');
   }
+  return seen;
+}
+
+/**
+ * 归档的实际身份：包内清单 + 成员边界。
+ *
+ * 这是**部署读路径**要用的部分：只需要知道实际包名与版本，并确保成员名不能越界、不夹带私密
+ * 配置。verifyFiles 是否齐全、exports 是否成立、依赖是否可移植、清单与包内元数据是否一致属于
+ * 交付侧合规，由 verify-release 独立执行。只读 `package.json` 一个成员，不整包落盘。
+ */
+export function inspectArchiveIdentity(archive) {
+  const seen = archiveMembers(archive);
+  if (!seen.has('package/package.json')) throw new Error('发布包缺少 package.json。');
+  return JSON.parse(readArchive(archive, ['-xzOf', '-', 'package/package.json']).toString('utf8'));
+}
+
+function inspectPackage(plugin, archive) {
+  const seen = archiveMembers(archive);
   const members = [...new Set(['package/package.json', ...plugin.verifyFiles.map(file => `package/${file}`)])];
   const missing = members.find(member => !seen.has(member));
   if (missing) throw new Error(`发布包缺少文件：${missing.slice('package/'.length)}。`);

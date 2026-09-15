@@ -39,7 +39,7 @@ test('check detects package and generated document drift without repairing files
   frameworkVersion(f.root, { mode: 'sync' });
   f.write(frameworkPackages[2], '{"version":"0.12.1"}\n');
   f.write('doc/getting-started.md', 'stale documentation\n');
-  assert.throws(() => frameworkVersion(f.root), /plugins\/dsh-auth\/package.json[\s\S]*doc\/getting-started.md/);
+  assert.throws(() => frameworkVersion(f.root), /plugins\/builtin\/dsh-auth\/package.json[\s\S]*doc\/getting-started.md/);
   assert.equal(f.read('doc/getting-started.md'), 'stale documentation\n');
   assert.equal(JSON.parse(f.read(frameworkPackages[2])).version, '0.12.1');
 });
@@ -72,9 +72,9 @@ test('CRLF checkout is accepted and the caller supplies the repository root', t 
 test('fixed public excerpts are rendered once and source drift is detected without writing', t => {
   const f = fixture(t);
   f.write('doc/plugin-development.md.tmpl', '# 作者 {{FRAMEWORK_VERSION}}\n<!-- excerpt:author-pack -->\n离线打包 {{FRAMEWORK_VERSION}}。\n<!-- /excerpt:author-pack -->\n');
-  f.write('plugins/dsh-example/knowledge/guide.md.tmpl', '# FAQ {{FRAMEWORK_VERSION}}\n<!-- include:author-pack -->\n');
+  f.write('plugins/builtin/dsh-example/knowledge/guide.md.tmpl', '# FAQ {{FRAMEWORK_VERSION}}\n<!-- include:author-pack -->\n');
   frameworkVersion(f.root, { mode: 'sync' });
-  const guide = 'plugins/dsh-example/knowledge/guide.md';
+  const guide = 'plugins/builtin/dsh-example/knowledge/guide.md';
   assert.match(f.read(guide), /离线打包 0\.13\.0/);
   assert.doesNotMatch(f.read(guide), /<!-- include:/);
   const previous = f.read(guide);
@@ -90,11 +90,11 @@ test('unknown, missing, repeated and nested excerpts fail before any output is c
   frameworkVersion(f.root, { mode: 'sync' });
   const previous = f.read('package.json');
   for (const id of ['../../.local/env.conf', 'constructor']) {
-    f.write('plugins/dsh-example/knowledge/guide.md.tmpl', `# FAQ {{FRAMEWORK_VERSION}}\n<!-- include:${id} -->\n`);
+    f.write('plugins/builtin/dsh-example/knowledge/guide.md.tmpl', `# FAQ {{FRAMEWORK_VERSION}}\n<!-- include:${id} -->\n`);
     assert.throws(() => frameworkVersion(f.root, { mode: 'set', version: '0.14.0' }), /未知文档片段/);
     assert.equal(f.read('package.json'), previous);
   }
-  f.write('plugins/dsh-example/knowledge/guide.md.tmpl', '# FAQ {{FRAMEWORK_VERSION}}\n<!-- include:author-pack -->\n');
+  f.write('plugins/builtin/dsh-example/knowledge/guide.md.tmpl', '# FAQ {{FRAMEWORK_VERSION}}\n<!-- include:author-pack -->\n');
   assert.throws(() => frameworkVersion(f.root), /缺失或重复文档片段/);
   f.write('doc/plugin-development.md.tmpl', '# 作者 {{FRAMEWORK_VERSION}}\n<!-- excerpt:author-tools -->\n工具。\n<!-- /excerpt:author-tools -->\n<!-- excerpt:author-pack -->\n<!-- include:author-tools -->\n<!-- /excerpt:author-pack -->\n');
   assert.throws(() => frameworkVersion(f.root), /嵌套引用/);

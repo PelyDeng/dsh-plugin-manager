@@ -1,4 +1,4 @@
-/** 对账诊断必须只读：只报告漂移类别，不写状态、不动容器。 */
+/** 对账诊断必须只读：只报告现场差异，不写状态、不动容器；旧记录不构成发布准入。 */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dirname, join, resolve } from 'node:path';
@@ -15,7 +15,10 @@ const RUNNING = `sha256:${'3'.repeat(64)}`;
 
 function write(path, value) { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`); }
 
-function fixture(t, { candidateImage = CANDIDATE, recordedImage = RECORDED, stopComplete = false, containerImage = RUNNING } = {}) {
+/** 已删除机制留下的词汇不允许再出现在诊断输出里（设计 3 节：只报现场差异，不设准入）。 */
+const REMOVED_VOCABULARY = /对账事务|不是同一代|续跑|拦下|--resume|--recover|needsResume|stopComplete|previousStateHash/u;
+
+function fixture(t, { candidateImage = CANDIDATE, recordedImage = RECORDED, containerImage = RUNNING, pointerStatus = 'deployment-failed' } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'dsh-check-records-'));
   t.after(() => { assert.equal(dirname(root), resolve(tmpdir())); rmSync(root, { recursive: true, force: true }); });
   write(join(root, 'deployment.json'), { composeProject: 'demo', containerImage, profile: 'web' });
@@ -25,9 +28,9 @@ function fixture(t, { candidateImage = CANDIDATE, recordedImage = RECORDED, stop
   write(join(operation, 'plugins/manifest.json'), { plugins: [{ id: 'alpha' }] });
   write(join(operation, 'deployment.json'), { containerImage: candidateImage });
   write(join(operation, 'result.json'), { schemaVersion: 3, inputKind: 'source', status: 'deployment-failed', operation, siteOperation: randomUUID(),
-    candidatePath: join(operation, 'deployment.json'), stopComplete, previousRuntime: { containerImage: recordedImage },
+    candidatePath: join(operation, 'deployment.json'), previousRuntime: { containerImage: recordedImage },
     selectedPlugins: [{ id: 'alpha' }], enabledPlugins: ['alpha'] });
-  write(join(root, '.local/source-release.json'), { operation, status: 'deployment-failed' });
+  write(join(root, '.local/source-release.json'), { operation, status: pointerStatus });
   const composePath = join(root, '.local/artifacts', randomUUID(), 'compose/compose.override.json');
   write(composePath, { services: { dsh: { image: recordedImage, environment: { DSH_HOME: '/data/dsh-home', DSH_PROFILE: 'web' } } } });
   write(join(root, '.local/artifacts/active-compose.json'), { schemaVersion: 1, path: composePath, appliedAt: '2026-01-01T00:00:00.000Z' });
@@ -58,15 +61,25 @@ const container = (image, { running = true, profile = 'web', home = '/data/dsh-h
   Mounts: [{ Type: 'bind', Destination: '/data', RW: true }],
 });
 
-test('运行容器与记录镜像不同代判定为 container-replaced，并指出镜像身份比对必然失败', t => {
+test('运行容器与记录镜像不同代只作现场差异，不再声称身份比对必然失败', t => {
   const f = fixture(t);
   const { execute, calls } = docker({ images: [CANDIDATE, RECORDED, RUNNING], containers: [container(RUNNING)] });
   const report = checkRecords(f.deployment, execute);
   assert.equal(report.classification, 'container-replaced');
   assert.deepEqual(report.conditions, ['container-replaced']);
-  assert.ok(report.blockers.some(text => text.includes('不是同一代')));
-  assert.ok(report.plan.some(text => text.includes('显式对账事务')));
+  assert.ok(report.differences.some(text => text.includes('允许的现场差异')));
+  assert.doesNotMatch(JSON.stringify(report), REMOVED_VOCABULARY);
   assert.ok(calls.every(call => /^(image inspect|ps |inspect )/.test(call)));
+});
+
+test('失败指针只作诊断，不再声称会被未完成操作拦下', t => {
+  const f = fixture(t);
+  const { execute } = docker({ images: [CANDIDATE, RECORDED, RUNNING], containers: [container(RUNNING)] });
+  const report = checkRecords(f.deployment, execute);
+  assert.equal(report.facts.pointer.status, 'deployment-failed');
+  assert.equal(report.facts.pointer.unfinished, true);
+  assert.ok(report.differences.some(text => text.includes('只作诊断')));
+  assert.doesNotMatch(JSON.stringify(report), /拦下/u);
 });
 
 test('记录镜像已删且容器已被替换时两个条件并存，主判定取镜像缺失', t => {
@@ -75,8 +88,8 @@ test('记录镜像已删且容器已被替换时两个条件并存，主判定�
   const report = checkRecords(f.deployment, execute);
   assert.equal(report.classification, 'candidate-image-missing');
   assert.ok(report.conditions.includes('container-replaced'), '并存的替换条件必须一并报告');
-  assert.ok(report.plan.some(text => text.includes('确认接受新容器身份')) === false);
-  assert.ok(report.blockers.some(text => text.includes('不是同一代')));
+  assert.doesNotMatch(JSON.stringify(report), REMOVED_VOCABULARY);
+  assert.ok(report.differences.some(text => text.includes('允许的现场差异')));
 });
 
 test('候选镜像缺失与容器被替换是两个分支', t => {
@@ -85,24 +98,26 @@ test('候选镜像缺失与容器被替换是两个分支', t => {
   const report = checkRecords(f.deployment, execute);
   assert.equal(report.classification, 'candidate-image-missing');
   assert.equal(report.facts.candidate.present, false);
-  assert.ok(report.blockers.some(text => text.includes('失败候选镜像不存在')));
+  assert.ok(report.differences.some(text => text.includes('候选镜像不在本机')));
 });
 
-test('旧容器已消失判定为 container-evidence-missing，并要求显式接受新容器身份', t => {
+test('旧容器已消失只作诊断，不再要求显式接受新容器身份', t => {
   const f = fixture(t);
   const { execute } = docker({ images: [CANDIDATE, RECORDED, RUNNING], containers: [] });
   const report = checkRecords(f.deployment, execute);
   assert.equal(report.classification, 'container-evidence-missing');
-  assert.ok(!report.blockers.some(text => text.includes('不是同一代')));
-  assert.ok(report.plan.some(text => text.includes('确认接受新容器身份')));
+  assert.ok(report.differences.some(text => text.includes('旧容器已不存在')));
+  assert.ok(report.plan.some(text => text.includes('只作诊断')));
+  assert.doesNotMatch(JSON.stringify(report), REMOVED_VOCABULARY);
 });
 
-test('记录与现场一致时不报身份阻断项', t => {
+test('记录与现场一致时按正常流程发布', t => {
   const f = fixture(t, { recordedImage: RUNNING, containerImage: RUNNING });
   const { execute } = docker({ images: [CANDIDATE, RUNNING], containers: [container(RUNNING, { running: false })] });
   const report = checkRecords(f.deployment, execute);
   assert.equal(report.classification, 'consistent');
-  assert.ok(!report.blockers.some(text => text.includes('不是同一代')));
+  assert.ok(report.plan.some(text => text.includes('按正常流程发布')));
+  assert.doesNotMatch(JSON.stringify(report), REMOVED_VOCABULARY);
 });
 
 test('没有发布记录时给出 no-record，且不写任何文件', t => {
@@ -115,21 +130,22 @@ test('没有发布记录时给出 no-record，且不写任何文件', t => {
   assert.equal(report.facts.pointer.present, false);
   assert.equal(readdirSync(f.root, { recursive: true }).length, before, '只读诊断不得新增文件');
   assert.ok(report.notice.includes('未写入任何状态'));
+  assert.ok(report.notice.includes('不阻断普通 build'));
 });
 
-test('活动 Compose 缺启动参数时给出显式阻断项', t => {
+test('活动 Compose 缺启动参数时给出差异项', t => {
   const f = fixture(t);
   const { execute } = docker({ images: [CANDIDATE, RUNNING], containers: [container(RUNNING)] });
   const report = checkRecords(f.deployment, execute);
-  assert.ok(report.blockers.some(text => text.includes('未显式声明启动参数')));
+  assert.ok(report.differences.some(text => text.includes('未显式声明启动参数')));
   assert.ok(readFileSync(join(f.root, 'deployment.json'), 'utf8').includes('demo'));
 });
 
-test('profile 钉住的归档不可达时给出阻断项', t => {
+test('profile 钉住的归档不可达时给出差异项', t => {
   const f = fixture(t);
   rmSync(join(f.root, '.local/artifacts/pkg/alpha-abc.tgz'));
   const { execute } = docker({ images: [CANDIDATE, RUNNING], containers: [container(RUNNING)] });
   const report = checkRecords(f.deployment, execute);
-  assert.ok(report.blockers.some(text => text.includes('归档不可达')));
+  assert.ok(report.differences.some(text => text.includes('归档不可达')));
   assert.equal(report.facts.deployment.pinnedArchives[0].present, false);
 });

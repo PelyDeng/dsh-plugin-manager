@@ -54,4 +54,4 @@ auth 提供受保护的 `GET /auth/api/conversation-plugins`、`GET /auth/api/co
 
 移除时先写入 pending 标记，阻止新的写入，再释放空闲句柄，等待官方 `ctx.workspaceRegistry.archiveSession` 完成，最后更新插件的删除标记。插件与官方存储不在同一个数据库事务中，出错时须保留进度供重试。归档服务由宿主提供，缺失时报告不可用。不得自行写入官方归档文件、让 auth 扫描业务数据库，或把所有用户的归档列表发给浏览器。
 
-公共实现和可复制示例见 `packages/plugin-kit/src/conversations.ts`、`plugins/dsh-auth/src/http.ts`、`plugins/dsh-example/src/index.ts` 和 `src/history.ts`。各业务插件自行维护 owner 索引、查询 SQL、预览投影与活动任务检查。
+公共实现和可复制示例见 `packages/plugin-kit/src/conversations.ts`、`plugins/builtin/dsh-auth/src/http.ts`、`plugins/builtin/dsh-example/src/index.ts` 和 `src/history.ts`。各业务插件自行维护 owner 索引、查询 SQL、预览投影与活动任务检查。

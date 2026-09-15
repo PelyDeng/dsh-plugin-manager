@@ -6,8 +6,8 @@ import { fileURLToPath } from 'node:url';
 export const frameworkPackages = [
   'packages/plugin-manager/package.json',
   'packages/plugin-kit/package.json',
-  'plugins/dsh-auth/package.json',
-  'plugins/dsh-example/package.json',
+  'plugins/builtin/dsh-auth/package.json',
+  'plugins/builtin/dsh-example/package.json',
 ];
 export const versionTemplates = [
   'packages/plugin-manager/README.md.tmpl',
@@ -19,10 +19,10 @@ export const versionTemplates = [
   'doc/versioning.md.tmpl',
   'examples/standalone-kit/README.md.tmpl',
   'examples/standalone-plugin/README.md.tmpl',
-  'plugins/dsh-example/knowledge/guide.md.tmpl',
+  'plugins/builtin/dsh-example/knowledge/guide.md.tmpl',
   'deploy/DEPLOYMENT.md.tmpl',
   'deploy/STARTERS.md.tmpl',
-  'plugins/dsh-example/examples/README.md.tmpl',
+  'plugins/builtin/dsh-example/examples/README.md.tmpl',
 ];
 
 // Fixed public excerpts only. sync/check owns every rendered document; builds only consume it.

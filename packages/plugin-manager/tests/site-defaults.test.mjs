@@ -21,7 +21,9 @@ test('new private env records effective site and image defaults without secrets 
   const root = fixture(t);
   const { sitePath } = loadSite(root, undefined, { imagePlatform: 'linux/arm64', desktop: true });
   const value = readFrameworkConfig(sitePath);
-  assert.equal(value.config.port, 7902); assert.deepEqual(value.config.plugins, ['auth', 'example']);
+  assert.equal(value.config.port, 7902);
+  // 运行选集不随来源改变（设计 2.8、6.2 第 7 步）：未指定就是空值，部署时采用全部候选。
+  assert.equal(value.config.plugins, undefined);
   assert.equal(value.config.composeProject, 'dsh-plugins'); assert.equal(value.config.publicOrigin, 'http://127.0.0.1:7902');
   assert.equal(value.config.home, '.local/data/dsh-home'); assert.equal(value.config.workspace, '.local/data/workspace');
   assert.equal(value.config.authUrlFile, resolve(root, '.local/data/dsh-web-auth-url.txt'));

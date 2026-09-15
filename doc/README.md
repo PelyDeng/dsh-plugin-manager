@@ -24,7 +24,7 @@
 - [内部工作区开发](plugin-development.md#内部工作区开发)
 - [复制完整问答应用](plugin-development.md#复制完整问答应用到独立仓库)
 - [会话管理](conversation-management.md)
-- [聊天风格](../plugins/dsh-example/skills/dsh-chat-style/SKILL.md)
+- [聊天风格](../plugins/builtin/dsh-example/skills/dsh-chat-style/SKILL.md)
 
 ## 部署与维护
 

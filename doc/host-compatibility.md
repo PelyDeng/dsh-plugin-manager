@@ -13,7 +13,7 @@ git submodule update --init deepseek-harness
 
 普通构建不会下载或切换宿主。宿主使用自己的 `pnpm@11.7.0` 和锁文件，框架使用根 `package.json` 指定的 pnpm。源码构建步骤见[源码部署](../deploy/README.md#服务器源码发版)。Docker 构建使用已有的干净宿主检出，并记录提交和镜像身份。
 
-若站点配置了 `DSH_HOST_IMAGE`，更新 gitlink 不会更换这个固定镜像。应先构建新宿主镜像，验证其 `org.opencontainers.image.revision` 和版本标签，再更新站点镜像引用。宿主变化时执行完整构建；`--rebuild-plugins` 不能复用旧宿主基线中的插件归档。具体操作见[部署说明](../deploy/README.md)。
+若站点配置了 `DSH_HOST_IMAGE`，更新 gitlink 不会更换这个固定镜像。应先构建新宿主镜像，验证其 `org.opencontainers.image.revision` 和版本标签，再更新站点镜像引用。内置插件固定全量构建，不复用旧宿主基线中的归档。具体操作见[部署说明](../deploy/README.md)。
 
 ## 插件接口
 

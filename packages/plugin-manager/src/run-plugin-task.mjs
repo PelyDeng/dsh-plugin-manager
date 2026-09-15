@@ -81,28 +81,34 @@ export function preparePluginDependencies(root, plugins, step = (_label, run) =>
 
 /** 各命令的用法：帮助不该要求先有项目根，所以放在解析参数之前。 */
 export const USAGE = [
-  'build  [--root <项目根>] [--plugins <ID列表>] [--package <独立包目录>]',
-  'check  [--root <项目根>] [--plugins <ID列表>] [--package <独立包目录>]',
-  'clean  [--root <项目根>] [--plugins <ID列表>]',
-  'list   [--root <项目根>] [--plugins <ID列表>] [--package <独立包目录>]',
-  'pack   [--root <项目根>] [--plugins <ID列表>] [--output <新目录>] [--concurrency <正整数>] [--verify-plugin-check]',
+  'build  [--root <项目根>] [--plugins <ID列表>] [--external] [--package <独立包目录>]',
+  'check  [--root <项目根>] [--plugins <ID列表>] [--external] [--package <独立包目录>]',
+  'clean  [--root <项目根>] [--plugins <ID列表>] [--external]',
+  'list   [--root <项目根>] [--plugins <ID列表>] [--external] [--package <独立包目录>]',
+  'pack   [--root <项目根>] [--plugins <ID列表>] [--external] [--output <新目录>] [--concurrency <正整数>]',
   '',
-  '--plugins 省略表示全部；逗号分隔的 ID 列表要加引号，避免 PowerShell 拆成数组。',
-  'pack 默认跳过插件检查（CI 已跑过，产物不变），要本机确认时加 --verify-plugin-check。',
+  '默认发现并构建框架内置源码（plugins/builtin），省略 --plugins 表示全部；逗号分隔的 ID 列表要加引号，避免 PowerShell 拆成数组。',
+  '--external 是作者对 plugins/external 私有源码的显式调用，必须显式给出选集（ID 列表、all 或 none），不透传给站点 build。',
+  'pack 只构建、打包并做内容寻址；类型检查用 check，归档与源码一致性用 verify-package，交付目录合规用 verify-release。',
 ].join('\n');
 
 export function main(argv = process.argv.slice(2)) {
   const [action, ...args] = argv;
   if (argv.includes('--help')) { console.log(USAGE); return; }
   if (!['build', 'check', 'clean', 'list'].includes(action)) throw new Error('任务必须是 build、check、clean 或 list。');
-  const options = parseOptions(args, ['root', 'plugins', ...(action === 'clean' ? [] : ['package'])]);
+  const options = parseOptions(args, ['root', 'plugins', ...(action === 'clean' ? [] : ['package'])], ['external']);
   if (!options.root) throw new Error('必须显式指定 --root 项目根目录。');
   const root = resolve(options.root);
-  const requested = action === 'list' && options.plugins === undefined && options.package === undefined ? 'all' : options.plugins;
-  const selected = sourcePlugins(root, requested, options.package);
+  // 发现范围由 --external 决定：内置命令未点名时构建全部 builtin；external 必须显式给出选集。
+  // `--package .` 自带唯一插件，不能与选集同用。
+  const scope = options.external ? 'external' : 'builtin';
+  const defaults = options.package === undefined && (action === 'list' || scope === 'builtin');
+  const requested = options.plugins ?? (defaults ? 'all' : undefined);
+  if (options.external && requested === undefined) throw new Error('--external 必须显式给出插件选集：ID 列表、all 或 none。');
+  const selected = sourcePlugins(root, requested, options.package, { source: scope });
   if (['build', 'check'].includes(action)) preparePluginDependencies(root, selected);
   for (const plugin of selected) {
-    if (action === 'list') console.log(`${plugin.id}\t${plugin.package}\tdefault=${plugin.defaultEnabled}`);
+    if (action === 'list') console.log(`${plugin.id}\t${plugin.package}`);
     else runPluginTask(root, plugin, action);
   }
 }

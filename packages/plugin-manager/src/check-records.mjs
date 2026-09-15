@@ -1,21 +1,24 @@
 /**
- * 只读的发布记录对账诊断。
+ * 只读的发布现场对账诊断。
  *
- * 发布失败后现场常被人工干预（换镜像、重建容器、留旧记录），高层 `--resume`/`--recover`
- * 会按契约拒绝继续，而拒绝原因分散在指针、失败候选、活动 Compose、容器与 profile 里。
- * 本模块只读这些来源，判定属于哪一类漂移并给出对账计划；**不写任何状态、不动容器、
- * 不改生产数据**——真正的收敛必须由操作者看过计划后显式执行。
+ * 发布失败或中断后现场常被人工干预（换镜像、重建容器、留旧记录）。本模块**只读**对比上一次发布
+ * 记录、活动 Compose、镜像、容器与 profile 证据，报告**现场差异**与需要人工核实的事项；**不写任何
+ * 状态、不动容器、不改生产数据**——真正的收敛必须由操作者看过报告后显式执行。
+ *
+ * 旧记录只作诊断（设计 3 节、5.4）：失败指针、旧容器、旧镜像都不再阻断下一次普通 build，因此这里
+ * 不再声称「会被拦下」，也不要求恢复旧代次；它回答的是「记录说的和现场实际的差在哪」。
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parseArguments, resolveDeployment } from './config.mjs';
 import { readSiteJson, sitePointer } from './site-record.mjs';
-import { LOCK, OWNER, PENDING, STATE } from './state.mjs';
+import { LOCK, OWNER, STATE } from './state.mjs';
 
 export const conditions = ['no-record', 'consistent', 'candidate-image-missing', 'container-evidence-missing', 'container-replaced', 'record-drift'];
 
-const UNFINISHED = ['prepared', 'backing-up', 'applying', 'deployment-failed'];
+/** 除 ready 以外的指针状态：只用于说明上次发布没有正常结束，不作为发布准入。 */
+const UNFINISHED = ['building', 'prepared', 'backing-up', 'applying', 'build-failed', 'deployment-failed'];
 const short = value => typeof value === 'string' && value.length > 12 ? value.slice(0, 12) : value ?? null;
 
 function probe(execute, args) {
@@ -45,14 +48,12 @@ function savedFacts(root, operation) {
     schemaVersion: record.schemaVersion ?? null,
     inputKind: record.inputKind ?? null,
     status: record.status ?? null,
-    stopComplete: record.stopComplete ?? null,
     candidateImage: candidate?.containerImage ?? null,
     activeImage: record.previousRuntime?.containerImage ?? record.previousRuntime?.image ?? null,
     activeManifest: relativeTo(root, record.previousRuntime?.manifest ?? ''),
     activeSiteOperation: short(record.previousRuntime?.siteOperation),
     selectedPlugins: Array.isArray(record.selectedPlugins) ? record.selectedPlugins.map(item => item.id) : null,
     enabledPlugins: Array.isArray(record.enabledPlugins) ? record.enabledPlugins : null,
-    previousStateHash: short(record.previousStateHash),
   };
 }
 
@@ -99,10 +100,10 @@ function deploymentEvidence(root, deployment) {
     home: relativeTo(root, deployment.home),
     project: deployment.config.composeProject ?? null,
     configuredImage: deployment.config.containerImage ?? null,
-    pluginSource: deployment.config.pluginSource ?? null,
+    pluginSource: null,
     hostImage: deployment.config.hostImage ?? null,
     records: { lock: existsSync(resolve(profileRoot, LOCK)), owner: existsSync(resolve(profileRoot, OWNER)),
-      state: existsSync(resolve(profileRoot, STATE)), pending: existsSync(resolve(profileRoot, PENDING)) },
+      state: existsSync(resolve(profileRoot, STATE)) ? readSiteJson(resolve(profileRoot, STATE)).schemaVersion : null },
     pinnedArchives: manifest ? Object.entries(manifest.dependencies ?? {})
       .filter(([, spec]) => typeof spec === 'string' && spec.startsWith('file:'))
       .map(([name, spec]) => ({ package: name, file: spec.slice(5).split('/').pop(), present: existsSync(resolve(spec.slice(5))) })) : [],
@@ -119,8 +120,8 @@ function collectConditions({ saved, candidatePresent, activeImage, activePresent
   if (candidatePresent === false) conditions.push('candidate-image-missing');
   if (activeImage && activePresent === false && !conditions.includes('candidate-image-missing')) conditions.push('candidate-image-missing');
   if (!containersAvailable) return [...conditions, 'record-drift'];
-  if (!containers.length) return [...conditions, saved.stopComplete ? 'record-drift' : 'container-evidence-missing'];
-  // 有容器却没有一个属于记录声明的这一代：镜像身份比对必然失败，属"现有容器被替换"。
+  if (!containers.length) return [...conditions, 'container-evidence-missing'];
+  // 有容器却没有一个来自记录声明的这一代：现场差异，只报告，不作准入（设计 3 节）。
   if (activeImage && !containers.some(container => container.configImage === activeImage)) conditions.push('container-replaced');
   if (!conditions.length && containers.every(container => container.running)) conditions.push('record-drift');
   return conditions.length ? conditions : ['consistent'];
@@ -128,40 +129,38 @@ function collectConditions({ saved, candidatePresent, activeImage, activePresent
 
 const remedies = {
   'no-record': ['没有可对账的发布记录；按正常流程发布即可，无需对账。'],
-  consistent: ['记录与现场一致：无需对账，按正常流程发布或续跑。'],
+  consistent: ['记录与现场一致：无需对账，按正常流程发布即可。'],
   'candidate-image-missing': [
-    '失败候选或活动记录声明的镜像已不在本机：不能续跑，也不能靠删锁或改指针恢复。',
-    '从可核验来源重新提供同一摘要的镜像，或显式开始一次新发布以生成新候选。',
-    '新候选若依赖镜像默认启动行为，应在恢复产物中显式写出必要参数，不依赖隐式回退。',
+    '记录声明过的镜像已不在本机：这只影响旧记录的诊断和旧容器的重建，不影响新发布——新发布会按本次输入的镜像重新起服务。',
+    '若仍要让该记录对应的候选可用，先按记录里的镜像摘要重新提供镜像；否则直接按正常流程重新发布。',
   ],
   'container-evidence-missing': [
-    '记录声明的旧容器已不存在，恢复所需的服务身份证据缺失。',
-    '确认该服务当前由哪个容器承担，并核对该容器的镜像与服务标签。',
-    '由操作者在显式对账事务中确认接受新容器身份；旧记录保持不可变，以继承关系表达新状态。',
+    '记录声明的旧容器已不存在：旧记录只作诊断，不要求旧容器或旧镜像回来。',
+    '按站点绑定核对当前服务由哪个容器承担、其 home/profile 与持久挂载是否仍是绑定目录；确认后按正常流程发布。',
   ],
   'container-replaced': [
-    '现存容器与记录中的旧容器不是同一代，镜像身份比对必然失败——这是当前版本有意保留的保护。',
-    '不要用弱化镜像校验的开关绕过归属证明；改为执行显式对账事务。',
-    '对账前先核对容器的 home、profile、挂载与受管状态是否仍指向同一份持久数据。',
+    '现存容器与记录里那一代镜像不同：这是允许的现场差异（记录不参与准入），新发布只核对站点绑定、停写与重叠写入者。',
+    '核对现存容器的 home/profile 与持久挂载是否指向本站点绑定目录；不一致时按绑定与迁移文档处理。',
   ],
   'record-drift': [
-    '指针、失败候选、活动 Compose 与容器记录指向不同代次，需要逐项核对后再收敛。',
-    '先确认哪一代对应正在提供服务的容器；其余各代只作证据保留，不改写。',
+    '指针、候选、活动 Compose 与容器指向不同代次：逐项核对哪一代对应正在提供服务的容器，其余只作证据保留。',
+    '不要靠改写记录或删除状态来“对齐”；按现场事实判断，需要时重新发布一次收敛。',
   ],
 };
 
-function buildBlockers(record, conditions) {
-  const blockers = [];
-  if (!record.pointer.present) blockers.push('站点发布指针缺失或不合法，无法核对操作归属。');
-  if (record.pointer.needsResume) blockers.push(`站点记录停在 ${record.pointer.status}：正常发布会先被未完成操作拦下。`);
-  if (record.candidate.present === false) blockers.push('失败候选镜像不存在，无法按原候选续跑。');
-  if (record.active.image && record.active.present === false) blockers.push('活动 Compose 声明的镜像不存在：容器一旦重建就没有可用镜像。');
-  if (record.active.image && !record.active.command) blockers.push('活动 Compose 未显式声明启动参数：启动依赖镜像默认行为，恢复产物应写明必要参数。');
-  if (conditions.includes('container-replaced')) blockers.push('现存容器与记录中的旧容器不是同一代，镜像身份比对必然失败。');
-  if (record.deployment.records.lock) blockers.push('profile 存在安装锁：先按恢复文档核实锁主再继续。');
-  if (record.deployment.records.pending) blockers.push('profile 存在未完成安装操作，恢复入口会要求原清单与配置。');
-  for (const archive of record.deployment.pinnedArchives) if (!archive.present) blockers.push(`profile 钉住的归档不可达：${archive.package}。`);
-  return blockers;
+function buildDifferences(record, conditions) {
+  const differences = [];
+  if (!record.pointer.present) differences.push('站点发布指针缺失或不合法：无法核对上一次发布的归属；不影响按当前现场发布。');
+  if (record.pointer.unfinished) differences.push(`上一次发布未以 ready 结束（状态 ${record.pointer.status}）：只作诊断，普通 build 会从当前现场重新收敛。`);
+  if (record.candidate.present === false) differences.push('记录里的候选镜像不在本机：该记录只作诊断，按正常流程重新发布即可。');
+  if (record.active.image && record.active.present === false) differences.push('活动 Compose 声明的镜像不在本机：现有容器一旦被重建就没有可用镜像，重新发布前先确认镜像来源。');
+  if (record.active.image && !record.active.command) differences.push('活动 Compose 未显式声明启动参数：重建会依赖镜像默认行为；新发布会重新生成 compose。');
+  if (conditions.includes('container-replaced')) differences.push('现存容器与记录里那一代镜像不同：允许的现场差异，只需核对站点绑定与写入者。');
+  if (conditions.includes('container-evidence-missing')) differences.push('记录声明的旧容器已不存在：旧记录只作诊断，按站点绑定核对当前服务由哪个容器承担。');
+  if (record.deployment.records.lock) differences.push('profile 存在安装锁：核实持锁者是否已退出（doctor / unlock），control 锁由取锁、退役与显式解锁共用。');
+  if (record.deployment.records.state !== null && record.deployment.records.state !== 3) differences.push(`profile 受管状态是旧 schema ${record.deployment.records.state}：需用 migrate-site 显式迁移后再发布。`);
+  for (const archive of record.deployment.pinnedArchives) if (!archive.present) differences.push(`profile 钉住的归档不可达：${archive.package}。`);
+  return differences;
 }
 
 /** Read-only reconciliation diagnosis: returns a structured report and never writes state. */
@@ -181,7 +180,7 @@ export function checkRecords(deployment, execute = (args, options) => spawnSync(
   const activePresent = activeImage ? probe(execute, ['image', 'inspect', '--format', '{{.Id}}', activeImage]) !== null : null;
   const containers = containerFacts(deployment, execute);
   const record = {
-    pointer: { present: pointer !== null, status: pointer?.status ?? null, needsResume: pointer ? UNFINISHED.includes(pointer.status) : false, operation: relativeTo(root, operation ?? ''), error: pointerError },
+    pointer: { present: pointer !== null, status: pointer?.status ?? null, unfinished: pointer ? UNFINISHED.includes(pointer.status) : false, operation: relativeTo(root, operation ?? ''), error: pointerError },
     saved,
     candidate: { image: saved?.candidateImage ?? null, present: candidatePresent, archiveCount: operation ? archiveCount(operation) : 0,
       manifestPresent: operation ? existsSync(resolve(operation, 'plugins/manifest.json')) : false },
@@ -196,16 +195,16 @@ export function checkRecords(deployment, execute = (args, options) => spawnSync(
     classification: conditions[0],
     conditions,
     facts: record,
-    blockers: buildBlockers(record, conditions),
+    differences: buildDifferences(record, conditions),
     plan: conditions.flatMap(condition => remedies[condition]),
-    notice: '只读诊断：未写入任何状态、未改动容器与生产数据；实际收敛必须由操作者显式执行。',
+    notice: '只读诊断：未写入任何状态、未改动容器与生产数据；旧记录只作诊断，不阻断普通 build，实际收敛由操作者显式执行。',
   };
 }
 
 /** CLI entry: same project inputs as check-compose, with the same read-only contract. */
 export function main(args = process.argv.slice(2)) {
   if (args.includes('--help')) {
-    console.log('check-records：只读核对发布记录、活动 Compose、镜像与容器，判定漂移类别并给出对账计划。\n用法：check-records --root <站点目录> --config <env.conf|deployment.json> [--artifacts <目录>] [--compose-project <名称>]');
+    console.log('check-records：只读对比上一次发布记录、活动 Compose、镜像、容器与 profile 证据，报告现场差异与需人工核实项。\n用法：check-records --root <站点目录> --config <env.conf|deployment.json> [--artifacts <目录>] [--compose-project <名称>]\n旧记录只作诊断：失败指针、旧容器与旧镜像都不阻断下一次普通 build。');
     return;
   }
   console.log(JSON.stringify(checkRecords(resolveDeployment(parseArguments(args), {})), null, 2));

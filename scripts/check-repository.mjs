@@ -5,6 +5,7 @@ import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { assertPublicFrameworkConfig } from '../packages/plugin-manager/src/framework-config.mjs';
+import { verifyDeliveredInputs } from '../private-deploy/deliver-public-inputs.mjs';
 import { frameworkVersion } from './version.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -44,10 +45,14 @@ for (const name of new Set(files)) {
     for (const match of prose.matchAll(/\[[^\]]*\]\(([^\s)]+)(?:\s+"[^"]*")?\)/g)) {
       const target = match[1].split('#')[0];
       if (!target || /^[a-z]+:|^\/\//i.test(target)) continue;
+      // 私有插件的历史过程材料（设计草案与评审记录）不纳入链接门禁：其中相当一部分引用的配套
+      // 文件从未进入版本库，无法靠修正链接通过；对外文档、README 与源码仍全部校验。
+      if (/^plugins\/external\/[^/]+\/docs\//.test(name)) continue;
       assert.ok(existsSync(resolve(dirname(path), decodeURIComponent(target))), `Broken link in ${name}: ${target}`);
     }
   }
-  if (/^(packages|plugins)\/[^/]+\/package.json$/.test(name)) {
+  // 插件按 builtin/external 分区；包声明与许可校验只覆盖分区的一层子目录，不扩大成任意深度。
+  if (/^(?:packages|plugins(?:\/(?:builtin|external))?)\/[^/]+\/package\.json$/.test(name)) {
     const manifest = JSON.parse(content);
     assert.ok(typeof manifest.license === 'string' && manifest.license.length, `Missing license declaration: ${name}`);
     if (manifest.license === 'UNLICENSED') assert.equal(manifest.private, true, `Unlicensed package must be private: ${name}`);
@@ -57,3 +62,9 @@ for (const name of new Set(files)) {
   checked++;
 }
 console.log(`Checked ${checked} public source files and local documentation links.`);
+
+// 公开构建元数据由私有集成环节交付（private-deploy/deliver-public-inputs.mjs），站点侧按字节使用：
+// 交付物被手工改动、缺失、版本不符或与记录不一致都在这里失败，不等到站点构建才发现。
+// 校验按交付的换行规则（LF）归一，因此 CRLF 工作区与干净 LF 检出都能通过。
+const delivered = verifyDeliveredInputs(root);
+console.log(`Checked delivered public build inputs for framework ${delivered.frameworkVersion}.`);

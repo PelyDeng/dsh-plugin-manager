@@ -3,16 +3,19 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { closeSync, existsSync, openSync, statSync } from 'node:fs';
 import { readFrameworkConfig } from './framework-config.mjs';
+import { removedArguments } from './site-record.mjs';
 import { frameworkCredentialEnvironment, rememberFrameworkInput } from './framework-credentials.mjs';
 /** Parse CLI options without interpreting user text as shell code. */
 export function parseArguments(args) {
   const result = { action: args[0] && !args[0].startsWith('--') ? args.shift() : 'deploy' };
-  const flags = new Set(['offline', 'resume', 'recover', 'data-compatible', 'rebuild', 'container', 'help']);
+  const flags = new Set(['offline', 'help']);
   const keys = new Set(['root', 'config', 'plugins', 'manifest', 'profile', 'data-root', 'home', 'workspace', 'auth-url-file', 'artifacts', 'harness-root', 'dsh-cli', 'dsh-cli-js', 'mode', 'host-mode', 'stopped-file', 'started-file', 'store-dir', 'offline-store', 'cache-dir', 'offline-cache', 'base-url', 'output', 'port', 'host', 'trusted-hosts', 'public-url']);
   while (args.length) {
     const option = args.shift();
     if (!option.startsWith('--')) fail(`未知参数：${option}`);
     const key = option.slice(2);
+    // 已移除的旗标要说出替代入口：落进「未知参数」会让人以为只是拼写错误。
+    if (removedArguments[key]) fail(`${option} 已移除：${removedArguments[key]}`);
     if (Object.hasOwn(result, key)) fail(`重复参数：${option}`);
     if (flags.has(key)) result[key] = true;
     else if (keys.has(key) && args.length && !args[0].startsWith('--')) result[key] = args.shift();
@@ -21,12 +24,17 @@ export function parseArguments(args) {
   return result;
 }
 
-/** All user relative paths are anchored at the plugin repository root. */
-export function resolveDeployment(options = {}, env = process.env) {
+/**
+ * All user relative paths are anchored at the plugin repository root.
+ *
+ * `readOptions` 原样传给私有配置解析：只有一次性迁移入口传 `{ allowRemovedFields: true }`，
+ * 正常部署入口保持拒绝已移除字段。
+ */
+export function resolveDeployment(options = {}, env = process.env, readOptions = {}) {
   if (!options.root) fail('必须显式指定 --root 项目根目录。');
   const root = canonical(options.root);
   const configPath = options.config ?? env.DEPLOYMENT_CONFIG;
-  const framework = configPath?.endsWith('.conf') ? readFrameworkConfig(resolve(root, configPath)) : undefined;
+  const framework = configPath?.endsWith('.conf') ? readFrameworkConfig(resolve(root, configPath), readOptions) : undefined;
   const config = framework?.config ?? (configPath ? json(resolve(root, configPath)) : {});
   if (!config || typeof config !== 'object' || Array.isArray(config)) fail('部署配置必须是对象。');
   const pick = (option, variable, field, fallback) => options[option] ?? env[variable] ?? config[field] ?? fallback;

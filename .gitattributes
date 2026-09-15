@@ -1,10 +1,10 @@
 *.sh text eol=lf
 Dockerfile text eol=lf
 *.Dockerfile text eol=lf
-/plugins/dsh-auth/*.yml text eol=lf
-/plugins/dsh-auth/**/*.ts text eol=lf
-/plugins/dsh-auth/**/*.tsx text eol=lf
-/plugins/dsh-example/knowledge/*.md text eol=lf
+/plugins/builtin/dsh-auth/*.yml text eol=lf
+/plugins/builtin/dsh-auth/**/*.ts text eol=lf
+/plugins/builtin/dsh-auth/**/*.tsx text eol=lf
+/plugins/builtin/dsh-example/knowledge/*.md text eol=lf
 
 /data export-ignore
 /.local export-ignore

@@ -1,6 +1,7 @@
 /** Assemble existing releases without source checkouts, dependency installation or builds. */
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { loadRelease } from './release.mjs';
 import { parseOptions } from './plugins.mjs';
 import { hash, within } from './state.mjs';
@@ -13,8 +14,15 @@ export function composeRelease(manifests, output, previous, verificationReports 
   return composeReleases(releases, output, previous && loadRelease(previous), verificationReports);
 }
 
-/** Compose validated, explicitly selected releases using the same archive writer as the CLI. */
-export function composeReleases(releases, output, previous, verificationReports = []) {
+/**
+ * 组合并复制归档。
+ *
+ * `output` 是本次操作的发布目录（manifest.json + 摘要命名 tgz）。`options.cacheRoot` 可选：给定
+ * 时归档按**实际字节摘要**追加复制到缓存根（默认 `.local/artifacts/plugin-packages/`，普通部署
+ * 不清理），并生成不可变的 `manifest-<随机>.json` 描述本次选集与缓存文件名——缓存不要求摘要等于
+ * 作者声明或历史记录，只为避免缓存混淆并提供稳定 file: 引用。返回 `{ manifest, cacheManifest }`。
+ */
+export function composeReleases(releases, output, previous, verificationReports = [], { cacheRoot } = {}) {
   const plugins = releases.flatMap(release => release.plugins);
   const verification = mergeVerification(releases.map(release => release.verification), verificationReports, plugins);
   for (const field of ['id', 'package']) {
@@ -62,7 +70,21 @@ export function composeReleases(releases, output, previous, verificationReports 
   const temporary = resolve(output, 'manifest.json.tmp');
   writeFileSync(temporary, `${JSON.stringify(manifest, null, 2)}\n`);
   renameSync(temporary, resolve(output, 'manifest.json'));
-  return manifest;
+  let cacheManifest;
+  if (cacheRoot) {
+    mkdirSync(cacheRoot, { recursive: true });
+    for (const { target, source, sha256 } of copies.values()) {
+      const cached = resolve(cacheRoot, target.split(/[\\/]/u).at(-1));
+      if (!existsSync(cached)) cpSync(source, cached);
+      if (hash(readFileSync(cached)) !== sha256) throw new Error(`归档缓存摘要不符：${target.split(/[\\/]/u).at(-1)}。`);
+    }
+    cacheManifest = `manifest-${randomUUID()}.json`;
+    // 缓存清单是**容器内部署读路径**的输入（PLUGIN_MANIFEST_FILE → loadReleaseInputs）：必须携带
+    // 完整安装契约（verifyFiles、入口、运行配置等），不能只留寻址字段，否则容器一启动就拒绝。
+    // 归档名相对缓存根，与 manifest.json 同名同布局。
+    writeFileSync(resolve(cacheRoot, cacheManifest), `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+  return { manifest, ...(cacheManifest ? { cacheManifest } : {}) };
 }
 
 export function main(args = process.argv.slice(2)) {

@@ -1,20 +1,17 @@
 /** Update a deployment checkout only from the integrated Gitee branch. */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { needsSourceResume } from '../deploy/scripts/source-lock.mjs';
 
 /** Called under the checkout deployment lock; never merges GitHub, pushes or updates submodules. */
 export function syncOrigin(root, args = [], env = process.env) {
-  if (args.includes('--resume') || args.includes('--help')) return;
+  if (args.includes('--help')) return;
   // Preserve native error.signal so sourceRelease retains its lock after an interrupted Git child.
   const git = (...args) => execFileSync('git', args, { cwd: root, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true }).trim();
   const entry = process.platform === 'win32' ? '.\\build.ps1' : 'bash build.sh';
-  const pointer = resolve(root, '.local/source-release.json');
-  if (existsSync(pointer) && needsSourceResume(JSON.parse(readFileSync(pointer, 'utf8')).status)) {
-    throw new Error(`存在未完成部署；请使用 ${entry} --resume，不更新源码。`);
-  }
+  // 旧失败记录不再阻断源码更新（设计 3 节删除失败门禁）：站点处于失败或中断现场时必须能用新
+  // 代码重新收敛，否则集成版本永远到不了站点。Git 卫生检查（未完成操作、工作区、分支、分叉）保留。
   for (const state of ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'rebase-merge', 'rebase-apply']) {
     if (existsSync(resolve(root, git('rev-parse', '--git-path', state)))) throw new Error(`存在未完成的 Git 操作；请先完成，再运行 ${entry}。`);
   }

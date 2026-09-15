@@ -52,15 +52,18 @@ test('local commits and diverged origin stop without starting a merge', t => {
   assert.equal(existsSync(join(checkout, '.git/MERGE_HEAD')), false);
 });
 
-test('dirty files and pending deployments block sync; resume and help do not fetch', t => {
+test('dirty files block sync while a stale failure record does not; help never fetches', t => {
   const { checkout, git } = fixture(t);
   git(checkout, 'remote', 'set-url', 'upstream', join(checkout, 'missing-remote'));
+  mkdirSync(join(checkout, '.local'), { recursive: true });
+  writeFileSync(join(checkout, '.local/source-release.json'), JSON.stringify({ status: 'deployment-failed' }));
+  syncOrigin(checkout, ['--help']);
+  const head = git(checkout, 'rev-parse', 'HEAD');
+  // 旧失败门禁已删除：故障中的站点仍能取得集成版本（设计 3 节）。
+  syncOrigin(checkout);
+  assert.equal(git(checkout, 'rev-parse', 'HEAD'), head);
   writeFileSync(join(checkout, 'private.txt'), 'uncommitted\n');
   assert.throws(() => syncOrigin(checkout), /工作区.*改动/);
-  mkdirSync(join(checkout, '.local'));
-  writeFileSync(join(checkout, '.local/source-release.json'), JSON.stringify({ status: 'deployment-failed' }));
-  assert.throws(() => syncOrigin(checkout), /未完成部署/);
-  syncOrigin(checkout, ['--resume']); syncOrigin(checkout, ['--help']);
   assert.equal(readFileSync(join(checkout, 'private.txt'), 'utf8'), 'uncommitted\n');
 });
 
@@ -127,7 +130,7 @@ test('the private platform entry fast-forwards origin and starts updated source 
   assert.equal(f.git(f.checkout, 'branch', '--list', '*codex*'), '');
 });
 
-test('help and management need no sync or deployment preflight; resume preserves source and pending input', t => {
+test('help and management need no sync or deployment preflight while removed recovery flags are rejected', t => {
   const f = entryFixture(t);
   f.git(f.checkout, 'remote', 'set-url', 'origin', join(f.root, 'missing-origin'));
   writeFileSync(join(f.checkout, 'framework.txt'), 'dirty source preserved');
@@ -148,22 +151,28 @@ test('help and management need no sync or deployment preflight; resume preserves
     toolRoot, managerArchive, managerHash: fileHash(managerArchive), toolHash: toolTreeIdentity(toolRoot), sitePath: join(f.checkout, '.local/env.conf') }));
   const pointer = join(f.checkout, '.local/source-release.json'), original = JSON.stringify({ status: 'prepared', operation });
   writeFileSync(pointer, original);
-  assert.equal(f.run('--resume').status, 0);
-  assert.equal(JSON.parse(readFileSync(f.worker)).label, 'saved-recovery');
-  assert.equal(f.run('--recover', '--data-compatible').status, 0);
+  // 恢复参数已移除：明确拒绝，不套用旧 worker、不改动旧记录、不更新源码（设计 3 节）。
+  for (const removed of [['--resume'], ['--recover', '--data-compatible']]) {
+    const result = f.run(...removed);
+    assert.equal(result.status, 1, result.stdout + result.stderr);
+    assert.match(result.stderr, /已移除/);
+  }
+  assert.equal(existsSync(f.worker), false);
   assert.equal(readFileSync(pointer, 'utf8'), original);
   assert.equal(readFileSync(join(f.checkout, 'framework.txt'), 'utf8'), 'dirty source preserved');
   assert.equal(existsSync(f.lock), false);
 });
 
-test('archive input starts the shared worker without fetching the private source', t => {
+test('a removed source-mode field is rejected before any source update or build', t => {
   const f = entryFixture(t);
   f.git(f.checkout, 'remote', 'set-url', 'origin', join(f.root, 'missing-origin'));
   mkdirSync(join(f.checkout, '.local'), { recursive: true });
+  // 输入形态由入口决定，站点配置不再有 pluginSource；旧字段必须明确报错而不是静默忽略。
   writeFileSync(join(f.checkout, '.local/env.conf'), 'DSH_PLUGIN_SOURCE="archives"\n', { mode: 0o600 });
   const result = f.run();
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(readFileSync(f.worker)).label, 'old');
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stderr, /已移除/);
+  assert.equal(existsSync(f.worker), false);
   assert.equal(existsSync(f.lock), false);
 });
 

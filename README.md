@@ -69,7 +69,7 @@ pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --
 
 | 已有项目 | 接入方式 |
 | --- | --- |
-| 自己开发的 DSH 插件 | 放在独立仓库或框架 `plugins/*`，按声明、构建和打包规范交付 |
+| 自己开发的 DSH 插件 | 放在独立仓库或框架 `plugins/builtin/*`（内置）或 `plugins/external/*`（自己的源码），按声明、构建和打包规范交付 |
 | 第三方 DSH 插件或官方 Bundle | 确认宿主兼容性；已有合规完整发布目录可直接部署 |
 | 普通 Node.js 项目 | 改造为官方 Cordis 插件，提供 Bundle 入口和构建产物 |
 | Java、Python 或已有 HTTP 服务 | 服务继续独立部署，由一个 DSH 适配插件调用其接口 |
@@ -111,4 +111,4 @@ DSH 负责 Agent、模型、会话和插件运行。manager 负责打包、配�
 
 ## 贡献与许可
 
-公共库在 `packages/*`，内置示例插件在 `plugins/*`，独立起步包在 `examples/*`。参与开发前先读[贡献说明](CONTRIBUTING.md)和[架构](doc/architecture.md)。使用 [Apache-2.0](LICENSE) 许可，第三方来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+公共库在 `packages/*`，内置示例插件在 `plugins/builtin/*`，独立起步包在 `examples/*`。参与开发前先读[贡献说明](CONTRIBUTING.md)和[架构](doc/architecture.md)。使用 [Apache-2.0](LICENSE) 许可，第三方来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

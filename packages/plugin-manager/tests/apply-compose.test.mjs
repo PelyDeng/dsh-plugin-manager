@@ -28,7 +28,7 @@ test('fresh deployment initializes directories and settings for the container us
   const compose = JSON.parse(readFileSync(result.path, 'utf8'));
   const { containerUid: uid, containerGid: gid } = f.deployment.config;
   assert.equal(compose.services.dsh.user, `${uid}:${gid}`);
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3); // stop + 候选 up（restart=no）+ 验证后的 up（unless-stopped）
   assert.deepEqual(JSON.parse(readFileSync(f.settingsFile, 'utf8')), { schemaVersion: 1, enabled: true });
   if (process.platform !== 'linux') return;
   for (const path of [f.deployment.dataRoot, f.deployment.home, f.deployment.workspace, f.settingsFile, result.configPath]) {
@@ -41,19 +41,20 @@ test('fresh deployment initializes directories and settings for the container us
   assert.equal(probe.status, 0, probe.stderr || probe.error?.message);
 });
 
-test('local image startup uses the configured health port and forwards recovery to the container', t => {
+test('local image startup uses the configured health port and staged restart policy', t => {
   const f = fixture(t);
   f.deployment.config.containerImage = `sha256:${'b'.repeat(64)}`;
   f.deployment.config.port = 17913;
-  f.deployment.options.resume = true;
-  f.deployment.options.rebuild = true;
-  const result = applyCompose(f.deployment, f.release, () => {});
+  const ups = [];
+  const result = applyCompose(f.deployment, f.release, args => { if (args.includes('up')) ups.push(args); });
   const service = JSON.parse(readFileSync(result.path, 'utf8')).services.dsh;
   assert.equal(service.image, f.deployment.config.containerImage);
   assert.equal(service.pull_policy, 'never');
-  assert.deepEqual(service.command, ['--rebuild', '--resume']);
   assert.equal(service.environment.DSH_PORT, '17913');
   assert.equal(JSON.parse(readFileSync(result.configPath, 'utf8')).port, 17913);
+  // 候选验证阶段 restart=no（不会无限重启），健康通过后才切回 unless-stopped：两次 up。
+  assert.equal(ups.length, 2);
+  assert.equal(service.restart, 'unless-stopped');
 });
 
 test('a stopped matching container permits preserving and clearing only its stale process records', t => {
@@ -129,9 +130,11 @@ test('Desktop preflight uses bridge and rejects inaccessible mounts before any s
   assert.ok(failures.every(args => !args.includes('stop') && !args.includes('up')));
 });
 
-test('an unexpected Docker engine rejects before writing candidate settings', t => {
+test('a changed Docker engine is no longer a cross-run gate and candidate settings are written', t => {
   const f = fixture(t);
+  // 引擎 ID 只在本机 Linux endpoint 内定位当前引擎；换引擎不再是拒绝准入的历史条件。
   f.deployment.config.dockerRuntime = { ...runtime, id: 'previous-engine' };
-  assert.throws(() => checkCompose(f.deployment, f.release, () => {}, runtime), /Docker 引擎/);
-  assert.equal(existsSync(f.settingsFile), false);
+  const generated = checkCompose(f.deployment, f.release, () => {}, runtime);
+  assert.equal(generated.status, 'checked');
+  assert.equal(existsSync(f.settingsFile), true);
 });

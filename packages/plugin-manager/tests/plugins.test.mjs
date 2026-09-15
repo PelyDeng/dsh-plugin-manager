@@ -47,22 +47,12 @@ function run(args, options = {}) {
   return spawnSync(process.execPath, args, { cwd: repositoryRoot, encoding: 'utf8', ...options });
 }
 
-test('public auth and example are discovered independently from library packages and enabled by default', () => {
+test('public auth and example are discovered independently from library packages', () => {
   const plugins = discoverPlugins(repositoryRoot);
   assert.ok(['auth', 'example'].every(id => plugins.some(plugin => plugin.id === id)));
   assert.ok(!plugins.some(plugin => plugin.package.startsWith('@dsh-plugin-manager/')));
-  assert.ok(['auth', 'example'].every(id => selectPlugins(plugins).some(plugin => plugin.id === id)));
+  assert.ok(['auth', 'example'].every(id => selectPlugins(plugins, 'all').some(plugin => plugin.id === id)));
   assert.ok(plugins.every(plugin => plugin.verifyFiles.includes('cordis.patch.yml')));
-});
-
-test('public plugins declare the build inputs that selective reuse has to watch', () => {
-  const declared = id => {
-    const plugin = discoverPlugins(repositoryRoot).find(entry => entry.id === id);
-    return JSON.parse(readFileSync(resolve(repositoryRoot, plugin.directory, 'package.json'), 'utf8')).deepseekPlugin.buildInputs;
-  };
-  // auth 只构建自己目录里的源码；example 会快照框架公开文件，不声明就会退回全量重建。
-  assert.deepEqual(declared('auth'), []);
-  for (const input of ['doc', 'deploy', 'packages/plugin-manager', 'scripts']) assert.ok(declared('example').includes(input), `example 必须声明 ${input}`);
 });
 
 test('a known confusing failure gets a hint without changing the failure itself', t => {
@@ -85,11 +75,10 @@ test('a known confusing failure gets a hint without changing the failure itself'
 
 test('a dropped-in second plugin is listed, selected, checked, built and packed without lifecycle hooks', t => {
   const root = fixture(t);
-  plugin(root, 'z', m => { m.deepseekPlugin.defaultEnabled = false; });
+  plugin(root, 'z');
   const second = plugin(root, 'a');
   const plugins = discoverPlugins(root);
   assert.deepEqual(plugins.map(p => p.id), ['a', 'z']);
-  assert.deepEqual(selectPlugins(plugins).map(p => p.id), ['a']);
   assert.deepEqual(selectPlugins(plugins, 'z,a').map(p => p.id), ['z', 'a']);
   assert.deepEqual(selectPlugins(plugins, 'all').map(p => p.id), ['a', 'z']);
   assert.match(pluginRecord(plugins[0]), /\|-\|-\|-\|package.json,README.md,dist\/index.mjs,cordis.patch.yml$/u);
@@ -115,22 +104,24 @@ test('a dropped-in second plugin is listed, selected, checked, built and packed 
 test('selection and arguments reject empty, repeated and unknown values', t => {
   const root = fixture(t); plugin(root, 'a'); const plugins = discoverPlugins(root);
   for (const selection of ['', ',', 'a,', ',a', 'a,a', 'missing']) assert.throws(() => selectPlugins(plugins, selection));
+  // 退役 defaultEnabled 后没有隐式选集：作者命令必须点名 ID、all 或 none。
+  assert.throws(() => selectPlugins(plugins), /显式给出插件选集/u);
   assert.deepEqual(selectPlugins([], 'all'), []);
   assert.deepEqual(selectPlugins(plugins, 'none'), []);
   assert.deepEqual(parseOptions(['--', '--plugins', 'a']), { plugins: 'a' });
   for (const args of [['--plugins'], ['--plugins', ''], ['--plugins', 'a', '--plugins', 'a'], ['--other', 'a']]) assert.throws(() => parseOptions(args));
   const emptyRoot = fixture(t);
-  const result = run(['scripts/plugins.mjs', '--root', emptyRoot]);
+  const result = run(['scripts/plugins.mjs', '--root', emptyRoot, '--plugins', 'all']);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), { plugins: [], selected: [] });
+  // 目录清单同样要求显式选集：不再有隐式的默认启用集合。
+  assert.notEqual(run(['scripts/plugins.mjs', '--root', emptyRoot]).status, 0);
 });
 
 test('value-less switches parse only when declared, and still reject pairing forms', () => {
-  assert.deepEqual(parseOptions(['--plugins', 'a', '--verify-plugin-check'], ['plugins'], ['verify-plugin-check']), { 'verify-plugin-check': true, plugins: 'a' });
   assert.deepEqual(parseOptions(['--plugins', 'a'], ['plugins']), { plugins: 'a' });
-  // 未声明的开关不能悄悄变成键；声明过也不接受重复。
-  for (const args of [['--plugins', 'a', '--verify-plugin-check'], ['plugins', 'a', 'verify-plugin-check']]) assert.throws(() => parseOptions(args, ['plugins']));
-  assert.throws(() => parseOptions(['--verify-plugin-check', '--verify-plugin-check'], ['plugins'], ['verify-plugin-check']));
+  // 未声明的开关不能悄悄变成键；已移除的检查开关也不再是合法参数。
+  for (const args of [['--plugins', 'a', '--verify-plugin-check'], ['plugins', 'a', 'verify-plugin-check'], ['--plugins', 'a', '--skip-plugin-check']]) assert.throws(() => parseOptions(args, ['plugins']));
 });
 
 test('--help prints the flags without requiring a project root', async () => {
@@ -143,23 +134,24 @@ test('--help prints the flags without requiring a project root', async () => {
     taskMain(['build', '--help']);
   } finally { console.log = original; }
   const usage = lines.join('\n');
-  for (const token of ['build', 'check', 'clean', 'list', 'pack', '--plugins', '--output', '--concurrency', '--verify-plugin-check']) {
+  for (const token of ['build', 'check', 'clean', 'list', 'pack', '--plugins', '--output', '--concurrency', '--package']) {
     assert.ok(usage.includes(token), `用法里应列出 ${token}`);
   }
   assert.doesNotMatch(usage, /必须显式指定 --root/u);
 });
 
-test('the plugin check is skipped by default and only runs when explicitly requested', async t => {
+test('pack 只构建打包，插件检查只由独立的 check 命令承担', async t => {
   const root = fixture(t);
   plugin(root, 'skip');
   const directory = resolve(root, 'plugins/plugin-skip');
-  // 默认跳过：fixture 的 check 脚本会写出 checked 标记，标记不出现即证明它没被执行。
+  // pack 不再顺带做检查：fixture 的 check 脚本会写出 checked 标记，标记不出现即证明它没被执行。
   const manifest = await packagePlugins(root, 'skip', resolve(root, 'release-default'));
   assert.equal(manifest.plugins.length, 1);
   assert.equal(existsSync(resolve(directory, 'checked')), false);
   assert.equal(existsSync(resolve(directory, 'dist/index.mjs')), true);
-  // 显式要回来时才真的跑 check，否则上面的断言可能只是脚本从未生效。
-  await packagePlugins(root, 'skip', resolve(root, 'release-verified'), undefined, undefined, { skipCheck: false });
+  // 独立 check 命令才是执行它的地方；没有这一步，上面的断言也可能只是脚本从未生效。
+  const checked = run(['scripts/run-plugin-task.mjs', 'check', '--root', root, '--plugins', 'skip']);
+  assert.equal(checked.status, 0, checked.stdout + checked.stderr);
   assert.equal(existsSync(resolve(directory, 'checked')), true);
 });
 
@@ -178,7 +170,7 @@ test('optional metadata and deployment-only settings do not block build, pack or
   assert.equal(result.description, undefined);
   assert.deepEqual(result.permissions, []);
   assert.equal(result.displayName, '@fixture/minimal');
-  assert.equal(result.defaultEnabled, true);
+  assert.equal(result.defaultEnabled, undefined);
   assert.deepEqual(result.runtimeConfig, { variable: 'MINIMAL_CONFIG', required: true });
   assert.ok(result.verifyFiles.every(file => typeof file === 'string'));
   const deployment = resolveDeployment({ root }, {});
@@ -241,12 +233,12 @@ test('malformed declarations fail before any task runs', t => {
     m => { m.deepseekPlugin.runtimeConfig = { variable: 'EXAMPLE_ENV', template: 'missing.example' }; },
     m => { m.deepseekPlugin.configuration = { auth: 'consumer' }; },
     m => { m.deepseekPlugin.development = { rootVariable: 'EXAMPLE_ROOT' }; },
-    // 构建输入声明：形状与存在性都要挡住，写错的路径会让复用把真实变化当成无关变化。
-    m => { m.deepseekPlugin.buildInputs = 'doc'; }, m => { m.deepseekPlugin.buildInputs = ['../doc']; },
-    m => { m.deepseekPlugin.buildInputs = ['/doc']; }, m => { m.deepseekPlugin.buildInputs = ['doc//x']; },
-    m => { m.deepseekPlugin.buildInputs = ['doc', 'doc']; }, m => { m.deepseekPlugin.buildInputs = ['doc/./x']; },
-    m => { m.deepseekPlugin.buildInputs = [42]; }, m => { m.deepseekPlugin.buildInputs = ['a\\b']; },
-    m => { m.deepseekPlugin.buildInputs = ['no-such-directory']; },
+    // defaultEnabled 已退役，旧声明必须当场失败，而不是被静默忽略。
+    m => { m.deepseekPlugin.defaultEnabled = true; },
+    // buildInputs 同样退役：内置构建统一使用发行方的完整公开构建视图，不再按插件声明裁剪输入，
+    // 旧声明一律拒绝，也不能靠它恢复逐插件的复用判断。
+    m => { m.deepseekPlugin.buildInputs = ['doc']; }, m => { m.deepseekPlugin.buildInputs = []; },
+    m => { m.deepseekPlugin.buildInputs = 'doc'; },
     m => { delete m.deepseekPlugin; },
   ];
   for (const [index, change] of cases.entries()) {
@@ -332,17 +324,44 @@ test('runtime templates are checked without needing a user configuration file', 
   assert.ok(!discoverPlugins(root)[0].verifyFiles.includes('env.conf'));
 });
 
-test('the package pipeline builds once, checks that build, and writes a portable manifest', async t => {
+test('author source scope: builtin is the default while external needs an explicit selection', t => {
+  const root = fixture(t);
+  for (const [folder, id] of [['builtin/alpha', 'alpha'], ['external/beta', 'beta']]) {
+    const directory = resolve(root, 'plugins', folder);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(resolve(directory, 'package.json'), JSON.stringify({
+      name: `@fixture/${id}`, version: '1.0.0', type: 'module', main: './dist/index.mjs', files: ['dist', 'cordis.patch.yml'],
+      dsh: { bundle: { patch: './cordis.patch.yml' } }, deepseekPlugin: { schemaVersion: 3, id }, scripts: { build: 'node build.mjs', check: 'node check.mjs' },
+    }));
+    writeFileSync(resolve(directory, 'build.mjs'), "import{mkdirSync,writeFileSync}from'node:fs';mkdirSync('dist',{recursive:true});writeFileSync('dist/index.mjs','export function apply() {}\\n');\n");
+    writeFileSync(resolve(directory, 'README.md'), 'Fixture\n');
+    writeFileSync(resolve(directory, 'cordis.patch.yml'), '[]\n');
+  }
+  // 默认发现只覆盖框架内置源码；外部源码只在作者显式声明来源时进入。
+  assert.deepEqual(discoverPlugins(root).map(plugin => plugin.id), ['alpha']);
+  const external = discoverPlugins(root, { source: 'external' });
+  assert.deepEqual(external.map(plugin => plugin.id), ['beta']);
+  assert.equal(external[0].directory, 'plugins/external/beta');
+  assert.throws(() => discoverPlugins(root, { source: 'other' }), /未知插件来源/);
+  // external 是显式调用：未点名选集时必须在安装依赖与写输出之前拒绝。
+  for (const action of ['build', 'check']) assert.throws(() => taskMain([action, '--root', root, '--external']), /必须显式给出插件选集/);
+  // 内置命令省略选集仍然表示全部内置插件。
+  assert.doesNotThrow(() => selectPlugins(discoverPlugins(root), 'all'));
+});
+
+test('the package pipeline builds and packs a portable manifest, and the standalone check verifies that build', async t => {
   const root = fixture(t);
   const dir = plugin(root, 'a');
   writeFileSync(resolve(dir, 'build.mjs'), "import{mkdirSync,writeFileSync,appendFileSync}from'node:fs';mkdirSync('dist',{recursive:true});writeFileSync('dist/index.mjs','export const value=1;\\n');appendFileSync('trace','build\\n');\n");
   writeFileSync(resolve(dir, 'check.mjs'), "import{appendFileSync}from'node:fs';import{value}from'./dist/index.mjs';if(value!==1)throw Error('build missing');appendFileSync('trace','check\\n');\n");
   writeFileSync(resolve(dir, 'env.conf'), 'TEST_PRIVATE_VALUE=not-published\n');
   const output = resolve(root, 'output with spaces');
-  // 默认跳过插件检查，所以只有构建痕迹；再显式要回检查时才多出 check。
+  // pack 只做构建，不再顺带检查：痕迹里只有构建。
   const manifest = await packagePlugins(root, 'all', output);
   assert.equal(readFileSync(resolve(dir, 'trace'), 'utf8'), 'build\n');
-  await packagePlugins(root, 'all', resolve(root, 'checked-output'), undefined, undefined, { skipCheck: false });
+  // 检查由独立的 check 命令承担：它先构建再检查，检查读到的是本次构建产物。
+  const checked = run(['scripts/run-plugin-task.mjs', 'check', '--root', root, '--plugins', 'all']);
+  assert.equal(checked.status, 0, checked.stdout + checked.stderr);
   assert.equal(readFileSync(resolve(dir, 'trace'), 'utf8'), 'build\nbuild\ncheck\n');
   assert.equal(manifest.plugins[0].archive, `a-${manifest.plugins[0].sha256}.tgz`);
   assert.match(manifest.plugins[0].sha256, /^[a-f0-9]{64}$/u);

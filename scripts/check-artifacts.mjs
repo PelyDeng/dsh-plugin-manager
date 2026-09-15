@@ -58,8 +58,8 @@ try {
   run(['--input-type=module', '-e', "import {conversationQuery} from '@dsh-plugin-manager/plugin-kit/conversations'; if(conversationQuery(new URLSearchParams()).limit!==30) throw Error('conversation leaf');"], consumer);
 
   const externalAuth = join(temporary, 'external auth'); mkdirSync(externalAuth);
-  for (const path of ['src', 'web', 'cordis.patch.yml', 'tsconfig.json', 'tsdown.config.ts']) cpSync(join(root, 'plugins/dsh-auth', path), join(externalAuth, path), { recursive: true });
-  const authMetadata = JSON.parse(readFileSync(join(root, 'plugins/dsh-auth/package.json')));
+  for (const path of ['src', 'web', 'cordis.patch.yml', 'tsconfig.json', 'tsdown.config.ts']) cpSync(join(root, 'plugins/builtin/dsh-auth', path), join(externalAuth, path), { recursive: true });
+  const authMetadata = JSON.parse(readFileSync(join(root, 'plugins/builtin/dsh-auth/package.json')));
   authMetadata.devDependencies['@dsh-plugin-manager/plugin-kit'] = 'file:../plugin-kit.tgz';
   json(join(externalAuth, 'package.json'), authMetadata);
   writeFileSync(join(externalAuth, 'pnpm-workspace.yaml'), policy);
@@ -70,9 +70,9 @@ try {
 
   const releasePath = join(temporary, 'release');
   await packagePlugins(root, 'auth,example', releasePath);
-  const original = JSON.parse(readFileSync(join(root, 'plugins/dsh-example/package.json')));
+  const original = JSON.parse(readFileSync(join(root, 'plugins/builtin/dsh-example/package.json')));
   const external = join(temporary, 'external example'); mkdirSync(external);
-  for (const path of ['src', 'web', 'knowledge', 'scripts', 'cordis.patch.yml', 'tsconfig.json', 'tsdown.config.ts', 'tsdown.web.config.ts']) cpSync(join(root, 'plugins/dsh-example', path), join(external, path), { recursive: true });
+  for (const path of ['src', 'web', 'knowledge', 'scripts', 'cordis.patch.yml', 'tsconfig.json', 'tsdown.config.ts', 'tsdown.web.config.ts']) cpSync(join(root, 'plugins/builtin/dsh-example', path), join(external, path), { recursive: true });
   const metadata = { ...original, devDependencies: { ...original.devDependencies, '@dsh-plugin-manager/plugin-kit': 'file:../plugin-kit.tgz' } };
   // Independent authors supply the framework root explicitly, never relative to their checkout.
   delete metadata.devDependencies['dsh-auth'];

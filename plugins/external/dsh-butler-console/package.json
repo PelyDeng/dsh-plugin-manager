@@ -1,0 +1,131 @@
+{
+  "name": "dsh-butler-console",
+  "version": "0.4.0",
+  "description": "DSH 牛马大总管：统一对话入口、任务拆解与子 Agent 调度状态页",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/",
+    "web/",
+    "persona.txt",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "packageManager": "pnpm@11.19.0",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "deepseekPlugin": {
+    "schemaVersion": 3,
+    "id": "butler",
+    "displayName": "牛马聊天群",
+    "category": "web-services",
+    "entryPath": "/butler",
+    "healthPath": "/butler/ready",
+    "permissions": [
+      "butler:access"
+    ],
+    "verifyFiles": [
+      "persona.txt",
+      "web/index.html",
+      "web/style.css",
+      "web/app.js",
+      "web/api.js",
+      "web/stream.js",
+      "dist/web/app.js"
+    ],
+    "configuration": {
+      "entryId": "butler",
+      "auth": "consumer"
+    }
+  },
+  "scripts": {
+    "build": "tsdown && tsdown --config tsdown.web.config.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "pnpm typecheck && node --check web/app.js && node --check web/api.js && node --check web/stream.js && node --check web/markdown.js",
+    "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-home-paths": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-host-webserver": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-llm": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-session": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-session-persistence": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-tools": "0.1.5-alpha.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent-default-model": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-home-paths": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-host-webserver": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session-persistence": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-system-prompt": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-home-paths": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-host-webserver": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-llm": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-session": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-session-persistence": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-system-prompt": "0.1.5-alpha.2",
+    "@deepseek-ai/dsh-tools": "0.1.5-alpha.2",
+    "@dsh-plugin-manager/plugin-kit": "workspace:*",
+    "@types/node": "^22.20.0",
+    "markdown-it": "15.0.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

@@ -17,7 +17,7 @@ function fixture() {
   put('.local/data/sentinel', 'preserve');
   for (const [path, stage, outputFlag, outputName] of [
     ['scripts/package-plugins.mjs', 'pack', '--output', 'manifest.json'],
-    ['plugins/dsh-example/tests/host-smoke.mjs', 'test', '--report', ''],
+    ['plugins/builtin/dsh-example/tests/host-smoke.mjs', 'test', '--report', ''],
     ['packages/plugin-manager/src/cli.mjs', 'compose', '--output', 'manifest.json'],
   ]) put(path, `
     import {appendFileSync,mkdirSync,writeFileSync,existsSync} from 'node:fs';
@@ -36,7 +36,9 @@ function fixture() {
 test('无node_modules的新检出能显示帮助，并在打包前检查宿主和参数', () => {
   const f = fixture();
   try {
-    for (const name of ['scripts/test-report.mjs', 'packages/plugin-manager/src/pnpm.mjs', 'packages/plugin-manager/src/process.mjs', 'packages/plugin-manager/src/state.mjs']) {
+    // 只复制这条入口真正依赖的源码文件（含 process.mjs 现在用到的 docker-runtime.mjs）：
+    // 新检出没有 node_modules，多余依赖会以 ERR_MODULE_NOT_FOUND 暴露出来。
+    for (const name of ['scripts/test-report.mjs', 'packages/plugin-manager/src/pnpm.mjs', 'packages/plugin-manager/src/process.mjs', 'packages/plugin-manager/src/state.mjs', 'packages/plugin-manager/src/docker-runtime.mjs']) {
       const source = resolve(dirname(entry), '..', name), target = join(f.root, name);
       mkdirSync(dirname(target), { recursive: true }); cpSync(source, target);
     }

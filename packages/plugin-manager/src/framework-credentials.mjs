@@ -3,7 +3,7 @@ import { join, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { validateModelKey } from '@dsh-plugin-manager/plugin-kit/model-key';
 import { readPrivateConfig } from './literal-config.mjs';
-import { canonical, within, PENDING, readOptional } from './state.mjs';
+import { canonical, within } from './state.mjs';
 import { ensurePrivateDirectory, writePrivateFile } from './private-files.mjs';
 
 const inputs = new WeakMap();
@@ -42,20 +42,6 @@ export function prepareFrameworkCredentials(deployment, owner, { directory: targ
   const credentials = validate(input.credentials);
   const bytes = Object.keys(credentials).length ? Buffer.from(JSON.stringify(credentials) + '\n') : undefined;
   const sha256 = bytes && digest(bytes);
-  const pending = !targetDirectory && deployment.options.resume && readOptional(join(deployment.profileRoot, PENDING));
-  if (pending) {
-    const original = pending.desired?.configurations?.$framework;
-    if (original?.sha256 !== sha256) throw new Error('恢复需要原框架凭据配置；不能替换或清除待恢复操作的密钥。');
-    if (original) {
-      // Shared pending state records the container target; only Compose may translate it.
-      const file = owner && original.file === containerCredentialsPath
-        ? join(deployment.root, '.local', 'secrets', 'framework-credentials', `${sha256}.json`)
-        : original.file;
-      deployment.config.frameworkCredentials = { ...original, file };
-    }
-    frameworkCredentialEnvironment(deployment);
-    return;
-  }
   if (!bytes) return;
   const directory = targetDirectory ?? join(deployment.root, '.local', 'secrets', 'framework-credentials');
   if (!within(deployment.root, canonical(directory))) throw new Error('框架私有配置目录不能通过联接跳转到项目外。');

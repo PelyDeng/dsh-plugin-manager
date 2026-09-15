@@ -18,36 +18,22 @@ function fixture(t) {
 }
 
 test('source argument validation rejects unsupported, duplicate and missing options', () => {
-  assert.deepEqual(sourceArguments(['--config', '中文 with spaces.conf', '--resume']), ['--config', '中文 with spaces.conf', '--resume']);
-  assert.deepEqual(sourceArguments(['--rebuild-plugins', 'alpha,charlie']), ['--rebuild-plugins', 'alpha,charlie']);
-  // `auto` 是哨兵值：重建集由判定自己算，因此只能单独出现。
-  assert.deepEqual(sourceArguments(['--rebuild-plugins', 'auto']), ['--rebuild-plugins', 'auto']);
-  for (const args of [['--config'], ['--config', '--resume'], ['--resume', '--resume'], ['--unknown'], ['other']]) assert.throws(() => sourceArguments(args), /argument/);
-  for (const value of ['', 'all', 'none', 'dsh-console', 'auto,alpha', 'alpha,auto', 'alpha,alpha', 'alpha,', 'Alpha', 'alpha beta', '../alpha']) assert.throws(() => sourceArguments(['--rebuild-plugins', value]), /argument/);
-  assert.throws(() => sourceArguments(['--resume', '--rebuild-plugins', 'alpha']), /--resume/);
-  assert.throws(() => sourceArguments(['--rebuild-plugins', 'alpha', '--rebuild-plugins', 'beta']), /argument/);
+  assert.deepEqual(sourceArguments(['--config', '中文 with spaces.conf']), ['--config', '中文 with spaces.conf']);
+  for (const args of [['--config'], ['--config', '--resume'], ['--resume', '--resume'], ['--unknown'], ['other'], ['--rebuild-plugins', 'alpha,charlie'], ['--rebuild-plugins', 'auto']]) assert.throws(() => sourceArguments(args), /argument|已移除/);
+  assert.throws(() => sourceArguments(['--resume', '--rebuild-plugins', 'alpha']), /已移除/);
+  assert.throws(() => sourceArguments(['--rebuild-plugins', 'alpha', '--rebuild-plugins', 'beta']), /已移除/);
 });
 
-test('plugin-check switches are value-less, reject duplicates and compose with resume', () => {
-  // 检查默认跳过，--verify-plugin-check 是把它要回来的那个开关。
-  assert.deepEqual(sourceArguments(['--verify-plugin-check']), ['--verify-plugin-check']);
-  assert.deepEqual(sourceArguments(['--verify-plugin-check', '--resume']), ['--verify-plugin-check', '--resume']);
-  assert.throws(() => sourceArguments(['--verify-plugin-check', '--verify-plugin-check']), /argument/);
-  // 兼容形式仍然接受（与默认同义），同样不能被重复。
-  assert.deepEqual(sourceArguments(['--skip-plugin-check']), ['--skip-plugin-check']);
-  assert.throws(() => sourceArguments(['--skip-plugin-check', '--skip-plugin-check']), /argument/);
-  // 它们不参与「互斥」那一组：是否跑检查与恢复原操作并不冲突。
-  assert.deepEqual(sourceArguments(['--verify-plugin-check', '--recover', '--data-compatible']), ['--verify-plugin-check', '--recover', '--data-compatible']);
+test('已移除的插件检查开关被明确拒绝，也不再参与参数组合', () => {
+  // 构建不再有「顺便做检查」这个开关：遇见旧旗标要说明替代命令，不能当成未知参数或静默接受。
+  for (const args of [['--verify-plugin-check'], ['--skip-plugin-check'], ['--verify-plugin-check', '--resume'], ['--verify-plugin-check', '--recover', '--data-compatible']]) {
+    assert.throws(() => sourceArguments(args), /已移除/u);
+  }
 });
 
-test('partial build selection reaches the private update and fresh worker under the source lock', async t => {
-  const f = fixture(t), args = ['--rebuild-plugins', 'alpha,charlie'];
-  f.put('deploy/scripts/build.mjs', 'import {writeFileSync} from "node:fs"; writeFileSync("selection.json", JSON.stringify(process.argv.slice(2))); process.send({type:"source-build-finished",code:0});');
-  let updated = false;
-  assert.equal(await sourceRelease({ root: f.root, args, preflight: f.preflight, beforeBuild: (_root, actual) => { assert.deepEqual(actual, args); assert.ok(existsSync(f.lock)); updated = true; } }), 0);
-  assert.ok(updated);
-  assert.deepEqual(JSON.parse(readFileSync(resolve(f.root, 'selection.json'))), args);
-  await assert.rejects(sourceRelease({ root: f.root, args: ['--rebuild-plugins', 'alpha,alpha'], beforeBuild: () => { throw new Error('must not sync'); } }), /argument/);
+test('removed rebuild selection is rejected before any source sync', async t => {
+  const f = fixture(t);
+  await assert.rejects(sourceRelease({ root: f.root, args: ['--rebuild-plugins', 'alpha,charlie'], preflight: f.preflight, beforeBuild: () => { throw new Error('must not sync'); } }), /已移除/);
 });
 
 test('the presenter is loaded after the source sync so one release uses one revision', async t => {
@@ -92,12 +78,11 @@ test('one source lock covers the update and a fresh build worker with frozen env
   assert.equal(existsSync(f.lock), false);
 });
 
-test('resume skips source sync and normal worker failure releases only the Node source lock', async t => {
+test('removed resume flag is rejected before any source sync', async t => {
   const f = fixture(t);
   f.put('.local/source-release.lock', 'legacy flock inode');
   f.put('deploy/scripts/build.mjs', 'process.exitCode=7; process.send({type:"source-build-finished",code:7});');
-  assert.equal(await sourceRelease({ root: f.root, args: ['--resume'], preflight: f.preflight, beforeBuild: () => { throw new Error('must not sync'); } }), 7);
-  assert.equal(existsSync(f.lock), false);
+  await assert.rejects(sourceRelease({ root: f.root, args: ['--resume'], preflight: f.preflight, beforeBuild: () => { throw new Error('must not sync'); } }), /已移除/);
   assert.equal(readFileSync(resolve(f.root, '.local/source-release.lock'), 'utf8'), 'legacy flock inode');
 });
 

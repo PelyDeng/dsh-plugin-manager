@@ -12,7 +12,7 @@ import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { loadRelease } from '../src/release.mjs';
+import { loadRelease, loadReleaseInputs } from '../src/release.mjs';
 import { tarCommand } from '../src/state.mjs';
 import { verificationStats } from '../src/verify-package.mjs';
 
@@ -84,4 +84,32 @@ test('changed archive bytes are inspected again', t => {
   tampered.plugins[0].sha256 = 'f'.repeat(64);
   json(rebuilt, tampered);
   assert.throws(() => loadRelease(rebuilt), /摘要不匹配/);
+});
+
+test('部署读路径信任实际字节：作者摘要写错不阻断，越界路径仍被拒绝', t => {
+  const root = fixture(t), manifest = release(root);
+  // 作者摘要写错：完整校验报不合规，但部署读路径仍能按实际字节解析（设计 4.1 的必测反例）。
+  const tampered = JSON.parse(readFileSync(manifest, 'utf8'));
+  tampered.plugins[0].sha256 = 'f'.repeat(64);
+  json(manifest, tampered);
+  assert.throws(() => loadRelease(manifest), /摘要不匹配/);
+  const inputs = loadReleaseInputs(manifest);
+  assert.equal(inputs.plugins[0].sha256, digest(join(root, 'alpha.tgz')), '内部寻址用归档实际字节摘要');
+  assert.equal(inputs.plugins[0].package, 'fixture-alpha', '实际包名来自归档本身');
+  // 产物路径越界属于操作边界，读路径仍然拒绝。
+  const escaped = JSON.parse(readFileSync(manifest, 'utf8'));
+  escaped.plugins[0].archive = '../alpha.tgz';
+  escaped.plugins[0].sha256 = digest(join(root, 'alpha.tgz'));
+  json(manifest, escaped);
+  assert.throws(() => loadReleaseInputs(manifest), /越界/);
+  // 旧清单字段只读兼容：schema 2 带 defaultEnabled 的旧记录仍能解析，但不因此回到作者选集。
+  const legacy = JSON.parse(readFileSync(manifest, 'utf8'));
+  legacy.schemaVersion = 2;
+  legacy.plugins[0].archive = 'alpha.tgz';
+  legacy.plugins[0].sha256 = digest(join(root, 'alpha.tgz'));
+  legacy.plugins[0].defaultEnabled = false;
+  delete legacy.plugins[0].directory;
+  json(manifest, legacy);
+  assert.equal(loadRelease(manifest).plugins[0].defaultEnabled, false, '完整校验仍可读旧清单字段');
+  assert.equal(loadReleaseInputs(manifest).plugins[0].defaultEnabled, false, '部署读路径同样只读不生效');
 });

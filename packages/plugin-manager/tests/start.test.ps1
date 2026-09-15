@@ -12,10 +12,15 @@ if(args.includes('fail')) process.exitCode=7;
 '@
   [IO.File]::WriteAllText((Join-Path $scriptRoot 'deployment.mjs'),$fixture+"`n",[Text.UTF8Encoding]::new($false))
   $before=$env:DSH_HOME
-  $result=& (Join-Path $scriptRoot 'start.ps1') -Plugins one,two -Profile custom -Mode release -HarnessRoot '../official with spaces' -Home 'data/local home' -Config 'deploy/config/example.json' -Resume
+  $result=& (Join-Path $scriptRoot 'start.ps1') -Plugins one,two -Profile custom -Mode release -HarnessRoot '../official with spaces' -Home 'data/local home' -Config 'deploy/config/example.json' -Offline
   $actual=$result | ConvertFrom-Json
-  $expected=@('start','--mode','release','--profile','custom','--plugins','one,two','--harness-root','../official with spaces','--config','deploy/config/example.json','--home','data/local home','--resume')
+  $expected=@('start','--mode','release','--profile','custom','--plugins','one,two','--harness-root','../official with spaces','--config','deploy/config/example.json','--home','data/local home','--offline')
   if (($actual.args | ConvertTo-Json -Compress) -ne ($expected | ConvertTo-Json -Compress)) {throw 'PowerShell 包装器参数与统一协议不一致'}
+  # 已删除的恢复/重建开关既不能声明也不能转发：包装器里再出现它们，等于把旧分支重新挂回入口。
+  $wrapper=Get-Content -LiteralPath (Join-Path $scriptRoot 'start.ps1') -Raw
+  foreach ($removed in @('resume','recover','data-compatible','rebuild')) {
+    if ($wrapper -match "\b$removed\b") {throw "PowerShell 包装器仍暴露已移除的旗标：$removed"}
+  }
   if ($env:DSH_HOME -ne $before) {throw '包装器修改了调用者环境'}
   $failed=$false
   try {& (Join-Path $scriptRoot 'start.ps1') -Mode release -Manifest fail | Out-Null} catch {$failed=$true}

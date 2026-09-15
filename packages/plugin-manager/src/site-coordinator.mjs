@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { acquireSourceLock, sourceLockCommand, sourceRecoveryIdentity } from './site-lock.mjs';
 import { canonical } from './state.mjs';
 import { buildStep } from './site-output.mjs';
-import { siteArguments, readSitePointer, readSiteRecord, verifySavedTooling, needsSiteResume } from './site-record.mjs';
+import { siteArguments } from './site-record.mjs';
 import { readFrameworkConfig, resolveSiteConfig } from './framework-config.mjs';
 
 function runEntry(root, entry, args) {
@@ -47,21 +47,17 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight, p
   const buildArgs = args[0] === 'release' ? args.slice(1) : [...args];
   if (buildArgs.includes('--help')) {
     if (existsSync(resolve(root, 'deploy/scripts/build.mjs'))) return runEntry(root, 'build.mjs', ['--help']);
-    console.log('build [--config <env.conf>] [--verify-plugin-check] [--resume | --recover --data-compatible]\n产物放入 incoming/<发布目录>/；首次自动创建 .local/env.conf。插件检查默认跳过（CI 已跑过，产物不变），要本机确认时加 --verify-plugin-check。'); return 0;
+    console.log('build [--config <env.conf>]\n产物放入 incoming/<发布目录>/；首次自动创建 .local/env.conf。构建只做构建与打包，插件检查由仓库 CI 与 check 命令承担。'); return 0;
   }
   const options = siteArguments(buildArgs);
-  const saved = readSitePointer(root);
-  if (saved && needsSiteResume(saved.status) && !options.resume && !options.recover) throw new Error('An unfinished deployment is recorded; use --resume or --recover --data-compatible.');
-  const recoveryRecord = (options.resume || options.recover) && saved ? readSiteRecord(root, saved.operation) : null;
-  const configPath = resolve(root, options.config ?? recoveryRecord?.sitePath ?? '.local/env.conf');
+  const configPath = resolve(root, options.config ?? '.local/env.conf');
   const framework = existsSync(configPath) && configPath.endsWith('.conf') ? readFrameworkConfig(configPath) : undefined;
   const config = framework?.config ?? (existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf8')) : {});
-  const inputKind = recoveryRecord?.inputKind ?? (recoveryRecord ? 'source' : config.pluginSource ?? defaultInputKind);
-  if (recoveryRecord && config.pluginSource && config.pluginSource !== inputKind) throw new Error('未完成操作不能更改输入模式。');
+  // 输入形态由入口决定（源码检出入口 source、发行包入口 archives），站点配置不再有 pluginSource 字段。
+  const inputKind = defaultInputKind;
   resolveSiteConfig(root, config, { inputKind, source: framework });
-  if (inputKind === 'archives' && options['rebuild-plugins']) throw new Error('--rebuild-plugins 仅用于 source；archives 请替换完整发布目录。');
   const prepare = preflight ?? (await import('./site-platform.mjs')).prepareSiteRelease;
-  const prepared = await buildStep('准备站点运行时', () => prepare(root, { inputKind, recovery: Boolean(recoveryRecord) }));
+  const prepared = await buildStep('准备站点运行时', () => prepare(root, { inputKind }));
   const env = prepared?.env ?? process.env;
   const path = resolve(root, '.local/source-release.node.lock');
   const recovery = sourceRecoveryIdentity();
@@ -72,12 +68,9 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight, p
   process.on('SIGINT', interrupt); process.on('SIGTERM', terminate);
   try {
     unlock.update({ recovery });
-    if (beforeBuild && inputKind === 'source' && !options.resume && !options.recover) await buildStep('同步 Gitee 集成版本', () => beforeBuild(root, buildArgs, env));
+    if (beforeBuild && inputKind === 'source') await buildStep('同步 Gitee 集成版本', () => beforeBuild(root, buildArgs, env));
     if (interrupted) return interrupted === 'SIGINT' ? 130 : 143;
-    let entry = resolve(root, 'deploy/scripts/build.mjs'), workerArgs = [...buildArgs];
-    if (recoveryRecord?.schemaVersion === 3) entry = verifySavedTooling(recoveryRecord).worker;
-    else if (recoveryRecord || !existsSync(entry)) entry = fileURLToPath(new URL('./site-release.mjs', import.meta.url));
-    if (entry !== resolve(root, 'deploy/scripts/build.mjs')) workerArgs.push('--root', root);
+    const entry = resolve(root, 'deploy/scripts/build.mjs'), workerArgs = [...buildArgs];
     // 同步之后才加载展示端：这一次发布就用快进后的代码渲染进度与汇总。
     const present = await presenter();
     const code = await present(entry, workerArgs, {
@@ -101,7 +94,7 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight, p
     process.off('SIGINT', interrupt); process.off('SIGTERM', terminate);
     if (interrupted || (workerStarted && !confirmed)) {
       unlock.retain();
-      console.error(`无法确认构建进程正常结束，源码锁已保留：${path}。请运行 build 脚本 doctor 查看原因，再运行 unlock-source 安全解锁；命令会提示使用普通构建或 --resume。`);
+      console.error(`无法确认构建进程正常结束，源码锁已保留：${path}。请运行 build 脚本 doctor 查看原因，再运行 unlock-source 安全解锁；随后直接运行普通构建。`);
     } else unlock();
   }
 }

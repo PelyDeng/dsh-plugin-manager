@@ -29,13 +29,13 @@ Windows 不使用 Bash 时，在框架根执行 `node scripts/test-report.mjs --
 
 ```sh
 pnpm package --plugins "auth,example" --output .local/artifacts/candidate
-node plugins/dsh-example/tests/host-smoke.mjs .local/artifacts/candidate --report .local/artifacts/example-host-report.json
+node plugins/builtin/dsh-example/tests/host-smoke.mjs .local/artifacts/candidate --report .local/artifacts/example-host-report.json
 node packages/plugin-manager/src/cli.mjs compose-release --root . --manifest .local/artifacts/candidate/manifest.json --verification-report .local/artifacts/example-host-report.json --output .local/artifacts/delivery
 ```
 
 测试入口需要已准备好的官方 CLI，默认 `deepseek-harness/apps/cli/lib/bin.js`，也可用 `DSH_TEST_CLI` 显式指定。它使用真实宿主和本地模型替身，不调用真实模型。每次使用新的报告路径和发布目录。`--verification-report` 可重复；普通 pack/deploy 不启动测试，不生成“已测宿主”结论。
 
-部署者取得整个 delivery 目录。compose 校验输入记录及主包摘要，复制后再次核对 tgz；不重打包，不覆盖原发布物。补充报告需新建发布目录，不能原地修改已经进入部署/续跑流程的清单。`--previous` 只保留恢复需要的旧归档，不把旧包验收转移给新包。
+部署者取得整个 delivery 目录。compose 校验输入记录及主包摘要，复制后再次核对 tgz；不重打包，不覆盖原发布物。补充报告需新建发布目录，不能原地修改已经进入部署流程的清单。`--previous` 只保留恢复需要的旧归档，不把旧包验收转移给新包。
 
 独立测试运行器可从 `@dsh-plugin-manager/plugin-manager/verification` 导入 `verificationSubjects`、`verificationIdentity`、`writeVerificationReport`。在实际断言阶段记录最终归档与参与组合，全部断言和清理完成后才写报告。失败、跳过和中断不能留下本次 passed；写报告失败也必须非零退出。写入采用同目录临时文件及独占原子创建，输出文件必须不存在。
 

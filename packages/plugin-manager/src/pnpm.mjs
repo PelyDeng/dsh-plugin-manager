@@ -1,7 +1,31 @@
 /** 无工作区依赖的 pnpm 进程入口，也供首次安装前置检查使用。 */
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { delimiter, resolve } from 'node:path';
 import { commandSpec, normalizeEnvironment } from './process.mjs';
+
+/**
+ * 让本机 pnpm 与项目固定的版本一致；缺失或版本不符时在项目内准备一份。
+ *
+ * 固定版本始终按 `root` 的根清单决定：内置构建在**隔离视图**里安装依赖，而视图清单是复制来的，
+ * 不能作为「本项目要哪个 pnpm」的权威来源。
+ */
+export function ensurePinnedPnpm(root, env, execute) {
+  const run = (bin, args, options = {}) => execute(bin, args, { cwd: root, env, ...options });
+  const capture = (bin, args) => run(bin, args, { stdio: 'pipe', encoding: 'utf8' });
+  const pin = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).packageManager;
+  if (!/^pnpm@[0-9]+\.[0-9]+\.[0-9]+$/.test(pin)) throw new Error('packageManager must pin a pnpm version.');
+  let version;
+  try { version = capture('pnpm', ['--version']); } catch { /* A missing or wrong pnpm is prepared locally. */ }
+  if (version !== pin.slice(5)) {
+    const tooling = resolve(root, '.local/tooling/pnpm');
+    // 这里不用进度包装：本模块要保持无额外依赖，便于在还没有 node_modules 的检出里单独运行。
+    console.log(`[准备构建工具] npm install --prefix ${tooling} ${pin}`);
+    run('npm', ['install', '--prefix', tooling, '--ignore-scripts', '--no-audit', '--no-fund', pin]);
+    env.PATH = `${resolve(tooling, 'node_modules/.bin')}${delimiter}${env.PATH ?? ''}`;
+    if (capture('pnpm', ['--version']) !== pin.slice(5)) throw new Error('Could not prepare the pinned pnpm version.');
+  }
+}
 
 function spec(args, cwd, env) {
   try { return commandSpec('pnpm', { env, cwd }); }

@@ -6,7 +6,7 @@ import { LOCK, OWNER, atomicJSON, canonical, fail, json, within } from './state.
 import { renderCompose } from './compose.mjs';
 import { resolvePluginSettings } from './plugin-settings.mjs';
 import { assertReleaseMode } from './release.mjs';
-import { inspectDocker, dockerArguments, executeDocker, checkDockerMounts, proveDockerHome, ensureDockerIdentity } from './docker-runtime.mjs';
+import { inspectDocker, dockerArguments, executeDocker, checkDockerMounts, proveDockerHome } from './docker-runtime.mjs';
 import { ensurePrivateDirectory } from './private-files.mjs';
 
 /** Initialize missing settings and perform a controlled restart with readiness checks. */
@@ -22,9 +22,7 @@ export function checkCompose(deployment, release, execute = executeDocker, runti
   const port = deployment.config.port ?? 7902;
   if (!Number.isInteger(port) || port < 1 || port > 65535) fail('容器端口必须是 1 到 65535 的整数。');
   runtime ??= inspectDocker(execute);
-  ensureDockerIdentity(deployment.config.dockerRuntime, runtime);
   const active = join(deployment.artifacts, 'active-compose.json');
-  if (existsSync(active)) ensureDockerIdentity(json(active).runtime, runtime);
   const run = (args, options) => execute(dockerArguments(runtime, args), options);
   const own = path => { if (process.platform !== 'win32' && process.getuid?.() === 0) chownSync(path, uid, gid); };
   const ensureDirectory = path => {
@@ -49,13 +47,12 @@ export function checkCompose(deployment, release, execute = executeDocker, runti
   own(generated.configPath);
   const compose = json(generated.path);
   const service = compose.services.dsh;
-  Object.assign(service, { image, user: `${uid}:${gid}`, restart: 'unless-stopped', init: true, security_opt: ['no-new-privileges:true'], cap_drop: ['ALL'], stop_grace_period: '30s' });
+  // 候选验证期间 restart=no：启动失败不会自己无限重启；健康验证通过后再切回正常重启策略。
+  Object.assign(service, { image, user: `${uid}:${gid}`, restart: 'no', init: true, security_opt: ['no-new-privileges:true'], cap_drop: ['ALL'], stop_grace_period: '30s' });
   if (runtime.desktop) service.ports = [{ target: port, published: String(port), host_ip: '127.0.0.1', protocol: 'tcp' }];
   else service.network_mode = 'host';
   Object.assign(service.environment, { DSH_BIND_HOST: '127.0.0.1', DSH_PORT: String(port), ...(runtime.desktop ? { DSH_CONTAINER_LOOPBACK_FORWARD: '1' } : {}) });
   if (image.startsWith('sha256:')) service.pull_policy = 'never';
-  const flags = ['rebuild', 'resume'].filter(flag => deployment.options[flag]).map(flag => `--${flag}`);
-  if (flags.length) service.command = flags;
   for (const mount of service.volumes) if (existsSync(mount.source)) checkAccess(mount.source, statSync(mount.source).isDirectory() ? 5 : mount.read_only ? 4 : 6);
   atomicJSON(generated.path, compose);
   if (runtime.desktop) checkDockerMounts(service, run);
@@ -100,7 +97,25 @@ export function applyCompose(deployment, release, execute = executeDocker, runti
   // 服务完全正常——首次启动要装插件依赖，比稳态重启慢得多。
   // 这个值只在失败时起作用：收紧换来的是「失败早 90 秒看到」，代价却是一次完整重跑
   // （约 9 分钟）加一次不必要的服务中断。收益远小于代价，所以不收紧。
-  run([...args, 'up', '-d', '--force-recreate', '--wait', '--wait-timeout', '180', 'dsh']);
+  // 启动或探针失败必须停止本次候选并确认退出，不把未验证的实例留给现场（设计 5.4、7.1）。
+  const stopCandidate = () => {
+    try {
+      run([...args, 'stop', 'dsh']);
+      const running = String(run([...args, 'ps', '--status', 'running', '-q', 'dsh'], { encoding: 'utf8' }) ?? '').trim();
+      if (running) console.error(`候选容器仍在运行：${running.split(/\s+/).join(', ')}；请人工确认后再重跑。`);
+    } catch (error) { console.error(`停止候选容器失败：${error.message}；请人工确认后再重跑。`); }
+  };
+  const start = (extra = []) => {
+    try { run([...args, 'up', '-d', ...extra, '--wait', '--wait-timeout', '180', 'dsh']); }
+    catch (error) { stopCandidate(); throw error; }
+  };
+  start(['--force-recreate']);
+  // 候选已通过健康验证：切回正常重启策略。切换 restart 会重建容器，所以最终实例必须再次通过
+  // 健康等待——ready 只表示「已验证的实例」在运行，不是「曾经有一个实例健康过」。
+  const composed = json(generated.path);
+  composed.services.dsh.restart = 'unless-stopped';
+  atomicJSON(generated.path, composed);
+  start();
   atomicJSON(join(deployment.artifacts, 'active-compose.json'), { schemaVersion: 1, project, path: generated.path, runtime, appliedAt: new Date().toISOString() });
   return { ...generated, project, status: 'ready' };
 }

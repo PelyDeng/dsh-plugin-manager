@@ -1,11 +1,8 @@
 /** Repository entry: prepare source-only dependencies, then use the shared site operation. */
-import { existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { siteArguments, readSiteJson } from '../../packages/plugin-manager/src/site-record.mjs';
-import { readFrameworkConfig } from '../../packages/plugin-manager/src/framework-config.mjs';
+import { siteArguments } from '../../packages/plugin-manager/src/site-record.mjs';
 import { commandSpec, normalizeEnvironment } from '../../packages/plugin-manager/src/process.mjs';
 import { frameworkVersion } from '../../scripts/version.mjs';
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -34,24 +31,14 @@ export function release({ root = repositoryRoot, ...options } = {}, execute = co
 if (direct) {
   try {
     const options = siteArguments(process.argv.slice(2));
-    if (options.help) console.log('Windows: .\\build.ps1 [--config <env.conf>] [--rebuild-plugins <id,...|auto> | --verify-plugin-check | --resume | --recover --data-compatible]\nLinux/macOS: bash build.sh [相同参数]\nsource 构建源码；archives 读取 incoming 完整发布目录。插件检查默认跳过（CI 已跑过，产物不变），要本机确认时加 --verify-plugin-check。--rebuild-plugins 点名只重建这些插件、其余复用上次成功发布的归档；写 auto 则由判定自己算重建集（判不了就整套重建）。doctor 只读诊断锁；unlock-source 安全解锁。');
+    if (options.help) console.log('Windows: .\\build.ps1 [--config <env.conf>]\nLinux/macOS: bash build.sh [相同参数]\nsource 构建内置源码并合并 incoming 外部产物；archives 入口由发行包自带的 build 脚本提供。内置插件固定全量构建，外部产物来自 incoming，不再按旧记录复用；构建只做构建与打包，插件检查由仓库 CI 与 check 命令承担。doctor 只读诊断锁；unlock-source 安全解锁。');
     else {
       frameworkVersion(repositoryRoot);
-      const file = resolve(repositoryRoot, options.config ?? '.local/env.conf');
-      const kind = existsSync(file) ? (file.endsWith('.conf') ? readFrameworkConfig(file).config : readSiteJson(file)).pluginSource ?? 'source' : 'source';
-      if (kind === 'archives') {
-        const { prepareManagerTooling } = await import('../../scripts/manager-tooling.mjs');
-        const { ensurePinnedPnpm } = await import('./bootstrap.mjs');
-        const env = normalizeEnvironment(process.env);
-        ensurePinnedPnpm(repositoryRoot, env, command);
-        const prepared = prepareManagerTooling({ root: repositoryRoot, output: resolve(repositoryRoot, '.local/artifacts', `site-tools-${randomUUID()}`), execute: command, env });
-        command(process.execPath, [resolve(dirname(prepared.cli), 'site-release.mjs'), ...process.argv.slice(2), '--root', repositoryRoot], { cwd: repositoryRoot, env: { ...env, DSH_SITE_TOOL_ROOT: prepared.toolRoot } });
-      } else {
-        const { bootstrapSource } = await import('./bootstrap.mjs');
-        bootstrapSource(repositoryRoot, process.argv.slice(2), normalizeEnvironment(process.env), command);
-        await loadSource();
-        release({ config: options.config, resume: options.resume, recover: options.recover, dataCompatible: options['data-compatible'], rebuildPlugins: options['rebuild-plugins'], verifyPluginCheck: options['verify-plugin-check'] });
-      }
+      // 源码检出入口固定 source：插件来源不再由站点配置字段二选一，也没有第二套准备逻辑。
+      const { bootstrapSource } = await import('./bootstrap.mjs');
+      bootstrapSource(repositoryRoot, process.argv.slice(2), normalizeEnvironment(process.env), command);
+      await loadSource();
+      release({ config: options.config });
     }
   } catch (error) { console.error(error.message); process.exitCode = 1; }
   if (typeof process.send === 'function') {

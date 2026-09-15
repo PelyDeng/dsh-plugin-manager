@@ -20,17 +20,17 @@ export async function main(args = process.argv.slice(2)) {
   deploy / start / stop / sync    底层安装与运行操作
   health / verify                 读取部署记录并检查状态
   check-records                   只读核对发布记录与现场，判定漂移类别并给出对账计划
-  apply-compose / check-compose / render-compose
-  container-start                  完整运行镜像容器入口（通常由镜像 ENTRYPOINT 调用）
+  container-start                 完整运行镜像容器入口（通常由镜像 ENTRYPOINT 调用）
 
 维护者：
   compose-release                 合并多个完整发布目录
   catalog / paths / adopt / unlock
+  migrate-site                    一次性把旧站点迁移到 managed 授权集合与稳定绑定
   migrate-data / migrate-artifacts
   set-api-key
 
 常用参数：
-  list/build/check/pack: --package . 选择独立包；省略时保留 plugins/* 扫描和 --plugins 选集。
+  list/build/check/pack: --package . 选择独立包；省略时保留 plugins/builtin/* 扫描和 --plugins 选集。
   verify-package: --root <包根> --package . --archive <tgz>
   compose-release: --root <交付根> --output <新发布目录> --manifest <清单> [--verification-report <报告.json>]
   --verification-report 可重复；记录仅作安装提示，不是兼容认证。
@@ -39,7 +39,7 @@ export async function main(args = process.argv.slice(2)) {
   else if (action === 'release-site') {
     const { siteArguments } = await import('./site-record.mjs');
     // doctor/unlock remain usable without importing deployment or kit implementations.
-    const routeIndex = rest.findIndex((value, index) => ['doctor', 'unlock-source', 'release'].includes(value) && (index === 0 || !['--root', '--config', '--rebuild-plugins'].includes(rest[index - 1])));
+    const routeIndex = rest.findIndex((value, index) => ['doctor', 'unlock-source', 'release'].includes(value) && (index === 0 || !['--root', '--config'].includes(rest[index - 1])));
     const route = routeIndex < 0 ? undefined : rest.splice(routeIndex, 1)[0];
     const options = siteArguments(rest);
     if (!options.root) throw new Error('release-site 必须明确 --root 站点目录。');
@@ -58,7 +58,8 @@ export async function main(args = process.argv.slice(2)) {
   else if (['migrate-data', 'migrate-artifacts'].includes(action)) {
     const { migrateData, parseMigrationArguments } = await import('./migrate-data.mjs');
     console.log(JSON.stringify(migrateData({ ...parseMigrationArguments(rest), kind: action === 'migrate-artifacts' ? 'artifacts' : 'data' }), null, 2));
-  } else await (await import('./deployment.mjs')).main(args);
+  } else if (action === 'migrate-site') (await import('./migrate-site.mjs')).main(rest);
+  else await (await import('./deployment.mjs')).main(args);
 }
 
 await main().catch(error => { console.error(error.message); process.exitCode = 1; });

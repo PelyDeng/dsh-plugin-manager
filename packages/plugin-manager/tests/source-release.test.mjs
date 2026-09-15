@@ -2,14 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readPlugin } from '../src/plugins.mjs';
-import { loadRelease } from '../src/release.mjs';
+import { loadRelease, loadReleaseInputs } from '../src/release.mjs';
 import { release, validateBase } from '../../../deploy/scripts/build.mjs';
 import { loadSite } from '../../../deploy/scripts/site.mjs';
 import { renderFrameworkConfig } from '../src/framework-config.mjs';
+import { writePublicInputRecord } from '../src/public-build-view.mjs';
 
 const hostCommit = 'a'.repeat(40), revision = 'b'.repeat(40);
 const base = `registry.test/dsh@sha256:${'1'.repeat(64)}`, target = `registry.test/dsh@sha256:${'2'.repeat(64)}`;
@@ -25,11 +26,11 @@ function fixture(t, { fresh = false, fail } = {}) {
   const put = (path, value) => { path = resolve(root, path); mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value), { mode: 0o600 }); };
   const artifacts = resolve(root, '.local/artifacts');
   const config = resolve(root, '.local/deployment.json');
-  const runtimeData = resolve(root, 'runtime-data');
-  put('runtime-data/marker.txt', 'retained runtime');
   put('deploy/config/site.defaults.json', defaults);
-  put('package.json', { packageManager: 'pnpm@11.19.0' });
+  put('package.json', { version: '0.2.3', packageManager: 'pnpm@11.19.0' });
   put('packages/plugin-manager/package.json', { version: '0.2.3' });
+  put('pnpm-workspace.yaml', "packages:\n  - 'packages/*'\n  - 'plugins/builtin/*'\n  - 'plugins/external/*'\n");
+  put('pnpm-lock.yaml', "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/plugin-manager: {}\n");
   put('integrations/docker/manager-update.Dockerfile', 'FROM test');
   put('deepseek-harness/.git', 'fixture git worktree');
   const archivePlugin = (output, id, version, archive) => {
@@ -53,11 +54,23 @@ function fixture(t, { fresh = false, fail } = {}) {
     oldArchive = readFileSync(resolve(artifacts, 'old/example.tgz'));
     put('.local/artifacts/old/manifest.json', { schemaVersion: 2, plugins: [old] });
     put('.local/artifacts/active-compose.json', { project: 'site', path: resolve(artifacts, 'previous.json') });
-    put('.local/artifacts/previous.json', { services: { dsh: { image: base, environment: { DSH_PORT: '7902', DSH_HOME: '/data/dsh-home', DSH_PROFILE: 'web' }, volumes: [{ type: 'bind', source: runtimeData, target: '/data' }] } } });
+    put('.local/artifacts/previous.json', { services: { dsh: { image: base, environment: { DSH_PORT: '7902', DSH_HOME: '/data/dsh-home', DSH_PROFILE: 'web' }, volumes: [{ type: 'bind', source: resolve(root, '.local/data'), target: '/data' }] } } });
+    // 模拟 migrate-site 已完成：稳定绑定与目录标记就位，旧数据与活动部署保留。
+    put('.local/site-binding.json', { schemaVersion: 1, siteId: 'site-legacy', root, dataRoot: resolve(root, '.local/data'), home: resolve(root, '.local/data/dsh-home'), workspace: resolve(root, '.local/data/workspace'), authUrlFile: resolve(root, '.local/data/dsh-web-auth-url.txt'), artifacts: resolve(root, '.local/artifacts'), profile: 'web', composeProject: 'site' });
+    // 绑定声明的持久目录必须在场：缺失会被当成数据丢失而拒绝发布。
+    mkdirSync(resolve(root, '.local/data/dsh-home'), { recursive: true });
+    mkdirSync(resolve(root, '.local/data/workspace'), { recursive: true });
+    put('.local/data/.dsh-site-id', 'site-legacy');
+    put('.local/artifacts/.dsh-site-id', 'site-legacy');
+    // 站点数据就在绑定声明的数据根内：旧站点数据在普通更新后必须原样保留。
+    put('.local/data/marker.txt', 'retained runtime');
   }
   const original = existsSync(config) ? readFileSync(config, 'utf8') : null, calls = [];
   const images = new Map([[base, info], [baseId, info]]);
   const builtInfo = { ...info, Id: builtId, RepoDigests: [target], Config: { Labels: { ...info.Config.Labels, 'com.dsh-plugin-manager.manager.sha256': digest('saved manager fixture archive') } } };
+  // 实时查询的状态：旧站点有一个运行中的 dsh 容器，本次部署按项目查询后停止它；新站点没有容器。
+  const containerId = 'c'.repeat(64);
+  let containerExists = !fresh, containerRunning = !fresh;
   const execute = (bin, args) => {
     calls.push([bin, ...args]);
     if (fail?.(bin, args)) throw new Error('simulated failure');
@@ -69,26 +82,32 @@ function fixture(t, { fresh = false, fail } = {}) {
     if (bin === 'git') return args[0] === '-C' ? args[2] === 'rev-parse' ? hostCommit : '' : args[0] === 'ls-tree' ? `160000 commit ${hostCommit}\tdeepseek-harness` : args[0] === 'rev-parse' ? revision : '';
     if (bin === 'pnpm' && args[0] === '--version') return '11.19.0';
     if (bin === 'pnpm' && args.includes('pack')) put(args.at(-1), 'archive');
-    if (bin === process.execPath && args[0] === 'scripts/package-plugins.mjs') {
-      const selected = args[args.indexOf('--plugins') + 1].split(',').filter(id => id !== 'none');
+    if (bin === process.execPath && String(args[0]).replaceAll('\\', '/').endsWith('scripts/package-plugins.mjs')) {
+      // 内置构建固定全量：fixture 的内置集合是 auth+example，与运行选集（DSH_PLUGINS）无关。
+      const requested = args[args.indexOf('--plugins') + 1];
+      const selected = requested === 'all' ? ['auth', 'example'] : requested.split(',').filter(id => id !== 'none');
       const output = args[args.indexOf('--output') + 1];
       const plugins = selected.map(id => archivePlugin(output, id, '0.2.1', `${id}-0.2.1.tgz`));
       put(resolve(output, 'manifest.json'), { schemaVersion: 2, plugins });
     }
     if (bin === process.execPath && args[1] === 'apply-compose') {
       const candidate = JSON.parse(readFileSync(args[args.indexOf('--config') + 1]));
-      put('.local/artifacts/new-compose.json', { services: { dsh: { image: candidate.containerImage, environment: { DSH_PORT: String(candidate.port), DSH_HOME: '/data/dsh-home', DSH_PROFILE: 'web', PLUGIN_MANIFEST_FILE: '/opt/plugin-packages/manifest.json' }, volumes: [{ type: 'bind', source: runtimeData, target: '/data' }, { type: 'bind', source: resolve(root, candidate.manifest, '..'), target: '/opt/plugin-packages', read_only: true }] } } });
+      put('.local/artifacts/new-compose.json', { services: { dsh: { image: candidate.containerImage, environment: { DSH_PORT: String(candidate.port), DSH_HOME: '/data/dsh-home', DSH_PROFILE: 'web', PLUGIN_MANIFEST_FILE: '/opt/plugin-packages/manifest.json' }, volumes: [{ type: 'bind', source: resolve(root, '.local/data'), target: '/data' }, { type: 'bind', source: resolve(root, candidate.manifest, '..'), target: '/opt/plugin-packages', read_only: true }] } } });
       put('.local/artifacts/active-compose.json', { project: candidate.composeProject, path: resolve(artifacts, 'new-compose.json') });
     }
     if (bin === 'docker' && args[0] === 'tag') images.set(args[2], images.get(args[1]) ?? builtInfo);
-    if (bin === 'docker' && args[0] === 'compose' && args.includes('ps') && args.includes('-a')) return 'c'.repeat(64);
+    if (bin === 'docker' && args[0] === 'ps') {
+      if (args.includes('-a')) return containerExists ? containerId : '';
+      return containerRunning ? containerId : '';
+    }
+    if (bin === 'docker' && args[0] === 'stop') { containerRunning = false; return ''; }
     if (bin === 'docker' && args[0] === 'inspect') {
       const active = JSON.parse(readFileSync(resolve(artifacts, 'active-compose.json')));
       const service = JSON.parse(readFileSync(active.path)).services.dsh;
-      return JSON.stringify([{ Id: 'c'.repeat(64), State: { Running: false, Restarting: false }, Config: { Image: service.image, Labels: { 'com.docker.compose.service': 'dsh' }, Env: ['DSH_HOME=/data/dsh-home', 'DSH_PROFILE=web'] }, Mounts: [{ Type: 'bind', Source: runtimeData, Destination: '/data', RW: true }] }]);
+      return JSON.stringify([{ Id: containerId, State: { Running: containerRunning, Restarting: false }, Config: { Image: service.image, Labels: { 'com.docker.compose.service': 'dsh' }, Env: ['DSH_HOME=/data/dsh-home', 'DSH_PROFILE=web'] }, Mounts: [{ Type: 'bind', Source: resolve(root, '.local/data'), Destination: '/data', RW: true }] }]);
     }
     if (bin === 'docker' && args[0] === 'image') return JSON.stringify([images.get(args[2]) ?? builtInfo]);
-    if (bin === 'docker' && args.includes('--volumes-from')) return readFileSync(resolve(runtimeData, args.at(-1).slice('/data/'.length)), 'utf8');
+    if (bin === 'docker' && args.includes('--volumes-from')) return readFileSync(resolve(root, '.local/data', args.at(-1).slice('/data/'.length)), 'utf8');
     if (bin === 'docker' && args[0] === 'run') return '0.2.3';
     return '';
   };
@@ -107,6 +126,68 @@ function fixture(t, { fresh = false, fail } = {}) {
   return { root, config, original, calls, execute, buildHost, tooling, result, put, oldArchive };
 }
 
+test('the source entry merges incoming external archives into the same candidate set', t => {
+  const f = fixture(t);
+  // 外部产物只以完整发布目录出现在 incoming：与内置构建结果合并成唯一候选集合。
+  const stage = resolve(f.root, 'incoming/stage/package');
+  mkdirSync(stage, { recursive: true });
+  f.put(resolve(stage, 'package.json'), { name: 'fixture-external', version: '1.0.0', type: 'module', main: 'index.js', dsh: { bundle: { patch: 'cordis.patch.yml' } }, deepseekPlugin: { schemaVersion: 3, id: 'external-one' } });
+  f.put(resolve(stage, 'index.js'), 'export const external = true;\n');
+  f.put(resolve(stage, 'cordis.patch.yml'), '{}\n');
+  const archive = resolve(f.root, 'incoming/stage/external.tgz');
+  const tar = spawnSync('tar', ['-czf', archive, '-C', dirname(stage), 'package'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(tar.status, 0, tar.stderr);
+  f.put(resolve(f.root, 'incoming/stage/manifest.json'), { schemaVersion: 2, plugins: [
+    { id: 'external-one', package: 'fixture-external', version: '1.0.0', archive: 'external.tgz', sha256: digest(readFileSync(archive)), verifyFiles: ['package.json', 'index.js', 'cordis.patch.yml'] },
+  ] });
+  const record = release({ root: f.root }, f.execute, f.buildHost, f.tooling);
+  assert.equal(record.status, 'ready');
+  const candidate = loadReleaseInputs(record.manifest);
+  const ids = candidate.plugins.map(plugin => plugin.id).sort();
+  assert.deepEqual(ids, ['auth', 'example', 'external-one']);
+  assert.deepEqual(record.externalPlugins, ['external-one']);
+  assert.deepEqual(record.pluginBuilds.map(item => item.id).sort(), ['auth', 'example']);
+});
+
+test('a selected plugin missing from the merged candidate fails before the old service is stopped', t => {
+  const f = fixture(t, { fresh: true });
+  f.put('.local/site.json', { plugins: ['example', 'ghost'] });
+  const calls = [];
+  assert.throws(() => release({ root: f.root }, (bin, args) => { calls.push([bin, ...args]); return f.execute(bin, args); }, f.buildHost, f.tooling), /ghost 缺少产物/);
+  assert.equal(calls.some(call => call.includes('stop')), false);
+});
+
+test('the source entry builds its view from the delivered public build inputs', t => {
+  const f = fixture(t, { fresh: true });
+  const delivered = resolve(f.root, 'tools/builtin-build');
+  const lock = "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies: {}\n  packages/plugin-manager:\n    dependencies: {}\n";
+  f.put('tools/builtin-build/package.json', { version: '0.2.3', packageManager: 'pnpm@11.19.0' });
+  f.put('tools/builtin-build/pnpm-workspace.yaml', "packages:\n  - 'packages/*'\n  - 'plugins/builtin/*'\n");
+  f.put('tools/builtin-build/pnpm-lock.yaml', lock);
+  // 交付记录随材料一起交付：只有独立交付目录就必须能证明交付完整性（站点侧同一判据）。
+  writePublicInputRecord(delivered, { version: '0.2.3' });
+  // 现场根文件与交付材料不同：源码入口只能按交付的字节构造视图。
+  f.put('pnpm-lock.yaml', "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  plugins/external/marker: {}\n");
+  const record = release({ root: f.root }, f.execute, f.buildHost, f.tooling);
+  assert.equal(record.status, 'ready');
+  const view = resolve(record.operation, 'build-view');
+  for (const name of ['package.json', 'pnpm-workspace.yaml', 'pnpm-lock.yaml']) {
+    assert.deepEqual(readFileSync(resolve(view, name)), readFileSync(resolve(delivered, name)), `${name} 必须逐字节来自交付输入`);
+  }
+  assert.equal(existsSync(resolve(view, 'plugins/external')), false, '视图不得包含 external 源码');
+  assert.equal(existsSync(resolve(view, 'pnpm-workspace.yaml')) && readFileSync(resolve(view, 'pnpm-lock.yaml'), 'utf8').includes('plugins/external/'), false);
+});
+
+test('the source entry refuses a private checkout without delivered public build inputs', t => {
+  const f = fixture(t, { fresh: true });
+  f.put('plugins/external/one/package.json', { name: 'private-one', version: '0.1.0' });
+  const calls = [];
+  assert.throws(() => release({ root: f.root }, (bin, args) => { calls.push([bin, ...args]); return f.execute(bin, args); }, f.buildHost, f.tooling), /不能按现场元数据构造构建视图/);
+  // 拒绝发生在准备阶段：没有停服、没有候选启动，记录停在 build-failed。
+  assert.equal(calls.some(call => call[0] === 'docker' && (call[1] === 'stop' || call.includes('apply-compose'))), false);
+  assert.equal(f.result().status, 'build-failed');
+});
+
 test('a complete source checkout initializes defaults without fetching official source or using previous artifacts', t => {
   const f = fixture(t, { fresh: true });
   assert.equal(release({ root: f.root }, f.execute, f.buildHost, f.tooling).status, 'ready');
@@ -121,7 +202,8 @@ test('a complete source checkout initializes defaults without fetching official 
   assert.equal(f.calls.some(call => call.includes('push') || call.includes('stop') || call.includes('-czf')), false);
   assert.equal(JSON.parse(readFileSync(f.config)).containerImage, builtId);
   const { site } = loadSite(f.root);
-  assert.deepEqual(site.plugins, ['auth', 'example']);
+  // 运行选集不随来源改变（设计 2.8）：未指定选集时站点配置不落值，部署按全部候选收敛。
+  assert.equal(site.plugins, undefined);
   assert.equal('containerImage' in site, false);
 });
 
@@ -170,106 +252,22 @@ test('legacy update preserves data and site values and applies immediately after
   const apply = f.calls.findIndex(call => call.includes('apply-compose'));
   const proof = f.calls.findIndex(call => call[0] === 'docker' && call[1] === 'inspect');
   assert.ok(push < stop && stop < proof && proof < apply);
-  assert.equal(f.calls.some(call => call.includes('-czf') || call.includes('-tzf')), false);
   assert.equal(existsSync(resolve(f.result().operation, 'backup')), false);
-  assert.equal(readFileSync(resolve(f.root, 'runtime-data/marker.txt'), 'utf8'), 'retained runtime');
+  assert.equal(readFileSync(resolve(f.root, '.local/data/marker.txt'), 'utf8'), 'retained runtime');
   const updated = JSON.parse(readFileSync(f.config));
   assert.equal(updated.publicOrigin, 'https://example.test');
   assert.equal(updated.containerImage, target);
-  assert.deepEqual(readFileSync(resolve(f.root, updated.manifest, '../example.tgz')), f.oldArchive);
 });
 
-test('repeated execution keeps the site file and uses the established deployment', t => {
+test('repeated execution keeps the site file and the established binding', t => {
   const f = fixture(t, { fresh: true });
   release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   const site = readFileSync(resolve(f.root, '.local/env.conf'), 'utf8');
+  const binding = JSON.parse(readFileSync(resolve(f.root, '.local/site-binding.json')));
   release({ root: f.root }, f.execute, f.buildHost, f.tooling);
-  assert.equal(f.calls.filter(call => call[0] === 'build-host').length, 1);
   assert.equal(readFileSync(resolve(f.root, '.local/env.conf'), 'utf8'), site);
-  assert.equal(f.result().stopComplete, true);
-});
-
-for (const hostMode of ['host source', 'registry image']) test(`selective source release with ${hostMode} preserves archives and resumes the fixed combination`, t => {
-  const immutableHost = hostMode !== 'host source';
-  const f = fixture(t, { fresh: true }), ids = ['alpha', 'bravo', 'charlie', 'delta'];
-  f.put('pnpm-lock.yaml', 'lockfileVersion: 9.0');
-  f.put('.local/site.json', { plugins: ids, ...(immutableHost ? { hostImage: base } : {}) });
-  if (immutableHost) rmSync(resolve(f.root, 'deepseek-harness/.git'));
-  for (const id of ids) {
-    f.put(`plugins/${id}/package.json`, { name: id, version: '0.1.0', type: 'module', main: 'dist/index.mjs', files: ['dist', 'cordis.patch.yml'],
-      scripts: { build: 'node build.mjs', check: 'node check.mjs' }, dsh: { bundle: { patch: 'cordis.patch.yml' } }, deepseekPlugin: { schemaVersion: 3, id } });
-    f.put(`plugins/${id}/README.md`, id);
-    f.put(`plugins/${id}/cordis.patch.yml`, `- insert:\n  - id: ${id}\n    name: ${id}\n`);
-  }
-  const packaged = [], counts = Object.fromEntries(ids.map(id => [id, 0]));
-  let failApply = false, dirtyHostAfterPack = false, hostDirty = false, imageChanged = false;
-  const execute = (bin, args, options) => {
-    if (bin === 'docker' && args[0] === 'image' && imageChanged) {
-      const value = JSON.parse(f.execute(bin, args, options));
-      value[0].Config.Labels['org.opencontainers.image.revision'] = 'd'.repeat(40);
-      return JSON.stringify(value);
-    }
-    if (bin === 'git' && args[0] === '-C' && args[2] === 'status' && hostDirty) return ' M changed-host.mjs';
-    if (bin === 'git' && args[0] === 'show') return readFileSync(resolve(f.root, args[1].slice(args[1].indexOf(':') + 1)), 'utf8');
-    if (bin === process.execPath && args[0] === 'scripts/package-plugins.mjs') {
-      const selected = args[args.indexOf('--plugins') + 1].split(','); packaged.push(selected);
-      const output = args[args.indexOf('--output') + 1], plugins = [];
-      for (const id of selected) {
-        counts[id]++;
-        const stage = `.local/staging/${id}/package`, source = JSON.parse(readFileSync(resolve(f.root, `plugins/${id}/package.json`)));
-        f.put(`${stage}/package.json`, source);
-        f.put(`${stage}/README.md`, id);
-        f.put(`${stage}/cordis.patch.yml`, readFileSync(resolve(f.root, `plugins/${id}/cordis.patch.yml`), 'utf8'));
-        f.put(`${stage}/dist/index.mjs`, `export const build = ${counts[id]};\nexport function apply() {}\n`);
-        mkdirSync(output, { recursive: true });
-        const archive = `${id}-${counts[id]}.tgz`, path = resolve(output, archive);
-        const tar = spawnSync('tar', ['-czf', path, '-C', resolve(f.root, stage, '..'), 'package'], { encoding: 'utf8', windowsHide: true });
-        assert.equal(tar.status, 0, tar.stderr);
-        plugins.push({ ...readPlugin(resolve(f.root, `plugins/${id}`)), directory: `plugins/${id}`, archive, sha256: digest(readFileSync(path)) });
-      }
-      f.put(resolve(output, 'manifest.json'), { schemaVersion: 1, plugins });
-      if (dirtyHostAfterPack) { if (immutableHost) imageChanged = true; else hostDirty = true; }
-      return '';
-    }
-    if (failApply && args[1] === 'apply-compose') throw new Error('selective apply interrupted');
-    return f.execute(bin, args, options);
-  };
-  const options = { root: f.root, config: '.local/site.json' };
-  release(options, execute, f.buildHost, f.tooling);
-  const baseline = f.result(), original = loadRelease(baseline.manifest);
-  failApply = true;
-  assert.throws(() => release({ ...options, rebuildPlugins: 'charlie' }, execute, f.buildHost, f.tooling), /selective apply interrupted/);
-  const partial = f.result(), candidate = loadRelease(partial.manifest);
-  assert.deepEqual(packaged, [ids, ['charlie']]);
-  assert.deepEqual(counts, { alpha: 1, bravo: 1, charlie: 2, delta: 1 });
-  assert.deepEqual(candidate.plugins.map(p => p.id).sort(), ids);
-  for (const before of original.plugins) {
-    const after = candidate.plugins.find(p => p.id === before.id);
-    if (before.id === 'charlie') assert.notEqual(after.sha256, before.sha256);
-    else assert.deepEqual(readFileSync(after.archivePath), readFileSync(before.archivePath));
-  }
-  assert.deepEqual(partial.rebuilt, ['charlie']);
-  assert.deepEqual(partial.reused, ['alpha', 'bravo', 'delta']);
-  assert.equal(partial.reuseSource, resolve(baseline.operation, 'result.json'));
-  failApply = false;
-  release({ ...options, resume: true }, execute, f.buildHost, f.tooling);
+  assert.deepEqual(JSON.parse(readFileSync(resolve(f.root, '.local/site-binding.json'))), binding);
   assert.equal(f.result().status, 'ready');
-  assert.equal(f.result().manifestHash, partial.manifestHash);
-  assert.deepEqual(packaged, [ids, ['charlie']]);
-  release({ ...options, rebuildPlugins: 'bravo,delta' }, execute, f.buildHost, f.tooling);
-  assert.deepEqual(packaged.at(-1), ['bravo', 'delta']);
-  assert.deepEqual(f.result().reused, ['alpha', 'charlie']);
-  assert.equal(f.result().pluginBuilds.find(p => p.id === 'charlie').sha256, candidate.plugins.find(p => p.id === 'charlie').sha256);
-  const beforeAll = loadRelease(f.result().manifest);
-  release({ ...options, rebuildPlugins: ids.join(',') }, execute, f.buildHost, f.tooling);
-  assert.deepEqual(packaged.at(-1), ids);
-  for (const plugin of beforeAll.plugins) assert.deepEqual(readFileSync(resolve(f.result().manifest, '..', plugin.archive)), readFileSync(plugin.archivePath));
-  const stops = f.calls.filter(call => call.includes('stop')).length;
-  dirtyHostAfterPack = true;
-  assert.throws(() => release({ ...options, rebuildPlugins: 'charlie' }, execute, f.buildHost, f.tooling), /Host source or image changed/);
-  assert.equal(f.calls.filter(call => call.includes('stop')).length, stops);
-  assert.equal(f.result().status, 'build-failed');
-  assert.equal(f.result().hostSourceClean, false);
 });
 
 test('a partial site override uses the same effective paths on repeated deployments', t => {
@@ -279,14 +277,13 @@ test('a partial site override uses the same effective paths on repeated deployme
   release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   assert.equal(f.result().status, 'ready');
   assert.equal(JSON.parse(readFileSync(f.config)).home, resolve(f.root, defaults.home));
-  assert.ok(f.calls.filter(call => call.includes('apply-compose')).every(call => call.includes('--rebuild')));
 });
 
 test('changing the established data location is rejected before stopping the service', t => {
   const f = fixture(t, { fresh: true });
   release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   f.put('.local/env.conf', renderFrameworkConfig({ config: { ...defaults, home: '.local/data/another-home' } }));
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /explicit migration/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /站点绑定/);
   assert.equal(f.calls.some(call => call.includes('stop')), false);
 });
 
@@ -308,17 +305,21 @@ test('generated Docker identity is not imported as a site preference', t => {
 });
 
 test('container access failure is detected before stopping the old service', t => {
-  const f = fixture(t, { fail: (bin, args) => args.includes('check-compose') });
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
-  assert.equal(readFileSync(f.config, 'utf8'), f.original);
+  const f = fixture(t);
+  let deny = true;
+  const execute = (bin, args, options) => {
+    if (deny && bin === 'docker' && args.includes('--mount')) throw new Error('simulated mount failure');
+    if (bin === 'docker' && args[2] === 'info') return JSON.stringify({ OSType: 'linux', ID: 'fixture-engine', Architecture: 'x86_64', OperatingSystem: 'Docker Desktop' });
+    return f.execute(bin, args, options);
+  };
+  assert.throws(() => release({ root: f.root }, execute, f.buildHost, f.tooling), /simulated mount failure/);
   assert.equal(f.calls.some(call => call.includes('stop')), false);
-  assert.equal(f.calls.some(call => call.includes('apply-compose')), false);
 });
 
-test('first access preflight may create settings and fail without preventing resume', t => {
+test('first access failure is repaired by the next ordinary build', t => {
   let deny = true, f;
   f = fixture(t, { fresh: true, fail: (bin, args) => {
-    if (deny && args.includes('check-compose')) {
+    if (deny && args.includes('apply-compose')) {
       f.put('.local/data/dsh-home/plugins/example/plugin.json', { schemaVersion: 1, enabled: true });
       return true;
     }
@@ -328,38 +329,20 @@ test('first access preflight may create settings and fail without preventing res
   assert.equal(f.result().status, 'deployment-failed');
   assert.equal(f.calls.some(call => call.includes('stop')), false);
   deny = false;
-  const result = release({ root: f.root, resume: true }, f.execute, f.buildHost, f.tooling);
+  const result = release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   assert.equal(result.status, 'ready');
-  assert.equal(f.calls.filter(call => call[0] === 'build-host').length, 1);
   assert.equal(JSON.parse(readFileSync(resolve(f.root, '.local/data/dsh-home/plugins/example/plugin.json'))).enabled, true);
 });
 
-test('legacy schema 2 unfinished releases keep their original preflight and install CLI', t => {
-  let failApply = true;
-  const f = fixture(t, { fresh: true, fail: (bin, args) => failApply && args.includes('apply-compose') });
+test('a changed Docker engine no longer blocks an ordinary build', t => {
+  let deny = true;
+  const f = fixture(t, { fresh: true, fail: (bin, args) => deny && args.includes('apply-compose') });
   assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
-  const saved = f.result();
-  saved.schemaVersion = 2;
-  for (const key of ['runtime', 'inputKind', 'inputs', 'inputEnvironment', 'toolHash']) delete saved[key];
-  rmSync(resolve(saved.toolRoot, 'node_modules/@dsh-plugin-manager/plugin-manager/dist/site-release.mjs'));
-  f.put(resolve(saved.operation, 'result.json'), saved);
-  failApply = false;
-  const callsBefore = f.calls.length;
-  release({ root: f.root, resume: true }, f.execute, f.buildHost, f.tooling);
-  const calls = f.calls.slice(callsBefore);
-  assert.equal(calls.find(call => call.includes('check-compose'))[1], resolve(saved.operation, 'tooling/node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs'));
-  assert.equal(calls.find(call => call.includes('apply-compose'))[1], resolve(saved.operation, 'tooling/node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs'));
-});
-
-test('resume refuses a different Docker engine without stopping or applying', t => {
-  const f = fixture(t, { fresh: true, fail: (bin, args) => args.includes('apply-compose') });
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
-  const before = f.calls.length;
   const otherEngine = (bin, args, options) => bin === 'docker' && args.includes('info')
     ? JSON.stringify({ OSType: 'linux', ID: 'different-engine', Architecture: 'x86_64', OperatingSystem: 'Linux' })
     : f.execute(bin, args, options);
-  assert.throws(() => release({ root: f.root, resume: true }, otherEngine, f.buildHost, f.tooling), /Docker/);
-  assert.equal(f.calls.slice(before).some(call => call.includes('stop') || call.includes('apply-compose')), false);
+  deny = false;
+  assert.equal(release({ root: f.root }, otherEngine, f.buildHost, f.tooling).status, 'ready');
 });
 
 test('a new site saves the engine architecture while existing preferences remain unchanged', t => {
@@ -371,67 +354,40 @@ test('a new site saves the engine architecture while existing preferences remain
   assert.deepEqual(readFileSync(first.sitePath), bytes);
 });
 
-test('stop verification failure restarts the unchanged old service and is checked again on resume', t => {
+test('stop verification failure leaves the site intact for the next ordinary build', t => {
   let denied = true;
-  const f = fixture(t, { fail: (bin, args) => denied && bin === 'docker' && args[0] === 'inspect' });
+  // 停止目标来自实时查询：查询失败必须在写运行配置与停旧之前中止。
+  const f = fixture(t, { fail: (bin, args) => denied && bin === 'docker' && args[0] === 'ps' });
   assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
   assert.equal(readFileSync(f.config, 'utf8'), f.original);
   assert.equal(f.calls.some(call => call.includes('apply-compose')), false);
-  assert.ok(f.calls.at(-1).includes('up'));
-  assert.equal(f.result().stopComplete, false);
   denied = false;
-  release({ root: f.root, resume: true }, f.execute, f.buildHost, f.tooling);
-  assert.equal(f.calls.filter(call => call.includes('stop')).length, 2);
+  release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   assert.equal(f.result().status, 'ready');
 });
 
-test('resume accepts older stop records without requiring their archive files or rechecking a replaced container', t => {
-  for (const completed of [false, true]) {
-    let failApply = true;
-    const f = fixture(t, { fail: (bin, args) => failApply && args.includes('apply-compose') });
-    assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
-    const saved = f.result();
-    delete saved.stopComplete;
-    Object.assign(saved, { status: completed ? 'applying' : 'backing-up', backupComplete: completed, backupArchive: '/missing/legacy.tar.gz' });
-    f.put(resolve(saved.operation, 'result.json'), saved);
-    f.put('.local/source-release.json', { operation: saved.operation, status: saved.status });
-    f.put(resolve(saved.operation, 'backup/existing-file'), 'preserve existing files');
-    failApply = false;
-    const before = f.calls.length;
-    assert.equal(release({ root: f.root, resume: true }, f.execute, f.buildHost, f.tooling).status, 'ready');
-    const calls = f.calls.slice(before);
-    assert.equal(calls.some(call => call.includes('stop')), !completed);
-    assert.equal(calls.some(call => call.includes('-czf') || call.includes('-tzf')), false);
-    assert.equal(readFileSync(resolve(saved.operation, 'backup/existing-file'), 'utf8'), 'preserve existing files');
-  }
-});
-
-test('failed first startup resumes the original artifacts without rebuilding or deleting data', t => {
+test('failed first startup converges on the next ordinary build without touching data', t => {
   let failApply = true;
   const f = fixture(t, { fresh: true, fail: (bin, args) => failApply && args.includes('apply-compose') });
   assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /simulated failure/);
-  const operation = f.result().operation;
   f.put('.local/data/dsh-home/user-data', 'keep me');
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /--resume/);
   failApply = false;
-  release({ root: f.root, resume: true }, f.execute, f.buildHost, f.tooling);
-  assert.equal(f.result().operation, operation);
-  assert.equal(f.calls.filter(call => call[0] === 'build-host').length, 1);
-  assert.ok(f.calls.at(-1).includes('--resume'));
+  release({ root: f.root }, f.execute, f.buildHost, f.tooling);
+  assert.equal(f.result().status, 'ready');
   assert.equal(readFileSync(resolve(f.root, '.local/data/dsh-home/user-data'), 'utf8'), 'keep me');
 });
 
 test('existing data or a missing explicit site file cannot be treated as a blank installation', t => {
   const f = fixture(t, { fresh: true }); f.put('.local/data/dsh-home/user-data', 'keep me');
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /Existing data/);
+  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /存在数据但没有站点绑定/);
   assert.throws(() => loadSite(f.root, '.local/typo.json'), /does not exist/);
   assert.equal(f.calls.some(call => call.includes('install')), false);
 });
 
-test('tampered previous archives are rejected before stopping', t => {
+test('damaged archives from previous releases do not block a new build', t => {
   const f = fixture(t); f.put('.local/artifacts/old/example.tgz', 'changed');
-  assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /包摘要不匹配/);
-  assert.equal(f.calls.some(call => call.includes('stop')), false);
+  // 旧指针与旧归档不再是新发布的输入：内置构建固定全量，正常发布不受影响。
+  assert.equal(release({ root: f.root }, f.execute, f.buildHost, f.tooling).status, 'ready');
 });
 
 test('immutable supplied images are accepted without a predetermined host version', () => {

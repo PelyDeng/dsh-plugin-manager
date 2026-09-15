@@ -4,14 +4,13 @@ import { parseLiteralConfig, readPrivateConfig } from './literal-config.mjs';
 
 // Each mapping is shared by parsing, migration and the public Chinese template.
 export const deploymentFields = [
-  ['DSH_PLUGIN_SOURCE', 'pluginSource', 'string', '站点 build 的插件来源：source 构建框架源码，archives 自动读取 incoming。独立 CLI 保持原清单语义。'],
   ['DSH_PUBLIC_URL', 'publicUrl', 'string', '对外访问地址。不带路径或末尾斜杠；本机默认为 http://127.0.0.1:7902，公网部署填写自己的地址。'],
   ['DSH_PUBLIC_ORIGIN', 'publicOrigin', 'string', '认证请求来源。留空沿用 DSH_PUBLIC_URL；认证启用时必须与实际浏览器来源一致。'],
   ['DSH_TRUSTED_HOSTS', 'trustedHosts', 'array', '官方控制台信任主机，JSON数组，例如 ["dsh.example.com"]。公网访问需配置；不带协议或路径，不使用通配符。'],
   ['DSH_BIND_HOST', 'host', 'string', '非容器宿主监听地址，默认 127.0.0.1。源码Compose仍使用回环监听，公网通过反向代理访问。'],
   ['DSH_PORT', 'port', 'integer', '监听端口，默认7902，范围1到65535；自定义后同时核对访问URL。'],
   ['DSH_PROFILE', 'profile', 'string', '官方profile，默认web。已有站点切换需要迁移，不能当成无损改名。'],
-  ['DSH_PLUGINS', 'plugins', 'array', '候选插件ID的JSON数组。源码首次部署默认 ["auth","example"]；独立归档留空沿用清单；[]表示空选集。'],
+  ['DSH_PLUGINS', 'plugins', 'array', '候选插件ID的JSON数组。留空表示清单里的全部候选（builtin 加全部 incoming），两种来源行为一致；[]表示空选集。'],
   ['DSH_MODE', 'mode', 'string', 'release或development。独立管理器及有配置的启动默认release；源码容器部署只使用release。'],
   ['DSH_HOST_MODE', 'hostMode', 'string', 'owned或external。独立同步默认external，需要原管理者停服证据；start由管理器拥有宿主。'],
   ['DSH_DATA_DIR', 'dataRoot', 'string', '持久数据根，默认.local/data。已有目录必须沿用或正式迁移，不能删除排错。'],
@@ -58,27 +57,33 @@ export const credentialFields = [
   ['ZHIPU_API_KEY', '私密：智谱API Key。非空时文件优先、网页只读；留空不添加覆盖。还需在官方DSH配置相应模型路由。'],
 ];
 export const frameworkKeys = new Set([...deploymentFields, ...imageFields, ...credentialFields].map(([key]) => key));
+/** 已移除的旧字段：解析时单独识别，直接给出迁移指引而不是"未知配置字段"。 */
+const removedFrameworkKeys = new Set(['DSH_PLUGIN_SOURCE']);
 
 /** Public, fixed source-site defaults; derived paths and entry-specific choices stay unset. */
 export const publicDeploymentDefaults = {
-  publicUrl: 'http://127.0.0.1:7902', host: '127.0.0.1', port: 7902, profile: 'web', plugins: ['auth', 'example'],
+  publicUrl: 'http://127.0.0.1:7902', host: '127.0.0.1', port: 7902, profile: 'web',
   mode: 'release', dataRoot: '.local/data', artifacts: '.local/artifacts', dshCli: 'dsh', patches: [], instances: {},
   offline: false, composeProject: 'dsh-plugins', containerUid: 1000, containerGid: 1000,
 };
 
-/** Entry defaults are shared by the source checkout and the standalone deployment bundle. */
+/**
+ * 入口默认值（源码检出与发行包共用）。
+ *
+ * 两个入口只在**材料能力**上不同：运行选集一律由 DSH_PLUGINS 决定，留空即采用全部候选
+ * （builtin 加全部 incoming），不因为来源是源码还是发行包而改变（设计 2.8、6.2 第 7 步）。
+ */
 export function siteDefaults(inputKind = 'source') {
-  if (!['source', 'archives'].includes(inputKind)) throw new Error('DSH_PLUGIN_SOURCE 仅支持 source 或 archives。');
-  const { plugins, ...common } = publicDeploymentDefaults;
-  return { ...common, pluginSource: inputKind, ...(inputKind === 'source' ? { plugins } : {}),
-    home: '.local/data/dsh-home', workspace: '.local/data/workspace', publicOrigin: common.publicUrl,
+  if (!['source', 'archives'].includes(inputKind)) throw new Error('站点输入形态仅支持 source 或 archives。');
+  return { ...publicDeploymentDefaults,
+    home: '.local/data/dsh-home', workspace: '.local/data/workspace', publicOrigin: publicDeploymentDefaults.publicUrl,
     publishImage: null, hostImage: null, hostImageConfig: null };
 }
 
 /** Static preferences must be valid before preparing Docker or updating source. */
 export function resolveSiteConfig(root, overrides, { inputKind = 'source', source } = {}) {
   if (!overrides || typeof overrides !== 'object' || Array.isArray(overrides)) throw new Error('Site configuration must be a JSON object.');
-  inputKind = overrides.pluginSource ?? inputKind;
+  // 输入形态由入口决定（源码检出入口 source、发行包入口 archives），不再是站点配置字段。
   const defaults = siteDefaults(inputKind);
   if ('manifest' in overrides || (inputKind === 'source' && 'containerImage' in overrides)) throw new Error('manifest and source containerImage are generated; use hostImage only for a source base.');
   if (inputKind === 'archives') {
@@ -110,8 +115,17 @@ export function resolveSiteConfig(root, overrides, { inputKind = 'source', sourc
   return site;
 }
 
-export function decodeFrameworkConfig(text) {
-  const values = parseLiteralConfig(text, frameworkKeys);
+/**
+ * 解析私有配置。
+ *
+ * `allowRemovedFields` 只给一次性迁移入口使用（设计 6.2：迁移必须能读旧现场并把它转换掉）；
+ * 正常部署入口一律拒绝已移除字段，不静默忽略。
+ */
+export function decodeFrameworkConfig(text, { allowRemovedFields = false } = {}) {
+  const values = parseLiteralConfig(text, new Set([...frameworkKeys, ...removedFrameworkKeys]));
+  const removed = Object.fromEntries([...removedFrameworkKeys].filter(key => values[key] !== undefined).map(key => [key, values[key]]));
+  // 旧站点字段不悄悄忽略：入口固定为 builtin 自动构建加 incoming 外部归档，旧站点先跑 migrate-site。
+  if (Object.keys(removed).length && !allowRemovedFields) throw new Error('DSH_PLUGIN_SOURCE 已移除：插件来源固定为 builtin 自动构建加 incoming 外部归档；旧站点请先执行 dsh-plugin-manager migrate-site 迁移。');
   const config = {};
   for (const [key, field, type] of deploymentFields) {
     const raw = values[key];
@@ -140,13 +154,12 @@ export function decodeFrameworkConfig(text) {
   const image = { ...imageDefaults };
   for (const [key] of imageFields) if (values[key]) image[key] = values[key];
   const credentials = Object.fromEntries(credentialFields.filter(([key]) => values[key]).map(([key]) => [key, values[key]]));
-  if (config.pluginSource !== undefined && !['source', 'archives'].includes(config.pluginSource)) throw new Error('DSH_PLUGIN_SOURCE 仅支持 source 或 archives。');
-  return { config, image, credentials };
+  return { config, image, credentials, ...(Object.keys(removed).length ? { removed } : {}) };
 }
 
-export function readFrameworkConfig(path) {
+export function readFrameworkConfig(path, options) {
   const bytes = readPrivateConfig(path);
-  return { ...decodeFrameworkConfig(bytes.toString('utf8')), bytes, sha256: createHash('sha256').update(bytes).digest('hex') };
+  return { ...decodeFrameworkConfig(bytes.toString('utf8'), options), bytes, sha256: createHash('sha256').update(bytes).digest('hex') };
 }
 
 /** Public templates spell out fixed defaults; private rendering preserves the supplied resolved input. */
@@ -178,7 +191,7 @@ export function renderFrameworkConfig({ config = {}, image = {}, credentials = {
 /** Concise deployment-bundle template; values and comments have the same owner as parsing. */
 export function renderSiteTemplate(inputKind = 'archives') {
   if (inputKind === 'source') return renderFrameworkConfig({ config: siteDefaults('source') });
-  const defaults = siteDefaults(inputKind), fields = new Set(['pluginSource', 'publicUrl', 'publicOrigin', 'plugins', 'port', 'profile', 'dataRoot', 'artifacts', 'composeProject', 'containerUid', 'containerGid', 'containerImage', 'offline']);
+  const defaults = siteDefaults(inputKind), fields = new Set(['publicUrl', 'publicOrigin', 'plugins', 'port', 'profile', 'dataRoot', 'artifacts', 'composeProject', 'containerUid', 'containerGid', 'containerImage', 'offline']);
   const lines = ['# DSH 插件产物部署配置示例', '# 真实配置由 build 初始化到 .local/env.conf；不要把凭据写入公开模板。', '# KEY=VALUE 是字面量；插件业务参数各自在 .local/config/plugins 下填写。'];
   for (const [key, field, , comment] of deploymentFields) if (fields.has(field)) lines.push('', `# ${comment}`, `${key}=${defaults[field] == null ? '' : JSON.stringify(defaults[field])}`);
   return lines.join('\n') + '\n';

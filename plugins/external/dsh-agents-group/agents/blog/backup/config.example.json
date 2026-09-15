@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "pluginConfig": "/absolute/project/plugins/external/dsh-agents-group/agents/blog/config/config.json",
+  "stateRoot": "/absolute/private/blog-backup-state",
+  "backupRoot": "/absolute/private/blog-backups",
+  "restoreRoot": "/absolute/private/blog-restores",
+  "blogRoot": "/absolute/typecho-site",
+  "imageRoot": "/absolute/lsky-site",
+  "pluginData": "/absolute/dsh-home/plugins/blog",
+  "attachmentRoot": "/absolute/dsh-home/attachments/v1",
+  "chat": {
+    "sessionRoot": "/absolute/official-session-root",
+    "storageRoot": "/absolute/official-json-storage-root",
+    "cwd": "/absolute/cwd-recorded-by-dsh"
+  },
+  "minioData": "/absolute/minio-data",
+  "nginxFiles": [],
+  "mysqlContainer": "mysql-container",
+  "minioContainer": "minio-container",
+  "dshContainer": "dsh-container",
+  "phpUnit": "php-fpm-81.service",
+  "phpBinary": "/absolute/php",
+  "port": 7913,
+  "dshOrigin": "http://127.0.0.1:7902",
+  "bucket": "pelyblog",
+  "strategyId": 2
+}

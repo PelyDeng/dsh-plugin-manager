@@ -1,14 +1,9 @@
 /** Repository-only preparation. The manager owns all site state, application and recovery. */
 import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve } from 'node:path';
 import { buildHostImage, withRegistryAuthentication, validateImageConfig } from '../../integrations/docker/host-image.mjs';
 import { prepareManagerTooling } from '../../scripts/manager-tooling.mjs';
-import { prepareWorkspaceDependencies } from './bootstrap.mjs';
-import { assertSelectiveInstallSafe, preparePluginReuse } from './plugin-reuse.mjs';
-import { resolveToolingReuse } from './tooling-reuse.mjs';
-import { composeReleases } from '../../packages/plugin-manager/src/compose-release.mjs';
-import { loadRelease } from '../../packages/plugin-manager/src/release.mjs';
-import { buildMessage, buildStep } from '../../packages/plugin-manager/src/site-output.mjs';
+import { buildMessage } from '../../packages/plugin-manager/src/site-output.mjs';
 import { fileHash, readSiteJson } from '../../packages/plugin-manager/src/site-record.mjs';
 import { formatLayerReport, layerReport } from './layer-count.mjs';
 
@@ -22,52 +17,32 @@ export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareMan
   return {
     prepareTools(context) {
       const output = resolve(context.operation, 'tooling');
-      const reuse = context.source.toolingReuse;
-      buildMessage(reuse ? '管理器工具：复用活动部署的归档（构建输入未变化）' : `管理器工具：重新构建（${context.source.toolingReason}）`);
-      const tools = tooling({ root: context.root, output, execute: context.execute, env: context.env, ...(reuse ? { archive: reuse.archive } : {}) });
-      // 归档在核验与安装之间被换掉时，装出来的摘要就对不上；以实际安装内容为准再核一次。
-      if (reuse && tools.sha256 !== reuse.sha256) throw new Error('复用的管理器归档与核验摘要不一致；请重试发布。');
-      return tools;
+      buildMessage('管理器工具：按本次输入重新构建');
+      return tooling({ root: context.root, output, execute: context.execute, env: context.env });
     },
     inspect(context) {
-      const { root, capture, site, runtime, rebuildPlugins, previous, active } = context;
+      const { root, capture, site, runtime, previous, active } = context;
       const git = args => capture('git', args), host = resolve(root, 'deepseek-harness');
       if (git(['status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=all'])) throw new Error('Commit source changes before release; the checkout must be clean.');
       const revision = git(['rev-parse', 'HEAD']);
       const hostCommit = existsSync(resolve(host, '.git')) ? git(['-C', host, 'rev-parse', 'HEAD']) : undefined;
       const buildEnvironment = { nodeVersion: process.versions.node, platform: process.platform, architecture: process.arch,
         packageManager: readSiteJson(resolve(root, 'package.json')).packageManager, targetArchitecture: runtime.architecture, hostImage: site.hostImage ?? null };
-      // `--rebuild-plugins auto` 把重建集交给判定自己算：拿不到可靠基线时它退回整套重建，
-      // 所以打包选集一律以判定交回的集合为准，而不是运维写下的那一串。
-      const auto = rebuildPlugins === 'auto';
-      const requested = rebuildPlugins === undefined || auto ? site.plugins : rebuildPlugins.split(',');
-      if (rebuildPlugins !== undefined) assertSelectiveInstallSafe(root);
-      const selection = rebuildPlugins === undefined ? null : preparePluginReuse({ root, previous, active, site, revision, hostCommit, buildEnvironment, ...(auto ? { auto: true } : { rebuilt: requested }), git });
-      const rebuilt = selection?.rebuilt ?? requested;
-      if (selection?.reuseUnavailable) buildMessage(`按需复用不可用（${selection.reuseUnavailable}），本次重建全部插件`);
-      const tooling_ = resolveToolingReuse({ root, git, revision, previous, active });
-      context.source = { git, host, rebuilt, reuse: selection?.release.plugins.length ? selection : null, toolingReuse: tooling_.reuse, toolingReason: tooling_.reason };
-      return { revision, hostCommit, hostSourceCommit: hostCommit, hostSourceClean: Boolean(hostCommit) && git(['-C', host, 'status', '--porcelain', '--untracked-files=normal']) === '', buildEnvironment,
-        managerInputs: tooling_.inputs,
-        ...(context.source.reuse ? { rebuilt, reused: context.source.reuse.builtFrom.map(p => p.id), reuseSource: context.source.reuse.sourceRecord } : {}) };
+      // 内置构建固定全量：系统只构建 builtin，外部产物来自 incoming，不再按旧成功记录复用源码产物。
+      // 管理器工具每次按本次输入重新构建，不复用旧 ready 的归档。
+      context.source = { git, host };
+      return { revision, hostCommit, hostSourceCommit: hostCommit, hostSourceClean: Boolean(hostCommit) && git(['-C', host, 'status', '--porcelain', '--untracked-files=normal']) === '', buildEnvironment };
     },
-    prepare(context) {
-      const { root, site, operation, record, env, execute, run, step, capture, probe, inspect, previous, sourceInput, skipPluginCheck } = context;
-      const { git, host, rebuilt, reuse } = context.source;
+    /**
+     * 源码检出特有的运行镜像准备（过渡能力）：设计 2.8 要求完整运行镜像由框架发行流程完成，
+     * 因此正常发行包用 `framework-runtime.json` 指向的镜像；只有源码检出还没有发行镜像时，
+     * 才按本机官方源码构建一次——不以上一次的运行镜像为基底叠加（设计 3 节）。
+     */
+    prepareImage(context, tools) {
+      const { root, site, operation, record, run, step, capture, probe, inspect, sourceInput } = context;
+      const { git, host } = context.source;
       if (sourceInput) validateImageConfig(sourceInput.image);
-      prepareWorkspaceDependencies(root, env, execute);
-      const tools = buildStep('准备管理器工具', () => this.prepareTools(context));
-      Object.assign(record, { managerArchive: tools.archive, managerHash: tools.sha256, toolRoot: tools.toolRoot });
-      // 插件检查是开发期门禁：CI 已对同一提交跑过，部署时再对每个插件重复一次 pnpm typecheck
-      // 只是把发布拖长（实测 5 个插件约 56 秒）。跳过它不改变产物，只改变谁来担这道校验。
-      run(process.execPath, ['scripts/package-plugins.mjs', '--plugins', rebuilt.join(',') || 'none', '--output', resolve(operation, 'fresh'), ...(skipPluginCheck ? ['--skip-plugin-check'] : [])]);
-      const fresh = buildStep('加载并核验发布清单', () => loadRelease(resolve(operation, 'fresh/manifest.json')));
-      if (fresh.plugins.length !== rebuilt.length || fresh.plugins.some(p => !rebuilt.includes(p.id))) throw new Error('Built plugin archives differ from the requested selection.');
-      const old = previous?.manifest ? buildStep('加载并核验发布清单', () => loadRelease(resolve(root, previous.manifest))) : undefined;
-      const manifest = resolve(operation, 'plugins/manifest.json');
-      buildStep('组装发布清单与归档', () => composeReleases(reuse ? [reuse.release, fresh] : [fresh], dirname(manifest), old));
-      record.pluginBuilds = readSiteJson(manifest).plugins.map(plugin => reuse?.builtFrom.find(p => p.id === plugin.id) ?? { id: plugin.id, sha256: plugin.sha256, builtFromRevision: record.revision });
-      let baseReference = site.hostImage ?? previous?.containerImage, base;
+      let baseReference = site.hostImage, base;
       if (baseReference) {
         if (!/^(?:sha256:[a-f0-9]{64}|\S+@sha256:[a-f0-9]{64})$/.test(baseReference)) throw new Error('Host image must be immutable.');
         if (probe('docker', ['image', 'inspect', baseReference]) === null) {
@@ -118,8 +93,8 @@ export function sourceAdapter({ buildHost = buildHostImage, tooling = prepareMan
       if (git(['rev-parse', 'HEAD']) !== record.revision || git(['status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=all']) || fileHash(context.sitePath) !== record.siteHash) throw new Error('Source or site preferences changed during the build; service has not been stopped.');
       const unchanged = Boolean(record.hostSourceCommit) && git(['-C', host, 'rev-parse', 'HEAD']) === record.hostSourceCommit && git(['-C', host, 'status', '--porcelain', '--untracked-files=normal']) === '';
       record.hostSourceClean = record.hostSourceClean && unchanged;
-      if (reuse && ((!site.hostImage && !record.hostSourceClean) || record.hostCommit !== reuse.hostCommit)) throw new Error('Host source or image changed during selective build; service has not been stopped.');
-      return { manifest, image: reference, manager, ...tools };
+      // 只回传运行镜像引用：工具、内置构建、候选合并与验证都在唯一的部署准备里完成。
+      return reference;
     },
   };
 }

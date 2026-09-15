@@ -69,7 +69,7 @@ pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --
 
 | Existing project | Integration path |
 | --- | --- |
-| Your own DSH plugin | Keep it in an independent repository or framework `plugins/*`, then follow the declaration and packaging contract |
+| Your own DSH plugin | Keep it in an independent repository or framework `plugins/builtin/*` or `plugins/external/*`, then follow the declaration and packaging contract |
 | Third-party DSH plugin or official Bundle | Verify host compatibility; an existing compliant release directory can be deployed directly |
 | Existing Node.js project | Adapt it to an official Cordis plugin with a Bundle entry and build output |
 | Java, Python, or existing HTTP service | Keep the service independently deployed and call it from a DSH adapter plugin |
@@ -96,4 +96,4 @@ pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --
 
 ## Contribution and license
 
-Shared libraries live in `packages/*`, built-in example apps in `plugins/*`, and independent starters in `examples/*`. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [architecture guide](doc/architecture.md) before framework development. The project uses [Apache-2.0](LICENSE); third-party sources are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Shared libraries live in `packages/*`, built-in example apps in `plugins/builtin/*`, and independent starters in `examples/*`. Read [CONTRIBUTING.md](CONTRIBUTING.md) and the [architecture guide](doc/architecture.md) before framework development. The project uses [Apache-2.0](LICENSE); third-party sources are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
