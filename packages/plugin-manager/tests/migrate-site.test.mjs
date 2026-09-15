@@ -22,7 +22,9 @@ function stoppedManager(t) {
 }
 
 function fixture(t, { legacyState = true, pending = false, explicitPlugins = false, conf = false } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'dsh-migrate-site-'));
+  // macOS 的 /var 会解析到 /private/var，Windows 的临时目录可能是 8.3 短名：写入路径与代码内部
+  // canonical 后的结果必须同源，否则 rebind/绑定比较会在这些平台上凭空不一致。
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-migrate-site-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   stoppedManager(t);
   const put = (path, value) => { path = resolve(root, path); mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value), { mode: 0o600 }); return path; };

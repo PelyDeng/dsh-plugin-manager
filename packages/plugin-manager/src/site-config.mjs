@@ -52,7 +52,10 @@ function initializeFrameworkSite(root, sitePath, runtimePath, defaults, imagePla
   if (unknown.length) throw new Error(`Legacy fields require explicit JSON compatibility or migration: ${unknown.join(', ')}.`);
   // Imported settings retain their omissions; runtime defaults are applied by loadSite.
   const config = previousPath ? { ...preferences } : { ...defaults };
-  if (!previousPath && desktop && process.platform === 'darwin' && process.getuid?.() > 0 && process.getgid?.() > 0) {
+  // 新建站点把容器用户对齐当前非 root 用户：站点流程按同一个 uid/gid 起容器（`service.user`），
+  // 运维用本人身份创建的持久目录才对容器可用；Windows 与 root（容器内运行）保持通用默认 1000。
+  // 已有站点沿用自己记录的值，不被这里改写。
+  if (!previousPath && process.platform !== 'win32' && process.getuid?.() > 0 && process.getgid?.() > 0) {
     config.containerUid = process.getuid(); config.containerGid = process.getgid();
   }
   delete config.hostImageConfig;

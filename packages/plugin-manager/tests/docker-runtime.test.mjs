@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { inspectDocker, ensureDockerIdentity, dockerArguments, checkDockerMounts, proveDockerHome, assertStoppedBinding, assertNoOverlappingWriters, composeContainers, executeDocker, locationForms, sameOrWithinLocation } from '../src/docker-runtime.mjs';
@@ -149,7 +149,8 @@ test('Docker Desktop VM path spellings are compared in one path space', t => {
   assert.equal(sameOrWithinLocation('/run/desktop/mnt/host/c/site/data', '/run/desktop/mnt/host/c/site/data/plugins'), true);
   assert.equal(sameOrWithinLocation('/run/desktop/mnt/host/c/other', '/run/desktop/mnt/host/c/site/data'), false);
   if (process.platform !== 'win32') return;
-  const root = mkdtempSync(join(tmpdir(), 'dsh-desktop-space-'));
+  // CI 的临时目录可能是 8.3 短名或联接点：locationForms 内部按 canonical 归一，这里必须用同一份路径比较。
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-desktop-space-')));
   const home = join(root, 'home'); mkdirSync(home, { recursive: true });
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const vm = path => `/run/desktop/mnt/host/${path[0].toLowerCase()}/${path.slice(3).replace(/\\/gu, '/')}`;

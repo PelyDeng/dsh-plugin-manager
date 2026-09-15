@@ -17,6 +17,26 @@ function fixture(t) {
   return root;
 }
 
+test('a new site adopts the current non-root user as its container user, and existing sites keep theirs', t => {
+  const root = fixture(t);
+  const { sitePath } = loadSite(root, undefined, { imagePlatform: 'linux/amd64' });
+  const created = readFrameworkConfig(sitePath);
+  // 站点流程按同一个 uid/gid 起容器（compose 的 service.user），新建站点因此对齐当前非 root 用户；
+  // Windows 与 root（容器内运行）保持通用默认 1000。
+  if (process.platform === 'win32' || !(process.getuid?.() > 0)) {
+    assert.equal(created.config.containerUid, 1000);
+    assert.equal(created.config.containerGid, 1000);
+  } else {
+    assert.equal(created.config.containerUid, process.getuid());
+    assert.equal(created.config.containerGid, process.getgid());
+  }
+  // 已有站点沿用自己记录的值，初始化逻辑不改写它。
+  const other = fixture(t);
+  mkdirSync(join(other, '.local'), { recursive: true });
+  writeFileSync(join(other, '.local/env.conf'), 'DSH_CONTAINER_UID=1234\nDSH_CONTAINER_GID=1234\n');
+  assert.equal(readFrameworkConfig(loadSite(other, undefined, { imagePlatform: 'linux/amd64' }).sitePath).config.containerUid, 1234);
+});
+
 test('new private env records effective site and image defaults without secrets or generated image/manifest', t => {
   const root = fixture(t);
   const { sitePath } = loadSite(root, undefined, { imagePlatform: 'linux/arm64', desktop: true });

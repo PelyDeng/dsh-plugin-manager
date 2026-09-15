@@ -18,6 +18,12 @@ const baseId = `sha256:${'3'.repeat(64)}`, builtId = `sha256:${'4'.repeat(64)}`;
 const info = { Id: baseId, Os: 'linux', Architecture: 'amd64', Config: { Labels: { 'org.opencontainers.image.revision': hostCommit } } };
 const digest = value => createHash('sha256').update(value).digest('hex');
 const defaults = JSON.parse(readFileSync(new URL('../../../deploy/config/site.defaults.json', import.meta.url)));
+/**
+ * 已有站点（旧 JSON）没有声明容器用户时，站点流程按默认 1000 判定挂载可访问性；CI 与 macOS 运行器的
+ * uid 不是 1000，而夹具目录属于测试进程。真实部署里运维会把 `DSH_CONTAINER_UID/GID` 对齐到本机属主，
+ * 夹具照此声明（`apply-compose.test.mjs` 同做法）。
+ */
+const containerUser = { containerUid: process.getuid?.() ?? 1000, containerGid: process.getgid?.() ?? 1000 };
 
 function fixture(t, { fresh = false, fail } = {}) {
   // Windows runners can expose TEMP through an 8.3 alias; production paths are canonical.
@@ -49,7 +55,7 @@ function fixture(t, { fresh = false, fail } = {}) {
   };
   let oldArchive;
   if (!fresh) {
-    put('.local/deployment.json', { containerImage: base, manifest: '.local/artifacts/old/manifest.json', plugins: ['example'], publicOrigin: 'https://example.test', composeProject: 'site' });
+    put('.local/deployment.json', { ...containerUser, containerImage: base, manifest: '.local/artifacts/old/manifest.json', plugins: ['example'], publicOrigin: 'https://example.test', composeProject: 'site' });
     const old = archivePlugin(resolve(artifacts, 'old'), 'example', '0.2.0', 'example.tgz');
     oldArchive = readFileSync(resolve(artifacts, 'old/example.tgz'));
     put('.local/artifacts/old/manifest.json', { schemaVersion: 2, plugins: [old] });
@@ -272,7 +278,7 @@ test('repeated execution keeps the site file and the established binding', t => 
 
 test('a partial site override uses the same effective paths on repeated deployments', t => {
   const f = fixture(t, { fresh: true });
-  f.put('.local/site.json', { dataRoot: '.local/data/custom' });
+  f.put('.local/site.json', { ...containerUser, dataRoot: '.local/data/custom' });
   release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   assert.equal(f.result().status, 'ready');
@@ -397,7 +403,8 @@ test('immutable supplied images are accepted without a predetermined host versio
 
 test('unified source keeps exact private input backup while generated records contain no secret values', t => {
   const f = fixture(t, { fresh: true });
-  const text = renderFrameworkConfig({ credentials: { DEEPSEEK_API_KEY: 'sk-source-private-sentinel' }, privateInput: true });
+  // 手写的统一配置要像真实运维那样声明容器用户：默认 1000 在非 1000 的运行器上会被访问核对判成不可访问。
+  const text = renderFrameworkConfig({ config: { containerUid: process.getuid?.() ?? 1000, containerGid: process.getgid?.() ?? 1000 }, credentials: { DEEPSEEK_API_KEY: 'sk-source-private-sentinel' }, privateInput: true });
   f.put('.local/env.conf', text);
   const result = release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   assert.equal(readFileSync(result.inputs.find(input => input.kind === 'site').path, 'utf8'), text);
