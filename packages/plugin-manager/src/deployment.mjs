@@ -18,7 +18,7 @@ import { applyCompose } from './apply-compose.mjs';
 /** Public CLI shared by Bash, PowerShell and the container entrypoint. */
 export async function main(args = process.argv.slice(2)) {
   const options = parseArguments([...args]);
-  if (options.help) { console.log('deployment.mjs deploy|start|stop|sync|verify|adopt|paths|health|container-start|unlock --root <project> --config <env.conf|deployment.json> --plugins all|none|id,... --manifest path --home path --profile web --host-mode owned|external --stopped-file path --started-file path'); return; }
+  if (options.help) { console.log('deployment.mjs deploy|start|stop|sync|verify|adopt|apply-compose|paths|health|container-start|unlock --root <project> --config <env.conf|deployment.json> --plugins all|none|id,... --manifest path --home path --profile web --host-mode owned|external --stopped-file path --started-file path'); return; }
   const deployment = resolveDeployment(options);
   if (options.action === 'health') {
     // 存活检查是只读诊断：缺少身份时也照常报告现场，身份一致性由写入路径强制（设计 2.6、5.4）。

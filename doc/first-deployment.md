@@ -14,9 +14,10 @@
 ```text
 dsh-deployment/
 ├─ build.ps1 / build.sh
-├─ tools/                       随包管理器，不手改
+├─ tools/                       随包管理器与公开构建输入，不手改
+├─ source/                      公开源码材料，内置插件构建输入，不手改
 ├─ framework-runtime.json       固定运行镜像信息，不手改
-├─ optional/auth/               按需使用的认证发布目录
+├─ optional/auth/               认证插件的独立发布目录（与内置 auth 同 id）
 ├─ incoming/
 │  └─ my-plugin/
 │     ├─ manifest.json
@@ -24,7 +25,7 @@ dsh-deployment/
 └─ .local/                      运行后创建，保留配置和数据
 ```
 
-在部署根执行 `bash build.sh`；Windows PowerShell 执行 `.\build.ps1`。普通 zip/tgz 单文件不能代替完整发布目录。需要认证时，将 optional/auth 整个目录复制到 incoming/auth，保留自己的应用。不要删除组合清单中某个归档来挑选插件。
+在部署根执行 `bash build.sh`；Windows PowerShell 执行 `.\build.ps1`。普通 zip/tgz 单文件不能代替完整发布目录。内置 auth、example 由本次构建产出（archives 用随包公开构建视图），已经在候选里；`incoming/` 只放外部作者的完整发布目录。把随包的 `optional/auth` 或 `public-apps`（同一批插件）再放进去会因插件 id 重复被组合清单拒绝。不要删除组合清单中某个归档来挑选插件。
 
 产物合规由**作者在交付前**自检，部署侧不重复检查：作者打包后执行 `dsh-plugin-manager verify-release --release <发布目录>`，它只读目录，退出码 0 表示清单格式、产物摘要、包结构与包内元数据一致。部署者收到目录后想再确认一次，可在**停服前**对 incoming 下的目录跑同一条命令；它不接触部署状态，也不改动任何文件。
 
@@ -39,7 +40,7 @@ dsh-deployment/
 
 ## 首次登录与模型密钥
 
-无 kit 的起步插件：请求 `/independent-example/ready` 并核对其 README 中的 JSON。带认证的起步插件：先复制 optional/auth，再访问 `/auth` 完成初始管理员改密、重新登录、普通账号授权，最后请求 `/independent-access-example/identity`。详细操作见[首次登录与请求](getting-started.md#4-登录并体验问答)。
+无 kit 的起步插件：请求 `/independent-example/ready` 并核对其 README 中的 JSON。带认证的起步插件：直接用构建产出的内置 auth（不要另行复制 optional/auth），访问 `/auth` 完成初始管理员改密、重新登录、普通账号授权，最后请求 `/independent-access-example/identity`。详细操作见[首次登录与请求](getting-started.md#4-登录并体验问答)。
 
 `/auth` 的账号、官方控制台根路径认证、模型 API 密钥各有用途。需要 AI 问答时再配置模型，见[模型与凭据规则](framework-configuration.md#密钥由谁管理)；仅登录或 identity 请求不需要模型。密钥不放进插件 config 或命令参数。
 
@@ -54,7 +55,7 @@ dsh-deployment/
 | .local/data | 账号、会话、业务数据，沿用与独立备份 |
 | incoming | 完整候选发布目录，框架不自动清空 |
 
-公网访问应配置代理或 SSH 转发，并核对 `.local/env.conf` 的 public URL、origin、trusted hosts；自定义端口时同步核对 URL。字段及 source/archives/CLI 默认值差异只在[框架配置](framework-configuration.md)维护。新部署包默认 archives，全新源码检出默认 source，不能把源码模板的 auth/example 默认选集复制到新产物站点。
+公网访问应配置代理或 SSH 转发，并核对 `.local/env.conf` 的 public URL、origin、trusted hosts；自定义端口时同步核对 URL。字段及 source/archives/CLI 默认值差异只在[框架配置](framework-configuration.md)维护。新部署包默认 archives，全新源码检出默认 source，两种入口的选集规则相同（留空即全部候选），差异只在候选材料来自源码检出还是发行包。
 
 ## 更新与恢复
 

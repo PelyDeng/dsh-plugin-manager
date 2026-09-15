@@ -6,7 +6,7 @@
 
 通过管理器部署时，本插件按 `configuration.auth: provider` 提供认证，站点 origin 统一配置。新 archives 站点的配置为 `.local/config/plugins/auth/plugin.json`；源码和手工 CLI 默认 `<DSH home>/plugins/auth/plugin.json`，已有实例及显式路径原样沿用。配置不接受 `accessMode`；其他插件各自决定是否要求认证。按部署包随附指南操作，独立 CLI 的手工步骤见管理器包内 DELIVERY.md。
 
-可选统一认证插件，在宿主 WebServer 提供 `/auth` 页面、账号管理与逐插件授权。源码默认选集包含 auth；archives 只部署 incoming 中的完整候选，需要认证时显式提供 auth，已有 public-apps 已含 auth 时不重复添加。不改变业务插件的访问模式，也不替代 DSH 官方控制台认证。
+可选统一认证插件，在宿主 WebServer 提供 `/auth` 页面、账号管理与逐插件授权。两种入口的候选都包含内置 auth（archives 用随包公开构建视图构建），不需要手工放进 incoming；incoming 里放同名 auth 会与内置重复而被拒绝。不改变业务插件的访问模式，也不替代 DSH 官方控制台认证。
 
 管理员可以管理账号，自动拥有已加载插件和控制台权限。普通用户需要逐项授权。账号角色、密码、启停或授权变化会撤销该用户登录会话；最后一个有效管理员不能被停用或降级。
 

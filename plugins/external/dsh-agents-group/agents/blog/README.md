@@ -24,7 +24,7 @@
 
 管理器认证配置层覆盖 Bundle 默认配置时，插件仍从 `BLOG_CONFIG_PATH` 取得同一凭据文件的路径；显式 `runtimeConfig` 优先。该变量只存路径，不存账号或密码。
 
-离线源码构建前需准备本插件依赖的包内容和 registry 元数据；部署完整归档不构建博客源码。pnpm 11 的已有可写 store 使用 SQLite 索引，仅复制只读包文件不会更新索引，应在独立临时项目中用 pnpm 预热目标 store，不覆盖 `index.db`。失败操作按[框架恢复规则](../../../../../deploy/README.md#安装与恢复)继续。
+离线源码构建前需准备本插件依赖的包内容和 registry 元数据；部署完整归档不构建博客源码。pnpm 11 的已有可写 store 使用 SQLite 索引，仅复制只读包文件不会更新索引，应在独立临时项目中用 pnpm 预热目标 store，不覆盖 `index.db`。失败操作按[框架失败重试规则](../../../../../deploy/README.md#安装与重试)继续。
 
 ## 宿主能力
 
@@ -201,10 +201,10 @@ pnpm --filter @dsh-agents-group/blog build
 pnpm --filter @dsh-agents-group/blog test
 pnpm --filter @dsh-agents-group/blog test:bridge # 需要 PHP CLI
 pnpm --filter @dsh-agents-group/blog test:reports # 需要 PHP CLI 和 PDO_SQLite
-python3 -m unittest discover -s plugins/dsh-agents-group/agents/blog/backup -p 'test_*.py'
+python3 -m unittest discover -s plugins/external/dsh-agents-group/agents/blog/backup -p 'test_*.py'
 ```
 
-按改动选择必要检查；这些命令分别检查类型与语法、构建、本地行为、Typecho 桥接及备份执行器。**发布走群组，不单独发布本子包**：在仓库根执行 `pnpm package --plugins agents-group`，它另行执行构建、检查和归档校验，输出完整发布目录。认证站点须同时保留 auth，私有完整选集见[集成说明](../../../../../PRIVATE.md#本地集成公共更新)。`test:bridge` 使用数据库和原生组件的替身，检查删除、回执重放、冲突与事务回滚。
+按改动选择必要检查；这些命令分别检查类型与语法、构建、本地行为、Typecho 桥接及备份执行器。**发布走群组，不单独发布本子包**：在仓库根执行 `pnpm package --external --plugins agents-group`，它另行执行构建、检查和归档校验，输出完整发布目录。认证站点须同时保留 auth，私有完整选集见[集成说明](../../../../../PRIVATE.md#本地集成公共更新)。`test:bridge` 使用数据库和原生组件的替身，检查删除、回执重放、冲突与事务回滚。
 
 `test:reports` 在内存 SQLite 中实际执行筛选、关联及汇总查询，覆盖保存稿去重、分类后代、组合条件、上海日期、评论排行、目录分页、范围上限和返回体积。默认使用测试查询构造器；设置 `TYPECHO_QUERY_DIR` 指向 Typecho 1.2.1 的 `var/Typecho/Db/`（含 `Query.php`、`Adapter.php`）可改用原生查询构造器。测试不会下载源码；MySQL 事务命令与表引擎检查使用替身，不能作为真实 MySQL 并发快照验收。
 

@@ -313,9 +313,9 @@ POST /butler/supplement
 
 ```sh
 pnpm install                      # 首次新增插件后需要，用于写入 workspace 锁
-pnpm list:plugins                 # 应看到 butler 一行
-pnpm build --plugins "butler"
-pnpm check --plugins "butler"
+pnpm list:plugins --external      # 应看到 butler 一行
+pnpm build --external --plugins "butler"
+pnpm check --external --plugins "butler"
 pnpm test --filter dsh-butler-console
 ```
 

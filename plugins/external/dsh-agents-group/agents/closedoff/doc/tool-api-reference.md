@@ -39,7 +39,7 @@ kind: "package-reference"
 
 ## 配置文件与源码位置
 
-以下地址均相对于群组包根 `plugins/dsh-agents-group/agents/closedoff/`：
+以下地址均相对于群组包根 `plugins/external/dsh-agents-group/agents/closedoff/`：
 
 | 文件 | 用途 |
 | --- | --- |

@@ -4,7 +4,7 @@ niuma-boss 不替员工创建业务 Agent 会话，员工由各自插件通过 C
 本文件说明这个协议怎么翻译成游戏事件，以及**哪里翻译不过去**。
 
 协议定义在 `plugins/dsh-butler-console/src/protocol.ts`，不由本项目重新定义。
-参照实现是 `plugins/dsh-agents-group/src/butler-bridge.ts`。
+参照实现是 `plugins/external/dsh-agents-group/src/butler-bridge.ts`。
 
 ## 一、先说清楚「桥」是什么
 

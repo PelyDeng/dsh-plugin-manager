@@ -10,7 +10,7 @@ API Key 统一在 auth“模型设置 → 智谱”保存到官方 credentials�
 旧配置省略 models 时沿用宿主默认模型；继续含图片的历史对话时，仍需使用支持图片的模型。缺少 Key 时会报错，不会悄悄换用其他配置。
 
 正式环境在站点设置指定 `instances.blog.runtimeConfig` 为
-`plugins/dsh-agents-group/agents/blog/config/config.json`。管理器将该文件只读挂载，
+`plugins/external/dsh-agents-group/agents/blog/config/config.json`。管理器将该文件只读挂载，
 插件从群组级配置的 `blog` 小节解析 JSON；该位置只放配置，不放密码以外的业务数据。
 不需要、也不读取另一份 env.conf 凭据。更改后通过管理器重启生效。
 

@@ -54,9 +54,10 @@ list 只读声明，不要求锁文件。pack 只做构建、打包与内容寻�
 ```text
 dsh-deployment/
 ├─ build.ps1 / build.sh
-├─ tools/                       随包管理器，不手改
+├─ tools/                       随包管理器与公开构建输入，不手改
+├─ source/                      公开源码材料，内置插件构建输入，不手改
 ├─ framework-runtime.json       固定运行镜像信息，不手改
-├─ optional/auth/               按需使用的认证发布目录
+├─ optional/auth/               认证插件的独立发布目录（与内置 auth 同 id）
 ├─ incoming/
 │  └─ my-plugin/
 │     ├─ manifest.json
@@ -64,7 +65,7 @@ dsh-deployment/
 └─ .local/                      运行后创建，保留配置和数据
 ```
 
-在部署根执行 `bash build.sh`；Windows PowerShell 执行 `.\build.ps1`。普通 zip/tgz 单文件不能代替完整发布目录。需要认证时，将 optional/auth 整个目录复制到 incoming/auth，保留自己的应用。不要删除组合清单中某个归档来挑选插件。
+在部署根执行 `bash build.sh`；Windows PowerShell 执行 `.\build.ps1`。普通 zip/tgz 单文件不能代替完整发布目录。内置 auth、example 由本次构建产出（archives 用随包公开构建视图），已经在候选里；`incoming/` 只放外部作者的完整发布目录。把随包的 `optional/auth` 或 `public-apps`（同一批插件）再放进去会因插件 id 重复被组合清单拒绝。不要删除组合清单中某个归档来挑选插件。
 
 产物合规由**作者在交付前**自检，部署侧不重复检查：作者打包后执行 `dsh-plugin-manager verify-release --release <发布目录>`，它只读目录，退出码 0 表示清单格式、产物摘要、包结构与包内元数据一致。部署者收到目录后想再确认一次，可在**停服前**对 incoming 下的目录跑同一条命令；它不接触部署状态，也不改动任何文件。
 
@@ -145,7 +146,7 @@ bash build.sh
 
 ## 构建或部署失败如何处理？
 
-<!-- Excerpt from deploy/README.md#site-recovery; edit its source. -->
+<!-- Excerpt from deploy/README.md#install-retry; edit its source. -->
 归档、公共配置结构或认证提供者缺失在停服前报告。插件业务 Schema 可能在加载时才检查；健康通过仍需实际业务请求。保留 .local/data、.local/artifacts、incoming 和用户备份，不通过删除状态重新初始化。
 
 | 情况 | 操作 |
@@ -167,7 +168,7 @@ Windows 用 `.\build.ps1` 替代 bash build.sh。doctor 只读诊断锁和记录
 <!-- Excerpt from doc/framework-configuration.md#platform-defaults; edit its source. -->
 Windows 使用 build.ps1，Linux/macOS 使用 build.sh。已有配置不覆盖；手工复制公共模板不探测平台。源码公共模板的 DSH_IMAGE_PLATFORM=linux/amd64，source 新站点根据 Docker 引擎初始化架构；Windows/Linux UID/GID 默认 1000，macOS 非 root 用户使用当前 UID/GID。archives 只选发行信息实际提供的镜像架构，未提供的架构拒绝，不回退构建源码。
 
-source 默认 auth/example；archives 默认发现完整 incoming；独立 CLI 使用显式清单，三者不能混用默认选集。新 archives 可编辑插件配置位于 .local/config/plugins/<id>，通过已有 instances 引用；旧记录及显式 settingsFile/runtimeConfig 原样沿用，不自动迁移 home/plugins。
+两个入口都构建全部内置插件（source 用检出、archives 用随包公开构建视图），留空 DSH_PLUGINS 表示候选全集＝全部内置加全部 incoming；独立 CLI 使用显式清单；三者不能混用默认选集。incoming 只放外部作者的完整发布目录，与内置同 id 的目录会被组合清单拒绝。新 archives 可编辑插件配置位于 .local/config/plugins/<id>，通过已有 instances 引用；旧记录及显式 settingsFile/runtimeConfig 原样沿用，不自动迁移 home/plugins。
 
 Docker 只接受本机 Linux 引擎 unix/npipe endpoint。Docker Desktop 使用桥接与 TCP 转发，原生 Linux 使用 host 网络；同 Docker 网络是信任边界，不能据此承诺公网隔离。macOS 尚未完成真实 Docker 部署验收，架构与平台以具体发行验收范围为准。本次所有命令固定到同一 endpoint，不要求历史引擎 ID 与本次一致。
 

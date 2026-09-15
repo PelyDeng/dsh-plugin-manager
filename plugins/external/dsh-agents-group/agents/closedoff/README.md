@@ -103,10 +103,10 @@ flowchart LR
 ```powershell
 Set-Location '<dsh-plugin-manager-gitee 仓库目录>'
 pnpm install --frozen-lockfile
-pnpm check --plugins agents-group
+pnpm check --external --plugins agents-group
 ```
 
-本包是群组 `dsh-agents-group` 的子包，**没有独立的构建入口**：构建与检查都通过群组完成。根 `check --plugins agents-group` 会先构建群组（含本子包），再执行类型、前端语法和行为检查；只构建时使用 `pnpm build --plugins agents-group`。子包单独的 `pnpm typecheck` 与 `pnpm test` 仍可在本目录执行，用于快速定位本包的问题。构建生成群组的 `dist/`，并把页面源码、固定为 `1.142.0` 的公共 CesiumJS、设备组标记图片、DSH 图标和 `@hy-media/video-player@0.0.37` 运行资源复制到本子包的 `web/assets/`。`index.html` 保留页面骨架，`app.js` 管理主交互，`trajectory.js` 管理地图、截图和摄像头播放器。轨迹地图和视频播放器均不使用公网 CDN。
+本包是群组 `dsh-agents-group` 的子包，**没有独立的构建入口**：构建与检查都通过群组完成。根 `check --external --plugins agents-group` 会先构建群组（含本子包），再执行类型、前端语法和行为检查；只构建时使用 `pnpm build --external --plugins agents-group`。子包单独的 `pnpm typecheck` 与 `pnpm test` 仍可在本目录执行，用于快速定位本包的问题。构建生成群组的 `dist/`，并把页面源码、固定为 `1.142.0` 的公共 CesiumJS、设备组标记图片、DSH 图标和 `@hy-media/video-player@0.0.37` 运行资源复制到本子包的 `web/assets/`。`index.html` 保留页面骨架，`app.js` 管理主交互，`trajectory.js` 管理地图、截图和摄像头播放器。轨迹地图和视频播放器均不使用公网 CDN。
 
 `@hy-media/video-player@0.0.37` 的版本化 npm 包快照保存在本插件的 `vendor/`，本包通过相对 `file:` 开发依赖安装，不再访问原私有 npm 源。CesiumJS 和其余公开依赖仍从公共 npm 源安装。正式插件 `.tgz` 携带复制到 `web/assets/` 的播放器运行资源，不依赖仓库外目录。
 
@@ -137,7 +137,7 @@ pnpm dsh plugin --profile web add "file:$pluginRoot"
 ```powershell
 New-Item -ItemType Directory -Force .local/secrets | Out-Null
 if (-not (Test-Path .local/secrets/closedoff.env.conf)) {
-  Copy-Item plugins/dsh-agents-group/agents/closedoff/env.conf.example .local/secrets/closedoff.env.conf
+  Copy-Item plugins/external/dsh-agents-group/agents/closedoff/env.conf.example .local/secrets/closedoff.env.conf
 }
 ```
 
@@ -215,7 +215,7 @@ HMR 会释放旧插件注册的路由、Agent 和正在响应的 SSE 流，开�
 
 ## 开发与升级
 
-构建和检查使用[本地构建](#本地构建)的命令。开发 link 安装在重新构建后生效；手工快照安装须更新包并重启。**发布走群组，不单独发布本子包**：在仓库根执行 `pnpm package --plugins agents-group`，认证站点还需交付 auth，完整选集和部署步骤见[私有集成说明](../../../../../PRIVATE.md#本地集成公共更新)。
+构建和检查使用[本地构建](#本地构建)的命令。开发 link 安装在重新构建后生效；手工快照安装须更新包并重启。**发布走群组，不单独发布本子包**：在仓库根执行 `pnpm package --external --plugins agents-group`，认证站点还需交付 auth，完整选集和部署步骤见[私有集成说明](../../../../../PRIVATE.md#本地集成公共更新)。
 
 仅在发版时按版本规则更新本插件 `package.json`，提交源文件、文档与必要锁文件；真实 `env.conf` 留在用户配置目录，不提交 `dist/`、`web/assets/` 等生成物。播放器升级时更新本插件 `vendor/` 快照和对应 `file:` 依赖，确认没有有效引用后再移除旧快照。
 

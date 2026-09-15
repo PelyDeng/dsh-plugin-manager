@@ -119,7 +119,7 @@ pnpm install --frozen-lockfile
 pnpm list:plugins
 ```
 
-**预期**：继续扫描 `plugins/builtin/*`。新增插件放在该目录并按[配置规范](plugin-configuration.md)声明；使用 `--plugins` 选择需要处理的插件。源码默认选集包含 auth 和 example。
+**预期**：继续扫描 `plugins/builtin/*`。新增插件放在该目录并按[配置规范](plugin-configuration.md)声明；使用 `--plugins` 选择需要处理的插件。源码内置插件就是 auth 和 example，选集留空即采用全部候选；`DSH_PLUGINS` 显式列出时才收窄。
 
 ### 2. 选择日常检查或直接打包
 
@@ -154,15 +154,13 @@ node scripts/web-page-probe.mjs --root plugins/builtin/dsh-auth --prefix /auth \
 
 站点内置插件固定全量构建，不再按插件点名重建；部署选集、构建输入与重试方式见[部署说明](../deploy/README.md#服务器源码发版)。日常 `pnpm package --plugins c` 只生成 c 的交付清单，不会自动补入其他插件。
 
-可复用插件的构建输入来自自身目录、`dependencies`、`devDependencies`、`optionalDependencies`、`peerDependencies` 里声明的本地依赖（`workspace:` 按包名解析，含间接依赖），加上仓库级共享输入（`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.npmrc`、`.gitattributes`）。读取其他插件源码也属于构建依赖，应通过本地包名和标准 `workspace:` 声明；example 读取 auth 源码生成索引，因此把 auth 声明为开发依赖。改动落在这些之外时，判定无法逐插件确认，按保守口径处理：只有本次改动全部落在被重建插件的目录内，其余插件才继续复用旧归档。
+构建输入来自插件自身目录、`dependencies`、`devDependencies`、`optionalDependencies`、`peerDependencies` 里声明的本地依赖（`workspace:` 按包名解析，含间接依赖），加上仓库级共享输入（`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.npmrc`、`.gitattributes`）。读取其他插件源码也属于构建依赖，应通过本地包名和标准 `workspace:` 声明；example 读取 auth 源码生成索引，因此把 auth 声明为开发依赖。
 
-内置构建不再由插件清单逐项声明要读哪些文件：它固定使用框架发行方的完整公开构建视图（`packages`、`plugins/builtin`、`scripts`、`deploy`、`integrations`、`examples`、`doc`、`.github` 以及公开根构建文件与模板），视图内的材料都是内置构建的输入。旧字段 `deepseekPlugin.buildInputs` 已退役，声明它会被当场拒绝；需要读取公开视图之外的东西应改为标准包依赖声明，读不到的输入变化一律按全量构建处理，判定规则见[部署说明](../deploy/README.md#服务器源码发版)。
+内置构建固定使用框架发行方的完整公开构建视图（`packages`、`plugins/builtin`、`scripts`、`deploy`、`integrations`、`examples`、`doc`、`.github` 以及公开根构建文件与模板），视图内的材料都是内置构建的输入；每次 build 都为选集里的每个插件重新构建，不按旧成功记录逐插件复用，因此不需要逐插件声明构建输入。旧字段 `deepseekPlugin.buildInputs` 已退役，声明它会被当场拒绝；需要读取公开视图之外的东西应改为标准包依赖声明。
 
-本地构建归档可声明为 `file:vendor/library-0.1.0.tgz`，但必须位于声明它的插件自身目录内，是已纳入 Git 的常规 `.tgz` / `.tar.gz` 文件。复用时核对旧、新提交中的 Git blob 一致，且磁盘字节与 Git 对象相符；归档及父目录不能是符号链接。跨目录、目录形式、未跟踪或仅在忽略目录中的归档，以及 `link:` 依赖仍不支持复用，须全量构建。这不改变最终发布包不能携带 `file:` 运行依赖的约束：本地归档用于构建，所需代码应内嵌到插件产物。
+本地构建归档可声明为 `file:vendor/library-0.1.0.tgz`，但必须位于声明它的插件自身目录内，是已纳入 Git 的常规 `.tgz` / `.tar.gz` 文件；归档及父目录不能是符号链接，跨目录、目录形式、未跟踪或仅在忽略目录中的归档，以及 `link:` 依赖都不被接受。这不改变最终发布包不能携带 `file:` 运行依赖的约束：本地归档用于构建，所需代码应内嵌到插件产物。
 
-任意脚本读取公开视图之外的文件（例如 `plugins/external` 源码、私有配置）或由环境产生的输入无法由 Git 差异证明；存在这种输入变化时应全量构建。
-
-插件构建由显式 build/check/pack 流程执行，不得用依赖安装钩子触发插件构建或修改产物。选择重建前会核验相关安装钩子；不能以“插件没有被选中”为由允许其安装钩子间接重建。
+插件构建由显式 build/check/pack 流程执行，不得用依赖安装钩子触发插件构建或修改产物。
 
 ### 3. 运行并验证
 

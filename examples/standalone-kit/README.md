@@ -42,7 +42,7 @@ list 只读声明，不要求锁文件。pack 只做构建、打包与内容寻�
 
 交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。交付时以整个目录为单位，不单独抽走 tgz。
 
-将本次完整目录放入部署包 incoming/independent-access-example，再将部署包 optional/auth 复制到 incoming/auth；已经存在其他含 auth 的清单时不重复复制。运行 build 后使用实际站点地址：
+将本次完整目录放入部署包 incoming/independent-access-example；auth 用构建产出的内置插件（不要另复制 optional/auth）。运行 build 后使用实际站点地址：
 
 <!-- Excerpt from doc/getting-started.md.tmpl#first-login; edit its source. -->
 需要认证的应用先确认已选入并启用 auth，再访问实际站点的 /auth；无认证应用跳过登录。空数据库首次管理员为 admin，初始密码 123456；首次登录按页面强制改密，然后重新登录。此后创建普通账号，为它勾选目标插件授权，再用该普通账号登录。
@@ -62,4 +62,4 @@ list 只读声明，不要求锁文件。pack 只做构建、打包与内容寻�
 
 不需要重新实现登录。metadata 声明不自动保护自行注册的路由，应沿用 createAccess/createPluginHttp。需要共享匿名演示时，显式将 plugin.json 的 accessMode 改成 standalone 并受控部署；它返回共享本地身份，不是个人身份。
 
-再次开发按“改代码→pack 新目录→整体替换 incoming 对应目录→build→普通用户请求”验证。更改业务配置导致加载失败时按 build 的 recover 指引处理；需要换修复包不属于同包配置快捷恢复。
+再次开发按“改代码→pack 新目录→整体替换 incoming 对应目录→build→普通用户请求”验证。更改业务配置导致加载失败时按 build 错误提示修改原文件后重跑普通 build；需要换修复包要整体替换 incoming 对应目录。

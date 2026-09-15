@@ -517,7 +517,7 @@ export function visibleError(error: unknown, limit: number): string {
 /**
  * 派单 message 的管家本地保守上限（字符）。
  *
- * 依据：参考博客成员入口的实际接收检查（`plugins/dsh-agents-group/agents/blog/src/participant.ts`：
+ * 依据：参考博客成员入口的实际接收检查（`plugins/external/dsh-agents-group/agents/blog/src/participant.ts`：
  * `request.message.length <= 8000`）。**不是**成员能力协商机制，也不代表其它成员或模型的容量；
  * 其它成员若有更低限制，仍以其入口的实际检查为准。超限一律不派单，不截断后继续。
  */

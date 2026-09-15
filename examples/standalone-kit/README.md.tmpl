@@ -18,7 +18,7 @@ pnpm add --ignore-workspace --save-dev ./vendor/plugin-kit.tgz
 
 <!-- include:author-pack -->
 
-将本次完整目录放入部署包 incoming/independent-access-example，再将部署包 optional/auth 复制到 incoming/auth；已经存在其他含 auth 的清单时不重复复制。运行 build 后使用实际站点地址：
+将本次完整目录放入部署包 incoming/independent-access-example；auth 用构建产出的内置插件（不要另复制 optional/auth）。运行 build 后使用实际站点地址：
 
 <!-- include:first-login -->
 
@@ -33,4 +33,4 @@ pnpm add --ignore-workspace --save-dev ./vendor/plugin-kit.tgz
 
 不需要重新实现登录。metadata 声明不自动保护自行注册的路由，应沿用 createAccess/createPluginHttp。需要共享匿名演示时，显式将 plugin.json 的 accessMode 改成 standalone 并受控部署；它返回共享本地身份，不是个人身份。
 
-再次开发按“改代码→pack 新目录→整体替换 incoming 对应目录→build→普通用户请求”验证。更改业务配置导致加载失败时按 build 的 recover 指引处理；需要换修复包不属于同包配置快捷恢复。
+再次开发按“改代码→pack 新目录→整体替换 incoming 对应目录→build→普通用户请求”验证。更改业务配置导致加载失败时按 build 错误提示修改原文件后重跑普通 build；需要换修复包要整体替换 incoming 对应目录。

@@ -13,7 +13,7 @@ DSH 生态里的智能体群组。多个业务智能体合在一个插件项目�
 ## 目录结构
 
 ```
-plugins/dsh-agents-group/
+plugins/external/dsh-agents-group/
 ├── package.json             # 群组的 DSH 声明（包 id = agents-group）
 ├── cordis.patch.yml         # Bundle 默认配置
 ├── dev/dev-hmr.patch.yml    # 开发期热重载（群组级统一开发根）
@@ -141,8 +141,8 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
      两边靠**字段名**对齐、不互相导入源码，所以改任一侧的字段都要同时改桥接与
      `tests/butler-progress-contract.test.ts`。
 5. 在 `src/index.ts` 的 `loadAgent()` 里加一个 `case`。
-6. 跑 `pnpm install`（写入 workspace 锁）、`pnpm check --plugins "agents-group"`、`pnpm test`。
-7. **打包一次并检查归档**（`pnpm package --plugins "agents-group"`）：子包在运行时读取的文件
+6. 跑 `pnpm install`（写入 workspace 锁）、`pnpm check --external --plugins "agents-group"`、`pnpm test`。
+7. **打包一次并检查归档**（`pnpm package --external --plugins "agents-group"`）：子包在运行时读取的文件
    （人格文件、`runtime/`、`web/`）必须都在归档里。这一步不能省 —— 「不入库」与「不随包发布」
    是两件事，而漏文件的后果是装载期直接抛错、站点起不来。
 
@@ -185,8 +185,8 @@ Agent 挂了」升级成「全部不可用」，运维上更难判断。一个�
 
 ```sh
 pnpm install                              # 首次或新增子包后，写入 workspace 锁
-pnpm list:plugins                         # 应看到 agents-group 一行
-pnpm check --plugins "agents-group"
+pnpm list:plugins --external                # 应看到 agents-group 一行
+pnpm check --external --plugins "agents-group"
 pnpm test --filter dsh-agents-group
 ```
 

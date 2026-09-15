@@ -175,7 +175,7 @@ export function migrateData(options) {
   const entries = inventory(paths.source, paths.kind);
   const capacity = checkCapacity(paths, entries);
   const summary = { kind: paths.kind, source: paths.source, target: paths.target, backup: paths.backup, ...capacity, files: entries.filter(entry => entry.kind === 'file').length, links: entries.filter(entry => entry.kind === 'link').length,
-    ...(paths.kind === 'artifacts' ? { recovery: 'Original records and paths are retained. Copying does not relocate resume/recover operations.' } : {}) };
+    ...(paths.kind === 'artifacts' ? { recovery: 'Original records and paths are retained. Copying does not relocate an interrupted operation.' } : {}) };
   if (!options.apply) return { status: 'dry-run', ...summary };
   const operationId = randomUUID();
   mkdirSync(paths.backup, { recursive: true, mode: 0o700 });

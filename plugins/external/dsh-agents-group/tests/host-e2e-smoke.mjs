@@ -15,7 +15,7 @@
  * 运行前提：宿主 CLI 已构建（`deepseek-harness/apps/cli/lib/bin.js`），且已打包：
  *   pnpm package --plugins "agents-group,butler"
  * 用法：
- *   node plugins/dsh-agents-group/tests/host-e2e-smoke.mjs [发布目录]
+ *   node plugins/external/dsh-agents-group/tests/host-e2e-smoke.mjs [发布目录]
  */
 
 import assert from 'node:assert/strict'

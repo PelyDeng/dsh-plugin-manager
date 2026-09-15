@@ -56,26 +56,27 @@ git add tools/builtin-build
 pnpm install --frozen-lockfile
 node scripts/version.mjs check
 node scripts/check-repository.mjs
-pnpm check --plugins "auth,example"
-pnpm check --external --plugins "closedoff,blog"
+pnpm check --plugins "auth,example"                     # 内置：auth、example
+pnpm check --external --plugins "agents-group,butler"   # 外部：群组（含 blog/closedoff/verify-doll）与管家
 pnpm --filter dsh-auth test
 pnpm --filter dsh-example test
-pnpm --filter dsh-blog-assistant test
+pnpm --filter dsh-agents-group test
+pnpm --filter dsh-butler-console test
 node --test private-deploy/tests/sync-origin.test.mjs
 node --test private-deploy/tests/deliver-public-inputs.test.mjs
 pnpm package --plugins "auth,example"
-pnpm package --external --plugins "closedoff,blog"
+pnpm package --external --plugins "agents-group,butler"
 ```
 
-发现范围分成两段：不写 `--external` 时只处理 `plugins/builtin`（省略 `--plugins` 表示全部内置），`--external` 是对 `plugins/external` 私有源码的显式调用、必须点名 ID/all/none。两者不能在同一条命令里混选。
+发现范围分成两段：不写 `--external` 时只处理 `plugins/builtin`（省略 `--plugins` 表示全部内置）；`--external` 是对 `plugins/external` 私有源码的显式调用、必须点名 ID/all/none。两者不能在同一条命令里混选，所有针对外部插件（`agents-group`、`butler`、`niuma-boss`）的命令都要带 `--external`。
 
-上述选集覆盖现有四个应用，打包后核对输出路径及完整 manifest。省略 `--output` 会创建独立产物目录，不覆盖旧包；按需指定时必须使用不存在或空目录。`check` 已包含构建，closedoff 的 `check` 还包含其行为测试，不重复执行。博客桥接相关修改另按其 [README](plugins/external/dsh-agents-group/agents/blog/README.md#开发检查) 验证；框架部署不自动替换 Typecho 桥接文件。
+上述选集覆盖生产部署的四个应用（内置 auth、example 加外部 agents-group、butler；`niuma-boss` 未部署）。打包后核对输出路径及完整 manifest。省略 `--output` 会创建独立产物目录，不覆盖旧包；按需指定时必须使用不存在或空目录。`check` 已包含构建与各包自带的行为检查（群组的 `check` 覆盖其子包），不重复执行。博客桥接相关修改另按其 [README](plugins/external/dsh-agents-group/agents/blog/README.md#开发检查) 验证；框架部署不自动替换 Typecho 桥接文件。
 
 检查、归档及相关业务验收完成后，只暂存任务文件，运行 `git diff --cached --check` 并提交集成修改。推送前刷新 origin，核实当前提交包含最新 origin/main，再执行 `git push origin HEAD:main` 并核对远端 SHA；不使用强制推送。部署者随后运行根 build 获取这个集成版本，不能把合并冲突转移到服务器。
 
-封闭化智能体已并入[智能体群组](plugins/external/dsh-agents-group/README.md)，源码在 `plugins/dsh-agents-group/agents/closedoff/`，其 `vendor/` 包含构建播放器所需的版本化归档。该目录不受根 Apache-2.0 许可授权，适用群组的 [LICENSE](plugins/external/dsh-agents-group/LICENSE)。第三方资源保持各自许可。不得将该目录或包含它的提交推送公共仓库。
+封闭化智能体已并入[智能体群组](plugins/external/dsh-agents-group/README.md)，源码在 `plugins/external/dsh-agents-group/agents/closedoff/`，其 `vendor/` 包含构建播放器所需的版本化归档。该目录不受根 Apache-2.0 许可授权，适用群组的 [LICENSE](plugins/external/dsh-agents-group/LICENSE)。第三方资源保持各自许可。不得将该目录或包含它的提交推送公共仓库。
 
-博客智能体已并入[智能体群组](plugins/external/dsh-agents-group/README.md)，源码在 `plugins/dsh-agents-group/agents/blog/`，适用群组的 [LICENSE](plugins/external/dsh-agents-group/LICENSE)，只在 Gitee 集成。它通过 auth 使用博客工作台，通过 Typecho 桥接编辑文章，并使用独立 systemd 执行器备份网站。运行凭据源为插件自己的 `config/config.json`；文件不提交、不进入镜像和归档，生产以 `instances.blog.runtimeConfig` 显式引用。安装与使用见[插件说明](plugins/external/dsh-agents-group/agents/blog/README.md)。
+博客智能体已并入[智能体群组](plugins/external/dsh-agents-group/README.md)，源码在 `plugins/external/dsh-agents-group/agents/blog/`，适用群组的 [LICENSE](plugins/external/dsh-agents-group/LICENSE)，只在 Gitee 集成。它通过 auth 使用博客工作台，通过 Typecho 桥接编辑文章，并使用独立 systemd 执行器备份网站。运行凭据源为插件自己的 `config/config.json`；文件不提交、不进入镜像和归档，生产以 `instances.blog.runtimeConfig` 显式引用。安装与使用见[插件说明](plugins/external/dsh-agents-group/agents/blog/README.md)。
 
 公共 example 的问答知识与源码索引只承载公共框架能力，不加入本文件、`private-deploy/`、定制插件源码、内部接口或运行凭据。私有模型路由和业务接入说明保留在本仓库及各私有插件文档中，不能为补齐公共问答而复制到 GitHub。
 
@@ -83,7 +84,7 @@ pnpm package --external --plugins "closedoff,blog"
 
 宿主子模块锁定 DSH `0.1.6-alpha.1`（提交 `0a15e36e7f82b6ed45af6fa9759f29b40dcd965d`），以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。业务插件（`plugins/external/*`）本轮保留各自的 `0.1.5-alpha.2` 声明与原有发布目录，随它们自己的升级再对齐宿主版本。
 
-私有根更新入口不更新宿主子模块，也不替换 `DSH_HOST_IMAGE`。宿主升级时显式运行 `git submodule update --init deepseek-harness`，或准备与 gitlink 对应的干净检出并构建新镜像，再更新私有镜像引用。Session V3 的迁移、刷新历史与数据回退约束见[宿主兼容说明](doc/host-compatibility.md)。仅发布现有业务应用时保留 `auth,example,blog,closedoff` 选集，不加入尚未交付的插件。
+私有根更新入口不更新宿主子模块，也不替换 `DSH_HOST_IMAGE`。宿主升级时显式运行 `git submodule update --init deepseek-harness`，或准备与 gitlink 对应的干净检出并构建新镜像，再更新私有镜像引用；服务器直连 GitHub 失败时，可在本地用 `git bundle` 打包宿主历史再传输。Session V3 的迁移、刷新历史与数据回退约束见[宿主兼容说明](doc/host-compatibility.md)。生产选集为 `auth,example,agents-group,butler`（blog 与 closedoff 是 agents-group 的成员，不单独占选集条目），不加入尚未交付的 `niuma-boss`。
 
 ## 默认模型与私有插件
 

@@ -32,7 +32,7 @@ export const documentationFragments = {
   'author-page-test': 'doc/plugin-development.md.tmpl',
   'deployment-start': 'doc/first-deployment.md.tmpl',
   'deployment-update': 'doc/first-deployment.md.tmpl',
-  'site-recovery': 'deploy/README.md',
+  'install-retry': 'deploy/README.md',
   'source-rebuild': 'deploy/README.md',
   'model-credentials': 'doc/framework-configuration.md',
   'platform-defaults': 'doc/framework-configuration.md',

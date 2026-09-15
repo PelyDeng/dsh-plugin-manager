@@ -1,0 +1,156 @@
+/**
+ * JSON 列的纯解析函数：从原 `store.ts` 原样提取，SQLite 与 PostgreSQL 两条存储实现共用，
+ * 行为逐字保持（ damaged/unknown 分类语义不因换库改变）。
+ *
+ * 原则：输入是落库的 TEXT，输出是「能信的记录」或明确的分类结论，**不静默补造**——
+ * 损坏不降级为空值（那会把「有材料但读不出来」伪装成「没有材料」），合法值也不被重算。
+ */
+
+import type { AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
+import { SUBTASK_STATES, type SubtaskState } from '../task-model.ts'
+import type { ButlerDependsOnKind, ButlerInputRef, ButlerInputRefsKind, ButlerMemberReturn } from './types.ts'
+
+/**
+ * 校验外部待办声明。
+ *
+ * `undefined` 表示「没有声明」；对象但字段类型不对返回 `null`（非法）。不做修补：`null`、
+ * 非字符串的 `reason`、非字符串的 `next` 都不能变成一份看起来合法的待办交给下游。
+ */
+function parsePending(value: unknown): { reason: string; next?: string } | null | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const candidate = value as { reason?: unknown; next?: unknown }
+  if (typeof candidate.reason !== 'string') return null
+  if (candidate.next !== undefined && typeof candidate.next !== 'string') return null
+  return candidate.next === undefined ? { reason: candidate.reason } : { reason: candidate.reason, next: candidate.next }
+}
+
+/**
+ * 校验位置型材料列表：必须是数组，且每一项都有字符串的标题、路径与种类。
+ *
+ * 非法返回 `null`。**不静默补成空数组** —— 那会把「有材料但读不出来」伪装成「没有材料」。
+ */
+function parseArtifactList(value: unknown): readonly AgentArtifact[] | null {
+  if (!Array.isArray(value)) return null
+  const items: AgentArtifact[] = []
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null) return null
+    const candidate = item as Partial<AgentArtifact>
+    if (typeof candidate.title !== 'string' || typeof candidate.path !== 'string' || typeof candidate.kind !== 'string') return null
+    items.push({ title: candidate.title, path: candidate.path, kind: candidate.kind })
+  }
+  return items
+}
+
+/**
+ * 解析派单材料快照，并说清结论是「还没固定」「已固定」「旧已派出未知」还是「损坏」。
+ *
+ * 空串本身分不出来源：从没派过是「还没固定」，派出过却留空是旧记录的未知。所以调用方要把
+ * 「这条记录确实没派出去过」这个事实传进来（`neverDispatched`）。
+ *
+ * 解析失败、形状或版本非法一律算**损坏**：既不降级为空数组（那会被当成「已核验无需材料」
+ * 而放行派单），也不允许重算一份盖上去（那和这条记录已经发出去过的东西对不上）。逐层核验到
+ * 嵌套字段（状态取值、每条材料的位置列表、外部待办）。
+ */
+export function parseInputRefs(
+  raw: string,
+  neverDispatched: boolean,
+): { readonly kind: ButlerInputRefsKind; readonly inputRefs?: readonly ButlerInputRef[] } {
+  if (raw === '') return { kind: neverDispatched ? 'unfixed' : 'unknown' }
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return { kind: 'damaged' }
+    const items: ButlerInputRef[] = []
+    for (const item of parsed) {
+      if (typeof item !== 'object' || item === null) return { kind: 'damaged' }
+      const candidate = item as Partial<ButlerInputRef>
+      if (typeof candidate.subtaskId !== 'string' || typeof candidate.logicalId !== 'string'
+        || typeof candidate.state !== 'string' || typeof candidate.text !== 'string') return { kind: 'damaged' }
+      if (!SUBTASK_STATES.includes(candidate.state as SubtaskState)) return { kind: 'damaged' }
+      const artifacts = parseArtifactList(candidate.artifacts)
+      if (artifacts === null) return { kind: 'damaged' }
+      const pending = parsePending(candidate.externalPending)
+      if (pending === null) return { kind: 'damaged' }
+      items.push({
+        subtaskId: candidate.subtaskId,
+        logicalId: candidate.logicalId,
+        state: candidate.state as SubtaskState,
+        text: candidate.text,
+        artifacts,
+        ...(pending === undefined ? {} : { externalPending: pending }),
+      })
+    }
+    return { kind: 'fixed', inputRefs: items }
+  } catch {
+    return { kind: 'damaged' }
+  }
+}
+
+/** 解析协作返回留存；空串或非法形状按未知处理（`undefined`），不降级为「无材料」。 */
+export function parseMemberReturn(raw: string): ButlerMemberReturn | undefined {
+  if (raw === '') return undefined
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed !== 'object' || parsed === null) return undefined
+    const candidate = parsed as Partial<ButlerMemberReturn>
+    if (candidate.protocol !== 1 || typeof candidate.text !== 'string') return undefined
+    const pending = parsePending(candidate.externalPending)
+    if (pending === null) return undefined
+    return {
+      protocol: 1,
+      text: candidate.text,
+      ...(pending === undefined ? {} : { externalPending: pending }),
+    }
+  } catch {
+    return undefined
+  }
+}
+
+export function parseArtifacts(raw: string): readonly AgentArtifact[] {
+  if (raw === '') return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((item): item is AgentArtifact => {
+      if (typeof item !== 'object' || item === null) return false
+      const candidate = item as Partial<AgentArtifact>
+      return typeof candidate.title === 'string' && typeof candidate.path === 'string' && typeof candidate.kind === 'string'
+    })
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 解析落库的前置目标标识。
+ *
+ * 与材料引用同理：一条脏记录不该让整个任务详情读不出来，解析失败按「没有前置」处理。
+ */
+export function parseDependsOn(raw: string): readonly string[] {
+  if (raw === '') return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 严格解析落库的前置目标标识，并给出分类结论（依赖重判方案 §3 条目 4：损坏即拒）。
+ *
+ * 与 {@link parseDependsOn} 的「脏数据静默降级为无前置」不同：解析失败、不是数组、或混入
+ * 非字符串项一律归为 `damaged`。`damaged` 时 `items` 为空数组，编排层读到该分类必须拒派
+ * （拒派语义由编排层消费，存储层只暴露分类）；原值保持原样留存，不做修补。
+ */
+export function parseDependsOnStrict(raw: string): { readonly kind: ButlerDependsOnKind; readonly items: readonly string[] } {
+  if (raw === '') return { kind: 'valid', items: [] }
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return { kind: 'damaged', items: [] }
+    if (!parsed.every((item): item is string => typeof item === 'string')) return { kind: 'damaged', items: [] }
+    return { kind: 'valid', items: parsed }
+  } catch {
+    return { kind: 'damaged', items: [] }
+  }
+}
