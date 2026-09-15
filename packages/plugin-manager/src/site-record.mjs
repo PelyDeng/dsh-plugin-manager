@@ -4,7 +4,6 @@ import { existsSync, readFileSync, realpathSync, lstatSync, readdirSync } from '
 import { dirname, resolve, relative, isAbsolute, sep } from 'node:path';
 
 export const siteStatuses = ['building', 'build-failed', 'ready', 'prepared', 'backing-up', 'applying', 'deployment-failed'];
-export const needsSiteResume = status => ['prepared', 'backing-up', 'applying', 'deployment-failed'].includes(status);
 export const fileHash = path => createHash('sha256').update(readFileSync(path)).digest('hex');
 export const readSiteJson = path => JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, ''));
 export const sitePointer = root => resolve(root, '.local/source-release.json');
@@ -22,23 +21,28 @@ function operationWithin(root, operation) {
   if (!lstatSync(operation).isDirectory() || lstatSync(operation).isSymbolicLink()) throw new Error('Saved operation must be a real directory.');
 }
 
+// 已移除的旗标：明确说出替代入口，不静默接受，也不混进「未知参数」里让人以为写错了拼写。
+export const removedArguments = {
+  'skip-plugin-check': '构建不再有「顺便做检查」这个开关。类型检查用 check 命令，归档与源码一致性用 verify-package，交付目录合规用 verify-release。',
+  'verify-plugin-check': '构建不再有「顺便做检查」这个开关。类型检查用 check 命令，归档与源码一致性用 verify-package，交付目录合规用 verify-release。',
+  'resume': '恢复分支已移除：普通 build 从当前现场重新收敛，不读取旧操作继续。现场诊断用 check-records 与 doctor。',
+  'recover': '恢复分支已移除：同包业务配置直接修改后运行普通 build；换包、宿主或工具由维护者显式核查。',
+  'data-compatible': '该参数只属于已移除的 recover，不再接受。',
+  'rebuild': '环境变化由普通 build 自动按目标环境重装，不再需要确认开关。',
+  'container': '容器入口使用 container-start 动作；布尔参数 --container 已移除。',
+  'rebuild-plugins': '按需重建与旧成功记录复用已移除：内置插件固定全量构建，外部产物来自 incoming，普通 build 每次从当前现场收敛。',
+};
+
 export function siteArguments(args) {
   const options = {}, copy = [...args];
   while (copy.length) {
     const flag = copy.shift(), key = flag?.slice(2);
+    if (removedArguments[key]) throw new Error(`${flag} 已移除：${removedArguments[key]}`);
     if (!flag?.startsWith('--') || Object.hasOwn(options, key)) throw new Error(`Unknown or duplicate argument: ${flag}. Use --help.`);
-    if (['resume', 'recover', 'data-compatible', 'skip-plugin-check', 'verify-plugin-check', 'help'].includes(key)) options[key] = true;
-    else if (['root', 'config', 'rebuild-plugins'].includes(key) && copy[0] && !copy[0].startsWith('--')) options[key] = copy.shift();
+    if (['help'].includes(key)) options[key] = true;
+    else if (['root', 'config'].includes(key) && copy[0] && !copy[0].startsWith('--')) options[key] = copy.shift();
     else throw new Error(`Unknown or missing argument: ${flag}. Use --help.`);
   }
-  if (options['rebuild-plugins']) {
-    const ids = options['rebuild-plugins'].split(',');
-    // `auto` 是哨兵值：重建集由判定自己算，因此必须单独出现。
-    const auto = ids.length === 1 && ids[0] === 'auto';
-    if (!auto && (ids.some(id => !/^[a-z][a-z0-9-]*$/.test(id) || ['all', 'none', 'auto', 'dsh-console'].includes(id)) || new Set(ids).size !== ids.length)) throw new Error('Invalid --rebuild-plugins argument: use distinct plugin IDs separated by commas, or auto.');
-  }
-  if ([options.resume, options.recover, options['rebuild-plugins']].filter(Boolean).length > 1) throw new Error('--resume、--recover 与 --rebuild-plugins 不能同时使用。');
-  if (Boolean(options.recover) !== Boolean(options['data-compatible'])) throw new Error('--recover 必须与 --data-compatible 一起使用。');
   return options;
 }
 

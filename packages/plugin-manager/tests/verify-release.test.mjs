@@ -1,12 +1,12 @@
 /** 发布目录校验必须独立可跑：合规放行、被篡改的产物必须报错且退出码非 0。 */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { findManifest, formatReport, verifyRelease } from '../src/verify-release.mjs';
+import { formatReport, verifyRelease } from '../src/verify-release.mjs';
 
 const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const repository = fileURLToPath(new URL('../../..', import.meta.url));
@@ -47,12 +47,30 @@ test('清单缺失时按路径报错，不抛未处理异常', t => {
   assert.ok(result.error.length > 0);
 });
 
-test('manifest 在子目录时仍能定位，且跳过 node_modules', t => {
-  const root = mkdtempSync(join(tmpdir(), 'dsh-find-manifest-'));
-  t.after(() => { assert.equal(dirname(root), resolve(tmpdir())); rmSync(root, { recursive: true, force: true }); });
-  mkdirSync(join(root, 'node_modules/pkg'), { recursive: true });
-  writeFileSync(join(root, 'node_modules/pkg/manifest.json'), '{}');
-  mkdirSync(join(root, 'app'), { recursive: true });
-  writeFileSync(join(root, 'app/manifest.json'), '{}');
-  assert.equal(findManifest(root), join(root, 'app/manifest.json'));
+test('--release 必须精确指向含根 manifest.json 的目录，不递归猜测', t => {
+  const f = pack(t);
+  // f.root 本身没有 manifest.json（它在 f.output），即使子目录里有也不能递归去找。
+  const result = spawnSync(process.execPath, [cli, 'verify-release', '--release', f.root], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /manifest\.json/);
+});
+
+test('多目录一次报告，任一不合规即整体非零退出码', t => {
+  const f = pack(t);
+  const bad = join(f.root, 'bad'); cpSync(f.output, bad, { recursive: true });
+  const archive = readdirSync(bad).find(name => name.endsWith('.tgz'));
+  appendFileSync(join(bad, archive), 'tampered');
+  const result = spawnSync(process.execPath, [cli, 'verify-release', '--release', f.output, '--release', bad], { encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /1 个不合规/);
+});
+
+test('CLI 全部合规时退出码为 0，未知参数明确报错', t => {
+  const f = pack(t);
+  const pass = spawnSync(process.execPath, [cli, 'verify-release', '--release', f.output], { encoding: 'utf8' });
+  assert.equal(pass.status, 0, pass.stdout + pass.stderr);
+  assert.match(pass.stdout, /全部合规/);
+  const unknown = spawnSync(process.execPath, [cli, 'verify-release', '--release', f.output, '--typo'], { encoding: 'utf8' });
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /未知参数/);
 });

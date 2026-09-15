@@ -1,13 +1,13 @@
 <!-- Generated from deploy/DEPLOYMENT.md.tmpl by scripts/version.mjs; edit the template. -->
 
-# DSH Plugin Manager 0.17.0 部署包
+# DSH Plugin Manager 0.18.0 部署包
 
 本目录是可独立使用的框架部署包，不需要作者源码或框架 Git 检出。先准备 Node，再按下列步骤部署标准插件产物。运行依赖和固定宿主镜像仍可能需要网络，离线阅读不等于离线安装。
 
 ## 放入产物并启动
 
 <!-- Excerpt from doc/first-deployment.md.tmpl#deployment-start; edit its source. -->
-从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.17.0.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
+从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.18.0.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
 
 每个作者交付的是一个完整目录，包含 manifest.json 和它引用的全部 tgz。将它放在部署根的 incoming 直接子目录中：
 
@@ -39,7 +39,7 @@ Windows 使用 build.ps1，Linux/macOS 使用 build.sh。已有配置不覆盖�
 
 source 默认 auth/example；archives 默认发现完整 incoming；独立 CLI 使用显式清单，三者不能混用默认选集。新 archives 可编辑插件配置位于 .local/config/plugins/<id>，通过已有 instances 引用；旧记录及显式 settingsFile/runtimeConfig 原样沿用，不自动迁移 home/plugins。
 
-Docker 只接受本机 Linux 引擎 unix/npipe endpoint。Docker Desktop 使用桥接与 TCP 转发，原生 Linux 使用 host 网络；同 Docker 网络是信任边界，不能据此承诺公网隔离。macOS 尚未完成真实 Docker 部署验收，架构与平台以具体发行验收范围为准。恢复时核对同一引擎，不能切换 endpoint 后沿用原记录。
+Docker 只接受本机 Linux 引擎 unix/npipe endpoint。Docker Desktop 使用桥接与 TCP 转发，原生 Linux 使用 host 网络；同 Docker 网络是信任边界，不能据此承诺公网隔离。macOS 尚未完成真实 Docker 部署验收，架构与平台以具体发行验收范围为准。本次所有命令固定到同一 endpoint，不要求历史引擎 ID 与本次一致。
 
 站点地址和选集编辑 `.local/env.conf`；全新 archives 插件参数编辑 `.local/config/plugins/<id>/plugin.json` 或所声明的运行文件，以错误提示的实际路径为准。域名部署同时填写 `DSH_PUBLIC_URL`、`DSH_PUBLIC_ORIGIN`、`DSH_TRUSTED_HOSTS`；不自动配置代理。生成的 deployment.json、清单和快照不手改。
 
@@ -92,30 +92,25 @@ bash build.sh
 
 每个命令失败后先修复，不继续执行后续步骤；不要删除原目录或数据来重试。build 在停服前显示新增、更新、保留和停用。移走仍启用的插件产物会拒绝，不等于卸载。停用配置型插件先设 enabled=false 并成功部署，再移走其产物；其他插件用 DSH_PLUGINS 显式列出保留集合。留空选集为全部发现项，[] 才是明确空集合。
 
-框架升级在同一站点 root 替换公开脚本、tools、framework-runtime.json、optional 资源和公开模板；incoming/.local 原样保留。optional/auth 更新不会自动替换 incoming 中正在部署的 auth。未完成操作沿用保存的原工具、镜像和输入，先按恢复流程处理。
+框架升级在同一站点 root 替换公开脚本、tools、framework-runtime.json、optional 资源和公开模板；incoming/.local 原样保留。optional/auth 更新不会自动替换 incoming 中正在部署的 auth。内置插件固定全量构建，外部产物来自 incoming；普通 build 每次从当前现场重新收敛。
 
 ## 失败后的操作
 
 <!-- Excerpt from deploy/README.md#site-recovery; edit its source. -->
 归档、公共配置结构或认证提供者缺失在停服前报告。插件业务 Schema 可能在加载时才检查；健康通过仍需实际业务请求。保留 .local/data、.local/artifacts、incoming 和用户备份，不通过删除状态重新初始化。
 
-| 情况 | 在站点根执行 |
+| 情况 | 操作 |
 | --- | --- |
-| 尚未 prepared 的准备失败 | 修复错误后 `bash build.sh` |
-| prepared 后临时网络、权限或挂载失败 | 原输入不变，`bash build.sh --resume` |
-| 同一插件包的业务配置错误 | 编辑指出的原文件，`bash build.sh --recover --data-compatible` |
+| 准备阶段失败（旧服务未动） | 修正输入后 `bash build.sh` |
+| 停旧失败 | 由原管理者处理仍活跃的服务，再 `bash build.sh` |
+| 包增删或安装验证失败 | 修正包/权限/网络后 `bash build.sh`，从当前现场重新求差 |
+| 启动或就绪探针失败 | 停止本次候选并确认退出，修正后 `bash build.sh` |
 | 遗留站点发布锁 | `bash build.sh doctor` 查看归属，确认进程退出后 `bash build.sh unlock-source` |
 
-Windows 用 `.\build.ps1` 替代 bash build.sh。--resume、--recover、--rebuild-plugins 互斥；--data-compatible 只能随 recover。doctor 只读诊断锁和记录，不要求 Docker/kit，也不是完整的安装环境扫描。`dsh-plugin-manager check-records --root <站点根> --config <env.conf|deployment.json>` 只读核对发布记录、活动 Compose、镜像与容器，判定漂移类别并给出对账计划；它不写状态、不动容器，收敛仍须显式执行。
+Windows 用 `.\build.ps1` 替代 bash build.sh。doctor 只读诊断锁和记录，不要求 Docker/kit，也不是完整的安装环境扫描。`dsh-plugin-manager check-records --root <站点根> --config <env.conf|deployment.json>` 只读对比上一次发布记录、活动 Compose、镜像、容器与 profile 证据，报告现场差异与需要人工核实的项；它不写状态、不动容器，旧记录只作诊断、不阻断普通 build，收敛仍须显式执行。
 
-resume 使用保存的工具、镜像、归档和配置副本；原受管配置被修改时拒绝。prepared 前不为新站点创建 data/home，之后即使挂载预检尚未停服就失败，也通过 resume 沿用已记录归属。
-
-recover 只修正新 schema 3 失败操作的 plugin.json.config 或 runtimeConfig，保留包摘要、选集、认证控制字段、镜像、工具和站点路径。--data-compatible 是部署者确认当前包可继续读取现有数据，不是自动备份或兼容证明。新候选保留前序失败快照；再次临时失败用 resume，继续改业务配置则再显式 recover。
-
-恢复会核对安装状态和 pending 是否确属前序站点候选；仅包名和摘要相同不足以接管另一操作。尚未写出 pending 时也须与保存的前序状态证据一致，不能手工替换状态或把其他站点的记录移入当前目录。
-
-需要换修复包、宿主或工具不属于这一高层快捷恢复；保留现场并由维护者核查底层高级修复与数据兼容流程，不自行删锁、改记录或删数据。旧 schema 2 使用其原环境与兼容恢复证据，不能伪造新快照。恢复只继续部署，不回滚业务数据；发布归档和配置副本不能代替独立数据备份。
+受管授权集合（profile 状态 schema 3）承接部分失败：add 写一半失败后授权已持久保留，普通 build 重新求差并修复，不要求 pending 或同一包版本；remove 完成后才移除授权，遗留的精确受管 Bundle 会被清理，模板与非受管内容不变。换修复包、宿主或工具直接准备新的完整输入再 build；不自行删锁、改记录或删数据。恢复只收敛部署，不回滚业务数据；发布归档和配置副本不能代替独立数据备份。
 
 ## 进阶资料
 
-本 README 的操作正文来自框架固定公开维护源，由同一文档同步生成。进一步查阅该版本的[配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.17.0/doc/framework-configuration.md)、[运维说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.17.0/deploy/README.md)及[独立 CLI 指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.17.0/packages/plugin-manager/DELIVERY.md)。这些链接不保证比已安装版本更新；本目录 `framework-runtime.json` 记录实际配套运行镜像身份。
+本 README 的操作正文来自框架固定公开维护源，由同一文档同步生成。进一步查阅该版本的[配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.18.0/doc/framework-configuration.md)、[运维说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.18.0/deploy/README.md)及[独立 CLI 指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.18.0/packages/plugin-manager/DELIVERY.md)。这些链接不保证比已安装版本更新；本目录 `framework-runtime.json` 记录实际配套运行镜像身份。

@@ -50,7 +50,7 @@ export function readPlugin(root) {
   const meta = manifest.deepseekPlugin;
   const label = `${packageLabel}/package.json#deepseekPlugin`;
   requireValue(meta && meta.schemaVersion === 3, `${label}.schemaVersion 仅支持 3；旧 env 声明请迁移为 runtimeConfig，并从 files 移除用户配置。`);
-  object(meta, ['schemaVersion', 'id', 'defaultEnabled', 'runtimeConfig', 'configuration', 'healthPath', 'verifyFiles', 'development', 'displayName', 'entryPath', 'permissions', 'category', 'buildInputs'], label);
+  object(meta, ['schemaVersion', 'id', 'runtimeConfig', 'configuration', 'healthPath', 'verifyFiles', 'development', 'displayName', 'entryPath', 'permissions', 'category'], label);
   validateConfiguration(meta.configuration, label);
   requireValue(typeof meta.id === 'string' && /^[a-z][a-z0-9-]*$/u.test(meta.id) && !['all', 'none', 'dsh-console'].includes(meta.id), `${label}.id 无效或为保留字。`);
   requireValue(typeof manifest.name === 'string' && /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(manifest.name), `${packageLabel} 包名无效。`);
@@ -63,7 +63,6 @@ export function readPlugin(root) {
   pluginFile(root, 'README.md', packageLabel, { required: true });
   const main = pluginFile(root, manifest.main, `${packageLabel}.main`, { standard: true });
   const patch = pluginFile(root, manifest.dsh?.bundle?.patch, `${packageLabel}.dsh.bundle.patch`, { required: true, standard: true });
-  requireValue(meta.defaultEnabled === undefined || typeof meta.defaultEnabled === 'boolean', `${label}.defaultEnabled 必须是布尔值。`);
   let runtimeConfig;
   if (meta.runtimeConfig !== undefined) {
     object(meta.runtimeConfig, ['variable', 'template', 'required'], `${label}.runtimeConfig`);
@@ -97,33 +96,45 @@ export function readPlugin(root) {
   const verifyFiles = [...new Set(['package.json', 'README.md', main, patch, ...(runtimeConfig?.template ? [runtimeConfig.template] : []),
     ...(meta.verifyFiles ?? []).map(file => pluginFile(root, file, `${label}.verifyFiles`))])];
   requireValue(!verifyFiles.some(privatePackagePath), `${packageLabel} 的公开资源不得指向用户配置或部署数据。`);
-  // 构建输入的完整声明：按需复用时用它判断「这次改动要不要重建这个插件」。路径相对于仓库根，
-  // 指向插件目录之外（插件目录本身与声明的包依赖不需要列）。缺这个字段时，复用会退回保守判断。
-  // 只核验形状：这些路径只用来把「可能的变化」算进构建输入，多列只会多重建，不会少重建；
-  // 未跟踪的路径在 Git 树里查不到，因此也不构成漏判。
-  requireValue(meta.buildInputs === undefined || (Array.isArray(meta.buildInputs) && meta.buildInputs.length <= 200
-    && meta.buildInputs.every(input => typeof input === 'string' && /^[a-zA-Z0-9_.-][a-zA-Z0-9._/-]*$/u.test(input)
-      && !input.split('/').some(part => part === '' || part === '.' || part === '..'))),
-  `${label}.buildInputs 必须是仓库根目录下的相对路径列表；不需要列插件目录本身与已声明的包依赖。`);
-  requireValue(meta.buildInputs === undefined || new Set(meta.buildInputs).size === meta.buildInputs.length, `${label}.buildInputs 不得重复。`);
   return { id: meta.id, package: manifest.name, version: manifest.version,
     displayName: meta.displayName ?? manifest.name, description: manifest.description, entryPath: meta.entryPath, permissions,
-    category: meta.category?.trim(), defaultEnabled: meta.defaultEnabled ?? true, runtimeConfig, configuration: meta.configuration, development, healthPath: meta.healthPath, verifyFiles };
+    category: meta.category?.trim(), runtimeConfig, configuration: meta.configuration, development, healthPath: meta.healthPath, verifyFiles };
 }
 
-/** Return all declared plugins in stable id order; malformed declarations fail before work starts. */
-export function discoverPlugins(root) {
+/**
+ * Return all framework-owned plugins in stable id order; malformed declarations fail before work starts.
+ *
+ * `source` 决定发现范围：默认 `builtin` 只扫描 `plugins/builtin/` 的直接子目录——框架内置插件是
+ * 唯一由根 build 主动构建的来源；`external` 只在作者显式调用（`--external`）时扫描
+ * `plugins/external/`。站点既不扫描也不构建 external。旧布局（插件直接放在 `plugins/` 下）仍被
+ * 接受，便于作者仓库与既有检出继续工作；`plugins/builtin/` 存在时以它为准，不再回头看扁平目录。
+ */
+export function discoverPlugins(root, { source = 'builtin' } = {}) {
   if (!root) throw new Error('必须显式指定 --root 项目根目录。');
+  requireValue(['builtin', 'external'].includes(source), `未知插件来源：${source}。`);
   pluginFile(root, 'pnpm-lock.yaml', '工作目录统一锁文件', { required: true });
   const plugins = [];
   const container = resolve(root, 'plugins');
   if (!existsSync(container)) return plugins;
   requireValue(lstatSync(container).isDirectory() && !lstatSync(container).isSymbolicLink(), 'plugins 必须是仓库内的真实目录。');
   requireValue(!existsSync(resolve(container, 'package.json')), 'plugins 是容器目录，不得声明 package.json。');
-  for (const entry of readdirSync(container, { withFileTypes: true })) {
+  const builtin = resolve(container, 'builtin');
+  if (source === 'external') {
+    const external = resolve(container, 'external');
+    if (!existsSync(external)) return plugins;
+    return collectPlugins(external, 'plugins/external', plugins);
+  }
+  const directory = existsSync(builtin) ? builtin : container;
+  const prefix = existsSync(builtin) ? 'plugins/builtin' : 'plugins';
+  return collectPlugins(directory, prefix, plugins);
+}
+
+/** 扫描一个插件容器目录的直接子目录；来源前缀只影响记录的源码目录。 */
+function collectPlugins(directory, prefix, plugins) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
     requireValue(!entry.isSymbolicLink(), `插件目录不得为符号链接：${entry.name}。`);
     if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
-    const pluginRoot = resolve(container, entry.name);
+    const pluginRoot = resolve(directory, entry.name);
     const manifestPath = resolve(pluginRoot, 'package.json');
     if (!existsSync(manifestPath)) continue;
     pluginFile(pluginRoot, 'package.json', entry.name, { required: true });
@@ -134,12 +145,7 @@ export function discoverPlugins(root) {
       continue;
     }
     requireValue(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(entry.name), `插件目录名称无效：${entry.name}。`);
-    plugins.push({ ...readPlugin(pluginRoot), directory: `plugins/${entry.name}` });
-    // 声明指向仓库根，只有在这里才知道根目录，所以存在性在这一层核验：写错路径当场失败，
-    // 而不是等到复用判定时把一次真实变化当成无关变化。
-    for (const input of manifest.deepseekPlugin.buildInputs ?? []) {
-      requireValue(existsSync(resolve(root, input)), `${entry.name}/package.json#deepseekPlugin.buildInputs 指向不存在的路径：${input}。`);
-    }
+    plugins.push({ ...readPlugin(pluginRoot), directory: `${prefix}/${entry.name}` });
   }
   for (const field of ['id', 'package']) {
     const seen = new Set();
@@ -158,14 +164,13 @@ export function discoverPlugins(root) {
   return plugins.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 }
 
-/** Select the default set, all plugins, or a comma-separated list preserving explicit order. */
+/** Select all plugins, an empty set, or a comma-separated list preserving explicit order. */
 export function selectPlugins(plugins, requested) {
   let selected;
-  if (requested === undefined) selected = plugins.filter(plugin => plugin.defaultEnabled);
-  else if (requested === 'all') selected = [...plugins];
+  if (requested === 'all') selected = [...plugins];
   else if (requested === 'none') selected = [];
   else {
-    requireValue(typeof requested === 'string' && requested.length > 0, '插件选择不能为空。');
+    requireValue(typeof requested === 'string' && requested.length > 0, '必须显式给出插件选集：ID 列表、all 或 none。');
     const seen = new Set();
     selected = requested.split(',').map(id => {
       const plugin = plugins.find(candidate => candidate.id === id);
@@ -179,9 +184,9 @@ export function selectPlugins(plugins, requested) {
 }
 
 /** Select either an explicit single package or the existing workspace inventory. */
-export function sourcePlugins(root, requested, packageDirectory) {
+export function sourcePlugins(root, requested, packageDirectory, options) {
   if (!root) throw new Error('必须显式指定 --root 项目根目录。');
-  if (packageDirectory === undefined) return selectPlugins(discoverPlugins(root), requested);
+  if (packageDirectory === undefined) return selectPlugins(discoverPlugins(root, options), requested);
   requireValue(packageDirectory === '.' && requested === undefined, '--package 仅支持 .，且不能与 --plugins 同用。');
   return [readPlugin(root)];
 }
@@ -208,7 +213,7 @@ export function parseOptions(args, allowed = ['root', 'plugins', 'format'], bool
 
 /** Preserve the runtime record format without evaluating any metadata as shell source. */
 export function pluginRecord(plugin) {
-  return [plugin.id, plugin.defaultEnabled ? '1' : '0', plugin.directory, plugin.package,
+  return [plugin.id, plugin.directory, plugin.package,
     plugin.runtimeConfig?.variable ?? '-', plugin.runtimeConfig?.template ?? '-', plugin.healthPath ?? '-', plugin.verifyFiles.join(',')].join('|');
 }
 

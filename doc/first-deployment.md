@@ -2,12 +2,12 @@
 
 # 插件产物一键部署
 
-把作者交付的标准发布目录放进框架部署包，执行 build 即可部署。部署机器不需要作者源码、kit 或插件构建工具链，也不负责修复作者包；缺包或清单不完整时联系作者重新 pack。本文适用于框架 **0.17.0**；框架源码用户见[源码部署](../deploy/README.md#服务器源码发版)，只安装 manager 的用户见[手工 CLI 交付](../packages/plugin-manager/DELIVERY.md)。
+把作者交付的标准发布目录放进框架部署包，执行 build 即可部署。部署机器不需要作者源码、kit 或插件构建工具链，也不负责修复作者包；缺包或清单不完整时联系作者重新 pack。本文适用于框架 **0.18.0**；框架源码用户见[源码部署](../deploy/README.md#服务器源码发版)，只安装 manager 的用户见[手工 CLI 交付](../packages/plugin-manager/DELIVERY.md)。
 
 ## 首次部署
 
 <!-- excerpt:deployment-start -->
-从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.17.0.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
+从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.18.0.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
 
 每个作者交付的是一个完整目录，包含 manifest.json 和它引用的全部 tgz。将它放在部署根的 incoming 直接子目录中：
 
@@ -83,15 +83,16 @@ bash build.sh
 
 每个命令失败后先修复，不继续执行后续步骤；不要删除原目录或数据来重试。build 在停服前显示新增、更新、保留和停用。移走仍启用的插件产物会拒绝，不等于卸载。停用配置型插件先设 enabled=false 并成功部署，再移走其产物；其他插件用 DSH_PLUGINS 显式列出保留集合。留空选集为全部发现项，[] 才是明确空集合。
 
-框架升级在同一站点 root 替换公开脚本、tools、framework-runtime.json、optional 资源和公开模板；incoming/.local 原样保留。optional/auth 更新不会自动替换 incoming 中正在部署的 auth。未完成操作沿用保存的原工具、镜像和输入，先按恢复流程处理。
+框架升级在同一站点 root 替换公开脚本、tools、framework-runtime.json、optional 资源和公开模板；incoming/.local 原样保留。optional/auth 更新不会自动替换 incoming 中正在部署的 auth。内置插件固定全量构建，外部产物来自 incoming；普通 build 每次从当前现场重新收敛。
 <!-- /excerpt:deployment-update -->
 
 | 情况 | 下一步 |
 | --- | --- |
-| 归档/静态配置检查失败，尚未 prepared | 按错误修复后普通 build |
-| prepared 后临时网络、权限或挂载错误 | 保持原受管配置，`bash build.sh --resume` |
-| 需修改同一个插件包的业务配置 | 修改错误提示指出的原文件，`bash build.sh --recover --data-compatible` |
-| 需要替换错误插件包 | 不属于本次高层快捷恢复；保留现场，查运维指南 |
+| 准备阶段失败（旧服务未动） | 按错误修复后普通 build |
+| 停旧失败 | 由原管理者处理仍活跃的服务，再普通 build |
+| 包增删或安装验证失败 | 修正包/权限/网络后普通 build，从当前现场重新求差 |
+| 启动或就绪探针失败 | 停止本次候选并确认退出，修正后普通 build |
+| 需要替换错误插件包 | 准备新的完整发布目录替换 incoming 对应目录，再 build |
 | 遗留锁 | 先运行 build doctor，按归属证据解锁；不删状态 |
 
-Windows 将上述 `bash build.sh` 换为 `.\build.ps1`。`--data-compatible` 是部署者明确确认同包可使用现有数据，不是框架证明兼容或自动备份。完整恢复、旧记录与按需重建规则见[部署与管理](../deploy/README.md)。
+Windows 将上述 `bash build.sh` 换为 `.\build.ps1`。旧站点升级先执行 `dsh-plugin-manager migrate-site --root <站点根> --config <配置>` 预览，确认后加 `--apply --stopped-file <停写证据>`；迁移只补写能证明属于同一次未完成转换的现场，残留锁只有在能证明持有者已退出时才退役（本机 PID 已退出，或容器来源且引擎上没有重叠写入者），否则保留记录并要求人工移出 profile 目录。旧 profile 里指向旧归档挂载的 `file:` 引用会在写任何新元数据之前保全，旧活动记录不可读时用 `--archive-root <旧归档主机目录>` 指明原位置，物理搬迁用 `--rebind`。完整规则见[部署与管理](../deploy/README.md)。

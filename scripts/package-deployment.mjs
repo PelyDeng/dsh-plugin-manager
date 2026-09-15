@@ -8,6 +8,7 @@ import { composeReleases } from '../packages/plugin-manager/src/compose-release.
 import { loadRelease } from '../packages/plugin-manager/src/release.mjs';
 import { selectVerification } from '../packages/plugin-manager/src/verification.mjs';
 import { renderSiteTemplate } from '../packages/plugin-manager/src/framework-config.mjs';
+import { createPublicBuildView, publicInputFiles, writePublicInputRecord } from '../packages/plugin-manager/src/public-build-view.mjs';
 import { hash, readArchive } from '../packages/plugin-manager/src/state.mjs';
 import { installManagerArchive } from './manager-tooling.mjs';
 
@@ -107,6 +108,21 @@ export function assembleDeployment({ root, manager, kit, authManifest, images, o
   if (tooling.sha256 !== managerHash) throw new Error('Installed manager bytes differ from the verified release archive.');
   const metadata = { schemaVersion: 1, frameworkVersion: version, manager: { version, sha256: tooling.sha256 }, runtimes };
   write(join(deployment, 'framework-runtime.json'), `${JSON.stringify(metadata, null, 2)}\n`);
+  // 统一部署路径需要内置源码与公开构建输入：发行包必须自带，不能让站点在含 external 的现场生成。
+  // source/ 是只含公开目录的源码材料，它的清单/workspace/锁与 tools/builtin-build/ 都逐字节来自
+  // **本次公共框架根文件**（同一份输入），打包后立刻核对字节，避免交付走样。
+  const source = join(deployment, 'source');
+  createPublicBuildView({ root, output: source, inputs: root });
+  const builtinBuild = join(deployment, 'tools/builtin-build');
+  mkdirSync(builtinBuild, { recursive: true });
+  for (const name of publicInputFiles) copyPublic(join(root, name), join(builtinBuild, name));
+  for (const name of publicInputFiles) {
+    if (!readFileSync(join(builtinBuild, name)).equals(readFileSync(join(root, name)))) throw new Error(`公开构建输入交付后字节不一致：${name}`);
+    if (!readFileSync(join(source, name)).equals(readFileSync(join(root, name)))) throw new Error(`source/ 的公开构建输入与根文件不一致：${name}`);
+  }
+  // 交付记录随包产出：站点侧用的是独立交付目录，没有记录就直接拒绝构造构建视图。记录取自刚写下的
+  // 字节（发行目录没有提交身份，只记来源种类），时间戳一律不写，发行包保持可复现。
+  writePublicInputRecord(builtinBuild, { version, sourceKind: 'release', sourceCommit: null, sourceModified: null });
   write(join(deployment, 'build.sh'), shell); write(join(deployment, 'build.ps1'), powershell);
   write(join(deployment, 'env.conf.example'), renderSiteTemplate('archives'));
   write(join(deployment, '.gitignore'), '.local/\nincoming/*\n!incoming/README.md\n');

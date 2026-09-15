@@ -1,6 +1,6 @@
 # 贡献
 
-先按 [README](README.md) 准备本地开发环境，再按改动选择需要的构建和检查，不必每次运行全套。`pnpm check` 执行必要的编译、类型和语法检查，行为回归使用 `pnpm test`；CI 将两者分开运行。新增插件可复制 `plugins/dsh-example`，修改包名、插件 ID、Bundle、路由、权限及测试；通过 `plugins/*` 自动发现，不修改中央名单。独立作者参见[接入指南](doc/plugin-development.md)。
+先按 [README](README.md) 准备本地开发环境，再按改动选择需要的构建和检查，不必每次运行全套。`pnpm check` 执行必要的编译、类型和语法检查，行为回归使用 `pnpm test`；CI 将两者分开运行。新增插件可复制 `plugins/builtin/dsh-example`，修改包名、插件 ID、Bundle、路由、权限及测试；通过 `plugins/builtin/*` 自动发现，不修改中央名单。独立作者参见[接入指南](doc/plugin-development.md)。
 
 公共代码按包名引用。manager、kit、auth、example 使用根 `package.json` 的统一框架版本，定制插件独立版本管理；版本号在发版时统一确定，日常开发不自行修改。同步命令与文档模板规则见[版本管理](doc/versioning.md)。插件的运行与类型产物不得包含工作区绝对路径、`workspace:`、`file:` 或 `link:` 运行依赖。修改公共包时检查使用它的插件或项目，更新相应 README 模板并生成说明文档。
 

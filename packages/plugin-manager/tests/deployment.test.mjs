@@ -7,11 +7,12 @@ import { join, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
-import { resolveDeployment, parseArguments, loadRelease, runtimeEnvironment, computeChanges, synchronize, atomicJSON, finalize, acquireLock, renderCompose, checkDataSelection, verifyReady, adoptLegacy, tarCommand, supervise, prepareOfflineDependencies } from '../src/deployment.mjs';
+import { resolveDeployment, parseArguments, loadRelease, runtimeEnvironment, computeChanges, synchronize, atomicJSON, finalize, acquireLock, renderCompose, checkDataSelection, verifyReady, adoptLegacy, tarCommand, supervise, prepareOfflineDependencies, main } from '../src/deployment.mjs';
 import { installedMatches, readState } from '../src/installation.mjs';
 import { verificationSubjects } from '../src/verification.mjs';
 
 const read = path => JSON.parse(readFileSync(path, 'utf8'));
+const statePath = deployment => join(deployment.profileRoot, '.deepseek-plugin-state.json');
 
 function fixture(t) {
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-deployment-test-')));
@@ -19,7 +20,9 @@ function fixture(t) {
     assert.equal(dirname(root), realpathSync.native(tmpdir()));
     rmSync(root, { recursive: true, force: true });
   });
-  const deployment = resolveDeployment({ root, home: 'data/home', 'host-mode': 'owned' }, {});
+  // schema 3 需要站点身份：本次部署配置提供 siteId（容器内由 candidate 提供，宿主由绑定提供）。
+  const siteConfig = join(root, 'site.json'); writeFileSync(siteConfig, `${JSON.stringify({ siteId: 'site-fixture' }, null, 2)}\n`);
+  const deployment = resolveDeployment({ root, config: siteConfig, home: 'data/home', 'host-mode': 'owned' }, {});
   const stoppedFile = join(root, 'stopped.json');
   // Simulate a stopped manager: a real exited child's PID can be reused by tar/Node.
   const stoppedPid = 2147483647;
@@ -80,11 +83,12 @@ function fixture(t) {
   return { root, deployment, release, execute, calls, cli: { command: 'fixture' } };
 }
 
-test('adding publisher evidence preserves pending resume and unchanged installs without reinstallation', async t => {
+const options = f => ({ execute: f.execute, cli: f.cli });
+
+test('unchanged sync reuses verified installs and publisher evidence never becomes a gate', async t => {
   const f = fixture(t);
-  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
-  const pendingPath = join(f.deployment.profileRoot, '.deepseek-plugin-pending.json');
-  const before = read(pendingPath).desiredHash;
+  await synchronize(f.deployment, f.release, options(f));
+  await finalize(f.deployment, f.release, { running: true });
   const plugin = f.release.plugins[0];
   const annotated = { ...f.release, verification: { schemaVersion: 1, builds: [], runs: [{
     pluginId: plugin.id, archiveSha256: plugin.sha256, subjects: verificationSubjects(f.release.plugins),
@@ -92,19 +96,12 @@ test('adding publisher evidence preserves pending resume and unchanged installs 
     outcome: 'passed', scope: 'real-host', source: 'runner', host: { kind: 'unknown' },
     platform: { os: process.platform, architecture: process.arch, nodeVersion: process.versions.node }, reportSha256: 'b'.repeat(64),
   }] } };
-  f.deployment.options.resume = true;
   const calls = f.calls.length;
-  const resumed = await synchronize(f.deployment, annotated, { execute: f.execute, cli: f.cli });
-  assert.equal(read(pendingPath).desiredHash, before);
-  assert.equal(resumed.verification[0].records[0].status, 'partial-match');
-  assert.equal(f.calls.length, calls);
-  await finalize(f.deployment, annotated, { running: true });
-  delete f.deployment.options.resume;
-  const unchanged = await synchronize(f.deployment, annotated, { execute: f.execute, cli: f.cli });
+  const unchanged = await synchronize(f.deployment, annotated, options(f));
   assert.equal(unchanged.changed, false);
   assert.equal(unchanged.verification[0].records[0].scope, 'real-host');
   assert.equal(f.calls.length, calls);
-  assert.equal(Object.hasOwn(readState(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')), 'verification'), false);
+  assert.equal(Object.hasOwn(readState(statePath(f.deployment)), 'verification'), false);
 });
 
 test('an unchanged package is re-added when its archive reference changes', t => {
@@ -116,7 +113,7 @@ test('an unchanged package is re-added when its archive reference changes', t =>
   writeFileSync(archivePath, readFileSync(plugin.archivePath));
   const next = { ...plugin, archivePath };
   assert.equal(installedMatches(f.deployment.profileRoot, next), false);
-  const changes = computeChanges({ plugins: [plugin] }, [next], read(join(f.deployment.profileRoot, 'package.json')), p => installedMatches(f.deployment.profileRoot, p));
+  const changes = computeChanges([{ id: 'alpha', package: 'fixture-alpha' }], [next], read(join(f.deployment.profileRoot, 'package.json')), p => installedMatches(f.deployment.profileRoot, p));
   assert.deepEqual(changes.add, [next]);
 });
 
@@ -130,6 +127,24 @@ test('paths use repo root, honor explicit home, and exclude persistent paths fro
   assert.throws(() => resolveDeployment({ root: f.root, home: 'plugins/alpha' }, {}), /持久路径/);
   assert.throws(() => resolveDeployment({ root: f.root, artifacts: '.local/data' }, {}), /重叠/);
   assert.throws(() => parseArguments(['sync', '--unknown']), /未知参数/);
+});
+
+test('已移除的部署旗标明确报错并指向替代入口，不混进未知参数', () => {
+  for (const flag of ['--resume', '--recover', '--data-compatible', '--rebuild', '--rebuild-plugins', '--container']) {
+    assert.throws(() => parseArguments(['start', flag]), /已移除/u, flag);
+  }
+  assert.throws(() => parseArguments(['start', '--recover']), /普通 build/u);
+  assert.throws(() => parseArguments(['start', '--container']), /container-start/u);
+  assert.throws(() => parseArguments(['start', '--unknown']), /未知参数/u);
+});
+
+test('没有残留 profile 锁时 unlock 不创建 profile 目录', async t => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'dsh-unlock-')));
+  t.after(() => { assert.equal(dirname(root), realpathSync.native(tmpdir())); rmSync(root, { recursive: true, force: true }); });
+  const home = join(root, 'data/home');
+  // 解锁是「什么都不该做」的动作：缺锁要报成缺锁，而不是裸 ENOENT；也不能顺手补建空目录掩盖现场。
+  await main(['unlock', '--root', root, '--home', home, '--data-root', join(root, 'data'), '--artifacts', join(root, '.local/artifacts')]);
+  assert.equal(existsSync(home), false, '没有锁时不得创建 profile 目录');
 });
 
 test('old data candidates require explicit selection before creating an empty home', t => {
@@ -160,7 +175,8 @@ test('official add, install and remove receive the same offline store and metada
   await synchronize(f.deployment, f.release, { execute, cli: f.cli });
   await finalize(f.deployment, f.release, { running: true });
   await synchronize(f.deployment, { ...f.release, plugins: [] }, { execute, cli: f.cli });
-  assert.deepEqual(new Set(calls.map(args => args[0])), new Set(['add', 'install', 'remove']));
+  // 没有待保留的非受管依赖时不跑隔离安装：官方 CLI 只按目标 add/remove 收敛。
+  assert.deepEqual(new Set(calls.map(args => args[0])), new Set(['add', 'remove']));
   for (const args of calls) {
     assert.ok(args.includes(args[0] === 'remove' ? '--config.offline=true' : '--offline'));
     if (args[0] === 'remove') assert.ok(!args.includes('--offline'));
@@ -169,21 +185,18 @@ test('official add, install and remove receive the same offline store and metada
   }
 });
 
-test('saved candidates survive disabling every plugin and allow re-enabling from source', async t => {
+test('deselecting every plugin empties the managed set and re-selection installs again', async t => {
   const f = fixture(t);
-  f.deployment.candidates = f.release.plugins.map(plugin => plugin.id);
-  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  await synchronize(f.deployment, f.release, options(f));
   await finalize(f.deployment, f.release, { running: true });
   const disabled = { ...f.release, plugins: [] };
-  await synchronize(f.deployment, disabled, { execute: f.execute, cli: f.cli });
+  await synchronize(f.deployment, disabled, options(f));
   await finalize(f.deployment, disabled, { running: true });
-  const state = readState(join(f.deployment.profileRoot, '.deepseek-plugin-state.json'));
-  assert.deepEqual(state.plugins, []);
-  assert.deepEqual(state.candidates, ['alpha', 'beta']);
-  const enabled = { ...f.release, plugins: f.release.plugins.filter(plugin => state.candidates.includes(plugin.id)) };
-  await synchronize(f.deployment, enabled, { execute: f.execute, cli: f.cli });
-  await finalize(f.deployment, enabled, { running: true });
-  assert.deepEqual(readState(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')).plugins.map(plugin => plugin.id), ['alpha', 'beta']);
+  assert.deepEqual(readState(statePath(f.deployment)).managed, []);
+  assert.deepEqual(read(join(f.deployment.profileRoot, 'package.json')).dependencies, {});
+  await synchronize(f.deployment, f.release, options(f));
+  await finalize(f.deployment, f.release, { running: true });
+  assert.deepEqual(readState(statePath(f.deployment)).managed.map(entry => entry.id), ['alpha', 'beta']);
 });
 
 test('offline inputs are copied independently and warmed metadata refreshes an existing writable cache', t => {
@@ -245,26 +258,26 @@ test('optional runtime files do not inherit stale process values and config revi
 
 test('existing non-managed dependency conflicts even if the package is discovered', () => {
   const plugin = { id: 'alpha', package: 'fixture-alpha', sha256: 'a'.repeat(64) };
-  assert.throws(() => computeChanges(null, [plugin], { dependencies: { 'fixture-alpha': '1.0.0' } }, () => true), /非受管/);
+  assert.throws(() => computeChanges([], [plugin], { dependencies: { 'fixture-alpha': '1.0.0' } }, () => true), /非受管/);
 });
 
 test('sync retains unchanged packages, removes only deselected packages, and supports empty selection', async t => {
-  const f = fixture(t); const options = { execute: f.execute, cli: f.cli };
-  await synchronize(f.deployment, f.release, options);
-  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')), false);
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  assert.equal(readState(statePath(f.deployment)).managed.length, 2);
   await finalize(f.deployment, f.release, { running: true });
   const firstCount = f.calls.length;
-  const result = await synchronize(f.deployment, f.release, options);
+  const result = await synchronize(f.deployment, f.release, options(f));
   assert.equal(result.changed, false); assert.equal(f.calls.length, firstCount);
   const selected = { ...f.release, plugins: [f.release.plugins[0]] };
-  await synchronize(f.deployment, selected, options); await finalize(f.deployment, selected, { running: true });
+  await synchronize(f.deployment, selected, options(f)); await finalize(f.deployment, selected, { running: true });
   assert.ok(f.calls.slice(firstCount).filter(call => call.home === f.deployment.home).every(call => call.args[0] === 'remove' && call.args.at(-1) === 'fixture-beta'));
   const empty = { ...f.release, plugins: [] };
-  await synchronize(f.deployment, empty, options); await finalize(f.deployment, empty, { running: true });
+  await synchronize(f.deployment, empty, options(f)); await finalize(f.deployment, empty, { running: true });
   assert.deepEqual(read(join(f.deployment.profileRoot, 'package.json')).dependencies, {});
 });
 
-test('failed second installation remains recoverable and never claims unrelated packages', async t => {
+test('a partially applied add converges on the next ordinary run without any journal', async t => {
   const f = fixture(t); let failed = false;
   const broken = (cli, d, args, home) => {
     if (home === undefined && args.at(-1).endsWith('beta.tgz') && !failed) {
@@ -275,84 +288,64 @@ test('failed second installation remains recoverable and never claims unrelated 
     f.execute(cli, d, args, home);
   };
   await assert.rejects(synchronize(f.deployment, f.release, { execute: broken, cli: f.cli }), /second-package-failure/);
-  const pendingPath = join(f.deployment.profileRoot, '.deepseek-plugin-pending.json');
-  assert.equal(read(pendingPath).status, 'failed');
-  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')), false);
-  await assert.rejects(synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli }), /未完成部署/);
-  f.deployment.options.resume = true;
-  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  // 授权先于 CLI 写入：两个包都已是受管对象，失败现场没有任何 journal。
+  assert.deepEqual(readState(statePath(f.deployment)).managed.map(entry => entry.id), ['alpha', 'beta']);
+  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-pending.json')), false);
+  // 普通重跑直接收敛：不要求 resume/pending，也不要求同一包版本。
+  await synchronize(f.deployment, f.release, options(f));
   await finalize(f.deployment, f.release, { running: true });
-  assert.equal(existsSync(pendingPath), false);
-  assert.deepEqual(read(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')).plugins.map(p => p.id), ['alpha', 'beta']);
+  assert.deepEqual(readState(statePath(f.deployment)).managed.map(entry => entry.id), ['alpha', 'beta']);
+  assert.deepEqual(Object.keys(read(join(f.deployment.profileRoot, 'package.json')).dependencies), ['fixture-alpha', 'fixture-beta']);
+  // 换修复包（不同字节、同版本）同样由普通重跑承接。
+  const plugin = f.release.plugins[1];
+  const fixed = join(f.root, 'fixed-beta.tgz');
+  writeFileSync(fixed, readFileSync(plugin.archivePath));
+  const fixedRelease = { ...f.release, plugins: f.release.plugins.map(p => p.id === 'beta' ? { ...p, archivePath: fixed } : p) };
+  await synchronize(f.deployment, fixedRelease, options(f));
+  assert.deepEqual(read(join(f.deployment.profileRoot, 'package.json')).dependencies['fixture-beta'], `file:${fixed}`);
 });
 
-test('an orphaned owned Bundle preserves ownership until its dependency is restored', async t => {
+test('an orphaned managed Bundle is cleaned only for exactly managed packages', async t => {
   const f = fixture(t);
-  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  await synchronize(f.deployment, f.release, options(f));
   await finalize(f.deployment, f.release, { running: true });
   const path = join(f.deployment.profileRoot, 'package.json');
-  const metadata = read(path); delete metadata.dependencies['fixture-alpha']; atomicJSON(path, metadata);
+  const metadata = read(path);
+  // 模拟官方 CLI 撤选只删掉了依赖、却遗留了 Bundle。
+  delete metadata.dependencies['fixture-alpha'];
+  atomicJSON(path, metadata);
   const empty = { ...f.release, plugins: [] };
-  await assert.rejects(synchronize(f.deployment, empty, { execute: f.execute, cli: f.cli }), /Bundle.*依赖已缺失/);
-  assert.equal(read(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')).plugins.length, 2);
-  f.deployment.options.rebuild = true;
-  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
-  await finalize(f.deployment, f.release, { running: true });
-  await synchronize(f.deployment, empty, { execute: f.execute, cli: f.cli });
-  await finalize(f.deployment, empty, { running: true });
-  assert.deepEqual(read(path).dsh.profile.bundles, []);
+  await synchronize(f.deployment, empty, options(f));
+  const after = read(path);
+  assert.deepEqual(after.dsh.profile.bundles, [], '受管包遗留的 Bundle 被精确剔除，不残留');
+  assert.deepEqual(readState(statePath(f.deployment)).managed, []);
 });
 
 test('external synchronization requires stop evidence and applied configuration requires start evidence', async t => {
   const f = fixture(t); f.deployment.hostMode = 'external';
   delete f.deployment.options['stopped-file'];
-  await assert.rejects(synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli }), /停服证据/);
+  await assert.rejects(synchronize(f.deployment, f.release, options(f)), /停服证据/);
   assert.equal(existsSync(join(f.deployment.profileRoot, 'package.json')), false);
   f.deployment.options['stopped-file'] = join(f.root, 'stopped.json');
-  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  await synchronize(f.deployment, f.release, options(f));
   await assert.rejects(finalize(f.deployment, f.release), /启动证据/);
-  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')), false);
+  // 受管授权与安装验证由 synchronize 维护：外部同步后状态已存在，启动证据只影响验证步骤。
+  assert.deepEqual(readState(statePath(f.deployment)).managed.map(entry => entry.id), ['alpha', 'beta']);
 });
 
 test('external synchronization rejects stopped evidence for a live process', async t => {
   const f = fixture(t); f.deployment.hostMode = 'external';
   const evidence = f.deployment.options['stopped-file'];
   atomicJSON(evidence, { ...read(evidence), pid: process.pid });
-  await assert.rejects(synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli }), /进程状态与证据不符/);
+  await assert.rejects(synchronize(f.deployment, f.release, options(f)), /进程状态与证据不符/);
   assert.equal(existsSync(join(f.deployment.profileRoot, 'package.json')), false);
-});
-
-test('recovery selects a corrected release while retaining the old journal and partial ownership', async t => {
-  const f = fixture(t);
-  const broken = (cli, d, args, home) => {
-    f.execute(cli, d, args, home);
-    if (home === undefined) throw new Error('interrupted-after-install');
-  };
-  await assert.rejects(synchronize(f.deployment, f.release, { execute: broken, cli: f.cli }), /interrupted/);
-  const pendingPath = join(f.deployment.profileRoot, '.deepseek-plugin-pending.json');
-  const original = read(pendingPath);
-  const selected = { ...f.release, plugins: [f.release.plugins[0]] };
-  f.deployment.options.recover = true;
-  await assert.rejects(synchronize(f.deployment, selected, { execute: f.execute, cli: f.cli }), /data-compatible/);
-  f.deployment.options['data-compatible'] = true;
-  await assert.rejects(synchronize(f.deployment, selected, { cli: f.cli, execute: () => { throw new Error('preflight-failure'); } }), /preflight-failure/);
-  assert.deepEqual(read(pendingPath), original);
-  await synchronize(f.deployment, selected, { execute: f.execute, cli: f.cli });
-  const replacement = read(pendingPath);
-  assert.equal(replacement.supersedes, original.operationId);
-  assert.notEqual(replacement.operationId, original.operationId);
-  assert.deepEqual(read(join(f.deployment.dataRoot, '.deployment-private', original.operationId, 'pending-before-recovery.json')), original);
-  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')), false);
-  await finalize(f.deployment, selected, { running: true });
-  assert.equal(read(join(f.deployment.profileRoot, 'package.json')).dependencies['fixture-beta'], undefined);
-  assert.deepEqual(read(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')).plugins.map(p => p.id), ['alpha']);
 });
 
 test('unchanged installations still require external stop evidence before owned startup', async t => {
   const f = fixture(t);
-  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  await synchronize(f.deployment, f.release, options(f));
   await finalize(f.deployment, f.release, { running: true });
-  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  await synchronize(f.deployment, f.release, options(f));
   delete f.deployment.options['stopped-file'];
   const cliFile = join(f.root, 'never-start.mjs'); writeFileSync(cliFile, 'throw new Error("must not spawn");');
   f.deployment.options['dsh-cli-js'] = cliFile;
@@ -363,7 +356,7 @@ test('unchanged installations still require external stop evidence before owned 
 
 test('owned startup allows a cold host to take more than ten seconds', { timeout: 30000 }, async t => {
   const f = fixture(t);
-  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  await synchronize(f.deployment, f.release, options(f));
   const reservation = createServer();
   await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
   const port = reservation.address().port;
@@ -379,25 +372,32 @@ test('owned startup allows a cold host to take more than ten seconds', { timeout
   assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
 });
 
-test('configuration revision restarts without reinstall', async t => {
-  const f = fixture(t); await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+test('configuration revision does not reinstall and never enters the managed set', async t => {
+  const f = fixture(t); await synchronize(f.deployment, f.release, options(f));
   await finalize(f.deployment, f.release, { running: true });
   f.calls.length = 0; f.deployment.instances.alpha = { configRevision: 1 };
-  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  const result = await synchronize(f.deployment, f.release, options(f));
+  assert.equal(result.changed, false);
   assert.equal(f.calls.length, 0);
-  await finalize(f.deployment, f.release, { running: true });
-  assert.equal(read(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')).configurations.alpha.configRevision, 1);
+  assert.equal(Object.hasOwn(readState(statePath(f.deployment)), 'configurations'), false);
 });
 
-test('configuration changes after sync cannot finalize a stale applied record', async t => {
-  const f = fixture(t); await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
-  f.deployment.instances.alpha = { configRevision: 3 };
-  await assert.rejects(finalize(f.deployment, f.release, { running: true }), /验证配置与待启动/);
-  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')), false);
+test('a changed environment reinstalls from the ordinary path without any rebuild flag', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  await finalize(f.deployment, f.release, { running: true });
+  const path = statePath(f.deployment);
+  const recorded = readState(path);
+  recorded.environment = { ...recorded.environment, mode: 'development' };
+  atomicJSON(path, recorded);
+  f.calls.length = 0;
+  const result = await synchronize(f.deployment, f.release, options(f));
+  assert.equal(result.changed, true, '环境记录变化使安装重用失效并触发重装');
+  assert.ok(f.calls.some(call => call.args[0] === 'add'));
 });
 
 test('every plugin probe is checked and a later failure cannot be hidden by the first success', async t => {
-  const f = fixture(t); await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
+  const f = fixture(t); await synchronize(f.deployment, f.release, options(f));
   f.deployment.baseUrl = 'http://127.0.0.1:12345';
   const calls = [];
   const release = { ...f.release, plugins: f.release.plugins.map(p => ({ ...p, healthPath: `/${p.id}/ready` })) };
@@ -422,16 +422,24 @@ test('preflight rejects changes to retained non-managed dependencies before touc
   assert.equal(existsSync(join(f.deployment.profileRoot, 'node_modules/fixture-alpha')), false);
 });
 
-test('explicit adoption manages only named actual installations and still requires sync', async t => {
+test('explicit adoption adds only named actual installations and stays idempotent', async t => {
   const f = fixture(t);
   for (const p of f.release.plugins) f.execute(f.cli, f.deployment, ['add', `file:${p.archivePath}`]);
   await assert.rejects(adoptLegacy(f.deployment, f.release, ['all']), /精确列出/);
   const result = await adoptLegacy(f.deployment, f.release, ['alpha']);
   assert.equal(result.status, 'adopted-requires-sync');
-  const state = read(join(f.deployment.profileRoot, '.deepseek-plugin-state.json'));
-  assert.deepEqual(state.plugins.map(p => p.id), ['alpha']);
-  assert.equal(state.plugins[0].sha256, '0'.repeat(64));
-  assert.deepEqual(state.configurations, {});
+  assert.deepEqual(readState(statePath(f.deployment)).managed, [{ id: 'alpha', package: 'fixture-alpha' }]);
+  // 相同映射幂等，未点名的包不被接管。
+  const again = await adoptLegacy(f.deployment, f.release, ['alpha']);
+  assert.equal(again.status, 'adopted-unchanged');
+  assert.deepEqual(readState(statePath(f.deployment)).managed, [{ id: 'alpha', package: 'fixture-alpha' }]);
+  // 增量接管保留原授权。
+  await adoptLegacy(f.deployment, f.release, ['beta']);
+  assert.deepEqual(readState(statePath(f.deployment)).managed.map(entry => entry.id), ['alpha', 'beta']);
+  // 接管不宣称环境已应用：没有 environment 记录，下一次同步完成目标环境安装验证。
+  const synced = await synchronize(f.deployment, f.release, options(f));
+  assert.equal(synced.changed, true);
+  assert.ok(Object.hasOwn(readState(statePath(f.deployment)), 'environment'));
 });
 
 test('profile locks reject concurrent synchronization without clobbering the owner', t => {
@@ -443,8 +451,14 @@ test('profile locks reject concurrent synchronization without clobbering the own
 test('legacy discovery-derived state is not automatically adopted', async t => {
   const f = fixture(t);
   atomicJSON(join(f.deployment.profileRoot, '.deepseek-plugin-managed.json'), { schemaVersion: 1, packages: ['fixture-alpha', 'unmanaged'] });
-  await assert.rejects(synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli }), /旧受管/);
+  await assert.rejects(synchronize(f.deployment, f.release, options(f)), /旧受管/);
   assert.equal(f.calls.length, 0);
+});
+
+test('a shared home owner record blocks fresh container synchronization', async t => {
+  const f = fixture(t);
+  atomicJSON(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json'), { token: 'occupied' });
+  await assert.rejects(synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli, freshContainer: true }), /运行记录/);
 });
 
 test('Compose maps external home and runtime files independently of the data root', t => {
@@ -478,48 +492,96 @@ test('Compose maps external home and runtime files independently of the data roo
   }
 });
 
-test('ordinary site candidates retain their identity through Compose, pending and successful state', async t => {
-  const f = fixture(t), id = '12345678-1234-1234-1234-123456789012';
-  f.deployment.config.siteOperation = id;
-  const rendered = renderCompose(f.deployment, f.release, join(f.root, 'compose-site'));
-  assert.equal(read(rendered.configPath).siteOperation, id);
-  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
-  const pendingPath = join(f.deployment.profileRoot, '.deepseek-plugin-pending.json');
-  assert.equal(read(pendingPath).desired.siteOperation, id);
-  f.deployment.config.siteOperation = '22345678-1234-1234-1234-123456789012';
-  await assert.rejects(finalize(f.deployment, f.release, { running: true }), /验证配置与待启动操作不一致/);
-  f.deployment.config.siteOperation = id;
-  await finalize(f.deployment, f.release, { running: true });
-  assert.equal(read(join(f.deployment.profileRoot, '.deepseek-plugin-state.json')).siteOperation, id);
-});
-
-for (const pendingFirst of [false, true]) test(`site configuration recovery intent is consumed once with pending=${pendingFirst}`, async t => {
+test('site identity travels through Compose rendering without entering the managed set', async t => {
   const f = fixture(t);
-  f.deployment.config.siteOperation = '22345678-1234-1234-1234-123456789012';
-  const pendingPath = join(f.deployment.profileRoot, '.deepseek-plugin-pending.json');
-  const statePath = join(f.deployment.profileRoot, '.deepseek-plugin-state.json');
-  await synchronize(f.deployment, f.release, { execute: f.execute, cli: f.cli });
-  if (!pendingFirst) await finalize(f.deployment, f.release, { running: true });
-  const pending = existsSync(pendingPath) ? read(pendingPath) : null;
-  const previous = existsSync(statePath) ? read(statePath) : null;
-  const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
   const id = '12345678-1234-1234-1234-123456789012';
   f.deployment.config.siteOperation = id;
-  f.deployment.config.siteRecovery = { schemaVersion: 1, id, pendingId: pending?.operationId ?? null, pendingHash: pending ? digest(pending) : null, stateHash: previous ? digest(previous) : null };
-  const options = { execute: f.execute, cli: f.cli, freshContainer: true };
-  const first = await synchronize(f.deployment, f.release, options);
-  assert.equal(first.changed, true);
-  const current = read(pendingPath);
-  assert.equal(current.desired.siteOperation, id);
-  if (pending) assert.equal(current.supersedes, pending.operationId);
-  await synchronize(f.deployment, f.release, options);
-  assert.equal(read(pendingPath).operationId, current.operationId);
-  assert.equal(f.deployment.options.recover, false);
-  assert.equal(f.deployment.options.resume, true);
-  await finalize(f.deployment, f.release, { running: true });
-  assert.equal(read(statePath).siteOperation, id);
-  const restart = await synchronize(f.deployment, f.release, options);
-  assert.equal(restart.changed, false);
-  assert.equal(existsSync(pendingPath), false);
-  assert.equal(f.deployment.options.recover, false);
+  const rendered = renderCompose(f.deployment, f.release, join(f.root, 'compose-site'));
+  // siteOperation 已随旧 site-recovery 路径一起移除：渲染产物不得再携带该字段。
+  assert.equal(Object.hasOwn(read(rendered.configPath), 'siteOperation'), false);
+  // 容器内没有宿主绑定，站点身份只能来自本次部署配置：缺了它就写不了 schema 3 授权（设计 2.6）。
+  assert.equal(read(rendered.configPath).siteId, 'site-fixture');
+  await synchronize(f.deployment, f.release, options(f));
+  assert.equal(Object.hasOwn(readState(statePath(f.deployment)), 'siteOperation'), false);
+});
+
+test('managed state from another site or profile is refused instead of adopted', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  const path = statePath(f.deployment), managed = readState(path).managed;
+  // 另一个站点留下的授权集合：既不能当成「无需改变」，也不能用当前身份重写。
+  atomicJSON(path, { schemaVersion: 3, siteId: 'site-other', profile: 'web', managed });
+  await assert.rejects(synchronize(f.deployment, f.release, options(f)), /与本次部署 site-fixture（profile web）不一致/);
+  assert.equal(readState(path).siteId, 'site-other');
+  // 同一站点、另一个 profile 同样拒绝。
+  atomicJSON(path, { schemaVersion: 3, siteId: 'site-fixture', profile: 'other', managed });
+  await assert.rejects(synchronize(f.deployment, f.release, options(f)), /与本次部署 site-fixture（profile web）不一致/);
+  // 显式接管走同一条身份判定：别人的授权不能被增量并入。
+  atomicJSON(path, { schemaVersion: 3, siteId: 'site-other', profile: 'web', managed: [] });
+  await assert.rejects(adoptLegacy(f.deployment, f.release, ['alpha']), /与本次部署 site-fixture（profile web）不一致/);
+  assert.deepEqual(readState(path).managed, []);
+  // 缺身份的 schema 3 状态无法证明属于哪个站点（设计 2.6）：字段校验必须自己拦住，不能靠后面的比对。
+  // 这里用原始 JSON 读盘：readState 会做同一份校验，拿不到「拒绝后现场有没有被改写」这个事实。
+  atomicJSON(path, { schemaVersion: 3, profile: 'web', managed });
+  await assert.rejects(synchronize(f.deployment, f.release, options(f)), /受管授权集合缺少 siteId/);
+  assert.equal(read(path).siteId, undefined);
+  atomicJSON(path, { schemaVersion: 3, siteId: 'site-fixture', managed });
+  await assert.rejects(synchronize(f.deployment, f.release, options(f)), /受管授权集合缺少 profile/);
+  assert.equal(read(path).profile, undefined);
+});
+
+test('缺少站点身份时拒绝写入受管授权集合', async t => {
+  const f = fixture(t);
+  // 部署配置与站点绑定都没有 siteId：写授权集合等于把一个站点的授权悄悄带到另一个站点。
+  const anonymousConfig = join(f.root, 'anonymous.json'); writeFileSync(anonymousConfig, '{}\n');
+  const anonymous = resolveDeployment({ root: f.root, config: anonymousConfig, home: 'data/home', 'host-mode': 'owned' }, {});
+  anonymous.options['stopped-file'] = f.deployment.options['stopped-file'];
+  await assert.rejects(synchronize(anonymous, f.release, options(f)), /缺少站点身份 siteId/);
+  assert.equal(existsSync(statePath(anonymous)), false, '拒绝时不得留下受管授权集合');
+});
+
+test('owned startup keeps the caller profile lock until ready and releases it there', { timeout: 30000 }, async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  const reservation = createServer();
+  await new Promise(resolvePromise => reservation.listen(0, '127.0.0.1', resolvePromise));
+  const port = reservation.address().port;
+  await new Promise(resolvePromise => reservation.close(resolvePromise));
+  const cliFile = join(f.root, 'lock-hold.mjs');
+  // 宿主先就绪、再存活一段时间：只有这样才能观察到「就绪时释放、宿主仍在运行」这个状态本身，
+  // 而不是等 supervise 返回（那时宿主已退出，释放时机无从区分）。
+  writeFileSync(cliFile, `import { createServer } from 'node:http';
+    setTimeout(() => createServer((_req, res) => res.end('ready')).listen(${port}, '127.0.0.1'), 1500);
+    setTimeout(() => process.exit(0), 12000);`);
+  f.deployment.options['dsh-cli-js'] = cliFile;
+  f.deployment.options.port = port;
+  const lockPath = join(f.deployment.profileRoot, '.deepseek-plugin-lock');
+  const ownerPath = join(f.deployment.profileRoot, '.deepseek-plugin-owner.json');
+  const unlock = acquireLock(f.deployment.profileRoot);
+  const starting = supervise(f.deployment, f.release, { locked: true, unlock });
+  await new Promise(resolvePromise => setTimeout(resolvePromise, 500));
+  // 安装到启动验收之间锁必须连续：另一个安装拿不到同一把锁，也不会重复取锁。
+  assert.equal(existsSync(lockPath), true);
+  assert.throws(() => acquireLock(f.deployment.profileRoot), /正在同步或上次进程中断/);
+  const deadline = Date.now() + 20000;
+  while (existsSync(lockPath) && Date.now() < deadline) await new Promise(resolvePromise => setTimeout(resolvePromise, 250));
+  // 就绪即释放安装锁：此刻宿主进程仍在运行（OWNER 还在），锁已经可以被别人取得。
+  assert.equal(existsSync(lockPath), false, '就绪后必须释放安装锁');
+  assert.equal(existsSync(ownerPath), true, '宿主仍在运行时 OWNER 必须保留');
+  assert.doesNotThrow(() => acquireLock(f.deployment.profileRoot));
+  // 兜底释放幂等：调用方再释放一次不会把别人的锁删掉。
+  unlock();
+  await starting;
+  assert.equal(existsSync(ownerPath), false);
+});
+
+test('a host binding refuses synchronization into another home even without existing state', async t => {
+  const f = fixture(t);
+  const other = join(f.root, 'other-home');
+  // 绑定指向既有 home；本次同步却解析到另一个空 home——那里没有 STATE，身份比对不会触发。
+  atomicJSON(join(f.root, '.local/site-binding.json'), { schemaVersion: 1, siteId: 'site-fixture', root: resolve(f.root), dataRoot: f.deployment.dataRoot,
+    home: f.deployment.home, workspace: f.deployment.workspace, authUrlFile: f.deployment.authUrlFile, artifacts: f.deployment.artifacts, profile: f.deployment.profile, composeProject: 'dsh-plugins' });
+  const target = { ...f.deployment, home: other, profileRoot: join(other, 'profiles', 'web') };
+  await assert.rejects(synchronize(target, f.release, options(f)), /站点绑定 home 与本次解析不一致/);
+  assert.equal(existsSync(join(target.profileRoot, '.deepseek-plugin-state.json')), false);
 });

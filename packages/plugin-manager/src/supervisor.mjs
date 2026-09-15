@@ -13,7 +13,7 @@ import { hostname } from 'node:os';
 import { frameworkCredentialEnvironment, prepareFrameworkCredentials } from './framework-credentials.mjs';
 import { forwardContainerLoopback } from './container-forward.mjs';
 /** Start one DSH child, keeping startup tokens out of normal logs. */
-export async function supervise(deployment, release) {
+export async function supervise(deployment, release, { locked = false, unlock } = {}) {
   prepareFrameworkCredentials(deployment);
   assertReleaseMode(release, deployment.mode);
   const cli = hostCLI(deployment);
@@ -36,8 +36,10 @@ export async function supervise(deployment, release) {
   if (trusted) for (const value of (Array.isArray(trusted) ? trusted : trusted.split(','))) args.push('--trusted-host', value);
   const env = { ...process.env, ...runtime.variables, ...frameworkCredentialEnvironment(deployment) };
   for (const [key, value] of Object.entries(env)) if (value === undefined) delete env[key];
-  const startupUnlock = acquireLock(deployment.profileRoot);
-  let startupLocked = true;
+  // `locked` 表示调用方在安装阶段就持有同一 profile 锁，并把锁句柄一并传入：锁必须连续覆盖
+  // 安装到启动验收（设计 5.2）。就绪后由这里释放；调用方未传句柄时说明它自己负责释放。
+  const startupUnlock = locked ? unlock ?? (() => {}) : acquireLock(deployment.profileRoot);
+  let startupLocked = !locked;
   const ownerPath = join(deployment.profileRoot, OWNER);
   const token = randomUUID();
   let stopped = true;
@@ -101,7 +103,7 @@ export async function supervise(deployment, release) {
         await finalize(deployment, release, { running: true, locked: true }); verified = true; break;
       } catch (error) { lastError = error; await new Promise(resolvePromise => setTimeout(resolvePromise, 250)); }
     }
-    if (!verified) { child.kill('SIGTERM'); throw new Error(stopped ? 'DSH 在启动验证前退出。' : 'DSH 在 60 秒内未通过启动验证，请检查宿主日志并使用 --resume 恢复。', { cause: lastError }); }
+    if (!verified) { child.kill('SIGTERM'); throw new Error(stopped ? 'DSH 在启动验证前退出。' : 'DSH 在 60 秒内未通过启动验证，请检查宿主日志；修正后直接重新运行普通 build。', { cause: lastError }); }
     startupUnlock(); startupLocked = false;
     process.stdout.write(`${JSON.stringify({ status: 'running', activated: 'unknown', profile: deployment.profile })}\n`);
     const result = await exited;

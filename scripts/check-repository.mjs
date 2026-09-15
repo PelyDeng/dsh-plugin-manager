@@ -47,7 +47,8 @@ for (const name of new Set(files)) {
       assert.ok(existsSync(resolve(dirname(path), decodeURIComponent(target))), `Broken link in ${name}: ${target}`);
     }
   }
-  if (/^(packages|plugins)\/[^/]+\/package.json$/.test(name)) {
+  // 插件按 builtin/external 分区；包声明与许可校验只覆盖分区的一层子目录，不扩大成任意深度。
+  if (/^(?:packages|plugins(?:\/(?:builtin|external))?)\/[^/]+\/package\.json$/.test(name)) {
     const manifest = JSON.parse(content);
     assert.ok(typeof manifest.license === 'string' && manifest.license.length, `Missing license declaration: ${name}`);
     if (manifest.license === 'UNLICENSED') assert.equal(manifest.private, true, `Unlicensed package must be private: ${name}`);

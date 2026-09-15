@@ -4,7 +4,6 @@ import { dirname, resolve } from 'node:path';
 import { resolveDeployment } from './config.mjs';
 import { decodeFrameworkConfig, deploymentFields, imageDefaults, readFrameworkConfig, renderFrameworkConfig, resolveSiteConfig, siteDefaults, validateImageConfig } from './framework-config.mjs';
 import { ensurePrivateDirectory, writePrivateFile } from './private-files.mjs';
-import { readSitePointer, readSiteRecord, needsSiteResume } from './site-record.mjs';
 
 export const readJson = path => JSON.parse(readFileSync(path, 'utf8'));
 export function saveJson(path, value) {
@@ -13,22 +12,29 @@ export function saveJson(path, value) {
   renameSync(`${path}.tmp`, path);
 }
 
-/** Generate a site once, importing existing deployment preferences without modifying them. */
-export function loadSite(root, filename, { imagePlatform, desktop = false, inputKind = 'source' } = {}) {
+/**
+ * Generate a site once, importing existing deployment preferences without modifying them.
+ *
+ * `legacy` 与 `initialize: false` 只给一次性迁移入口使用：前者允许读取带已移除字段的旧 `.conf`，
+ * 后者在配置文件不存在时退回既有旧 JSON（site.json/deployment.json）而不生成新配置——迁移预览
+ * 必须只读，不能靠初始化配置来“读现场”。
+ */
+export function loadSite(root, filename, { imagePlatform, desktop = false, inputKind = 'source', legacy = false, initialize = true } = {}) {
   const defaults = siteDefaults(inputKind);
   const runtimePath = resolve(root, '.local/deployment.json');
-  const prior = readSitePointer(root);
-  const interrupted = prior && needsSiteResume(prior.status);
-  const original = interrupted ? readSiteRecord(root, prior.operation).sitePath : undefined;
-  // An unfinished operation keeps its original input, including legacy JSON, until resumed.
-  const sitePath = resolve(root, filename ?? original ?? '.local/env.conf');
+  // 旧运行记录不再决定输入来源：站点偏好固定为 .local/env.conf（或显式 --config）。
+  const sitePath = resolve(root, filename ?? '.local/env.conf');
   if (sitePath === runtimePath) throw new Error('Use .local/env.conf for site preferences; .local/deployment.json is generated.');
   if (!existsSync(sitePath)) {
+    if (!initialize) {
+      const existing = [resolve(root, '.local/site.json'), runtimePath].find(path => existsSync(path));
+      if (!existing) throw new Error(`站点配置不存在：${sitePath}；也没有可迁移的旧配置。`);
+      return { site: resolveSiteConfig(root, readJson(existing), { inputKind }), sitePath: existing, runtimePath, source: undefined };
+    }
     if (filename) throw new Error(`Site configuration does not exist: ${sitePath}. Run build.ps1 (Windows) or build.sh (macOS/Linux) without --config to initialize defaults.`);
-    if (original) throw new Error('The original interrupted site input is missing; restore it before resuming.');
     initializeFrameworkSite(root, sitePath, runtimePath, defaults, imagePlatform, desktop);
   }
-  const source = sitePath.endsWith('.conf') ? readFrameworkConfig(sitePath) : undefined;
+  const source = sitePath.endsWith('.conf') ? readFrameworkConfig(sitePath, { allowRemovedFields: legacy }) : undefined;
   const overrides = source?.config ?? readJson(sitePath);
   const site = resolveSiteConfig(root, overrides, { inputKind, source });
   return { site, sitePath, runtimePath, source };
@@ -39,7 +45,8 @@ function initializeFrameworkSite(root, sitePath, runtimePath, defaults, imagePla
   const legacy = resolve(root, '.local/site.json');
   const previousPath = existsSync(legacy) ? legacy : existsSync(runtimePath) ? runtimePath : undefined;
   const previous = previousPath ? readJson(previousPath) : {};
-  const { manifest, containerImage, hostImageConfig, dockerRuntime, ...preferences } = previous;
+  const { manifest, containerImage, hostImageConfig, dockerRuntime, pluginSource, ...preferences } = previous;
+  if (pluginSource !== undefined) console.warn('旧字段 pluginSource 已移除且不导入：插件来源固定为 builtin 自动构建加 incoming 外部归档；旧选集请用 migrate-site 显式化。');
   const known = new Set(deploymentFields.map(([, field]) => field));
   const unknown = Object.keys(preferences).filter(key => !known.has(key));
   if (unknown.length) throw new Error(`Legacy fields require explicit JSON compatibility or migration: ${unknown.join(', ')}.`);

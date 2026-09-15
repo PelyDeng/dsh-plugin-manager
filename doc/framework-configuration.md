@@ -48,17 +48,17 @@ ZHIPU_API_KEY=
 | 项目 | 公开模板中的值或规则 |
 | --- | --- |
 | 访问与监听 | `DSH_PUBLIC_URL=http://127.0.0.1:7902`、`DSH_BIND_HOST=127.0.0.1`、`DSH_PORT=7902`；origin 留空时从 URL 派生，信任域名按实际访问填写 |
-| 启动与存储 | profile `web`、插件 `["auth","example"]`、mode `release`、数据根 `.local/data`、产物根 `.local/artifacts` |
+| 启动与存储 | profile `web`、选集留空（采用全部候选）、mode `release`、数据根 `.local/data`、产物根 `.local/artifacts` |
 | 工具与容器 | CLI `dsh`、patches `[]`、offline `false`、Compose 项目 `dsh-plugins`、UID/GID `1000` |
 | 镜像 | 平台 `linux/amd64`、基础镜像 `docker.io/library/node:24-bookworm-slim`；Harbor 关闭，上游回退开启 |
 | 保持留空 | 模型密钥、仓库账号密码、生成的镜像/manifest、可选宿主来源；home/workspace/authUrlFile 等从入口与数据根派生 |
 
-模板中的 auth/example 选集仅用于 source。新 archives 留空选集表示发现 incoming 全集，显式 [] 表示空集合；独立 CLI 留空沿用显式发布清单。手工更改端口不会同步改写已填的 URL，需同时核对。
+选集留空表示采用清单里的全部候选（builtin 加全部 incoming），显式 `[]` 表示空集合；两种来源行为一致，不因 source 或 archives 改变，构建某个插件也不表示启用它。独立 CLI 留空沿用显式发布清单。手工更改端口不会同步改写已填的 URL，需同时核对。
 
 | 类别 | 字段 |
 | --- | --- |
 | 常用访问与模型 | `DSH_PUBLIC_URL`、`DSH_PUBLIC_ORIGIN`、`DSH_TRUSTED_HOSTS`、`DEEPSEEK_API_KEY`、`ZHIPU_API_KEY` |
-| 启动与选集 | `DSH_BIND_HOST`、`DSH_PORT`、`DSH_PROFILE`、`DSH_PLUGINS`、`DSH_PLUGIN_SOURCE`、`DSH_MODE`、`DSH_HOST_MODE` |
+| 启动与选集 | `DSH_BIND_HOST`、`DSH_PORT`、`DSH_PROFILE`、`DSH_PLUGINS`、`DSH_MODE`、`DSH_HOST_MODE` |
 | 数据与路径 | `DSH_DATA_DIR`、`DSH_HOME`、`DSH_WORKSPACE`、`DSH_AUTH_URL_FILE`、`DSH_DEPLOY_ARTIFACTS` |
 | 宿主与插件文件引用 | `DSH_HARNESS_ROOT`、`DSH_CLI_JS`、`DSH_CLI`、`DSH_PATCHES`、`DSH_INSTANCES` |
 | 离线与缓存 | `DSH_OFFLINE`、`DSH_STORE_DIR`、`DSH_CACHE_DIR`、`DSH_OFFLINE_STORE_DIR`、`DSH_OFFLINE_CACHE_DIR` |
@@ -74,7 +74,7 @@ Windows 使用 build.ps1，Linux/macOS 使用 build.sh。已有配置不覆盖�
 
 source 默认 auth/example；archives 默认发现完整 incoming；独立 CLI 使用显式清单，三者不能混用默认选集。新 archives 可编辑插件配置位于 .local/config/plugins/<id>，通过已有 instances 引用；旧记录及显式 settingsFile/runtimeConfig 原样沿用，不自动迁移 home/plugins。
 
-Docker 只接受本机 Linux 引擎 unix/npipe endpoint。Docker Desktop 使用桥接与 TCP 转发，原生 Linux 使用 host 网络；同 Docker 网络是信任边界，不能据此承诺公网隔离。macOS 尚未完成真实 Docker 部署验收，架构与平台以具体发行验收范围为准。恢复时核对同一引擎，不能切换 endpoint 后沿用原记录。
+Docker 只接受本机 Linux 引擎 unix/npipe endpoint。Docker Desktop 使用桥接与 TCP 转发，原生 Linux 使用 host 网络；同 Docker 网络是信任边界，不能据此承诺公网隔离。macOS 尚未完成真实 Docker 部署验收，架构与平台以具体发行验收范围为准。本次所有命令固定到同一 endpoint，不要求历史引擎 ID 与本次一致。
 <!-- /excerpt:platform-defaults -->
 
 ## 三种入口
@@ -82,18 +82,18 @@ Docker 只接受本机 Linux 引擎 unix/npipe endpoint。Docker Desktop 使用�
 | 入口 | 输入与默认行为 |
 | --- | --- |
 | 精简部署包 build | archives，从 incoming 直接子目录发现完整清单；不构建作者源码；镜像来自发行信息或显式完整不可变 containerImage |
-| 框架源码 build | 缺省 source；原源码、按需构建与旧 JSON 兼容。可显式设 DSH_PLUGIN_SOURCE=archives，只隔离准备框架工具，不构建 plugins/* |
+| 框架源码 build | source，内置插件固定全量构建并合并 incoming 外部归档；不构建作者源码 |
 | 独立 manager CLI | 显式 --root 与 --config/DEPLOYMENT_CONFIG；手填 manifest/运行镜像，不自动发现；保留 Node 和 Compose 操作 |
 
-build 只允许 release。source 禁止手填 manifest/containerImage；archives 禁止手填 manifest，允许完整 containerImage，但不接受 hostImage/publishImage 或主动源码构建参数。DSH_PLUGIN_SOURCE 与 DSH_MODE 是不同字段，不能用 development 表示源码来源。
+build 只允许 release。source 禁止手填 manifest/containerImage；archives 禁止手填 manifest，允许完整 containerImage，但不接受 hostImage/publishImage 或主动源码构建参数。插件来源不再是站点配置字段（旧 `DSH_PLUGIN_SOURCE` 已移除，旧站点先跑 migrate-site），由入口固定为「builtin 自动构建加 incoming 外部归档」。
 
-站点 build 以文件为输入，不套用底层 CLI 的环境覆盖。基础 CLI 保持“参数→原对应环境变量→文件→默认值”；仓库 start.ps1 的显式 Mode 优先，无配置的旧 development 默认继续兼容。来源切换和未完成操作规则见 deploy/README.md。
+站点 build 以文件为输入，不套用底层 CLI 的环境覆盖。基础 CLI 保持“参数→原对应环境变量→文件→默认值”；仓库 start.ps1 的显式 Mode 优先，无配置的旧 development 默认继续兼容。重试与失败语义见 deploy/README.md。
 
 ## 旧站点导入与恢复
 
 默认入口首次发现没有 `.local/env.conf` 时，优先导入 `.local/site.json`，其次导入 `.local/deployment.json`，保留已解析的数据路径、profile 和原文件。旧 `hostImageConfig` 的镜像字段一并导入，之后以统一文件为准。无法表示的旧字段拒绝自动导入，可以继续显式传原 JSON，不能静默丢弃。
 
-`.local/deployment.json`、清单、Compose 和官方 patch 是生成输入，不替代人工入口。已有未完成部署继续使用原操作记录中的文件，不在恢复期间迁移格式。`--resume` 要求原输入和供进程读取的凭据文件未变化；源码操作目录的 `framework-input.conf` 保存本次 env 原始字节；原文件丢失时从此私有备份恢复到原路径。新 schema 3 同包业务配置错误使用受控 recover 生成新候选，不改旧快照；工具/镜像/站点环境变动不属于该快捷路径。配置格式导入不搬迁数据，更换数据路径仍须遵守[正式迁移流程](migration.md)。
+`.local/deployment.json`、清单、Compose 和官方 patch 是生成输入，不替代人工入口。站点目标与数据位置由 `.local/site-binding.json` 稳定绑定，每个持久目录根带 `.dsh-site-id` 标记；绑定或标记损坏必须通过 `dsh-plugin-manager migrate-site` 显式修复，普通 build 只读核对。旧 schema 2 受管状态经同一工具一次性迁移为 schema 3 managed 授权集合。配置格式导入不搬迁数据，更换数据路径仍须遵守[正式迁移流程](migration.md)。
 
 ## 插件配置与环境变量的生效路径
 
@@ -137,7 +137,7 @@ build 只允许 release。source 禁止手填 manifest/containerImage；archives
 
 ### 5. 归档引用：部署后不要单独更新插件目录
 
-发布把插件归档以**内容哈希**命名，profile 的 `package.json` 以 `file:` 绝对路径钉住这些归档。归档集合与 profile 引用由部署流程一起改写。只替换归档目录而不重新部署，会让 profile 指向不存在的归档，容器安装阶段直接失败。中断后要恢复，用原输入 `--resume`，或按 `deploy/README.md` 的故障定位入口处理，不要手工改 profile。
+发布把插件归档以**内容哈希**命名，追加复制到 `.local/artifacts/plugin-packages/` 缓存并按实际字节寻址，profile 的 `package.json` 以 `file:` 绝对路径钉住这些归档。归档集合与 profile 引用由部署流程一起改写。只替换归档目录而不重新部署，会让 profile 指向不存在的归档，容器安装阶段直接失败。失败后直接重新运行普通 build，不要手工改 profile。
 
 ## 独立 CLI 字段参考
 

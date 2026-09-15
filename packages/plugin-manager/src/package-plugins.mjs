@@ -6,7 +6,6 @@ import { resolve } from 'node:path';
 import { parseOptions, sourcePlugins } from './plugins.mjs';
 import { runPnpmAsync } from './pnpm.mjs';
 import { preparePluginDependencies, replayPluginOutput, runPluginTaskAsync, runPnpm, USAGE } from './run-plugin-task.mjs';
-import { verifyBuildPackage } from './verify-package.mjs';
 import { validateVerification } from './verification.mjs';
 
 /**
@@ -47,42 +46,42 @@ async function mapWithLimit(items, limit, worker) {
 /**
  * 构建并打包选中的插件。
  *
- * `skipCheck` 默认为 **true**：插件检查（`pnpm typecheck` 等）是开发期门禁，仓库的
- * CI 与 `pnpm check` 已会在同一提交上跑它；日常构建再对每个插件重复一次只是把反馈
- * 拖长（实测 5 个插件约 56 秒），且不改变任何产物。需要在本机确认检查时用
- * `--verify-plugin-check` 显式要回来。
+ * 这里只做构建、打包与内容寻址，**不做完整静态检查**：类型检查等开发期门禁由仓库 CI 与
+ * `pnpm check` 承担，归档与源码字节一致由独立的 `verify-package` 命令承担，交付目录的合规
+ * 由 `verify-release` 承担。pack 的输出只说明生成了什么，不说"已验证"。
  *
  * 每个插件的构建与打包并行进行（上限见 `concurrency`），共享依赖的安装与准备仍是单线：
  * 那两步动的是同一份 `node_modules`，先做完再并行。
  */
-export async function packagePlugins(root, requested, output, packageDirectory, step = (_label, run) => run(), { skipCheck = true, concurrency = defaultConcurrency() } = {}) {
-  const selected = sourcePlugins(root, requested, packageDirectory);
+export async function packagePlugins(root, requested, output, packageDirectory, step = (_label, run) => run(), { concurrency = defaultConcurrency(), workspaceRoot = root, source = 'builtin' } = {}) {
+  const selected = sourcePlugins(root, requested, packageDirectory, { source });
   const single = packageDirectory !== undefined;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new Error('并发数必须是正整数。');
   if (single && !existsSync(resolve(root, 'pnpm-lock.yaml'))) throw new Error('独立包打包需要包根 pnpm-lock.yaml。请在作者项目根执行 pnpm install --ignore-workspace 生成锁文件后重试。');
   if (existsSync(output) && readdirSync(output).length) throw new Error('发布目录必须不存在或为空；不会覆盖旧操作产物。请换一个新的发布目录（例如 v2）后重试。');
   mkdirSync(output, { recursive: true });
-  if (selected.length) step('安装插件依赖', () => runPnpm(['install', '--frozen-lockfile', ...(single ? ['--ignore-workspace'] : [])], root));
-  preparePluginDependencies(root, selected, step);
+  // 安装与构建发生在 workspaceRoot（内置构建用只含公开输入的隔离视图），插件发现仍按 root：
+  // 站点侧的源码树可能同时含私有/外部源码，不能在那里做一次全 workspace 安装。
+  if (selected.length) step('安装插件依赖', () => runPnpm(['install', '--frozen-lockfile', ...(single ? ['--ignore-workspace'] : [])], workspaceRoot));
+  preparePluginDependencies(workspaceRoot, selected, step);
   const plugins = await mapWithLimit(selected, concurrency, async plugin => {
-    // 'build' 走的是同一条「构建 + 打包」路径，只是不再追加开发期的检查步骤。
-    await runPluginTaskAsync(root, plugin, skipCheck ? 'build' : 'check', step);
+    await runPluginTaskAsync(workspaceRoot, plugin, 'build', step);
     return await step(`打包插件 ${plugin.id}`, async () => {
       const destination = resolve(output, `${plugin.id}.tgz`);
       // pnpm 的 JSON 清单没人读（校验读的是归档本身），所以只回放它的报错。
-      const captured = await runPnpmAsync([...(single ? ['--ignore-workspace'] : []), 'pack', '--json', '--out', destination], resolve(root, plugin.directory ?? '.'), { maxBuffer: 32 * 1024 * 1024 });
+      const captured = await runPnpmAsync([...(single ? ['--ignore-workspace'] : []), 'pack', '--json', '--out', destination], resolve(workspaceRoot, plugin.directory ?? '.'), { maxBuffer: 32 * 1024 * 1024 });
       replayPluginOutput(plugin.id, { stderr: captured.stderr });
-      verifyBuildPackage(root, plugin, destination);
       const sha256 = createHash('sha256').update(readFileSync(destination)).digest('hex');
       // pnpm must see a new file spec when the same package version has new bytes.
       const archive = `${plugin.id}-${sha256}.tgz`;
       renameSync(destination, resolve(output, archive));
-      console.log(`[${plugin.id}] 发布包已验证：${archive}`);
+      console.log(`[${plugin.id}] 已生成：${archive}`);
       return { ...plugin, archive, sha256 };
     });
   });
-  const lockPath = resolve(root, 'pnpm-lock.yaml');
-  const packageManagerVersion = plugins.length ? runPnpm(['--version'], root, { stdio: ['ignore', 'pipe', 'pipe'] }).stdout.toString().trim() : undefined;
+  // 验证记录必须描述真正执行安装的那份锁与管理器，而不是发现源码的目录。
+  const lockPath = resolve(workspaceRoot, 'pnpm-lock.yaml');
+  const packageManagerVersion = plugins.length ? runPnpm(['--version'], workspaceRoot, { stdio: ['ignore', 'pipe', 'pipe'] }).stdout.toString().trim() : undefined;
   const verification = validateVerification({ schemaVersion: 1, builds: plugins.map(plugin => ({
     pluginId: plugin.id, archiveSha256: plugin.sha256, nodeVersion: process.versions.node, packageManagerVersion,
     ...(existsSync(lockPath) ? { lockSha256: createHash('sha256').update(readFileSync(lockPath)).digest('hex') } : {}),
@@ -97,15 +96,20 @@ export async function packagePlugins(root, requested, output, packageDirectory, 
 export async function main(argv = process.argv.slice(2), step) {
   // 帮助与用法放在解析参数之前：查用法不该先备好项目根。
   if (argv.includes('--help')) { console.log(USAGE); return; }
-  // 默认跳过插件检查（见 packagePlugins 说明）；--verify-plugin-check 把它要回来。
-  const options = parseOptions(argv, ['root', 'plugins', 'output', 'package', 'concurrency'], ['skip-plugin-check', 'verify-plugin-check']);
+  // 已移除的旗标明确说出替代命令，不静默接受，也不让作者以为是拼写错误。
+  const removed = argv.find(value => ['--skip-plugin-check', '--verify-plugin-check'].includes(value));
+  if (removed) throw new Error(`${removed} 已移除：pack 只构建、打包并做内容寻址；类型检查用 check，归档与源码一致性用 verify-package，交付目录合规用 verify-release。`);
+  const options = parseOptions(argv, ['root', 'plugins', 'output', 'package', 'concurrency', 'workspace-root'], ['external']);
   if (!options.root) throw new Error('必须显式指定 --root 项目根目录。');
   const root = resolve(options.root);
+  const workspaceRoot = options['workspace-root'] === undefined ? root : resolve(options['workspace-root']);
   const output = resolve(root, options.output ?? `.local/artifacts/${randomUUID()}/plugins`);
-  const skipCheck = options['verify-plugin-check'] === true ? false : true;
   const concurrency = options.concurrency === undefined ? defaultConcurrency() : Number(options.concurrency);
-  const manifest = await packagePlugins(root, options.plugins, output, options.package, step, { skipCheck, concurrency });
+  // 与 build/check 同一契约：内置默认全量；--external 是作者显式调用，必须显式给出选集。
+  const source = options.external ? 'external' : 'builtin';
+  if (options.external && options.plugins === undefined && options.package === undefined) throw new Error('--external 必须显式给出插件选集：ID 列表、all 或 none。');
+  const manifest = await packagePlugins(root, options.plugins ?? (options.package === undefined ? 'all' : undefined), output, options.package, step, { concurrency, workspaceRoot, source });
   console.log(`插件产物：${output}`);
   console.log(`交付插件：${manifest.plugins.map(plugin => plugin.id).join(',') || 'none'}`);
-  console.log('下一步：交付整个发布目录（manifest.json 和全部 tgz）；部署者放入 incoming/<应用目录> 后执行 build，并请求插件声明的 healthPath。');
+  console.log('下一步：需要自检时先跑 verify-package（归档与源码一致）与 verify-release（交付目录合规），再把整个发布目录交给部署者。');
 }

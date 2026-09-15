@@ -66,7 +66,7 @@ importers:
         specifier: ^0.22.2
         version: 0.22.14(typescript@6.0.3)
 
-  plugins/dsh-auth:
+  plugins/builtin/dsh-auth:
     dependencies:
       '@deepseek-ai/schemastery':
         specifier: 3.18.2
@@ -80,7 +80,7 @@ importers:
         version: 0.1.5-alpha.2(@deepseek-ai/cordis@4.0.2)
       '@dsh-plugin-manager/plugin-kit':
         specifier: workspace:*
-        version: link:../../packages/plugin-kit
+        version: link:../../../packages/plugin-kit
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.1
@@ -94,7 +94,7 @@ importers:
         specifier: ^4.1.8
         version: 4.1.11(@types/node@22.20.1)(vite@8.2.2(@types/node@22.20.1))
 
-  plugins/dsh-example:
+  plugins/builtin/dsh-example:
     dependencies:
       '@deepseek-ai/schemastery':
         specifier: 3.18.2
@@ -156,7 +156,7 @@ importers:
         version: 0.1.5-alpha.2(2b754afda902b21956a20e8a701ed6ef)
       '@dsh-plugin-manager/plugin-kit':
         specifier: workspace:*
-        version: link:../../packages/plugin-kit
+        version: link:../../../packages/plugin-kit
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.1

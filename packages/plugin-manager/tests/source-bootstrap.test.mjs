@@ -15,9 +15,9 @@ const repository = fileURLToPath(new URL('../../../', import.meta.url));
 test('invalid site configuration fails before preflight or private source updates', async t => {
   const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'site-config-preflight-')));
   t.after(() => { assert.equal(dirname(root), realpathSync.native(tmpdir())); rmSync(root, { recursive: true, force: true }); });
-  for (const [config, expected] of [[{ mode: 'development' }, /release 模式/], ['DSH_PLUGIN_SOURCE=source\nDSH_MODE=development\n', /release 模式/], [{ manifest: 'other.json' }, /manifest.*generated/], [{ hostImage: 'runtime:latest' }, /immutable registry digest/]]) {
+  for (const [config, expected] of [[{ mode: 'development' }, /release 模式/], ['DSH_PLUGIN_SOURCE=source\nDSH_MODE=development\n', /已移除/], [{ manifest: 'other.json' }, /manifest.*generated/], [{ hostImage: 'runtime:latest' }, /immutable registry digest/]]) {
     const path = resolve(root, typeof config === 'string' ? 'site.conf' : 'site.json');
-    writeFileSync(path, typeof config === 'string' ? config : JSON.stringify({ pluginSource: 'source', ...config }), { mode: 0o600 });
+    writeFileSync(path, typeof config === 'string' ? config : JSON.stringify({ ...config }), { mode: 0o600 });
     const calls = [];
     await assert.rejects(sourceRelease({ root, args: ['--config', path],
       preflight: () => { calls.push('preflight'); return { env: process.env }; },
@@ -27,18 +27,19 @@ test('invalid site configuration fails before preflight or private source update
   }
 });
 
-test('unfinished archive deployment prevents a new source build before its private update', async t => {
+test('stale unfinished records no longer block a new source build before its private update', async t => {
   const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'unfinished-before-update-')));
   t.after(() => { assert.equal(dirname(root), realpathSync.native(tmpdir())); rmSync(root, { recursive: true, force: true }); });
   const operation = resolve(root, '.local/artifacts/retained'); mkdirSync(operation, { recursive: true });
-  writeFileSync(resolve(root, 'site.json'), JSON.stringify({ pluginSource: 'source' }));
+  writeFileSync(resolve(root, 'site.json'), JSON.stringify({}));
   writeFileSync(resolve(operation, 'result.json'), JSON.stringify({ schemaVersion: 3, operation, inputKind: 'archives', status: 'deployment-failed' }));
   writeFileSync(resolve(root, '.local/source-release.json'), JSON.stringify({ operation, status: 'deployment-failed' }));
   const calls = [];
+  // 旧失败指针不再是新发布的准入输入：正常发布照常走到私有源码更新。
   await assert.rejects(sourceRelease({ root, args: ['--config', 'site.json'],
     preflight: () => { calls.push('preflight'); return { env: process.env }; },
-    beforeBuild: () => { calls.push('beforeBuild'); throw new Error('private source update reached'); } }), /unfinished.*--resume/);
-  assert.deepEqual(calls, []);
+    beforeBuild: () => { calls.push('beforeBuild'); throw new Error('private source update reached'); } }), /private source update reached/);
+  assert.deepEqual(calls, ['preflight', 'beforeBuild']);
   assert.equal(existsSync(resolve(root, '.local/source-release.node.lock')), false);
 });
 
@@ -53,12 +54,12 @@ test('site coordinator help and doctor load without installed workspace packages
   }
 });
 
-test('selective fresh worker rejects workspace install hooks before the first dependency install', async t => {
-  const f = snapshot(t), path = resolve(f.root, 'plugins/dsh-example/package.json');
+test('removed rebuild selection is rejected before any dependency install', async t => {
+  const f = snapshot(t), path = resolve(f.root, 'plugins/builtin/dsh-example/package.json');
   const pkg = JSON.parse(readFileSync(path)); pkg.scripts.postinstall = 'node forbidden-build.mjs';
   writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
   command('git', ['add', '.'], f.root); f.commit();
-  assert.equal(await sourceRelease({ root: f.root, args: ['--rebuild-plugins', 'example'], preflight: f.preflight }), 1);
+  await assert.rejects(sourceRelease({ root: f.root, args: ['--rebuild-plugins', 'example'], preflight: f.preflight }), /已移除/);
   assert.equal(existsSync(f.marker), false);
   f.absent();
 });
@@ -144,8 +145,8 @@ test('fresh workers reject malformed arguments, dirty source and pending recover
   command('git', ['add', 'README.md'], f.root); f.commit();
   const pointer = resolve(f.root, '.local/source-release.json'), original = JSON.stringify({ status: 'prepared', operation: 'preserved-operation' });
   writeFileSync(pointer, original);
-  await assert.rejects(sourceRelease({ root: f.root, preflight: f.preflight }), /发布记录无效/);
-  await assert.rejects(sourceRelease({ root: f.root, args: ['--resume'], preflight: f.preflight }), /发布记录无效/);
+  // 旧发布指针不再作为新发布的准入输入；已移除的 --resume 明确拒绝。
+  await assert.rejects(sourceRelease({ root: f.root, args: ['--resume'], preflight: f.preflight }), /已移除/);
   assert.equal(readFileSync(pointer, 'utf8'), original);
   assert.equal(existsSync(f.marker), false); assert.equal(existsSync(resolve(f.root, '.local/source-release.node.lock')), false);
   f.absent();

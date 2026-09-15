@@ -7,9 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { acquireFileLock } from './lock.mjs';
 import { ensurePrivateDirectory } from './private-files.mjs';
-import { needsSiteResume, readSitePointer } from './site-record.mjs';
-
-export const needsSourceResume = needsSiteResume;
+import { readSitePointer } from './site-record.mjs';
 const sourcePath = root => resolve(root, '.local/source-release.node.lock');
 const controlPath = root => resolve(root, '.local/source-release.control.lock');
 const positive = value => Number.isSafeInteger(value) && value > 0;
@@ -77,9 +75,9 @@ function buildCommand(root) {
 export function inspectSourceLock(root, { ignoreControl = false } = {}) {
   const result = { root, path: sourcePath(root), reasons: [], processes: [] };
   try {
-    const status = releaseState(root);
-    result.status = status;
-    result.next = `${buildCommand(root)}${needsSourceResume(status) ? ' --resume' : ''}`;
+    result.status = releaseState(root);
+    // 恢复参数已移除：失败或中断后直接重跑普通 build，记录不再决定下一步命令（设计 3 节）。
+    result.next = buildCommand(root);
   } catch (error) { result.reasons.push(error.message); }
   if (!ignoreControl && existsSync(controlPath(root))) {
     result.reasons.push(`control 锁尚未释放：${controlPath(root)}；不要自动删除，需核实元数据操作已结束`);

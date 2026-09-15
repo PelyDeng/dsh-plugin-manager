@@ -1,10 +1,15 @@
 /** Remove disposable package outputs; persistent data and release records are retained. */
-import { readdirSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-for (const group of ['packages', 'plugins']) {
-  const root = new URL(`../${group}/`, import.meta.url);
+
+const sweep = root => {
+  if (!existsSync(root)) return;
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
     for (const output of ['dist', 'coverage']) rmSync(fileURLToPath(new URL(`${entry.name}/${output}`, root)), { recursive: true, force: true });
   }
-}
+};
+
+for (const group of ['packages', 'plugins']) sweep(new URL(`../${group}/`, import.meta.url));
+// 插件按 builtin/external 分区，清理要覆盖两层，且不递归进无关目录。
+for (const partition of ['builtin', 'external']) sweep(new URL(`../plugins/${partition}/`, import.meta.url));

@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { readPlugin, sourcePlugins } from '../src/plugins.mjs';
 import { packagePlugins } from '../src/package-plugins.mjs';
-import { composeRelease } from '../src/compose-release.mjs';
-import { loadRelease, selectRelease } from '../src/release.mjs';
+import { composeRelease, composeReleases } from '../src/compose-release.mjs';
+import { loadRelease, loadReleaseInputs, selectRelease } from '../src/release.mjs';
 import { resolveDeployment, runtimeEnvironment } from '../src/config.mjs';
 import { applyCompose } from '../src/apply-compose.mjs';
 import { renderCompose } from '../src/compose.mjs';
@@ -30,7 +30,7 @@ function fixture(t) {
     name: 'external-fixture', version: '1.0.0', type: 'module', packageManager: 'pnpm@11.19.0',
     main: './dist/index.mjs', exports: './dist/index.mjs', files: ['dist', 'cordis.patch.yml', 'dev.yml'],
     dsh: { bundle: { patch: './cordis.patch.yml' } },
-    deepseekPlugin: { schemaVersion: 3, id: 'fixture', defaultEnabled: false, development: { rootVariable: 'FIXTURE_SOURCE', patch: 'dev.yml' } },
+    deepseekPlugin: { schemaVersion: 3, id: 'fixture', development: { rootVariable: 'FIXTURE_SOURCE', patch: 'dev.yml' } },
     scripts: { build: 'node build.mjs', check: 'node check.mjs' },
   };
   json(join(root, 'package.json'), manifest);
@@ -90,7 +90,7 @@ test('repository packaging reports build and verified pack separately, skipping 
     const pluginRoot = join(workspace, 'plugins', id);
     mkdirSync(pluginRoot);
     for (const file of readdirSync(root)) copyFileSync(join(root, file), join(pluginRoot, file));
-    json(join(pluginRoot, 'package.json'), { ...manifest, name: id, deepseekPlugin: { schemaVersion: 3, id, defaultEnabled: true } });
+    json(join(pluginRoot, 'package.json'), { ...manifest, name: id, deepseekPlugin: { schemaVersion: 3, id } });
     writeFileSync(join(pluginRoot, 'cordis.patch.yml'), `- insert:\n    - id: ${id}\n      name: ${id}\n`);
   }
   const script = fileURLToPath(new URL('../../../scripts/package-plugins.mjs', import.meta.url));
@@ -132,7 +132,7 @@ test('repository packaging reports build and verified pack separately, skipping 
   };
   const tasks = id => readFileSync(join(workspace, 'plugins', id, 'tasks'), 'utf8');
 
-  // 默认跳过插件检查：进度里没有「检查插件」，fixture 的 check.mjs 也没被执行。
+  // pack 只构建打包：进度里没有「检查插件」，fixture 的 check.mjs 也没被执行。
   const result = pack('.local/success'); ok(result);
   const skipped = fold(events(result));
   assert.deepEqual(skipped.open, []);
@@ -142,29 +142,29 @@ test('repository packaging reports build and verified pack separately, skipping 
   assert.equal(read(join(workspace, '.local/success/manifest.json')).plugins.length, FIXTURE_PLUGINS.length);
   for (const id of FIXTURE_PLUGINS) assert.equal(tasks(id), 'build\n');
 
-  // 显式要回检查时才真的跑：进度与标记都多出「检查」一步（标记是追加的，两次构建都在）。
-  const verified = pack('.local/verified', '--verify-plugin-check'); ok(verified);
-  const checked = fold(events(verified));
-  assert.deepEqual(checked.open, []);
-  assert.deepEqual([...checked.finished].sort(), ['done 安装插件依赖', ...FIXTURE_PLUGINS.flatMap(id => [`done 构建插件 ${id}`, `done 检查插件 ${id}`, `done 打包插件 ${id}`])].sort());
-  for (const id of FIXTURE_PLUGINS) assert.equal(tasks(id), 'build\nbuild\ncheck\n');
+  // 已移除的检查开关被明确拒绝：不静默忽略，也不会悄悄执行检查、产出目录。
+  const removed = pack('.local/removed', '--verify-plugin-check');
+  assert.notEqual(removed.status, 0);
+  assert.match(removed.stdout + removed.stderr, /已移除/);
+  assert.equal(existsSync(join(workspace, '.local/removed')), false);
 
-  // 检查失败时不得产出成功清单：已经派发的插件跑完，还没派发的插件一步都不启动。
-  // 用并发 1 让顺序确定：alpha 正常跑完，beta 的检查失败，gamma 不该出现任何阶段。
-  writeFileSync(join(workspace, 'plugins/beta/check.mjs'), 'process.exitCode = 8;\n');
-  const failure = pack('.local/failure', '--verify-plugin-check', '--concurrency', '1');
+  // 构建失败时不得产出成功清单：已经派发的插件跑完，还没派发的插件一步都不启动。
+  // 用并发 1 让顺序确定：alpha 正常跑完，beta 的构建失败，gamma 不该出现任何阶段。
+  writeFileSync(join(workspace, 'plugins/beta/build.mjs'), 'process.exitCode = 8;\n');
+  const failure = pack('.local/failure', '--concurrency', '1');
   assert.notEqual(failure.status, 0);
   const failed = events(failure);
-  const failureIndex = failed.findIndex(event => event.type === 'failed' && event.label === '检查插件 beta');
+  const failureIndex = failed.findIndex(event => event.type === 'failed' && event.label === '构建插件 beta');
   assert.ok(failureIndex >= 0, '失败的那一步被如实报告');
   assert.equal(failed.some(event => event.label?.endsWith('插件 gamma')), false, '失败后不再派发新的插件');
   assert.equal(failed.some(event => event.label === '打包插件 beta'), false);
   assert.equal(existsSync(join(workspace, '.local/failure/manifest.json')), false);
 });
 
-test('explicit sources select disabled packages without a lockfile, and reject invalid declarations before scripts', t => {
+test('explicit sources select a standalone package without a lockfile, and reject invalid declarations before scripts', t => {
   const { root, manifest } = fixture(t);
-  assert.equal(sourcePlugins(root, undefined, '.')[0].defaultEnabled, false);
+  assert.equal(sourcePlugins(root, undefined, '.')[0].id, 'fixture');
+  assert.equal(sourcePlugins(root, undefined, '.')[0].defaultEnabled, undefined);
   ok(run(root, 'list', '--root', root, '--package', '.'));
   assert.equal(existsSync(join(root, 'tasks')), false);
   assert.throws(() => sourcePlugins(root, 'all', '.'), /不能与/);
@@ -191,11 +191,11 @@ test('a single package builds once and packs a source-free release without touch
   await assert.rejects(() => packagePlugins(root, undefined, output, '.'), /pnpm-lock\.yaml。请在作者项目根执行 pnpm install --ignore-workspace/u);
   assert.equal(existsSync(output), false);
   writeFileSync(join(root, 'pnpm-lock.yaml'), lock);
-  // 默认跳过插件检查，所以标记里只有构建；这一步由 --verify-plugin-check 显式要回来。
+  // pack 不做插件检查，也不做合规校验，所以标记里只有构建。
   const packedRun = run(root, 'pack', '--root', root, '--package', '.', '--output', '.local/release');
   ok(packedRun);
   assert.match(packedRun.stdout, /交付插件：fixture/u);
-  assert.match(packedRun.stdout, /下一步：交付整个发布目录.*incoming/u);
+  assert.match(packedRun.stdout, /下一步：需要自检时先跑 verify-package/u);
   assert.equal(readFileSync(join(root, 'tasks'), 'utf8'), 'build\n');
   assert.equal(readFileSync(join(base, 'pnpm-lock.yaml'), 'utf8'), 'parent-lock-must-not-be-used\n');
   assert.equal(existsSync(join(base, 'node_modules')), false);
@@ -207,7 +207,7 @@ test('a single package builds once and packs a source-free release without touch
   assert.equal(packed.verification.builds[0].nodeVersion, process.versions.node);
   assert.deepEqual(packed.verification.runs, []);
   assert.equal(Object.hasOwn(packed.plugins[0], 'directory'), false);
-  assert.equal(packed.plugins[0].defaultEnabled, false);
+  assert.equal(Object.hasOwn(packed.plugins[0], 'defaultEnabled'), false);
   assert.deepEqual(packed.plugins[0].development, manifest.deepseekPlugin.development);
   ok(run(root, 'verify-package', '--root', root, '--package', '.', '--archive', join('.local/release', packed.plugins[0].archive)));
   // verify-package 只读校验，不会执行插件的 check 脚本。
@@ -225,7 +225,7 @@ test('a single package builds once and packs a source-free release without touch
   assert.throws(() => renderCompose(deployment, release, join(base, 'compose')), /仅支持 release/);
   assert.throws(() => applyCompose(deployment, release, () => assert.fail('must not invoke Docker')), /仅支持 release/);
   for (const action of [synchronize, supervise, finalize, adoptLegacy]) await assert.rejects(action(deployment, release), /仅支持 release/);
-  for (const action of ['deploy', 'start', 'sync', 'render-compose', 'apply-compose']) {
+  for (const action of ['deploy', 'start', 'sync', 'apply-compose']) {
     const result = run(root, action, '--root', base, '--home', 'data/home', '--artifacts', 'artifacts', '--manifest', releasePath, '--mode', 'development');
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /仅支持 release/);
@@ -262,12 +262,17 @@ test('failed builds and unsafe output selections never produce a success manifes
   const { root, manifest } = fixture(t);
   writeFileSync(join(root, 'pnpm-lock.yaml'), lock);
   await assert.rejects(() => packagePlugins(root, undefined, root, '.'), /发布目录/);
-  manifest.scripts.check = 'node -e "process.exit(1)"'; json(join(root, 'package.json'), manifest);
+  manifest.scripts.build = 'node -e "process.exit(1)"'; json(join(root, 'package.json'), manifest);
   const output = join(root, '.local/failed');
-  // 显式要回检查（默认跳过，见 packagePlugins 说明），让这一步的失败真的发生。
-  await assert.rejects(() => packagePlugins(root, undefined, output, '.', undefined, { skipCheck: false }), /失败/);
+  await assert.rejects(() => packagePlugins(root, undefined, output, '.'), /失败/);
   assert.equal(existsSync(join(output, 'manifest.json')), false);
   assert.deepEqual(readdirSync(output), []);
+  // 检查脚本失败不再影响 pack：它只由独立的 check 命令执行，那里会如实报错。
+  manifest.scripts.build = 'node build.mjs';
+  manifest.scripts.check = 'node -e "process.exit(7)"'; json(join(root, 'package.json'), manifest);
+  const packed = await packagePlugins(root, undefined, join(root, '.local/passing'), '.');
+  assert.equal(packed.plugins.length, 1);
+  assert.notEqual(run(root, 'check', '--root', root, '--package', '.').status, 0);
 });
 
 test('compose releases from archives, reject conflicts before output, retain source independence', async t => {
@@ -346,4 +351,23 @@ test('compose releases from archives, reject conflicts before output, retain sou
   assert.equal(existsSync(conflict), false);
   renameSync(first, join(base, 'first-moved')); renameSync(second, join(base, 'second-moved'));
   assert.equal(loadRelease(join(output, 'manifest.json')).plugins.length, 2);
+});
+
+test('the cache manifest is readable by the deployment path that consumes it in the container', async t => {
+  const { base, root } = fixture(t);
+  writeFileSync(join(root, 'pnpm-lock.yaml'), lock);
+  const output = join(base, 'release'); await packagePlugins(root, undefined, output, '.');
+  const released = loadReleaseInputs(join(output, 'manifest.json'));
+  const cacheRoot = join(base, 'cache');
+  const composed = composeReleases([released], join(base, 'composed'), undefined, [], { cacheRoot });
+  assert.equal(typeof composed.cacheManifest, 'string');
+  // 容器内 PLUGIN_MANIFEST_FILE 指向这份缓存清单：部署读路径必须能直接解析，并拿到完整安装契约。
+  const consumed = loadReleaseInputs(join(cacheRoot, composed.cacheManifest));
+  assert.deepEqual(consumed.plugins.map(plugin => plugin.id), released.plugins.map(plugin => plugin.id));
+  for (const plugin of consumed.plugins) {
+    assert.ok(plugin.verifyFiles.length > 0, `${plugin.id} 的 verifyFiles 不能丢`);
+    assert.equal(existsSync(plugin.archivePath), true, `${plugin.id} 的归档相对缓存根可达`);
+    assert.equal(typeof plugin.package, 'string');
+    assert.equal(typeof plugin.version, 'string');
+  }
 });

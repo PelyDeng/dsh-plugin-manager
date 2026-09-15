@@ -1,7 +1,7 @@
 /** Freeze declared configuration inputs; configuration semantics stay in their existing owners. */
 import { existsSync, readFileSync, lstatSync, chownSync } from 'node:fs';
 import { resolve, join } from 'node:path';
-import { hash, canonical, json, same, readArchive } from './state.mjs';
+import { hash, canonical, readArchive } from './state.mjs';
 import { resolveDeployment, runtimeEnvironment } from './config.mjs';
 import { resolvePluginSettings } from './plugin-settings.mjs';
 import { prepareFrameworkCredentials, rememberFrameworkInput } from './framework-credentials.mjs';
@@ -75,8 +75,13 @@ export function freezeSiteInputs({ root, operation, site, sitePath, source, rele
   return { candidate, inputs, environment, enabled: settings.release.plugins.map(plugin => plugin.id) };
 }
 
-/** Original bytes are required for resume; recover may change only business configuration. */
-export function verifySiteInputs(record, { recover = false } = {}) {
+/**
+ * 核对本次记录里的输入快照：快照在本次操作内必须保持一致，供稳定启动配置使用。
+ *
+ * 不跨次冻结（设计 3 节）：新发布可以用新输入，因此没有 resume/recover 分支；输入变化只报错，
+ * 修正输入后重新运行普通 build。
+ */
+export function verifySiteInputs(record) {
   if (record.schemaVersion !== 3) return;
   for (const [key, expected] of Object.entries(record.inputEnvironment ?? {})) if (hash(process.env[key] ?? '') !== expected) throw new Error(`原固定环境 ${key} 已变化；请恢复后重试。`);
   for (const input of record.inputs) {
@@ -84,14 +89,7 @@ export function verifySiteInputs(record, { recover = false } = {}) {
     const exists = existsSync(input.source), actual = exists ? readFileSync(input.source) : undefined;
     const unchanged = input.existed ? exists && hash(actual) === input.sha256 : !exists || input.defaulted && hash(actual) === input.sha256;
     if (unchanged) continue;
-    if (recover && input.kind === 'runtime' && exists) continue;
-    if (recover && input.kind === 'settings' && exists) {
-      const before = input.path ? json(input.path) : { schemaVersion: 1 }, after = JSON.parse(actual.toString('utf8'));
-      const controls = value => ({ ...value, config: undefined, enabled: value.enabled ?? true, accessMode: value.accessMode ?? (before.accessMode === 'authenticated' ? 'authenticated' : undefined) });
-      if (same(controls(before), controls(after))) continue;
-      throw new Error(`${input.id}：recover 只允许修改 config，不能更改 enabled/accessMode。`);
-    }
-    throw new Error(`原受管输入已变化：${input.source}。恢复原文件使用 --resume；业务配置修正使用 --recover --data-compatible。`);
+    throw new Error(`原受管输入已变化：${input.source}。修正输入后重新运行普通 build；已移除的恢复参数不再提供。`);
   }
 }
 

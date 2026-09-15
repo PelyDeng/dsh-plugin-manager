@@ -9,6 +9,7 @@ import { hash, tarCommand } from '../src/state.mjs';
 import { discoverArchives, validateRuntimeIndex } from '../src/site-archives.mjs';
 import { releaseSite, describeTooling } from '../src/site-release.mjs';
 import { fileHash, readSitePointer, readSiteRecord, verifySavedTooling } from '../src/site-record.mjs';
+import { writePublicInputRecord } from '../src/public-build-view.mjs';
 
 const image = `registry.test/runtime@sha256:${'a'.repeat(64)}`, hostCommit = 'b'.repeat(40);
 
@@ -43,6 +44,21 @@ function fixture(t) {
     put('framework-runtime.json', { schemaVersion: 1, frameworkVersion: version, manager: { version, sha256: fileHash(resolve(root, 'tools/plugin-manager.tgz')) }, runtimes: [{ platform: 'linux/amd64', image: runtimeImage, hostCommit }] });
   };
   setFramework('0.15.2');
+  // 统一部署路径：发行包自带公开源码（source/）与公开构建输入（tools/builtin-build/），
+  // 站点侧在只含这些材料的视图里构建全部内置插件。
+  const builtinManifest = { name: 'fixture-builtin', version: '0.1.0', type: 'module', main: 'index.js', files: ['index.js', 'cordis.patch.yml'], dsh: { bundle: { patch: 'cordis.patch.yml' } }, deepseekPlugin: { schemaVersion: 3, id: 'builtin-one' } };
+  put('source/package.json', { version, packageManager: 'pnpm@11.19.0' });
+  put('source/packages/plugin-manager/package.json', { version });
+  put('source/pnpm-workspace.yaml', "packages:\n  - 'packages/*'\n  - 'plugins/builtin/*'\n");
+  put('source/pnpm-lock.yaml', ["lockfileVersion: '9.0'", 'settings:', '  autoInstallPeers: true', '  excludeLinksFromLockfile: false', 'importers:', '  .:', '    dependencies: {}', '  packages/plugin-manager:', '    dependencies: {}', '  plugins/builtin/one:', '    dependencies: {}', ''].join('\n'));
+  put('source/plugins/builtin/one/package.json', builtinManifest);
+  put('source/plugins/builtin/one/index.js', 'export const one = true;\n');
+  put('source/plugins/builtin/one/cordis.patch.yml', '{}\n');
+  // 交付输入必须按字节写入：put 会把 Buffer 之类的非字符串值 JSON 化（归档/元数据一律用 writeFileSync）。
+  mkdirSync(resolve(root, 'tools/builtin-build'), { recursive: true });
+  for (const name of ['package.json', 'pnpm-workspace.yaml', 'pnpm-lock.yaml']) writeFileSync(resolve(root, `tools/builtin-build/${name}`), readFileSync(resolve(root, `source/${name}`)));
+  // 发行包必须自带交付记录：站点侧用的是独立交付目录，没有记录就直接拒绝构造构建视图。
+  writePublicInputRecord(resolve(root, 'tools/builtin-build'), { version, sourceKind: 'release', sourceCommit: null, sourceModified: null });
   const pack = (directory = 'alpha-release', content = 'one') => {
     const stage = resolve(root, 'stage/package'), output = resolve(root, 'incoming', directory);
     put('stage/package/package.json', { name: 'fixture-alpha', version: '0.1.0', type: 'module', main: 'index.js', dsh: { bundle: { patch: 'cordis.patch.yml' } }, deepseekPlugin: { schemaVersion: 3, id: 'alpha', configuration: { entryId: 'alpha' } } });
@@ -55,9 +71,33 @@ function fixture(t) {
   };
   pack();
   const calls = []; let fail = 'check-compose';
-  const execute = (bin, args) => {
+  const installCwds = [];
+  const buildRoots = [];
+  const execute = (bin, args, options = {}) => {
     calls.push([bin, ...args]);
     if (args[1] === fail) throw new Error(`fixture ${fail} failure`);
+    if (bin === 'pnpm' && args[0] === '--version') return '11.19.0';
+    if (bin === 'pnpm' && args.includes('install')) { installCwds.push(options.cwd); return ''; }
+    if (bin === process.execPath && String(args[0]).replaceAll('\\', '/').endsWith('scripts/package-plugins.mjs')) {
+      // 内置构建的产物必须落在站点操作目录里，并与视图分开。
+      const output = args[args.indexOf('--output') + 1];
+      buildRoots.push(args[args.indexOf('--workspace-root') + 1]);
+      const stage = resolve(root, 'stage-builtin/package');
+      put(resolve(stage, 'package.json'), builtinManifest);
+      put(resolve(stage, 'index.js'), 'export const one = true;\n');
+      put(resolve(stage, 'cordis.patch.yml'), '{}\n');
+      const archive = resolve(root, 'stage-builtin/one.tgz');
+      const tar = spawnSync(tarCommand, ['-czf', '-', 'package'], { cwd: resolve(root, 'stage-builtin'), windowsHide: true });
+      assert.equal(tar.status, 0, tar.stderr?.toString());
+      writeFileSync(archive, tar.stdout);
+      // put 会把非字符串 JSON 化；归档必须按字节写入。
+      mkdirSync(output, { recursive: true });
+      writeFileSync(resolve(output, 'one.tgz'), readFileSync(archive));
+      put(resolve(output, 'manifest.json'), { schemaVersion: 2, plugins: [
+        { id: 'builtin-one', package: 'fixture-builtin', version: '0.1.0', archive: 'one.tgz', sha256: fileHash(archive), verifyFiles: ['package.json', 'index.js', 'cordis.patch.yml'] },
+      ] });
+      return '';
+    }
     if (bin === 'docker' && args[0] === 'context') return JSON.stringify('unix:///var/run/docker.sock');
     if (bin === 'docker' && args[0] === '--host') return args[2] === 'info' ? JSON.stringify({ OSType: 'linux', ID: 'site-engine', Architecture: 'x86_64', OperatingSystem: process.platform === 'linux' ? 'Linux' : 'Docker Desktop' }) : 'Docker Compose fixture';
     if (bin === 'docker' && args[0] === 'image') return JSON.stringify([{ Id: runtimeImage.split('@')[1], Os: 'linux', Architecture: 'amd64', Config: { Entrypoint: entry, Labels: { 'org.opencontainers.image.revision': hostCommit, 'com.dsh-plugin-manager.manager.sha256': fileHash(resolve(root, 'tools/plugin-manager.tgz')) } } }]);
@@ -65,78 +105,27 @@ function fixture(t) {
     return '';
   };
   const record = () => { const pointer = readSitePointer(root); return readSiteRecord(root, pointer.operation); };
-  return { root, put, pack, calls, execute, record, setFramework, setFail: value => { fail = value; } };
+  return { root, put, pack, calls, installCwds, buildRoots, execute, record, setFramework, setFail: value => { fail = value; } };
 }
 
-test('a release renders and checks the container configuration in one pass before stopping', t => {
+test('a release renders and applies the container configuration in one pass before stopping', t => {
   const f = fixture(t);
   f.setFail(null);
   assert.equal(releaseSite({ root: f.root }, f.execute).status, 'ready');
-  // check-compose 内部先渲染再核验，已是 render 那一步的超集；再单独渲染一次等于把同一份
-  // 清单加载与渲染做两遍，还会在每次操作里留下一个没人读的 preflight 目录。
-  const compose = f.calls.map(call => call[2]).filter(action => ['render-compose', 'check-compose', 'apply-compose'].includes(action));
-  assert.deepEqual(compose, ['check-compose', 'apply-compose']);
+  // check-compose/render-compose 公共动作已移除：apply-compose 内部先渲染核验再停旧起新，
+  // 不再留下没人读的 preflight 目录。
+  const compose = f.calls.map(call => call[2]).filter(action => action === 'apply-compose');
+  assert.deepEqual(compose, ['apply-compose']);
 });
 
-for (const priorKind of ['current', 'schema3 archives', 'schema3 source', 'mismatched image', 'mismatched candidate', 'mismatched operation', 'mismatched manifest', 'schema2']) test(`framework summary identifies a ${priorKind} deployment before preflight`, t => {
+test('a release reports current facts without inferring from old records', t => {
   const f = fixture(t), messages = [];
   t.mock.method(console, 'log', message => messages.push(message));
   f.setFail(null);
-  const successful = releaseSite({ root: f.root }, f.execute), candidate = JSON.parse(readFileSync(successful.candidatePath));
-  if (priorKind === 'current') assert.equal(candidate.frameworkVersion, '0.15.2');
-  else {
-    // Recreate a real pre-field deployment using the completed lifecycle's frozen candidate.
-    delete candidate.frameworkVersion;
-    f.put(successful.candidatePath, candidate); f.put('.local/deployment.json', candidate);
-    successful.candidateHash = fileHash(successful.candidatePath);
-    if (priorKind === 'schema3 source') { successful.inputKind = 'source'; delete successful.frameworkVersion; }
-    if (priorKind === 'mismatched image') successful.image = `registry.test/runtime@sha256:${'d'.repeat(64)}`;
-    if (priorKind === 'mismatched candidate') successful.candidateHash = 'e'.repeat(64);
-    if (priorKind === 'mismatched operation') successful.siteOperation = '12345678-1234-1234-1234-123456789012';
-    if (priorKind === 'mismatched manifest') successful.manifest = resolve(f.root, 'unrelated/manifest.json');
-    if (priorKind === 'schema2') successful.schemaVersion = 2;
-    f.put(resolve(successful.operation, 'result.json'), successful);
-  }
-  const compose = f.put('.local/artifacts/prior-compose.json', { services: { dsh: { image, environment: { DSH_PORT: candidate.port } } } });
-  f.put('.local/artifacts/active-compose.json', { project: candidate.composeProject, path: compose });
-  f.setFramework('0.15.3', `registry.test/runtime@sha256:${'c'.repeat(64)}`);
-  f.setFail('check-compose'); messages.length = 0;
-  assert.throws(() => releaseSite({ root: f.root }, f.execute), /fixture check-compose/);
-  const known = ['current', 'schema3 archives', 'schema3 source'].includes(priorKind);
-  assert.ok(messages.some(message => message.startsWith(`框架 ${known ? '0.15.2' : '首次/旧记录'} → 0.15.3；`)), messages.join('\n'));
-  assert.equal(f.calls.some(call => call[0] === 'docker' && call.includes('stop')), false);
-});
-
-for (const legacy of [false, true]) test(`framework recovery summary retains the ${legacy ? 'legacy schema3' : 'current'} runtime after the failed candidate was applied`, t => {
-  const f = fixture(t), messages = [], targetImage = `registry.test/runtime@sha256:${'c'.repeat(64)}`;
-  t.mock.method(console, 'log', message => messages.push(message));
-  f.setFail(null);
-  const successful = releaseSite({ root: f.root }, f.execute), candidate = JSON.parse(readFileSync(successful.candidatePath));
-  if (legacy) {
-    delete candidate.frameworkVersion;
-    f.put(successful.candidatePath, candidate); f.put('.local/deployment.json', candidate);
-    successful.candidateHash = fileHash(successful.candidatePath);
-    f.put(resolve(successful.operation, 'result.json'), successful);
-  }
-  const data = resolve(f.root, '.local/data'), containerId = 'f'.repeat(64);
-  mkdirSync(data, { recursive: true });
-  const compose = f.put('.local/artifacts/prior-compose.json', { services: { dsh: { image,
-    environment: { DSH_PORT: candidate.port, DSH_HOME: '/data/dsh-home', DSH_PROFILE: 'web' }, volumes: [{ type: 'bind', source: data, target: '/data' }] } } });
-  f.put('.local/artifacts/active-compose.json', { project: candidate.composeProject, path: compose });
-  const execute = (bin, args) => {
-    if (bin === 'docker' && args[0] === 'compose' && args.includes('ps') && args.includes('-a')) return containerId;
-    if (bin === 'docker' && args[0] === 'inspect') return JSON.stringify([{ Id: containerId, State: { Running: false, Restarting: false },
-      Config: { Image: image, Labels: { 'com.docker.compose.service': 'dsh' }, Env: ['DSH_HOME=/data/dsh-home', 'DSH_PROFILE=web'] },
-      Mounts: [{ Type: 'bind', Source: data, Destination: '/data', RW: true }] }]);
-    if (bin === 'docker' && args.includes('--volumes-from')) return readFileSync(resolve(data, args.at(-1).slice('/data/'.length)), 'utf8');
-    return f.execute(bin, args);
-  };
-  f.setFramework('0.15.3', targetImage); f.setFail('apply-compose');
-  assert.throws(() => releaseSite({ root: f.root }, execute), /fixture apply-compose/);
-  assert.equal(JSON.parse(readFileSync(resolve(f.root, '.local/deployment.json'))).containerImage, targetImage);
-  messages.length = 0; f.setFail(null);
-  assert.equal(releaseSite({ root: f.root, recover: true, dataCompatible: true }, execute).status, 'ready');
-  assert.ok(messages.includes(`框架 0.15.2 → 0.15.3；宿主镜像 ${image} → ${targetImage}`), messages.join('\n'));
+  assert.equal(releaseSite({ root: f.root }, f.execute).status, 'ready');
+  assert.ok(messages.some(message => message.includes('发布已完成')), messages.join('\n'));
+  // 摘要只报本次事实，不读取旧记录推断升级路径。
+  assert.ok(!messages.some(message => message.includes('框架 ')), messages.join('\n'));
 });
 
 test('archive discovery requires complete, unique, ordinary release directories', t => {
@@ -147,127 +136,37 @@ test('archive discovery requires complete, unique, ordinary release directories'
   const duplicate = resolve(f.root, 'incoming/old-alpha'); assert.equal(dirname(duplicate), resolve(f.root, 'incoming')); rmSync(duplicate, { recursive: true });
   f.put('incoming/loose.tgz', 'loose'); assert.throws(() => discoverArchives(f.root), /完整发布目录/);
   rmSync(resolve(f.root, 'incoming/loose.tgz'));
-  f.put('incoming/alpha-release/alpha.tgz', 'tampered'); assert.throws(() => discoverArchives(f.root), /摘要/);
+  f.put('incoming/alpha-release/alpha.tgz', 'tampered'); assert.throws(() => discoverArchives(f.root), /无法读取插件归档/);
 });
 
-test('prepared archive operations freeze tools and inputs before data writes and resume without incoming', t => {
-  const f = fixture(t);
-  assert.throws(() => releaseSite({ root: f.root }, f.execute), /fixture check-compose/);
+test('prepared archive operations freeze tools and inputs before data writes', t => {
+  const f = fixture(t); f.setFail('apply-compose');
+  assert.throws(() => releaseSite({ root: f.root }, f.execute), /fixture apply-compose/);
   const record = f.record(); assert.equal(record.schemaVersion, 3); assert.equal(record.status, 'deployment-failed');
-  assert.equal(existsSync(resolve(f.root, '.local/data')), false);
-  assert.equal(f.calls.some(call => ['npm', 'pnpm', 'git'].includes(call[0])), false);
+  // 绑定初始化会创建持久目录与站点标记；业务写入（profile/安装层）尚未发生。
+  assert.equal(existsSync(resolve(f.root, '.local/data', '.dsh-site-id')), true);
+  assert.equal(existsSync(resolve(f.root, '.local/data/dsh-home/profiles/web')), false);
+  // 统一准备不再调用 git，也不在站点根安装依赖：构建依赖只装进公开构建视图。
+  assert.equal(f.calls.some(call => call[0] === 'git'), false);
+  assert.equal(existsSync(resolve(f.root, 'node_modules')), false);
+  // 视图安装只由打包入口在同一个视图里做（不再由站点准备重复安装一次）：
+  // 这里核对构建拿到的 workspace 根就是视图，站点根与任何非视图位置都不在列。
+  assert.ok(f.buildRoots.length > 0 && f.buildRoots.every(cwd => resolve(cwd).startsWith(resolve(f.root, '.local/artifacts'))), f.buildRoots.join(','));
+  assert.ok(f.buildRoots.every(cwd => resolve(cwd) !== resolve(f.root)), f.buildRoots.join(','));
+  assert.ok(f.installCwds.every(cwd => resolve(cwd).startsWith(resolve(f.root, '.local/artifacts'))), f.installCwds.join(','));
   const settings = resolve(f.root, '.local/config/plugins/alpha/plugin.json');
   assert.equal(existsSync(settings), true);
   const candidate = JSON.parse(readFileSync(record.candidatePath));
-  assert.equal(typeof record.siteOperation, 'string');
-  assert.equal(candidate.siteOperation, record.siteOperation);
+  assert.equal(typeof record.siteId, 'string');
+  assert.equal(candidate.siteId, record.siteId);
   assert.ok(candidate.instances.alpha.settingsFile.startsWith(record.operation));
-  const incoming = resolve(f.root, 'incoming'); assert.equal(dirname(incoming), f.root); rmSync(incoming, { recursive: true });
-  f.setFail(null);
-  assert.equal(releaseSite({ root: f.root, resume: true }, f.execute).status, 'ready');
-  assert.equal(f.record().operation, record.operation);
-});
-
-test('configuration recovery uses the same saved package and rejects enablement or tool changes', t => {
-  const f = fixture(t);
-  assert.throws(() => releaseSite({ root: f.root }, f.execute), /fixture check-compose/);
-  const original = f.record(), settings = resolve(f.root, '.local/config/plugins/alpha/plugin.json');
-  f.put(settings, { schemaVersion: 1, enabled: false, config: {} });
-  assert.throws(() => releaseSite({ root: f.root, recover: true, dataCompatible: true }, f.execute), /enabled\/accessMode/);
-  f.put(settings, { schemaVersion: 1, enabled: true, config: { corrected: true } });
-  assert.throws(() => releaseSite({ root: f.root, resume: true }, f.execute), /原受管输入已变化/);
-  f.setFail(null);
-  const recovered = releaseSite({ root: f.root, recover: true, dataCompatible: true }, f.execute);
-  assert.equal(recovered.supersedes, original.operation); assert.notEqual(recovered.operation, original.operation);
-  assert.deepEqual(recovered.selectedPlugins, original.selectedPlugins);
-  const candidate = JSON.parse(readFileSync(recovered.candidatePath));
-  assert.equal(candidate.siteOperation, recovered.siteOperation);
-  assert.equal(candidate.siteRecovery.id, recovered.siteOperation);
-  assert.notEqual(recovered.siteOperation, original.siteOperation);
-  assert.equal(candidate.siteRecovery.pendingId, null);
-  assert.deepEqual(JSON.parse(readFileSync(candidate.instances.alpha.settingsFile)).config, { corrected: true });
-  f.put(resolve(recovered.toolRoot, 'node_modules/extra.mjs'), 'changed');
-  assert.throws(() => verifySavedTooling(recovered), /execution tree changed/);
-});
-
-for (const kind of ['pending', 'state']) for (const field of ['configurations', 'environment', 'patches']) test(`recover rejects unrelated same-package ${kind} with different ${field}`, t => {
-  const f = fixture(t);
-  assert.throws(() => releaseSite({ root: f.root }, f.execute), /fixture check-compose/);
-  const original = f.record();
-  const desired = { schemaVersion: 2, plugins: original.selectedPlugins, siteOperation: '12345678-1234-1234-1234-123456789012',
-    [field]: field === 'patches' ? ['/other.yml'] : { unrelated: true } };
-  const value = kind === 'state' ? desired : { schemaVersion: 2, operationId: '22345678-1234-1234-1234-123456789012', desired };
-  f.put(resolve(original.sitePaths.home, 'profiles', original.sitePaths.profile, `.deepseek-plugin-${kind}.json`), value);
-  const callsBefore = f.calls.length;
-  f.setFail(null);
-  assert.throws(() => releaseSite({ root: f.root, recover: true, dataCompatible: true }, f.execute), /失败候选|受管成功状态/);
-  assert.equal(f.record().operation, original.operation);
-  assert.equal(f.calls.slice(callsBefore).some(call => call[2] === 'apply-compose'), false);
-});
-
-for (const kind of ['pending', 'state']) test(`recover accepts ${kind} owned by the failed site candidate`, t => {
-  const f = fixture(t);
-  assert.throws(() => releaseSite({ root: f.root }, f.execute), /fixture check-compose/);
-  const original = f.record();
-  const desired = { schemaVersion: 2, plugins: original.selectedPlugins, siteOperation: original.siteOperation };
-  const value = kind === 'state' ? desired : { schemaVersion: 2, operationId: '22345678-1234-1234-1234-123456789012', desired };
-  f.put(resolve(original.sitePaths.home, 'profiles', original.sitePaths.profile, `.deepseek-plugin-${kind}.json`), value);
-  f.setFail(null);
-  assert.equal(releaseSite({ root: f.root, recover: true, dataCompatible: true }, f.execute).status, 'ready');
-});
-
-test('recover before the first pending accepts only the recorded prior successful state', t => {
-  const f = fixture(t);
-  f.setFail(null);
-  const successful = releaseSite({ root: f.root }, f.execute), candidate = JSON.parse(readFileSync(successful.candidatePath));
-  const state = { schemaVersion: 2, plugins: successful.selectedPlugins, siteOperation: successful.siteOperation };
-  const statePath = resolve(successful.sitePaths.home, 'profiles', successful.sitePaths.profile, '.deepseek-plugin-state.json');
-  f.put(statePath, state);
-  const composePath = f.put('.local/artifacts/prior-compose.json', { services: { dsh: { image, environment: { DSH_PORT: candidate.port } } } });
-  f.put('.local/artifacts/active-compose.json', { project: candidate.composeProject, path: composePath });
-  f.pack('alpha-release', 'updated'); f.setFail('check-compose');
-  assert.throws(() => releaseSite({ root: f.root }, f.execute), /fixture check-compose/);
-  const failed = f.record();
-  assert.equal(failed.previousStateHash, hash(JSON.stringify(state)));
-  assert.notDeepEqual(failed.selectedPlugins, state.plugins);
-  f.put(statePath, { ...state, configurations: { drifted: true } });
-  assert.throws(() => releaseSite({ root: f.root, recover: true, dataCompatible: true }, f.execute), /受管成功状态/);
-  f.put(statePath, state);
-  assert.throws(() => releaseSite({ root: f.root, recover: true, dataCompatible: true }, f.execute), /fixture check-compose/);
-  assert.equal(f.record().supersedes, failed.operation);
-});
-
-test('recover accepts first installation failing before pending creation', t => {
-  const f = fixture(t); f.setFail('apply-compose');
-  assert.throws(() => releaseSite({ root: f.root }, f.execute), /fixture apply-compose/);
-  assert.equal(f.record().installStarted, true);
-  assert.equal(f.record().previousStateHash, null);
-  f.setFail(null);
-  assert.equal(releaseSite({ root: f.root, recover: true, dataCompatible: true }, f.execute).status, 'ready');
-});
-
-test('repeated recovery before pending consumption keeps only the already-authorized transaction', t => {
-  const f = fixture(t);
-  assert.throws(() => releaseSite({ root: f.root }, f.execute), /fixture check-compose/);
-  const original = f.record(), pendingPath = resolve(original.sitePaths.home, 'profiles', original.sitePaths.profile, '.deepseek-plugin-pending.json');
-  const pending = { schemaVersion: 2, operationId: '22345678-1234-1234-1234-123456789012', desired: { schemaVersion: 2, plugins: original.selectedPlugins, siteOperation: original.siteOperation } };
-  f.put(pendingPath, pending);
-  assert.throws(() => releaseSite({ root: f.root, recover: true, dataCompatible: true }, f.execute), /fixture check-compose/);
-  const failedRecovery = f.record();
-  assert.equal(Object.hasOwn(failedRecovery, 'previousStateHash'), false);
-  rmSync(pendingPath);
-  assert.throws(() => releaseSite({ root: f.root, recover: true, dataCompatible: true }, f.execute), /受管成功状态/);
-  f.put(pendingPath, { ...pending, desired: { ...pending.desired, configurations: { drifted: true } } });
-  assert.throws(() => releaseSite({ root: f.root, recover: true, dataCompatible: true }, f.execute), /原 pending/);
-  f.put(pendingPath, pending); f.setFail(null);
-  const recovered = releaseSite({ root: f.root, recover: true, dataCompatible: true }, f.execute);
-  assert.equal(recovered.supersedes, failedRecovery.operation);
-  assert.equal(recovered.status, 'ready');
+  // 绑定已初始化且目录标记就位；失败候选保留，下次普通 build 重新收敛。
+  assert.equal(existsSync(resolve(f.root, '.local/site-binding.json')), true);
 });
 
 test('saved operations and executable paths cannot escape through directory junctions', t => {
-  const f = fixture(t);
-  assert.throws(() => releaseSite({ root: f.root }, f.execute), /fixture check-compose/);
+  const f = fixture(t); f.setFail('apply-compose');
+  assert.throws(() => releaseSite({ root: f.root }, f.execute), /fixture apply-compose/);
   const record = f.record(), outside = resolve(f.root, 'elsewhere');
   cpSync(record.toolRoot, outside, { recursive: true, filter: () => true });
   assert.throws(() => verifySavedTooling({ ...record, toolRoot: outside }), /escapes/);
@@ -283,4 +182,18 @@ test('runtime metadata rejects version mismatch and duplicate platforms', () => 
   assert.equal(validateRuntimeIndex(index), index);
   assert.throws(() => validateRuntimeIndex({ ...index, manager: { ...index.manager, version: '0.1.0' } }), /发行信息/);
   assert.throws(() => validateRuntimeIndex({ ...index, runtimes: [...index.runtimes, ...index.runtimes] }), /平台重复/);
+});
+
+test('the archive cache root follows the resolved artifacts root instead of a fixed path', t => {
+  const f = fixture(t);
+  // 自定义 artifacts 根：迁移保全 file: 引用时按绑定的 artifacts 换算，发布必须落到同一个位置，
+  // 否则换容器后挂载的是另一个目录，历史引用会失效（设计 4.2、5.1、6.2）。
+  f.put('.local/site.json', { artifacts: 'deploy-artifacts' });
+  f.setFail(null);
+  const record = releaseSite({ root: f.root }, f.execute);
+  assert.equal(record.status, 'ready');
+  const candidate = JSON.parse(readFileSync(record.candidatePath));
+  assert.equal(candidate.pluginCacheRoot, resolve(f.root, 'deploy-artifacts/plugin-packages'));
+  assert.equal(existsSync(resolve(candidate.pluginCacheRoot, candidate.pluginCacheManifest)), true);
+  assert.equal(record.sitePaths.artifacts, resolve(f.root, 'deploy-artifacts'));
 });

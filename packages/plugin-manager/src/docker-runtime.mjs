@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { writeFileSync, rmSync, statSync, openSync, readSync, closeSync } from 'node:fs';
-import { join, posix } from 'node:path';
-import { canonical } from './state.mjs';
+import { join, posix, resolve } from 'node:path';
+import { canonical, within } from './state.mjs';
 
 export const executeDocker = (args, options = {}) => execFileSync('docker', args, { windowsHide: true, ...options });
 
@@ -41,11 +41,39 @@ export function checkDockerMounts(service, execute) {
 }
 
 const hashFileScript = `const fs=require('node:fs'),hash=require('node:crypto').createHash('sha256'),fd=fs.openSync(process.argv[1],'r'),buffer=Buffer.alloc(1048576);try{for(let n;(n=fs.readSync(fd,buffer,0,buffer.length,null));)hash.update(buffer.subarray(0,n));}finally{fs.closeSync(fd);}process.stdout.write(hash.digest('hex'));`;
+
 function hashFile(path) {
   const hash = createHash('sha256'), fd = openSync(path, 'r'), buffer = Buffer.alloc(1048576);
   try { for (let n; (n = readSync(fd, buffer, 0, buffer.length, null));) hash.update(buffer.subarray(0, n)); }
   finally { closeSync(fd); }
   return hash.digest('hex');
+}
+
+/**
+ * 同一目录的候选路径空间（设计 3 节、5.1）。
+ *
+ * Docker Desktop 上 `docker inspect` 的 `Mounts[].Source` 可能给主机写法（`C:\data`），也可能给
+ * VM 写法（`/run/desktop/mnt/host/c/data`）。用主机写法去比较 VM 写法会得出「不属于本站点」或
+ * 「没有重叠写入者」两种相反的错误结论，所以比较必须发生在**同一个路径空间**里。
+ */
+export function locationForms(path) {
+  const text = String(path ?? '');
+  if (/^\/run\/desktop\/mnt\/host\//u.test(text)) return [{ space: 'vm', path: text.replace(/\/+$/u, '') }];
+  const host = canonical(text);
+  const forms = [{ space: 'host', path: host }];
+  const drive = /^([a-zA-Z]):[\\/](.*)$/u.exec(host);
+  if (drive) forms.push({ space: 'vm', path: `/run/desktop/mnt/host/${drive[1].toLowerCase()}/${drive[2].replace(/\\/gu, '/')}`.replace(/\/+$/u, '') });
+  return forms;
+}
+
+/** `inner` 与 `outer` 相同，或位于 `outer` 之内；只在同一路径空间内比较。 */
+export function sameOrWithinLocation(outer, inner) {
+  for (const a of locationForms(outer)) for (const b of locationForms(inner)) {
+    if (a.space !== b.space) continue;
+    if (a.space === 'host') { if (b.path === a.path || within(a.path, b.path)) return true; }
+    else if (b.path === a.path || b.path.startsWith(`${a.path}/`)) return true;
+  }
+  return false;
 }
 
 function proveMountedSource(source, target, container, image, execute) {
@@ -70,27 +98,79 @@ export function proveDockerHome(deployment, container, image, execute) {
   return proveMountedSource(deployment.home, home, container, image, execute);
 }
 
-/** Prove the old service identity and persistent mounts before deployment. */
-export function assertStoppedCompose(compose, containerIds, image, execute, runtime) {
-  const service = compose?.services?.dsh;
-  if (!service || !Array.isArray(service.volumes) || !Array.isArray(containerIds) || !containerIds.length || new Set(containerIds).size !== containerIds.length || containerIds.some(id => !/^[a-f0-9]{12,64}$/u.test(id))) throw new Error('缺少可核验的旧容器身份，拒绝部署。');
-  const inspect = () => {
-    const containers = JSON.parse(String(execute(['inspect', ...containerIds], { encoding: 'utf8' })));
-    if (!Array.isArray(containers) || containers.length !== containerIds.length || containerIds.some(id => containers.filter(container => container.Id?.startsWith(id)).length !== 1)) throw new Error('旧容器身份不完整，拒绝部署。');
-    for (const container of containers) {
-      if (container.State?.Running !== false || container.State?.Restarting !== false || container.Config?.Image !== service.image || container.Config?.Labels?.['com.docker.compose.service'] !== 'dsh') throw new Error('旧容器未完全停止或镜像/服务身份不匹配，拒绝部署。');
-      for (const key of ['DSH_HOME', 'DSH_PROFILE']) if (!service.environment?.[key] || !container.Config.Env?.includes(`${key}=${service.environment[key]}`)) throw new Error('旧容器 home/profile 不匹配，拒绝部署。');
+/**
+ * 按 Compose 项目实时查询当前容器：停止目标与挂载证明的唯一来源（设计 3、5.3）。
+ * 不读旧记录、旧镜像或容器代次；返回的项目容器包含已停与运行中的全部实例。
+ */
+export function composeContainers(execute, runtime, composeProject) {
+  const run = args => String(execute(args, { encoding: 'utf8' })).trim();
+  const ids = value => value.split(/\s+/).filter(id => /^[a-f0-9]{12,64}$/u.test(id));
+  const filter = `label=com.docker.compose.project=${composeProject}`;
+  return { running: ids(run(['ps', '-q', '--filter', filter])), all: ids(run(['ps', '-a', '-q', '--filter', filter])) };
+}
+
+/**
+ * 当前服务的停止与挂载证明（设计 3、5.1、5.3）。
+ *
+ * 零容器是合法已停现场：没有容器时不需要（也无法）证明挂载，直接通过——不要求旧容器存在，
+ * 也不比较镜像或容器代次。有容器时只核验当前安全事实：已停、服务身份是 dsh、profile 与 home
+ * 通过**实际挂载映射**对应本次绑定，且可写持久挂载都落在绑定的持久目录内。
+ *
+ * `image` 是本次部署已经核验过的运行镜像：Desktop 的路径证明要起一个一次性容器，只能用本次镜像，
+ * 不能再用旧容器的 `Config.Image`（旧标签可能已被删除，那会把证明变成对旧代次的准入依赖）。
+ */
+export function assertStoppedBinding(containerIds, binding, execute, runtime, image) {
+  if (!containerIds.length) return [];
+  const containers = JSON.parse(String(execute(['inspect', ...containerIds], { encoding: 'utf8' })));
+  if (!Array.isArray(containers) || containers.length !== containerIds.length
+    || containerIds.some(id => containers.filter(container => container.Id?.startsWith(id)).length !== 1)) throw new Error('当前容器身份不完整，拒绝部署。');
+  const directories = [binding.dataRoot, binding.home, binding.workspace, binding.artifacts].map(canonical);
+  const home = canonical(binding.home);
+  if (runtime.desktop && typeof image !== 'string') throw new Error('Desktop 挂载证明需要本次已核验的运行镜像；不再使用旧容器的镜像。');
+  for (const container of containers) {
+    if (container.State?.Running !== false || container.State?.Restarting !== false) throw new Error('当前服务未完全停止，拒绝部署。');
+    if (container.Config?.Labels?.['com.docker.compose.service'] !== 'dsh') throw new Error('当前容器不是本站点的 dsh 服务，拒绝部署。');
+    const variables = Object.fromEntries((container.Config?.Env ?? []).map(value => { const index = value.indexOf('='); return [value.slice(0, index), value.slice(index + 1)]; }));
+    const containerHome = variables.DSH_HOME;
+    if (!containerHome || variables.DSH_PROFILE !== binding.profile) throw new Error('当前容器 profile 与站点绑定不一致，拒绝部署。');
+    const mount = (container.Mounts ?? []).filter(item => item.Type === 'bind' && (containerHome === item.Destination || containerHome.startsWith(`${item.Destination}/`)))
+      .sort((a, b) => b.Destination.length - a.Destination.length)[0];
+    if (!mount || typeof mount.Source !== 'string') throw new Error('当前容器没有对应 home 的持久挂载，拒绝部署。');
+    // Desktop 的路径同一性用探针证明；本机 Linux 直接按挂载映射把容器内 home 换算回主机路径。
+    const same = runtime.desktop
+      ? proveMountedSource(home, containerHome, container, image, execute)
+      : canonical(resolve(mount.Source, posix.relative(mount.Destination, containerHome))) === home;
+    if (!same) throw new Error('当前容器挂载的数据目录与站点绑定不一致，拒绝部署。');
+    for (const item of container.Mounts ?? []) {
+      if (item.Type !== 'bind' || !item.RW || String(item.Destination ?? '').startsWith('/run/')) continue;
+      // 路径空间可能不同（Desktop 的 VM 写法），比较前先归一；否则会误判为「不属于站点绑定」。
+      if (!directories.some(directory => sameOrWithinLocation(directory, item.Source ?? ''))) throw new Error(`当前容器的可写挂载不属于站点绑定：${item.Source}；拒绝部署。`);
     }
-    return containers;
-  };
-  const containers = inspect();
-  const volumes = service.volumes.filter(volume => !volume.read_only || volume.target?.startsWith('/run/'));
-  if (!volumes.length) throw new Error('旧容器没有持久挂载，拒绝部署。');
-  for (const container of containers) for (const volume of volumes) {
-    const mount = container.Mounts?.find(item => item.Type === 'bind' && item.Destination === volume.target);
-    if (volume.type !== 'bind' || typeof volume.source !== 'string' || !mount || mount.RW !== !Boolean(volume.read_only)) throw new Error('旧容器持久挂载声明不匹配，拒绝部署。');
-    const source = canonical(volume.source);
-    if (runtime.desktop ? !proveMountedSource(source, volume.target, container, image, execute) : canonical(mount.Source) !== source) throw new Error('旧容器持久挂载来源不匹配，拒绝部署。');
   }
-  inspect();
+  return containers;
+}
+
+/**
+ * 本机引擎上还有谁在写同一批持久目录（设计 5.1、6.2）。
+ *
+ * 查询只覆盖本项目是不够的：零容器只是「本项目没有容器」，不代表没有别的容器（旧副本、手工起的
+ * 实例、另一个 Compose 项目）正在写同一份数据。这里按**运行中**容器逐个核对可写绑定挂载与站点
+ * 四个持久目录是否重叠，任一重叠就拒绝部署。已停止的容器不算写入者。
+ */
+export function assertNoOverlappingWriters(binding, execute, runtime) {
+  const running = String(execute(['ps', '-q'], { encoding: 'utf8' })).trim().split(/\s+/).filter(id => /^[a-f0-9]{12,64}$/u.test(id));
+  if (!running.length) return [];
+  const containers = JSON.parse(String(execute(['inspect', ...running], { encoding: 'utf8' })));
+  const directories = [binding.dataRoot, binding.home, binding.workspace, binding.artifacts];
+  for (const container of containers) {
+    if (container.State?.Running === false) continue;
+    for (const item of container.Mounts ?? []) {
+      if (item.Type !== 'bind' || !item.RW) continue;
+      // 双向重叠都算写入者；比较在同一路径空间内进行（Desktop 会给 VM 写法）。
+      if (directories.some(directory => sameOrWithinLocation(directory, item.Source ?? '') || sameOrWithinLocation(item.Source ?? '', directory))) {
+        throw new Error(`容器 ${String(container.Id ?? '').slice(0, 12)} 正在写入站点持久目录：${item.Source}；先停止该写入者再部署。`);
+      }
+    }
+  }
+  return containers;
 }

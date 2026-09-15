@@ -1,6 +1,6 @@
 # 插件运行配置规范
 
-需要完整可复制配置时，使用 [demo 配置示例](../plugins/dsh-example/examples/README.md)，其中列出 example、auth、部署配置的全部适用字段、默认值和必填条件。
+需要完整可复制配置时，使用 [demo 配置示例](../plugins/builtin/dsh-example/examples/README.md)，其中列出 example、auth、部署配置的全部适用字段、默认值和必填条件。
 
 管理器 0.2.1 起，支持 `configuration` 声明的插件使用自己的 `plugin.json`。插件作者声明入口、认证角色和就绪地址；管理器负责配置读取、DSH patch、容器挂载、启停和健康检查。添加符合声明格式的插件，不需要修改管理器的插件名单或专用判断。
 
@@ -12,7 +12,6 @@
 {
   "schemaVersion": 3,
   "id": "example",
-  "defaultEnabled": true,
   "entryPath": "/example",
   "healthPath": "/example/ready",
   "permissions": ["example:access"],
@@ -32,7 +31,6 @@
 | --- | --- |
 | `description` | 可选，可省略或填写空文本 |
 | `displayName` | 可选，默认使用 npm 包名 |
-| `defaultEnabled` | 可选，默认 true |
 | `entryPath`、`healthPath` | 可选，不猜测页面或健康检查地址 |
 | `permissions`、`verifyFiles` | 可选，默认没有额外声明；基本归档文件仍校验 |
 | `configuration` | 可整体省略，使用插件自身的 Bundle 配置 |
@@ -40,21 +38,9 @@
 | `configuration.auth` | 可选，不声明则不接入统一认证角色 |
 | `runtimeConfig` | 可整体省略；声明时 `variable` 必填，`template` 可选，`required` 默认 true |
 | `development` | 可整体省略；声明时开发 patch 和变量映射仍须有效 |
-| `buildInputs` | 可选；省略时按需复用采取保守判断（见下） |
 | 运行配置的 `enabled`、`accessMode`、`config` | 可省略，分别默认 true、消费者 authenticated、空对象；这些字段不参与构建 |
 
 用于确定包身份、执行构建和加载 Bundle 的 `name`、`version`、`deepseekPlugin.schemaVersion`、`deepseekPlugin.id`、`main`、`dsh.bundle.patch`、`files`、README、`scripts.build` 和 `scripts.check` 是内部与独立包共用的必需输入。声明的文件必须真实存在；构建产物可由 build 生成。
-
-### 声明构建输入，让按需复用能精确判断
-
-源码部署默认全量构建；`--rebuild-plugins <ID列表>` 只重建点名的插件，其余复用上一次成功发布的归档（判定与拒绝规则见[部署说明](../deploy/README.md#服务器源码发版)）。判定依据是「这次改动落在哪些插件的构建输入里」，而插件目录本身与它声明的包依赖（`dependencies`、`devDependencies`、`optionalDependencies`、`peerDependencies` 里的 `workspace:` 依赖）是自动识别的。不想自己点名时用 `--rebuild-plugins auto`：重建集由同一套判定算出来，判不出来就整套重建。
-
-问题出在插件读取**没有通过包依赖声明**的文件：它可能读仓库里的文档、脚本或框架源码。这类读取框架无法推断，所以：
-
-- **声明 `buildInputs`**（仓库根目录下的相对路径，目录或文件）就表示「除插件目录与包依赖之外，我只读这些」。之后改动落在这些路径之外时，这个插件可以直接复用旧归档。
-- **不声明**则视为读取范围未知：只有改动全部落在本次重建的插件目录内，才允许复用它。空数组 `[]` 是有效声明，表示「我不读插件目录与包依赖之外的任何文件」。
-
-路径只做形状与存在性校验，不限制范围；多列只会多触发重建，不会漏判。未纳入 Git 的路径在构建输入里查不到，因此不影响判定。真实例子见 `plugins/dsh-example/package.json`：它的构建会快照框架公开文件，所以逐项列出了 `doc`、`deploy`、`scripts` 等；`plugins/dsh-auth/package.json` 则是 `[]`。
 
 要求认证的实例仍需在部署时提供合法站点 origin 和认证提供者；声明为必需的业务配置也在部署时检查。省略上表中的可选字段，不代表这些运行前提也可以省略。
 

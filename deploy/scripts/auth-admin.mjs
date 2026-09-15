@@ -1,1 +1,1 @@
-import '../../plugins/dsh-auth/scripts/auth-admin.mjs';
+import '../../plugins/builtin/dsh-auth/scripts/auth-admin.mjs';

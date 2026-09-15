@@ -7,19 +7,19 @@
 ## 准备工具
 
 <!-- Excerpt from doc/plugin-development.md.tmpl#author-tools; edit its source. -->
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.17.0.zip`、`plugin-manager-0.17.0.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.17.0.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.18.0.zip`、`plugin-manager-0.18.0.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.18.0.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
 
 起步 zip 内有 standalone-plugin、standalone-kit；选一个目录复制为自己的作者项目，不复制 node_modules、dist 或 .local。在作者项目以外创建独立工具目录 dsh-tools，在该工具目录安装实际 manager 归档：
 
 ```sh
 pnpm init
-pnpm add --ignore-workspace /absolute/path/plugin-manager-0.17.0.tgz
+pnpm add --ignore-workspace /absolute/path/plugin-manager-0.18.0.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
 将占位路径替换为实际绝对路径，含空格时加引号。以后 pnpm exec dsh-plugin-manager 都在这个工具目录执行，--root 明确指向作者项目。manager 不加入业务运行依赖；工具目录和作者项目各自保存锁文件。
 
-在本作者目录执行 `pnpm install --ignore-workspace`，保存生成的 pnpm-lock.yaml。该例适用于框架 0.17.0 的打包与部署流程。
+在本作者目录执行 `pnpm install --ignore-workspace`，保存生成的 pnpm-lock.yaml。该例适用于框架 0.18.0 的打包与部署流程。
 
 ## 打包并请求
 
@@ -29,11 +29,12 @@ pnpm exec dsh-plugin-manager --version
 ```sh
 pnpm exec dsh-plugin-manager list --root /absolute/path/my-plugin --package .
 pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --output .local/artifacts/release/v1
+pnpm exec dsh-plugin-manager verify-release --release .local/artifacts/release/v1
 ```
 
-list 只读声明，不要求锁文件；pack 要求作者根的 pnpm-lock.yaml，冻结安装后各执行一次 build/check，再校验并打包，无需事先重复 check。输出必须是新目录或空目录，路径相对作者 root；再次发布用新目录 v2。日常可独立运行 check，它会先 build，完整业务测试另行运行。
+list 只读声明，不要求锁文件。pack 只做构建、打包与内容寻址（归档按实际字节摘要命名），不再顺带做检查或校验；输出必须是新目录或空目录，路径相对作者 root，再次发布用新目录 v2。自检是三条独立命令：`check`（先 build 再跑类型检查等，日常开发用它）、`verify-package --root <包根> --package . --archive <tgz>`（归档与本次构建源码字节一致）、`verify-release --release <发布目录>`（整个交付目录的清单、摘要、包结构与元数据合规，可进 CI）。pack 成功后 CLI 只说明生成了什么，不说"已验证"。
 
-交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。CLI 会在 pack 成功后输出这些下一步，交付时以整个目录为单位，不单独抽走 tgz。
+交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。交付时以整个目录为单位，不单独抽走 tgz。
 
 在独立部署目录中把本次完整发布目录放入 incoming/independent-example，执行 build。访问 `http://127.0.0.1:7902/independent-example/ready`；端口改动时使用实际地址。预期 HTTP 200，响应为 `{"ready":true}`；必须验证实际端点，而非仅看到容器运行。
 

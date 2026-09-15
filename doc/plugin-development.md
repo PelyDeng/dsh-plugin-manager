@@ -19,13 +19,13 @@
 ### 1. 取得并安装工具
 
 <!-- excerpt:author-tools -->
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.17.0.zip`、`plugin-manager-0.17.0.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.17.0.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.18.0.zip`、`plugin-manager-0.18.0.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.18.0.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
 
 起步 zip 内有 standalone-plugin、standalone-kit；选一个目录复制为自己的作者项目，不复制 node_modules、dist 或 .local。在作者项目以外创建独立工具目录 dsh-tools，在该工具目录安装实际 manager 归档：
 
 ```sh
 pnpm init
-pnpm add --ignore-workspace /absolute/path/plugin-manager-0.17.0.tgz
+pnpm add --ignore-workspace /absolute/path/plugin-manager-0.18.0.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
@@ -52,11 +52,12 @@ vendor 是作者选择保存的公开构建输入，不能放真实配置；保�
 ```sh
 pnpm exec dsh-plugin-manager list --root /absolute/path/my-plugin --package .
 pnpm exec dsh-plugin-manager pack --root /absolute/path/my-plugin --package . --output .local/artifacts/release/v1
+pnpm exec dsh-plugin-manager verify-release --release .local/artifacts/release/v1
 ```
 
-list 只读声明，不要求锁文件；pack 要求作者根的 pnpm-lock.yaml，冻结安装后各执行一次 build/check，再校验并打包，无需事先重复 check。输出必须是新目录或空目录，路径相对作者 root；再次发布用新目录 v2。日常可独立运行 check，它会先 build，完整业务测试另行运行。
+list 只读声明，不要求锁文件。pack 只做构建、打包与内容寻址（归档按实际字节摘要命名），不再顺带做检查或校验；输出必须是新目录或空目录，路径相对作者 root，再次发布用新目录 v2。自检是三条独立命令：`check`（先 build 再跑类型检查等，日常开发用它）、`verify-package --root <包根> --package . --archive <tgz>`（归档与本次构建源码字节一致）、`verify-release --release <发布目录>`（整个交付目录的清单、摘要、包结构与元数据合规，可进 CI）。pack 成功后 CLI 只说明生成了什么，不说"已验证"。
 
-交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。CLI 会在 pack 成功后输出这些下一步，交付时以整个目录为单位，不单独抽走 tgz。
+交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。交付时以整个目录为单位，不单独抽走 tgz。
 <!-- /excerpt:author-pack -->
 
 按[首次部署](first-deployment.md)用真实请求跑通。无 kit 示例请求 `/independent-example/ready`；鉴权示例需 optional/auth、登录与授权后请求 `/independent-access-example/identity`。有了第一次成功后再改名称和业务。
@@ -118,7 +119,7 @@ pnpm install --frozen-lockfile
 pnpm list:plugins
 ```
 
-**预期**：继续扫描 `plugins/*`。新增插件放在该目录并按[配置规范](plugin-configuration.md)声明；使用 `--plugins` 选择需要处理的插件。源码默认选集包含 auth 和 example。
+**预期**：继续扫描 `plugins/builtin/*`。新增插件放在该目录并按[配置规范](plugin-configuration.md)声明；使用 `--plugins` 选择需要处理的插件。源码默认选集包含 auth 和 example。
 
 ### 2. 选择日常检查或直接打包
 
@@ -137,12 +138,12 @@ pnpm list:plugins
 插件的页面代码是浏览器原生模块，没有 jsdom 能覆盖的执行环境，所以布局改动最容易只能靠人眼。仓库提供的做法是**真的把页面跑起来量一遍**：`scripts/web-page-probe.mjs` 起静态服务、按桩文件顶掉接口、用无头 Chromium 在多个视口宽度下执行你写的探针表达式，再把结果打回来。
 
 ```bash
-node scripts/web-page-probe.mjs --root plugins/dsh-auth --prefix /auth \
-  --stub plugins/dsh-auth/tests/page-stub.json --probe plugins/dsh-auth/tests/page-probe.js \
+node scripts/web-page-probe.mjs --root plugins/builtin/dsh-auth --prefix /auth \
+  --stub plugins/builtin/dsh-auth/tests/page-stub.json --probe plugins/builtin/dsh-auth/tests/page-probe.js \
   --widths 1150,860,640
 ```
 
-探针就是一段返回可序列化值的表达式，能直接读 DOM（样例量的是每行卡片数、同一行卡片头部与页脚的位置差、是否横向溢出、说明渲染了几行）。`plugins/dsh-auth/tests/page-layout.test.mjs` 把这些量变成断言，`pnpm test` 里就会跑：宽视口必须出现三张一行、窄视口回落单列、任何宽度都不许出现错位或横向溢出。
+探针就是一段返回可序列化值的表达式，能直接读 DOM（样例量的是每行卡片数、同一行卡片头部与页脚的位置差、是否横向溢出、说明渲染了几行）。`plugins/builtin/dsh-auth/tests/page-layout.test.mjs` 把这些量变成断言，`pnpm test` 里就会跑：宽视口必须出现三张一行、窄视口回落单列、任何宽度都不许出现错位或横向溢出。
 
 页面 HTML 与构建产物不在同一目录时：用 `--dir <目录>` 换掉页面目录（默认 `<root>/web`），用 `--mount <路径=目录>` 把产物目录挂到宿主约定的资源前缀下；HTML 里有待宿主替换的占位配置时，用 `--replace <词=文件>` 在返回前换成该文件内容。探针与桩文件放在插件的 `tests/` 下随源码维护，不需要额外依赖。加 `--json` 只输出结果，便于脚本消费。
 
@@ -151,15 +152,15 @@ node scripts/web-page-probe.mjs --root plugins/dsh-auth --prefix /auth \
 
 打包会并行构建与打包多个插件：插件之间没有依赖，同时最多 4 个（`pnpm package --concurrency <n>` 可调整，1 表示逐个进行）。依赖安装与共享依赖准备先单线做完，再进入并行阶段；日志按插件 ID 加前缀以便分辨，交付清单里的插件顺序仍按选集，与并发无关。
 
-源码部署可用 `./build.sh --rebuild-plugins c` 或 `.\build.ps1 --rebuild-plugins c` 只重建指定插件，并复用其余已启用插件的旧归档；部署选集、复用条件及恢复方式见[部署说明](../deploy/README.md#服务器源码发版)。日常 `pnpm package --plugins c` 只生成 c 的交付清单，不会自动补入其他插件。
+站点内置插件固定全量构建，不再按插件点名重建；部署选集、构建输入与重试方式见[部署说明](../deploy/README.md#服务器源码发版)。日常 `pnpm package --plugins c` 只生成 c 的交付清单，不会自动补入其他插件。
 
-可复用插件的构建输入来自自身目录、`dependencies`、`devDependencies`、`optionalDependencies`、`peerDependencies` 里声明的本地依赖（`workspace:` 按包名解析，含间接依赖），加上仓库级共享输入（`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.npmrc`、`.gitattributes`）。读取其他插件源码也属于构建依赖，应通过本地包名和标准 `workspace:` 声明；example 读取 auth 源码生成索引，因此把 auth 声明为开发依赖。改动落在这些之外时，插件可以直接复用旧归档。
+可复用插件的构建输入来自自身目录、`dependencies`、`devDependencies`、`optionalDependencies`、`peerDependencies` 里声明的本地依赖（`workspace:` 按包名解析，含间接依赖），加上仓库级共享输入（`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`.npmrc`、`.gitattributes`）。读取其他插件源码也属于构建依赖，应通过本地包名和标准 `workspace:` 声明；example 读取 auth 源码生成索引，因此把 auth 声明为开发依赖。改动落在这些之外时，判定无法逐插件确认，按保守口径处理：只有本次改动全部落在被重建插件的目录内，其余插件才继续复用旧归档。
 
-构建还会读取没有通过包依赖声明的文件（例如框架公开文档、`scripts`、`deploy`），这是框架推断不出来的，所以要在 `deepseekPlugin.buildInputs` 里逐项声明（仓库根目录下的相对路径，目录或文件；空数组表示不读插件目录与包依赖之外的任何文件）。**省略这个字段时**读取范围视为未知：只有本次改动全部落在被重建的插件目录内才允许复用它。example 会快照框架公开文件，因此声明了 `doc`、`deploy`、`scripts`、`packages/plugin-manager` 等；字段与判定规则见[插件配置](plugin-configuration.md#声明构建输入让按需复用能精确判断)与[部署说明](../deploy/README.md#服务器源码发版)。
+内置构建不再由插件清单逐项声明要读哪些文件：它固定使用框架发行方的完整公开构建视图（`packages`、`plugins/builtin`、`scripts`、`deploy`、`integrations`、`examples`、`doc`、`.github` 以及公开根构建文件与模板），视图内的材料都是内置构建的输入。旧字段 `deepseekPlugin.buildInputs` 已退役，声明它会被当场拒绝；需要读取公开视图之外的东西应改为标准包依赖声明，读不到的输入变化一律按全量构建处理，判定规则见[部署说明](../deploy/README.md#服务器源码发版)。
 
 本地构建归档可声明为 `file:vendor/library-0.1.0.tgz`，但必须位于声明它的插件自身目录内，是已纳入 Git 的常规 `.tgz` / `.tar.gz` 文件。复用时核对旧、新提交中的 Git blob 一致，且磁盘字节与 Git 对象相符；归档及父目录不能是符号链接。跨目录、目录形式、未跟踪或仅在忽略目录中的归档，以及 `link:` 依赖仍不支持复用，须全量构建。这不改变最终发布包不能携带 `file:` 运行依赖的约束：本地归档用于构建，所需代码应内嵌到插件产物。
 
-任意脚本读取未声明目录、外部文件或环境产生的输入无法由 Git 差异证明；存在这种输入变化时应全量构建。
+任意脚本读取公开视图之外的文件（例如 `plugins/external` 源码、私有配置）或由环境产生的输入无法由 Git 差异证明；存在这种输入变化时应全量构建。
 
 插件构建由显式 build/check/pack 流程执行，不得用依赖安装钩子触发插件构建或修改产物。选择重建前会核验相关安装钩子；不能以“插件没有被选中”为由允许其安装钩子间接重建。
 
@@ -169,7 +170,7 @@ node scripts/web-page-probe.mjs --root plugins/dsh-auth --prefix /auth \
 
 ## 复制完整问答应用到独立仓库
 
-复制 `plugins/dsh-example` 中的源码、scripts、web、knowledge、examples、skills、Bundle、README/LICENSE、package.json、tsconfig 与 tsdown 配置；不复制 node_modules、dist、数据库和 .local。选择一个未加入原框架 workspace 的新包根。问答视觉与交互遵循随包 [聊天风格 skill](../plugins/dsh-example/skills/dsh-chat-style/SKILL.md)，包括折叠思考预览、流式更新和回答工具栏。
+复制 `plugins/builtin/dsh-example` 中的源码、scripts、web、knowledge、examples、skills、Bundle、README/LICENSE、package.json、tsconfig 与 tsdown 配置；不复制 node_modules、dist、数据库和 .local。选择一个未加入原框架 workspace 的新包根。问答视觉与交互遵循随包 [聊天风格 skill](../plugins/builtin/dsh-example/skills/dsh-chat-style/SKILL.md)，包括折叠思考预览、流式更新和回答工具栏。
 
 1. 在作者 package.json 删除 `@dsh-plugin-manager/plugin-kit` 的 `workspace:*` 开发依赖，再在作者根执行 `pnpm add --ignore-workspace --save-dev <kit-tgz绝对路径>`。同时删除只用于声明框架源码索引输入的 `dsh-auth` 开发依赖；索引读取第 5 步显式提供的框架源码。保留 tsdown 内嵌 kit，宿主依赖保持 peer。
 2. 删除 scripts.clean 的原仓库相对入口，或换成只清理本包构建目录的实现。不要把数据目录加入清理命令。
@@ -182,9 +183,22 @@ node scripts/web-page-probe.mjs --root plugins/dsh-auth --prefix /auth \
 
 复制时保留[自动标题](conversation-management.md#自动标题)的全生命周期监听、owner 检查和手动标题保护；前端复用有界历史刷新。宿主已经提炼首句，业务插件不再另发标题请求。沿用历史数据库时核对 schema 4 的升级与回退边界。
 
-## 交付内容
+## 接入与交付约定
 
-作者随归档提供公开配置模板、包内 README、已验证宿主版本、就绪地址和一次业务验证方法。manager 可通过 `compose-release --verification-report` 将最终归档的测试记录附入新发布清单，详细字段与命令见[发布物验证记录](../packages/plugin-manager/VERIFICATION.md)。pack 的构建检查不等于宿主或模型测试。不要在归档中加入真实凭据或客户数据。
+作者按本节交付，站点只按完整发布目录安装，自检只在交付侧执行：
+
+| 约定 | 内容 |
+| --- | --- |
+| 完整发布目录 | manifest.json 加全部摘要命名 tgz；一次整体替换 incoming/<应用目录>，不单独抽走 tgz、不手写清单 |
+| 内容寻址命名 | 归档名为 `<id>-<sha256>.tgz`，摘要是归档实际字节；更新后换新目录（v1 → v2），同 ID 新版整体替换旧目录 |
+| 可移植依赖 | 运行依赖不指向作者机器、workspace 路径或 file:/link:；本地构建归档只用于构建，所需代码内嵌进产物 |
+| 入口与声明一致 | id、包名、版本、entryPath、healthPath 与归档一致；部署读路径从归档读实际包名，清单写错会被拒绝 |
+| 不得包含私密配置 | 归档不含 env.conf、.env、凭据、token、客户数据；runtimeConfig 只声明变量与模板 |
+| 配置归属 | 业务参数用 configuration 或 runtimeConfig；用户配置与部署数据不属于包资源 |
+| 数据兼容性由作者说明 | 同包业务配置修正的兼容性由作者在发布说明中写清；管理器不代判跨包兼容 |
+| 自检只在交付侧执行 | check / verify-package / verify-release 由作者与 CI 执行；站点 build 不重跑这些门禁，坏包在安装或验证时如实报错并给出独立检查命令 |
+
+作者随归档提供公开配置模板、包内 README、已验证宿主版本、就绪地址和一次业务验证方法。manager 可通过 `compose-release --verification-report` 将最终归档的测试记录附入新发布清单，详细字段与命令见[发布物验证记录](../packages/plugin-manager/VERIFICATION.md)。pack 的构建不等于宿主或模型测试。不要在归档中加入真实凭据或客户数据。
 
 使用说明应提供就绪地址、普通账号操作步骤和所需授权。销售接口、数据范围、Agent 工具和图表属于应用代码，kit 的可信身份不能替代业务数据授权。
 

@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { resolveDeployment, runtimeEnvironment } from '../src/config.mjs';
 import { prepareFrameworkCredentials, frameworkCredentialEnvironment } from '../src/framework-credentials.mjs';
 import { renderCompose } from '../src/compose.mjs';
-import { PENDING } from '../src/state.mjs';
 
 function fixture(t, text = 'DEEPSEEK_API_KEY=sk-private-sentinel\nREGISTRY_PASSWORD=registry-private-sentinel\n') {
   const root = mkdtempSync(join(tmpdir(), 'dsh credentials 中文 '));
@@ -47,42 +46,8 @@ test('source changes and projection tampering reject instead of silently regener
   assert.throws(() => prepareFrameworkCredentials(deployment), /读取后发生变化/);
 });
 
-test('resume binds the original projection and rejects changed keys or missing original bytes', t => {
-  const { root, config, deployment } = fixture(t);
-  prepareFrameworkCredentials(deployment);
-  const original = deployment.config.frameworkCredentials;
-  mkdirSync(deployment.profileRoot, { recursive: true });
-  writeFileSync(join(deployment.profileRoot, PENDING), JSON.stringify({ desired: { configurations: { $framework: original } } }));
-  writeFileSync(config, 'DEEPSEEK_API_KEY=sk-other\n');
-  assert.throws(() => prepareFrameworkCredentials(resolveDeployment({ root, config, resume: true }, {})), /恢复需要原框架/);
-  writeFileSync(config, 'DEEPSEEK_API_KEY=sk-private-sentinel\n');
-  const resumed = resolveDeployment({ root, config, resume: true }, {});
-  prepareFrameworkCredentials(resumed);
-  assert.deepEqual(resumed.config.frameworkCredentials, original);
-  rmSync(original.file);
-  assert.throws(() => prepareFrameworkCredentials(resumed), /ENOENT/);
-  assert.equal(existsSync(original.file), false);
-});
-
 test('POSIX public-readable private input is rejected', { skip: process.platform === 'win32' }, t => {
   const { root, config } = fixture(t);
   chmodSync(config, 0o644);
   assert.throws(() => resolveDeployment({ root, config }, {}), /0600/);
-});
-
-test('Compose resume maps the container pending reference to the existing host projection only', t => {
-  const { root, config, deployment } = fixture(t);
-  const release = { schemaVersion: 1, plugins: [], path: join(root, 'release/manifest.json') };
-  const rendered = renderCompose(deployment, release, join(root, 'compose'));
-  const original = JSON.parse(readFileSync(rendered.configPath)).frameworkCredentials;
-  const hostFile = deployment.config.frameworkCredentials.file;
-  mkdirSync(deployment.profileRoot, { recursive: true });
-  writeFileSync(join(deployment.profileRoot, PENDING), JSON.stringify({ desired: { configurations: { $framework: original } } }));
-  const resumed = resolveDeployment({ root, config, resume: true }, {});
-  const recovered = renderCompose(resumed, release, join(root, 'recovered'));
-  assert.deepEqual(JSON.parse(readFileSync(recovered.configPath)).frameworkCredentials, original);
-  assert.equal(resumed.config.frameworkCredentials.file, hostFile);
-  rmSync(hostFile);
-  assert.throws(() => renderCompose(resumed, release, join(root, 'missing')), /ENOENT/);
-  assert.equal(existsSync(hostFile), false);
 });

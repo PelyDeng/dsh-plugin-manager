@@ -1,4 +1,4 @@
-/** The periodic CLI consumes recorded state, not deployment archive descriptors. */
+/** The periodic CLI consumes recorded managed grants and installed metadata, not release archives. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -8,8 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { atomicJSON, json, PENDING, STATE } from '../src/state.mjs';
-import { statePlugin } from '../src/installation.mjs';
+import { atomicJSON, STATE } from '../src/state.mjs';
 
 const execute = promisify(execFile);
 const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -31,17 +30,18 @@ async function fixture(t, plugins = true) {
   const profile = join(root, '.local/data/dsh-home/profiles/web');
   const packageRoot = join(profile, 'node_modules/weather-plugin');
   const manifest = { dependencies: { 'weather-plugin': 'file:unavailable.tgz' }, dsh: { profile: { bundles: ['weather-plugin'] } } };
-  const installed = { name: 'weather-plugin', version: '1.0.0', main: './index.js' };
+  const installed = { name: 'weather-plugin', version: '1.0.0', main: './index.js', deepseekPlugin: { schemaVersion: 3, id: 'weather', healthPath: '/weather/ready' } };
   atomicJSON(join(profile, 'package.json'), manifest);
   atomicJSON(join(packageRoot, 'package.json'), installed);
   writeFileSync(join(packageRoot, 'index.js'), 'export {};\n');
-  atomicJSON(join(profile, STATE), { schemaVersion: 2, plugins: plugins ? [statePlugin({ id: 'weather', package: installed.name, version: installed.version, sha256: 'a'.repeat(64), mode: 'release', healthPath: '/weather/ready' })] : [] });
+  // schema 3 的必需身份：siteId/profile 缺一不可（设计 2.6）。
+  atomicJSON(join(profile, STATE), { schemaVersion: 3, siteId: 'site-health', profile: 'web', managed: plugins ? [{ id: 'weather', package: installed.name }] : [], environment: { os: process.platform, architecture: process.arch, node: process.versions.node, mode: 'release' } });
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('DSH_') && !['DEPLOYMENT_CONFIG', 'PLUGIN_MANIFEST_FILE'].includes(key)));
   const run = () => execute(process.execPath, [cli, 'health', '--root', root, '--base-url', `http://127.0.0.1:${server.address().port}`], { env, timeout: 15000 });
   return { run, statuses, requested, profile, packageRoot, manifest, installed };
 }
 
-test('health CLI accepts real persisted state without release archives or verifyFiles', async t => {
+test('health CLI accepts real managed grants without release archives or verifyFiles', async t => {
   const f = await fixture(t);
   const result = await f.run();
   assert.deepEqual(JSON.parse(result.stdout), [{ id: 'weather', installed: true, activated: 'unknown', ready: 'ready' }]);
@@ -50,18 +50,14 @@ test('health CLI accepts real persisted state without release archives or verify
 
 test('omitting a plugin probe reports not-provided while preserving host and installation checks', async t => {
   const f = await fixture(t);
-  const state = json(join(f.profile, STATE));
-  delete state.plugins[0].healthPath;
-  atomicJSON(join(f.profile, STATE), state);
+  atomicJSON(join(f.packageRoot, 'package.json'), { ...f.installed, deepseekPlugin: { schemaVersion: 3, id: 'weather' } });
   assert.equal(JSON.parse((await f.run()).stdout)[0].ready, 'not-provided');
   assert.deepEqual(f.requested, ['/']);
-  atomicJSON(join(f.packageRoot, 'package.json'), { ...f.installed, version: '2.0.0' });
-  await assert.rejects(f.run(), /安装或 Bundle 漂移/);
 });
 
-test('health CLI rejects package name, version, Bundle and entry drift', async t => {
+test('health CLI rejects package name, Bundle and entry drift', async t => {
   const f = await fixture(t);
-  for (const override of [{ name: 'other-plugin' }, { version: '2.0.0' }, { main: './missing.js' }]) {
+  for (const override of [{ name: 'other-plugin' }, { main: './missing.js' }]) {
     atomicJSON(join(f.packageRoot, 'package.json'), { ...f.installed, ...override });
     await assert.rejects(f.run(), /安装或 Bundle 漂移|插件入口缺失或无效/);
   }
@@ -83,9 +79,9 @@ test('health CLI still checks the host when no plugins are enabled', async t => 
   await assert.rejects(f.run(), /宿主存活检查失败 HTTP 503/);
 });
 
-test('health CLI rejects pending deployment before probing', async t => {
+test('health CLI rejects old state schemas instead of treating them as empty', async t => {
   const f = await fixture(t);
-  atomicJSON(join(f.profile, PENDING), {});
-  await assert.rejects(f.run(), /部署尚未完成/);
+  atomicJSON(join(f.profile, STATE), { schemaVersion: 2, plugins: [] });
+  await assert.rejects(f.run(), /旧受管状态版本/);
   assert.deepEqual(f.requested, []);
 });

@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { assembleDeployment, runtimeFromImage, zipTree } from '../package-deployment.mjs';
 import { hash, tarCommand } from '../../packages/plugin-manager/src/state.mjs';
 import { decodeFrameworkConfig, renderSiteTemplate } from '../../packages/plugin-manager/src/framework-config.mjs';
+import { verifyPublicInputRecord, createPublicBuildView } from '../../packages/plugin-manager/src/public-build-view.mjs';
 
 const repo = fileURLToPath(new URL('../../', import.meta.url));
 const version = '0.9.0', image = `registry.example/dsh@sha256:${'a'.repeat(64)}`, imageId = `sha256:${'b'.repeat(64)}`, commit = 'c'.repeat(40);
@@ -46,6 +47,11 @@ function fixture(t, { withExample = false } = {}) {
   t.after(() => { assert.equal(dirname(base), parent); rmSync(base, { recursive: true, force: true }); });
   const root = join(base, 'framework'); mkdirSync(root);
   json(join(root, 'package.json'), { version });
+  // 公开发行输入：发行包必须自带根清单、workspace 定义与匹配锁（设计 2.8）。
+  write(join(root, 'pnpm-workspace.yaml'), "packages:\n  - 'packages/*'\n  - 'plugins/builtin/*'\n");
+  write(join(root, 'pnpm-lock.yaml'), ["lockfileVersion: '9.0'", 'settings:', '  autoInstallPeers: true', '  excludeLinksFromLockfile: false', 'importers:', '  .:', '    dependencies: {}', '  packages/plugin-manager:', '    dependencies: {}', ''].join('\n'));
+  // 公开构建输入要与本次源码同一框架版本：打包前置校验按 manager 清单比对。
+  json(join(root, 'packages/plugin-manager/package.json'), { version });
   for (const path of ['deploy/DEPLOYMENT.md', 'deploy/STARTERS.md', 'incoming/README.md', 'LICENSE']) write(join(root, path), `Public fixture: ${path}\n`);
   for (const name of ['standalone-plugin', 'standalone-kit']) cpSync(join(repo, 'examples', name), join(root, 'examples', name), { recursive: true });
   write(join(root, 'examples/standalone-kit/.local/private'), 'never-package-this');
@@ -83,7 +89,20 @@ test('deployment contains installed tools and optional auth; starters copy indep
   assert.equal(result.metadata.manager.sha256, hash(readFileSync(options.manager)));
   assert.equal(readFileSync(join(result.deployment, 'env.conf.example'), 'utf8'), renderSiteTemplate('archives'));
   const config = decodeFrameworkConfig(readFileSync(join(result.deployment, 'env.conf.example'), 'utf8')).config;
-  assert.equal(config.pluginSource, 'archives'); assert.equal(config.plugins, undefined);
+  assert.equal(config.pluginSource, undefined); assert.equal(config.plugins, undefined);
+  // 统一部署路径的材料齐备：公开源码材料 + 发行方提供的公开构建输入（逐字节一致）。
+  assert.ok(existsSync(join(result.deployment, 'source/package.json')));
+  for (const name of ['package.json', 'pnpm-workspace.yaml', 'pnpm-lock.yaml']) {
+    assert.equal(readFileSync(join(result.deployment, 'tools/builtin-build', name), 'utf8'), readFileSync(join(options.root, name), 'utf8'), `${name} 必须逐字节来自发行输入`);
+  }
+  // 发行包必须自带交付记录：站点按独立交付目录构造视图，没有记录就直接拒绝（站点侧同一判据）。
+  const delivered = join(result.deployment, 'tools/builtin-build');
+  assert.equal(verifyPublicInputRecord(options.root, delivered).frameworkVersion, version);
+  // 站点真实路径：按 source/ 与 tools/builtin-build/ 构造公开构建视图必须直接通过。
+  const view = createPublicBuildView({ root: join(result.deployment, 'source'), output: join(options.output, 'site-view'), inputs: delivered });
+  assert.equal(view.inputs, delivered);
+  writeFileSync(join(delivered, 'pnpm-lock.yaml'), `${readFileSync(join(delivered, 'pnpm-lock.yaml'), 'utf8')}# 手工改过\n`);
+  assert.throws(() => verifyPublicInputRecord(options.root, delivered), /交付的公开构建输入与记录不一致：pnpm-lock\.yaml/);
   assert.equal(existsSync(join(result.deployment, '.local')), false);
   assert.equal(existsSync(join(result.deployment, 'plugins')), false);
   assert.equal(existsSync(join(result.deployment, 'incoming/auth')), false);

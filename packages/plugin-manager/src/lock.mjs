@@ -32,3 +32,15 @@ export function acquireFileLock(path, message = `Operation is locked: ${path}`) 
   release.retain = () => { if (!closed) { closed = true; closeSync(fd); } };
   return release;
 }
+
+/**
+ * 串行化一把锁的元数据操作：取锁、退役残留、显式解锁都先取同一把 control 锁。
+ *
+ * 没有这一步，"读一遍确认它是旧记录 → 把它移走" 与 "另一个进程新建锁" 之间就有窗口：搬走的可能
+ * 是别人刚取得的锁，对方释放时报 ENOENT。control 锁只覆盖元数据操作本身，不覆盖持锁期间的工作。
+ */
+export function withLockControl(lockPath, action) {
+  const control = `${lockPath}.control`;
+  const release = acquireFileLock(control, `锁元数据正在操作或上次操作被强制终止；确认没有并发的安装后删除 ${control} 再重试。`);
+  try { return action(); } finally { release(); }
+}

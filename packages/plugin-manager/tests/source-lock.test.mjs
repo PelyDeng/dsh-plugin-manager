@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { acquireSourceLock, inspectSourceLock, needsSourceResume, sourceLockCommand, sourceRecoveryIdentity, unlockSource } from '../../../deploy/scripts/source-lock.mjs';
+import { acquireSourceLock, inspectSourceLock, sourceLockCommand, sourceRecoveryIdentity, unlockSource } from '../../../deploy/scripts/source-lock.mjs';
 import { sourceRelease } from '../../../deploy/scripts/release.mjs';
 
 function fixture(t) {
@@ -38,7 +38,7 @@ test('doctor and recovery help need no preflight, source update, dependencies or
   }
 });
 
-test('build and recovery share one resume decision and preserve saved inputs', t => {
+test('doctor reports the current status and always points at the ordinary build', t => {
   const f = fixture(t);
   f.put('build.sh', '#!/usr/bin/env bash\n'); f.put('build.ps1', '# PowerShell entry\n');
   const command = process.platform === 'win32' ? '.\\build.ps1' : 'bash build.sh';
@@ -47,7 +47,8 @@ test('build and recovery share one resume decision and preserve saved inputs', t
     const bytes = readFileSync(resolve(f.root, '.local/source-release.json'));
     const report = inspectSourceLock(f.root);
     assert.equal(report.status, status);
-    assert.equal(report.next, command + (needsSourceResume(status) ? ' --resume' : ''));
+    // 恢复参数已移除：任何状态下的下一步都是同一条普通构建命令。
+    assert.equal(report.next, command);
     assert.deepEqual(readFileSync(resolve(f.root, '.local/source-release.json')), bytes);
   }
   f.record('unknown'); assert.match(inspectSourceLock(f.root).reasons.join(), /发布记录无效/);

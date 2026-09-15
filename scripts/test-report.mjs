@@ -42,7 +42,7 @@ CLI 默认 deepseek-harness/apps/cli/lib/bin.js，也可沿用 DSH_TEST_CLI；�
     console.log(`本次测试目录：${operation}\n范围：auth/example；真实宿主、本地模型替身。`);
     runPnpm(['install', '--frozen-lockfile'], root);
     run([join(root, 'scripts/package-plugins.mjs'), '--root', root, '--plugins', 'auth,example', '--output', candidate], root);
-    run([join(root, 'plugins/dsh-example/tests/host-smoke.mjs'), candidate, '--report', report], root, { ...process.env, DSH_TEST_CLI: cli });
+    run([join(root, 'plugins/builtin/dsh-example/tests/host-smoke.mjs'), candidate, '--report', report], root, { ...process.env, DSH_TEST_CLI: cli });
     run([join(root, 'packages/plugin-manager/src/cli.mjs'), 'compose-release', '--root', root, '--manifest', join(candidate, 'manifest.json'), '--verification-report', report, '--output', delivery], root);
     console.log(`测试及报告交付完成。\n报告：${report}\n交付目录：${delivery}\n请交付此目录；再次打包产生的其他归档不自动继承本次验证。`);
   }
