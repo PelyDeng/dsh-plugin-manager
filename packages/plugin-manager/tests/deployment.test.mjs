@@ -372,6 +372,79 @@ test('owned startup allows a cold host to take more than ten seconds', { timeout
   assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
 });
 
+test('a managed plugin the host only warns about still fails owned startup', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const cliFile = join(f.root, 'warning-host.mjs');
+  // 官方宿主从 0.1.6 起只对全局必需条目拒绝启动，其余条目只警告并继续服务：端口能访问不再
+  // 等于托管插件起来了，所以这里必须由管理器按官方诊断判定。两条诊断分别按入口 id 和包名命中。
+  writeFileSync(cliFile, `import { createServer } from 'node:http';
+    process.stderr.write('dsh: warning: 2 entries did not activate\\nalpha (fixture-alpha): failed to import\\nexample (fixture-beta): pending (waiting for service: webServer)\\n');
+    createServer((_req, res) => res.end('ready')).listen(${port}, '127.0.0.1');`);
+  f.deployment.options['dsh-cli-js'] = cliFile;
+  f.deployment.options.port = port;
+  await assert.rejects(supervise(f.deployment, f.release), error => {
+    assert.match(error.message, /^托管插件未激活：/);
+    assert.match(error.message, /alpha \(fixture-alpha\) failed to import/);
+    assert.match(error.message, /example \(fixture-beta\) pending \(waiting for service: webServer\)/);
+    return true;
+  });
+  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
+});
+
+test('a warning about an entry the manager does not own leaves startup successful', { timeout: 30000 }, async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const cliFile = join(f.root, 'foreign-warning-host.mjs');
+  writeFileSync(cliFile, `import { createServer } from 'node:http';
+    process.stderr.write('dsh: warning: 1 entry did not activate\\nsomeone-else (/opt/other/index.mjs): pending (waiting for service: neverProvided)\\n');
+    createServer((_req, res) => res.end('ready')).listen(${port}, '127.0.0.1');
+    setTimeout(() => process.exit(0), 1500);`);
+  f.deployment.options['dsh-cli-js'] = cliFile;
+  f.deployment.options.port = port;
+  await supervise(f.deployment, f.release);
+  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
+});
+
+test('a required startup failure is reported with the authoritative diagnostics', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  const cliFile = join(f.root, 'required-failure-host.mjs');
+  // 逐字取自真实 0.1.6 宿主：必需条目失败的抬头前面还有调用方的前缀（boot 包装 + Node 未捕获异常），
+  // 所以解析必须按行内匹配，否则这段诊断永远读不到。
+  writeFileSync(cliFile, `process.stderr.write('Error: dsh: plugin tree failed to load: required startup failure: 1 entry did not activate\\nsdk-jsonrpc-server (dsh-plugin-that-does-not-exist): failed to import\\n    at boot (/opt/dsh-runtime/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js:2579:9)\\n');
+    setTimeout(() => process.exit(1), 500);`);
+  f.deployment.options['dsh-cli-js'] = cliFile;
+  await assert.rejects(supervise(f.deployment, f.release), /未激活的必需条目：[\s\S]*sdk-jsonrpc-server \(dsh-plugin-that-does-not-exist\): failed to import/);
+});
+
+test('a decoy line inside a failure reason cannot hide a later managed plugin', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const cliFile = join(f.root, 'decoy-host.mjs');
+  // 逐字取自真实 0.1.6 宿主：官方原因字段用 error.stack，插件抛出的消息里带一行以列 0 开头、
+  // 形状与明细行相同的诱饵。按抬头条数收行会在这里把真正的托管条目挤掉，从而漏判成成功。
+  writeFileSync(cliFile, `import { createServer } from 'node:http';
+    process.stderr.write('dsh: warning: 2 entries did not activate\\nevil-first (file:///probe/evil.mjs): Error: boom\\ndecoy (decoy-package): decoy reason\\ntail\\n    at new apply (file:///probe/evil.mjs:2:9)\\nmanaged-second (fixture-beta): failed to import\\n');
+    createServer((_req, res) => res.end('ready')).listen(${port}, '127.0.0.1');`);
+  f.deployment.options['dsh-cli-js'] = cliFile;
+  f.deployment.options.port = port;
+  await assert.rejects(supervise(f.deployment, f.release), /托管插件未激活：[\s\S]*managed-second \(fixture-beta\) failed to import/);
+  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
+});
+
 test('configuration revision does not reinstall and never enters the managed set', async t => {
   const f = fixture(t); await synchronize(f.deployment, f.release, options(f));
   await finalize(f.deployment, f.release, { running: true });

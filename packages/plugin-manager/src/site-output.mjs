@@ -1,8 +1,8 @@
 /** Keep source-release progress on the terminal and tool output in a private log. */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { closeSync, openSync, writeSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { closeSync, openSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { stripVTControlCharacters } from 'node:util';
@@ -103,8 +103,8 @@ function timedLine(text, elapsedMs, output) {
  * 不必再靠「墙钟减去相加」去猜。
  *
  * 两行合计都给：逐项相加是「工具自己花了多少时间」，并行阶段互相重叠时它会大于墙钟；
- * 墙钟是「这次发布等了多久」，阶段之间还有间隙，所以它也可能大于相加。只给一个数，
- * 另一个看起来就像算错了。
+ * 墙钟是「首个阶段开始到末个阶段结束」，阶段之间还有间隙，所以它也可能大于相加。只给一个数，
+ * 另一个看起来就像算错了。两张表（这里与 timings.json）用同一条时间线和同一个墙钟口径。
  */
 function stageSummary(stages, { wallMs = 0 } = {}) {
   const width = Math.max(...stages.map(stage => textWidth(stage.label)));
@@ -116,16 +116,67 @@ function stageSummary(stages, { wallMs = 0 } = {}) {
   };
   return [
     '各阶段耗时（含进程启动；方括号为开始时刻）：',
-    ...stages.map(stage => `  ${stage.startedAt === undefined ? '--:--:--' : clock(stage.startedAt)}  ${cell(stage.label)}${duration(stage.elapsedMs)}${stage.ok ? '' : '（失败）'}`),
+    ...stages.map(stage => `  ${stage.startedAt === undefined ? '--:--:--' : clock(stage.startedAt)}  ${cell(stage.label)}${duration(stage.elapsedMs)}${stage.unfinished ? '（未结束）' : stage.ok ? '' : '（失败）'}`),
     `  ${cell('相加（逐项）')}${duration(total)}`,
     `  ${cell('墙钟（首末阶段之间）')}${duration(wallMs)}`,
   ].join('\n');
 }
 
+/**
+ * 结构化计时记录（唯一实现）：把一次构建的逐步耗时落成可排查的 JSON。
+ *
+ * 与终端汇总表同源：`stages` 是同一条时间线（含失败与未结束阶段），`wallMs` 是同一个墙钟口径
+ * （首个阶段开始到末个已结束阶段），`sumMs` 是各阶段耗时之和；并行阶段会重叠，所以 `sumMs` 可能
+ * 大于 `wallMs`（`overlapMs` 记下差值）。`processMs` 另外给出「首个阶段开始到构建进程退出」的
+ * 全程，用来发现末个阶段之后的收尾耗时。缺字段或时间戳不可用时退化为不报错的最小记录。
+ */
+export function buildTimingRecord({ buildId, startedAtMs, finishedAtMs, processFinishedAtMs, code, stages = [], metadata } = {}) {
+  const elapsed = stage => Number.isFinite(stage.elapsedMs) ? Math.max(0, stage.elapsedMs) : 0;
+  const now = Date.now();
+  const start = Number.isFinite(startedAtMs) ? startedAtMs : Number.isFinite(finishedAtMs) ? finishedAtMs : now;
+  const finish = Number.isFinite(finishedAtMs) ? finishedAtMs : start;
+  const wallMs = Math.max(0, finish - start);
+  const sumMs = stages.reduce((total, stage) => total + elapsed(stage), 0);
+  return {
+    schemaVersion: 1,
+    buildId,
+    startedAt: new Date(start).toISOString(),
+    finishedAt: new Date(finish).toISOString(),
+    wallMs: Math.round(wallMs),
+    sumMs: Math.round(sumMs),
+    overlapMs: Math.max(0, Math.round(sumMs - wallMs)),
+    processMs: Number.isFinite(processFinishedAtMs) ? Math.round(Math.max(0, processFinishedAtMs - start)) : Math.round(wallMs),
+    exitCode: code,
+    status: code === 0 ? 'ready' : 'failed',
+    stages: stages.map(stage => ({
+      id: stage.id ?? null,
+      label: stage.label,
+      startedAt: stage.startedAtIso ?? null,
+      finishedAt: stage.finishedAtIso ?? null,
+      elapsedMs: Math.round(elapsed(stage)),
+      status: stage.ok === true ? 'done' : stage.unfinished ? 'unfinished' : 'failed',
+    })),
+    environment: metadata ?? {},
+  };
+}
+
+/** 原子写入计时记录；写失败不得改变部署结果，只清理半成品并返回 false。 */
+export function writeTimings(path, value) {
+  const temporary = `${path}.tmp`;
+  try {
+    writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    renameSync(temporary, path);
+    return true;
+  } catch { rmSync(temporary, { force: true }); return false; }
+}
+
 /** Run a build entry with live progress; return its exit code after closing its log. */
-export async function presentBuild(entry, args, { logDirectory, output = process.stdout, env = process.env, cwd, onSpawn, onFinished } = {}) {
+export async function presentBuild(entry, args, { logDirectory, output = process.stdout, env = process.env, cwd, onSpawn, onFinished, metadata, timingsPath } = {}) {
   const privateDirectory = ensurePrivateDirectory(resolve(logDirectory, `build-${Date.now()}-${randomUUID()}`));
   const log = resolve(privateDirectory, 'build.log');
+  const timings = timingsPath ?? resolve(privateDirectory, 'timings.json');
+  // 计时事件用的是进程单调时钟（performance.now），记录要落成可读的挂钟时间：先算出两者的固定偏移。
+  const wallStart = Date.now() - performance.now();
   const fd = openSync(log, 'wx', 0o600);
   let settling = false;
   let presentation = Promise.resolve();
@@ -186,7 +237,7 @@ export async function presentBuild(entry, args, { logDirectory, output = process
   };
   const show = async event => {
     if (event.type === 'start') {
-      const stage = { label: event.label, startedAt: event.receivedAt, percent: 0, frame: 0, finishedMs: undefined };
+      const stage = { id: typeof event.id === 'string' && event.id ? event.id : null, label: event.label, startedAt: event.receivedAt, startedAtIso: new Date(wallStart + event.receivedAt).toISOString(), percent: 0, frame: 0, finishedMs: undefined };
       active.set(stageKey(event), stage);
       firstStart ??= event.receivedAt;
       if (output.isTTY) draw(); else line(stageLine(stage, false));
@@ -194,12 +245,12 @@ export async function presentBuild(entry, args, { logDirectory, output = process
     }
     if (event.type === 'message') { line(event.label); return; }
     const key = stageKey(event);
-    const stage = active.get(key) ?? { label: event.label, startedAt: event.receivedAt, percent: 0, frame: 0 };
+    const stage = active.get(key) ?? { id: typeof event.id === 'string' && event.id ? event.id : null, label: event.label, startedAt: event.receivedAt, startedAtIso: new Date(wallStart + event.receivedAt).toISOString(), percent: 0, frame: 0 };
     active.delete(key);
     stage.finishedMs = Number.isFinite(event.elapsedMs) ? Math.max(0, event.elapsedMs) : event.receivedAt - stage.startedAt;
     lastFinish = event.receivedAt;
     const ok = event.type === 'done';
-    stages.push({ label: stage.label, elapsedMs: elapsed(stage), ok, startedAt: stage.startedAt });
+    stages.push({ id: stage.id, label: stage.label, elapsedMs: elapsed(stage), ok, startedAt: stage.startedAt, startedAtIso: stage.startedAtIso, finishedAtIso: new Date(wallStart + event.receivedAt).toISOString() });
     // 补满动画只在这一阶段是最后一个时做：还有阶段在跑时，动画会盖住它们的进度。
     if (ok && output.isTTY && !active.size) {
       settling = true;
@@ -218,7 +269,7 @@ export async function presentBuild(entry, args, { logDirectory, output = process
     if (active.size) draw();
   };
   const child = spawn(process.execPath, [entry, ...args], {
-    env: { ...normalizeEnvironment(env), DSH_BUILD_PROGRESS: '1' }, cwd,
+    env: { ...normalizeEnvironment(env), DSH_BUILD_PROGRESS: '1', DSH_BUILD_TIMINGS: timings }, cwd,
     stdio: ['inherit', 'pipe', 'pipe', 'ipc'], detached: process.platform !== 'win32', windowsHide: true,
   });
   child.on('message', message => {
@@ -283,7 +334,17 @@ export async function presentBuild(entry, args, { logDirectory, output = process
       line(`完整日志：${log}`);
     }
     // 汇总放在最后：发布记录、失败原因都在上面，接着就是「时间花在哪」。
-    if (stages.length) line(stageSummary(stages, { wallMs: (lastFinish ?? closedAt) - (firstStart ?? closedAt) }));
+    // 终端表与 timings.json 用同一条时间线和同一个墙钟口径：还在跑的阶段按已等待时间一并列出，
+    // 失败也写记录，运维排查慢步骤不必只靠终端回滚。
+    const timeline = [...stages, ...[...active.values()].map(stage => ({ id: stage.id, label: stage.label, elapsedMs: stage.finishedMs ?? closedAt - stage.startedAt, ok: false, unfinished: true, startedAt: stage.startedAt, startedAtIso: stage.startedAtIso }))];
+    // 孤立终止事件（只有 done/failed、没有 start）时 `firstStart` 是空的：退回最早一个阶段自己的
+    // 开始时间，免得记录的 startedAt 比它内部的阶段还晚。
+    const earliest = timeline.reduce((value, stage) => Number.isFinite(stage.startedAt) ? Math.min(value, stage.startedAt) : value, firstStart ?? Infinity);
+    const startedAtMs = wallStart + (Number.isFinite(earliest) ? earliest : closedAt);
+    const record = buildTimingRecord({ buildId: basename(privateDirectory), startedAtMs, finishedAtMs: wallStart + (lastFinish ?? closedAt), processFinishedAtMs: wallStart + closedAt, code, stages: timeline, metadata });
+    if (writeTimings(timings, record)) line(`时间记录：${timings}`);
+    else line(`时间记录写入失败：${timings}（不影响本次构建结果）`);
+    if (timeline.length) line(stageSummary(timeline, { wallMs: record.wallMs }));
     return code;
   } finally {
     clearInterval(timer); eraseBlock(); closeSync(fd);

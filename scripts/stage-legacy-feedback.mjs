@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { resolve, join, relative, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { mergeLegacyFeedback } from '../packages/plugin-manager/src/session-snapshot.mjs';
@@ -21,11 +22,17 @@ const legacy = JSON.parse(await readFile(options['--legacy'], 'utf8'));
 assert.ok(legacy.tables?.sessions && !Array.isArray(legacy.tables.sessions), 'Invalid legacy feedback storage.');
 const rows = Object.entries(legacy.tables.sessions); assert.ok(rows.length <= 10000, 'Too many feedback sessions.');
 const resolvers = [createRequire(join(options['--runtime'], 'package.json')), createRequire(join(options['--runtime'], 'node_modules/.pnpm/runtime-helper.cjs'))];
+// 运行镜像根清单是 python 闭包（dsh-python-runtime-closure），不是宿主版本；宿主版本以镜像里的
+// CLI 包 @deepseek-ai/dsh 为准。这样升级宿主不必改脚本，也不会放过把几个版本混装进同一个镜像。
+const hostManifest = join(options['--runtime'], 'node_modules/@deepseek-ai/dsh/package.json');
+assert.ok(existsSync(hostManifest), `运行镜像里缺少宿主清单：${hostManifest}`);
+const hostVersion = JSON.parse(await readFile(hostManifest, 'utf8')).version;
 const load = async name => {
   const pkg = '@deepseek-ai/' + name;
   const require = resolvers.find(r => { try { r.resolve(pkg); return true; } catch { return false; } });
   assert.ok(require, 'Missing official package: ' + pkg);
-  assert.equal(JSON.parse(await readFile(require.resolve(pkg + '/package.json'), 'utf8')).version, name === 'cordis' ? '4.0.2' : '0.1.5-alpha.2');
+  const version = JSON.parse(await readFile(require.resolve(pkg + '/package.json'), 'utf8')).version;
+  assert.equal(version, name === 'cordis' ? '4.0.2' : hostVersion, `${pkg} 的版本 ${version} 与运行镜像的宿主 ${hostVersion} 不一致。`);
   return import(pathToFileURL(require.resolve(pkg)));
 };
 const { Context } = await load('cordis'), persistence = await load('dsh-session-persistence-jsonl');

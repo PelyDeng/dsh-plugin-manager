@@ -1,6 +1,6 @@
 # 官方宿主版本与升级
 
-当前框架使用 DeepSeek Harness `0.1.5-alpha.2`，子模块锁定提交 `b2e3b2a0125854567a4a5fcba75782e42fe84901`，对应官方标签 `dsh-v0.1.5-alpha.2`。这是官方预发布版本。kit、auth、example 的宿主依赖与开发类型使用同一版本；宿主服务继续由官方运行环境提供，不打入业务插件。
+当前框架使用 DeepSeek Harness `0.1.6-alpha.1`，子模块锁定提交 `0a15e36e7f82b6ed45af6fa9759f29b40dcd965d`，对应官方标签 `dsh-v0.1.6-alpha.1`。这是官方预发布版本。kit、auth、example 的宿主依赖与开发类型使用同一版本；宿主服务继续由官方运行环境提供，不打入业务插件。
 
 ## 更新源码和镜像
 
@@ -17,6 +17,10 @@ git submodule update --init deepseek-harness
 
 ## 插件接口
 
+- 官方从 `0.1.6-alpha.1` 起只在**全局必需条目**（`agent-loop`、`webserver`、`modules`、`connection`、`headless-runner`、`acp`、`sdk-jsonrpc-server`）失败时中止启动并非零退出；其余条目导入失败、配置校验失败或一直等待依赖，只打印一条 `warning: N entries did not activate` 并继续服务。旧版对任何未激活条目都直接退出，因此「端口能访问」在新版不再等于站点可用。管理器读这条诊断：受管插件未激活就按启动失败处理并终止本次构建，必需条目失败则把官方诊断一并报出。判定只覆盖启动期：启动之后再出现的诊断（例如 profile patch 热重载失败经宿主日志打印）不在范围内。
+- 官方 `0.1.6-alpha.1` 用一次性的包解析代（link、dual、runtime 三种模式）取代旧的 profile 模块回退：源码检出启动仍是 link 模式，安装目录与 profile 内的回退链接与旧版一致；打包可执行文件才使用运行时解析。框架的源码与固定镜像两种基底都从源码检出启动，因此插件按包名解析的行为不变。
+- 宿主 `0.1.6-alpha.1` 起把缓存放在 `$DSH_HOME/cache/`（附件与请求图片缓存）。缓存可以丢弃，备份与迁移只需要会话、存储、profile 和私有配置。
+- 官方 `0.1.6-alpha.1` 删除了 `@deepseek-ai/dsh-code-runtime`（能力族改为 `dsh-ptc-runtime`），`workflow-worker-thread` 更名为 `workflow-ptc`。框架的依赖声明已同步；业务插件若直接依赖旧包名，需在自身升级时改为新包名。
 - 实时输出订阅官方 `agent/assistant-stream`，按 Agent 实例隔离。持久日志使用 `assistant/message` 与 `assistant/attempt` 的 `stream`，通过 `expandAssistantStream()` 展开；不再订阅或自行写入 `assistant/chunk`。example 的中断历史和首 token 时间均来自官方持久流。
 - `SessionHandle.read()` 返回 `{ events, eventState }`，不再直接返回事件数组。kit 在一个入口解包并校验结果，example 复用此入口；业务插件应使用官方类型，避免通过旧的类型断言隐藏接口变化。
 - 模型目录、会话模型选择和历史投影继续使用官方 `sessionController`、`agentDefaultModel` 和 `sessionProjections`。kit 在模型切换前、异步校验后的提交边界和返回后复核权限；提交边界使用 Cordis 的同步 `internal/dispatch`，普通 `session/event` 观察者在事件提交后运行，不能用于阻止写入。
@@ -50,4 +54,4 @@ node scripts/stage-legacy-feedback.mjs --runtime /opt/dsh-runtime --sessions /in
 
 升级应分别记录类型与行为测试、独立归档安装、真实宿主加模型替身、容器与生产验收。替身问答不代表真实模型可用，健康检查也不代表浏览器操作完成。框架的 `test-report.sh` 提供 auth/example 的真实宿主及归档验证；私有插件由集成仓库单独检查。
 
-依据：[官方发布说明](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.5-alpha.2)、[V2 到 V3 迁移规范](https://github.com/deepseek-ai/deepseek-harness/blob/b2e3b2a0125854567a4a5fcba75782e42fe84901/packages/session/session-format-v2-to-v3/README.zh.md)、[官方 JSONL 持久化语义](https://github.com/deepseek-ai/deepseek-harness/blob/b2e3b2a0125854567a4a5fcba75782e42fe84901/packages/session/session-persistence-jsonl/README.zh.md)。
+依据：[官方发布说明](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.6-alpha.1)、[V2 到 V3 迁移规范](https://github.com/deepseek-ai/deepseek-harness/blob/0a15e36e7f82b6ed45af6fa9759f29b40dcd965d/packages/session/session-format-v2-to-v3/README.zh.md)、[官方 JSONL 持久化语义](https://github.com/deepseek-ai/deepseek-harness/blob/0a15e36e7f82b6ed45af6fa9759f29b40dcd965d/packages/session/session-persistence-jsonl/README.zh.md)。

@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { dirname, join, resolve } from 'node:path';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { resolveDeployment } from '../src/config.mjs';
@@ -70,6 +70,69 @@ test('运行容器与记录镜像不同代只作现场差异，不再声称身�
   assert.ok(report.differences.some(text => text.includes('允许的现场差异')));
   assert.doesNotMatch(JSON.stringify(report), REMOVED_VOCABULARY);
   assert.ok(calls.every(call => /^(image inspect|ps |inspect )/.test(call)));
+});
+
+test('构建计时只读读出最慢阶段，缺失或越界都不报错、不写文件', t => {
+  const f = fixture(t);
+  const timingPath = join(f.operation, 'timings.json');
+  write(timingPath, { schemaVersion: 1, buildId: 'build-1', startedAt: '2026-01-01T00:00:00.000Z', finishedAt: '2026-01-01T00:10:00.000Z',
+    wallMs: 600000, sumMs: 900000, overlapMs: 300000, exitCode: 0, status: 'ready', environment: { frameworkVersion: '0.18.0', inputKind: 'source' },
+    stages: [{ id: 'stage-1-1', label: '构建运行镜像', elapsedMs: 500000, status: 'done' }, { id: 'stage-1-2', label: '构建内置插件', elapsedMs: 9000, status: 'done' }] });
+  const recordPath = join(f.operation, 'result.json');
+  const record = JSON.parse(readFileSync(recordPath, 'utf8'));
+  record.timings = { path: timingPath };
+  write(recordPath, record);
+  const before = readdirSync(f.root, { recursive: true }).length;
+  const { execute } = docker({ images: [CANDIDATE, RECORDED, RUNNING], containers: [container(RUNNING)] });
+  const report = checkRecords(f.deployment, execute);
+  const timings = report.facts.saved.build.timings;
+  assert.equal(timings.slowest[0].label, '构建运行镜像');
+  assert.equal(timings.slowest[0].elapsedMs, 500000);
+  assert.equal(timings.wallMs, 600000);
+  assert.equal(timings.stageCount, 2);
+  // 报告要能分辨「哪一次构建」以及最慢阶段是否被截断。
+  assert.equal(timings.buildId, 'build-1');
+  assert.equal(timings.stagesTotal, 2);
+  assert.equal(timings.slowestLimit, 5);
+  assert.equal(timings.environment.frameworkVersion, '0.18.0');
+  assert.equal(readdirSync(f.root, { recursive: true }).length, before, '只读诊断不得写文件');
+  assert.doesNotMatch(JSON.stringify(report), REMOVED_VOCABULARY);
+  // 路径越界与文件损坏都只报缺失：老记录与删掉计时的构建不该让诊断失败。
+  const outside = join(dirname(f.root), `outside-timings-${randomUUID()}.json`);
+  write(outside, { schemaVersion: 1, stages: [] });
+  t.after(() => rmSync(outside, { force: true }));
+  for (const path of [outside, join(f.operation, 'missing.json'), timingPath]) {
+    const next = JSON.parse(readFileSync(recordPath, 'utf8'));
+    next.timings = { path };
+    write(recordPath, next);
+    if (path === timingPath) writeFileSync(timingPath, 'not json');
+    const result = checkRecords(f.deployment, execute);
+    assert.equal(result.facts.saved.build.timings, null, `${path} 不应产生计时事实`);
+    assert.ok(result.conditions.length, '计时缺失不改变既有判定');
+  }
+});
+
+test('计时路径必须真的在站点根内：另一盘符的绝对路径不算越界', t => {
+  const f = fixture(t);
+  // Windows 上 relative('C:\\站点', 'E:\\x') 返回绝对路径而不是 '..'，只比较前缀会把它当成根内路径
+  // 读出来、并把绝对路径写进报告。这里要一个真实的第二块盘：单盘机器显式跳过，不假装通过。
+  const candidates = 'DEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(letter => `${letter}:\\`).filter(drive => {
+    try { return existsSync(drive) && !resolve(f.root).toLowerCase().startsWith(drive.toLowerCase()); } catch { return false; }
+  });
+  if (process.platform !== 'win32' || !candidates.length) { t.skip('需要一块与站点根不同的盘符（或非 Windows）：本机没有'); return; }
+  const outside = join(candidates[0], `dsh-check-records-${randomUUID()}`, 'timings.json');
+  mkdirSync(dirname(outside), { recursive: true });
+  write(outside, { schemaVersion: 1, stages: [{ label: '不该被读到的阶段', elapsedMs: 1, status: 'done' }] });
+  t.after(() => rmSync(dirname(outside), { recursive: true, force: true }));
+  const recordPath = join(f.operation, 'result.json');
+  const record = JSON.parse(readFileSync(recordPath, 'utf8'));
+  record.timings = { path: outside };
+  write(recordPath, record);
+  const { execute } = docker({ images: [CANDIDATE, RECORDED, RUNNING], containers: [container(RUNNING)] });
+  const report = checkRecords(f.deployment, execute);
+  assert.equal(report.facts.saved.build.timings, null, '另一盘符的计时文件必须按越界处理');
+  assert.ok(!JSON.stringify(report).includes('不该被读到的阶段'), '越界文件不得被读取');
+  assert.ok(!JSON.stringify(report).includes(outside.replace(/\\/g, '\\\\')), '报告里不得出现越界的绝对路径');
 });
 
 test('失败指针只作诊断，不再声称会被未完成操作拦下', t => {
