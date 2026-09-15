@@ -73,8 +73,12 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight, p
     const entry = resolve(root, 'deploy/scripts/build.mjs'), workerArgs = [...buildArgs];
     // 同步之后才加载展示端：这一次发布就用快进后的代码渲染进度与汇总。
     const present = await presenter();
+    // 计时记录要能回答「这次慢在哪」：把本次发布的身份与输入形态一起落盘，便于跨次对比。
+    const manifest = (() => { try { return JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')); } catch { return {}; } })();
     const code = await present(entry, workerArgs, {
       logDirectory: resolve(root, '.local/artifacts/build-logs'), cwd: root, env,
+      metadata: { frameworkVersion: manifest.version ?? null, inputKind, node: process.versions.node, platform: process.platform,
+        architecture: process.arch, targetArchitecture: prepared?.runtime?.architecture ?? null, packageManager: manifest.packageManager ?? null },
       onSpawn: child => {
         workerStarted = true;
         unlock.update({ workerPid: child.pid, recovery: { ...recovery, ...(process.platform === 'linux' ? { workerGroup: child.pid } : {}) } });

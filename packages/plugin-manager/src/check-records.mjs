@@ -13,7 +13,7 @@ import { relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parseArguments, resolveDeployment } from './config.mjs';
 import { readSiteJson, sitePointer } from './site-record.mjs';
-import { LOCK, OWNER, STATE } from './state.mjs';
+import { LOCK, OWNER, STATE, within } from './state.mjs';
 
 export const conditions = ['no-record', 'consistent', 'candidate-image-missing', 'container-evidence-missing', 'container-replaced', 'record-drift'];
 
@@ -29,11 +29,17 @@ function probe(execute, args) {
   } catch { return null; }
 }
 
-/** Keep reports comparable across environments: project-relative paths only. */
+/**
+ * Keep reports comparable across environments: project-relative paths only.
+ *
+ * 相对路径按站点根解析（不按诊断进程的 cwd），并且用 `within` 判定边界：只比较字符串前缀
+ * 会漏掉另一盘符的绝对路径（Windows 上 `relative('E:\\a', 'C:\\b')` 返回绝对路径而不是 `..`）。
+ */
 function relativeTo(root, path) {
   if (typeof path !== 'string' || !path) return null;
-  const value = relative(resolve(root), resolve(path)).split(sep).join('/');
-  return value.startsWith('..') ? null : value;
+  const resolved = resolve(root, path);
+  if (!within(root, resolved)) return null;
+  return relative(resolve(root), resolved).split(sep).join('/');
 }
 
 function savedFacts(root, operation) {
@@ -54,7 +60,35 @@ function savedFacts(root, operation) {
     activeSiteOperation: short(record.previousRuntime?.siteOperation),
     selectedPlugins: Array.isArray(record.selectedPlugins) ? record.selectedPlugins.map(item => item.id) : null,
     enabledPlugins: Array.isArray(record.enabledPlugins) ? record.enabledPlugins : null,
+    build: { timings: buildTimingFacts(root, record.timings?.path) },
   };
+}
+
+/** 最慢阶段只列前几名：报告要能看出被截断，所以同时给出总阶段数与这个上限。 */
+const SLOWEST = 5;
+
+/**
+ * 只读读取一次构建的逐步计时（展示端写下的 timings.json）。
+ *
+ * 记录缺失、路径越界、文件不存在或无法解析都返回 null：老记录与没有计时的构建不该让诊断报错。
+ * 只读：不创建目录、不写文件（与 check-records 的整体契约一致）。
+ */
+function buildTimingFacts(root, path) {
+  if (typeof path !== 'string' || path === '') return null;
+  const relative = relativeTo(root, path);
+  if (relative === null) return null;
+  const resolved = resolve(root, path);
+  if (!existsSync(resolved)) return null;
+  let timing;
+  try { timing = readSiteJson(resolved); } catch { return null; }
+  if (!timing || typeof timing !== 'object' || !Array.isArray(timing.stages)) return null;
+  const stages = timing.stages.filter(stage => stage && typeof stage.label === 'string' && Number.isFinite(stage.elapsedMs));
+  const slowest = [...stages].sort((a, b) => b.elapsedMs - a.elapsedMs).slice(0, SLOWEST)
+    .map(stage => ({ label: stage.label, elapsedMs: stage.elapsedMs, status: stage.status ?? null }));
+  return { path: relative, buildId: timing.buildId ?? null, startedAt: timing.startedAt ?? null, finishedAt: timing.finishedAt ?? null,
+    wallMs: timing.wallMs ?? null, sumMs: timing.sumMs ?? null, overlapMs: timing.overlapMs ?? null,
+    exitCode: timing.exitCode ?? null, status: timing.status ?? null, stageCount: stages.length, stagesTotal: timing.stages.length,
+    slowestLimit: SLOWEST, slowest, environment: timing.environment ?? {} };
 }
 
 function archiveCount(operation) {

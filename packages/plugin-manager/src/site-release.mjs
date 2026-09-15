@@ -110,6 +110,9 @@ export function releaseSite(options = {}, execute = command, adapter) {
   const recordPath = resolve(operation, 'result.json');
   const pointer = sitePointer(root);
   const record = { schemaVersion: 3, inputKind, operation, siteId: binding.siteId, sitePath, sitePaths, siteHash: fileHash(sitePath), status: 'building', previous: active, runtime };
+  // 展示端会把逐步计时写到它的私有目录，并把路径通过环境变量交给本次 worker：登记在第一次写入之前，
+  // 否则后续 persist() 会用内存里的记录整体覆盖 result.json，把这条线索丢掉。
+  if (process.env.DSH_BUILD_TIMINGS) record.timings = { path: resolve(process.env.DSH_BUILD_TIMINGS) };
   const persist = (publish = true) => { saveJson(recordPath, record); if (publish) saveJson(pointer, { operation, status: record.status }); };
   persist();
   const context = { root, site, sitePath, sourceInput, resolvedSite, runtimePath, previous: active, active, env, run, step, capture, probe, runtime, execute, adapter, operation, record,

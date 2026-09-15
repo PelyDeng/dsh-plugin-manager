@@ -6,19 +6,28 @@ import { resolve } from 'node:path';
 import { execFile } from 'node:child_process';
 import { presentBuild } from '../../../deploy/scripts/build-output.mjs';
 
-function fixture(t, source, isTTY = false, columns = 100) {
+function fixture(t, source, isTTY = false, columns = 100, metadata = undefined) {
   const root = mkdtempSync(resolve(tmpdir(), 'build-output-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const entry = resolve(root, 'build.mjs');
   const module = new URL('../../../deploy/scripts/build-output.mjs', import.meta.url).href;
   writeFileSync(entry, `import { buildStep, buildMessage, startStage } from ${JSON.stringify(module)};\n${source}\n`);
   let text = '';
+  const buildDirectory = () => resolve(root, readdirSync(root).find(name => name.startsWith('build-')));
   return {
     root, entry, module,
-    run: () => presentBuild(entry, [], { logDirectory: root, output: { isTTY, columns, write: chunk => { text += chunk; } } }),
+    run: (options = {}) => presentBuild(entry, [], { logDirectory: root, output: { isTTY, columns, write: chunk => { text += chunk; } }, metadata, ...options }),
     text: () => text,
-    log: () => { const path = resolve(root, readdirSync(root).find(name => name.startsWith('build-')), 'build.log'); return { path, text: readFileSync(path, 'utf8') }; },
+    log: () => { const path = resolve(buildDirectory(), 'build.log'); return { path, text: readFileSync(path, 'utf8') }; },
+    timings: () => { const path = resolve(buildDirectory(), 'timings.json'); return { path, value: JSON.parse(readFileSync(path, 'utf8')) }; },
   };
+}
+
+/** 终端汇总表里的 `HH:MM:SS.d` 换算成毫秒；它只显示到 0.1 秒，所以比较时留 100 毫秒余量。 */
+function clockMs(text, label) {
+  const match = new RegExp(`${label}\\s*\\+?(\\d+):(\\d{2}):(\\d{2})\\.(\\d)`).exec(text);
+  assert.ok(match, `终端汇总表里应有 ${label} 一行`);
+  return ((Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])) * 10 + Number(match[4])) * 100;
 }
 
 test('successful builds show stages and summary while retaining noisy tool output only in the log', async t => {
@@ -44,6 +53,69 @@ test('successful builds show stages and summary while retaining noisy tool outpu
   assert.match(f.log().text, /compiler-detail/);
   assert.match(f.log().text, /tool-warning/);
   if (process.platform !== 'win32') assert.equal(statSync(f.log().path).mode & 0o777, 0o600);
+  // 逐步计时落盘：失败与成功都写，运维排查慢步骤不必只靠终端回滚。
+  const timing = f.timings();
+  assert.ok(f.text().includes(`时间记录：${timing.path}`), '控制台要给出计时记录路径');
+  assert.equal(timing.value.schemaVersion, 1);
+  assert.equal(timing.value.status, 'ready');
+  assert.equal(timing.value.exitCode, 0);
+  assert.deepEqual(timing.value.stages.map(stage => stage.label), ['构建示例插件', '准备镜像']);
+  for (const stage of timing.value.stages) {
+    assert.ok(Number.isFinite(stage.elapsedMs) && stage.elapsedMs >= 0, '每个阶段都要有耗时');
+    assert.equal(stage.status, 'done');
+    assert.ok(Number.isFinite(Date.parse(stage.startedAt)), '阶段开始时间要是可解析的挂钟时间');
+  }
+  assert.ok(timing.value.wallMs > 0 && timing.value.sumMs >= 0);
+  assert.ok(Number.isFinite(Date.parse(timing.value.startedAt)) && Number.isFinite(Date.parse(timing.value.finishedAt)));
+  // 终端表与记录是同一条时间线、同一个墙钟口径：两行合计必须对得上（表只显示到 0.1 秒）。
+  assert.ok(Math.abs(clockMs(f.text(), '相加（逐项）') - timing.value.sumMs) < 100, '相加一行应与记录的 sumMs 一致');
+  assert.ok(Math.abs(clockMs(f.text(), '墙钟（首末阶段之间）') - timing.value.wallMs) < 100, '墙钟一行应与记录的 wallMs 一致');
+  if (process.platform !== 'win32') assert.equal(statSync(timing.path).mode & 0o777, 0o600);
+});
+
+test('the timing record carries the run identity and keeps failed stages', async t => {
+  const f = fixture(t, `
+    buildStep('先成功的阶段', () => {});
+    buildStep('后失败的阶段', () => { throw new Error('boom'); });
+  `, false, 100, { frameworkVersion: '1.2.3', hostCommit: 'a'.repeat(40), inputKind: 'source' });
+  assert.notEqual(await f.run(), 0);
+  const timing = f.timings().value;
+  assert.deepEqual(timing.environment, { frameworkVersion: '1.2.3', hostCommit: 'a'.repeat(40), inputKind: 'source' });
+  assert.equal(timing.status, 'failed');
+  assert.notEqual(timing.exitCode, 0);
+  assert.deepEqual(timing.stages.map(stage => [stage.label, stage.status]), [['先成功的阶段', 'done'], ['后失败的阶段', 'failed']]);
+});
+
+test('a stage still running when the build dies is recorded as unfinished with its waited time', async t => {
+  const f = fixture(t, `
+    buildStep('已完成的阶段', () => {});
+    startStage('未结束的阶段');
+    await new Promise(resolve => setTimeout(resolve, 600));
+    process.exit(3);
+  `);
+  assert.equal(await f.run(), 3);
+  const timing = f.timings().value;
+  assert.deepEqual(timing.stages.map(stage => [stage.label, stage.status]), [['已完成的阶段', 'done'], ['未结束的阶段', 'unfinished']]);
+  const unfinished = timing.stages[1];
+  assert.ok(Number.isFinite(Date.parse(unfinished.startedAt)), '未结束阶段也要有可解析的开始时间');
+  assert.equal(unfinished.finishedAt, null);
+  assert.ok(unfinished.elapsedMs >= 500, `未结束阶段按已等待时间计，实际 ${unfinished.elapsedMs}`);
+  assert.ok(timing.sumMs >= unfinished.elapsedMs, '未结束阶段的等待时间要计入相加');
+  // 终端表列出同一行并标注未结束，两行合计仍与记录一致。
+  assert.match(f.text(), /未结束的阶段 +00:00:0\d\.\d（未结束）/);
+  assert.ok(Math.abs(clockMs(f.text(), '相加（逐项）') - timing.sumMs) < 100);
+  assert.ok(Math.abs(clockMs(f.text(), '墙钟（首末阶段之间）') - timing.wallMs) < 100);
+});
+
+test('a timing record that cannot be written is reported instead of claiming a path', async t => {
+  const f = fixture(t, `buildStep('构建示例插件', () => {});`);
+  const blocked = resolve(f.root, 'no-such-directory', 'timings.json');
+  assert.equal(await f.run({ timingsPath: blocked }), 0);
+  assert.match(f.text(), /时间记录写入失败：/);
+  assert.ok(!f.text().includes(`时间记录：${blocked}`), '写不成就不能打印“时间记录：<路径>”');
+  assert.equal(readdirSync(f.root).some(name => name.startsWith('build-')), true, '构建日志目录仍然照常保留');
+  const buildRoot = resolve(f.root, readdirSync(f.root).find(name => name.startsWith('build-')));
+  assert.deepEqual(readdirSync(buildRoot).filter(name => name.endsWith('.tmp')), [], '失败的写入不留下半成品');
 });
 
 test('a failed step keeps its exit code, bounded diagnostic tail and full log without claiming success', async t => {
