@@ -49,4 +49,5 @@ export type {
   AgentExecutor,
   AgentExternalPending,
   AgentReplyRequest,
+  AgentSelfCheck,
 } from './execution.ts'
