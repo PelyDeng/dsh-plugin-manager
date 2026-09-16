@@ -8,7 +8,7 @@
  * 这里曾经放在一个独立的协作入口插件里；那个插件移除后契约搬进群组的共享包，
  * 因为**只剩群组这一个消费者**，而子包本来就已经依赖这个包（构建期内联）。
  */
-import type { Actor } from '@dsh-plugin-manager/plugin-kit'
+import type { Actor, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
 
 /**
  * 协作契约的版本号。
@@ -75,6 +75,15 @@ export interface ParticipantRequest {
   readonly requestId: string
   readonly message: string
   readonly conversationId?: string
+  /**
+   * 这一步的验收口径：交回什么才算完成。由协调方派单时给出，执行方拿它做本轮自检。
+   *
+   * 缺省表示没有声明口径（老协调方，或这一步本来就没有可核验的产出）——此时不施加
+   * 「口径提到的产出物必须交回」那条校验，如实标记未核验，不判不达标。
+   */
+  readonly acceptance?: string
+  /** 这一次派活是对哪一条尝试的重做：填被重做的子任务 id；缺省表示首次派活。 */
+  readonly reworkOf?: string
   readonly signal: AbortSignal
   readonly onProgress: (progress: ParticipantProgress) => void
 }
@@ -92,6 +101,12 @@ export interface ParticipantResult {
   readonly question?: string
   /** `status: 'external_pending'` 时**必须**给出，理由见 {@link ParticipantExternalPending}。 */
   readonly externalPending?: ParticipantExternalPending
+  /**
+   * 对照 {@link ParticipantRequest.acceptance} 的自检结论；形状与语义沿用 kit 的定义。
+   *
+   * 缺省表示这一轮没有做自检（老参与者）——群组按未核验如实标记，不判不达标。
+   */
+  readonly selfCheck?: AgentSelfCheck
 }
 export interface AgentParticipant {
   readonly protocol: typeof PARTICIPANT_PROTOCOL

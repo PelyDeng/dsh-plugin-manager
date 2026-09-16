@@ -1,6 +1,6 @@
 -- 牛马大总管工作台 PostgreSQL 初始结构。
--- 对应源 schema 8（原 node:sqlite 版 store.ts 的 PRAGMA user_version = 8），一次性建出
--- 全量形状（六张业务表 + schema_version 版本表），不走源库 v1..v7 的逐版迁移链。
+-- 对应源 schema 9（原 node:sqlite 版 store.ts 的 PRAGMA user_version = 9），一次性建出
+-- 全量形状（六张业务表 + schema_version 版本表），不走源库 v1..v8 的逐版迁移链。
 --
 -- 列类型映射约定（方案 §3 方言差异）：
 --   毫秒时间戳 → bigint；JSON 列 → text（保持 TEXT + 读时解析分类，不迁 JSONB）；
@@ -17,6 +17,8 @@
 --   - v5 加 logical_id 时的回填规则：logical_id 为空的旧行按 `logical_id = 'g' || seq`
 --     回填（每条子任务各自当一个目标）；
 --   - v8 加 input_refs / member_return 时旧值一律留空 '' = 未知（unknown），不反推、不补造；
+--   - v9 加 acceptance（验收口径）时旧值一律留空 '' = 没有声明口径（**不是**「默认通过」）：
+--     协调方据此不施加「口径提到的产出物必须交回」那条校验，与加这一列之前的行为一致；
 --   - 子任务 artifacts / depends_on 留空 = 空数组；tasks.finished_at 允许 NULL。
 --
 -- 版本号与建表在同一批语句内完成：schema_version 用 id=0 单行约束（CHECK 保证只有一行），
@@ -40,6 +42,7 @@ CREATE TABLE tasks (
   owner_namespace TEXT NOT NULL,
   owner_id TEXT NOT NULL,
   goal TEXT NOT NULL,
+  acceptance TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
   summary TEXT NOT NULL DEFAULT '',
@@ -61,6 +64,7 @@ CREATE TABLE subtasks (
   id TEXT NOT NULL,
   seq INTEGER NOT NULL,
   goal TEXT NOT NULL,
+  acceptance TEXT NOT NULL DEFAULT '',
   agent_id TEXT NOT NULL DEFAULT '',
   reason TEXT NOT NULL DEFAULT '',
   state TEXT NOT NULL,
@@ -124,4 +128,4 @@ CREATE TABLE schema_version (
 );
 
 INSERT INTO schema_version(id, version, applied_at)
-VALUES (0, 8, (CAST(EXTRACT(EPOCH FROM now()) AS BIGINT) * 1000));
+VALUES (0, 9, (CAST(EXTRACT(EPOCH FROM now()) AS BIGINT) * 1000));

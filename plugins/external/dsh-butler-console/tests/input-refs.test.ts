@@ -85,15 +85,19 @@ function rawColumn(path: string, column: 'input_refs' | 'member_return'): string
   return row.value
 }
 
-describe('schema 8：两列存在', () => {
-  it('新库为 schema 8，两列存在', () => {
+describe('schema 9：当前结构', () => {
+  it('新库为 schema 9，口径列与快照列都存在', () => {
     const path = tempDb()
     const store = new TaskStore(path)
     const db = new DatabaseSync(path)
-    expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 8 })
+    expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 9 })
     const columns = (db.prepare('PRAGMA table_info(subtasks)').all() as unknown as { name: string }[]).map(row => row.name)
     expect(columns).toContain('input_refs')
     expect(columns).toContain('member_return')
+    // v9 的验收口径：任务级与子任务级各一列，缺任一个都会让派单时读不到口径。
+    expect(columns).toContain('acceptance')
+    const taskColumns = (db.prepare('PRAGMA table_info(tasks)').all() as unknown as { name: string }[]).map(row => row.name)
+    expect(taskColumns).toContain('acceptance')
     db.close()
     store.close()
   })

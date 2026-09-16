@@ -57,7 +57,7 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
     // 幂等：再次 init 也应通过。
     await expect(storage.init()).resolves.toBeUndefined()
     const version = await admin.query<{ version: string | number }>('SELECT version FROM schema_version')
-    expect(Number(version.rows[0]?.version)).toBe(8)
+    expect(Number(version.rows[0]?.version)).toBe(9)
     const counts = await storage.counts(actor)
     expect(counts.completed).toBe(0)
   })
@@ -74,7 +74,7 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
       )
     } finally {
       await rejected.close()
-      await admin.query('UPDATE schema_version SET version = 8')
+      await admin.query('UPDATE schema_version SET version = 9')
     }
   })
 

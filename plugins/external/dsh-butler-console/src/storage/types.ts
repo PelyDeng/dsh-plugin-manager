@@ -38,6 +38,14 @@ export interface TaskRecord {
   readonly id: string
   readonly conversationId: string
   readonly goal: string
+  /**
+   * 这次的**验收口径**：交回什么才算完成。空串表示没有声明口径。
+   *
+   * 由 `butler_plan` 在定目标时给出，落库后随每一次派单交给执行方，也用来核验「口径里
+   * 提到的产出物」是否真的以材料交回。它约束的是自洽（口径与材料都是执行侧自报的），
+   * 不是交付完整性判定。
+   */
+  readonly acceptance: string
   readonly state: TaskState
   readonly note: string
   readonly summary: string
@@ -135,6 +143,13 @@ export interface SubtaskRecord {
   /** 这一步是否真的需要外部动作（采用、确认、发布）已经办完；由计划声明。 */
   readonly requiresExternalAction: boolean
   readonly goal: string
+  /**
+   * 这一步自己的验收口径；空串表示沿用任务级口径或没有口径。
+   *
+   * 与任务级分开存：同一次任务里，不同子任务的产出物种类不同（一个交草稿、一个交发布
+   * 确认），只看任务级口径会把它们判成同一个标准。
+   */
+  readonly acceptance: string
   readonly agentId: string
   readonly reason: string
   readonly state: SubtaskState
@@ -198,6 +213,8 @@ export interface NewSubtask {
   readonly goal: string
   readonly agentId: string
   readonly reason: string
+  /** 这一步的验收口径；不传表示沿用任务级口径（或本来就没有口径）。 */
+  readonly acceptance?: string
   /** 目标标识；不传时由存储层按顺序分配（`g1`、`g2`…）。 */
   readonly logicalId?: string
   /** 替代了哪一条尝试；首次尝试不传。 */
@@ -316,6 +333,8 @@ export interface ButlerStorage {
     conversationId: string
     actor: Actor
     goal: string
+    /** 这次的验收口径（`butler_plan` 顶层声明）；不传表示没有声明。 */
+    acceptance?: string
     note: string
     subtasks: readonly NewSubtask[]
   }): Promise<void>

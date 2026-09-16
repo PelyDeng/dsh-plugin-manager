@@ -347,3 +347,59 @@ describe('执行入口的身份声明', () => {
     expect(BUTLER_EXECUTORS_EVENT).toBe('butler/executors')
   })
 })
+
+/**
+ * 验收口径与自检的透传（P0）。
+ *
+ * 断言一律落在**参与者侧的回调**里，而不是 `executor.dispatch` 的入参上：桥接内部是逐字段
+ * 重建 `run` 的入参，漏传一个可选字段既不报错也不影响其它字段——只看协调方那一跳的 spy
+ * 根本看不见。仓库自己的先例也是这么断言的（本文件上面的身份传递用例）。
+ */
+describe('验收口径与自检的透传', () => {
+  it('派单把 acceptance 与 reworkOf 原样交给参与者', async () => {
+    let seen: Record<string, unknown> = {}
+    const executor = executorFor(manifest, stubParticipant({}, value => { seen = value as Record<string, unknown> }))
+    await executor.dispatch(request({ acceptance: '一份 800 字以上的候选稿，含标题与正文', reworkOf: 's3' }))
+    expect(seen.acceptance).toBe('一份 800 字以上的候选稿，含标题与正文')
+    expect(seen.reworkOf).toBe('s3')
+  })
+
+  it('没有声明口径时不传该字段，而不是传空串', async () => {
+    let seen: Record<string, unknown> = {}
+    const executor = executorFor(manifest, stubParticipant({}, value => { seen = value as Record<string, unknown> }))
+    await executor.dispatch(request())
+    // 空串到参与者那边会被读成「有口径，但内容是空的」，与「没有声明口径」不是同一件事：
+    // 前者会让按参与者能力豁免的那条校验失效。
+    expect('acceptance' in seen).toBe(false)
+    expect('reworkOf' in seen).toBe(false)
+  })
+
+  it('续问沿用同一份口径（口径不变，变的是用户又补了一句话）', async () => {
+    let seen: Record<string, unknown> = {}
+    const executor = executorFor(manifest, stubParticipant({}, value => { seen = value as Record<string, unknown> }))
+    await executor.reply?.({
+      taskId: 'task-1', subtaskId: 'sub-1', requestId: 'reply-run-1', text: '用上周的数据',
+      acceptance: '一份 800 字以上的候选稿', conversationId: 'member-conv-7',
+      decideByAgent: false, owner: 'user:alice', actor, signal: new AbortController().signal,
+    })
+    expect(seen.acceptance).toBe('一份 800 字以上的候选稿')
+  })
+
+  it('selfCheck 原样回传，缺声明时不补一个 passed', async () => {
+    const reported = executorFor(manifest, stubParticipant({ selfCheck: { status: 'failed', detail: '少了发布链接' } }))
+    await expect(reported.dispatch(request())).resolves.toMatchObject({
+      selfCheck: { status: 'failed', detail: '少了发布链接' },
+    })
+    // 补一个 passed 会把一次没人核验过的交付显示成已核验；协调方按「未核验」如实标记才对。
+    const silent = executorFor(manifest, stubParticipant())
+    const result = await silent.dispatch(request())
+    expect('selfCheck' in result).toBe(false)
+  })
+
+  it('unverifiable 如实透传，不被折成通过或失败', async () => {
+    // 它的语义是「这一轮没有可核验的产出」，是「没顾上过目」而不是「活没干好」——
+    // 折成任何一边都会让不带产出物的正常步骤被算成不达标。
+    const executor = executorFor(manifest, stubParticipant({ selfCheck: { status: 'unverifiable' } }))
+    await expect(executor.dispatch(request())).resolves.toMatchObject({ selfCheck: { status: 'unverifiable' } })
+  })
+})

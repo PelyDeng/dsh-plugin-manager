@@ -8,9 +8,10 @@
  * | `taskId` / `subtaskId` | `missionId` / `requestId` |
  * | `brief`（含 `goal`） | `message` |
  * | `actor` | `actor`（原样传，不从 `owner` 字符串重建） |
+ * | `acceptance` / `reworkOf` | 同名（派单）；续问只沿用 `acceptance`——口径不变，变的是用户又补了一句话 |
  * | `onProgress` | `onProgress`（形态转换） |
  * | `succeeded` / `waiting_user` / `external_pending` / `cancelled` / `failed` | `completed` / `waiting` / `external_pending` / `cancelled` / `failed` |
- * | `artifacts` / `externalPending` / `question` | 同名字段原样透传 |
+ * | `artifacts` / `externalPending` / `question` / `selfCheck` | 同名字段原样透传 |
  *
  * 为什么需要这一层：`AgentParticipant` 是给协作页面用的（一轮活怎么跑、拿到什么结论），
  * `ButlerAgentExecutor` 是给牛马大总管用的（派活、收结论、追问）。两者描述的是同一件事，
@@ -122,6 +123,9 @@ function toButlerResult(result: ParticipantResult): ButlerDispatchResult {
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.artifacts === undefined ? {} : { artifacts: toButlerArtifacts(result.artifacts) }),
     ...(result.externalPending === undefined ? {} : { externalPending: result.externalPending }),
+    // 自检结论原样透传，缺声明就不传：协调方据此把「没自检」与「自检通过」分开，
+    // 这里替参与者补一个 passed 会把一次没人核验过的交付显示成已核验。
+    ...(result.selfCheck === undefined ? {} : { selfCheck: result.selfCheck }),
   }
 }
 
@@ -197,6 +201,10 @@ export function executorFor(manifest: AgentManifest, participant: AgentParticipa
         missionId: request.taskId,
         requestId: request.subtaskId,
         message,
+        // 验收口径与重做溯源逐字段透传：它们决定执行方要不要自检、以及是不是换做法重跑，
+        // 悄悄丢掉只会让执行方以为这是一次普通派活（而契约测试在 participant 侧取证）。
+        ...(request.acceptance === undefined ? {} : { acceptance: request.acceptance }),
+        ...(request.reworkOf === undefined ? {} : { reworkOf: request.reworkOf }),
         signal: request.signal,
         onProgress: update => request.onProgress?.(toButlerProgress(asProgressFields(update))),
       })
@@ -218,6 +226,8 @@ export function executorFor(manifest: AgentManifest, participant: AgentParticipa
           missionId: request.taskId,
           requestId: request.requestId,
           message: request.text,
+          // 续问沿用同一份验收口径：口径不变，变的是用户又补了一句话。
+          ...(request.acceptance === undefined ? {} : { acceptance: request.acceptance }),
           ...(request.conversationId === undefined ? {} : { conversationId: request.conversationId }),
           signal: request.signal,
           onProgress: update => request.onProgress?.(toButlerProgress(asProgressFields(update))),

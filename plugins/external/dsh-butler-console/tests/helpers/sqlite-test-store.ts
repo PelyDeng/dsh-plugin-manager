@@ -41,8 +41,10 @@ import type {
  * 5：子任务增加 `logical_id`（同一目标的稳定标识）与 `supersedes`（替代了哪一条尝试）。
  * 6：子任务增加 `depends_on`（前置目标的标识列表）。
  * 7：子任务增加 `requires_external_action`（这一步是否真的需要外部动作已经办完）。
+ * 8：子任务增加 `input_refs`（派单材料快照）与 `member_return`（协作返回原文）。
+ * 9：任务与子任务增加 `acceptance`（验收口径：交回什么才算完成）。
  */
-const SCHEMA_VERSION = 8
+const SCHEMA_VERSION = 9
 
 /**
  * 能从这些旧版本就地升上来。
@@ -50,7 +52,7 @@ const SCHEMA_VERSION = 8
  * 不在这张表里的版本（比当前新、或者来历不明）一律拒绝：拿错版本的结构去读写，比起不来
  * 严重得多。这条链只服务于等价性验收，生产升级走 migrations/postgres/。
  */
-const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7]
+const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8]
 
 /**
  * 牛马大总管工作台的 SQLite 索引。
@@ -88,6 +90,7 @@ export class TaskStore {
         owner_namespace TEXT NOT NULL,
         owner_id TEXT NOT NULL,
         goal TEXT NOT NULL,
+        acceptance TEXT NOT NULL DEFAULT '',
         state TEXT NOT NULL,
         note TEXT NOT NULL DEFAULT '',
         summary TEXT NOT NULL DEFAULT '',
@@ -107,6 +110,7 @@ export class TaskStore {
         id TEXT NOT NULL,
         seq INTEGER NOT NULL,
         goal TEXT NOT NULL,
+        acceptance TEXT NOT NULL DEFAULT '',
         agent_id TEXT NOT NULL DEFAULT '',
         reason TEXT NOT NULL DEFAULT '',
         state TEXT NOT NULL,
@@ -211,6 +215,11 @@ export class TaskStore {
         // 8：派单材料快照与协作返回原文。旧库一律留空 = 未知：旧 result 是裁剪过的展示摘要，
         // 不能当作可交付材料，也不反推、不补造。
         this.db.exec("ALTER TABLE subtasks ADD COLUMN input_refs TEXT NOT NULL DEFAULT ''; ALTER TABLE subtasks ADD COLUMN member_return TEXT NOT NULL DEFAULT '';")
+      }
+      if (from <= 8) {
+        // 9：验收口径。旧库从来没有声明过口径，一律空串 = 没有口径（**不是**「默认通过」）：
+        // 协调方据此不施加「口径提到的产出物必须交回」那条校验，与加这一列之前的行为一致。
+        this.db.exec("ALTER TABLE tasks ADD COLUMN acceptance TEXT NOT NULL DEFAULT ''; ALTER TABLE subtasks ADD COLUMN acceptance TEXT NOT NULL DEFAULT '';")
       }
 
       this.db.exec('COMMIT')
@@ -334,6 +343,7 @@ export class TaskStore {
     conversationId: string
     actor: Actor
     goal: string
+    acceptance?: string
     note: string
     subtasks: readonly NewSubtask[]
   }): void {
@@ -341,21 +351,22 @@ export class TaskStore {
     const now = Date.now()
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      this.db.prepare(`INSERT INTO tasks(id,conversation_id,owner_namespace,owner_id,goal,state,note,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?)`).run(
+      this.db.prepare(`INSERT INTO tasks(id,conversation_id,owner_namespace,owner_id,goal,acceptance,state,note,created_at,updated_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(
         input.id, input.conversationId, input.actor.namespace, input.actor.userId,
-        input.goal, 'running', input.note, now, now,
+        input.goal, input.acceptance ?? '', 'running', input.note, now, now,
       )
       this.db.prepare(`INSERT INTO task_inputs(task_id,version,text,source,created_at) VALUES(?,1,?,?,?)`)
         .run(input.id, input.goal, 'chat', now)
-      const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on,requires_external_action)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+      const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on,requires_external_action,acceptance)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
       input.subtasks.forEach((subtask, index) => {
         // 没给目标标识就按顺序分配：首次计划里一条子任务就是一个目标。
         insert.run(
           input.id, subtask.id, index + 1, subtask.goal, subtask.agentId, subtask.reason, 'queued',
           subtask.logicalId ?? `g${index + 1}`, subtask.supersedes ?? '', JSON.stringify(subtask.dependsOn ?? []),
           subtask.requiresExternalAction === true ? 1 : 0,
+          subtask.acceptance ?? '',
         )
       })
       this.db.exec('COMMIT')
@@ -490,13 +501,13 @@ export class TaskStore {
 
   /** 读取一条任务的完整记录；不存在或不属于该用户时返回 undefined。 */
   task(actor: Actor, id: string): TaskRecord | undefined {
-    const row = this.db.prepare(`SELECT id,conversation_id AS conversationId,goal,state,note,summary,error,
+    const row = this.db.prepare(`SELECT id,conversation_id AS conversationId,goal,acceptance,state,note,summary,error,
         accepted_version AS acceptedVersion,processed_version AS processedVersion,
         created_at AS createdAt,updated_at AS updatedAt,finished_at AS finishedAt
       FROM tasks WHERE id=? AND owner_namespace=? AND owner_id=?`)
       .get(id, actor.namespace, actor.userId)
     if (row === undefined) return undefined
-    const rows = this.db.prepare(`SELECT id,seq,goal,logical_id AS logicalId,supersedes,depends_on AS dependsOnRaw,
+    const rows = this.db.prepare(`SELECT id,seq,goal,acceptance,logical_id AS logicalId,supersedes,depends_on AS dependsOnRaw,
         agent_id AS agentId,reason,state,result,error,
         artifacts,conversation_id AS subtaskConversationId,started_at AS startedAt,finished_at AS finishedAt,
         requires_external_action AS requiresExternalActionRaw,
@@ -675,8 +686,8 @@ export class TaskStore {
       .map(item => Number.parseInt(item.logicalId.replace(/^g/u, ''), 10))
       .filter(value => Number.isSafeInteger(value))
       .reduce((max, value) => Math.max(max, value), 0)
-    const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on,requires_external_action)
-      VALUES(?,?,?,?,?,?,?,?,?,?,?)`)
+    const insert = this.db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on,requires_external_action,acceptance)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`)
     const ids: string[] = []
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -685,6 +696,7 @@ export class TaskStore {
           taskId, subtask.id, start + index + 1, subtask.goal, subtask.agentId, subtask.reason, 'queued',
           subtask.logicalId ?? `g${nextLogical + index + 1}`, subtask.supersedes ?? '', JSON.stringify(subtask.dependsOn ?? []),
           subtask.requiresExternalAction === true ? 1 : 0,
+          subtask.acceptance ?? '',
         )
         ids.push(subtask.id)
       })

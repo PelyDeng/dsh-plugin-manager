@@ -271,7 +271,7 @@ describe.skipIf(DSN === '')('butler 存量迁移工具（butler_mig）', () => {
       }
 
       const versionRow = await admin.query<{ version: number }>('SELECT version FROM schema_version')
-      expect(Number(versionRow.rows[0]?.version)).toBe(8)
+      expect(Number(versionRow.rows[0]?.version)).toBe(9)
       const counts = new Map<string, number>()
       for (const table of ['conversations', 'tasks', 'subtasks', 'agent_aliases', 'requests', 'task_inputs']) {
         const result = await admin.query<{ total: string }>(`SELECT count(*) AS total FROM ${table}`)
@@ -312,7 +312,7 @@ describe.skipIf(DSN === '')('butler 存量迁移工具（butler_mig）', () => {
         expect(claimed.rows[0]?.state).toBe('claimed')
       }
 
-      // 路二（等价性验收）：副本先经旧 TaskStore.migrate() 升 8 再导出导入，两路逐列比对。
+      // 路二（等价性验收）：副本先经旧 TaskStore.migrate() 升到当前版本再导出导入，两路逐列比对。
       const dumpDirect = await dumpAll()
       const upgraded = tempDb(`v${version}-upgraded`)
       copyFileSync(source, upgraded)
@@ -320,7 +320,7 @@ describe.skipIf(DSN === '')('butler 存量迁移工具（butler_mig）', () => {
       store.close()
       const verify = new DatabaseSync(upgraded, { readOnly: true })
       const sourceVersionRow = verify.prepare('PRAGMA user_version').get() as unknown as { user_version?: number } | undefined
-      expect(Number(sourceVersionRow?.user_version ?? 0)).toBe(8)
+      expect(Number(sourceVersionRow?.user_version ?? 0)).toBe(9)
       verify.close()
 
       await resetTarget()
@@ -337,18 +337,19 @@ describe.skipIf(DSN === '')('butler 存量迁移工具（butler_mig）', () => {
     await resetTarget()
     await runMigration({ sourcePath: source, dsn: DSN, log: silent })
     const versionRow = await admin.query<{ version: number }>('SELECT version FROM schema_version')
-    expect(Number(versionRow.rows[0]?.version)).toBe(8)
+    expect(Number(versionRow.rows[0]?.version)).toBe(9)
     for (const table of ['conversations', 'tasks', 'subtasks', 'agent_aliases', 'requests', 'task_inputs']) {
       const result = await admin.query<{ total: string }>(`SELECT count(*) AS total FROM ${table}`)
       expect(Number(result.rows[0]?.total ?? 0)).toBe(0)
     }
   })
 
-  it('user_version=9 拒绝迁移：main 返回退出码 2（支持环境变量 DSN）', async () => {
-    const source = tempDb('v9')
+  it('user_version=10 拒绝迁移：main 返回退出码 2（支持环境变量 DSN）', async () => {
+    const source = tempDb('v10')
     createLegacyDb(source, 8)
     const db = new DatabaseSync(source)
-    db.exec('PRAGMA user_version = 9')
+    // 比当前支持上限（9）高一版：来历不明的结构不能拿来导入，宁可拒绝。
+    db.exec('PRAGMA user_version = 10')
     db.close()
     await resetTarget()
     const code = await main(['--source', source], { BUTLER_MIGRATE_PG_DSN: DSN }, silent)

@@ -40,7 +40,7 @@ import type {
 } from './types.ts'
 
 /** 本实现对应的库结构版本（与 `migrations/postgres/0001_init.sql` 写入的版本行一致）。 */
-export const STORAGE_SCHEMA_VERSION = 8
+export const STORAGE_SCHEMA_VERSION = 9
 /** init 版本校验使用的期望版本（与 {@link STORAGE_SCHEMA_VERSION} 同源，/ready 汇报同一数值）。 */
 const EXPECTED_SCHEMA_VERSION = STORAGE_SCHEMA_VERSION
 
@@ -63,6 +63,7 @@ interface TaskRow extends QueryResultRow {
   readonly id: string
   readonly conversationId: string
   readonly goal: string
+  readonly acceptance: string
   readonly state: string
   readonly note: string
   readonly summary: string
@@ -79,6 +80,7 @@ interface SubtaskRow extends QueryResultRow {
   readonly id: string
   readonly seq: string | number
   readonly goal: string
+  readonly acceptance: string
   readonly logicalId: string
   readonly supersedes: string
   readonly dependsOnRaw: string
@@ -117,6 +119,7 @@ function mapSubtaskRow(row: SubtaskRow): SubtaskRecord {
     dependsOn: depends.kind === 'valid' ? depends.items : parseDependsOn(row.dependsOnRaw),
     dependsOnState: depends.kind,
     goal: row.goal,
+    acceptance: row.acceptance,
     agentId: row.agentId,
     reason: row.reason,
     state: row.state as SubtaskState,
@@ -139,10 +142,12 @@ function subtaskInsertValues(taskId: string, subtask: NewSubtask, seq: number, l
     taskId, subtask.id, seq, subtask.goal, subtask.agentId, subtask.reason, 'queued',
     logicalId, subtask.supersedes ?? '', JSON.stringify(subtask.dependsOn ?? []),
     subtask.requiresExternalAction === true ? 1 : 0,
+    // 验收口径：没声明就写空串（列是 NOT NULL DEFAULT ''），读路径靠空串区分「没有口径」。
+    subtask.acceptance ?? '',
   ]
 }
 
-const SUBTASK_INSERT_COLUMNS = 'task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on,requires_external_action'
+const SUBTASK_INSERT_COLUMNS = 'task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on,requires_external_action,acceptance'
 
 /**
  * 牛马大总管工作台的 PostgreSQL 存储。
@@ -383,6 +388,7 @@ export class PostgresTaskStorage implements ButlerStorage {
     conversationId: string
     actor: Actor
     goal: string
+    acceptance?: string
     note: string
     subtasks: readonly NewSubtask[]
   }): Promise<void> {
@@ -392,9 +398,9 @@ export class PostgresTaskStorage implements ButlerStorage {
       // 任务行的锁由本次 INSERT 取得：并发的追加编号（appendSubtasks 的 FOR UPDATE）会
       // 排队到本事务提交之后，seq/logicalId 不会撞号（§3 createTask 规格）。
       await client.query(
-        `INSERT INTO tasks(id,conversation_id,owner_namespace,owner_id,goal,state,note,created_at,updated_at)
-         VALUES($1,$2,$3,$4,$5,'running',$6,$7,$7)`,
-        [input.id, input.conversationId, input.actor.namespace, input.actor.userId, input.goal, input.note, now],
+        `INSERT INTO tasks(id,conversation_id,owner_namespace,owner_id,goal,acceptance,state,note,created_at,updated_at)
+         VALUES($1,$2,$3,$4,$5,$6,'running',$7,$8,$8)`,
+        [input.id, input.conversationId, input.actor.namespace, input.actor.userId, input.goal, input.acceptance ?? '', input.note, now],
       )
       // 开头那条需求就是版本 1，与任务一起落库：输入历史要完整。
       await client.query(
@@ -404,7 +410,7 @@ export class PostgresTaskStorage implements ButlerStorage {
       for (const [index, subtask] of input.subtasks.entries()) {
         // 没给目标标识就按顺序分配：首次计划里一条子任务就是一个目标。
         await client.query(
-          `INSERT INTO subtasks(${SUBTASK_INSERT_COLUMNS}) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          `INSERT INTO subtasks(${SUBTASK_INSERT_COLUMNS}) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
           subtaskInsertValues(input.id, subtask, index + 1, subtask.logicalId ?? `g${index + 1}`),
         )
       }
@@ -496,7 +502,7 @@ export class PostgresTaskStorage implements ButlerStorage {
 
   async task(actor: Actor, id: string): Promise<TaskRecord | undefined> {
     const taskResult = await this.run<TaskRow>(
-      `SELECT id,conversation_id AS "conversationId",goal,state,note,summary,error,
+      `SELECT id,conversation_id AS "conversationId",goal,acceptance,state,note,summary,error,
          accepted_version AS "acceptedVersion",processed_version AS "processedVersion",
          created_at AS "createdAt",updated_at AS "updatedAt",finished_at AS "finishedAt"
        FROM tasks WHERE id=$1 AND owner_namespace=$2 AND owner_id=$3`,
@@ -505,7 +511,7 @@ export class PostgresTaskStorage implements ButlerStorage {
     const row = taskResult.rows[0]
     if (row === undefined) return undefined
     const subResult = await this.run<SubtaskRow>(
-      `SELECT id,seq,goal,logical_id AS "logicalId",supersedes,depends_on AS "dependsOnRaw",
+      `SELECT id,seq,goal,acceptance,logical_id AS "logicalId",supersedes,depends_on AS "dependsOnRaw",
          agent_id AS "agentId",reason,state,result,error,
          artifacts,conversation_id AS "subtaskConversationId",started_at AS "startedAt",finished_at AS "finishedAt",
          requires_external_action AS "requiresExternalActionRaw",
@@ -518,6 +524,7 @@ export class PostgresTaskStorage implements ButlerStorage {
       id: row.id,
       conversationId: row.conversationId,
       goal: row.goal,
+      acceptance: row.acceptance,
       state: row.state as TaskState,
       note: row.note,
       summary: row.summary,
@@ -691,7 +698,7 @@ export class PostgresTaskStorage implements ButlerStorage {
       const ids: string[] = []
       for (const [index, subtask] of subtasks.entries()) {
         await client.query(
-          `INSERT INTO subtasks(${SUBTASK_INSERT_COLUMNS}) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          `INSERT INTO subtasks(${SUBTASK_INSERT_COLUMNS}) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
           subtaskInsertValues(taskId, subtask, start + index + 1, subtask.logicalId ?? `g${nextLogical + index + 1}`),
         )
         ids.push(subtask.id)

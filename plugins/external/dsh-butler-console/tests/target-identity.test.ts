@@ -273,7 +273,7 @@ describe('替代：同一目标的新尝试', () => {
 describe('聚合只看有效尝试', () => {
   const subtask = (id: string, logicalId: string, supersedes: string, state: string): SubtaskRecord => ({
     id, seq: Number(id.slice(1)), logicalId, supersedes, dependsOn: [], dependsOnState: 'valid', requiresExternalAction: false,
-    goal: id, agentId: 'blog', reason: '',
+    goal: id, acceptance: '', agentId: 'blog', reason: '',
     state: state as SubtaskRecord['state'], result: '', error: '', artifacts: [], conversationId: '',
     startedAt: null, finishedAt: null,
     inputRefs: undefined, inputRefsState: 'unfixed', memberReturn: undefined,
