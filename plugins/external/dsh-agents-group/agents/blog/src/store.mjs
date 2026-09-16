@@ -10,6 +10,7 @@ export const ownerKey = actor => `${actor.namespace}:${actor.userId}`
 // Legacy deleted copies no longer retain the content timestamp from before deletion.
 export const draftContentUpdatedAt = d => d.contentUpdatedAt !== undefined ? d.contentUpdatedAt : d.remote?.deleted ? null : d.updatedAt
 const draftContentTimeSource = d => Number.isFinite(draftContentUpdatedAt(d)) ? d.contentTimeSource??(d.contentUpdatedAt!==undefined?'content':'legacy-record') : 'unknown'
+export { draftContentTimeSource }
 export function draftSummary(d) {
   return {id:d.id,title:d.title,revision:d.revision,createdAt:d.createdAt??null,updatedAt:d.updatedAt,contentUpdatedAt:draftContentUpdatedAt(d),contentTimeSource:draftContentTimeSource(d),tags:d.tags,categories:d.categories,
     remote:d.remote?{publishedCid:d.remote.published?.cid??null,savedDraftCid:d.remote.savedDraft?.cid??null,deleted:d.remote.deleted===true,deletedAt:d.remote.deletedAt??null}:null}

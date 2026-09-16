@@ -42,6 +42,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/participant.test.mjs tests/native-drafts.test.mjs tests/management.test.mjs tests/clipboard.test.mjs tests/attachments.test.mjs tests/chat-store.test.mjs tests/chat.test.mjs tests/chat-ui.test.mjs tests/article-diff.test.mjs tests/drafts.test.mjs tests/jobs.test.mjs tests/models.test.mjs tests/search.test.mjs tests/reports.test.mjs",
     "test:host": "node --test tests/http.test.mjs tests/chat-history-native.test.mjs tests/chat-backup-native.test.mjs",
+    "test:pg": "node --test tests/pg-smoke.test.mjs",
     "test:bridge": "php -n -l typecho/DshBlogBridge/Plugin.php && php -n tests/management-bridge.test.php",
     "test:reports": "php tests/reports-bridge.test.php",
     "check": "pnpm typecheck && node --check web/app.js",
@@ -122,8 +123,10 @@
     "@dsh-agents-group/common": "workspace:*",
     "@dsh-plugin-manager/plugin-kit": "workspace:*",
     "@types/node": "^22.20.0",
+    "@types/pg": "^8.15.0",
     "dompurify": "3.4.14",
     "markdown-it": "15.0.1",
+    "pg": "^8.16.0",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3"
   }

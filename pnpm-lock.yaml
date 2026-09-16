@@ -321,12 +321,18 @@ importers:
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.1
+      '@types/pg':
+        specifier: ^8.15.0
+        version: 8.23.1
       dompurify:
         specifier: 3.4.14
         version: 3.4.14
       markdown-it:
         specifier: 15.0.1
         version: 15.0.1
+      pg:
+        specifier: ^8.16.0
+        version: 8.23.0
       tsdown:
         specifier: ^0.22.2
         version: 0.22.14(@volar/typescript@2.4.28(typescript@6.0.3))(typescript@6.0.3)(vue-tsc@3.3.11(typescript@6.0.3))
