@@ -999,3 +999,18 @@ body[data-settings="open"] .settings {
 @media (max-width: 720px) {
   .dispatch__tabs { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
 }
+/* 面板上的两个小开关：只看结论 / 复制当前成员正文 */
+.dispatch__tools { display: inline-flex; gap: 6px; margin-left: auto; }
+.dispatch__tool {
+  font-family: inherit; font-size: 11.5px; color: var(--bt-ink-soft);
+  background: #ffffff9c; border: 1.5px solid var(--bt-line); border-radius: 999px;
+  padding: 1px 8px; cursor: pointer;
+}
+.dispatch__tool:hover { color: var(--bt-ink); border-color: var(--bt-stroke); }
+.dispatch__tool--on { color: var(--bt-ink); border-color: var(--bt-stroke); background: #fff; font-weight: 700; }
+/* 「只看结论」：把过程行收起来，结论照旧。 */
+.dispatch__body--result-only .think,
+.dispatch__body--result-only .tool-line,
+.dispatch__body--result-only .typing,
+.dispatch__body--result-only .progress,
+.dispatch__body--result-only .msg__meta { display: none; }

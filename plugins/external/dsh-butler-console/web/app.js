@@ -625,20 +625,26 @@ function mountDispatch(subtasks) {
   const summary = make('summary', 'dispatch__summary')
   const title = make('span', 'dispatch__title')
   const tabs = make('div', 'dispatch__tabs')
+  const tools = make('div', 'dispatch__tools')
   const body = make('div', 'dispatch__body')
   const slots = new Map()
   const buttons = new Map()
+  /** 每位成员当前可复制的正文：取的是它的累积正文（流式期间也成立）。 */
+  const texts = new Map()
 
   const panel = {
     details,
     summary,
     title,
     tabs,
+    tools,
     body,
     slots,
     buttons,
+    texts,
     order: subtasks.map(subtask => subtask.id),
     active: subtasks.length > 0 ? subtasks[0].id : null,
+    resultOnly: false,
   }
 
   const select = id => selectDispatch(panel, id)
@@ -658,8 +664,28 @@ function mountDispatch(subtasks) {
     slots.set(subtask.id, slot)
   }
 
+  // 「只看结论」：过程行（思考、工具行、打字点）收起来，只留成员交回的结论。
+  const resultOnly = make('button', 'dispatch__tool')
+  resultOnly.type = 'button'
+  resultOnly.textContent = '只看结论'
+  resultOnly.title = '隐藏成员的思考与工具过程，只留它交回的结论'
+  resultOnly.addEventListener('click', () => { toggleDispatchResultOnly(panel, !panel.resultOnly) })
+  panel.resultOnlyButton = resultOnly
+
+  // 「复制」：把当前这位成员交回的内容拷走，粘到别处不用再手选。
+  const copy = make('button', 'dispatch__tool')
+  copy.type = 'button'
+  copy.textContent = '复制'
+  copy.title = '复制当前这位成员交回的内容'
+  copy.addEventListener('click', () => { void copyDispatchText(panel, copy) })
+  panel.copyButton = copy
+
+  tools.appendChild(resultOnly)
+  tools.appendChild(copy)
+
   summary.appendChild(title)
   summary.appendChild(tabs)
+  summary.appendChild(tools)
   details.appendChild(summary)
   details.appendChild(body)
   // 点开面板时不再自动跳到某个 tab：记住用户上一次的选择（初始是第一位成员）。
@@ -669,6 +695,28 @@ function mountDispatch(subtasks) {
   renderDispatchHeader(panel)
   if (panel.active !== null) select(panel.active)
   return details
+}
+
+/** 「只看结论」开关：过程行收起来，结论照旧。 */
+function toggleDispatchResultOnly(panel, on) {
+  panel.resultOnly = on === true
+  panel.body.classList.toggle('dispatch__body--result-only', panel.resultOnly)
+  panel.resultOnlyButton.classList.toggle('dispatch__tool--on', panel.resultOnly)
+  panel.resultOnlyButton.textContent = panel.resultOnly ? '看完整过程' : '只看结论'
+}
+
+/** 复制当前成员交回的正文；剪贴板不可用（非安全上下文等）时如实报失败，不假装成功。 */
+async function copyDispatchText(panel, button) {
+  const text = panel.active === null ? '' : (panel.texts.get(panel.active)?.() ?? '')
+  const original = button.textContent
+  try {
+    if (text.trim() === '') throw new Error('还没有可复制的内容')
+    await navigator.clipboard.writeText(text)
+    button.textContent = '已复制'
+  } catch {
+    button.textContent = '复制失败'
+  }
+  setTimeout(() => { button.textContent = original }, 1500)
 }
 
 /** 面板标题：几位成员、各自现在什么状态，一眼看完。 */
@@ -701,6 +749,8 @@ function attachToDispatch(view, event) {
   if (panel === null || !panel.slots.has(event.id)) return
   const slot = panel.slots.get(event.id)
   if (view.bubble.parentNode !== slot) slot.appendChild(view.bubble)
+  // 面板「复制」按成员取正文：`view.body` 是累积正文，流式期间也在长。
+  panel.texts.set(event.id, () => view.body ?? '')
   const tone = DISPATCH_TONE[event.state] ?? 'queued'
   const button = panel.buttons.get(event.id)
   if (button !== undefined && button.dataset.tone !== tone) {
@@ -709,14 +759,20 @@ function attachToDispatch(view, event) {
     if (dot !== null) dot.className = `dot dot--${tone}`
     renderDispatchHeader(panel)
   }
-  // 群里那一行是入口：点一下展开面板并切到它。
+  // 群里那一行是入口：点一下（或回车）展开面板并切到它。
   if (view.msg.dataset.dispatchBound !== '1') {
     view.msg.dataset.dispatchBound = '1'
     view.msg.classList.add('msg--dispatchable')
-    view.msg.addEventListener('click', () => {
+    view.msg.title = '点开看它在面板里的完整输出'
+    view.msg.tabIndex = 0
+    const open = () => {
       if (state.dispatch !== panel) return
       panel.details.open = true
       selectDispatch(panel, event.id)
+    }
+    view.msg.addEventListener('click', open)
+    view.msg.addEventListener('keydown', input => {
+      if (input.key === 'Enter' || input.key === ' ') { input.preventDefault(); open() }
     })
   }
 }
@@ -2002,9 +2058,10 @@ function renderCrew() {
   const busy = state.members.filter(member => member.busy !== null).length
   const total = state.members.length
   const working = busy > 0 ? ` · ${busy} 位在忙` : ''
+  // 「能干活」= 登记了调度执行入口的成员。剩下的不是不在场，是没接入调度，见 renderStatuses。
   el.crewLine.textContent = `${total} 个牛马 · ${online} 个能干活${working}`
-  el.crewNote.textContent = `共 ${total} 位，${online} 位在场${working}`
-  el.groupSub.textContent = `${total} 位成员 · ${online} 位在场${working}`
+  el.crewNote.textContent = `共 ${total} 位，${online} 位可派活${working}`
+  el.groupSub.textContent = `${total} 位成员 · ${online} 位可派活${working}`
 }
 
 function renderMetrics(counts) {
@@ -2031,11 +2088,15 @@ function renderStatuses() {
     const row = make('div', 'status-row')
     row.appendChild(avatarNode(member.agentId, 'sm'))
     row.appendChild(make('span', 'status-row__name', member.displayName))
-    // 有活报活的状态，没活只报在不在场。
+    // 有活报活的状态；没活时区分「待命」与「未接入调度」——后者不是不在场，
+    // 而是它自己没登记执行入口，牛马大总管派不了活给它（页面上必须说实话）。
     const stateText = member.busy === null
-      ? (member.online ? '待命' : '不在场')
+      ? (member.online ? '待命' : '未接入调度')
       : (STATE_TEXT[member.busy.state] ?? '在忙')
     const stateCell = make('span', 'status-row__state', stateText)
+    if (member.busy === null && !member.online) {
+      stateCell.title = `${member.displayName}没有登记调度执行入口，牛马大总管无法把活派给它`
+    }
     const dotClass = member.busy === null
       ? (member.online ? 'online' : 'queued')
       : (member.busy.state ?? 'queued')
@@ -2444,6 +2505,8 @@ function renderTaskRecord(record, opts = {}) {
   state.taskId = record.id
   for (const subtask of record.subtasks) {
     const view = memberMessage(subtask.agentId, subtask.id)
+    // 恢复出来的成员输出同样收进面板：与实时视图一致，群里只留一行状态。
+    attachToDispatch(view, { id: subtask.id, state: subtask.state })
     view.startedAt = subtask.startedAt ?? record.createdAt
     view.status.textContent = STATE_TEXT[subtask.state] ?? subtask.state
     const text = subtask.state === 'failed' || subtask.state === 'cancelled'

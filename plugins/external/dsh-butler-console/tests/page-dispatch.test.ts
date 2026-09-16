@@ -52,13 +52,24 @@ function loadPanel() {
   const state: { dispatch: unknown } = { dispatch: null }
   const displayNameOf = (id: string) => `成员-${id}`
   const api = Function('state', 'make', 'displayNameOf', 'DISPATCH_TONE',
-    `${pick('renderDispatchHeader')}\n${pick('selectDispatch')}\n${pick('mountDispatch')}\nreturn { mountDispatch, selectDispatch, renderDispatchHeader }`,
+    `${pick('renderDispatchHeader')}\n${pick('selectDispatch')}\n${pick('mountDispatch')}\n${pick('toggleDispatchResultOnly')}\n`
+    + 'return { mountDispatch, selectDispatch, renderDispatchHeader, toggleDispatchResultOnly }',
   )(state, node, displayNameOf, { succeeded: 'ok', failed: 'error', waiting_user: 'warn' }) as {
     mountDispatch(subtasks: { id: string; agentId: string; state?: string }[]): StubNode
     selectDispatch(panel: unknown, id: string): void
     renderDispatchHeader(panel: unknown): void
+    toggleDispatchResultOnly(panel: unknown, on: boolean): void
   }
   return { ...api, state }
+}
+
+/** 「复制」要碰剪贴板与定时器：两者都注入，标签才不会在断言前被还原。 */
+function loadPanelTools(clipboard: { writeText(text: string): Promise<void> }) {
+  const body = source.match(/async function copyDispatchText\([^)]*\) \{[\s\S]*?\n\}\n/)?.[0]
+  if (body === undefined) throw new Error('copyDispatchText 源码未找到')
+  return Function('navigator', 'setTimeout', `${body}\nreturn { copyDispatchText }`)(
+    { clipboard }, () => 0,
+  ) as { copyDispatchText(panel: unknown, button: StubNode): Promise<void> }
 }
 
 const subtasks = [
@@ -115,8 +126,48 @@ describe('本次已调度成员面板', () => {
     expect(source.match(/append\(mountDispatch\(/g) ?? []).toHaveLength(2)
     expect(source).toMatch(/function handleSubtask\(event\) \{[\s\S]{0,200}attachToDispatch\(view, event\)/)
     expect(source).toMatch(/function attachToDispatch\(view, event\) \{[\s\S]{0,400}slot\.appendChild\(view\.bubble\)/)
-    // 群里那行是入口：点开面板并切到该成员；只绑一次。
+    // 群里那行是入口：点开面板并切到该成员；只绑一次（含键盘可达）。
     expect(source).toContain('panel.details.open = true')
     expect(source).toContain("view.msg.dataset.dispatchBound !== '1'")
+    expect(source).toContain("input.key === 'Enter'")
+    // 历史回放（任务记录恢复）也把成员输出收进面板，两条路径观感一致。
+    expect(source).toMatch(/attachToDispatch\(view, \{ id: subtask\.id, state: subtask\.state \}\)/)
+    // 复制取的是成员累积正文，而不是面板 DOM 的全文（免得把思考也拷走）。
+    expect(source).toContain('panel.texts.set(event.id, () => view.body ?? \'\')')
+  })
+
+  it('「只看结论」开关切换类名与按钮文案', () => {
+    const f = loadPanel()
+    const body = node()
+    const button = node()
+    const panel = { body, resultOnlyButton: button, resultOnly: false }
+    f.toggleDispatchResultOnly(panel, true)
+    expect(panel.resultOnly).toBe(true)
+    expect(body.className).toContain('dispatch__body--result-only')
+    expect(button.className).toContain('dispatch__tool--on')
+    expect(button.textContent).toBe('看完整过程')
+    f.toggleDispatchResultOnly(panel, false)
+    expect(panel.resultOnly).toBe(false)
+    expect(body.className).not.toContain('dispatch__body--result-only')
+    expect(button.textContent).toBe('只看结论')
+  })
+
+  it('复制当前成员正文：成功报「已复制」，没有内容时如实报失败', async () => {
+    const copied: string[] = []
+    const failures: string[] = []
+    const runner = loadPanelTools({
+      writeText: async (text: string) => { copied.push(text); if (text === '炸') throw new Error('denied') },
+    })
+    const button = node()
+    button.textContent = '复制'
+    await runner.copyDispatchText({ active: 's1', texts: new Map([['s1', () => '博客交回的清单']]) }, button)
+    expect(copied).toEqual(['博客交回的清单'])
+    expect(button.textContent).toBe('已复制')
+
+    const empty = node()
+    empty.textContent = '复制'
+    await runner.copyDispatchText({ active: 's1', texts: new Map([['s1', () => '   ']]) }, empty)
+    failures.push(empty.textContent)
+    expect(empty.textContent).toBe('复制失败')
   })
 })
