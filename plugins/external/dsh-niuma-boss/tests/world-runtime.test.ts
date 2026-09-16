@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BIRTH_MAP, FACINGS, MapRouter, cellPoint, directionOf, frameOrigin, integerZoom, safeMapId,
+  ARRIVAL_RADIUS_TILES, BIRTH_MAP, FACINGS, IDLE_MS_MAX, IDLE_MS_MIN, MapRouter, WALK_TILES_PER_SEC,
+  activityRoute, activityTarget, cellPoint, directionOf, frameOrigin, idleMs, integerZoom, rendezvousCell, safeMapId,
   type Cell, type EntrySpec, type MapSpec, type WorldSpec,
 } from '../src/world-runtime.ts'
 
@@ -175,5 +176,50 @@ describe('坐标、朝向与镜头', () => {
     expect(integerZoom({ width: 3000, height: 2000 }, { width: 42, height: 30 })).toBe(2)
     expect(integerZoom({ width: 8000, height: 8000 }, { width: 14, height: 15 })).toBe(4)
     expect(integerZoom({ width: 8000, height: 8000 }, { width: 42, height: 30 })).toBe(4)
+  })
+})
+
+/**
+ * 走动与自主活动（balance_params.yaml / npc_rules.yaml#movement）：速度、到达半径、
+ * 活动域选点与整条路径的边界判定都是纯函数，这里直接驱动。
+ */
+describe('走动参数与普通职员的活动域', () => {
+  it('到达半径取欧氏距离 ≤ 1.5 格：斜邻算到，隔两格不算', () => {
+    expect(ARRIVAL_RADIUS_TILES).toBe(1.5)
+    const walkable = () => true
+    expect(rendezvousCell([[4, 4]], walkable)).toEqual([4, 3])
+    // 只留斜邻（距离 √2 ≈ 1.414）：仍在半径内。
+    const diagonalOnly = (cell: Cell) => Math.abs(cell[0] - 4) === 1 && Math.abs(cell[1] - 4) === 1
+    expect(rendezvousCell([[4, 4]], diagonalOnly)).toEqual([3, 3])
+    // 只留隔两格（距离 2.0）：超出半径，宁可空着也不放人到半径外。
+    const farOnly = (cell: Cell) => Math.hypot(cell[0] - 4, cell[1] - 4) >= 2
+    expect(rendezvousCell([[4, 4]], farOnly)).toBeNull()
+  })
+
+  it('速度取自 balance_params：员工走 3.0 格/秒', () => {
+    expect(WALK_TILES_PER_SEC).toBe(3.0)
+  })
+
+  it('活动域整条路径判定：只要有一格在域外就整条丢弃', () => {
+    const domain = { region: 'hr', cells: [[18, 5], [19, 5], [18, 6]] as Cell[] }
+    expect(activityRoute([[18, 5], [19, 5]], domain)).toEqual([[18, 5], [19, 5]])
+    // 绕到域外再回来（[20,5] 不在域里）：不许走。
+    expect(activityRoute([[18, 5], [19, 5], [20, 5], [19, 5]], domain)).toBeNull()
+    expect(activityRoute([], domain)).toBeNull()
+    expect(activityRoute(null, domain)).toBeNull()
+  })
+
+  it('自主活动只在域内换点：不会选当前格，随机源给定时结果确定', () => {
+    const domain = { region: 'hr', cells: [[18, 5], [19, 5], [18, 6]] as Cell[] }
+    expect(activityTarget(domain, [18, 5], () => 0)).toEqual([19, 5])
+    expect(activityTarget(domain, [18, 5], () => 0.99)).toEqual([18, 6])
+    // 只有这一格时没有可去的地方。
+    expect(activityTarget({ region: 'hr', cells: [[18, 5]] }, [18, 5])).toBeNull()
+  })
+
+  it('闲下来的时长取 balance_params#autonomous 的区间', () => {
+    expect(idleMs(() => 0)).toBe(IDLE_MS_MIN)
+    expect(idleMs(() => 0.999999)).toBe(IDLE_MS_MAX)
+    expect(IDLE_MS_MAX).toBe(6000)
   })
 })

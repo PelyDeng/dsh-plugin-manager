@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { compileMap, compileWorld, delivery, reachable } from '../scripts/prepare-assets.mjs'
+import { compileActivity, compileMap, compileProfile, compileSeats, compileWorld, delivery, needsWalk, readProfiles, reachable } from '../scripts/prepare-assets.mjs'
 
 /**
  * 构建期资源编译：三张图走同一套双源校验（Tiled `.tmj` + 验收过的 `.layout.json`），
@@ -214,5 +214,237 @@ describe('真实交付的三图', () => {
     expect(cafe.entries[0].trigger).toEqual([6, 12])
     // 三张图的出生点都能从本图到达格连通区走出来（不困住老板）。
     for (const runtime of runtimes) expect(reachable(runtime, runtime.spawn).size).toBeGreaterThan(100)
+  })
+
+  it('真实交付的七席座位：坐姿锚点、站格与作者椅背遮挡都编译进运行时', async () => {
+    const characters = await json(resolve(delivery, 'characters.json'))
+    const [tmj, layout, tsj] = await Promise.all([
+      json(resolve(delivery, 'maps/office.tmj')),
+      json(resolve(delivery, 'maps/office.layout.json')),
+      json(resolve(delivery, 'maps/world.tsj')),
+    ])
+    const { runtime } = compile(tmj, layout, tsj)
+    const tiles = new Map((tsj.tiles as { properties: { name: string; value: string }[]; image: string }[])
+      .map(tile => [tile.properties.find(p => p.name === 'asset_id')!.value, tile]))
+    const { seats, used } = compileSeats(layout, tmj, runtime, characters, tiles)
+    // 有作者工位的七个角色各有一座，业务员工与普通职员都在内，旧示例（无工位）不在。
+    expect([...seats.keys()].sort()).toEqual(['blog', 'closedoff', 'example', 'npc_admin', 'npc_hr', 'npc_reception', 'npc_recruiter'])
+    const example = seats.get('example')!
+    expect(example).toMatchObject({ cell: [5, 13], direction: 'north', stand: [5, 14], anchor: [176, 432], contact: [176, 402] })
+    // 深度取同一 y 锚点内的槽位：坐姿角色在椅座之上、椅背之下。
+    expect(example.depth).toBe(432.25)
+    expect(example.occlusion).toMatchObject({ frame: 'tech-chair-back-north', x: 160, y: 385, depth: 432.5 })
+    // 坐姿帧带逐帧接触锚点（坐姿精灵左上角 = 接触点 − 该锚点）。
+    expect(example.sit).toMatchObject({ action: 'sit', direction: 'north' })
+    expect(example.sit.frames[0].seat).toEqual([16, 39])
+    // 面朝南的前台没有声明前景遮挡：不给它编一个遮挡层。
+    expect(seats.get('npc_reception')!.occlusion).toBeNull()
+    expect(seats.get('npc_reception')!.direction).toBe('south')
+    // 遮挡图集资源进地图图集（不新增首包请求）。
+    expect(used.map((tile: { asset: string }) => tile.asset)).toEqual([
+      'tech-chair-back-north', 'tech-chair-back-north', 'tech-chair-back-north',
+      'tech-chair-back-north', 'tech-chair-back-north', 'tech-chair-back-north',
+    ])
+  })
+
+  it('走帧按需编给会走动的角色：3 位员工与 4 位普通职员各 32 帧、四向齐整', async () => {
+    const characters = await json(resolve(delivery, 'characters.json'))
+    const layout = await json(resolve(delivery, 'maps/office.layout.json'))
+    const profiles = await readProfiles()
+    const walkers = (characters.characters as { id: string; clips: { action: string; direction: string; frames: unknown[] }[] }[])
+      .filter(character => needsWalk(character.id, layout, profiles.get(character.id)))
+    expect(walkers.map(character => character.id).sort()).toEqual(
+      ['blog', 'closedoff', 'example', 'npc_admin', 'npc_hr', 'npc_reception', 'npc_recruiter'])
+    // 每位走动的角色都要有完整四向走帧：缺向会让运行时走到某个方向时没有帧可播。
+    let frames = 0
+    for (const walker of walkers) {
+      const walk = walker.clips.filter(clip => clip.action === 'walk')
+      expect(walk.map(clip => clip.direction).sort(), walker.id).toEqual(['east', 'north', 'south', 'west'])
+      expect(walk.every(clip => clip.frames.length > 0), walker.id).toBe(true)
+      frames += walk.reduce((sum, clip) => sum + clip.frames.length, 0)
+    }
+    expect(frames).toBe(224)
+    // 老板的走帧在自己的全量图集里；牛马大总管与设计示例没有走动命令或活动域，不编走帧。
+    expect(needsWalk('boss', layout, profiles.get('boss'))).toBe(false)
+    expect(needsWalk('butler', layout, profiles.get('butler'))).toBe(false)
+    expect(needsWalk('sample_explorer', layout, profiles.get('sample_explorer'))).toBe(false)
+  })
+
+  it('普通职员的活动域按作者数据编译：格必须可站立、出生格必须在域内', async () => {
+    const layout = await json(resolve(delivery, 'maps/office.layout.json'))
+    const [tmj, tsj] = await Promise.all([
+      json(resolve(delivery, 'maps/office.tmj')),
+      json(resolve(delivery, 'maps/world.tsj')),
+    ])
+    const { runtime } = compile(tmj, layout, tsj)
+    const profiles = await readProfiles()
+    const hr = compileActivity(layout, runtime, 'npc_hr', profiles.get('npc_hr'))
+    expect(hr).toMatchObject({ region: 'hr' })
+    expect(hr!.cells).toHaveLength(12)
+    expect(hr!.cells).toContainEqual([18, 5])
+    // 员工与设计示例都没有活动域（自主活动只给本轮的普通职员）。
+    expect(compileActivity(layout, runtime, 'blog', profiles.get('blog'))).toBeNull()
+    expect(compileActivity(layout, runtime, 'sample_explorer', profiles.get('sample_explorer'))).toBeNull()
+    // 负例一：活动域里混进阻挡格 → 构建失败（否则角色会被引到墙里）。
+    const blocked = runtime.collision.findIndex(value => value === 1)
+    const blockedCell = [blocked % runtime.width, Math.floor(blocked / runtime.width)]
+    const onWall = clone(layout)
+    onWall.npcs = clone(layout.npcs).map((npc: { id: string; activity_cells: number[][] }) =>
+      npc.id === 'npc_hr' ? { ...npc, activity_cells: [...npc.activity_cells, blockedCell] } : npc)
+    expect(() => compileActivity(onWall, runtime, 'npc_hr', profiles.get('npc_hr'))).toThrow(/不可站立/)
+    // 负例二：出生格不在活动域里 → 构建失败（角色一开局就走不出去）。
+    const outside = clone(layout)
+    outside.npcs = clone(layout.npcs).map((npc: { id: string; initial_cell: number[] }) =>
+      npc.id === 'npc_hr' ? { ...npc, initial_cell: [30, 25] } : npc)
+    expect(() => compileActivity(outside, runtime, 'npc_hr', profiles.get('npc_hr'))).toThrow(/出生格不在活动域内/)
+  })
+
+  it('职责与作者预写对白：员工没有对白块，普通 NPC 用名册里的内容，旧示例保持 unavailable', async () => {
+    const characters = await json(resolve(delivery, 'characters.json'))
+    const layout = await json(resolve(delivery, 'maps/office.layout.json'))
+    const profiles = new Map([
+      ['npc_hr', { name: '沈禾', role: '人事', lines: ['这页先留白，你说完我再记。'], ordinary: true }],
+    ])
+    const character = (id: string) => (characters.characters as { id: string; label: string }[]).find(c => c.id === id)!
+    expect(compileProfile('boss', layout, character('boss'), profiles)).toEqual({ role: 'player' })
+    expect(compileProfile('butler', layout, character('butler'), profiles)).toEqual({ role: 'butler' })
+    expect(compileProfile('blog', layout, character('blog'), profiles)).toEqual({ role: 'staff' })
+    expect(compileProfile('npc_hr', layout, character('npc_hr'), profiles)).toEqual({
+      role: 'npc',
+      dialogue: { mode: 'authored_lines', name: '沈禾', role: '人事', lines: ['这页先留白，你说完我再记。'] },
+    })
+    // 设计示例（sample_explorer）按作者数据原样保留：id 不改、名字来自交付、通道 unavailable。
+    expect(compileProfile('sample_explorer', layout, character('sample_explorer'), profiles)).toEqual({
+      role: 'npc',
+      dialogue: { mode: 'unavailable', name: '探险NPC示例', role: '', lines: [] },
+    })
+    // 业务员工拿不到对白块：本切片不给员工开搭话通道。
+    expect(compileProfile('closedoff', layout, character('closedoff'), profiles)).not.toHaveProperty('dialogue')
+    // 负例：声明了 authored_lines 却没有作者预写内容，构建期直接失败。
+    expect(() => compileProfile('npc_hr', layout, character('npc_hr'), new Map())).toThrow(/预写台词/)
+    // 负例：名册与美术档名字不一致必须失败（防止两处漂移）。
+    expect(() => compileProfile('npc_hr', layout, character('npc_hr'), new Map([
+      ['npc_hr', { name: '沈禾（改）', role: '人事', lines: ['x'], ordinary: true }],
+    ]))).toThrow(/名字不一致/)
+    // 负例：本切片不接模型对白通道。
+    const modelLayout = clone(layout)
+    modelLayout.npcs = clone(layout.npcs).map((n: { id: string }) => n.id === 'npc_hr' ? { ...n, dialogue_mode: 'model_chat' } : n)
+    expect(() => compileProfile('npc_hr', modelLayout, character('npc_hr'), profiles)).toThrow(/模型对白通道/)
+  })
+})
+
+/** 座位编译的最小双源夹具：一个工位、一把椅子和作者声明的椅背遮挡层。 */
+type FixtureObject = {
+  id: string; asset: string; x: number; y: number; pixel_width: number; pixel_height: number; layer: string
+  image_position_px: number[]; blocked_cells: number[][]; sort_anchor_px: number[]
+  preview_only?: boolean; preview_state?: string; seat_id?: string
+}
+type FixtureWorkstation = {
+  seat_id: string; occupant: string | null; region: string; seat_direction: string; seat_cell: number[]
+  seat_anchor_px: number[]; seat_contact_px: number[]; stand_cell: number[]; chair_object_id: string
+  chair_foreground_rect_px: number[] | null
+}
+type FixtureFrame = { path: string; size: number[]; frameAnchor: number[]; seatAnchor?: number[] }
+type FixtureClip = { action: string; direction: string; frames: FixtureFrame[] }
+type SeatFixture = {
+  layout: { id: string; width: number; height: number; tile_size: number; objects: FixtureObject[]; workstations: FixtureWorkstation[] }
+  tmj: { layers: { name: string; type: string; objects: { name: string }[] }[] }
+  runtime: { id: string; width: number; height: number; tileSize: number; collision: number[]; spawn: number[] }
+  characters: { characters: { id: string; label: string; clips: FixtureClip[] }[] }
+  tiles: Map<string, { image: string }>
+}
+
+function seatFixture(): SeatFixture {
+  const width = 8, height = 8
+  const chair = { id: 'chair_a', asset: 'chair', x: 2, y: 2, pixel_width: 32, pixel_height: 32, layer: 'furniture', image_position_px: [64, 64], blocked_cells: [[2, 2]], sort_anchor_px: [80, 112] }
+  const back = { id: 'chair_back_a', asset: 'chair-back', x: 2, y: 3, pixel_width: 32, pixel_height: 32, layer: 'furniture', image_position_px: [64, 64], blocked_cells: [], sort_anchor_px: [80, 112], preview_only: true, preview_state: 'seated_chair_foreground' }
+  const tmj = {
+    layers: [{ name: 'furniture', type: 'objectgroup', objects: [{ name: 'chair_a' }, { name: 'chair_back_a' }] }],
+  }
+  const runtime = { id: 'mini', width, height, tileSize: 32, collision: Array.from({ length: width * height }, () => 0), spawn: [1, 1] }
+  const characters = { characters: [{
+    id: 'staff_a', label: '员工甲', clips: [
+      { action: 'idle', direction: 'south', frames: [{ path: 'idle.png', size: [32, 48], frameAnchor: [16, 47] }] },
+      { action: 'sit', direction: 'north', frames: [{ path: 'sit.png', size: [32, 48], frameAnchor: [16, 47], seatAnchor: [16, 39] }] },
+    ],
+  }] }
+  const tiles = new Map([['chair', { image: 'chair.png' }], ['chair-back', { image: 'chair-back.png' }]])
+  const layout = {
+    id: 'mini', width, height, tile_size: 32, objects: [chair, back], workstations: [{
+      seat_id: 'a_01', occupant: 'staff_a', region: 'dev', seat_direction: 'north', seat_cell: [2, 3], seat_anchor_px: [80, 112],
+      seat_contact_px: [80, 82], stand_cell: [2, 4], chair_object_id: 'chair_a', chair_foreground_rect_px: [0, 0, 32, 18],
+    }],
+  }
+  return { layout, tmj, runtime, characters, tiles }
+}
+
+const seatsOf = (fixture: SeatFixture) =>
+  compileSeats(fixture.layout, fixture.tmj, fixture.runtime, fixture.characters, fixture.tiles)
+
+describe('座位与遮挡编译', () => {
+  it('工位、坐姿帧与椅背遮挡一致时输出可用座位块', () => {
+    const fixture = seatFixture()
+    const { seats, used } = seatsOf(fixture)
+    expect(seats.get('staff_a')).toMatchObject({
+      cell: [2, 3], direction: 'north', anchor: [80, 112], contact: [80, 82], stand: [2, 4], depth: 112.25,
+      occlusion: { frame: 'chair-back', x: 64, y: 64, width: 32, height: 32, depth: 112.5 },
+    })
+    expect(used).toEqual([{ asset: 'chair-back', image: 'chair-back.png' }])
+  })
+
+  it('没有作者座位的角色不会凭空得到座位（空席不创建人物）', () => {
+    const fixture = seatFixture()
+    fixture.layout.workstations = fixture.layout.workstations.map(workstation => ({ ...workstation, occupant: null }))
+    expect(seatsOf(fixture).seats.size).toBe(0)
+  })
+
+  it('负例：坐姿锚点没有对齐坐格中心必须失败', () => {
+    const fixture = seatFixture()
+    fixture.layout.workstations[0].seat_anchor_px = [88, 96]
+    expect(() => seatsOf(fixture)).toThrow(/坐格中心/)
+  })
+
+  it('负例：站格与坐格重合、站格不可站立或越界必须失败', () => {
+    const same = seatFixture(); same.layout.workstations[0].stand_cell = [2, 3]
+    expect(() => seatsOf(same)).toThrow(/重合/)
+    const walled = seatFixture(); walled.runtime.collision[4 * 8 + 2] = 1
+    expect(() => seatsOf(walled)).toThrow(/不可站立/)
+    const outside = seatFixture(); outside.layout.workstations[0].stand_cell = [2, 9]
+    expect(() => seatsOf(outside)).toThrow(/站格越界/)
+  })
+
+  it('负例：缺少坐姿帧、坐姿方向不符或坐姿帧没有接触锚点必须失败', () => {
+    const missing = seatFixture(); missing.characters.characters[0].clips = [missing.characters.characters[0].clips[0]]
+    expect(() => seatsOf(missing)).toThrow(/坐姿帧/)
+    const wrongDirection = seatFixture()
+    wrongDirection.layout.workstations[0].seat_direction = 'west'
+    expect(() => seatsOf(wrongDirection)).toThrow(/坐姿帧/)
+    const noAnchor = seatFixture()
+    noAnchor.characters.characters[0].clips[1].frames[0].seatAnchor = undefined
+    expect(() => seatsOf(noAnchor)).toThrow(/接触锚点/)
+  })
+
+  it('负例：椅座缺失、锚点不一致、椅背缺资源或绘制顺序颠倒必须失败', () => {
+    const noChair = seatFixture(); noChair.layout.objects = noChair.layout.objects.filter(o => o.id !== 'chair_a')
+    expect(() => seatsOf(noChair)).toThrow(/椅座/)
+    const mismatched = seatFixture(); mismatched.layout.objects[0].sort_anchor_px = [80, 128]
+    expect(() => seatsOf(mismatched)).toThrow(/锚点与坐姿锚点不一致/)
+    const noTile = seatFixture(); noTile.tiles.delete('chair-back')
+    expect(() => seatsOf(noTile)).toThrow(/图集资源/)
+    const reversed = seatFixture(); reversed.tmj.layers[0].objects = [{ name: 'chair_back_a' }, { name: 'chair_a' }]
+    expect(() => seatsOf(reversed)).toThrow(/椅背必须在椅座之后/)
+    const noBack = seatFixture(); noBack.layout.objects = noBack.layout.objects.filter(o => o.id !== 'chair_back_a')
+    expect(() => seatsOf(noBack)).toThrow(/前景遮挡对象不唯一/)
+    // 数据自相矛盾：没有声明前景遮挡，却给了一张作者椅背对象。
+    const undeclared = seatFixture(); undeclared.layout.workstations[0].chair_foreground_rect_px = null
+    expect(() => seatsOf(undeclared)).toThrow(/没有声明前景遮挡/)
+    const blocked = seatFixture(); blocked.layout.objects[1].blocked_cells = [[2, 3]]
+    expect(() => seatsOf(blocked)).toThrow(/不能阻挡通行/)
+  })
+
+  it('负例：声明了椅背却把遮挡矩形写得超出椅座像素必须失败', () => {
+    const fixture = seatFixture()
+    fixture.layout.workstations[0].chair_foreground_rect_px = [0, 0, 32, 40]
+    expect(() => seatsOf(fixture)).toThrow(/矩形不合法/)
   })
 })

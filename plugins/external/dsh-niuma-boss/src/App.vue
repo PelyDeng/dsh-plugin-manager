@@ -4,13 +4,18 @@
  * （需要真实的 DOM 挂载点），业务接线全部在 GameSession 内，这里只有界面意图转发：
  * 派活表单、等待成员的回复入口、停止本轮与结果展示都只是把意图交给会话。
  *
+ * 人物对话（本切片）：员工气泡与名牌只显示**权威状态**（任务投影 + 表现命令），
+ * 普通 NPC 打开作者预写对白面板。两个通路都没有自由输入框：不新增闲聊模型通道，
+ * 也不给员工开搭话入口——要办的工作只经牛马大总管。
+ *
  * 横竖屏：旋转不清空任何界面状态（位置与任务本开合都由会话/存储保存，旋转只改布局）；
  * 可见区域按 visualViewport 收缩，软键盘不遮挡输入框（真机未验证）。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useTaskBookStore } from './store'
 import { GameSession } from './game-session'
-import { taskStateLabel } from './task-projection'
+// 状态文案：投影的映射 + labels 里补的三个英文 token（dispatched/executing/succeeded）。
+import { stateLabel as taskStateLabel } from './labels'
 import { installViewportHeight } from './viewport'
 
 const store = useTaskBookStore()
@@ -76,6 +81,9 @@ const formatTime = (value: number): string => {
 
 const onVisibility = () => { document.hidden ? session?.onHidden() : session?.onVisible() }
 
+/** 唯一生效的就近提示：点击等价于按交互键（interaction_rules.yaml#hotkey 的同一条动作）。 */
+const onPrompt = () => { session?.interactKey() }
+
 /** 软键盘弹出时把输入框滚进可见区；真机未验证，只保证有焦点就把目标带进视野。 */
 const onFocusIn = (event: FocusEvent) => {
   const target = event.target as HTMLElement | null
@@ -106,6 +114,39 @@ onBeforeUnmount(() => {
       <button v-if="!store.worldReady" class="badge" type="button" disabled>地图装载中…</button>
       <button class="book-toggle" type="button" @click="session?.openBook()">任务本</button>
     </header>
+
+    <!-- 就近提示：同一时刻只有一个（interaction_rules.yaml#principles.single-prompt）；
+         触发器都写着 requires.input_open: false，任务本开着时不渲染（会话已同步置空，这里再挡一次）。 -->
+    <button
+      v-if="store.prompt && !store.bookOpen" class="prompt" type="button" :data-prompt="store.prompt.id"
+      :data-kind="store.prompt.kind" @click="onPrompt"
+    >{{ store.prompt.label }}</button>
+
+    <!-- 员工表现：只显示权威状态与权威正文气泡，不自造内容。 -->
+    <section v-if="store.staff.length > 0" class="staff" aria-label="员工状态">
+      <article v-for="member in store.staff" :key="member.id" :data-staff="member.id" :data-action="member.action">
+        <header>
+          <strong>{{ member.label }}</strong>
+          <span class="state">{{ member.stateLabel }}</span>
+          <span class="action">{{ member.actionLabel }}</span>
+        </header>
+        <p v-if="member.bubble" class="bubble">{{ member.bubble }}</p>
+      </article>
+    </section>
+
+    <!-- 对白面板：普通 NPC 播放作者预写台词；员工只给名牌与真实状态，都没有自由输入。 -->
+    <aside v-if="store.dialogue" class="dialogue" :data-dialogue="store.dialogue.kind" role="dialog" :aria-label="store.dialogue.title">
+      <header>
+        <strong>{{ store.dialogue.title }}</strong>
+        <span v-if="store.dialogue.role" class="role">{{ store.dialogue.role }}</span>
+        <button type="button" @click="session?.closeDialogue()">关闭</button>
+      </header>
+      <p class="state" :data-mode="store.dialogue.mode">{{ store.dialogue.stateLabel }}</p>
+      <ul v-if="store.dialogue.lines.length > 0" class="lines">
+        <li v-for="(line, index) in store.dialogue.lines" :key="index">{{ line }}</li>
+      </ul>
+      <p class="detail">{{ store.dialogue.detail }}</p>
+    </aside>
 
     <p v-if="store.notice" class="toast" role="status" @click="store.notice = ''">{{ store.notice }}</p>
 

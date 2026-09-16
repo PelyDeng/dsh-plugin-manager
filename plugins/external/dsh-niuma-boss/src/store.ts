@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
 import type { ButlerStatus, HistoryItem } from './butler-client.ts'
+import type { DialogueView, Prompt } from './interaction.ts'
+import type { StaffDialogueView } from './performance.ts'
 import { emptyTaskView, type ConversationSummary, type RunInfo, type TaskView } from './task-projection.ts'
 
 /**
@@ -47,8 +49,19 @@ export const useTaskBookStore = defineStore('task-book', {
     replyDrafts: {} as Record<string, string>,
     /** 有写请求在途；写入口据此禁用，避免并发提交。 */
     submitting: false,
+    /**
+     * 已请求停止本轮、还没收到权威终态：界面按「正在收尾」提示并隐藏派活入口。
+     * 这是界面请求状态，不是业务状态——真的停下以管家事件或下一次 probe 为准。
+     */
+    stopRequested: false,
     /** 响应未知、可原样重试的提交；其余失败（403/409 等）不留待重试。 */
     pendingSubmit: null as PendingSubmit | null,
+    /** 员工当前的对话气泡与权威状态文案；只读展示（动作文案由它一并给出）。 */
+    staff: [] as StaffDialogueView[],
+    /** 就近范围内的唯一交互提示（interaction_rules.yaml 的全序优先级）。 */
+    prompt: null as Prompt | null,
+    /** 对白面板（普通 NPC 预写对白）或员工名牌；两者都没有自由输入。 */
+    dialogue: null as DialogueView | null,
   }),
   getters: {
     selectedConversation: state => state.conversations.find(c => c.id === state.selectedId) ?? null,
