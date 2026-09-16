@@ -40,9 +40,34 @@
 --   独占管理，版本行由**建库脚本**写，不由插件启动时写）。
 --   `applied_at` 是 `Date.now()` 同空间的**毫秒** BIGINT（设计 §4：毫秒时间保留 BIGINT）。
 --
+-- 与另一套 DDL 的关系（先读这一条，否则版本号会被误读）
+--   仓库里同时存在两套建库 DDL，**不是同一层的两个版本**：
+--     ① `plugins/external/dsh-butler-console/migrations/postgres/0001_init.sql`
+--        ——**管家单插件**的库：7 张表（`conversations` / `tasks` / `subtasks` / `agent_aliases` /
+--        `requests` / `task_inputs` + 单行 `schema_version`），无表前缀，`schema_version.version = 9`
+--        （对应源 SQLite 的 `PRAGMA user_version = 9`；v9 就是给 `tasks` / `subtasks` 各加一列
+--        `acceptance` 的那一版，P0 为了让 CI 的 PG 契约测试继续跑而保留）。
+--        它**是过渡态**：P5 把管家切到本文件的 `butler_*` 表之后退役。
+--     ② 本文件 ——**目标态**：单库 `dsh`、15 张表、统一前缀（`butler_` / `blog_` / `closedoff_` /
+--        `dsh_`），`dsh_schema_versions` **四行版本全为 1**。
+--   ⚠️ **两套的版本号语义不同、数字不可比**：`9` 是"管家单插件第 9 版结构"（含 v1..v8 的历史累积），
+--   而本文件的 `1` 是"新库的初始形状"——它不是"第 1 次迁移"，也不表示比 9 旧。看到 9 vs 1
+--   不要当成漂移，两者分别在各自的库上生效（`dsh` 库由本文件建，管家旧库由 ① 建）。
+--
 -- 写路径须知（已写进 §8.1，此处只留指针）
---   六张业务表的 `payload` **不给 DEFAULT**；提升列除 `blog_translations.status`（镜像列）外
---   全是生成列：**INSERT 不能写它们**（写了报 428C9），只需保证 `payload` 里有对应键。
+--   六张业务表的 `payload` **不给 DEFAULT**；提升列里**6 个生成列分布在 4 张表**——
+--   `blog_drafts`（`title` / `updated_at`）、`blog_jobs`（`draft_id` / `status`）、
+--   `blog_operations`（`status`）、`blog_attachments`（`status`）；`blog_translations.status`
+--   是**镜像列**（INSERT 要写）、`blog_audit` **两者皆无**（无提升列）。
+--   **INSERT 不能写生成列**（写了报 428C9），只需保证 `payload` 里有对应键——由紧跟的
+--   `CHECK (payload ? 'x')` 形状守卫强制；键**存在但值为 JSON null** 时生成列为 NULL。
+--   ⚠️ 例外不是生成列：`blog_operations` 的 **scope 是两列**（`draft_id` = 真实草稿 id、
+--   `scope_id` = 管理 / 远端操作的合成 scope，`blog_operations_one_scope` 保证恰好一支非空），
+--   两列都由**写入侧**填（`scope_id` 还有 DEFAULT ''）——INSERT 必须自己判是哪一支。
+--   `blog_translations.status`（镜像列）同理必须写。
+--
+-- 文件内出现的一切错误码都是**本机 PG18 实测**的（428C9 写生成列 / 23514 形状守卫 /
+-- 22P02 生成列 cast 失败 / 23503 外键 / 23001 RESTRICT / 42P07 重复建库）。
 
 BEGIN;
 
@@ -267,7 +292,31 @@ CREATE TABLE blog_jobs (
   payload         JSONB  NOT NULL,
   UNIQUE (owner_namespace, owner_id, caller, request_id),
   -- 与 status 对称：生成列的形状守卫（缺键会让 draft_id 静默变 NULL）。
-  CHECK (payload ? 'status' AND payload->'input' ? 'draftId')
+  CHECK (payload ? 'status' AND payload->'input' ? 'draftId'),
+  -- 租户隔离：与 `blog_operations` / `blog_attachments` 同一条复合外键（红队实测的缺口——
+  -- 补之前，B 的 owner 用本表指向 A 的草稿能插进去，而另两张表被 23503 挡住）。
+  --
+  -- ⚠️ 语义（两条都必须先懂，否则会误判它"不生效"）：
+  --   1. **MATCH SIMPLE（默认，故意不写 `MATCH FULL`）**：`draft_id` 是生成列且**可为 NULL**——
+  --      `CHECK (payload->'input' ? 'draftId')` 只保证**键存在**，`{"input":{"draftId":null}}`
+  --      同样通过（键在、值为 JSON null → 生成列 NULL）。MATCH SIMPLE 下只要有一列为 NULL
+  --      就整条不校验，这正是想要的：**没有引用对象时无须校验**，不是隔离缺口。
+  --      反过来 `MATCH FULL` 会因 `owner_namespace` / `owner_id` 是 NOT NULL 而**拒绝**这种行，
+  --      把"合法地没有 draftId"变成 23503，与 §5.4.1"生成列留 NULL 语义"定稿相抵。
+  --      另外：job 的 `draftId` 在现有写路径上**必然存在**——`jobs.mjs:157-166` 先 `storage.get`
+  --      草稿（取不到就 404）再 `input = { draftId: d.id, … }`，没有"无草稿的 job"这条路径。
+  --   2. **ON DELETE CASCADE**（与 `blog_operations` / `blog_attachments` 一致）：
+  --      **不能选 RESTRICT**。删草稿是业务动作，RESTRICT 会让它变成 23503 失败；而且 job 的
+  --      `payload.input` 是"针对某一版草稿的快照"，草稿没了这条记录也就失去读出的路径
+  --      （`jobList` 按 draftId 过滤，它只会变成查不到的悬垂行）。历史留痕由**不级联**的
+  --      `blog_audit` 承担，所以 CASCADE 不会丢掉审计面。
+  --      已知窗口（如实记下，不是为了辩解）：草稿被硬删时正在跑的 job 会连行一起消失，
+  --      其后的 `jobUpdate` 会 404。目前**全仓没有任何硬删草稿的语句**（`plugins/` 下
+  --      `DELETE FROM` 零命中，与设计 §6 决策 4"三条 CASCADE 是死代码"同源），故这条分支
+  --      不在现有路径上；将来若开硬删草稿的入口，须同时定义"在跑的 job 怎么办"。
+  --      实测（本机 PG18）：删草稿后 job / operation / attachment 三张表的对应行都随草稿消失。
+  FOREIGN KEY (draft_id, owner_namespace, owner_id)
+    REFERENCES blog_drafts (id, owner_namespace, owner_id) ON DELETE CASCADE
 );
 CREATE INDEX blog_jobs_owner ON blog_jobs (owner_namespace, owner_id, seq DESC);
 CREATE INDEX blog_jobs_draft ON blog_jobs (owner_namespace, owner_id, draft_id, seq DESC);
@@ -276,12 +325,26 @@ CREATE TABLE blog_operations (
   id              TEXT    NOT NULL PRIMARY KEY,
   owner_namespace TEXT    NOT NULL,
   owner_id        TEXT    NOT NULL,
-  draft_id        TEXT    NOT NULL,
+  -- ⚠️ **多态 scope（与 `blog_attachments` 同一个标准解）**：这一列只装**真实草稿 id**；
+  -- 管理 / 远端操作的合成 scope（`manage:<kind>:<id|new>` / `remote:<rootCid>`，
+  -- 来自 `application.mjs:203` / `:239`）落 `scope_id`。
+  -- 两义值装不进一列：装进去之后复合外键就会把"合法地指向远端文章"的操作判成 23503
+  -- （本机 PG18 实测：`draft_id='manage:blog:new'` → 23503、`draft_id='remote:12345'` → 23503）。
+  -- 这两列都是**普通列、不是生成列**（`scope_id` 还要 DEFAULT ''），所以 INSERT 必须自己写对是哪一支。
+  draft_id        TEXT,
+  scope_id        TEXT    NOT NULL DEFAULT '',
   revision        INTEGER NOT NULL,
   status          TEXT    GENERATED ALWAYS AS (payload->>'status') STORED,
   seq             BIGINT  GENERATED ALWAYS AS IDENTITY,
   payload         JSONB   NOT NULL,
   CHECK (payload ? 'status'),
+  -- 恰好一支非空：`scope_id` 用空串表示"没有"，所以先 `NULLIF` 再数。
+  CONSTRAINT blog_operations_one_scope
+    CHECK (num_nonnulls(draft_id, NULLIF(scope_id, '')) = 1),
+  -- 只对"真实草稿"那一支生效：MATCH SIMPLE 下 `draft_id` 为 NULL 时整条外键不检查，
+  -- 所以合成 scope 的操作不受影响。删草稿只级联**真实草稿操作**；合成 scope 的记录**留下**——
+  -- 它们的 scope 指向远端文章 / 管理对象而不是本地草稿，生命周期归各自的 `expiresAt` 与 `status`
+  -- （级联掉它们等于静默丢弃一条"提交待核对"记录，而那条远端文章还在）。
   FOREIGN KEY (draft_id, owner_namespace, owner_id)
     REFERENCES blog_drafts (id, owner_namespace, owner_id) ON DELETE CASCADE
 );
@@ -331,8 +394,9 @@ CREATE TABLE blog_translations (
   owner_namespace TEXT   NOT NULL,
   owner_id        TEXT   NOT NULL,
   -- ⚠️ **例外：这一列仍是镜像列**（不是生成列）——本表是按 `(cache_key, status)` upsert 的缓存表，
-  -- INSERT 时就已知 `status`，无需从 payload 反推。5 张业务表用生成列、这 1 张用镜像列，
-  -- 实施时**按本 DDL 为准，不要统一**。
+  -- INSERT 时就已知 `status`，无需从 payload 反推。**6 个生成列分布在 4 张表**
+  -- （`blog_drafts` / `blog_jobs` / `blog_operations` / `blog_attachments`），本表是镜像列、
+  -- `blog_audit` 两者皆无——实施时**按本 DDL 为准，不要统一**。
   status          TEXT   NOT NULL,
   seq             BIGINT GENERATED ALWAYS AS IDENTITY,
   payload         JSONB  NOT NULL

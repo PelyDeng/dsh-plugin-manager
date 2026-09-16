@@ -20,14 +20,18 @@ export const EXPECTED_TABLES = [
   'blog_drafts', 'blog_jobs', 'blog_operations', 'blog_audit', 'blog_attachments', 'blog_translations',
 ];
 
-const USAGE = `用法：node private-deploy/db/create.mjs [--dsn <DSN>] [--database <库名>] [--help]
+const USAGE = `用法：node private-deploy/db/create.mjs [--dsn <DSN>] [--database <库名>] [--confirm <库名>] [--help]
 
 环境变量（凭据一律不写进代码；--dsn 优先于环境变量）：
   DSH_PG_DSN      完整连接串，例如 postgresql://user:password@host:5432/dsh
   或分开给：DSH_PG_HOST / DSH_PG_PORT / DSH_PG_USER / DSH_PG_PASSWORD / DSH_PG_DATABASE
+  DSH_DB_CONFIRM  目标库名；不是一次性测试库（*_test / *_mig / *_iso）时必须等于库名
 
 行为：库不存在则 CREATE DATABASE，然后在一个事务里应用 0001_init.sql。
-重复执行会被拒绝（42P07 关系已存在，整体回滚），不做幂等跳过。`;
+重复执行会被拒绝（42P07 关系已存在，整体回滚），不做幂等跳过。
+
+⚠️ 建库不可逆，所以有两道闸：**正式库名（butler / agents_group）一律拒绝**；
+**非测试库必须显式确认**（DSH_DB_CONFIRM 或 --confirm 等于目标库名）。`;
 
 /** 从环境变量拼装 DSN；没有 host 也没有完整串时返回空串（调用方据此报错，不猜默认值）。 */
 export function dsnFromEnv(env = process.env) {
@@ -148,16 +152,46 @@ export function assertDsn(dsn) {
   return dsn;
 }
 
-/** 对不可逆的建库动作做前置校验：库名合法、两个来源不打架、不拿自带库当目标。 */
-export function validateTarget({ dsn, database, target }) {
+/**
+ * 一次性测试库：沿用本仓既有命名（`*_test` / `*_mig` / `*_iso`），它们免确认。
+ *
+ * 这几个后缀来自既有的环境库（`agents_group_iso` / `_mig` / `_test`、`butler_*` 同款），
+ * 本来就是建了就用、用完就丢的库。
+ */
+function isDisposableDatabase(target) {
+  return /_(?:test|mig|iso)$/.test(target);
+}
+
+/**
+ * 对**不可逆**的建库动作做前置校验。
+ *
+ * 三道闸，按"先拦最危险的"排序：
+ *
+ * 1. **自带库与重构前的正式库一律拒绝**。`butler` 与 `agents_group` 是本次重构之前的正式库，
+ *    新库建好之前它们**全程只读**——这个脚本不该有机会碰到它们。
+ * 2. **不是一次性测试库就必须显式确认**：`DSH_DB_CONFIRM`（或 `--confirm`）要等于目标库名。
+ *    它挡的是"手滑跑错环境"——本地 shell 里还留着生产 DSN、或者 CI 变量没清，
+ *    都会在这一步被拦下。**这一条是实测补上的**：早先的版本对 host 与库名没有任何闸门，
+ *    用生产库名 `dsh` 会直接把库和 15 张表建出来；而本项目"测试与正式环境共用一个 PG 实例"，
+ *    一次误建就会污染正式环境。
+ * 3. 库名要合法、两个来源不能打架。
+ */
+export function validateTarget({ dsn, database, target, confirm = process.env.DSH_DB_CONFIRM }) {
   assertDsn(dsn);
   const declared = decodeURIComponent(new URL(dsn).pathname.replace(/^\//, ''));
   if (database && declared && declared !== database) {
     throw new Error(`--database(${database}) 与 DSN 里的库名(${declared}) 不一致；只保留一个来源，避免建错库。`);
   }
   quoteDatabase(target);
-  if (['postgres', 'template0', 'template1'].includes(target)) {
-    throw new Error(`目标库名 ${target} 是 PostgreSQL 自带库，拒绝在这个名字上建库；请显式指定目标库（--database 或 DSN 路径）。`);
+  if (['postgres', 'template0', 'template1', 'butler', 'agents_group'].includes(target)) {
+    throw new Error(`目标库名 ${target} 是 PostgreSQL 自带库或本次重构前的正式库，拒绝在这个名字上建库。正式库全程只读，请给新库另取名字。`);
+  }
+  if (!isDisposableDatabase(target) && confirm !== target) {
+    throw new Error(
+      `拒绝在 ${target} 上建库：它不是一次性测试库（\`*_test\` / \`*_mig\` / \`*_iso\`），需要显式确认。`
+      + `\n确认方式：设 DSH_DB_CONFIRM=${target}，或加 --confirm ${target}。`
+      + '\n这一步挡的是"手滑跑错环境"——建库不可逆，而本项目测试与正式环境共用一个 PG 实例。',
+    );
   }
   return { target };
 }
@@ -168,10 +202,10 @@ async function exists(client, target) {
 }
 
 /** 建库入口：库不存在则创建，再在**单事务**里应用完整 DDL，最后返回可核验摘要。 */
-export async function createDatabase({ dsn = dsnFromEnv(), database, maintenance = 'postgres', log = console.log } = {}) {
+export async function createDatabase({ dsn = dsnFromEnv(), database, confirm, maintenance = 'postgres', log = console.log } = {}) {
   assertDsn(dsn);
   const { target, targetDsn, adminDsn } = splitDsn(dsn, database, maintenance);
-  validateTarget({ dsn, database, target });
+  validateTarget({ dsn, database, target, confirm });
   const sql = readFileSync(SQL_FILE, 'utf8');
   const appliedAt = Date.now();
   const admin = new Client({ connectionString: adminDsn });
@@ -216,16 +250,16 @@ function report(summary) {
 
 /** 只识别 `--flag value` / `--flag=value`；未知 flag 与多余位置参数一律拒绝，不静默忽略。 */
 export function parseArgs(args) {
-  const options = { dsn: undefined, database: undefined, help: false };
+  const options = { dsn: undefined, database: undefined, confirm: undefined, help: false };
   for (let index = 0; index < args.length; index += 1) {
     const [flag, inline] = args[index].startsWith('--') && args[index].includes('=')
       ? [args[index].slice(0, args[index].indexOf('=')), args[index].slice(args[index].indexOf('=') + 1)]
       : [args[index], undefined];
     if (flag === '--help') { options.help = true; continue; }
-    if (flag !== '--dsn' && flag !== '--database') throw new Error(`未知参数：${args[index]}\n\n${USAGE}`);
+    if (flag !== '--dsn' && flag !== '--database' && flag !== '--confirm') throw new Error(`未知参数：${args[index]}\n\n${USAGE}`);
     const value = inline ?? args[++index];
     if (value === undefined || value.startsWith('--')) throw new Error(`${flag} 缺少取值。\n\n${USAGE}`);
-    options[flag === '--dsn' ? 'dsn' : 'database'] = value;
+    options[flag === '--dsn' ? 'dsn' : flag === '--database' ? 'database' : 'confirm'] = value;
   }
   return options;
 }
@@ -240,7 +274,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       // `DSH_PG_DATABASE` 只在"分项环境变量拼 DSN"这条路上才是库名来源；完整 DSN（--dsn 或
       // DSH_PG_DSN）自己已经带库名了，再拿它去覆盖只会变成"两个来源打架"的假报错（实测踩过）。
       const split = options.dsn === undefined && !process.env.DSH_PG_DSN;
-      report(await createDatabase({ dsn, database: options.database ?? (split ? process.env.DSH_PG_DATABASE : undefined) }));
+      report(await createDatabase({
+        dsn,
+        database: options.database ?? (split ? process.env.DSH_PG_DATABASE : undefined),
+        confirm: options.confirm,
+      }));
     }
   } catch (error) { console.error(error.message); process.exitCode = 1; }
 }
