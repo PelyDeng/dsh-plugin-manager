@@ -17,7 +17,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { apply as applyGroup } from '../src/index.ts'
 import { Config as GroupConfig } from '../src/config.ts'
-
 /** 测试用的站点 origin。认证模式的 Agent 必须能拿到它，否则会如实拒绝装载。 */
 const PUBLIC_ORIGIN = 'https://butler.test'
 
@@ -57,10 +56,13 @@ function writeGroupConfig(): string {
 
 interface Route { kind: string; path: string; handler: unknown }
 
+/** 本文件各测试装载后注册的释放函数；afterEach 逆序排空，避免句柄跨测试泄漏。 */
+const pendingCleanups: (() => unknown)[] = []
+
 /** 记录型假上下文：只实现挂载路径真正用到的东西。 */
 function fakeHost() {
   const routes: Route[] = []
-  const effects: (() => void)[] = []
+  const effects: (() => unknown)[] = []
   const listeners = new Map<string, ((...args: unknown[]) => void)[]>()
   const provided = new Map<string, unknown>()
   const catalog: unknown[] = []
@@ -68,6 +70,14 @@ function fakeHost() {
   /** 全局注册的工具名，以及每一次 restrict 规则。 */
   const registeredTools: string[] = []
   const restrictions: { allow?: readonly string[]; deny?: readonly string[] }[] = []
+  // 每次装载注册的释放函数要真的执行（afterEach 统一排空）：closedoff 装载会打开
+  // ~/.dsh 下的真实会话库，泄漏的句柄会在多次装载后以 database is locked 暴露。
+  pendingCleanups.push(() => {
+    for (const dispose of [...effects].reverse()) {
+      const outcome = dispose()
+      if (outcome instanceof Promise) outcome.catch(() => {})
+    }
+  })
 
   const emit = (name: string, accept: (value: unknown) => void) => {
     if (name === 'ecosystem/providers') return
@@ -161,14 +171,27 @@ function installProvider(ctx: Context) {
 describe('群组端到端挂载', () => {
   let errors: string[]
   let spy: typeof console.error
+  let previousHome: string | undefined
   beforeEach(() => {
     errors = []
     spy = console.error
+    // 隔离 DSH 主目录：closedoff 装载会打开真实主目录下的会话库，测试并发访问它
+    // 会以 database is locked 偶发失败，也不该碰用户数据。
+    previousHome = process.env.DSH_HOME
+    process.env.DSH_HOME = mkdtempSync(join(tmpdir(), 'agents-group-e2e-home-'))
     console.error = (...args: unknown[]) => {
       errors.push(args.map(a => (a instanceof Error ? `${a.message}\n${a.stack ?? ''}` : String(a))).join(' '))
     }
   })
-  afterEach(() => { console.error = spy })
+  afterEach(async () => {
+    console.error = spy
+    if (previousHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousHome
+    for (const dispose of pendingCleanups.splice(0).reverse()) {
+      const outcome = dispose()
+      if (outcome instanceof Promise) await outcome.catch(() => {})
+    }
+  })
 
   it('把两个子包的页面路由注册在各自前缀下', async () => {
     const host = fakeHost()
@@ -277,4 +300,109 @@ describe('群组端到端挂载', () => {
     expect(host.routes.map(route => route.path)).toContain('/agents/closedoff')
   }, 30000)
 
+  it('Q4 口径：缺 PG 配置时 blog 未就绪（503+稳定码）但群组照常装载', async () => {
+    const host = fakeHost()
+    writeGroupConfig()
+    installProvider(host.ctx)
+    const previousConfig = process.env.AGENTS_GROUP_PG_CONFIG
+    const previousDsn = process.env.AGENTS_GROUP_PG_DSN
+    // 显式指向不存在的配置文件：默认路径是否存在不应影响测试结果。
+    process.env.AGENTS_GROUP_PG_CONFIG = join(tmpdir(), 'agents-group-test-missing-storage.json')
+    delete process.env.AGENTS_GROUP_PG_DSN
+    try {
+      await applyGroup(host.ctx, groupConfig())
+    } finally {
+      if (previousConfig === undefined) delete process.env.AGENTS_GROUP_PG_CONFIG
+      else process.env.AGENTS_GROUP_PG_CONFIG = previousConfig
+      if (previousDsn === undefined) delete process.env.AGENTS_GROUP_PG_DSN
+      else process.env.AGENTS_GROUP_PG_DSN = previousDsn
+    }
+
+    // 群组照常装载：页面与探针都在，blog 的路由也已注册（未就绪 ≠ 不装载）。
+    const paths = host.routes.map(route => route.path)
+    expect(paths).toContain('/agents/blog')
+    expect(paths).toContain('/agents/blog/ready')
+    expect(paths).toContain('/agents/closedoff')
+    const blogReady = await probe(host, '/agents/blog/ready')
+    expect(blogReady.status).toBe(503)
+    expect(blogReady.body.ok).toBe(false)
+    expect(blogReady.body.error).toContain('未配置')
+    // 群组就绪汇总：closedoff 仍就绪，群组整体 200；明细如实标出 blog 未就绪。
+    const groupReady = await probe(host, '/agents/ready')
+    expect(groupReady.status).toBe(200)
+    expect(groupReady.body.authReady).toBe(true)
+    const agents = (groupReady.body as { agents?: { id: string, ready: boolean, error?: string }[] }).agents ?? []
+    const blog = agents.find(agent => agent.id === 'blog')
+    expect(blog!.ready).toBe(false)
+    expect(blog!.error).toContain('未配置')
+    const closedoff = agents.find(agent => agent.id === 'closedoff')
+    expect(closedoff!.ready).toBe(true)
+  }, 30000)
+
+  it('Q4 口径：PG 不可达（127.0.0.1:1）时 blog 探针 503+storage_unreachable，群组仍在线', async () => {
+    const host = fakeHost()
+    writeGroupConfig()
+    installProvider(host.ctx)
+    const previousDsn = process.env.AGENTS_GROUP_PG_DSN
+    process.env.AGENTS_GROUP_PG_DSN = 'postgres://127.0.0.1:1/agents_group'
+    try {
+      await applyGroup(host.ctx, groupConfig())
+    } finally {
+      if (previousDsn === undefined) delete process.env.AGENTS_GROUP_PG_DSN
+      else process.env.AGENTS_GROUP_PG_DSN = previousDsn
+    }
+
+    // init 连接被拒：blog 已装载但未就绪，healthPath 按稳定码说明原因。
+    const blogReady = await probe(host, '/agents/blog/ready')
+    expect(blogReady.status).toBe(503)
+    expect(blogReady.body.ok).toBe(false)
+    expect(blogReady.body.error).toContain('storage_unreachable')
+    const groupReady = await probe(host, '/agents/ready')
+    expect(groupReady.status).toBe(200)
+    const agents = (groupReady.body as { agents?: { id: string, ready: boolean }[] }).agents ?? []
+    const closedoff = agents.find(agent => agent.id === 'closedoff')
+    expect(closedoff!.ready).toBe(true)
+  }, 30000)
+
+  it('Q4 口径：blog 的 HTTP 错误渲染把存储稳定码映射为 503/409，其余保持 kit 默认', async () => {
+    const { blogStorageErrorHandler } = await import('../src/agents/blog.ts')
+    const render = (error: unknown) => {
+      const response = {
+        headersSent: false,
+        statusCode: 0,
+        body: '',
+        writeHead(status: number) { this.statusCode = status },
+        end(chunk: string) { this.body = String(chunk) },
+      }
+      blogStorageErrorHandler(response as never, error)
+      return { status: response.statusCode, body: JSON.parse(response.body) }
+    }
+    const { AccessError } = await import('@dsh-plugin-manager/plugin-kit')
+    const { StorageError } = await import('../agents/blog/src/storage/errors.mjs')
+    const unreachable = render(new StorageError('storage_unreachable', '存储连接失败'))
+    expect(unreachable.status).toBe(503)
+    expect(unreachable.body.code).toBe('storage_unreachable')
+    expect(render(new StorageError('storage_unconfigured', '未配置')).status).toBe(503)
+    expect(render(new StorageError('storage_constraint', '存储约束冲突')).status).toBe(409)
+    expect(render(new StorageError('storage_unknown', '存储未知故障')).status).toBe(500)
+    const business = render(new AccessError(404, '草稿不存在或无权访问'))
+    expect(business.status).toBe(404)
+    expect(business.body.error).toBe('草稿不存在或无权访问')
+    expect(render(new Error('boom'))).toEqual({ status: 500, body: { error: '请求处理失败' } })
+  }, 30000)
 })
+
+/** 直接调用群组注册的公共探针路由，取回状态码与 JSON 正文。 */
+async function probe(host: ReturnType<typeof fakeHost>, path: string): Promise<{ status: number, body: Record<string, never> & { [key: string]: unknown } }> {
+  const route = host.routes.find(item => item.path === path)
+  expect(route, `路由未注册：${path}`).toBeDefined()
+  const response = {
+    headersSent: false,
+    statusCode: 0,
+    body: '',
+    writeHead(status: number) { this.statusCode = status },
+    end(chunk: string) { this.body = String(chunk) },
+  }
+  await (route!.handler as (request: unknown, response: unknown) => Promise<void>)({}, response)
+  return { status: response.statusCode, body: JSON.parse(response.body) }
+}

@@ -35,6 +35,11 @@ export interface MountedAgent {
   readonly participant?: AgentParticipant
   /** 装载失败时的可读原因；正常时为 undefined。 */
   readonly failure?: string
+  /**
+   * 运行期就绪探针（可选）：装载成功 ≠ 永远就绪（例如 blog 的业务存储可配置但运行中不可达）。
+   * 返回 `{ok:false,error}` 时该 Agent 按未就绪计，探针 503；实现必须自带有界超时。
+   */
+  readonly health?: () => Promise<{ ok: boolean; error?: string }>
   dispose(): Promise<void>
 }
 
@@ -82,7 +87,7 @@ export type AgentMount = (context: AgentMountContext) => Promise<{
    * 本次装载注册的工具条目。
    *
    * 群组用它算「本分类 + 通用」的可见性限制，所以子包必须如实返回**全部**已注册工具；
-   * 漏报会让对应工具对该 Agent 不可见，而那在界面上看不出来。
+   * 漏报会让对应工具对该 Agent 不可见，而那种失效在界面上看不出来。
    */
   tools: readonly ToolDescriptor[]
   /**
@@ -92,6 +97,11 @@ export type AgentMount = (context: AgentMountContext) => Promise<{
    * 翻译。漏报会让该 Agent 在牛马大总管的名单里变成「不可调度」，牛马大总管于是不会把专业活派给它。
    */
   participant: AgentParticipant
+  /**
+   * 运行期就绪探针（可选）：装载成功后仍可能未就绪（blog 的 Q4 口径——业务存储缺配置
+   * 或运行中不可达）。群组的 healthPath 与 /ready 汇总都会调用它；实现必须自带有界超时。
+   */
+  health?: () => Promise<{ ok: boolean; error?: string }>
 }>
 
 /**
@@ -172,7 +182,13 @@ export async function mountAgents(
         common: shared.common,
         ...(shared.groupConfigPath === undefined ? {} : { groupConfigPath: shared.groupConfigPath }),
       })
-      mounted.push({ ...base, tools: instance.tools, participant: instance.participant, dispose: instance.dispose })
+      mounted.push({
+        ...base,
+        tools: instance.tools,
+        participant: instance.participant,
+        ...(instance.health === undefined ? {} : { health: instance.health }),
+        dispose: instance.dispose,
+      })
     } catch (error) {
       // 只标记这一个 Agent 失败，群组继续服务其他 Agent。
       // 连栈一起记：只记 message 会让这类问题在运维时无从定位。
@@ -190,16 +206,31 @@ export async function mountAgents(
  * **只要有一个 Agent 就绪就返回 200**，明细写在正文里。理由：如果任一 Agent 配置错
  * 就让整个群组 503，会把「某一个 Agent 挂了」升级成「全部不可用」，运维上更难判断。
  * 一个都没起来才算不就绪。
+ *
+ * 异步：提供 `health` 探针的 Agent（如 blog 的业务存储）在判定时要核实当前状态；
+ * 探针实现自带有界超时，不会拖住整个判定。
  */
-export function readiness(mounted: readonly MountedAgent[]): {
+export async function readiness(mounted: readonly MountedAgent[]): Promise<{
   ok: boolean
   agents: { id: string; ready: boolean; entryPath: string; error?: string }[]
-} {
-  const agents = mounted.map(agent => ({
-    id: agent.id,
-    ready: agent.failure === undefined,
-    entryPath: agent.entryPath,
-    ...(agent.failure === undefined ? {} : { error: agent.failure }),
-  }))
+}> {
+  const agents = []
+  for (const agent of mounted) {
+    let ready = agent.failure === undefined
+    let error: string | undefined = agent.failure
+    if (ready && agent.health !== undefined) {
+      try {
+        const state = await agent.health()
+        if (!state.ok) {
+          ready = false
+          error = state.error ?? 'Agent 未就绪'
+        }
+      } catch (caught) {
+        ready = false
+        error = caught instanceof Error ? caught.message : String(caught)
+      }
+    }
+    agents.push({ id: agent.id, ready, entryPath: agent.entryPath, ...(error === undefined ? {} : { error }) })
+  }
   return { ok: agents.some(agent => agent.ready), agents }
 }

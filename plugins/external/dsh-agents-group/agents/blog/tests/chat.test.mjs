@@ -8,7 +8,7 @@ import {BlogStore} from '../src/store.mjs'
 import {ChatStore} from '../src/chat-store.mjs'
 import {BlogJobs} from '../src/jobs.mjs'
 import {BlogChat} from '../src/chat.mjs'
-import {BlogApplication} from '../src/application.mjs'
+import {BlogApplication,PendingOperationsMirror} from '../src/application.mjs'
 import {projectChat} from '../src/chat-history.mjs'
 import {createBlogParticipant} from '../src/participant.ts'
 
@@ -48,7 +48,7 @@ test('saved attempts display authoritative original blocks with a stable partial
 async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=false}={}){
   const root=new Context(),registry=root.plugin(AgentRegistry);await registry
   const runtimeJobs=root.plugin(LocalJobRegistry);await runtimeJobs
-  const store=new BlogStore(':memory:'),index=new ChatStore(store),handles=[],saved=new Map(),headers=new Map(),disposers=[],tools=new Map(),feedbackCalls=[]
+  const store=new BlogStore(':memory:');await store.init();const pending=new PendingOperationsMirror(),index=new ChatStore(':memory:',()=>pending.ids()),handles=[],saved=new Map(),headers=new Map(),disposers=[],tools=new Map(),feedbackCalls=[]
   let revoked=false,releaseOpen,releaseFlush,flushCount=0,nextFlushGate;const releaseGates=[]
   const access={assert(a){assert.ok(!revoked&&a.sessionId==='login','revoked')}}
   const openGate=delayedOpen?new Promise(r=>{releaseOpen=r}):Promise.resolve()
@@ -80,7 +80,7 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
   }
   const nativeRecords=new Map();let nativeCid=900
   const attachments={freeze:()=>[]},blog={list:async()=>({items:[{cid:337,title:'现有文章'}]}),get:async id=>structuredClone(nativeRecords.get(id)),async call(action,args){if(action==='status')return{nativeDrafts:true};assert.equal(action,'save');const id=args.base?.savedDraft?.cid??nativeCid++,snapshot={published:null,savedDraft:{...args.content,cid:id},version:String(nativeCid),selectedVariant:'savedDraft'};nativeRecords.set(id,snapshot);return{cid:id,snapshot}}}
-  const jobs=new BlogJobs(ctx,access,store,blog,attachments,3000),app=new BlogApplication(store,access,blog,null,null,jobs,attachments)
+  const jobs=new BlogJobs(ctx,access,store,blog,attachments,3000),app=new BlogApplication(store,access,blog,null,null,jobs,attachments,pending)
   const chat=new BlogChat(ctx,access,store,index,attachments,jobs,app,sdk,3000)
   t.after(async()=>{releaseOpen?.();releaseFlush?.();for(const release of releaseGates)release();await chat.close();await jobs.close();for(const dispose of disposers.reverse())await dispose?.();store.close();await runtimeJobs.dispose();await registry.dispose()})
   const conversation=chat.create(actor,'conversation-123')
@@ -140,10 +140,10 @@ test('management previews without resuming and archives only owner sessions afte
   assert.ok(!JSON.stringify(preview).includes('MODEL-ONLY-FROZEN-ATTACHMENT'))
   assert.deepEqual(f.index.record(owner,id),before);assert.equal(f.handles.length,handles)
   await assert.rejects(p.preview({...actor,userId:'another'},id),e=>e.status===404)
-  f.store.db.prepare('INSERT INTO operations(id,owner,draftId,revision,data) VALUES(?,?,?,1,?)').run('pending',owner,'draft',JSON.stringify({status:'prepared',expiresAt:Date.now()+60000,chat:{conversationId:id}}))
+  await f.chat.app.operationInsert({id:'pending',owner,draftId:'draft',revision:1,status:'prepared',expiresAt:Date.now()+60000,chat:{conversationId:id}})
   assert.equal((await p.list(actor,query)).items[0].canRemove,false)
   assert.equal((await p.remove(actor,[id])).results[0].status,'blocked')
-  f.chat.app.operationSave('pending',{status:'cancelled',chat:{conversationId:id}})
+  await f.chat.app.operationSave('pending',{status:'cancelled',chat:{conversationId:id}})
   assert.equal((await p.remove(actor,[id])).results[0].status,'removed')
   assert.equal((await p.remove(actor,[id])).results[0].status,'alreadyRemoved')
   assert.equal((await p.list(actor,query)).total,0)
@@ -151,13 +151,13 @@ test('management previews without resuming and archives only owner sessions afte
 })
 
 test('publish tool prepares a private confirmation card; candidate is applied only after user confirmation',async t=>{
-  const f=await fixture(t),draft=f.store.create(owner,{title:'测试文章',text:'原文'}),proposal=f.store.propose(owner,draft.id,1,{text:'候选正文'},[])
+  const f=await fixture(t),draft=await f.store.create(owner,{title:'测试文章',text:'原文'}),proposal=await f.store.propose(owner,draft.id,1,{text:'候选正文'},[])
   let writes=0
   f.blog.call=async(action,args)=>{assert.equal(action,'save');assert.equal(args.content.text,'候选正文');writes++;return{cid:338,url:'https://example.test/338',snapshot:{version:'v2',published:{cid:338}}}}
   await f.send();await tick();const h=f.handles[0]
   const execute=args=>f.tools.get('blog_publish_draft').execute(args,{agent:h.agent})
   const args={draftId:draft.id,proposalId:proposal.id},prepared=await execute(args)
-  assert.equal(writes,0);assert.equal(f.store.get(owner,draft.id).text,'原文');assert.equal(prepared.nonce,undefined)
+  assert.equal(writes,0);assert.equal((await f.store.get(owner,draft.id)).text,'原文');assert.equal(prepared.nonce,undefined)
   assert.equal((await execute(args)).id,prepared.id)
   let card=(await f.chat.history(actor,f.conversation.id)).operations[0]
   assert.equal(card.after.text,'候选正文');assert.equal(card.canConfirm,false)
@@ -170,7 +170,7 @@ test('publish tool prepares a private confirmation card; candidate is applied on
   await assert.rejects(f.chat.app.confirm(actor,request),/原对话/)
   assert.equal((await f.chat.operationAction(actor,request)).status,'succeeded')
   assert.equal((await f.chat.operationAction(actor,request)).status,'succeeded');assert.equal(writes,1)
-  assert.equal(f.store.get(owner,draft.id).text,'候选正文');assert.equal(f.store.get(owner,draft.id).proposal,null)
+  assert.equal((await f.store.get(owner,draft.id)).text,'候选正文');assert.equal((await f.store.get(owner,draft.id)).proposal,null)
   const history=await f.chat.history(actor,f.conversation.id);assert.equal(history.operations[0].status,'succeeded');assert.equal(history.operations[0].nonce,null)
   await f.send({requestId:'after-publish',text:'刚才发布成功了吗'});await tick()
   const context=f.handles[1].contexts.find(c=>c.name==='blog:operations')
@@ -189,20 +189,20 @@ test('publishing a blog saved draft requires consumption confirmation and preser
   await f.send();await tick();const h=f.handles[0]
   await f.tools.get('blog_publish_draft').execute({cid:338},{agent:h.agent})
   complete(h);await tick()
-  const card=(await f.chat.history(actor,f.conversation.id)).operations[0],draft=f.store.list(owner)[0]
+  const card=(await f.chat.history(actor,f.conversation.id)).operations[0],draft=(await f.store.list(owner))[0]
   assert.equal(card.after.text,'保存稿正文');assert.equal(card.before.text,'公开正文')
   const request={conversationId:f.conversation.id,id:card.id,nonce:card.nonce,operation:'confirm'}
   await assert.rejects(f.chat.operationAction(actor,request),/消费现有博客保存稿/);assert.equal(writes,0)
   const confirming=f.chat.operationAction(actor,{...request,consumeSavedDraft:true});await tick()
   await assert.rejects(f.chat.app.prepare(actor,{id:draft.id,revision:1,mode:'publish'}),/提交待核对/)
-  f.store.save(owner,draft.id,1,{text:'请求期间继续手写'})
+  await f.store.save(owner,draft.id,1,{text:'请求期间继续手写'})
   release();assert.equal((await confirming).status,'succeeded');assert.equal(writes,1)
-  assert.equal(f.store.get(owner,draft.id).text,'请求期间继续手写')
+  assert.equal((await f.store.get(owner,draft.id)).text,'请求期间继续手写')
   assert.equal((await f.chat.history(actor,f.conversation.id)).operations[0].after.text,'保存稿正文')
 })
 
 test('confirmation rejects replaced proposals, another conversation, expired cards and revoked actors',async t=>{
-  const f=await fixture(t),draft=f.store.create(owner,{title:'标题',text:'原文'}),proposal=f.store.propose(owner,draft.id,1,{text:'待发布'},[])
+  const f=await fixture(t),draft=await f.store.create(owner,{title:'标题',text:'原文'}),proposal=await f.store.propose(owner,draft.id,1,{text:'待发布'},[])
   let writes=0;f.blog.call=async()=>{writes++;throw new Error('must not execute')}
   await f.send();await tick();const h=f.handles[0]
   const prepared=await f.tools.get('blog_publish_draft').execute({draftId:draft.id,proposalId:proposal.id},{agent:h.agent})
@@ -210,9 +210,9 @@ test('confirmation rejects replaced proposals, another conversation, expired car
   const card=(await f.chat.history(actor,f.conversation.id)).operations[0],request={conversationId:f.conversation.id,id:prepared.id,nonce:card.nonce,operation:'confirm'}
   const other=f.chat.create(actor,'another-conversation')
   await assert.rejects(f.chat.operationAction(actor,{...request,conversationId:other.id}),/不属于/)
-  f.store.propose(owner,draft.id,1,{text:'新的候选'},[])
+  await f.store.propose(owner,draft.id,1,{text:'新的候选'},[])
   await assert.rejects(f.chat.operationAction(actor,request),/候选稿已变化/)
-  const op=f.chat.app.operation(owner,prepared.id);op.expiresAt=0;f.chat.app.operationSave(op.id,op)
+  const op=await f.chat.app.operation(owner,prepared.id);op.expiresAt=0;await f.chat.app.operationSave(op.id,op)
   await assert.rejects(f.chat.operationAction(actor,request),/失效/)
   f.revoke();await assert.rejects(f.chat.operationAction(actor,request),/revoked/)
   assert.equal(writes,0)
@@ -220,7 +220,7 @@ test('confirmation rejects replaced proposals, another conversation, expired car
 
 test('delete confirmation preserves local copies and reconciles an uncertain remote result without another delete',async t=>{
   const f=await fixture(t),remote={version:'v1',published:{cid:338,title:'删除目标',text:'正文',type:'post'},savedDraft:{cid:339,title:'保存稿',text:'草稿',type:'post_draft'}}
-  const draft=f.store.create(owner,{title:'本地副本',text:'本地正文'},remote);let deletes=0
+  const draft=await f.store.create(owner,{title:'本地副本',text:'本地正文'},remote);let deletes=0
   f.blog.get=async()=>remote
   f.blog.call=async(action,args)=>{
     if(action==='status')return{deleteArticle:true}
@@ -238,12 +238,12 @@ test('delete confirmation preserves local copies and reconciles an uncertain rem
   await assert.rejects(f.chat.operationAction(actor,request),/response lost/)
   await assert.rejects(f.chat.operationAction(actor,request),/查询回执/)
   assert.equal((await f.chat.operationAction(actor,{...request,operation:'reconcile'})).status,'succeeded')
-  assert.equal(deletes,1);assert.equal(f.store.get(owner,draft.id).text,'本地正文');assert.equal(f.store.get(owner,draft.id).remote.deleted,true)
+  assert.equal(deletes,1);assert.equal((await f.store.get(owner,draft.id)).text,'本地正文');assert.equal((await f.store.get(owner,draft.id)).remote.deleted,true)
   await assert.rejects(f.chat.app.prepare(actor,{id:draft.id,revision:2,mode:'publish'}),/原文已删除/)
 })
 
 test('cancelled cards cannot execute and unsupported bridges never prepare deletion',async t=>{
-  const f=await fixture(t),draft=f.store.create(owner,{title:'标题',text:'正文'})
+  const f=await fixture(t),draft=await f.store.create(owner,{title:'标题',text:'正文'})
   f.blog.call=async()=>({deleteArticle:false})
   await f.send();await tick();const h=f.handles[0]
   await assert.rejects(f.tools.get('blog_delete_post').execute({cid:338},{agent:h.agent}),/先更新/)
@@ -294,8 +294,8 @@ test('fork source is protected during historical reads and both source and child
 })
 
 test('chat search tools preserve structured dates and return lossless imported draft references',async t=>{
-  const f=await fixture(t),draft=f.store.create(owner,{title:'时间检索稿'},{published:{cid:338}})
-  f.chat.app.applyResult({id:'delete-338',owner,mode:'delete',before:{published:{cid:338}}},{deleted:true})
+  const f=await fixture(t),draft=await f.store.create(owner,{title:'时间检索稿'},{published:{cid:338}})
+  await f.chat.app.applyResult({id:'delete-338',owner,mode:'delete',before:{published:{cid:338}}},{deleted:true})
   let received;f.blog.search=async args=>{received=args;return {items:[],hasMore:false}}
   await f.send();await tick();const agent=f.handles[0].agent
   const args={period:'yesterday',title:'测试',category:'摘抄笔记',page:2}
@@ -312,17 +312,17 @@ test('separate chat operations reuse the same imported version without losing a 
   const tool=f.tools.get('blog_select_draft'),args={cid:338,variant:'published'}
   const first=await tool.execute(args,{agent:f.handles[0].agent})
   assert.deepEqual(first,JSON.parse(JSON.stringify(first)),'selected draft without an explicit comment setting must remain lossless JSON')
-  const proposal=f.store.propose(owner,first.draftId,first.revision,{text:'保留候选'},[])
+  const proposal=await f.store.propose(owner,first.draftId,first.revision,{text:'保留候选'},[])
   complete(f.handles[0]);await tick()
   await f.send({requestId:'request-second',text:'继续修改该文章'});await tick()
   const next=await tool.execute(args,{agent:f.handles.at(-1).agent})
   assert.deepEqual(next,JSON.parse(JSON.stringify(next)))
   assert.equal(next.draftId,first.draftId);assert.equal(next.proposalId,proposal.id)
-  assert.equal(f.store.list(owner).length,1)
+  assert.equal((await f.store.list(owner)).length,1)
 })
 
 test('article tools preserve explicit false and omit unavailable optional values',async t=>{
-  const f=await fixture(t),draft=f.store.create(owner,{allowComment:false})
+  const f=await fixture(t),draft=await f.store.create(owner,{allowComment:false})
   await f.send();await tick();const execution={agent:f.handles[0].agent}
   const selected=await f.tools.get('blog_select_draft').execute({draftId:draft.id},execution)
   assert.equal(selected.allowComment,false);assert.deepEqual(selected,JSON.parse(JSON.stringify(selected)))
@@ -346,14 +346,14 @@ test('concurrent conversations sharing an import cannot replace each others cand
   assert.equal(a.draftId,b.draftId)
   const first=await propose.execute({text:'先完成候选'},{agent:f.handles[0].agent})
   await assert.rejects(propose.execute({text:'后完成候选'},{agent:f.handles[1].agent}),/候选稿已被其他任务更新/)
-  assert.equal(f.store.get(owner,a.draftId).proposal.id,first.proposalId)
+  assert.equal((await f.store.get(owner,a.draftId)).proposal.id,first.proposalId)
   const continued=await propose.execute({text:'同一任务继续调整'},{agent:f.handles[0].agent})
-  assert.equal(f.store.get(owner,a.draftId).proposal.id,continued.proposalId)
+  assert.equal((await f.store.get(owner,a.draftId)).proposal.id,continued.proposalId)
 })
 
 test('chat starts without an article, preserves native history, resumes and deduplicates network requests',async t=>{
   const f=await fixture(t),request=await f.send();await tick()
-  assert.equal(f.store.list(owner).length,0);assert.equal(f.handles.length,1)
+  assert.equal((await f.store.list(owner)).length,0);assert.equal(f.handles.length,1)
   assert.ok(f.handles[0].allowed.includes('blog_select_draft'))
   assert.deepEqual(await f.send(),{id:request.id,status:'running',conversationId:f.conversation.id})
   await assert.rejects(f.send({requestId:'request-456'}),/对话|上一轮/)
@@ -377,12 +377,12 @@ test('new draft and retry share one logical article; manual changes reject stale
   const first=await execute('blog_select_draft',{newArticle:true}),second=await execute('blog_select_draft',{newArticle:true})
   assert.equal(first.draftId,second.draftId)
   await execute('blog_propose',{title:'标题',text:'第一版'})
-  f.store.save(owner,first.draftId,first.revision,{text:'手写内容'})
+  await f.store.save(owner,first.draftId,first.revision,{text:'手写内容'})
   await assert.rejects(execute('blog_propose',{text:'迟到的候选'}),/手动修改/)
   complete(h);await tick()
   await f.send({requestId:'request-retry',retryFrom:request.id,text:'重新给出候选'});await tick()
   const next=await f.tools.get('blog_select_draft').execute({newArticle:true},{agent:f.handles[1].agent})
-  assert.equal(next.draftId,first.draftId);assert.equal(next.text,'手写内容');assert.equal(f.store.list(owner).length,1)
+  assert.equal(next.draftId,first.draftId);assert.equal(next.text,'手写内容');assert.equal((await f.store.list(owner)).length,1)
   const cards=f.index.results(owner,f.conversation.id);assert.equal(cards[0].proposal.fields.text,'第一版')
 })
 
@@ -419,7 +419,7 @@ test('stop during Agent creation waits for that handle and does not release the 
 
 test('participant revocation waits for original Agent creation and durability before rejecting',async t=>{
   const f=await fixture(t,{delayedOpen:true,delayedFlush:true})
-  const participant=createBlogParticipant({access:f.chat.access,chat:f.chat,index:f.index,store:f.store,routePrefix:'/blog'})
+  const participant=createBlogParticipant({access:f.chat.access,chat:f.chat,index:f.index,storage:f.store,routePrefix:'/blog'})
   let settled=false
   const running=participant.run({actor,missionId:'mission-revoked',requestId:'request-revoked',message:'查询博客',signal:new AbortController().signal,onProgress(){}})
   const rejected=assert.rejects(running,/revoked/).then(()=>{settled=true})
@@ -468,15 +468,15 @@ test('remote import is deduplicated across retries, rejects oversize before writ
   complete(f.handles[1],'answer-2');await tick()
   await f.send({requestId:'retry-second',retryFrom:request.id});await tick()
   const same=await f.tools.get('blog_select_draft').execute({cid:42,variant:'published'},{agent:f.handles[2].agent})
-  assert.equal(same.draftId,selected.draftId);assert.equal(f.store.list(owner).length,1)
+  assert.equal(same.draftId,selected.draftId);assert.equal((await f.store.list(owner)).length,1)
   complete(f.handles[2],'answer-3');await tick()
   await f.send({requestId:'another-operation'});await tick()
   f.blog.get=async()=>({published:{...source,text:'x'.repeat(120001)}})
   await assert.rejects(f.tools.get('blog_select_draft').execute({cid:42,variant:'published'},{agent:f.handles[3].agent}),/正文过长/)
-  assert.equal(f.store.list(owner).length,1)
+  assert.equal((await f.store.list(owner)).length,1)
   let release;f.blog.get=()=>new Promise(r=>{release=r})
   const abort=new AbortController(),pending=f.tools.get('blog_select_draft').execute({cid:42,variant:'published'},{agent:f.handles[3].agent,signal:abort.signal})
-  await tick();abort.abort();release({published:source});await assert.rejects(pending);assert.equal(f.store.list(owner).length,1)
+  await tick();abort.abort();release({published:source});await assert.rejects(pending);assert.equal((await f.store.list(owner)).length,1)
 })
 
 test('native draft receipt survives failed logical binding and retry reuses the same article',async t=>{
@@ -484,8 +484,8 @@ test('native draft receipt survives failed logical binding and retry reuses the 
   const update=f.index.updateRequest.bind(f.index);let fail=true
   f.index.updateRequest=(id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected binding write failure')}return update(id,patch)}
   const execute=()=>f.tools.get('blog_select_draft').execute({newArticle:true},{agent:f.handles[0].agent})
-  await assert.rejects(execute(),/injected/);assert.equal(f.store.list(owner).length,1);assert.ok(f.store.get(owner,f.store.list(owner)[0].id).blogNative)
-  const selected=await execute();assert.ok(selected.draftId);assert.equal(f.store.list(owner).length,1)
+  await assert.rejects(execute(),/injected/);assert.equal((await f.store.list(owner)).length,1);assert.ok((await f.store.get(owner,(await f.store.list(owner))[0].id)).blogNative)
+  const selected=await execute();assert.ok(selected.draftId);assert.equal((await f.store.list(owner)).length,1)
 })
 
 test('image model survives removed selection, native history reopening and branch continuation',async t=>{
@@ -500,7 +500,7 @@ test('image model survives removed selection, native history reopening and branc
   const branch=await chat.fork(actor,{conversationId:f.conversation.id,messageId:'continued-answer',requestId:'image-fork'})
   assert.equal(f.handles[3].options.agentOptions.model,'vision')
   await chat.close()
-  const reopened=new BlogChat(chat.ctx,chat.access,chat.store,chat.index,chat.attachments,chat.jobs,chat.app,chat.sdk,3000)
+  const reopened=new BlogChat(chat.ctx,chat.access,chat.storage,chat.index,chat.attachments,chat.jobs,chat.app,chat.sdk,3000)
   t.after(()=>reopened.close())
   await reopened.send(actor,{conversationId:branch.id,requestId:'reopened-image-followup',text:'继续看前面的图',research:false})
   await tick();assert.equal(f.handles[4].options.agentOptions.model,'vision')
@@ -514,7 +514,7 @@ test('new text chats follow the framework default while reopening and branching 
   await f.send();await tick();assert.equal(f.handles[0].options.agentOptions.model,'test');complete(f.handles[0]);await tick()
   chat.ctx.agentDefaultModel.currentSelection=()=>({provider:'new-provider',model:'new-model'})
   await chat.close()
-  const reopened=new BlogChat(chat.ctx,chat.access,chat.store,chat.index,chat.attachments,chat.jobs,chat.app,chat.sdk,3000)
+  const reopened=new BlogChat(chat.ctx,chat.access,chat.storage,chat.index,chat.attachments,chat.jobs,chat.app,chat.sdk,3000)
   t.after(()=>reopened.close())
   await reopened.send(actor,{conversationId:f.conversation.id,requestId:'resume-default-model',text:'继续',research:false})
   await tick();assert.equal(f.handles[1].options.agentOptions.model,'test');complete(f.handles[1],'old-answer');await tick()
@@ -660,7 +660,7 @@ test('revocation inside official selection prevents session log and default writ
 test('participant uses the same validated default and blocks an unroutable model before a native turn',async t=>{
   const f=await fixture(t)
   f.chat.ctx.llm.resolveCallConfig=async()=>{throw new Error('fixture route unavailable')}
-  const participant=createBlogParticipant({access:f.chat.access,chat:f.chat,index:f.index,store:f.store,routePrefix:'/blog'})
+  const participant=createBlogParticipant({access:f.chat.access,chat:f.chat,index:f.index,storage:f.store,routePrefix:'/blog'})
   const result=await participant.run({actor,missionId:'route-blocked-mission',requestId:'route-blocked-request',message:'查询博客',signal:new AbortController().signal,onProgress(){}})
   assert.equal(result.status,'failed');assert.equal(f.handles.length,0)
   assert.equal(f.chat.listeners.size,0);assert.deepEqual(f.chat.ctx.agentDefaultModel.currentSelection(),{provider:'test',model:'test'})
@@ -717,4 +717,50 @@ test('report results are withheld when access expires during the request',async 
   f.blog.report=async()=>{entered.resolve();return gate.promise}
   await f.send();await tick();const h=f.handles[0],result=f.tools.get('blog_group_articles').execute({},{agent:h.agent})
   const rejected=assert.rejects(result,/revoked/);await entered.promise;f.revoke();gate.resolve({complete:true,groups:[{name:'private'}]});await rejected
+})
+
+test('binding two-step after the split: a failed index write retries onto the same imported article',async t=>{
+  const f=await fixture(t);await f.send();await tick();complete(f.handles[0]);await tick()
+  const source={cid:77,title:'绑定基线',text:'原始正文',slug:'post',format:'markdown',tags:[],categories:[]}
+  let remote={published:source,version:'v1'}
+  f.blog.get=async()=>remote
+  const select=requestId=>f.send({requestId}).then(async()=>{await tick();return f.tools.get('blog_select_draft').execute({cid:77,variant:'published'},{agent:f.handles.at(-1).agent})})
+  const first=await select('binding-first')
+  complete(f.handles.at(-1),'binding-a1');await tick()
+  // 新一轮操作：PG 侧建稿成功、索引侧 updateRequest 失败（注入）。
+  const update=f.index.updateRequest.bind(f.index);let fail=true
+  f.index.updateRequest=(id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected index failure')}return update(id,patch)}
+  await assert.rejects(select('binding-retry'),/injected index failure/)
+  await tick();complete(f.handles.at(-1),'binding-a2');await tick()
+  // 重试（远端内容未变）：cid 幂等去重，复用同一草稿，不产生第二份。
+  fail=true
+  f.index.updateRequest=(id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected index failure again')}return update(id,patch)}
+  await assert.rejects(select('binding-retry-2'),/injected index failure again/)
+  await tick();complete(f.handles.at(-1),'binding-a3');await tick()
+  const recovered=await select('binding-retry-3')
+  assert.equal(recovered.draftId,first.draftId)
+  assert.equal((await f.store.list(owner)).length,1)
+})
+
+test('binding retry with drifted remote content keeps the current dedup semantics (documented residual window)',async t=>{
+  const f=await fixture(t);await f.send();await tick();complete(f.handles[0]);await tick()
+  const source={cid:78,title:'漂移基线',text:'原始正文',slug:'post',format:'markdown',tags:[],categories:[]}
+  let remote={published:source,version:'v1'}
+  f.blog.get=async()=>remote
+  const select=requestId=>f.send({requestId}).then(async()=>{await tick();return f.tools.get('blog_select_draft').execute({cid:78,variant:'published'},{agent:f.handles.at(-1).agent})})
+  const first=await select('drift-first')
+  complete(f.handles.at(-1),'drift-a1');await tick()
+  const update=f.index.updateRequest.bind(f.index);let fail=true
+  f.index.updateRequest=(id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected drift failure')}return update(id,patch)}
+  // 绑定失败期间远端内容漂移：重试导入时 sameBlogContent 不再匹配，按现行语义生成第二份副本
+  //（方案 §2.1 声明的残余窗口，保持现状不加守卫）。
+  remote={published:{...source,text:'远端已修改'},version:'v2'}
+  await assert.rejects(select('drift-retry'),/injected drift failure/)
+  assert.equal((await f.store.list(owner)).length,2,'失败尝试已按现行语义生成第二份副本')
+  await tick();complete(f.handles.at(-1),'drift-a2');await tick()
+  // 内容稳定后的重试命中第二份副本（cid+内容去重），不会继续累积。
+  const recovered=await select('drift-retry-2')
+  assert.notEqual(recovered.draftId,first.draftId)
+  assert.equal(recovered.text,'远端已修改')
+  assert.equal((await f.store.list(owner)).length,2)
 })

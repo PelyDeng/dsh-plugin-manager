@@ -2,7 +2,7 @@ import type { Actor } from '@dsh-plugin-manager/plugin-kit'
 import type { AgentParticipant, ParticipantRequest, ParticipantResult } from '../../../packages/common/src/participant.ts'
 import type { BlogChat } from './chat.mjs'
 import type { ChatStore } from './chat-store.mjs'
-import type { BlogStore } from './store.mjs'
+import type { BlogPgStorage } from './storage/pg.mjs'
 import { digest, ownerKey } from './store.mjs'
 import { invariant } from './settings.mjs'
 
@@ -27,21 +27,23 @@ function publicResultText(answer: string, notices: string[], candidates: { title
 }
 
 /** 只适配博客自己的会话；确认凭据和内部推理不进入跨插件结果。 */
-export function createBlogParticipant({ access, chat, index, store, routePrefix }: {
+export function createBlogParticipant({ access, chat, index, storage, routePrefix }: {
   access: { assert(actor: Actor): void }
   chat: BlogChat
   index: ChatStore
-  store: BlogStore
+  storage: BlogPgStorage
   routePrefix: string
 }): AgentParticipant {
   invariant(/^\/(?!\/)[^?#\\]*$/.test(routePrefix), '博客入口路径无效', 503)
   // 表名与两个请求前缀沿用协作入口改名前的写法：它们是**持久标识** —— 表里有线上数据、
   // 请求前缀参与幂等去重，改名要迁移老库，还可能让升级窗口内的重试变成两次投递。
   // 内部噪音不值得用这个代价换，所以只在代码与文档里换新说法。
-  store.db.exec(`CREATE TABLE IF NOT EXISTS pirate_blog_conversations (
+  // 映射表留在索引库（四耦合点之 3）：与 conversations 同库同事务，拆库后混事务自然消失。
+  index.db.exec(`CREATE TABLE IF NOT EXISTS pirate_blog_conversations (
     owner TEXT NOT NULL, missionId TEXT NOT NULL, conversationId TEXT NOT NULL,
     PRIMARY KEY(owner,missionId), UNIQUE(owner,conversationId))`)
-  const binding = (owner: string, missionId: string) => store.db.prepare(
+  const db = index.db
+  const binding = (owner: string, missionId: string) => db.prepare(
     'SELECT conversationId FROM pirate_blog_conversations WHERE owner=? AND missionId=?',
   ).get(owner, missionId) as { conversationId: string } | undefined
 
@@ -59,13 +61,14 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
       let linked = binding(owner, missionId)
       if (request.conversationId !== undefined) invariant(linked?.conversationId === request.conversationId, '博客会话不属于当前协作任务', 403)
       if (!linked) {
-        store.db.exec('BEGIN IMMEDIATE')
+        // 映射与 conversations 同库：索引侧自己的事务，不再混业务库。
+        db.exec('BEGIN IMMEDIATE')
         try {
           const conversation = chat.create(actor, 'pirate-conversation-' + digest({ missionId }))
-          store.db.prepare('INSERT INTO pirate_blog_conversations VALUES(?,?,?)').run(owner, missionId, conversation.id)
+          db.prepare('INSERT INTO pirate_blog_conversations VALUES(?,?,?)').run(owner, missionId, conversation.id)
           linked = { conversationId: conversation.id }
-          store.db.exec('COMMIT')
-        } catch (error) { store.db.exec('ROLLBACK'); throw error }
+          db.exec('COMMIT')
+        } catch (error) { db.exec('ROLLBACK'); throw error }
       }
       const conversationId = linked.conversationId
       const assertBound = () => {
@@ -164,12 +167,16 @@ export function createBlogParticipant({ access, chat, index, store, routePrefix 
             const final = said.filter(message => 'tail' in message && message.tail === true).at(-1)
             const text = final !== undefined ? final.text : said.map(message => message.text).join('\n\n')
             const confirmation = history.operations.some((operation: { status: string }) => ['prepared', 'running', 'uncertain', 'conflict'].includes(operation.status))
-            const candidate = history.results.some(result => result.kind === 'candidate'
-              && result.proposal?.id && store.get(owner, result.draftId).proposal?.id === result.proposal.id)
+            // some() 不等待异步谓词，候选判定必须逐条 await 核对（草稿在业务库里）。
+            let candidate = false
+            for (const result of history.results) {
+              if (result.kind !== 'candidate' || !result.proposal?.id) continue
+              if ((await storage.get(owner, result.draftId)).proposal?.id === result.proposal.id) { candidate = true; break }
+            }
             const currentCandidates = new Map<string, { title: string, text: string }>()
             for (const result of history.results) {
               if (result.requestId !== turnId || result.kind !== 'candidate' || !result.proposal?.id) continue
-              const proposal = store.get(owner, result.draftId).proposal
+              const proposal = (await storage.get(owner, result.draftId)).proposal
               if (proposal?.id === result.proposal.id) currentCandidates.set(result.draftId, { title: proposal.fields.title, text: proposal.fields.text })
             }
             // 这两种「没跑完」要分开报：材料已经交回、剩下的事在博客里办（采用候选稿、核对操作），

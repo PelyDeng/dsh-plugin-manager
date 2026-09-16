@@ -38,8 +38,8 @@ export class BlogJobs {
    * @param {string} [category]
    * @param {(() => readonly string[]) | undefined} [allowedTools]
    */
-  constructor(ctx, access, store, blog, attachments, timeoutMs = 240000, models = {}, category = '', allowedTools = undefined) {
-    this.ctx = ctx; this.access = access; this.store = store; this.blog = blog; this.attachments = attachments; this.timeoutMs = timeoutMs
+  constructor(ctx, access, storage, blog, attachments, timeoutMs = 240000, models = {}, category = '', allowedTools = undefined) {
+    this.ctx = ctx; this.access = access; this.storage = storage; this.blog = blog; this.attachments = attachments; this.timeoutMs = timeoutMs
     // 分类由群组从清单注入：这是唯一权威来源，子包不自己写字符串，否则两处漂移
     // 会让本 Agent 的工具全部不可见，而那种失效在界面上看不出来。
     this.category = category
@@ -87,8 +87,8 @@ export class BlogJobs {
       }, async (args,b) => {
         this.bound(b.handle.agent)
         invariant(Object.keys(args).length > 0 && Object.keys(args).every(k => ['title','text','tags','categories','allowComment'].includes(k)), '候选稿字段无效')
-        if(b.chat)return b.chat.propose(b,args)
-        const proposal = store.propose(b.job.owner, b.job.input.draftId, b.job.input.expectedRevision, args, b.sources, b.expectedProposalId)
+        if(b.chat)return await b.chat.propose(b,args)
+        const proposal = await this.storage.propose(b.job.owner, b.job.input.draftId, b.job.input.expectedRevision, args, b.sources, b.expectedProposalId)
         b.expectedProposalId=proposal.id
         this.update(b, { proposalId: proposal.id }); return { proposalId: proposal.id, savedAs: 'candidate', requiresUserAction: true }
       }),
@@ -126,6 +126,9 @@ export class BlogJobs {
     ctx.effect(() => ctx.on(BLOG_SERVICE_EVENT, accept => accept(this.service), { global: true }))
     ctx.effect(() => onRevoked(ctx, () => this.recheck()))
     ctx.effect(() => { const timer = setInterval(() => this.recheck(), 1000); timer.unref(); return () => clearInterval(timer) })
+    // 任务记录写入串行链：jobUpdate 是读-合-写，业务库异步化后并发的流式增量若不排队，
+    // 两条在途更新可能交错覆盖（旧内容后落）。所有后台写都挂在这条链上，收尾写等待排空。
+    this.writes = Promise.resolve()
   }
   modelArticle(p) { return p ? { cid:p.cid, title:p.title, text:p.text, format:p.format, tags:p.tags, categories:p.categories,...(p.raw?.allowComment===undefined?{}:{allowComment:!!Number(p.raw.allowComment)}),...(p.url===undefined?{}:{url:p.url}) } : null }
   async searchDrafts(owner,args,signal) { return {...await this.blog.search({...args,status:'draft'},signal),clock:searchContext()} }
@@ -133,23 +136,34 @@ export class BlogJobs {
   update(b, patch) {
     if (b.stopped) return
     if(b.chat){this.access.assert(b.job.actor);b.chat.update(b,patch);return}
-    this.access.assert(b.job.actor); b.job = this.store.jobUpdate(b.job.id, patch)
-    this.ctx.root.emit(BLOG_TASK_EVENT, { protocolVersion:1, taskId:b.job.id, updatedAt:b.job.updatedAt })
+    this.access.assert(b.job.actor)
+    // 内存里的 b.job 先合上补丁（快照语义不变），落库排队执行；顺序由链保证。
+    b.job = { ...b.job, ...patch, updatedAt: Date.now() }
+    const id = b.job.id
+    this.writes = this.writes.then(async () => {
+      b.job = await this.storage.jobUpdate(id, patch)
+      this.ctx.root.emit(BLOG_TASK_EVENT, { protocolVersion:1, taskId:b.job.id, updatedAt:b.job.updatedAt })
+    }).catch(error => {
+      // 流式增量期间的单次落库失败不终止本轮：收尾写（stop/observe）会再尝试并如实暴露。
+      console.error('blog: 写作任务进度落库失败', error)
+    })
   }
+  /** 等待后台进度写排空；收尾状态写之前调用，避免最终状态被迟到的增量覆盖。 */
+  async settleWrites() { const chain = this.writes; await chain; if (chain !== this.writes) await this.settleWrites() }
   recheck() { for (const b of this.active.values()) { try { this.access.assert(b.job.actor) } catch { void this.stop(b, 'cancelled', { code:'revoked', message:'登录或授权已失效' }) } } }
-  get(actor,id) { this.access.assert(actor); const { actor:_actor, owner:_owner, ...job } = this.store.jobGet(ownerKey(actor),id);const b=this.active.get(id);if(b?.runtimeJobId)job.runtimeStatus=this.ctx.jobs.get(b.runtimeJobId,b.handle.agent).status;this.access.assert(actor);return job }
+  async get(actor,id) { this.access.assert(actor); const { actor:_actor, owner:_owner, ...job } = await this.storage.jobGet(ownerKey(actor),id);const b=this.active.get(id);if(b?.runtimeJobId)job.runtimeStatus=this.ctx.jobs.get(b.runtimeJobId,b.handle.agent).status;this.access.assert(actor);return job }
   async start(actor, request) {
     this.access.assert(actor); invariant(!this.closed, '博客助手正在停止', 503)
-    const d = this.store.get(ownerKey(actor), request.draftId)
+    const d = await this.storage.get(ownerKey(actor), request.draftId)
     invariant(d.revision === request.expectedRevision, '草稿已变化，请先保存再发起 AI 写作', 409)
     invariant(typeof request.instruction === 'string' && request.instruction.trim() && request.instruction.length <= 8000, '请输入写作要求（最多 8000 字符）')
     invariant(typeof request.research === 'boolean', '联网选项无效')
     invariant(d.text.length <= 120000, '正文超过本次 AI 上下文上限，请先按章节整理；原文仍完整保留', 413)
-    const frozen = this.attachments.freeze(actor,d.id,request.attachments??[])
+    const frozen = await this.attachments.freeze(actor,d.id,request.attachments??[])
     const input = { draftId:d.id, expectedRevision:d.revision, instruction:request.instruction, research:request.research, attachments:frozen.map(({id,version,range})=>({id,version,range})) }
-    const old = this.store.db.prepare('SELECT data,inputHash FROM jobs WHERE owner=? AND caller=? AND requestId=?').get(ownerKey(actor),request.callerId,request.requestId)
+    const old = await this.storage.jobLookup(ownerKey(actor),request.callerId,request.requestId)
     if (!old) invariant(this.active.size < 4, '当前写作任务较多，请稍后重试', 429)
-    const { job, fresh } = this.store.jobStart(ownerKey(actor), request.callerId, request.requestId, input, actor)
+    const { job, fresh } = await this.storage.jobStart(ownerKey(actor), request.callerId, request.requestId, input, actor)
     if (fresh) {
       const b = { job, frozen, expectedProposalId:d.proposal?.id??null, sources:[], stopped:false, text:'', thinking:'', liveReasoning:'', handle:null, timer:null, unsub:[], runtimeJobId:null, settle:null, completion:null, abort:new AbortController() }
       b.timer=setTimeout(()=>void this.stop(b,'failed',{code:'timeout',message:'写作超时，已有内容保留'}),this.timeoutMs)
@@ -218,7 +232,8 @@ export class BlogJobs {
       let snapshot
       do {snapshot=await this.ctx.jobs.wait(b.runtimeJobId,this.timeoutMs+60000,b.handle.agent)} while(['running','stopping'].includes(snapshot.status))
       const status={completed:'succeeded',killed:'cancelled',failed:'failed'}[snapshot.status]
-      b.job=this.store.jobUpdate(b.job.id,{status,error:b.error??null,text:b.text,thinking:this.finalThinking(b),sources:b.sources})
+      await this.settleWrites()
+      b.job=await this.storage.jobUpdate(b.job.id,{status,error:b.error??null,text:b.text,thinking:this.finalThinking(b),sources:b.sources})
       try{this.access.assert(b.job.actor);this.ctx.root.emit(BLOG_TASK_EVENT,{protocolVersion:1,taskId:b.job.id,updatedAt:b.job.updatedAt})}catch{}
     } finally {this.active.delete(b.job.id);await b.handle.dispose().catch(()=>{})}
   }
@@ -228,7 +243,7 @@ export class BlogJobs {
     b.stopped=true;b.error=error;b.abort.abort();clearTimeout(b.timer);for(const off of b.unsub)off()
     if(b.handle){this.bindings.delete(b.handle.agent);if(status!=='succeeded')b.handle.agent.cancel({kind:'user'});await b.handle.agent.whenIdle()}
     if(b.settle && b.runtimeJobId)b.settle({status:{succeeded:'completed',cancelled:'killed',failed:'failed'}[status],detail:error?.code})
-    else {this.active.delete(b.job.id);this.store.jobUpdate(b.job.id,{status,error,text:b.text,thinking:this.finalThinking(b),sources:b.sources});await b.handle?.dispose().catch(()=>{})}
+    else {await this.settleWrites();this.active.delete(b.job.id);await this.storage.jobUpdate(b.job.id,{status,error,text:b.text,thinking:this.finalThinking(b),sources:b.sources});await b.handle?.dispose().catch(()=>{})}
   }
   // The last step's text is the answer; drop its duplicate from the persisted thinking trail.
   finalThinking(b) {
@@ -236,6 +251,6 @@ export class BlogJobs {
     if(answer && b.thinking.endsWith(answer+'\n\n')) b.thinking=b.thinking.slice(0,b.thinking.length-answer.length-2).trimEnd()
     return b.thinking
   }
-  cancel(actor,id) { this.access.assert(actor);this.store.jobGet(ownerKey(actor),id);const b=this.active.get(id);if(b?.runtimeJobId)this.ctx.jobs.kill(b.runtimeJobId,b.handle.agent,'user');else if(b)void this.stop(b,'cancelled');return this.get(actor,id) }
+  async cancel(actor,id) { this.access.assert(actor);await this.storage.jobGet(ownerKey(actor),id);const b=this.active.get(id);if(b?.runtimeJobId)this.ctx.jobs.kill(b.runtimeJobId,b.handle.agent,'user');else if(b)void this.stop(b,'cancelled');return this.get(actor,id) }
   async close(){this.closed=true;const active=[...this.active.values()];await Promise.all(active.map(b=>this.stop(b,'failed',{code:'interrupted',message:'服务正在停止'})));await Promise.all(active.map(b=>b.runPromise));await Promise.all(active.map(b=>b.completion))}
 }

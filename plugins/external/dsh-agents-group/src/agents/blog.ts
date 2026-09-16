@@ -12,6 +12,9 @@ import { Config as BlogConfigSchema, mount, type PluginConfig } from '../../agen
 import type { AgentMount } from '../host.ts'
 import { endpointsOf } from './registry.ts'
 
+/** 存储稳定码到 HTTP 的错误渲染（blog 子包实现，群组经 onError 注入）。 */
+export { blogStorageErrorHandler } from '../../agents/blog/src/index.ts'
+
 /**
  * 把群组配置里的 `blog` 小节写成一份临时 JSON 文件，交给子包原有的 loadSettings 读取。
  *
@@ -70,5 +73,11 @@ export const mountBlog: AgentMount = async context => {
     ...(context.groupConfigPath === undefined ? {} : { groupConfigPath: context.groupConfigPath }),
   })
 
-  return { tools: instance.tools, participant: instance.participant, dispose: instance.dispose }
+  return {
+    tools: instance.tools,
+    participant: instance.participant,
+    // Q4 口径：业务存储的运行期就绪探针交给群组的 per-agent 探针汇总。
+    ...(instance.health === undefined ? {} : { health: instance.health }),
+    dispose: instance.dispose,
+  }
 }

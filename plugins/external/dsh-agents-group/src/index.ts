@@ -69,6 +69,8 @@ async function loadAgent(manifest: AgentManifest): Promise<AgentMount | undefine
 async function errorHandlerOf(agentId: string) {
   switch (agentId) {
     case 'closedoff': return (await import('./agents/closedoff.ts')).closedoffErrorHandler
+    // blog：存储层稳定码 → 503/409/500（Q4 口径的 HTTP 错误映射）。
+    case 'blog': return (await import('./agents/blog.ts')).blogStorageErrorHandler
     default: return undefined
   }
 }
@@ -239,11 +241,11 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   ctx.effect(() => groupHttp.registerPublic({
     kind: 'exact',
     path: `${config.routePrefix}/ready`,
-    handler: (_request, response) => {
+    handler: async (_request, response) => {
       // 就绪探针无需登录，但认证模式不对时要如实报不就绪，不能假装正常。
       let ready = true
       try { groupAccess.ready() } catch { ready = false }
-      const state = readiness(mounted)
+      const state = await readiness(mounted)
       const ok = ready && state.ok
       response.writeHead(ok ? 200 : 503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
       response.end(JSON.stringify({ ok, authReady: ready, agents: state.agents }))
@@ -255,26 +257,43 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
    *
    * 由群组注册而不是子包自己注册：容器级探针是群组的职责，而且子包只知道自己 config 里的
    * 前缀，与注入的页面前缀可能不一致。声明与实现由同一处产生，才不会对不上。
+   *
+   * 提供了运行期 `health` 探针的 Agent（如 blog 的业务存储，Q4 口径）在每次探测时核实
+   * 当前状态；装载失败（`failure`）与运行期未就绪同口径 503。
    */
   for (const agent of mounted) {
     ctx.effect(() => groupHttp.registerPublic({
       kind: 'exact',
       path: agent.healthPath,
-      handler: (_request, response) => {
-        const ok = agent.failure === undefined
+      handler: async (_request, response) => {
+        let ok = agent.failure === undefined
+        let error = agent.failure
+        if (ok && agent.health !== undefined) {
+          try {
+            const state = await agent.health()
+            if (!state.ok) {
+              ok = false
+              error = state.error ?? 'Agent 未就绪'
+            }
+          } catch (caught) {
+            ok = false
+            error = caught instanceof Error ? caught.message : String(caught)
+          }
+        }
         response.writeHead(ok ? 200 : 503, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
         response.end(JSON.stringify({
           ok,
           id: agent.id,
           entryPath: agent.entryPath,
-          ...(agent.failure === undefined ? {} : { error: agent.failure }),
+          ...(error === undefined ? {} : { error }),
         }))
       },
     }))
   }
 
-  if (mounted.some(agent => agent.failure !== undefined)) {
-    const failed = mounted.filter(agent => agent.failure !== undefined).map(agent => agent.id)
+  const state = await readiness(mounted)
+  if (state.agents.some(agent => !agent.ready)) {
+    const failed = state.agents.filter(agent => !agent.ready).map(agent => agent.id)
     console.warn(`agents-group: 以下 Agent 未就绪：${failed.join('、')}`)
   }
 }

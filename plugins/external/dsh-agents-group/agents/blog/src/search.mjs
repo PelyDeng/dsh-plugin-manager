@@ -33,12 +33,12 @@ export function normalizeSearch(input={},now=Date.now()) {
   return {filters:f,timeZone:searchTimeZone,start,end}
 }
 
-export function searchDrafts(store,owner,input={},now=Date.now(),categories=[]) {
+export async function searchDrafts(storage,owner,input={},now=Date.now(),categories=[]) {
   const {filters:f,timeZone,start,end}=normalizeSearch(input,now)
   const categoryIds=categories.filter(c=>c.name===f.category).map(c=>c.id)
   const contains=(s,q)=>!q||s.toLowerCase().includes(q.toLowerCase())
   let unknownDateCount=0
-  const rows=store.db.prepare('SELECT data FROM drafts WHERE owner=?').all(owner).map(r=>JSON.parse(r.data)).filter(d=>{
+  const rows=(await storage.draftRecords(owner)).filter(d=>{
     if(f.status==='published')return false
     if(!(contains(d.title,f.query)||contains(d.text,f.query))||!contains(d.title,f.title)||!contains(d.text,f.content))return false
     if(f.category&&!d.categories.some(id=>categoryIds.includes(id)))return false

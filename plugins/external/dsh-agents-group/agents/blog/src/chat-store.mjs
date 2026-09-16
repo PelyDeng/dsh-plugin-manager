@@ -1,13 +1,28 @@
 import {randomUUID} from 'node:crypto'
+import {mkdirSync,chmodSync} from 'node:fs'
+import {dirname} from 'node:path'
+import {DatabaseSync} from 'node:sqlite'
 import {digest} from './store.mjs'
 import {invariant} from './settings.mjs'
 import {queryConversationIndex} from '@dsh-plugin-manager/plugin-kit'
 
-/** Ownership and operation index; messages remain in official Session logs. */
+/**
+ * Ownership and operation index; messages remain in official Session logs.
+ *
+ * 批 2 拆库后本库独立打开 blog.sqlite（索引 3 表 + participant 侧映射表），不再共享业务库：
+ * 旧文件缺业务表时索引功能完好。`pendingOperations` 改为进程内镜像（四耦合点之 2）——
+ * `pending` 由装载方注入（写路径维护 + 启动从业务存储恢复一次），满足 kit 的同步布尔契约。
+ */
 export class ChatStore {
-  constructor(store) {
-    this.store=store;this.db=store.db
-    this.db.exec(`CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,owner TEXT NOT NULL,requestId TEXT NOT NULL,updated INTEGER NOT NULL,data TEXT NOT NULL,UNIQUE(owner,requestId));
+  /** @param {string} path 索引库文件路径（':memory:' 为内存库）
+   *  @param {() => string[]} [pendingOperations] 待核对会话 id 的同步镜像读取（四耦合点之 2） */
+  constructor(path, pendingOperations = () => []) {
+    if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+    this.db = new DatabaseSync(path)
+    if (path !== ':memory:' && process.platform !== 'win32') chmodSync(path, 0o600)
+    this.pendingSource = pendingOperations
+    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
+      CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,owner TEXT NOT NULL,requestId TEXT NOT NULL,updated INTEGER NOT NULL,data TEXT NOT NULL,UNIQUE(owner,requestId));
       CREATE INDEX IF NOT EXISTS chat_owner ON conversations(owner,updated DESC);
       CREATE TABLE IF NOT EXISTS chat_requests(id TEXT PRIMARY KEY,owner TEXT NOT NULL,conversationId TEXT NOT NULL,requestId TEXT NOT NULL,inputHash TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(owner,requestId));
       CREATE TABLE IF NOT EXISTS chat_results(id TEXT PRIMARY KEY,owner TEXT NOT NULL,conversationId TEXT NOT NULL,requestId TEXT NOT NULL,operationId TEXT NOT NULL,data TEXT NOT NULL);`)
@@ -17,6 +32,7 @@ export class ChatStore {
     }
     this.db.exec("UPDATE conversations SET data=json_set(data,'$.removalState','failed') WHERE json_extract(data,'$.removalState')='pending'")
   }
+  close(){this.db.close()}
   id(value){invariant(typeof value==='string'&&/^[\w-]{8,100}$/.test(value),'请求标识无效');return value}
   create(owner,requestId,initial={}) {
     this.id(requestId)
@@ -29,7 +45,7 @@ export class ChatStore {
   record(owner,id){const row=this.db.prepare('SELECT data FROM conversations WHERE owner=? AND id=?').get(owner,id);invariant(row,'对话不存在或无权访问',404);return{removalState:'',...JSON.parse(row.data)}}
   mark(owner,id,removalState){const value=this.record(owner,id);value.removalState=removalState;if(removalState==='removed')value.deletedAt??=Date.now();this.db.prepare('UPDATE conversations SET data=? WHERE id=? AND owner=?').run(JSON.stringify(value),id,owner)}
   managed(owner,query,archived,busy){return queryConversationIndex(this.db,"SELECT id,json_extract(data,'$.title') AS title,updated AS updatedAt,json_extract(data,'$.deletedAt') AS deletedAt,COALESCE(json_extract(data,'$.removalState'),'') AS removalState FROM conversations WHERE owner=? AND json_extract(data,'$.ready')=1",[owner],query,archived,busy)}
-  pendingOperations(){return this.db.prepare("SELECT DISTINCT json_extract(data,'$.chat.conversationId') AS id FROM operations WHERE json_extract(data,'$.status') IN ('running','uncertain') OR (json_extract(data,'$.status')='prepared' AND json_extract(data,'$.expiresAt')>?)").all(Date.now()).map(row=>row.id).filter(Boolean)}
+  pendingOperations(){return this.pendingSource()}
   save(owner,id,patch){const old=this.get(owner,id),value={...old,...patch,id,owner,updatedAt:Date.now()};this.db.prepare('UPDATE conversations SET updated=?,data=? WHERE id=? AND owner=?').run(value.updatedAt,JSON.stringify(value),id,owner);return value}
   /** Automatic titles preserve manual names; trusted user renames can update them again. */
   syncTitle(id,title,manual=false,complete=false){
@@ -56,8 +72,10 @@ export class ChatStore {
       this.db.exec('COMMIT')
     }catch(error){this.db.exec('ROLLBACK');throw error}
   }
-  assertScope(owner,id){return typeof id==='string'&&id.startsWith('blog-chat-')?this.get(owner,id):this.store.get(owner,id)}
+  /** 会话路径的 scope 校验（blog-chat-* 前缀判定，索引侧只管会话；草稿路径由业务存储核验）。 */
+  assertScope(owner,id){invariant(typeof id==='string'&&id.startsWith('blog-chat-'),'会话标识无效');return this.get(owner,id)}
   request(owner,id){const row=this.db.prepare('SELECT data FROM chat_requests WHERE owner=? AND id=?').get(owner,id);invariant(row,'对话请求不存在或无权访问',404);return JSON.parse(row.data)}
+  hasRequest(owner,requestId){return this.db.prepare('SELECT id FROM chat_requests WHERE owner=? AND requestId=?').get(owner,requestId)!==undefined}
   requests(owner,conversationId,includeRemoved=false){includeRemoved?this.record(owner,conversationId):this.get(owner,conversationId);return this.db.prepare('SELECT data FROM chat_requests WHERE owner=? AND conversationId=? ORDER BY rowid').all(owner,conversationId).map(r=>JSON.parse(r.data))}
   start(owner,conversationId,requestId,input) {
     this.id(requestId);this.get(owner,conversationId)

@@ -263,6 +263,12 @@ export class BlogPgStorage {
     return JSON.parse(result.rows[0].data)
   }
 
+  /** 只读探测：同 (owner,caller,requestId) 的既有任务（jobs.mjs 的 429 门在 jobStart 前先看它）。 */
+  async jobLookup(owner, caller, requestId) {
+    const result = await this.run('SELECT data FROM blog_jobs WHERE owner=$1 AND caller=$2 AND request_id=$3', [owner, caller, requestId])
+    return result.rows[0] === undefined ? undefined : JSON.parse(result.rows[0].data)
+  }
+
   async jobUpdate(id, patch) {
     const result = await this.run('SELECT data FROM blog_jobs WHERE id=$1', [id])
     invariant(result.rows[0], '任务不存在', 404)
@@ -304,6 +310,12 @@ export class BlogPgStorage {
     return result.rows.map(r => JSON.parse(r.data)).filter(a => a.status !== 'removed')
   }
 
+  /** 按 id 读原始记录（含 removed；attachments.mjs 上传失败路径要复核当前状态）。 */
+  async attachmentRaw(id) {
+    const result = await this.run('SELECT data FROM blog_attachments WHERE id=$1', [id])
+    return result.rows[0] === undefined ? undefined : JSON.parse(result.rows[0].data)
+  }
+
   // ---------- 译文（reasoning-translation.ts 的 translations 表读写） ----------
 
   /** 最近一条已完成的译文留档（cacheKey+status 索引，rowid 序取最新 → seq DESC）。 */
@@ -339,6 +351,16 @@ export class BlogPgStorage {
     await this.run('UPDATE blog_operations SET data=$1 WHERE id=$2', [JSON.stringify(value), id])
   }
 
+  /**
+   * 条件状态占位（CAS）：仅当记录当前 status 仍是 `expected` 时写入 `value`。
+   * 异步化后 confirm 的互斥前奏会交错（原 SQLite 同步段的原子性消失），靠这一条
+   * 条件 UPDATE 保证并发下恰有一路把 prepared 翻成 running；败者按 0 行拒绝。
+   */
+  async operationClaimStatus(id, expected, value) {
+    const result = await this.run('UPDATE blog_operations SET data=$1 WHERE id=$2 AND data::jsonb->>\'status\'=$3', [JSON.stringify(value), id, expected])
+    return (result.rowCount ?? 0) === 1
+  }
+
   async operations(owner) {
     const result = await this.run('SELECT data FROM blog_operations WHERE owner=$1 ORDER BY seq', [owner])
     return result.rows.map(row => JSON.parse(row.data))
@@ -367,6 +389,21 @@ export class BlogPgStorage {
       }
     }
     return [...ids]
+  }
+
+  /**
+   * 有待核对的操作记录全量（B2-2b 接线新增）：进程内 pending 镜像启动恢复用。
+   * 与 pendingOperations() 同一过滤口径，但带完整记录，镜像才能在状态翻转时自行重算。
+   */
+  async pendingOperationRecords() {
+    const now = Date.now()
+    const result = await this.run('SELECT data FROM blog_operations')
+    const records = []
+    for (const row of result.rows) {
+      const op = JSON.parse(row.data)
+      if (['running', 'uncertain'].includes(op.status) || (op.status === 'prepared' && op.expiresAt > now)) records.push(op)
+    }
+    return records
   }
 
   // ---------- 生命周期 ----------

@@ -8,6 +8,8 @@
  * - `storage_auth`：认证或权限失败（口令错、库不存在、权限不足）；
  * - `storage_schema_missing`：结构缺失（表不存在）—— 由显式迁移工具补齐，不自动建表；
  * - `storage_schema_version`：结构版本不符 —— 未就绪即不服务；
+ * - `storage_unconfigured`：没有提供连接配置（B2-2b 接线新增）—— blog 以未就绪口径 503，
+ *   消息说明两条配置路径；与其他可用性故障一样不触发群组级失败；
  * - `storage_timeout`：语句超时或锁等待超时（事务已中止，可安全重试）；
  * - `storage_constraint`：唯一等约束冲突（携带约束名），按业务语义映射；
  * - `storage_transaction`：可重试事务错误（序列化失败/死锁），调用方有限重试；
@@ -23,7 +25,7 @@ import { BlogError } from '../settings.mjs'
 /** 存储层稳定错误码。 */
 export const STORAGE_ERROR_CODES = [
   'storage_unreachable', 'storage_auth', 'storage_schema_missing', 'storage_schema_version',
-  'storage_timeout', 'storage_constraint', 'storage_transaction', 'storage_closed', 'storage_unknown',
+  'storage_unconfigured', 'storage_timeout', 'storage_constraint', 'storage_transaction', 'storage_closed', 'storage_unknown',
 ]
 
 /** 存储层故障；`code` 是跨实现的稳定码。 */

@@ -1,13 +1,11 @@
 /** Derived Chinese reading copy. The official conversation log is never changed. */
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdirSync, chmodSync } from 'node:fs'
-import { dirname } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import type { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, ReasoningEffortId, BlockAssembler } from '@deepseek-ai/dsh-llm'
 import * as llm from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, actorKey, onRevoked, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import type { BlogPgStorage } from './storage/pg.mjs'
 
 export function needsChineseTranslation(text: string): boolean {
   const prose = text.replace(/```[\s\S]*?```|`[^`]*`|https?:\/\/\S+/g, '')
@@ -50,7 +48,8 @@ export function reasoningOriginal(events: readonly SessionEvent[], sourceId: str
 interface Options {
   ctx: Context
   pluginId: string
-  path: string
+  /** 译文留档存业务库（批 2 迁 PG：不再打开 reasoning-translations.sqlite）。 */
+  storage: BlogPgStorage
   access: { assert(actor: Actor): void }
   selectModel(signal: AbortSignal): Promise<{provider: string;model: string}> | {provider: string;model: string}
   readOriginal(actor: Actor, target: ReasoningTarget): Promise<{text: string;partial: boolean}>
@@ -80,18 +79,11 @@ interface Entry {
 }
 
 export class ReasoningTranslations {
-  private db: DatabaseSync
   private active = new Map<string, Entry>()
   private closed = false
   private timer: ReturnType<typeof setInterval>
   private off: () => void
   constructor(private options: Options) {
-    if (options.path !== ':memory:') mkdirSync(dirname(options.path), {recursive: true, mode: 0o700})
-    this.db = new DatabaseSync(options.path)
-    if (options.path !== ':memory:' && process.platform !== 'win32') chmodSync(options.path, 0o600)
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
-      CREATE TABLE IF NOT EXISTS translations(id TEXT PRIMARY KEY, cacheKey TEXT NOT NULL, owner TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL);
-      CREATE INDEX IF NOT EXISTS translation_cache ON translations(cacheKey,status);`)
     const check = () => { for (const entry of this.active.values()) { try { this.check(entry) } catch { entry.controller.abort() } } }
     this.timer = setInterval(check, 1000); this.timer.unref()
     this.off = onRevoked(options.ctx, check)
@@ -112,9 +104,9 @@ export class ReasoningTranslations {
     const sourceHash = createHash('sha256').update(original.text).digest('hex')
     if (!needsChineseTranslation(original.text)) return {status:'native',text:original.text,partial:original.partial,sourceHash}
     const owner = actorKey(actor), key = createHash('sha256').update(JSON.stringify([owner,target.conversationId,target.sourceId,sourceHash,'zh-v1'])).digest('hex')
-    const saved = this.db.prepare("SELECT data FROM translations WHERE cacheKey=? AND status='translated' ORDER BY rowid DESC LIMIT 1").get(key)
+    const saved = await this.options.storage.translationLatest(key)
     if (saved) {
-      const audit = JSON.parse(String(saved.data)), result = audit.result
+      const audit = saved, result = audit.result
       try { return {...result,text:audit.textNormalized === true ? result.text : translationText(result.text),cached:true} }
       catch (error) { if (!(error instanceof AccessError)) throw error }
     }
@@ -144,11 +136,11 @@ export class ReasoningTranslations {
   private async run(entry: Entry): Promise<ReadingCopy> {
     const startedAt=Date.now(),requestId=randomUUID(),timeout=setTimeout(()=>entry.controller.abort(),90000)
     const audit: Record<string,unknown>={requestId,conversationId:entry.target.conversationId,sourceId:entry.target.sourceId,sourceHash:entry.sourceHash,targetLanguage:'zh-CN',version:'zh-v1',startedAt,usage:null}
-    const write=(status:string)=>this.db.prepare('INSERT OR REPLACE INTO translations(id,cacheKey,owner,status,data) VALUES(?,?,?,?,?)').run(requestId,entry.key,entry.owner,status,JSON.stringify(audit))
+    const write=async(status:string)=>{await this.options.storage.translationWrite(requestId,entry.key,entry.owner,status,audit)}
     try {
       this.check(entry)
       const selected=await this.options.selectModel(entry.controller.signal)
-      this.check(entry);Object.assign(audit,selected);write('running')
+      this.check(entry);Object.assign(audit,selected);await write('running')
       const info=await this.options.ctx.llm.resolveModelInfo(selected.provider,selected.model,entry.controller.signal)
       this.check(entry)
       const off=info.reasoning?.efforts.some(e=>e.id==='off')
@@ -172,10 +164,10 @@ export class ReasoningTranslations {
       const generated=assembler.blocks().filter(b=>b.type==='text').map(b=>b.text).join(''),text=translationText(generated.trim())
       if(!finished||generated.length>64000||!text.trim()||!/[\p{Script=Han}]/u.test(text)||needsChineseTranslation(text))throw new AccessError(502,'未获得完整中文译文，请重试；原文仍可查看')
       const result: ReadingCopy={status:'translated',text,partial:entry.original.partial,sourceHash:entry.sourceHash,...selected,usage:audit.usage as Record<string,unknown>|null,elapsedMs:Date.now()-startedAt,createdAt:Date.now(),cached:false}
-      audit.result=result;audit.textNormalized=true;audit.endedAt=Date.now();write('translated');return result
+      audit.result=result;audit.textNormalized=true;audit.endedAt=Date.now();await write('translated');return result
     } catch(error) {
       audit.endedAt=Date.now();audit.error=entry.controller.signal.aborted?'cancelled':error instanceof AccessError?error.message:'译文请求失败'
-      write('failed')
+      await write('failed').catch(()=>{})
       if(error instanceof AccessError)throw error
       throw new AccessError(entry.controller.signal.aborted?499:502,entry.controller.signal.aborted?'译文请求已取消或超时；原文仍可查看':'中文译文生成失败，请稍后重试；原文仍可查看')
     } finally { clearTimeout(timeout) }
@@ -184,6 +176,5 @@ export class ReasoningTranslations {
     this.closed=true;clearInterval(this.timer);this.off()
     for(const entry of this.active.values())entry.controller.abort()
     await Promise.allSettled([...this.active.values()].map(entry=>entry.promise))
-    this.db.close()
   }
 }

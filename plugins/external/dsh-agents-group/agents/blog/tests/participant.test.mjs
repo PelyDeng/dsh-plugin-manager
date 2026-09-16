@@ -9,8 +9,8 @@ import { renderMarkdown } from '../web/markdown.js'
 
 const actor = Object.freeze({ namespace: 'user', userId: 'writer', sessionId: 'login-a' })
 
-function fixture(t) {
-  const store = new BlogStore(':memory:'), index = new ChatStore(store)
+async function fixture(t) {
+  const store = new BlogStore(':memory:'); await store.init(); const index = new ChatStore(':memory:')
   t.after(() => store.close())
   const f = { store, index, denied: false, auto: true, runs: 0, stops: 0, creates: 0, listeners: new Set(), messages: new Map(), active: new Map(), operations: [] }
   f.access = { assert(current) { assert.equal(current.namespace, 'user'); if (f.denied) throw new Error('登录或授权已失效') } }
@@ -68,7 +68,7 @@ function fixture(t) {
       }
     },
   }
-  f.provider = (routePrefix = '/blog') => createBlogParticipant({ access: f.access, chat: f.chat, index, store, routePrefix })
+  f.provider = (routePrefix = '/blog') => createBlogParticipant({ access: f.access, chat: f.chat, index, storage: store, routePrefix })
   return f
 }
 
@@ -77,7 +77,7 @@ function input(overrides = {}) {
 }
 
 test('reuses a durable mission conversation and original request idempotency without replaying another turn', async t => {
-  const f = fixture(t), progress = [], provider = f.provider()
+  const f = await fixture(t), progress = [], provider = f.provider()
   const first = await provider.run(input({ onProgress: value => progress.push(value) }))
   assert.equal(first.status, 'completed'); assert.equal(first.text, '本轮可显示的博客回答')
   assert.ok(progress.every(value => value.conversationId === first.conversationId))
@@ -91,7 +91,7 @@ test('reuses a durable mission conversation and original request idempotency wit
 
 test('successful retries return only committed answers for completed and external_pending results', async t => {
   for (const expected of ['completed', 'external_pending']) await t.test(expected, async t => {
-    const f = fixture(t); f.auto = false
+    const f = await fixture(t); f.auto = false
     const running = f.provider().run(input())
     await tick()
     const id = [...f.active.keys()][0]
@@ -117,15 +117,15 @@ test('successful retries return only committed answers for completed and externa
 
 test('failed and cancelled results retain interrupted text with an unfinished notice despite pending confirmation', async t => {
   for (const expected of ['failed', 'cancelled']) await t.test(expected, async t => {
-    const f = fixture(t), controller = new AbortController(); f.auto = false
+    const f = await fixture(t), controller = new AbortController(); f.auto = false
     const running = f.provider().run(input({ signal: controller.signal }))
     await tick()
     const id = [...f.active.keys()][0]
     f.messages.get(id).push({ id: 'attempt-1', role: 'assistant', text: '尚未完成的回答片段', interrupted: true, reasoning: 'PRIVATE_ATTEMPT_REASONING' })
     f.operations = [{ status: 'prepared', nonce: 'PRIVATE_CONFIRM_NONCE' }]
-    const owner = ownerKey(actor), turn = f.active.get(id), draft = f.store.create(owner)
-    f.store.propose(owner, draft.id, draft.revision, { title: '本轮留存候选', text: '尚需复核的候选正文' }, [])
-    f.index.result(owner, turn, 'candidate', f.store.get(owner, draft.id))
+    const owner = ownerKey(actor), turn = f.active.get(id), draft = await f.store.create(owner)
+    await f.store.propose(owner, draft.id, draft.revision, { title: '本轮留存候选', text: '尚需复核的候选正文' }, [])
+    f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
     if (expected === 'cancelled') controller.abort()
     else f.complete(id, '', 'interrupted')
     const result = await running
@@ -140,7 +140,7 @@ test('failed and cancelled results retain interrupted text with an unfinished no
 })
 
 test('rejects arbitrary user conversations, cross-mission references and other owners before sending', async t => {
-  const f = fixture(t), provider = f.provider()
+  const f = await fixture(t), provider = f.provider()
   const unrelated = f.chat.create(actor, 'ordinary-conversation')
   await assert.rejects(provider.run(input({ conversationId: unrelated.id })), /不属于当前协作任务/)
   assert.equal(f.runs, 0)
@@ -151,14 +151,14 @@ test('rejects arbitrary user conversations, cross-mission references and other o
 })
 
 test('pre-aborted requests create no conversation and install no subscription', async t => {
-  const f = fixture(t), controller = new AbortController(), progress = []; controller.abort()
+  const f = await fixture(t), controller = new AbortController(), progress = []; controller.abort()
   await assert.rejects(f.provider().run(input({ signal: controller.signal, onProgress: value => progress.push(value) })), { name: 'AbortError' })
   assert.equal(f.creates, 0); assert.equal(f.runs, 0); assert.equal(f.listeners.size, 0)
   assert.deepEqual(progress, [])
 })
 
 test('emits one bound native conversation link before sending and preserves its final artifact', async t => {
-  const f = fixture(t), progress = []; f.auto = false
+  const f = await fixture(t), progress = []; f.auto = false
   const running = f.provider('/native-blog/').run(input({ onProgress: value => {
     f.index.get(ownerKey(actor), value.conversationId)
     progress.push({ value, runs: f.runs })
@@ -176,7 +176,7 @@ test('emits one bound native conversation link before sending and preserves its 
 })
 
 test('过程按思考上报：完整覆盖，换段整段追加且不重复', async t => {
-  const f = fixture(t); f.auto = false
+  const f = await fixture(t); f.auto = false
   const progress = []
   const running = f.provider().run(input({ onProgress: value => progress.push(value) }))
   await tick()
@@ -206,7 +206,7 @@ test('过程按思考上报：完整覆盖，换段整段追加且不重复', as
 })
 
 test('只带推理的分片把正文基准归零，下一步的叙述整段保留', async t => {
-  const f = fixture(t); f.auto = false
+  const f = await fixture(t); f.auto = false
   const progress = []
   const running = f.provider().run(input({ onProgress: value => progress.push(value) }))
   await tick()
@@ -224,7 +224,7 @@ test('只带推理的分片把正文基准归零，下一步的叙述整段保�
 })
 
 test('交回的正文只取该回合最后一条，过程叙述不拼进材料', async t => {
-  const f = fixture(t); f.auto = false
+  const f = await fixture(t); f.auto = false
   const running = f.provider().run(input({ onProgress: () => {} }))
   await tick()
   const id = [...f.active.keys()][0]
@@ -247,7 +247,7 @@ test('交回的正文只取该回合最后一条，过程叙述不拼进材料',
 })
 
 test('没有 tail（本轮没跑完）时保留全部已生成内容，不丢东西', async t => {
-  const f = fixture(t); f.auto = false
+  const f = await fixture(t); f.auto = false
   const running = f.provider().run(input({ onProgress: () => {} }))
   await tick()
   const id = [...f.active.keys()][0]
@@ -266,7 +266,7 @@ test('没有 tail（本轮没跑完）时保留全部已生成内容，不丢东
 
 test('cancel or revoke before initial progress emits no conversation link or request', async t => {
   for (const action of ['cancel', 'revoke']) {
-    const f = fixture(t), controller = new AbortController(), progress = []
+    const f = await fixture(t), controller = new AbortController(), progress = []
     const subscribe = f.chat.subscribe
     f.chat.subscribe = (...args) => {
       const unsubscribe = subscribe(...args)
@@ -283,7 +283,7 @@ test('cancel or revoke before initial progress emits no conversation link or req
 
 test('cancel or revoke in the initial link callback cannot start a blog turn', async t => {
   for (const action of ['cancel', 'revoke']) {
-    const f = fixture(t), controller = new AbortController(), progress = []
+    const f = await fixture(t), controller = new AbortController(), progress = []
     await assert.rejects(f.provider().run(input({ signal: controller.signal, onProgress(value) {
       progress.push(value)
       if (action === 'cancel') controller.abort()
@@ -296,7 +296,7 @@ test('cancel or revoke in the initial link callback cannot start a blog turn', a
 })
 
 test('aborting during send preparation stops the accepted turn and cleans its subscription', async t => {
-  const f = fixture(t), controller = new AbortController(); f.auto = false
+  const f = await fixture(t), controller = new AbortController(); f.auto = false
   let release; f.sendGate = new Promise(resolve => { release = resolve })
   const running = f.provider().run(input({ signal: controller.signal }))
   await tick(); controller.abort(); release()
@@ -305,7 +305,7 @@ test('aborting during send preparation stops the accepted turn and cleans its su
 })
 
 test('aborting from a running progress callback does not lose its completion notification', async t => {
-  const f = fixture(t), controller = new AbortController(); f.auto = false
+  const f = await fixture(t), controller = new AbortController(); f.auto = false
   const result = await f.provider().run(input({ signal: controller.signal, onProgress(value) {
     if (value.text === '博客正在整理资料与回答') controller.abort()
   } }))
@@ -313,7 +313,7 @@ test('aborting from a running progress callback does not lose its completion not
 })
 
 test('cancellation waits for an asynchronously settled job after stop has already returned', async t => {
-  const f = fixture(t), controller = new AbortController(); f.auto = false
+  const f = await fixture(t), controller = new AbortController(); f.auto = false
   f.chat.stop = async (current, id) => {
     f.access.assert(current); f.index.get(ownerKey(current), id)
     const turn = f.active.get(id); f.stops++
@@ -331,7 +331,7 @@ test('cancellation waits for an asynchronously settled job after stop has alread
 })
 
 test('returns a native confirmation link without nonce, reasoning or remote operation snapshots', async t => {
-  const f = fixture(t); f.auto = false
+  const f = await fixture(t); f.auto = false
   const running = f.provider().run(input())
   await tick()
   const id = [...f.active.keys()][0]
@@ -347,13 +347,13 @@ test('returns a native confirmation link without nonce, reasoning or remote oper
 })
 
 test('an unapplied proposal is reported as external_pending and never as a saved native article', async t => {
-  const f = fixture(t); f.auto = false
+  const f = await fixture(t); f.auto = false
   const running = f.provider().run(input())
   await tick()
   const [id, turn] = [...f.active.entries()][0], owner = ownerKey(actor)
-  const draft = f.store.create(owner, { title: 'PRIVATE_BEFORE_TITLE', text: 'PRIVATE_BEFORE_TEXT' })
-  f.store.propose(owner, draft.id, draft.revision, { title: '实际候选标题', text: '真实候选正文与 Agent 自述不同', tags: ['PRIVATE_TAG'] }, [{ text: 'PRIVATE_SOURCE' }])
-  f.index.result(owner, turn, 'candidate', f.store.get(owner, draft.id))
+  const draft = await f.store.create(owner, { title: 'PRIVATE_BEFORE_TITLE', text: 'PRIVATE_BEFORE_TEXT' })
+  await f.store.propose(owner, draft.id, draft.revision, { title: '实际候选标题', text: '真实候选正文与 Agent 自述不同', tags: ['PRIVATE_TAG'] }, [{ text: 'PRIVATE_SOURCE' }])
+  f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
   f.complete(id, '已提出文章修改建议')
   const result = await running
   assert.equal(result.status, 'external_pending'); assert.equal(result.artifacts[0].kind, 'draft')
@@ -366,13 +366,13 @@ test('an unapplied proposal is reported as external_pending and never as a saved
 })
 
 test('a later progress question preserves earlier unresolved candidates and confirmation operations', async t => {
-  const f = fixture(t); f.auto = false
+  const f = await fixture(t); f.auto = false
   const provider = f.provider(), first = provider.run(input())
   await tick()
   const [id, turn] = [...f.active.entries()][0], owner = ownerKey(actor)
-  const draft = f.store.create(owner, { title: '仍待采用' })
-  f.store.propose(owner, draft.id, draft.revision, { text: '候选内容' }, [])
-  f.index.result(owner, turn, 'candidate', f.store.get(owner, draft.id))
+  const draft = await f.store.create(owner, { title: '仍待采用' })
+  await f.store.propose(owner, draft.id, draft.revision, { text: '候选内容' }, [])
+  f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
   f.complete(id)
   assert.equal((await first).status, 'external_pending')
   f.auto = true
@@ -386,13 +386,13 @@ test('a later progress question preserves earlier unresolved candidates and conf
 })
 
 test('actual candidate paragraphs and headings render readably without JSON escapes in collaboration details', async t => {
-  const f = fixture(t); f.auto = false
+  const f = await fixture(t); f.auto = false
   const running = f.provider().run(input())
   await tick()
-  const [id, turn] = [...f.active.entries()][0], owner = ownerKey(actor), draft = f.store.create(owner)
+  const [id, turn] = [...f.active.entries()][0], owner = ownerKey(actor), draft = await f.store.create(owner)
   const body = '## 数据来源\n\n这是实际候选的第一段。\n\n第二段包含 "引号" 和 C:\\reports。\n\n- 本页 2 条样例\n- 全量未知\n\n<script>不能执行</script>'
-  f.store.propose(owner, draft.id, draft.revision, { title: '候选标题 "样例"', text: body }, [])
-  f.index.result(owner, turn, 'candidate', f.store.get(owner, draft.id))
+  await f.store.propose(owner, draft.id, draft.revision, { title: '候选标题 "样例"', text: body }, [])
+  f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
   f.complete(id, 'Agent 的概述不能代替候选正文')
   const result = await running, html = renderMarkdown(result.text)
   assert.ok(result.text.includes(body), 'candidate body must remain complete and unmodified')
@@ -407,17 +407,17 @@ test('actual candidate paragraphs and headings render readably without JSON esca
 
 test('only the current unapplied candidate of the requested turn is forwarded', async t => {
   for (const action of ['replace', 'apply', 'discard']) await t.test(action, async t => {
-    const f = fixture(t); f.auto = false
+    const f = await fixture(t); f.auto = false
     const running = f.provider().run(input())
     await tick()
-    const [id, turn] = [...f.active.entries()][0], owner = ownerKey(actor), draft = f.store.create(owner)
-    const first = f.store.propose(owner, draft.id, draft.revision, { text: '旧候选不应转交' }, [])
-    f.index.result(owner, turn, 'candidate', f.store.get(owner, draft.id))
+    const [id, turn] = [...f.active.entries()][0], owner = ownerKey(actor), draft = await f.store.create(owner)
+    const first = await f.store.propose(owner, draft.id, draft.revision, { text: '旧候选不应转交' }, [])
+    f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
     if (action === 'replace') {
-      f.store.propose(owner, draft.id, draft.revision, { text: '同轮替换后的实际候选' }, [], first.id)
-      f.index.result(owner, turn, 'candidate', f.store.get(owner, draft.id))
-    } else if (action === 'apply') f.store.applyProposal(owner, draft.id, draft.revision, first.id, ['text'])
-    else f.store.discardProposal(owner, draft.id, draft.revision, first.id)
+      await f.store.propose(owner, draft.id, draft.revision, { text: '同轮替换后的实际候选' }, [], first.id)
+      f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
+    } else if (action === 'apply') await f.store.applyProposal(owner, draft.id, draft.revision, first.id, ['text'])
+    else await f.store.discardProposal(owner, draft.id, draft.revision, first.id)
     f.complete(id)
     const result = await running
     assert.doesNotMatch(result.text, /旧候选不应转交/)
@@ -429,16 +429,16 @@ test('only the current unapplied candidate of the requested turn is forwarded', 
 
 test('multiple current draft candidates are deduplicated and forwarded together or explicitly all omitted', async t => {
   for (const oversized of [false, true]) await t.test(oversized ? 'oversized list' : 'full list', async t => {
-    const f = fixture(t); f.auto = false
+    const f = await fixture(t); f.auto = false
     const running = f.provider().run(input())
     await tick()
     const [id, turn] = [...f.active.entries()][0], owner = ownerKey(actor)
     const bodies = ['甲稿正文', oversized ? '乙稿正文'.repeat(20000) : '乙稿正文']
     for (const [i, body] of bodies.entries()) {
-      const draft = f.store.create(owner)
-      f.store.propose(owner, draft.id, draft.revision, { title: '候选标题' + i, text: body }, [])
-      f.index.result(owner, turn, 'candidate', f.store.get(owner, draft.id))
-      f.index.result(owner, turn, 'candidate', f.store.get(owner, draft.id))
+      const draft = await f.store.create(owner)
+      await f.store.propose(owner, draft.id, draft.revision, { title: '候选标题' + i, text: body }, [])
+      f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
+      f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
     }
     f.complete(id)
     const result = await running
@@ -470,14 +470,14 @@ test('long responses preserve status and disclose omissions within the collabora
     ['literal backslashes fit without JSON expansion', '公开回答', '\\'.repeat(40000), true, false],
     ['no candidate', '答'.repeat(70000), null, false],
   ]) await t.test(name, async t => {
-    const f = fixture(t); f.auto = false
+    const f = await fixture(t); f.auto = false
     const running = f.provider().run(input())
     await tick()
     const [id, turn] = [...f.active.entries()][0], owner = ownerKey(actor)
     if (body !== null) {
-      const draft = f.store.create(owner)
-      f.store.propose(owner, draft.id, draft.revision, { title: '需要核对的候选', text: body }, [])
-      f.index.result(owner, turn, 'candidate', f.store.get(owner, draft.id))
+      const draft = await f.store.create(owner)
+      await f.store.propose(owner, draft.id, draft.revision, { title: '需要核对的候选', text: body }, [])
+      f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
     }
     f.complete(id, answer)
     const result = await running
@@ -497,7 +497,7 @@ test('long responses preserve status and disclose omissions within the collabora
 })
 
 test('revocation during result read fails closed and removes the subscription', async t => {
-  const f = fixture(t)
+  const f = await fixture(t)
   let release, entered
   f.historyGate = new Promise(resolve => { release = resolve })
   const reading = new Promise(resolve => { entered = resolve }); f.historyEntered = entered
@@ -508,7 +508,7 @@ test('revocation during result read fails closed and removes the subscription', 
 })
 
 test('subscription revocation while running rejects instead of leaking a later answer', async t => {
-  const f = fixture(t); f.auto = false
+  const f = await fixture(t); f.auto = false
   const running = f.provider().run(input())
   await tick(); f.denied = true; f.emit([...f.active.keys()][0])
   await assert.rejects(running, /登录或授权已失效/)

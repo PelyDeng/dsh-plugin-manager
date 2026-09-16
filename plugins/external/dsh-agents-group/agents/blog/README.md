@@ -42,7 +42,7 @@
 
 `models.text`、`models.vision` 保留给文章编辑器的专用写作及识图任务，均只保存 provider/model 引用。模板使用 GLM-5.3 写作、GLM-5V-Turbo 看图。缺少智谱密钥明确提示，不悄悄替换。GLM-5.3 始终开启思考、路由默认 high；GLM-5V-Turbo 只发送支持的思考开关。每次输出上限为 8192 Token。选为框架默认的博客模型路由要求本 Bundle 保持安装。
 
-AI 任务由官方 Jobs controller 管理，并绑定实际执行任务的 Agent。文章编辑器每次写作建立独立 Agent；多轮对话则恢复同一个官方 Session，每轮结束后保存记录并释放 Agent。任务结果、用于防止重复执行的请求记录、候选稿和用户归属保存在本插件 SQLite 中。服务重启后，未完成任务会标记为中断，不会自动重新调用模型。
+AI 任务由官方 Jobs controller 管理，并绑定实际执行任务的 Agent。文章编辑器每次写作建立独立 Agent；多轮对话则恢复同一个官方 Session，每轮结束后保存记录并释放 Agent。任务结果、用于防止重复执行的请求记录、候选稿和用户归属保存在业务存储（PostgreSQL，经 `AGENTS_GROUP_PG_DSN` 或 `AGENTS_GROUP_PG_CONFIG` 配置）中。服务重启后，未完成任务会标记为中断，不会自动重新调用模型。
 
 对话全文保存在官方 Session 日志中。点赞、点踩及备注由官方 messageFeedback 校验版本；Token 用量采用官方 token-meter 的单轮统计，没有数据时显示“未提供”。分支保留完成轮次之前的消息；重新生成会在分支中追加新请求，继续关联原工作台文章，不回滚原文章。消息中的文章卡片保存当时的候选内容，不随正文变化；当前正文和候选能否应用，以编辑器为准。
 
@@ -210,4 +210,4 @@ python3 -m unittest discover -s plugins/external/dsh-agents-group/agents/blog/ba
 
 这些检查通过后，仍不能据此认定真实 Typecho/MySQL、宿主、模型、图床上传、定时触发、恢复或浏览器操作都正常；需要验收哪一项，就单独记录该项的实际结果。过程记录放在 Git 忽略的 `.local/dsh-agents-group/docs/`。
 
-中文译文接口 `POST /blog/reasoning-translation` 按当前身份读取所属会话的精确消息（或持久化 attempt）原文。成功结果按用户、会话、消息与原文摘要缓存，命中缓存仍校验权限。插件数据目录下 `reasoning-translations.sqlite` 保存派生译文与独立调用记录，现有停写备份的 `plugin-data.tar.gz` 一并收录；原官方会话日志不变。原文超过 32,000 字符、90 秒超时或模型未正常完成时保留原文并显示可重试错误。同一用户最多两条翻译并行，无需单独配置密钥。
+中文译文接口 `POST /blog/reasoning-translation` 按当前身份读取所属会话的精确消息（或持久化 attempt）原文。成功结果按用户、会话、消息与原文摘要缓存，命中缓存仍校验权限。派生译文与独立调用记录保存在业务存储（PostgreSQL）中；其备份由 PostgreSQL 侧自行管理，插件数据目录的 `plugin-data.tar.gz` 不再包含它。原官方会话日志不变。原文超过 32,000 字符、90 秒超时或模型未正常完成时保留原文并显示可重试错误。同一用户最多两条翻译并行，无需单独配置密钥。

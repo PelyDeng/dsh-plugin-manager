@@ -96,8 +96,8 @@ describe('就绪判定', () => {
     dispose: async () => {},
   }
 
-  it('只要有一个 Agent 就绪就算就绪 —— 避免一个 Agent 拖垮整组判定', () => {
-    const state = readiness([
+  it('只要有一个 Agent 就绪就算就绪 —— 避免一个 Agent 拖垮整组判定', async () => {
+    const state = await readiness([
       { ...base, id: 'closedoff', failure: '坏了' },
       { ...base, id: 'blog' },
     ])
@@ -106,16 +106,26 @@ describe('就绪判定', () => {
     expect(state.agents.find(a => a.id === 'blog')?.ready).toBe(true)
   })
 
-  it('全部失败时才不就绪', () => {
-    expect(readiness([{ ...base, id: 'closedoff', failure: '坏了' }]).ok).toBe(false)
+  it('全部失败时才不就绪', async () => {
+    expect((await readiness([{ ...base, id: 'closedoff', failure: '坏了' }])).ok).toBe(false)
   })
 
-  it('空群组不就绪：没有可用 Agent 时不应报正常', () => {
-    expect(readiness([]).ok).toBe(false)
+  it('空群组不就绪：没有可用 Agent 时不应报正常', async () => {
+    expect((await readiness([])).ok).toBe(false)
   })
 
-  it('明细里带上失败原因，便于运维定位', () => {
-    const state = readiness([{ ...base, id: 'closedoff', failure: '缺少 gateway 配置' }])
+  it('明细里带上失败原因，便于运维定位', async () => {
+    const state = await readiness([{ ...base, id: 'closedoff', failure: '缺少 gateway 配置' }])
     expect(state.agents[0]?.error).toBe('缺少 gateway 配置')
+  })
+
+  it('装载成功但运行期探针报未就绪时如实计入（blog 存储的 Q4 口径）', async () => {
+    const state = await readiness([
+      { ...base, id: 'closedoff' },
+      { ...base, id: 'blog', health: async () => ({ ok: false, error: '博客业务存储不可用（storage_unreachable）' }) },
+    ])
+    expect(state.ok).toBe(true)
+    expect(state.agents.find(a => a.id === 'blog')?.ready).toBe(false)
+    expect(state.agents.find(a => a.id === 'blog')?.error).toContain('storage_unreachable')
   })
 })

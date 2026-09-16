@@ -12,13 +12,12 @@ import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { agentResource } from '@dsh-agents-group/common'
-import { registerPlugin,registerConversations,AccessError,type Access,type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
+import { registerPlugin,registerConversations,AccessError,isAccessError,type Access,type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import type { ProtectedRoute } from '@dsh-plugin-manager/plugin-kit/http'
 import { loadSettings } from './settings.mjs'
-import { BlogStore } from './store.mjs'
+import { BlogApplication, PendingOperationsMirror } from './application.mjs'
 import { BlogClient,ImageClient,BackupClient } from './connectors.mjs'
 import { BlogJobs } from './jobs.mjs'
-import { BlogApplication } from './application.mjs'
 import { BlogAttachments, MAX_ATTACHMENT_BYTES } from './attachments.mjs'
 import { ChatStore } from './chat-store.mjs'
 import { BlogChat } from './chat.mjs'
@@ -26,11 +25,64 @@ import { createBlogParticipant } from './participant.ts'
 import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
 import {selectBlogModel} from './models.mjs'
 import {ReasoningTranslations,reasoningOriginal} from './reasoning-translation.ts'
+import { resolveStorageDsn } from './storage/dsn.mjs'
+import { StorageError } from './storage/errors.mjs'
+import { BlogPgStorage } from './storage/pg.mjs'
 import type { Config } from './config.ts'
 export { Config } from './config.ts'
 /** 同 closedoff 的约定：适配层需要类型名 `PluginConfig`。 */
 export type { Config as PluginConfig } from './config.ts'
 export const name='blog'
+
+/** 存储层故障到 HTTP 的映射（对齐管家 butler-console 的 §3 错误分类层）。 */
+const STORAGE_STATUS: Record<string,{status:number,message?:string}> = {
+  storage_unreachable: { status: 503 },
+  storage_auth: { status: 503 },
+  storage_schema_missing: { status: 503 },
+  storage_schema_version: { status: 503 },
+  storage_unconfigured: { status: 503 },
+  storage_timeout: { status: 503 },
+  storage_closed: { status: 503 },
+  storage_transaction: { status: 503 },
+  storage_constraint: { status: 409 },
+  storage_unknown: { status: 500, message: '服务处理请求失败' },
+}
+
+/**
+ * blog 路由的 HTTP 错误渲染（群组经 `onError` 注入 createPluginHttp）。
+ *
+ * 存储层故障按稳定码归类：可用性类 503、约束冲突 409、未知 500，稳定码进响应体；
+ * 其余错误保持 kit 默认渲染（AccessError 原状态、未知 500），对外契约不变。
+ */
+export function blogStorageErrorHandler(response: ServerResponse, error: unknown): void {
+  const known = isAccessError(error)
+  if (!(error instanceof StorageError) && !known) {
+    console.error('agents-group/blog: 请求处理失败', error)
+    response.writeHead(500, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'})
+    response.end(JSON.stringify({error:'请求处理失败'}))
+    return
+  }
+  if (!(error instanceof StorageError)) {
+    response.writeHead((error as {status:number}).status, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'})
+    response.end(JSON.stringify({error:(error as Error).message}))
+    return
+  }
+  const mapped = STORAGE_STATUS[error.code] ?? STORAGE_STATUS.storage_unknown!
+  if (mapped.status >= 500) console.error('agents-group/blog: 存储请求失败', error)
+  response.writeHead(mapped.status, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'})
+  response.end(JSON.stringify({error:mapped.message ?? error.message,code:error.code}))
+}
+
+/** 未配置连接时占位的业务存储：任何读写都以 `storage_unconfigured` 拒绝（blog 未就绪，Q4）。 */
+function unconfiguredBusinessStorage(hint: string): BlogPgStorage {
+  const reject = () => { throw new StorageError('storage_unconfigured', `博客业务存储未就绪：${hint}`) }
+  return new Proxy({}, {
+    get(_target, property) {
+      if (property === 'then') return undefined // 不当 thenable 被 await 意外消费
+      return reject
+    },
+  }) as unknown as BlogPgStorage
+}
 
 /**
  * 本子包需要宿主提供的服务。
@@ -84,14 +136,20 @@ async function body(req:IncomingMessage,max:number){const chunks:Buffer[]=[];let
 const blogResource = (relative: string): URL => agentResource(import.meta.url, 'blog', relative)
 
 /**
- * 装载博客工作台，返回群组用于卸载的释放函数与本次注册的工具条目。
+ * 装载博客工作台，返回群组用于卸载的释放函数、本次注册的工具条目、协作参与者与就绪探针。
  *
- * `access` 与 `http` 由群组注入：一个 Agent 只应有一套鉴权实例。业务逻辑未作改动。
+ * `access` 与 `http` 由群组注入：一个 Agent 只应有一套鉴权实例。
+ *
+ * 业务存储只有 PostgreSQL 一种（Q4 口径）：缺配置或 init 失败都算 **blog 未就绪**——
+ * 装载继续（页面、目录条目、参与者照常注册，探针 503），业务读写一律以稳定码拒绝，
+ * 绝不静默回退 SQLite，也不把失败抛给群组拖累其他 Agent。`health` 供群组的
+ * per-agent 就绪探针在运行期核实 PG 此刻可达。
  */
 export async function mount(mountContext:AgentMountContext):Promise<{
   dispose():Promise<void>
   tools:readonly ToolDescriptor[]
   participant:AgentParticipant
+  health():Promise<{ok:boolean;error?:string}>
 }>{
   const {ctx,access,http}=mountContext
   const config=mountContext.config
@@ -99,18 +157,39 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   // 若把群组配成 standalone，它会以「认证不可用」如实报错，而不是被误判成装载失败。
   const settings=loadSettings(config.runtimeConfig||process.env.BLOG_CONFIG_PATH||'')
   const root=config.dataPath||dshHomePath('plugins','blog')
-  const store=new BlogStore(join(root,'blog.sqlite'))
+  // ---- 业务存储（PG；Q4：无配置=blog 未就绪而非抛群组） ----
+  const dsnSource=await resolveStorageDsn(process.env,dshHomePath('plugins','agents-group','storage.json'),(path:string)=>readFile(path,'utf8'))
+  const unconfiguredHint='设置环境变量 AGENTS_GROUP_PG_DSN，或在私有配置文件（环境变量 AGENTS_GROUP_PG_CONFIG 指定路径，缺省 <DSH 主目录>/plugins/agents-group/storage.json）里写 {"dsn":"postgres://…"}。不会回退其他存储后端。'
+  const storage=dsnSource?new BlogPgStorage(dsnSource.dsn):unconfiguredBusinessStorage(`缺少 PostgreSQL 存储配置。${unconfiguredHint}`)
+  if(dsnSource){
+    try{await storage.init()}
+    catch(error){
+      // init 失败同样是 blog 未就绪：探针与业务端点都会如实反映，群组照常装载。
+      console.warn(`agents-group/blog: 业务存储未就绪（${error instanceof Error?error.message:String(error)}）`)
+    }
+  }
+  const health=async():Promise<{ok:boolean;error?:string}>=>{
+    if(!dsnSource)return{ok:false,error:`博客业务存储未配置。${unconfiguredHint}`}
+    try{await storage.readyProbe();return{ok:true}}
+    catch(error){
+      const code=error instanceof StorageError?error.code:'storage_unknown'
+      return{ok:false,error:`博客业务存储不可用（${code}）：${error instanceof Error?error.message:String(error)}`}
+    }
+  }
+  // ---- 索引库独立开库；pending 镜像由业务操作写路径维护、启动从 PG 恢复一次 ----
+  const pending=new PendingOperationsMirror()
+  if(dsnSource)await pending.restore(storage).catch(error=>console.warn('agents-group/blog: 恢复待核对操作镜像失败',error))
+  const conversations=new ChatStore(join(root,'blog.sqlite'),()=>pending.ids())
   const blog=new BlogClient(settings.blog),images=new ImageClient(settings.image,join(root,'image-token.json')),backups=new BackupClient(settings.backup,access)
-  const conversations=new ChatStore(store)
-  const attachments=new BlogAttachments(ctx,access,store,(owner:string,id:string)=>conversations.assertScope(owner,id))
-  const jobs=new BlogJobs(ctx,access,store,blog,attachments,config.turnTimeoutMs,settings.models,mountContext.category,mountContext.allowedTools)
-  const app=new BlogApplication(store,access,blog,images,backups,jobs,attachments)
+  const attachments=new BlogAttachments(ctx,access,storage,(owner:string,id:string)=>id.startsWith('blog-chat-')?conversations.assertScope(owner,id):storage.get(owner,id))
+  const jobs=new BlogJobs(ctx,access,storage,blog,attachments,config.turnTimeoutMs,settings.models,mountContext.category,mountContext.allowedTools)
+  const app=new BlogApplication(storage,access,blog,images,backups,jobs,attachments,pending)
   const {chatSdk}=await import(blogResource('runtime/chat-sdk.mjs').href)
-  const chat=new BlogChat(ctx,access,store,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)
+  const chat=new BlogChat(ctx,access,storage,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)
   // 群组直接把这个实例桥接成牛马大总管的执行入口，不再经过额外的发现事件。
-  const participant=createBlogParticipant({access,chat,index:conversations,store,routePrefix:config.routePrefix})
+  const participant=createBlogParticipant({access,chat,index:conversations,storage,routePrefix:config.routePrefix})
   ctx.effect(()=>registerConversations(ctx,chat.provider))
-  const translations=new ReasoningTranslations({ctx,pluginId:'blog',path:join(root,'reasoning-translations.sqlite'),access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
+  const translations=new ReasoningTranslations({ctx,pluginId:'blog',storage,access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
   const manifest=JSON.parse(await readFile(blogResource('package.json'),'utf8'))
   ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],category:'agents',tools:jobs.chatTools}))
   for(const [suffix,file,mime] of [['','web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],['/style.css','web/style.css','text/css'],['/writing.css','web/writing.css','text/css'],['/chat-base.css','web/chat-base.css','text/css'],['/chat-theme.css','web/chat-theme.css','text/css'],...['chevron-down','copy','check','like','dislike','branch','database','clock','think','api','send','user','chat','stop'].map(name=>[`/media/icon-${name}.svg`,`web/media/icon-${name}.svg`,'image/svg+xml']),['/icons.svg','web/icons.svg','image/svg+xml']] as const){
@@ -146,7 +225,7 @@ export async function mount(mountContext:AgentMountContext):Promise<{
     const args=input.args
     let result
     switch(input.action){
-      case 'chat-create':result=chat.create(actor,args.requestId);break
+      case 'chat-create':result=await chat.create(actor,args.requestId);break
       case 'chat-list':result=chat.list(actor,args.offset??0,args.query??'');break
       case 'chat-models':result=await chat.models(actor,args.conversationId);break
       case 'chat-update':result=await chat.mutate(actor,args);break
@@ -195,7 +274,7 @@ export async function mount(mountContext:AgentMountContext):Promise<{
     if(req.method!=='GET')throw new AccessError(405,'只支持 GET')
     const query=new URL(req.url!,'http://localhost').searchParams
     const file=await attachments.original(actor,query.get('draftId'),query.get('id'));access.assert(actor)
-    const record=attachments.get(actor,query.get('draftId'),query.get('id'))
+    const record=await attachments.get(actor,query.get('draftId'),query.get('id'))
     const inline=query.get('inline')==='1'&&record.status==='ready'&&record.image&&['image/png','image/jpeg','image/webp','image/gif'].includes(record.kind)
     res.writeHead(200,{'content-type':inline?record.kind:'application/octet-stream','content-disposition':`${inline?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name)}`,'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"});res.end(file.bytes)
   }}))
@@ -205,9 +284,14 @@ export async function mount(mountContext:AgentMountContext):Promise<{
     tools: jobs.chatTools,
     // 参与者交给群组桥接成牛马大总管的执行入口。
     participant,
+    // Q4 口径的就绪探针：群组的 healthPath 与 /ready 汇总据此如实反映 blog 状态。
+    health,
     dispose: async () => {
-      // 释放顺序与创建相反，与迁移前保持一致。
-      await translations.close(); await chat.close(); await jobs.close(); await attachments.close(); store.close()
+      // 释放顺序与创建相反，与迁移前保持一致；业务存储与索引库句柄都纳入释放链
+      // （索引库拆库后独立开库，句柄泄漏会以 database is locked 或目录占用暴露）。
+      await translations.close(); await chat.close(); await jobs.close(); await attachments.close()
+      try{conversations.close()}catch{/* 未开库或已关闭 */}
+      try{await storage.close()}catch{/* 未配置占位没有可关闭的池 */}
     },
   }
 }
