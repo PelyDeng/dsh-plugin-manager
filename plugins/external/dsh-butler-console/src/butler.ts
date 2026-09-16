@@ -2211,7 +2211,9 @@ export class ButlerConsole {
     if (state === undefined || !this.thinkings.has(sessionKey)) return
     state.raw += delta
     if (state.timer !== undefined) return
-    state.timer = setTimeout(() => { state.timer = undefined; this.flushThinking(sessionKey, false) }, THINKING_INTERVAL_MS)
+    // 计时器用完就删掉键：`exactOptionalPropertyTypes` 下不能给可选属性赋 undefined，
+    // 语义上也是「这个间隔已经结清」，不是「有一个值为 undefined 的计时器」。
+    state.timer = setTimeout(() => { delete state.timer; this.flushThinking(sessionKey, false) }, THINKING_INTERVAL_MS)
   }
 
   /** 发布一次思考快照；与上次相同就跳过，避免无意义的重复事件。 */
@@ -2219,7 +2221,7 @@ export class ButlerConsole {
     const publish = this.thinkings.get(sessionKey)
     const state = this.thinkingState.get(sessionKey)
     if (publish === undefined || state === undefined) return
-    if (state.timer !== undefined) { clearTimeout(state.timer); state.timer = undefined }
+    if (state.timer !== undefined) { clearTimeout(state.timer); delete state.timer }
     const snapshot = thinkingSnapshot(state.raw, done)
     if (snapshot === '' || snapshot === state.published) return
     state.published = snapshot
