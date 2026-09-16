@@ -3,6 +3,54 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  postgres-contracts:
+    # PostgreSQL 门控契约测试（无 DSN 时自动跳过的那批）在真实 PG 上跑一遍。
+    # 独立 job 的原因：service 容器只在 Linux runner 可用，现有三系统矩阵保持原样。
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      BUTLER_TEST_PG_DSN: postgresql://postgres:ci@127.0.0.1:5432/butler_test
+      AGENTS_GROUP_TEST_PG_DSN: postgresql://postgres:ci@127.0.0.1:5432/agents_group_test
+      AGENTS_GROUP_MIGRATE_PG_DSN: postgresql://postgres:ci@127.0.0.1:5432/agents_group_mig
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm install --global pnpm@11.19.0
+      - run: pnpm install --frozen-lockfile
+      - name: Create test databases
+        run: |
+          for db in butler_test agents_group_test agents_group_mig; do
+            psql "postgresql://postgres:ci@127.0.0.1:5432/postgres" -v ON_ERROR_STOP=1 -c "CREATE DATABASE $db"
+          done
+      - name: Butler PG contracts
+        # storage-postgres 与 acceptance 共用 butler_test 且各自重建 schema，必须串行。
+        run: pnpm --dir plugins/external/dsh-butler-console exec vitest run --no-file-parallelism tests/storage-postgres.smoke.test.ts tests/acceptance-pg-contract.test.ts
+      - name: Group PG contracts
+        run: pnpm --dir plugins/external/dsh-agents-group exec vitest run tests/migrate-blog-storage.test.ts
+      - name: Blog PG contracts
+        run: node --test plugins/external/dsh-agents-group/agents/blog/tests/pg-smoke.test.mjs
   public-workspace:
     strategy:
       fail-fast: false
