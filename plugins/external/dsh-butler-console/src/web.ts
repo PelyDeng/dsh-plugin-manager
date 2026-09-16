@@ -163,13 +163,13 @@ const AVATAR_TYPES: Record<string, string> = {
  */
 async function rawBody(request: IncomingMessage, limit: number): Promise<Buffer> {
   const declared = Number(request.headers['content-length'] ?? '0')
-  if (Number.isFinite(declared) && declared > limit) throw new HttpError(413, '图片太大了', 'payload_too_large')
+  if (Number.isFinite(declared) && declared > limit) throw new HttpError(413, '图片超出大小限制', 'payload_too_large')
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array)
     size += buffer.length
-    if (size > limit) throw new HttpError(413, '图片太大了', 'payload_too_large')
+    if (size > limit) throw new HttpError(413, '图片超出大小限制', 'payload_too_large')
     chunks.push(buffer)
   }
   if (size === 0) throw new HttpError(400, '没有收到图片内容', 'invalid_body')
@@ -770,7 +770,7 @@ export async function installWeb(
       const subtaskId = stringField(payload, 'subtaskId', 40)
       const decideByAgent = payload.decideByAgent === true
       const text = decideByAgent ? '' : stringField(payload, 'text', config.maxMessageChars).trim()
-      if (!decideByAgent && text === '') throw new HttpError(400, '请先写点内容，或者让它自己拿主意', 'reply_text_missing')
+      if (!decideByAgent && text === '') throw new HttpError(400, '请输入内容，或留空让管家决定', 'reply_text_missing')
 
       access.assert(actor)
       const started = await console_.startReply({

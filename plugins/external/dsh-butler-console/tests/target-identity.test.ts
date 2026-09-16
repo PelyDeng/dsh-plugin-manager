@@ -317,14 +317,14 @@ describe('部分完成的结论由后端统一给出', () => {
     return { f, taskId }
   }
 
-  it('一条成、一条败给的是 partial，不是「活干完了」', async () => {
+  it('一条成、一条败给的是 partial，不是「已完成」', async () => {
     const { f, taskId } = await twoWork(executorByGoal({ 乙: { status: 'failed', summary: '乙炸了' } }))
     const record = f.store.task(actor, taskId)!
     expect(record.state).toBe('partial')
     // 失败的那条仍然如实写着，用户能看出差在哪儿。
     expect(record.subtasks.map(item => item.state)).toEqual(['succeeded', 'failed'])
     expect(record.finishedAt).not.toBeNull()
-    // 计数也分开：partial 不该混进「已交差」。
+    // 计数也分开：partial 不该混进「已完成」。
     expect(f.store.counts(actor).partial).toBe(1)
     expect(f.store.counts(actor).completed).toBe(0)
     await f.settle()

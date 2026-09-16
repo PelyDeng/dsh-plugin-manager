@@ -4,46 +4,46 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
-<title>派活小本本 · 牛马大总管群聊</title>
+<title>牛马台账 · 大总管群聊</title>
 <link rel="stylesheet" href="/butler/assets/style.css">
 </head>
 <body data-drawer="closed" data-sidebar="closed">
 <div class="shell">
 
   <header class="topbar">
-    <button type="button" class="btn btn--ghost sidebar-toggle" id="sidebar-toggle" aria-label="打开派活记录" aria-expanded="false">☰</button>
+    <button type="button" class="btn btn--ghost sidebar-toggle" id="sidebar-toggle" aria-label="打开任务记录" aria-expanded="false">☰</button>
     <span class="topbar__brand">
       <span class="topbar__crown" aria-hidden="true">⭐</span>
-      <h1>派活小本本</h1>
+      <h1>牛马台账</h1>
     </span>
     <span class="topbar__status"><span class="dot dot--online" aria-hidden="true"></span><span id="top-status">已上线</span></span>
     <span class="spacer"></span>
     <span class="identity" id="identity"></span>
-    <button type="button" class="btn btn--ghost drawer-toggle" id="drawer-toggle" aria-label="打开牛马档案" aria-expanded="false">🐮</button>
+    <button type="button" class="btn btn--ghost drawer-toggle" id="drawer-toggle" aria-label="打开成员档案" aria-expanded="false">🐮</button>
   </header>
 
   <div class="columns">
 
-    <aside class="column column--left paper" id="left-panel" tabindex="-1" aria-label="派活记录">
+    <aside class="column column--left paper" id="left-panel" tabindex="-1" aria-label="任务记录">
       <div class="left__top">
         <div class="brand">
           <svg class="brand__badge" viewBox="0 0 34 32" aria-hidden="true">
             <path d="M17 2.6 C 18 6.2, 19 8.4, 21.4 9.6 C 24.2 10.8, 27.4 10.6, 30.8 10 C 28.6 12.8, 27.2 15, 26.8 17.4 C 26.4 19.8, 27.2 22.4, 28.8 25.4 C 25.6 24.4, 23 24.2, 20.6 25.2 C 18.2 26.2, 16.4 28.2, 14.6 30.4 C 14.2 27, 13.4 24.6, 11.6 22.8 C 9.8 21, 7.2 20, 3.6 19.6 C 6.6 17.6, 8.6 15.6, 9.6 13.2 C 10.6 10.8, 10.4 8, 9.4 4.8 C 12.4 6.4, 14.8 6.8, 17 2.6 Z" fill="#ffb703" stroke="#4a423a" stroke-width="1.7" stroke-linejoin="round"/>
           </svg>
-          <h2 class="brand__title">派活小本本</h2>
+          <h2 class="brand__title">牛马台账</h2>
           <svg class="brand__wave" viewBox="0 0 150 8" preserveAspectRatio="none" aria-hidden="true">
             <path d="M2 5 C 15 1, 28 8, 42 4 S 70 1, 84 5 S 112 8, 126 4 S 142 2, 148 5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
           </svg>
           <div class="left__brandline" id="crew-line">—</div>
         </div>
-        <button type="button" class="btn btn--primary btn--chunky" id="new-chat">＋ 派活</button>
-        <label class="visually-hidden" for="chat-search">搜索派活记录</label>
-        <input type="search" id="chat-search" class="doodle-input" placeholder="找找派过什么活" autocomplete="off">
-        <h2 class="section-title">我的派活记录</h2>
+        <button type="button" class="btn btn--primary btn--chunky" id="new-chat">＋ 新建任务</button>
+        <label class="visually-hidden" for="chat-search">搜索任务记录</label>
+        <input type="search" id="chat-search" class="doodle-input" placeholder="搜索任务记录" autocomplete="off">
+        <h2 class="section-title">任务记录</h2>
       </div>
       <div class="left__list" id="chat-list"></div>
       <div class="crew">
-        <h2 class="section-title">我的牛马</h2>
+        <h2 class="section-title">我的成员</h2>
         <div class="crew__faces" id="crew-faces"></div>
         <div class="crew__line" id="crew-note">—</div>
       </div>
@@ -76,9 +76,9 @@
             <path d="M8 6.2 C 8.6 5, 8.2 4.2, 7.6 3.2 M12.6 6 C 13.2 4.8, 12.9 3.9, 12.2 3 M17 6.2 C 17.6 5.1, 17.3 4.2, 16.7 3.3" fill="none" stroke="#4a423a" stroke-width="1.4" stroke-linecap="round"/>
           </svg>
           <label class="visually-hidden" for="message-input">说句话</label>
-          <textarea id="message-input" rows="1" placeholder="想干点啥，说一声" autocomplete="off"></textarea>
+          <textarea id="message-input" rows="1" placeholder="说说你要做什么" autocomplete="off"></textarea>
           <div class="composer__actions">
-            <button type="button" class="doodle-btn" id="at-button" title="插入 @，点点名" aria-label="插入 @">
+            <button type="button" class="doodle-btn" id="at-button" title="插入 @，点名成员" aria-label="插入 @">
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <path d="M13.6 5.4 C 12.4 4.2, 10.8 3.8, 9.2 4.4 C 6.4 5.4, 4.8 8.2, 5.6 11 C 6.4 13.8, 9.2 15.4, 12 14.6 C 13.4 14.2, 14.4 13.2, 14.9 12 M14.6 8.4 C 14.9 9.9, 14.7 11.5, 15.4 12.6 C 16 13.4, 17.2 13.2, 17.8 12.2 C 18.9 10.2, 18.6 7.4, 16.9 5.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
               </svg>
@@ -88,7 +88,7 @@
                 <path d="M13.4 8.2 9 12.6 C 8 13.6, 8 15, 9 15.8 C 10 16.7, 11.4 16.6, 12.3 15.7 L 16.6 11.3 C 18.2 9.7, 18.2 7.2, 16.6 5.7 C 15 4.2, 12.5 4.3, 10.9 5.8 L 6.5 10.2 C 4.9 11.7, 4.9 14.3, 6.4 15.9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </span>
-            <button type="submit" class="send" id="send-button" aria-label="派活">
+            <button type="submit" class="send" id="send-button" aria-label="发送">
               <svg width="18" height="16" viewBox="0 0 18 16" fill="none" aria-hidden="true">
                 <path d="M2.6 8.2 C 6.4 7.8, 10.2 7.9, 14.6 8.1 M11 4.2 C 12.4 5.6, 13.6 6.9, 15.3 8.2 C 13.6 9.4, 12.3 10.7, 11.1 12.1" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
@@ -102,18 +102,18 @@
       </form>
     </main>
 
-    <aside class="column column--right" id="drawer" tabindex="-1" aria-label="牛马档案">
+    <aside class="column column--right" id="drawer" tabindex="-1" aria-label="成员档案">
       <section class="paper">
         <div class="panel">
-          <h2 class="section-title">牛马档案</h2>
-          <p class="panel__note">外号、头像、配色在右上角 ⚙ 设置里改；这里看谁登记了、在不在场。</p>
+          <h2 class="section-title">成员档案</h2>
+          <p class="panel__note">外号、头像、配色在右上角的设置里改；这里看谁登记了、在不在场。</p>
           <div id="member-list"></div>
         </div>
       </section>
 
       <section class="paper">
         <div class="panel">
-          <h2 class="section-title">现在在干嘛</h2>
+          <h2 class="section-title">运行状态</h2>
           <div class="metrics" id="metrics"></div>
           <div id="status-list"></div>
         </div>
@@ -121,7 +121,7 @@
 
       <section class="paper">
         <div class="panel">
-          <h2 class="section-title">最近的翻车现场</h2>
+          <h2 class="section-title">失败记录</h2>
           <div id="failure-list"></div>
         </div>
       </section>
@@ -134,7 +134,7 @@
     <div class="settings__head">
       <button type="button" class="btn" id="settings-back">← 回群聊</button>
       <h2 class="settings__title" id="settings-title" tabindex="-1">设置</h2>
-      <span class="settings__note">改个外号、换张脸、挑个配色，只在你这儿生效，不影响插件自己声明的身份。</span>
+      <span class="settings__note">改外号、换头像、挑配色，只在你这里生效，不影响插件自己声明的身份。</span>
       <!-- 执行中进设置：停止入口被页面切换挡住了，这里给出路（方案 I18）。 -->
       <span class="settings__live" id="settings-live-note" hidden></span>
     </div>

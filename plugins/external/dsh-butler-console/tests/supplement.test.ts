@@ -180,7 +180,7 @@ describe('补充改的是同一轮', () => {
 
 describe('补充的边界', () => {
   it('任务已经结束就拒绝，且不偷偷开一轮新的', async () => {
-    // 这一位干完就交差：任务跑成终态。
+    // 这一位干完就汇总：任务跑成终态。
     const done: ButlerAgentExecutor = {
       protocol: 1, agentId: 'blog', capabilities: ['写作'],
       dispatch: async () => ({ status: 'succeeded', summary: '写好了' }),
@@ -195,7 +195,7 @@ describe('补充的边界', () => {
     f.endTurn()
     await until(() => f.tasks().length === 1, '任务落库')
     const taskId = f.tasks()[0]!.id
-    // 子任务交差之后还会跑一轮汇总，那一轮也要放掉才会落到终态。
+    // 子任务完成之后还会跑一轮汇总，那一轮也要放掉才会落到终态。
     let released = false
     await until(() => {
       const state = f.store.task(actor, taskId)!.state

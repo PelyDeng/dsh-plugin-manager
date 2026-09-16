@@ -53,25 +53,25 @@ const BUILTIN_AVATARS = [
 
 const STATE_TEXT = {
   queued: '排队中',
-  dispatched: '刚收到活',
+  dispatched: '已收到',
   running: '在干活',
-  waiting_user: '等着你回话',
+  waiting_user: '等你回话',
   external_pending: '待外部处理',
   partial: '部分完成',
-  succeeded: '交差了',
-  failed: '翻车了',
-  cancelled: '不干了',
+  succeeded: '已完成',
+  failed: '失败',
+  cancelled: '已停止',
   summarizing: '在写总结',
-  completed: '收工',
+  completed: '已完成',
 }
 
 /** 协同链路：页面上的每一步都能追到一次真实事件。 */
 const RAIL_STEPS = [
-  { key: 'ask', label: '说个活' },
-  { key: 'parse', label: '总管听懂' },
-  { key: 'dispatch', label: '派活' },
-  { key: 'work', label: '牛马干活' },
-  { key: 'sum', label: '交差' },
+  { key: 'ask', label: '提需求' },
+  { key: 'parse', label: '听懂' },
+  { key: 'dispatch', label: '分派' },
+  { key: 'work', label: '执行' },
+  { key: 'sum', label: '汇总' },
 ]
 
 /** 链路徽章里的小图标：纯静态标记，不含任何用户数据。 */
@@ -109,7 +109,7 @@ const SUGGESTIONS = [
 ]
 
 const MOTTO_KEY = 'butler.motto'
-const DEFAULT_MOTTO = '打工是不可能打工的，但派活可以'
+const DEFAULT_MOTTO = '你负责说清楚，牛马负责干明白'
 /** 上次用过的会话。刷新后要拿它去问「这一轮还在跑吗」。 */
 const CONVERSATION_KEY = 'butler.conversationId'
 
@@ -184,7 +184,7 @@ const state = {
   /**
    * 本次「已调度成员」面板：成员的真实在查什么、交回了什么，都收在这里。
    *
-   * `null` 表示这一轮没派活（大总管自己答的）。新一轮开始时整体重建，见 `mountDispatch`。
+   * `null` 表示这一轮没分派（大总管自己答的）。新一轮开始时整体重建，见 `mountDispatch`。
    */
   dispatch: null,
   /** 子任务 id → 等待中的提问卡，收到回复后移除。 */
@@ -587,7 +587,7 @@ function butlerSettle(text, time) {
 /** 计划贴纸：拆解结果，每条带 @ 句柄。 */
 function planNote(event) {
   const note = make('div', 'plan-note')
-  note.appendChild(make('div', 'plan-note__title', '活分好了 👇'))
+  note.appendChild(make('div', 'plan-note__title', '已分派'))
   const list = make('ol')
   for (const subtask of event.subtasks) {
     const item = make('li')
@@ -791,7 +791,7 @@ function memberMessage(agentId, handle) {
   name.style.color = accentOf(agentId)
   head.appendChild(name)
   head.appendChild(make('span', 'msg__handle', `@${agentId}`))
-  const status = make('span', 'msg__tag', '刚收到活')
+  const status = make('span', 'msg__tag', '已收到')
   head.appendChild(status)
   col.appendChild(head)
 
@@ -940,9 +940,9 @@ function settleMemberDynamics(view, state) {
 const PROGRESS_SETTLE_TEXT = {
   waiting_user: '等你回话',
   external_pending: '待外部处理',
-  failed: '没干成',
-  cancelled: '不干了',
-  succeeded: '搞定',
+  failed: '失败',
+  cancelled: '已停止',
+  succeeded: '完成',
 }
 
 /* ── 中栏：链路条 ─────────────────────────────────────────────────────── */
@@ -1048,7 +1048,7 @@ function handleEvent(event) {
       break
 
     case 'input': {
-      // 使用者改了目标。先留一行痕迹，随后的派活与汇总照旧走原来的分支。
+      // 使用者改了目标。先留一行痕迹，随后的分派与汇总照旧走原来的分支。
       state.taskId = event.taskId
       append(make('p', 'msg__meta',
         event.source === 'supplement'
@@ -1068,7 +1068,7 @@ function handleEvent(event) {
       // subtask 事件按服务端事实呈现（方案 S02）。
       state.butlerSpeech = null
       append(planNote(event))
-      // 派活面板跟着计划一起出现：成员查了什么、交回什么，收在这里，群里只留一行状态。
+      // 分派面板跟着计划一起出现：成员查了什么、交回什么，收在这里，群里只留一行状态。
       append(mountDispatch(event.subtasks))
       break
     }
@@ -1108,7 +1108,7 @@ function handleEvent(event) {
       applySummaryRail(event.state)
       for (const view of state.bubbles.values()) view.caret.hidden = true
       announce(`这一轮${
-        event.state === 'completed' ? '干完了' : event.state === 'failed' ? '没干成' : event.state === 'cancelled' ? '已喊停' : event.state === 'partial' ? '部分完成' : event.state === 'waiting_user' ? '还等你回话' : '待外部处理'}`)
+        event.state === 'completed' ? '已完成' : event.state === 'failed' ? '失败' : event.state === 'cancelled' ? '已喊停' : event.state === 'partial' ? '部分完成' : event.state === 'waiting_user' ? '等你回话' : '待外部处理'}`)
       // 正文只展示一次（S12）：总结气泡已经承载的正文，汇总卡不再整段重复；
       // 历史回放没有对应气泡时（renderTaskRecord），卡片照常承载。
       append(summaryCard(event.text !== '' && event.text === state.lastChatText
@@ -1130,7 +1130,7 @@ function handleEvent(event) {
 
 function handleSubtask(event) {
   const view = state.bubbles.get(event.id) ?? memberMessage(event.agentId, event.id)
-  // 成员的真实输出收进派活面板；群里这行只剩状态与入口。
+  // 成员的真实输出收进分派面板；群里这行只剩状态与入口。
   attachToDispatch(view, event)
   view.status.textContent = STATE_TEXT[event.state] ?? event.state
   view.status.style.color =
@@ -1201,7 +1201,7 @@ function handleSubtask(event) {
 
   if (event.state === 'external_pending') {
     // 材料交回来了，但还有事在外面办。这里**不给回复入口**：要办的事不在这一页，
-    // 让用户在这里写一句话并不能把候选稿采用掉。也不显示成「搞定」。
+    // 让用户在这里写一句话并不能把候选稿采用掉。也不显示成「完成」。
     view.bubble.classList.add('bubble--wait')
     if (view.body === '') view.text.textContent = event.detail
     view.footer.appendChild(make('div', 'msg__meta', '待外部处理，办好之后可以新开一轮'))
@@ -1220,7 +1220,7 @@ function handleSubtask(event) {
       if (view.progress !== null) {
         view.progress.fill.classList.remove('progress__fill--indeterminate')
         view.progress.fill.style.width = '100%'
-        view.progress.label.textContent = '搞定'
+        view.progress.label.textContent = '完成'
       }
       // 耗时行也是这次落定的一部分：一并收进钉扎范围，别在补偿之后又顶开视口。
       view.footer.appendChild(make('div', 'msg__meta', `耗时 ${formatElapsed(view.startedAt, event.time)}`))
@@ -1235,7 +1235,7 @@ function handleSubtask(event) {
     if (event.state === 'failed') view.bubble.classList.add('bubble--fail')
     if (view.body === '') view.text.textContent = event.detail
     else view.bubble.appendChild(make('div', 'msg__meta', event.detail))
-    announce(event.state === 'failed' ? `${displayNameOf(event.agentId)} 没干成：${event.detail ?? '原因不明'}` : `${displayNameOf(event.agentId)} 的活已取消`)
+    announce(event.state === 'failed' ? `${displayNameOf(event.agentId)} 失败：${event.detail ?? '原因不明'}` : `${displayNameOf(event.agentId)} 的活已取消`)
     return
   }
 }
@@ -1253,7 +1253,7 @@ function askCard(view, event) {
   const row = make('div', 'ask__row')
   const input = document.createElement('input')
   input.type = 'text'
-  input.placeholder = '补充点什么…'
+  input.placeholder = '补充说明'
   row.appendChild(input)
 
   const send = make('button', 'btn btn--tiny btn--primary', '我来说')
@@ -1310,13 +1310,13 @@ function askCard(view, event) {
 function summaryCard(event) {
   const card = make('div', 'summary')
   card.dataset.state = event.state
-  const title = event.state === 'completed' ? '活干完了！'
-    : event.state === 'failed' ? '这次翻车了'
+  const title = event.state === 'completed' ? '已完成'
+    : event.state === 'failed' ? '这一轮失败'
       : event.state === 'cancelled' ? '已喊停'
         // 「待外部处理」不是「办完了」：材料在这，那件事还在外面等着。
         : event.state === 'external_pending' ? '材料交回了，还有事在外面等着'
-          : event.state === 'partial' ? '有些活没干成，成果在这儿'
-          : '还等你回话'
+          : event.state === 'partial' ? '部分任务失败，成果已保留'
+          : '等你回话'
   card.appendChild(make('div', 'summary__title', title))
   // 正文去重后为空（总结气泡已承载）时不显示占位——那会像「没有结论」。
   // 汇总正文与错误信息都走受控 Markdown（C 批）；同帧排版，不逐字重建。
@@ -1340,7 +1340,7 @@ function renderWelcome() {
   mascot.src = `${ROUTE_PREFIX}/assets/media/avatars/mascot-welcome.png`
   mascot.addEventListener('error', () => { mascot.remove() })
   box.appendChild(mascot)
-  box.appendChild(make('h2', null, '今天想干点啥？'))
+  box.appendChild(make('h2', null, '说说你要做什么'))
   box.appendChild(make('p', null, '把活说清楚就行。牛马大总管先听懂，再替你把人喊来，你只管收结果。'))
   const list = make('div', 'welcome__list')
   for (const text of SUGGESTIONS) {
@@ -1370,7 +1370,7 @@ function setBusy(on) {
   el.hint.textContent = on ? '正在处理；下一句可以先写好，这轮完事再发' : '牛马大总管先听明白，再替你把人喊来'
   // 执行中进设置页的提示随状态同步（方案 I18）。
   el.settingsLive.hidden = !(state.settingsOpen && on)
-  el.settingsLive.textContent = state.settingsOpen && on ? '有活正在跑：回群聊可查看进度或喊停' : ''
+  el.settingsLive.textContent = state.settingsOpen && on ? '有任务正在执行：回群聊可查看进度或喊停' : ''
 }
 
 function newConversationId() {
@@ -1433,7 +1433,7 @@ async function resumeLiveTurn() {
   try {
     await followUntilTerminal(conversationId, { from: 0, expectedRunId: head.runId, signal: controller.signal })
   } catch (error) {
-    reportFailure(error, '接上正在跑的任务失败')
+    reportFailure(error, '接续正在执行的任务失败')
   } finally {
     finishTurn()
   }
@@ -1664,7 +1664,7 @@ async function followUntilTerminal(conversationId, { from, expectedRunId, signal
   const followedRunId = expectedRunId
   const deadline = Date.now() + 120000
   let reconnects = 0
-  const giveUp = () => { append(make('p', 'error-line', '这一轮的后续跟不上了；已收到的内容保留，终态以右栏为准。')) }
+  const giveUp = () => { append(make('p', 'error-line', '事件流已断开；已收到的内容保留，终态以右栏为准。')) }
   // 可中断退避：截止或取消提前唤醒；进入时信号已取消则立即退出，不空等计时器。
   // timer 先声明再赋值：done 可能被同步调度器立即调用，不能踩到初始化之前。
   const backoff = stop => new Promise(resolve => {
@@ -1771,7 +1771,7 @@ async function finishTurn() {
 function renderMembers() {
   clear(el.memberList)
   if (state.members.length === 0) {
-    el.memberList.appendChild(make('p', 'empty', '还没有能派活的成员。'))
+    el.memberList.appendChild(make('p', 'empty', '还没有可分派的成员。'))
     return
   }
   for (const member of state.members) {
@@ -1799,7 +1799,7 @@ function renderSettingsMembers() {
   clear(el.settingsMembers)
   settingsCards.clear()
   if (state.members.length === 0) {
-    el.settingsMembers.appendChild(make('p', 'empty', '还没有能派活的成员。'))
+    el.settingsMembers.appendChild(make('p', 'empty', '还没有可分派的成员。'))
     return
   }
   for (const member of state.members) el.settingsMembers.appendChild(buildSettingsCard(member))
@@ -1819,7 +1819,7 @@ function setCardStatus(view, kind, text) {
 function markCardDirty(view) {
   view.draftVersion += 1
   view.dirty = true
-  if (view.status.dataset.kind !== 'busy') setCardStatus(view, 'dirty', '有未保存的改动')
+  if (view.status.dataset.kind !== 'busy') setCardStatus(view, 'dirty', '未保存的改动')
 }
 
 /** 保存一张卡的外号与配色：按**提交时的草稿版本**确认（复核 1）。 */
@@ -1901,7 +1901,7 @@ function buildSettingsCard(member) {
   // 相机是按钮不是贴纸（方案 I16）：键盘可达、有名字。
   const camera = make('button', 'member__camera', '📷')
   camera.type = 'button'
-  camera.title = '换张脸'
+  camera.title = '换头像'
   camera.setAttribute('aria-label', `给 ${displayNameOf(agentId)} 换头像`)
   const picker = document.createElement('input')
   picker.type = 'file'
@@ -2001,12 +2001,12 @@ function buildSettingsCard(member) {
   save.addEventListener('click', () => { void saveMemberCard(agentId) })
   actions.appendChild(save)
   if (state.avatarStamps.has(agentId)) {
-    const reset = make('button', 'btn btn--tiny btn--ghost', '删掉头像')
+    const reset = make('button', 'btn btn--tiny btn--ghost', '删除头像')
     reset.type = 'button'
     reset.addEventListener('click', () => { void runAvatarAction(agentId, async () => {
       await api.clearAvatar(agentId)
       state.avatarStamps.delete(agentId)
-    }, '删除中…', '头像已删掉，用回默认') })
+    }, '删除中…', '已删除头像，恢复默认') })
     actions.appendChild(reset)
   }
   card.appendChild(actions)
@@ -2032,7 +2032,7 @@ function setOpenSettings(open) {
   el.settingsButton.setAttribute('aria-expanded', String(open))
   el.settings.hidden = !open
   el.settingsLive.hidden = !(open && state.streaming)
-  el.settingsLive.textContent = open && state.streaming ? '有活正在跑：回群聊可查看进度或喊停' : ''
+  el.settingsLive.textContent = open && state.streaming ? '有任务正在执行：回群聊可查看进度或喊停' : ''
   if (open) {
     renderSettingsMembers()
     el.settingsTitle.focus()
@@ -2066,8 +2066,8 @@ function renderMetrics(counts) {
     { label: '等你回话', value: counts.waitingUser },
     { label: '待外部处理', value: counts.externalPending },
     { label: '部分完成', value: counts.partial },
-    { label: '翻车', value: counts.failed },
-    { label: '已交差', value: counts.completed },
+    { label: '失败', value: counts.failed },
+    { label: '已完成', value: counts.completed },
   ]
   for (const tile of tiles) {
     const box = make('div', 'metric')
@@ -2098,7 +2098,7 @@ function renderStatuses() {
 function renderFailures(items) {
   clear(el.failureList)
   if (items.length === 0) {
-    el.failureList.appendChild(make('p', 'empty', '暂无翻车记录，保持住'))
+    el.failureList.appendChild(make('p', 'empty', '暂无失败记录'))
     return
   }
   for (const item of items) {
@@ -2119,7 +2119,7 @@ function renderChatList(items, keyword) {
       (item.title ?? '').toLowerCase().includes(keyword) ||
       (item.preview ?? '').toLowerCase().includes(keyword))
   if (filtered.length === 0) {
-    el.chatList.appendChild(make('p', 'empty', items.length === 0 ? '还没派过活，先来一单？' : '没找到，换个词？'))
+    el.chatList.appendChild(make('p', 'empty', items.length === 0 ? '还没有任务记录' : '没有匹配结果'))
     return
   }
   for (const item of filtered) {
@@ -2284,7 +2284,7 @@ function taskSummaryCard(task) {
   head.appendChild(make('span', 'task-card__time', formatTime(task.updatedAt)))
   card.appendChild(head)
   card.appendChild(make('div', 'task-card__goal', task.goal))
-  card.appendChild(make('div', 'task-card__meta', `${formatTime(task.createdAt)} 派活 · ${task.subtaskDone}/${task.subtaskTotal} 项收尾`))
+  card.appendChild(make('div', 'task-card__meta', `${formatTime(task.createdAt)} 分派 · ${task.subtaskDone}/${task.subtaskTotal} 项收尾`))
   card.addEventListener('click', () => { void openTask(task.id) })
   return card
 }
@@ -2499,7 +2499,7 @@ function renderTaskRecord(record, opts = {}) {
     view.startedAt = subtask.startedAt ?? record.createdAt
     view.status.textContent = STATE_TEXT[subtask.state] ?? subtask.state
     const text = subtask.state === 'failed' || subtask.state === 'cancelled'
-      ? (subtask.error || '没干成')
+      ? (subtask.error || '失败')
       : (subtask.result || STATE_TEXT[subtask.state] || '')
     // 成员终稿与实时同口径（C 批）：成功/待外部的结果走受控 Markdown；失败与状态占位保持纯文本。
     if (subtask.state !== 'failed' && subtask.state !== 'cancelled' && subtask.result) {
@@ -2607,7 +2607,7 @@ function bind() {
 
   el.input.addEventListener('input', autosize)
   el.input.addEventListener('keydown', event => {
-    // Enter 派活，Shift+Enter 换行；输入法组合期间不拦截。
+    // Enter 发送，Shift+Enter 换行；输入法组合期间不拦截。
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault()
       void sendMessage(el.input.value)
@@ -2663,7 +2663,7 @@ function bind() {
     state.selecting = selection !== null && !selection.isCollapsed && el.thread.contains(selection.anchorNode)
   })
 
-  // 在光标处插一个 @：派活时点名成员用的，不是装饰。
+  // 在光标处插一个 @：分派时点名成员用的，不是装饰。
   el.at?.addEventListener('click', () => {
     const start = el.input.selectionStart ?? el.input.value.length
     const end = el.input.selectionEnd ?? start

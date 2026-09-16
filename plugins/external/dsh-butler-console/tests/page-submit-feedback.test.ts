@@ -153,7 +153,7 @@ describe('B 批恢复一致性守卫（S05–S09/S12）', () => {
     // 退避有界且截止可中断：订阅读取挂截止信号（不是只在循环之间检查），预算与总期限共用。
     expect(source).toMatch(/reconnects >= 4 \|\| Date\.now\(\) > deadline/u)
     expect(source).toMatch(/AbortSignal\.any\(\[signal, timeout\]\)/u)
-    expect(source).toContain('后续跟不上了')
+    expect(source).toContain('事件流已断开')
     // 跟随对象预先指定：不把首次订阅返回的 runId 当预期。
     expect(source).toContain('expectedRunId')
     // 快照失败不推进游标：只有重建成功才对齐窗口头。
@@ -585,7 +585,7 @@ describe('D 批「交互和动效收尾」守卫', () => {
     const settle = pick('settleMemberDynamics')
     expect(settle).toContain('tool-line--past')
     expect(source).toContain("'等你回话'")
-    expect(source).toContain("'没干成'")
+    expect(source).toContain("'失败'")
     expect(source).toContain("PROGRESS_SETTLE_TEXT")
     expect(settle).toContain("state === 'failed' || state === 'cancelled'")
   })
@@ -623,7 +623,7 @@ describe('D 批「交互和动效收尾」守卫', () => {
         busy: false,
         draftVersion: 3,
         save: { disabled: false },
-        status: { dataset: { kind: 'dirty' }, textContent: '有未保存的改动', hidden: false },
+        status: { dataset: { kind: 'dirty' }, textContent: '未保存的改动', hidden: false },
         titles: { replaceChildren: noop },
         swatches,
         pressed,
@@ -671,7 +671,7 @@ describe('D 批「交互和动效收尾」守卫', () => {
     expect(view.pressed.get('#111111')).toBe('false')
   })
 
-  it('保存成功后再次编辑：状态行从「已保存」回到「有未保存的改动」（复核 1 行为测试）', async () => {
+  it('保存成功后再次编辑：状态行从「已保存」回到「未保存的改动」（复核 1 行为测试）', async () => {
     const noop = () => {}
     const view = {
       agentId: 'blog',
@@ -681,7 +681,7 @@ describe('D 批「交互和动效收尾」守卫', () => {
       busy: false,
       draftVersion: 1,
       save: { disabled: false },
-      status: { dataset: { kind: 'dirty' }, textContent: '有未保存的改动', hidden: false },
+      status: { dataset: { kind: 'dirty' }, textContent: '未保存的改动', hidden: false },
       titles: { replaceChildren: noop },
       swatches: new Map([['#111111', { setAttribute: noop }]]),
     }
@@ -703,7 +703,7 @@ describe('D 批「交互和动效收尾」守卫', () => {
     )(view)
     expect(view.dirty).toBe(true)
     expect(view.status.dataset.kind).toBe('dirty')
-    expect(view.status.textContent).toBe('有未保存的改动')
+    expect(view.status.textContent).toBe('未保存的改动')
     expect(view.draftVersion).toBe(2)
   })
 
@@ -759,7 +759,7 @@ describe('D 批「交互和动效收尾」守卫', () => {
     const settings = pick('setOpenSettings')
     expect(settings).toContain('el.settingsTitle.focus()')
     expect(settings).toContain('el.settingsButton.focus()')
-    expect(settings).toContain('有活正在跑')
+    expect(settings).toContain('有任务正在执行')
     expect(settings).not.toContain('el.input.focus()')
   })
 

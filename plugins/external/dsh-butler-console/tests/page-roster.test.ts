@@ -53,7 +53,7 @@ function loadRoster() {
     return face
   }
   const clear = (parent: StubNode) => { parent.children = [] }
-  const stateText = { running: '在干活', waiting_user: '等着你回话' }
+  const stateText = { running: '在干活', waiting_user: '等你回话' }
   const api = Function('state', 'el', 'make', 'clear', 'avatarNode', 'STATE_TEXT',
     `${pick('renderMembers')}\n${pick('renderCrew')}\n${pick('renderStatuses')}\n`
     + 'return { renderMembers, renderCrew, renderStatuses }',
@@ -100,7 +100,7 @@ describe('成员名单的页面文案', () => {
     const page = loadRoster()
     page.state.members = members
     page.renderStatuses()
-    expect(page.el.statusList.children.map(stateTextOf)).toEqual(['待命', '在干活', '等着你回话'])
+    expect(page.el.statusList.children.map(stateTextOf)).toEqual(['待命', '在干活', '等你回话'])
   })
 
   it('右栏成员行只列人，不再挂一个恒亮的状态点', () => {
@@ -118,7 +118,7 @@ describe('成员名单的页面文案', () => {
   it('空名单时给一句人话', () => {
     const page = loadRoster()
     page.renderMembers()
-    expect(page.el.memberList.children[0]?.textContent).toBe('还没有能派活的成员。')
+    expect(page.el.memberList.children[0]?.textContent).toBe('还没有可分派的成员。')
   })
 
   it('开场示例话题不提没有成员能接的开发接入问题', () => {
