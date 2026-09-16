@@ -22,7 +22,7 @@
 
 1. 从同一版本 [Release](https://github.com/PelyDeng/dsh-plugin-manager/releases) 下载 `dsh-plugin-manager-deployment-<版本>.zip` 并解压。
 2. 把每个应用的完整发布目录放入 `incoming/<应用>/`。
-3. 内置 auth、example 由本次构建产出（archives 用随包公开构建视图），已经在候选里；`incoming/` 只放外部作者的完整发布目录。把随包的 `optional/auth` 或 `public-apps`（同一批插件）再放进去会因插件 id 重复被组合清单拒绝。
+3. 内置 auth、example 由本次构建产出（archives 用随包公开构建视图），已经在候选里；`incoming/` 只放外部作者的完整发布目录。把随包的 `public-apps`（同一批插件）再放进去会在准备输入阶段被拒绝，并指明与哪个内置插件重复。
 4. 在部署根执行：
 
    ```sh

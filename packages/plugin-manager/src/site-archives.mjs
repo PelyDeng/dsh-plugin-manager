@@ -89,6 +89,12 @@ export function buildBuiltinPlugins(context) {
  * 全部内置与全部 incoming 都进入候选；运行选集在部署阶段生效，不在准备阶段丢包。
  */
 export function composeCandidate(context, builtin, incoming) {
+  // 内置插件由本次构建产出；incoming 里出现同一个 id 时在**停旧之前**就报出两个来源，
+  // 不要等组合清单给出「id 重复」这种不指明出处的失败。
+  const builtinIds = new Map(builtin.plugins.map(plugin => [plugin.id, plugin.package]));
+  for (const release of incoming) for (const plugin of release.plugins) {
+    if (builtinIds.has(plugin.id)) throw new Error(`插件 id 与内置构建重复：${plugin.id}（内置 ${builtinIds.get(plugin.id)} 与 ${dirname(release.path)}）。内置插件已由本次构建产出，请从 incoming 移除该发布目录。`);
+  }
   const manifest = resolve(context.operation, 'plugins/manifest.json');
   const composed = composeReleases([builtin, ...incoming], dirname(manifest), undefined, [], { cacheRoot: context.cacheRoot });
   // 只回传清单**路径**与缓存清单名：调用方按路径重新加载，避免与 composeReleases 返回的清单对象混淆。

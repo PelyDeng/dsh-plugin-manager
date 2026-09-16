@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -67,15 +67,13 @@ function fixture(t, { withExample = false } = {}) {
   const manager = archive('manager', { 'dist/cli.mjs': `console.log(process.argv.includes('--version') ? '${version}' : JSON.stringify({home:'fixture-home'}));\n` }, { name: '@dsh-plugin-manager/plugin-manager', main: 'dist/cli.mjs', exports: { '.': './dist/cli.mjs' } });
   const kit = archive('kit', { 'dist/index.mjs': 'export const fixture = true;\n' }, { name: '@dsh-plugin-manager/plugin-kit', main: 'dist/index.mjs' });
   const auth = archive('auth', { 'dist/index.mjs': 'export function apply() {}\n', 'README.md': 'Authentication fixture\n', 'cordis.patch.yml': '[]\n' }, { name: 'dsh-auth', deepseekPlugin: { schemaVersion: 3, id: 'auth', configuration: { entryId: 'auth', auth: 'provider' } } });
-  const authManifest = join(base, 'auth-manifest.json');
   const plugins = [{ id: 'auth', package: 'dsh-auth', version, archive: 'auth.tgz', sha256: hash(readFileSync(auth)), configuration: { entryId: 'auth', auth: 'provider' }, verifyFiles: ['package.json', 'dist/index.mjs', 'README.md', 'cordis.patch.yml'] }];
   if (withExample) {
     const example = archive('example', { 'dist/index.mjs': 'export function apply() {}\n', 'README.md': 'Conversation fixture\n', 'cordis.patch.yml': '[]\n' }, { name: 'dsh-example', deepseekPlugin: { schemaVersion: 3, id: 'example', configuration: { entryId: 'example', auth: 'consumer' } } });
     plugins.push({ id: 'example', package: 'dsh-example', version, archive: 'example.tgz', sha256: hash(readFileSync(example)), configuration: { entryId: 'example', auth: 'consumer' }, verifyFiles: ['package.json', 'dist/index.mjs', 'README.md', 'cordis.patch.yml'] });
   }
   const verification = withExample ? { schemaVersion: 1, builds: plugins.map(plugin => ({ pluginId: plugin.id, archiveSha256: plugin.sha256, nodeVersion: '22.19.0', packageManagerVersion: '11.19.0' })), runs: [] } : undefined;
-  json(authManifest, { schemaVersion: 2, plugins, ...(verification ? { verification } : {}) });
-  return { root, manager, kit, authManifest, images: [image], output: join(root, '.local/output') };
+  return { root, manager, kit, images: [image], output: join(root, '.local/output') };
 }
 
 test('deployment contains installed tools and optional auth; starters copy independently with a relative kit archive', t => {
@@ -106,7 +104,8 @@ test('deployment contains installed tools and optional auth; starters copy indep
   assert.equal(existsSync(join(result.deployment, '.local')), false);
   assert.equal(existsSync(join(result.deployment, 'plugins')), false);
   assert.equal(existsSync(join(result.deployment, 'incoming/auth')), false);
-  assert.deepEqual(JSON.parse(readFileSync(join(result.deployment, 'optional/auth/manifest.json'))).plugins.map(plugin => plugin.id), ['auth']);
+  // 精简部署包自建内置插件：不再附带 optional/auth（同 id 的目录放进 incoming 会在停旧前被拒绝）。
+  assert.equal(existsSync(join(result.deployment, 'optional')), false);
   const starter = join(result.starters, 'standalone-kit');
   const manifest = JSON.parse(readFileSync(join(starter, 'package.json')));
   assert.equal(manifest.version, '0.1.0');
@@ -122,18 +121,12 @@ test('deployment contains installed tools and optional auth; starters copy indep
   assert.throws(() => assembleDeployment(options, { inspectRuntime: () => runtime }), /new or empty/);
 });
 
-test('a verified auth and example release produces optional auth with only its own build record', t => {
+test('a verified auth and example release changes nothing inside the deployment package', t => {
   const options = fixture(t, { withExample: true });
-  const input = readFileSync(options.authManifest);
-  const source = JSON.parse(input);
   const result = assembleDeployment(options, { inspectRuntime: () => runtime });
-  const optionalRoot = join(result.deployment, 'optional/auth');
-  const optional = JSON.parse(readFileSync(join(optionalRoot, 'manifest.json')));
-  assert.deepEqual(optional.plugins.map(plugin => plugin.id), ['auth']);
-  assert.deepEqual(optional.verification.builds, [source.verification.builds[0]]);
-  assert.equal(hash(readFileSync(join(optionalRoot, optional.plugins[0].archive))), source.plugins[0].sha256);
-  assert.equal(existsSync(join(optionalRoot, source.plugins[1].archive)), false);
-  assert.deepEqual(readFileSync(options.authManifest), input);
+  // 部署包只带自己构建内置插件所需的材料：公开源码视图、公开构建输入、发布信息与工具树。
+  assert.deepEqual(readdirSync(result.deployment).sort(), ['.gitignore', 'LICENSE', 'README.md', 'build.ps1', 'build.sh', 'env.conf.example', 'framework-runtime.json', 'incoming', 'source', 'tools']);
+  assert.equal(existsSync(join(result.deployment, 'optional')), false);
 });
 
 test('mismatched tool versions and repeated runtime platforms fail before staging a deployment', t => {

@@ -22,7 +22,7 @@ git push origin "refs/tags/v$version"
 
 `runtime` 任务核验标签与统一版本，递归检出锁定的官方宿主源码，构建宿主层并装入本次唯一的 manager 归档，再向 GHCR 推送镜像。发布使用不可变摘要，并实际检查匿名拉取；首次 GHCR 包若仍为私有，需在 GitHub 包设置中改为公开后重试，不能交付只有发布账号能拉取的运行镜像。
 
-`build` 任务复用 runtime 产出的同一 manager 归档，核验版本说明、冻结依赖、公共组件及生成文档，再执行检查、行为测试、独立安装包验证和仓库检查。仅打包公共 auth/example，生成无源码目录字段的 schema 2 清单。交付五个产物：manager tgz、kit tgz、public-apps ZIP、deployment ZIP、starters ZIP，另附覆盖五个产物的 `SHA256SUMS.txt`。部署包包含同一管理器、可选 auth 和固定镜像信息，起步包包含独立作者示例及相应 kit；public-apps ZIP 附版本说明。工作流只上传专用输出目录，不收集任意 `.local` 文件。
+`build` 任务复用 runtime 产出的同一 manager 归档，核验版本说明、冻结依赖、公共组件及生成文档，再执行检查、行为测试、独立安装包验证和仓库检查。仅打包公共 auth/example，生成无源码目录字段的 schema 2 清单。交付五个产物：manager tgz、kit tgz、public-apps ZIP、deployment ZIP、starters ZIP，另附覆盖五个产物的 `SHA256SUMS.txt`。部署包包含同一管理器、公开源码材料与固定镜像信息（内置 auth/example 由站点构建产出，不再附独立的 auth 目录），起步包包含独立作者示例及相应 kit；public-apps ZIP 附版本说明，供独立 CLI 与显式清单流程使用。工作流只上传专用输出目录，不收集任意 `.local` 文件。
 
 源码读取保持 `contents: read`；只有 runtime 任务授予 `packages: write` 以发布镜像。独立 `publish` 任务取得已构建附件、再次核对校验值，使用 GitHub 临时令牌及 `contents: write` 创建 Release；不向本地导出令牌，不需要个人访问令牌。Release 正文来自该标签内的版本说明。镜像构建、匿名拉取和归档检查不替代真实模型、浏览器或生产验收。
 

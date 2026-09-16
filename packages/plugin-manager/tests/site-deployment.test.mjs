@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { hash, tarCommand } from '../src/state.mjs';
-import { discoverArchives, validateRuntimeIndex } from '../src/site-archives.mjs';
+import { composeCandidate, discoverArchives, validateRuntimeIndex } from '../src/site-archives.mjs';
 import { releaseSite, describeTooling } from '../src/site-release.mjs';
 import { fileHash, readSitePointer, readSiteRecord, verifySavedTooling } from '../src/site-record.mjs';
 import { writePublicInputRecord } from '../src/public-build-view.mjs';
@@ -31,6 +31,23 @@ test('发布日志能分辨这轮跑的是源码还是工具快照', t => {
   assert.doesNotMatch(legacy, /工具目录|工具归档摘要/);
 });
 const entry = ['node', '/opt/plugin-manager/node_modules/@dsh-plugin-manager/plugin-manager/dist/cli.mjs', 'container-start', '--root', '/opt/plugin-project'];
+
+test('内置构建与 incoming 同 id 时在准备输入阶段就报出两个来源', t => {
+  const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'duplicate-id-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const operation = resolve(root, '.local/artifacts/op');
+  mkdirSync(operation, { recursive: true });
+  const builtin = { plugins: [{ id: 'auth', package: 'dsh-auth' }] };
+  const incoming = [{ path: resolve(root, 'incoming/public-apps/manifest.json'), plugins: [{ id: 'auth', package: 'dsh-auth' }] }];
+  // 这一步在「准备部署输入」里，先于停旧：报错要让操作者看到是两个来源撞了 id，而不是等到组合清单。
+  assert.throws(() => composeCandidate({ operation }, builtin, incoming), error => {
+    assert.match(error.message, /插件 id 与内置构建重复：auth/);
+    assert.match(error.message, /incoming[\\/]public-apps/);
+    assert.match(error.message, /请从 incoming 移除该发布目录/);
+    return true;
+  });
+});
+
 function fixture(t) {
   const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'site archives 中文 ')));
   t.after(() => { assert.equal(dirname(root), realpathSync.native(tmpdir())); rmSync(root, { recursive: true, force: true }); });

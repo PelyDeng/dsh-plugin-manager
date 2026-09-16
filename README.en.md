@@ -22,7 +22,7 @@ Use this path when an author provides a complete release directory containing `m
 
 1. Download and extract `dsh-plugin-manager-deployment-<version>.zip` from one [Release](https://github.com/PelyDeng/dsh-plugin-manager/releases).
 2. Put each app's complete release directory under `incoming/<app>/`.
-3. The built-in auth and example plugins are produced by the build itself (the archives entry builds them from the packaged public view) and are already candidates. Use `incoming/` only for complete external author release directories: adding the bundled `optional/auth` or `public-apps` (the same plugin ids) is rejected as a duplicate id.
+3. The built-in auth and example plugins are produced by the build itself (the archives entry builds them from the packaged public view) and are already candidates. Use `incoming/` only for complete external author release directories: adding the bundled `public-apps` (the same plugin ids) is rejected during input preparation, naming the built-in plugin it collides with.
 4. From the extracted deployment directory, run:
 
    ```sh

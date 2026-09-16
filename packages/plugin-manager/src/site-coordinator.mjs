@@ -9,6 +9,9 @@ import { buildStep } from './site-output.mjs';
 import { siteArguments } from './site-record.mjs';
 import { readFrameworkConfig, resolveSiteConfig } from './framework-config.mjs';
 
+/** archives 入口的 worker 动作名：随包管理器 CLI 自带，因此部署包不依赖站点根的任何源码文件。 */
+export const ARCHIVES_WORKER_ACTION = 'archives-worker';
+
 function runEntry(root, entry, args) {
   const result = spawnSync(process.execPath, [resolve(root, 'deploy/scripts', entry), ...args], { cwd: root, stdio: 'inherit', windowsHide: true });
   if (result.error) throw result.error;
@@ -70,7 +73,12 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight, p
     unlock.update({ recovery });
     if (beforeBuild && inputKind === 'source') await buildStep('同步 Gitee 集成版本', () => beforeBuild(root, buildArgs, env));
     if (interrupted) return interrupted === 'SIGINT' ? 130 : 143;
-    const entry = resolve(root, 'deploy/scripts/build.mjs'), workerArgs = [...buildArgs];
+    // 输入形态决定 worker：source 用检出里的 `deploy/scripts/build.mjs`（它负责同步后的源码流程）；
+    // archives 站点没有源码检出，改用随包管理器自己的 CLI（`archives-worker`），部署包不需要额外文件。
+    const entry = inputKind === 'archives'
+      ? fileURLToPath(new URL('./cli.mjs', import.meta.url))
+      : resolve(root, 'deploy/scripts/build.mjs');
+    const workerArgs = inputKind === 'archives' ? [ARCHIVES_WORKER_ACTION, '--root', root, ...buildArgs] : [...buildArgs];
     // 同步之后才加载展示端：这一次发布就用快进后的代码渲染进度与汇总。
     const present = await presenter();
     // 计时记录要能回答「这次慢在哪」：把本次发布的身份与输入形态一起落盘，便于跨次对比。
