@@ -223,7 +223,13 @@ jobs:
           timing=$(grep -o '时间记录：[^ ]*' build.log | tail -n 1 | sed 's/时间记录：//')
           test -f "$timing"
           node -e "const t=require(process.argv[1]); if (t.status!=='ready'||!t.stages.length) throw new Error('计时记录不完整');" "$timing"
-          record=$(ls -td .local/artifacts/source-release-* | head -n 1)/result.json
+          # 发布记录取构建自己打印的路径：.local/artifacts 下可能还有更早的准备目录，
+          # 按修改时间取最新目录会读到不是本次结果的那一份。
+          if ! record=$(grep -o '发布记录：[^ ]*' build.log | tail -n 1 | sed 's/发布记录：//'); then
+            echo '::error::构建输出里没有发布记录路径'
+            tail -n 20 build.log | sed 's/%/%25/g' | awk '{ print "::error::" $0 }'
+            exit 1
+          fi
           test -f "$record"
           node -e "const r=require(process.argv[1]); if (r.status!=='ready'||!r.timings?.path) throw new Error('发布记录缺少计时指针');" "$record"
           for path in /auth/health /example/ready; do curl -fsS -m 15 "http://127.0.0.1:17921$path"; echo; done
