@@ -111,7 +111,7 @@ export interface IdentityInfo {
 
 /** 管家事件流里会出现的事件；只声明本切片消费的字段。 */
 export interface ButlerEvent {
-  readonly type: 'run' | 'user' | 'chat' | 'chat_delta' | 'plan' | 'subtask' | 'subtask_delta' | 'subtask_thinking' | 'summary' | 'error' | 'reset' | 'conversation'
+  readonly type: 'run' | 'user' | 'chat' | 'chat_delta' | 'chat_thinking' | 'plan' | 'subtask' | 'subtask_delta' | 'subtask_thinking' | 'summary' | 'error' | 'reset' | 'conversation'
   readonly seq?: number
   readonly runId?: string
   readonly taskId?: string
@@ -211,6 +211,15 @@ export interface TaskView {
   /** 牛马大总管最近一次落定的发言（chat 替换、chat_delta 追加）。 */
   butlerText: string
   /**
+   * 牛马大总管这一轮的思考快照（`chat_thinking`，覆盖语义）。
+   *
+   * 与成员思考同一套语义，只是挂在大总管自己的气泡上：只发稳定行，末行未写完时带
+   * 「正在生成…」占位；`chat` 到达表示这一轮说完了，界面据此收起思考。
+   */
+  butlerThinking: string
+  /** 这一轮的思考是否已经结束（`chat` 落定后为 true）。 */
+  butlerThinkingDone: boolean
+  /**
    * 本轮正文可能不完整：事件窗口滚出后，未落库的增量无法从日志恢复。
    * 由恢复上下文置位，本轮结束重读快照补齐后清除；界面据此如实提示，不静默展示残缺正文。
    */
@@ -228,7 +237,7 @@ const CERTAIN_RESULT_STATES: ReadonlySet<string> = new Set(['succeeded', 'extern
 const ACTIVE_STATES: ReadonlySet<string> = new Set(['queued', 'dispatched', 'running'])
 
 export function emptyTaskView(conversationId = ''): TaskView {
-  return { taskId: '', conversationId, goal: '', state: '', runState: '', lastRunId: '', summary: '', error: '', subtasks: [], butlerText: '', incomplete: false, updatedAt: 0 }
+  return { taskId: '', conversationId, goal: '', state: '', runState: '', lastRunId: '', summary: '', error: '', subtasks: [], butlerText: '', butlerThinking: '', butlerThinkingDone: false, incomplete: false, updatedAt: 0 }
 }
 
 /** 新建条目的覆盖边界：还没有落库基准，轮内增量全部计入。 */
@@ -322,6 +331,9 @@ export function applySnapshot(view: TaskView, snapshot: TaskSnapshot, now = Date
     error: snapshot.error ?? '',
     // 换任务后旧一轮的管家发言不再属于当前展示，一并作废。
     butlerText: snapshot.id === view.taskId ? view.butlerText : '',
+    // 同一套口径：思考快照也只在同一任务内保留，换任务就清空（并视为还没结束）。
+    butlerThinking: snapshot.id === view.taskId ? view.butlerThinking : '',
+    butlerThinkingDone: snapshot.id === view.taskId ? view.butlerThinkingDone : false,
     // 恢复上下文说明事件窗口是否滚出过；补齐用的重读要看是否证明得了本轮完整。
     incomplete: recovery?.final === true ? !proven : recovery?.truncated === true,
     subtasks: snapshot.subtasks.map(s => {
@@ -387,6 +399,9 @@ export function applyEvent(view: TaskView, event: ButlerEvent, now = Date.now())
         // 同任务换执行轮（回复/补话）：只清轮内发言与错误；跨任务轮换已整体重置。
         next.butlerText = ''
         next.error = ''
+        // 上一轮的思考不续到这一轮：新轮从空快照开始。
+        next.butlerThinking = ''
+        next.butlerThinkingDone = false
       }
       next.runState = (event.state as RunState | undefined) ?? ''
       if (runId) next.lastRunId = runId
@@ -455,6 +470,13 @@ export function applyEvent(view: TaskView, event: ButlerEvent, now = Date.now())
     }
     case 'chat':
       next.butlerText = event.text ?? ''
+      // 说完了：思考保留下来可展开，但标记结束，界面不再显示「正在生成」。
+      next.butlerThinkingDone = true
+      return next
+    case 'chat_thinking':
+      // 覆盖语义：整段快照替换，不做追加；新一轮开始前都是「还在想」。
+      next.butlerThinking = event.thinking ?? ''
+      next.butlerThinkingDone = false
       return next
     case 'chat_delta':
       next.butlerText = view.butlerText + (event.text ?? '')

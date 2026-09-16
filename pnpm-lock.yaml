@@ -422,12 +422,6 @@ importers:
         specifier: 3.5.42
         version: 3.5.42(typescript@6.0.3)
 
-  plugins/external/dsh-agents-group/agents/verify-doll:
-    devDependencies:
-      tsdown:
-        specifier: ^0.22.2
-        version: 0.22.14(@volar/typescript@2.4.28(typescript@6.0.3))(typescript@6.0.3)(vue-tsc@3.3.11(typescript@6.0.3))
-
   plugins/external/dsh-agents-group/packages/common:
     devDependencies:
       '@dsh-plugin-manager/plugin-kit':

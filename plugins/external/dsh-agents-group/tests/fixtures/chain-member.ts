@@ -1,31 +1,32 @@
 /**
- * 接入验收成员：一只最小「验收娃娃」。
+ * 链路验收替身（**只在测试里存在**，不随包发布）。
  *
- * 它是群组接入路径的**活样例**（方案 G06）：子包、清单、适配层、装载分支、构建与
- * 归档一处不缺，但业务只有协作契约本身——派活先等回话，回话沿原会话续接，两次回话
- * 后交差。新成员接入时照着这个目录做，缺哪一环验收就会在哪里红。
+ * 群组接入路径需要一只「只有协作契约、没有业务」的成员来做贯通验收：派活先等回话、回话沿原会话
+ * 续接、两次回话后交差，并且同一个 `requestId` 重试不产生第二个副作用。它以前以 `verify-doll`
+ * （验收娃娃）的形式随包发布，虽然默认关闭、要显式配置才装载，但它出现在任何站点的成员名单里都
+ * 是噪音——接入期的临时替身做完验收就该留在测试里。
  *
- * 语义刻意钉死三条（对应 B 批验收核心）：
+ * 语义与当时完全一致，钉死三条：
  *
- * 1. **不重复执行**：同一个 `requestId` 再来（重试），返回同一份结论，不产生新副作用；
+ * 1. **不重复执行**：同一个 `requestId` 再来（重试）返回同一份结论，不产生新副作用；
  * 2. **不丢会话**：业务一开始就把会话引用随进度交回（早期上报），续问必须沿它续接；
  * 3. **不混轮次**：每次回话的 `requestId` 不同才算新回话，同 ID 不同内容直接拒绝。
  *
- * 与 closedoff/blog 的分层一致：目录条目由子包**自己**登记（分类 `agents`），群组不
- * 代注册；类型按相对路径引 common 的源码、值按包名引（构建期内联）。状态只在内存里：
- * 验收成员没有真实业务，重启丢掉反而是想要的行为。
+ * 状态只在内存里，进程重启即丢——测试替身没有真实业务，丢掉正是想要的。
  */
-
 import type { Access, Actor, ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import { registerPlugin } from '@dsh-plugin-manager/plugin-kit'
 import { PARTICIPANT_PROTOCOL } from '@dsh-agents-group/common'
-import type { AgentParticipant, ParticipantRequest, ParticipantResult } from '../../../packages/common/src/participant.ts'
+import type { AgentManifest } from '../../src/agents/registry.ts'
+import type { AgentParticipant, ParticipantRequest, ParticipantResult } from '../../packages/common/src/participant.ts'
 
-/** 子包需要的装载入参：宿主上下文、访问校验器与自己的页面前缀。 */
-export interface MountInput {
-  readonly ctx: Parameters<typeof registerPlugin>[0]
-  readonly access: Access
-  readonly routePrefix: string
+/** 替身在群组名单里的形状：分类必须是 `agents`，否则牛马大总管发现不了它。 */
+export const CHAIN_MEMBER_MANIFEST: AgentManifest = {
+  id: 'chain-member',
+  displayName: '链路验收替身',
+  directory: 'chain-member',
+  category: 'agents',
+  description: '测试专用最小成员：等待、续问与幂等语义',
 }
 
 /** 一条回话记录：哪一次（requestId）、说了什么。 */
@@ -35,30 +36,37 @@ interface ReplyEntry {
 }
 
 /** 一场验收业务的全部状态，按原会话标识归档。 */
-interface DollSession {
+interface MemberSession {
   /** 该会话已经收到的回话，按到达顺序。 */
   readonly replies: ReplyEntry[]
   /** 同一 requestId 的结论重放，保证幂等。 */
   readonly settled: Map<string, ParticipantResult>
 }
 
-/** 装载：登记目录条目并交出一个参与者，不注册页面与工具。 */
-export async function mount(input: MountInput): Promise<{
-  tools: readonly ToolDescriptor[]
-  participant: AgentParticipant
+export interface ChainMemberMount {
+  readonly tools: readonly ToolDescriptor[]
+  readonly participant: AgentParticipant
   dispose(): Promise<void>
-}> {
-  const sessions = new Map<string, DollSession>()
-  // 目录条目：牛马大总管按分类 `agents` 发现成员。没有这条，名单里就看不到验收娃娃——
-  // 之前贯通测试手工编造条目掩盖的就是这处缺失。
+}
+
+/** 装载替身：登记目录条目并交出一个参与者，不注册页面与工具。 */
+export async function mountChainMember(input: {
+  ctx: Parameters<typeof registerPlugin>[0]
+  access: Access
+  routePrefix: string
+}): Promise<ChainMemberMount> {
+  const sessions = new Map<string, MemberSession>()
+  // 目录条目：牛马大总管按分类 `agents` 发现成员。缺了这条，成员名单里就看不到它 ——
+  // 真实装配里这处缺失曾被手工编造的条目掩盖过，所以测试要用真装配路径。
   input.ctx.effect(() => registerPlugin(input.ctx, {
-    id: 'verify-doll',
-    packageName: '@dsh-agents-group/verify-doll',
+    id: CHAIN_MEMBER_MANIFEST.id,
+    packageName: '@dsh-agents-group/chain-member',
     version: '0.1.0',
-    displayName: '验收娃娃',
-    description: '最小接入验收成员：等待、续问与幂等语义',
-    entryPath: input.routePrefix,
-    permissions: ['verify-doll:access'],
+    displayName: CHAIN_MEMBER_MANIFEST.displayName,
+    description: CHAIN_MEMBER_MANIFEST.description,
+    // 与群组 `mountAgents` 给出的路径一致：成员页面挂在群组前缀的下一级。
+    entryPath: `${input.routePrefix}/${CHAIN_MEMBER_MANIFEST.id}`,
+    permissions: [`${CHAIN_MEMBER_MANIFEST.id}:access`],
     category: 'agents',
     tools: [],
   }))
@@ -66,24 +74,24 @@ export async function mount(input: MountInput): Promise<{
     tools: [],
     participant: {
       protocol: PARTICIPANT_PROTOCOL,
-      id: 'verify-doll',
-      displayName: '验收娃娃',
-      description: '最小接入验收成员：等待、续问与幂等语义',
+      id: CHAIN_MEMBER_MANIFEST.id,
+      displayName: CHAIN_MEMBER_MANIFEST.displayName,
+      description: CHAIN_MEMBER_MANIFEST.description,
       assertAccess: (actor: Actor) => { input.access.assert(actor) },
       async run(request: ParticipantRequest): Promise<ParticipantResult> {
         // 派活按子任务标识幂等：重试回到同一份等待结论，不把问题问两遍。
-        const conversationId = `doll-${request.missionId}-${request.actor.userId}`
+        const conversationId = `chain-${request.missionId}-${request.actor.userId}`
         const settled = sessions.get(conversationId)?.settled.get(`dispatch:${request.requestId}`)
         if (settled !== undefined) return settled
         // 业务一开始就交回会话引用：协调方落库后，final 前失败也找得回原会话。
         request.onProgress({
           kind: 'status',
-          text: '验收娃娃开工',
+          text: '链路验收替身开工',
           conversationId,
           conversationArtifact: {
             kind: 'conversation',
             title: '查看验收会话',
-            path: `${input.routePrefix}/verify-doll?conversationId=${conversationId}`,
+            path: `${input.routePrefix}/${CHAIN_MEMBER_MANIFEST.id}?conversationId=${conversationId}`,
           },
         })
         const result: ParticipantResult = {
@@ -96,7 +104,7 @@ export async function mount(input: MountInput): Promise<{
         return result
       },
       async reply(request: ParticipantRequest): Promise<ParticipantResult> {
-        // 没有原会话引用的续问不接：接了就等于让验收成员另起炉灶，那正是要防的丢会话。
+        // 没有原会话引用的续问不接：接了就等于让成员另起炉灶，那正是要防的丢会话。
         if (request.conversationId === undefined) {
           return { status: 'failed', conversationId: '', text: '续问必须携带原会话引用' }
         }
@@ -131,7 +139,7 @@ export async function mount(input: MountInput): Promise<{
           artifacts: [{
             kind: 'report',
             title: '验收报告',
-            path: `${input.routePrefix}/verify-doll?conversationId=${request.conversationId}`,
+            path: `${input.routePrefix}/${CHAIN_MEMBER_MANIFEST.id}?conversationId=${request.conversationId}`,
           }],
         }
         remember(sessions, request.conversationId, `reply:${request.requestId}`, result)
@@ -142,7 +150,7 @@ export async function mount(input: MountInput): Promise<{
   }
 }
 
-function remember(sessions: Map<string, DollSession>, conversationId: string, key: string, result: ParticipantResult): void {
+function remember(sessions: Map<string, MemberSession>, conversationId: string, key: string, result: ParticipantResult): void {
   const session = sessions.get(conversationId) ?? { replies: [], settled: new Map() }
   session.settled.set(key, result)
   sessions.set(conversationId, session)

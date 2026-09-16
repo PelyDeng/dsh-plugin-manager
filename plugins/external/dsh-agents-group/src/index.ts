@@ -60,7 +60,6 @@ async function loadAgent(manifest: AgentManifest): Promise<AgentMount | undefine
   switch (manifest.id) {
     case 'closedoff': return (await import('./agents/closedoff.ts')).mountClosedoff
     case 'blog': return (await import('./agents/blog.ts')).mountBlog
-    case 'verify-doll': return (await import('./agents/verify-doll.ts')).mountVerifyDoll
     default: return undefined
   }
 }

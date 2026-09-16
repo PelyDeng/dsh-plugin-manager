@@ -48,6 +48,15 @@ import { isTerminal, dependencyVerdict, type SubtaskState, type TaskState } from
 
 const CONVERSATION_ID = /^butler-web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const PLAN_TOOL = 'butler_plan'
+/**
+ * 思考快照的发布间隔。
+ *
+ * 推理增量比正文更碎（一次几百字很常见），逐字发只会让页面反复重绘；攒到这个间隔再发一次
+ * 整段快照，既看得出「在思考」，也不会把页面刷爆。
+ */
+const THINKING_INTERVAL_MS = 250
+/** 末行还在生成时的占位：页面据此知道这一段还没写完。 */
+const THINKING_TAIL = '正在生成…'
 
 /** 群聊里一位成员的完整展示信息，含插件声明的补充字段。 */
 export interface ButlerMemberCard extends ButlerMember {
@@ -67,6 +76,14 @@ export type ButlerEvent =
    * 正文**替换**预览（重试过的那一版就不会留在页面上）。
    */
   | { readonly type: 'chat_delta'; readonly role: 'butler'; readonly text: string; readonly time: number }
+  /**
+   * 牛马大总管这一轮的思考快照（覆盖语义）。
+   *
+   * 页面用整段快照替换思考区，而不是追加。只发布**稳定行**：末尾还在生成的那一行留着，
+   * 用一个「正在生成…」占位，所以它不会像正文那样字字跳动。空快照不下发；回合结束会补发
+   * 一次完整快照，页面据此把占位去掉、把思考折起来。
+   */
+  | { readonly type: 'chat_thinking'; readonly role: 'butler'; readonly thinking: string; readonly time: number }
   /**
    * 模型重试开始：当前预览作废，下一段增量从新气泡起头（方案 S08）。
    *
@@ -455,6 +472,22 @@ function clip(value: string, limit: number): string {
 }
 
 /**
+ * 把本轮推理整理成可发布的快照。
+ *
+ * 只发布**完整行**：末尾那一行还在生成，先只留一个占位，页面上的字就不会来回跳；
+ * 回合结束时（`done`）把全部内容发出去，包括最后一行。全空时返回空串，调用方据此跳过，
+ * 不发空事件。
+ */
+function thinkingSnapshot(raw: string, done: boolean): string {
+  const text = raw.replace(/\s+$/u, '')
+  if (text === '') return ''
+  if (done) return text
+  const cut = text.lastIndexOf('\n')
+  const head = cut < 0 ? '' : text.slice(0, cut)
+  return head === '' ? THINKING_TAIL : `${head}\n${THINKING_TAIL}`
+}
+
+/**
  * 把失败原因裁剪成用户可读的一段话。
  *
  * 设计文档要求不展示内部路径、配置值和凭据，所以这里只保留错误消息本身，并抹掉
@@ -705,6 +738,10 @@ export class ButlerConsole {
   private readonly logs = new Map<string, ConversationLog<ButlerEvent>>()
   /** 每个正在进行的大总管回合的正文增量出口：`sessionId` → 写进当前事件流。 */
   private readonly deltas = new Map<string, (text: string) => void>()
+  /** 同一个回合的思考快照出口：与 `deltas` 并行，覆盖语义而不是追加。 */
+  private readonly thinkings = new Map<string, (thinking: string) => void>()
+  /** 思考累积状态：按会话记原始推理、已发布的快照与节流计时器。 */
+  private readonly thinkingState = new Map<string, { raw: string; published: string; timer?: NodeJS.Timeout }>()
   /** 每个会话当前采用的流式尝试（宿主帧的 attemptId）：旧尝试的迟到帧按它丢弃（S08）。 */
   private readonly streamAttempts = new Map<string, unknown>()
   /** 尝试切换时通知回合回调重置预览（发出 chat_reset）。 */
@@ -1338,7 +1375,9 @@ export class ButlerConsole {
       const speech = progressQueue()
       const planningTurn = this.runTurn(conversation, text, abort.signal,
         delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
-        () => speech.push({ type: 'chat_reset', time: Date.now() }))
+        () => speech.push({ type: 'chat_reset', time: Date.now() }),
+        undefined,
+        thinking => speech.push({ type: 'chat_thinking', role: 'butler', thinking, time: Date.now() }))
       void planningTurn.then(() => speech.settle(), () => speech.settle())
       for await (const event of speech.drain()) yield event
       const planning = await planningTurn
@@ -1627,7 +1666,8 @@ export class ButlerConsole {
       const turn = this.runTurn(conversation, prompt, prepared.abort.signal,
         delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
         () => speech.push({ type: 'chat_reset', time: Date.now() }),
-        { taskId, subtasks: record.subtasks })
+        { taskId, subtasks: record.subtasks },
+        thinking => speech.push({ type: 'chat_thinking', role: 'butler', thinking, time: Date.now() }))
       void turn.then(() => speech.settle(), () => speech.settle())
       for await (const event of speech.drain()) yield event
       const outcome = await turn
@@ -2071,6 +2111,7 @@ export class ButlerConsole {
     onDelta?: (text: string) => void,
     onReset?: () => void,
     context?: { readonly taskId: string; readonly subtasks: readonly SubtaskRecord[] },
+    onThinking?: (thinking: string) => void,
   ): Promise<{ outcome: TurnOutcome; text: string; plans: readonly PlanSubmission[] }> {
     const sessionId = String(conversation.handle.agent.session.id)
     const turn: Turn = {
@@ -2082,6 +2123,11 @@ export class ButlerConsole {
     this.turns.set(sessionId, turn)
     if (onDelta !== undefined) this.deltas.set(sessionId, onDelta)
     if (onReset !== undefined) this.deltaResets.set(sessionId, onReset)
+    // 思考是覆盖语义：这一轮从空快照起头，上一轮的残留不会混进来。
+    if (onThinking !== undefined) {
+      this.thinkings.set(sessionId, onThinking)
+      this.thinkingState.set(sessionId, { raw: '', published: '' })
+    }
     const finished = new Promise<TurnOutcome>(resolve => {
       turn.resolve = outcome => {
         if (turn.done) return
@@ -2101,19 +2147,26 @@ export class ButlerConsole {
       console.error(`butler-console: 一轮失败：${visibleError(error, 500)}\n${stackOf(error)}`)
       return { outcome: { kind: 'failed', message: visibleError(error, 500) }, text: turn.text, plans: turn.plans }
     } finally {
+      // 收尾补发一次完整思考快照：末行还在生成时页面用的是「正在生成…」占位，
+      // 这里把最后一节补齐，页面才知道这轮的思考已经结束。
+      this.flushThinking(sessionId, true)
       this.turns.delete(sessionId)
       this.deltas.delete(sessionId)
       this.deltaResets.delete(sessionId)
       this.streamAttempts.delete(sessionId)
+      this.thinkings.delete(sessionId)
+      this.thinkingState.delete(sessionId)
     }
   }
 
   /**
    * 宿主实时帧入口，由 `index.ts` 注册到 `ctx.on('agent/assistant-stream')`。
    *
-   * 只转发牛马大总管当前回合的正文增量：其他插件 Agent 的帧、推理与工具参数都不进页面。
+   * 只处理牛马大总管当前回合的帧：其他插件 Agent 的帧与工具参数都不进页面。
+   * - 正文增量走 `deltas`（页面追加）；
+   * - 推理增量走 `thinkings`（页面覆盖，节流后只发稳定行）；
    * 一次回合里可能有多次尝试（重试会换 attemptId），这里不做尝试级区分 —— 落定的 `chat`
-   * 会用最终正文替换整条预览，被重试掉的那一版不会留在页面上。
+   * 会用最终正文替换整条预览，被重试掉的那一版不会留在页面上，思考也随新尝试重新起头。
    */
   observeStream(agent: { session?: { id?: unknown } } | undefined, frame: AssistantStreamFrame): void {
     // 流式诊断（方案 S01）：BUTLER_STREAM_DEBUG=1 时记录宿主帧的类型与长度——正文、推理与
@@ -2129,16 +2182,50 @@ export class ButlerConsole {
       if (this.streamAttempts.get(sessionKey) !== frame.attemptId) {
         this.streamAttempts.set(sessionKey, frame.attemptId)
         this.deltaResets.get(sessionKey)?.()
+        // 重试换的是另一次尝试：上一版的推理不能续到这一版上，思考快照重新起头。
+        const state = this.thinkingState.get(sessionKey)
+        if (state !== undefined) { state.raw = ''; state.published = '' }
       }
       return
     }
-    if (frame.type !== 'chunk' || frame.chunk.type !== 'text-delta') return
+    if (frame.type !== 'chunk') return
+    const kind = frame.chunk.type
+    if (kind !== 'text-delta' && kind !== 'reasoning-delta') return
     const current = this.streamAttempts.get(sessionKey)
     if (current !== undefined && current !== frame.attemptId) return
     if (current === undefined) this.streamAttempts.set(sessionKey, frame.attemptId)
     const text = frame.chunk.text
     if (text === '') return
+    if (kind === 'reasoning-delta') { this.collectThinking(sessionKey, text); return }
     this.deltas.get(sessionKey)?.(text)
+  }
+
+  /**
+   * 收下一条推理增量，按节流发布思考快照。
+   *
+   * 逐字发会让页面反复重绘，所以攒够一个间隔再发；发的是**覆盖语义的整段快照**，
+   * 页面直接替换思考区，不需要自己维护拼接状态。
+   */
+  private collectThinking(sessionKey: string, delta: string): void {
+    const state = this.thinkingState.get(sessionKey)
+    if (state === undefined || !this.thinkings.has(sessionKey)) return
+    state.raw += delta
+    if (state.timer !== undefined) return
+    // 计时器用完就删掉键：`exactOptionalPropertyTypes` 下不能给可选属性赋 undefined，
+    // 语义上也是「这个间隔已经结清」，不是「有一个值为 undefined 的计时器」。
+    state.timer = setTimeout(() => { delete state.timer; this.flushThinking(sessionKey, false) }, THINKING_INTERVAL_MS)
+  }
+
+  /** 发布一次思考快照；与上次相同就跳过，避免无意义的重复事件。 */
+  private flushThinking(sessionKey: string, done: boolean): void {
+    const publish = this.thinkings.get(sessionKey)
+    const state = this.thinkingState.get(sessionKey)
+    if (publish === undefined || state === undefined) return
+    if (state.timer !== undefined) { clearTimeout(state.timer); delete state.timer }
+    const snapshot = thinkingSnapshot(state.raw, done)
+    if (snapshot === '' || snapshot === state.published) return
+    state.published = snapshot
+    publish(snapshot)
   }
 
   /**
@@ -3005,7 +3092,9 @@ export class ButlerConsole {
     const speech = progressQueue()
     const summaryTurn = this.runTurn(conversation, prompt, signal,
       delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
-      () => speech.push({ type: 'chat_reset', time: Date.now() }))
+      () => speech.push({ type: 'chat_reset', time: Date.now() }),
+      undefined,
+      thinking => speech.push({ type: 'chat_thinking', role: 'butler', thinking, time: Date.now() }))
     void summaryTurn.then(() => speech.settle(), () => speech.settle())
     for await (const event of speech.drain()) yield event
     const outcome = await summaryTurn

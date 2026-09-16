@@ -47,15 +47,22 @@ function load() {
   const renderMarkdownInto = (target: StubNode, text: string) => { target.textContent = text; rendered.push(text) }
   // 追加写替身：语义与真实实现一致（写入由帧回调驱动），节点细节由浏览器验证覆盖。
   const appendPreviewText = (target: StubNode, book: { rendered?: string }, text: string) => { target.textContent = text; book.rendered = text }
-  const api = Function('state', 'butlerMessage', 'scheduleFrame', 'stabilizeViewport', 'make', 'renderMarkdownInto', 'appendPreviewText',
+  /**
+   * 思考挂载替身：真实实现把 `state.butlerThinking` 挂到这条气泡上（思考行本身见
+   * `page-thinking.test.ts`）。这里只锁住「气泡一出现就挂思考」这条接线确实被走到。
+   */
+  const attached: unknown[] = []
+  const attachButlerThinking = (view: unknown) => { attached.push(view) }
+  const api = Function('state', 'butlerMessage', 'scheduleFrame', 'stabilizeViewport', 'make', 'renderMarkdownInto', 'appendPreviewText', 'attachButlerThinking',
     `${pick('butlerSpeech')}\n${pick('butlerDelta')}\n${pick('settleMarkdown')}\n${pick('butlerSettle')}\nreturn { butlerDelta, butlerSettle }`,
-  )(state, butlerMessage, scheduleFrame, stabilizeViewport, make, renderMarkdownInto, appendPreviewText) as
+  )(state, butlerMessage, scheduleFrame, stabilizeViewport, make, renderMarkdownInto, appendPreviewText, attachButlerThinking) as
     { butlerDelta(text: string): void; butlerSettle(text: string, time?: number): void }
   return {
     ...api,
     state,
     created,
     rendered,
+    attached,
     pending: () => jobs.length,
     flush: () => { for (const run of jobs.splice(0, jobs.length)) run() },
   }
@@ -67,6 +74,9 @@ describe('大总管气泡的流式预览', () => {
     f.butlerDelta('收到老板，')
     f.butlerDelta('我这就安排。')
     expect(f.created).toHaveLength(1)
+    // 气泡一出现就把这一轮的思考挂上去（思考通常先于正文到达，挂载点在这里）。
+    expect(f.attached.length).toBeGreaterThan(0)
+    expect(f.attached.every(view => view === f.state.butlerSpeech)).toBe(true)
     // 帧没冲之前不写 DOM（I12：不逐 token 全量重建）。
     expect(f.created[0]!.body.textContent).toBe('')
     expect(f.pending()).toBe(1)
