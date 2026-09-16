@@ -51,7 +51,13 @@ export interface ConversationAdapterInput {
   readonly access: Access
   /** **同步**的忙判定（本实例正在跑 + 宿主侧正在跑）。 */
   readonly busy: (conversationId: string) => boolean
-  /** 本实例正在跑的会话 id（侧栏 list 的 `busy` 集合要带上它们）。 */
+  /**
+   * 本实例正在跑的会话 id（侧栏 `list` 的 `busy` 集合要带上它们）。
+   *
+   * ⚠️ 装配时应当传 `ConversationLifecycle.busyIds()` —— 它与 `isBusy` **同源**，是"本地占用"
+   * 的唯一算法。在这里另算一遍（或换个来源）就会与移除围栏漂移：围栏看的是一套集合、
+   * 侧栏显示的是另一套，而那种漂移在页面上只表现为"这条怎么删不掉"。
+   */
   readonly localBusyIds: () => readonly string[]
   /** 移除时释放本插件持有的会话句柄（删了就不该继续占着）。 */
   readonly release: (conversationId: string) => Promise<void>
