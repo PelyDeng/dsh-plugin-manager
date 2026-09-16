@@ -10,7 +10,39 @@ import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { AccessError, type Actor, type AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
-import { isTerminal, SUBTASK_STATES, type SubtaskState, type TaskState } from './task-model.ts'
+import { isTerminal, type SubtaskState, type TaskState } from './task-model.ts'
+import { parseArtifacts, parseDependsOn, parseDependsOnStrict, parseInputRefs, parseMemberReturn } from './storage/parse.ts'
+import type {
+  ButlerInputRef,
+  ButlerMemberReturn,
+  ConversationSummary,
+  HistoryQuery,
+  NewSubtask,
+  RequestRecord,
+  SubtaskRecord,
+  TaskCounts,
+  TaskInput,
+  TaskRecord,
+  TaskSummary,
+} from './storage/types.ts'
+
+// 记录类型与 JSON 列的纯解析函数已平移到 `src/storage/`（异步存储接口与 PG 实现共用同一份），
+// 这里原样再导出，公开导出保持兼容。
+export type {
+  ButlerDependsOnKind,
+  ButlerInputRef,
+  ButlerInputRefsKind,
+  ButlerMemberReturn,
+  ConversationSummary,
+  HistoryQuery,
+  NewSubtask,
+  RequestRecord,
+  SubtaskRecord,
+  TaskCounts,
+  TaskInput,
+  TaskRecord,
+  TaskSummary,
+} from './storage/types.ts'
 
 /**
  * 工作台索引的数据结构版本。
@@ -34,207 +66,6 @@ const SCHEMA_VERSION = 8
  * 比起不来严重得多。
  */
 const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7]
-
-/** 侧栏里的一条会话。 */
-export interface ConversationSummary {
-  readonly id: string
-  readonly title: string
-  readonly createdAt: number
-  readonly updatedAt: number
-  readonly taskCount: number
-}
-
-/** 历史列表里的一条任务。 */
-export interface TaskSummary {
-  readonly id: string
-  readonly conversationId: string
-  readonly goal: string
-  readonly state: TaskState
-  readonly createdAt: number
-  readonly updatedAt: number
-  readonly subtaskTotal: number
-  readonly subtaskDone: number
-}
-
-/** 一条完整的任务记录，含全部子任务。 */
-export interface TaskRecord {
-  readonly id: string
-  readonly conversationId: string
-  readonly goal: string
-  readonly state: TaskState
-  readonly note: string
-  readonly summary: string
-  readonly error: string
-  /**
-   * 已接受的需求版本，从 1 开始。
-   *
-   * 第一条需求就是版本 1，之后每接受一条补充加一。**接受不等于处理完成**：汇总前要
-   * `acceptedVersion === processedVersion` 才算处理到了最新输入。
-   */
-  readonly acceptedVersion: number
-  /** 管家已经处理到的版本。 */
-  readonly processedVersion: number
-  readonly createdAt: number
-  readonly updatedAt: number
-  readonly finishedAt: number | null
-  readonly subtasks: readonly SubtaskRecord[]
-}
-
-/**
- * 一次被接受的需求或补充。
- *
- * 原文留着：汇总要能核对「最新一条到底说了什么」，只存一个版本号是不够的。
- */
-export interface TaskInput {
-  readonly version: number
-  readonly text: string
-  /** `chat` 是最初那条需求，`supplement` 是后来的补充。 */
-  readonly source: 'chat' | 'supplement'
-  readonly createdAt: number
-}
-
-/** 派单时固定下来的上游材料来源快照项；管家内部结构，不进公共协议。 */
-export interface ButlerInputRef {
-  readonly subtaskId: string
-  readonly logicalId: string
-  /** 上游该次有效尝试的状态；只记录权威值，不推断。 */
-  readonly state: SubtaskState
-  /** 上游协作返回原文（未裁剪）；位置型材料不构成可消费材料。 */
-  readonly text: string
-  /** 上游交回的位置型材料，仅作为来源记录。 */
-  readonly artifacts: readonly AgentArtifact[]
-  /** 上游结构化外部待办；取自权威声明，不作推断。 */
-  readonly externalPending?: { readonly reason: string; readonly next?: string }
-}
-
-/**
- * 派单材料快照的读取结论。**只有 `unfixed` 允许首次固定**，其余三种都不许拿当前上游结果补造。
- *
- * - `unfixed`：确实还没派出去过（列是空的、状态还是排队中、从未开始）；
- * - `unknown`：派出过但没留下材料（旧版本记录），来源未知；
- * - `damaged`：列里有值但读不出来（损坏 JSON／形状或版本非法）；
- * - `fixed`：已固定的合法快照。
- */
-export type ButlerInputRefsKind = 'unfixed' | 'unknown' | 'damaged' | 'fixed'
-
-/** 员工一次协作返回的内部留存：原文与结构化外部待办。 */
-export interface ButlerMemberReturn {
-  readonly protocol: 1
-  readonly text: string
-  readonly externalPending?: { readonly reason: string; readonly next?: string }
-}
-
-/** 一条子任务记录。 */
-export interface SubtaskRecord {
-  readonly id: string
-  readonly seq: number
-  /**
-   * 这条尝试对应的**目标**标识。
-   *
-   * 同一个目标重做几次，几次尝试共用它 —— 结论按目标算，不按尝试算，否则「重试成功」
-   * 会被前面那次已经作废的失败拉低。
-   */
-  readonly logicalId: string
-  /** 替代了哪一条尝试；首次尝试为空字符串。 */
-  readonly supersedes: string
-  /**
-   * 前置目标的标识；空数组表示没有前置。
-   *
-   * 只在**前置成功**时才派这一步。前置失败、取消、还在等人回话、或者带着外部待办时都不派，
-   * 并如实说明「前提没有满足」—— 不伪造一次员工报错。
-   */
-  readonly dependsOn: readonly string[]
-  /** 这一步是否真的需要外部动作（采用、确认、发布）已经办完；由计划声明。 */
-  readonly requiresExternalAction: boolean
-  readonly goal: string
-  readonly agentId: string
-  readonly reason: string
-  readonly state: SubtaskState
-  readonly result: string
-  readonly error: string
-  /** 员工交回的材料引用；没有可点开的位置时为空数组。 */
-  readonly artifacts: readonly AgentArtifact[]
-  /** 员工在别处用的会话标识，便于用户回到原页面继续；没拿到时为空字符串。 */
-  readonly conversationId: string
-  /**
-   * 派单时固定的上游材料快照；只在 {@link inputRefsState} 为 `fixed` 时有值。
-   *
-   * `undefined` 本身分不出三种情况（还没派过／旧记录没留材料／读不出来），判断能不能首次
-   * 固定要看 `inputRefsState`，只看这个字段会把「未知」当成「还没固定」。
-   */
-  readonly inputRefs: readonly ButlerInputRef[] | undefined
-  /**
-   * 快照为什么是这个值 —— **只有 `unfixed` 允许首次固定**（取值含义见 {@link ButlerInputRefsKind}）。
-   *
-   * 旧已派出的未知与损坏都必须拒绝派单：拿此刻的上游结果补一份来源等于伪造历史；损坏的那份
-   * 又写不回库，员工收到的材料会和库里记的对不上。
-   */
-  readonly inputRefsState: ButlerInputRefsKind
-  /** 员工协作返回原文与结构化外部待办；`undefined` 表示未知（旧记录）。 */
-  readonly memberReturn: ButlerMemberReturn | undefined
-  readonly startedAt: number | null
-  readonly finishedAt: number | null
-}
-
-/** 状态计数，供右栏指标卡使用。 */
-export interface TaskCounts {
-  readonly running: number
-  readonly waitingUser: number
-  /** 材料已交回、还有事在别处等着办。与「等人回话」分开计数：等的东西不一样。 */
-  readonly externalPending: number
-  /** 一部分成、一部分没成。与「已交差」分开：那是后端给的结论，不是界面数出来的。 */
-  readonly partial: number
-  readonly failed: number
-  readonly completed: number
-  readonly queued: number
-}
-
-/** 一条写请求的幂等记录。 */
-export interface RequestRecord {
-  readonly kind: string
-  /** 请求指纹：同一个 id 换了正文要能认出来并拒绝。 */
-  readonly digest: string
-  /**
-   * `claimed`：已经受理，但还没有任何终态证据 —— 进程在这里断掉的话，这一次的结果
-   * **不明**，绝不能重跑。`finished`：这一轮已经跑完了。
-   */
-  readonly state: 'claimed' | 'finished'
-  readonly runId: string
-  readonly conversationId: string
-  readonly updatedAt: number
-}
-
-/** 新建任务时写入的一份计划。 */
-export interface NewSubtask {
-  readonly id: string
-  readonly goal: string
-  readonly agentId: string
-  readonly reason: string
-  /** 目标标识；不传时由存储层按顺序分配（`g1`、`g2`…）。 */
-  readonly logicalId?: string
-  /** 替代了哪一条尝试；首次尝试不传。 */
-  readonly supersedes?: string
-  /** 前置目标的标识；不传表示没有前置。 */
-  readonly dependsOn?: readonly string[]
-  /** 这一步是否真的需要外部动作（采用、确认、发布）已经办完；不传按不需要算。 */
-  readonly requiresExternalAction?: boolean
-}
-
-/** 运行历史查询条件。 */
-export interface HistoryQuery {
-  readonly offset: number
-  readonly limit: number
-  readonly keyword: string
-  /** 空字符串表示不按状态过滤。 */
-  readonly state: string
-  /**
-   * 只取某个会话的活；省略或空串表示不按会话过滤。
-   *
-   * 打开历史会话时按会话取，而不是「拉一页再在页面上筛」：会话一多，更早的那个
-   * 就会落在第一页之外，页面把它显示成没派过活 —— 记录明明在库里，只是没被取到。
-   */
-  readonly conversationId?: string
-}
 
 const STORE_ERROR = '工作台数据不可用，请稍后重试'
 
@@ -675,7 +506,7 @@ export class TaskStore {
         artifacts,conversation_id AS subtaskConversationId,started_at AS startedAt,finished_at AS finishedAt,
         requires_external_action AS requiresExternalActionRaw,
         input_refs AS inputRefsRaw,member_return AS memberReturnRaw
-      FROM subtasks WHERE task_id=? ORDER BY seq`).all(id) as unknown as (Omit<SubtaskRecord, 'artifacts' | 'conversationId' | 'dependsOn' | 'requiresExternalAction'> & {
+      FROM subtasks WHERE task_id=? ORDER BY seq`).all(id) as unknown as (Omit<SubtaskRecord, 'artifacts' | 'conversationId' | 'dependsOn' | 'dependsOnState' | 'requiresExternalAction' | 'inputRefs' | 'inputRefsState' | 'memberReturn'> & {
         readonly artifacts: string
         readonly subtaskConversationId: string
         readonly dependsOnRaw: string
@@ -687,11 +518,15 @@ export class TaskStore {
       // 「确实还没派出去过」= 从未开始过（`started_at` 为空）且状态还是排队中。别的状态都说明
       // 已经派出去过：那时列还是空串只能表示旧记录没留材料，是未知，不是「等着首次固定」。
       const snapshot = parseInputRefs(inputRefsRaw, rest.startedAt === null && rest.state === 'queued')
+      const depends = parseDependsOnStrict(dependsOnRaw)
       return {
         ...rest,
         artifacts: parseArtifacts(artifacts),
         conversationId: subtaskConversationId,
-        dependsOn: parseDependsOn(dependsOnRaw),
+        // 取值保持原有行为（合法列表照旧）；分类如实暴露：损坏的前置列表必须拒派，由编排层
+        // 消费 dependsOnState，存储层不静默改写原值、也不把损坏伪装成「没有前置」。
+        dependsOn: depends.kind === 'valid' ? depends.items : parseDependsOn(dependsOnRaw),
+        dependsOnState: depends.kind,
         requiresExternalAction: requiresExternalActionRaw === 1,
         inputRefs: snapshot.kind === 'fixed' ? snapshot.inputRefs : undefined,
         inputRefsState: snapshot.kind,
@@ -1001,130 +836,5 @@ export class TaskStore {
   }
 }
 
-/**
- * 校验外部待办声明。
- *
- * `undefined` 表示「没有声明」；对象但字段类型不对返回 `null`（非法）。不做修补：`null`、
- * 非字符串的 `reason`、非字符串的 `next` 都不能变成一份看起来合法的待办交给下游。
- */
-function parsePending(value: unknown): { reason: string; next?: string } | null | undefined {
-  if (value === undefined) return undefined
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
-  const candidate = value as { reason?: unknown; next?: unknown }
-  if (typeof candidate.reason !== 'string') return null
-  if (candidate.next !== undefined && typeof candidate.next !== 'string') return null
-  return candidate.next === undefined ? { reason: candidate.reason } : { reason: candidate.reason, next: candidate.next }
-}
-
-/**
- * 校验位置型材料列表：必须是数组，且每一项都有字符串的标题、路径与种类。
- *
- * 非法返回 `null`。**不静默补成空数组** —— 那会把「有材料但读不出来」伪装成「没有材料」。
- */
-function parseArtifactList(value: unknown): readonly AgentArtifact[] | null {
-  if (!Array.isArray(value)) return null
-  const items: AgentArtifact[] = []
-  for (const item of value) {
-    if (typeof item !== 'object' || item === null) return null
-    const candidate = item as Partial<AgentArtifact>
-    if (typeof candidate.title !== 'string' || typeof candidate.path !== 'string' || typeof candidate.kind !== 'string') return null
-    items.push({ title: candidate.title, path: candidate.path, kind: candidate.kind })
-  }
-  return items
-}
-
-/**
- * 解析派单材料快照，并说清结论是「还没固定」「已固定」「旧已派出未知」还是「损坏」。
- *
- * 空串本身分不出来源：从没派过是「还没固定」，派出过却留空是旧记录的未知。所以调用方要把
- * 「这条记录确实没派出去过」这个事实传进来（`neverDispatched`）。
- *
- * 解析失败、形状或版本非法一律算**损坏**：既不降级为空数组（那会被当成「已核验无需材料」
- * 而放行派单），也不允许重算一份盖上去（那和这条记录已经发出去过的东西对不上）。逐层核验到
- * 嵌套字段（状态取值、每条材料的位置列表、外部待办）。
- */
-function parseInputRefs(
-  raw: string,
-  neverDispatched: boolean,
-): { readonly kind: ButlerInputRefsKind; readonly inputRefs?: readonly ButlerInputRef[] } {
-  if (raw === '') return { kind: neverDispatched ? 'unfixed' : 'unknown' }
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return { kind: 'damaged' }
-    const items: ButlerInputRef[] = []
-    for (const item of parsed) {
-      if (typeof item !== 'object' || item === null) return { kind: 'damaged' }
-      const candidate = item as Partial<ButlerInputRef>
-      if (typeof candidate.subtaskId !== 'string' || typeof candidate.logicalId !== 'string'
-        || typeof candidate.state !== 'string' || typeof candidate.text !== 'string') return { kind: 'damaged' }
-      if (!SUBTASK_STATES.includes(candidate.state as SubtaskState)) return { kind: 'damaged' }
-      const artifacts = parseArtifactList(candidate.artifacts)
-      if (artifacts === null) return { kind: 'damaged' }
-      const pending = parsePending(candidate.externalPending)
-      if (pending === null) return { kind: 'damaged' }
-      items.push({
-        subtaskId: candidate.subtaskId,
-        logicalId: candidate.logicalId,
-        state: candidate.state as SubtaskState,
-        text: candidate.text,
-        artifacts,
-        ...(pending === undefined ? {} : { externalPending: pending }),
-      })
-    }
-    return { kind: 'fixed', inputRefs: items }
-  } catch {
-    return { kind: 'damaged' }
-  }
-}
-
-/** 解析协作返回留存；空串或非法形状按未知处理（`undefined`），不降级为「无材料」。 */
-function parseMemberReturn(raw: string): ButlerMemberReturn | undefined {
-  if (raw === '') return undefined
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (typeof parsed !== 'object' || parsed === null) return undefined
-    const candidate = parsed as Partial<ButlerMemberReturn>
-    if (candidate.protocol !== 1 || typeof candidate.text !== 'string') return undefined
-    const pending = parsePending(candidate.externalPending)
-    if (pending === null) return undefined
-    return {
-      protocol: 1,
-      text: candidate.text,
-      ...(pending === undefined ? {} : { externalPending: pending }),
-    }
-  } catch {
-    return undefined
-  }
-}
-
-function parseArtifacts(raw: string): readonly AgentArtifact[] {
-  if (raw === '') return []
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((item): item is AgentArtifact => {
-      if (typeof item !== 'object' || item === null) return false
-      const candidate = item as Partial<AgentArtifact>
-      return typeof candidate.title === 'string' && typeof candidate.path === 'string' && typeof candidate.kind === 'string'
-    })
-  } catch {
-    return []
-  }
-}
-
-/**
- * 解析落库的前置目标标识。
- *
- * 与材料引用同理：一条脏记录不该让整个任务详情读不出来，解析失败按「没有前置」处理。
- */
-function parseDependsOn(raw: string): readonly string[] {
-  if (raw === '') return []
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []
-  } catch {
-    return []
-  }
-}
 
 export { STORE_ERROR }
