@@ -20,6 +20,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
+import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
+import { STORAGE_SCHEMA_VERSION } from '../src/storage/postgres.ts'
 import { TaskStore } from '../src/store.ts'
 import { installWeb } from '../src/web.ts'
 
@@ -96,8 +98,8 @@ async function fixture() {
     },
   } as unknown as Context
 
-  const console_ = new ButlerConsole(ctx, config, access, store, '')
-  await installWeb(ctx, config, console_, access)
+  const console_ = new ButlerConsole(ctx, config, access, new SqliteButlerStorage(store), '')
+  await installWeb(ctx, config, console_, access, { ready: true, schemaVersion: STORAGE_SCHEMA_VERSION })
 
   /** 打真路由：查询串留在 url 里给处理函数自己解析。 */
   const get = async (target: string) => {

@@ -7,6 +7,10 @@
  * 2. 打开一个牛马大总管 Agent，负责理解目标、拆解任务和汇总。
  * 3. 提供工作台页面、SSE 接口和只读就绪探针。
  *
+ * 业务存储只有 PostgreSQL 一种（方案 §2.5 启动序列）：读配置 → 建池 → `init()` 校验结构
+ * 版本 → `failInterrupted()` 收敛上次未完成的任务 → 就绪。缺配置或校验失败都让 `apply`
+ * 抛错、插件不激活，绝不静默回退别的后端。
+ *
  * 子 Agent 不由这里创建：每个业务插件在自己的生命周期里向 `butler/executors`
  * 登记执行入口，牛马大总管据此把子任务交给它们。
  */
@@ -24,7 +28,8 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { createAccess, registerPlugin } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from './butler.ts'
 import { Config as ConfigSchema, type Config as PluginConfig } from './config.ts'
-import { TaskStore } from './store.ts'
+import { resolveStorageDsn } from './storage/dsn.ts'
+import { PostgresTaskStorage, STORAGE_SCHEMA_VERSION } from './storage/postgres.ts'
 import { installWeb } from './web.ts'
 
 export { ConfigSchema as Config }
@@ -67,18 +72,50 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     deepseekPlugin: { id: string; displayName: string; permissions: string[]; category?: string }
   }
 
+  // §2.5 启动序列：缺 PG 配置 = 装载失败（不激活），消息说清两条配置路径；不回退 SQLite。
+  const source = await resolveStorageDsn(
+    process.env,
+    dshHomePath('plugins', manifest.deepseekPlugin.id, 'storage.json'),
+    path => readFile(path, 'utf8'),
+  )
+  if (source === undefined) {
+    throw new Error(
+      'butler-console 缺少 PostgreSQL 存储配置：设置环境变量 BUTLER_PG_DSN，'
+      + '或在私有配置文件（环境变量 BUTLER_PG_CONFIG 指定路径，缺省 <DSH 主目录>/plugins/butler/storage.json）'
+      + '里写 {"dsn":"postgres://…"}。不会回退其他存储后端。',
+    )
+  }
+
   const access = createAccess(ctx, {
     mode: config.accessMode,
     pluginId: manifest.deepseekPlugin.id,
     publicOrigin: config.publicOrigin,
   })
-  const store = new TaskStore(dshHomePath('plugins', manifest.deepseekPlugin.id, 'butler.sqlite'))
-  // 上次进程没有正常退出时留下的执行中状态要收敛，否则页面会一直显示转圈。
-  const interrupted = store.failInterrupted()
-  if (interrupted > 0) console.warn(`butler-console: 标记 ${interrupted} 个上次未完成的任务为失败`)
-  const console_ = new ButlerConsole(ctx, config, access, store, persona)
+  const storage = new PostgresTaskStorage(source.dsn)
+  try {
+    // init 失败 = 插件不激活：StorageError 带稳定码（storage_unreachable / storage_schema_missing /
+    // storage_schema_version / …）原样抛给装载日志。failInterrupted 是恢复写，纳入同一序列。
+    await storage.init()
+    // 上次进程没有正常退出时留下的执行中状态要收敛，否则页面会一直显示转圈。
+    const interrupted = await storage.failInterrupted()
+    if (interrupted > 0) console.warn(`butler-console: 标记 ${interrupted} 个上次未完成的任务为失败`)
+  } catch (error) {
+    // init 阶段失败也要把池收掉：装载失败后进程还在，留着空池只会占着连接与定时器。
+    await storage.close().catch(() => {})
+    throw error
+  }
+  const console_ = new ButlerConsole(ctx, config, access, storage, persona)
+  // 就绪状态来自启动序列的缓存结果（§2.5 口径：已装载未就绪 → 业务与 /ready 503）。
+  const storageReady = { ready: true, schemaVersion: STORAGE_SCHEMA_VERSION } as const
 
-  ctx.effect(() => () => { void console_.dispose(); store.close() })
+  ctx.effect(() => () => {
+    void console_.dispose()
+    // 有界关闭（§2.6）：effect 清理不能 await——发起 close（实现内部有 5 秒上限，超时放弃
+    // 等待并记录，池终结交给进程退出），失败只落服务端日志，不阻塞也不外溢。
+    void storage.close().catch(error => {
+      console.error(`butler-console: 存储关闭失败：${error instanceof Error ? error.message : String(error)}`)
+    })
+  })
   ctx.effect(() => registerPlugin(ctx, {
     id: manifest.deepseekPlugin.id,
     packageName: manifest.name,
@@ -96,5 +133,5 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   // 它自己的回答也要边收边上：实时帧只转发它自己会话的正文增量，其余一律忽略。
   ctx.on('agent/assistant-stream', ({ agent, frame }) => { console_.observeStream(agent, frame) })
 
-  await installWeb(ctx, config, console_, access)
+  await installWeb(ctx, config, console_, access, storageReady)
 }

@@ -13,7 +13,7 @@ import type { Access } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole, type ButlerEvent } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor, ButlerProgressUpdate } from '../src/protocol.ts'
-import type { TaskStore } from '../src/store.ts'
+import type { ButlerStorage } from '../src/storage/types.ts'
 
 /**
  * 只实现本测试用到的两条通道。
@@ -66,7 +66,7 @@ function consoleFor(executor: ButlerAgentExecutor) {
         inputRefs: undefined, inputRefsState: 'unfixed',
       }],
     })),
-  } as unknown as TaskStore
+  } as unknown as ButlerStorage
   const access = { mode: 'authenticated', ready() {}, resolve: () => undefined, assert() {} } as unknown as Access
   const config = { subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000 } as Config
   const console_ = new ButlerConsole(dispatchContext(executor), config, access, store, '')

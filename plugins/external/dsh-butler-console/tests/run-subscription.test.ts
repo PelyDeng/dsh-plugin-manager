@@ -15,7 +15,7 @@ import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole, type ButlerEvent } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import { canResume, ConversationLog } from '../src/event-log.ts'
-import type { TaskStore } from '../src/store.ts'
+import type { ButlerStorage } from '../src/storage/types.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
@@ -37,10 +37,10 @@ function context(): Context {
 /** 让已经就绪的微任务与宏任务跑一轮。 */
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 
-/** 等到条件成立，或超时后如实失败 —— 不用固定次数的 settle 去赌时序。 */
-async function until(check: () => boolean, label: string): Promise<void> {
+/** 等到条件成立，或超时后如实失败 —— 不用固定次数的 settle 去赌时序。检查可以是异步的。 */
+async function until(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (check()) return
+    if (await check()) return
     await settle()
   }
   throw new Error(`等待超时：${label}`)
@@ -59,7 +59,7 @@ function fixture() {
     assertOwner: vi.fn(),
     task: vi.fn(() => undefined),
     setSubtaskState: vi.fn(),
-  } as unknown as TaskStore
+  } as unknown as ButlerStorage
   const access = { mode: 'authenticated', ready() {}, resolve: () => undefined, assert() {} } as unknown as Access
   const config = {
     subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000, maxConversationEvents: 50,
@@ -190,7 +190,7 @@ describe('提交之后，观察者是否在场与任务无关', () => {
   it('观察者读到第一条就断开，这一轮仍然跑完并留下终态', async () => {
     const f = fixture()
     const started = await f.console_.start(conversationId, '看看今天园区的情况', actor)
-    const watch = f.console_.watch(conversationId, actor, started.from)
+    const watch = await f.console_.watch(conversationId, actor, started.from)
     expect(watch).toBeDefined()
 
     // 页面在这里关掉：只读到「用户发了话」就断开。
@@ -199,15 +199,15 @@ describe('提交之后，观察者是否在场与任务无关', () => {
 
     // 执行还在后台等着这一轮结束 —— 断线没有把它取消掉。
     expect(f.agent.followup).toHaveBeenCalledTimes(1)
-    expect(f.console_.watch(conversationId, actor, 0)!.head.state).toBe('running')
+    expect((await f.console_.watch(conversationId, actor, 0))!.head.state).toBe('running')
 
     f.endTurn()
-    await until(() => f.console_.watch(conversationId, actor, 0)!.head.state !== 'running', '这一轮结束')
+    await until(async () => (await f.console_.watch(conversationId, actor, 0))!.head.state !== 'running', '这一轮结束')
 
-    const after = f.console_.watch(conversationId, actor, 0)!
-    expect(after.head.state).toBe('finished')
+    const after = await f.console_.watch(conversationId, actor, 0)
+    expect(after!.head.state).toBe('finished')
     // 断线之后产生的事件一条都没丢，重新订阅就能补齐。
-    const replayed = await collect(f.console_.watch(conversationId, actor, 0)!.events)
+    const replayed = await collect((await f.console_.watch(conversationId, actor, 0))!.events)
     expect(replayed.map(item => item.event.type)).toEqual(['user', 'chat'])
     expect(replayed.map(item => item.seq)).toEqual([1, 2])
   })
@@ -215,8 +215,8 @@ describe('提交之后，观察者是否在场与任务无关', () => {
   it('两个入口同时观察同一轮，两边内容一致，任务只执行一次', async () => {
     const f = fixture()
     const started = await f.console_.start(conversationId, '看看今天园区的情况', actor)
-    const left = collect(f.console_.watch(conversationId, actor, started.from)!.events)
-    const right = collect(f.console_.watch(conversationId, actor, started.from)!.events)
+    const left = collect((await f.console_.watch(conversationId, actor, started.from))!.events)
+    const right = collect((await f.console_.watch(conversationId, actor, started.from))!.events)
 
     await settle()
     f.endTurn()
@@ -233,16 +233,16 @@ describe('提交之后，观察者是否在场与任务无关', () => {
     const started = await f.console_.start(conversationId, '看看今天园区的情况', actor)
     await settle()
     f.endTurn()
-    await until(() => f.console_.watch(conversationId, actor, 0)!.head.state !== 'running', '这一轮结束')
+    await until(async () => (await f.console_.watch(conversationId, actor, 0))!.head.state !== 'running', '这一轮结束')
 
-    const tail = await collect(f.console_.watch(conversationId, actor, 1)!.events)
+    const tail = await collect((await f.console_.watch(conversationId, actor, 1))!.events)
     expect(tail.map(item => item.seq)).toEqual([2])
     expect(tail[0]!.event.type).toBe('chat')
   })
 
-  it('没有跑过的会话取不到可观察的一轮', () => {
+  it('没有跑过的会话取不到可观察的一轮', async () => {
     const f = fixture()
-    expect(f.console_.watch(conversationId, actor, 0)).toBeUndefined()
+    expect(await f.console_.watch(conversationId, actor, 0)).toBeUndefined()
   })
 })
 
@@ -251,18 +251,18 @@ describe('停止只作用在该停的那一轮上', () => {
     const f = fixture()
     await f.console_.start(conversationId, '看看今天园区的情况', actor)
 
-    expect(f.console_.cancel(conversationId, actor)).toEqual({ accepted: true, reason: '' })
-    await until(() => f.console_.watch(conversationId, actor, 0)!.head.state !== 'running', '这一轮被取消')
+    expect(await f.console_.cancel(conversationId, actor)).toEqual({ accepted: true, reason: '' })
+    await until(async () => (await f.console_.watch(conversationId, actor, 0))!.head.state !== 'running', '这一轮被取消')
 
-    const head = f.console_.watch(conversationId, actor, 0)!.head
+    const head = (await f.console_.watch(conversationId, actor, 0))!.head
     expect(head.state).toBe('cancelled')
-    const seen = await collect(f.console_.watch(conversationId, actor, 0)!.events)
+    const seen = await collect((await f.console_.watch(conversationId, actor, 0))!.events)
     expect(seen.at(-1)!.event).toMatchObject({ type: 'summary', state: 'cancelled' })
   })
 
   it('没有正在跑的一轮时停止是幂等的，不报错', async () => {
     const f = fixture()
-    const outcome = f.console_.cancel(conversationId, actor)
+    const outcome = await f.console_.cancel(conversationId, actor)
     expect(outcome.accepted).toBe(false)
     expect(outcome.reason).not.toBe('')
   })
@@ -272,13 +272,13 @@ describe('停止只作用在该停的那一轮上', () => {
     const taskId = 'butler-task-1'
     f.store.task = vi.fn((_actor: Actor, id: string) => (id === taskId
       ? { id: taskId, conversationId, subtasks: [] }
-      : undefined)) as unknown as TaskStore['task']
+      : undefined)) as unknown as ButlerStorage['task']
 
     await f.console_.start(conversationId, '看看今天园区的情况', actor)
     // 这一轮才走到理解阶段，日志里还没有 taskId：旧任务的取消不该把它掐掉。
-    const outcome = f.console_.cancel(conversationId, actor, taskId)
+    const outcome = await f.console_.cancel(conversationId, actor, taskId)
     expect(outcome.accepted).toBe(false)
-    expect(f.console_.watch(conversationId, actor, 0)!.head.state).toBe('running')
+    expect((await f.console_.watch(conversationId, actor, 0))!.head.state).toBe('running')
   })
 
   it('别的会话的任务 id 借不来取消权限', async () => {
@@ -286,8 +286,8 @@ describe('停止只作用在该停的那一轮上', () => {
     const taskId = 'butler-task-1'
     f.store.task = vi.fn((_actor: Actor, id: string) => (id === taskId
       ? { id: taskId, conversationId: 'butler-web-11111111-2222-4333-8444-555555555555', subtasks: [] }
-      : undefined)) as unknown as TaskStore['task']
+      : undefined)) as unknown as ButlerStorage['task']
 
-    expect(() => f.console_.cancel(conversationId, actor, taskId)).toThrowError(/任务不存在或无权访问/)
+    await expect(f.console_.cancel(conversationId, actor, taskId)).rejects.toThrowError(/任务不存在或无权访问/)
   })
 })

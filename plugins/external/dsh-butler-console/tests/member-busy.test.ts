@@ -16,6 +16,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
+import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
 import { TaskStore } from '../src/store.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
@@ -40,7 +41,7 @@ function fixture() {
   const store = new TaskStore(':memory:')
   const access = { mode: 'authenticated', ready() {}, resolve: () => actor, assert() {} } as unknown as Access
   const config = { subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000, maxConversationEvents: 200, waitingTimeoutMs: 600_000 } as Config
-  const console_ = new ButlerConsole(context(), config, access, store, '')
+  const console_ = new ButlerConsole(context(), config, access, new SqliteButlerStorage(store), '')
 
   /** 给某位用户开一条会话并派一个子任务。 */
   const assign = (owner: Actor, taskId: string, agentId: string, state: string) => {
@@ -101,21 +102,21 @@ describe('任务库里的占用', () => {
 })
 
 describe('成员名单上的占用', () => {
-  it('空闲时 busy 是 null，有活时带上任务与子任务', () => {
+  it('空闲时 busy 是 null，有活时带上任务与子任务', async () => {
     const f = fixture()
-    expect(f.console_.members(actor)[0]).toMatchObject({ agentId: 'blog', busy: null })
+    expect((await f.console_.members(actor))[0]).toMatchObject({ agentId: 'blog', busy: null })
 
     f.assign(actor, 'task-1', 'blog', 'waiting_user')
-    expect(f.console_.members(actor)[0]?.busy).toEqual({
+    expect((await f.console_.members(actor))[0]?.busy).toEqual({
       taskId: 'task-1', subtaskId: 's1', state: 'waiting_user',
     })
     f.store.close()
   })
 
-  it('busy 与 online 是两件事，不能互相代替', () => {
+  it('busy 与 online 是两件事，不能互相代替', async () => {
     const f = fixture()
     f.assign(actor, 'task-1', 'blog', 'running')
-    const member = f.console_.members(actor)[0]!
+    const member = (await f.console_.members(actor))[0]!
     // 没登记执行入口：成员在场但不接活，同时手上那份活是库里记着的。
     expect(member.online).toBe(false)
     expect(member.busy).toMatchObject({ state: 'running' })

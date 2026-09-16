@@ -1183,12 +1183,6 @@ export class ButlerConsole {
     return await this.storage.listConversations(actor, 50)
   }
 
-  /** 侧栏列表。 */
-  listConversations(actor: Actor) {
-    this.access.assert(actor)
-    return this.store.listConversations(actor, 50)
-  }
-
   /** 运行历史分页。 */
   async history(actor: Actor, query: {
     offset: number
@@ -1398,7 +1392,7 @@ export class ButlerConsole {
       // 第二段：按顺序调度。
       for (const subtask of subtasks) {
         if (abort.signal.aborted) {
-          await this.storage.setSubtaskState(taskId, subtask.id, 'cancelled', { error: '已停止' })
+          await this.queueSubtaskWrite(taskId, subtask.id, () => this.storage.setSubtaskState(taskId, subtask.id, 'cancelled', { error: '已停止' }))
           yield {
             type: 'subtask', taskId, id: subtask.id, state: 'cancelled',
             agentId: subtask.agentId, displayName: subtask.displayName, detail: '已停止', time: Date.now(),
@@ -1481,6 +1475,7 @@ export class ButlerConsole {
     const log = this.beginLog(turn.conversationId, turn.runId)
     void this.pump(turn.abort.signal, log, this.turnBody(turn))
       .then(() => { if (requestId !== '') void this.finishRequestWithRetry(actor, 'chat', requestId) })
+      .catch(error => { console.error(`butler-console: 回合收尾链失败（${turn.conversationId}/${turn.runId}）：${visibleError(error, 300)}\n${stackOf(error)}`) })
     return { runId: turn.runId, conversationId: turn.conversationId, from: 0 }
   }
 
@@ -1517,6 +1512,7 @@ export class ButlerConsole {
     const log = this.beginLog(prepared.conversationId, prepared.runId)
     void this.pump(prepared.abort.signal, log, this.replyBody(prepared))
       .then(() => { if (requestId !== '') void this.finishRequestWithRetry(input.actor, 'reply', requestId) })
+      .catch(error => { console.error(`butler-console: 回话收尾链失败（${prepared.conversationId}/${prepared.runId}）：${visibleError(error, 300)}\n${stackOf(error)}`) })
     return { runId: prepared.runId, conversationId: prepared.conversationId, from: 0 }
   }
 
@@ -1559,6 +1555,7 @@ export class ButlerConsole {
     const log = this.beginLog(prepared.conversationId, prepared.runId)
     void this.pump(prepared.abort.signal, log, this.supplementBody(prepared))
       .then(() => { if (requestId !== '') void this.finishRequestWithRetry(input.actor, 'supplement', requestId) })
+      .catch(error => { console.error(`butler-console: 补充收尾链失败（${prepared.conversationId}/${prepared.runId}）：${visibleError(error, 300)}\n${stackOf(error)}`) })
     return { runId: prepared.runId, conversationId: prepared.conversationId, from: 0 }
   }
 
@@ -1775,7 +1772,13 @@ export class ButlerConsole {
     // 查不到会话就不上闹钟：超时收尾要按会话归属写回去，无从下手时宁可不动。
     if (conversationId === '') return
     const timer = setTimeout(
-      () => { void this.expireWaiting(key, taskId, subtaskId, displayName, actor) },
+      () => {
+        // 后台收尾的失败只落服务端日志：它是无人等待的 Promise，绝不成为宿主的
+        // unhandledRejection（§3 后台错误不外溢）。
+        void this.expireWaiting(key, taskId, subtaskId, displayName, actor).catch(error => {
+          console.error(`butler-console: 等待超时收尾失败（${key}）：${visibleError(error, 300)}\n${stackOf(error)}`)
+        })
+      },
       this.config.waitingTimeoutMs,
     )
     // 别让一个等待中的闹钟把进程钉住不退出。
@@ -2138,19 +2141,22 @@ export class ButlerConsole {
    * 之前两条路径各写一份且都有缺：reply 的 `external_pending` 落成 `failed`，成功分支
    * 只写 summary 丢掉材料与会话；dispatch 的成功分支同样丢引用。事件上报由调用方按
    * 各自的展示差异发出，落库口径只有这一份。
+   *
+   * 写入经 {@link queueSubtaskWrite} 入队（§3 同子任务写入顺序）：结果必须排在 fire-and-forget
+   * 的进度写入之后落地，否则一次迟到的 running 上报会盖掉终态。
    */
-  private applyMemberResult(taskId: string, subtaskId: string, result: ButlerDispatchResult): void {
+  private async applyMemberResult(taskId: string, subtaskId: string, result: ButlerDispatchResult): Promise<void> {
     const max = this.config.maxResultChars
     const artifacts = result.artifacts === undefined ? {} : { artifacts: result.artifacts }
     const conversation = result.conversationId === undefined || result.conversationId === ''
       ? {}
       : { conversationId: result.conversationId }
     if (result.status === 'succeeded') {
-      this.store.setSubtaskState(taskId, subtaskId, 'succeeded', { result: clip(result.summary, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation })
+      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'succeeded', { result: clip(result.summary, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation }))
       return
     }
     if (result.status === 'waiting_user') {
-      this.store.setSubtaskState(taskId, subtaskId, 'waiting_user', { result: clip(result.summary, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation })
+      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'waiting_user', { result: clip(result.summary, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation }))
       return
     }
     if (result.status === 'external_pending') {
@@ -2158,29 +2164,31 @@ export class ButlerConsole {
       if (reason === '') {
         // 声明了外部待办却没说明在等什么，按「返回不满足协作契约」收：猜一个理由等于
         // 给用户显示一件没发生过的外部事项。材料仍然保留。
-        this.store.setSubtaskState(taskId, subtaskId, 'failed', {
+        await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', {
           error: '说还有外部待办，但没说明在等什么',
           result: clip(result.summary, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation,
-        })
+        }))
         return
       }
-      this.store.setSubtaskState(taskId, subtaskId, 'external_pending', {
+      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'external_pending', {
         result: clip(`${result.summary}\n\n外部待办：${reason}`, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation,
-      })
+      }))
       return
     }
     const cancelled = result.status === 'cancelled'
     // 失败/取消只写 error，result 由 COALESCE 保留先前交回的阶段性成果。
-    this.store.setSubtaskState(taskId, subtaskId, cancelled ? 'cancelled' : 'failed', {
+    await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, cancelled ? 'cancelled' : 'failed', {
       error: cancelled && clip(result.summary, max) === '' ? '已停止' : clip(result.summary, max),
       memberReturn: memberReturnOf(result),
-    })
+    }))
   }
 
   /**
    * 调度一个子任务，实时产出状态事件。
    *
    * 状态先写库再上报：页面上的每个状态都对应一次已持久化的迁移，刷新后仍然一致。
+   * 例外是执行器 onProgress 回调里的 running/waiting_user：事件先行推送、写库入队
+   * fire-and-forget —— 崩溃窗口内页面可能短暂领先于库，但写库仍严格按发生顺序串行落盘。
    */
   private async *dispatchSubtask(input: {
     taskId: string
@@ -2242,7 +2250,7 @@ export class ButlerConsole {
     //   库里记的对不上，宁可停下来说清楚。
     // 已固定的合法快照则沿用库里的那一份：材料已经随派单 message 发出去过，此刻再按上游当前
     // 状态重算，会让库里的来源与员工实际收到的东西对不上。
-    const record = this.store.task(input.actor, taskId)
+    const record = await this.storage.task(input.actor, taskId)
     const current = effectiveSubtasks(record?.subtasks ?? [])
     const self = current.find(candidate => candidate.id === subtaskId)
     // 读不到这条记录就无从证明「还没派过」：按未知拒绝，不猜。
@@ -2251,7 +2259,7 @@ export class ButlerConsole {
       const detail = snapshotState === 'unknown'
         ? '这一步之前派出过，但没有留下材料快照（旧记录未留存）：来源未知，不重新派单，也不补造历史'
         : '这一步已固定的材料快照读不出来（数据损坏）：不重新派单，原记录保持不动'
-      this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
+      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
       yield emit('failed', detail)
       return { state: 'failed', report: `【${displayName}】失败：${detail}` }
     }
@@ -2301,13 +2309,13 @@ export class ButlerConsole {
         // 前置还没终结：这一步留在队列里，不占员工，也不判失败。等前置有结果之后由收尾
         // （或补话后的重新核验）再走一遍；这一轮会按上游的真实状态结账。
         const detail = `等前置有结果：${waiting.join('、')}`
-        this.store.setSubtaskState(taskId, subtaskId, 'queued')
+        await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'queued'))
         yield emit('queued', detail)
         return { state: 'queued', report: `【${displayName}】还没派：${detail}` }
       }
       if (blocked.length > 0) {
         const detail = `前置没有完成，这一步不派了：${blocked.join('、')}`
-        this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
+        await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
         yield emit('failed', detail)
         return { state: 'failed', report: `【${displayName}】失败：${detail}` }
       }
@@ -2318,19 +2326,22 @@ export class ButlerConsole {
     const brief = dispatchBrief(input.taskGoal, input.goal, inputRefs)
     if (brief.length > DISPATCH_MESSAGE_LIMIT) {
       const detail = `派单材料超过成员接收上限（${brief.length} > ${DISPATCH_MESSAGE_LIMIT} 字符），已停止派单，请缩小范围后重试`
-      this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
+      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
       yield emit('failed', detail)
       return { state: 'failed', report: `【${displayName}】失败：${detail}` }
     }
     const executor: ButlerAgentExecutor | undefined = resolveExecutor(this.ctx, agentId)
     if (executor === undefined) {
       const detail = `${displayName} 现在不在场，接不了这活`
-      this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
+      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
       yield emit('failed', detail)
       return { state: 'failed', report: `【${displayName}】${detail}` }
     }
 
-    this.store.setSubtaskState(taskId, subtaskId, 'dispatched', { inputRefs })
+    // 同子任务写入顺序（§3 / T1-2 不变量 b）：dispatched（含 inputRefs 首次固定）必须先于
+    // onProgress 触发的任何 running 写入落地。这里入队并 await；后续进度写入排进同一条
+    // 队列，天然晚于本条。
+    await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'dispatched', { inputRefs }))
     yield emit('dispatched', `已把活交给 ${displayName}`, { phase: 'analyzing' })
 
     const controller = new AbortController()
@@ -2355,17 +2366,23 @@ export class ButlerConsole {
       const stage = update.stage ?? ''
       // 早期引用（G02）：拿到业务会话就落库，不等 final——final 前失败或进程重启，任务
       // 记录里仍找得回原会话，不需要重新派活去补。引用只表示可找到，不表示业务完成。
+      //
+      // 写入是 fire-and-forget 的（回调不能 await），经 queueSubtaskWrite 排进该子任务的
+      // 串行队列（§3）：乱序落地会让首次固定的 inputRefs 被跳过、终态被迟到的 running 盖掉。
       if (update.conversationId !== undefined && update.conversationId !== '') {
         memberConversationId ??= update.conversationId
-        this.store.setSubtaskState(taskId, subtaskId, 'running', {
-          conversationId: update.conversationId,
-          ...(update.conversationArtifact === undefined ? {} : { artifacts: [update.conversationArtifact] }),
-        })
+        // 局部固化引用：闭包里 TS 不会保持属性收窄，队列回调又可能晚于本轮事件执行。
+        const earlyRef = update.conversationId
+        const earlyArtifact = update.conversationArtifact
+        void this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'running', {
+          conversationId: earlyRef,
+          ...(earlyArtifact === undefined ? {} : { artifacts: [earlyArtifact] }),
+        }))
       }
       if (update.needsReply === true) {
-        this.store.setSubtaskState(taskId, subtaskId, 'waiting_user', {
+        void this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'waiting_user', {
           ...(update.conversationId === undefined || update.conversationId === '' ? {} : { conversationId: update.conversationId }),
-        })
+        }))
         progress.push(emit('waiting_user', clip(update.detail ?? stage, 300), {
           phase: 'waiting_user',
           question: clip(update.detail ?? stage, 500),
@@ -2383,7 +2400,7 @@ export class ButlerConsole {
       const detail = clip(update.detail ? (stage === '' ? update.detail : `${stage} · ${update.detail}`) : stage, 300)
       if (!running) {
         running = true
-        this.store.setSubtaskState(taskId, subtaskId, 'running')
+        void this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'running'))
       }
       progress.push(emit('running', detail === '' ? '干活中' : detail, {
         ...(update.phase === undefined ? {} : { phase: update.phase }),
@@ -2410,27 +2427,27 @@ export class ButlerConsole {
       if (result.conversationId !== undefined && result.conversationId !== '') memberConversationId = result.conversationId
       if (result.status === 'cancelled' || signal.aborted || timedOut) {
         const detail = timedOut ? `超过 ${Math.round(this.config.subtaskTimeoutMs / 1000)} 秒没干完，已叫停` : '已停止'
-        this.store.setSubtaskState(taskId, subtaskId, 'cancelled', { error: detail })
+        await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'cancelled', { error: detail }))
         yield emit('cancelled', detail)
         return { state: 'cancelled', report: `【${displayName}】${detail}` }
       }
       if (result.status === 'failed') {
         const detail = clip(result.summary === '' ? `${displayName} 没干成这活` : result.summary, this.config.maxResultChars)
-        this.applyMemberResult(taskId, subtaskId, result)
+        await this.applyMemberResult(taskId, subtaskId, result)
         yield emit('failed', detail)
         return { state: 'failed', report: `【${displayName}】失败：${detail}` }
       }
       if (result.status === 'waiting_user') {
         const question = clip(result.question ?? result.summary, 500)
         // 落库走统一矩阵（G04）：正文、原会话与材料一次写全，刷新和重启都找得回。
-        this.applyMemberResult(taskId, subtaskId, result)
+        await this.applyMemberResult(taskId, subtaskId, result)
         // 记下等待上下文，用户回复时据此把话交回同一位成员；带上原会话引用供续问（G01）。
         this.waiting.set(`${taskId}:${subtaskId}`, {
           executor, agentId, displayName,
           ...(memberConversationId === undefined ? {} : { conversationId: memberConversationId }),
         })
         // 等待不是终态，执行的定时器已经撤了，这里另起一个等回话的。
-        this.scheduleWaitingTimeout(taskId, subtaskId, displayName, input.actor)
+        await this.scheduleWaitingTimeout(taskId, subtaskId, displayName, input.actor)
         yield emit('waiting_user', question, {
           phase: 'waiting_user',
           question,
@@ -2442,7 +2459,7 @@ export class ButlerConsole {
         // 判定来源只有一个：员工给出的结构化声明。**不从正文措辞里猜**，也不因为
         // 「结果里带着材料」就自行把这一轮当成可以在外部收尾 —— 那正是要避免的混用。
         const reason = typeof result.externalPending?.reason === 'string' ? result.externalPending.reason.trim() : ''
-        this.applyMemberResult(taskId, subtaskId, result)
+        await this.applyMemberResult(taskId, subtaskId, result)
         if (reason === '') {
           if (!signal.aborted) console.warn(`butler-console: 子任务 ${taskId}:${subtaskId}（${agentId}）声明 external_pending 但没有给出理由`)
           const detail = clip(`${displayName} 说还有外部待办，但没说明在等什么`, this.config.maxResultChars)
@@ -2461,7 +2478,7 @@ export class ButlerConsole {
         return { state: 'external_pending', report: `【${displayName}】${clip(result.summary, this.config.maxResultChars)}\n外部待办：${reason}` }
       }
       const summary = clip(result.summary, this.config.maxResultChars)
-      this.applyMemberResult(taskId, subtaskId, result)
+      await this.applyMemberResult(taskId, subtaskId, result)
       yield emit('succeeded', summary)
       return { state: 'succeeded', report: summary }
     } catch (error) {
@@ -2474,7 +2491,7 @@ export class ButlerConsole {
       // TypeError，日志里什么都没有，定位只能靠猜。这里把栈单独写进日志（脱敏后），
       // 用户看到的文案不变。
       if (!stopped) console.error(`butler-console: 子任务执行失败（${agentId}）：${detail}\n${stackOf(error)}`)
-      this.store.setSubtaskState(taskId, subtaskId, state, { error: detail })
+      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, state, { error: detail }))
       yield emit(state, detail)
       return { state, report: `【${displayName}】${stopped ? detail : `失败：${detail}`}` }
     } finally {
@@ -2490,16 +2507,16 @@ export class ButlerConsole {
    * 提交那一刻就返回。补话同样登记到会话上，因此 `/stop` 也能中止它 —— 之前它用的是
    * 一个没人拿得到的局部控制器，喊停对补话是没有效果的。
    */
-  private prepareReply(input: {
+  private async prepareReply(input: {
     taskId: string
     subtaskId: string
     text: string
     decideByAgent: boolean
     actor: Actor
-  }, runId: string): PreparedReply {
+  }, runId: string): Promise<PreparedReply> {
     this.access.assert(input.actor)
     const waiting = this.waiting.get(`${input.taskId}:${input.subtaskId}`)
-    const record = this.store.task(input.actor, input.taskId)
+    const record = await this.storage.task(input.actor, input.taskId)
     if (record === undefined) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
     const subtask = record.subtasks.find(item => item.id === input.subtaskId)
     if (subtask === undefined) throw new AccessError(404, '这个子任务不存在', 'subtask_not_found')
@@ -2508,8 +2525,8 @@ export class ButlerConsole {
       throw new AccessError(409, `${subtask.agentId} 的这次等待已经失效，请重新描述你的目标`, 'waiting_expired')
     }
     if (subtask.state !== 'waiting_user') throw new AccessError(409, '这位成员当前没有在等你回话', 'not_waiting')
-    // 同会话执行互斥：两个标签分别回复同一会话的两张请示卡时，后到的在这里拒绝——
-    // 再往下就要改子任务状态、换运行引用和事件日志，放进去会把前一次回复变成不可停止。
+    // 同会话执行互斥（T1-2 不变量 a）：检查与置位都在 claimNow 这一个同步调用里完成，
+    // 之间不允许出现 await；执行权拿到之后，下面的状态写入才可以让出执行权。
     // 回合还活着同样拒绝：接管会覆盖运行引用与日志，把在跑的活变成不可停止；等它收尾
     // 或先停止再回复。
     if (!this.claimNow(record.conversationId, runId, 'reply')) {
@@ -2519,9 +2536,11 @@ export class ButlerConsole {
         : '这个会话已有一次回话或补充在执行，等它完成或先停止', 'conversation_busy')
     }
 
-    this.store.setSubtaskState(input.taskId, input.subtaskId, 'running')
     // 用户回话了，这次等待的闹钟就该撤掉 —— 留着它到点会把一个正在跑的活的结局改成超时。
+    // 必须在写 running 让出执行权**之前**撤：写库的 await 窗口里闹钟一旦触发，超时的条件
+    // 更新先落地，running 会被转移守卫挡成 no-op，这一步就被钉死在超时结局上。
     this.clearWaitingTimeout(`${input.taskId}:${input.subtaskId}`)
+    await this.queueSubtaskWrite(input.taskId, input.subtaskId, () => this.storage.setSubtaskState(input.taskId, input.subtaskId, 'running'))
     const abort = new AbortController()
     this.runs.set(record.conversationId, { runId, abort })
     // 原成员会话引用（G01）：等待登记里的早期上报优先，库里落的结果引用兜底。
@@ -2566,13 +2585,17 @@ export class ButlerConsole {
       const onProgress = (update: ButlerProgressUpdate) => {
         // 理由同 `dispatchSubtask`：`stage` 来自另一个插件，缺值按空状态行处理。
         const stage = update.stage ?? ''
-        // 早期引用同派发路径（G02）：续问期间拿到会话也尽早落库。
+        // 早期引用同派发路径（G02）：续问期间拿到会话也尽早落库。写入经该子任务的串行
+        // 队列（§3 同子任务写入顺序），fire-and-forget 不 await，也不会乱序。
         if (update.conversationId !== undefined && update.conversationId !== '') {
           latestConversationId ??= update.conversationId
-          this.store.setSubtaskState(taskId, subtaskId, 'running', {
-            conversationId: update.conversationId,
-            ...(update.conversationArtifact === undefined ? {} : { artifacts: [update.conversationArtifact] }),
-          })
+          // 局部固化引用：闭包里 TS 不会保持属性收窄（理由同派发路径）。
+          const earlyRef = update.conversationId
+          const earlyArtifact = update.conversationArtifact
+          void this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'running', {
+            conversationId: earlyRef,
+            ...(earlyArtifact === undefined ? {} : { artifacts: [earlyArtifact] }),
+          }))
         }
         if (update.delta !== undefined && update.delta !== '') {
           progress.push({ type: 'subtask_delta', taskId, id: subtaskId, agentId, delta: update.delta, time: Date.now() })
@@ -2608,7 +2631,7 @@ export class ButlerConsole {
       try {
         if (prepared.executor.reply === undefined) {
           const detail = `${displayName} 不接受中途回话，等它跑完或者重新描述你的目标`
-          this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
+          await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
           yield {
             type: 'subtask', taskId, id: subtaskId, state: 'failed',
             agentId, displayName, detail, time: Date.now(),
@@ -2621,7 +2644,7 @@ export class ButlerConsole {
         const result = await execution
         if (result.conversationId !== undefined && result.conversationId !== '') latestConversationId = result.conversationId
         // 落库走与派发同一份结果矩阵（G04）：每种合法状态都写全正文、原会话与材料。
-        this.applyMemberResult(taskId, subtaskId, result)
+        await this.applyMemberResult(taskId, subtaskId, result)
         if (result.status === 'waiting_user') {
           const question = clip(result.question ?? result.summary, 500)
           // 回话又引出新的等待：重新登记等待上下文与闹钟，用户可以继续回话。
@@ -2629,7 +2652,7 @@ export class ButlerConsole {
             executor: prepared.executor, agentId, displayName,
             ...(latestConversationId === undefined ? {} : { conversationId: latestConversationId }),
           })
-          this.scheduleWaitingTimeout(taskId, subtaskId, displayName, prepared.actor)
+          await this.scheduleWaitingTimeout(taskId, subtaskId, displayName, prepared.actor)
           yield {
             type: 'subtask', taskId, id: subtaskId, state: 'waiting_user',
             agentId, displayName, detail: question, phase: 'waiting_user', question, time: Date.now(),
@@ -2664,7 +2687,7 @@ export class ButlerConsole {
         yield* this.closeAfterReply(prepared)
       } catch (error) {
         const detail = visibleError(error, this.config.maxResultChars)
-        this.store.setSubtaskState(taskId, subtaskId, 'failed', { error: detail })
+        await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
         this.waiting.delete(key)
         yield { type: 'subtask', taskId, id: subtaskId, state: 'failed', agentId, displayName, detail, time: Date.now() }
         yield* this.closeAfterReply(prepared)
@@ -2684,7 +2707,7 @@ export class ButlerConsole {
     decideByAgent: boolean
     actor: Actor
   }): AsyncGenerator<ButlerEvent, void> {
-    yield* this.replyBody(this.prepareReply(input, `butler-run-${randomUUID()}`))
+    yield* this.replyBody(await this.prepareReply(input, `butler-run-${randomUUID()}`))
   }
 
   /**
@@ -2694,12 +2717,12 @@ export class ButlerConsole {
    * 再参与这一轮的结论。库里查不到时回落到计划里的那几项、并按「未跑完」处理：宁可把一轮
    * 当成没跑成，也不要凭内存里的旧状态给它写一个偏乐观的终态。
    */
-  private storedSubtasks(
+  private async storedSubtasks(
     actor: Actor,
     taskId: string,
     planned: readonly { readonly id: string; readonly goal: string; readonly agentId: string }[],
-  ): { id: string; goal: string; agentId: string; state: SubtaskState }[] {
-    const record = this.store.task(actor, taskId)
+  ): Promise<{ id: string; goal: string; agentId: string; state: SubtaskState }[]> {
+    const record = await this.storage.task(actor, taskId)
     if (record === undefined) {
       return planned.map(item => ({ ...item, state: 'cancelled' as SubtaskState }))
     }
@@ -2709,8 +2732,8 @@ export class ButlerConsole {
   }
 
   /** 收尾时要交给汇总的材料，同样从库里重建、同样只看有效尝试。 */
-  private storedReports(actor: Actor, taskId: string): string[] {
-    const record = this.store.task(actor, taskId)
+  private async storedReports(actor: Actor, taskId: string): Promise<string[]> {
+    const record = await this.storage.task(actor, taskId)
     return record === undefined ? [] : effectiveSubtasks(record.subtasks).map(reportOf)
   }
 
@@ -2764,7 +2787,7 @@ export class ButlerConsole {
      * 这个屏障是必需的而不是保险：受理补充与收尾是两条异步路径，受理会在打开会话那里让出
      * 执行权，旧范围正好在这段时间跑完的情况是能构造出来的。
      */
-    const versions = this.store.inputVersions(taskId)
+    const versions = await this.storage.inputVersions(taskId)
     const pendingInput = versions !== undefined && versions.accepted > versions.processed
     const undispatched = subtasks.filter(item => item.state === 'queued').length
     if (!stopped && pendingInput && (taskState === 'completed' || taskState === 'partial')) {
@@ -2780,7 +2803,7 @@ export class ButlerConsole {
 
     if (waiting > 0 && !stopped) {
       const message = `有 ${waiting} 位成员在等你回话，回完再给你汇总。`
-      this.store.setTaskState(taskId, 'waiting_user', { summary: reports.join('\n\n') })
+      await this.storage.setTaskState(taskId, 'waiting_user', { summary: reports.join('\n\n') })
       if (reports.length > 0) yield { type: 'chat', role: 'butler', text: message, time: Date.now() }
       yield { type: 'summary', taskId, text: message, state: 'waiting_user', error: '', time: Date.now() }
       return
@@ -2798,14 +2821,14 @@ export class ButlerConsole {
     if (external > 0 && !stopped) {
       const message = `材料已经交回，还有 ${external} 件事要在外面办完。这一轮到此为止，想继续可以新开一轮。`
       const error = failed === 0 ? '' : `${failed} 个子任务失败`
-      this.store.setTaskState(taskId, 'external_pending', { summary: reports.join('\n\n'), error })
+      await this.storage.setTaskState(taskId, 'external_pending', { summary: reports.join('\n\n'), error })
       yield { type: 'summary', taskId, text: message, state: 'external_pending', error, time: Date.now() }
       return
     }
 
     let summaryText = ''
     if (!stopped && conversation !== undefined) {
-      this.store.setTaskState(taskId, 'summarizing')
+      await this.storage.setTaskState(taskId, 'summarizing')
       for await (const event of this.summarize(conversation, goal, subtasks, reports, signal)) {
         const inner = summaryTextOf(event)
         if (inner !== null) summaryText = inner
@@ -2823,9 +2846,9 @@ export class ButlerConsole {
      * 正好在它跑的这段时间里进来的补充，只能在这里拦下来 —— 那份结论是按**旧范围**总结的，
      * 写下去就等于用旧结论盖住新目标，还把任务报成完成。
      */
-    if (!this.store.commitTaskState(taskId, taskState, { summary: summaryText, error })) {
+    if (!(await this.storage.commitTaskState(taskId, taskState, { summary: summaryText, error }))) {
       // 结论作废，但它已经边流边出现在页面上了：如实说明它只是草稿，不冒充最终答复。
-      this.store.setTaskState(taskId, 'running')
+      await this.storage.setTaskState(taskId, 'running')
       yield {
         type: 'chat', role: 'butler',
         text: '老大又补了一句，刚那份结论先当草稿 —— 等新的说法处理完再给你结论。',
@@ -2862,32 +2885,32 @@ export class ButlerConsole {
     signal: AbortSignal
   }): AsyncGenerator<ButlerEvent> {
     for (;;) {
-      const record = this.store.task(input.actor, input.taskId)
+      const record = await this.storage.task(input.actor, input.taskId)
       if (record === undefined) return
       const next = record.subtasks.find(item => item.state === 'queued')
       if (next === undefined) return
       if (input.signal.aborted) return
       yield* this.dispatchSubtask({
         taskId: input.taskId, subtaskId: next.id, goal: next.goal, agentId: next.agentId,
-        displayName: this.displayNameOf(input.actor, next.agentId), taskGoal: input.goal,
+        displayName: await this.displayNameOf(input.actor, next.agentId), taskGoal: input.goal,
         actor: input.actor, signal: input.signal,
         ...(next.dependsOn.length === 0 ? {} : { dependsOn: next.dependsOn }),
         ...(next.requiresExternalAction ? { requiresExternalAction: true } : {}),
       })
-      const after = this.store.task(input.actor, input.taskId)?.subtasks.find(item => item.id === next.id)
+      const after = (await this.storage.task(input.actor, input.taskId))?.subtasks.find(item => item.id === next.id)
       // 派完还是排队中，说明前置仍未就绪：到此为止，等下一次核验。
       if (after === undefined || after.state === 'queued') return
     }
   }
 
   private async *closeAfterReply(prepared: PreparedReply): AsyncGenerator<ButlerEvent> {
-    const before = this.store.task(prepared.actor, prepared.taskId)
+    const before = await this.storage.task(prepared.actor, prepared.taskId)
     if (before === undefined) return
     // 有人回完话之后，之前「前置还没终结」而留在队列里的步骤可能就绪了：先核验再派。
     yield* this.drainQueue({
       taskId: before.id, actor: prepared.actor, goal: before.goal, signal: prepared.abort.signal,
     })
-    const record = this.store.task(prepared.actor, prepared.taskId)
+    const record = await this.storage.task(prepared.actor, prepared.taskId)
     if (record === undefined) return
     if (record.subtasks.some(item => !isTerminal(item.state))) return
     // 只看有效尝试：被替代掉的旧尝试不该参与这一轮的结论。

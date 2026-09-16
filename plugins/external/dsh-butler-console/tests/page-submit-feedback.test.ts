@@ -115,7 +115,7 @@ describe('补缺轮守卫（代码核对发现的三处缺口）', () => {
   })
 
   it('互斥不允许回话接管活着的回合（缺口 1）', () => {
-    const prepareReply = serverSource.slice(serverSource.indexOf('private prepareReply'), serverSource.indexOf('private async *replyBody'))
+    const prepareReply = serverSource.slice(serverSource.indexOf('private async prepareReply'), serverSource.indexOf('private async *replyBody'))
     expect(prepareReply).toContain('这一轮还在执行')
     // claimNow 不再有按 kind 的接管分支。
     const claim = serverSource.slice(serverSource.indexOf('private claimNow'), serverSource.indexOf('private releaseClaim'))

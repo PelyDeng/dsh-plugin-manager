@@ -9,7 +9,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Access } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
-import type { TaskStore } from '../src/store.ts'
+import type { ButlerStorage } from '../src/storage/types.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 
@@ -28,7 +28,7 @@ function context(): Context {
 }
 
 function fixture() {
-  const store = { setSubtaskState: vi.fn() } as unknown as TaskStore
+  const store = { setSubtaskState: vi.fn() } as unknown as ButlerStorage
   const access = { mode: 'authenticated', ready() {}, resolve: () => undefined, assert() {} } as unknown as Access
   const config = { subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000 } as Config
   const console_ = new ButlerConsole(context(), config, access, store, '')

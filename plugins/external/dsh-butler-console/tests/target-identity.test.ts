@@ -16,6 +16,7 @@ import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole, effectiveSubtasks } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor } from '../src/protocol.ts'
+import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
 import { TaskStore, type SubtaskRecord } from '../src/store.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
@@ -84,7 +85,7 @@ async function fixture(executor: ButlerAgentExecutor) {
     subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000, maxConversationEvents: 200,
     waitingTimeoutMs: 600_000, idempotencyTtlMs: 600_000,
   } as Config
-  const console_ = new ButlerConsole(context(executor), config, access, store, '')
+  const console_ = new ButlerConsole(context(executor), config, access, new SqliteButlerStorage(store), '')
   /**
    * 后台那一轮要在关库之前收干净。
    *

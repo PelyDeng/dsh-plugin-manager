@@ -23,6 +23,7 @@ import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor } from '../src/protocol.ts'
+import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
 import { TaskStore } from '../src/store.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
@@ -62,7 +63,7 @@ async function dispatchOnce(executor: ButlerAgentExecutor) {
     // 那个闹钟才醒过来写库。
     waitingTimeoutMs: 600_000,
   } as Config
-  const console_ = new ButlerConsole(context(executor), config, access, store, '')
+  const console_ = new ButlerConsole(context(executor), config, access, new SqliteButlerStorage(store), '')
   const agent = { session: { id: conversationId }, followup: vi.fn(), cancel: vi.fn(), dispose: vi.fn(async () => {}) }
   const inner = console_ as unknown as {
     setup(ctx: unknown, sessionId: string): void

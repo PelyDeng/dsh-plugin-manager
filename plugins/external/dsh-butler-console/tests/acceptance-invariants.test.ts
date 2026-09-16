@@ -18,6 +18,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
+import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
 import { TaskStore } from '../src/store.ts'
 
 const actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' } as const
@@ -42,7 +43,7 @@ function fixture() {
   } as Config
   const service = new ButlerConsole(
     {} as never, concurrency,
-    { assert() {} } as never, store, '',
+    { assert() {} } as never, new SqliteButlerStorage(store), '',
   )
   const conversation = { id: conversationId, active: false, lastUsedAt: Date.now(), handle: { agent: {} } }
   const open = vi.spyOn(service, 'open').mockImplementation(async () => conversation as never)

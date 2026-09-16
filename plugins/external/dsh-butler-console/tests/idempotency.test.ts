@@ -22,6 +22,7 @@ import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor } from '../src/protocol.ts'
+import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
 import { TaskStore } from '../src/store.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
@@ -72,7 +73,7 @@ function session(path: string) {
     subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000, maxConversationEvents: 200,
     waitingTimeoutMs: 600_000, idempotencyTtlMs: 600_000,
   } as Config
-  const console_ = new ButlerConsole(context(), config, access, store, '')
+  const console_ = new ButlerConsole(context(), config, access, new SqliteButlerStorage(store), '')
   const agent = { session: { id: conversationId }, followup: vi.fn(), cancel: vi.fn(), dispose: vi.fn(async () => {}) }
   // 会话对象要**缓存**：真实的 `open()` 会复用同一个实例，`active` 才是共享的。
   // 每次返回新对象的话，「上一轮还没完」这个状态根本传不出来。

@@ -18,7 +18,7 @@ import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { AccessError } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
-import type { TaskStore } from '../src/store.ts'
+import type { ButlerStorage } from '../src/storage/types.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
@@ -60,7 +60,7 @@ function fixture(all: readonly unknown[], options: { missingSession?: boolean; f
     assertOwner: vi.fn(() => {
       if (options.foreignOwner === true) throw new AccessError(404, '会话不存在或无权访问', 'conversation_not_found')
     }),
-  } as unknown as TaskStore
+  } as unknown as ButlerStorage
   const access = { mode: 'authenticated', ready() {}, resolve: () => actor, assert() {} } as unknown as Access
   const config = { maxConversationEvents: 200, waitingTimeoutMs: 600_000, idempotencyTtlMs: 600_000 } as Config
   const ctx = {

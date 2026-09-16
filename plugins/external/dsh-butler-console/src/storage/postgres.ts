@@ -40,7 +40,9 @@ import type {
 } from './types.ts'
 
 /** 本实现对应的库结构版本（与 `migrations/postgres/0001_init.sql` 写入的版本行一致）。 */
-const EXPECTED_SCHEMA_VERSION = 8
+export const STORAGE_SCHEMA_VERSION = 8
+/** init 版本校验使用的期望版本（与 {@link STORAGE_SCHEMA_VERSION} 同源，/ready 汇报同一数值）。 */
+const EXPECTED_SCHEMA_VERSION = STORAGE_SCHEMA_VERSION
 
 /** 业务表清单：init 时逐一核验存在性（插件 schema 固定 public），缺表归类 `storage_schema_missing`。 */
 const EXPECTED_TABLES = ['conversations', 'tasks', 'subtasks', 'agent_aliases', 'requests', 'task_inputs'] as const

@@ -18,7 +18,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
-import type { TaskStore } from '../src/store.ts'
+import { STORAGE_SCHEMA_VERSION } from '../src/storage/postgres.ts'
+import type { ButlerStorage } from '../src/storage/types.ts'
 import { installWeb } from '../src/web.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
@@ -26,9 +27,9 @@ const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-log
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 
-async function until(check: () => boolean, label: string): Promise<void> {
+async function until(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (check()) return
+    if (await check()) return
     await settle()
   }
   throw new Error(`等待超时：${label}`)
@@ -126,7 +127,7 @@ interface Fixture {
   endTurn: () => void
   /** 让大总管这一轮以失败收场，用来验证流内的错误事件。 */
   failTurn: () => void
-  store: TaskStore
+  store: ButlerStorage
 }
 
 /** 装好插件：真路由 + 真会话，只有宿主与存储是替身。 */
@@ -165,7 +166,7 @@ async function fixture(options: { maxConversationEvents?: number; assertOwner?: 
       if (found !== undefined) found.state = 'finished'
     },
     releaseRequest: (who: Actor, kind: string, id: string) => { requests.delete(requestKey(who, kind, id)) },
-  } as unknown as TaskStore
+  } as unknown as ButlerStorage
   const access = {
     mode: 'authenticated',
     ready() {},
@@ -210,7 +211,7 @@ async function fixture(options: { maxConversationEvents?: number; assertOwner?: 
   vi.spyOn(console_, 'open').mockResolvedValue({
     id: conversationId, handle: { agent }, active: false, lastUsedAt: Date.now(),
   } as never)
-  await installWeb(ctx, config, console_, access)
+  await installWeb(ctx, config, console_, access, { ready: true, schemaVersion: STORAGE_SCHEMA_VERSION })
 
   const call = (method: 'GET' | 'POST', target: string, payload?: unknown): Call => {
     // 路由按路径注册，查询串要留到 request.url 里给处理函数自己解析。
@@ -250,11 +251,11 @@ describe('提交之后，连接不再是任务的命门', () => {
     await settle()
 
     // 关键：连接没了，这一轮还在跑。
-    expect(f.console_.watch(conversationId, actor, 0)!.head.state).toBe('running')
+    expect((await f.console_.watch(conversationId, actor, 0))!.head.state).toBe('running')
     await chat.pending
 
     f.endTurn()
-    await until(() => f.console_.watch(conversationId, actor, 0)!.head.state !== 'running', '这一轮跑完')
+    await until(async () => (await f.console_.watch(conversationId, actor, 0))!.head.state !== 'running', '这一轮跑完')
 
     // 断线之后产生的事件都在，重新订阅就补齐了。
     const replay = f.call('GET', `/butler/events?conversationId=${conversationId}&after=0`)
@@ -549,9 +550,9 @@ describe('/stop 说清楚它到底停没停', () => {
     await stop.pending
     expect(JSON.parse(stop.response.text)).toEqual({ ok: true, accepted: true })
 
-    await until(() => f.console_.watch(conversationId, actor, 0)!.head.state !== 'running', '这一轮被取消')
+    await until(async () => (await f.console_.watch(conversationId, actor, 0))!.head.state !== 'running', '这一轮被取消')
     await chat.pending
-    expect(f.console_.watch(conversationId, actor, 0)!.head.state).toBe('cancelled')
+    expect((await f.console_.watch(conversationId, actor, 0))!.head.state).toBe('cancelled')
   })
 
   it('没有在跑的任务时仍然返回 ok，但明说没有停到东西', async () => {
@@ -568,14 +569,14 @@ describe('/stop 说清楚它到底停没停', () => {
     const f = await fixture()
     f.store.task = vi.fn((_actor: Actor, id: string) => (id === 'butler-task-1'
       ? { id: 'butler-task-1', conversationId, subtasks: [] }
-      : undefined)) as unknown as TaskStore['task']
+      : undefined)) as unknown as ButlerStorage['task']
 
     const chat = await startTurn(f)
     const stop = f.call('POST', '/butler/stop', { conversationId, taskId: 'butler-task-1' })
     await stop.pending
 
     expect(JSON.parse(stop.response.text)).toMatchObject({ ok: true, accepted: false })
-    expect(f.console_.watch(conversationId, actor, 0)!.head.state).toBe('running')
+    expect((await f.console_.watch(conversationId, actor, 0))!.head.state).toBe('running')
 
     f.endTurn()
     await chat.pending

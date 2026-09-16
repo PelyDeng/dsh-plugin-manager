@@ -18,6 +18,8 @@ import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor, ButlerDispatchRequest } from '../src/protocol.ts'
+import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
+import type { ButlerStorage } from '../src/storage/types.ts'
 import { TaskStore } from '../src/store.ts'
 import type { SubtaskState } from '../src/task-model.ts'
 
@@ -97,16 +99,22 @@ function environment(store: TaskStore, handlers: { dispatch: Dispatch; reply?: R
     subtaskTimeoutMs: 10_000, maxResultChars, maxMessageChars: 8000, maxConversationEvents: 200,
     waitingTimeoutMs: 600_000,
   } as Config
-  const console_ = new ButlerConsole(context(executor), config, access, store, '')
+  const console_ = new ButlerConsole(context(executor), config, access, new SqliteButlerStorage(store), '')
   const agent = { session: { id: conversationId }, followup: vi.fn(), cancel: vi.fn(), dispose: vi.fn(async () => {}) }
   const inner = console_ as unknown as {
     setup(ctx: unknown, sessionId: string): void
     conversations: Map<string, unknown>
+    storage: ButlerStorage
   }
   // 取当前挂在管家上的存储（用例中途换过存储时，替身入口也要跟着换）。
-  const currentStore = () => (console_ as unknown as { store: TaskStore }).store
+  let current: TaskStore = store
+  /** 把管家换到另一份存储上（重开后的库）：内部字段与替身入口一起换。 */
+  const swapStore = (next: TaskStore) => {
+    current = next
+    inner.storage = new SqliteButlerStorage(next)
+  }
   vi.spyOn(console_, 'open').mockImplementation(async (requestedId?: string) => {
-    currentStore().openOrReserveConversation(String(requestedId), actor)
+    current.openOrReserveConversation(String(requestedId), actor)
     const conversation = { id: conversationId, handle: { agent }, active: false, lastUsedAt: Date.now() }
     inner.conversations.set(conversationId, conversation)
     return conversation as never
@@ -119,7 +127,7 @@ function environment(store: TaskStore, handlers: { dispatch: Dispatch; reply?: R
   const planTool = tools[0]
   if (planTool === undefined) throw new Error('派活工具没有注册')
   const endTurn = () => console_.observe({ id: conversationId }, { type: 'turn/end', data: { reason: { kind: 'completed' } } } as never)
-  return { console_, agent, planTool, requests, replies, endTurn }
+  return { console_, agent, planTool, requests, replies, endTurn, swapStore }
 }
 
 type Env = ReturnType<typeof environment>
@@ -313,7 +321,7 @@ describe('存储重开与续问之后的来源', () => {
     options.prepare?.(path)
 
     const reopened = new TaskStore(path)
-    ;(env.console_ as unknown as { store: TaskStore }).store = reopened
+    env.swapStore(reopened)
     return { path, store: reopened, env, taskId }
   }
 

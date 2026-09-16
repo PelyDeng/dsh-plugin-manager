@@ -20,6 +20,39 @@ import { listAgentCards } from './agents.ts'
 import { TRANSCRIPT_MAX_ITEMS, type ButlerConsole, type RunWatch, type StartedRun } from './butler.ts'
 import type { Config } from './config.ts'
 import { canResume } from './event-log.ts'
+import { StorageError } from './storage/errors.ts'
+
+/**
+ * 存储就绪探针结果（方案 §2.5）：启动序列（init → failInterrupted）缓存的布尔与 schema
+ * 版本；未就绪时带稳定码。`/ready` 把它与 auth 就绪合并汇报，任一不可用都按 503 拒绝。
+ */
+export interface StorageReadiness {
+  readonly ready: boolean
+  readonly schemaVersion: number
+  /** 未就绪时的稳定码（storage_unreachable / storage_schema_missing / storage_schema_version / storage_closed）。 */
+  readonly code?: string
+}
+
+/**
+ * 存储层故障到 HTTP 的映射（方案 §3 错误分类层）：
+ *
+ * - 可用性类（unreachable / auth / schema_missing / schema_version / timeout / closed）→ 503，
+ *   稳定码进响应体；`storage_transaction`（可重试事务冲突）同样按临时不可用给 503；
+ * - `storage_constraint`（唯一约束等）按业务冲突给 409；
+ * - `storage_unknown` → 500，只给固定文案，不泄露连接串等内部信息；
+ * - 版本冲突（version_conflict）在存储层就是 kit 的 AccessError(409)，走既有通道，不经这里。
+ */
+const STORAGE_STATUS: Record<string, { status: number; message?: string }> = {
+  storage_unreachable: { status: 503 },
+  storage_auth: { status: 503 },
+  storage_schema_missing: { status: 503 },
+  storage_schema_version: { status: 503 },
+  storage_timeout: { status: 503 },
+  storage_closed: { status: 503 },
+  storage_transaction: { status: 503 },
+  storage_constraint: { status: 409 },
+  storage_unknown: { status: 500, message: '服务处理请求失败' },
+}
 
 /**
  * 只按 HTTP 语义给出的兜底码。
@@ -213,6 +246,7 @@ export async function installWeb(
   config: Config,
   console_: ButlerConsole,
   access: Access,
+  storageReady: StorageReadiness,
 ): Promise<void> {
   const sourceHtml = await readFile(new URL('../web/index.html', import.meta.url), 'utf8')
   // 页面里的 `/butler/...` 是包内默认前缀，部署改前缀时一并替换。
@@ -234,6 +268,17 @@ export async function installWeb(
     access,
     routePrefix: config.routePrefix,
     onError: (response, caught) => {
+      // 存储层故障先按稳定码归类（§3 错误分类层），可用性类 503、约束冲突 409、未知 500
+      // 且不泄露连接信息；文案沿用 StorageError 的固定描述（不含连接串）。
+      if (caught instanceof StorageError) {
+        const mapped = STORAGE_STATUS[caught.code] ?? STORAGE_STATUS.storage_unknown!
+        if (mapped.status >= 500) console.error('butler web storage failed', caught)
+        json(response, mapped.status, {
+          error: mapped.message ?? caught.message,
+          code: caught.code,
+        })
+        return
+      }
       const known = caught instanceof HttpError || isAccessError(caught)
       const status = known ? (caught as HttpError).status : 500
       if (!known) console.error('butler web request failed', caught)
@@ -281,7 +326,7 @@ export async function installWeb(
   const streamRun = async (input: {
     readonly response: ServerResponse
     readonly after: number
-    readonly watch: (signal: AbortSignal) => RunWatch | undefined
+    readonly watch: (signal: AbortSignal) => Promise<RunWatch | undefined>
     readonly preamble?: Record<string, unknown>
   }): Promise<void> => {
     const { response, after, watch, preamble } = input
@@ -319,7 +364,7 @@ export async function installWeb(
     })
     if (preamble !== undefined) send(preamble)
 
-    const ready = watch(detached.signal)
+    const ready = await watch(detached.signal)
     if (ready === undefined) {
       // 没有可观察的一轮：如实说明，让调用方自己决定是等还是去读历史。
       send({ type: 'run', runId: '', state: 'idle', startedAt: 0, finishedAt: null, taskId: '' })
@@ -377,7 +422,17 @@ export async function installWeb(
       try {
         method(request, 'GET')
         access.ready()
-        json(response, 200, { ok: true })
+        // 存储就绪（§2.5）：auth 可用但存储未就绪同样是 503，带稳定码；两者都可用时把
+        // schema 版本一并汇报，运维区分「服务没起来」与「结构版本不对」。
+        if (!storageReady.ready) {
+          json(response, 503, {
+            error: '工作台存储未就绪',
+            code: storageReady.code ?? 'storage_unknown',
+            schemaVersion: storageReady.schemaVersion,
+          })
+          return
+        }
+        json(response, 200, { ok: true, storage: { ready: true, schemaVersion: storageReady.schemaVersion } })
       } catch (caught) {
         const known = caught instanceof HttpError || isAccessError(caught)
         json(response, known ? (caught as HttpError).status : 503, { error: known ? (caught as Error).message : '认证服务不可用' })
@@ -457,9 +512,9 @@ export async function installWeb(
   ctx.effect(() => register({
     kind: 'exact',
     path: `${config.routePrefix}/members`,
-    handler: (request, response, actor) => {
+    handler: async (request, response, actor) => {
       method(request, 'GET')
-      respond(actor, response, 200, { items: console_.members(actor) })
+      respond(actor, response, 200, { items: await console_.members(actor) })
     },
   }))
 
@@ -484,8 +539,8 @@ export async function installWeb(
       if (agentId === '') throw new HttpError(400, '缺少 agentId', 'missing_field')
       // 只允许给目录里真实存在的成员起别名，避免写出永远不显示的死配置。
       if (!listAgentCards(ctx).some(card => card.id === agentId)) throw new HttpError(404, '没有这个成员', 'member_not_found')
-      console_.setAlias(actor, agentId, stringField(payload, 'displayName', 24, false), stringField(payload, 'accent', 9, false))
-      respond(actor, response, 200, { items: console_.members(actor) })
+      await console_.setAlias(actor, agentId, stringField(payload, 'displayName', 24, false), stringField(payload, 'accent', 9, false))
+      respond(actor, response, 200, { items: await console_.members(actor) })
     },
   }))
 
@@ -506,14 +561,14 @@ export async function installWeb(
       if (request.method === 'DELETE') {
         const target = new URL(request.url ?? '/', 'http://localhost').searchParams.get('agentId')?.trim() ?? ''
         if (target === '') throw new HttpError(400, '缺少 agentId', 'missing_field')
-        console_.clearAvatar(actor, target)
-        respond(actor, response, 200, { items: console_.members(actor) })
+        await console_.clearAvatar(actor, target)
+        respond(actor, response, 200, { items: await console_.members(actor) })
         return
       }
       // 读取头像：按当前登录用户鉴权，不能靠猜 id 读到别人的头像。
       if (request.method === 'GET') {
         const agentId = new URL(request.url ?? '/', 'http://localhost').searchParams.get('agentId')?.trim() ?? ''
-        const found = agentId === '' ? undefined : console_.avatar(actor, agentId)
+        const found = agentId === '' ? undefined : await console_.avatar(actor, agentId)
         if (found === undefined) throw new HttpError(404, '没有设置头像', 'avatar_not_found')
         response.writeHead(200, {
           'content-type': found.contentType,
@@ -531,8 +586,8 @@ export async function installWeb(
       if (contentType === undefined) throw new HttpError(415, '头像只支持 PNG / JPEG / WebP', 'unsupported_media_type')
       const bytes = await rawBody(request, config.maxAvatarBytes)
       if (!matchesImageSignature(bytes, declared)) throw new HttpError(415, '文件内容与图片格式不符', 'unsupported_media_type')
-      console_.setAvatar(actor, agentId, bytes, contentType)
-      respond(actor, response, 200, { items: console_.members(actor) })
+      await console_.setAvatar(actor, agentId, bytes, contentType)
+      respond(actor, response, 200, { items: await console_.members(actor) })
     },
   }))
 
@@ -540,9 +595,9 @@ export async function installWeb(
   ctx.effect(() => register({
     kind: 'exact',
     path: `${config.routePrefix}/overview`,
-    handler: (request, response, actor) => {
+    handler: async (request, response, actor) => {
       method(request, 'GET')
-      respond(actor, response, 200, console_.overview(actor))
+      respond(actor, response, 200, await console_.overview(actor))
     },
   }))
 
@@ -579,9 +634,9 @@ export async function installWeb(
   ctx.effect(() => register({
     kind: 'exact',
     path: `${config.routePrefix}/conversations`,
-    handler: (request, response, actor) => {
+    handler: async (request, response, actor) => {
       method(request, 'GET')
-      respond(actor, response, 200, { items: console_.listConversations(actor) })
+      respond(actor, response, 200, { items: await console_.listConversations(actor) })
     },
   }))
 
@@ -589,14 +644,14 @@ export async function installWeb(
   ctx.effect(() => register({
     kind: 'exact',
     path: `${config.routePrefix}/history`,
-    handler: (request, response, actor) => {
+    handler: async (request, response, actor) => {
       method(request, 'GET')
       const params = new URL(request.url ?? '/', 'http://localhost').searchParams
       const state = params.get('state') ?? ''
       if (!['', 'queued', 'running', 'waiting_user', 'summarizing', 'external_pending', 'partial', 'completed', 'failed', 'cancelled'].includes(state)) {
         throw new HttpError(400, '状态筛选值无效', 'history_query_invalid')
       }
-      respond(actor, response, 200, console_.history(actor, {
+      respond(actor, response, 200, await console_.history(actor, {
         offset: Number(params.get('offset') ?? '0'),
         limit: Number(params.get('limit') ?? '30'),
         keyword: (params.get('q') ?? '').trim(),
@@ -610,11 +665,11 @@ export async function installWeb(
   ctx.effect(() => register({
     kind: 'exact',
     path: `${config.routePrefix}/task`,
-    handler: (request, response, actor) => {
+    handler: async (request, response, actor) => {
       method(request, 'GET')
       const id = new URL(request.url ?? '/', 'http://localhost').searchParams.get('id') ?? ''
       if (id === '') throw new HttpError(400, '缺少任务 id', 'missing_field')
-      respond(actor, response, 200, console_.task(actor, id))
+      respond(actor, response, 200, await console_.task(actor, id))
     },
   }))
 
@@ -630,7 +685,7 @@ export async function installWeb(
       const payload = await body(request, config.maxRequestBodyBytes)
       const conversationId = stringField(payload, 'conversationId', 200)
       const taskId = stringField(payload, 'taskId', 80, false).trim()
-      const outcome = console_.cancel(conversationId, actor, taskId)
+      const outcome = await console_.cancel(conversationId, actor, taskId)
       respond(actor, response, 200, {
         ok: true,
         accepted: outcome.accepted,
@@ -662,19 +717,19 @@ export async function installWeb(
       if (conversationId === '') throw new HttpError(400, '缺少 conversationId', 'missing_field')
 
       if (params.get('probe') === '1') {
-        respond(actor, response, 200, { run: console_.watch(conversationId, actor, 0)?.head ?? null })
+        respond(actor, response, 200, { run: (await console_.watch(conversationId, actor, 0))?.head ?? null })
         return
       }
 
       const requested = params.get('after')
       access.assert(actor)
       // 先取一次头部才知道「现在」在哪；这个探测用的生成器没有被消费，不会执行。
-      const probe = console_.watch(conversationId, actor, 0)
+      const probe = await console_.watch(conversationId, actor, 0)
       const after = requested === null ? (probe?.head.seq ?? 0) : cursorField(requested)
       await streamRun({
         response,
         after,
-        watch: signal => console_.watch(conversationId, actor, after, signal),
+        watch: async signal => await console_.watch(conversationId, actor, after, signal),
       })
     },
   }))
@@ -705,7 +760,7 @@ export async function installWeb(
       await streamRun({
         response,
         after: started.from,
-        watch: signal => console_.watch(started.conversationId, actor, started.from, signal),
+        watch: async signal => await console_.watch(started.conversationId, actor, started.from, signal),
       })
     },
   }))
@@ -758,7 +813,7 @@ export async function installWeb(
       await streamRun({
         response,
         after: started.from,
-        watch: signal => console_.watch(started.conversationId, actor, started.from, signal),
+        watch: async signal => await console_.watch(started.conversationId, actor, started.from, signal),
       })
     },
   }))
@@ -790,7 +845,7 @@ export async function installWeb(
       await streamRun({
         response,
         after: started.from,
-        watch: signal => console_.watch(started.conversationId, actor, started.from, signal),
+        watch: async signal => await console_.watch(started.conversationId, actor, started.from, signal),
         preamble: { type: 'conversation', conversationId: started.conversationId },
       })
     },
