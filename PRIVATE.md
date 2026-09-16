@@ -57,7 +57,7 @@ pnpm install --frozen-lockfile
 node scripts/version.mjs check
 node scripts/check-repository.mjs
 pnpm check --plugins "auth,example"                     # 内置：auth、example
-pnpm check --external --plugins "agents-group,butler"   # 外部：群组（含 blog/closedoff/verify-doll）与管家
+pnpm check --external --plugins "agents-group,butler"   # 外部：群组（含 blog/closedoff）与管家
 pnpm --filter dsh-auth test
 pnpm --filter dsh-example test
 pnpm --filter dsh-agents-group test

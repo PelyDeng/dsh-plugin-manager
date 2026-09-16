@@ -1,12 +1,15 @@
 /**
- * 两项目贯通验收（方案 G06/G01/G02/G04，B 批补缺版）。
+ * 成员链路贯通验收（方案 G06/G01/G02/G04）。
  *
- * 与上一版的差别：**执行入口与目录条目都来自真实群组装配**——用替身宿主上下文跑群组
- * 的 `apply()`，从 `butler/executors` 事件收执行入口、从 `ecosystem/catalog` 收目录
- * 条目，再把这两份「真实产物」喂给真实的 ButlerConsole。此前测试手工编造目录条目，
- * 掩盖了群组从未给成员注册目录条目的缺口；现在装配缺任何一环这里都会红。
+ * 与早先版本的关系：这里的「成员」是**测试内自建的替身**（`tests/fixtures/chain-member.ts`），
+ * 不再依赖随包发布的验收成员。替身以前以 `verify-doll`（验收娃娃）随包发布，虽然默认关闭、
+ * 要显式配置才装载，但任何站点的成员名单里都不该出现一只验收替身，所以它被移出产品代码。
+ * 链路语义一条没少：派活→等待→两次续问→交差，外加同 ID 重试幂等与异文拒绝。
  *
- * 同时验证验收成员的启用边界：不显式 `enabled` 时它不出现在装配产物里。
+ * 执行入口与目录条目都走**真实装配路径**：用替身宿主上下文跑群组 `apply()`，从
+ * `butler/executors` 收执行入口、从 `ecosystem/catalog` 收目录条目，再把这两份真实产物喂给
+ * 真实的 ButlerConsole。此前测试手工编造目录条目，掩盖了群组从未给成员注册目录条目的缺口；
+ * 现在装配缺任何一环这里都会红。
  */
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -16,15 +19,19 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Access, Actor, PluginDescriptor } from '@dsh-plugin-manager/plugin-kit'
 // 群组侧的真实装配与管家实现（仅测试内跨插件引用；运行时两插件互不导入业务源码）。
 import { apply as applyGroup } from '../src/index.ts'
+import { AGENT_MANIFESTS } from '../src/agents/registry.ts'
 import { Config as GroupConfig } from '../src/config.ts'
+import { executorFor, onButlerExecutors } from '../src/butler-bridge.ts'
 import { ButlerConsole } from '../../dsh-butler-console/src/butler.ts'
 import type { Config } from '../../dsh-butler-console/src/config.ts'
 import type { ButlerAgentExecutor } from '../../dsh-butler-console/src/protocol.ts'
 import { TaskStore } from '../../dsh-butler-console/tests/helpers/sqlite-test-store.ts'
+import { CHAIN_MEMBER_MANIFEST, mountChainMember } from './fixtures/chain-member.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
 const PUBLIC_ORIGIN = 'https://butler.test'
+const MEMBER = CHAIN_MEMBER_MANIFEST.id
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0))
 
@@ -92,12 +99,17 @@ function fakeHost() {
   return { ctx, effects }
 }
 
-/** 跑一次真实群组装配，收执行入口与目录条目。 */
-async function assembleGroup(enableDoll: boolean) {
+/**
+ * 跑一次真实群组装配，并把测试替身按同样的桥接路径登记进去。
+ *
+ * 替身走的是与随包成员完全相同的 `registerPlugin` + `executorFor` + `onButlerExecutors`，
+ * 所以「目录条目 / 执行入口」这两条链路由它覆盖时，被测的仍是产品代码那条通路。
+ */
+async function assembleWithMember() {
   writeGroupConfig()
   const { ctx } = fakeHost()
   // blog 的 SQLite 需要独立数据目录：与其他并行测试文件共用默认 dshHome 路径会锁库。
-  const blogData = mkdtempSync(join(tmpdir(), 'doll-blog-'))
+  const blogData = mkdtempSync(join(tmpdir(), 'chain-blog-'))
   const config = GroupConfig({
     accessMode: 'authenticated',
     publicOrigin: PUBLIC_ORIGIN,
@@ -105,15 +117,17 @@ async function assembleGroup(enableDoll: boolean) {
     authRecheckMs: 100,
     agents: {
       blog: { enabled: true, config: { dataPath: blogData }, models: { allow: [], deny: [] } },
-      ...(enableDoll ? { 'verify-doll': { enabled: true, config: {}, models: { allow: [], deny: [] } } } : {}),
     },
   } as never)
   await applyGroup(ctx, config)
+  const access = { mode: 'authenticated', ready() {}, resolve: () => actor, assert() {} } as unknown as Access
+  const member = await mountChainMember({ ctx, access, routePrefix: '/agents' })
+  ctx.effect(() => onButlerExecutors(ctx, executorFor(CHAIN_MEMBER_MANIFEST, member.participant)))
   const executors: ButlerAgentExecutor[] = []
   ctx.root.emit('butler/executors', (value: unknown) => { executors.push(value as ButlerAgentExecutor) })
   const catalog: PluginDescriptor[] = []
   ctx.root.emit('ecosystem/catalog', (value: unknown) => { catalog.push((value as { plugin: PluginDescriptor }).plugin) })
-  return { executors, catalog }
+  return { ctx, executors, catalog }
 }
 
 /** 管家：执行入口与目录条目来自真实装配（不再手工编造）。 */
@@ -154,51 +168,54 @@ async function butlerFixture(executors: readonly ButlerAgentExecutor[], catalog:
   let planningDone = false
   agent.followup.mockImplementation(() => { if (planningDone) queueMicrotask(endTurn) })
   const tasks = () => store.history(actor, { offset: 0, limit: 10, keyword: '', state: '' }).items
-  const planTowardDoll = async () => {
+  const planTowardMember = async () => {
     await console_.start(conversationId, '验收一次群组接入', actor)
     await until(() => agent.followup.mock.calls.length === 1, '大总管开始理解')
     await planTool.execute({
-      reply: '让验收娃娃走一遍。',
+      reply: '让链路替身走一遍。',
       note: '',
-      subtasks: [{ goal: '走完等待与续问', agentId: 'verify-doll', reason: '' }],
+      subtasks: [{ goal: '走完等待与续问', agentId: MEMBER, reason: '' }],
     }, { signal: new AbortController().signal })
     endTurn()
     planningDone = true
     await until(() => tasks().length === 1, '任务落库')
     const taskId = tasks()[0]!.id
-    await until(() => store.task(actor, taskId)?.state === 'waiting_user', '娃娃停在等人回话')
+    await until(() => store.task(actor, taskId)?.state === 'waiting_user', '替身停在等人回话')
     return taskId
   }
-  return { console_, store, tasks, planTowardDoll, subtaskOf: (taskId: string) => store.task(actor, taskId)!.subtasks[0]! }
+  return { console_, store, tasks, planTowardMember, subtaskOf: (taskId: string) => store.task(actor, taskId)!.subtasks[0]! }
 }
 
-describe('验收娃娃的两项目贯通（真实装配）', () => {
+describe('成员链路贯通（真实装配 + 测试内替身）', () => {
   let spy: typeof console.error
   beforeEach(() => { spy = console.error; console.error = () => {} })
   afterEach(() => { console.error = spy; delete process.env.AGENTS_GROUP_CONFIG })
 
-  it('真实装配提供目录条目与执行入口；显式启用才出现', async () => {
-    const off = await assembleGroup(false)
-    expect(off.catalog.some(plugin => plugin.id === 'verify-doll')).toBe(false)
-    expect(off.executors.some(executor => executor.agentId === 'verify-doll')).toBe(false)
-    // 普通成员不受验收开关影响。
-    expect(off.catalog.some(plugin => plugin.id === 'blog')).toBe(true)
+  it('随包名单里没有任何验收专用成员，成员都从真实装配拿到目录条目与执行入口', async () => {
+    // 回归护栏：接入期的验收替身只活在测试里，不再随包发布。
+    expect(AGENT_MANIFESTS.filter(item => item.verificationOnly === true)).toEqual([])
+    expect(AGENT_MANIFESTS.map(item => item.id)).toEqual(['closedoff', 'blog'])
 
-    const on = await assembleGroup(true)
-    const entry = on.catalog.find(plugin => plugin.id === 'verify-doll')
+    const { executors, catalog } = await assembleWithMember()
+    for (const id of ['closedoff', 'blog']) {
+      expect(catalog.some(plugin => plugin.id === id), `${id} 缺少目录条目`).toBe(true)
+      expect(executors.some(executor => executor.agentId === id), `${id} 缺少执行入口`).toBe(true)
+    }
+    // 替身自己那条也必须齐：分类是 agents，条目路径落在群组前缀下。
+    const entry = catalog.find(plugin => plugin.id === MEMBER)
     expect(entry?.category).toBe('agents')
-    expect(entry?.entryPath).toBe('/agents/verify-doll')
-    expect(on.executors.some(executor => executor.agentId === 'verify-doll')).toBe(true)
+    expect(entry?.entryPath).toBe(`/agents/${MEMBER}`)
+    expect(executors.some(executor => executor.agentId === MEMBER)).toBe(true)
   })
 
   it('装配→派发→早期引用→两次续问→交差，全程不丢会话与材料', async () => {
-    const { executors, catalog } = await assembleGroup(true)
+    const { executors, catalog } = await assembleWithMember()
     const f = await butlerFixture(executors, catalog)
-    const taskId = await f.planTowardDoll()
+    const taskId = await f.planTowardMember()
 
     const waitingSubtask = f.subtaskOf(taskId)
     expect(waitingSubtask.state).toBe('waiting_user')
-    expect(waitingSubtask.conversationId).toMatch(/^doll-/)
+    expect(waitingSubtask.conversationId).toMatch(/^chain-/)
     expect(waitingSubtask.artifacts.some(item => item.kind === 'conversation')).toBe(true)
     const memberConversation = waitingSubtask.conversationId
 
@@ -216,12 +233,12 @@ describe('验收娃娃的两项目贯通（真实装配）', () => {
   })
 
   it('同一次回话重试不重复执行业务，同 ID 异文被成员拒绝', async () => {
-    const { executors, catalog } = await assembleGroup(true)
-    const executor = executors.find(item => item.agentId === 'verify-doll')
-    if (executor === undefined) throw new Error('验收娃娃未登记执行入口')
+    const { executors, catalog } = await assembleWithMember()
+    const executor = executors.find(item => item.agentId === MEMBER)
+    if (executor === undefined) throw new Error('替身未登记执行入口')
     const replySpy = vi.spyOn(executor, 'reply')
     const f = await butlerFixture(executors, catalog)
-    const taskId = await f.planTowardDoll()
+    const taskId = await f.planTowardMember()
 
     const first = await f.console_.startReply({ taskId, subtaskId: 's1', text: '先用第一版', decideByAgent: false, actor, requestId: 'retry-me-once' })
     await until(() => f.subtaskOf(taskId).state === 'waiting_user' && f.subtaskOf(taskId).result.includes('先用第一版'), '第一次回话完成')

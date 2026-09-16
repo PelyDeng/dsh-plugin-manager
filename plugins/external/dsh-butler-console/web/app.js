@@ -607,16 +607,8 @@ function memberMessage(agentId, handle) {
 
   const bubble = make('div', 'bubble')
   // 思考行：默认收起，只有执行方真的上报了快照才出现；正文照旧在它下面。
-  const think = make('details', 'think')
-  think.hidden = true
-  const thinkSummary = make('summary', 'think__summary')
-  thinkSummary.appendChild(make('span', 'think__title', '思考'))
-  const thinkPreview = make('span', 'think__preview')
-  thinkSummary.appendChild(thinkPreview)
-  const thinkBody = make('div', 'think__body')
-  think.appendChild(thinkSummary)
-  think.appendChild(thinkBody)
-  bubble.appendChild(think)
+  const think = thinkingArea()
+  bubble.appendChild(think.node)
   const text = make('span')
   const caret = make('span', 'caret')
   caret.hidden = true
@@ -647,10 +639,29 @@ function memberMessage(agentId, handle) {
     /** 是否还在执行态：等待/终态置 false，在途增量帧回调据此放弃写入。 */
     live: true,
     progress: null,
-    think: { node: think, preview: thinkPreview, body: thinkBody },
+    think: { node: think.node, preview: think.preview, body: think.body },
   }
   state.bubbles.set(handle, view)
   return view
+}
+
+/**
+ * 思考行：默认收起，只有真的上报了快照才出现。
+ *
+ * 成员与大总管共用同一份结构（`.think`），两者的差别只在内容来源：成员是执行方上报的
+ * 脱敏投影，大总管是它自己这一轮的推理。
+ */
+function thinkingArea() {
+  const node = make('details', 'think')
+  node.hidden = true
+  const summary = make('summary', 'think__summary')
+  summary.appendChild(make('span', 'think__title', '思考'))
+  const preview = make('span', 'think__preview')
+  summary.appendChild(preview)
+  const body = make('div', 'think__body')
+  node.appendChild(summary)
+  node.appendChild(body)
+  return { node, preview, body }
 }
 
 /**
@@ -667,6 +678,22 @@ function setThinking(view, thinking) {
   const latest = lines.length === 0 ? '' : lines[lines.length - 1]
   view.think.preview.textContent = latest
   view.think.preview.hidden = latest === ''
+}
+
+/**
+ * 大总管这一轮的思考。
+ *
+ * 与成员思考同一套语义：覆盖、默认收起、摘要行只留最新一行；区别是它挂在大总管自己的气泡上、
+ * 位于正文之前（先想后说）。推理常常早于第一段正文到达，所以这里和正文增量一样按需开气泡，
+ * 否则这一段就被丢掉了。
+ */
+function butlerThinking(thinking) {
+  const speech = butlerSpeech()
+  if (speech.think === undefined) {
+    speech.think = thinkingArea()
+    speech.bubble.insertBefore(speech.think.node, speech.body)
+  }
+  setThinking(speech, thinking)
 }
 
 function ensureProgress(view) {
@@ -804,6 +831,10 @@ function handleEvent(event) {
 
     case 'chat_delta':
       butlerDelta(event.text)
+      break
+
+    case 'chat_thinking':
+      butlerThinking(event.thinking)
       break
 
     case 'chat_reset':

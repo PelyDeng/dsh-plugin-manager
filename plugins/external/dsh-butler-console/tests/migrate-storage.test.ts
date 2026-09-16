@@ -135,7 +135,7 @@ function createLegacyDb(path: string, version: number): void {
     ...(version >= 8 ? { input_refs: '{oops', member_return: '' } : {}),
   }))
   insert('subtasks', subtask({
-    id: 's3', seq: 3, goal: '排队中的一步', agent_id: 'verify-doll', reason: '', state: 'queued',
+    id: 's3', seq: 3, goal: '排队中的一步', agent_id: 'closedoff', reason: '', state: 'queued',
     result: '', error: '', started_at: null, finished_at: null,
     ...(version >= 2 ? { artifacts: '', conversation_id: '' } : {}),
     ...(version >= 5 ? { logical_id: 'g3', supersedes: '' } : {}),
@@ -148,7 +148,7 @@ function createLegacyDb(path: string, version: number): void {
     avatar: new Uint8Array([137, 80, 78, 71, 13, 10]), avatar_type: 'image/png', updated_at: 9500,
   })
   insert('agent_aliases', {
-    owner_namespace: 'user', owner_id: 'bob', agent_id: 'verify-doll', display_name: '', accent: '',
+    owner_namespace: 'user', owner_id: 'bob', agent_id: 'closedoff', display_name: '', accent: '',
     avatar: null, avatar_type: '', updated_at: 9600,
   })
   if (version >= 3) {

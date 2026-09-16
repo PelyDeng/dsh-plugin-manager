@@ -80,6 +80,31 @@ describe('任务投影：事件语义', () => {
     expect(view.butlerText).toBe('先看草稿……')
   })
 
+  it('大总管的思考快照是覆盖语义，正文落定后标记结束', () => {
+    let view = emptyTaskView('c1')
+    view = applyEvent(view, { type: 'chat_thinking', role: 'butler', thinking: '先看通行记录。\n正在生成…' })
+    expect(view.butlerThinking).toBe('先看通行记录。\n正在生成…')
+    expect(view.butlerThinkingDone).toBe(false)
+    // 覆盖而不是追加：第二段快照整段替换。
+    view = applyEvent(view, { type: 'chat_thinking', role: 'butler', thinking: '先看通行记录。\n再核对危化车。' })
+    expect(view.butlerThinking).toBe('先看通行记录。\n再核对危化车。')
+    // 正文落定 = 这一轮说完了：思考保留可展开，但不再标「还在想」。
+    view = applyEvent(view, { type: 'chat', role: 'butler', text: '今天 12 辆车入园。' })
+    expect(view.butlerText).toBe('今天 12 辆车入园。')
+    expect(view.butlerThinkingDone).toBe(true)
+  })
+
+  it('换执行轮时上一轮的思考不续到这一轮', () => {
+    let view = emptyTaskView('c1')
+    view = applyEvent(view, { type: 'run', runId: 'r1', state: 'running', taskId: 'butler-task-1' })
+    view = applyEvent(view, { type: 'chat_thinking', role: 'butler', thinking: '第一轮的思路' })
+    view = applyEvent(view, { type: 'chat', role: 'butler', text: '第一轮的结论' })
+    expect(view.butlerThinkingDone).toBe(true)
+    view = applyEvent(view, { type: 'run', runId: 'r2', state: 'running', taskId: 'butler-task-1' })
+    expect(view.butlerThinking).toBe('')
+    expect(view.butlerThinkingDone).toBe(false)
+  })
+
   it('summary 落终态；error 只记录不推算', () => {
     let view = applySnapshot(emptyTaskView(), snapshot)
     view = applyEvent(view, { type: 'summary', taskId: 'butler-task-1', text: '完成', state: 'completed' })

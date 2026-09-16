@@ -30,7 +30,8 @@ export interface AgentManifest {
   readonly requiresAuthentication?: boolean
   /**
    * 仅用于验收的成员：默认不装载，部署配置显式 `agents.<id>.enabled = true` 才进入
-   * 运行环境。验收娃娃这类成员不该出现在普通站点的名单里。
+   * 运行环境。随包名单里不带这类成员——接入期的临时替身做完验收就该留在测试里，
+   * 不该出现在普通站点的成员名单上。
    */
   readonly verificationOnly?: true
 }
@@ -56,15 +57,6 @@ export const AGENT_MANIFESTS: readonly AgentManifest[] = [
     description: '博客写作、发布、图床与备份',
     // 博客按用户隔离草稿、附件与备份，业务前提是必须有可信身份。
     requiresAuthentication: true,
-  },
-  {
-    id: 'verify-doll',
-    displayName: '验收娃娃',
-    directory: 'verify-doll',
-    category: '接入验收',
-    description: '最小接入验收成员：等待、续问与幂等语义（G06 活样例）',
-    // 仅验收用：默认不装载，部署配置显式 enabled 才进入运行环境。
-    verificationOnly: true,
   },
 ]
 

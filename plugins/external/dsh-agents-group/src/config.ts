@@ -65,5 +65,6 @@ export function agentConfig(config: Config, agentId: string): AgentConfig {
  */
 export function isAgentEnabled(config: Config, agentId: string, defaultEnabled?: boolean): boolean {
   // 默认开关由清单给：验收成员（verificationOnly）默认关，普通成员默认开。
+  // 随包名单目前没有这类成员，这条通路留给接入期在部署配置里临时挂验收替身的场景。
   return config.agents[agentId]?.enabled ?? defaultEnabled ?? true
 }
