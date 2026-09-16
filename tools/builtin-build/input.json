@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
   "newline": "lf",
-  "frameworkVersion": "0.19.2",
+  "frameworkVersion": "0.19.3",
   "sourceKind": "checkout",
-  "sourceCommit": "930cff99414823f186ea47e88cb38c16663382c0",
+  "sourceCommit": "0ab283dbed8513d9cdf9b4ae11f588c92457c723",
   "sourceModified": [],
-  "deliveredAt": "2026-09-16T02:46:46.486Z",
+  "deliveredAt": "2026-09-16T03:13:02.464Z",
   "files": {
-    "package.json": "5cdf95cca74f3f15e88dfb271f8d4d011075b2c225b5055877cefddc0527d947",
+    "package.json": "0208c23c4872a01815cecbfee5b552062478d17c0f7f46a3f817d67c3d0d8e8a",
     "pnpm-workspace.yaml": "96ef3d332e7f09d76015ce97f223a9710adec22bf4e37c61e25ee3198479715b",
     "pnpm-lock.yaml": "961da657ab37415671c09a01be1ff690b763201809d98bc2ccc2e041a818e199"
   }

@@ -184,6 +184,10 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          # 站点私有配置必须是 0600（readPrivateConfig 拒绝任何组/其他权限位），
+          # 因此本步骤创建的文件一律走 077。容器 uid/gid 不写死：新站点在 Linux 上按当前非 root 用户初始化，
+          # 写死 1000 会在宿主属主不是 1000 的机器上让容器用户拿不到绑定目录权限。
+          umask 077
           version="${RELEASE_TAG#v}"
           site="${RUNNER_TEMP}/site"
           mkdir -p "$site" && cd "$site"
@@ -199,9 +203,8 @@ jobs:
           DSH_DATA_DIR=".local/data"
           DSH_DEPLOY_ARTIFACTS=".local/artifacts"
           DSH_COMPOSE_PROJECT="dsh-release-smoke"
-          DSH_CONTAINER_UID=1000
-          DSH_CONTAINER_GID=1000
           EOF
+          chmod 600 .local/env.conf
           # 失败时只能看到「exit code 1」没有意义：先记录环境，再把日志末尾转成注解。
           node --version
           pnpm --version
@@ -226,6 +229,8 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          # 与上一步同一套私有文件规则：本步骤创建的文件也走 077。
+          umask 077
           version="${RELEASE_TAG#v}"
           site="${RUNNER_TEMP}/site/dsh-deployment"
           cd "$site"
