@@ -68,6 +68,8 @@ interface HostOptions {
   readonly status?: 'claimed' | 'finished' | undefined
   /** 不传存储门面，验 C6。 */
   readonly withoutStorage?: boolean
+  /** 幂等缓存上界，供 C7 验"淘汰真的发生"。 */
+  readonly settledCacheMax?: number
 }
 
 function host(options: HostOptions = {}) {
@@ -204,6 +206,7 @@ function host(options: HostOptions = {}) {
   const runtimeConfig: RuntimeConfig = {
     routePrefix: '/claim', turnTimeoutMs: 30_000, authRecheckMs: 10_000,
     maxActiveConversations: 8, reasoningEffort: 'medium',
+    ...(options.settledCacheMax === undefined ? {} : { settledCacheMax: options.settledCacheMax }),
   }
   const lifecycle = new ConversationLifecycle({
     ctx, definition: definitionOf(), access, store: port, config: runtimeConfig, allowedTools: () => [],
@@ -229,10 +232,15 @@ function host(options: HostOptions = {}) {
       signal: new AbortController().signal, onProgress: () => {},
       ...overrides,
     }),
-    /** 等会话接单并返回它的 id；先挂 `catch` 以免未处理拒绝污染别处。 */
-    accept: async (promise: Promise<ParticipantResult>): Promise<string> => {
+    /**
+     * 等**第 `since + 1` 轮**接单并返回会话 id；先挂 `catch` 以免未处理拒绝污染别处。
+     *
+     * ⚠️ 多轮用例必须传 `since`：判据是 `followups.length > since`，缺省 0 时首轮就已满足，
+     * 会**立刻返回首轮那个会话**。这个坑在 P3.5 的 A3-1 上耗过三次往返。
+     */
+    accept: async (promise: Promise<ParticipantResult>, since = 0): Promise<string> => {
       void promise.catch(() => {})
-      await until(() => followups.length > 0, '接单')
+      await until(() => followups.length > since, '接单')
       return openedIds[openedIds.length - 1] ?? ''
     },
     dispose: async () => { await lifecycle.dispose(); await Promise.allSettled(disposers.map(fn => fn())) },
@@ -334,6 +342,22 @@ describe('判据：轮次幂等真的接在运行时上（`dsh_turns`）', () =>
       // 一次都没碰存储层。
       expect(h.calls.claimed).toHaveLength(0)
       expect(h.calls.finished).toHaveLength(0)
+    } finally { await h.dispose() }
+  })
+
+  it('C7 幂等缓存有上界：超过上限后最旧的被淘汰（防长期运行单调增长）', async () => {
+    const h = host({ settledCacheMax: 2 })
+    try {
+      for (const requestId of ['a', 'b', 'c']) {
+        const promise = h.participant.run(h.request({ requestId }))
+        const id = await h.accept(promise, h.followups().length)
+        h.complete(id, `正文 ${requestId}`)
+        await promise
+      }
+      // 跑了 3 个不同请求、上限 2 ⇒ 只该留 2 条。没有淘汰时这里会单调增长。
+      expect(h.participant.settledRequests).toBe(2)
+      // 淘汰的只是"进程内回放"：三轮都真的走了 `claim`，一次都没被缓存短路。
+      expect(h.calls.claimed.map(entry => entry.requestId)).toEqual(['run:a', 'run:b', 'run:c'])
     } finally { await h.dispose() }
   })
 })

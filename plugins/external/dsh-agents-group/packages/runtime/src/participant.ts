@@ -104,6 +104,11 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
   const { definition, runtime, access, config } = input
   const { ctx, lifecycle } = runtime
   const storage = input.storage
+  /**
+   * 幂等缓存的上界（条）。缓存只为"进程内重试"服务，**持久化由 `dsh_turns` 承担**，所以给它一个
+   * 有界窗口：不清理的话每轮都会永久留下一条完整结果，长期运行的进程会单调增长。
+   */
+  const settledCacheMax = config.settledCacheMax ?? 256
   let disposed = false
   const pending = new Set<() => Promise<void>>()
   /** 正在协作的业务会话 → 这一轮的增量出口。同一会话不会有两轮同时跑。 */
@@ -450,6 +455,13 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
               if (outcome.kind === 'deliver') {
                 cleanup()
                 settledTurns.set(settledKey, { message, result: outcome.result })
+                // 先进先出淘汰：`Map` 的迭代顺序就是插入顺序，第一个键即最旧的一条。
+                // 淘汰掉的只是"进程内回放"能力，重启后的幂等仍由 `dsh_turns` 保证。
+                while (settledTurns.size > settledCacheMax) {
+                  const oldest = settledTurns.keys().next().value
+                  if (oldest === undefined) break
+                  settledTurns.delete(oldest)
+                }
                 // ⚠️ `finish` 必须在 `resolve` **之前**：反过来的话调用方一拿到结果就可能退出
                 // 进程，状态停在 `claimed`，下次重试会被判成"中断可重跑"——而它其实已经交付过
                 // ⇒ 又是重复副作用。`claim` 与 `finish` 必须成对落地：`dsh_turns` 里的 `claimed`

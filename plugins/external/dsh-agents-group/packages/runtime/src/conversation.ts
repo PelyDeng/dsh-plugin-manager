@@ -89,6 +89,13 @@ export interface RuntimeConfig {
   readonly maxActiveConversations: number
   /** 首选 reasoning effort；宿主不认这个值时回落到按会话选择的结果。 */
   readonly reasoningEffort: string
+  /**
+   * 进程内幂等缓存的上界（条），缺省 256。
+   *
+   * 它是内存优化，**不是**持久化保证 —— 重启后的幂等由 `dsh_turns` 承担（见 `TurnStorePort`）。
+   * 做成可配是为了让"淘汰确实发生"能被测试直接验到，而不必跑几百轮。
+   */
+  readonly settledCacheMax?: number
 }
 
 /**
