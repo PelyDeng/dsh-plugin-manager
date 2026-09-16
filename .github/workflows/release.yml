@@ -202,7 +202,15 @@ jobs:
           DSH_CONTAINER_UID=1000
           DSH_CONTAINER_GID=1000
           EOF
-          bash build.sh 2>&1 | tee build.log
+          # 失败时只能看到「exit code 1」没有意义：先记录环境，再把日志末尾转成注解。
+          node --version
+          pnpm --version
+          bash --version | head -n 1
+          docker version --format '{{.Server.Version}}'
+          if ! bash build.sh 2>&1 | tee build.log; then
+            tail -n 30 build.log | sed 's/%/%25/g' | awk '{ print "::error::" $0 }'
+            exit 1
+          fi
           grep -q "发布已完成：archives" build.log
           # 计时记录必须落盘，且发布记录指向它。
           timing=$(grep -o '时间记录：[^ ]*' build.log | tail -n 1 | sed 's/时间记录：//')
@@ -228,8 +236,13 @@ jobs:
           if bash build.sh 2>&1 | tee duplicate.log; then
             echo '::error::重复插件 id 没有被拒绝'; exit 1
           fi
-          grep -q "插件 id 与内置构建重复：auth" duplicate.log
-          grep -q "请从 incoming 移除该发布目录" duplicate.log
+          for text in "插件 id 与内置构建重复：auth" "请从 incoming 移除该发布目录"; do
+            grep -q "$text" duplicate.log || {
+              echo "::error::重复插件 id 的报错缺少：$text"
+              tail -n 30 duplicate.log | sed 's/%/%25/g' | awk '{ print "::error::" $0 }'
+              exit 1
+            }
+          done
           # 拒绝发生在停旧之前：原有容器仍在运行。
           docker ps --filter label=com.docker.compose.project=dsh-release-smoke --format '{{.Names}}' | grep -q .
           curl -fsS -m 15 http://127.0.0.1:17921/auth/health

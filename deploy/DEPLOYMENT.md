@@ -1,13 +1,13 @@
 <!-- Generated from deploy/DEPLOYMENT.md.tmpl by scripts/version.mjs; edit the template. -->
 
-# DSH Plugin Manager 0.19.1 部署包
+# DSH Plugin Manager 0.19.2 部署包
 
 本目录是可独立使用的框架部署包，不需要作者源码或框架 Git 检出。先准备 Node，再按下列步骤部署标准插件产物。运行依赖和固定宿主镜像仍可能需要网络，离线阅读不等于离线安装。
 
 ## 放入产物并启动
 
 <!-- Excerpt from doc/first-deployment.md.tmpl#deployment-start; edit its source. -->
-从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.19.1.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
+从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.19.2.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。首次 build 会在随包公开构建视图（`source/` 与 `tools/builtin-build/`）里安装框架工作区依赖，并按站点根清单准备固定版本的 pnpm；这一步需要网络或完整缓存，站点自身目录不会安装依赖。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
 
 每个作者交付的是一个完整目录，包含 manifest.json 和它引用的全部 tgz。将它放在部署根的 incoming 直接子目录中：
 
@@ -54,7 +54,7 @@ Docker 只接受本机 Linux 引擎 unix/npipe endpoint。Docker Desktop 使用�
 
 ## 模型凭据
 
-部署包运行不要求 pnpm，启用 auth 时可使用 /auth 的网页管理。下面的 pnpm 命令仅供已另外安装独立 CLI 工具的维护者使用。
+部署包不要求你预先安装 pnpm：首次 build 会在公开构建视图内按站点根清单准备固定版本并安装工作区依赖，这一步需要网络或完整缓存。下面的 pnpm 命令仅供已另外安装独立 CLI 工具的维护者使用。
 
 <!-- Excerpt from doc/framework-configuration.md#model-credentials; edit its source. -->
 私有 .local/env.conf 中的 DEEPSEEK_API_KEY / ZHIPU_API_KEY 非空时：文件为准，只注入官方DSH子进程，网页只读；改文件后受控部署。留空不添加覆盖、不删除官方凭据、不清除继承环境密钥。没有外部环境覆盖时，管理员可在 /auth 的“模型设置”管理 DeepSeek/智谱，写入官方存储时默认无需重启。
@@ -113,4 +113,4 @@ Windows 用 `.\build.ps1` 替代 bash build.sh。doctor 只读诊断锁和记录
 
 ## 进阶资料
 
-本 README 的操作正文来自框架固定公开维护源，由同一文档同步生成。进一步查阅该版本的[配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.1/doc/framework-configuration.md)、[运维说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.1/deploy/README.md)及[独立 CLI 指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.1/packages/plugin-manager/DELIVERY.md)。这些链接不保证比已安装版本更新；本目录 `framework-runtime.json` 记录实际配套运行镜像身份。
+本 README 的操作正文来自框架固定公开维护源，由同一文档同步生成。进一步查阅该版本的[配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.2/doc/framework-configuration.md)、[运维说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.2/deploy/README.md)及[独立 CLI 指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.2/packages/plugin-manager/DELIVERY.md)。这些链接不保证比已安装版本更新；本目录 `framework-runtime.json` 记录实际配套运行镜像身份。

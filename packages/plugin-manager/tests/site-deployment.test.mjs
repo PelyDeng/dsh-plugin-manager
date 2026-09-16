@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, cpSync, symlinkSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { hash, tarCommand } from '../src/state.mjs';
-import { composeCandidate, discoverArchives, validateRuntimeIndex } from '../src/site-archives.mjs';
+import { buildBuiltinPlugins, composeCandidate, discoverArchives, validateRuntimeIndex } from '../src/site-archives.mjs';
 import { releaseSite, describeTooling } from '../src/site-release.mjs';
 import { fileHash, readSitePointer, readSiteRecord, verifySavedTooling } from '../src/site-record.mjs';
 import { writePublicInputRecord } from '../src/public-build-view.mjs';
@@ -46,6 +46,41 @@ test('内置构建与 incoming 同 id 时在准备输入阶段就报出两个来
     assert.match(error.message, /请从 incoming 移除该发布目录/);
     return true;
   });
+});
+
+test('内置构建先把依赖装进公开构建视图，再用视图里的入口脚本构建', t => {
+  const repository = fileURLToPath(new URL('../../..', import.meta.url));
+  const root = realpathSync.native(mkdtempSync(resolve(tmpdir(), 'public-view-build-')));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const operation = resolve(root, '.local/artifacts/op');
+  mkdirSync(operation, { recursive: true });
+  const pinned = JSON.parse(readFileSync(resolve(repository, 'package.json'), 'utf8')).packageManager.slice(5);
+  const calls = [];
+  // 视图内没有 node_modules 时入口脚本连加载都过不去：安装必须先于运行入口脚本，且装在视图里。
+  const execute = (bin, args) => { calls.push({ bin, args }); return bin === 'pnpm' && args[0] === '--version' ? pinned : ''; };
+  const run = (bin, args, options = {}) => {
+    calls.push({ bin, args, options });
+    if (bin === process.execPath) {
+      const output = args[args.indexOf('--output') + 1];
+      mkdirSync(output, { recursive: true });
+      writeFileSync(resolve(output, 'manifest.json'), JSON.stringify({ schemaVersion: 2, plugins: [] }));
+    }
+    return { status: 0 };
+  };
+  const builtin = buildBuiltinPlugins({ root: repository, operation, env: { PATH: process.env.PATH }, execute, run });
+  assert.deepEqual(builtin.plugins, []);
+  const view = resolve(operation, 'build-view');
+  assert.ok(existsSync(resolve(view, 'scripts/package-plugins.mjs')), '入口脚本必须来自视图');
+  assert.ok(existsSync(resolve(view, 'packages/plugin-manager/src/plugins.mjs')), '视图必须带管理器源码');
+  const install = calls.findIndex(call => call.bin === 'pnpm' && call.args[1] === '--frozen-lockfile');
+  const entry = calls.findIndex(call => call.bin === process.execPath);
+  assert.ok(install >= 0 && entry >= 0 && install < entry, '安装视图依赖必须早于运行入口脚本');
+  assert.equal(calls[install].args[0], 'install');
+  assert.equal(calls[install].options.cwd, view);
+  // `source/` 只是材料目录：入口脚本与工作区都取视图，站点材料里不装依赖。
+  assert.deepEqual(calls[entry].args.slice(0, 4), [resolve(view, 'scripts/package-plugins.mjs'), '--plugins', 'all', '--output']);
+  assert.equal(calls[entry].args[calls[entry].args.indexOf('--workspace-root') + 1], view);
+  assert.equal(calls.some(call => call.options?.cwd === repository && call.bin === 'pnpm'), false);
 });
 
 function fixture(t) {
