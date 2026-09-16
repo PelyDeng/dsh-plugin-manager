@@ -65,6 +65,13 @@ export interface CreateParticipantInput {
     readonly turnTimeoutMs: number
     readonly authRecheckMs: number
     readonly routePrefix: string
+    /**
+     * 进程内幂等缓存的上界（条），缺省 256。
+     *
+     * 与 `RuntimeConfig` 的同名字段对应；这里只取装配真正用到的那几个，所以是独立的内联类型
+     * 而不是 `RuntimeConfig` 本身 —— 加字段时**两处都要改**（这一条已经漏过一次）。
+     */
+    readonly settledCacheMax?: number
   }
 }
 
