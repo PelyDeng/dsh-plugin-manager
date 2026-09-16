@@ -155,28 +155,36 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
   }
 
   function runTurn(request: ParticipantRequest, mode: 'run' | 'reply'): Promise<ParticipantResult> {
-    request.signal.throwIfAborted()
-    assertAccess(request.actor)
-    const message = request.message.trim()
-    if (!message) throw new AccessError(400, '协作消息不能为空')
-    if (mode === 'reply' && (request.conversationId === undefined || request.conversationId === '')) {
-      // 没有原会话引用就无法"续接"：新建一个会话会让用户的话落进一条他不认识的对话里。
-      throw new AccessError(400, '续问缺少原会话引用（conversationId）')
-    }
-    // —— 幂等：同 `requestId` 的重试直接回上一次的结论，**不重跑一轮** ——
-    // `run` 与 `reply` 分开算：子任务 id 与回话身份是两套命名空间。
+    // `run` 与 `reply` 分开算：子任务 id 与回话身份是两套命名空间。`settledKey` 留在 executor
+    // **外面** —— 收尾循环写幂等缓存时还要用它。
     const settledKey = `${mode}:${request.requestId}`
-    const cached = settledTurns.get(settledKey)
-    if (cached !== undefined) {
-      if (cached.message !== message) {
-        // 同一个身份换了内容 = 调用方把幂等身份生成错了。按契约拒绝，不静默当同一次：
-        // 那会让"重试"变成"用旧结论回答新问题"。
-        throw new AccessError(409, '同一请求身份不能用在不同内容上')
-      }
-      return Promise.resolve(cached.result)
-    }
     return new Promise<ParticipantResult>((resolve, reject) => {
       void (async () => {
+        // ⚠️ 这一整段校验与幂等判断必须在 Promise **内部**。写在 `new Promise` 之前的话，它们会
+        // **同步抛出**：调用方写 `.catch()` 接不住（拿到的是同步异常而不是 rejected Promise），
+        // 而 `run`/`reply` 对外是异步方法 —— 契约要求失败也走 Promise。
+        let message = ''
+        try {
+          request.signal.throwIfAborted()
+          assertAccess(request.actor)
+          message = request.message.trim()
+          if (!message) throw new AccessError(400, '协作消息不能为空')
+          if (mode === 'reply' && (request.conversationId === undefined || request.conversationId === '')) {
+            // 没有原会话引用就无法"续接"：新建一个会话会让用户的话落进一条他不认识的对话里。
+            throw new AccessError(400, '续问缺少原会话引用（conversationId）')
+          }
+          // —— 幂等：同 `requestId` 的重试直接回上一次的结论，**不重跑一轮** ——
+          const cached = settledTurns.get(settledKey)
+          if (cached !== undefined) {
+            if (cached.message !== message) {
+              // 同一个身份换了内容 = 调用方把幂等身份生成错了。按契约拒绝，不静默当同一次：
+              // 那会让"重试"变成"用旧结论回答新问题"。
+              throw new AccessError(409, '同一请求身份不能用在不同内容上')
+            }
+            resolve(cached.result)
+            return
+          }
+        } catch (error) { reject(error); return }
         let conversation: Conversation | undefined
         try {
           conversation = await lifecycle.open(

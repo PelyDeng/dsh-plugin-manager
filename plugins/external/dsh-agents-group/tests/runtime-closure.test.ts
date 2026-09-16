@@ -396,12 +396,20 @@ describe('判据③：同 requestId 重试不产生第二轮副作用', () => {
     } finally { await hosted.dispose() }
   })
 
-  it('同 requestId 换了内容 → 明确拒绝（不静默当同一次）', async () => {
+  it('同 requestId 换了内容 → 明确拒绝（不静默当同一次；且失败走 Promise 而非同步抛）', async () => {
     const hosted = host(definitionOf())
     try {
       await runOnce(hosted, hosted.request({ requestId: 'clash' }), '正文', { status: 'completed', text: '交回的正文' })
-      expect(() => hosted.participant.run(hosted.request({ requestId: 'clash', message: '换了个问题' })))
-        .toThrow(/同一请求身份/u)
+      let thrown: unknown
+      let promise: Promise<ParticipantResult> | undefined
+      try {
+        promise = hosted.participant.run(hosted.request({ requestId: 'clash', message: '换了个问题' }))
+      } catch (error) { thrown = error }
+      // `run`/`reply` 对外是异步方法：校验失败也必须走 rejected Promise，调用方写 `.catch()`
+      // 才接得住。以前这里是从 `new Promise` **之前**同步抛出的，同步断言能过、`.catch()` 接不住。
+      expect(thrown).toBeUndefined()
+      if (promise === undefined) throw new Error('未返回 Promise')
+      await expect(promise).rejects.toThrow(/同一请求身份/u)
     } finally { await hosted.dispose() }
   })
 
