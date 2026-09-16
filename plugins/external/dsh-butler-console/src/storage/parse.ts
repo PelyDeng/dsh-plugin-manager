@@ -11,7 +11,7 @@
  * 实现在这一点上保持一致。
  */
 
-import type { AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
+import type { AgentArtifact, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
 import { SUBTASK_STATES, type SubtaskState } from '../task-model.ts'
 import type { ButlerDependsOnKind, ButlerInputRef, ButlerInputRefsKind, ButlerMemberReturn } from './types.ts'
 
@@ -101,13 +101,32 @@ export function parseMemberReturn(raw: string): ButlerMemberReturn | undefined {
     if (candidate.protocol !== 1 || typeof candidate.text !== 'string') return undefined
     const pending = parsePending(candidate.externalPending)
     if (pending === null) return undefined
+    const selfCheck = parseSelfCheck(candidate.selfCheck)
     return {
       protocol: 1,
       text: candidate.text,
       ...(pending === undefined ? {} : { externalPending: pending }),
+      ...(selfCheck === undefined ? {} : { selfCheck }),
     }
   } catch {
     return undefined
+  }
+}
+
+/**
+ * 解析自检结论。
+ *
+ * 三种合法取值之外的一切（缺字段、拼错的状态名、不是对象）都返回 `undefined`——它表示
+ * **「这一轮没有自检结论」**，而不是任何一档结论。**绝不降级成 `passed`**：那会把一次没人
+ * 核验过的交付显示成已核验，正是这条判据要防的事。
+ */
+function parseSelfCheck(value: unknown): AgentSelfCheck | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const candidate = value as { status?: unknown; detail?: unknown }
+  if (candidate.status !== 'passed' && candidate.status !== 'unverifiable' && candidate.status !== 'failed') return undefined
+  return {
+    status: candidate.status,
+    ...(typeof candidate.detail === 'string' && candidate.detail !== '' ? { detail: candidate.detail } : {}),
   }
 }
 

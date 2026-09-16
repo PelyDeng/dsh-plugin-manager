@@ -5,11 +5,13 @@
  *
  * - 源库**只读**打开（node:sqlite readOnly），逐版本直导、不做就地升级；旧库保持只读封存，
  *   本工具对源库不做任何写入。
- * - 源版本 0..8：0 = 空库（只初始化目标结构）；1..8 = 按缺列投影直导；9+ 或结构无法识别
- *   = 拒绝（退出码 2，打印实际与所需版本）。
- * - 缺列投影与旧 migrate() 链等价：文本列 `''`、`accepted_version`/`processed_version` 1、
- *   `requires_external_action` 0、可空列为 NULL；v1..v4 缺 `logical_id` 列按 `'g'||seq`
- *   回填（每条子任务各自当一个目标），v5+ 已有值原样保留、空值不补造。
+ * - 源版本 0..9：0 = 空库（只初始化目标结构）；1..9 = 按缺列投影直导；10+ 或结构无法识别
+ *   = 拒绝（退出码 2，打印实际与所需版本）。上限 9 与 `TARGET_SCHEMA_VERSION` 同源——源库
+ *   版本比目标还新时直导会把新列**静默丢掉**，所以宁可拒绝。
+ * - 缺列投影与旧 migrate() 链等价：文本列 `''`（含 v9 的 `acceptance`）、
+ *   `accepted_version`/`processed_version` 1、`requires_external_action` 0、可空列为 NULL；
+ *   v1..v4 缺 `logical_id` 列按 `'g'||seq` 回填（每条子任务各自当一个目标），v5+ 已有值
+ *   原样保留、空值不补造。
  * - 结构初始化（0001_init.sql）、导入与校验在**同一个 PG 事务**内；停写点复核（源库指纹
  *   导入前后比对）在 COMMIT 之前，不一致则整体回滚（退出码 4），目标库保持空。
  * - 损坏的 input_refs / depends_on / member_return 等 JSON 原样搬入，不修补、不拦截。
@@ -79,7 +81,12 @@ const TABLE_SPECS: readonly TableSpec[] = [
   {
     name: 'tasks', pk: ['id'],
     columns: [
-      text('id'), text('conversation_id'), text('owner_namespace'), text('owner_id'), text('goal'), text('state'),
+      text('id'), text('conversation_id'), text('owner_namespace'), text('owner_id'), text('goal'),
+      // v9 的验收口径。**必须列在这里**：这张清单是"目标全量列"的唯一来源，缺一列的话
+      // 源库（最高 v8、没有这一列）与新库（v9、有）之间会**静默丢字段**——导入时按清单
+      // 生成 INSERT，漏掉的列拿不到值，而校验和只算清单里的列，谁也发现不了。
+      text('acceptance'),
+      text('state'),
       text('note'), text('summary'), text('error'), int('accepted_version'), int('processed_version'),
       int('created_at'), int('updated_at'), int('finished_at', true),
     ],
@@ -87,7 +94,8 @@ const TABLE_SPECS: readonly TableSpec[] = [
   {
     name: 'subtasks', pk: ['task_id', 'id'],
     columns: [
-      text('task_id'), text('id'), int('seq'), text('goal'), text('agent_id'), text('reason'), text('state'),
+      text('task_id'), text('id'), int('seq'), text('goal'), text('acceptance'), text('agent_id'),
+      text('reason'), text('state'),
       text('result'), text('error'), text('artifacts'), text('conversation_id'), text('logical_id'),
       text('supersedes'), text('depends_on'), int('requires_external_action'), text('input_refs'),
       text('member_return'), int('started_at', true), int('finished_at', true),

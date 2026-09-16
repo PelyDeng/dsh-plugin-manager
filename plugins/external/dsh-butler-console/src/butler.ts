@@ -242,7 +242,8 @@ interface PlannedSubtask {
   readonly agentId: string
   readonly reason: string
   /**
-   * 这一步自己的验收口径；缺省表示沿用任务级口径（或本来就没有口径）。
+   * 这一步自己的验收口径；**缺省就是这一步没有口径**（不沿用任务级口径——见下方
+   * `dispatchSubtask` 的说明）。
    *
    * 与任务级分开：同一次任务里各步的产出物种类不同（一步交草稿、一步交发布确认），
    * 只留任务级口径会把它们按同一个标准核验。
@@ -487,11 +488,15 @@ function clip(value: string, limit: number): string {
 }
 
 /**
- * 验收口径的**形态**下限：去掉标点与空白后至少这么多个字符。
+ * 去掉标点与空白后的最少字数：只挡住「好」「行」这类连表态都算不上的输入。
  *
- * 按去标点后的字数算，是因为「完成。」与「完成」是同一种敷衍，句号不该让它合格。
+ * ⚠️ 它**不是**主要判据。早先的版本只数长度 + 比一张无信息词表，独立评审逐字重放实测
+ * 两端全漏：误杀「一份表格」「一条链接」「3 个文件」这类完全可核验的短口径 13/13，
+ * 同时放过「认真完成不要敷衍」「全部完成没有任何问题」这类够长却零信息的表态 12/12。
+ * 降阈值也救不了——**信息量不是长度的函数**（中文 4 字既可能是「一份表格」也可能是
+ * 「全部完成」）。
  */
-const ACCEPTANCE_MIN_CHARS = 8
+const ACCEPTANCE_MIN_CHARS = 4
 
 /** 整句就是一个无信息词的情形。比较前统一小写，中英文都列上。 */
 const ACCEPTANCE_EMPTY_WORDS: readonly string[] = [
@@ -500,15 +505,34 @@ const ACCEPTANCE_EMPTY_WORDS: readonly string[] = [
   'ok', 'done', 'yes', 'fine',
 ]
 
+/** 明确的位置：URL，或常见产物的文件名后缀。 */
+const ACCEPTANCE_LOCATOR = /https?:\/\/|[\w-]+\.(?:pdf|docx?|xlsx?|pptx?|zip|rar|tar|gz|png|jpe?g|gif|svg|md|txt|csv|json|html?)\b/iu
+
 /**
- * 验收口径的形态校验（§5.2 的防套话）。
+ * 产出物名词：说明"要交什么"。
  *
- * 口径的价值在于「说得比目标更具体」，而模型很容易用一句「完成即可」敷衍过去 —— 那种
- * 口径在核验阶段没有任何可对照的东西，**比没有口径更危险**：它会让「口径提到的产出物必须
- * 交回」那条校验假装有依据。所以写入前先挡形态：太短、或整句就是一个无信息词。
+ * 刻意列得宽（含"数据""记录""截图""回执"这类中间产物）：**宁可多放行一个模糊口径，
+ * 也不要误杀一个明确的口径**——误杀的代价是模型被迫放弃一个本来正确的口径，
+ * 而它无从知道为什么被拒。
+ */
+const ACCEPTANCE_NOUN = /(稿|文章|文案|链接|地址|表格|报表|报告|清单|列表|文档|文件|附件|截图|图片|照片|图|视频|音频|数据|记录|日志|回执|凭证|签章|签名|版本|页面|接口|字段|条目|结论|方案|计划|说明书|手册|PDF|Excel|Word|URL|CSV|JSON)/iu
+
+/** 数量：说明"交多少"。含数字（"HTTP 200""3 个文件"都在这一档）。 */
+const ACCEPTANCE_QUANTITY = /\d|[一二两三四五六七八九十百千]+(?=[个份张条篇页行字次版])/u
+
+/**
+ * 验收口径的判据：**可对照性**，不是长度（§5.2 的防套话）。
  *
- * **不判断内容是否真的有意义** —— 那要求理解业务，正是这条校验不做的事。返回空串表示
- * 「没有声明口径」；给了却不合格由 {@link requireAcceptance} 报错，不静默丢弃。
+ * 口径的价值在于「说得比目标更具体」，而模型很容易用一句「完成即可」敷衍过去——那种口径
+ * 在核验阶段没有任何可对照的东西，**比没有口径更危险**：它会让「口径提到的产出物必须交回」
+ * 那条校验假装有依据。
+ *
+ * 判据是：口径里必须出现一个**可对照的东西**——一个明确的位置（URL / 文件名）、一个产出物
+ * 名词（"稿""链接""表格"…），或一个数量。三者都没有的就是表态，多长都拒。
+ *
+ * ⚠️ 它仍然只是**形态**校验：词表可绕，真正能保证交付完整的是 acceptance 结构化（后续期）。
+ * 这里的目标是把零成本的敷衍挡在门外，不是判定口径写得好不好。返回空串表示「没有声明口径」；
+ * 给了却不合格由 {@link requireAcceptance} 报错，不静默丢弃。
  */
 function acceptanceOf(value: unknown): string {
   if (typeof value !== 'string') return ''
@@ -517,6 +541,8 @@ function acceptanceOf(value: unknown): string {
   const bare = text.replace(/[\s，。；、,.!！?？:：~～\-—_/]/gu, '')
   if ([...bare].length < ACCEPTANCE_MIN_CHARS) return ''
   if (ACCEPTANCE_EMPTY_WORDS.includes(text.toLowerCase())) return ''
+  // 三者都没有 = 纯表态（「认真完成不要敷衍」这类够长的也算）。
+  if (!ACCEPTANCE_LOCATOR.test(text) && !ACCEPTANCE_NOUN.test(text) && !ACCEPTANCE_QUANTITY.test(text)) return ''
   return text
 }
 
@@ -642,6 +668,9 @@ function memberReturnOf(result: ButlerDispatchResult): ButlerMemberReturn {
     protocol: 1,
     text: result.summary ?? '',
     ...(reason === '' ? {} : { externalPending: { reason, ...(next === '' ? {} : { next }) } }),
+    // 自检结论必须随留存一起落库：以前这里只留原文与外部待办，`selfCheck` 在落库那刻被丢掉，
+    // 于是重启后的判据永远拿不到它，只能按"缺省 = 通过"处理——那等于所有交付都被标记为已核验。
+    ...(result.selfCheck === undefined ? {} : { selfCheck: result.selfCheck }),
   }
 }
 
@@ -1090,7 +1119,7 @@ export class ButlerConsole {
             additionalProperties: false,
             properties: {
               goal: { type: 'string', required: true, description: '交给子 Agent 的完整目标，要自带必要上下文，不要用“同上”“继续”这类指代。' },
-              acceptance: { type: 'string', description: '这一步自己的验收口径：交回什么才算完成。各步的产出物不同，所以要分别写（例如「一份 800 字以上的候选稿」「已发布版本的链接」）。不填表示这一步沿用任务级口径，或本来就没有可核验的产出物。' },
+              acceptance: { type: 'string', description: '这一步自己的验收口径：交回什么才算完成。各步的产出物不同，所以要分别写（例如「一份 800 字以上的候选稿」「已发布版本的链接」）。**不填就是这一步没有口径**——它不沿用上面的任务级口径，所以需要核验的步骤必须自己写出来。确实没有可核验产出物时不要填。' },
               agentId: { type: 'string', required: true, description: '目标 Agent 的 id，只能从本轮可调度的 Agent 列表中选择。' },
               reason: { type: 'string', description: '为什么把这个子任务派给这个 Agent。' },
               logicalId: { type: 'string', description: '同一个目标重做时沿用原来的目标标识（例如 g1）。新目标不要填，管家会分配。' },
@@ -1123,6 +1152,12 @@ export class ButlerConsole {
         exec.signal.throwIfAborted()
         const turn = this.turns.get(sessionId)
         if (turn === undefined || turn.done) throw new Error('这一轮已经结束，计划未被接受')
+        // 补充轮**不接受**顶层验收口径：口径描述的是"这个任务要交回什么"，而补充轮追加的是同一
+        // 任务里的新活。让它改写任务级口径，会让已经派出去的那些步失去依据；静默丢弃更糟——
+        // 模型以为自己改了口径，实际没有。所以当场拒绝，并把它该写在哪告诉它。
+        if (turn.context !== undefined && typeof args.acceptance === 'string' && args.acceptance.trim() !== '') {
+          throw new Error('补充轮不能声明任务级验收口径（顶层 acceptance 不会被使用）。请把口径分别写在这次新增的每一条子任务上。')
+        }
         const available = new Set(this.dispatchableAgents().map(card => card.id))
         const subtasks: PlannedSubtask[] = []
         // 前置只能指向这一轮里已有的目标，或者本次计划中排在它前面的目标 —— 这样依赖天然
@@ -1522,6 +1557,7 @@ export class ButlerConsole {
           taskId, subtaskId: subtask.id, goal: subtask.goal, agentId: subtask.agentId,
           displayName: subtask.displayName, taskGoal: text, actor, signal: abort.signal,
           ...(subtask.acceptance === undefined ? {} : { acceptance: subtask.acceptance }),
+          ...(subtask.supersedes === undefined ? {} : { reworkOf: subtask.supersedes }),
           ...(subtask.dependsOn === undefined ? {} : { dependsOn: subtask.dependsOn }),
           ...(subtask.requiresExternalAction === true ? { requiresExternalAction: true } : {}),
         })) {
@@ -1814,6 +1850,7 @@ export class ButlerConsole {
             taskId, subtaskId: subtask.id, goal: subtask.goal, agentId: subtask.agentId,
             displayName: subtask.displayName, taskGoal: existing.goal, actor, signal: prepared.abort.signal,
             ...(subtask.acceptance === undefined ? {} : { acceptance: subtask.acceptance }),
+            ...(subtask.supersedes === undefined ? {} : { reworkOf: subtask.supersedes }),
             ...(subtask.dependsOn === undefined ? {} : { dependsOn: subtask.dependsOn }),
             ...(subtask.requiresExternalAction === true ? { requiresExternalAction: true } : {}),
           })
@@ -2410,6 +2447,15 @@ export class ButlerConsole {
      * 判成不达标。任务级口径留给汇总与裁决阶段用。
      */
     acceptance?: string
+    /**
+     * 这一次派活是对哪一条尝试的重做：填被重做的子任务 id，取值来自库里的 `supersedes`。
+     *
+     * 它与 `supersedes` 是**同一条关系的两个投影**：`supersedes` 是管家自己的私有列（模型填、
+     * 有强校验、被 `effectiveSubtasks()` 消费），`reworkOf` 是跨插件契约里的那一个（执行方看）。
+     * 两者**必须同源**——由这里从同一条记录同时取出，不允许各写一份（否则会出现
+     * `supersedes=s3` 而 `reworkOf=s5` 的自相矛盾，且没有任何断言能发现）。
+     */
+    reworkOf?: string
     /** 前置目标标识；按就绪表逐个核验后才派这一步。 */
     dependsOn?: readonly string[]
     /** 这一步是否真的需要外部动作（采用、确认、发布）已经办完；不传按不需要算。 */
@@ -2643,6 +2689,8 @@ export class ButlerConsole {
         // 验收口径按步传：执行方拿它做本轮自检，协调方也用它核验「口径提到的产出物是否真的
         // 交回」。空串不传 —— 契约里的缺省语义就是「没有声明口径」，传空串会让执行方以为有口径。
         ...(input.acceptance === undefined || input.acceptance === '' ? {} : { acceptance: input.acceptance }),
+        // 重做溯源：与库里的 `supersedes` 同源，由调用方从同一条记录取出。
+        ...(input.reworkOf === undefined || input.reworkOf === '' ? {} : { reworkOf: input.reworkOf }),
         owner: `${input.actor.namespace}:${input.actor.userId}`,
         // 完整身份交给执行方鉴权：owner 丢掉了 sessionId，无法反推回 Actor。
         actor: input.actor,
@@ -3135,6 +3183,8 @@ export class ButlerConsole {
         actor: input.actor, signal: input.signal,
         // 从库里读回来的口径：进程重启后补派这一步时仍要带上（空串 = 这一步没有口径）。
         ...(next.acceptance === '' ? {} : { acceptance: next.acceptance }),
+        // 重做溯源同样从库里读回（重启后补派这一步时也要带）。
+        ...(next.supersedes === '' ? {} : { reworkOf: next.supersedes }),
         ...(next.dependsOn.length === 0 ? {} : { dependsOn: next.dependsOn }),
         ...(next.requiresExternalAction ? { requiresExternalAction: true } : {}),
       })

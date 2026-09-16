@@ -25,11 +25,20 @@ const manifest: AgentManifest = {
 
 const actor = { namespace: 'user', userId: 'alice', sessionId: 'login-a' } as const
 
-/** 一个记录收到的请求、返回指定结论的参与者替身。 */
-function stubParticipant(result: Partial<Awaited<ReturnType<AgentParticipant['run']>>> = {}, onRun?: (request: unknown) => void): AgentParticipant {
+/**
+ * 一个记录收到的请求、返回指定结论的参与者替身。
+ *
+ * `id` 可覆盖：判据④的载体要把三种老执行方（`closedoff` / `blog` / `chain-member`）都跑一遍，
+ * 而桥接会核验参与者身份与清单一致——id 对不上会被直接拒包装。
+ */
+function stubParticipant(
+  result: Partial<Awaited<ReturnType<AgentParticipant['run']>>> = {},
+  onRun?: (request: unknown) => void,
+  id = 'closedoff',
+): AgentParticipant {
   return {
     protocol: 1,
-    id: 'closedoff',
+    id,
     displayName: '封闭化管理智能助手',
     description: '替身',
     assertAccess: vi.fn(),
@@ -401,5 +410,34 @@ describe('验收口径与自检的透传', () => {
     // 折成任何一边都会让不带产出物的正常步骤被算成不达标。
     const executor = executorFor(manifest, stubParticipant({ selfCheck: { status: 'unverifiable' } }))
     await expect(executor.dispatch(request())).resolves.toMatchObject({ selfCheck: { status: 'unverifiable' } })
+  })
+})
+
+/**
+ * 老执行方集合（P0 判据④的载体）。
+ *
+ * 判据原文要求"定义老执行方集合 = `closedoff` + `blog` + `chain-member` 替身"，但早先全仓
+ * 只有 kit 里一句注释，没有可执行的东西。这里把它落成断言。
+ *
+ * **三种老执行方都不声明 `selfCheck`**，桥接必须如实回传"没有自检结论"，而**绝不能**替它们
+ * 补一个 `passed`——那会把一次没人核验过的交付显示成已核验。判据要能区分四种情形：
+ * `passed` / `unverifiable` / `failed` / **缺省（执行方没实现自检）**，缺省**不等价于通过**。
+ *
+ * `closedoff` 与 `blog` 是当前两个生产执行方（都还没读 `acceptance` / `selfCheck`，恒缺省）；
+ * `chain-member`（`tests/fixtures/chain-member.ts`）是测试替身，代表"将来新写的、还没跟上
+ * 契约的执行方"。
+ */
+describe('老执行方集合：缺省的自检不得被当成通过', () => {
+  it.each(['closedoff', 'blog', 'chain-member'])('%s 不声明 selfCheck 时不补 passed', async (id) => {
+    const executor = executorFor({ ...manifest, id }, stubParticipant({}, undefined, id))
+    const result = await executor.dispatch(request())
+    expect('selfCheck' in result).toBe(false)
+  })
+
+  it('缺省与 unverifiable 是两件事，都不能等同于 passed', async () => {
+    const silent = executorFor(manifest, stubParticipant())
+    expect('selfCheck' in await silent.dispatch(request())).toBe(false)
+    const declared = executorFor(manifest, stubParticipant({ selfCheck: { status: 'unverifiable' } }))
+    expect((await declared.dispatch(request())).selfCheck).toEqual({ status: 'unverifiable' })
   })
 })

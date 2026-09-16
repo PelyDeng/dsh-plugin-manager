@@ -9,7 +9,7 @@
  * 不在别处另造。
  */
 
-import type { Actor, AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
+import type { Actor, AgentArtifact, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
 import type { SubtaskState, TaskState } from '../task-model.ts'
 
 /** 侧栏里的一条会话。 */
@@ -102,11 +102,18 @@ export interface ButlerInputRef {
  */
 export type ButlerInputRefsKind = 'unfixed' | 'unknown' | 'damaged' | 'fixed'
 
-/** 员工一次协作返回的内部留存：原文与结构化外部待办。 */
+/**
+ * 员工一次协作返回的内部留存：原文、结构化外部待办，以及**自检结论**。
+ *
+ * ⚠️ `selfCheck` 必须留在这里。执行结果里带着它，而落库这一步一度把它丢掉——那样重启之后
+ * ⑦ 的自检判据永远拿不到值，只能按"缺省 = 通过"处理，**等于所有交付都被标记为自检通过**。
+ * 判据要能区分 `passed` / `unverifiable` / `failed` 和**缺省**（执行方没实现自检）四种情形。
+ */
 export interface ButlerMemberReturn {
   readonly protocol: 1
   readonly text: string
   readonly externalPending?: { readonly reason: string; readonly next?: string }
+  readonly selfCheck?: AgentSelfCheck
 }
 
 /**
@@ -144,7 +151,7 @@ export interface SubtaskRecord {
   readonly requiresExternalAction: boolean
   readonly goal: string
   /**
-   * 这一步自己的验收口径；空串表示沿用任务级口径或没有口径。
+   * 这一步自己的验收口径；**空串就是这一步没有口径**（不是"沿用任务级口径"）。
    *
    * 与任务级分开存：同一次任务里，不同子任务的产出物种类不同（一个交草稿、一个交发布
    * 确认），只看任务级口径会把它们判成同一个标准。
@@ -213,7 +220,7 @@ export interface NewSubtask {
   readonly goal: string
   readonly agentId: string
   readonly reason: string
-  /** 这一步的验收口径；不传表示沿用任务级口径（或本来就没有口径）。 */
+  /** 这一步的验收口径；**不传就是这一步没有口径**（不沿用任务级口径）。 */
   readonly acceptance?: string
   /** 目标标识；不传时由存储层按顺序分配（`g1`、`g2`…）。 */
   readonly logicalId?: string

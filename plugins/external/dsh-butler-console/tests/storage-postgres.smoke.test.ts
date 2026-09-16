@@ -87,9 +87,10 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
       conversationId,
       actor,
       goal: '把发布说明整理成三段',
+      acceptance: '一篇已发布的发布说明链接',
       note: '',
       subtasks: [
-        { id: 's1', goal: '收集要点', agentId: 'writer', reason: '写手最合适' },
+        { id: 's1', goal: '收集要点', agentId: 'writer', reason: '写手最合适', acceptance: '一份列全要点的清单' },
         { id: 's2', goal: '校对成稿', agentId: 'editor', reason: '编辑收尾', logicalId: 'g9' },
       ],
     })
@@ -101,9 +102,40 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
       ['s1', 1, 'g1', 'queued'],
       ['s2', 2, 'g9', 'queued'],
     ])
+    // 验收口径必须真的读得回来。此前**生产实现这一列零覆盖**：把 `postgres.ts` 的读映射改成
+    // 恒 `''`，整个测试套件仍然 318 passed / 0 failed——那盏绿灯照不到这条路径。
+    // 现在这两条就是"改坏读映射必须变红"的落点。
+    expect(record?.acceptance).toBe('一篇已发布的发布说明链接')
+    expect(record?.subtasks.map(item => item.acceptance)).toEqual(['一份列全要点的清单', ''])
     const inputs = await storage.inputs(taskId)
     expect(inputs).toHaveLength(1)
     expect(inputs[0]).toMatchObject({ version: 1, text: '把发布说明整理成三段', source: 'chat' })
+  })
+
+  it('acceptance 落库往返：换一个存储实例（等价于重启）后仍可读', async () => {
+    // 判据要求的是"写入 → 重启 → 仍可读"。这里用一个全新的连接池重读同一行：内存里的东西
+    // 全都换了，只剩库里的还在——只落库不读回、或者读映射丢字段，都会在这里露出来。
+    const conversationId = randomUUID()
+    await storage.reserveConversation(conversationId, actor)
+    const taskId = `butler-task-${randomUUID()}`
+    await storage.createTask({
+      id: taskId,
+      conversationId,
+      actor,
+      goal: '写一篇稿子',
+      acceptance: '一份 800 字以上的候选稿',
+      note: '',
+      subtasks: [{ id: 's1', goal: '写稿', agentId: 'writer', reason: '', acceptance: '一份含标题与正文的候选稿' }],
+    })
+    const reopened = new PostgresTaskStorage(DSN)
+    try {
+      await reopened.init()
+      const record = await reopened.task(actor, taskId)
+      expect(record?.acceptance).toBe('一份 800 字以上的候选稿')
+      expect(record?.subtasks[0]?.acceptance).toBe('一份含标题与正文的候选稿')
+    } finally {
+      await reopened.close()
+    }
   })
 
   it('createTask 中途注入失败（子任务主键冲突）全回滚：任务与输入都不留痕', async () => {
