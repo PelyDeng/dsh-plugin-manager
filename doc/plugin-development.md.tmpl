@@ -58,7 +58,7 @@ list 只读声明，不要求锁文件。pack 只做构建、打包与内容寻�
 交付整个输出目录，其中有 manifest.json 和所有摘要命名 tgz。部署者把目录放到 incoming/my-plugin 后执行框架 build，不手写清单。不使用 prepare/prepack/postpack 重复构建。运行依赖不得指向作者机器或 workspace；pack 成功不是宿主、登录、模型或业务验收成功。交付时以整个目录为单位，不单独抽走 tgz。
 <!-- /excerpt:author-pack -->
 
-按[首次部署](first-deployment.md)用真实请求跑通。无 kit 示例请求 `/independent-example/ready`；鉴权示例需 optional/auth、登录与授权后请求 `/independent-access-example/identity`。有了第一次成功后再改名称和业务。
+按[首次部署](first-deployment.md)用真实请求跑通。无 kit 示例请求 `/independent-example/ready`；鉴权示例用构建产出的内置 auth、登录与授权后请求 `/independent-access-example/identity`。有了第一次成功后再改名称和业务。
 
 ### 4. 改名与实现业务
 

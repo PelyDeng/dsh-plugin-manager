@@ -135,7 +135,6 @@ jobs:
           node scripts/package-deployment.mjs --root "$PWD" \
             --manager "$release_root/upload/plugin-manager-${RELEASE_TAG#v}.tgz" \
             --kit "$release_root/upload/plugin-kit-${RELEASE_TAG#v}.tgz" \
-            --auth-manifest "$release_root/public-plugins/manifest.json" \
             --image "$RUNTIME_IMAGE" --output "$release_root/portable"
           cp "$release_root/portable/"*.zip "$release_root/upload/"
           node --input-type=module <<'JS'
@@ -165,8 +164,77 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 7
-  publish:
+  deployment-smoke:
+    # 精简部署包必须真的能部署：这条作业用刚打出来的 ZIP 在一次性目录里跑一次 build，
+    # 验探针、计时记录，并确认「内置与 incoming 同 id」会在停旧前报错。打包而没部署过
+    # 正是这个入口曾经跑不起来的根因。
     needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: release-assets
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global pnpm@11.19.0
+      - name: Deploy the packaged deployment ZIP
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          site="${RUNNER_TEMP}/site"
+          mkdir -p "$site" && cd "$site"
+          unzip -q "${GITHUB_WORKSPACE}/release-assets/dsh-plugin-manager-deployment-${version}.zip"
+          cd dsh-deployment
+          mkdir -p .local
+          cat > .local/env.conf <<EOF
+          DSH_PUBLIC_URL="http://127.0.0.1:17921"
+          DSH_PUBLIC_ORIGIN="http://127.0.0.1:17921"
+          DSH_PORT=17921
+          DSH_PROFILE="web"
+          DSH_PLUGINS=
+          DSH_DATA_DIR=".local/data"
+          DSH_DEPLOY_ARTIFACTS=".local/artifacts"
+          DSH_COMPOSE_PROJECT="dsh-release-smoke"
+          DSH_CONTAINER_UID=1000
+          DSH_CONTAINER_GID=1000
+          EOF
+          bash build.sh 2>&1 | tee build.log
+          grep -q "发布已完成：archives" build.log
+          # 计时记录必须落盘，且发布记录指向它。
+          timing=$(grep -o '时间记录：[^ ]*' build.log | tail -n 1 | sed 's/时间记录：//')
+          test -f "$timing"
+          node -e "const t=require(process.argv[1]); if (t.status!=='ready'||!t.stages.length) throw new Error('计时记录不完整');" "$timing"
+          record=$(ls -td .local/artifacts/source-release-* | head -n 1)/result.json
+          test -f "$record"
+          node -e "const r=require(process.argv[1]); if (r.status!=='ready'||!r.timings?.path) throw new Error('发布记录缺少计时指针');" "$record"
+          for path in /auth/health /example/ready; do curl -fsS -m 15 "http://127.0.0.1:17921$path"; echo; done
+          docker ps --filter label=com.docker.compose.project=dsh-release-smoke --format '{{.Names}} {{.Status}}'
+      - name: Reject a duplicate plugin id before stopping the running service
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          site="${RUNNER_TEMP}/site/dsh-deployment"
+          cd "$site"
+          # public-apps 里带的是同一批内置插件：放进 incoming 必须在准备输入阶段就被拒绝。
+          mkdir -p incoming/public-apps
+          unzip -q -o "${GITHUB_WORKSPACE}/release-assets/dsh-plugin-manager-public-apps-${version}.zip" -d "${RUNNER_TEMP}/apps"
+          cp -a "${RUNNER_TEMP}/apps/public-plugins/." incoming/public-apps/
+          if bash build.sh 2>&1 | tee duplicate.log; then
+            echo '::error::重复插件 id 没有被拒绝'; exit 1
+          fi
+          grep -q "插件 id 与内置构建重复：auth" duplicate.log
+          grep -q "请从 incoming 移除该发布目录" duplicate.log
+          # 拒绝发生在停旧之前：原有容器仍在运行。
+          docker ps --filter label=com.docker.compose.project=dsh-release-smoke --format '{{.Names}}' | grep -q .
+          curl -fsS -m 15 http://127.0.0.1:17921/auth/health
+  publish:
+    needs: [build, deployment-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write

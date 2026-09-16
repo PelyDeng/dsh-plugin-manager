@@ -2,7 +2,7 @@
 
 # 开发者接入 FAQ
 
-这是框架 0.19.0 随包指南。模型不可用时仍可在已授权应用中阅读；内容来自发布时固定的公共文档，不扫描部署者机器。在线 main 可能领先，知识不能证明生产状态。
+这是框架 0.19.1 随包指南。模型不可用时仍可在已授权应用中阅读；内容来自发布时固定的公共文档，不扫描部署者机器。在线 main 可能领先，知识不能证明生产状态。
 
 ## 这个框架是做什么的？
 
@@ -15,13 +15,13 @@
 ## 工具从哪里来？
 
 <!-- Excerpt from doc/plugin-development.md.tmpl#author-tools; edit its source. -->
-需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.19.0.zip`、`plugin-manager-0.19.0.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.19.0.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
+需要 Node.js `^22.19.0 || >=24`、pnpm `11.19.0` 和系统 tar。从同一框架 Release 取得 `dsh-plugin-manager-starters-0.19.1.zip`、`plugin-manager-0.19.1.tgz`；起步包的鉴权目录已带同版 kit；仅单独复制仓库示例或升级 kit 时另取 `plugin-kit-0.19.1.tgz`。核对随发行提供的 SHA-256，不假设这些包已发布到 npm registry。
 
 起步 zip 内有 standalone-plugin、standalone-kit；选一个目录复制为自己的作者项目，不复制 node_modules、dist 或 .local。在作者项目以外创建独立工具目录 dsh-tools，在该工具目录安装实际 manager 归档：
 
 ```sh
 pnpm init
-pnpm add --ignore-workspace /absolute/path/plugin-manager-0.19.0.tgz
+pnpm add --ignore-workspace /absolute/path/plugin-manager-0.19.1.tgz
 pnpm exec dsh-plugin-manager --version
 ```
 
@@ -47,7 +47,7 @@ list 只读声明，不要求锁文件。pack 只做构建、打包与内容寻�
 ## 部署者收到什么，如何启动？
 
 <!-- Excerpt from doc/first-deployment.md.tmpl#deployment-start; edit its source. -->
-从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.19.0.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
+从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.19.1.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
 
 每个作者交付的是一个完整目录，包含 manifest.json 和它引用的全部 tgz。将它放在部署根的 incoming 直接子目录中：
 
@@ -57,7 +57,6 @@ dsh-deployment/
 ├─ tools/                       随包管理器与公开构建输入，不手改
 ├─ source/                      公开源码材料，内置插件构建输入，不手改
 ├─ framework-runtime.json       固定运行镜像信息，不手改
-├─ optional/auth/               认证插件的独立发布目录（与内置 auth 同 id）
 ├─ incoming/
 │  └─ my-plugin/
 │     ├─ manifest.json
@@ -65,7 +64,7 @@ dsh-deployment/
 └─ .local/                      运行后创建，保留配置和数据
 ```
 
-在部署根执行 `bash build.sh`；Windows PowerShell 执行 `.\build.ps1`。普通 zip/tgz 单文件不能代替完整发布目录。内置 auth、example 由本次构建产出（archives 用随包公开构建视图），已经在候选里；`incoming/` 只放外部作者的完整发布目录。把随包的 `optional/auth` 或 `public-apps`（同一批插件）再放进去会因插件 id 重复被组合清单拒绝。不要删除组合清单中某个归档来挑选插件。
+在部署根执行 `bash build.sh`；Windows PowerShell 执行 `.\build.ps1`。普通 zip/tgz 单文件不能代替完整发布目录。内置 auth、example 由本次构建产出（archives 用随包公开构建视图），已经在候选里；`incoming/` 只放外部作者的完整发布目录。把随包的 `public-apps`（同一批插件）再放进去会在准备输入阶段被拒绝，并指明与哪个内置插件重复。不要删除组合清单中某个归档来挑选插件。
 
 产物合规由**作者在交付前**自检，部署侧不重复检查：作者打包后执行 `dsh-plugin-manager verify-release --release <发布目录>`，它只读目录，退出码 0 表示清单格式、产物摘要、包结构与包内元数据一致。部署者收到目录后想再确认一次，可在**停服前**对 incoming 下的目录跑同一条命令；它不接触部署状态，也不改动任何文件。
 
@@ -142,7 +141,7 @@ bash build.sh
 
 每个命令失败后先修复，不继续执行后续步骤；不要删除原目录或数据来重试。build 在停服前显示新增、更新、保留和停用。移走仍启用的插件产物会拒绝，不等于卸载。停用配置型插件先设 enabled=false 并成功部署，再移走其产物；其他插件用 DSH_PLUGINS 显式列出保留集合。留空选集为全部发现项，[] 才是明确空集合。
 
-框架升级在同一站点 root 替换公开脚本、tools、framework-runtime.json、optional 资源和公开模板；incoming/.local 原样保留。optional/auth 更新不会自动替换 incoming 中正在部署的 auth。内置插件固定全量构建，外部产物来自 incoming；普通 build 每次从当前现场重新收敛。
+框架升级在同一站点 root 替换公开脚本、tools、source、framework-runtime.json 和公开模板；incoming/.local 原样保留。内置插件固定全量构建，外部产物来自 incoming；普通 build 每次从当前现场重新收敛。
 
 ## 构建或部署失败如何处理？
 
@@ -227,6 +226,6 @@ Release 的 runtime 构建并发布固定宿主/manager 镜像，检查匿名拉
 
 根 test-report.sh 验证最终 auth/example 归档、真实宿主及本地模型替身；不代表真实提供方或生产业务已通过。完整记录见 packages/plugin-manager/VERIFICATION.md。其他插件独立测试，重打包不能沿用旧包验证结果。
 
-- [固定版本作者指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.0/doc/plugin-development.md)
-- [固定版本部署指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.0/doc/first-deployment.md)
+- [固定版本作者指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.1/doc/plugin-development.md)
+- [固定版本部署指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.1/doc/first-deployment.md)
 - [可复制开发提示词](prompts.md)

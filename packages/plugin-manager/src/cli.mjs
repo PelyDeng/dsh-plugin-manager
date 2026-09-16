@@ -36,6 +36,11 @@ export async function main(args = process.argv.slice(2)) {
   --verification-report 可重复；记录仅作安装提示，不是兼容认证。
   --version 显示管理器版本`);
   } else if (action === '--version') console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url))).version);
+  else if (action === 'archives-worker') {
+    // 部署包站点的构建 worker：由 release-site 的展示端拉起，跑完同一条站点发布后回一个退出码。
+    const { archivesWorker } = await import('./archives-worker.mjs');
+    process.exitCode = await archivesWorker(rest);
+  }
   else if (action === 'release-site') {
     const { siteArguments } = await import('./site-record.mjs');
     // doctor/unlock remain usable without importing deployment or kit implementations.

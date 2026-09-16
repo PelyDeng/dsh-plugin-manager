@@ -46,6 +46,28 @@ test('the presenter is loaded after the source sync so one release uses one revi
   assert.deepEqual(order, ['sync', 'presenter', 'present']);
 });
 
+test('archives 入口用随包管理器自己的 worker，站点根不需要任何源码文件', async t => {
+  const f = fixture(t);
+  // 部署包站点里没有 deploy/scripts/build.mjs：worker 必须是管理器自带的 CLI。
+  assert.equal(existsSync(resolve(f.root, 'deploy/scripts/build.mjs')), false);
+  let seen;
+  const presenter = async () => (entry, args, options) => { seen = { entry, args, cwd: options.cwd }; options.onFinished?.(0); return 0; };
+  assert.equal(await sourceRelease({ root: f.root, args: ['--config', '.local/env.conf'], defaultInputKind: 'archives', preflight: f.preflight, presenter }), 0);
+  assert.match(seen.entry.replaceAll('\\', '/'), /packages\/plugin-manager\/src\/cli\.mjs$/);
+  assert.deepEqual(seen.args, ['archives-worker', '--root', f.root, '--config', '.local/env.conf']);
+  assert.equal(seen.cwd, f.root);
+});
+
+test('source 入口仍然用检出里的 worker，两种入口的 worker 不混用', async t => {
+  const f = fixture(t);
+  const worker = f.put('deploy/scripts/build.mjs', 'process.send({type:"source-build-finished",code:0});');
+  let seen;
+  const presenter = async () => (entry, args, options) => { seen = { entry, args }; options.onFinished?.(0); return 0; };
+  assert.equal(await sourceRelease({ root: f.root, args: ['--config', '.local/env.conf'], defaultInputKind: 'source', preflight: f.preflight, presenter }), 0);
+  assert.equal(seen.entry, worker);
+  assert.deepEqual(seen.args, ['--config', '.local/env.conf']);
+});
+
 test('every presenter load re-reads the file instead of reusing a cached copy', async () => {
   const first = await loadPresenter(), second = await loadPresenter();
   assert.equal(typeof first, 'function');

@@ -1,13 +1,13 @@
 <!-- Generated from deploy/DEPLOYMENT.md.tmpl by scripts/version.mjs; edit the template. -->
 
-# DSH Plugin Manager 0.19.0 部署包
+# DSH Plugin Manager 0.19.1 部署包
 
 本目录是可独立使用的框架部署包，不需要作者源码或框架 Git 检出。先准备 Node，再按下列步骤部署标准插件产物。运行依赖和固定宿主镜像仍可能需要网络，离线阅读不等于离线安装。
 
 ## 放入产物并启动
 
 <!-- Excerpt from doc/first-deployment.md.tmpl#deployment-start; edit its source. -->
-从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.19.0.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
+从同一个框架 Release 取得 `dsh-plugin-manager-deployment-0.19.1.zip` 并解压。准备 Node.js `^22.19.0 || >=24`、系统 tar、本机 Linux Docker 引擎及 Compose；不自动安装系统软件。镜像架构必须有该版本实际提供的运行镜像，不使用未验证的默认摘要。
 
 每个作者交付的是一个完整目录，包含 manifest.json 和它引用的全部 tgz。将它放在部署根的 incoming 直接子目录中：
 
@@ -17,7 +17,6 @@ dsh-deployment/
 ├─ tools/                       随包管理器与公开构建输入，不手改
 ├─ source/                      公开源码材料，内置插件构建输入，不手改
 ├─ framework-runtime.json       固定运行镜像信息，不手改
-├─ optional/auth/               认证插件的独立发布目录（与内置 auth 同 id）
 ├─ incoming/
 │  └─ my-plugin/
 │     ├─ manifest.json
@@ -25,7 +24,7 @@ dsh-deployment/
 └─ .local/                      运行后创建，保留配置和数据
 ```
 
-在部署根执行 `bash build.sh`；Windows PowerShell 执行 `.\build.ps1`。普通 zip/tgz 单文件不能代替完整发布目录。内置 auth、example 由本次构建产出（archives 用随包公开构建视图），已经在候选里；`incoming/` 只放外部作者的完整发布目录。把随包的 `optional/auth` 或 `public-apps`（同一批插件）再放进去会因插件 id 重复被组合清单拒绝。不要删除组合清单中某个归档来挑选插件。
+在部署根执行 `bash build.sh`；Windows PowerShell 执行 `.\build.ps1`。普通 zip/tgz 单文件不能代替完整发布目录。内置 auth、example 由本次构建产出（archives 用随包公开构建视图），已经在候选里；`incoming/` 只放外部作者的完整发布目录。把随包的 `public-apps`（同一批插件）再放进去会在准备输入阶段被拒绝，并指明与哪个内置插件重复。不要删除组合清单中某个归档来挑选插件。
 
 产物合规由**作者在交付前**自检，部署侧不重复检查：作者打包后执行 `dsh-plugin-manager verify-release --release <发布目录>`，它只读目录，退出码 0 表示清单格式、产物摘要、包结构与包内元数据一致。部署者收到目录后想再确认一次，可在**停服前**对 incoming 下的目录跑同一条命令；它不接触部署状态，也不改动任何文件。
 
@@ -93,7 +92,7 @@ bash build.sh
 
 每个命令失败后先修复，不继续执行后续步骤；不要删除原目录或数据来重试。build 在停服前显示新增、更新、保留和停用。移走仍启用的插件产物会拒绝，不等于卸载。停用配置型插件先设 enabled=false 并成功部署，再移走其产物；其他插件用 DSH_PLUGINS 显式列出保留集合。留空选集为全部发现项，[] 才是明确空集合。
 
-框架升级在同一站点 root 替换公开脚本、tools、framework-runtime.json、optional 资源和公开模板；incoming/.local 原样保留。optional/auth 更新不会自动替换 incoming 中正在部署的 auth。内置插件固定全量构建，外部产物来自 incoming；普通 build 每次从当前现场重新收敛。
+框架升级在同一站点 root 替换公开脚本、tools、source、framework-runtime.json 和公开模板；incoming/.local 原样保留。内置插件固定全量构建，外部产物来自 incoming；普通 build 每次从当前现场重新收敛。
 
 ## 失败后的操作
 
@@ -114,4 +113,4 @@ Windows 用 `.\build.ps1` 替代 bash build.sh。doctor 只读诊断锁和记录
 
 ## 进阶资料
 
-本 README 的操作正文来自框架固定公开维护源，由同一文档同步生成。进一步查阅该版本的[配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.0/doc/framework-configuration.md)、[运维说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.0/deploy/README.md)及[独立 CLI 指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.0/packages/plugin-manager/DELIVERY.md)。这些链接不保证比已安装版本更新；本目录 `framework-runtime.json` 记录实际配套运行镜像身份。
+本 README 的操作正文来自框架固定公开维护源，由同一文档同步生成。进一步查阅该版本的[配置规范](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.1/doc/framework-configuration.md)、[运维说明](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.1/deploy/README.md)及[独立 CLI 指南](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.1/packages/plugin-manager/DELIVERY.md)。这些链接不保证比已安装版本更新；本目录 `framework-runtime.json` 记录实际配套运行镜像身份。

@@ -86,8 +86,8 @@ exit $LASTEXITCODE
 `;
 
 /** Return staged trees so their real independent consumption can be checked before publication. */
-export function assembleDeployment({ root, manager, kit, authManifest, images, output }, { inspectRuntime = runtimeFromImage, installTools = installManagerArchive } = {}) {
-  if (![root, manager, kit, authManifest, output].every(value => typeof value === 'string' && value)) throw new Error('Explicit root, tool archives, auth manifest and new output are required.');
+export function assembleDeployment({ root, manager, kit, images, output }, { inspectRuntime = runtimeFromImage, installTools = installManagerArchive } = {}) {
+  if (![root, manager, kit, output].every(value => typeof value === 'string' && value)) throw new Error('Explicit root, tool archives and new output are required.');
   root = resolve(root); output = resolve(output); manager = resolve(manager); kit = resolve(kit);
   const version = json(join(root, 'package.json')).version;
   if (!/^\d+\.\d+\.\d+$/u.test(version)) throw new Error('Expected a stable framework version.');
@@ -98,9 +98,6 @@ export function assembleDeployment({ root, manager, kit, authManifest, images, o
   toolArchive(kit, '@dsh-plugin-manager/plugin-kit', version, 'dist/index.mjs');
   const runtimes = images.map(image => inspectRuntime(image, version, managerHash));
   if (new Set(runtimes.map(runtime => runtime.platform)).size !== runtimes.length) throw new Error('Only one runtime per platform may be published.');
-  const authRelease = loadRelease(resolve(authManifest));
-  const auth = authRelease.plugins.find(plugin => plugin.id === 'auth');
-  if (!auth || auth.package !== 'dsh-auth' || auth.version !== version || auth.configuration?.auth !== 'provider') throw new Error('Optional auth must be the matching framework authentication provider.');
   for (const doc of ['deploy/DEPLOYMENT.md', 'deploy/STARTERS.md', 'incoming/README.md', 'LICENSE']) if (!existsSync(join(root, doc))) throw new Error(`Missing public release document: ${doc}`);
   const deployment = join(output, 'dsh-deployment'), starters = join(output, 'dsh-starters');
   mkdirSync(deployment, { recursive: true }); mkdirSync(starters);
@@ -129,7 +126,6 @@ export function assembleDeployment({ root, manager, kit, authManifest, images, o
   copyPublic(join(root, 'deploy/DEPLOYMENT.md'), join(deployment, 'README.md'));
   copyPublic(join(root, 'incoming/README.md'), join(deployment, 'incoming/README.md'));
   copyPublic(join(root, 'LICENSE'), join(deployment, 'LICENSE'));
-  composeReleases([{ ...authRelease, plugins: [auth], verification: selectVerification(authRelease.verification, [auth]) }], join(deployment, 'optional/auth'));
   copyPublic(join(root, 'deploy/STARTERS.md'), join(starters, 'README.md'));
   copyPublic(join(root, 'LICENSE'), join(starters, 'LICENSE'));
   for (const name of ['standalone-plugin', 'standalone-kit']) {
@@ -182,11 +178,11 @@ export function packageDeployment(options, dependencies) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const options = { images: [] }, values = { '--root': 'root', '--manager': 'manager', '--kit': 'kit', '--auth-manifest': 'authManifest', '--output': 'output', '--python': 'python' };
+    const options = { images: [] }, values = { '--root': 'root', '--manager': 'manager', '--kit': 'kit', '--output': 'output', '--python': 'python' };
     const args = process.argv.slice(2);
     while (args.length) {
       const flag = args.shift(), value = args.shift();
-      if ((!Object.hasOwn(values, flag) && flag !== '--image') || !value || value.startsWith('--')) throw new Error('Usage: package-deployment.mjs --root <framework> --manager <tgz> --kit <tgz> --auth-manifest <json> --image <repository@sha256> --output <new-directory> [--python <executable>]');
+      if ((!Object.hasOwn(values, flag) && flag !== '--image') || !value || value.startsWith('--')) throw new Error('Usage: package-deployment.mjs --root <framework> --manager <tgz> --kit <tgz> --image <repository@sha256> --output <new-directory> [--python <executable>]');
       if (flag === '--image') options.images.push(value);
       else if (options[values[flag]]) throw new Error(`Repeated argument: ${flag}`);
       else options[values[flag]] = value;

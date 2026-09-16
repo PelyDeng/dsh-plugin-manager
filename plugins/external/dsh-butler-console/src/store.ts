@@ -493,6 +493,18 @@ export class TaskStore {
     )
   }
 
+  /**
+   * 读一条子任务的状态；不存在时返回 undefined。
+   *
+   * 过渡适配器（storage/sqlite-adapter.ts）配套：等待超时条件结账要按主键读状态而不带
+   * owner 过滤（PG 侧为同语义的单条条件 UPDATE）；生产代码不使用。
+   */
+  subtaskState(taskId: string, subtaskId: string): SubtaskState | undefined {
+    const row = this.db.prepare('SELECT state FROM subtasks WHERE task_id=? AND id=?')
+      .get(taskId, subtaskId) as unknown as { state: SubtaskState } | undefined
+    return row?.state
+  }
+
   /** 读取一条任务的完整记录；不存在或不属于该用户时返回 undefined。 */
   task(actor: Actor, id: string): TaskRecord | undefined {
     const row = this.db.prepare(`SELECT id,conversation_id AS conversationId,goal,state,note,summary,error,
