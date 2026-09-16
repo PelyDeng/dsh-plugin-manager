@@ -46,6 +46,7 @@ import type { AgentDefinition, ProjectedResult, ResultContext } from './definiti
 import {
   createHandoffLedger,
   HANDOFF_RETRY_PROMPT,
+  REPORT_RESULT_TOOL,
   reworkPrompt,
   type HandoffLedger,
   type TurnAttempt,
@@ -117,6 +118,8 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
   const settledTurns = new Map<string, { readonly message: string; readonly result: ParticipantResult }>()
   /** 按会话分的交活账本。 */
   const ledgers = new Map<string, HandoffLedger>()
+  /** 门槛缺失只警告一次：那是装配错误，不该按会话刷屏。 */
+  let warnedHandoffMissing = false
   let lastLedger = createHandoffLedger()
   const ledgerOf = (conversationId: string): HandoffLedger => {
     const existing = ledgers.get(conversationId)
@@ -211,6 +214,17 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
         let retriedHandoff = false
         /** 本轮的交活账本（按会话取；补交轮与自修正轮共用同一个）。 */
         const ledger = ledgerOf(opened.id)
+        // 门槛 `ledger.available` 只有装配侧注册过 `report_result` 时才为真（`handoff.ts:88-89`）。
+        // 装配侧漏调 `install()` 时它**没有任何信号**：⑦ 会把"没调用工具"记成 `unverified`，而看到
+        // `unverified` 的人会以为是"模型没交活"，真因却是"运行时没接线"。第一次拿到账本就警告一次。
+        if (!ledger.available && !warnedHandoffMissing) {
+          warnedHandoffMissing = true
+          console.warn(
+            `[agents-group/runtime] ${definition.id} 没有可用的 ${REPORT_RESULT_TOOL} 账本：`
+            + '补交轮不会发生，⑦ 会把"没交活"记为 unverified。若这不是有意为之，'
+            + '检查装配侧注册工具后是否漏调了 handoff.install()。',
+          )
+        }
         /**
          * `turn/end` 的交接队列。
          *
