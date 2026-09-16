@@ -20,7 +20,7 @@ import { Config as GroupConfig } from '../src/config.ts'
 import { ButlerConsole } from '../../dsh-butler-console/src/butler.ts'
 import type { Config } from '../../dsh-butler-console/src/config.ts'
 import type { ButlerAgentExecutor } from '../../dsh-butler-console/src/protocol.ts'
-import { TaskStore } from '../../dsh-butler-console/src/store.ts'
+import { TaskStore } from '../../dsh-butler-console/tests/helpers/sqlite-test-store.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }

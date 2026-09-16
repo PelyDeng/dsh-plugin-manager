@@ -10,14 +10,14 @@
  * 所以这里不测「桥接发了什么」，而是测「牛马大总管真的能消化」：把群组的桥接当执行方装进
  * 真实的子任务调度里跑一遍。
  */
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentParticipant } from '@dsh-agents-group/common'
 import { AccessError, type Access } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole, type ButlerEvent } from '../../dsh-butler-console/src/butler.ts'
 import type { Config } from '../../dsh-butler-console/src/config.ts'
 import type { ButlerAgentExecutor } from '../../dsh-butler-console/src/protocol.ts'
-import type { TaskStore } from '../../dsh-butler-console/src/store.ts'
+import { TaskStore } from '../../dsh-butler-console/tests/helpers/sqlite-test-store.ts'
 import { executorFor } from '../src/butler-bridge.ts'
 import type { AgentManifest } from '../src/agents/registry.ts'
 
@@ -67,7 +67,16 @@ const input = {
  * 能验证「执行方上报的进度会不会被消化」。所以这里直接驱动它。
  */
 async function run(executor: ButlerAgentExecutor): Promise<ButlerEvent[]> {
-  const store = { setSubtaskState: vi.fn() } as unknown as TaskStore
+  // 真实存储夹具（:memory:）：派单前会读取任务记录判定材料快照状态，读不到记录按
+  // 「未知」拒派——所以这里必须先落一条带目标子任务的真实任务，而不是只伪装
+  // setSubtaskState 的空壳。TaskStore 与异步接口结构兼容，与管家自家测试同款用法。
+  const store = new TaskStore(':memory:')
+  store.reserveConversation('conv-1', actor)
+  await store.createTask({
+    id: input.taskId, conversationId: 'conv-1', actor,
+    goal: input.taskGoal, note: '',
+    subtasks: [{ id: input.subtaskId, goal: input.goal, agentId: input.agentId, reason: '测试派单' }],
+  })
   const access = { mode: 'authenticated', ready() {}, resolve: () => undefined,
     assert() { throw new AccessError(503, '本测试不涉及鉴权') } } as unknown as Access
   const config = { subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000 } as Config
