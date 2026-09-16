@@ -76,6 +76,15 @@ async function removalStateOf(id: string): Promise<string> {
   return rows.rows[0]?.removal_state ?? '<missing>'
 }
 
+/**
+ * `titleSource` 不在端口暴露的 `ConversationRecordShape` 里（端口有意只给
+ * `id/title/updatedAt/deletedAt/removalState/ready`），所以只能直接查库。
+ */
+async function titleSourceOf(id: string): Promise<string> {
+  const rows = await admin.query<{ title_source: string }>('SELECT title_source FROM dsh_conversations WHERE id = $1', [id])
+  return rows.rows[0]?.title_source ?? '<missing>'
+}
+
 describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), 'dsh-runtime-storage-'))
@@ -109,6 +118,26 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
       await db.conversations.create(owner, id, '')
       expect(await db.conversations.conversationOf(owner, id)).toMatchObject({ conversationId: id, agentId: AGENT })
       expect(await db.conversations.conversationOf(otherOwner, id)).toBeUndefined()
+    } finally { await db.close() }
+  })
+
+  it('D4 回归：空标题（缺省 / {} / 空串）落 automatic，只有非空标题才落 manual', async () => {
+    const { db } = await newFacade()
+    try {
+      // 生产路径传的正是 `{ title: '' }`（不是缺省）。只看 `undefined` 会把它当人工标题，
+      // 于是 `syncTitle(..., 'automatic')` 被 `title_source = 'automatic'` 守卫拒绝 ⇒
+      // 侧栏标题永久为空。三种"没给标题"的写法必须都落 `automatic`。
+      for (const initial of [undefined, {}, { title: '' }] as const) {
+        const id = conversationId()
+        const record = await db.conversations.create(owner, id, '', initial)
+        expect(record.title, `initial=${JSON.stringify(initial)}`).toBe('')
+        expect(await titleSourceOf(id), `initial=${JSON.stringify(initial)}`).toBe('automatic')
+      }
+      // 反向：非空标题仍必须是人工来源，否则自动结果会覆盖用户明确取的标题。
+      const manualId = conversationId()
+      const manual = await db.conversations.create(owner, manualId, '', { title: '人工标题' })
+      expect(manual.title).toBe('人工标题')
+      expect(await titleSourceOf(manualId)).toBe('manual')
     } finally { await db.close() }
   })
 

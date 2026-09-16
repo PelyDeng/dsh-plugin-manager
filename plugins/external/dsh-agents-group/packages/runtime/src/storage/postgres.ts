@@ -103,7 +103,11 @@ export class PgConversations implements PgConversationPart {
        VALUES($1,$2,$3,$4,$5,$6,$7,FALSE,FALSE,'',$8,$8,'{}'::jsonb)
        ON CONFLICT (agent_id, owner_namespace, owner_id, request_id) WHERE request_id <> '' DO NOTHING`,
       [conversationId, this.agentId, owner.namespace, owner.userId, requestId, title,
-        initial?.title === undefined ? 'automatic' : 'manual', now],
+        // 判定复用上一行算好的 `title`（= `initial?.title ?? ''`），两者必须**同源**。
+        // 只看 `undefined` 会把空串当成人工标题：生产路径传的正是 `{ title: '' }`
+        // （`conversation.ts` 新建会话处），于是每次新建都落 `manual`，`syncTitle(..., 'automatic')`
+        // 被 `title_source = 'automatic'` 守卫拒绝 ⇒ 侧栏标题永久为空。
+        title === '' ? 'automatic' : 'manual', now],
     )
     const existing = await this.readByRequest(owner, requestId)
     if (existing !== undefined) return existing
