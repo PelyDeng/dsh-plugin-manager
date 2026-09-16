@@ -106,7 +106,9 @@ describe('任务投影：事件语义', () => {
   })
 
   it('同一任务重读快照保留事件期的思考，换任务才清空', () => {
-    let view = applyEvent(emptyTaskView(), { type: 'chat_thinking', role: 'butler', thinking: '事件期的思路' })
+    // 先立同一任务的权威基准，事件期的思考才落在「当前任务」上（同 butlerText 的口径）。
+    let view = applySnapshot(emptyTaskView(), snapshot)
+    view = applyEvent(view, { type: 'chat_thinking', role: 'butler', thinking: '事件期的思路' })
     view = applyEvent(view, { type: 'chat', role: 'butler', text: '事件期的结论' })
     // 同一任务：快照只做权威基准，事件期已经收到的思考不该被抹掉。
     const kept = applySnapshot(view, snapshot)
