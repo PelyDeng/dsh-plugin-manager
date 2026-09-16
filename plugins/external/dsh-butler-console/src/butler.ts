@@ -1697,6 +1697,16 @@ export class ButlerConsole {
         yield { type: 'chat', role: 'butler', text: outcome.text, time: Date.now() }
       }
 
+      // 收尾前先排空队列（依赖重判方案 §3.2，Q3 已批准）：补充追加的新行（含 supersedes
+      // 新尝试）派完之后，既有排队下游的依赖状态可能已经变化 —— 新尝试成功、旧失败不再算数。
+      // 与 closeAfterReply 复用同一 drainQueue，传导给排队下游之后才谈收尾。
+      yield* this.drainQueue({
+        taskId,
+        actor,
+        goal: (await this.storage.task(actor, taskId))?.goal ?? '',
+        signal: prepared.abort.signal,
+      })
+
       // 收尾走同一条路径：它按库里的子任务结局决定终态，也负责把材料与外部待办留住。
       yield* this.closeTask({
         taskId,
@@ -1959,6 +1969,9 @@ export class ButlerConsole {
    *
    * 全终结时把这一轮也收掉，但**不跑汇总轮** —— 没有人在看，而且用户随时可能开始新一轮，
    * 跟它抢同一个会话句柄只会让两边都出错。逐项结局与材料都在库里，下次进来读得到。
+   *
+   * 上游判 failed 之后、任务结账之前，同任务里仍排队的下游先经 {@link drainQueue} 走一次
+   * 依赖判定（§3.2）：该失败的写明原因，还该等的保持排队，不再悬空。
    */
   private async expireWaiting(key: string, taskId: string, subtaskId: string, displayName: string, actor: Actor): Promise<void> {
     this.waitingTimers.delete(key)
@@ -1969,6 +1982,23 @@ export class ButlerConsole {
 
     this.waiting.delete(key)
     console.warn(`butler-console: ${displayName} 的等待超过 ${Math.round(this.config.waitingTimeoutMs / 1000)} 秒没有回音，已按超时收尾（任务 ${taskId}）`)
+
+    // 上游判 failed 之后，同任务的非终态下游先走一次依赖判定结账（依赖重判方案 §3.2，
+    // Q3 已批准）：fail 的下游写明原因收成 failed，wait 的保持 queued 如实挂起，放行的
+    // 照常派出去 —— 之前这里直接返回，排队下游会悬空到老板下一次人工过问。复用 drainQueue
+    // （与 closeAfterReply 同一实现，不另造一套）。会话上正有回话或补充在执行时让位：那一轮
+    // 自己的收尾会排空队列，两条路径同时派同一步会把它派两遍。
+    const settled = await this.storage.task(actor, taskId)
+    if (settled !== undefined) {
+      const holder = this.claims.get(settled.conversationId)
+      if (holder?.kind !== 'reply' && holder?.kind !== 'supplement') {
+        // 这是无人观看的后台收尾：没有对应的 SSE 轮次，事件如实产出后不外推，状态与原因
+        // 都以先写库的记录为准（先写库后上报的顺序在 drainQueue 内部保持）。
+        for await (const _event of this.drainQueue({
+          taskId, actor, goal: settled.goal, signal: new AbortController().signal,
+        })) { /* 后台收尾没有 SSE 观众 */ }
+      }
+    }
 
     const after = await this.storage.task(actor, taskId)
     if (after === undefined || after.subtasks.some(item => !isTerminal(item.state))) return
@@ -2253,6 +2283,14 @@ export class ButlerConsole {
     const record = await this.storage.task(input.actor, taskId)
     const current = effectiveSubtasks(record?.subtasks ?? [])
     const self = current.find(candidate => candidate.id === subtaskId)
+    // 前置声明读不出来（损坏即拒，依赖重判方案 §3 条目 4）：不知道这一步依赖谁就不能派，
+    // 也不把损坏值修补成「没有前置」。原值原样保留在库里，与 inputRefs/memberReturn 同原则。
+    if (self?.dependsOnState === 'damaged') {
+      const detail = '这一步的前置声明读不出来（数据损坏）：不派单，原记录保持不动'
+      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
+      yield emit('failed', detail)
+      return { state: 'failed', report: `【${displayName}】失败：${detail}` }
+    }
     // 读不到这条记录就无从证明「还没派过」：按未知拒绝，不猜。
     const snapshotState: ButlerInputRefsKind = self?.inputRefsState ?? 'unknown'
     if (snapshotState === 'unknown' || snapshotState === 'damaged') {
@@ -2274,35 +2312,42 @@ export class ButlerConsole {
           blocked.push(`${logicalId}（找不到这条前置）`)
           continue
         }
+        // 材料真值统一到协作返回原文（依赖重判方案 §3.1）：上游该次有效尝试留下协作返回
+        // 正文才算「可消费」，判定与交付用同一真值。result（可裁剪的展示摘要）与 artifacts
+        // （位置型材料）退为展示信息，不再参与判定；旧记录没有留存（memberReturn 为
+        // undefined）即「协作返回未知」，按现状拒派，也绝不拿裁剪过的展示摘要顶替。
+        const source = attempt.memberReturn
+        const materialsReady = source !== undefined && source.text.trim() !== ''
         const verdict = dependencyVerdict({
           upstream: attempt.state,
-          // 交回的材料算不算「可用」：有正文或有可点开的材料引用就算有。
-          materialsReady: attempt.result !== '' || attempt.artifacts.length > 0,
+          materialsReady,
           requiresExternalAction: input.requiresExternalAction === true,
         })
         if (verdict === 'wait') waiting.push(`${logicalId}（${attempt.state}）`)
-        else if (verdict === 'fail') blocked.push(`${logicalId}（${attempt.state}）`)
+        else if (verdict !== 'dispatch' || source === undefined) {
+          // 拒派原因如实分类写明缺什么：上游已判失败/取消的只写状态；材料不满足的区分
+          // 未知（旧记录）、只有页面位置、正文为空；确需外部办完的写明是这一步自己的声明
+          // 没被满足。判定放行却没有留存属于逻辑上不可达的防御分支，按未知拒派。
+          const why = attempt.state === 'failed' || attempt.state === 'cancelled'
+            ? attempt.state
+            : materialsReady
+              ? '这一步需要外部动作办完，上游还在等外部处理'
+              : source === undefined
+                ? '上游协作返回未知（旧记录未留存材料）'
+                : attempt.artifacts.length > 0 ? '上游只提供页面位置，下游无法消费' : '上游协作返回为空'
+          blocked.push(why === attempt.state
+            ? `${logicalId}（${why}）`
+            : `${logicalId}（${attempt.state}，${why}）`)
+        }
         else {
-          // 材料来源：上游该次有效尝试必须留下**协作返回原文**才可交付。旧记录没有留存
-          // （memberReturn 为 undefined）即未知；只有位置型材料不构成可消费材料 —— 两种情况
-          // 都不派单，也绝不拿裁剪过的展示摘要顶替。
-          const source = attempt.memberReturn
-          if (source === undefined || source.text.trim() === '') {
-            const why = source === undefined
-              ? '上游协作返回未知（旧记录未留存材料）'
-              : attempt.artifacts.length > 0 ? '上游只提供页面位置，下游无法消费' : '上游协作返回为空'
-            blocked.push(`${logicalId}（${why}）`)
-          }
-          else {
-            inputRefs.push({
-              subtaskId: attempt.id,
-              logicalId: attempt.logicalId,
-              state: attempt.state,
-              text: source.text,
-              artifacts: [...attempt.artifacts],
-              ...(source.externalPending === undefined ? {} : { externalPending: { ...source.externalPending } }),
-            })
-          }
+          inputRefs.push({
+            subtaskId: attempt.id,
+            logicalId: attempt.logicalId,
+            state: attempt.state,
+            text: source.text,
+            artifacts: [...attempt.artifacts],
+            ...(source.externalPending === undefined ? {} : { externalPending: { ...source.externalPending } }),
+          })
         }
       }
       if (waiting.length > 0 && blocked.length === 0) {
@@ -2874,9 +2919,11 @@ export class ButlerConsole {
    *
    * 依赖在**派单前**核验，而不是计划生成时定死：前置可能还在跑、还在等人回话、或者交了
    * 材料而外面还没办完。之前因为「前置还没终结」留在队列里的步骤，等前置有结果之后要接得
-   * 上 —— 补话那条路径收尾前走一遍这里，就是机制里说的「派单前重新核验条件」。
+   * 上 —— 补话收尾（closeAfterReply）、补充收尾与等待超时收尾前都走一遍这里，就是机制里
+   * 说的「派单前重新核验条件」。
    *
-   * 还在等前置的就保持队列状态直接返回：不空转，也不占用员工。
+   * 还在等前置的保持队列状态如实挂起：不空转，也不占用员工；但核验按条独立结账，队头在等
+   * 不挡住队尾已经就绪的步骤。
    */
   private async *drainQueue(input: {
     taskId: string
@@ -2884,10 +2931,14 @@ export class ButlerConsole {
     goal: string
     signal: AbortSignal
   }): AsyncGenerator<ButlerEvent> {
+    // 本轮核验过、结论是「继续等」的步骤：如实挂起、不再反复核验（否则会在它身上空转），
+    // 但也不让它挡住排在后面、已经就绪的步骤 —— 依赖核验按条独立结账，队头在等不该让
+    // 队尾跟着悬空。
+    const suspended = new Set<string>()
     for (;;) {
       const record = await this.storage.task(input.actor, input.taskId)
       if (record === undefined) return
-      const next = record.subtasks.find(item => item.state === 'queued')
+      const next = record.subtasks.find(item => item.state === 'queued' && !suspended.has(item.id))
       if (next === undefined) return
       if (input.signal.aborted) return
       yield* this.dispatchSubtask({
@@ -2898,8 +2949,12 @@ export class ButlerConsole {
         ...(next.requiresExternalAction ? { requiresExternalAction: true } : {}),
       })
       const after = (await this.storage.task(input.actor, input.taskId))?.subtasks.find(item => item.id === next.id)
-      // 派完还是排队中，说明前置仍未就绪：到此为止，等下一次核验。
-      if (after === undefined || after.state === 'queued') return
+      if (after === undefined) return
+      // 派完仍排队中：前置仍未就绪，如实挂起，继续核验排在后面的。
+      if (after.state === 'queued') suspended.add(next.id)
+      // 有步骤真的结账（派出或判失败）：挂起中的那些前置可能因此就绪，全部重新核验一轮。
+      // 结账最多发生排队项数那么多次，循环必然收敛。
+      else suspended.clear()
     }
   }
 
