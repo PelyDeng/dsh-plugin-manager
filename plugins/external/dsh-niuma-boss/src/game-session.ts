@@ -20,6 +20,15 @@
  * 身份边界：刷新全程持有统一代次，旧刷新的迟到响应不得写回；登录人变化、
  * 空会话列表、观察流或读取返回未登录/无权限时，先取消订阅、作废在途结果，
  * 再清空会话列表与任务投影——不保留可能属于其他用户的数据。
+ *
+ * 故障恢复与竞争场景（本切片）：代次守卫覆盖读与写两条链路——旧会话/旧身份的
+ * 迟到事件、迟到受理回调、迟到快照都不进新会话的状态；写尝试按序号归属，受理回调
+ * 只清自己那一次的冻结提交（用户点过「重试提交」后，旧尝试的迟到受理不会把新尝试
+ * 的冻结提交清掉，重试入口保持可用）；换会话时旧上下文的写状态与草稿一并收起
+ * （待重试的冻结提交属于旧会话就作废，在途提交的界面锁解开），因此旧请求
+ * 释放后不写回新会话，新会话的写入口也不会被旧请求锁死。页面隐藏只暂停渲染并落盘
+ * 位置，订阅保持；回前台重读权威快照并按 probe 重新接上订阅。权限失效（无论来自
+ * 读取、订阅流还是写链路）沿用同一条清空规则，界面按链路状态给出可见原因。
  */
 import { ButlerClient, ButlerError, type ButlerStatus } from './butler-client.ts'
 import { GameWorld } from './game-world.ts'
@@ -50,6 +59,8 @@ export class GameSession {
   private scope = ''
   /** 刷新与选择的统一代次：旧请求的迟到响应不得写回任何状态。 */
   private generation = 0
+  /** 写尝试序号：受理回调只认自己那一次尝试（用户可能已经用同一份提交点了重试）。 */
+  private submitAttempt = 0
   private currentTaskId = ''
   /** 当前观察循环（只读订阅）的在途 Promise；新意图先等它退出再开自己的流。 */
   private observeTask: Promise<void> | null = null
@@ -304,6 +315,27 @@ export class GameSession {
   private resetForIdentityChange(): void {
     this.clearSelection()
     this.store.conversations = []
+    // 旧身份的写状态与草稿一起作废：待重试的冻结提交属于上一位登录人，重试会把旧正文
+    // 发到新身份下；在途提交的锁也不能留给下一位（写入口会一直禁用）；派活与回复草稿
+    // 同样是上一位登录人在输入框里写的东西，同样不留给下一位。
+    this.store.pendingSubmit = null
+    this.store.submitting = false
+    this.store.assignDraft = ''
+    this.store.replyDrafts = {}
+  }
+
+  /**
+   * 换会话时收干净旧上下文的写状态（旧请求释放后不写回新会话）：
+   * - 待重试的冻结提交指向**别的会话**时随选择作废——它的 requestId 与正文属于那次
+   *   提交的会话，留着会让「重试提交」把旧请求发进新会话的界面语境里。冻结正文仍在
+   *   草稿里，用户可在新会话重新提交（那是一次新的提交，新 requestId）。
+   * - 在途提交的写锁（submitting）一并解开：旧请求已经不再拥有新会话的界面状态，
+   *   留着它只会让新会话的写入口一直禁用（旧请求的迟到回调按代次守卫不会碰新状态）。
+   */
+  private releaseWriteState(conversationId: string): void {
+    this.store.submitting = false
+    const pending = this.store.pendingSubmit
+    if (pending !== null && pending.conversationId !== conversationId) this.store.pendingSubmit = null
   }
 
   private async reloadConversations(conversations: ConversationSummary[], token: number): Promise<void> {
@@ -324,6 +356,7 @@ export class GameSession {
   async selectConversation(id: string): Promise<void> {
     const token = ++this.generation
     this.client.cancelObserve()
+    this.releaseWriteState(id)
     this.store.selectedId = id
     this.store.task = emptyTaskView(id)
     this.store.activeRun = null
@@ -554,6 +587,7 @@ export class GameSession {
     const pending = this.store.pendingSubmit
     if (pending === null) return
     const token = ++this.generation
+    const attempt = ++this.submitAttempt
     this.store.submitting = true
     this.store.notice = ''
     // 新意图作废旧观察（只读订阅或上一次写响应的流）：先取消再等它退出，
@@ -561,10 +595,24 @@ export class GameSession {
     this.client.cancelObserve()
     await (this.observeTask ?? Promise.resolve()).catch(() => {})
     const accepted = () => {
-      if (token !== this.generation) return
-      this.store.pendingSubmit = null
+      // 只清自己这一次尝试的冻结提交。用户可能在这次尝试后点过「重试提交」——那是同一个
+      // pending 对象的新一次尝试（同 requestId），旧的受理回调迟到时若按对象身份清掉它，
+      // 重试入口会消失；用户重打正文会用新的 requestId，可能重复执行。
+      // 用尝试序号而不是「现在没有在途提交」判断：更新的那次尝试也可能已经以「结果不明」
+      // 收尾（那时 submitting 已是 false），冻结提交同样必须留着。
+      if (attempt === this.submitAttempt && this.store.pendingSubmit === pending) this.store.pendingSubmit = null
+      if (token !== this.generation) {
+        // 代次已经在提交期间前进（回前台刷新、切换会话）：事件流不再属于当前投影，
+        // 但这一次提交确实受理了——如果界面还停在这个会话上，只读重读一次把这一轮接回来。
+        // 还有写请求在途（更新的提交尝试或停止请求）时不再重读：它的写响应流正接管同一份
+        // 投影，这里再开一条只读订阅会让同一批事件进两次投影。
+        if (!this.store.submitting && this.store.selectedId === pending.conversationId) void this.resyncCurrent()
+        return
+      }
       // 受理即解锁写入口：这一轮可以继续观察，用户也能进行下一个意图（如回复）。
       this.store.submitting = false
+      // 草稿按会话归属清：提交的会话已经不是当前选择时不动草稿（那可能是新会话在写）。
+      if (this.store.selectedId !== pending.conversationId) return
       if (pending.kind === 'chat') this.store.assignDraft = ''
       else this.store.replyDrafts = { ...this.store.replyDrafts, [pending.subtaskId]: '' }
     }
@@ -610,10 +658,61 @@ export class GameSession {
       case 'conflict':
         this.store.pendingSubmit = null
         this.store.notice = conflictNotice(error.code, error.message)
+        // 管家的拒绝说明服务端状态与我们看到的不一样（换轮、已被别的入口结束、版本更新…）：
+        // 只读重读一次当前任务，不用本地推测补齐，也不重发任何写请求。
+        void this.resyncCurrent()
         return
       default:
         this.store.pendingSubmit = null
         this.store.notice = '提交失败：' + error.message
+    }
+  }
+
+  /**
+   * 只读重读当前会话的权威状态（probe/快照/历史，不重发任何写请求）：用于写请求被
+   * 明确拒绝之后，以及受理回调迟到（代次已前进）而界面还停在这个会话上时——两种情形
+   * 都说明本地投影可能已经和管家不一致，提示文案里说的「刷新」得有东西可读。
+   * 语义与选择会话时同一套：任务身份优先用 probe 给的当前轮，退回正在展示的任务；
+   * 读取全部回来即证明链路可用，收尾同样按选择会话那一套回写链路状态。
+   */
+  private async resyncCurrent(): Promise<void> {
+    const conversationId = this.store.selectedId
+    if (conversationId === '') return
+    const token = this.generation
+    const stale = () => token !== this.generation || this.store.selectedId !== conversationId
+    try {
+      const run = await this.client.probe(conversationId)
+      if (stale()) return
+      this.store.activeRun = run
+      const taskId = run?.taskId || this.currentTaskId
+      if (taskId !== '') {
+        const snapshot = await this.client.taskSnapshot(taskId)
+        if (stale()) return
+        this.currentTaskId = taskId
+        this.store.task = applySnapshot(this.store.task, snapshot, Date.now(), recoveryOf(run))
+      }
+      const history = await this.client.history({ conversationId, limit: 10 })
+      if (stale()) return
+      this.store.history = history.items
+      // 这一跳的读取（probe／快照／历史）全部回来了：链路刚刚被证明可用，状态回写为
+      // 可用，否则断线之后重读成功，离线徽标与「重试」入口还挂在界面上不消失。
+      // 文案与选择会话同一套口径：在跑的一轮交给订阅接通时的「已连接」。
+      this.store.status = 'ready'
+      if (run === null || run.state !== 'running') {
+        // 权威状态说这一轮已经不在跑：界面里「正在收尾」的请求状态随之作废。
+        this.store.stopRequested = false
+        this.store.statusDetail = run === null ? '当前没有进行中的一轮' : '本轮已结束'
+      } else {
+        // 这一轮在跑：链路可用的文案交给订阅接通时的「已连接」，这里不保留旧的断线提示。
+        this.store.statusDetail = ''
+        if (!this.client.isObserving) {
+          // 提交前的订阅已经被取消、谁也没接回来：只读订阅从 0 重放当前轮。
+          this.observe(conversationId, 0, token)
+        }
+      }
+      this.refreshPerformance()
+    } catch (error) {
+      if (!stale()) this.report(error)
     }
   }
 

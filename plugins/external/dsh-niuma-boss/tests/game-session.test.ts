@@ -106,10 +106,10 @@ class MemoryStorage {
   get dump() { return [...this.values.entries()].map(([k, v]) => k + '=' + v).join('\n') }
 }
 
-const makeSession = (storage = new MemoryStorage()) => new GameSession({
+const makeSession = (storage = new MemoryStorage(), delays: readonly number[] = [5, 5]) => new GameSession({
   parent: {} as HTMLElement, // 世界已 mock，挂载点不会真的被使用
   assetsBase: '/niuma-boss/generated/',
-  butler: { origin, delays: [5, 5] },
+  butler: { origin, delays: [...delays] },
   recovery: new RecoveryStore(storage, id => ['office', 'street', 'cafe'].includes(id)),
 })
 
@@ -124,11 +124,14 @@ describe('身份与归属边界', () => {
     session.stop()
   })
 
-  it('换成没有会话的账号：旧任务、历史与选择全部清空', async () => {
+  it('换成没有会话的账号：旧任务、历史、选择与草稿全部清空', async () => {
     const session = makeSession()
     await session.refresh()
     const store = useTaskBookStore()
     expect(store.task.goal).toBe('写博客')
+    // 上一位登录人在输入框里写下的派活与回复草稿：换人后同样不留给下一位。
+    store.assignDraft = '上一位登录人的派活草稿'
+    store.replyDrafts = { s1: '上一位登录人的回复草稿' }
     stub.state.identityBody = { mode: 'authenticated', key: 'user:b', label: '已登录', authPath: '/auth', routePrefix: '/fixture-butler', contractVersion: 1 }
     stub.state.conversations = []
     stub.state.history = []
@@ -140,6 +143,8 @@ describe('身份与归属边界', () => {
     expect(store.task.goal).toBe('')
     expect(store.task.subtasks).toHaveLength(0)
     expect(store.history).toHaveLength(0)
+    expect(store.assignDraft).toBe('')
+    expect(store.replyDrafts).toEqual({})
     session.stop()
   })
 
@@ -1068,6 +1073,417 @@ describe('人物表现与业务状态映射', () => {
     expect(store.dialogue).toBeNull()
     expect(store.prompt).toBeNull()
     expect(performanceOf().every(c => c.action === 'at_post')).toBe(true)
+    session.stop()
+  })
+})
+
+/**
+ * 第五切片：故障恢复与竞争场景。逐项对着验收行落地——
+ * 断流、reset、权限失效、换用户、后台恢复、双入口并发、迟到回复及 stop；
+ * 并核验三条不变量：旧请求释放后不写回新会话、重试不重复执行、正文不持久化到浏览器。
+ * 桩端到端（本文件）覆盖状态机与权限语义；真实事件流的并发扇出另外由浏览器用例覆盖。
+ */
+describe('故障恢复与竞争场景', () => {
+  const identityOf = (key: string) => ({ mode: 'authenticated', key, label: '已登录', authPath: '/auth', routePrefix: '/fixture-butler', contractVersion: 1 })
+
+  it('断流：正文保持可浏览、按最后序号续订后继续', async () => {
+    // 重连间隔调长：断流后的「离线」窗口要能被观察到（默认 5ms 太短，不用于断言时序）。
+    stub.state.streamQueue.push({ events: [
+      { type: 'run', runId: 'run-1', state: 'running', taskId: 'task-1' },
+      { type: 'subtask_delta', taskId: 'task-1', id: 's1', agentId: 'blog', delta: '（后半段）', seq: 6, runId: 'run-1' },
+    ], destroy: true })
+    stub.state.streamQueue.push({ events: [
+      { type: 'subtask', taskId: 'task-1', id: 's1', state: 'succeeded', agentId: 'blog', detail: '完成', seq: 7, runId: 'run-1' },
+      { type: 'summary', taskId: 'task-1', text: '完成', state: 'completed', seq: 8, runId: 'run-1' },
+    ], done: true })
+    const session = makeSession(new MemoryStorage(), [400, 400])
+    await session.refresh()
+    const store = useTaskBookStore()
+    // 断流：链路落入断线提示，已有正文仍可浏览（不清空、不推算）。
+    await vi.waitFor(() => expect(store.status).toBe('offline'))
+    expect(store.task.subtasks[0]?.text).toContain('草稿写到一半')
+    expect(store.task.subtasks[0]?.text).toContain('（后半段）')
+    // 有界重连用最后序号续订，这一轮照常收尾。
+    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    expect(stub.state.subscriptions).toEqual([0, 6])
+    // 这里不写「不重发写请求」：本用例全程没有写请求，0 次请求没有区分度。
+    // 断流后只续订不重新提交的真证据（含请求次数与执行次数）在
+    // tests/butler-client.test.ts 的「断流不重发写请求」。
+    session.stop()
+  })
+
+  it('reset：重读权威快照、从窗口左边缘之前续订，正文不重复也不丢', async () => {
+    // 真实语义：重放里含窗口内还留着的增量；续订点回到左边缘之前，服务端重发的第一条
+    // 严格大于已读最大序号，因此既不重复计入、也不漏掉窗口内的片段。
+    // 权威快照也按真实节奏演进：本轮结束时才落库（终态 + 完整正文），重读才有得补。
+    stub.state.snapshotFor = reads => reads <= 2
+      ? { ...defaultSnapshot, subtasks: [{ ...defaultSnapshot.subtasks[0], state: 'running', result: '' }] }
+      : {
+          ...defaultSnapshot, state: 'completed', summary: '完成',
+          subtasks: [{ ...defaultSnapshot.subtasks[0], state: 'succeeded', result: '（片段甲）（片段乙）' }],
+        }
+    stub.state.streamQueue.push({ events: [
+      { type: 'run', runId: 'run-1', state: 'running', taskId: 'task-1' },
+      { type: 'subtask_delta', taskId: 'task-1', id: 's1', agentId: 'blog', delta: '（片段甲）', seq: 2, runId: 'run-1' },
+      { type: 'reset', runId: 'run-1', seq: 2001, windowStart: 1000 },
+    ], done: true })
+    stub.state.streamQueue.push({ events: [
+      { type: 'subtask_delta', taskId: 'task-1', id: 's1', agentId: 'blog', delta: '（片段乙）', seq: 1000, runId: 'run-1' },
+      { type: 'summary', taskId: 'task-1', text: '完成', state: 'completed', seq: 1001, runId: 'run-1' },
+    ], done: true })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    // 正文各出现一次：甲是 reset 前已经收到的（保留），乙是窗口内重连后收到的；
+    // 本轮结束后按权威快照补齐，不完整提示随之清除。
+    expect(store.task.subtasks[0]?.text).toBe('（片段甲）（片段乙）')
+    expect(store.task.incomplete).toBe(false)
+    // reset 是正常恢复信号：重读快照三次（装载、reset、结束后补齐），续订点回到窗口左边缘之前。
+    expect(stub.state.snapshotReads).toBe(3)
+    expect(stub.state.subscriptions).toEqual([0, 999])
+    expect(store.status).toBe('ready')
+    session.stop()
+  })
+
+  it('订阅流登录失效（401）：清空可能属于他人的数据并给出未登录状态', async () => {
+    stub.state.eventsStatus = 401
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    await vi.waitFor(() => expect(store.status).toBe('unauthorized'))
+    expect(store.conversations).toHaveLength(0)
+    expect(store.task.goal).toBe('')
+    expect(store.history).toHaveLength(0)
+    session.stop()
+  })
+
+  it('换用户：旧身份待重试的提交不跟随到新身份，重试入口不会把旧正文发到新身份下', async () => {
+    stub.state.run = null
+    stub.state.chatQueue.push({ acceptThenDestroy: true, done: true, events: [
+      { type: 'conversation', conversationId: 'conv-1' },
+      { type: 'run', runId: 'run-lost', state: 'running', taskId: '' },
+      { type: 'summary', taskId: 'task-lost', text: '完成', state: 'completed', seq: 1, runId: 'run-lost' },
+    ] })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    await session.submitTask('写一篇新博客')
+    expect(store.pendingSubmit?.message).toBe('写一篇新博客')
+    expect(stub.state.chatExecutions).toBe(1)
+    // 换成另一位登录人（有自己的会话）：旧身份的冻结提交随身份一起作废。
+    stub.state.identityBody = identityOf('user:b')
+    stub.state.conversations = [{ id: 'conv-b', title: 'B 的任务', createdAt: 1, updatedAt: 2, taskCount: 0 }]
+    stub.state.history = []
+    await session.refresh()
+    expect(store.selectedId).toBe('conv-b')
+    expect(store.pendingSubmit).toBeNull()
+    // 重试入口已经没有可发的东西：旧正文不会被发到新身份下。
+    session.retrySubmit()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.chatRequests).toHaveLength(1)
+    session.stop()
+  })
+
+  it('旧会话的在途提交：切到新会话后不写回新会话，也不把新会话的写入口锁死', async () => {
+    stub.state.conversations = [
+      { id: 'conv-1', title: '博客任务', createdAt: 1, updatedAt: 2, taskCount: 1 },
+      { id: 'conv-2', title: '另一个会话', createdAt: 1, updatedAt: 2, taskCount: 1 },
+    ]
+    // 写响应迟到 150ms：到达时界面已经切到 conv-2。
+    stub.state.chatQueue.push({ delayMs: 150, done: true, events: [
+      { type: 'conversation', conversationId: 'conv-1' },
+      { type: 'run', runId: 'run-late', state: 'running', taskId: 'task-1' },
+      { type: 'subtask', taskId: 'task-1', id: 's1', state: 'succeeded', agentId: 'blog', detail: '完成', seq: 9, runId: 'run-late' },
+      { type: 'summary', taskId: 'task-1', text: '迟到的一轮完成', state: 'completed', seq: 10, runId: 'run-late' },
+    ] })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    void session.submitTask('写一篇新博客')
+    await vi.waitFor(() => expect(store.pendingSubmit).not.toBeNull())
+    expect(store.submitting).toBe(true)
+    // 切到另一个会话：conv-1 的冻结提交随选择作废，在途提交的界面锁一起解开。
+    stub.state.run = null
+    stub.state.history = [{ id: 'task-2', conversationId: 'conv-2', goal: '另一个会话的任务', state: 'completed', createdAt: 3, updatedAt: 4, subtaskTotal: 0, subtaskDone: 0 }]
+    stub.state.snapshotFor = () => ({ ...defaultSnapshot, id: 'task-2', goal: '另一个会话的任务', state: 'completed', subtasks: [] })
+    await session.selectConversation('conv-2')
+    expect(store.pendingSubmit).toBeNull()
+    expect(store.submitting).toBe(false)
+    expect(store.task.goal).toBe('另一个会话的任务')
+    // 旧请求的迟到受理与事件到达：代次守卫拦下，新会话的状态一个字都不变。
+    await new Promise(resolve => setTimeout(resolve, 250))
+    expect(store.selectedId).toBe('conv-2')
+    expect(store.task.goal).toBe('另一个会话的任务')
+    expect(store.task.state).toBe('completed')
+    expect(store.conversations.map(item => item.id)).toEqual(['conv-1', 'conv-2'])
+    session.stop()
+  })
+
+  it('迟到回复：等待已被别的入口结束，按 409 not_waiting 提示且不重试，终态仍以管家为准', async () => {
+    stub.state.streamQueue.push({ events: [
+      { type: 'run', runId: 'run-1', state: 'running', taskId: 'task-1' },
+      { type: 'subtask', taskId: 'task-1', id: 's1', state: 'waiting_user', detail: '两个版本选哪个？', seq: 6, runId: 'run-1' },
+    ], done: false })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    await vi.waitFor(() => expect(store.task.subtasks[0]?.state).toBe('waiting_user'))
+    // 另一个入口先停了这一轮（原始 HTTP 入口，共享同一份权威记录）。
+    const stopped = await fetch(origin + '/fixture-butler/stop', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'conv-1', taskId: 'task-1' }),
+    })
+    expect(stopped.status).toBe(200)
+    stub.state.run = null
+    stub.state.snapshot = { ...defaultSnapshot, state: 'cancelled', summary: '这一轮已按请求停止。', subtasks: [{ ...defaultSnapshot.subtasks[0], state: 'cancelled' }] }
+    // 用户此刻才点「回复」：等待已经过期，管家按稳定码拒绝。
+    stub.state.replyQueue.push({ status: 409, body: { error: '这位成员当前没有在等你回话', code: 'not_waiting' } })
+    const readsBefore = stub.state.snapshotReads
+    await session.replySubtask('s1', '采用第一版')
+    expect(store.notice).toContain('没有在等你回话')
+    expect(store.pendingSubmit).toBeNull()
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.replyRequests).toHaveLength(1) // 明确拒绝不留待重试，也不自动重发
+    // 明确拒绝之后按权威状态自读一次（只读）：提示里说的「刷新」有东西可读，
+    // 本地不用任何推测去补「回复成功」或失败。
+    await vi.waitFor(() => expect(store.task.state).toBe('cancelled'))
+    expect(stub.state.snapshotReads).toBeGreaterThan(readsBefore)
+    expect(stub.state.replyRequests).toHaveLength(1)
+    session.stop()
+  })
+
+  it('迟到 stop：本轮已被别的入口结束 / 已换任务 → 幂等空操作提示，不重试也不动待重试提交', async () => {
+    stub.state.streamQueue.push({ events: [
+      { type: 'run', runId: 'run-1', state: 'running', taskId: 'task-1' },
+      { type: 'subtask', taskId: 'task-1', id: 's1', state: 'running', seq: 6, runId: 'run-1' },
+    ], done: false })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    // 先冻结一份待重试的提交（响应未知）：stop 的结果不得把它清掉。
+    stub.state.chatQueue.push({ acceptThenDestroy: true, done: true, events: [{ type: 'run', runId: 'run-lost', state: 'running', taskId: '' }] })
+    await session.submitTask('写一篇新博客')
+    expect(store.pendingSubmit).not.toBeNull()
+    // 停止请求带的是当前这一轮的 taskId：本轮已经结束，管家按幂等空操作回 accepted:false。
+    stub.state.stopQueue.push({ body: { ok: true, accepted: false, reason: '这个任务已经不在执行了' } })
+    await session.stopRound()
+    expect(store.notice).toContain('本轮无需停止')
+    expect(store.notice).toContain('已经不在执行了')
+    expect(store.stopRequested).toBe(false)
+    expect(stub.state.stopRequests[0]).toMatchObject({ conversationId: 'conv-1', taskId: 'task-1' })
+    // 旧任务迟到的取消不会碰到该会话随后开的新任务：taskId 对不上时同样只回幂等空操作。
+    stub.state.run = { runId: 'run-2', state: 'running', taskId: 'task-2', seq: 2, windowStart: 1 }
+    await session.stopRound()
+    expect(stub.state.stopRequests[1]).toMatchObject({ conversationId: 'conv-1', taskId: 'task-1' })
+    expect(store.notice).toContain('本轮无需停止')
+    expect(store.pendingSubmit).not.toBeNull() // 与待重试提交无关，stop 的失败/空操作都不碰它
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.stopRequests).toHaveLength(2) // 两次都是用户按的，没有自动重试
+    session.stop()
+  })
+
+  it('重试不重复执行：响应未知后原样重试，管家只执行一次并按首次那一轮收敛', async () => {
+    stub.state.run = null
+    stub.state.chatQueue.push({ acceptThenDestroy: true, done: true, events: [
+      { type: 'conversation', conversationId: 'conv-1' },
+      { type: 'run', runId: 'run-retry', state: 'running', taskId: '' },
+      { type: 'plan', taskId: 'task-retry', goal: '写一篇新博客', seq: 1, runId: 'run-retry', subtasks: [{ id: 's1', goal: '起草', agentId: 'blog', displayName: '博客' }] },
+      { type: 'subtask', taskId: 'task-retry', id: 's1', state: 'succeeded', agentId: 'blog', detail: '完成', seq: 2, runId: 'run-retry' },
+      { type: 'summary', taskId: 'task-retry', text: '按目标完成。', state: 'completed', seq: 3, runId: 'run-retry' },
+    ] })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    store.assignDraft = '写一篇新博客'
+    await session.submitTask(store.assignDraft)
+    expect(store.notice).toContain('无法确认')
+    expect(store.pendingSubmit?.message).toBe('写一篇新博客')
+    const requestId = store.pendingSubmit?.requestId ?? ''
+    expect(stub.state.chatExecutions).toBe(1)
+    session.retrySubmit()
+    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    // 两次请求、一次执行：第二次是幂等重放（同 requestId 同正文），回放首次那一轮。
+    expect(stub.state.chatRequests).toHaveLength(2)
+    expect(stub.state.chatRequests[1]).toEqual(stub.state.chatRequests[0])
+    expect(stub.state.duplicateSubmits).toEqual([requestId])
+    expect(stub.state.chatExecutions).toBe(1)
+    expect(store.task.taskId).toBe('task-retry')
+    expect(store.pendingSubmit).toBeNull()
+    expect(store.assignDraft).toBe('')
+    session.stop()
+  })
+
+  it('双入口并发：两个入口读同一份权威任务；第二次提交遇 run_busy 不重试；停后两边收敛一致', async () => {
+    stub.state.run = { runId: 'run-a', state: 'running', taskId: 'task-a', seq: 4, windowStart: 1 }
+    stub.state.snapshot = { ...defaultSnapshot, id: 'task-a', goal: '双入口任务', state: 'running' }
+    stub.state.history = [{ id: 'task-a', conversationId: 'conv-1', goal: '双入口任务', state: 'running', createdAt: 1, updatedAt: 2, subtaskTotal: 1, subtaskDone: 0 }]
+    // 两个入口各自订阅同一会话（每个订阅取一段剧本）。
+    stub.state.streamQueue.push({ events: [{ type: 'run', runId: 'run-a', state: 'running', taskId: 'task-a' }], done: false })
+    stub.state.streamQueue.push({ events: [{ type: 'run', runId: 'run-a', state: 'running', taskId: 'task-a' }], done: false })
+    const entryA = makeSession()
+    await entryA.refresh()
+    const storeA = useTaskBookStore()
+    // 第二个入口是另一个页面上下文：它有自己的 store 实例，读同一份权威记录。
+    setActivePinia(createPinia())
+    const entryB = makeSession()
+    await entryB.refresh()
+    const storeB = useTaskBookStore()
+    for (const view of [storeA.task, storeB.task]) {
+      expect(view.taskId).toBe('task-a')
+      expect(view.goal).toBe('双入口任务')
+      expect(view.subtasks[0]?.text).toBe('草稿写到一半')
+    }
+    // 入口 B 再提交：同一会话同时只允许一轮，管家回 409 run_busy；提示且不自动重试。
+    stub.state.chatQueue.push({ status: 409, body: { error: '牛马大总管正在处理上一条消息，请先停止或等待完成', code: 'run_busy' } })
+    storeB.assignDraft = '再派一个活'
+    await entryB.submitTask(storeB.assignDraft)
+    expect(storeB.notice).toContain('正在处理上一条消息')
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.chatRequests).toHaveLength(1)
+    // 被明确拒绝之后重读权威状态：入口 B 看到的是同一轮（run-a），不是自己想象的状态。
+    await vi.waitFor(() => expect(storeB.activeRun?.runId).toBe('run-a'))
+    // 其中任意一个入口停止这一轮：两边再读权威记录时看到同一份终态。
+    stub.state.run = null
+    stub.state.snapshot = { ...defaultSnapshot, id: 'task-a', goal: '双入口任务', state: 'cancelled', summary: '这一轮已按请求停止。', subtasks: [{ ...defaultSnapshot.subtasks[0], state: 'cancelled' }] }
+    stub.state.history = [{ id: 'task-a', conversationId: 'conv-1', goal: '双入口任务', state: 'cancelled', createdAt: 1, updatedAt: 3, subtaskTotal: 1, subtaskDone: 0 }]
+    await entryA.refresh()
+    expect(storeA.task.taskId).toBe('task-a')
+    expect(storeA.task.state).toBe('cancelled')
+    expect(storeA.task.summary).toBe('这一轮已按请求停止。')
+    await entryB.refresh()
+    expect(storeB.task.taskId).toBe('task-a')
+    expect(storeB.task.state).toBe('cancelled')
+    expect(storeB.task.summary).toBe('这一轮已按请求停止。')
+    entryB.stop()
+    entryA.stop()
+  })
+
+  it('同会话刷新后点重试：第 1 次的迟到受理不得清掉第 2 次的冻结提交（两者同 requestId）', async () => {
+    stub.state.run = null
+    // 第 1 次提交：受理与响应都迟到 300ms（到达时用户已经回过前台并点过重试）。
+    stub.state.chatQueue.push({ delayMs: 300, done: true, events: [
+      { type: 'conversation', conversationId: 'conv-1' },
+      { type: 'run', runId: 'run-first', state: 'running', taskId: '' },
+      { type: 'summary', taskId: 'task-first', text: '完成', state: 'completed', seq: 1, runId: 'run-first' },
+    ] })
+    // 第 2 次（点「重试提交」）响应也丢失：结果不明，冻结提交必须留在界面上等下一次重试。
+    stub.state.chatQueue.push({ destroy: true })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    void session.submitTask('写一篇新博客')
+    expect(store.pendingSubmit?.message).toBe('写一篇新博客')
+    const requestId = store.pendingSubmit?.requestId ?? ''
+    expect(requestId).not.toBe('')
+    expect(store.submitting).toBe(true)
+    // 回前台刷新：同一会话重选（releaseWriteState），写锁解开、冻结提交保留。
+    session.onHidden()
+    session.onVisible()
+    await vi.waitFor(() => expect(store.submitting).toBe(false))
+    expect(store.pendingSubmit?.requestId).toBe(requestId)
+    // 用户点「重试提交」：第 2 次在途，用的是同一份冻结提交（同 requestId 同正文）。
+    session.retrySubmit()
+    await vi.waitFor(() => expect(stub.state.chatRequests).toHaveLength(2))
+    await vi.waitFor(() => expect(store.submitting).toBe(false))
+    expect(stub.state.chatRequests[1]).toEqual(stub.state.chatRequests[0])
+    // 第 2 次也「结果不明」：冻结提交留着，重试入口（pendingSubmit）可用。
+    expect(store.pendingSubmit?.requestId).toBe(requestId)
+    expect(store.notice).toContain('无法确认')
+    // 第 1 次的受理此刻才到达：它属于上一次尝试，不得清掉第 2 次留下的冻结提交。
+    await new Promise(resolve => setTimeout(resolve, 400))
+    expect(store.pendingSubmit?.requestId).toBe(requestId)
+    expect(store.pendingSubmit?.message).toBe('写一篇新博客')
+    expect(store.notice).toContain('无法确认')
+    // 迟到受理不放大概率：两次请求、一次执行，重试还是同一份内容。
+    expect(stub.state.chatRequests).toHaveLength(2)
+    expect(stub.state.chatExecutions).toBe(1)
+    session.stop()
+  })
+
+  it('写请求被明确拒绝后的只读重读成功：链路状态回写为可用，离线徽标与重试入口消失', async () => {
+    // 装载时快照读取失败一次：链路落入断线态，且没有任何订阅在跑。
+    stub.state.snapshotStatus = 500
+    stub.state.snapshotStatusFromRead = 1
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    expect(store.status).toBe('offline')
+    // 链路恢复（读取都能成功），用户此刻派活：管家按 run_busy 明确拒绝。
+    stub.state.snapshotStatus = 0
+    stub.state.run = null
+    stub.state.chatQueue.push({ status: 409, body: { error: '牛马大总管正在处理上一条消息，请先停止或等待完成', code: 'run_busy' } })
+    await session.submitTask('再派一个活')
+    expect(store.notice).toContain('正在处理上一条消息')
+    // 明确拒绝之后按权威状态自读一次：读取全部回来即证明链路可用，状态回写为
+    // 可用——否则断线徽标与任务本里的「重试」入口会一直挂在界面上。
+    await vi.waitFor(() => expect(store.status).toBe('ready'))
+    expect(store.statusDetail).toBe('当前没有进行中的一轮')
+    session.stop()
+  })
+
+  it('后台/回前台撞上在途提交：不重发、冻结提交不丢，受理后的这一轮仍接回界面', async () => {
+    stub.state.run = null
+    // 受理与响应都迟到：提交在途时用户切后台再回前台（回前台会重读权威状态、代次前进）。
+    stub.state.chatQueue.push({ delayMs: 120, done: true, events: [
+      { type: 'conversation', conversationId: 'conv-1' },
+      { type: 'run', runId: 'run-new', state: 'running', taskId: '' },
+      { type: 'plan', taskId: 'task-new', goal: '写一篇新博客', seq: 1, runId: 'run-new', subtasks: [{ id: 's1', goal: '起草', agentId: 'blog', displayName: '博客' }] },
+      { type: 'subtask', taskId: 'task-new', id: 's1', state: 'succeeded', agentId: 'blog', detail: '完成', seq: 2, runId: 'run-new' },
+      { type: 'summary', taskId: 'task-new', text: '完成', state: 'completed', seq: 3, runId: 'run-new' },
+    ] })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    store.assignDraft = '写一篇新博客'
+    void session.submitTask(store.assignDraft)
+    await vi.waitFor(() => expect(store.pendingSubmit).not.toBeNull())
+    const requestId = store.pendingSubmit?.requestId ?? ''
+    expect(requestId).not.toBe('')
+    // 管家那边这一轮已经跑起来了（probe 看得到），回前台的重读会带上它。
+    stub.state.run = { runId: 'run-new', state: 'running', taskId: 'task-new', seq: 3, windowStart: 1 }
+    stub.state.history = [{ id: 'task-new', conversationId: 'conv-1', goal: '写一篇新博客', state: 'running', createdAt: 3, updatedAt: 4, subtaskTotal: 1, subtaskDone: 0 }]
+    stub.state.snapshot = { ...defaultSnapshot, id: 'task-new', goal: '写一篇新博客', state: 'running' }
+    stub.state.streamQueue.push({ events: [
+      { type: 'run', runId: 'run-new', state: 'running', taskId: 'task-new' },
+      { type: 'subtask', taskId: 'task-new', id: 's1', state: 'succeeded', agentId: 'blog', detail: '完成', seq: 4, runId: 'run-new' },
+      { type: 'summary', taskId: 'task-new', text: '完成', state: 'completed', seq: 5, runId: 'run-new' },
+    ], done: true })
+    session.onHidden()
+    session.onVisible()
+    // 这一轮照常被界面接回来：任务身份、权威状态与终态都来自快照与事件。
+    await vi.waitFor(() => expect(store.task.taskId).toBe('task-new'))
+    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    // 提交没有被后台/回前台放大：只有一次请求，冻结提交也已被那一次受理清掉。
+    await vi.waitFor(() => expect(store.pendingSubmit).toBeNull())
+    expect(stub.state.chatRequests).toHaveLength(1)
+    expect(stub.state.chatRequests[0]?.requestId).toBe(requestId)
+    session.stop()
+  })
+
+  it('故障场景之后正文仍不落盘：浏览器存储只有位置四项，提交正文与 requestId 都不在其中', async () => {
+    stub.state.run = null
+    stub.state.chatQueue.push({ acceptThenDestroy: true, done: true, events: [{ type: 'run', runId: 'run-lost', state: 'running', taskId: '' }] })
+    const storage = new MemoryStorage()
+    const session = makeSession(storage)
+    await session.refresh()
+    const store = useTaskBookStore()
+    store.assignDraft = '写一篇新博客'
+    await session.submitTask(store.assignDraft)
+    const requestId = store.pendingSubmit?.requestId ?? ''
+    expect(requestId).not.toBe('')
+    // 故障（断流 + 结果不明 + 手动重试）之后照常落盘位置：存储里不该出现任何正文或提交标识。
+    stub.state.chatQueue.push({ destroy: true })
+    session.retrySubmit()
+    await new Promise(resolve => setTimeout(resolve, 60))
+    worldMock.options?.onFeet?.({ map: 'office', cell: [30, 20], facing: 'west' })
+    const dump = storage.dump
+    expect(dump).not.toContain('写一篇新博客')
+    expect(dump).not.toContain(requestId)
+    expect(dump).not.toContain('requestId')
+    expect(dump).not.toContain('user:a')
+    const snapshotLine = [...storage.values.entries()].find(([key]) => key !== LAST_SCOPE_KEY && !key.endsWith('last'))
+    expect(Object.keys(JSON.parse(snapshotLine![1]))).toEqual(['map', 'cell', 'facing', 'preferences'])
     session.stop()
   })
 })

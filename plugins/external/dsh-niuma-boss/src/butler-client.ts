@@ -20,6 +20,11 @@
  *
  * 入口发现从约定的默认 `/butler/identity` 起步：管家在 identity 里交出真实的
  * `routePrefix` 与 `contractVersion`，之后所有请求都改用返回的前缀，不写死部署配置。
+ *
+ * 重连与取消：只读订阅断线按 {@link RECONNECT_DELAYS} 逐级退避、末项即上限
+ * （`reconnectDelay`），不无限增长；等待间隔里 `cancelObserve()` 或 `stop()` 立即
+ * 生效并停止重连。写请求一律不自动重试——断流不重发、stop 不重发、响应未知留给
+ * 用户用同一份 `requestId` 手动重试。
  */
 import { readEventStream, STREAM_DONE } from './stream.ts'
 import { CONTRACT_VERSION, type ButlerEvent, type ConversationSummary, type IdentityInfo, type RunInfo, type TaskSnapshot } from './task-projection.ts'
@@ -58,9 +63,19 @@ export class ButlerError extends Error {
 
 const IDENTITY_PATH_DEFAULT = '/butler/identity'
 const ROUTE_PREFIX_PATTERN = /^\/[a-z0-9][a-z0-9/-]*$/
-const RECONNECT_DELAYS = [1000, 2000, 5000, 10000]
+/** 只读订阅的重连间隔：逐级退避，末项即上限（此后一直按上限重试，不无限增长）。 */
+export const RECONNECT_DELAYS = [1000, 2000, 5000, 10000]
 /** 写请求「是否受理」的等待上限：只约束拿到响应头，不约束随后的事件流。 */
 const WRITE_ACCEPT_TIMEOUT_MS = 15_000
+
+/**
+ * 第 `attempt` 次重连前等待的毫秒数：取序列里对应的一项，超过序列长度后一直用末项。
+ * 抽成纯函数是为了让「退避有上限」这条约束能被单独验证，不依赖真实计时。
+ */
+export function reconnectDelay(delays: readonly number[], attempt: number): number {
+  if (delays.length === 0) return 0
+  return delays[Math.max(0, Math.min(attempt, delays.length - 1))] ?? 0
+}
 
 export interface ObserveHandlers {
   /** 收到一条业务事件（run/plan/subtask/summary/…，不含 reset）。 */
@@ -538,7 +553,7 @@ export class ButlerClient {
           handlers.onRoundEnd?.(lastRunState, seq)
           return
         }
-        const delay = this.delays[Math.min(attempt++, this.delays.length - 1)]
+        const delay = reconnectDelay(this.delays, attempt++)
         this.status('offline', '连接异常，' + Math.round(delay / 1000) + ' 秒后重试')
         await sleepAbortable(delay, obs.signal)
       }

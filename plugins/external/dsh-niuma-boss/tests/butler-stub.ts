@@ -16,6 +16,11 @@ async function readBody(request: IncomingMessage): Promise<Record<string, unknow
  * 管家契约桩（测试共用）：按契约 v1 形状提供 identity、会话、历史、快照、probe
  * 与 SSE，全部状态可变，用于复现迟到响应、授权失效与换轮等时序场景。
  * 只服务回环地址，数据全部自造，不涉及任何真实用户数据。
+ *
+ * 能力边界：幂等记录只在进程内存里，受理后「事件日志是否还能回放」用剧本字段
+ * `lostLog` 显式表达（真实管家按事件日志头是不是那一轮判断），保留期与跨重启
+ * 持久化都不模拟；`lostLog` 命中时按契约回 409——那一轮已有终态证据
+ * （`run_already_finished`）或只有受理、结果不明（`run_result_unknown`），两种都不重新执行。
  */
 
 export const identity = { mode: 'authenticated', key: 'user:a', label: '已登录', authPath: '/auth', routePrefix: '/fixture-butler', contractVersion: 1 }
@@ -32,16 +37,46 @@ export interface WritePlan {
   /** 非 0 时按该状态码回 JSON 响应（body 字段即响应体，含 error/code）。 */
   status?: number
   body?: object
-  /** 收到请求后不回应直接断开连接：复现「响应未知」。 */
+  /** 收到请求后不回应直接断开连接：复现「响应未知」，且这次**没有**受理。 */
   destroy?: boolean
   /** 收到请求后永不回应：复现受理超时（配合客户端缩短的受理时限）。 */
   hang?: boolean
   /** 受理成立、事件发出后断开连接：复现「受理已知、事件流中断」。 */
   cut?: boolean
+  /**
+   * 受理成立（这一轮真的在服务端跑起来、幂等占位落下）但响应没有送到：
+   * 复现「提交可能已被受理、结果不明」——客户端只能保留原正文手动重试，重试按
+   * requestId 拿回**同一轮**，不重复执行。
+   */
+  acceptThenDestroy?: boolean
   /** 受理成立后写在响应事件流上的事件序列。 */
   events?: object[]
   /** 事件发完后是否以 [DONE] 结束；false 表示这一轮还在跑、连接保持打开。 */
   done?: boolean
+  /** `/stop` 响应前的延迟（毫秒）：复现停止请求迟到（等它到达时本轮已被别的入口结束）。 */
+  delayMs?: number
+  /**
+   * 首次那一轮的事件日志已经不可回放（契约里的两种情形：被下一轮覆盖，或受理后
+   * 进程重启、只在内存里的日志丢掉）。同一个 `requestId` 的同一份正文再次到达时
+   * 没有过程可回放，按契约回 `409`：那一轮已有终态证据（有 `summary` 事件）回
+   * `run_already_finished`，否则（受理过、没有终态证据）回 `run_result_unknown`；
+   * 两种都**不重新执行**，也不计入幂等重放。
+   */
+  lostLog?: boolean
+}
+
+/** 一次受理的幂等记录：同 requestId 同正文再提交时回放**首次那一轮**（不重复执行）。 */
+interface IdempotencyRecord {
+  readonly fingerprint: string
+  /** 回放形态：首次那一轮的凭据（run 头）与事件流，从第一条事件重新发一遍。 */
+  readonly replay: WritePlan
+  /** 首次那一轮的凭据：日志不可回放时回在 409 里，供客户端去读任务快照。 */
+  readonly runId: string
+  readonly conversationId: string
+  /** 首次那一轮是否已有终态证据（`summary`）：决定不可回放时的错误码。 */
+  readonly finished: boolean
+  /** 首次那一轮的日志是否已不可回放（剧本字段 `lostLog`）。 */
+  readonly lostLog: boolean
 }
 
 /** `/chat` 的缺省剧本：一段受理后直奔完成的正常轮。 */
@@ -107,10 +142,19 @@ export class ButlerStubServer {
     replyQueue: [] as WritePlan[],
     /** POST /stop 的剧本；null 用默认 {accepted:true}。 */
     stopPlan: null as WritePlan | null,
+    /** POST /stop 的剧本队列（先到先用）；用尽后落到 stopPlan。 */
+    stopQueue: [] as WritePlan[],
     /** 收到的写请求体（含 requestId 与正文，供幂等与「不重试」断言）。 */
     chatRequests: [] as Record<string, unknown>[],
     replyRequests: [] as Record<string, unknown>[],
     stopRequests: [] as Record<string, unknown>[],
+    /** 真正**执行**的轮次数（受理成立才 +1）：幂等重试不回放执行，只回放首次那一轮的凭据。 */
+    chatExecutions: 0,
+    replyExecutions: 0,
+    /** 按 requestId 命中的幂等重放次数（同一份提交再次到达）。 */
+    duplicateSubmits: [] as string[],
+    /** requestId → 首次受理的幂等记录。 */
+    idempotency: new Map<string, IdempotencyRecord>(),
     /** 每一个到达桩的请求路径：用于断言某条通路「一次调用都没有」（例如普通 NPC 对白）。 */
     requests: [] as string[],
   }
@@ -170,7 +214,12 @@ export class ButlerStubServer {
       if (step.status !== undefined) return json(step.status, { error: 'x', code: 'http_error' })
       response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
       for (const event of step.events ?? []) response.write('data: ' + JSON.stringify(event) + '\n\n')
-      if (step.destroy) { response.destroy(); return }
+      if (step.destroy) {
+        // 先把已经写的事件真正发出去，再断开：复现「读到了几条事件之后连接中断」。
+        response.flushHeaders()
+        setTimeout(() => response.destroy(), 20)
+        return
+      }
       if (step.done !== false) response.write('data: [DONE]\n\n')
       response.end()
       return
@@ -178,28 +227,103 @@ export class ButlerStubServer {
     if (url.pathname === '/fixture-butler/chat' && request.method === 'POST') {
       const payload = await readBody(request)
       state.chatRequests.push(payload)
-      return this.serveWrite(state.chatQueue.shift() ?? defaultChatPlan(payload), response)
+      return this.serveWrite(this.planned('chat', payload, state.chatQueue), response)
     }
     if (url.pathname === '/fixture-butler/reply' && request.method === 'POST') {
       const payload = await readBody(request)
       state.replyRequests.push(payload)
-      return this.serveWrite(state.replyQueue.shift() ?? defaultReplyPlan(payload), response)
+      return this.serveWrite(this.planned('reply', payload, state.replyQueue), response)
     }
     if (url.pathname === '/fixture-butler/stop' && request.method === 'POST') {
       const payload = await readBody(request)
       state.stopRequests.push(payload)
-      const plan = state.stopPlan
-      if (plan?.destroy) { response.destroy(); return }
-      if (plan?.hang) return
-      if (plan?.status !== undefined) return json(plan.status, plan.body ?? { error: '停止失败', code: 'http_error' })
-      // /stop 的成功响应是 JSON（accepted:false 是幂等空操作，不是错误）。
-      return json(200, plan?.body ?? { ok: true, accepted: true })
+      const plan = state.stopQueue.shift() ?? state.stopPlan ?? this.defaultStopPlan(payload)
+      const respond = () => {
+        if (plan.destroy) { response.destroy(); return }
+        if (plan.hang) return
+        if (plan.status !== undefined) return json(plan.status, plan.body ?? { error: '停止失败', code: 'http_error' })
+        // /stop 的成功响应是 JSON（accepted:false 是幂等空操作，不是错误）。
+        return json(200, plan.body ?? { ok: true, accepted: true })
+      }
+      if (plan.delayMs !== undefined) { setTimeout(respond, plan.delayMs); return }
+      respond()
+      return
     }
     return json(404, { error: 'not found', code: 'not_found' })
   }
 
+  /**
+   * 没有显式剧本时的 `/stop` 契约行为：带 `taskId` 时只中止「当前这一轮确实在跑那个
+   * 任务」的情况——旧任务迟到的取消请求不会碰到该会话随后开的新任务，按幂等空操作回
+   * `accepted:false`（不是错误）。
+   */
+  private defaultStopPlan(payload: Record<string, unknown>): WritePlan {
+    const taskId = typeof payload.taskId === 'string' ? payload.taskId : ''
+    const current = this.state.run?.taskId ?? ''
+    if (taskId !== '' && taskId !== current) {
+      return { body: { ok: true, accepted: false, reason: '这个任务已经不在执行了' } }
+    }
+    return { body: { ok: true, accepted: true } }
+  }
+
+  /**
+   * 按 requestId 决定这次写请求的剧本。契约里「同 owner + 同类型 + 同 requestId」是同一次
+   * 提交：首次到达按剧本队列受理；再次到达且正文相同时——首次那一轮的日志还能回放就
+   * **回放首次那一轮**（同一个 runId，不重新执行），日志已经不可回放（`lostLog`）则按契约
+   * 回 409（终态已落库 `run_already_finished`／只有受理 `run_result_unknown`）；正文不同则
+   * 回 409 idempotency_conflict。不带 requestId 时每次都是新一轮。
+   */
+  private planned(kind: 'chat' | 'reply', payload: Record<string, unknown>, queue: WritePlan[]): WritePlan {
+    const state = this.state
+    const requestId = typeof payload.requestId === 'string' ? payload.requestId : ''
+    const plan = queue.shift() ?? (kind === 'chat' ? defaultChatPlan(payload) : defaultReplyPlan(payload))
+    // 受理成立 = 走了事件流（400/409/断开/悬挂都没有受理）。
+    const accepted = plan.status === undefined && plan.destroy !== true && plan.hang !== true
+    if (requestId === '' || !accepted) return plan
+    const fingerprint = kind + '|' + JSON.stringify(payload)
+    const events = plan.events ?? []
+    const runHead = events.find(event => (event as { type?: string }).type === 'run') as { runId?: string } | undefined
+    const seen = state.idempotency.get(requestId)
+    if (seen !== undefined) {
+      if (seen.fingerprint !== fingerprint) {
+        return { status: 409, body: { error: '这次提交的 requestId 已经用在另一份内容上', code: 'idempotency_conflict' } }
+      }
+      if (seen.lostLog) {
+        // 没有可回放的记录：不重新执行，也不计入幂等重放；按那一轮有没有终态证据给码。
+        return { status: 409, body: {
+          error: seen.finished
+            ? '这次提交已经处理过，那一轮也已经结束，无法再回放它的过程'
+            : '这次提交已经受理过，但结果不明（服务在这里重启过）；不会重新执行',
+          code: seen.finished ? 'run_already_finished' : 'run_result_unknown',
+          runId: seen.runId,
+          conversationId: seen.conversationId,
+        } }
+      }
+      // 同一次提交：回放首次那一轮的凭据与事件流，执行次数不再增加。
+      state.duplicateSubmits.push(requestId)
+      return seen.replay
+    }
+    state.idempotency.set(requestId, {
+      fingerprint,
+      replay: { events, done: plan.done },
+      runId: runHead?.runId ?? '',
+      conversationId: typeof payload.conversationId === 'string' ? payload.conversationId : '',
+      // 终态证据 = 这一轮的剧本里有 summary（契约里 finished 与 claimed 的分界）。
+      finished: events.some(event => (event as { type?: string }).type === 'summary'),
+      lostLog: plan.lostLog === true,
+    })
+    if (kind === 'chat') state.chatExecutions++
+    else state.replyExecutions++
+    return plan
+  }
+
   /** 按剧本回应一个写请求：错误 JSON、断开、悬挂或受理后的事件流。 */
   private serveWrite(plan: WritePlan, response: ServerResponse): void {
+    if (plan.delayMs !== undefined && plan.delayMs > 0 && !response.writableEnded) {
+      // 迟到的受理与事件：响应到达时界面可能已经换了会话或轮次（代次守卫要拦住它）。
+      setTimeout(() => { if (!response.writableEnded) this.serveWrite({ ...plan, delayMs: 0 }, response) }, plan.delayMs)
+      return
+    }
     if (plan.hang) return
     if (plan.status !== undefined) {
       response.writeHead(plan.status, { 'content-type': 'application/json; charset=utf-8' })
@@ -207,6 +331,11 @@ export class ButlerStubServer {
       return
     }
     if (plan.destroy) { response.destroy(); return }
+    if (plan.acceptThenDestroy) {
+      // 受理成立（这一轮在服务端跑），但响应没有送到客户端：响应未知，重试按 requestId 回放同一轮。
+      response.destroy()
+      return
+    }
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
     for (const event of plan.events ?? []) response.write('data: ' + JSON.stringify(event) + '\n\n')
     if (plan.cut) {

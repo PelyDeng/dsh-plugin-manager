@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ButlerClient, ButlerError, type ButlerStatus } from '../src/butler-client.ts'
+import { ButlerClient, ButlerError, RECONNECT_DELAYS, reconnectDelay, type ButlerStatus } from '../src/butler-client.ts'
 import { ButlerStubServer, defaultSnapshot } from './butler-stub.ts'
 
 /**
@@ -386,5 +386,171 @@ describe('写链路', () => {
     await expect(makeClient().requestStop('conv-1', 'task-1')).rejects.toMatchObject({ kind: 'http', status: 500 })
     await new Promise(resolve => setTimeout(resolve, 30))
     expect(stub.state.stopRequests).toHaveLength(1)
+  })
+})
+
+/**
+ * 第五切片：有界重连/取消（退避上限、取消语义、断流不重发写请求）。
+ * 写链路的「不重发」与「幂等重试不重复执行」分别由请求次数与桩的执行次数断言。
+ */
+describe('有界重连与取消', () => {
+  it('退避序列逐级增长、末项即上限（不无限增长）', () => {
+    // 默认 1/2/5/10 秒；第 5 次及以后一直停在末项。
+    expect([0, 1, 2, 3, 4, 9, 100].map(attempt => reconnectDelay(RECONNECT_DELAYS, attempt)))
+      .toEqual([1000, 2000, 5000, 10000, 10000, 10000, 10000])
+    // 序列只有一项时（测试注入的短退避）永不增长；空序列不等待。
+    expect([0, 5].map(attempt => reconnectDelay([7], attempt))).toEqual([7, 7])
+    expect(reconnectDelay([], 3)).toBe(0)
+  })
+
+  it('连续断线一直重连：每次都用最后 seq 续订，间隔不增长', async () => {
+    for (let index = 0; index < 4; index++) {
+      stub.state.streamQueue.push({ events: [{ type: 'subtask', id: 's1', state: 'running', seq: index + 1, runId: 'run-1' }], done: false })
+    }
+    stub.state.streamQueue.push({ events: [], done: true })
+    const client = makeClient({ delays: [5, 5] })
+    const seen: number[] = []
+    await client.observe('conv-1', 0, {
+      onEvent: event => seen.push(event.seq ?? 0),
+      onReset: async () => {},
+    })
+    // 五次订阅：0 → 1 → 2 → 3 → 4，最后一次正常收尾。
+    expect(stub.state.subscriptions).toEqual([0, 1, 2, 3, 4])
+    expect(seen).toEqual([1, 2, 3, 4])
+    expect(statuses.at(-1)).toBe('ready')
+  })
+
+  it('重连等待中 cancelObserve：立即返回且不再续订（不产生孤儿循环）', async () => {
+    stub.state.streamQueue.push({ events: [{ type: 'subtask', id: 's1', state: 'running', seq: 3 }], done: false })
+    const client = makeClient({ delays: [10_000] })
+    const finished = client.observe('conv-1', 0, { onEvent: () => {}, onReset: async () => {} })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.subscriptions).toEqual([0])
+    client.cancelObserve()
+    await expect(finished).resolves.toBeUndefined()
+    expect(client.isObserving).toBe(false)
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(stub.state.subscriptions).toEqual([0]) // 取消后没有再次续订
+  })
+
+  it('取消后再观察：按新游标重新订阅，互不干扰', async () => {
+    stub.state.streamQueue.push({ events: [], done: false })
+    stub.state.streamQueue.push({ events: [
+      { type: 'run', runId: 'run-1', state: 'running', taskId: 'task-1' },
+      { type: 'summary', taskId: 'task-1', text: '完成', state: 'completed', seq: 9, runId: 'run-1' },
+    ], done: true })
+    const client = makeClient({ delays: [10_000] })
+    const first = client.observe('conv-1', 0, { onEvent: () => {}, onReset: async () => {} })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    client.cancelObserve()
+    await first
+    let roundEnd = ''
+    await client.observe('conv-1', 8, { onEvent: () => {}, onReset: async () => {}, onRoundEnd: state => { roundEnd = state } })
+    expect(stub.state.subscriptions).toEqual([0, 8])
+    expect(roundEnd).toBe('running')
+  })
+
+  it('断流不重发写请求：受理后流断掉只续订，不重新提交（幂等记录只有一次执行）', async () => {
+    // 「断流不重发写请求」的证据在这里：本用例真的发过一次写、真的断过流，
+    // 请求次数与执行次数都有区分度（游戏层那条断流用例全程没有写请求，只断言续订）。
+    stub.state.chatQueue.push({ events: [
+      { type: 'conversation', conversationId: 'conv-1' },
+      { type: 'run', runId: 'run-cut', state: 'running', taskId: '', seq: 0 },
+      { type: 'subtask', taskId: 'task-cut', id: 's1', state: 'running', seq: 2, runId: 'run-cut' },
+    ], cut: true })
+    stub.state.streamQueue.push({ events: [
+      { type: 'summary', taskId: 'task-cut', text: '完成', state: 'completed', seq: 3, runId: 'run-cut' },
+    ], done: true })
+    const client = makeClient({ delays: [5] })
+    const events: string[] = []
+    await client.submitChat('conv-1', '写博客', 'req-cut', {
+      onEvent: event => events.push(event.type),
+      onReset: async () => {},
+    })
+    expect(events).toContain('summary')
+    expect(stub.state.chatRequests).toHaveLength(1) // 断流后没有重新提交
+    expect(stub.state.chatExecutions).toBe(1)
+    // 续订带着最后读到的序号。
+    expect(stub.state.subscriptions).toEqual([2])
+    // 再过一段时间仍然只有这一份提交：重连与收尾的后续路径都不会补发写请求。
+    await new Promise(resolve => setTimeout(resolve, 40))
+    expect(stub.state.chatRequests).toHaveLength(1)
+    expect(stub.state.chatExecutions).toBe(1)
+  })
+
+  it('受理后响应丢失：手动重试同 requestId 只执行一次，回放首次那一轮', async () => {
+    // 第一份剧本受理成立（这一轮在服务端跑），但响应没送到：客户端只能按结果不明处理。
+    stub.state.chatQueue.push({ events: [
+      { type: 'conversation', conversationId: 'conv-1' },
+      { type: 'run', runId: 'run-unknown', state: 'running', taskId: '', seq: 0 },
+      { type: 'summary', taskId: 'task-unknown', text: '完成', state: 'completed', seq: 1, runId: 'run-unknown' },
+    ], acceptThenDestroy: true, done: true })
+    const client = makeClient({ delays: [5] })
+    await expect(client.submitChat('conv-1', '写博客', 'req-unknown', { onEvent: () => {}, onReset: async () => {} }))
+      .rejects.toMatchObject({ kind: 'unknown' })
+    expect(stub.state.chatExecutions).toBe(1)
+    // 手动重试同一份提交：同一个 runId 的事件流从头回放，执行次数不增加。
+    const events: { type: string; runId?: string }[] = []
+    let ended = ''
+    await client.submitChat('conv-1', '写博客', 'req-unknown', {
+      onEvent: event => events.push({ type: event.type, ...(event.runId === undefined ? {} : { runId: event.runId }) }),
+      onReset: async () => {},
+      onRoundEnd: state => { ended = state },
+    })
+    expect(stub.state.duplicateSubmits).toEqual(['req-unknown'])
+    expect(stub.state.chatExecutions).toBe(1)
+    expect(events[0]).toEqual({ type: 'conversation' })
+    expect(events.find(event => event.type === 'run')?.runId).toBe('run-unknown')
+    expect(events.at(-1)?.type).toBe('summary')
+    // onRoundEnd 报的是**观察流的头部状态**（这里回放里只有一条 running 头）；权威终态由投影从 summary 得出。
+    expect(ended).toBe('running')
+    expect(stub.state.chatRequests).toHaveLength(2) // 两次请求都是同一份内容
+  })
+
+  it('同 requestId 换正文：409 idempotency_conflict，不执行也不覆盖首次那一轮', async () => {
+    stub.state.chatQueue.push({ events: [
+      { type: 'run', runId: 'run-first', state: 'running', taskId: '' },
+      { type: 'summary', taskId: 'task-first', text: '完成', state: 'completed', seq: 1, runId: 'run-first' },
+    ], done: true })
+    const client = makeClient()
+    await client.submitChat('conv-1', '写博客', 'req-same', { onEvent: () => {}, onReset: async () => {} })
+    await expect(client.submitChat('conv-1', '写别的', 'req-same', { onEvent: () => {}, onReset: async () => {} }))
+      .rejects.toMatchObject({ kind: 'conflict', code: 'idempotency_conflict' })
+    expect(stub.state.chatExecutions).toBe(1)
+    expect(stub.state.duplicateSubmits).toEqual([]) // 换了正文不是同一次提交，不算幂等重放
+  })
+
+  it('受理后未终态且日志已不可回放：同 requestId 重试回 409 run_result_unknown，不重新执行', async () => {
+    // 受理成立（这一轮在服务端跑），但响应没有送到：结果不明；随后事件日志不可回放
+    // （契约里 claimed 的那一行：受理过、没有终态证据，重试只能读快照）。
+    stub.state.chatQueue.push({ acceptThenDestroy: true, lostLog: true, events: [
+      { type: 'conversation', conversationId: 'conv-1' },
+      { type: 'run', runId: 'run-claimed', state: 'running', taskId: '' },
+    ] })
+    const client = makeClient()
+    await expect(client.submitChat('conv-1', '写博客', 'req-claimed', { onEvent: () => {}, onReset: async () => {} }))
+      .rejects.toMatchObject({ kind: 'unknown' })
+    expect(stub.state.chatExecutions).toBe(1)
+    // 重试同一份提交：没有过程可回放，管家按稳定码拒绝；错误里带着原凭据供读快照。
+    await expect(client.submitChat('conv-1', '写博客', 'req-claimed', { onEvent: () => {}, onReset: async () => {} }))
+      .rejects.toMatchObject({ kind: 'conflict', code: 'run_result_unknown', status: 409 })
+    expect(stub.state.chatExecutions).toBe(1)
+    expect(stub.state.duplicateSubmits).toEqual([]) // 没有回放，也没有重跑
+  })
+
+  it('那一轮已跑完但日志已不可回放：同 requestId 重试回 409 run_already_finished', async () => {
+    stub.state.chatQueue.push({ lostLog: true, done: true, events: [
+      { type: 'conversation', conversationId: 'conv-1' },
+      { type: 'run', runId: 'run-done', state: 'running', taskId: '' },
+      { type: 'summary', taskId: 'task-done', text: '完成', state: 'completed', seq: 1, runId: 'run-done' },
+    ] })
+    const client = makeClient()
+    await client.submitChat('conv-1', '写博客', 'req-done', { onEvent: () => {}, onReset: async () => {} })
+    expect(stub.state.chatExecutions).toBe(1)
+    // 重试同一份提交：那一轮有终态证据（summary），但没有可回放的日志。
+    await expect(client.submitChat('conv-1', '写博客', 'req-done', { onEvent: () => {}, onReset: async () => {} }))
+      .rejects.toMatchObject({ kind: 'conflict', code: 'run_already_finished', status: 409 })
+    expect(stub.state.chatExecutions).toBe(1)
+    expect(stub.state.duplicateSubmits).toEqual([])
   })
 })

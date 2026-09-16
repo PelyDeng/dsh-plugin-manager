@@ -47,6 +47,23 @@ const roundStoppable = computed(() =>
   || ['queued', 'running', 'summarizing', 'waiting_user'].includes(store.task.state))
 
 /**
+ * 登录失效、无权限、契约不兼容时身份/接口已经不可信，写入口一律停用并给出可见原因
+ * （再发写请求只会得到同一个拒绝，按「提示且不重试」处理）。断线（offline）不在此列：
+ * 写请求走的是另一条连接，断流期间仍可能受理。
+ */
+const writeBlocked = computed(() => ['unauthorized', 'forbidden', 'incompatible'].includes(store.status))
+
+/** 写入口禁用时的原因文案：不让用户对着不响应的输入框猜。 */
+const writeBlockedReason = computed(() => {
+  switch (store.status) {
+    case 'unauthorized': return '需要登录后才能派活或回复，写入口已停用'
+    case 'forbidden': return '没有访问权限，写入口已停用'
+    case 'incompatible': return '管家接口版本不兼容，写入口已停用'
+    default: return ''
+  }
+})
+
+/**
  * 待重试提交的冻结正文摘要：pendingSubmit 存在期间草稿锁定、重试发送的是冻结
  * 正文而非输入框当前内容，摘要如实展示将要重发的那份，避免「显示新文本、发出旧正文」。
  */
@@ -57,12 +74,13 @@ const pendingSummary = computed(() => {
   return body.length > 30 ? body.slice(0, 30) + '…' : body
 })
 
-const assignUsable = computed(() => !store.submitting && store.pendingSubmit === null && store.assignDraft.trim() !== '')
+const assignUsable = computed(() =>
+  !store.submitting && !writeBlocked.value && store.pendingSubmit === null && store.assignDraft.trim() !== '')
 
 const onAssign = () => { if (assignUsable.value) void session?.submitTask(store.assignDraft) }
 
 const replyUsable = (subtaskId: string) =>
-  !store.submitting && store.pendingSubmit === null && (store.replyDrafts[subtaskId] ?? '').trim() !== ''
+  !store.submitting && !writeBlocked.value && store.pendingSubmit === null && (store.replyDrafts[subtaskId] ?? '').trim() !== ''
 
 const onReply = (subtaskId: string) => {
   if (replyUsable(subtaskId)) void session?.replySubtask(subtaskId, store.replyDrafts[subtaskId] ?? '')
@@ -185,15 +203,16 @@ onBeforeUnmount(() => {
           <textarea
             id="assign-goal" v-model="store.assignDraft" rows="2"
             placeholder="要派什么活？一句话说清目标；与管家入口共享同一份任务"
-            :disabled="store.submitting || store.pendingSubmit !== null"
+            :disabled="store.submitting || store.pendingSubmit !== null || writeBlocked"
           ></textarea>
           <div class="assign-actions">
             <button type="submit" :disabled="!assignUsable">{{ store.submitting ? '提交中…' : '派活' }}</button>
             <button
               v-if="store.pendingSubmit" type="button" class="retry-submit"
-              :disabled="store.submitting" @click="session?.retrySubmit()"
+              :disabled="store.submitting || writeBlocked" @click="session?.retrySubmit()"
             >重试提交</button>
           </div>
+          <p v-if="writeBlockedReason" class="write-blocked" role="status" data-write-blocked>{{ writeBlockedReason }}</p>
           <p v-if="store.pendingSubmit" class="pending-hint" role="status">
             上次提交结果不明，输入区已锁定；重试将原样发送冻结内容「{{ pendingSummary }}」（管家按 requestId
             幂等，不会执行两次）。重试成功或被明确拒绝后恢复编辑。
@@ -207,7 +226,7 @@ onBeforeUnmount(() => {
             <span v-if="store.task.runState && store.task.runState !== 'idle'" class="run">本轮：{{ store.task.runState }}</span>
             <button
               v-if="roundStoppable" type="button" class="stop"
-              :disabled="store.submitting" @click="session?.stopRound()"
+              :disabled="store.submitting || writeBlocked" @click="session?.stopRound()"
             >停止本轮</button>
           </p>
           <p v-if="store.task.butlerText" class="butler">{{ store.task.butlerText }}</p>
@@ -230,11 +249,11 @@ onBeforeUnmount(() => {
                 <input
                   v-model="store.replyDrafts[subtask.id]" type="text"
                   placeholder="回一句话，这位成员继续干"
-                  :disabled="store.submitting || store.pendingSubmit !== null"
+                  :disabled="store.submitting || store.pendingSubmit !== null || writeBlocked"
                 >
                 <button type="submit" :disabled="!replyUsable(subtask.id)">回复</button>
                 <button
-                  type="button" :disabled="store.submitting"
+                  type="button" :disabled="store.submitting || writeBlocked"
                   @click="session?.replySubtask(subtask.id, '', true)"
                 >让它自己拿主意</button>
               </form>

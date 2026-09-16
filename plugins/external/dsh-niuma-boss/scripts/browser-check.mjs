@@ -15,6 +15,13 @@
  * 第四切片修复轮（逐格走动）：走帧图集不进首包（首包边界上没有任何 office-walk 请求）、
  * 玩家操作之后才由 load.multiatlas 懒加载、员工真的按格走过（data-actor-cells 采到
  * 至少两个中间格，逐格四邻相接，用时与速度一致——不是瞬移）。
+ * 第五切片（故障恢复与竞争场景）：断流（离线提示 + 重试入口 + 有界重连续订 + 不重发写请求）、
+ * 事件窗口滚出（reset → 重读快照 → 先如实提示可能不完整、结束后按权威快照补齐且不重复）、
+ * 权限失效（未登录横幅 + 清空旧数据 + 写入口停用并写明原因）、后台→回前台
+ * （visibilitychange：后台暂停渲染并落盘位置、回前台恢复渲染并重读权威状态、可见状态正确）、
+ * 双入口并发（另一个入口回复 → 本入口跟着换轮）、迟到 stop 与迟到回复（幂等空操作 /
+ * not_waiting 提示且不重试）、响应未知后的手动重试（两次请求一次执行）、正文不落盘。
+ * 桩控制口与场景标记（#cut/#trim/#done/#late_stop/#late_reply）见 scripts/local-butler.mjs 头注释。
  * 截图与结果写 .artifacts/，供人工复核。
  *
  * 用法：node scripts/browser-check.mjs [edge|chromium]
@@ -653,6 +660,265 @@ await check('写链路：external_pending 显示待外部处理而非发布成�
   assert.ok(!badge.includes('已完成'), 'external_pending 被显示成发布成功')
   assert.ok((await page.locator('.task-book').innerText()).includes('待办'), '待办理由未展示')
   await page.screenshot({ path: resolve(directory, engineName + '-external-pending.png') })
+})
+
+// ---- 第五切片：故障恢复与竞争场景 ----
+// 断流（离线提示 + 有界重连 + 不重发写请求）、事件窗口滚出（reset → 重读快照 → 结束后补齐）、
+// 权限失效（可见原因 + 写入口停用 + 清空旧数据）、双入口并发（另一个入口回复 → 本入口跟着换轮）、
+// 迟到回复与迟到 stop、重试不重复执行（两次请求一次执行）、正文不落盘。
+
+/** 桩控制口（仅本地桩）：驱动「另一个入口」、断流与权限撤换；形状见 local-butler.mjs 头注释。 */
+const fixturePost = async payload => {
+  const response = await fetch(fixture.origin + '/butler/__fixture', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+  })
+  assert.equal(response.status, 200, '桩控制口调用失败：' + response.status)
+  return await response.json()
+}
+
+/** 连续性采样：状态徽标与任务本头部按钮（断线/重连是瞬时提示，只在时间窗里才看得到）。 */
+const sampleStatus = async (ms = 4_000, step = 120) => {
+  const badges = new Set()
+  const buttons = new Set()
+  const started = Date.now()
+  while (Date.now() - started < ms) {
+    const snapshot = await page.evaluate(() => ({
+      badge: document.querySelector('.hud .badge')?.textContent ?? '',
+      buttons: [...document.querySelectorAll('.task-book > header button')].map(button => button.textContent?.trim() ?? '').join('|'),
+    }))
+    badges.add(snapshot.badge)
+    buttons.add(snapshot.buttons)
+    await delay(step)
+  }
+  return { badges: [...badges], buttons: [...buttons] }
+}
+
+const bookText = () => page.locator('.task-book').innerText()
+/** 片段出现次数：用来断言正文既不重复也不丢。 */
+const occurrences = (text, part) => text.split(part).length - 1
+
+await check('断流：离线提示与重试入口出现，有界重连续订后继续，全程不重发写请求（#cut + 断事件流）', async () => {
+  await openBook()
+  await page.click('.conversations button:nth-child(2)')
+  await page.waitForFunction(() => document.querySelector('.task-book')?.textContent?.includes('会议纪要'), undefined, { timeout: 10_000 })
+  const chatsBefore = countPosts('/butler/chat')
+  await page.fill('.assign textarea', '#cut 断流重连验证清单')
+  await page.click('.assign button[type="submit"]')
+  // 受理之后写响应在 500ms 被切断：这一轮在服务端继续跑，客户端应转只读订阅从最后序号续上。
+  await page.waitForFunction(() => document.querySelector('.task-book')?.textContent?.includes('断流重连验证清单'), undefined, { timeout: 15_000 })
+  // 等客户端确实切到只读订阅（写流断开后立刻续订），再断开它并让下一次续订失败一次
+  // （真实断网/服务端 5xx 的形态）：状态应落到断线并给出重试入口。
+  let broke = { ok: false, dropped: 0 }
+  for (let attempt = 0; attempt < 8 && broke.dropped === 0; attempt++) {
+    await delay(400)
+    broke = await fixturePost({ action: 'breakEvents', conversationIndex: 1 })
+  }
+  assert.ok(broke.ok === true && broke.dropped >= 1, '没能在会话上断开观察连接：' + JSON.stringify(broke))
+  const statusWindow = await sampleStatus(5_000)
+  assert.ok(statusWindow.badges.some(text => text.includes('中断') || text.includes('重连') || text.includes('异常')), '断流后没有出现断线提示：' + statusWindow.badges.join(' | '))
+  assert.ok(statusWindow.buttons.some(text => text.includes('重试')), '断线时任务本没有给出重试入口：' + statusWindow.buttons.join(' | '))
+  // 有界重连自己接上：等待事件照常到达，正文没有因为断流掉字。
+  await page.waitForFunction(() => document.querySelector('.task-book')?.textContent?.includes('等你回话'), undefined, { timeout: 25_000 })
+  await page.waitForFunction(() => document.querySelector('.hud .badge')?.textContent?.includes('已连接'), undefined, { timeout: 20_000 })
+  const text = await bookText()
+  assert.equal(occurrences(text, '（草稿第 1 段：先列要点）'), 1, '断流后正文出现重复或丢字：' + text)
+  assert.ok(text.includes('（草稿第 2 段：补齐说明）'), '断流后错过的增量没有续上')
+  assert.equal(countPosts('/butler/chat'), chatsBefore + 1, '断流后出现了重新提交')
+  report.cut = { badges: statusWindow.badges, buttons: statusWindow.buttons }
+  await page.screenshot({ path: resolve(directory, engineName + '-cut-reconnect.png') })
+  // 收拾现场：让这一轮正常收尾（回复后完成），后续用例从干净状态继续。
+  await page.fill('.reply input', '照第一版办')
+  await page.click('.reply button[type="submit"]')
+  await page.waitForFunction(() => document.querySelector('.task .state .badge')?.textContent?.includes('已完成'), undefined, { timeout: 20_000 })
+})
+
+await check('事件窗口滚出：reset 后重读快照续表，先如实提示可能不完整，结束后按权威快照补齐且不重复（#trim #done）', async () => {
+  const before = countPosts('/butler/chat')
+  await page.fill('.assign textarea', '#trim #done 窗口滚出恢复验证清单')
+  await page.click('.assign button[type="submit"]')
+  // 窗口左边缘右移、连接被回收：续订游标落在窗口之外，客户端拿到 reset（不是错误）并重读快照。
+  await page.waitForFunction(() => document.querySelector('.task-book')?.textContent?.includes('正文可能不完整'), undefined, { timeout: 25_000 })
+  const mid = await bookText()
+  assert.ok(mid.includes('（草稿第 1 段：先列要点）'), '窗口滚出前已收到的正文被丢掉：' + mid)
+  await page.screenshot({ path: resolve(directory, engineName + '-trim-incomplete.png') })
+  // 结束：权威快照里这一轮已经落库（含滚出窗口的那一段），重读后补齐并清掉提示。
+  await page.waitForFunction(() => document.querySelector('.task .state .badge')?.textContent?.includes('已完成'), undefined, { timeout: 25_000 })
+  await page.waitForFunction(() => !(document.querySelector('.task-book')?.textContent ?? '').includes('正文可能不完整'), undefined, { timeout: 20_000 })
+  const text = await bookText()
+  for (const part of ['（草稿第 1 段：先列要点）', '（草稿第 3 段：窗口滚出后继续写）', '（草稿第 4 段：补齐说明）', '（草稿第 5 段：收尾）']) {
+    assert.equal(occurrences(text, part), 1, `补齐后的正文里「${part}」出现 ${occurrences(text, part)} 次（应为 1 次）：` + text)
+  }
+  assert.equal(countPosts('/butler/chat'), before + 1, '窗口滚出后出现了重新提交')
+  report.trim = { mid: mid.slice(0, 200), final: text.slice(0, 400) }
+  await page.screenshot({ path: resolve(directory, engineName + '-trim-recovered.png') })
+})
+
+await check('权限失效：撤换登录后按未登录提示、清空旧数据、写入口停用并写明原因', async () => {
+  await openBook()
+  assert.equal(await fixturePost({ identity: 401 }).then(body => body.identity), 401)
+  // 下一次读取（切换会话）按 401 失败：身份不可信，旧数据一起清空。
+  await page.click('.conversations button:nth-child(1)')
+  await page.waitForSelector('.banner a[href*="/auth"]', { timeout: 10_000 })
+  const banner = await page.locator('.banner').innerText()
+  assert.ok(banner.includes('需要登录'), '未登录横幅文案不符：' + banner)
+  await page.waitForFunction(() => document.querySelector('.assign textarea')?.disabled === true, undefined, { timeout: 10_000 })
+  const reason = await page.locator('[data-write-blocked]').innerText()
+  assert.ok(reason.includes('需要登录'), '写入口停用没有写明原因：' + reason)
+  assert.equal(await page.locator('.assign-actions button[type="submit"]').isDisabled(), true, '未登录时派活按钮仍可用')
+  assert.equal(await page.locator('.conversations button').count(), 0, '权限失效后旧会话列表没有清空')
+  report.authRevoked = { banner, reason }
+  await page.screenshot({ path: resolve(directory, engineName + '-auth-revoked.png') })
+  // 恢复登录：刷新页面重新发现身份（存在本地位置快照，恢复同一位用户的落点）。
+  assert.equal(await fixturePost({ identity: 200 }).then(body => body.identity), 200)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('canvas', { timeout: 20_000 })
+  await page.waitForFunction(() => document.querySelector('.hud .badge')?.textContent?.includes('已连接'), undefined, { timeout: 20_000 })
+  await closeBook()
+})
+
+await check('后台→回前台（visibilitychange）：后台暂停渲染并落盘位置，回前台恢复渲染、重读权威状态且可见状态正确', async () => {
+  // 上一条用例刚刷新过页面：链路已连接、会话一已在观察（种子活跃轮一直在推增量）。
+  await closeBook()
+  await page.waitForFunction(() => document.querySelector('.hud .badge')?.textContent?.includes('已连接'), undefined, { timeout: 15_000 })
+  const cell = await settle()
+  const map = await scene()
+  const postsBefore = butlerPosts.length
+  // 后台：走页面真实的可见性回调（document.hidden 置位 + visibilitychange）。
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  // 后台暂停渲染：方向键不再带动人物（暂停的事件与画面都不再推进）。
+  await page.keyboard.down('w')
+  await delay(700)
+  await page.keyboard.up('w')
+  await delay(200)
+  assert.equal(await playerCell(), cell, '后台期间场景没有暂停：方向键仍带动了人物')
+  assert.equal(await scene(), map, '后台期间换了地图')
+  // 后台期间另一个入口在同一站开了一个新会话：本页面观察的是别的会话，看不到它，
+  // 只能靠回前台的重读拿到——这条会话就是「回前台真的重读了权威状态」的证据。
+  const behindConversationId = 'butler-web-' + crypto.randomUUID()
+  const opened = await fetch(fixture.origin + '/butler/chat', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ conversationId: behindConversationId, message: '后台期间另一个入口开的会话' }),
+  })
+  assert.equal(opened.status, 200, '后台期间的另一个入口提交未被受理：' + opened.status)
+  await opened.body?.cancel().catch(() => {}) // 断开读端：这一轮在服务端继续留着
+  // 回前台：恢复渲染并重读权威快照。
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => false })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  await openBook()
+  await page.waitForFunction(() => (document.querySelector('.task-book')?.textContent ?? '').includes('后台期间另一个入口开的会话'), undefined, { timeout: 15_000 })
+  // 可见状态正确：链路显示已连接、没有断线重试入口、当前会话与任务正文都还在。
+  const badge = await page.locator('.hud .badge').first().innerText()
+  assert.ok(badge.includes('已连接'), '回前台后链路状态不是已连接：' + badge)
+  const headerButtons = await page.locator('.task-book > header button').allInnerTexts()
+  assert.ok(!headerButtons.some(text => text.includes('重试')), '回前台后仍显示断线重试入口：' + headerButtons.join('|'))
+  assert.equal(await scene(), map, '回前台换了地图')
+  await page.waitForFunction(() => document.querySelector('.task-book')?.textContent?.includes('园区安全博客'), undefined, { timeout: 10_000 })
+  // 恢复渲染：人物又能走动（证明前面的「不动」是后台暂停，而不是卡死）。
+  await closeBook()
+  assert.ok(await movedByKeyboard(), '回前台后键盘不能移动人物')
+  // 重读是只读的：后台与回前台全程没有产生写请求。
+  assert.equal(butlerPosts.length, postsBefore, '后台/回前台产生了写请求：' + butlerPosts.slice(postsBefore).join(', '))
+  report.visibility = { badge, headerButtons, behindConversationId, posts: butlerPosts.length - postsBefore }
+  await page.screenshot({ path: resolve(directory, engineName + '-visibility-resume.png') })
+})
+
+await check('双入口并发：另一个入口回复后本入口跟着换轮，两边读同一份任务且不重复正文', async () => {
+  await openBook()
+  await page.click('.conversations button:nth-child(2)')
+  await page.waitForFunction(() => document.querySelector('.task-book')?.textContent?.includes('会议纪要'), undefined, { timeout: 10_000 })
+  const postsBefore = butlerPosts.length
+  await page.fill('.assign textarea', '双入口并发验证清单')
+  await page.click('.assign button[type="submit"]')
+  await page.waitForFunction(() => document.querySelector('.task-book')?.textContent?.includes('等你回话'), undefined, { timeout: 20_000 })
+  // 另一个入口（管家入口）替这位等待中的成员作答：同任务换执行轮，事件日志被新轮替换。
+  const replied = await fixturePost({ otherEntry: 'reply', conversationIndex: 1 })
+  assert.equal(replied.ok, true, '另一个入口没能回复：' + JSON.stringify(replied))
+  // 本入口没有任何写请求，却跟着看到新轮的结果：换轮按 probe 重读快照并从 0 重放当前轮。
+  await page.waitForFunction(() => document.querySelector('.task .state .badge')?.textContent?.includes('已完成'), undefined, { timeout: 25_000 })
+  assert.equal(butlerPosts.length, postsBefore + 1, '另一个入口回复期间本入口产生了额外写请求：' + butlerPosts.slice(postsBefore).join(', '))
+  const text = await bookText()
+  assert.ok(text.includes('（按你的选择定稿）'), '换轮后的新正文没有跟上：' + text)
+  assert.equal(occurrences(text, '（草稿第 1 段：先列要点）'), 1, '换轮把上一轮的正文重复或丢了：' + text)
+  assert.equal(occurrences(text, '（草稿第 2 段：补齐说明）'), 1, '换轮把上一轮的正文重复或丢了：' + text)
+  report.dualEntry = { runId: replied.runId, text: text.slice(0, 300) }
+  await page.screenshot({ path: resolve(directory, engineName + '-dual-entry.png') })
+})
+
+await check('迟到 stop：另一个入口先停掉 → 幂等空操作提示，不重试、不谎称正在收尾（#late_stop）', async () => {
+  const stopsBefore = countPosts('/butler/stop')
+  await page.fill('.assign textarea', '#late_stop 迟到停止验证清单')
+  await page.click('.assign button[type="submit"]')
+  await page.waitForFunction(() => document.querySelector('.task-book')?.textContent?.includes('等你回话'), undefined, { timeout: 20_000 })
+  await page.click('.task .stop')
+  await page.waitForFunction(() => document.querySelector('.toast')?.textContent?.includes('本轮无需停止'), undefined, { timeout: 15_000 })
+  const toast = await page.locator('.toast').innerText()
+  assert.ok(toast.includes('已经不在执行了') || toast.includes('不需要'), '迟到 stop 的提示没有说明原因：' + toast)
+  // 收敛以管家事件为准：这一轮按取消收尾，界面上不显示「正在收尾」。
+  await page.waitForFunction(() => document.querySelector('.task .state .badge')?.textContent?.includes('已取消'), undefined, { timeout: 20_000 })
+  assert.equal(await page.locator('.task .stop').count(), 0, '本轮已结束后仍显示停止按钮')
+  await delay(800)
+  assert.equal(countPosts('/butler/stop'), stopsBefore + 1, 'stop 出现自动重试')
+  report.lateStop = { toast }
+  await page.screenshot({ path: resolve(directory, engineName + '-late-stop.png') })
+})
+
+await check('迟到回复：等待已被别的入口结束 → 按 not_waiting 提示，不重试也不改成本地推断（#late_reply）', async () => {
+  const repliesBefore = countPosts('/butler/reply')
+  await page.fill('.assign textarea', '#late_reply 迟到回复验证清单')
+  await page.click('.assign button[type="submit"]')
+  await page.waitForFunction(() => document.querySelector('.task-book')?.textContent?.includes('等你回话'), undefined, { timeout: 20_000 })
+  await page.fill('.reply input', '#late_reply 采用第二版')
+  await page.click('.reply button[type="submit"]')
+  // 回复到达时这次等待已经被另一个入口结束：管家按稳定码拒绝，界面按码给出提示。
+  await page.waitForFunction(() => document.querySelector('.toast')?.textContent?.includes('没有在等你回话'), undefined, { timeout: 15_000 })
+  const toast = await page.locator('.toast').innerText()
+  await delay(800)
+  assert.equal(countPosts('/butler/reply'), repliesBefore + 1, '回复出现自动重试')
+  // 终态仍然以管家为准（这一轮已被取消），不因为点过回复就显示成功。
+  await page.waitForFunction(() => document.querySelector('.task .state .badge')?.textContent?.includes('已取消'), undefined, { timeout: 20_000 })
+  report.lateReply = { toast }
+  await page.screenshot({ path: resolve(directory, engineName + '-late-reply.png') })
+})
+
+await check('响应未知→手动重试：两次请求一次执行（同 runId 回放），正文不落盘', async () => {
+  const statsBefore = await fixturePost({ query: 'stats' })
+  const chatsBefore = countPosts('/butler/chat')
+  await page.fill('.assign textarea', '#network 幂等重试验证清单')
+  await page.click('.assign button[type="submit"]')
+  // 受理已成立但响应丢失：结果不明，不自动重试，保留冻结正文等待手动重试。
+  await page.waitForFunction(() => document.querySelector('.toast')?.textContent?.includes('无法确认'), undefined, { timeout: 15_000 })
+  await page.waitForSelector('.assign-actions .retry-submit', { timeout: 5_000 })
+  await delay(600)
+  const chatsAfterGlitch = countPosts('/butler/chat')
+  await page.click('.assign-actions .retry-submit')
+  await page.waitForFunction(() => document.querySelector('.task-book')?.textContent?.includes('等你回话'), undefined, { timeout: 20_000 })
+  await delay(600)
+  // 两次请求、一次执行：第二次带同一个 requestId，管家回放首次那一轮，不重新执行。
+  assert.equal(countPosts('/butler/chat'), chatsAfterGlitch + 1, '重试后请求次数不符')
+  assert.equal(countPosts('/butler/chat'), chatsBefore + 2, '提交与重试各一次')
+  const statsAfter = await fixturePost({ query: 'stats' })
+  assert.equal(statsAfter.chatExecutions, statsBefore.chatExecutions + 1, `管家执行了 ${statsAfter.chatExecutions - statsBefore.chatExecutions} 次（应为 1 次）`)
+  assert.equal(statsAfter.duplicateSubmits, statsBefore.duplicateSubmits + 1, '重试没有被识别成同一次提交')
+  // 正文不落盘：位置与偏好之外的任何内容都不进浏览器存储。
+  const stored = await page.evaluate(() => Object.entries(localStorage).map(([key, value]) => key + '=' + value).join(String.fromCharCode(10)))
+  for (const forbidden of ['幂等重试验证清单', '窗口滚出恢复验证清单', '断流重连验证清单', '就按第二版来', 'requestId', '无法确认']) {
+    assert.ok(!stored.includes(forbidden), '浏览器存储里出现了不该存的内容：' + forbidden)
+  }
+  // 冻结的 requestId（`niuma-<uuid>`）同样不落盘：键名里的 `niuma-boss:world:` 不匹配这条形状。
+  assert.ok(!/niuma-[0-9a-f]{8}-/.test(stored), '浏览器存储里出现了 requestId：' + stored)
+  const keys = await page.evaluate(() => Object.keys(localStorage))
+  assert.ok(keys.every(key => key.startsWith('niuma-boss:world:')), '存储里出现了位置快照之外的键：' + keys.join(', '))
+  report.idempotency = { chatExecutions: statsAfter.chatExecutions - statsBefore.chatExecutions, duplicateSubmits: statsAfter.duplicateSubmits - statsBefore.duplicateSubmits, keys }
+  await page.screenshot({ path: resolve(directory, engineName + '-idempotent-retry.png') })
+  // 收拾现场：回复并等这一轮收尾，回到正常状态。
+  await page.fill('.reply input', '照第二版办')
+  await page.click('.reply button[type="submit"]')
+  await page.waitForFunction(() => document.querySelector('.task .state .badge')?.textContent?.includes('已完成'), undefined, { timeout: 20_000 })
 })
 
 await check('写链路：run_busy/version_conflict/run_result_unknown 提示且不自动重试', async () => {
