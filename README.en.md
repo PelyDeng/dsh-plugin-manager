@@ -32,7 +32,7 @@ Use this path when an author provides a complete release directory containing `m
    On Windows PowerShell, run `.\build.ps1`.
 5. Open the address reported by build and request the actual endpoint documented by the plugin README.
 
-The deployment machine needs Node.js, system tar, and a local Linux Docker engine with Compose. An arbitrary source ZIP, single npm archive, or frontend-only dist bundle is not a standard release directory. See the [deployment guide](doc/first-deployment.md) for configuration, updates, and what to do after a failure.
+The deployment machine needs Node.js, system tar, and a local Linux Docker engine with Compose. The first build installs the framework workspace dependencies inside the packaged public build view (it needs network access or a complete cache); the site directory itself is never installed into. An arbitrary source ZIP, single npm archive, or frontend-only dist bundle is not a standard release directory. See the [deployment guide](doc/first-deployment.md) for configuration, updates, and what to do after a failure.
 
 ## Develop your own app
 

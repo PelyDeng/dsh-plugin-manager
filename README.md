@@ -32,7 +32,7 @@
    Windows PowerShell 执行 `.\build.ps1`。
 5. 按 build 输出访问站点，并请求插件 README 声明的实际端点。
 
-部署机器需要 Node.js、系统 tar、本机 Linux Docker 引擎及 Compose。普通源码 ZIP、单个 npm tgz 或只有前端 dist 的压缩包不能代替标准发布目录。完整配置、升级和恢复见[产物部署指南](doc/first-deployment.md)。
+部署机器需要 Node.js、系统 tar、本机 Linux Docker 引擎及 Compose；首次 build 会在随包公开构建视图内安装框架工作区依赖（需要网络或完整缓存），站点自身目录不装依赖。普通源码 ZIP、单个 npm tgz 或只有前端 dist 的压缩包不能代替标准发布目录。完整配置、升级和恢复见[产物部署指南](doc/first-deployment.md)。
 
 ## 开发自己的插件
 
