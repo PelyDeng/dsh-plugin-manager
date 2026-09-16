@@ -380,4 +380,11 @@ describe('写链路', () => {
     await new Promise(resolve => setTimeout(resolve, 30))
     expect(stub.state.stopRequests).toHaveLength(2)
   })
+
+  it('stop 的 500 归为 http（不伪装成幂等空操作）；不重发', async () => {
+    stub.state.stopPlan = { status: 500, body: { error: '服务处理请求失败' } }
+    await expect(makeClient().requestStop('conv-1', 'task-1')).rejects.toMatchObject({ kind: 'http', status: 500 })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.stopRequests).toHaveLength(1)
+  })
 })

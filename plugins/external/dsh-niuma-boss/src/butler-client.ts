@@ -265,11 +265,21 @@ export class ButlerClient {
     }, input.conversationId, handlers, callbacks)
   }
 
-  /** 停止当前这一轮（`/stop`）；`accepted: false` 是幂等空操作，不是错误。不重试。 */
+  /**
+   * 停止当前这一轮（`/stop`）；`accepted: false` 是幂等空操作，不是错误。不重试。
+   *
+   * 401/403/404 由 {@link assertNotOk} 归类抛出；其余非 2xx（500/502/503 等）说明这次
+   * 停止没有送达，按 http 错误如实上报——绝不能落进「accepted:false」被提示成
+   * 「本轮无需停止」。
+   */
   async requestStop(conversationId: string, taskId = ''): Promise<StopOutcome> {
     const { response, detach } = await this.postFor('/stop', { conversationId, ...(taskId === '' ? {} : { taskId }) })
     try {
       this.assertNotOk(response)
+      if (!response.ok) {
+        const payload = await readJson(response)
+        throw new ButlerError('http', payload.error ?? '管家返回了意外的响应', response.status, payload.code ?? '')
+      }
       const body = await response.json().catch(() => null) as { accepted?: boolean; reason?: string } | null
       return { accepted: body?.accepted === true, reason: body?.reason ?? '' }
     } finally {

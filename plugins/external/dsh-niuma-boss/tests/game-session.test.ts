@@ -593,6 +593,20 @@ describe('写意图闭环与错误语义', () => {
     session.stop()
   })
 
+  it('停止请求遇 500：提示失败而非「无需停止」，不重试', async () => {
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    // 500 说明停止没有送达；不能解析成 accepted:false 被提示成「本轮无需停止」。
+    stub.state.stopPlan = { status: 500, body: { error: '服务处理请求失败' } }
+    await session.stopRound()
+    expect(store.notice).toContain('停止请求失败')
+    expect(store.notice).not.toContain('无需停止')
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.stopRequests).toHaveLength(1)
+    session.stop()
+  })
+
   it('响应未知后 stop 返回 403：身份不可信，沿用清空规则', async () => {
     const session = makeSession()
     await session.refresh()
