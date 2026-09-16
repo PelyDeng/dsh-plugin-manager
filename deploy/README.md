@@ -16,7 +16,7 @@ bash build.sh
 
 后续自行确认更新源码，再运行同一 build。源码操作使用已提交输入；正常全量构建准备 manager、选中业务插件和宿主镜像，不要求宿主等于预设 gitlink，但记录实际提交。仅指定 publishImage 时推送镜像；默认使用本机不可变镜像 ID。宿主升级约束见[兼容说明](../doc/host-compatibility.md)。
 
-首次创建 .local/env.conf，已有文件不覆盖；旧 JSON 导入保留解析后的数据路径。两种入口都构建全部内置插件（archives 用随包公开构建视图），DSH_PLUGINS 决定运行选集、留空即全部候选；incoming 只放外部作者的完整发布目录。源码树中缺少工具时只准备 manager 工具依赖。两种模式不混合输入，字段规则见[框架配置](../doc/framework-configuration.md)。
+首次创建 .local/env.conf，已有文件不覆盖；旧 JSON 导入保留解析后的数据路径。两种入口都构建全部内置插件（archives 用随包公开构建视图，并在视图内装工作区依赖，需要网络或完整缓存），DSH_PLUGINS 决定运行选集、留空即全部候选；incoming 只放外部作者的完整发布目录。源码树中缺少工具时只准备 manager 工具依赖。两种模式不混合输入，字段规则见[框架配置](../doc/framework-configuration.md)。
 
 ### 内置构建与外部产物
 

@@ -77,10 +77,13 @@ export function buildBuiltinPlugins(context) {
   buildMessage(`公开构建视图：收录 ${view.included.length} 个顶层项，importer ${view.importers.length} 个`);
   // 固定版本的 pnpm 按**材料根**的根清单准备：视图清单是复制来的，不能作为权威来源。
   ensurePinnedPnpm(sourceRoot, env, execute);
+  // 依赖必须**先**装进视图：入口脚本静态导入视图里的 `packages/plugin-manager/src/plugins.mjs`，
+  // 它需要视图内已链接好的 `@dsh-plugin-manager/plugin-kit`；视图里没有 node_modules 时脚本连加载
+  // 都过不去（ERR_MODULE_NOT_FOUND），也就轮不到入口自己去安装。装完入口内的安装是一次空跑。
+  buildStep('安装项目依赖', () => run('pnpm', ['install', '--frozen-lockfile'], { cwd: view.root }));
   const output = resolve(operation, 'fresh');
-  // 视图依赖由打包入口在同一个视图里安装（package-plugins.mjs 的 workspaceRoot），这里不再重复
-  // 调用一次 pnpm install：安装步骤与失败诊断只留一处。
-  buildStep('构建全部内置插件', () => run(process.execPath, [resolve(sourceRoot, 'scripts/package-plugins.mjs'), '--plugins', 'all', '--output', output, '--workspace-root', view.root]));
+  // 入口脚本取视图内那一份：`source/` 只是材料目录，装了依赖的视图才是本次构建的工作区。
+  buildStep('构建全部内置插件', () => run(process.execPath, [resolve(view.root, 'scripts/package-plugins.mjs'), '--plugins', 'all', '--output', output, '--workspace-root', view.root]));
   return buildStep('加载内置发布清单', () => loadReleaseInputs(resolve(output, 'manifest.json')));
 }
 

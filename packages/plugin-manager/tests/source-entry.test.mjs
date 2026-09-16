@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { sourceArguments, sourceRelease } from '../../../deploy/scripts/release.mjs';
 import { loadPresenter } from '../src/site-coordinator.mjs';
@@ -151,6 +151,18 @@ test('unconfirmed or mismatched completion retains the source lock even without 
     assert.equal(await sourceRelease({ root: f.root, preflight: f.preflight }), 1);
     assert.equal(existsSync(f.lock), true);
   }
+});
+
+test('archives worker 用结束消息回报退出码，协调器据此才释放源码锁', async () => {
+  // 协调器的判据是「结束消息里的退出码 == worker 退出码」；archives 入口过去不回这条消息，
+  // 于是每次构建都留着源码锁，下一次 build 直接被拒绝。
+  const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
+  const child = spawn(process.execPath, [cli, 'archives-worker'], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
+  const messages = [];
+  child.on('message', message => messages.push(message));
+  const code = await new Promise(resolve => child.once('close', resolve));
+  assert.equal(code, 1);
+  assert.deepEqual(messages, [{ type: 'source-build-finished', code }]);
 });
 
 test('public deploy platform scripts preserve arguments, working directory and exit status', t => {

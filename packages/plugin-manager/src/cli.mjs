@@ -37,9 +37,11 @@ export async function main(args = process.argv.slice(2)) {
   --version 显示管理器版本`);
   } else if (action === '--version') console.log(JSON.parse(readFileSync(new URL('../package.json', import.meta.url))).version);
   else if (action === 'archives-worker') {
-    // 部署包站点的构建 worker：由 release-site 的展示端拉起，跑完同一条站点发布后回一个退出码。
-    const { archivesWorker } = await import('./archives-worker.mjs');
-    process.exitCode = await archivesWorker(rest);
+    // 部署包站点的构建 worker：由 release-site 的展示端拉起。任何结果都要回报结束消息，
+    // 否则协调器会认为 worker 没有正常收尾并保留源码锁，下一次 build 就会被拒绝。
+    const { archivesWorker, reportArchivesFinish } = await import('./archives-worker.mjs');
+    try { process.exitCode = await archivesWorker(rest); }
+    finally { reportArchivesFinish(process.exitCode ?? 1); }
   }
   else if (action === 'release-site') {
     const { siteArguments } = await import('./site-record.mjs');

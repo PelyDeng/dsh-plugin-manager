@@ -7,6 +7,18 @@
  */
 import { siteArguments } from './site-record.mjs';
 
+/**
+ * 构建结束后回一个结束消息。
+ *
+ * 协调器（`site-coordinator.mjs`）只有在收到这条消息、且它的退出码与 worker 退出码一致时，才认为
+ * worker 正常收尾并释放源码锁；source 入口的 `deploy/scripts/build.mjs` 一直这么做。缺了这一步，
+ * 每次 archives 构建都会留下 `.local/source-release.node.lock`，下一次 build 会被直接拒绝。
+ */
+export function reportArchivesFinish(code) {
+  if (typeof process.send !== 'function') return;
+  process.send({ type: 'source-build-finished', code }, () => process.disconnect());
+}
+
 /** 跑一次 archives 发布；返回进程退出码（0 成功、1 失败）。 */
 export async function archivesWorker(argv) {
   const options = siteArguments(argv);
