@@ -175,6 +175,13 @@ const state = {
   bubbles: new Map(),
   /** 大总管正在流式发言的那条气泡；落定的 `chat` 收它。 */
   butlerSpeech: null,
+  /**
+   * 大总管这一轮的思考快照（覆盖语义）。
+   *
+   * 思考通常先于正文到达，所以它先存在这里；等气泡真的出现（第一段增量或落定正文）再挂上去，
+   * 换尝试（`chat_reset`）或开新一轮时清空。
+   */
+  butlerThinking: '',
   /** 子任务 id → 等待中的提问卡，收到回复后移除。 */
   asks: new Map(),
   taskId: null,
@@ -530,6 +537,8 @@ function appendPreviewText(node, book, text) {
 
 function butlerDelta(text) {
   const speech = butlerSpeech()
+  // 气泡真的出现了，才把这一轮的思考挂上去（思考通常先于正文到达）。
+  attachButlerThinking(speech)
   speech.text += text
   // 按帧合并（I12）：正文累积在内存里，一帧只写一次 DOM；气泡已被落定收走就不再写。
   if (speech.framePending === true) return
@@ -561,6 +570,8 @@ function butlerSettle(text, time) {
   state.butlerSpeech = null
   if (speech === null) {
     const view = butlerMessage('', time)
+    // 只有落定正文、没有流式增量时（例如直接回答、历史恢复）思考也挂在这条上。
+    attachButlerThinking(view)
     stabilizeViewport(() => { settleMarkdown(view.body, text) })
     return
   }
@@ -683,12 +694,24 @@ function setThinking(view, thinking) {
 /**
  * 大总管这一轮的思考。
  *
- * 与成员思考同一套语义：覆盖、默认收起、摘要行只留最新一行；区别是它挂在大总管自己的气泡上、
- * 位于正文之前（先想后说）。推理常常早于第一段正文到达，所以这里和正文增量一样按需开气泡，
- * 否则这一段就被丢掉了。
+ * 思考常常**早于第一段正文**到达（模型先推理、后说话）。这里不因为它就开一条气泡：只推理、
+ * 还没吐字的尝试可能是会被重试掉的一版，先开气泡就会在页面上留下一条空消息。所以先把快照
+ * 存进 `state.butlerThinking`，等这条气泡真的出现（第一段增量或落定正文）再挂上去。
  */
 function butlerThinking(thinking) {
-  const speech = butlerSpeech()
+  state.butlerThinking = thinking
+  attachButlerThinking(state.butlerSpeech)
+}
+
+/**
+ * 把当前思考快照挂到一条已存在的大总管气泡上。
+ *
+ * 思考行按需创建、位置在正文之前；`state.butlerThinking` 为空（这一轮没有思考、或已换尝试）
+ * 时什么都不做。
+ */
+function attachButlerThinking(speech) {
+  const thinking = state.butlerThinking
+  if (speech === null || speech === undefined || thinking === '' || thinking === undefined) return
   if (speech.think === undefined) {
     speech.think = thinkingArea()
     speech.bubble.insertBefore(speech.think.node, speech.body)
@@ -819,6 +842,7 @@ function handleEvent(event) {
         break
       }
       state.butlerSpeech = null
+      state.butlerThinking = ''
       userMessage(event.text, event.time)
       break
     }
@@ -839,8 +863,9 @@ function handleEvent(event) {
 
     case 'chat_reset':
       // 模型重试开始（S08）：当前预览作废，下一段增量从新气泡起头，
-      // 两次尝试的正文不拼在一起。
+      // 两次尝试的正文不拼在一起；被重试掉那一版的思考也不该留在页面上。
       state.butlerSpeech = null
+      state.butlerThinking = ''
       break
 
     case 'input': {

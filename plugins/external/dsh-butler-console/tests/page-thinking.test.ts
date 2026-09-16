@@ -68,36 +68,69 @@ describe('成员气泡里的思考行', () => {
 })
 
 describe('大总管气泡里的思考行', () => {
-  /** 取出 `butlerThinking`：它依赖气泡与思考行两处，用替身注入。 */
+  /**
+   * 取出 `butlerThinking` 与 `attachButlerThinking`：两者依赖页面状态、气泡与思考行，
+   * 用替身注入后单独跑。
+   */
   function loadButlerThinking() {
-    const body = source.match(/function butlerThinking\(thinking\) \{[\s\S]*?\n\}\n/)?.[0]
-    if (body === undefined) throw new Error('butlerThinking 源码未找到')
-    const calls: { inserted: string[]; thinking: string[] } = { inserted: [], thinking: [] }
+    const thinkingBody = source.match(/function butlerThinking\(thinking\) \{[\s\S]*?\n\}\n/)?.[0]
+    const attachBody = source.match(/function attachButlerThinking\(speech\) \{[\s\S]*?\n\}\n/)?.[0]
+    if (thinkingBody === undefined || attachBody === undefined) throw new Error('大总管思考行源码未找到')
+    const calls: { inserted: string[]; thinking: string[]; areaMade: number } = { inserted: [], thinking: [], areaMade: 0 }
     const speech: { think?: unknown; bubble: { insertBefore(node: unknown, before: unknown): void }; body: object } = {
       bubble: { insertBefore: (node: unknown, before: unknown) => { calls.inserted.push(String(before === speech.body ? 'before-body' : 'elsewhere')); void node } },
       body: {},
     }
-    const thinkingArea = () => ({ node: { name: 'think' }, preview: {}, body: {} })
+    const state = { butlerSpeech: null as unknown, butlerThinking: '' }
+    const thinkingArea = () => { calls.areaMade += 1; return { node: { name: 'think' }, preview: {}, body: {} } }
     const setThinking = (_view: unknown, thinking: string) => { calls.thinking.push(thinking) }
-    const butlerThinking = Function('butlerSpeech', 'thinkingArea', 'setThinking',
-      `${body}; return butlerThinking`)(() => speech, thinkingArea, setThinking) as (thinking: string) => void
-    return { butlerThinking, speech, calls }
+    const loaded = Function('state', 'thinkingArea', 'setThinking',
+      `${attachBody}\n${thinkingBody}\nreturn { butlerThinking, attachButlerThinking }`)(state, thinkingArea, setThinking) as {
+        butlerThinking(thinking: string): void
+        attachButlerThinking(view: unknown): void
+      }
+    return { ...loaded, state, speech, calls }
   }
 
-  it('思考行按需建在大总管气泡里，位置在正文之前', () => {
-    const { butlerThinking, speech, calls } = loadButlerThinking()
-    expect(speech.think).toBeUndefined()
-    butlerThinking('先看通行记录。')
-    expect(speech.think).toBeDefined()
-    expect(calls.inserted).toEqual(['before-body'])
+  it('只有思考、还没有正文时不新开气泡（重试掉的那版不留空消息）', () => {
+    const f = loadButlerThinking()
+    // 状态里没有当前气泡：思考只入缓冲，不建行、不插 DOM。
+    f.butlerThinking('先看通行记录。')
+    expect(f.state.butlerThinking).toBe('先看通行记录。')
+    expect(f.calls.areaMade).toBe(0)
+    expect(f.calls.inserted).toEqual([])
+    expect(f.calls.thinking).toEqual([])
+    expect(f.state.butlerSpeech).toBeNull()
+  })
+
+  it('气泡出现后才挂思考行：按需创建一次，位置在正文之前', () => {
+    const f = loadButlerThinking()
+    f.butlerThinking('先看通行记录。')
+    f.state.butlerSpeech = f.speech
+    f.attachButlerThinking(f.speech)
+    expect(f.calls.areaMade).toBe(1)
+    expect(f.calls.inserted).toEqual(['before-body'])
+    expect(f.calls.thinking).toEqual(['先看通行记录。'])
   })
 
   it('已存在的思考行不再重复插入，快照仍按覆盖语义交给 setThinking', () => {
-    const { butlerThinking, calls } = loadButlerThinking()
-    butlerThinking('第一段。')
-    butlerThinking('第一段。\n第二段。')
-    expect(calls.inserted).toEqual(['before-body'])
-    expect(calls.thinking).toEqual(['第一段。', '第一段。\n第二段。'])
+    const f = loadButlerThinking()
+    f.butlerThinking('第一段。')
+    f.state.butlerSpeech = f.speech
+    f.attachButlerThinking(f.speech)
+    f.butlerThinking('第一段。\n第二段。')
+    expect(f.calls.areaMade).toBe(1)
+    expect(f.calls.inserted).toEqual(['before-body'])
+    expect(f.calls.thinking).toEqual(['第一段。', '第一段。\n第二段。'])
+  })
+
+  it('换尝试或开新一轮时清空缓冲，旧思考不挂到新气泡上', () => {
+    // 源码级锁住接线：reset/user 清缓冲，增量与落定各自把缓冲挂上去。
+    expect(source).toContain("case 'chat_reset':")
+    expect(source).toMatch(/case 'chat_reset':[\s\S]{0,260}state\.butlerThinking = ''/)
+    expect(source).toMatch(/case 'user':[\s\S]{0,600}state\.butlerThinking = ''/)
+    expect(source).toMatch(/function butlerDelta\(text\) \{[\s\S]{0,200}attachButlerThinking\(speech\)/)
+    expect(source).toMatch(/function butlerSettle\(text, time\) \{[\s\S]{0,400}attachButlerThinking\(view\)/)
   })
 
   it('页面把 chat_thinking 接到大总管自己的气泡上', () => {
