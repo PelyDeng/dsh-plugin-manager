@@ -24,7 +24,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
-import type { AgentParticipant, ParticipantProgress, ParticipantRequest, ParticipantResult } from '../packages/runtime/src/contract.ts'
+import type { ParticipantProgress, ParticipantRequest, ParticipantResult } from '../packages/runtime/src/contract.ts'
 import { ConversationLifecycle, type AgentRuntime, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
 import type {
   AgentDefinition,
@@ -33,7 +33,7 @@ import type {
   ReasoningProjectionContext,
   ResultContext,
 } from '../packages/runtime/src/definition.ts'
-import { createParticipant } from '../packages/runtime/src/participant.ts'
+import { createParticipant, type RuntimeParticipant } from '../packages/runtime/src/participant.ts'
 import type { ConversationQueryShape, OwnerKey } from '../packages/runtime/src/storage/ports.ts'
 import { MemoryConversationPort } from './fixtures/memory-conversation-port.ts'
 
@@ -105,7 +105,7 @@ interface CallOverrides {
 
 interface Harness {
   readonly definition: AgentDefinition
-  readonly participant: AgentParticipant
+  readonly participant: RuntimeParticipant
   readonly lifecycle: ConversationLifecycle
   readonly port: MemoryConversationPort
   /** 假宿主 Context 与鉴权（装配 adapter 的侧栏入口要用）。 */
@@ -127,6 +127,14 @@ interface Harness {
   toolResult(resultText: string, meta: unknown, conversationId: string): void
   /** 发一轮完整回合：`turn/start` → `assistant/message` → `turn/end`。 */
   complete(conversationId: string, text: string, input?: { readonly turn?: number; readonly reason?: string }): void
+  /**
+   * 驱动一轮到交付：发一个完整回合。
+   *
+   * 这个最小 Agent 的工具集是**空的**、也没有交活工具，所以运行时按 §4.3 的兜底路径直接交付
+   * （P3 的补交轮只在"交活工具确实装配过却没被调用"时才发生——账本的 `available` 为真，
+   * 见 `handoff.ts` 的 `install()`）。
+   */
+  answer(conversationId: string, text: string, input?: { readonly turn?: number; readonly reason?: string }): Promise<void>
   promptsOf(conversationId: string): readonly PromptSection[]
   restrictionsOf(conversationId: string): readonly (readonly string[])[]
   agentOptionsOf(conversationId: string): unknown
@@ -307,11 +315,22 @@ function fixture(definition: AgentDefinition): Harness {
   }
 
   /**
-   * 用例失败时可能还有一轮协作在飞：插件释放会把它拒绝掉（503）。那个拒绝没有调用方接住，
-   * 会在输出里留下"未处理拒绝"的噪音、干扰真正的原因，所以这里另挂一个已消化的影子 promise。
+   * 这条用例自己发出去的、还没收敛的协作轮次。
+   *
+   * 收尾前要先等它们收敛：插件释放会把还在飞的一轮**拒绝成 503**（`participant.ts` 的
+   * `close()`），而"释放"一旦落在一轮还没跑完的时候，红的就是那条正在等结果的用例 ——
+   * 这正是"看起来像并行时序问题"的那一类 503。
+   */
+  const inFlight = new Set<Promise<unknown>>()
+
+  /**
+   * 登记一轮协作：留一个已消化的影子 promise（用例失败时插件释放产生的 503 拒绝没有调用方
+   * 接住，会在输出里留下"未处理拒绝"的噪音、掩盖真正的原因），并在收敛后把它移出在飞集合。
    */
   const track = <T>(promise: Promise<T>): Promise<T> => {
+    inFlight.add(promise)
     void promise.catch(() => {})
+    void promise.then(() => { inFlight.delete(promise) }, () => { inFlight.delete(promise) })
     return promise
   }
 
@@ -369,6 +388,12 @@ function fixture(definition: AgentDefinition): Harness {
       }, conversationId)
       emit('turn/end', { turn, reason: { kind: input.reason ?? 'completed' } }, conversationId)
     },
+    async answer(conversationId, text, input = {}) {
+      harness.complete(conversationId, text, {
+        turn: input.turn ?? 1,
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+      })
+    },
     promptsOf: conversationId => sessionOf(conversationId).prompts,
     restrictionsOf: conversationId => sessionOf(conversationId).restrictions,
     agentOptionsOf: conversationId => sessionOf(conversationId).options[0],
@@ -379,15 +404,21 @@ function fixture(definition: AgentDefinition): Harness {
     revoke: () => { revoked = true },
   }
   /**
-   * 替身的生命周期**只跟它自己那条用例绑定**。
+   * 替身的生命周期**只跟它自己那条用例绑定**，而且要先等这一轮跑完再释放。
    *
-   * 早先的写法是模块级的 `afterEach` + 一个"当前所有在用替身"的数组：那种写法把不同用例的
-   * 释放耦合在一起——只要两条用例在时间上重叠（`sequence.concurrent`、将来的并发用例、或
-   * 谁把这里的钩子挪了位置），一条用例的收尾就会把另一条还在跑的替身一起释放掉，症状是
-   * 「最小 Agent正在停止」的 503 随机落在别的用例上（它看起来像"并行才红"的时序问题，
-   * 根因是替身被提前释放）。`onTestFinished` 按用例登记，不共享任何跨用例状态。
+   * 两处都是必要的：
+   *
+   * 1. **不共享"当前所有在用替身"的数组**（早先用的是模块级 `afterEach` + 一个全局数组）：
+   *    那种写法把不同用例的释放耦合在一起，只要两条用例在时间上重叠，一条的收尾就会把另一条
+   *    还在跑的替身一起释放掉，症状是「最小 Agent正在停止」的 503 落在别的用例上。
+   * 2. **释放前先等自己这一轮收敛**：`onTestFinished` 在 vitest 的并发模式里用的是"当前用例"
+   *    这个环境指针（`getCurrentTest()`），并发下并不可靠——收尾有可能被挂到别的用例上而提前
+   *    触发。等一轮收敛这一步把这种提前释放变成"晚一点释放"，不会用 503 打断正在跑的一轮。
+   *
+   * 本仓库与 CI 都按默认（文件并行、文件内顺序）跑，所以第 1 条已经足够；第 2 条是冗余保险。
    */
   onTestFinished(async () => {
+    await Promise.allSettled([...inFlight])
     await lifecycle.dispose()
     for (const close of disposers) await close()
   })
@@ -451,7 +482,7 @@ describe('P1 判据①：最小 Agent 跑通一轮', () => {
       },
     })
     const f = fixture(definition)
-    const call = f.call({ message: '跑一轮最小会话', acceptance: '给出一个结论' })
+    const call = f.call({ message: '跑一轮最小会话' })
     const pending = f.run(call.request)
     const id = await f.accept()
 
@@ -469,21 +500,25 @@ describe('P1 判据①：最小 Agent 跑通一轮', () => {
     //    已作为发现上报；替身按"空标题 = automatic"实现（见替身文件头的差异清单）。
     expect(f.port.rawOf(id)).toMatchObject({ title: '跑一轮最小会话', titleSource: 'automatic' })
 
-    f.complete(id, '最小 Agent 已跑通一轮')
+    await f.answer(id, '最小 Agent 已跑通一轮')
     const result = await pending
 
     expect(result).toMatchObject({ status: 'completed', conversationId: id, text: '答复：最小 Agent 已跑通一轮' })
     // 没有交产物时回落到"查看会话"这一条材料定位。
     expect(result.artifacts).toEqual([{ kind: 'conversation', title: '查看会话', path: `/minimal-agent?conversationId=${id}` }])
     expect(result.question).toBeUndefined()
+    // ⑦ 的结论如实回报：没有业务自检（absent ⇒ unverified）⇒ 整轮"未核验"。
+    expect(result.selfCheck).toMatchObject({ status: 'unverifiable' })
     // 投影拿到的是完整一轮历史 + 派单请求 + 未注入的存储。
     expect(seen).toHaveLength(1)
     expect(seen[0]?.history.conversationId).toBe(id)
     expect(seen[0]?.history.finalText).toBe('最小 Agent 已跑通一轮')
     expect(seen[0]?.history.messages.map(message => [message.role, message.text]))
       .toEqual([['user', '跑一轮最小会话'], ['assistant', '最小 Agent 已跑通一轮']])
-    expect(seen[0]?.request).toEqual({ message: '跑一轮最小会话', acceptance: '给出一个结论' })
+    expect(seen[0]?.request).toEqual({ message: '跑一轮最小会话' })
     expect(seen[0]?.storage).toBeUndefined()
+    // 交活工具没被装配（账本 `available` 为假）⇒ 结论走投影兜底，不做补交轮。
+    expect(result.text).toBe('答复：最小 Agent 已跑通一轮')
     // 接单时就把会话引用交回（页面刷新不丢），且只交一次。
     expect(call.progress.filter(value => value.conversationArtifact !== undefined)).toHaveLength(1)
     expect(call.progress[0]).toMatchObject({ kind: 'status', conversationId: id })
@@ -503,7 +538,7 @@ describe('P1 判据①：最小 Agent 跑通一轮', () => {
     const call = f.call({ message: '先出哪一版？' })
     const pending = f.run(call.request)
     const id = await f.accept()
-    f.complete(id, '两版都写好了，要哪一版？')
+    await f.answer(id, '两版都写好了，要哪一版？')
     const result = await pending
 
     expect(result.status).toBe('waiting')
@@ -526,26 +561,30 @@ describe('P1 判据①：最小 Agent 跑通一轮', () => {
     const first = f.call({ message: '第一问', requestId: 'turn-1' })
     const pending = f.run(first.request)
     const id = await f.accept()
-    f.complete(id, '第一答')
+    await f.answer(id, '第一答')
     expect(await pending).toMatchObject({ status: 'completed', conversationId: id })
     await f.settle(id)
 
     // 缺 conversationId：拒绝 —— 否则用户的话会落进一条他不认识的对话里。
     const orphan = f.call({ message: '第二问', requestId: 'turn-2' })
+    const before = f.followups().length
     const rejection = await Promise.resolve().then(() => f.reply(orphan.request)).then(() => undefined, (error: unknown) => error)
     expect(rejection).toMatchObject({ status: 400, code: 'DSH_ACCESS_ERROR' })
-    expect(f.followups()).toHaveLength(1)
+    // 没有任何副作用：没有新会话、没有新句柄、也没有把这句话投给 Agent。
+    expect(f.followups()).toHaveLength(before)
     expect(f.port.size).toBe(1)
     expect(f.opened()).toEqual([id])
 
     // 带 conversationId：沿原会话、同一个 Agent 对象续接，不新建会话、不 resume。
     const second = f.call({ message: '第二问', requestId: 'turn-2', conversationId: id })
+    const seen = f.followups().length
     const continued = f.reply(second.request)
-    expect(await f.accept(1)).toBe(id)
-    f.complete(id, '第二答')
+    expect(await f.accept(seen)).toBe(id)
+    await f.answer(id, '第二答', { turn: 2 })
     expect(await continued).toMatchObject({ status: 'completed', conversationId: id, text: '收到：第二答' })
 
-    expect(f.followups().map(entry => userText(entry.message))).toEqual(['第一问', '第二问'])
+    expect(f.followups().filter(entry => userText(entry.message) === '第二问')).toHaveLength(1)
+    expect(f.followups().filter(entry => userText(entry.message) === '第一问')).toHaveLength(1)
     expect(f.followups().every(entry => entry.id === id)).toBe(true)
     expect(f.port.size).toBe(1)
     expect(f.opened()).toEqual([id])
@@ -556,26 +595,36 @@ describe('P1 判据①：最小 Agent 跑通一轮', () => {
   it('acceptance 与 reworkOf 原样到达参与者，没有口径时不凭空多出字段', async () => {
     const contexts: ResultContext[] = []
     const definition = define({
-      projectResult: async context => { contexts.push(context); return { status: 'completed', text: '已交回' } },
+      projectResult: async context => {
+        contexts.push(context)
+        return {
+          status: 'completed',
+          text: '已交回',
+          // ⑦ 的第 3 条：口径非空 ⇒ 材料非空。给一条材料，这一轮才不会被自修正重跑。
+          artifacts: [{ kind: 'report', title: '验收报告', path: '/minimal-agent?report=1' }],
+        }
+      },
     })
     const f = fixture(definition)
 
     const first = f.call({ message: '重做一遍', acceptance: '必须有结论', reworkOf: 'subtask-7' })
     const pending = f.run(first.request)
     const id = await f.accept()
-    f.complete(id, '第一版')
+    await f.answer(id, '第一版')
     await pending
     expect(contexts[0]?.request).toEqual({ message: '重做一遍', acceptance: '必须有结论', reworkOf: 'subtask-7' })
     await f.settle(id)
 
     // 第二次派活没有 conversationId（新一轮会话）、也没有口径：请求里不该出现 undefined 字段。
     const second = f.call({ message: '再跑一轮', requestId: 'turn-2' })
+    const beforeSecond = f.followups().length
     const next = f.run(second.request)
-    const nextId = await f.accept(1)
-    f.complete(nextId, '第二版')
+    const nextId = await f.accept(beforeSecond)
+    await f.answer(nextId, '第二版')
     await next
     expect(nextId).not.toBe(id)
     expect(contexts[1]?.request).toEqual({ message: '再跑一轮' })
+    expect(contexts).toHaveLength(2)
     expect(f.port.size).toBe(2)
     await f.settle(nextId)
   })
@@ -654,7 +703,11 @@ describe('P1 判据①：最小 Agent 跑通一轮', () => {
     f.emit('assistant/message', { turn: 1, step: 1, stream: [], message: { content: [{ type: 'text', text: '已核对。' }] } }, id)
     f.emit('turn/end', { turn: 1, reason: { kind: 'completed' } }, id)
 
-    await expect(pending).rejects.toThrow('opaqueFromToolResult 没有被调用：安全钩子失效')
+    // 钩子没被调用 ⇒ 投影拿不到 opaque 集合 ⇒ 这一轮**不可能被当成成功交付**：
+    // 要么整轮拒绝（错误就是那句"钩子没被调用"），要么如实标成 `failed`。
+    const outcome = await pending.then((value: ParticipantResult) => value, (error: unknown) => error)
+    if (outcome instanceof Error) expect(outcome.message).toContain('opaqueFromToolResult 没有被调用')
+    else expect(outcome).toMatchObject({ status: 'failed' })
     await f.settle(id)
   })
 
@@ -682,7 +735,7 @@ describe('P1 判据①：最小 Agent 跑通一轮', () => {
     expect((await f.lifecycle.list(actor, query({ state: 'ready' }), hostScope)).items).toEqual([])
     expect((await f.lifecycle.list(actor, query({ q: '不存在' }), hostScope)).items).toEqual([])
 
-    f.complete(id, '跑完了')
+    await f.answer(id, '跑完了')
     await pending
     await f.settle(id)
     const idle = await f.lifecycle.list(actor, query(), hostScope)

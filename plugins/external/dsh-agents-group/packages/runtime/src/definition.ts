@@ -25,7 +25,7 @@
  */
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type Schema from '@deepseek-ai/schemastery'
-import type { ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
+import type { ToolDescriptor, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
 import type {
   ParticipantArtifact,
   ParticipantExternalPending,
@@ -85,6 +85,16 @@ export interface ProjectedResult {
   readonly externalPending?: ParticipantExternalPending
   /** `status: 'waiting'` 时要用户回答的问题。 */
   readonly question?: string
+  /**
+   * **业务自报的自检结论**（可选）。
+   *
+   * 它是 ⑦ 第 2 条的输入：只有 `passed` 算"自检通过"；`unverifiable`（这一轮没有可核验的
+   * 产出）与缺省（**执行方没实现自检**）都如实标为"未核验"，**只有 `failed` 计入不达标**。
+   *
+   * ⚠️ 它**不是**回报给协调方的那一份：协调方拿到的是运行时跑完 ⑦ 之后的汇总结论
+   * （`ParticipantResult.selfCheck`），由 `toSelfCheck()` 产出。两者方向相反，别混。
+   */
+  readonly selfCheck?: AgentSelfCheck
 }
 
 /** `judge` 的输入（⑧ 有界自修正用）。 */
@@ -229,4 +239,16 @@ export interface AgentDefinition {
    * 它**不改契约**：跨边界进度契约是封闭枚举 + 白名单投影，`'process'` 要真正生效需要另开通道。
    */
   readonly observe?: 'signal' | 'process'
+
+  /**
+   * ⑧ 有界自修正的重跑次数上限：**默认 1、上限 3**（写死在这里，不接受更大的值）。
+   *
+   * 上限是硬约束，不是保守估计：每次自修正都要**再跑一整轮**（注入一条 user message、
+   * 等模型重新作答），没有上界时"再试一次"会变成不受控的循环，而它烧的是同一份超时预算。
+   *
+   * **一次自修正按 0.5 次重做预算折算** —— 那是内环预算的记账口径：协调侧按"重做次数"
+   * 分配预算，而自修正是执行侧内部的局部循环，按半次折算才不会让某个 Agent 的内部重试
+   * 吃掉整条链路的预算。这个折算只影响记账，不影响这里实际跑几轮。
+   */
+  readonly maxSelfRetries?: number
 }

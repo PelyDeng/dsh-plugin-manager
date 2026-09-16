@@ -1,0 +1,534 @@
+/**
+ * P3 的端到端验收：补交轮 · 超时预算 · 幂等 · 待答问题的持久化 · ⑧ 有界自修正。
+ *
+ * 这里用的是**精简假宿主**（只造这条路径需要的那几个面），与 `runtime-minimal-agent.test.ts`
+ * 的内联 fixture 是**有意的重复**：那是 P1 的验收文件，动它会把两期的改动搅在一起。
+ *
+ * ## 驱动的两条纪律（不遵守就会得到"测试超时"这种没信息量的失败）
+ *
+ * 1. **想跑"干净的一轮"就必须先交活**：一轮正常跑完却没调交活工具时，运行时会**注入一条
+ *    补交提示再跑一轮**——那是 §4.3 要求的行为。所以除了专门测补交轮的用例，其余用例都在
+ *    `complete(...)` 之前调 {@link report}（模拟"模型调了交活工具"）。
+ * 2. **每一轮都要自己发事件**：`complete(...)` 只发一轮（`turn/start` → `assistant/message`
+ *    → `turn/end`）。补交轮与自修正轮都需要再发一次。
+ *
+ * 断言全部落在**对外可见的行为**上：注入了几条 user message、交付了什么、载体里留下了什么。
+ */
+import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { describe, expect, it } from 'vitest'
+import type { ParticipantRequest, ParticipantResult } from '../packages/runtime/src/contract.ts'
+import { ConversationLifecycle, type AgentRuntime, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
+import { createParticipant, type RuntimeParticipant } from '../packages/runtime/src/participant.ts'
+import type { AgentDefinition, ProjectedResult } from '../packages/runtime/src/definition.ts'
+import type { HandoffLedger } from '../packages/runtime/src/handoff.ts'
+import type { AgentDatabasePort, AgentStoragePort, ConversationPort, OwnerKey, TurnStorePort } from '../packages/runtime/src/storage/ports.ts'
+import { MemoryConversationPort } from './fixtures/memory-conversation-port.ts'
+
+const AGENT_ID = 'closure-agent'
+const ACTOR: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
+const DEFAULT_MODEL = { provider: 'deepseek', model: 'deepseek-chat' }
+const OWNER: OwnerKey = { namespace: 'user', userId: 'alice' }
+/** 待答问题的键：与运行时用的 `OwnerKey` 同形。 */
+const ownerKey = (owner: OwnerKey, conversationId: string): string => `${owner.namespace}:${owner.userId}:${conversationId}`
+
+// ---------------------------------------------------------------------------
+// 待答问题的载体（内存版 `TurnStorePort`）
+// ---------------------------------------------------------------------------
+
+/**
+ * 只实现 P3 需要的那几个面。
+ *
+ * `questions` 由调用方**传进来**：这样"关掉一个实例、开一个新实例"只要共用同一个 Map，
+ * 就等价于"数据落进了持久存储"——而那正是接线要保证的事。
+ */
+function memoryStorage(port: ConversationPort, questions: Map<string, string>) {
+  const turns: TurnStorePort = {
+    claim: async () => 'claimed',
+    finish: async () => {},
+    pendingQuestion: async (owner, conversationId) => questions.get(ownerKey(owner, conversationId)),
+    setPendingQuestion: async (owner, conversationId, question) => {
+      const key = ownerKey(owner, conversationId)
+      if (question === undefined) questions.delete(key)
+      else questions.set(key, question)
+    },
+  }
+  const db = {
+    assertSchema: async () => {},
+    conversations: port,
+    turns,
+    query: async () => [],
+    transaction: async (fn: (tx: AgentDatabasePort) => Promise<unknown>) => fn(db as unknown as AgentDatabasePort),
+    close: async () => {},
+  } as unknown as AgentDatabasePort
+  const storage: AgentStoragePort = { db, access: { mode: 'authenticated' } as unknown as Access }
+  return { storage, turns }
+}
+
+// ---------------------------------------------------------------------------
+// 精简假宿主
+// ---------------------------------------------------------------------------
+
+interface FakeSession {
+  readonly id: string
+  readonly events: SessionEvent[]
+  agent: Agent
+  disposed: boolean
+}
+
+const sleep = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
+
+/** 有界等待；次数刻意压到 200（Windows 上每次 tick 可能十几毫秒），失败时给**有信息量**的错。 */
+async function until(check: () => boolean, label: string): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (check()) return
+    await sleep()
+  }
+  throw new Error(`等待超时：${label}`)
+}
+
+function host(definition: AgentDefinition, config: Partial<RuntimeConfig> = {}, questions = new Map<string, string>()) {
+  const byEvent = new Map<string, Set<(...args: unknown[]) => void>>()
+  const sessions = new Map<string, FakeSession>()
+  const followups: { readonly id: string; readonly text: string }[] = []
+  const disposers: (() => Promise<void> | void)[] = []
+  const openedIds: string[] = []
+  let seq = 0
+
+  const sessionOf = (id: string): FakeSession => {
+    const existing = sessions.get(id)
+    if (existing !== undefined) return existing
+    const session = { id, events: [], disposed: false } as unknown as FakeSession
+    session.agent = {
+      id,
+      session: { id, snapshotEvents: () => session.events },
+      followup: (message: unknown) => {
+        const text = (message as { content?: readonly { text?: string }[] }).content?.[0]?.text ?? ''
+        followups.push({ id, text })
+        seq += 1
+        session.events.push({ type: 'user/message', data: message, time: Date.now(), seq } as unknown as SessionEvent)
+      },
+      whenIdle: async () => {},
+      cancel: () => {},
+    } as unknown as Agent
+    sessions.set(id, session)
+    return session
+  }
+
+  const dispatch = (name: string, ...args: unknown[]): void => {
+    for (const listener of [...(byEvent.get(name) ?? [])]) listener(...args)
+  }
+  const emit = (type: string, data: unknown, conversationId: string): void => {
+    const session = sessionOf(conversationId)
+    seq += 1
+    const value = { type, data, time: Date.now(), seq } as unknown as SessionEvent
+    session.events.push(value)
+    dispatch('session/event', { id: conversationId }, value)
+  }
+
+  const scopeOf = (): Context => ({
+    systemPrompt: { section: () => {} },
+    tools: { restrict: () => {} },
+  }) as unknown as Context
+  const agents = {
+    create: async (input: { readonly sessionId: unknown; readonly setup?: (ctx: Context, agent: Agent) => unknown }) => {
+      const session = sessionOf(String(input.sessionId))
+      openedIds.push(session.id)
+      await input.setup?.(scopeOf(), session.agent)
+      return { agent: session.agent, dispose: async () => { session.disposed = true } }
+    },
+    resume: async (input: { readonly resumeSessionId: unknown; readonly setup?: (ctx: Context, agent: Agent) => unknown }) => {
+      const session = sessionOf(String(input.resumeSessionId))
+      await input.setup?.(scopeOf(), session.agent)
+      return { agent: session.agent, dispose: async () => { session.disposed = true } }
+    },
+    list: () => [],
+    get: () => undefined,
+  }
+  const llm = {
+    resolveCallConfig: async (value: unknown) => value,
+    resolveModelInfo: async () => ({ reasoning: { efforts: [{ id: 'medium' }] } }),
+  }
+  const services: Record<string, unknown> = {
+    agentDefaultModel: { currentSelection: () => ({ ...DEFAULT_MODEL }) },
+    sessionController: {
+      modelCatalog: async () => ({
+        groups: [{ id: DEFAULT_MODEL.provider, name: 'DeepSeek', models: [{ id: DEFAULT_MODEL.model, name: 'DeepSeek Chat' }] }],
+        failures: [],
+        selected: { ...DEFAULT_MODEL },
+      }),
+      selectModel: async (input: { readonly provider: string; readonly model: string }) => ({ selected: { provider: input.provider, model: input.model } }),
+    },
+    llm,
+    sessionPersistence: { inspect: async (id: string) => ({ events: sessions.get(id)?.events ?? [], header: { id } }) },
+    sessionProjections: { restore: () => ({ checkpoint: { modelSelection: { val: { pending: null, lastUsed: { ...DEFAULT_MODEL } } } } }) },
+    workspaceRegistry: { archivedSessionIds: [], archiveSession: async () => {} },
+    agents,
+  }
+  const ctx = {
+    effect: (effect: () => () => Promise<void> | void) => { disposers.push(effect()) },
+    on: (name: string, listener: (...args: unknown[]) => void) => {
+      const group = byEvent.get(name) ?? new Set<(...args: unknown[]) => void>()
+      group.add(listener); byEvent.set(name, group)
+      return () => { group.delete(listener) }
+    },
+    get: (name: string) => services[name],
+    llm,
+    agents,
+    root: { emit: () => {} },
+  } as unknown as Context
+  const access: Access = {
+    mode: 'authenticated',
+    ready: () => {},
+    resolve: () => ACTOR,
+    assert: value => { if (value !== ACTOR) throw new AccessError(403, '无权访问') },
+  }
+  const port = new MemoryConversationPort(AGENT_ID)
+  const { storage } = memoryStorage(port, questions)
+  const runtimeConfig: RuntimeConfig = {
+    routePrefix: '/closure',
+    turnTimeoutMs: 30_000,
+    authRecheckMs: 10_000,
+    maxActiveConversations: 8,
+    reasoningEffort: 'medium',
+    ...config,
+  }
+  const lifecycle = new ConversationLifecycle({
+    ctx, definition, access, store: port, config: runtimeConfig, allowedTools: () => [],
+  })
+  const runtime: AgentRuntime = { ctx, definition, access, store: port, config: runtimeConfig, lifecycle, allowedTools: () => [] }
+  const participant: RuntimeParticipant = createParticipant({ definition, runtime, storage, access, config: runtimeConfig })
+
+  return {
+    participant, lifecycle, port, storage, questions,
+    followups: () => followups,
+    opened: () => openedIds,
+    /** 最近一次建立句柄的会话 id。 */
+    lastConversation: () => openedIds[openedIds.length - 1] ?? '',
+    /** 发一轮完整回合：`turn/start` → `assistant/message` → `turn/end`。 */
+    complete: (conversationId: string, text: string, reason = 'completed') => {
+      emit('turn/start', { turn: 1 }, conversationId)
+      emit('assistant/message', { message: { content: [{ type: 'text', text }] }, step: 0 }, conversationId)
+      emit('turn/end', { reason: { kind: reason } }, conversationId)
+    },
+    request: (overrides: Partial<ParticipantRequest> = {}): ParticipantRequest => ({
+      actor: ACTOR, missionId: 'm1', requestId: 'r1', message: '干活',
+      signal: new AbortController().signal, onProgress: () => {},
+      ...overrides,
+    }),
+    dispose: async () => { await lifecycle.dispose(); await Promise.allSettled(disposers.map(fn => fn())) },
+  }
+}
+
+const definitionOf = (overrides: Partial<AgentDefinition> = {}): AgentDefinition => ({
+  id: AGENT_ID,
+  displayName: '闭环 Agent',
+  description: '只跑一轮',
+  persona: '你好',
+  tools: () => [],
+  config: {} as never,
+  ...overrides,
+})
+
+type Hosted = ReturnType<typeof host>
+
+/**
+ * 模拟**装配侧接线**：注册交活工具。
+ *
+ * 补交轮只在 `ledger.available` 为真时跑（没注册工具时补交只会让模型把同一件事再答一遍）。
+ * 真实装配里这一步发生在把 `reportResultTool(...)` 注册进 agent 作用域的时候。
+ */
+function install(hosted: Hosted, conversationId: string): HandoffLedger {
+  const ledger = hosted.participant.handoffFor(conversationId)
+  ledger.install()
+  return ledger
+}
+
+/** 模拟"模型调了交活工具"：接线 + 把结论写进这个会话的账本，收尾时就会被采用。 */
+function report(hosted: Hosted, conversationId: string, result: ProjectedResult): void {
+  install(hosted, conversationId).submit(result)
+}
+
+/** 起一轮并等它接单（`followup` 投出去的那一刻），返回会话 id。 */
+async function accept(hosted: Hosted, promise: Promise<ParticipantResult>, since = 0): Promise<string> {
+  await until(() => hosted.followups().length > since, '这一轮接单')
+  void promise.catch(() => {})
+  return hosted.followups()[hosted.followups().length - 1]!.id
+}
+
+/** 跑一轮"干净"的回合：交活 → 发事件 → 拿到结论。 */
+async function runOnce(hosted: Hosted, request: ParticipantRequest, text: string, result: ProjectedResult, since = 0): Promise<ParticipantResult> {
+  const promise = hosted.participant.run(request)
+  const id = await accept(hosted, promise, since)
+  report(hosted, id, result)
+  hosted.complete(id, text)
+  return promise
+}
+
+// ---------------------------------------------------------------------------
+
+describe('补交轮：没调交活工具时补一次，补不上就按投影兜底（不判失败）', () => {
+  it('第一轮没交活 → 注入补交提示；第二轮交活 → 用**工具的结果**交付', async () => {
+    const hosted = host(definitionOf())
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      install(hosted, id)
+      hosted.complete(id, '第一轮自己写的正文')
+      await until(() => hosted.followups().length >= 2, '补交提示已注入')
+      expect(hosted.followups()[1]!.text).toContain('report_result')
+      expect(hosted.followups()[1]!.text).toContain('实际')
+      // 第二轮：模型显式交活。
+      report(hosted, id, { status: 'completed', text: '工具交回的正文' })
+      hosted.complete(id, '第二轮自己写的正文')
+      const result = await promise
+      expect(result.text).toBe('工具交回的正文')
+      expect(result.status).toBe('completed')
+      // 交活过 ⇒ 第 4 条通过；没有口径、没有业务自检 ⇒ 第 2/3 条未核验 ⇒ 汇总如实说"未核验"。
+      expect(result.selfCheck?.status).toBe('unverifiable')
+    } finally { await hosted.dispose() }
+  })
+
+  it('两轮都没交活 → **只补一次**，最后按会话投影兜底交付且不判失败', async () => {
+    const hosted = host(definitionOf())
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      install(hosted, id)
+      hosted.complete(id, '第一轮正文')
+      await until(() => hosted.followups().length >= 2, '补交提示已注入')
+      hosted.complete(id, '第二轮正文')
+      const result = await promise
+      // 补交只补一次：注入计数停在 2（一条原始 + 一条补交）。
+      expect(hosted.followups().length).toBe(2)
+      expect(result.status).toBe('completed')
+      expect(result.text).toBe('第二轮正文')
+      expect(result.selfCheck?.status).toBe('unverifiable')
+    } finally { await hosted.dispose() }
+  })
+
+  it('取消的回合不触发补交（没有可补的结论）', async () => {
+    const hosted = host(definitionOf())
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      hosted.complete(id, '', 'aborted')
+      const result = await promise
+      expect(result.status).toBe('cancelled')
+      expect(hosted.followups().length).toBe(1)
+    } finally { await hosted.dispose() }
+  })
+
+  it('**没接线（交活工具没注册）也不补交** —— 补交只会让模型把同一件事再答一遍', async () => {
+    // `ledger.available` 是装配侧 `install()` 的结果。没注册工具时模型手里根本没有
+    // `report_result`，补一次只会白花一轮（而那一轮吃的是同一个超时预算）。
+    // 这条用例锁定那个门槛：有人把它改成"无条件补交"时，这里必须红。
+    const hosted = host(definitionOf())
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      // 刻意**不** install。
+      hosted.complete(id, '只答了一句')
+      const result = await promise
+      expect(hosted.followups().length).toBe(1)
+      expect(result.status).toBe('completed')
+      expect(result.text).toBe('只答了一句')
+      // 没调工具 ⇒ 第 4 条如实标"未核验"，不冒充通过。
+      expect(result.selfCheck?.status).toBe('unverifiable')
+    } finally { await hosted.dispose() }
+  })
+})
+
+describe('判据②：补交轮不撑破 turnTimeoutMs', () => {
+  it('补交轮迟迟不结束 → 总时长仍受 turnTimeoutMs 约束', async () => {
+    // 50ms 预算 + 补交轮永不结束：如果没有这个约束，这里会一直挂着。
+    const hosted = host(definitionOf(), { turnTimeoutMs: 50 })
+    try {
+      const started = Date.now()
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      install(hosted, id)
+      hosted.complete(id, '第一轮正文')
+      await until(() => hosted.followups().length >= 2, '补交提示已注入')
+      // 补交轮不结束：不发第二轮的任何事件。
+      await expect(promise).rejects.toThrow(/超时/)
+      // 约束是"总共 50ms 量级"，给足调度余量；关键是它**没有**无限等下去。
+      expect(Date.now() - started).toBeLessThan(2_000)
+    } finally { await hosted.dispose() }
+  })
+
+  it('超时也发生在首轮（补交之前）——同一个预算覆盖整条循环', async () => {
+    const hosted = host(definitionOf(), { turnTimeoutMs: 40 })
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      await accept(hosted, promise)
+      await expect(promise).rejects.toThrow(/超时/)
+      expect(hosted.followups().length).toBe(1)
+    } finally { await hosted.dispose() }
+  })
+})
+
+describe('判据③：同 requestId 重试不产生第二轮副作用', () => {
+  it('第二次调用直接回上一次的结论，**不再注入任何 user message**', async () => {
+    const hosted = host(definitionOf())
+    try {
+      const result = await runOnce(hosted, hosted.request({ requestId: 'same-id' }), '正文', { status: 'completed', text: '交回的正文' })
+      const injected = hosted.followups().length
+      // 同 ID 同内容重试：必须回缓存，不能重跑（否则补交轮会再跑一遍 ⇒ 第二轮副作用）。
+      const again = await hosted.participant.run(hosted.request({ requestId: 'same-id' }))
+      expect(again).toEqual(result)
+      expect(hosted.followups().length).toBe(injected)
+    } finally { await hosted.dispose() }
+  })
+
+  it('同 requestId 换了内容 → 明确拒绝（不静默当同一次）', async () => {
+    const hosted = host(definitionOf())
+    try {
+      await runOnce(hosted, hosted.request({ requestId: 'clash' }), '正文', { status: 'completed', text: '交回的正文' })
+      expect(() => hosted.participant.run(hosted.request({ requestId: 'clash', message: '换了个问题' })))
+        .toThrow(/同一请求身份/u)
+    } finally { await hosted.dispose() }
+  })
+
+  it('不同 requestId 各自跑一轮（缓存不串）', async () => {
+    const hosted = host(definitionOf())
+    try {
+      await runOnce(hosted, hosted.request({ requestId: 'a' }), '正文 A', { status: 'completed', text: '交回 A' })
+      const injected = hosted.followups().length
+      const result = await runOnce(hosted, hosted.request({ requestId: 'b' }), '正文 B', { status: 'completed', text: '交回 B' }, injected)
+      expect(result.text).toBe('交回 B')
+      expect(hosted.followups().length).toBe(injected + 1)
+    } finally { await hosted.dispose() }
+  })
+})
+
+describe('待答问题的持久化（重启后仍能恢复"在等什么"）', () => {
+  it('产出 waiting → 写入载体；**新实例**读回同一 question', async () => {
+    const questions = new Map<string, string>()
+    const definition = definitionOf()
+    const first = host(definition, {}, questions)
+    let conversationId = ''
+    try {
+      const result = await runOnce(
+        first,
+        first.request(),
+        '阶段正文',
+        // 模型通过交活工具交回"我在等用户回话"——`status: 'waiting'` 与 `question` 一起。
+        { status: 'waiting', text: '阶段成果', question: '采用哪一版？' },
+      )
+      conversationId = first.lastConversation()
+      expect(result.status).toBe('waiting')
+      expect(result.question).toBe('采用哪一版？')
+      // 载体里必须有它——**接线缺失时这条断言必然红**（Map 里根本没记录）。
+      expect(questions.get(ownerKey(OWNER, conversationId))).toBe('采用哪一版？')
+    } finally { await first.dispose() }
+
+    // 等价重启：新宿主、新 participant、**同一个载体**。
+    const second = host(definition, {}, questions)
+    try {
+      expect(await second.storage.db.turns.pendingQuestion(OWNER, conversationId)).toBe('采用哪一版？')
+    } finally { await second.dispose() }
+  })
+
+  it('非 waiting 的一轮把待答问题**清空**（否则上一轮的问题会被下一轮读回来）', async () => {
+    const questions = new Map<string, string>()
+    const hosted = host(definitionOf(), {}, questions)
+    try {
+      const waiting = await runOnce(hosted, hosted.request({ requestId: 'q1' }), '阶段正文',
+        { status: 'waiting', text: '阶段成果', question: '采用哪一版？' })
+      const id = hosted.lastConversation()
+      expect(waiting.status).toBe('waiting')
+      expect(questions.has(ownerKey(OWNER, id))).toBe(true)
+
+      // 第二轮：不再等待 ⇒ 必须清空。
+      const done = await runOnce(hosted, hosted.request({ requestId: 'q2', conversationId: id }), '做完了',
+        { status: 'completed', text: '做完了' }, 1)
+      expect(done.status).toBe('completed')
+      expect(questions.has(ownerKey(OWNER, id))).toBe(false)
+    } finally { await hosted.dispose() }
+  })
+})
+
+describe('⑧ 有界自修正', () => {
+  it('judge 不达标 → 注入重做提示（带上原因）；第二轮达标 → 交付', async () => {
+    let round = 0
+    const hosted = host(definitionOf({
+      judge: async () => { round += 1; return round === 1 ? { ok: false, reason: '缺少发布链接' } : { ok: true } },
+    }))
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      report(hosted, id, { status: 'completed', text: '第一版' })
+      hosted.complete(id, '第一版正文')
+      await until(() => hosted.followups().length >= 2, '重做提示已注入')
+      expect(hosted.followups()[1]!.text).toContain('缺少发布链接')
+      report(hosted, id, { status: 'completed', text: '第二版（含链接）' })
+      hosted.complete(id, '第二版正文')
+      const result = await promise
+      expect(result.text).toBe('第二版（含链接）')
+      expect(round).toBe(2)
+    } finally { await hosted.dispose() }
+  })
+
+  it('maxSelfRetries: 0 → 不重跑，直接交付（并如实回报）', async () => {
+    const hosted = host(definitionOf({
+      maxSelfRetries: 0,
+      judge: async () => ({ ok: false, reason: '就是不达标' }),
+    }))
+    try {
+      const result = await runOnce(hosted, hosted.request(), '正文', { status: 'completed', text: '唯一一版' })
+      expect(result.text).toBe('唯一一版')
+      expect(hosted.followups().length).toBe(1)
+    } finally { await hosted.dispose() }
+  })
+
+  it('⑦ 的不达标（有口径却零材料）也触发自修正', async () => {
+    const hosted = host(definitionOf())
+    try {
+      const promise = hosted.participant.run(hosted.request({ acceptance: '一份 800 字以上的候选稿' }))
+      const id = await accept(hosted, promise)
+      // 交了正文但**没有任何材料** ⇒ 第 3 条不达标 ⇒ 自修正。
+      report(hosted, id, { status: 'completed', text: '只有正文' })
+      hosted.complete(id, '正文')
+      await until(() => hosted.followups().length >= 2, '自修正提示已注入')
+      expect(hosted.followups()[1]!.text).toContain('没有达到验收要求')
+      report(hosted, id, { status: 'completed', text: '带材料的版本', artifacts: [{ title: '候选稿', path: '/x', kind: 'draft' }] })
+      hosted.complete(id, '正文')
+      const result = await promise
+      expect(result.selfCheck?.status).not.toBe('failed')
+    } finally { await hosted.dispose() }
+  })
+
+  it('自修正次数硬上限是 3（声明 99 也不会无限重跑）', async () => {
+    let judgeCalls = 0
+    const hosted = host(definitionOf({
+      maxSelfRetries: 99,
+      judge: async () => { judgeCalls += 1; return { ok: false, reason: '永远不达标' } },
+    }))
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      let finished = false
+      void promise.then(() => { finished = true }, () => { finished = true })
+      // 每一轮都交活、都宣告不达标：**驱动到它自己停下来为止**（同时盯着 promise 是否已交付，
+      // 免得在"它已经交付、不再注入"之后还傻等）。
+      for (let round = 0; round < 8 && !finished; round += 1) {
+        const ready = await Promise.race([
+          until(() => hosted.followups().length > round, `第 ${round + 1} 轮`)
+            .then(() => true).catch(() => false),
+          promise.then(() => false, () => false),
+        ])
+        if (!ready || finished) break
+        const id = hosted.followups()[round]!.id
+        report(hosted, id, { status: 'completed', text: `第 ${round + 1} 版` })
+        hosted.complete(id, `第 ${round + 1} 轮`)
+      }
+      const result = await promise
+      // 1 次原始 + 最多 3 次自修正：注入条数与 judge 调用次数都被硬上限夹住。
+      expect(judgeCalls).toBeLessThanOrEqual(4)
+      expect(hosted.followups().length).toBeLessThanOrEqual(4)
+      expect(result.selfCheck?.status).toBe('failed')
+    } finally { await hosted.dispose() }
+  })
+})

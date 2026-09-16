@@ -35,7 +35,7 @@ import {
   type ConversationProvider,
   type PreviewMessage,
 } from '@dsh-plugin-manager/plugin-kit'
-import type { ConversationPort, OwnerKey } from './ports.ts'
+import type { ConversationPageShape, ConversationPort, ConversationQueryShape } from './ports.ts'
 
 /** 预览消息：业务的展示口径（缺省实现由调用方给，通常是 `previewMessages`）。 */
 export interface AdapterPreviewMessage {
@@ -52,13 +52,20 @@ export interface ConversationAdapterInput {
   /** **同步**的忙判定（本实例正在跑 + 宿主侧正在跑）。 */
   readonly busy: (conversationId: string) => boolean
   /**
-   * 本实例正在跑的会话 id（侧栏 `list` 的 `busy` 集合要带上它们）。
+   * 列表查询的委托目标。
    *
-   * ⚠️ 装配时应当传 `ConversationLifecycle.busyIds()` —— 它与 `isBusy` **同源**，是"本地占用"
-   * 的唯一算法。在这里另算一遍（或换个来源）就会与移除围栏漂移：围栏看的是一套集合、
-   * 侧栏显示的是另一套，而那种漂移在页面上只表现为"这条怎么删不掉"。
+   * ⚠️ 装配时传 `ConversationLifecycle.list`——它负责把**本实例**的忙集合并进去（走
+   * `busyIds()`，与 `isBusy` 同源）。本适配器只补**宿主侧**那两个集合：它们来自 kit
+   * （`hostBusyConversationIds` / `conversationArchive`），而 kit 的会话契约只该在这里碰。
+   *
+   * **为什么不让 adapter 自己合并**：那样"哪些会话在跑"就有两份算法（一份在生命周期、
+   * 一份在这里），而它们会漂移——围栏看一套集合、侧栏显示另一套，页面上只表现为
+   * "这条怎么删不掉"，查起来要跨两个文件。
    */
-  readonly localBusyIds: () => readonly string[]
+  readonly list: (actor: Actor, query: ConversationQueryShape, scope: {
+    readonly hostBusy: readonly string[]
+    readonly archived: readonly string[]
+  }) => Promise<ConversationPageShape>
   /** 移除时释放本插件持有的会话句柄（删了就不该继续占着）。 */
   readonly release: (conversationId: string) => Promise<void>
   /** 插件是否正在停止（停止中拒绝新的移除）。 */
@@ -76,13 +83,12 @@ export interface ConversationAdapterInput {
  */
 export function createConversationProvider(input: ConversationAdapterInput): ConversationProvider {
   const { ctx, port, access } = input
-  const ownerOf = (actor: Actor): OwnerKey => ({ namespace: actor.namespace, userId: actor.userId })
   return {
     protocol: 1,
     pluginId: port.agentId,
     list: async (actor, query) => {
       access.assert(actor)
-      const page = await port.list(ownerOf(actor), {
+      const page = await input.list(actor, {
         offset: query.offset,
         limit: query.limit,
         q: query.q,
@@ -91,9 +97,10 @@ export function createConversationProvider(input: ConversationAdapterInput): Con
         state: query.state,
       }, {
         // 宿主侧正在跑的会话也要算忙：它可能不属于本插件，但移除围栏必须看见它。
-        busy: [...new Set([...hostBusyConversationIds(ctx), ...input.localBusyIds()])],
+        hostBusy: hostBusyConversationIds(ctx),
         archived: conversationArchive(ctx).archivedSessionIds,
       })
+      // 私有端口的 `items` 是只读数组，kit 的 `ConversationPage` 要可变的：展开复制一次。
       return { items: [...page.items], total: page.total, nextOffset: page.nextOffset }
     },
     preview: async (actor, id, before) => {
