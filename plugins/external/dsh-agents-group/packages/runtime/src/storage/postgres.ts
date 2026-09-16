@@ -305,6 +305,23 @@ export class PgTurns {
   }
 
   /**
+   * 这一轮的状态；没有行时 `undefined`。
+   *
+   * `claim` 的 `'duplicate'` 分不清"已交付"与"崩溃中断"，接线时必须配合本方法才有正确语义：
+   * `finished` ⇒ 不重跑；`claimed` ⇒ 上一轮中断，允许重跑。
+   */
+  async turnStatus(owner: OwnerKey, requestId: string): Promise<'claimed' | 'finished' | undefined> {
+    if (requestId === '') return undefined
+    const rows = await this.scoped.query<{ status: string }>(
+      `SELECT status FROM dsh_turns
+        WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND request_id = $4`,
+      [this.agentId, owner.namespace, owner.userId, requestId],
+    )
+    const status = rows[0]?.status
+    return status === 'claimed' || status === 'finished' ? status : undefined
+  }
+
+  /**
    * 这个会话在等用户回什么。
    *
    * 取该会话**最新**一条带 `question` 的行：等待可能发生多次（回一句、又等一句），

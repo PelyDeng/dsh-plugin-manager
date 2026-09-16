@@ -48,6 +48,12 @@ function memoryStorage(port: ConversationPort, questions: Map<string, string>) {
   const turns: TurnStorePort = {
     claim: async () => 'claimed',
     finish: async () => {},
+    // 永远"没有这一轮的记录"，与上面的恒 `'claimed'` 自洽。
+    //
+    // ⚠️ 注意替身这么宽松的代价：**既有运行时用例全都碰不到 `claim` 接线**，一处都测不到
+    // （接线后它们仍全绿）。`runtime-turn-claim.test.ts` 里那个可编程替身是唯一覆盖 ——
+    // 这正是"实现与测试各自都在、中间的线没接"能连续发生三次的结构性原因。
+    turnStatus: async () => undefined,
     pendingQuestion: async (owner, conversationId) => questions.get(ownerKey(owner, conversationId)),
     setPendingQuestion: async (owner, conversationId, question) => {
       const key = ownerKey(owner, conversationId)

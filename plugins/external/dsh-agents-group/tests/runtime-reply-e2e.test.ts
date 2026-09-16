@@ -130,6 +130,8 @@ function runtimeHost(definition: AgentDefinition, questions = new Map<string, st
   const turns: TurnStorePort = {
     claim: async () => 'claimed',
     finish: async () => {},
+    // 与恒 `'claimed'` 自洽：没有"已存在"的轮次，也就没有状态可答。
+    turnStatus: async () => undefined,
     pendingQuestion: async (owner, conversationId) => questions.get(`${owner.namespace}:${owner.userId}:${conversationId}`),
     setPendingQuestion: async (owner, conversationId, question) => {
       const key = `${owner.namespace}:${owner.userId}:${conversationId}`

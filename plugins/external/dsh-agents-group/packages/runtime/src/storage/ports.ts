@@ -210,6 +210,18 @@ export interface TurnStorePort {
   finish(owner: OwnerKey, requestId: string): Promise<void>
 
   /**
+   * 这一轮现在处于什么状态；没有行时 `undefined`。
+   *
+   * **必须与 {@link claim} 成对使用**：`claim` 只回答"有没有这一轮"，`'duplicate'` 把"已经交付过"
+   * 与"上一轮认领后崩在半路"混成同一个答案。不加区分就按 `'duplicate'` 跳过，等于把崩溃的那一轮
+   * **永久判成已结算** —— 把一个"静默重放"缺陷换成"静默丢活"缺陷，后者更坏。
+   *
+   * 单独放在这里而不是把 `claim` 改成三态：`claim` 的现有语义已被存储契约测试固化
+   * （未 `finish` 与已 `finish` 都返回 `'duplicate'`），改返回值会动既有断言。
+   */
+  turnStatus(owner: OwnerKey, requestId: string): Promise<'claimed' | 'finished' | undefined>
+
+  /**
    * 待答问题：重启后仍能恢复"这个会话在等用户回什么"。
    *
    * **必须有**：协调侧要求子任务确实进入 `waiting_user`，而等待上下文以前只在内存

@@ -120,6 +120,8 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
   const ledgers = new Map<string, HandoffLedger>()
   /** 门槛缺失只警告一次：那是装配错误，不该按会话刷屏。 */
   let warnedHandoffMissing = false
+  /** 中断轮次的告警也只发一次：同一进程里反复刷同一个崩溃信号没有意义。 */
+  let warnedResumedTurn = false
   let lastLedger = createHandoffLedger()
   const ledgerOf = (conversationId: string): HandoffLedger => {
     const existing = ledgers.get(conversationId)
@@ -440,6 +442,13 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
               if (outcome.kind === 'deliver') {
                 cleanup()
                 settledTurns.set(settledKey, { message, result: outcome.result })
+                // ⚠️ `finish` 必须在 `resolve` **之前**：反过来的话调用方一拿到结果就可能退出
+                // 进程，状态停在 `claimed`，下次重试会被判成"中断可重跑"——而它其实已经交付过
+                // ⇒ 又是重复副作用。`claim` 与 `finish` 必须成对落地：`dsh_turns` 里的 `claimed`
+                // 行没有任何清理或翻转机制（`failStalePending` 翻的是会话围栏，不是它）。
+                if (storage !== undefined) {
+                  await storage.db.turns.finish(ownerOf(request.actor), settledKey)
+                }
                 resolve(outcome.result)
                 return
               }
@@ -519,6 +528,40 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
           request.signal.throwIfAborted()
           assert()
           if (opened.active) throw new AccessError(409, '智能体正在回答上一条问题')
+          // —— 轮次幂等（落 `dsh_turns`）：同一个 `requestId` 在**重启之后**也只跑一轮 ——
+          // ⚠️ 这一处接线曾经缺失，与上面 `setPendingQuestion` 是同一家族的另一处：接口
+          // （`TurnStorePort.claim`）与实现（`PgTurns.claim`）都在、两侧测试各自绿，但运行时
+          // **从不调用它**。后果是进程重启后**整轮重放**、重复产生外部副作用，而且**静默**。
+          //
+          // 位置被两头钉死，不能挪：
+          //  · 不能放早 —— `dsh_turns.conversation_id` 是 NOT NULL + 外键，会话要到
+          //    `lifecycle.open()` 才存在（放早直接 23503）；也不能放到上面那条 `opened.active`
+          //    校验之前，否则一个已被判 409/401/404、从未执行的轮次会被登记成"已结算"。
+          //  · 不能放晚 —— `retainTurn`/`followup` 一执行，消息已注入、模型已开跑，外部副作用
+          //    已经发生，此时再 claim 只能丢结果，白烧一次调用。
+          //
+          // `settledKey`（含 `run:`/`reply:` 前缀）整体当作 `requestId`：这样 DB 里就是两个不同
+          // 身份，与现有"`run` 与 `reply` 分开算"逐字一致；传裸 `requestId` 会让两者互相冲突。
+          if (storage !== undefined) {
+            const owner = ownerOf(request.actor)
+            const verdict = await storage.db.turns.claim(owner, opened.id, settledKey, message)
+            if (verdict === 'duplicate') {
+              const status = await storage.db.turns.turnStatus(owner, settledKey)
+              if (status === 'finished') {
+                // 已经交付过 ⇒ 重跑会重复外部副作用，必须显式拒绝，不能静默再来一遍。
+                throw new AccessError(409, '这一轮已经结算过（同一个请求标识）')
+              }
+              // `claimed` ⇒ 上一轮认领后崩在半路，那是**中断**而不是"已结算"，允许重跑。
+              // `claim` 自己分辨不出这两者 —— 这就是它必须与 `turnStatus` 成对使用的原因。
+              if (!warnedResumedTurn) {
+                warnedResumedTurn = true
+                console.warn(
+                  `[agents-group/runtime] ${definition.id} 遇到中断的轮次（${settledKey}）：`
+                  + '上一轮认领后没有结算完，本轮会重跑，外部副作用可能因此发生两次。',
+                )
+              }
+            }
+          }
           releaseTurn = lifecycle.retainTurn(opened, request.actor)
           admitted = true
           sinks.set(opened.id, sink!)
