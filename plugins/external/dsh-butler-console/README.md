@@ -140,11 +140,15 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | GET | `/butler/models` | 宿主模型目录 |
 
 `/butler/chat` 与 `/butler/reply` 的 SSE 事件类型：`conversation`、`user`、`chat`、`chat_delta`、
-`plan`、`subtask`、`subtask_delta`、`subtask_thinking`、`summary`、`error`，以 `[DONE]` 结束。
-`/butler/events` 还会先给一条 `run`（这一轮的头部）；游标接不上时给 `reset`。
+`chat_thinking`、`plan`、`subtask`、`subtask_delta`、`subtask_thinking`、`summary`、`error`，
+以 `[DONE]` 结束。`/butler/events` 还会先给一条 `run`（这一轮的头部）；游标接不上时给 `reset`。
 
 牛马大总管自己的发言也是边收边上的：`chat_delta` 开一条气泡并逐段追加，回合结束时到达的
 `chat` 用它落定后的正文**替换**预览，所以被重试掉的那一版不会留在页面上。
+
+它自己的思考同样边收边上，走 `chat_thinking`：这是一条**覆盖语义**的整段快照（不是增量），
+只发完整行，末行还在生成时带「正在生成…」占位，回合结束时补发一次完整快照。页面把它挂在
+大总管气泡的正文之前，默认收起；成员那侧的 `subtask_thinking` 是同一套语义。
 
 ### 对话正文从哪儿读
 
