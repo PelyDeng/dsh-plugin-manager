@@ -1,6 +1,6 @@
 {
   "name": "dsh-butler-console",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "DSH 牛马大总管：统一对话入口、任务拆解与子 Agent 调度状态页",
   "license": "UNLICENSED",
   "private": true,
