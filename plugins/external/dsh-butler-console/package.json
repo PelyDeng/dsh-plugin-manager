@@ -18,6 +18,8 @@
   "files": [
     "dist/",
     "web/",
+    "migrations/postgres/0001_init.sql",
+    "config/storage.example.json",
     "persona.txt",
     "cordis.patch.yml",
     "README.md",
@@ -49,8 +51,14 @@
       "web/app.js",
       "web/api.js",
       "web/stream.js",
-      "dist/web/app.js"
+      "dist/web/app.js",
+      "migrations/postgres/0001_init.sql",
+      "dist/migrate-storage.mjs"
     ],
+    "runtimeConfig": {
+      "variable": "BUTLER_PG_CONFIG",
+      "template": "config/storage.example.json"
+    },
     "configuration": {
       "entryId": "butler",
       "auth": "consumer"
