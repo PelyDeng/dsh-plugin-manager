@@ -20,6 +20,58 @@ export type Feet = { map: string; cell: Cell; facing: Direction }
 /** 一条可走的入口：从当前图的触发格走到目标图的到达格。 */
 export type Portal = { entryId: string; to: { map: string; entry: string; cell: Cell } }
 
+/** 角色在世界里的职责（作者数据：posts.role_kind / npcs.status / characters.ordinaryNpc）。 */
+export type CharacterRole = 'player' | 'butler' | 'staff' | 'npc'
+/** npc_rules.yaml#dialogue.dialogue_modes；`model_chat` 本切片不接（不新增闲聊模型通道）。 */
+export type DialogueMode = 'authored_lines' | 'model_chat' | 'unavailable'
+
+/** 作者预写对白（普通 NPC）：名字、职责与已写定的场景台词。 */
+export type DialogueSpec = { mode: DialogueMode; name: string; role: string; lines: string[] }
+
+/** 逐帧锚点：`anchor` 是脚点，`seat` 是坐姿的臀部接触点（仅坐姿帧有）。 */
+export type FrameSpec = { path: string; size: [number, number]; anchor: [number, number]; seat?: [number, number] }
+export type ClipSpec = { action: string; direction: string; frames: FrameSpec[] }
+
+/**
+ * 作者座位与遮挡：坐姿导航脚点、臀部接触点、站格、坐姿帧与椅背遮挡层，
+ * 全部来自构建期编译（scripts/prepare-assets.mjs）；运行时只读，不硬编码坐标。
+ */
+export type SeatSpec = {
+  /** 坐姿导航脚点所在格（坐姿坐标指的是脚底中心，坐姿帧另有接触点）。 */
+  cell: Cell
+  direction: Direction
+  /** 作者给的坐姿锚点像素（= 坐格中心）。 */
+  anchor: [number, number]
+  /** 臀部接触点像素：坐姿精灵按逐帧 `seat` 锚点对到这里。 */
+  contact: [number, number]
+  /** 坐姿角色在 y 排序里的深度（椅座与椅背之间）。 */
+  depth: number
+  sit: ClipSpec
+  /** 作者声明的椅背遮挡层（布局/图集锚点/遮挡层），没有就为 null。 */
+  occlusion: { frame: string; x: number; y: number; width: number; height: number; depth: number } | null
+  /** 作者工位旁的站立格（员工离座/回位用）。 */
+  stand: Cell
+}
+
+/** 运行时角色：位置、职责、作者座位与对白内容。 */
+export type CharacterSpec = {
+  id: string
+  label: string
+  role: CharacterRole
+  cell: Cell
+  seat?: SeatSpec
+  dialogue?: DialogueSpec
+}
+
+/** balance_params.yaml#interaction.arrival_radius_tiles：到位判定与会合点落位的半径（格）。 */
+export const ARRIVAL_RADIUS_TILES = 1.5
+/**
+ * balance_params.yaml#movement：走动速度（格/秒）。员工去干活比回工位快一点，
+ * 与 8fps 走帧的步频一起决定位移，不允许用滑行凑距离。
+ */
+export const WALK_TILES_PER_SEC = 3.0
+export const RETURN_TILES_PER_SEC = 2.5
+
 export const FACINGS: readonly Direction[] = ['north', 'south', 'east', 'west']
 /** 出生地图的兜底常量：与构建产物 `world.birth` 一致（tests/map-compile.test.ts 断言）。 */
 export const BIRTH_MAP = 'office'
@@ -48,6 +100,55 @@ export function frameOrigin(frame: { size: [number, number]; anchor: [number, nu
   return { x: frame.anchor[0] / frame.size[0], y: frame.anchor[1] / frame.size[1] }
 }
 
+/** 坐姿逐帧锚点：origin = seatAnchor / frameSize，臀部接触点因此落在作者给定的像素上。 */
+export function seatOrigin(frame: { size: [number, number]; seat?: [number, number] }): Point | null {
+  if (!frame.seat) return null
+  return { x: frame.seat[0] / frame.size[0], y: frame.seat[1] / frame.size[1] }
+}
+
+/** 坐姿精灵左上角：接触点减去逐帧接触锚点（都用作者像素，不引入新坐标）。 */
+export function seatPosition(contact: [number, number], frame: { seat?: [number, number] }): Point | null {
+  if (!frame.seat) return null
+  return { x: contact[0] - frame.seat[0], y: contact[1] - frame.seat[1] }
+}
+
+/**
+ * 会合点解析（map_rules.yaml#anchors）：作者/后端只给语义目标，格子在这里算。
+ * 从目标对象所在格向外按环搜索可站立格：先近后远，永不选中目标脚下的那一格
+ * （never-on-top），相邻全被占时退到 arrival_radius_tiles 范围内的最近可站立格。
+ * 判定用**欧氏距离 ≤ arrival_radius_tiles**（balance_params.yaml#interaction：
+ * 1.5 格；斜邻 1.414 算抵达，隔两格的 2.0 不算）。距离相同的候选按「y 小优先、
+ * x 小优先」取第一个：结果稳定，便于断言与复现。
+ */
+export function rendezvousCell(
+  sources: readonly Cell[],
+  isWalkable: (cell: Cell) => boolean,
+  isFree: (cell: Cell) => boolean = () => true,
+  radius = ARRIVAL_RADIUS_TILES,
+): Cell | null {
+  const rings = Math.max(1, Math.ceil(radius))
+  for (let ring = 1; ring <= rings; ring++) {
+    let best: Cell | null = null
+    let bestDistance = Infinity
+    for (let dy = -ring; dy <= ring; dy++) {
+      for (let dx = -ring; dx <= ring; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue
+        const distance = Math.hypot(dx, dy)
+        if (distance > radius || distance >= bestDistance) continue
+        for (const source of sources) {
+          const cell: Cell = [source[0] + dx, source[1] + dy]
+          if (!isWalkable(cell) || !isFree(cell)) continue
+          bestDistance = distance
+          best = cell
+          break
+        }
+      }
+    }
+    if (best) return best
+  }
+  return null
+}
+
 /**
  * 镜头缩放：只允许整数倍（map_rules.coordinate_system.scale），宁可留黑边也不用
  * 非整数倍缩放；地图比视口大时用 1 倍，等于开一个窗口看地图。
@@ -60,6 +161,42 @@ export function integerZoom(viewport: { width: number; height: number }, map: { 
 }
 
 const sameCell = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
+
+/** 格集合的键：活动域判定只比较格，不比较像素。 */
+export const cellKey = (cell: Cell): string => cell[0] + ',' + cell[1]
+
+/** 作者给的有限活动域（npc_rules.yaml#movement）：目标与整条路径都必须落在里面。 */
+export type ActivityDomain = { region: string; cells: Cell[] }
+
+/**
+ * 普通职员的整条路径核验：只要有一格落在活动域外就丢弃这条路径（境界外的近路也不许走），
+ * 不因为老板靠近或域外有兴趣点而放宽。空路径按不可用处理。
+ */
+export function activityRoute(path: readonly Cell[] | null | undefined, domain: ActivityDomain): Cell[] | null {
+  if (!path || path.length === 0) return null
+  const allowed = new Set(domain.cells.map(cellKey))
+  return path.every(cell => allowed.has(cellKey(cell))) ? [...path] : null
+}
+
+/**
+ * 自主活动选点：只从活动域里挑一个不是当前格的格，避免原地打转。
+ * `random` 注入随机源，测试可以给出确定序列。
+ */
+export function activityTarget(domain: ActivityDomain, from: Cell, random: () => number = Math.random): Cell | null {
+  const candidates = domain.cells.filter(cell => !sameCell(cell, from))
+  if (candidates.length === 0) return null
+  const index = Math.min(candidates.length - 1, Math.floor(random() * candidates.length))
+  return [...candidates[index]] as Cell
+}
+
+/** balance_params.yaml#autonomous：闲下来的时长区间（毫秒）。 */
+export const IDLE_MS_MIN = 1500
+export const IDLE_MS_MAX = 6000
+
+/** 自主活动的停留时长：区间内的均匀取值。 */
+export function idleMs(random: () => number = Math.random): number {
+  return IDLE_MS_MIN + Math.floor(random() * (IDLE_MS_MAX - IDLE_MS_MIN + 1))
+}
 
 /**
  * 地图路由：入口索引、防连跳的武装状态与恢复落点判定。

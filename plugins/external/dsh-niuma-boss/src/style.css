@@ -110,6 +110,45 @@ html, body, #app { height: 100%; margin: 0; }
 .history li { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 13px; }
 .history .goal { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+/* 就近提示：同一时刻只有一个（interaction_rules.yaml#principles.single-prompt）；
+   点击等价于按交互键 E。 */
+.prompt {
+  position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%);
+  font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 999px;
+  border: 1px solid #c9c2b0; background: rgba(28, 42, 56, .92); color: #fff; cursor: pointer;
+}
+.prompt[data-kind='staff'] { background: rgba(85, 98, 79, .92); }
+.prompt[data-kind='npc'] { background: rgba(122, 79, 160, .92); }
+
+/* 员工状态与权威正文气泡：名字、状态、动作都来自任务投影与表现命令。 */
+.staff {
+  position: absolute; top: 52px; left: 12px; display: flex; flex-direction: column; gap: 6px;
+  max-width: min(320px, 46vw);
+}
+.staff article { padding: 6px 8px; border-radius: 8px; background: rgba(255, 255, 255, .9); border: 1px solid #e2dccc; }
+.staff header { display: flex; gap: 6px; align-items: baseline; font-size: 12px; color: #55503f; }
+.staff .state { color: #2a5d8f; }
+.staff .action { margin-left: auto; color: #7a7461; }
+.staff .bubble { margin: 4px 0 0; font-size: 12px; color: #22303f; white-space: pre-wrap; word-break: break-word; }
+
+/* 对白面板：普通 NPC 的作者预写台词；员工名牌没有自由输入框。 */
+.dialogue {
+  position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+  width: min(520px, 92vw); padding: 10px 14px 12px; border-radius: 12px;
+  background: rgba(252, 250, 244, .97); border: 1px solid #c9c2b0; box-shadow: 0 8px 24px rgba(20, 30, 40, .28);
+}
+.dialogue > header { display: flex; gap: 8px; align-items: baseline; }
+.dialogue > header strong { font-size: 14px; }
+.dialogue .role { font-size: 12px; color: #7a7461; }
+.dialogue > header button {
+  margin-left: auto; font: inherit; font-size: 12px; padding: 4px 12px; min-height: 36px;
+  border-radius: 8px; border: 1px solid #c9c2b0; background: #2a3d52; color: #fff; cursor: pointer;
+}
+.dialogue .state { margin: 6px 0 0; font-size: 12px; color: #55503f; }
+.dialogue .lines { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.dialogue .lines li { padding: 6px 10px; border-radius: 8px; background: #e8e2d2; font-size: 13px; }
+.dialogue .detail { margin: 8px 0 0; font-size: 12px; color: #7a7461; }
+
 /* 竖屏：任务本占满全屏（首版移动精简布局约定）；横向加宽点击区，输入框留在可见区内。
    主要触摸控件的最小高度由下面的通用规则保证（横屏同样是主要体验，不能只在竖屏加高）。 */
 @media (orientation: portrait) {

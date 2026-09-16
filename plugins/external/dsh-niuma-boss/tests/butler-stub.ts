@@ -111,6 +111,8 @@ export class ButlerStubServer {
     chatRequests: [] as Record<string, unknown>[],
     replyRequests: [] as Record<string, unknown>[],
     stopRequests: [] as Record<string, unknown>[],
+    /** 每一个到达桩的请求路径：用于断言某条通路「一次调用都没有」（例如普通 NPC 对白）。 */
+    requests: [] as string[],
   }
 
   private server: Server
@@ -127,6 +129,7 @@ export class ButlerStubServer {
       response.end(JSON.stringify(body))
     }
     const state = this.state
+    state.requests.push((request.method ?? 'GET') + ' ' + url.pathname)
     if (url.pathname === '/butler/identity') {
       const delay = state.identityDelayMs
       state.identityDelayMs = 0

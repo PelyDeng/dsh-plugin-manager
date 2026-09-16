@@ -9,6 +9,12 @@
  * 第三切片：office↔street↔cafe 往返与防连跳、触摸与键盘共用碰撞（格子永不进墙）、
  * 输入法组词不带动人物、旋转保留位置与当前界面、首包门槛在「出生地图就绪」处结算
  * （street/cafe 资产切图时才加载，不计入首包），三图全量 gzip 合计另有一条门槛断言。
+ * 第四切片：坐姿角色按作者座位到位（data-seats 读得到）、员工表现跟随权威状态
+ * （派单中离开工位去会合点、终态后交回并回工位，data-staff 读得到）、走近普通 NPC
+ * 打开**作者预写对白**且全程 0 次写请求（不调用模型或业务工具）。
+ * 第四切片修复轮（逐格走动）：走帧图集不进首包（首包边界上没有任何 office-walk 请求）、
+ * 玩家操作之后才由 load.multiatlas 懒加载、员工真的按格走过（data-actor-cells 采到
+ * 至少两个中间格，逐格四邻相接，用时与速度一致——不是瞬移）。
  * 截图与结果写 .artifacts/，供人工复核。
  *
  * 用法：node scripts/browser-check.mjs [edge|chromium]
@@ -84,6 +90,29 @@ const cellNow = async () => (await playerCell()).split(',').map(Number)
 /** 出生地图的运行时（含碰撞）：断言人物格子永不落进阻挡格时用它，避免凭截图判断。 */
 const runtimeOf = async (map) => JSON.parse(await readFile(resolve('web', 'generated', map + '.runtime.json'), 'utf8'))
 const walkable = (runtime, cell) => runtime.collision[cell[1] * runtime.width + cell[0]] === 0
+/** 人物表现诊断：坐着的角色与员工当前动作（表现层按变化写入挂载点）。 */
+const seatsNow = () => page.evaluate(() => document.querySelector('[data-seats]')?.getAttribute('data-seats') ?? '')
+const staffNow = () => page.evaluate(() => document.querySelector('[data-staff]')?.getAttribute('data-staff') ?? '')
+/**
+ * 员工条目：`id=动作+走动状态`。走动状态是表现事实（walking/arrived/instant/
+ * walk_failed/walk_timeout），断动作时只比 `+` 前面的部分。
+ */
+const staffEntries = async () => Object.fromEntries((await staffNow()).split(',')
+  .filter(entry => entry.includes('='))
+  .map(entry => {
+    const [id, value] = entry.split('=')
+    const [action, phase = ''] = (value ?? '').split('+')
+    return [id, { action, phase }]
+  }))
+/** 非老板角色的格与姿态：`id:x,y:pose`（逐格走动的轨迹读它）。 */
+const actorCells = async () => Object.fromEntries((await page.evaluate(() =>
+  document.querySelector('[data-actor-cells]')?.getAttribute('data-actor-cells') ?? ''))
+  .split(';').filter(entry => entry.includes(':'))
+  .map(entry => {
+    const [id, cell, pose] = entry.split(':')
+    return [id, { cell: (cell ?? '').split(',').map(Number), pose: pose ?? '' }]
+  }))
+const staffPhase = async (id) => (await staffEntries())[id]?.phase ?? ''
 const waitScene = (name, timeout = 5_000) =>
   page.waitForFunction(expected => document.querySelector('[data-scene]')?.getAttribute('data-scene') === expected, name, { timeout })
 /** 短促点按方向键：像真人按键一样按下再抬起，位移交给场景自己的 update。 */
@@ -138,6 +167,62 @@ const walkToward = async (target, budget = 40) => {
   return x === target[0] && y === target[1]
 }
 
+/**
+ * 在作者碰撞网格上按四向找路并逐格走过去（与游戏共用同一份 collision，不猜几何）。
+ * 键盘每次只推进一格，格子真的变了再走下一步：比固定时长稳，也不依赖镜头位置。
+ */
+const routeTo = (runtime, from, to) => {
+  const key = (cell) => cell[0] + ',' + cell[1]
+  const queue = [from]
+  const previous = new Map([[key(from), null]])
+  while (queue.length > 0) {
+    const current = queue.shift()
+    if (key(current) === key(to)) break
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const next = [current[0] + dx, current[1] + dy]
+      if (previous.has(key(next))) continue
+      if (next[0] < 0 || next[1] < 0 || next[0] >= runtime.width || next[1] >= runtime.height) continue
+      if (!walkable(runtime, next)) continue
+      previous.set(key(next), key(current))
+      queue.push(next)
+    }
+  }
+  if (!previous.has(key(to))) return null
+  const path = []
+  for (let cursor = key(to); cursor !== null && cursor !== key(from); cursor = previous.get(cursor)) {
+    path.push(cursor.split(',').map(Number))
+  }
+  return path.reverse()
+}
+const keyToward = (from, to) => to[0] !== from[0] ? (to[0] > from[0] ? 'd' : 'a') : (to[1] > from[1] ? 's' : 'w')
+const walkRoute = async (target, budget = 120) => {
+  for (let step = 0; step < budget; step++) {
+    const current = await cellNow()
+    if (current[0] === target[0] && current[1] === target[1]) return true
+    const runtime = await runtimeOf(await scene())
+    const path = routeTo(runtime, current, target)
+    if (path === null || path.length === 0) return false
+    await nudge(keyToward(current, path[0]), 220)
+  }
+  const current = await cellNow()
+  return current[0] === target[0] && current[1] === target[1]
+}
+/**
+ * 走近一个会自己走动的角色（普通职员的自主活动）：每轮读一次它的当前格再寻路，
+ * 直到老板与它的欧氏距离进了交互半径（1.5 格）。活动域很小，几轮就能靠近。
+ */
+const approachActor = async (id, rounds = 8) => {
+  for (let round = 0; round < rounds; round++) {
+    const where = (await actorCells())[id]
+    if (where === undefined) return false
+    await walkRoute(where.cell)
+    const [x, y] = await cellNow()
+    const now = (await actorCells())[id]
+    if (now && Math.hypot(now.cell[0] - x, now.cell[1] - y) <= 1) return true
+  }
+  return false
+}
+
 await page.goto(fixture.origin + '/niuma-boss', { waitUntil: 'domcontentloaded' })
 
 await check('页面装载并渲染 office 场景', async () => {
@@ -181,6 +266,8 @@ await check('首包（出生地图就绪）静态请求与 gzip 量满足计划�
   assert.ok(first.gzipBytes <= FIRST_LOAD_MAX_GZIP_BYTES, `静态 gzip 合计 ${first.gzipBytes} 字节，超过门槛 ${FIRST_LOAD_MAX_GZIP_BYTES}`)
   // 切图才会加载的资产不能混进首包：出生边界上不应出现 street/cafe。
   assert.ok(!first.paths.some(path => path.includes('street') || path.includes('cafe')), '首包里出现了 street/cafe 资源：' + first.paths.join(', '))
+  // 走帧图集不进首包：出生就绪这条边界上一个 office-walk 请求都不许有。
+  assert.ok(!first.paths.some(path => path.includes('walk')), '首包里出现了走帧图集：' + first.paths.join(', '))
 })
 
 await check('三图往返：office→street→cafe→street→office，落点固定', async () => {
@@ -401,8 +488,108 @@ await check('位置快照按用户只写四项，刷新后按用户恢复', asyn
   await page.screenshot({ path: resolve(directory, engineName + '-reload-restore.png') })
 })
 
-// ---- 第二切片：一条真实任务的双入口写链路（会话二承接动态轮，不影响种子活跃轮） ----
+// ---- 第四切片：人物表现（作者座位与站坐）、普通 NPC 预写对白 ----
 
+await check('人物表现：坐姿角色按作者座位到位，员工按权威状态离开工位去会合点', async () => {
+  // 页面刚按用户快照重载过，当前是种子活跃轮（会话一，blog 在跑）。
+  const seats = (await seatsNow()).split(',').filter(Boolean)
+  const staff = await staffNow()
+  const entries = await staffEntries()
+  assert.ok(seats.length > 0 && staff !== '', '缺少人物表现诊断属性（data-seats / data-staff）')
+  // 派单中的员工离开自己的座位去会合点；其余员工留在工位待命。
+  assert.deepEqual(Object.fromEntries(Object.entries(entries).map(([id, entry]) => [id, entry.action])),
+    { example: 'at_post', closedoff: 'at_post', blog: 'start_work' }, '员工表现命令与权威状态不符：' + staff)
+  // 出生装载时走帧还没就绪：按到位处理，并且**如实标注**（不是「走过了」）。
+  assert.equal(entries.blog.phase, 'instant', '出生装载期间的员工走动没有如实标注：' + staff)
+  assert.ok(!seats.includes('blog'), '派单中的员工还在座位上：' + seats)
+  for (const id of ['example', 'closedoff']) {
+    assert.ok(seats.includes(id), `员工 ${id} 没有按作者座位就位：${seats}`)
+  }
+  // 构建产物里带着作者座位与遮挡层（椅背只画在坐姿角色之上，按作者深度）。
+  const office = await runtimeOf('office')
+  const seated = office.characters.filter(character => character.seat)
+  assert.equal(seated.length, 7, '运行时座位数量与作者工位不符：' + seated.length)
+  const back = seated.filter(character => character.seat.occlusion)
+  assert.equal(back.length, 6, '椅背遮挡层数量与作者声明不符：' + back.length)
+  assert.ok(seated.every(character => character.seat.occlusion === null
+    || character.seat.occlusion.depth > character.seat.depth), '椅背遮挡没有画在坐姿角色之上')
+  assert.ok(seated.every(character => character.seat.direction === character.seat.sit.direction), '坐姿帧方向与作者座位方向不一致')
+  // 普通职员按 npc_rules.yaml#preview.autonomy 在作者活动域里自主走动：不在座位上也算合格，
+  // 但所在格必须落在**本人**的活动域里（不越界、不到阻挡格）。
+  const cells = await actorCells()
+  for (const character of office.characters.filter(entry => entry.activity)) {
+    const allowed = new Set(character.activity.cells.map(cell => cell.join(',')))
+    const where = cells[character.id]
+    assert.ok(where !== undefined, `缺少普通职员 ${character.id} 的位置诊断`)
+    const home = character.seat ? character.seat.cell.join(',') : character.cell.join(',')
+    assert.ok(where.pose === 'sit' ? where.cell.join(',') === home : allowed.has(where.cell.join(',')),
+      `普通职员 ${character.id} 走到了活动域外：${where.cell.join(',')}（域：${[...allowed].join('|')}）`)
+  }
+  report.seats = { seatedIds: seats, staff }
+  await page.screenshot({ path: resolve(directory, engineName + '-seated.png') })
+})
+
+/**
+ * 第五阶段切片 4 修复轮：走帧独立图集 + 逐格走动。
+ * 首包边界已在上面的用例断言过（没有 office-walk 请求）；这里验证玩家操作之后的
+ * 懒加载，以及员工**真的按格走过**：抓取至少两个中间位置，逐格四邻相接，用时与
+ * 作者给的速度一致——不是瞬移。
+ */
+await check('员工逐格走动：走帧懒加载在首包之后，位移逐格且用时可测', async () => {
+  // 走帧图集是玩家操作之后才拉的：json 与 png 都拿到 200。
+  const walkRequests = report.requests.filter(entry => entry.path.includes('office-walk'))
+  assert.ok(walkRequests.some(entry => entry.path.endsWith('office-walk.json') && entry.status === 200),
+    '玩家操作之后没有请求走帧图集：' + JSON.stringify(walkRequests))
+  assert.ok(walkRequests.some(entry => entry.path.endsWith('office-walk.png') && entry.status === 200),
+    '走帧图集图片没有成功加载：' + JSON.stringify(walkRequests))
+  const office = await runtimeOf('office')
+  const blogSeat = office.characters.find(character => character.id === 'blog')?.seat
+  assert.ok(blogSeat, '运行时缺少 blog 的作者座位')
+  // 刷新之后走帧图集要重新拉：先由玩家操作触发懒加载（任务本开着时按键只热身、不移动老板）。
+  await openBook()
+  assert.notEqual(await page.evaluate(() => document.querySelector('[data-walk]')?.getAttribute('data-walk') ?? ''), 'ready',
+    '刷新后还没操作就把走帧算成已就绪')
+  await page.keyboard.press('w')
+  await page.waitForFunction(() => document.querySelector('[data-walk]')?.getAttribute('data-walk') === 'ready', undefined, { timeout: 15_000 })
+  // 切到已完结的会话：blog 的命令变成回工位（at_post），从会合点逐格走回自己的座位。
+  await page.click('.conversations button:nth-child(2)')
+  await page.waitForFunction(() => (document.querySelector('[data-staff]')?.getAttribute('data-staff') ?? '').includes('blog=at_post'), undefined, { timeout: 10_000 })
+  const samples = []
+  const started = Date.now()
+  while (Date.now() - started < 20_000) {
+    const where = (await actorCells()).blog
+    if (where === undefined) break
+    samples.push({ at: Date.now(), cell: where.cell.join(','), pose: where.pose, phase: await staffPhase('blog') })
+    if (samples[samples.length - 1].phase === 'arrived' && where.pose === 'sit' && where.cell.join(',') === blogSeat.cell.join(',')) break
+    await delay(120)
+  }
+  const steps = samples.filter((sample, index) => index === 0 || sample.cell !== samples[index - 1].cell)
+  const phases = new Set(samples.map(sample => sample.phase))
+  report.walk = {
+    seat: blogSeat.cell, steps: steps.map(sample => sample.cell), phases: [...phases],
+    ms: samples.length > 1 ? samples[samples.length - 1].at - samples[0].at : 0,
+  }
+  // 真的走过：至少两个中间位置（起止之外），而且每一段都是四邻相接的一格。
+  assert.ok(steps.length >= 4, '没抓到足够的中间位置：' + JSON.stringify(steps.map(step => step.cell)))
+  assert.ok(steps.some(sample => sample.phase === 'walking'), '员工没有进入逐格走动状态：' + [...phases].join(','))
+  for (let index = 1; index < steps.length; index++) {
+    const [x, y] = steps[index].cell.split(',').map(Number)
+    const [px, py] = steps[index - 1].cell.split(',').map(Number)
+    assert.equal(Math.abs(x - px) + Math.abs(y - py), 1, `位移跳格：${steps[index - 1].cell} → ${steps[index].cell}`)
+  }
+  // 逐格位移不是瞬移：走过的格数 × 单格用时（回工位 2.5 格/秒）与实际用时可比。
+  const elapsed = samples[samples.length - 1].at - samples[0].at
+  assert.ok(elapsed >= (steps.length - 1) / 3.0 * 1000 * 0.6, `位移用时过短，疑似瞬移：${steps.length - 1} 格 / ${elapsed}ms`)
+  assert.equal(samples[samples.length - 1].cell, blogSeat.cell.join(','), '员工没有走回自己的作者座位')
+  assert.equal(samples[samples.length - 1].pose, 'sit', '走回工位后没有坐下')
+  await page.screenshot({ path: resolve(directory, engineName + '-walk.png') })
+  // 收拾现场：切回活跃会话，blog 再走去会合点，后续用例按原来的会话继续。
+  await page.click('.conversations button:nth-child(1)')
+  await page.waitForFunction(() => (document.querySelector('[data-staff]')?.getAttribute('data-staff') ?? '').includes('blog=start_work'), undefined, { timeout: 10_000 })
+  await closeBook()
+})
+
+// ---- 第二切片：一条真实任务的双入口写链路（会话二承接动态轮，不影响种子活跃轮） ----
 await check('写链路：派活→SSE 推进→等待回复→回复完成→同一历史', async () => {
   await openBook()
   await page.click('.conversations button:nth-child(2)')
@@ -492,6 +679,62 @@ await check('写链路：run_busy/version_conflict/run_result_unknown 提示且�
   assert.equal(chats(), before + 1, 'run_result_unknown 后出现自动重试')
 })
 
+
+await check('人物表现：权威终态一到就交回并回工位（不等任何演出）', async () => {
+  // 切到已完结的会话：权威快照里 example 的子任务已 succeeded。
+  await page.click('.conversations button:nth-child(2)')
+  await page.waitForFunction(() => document.querySelector('.task-book')?.textContent?.includes('会议纪要'), undefined, { timeout: 10_000 })
+  await page.waitForFunction(() => {
+    const staff = document.querySelector('[data-staff]')?.getAttribute('data-staff') ?? ''
+    return staff.includes('example=hand_back') && staff.includes('blog=at_post')
+  }, undefined, { timeout: 10_000 })
+  // 走回工位需要时间（逐格位移，不瞬移）：等三位员工都落位坐下再断言座位。
+  await page.waitForFunction(() => {
+    const seats = document.querySelector('[data-seats]')?.getAttribute('data-seats') ?? ''
+    return ['example', 'closedoff', 'blog'].every(id => seats.split(',').includes(id))
+  }, undefined, { timeout: 25_000 })
+  const staff = await staffNow()
+  const entries = await staffEntries()
+  const seats = (await seatsNow()).split(',').filter(Boolean)
+  assert.equal(entries.example.action, 'hand_back')
+  assert.equal(entries.blog.action, 'at_post')
+  // 交回的员工回到自己的作者座位（椅子遮挡层随之显示）。
+  for (const id of ['example', 'closedoff', 'blog']) {
+    assert.ok(seats.includes(id), `空闲的员工 ${id} 没有回到座位：${seats}`)
+    // 走动收口：走了就是 arrived，走帧没就绪时是 instant（同样是「已到位」的如实标注）。
+    assert.ok(['arrived', 'instant'].includes(entries[id].phase), `${id} 的走动没有收口：${staff}`)
+  }
+  report.handBack = { staff, seats }
+  await page.screenshot({ path: resolve(directory, engineName + '-handback.png') })
+})
+
+await check('普通 NPC 预写对白：走近交谈，零模型与业务工具调用', async () => {
+  await closeBook()
+  // 走到前台唐可旁边：她会在作者活动域里自主走动，所以每轮都按她的**当前格**重新寻路，
+  // 而不是钉死在一个坐标上（活动域很小，几轮之内就能靠近）。
+  assert.ok(await approachActor('npc_reception'), '没能走到前台唐可的交互范围内')
+  await page.waitForSelector('[data-prompt="npc_talk_hint"]', { timeout: 8_000 })
+  const prompt = await page.locator('[data-prompt="npc_talk_hint"]').innerText()
+  assert.ok(prompt.includes('交谈'), '就近提示文案不是作者给的「交谈」：' + prompt)
+  // 打开面板前记一笔写请求数：普通对白通路一次请求都不该产生。
+  const postsBefore = butlerPosts.length
+  await page.click('[data-prompt="npc_talk_hint"]')
+  await page.waitForSelector('.dialogue[data-dialogue="npc"]', { timeout: 5_000 })
+  const text = await page.locator('.dialogue').innerText()
+  assert.ok(text.includes('唐可'), '对白面板没有显示普通 NPC 名字：' + text)
+  assert.ok(text.includes('看中文牌子就能找到'), '没有播放作者预写台词：' + text)
+  assert.ok(text.includes('要交代工作直接找牛马大总管'), '作者预写台词不完整：' + text)
+  assert.ok(text.includes('不是模型回答'), '预写对白没有如实标注来源：' + text)
+  assert.equal(await page.locator('.dialogue input, .dialogue textarea').count(), 0, '预写对白面板出现了自由输入框')
+  await delay(600)
+  assert.equal(butlerPosts.length, postsBefore, '普通 NPC 对白产生了写请求：' + butlerPosts.slice(postsBefore).join(', '))
+  report.npcDialogue = { prompt, text: text.slice(0, 200), writeRequests: butlerPosts.length - postsBefore }
+  await page.screenshot({ path: resolve(directory, engineName + '-npc-dialogue.png') })
+  await page.click('.dialogue header button')
+  await page.waitForSelector('.dialogue', { state: 'detached', timeout: 5_000 })
+  // 关掉面板后人物可以继续走：证明前面的「不动」是面板锁输入，而不是卡死。
+  assert.ok(await movedByKeyboard(), '关掉对白面板后键盘仍不能移动')
+  await openBook()
 await check('写链路：403 按无权限提示且不重试', async () => {
   const before = countPosts('/butler/chat')
   await page.fill('.assign textarea', '#forbidden 越权提交')
@@ -499,6 +742,7 @@ await check('写链路：403 按无权限提示且不重试', async () => {
   await page.waitForFunction(() => document.querySelector('.banner')?.textContent?.includes('没有访问权限'), undefined, { timeout: 10_000 })
   await delay(800)
   assert.equal(countPosts('/butler/chat'), before + 1, '403 后出现自动重试')
+})
 })
 
 await check('首包口径复核：结算点与三图全量 gzip 均满足门槛', async () => {

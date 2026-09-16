@@ -5,6 +5,12 @@
  * 任务终态只来自权威快照与 `summary` 事件；断线期间已有投影保持可浏览，
  * 恢复后重新读取快照与事件序号，不用本地表现推算任务状态。
  *
+ * 人物表现（本切片）：权威投影 → **表现命令**（src/performance.ts 的纯函数）→
+ * GameWorld。命令只在权威状态变化时重算，表现层没有任何回写通路，因此演出缺失、
+ * 重复或乱序都不会改变任务终态；整轮只收到终态时命令直接收敛到「交回并回工位」。
+ * 就近交互（src/interaction.ts）只做两件事：按作者优先级选出唯一提示，并按作者数据
+ * 打开普通 NPC 的预写对白或员工名牌——两个通路都不产生任务、不调用模型或业务工具。
+ *
  * 写链路（本切片）同样只映射权威状态：`submitTask`（派活）、`replySubtask`（回复
  * 等待中的成员）、`stopRound`（停止当前轮）把用户意图按管家契约送进去，本会话
  * 不复制管家状态机、不在本地推算停止或完成。错误语义：403/409（含
@@ -17,9 +23,11 @@
  */
 import { ButlerClient, ButlerError, type ButlerStatus } from './butler-client.ts'
 import { GameWorld } from './game-world.ts'
+import { INTERACT_RADIUS_TILES, dialogueStillInReach, npcDialogue, resolvePrompt, staffNameplate, type NearTarget, type Prompt } from './interaction.ts'
+import { deriveStaffCommands, staffDialogueViews } from './performance.ts'
 import { browserStorage, RecoveryStore, scopeOf, type WorldSnapshot } from './recovery.ts'
 import { useTaskBookStore, type PendingSubmit } from './store.ts'
-import { applyEvent, applySnapshot, emptyTaskView, type ButlerEvent, type ConversationSummary, type RecoveryContext, type RunInfo } from './task-projection.ts'
+import { applyEvent, applySnapshot, emptyTaskView, taskStateLabel, type ButlerEvent, type ConversationSummary, type RecoveryContext, type RunInfo } from './task-projection.ts'
 import type { Feet } from './world-runtime.ts'
 
 export interface GameSessionOptions {
@@ -45,6 +53,12 @@ export class GameSession {
   private currentTaskId = ''
   /** 当前观察循环（只读订阅）的在途 Promise；新意图先等它退出再开自己的流。 */
   private observeTask: Promise<void> | null = null
+  /** 业务员工 id（作者数据 role=staff）：切图后仍保留，命令不会因为前台地图变了而丢。 */
+  private staffIds: string[] = []
+  /** 员工显示名（作者角色名册），只用于界面文案。 */
+  private readonly staffLabels = new Map<string, string>()
+  /** 就近范围内的可交互对象（表现事实），提示由它和权威任务事实一起解析。 */
+  private near: NearTarget[] = []
 
   constructor(options: GameSessionOptions) {
     this.client = new ButlerClient({
@@ -62,13 +76,30 @@ export class GameSession {
     this.recovery = options.recovery ?? new RecoveryStore(browserStorage())
     this.world = new GameWorld(options.parent, {
       assetsBase: options.assetsBase,
-      inputLocked: () => this.store.bookOpen,
-      onInteract: label => { this.store.notice = `${label}：正式对白将在后续版本接入` },
+      inputLocked: () => this.store.bookOpen || this.store.dialogue !== null,
+      onInteract: target => { this.interact(target) },
+      onNearTargets: targets => {
+        this.near = targets
+        // 走远/离场的角色自动结束就近会话，再按作者优先级解析唯一提示。
+        this.closeDialogueIfOutOfReach()
+        this.syncPrompt()
+      },
+      onInteractKey: () => { this.interactKey() },
       onAssetsError: detail => { this.store.notice = detail },
-      onReady: () => { this.store.worldReady = true },
+      onReady: () => {
+        this.store.worldReady = true
+        this.syncRoster()
+        // 场景重建后表现层会自己复位；这里只同步界面用的名册与气泡。
+        this.refreshPerformance()
+        this.syncPrompt()
+      },
       onLoading: () => { this.store.worldReady = false },
       // 位置事实按格变化回调一次；只写四项快照，不带任何任务内容。
-      onFeet: feet => this.saveFeet(feet),
+      onFeet: feet => {
+        // 换图后旧图的角色已经不在近邻事实里：就近会话随之关闭（先判再落盘新地图）。
+        if (feet.map !== this.store.worldMap) this.closeDialogueIfOutOfReach(true)
+        this.saveFeet(feet)
+      },
       restore: () => this.recovery.load(this.scope),
     })
   }
@@ -88,6 +119,7 @@ export class GameSession {
       console.error('牛马-老板：地图启动失败', error)
     }
     this.store.worldMap = this.world.mapId
+    this.syncRoster()
     await this.refresh()
   }
 
@@ -137,6 +169,121 @@ export class GameSession {
     this.recovery.save(this.scope, feet, { taskBookOpen: this.store.bookOpen })
   }
 
+  /** 名册：当前地图的作者角色（名字、职责、对白通道）。界面只读展示，不改任何业务。 */
+  private syncRoster(): void {
+    const staff = this.world.characters.filter(c => c.role === 'staff')
+    // 员工名单按作者数据累积：走到外图时仍按权威状态更新员工表现（不因为看不见就不算）。
+    if (staff.length > 0) {
+      this.staffIds = staff.map(c => c.id)
+      for (const character of staff) this.staffLabels.set(character.id, character.label)
+    }
+  }
+
+  /**
+   * 权威投影 → 表现命令：全项目唯一的映射点。命令是投影的纯函数，不产生也不修改
+   * 业务状态；演出缺失、重复或乱序都不会改变任务终态，只影响画面。
+   */
+  private refreshPerformance(): void {
+    // 名册跟着前台地图走：切图后仍按同一份权威状态更新员工表现。
+    this.syncRoster()
+    const commands = deriveStaffCommands(this.store.task, this.staffIds)
+    // 命令只下发给表现层：会话不保存第二份副本，避免出现「哪个进度为准」的歧义。
+    this.world.applyPerformance(commands)
+    this.store.staff = staffDialogueViews(
+      this.store.task, commands,
+      this.staffIds.map(id => ({ id, label: this.staffLabels.get(id) ?? id })),
+    )
+    // 打开着的员工名牌跟着权威状态刷新：状态文案不能停在旧的一轮上。
+    const open = this.store.dialogue
+    if (open !== null && open.kind === 'staff' && open.mode === 'staff') {
+      const view = this.store.staff.find(entry => entry.id === open.id)
+      const character = this.world.character(open.id)
+      if (view !== undefined && character !== undefined) {
+        this.store.dialogue = staffNameplate(character, view.stateLabel + ' · ' + view.actionLabel)
+      }
+    }
+    this.syncPrompt()
+  }
+
+  /** 就近提示：表现层给对象与距离，权威投影给任务事实，按作者优先级只留一个。 */
+  private syncPrompt(): void {
+    const active = this.store.task.runState === 'running' || this.store.activeRun?.state === 'running'
+      || ['queued', 'running', 'summarizing', 'waiting_user'].includes(this.store.task.state)
+    this.store.prompt = resolvePrompt(this.near, {
+      staffReplyPending: this.store.task.subtasks.some(subtask => subtask.state === 'waiting_user'),
+      taskActive: active,
+      stopping: this.store.stopRequested,
+      // 每个就近触发器都写着 requires.input_open: false：任务本或对白开着时不出现提示。
+      inputOpen: this.store.bookOpen || this.store.dialogue !== null,
+    })
+  }
+
+  /**
+   * 已经打开的对白/名牌随**表现事实**收尾（interaction_rules.yaml#selection.walk_away、
+   * npc_rules.yaml#dialogue.interruption）：老板走远超过 walk_away_tiles、切到别的图、
+   * 或者被搭话的角色已经离场时自动关闭。只关面板，不碰任何任务状态，也没有草稿要留。
+   */
+  private closeDialogueIfOutOfReach(mapChanged = false): void {
+    const open = this.store.dialogue
+    if (open === null) return
+    if (dialogueStillInReach(this.near, open.id, mapChanged)) return
+    this.store.dialogue = null
+  }
+
+  /**
+   * 用户意图：点击地图上的角色。超出就近范围只给一次轻微反馈，不打开任何输入
+   * （interaction_rules.yaml#hotkey.out_of_range 的同一条规则）。
+   */
+  private interact(target: NearTarget): void {
+    if (target.distanceTiles > INTERACT_RADIUS_TILES) {
+      this.store.notice = '走近一点再和' + target.label + '说话'
+      this.syncPrompt()
+      return
+    }
+    this.openTarget(target)
+  }
+
+  /** 用户意图：交互键（E）或点击就近提示。有提示就执行提示动作，没有就只给一次轻微反馈。 */
+  interactKey(): void {
+    const prompt: Prompt | null = this.store.prompt
+    if (prompt === null) {
+      this.store.notice = '这里没有可以互动的对象'
+      return
+    }
+    if (prompt.action === 'hint_only') {
+      // 「正在收尾」这类提示只说明状态，不提供入口（interaction_rules.yaml 的 butler_busy_hint）。
+      this.store.notice = prompt.label + '：本轮正在收尾，以管家事件为准'
+      return
+    }
+    const target = this.near.find(entry => entry.id === prompt.target)
+    if (target !== undefined) this.openTarget(target)
+  }
+
+  /**
+   * 按对象类型分派，职责隔离就在这一个分叉上：
+   * 牛马大总管走任务本（常驻入口），业务员工只给名牌与权威状态（本切片没有独立搭话通道），
+   * 普通 NPC 打开作者预写对白。三条通路都不产生任务、不调用模型或业务工具。
+   */
+  private openTarget(target: NearTarget): void {
+    if (target.kind === 'butler') { this.openBook(); return }
+    const character = this.world.character(target.id)
+    if (character === undefined) return
+    if (target.kind === 'staff') {
+      const view = this.store.staff.find(entry => entry.id === target.id)
+      this.store.dialogue = staffNameplate(character, view === undefined ? '状态未知' : view.stateLabel + ' · ' + view.actionLabel)
+    } else {
+      this.store.dialogue = npcDialogue(character)
+    }
+    // 会话视图开着的期间不再渲染就近提示（requires.input_open: false）。
+    this.syncPrompt()
+  }
+
+  /** 用户意图：关闭对白面板或名牌。 */
+  closeDialogue(): void {
+    this.store.dialogue = null
+    this.syncPrompt()
+  }
+
   /** 使旧会话的一切失效：取消订阅与在途请求，清空选择、任务与历史。 */
   private clearSelection(): void {
     this.generation++
@@ -145,6 +292,12 @@ export class GameSession {
     this.store.activeRun = null
     this.store.history = []
     this.store.task = emptyTaskView()
+    this.store.stopRequested = false
+    // 展示类状态一起清：对白面板/名牌属于被作废的那份任务与身份。
+    this.near = []
+    this.store.prompt = null
+    this.store.dialogue = null
+    this.refreshPerformance()
   }
 
   /** 身份变化或授权失效时连会话列表一并作废，不保留可能属于他人的数据。 */
@@ -182,6 +335,8 @@ export class GameSession {
       const run = await this.client.probe(id)
       if (token !== this.generation) return
       this.store.activeRun = run
+      // 权威状态说本轮已经不在跑，界面里「正在收尾」的请求状态随之作废。
+      if (run === null || run.state !== 'running') this.store.stopRequested = false
       const history = await this.client.history({ conversationId: id, limit: 10 })
       if (token !== this.generation) return
       this.store.history = history.items
@@ -202,6 +357,8 @@ export class GameSession {
         this.store.status = 'ready'
         this.store.statusDetail = run === null ? '当前没有进行中的一轮' : '本轮已结束'
       }
+      // 快照落地后重算表现命令：整轮只有终态快照时，员工直接收敛到交回并回工位。
+      this.refreshPerformance()
     } catch (error) {
       if (token !== this.generation) return
       this.report(error)
@@ -220,6 +377,8 @@ export class GameSession {
         }
         if (event.taskId) this.currentTaskId = event.taskId
         this.store.task = applyEvent(this.store.task, event)
+        // 权威投影变了就重算一次表现命令；表现层不回写，终态只由上面的投影决定。
+        this.refreshPerformance()
       },
       onReset: async (reason: 'reset' | 'round', info: { runId: string; taskId: string; seq: number; windowStart?: number }) => {
         // 换轮时以 probe 给出的新轮任务身份为准——新轮可能已经换了任务，
@@ -236,6 +395,7 @@ export class GameSession {
           seq: info.seq,
           truncated: info.windowStart === undefined || info.windowStart > 1,
         })
+        this.refreshPerformance()
       },
       // 本轮结束后补取：执行结束时正文已经落库，快照是完整来源；随后补读会话
       // 与历史列表，任一入口看到的都是同一份权威记录。
@@ -256,6 +416,9 @@ export class GameSession {
   /** 本轮结束：按需补取完整正文（只读 GET），再补读会话与运行历史。 */
   private async afterRoundEnd(lastSeq: number, token: number): Promise<void> {
     await this.completeRound(lastSeq, token)
+    // 本轮已收敛：停止请求的界面状态随之作废（是否真停下由权威终态说了算）。
+    if (token === this.generation) this.store.stopRequested = false
+    this.refreshPerformance()
     try {
       const conversations = await this.client.listConversations()
       if (token !== this.generation) return
@@ -301,15 +464,17 @@ export class GameSession {
     void this.refresh()
   }
 
-  /** 用户意图：任务本开合。界面偏好随位置一起按用户保存。 */
+  /** 用户意图：任务本开合。界面偏好随位置一起按用户保存；开着的时候不渲染就近提示。 */
   openBook(): void {
     this.store.bookOpen = true
     this.saveFeet(this.world.state)
+    this.syncPrompt()
   }
 
   closeBook(): void {
     this.store.bookOpen = false
     this.saveFeet(this.world.state)
+    this.syncPrompt()
   }
 
   /** 用户意图：断线/过期后的手动重试。 */
@@ -356,6 +521,11 @@ export class GameSession {
     try {
       // 带 taskId 精确到这一轮：旧任务迟到的取消不会碰到该会话随后开的新任务。
       const outcome = await this.client.requestStop(this.store.selectedId, this.currentTaskId)
+      if (outcome.accepted && token === this.generation) {
+        // 受理只是请求：界面按「正在收尾」提示，是否真停下以管家事件为准（不改任何状态）。
+        this.store.stopRequested = true
+        this.syncPrompt()
+      }
       this.store.notice = outcome.accepted
         ? '已请求停止本轮；停止进度以管家的任务事件为准。'
         : '本轮无需停止：' + (outcome.reason || '当前没有正在执行的一轮')

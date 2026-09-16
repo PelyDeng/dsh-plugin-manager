@@ -13,10 +13,27 @@ import { ButlerStubServer, defaultSnapshot } from './butler-stub.ts'
  * 传进来的位置选项与调用，用来断言按用户恢复、落盘内容与后台暂停/回前台刷新。
  */
 
+/** 作者角色名册（与编译产物同形状）：员工走任务协议，普通 NPC 只给预写对白。 */
+const staffCharacter = (id: string, label: string) => ({ id, label, role: 'staff' })
+const npcCharacter = (id: string, label: string, mode: string, lines: string[]) =>
+  ({ id, label, role: 'npc', dialogue: { mode, name: label, role: '岗位说明', lines } })
+const worldRoster = [
+  { id: 'boss', label: '老板', role: 'player' },
+  { id: 'butler', label: '牛马大总管', role: 'butler' },
+  staffCharacter('example', 'example'),
+  staffCharacter('closedoff', 'closedoff'),
+  staffCharacter('blog', '博客'),
+  npcCharacter('npc_hr', '沈禾', 'authored_lines', ['这页先留白，你说完我再记。']),
+  npcCharacter('sample_explorer', '探险NPC示例', 'unavailable', []),
+]
+
 const worldMock = vi.hoisted(() => ({
   options: undefined as {
     restore?: () => unknown
     onFeet?: (feet: { map: string; cell: [number, number]; facing: string }) => void
+    onNearTargets?: (targets: unknown[]) => void
+    onInteract?: (target: unknown) => void
+    onInteractKey?: () => void
   } | undefined,
   feet: { map: 'office', cell: [34, 26] as [number, number], facing: 'south' },
   reloads: [] as unknown[],
@@ -26,6 +43,12 @@ const worldMock = vi.hoisted(() => ({
   startFailed: false,
   paused: 0,
   resumed: 0,
+  /** 作者角色名册：会话据此算员工表现与普通 NPC 对白归属。 */
+  roster: [] as unknown[],
+  /** 会话下发的表现命令（每次调用一帧快照）。 */
+  performance: [] as unknown[],
+  /** 就近范围内的可交互对象（表现层事实）。 */
+  near: [] as unknown[],
 }))
 
 vi.mock('../src/game-world.ts', () => ({
@@ -34,6 +57,9 @@ vi.mock('../src/game-world.ts', () => ({
     constructor(_parent: unknown, options: typeof worldMock.options) { this.options = options; worldMock.options = options }
     get state() { return { map: worldMock.feet.map, cell: [...worldMock.feet.cell], facing: worldMock.feet.facing } }
     get mapId() { return worldMock.feet.map }
+    get characters() { return worldMock.roster }
+    get staffIds() { return (worldMock.roster as { id: string; role?: string }[]).filter(c => c.role === 'staff').map(c => c.id) }
+    character(id: string) { return (worldMock.roster as { id: string }[]).find(c => c.id === id) }
     start() {
       worldMock.boot = this.options?.restore?.()
       if (worldMock.startFailed) return Promise.reject(new Error('地图资源加载失败：office（HTTP 404）'))
@@ -44,6 +70,11 @@ vi.mock('../src/game-world.ts', () => ({
     destroy() {}
     movementLocked() { return false }
     applyRestore(snapshot: unknown) { worldMock.reloads.push(snapshot) }
+    applyPerformance(commands: unknown) { worldMock.performance.push(commands) }
+    /** 测试驱动就近事实：会话据此解析唯一提示。 */
+    near(targets: unknown[]) { worldMock.options?.onNearTargets?.(targets) }
+    interact(target: unknown) { worldMock.options?.onInteract?.(target) }
+    pressInteractKey() { worldMock.options?.onInteractKey?.() }
   },
 }))
 
@@ -58,6 +89,9 @@ beforeEach(async () => {
   worldMock.startFailed = false
   worldMock.paused = 0
   worldMock.resumed = 0
+  worldMock.roster = worldRoster
+  worldMock.performance = []
+  worldMock.near = []
   stub = new ButlerStubServer()
   origin = await stub.start()
 })
@@ -779,7 +813,7 @@ describe('按用户的位置恢复', () => {
 })
 
 /**
- * 启动边界：任务本与地图互不影响（game-world 头注释声明）。出生地图资产缺失/过期时
+ * 启动边界：任务本与地图互不影响（game-world 头注释声明）。出生地图资产失效/过期时
  * world.start 抛错，任务本（列表 + 订阅）必须照常装载，错误如实记录、不静默吞掉。
  */
 describe('地图启动失败不连带任务本', () => {
@@ -805,5 +839,235 @@ describe('地图启动失败不连带任务本', () => {
     } finally {
       errors.mockRestore()
     }
+  })
+})
+
+/**
+ * 切片 4：权威投影 → 表现命令 → 表现层；就近交互按作者优先级只留一个提示；
+ * 普通 NPC 与业务员工严格分开（一个只有预写对白，一个只给名牌与权威状态）。
+ * 「不调用模型或业务工具」用管家的**总请求数不变**来断言：普通对白通路不碰网络。
+ */
+describe('人物表现与业务状态映射', () => {
+  const performanceOf = () => {
+    // worldMock.performance 记录每次下发的命令帧；取最后一帧。
+    const frames = worldMock.performance as { agentId: string; action: string; work: string; state: string }[][]
+    return frames[frames.length - 1] ?? []
+  }
+  /** 表现层事实（就近对象与点击）由世界回调报上来，这里按同一条通路驱动。 */
+  const near = (targets: unknown[]) => worldMock.options?.onNearTargets?.(targets)
+  const interact = (target: unknown) => worldMock.options?.onInteract?.(target)
+
+  it('权威快照 → 员工表现命令：整轮只有终态时直接收敛到交回并回工位', async () => {
+    stub.state.run = null
+    stub.state.snapshot = { ...defaultSnapshot, state: 'completed', subtasks: [{ ...defaultSnapshot.subtasks[0], state: 'succeeded', result: '定稿' }] }
+    const session = makeSession()
+    await session.refresh()
+    const commands = performanceOf()
+    const blog = commands.find(c => c.agentId === 'blog')!
+    expect(blog).toMatchObject({ state: 'succeeded', work: 'free', action: 'hand_back' })
+    // 没有派活的两位员工停在工位待命，不会被别人的终态带着走。
+    expect(commands.filter(c => c.agentId !== 'blog').every(c => c.action === 'at_post')).toBe(true)
+    session.stop()
+  })
+
+  it('任务终态不从演出推算：权威终态之后晚到的增量/重复成功事件不改命令与状态', async () => {
+    // 权威快照已经是终态；观察流随后才把「迟到的增量」和「重复的成功事件」送进来。
+    stub.state.snapshot = {
+      ...defaultSnapshot, state: 'completed', summary: '完成', finishedAt: 9,
+      subtasks: [{ ...defaultSnapshot.subtasks[0], state: 'succeeded', result: '定稿' }],
+    }
+    stub.state.run = { runId: 'run-1', state: 'running', taskId: 'task-1', seq: 5, windowStart: 1 }
+    stub.state.streamQueue.push({ events: [
+      { type: 'subtask_delta', taskId: 'task-1', id: 's1', agentId: 'blog', delta: '（迟到的增量）', seq: 6, runId: 'run-1' },
+      { type: 'subtask', taskId: 'task-1', id: 's1', state: 'succeeded', agentId: 'blog', displayName: '博客', detail: '又报了一次完成', seq: 7, runId: 'run-1' },
+    ], done: true })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    // 迟到事件确实到了（正文按覆盖边界如实追加，不静默丢弃），但业务事实一个都不变。
+    await vi.waitFor(() => expect(store.task.subtasks[0]!.text).toContain('迟到的增量'))
+    expect(store.task.state).toBe('completed')
+    expect(store.task.summary).toBe('完成')
+    expect(store.task.subtasks[0]!.state).toBe('succeeded')
+    // 正文基准仍然只有权威快照里的那份结果，迟到增量只是显示层追加。
+    expect(store.task.subtasks[0]!.base).toBe('定稿')
+    // 员工命令只读投影：终态之后仍然是「交回并回工位」，没有被演出再推回开工。
+    const commands = performanceOf()
+    expect(commands.find(c => c.agentId === 'blog')).toMatchObject({ state: 'succeeded', work: 'free', action: 'hand_back' })
+    session.stop()
+  })
+
+  it('就近提示按作者优先级只留一个，牛马大总管赢过普通 NPC', async () => {
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    near([
+      { id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles: 0.5, dialogueMode: 'authored_lines' },
+      { id: 'butler', label: '牛马大总管', kind: 'butler', distanceTiles: 1.2 },
+    ])
+    await vi.waitFor(() => expect(store.prompt?.id).toBe('supplement_hint'))
+    expect(store.prompt?.label).toBe('补充一句')
+    // 走远后只剩普通 NPC 的交谈提示。
+    near([{ id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles: 0.5, dialogueMode: 'authored_lines' }])
+    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    near([])
+    await vi.waitFor(() => expect(store.prompt).toBeNull())
+    session.stop()
+  })
+
+  it('普通 NPC 对白用作者预写内容，0 次模型/业务工具调用（管家的总请求数不变）', async () => {
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    // 等只读订阅接通（一次长连接）再计数：对白通路本身不产生任何请求。
+    await vi.waitFor(() => expect(store.status).toBe('ready'))
+    await new Promise(resolve => setTimeout(resolve, 30))
+    const before = [...stub.state.requests]
+    near([{ id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles: 0.8, dialogueMode: 'authored_lines' }])
+    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    session.interactKey()
+    expect(store.dialogue).toMatchObject({ kind: 'npc', id: 'npc_hr', title: '沈禾', mode: 'authored_lines', inputAllowed: false })
+    expect(store.dialogue?.lines).toEqual(['这页先留白，你说完我再记。'])
+    // 关掉面板、再点一次头像：整条通路不产生任何请求（模型与业务工具都不在其中）。
+    session.closeDialogue()
+    expect(store.dialogue).toBeNull()
+    interact({ id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles: 0.8, dialogueMode: 'authored_lines' })
+    expect(store.dialogue?.mode).toBe('authored_lines')
+    await new Promise(resolve => setTimeout(resolve, 50))
+    expect(stub.state.requests).toEqual(before)
+    expect(stub.state.chatRequests).toHaveLength(0)
+    expect(stub.state.replyRequests).toHaveLength(0)
+    expect(stub.state.stopRequests).toHaveLength(0)
+    session.stop()
+  })
+
+  it('任务本或对白开着时不渲染就近提示（requires.input_open: false）', async () => {
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    near([{ id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles: 0.5, dialogueMode: 'authored_lines' }])
+    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    session.openBook()
+    expect(store.prompt).toBeNull()
+    session.closeBook()
+    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    // 对白面板同理：开着的时候一个提示都不生效，关掉才恢复。
+    session.interactKey()
+    expect(store.dialogue).not.toBeNull()
+    expect(store.prompt).toBeNull()
+    session.closeDialogue()
+    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    session.stop()
+  })
+
+  it('就近会话随走远、换图与角色离场自动关闭，且不碰任务状态', async () => {
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    const target = (distanceTiles: number) =>
+      ({ id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles, dialogueMode: 'authored_lines' })
+    near([target(0.5)])
+    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    session.interactKey()
+    expect(store.dialogue?.id).toBe('npc_hr')
+    // 走出交互半径但还没走远（< walk_away_tiles = 3.5）：会话留着，提示不闪。
+    near([target(3.4)])
+    expect(store.dialogue?.id).toBe('npc_hr')
+    // 走远了：自动关闭。
+    near([target(3.6)])
+    expect(store.dialogue).toBeNull()
+    // 再开一次：角色离场（本图近邻里没有这个人）同样关闭。
+    near([target(0.5)])
+    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    session.interactKey()
+    expect(store.dialogue).not.toBeNull()
+    near([{ id: 'npc_admin', label: '陆小周', kind: 'npc', distanceTiles: 0.5, dialogueMode: 'authored_lines' }])
+    expect(store.dialogue).toBeNull()
+    // 换到另一张图：旧图的角色不在近邻事实里，会话随之关闭。
+    near([target(0.5)])
+    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    session.interactKey()
+    expect(store.dialogue).not.toBeNull()
+    worldMock.options?.onFeet?.({ map: 'street', cell: [5, 12], facing: 'north' })
+    expect(store.dialogue).toBeNull()
+    // 对白只是表现：任务投影与命令一个字节都没变。
+    expect(store.task.state).toBe('running')
+    expect(performanceOf().find(c => c.agentId === 'blog')).toMatchObject({ action: 'start_work' })
+    session.stop()
+  })
+
+  it('没有对白通道的角色只给名牌，不回退到员工通道', async () => {
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    near([{ id: 'sample_explorer', label: '探险NPC示例', kind: 'npc', distanceTiles: 1, dialogueMode: 'unavailable' }])
+    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_status_hint'))
+    session.interactKey()
+    expect(store.dialogue).toMatchObject({ id: 'sample_explorer', mode: 'unavailable', inputAllowed: false })
+    expect(store.dialogue?.lines).toEqual([])
+    session.stop()
+  })
+
+  it('员工名牌上的状态用中文文案：dispatched/executing/succeeded 不留英文 token', async () => {
+    for (const [state, label] of [['dispatched', '已派出'], ['executing', '执行中'], ['succeeded', '已完成']] as const) {
+      stub.state.run = null
+      stub.state.snapshot = { ...defaultSnapshot, subtasks: [{ ...defaultSnapshot.subtasks[0]!, state }] }
+      const session = makeSession()
+      await session.refresh()
+      const store = useTaskBookStore()
+      const world = session['world'] as unknown as { interact: (t: unknown) => void }
+      world.interact({ id: 'blog', label: '博客', kind: 'staff', distanceTiles: 1 })
+      expect(store.dialogue?.stateLabel, state).toContain(label)
+      session.stop()
+    }
+  })
+
+  it('业务员工只给名牌与权威状态：超范围点击只给轻微反馈，不打开任何输入', async () => {
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    const world = session['world'] as unknown as { interact: (t: unknown) => void }
+    world.interact({ id: 'blog', label: '博客', kind: 'staff', distanceTiles: 3 })
+    expect(store.dialogue).toBeNull()
+    expect(store.notice).toContain('走近一点')
+    // 范围内：名牌显示权威状态与当前表现动作，没有搭话入口。
+    world.interact({ id: 'blog', label: '博客', kind: 'staff', distanceTiles: 1 })
+    expect(store.dialogue).toMatchObject({ kind: 'staff', id: 'blog', inputAllowed: false })
+    expect(store.dialogue?.stateLabel).toContain('进行中')
+    expect(store.dialogue?.lines).toEqual([])
+    session.stop()
+  })
+
+  it('切到没有员工的会话时命令复位，回到有派活的会话再按权威状态复位', async () => {
+    stub.state.conversations = [
+      { id: 'conv-1', title: '博客任务', createdAt: 1, updatedAt: 2, taskCount: 1 },
+      { id: 'conv-2', title: '另一个会话', createdAt: 1, updatedAt: 2, taskCount: 0 },
+    ]
+    const session = makeSession()
+    await session.refresh()
+    expect(performanceOf().find(c => c.agentId === 'blog')).toMatchObject({ state: 'running', action: 'start_work' })
+    // 空会话：投影清空，命令回到工位待命（不保留上一份任务的演出）。
+    stub.state.history = []
+    stub.state.run = null
+    await session.selectConversation('conv-2')
+    expect(performanceOf().every(c => c.action === 'at_post')).toBe(true)
+    session.stop()
+  })
+
+  it('身份失效时表现与对白一起作废，不把上一份任务的状态留在画面上', async () => {
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    near([{ id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles: 0.5, dialogueMode: 'authored_lines' }])
+    await vi.waitFor(() => expect(store.prompt).not.toBeNull())
+    session.interactKey()
+    expect(store.dialogue).not.toBeNull()
+    stub.state.identityStatus = 401
+    await session.refresh()
+    expect(store.dialogue).toBeNull()
+    expect(store.prompt).toBeNull()
+    expect(performanceOf().every(c => c.action === 'at_post')).toBe(true)
+    session.stop()
   })
 })
