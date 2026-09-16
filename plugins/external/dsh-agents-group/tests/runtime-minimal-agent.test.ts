@@ -23,7 +23,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { AgentParticipant, ParticipantProgress, ParticipantRequest, ParticipantResult } from '../packages/runtime/src/contract.ts'
 import { ConversationLifecycle, type AgentRuntime, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
 import type {
@@ -42,6 +42,15 @@ const PERSONA = '你是一个最小 Agent：只回答一轮，不调用任何业
 const DEFAULT_MODEL = { provider: 'deepseek', model: 'deepseek-chat' }
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
 const otherActor: Actor = { namespace: 'user', userId: 'bob', sessionId: 'bob-login' }
+
+/**
+ * 单条用例的超时放到 30s。
+ *
+ * 这个文件里的每一轮都由测试自己驱动，逻辑上不吃墙钟时间；但 `pnpm test` 默认**并行**跑整套，
+ * 机器可能被别的用例占满。留出宽裕的上界，是为了让"机器忙"表现为慢、而不是表现为红
+ * （文件内自己的等待上限见 `until`，只有 10s，所以卡住时先报出来的是带名字的等待超时）。
+ */
+vi.setConfig({ testTimeout: 30_000 })
 
 // ---------------------------------------------------------------------------
 // 假宿主
@@ -99,6 +108,9 @@ interface Harness {
   readonly participant: AgentParticipant
   readonly lifecycle: ConversationLifecycle
   readonly port: MemoryConversationPort
+  /** 假宿主 Context 与鉴权（装配 adapter 的侧栏入口要用）。 */
+  readonly ctx: Context
+  readonly access: Access
   /** 造一次 `run` / `reply` 的请求（每次调用自带一个进度收集器）。 */
   call(overrides?: CallOverrides): PlannedCall
   /** `participant.run`：外挂一个已消化的影子 promise，避免失败路径上出现"未处理拒绝"噪音。 */
@@ -279,10 +291,19 @@ function fixture(definition: AgentDefinition): Harness {
   const runtime: AgentRuntime = { ctx, definition, access, store: port, config, lifecycle, allowedTools }
   const participant = createParticipant({ definition, runtime, access, config })
 
-  /** 等到条件成立；不用假计时器，也不依赖 `vi.waitFor` 的轮询语义。 */
+  /**
+   * 等到条件成立。
+   *
+   * 用真实计时器轮询（不用假计时器：假计时器会把"谁在推进回合"变成测试自己说了算），并且
+   * 用**墙钟上限**而不是固定次数：并行跑整套时机器会更忙，但这条链只吃微任务，10s 已经是
+   * 极宽松的上界；真卡住时报出的是带名字的等待超时，不是一句笼统的用例超时。
+   */
   const until = async (check: () => boolean, label: string): Promise<void> => {
-    for (let attempt = 0; attempt < 400 && !check(); attempt += 1) await new Promise<void>(resolve => { setTimeout(resolve, 1) })
-    if (!check()) throw new Error(`等待超时：${label}`)
+    const deadline = Date.now() + 10_000
+    while (!check()) {
+      if (Date.now() > deadline) throw new Error(`等待超时（10s）：${label}`)
+      await new Promise<void>(resolve => { setTimeout(resolve, 1) })
+    }
   }
 
   /**
@@ -295,7 +316,7 @@ function fixture(definition: AgentDefinition): Harness {
   }
 
   const harness: Harness = {
-    definition, participant, lifecycle, port,
+    definition, participant, lifecycle, port, ctx, access,
     call(overrides = {}) {
       const progress: ParticipantProgress[] = []
       return {
@@ -357,22 +378,21 @@ function fixture(definition: AgentDefinition): Harness {
     cancels: () => cancels,
     revoke: () => { revoked = true },
   }
-  live.push({
-    harness,
-    async dispose() {
-      await lifecycle.dispose()
-      for (const close of disposers) await close()
-    },
+  /**
+   * 替身的生命周期**只跟它自己那条用例绑定**。
+   *
+   * 早先的写法是模块级的 `afterEach` + 一个"当前所有在用替身"的数组：那种写法把不同用例的
+   * 释放耦合在一起——只要两条用例在时间上重叠（`sequence.concurrent`、将来的并发用例、或
+   * 谁把这里的钩子挪了位置），一条用例的收尾就会把另一条还在跑的替身一起释放掉，症状是
+   * 「最小 Agent正在停止」的 503 随机落在别的用例上（它看起来像"并行才红"的时序问题，
+   * 根因是替身被提前释放）。`onTestFinished` 按用例登记，不共享任何跨用例状态。
+   */
+  onTestFinished(async () => {
+    await lifecycle.dispose()
+    for (const close of disposers) await close()
   })
   return harness
 }
-
-const live: { readonly harness: Harness; dispose(): Promise<void> }[] = []
-afterEach(async () => {
-  // 用例之间不共享宿主：每个替身都在这里释放（dispose 是幂等的）。
-  const pending = live.splice(0, live.length)
-  for (const entry of pending) await entry.dispose()
-})
 
 // ---------------------------------------------------------------------------
 // 最小 AgentDefinition 与请求
@@ -650,19 +670,22 @@ describe('P1 判据①：最小 Agent 跑通一轮', () => {
 
     const query = (overrides: Partial<ConversationQueryShape> = {}): ConversationQueryShape =>
       ({ offset: 0, limit: 30, q: '', state: '', ...overrides })
-    const running = await f.lifecycle.management().list(actor, query())
+    // 宿主侧的两个集合在内存替身场景里是空的：它们来自 kit
+    // （`hostBusyConversationIds` / `conversationArchive`），而那条路径只有 adapter 该碰。
+    const hostScope = { hostBusy: [], archived: [] } as const
+    const running = await f.lifecycle.list(actor, query(), hostScope)
     expect(running.items.map(item => item.id)).toEqual([id])
     expect(running.items[0]).toMatchObject({ id, state: 'busy', canRemove: false })
     expect(running.items[0]?.blockedReason).toBeTruthy()
     // 状态过滤与搜索都走存储端口，不是在这里现筛的。
-    expect((await f.lifecycle.management().list(actor, query({ state: 'busy' }))).items.map(item => item.id)).toEqual([id])
-    expect((await f.lifecycle.management().list(actor, query({ state: 'ready' }))).items).toEqual([])
-    expect((await f.lifecycle.management().list(actor, query({ q: '不存在' }))).items).toEqual([])
+    expect((await f.lifecycle.list(actor, query({ state: 'busy' }), hostScope)).items.map(item => item.id)).toEqual([id])
+    expect((await f.lifecycle.list(actor, query({ state: 'ready' }), hostScope)).items).toEqual([])
+    expect((await f.lifecycle.list(actor, query({ q: '不存在' }), hostScope)).items).toEqual([])
 
     f.complete(id, '跑完了')
     await pending
     await f.settle(id)
-    const idle = await f.lifecycle.management().list(actor, query())
+    const idle = await f.lifecycle.list(actor, query(), hostScope)
     expect(idle.items[0]).toMatchObject({ id, state: 'ready', canRemove: true })
     expect(idle.items[0]?.blockedReason).toBeUndefined()
   })

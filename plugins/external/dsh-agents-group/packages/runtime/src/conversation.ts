@@ -24,22 +24,15 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import {
   AccessError,
-  conversationArchive,
   conversationModel,
-  conversationRemover,
-  hostBusyConversationIds,
-  previewPage,
-  readConversationEvents,
   registerConversationTitles,
   type Access,
   type Actor,
   type ConversationModel,
-  type ConversationProvider,
-  type PreviewMessage,
 } from '@dsh-plugin-manager/plugin-kit'
 import { conversationModelCatalog, requestedConversationModel, selectConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
 import type { AgentDefinition, TurnHistory } from './definition.ts'
-import type { ConversationPort, ConversationRecordShape, OwnerKey } from './storage/ports.ts'
+import type { ConversationPageShape, ConversationPort, ConversationQueryShape, OwnerKey } from './storage/ports.ts'
 
 /**
  * 各 Agent 的会话前缀。**不可改。**
@@ -104,8 +97,12 @@ export interface RuntimeConfig {
  * `registerConversationTitles` 的回调是**同步**的（`conversations.ts:36`），而标题最终要落 PG
  * （异步）。所以回调里只投递，后台按会话 FIFO 落库。
  *
- * ⚠️ **必须是持久队列**：内存队列会在崩溃或插件卸载时丢标题。持久 outbox 由存储层提供
- * （与删除围栏共用同一套"本地留下、后台补写"的机制）。
+ * ⚠️ **必须是持久队列**：内存队列会在崩溃或插件卸载时丢标题——丢的是一条"这个会话该叫什么"
+ * 的指令，而它不可重建（宿主不会再发一次同一条事件）。
+ *
+ * **已经落地**：实现是 `storage/index.ts` 的 `AgentDatabaseFacade.titleSink()`，底层是
+ * `storage/local.ts` 的 `title_outbox` 表（与删除围栏共用同一套"本地留下、后台补写"的机制，
+ * 同一会话连续更新只留最后一条）。挂载时用 `installTitleSink(db.titleSink())` 接上。
  */
 export interface TitleSink {
   /** 同步投递：把一次标题更新交出去，调用方不等待落库。 */
@@ -163,7 +160,6 @@ export class ConversationLifecycle {
   private pendingOpens = 0
   private disposed = false
   private readonly identities = new WeakMap<object, Actor>()
-  private provider?: ConversationProvider
   private readonly stopTitles: () => void
 
   constructor(private readonly host: LifecycleHost) {
@@ -187,78 +183,48 @@ export class ConversationLifecycle {
   }
 
   /**
-   * 侧栏入口（对应 kit 的 `ConversationProvider`）。
+   * 本实例此刻占用的全部会话 id。
    *
-   * 它复用与发送 / 恢复 / 分支**同一道围栏**。三个同步面一个都不能改成异步查询：
-   * `busy` 返回 `Promise` 会恒真（移除永远 409）、`record` 是同步读且返回值参与 kit 的
-   * `alreadyRemoved` 分支、`mark` 是同步写。
+   * 侧栏 `list` 的 `busy` 集合要带上它们（adapter 装配时用 `localBusyIds` 传进去），
+   * 与 {@link isBusy} **同源**：活跃、正在打开、正在分支三者都算——两处各算一遍迟早会漂移。
    */
-  management(): ConversationProvider {
-    if (this.provider) return this.provider
-    const { ctx, access, definition, store } = this.host
-    return this.provider = {
-      protocol: 1,
-      pluginId: definition.id,
-      list: async (actor, query) => {
-        access.assert(actor)
-        const local = [...new Set([...this.conversations.keys(), ...this.openings.keys(), ...this.forks])].filter(id => this.isBusy(id))
-        const page = await store.list(this.ownerOf(actor), {
-          offset: query.offset,
-          limit: query.limit,
-          q: query.q,
-          ...(query.from === undefined ? {} : { from: query.from }),
-          ...(query.to === undefined ? {} : { to: query.to }),
-          state: query.state,
-        }, {
-          // 宿主侧正在跑的会话也要算忙：它可能不属于本插件，但移除围栏必须看见它。
-          busy: [...new Set([...hostBusyConversationIds(ctx), ...local])],
-          archived: conversationArchive(ctx).archivedSessionIds,
-        })
-        return { items: [...page.items], total: page.total, nextOffset: page.nextOffset }
-      },
-      preview: async (actor, id, before) => {
-        access.assert(actor)
-        if (store.record(actor, id).removalState === 'removed') throw new AccessError(404, '会话已移除')
-        const events = await readConversationEvents(ctx, id) as readonly SessionEvent[]
-        // 读事件是异步的：读完之后归属与围栏都可能变，必须重核一次再返回内容。
-        access.assert(actor)
-        if (store.record(actor, id).removalState === 'removed') throw new AccessError(404, '会话已移除')
-        const messages = this.projectHistory(events).flatMap<PreviewMessage>(message => message.role === 'user'
-          ? [{ role: 'user' as const, text: message.text, time: message.time }]
-          : [{
-            role: 'assistant' as const,
-            text: message.text,
-            ...(message.reasoning === undefined ? {} : { reasoning: message.reasoning }),
-            time: message.time,
-          }])
-        return previewPage(messages, before)
-      },
-      remove: conversationRemover(ctx, {
-        assert: actor => {
-          access.assert(actor)
-          if (this.disposed) throw new AccessError(503, '插件正在停止')
-        },
-        store: {
-          // 同步读（回答存在性 / 归属 / ready，并参与 kit 的 alreadyRemoved 分支）。
-          record: (actor, id): ConversationRecordShape => store.record(actor, id),
-          // 同步写：本地标记与 outbox 由存储层在同一个本地事务里完成。
-          mark: (actor, id, state) => { store.mark(actor, id, state) },
-        },
-        busy: id => this.isBusy(id),
-        release: async id => {
-          const conversation = this.conversations.get(id)
-          if (conversation) { this.conversations.delete(id); await conversation.handle.dispose() }
-        },
-      }),
-    }
+  busyIds(): readonly string[] {
+    return [...new Set([...this.conversations.keys(), ...this.openings.keys(), ...this.forks])].filter(id => this.isBusy(id))
   }
 
   /**
-   * 把一段会话事件投影成预览消息。
+   * 侧栏列表的**机制部分**：算本地占用集合，交给存储端口去查。
    *
-   * 缺省实现只取用户与助手的正文：**宁可少显示，也不替业务编一份它没要求的预览**。
+   * 宿主侧的忙集合与归档清单由调用方传进来——那两个来自 kit
+   * （`hostBusyConversationIds` / `conversationArchive`），而本文件不碰 kit 的会话契约
+   * （唯一接触点是 `storage/adapter.ts`）。`busy` 必须**同步**可判：它是移除围栏的一部分
+   * （`conversationRemover` 的 `busy(id)` 一旦返回 `Promise` 就恒真，移除会永远报 409）。
+   *
+   * 本地的忙集合走 {@link busyIds}，与 `isBusy` **同源**——两处各算一遍迟早会漂移。
    */
-  private projectHistory(events: readonly SessionEvent[]): readonly { role: 'user' | 'assistant'; text: string; reasoning?: string; time: number }[] {
+  async list(actor: Actor, query: ConversationQueryShape,
+    scope: { readonly hostBusy: readonly string[]; readonly archived: readonly string[] }): Promise<ConversationPageShape> {
+    this.host.access.assert(actor)
+    return this.host.store.list(this.ownerOf(actor), query, {
+      busy: [...new Set([...scope.hostBusy, ...this.busyIds()])],
+      archived: scope.archived,
+    })
+  }
+
+  /**
+   * 把一段会话事件投影成预览消息（供 adapter 装配侧栏的 `preview` 用）。
+   *
+   * 缺省实现只取用户与助手的正文：**宁可少显示，也不替业务编一份它没要求的预览**；
+   * 业务有自己的展示口径时用 `definition.projectHistory` 覆盖。
+   *
+   * ⚠️ **侧栏入口（kit 的 `ConversationProvider`）刻意不在这个类里。**
+   * `conversationRemover` 内部持有一个 `removing: Set<string>`（`conversations.ts:120`），
+   * 那是"移除时序"的**进程内互斥**。装配两处就有两个集合，同一会话经两条路径并发移除时
+   * 两道闸互相看不见——直接违反「状态、锁和恢复规则只有一个实现」（根 `AGENTS.md`）。
+   * 所以唯一装配点是 `storage/adapter.ts` 的 `createConversationProvider`，本类只提供
+   * 它需要的**预览投影**。
+   */
+  previewOf(events: readonly SessionEvent[]): readonly { role: 'user' | 'assistant'; text: string; reasoning?: string; time: number }[] {
     const custom = this.host.definition.projectHistory
     if (custom) return custom(events)
     return previewMessages(events)
