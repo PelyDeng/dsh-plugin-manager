@@ -21,6 +21,17 @@
  * （visibilitychange：后台暂停渲染并落盘位置、回前台恢复渲染并重读权威状态、可见状态正确）、
  * 双入口并发（另一个入口回复 → 本入口跟着换轮）、迟到 stop 与迟到回复（幂等空操作 /
  * not_waiting 提示且不重试）、响应未知后的手动重试（两次请求一次执行）、正文不落盘。
+ * 第六切片（发布候选与整体验收）：**HAR**（`recordHar`，上下文关闭时落
+ * `.artifacts/<engine>-browser-check.har`，只记请求/响应元数据不嵌正文）、**设备与环境记录**
+ * （浏览器版本、UA、viewport、DPR、GPU 渲染器、机器摘要，写进同一份检查产物 JSON），以及
+ * **重场景帧预算**：出生地图重新装载全量名册（办公楼 10 人；连同咖啡店 1 位共 11 位角色，
+ * 但单场景同屏最多 10 人——口径见报告），采样前用探针确认键盘能带动人物（探针只试作者碰撞
+ * 网格上当前格真的可走的方向，撞墙不动是正常行为；尝试方向与可走性写进产物），
+ * 走帧图集就绪后老板持续走动（走动帧 + 镜头跟随），
+ * 采样期间用包装过的 `fetch` 直接数管家 SSE 事件、并按帧读 `data-actor-cells` 记录主动走动的
+ * 角色与姿态；桌面 1440×1000 采样 ≥600 帧，断言 ≥60FPS 且 p95≤20ms；移动视口 390×844
+ * （模拟，非真机）采样 ≥300 帧，断言 ≥30FPS 且 p95≤33ms。管线里没有粒子/补间 VFX 层，
+ * 所以「环境特效」一项按 0 如实记录（第四阶段的 48 个特效属于技术验证原型夹具）。
  * 桩控制口与场景标记（#cut/#trim/#done/#late_stop/#late_reply）见 scripts/local-butler.mjs 头注释。
  * 截图与结果写 .artifacts/，供人工复核。
  *
@@ -31,6 +42,7 @@ import { createHash } from 'node:crypto'
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createRequire } from 'node:module'
+import { arch, cpus, platform, release, totalmem } from 'node:os'
 import { gzipSync } from 'node:zlib'
 import { setTimeout as delay } from 'node:timers/promises'
 import { startVerifyServer } from './local-verify.mjs'
@@ -65,7 +77,52 @@ const origins = new Set()
 /** 管家写请求的路径序列（含失败的那些——response 事件看不到断开的请求）。 */
 const butlerPosts = []
 const countPosts = path => butlerPosts.filter(entry => entry === path).length
-const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } })
+const context = await browser.newContext({
+  viewport: { width: 1440, height: 1000 },
+  // HAR：只记请求/响应元数据（含体积与耗时），不嵌正文，避免把 1.5MB 的 JS 与图集塞进证据。
+  recordHar: { path: resolve(directory, engineName + '-browser-check.har'), content: 'omit', mode: 'full' },
+})
+/**
+ * SSE 观测（只在页面里计数，不改变任何语义）：包装 `fetch`，对 `text/event-stream`
+ * 响应取一路 `clone()` 旁路统计——收到多少块、多少字节、解析出多少个带 `type` 的事件。
+ * 重场景采样据此证明「采样期间管家事件确实在推」，而不是靠界面文本间接推断。
+ * 这里必须用 `clone()`：`body.tee()` 会把响应体锁住，页面自己的读者会直接失败（实测
+ * 连接异常并反复重连），clone 出来的第二路才与页面各读各的、互不影响。
+ */
+await context.addInitScript(() => {
+  const original = globalThis.fetch
+  if (typeof original !== 'function') return
+  const state = globalThis.__NIUMA_SSE__ = { chunks: 0, bytes: 0, events: 0, types: {} }
+  globalThis.fetch = async function (input, init) {
+    const response = await original.call(this, input, init)
+    const contentType = response.headers.get('content-type') ?? ''
+    if (!contentType.includes('text/event-stream') || response.body === null) return response
+    const observed = response.clone()
+    void (async () => {
+      const reader = observed.body.getReader()
+      const decoder = new TextDecoder()
+      try {
+        for (;;) {
+          const { value, done } = await reader.read()
+          if (done) break
+          state.chunks++
+          state.bytes += value.byteLength
+          for (const line of decoder.decode(value, { stream: true }).split('\n')) {
+            if (!line.startsWith('data:')) continue
+            try {
+              const event = JSON.parse(line.slice(5).trim())
+              if (event !== null && typeof event === 'object' && typeof event.type === 'string') {
+                state.events++
+                state.types[event.type] = (state.types[event.type] ?? 0) + 1
+              }
+            } catch { /* 跨块残片或 [DONE]：不计入事件数。 */ }
+          }
+        }
+      } catch { /* 订阅被取消属于正常断流。 */ }
+    })()
+    return response
+  }
+})
 const page = await context.newPage()
 page.on('pageerror', error => errors.push('pageerror: ' + error.message))
 // 「Failed to load resource」是浏览器对非 2xx/断开 fetch 的固定诊断：写链路的
@@ -1036,13 +1093,268 @@ await check('所有请求同源', async () => {
   assert.ok(origins.size === 1 && [...origins][0] === fixture.origin, '出现非同源请求：' + [...origins].join(', '))
 })
 
+// ---- 第六切片：发布候选——设备与环境记录、重场景帧预算（HAR 已在上下文创建时开启） ----
+
+/**
+ * 帧预算采样：在页面里按 `requestAnimationFrame` 取帧间隔；顺手每帧读一次
+ * `data-actor-cells`（表现层的按格诊断），统计这段时间里**真正动过**的角色与出现过的姿态。
+ */
+const sampleFrames = (frames) => page.evaluate(frames => new Promise(resolve => {
+  const deltas = []
+  const moves = new Map()
+  const poses = new Set()
+  const read = () => {
+    for (const entry of (document.querySelector('[data-actor-cells]')?.getAttribute('data-actor-cells') ?? '').split(';')) {
+      const [id, cell, pose] = entry.split(':')
+      if (id === undefined || cell === undefined || id === '') continue
+      poses.add(pose ?? '')
+      const seen = moves.get(id) ?? new Set()
+      seen.add(cell)
+      moves.set(id, seen)
+    }
+  }
+  let last = performance.now()
+  const tick = (now) => {
+    deltas.push(now - last)
+    last = now
+    read()
+    if (deltas.length >= frames) {
+      resolve({
+        deltas,
+        poses: [...poses].filter(pose => pose !== ''),
+        movedActors: [...moves.entries()].filter(([, cells]) => cells.size > 1).map(([id, cells]) => id + '×' + cells.size),
+        actors: moves.size,
+      })
+      return
+    }
+    requestAnimationFrame(tick)
+  }
+  requestAnimationFrame(tick)
+}), frames)
+
+/** 帧间隔 → 报告口径：FPS 取样本数/总时长，p95 取第 95 百分位（与第四阶段记录口径一致）。 */
+const frameStats = (sample) => {
+  const sorted = [...sample.deltas].sort((a, b) => a - b)
+  const elapsed = sample.deltas.reduce((total, delta) => total + delta, 0)
+  return {
+    samples: sample.deltas.length,
+    elapsedMs: elapsed,
+    fps: elapsed === 0 ? 0 : sample.deltas.length / (elapsed / 1000),
+    p95Ms: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))],
+    maxMs: sorted[sorted.length - 1],
+    poses: sample.poses,
+    movedActors: sample.movedActors,
+    actors: sample.actors,
+  }
+}
+
+/** 页面里的 SSE 计数（由 addInitScript 包装 fetch 维护）。 */
+const sseStats = () => page.evaluate(() => ({ ...globalThis.__NIUMA_SSE__ }))
+const sseDelta = (before, after) => {
+  const types = Object.fromEntries(Object.entries(after.types)
+    .map(([type, count]) => [type, count - (before.types[type] ?? 0)])
+    .filter(([, count]) => count > 0))
+  return { chunks: after.chunks - before.chunks, bytes: after.bytes - before.bytes, events: after.events - before.events, types }
+}
+
+/** 重场景共同前置：清位置快照回出生地图（办公楼）→ 全量名册与走帧图集就绪 → 管家链路已连接。 */
+const reloadHeavyScene = async () => {
+  await page.evaluate(() => { for (const key of Object.keys(localStorage)) if (key.startsWith('niuma-boss:world:')) localStorage.removeItem(key) })
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('canvas', { timeout: 20_000 })
+  await page.waitForSelector('[data-scene="office"]', { timeout: 20_000 })
+  await page.waitForFunction(() => document.querySelector('.hud .badge')?.textContent?.includes('已连接'), undefined, { timeout: 20_000 })
+  // 走帧图集是玩家操作之后懒加载的：任务本开着时按键只热身、不移动老板（见第四切片用例）。
+  await openBook()
+  await page.keyboard.press('w')
+  await page.waitForFunction(() => document.querySelector('[data-walk]')?.getAttribute('data-walk') === 'ready', undefined, { timeout: 20_000 })
+  await closeBook()
+  return await runtimeOf('office')
+}
+
+/** 界面状态快照：人物能不能被键盘带动只取决于这些界面事实，采样失败时按它定位。 */
+const uiState = () => page.evaluate(() => ({
+  book: document.querySelector('.task-book') !== null,
+  dialogue: document.querySelector('.dialogue') !== null,
+  active: document.activeElement?.tagName ?? '',
+  badge: document.querySelector('.hud .badge')?.textContent ?? '',
+  walk: document.querySelector('[data-walk]')?.getAttribute('data-walk') ?? '',
+}))
+
+/** 方向键 → 位移（与游戏共用的坐标约定：d 东 x+1、a 西 x−1、w 北 y−1、s 南 y+1）。 */
+const DIRECTION_DELTA = { d: [1, 0], a: [-1, 0], w: [0, -1], s: [0, 1] }
+/**
+ * 按作者碰撞网格挑出**当前格真的能走**的方向（`walkable` 与游戏共用同一份 collision）。
+ * 「朝墙按方向键不动」是游戏的正常行为，不能算按键失灵，所以探针只从这些方向里选。
+ * 默认不选 `s`：出生点南边一格是去商业街的触发格，踩上去会换图。
+ */
+const walkableDirections = (runtime, cell, prefer = ['a', 'w', 'd']) => prefer.flatMap(key => {
+  const [dx, dy] = DIRECTION_DELTA[key]
+  const target = [cell[0] + dx, cell[1] + dy]
+  if (target[0] < 0 || target[1] < 0 || target[0] >= runtime.width || target[1] >= runtime.height) return []
+  return walkable(runtime, target) ? [{ key, target: target.join(','), walkable: true }] : []
+})
+
+/**
+ * 采样前确认键盘真的能带动人物：只按 runtime 碰撞挑出的可走方向试，最多两次。
+ * 产物里记下尝试方向、目标格与该格是否可走——「可走方向仍没动」才是真实观测，
+ * 撞墙不动不是。两次都不动就把 attempts 原样交给人工复核，不做因果推断。
+ */
+const movementProbe = async (runtime, prefer = ['a', 'w', 'd'], ms = 320) => {
+  const cell = await playerCell()
+  const candidates = walkableDirections(runtime, cell.split(',').map(Number), prefer)
+  const attempts = []
+  for (const candidate of candidates.slice(0, 2)) {
+    const before = await playerCell()
+    await page.keyboard.down(candidate.key)
+    await delay(attempts.length === 0 ? ms : ms + 80)
+    await page.keyboard.up(candidate.key)
+    await delay(200)
+    const after = await playerCell()
+    attempts.push({ ...candidate, before, after, moved: before !== after })
+    if (before !== after) break
+  }
+  const moved = attempts.some(attempt => attempt.moved)
+  return {
+    cell,
+    candidates,
+    attempts,
+    moved,
+    wake: attempts[0] ?? null,
+    retry: attempts[1] ?? null,
+  }
+}
+
+/**
+ * 采样期间让老板一直走：走动帧 + 逐格位移 + 镜头跟随都进负载（按住一个方向会顶墙，来回换向）。
+ * 只用 `a/w/d`：出生点南边一格是去商业街的触发格，踩上去会换图，采样的负载就不干净了。
+ */
+const driveWalking = async (keys, ms) => {
+  for (const key of keys) {
+    await page.keyboard.down(key)
+    await delay(ms)
+    await page.keyboard.up(key)
+    await delay(120)
+  }
+}
+
+/** 名册口径：办公楼 10 人（含老板）+ 咖啡店 1 位非老板角色 = 11 位角色定义；单场景同屏最多 10 人。 */
+const rosterNote = async () => {
+  const office = await runtimeOf('office')
+  const cafe = await runtimeOf('cafe')
+  const report_ = JSON.parse(await readFile(resolve('web', 'generated', 'asset-report.json'), 'utf8'))
+  const officeAtlas = report_.maps.find(map => map.map === 'office')
+  return {
+    office: office.characters.map(character => character.id),
+    cafe: cafe.characters.map(character => character.id),
+    sameSceneMax: office.characters.length,
+    definitions: new Set([...office.characters, ...cafe.characters].map(character => character.id)).size,
+    walkers: officeAtlas?.walkers ?? [],
+    atlasFrames: Object.fromEntries((officeAtlas?.atlases ?? []).map(atlas => [atlas.name, atlas.frames])),
+    note: '办公楼 10 人（含老板）与咖啡店 1 位非老板角色分属两张地图，同一时刻只渲染当前场景的角色；第四阶段「11 人」是原型夹具的并发口径，本产物同屏最多 10 人。管线没有粒子/补间 VFX 层，环境特效按 0 记录。',
+  }
+}
+
+await check('设备与环境记录（浏览器版本/视口/DPR/GPU/UA 摘要）', async () => {
+  const environment = await page.evaluate(() => {
+    const canvas = document.querySelector('canvas')
+    const gl = canvas?.getContext('webgl2') ?? canvas?.getContext('webgl') ?? null
+    const debug = gl?.getExtension('WEBGL_debug_renderer_info') ?? null
+    return {
+      userAgent: navigator.userAgent,
+      platform: navigator.platform ?? '',
+      languages: navigator.languages?.join(',') ?? '',
+      hardwareConcurrency: navigator.hardwareConcurrency ?? 0,
+      devicePixelRatio: window.devicePixelRatio,
+      viewport: [window.innerWidth, window.innerHeight],
+      canvas: canvas === null ? null : [canvas.width, canvas.height],
+      renderer: (debug === null ? gl?.getParameter(gl.RENDERER) : gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)) ?? '未知（Canvas 渲染或取不到 WebGL 上下文）',
+      vendor: (debug === null ? gl?.getParameter(gl.VENDOR) : gl.getParameter(debug.UNMASKED_VENDOR_WEBGL)) ?? '未知',
+    }
+  })
+  report.device = {
+    engine: engineName,
+    browserVersion: report.version,
+    headless: report.headless,
+    ...environment,
+    os: [platform(), release(), arch()].join(' '),
+    cpu: cpus()[0]?.model ?? '未知',
+    totalMemBytes: totalmem(),
+  }
+  assert.ok(report.device.browserVersion !== '' && report.device.userAgent !== '', '设备记录不完整：' + JSON.stringify(report.device))
+  report.roster = await rosterNote()
+})
+
+await check('重场景帧预算（桌面 1440×1000）：全量名册 + 角色动画 + 持续 SSE，≥60FPS 且 p95≤20ms', async () => {
+  const office = await reloadHeavyScene()
+  // 采样前先确认键盘能带动人物：只试 runtime 碰撞给出的可走方向，不动就换一个再试一次。
+  const wake = await movementProbe(office)
+  assert.ok(wake.candidates.length > 0, '当前格四邻在作者碰撞网格里都是阻挡格，探针选不到可走方向：' + JSON.stringify(wake))
+  const cellBefore = await playerCell()
+  const sseBefore = await sseStats()
+  const driving = driveWalking(['a', 'w', 'd', 'w', 'a', 'w', 'd', 'w'], 560)
+  const stats = frameStats(await sampleFrames(640))
+  await driving
+  const posts = await sseDelta(sseBefore, await sseStats())
+  const cellAfter = await playerCell()
+  report.heavyDesktop = { ...stats, sse: posts, cellBefore, cellAfter, scene: await scene(), canvas: report.device.canvas, movementProbe: wake, ui: await uiState() }
+  // 全量名册：办公楼 10 人 = 老板 + `data-actor-cells` 里的 9 位非老板角色。
+  assert.equal(office.characters.length, 10, '出生地图名册不是 10 人：' + office.characters.length)
+  assert.equal(await scene(), 'office', '采样期间离开了出生地图，重场景口径不成立')
+  assert.equal(stats.actors, office.characters.length - 1, `同屏角色数 ${stats.actors} 与名册不符（应为 ${office.characters.length - 1} 位非老板角色）`)
+  // 老板真的走过：走动帧、逐格位移与镜头跟随都进过这段采样。
+  assert.notEqual(cellAfter, cellBefore, '采样期间老板没有走动，重场景不成立：' + cellBefore + ' → ' + cellAfter + '；探针 ' + JSON.stringify(wake))
+  // 管家 SSE 真的在推（不是静止画面）：采样窗口里至少 2 个事件。
+  assert.ok(posts.events >= 2, `采样期间管家 SSE 只推了 ${posts.events} 个事件`)
+  assert.ok(stats.fps >= 60, `桌面重场景 ${stats.fps.toFixed(2)} FPS，低于 60`)
+  assert.ok(stats.p95Ms <= 20, `桌面重场景 p95 ${stats.p95Ms.toFixed(2)}ms，超过 20ms`)
+  await page.screenshot({ path: resolve(directory, engineName + '-heavy-desktop.png') })
+})
+
+await check('重场景帧预算（移动视口 390×844，模拟非真机）：≥30FPS 且 p95≤33ms', async () => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await delay(800)
+  const office = await runtimeOf('office')
+  // 与桌面同口径：只试 runtime 碰撞给出的可走方向（本视口下 `d` 常常正对阻挡格）。
+  const wake = await movementProbe(office)
+  assert.ok(wake.candidates.length > 0, '当前格四邻在作者碰撞网格里都是阻挡格，探针选不到可走方向：' + JSON.stringify(wake))
+  const cellBefore = await playerCell()
+  const sseBefore = await sseStats()
+  const driving = driveWalking(['d', 'a', 'w', 'a', 'd', 'a'], 560)
+  const stats = frameStats(await sampleFrames(320))
+  await driving
+  const posts = await sseDelta(sseBefore, await sseStats())
+  const cellAfter = await playerCell()
+  report.heavyMobile = {
+    ...stats, sse: posts, cellBefore, cellAfter, scene: await scene(), movementProbe: wake, ui: await uiState(),
+    canvas: await page.evaluate(() => { const canvas = document.querySelector('canvas'); return canvas === null ? null : [canvas.width, canvas.height] }),
+    devicePixelRatio: await page.evaluate(() => window.devicePixelRatio),
+    note: '仅有视口与像素尺寸的近似，不是真机；DPR 为 1，真实 Android 机型通常为 2–3，GPU 与散热也不同。',
+  }
+  assert.notEqual(cellAfter, cellBefore, '移动视口采样期间老板没有走动：' + cellBefore + ' → ' + cellAfter + '；探针 ' + JSON.stringify(wake))
+  assert.equal(report.heavyMobile.scene, 'office', '移动视口采样期间离开了出生地图')
+  assert.equal(report.heavyMobile.actors, report.roster.sameSceneMax - 1, `移动视口同屏角色数 ${report.heavyMobile.actors} 与名册不符`)
+  assert.ok(posts.events >= 2, `移动视口采样期间管家 SSE 只推了 ${posts.events} 个事件`)
+  assert.ok(stats.fps >= 30, `移动视口重场景 ${stats.fps.toFixed(2)} FPS，低于 30`)
+  assert.ok(stats.p95Ms <= 33, `移动视口重场景 p95 ${stats.p95Ms.toFixed(2)}ms，超过 33ms`)
+  await page.screenshot({ path: resolve(directory, engineName + '-heavy-mobile.png') })
+})
+
 report.pageErrors = errors
 report.sameOriginOnly = origins.size === 1 && [...origins][0] === fixture.origin
 report.butlerPosts = butlerPosts.reduce((counts, path) => { counts[path] = (counts[path] ?? 0) + 1; return counts }, {})
+report.har = { path: resolve(directory, engineName + '-browser-check.har'), content: 'omit', mode: 'full' }
 await writeFile(resolve(directory, engineName + '-browser-check.json'), JSON.stringify(report, null, 2))
+// HAR 在上下文关闭时落盘（顺序：先关上下文，再关浏览器）。
+await context.close()
 await browser.close()
 await fixture.close()
 
 const failed = report.cases.filter(c => !c.ok)
-console.log(JSON.stringify({ engine: engineName, version: report.version, firstLoad: report.firstLoad, cases: report.cases.map(c => c.name + (c.ok ? ' ✓' : ' ✗ ' + c.error)), pageErrors: errors }, null, 2))
+console.log(JSON.stringify({
+  engine: engineName, version: report.version, firstLoad: report.firstLoad,
+  device: report.device, roster: report.roster,
+  heavyDesktop: report.heavyDesktop, heavyMobile: report.heavyMobile, har: report.har,
+  cases: report.cases.map(c => c.name + (c.ok ? ' ✓' : ' ✗ ' + c.error)), pageErrors: errors,
+}, null, 2))
 if (failed.length > 0 || errors.length > 0) process.exit(1)
