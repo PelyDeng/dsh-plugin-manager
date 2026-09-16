@@ -182,6 +182,12 @@ const state = {
    * 换尝试（`chat_reset`）或开新一轮时清空。
    */
   butlerThinking: '',
+  /**
+   * 本次「已调度成员」面板：成员的真实在查什么、交回了什么，都收在这里。
+   *
+   * `null` 表示这一轮没派活（大总管自己答的）。新一轮开始时整体重建，见 `mountDispatch`。
+   */
+  dispatch: null,
   /** 子任务 id → 等待中的提问卡，收到回复后移除。 */
   asks: new Map(),
   taskId: null,
@@ -597,6 +603,124 @@ function planNote(event) {
   return note
 }
 
+/** 成员状态 → 面板小圆点的配色类名。 */
+const DISPATCH_TONE = {
+  succeeded: 'ok',
+  completed: 'ok',
+  failed: 'error',
+  cancelled: 'error',
+  waiting_user: 'warn',
+  external_pending: 'warn',
+}
+
+/**
+ * 「本次已调度成员」面板。
+ *
+ * 群里只留大总管的结论和每位成员的一行状态；成员真正在查什么、交回了什么，都收进这里，
+ * 用 tab 切换着看——大总管汇总时就不必再复述一遍成员原文。默认折叠：老板不关心过程时
+ * 看不到它，关心时点开就是完整的流式输出与结论。
+ */
+function mountDispatch(subtasks) {
+  const details = make('details', 'dispatch')
+  const summary = make('summary', 'dispatch__summary')
+  const title = make('span', 'dispatch__title')
+  const tabs = make('div', 'dispatch__tabs')
+  const body = make('div', 'dispatch__body')
+  const slots = new Map()
+  const buttons = new Map()
+
+  const panel = {
+    details,
+    summary,
+    title,
+    tabs,
+    body,
+    slots,
+    buttons,
+    order: subtasks.map(subtask => subtask.id),
+    active: subtasks.length > 0 ? subtasks[0].id : null,
+  }
+
+  const select = id => selectDispatch(panel, id)
+  for (const subtask of subtasks) {
+    const button = make('button', 'dispatch__tab')
+    button.type = 'button'
+    button.appendChild(make('span', `dot dot--${DISPATCH_TONE[subtask.state] ?? 'queued'}`))
+    button.appendChild(make('span', null, displayNameOf(subtask.agentId)))
+    button.addEventListener('click', () => { select(subtask.id) })
+    tabs.appendChild(button)
+
+    const slot = make('section', 'dispatch__panel')
+    slot.hidden = true
+    body.appendChild(slot)
+
+    buttons.set(subtask.id, button)
+    slots.set(subtask.id, slot)
+  }
+
+  summary.appendChild(title)
+  summary.appendChild(tabs)
+  details.appendChild(summary)
+  details.appendChild(body)
+  // 点开面板时不再自动跳到某个 tab：记住用户上一次的选择（初始是第一位成员）。
+  details.addEventListener('toggle', () => { if (details.open && panel.active !== null) select(panel.active) })
+
+  state.dispatch = panel
+  renderDispatchHeader(panel)
+  if (panel.active !== null) select(panel.active)
+  return details
+}
+
+/** 面板标题：几位成员、各自现在什么状态，一眼看完。 */
+function renderDispatchHeader(panel) {
+  const working = panel.order.filter(id => {
+    const tone = panel.buttons.get(id)?.dataset.tone
+    return tone === undefined || tone === 'queued'
+  }).length
+  panel.title.textContent = working > 0
+    ? `本次已调度 ${panel.order.length} 个成员，${working} 个在干活`
+    : `本次已调度 ${panel.order.length} 个成员`
+}
+
+/** 切到某位成员：只显示它的那一格，其余隐藏。 */
+function selectDispatch(panel, id) {
+  if (panel === null || !panel.slots.has(id)) return
+  panel.active = id
+  for (const [key, slot] of panel.slots) slot.hidden = key !== id
+  for (const [key, button] of panel.buttons) button.classList.toggle('dispatch__tab--active', key === id)
+}
+
+/**
+ * 把一位成员的输出挂进面板对应的格子，并在群里那行记上状态与入口。
+ *
+ * 成员的气泡 DOM 只搬一次（`appendChild` 保留同一批节点），所以搬完之后流式增量照旧写进
+ * 同一个气泡，不需要为面板再做一套渲染。
+ */
+function attachToDispatch(view, event) {
+  const panel = state.dispatch
+  if (panel === null || !panel.slots.has(event.id)) return
+  const slot = panel.slots.get(event.id)
+  if (view.bubble.parentNode !== slot) slot.appendChild(view.bubble)
+  const tone = DISPATCH_TONE[event.state] ?? 'queued'
+  const button = panel.buttons.get(event.id)
+  if (button !== undefined && button.dataset.tone !== tone) {
+    button.dataset.tone = tone
+    const dot = button.querySelector('.dot')
+    if (dot !== null) dot.className = `dot dot--${tone}`
+    renderDispatchHeader(panel)
+  }
+  // 群里那一行是入口：点一下展开面板并切到它。
+  if (view.msg.dataset.dispatchBound !== '1') {
+    view.msg.dataset.dispatchBound = '1'
+    view.msg.classList.add('msg--dispatchable')
+    view.msg.addEventListener('click', () => {
+      if (state.dispatch !== panel) return
+      panel.details.open = true
+      selectDispatch(panel, event.id)
+    })
+  }
+}
+
 /**
  * 一位成员的一条消息块。
  *
@@ -889,6 +1013,8 @@ function handleEvent(event) {
       // subtask 事件按服务端事实呈现（方案 S02）。
       state.butlerSpeech = null
       append(planNote(event))
+      // 派活面板跟着计划一起出现：成员查了什么、交回什么，收在这里，群里只留一行状态。
+      append(mountDispatch(event.subtasks))
       break
     }
 
@@ -949,6 +1075,8 @@ function handleEvent(event) {
 
 function handleSubtask(event) {
   const view = state.bubbles.get(event.id) ?? memberMessage(event.agentId, event.id)
+  // 成员的真实输出收进派活面板；群里这行只剩状态与入口。
+  attachToDispatch(view, event)
   view.status.textContent = STATE_TEXT[event.state] ?? event.state
   view.status.style.color =
     event.state === 'failed' ? 'var(--bt-error)'
@@ -2310,8 +2438,9 @@ function renderTaskRecord(record, opts = {}) {
   userMessage(record.goal, record.createdAt)
   butlerMessage(record.note ? `我按这个思路拆的：${record.note}` : '我按下面的方式拆了任务。', record.createdAt)
   append(planNote({
-    subtasks: record.subtasks.map(item => ({ goal: item.goal, agentId: item.agentId })),
+    subtasks: record.subtasks.map(item => ({ id: item.id, goal: item.goal, agentId: item.agentId, state: item.state })),
   }))
+  append(mountDispatch(record.subtasks.map(item => ({ id: item.id, goal: item.goal, agentId: item.agentId, state: item.state }))))
   state.taskId = record.id
   for (const subtask of record.subtasks) {
     const view = memberMessage(subtask.agentId, subtask.id)

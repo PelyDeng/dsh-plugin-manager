@@ -962,3 +962,40 @@ body[data-settings="open"] .settings {
 .error-line--retry {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
+
+/* ---------- 本次已调度成员面板 ---------- */
+/*
+ * 群里只留大总管的结论和每位成员的一行状态；成员在查什么、交回了什么，都收进这块面板，
+ * 用 tab 切换着看。默认折叠：不关心过程时看不到它，关心时点开就是完整流式输出与结论。
+ */
+.dispatch {
+  margin-top: 7px; max-width: 620px;
+  background: var(--bt-paper);
+  border: 2px dashed var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+}
+.dispatch__summary {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 10px; cursor: pointer; list-style: none;
+}
+.dispatch__summary::-webkit-details-marker { display: none; }
+.dispatch__summary::before { content: '▸'; color: var(--bt-ink-faint); font-size: 11px; }
+.dispatch[open] > .dispatch__summary::before { content: '▾'; }
+.dispatch__title { font-family: var(--bt-hand); font-size: 12.5px; color: var(--bt-ink-soft); }
+.dispatch__tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.dispatch__tab {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: inherit; font-size: 12px; color: var(--bt-ink-soft);
+  background: #ffffff9c; border: 1.5px solid var(--bt-line); border-radius: 999px;
+  padding: 2px 9px 2px 7px; cursor: pointer;
+}
+.dispatch__tab--active { color: var(--bt-ink); border-color: var(--bt-stroke); background: #fff; font-weight: 700; }
+.dispatch__body { padding: 2px 10px 10px; }
+.dispatch__panel { display: block; }
+.dispatch__panel[hidden] { display: none; }
+.dispatch__panel .bubble { margin-top: 4px; }
+.msg--dispatchable { cursor: pointer; }
+.msg--dispatchable:hover .msg__name { text-decoration: underline dotted; }
+@media (max-width: 720px) {
+  .dispatch__tabs { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
+}
