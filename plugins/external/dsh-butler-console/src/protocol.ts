@@ -47,6 +47,9 @@ export type ButlerProgressUpdate = AgentExecutionProgress
 /**
  * 群聊里一位成员的可展示身份。
  *
+ * 名单只收登记了调度执行入口的 Agent（判定在 `agents.ts`），所以这里没有「在不在场」这个字段：
+ * 没有执行入口的应用不是群成员，不会出现在名单、页面提示词和右栏里。名单上的人就是能接活的人。
+ *
  * 显示名优先取本地别名，插件声明的名称始终保留在 `declaredName`，页面上以次要文字
  * 显示，保证「页面上这个昵称对应哪个插件」永远可追溯。
  */
@@ -57,8 +60,6 @@ export interface ButlerMember {
   readonly displayName: string
   /** 插件自己声明的名称。 */
   readonly declaredName: string
-  /** 该成员此刻是否在场（登记了执行入口）。 */
-  readonly online: boolean
   /** 本地配色；没配过时为空字符串，由前端按 agentId 稳定推导。 */
   readonly accent: string
   /** 执行入口声明的能力，牛马大总管据此决定派谁。 */
@@ -66,9 +67,9 @@ export interface ButlerMember {
   /**
    * 此刻占着的活；空闲时为 `null`。
    *
-   * **`online` 不等于可派活**，三件事要分开看：登记了执行入口（`online`）、当前用户有授权
-   * （本插件判不了，由执行方自己鉴权）、以及这位成员是不是闲着（这里）。状态取子任务状态，
-   * 所以「在干活」与「等着用户回话」也分得开。
+   * 三个判断分开看，不能压成一个「能用」：能不能接活由名单回答（在名单里就能接）、当前用户
+   * 有没有授权本插件判不了（由执行方每次运行前自己鉴权）、此刻闲不闲看这里。状态取子任务
+   * 状态，所以「在干活」与「等着用户回话」也分得开。
    */
   readonly busy: { readonly taskId: string; readonly subtaskId: string; readonly state: string } | null
 }

@@ -1157,7 +1157,10 @@ export class ButlerConsole {
   }
 
   /**
-   * 群成员列表：目录里的全部 Agent，叠加该用户的本地别名。
+   * 群成员列表：登记了调度执行入口、且仍在插件目录里的 Agent，叠加该用户的本地别名。
+   *
+   * 只收能接活的人。声明为「智能体」但没有执行入口的应用不是群成员：列进名单只会让人
+   * 以为可以派活，大总管的提示词里也从来没有它们。
    *
    * 显示名取本地别名优先，插件声明的名称始终保留在 `declaredName` 里，页面上以次要
    * 文字显示，保证「谁是谁」永远可追溯。
@@ -1166,13 +1169,12 @@ export class ButlerConsole {
     this.access.assert(actor)
     const aliases = await this.storage.aliases(actor)
     const busy = await this.storage.busy(actor)
-    return listAgentCards(this.ctx).map(card => {
+    return this.dispatchableAgents().map(card => {
       const alias = aliases.get(card.id)
       return {
         agentId: card.id,
         displayName: alias?.displayName !== undefined && alias.displayName !== '' ? alias.displayName : card.displayName,
         declaredName: card.displayName,
-        online: card.dispatchable,
         accent: alias?.accent ?? '',
         capabilities: card.capabilities,
         description: card.description,

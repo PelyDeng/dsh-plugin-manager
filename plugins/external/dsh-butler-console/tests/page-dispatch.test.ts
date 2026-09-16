@@ -74,7 +74,7 @@ function loadPanelTools(clipboard: { writeText(text: string): Promise<void> }) {
 
 const subtasks = [
   { id: 's1', agentId: 'blog', state: 'dispatched' },
-  { id: 's2', agentId: 'example', state: 'dispatched' },
+  { id: 's2', agentId: 'closedoff', state: 'dispatched' },
 ]
 
 describe('本次已调度成员面板', () => {

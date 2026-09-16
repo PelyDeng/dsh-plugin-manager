@@ -1,15 +1,13 @@
 /**
- * 成员此刻忙不忙。
+ * 群成员名单与此刻忙不忙。
  *
- * 这是清单 C11 问的那件事：「在线、可派活、忙碌、等待回复」得能分开。之前 `/members` 只回答
- * 了第一层 —— `online` 等于「登记了执行入口」，一个正在干活的成员和一个闲着的成员看起来
- * 一模一样，游戏侧只好自己记谁手上有活。
+ * 名单只收能接活的成员：`/members` 从插件目录取「智能体」分类、再按调度执行入口过滤，
+ * 所以名单上的人都能接活，页面上没有「在场但派不了活」这种状态。
  *
- * 三个判断分别来自三处，不能压成一个「能用」：
+ * 剩下两个判断分开看，不能压成一个「能用」：
  *
- * - 有没有登记执行入口 → `online`（插件目录 + 调度入口）
  * - 当前用户有没有授权 → 本插件判不了，由执行方每次运行前自己鉴权
- * - 此刻是不是闲着 → `busy`（任务库里的活跃子任务）
+ * - 此刻是不是闲着 → `busy`（任务库里的活跃子任务），同时也说明在干活还是等着回话
  */
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
@@ -22,15 +20,26 @@ const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
 const other: Actor = { namespace: 'user', userId: 'bob', sessionId: 'bob-login' }
 
-/** 目录里有一位成员；`/members` 从目录取名单，`busy` 从库里取占用。 */
+/**
+ * 目录里有两位「智能体」：`blog` 登记了执行入口，`ghost` 没有。
+ *
+ * `/members` 从目录取名单，`busy` 从库里取占用，所以这个假上下文只实现这两条通道。
+ */
 function context(): Context {
   return {
     root: {
       emit(name: string, accept: (value: unknown) => void) {
-        if (name === 'ecosystem/catalog') accept({ protocol: 1, plugin: {
-          id: 'blog', packageName: 'dsh-blog', version: '1.0.0', displayName: '博客',
-          description: '', entryPath: '/agents/blog', permissions: [], tools: [], category: 'agents',
-        } })
+        if (name === 'ecosystem/catalog') {
+          for (const id of ['blog', 'ghost']) {
+            accept({ protocol: 1, plugin: {
+              id, packageName: `dsh-${id}`, version: '1.0.0', displayName: id === 'blog' ? '博客' : '没入口的应用',
+              description: '', entryPath: `/agents/${id}`, permissions: [], tools: [], category: 'agents',
+            } })
+          }
+        }
+        if (name === 'butler/executors') {
+          accept({ protocol: 1, agentId: 'blog', capabilities: ['写作'], dispatch: async () => ({ status: 'succeeded', summary: '' }) })
+        }
       },
     },
   } as unknown as Context
@@ -101,6 +110,13 @@ describe('任务库里的占用', () => {
 })
 
 describe('成员名单上的占用', () => {
+  it('只收登记了执行入口的成员，没入口的应用不是群成员', async () => {
+    const f = fixture()
+    // `ghost` 是「智能体」分类但没登记执行入口：它不在名单里，页面与提示词都不会提到它。
+    expect((await f.console_.members(actor)).map(member => member.agentId)).toEqual(['blog'])
+    f.store.close()
+  })
+
   it('空闲时 busy 是 null，有活时带上任务与子任务', async () => {
     const f = fixture()
     expect((await f.console_.members(actor))[0]).toMatchObject({ agentId: 'blog', busy: null })
@@ -112,13 +128,13 @@ describe('成员名单上的占用', () => {
     f.store.close()
   })
 
-  it('busy 与 online 是两件事，不能互相代替', async () => {
+  it('占用跟着任务走，不影响名单本身', async () => {
     const f = fixture()
     f.assign(actor, 'task-1', 'blog', 'running')
-    const member = (await f.console_.members(actor))[0]!
-    // 没登记执行入口：成员在场但不接活，同时手上那份活是库里记着的。
-    expect(member.online).toBe(false)
-    expect(member.busy).toMatchObject({ state: 'running' })
+    const members = await f.console_.members(actor)
+    // 手上有活不会把它从名单里挤掉，也不会因此多出别人。
+    expect(members.map(member => member.agentId)).toEqual(['blog'])
+    expect(members[0]?.busy).toMatchObject({ state: 'running' })
     f.store.close()
   })
 })

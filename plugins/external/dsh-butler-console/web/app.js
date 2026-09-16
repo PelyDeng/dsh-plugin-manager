@@ -24,7 +24,6 @@ const DEFAULT_AVATAR_FILES = new Map([
   ['butler', 'avatar-butler.png'],
   ['blog', 'avatar-blog.png'],
   ['closedoff', 'avatar-closedoff.png'],
-  ['example', 'avatar-example.png'],
   ['__boss__', 'avatar-boss.png'],
 ])
 
@@ -103,10 +102,10 @@ function doodleSvg(markup, className) {
   return svg
 }
 
+/** 开场示例话题：只写群里真有人能接的活，免得用户照着问了却没人接。 */
 const SUGGESTIONS = [
   '整理一篇园区封闭化管理介绍，再给点博客发布建议',
   '帮我查一下园区最近的通行情况，顺便说说异常',
-  'DSH 插件接入要准备哪些声明文件？给我个清单',
 ]
 
 const MOTTO_KEY = 'butler.motto'
@@ -1768,7 +1767,7 @@ async function finishTurn() {
 
 /* ── 右栏 ─────────────────────────────────────────────────────────────── */
 
-/** 右栏的紧凑成员行：只看是谁、在不在场；改名换脸去设置页。 */
+/** 右栏的紧凑成员行：只看是谁；改名换脸去设置页。名单上的人都能接活，所以这里没有状态点。 */
 function renderMembers() {
   clear(el.memberList)
   if (state.members.length === 0) {
@@ -1782,8 +1781,6 @@ function renderMembers() {
     col.appendChild(make('div', 'member__name', member.displayName))
     col.appendChild(make('div', 'member__declared', member.declaredName))
     row.appendChild(col)
-    row.appendChild(make('span', 'spacer'))
-    row.appendChild(make('span', `dot dot--${member.online ? 'online' : 'queued'}`))
     row.title = `${member.displayName}（@${member.agentId}）`
     el.memberList.appendChild(row)
   }
@@ -2049,19 +2046,17 @@ function renderCrew() {
   clear(el.crewFaces)
   for (const member of state.members) {
     const face = avatarNode(member.agentId, 'sm')
-    // 在场与在忙是两件事：在场只说「登记了执行入口」，手上有没有活看 busy。
+    // 名单上的人都能接活，所以这里只说手上有没有活。
     const working = member.busy === null ? '' : ` · ${STATE_TEXT[member.busy.state] ?? '在忙'}`
     face.title = `${member.displayName}（@${member.agentId}）${working}`
     el.crewFaces.appendChild(face)
   }
-  const online = state.members.filter(member => member.online).length
   const busy = state.members.filter(member => member.busy !== null).length
   const total = state.members.length
   const working = busy > 0 ? ` · ${busy} 位在忙` : ''
-  // 「能干活」= 登记了调度执行入口的成员。剩下的不是不在场，是没接入调度，见 renderStatuses。
-  el.crewLine.textContent = `${total} 个牛马 · ${online} 个能干活${working}`
-  el.crewNote.textContent = `共 ${total} 位，${online} 位可派活${working}`
-  el.groupSub.textContent = `${total} 位成员 · ${online} 位可派活${working}`
+  el.crewLine.textContent = `${total} 个牛马${working}`
+  el.crewNote.textContent = `共 ${total} 位${working}`
+  el.groupSub.textContent = `${total} 位成员${working}`
 }
 
 function renderMetrics(counts) {
@@ -2088,18 +2083,12 @@ function renderStatuses() {
     const row = make('div', 'status-row')
     row.appendChild(avatarNode(member.agentId, 'sm'))
     row.appendChild(make('span', 'status-row__name', member.displayName))
-    // 有活报活的状态；没活时区分「待命」与「未接入调度」——后者不是不在场，
-    // 而是它自己没登记执行入口，牛马大总管派不了活给它（页面上必须说实话）。
+    // 名单上的人都能接活：没活就是待命，有活就说它此刻在干什么。
     const stateText = member.busy === null
-      ? (member.online ? '待命' : '未接入调度')
+      ? '待命'
       : (STATE_TEXT[member.busy.state] ?? '在忙')
     const stateCell = make('span', 'status-row__state', stateText)
-    if (member.busy === null && !member.online) {
-      stateCell.title = `${member.displayName}没有登记调度执行入口，牛马大总管无法把活派给它`
-    }
-    const dotClass = member.busy === null
-      ? (member.online ? 'online' : 'queued')
-      : (member.busy.state ?? 'queued')
+    const dotClass = member.busy === null ? 'online' : (member.busy.state ?? 'queued')
     stateCell.prepend(make('span', `dot dot--${dotClass}`))
     row.appendChild(stateCell)
     el.statusList.appendChild(row)

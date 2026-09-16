@@ -2,7 +2,8 @@
  * Agent 发现与可调度性测试。
  *
  * 关键约束：已接入列表来自插件目录，不硬编码任何插件名；可调度性来自执行入口登记。
- * 目录里有但没有登记入口的 Agent 仍要展示，只是标为不可调度。
+ * 目录里有但没有登记入口的 Agent 仍然会被列出来（标为不可调度）——这是「谁在生态里」的
+ * 事实来源；但群成员名单只收可调度的那些，页面与成员提示词里都不会出现不可调度的应用。
  */
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
