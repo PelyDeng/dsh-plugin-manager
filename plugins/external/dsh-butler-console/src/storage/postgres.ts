@@ -19,7 +19,7 @@
  */
 
 import { Buffer } from 'node:buffer'
-import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
+import { Client, Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
 import { AccessError, type Actor, type AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
 import { isTerminal, type SubtaskState, type TaskState } from '../task-model.ts'
 import { mapStorageError, StorageError, uniqueViolation } from './errors.ts'
@@ -49,6 +49,12 @@ const EXPECTED_TABLES = ['conversations', 'tasks', 'subtasks', 'agent_aliases', 
 
 /** 有界关闭上限（§2.6）：超时后放弃等待并记录，池终结交给进程退出。 */
 const CLOSE_TIMEOUT_MS = 5000
+
+/**
+ * /ready 就绪探针的耗时上限（§2.5 运行期翻转）：连接与查询各有界，超过即按探针失败
+ * 回答，不让 /ready 挂住调用方，也不在业务池里积压等待者。
+ */
+const READY_PROBE_TIMEOUT_MS = 1500
 
 interface TaskRow extends QueryResultRow {
   readonly id: string
@@ -148,7 +154,7 @@ export class PostgresTaskStorage implements ButlerStorage {
   private inited = false
   private closed = false
 
-  constructor(dsn: string, onError?: (error: Error) => void) {
+  constructor(private readonly dsn: string, onError?: (error: Error) => void) {
     this.pool = new Pool({
       connectionString: dsn,
       max: 5,
@@ -203,6 +209,67 @@ export class PostgresTaskStorage implements ButlerStorage {
         : new StorageError('storage_unknown', '存储初始化失败', { cause: error })
       this.readyError = failure
       throw failure
+    }
+  }
+
+  /**
+   * 运行时就绪探针（§2.5 口径：已配置但运行中 PG 不可达 = 已装载未就绪，业务与 /ready 503）。
+   *
+   * 启动序列的缓存只证明「装载时校验通过」；PG 是否**此刻**可达由本探针回答：用一条
+   * 独立的短连接查 `SELECT 1` 同源的 schema 版本（版本校验逻辑与 {@link init} 一致），
+   * 失败按稳定码抛 StorageError（unreachable / auth / schema_version / timeout / closed）。
+   *
+   * 实现约束：不占业务池（探针慢或挂住不影响在途事务，也不产生池内等待者积压）；连接与
+   * 查询总耗时以 {@link READY_PROBE_TIMEOUT_MS} 为上界——超时即销毁连接终止挂起的查询；
+   * 不做结果缓存，/ready 调用频率低，每次如实探测。
+   */
+  async readyProbe(): Promise<void> {
+    this.assertOpen()
+    const client = new Client({ connectionString: this.dsn, connectionTimeoutMillis: READY_PROBE_TIMEOUT_MS })
+    // §2.6：探针连接同样必须监听 'error'，空闲期故障不得成为宿主 uncaughtException。
+    client.on('error', (error) => { this.reportError(error) })
+    let timer: NodeJS.Timeout | undefined
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new StorageError('storage_timeout', '就绪探针超时', { retryable: true })),
+        READY_PROBE_TIMEOUT_MS,
+      )
+    })
+    try {
+      // Promise.race 已给两侧挂上处理函数：deadline 先落定后，work 的迟到失败不会成为
+      // unhandledRejection；反向同理。
+      await Promise.race([
+        (async () => {
+          await client.connect()
+          await client.query(`SET statement_timeout = ${READY_PROBE_TIMEOUT_MS}`)
+          const one = await client.query<{ one: number }>('SELECT 1 AS one')
+          if (one.rows[0]?.one !== 1) {
+            throw new StorageError('storage_unknown', '就绪探针收到异常应答')
+          }
+          const versionResult = await client.query<{ version: string | number }>('SELECT version FROM schema_version')
+          const versionRow = versionResult.rows[0]
+          if (versionRow === undefined) {
+            throw new StorageError('storage_schema_version', 'schema_version 表没有版本行，无法确认工作台数据结构版本')
+          }
+          const current = Number(versionRow.version)
+          if (current !== EXPECTED_SCHEMA_VERSION) {
+            throw new StorageError(
+              'storage_schema_version',
+              `不支持的工作台数据结构版本：${current}（期望 ${EXPECTED_SCHEMA_VERSION}）`,
+            )
+          }
+        })(),
+        deadline,
+      ])
+    } catch (error) {
+      throw error instanceof StorageError ? error : mapStorageError(error)
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+      // 探针连接用完即弃：end() 销毁套接字，竞速超时时挂着的 connect/query 也一并终止，
+      // 不留无限积压。注意：对挂起查询的强制终止依赖 pg 8.x 的 Client.end() 行为
+      // （内部 stream.destroy()）；升级驱动时复核此性质，connect 未完成路径另由同值
+      // connectionTimeoutMillis 兜底。
+      client.end().catch(() => {})
     }
   }
 

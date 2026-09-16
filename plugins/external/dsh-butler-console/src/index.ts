@@ -105,8 +105,13 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     throw error
   }
   const console_ = new ButlerConsole(ctx, config, access, storage, persona)
-  // 就绪状态来自启动序列的缓存结果（§2.5 口径：已装载未就绪 → 业务与 /ready 503）。
-  const storageReady = { ready: true, schemaVersion: STORAGE_SCHEMA_VERSION } as const
+  // 就绪状态来自启动序列的缓存结果（§2.5 口径：已装载未就绪 → 业务与 /ready 503）；
+  // probe 供 /ready 在运行期核实 PG 此刻真的可达（已配置但运行中不可达 = 已装载未就绪）。
+  const storageReady = {
+    ready: true,
+    schemaVersion: STORAGE_SCHEMA_VERSION,
+    probe: () => storage.readyProbe(),
+  } as const
 
   ctx.effect(() => () => {
     void console_.dispose()

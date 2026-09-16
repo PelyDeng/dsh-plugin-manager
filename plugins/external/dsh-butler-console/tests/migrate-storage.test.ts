@@ -18,6 +18,7 @@ import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { Pool } from 'pg'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { TaskStore } from './helpers/sqlite-test-store.ts'
+import { PostgresTaskStorage } from '../src/storage/postgres.ts'
 import { main, runMigration } from '../scripts/migrate-storage.ts'
 
 const DSN = process.env.BUTLER_MIGRATE_PG_DSN ?? ''
@@ -449,5 +450,25 @@ describe.skipIf(DSN === '')('butler 存量迁移工具（butler_mig）', () => {
     await resetTarget()
     await expect(runMigration({ sourcePath: source, dsn: DSN, log: silent })).rejects.toMatchObject({ exitCode: 2 })
     await expect(businessTableCount()).resolves.toBe(0)
+  })
+
+  it('迁移导入后首次启动：running 遗留被 failInterrupted 收敛（定稿 §7 组合场景）', async () => {
+    const source = tempDb('v8-first-start')
+    createLegacyDb(source, 8)
+    await resetTarget()
+    await runMigration({ sourcePath: source, dsn: DSN, log: silent })
+    // 模拟「导入内容正是停写时的在途状态」：把一条已完成任务改回 running 带在途子任务。
+    await admin.query("UPDATE tasks SET state='running', finished_at=NULL WHERE id='task-a'")
+    await admin.query("UPDATE subtasks SET state='running', started_at=6000, finished_at=NULL WHERE id='s1' AND task_id='task-a'")
+    const storage = new PostgresTaskStorage(DSN)
+    await storage.init()
+    const interrupted = await storage.failInterrupted()
+    expect(interrupted).toBeGreaterThanOrEqual(1)
+    const taskRow = await admin.query<{ state: string; finished_at: string | null }>("SELECT state, finished_at FROM tasks WHERE id='task-a'")
+    expect(taskRow.rows[0]?.state).toBe('failed')
+    expect(taskRow.rows[0]?.finished_at).not.toBeNull()
+    const subRow = await admin.query<{ state: string }>("SELECT state FROM subtasks WHERE id='s1' AND task_id='task-a'")
+    expect(subRow.rows[0]?.state).toBe('failed')
+    await storage.close()
   })
 })

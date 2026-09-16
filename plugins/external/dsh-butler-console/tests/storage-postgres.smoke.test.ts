@@ -3,6 +3,8 @@
  *
  * 无 `BUTLER_TEST_PG_DSN` 时整文件跳过（CI 无 PG 供给，方案 D6 门控；验收证据需明示跳过）。
  * 测试库专用 butler_test，允许在测试内重建 schema（DROP SCHEMA public CASCADE）。
+ * 带 DSN 全量跑必须 `vitest run --no-file-parallelism`：本文件与 acceptance-pg-contract
+ * 共用 butler_test 且均重建 schema，文件级并行会互撞。
  * 覆盖：初始化与版本校验、createTask 单事务与回滚、并发 claimRequest 唯一胜者、
  * 损坏 input_refs/depends_on 分类、addInput 并发版本冲突映射、appendSubtasks 并发编号与
  * 任务不存在语义、expireWaitingSubtask 与 setSubtaskState 的并发对抗、close 后拒绝。

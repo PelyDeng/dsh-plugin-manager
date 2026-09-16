@@ -244,6 +244,17 @@ export interface ButlerStorage {
   init(): Promise<void>
 
   /**
+   * 运行时就绪探针（方案 §2.5 口径：已配置但运行中 PG 不可达 = 已装载未就绪，业务与
+   * /ready 503）。
+   *
+   * 启动校验的缓存只证明「装载时通过」；本探针用一条有界（约 1.5 秒上限）的独立连接
+   * 核实 PG 此刻可达且 schema 版本仍符合，失败以对应稳定码抛 StorageError
+   * （storage_unreachable / storage_auth / storage_schema_version / storage_timeout /
+   * storage_closed）。调用方据此在运行期翻转就绪状态；实现不做结果缓存。
+   */
+  readyProbe(): Promise<void>
+
+  /**
    * 【§3 新增专用原子操作】等待超时原子结账。
    *
    * 仅当子任务此刻仍处于 `waiting_user` 时，用单条条件 UPDATE 把它置为 `failed`（只写

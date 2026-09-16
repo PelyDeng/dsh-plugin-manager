@@ -18,6 +18,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
+import { StorageError } from '../src/storage/errors.ts'
 import { STORAGE_SCHEMA_VERSION } from '../src/storage/postgres.ts'
 import type { ButlerStorage } from '../src/storage/types.ts'
 import { installWeb } from '../src/web.ts'
@@ -131,7 +132,14 @@ interface Fixture {
 }
 
 /** 装好插件：真路由 + 真会话，只有宿主与存储是替身。 */
-async function fixture(options: { maxConversationEvents?: number; assertOwner?: () => void } = {}): Promise<Fixture> {
+async function fixture(options: {
+  maxConversationEvents?: number
+  assertOwner?: () => void
+  /** /ready 的运行期存储探针；不传时 /ready 不做运行期核实（夹具口径）。 */
+  storageProbe?: () => Promise<void>
+  /** 让 access.ready() 抛错（认证服务不可用），验证 /ready 的第一道闸。 */
+  accessFailReady?: boolean
+} = {}): Promise<Fixture> {
   /**
    * 幂等记录在这里用一张内存表顶上。
    *
@@ -169,7 +177,9 @@ async function fixture(options: { maxConversationEvents?: number; assertOwner?: 
   } as unknown as ButlerStorage
   const access = {
     mode: 'authenticated',
-    ready() {},
+    ready() {
+      if (options.accessFailReady === true) throw new Error('认证服务不可用')
+    },
     resolve: () => actor,
     assert() {},
   } as unknown as Access
@@ -211,7 +221,11 @@ async function fixture(options: { maxConversationEvents?: number; assertOwner?: 
   vi.spyOn(console_, 'open').mockResolvedValue({
     id: conversationId, handle: { agent }, active: false, lastUsedAt: Date.now(),
   } as never)
-  await installWeb(ctx, config, console_, access, { ready: true, schemaVersion: STORAGE_SCHEMA_VERSION })
+  await installWeb(ctx, config, console_, access, {
+    ready: true,
+    schemaVersion: STORAGE_SCHEMA_VERSION,
+    ...(options.storageProbe === undefined ? {} : { probe: options.storageProbe }),
+  })
 
   const call = (method: 'GET' | 'POST', target: string, payload?: unknown): Call => {
     // 路由按路径注册，查询串要留到 request.url 里给处理函数自己解析。
@@ -580,5 +594,63 @@ describe('/stop 说清楚它到底停没停', () => {
 
     f.endTurn()
     await chat.pending
+  })
+})
+
+describe('/ready 按运行期探针如实翻转（§2.5）', () => {
+  it('探针通过：200，带 schema 版本', async () => {
+    const f = await fixture({ storageProbe: async () => {} })
+    const ready = f.call('GET', '/butler/ready')
+    await ready.pending
+    expect(ready.response.status).toBe(200)
+    expect(JSON.parse(ready.response.text)).toEqual({ ok: true, storage: { ready: true, schemaVersion: STORAGE_SCHEMA_VERSION } })
+  })
+
+  it('运行中 PG 不可达：503 + storage_unreachable，不外泄连接信息', async () => {
+    const f = await fixture({
+      storageProbe: async () => {
+        throw new StorageError('storage_unreachable', '存储连接失败')
+      },
+    })
+    const ready = f.call('GET', '/butler/ready')
+    await ready.pending
+    expect(ready.response.status).toBe(503)
+    expect(JSON.parse(ready.response.text)).toMatchObject({
+      code: 'storage_unreachable',
+      schemaVersion: STORAGE_SCHEMA_VERSION,
+    })
+    // 公开探针不外泄内部信息：响应里不得出现连接串或主机细节。
+    expect(ready.response.text).not.toMatch(/postgres|127\.0\.0\.1|pelycloud/iu)
+  })
+
+  it('探针抛出非 StorageError：兜成 503 + storage_unknown，固定文案', async () => {
+    const f = await fixture({
+      storageProbe: async () => {
+        throw new Error('boom postgres://secret@internal-host/db')
+      },
+    })
+    const ready = f.call('GET', '/butler/ready')
+    await ready.pending
+    expect(ready.response.status).toBe(503)
+    expect(JSON.parse(ready.response.text)).toMatchObject({
+      error: '工作台存储此刻不可用',
+      code: 'storage_unknown',
+    })
+    expect(ready.response.text).not.toContain('boom')
+    expect(ready.response.text).not.toContain('internal-host')
+  })
+
+  it('auth 未就绪仍是第一道闸：原语义 503，不触发存储探针', async () => {
+    let probed = false
+    const f = await fixture({
+      accessFailReady: true,
+      storageProbe: async () => { probed = true },
+    })
+    const ready = f.call('GET', '/butler/ready')
+    await ready.pending
+    expect(ready.response.status).toBe(503)
+    expect(JSON.parse(ready.response.text)).toEqual({ error: '认证服务不可用' })
+    // 认证都不可用时不必再碰存储：探针没有被调用。
+    expect(probed).toBe(false)
   })
 })

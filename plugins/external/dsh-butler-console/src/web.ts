@@ -25,12 +25,17 @@ import { StorageError } from './storage/errors.ts'
 /**
  * 存储就绪探针结果（方案 §2.5）：启动序列（init → failInterrupted）缓存的布尔与 schema
  * 版本；未就绪时带稳定码。`/ready` 把它与 auth 就绪合并汇报，任一不可用都按 503 拒绝。
+ *
+ * 启动缓存只证明「装载时校验通过」；`probe` 在每次 /ready 时核实 PG **此刻**可达且版本
+ * 仍符合（运行期翻转：已配置但运行中不可达 = 已装载未就绪，业务与 /ready 同口径 503）。
  */
 export interface StorageReadiness {
   readonly ready: boolean
   readonly schemaVersion: number
   /** 未就绪时的稳定码（storage_unreachable / storage_schema_missing / storage_schema_version / storage_closed）。 */
   readonly code?: string
+  /** 运行期探针（生产为 PostgresTaskStorage.readyProbe）；缺省表示该装配不做运行期核实。 */
+  readonly probe?: () => Promise<void>
 }
 
 /**
@@ -418,7 +423,7 @@ export async function installWeb(
   ctx.effect(() => registerPublic({
     kind: 'exact',
     path: `${config.routePrefix}/ready`,
-    handler: (request, response) => {
+    handler: async (request, response) => {
       try {
         method(request, 'GET')
         access.ready()
@@ -431,6 +436,22 @@ export async function installWeb(
             schemaVersion: storageReady.schemaVersion,
           })
           return
+        }
+        // 运行期翻转（§2.5）：启动缓存只说明「装载过」；此刻是否服务由探针回答。探针失败
+        // 按稳定码 503（StorageError 的固定描述不含连接串等内部信息），兜住任何抛错，
+        // 不把连接细节外泄到公开探针。
+        if (storageReady.probe !== undefined) {
+          try {
+            await storageReady.probe()
+          } catch (probeError) {
+            const code = probeError instanceof StorageError ? probeError.code : 'storage_unknown'
+            json(response, 503, {
+              error: probeError instanceof StorageError ? probeError.message : '工作台存储此刻不可用',
+              code,
+              schemaVersion: storageReady.schemaVersion,
+            })
+            return
+          }
         }
         json(response, 200, { ok: true, storage: { ready: true, schemaVersion: storageReady.schemaVersion } })
       } catch (caught) {

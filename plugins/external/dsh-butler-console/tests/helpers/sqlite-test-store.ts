@@ -850,6 +850,11 @@ export class SqliteButlerStorage implements ButlerStorage {
     // TaskStore 构造函数已同步完成结构与版本校验（不支持版本直接 throw），这里无事可做。
   }
 
+  async readyProbe(): Promise<void> {
+    // 同 init() 的理由：夹具同步打开、同步校验，构造成功即就绪；生产装配（index.ts）只允许
+    // PostgresTaskStorage，运行期探测语义在那里实现并验证。
+  }
+
   async expireWaitingSubtask(taskId: string, subtaskId: string, error: string): Promise<boolean> {
     if (this.store.subtaskState(taskId, subtaskId) !== 'waiting_user') return false
     this.store.setSubtaskState(taskId, subtaskId, 'failed', { error })
