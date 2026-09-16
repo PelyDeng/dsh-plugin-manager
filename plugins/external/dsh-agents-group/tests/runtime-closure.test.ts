@@ -343,19 +343,26 @@ describe('补交轮：没调交活工具时补一次，补不上就按投影兜�
 
 describe('判据②：补交轮不撑破 turnTimeoutMs', () => {
   it('补交轮迟迟不结束 → 总时长仍受 turnTimeoutMs 约束', async () => {
-    // 50ms 预算 + 补交轮永不结束：如果没有这个约束，这里会一直挂着。
-    const hosted = host(definitionOf(), { turnTimeoutMs: 50 })
+    // 预算 120ms，且**先把首轮拖到 ~90ms 才结束** —— 这样共用预算只剩 ~30ms，而"每轮重设
+    // 预算"会拿到完整 120ms，两者差一个数量级。只测总时长是区分不开的：两种行为的总时长都
+    // 远小于任何宽松上界（这正是变异验证发现的假绿 —— 一个不会因实现被改坏而变红的用例，
+    // 等于这条判据形同虚设）。
+    const hosted = host(definitionOf(), { turnTimeoutMs: 120 })
     try {
       const started = Date.now()
       const promise = hosted.participant.run(hosted.request())
       const id = await accept(hosted, promise)
       install(hosted, id)
+      await new Promise<void>(resolve => { setTimeout(resolve, 90) })
       hosted.complete(id, '第一轮正文')
       await until(() => hosted.followups().length >= 2, '补交提示已注入')
+      const injectedAt = Date.now()
       // 补交轮不结束：不发第二轮的任何事件。
       await expect(promise).rejects.toThrow(/超时/)
-      // 约束是"总共 50ms 量级"，给足调度余量；关键是它**没有**无限等下去。
-      expect(Date.now() - started).toBeLessThan(2_000)
+      // 判据一：补交轮**没有拿到一份新预算**。共用 ⇒ 距注入约 30ms；每轮重设 ⇒ 约 120ms。
+      expect(Date.now() - injectedAt).toBeLessThan(80)
+      // 判据二：整体仍然有界，防止"其实一直在等"被上面那条掩盖。
+      expect(Date.now() - started).toBeLessThan(1_000)
     } finally { await hosted.dispose() }
   })
 
