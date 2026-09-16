@@ -25,7 +25,7 @@ import { executorFor, onButlerExecutors } from '../src/butler-bridge.ts'
 import { ButlerConsole } from '../../dsh-butler-console/src/butler.ts'
 import type { Config } from '../../dsh-butler-console/src/config.ts'
 import type { ButlerAgentExecutor } from '../../dsh-butler-console/src/protocol.ts'
-import { TaskStore } from '../../dsh-butler-console/tests/helpers/sqlite-test-store.ts'
+import { SqliteButlerStorage, TaskStore } from '../../dsh-butler-console/tests/helpers/sqlite-test-store.ts'
 import { CHAIN_MEMBER_MANIFEST, mountChainMember } from './fixtures/chain-member.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
@@ -132,6 +132,9 @@ async function assembleWithMember() {
 
 /** 管家：执行入口与目录条目来自真实装配（不再手工编造）。 */
 async function butlerFixture(executors: readonly ButlerAgentExecutor[], catalog: readonly PluginDescriptor[]) {
+  // `TaskStore` 是同步 SQLite 替身；交给 `SqliteButlerStorage` 适配成 `ButlerStorage`
+  // （`init`/`readyProbe`/`expireWaitingSubtask` 在适配器里，与管家自家
+  // `tests/target-identity.test.ts:88` 同款用法），`store` 保留供下面直接操作。
   const store = new TaskStore(':memory:')
   const access = { mode: 'authenticated', ready() {}, resolve: () => actor, assert() {} } as unknown as Access
   const config = {
@@ -146,7 +149,7 @@ async function butlerFixture(executors: readonly ButlerAgentExecutor[], catalog:
       },
     },
   } as unknown as Context
-  const console_ = new ButlerConsole(ctx, config, access, store, '')
+  const console_ = new ButlerConsole(ctx, config, access, new SqliteButlerStorage(store), '')
   const agent = { session: { id: conversationId }, followup: vi.fn(), cancel: vi.fn(), dispose: vi.fn(async () => {}) }
   const inner = console_ as unknown as { setup(ctx: unknown, sessionId: string): void; conversations: Map<string, unknown> }
   vi.spyOn(console_, 'open').mockImplementation(async (requestedId?: string) => {

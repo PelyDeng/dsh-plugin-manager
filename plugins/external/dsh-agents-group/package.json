@@ -151,6 +151,7 @@
     "@deepseek-ai/dsh-token-meter": "0.1.6-alpha.1",
     "@deepseek-ai/dsh-tools": "0.1.6-alpha.1",
     "@dsh-agents-group/common": "workspace:*",
+    "@dsh-agents-group/runtime": "workspace:*",
     "@dsh-plugin-manager/plugin-kit": "workspace:*",
     "@types/node": "^22.20.0",
     "@types/pg": "^8.15.0",

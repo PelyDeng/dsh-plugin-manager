@@ -1,0 +1,34 @@
+{
+  "name": "@dsh-agents-group/runtime",
+  "version": "0.1.0",
+  "description": "牛马生态的 Agent 运行时：机制在这里实现一次，业务只写 AgentDefinition；不对外发布",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node -e \"console.log('runtime 由群组产物内联，无需单独构建')\"",
+    "check": "pnpm typecheck"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-llm": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-session": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-session-persistence": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-system-prompt": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-tools": "0.1.6-alpha.1",
+    "@deepseek-ai/schemastery": "3.18.2",
+    "@dsh-plugin-manager/plugin-kit": "workspace:*",
+    "@types/node": "^22.20.0",
+    "@types/pg": "^8.15.0",
+    "pg": "^8.16.0",
+    "typescript": "^6.0.3"
+  }
+}

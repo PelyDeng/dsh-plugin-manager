@@ -1,0 +1,260 @@
+/**
+ * 私有侧存储端口：业务与运行时只依赖这里的形状。
+ *
+ * ## 为什么会话相关的类型在这里重新定义，而不是直接 import `plugin-kit`
+ *
+ * 框架（`plugin-kit`）**预期对外开放**：外部作者会照抄公开样板，所以框架的会话契约与私有需求
+ * 必须解耦。私有侧的落地方式是在 `adapter/conversations.ts` 里满足 kit 的
+ * `ConversationProvider` / `ConversationRemovalStore`——**那是全仓唯一接触点**，框架改契约时
+ * 只需要跟那一个文件，业务代码零改动。
+ *
+ * 所以本文件**不 import 会话契约**。区别对待两类类型：
+ *
+ * - **身份与鉴权**（`Actor` / `Access`）是稳定的公开契约，直接 import；
+ * - **会话契约**（`ConversationProvider` / `ConversationRemovalStore` / `ConversationQuery` …）
+ *   随框架演进，本地按形状定义等价的类型，由 adapter 负责两侧对应。
+ *
+ * ## 表侧一律双列
+ *
+ * `OwnerKey` 是端口侧的不可变值对象，落到 PG 一律展开成 `owner_namespace` + `owner_id`
+ * 两列 AND。**每一个**面向 `dsh_conversations` 的查询都必须再带 `agent_id`——三张 `dsh_*`
+ * 表是所有 Agent 共用的，而 `(namespace, user_id)` 只区分**人**、不区分 Agent，漏了就跨
+ * Agent 串数据（实测：管家侧栏会列出别的 Agent 的会话）。
+ */
+import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
+
+/** 归属键。端口内用一个值对象表达，落库时展开成两列。 */
+export interface OwnerKey {
+  readonly namespace: string
+  readonly userId: string
+}
+
+/**
+ * 会话索引行。
+ *
+ * ⚠️ 它必须能回答四件事，缺一个都会让上层出问题：
+ * 存在性 / 归属 / `ready`（发布握手）/ 围栏状态（`deletedAt` + `removalState`）。
+ * `ConversationRemovalStore.record` 是**同步读**且返回值参与 kit 的分支判定
+ * （`conversations.ts:130-131` 判 `alreadyRemoved`），所以这些字段**都要在本地镜像里**，
+ * 只存一个"标记"回答不了。
+ */
+export interface ConversationRecordShape {
+  readonly id: string
+  readonly title: string
+  readonly updatedAt: number
+  readonly deletedAt: number | null
+  readonly removalState: string
+  /**
+   * 发布握手是否完成。
+   *
+   * **陷阱字段**：三个消费方都拿它当"可见 / 可删"的门（列表过滤、移除围栏的 409、
+   * `conversation-store.ts:63/99`）。而管家**没有**"会话 ready"概念——它建会话时必须显式写
+   * `ready = TRUE` 一步到位，否则它的会话会永久停在"创建未完成"：侧栏看不到，也删不掉。
+   */
+  readonly ready: boolean
+}
+
+/** 会话归属的判据。返回 `undefined` 表示不存在或不属于该 owner。 */
+export interface ConversationOwner {
+  readonly conversationId: string
+  readonly agentId: string
+  readonly owner: OwnerKey
+}
+
+export interface ConversationQueryShape {
+  readonly offset: number
+  readonly limit: number
+  readonly q: string
+  readonly from?: number | undefined
+  readonly to?: number | undefined
+  readonly state: string
+}
+
+export interface ManagedConversationShape {
+  readonly id: string
+  readonly title: string
+  readonly updatedAt: number
+  readonly state: string
+  readonly canRemove: boolean
+  readonly blockedReason?: string
+}
+
+export interface ConversationPageShape {
+  readonly items: readonly ManagedConversationShape[]
+  readonly total: number
+  readonly nextOffset: number | null
+}
+
+/** 与 kit 的 `PreviewMessage` 同形。 */
+export interface PreviewMessageShape {
+  readonly role: 'user' | 'assistant' | 'tool'
+  readonly text: string
+  readonly reasoning?: string
+  readonly time?: number
+  readonly truncated?: boolean
+}
+
+export interface ConversationPreviewShape {
+  readonly messages: readonly PreviewMessageShape[]
+  readonly previousBefore: number | null
+  readonly total: number
+}
+
+export interface RemovalResultShape {
+  readonly id: string
+  readonly status: 'removed' | 'alreadyRemoved' | 'blocked' | 'failed'
+  readonly message?: string
+}
+
+/**
+ * 侧栏入口的形状（对应 kit 的 `ConversationProvider`）。
+ *
+ * 由 `adapter/conversations.ts` 登记到宿主；本模块只描述形状，不 import 那个接口。
+ */
+export interface ConversationProviderShape {
+  readonly protocol: 1
+  readonly pluginId: string
+  list(actor: Actor, query: ConversationQueryShape): Promise<ConversationPageShape>
+  preview(actor: Actor, id: string, before?: number): Promise<ConversationPreviewShape>
+  remove(actor: Actor, ids: readonly string[]): Promise<{ readonly results: readonly RemovalResultShape[] }>
+}
+
+/**
+ * 会话端口（落 `dsh_conversations` + `dsh_turns`）。
+ *
+ * ⚠️ `record` / `mark` 是**同步**的——这不是遗漏，是 kit 契约的硬要求
+ * （`conversations.ts:90-93`，被 `conversationRemover` 在 `:130/:139/:141/:149` 同步调用）。
+ * 实现分两段：**同步写本地 SQLite**（满足契约、原子），再由 adapter 异步把权威状态补进 PG
+ * 的 `removal_state`；启动时**先排空 outbox、再**按 PG 收敛。
+ *
+ * ⚠️ 围栏的真值方向：**pending 窗口内本地权威**。写成"PG 权威 + 本地可从 PG 重建"是**反的**——
+ * 崩溃窗口里 PG 什么都没有，按 PG 重建会把本地 pending 抹成空串，围栏失效而宿主可能已经归档，
+ * 于是留下幽灵会话。
+ */
+export interface ConversationPort {
+  readonly agentId: string
+
+  /** 会话归属——**授权判据**。返回 `undefined` 表示不存在或不属于该 owner。 */
+  conversationOf(owner: OwnerKey, conversationId: string): Promise<ConversationOwner | undefined>
+
+  /**
+   * **预留段**：插入一行归属，`ready = false`——会话此时还不可见、也不能发消息。
+   *
+   * `requestId` 参与**创建幂等**（部分唯一索引 `WHERE request_id <> ''`）：同一个 `requestId`
+   * 再来一次返回已存在的那一行，不新建。
+   *
+   * ⚠️ **id 由调用方铸，不是本方法生成的**：两个既有实现的铸点不同（blog 的
+   * `chat-store.mjs:41` 在 `create` 内部铸 `'blog-chat-' + randomUUID()`，closedoff 的
+   * `agent.ts:261` 与管家都在外面铸），统一后一律**外面铸、这里收**——因为格式契约是
+   * 按 `agent_id` 参数化的（见 `conversation.ts` 的 `CONVERSATION_PREFIX`），而只有调用方
+   * 知道自己是哪个 Agent。
+   *
+   * `requestId` 是**创建幂等键**（部分唯一索引 `WHERE request_id <> ''`）：同一个 requestId
+   * 再来一次返回已存在的那一行，不新建。管家没有这个语义，传空串。
+   */
+  create(owner: OwnerKey, conversationId: string, requestId: string,
+    initial?: { readonly title?: string }): Promise<ConversationRecordShape>
+
+  /**
+   * **发布段**：把 `ready` 翻成 true，会话从此在侧栏可见、可以发送。
+   *
+   * ⚠️ 这一项是实施时补上的：设计 §4.4 的端口清单里只有 `create`，但两个既有实现都是
+   * **两段握手**（blog 的 `chat-store.mjs:41` 写 `ready:false`，`chat.mjs` 随后翻真；
+   * closedoff 的 `conversation-store.ts:50-59` 是 `reserve` + `publish`）。只有"预留"没有
+   * "发布"，会话会永久停在"创建未完成"：侧栏看不到，也删不掉。
+   *
+   * **管家是例外**：它没有"发布握手"这个概念，建会话时必须**一步到位写 `ready = TRUE`**。
+   */
+  publish(owner: OwnerKey, conversationId: string): Promise<void>
+
+  /**
+   * 协作任务的会话寻址：**派生的 requestId + 部分唯一索引，不建映射表**。
+   *
+   * ⚠️ 派生的是 **requestId** 而不是会话 id——会话 id 是 `randomUUID()`，只有 `requestId`
+   * 是 missionId 的函数。含 `agentId`，避免跨 Agent 撞键。
+   */
+  missionRequestId(owner: OwnerKey, missionId: string): string
+
+  /**
+   * 供侧栏：列表查询。
+   *
+   * `scope` 里的两个集合**必须一起用**，否则侧栏会给出错误的可移除判定：
+   * - `busy`：本实例正在跑的会话 + **宿主侧正在跑的会话**（`hostBusyConversationIds`），
+   *   后者可能不属于本插件，但移除围栏必须看见它；
+   * - `archived`：宿主归档清单（`conversationArchive().archivedSessionIds`）。
+   */
+  list(owner: OwnerKey, query: ConversationQueryShape,
+    scope: { readonly busy: readonly string[]; readonly archived: readonly string[] }): Promise<ConversationPageShape>
+
+  /** 侧栏操作入口（对应 kit 的 `ConversationProvider`）。 */
+  managed(owner: OwnerKey): ConversationProviderShape
+
+  /** 标题投影；`source` 决定它能否覆盖手动标题。 */
+  syncTitle(owner: OwnerKey, conversationId: string, title: string,
+    source: 'automatic' | 'generated' | 'manual'): Promise<void>
+
+  /** 删除围栏读：**同步**（kit 契约的硬要求，见上）。 */
+  record(actor: Actor, conversationId: string): ConversationRecordShape
+
+  /** 删除围栏写：**同步**——写本地标记 + 写**持久 outbox**，后台按每会话 FIFO 补写 PG。 */
+  mark(actor: Actor, conversationId: string, state: 'pending' | 'failed' | 'removed'): void
+}
+
+/** 轮次幂等与待答问题（落 `dsh_turns`）。 */
+export interface TurnStorePort {
+  /** 幂等：同一 `requestId` 只跑一轮。同 ID 不同 `inputHash` 应报冲突而不是重跑。 */
+  claim(owner: OwnerKey, conversationId: string, requestId: string, inputHash: string)
+    : Promise<'claimed' | 'duplicate'>
+
+  /** 这一轮跑完了。 */
+  finish(owner: OwnerKey, requestId: string): Promise<void>
+
+  /**
+   * 待答问题：重启后仍能恢复"这个会话在等用户回什么"。
+   *
+   * **必须有**：协调侧要求子任务确实进入 `waiting_user`，而等待上下文以前只在内存
+   * （`butler.ts` 的 `waiting` Map 与定时器，进程重启即丢，重启后 `prepareReply` 会直接报
+   * `waiting_expired`）。
+   *
+   * ⚠️ 落 PG 只解决"问题文本"这一半：重启后仍然缺 `executor` 引用与**超时闹钟**，子任务会
+   * 永远停在 `waiting_user`。这三样必须**一起**恢复，"重启不再丢"这句话才成立。
+   */
+  pendingQuestion(owner: OwnerKey, conversationId: string): Promise<string | undefined>
+  setPendingQuestion(owner: OwnerKey, conversationId: string, question: string | undefined): Promise<void>
+}
+
+/**
+ * 私有侧的 PG 单库门面。
+ *
+ * **框架侧仍然用 SQLite**（`plugin-kit` + `dsh-auth` + `dsh-example` 源码零改动），两侧不共享
+ * 存储层：框架要对外开放，`node:sqlite` 是 Node 内置模块、框架零依赖，这是第一位的优势。
+ */
+export interface AgentDatabasePort {
+  /**
+   * 只核验，不建表（对齐 `blog/src/storage/pg.mjs:69-71` 的既定做法）。
+   *
+   * 缺表 / 版本不符分别归类为 `storage_schema_missing` / `storage_schema_version` 并**拒绝服务**；
+   * 建表由建库脚本完成（`private-deploy/db/0001_init.sql`，一次性建出，不是迁移）。
+   */
+  assertSchema(): Promise<void>
+
+  /** **框架级**会话索引——所有 Agent 共用 `dsh_conversations`，靠 `agent_id` 区分。 */
+  readonly conversations: ConversationPort
+
+  /** **框架级**轮次幂等与待答问题——`dsh_turns`。 */
+  readonly turns: TurnStorePort
+
+  /** 业务表访问：各 Agent 自己的 `<agentId>_*` 表。 */
+  query<T>(sql: string, values?: readonly unknown[]): Promise<T[]>
+
+  transaction<T>(fn: (tx: AgentDatabasePort) => Promise<T>): Promise<T>
+
+  close(): Promise<void>
+}
+
+/** 存储门面：目前只有一个后端（私有侧 PG 单库），保留一层是为了业务不直接碰 db。 */
+export interface AgentStoragePort {
+  readonly db: AgentDatabasePort
+  /** 业务侧的鉴权复核。 */
+  readonly access: Access
+}

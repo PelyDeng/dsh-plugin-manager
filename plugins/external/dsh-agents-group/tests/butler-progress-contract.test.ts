@@ -17,7 +17,7 @@ import { AccessError, type Access } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole, type ButlerEvent } from '../../dsh-butler-console/src/butler.ts'
 import type { Config } from '../../dsh-butler-console/src/config.ts'
 import type { ButlerAgentExecutor } from '../../dsh-butler-console/src/protocol.ts'
-import { TaskStore } from '../../dsh-butler-console/tests/helpers/sqlite-test-store.ts'
+import { SqliteButlerStorage, TaskStore } from '../../dsh-butler-console/tests/helpers/sqlite-test-store.ts'
 import { executorFor } from '../src/butler-bridge.ts'
 import type { AgentManifest } from '../src/agents/registry.ts'
 
@@ -69,7 +69,9 @@ const input = {
 async function run(executor: ButlerAgentExecutor): Promise<ButlerEvent[]> {
   // 真实存储夹具（:memory:）：派单前会读取任务记录判定材料快照状态，读不到记录按
   // 「未知」拒派——所以这里必须先落一条带目标子任务的真实任务，而不是只伪装
-  // setSubtaskState 的空壳。TaskStore 与异步接口结构兼容，与管家自家测试同款用法。
+  // setSubtaskState 的空壳。`TaskStore` 是**同步** SQLite 替身，只有 `SqliteButlerStorage`
+  // 才是 `ButlerStorage`（`init`/`readyProbe`/`expireWaitingSubtask` 都在适配器里），
+  // 与管家自家 `tests/target-identity.test.ts:88` 同款用法；`store` 保留下来供本用例直接操作。
   const store = new TaskStore(':memory:')
   store.reserveConversation('conv-1', actor)
   await store.createTask({
@@ -80,7 +82,7 @@ async function run(executor: ButlerAgentExecutor): Promise<ButlerEvent[]> {
   const access = { mode: 'authenticated', ready() {}, resolve: () => undefined,
     assert() { throw new AccessError(503, '本测试不涉及鉴权') } } as unknown as Access
   const config = { subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000 } as Config
-  const console_ = new ButlerConsole(context(executor), config, access, store, '')
+  const console_ = new ButlerConsole(context(executor), config, access, new SqliteButlerStorage(store), '')
   const dispatchSubtask = (console_ as unknown as {
     dispatchSubtask(value: typeof input): AsyncGenerator<ButlerEvent, unknown>
   }).dispatchSubtask.bind(console_)
