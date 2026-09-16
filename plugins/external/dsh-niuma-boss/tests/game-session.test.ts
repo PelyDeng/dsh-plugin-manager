@@ -7,6 +7,12 @@ import { taskStateLabel } from '../src/task-projection.ts'
 import { ButlerStubServer, defaultSnapshot } from './butler-stub.ts'
 
 /**
+ * 等待断言成立。显式放宽超时：`vi.waitFor` 默认 1s，在并发构建/CI 的 CPU 争用下会偶发超时
+ * （本地实测 18 轮中 1 次）；这里只放宽等待预算，不放宽任何断言本身。
+ */
+const waitFor = (assertion: () => unknown): Promise<void> => vi.waitFor(assertion, { timeout: 5000, interval: 20 }).then(() => {})
+
+/**
  * 身份与归属边界：换登录人、空会话列表、登录失效、订阅授权失效、旧响应迟到
  * 都必须清空或丢弃旧用户的任务投影与历史，不保留可能属于他人的数据。
  * 世界模块带 Phaser（需要真实 DOM），会话层测试 mock 掉，不启动渲染；mock 记录会话
@@ -190,8 +196,8 @@ describe('身份与归属边界', () => {
     const session = makeSession()
     await session.refresh()
     const store = useTaskBookStore()
-    await vi.waitFor(() => expect(store.task.goal).toBe('写博客'))
-    await vi.waitFor(() => expect(store.status).toBe('forbidden'))
+    await waitFor(() => expect(store.task.goal).toBe('写博客'))
+    await waitFor(() => expect(store.status).toBe('forbidden'))
     expect(store.conversations).toHaveLength(0)
     expect(store.selectedId).toBe('')
     expect(store.task.goal).toBe('')
@@ -257,7 +263,7 @@ describe('换轮恢复边界', () => {
     const session = makeSession()
     const store = useTaskBookStore()
     await session.refresh()
-    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    await waitFor(() => expect(store.task.state).toBe('completed'))
     // A、B 只存在于事件日志：换轮恢复从 0 重放当前轮，页面不缺 A。
     expect(store.task.subtasks[0]?.text).toBe('ABC')
     // 订阅序列：装载 after=0 → 断线 after=2 → 换轮从 0 重放。
@@ -285,7 +291,7 @@ describe('换轮恢复边界', () => {
     const session = makeSession()
     const store = useTaskBookStore()
     await session.refresh()
-    await vi.waitFor(() => expect(store.status).toBe('ready'))
+    await waitFor(() => expect(store.status).toBe('ready'))
     // 恢复边界以内的历史增量不重复计入：正文仍是快照里的 AB。
     expect(store.task.subtasks[0]?.text).toBe('AB')
     expect(store.task.subtasks[0]?.text).not.toContain('ABAB')
@@ -313,7 +319,7 @@ describe('换轮恢复边界', () => {
     const session = makeSession()
     const store = useTaskBookStore()
     await session.refresh()
-    await vi.waitFor(() => expect(store.status).toBe('ready'))
+    await waitFor(() => expect(store.status).toBe('ready'))
     expect(store.task.subtasks[0]?.text).toBe('ABAB')
     expect(store.task.subtasks[0]?.uncertain).toBe(true)
     expect(store.task.incomplete).toBe(false)
@@ -341,7 +347,7 @@ describe('换轮恢复边界', () => {
     const session = makeSession()
     const store = useTaskBookStore()
     await session.refresh()
-    await vi.waitFor(() => expect(store.status).toBe('ready'))
+    await waitFor(() => expect(store.status).toBe('ready'))
     expect(store.task.subtasks[0]?.text).toBe('BC')
     expect(store.task.incomplete).toBe(true)
     // 续订从窗口左边缘之前开始，而不是跳到日志头。
@@ -368,8 +374,8 @@ describe('换轮恢复边界', () => {
     const session = makeSession()
     const store = useTaskBookStore()
     await session.refresh()
-    await vi.waitFor(() => expect(store.task.incomplete).toBe(false))
-    await vi.waitFor(() => expect(store.task.subtasks[0]?.text).toBe('ABC'))
+    await waitFor(() => expect(store.task.incomplete).toBe(false))
+    await waitFor(() => expect(store.task.subtasks[0]?.text).toBe('ABC'))
     expect(store.task.state).toBe('completed')
     session.stop()
   })
@@ -393,7 +399,7 @@ describe('换轮恢复边界', () => {
     const session = makeSession()
     const store = useTaskBookStore()
     await session.refresh()
-    await vi.waitFor(() => expect(store.status).toBe('ready'))
+    await waitFor(() => expect(store.status).toBe('ready'))
     expect(store.task.subtasks[0]?.text).toBe('')
     expect(store.task.incomplete).toBe(true)
     expect(store.task.state).toBe('failed')
@@ -419,7 +425,7 @@ describe('换轮恢复边界', () => {
     const session = makeSession()
     const store = useTaskBookStore()
     await session.refresh()
-    await vi.waitFor(() => expect(store.status).toBe('ready'))
+    await waitFor(() => expect(store.status).toBe('ready'))
     // 补取前 ABC（旧 result A + 窗口内取回的 B、C），补取后仍是 ABC，提示保留。
     expect(store.task.subtasks[0]?.text).toBe('ABC')
     expect(store.task.incomplete).toBe(true)
@@ -452,7 +458,7 @@ describe('换轮恢复边界', () => {
     const session = makeSession()
     const store = useTaskBookStore()
     await session.refresh()
-    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    await waitFor(() => expect(store.task.state).toBe('completed'))
     // 快照里的旧 result 是基准，恢复之后的新增量继续累积。
     expect(store.task.subtasks[0]?.text).toBe('ABC')
     expect(stub.state.subscriptions).toEqual([0, 2, 0])
@@ -484,7 +490,7 @@ describe('换轮恢复边界', () => {
     const session = makeSession()
     const store = useTaskBookStore()
     await session.refresh()
-    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    await waitFor(() => expect(store.task.state).toBe('completed'))
     expect(store.task.subtasks[0]?.text).toBe('ABC')
     expect(store.task.subtasks[0]?.text).not.toContain('ABAB')
     expect(stub.state.subscriptions).toEqual([0, 2, 0])
@@ -513,7 +519,7 @@ describe('换轮恢复边界', () => {
     const session = makeSession()
     const store = useTaskBookStore()
     await session.refresh()
-    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    await waitFor(() => expect(store.task.state).toBe('completed'))
     // 读到的是新任务快照：目标、子任务来自 task-2，旧任务正文不残留。
     expect(store.task.taskId).toBe('task-2')
     expect(store.task.goal).toBe('新目标')
@@ -532,11 +538,11 @@ describe('写意图闭环与错误语义', () => {
     await session.refresh()
     const store = useTaskBookStore()
     await session.submitTask('写一篇新博客')
-    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    await waitFor(() => expect(store.task.state).toBe('completed'))
     expect(store.task.taskId).toBe('task-new')
     expect(store.task.goal).toBe('写一篇新博客')
     // 终态后补读历史：任务本与管家入口看到同一份权威记录。
-    await vi.waitFor(() => expect(store.history.map(item => item.id)).toContain('task-new'))
+    await waitFor(() => expect(store.history.map(item => item.id)).toContain('task-new'))
     expect(store.pendingSubmit).toBeNull()
     expect(stub.state.chatRequests).toHaveLength(1)
     session.stop()
@@ -555,10 +561,10 @@ describe('写意图闭环与错误语义', () => {
     await session.refresh()
     const store = useTaskBookStore()
     void session.submitTask('写博客')
-    await vi.waitFor(() => expect(store.task.subtasks[0]?.state).toBe('waiting_user'))
+    await waitFor(() => expect(store.task.subtasks[0]?.state).toBe('waiting_user'))
     expect(store.task.subtasks[0]?.note).toBe('两个版本选哪个？')
     await session.replySubtask('s1', '采用第一版')
-    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    await waitFor(() => expect(store.task.state).toBe('completed'))
     expect(stub.state.replyRequests[0]).toMatchObject({ taskId: 'task-1', subtaskId: 's1', text: '采用第一版' })
     expect(stub.state.chatRequests).toHaveLength(1) // 回复不是再次派活
     session.stop()
@@ -576,7 +582,7 @@ describe('写意图闭环与错误语义', () => {
     await session.stopRound()
     expect(stub.state.stopRequests).toEqual([{ conversationId: 'conv-1', taskId: 'task-1' }])
     expect(store.notice).toContain('已请求停止本轮')
-    await vi.waitFor(() => expect(store.task.state).toBe('cancelled'))
+    await waitFor(() => expect(store.task.state).toBe('cancelled'))
     expect(store.task.runState === 'cancelled' || store.task.state === 'cancelled').toBe(true)
     expect(stub.state.stopRequests).toHaveLength(1) // stop 不重试
     session.stop()
@@ -649,7 +655,7 @@ describe('写意图闭环与错误语义', () => {
     // 手动重试同一份提交：requestId 与正文逐字相同（管家幂等只执行一次）。
     stub.state.chatQueue.push({ destroy: true })
     session.retrySubmit()
-    await vi.waitFor(() => expect(stub.state.chatRequests).toHaveLength(2))
+    await waitFor(() => expect(stub.state.chatRequests).toHaveLength(2))
     expect(stub.state.chatRequests[1]).toEqual(stub.state.chatRequests[0])
     session.stop()
   })
@@ -670,7 +676,7 @@ describe('写意图闭环与错误语义', () => {
     // 手动重试：仍是冻结的同一份 requestId 与正文。
     stub.state.chatQueue.push({ destroy: true })
     session.retrySubmit()
-    await vi.waitFor(() => expect(stub.state.chatRequests).toHaveLength(2))
+    await waitFor(() => expect(stub.state.chatRequests).toHaveLength(2))
     expect(stub.state.chatRequests[1]).toEqual(stub.state.chatRequests[0])
     session.stop()
   })
@@ -717,7 +723,7 @@ describe('写意图闭环与错误语义', () => {
     await session.refresh()
     const store = useTaskBookStore()
     await session.submitTask('发布园区安全通告')
-    await vi.waitFor(() => expect(store.task.state).toBe('external_pending'))
+    await waitFor(() => expect(store.task.state).toBe('external_pending'))
     expect(taskStateLabel(store.task.state)).toBe('待外部处理')
     expect(store.task.state).not.toBe('completed')
     expect(store.task.subtasks[0]?.pending?.reason).toContain('选择采用')
@@ -812,7 +818,7 @@ describe('按用户的位置恢复', () => {
     expect(JSON.parse(storage.getItem(STORAGE_PREFIX + scope)!)).toMatchObject({ map: 'office', cell: [34, 26] })
     session.onVisible()
     expect(worldMock.resumed).toBe(1)
-    await vi.waitFor(() => expect(store.history[0]?.goal).toBe('回来后读到的任务'))
+    await waitFor(() => expect(store.history[0]?.goal).toBe('回来后读到的任务'))
     session.stop()
   })
 })
@@ -836,7 +842,7 @@ describe('地图启动失败不连带任务本', () => {
       expect(store.task.goal).toBe('写博客')
       expect(store.task.subtasks[0]?.text).toBe('草稿写到一半')
       // 订阅可用：probe 说这一轮在跑，只读观察流按 after=0 接上，链路状态由流接通给出「已连接」。
-      await vi.waitFor(() => expect(store.status).toBe('ready'))
+      await waitFor(() => expect(store.status).toBe('ready'))
       expect(stub.state.subscriptions[0]).toBe(0)
       // 错误如实记录（不静默），原样带上异常对象。
       expect(errors).toHaveBeenCalledWith('牛马-老板：地图启动失败', expect.any(Error))
@@ -889,9 +895,9 @@ describe('人物表现与业务状态映射', () => {
     const session = makeSession()
     await session.refresh()
     const store = useTaskBookStore()
-    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    await waitFor(() => expect(store.task.state).toBe('completed'))
     // 迟到事件确实到了（正文按覆盖边界如实追加，不静默丢弃），但业务事实一个都不变。
-    await vi.waitFor(() => expect(store.task.subtasks[0]!.text).toContain('迟到的增量'))
+    await waitFor(() => expect(store.task.subtasks[0]!.text).toContain('迟到的增量'))
     expect(store.task.state).toBe('completed')
     expect(store.task.summary).toBe('完成')
     expect(store.task.subtasks[0]!.state).toBe('succeeded')
@@ -911,13 +917,13 @@ describe('人物表现与业务状态映射', () => {
       { id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles: 0.5, dialogueMode: 'authored_lines' },
       { id: 'butler', label: '牛马大总管', kind: 'butler', distanceTiles: 1.2 },
     ])
-    await vi.waitFor(() => expect(store.prompt?.id).toBe('supplement_hint'))
+    await waitFor(() => expect(store.prompt?.id).toBe('supplement_hint'))
     expect(store.prompt?.label).toBe('补充一句')
     // 走远后只剩普通 NPC 的交谈提示。
     near([{ id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles: 0.5, dialogueMode: 'authored_lines' }])
-    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    await waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
     near([])
-    await vi.waitFor(() => expect(store.prompt).toBeNull())
+    await waitFor(() => expect(store.prompt).toBeNull())
     session.stop()
   })
 
@@ -926,11 +932,11 @@ describe('人物表现与业务状态映射', () => {
     await session.refresh()
     const store = useTaskBookStore()
     // 等只读订阅接通（一次长连接）再计数：对白通路本身不产生任何请求。
-    await vi.waitFor(() => expect(store.status).toBe('ready'))
+    await waitFor(() => expect(store.status).toBe('ready'))
     await new Promise(resolve => setTimeout(resolve, 30))
     const before = [...stub.state.requests]
     near([{ id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles: 0.8, dialogueMode: 'authored_lines' }])
-    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    await waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
     session.interactKey()
     expect(store.dialogue).toMatchObject({ kind: 'npc', id: 'npc_hr', title: '沈禾', mode: 'authored_lines', inputAllowed: false })
     expect(store.dialogue?.lines).toEqual(['这页先留白，你说完我再记。'])
@@ -952,17 +958,17 @@ describe('人物表现与业务状态映射', () => {
     await session.refresh()
     const store = useTaskBookStore()
     near([{ id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles: 0.5, dialogueMode: 'authored_lines' }])
-    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    await waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
     session.openBook()
     expect(store.prompt).toBeNull()
     session.closeBook()
-    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    await waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
     // 对白面板同理：开着的时候一个提示都不生效，关掉才恢复。
     session.interactKey()
     expect(store.dialogue).not.toBeNull()
     expect(store.prompt).toBeNull()
     session.closeDialogue()
-    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    await waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
     session.stop()
   })
 
@@ -973,7 +979,7 @@ describe('人物表现与业务状态映射', () => {
     const target = (distanceTiles: number) =>
       ({ id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles, dialogueMode: 'authored_lines' })
     near([target(0.5)])
-    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    await waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
     session.interactKey()
     expect(store.dialogue?.id).toBe('npc_hr')
     // 走出交互半径但还没走远（< walk_away_tiles = 3.5）：会话留着，提示不闪。
@@ -984,14 +990,14 @@ describe('人物表现与业务状态映射', () => {
     expect(store.dialogue).toBeNull()
     // 再开一次：角色离场（本图近邻里没有这个人）同样关闭。
     near([target(0.5)])
-    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    await waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
     session.interactKey()
     expect(store.dialogue).not.toBeNull()
     near([{ id: 'npc_admin', label: '陆小周', kind: 'npc', distanceTiles: 0.5, dialogueMode: 'authored_lines' }])
     expect(store.dialogue).toBeNull()
     // 换到另一张图：旧图的角色不在近邻事实里，会话随之关闭。
     near([target(0.5)])
-    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
+    await waitFor(() => expect(store.prompt?.id).toBe('npc_talk_hint'))
     session.interactKey()
     expect(store.dialogue).not.toBeNull()
     worldMock.options?.onFeet?.({ map: 'street', cell: [5, 12], facing: 'north' })
@@ -1007,7 +1013,7 @@ describe('人物表现与业务状态映射', () => {
     await session.refresh()
     const store = useTaskBookStore()
     near([{ id: 'sample_explorer', label: '探险NPC示例', kind: 'npc', distanceTiles: 1, dialogueMode: 'unavailable' }])
-    await vi.waitFor(() => expect(store.prompt?.id).toBe('npc_status_hint'))
+    await waitFor(() => expect(store.prompt?.id).toBe('npc_status_hint'))
     session.interactKey()
     expect(store.dialogue).toMatchObject({ id: 'sample_explorer', mode: 'unavailable', inputAllowed: false })
     expect(store.dialogue?.lines).toEqual([])
@@ -1065,7 +1071,7 @@ describe('人物表现与业务状态映射', () => {
     await session.refresh()
     const store = useTaskBookStore()
     near([{ id: 'npc_hr', label: '沈禾', kind: 'npc', distanceTiles: 0.5, dialogueMode: 'authored_lines' }])
-    await vi.waitFor(() => expect(store.prompt).not.toBeNull())
+    await waitFor(() => expect(store.prompt).not.toBeNull())
     session.interactKey()
     expect(store.dialogue).not.toBeNull()
     stub.state.identityStatus = 401
@@ -1100,11 +1106,11 @@ describe('故障恢复与竞争场景', () => {
     await session.refresh()
     const store = useTaskBookStore()
     // 断流：链路落入断线提示，已有正文仍可浏览（不清空、不推算）。
-    await vi.waitFor(() => expect(store.status).toBe('offline'))
+    await waitFor(() => expect(store.status).toBe('offline'))
     expect(store.task.subtasks[0]?.text).toContain('草稿写到一半')
     expect(store.task.subtasks[0]?.text).toContain('（后半段）')
     // 有界重连用最后序号续订，这一轮照常收尾。
-    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    await waitFor(() => expect(store.task.state).toBe('completed'))
     expect(stub.state.subscriptions).toEqual([0, 6])
     // 这里不写「不重发写请求」：本用例全程没有写请求，0 次请求没有区分度。
     // 断流后只续订不重新提交的真证据（含请求次数与执行次数）在
@@ -1134,7 +1140,7 @@ describe('故障恢复与竞争场景', () => {
     const session = makeSession()
     await session.refresh()
     const store = useTaskBookStore()
-    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    await waitFor(() => expect(store.task.state).toBe('completed'))
     // 正文各出现一次：甲是 reset 前已经收到的（保留），乙是窗口内重连后收到的；
     // 本轮结束后按权威快照补齐，不完整提示随之清除。
     expect(store.task.subtasks[0]?.text).toBe('（片段甲）（片段乙）')
@@ -1151,7 +1157,7 @@ describe('故障恢复与竞争场景', () => {
     const session = makeSession()
     await session.refresh()
     const store = useTaskBookStore()
-    await vi.waitFor(() => expect(store.status).toBe('unauthorized'))
+    await waitFor(() => expect(store.status).toBe('unauthorized'))
     expect(store.conversations).toHaveLength(0)
     expect(store.task.goal).toBe('')
     expect(store.history).toHaveLength(0)
@@ -1201,7 +1207,7 @@ describe('故障恢复与竞争场景', () => {
     await session.refresh()
     const store = useTaskBookStore()
     void session.submitTask('写一篇新博客')
-    await vi.waitFor(() => expect(store.pendingSubmit).not.toBeNull())
+    await waitFor(() => expect(store.pendingSubmit).not.toBeNull())
     expect(store.submitting).toBe(true)
     // 切到另一个会话：conv-1 的冻结提交随选择作废，在途提交的界面锁一起解开。
     stub.state.run = null
@@ -1228,7 +1234,7 @@ describe('故障恢复与竞争场景', () => {
     const session = makeSession()
     await session.refresh()
     const store = useTaskBookStore()
-    await vi.waitFor(() => expect(store.task.subtasks[0]?.state).toBe('waiting_user'))
+    await waitFor(() => expect(store.task.subtasks[0]?.state).toBe('waiting_user'))
     // 另一个入口先停了这一轮（原始 HTTP 入口，共享同一份权威记录）。
     const stopped = await fetch(origin + '/fixture-butler/stop', {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1247,7 +1253,7 @@ describe('故障恢复与竞争场景', () => {
     expect(stub.state.replyRequests).toHaveLength(1) // 明确拒绝不留待重试，也不自动重发
     // 明确拒绝之后按权威状态自读一次（只读）：提示里说的「刷新」有东西可读，
     // 本地不用任何推测去补「回复成功」或失败。
-    await vi.waitFor(() => expect(store.task.state).toBe('cancelled'))
+    await waitFor(() => expect(store.task.state).toBe('cancelled'))
     expect(stub.state.snapshotReads).toBeGreaterThan(readsBefore)
     expect(stub.state.replyRequests).toHaveLength(1)
     session.stop()
@@ -1302,7 +1308,7 @@ describe('故障恢复与竞争场景', () => {
     const requestId = store.pendingSubmit?.requestId ?? ''
     expect(stub.state.chatExecutions).toBe(1)
     session.retrySubmit()
-    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    await waitFor(() => expect(store.task.state).toBe('completed'))
     // 两次请求、一次执行：第二次是幂等重放（同 requestId 同正文），回放首次那一轮。
     expect(stub.state.chatRequests).toHaveLength(2)
     expect(stub.state.chatRequests[1]).toEqual(stub.state.chatRequests[0])
@@ -1342,7 +1348,7 @@ describe('故障恢复与竞争场景', () => {
     await new Promise(resolve => setTimeout(resolve, 30))
     expect(stub.state.chatRequests).toHaveLength(1)
     // 被明确拒绝之后重读权威状态：入口 B 看到的是同一轮（run-a），不是自己想象的状态。
-    await vi.waitFor(() => expect(storeB.activeRun?.runId).toBe('run-a'))
+    await waitFor(() => expect(storeB.activeRun?.runId).toBe('run-a'))
     // 其中任意一个入口停止这一轮：两边再读权威记录时看到同一份终态。
     stub.state.run = null
     stub.state.snapshot = { ...defaultSnapshot, id: 'task-a', goal: '双入口任务', state: 'cancelled', summary: '这一轮已按请求停止。', subtasks: [{ ...defaultSnapshot.subtasks[0], state: 'cancelled' }] }
@@ -1380,12 +1386,12 @@ describe('故障恢复与竞争场景', () => {
     // 回前台刷新：同一会话重选（releaseWriteState），写锁解开、冻结提交保留。
     session.onHidden()
     session.onVisible()
-    await vi.waitFor(() => expect(store.submitting).toBe(false))
+    await waitFor(() => expect(store.submitting).toBe(false))
     expect(store.pendingSubmit?.requestId).toBe(requestId)
     // 用户点「重试提交」：第 2 次在途，用的是同一份冻结提交（同 requestId 同正文）。
     session.retrySubmit()
-    await vi.waitFor(() => expect(stub.state.chatRequests).toHaveLength(2))
-    await vi.waitFor(() => expect(store.submitting).toBe(false))
+    await waitFor(() => expect(stub.state.chatRequests).toHaveLength(2))
+    await waitFor(() => expect(store.submitting).toBe(false))
     expect(stub.state.chatRequests[1]).toEqual(stub.state.chatRequests[0])
     // 第 2 次也「结果不明」：冻结提交留着，重试入口（pendingSubmit）可用。
     expect(store.pendingSubmit?.requestId).toBe(requestId)
@@ -1417,7 +1423,7 @@ describe('故障恢复与竞争场景', () => {
     expect(store.notice).toContain('正在处理上一条消息')
     // 明确拒绝之后按权威状态自读一次：读取全部回来即证明链路可用，状态回写为
     // 可用——否则断线徽标与任务本里的「重试」入口会一直挂在界面上。
-    await vi.waitFor(() => expect(store.status).toBe('ready'))
+    await waitFor(() => expect(store.status).toBe('ready'))
     expect(store.statusDetail).toBe('当前没有进行中的一轮')
     session.stop()
   })
@@ -1437,7 +1443,7 @@ describe('故障恢复与竞争场景', () => {
     const store = useTaskBookStore()
     store.assignDraft = '写一篇新博客'
     void session.submitTask(store.assignDraft)
-    await vi.waitFor(() => expect(store.pendingSubmit).not.toBeNull())
+    await waitFor(() => expect(store.pendingSubmit).not.toBeNull())
     const requestId = store.pendingSubmit?.requestId ?? ''
     expect(requestId).not.toBe('')
     // 管家那边这一轮已经跑起来了（probe 看得到），回前台的重读会带上它。
@@ -1452,10 +1458,10 @@ describe('故障恢复与竞争场景', () => {
     session.onHidden()
     session.onVisible()
     // 这一轮照常被界面接回来：任务身份、权威状态与终态都来自快照与事件。
-    await vi.waitFor(() => expect(store.task.taskId).toBe('task-new'))
-    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    await waitFor(() => expect(store.task.taskId).toBe('task-new'))
+    await waitFor(() => expect(store.task.state).toBe('completed'))
     // 提交没有被后台/回前台放大：只有一次请求，冻结提交也已被那一次受理清掉。
-    await vi.waitFor(() => expect(store.pendingSubmit).toBeNull())
+    await waitFor(() => expect(store.pendingSubmit).toBeNull())
     expect(stub.state.chatRequests).toHaveLength(1)
     expect(stub.state.chatRequests[0]?.requestId).toBe(requestId)
     session.stop()
