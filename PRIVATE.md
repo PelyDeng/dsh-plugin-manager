@@ -82,7 +82,7 @@ pnpm package --external --plugins "agents-group,butler"
 
 首次配置分别按[封闭化业务参数](plugins/external/dsh-agents-group/agents/closedoff/README.md#配置业务参数)和[博客配置](plugins/external/dsh-agents-group/agents/blog/README.md#配置)填写。现有实例沿用原 `runtimeConfig` 引用。站点来源、选集、模型凭据优先级及入口默认值统一见[框架配置](doc/framework-configuration.md)。
 
-宿主子模块锁定 DSH `0.1.6-alpha.1`（提交 `0a15e36e7f82b6ed45af6fa9759f29b40dcd965d`），以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。业务插件（`plugins/external/*`）本轮保留各自的 `0.1.5-alpha.2` 声明与原有发布目录，随它们自己的升级再对齐宿主版本。
+宿主子模块锁定 DSH `0.1.6-alpha.1`（提交 `0a15e36e7f82b6ed45af6fa9759f29b40dcd965d`），以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。业务插件（`plugins/external/*`）已与宿主对齐到 `0.1.6-alpha.1`（此前只有 butler 是新版，closedoff / blog 还停在 `0.1.5-alpha.2`，同一类型包会出现两份副本），保留各自的发布目录，随它们自己的升级再对齐宿主版本。
 
 私有根更新入口不更新宿主子模块，也不替换 `DSH_HOST_IMAGE`。宿主升级时显式运行 `git submodule update --init deepseek-harness`，或准备与 gitlink 对应的干净检出并构建新镜像，再更新私有镜像引用；服务器直连 GitHub 失败时，可在本地用 `git bundle` 打包宿主历史再传输。Session V3 的迁移、刷新历史与数据回退约束见[宿主兼容说明](doc/host-compatibility.md)。生产选集为 `auth,example,agents-group,butler`（blog 与 closedoff 是 agents-group 的成员，不单独占选集条目），不加入尚未交付的 `niuma-boss`。
 
