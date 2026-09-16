@@ -18,7 +18,9 @@ plugins/external/dsh-agents-group/
 ├── cordis.patch.yml         # Bundle 默认配置
 ├── dev/dev-hmr.patch.yml    # 开发期热重载（群组级统一开发根）
 ├── config/group.example.json# 业务配置模板；实际文件用 AGENTS_GROUP_CONFIG 指向
+├── config/storage.example.json # 业务存储（PostgreSQL）配置模板；见「业务存储配置与迁移」
 ├── scripts/hmr-observer.mjs # 开发期工具，不随归档交付
+├── scripts/migrate-blog-storage.ts # 存量迁移工具，构建成 dist/migrate-blog-storage.mjs
 ├── src/
 │   ├── index.ts             # 群组装配：登记自身条目、装载各 Agent、挂探针
 │   ├── host.ts              # 装载与失败隔离、就绪判定
@@ -29,7 +31,7 @@ plugins/external/dsh-agents-group/
 │       └── blog.ts          # 博客的装载适配层
 ├── agents/                  # ★ 各 Agent 的实体，独立 pnpm 子包
 │   ├── closedoff/           # @dsh-agents-group/closedoff
-│   └── blog/                # @dsh-agents-group/blog
+│   └── blog/                # @dsh-agents-group/blog（migrations/postgres/ 是业务库建表 SQL）
 ├── packages/common/         # ★ 群组内部共享组件包，构建期内联
 └── tests/
 ```
@@ -164,6 +166,107 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
 宿主的模型目录是**全局扁平的**，没有 scope 机制：provider 一旦注册，全进程可见。所以
 「只让某个 Agent 看到某些模型」只能在群组侧过滤，白名单由**我们自己维护**，宿主新增
 provider 时不会自动生效。
+
+## 业务存储配置与迁移
+
+博客的业务数据（草稿、写作任务、操作记录、审计、附件记录、译文留档）只存在 PostgreSQL
+一种后端（Q4 口径）。索引库——会话、对话请求与结果、协作映射——仍是各自的 `blog.sqlite`，
+与业务存储无关。
+
+**缺配置或运行中连不上都算「blog 未就绪」，不算群组装载失败**：页面、目录条目、参与者照常
+注册，群组探针照常在线，博客的业务端点以稳定错误码拒绝（PG 不可达是 503 + `storage_unreachable`），
+`/agents/blog/ready` 正文写明原因与配置方法。**绝不静默回退 SQLite。**
+
+### PostgreSQL 配置（三路来源，按优先级）
+
+1. 环境变量 `AGENTS_GROUP_PG_DSN`：直接给连接串（开发/测试最方便）。
+2. 私有配置文件 + 环境变量 `AGENTS_GROUP_PG_CONFIG` 指向它：文件内容形如
+   `{"dsn":"postgresql://用户:密码@主机:5432/库名"}`。
+3. 都没设时的缺省路径：`<DSH 主目录>/plugins/agents-group/storage.json`（存在才读，格式同上）。
+
+模板见 `config/storage.example.json`（复制后填写，不要提交 Git）。凭据只走环境变量与私有
+文件，**绝不写进 cordis 配置或 `plugin.json`**。注意：群组 manifest 的 `runtimeConfig` 槽位
+已被 `AGENTS_GROUP_CONFIG`（`config/group.example.json`）占用，所以存储配置**不由管理器挂载
+模板**——它是手写的私有文件或环境变量。每组独立数据库与独立运行账号，库内表按插件前缀平铺
+（博客用 `blog_` 前缀），将来其他 Agent 迁入各管各的表与版本行。
+
+### 初始化结构
+
+对空库执行一次 `agents/blog/migrations/postgres/0001_init.sql`（迁移工具会自动完成，也可以
+`psql -f` 手动执行）。版本行随建表写进 `blog_schema_version`；插件启动只核验版本，缺表或
+版本不符即拒绝读写，不自动建表、不自动改版本。
+
+### 存量迁移（SQLite → PostgreSQL）
+
+拆库前 `blog.sqlite` 里的业务 5 表与译文库 `reasoning-translations.sqlite` 用一次性工具
+`dist/migrate-blog-storage.mjs` 迁移（pg 驱动已打进产物，归档内可直接 `node` 运行）：
+
+```sh
+node dist/migrate-blog-storage.mjs --blog <旧 blog.sqlite 路径> [--translations <译文库路径>] \
+  --dsn <目标 DSN> [--dry-run] [--clear-source --backup <快照路径>]
+# DSN 也可以用环境变量 AGENTS_GROUP_MIGRATE_PG_DSN 传
+```
+
+| 退出码 | 含义 |
+| --- | --- |
+| 0 | 成功（`--dry-run` 为盘点与校验完成、未写入；源库业务表已清时同样 0，并提示无需迁移） |
+| 1 | 参数、连接、导入后校验、备份或清源失败 |
+| 2 | 源库无法识别：业务 5 表只存在一部分，或表在但列不齐 |
+| 3 | 目标库不是空库、结构版本不符，或有表却没有版本行 |
+| 4 | 停写点复核失败：导入期间（或导入后、清源前）源库又有写入，导入已整体回滚 / 清源被拒绝 |
+
+行为要点：
+
+- 源库**只读**打开；业务 5 表全不存在 = 已迁移或无需迁移（退出码 0，连 DSN 都不用给）。
+- 索引 3 表（conversations/chat_requests/chat_results）与协作映射表
+  （pirate_blog_conversations）**迁后仍留在 `blog.sqlite` 里当索引库**：导入不读它们，清源
+  不动它们，清源前后逐表核对行数。
+- SQLite 的隐式 rowid 序在目标里显式化为 `seq`：jobs/operations/attachments/translations 用
+  源 rowid 当 seq，audit 用源 rowid 当 id。导入后工具把五个 BIGSERIAL 序列 setval 到各自
+  最大值（空表复位成「首次插入得 1」）——不复位的话，后续不带该列的 INSERT 会从 1 开始撞
+  UNIQUE。
+- 建结构、导入、导入后校验（版本行、逐表行数、主键集合、逐列校验和、记录身份 spot check）
+  与序列复位都在**同一个 PG 事务**里；COMMIT 前复核源库指纹，不一致就整体回滚、目标库保持空。
+- 报告会列出**人工核对清单**：jobs 里 queued/running、attachments 里 uploading/parsing 的
+  id 与 owner。迁移不改这些状态；切换后首次启动的恢复序列会把它们收成 failed（任务记
+  「服务已重启」，附件记「解析已中断，请移除后重新上传」）——要等它们跑完就先别切。
+- `--translations` 省略时，若 `blog.sqlite` 同目录存在 `reasoning-translations.sqlite`，工具
+  只提示、不导入译文（译文是派生缓存，重问即可再生成）。
+
+### 停写、清源与回滚边界
+
+生产按「停插件写入口 → `--dry-run` 预演 → 备份先行 → 导入 → 校验 → `--clear-source` → 切
+配置」执行。`--clear-source` 必须先给 `--backup`：工具用 `VACUUM INTO` 出一致快照（**不裸拷
+主文件与 WAL**），当场只读打开核验各表行数，再用单事务 DROP 业务 5 表；快照路径已存在时拒绝
+覆盖。清源前工具会二次核对业务表清单与停写指纹——导入提交之后源库又被写入就拒绝清源，源库
+原样保留。
+
+回滚边界：**清源后 `blog.sqlite` 只剩索引表**，回退到 SQLite = 从停写快照**整库恢复**（索引
+一并回退）或保持新版修复 PG——**不支持只回业务表**（业务表已不在源库，只在快照里）。切换后
+PG 一旦接受新写入，就不再支持无损快速切回。
+
+#### 清源失败后的人工收尾
+
+清源被拒（快照路径冲突、快照校验失败、清源前复核发现源库又被写入）时：**目标库已导入且非
+空**，源库业务表原样保留；同一命令不能再跑一遍（导入会被退出码 3 拒绝）。两步收尾：
+
+1. 先处置那批「导入后写入」——重导到目标库或人工合并，确认源库无事可做；
+2. 手工清源（任选 SQLite 客户端，含 `node:sqlite`；**先自行出一致快照**，与工具同款）：
+
+```sql
+-- 1) 一致快照（不要裸拷主文件 + WAL）
+VACUUM INTO '<快照路径>';
+-- 2) 单事务清业务 5 表，索引 3 表与协作映射表保持不动
+BEGIN IMMEDIATE;
+DROP TABLE drafts;
+DROP TABLE jobs;
+DROP TABLE operations;
+DROP TABLE audit;
+DROP TABLE attachments;
+COMMIT;
+```
+
+清源后回滚同样只能走「停写快照整库恢复」——不支持只回业务表。
 
 ## 探针
 
