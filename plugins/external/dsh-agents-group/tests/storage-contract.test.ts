@@ -260,6 +260,41 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
     } finally { await db.close() }
   })
 
+  it('turnStatus 三态：无行 ⇒ undefined；认领未结算 ⇒ claimed；结算后 ⇒ finished（跨实例仍可读）', async () => {
+    const id = conversationId()
+    const first = await newFacade()
+    try {
+      await first.db.conversations.create(owner, id, '')
+      // 还没有行时必须答 `undefined`，**不能**答 `'claimed'` —— 后者会让"从没跑过"看起来像
+      // "跑到一半崩了"，接线处就会放行一次本该被拒的重放。
+      expect(await first.db.turns.turnStatus(owner, 'req-t')).toBeUndefined()
+      expect(await first.db.turns.claim(owner, id, 'req-t', 'hash')).toBe('claimed')
+      expect(await first.db.turns.turnStatus(owner, 'req-t')).toBe('claimed')
+      await first.db.turns.finish(owner, 'req-t')
+      expect(await first.db.turns.turnStatus(owner, 'req-t')).toBe('finished')
+      // 空 requestId 表示"没有幂等身份"，不该答出任何状态。
+      expect(await first.db.turns.turnStatus(owner, '')).toBeUndefined()
+    } finally { await first.db.close() }
+
+    // 换个实例（等价于重启）—— 这正是接线要解决的问题：重启后能分辨"已交付"与"崩在半路"。
+    const second = reopen(first.path)
+    try {
+      expect(await second.turns.turnStatus(owner, 'req-t')).toBe('finished')
+    } finally { await second.close() }
+  })
+
+  it('turnStatus 只认自己的 owner（别人的轮次返回 undefined，不泄露状态）', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.turns.claim(owner, id, 'req-o', 'hash')
+      expect(await db.turns.turnStatus(owner, 'req-o')).toBe('claimed')
+      // 同一个 requestId、不同的人：答出状态会让别人的重试被判成"已结算"而静默丢活。
+      expect(await db.turns.turnStatus(otherOwner, 'req-o')).toBeUndefined()
+    } finally { await db.close() }
+  })
+
   // -------------------------------------------------------------------
   // 三、待答问题：重启后仍能恢复"在等什么"
   // -------------------------------------------------------------------
