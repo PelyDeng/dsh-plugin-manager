@@ -16,9 +16,10 @@ beforeEach(async () => {
 })
 afterEach(async () => { await stub.close() })
 
-const makeClient = (options: { delays?: number[] } = {}) => new ButlerClient({
+const makeClient = (options: { delays?: number[]; writeAcceptTimeoutMs?: number } = {}) => new ButlerClient({
   origin: stub.origin,
   delays: options.delays ?? [5, 5],
+  writeAcceptTimeoutMs: options.writeAcceptTimeoutMs,
   onStatus: status => statuses.push(status),
 })
 
@@ -170,6 +171,44 @@ describe('只读订阅', () => {
     expect((await client.listConversations()).length).toBe(1)
   })
 
+  it('并发 observe 只启动一条订阅循环：输家立即让位，不产生孤儿观察', async () => {
+    // 修复前：守卫检查与置 observing=true 之间隔着 ensureDiscovered 的 await，
+    // 两个并发 observe 都能穿过守卫各自开循环，先启动的成为孤儿（observeAbort 只指向后者）。
+    stub.state.streamQueue.push({ events: [
+      { type: 'run', runId: 'run-1', state: 'running', taskId: 'task-1' },
+      { type: 'summary', taskId: 'task-1', text: '完成', state: 'completed', seq: 2, runId: 'run-1' },
+    ], done: true })
+    const client = makeClient()
+    const eventsA: string[] = []
+    const eventsB: string[] = []
+    const results = await Promise.allSettled([
+      client.observe('conv-1', 0, { onEvent: event => eventsA.push(event.type), onReset: async () => {} }),
+      client.observe('conv-1', 0, { onEvent: event => eventsB.push(event.type), onReset: async () => {} }),
+    ])
+    // 恰好一条观察赢下守卫并消费事件；另一条同步让位，不是各开一条订阅。
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    const rejected = results.filter(result => result.status === 'rejected') as PromiseRejectedResult[]
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0]?.reason).toBeInstanceOf(Error)
+    expect(rejected[0]?.reason.message).toBe('已有观察流在运行')
+    expect(eventsA.length + eventsB.length).toBe(2) // run + summary 只送进一条 handlers
+    expect(stub.state.subscriptions).toEqual([0])
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.subscriptions).toEqual([0]) // 没有孤儿循环再续订
+    expect(client.isObserving).toBe(false)
+  })
+
+  it('观察前的发现失败回退占位，后续 observe 可重新进入', async () => {
+    stub.state.identityStatus = 401
+    const client = makeClient()
+    await expect(client.observe('conv-1', 0, { onEvent: () => {}, onReset: async () => {} }))
+      .rejects.toMatchObject({ kind: 'unauthorized' })
+    expect(client.isObserving).toBe(false)
+    stub.state.identityStatus = 200
+    stub.state.streamQueue.push({ events: [], done: true })
+    await expect(client.observe('conv-1', 0, { onEvent: () => {}, onReset: async () => {} })).resolves.toBeUndefined()
+  })
+
   it('跨轮重连识别换轮：重读正确任务快照后从 0 重放当前轮', async () => {
     // 旧轮断线后管家开了新轮：新轮序号从 1 重新计数，旧游标会让服务端跳过新轮早期事件。
     // 客户端级测试不经历装载 probe；换轮时的一次 probe 返回新轮身份（新任务 task-2）。
@@ -228,5 +267,117 @@ describe('快照形状', () => {
   it('默认快照可被消费端直接投影', () => {
     expect(defaultSnapshot.subtasks[0]?.id).toBe('s1')
     expect(defaultSnapshot.state).toBe('running')
+  })
+})
+
+describe('写链路', () => {
+  it('提交受理：onAccepted 先行，事件按序送达并以本轮结束收尾', async () => {
+    stub.state.chatQueue.push({ events: [
+      { type: 'conversation', conversationId: 'conv-1' },
+      { type: 'run', runId: 'run-1', state: 'running', taskId: 'task-1' },
+      { type: 'summary', taskId: 'task-1', text: '完成', state: 'completed', seq: 2, runId: 'run-1' },
+    ], done: true })
+    const client = makeClient()
+    const order: string[] = []
+    await client.submitChat('conv-1', '写博客', 'req-1', {
+      onEvent: event => order.push(event.type),
+      onReset: async () => {},
+      onRoundEnd: state => order.push('end:' + state),
+    }, { onAccepted: () => order.push('accepted') })
+    expect(order).toEqual(['accepted', 'conversation', 'run', 'summary', 'end:running'])
+    // 请求体携带幂等标识；归属由服务端从登录身份判定，客户端不提交 owner。
+    expect(stub.state.chatRequests).toEqual([{ conversationId: 'conv-1', message: '写博客', requestId: 'req-1' }])
+  })
+
+  it('回复成员：请求体按 decideByAgent 分形状', async () => {
+    stub.state.replyQueue.push({ events: [{ type: 'run', runId: 'run-r', state: 'running', taskId: 'task-1' }], done: true })
+    const client = makeClient()
+    await client.submitReply({ conversationId: 'conv-1', taskId: 'task-1', subtaskId: 's1', text: '你看着办', decideByAgent: true, requestId: 'req-2' }, { onEvent: () => {}, onReset: async () => {} })
+    expect(stub.state.replyRequests[0]).toEqual({ taskId: 'task-1', subtaskId: 's1', decideByAgent: true, requestId: 'req-2' })
+  })
+
+  it('受理后事件流中断：不重新提交，转只读订阅从最后序号续上', async () => {
+    stub.state.chatQueue.push({ events: [
+      { type: 'run', runId: 'run-1', state: 'running', taskId: 'task-1' },
+      { type: 'subtask', taskId: 'task-1', id: 's1', state: 'running', seq: 2, runId: 'run-1' },
+    ], cut: true })
+    stub.state.streamQueue.push({ events: [
+      { type: 'summary', taskId: 'task-1', text: '完成', state: 'completed', seq: 3, runId: 'run-1' },
+    ], done: true })
+    const client = makeClient()
+    await client.submitChat('conv-1', '写博客', 'req-1', { onEvent: () => {}, onReset: async () => {} })
+    // 只提交过一次；断流后由只读订阅接管。
+    expect(stub.state.chatRequests).toHaveLength(1)
+    expect(stub.state.subscriptions).toEqual([2])
+  })
+
+  it('写流里的 reset：先回调重读快照，再转只读订阅从窗口左边缘之前续订', async () => {
+    stub.state.chatQueue.push({ events: [
+      { type: 'run', runId: 'run-1', state: 'running', taskId: 'task-1' },
+      { type: 'reset', runId: 'run-1', seq: 6, windowStart: 4 },
+    ], done: true })
+    stub.state.streamQueue.push({ events: [], done: true })
+    const client = makeClient()
+    const infos: { seq: number; windowStart?: number }[] = []
+    await client.submitChat('conv-1', '写博客', 'req-1', {
+      onEvent: () => {},
+      onReset: async (_reason, info) => { infos.push({ seq: info.seq, ...(info.windowStart === undefined ? {} : { windowStart: info.windowStart }) }) },
+    })
+    expect(infos).toEqual([{ seq: 6, windowStart: 4 }])
+    expect(stub.state.subscriptions).toEqual([3])
+  })
+
+  it('409 按冲突归类并保留服务端稳定码（version_conflict / run_result_unknown）', async () => {
+    stub.state.chatQueue.push({ status: 409, body: { error: '这一轮已经更新到第 2 版，请按最新内容重新提交', code: 'version_conflict' } })
+    const client = makeClient()
+    await expect(client.submitChat('conv-1', '写博客', 'req-1', { onEvent: () => {}, onReset: async () => {} }))
+      .rejects.toMatchObject({ kind: 'conflict', code: 'version_conflict' })
+    stub.state.chatQueue.push({ status: 409, body: { error: '这次提交的结果不明，不会重新执行', code: 'run_result_unknown', runId: 'run-x', conversationId: 'conv-1' } })
+    await expect(client.submitChat('conv-1', '写博客', 'req-2', { onEvent: () => {}, onReset: async () => {} }))
+      .rejects.toMatchObject({ kind: 'conflict', code: 'run_result_unknown' })
+    // 两类都是明确答复：客户端不重发。
+    expect(stub.state.chatRequests).toHaveLength(2)
+  })
+
+  it('403 归为 forbidden', async () => {
+    stub.state.chatQueue.push({ status: 403, body: { error: '请求来源不受信任', code: 'forbidden' } })
+    await expect(makeClient().submitChat('conv-1', '写博客', 'req-1', { onEvent: () => {}, onReset: async () => {} }))
+      .rejects.toMatchObject({ kind: 'forbidden' })
+  })
+
+  it('响应未知（连接被断开）：归为 unknown，不自动重试', async () => {
+    stub.state.chatQueue.push({ destroy: true })
+    await expect(makeClient().submitChat('conv-1', '写博客', 'req-1', { onEvent: () => {}, onReset: async () => {} }))
+      .rejects.toMatchObject({ kind: 'unknown' })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.chatRequests).toHaveLength(1)
+  })
+
+  it('响应未知（受理超时）：归为 unknown', async () => {
+    stub.state.chatQueue.push({ hang: true })
+    const client = makeClient({ writeAcceptTimeoutMs: 40 })
+    await expect(client.submitChat('conv-1', '写博客', 'req-1', { onEvent: () => {}, onReset: async () => {} }))
+      .rejects.toMatchObject({ kind: 'unknown' })
+    expect(stub.state.chatRequests).toHaveLength(1)
+  })
+
+  it('stop：accepted 与幂等空操作都不是错误；不重试', async () => {
+    const client = makeClient()
+    expect(await client.requestStop('conv-1', 'task-1')).toEqual({ accepted: true, reason: '' })
+    stub.state.stopPlan = { body: { ok: true, accepted: false, reason: '这个任务已经不在执行了' } }
+    expect(await client.requestStop('conv-1', 'task-1')).toEqual({ accepted: false, reason: '这个任务已经不在执行了' })
+    expect(stub.state.stopRequests).toEqual([
+      { conversationId: 'conv-1', taskId: 'task-1' },
+      { conversationId: 'conv-1', taskId: 'task-1' },
+    ])
+  })
+
+  it('stop 的 404 归为 forbidden、连接断开归为 unknown；都不重发', async () => {
+    stub.state.stopPlan = { status: 404, body: { error: '任务不存在或无权访问', code: 'not_found' } }
+    await expect(makeClient().requestStop('conv-1', 'task-1')).rejects.toMatchObject({ kind: 'forbidden' })
+    stub.state.stopPlan = { destroy: true }
+    await expect(makeClient().requestStop('conv-1', 'task-1')).rejects.toMatchObject({ kind: 'unknown' })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.stopRequests).toHaveLength(2)
   })
 })

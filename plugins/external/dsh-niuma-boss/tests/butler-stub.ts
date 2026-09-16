@@ -1,6 +1,17 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { TaskSnapshot } from '../src/task-projection.ts'
 
+/** 读一个写请求的 JSON 正文；解析失败按空对象处理。 */
+async function readBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = []
+  for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array))
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
+
 /**
  * 管家契约桩（测试共用）：按契约 v1 形状提供 identity、会话、历史、快照、probe
  * 与 SSE，全部状态可变，用于复现迟到响应、授权失效与换轮等时序场景。
@@ -15,6 +26,50 @@ export const defaultSnapshot: TaskSnapshot = {
 }
 
 export interface StreamStep { status?: number; events?: object[]; done?: boolean; destroy?: boolean }
+
+/** 写端点（/chat、/reply、/stop）的一段剧本：错误形态、断流形态或受理后的事件流。 */
+export interface WritePlan {
+  /** 非 0 时按该状态码回 JSON 响应（body 字段即响应体，含 error/code）。 */
+  status?: number
+  body?: object
+  /** 收到请求后不回应直接断开连接：复现「响应未知」。 */
+  destroy?: boolean
+  /** 收到请求后永不回应：复现受理超时（配合客户端缩短的受理时限）。 */
+  hang?: boolean
+  /** 受理成立、事件发出后断开连接：复现「受理已知、事件流中断」。 */
+  cut?: boolean
+  /** 受理成立后写在响应事件流上的事件序列。 */
+  events?: object[]
+  /** 事件发完后是否以 [DONE] 结束；false 表示这一轮还在跑、连接保持打开。 */
+  done?: boolean
+}
+
+/** `/chat` 的缺省剧本：一段受理后直奔完成的正常轮。 */
+export const defaultChatPlan = (payload: Record<string, unknown>): WritePlan => ({
+  events: [
+    { type: 'conversation', conversationId: payload.conversationId ?? '' },
+    { type: 'run', runId: 'run-chat', state: 'running', taskId: '', startedAt: 1, finishedAt: null },
+    { type: 'user', text: payload.message ?? '', time: 1, seq: 1, runId: 'run-chat' },
+    { type: 'chat', role: 'butler', text: '收到，安排执行。', time: 2, seq: 2, runId: 'run-chat' },
+    { type: 'plan', taskId: 'task-new', goal: String(payload.message ?? ''), seq: 3, runId: 'run-chat', subtasks: [{ id: 's1', goal: '执行第一步', agentId: 'blog', displayName: '博客' }] },
+    { type: 'subtask', taskId: 'task-new', id: 's1', state: 'running', agentId: 'blog', displayName: '博客', detail: '开始执行', seq: 4, runId: 'run-chat' },
+    { type: 'subtask', taskId: 'task-new', id: 's1', state: 'succeeded', agentId: 'blog', displayName: '博客', detail: '完成', seq: 5, runId: 'run-chat' },
+    { type: 'summary', taskId: 'task-new', text: '按目标完成。', state: 'completed', seq: 6, runId: 'run-chat' },
+  ],
+  done: true,
+})
+
+/** `/reply` 的缺省剧本：回复被受理，同任务换执行轮后完成。 */
+export const defaultReplyPlan = (payload: Record<string, unknown>): WritePlan => ({
+  events: [
+    { type: 'run', runId: 'run-reply', state: 'running', taskId: payload.taskId ?? '', startedAt: 1, finishedAt: null },
+    { type: 'subtask', taskId: payload.taskId ?? '', id: payload.subtaskId ?? '', state: 'running', agentId: 'blog', displayName: '博客', detail: '收到回复，继续执行', seq: 1, runId: 'run-reply' },
+    { type: 'subtask_delta', taskId: payload.taskId ?? '', id: payload.subtaskId ?? '', agentId: 'blog', delta: '（按你的选择定稿）', seq: 2, runId: 'run-reply' },
+    { type: 'subtask', taskId: payload.taskId ?? '', id: payload.subtaskId ?? '', state: 'succeeded', agentId: 'blog', displayName: '博客', detail: '完成', seq: 3, runId: 'run-reply' },
+    { type: 'summary', taskId: payload.taskId ?? '', text: '按你的选择完成。', state: 'completed', seq: 4, runId: 'run-reply' },
+  ],
+  done: true,
+})
 
 export class ButlerStubServer {
   readonly state = {
@@ -46,6 +101,16 @@ export class ButlerStubServer {
     subscriptions: [] as number[],
     /** 可选：按读取次数返回任务快照，用于复现快照内容随时间变化。 */
     snapshotFor: null as null | ((reads: number) => TaskSnapshot),
+    /** POST /chat 的剧本队列（先到先用）；耗尽后用缺省完成轮。 */
+    chatQueue: [] as WritePlan[],
+    /** POST /reply 的剧本队列；耗尽后用缺省完成轮。 */
+    replyQueue: [] as WritePlan[],
+    /** POST /stop 的剧本；null 用默认 {accepted:true}。 */
+    stopPlan: null as WritePlan | null,
+    /** 收到的写请求体（含 requestId 与正文，供幂等与「不重试」断言）。 */
+    chatRequests: [] as Record<string, unknown>[],
+    replyRequests: [] as Record<string, unknown>[],
+    stopRequests: [] as Record<string, unknown>[],
   }
 
   private server: Server
@@ -107,7 +172,51 @@ export class ButlerStubServer {
       response.end()
       return
     }
+    if (url.pathname === '/fixture-butler/chat' && request.method === 'POST') {
+      const payload = await readBody(request)
+      state.chatRequests.push(payload)
+      return this.serveWrite(state.chatQueue.shift() ?? defaultChatPlan(payload), response)
+    }
+    if (url.pathname === '/fixture-butler/reply' && request.method === 'POST') {
+      const payload = await readBody(request)
+      state.replyRequests.push(payload)
+      return this.serveWrite(state.replyQueue.shift() ?? defaultReplyPlan(payload), response)
+    }
+    if (url.pathname === '/fixture-butler/stop' && request.method === 'POST') {
+      const payload = await readBody(request)
+      state.stopRequests.push(payload)
+      const plan = state.stopPlan
+      if (plan?.destroy) { response.destroy(); return }
+      if (plan?.hang) return
+      if (plan?.status !== undefined) return json(plan.status, plan.body ?? { error: '停止失败', code: 'http_error' })
+      // /stop 的成功响应是 JSON（accepted:false 是幂等空操作，不是错误）。
+      return json(200, plan?.body ?? { ok: true, accepted: true })
+    }
     return json(404, { error: 'not found', code: 'not_found' })
+  }
+
+  /** 按剧本回应一个写请求：错误 JSON、断开、悬挂或受理后的事件流。 */
+  private serveWrite(plan: WritePlan, response: ServerResponse): void {
+    if (plan.hang) return
+    if (plan.status !== undefined) {
+      response.writeHead(plan.status, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify(plan.body ?? { error: '写请求失败', code: 'http_error' }))
+      return
+    }
+    if (plan.destroy) { response.destroy(); return }
+    response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+    for (const event of plan.events ?? []) response.write('data: ' + JSON.stringify(event) + '\n\n')
+    if (plan.cut) {
+      // 先把响应头与事件真正发出去，再断开连接：复现「受理已知、事件流中断」。
+      response.flushHeaders()
+      setTimeout(() => response.destroy(), 20)
+      return
+    }
+    if (plan.done !== false) {
+      response.write('data: [DONE]\n\n')
+      response.end()
+    }
+    // done === false：这一轮还在服务端执行，连接保持打开直到客户端断开。
   }
 
   async start(): Promise<string> {

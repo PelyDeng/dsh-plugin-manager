@@ -108,3 +108,23 @@ html, body, #app { height: 100%; margin: 0; }
 @media (orientation: portrait) {
   .task-book { width: 100vw; }
 }
+
+/* 派活表单：任务本顶部的提交入口；草稿保留到受理成立。 */
+.assign { display: flex; flex-direction: column; gap: 6px; margin: 0 0 12px; }
+.assign label { font-size: 13px; color: #55503f; }
+.assign textarea { resize: vertical; min-height: 44px; padding: 6px 8px; border-radius: 8px; border: 1px solid #d8d2c4; font: inherit; font-size: 13px; }
+.assign-actions { display: flex; gap: 8px; }
+.assign-actions button, .reply button, .stop { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 8px; border: 1px solid #c9c2b0; background: #2a3d52; color: #fff; cursor: pointer; }
+.assign-actions button:disabled, .reply button:disabled, .stop:disabled { opacity: .5; cursor: default; }
+.assign-actions .retry-submit { background: #9a6a1f; }
+.pending-hint { margin: 0; font-size: 12px; color: #8a6d1f; }
+/* 待重试提交存在期间草稿锁定：显示的是冻结正文，不让输入框偏离将要重发的内容。 */
+.assign textarea:disabled, .reply input:disabled { opacity: .5; cursor: default; }
+
+/* 停止按钮：受理即反馈，收敛以管家事件为准。 */
+.task .stop { margin-left: auto; padding: 2px 10px; font-size: 12px; background: #7c3a3a; }
+
+/* 等待中的成员：就地回复入口。 */
+.reply { display: flex; gap: 6px; margin-top: 8px; }
+.reply input { flex: 1; min-width: 0; padding: 5px 8px; border-radius: 8px; border: 1px solid #d8d2c4; font: inherit; font-size: 13px; }
+.reply button:last-child { background: #55624f; }

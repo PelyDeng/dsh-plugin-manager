@@ -111,10 +111,11 @@ export interface IdentityInfo {
 
 /** 管家事件流里会出现的事件；只声明本切片消费的字段。 */
 export interface ButlerEvent {
-  readonly type: 'run' | 'user' | 'chat' | 'chat_delta' | 'plan' | 'subtask' | 'subtask_delta' | 'subtask_thinking' | 'summary' | 'error' | 'reset'
+  readonly type: 'run' | 'user' | 'chat' | 'chat_delta' | 'plan' | 'subtask' | 'subtask_delta' | 'subtask_thinking' | 'summary' | 'error' | 'reset' | 'conversation'
   readonly seq?: number
   readonly runId?: string
   readonly taskId?: string
+  readonly conversationId?: string
   readonly state?: string
   readonly text?: string
   readonly message?: string
@@ -374,6 +375,12 @@ export function applyEvent(view: TaskView, event: ButlerEvent, now = Date.now())
   }
   const next: TaskView = { ...base, subtasks: base.subtasks, updatedAt: now }
   switch (event.type) {
+    case 'conversation': {
+      // 只在 `/chat` 的响应流开头出现一次：声明这一轮挂在哪个会话上。
+      // 会话刚由游戏创建、还没出现在列表里时，投影据此先记下归属。
+      if (event.conversationId) next.conversationId = event.conversationId
+      return next
+    }
     case 'run': {
       const runId = event.runId ?? ''
       if (runId && base.lastRunId && runId !== base.lastRunId) {

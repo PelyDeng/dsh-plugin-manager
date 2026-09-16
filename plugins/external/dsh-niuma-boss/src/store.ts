@@ -3,6 +3,23 @@ import type { ButlerStatus, HistoryItem } from './butler-client.ts'
 import { emptyTaskView, type ConversationSummary, type RunInfo, type TaskView } from './task-projection.ts'
 
 /**
+ * 一次待重试的提交：正文与 `requestId` 在生成时冻结，响应未知后的手动重试
+ * 逐字复用同一份——管家按「同 owner + 同类型 + 同 requestId」幂等，保证是同一次提交。
+ */
+export interface PendingSubmit {
+  readonly kind: 'chat' | 'reply'
+  readonly conversationId: string
+  readonly requestId: string
+  /** chat 的目标文本。 */
+  readonly message: string
+  /** reply 的定位与内容。 */
+  readonly taskId: string
+  readonly subtaskId: string
+  readonly replyText: string
+  readonly decideByAgent: boolean
+}
+
+/**
  * 任务本与连接状态的界面共享状态。只放业务/界面事件级别的数据：
  * 任务投影、会话列表、连接状态与弹层开合。人物逐帧坐标永远不进这里。
  */
@@ -18,10 +35,18 @@ export const useTaskBookStore = defineStore('task-book', {
     task: emptyTaskView() as TaskView,
     history: [] as HistoryItem[],
     activeRun: null as RunInfo | null,
-    /** 轻提示：资源错误、角色点击等；正式对白弹层属后续切片。 */
+    /** 轻提示：资源错误、角色点击、写链路结果等；正式对白弹层属后续切片。 */
     notice: '',
     /** 任务本开合；打开时暂停键盘移动，竖屏下为全屏弹层。 */
     bookOpen: false,
+    /** 派活表单草稿；受理成立后清空，失败与结果不明时保留以便重试。 */
+    assignDraft: '',
+    /** 各子任务的回复草稿（按 subtaskId）；受理成立后清空对应项。 */
+    replyDrafts: {} as Record<string, string>,
+    /** 有写请求在途；写入口据此禁用，避免并发提交。 */
+    submitting: false,
+    /** 响应未知、可原样重试的提交；其余失败（403/409 等）不留待重试。 */
+    pendingSubmit: null as PendingSubmit | null,
   }),
   getters: {
     selectedConversation: state => state.conversations.find(c => c.id === state.selectedId) ?? null,

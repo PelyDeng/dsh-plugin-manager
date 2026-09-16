@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * GameUI 的外壳：Phaser 挂载点 + 任务本/连接提示叠层。会话在本组件挂载后组装
- * （需要真实的 DOM 挂载点），业务接线全部在 GameSession 内，这里只有界面意图转发。
+ * （需要真实的 DOM 挂载点），业务接线全部在 GameSession 内，这里只有界面意图转发：
+ * 派活表单、等待成员的回复入口、停止本轮与结果展示都只是把意图交给会话。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useTaskBookStore } from './store'
@@ -27,6 +28,34 @@ const statusText = computed(() => {
     default: return store.status
   }
 })
+
+/** 当前是否有一轮可以停止：以管家给的权威运行状态为准，界面只做入口开关。 */
+const roundStoppable = computed(() =>
+  store.task.runState === 'running'
+  || store.activeRun?.state === 'running'
+  || ['queued', 'running', 'summarizing', 'waiting_user'].includes(store.task.state))
+
+/**
+ * 待重试提交的冻结正文摘要：pendingSubmit 存在期间草稿锁定、重试发送的是冻结
+ * 正文而非输入框当前内容，摘要如实展示将要重发的那份，避免「显示新文本、发出旧正文」。
+ */
+const pendingSummary = computed(() => {
+  const pending = store.pendingSubmit
+  if (!pending) return ''
+  const body = pending.kind === 'chat' ? pending.message : (pending.decideByAgent ? '让它自己拿主意' : pending.replyText)
+  return body.length > 30 ? body.slice(0, 30) + '…' : body
+})
+
+const assignUsable = computed(() => !store.submitting && store.pendingSubmit === null && store.assignDraft.trim() !== '')
+
+const onAssign = () => { if (assignUsable.value) void session?.submitTask(store.assignDraft) }
+
+const replyUsable = (subtaskId: string) =>
+  !store.submitting && store.pendingSubmit === null && (store.replyDrafts[subtaskId] ?? '').trim() !== ''
+
+const onReply = (subtaskId: string) => {
+  if (replyUsable(subtaskId)) void session?.replySubtask(subtaskId, store.replyDrafts[subtaskId] ?? '')
+}
 
 const authHref = computed(() => {
   const path = session?.client.identity?.authPath ?? '/auth'
@@ -95,11 +124,35 @@ onBeforeUnmount(() => {
       </nav>
 
       <section class="task" aria-label="当前任务">
+        <form class="assign" @submit.prevent="onAssign">
+          <label for="assign-goal">派活</label>
+          <textarea
+            id="assign-goal" v-model="store.assignDraft" rows="2"
+            placeholder="要派什么活？一句话说清目标；与管家入口共享同一份任务"
+            :disabled="store.submitting || store.pendingSubmit !== null"
+          ></textarea>
+          <div class="assign-actions">
+            <button type="submit" :disabled="!assignUsable">{{ store.submitting ? '提交中…' : '派活' }}</button>
+            <button
+              v-if="store.pendingSubmit" type="button" class="retry-submit"
+              :disabled="store.submitting" @click="session?.retrySubmit()"
+            >重试提交</button>
+          </div>
+          <p v-if="store.pendingSubmit" class="pending-hint" role="status">
+            上次提交结果不明，输入区已锁定；重试将原样发送冻结内容「{{ pendingSummary }}」（管家按 requestId
+            幂等，不会执行两次）。重试成功或被明确拒绝后恢复编辑。
+          </p>
+        </form>
+
         <template v-if="store.task.taskId">
           <h2>{{ store.task.goal || '（目标待管家给出）' }}</h2>
           <p class="state">
             <span class="badge" :data-state="store.task.state">{{ taskStateLabel(store.task.state) }}</span>
             <span v-if="store.task.runState && store.task.runState !== 'idle'" class="run">本轮：{{ store.task.runState }}</span>
+            <button
+              v-if="roundStoppable" type="button" class="stop"
+              :disabled="store.submitting" @click="session?.stopRound()"
+            >停止本轮</button>
           </p>
           <p v-if="store.task.butlerText" class="butler">{{ store.task.butlerText }}</p>
           <ul class="subtasks">
@@ -117,6 +170,18 @@ onBeforeUnmount(() => {
                 <pre>{{ subtask.thinking }}</pre>
               </details>
               <p v-if="subtask.text" class="text">{{ subtask.text }}</p>
+              <form v-if="subtask.state === 'waiting_user'" class="reply" @submit.prevent="onReply(subtask.id)">
+                <input
+                  v-model="store.replyDrafts[subtask.id]" type="text"
+                  placeholder="回一句话，这位成员继续干"
+                  :disabled="store.submitting || store.pendingSubmit !== null"
+                >
+                <button type="submit" :disabled="!replyUsable(subtask.id)">回复</button>
+                <button
+                  type="button" :disabled="store.submitting"
+                  @click="session?.replySubtask(subtask.id, '', true)"
+                >让它自己拿主意</button>
+              </form>
             </li>
           </ul>
           <p v-if="store.task.incomplete" class="incomplete" role="status">

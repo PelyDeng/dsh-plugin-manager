@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { GameSession } from '../src/game-session.ts'
 import { useTaskBookStore } from '../src/store.ts'
+import { taskStateLabel } from '../src/task-projection.ts'
 import { ButlerStubServer, defaultSnapshot } from './butler-stub.ts'
 
 /**
@@ -437,6 +438,193 @@ describe('换轮恢复边界', () => {
     expect(store.task.subtasks).toHaveLength(1)
     expect(store.task.subtasks[0]?.goal).toBe('新第一步')
     expect(store.task.subtasks[0]?.text).toBe('X')
+    session.stop()
+  })
+})
+
+describe('写意图闭环与错误语义', () => {
+  it('提交→SSE 状态推进→终态后补读同一份历史', async () => {
+    stub.state.run = null // 当前没有在跑的一轮，新提交即刻受理
+    stub.state.history = [{ id: 'task-new', conversationId: 'conv-1', goal: '写一篇新博客', state: 'completed', createdAt: 3, updatedAt: 4, subtaskTotal: 1, subtaskDone: 1 }]
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    await session.submitTask('写一篇新博客')
+    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    expect(store.task.taskId).toBe('task-new')
+    expect(store.task.goal).toBe('写一篇新博客')
+    // 终态后补读历史：任务本与管家入口看到同一份权威记录。
+    await vi.waitFor(() => expect(store.history.map(item => item.id)).toContain('task-new'))
+    expect(store.pendingSubmit).toBeNull()
+    expect(stub.state.chatRequests).toHaveLength(1)
+    session.stop()
+  })
+
+  it('等待用户回复：reply 后继续执行并完成', async () => {
+    stub.state.run = null
+    stub.state.chatQueue.push({ events: [
+      { type: 'conversation', conversationId: 'conv-1' },
+      { type: 'run', runId: 'run-1', state: 'running', taskId: 'task-1' },
+      { type: 'plan', taskId: 'task-1', goal: '写博客', seq: 1, runId: 'run-1', subtasks: [{ id: 's1', goal: '起草', agentId: 'blog', displayName: '博客' }] },
+      { type: 'subtask', taskId: 'task-1', id: 's1', state: 'running', seq: 2, runId: 'run-1' },
+      { type: 'subtask', taskId: 'task-1', id: 's1', state: 'waiting_user', detail: '两个版本选哪个？', seq: 3, runId: 'run-1' },
+    ], done: false }) // 等待中的轮不结束，连接保持打开
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    void session.submitTask('写博客')
+    await vi.waitFor(() => expect(store.task.subtasks[0]?.state).toBe('waiting_user'))
+    expect(store.task.subtasks[0]?.note).toBe('两个版本选哪个？')
+    await session.replySubtask('s1', '采用第一版')
+    await vi.waitFor(() => expect(store.task.state).toBe('completed'))
+    expect(stub.state.replyRequests[0]).toMatchObject({ taskId: 'task-1', subtaskId: 's1', text: '采用第一版' })
+    expect(stub.state.chatRequests).toHaveLength(1) // 回复不是再次派活
+    session.stop()
+  })
+
+  it('停止本轮：请求一次即受理提示，收敛以管家事件为准', async () => {
+    stub.state.streamQueue.push({ events: [], done: false }) // 先占住观察连接
+    stub.state.streamQueue.push({ events: [
+      { type: 'subtask', taskId: 'task-1', id: 's1', state: 'cancelled', seq: 6, runId: 'run-1' },
+      { type: 'summary', taskId: 'task-1', text: '已按请求停止', state: 'cancelled', seq: 7, runId: 'run-1' },
+    ], done: true })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    await session.stopRound()
+    expect(stub.state.stopRequests).toEqual([{ conversationId: 'conv-1', taskId: 'task-1' }])
+    expect(store.notice).toContain('已请求停止本轮')
+    await vi.waitFor(() => expect(store.task.state).toBe('cancelled'))
+    expect(store.task.runState === 'cancelled' || store.task.state === 'cancelled').toBe(true)
+    expect(stub.state.stopRequests).toHaveLength(1) // stop 不重试
+    session.stop()
+  })
+
+  it('403：提示且不重试，身份按不可信处理', async () => {
+    stub.state.chatQueue.push({ status: 403, body: { error: '请求来源不受信任', code: 'forbidden' } })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    await session.submitTask('写一篇新博客')
+    expect(store.notice).toContain('提交被拒绝')
+    expect(store.status).toBe('forbidden')
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.chatRequests).toHaveLength(1)
+    session.stop()
+  })
+
+  it('409 version_conflict：提示按码给出，不重试', async () => {
+    stub.state.chatQueue.push({ status: 409, body: { error: '这一轮已经更新到第 2 版，请按最新内容重新提交', code: 'version_conflict' } })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    await session.submitTask('写一篇新博客')
+    expect(store.notice).toContain('已被另一入口更新')
+    expect(store.pendingSubmit).toBeNull() // 明确拒绝：不留待重试
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.chatRequests).toHaveLength(1)
+    session.stop()
+  })
+
+  it('409 run_result_unknown：提示不会重新执行、读快照确认，不重试', async () => {
+    stub.state.chatQueue.push({ status: 409, body: { error: '这次提交的结果不明，不会重新执行', code: 'run_result_unknown', runId: 'run-x', conversationId: 'conv-1' } })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    await session.submitTask('写一篇新博客')
+    expect(store.notice).toContain('不会重新执行')
+    expect(store.notice).toContain('任务快照')
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.chatRequests).toHaveLength(1)
+    session.stop()
+  })
+
+  it('409 run_busy：提示等上一条消息，不重试', async () => {
+    stub.state.chatQueue.push({ status: 409, body: { error: '牛马大总管正在处理上一条消息，请先停止或等待完成', code: 'run_busy' } })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    await session.submitTask('再派一个活')
+    expect(store.notice).toContain('正在处理上一条消息')
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(stub.state.chatRequests).toHaveLength(1)
+    session.stop()
+  })
+
+  it('响应未知：保留原任务 ID 与原正文，重试复用同一 requestId 与正文', async () => {
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    expect(store.task.taskId).toBe('task-1')
+    expect(store.task.subtasks[0]?.text).toBe('草稿写到一半')
+    stub.state.chatQueue.push({ destroy: true })
+    await session.submitTask('写一篇新博客')
+    expect(store.notice).toContain('无法确认')
+    // 不编造失败：原任务投影与正文原样保留。
+    expect(store.task.taskId).toBe('task-1')
+    expect(store.task.subtasks[0]?.text).toBe('草稿写到一半')
+    expect(store.pendingSubmit?.message).toBe('写一篇新博客')
+    // 手动重试同一份提交：requestId 与正文逐字相同（管家幂等只执行一次）。
+    stub.state.chatQueue.push({ destroy: true })
+    session.retrySubmit()
+    await vi.waitFor(() => expect(stub.state.chatRequests).toHaveLength(2))
+    expect(stub.state.chatRequests[1]).toEqual(stub.state.chatRequests[0])
+    session.stop()
+  })
+
+  it('响应未知后 stop 返回 404：提示走 stop 路径，pendingSubmit 保留且重试仍发原正文', async () => {
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    // 先冻结一份待重试的提交（响应未知）。
+    stub.state.chatQueue.push({ destroy: true })
+    await session.submitTask('写一篇新博客')
+    expect(store.pendingSubmit?.message).toBe('写一篇新博客')
+    // stop 遇 404 不构成「那份提交已失效」的证据：只提示 stop 失败，不清 pendingSubmit。
+    stub.state.stopPlan = { status: 404, body: { error: '任务不存在或无权访问', code: 'not_found' } }
+    await session.stopRound()
+    expect(store.notice).toContain('停止请求失败')
+    expect(store.pendingSubmit?.message).toBe('写一篇新博客')
+    // 手动重试：仍是冻结的同一份 requestId 与正文。
+    stub.state.chatQueue.push({ destroy: true })
+    session.retrySubmit()
+    await vi.waitFor(() => expect(stub.state.chatRequests).toHaveLength(2))
+    expect(stub.state.chatRequests[1]).toEqual(stub.state.chatRequests[0])
+    session.stop()
+  })
+
+  it('响应未知后 stop 返回 403：身份不可信，沿用清空规则', async () => {
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    stub.state.chatQueue.push({ destroy: true })
+    await session.submitTask('写一篇新博客')
+    expect(store.pendingSubmit).not.toBeNull()
+    stub.state.stopPlan = { status: 403, body: { error: '请求来源不受信任', code: 'forbidden' } }
+    await session.stopRound()
+    expect(store.notice).toContain('停止请求被拒绝')
+    expect(store.pendingSubmit).toBeNull()
+    expect(store.status).toBe('forbidden')
+    session.stop()
+  })
+
+  it('external_pending：按待外部处理展示，不显示成完成', async () => {
+    stub.state.run = null
+    stub.state.chatQueue.push({ events: [
+      { type: 'conversation', conversationId: 'conv-1' },
+      { type: 'run', runId: 'run-x', state: 'running', taskId: '' },
+      { type: 'plan', taskId: 'task-x', goal: '发布园区安全通告', seq: 1, runId: 'run-x', subtasks: [{ id: 's1', goal: '起草并交回', agentId: 'blog', displayName: '博客' }] },
+      { type: 'subtask', taskId: 'task-x', id: 's1', state: 'external_pending', detail: '候选稿须在博客原对话选择采用', pending: { reason: '候选稿须在博客原对话选择采用', next: '采用之后可以再派一轮' }, artifacts: [{ kind: 'draft', title: '在博客查看并采用候选稿', path: '/blog?conversationId=x' }], seq: 2, runId: 'run-x' },
+      { type: 'summary', taskId: 'task-x', text: '材料已交回，还有 1 件事要在外面办完。', state: 'external_pending', seq: 3, runId: 'run-x' },
+    ], done: true })
+    const session = makeSession()
+    await session.refresh()
+    const store = useTaskBookStore()
+    await session.submitTask('发布园区安全通告')
+    await vi.waitFor(() => expect(store.task.state).toBe('external_pending'))
+    expect(taskStateLabel(store.task.state)).toBe('待外部处理')
+    expect(store.task.state).not.toBe('completed')
+    expect(store.task.subtasks[0]?.pending?.reason).toContain('选择采用')
     session.stop()
   })
 })
