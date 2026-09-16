@@ -38,6 +38,9 @@ const EXPECTED_TABLES = ['blog_drafts', 'blog_jobs', 'blog_operations', 'blog_au
 const CLOSE_TIMEOUT_MS = 5000
 /** /ready 就绪探针的耗时上限：连接与查询各有界，超过即按探针失败回答。 */
 const READY_PROBE_TIMEOUT_MS = 1500
+/** 语句/锁上限（连接启动参数注入，见池构造）。 */
+const STATEMENT_TIMEOUT_MS = 5000
+const LOCK_TIMEOUT_MS = 2000
 
 /**
  * blog 业务表的 PostgreSQL 存储。
@@ -48,15 +51,15 @@ const READY_PROBE_TIMEOUT_MS = 1500
 export class BlogPgStorage {
   constructor(dsn, onError) {
     this.dsn = dsn
-    this.pool = new Pool({ connectionString: dsn, max: 5, connectionTimeoutMillis: 3000, idleTimeoutMillis: 30000 })
+    this.pool = new Pool({
+      connectionString: dsn, max: 5, connectionTimeoutMillis: 3000, idleTimeoutMillis: 30000,
+      // 语句/锁超时走连接启动参数（服务端 -c），不额外发 SET：'connect' 钩子里 fire-and-forget
+      // 的 SET 会与该连接上的首个业务语句并发（pg 弃用警告，pg@9 起不再允许）。
+      options: `-c statement_timeout=${STATEMENT_TIMEOUT_MS} -c lock_timeout=${LOCK_TIMEOUT_MS}`,
+    })
     this.reportError = onError ?? (error => console.error('agents-group/blog: PostgreSQL 连接池错误', error))
     // 空闲连接的后台错误若无人监听会成为宿主 uncaughtException。
     this.pool.on('error', error => this.reportError(error))
-    // 连接建立后设置语句/锁超时；'connect' 在连接交付前同步触发，SET 排在业务语句之前。
-    this.pool.on('connect', client => {
-      void client.query('SET statement_timeout = 5000; SET lock_timeout = 2000')
-        .catch(error => this.reportError(error))
-    })
     this.readyError = undefined
     this.inited = false
     this.closed = false

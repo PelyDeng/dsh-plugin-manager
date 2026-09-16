@@ -55,6 +55,9 @@ const CLOSE_TIMEOUT_MS = 5000
  * 回答，不让 /ready 挂住调用方，也不在业务池里积压等待者。
  */
 const READY_PROBE_TIMEOUT_MS = 1500
+/** §2.7 的语句/锁上限（连接启动参数注入，见池构造）。 */
+const STATEMENT_TIMEOUT_MS = 5000
+const LOCK_TIMEOUT_MS = 2000
 
 interface TaskRow extends QueryResultRow {
   readonly id: string
@@ -160,16 +163,14 @@ export class PostgresTaskStorage implements ButlerStorage {
       max: 5,
       connectionTimeoutMillis: 3000,
       idleTimeoutMillis: 30000,
+      // §2.7：语句/锁超时走连接启动参数（服务端 -c），不额外发 SET——'connect' 钩子里
+      // fire-and-forget 的 SET 会与该连接上的首个业务语句并发（pg 警告 "client.query()
+      // when the client is already executing a query"，pg@9 起不再允许）。
+      options: `-c statement_timeout=${STATEMENT_TIMEOUT_MS} -c lock_timeout=${LOCK_TIMEOUT_MS}`,
     })
     this.reportError = onError ?? ((error) => { console.error('butler-console: PostgreSQL 连接池错误', error) })
     // §2.6：空闲连接的后台错误若无人监听会成为宿主 uncaughtException。
     this.pool.on('error', (error) => { this.reportError(error) })
-    // §2.7：连接建立后设置语句/锁超时。'connect' 在连接交付给等待者之前同步触发，
-    // SET 因此排在该连接上任何业务语句之前。
-    this.pool.on('connect', (client) => {
-      void client.query('SET statement_timeout = 5000; SET lock_timeout = 2000')
-        .catch((error: unknown) => { this.reportError(error as Error) })
-    })
   }
 
   /** §2.5 启动序列：schema 版本校验。缺表/版本不符分别归类，不自动改写版本、不自动建表。 */
