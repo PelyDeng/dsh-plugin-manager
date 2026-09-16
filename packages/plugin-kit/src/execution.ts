@@ -60,6 +60,25 @@ export interface AgentDispatchRequest {
   /** 完整简报：含整体目标、这位成员负责的部分和产出要求。 */
   readonly brief: string
   readonly taskGoal: string
+  /**
+   * 这一步的验收口径：**交回什么才算完成**。
+   *
+   * 由协调方在派单时给出（模型产出、协调方做形态校验后落库），执行方拿它当本轮自检的
+   * 依据——逐个对照「口径里提到的产出物」和自己实际交回的材料。缺省表示没有声明口径
+   * （老协调方，或这一步本来就没有可核验的产出），此时执行方不必自检，协调方也不因它
+   * 缺席而判不达标。
+   *
+   * 它约束的是**自洽**：口径与材料都是执行侧自报的，所以它能证明「说的和交的对得上」，
+   * 不能证明「活真的干完了」。协调方只做程序化对照，不重新理解业务。
+   */
+  readonly acceptance?: string
+  /**
+   * 这一次派活是对哪一条尝试的重做：填被重做的子任务 id。
+   *
+   * 与「同一目标的新尝试」是两件事：尝试链由协调方自己记录。给这一项是为了让执行方
+   * 知道上一轮产出没被采纳，从而换做法，而不是原样重跑一遍。缺省表示首次派活。
+   */
+  readonly reworkOf?: string
   /** 协调方做数据归属用的稳定键；鉴权请用 `actor`。 */
   readonly owner: string
   /**
@@ -94,6 +113,13 @@ export interface AgentReplyRequest {
   readonly text: string
   /** 用户选择「你看着办」时为 true，执行方自行决定，不必再追问。 */
   readonly decideByAgent: boolean
+  /**
+   * 这个子任务的验收口径，沿用派单时给出的那一份。
+   *
+   * 续问是同一个子任务的延续，口径不变——执行方拿它对照这一次的新产出，语义与
+   * {@link AgentDispatchRequest.acceptance} 完全一致。缺省表示这个子任务本来就没有口径。
+   */
+  readonly acceptance?: string
   /**
    * 该成员原业务会话：来自协调方落库的早期引用，执行方沿它续接，不再新建会话。
    * 没有引用时缺省，由执行方按自己的规则处理。
@@ -149,6 +175,25 @@ export interface AgentExternalPending {
   readonly next?: string
 }
 
+/**
+ * 执行方对照验收口径对自己这一轮产出的自检结论。
+ *
+ * 三种取值对协调方的意义不同，不能归并成一个布尔：
+ *
+ * - `passed`：对照口径自检通过。
+ * - `unverifiable`：**这一轮没有可核验的产出**（例如只查了资料、只是回了一句话）。它是
+ *   「没顾上过目」而不是「活没干好」，所以协调方如实标记，**不计入不达标**。
+ * - `failed`：自检发现产出与口径不符。
+ *
+ * 缺省表示执行方没有自检能力（老执行方）——协调方按「未核验」如实标记，同样不判不达标；
+ * 把它当成 `passed` 会让一次没人看过的交付显得已经被核验过。
+ */
+export interface AgentSelfCheck {
+  readonly status: 'passed' | 'unverifiable' | 'failed'
+  /** 自检说明，可空。 */
+  readonly detail?: string
+}
+
 /** 一次派活的结论。 */
 export interface AgentExecutionResult {
   /** `succeeded` 表示拿到了可用结果；其余按失败、取消或等待处理。 */
@@ -163,6 +208,8 @@ export interface AgentExecutionResult {
   readonly artifacts?: readonly AgentArtifact[]
   /** `external_pending` 时必填，理由见 {@link AgentExternalPending}。 */
   readonly externalPending?: AgentExternalPending
+  /** 对照 {@link AgentDispatchRequest.acceptance} 的自检结论；缺省见 {@link AgentSelfCheck}。 */
+  readonly selfCheck?: AgentSelfCheck
 }
 
 /** 协调方登记的单个执行入口。 */
