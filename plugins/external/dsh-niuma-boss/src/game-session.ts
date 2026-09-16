@@ -17,8 +17,10 @@
  */
 import { ButlerClient, ButlerError, type ButlerStatus } from './butler-client.ts'
 import { GameWorld } from './game-world.ts'
+import { browserStorage, RecoveryStore, scopeOf, type WorldSnapshot } from './recovery.ts'
 import { useTaskBookStore, type PendingSubmit } from './store.ts'
 import { applyEvent, applySnapshot, emptyTaskView, type ButlerEvent, type ConversationSummary, type RecoveryContext, type RunInfo } from './task-projection.ts'
+import type { Feet } from './world-runtime.ts'
 
 export interface GameSessionOptions {
   /** Phaser 挂载点。 */
@@ -27,12 +29,17 @@ export interface GameSessionOptions {
   readonly assetsBase: string
   /** 管家入口发现起点等客户端参数；本地联调可覆盖。 */
   readonly butler?: { origin?: string; identityPath?: string; delays?: readonly number[]; writeAcceptTimeoutMs?: number }
+  /** 位置快照存储；缺省用浏览器 localStorage，测试可传替身。 */
+  readonly recovery?: RecoveryStore
 }
 
 export class GameSession {
   readonly client: ButlerClient
   private world: GameWorld
   private store = useTaskBookStore()
+  /** 位置恢复：按登录用户分开存，只存地图/格子/朝向/偏好四项。 */
+  private readonly recovery: RecoveryStore
+  private scope = ''
   /** 刷新与选择的统一代次：旧请求的迟到响应不得写回任何状态。 */
   private generation = 0
   private currentTaskId = ''
@@ -52,18 +59,35 @@ export class GameSession {
         if (status === 'unauthorized' || status === 'forbidden') this.resetForIdentityChange()
       },
     })
+    this.recovery = options.recovery ?? new RecoveryStore(browserStorage())
     this.world = new GameWorld(options.parent, {
       assetsBase: options.assetsBase,
       inputLocked: () => this.store.bookOpen,
       onInteract: label => { this.store.notice = `${label}：正式对白将在后续版本接入` },
       onAssetsError: detail => { this.store.notice = detail },
       onReady: () => { this.store.worldReady = true },
+      onLoading: () => { this.store.worldReady = false },
+      // 位置事实按格变化回调一次；只写四项快照，不带任何任务内容。
+      onFeet: feet => this.saveFeet(feet),
+      restore: () => this.recovery.load(this.scope),
     })
   }
 
-  /** 启动：先让地图跑起来，再发现管家入口并装载任务本。游戏不因管家不可用而停摆。 */
+  /**
+   * 启动：先让地图跑起来，再发现管家入口并装载任务本。游戏不因管家不可用而停摆，
+   * 地图启动失败也不连带丢掉任务本：两条链路各自成败，任务本入口始终走到底。
+   */
   async start(): Promise<void> {
-    this.world.start()
+    // 身份确认前先按上次活跃用户恢复位置与界面偏好；确认后立刻校正（换用户就换位置）。
+    this.scope = this.recovery.lastScope()
+    this.store.bookOpen = this.recovery.load(this.scope)?.preferences.taskBookOpen === true
+    try {
+      await this.world.start()
+    } catch (error) {
+      // 出生地图资产缺失/过期时如实记录，不吞错也不静默；任务本照常刷新。
+      console.error('牛马-老板：地图启动失败', error)
+    }
+    this.store.worldMap = this.world.mapId
     await this.refresh()
   }
 
@@ -79,6 +103,7 @@ export class GameSession {
         this.resetForIdentityChange()
         token = this.generation
       }
+      this.applyUserScope()
       const conversations = await this.client.listConversations()
       // 旧刷新的列表响应迟到时直接丢弃，不得把前一用户的会话写回当前页面。
       if (token !== this.generation) return
@@ -88,6 +113,28 @@ export class GameSession {
       if (token !== this.generation) return
       this.report(error)
     }
+  }
+
+  /**
+   * 按登录身份切换位置作用域：换用户时把人物换到那位用户自己的落点，界面偏好
+   * 也换成他自己的，没有快照就回安全出生点。身份未知（未登录）时不动已恢复的位置。
+   */
+  private applyUserScope(): void {
+    const identityKey = this.client.identity?.key ?? ''
+    if (identityKey === '') return
+    const scope = scopeOf(identityKey)
+    if (scope === this.scope) return
+    this.scope = scope
+    this.recovery.remember(scope)
+    const snapshot = this.recovery.load(scope)
+    this.store.bookOpen = snapshot?.preferences.taskBookOpen === true
+    this.world.applyRestore(snapshot)
+  }
+
+  /** 位置事实按用户写回：只有地图、格子、朝向与界面偏好四项。 */
+  private saveFeet(feet: Feet): void {
+    this.store.worldMap = feet.map
+    this.recovery.save(this.scope, feet, { taskBookOpen: this.store.bookOpen })
   }
 
   /** 使旧会话的一切失效：取消订阅与在途请求，清空选择、任务与历史。 */
@@ -242,9 +289,10 @@ export class GameSession {
     }
   }
 
-  /** 页面隐藏：暂停渲染；订阅保持，回前台再按权威快照核对。 */
+  /** 页面隐藏：暂停渲染并立刻落盘位置；订阅保持，回前台再按权威快照核对。 */
   onHidden(): void {
     this.world.pause()
+    this.saveFeet(this.world.state)
   }
 
   /** 页面回前台：恢复渲染，重读任务快照并恢复订阅。 */
@@ -253,10 +301,16 @@ export class GameSession {
     void this.refresh()
   }
 
-  /** 用户意图：任务本开合。 */
-  openBook(): void { this.store.bookOpen = true }
+  /** 用户意图：任务本开合。界面偏好随位置一起按用户保存。 */
+  openBook(): void {
+    this.store.bookOpen = true
+    this.saveFeet(this.world.state)
+  }
 
-  closeBook(): void { this.store.bookOpen = false }
+  closeBook(): void {
+    this.store.bookOpen = false
+    this.saveFeet(this.world.state)
+  }
 
   /** 用户意图：断线/过期后的手动重试。 */
   retry(): void {

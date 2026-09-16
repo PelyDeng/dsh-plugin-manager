@@ -30,6 +30,8 @@ export const useTaskBookStore = defineStore('task-book', {
     statusDetail: '',
     /** Phaser 出生地图是否渲染完成。 */
     worldReady: false,
+    /** 老板当前所在地图 id（office/street/cafe），供界面标注与诊断。 */
+    worldMap: 'office',
     conversations: [] as ConversationSummary[],
     selectedId: '',
     task: emptyTaskView() as TaskView,

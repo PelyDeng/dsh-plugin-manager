@@ -3,15 +3,21 @@
  * GameUI 的外壳：Phaser 挂载点 + 任务本/连接提示叠层。会话在本组件挂载后组装
  * （需要真实的 DOM 挂载点），业务接线全部在 GameSession 内，这里只有界面意图转发：
  * 派活表单、等待成员的回复入口、停止本轮与结果展示都只是把意图交给会话。
+ *
+ * 横竖屏：旋转不清空任何界面状态（位置与任务本开合都由会话/存储保存，旋转只改布局）；
+ * 可见区域按 visualViewport 收缩，软键盘不遮挡输入框（真机未验证）。
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useTaskBookStore } from './store'
 import { GameSession } from './game-session'
 import { taskStateLabel } from './task-projection'
+import { installViewportHeight } from './viewport'
 
 const store = useTaskBookStore()
 const host = ref<HTMLElement>()
+const book = ref<HTMLElement>()
 let session: GameSession | undefined
+let detachViewport: (() => void) | undefined
 
 const assetsBase = ((globalThis as { __NIUMA_BOSS_CONFIG__?: { routePrefix: string } }).__NIUMA_BOSS_CONFIG__?.routePrefix ?? '/niuma-boss') + '/generated/'
 
@@ -70,24 +76,33 @@ const formatTime = (value: number): string => {
 
 const onVisibility = () => { document.hidden ? session?.onHidden() : session?.onVisible() }
 
+/** 软键盘弹出时把输入框滚进可见区；真机未验证，只保证有焦点就把目标带进视野。 */
+const onFocusIn = (event: FocusEvent) => {
+  const target = event.target as HTMLElement | null
+  target?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+}
+
 onMounted(() => {
   session = new GameSession({ parent: host.value!, assetsBase })
+  detachViewport = installViewportHeight(window, document)
   document.addEventListener('visibilitychange', onVisibility)
   void session.start()
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
+  detachViewport?.()
   session?.stop()
 })
 </script>
 
 <template>
-  <main class="shell" data-scene="office">
+  <main class="shell" :data-scene="store.worldMap">
     <section ref="host" class="game" aria-label="牛马办公楼"></section>
 
     <header class="hud" aria-label="状态与入口">
       <span class="badge" :data-status="store.status">{{ statusText }}</span>
+      <span class="badge" data-map>{{ store.worldMap === 'office' ? '办公楼' : store.worldMap === 'street' ? '商业街' : store.worldMap === 'cafe' ? '咖啡店' : store.worldMap }}</span>
       <button v-if="!store.worldReady" class="badge" type="button" disabled>地图装载中…</button>
       <button class="book-toggle" type="button" @click="session?.openBook()">任务本</button>
     </header>
@@ -104,7 +119,7 @@ onBeforeUnmount(() => {
       管家接口版本不兼容，请更新游戏或管家后再试；地图移动不受影响。
     </div>
 
-    <aside v-if="store.bookOpen" class="task-book" aria-label="任务本">
+    <aside v-if="store.bookOpen" ref="book" class="task-book" aria-label="任务本" @focusin="onFocusIn">
       <header>
         <strong>任务本</strong>
         <button type="button" @click="session?.closeBook()">关闭</button>

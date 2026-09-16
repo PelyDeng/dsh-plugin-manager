@@ -2,10 +2,16 @@
 
 html, body, #app { height: 100%; margin: 0; }
 
-.shell { position: relative; width: 100%; height: 100%; overflow: hidden; background: #dbe9f4; font-family: system-ui, 'Microsoft YaHei', sans-serif; }
+/* 外壳按可见高度（--vvh，由 viewport.ts 跟随 visualViewport 更新）收缩：
+   软键盘弹出时任务本与输入框留在可见区内；真机行为未验证。 */
+.shell {
+  position: relative; width: 100%; height: var(--vvh, 100%); overflow: hidden;
+  background: #dbe9f4; font-family: system-ui, 'Microsoft YaHei', sans-serif;
+  overscroll-behavior: none; touch-action: manipulation;
+}
 
 .game { position: absolute; inset: 0; }
-.game canvas { display: block; }
+.game canvas { display: block; touch-action: manipulation; }
 
 /* 顶部 HUD：连接状态与任务本入口，浮动不占游戏空间。 */
 .hud {
@@ -104,9 +110,16 @@ html, body, #app { height: 100%; margin: 0; }
 .history li { display: flex; justify-content: space-between; gap: 8px; align-items: center; font-size: 13px; }
 .history .goal { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* 竖屏：任务本占满全屏（首版移动精简布局约定）。 */
+/* 竖屏：任务本占满全屏（首版移动精简布局约定）；横向加宽点击区，输入框留在可见区内。
+   主要触摸控件的最小高度由下面的通用规则保证（横屏同样是主要体验，不能只在竖屏加高）。 */
 @media (orientation: portrait) {
-  .task-book { width: 100vw; }
+  .task-book { width: 100vw; padding-bottom: env(safe-area-inset-bottom, 0); }
+  .assign textarea { min-height: 72px; }
+  .assign-actions button, .reply button, .stop, .book-toggle {
+    padding-left: 16px; padding-right: 16px;
+  }
+  .task-book > header button { min-height: 44px; padding-left: 16px; padding-right: 16px; }
+  .reply input, .assign textarea { font-size: 16px; }
 }
 
 /* 派活表单：任务本顶部的提交入口；草稿保留到受理成立。 */
@@ -115,6 +128,9 @@ html, body, #app { height: 100%; margin: 0; }
 .assign textarea { resize: vertical; min-height: 44px; padding: 6px 8px; border-radius: 8px; border: 1px solid #d8d2c4; font: inherit; font-size: 13px; }
 .assign-actions { display: flex; gap: 8px; }
 .assign-actions button, .reply button, .stop { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 8px; border: 1px solid #c9c2b0; background: #2a3d52; color: #fff; cursor: pointer; }
+/* 主要触摸控件（任务本开关、派活/回复/停止按钮）：两种方向下都不小于 48px；
+   横屏是主要体验，最小高度只能在这里定，竖屏媒体查询里只做横向加宽。 */
+.book-toggle, .assign-actions button, .reply button, .stop { min-height: 48px; }
 .assign-actions button:disabled, .reply button:disabled, .stop:disabled { opacity: .5; cursor: default; }
 .assign-actions .retry-submit { background: #9a6a1f; }
 .pending-hint { margin: 0; font-size: 12px; color: #8a6d1f; }

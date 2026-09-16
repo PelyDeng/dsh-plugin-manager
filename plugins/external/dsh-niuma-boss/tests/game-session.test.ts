@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { GameSession } from '../src/game-session.ts'
+import { LAST_SCOPE_KEY, RecoveryStore, STORAGE_PREFIX, scopeOf } from '../src/recovery.ts'
 import { useTaskBookStore } from '../src/store.ts'
 import { taskStateLabel } from '../src/task-projection.ts'
 import { ButlerStubServer, defaultSnapshot } from './butler-stub.ts'
@@ -8,15 +9,41 @@ import { ButlerStubServer, defaultSnapshot } from './butler-stub.ts'
 /**
  * 身份与归属边界：换登录人、空会话列表、登录失效、订阅授权失效、旧响应迟到
  * 都必须清空或丢弃旧用户的任务投影与历史，不保留可能属于他人的数据。
- * 世界模块带 Phaser（需要真实 DOM），会话层测试 mock 掉，不启动渲染。
+ * 世界模块带 Phaser（需要真实 DOM），会话层测试 mock 掉，不启动渲染；mock 记录会话
+ * 传进来的位置选项与调用，用来断言按用户恢复、落盘内容与后台暂停/回前台刷新。
  */
+
+const worldMock = vi.hoisted(() => ({
+  options: undefined as {
+    restore?: () => unknown
+    onFeet?: (feet: { map: string; cell: [number, number]; facing: string }) => void
+  } | undefined,
+  feet: { map: 'office', cell: [34, 26] as [number, number], facing: 'south' },
+  reloads: [] as unknown[],
+  /** start 时的恢复候选：角色在身份确认前按上次活跃用户恢复。 */
+  boot: undefined as unknown,
+  /** 地图启动失败（出生图资产缺失/过期）：GameWorld.start 抛错。 */
+  startFailed: false,
+  paused: 0,
+  resumed: 0,
+}))
 
 vi.mock('../src/game-world.ts', () => ({
   GameWorld: class {
-    start() { return {} }
-    pause() {}
-    resume() {}
+    private readonly options: typeof worldMock.options
+    constructor(_parent: unknown, options: typeof worldMock.options) { this.options = options; worldMock.options = options }
+    get state() { return { map: worldMock.feet.map, cell: [...worldMock.feet.cell], facing: worldMock.feet.facing } }
+    get mapId() { return worldMock.feet.map }
+    start() {
+      worldMock.boot = this.options?.restore?.()
+      if (worldMock.startFailed) return Promise.reject(new Error('地图资源加载失败：office（HTTP 404）'))
+      return Promise.resolve()
+    }
+    pause() { worldMock.paused++ }
+    resume() { worldMock.resumed++ }
     destroy() {}
+    movementLocked() { return false }
+    applyRestore(snapshot: unknown) { worldMock.reloads.push(snapshot) }
   },
 }))
 
@@ -25,15 +52,31 @@ let origin: string
 
 beforeEach(async () => {
   setActivePinia(createPinia())
+  worldMock.options = undefined
+  worldMock.feet = { map: 'office', cell: [34, 26], facing: 'south' }
+  worldMock.reloads = []
+  worldMock.startFailed = false
+  worldMock.paused = 0
+  worldMock.resumed = 0
   stub = new ButlerStubServer()
   origin = await stub.start()
 })
 afterEach(async () => { await stub.close() })
 
-const makeSession = () => new GameSession({
+/** 每份存储独立：位置快照按用户写，测试要能看到全量文本。 */
+class MemoryStorage {
+  readonly values = new Map<string, string>()
+  getItem(key: string) { return this.values.get(key) ?? null }
+  setItem(key: string, value: string) { this.values.set(key, value) }
+  removeItem(key: string) { this.values.delete(key) }
+  get dump() { return [...this.values.entries()].map(([k, v]) => k + '=' + v).join('\n') }
+}
+
+const makeSession = (storage = new MemoryStorage()) => new GameSession({
   parent: {} as HTMLElement, // 世界已 mock，挂载点不会真的被使用
   assetsBase: '/niuma-boss/generated/',
   butler: { origin, delays: [5, 5] },
+  recovery: new RecoveryStore(storage, id => ['office', 'street', 'cafe'].includes(id)),
 })
 
 describe('身份与归属边界', () => {
@@ -640,5 +683,127 @@ describe('写意图闭环与错误语义', () => {
     expect(store.task.state).not.toBe('completed')
     expect(store.task.subtasks[0]?.pending?.reason).toContain('选择采用')
     session.stop()
+  })
+})
+
+/**
+ * 位置恢复（第三切片）：localStorage 按用户只存地图/格子/朝向/偏好四项，
+ * 任务正文与身份原文都不落盘；坏快照回安全出生点；后台暂停、回前台刷新权威快照。
+ */
+describe('按用户的位置恢复', () => {
+  const identityOf = (key: string) => ({ mode: 'authenticated', key, label: '已登录', authPath: '/auth', routePrefix: '/fixture-butler', contractVersion: 1 })
+
+  it('启动时按上次活跃用户恢复位置与界面偏好，身份确认后按该用户的作用域落盘', async () => {
+    const storage = new MemoryStorage()
+    const alice = scopeOf('user:a')
+    storage.setItem(LAST_SCOPE_KEY, alice)
+    storage.setItem(STORAGE_PREFIX + alice, JSON.stringify({ map: 'street', cell: [8, 12], facing: 'east', preferences: { taskBookOpen: true } }))
+    const session = makeSession(storage)
+    await session.start()
+    const store = useTaskBookStore()
+    // 启动就按上次活跃用户恢复：位置候选与任务本开合偏好都来自他自己的快照。
+    expect(worldMock.boot).toMatchObject({ map: 'street', cell: [8, 12] })
+    expect(store.bookOpen).toBe(true)
+    // 登录人就是同一位：不需要再换位置，也不会被清成出生点。
+    expect(worldMock.reloads).toHaveLength(0)
+    // 位置变化按当前用户（user:a）落盘，只有四项。
+    worldMock.options?.onFeet?.({ map: 'street', cell: [9, 13], facing: 'south' })
+    expect(JSON.parse(storage.getItem(STORAGE_PREFIX + alice)!)).toEqual({ map: 'street', cell: [9, 13], facing: 'south', preferences: { taskBookOpen: true } })
+    // 换用户：位置与界面偏好一起换成 B 自己的。
+    storage.setItem(STORAGE_PREFIX + scopeOf('user:b'), JSON.stringify({ map: 'cafe', cell: [6, 11], facing: 'north', preferences: { taskBookOpen: false } }))
+    stub.state.identityBody = identityOf('user:b')
+    await session.refresh()
+    expect(store.bookOpen).toBe(false)
+    expect(worldMock.reloads[0]).toMatchObject({ map: 'cafe', cell: [6, 11], facing: 'north' })
+    session.stop()
+  })
+
+  it('换用户：人物换到那位用户自己的落点，没有快照回安全出生点', async () => {
+    const storage = new MemoryStorage()
+    const session = makeSession(storage)
+    await session.start()
+    expect(worldMock.reloads).toHaveLength(1)
+    // B 有自己的位置快照；把身份换成 user:b 后人物按 B 的落点重开。
+    const bScope = scopeOf('user:b')
+    storage.setItem(STORAGE_PREFIX + bScope, JSON.stringify({ map: 'cafe', cell: [6, 11], facing: 'north', preferences: { taskBookOpen: false } }))
+    stub.state.identityBody = identityOf('user:b')
+    await session.refresh()
+    expect(worldMock.reloads[1]).toMatchObject({ map: 'cafe', cell: [6, 11], facing: 'north' })
+    // C 没有快照：回安全出生点（null 由会话交给世界判定）。
+    stub.state.identityBody = identityOf('user:c')
+    await session.refresh()
+    expect(worldMock.reloads[2]).toBeNull()
+    session.stop()
+  })
+
+  it('落盘只有四项：没有任务正文、会话内容、requestId 或身份原文', async () => {
+    const storage = new MemoryStorage()
+    const session = makeSession(storage)
+    await session.refresh()
+    const store = useTaskBookStore()
+    // 任务本里已经有权威正文（写博客/草稿写到一半），这些内容一律不进浏览器存储。
+    expect(store.task.goal).toBe('写博客')
+    worldMock.options?.onFeet?.({ map: 'office', cell: [30, 20], facing: 'west' })
+    session.openBook()
+    worldMock.options?.onFeet?.({ map: 'office', cell: [31, 20], facing: 'west' })
+    const snapshotLine = [...storage.values.entries()].find(([key]) => key !== LAST_SCOPE_KEY && !key.endsWith('last'))
+    expect(snapshotLine).toBeDefined()
+    const parsed = JSON.parse(snapshotLine![1])
+    expect(Object.keys(parsed)).toEqual(['map', 'cell', 'facing', 'preferences'])
+    expect(parsed).toEqual({ map: 'office', cell: [31, 20], facing: 'west', preferences: { taskBookOpen: true } })
+    expect(storage.dump).not.toContain('写博客')
+    expect(storage.dump).not.toContain('草稿写到一半')
+    expect(storage.dump).not.toContain('user:a')
+    expect(storage.dump).not.toContain('requestId')
+    session.stop()
+  })
+
+  it('后台暂停并立刻落盘，回前台恢复渲染并重读权威快照', async () => {
+    const storage = new MemoryStorage()
+    const session = makeSession(storage)
+    await session.refresh()
+    const store = useTaskBookStore()
+    // 后台期间管家那边换了内容：回前台必须重读权威快照，而不是沿用本地视图。
+    stub.state.history = [{ id: 'task-2', conversationId: 'conv-1', goal: '回来后读到的任务', state: 'completed', createdAt: 3, updatedAt: 4, subtaskTotal: 0, subtaskDone: 0 }]
+    stub.state.snapshot = { ...defaultSnapshot, id: 'task-2', goal: '回来后读到的任务', state: 'completed' }
+    stub.state.run = null
+    session.onHidden()
+    expect(worldMock.paused).toBe(1)
+    const scope = scopeOf('user:a')
+    expect(JSON.parse(storage.getItem(STORAGE_PREFIX + scope)!)).toMatchObject({ map: 'office', cell: [34, 26] })
+    session.onVisible()
+    expect(worldMock.resumed).toBe(1)
+    await vi.waitFor(() => expect(store.history[0]?.goal).toBe('回来后读到的任务'))
+    session.stop()
+  })
+})
+
+/**
+ * 启动边界：任务本与地图互不影响（game-world 头注释声明）。出生地图资产缺失/过期时
+ * world.start 抛错，任务本（列表 + 订阅）必须照常装载，错误如实记录、不静默吞掉。
+ */
+describe('地图启动失败不连带任务本', () => {
+  it('world.start 抛错：错误如实记录，任务本仍刷新（列表与订阅可用）', async () => {
+    worldMock.startFailed = true
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const session = makeSession()
+      await session.start()
+      const store = useTaskBookStore()
+      // 地图挂了但任务本入口照常走到底：会话列表、当前任务与历史都是权威数据。
+      expect(store.conversations).toHaveLength(1)
+      expect(store.selectedId).toBe('conv-1')
+      expect(store.task.taskId).toBe('task-1')
+      expect(store.task.goal).toBe('写博客')
+      expect(store.task.subtasks[0]?.text).toBe('草稿写到一半')
+      // 订阅可用：probe 说这一轮在跑，只读观察流按 after=0 接上，链路状态由流接通给出「已连接」。
+      await vi.waitFor(() => expect(store.status).toBe('ready'))
+      expect(stub.state.subscriptions[0]).toBe(0)
+      // 错误如实记录（不静默），原样带上异常对象。
+      expect(errors).toHaveBeenCalledWith('牛马-老板：地图启动失败', expect.any(Error))
+      session.stop()
+    } finally {
+      errors.mockRestore()
+    }
   })
 })
