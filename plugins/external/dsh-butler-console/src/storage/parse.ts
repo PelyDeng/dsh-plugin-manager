@@ -1,13 +1,14 @@
 /**
- * JSON 列的纯解析函数：从原 `store.ts` 原样提取，SQLite 与 PostgreSQL 两条存储实现共用，
- * 行为逐字保持（ damaged/unknown 分类语义不因换库改变）。
+ * JSON 列的纯解析函数：PostgreSQL 实现（postgres.ts）与 SQLite 测试双实现
+ * （tests/helpers/sqlite-test-store.ts）共用同一份，行为逐字保持（damaged/unknown 分类
+ * 语义不因换库改变）。
  *
  * 原则：输入是落库的 TEXT，输出是「能信的记录」或明确的分类结论，**不静默补造**——
  * 损坏不降级为空值（那会把「有材料但读不出来」伪装成「没有材料」），合法值也不被重算。
  *
  * 对齐说明：`parseDependsOnStrict` 给出的分类是编排层拒派的唯一依据；`damaged` 时记录侧的
- * `dependsOn` 取值走宽松的 {@link parseDependsOn}（能过滤出的字符串项照常给出），SQLite 与
- * PostgreSQL 两条实现在这一点上保持一致。
+ * `dependsOn` 取值走宽松的 {@link parseDependsOn}（能过滤出的字符串项照常给出），两条
+ * 实现在这一点上保持一致。
  */
 
 import type { AgentArtifact } from '@dsh-plugin-manager/plugin-kit'

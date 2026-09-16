@@ -16,8 +16,8 @@ import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole, effectiveSubtasks } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor } from '../src/protocol.ts'
-import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
-import { TaskStore, type SubtaskRecord } from '../src/store.ts'
+import { SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
+import type { SubtaskRecord } from '../src/storage/types.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }

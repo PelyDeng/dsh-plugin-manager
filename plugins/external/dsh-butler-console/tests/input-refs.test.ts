@@ -1,10 +1,11 @@
 /**
  * 派单材料快照与协作返回留存的持久化语义。
  *
- * 这里覆盖**存储层**能独立验证的部分：schema 8 的两列与旧库迁移、三态（未知 / `[]` / 非空）、
+ * 这里覆盖**存储层**能独立验证的部分：schema 8 的两列、三态（未知 / `[]` / 非空）、
  * 首次派单固定后不再被改写（含 `[]` 也是已固定值）、协作返回原文的留存（合法空文本要编码成
  * JSON，不能因为空串被 COALESCE 当成「不传」）、嵌套损坏按未知处理而不是修补成可派单材料、
- * 以及关闭重开后仍然可读。
+ * 以及关闭重开后仍然可读。旧库（v7 及更早）升上来的投影语义由 migrate-storage.test.ts 的
+ * v1..v8 fixture 与等价性验收承接。
  *
  * 派单链路的端到端断言（员工实际收到的 message、缺材料拒绝派单、外部待办经重开进入下游、
  * 续问后既有下游快照不变）在 `input-refs-flow.test.ts`；对外响应不含内部字段的断言在
@@ -17,7 +18,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Actor } from '@dsh-plugin-manager/plugin-kit'
-import { TaskStore } from '../src/store.ts'
+import { TaskStore } from './helpers/sqlite-test-store.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
@@ -35,35 +36,6 @@ afterEach(() => {
     }
   }
 })
-
-/** 建一个 schema 7 的旧库：列清单与加这两列之前一致。 */
-function legacyDb(path: string): void {
-  const db = new DatabaseSync(path)
-  db.exec(`
-    CREATE TABLE tasks (
-      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, owner_namespace TEXT NOT NULL,
-      owner_id TEXT NOT NULL, goal TEXT NOT NULL, state TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
-      summary TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, finished_at INTEGER,
-      accepted_version INTEGER NOT NULL DEFAULT 1, processed_version INTEGER NOT NULL DEFAULT 1
-    );
-    CREATE TABLE subtasks (
-      task_id TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL, goal TEXT NOT NULL,
-      agent_id TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', state TEXT NOT NULL,
-      result TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
-      artifacts TEXT NOT NULL DEFAULT '', conversation_id TEXT NOT NULL DEFAULT '',
-      logical_id TEXT NOT NULL DEFAULT '', supersedes TEXT NOT NULL DEFAULT '',
-      depends_on TEXT NOT NULL DEFAULT '', requires_external_action INTEGER NOT NULL DEFAULT 0,
-      started_at INTEGER, finished_at INTEGER, PRIMARY KEY (task_id, id)
-    );
-    PRAGMA user_version = 7;
-  `)
-  db.prepare('INSERT INTO tasks(id,conversation_id,owner_namespace,owner_id,goal,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)')
-    .run('task-old', conversationId, actor.namespace, actor.userId, '老任务', 'running', 1, 2)
-  db.prepare('INSERT INTO subtasks(task_id,id,seq,goal,state,result) VALUES(?,?,?,?,?,?)')
-    .run('task-old', 's1', 1, '老目标', 'succeeded', '老摘要')
-  db.close()
-}
 
 /** 直接落一条任务与子任务：这些用例只验存储层语义，不走需要会话归属校验的公开写入口。 */
 function newTask(path: string): void {
@@ -113,30 +85,10 @@ function rawColumn(path: string, column: 'input_refs' | 'member_return'): string
   return row.value
 }
 
-describe('schema 8：两列与旧库迁移', () => {
+describe('schema 8：两列存在', () => {
   it('新库为 schema 8，两列存在', () => {
     const path = tempDb()
     const store = new TaskStore(path)
-    const db = new DatabaseSync(path)
-    expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 8 })
-    const columns = (db.prepare('PRAGMA table_info(subtasks)').all() as unknown as { name: string }[]).map(row => row.name)
-    expect(columns).toContain('input_refs')
-    expect(columns).toContain('member_return')
-    db.close()
-    store.close()
-  })
-
-  it('v7 旧库只增列，旧记录两列留空（未知），不补造材料', () => {
-    const path = tempDb()
-    legacyDb(path)
-    const store = new TaskStore(path)
-    const legacy = store.task(actor, 'task-old')?.subtasks[0]
-    expect(legacy?.result).toBe('老摘要')
-    // 旧记录没有留存：未知，而不是「已核验无需材料」的空数组。
-    expect(legacy?.inputRefs).toBeUndefined()
-    // 也不能读成「还没固定」：这条记录是派出过的（状态已不是排队中），只是没留材料。
-    expect(legacy?.inputRefsState).toBe('unknown')
-    expect(legacy?.memberReturn).toBeUndefined()
     const db = new DatabaseSync(path)
     expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 8 })
     const columns = (db.prepare('PRAGMA table_info(subtasks)').all() as unknown as { name: string }[]).map(row => row.name)

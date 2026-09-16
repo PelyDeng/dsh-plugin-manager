@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { Pool } from 'pg'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { TaskStore } from '../src/store.ts'
+import { TaskStore } from './helpers/sqlite-test-store.ts'
 import { main, runMigration } from '../scripts/migrate-storage.ts'
 
 const DSN = process.env.BUTLER_MIGRATE_PG_DSN ?? ''

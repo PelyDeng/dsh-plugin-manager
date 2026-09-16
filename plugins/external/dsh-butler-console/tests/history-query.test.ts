@@ -20,9 +20,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
-import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
+import { SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
 import { STORAGE_SCHEMA_VERSION } from '../src/storage/postgres.ts'
-import { TaskStore } from '../src/store.ts'
 import { installWeb } from '../src/web.ts'
 
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }

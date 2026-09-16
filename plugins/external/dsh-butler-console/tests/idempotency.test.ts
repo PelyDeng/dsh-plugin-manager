@@ -15,15 +15,13 @@ import { randomUUID } from 'node:crypto'
 import { rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor } from '../src/protocol.ts'
-import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
-import { TaskStore } from '../src/store.ts'
+import { SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
@@ -83,36 +81,6 @@ function session(path: string) {
     return conversation as never
   })
   return { store, console_, agent }
-}
-
-/** 建一个旧版本的库，用来验证迁移。 */
-function legacyDb(path: string, version: 1 | 2): void {
-  const db = new DatabaseSync(path)
-  const subtaskColumns = version === 1
-    ? `task_id TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL, goal TEXT NOT NULL,
-       agent_id TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', state TEXT NOT NULL,
-       result TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
-       started_at INTEGER, finished_at INTEGER, PRIMARY KEY (task_id, id)`
-    : `task_id TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL, goal TEXT NOT NULL,
-       agent_id TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', state TEXT NOT NULL,
-       result TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
-       artifacts TEXT NOT NULL DEFAULT '', conversation_id TEXT NOT NULL DEFAULT '',
-       started_at INTEGER, finished_at INTEGER, PRIMARY KEY (task_id, id)`
-  db.exec(`
-    CREATE TABLE tasks (
-      id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, owner_namespace TEXT NOT NULL,
-      owner_id TEXT NOT NULL, goal TEXT NOT NULL, state TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
-      summary TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
-      created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, finished_at INTEGER
-    );
-    CREATE TABLE subtasks (${subtaskColumns});
-    PRAGMA user_version = ${version};
-  `)
-  db.prepare(`INSERT INTO tasks(id,conversation_id,owner_namespace,owner_id,goal,state,created_at,updated_at)
-    VALUES('task-old','${conversationId}','user','alice','老任务','completed',1,2)`).run()
-  db.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,state,result)
-    VALUES('task-old','s1',1,'老目标','succeeded','老结果')`).run()
-  db.close()
 }
 
 describe('幂等占用在执行前落库', () => {
@@ -199,39 +167,5 @@ describe('重启之后绝不重跑', () => {
     await expect(second.console_.start(conversationId, '改查危化车', actor, 'req-1'))
       .rejects.toThrow(/已经用在另一次请求上/u)
     second.store.close()
-  })
-})
-
-describe('索引结构升级与回滚约束', () => {
-  it('v1 的库一路升到 v3：新表建好，老数据一条不动', () => {
-    const path = tempDb()
-    legacyDb(path, 1)
-    const store = new TaskStore(path)
-    expect(store.task(actor, 'task-old')?.subtasks[0]?.result).toBe('老结果')
-    // 新表可用。
-    store.claimRequest(actor, 'chat', 'req-9', 'd', 'run-9', conversationId, 600_000)
-    expect(store.request(actor, 'chat', 'req-9')).toMatchObject({ state: 'claimed', runId: 'run-9' })
-    store.close()
-  })
-
-  it('v2 的库升到 v3：只补新表，材料列照旧', () => {
-    const path = tempDb()
-    legacyDb(path, 2)
-    const store = new TaskStore(path)
-    const record = store.task(actor, 'task-old')
-    expect(record?.subtasks[0]?.artifacts).toEqual([])
-    expect(record?.subtasks[0]?.result).toBe('老结果')
-    store.claimRequest(actor, 'chat', 'req-8', 'd', 'run-8', conversationId, 600_000)
-    expect(store.request(actor, 'chat', 'req-8')?.runId).toBe('run-8')
-    store.close()
-  })
-
-  it('版本比当前新的库直接拒绝启动，而不是拿错结构去读写', () => {
-    const path = tempDb()
-    legacyDb(path, 2)
-    const db = new DatabaseSync(path)
-    db.exec('PRAGMA user_version = 99')
-    db.close()
-    expect(() => new TaskStore(path)).toThrowError(/不支持的工作台数据结构版本：99/u)
   })
 })

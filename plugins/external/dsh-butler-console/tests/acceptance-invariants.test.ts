@@ -18,8 +18,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
-import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
-import { TaskStore } from '../src/store.ts'
+import { SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
 
 const actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' } as const
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'

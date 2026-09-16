@@ -5,26 +5,19 @@
  * `waiting`，管家也就只能把它们当成同一件事：任务永远停在等人回话，既没有结束，也没有
  * 「这事还没办完」的说法。
  *
- * 现在判定来源只有一个：员工给出的结构化声明。这里锁住四件事：
+ * 现在判定来源只有一个：员工给出的结构化声明。这里锁住三件事：
  *
  * 1. 声明齐备时映射为 `external_pending`，材料与原始状态一起留下，本轮结束。
  * 2. 声明缺理由时**不猜** —— 那是「返回不满足协作契约」，如实按失败收，材料仍保留。
  * 3. 旧版本员工仍然只说 `waiting` 时，保持原语义；不会因为结果里带着材料就自动升级。
- * 4. 数据结构从 v1 升到 v2 时就地增列，已有数据一条不动。
  */
-import { randomUUID } from 'node:crypto'
-import { rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor } from '../src/protocol.ts'
-import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
-import { TaskStore } from '../src/store.ts'
+import { SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
@@ -198,52 +191,5 @@ describe('员工声明外部待办', () => {
     expect(store.counts(actor).waitingUser).toBe(1)
 
     store.close()
-  })
-})
-
-describe('工作台索引的数据结构升级', () => {
-  it('v1 的库就地升到 v2：新列补上，已有数据一条不动', () => {
-    const path = join(tmpdir(), `butler-v1-${randomUUID()}.sqlite`)
-    const legacy = new DatabaseSync(path)
-    legacy.exec(`
-      CREATE TABLE tasks (
-        id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, owner_namespace TEXT NOT NULL,
-        owner_id TEXT NOT NULL, goal TEXT NOT NULL, state TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
-        summary TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
-        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, finished_at INTEGER
-      );
-      CREATE TABLE subtasks (
-        task_id TEXT NOT NULL, id TEXT NOT NULL, seq INTEGER NOT NULL, goal TEXT NOT NULL,
-        agent_id TEXT NOT NULL DEFAULT '', reason TEXT NOT NULL DEFAULT '', state TEXT NOT NULL,
-        result TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '',
-        started_at INTEGER, finished_at INTEGER, PRIMARY KEY (task_id, id)
-      );
-      PRAGMA user_version = 1;
-    `)
-    legacy.prepare(`INSERT INTO tasks(id,conversation_id,owner_namespace,owner_id,goal,state,created_at,updated_at)
-      VALUES('task-old','${conversationId}','user','alice','老任务','completed',1,2)`).run()
-    legacy.prepare(`INSERT INTO subtasks(task_id,id,seq,goal,state,result)
-      VALUES('task-old','s1',1,'老目标','succeeded','老结果')`).run()
-    legacy.close()
-
-    const store = new TaskStore(path)
-    const record = store.task(actor, 'task-old')
-    expect(record?.goal).toBe('老任务')
-    expect(record?.subtasks[0]?.result).toBe('老结果')
-    // 新列存在且是空值，不是把老记录判成损坏。
-    expect(record?.subtasks[0]?.artifacts).toEqual([])
-    expect(record?.subtasks[0]?.conversationId).toBe('')
-    // 升级后能写新字段。
-    store.setSubtaskState('task-old', 's1', 'succeeded', { artifacts: [draftArtifact], conversationId: 'c-9' })
-    expect(store.task(actor, 'task-old')?.subtasks[0]?.artifacts).toEqual([draftArtifact])
-    store.close()
-
-    // 再开一次：版本已是 v2，不该重复迁移或报错。
-    const reopened = new TaskStore(path)
-    expect(reopened.task(actor, 'task-old')?.subtasks[0]?.conversationId).toBe('c-9')
-    reopened.close()
-    rmSync(path, { force: true })
-    rmSync(`${path}-wal`, { force: true })
-    rmSync(`${path}-shm`, { force: true })
   })
 })

@@ -1,20 +1,26 @@
 /**
- * 牛马大总管工作台的持久化索引。
+ * 测试双实现：node:sqlite 版工作台索引（原 src/store.ts，随 T1-4 退出运行路径移入测试）。
  *
- * 这里只保存牛马大总管自己的工作台数据：会话归属、任务计划、子任务状态和运行历史。
- * 牛马大总管与用户的对话正文仍然存放在 DSH 官方会话日志里，本文件不复制一份，也不改写
- * 宿主日志。
+ * 这里只剩两个用途：
+ *
+ * 1. 业务语义断言的测试夹具（owner 隔离、digest 冲突、首次固定守卫、损坏分类等继续在这里跑）；
+ * 2. tests/migrate-storage.test.ts 等价性验收的基准：同一 fixture 两路（直导 vs 副本先经
+ *    TaskStore 的 migrate() 旧链升 8 再导）逐列比对。
+ *
+ * 生产运行路径只有 PostgresTaskStorage（src/storage/postgres.ts）；本文件不进 dist、不被
+ * 生产代码导入。migrate 链保留是为了让等价性验收有真实旧链可走，不再是运行时升级路径。
  */
 
 import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { AccessError, type Actor, type AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
-import { isTerminal, type SubtaskState, type TaskState } from './task-model.ts'
-import { parseArtifacts, parseDependsOn, parseDependsOnStrict, parseInputRefs, parseMemberReturn } from './storage/parse.ts'
+import { isTerminal, type SubtaskState, type TaskState } from '../../src/task-model.ts'
+import { parseArtifacts, parseDependsOn, parseDependsOnStrict, parseInputRefs, parseMemberReturn } from '../../src/storage/parse.ts'
 import type {
   ButlerInputRef,
   ButlerMemberReturn,
+  ButlerStorage,
   ConversationSummary,
   HistoryQuery,
   NewSubtask,
@@ -24,25 +30,7 @@ import type {
   TaskInput,
   TaskRecord,
   TaskSummary,
-} from './storage/types.ts'
-
-// 记录类型与 JSON 列的纯解析函数已平移到 `src/storage/`（异步存储接口与 PG 实现共用同一份），
-// 这里原样再导出，公开导出保持兼容。
-export type {
-  ButlerDependsOnKind,
-  ButlerInputRef,
-  ButlerInputRefsKind,
-  ButlerMemberReturn,
-  ConversationSummary,
-  HistoryQuery,
-  NewSubtask,
-  RequestRecord,
-  SubtaskRecord,
-  TaskCounts,
-  TaskInput,
-  TaskRecord,
-  TaskSummary,
-} from './storage/types.ts'
+} from '../../src/storage/types.ts'
 
 /**
  * 工作台索引的数据结构版本。
@@ -53,21 +41,16 @@ export type {
  * 5：子任务增加 `logical_id`（同一目标的稳定标识）与 `supersedes`（替代了哪一条尝试）。
  * 6：子任务增加 `depends_on`（前置目标的标识列表）。
  * 7：子任务增加 `requires_external_action`（这一步是否真的需要外部动作已经办完）。
- *
- * 升级只增列、增表，不动已有数据；但**旧代码读到新版本会拒绝启动**，所以回滚插件版本之前
- * 要先把库降回去，不能直接换回旧包。
  */
 const SCHEMA_VERSION = 8
 
 /**
  * 能从这些旧版本就地升上来。
  *
- * 不在这张表里的版本（比当前新、或者来历不明）一律拒绝启动：拿错版本的结构去读写，
- * 比起不来严重得多。
+ * 不在这张表里的版本（比当前新、或者来历不明）一律拒绝：拿错版本的结构去读写，比起不来
+ * 严重得多。这条链只服务于等价性验收，生产升级走 migrations/postgres/。
  */
 const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7]
-
-const STORE_ERROR = '工作台数据不可用，请稍后重试'
 
 /**
  * 牛马大总管工作台的 SQLite 索引。
@@ -496,8 +479,8 @@ export class TaskStore {
   /**
    * 读一条子任务的状态；不存在时返回 undefined。
    *
-   * 过渡适配器（storage/sqlite-adapter.ts）配套：等待超时条件结账要按主键读状态而不带
-   * owner 过滤（PG 侧为同语义的单条条件 UPDATE）；生产代码不使用。
+   * 本文件配套：等待超时条件结账要按主键读状态而不带 owner 过滤（PG 侧为同语义的单条
+   * 条件 UPDATE）；生产代码不使用。
    */
   subtaskState(taskId: string, subtaskId: string): SubtaskState | undefined {
     const row = this.db.prepare('SELECT state FROM subtasks WHERE task_id=? AND id=?')
@@ -839,7 +822,7 @@ export class TaskStore {
    * 报成需要恢复的状态。
    */
   releaseRequest(actor: Actor, kind: string, requestId: string): void {
-    this.db.prepare(`DELETE FROM requests WHERE owner_namespace=? AND owner_id=? AND kind=? AND request_id=?`)
+    this.db.prepare('DELETE FROM requests WHERE owner_namespace=? AND owner_id=? AND kind=? AND request_id=?')
       .run(actor.namespace, actor.userId, kind, requestId)
   }
 
@@ -848,5 +831,164 @@ export class TaskStore {
   }
 }
 
+/**
+ * 测试适配器：用同步 TaskStore（node:sqlite）实现异步 ButlerStorage 接口。
+ *
+ * **仅测试**：方法体把同步调用包成 Promise，语义直通、不做任何改写；生产装配（index.ts）
+ * 只允许 PostgresTaskStorage。两处例外说明：
+ *
+ * - `init()` 是空操作：TaskStore 在构造函数里同步完成建库与版本校验（含不支持版本的
+ *   同步 throw），启动序列里没有第二次校验可做；
+ * - `expireWaitingSubtask()` 退回「读-核-写」：TaskStore 没有条件更新原语，但整段在
+ *   同一个同步调用里完成、没有 await 窗口，与原 butler.ts 实现语义一致；单条条件
+ *   UPDATE 语义由 PostgresTaskStorage 提供。
+ */
+export class SqliteButlerStorage implements ButlerStorage {
+  constructor(private readonly store: TaskStore) {}
 
-export { STORE_ERROR }
+  async init(): Promise<void> {
+    // TaskStore 构造函数已同步完成结构与版本校验（不支持版本直接 throw），这里无事可做。
+  }
+
+  async expireWaitingSubtask(taskId: string, subtaskId: string, error: string): Promise<boolean> {
+    if (this.store.subtaskState(taskId, subtaskId) !== 'waiting_user') return false
+    this.store.setSubtaskState(taskId, subtaskId, 'failed', { error })
+    return true
+  }
+
+  async aliases(actor: Actor): Promise<Map<string, { displayName: string; accent: string }>> {
+    return this.store.aliases(actor)
+  }
+
+  async setAlias(actor: Actor, agentId: string, displayName: string, accent: string): Promise<void> {
+    this.store.setAlias(actor, agentId, displayName, accent)
+  }
+
+  async setAvatar(actor: Actor, agentId: string, bytes: Uint8Array, contentType: string): Promise<void> {
+    this.store.setAvatar(actor, agentId, bytes, contentType)
+  }
+
+  async avatar(actor: Actor, agentId: string): Promise<{ bytes: Uint8Array; contentType: string } | undefined> {
+    return this.store.avatar(actor, agentId)
+  }
+
+  async clearAvatar(actor: Actor, agentId: string): Promise<void> {
+    this.store.clearAvatar(actor, agentId)
+  }
+
+  async reserveConversation(id: string, actor: Actor): Promise<void> {
+    this.store.reserveConversation(id, actor)
+  }
+
+  async openOrReserveConversation(id: string, actor: Actor): Promise<void> {
+    this.store.openOrReserveConversation(id, actor)
+  }
+
+  async assertOwner(conversationId: string, actor: Actor): Promise<void> {
+    this.store.assertOwner(conversationId, actor)
+  }
+
+  async touchConversation(conversationId: string, actor: Actor, title?: string): Promise<void> {
+    this.store.touchConversation(conversationId, actor, title)
+  }
+
+  async listConversations(actor: Actor, limit: number): Promise<ConversationSummary[]> {
+    return this.store.listConversations(actor, limit)
+  }
+
+  async createTask(input: {
+    id: string
+    conversationId: string
+    actor: Actor
+    goal: string
+    note: string
+    subtasks: readonly NewSubtask[]
+  }): Promise<void> {
+    this.store.createTask(input)
+  }
+
+  async setTaskState(id: string, state: TaskRecord['state'], patch?: { note?: string; summary?: string; error?: string }): Promise<void> {
+    this.store.setTaskState(id, state, patch)
+  }
+
+  async commitTaskState(id: string, state: TaskRecord['state'], patch?: { note?: string; summary?: string; error?: string }): Promise<boolean> {
+    return this.store.commitTaskState(id, state, patch)
+  }
+
+  async setSubtaskState(
+    taskId: string,
+    subtaskId: string,
+    state: Parameters<TaskStore['setSubtaskState']>[2],
+    patch?: Parameters<TaskStore['setSubtaskState']>[3],
+  ): Promise<void> {
+    this.store.setSubtaskState(taskId, subtaskId, state, patch)
+  }
+
+  async task(actor: Actor, id: string): Promise<TaskRecord | undefined> {
+    return this.store.task(actor, id)
+  }
+
+  async history(actor: Actor, query: HistoryQuery): Promise<{ items: TaskSummary[]; total: number; nextOffset: number | null }> {
+    return this.store.history(actor, query)
+  }
+
+  async busy(actor: Actor): Promise<Map<string, { taskId: string; subtaskId: string; state: TaskRecord['subtasks'][number]['state'] }>> {
+    return this.store.busy(actor)
+  }
+
+  async addInput(actor: Actor, taskId: string, text: string, source: 'chat' | 'supplement', expectedVersion?: number): Promise<number> {
+    return this.store.addInput(actor, taskId, text, source, expectedVersion)
+  }
+
+  async inputVersions(taskId: string): Promise<{ accepted: number; processed: number } | undefined> {
+    return this.store.inputVersions(taskId)
+  }
+
+  async inputs(taskId: string): Promise<TaskInput[]> {
+    return this.store.inputs(taskId)
+  }
+
+  async setProcessedVersion(taskId: string, version: number): Promise<void> {
+    this.store.setProcessedVersion(taskId, version)
+  }
+
+  async appendSubtasks(actor: Actor, taskId: string, subtasks: readonly NewSubtask[]): Promise<string[]> {
+    return this.store.appendSubtasks(actor, taskId, subtasks)
+  }
+
+  async counts(actor: Actor): Promise<TaskCounts> {
+    return this.store.counts(actor)
+  }
+
+  async recentFailures(actor: Actor, limit: number): Promise<{ id: string; goal: string; error: string; updatedAt: number }[]> {
+    return this.store.recentFailures(actor, limit)
+  }
+
+  async failInterrupted(): Promise<number> {
+    return this.store.failInterrupted()
+  }
+
+  async request(actor: Actor, kind: string, requestId: string): Promise<RequestRecord | undefined> {
+    return this.store.request(actor, kind, requestId)
+  }
+
+  async claimRequest(actor: Actor, kind: string, requestId: string, digest: string, runId: string, conversationId: string, ttlMs: number): Promise<RequestRecord | undefined> {
+    return this.store.claimRequest(actor, kind, requestId, digest, runId, conversationId, ttlMs)
+  }
+
+  async bindRequest(actor: Actor, kind: string, requestId: string, runId: string, conversationId: string): Promise<void> {
+    this.store.bindRequest(actor, kind, requestId, runId, conversationId)
+  }
+
+  async finishRequest(actor: Actor, kind: string, requestId: string): Promise<void> {
+    this.store.finishRequest(actor, kind, requestId)
+  }
+
+  async releaseRequest(actor: Actor, kind: string, requestId: string): Promise<void> {
+    this.store.releaseRequest(actor, kind, requestId)
+  }
+
+  async close(): Promise<void> {
+    this.store.close()
+  }
+}

@@ -156,7 +156,8 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
       subtasks: [{ id: 's1', goal: '坏数据行', agentId: 'writer', reason: '' }],
     })
     // 绕过存储层直插损坏 JSON，模拟历史脏数据。depends_on 用「字符串混非字符串项」的数组，
-    // 验证损坏分类下取值与 SQLite 实现（store.ts）一致：宽松过滤出能读的字符串项。
+    // 验证损坏分类下取值与 SQLite 测试双实现（helpers/sqlite-test-store.ts）一致：宽松过滤
+    // 出能读的字符串项。
     await admin.query(
       `UPDATE subtasks SET input_refs = '{oops', depends_on = '[ "g9", 42, true ]', state = 'dispatched',
          started_at = $1 WHERE task_id = $2 AND id = 's1'`,
@@ -168,7 +169,7 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
     expect(row?.inputRefs).toBeUndefined()
     // depends_on 严格化（依赖重判方案 §3 条目 4）：损坏归类 damaged，编排层据此拒派。
     expect(row?.dependsOnState).toBe('damaged')
-    // 取值与 store.ts 兜底一致：宽松过滤只留字符串项，不整列丢弃、也不伪装成空计划。
+    // 取值与 SQLite 测试双实现的兜底一致：宽松过滤只留字符串项，不整列丢弃、也不伪装成空计划。
     expect(row?.dependsOn).toEqual(['g9'])
     // 派出过却留空 = 旧记录未知，不是「等着首次固定」。
     await admin.query(`UPDATE subtasks SET input_refs = '' WHERE task_id = $1 AND id = 's1'`, [taskId])

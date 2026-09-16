@@ -1,12 +1,12 @@
 /**
  * 牛马大总管工作台的异步存储接口与记录类型。
  *
- * 接口蓝本是原 `store.ts` 中 `TaskStore` 的全部公开操作（31 个方法异步化），原子性语义在
- * 存储实现内闭合：多行写入由实现收敛为单事务，调用方不拼多步读写。绑定规格见
- * 《非框架插件业务库 PostgreSQL 默认方案》§2 与 §3。
+ * 接口蓝本是原 SQLite 版 `TaskStore`（现为测试双实现 tests/helpers/sqlite-test-store.ts）的
+ * 全部公开操作（31 个方法异步化），原子性语义在存储实现内闭合：多行写入由实现收敛为单事务，
+ * 调用方不拼多步读写。绑定规格见《非框架插件业务库 PostgreSQL 默认方案》§2 与 §3。
  *
- * 这里的记录类型从原 `store.ts` 平移而来（`store.ts` 反向导入并原样再导出，公开导出保持
- * 兼容）；任务与子任务的状态取值仍复用 `task-model.ts`，不在别处另造。
+ * 这里的记录类型从原 `store.ts` 平移而来；任务与子任务的状态取值仍复用 `task-model.ts`，
+ * 不在别处另造。
  */
 
 import type { Actor, AgentArtifact } from '@dsh-plugin-manager/plugin-kit'

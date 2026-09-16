@@ -18,9 +18,8 @@ import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor, ButlerDispatchRequest } from '../src/protocol.ts'
-import { SqliteButlerStorage } from '../src/storage/sqlite-adapter.ts'
 import type { ButlerStorage } from '../src/storage/types.ts'
-import { TaskStore } from '../src/store.ts'
+import { SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
 import type { SubtaskState } from '../src/task-model.ts'
 
 type Dispatch = ButlerAgentExecutor['dispatch']

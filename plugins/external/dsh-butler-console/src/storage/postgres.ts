@@ -102,9 +102,9 @@ function mapSubtaskRow(row: SubtaskRow): SubtaskRecord {
     seq: Number(row.seq),
     logicalId: row.logicalId,
     supersedes: row.supersedes,
-    // depends_on 分类严格化，但取值与 SQLite 实现（store.ts）对齐：合法列表照旧，损坏时
-    // 保留宽松过滤结果（能读出的字符串项照常给出）；编排层只看 dependsOnState='damaged' 拒派，
-    // 存储层不静默改写原值、也不把损坏伪装成「没有前置」。
+    // depends_on 分类严格化，但取值与 SQLite 测试双实现（tests/helpers/sqlite-test-store.ts）
+    // 对齐：合法列表照旧，损坏时保留宽松过滤结果（能读出的字符串项照常给出）；编排层只看
+    // dependsOnState='damaged' 拒派，存储层不静默改写原值、也不把损坏伪装成「没有前置」。
     dependsOn: depends.kind === 'valid' ? depends.items : parseDependsOn(row.dependsOnRaw),
     dependsOnState: depends.kind,
     goal: row.goal,
@@ -392,8 +392,8 @@ export class PostgresTaskStorage implements ButlerStorage {
     const terminal = isTerminal(state)
     // 快照只在「可证明还没派出去过」时才落库：列还是空串，而且这条记录真的没开始过
     // （started_at 为空、状态还是排队中）。已固定的、旧已派出却留空的、以及损坏的值一律
-    // 原样保留。state、started_at 在这个 CASE 里都是**更新前**的旧值 —— 与原实现的
-    // SET 表达式逐字等价（store.ts:641-648）。
+    // 原样保留。state、started_at 在这个 CASE 里都是**更新前**的旧值 —— 与 SQLite 测试
+    // 双实现的 SET 表达式逐字等价。
     const inputRefs = patch.inputRefs === undefined ? null : JSON.stringify(patch.inputRefs)
     await this.run(
       `UPDATE subtasks SET state=$1,
