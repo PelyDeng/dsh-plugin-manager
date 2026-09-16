@@ -194,6 +194,8 @@ jobs:
           unzip -q "${GITHUB_WORKSPACE}/release-assets/dsh-plugin-manager-deployment-${version}.zip"
           cd dsh-deployment
           mkdir -p .local
+          # 容器用户必须能访问本步骤创建的绑定目录：CI 的 runner 不是 uid 1000，
+          # 写死默认值会让「核验容器挂载与权限」直接拒绝。真实非 root 部署同理，取当前用户。
           cat > .local/env.conf <<EOF
           DSH_PUBLIC_URL="http://127.0.0.1:17921"
           DSH_PUBLIC_ORIGIN="http://127.0.0.1:17921"
@@ -203,6 +205,8 @@ jobs:
           DSH_DATA_DIR=".local/data"
           DSH_DEPLOY_ARTIFACTS=".local/artifacts"
           DSH_COMPOSE_PROJECT="dsh-release-smoke"
+          DSH_CONTAINER_UID=$(id -u)
+          DSH_CONTAINER_GID=$(id -g)
           EOF
           chmod 600 .local/env.conf
           # 失败时只能看到「exit code 1」没有意义：先记录环境，再把日志末尾转成注解。
