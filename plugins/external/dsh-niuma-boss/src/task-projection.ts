@@ -331,6 +331,9 @@ export function applySnapshot(view: TaskView, snapshot: TaskSnapshot, now = Date
     error: snapshot.error ?? '',
     // 换任务后旧一轮的管家发言不再属于当前展示，一并作废。
     butlerText: snapshot.id === view.taskId ? view.butlerText : '',
+    // 同一套口径：思考快照也只在同一任务内保留，换任务就清空（并视为还没结束）。
+    butlerThinking: snapshot.id === view.taskId ? view.butlerThinking : '',
+    butlerThinkingDone: snapshot.id === view.taskId ? view.butlerThinkingDone : false,
     // 恢复上下文说明事件窗口是否滚出过；补齐用的重读要看是否证明得了本轮完整。
     incomplete: recovery?.final === true ? !proven : recovery?.truncated === true,
     subtasks: snapshot.subtasks.map(s => {

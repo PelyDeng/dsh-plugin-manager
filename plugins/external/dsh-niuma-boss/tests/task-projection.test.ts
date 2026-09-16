@@ -105,6 +105,19 @@ describe('任务投影：事件语义', () => {
     expect(view.butlerThinkingDone).toBe(false)
   })
 
+  it('同一任务重读快照保留事件期的思考，换任务才清空', () => {
+    let view = applyEvent(emptyTaskView(), { type: 'chat_thinking', role: 'butler', thinking: '事件期的思路' })
+    view = applyEvent(view, { type: 'chat', role: 'butler', text: '事件期的结论' })
+    // 同一任务：快照只做权威基准，事件期已经收到的思考不该被抹掉。
+    const kept = applySnapshot(view, snapshot)
+    expect(kept.butlerThinking).toBe('事件期的思路')
+    expect(kept.butlerThinkingDone).toBe(true)
+    // 换任务：上一轮的思考不属于当前展示。
+    const other = applySnapshot(view, { ...snapshot, id: 'butler-task-2' })
+    expect(other.butlerThinking).toBe('')
+    expect(other.butlerThinkingDone).toBe(false)
+  })
+
   it('summary 落终态；error 只记录不推算', () => {
     let view = applySnapshot(emptyTaskView(), snapshot)
     view = applyEvent(view, { type: 'summary', taskId: 'butler-task-1', text: '完成', state: 'completed' })
