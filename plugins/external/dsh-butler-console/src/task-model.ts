@@ -169,23 +169,7 @@ export interface Subtask {
   updatedAt: number
   finishedAt: number | null
   /** 子 Agent 最终回答或失败摘要，已经裁剪为可展示文本。 */
-  result: string
+  readonly result: string
   /** 可展示的失败原因，不含路径、Token 和内部堆栈。 */
-  error: string
-}
-
-/** 牛马大总管生成的一份任务计划。 */
-export interface TaskPlan {
-  /** 计划面向用户的目标摘要，通常等于用户原话的收敛表达。 */
-  readonly goal: string
-  /** 牛马大总管用于拆分任务的说明，可空。 */
-  readonly note: string
-  readonly subtasks: readonly Subtask[]
-}
-
-/** 计划里传给子 Agent 的执行指令。 */
-export interface SubtaskBrief {
-  readonly id: string
-  readonly goal: string
-  readonly agentId: string
+  readonly error: string
 }

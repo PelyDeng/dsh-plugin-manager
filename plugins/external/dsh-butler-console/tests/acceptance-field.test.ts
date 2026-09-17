@@ -16,8 +16,8 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
-import { ButlerConsole } from '../src/butler.ts'
+import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { ButlerConsole, REPLAY_REJECTED_PREFIX, dispatchFailureDetail, reportOf } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor } from '../src/protocol.ts'
 import { SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
@@ -255,5 +255,43 @@ describe('防套话：写入时拒绝没有信息量的口径', () => {
     })
     expect(f.store.task(actor, taskId)!.subtasks[0]!.acceptance).toBe(GOOD)
     await f.settle()
+  })
+})
+
+describe('重启重放被拒（409）与成员失败要分得开（判据 D-1）', () => {
+  /**
+   * 场景：同一个 `requestId` 的那一轮此前**已经交付过**，进程重启后重放被运行时显式拒绝
+   * （`AccessError(409, …)`）—— 拒绝的理由是外部副作用（候选稿、归档）已经发生过一次。
+   *
+   * 这件事不是"活没干好"：成员没有失败，是这一次请求本来就不该重跑。如果它与一次普通的
+   * 成员失败**同形**，页面与汇总材料都会写成"这位成员失败了"，把老板引向一个不存在的问题。
+   *
+   * ⚠️ **端到端那条路没做成，如实记在这里**：拒绝发生在派单循环内部，而走夹具那条路时
+   * `planTool.execute` 会等执行泵，派单一旦抛错用例就挂在 vitest 的 testTimeout 上
+   * （试过两种驱动方式：直调 `dispatchSubtask`、以及手工 `startTurn` + `execute`）。
+   * 所以判据拆成两个**可直测**的入口：归类（`dispatchFailureDetail`）与渲染（`reportOf`）；
+   * "catch 里真的调了归类"由调用点保证，**没有自动化覆盖**（报告里如实登记）。
+   */
+  it('归类：409 落固定前缀，普通失败原样', () => {
+    const rejection = new AccessError(409, '这一轮已经结算过（同一个请求标识）')
+    const detail = dispatchFailureDetail(rejection, 'AccessError: 这一轮已经结算过（同一个请求标识）')
+    expect(detail.startsWith(REPLAY_REJECTED_PREFIX)).toBe(true)
+    expect(detail).toContain('这一轮已经结算过')
+
+    // 反向对照：普通失败**不能**带那个前缀 —— 少了这条，"带前缀"可能只是无条件加上的。
+    expect(dispatchFailureDetail(new Error('成员内部崩了'), '成员内部崩了')).toBe('成员内部崩了')
+  })
+
+  it('渲染：带前缀的失败写成"已经结算过"，普通失败仍写"失败："', () => {
+    const replayed = reportOf({
+      state: 'failed', agentId: 'blog', result: '',
+      error: `${REPLAY_REJECTED_PREFIX}：这一轮已经结算过（同一个请求标识）`,
+    })
+    expect(replayed).toContain(REPLAY_REJECTED_PREFIX)
+    expect(replayed).not.toContain('失败：')
+
+    // 反向对照：普通失败仍然带「失败：」，说明上一条的 not.toContain 不是恒真。
+    const normal = reportOf({ state: 'failed', agentId: 'blog', result: '', error: '成员内部崩了' })
+    expect(normal).toContain('失败：')
   })
 })

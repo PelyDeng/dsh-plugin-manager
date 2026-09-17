@@ -773,12 +773,104 @@ type Settlement =
   | { readonly kind: 'external_pending'; readonly external: number; readonly failed: number }
 
 /**
+ * 四条收尾路径（派活轮 / 补充轮 / 补话之后 / 等待超时）**共用**的输入。
+ *
+ * 它们的差异全部以参数表达，不再各写一份收尾实现：
+ *
+ * | 路径 | `summarize` | `conversation` | `settleErrorOverride` |
+ * | --- | --- | --- | --- |
+ * | 派活轮（`turnBody`） | `true` | 有 | — |
+ * | 补充轮 | `true` | 有 | — |
+ * | 补话之后（`closeAfterReply`） | `true` | 拿不到时为 `undefined` ⇒ 跳过汇总但照常落终态 | — |
+ * | 等待超时（`expireWaiting`） | **`false`** | 恒 `undefined`（后台路径没有会话句柄） | `WAITING_EXPIRED_TASK` |
+ *
+ * `acceptance` / `artifacts` 是给 §5.2 的两条消费点（汇总提示词带口径、汇总前核验口径提到的
+ * 产出物）预留的：**本批只把数据取到签名里**，提示词改动排在下一批。先扩签名再写提示词，
+ * 否则会退化成"给 `summarize` 加一个永远为空的参数"。
+ */
+type SettleTaskInput = {
+  readonly taskId: string
+  /** 汇总要用的牛马大总管会话；拿不到时跳过汇总，仍然把终态落下。 */
+  readonly conversation: Conversation | undefined
+  readonly goal: string
+  readonly subtasks: readonly {
+    readonly id: string
+    readonly goal: string
+    readonly agentId: string
+    readonly state: SubtaskState
+    /** 这一步的验收口径；缺省/空串 = 没有声明。 */
+    readonly acceptance?: string | undefined
+    /** 这一步交回的材料（定位型，不含内容）。 */
+    readonly artifacts?: readonly AgentArtifact[] | undefined
+  }[]
+  /** 任务级验收口径；缺省 = 没有声明。 */
+  readonly acceptance?: string | undefined
+  readonly reports: readonly string[]
+  readonly signal: AbortSignal
+  /** 这一轮是否已经被喊停。子任务里有取消的同样按停止处理。 */
+  readonly stopped: boolean
+  /**
+   * 是否跑汇总轮。
+   *
+   * 后台等待超时（路径 4）为 `false` —— 没有观众，也没有会话句柄，跑一轮汇总只是白烧一次
+   * 模型调用（设计 §5.4 的既定口径，D-5）。
+   */
+  readonly summarize: boolean
+  /**
+   * `settle` 分支落终态时的 error 文案覆盖。
+   *
+   * 路径 4 传固定的超时说明（`WAITING_EXPIRED_TASK`）：那条路径的结论对用户来说是"没人回话
+   * 所以停了"，而不是"N 个子任务失败"。
+   */
+  readonly settleErrorOverride?: string | undefined
+}
+
+/**
  * 从落库的子任务记录重建交给汇总的材料。 *
  * 补话之后要重新汇总，而那时派活阶段的 `reports` 早已不在内存里（进程可能都换过一次），
  * 所以按同一种口径从库里重建：成功取结果正文，失败与取消带上原因，还没答复的带上已交回的
  * 材料和待答事项。
  */
-function reportOf(subtask: {
+/**
+ * **重启重放被拒**时落在子任务 `error` 里的固定前缀（判据 D-1）。
+ *
+ * 运行时在"同一个 `requestId` 的那一轮此前已经结算过"时抛 `AccessError(409, …)`（进程重启后
+ * 重放同一轮请求），显式拒绝再跑一遍 —— 因为外部副作用（候选稿、归档）已经发生过一次。
+ *
+ * 这件事**不是"活没干好"**：成员没有失败，是这一次请求本来就不该重跑。它落到
+ * {@link dispatchSubtask} 的 catch 里时，必须与一次普通的成员失败**分得开**：否则页面与汇总
+ * 材料都会写成"这位成员失败了"，而真相是"这一轮早就交付过"。分开的手段就是这个前缀 ——
+ * {@link reportOf} 按它渲染一句说明，而不是"失败："。
+ *
+ * 判定只看 `AccessError.status === 409`：运行时那条 409 不带 `reason`，而管家侧自己的 409
+ * （`run_busy` / `task_already_finished` 等）都发生在**受理阶段**、走不到这里的 catch。
+ */
+export const REPLAY_REJECTED_PREFIX = '这一轮此前已经结算过（重启重放被拒）'
+
+/** 这个错误是不是"重启重放被拒"（运行时抛的 409）。 */
+function isReplayRejection(error: unknown): boolean {
+  return error instanceof AccessError && error.status === 409
+}
+
+/**
+ * 一次派单失败的**归类**（判据 D-1 的判定部分）：重启重放被拒 ⇒ 带固定前缀，普通失败 ⇒ 原样。
+ *
+ * 抽成纯函数是为了让它**能被直接测到**：端到端那条路上，拒绝发生在派单循环内部，而用例很难
+ * 稳定摆出"这一轮还在跑"这个前提（实测：走 `planAndSettle` 时派单由执行泵驱动，
+ * `planTool.execute` 会等它，一旦派单抛错用例就挂在超时上）。判定与渲染各有一个可直测的入口
+ * （本函数与 {@link reportOf}），"接线有没有接上"由两处的调用点静态保证。
+ */
+export function dispatchFailureDetail(error: unknown, raw: string): string {
+  return isReplayRejection(error) ? `${REPLAY_REJECTED_PREFIX}：${raw}` : raw
+}
+
+/**
+ * 从落库的子任务记录重建交给汇总的材料。 *
+ * 补话之后要重新汇总，而那时派活阶段的 `reports` 早已不在内存里（进程可能都换过一次），
+ * 所以按同一种口径从库里重建：成功取结果正文，失败与取消带上原因，还没答复的带上已交回的
+ * 材料和待答事项。
+ */
+export function reportOf(subtask: {
   readonly state: SubtaskState
   readonly agentId: string
   readonly result: string
@@ -788,9 +880,20 @@ function reportOf(subtask: {
     case 'succeeded': return subtask.result
     // 失败也把已经交回的材料带上。超时就是一个例子：成员把候选稿交回来了，只是用户一直
     // 没回话 —— 只说「失败：超时」会让人以为材料也丢了。
-    case 'failed': return subtask.result === ''
-      ? `【${subtask.agentId}】失败：${subtask.error}`
-      : `【${subtask.agentId}】失败：${subtask.error}；已交回的材料：${subtask.result}`
+    case 'failed': {
+      /**
+       * 重启重放被拒**不是**活没干好：那一轮此前已经交付过，运行时只是拒绝再跑一遍。
+       * 渲染成"失败"会让老板以为成员出了问题，所以这里换一句说明（判据 D-1）。
+       */
+      if (subtask.error.startsWith(REPLAY_REJECTED_PREFIX)) {
+        return subtask.result === ''
+          ? `【${subtask.agentId}】${subtask.error}`
+          : `【${subtask.agentId}】${subtask.error}；已交回的材料：${subtask.result}`
+      }
+      return subtask.result === ''
+        ? `【${subtask.agentId}】失败：${subtask.error}`
+        : `【${subtask.agentId}】失败：${subtask.error}；已交回的材料：${subtask.result}`
+    }
     case 'cancelled': return `【${subtask.agentId}】${subtask.error === '' ? '已停止' : subtask.error}`
     case 'external_pending': return `【${subtask.agentId}】材料已交回，还有事在别处等着办：${subtask.result}`
     default: return `【${subtask.agentId}】交回材料，还等着答复：${subtask.result}`
@@ -1586,11 +1689,14 @@ export class ButlerConsole {
       // 子任务结局与汇总材料都**从库里重建**，而不是在循环里边跑边攒：补话那条路径上
       // 内存里早已没有这一轮的累积值（进程可能都换过一次），两条路径用同一个口径才不会
       // 出现「派活时汇总内容对、补话后汇总内容少一半」这种只在某条路径上复现的偏差。
+      const acceptance = await this.storedAcceptance(actor, taskId)
       yield* this.closeTask({
         taskId,
         conversation,
         goal: text,
         subtasks: await this.storedSubtasks(actor, taskId, subtasks),
+        // 任务级口径与每步口径/材料一并交给收尾（消费点排在下一批，这里先把数据取到）。
+        ...(acceptance === '' ? {} : { acceptance }),
         reports: await this.storedReports(actor, taskId),
         signal: abort.signal,
         stopped: abort.signal.aborted,
@@ -1887,11 +1993,13 @@ export class ButlerConsole {
       })
 
       // 收尾走同一条路径：它按库里的子任务结局决定终态，也负责把材料与外部待办留住。
+      const acceptance = await this.storedAcceptance(actor, taskId)
       yield* this.closeTask({
         taskId,
         conversation,
         goal: (await this.storage.task(actor, taskId))?.goal ?? '',
         subtasks: await this.storedSubtasks(actor, taskId, []),
+        ...(acceptance === '' ? {} : { acceptance }),
         reports: await this.storedReports(actor, taskId),
         signal: prepared.abort.signal,
         stopped: prepared.abort.signal.aborted,
@@ -2181,44 +2289,40 @@ export class ButlerConsole {
 
     const after = await this.storage.task(actor, taskId)
     if (after === undefined || after.subtasks.some(item => !isTerminal(item.state))) return
-    // 终态判定与 `closeTask` 共用同一处实现（{@link decideSettlement}）：这里不再自己数一遍
-    // 失败数 —— 那份重复缺了「有取消的按停止处理」与「还有未处理输入先不结账」，超时这条
-    // 路径会因此把已经写好的 `cancelled` 改写成 `partial`，或者按旧范围给新目标下结论。
-    const settlement = await this.decideSettlement({
+    /**
+     * 收尾走**与其余三条路径同一个实现**（{@link settleTask}）。差异只有两个，都以参数表达：
+     *
+     * - `summarize: false`：这是无人观看的后台收尾，没有对应的 SSE 轮次，跑汇总只会白烧一次
+     *   模型调用（设计 §5.4 的既定口径）；
+     * - `settleErrorOverride`：这条路径的结论对用户来说是"没人回话所以停了"，而不是
+     *   "N 个子任务失败"。
+     *
+     * 结论与写入一律由 `settleTask` 负责，**包括那道与汇总路径同样的版本屏障**
+     * （`completed` / `partial` 只在 `accepted_version <= processed_version` 的行上生效）。
+     * 这里不再自己算失败数、也不自己写终态：判定与写入各留一份的后果，实测就是这条路径把
+     * 已经写好的 `cancelled` 覆盖成 `partial`、或者按旧范围给新目标下结论。
+     *
+     * 事件全部丢弃：后台路径没有观众（先写库、后上报的顺序在 `drainQueue` 内部保持）。
+     * 合并顺带统一了一处细节：材料为空时 `settleTask` 会用兜底正文（"这次没有拿到可用的子任务
+     * 结果。"），而这条路径原先写空串 —— 统一到同一条口径是合并的收益，不是顺手改动。
+     */
+    for await (const _event of this.settleTask({
       taskId,
+      // 后台路径拿不到会话句柄：`settleTask` 照常落终态，只是不跑汇总（`summarize` 已是 false）。
+      conversation: undefined,
+      goal: after.goal,
       // 只看有效尝试：被替代掉的旧尝试不参与这一轮结论（与 closeTask 的调用方同口径）。
       subtasks: effectiveSubtasks(after.subtasks),
+      // 任务级口径与每步口径一并取到：本批只扩签名，消费点（汇总提示词）排在下一批。
+      ...(after.acceptance === '' ? {} : { acceptance: after.acceptance }),
+      reports: await this.storedReports(actor, taskId),
+      signal: new AbortController().signal,
       // 这条路径没有「这一轮被喊停」这一说：会话上没有对应的 SSE 轮次，唯一的停止信号就是
       // 子任务里的取消 —— 由判定内部从子任务状态里读出来。
       stopped: false,
-    })
-    const summary = (await this.storedReports(actor, taskId)).join('\n\n')
-
-    // `external_pending`：材料交回、剩下的事在别处办。与 closeTask 同一个分支：不跑汇总轮
-    // （没有观众，也没有会话句柄），只如实留下材料与外部待办。
-    if (settlement.kind === 'external_pending') {
-      await this.storage.setTaskState(taskId, 'external_pending', {
-        summary,
-        error: settlement.failed === 0 ? '' : `${settlement.failed} 个子任务失败`,
-      })
-      return
-    }
-    // 另外两种「先不写终态」的结论这里都不写：
-    // - `defer`：还有已接受未处理的输入，这一轮先不结账（交给那条输入自己的回合），与
-    //   closeTask 同一道屏障 —— 屏障是必需的：受理补充与收尾是两条异步路径；
-    // - `waiting_user`：这一格走不到（上面已经要求全部子任务终结，而 `waiting_user` 不是
-    //   终态），留着只是让上面那张判定表被逐条对齐，不由这条路径另作解释。
-    if (settlement.kind !== 'settle') return
-
-    /**
-     * 与汇总路径**同样的版本屏障**（设计 §5.4）：`completed` / `partial` 只在
-     * `accepted_version <= processed_version` 的行上生效。判定里那道读屏障挡的是「决策那一刻
-     * 已经有未处理输入」，这里挡的是决策与写入之间挤进来的补充 —— 少了它，这条路径就是
-     * 唯一一处可以绕过屏障宣称「干完了」的入口。取消与失败没有宣称成功，照常写入。
-     *
-     * 写不进去说明结论已经作废：什么都不写，任务停在原处，由那条补充自己的回合收尾。
-     */
-    await this.storage.commitTaskState(taskId, settlement.state, { summary, error: WAITING_EXPIRED_TASK })
+      summarize: false,
+      settleErrorOverride: WAITING_EXPIRED_TASK,
+    })) { /* 后台收尾没有 SSE 观众 */ }
   }
 
   /** 在会话上开一份新的事件日志，覆盖它的上一轮。 */  private beginLog(conversationId: string, runId: string): ConversationLog<ButlerEvent> {
@@ -2808,17 +2912,36 @@ export class ButlerConsole {
       return { state: 'succeeded', report: summary }
     } catch (error) {
       const stopped = signal.aborted || timedOut
+      /**
+       * **重启重放被拒**（运行时抛的 409）与"成员业务失败"必须分得开：前者不是活没干好，
+       * 是这一轮请求本来就不该重跑（外部副作用已经发生过一次）。判据是落库的 `error` 以
+       * {@link REPLAY_REJECTED_PREFIX} 开头，{@link reportOf} 据此换一句渲染。
+       */
+      const replayed = !stopped && isReplayRejection(error)
+      const raw = stopped ? '' : visibleError(error, this.config.maxResultChars)
       const detail = stopped
         ? (timedOut ? `超过 ${Math.round(this.config.subtaskTimeoutMs / 1000)} 秒没干完，已叫停` : '已停止')
-        : visibleError(error, this.config.maxResultChars)
+        // 归类交给纯函数（`dispatchFailureDetail`）：判定可被直接测到。
+        : dispatchFailureDetail(error, raw)
       const state: SubtaskState = stopped ? 'cancelled' : 'failed'
       // 失败只留下「给用户看的一句话」时，服务端也就没有别的东西可查：页面上只有一句
       // TypeError，日志里什么都没有，定位只能靠猜。这里把栈单独写进日志（脱敏后），
       // 用户看到的文案不变。
-      if (!stopped) console.error(`butler-console: 子任务执行失败（${agentId}）：${detail}\n${stackOf(error)}`)
+      //
+      // 重放被拒**不打 error 级日志**：它不是故障，是一次正常的拒绝；打成错误会让运维去追
+      // 一个不存在的成员故障。用 warn 并写清"不是失败"。
+      if (replayed) {
+        console.warn(`butler-console: 子任务 ${taskId}:${subtaskId}（${agentId}）被运行时拒绝重跑（不是失败）：${raw}`)
+      } else if (!stopped) {
+        console.error(`butler-console: 子任务执行失败（${agentId}）：${detail}\n${stackOf(error)}`)
+      }
       await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, state, { error: detail }))
       yield emit(state, detail)
-      return { state, report: `【${displayName}】${stopped ? detail : `失败：${detail}`}` }
+      return {
+        state,
+        // 取消与"重放被拒"都不加「失败：」前缀：前者是喊停，后者是这一轮本来就不该跑。
+        report: stopped || replayed ? `【${displayName}】${detail}` : `【${displayName}】失败：${detail}`,
+      }
     } finally {
       clearTimeout(timer)
       signal.removeEventListener('abort', onAbort)
@@ -3050,14 +3173,34 @@ export class ButlerConsole {
     actor: Actor,
     taskId: string,
     planned: readonly { readonly id: string; readonly goal: string; readonly agentId: string }[],
-  ): Promise<{ id: string; goal: string; agentId: string; state: SubtaskState }[]> {
+  ): Promise<{
+    id: string
+    goal: string
+    agentId: string
+    state: SubtaskState
+    acceptance: string
+    artifacts: readonly AgentArtifact[]
+  }[]> {
     const record = await this.storage.task(actor, taskId)
     if (record === undefined) {
-      return planned.map(item => ({ ...item, state: 'cancelled' as SubtaskState }))
+      // 库里查不到：按「未跑完」回落。没有口径、也没有材料可谈 —— 空串与空数组就是"没有"。
+      return planned.map(item => ({
+        ...item, state: 'cancelled' as SubtaskState, acceptance: '', artifacts: [],
+      }))
     }
     return effectiveSubtasks(record.subtasks).map(item => ({
       id: item.id, goal: item.goal, agentId: item.agentId, state: item.state,
+      // 每步的验收口径与交回材料在这里一并带上：汇总侧的两条消费点（提示词带口径、汇总前核验
+      // 口径提到的产出物）排在下一批，本批先把数据从库里取到调用点，免得那条改动退化成
+      // "给 `summarize` 加一个永远为空的参数"。
+      acceptance: item.acceptance,
+      artifacts: item.artifacts,
     }))
+  }
+
+  /** 任务级验收口径的**唯一**读法；库里的空串就是"没有声明"。 */
+  private async storedAcceptance(actor: Actor, taskId: string): Promise<string> {
+    return (await this.storage.task(actor, taskId))?.acceptance ?? ''
   }
 
   /** 收尾时要交给汇总的材料，同样从库里重建、同样只看有效尝试。 */
@@ -3146,22 +3289,7 @@ export class ButlerConsole {
    *
    * 结论一律来自 {@link decideSettlement}：这里不再自己数一遍子任务。
    */
-  private async *closeTask(input: {
-    readonly taskId: string
-    /** 汇总要用的牛马大总管会话；拿不到时跳过汇总，仍然把终态落下。 */
-    readonly conversation: Conversation | undefined
-    readonly goal: string
-    readonly subtasks: readonly {
-      readonly id: string
-      readonly goal: string
-      readonly agentId: string
-      readonly state: SubtaskState
-    }[]
-    readonly reports: readonly string[]
-    readonly signal: AbortSignal
-    /** 这一轮是否已经被喊停。子任务里有取消的同样按停止处理。 */
-    readonly stopped: boolean
-  }): AsyncGenerator<ButlerEvent> {
+  private async *settleTask(input: SettleTaskInput): AsyncGenerator<ButlerEvent> {
     const { taskId, conversation, goal, subtasks, reports, signal } = input
     const settlement = await this.decideSettlement({ taskId, subtasks, stopped: input.stopped })
 
@@ -3199,7 +3327,8 @@ export class ButlerConsole {
 
     const { state: taskState, failed, stopped } = settlement
     let summaryText = ''
-    if (!stopped && conversation !== undefined) {
+    // 汇总只在**有观众**的路径上跑：后台等待超时（路径 4）传 `summarize: false`。
+    if (input.summarize && !stopped && conversation !== undefined) {
       await this.storage.setTaskState(taskId, 'summarizing')
       for await (const event of this.summarize(conversation, goal, subtasks, reports, signal)) {
         const inner = summaryTextOf(event)
@@ -3210,7 +3339,9 @@ export class ButlerConsole {
     if (summaryText === '') {
       summaryText = reports.length === 0 ? '这次没有拿到可用的子任务结果。' : reports.join('\n\n')
     }
-    const error = failed === 0 ? '' : `${failed} 个子任务失败`
+    // 后台等待超时那条路径用固定的超时说明（`settleErrorOverride`）：它的结论对用户来说是
+    // "没人回话所以停了"，而不是"N 个子任务失败"。其余路径照旧按失败数拼。
+    const error = input.settleErrorOverride ?? (failed === 0 ? '' : `${failed} 个子任务失败`)
     /**
      * 汇总跑完再核一次输入版本，而且**核对与写入在同一个事务里**。
      *
@@ -3229,6 +3360,19 @@ export class ButlerConsole {
       return
     }
     yield { type: 'summary', taskId, text: summaryText, state: taskState, error, time: Date.now() }
+  }
+
+  /**
+   * 有观众的收尾：派活轮、补充轮、补话之后三条路径共用（判据 R8 的"正常路径"走的就是这里）。
+   *
+   * 它只是 {@link settleTask} 的一层薄包装 —— `summarize: true` 是这三条路径唯一的共同点，
+   * 其余差异（会话句柄拿不到、被喊停）由 `settleTask` 按参数处理。
+   *
+   * ⚠️ **不要再往这个包装里加逻辑**：收尾只有一处实现，包装里多一行就等于多一条"只在部分
+   * 路径上生效"的分支 —— 那正是合并要消掉的东西。后台路径（等待超时）直接调 `settleTask`。
+   */
+  private async *closeTask(input: Omit<SettleTaskInput, 'summarize'>): AsyncGenerator<ButlerEvent> {
+    yield* this.settleTask({ ...input, summarize: true })
   }
 
   /**
@@ -3307,7 +3451,11 @@ export class ButlerConsole {
       goal: record.goal,
       subtasks: effective.map(item => ({
         id: item.id, goal: item.goal, agentId: item.agentId, state: item.state,
+        // 每步的口径与交回材料一并带上（汇总侧的两条消费点排在下一批）。
+        acceptance: item.acceptance,
+        artifacts: item.artifacts,
       })),
+      ...(record.acceptance === '' ? {} : { acceptance: record.acceptance }),
       reports: effective.map(reportOf),
       signal: prepared.abort.signal,
       stopped: prepared.abort.signal.aborted,

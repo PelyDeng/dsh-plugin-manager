@@ -224,3 +224,48 @@ describe('收尾的输入屏障', () => {
     expect(task.state).toBe('running')
   })
 })
+
+describe('R8：正常路径的汇总轮次数', () => {
+  /**
+   * 「正常路径」的定义（判据 R8，交接文档 §36 的 D-7）：
+   *
+   * 一声令下、子任务**全部成功**、**没有**补充轮、**没有**等人回话、**单轮**收尾。
+   *
+   * 显式**排除**两类，否则同一条判据会自相矛盾：
+   * - **后台等待超时**（收尾路径 4，`expireWaiting`）：按设计**不跑汇总轮**（D-5：没有观众、
+   *   也没有会话句柄），把它算进"正常路径"会让期望值在 0 与 1 之间摇摆；
+   * - **补充轮与补话**（`closeAfterReply`）：它们各自有自己的回合，是另一条路径的收尾。
+   *
+   * 指标是 `summarize` 的**调用次数**——盘点实测它在 `src/butler.ts` 只有**唯一**调用点
+   * （`closeTask` 里那一处），所以这个数字可数、且不会被别处悄悄加一次。
+   *
+   * ⚠️ 这条断言必须在**收尾路径合并之前**先绿：它是后面那把重构的基线，合并后仍须为 1。
+   * 合并若把它变成 2（例如每条路径各汇总一次），这里会红。
+   */
+  it('正常路径只跑一次汇总（全成功、无补充、无等待、单轮）', async () => {
+    const f = fixture()
+    f.store.setSubtaskState('task-invariants', 's1', 'dispatched')
+    f.store.setSubtaskState('task-invariants', 's1', 'succeeded', { result: '结果' })
+
+    let summarizeCalls = 0
+    const console_ = f.service as unknown as {
+      summarize: (...args: unknown[]) => AsyncGenerator<unknown>
+      closeTask: (input: unknown) => AsyncGenerator<unknown>
+    }
+    console_.summarize = async function* () {
+      summarizeCalls += 1
+      yield { type: 'summary_text', text: '汇总结果' }
+    }
+
+    const events: unknown[] = []
+    for await (const event of console_.closeTask({
+      taskId: 'task-invariants', conversation: f.conversation, goal: '原来的目标',
+      subtasks: [{ id: 's1', state: 'succeeded' }], reports: ['结果'],
+      signal: new AbortController().signal, stopped: false,
+    })) events.push(event)
+
+    expect(summarizeCalls).toBe(1)
+    expect(f.task().state).toBe('completed')
+    expect(JSON.stringify(events)).toContain('汇总结果')
+  })
+})
