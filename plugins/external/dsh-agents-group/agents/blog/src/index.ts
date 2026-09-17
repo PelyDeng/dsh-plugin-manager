@@ -30,8 +30,8 @@ import {selectBlogModel} from './models.ts'
 import type {BlogModelChoices} from './models.ts'
 import {reasoningLanguage} from './jobs.ts'
 import {ReasoningTranslations,reasoningOriginal} from './reasoning-translation.ts'
-// DSN 来源解析用**运行时那一份**：blog 的 `storage/dsn.mjs` 文件头自述"复制管家 butler-console
-// 的 dsn.ts 模式"，而 P4 已把它迁进运行时（`packages/runtime/src/storage/dsn.ts`）。两处各留一份
+// DSN 来源解析用**运行时那一份**：blog 本地那份 `storage/dsn`（P4 期间由 `storage/dsn.mjs` 迁入运行时，
+// **本地副本已删**）的文件头曾自述"复制管家 butler-console 的 dsn.ts 模式"。两处各留一份
 // 的代价是**语义会漂移**，而这一段的判据恰恰是最容易漂的地方：缺文件算"没配置"（不是错误）、
 // 非法 JSON 要如实抛、**绝不静默回退 SQLite**。副本已删。
 import { resolveStorageDsn } from '../../../packages/runtime/src/storage/dsn.ts'

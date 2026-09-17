@@ -34,6 +34,9 @@ kind: "package-bundle"
 
 ## 一次问答的数据流
 
+> 下图里的 `/closedoff-qa` 是本包**独立运行**时的默认前缀；**在群组里页面前缀由群组从 id 推导**
+> （本 Agent 是 `/agents/closedoff`，就绪探针是 `/agents/closedoff/ready`），把下图中的前缀整体替换即可。
+
 ```mermaid
 sequenceDiagram
   participant U as 浏览器

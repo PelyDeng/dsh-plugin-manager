@@ -37,7 +37,7 @@ kind: "package-bundle"
 
 会话打开并核验归属后，会先提供原会话入口，便于在查询中或停止后回看；该链接不代表查询已完成。
 
-`/closedoff-qa?conversationId=closedoff-web-<UUIDv4>` 可打开指定会话。页面先验证身份，历史接口再校验会话主人；链接本身不授予访问权限。自定义 `routePrefix` 时使用对应入口路径。切换、新建或删除当前会话会同步地址中的 `conversationId`；刷新后恢复当前会话，或保持新会话入口。
+`/agents/closedoff?conversationId=closedoff-web-<UUIDv4>` 可打开指定会话（**页面前缀由群组推导**：群里是 `/agents/<id>`；只有独立运行本包时才是它自己的默认前缀 `/closedoff-qa`）。页面先验证身份，历史接口再校验会话主人；链接本身不授予访问权限。自定义 `routePrefix` 时使用对应入口路径。切换、新建或删除当前会话会同步地址中的 `conversationId`；刷新后恢复当前会话，或保持新会话入口。
 
 closedoff 在 authenticated 模式接入 auth 的[会话管理](../../../../../doc/conversation-management.md)。本人对话按插件分类、筛选和分页；只读预览使用已有的脱敏消息转换逻辑，不恢复 Agent 或查询园区接口。批量移除使用官方归档，底层日志和独立分支保留。
 
@@ -183,7 +183,7 @@ $env:CLOSEDOFF_ENV_CONF = (Resolve-Path '<用户配置目录>\env.conf').Path
 dsh --profile web
 ```
 
-浏览器打开 DSH 输出的 Web 地址，再追加 `/closedoff-qa`。例如 DSH 显示 `http://127.0.0.1:<port>/` 时，访问 `http://127.0.0.1:<port>/closedoff-qa`。
+浏览器打开 DSH 输出的 Web 地址，再追加**群组给的入口** `/agents/closedoff`（独立运行本包时才是 `/closedoff-qa`）。例如 DSH 显示 `http://127.0.0.1:<port>/` 时，群里访问 `http://127.0.0.1:<port>/agents/closedoff`，独立运行时访问 `http://127.0.0.1:<port>/closedoff-qa`。
 
 ## 开发模式与正式模式
 

@@ -789,7 +789,7 @@ POST /closed-off/device/page  { "pageIndex": 1, "pageSize": 500 }
 
 ## 通过 DSH 专用页面调用 Agent
 
-如果另一个客户端希望复用“自然语言 → Tool 选择 → 接口调用 → 中文分析”的完整流程，可以调用专用页面 API。下面以默认 `routePrefix=/closedoff-qa` 为例；修改前缀后应同步替换。
+如果另一个客户端希望复用“自然语言 → Tool 选择 → 接口调用 → 中文分析”的完整流程，可以调用专用页面 API。下面以本包**独立运行**时的默认前缀 `routePrefix=/closedoff-qa` 为例；修改前缀后应同步替换。**在群组里前缀不由本包决定**（见上文：由群组从 id 推导，最终是 `/agents/closedoff`）⇒ 群里请把下文所有 `/closedoff-qa` 换成 `/agents/closedoff`。
 
 ### 发起对话
 
