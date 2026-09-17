@@ -197,6 +197,15 @@ CREATE INDEX butler_tasks_conversation ON butler_tasks (conversation_id, created
 
 CREATE TABLE butler_subtasks (
   task_id                  TEXT    NOT NULL,
+  -- ⚠️ **双列归属 + 复合外键**（与 `blog_jobs` / `blog_operations` / `blog_attachments` 同一条口径）：
+  -- 本表原先**没有 owner 列**，外键只挂 `task_id` ⇒ B 的 owner 拿自己名下的一张 `butler_tasks` 行当
+  -- `task_id`，就能把子任务行插进**别人**的任务里，**DB 层拦不住**（设计 §9 R4"私有侧 PG 表一律双列"）。
+  -- 补上两列之后，`(task_id, owner_namespace, owner_id)` 一起指向父任务 ⇒ 归属不再只靠调用方记得查。
+  -- ⚠️ 这两列是**冗余**的（父任务已经有），存在的理由**就是**这条复合外键：让"子行的 owner 与父行不同"
+  -- 这件事在**数据库里不可能发生**。因此读路径仍可按 `task_id` 单列定位（`butler_tasks.id` 是主键 ⇒
+  -- 一个 `task_id` 只对应一个 owner），不需要把 owner 塞进每个 WHERE。
+  owner_namespace          TEXT    NOT NULL,
+  owner_id                 TEXT    NOT NULL,
   id                       TEXT    NOT NULL,
   seq                      INTEGER NOT NULL,
   goal                     TEXT    NOT NULL,
@@ -221,19 +230,26 @@ CREATE TABLE butler_subtasks (
   started_at               BIGINT,
   finished_at              BIGINT,
   PRIMARY KEY (task_id, id),
-  FOREIGN KEY (task_id) REFERENCES butler_tasks (id) ON DELETE CASCADE
+  -- MATCH SIMPLE（默认，**故意不写 `MATCH FULL`**）：三列都是 NOT NULL，两种模式在此等价；
+  -- 与 DDL 里另外三张表的复合外键保持同一种写法，避免"看起来有的更严"的错觉。
+  FOREIGN KEY (task_id, owner_namespace, owner_id)
+    REFERENCES butler_tasks (id, owner_namespace, owner_id) ON DELETE CASCADE
 );
 CREATE INDEX butler_subtasks_task    ON butler_subtasks (task_id, seq);
 CREATE INDEX butler_subtasks_logical ON butler_subtasks (task_id, logical_id);
 
 CREATE TABLE butler_task_inputs (
   task_id    TEXT    NOT NULL,
+  -- 同 `butler_subtasks`：双列归属 + 复合外键。本表原先也没有 owner 列。
+  owner_namespace TEXT NOT NULL,
+  owner_id        TEXT NOT NULL,
   version    INTEGER NOT NULL,
   text       TEXT    NOT NULL,
   source     TEXT    NOT NULL,
   created_at BIGINT  NOT NULL,
   PRIMARY KEY (task_id, version),
-  FOREIGN KEY (task_id) REFERENCES butler_tasks (id) ON DELETE CASCADE
+  FOREIGN KEY (task_id, owner_namespace, owner_id)
+    REFERENCES butler_tasks (id, owner_namespace, owner_id) ON DELETE CASCADE
 );
 
 CREATE TABLE butler_agent_aliases (

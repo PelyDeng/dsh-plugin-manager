@@ -228,6 +228,58 @@ describe.skipIf(DSN === '')('§7 验收合同（butler_test，ButlerConsole 级 
     expect(await storage.avatar(bob, 'blog')).toBeUndefined()
   })
 
+  /**
+   * ⚠️ 这一条测的是"**数据库自己拦不拦得住**"，不是"调用方记不记得查"（R4 的两表例外）。
+   *
+   * 补之前：`butler_subtasks` / `butler_task_inputs` **没有 owner 列**，外键只挂 `task_id`
+   * ⇒ 拿别人的 `task_id` **直接 INSERT**（绕过 API 那层的 owner 检查）能成功，DB 层拦不住。
+   * 现在两列 + 复合外键 `(task_id, owner_namespace, owner_id)` 在位 ⇒ 跨 owner 写入是 **23503**。
+   *
+   * ⚠️ 断言刻意**成对**（同 owner 必须成功 + 跨 owner 必须 23503）：只断"跨 owner 报错"的话，
+   * 一个"永远抛错"的实现也照样绿 —— 判据必须能分辨对错实现，而不是只证明"这里有异常"。
+   */
+  it('1b. 子表归属由数据库保证：同 owner 插得进、跨 owner 23503（不经 API，直接 SQL）', async () => {
+    const conversationId = `butler-web-${randomUUID()}`
+    const taskId = `butler-task-${randomUUID()}`
+    await storage.reserveConversation(conversationId, alice)
+    await storage.createTask({
+      id: taskId,
+      conversationId,
+      actor: alice,
+      goal: 'R4 归属探针',
+      note: '',
+      subtasks: [{ id: 's1', goal: '子任务', agentId: 'blog', reason: '' }],
+    })
+
+    // ① 同 owner：两张表都插得进（这两条同时证明上一条断言不是"永远抛错"）。
+    await admin.query(
+      `INSERT INTO butler_subtasks(task_id,owner_namespace,owner_id,id,seq,goal,state)
+       VALUES($1,'user','alice','own-sub',9,'同 owner','queued')`, [taskId])
+    await admin.query(
+      `INSERT INTO butler_task_inputs(task_id,owner_namespace,owner_id,version,text,source,created_at)
+       VALUES($1,'user','alice',9,'同 owner','chat',1)`, [taskId])
+
+    // ② 跨 owner：两张表都必须被外键拒（23503）。
+    //    版本号/子任务 id 都刻意取**未被占用**的值：否则可能先撞主键（23505），
+    //    用例就会因为**另一个原因**变绿。
+    for (const sql of [
+      `INSERT INTO butler_subtasks(task_id,owner_namespace,owner_id,id,seq,goal,state)
+       VALUES($1,'user','bob','cross-sub',10,'跨 owner','queued')`,
+      `INSERT INTO butler_task_inputs(task_id,owner_namespace,owner_id,version,text,source,created_at)
+       VALUES($1,'user','bob',10,'跨 owner','chat',1)`,
+    ]) {
+      await expect(admin.query(sql, [taskId]))
+        .rejects.toSatisfy((error: unknown) => (error as { code?: string }).code === '23503')
+    }
+    // ③ 被拒的两行**一行都不能落**。
+    const leaked = await admin.query<{ subs: string, inputs: string }>(
+      `SELECT (SELECT count(*) FROM butler_subtasks WHERE id='cross-sub') AS subs,
+              (SELECT count(*) FROM butler_task_inputs WHERE task_id=$1 AND version=10) AS inputs`,
+      [taskId])
+    expect(Number(leaked.rows[0]?.subs)).toBe(0)
+    expect(Number(leaked.rows[0]?.inputs)).toBe(0)
+  })
+
   it('2. 并发幂等：两个并发 start（同 requestId）恰一执行，重放拿到相同凭据', async () => {
     const { console_: consoleA, agent } = session(storage)
     const conversationId = `butler-web-${randomUUID()}`

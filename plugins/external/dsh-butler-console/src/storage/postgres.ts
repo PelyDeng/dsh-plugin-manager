@@ -183,8 +183,15 @@ function mapSubtaskRow(row: SubtaskRow): SubtaskRecord {
   }
 }
 
-/** 一条子任务的 SQL 写入参数（createTask 与 appendSubtasks 共用同一形状与顺序）。 */
-function subtaskInsertValues(taskId: string, subtask: NewSubtask, seq: number, logicalId: string): unknown[] {
+/**
+ * 一条子任务的 SQL 写入参数（createTask 与 appendSubtasks 共用同一形状与顺序）。
+ *
+ * ⚠️ **末尾那两列（`owner_namespace` / `owner_id`）不是可选的**：本表有
+ * `FOREIGN KEY (task_id, owner_namespace, owner_id)`，漏写就是 **23502**（NOT NULL），
+ * 写错 owner 就是 **23503**。取值一律来自**发起这次写的 actor** —— 让数据库来判"这个 task 是不是你的"，
+ * 而不是靠调用方记得先查一次父任务（补这两列之前正是那样，DB 层拦不住跨 owner 写入）。
+ */
+function subtaskInsertValues(owner: Actor, taskId: string, subtask: NewSubtask, seq: number, logicalId: string): unknown[] {
   return [
     taskId, subtask.id, seq, subtask.goal, subtask.agentId, subtask.reason, 'queued',
     logicalId, subtask.supersedes ?? '', JSON.stringify(subtask.dependsOn ?? []),
@@ -194,6 +201,9 @@ function subtaskInsertValues(taskId: string, subtask: NewSubtask, seq: number, l
     subtask.requiresExternalAction === true,
     // 验收口径：没声明就写空串（列是 NOT NULL DEFAULT ''，普通 TEXT 列，不是 JSONB）。
     subtask.acceptance ?? '',
+    // 归属两列**追加在末尾**（而不是插到 `task_id` 之后）：INSERT 带显式列清单，列序自由；
+    // 追加就不必给前面 12 个占位符重新编号 —— 那正是最容易写错一位的地方。
+    owner.namespace, owner.userId,
   ]
 }
 
@@ -218,7 +228,7 @@ function observationJson(observation: string | undefined): string {
   return text === '' ? '{}' : JSON.stringify({ why: text })
 }
 
-const SUBTASK_INSERT_COLUMNS = 'task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on,requires_external_action,acceptance'
+const SUBTASK_INSERT_COLUMNS = 'task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on,requires_external_action,acceptance,owner_namespace,owner_id'
 
 /**
  * 牛马大总管工作台的 PostgreSQL 存储。
@@ -491,15 +501,17 @@ export class PostgresTaskStorage implements ButlerStorage {
         [input.id, input.conversationId, input.actor.namespace, input.actor.userId, input.goal, input.acceptance ?? '', input.note, now],
       )
       // 开头那条需求就是版本 1，与任务一起落库：输入历史要完整。
+      // ⚠️ 归属两列必须写：本表有 `(task_id, owner_namespace, owner_id)` 复合外键，
+      // 漏了就 23502、写错 owner 就 23503（见 `subtaskInsertValues` 的注释）。
       await client.query(
-        'INSERT INTO butler_task_inputs(task_id,version,text,source,created_at) VALUES($1,1,$2,$3,$4)',
-        [input.id, input.goal, 'chat', now],
+        'INSERT INTO butler_task_inputs(task_id,owner_namespace,owner_id,version,text,source,created_at) VALUES($1,$2,$3,1,$4,$5,$6)',
+        [input.id, input.actor.namespace, input.actor.userId, input.goal, 'chat', now],
       )
       for (const [index, subtask] of input.subtasks.entries()) {
         // 没给目标标识就按顺序分配：首次计划里一条子任务就是一个目标。
         await client.query(
-          `INSERT INTO butler_subtasks(${SUBTASK_INSERT_COLUMNS}) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          subtaskInsertValues(input.id, subtask, index + 1, subtask.logicalId ?? `g${index + 1}`),
+          `INSERT INTO butler_subtasks(${SUBTASK_INSERT_COLUMNS}) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          subtaskInsertValues(input.actor, input.id, subtask, index + 1, subtask.logicalId ?? `g${index + 1}`),
         )
       }
     })
@@ -592,7 +604,12 @@ export class PostgresTaskStorage implements ButlerStorage {
    * 落一条裁决结论（`butler_verdict` 的写入面）。
    *
    * 一条 scoped UPDATE：`task_id` 与 `id` 一起进 WHERE，**不另做一次预查询**（两套判定必然漂移）。
-   * 子任务表没有 owner 列，归属靠 `task_id` 挂在任务上，所以 owner 条件写在子查询里。
+   *
+   * ⚠️ **归属条件从"子查询"改成了本表的列**（R4 两表例外补上 owner 两列 + 复合外键之后）：
+   * 原先本表没有 owner 列，只能写 `EXISTS (SELECT 1 FROM butler_tasks t WHERE t.id=$5 AND …)`；
+   * 现在 `(task_id, owner_namespace, owner_id)` 是复合外键 ⇒ **子行的 owner 恒等于父行的 owner**，
+   * 于是 `owner_namespace=$7 AND owner_id=$8` 与那条子查询**等价**，而少一次子查询。
+   * （等价性不是推断出来的：外键让"两者不同"这件事在数据库里不可能存在。）
    *
    * **返回受影响行数** ⇒ 调用方做写后核验（0 = 这条子任务不存在或不属于该任务，是编程错误）。
    */
@@ -604,8 +621,7 @@ export class PostgresTaskStorage implements ButlerStorage {
   ): Promise<number> {
     const result = await this.run(
       `UPDATE butler_subtasks SET verdict=$1, verdict_reason=$2, verdict_evidence=$3, observation=$4
-        WHERE task_id=$5 AND id=$6
-          AND EXISTS (SELECT 1 FROM butler_tasks t WHERE t.id=$5 AND t.owner_namespace=$7 AND t.owner_id=$8)`,
+        WHERE task_id=$5 AND id=$6 AND owner_namespace=$7 AND owner_id=$8`,
       [patch.verdict, patch.reason ?? '', verdictEvidenceJson(patch.evidence), observationJson(patch.observation),
         taskId, subtaskId, actor.namespace, actor.userId],
     )
@@ -738,8 +754,8 @@ export class PostgresTaskStorage implements ButlerStorage {
       try {
         await client.query('UPDATE butler_tasks SET accepted_version=$1, updated_at=$2 WHERE id=$3', [next, now, taskId])
         await client.query(
-          'INSERT INTO butler_task_inputs(task_id,version,text,source,created_at) VALUES($1,$2,$3,$4,$5)',
-          [taskId, next, text, source, now],
+          'INSERT INTO butler_task_inputs(task_id,owner_namespace,owner_id,version,text,source,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
+          [taskId, actor.namespace, actor.userId, next, text, source, now],
         )
       } catch (error) {
         // (task_id,version) 主键兜底（§3）：正常并发已被任务行锁串行化，真撞上说明
@@ -811,8 +827,8 @@ export class PostgresTaskStorage implements ButlerStorage {
       const ids: string[] = []
       for (const [index, subtask] of subtasks.entries()) {
         await client.query(
-          `INSERT INTO butler_subtasks(${SUBTASK_INSERT_COLUMNS}) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-          subtaskInsertValues(taskId, subtask, start + index + 1, subtask.logicalId ?? `g${nextLogical + index + 1}`),
+          `INSERT INTO butler_subtasks(${SUBTASK_INSERT_COLUMNS}) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          subtaskInsertValues(actor, taskId, subtask, start + index + 1, subtask.logicalId ?? `g${nextLogical + index + 1}`),
         )
         ids.push(subtask.id)
       }
