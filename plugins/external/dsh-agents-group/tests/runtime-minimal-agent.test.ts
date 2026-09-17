@@ -75,6 +75,13 @@ interface FakeSession {
   readonly prompts: PromptSection[]
   /** agent 作用域里应用过的工具限制。 */
   readonly restrictions: (readonly string[])[]
+  /**
+   * agent 作用域里**注册**过的工具（交活工具走这条口）。
+   *
+   * 与 `restrictions` 分开记：限制是"减"、注册是"加"，而交活工具是加进来的那一个。两者混在
+   * 一起就看不出"工具真的挂上去了没有"——而那正是接线唯一的判据。
+   */
+  readonly scopedTools: { readonly name: string }[]
   /** 每次 create / resume 收到的 `agentOptions`。 */
   readonly options: unknown[]
   disposed: boolean
@@ -139,6 +146,8 @@ interface Harness {
   answer(conversationId: string, text: string, input?: { readonly turn?: number; readonly reason?: string }): Promise<void>
   promptsOf(conversationId: string): readonly PromptSection[]
   restrictionsOf(conversationId: string): readonly (readonly string[])[]
+  /** agent 作用域里注册过的工具（本文件**不接线**交活工具，所以恒为空——见 `answer` 的注释）。 */
+  scopedToolsOf(conversationId: string): readonly { readonly name: string }[]
   agentOptionsOf(conversationId: string): unknown
   /** 建立过句柄的会话 id（`create` / `resume` 各算一次）。 */
   opened(): readonly string[]
@@ -172,7 +181,7 @@ function fixture(definition: AgentDefinition, extraActors: readonly Actor[] = []
     const existing = sessions.get(id)
     if (existing !== undefined) return existing
     const session = {
-      id, events: [], prompts: [], restrictions: [], options: [], disposed: false,
+      id, events: [], prompts: [], restrictions: [], scopedTools: [], options: [], disposed: false,
     } as unknown as FakeSession
     session.agent = {
       id,
@@ -213,7 +222,12 @@ function fixture(definition: AgentDefinition, extraActors: readonly Actor[] = []
   /** agent 作用域：`ConversationLifecycle.setup` 只碰这两个面。 */
   const scopeOf = (session: FakeSession): Context => ({
     systemPrompt: { section: (section: PromptSection) => { session.prompts.push(section) } },
-    tools: { restrict: (input: { readonly allow: readonly string[] }) => { session.restrictions.push([...input.allow]) } },
+    tools: {
+      restrict: (input: { readonly allow: readonly string[] }) => { session.restrictions.push([...input.allow]) },
+      // 交活工具的接线口：宿主在 agent 作用域注册工具时走它（`conversation.ts` 的
+      // `registerScopedTools`）。返回 disposer 的契约与宿主一致。
+      register: (tool: { readonly name: string }) => { session.scopedTools.push(tool); return () => {} },
+    },
   }) as unknown as Context
 
   const handleOf = (session: FakeSession) => ({
@@ -310,7 +324,7 @@ function fixture(definition: AgentDefinition, extraActors: readonly Actor[] = []
   const allowedTools = () => ['dsh_tool_read']
   const lifecycle = new ConversationLifecycle({ ctx, definition, access, store: port, config, allowedTools })
   const runtime: AgentRuntime = { ctx, definition, access, store: port, config, lifecycle, allowedTools }
-  const participant = createParticipant({ definition, runtime, access, config })
+  const participant = createParticipant({ definition, runtime: { ...runtime, lifecycle: () => lifecycle }, access, config })
 
   /**
    * 等到条件成立。
@@ -409,6 +423,7 @@ function fixture(definition: AgentDefinition, extraActors: readonly Actor[] = []
     },
     promptsOf: conversationId => sessionOf(conversationId).prompts,
     restrictionsOf: conversationId => sessionOf(conversationId).restrictions,
+    scopedToolsOf: conversationId => sessionOf(conversationId).scopedTools,
     agentOptionsOf: conversationId => sessionOf(conversationId).options[0],
     opened: () => openedIds,
     resumed: () => resumedIds,

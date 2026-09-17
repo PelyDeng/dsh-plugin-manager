@@ -205,9 +205,36 @@ describe('createAgentRuntime 的装配链', () => {
     // 侧栏入口的装配只发生一次（`conversationRemover` 的移除互斥是进程内的）。
     expect(assembly.provider.protocol).toBe(1)
     expect(assembly.provider.pluginId).toBe(AGENT_ID)
-    // 运行时的两个监听都挂在装配 ctx 上：标题（生命周期的）与模型增量（入口的）。
-    expect(f.host.listeners()).toEqual(['session/event', 'agent/assistant-stream'])
+    // 运行时的两个监听都挂在装配 ctx 上：模型增量（participant 的）与标题（lifecycle 的）。
+    //
+    // ⚠️ **顺序与装配顺序同源，不是随意排的**：交活工具按会话注册，接线点要 participant 的
+    // `handoffFor`，所以工厂改成"先造 participant、后造 lifecycle"——于是增量出口的订阅先挂、
+    // 标题订阅后挂。**不要**把它当成降级成无序比较：这两个监听的注册顺序是装配顺序的直接
+    // 可观测结果，写死顺序才能在有人调回去时变红（标题订阅晚于增量出口不影响行为，但那说明
+    // 装配顺序变了，而那件事影响的是接线本身）。
+    expect(f.host.listeners()).toEqual(['agent/assistant-stream', 'session/event'])
     expect(f.host.registeredEffects).toHaveLength(1)
+
+    /**
+     * ★ **交活工具的接线点在工厂里确实存在**（对应 `report_result` 那条"声明了却零接线"）。
+     *
+     * 为什么要单独断言它：删掉工厂里那几行，交付照样成功（走投影兜底），任何一条"结果对不对"
+     * 的用例都不会红——所以只能直接看"线接上了没有"。
+     *
+     * 怎么读到它：`registerScopedTools` 住在 `ConversationLifecycle` 私有的 `host` 上，正常途径
+     * 从外部看不见。这里**刻意**穿透读一次，而不是在假 ctx 上留一个探针位——探针位由工厂写、
+     * 也由测试读，看着更"干净"，实测却会给出"写入成功但读回 `undefined`"的假象（本批踩过）。
+     * 穿透读是唯一能真正区分"注入了"与"没注入"的写法。
+     *
+     * ★ **变异验证（本批实测）**：把工厂里那三行注释掉，这一条**变红**；而
+     * `runtime-closure.test.ts` 的三条接线断言**仍然全绿**（它们的替身自己复刻了接线）。
+     * 所以"装配那一环"只由这一条守住，别把它删了换成别处的间接证据。
+     *
+     * 运行期"注入了就会被调用、且按会话取账本、且不受 `restrict` 影响"由 `runtime-closure.test.ts`
+     * 那三条覆盖（那里真的打开会话、真的跑 `setup`）。
+     */
+    const host = (assembly.lifecycle as unknown as { host: { registerScopedTools?: unknown } }).host
+    expect(typeof host.registerScopedTools).toBe('function')
   })
 
   it('storage 与 database 二选一：两个都给、或都不给，都是装配错误', async () => {

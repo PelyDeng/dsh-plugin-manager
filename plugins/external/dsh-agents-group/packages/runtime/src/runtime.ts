@@ -5,8 +5,8 @@
  * 建存储（createAgentDatabase + await open()）
  *   → 调 definition.tools(...) 取业务工具描述符        ← ★ 这个钩子的唯一调用点
  *   → 把存储端口的 titleSink() 接上 installTitleSink    ← ★ 标题投递的唯一装配点（经进程级路由）
- *   → new ConversationLifecycle({ ctx, definition, access, store, config, allowedTools })
- *   → createParticipant({ definition, runtime, access, config, storage })
+ *   → 造 participant（先于 lifecycle：交活工具的按会话注册要它的 `handoffFor`）
+ *   → new ConversationLifecycle({ ctx, definition, access, store, config, allowedTools, registerScopedTools })
  *   → createConversationProvider(...) 侧栏入口
  * ```
  *
@@ -47,6 +47,7 @@ import {
   type TitleSink,
 } from './conversation.ts'
 import type { AgentDefinition } from './definition.ts'
+import { reportResultTool } from './handoff.ts'
 import { createParticipant, type RuntimeParticipant } from './participant.ts'
 import { createConversationProvider } from './storage/adapter.ts'
 import { createAgentDatabase, type CreateAgentDatabaseInput } from './storage/index.ts'
@@ -179,10 +180,56 @@ export async function createAgentRuntime(input: CreateAgentRuntimeInput): Promis
 
   // `storage` 一并交给生命周期：回合钩子（`onTurnStart` / `onTurnFinish`）要把它给业务，
   // 而业务在那个时点只能靠它读自己的表（`definition` 是每 Agent 一份，拿不到每请求的东西）。
+  //
+  // ⚠️ **装配顺序：先 participant、后 lifecycle**。交活工具是**按会话**的，账本住在 participant
+  // 里（`handoffFor(conversationId)`），而工具注册发生在 lifecycle 的 `setup()` 里 ⇒ 先造
+  // participant，才能把那个闭包交给 lifecycle。`createParticipant` 只在**回合运行时**读
+  // `runtime.lifecycle`（`participant.ts` 里 `lifecycle.*` 全在 `runTurn` 内），构造期不读，
+  // 所以下面那个"先占位、后补上"的写法成立；`runtime` 是同一个对象引用，participant 看到的
+  // 就是补好之后的那一份。
   const host: LifecycleHost = { ctx, definition, access, store: db.conversations, config, allowedTools, storage }
+  const runtime: AgentRuntime = { ...host, lifecycle: undefined as never }
+  /**
+   * 交给 participant 的是**惰性取值器**（`CreateParticipantInput.runtime` 的说明）。
+   *
+   * 这里直接把 `runtime.lifecycle` 那个 getter 交出去（它下面被定义成 `() => lifecycle`），
+   * 于是"什么时候真的读到实例"由 participant 决定——它在回合运行时读，那时装配早已完成。
+   * 不能写成 `lifecycle: () => lifecycle`：那会在这一行就捕获**尚未初始化的 `const lifecycle`**
+   * （TDZ），运行期报 `Cannot access 'lifecycle' before initialization`。
+   */
+  const participant = createParticipant({
+    definition,
+    runtime: runtime as unknown as Parameters<typeof createParticipant>[0]['runtime'],
+    storage,
+    access,
+    config,
+  })
+  /**
+   * **交活工具的接线点**（`report_result` 唯一的注册处）。
+   *
+   * 两件事必须一起做完，缺一件都是**静默失效**：
+   *
+   * - `agentCtx.tools.register(...)`：把工具挂进**这个会话**的 agent 作用域。挂会话作用域是有意
+   *   的——账本按会话分，工具就必须按会话取账本，否则多会话并发时会串到别人的账本上。宿主的
+   *   `register` 语义正是"按调用时的作用域注册"，且 scoped 工具**不受 `restrict` 影响**
+   *   （所以它不需要、也不该出现在 `allowedTools` 名册里）。
+   * - `ledger.install()`：告诉运行时"模型手里**真的**有这个工具"。补交轮的门槛就是
+   *   `ledger.available`（`handoff.ts:64-67`）：没装它时运行时不敢补交（怕模型手里没工具、
+   *   补交只是白花一轮预算），于是 ⑦ 把"没交活"记成 `unverified` 而不是判失败。
+   *
+   * 删掉这一段**不会报任何错**：交付照常走投影兜底，只是补交轮、⑦ 的 `report-called`、超时兜底
+   * 三条路径一起消失。`tests/runtime-closure.test.ts` 的接线断言就是为了让这种删除变成红灯。
+   */
+  host.registerScopedTools = (
+    agentCtx: Parameters<NonNullable<LifecycleHost['registerScopedTools']>>[0],
+    conversationId: Parameters<NonNullable<LifecycleHost['registerScopedTools']>>[1],
+  ) => {
+    const ledger = participant.handoffFor(conversationId)
+    ledger.install()
+    agentCtx.tools.register(reportResultTool(ledger))
+  }
   const lifecycle = new ConversationLifecycle(host)
-  const runtime: AgentRuntime = { ...host, lifecycle }
-  const participant = createParticipant({ definition, runtime, storage, access, config })
+  runtime.lifecycle = lifecycle
   const provider = createConversationProvider({
     ctx,
     port: db.conversations,

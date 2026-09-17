@@ -20,10 +20,10 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { describe, expect, it, vi } from 'vitest'
 import type { ParticipantRequest, ParticipantResult } from '../packages/runtime/src/contract.ts'
-import { ConversationLifecycle, type AgentRuntime, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
+import { ConversationLifecycle, type AgentRuntime, type LifecycleHost, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
 import { createParticipant, type RuntimeParticipant } from '../packages/runtime/src/participant.ts'
 import type { AgentDefinition, ProjectedResult, TurnHookContext } from '../packages/runtime/src/definition.ts'
-import type { HandoffLedger } from '../packages/runtime/src/handoff.ts'
+import { reportResultTool, type HandoffLedger } from '../packages/runtime/src/handoff.ts'
 import type { AgentDatabasePort, AgentStoragePort, ConversationPort, OwnerKey, TurnStorePort } from '../packages/runtime/src/storage/ports.ts'
 import { MemoryConversationPort } from './fixtures/memory-conversation-port.ts'
 
@@ -109,7 +109,19 @@ async function until(check: () => boolean, label: string): Promise<void> {
   throw new Error(`等待超时：${label}`)
 }
 
-function host(definition: AgentDefinition, config: Partial<RuntimeConfig> = {}, questions = new Map<string, string>()) {
+function host(
+  definition: AgentDefinition,
+  config: Partial<RuntimeConfig> = {},
+  questions = new Map<string, string>(),
+  /**
+   * 是否复刻生产装配的**交活工具接线**。
+   *
+   * - `true`（缺省）：与 `runtime.ts` 的 `registerScopedTools` 逐字同形 —— 生产路径就是这样；
+   * - `false`：**故意不接线**，用来锁住"没接线时不补交"那个门槛（`ledger.available` 为假时
+   *   运行时不该白花一轮去补交）。
+   */
+  registerScopedTools = true,
+) {
   const byEvent = new Map<string, Set<(...args: unknown[]) => void>>()
   const sessions = new Map<string, FakeSession>()
   const followups: { readonly id: string; readonly text: string }[] = []
@@ -159,23 +171,46 @@ function host(definition: AgentDefinition, config: Partial<RuntimeConfig> = {}, 
    * **这一轮**的快照"，而不是"打开会话那一次"的那份（后者在界面上完全看不出来）。
    */
   const registeredContexts: { name: string; order: number; text: string | ((context: unknown) => string) }[] = []
-  const scopeOf = (): Context => ({
+  /**
+   * 各会话**在 agent 作用域里注册进来的工具**，按会话 id 分桶。
+   *
+   * 它是「交活工具真的接线了」这件事的**唯一判据**：接线发生在 `setup()` 里，而生产装配的
+   * 接线点（`runtime.ts` 的 `registerScopedTools`）删掉之后**不会报任何错**——补交轮、
+   * ⑦ 的 `report-called`、超时兜底三条路径只是安静地不再发生。所以断言必须直接看这里，
+   * 而不是看"最终交付成不成功"（那条路走投影兜底，永远成功）。
+   */
+  const scopedTools = new Map<string, { readonly name: string }[]>()
+  /** 各会话应用的工具限制（`allow` 列表）。 */
+  const restrictions = new Map<string, (readonly string[])[]>()
+  const scopeOf = (conversationId: string): Context => ({
     systemPrompt: {
       section: () => {},
       context: (value: { name: string; order: number; text: string | ((context: unknown) => string) }) => { registeredContexts.push(value) },
     },
-    tools: { restrict: () => {} },
+    tools: {
+      restrict: (input: { readonly allow: readonly string[] }) => {
+        const applied = restrictions.get(conversationId) ?? []
+        applied.push([...input.allow])
+        restrictions.set(conversationId, applied)
+      },
+      register: (tool: { readonly name: string }) => {
+        const list = scopedTools.get(conversationId) ?? []
+        list.push(tool)
+        scopedTools.set(conversationId, list)
+        return () => {}
+      },
+    },
   }) as unknown as Context
   const agents = {
     create: async (input: { readonly sessionId: unknown; readonly setup?: (ctx: Context, agent: Agent) => unknown }) => {
       const session = sessionOf(String(input.sessionId))
       openedIds.push(session.id)
-      await input.setup?.(scopeOf(), session.agent)
+      await input.setup?.(scopeOf(session.id), session.agent)
       return { agent: session.agent, dispose: async () => { session.disposed = true; disposals.set(session.id, (disposals.get(session.id) ?? 0) + 1) } }
     },
     resume: async (input: { readonly resumeSessionId: unknown; readonly setup?: (ctx: Context, agent: Agent) => unknown }) => {
       const session = sessionOf(String(input.resumeSessionId))
-      await input.setup?.(scopeOf(), session.agent)
+      await input.setup?.(scopeOf(session.id), session.agent)
       return { agent: session.agent, dispose: async () => { session.disposed = true; disposals.set(session.id, (disposals.get(session.id) ?? 0) + 1) } }
     },
     list: () => [],
@@ -229,11 +264,30 @@ function host(definition: AgentDefinition, config: Partial<RuntimeConfig> = {}, 
     reasoningEffort: 'medium',
     ...config,
   }
-  const lifecycle = new ConversationLifecycle({
-    ctx, definition, access, store: port, config: runtimeConfig, allowedTools: () => [],
-  })
-  const runtime: AgentRuntime = { ctx, definition, access, store: port, config: runtimeConfig, lifecycle, allowedTools: () => [] }
-  const participant: RuntimeParticipant = createParticipant({ definition, runtime, storage, access, config: runtimeConfig })
+  /**
+   * 装配顺序与生产一致（`runtime.ts`）：**先 participant、后 lifecycle**。
+   *
+   * 理由是接线本身：交活工具按会话注册，账本在 participant 里，而注册发生在 lifecycle 的
+   * `setup()` 里。这个替身刻意复刻生产那三行接线（`ledger.install()` + `tools.register(...)`）
+   * ——它是**逐字等价**的，因为要断言的正是"这条接线存在"；换成一个假的空实现就等于把被测
+   * 对象换掉了。生产装配本身的等价性由 `runtime-assembly.test.ts` 走真工厂核验。
+   */
+  const host: LifecycleHost = { ctx, definition, access, store: port, config: runtimeConfig, allowedTools: () => [] }
+  const runtime: AgentRuntime = { ...host, lifecycle: undefined as never }
+  const participant: RuntimeParticipant = createParticipant({ definition, runtime: { ...runtime, lifecycle: () => lifecycle }, storage, access, config: runtimeConfig })
+  // 与 `runtime.ts` 的接线点逐字同形（见该处注释：两件事必须一起做完，缺一件都是静默失效）。
+  if (registerScopedTools) {
+    host.registerScopedTools = (
+      agentCtx: Parameters<NonNullable<LifecycleHost['registerScopedTools']>>[0],
+      conversationId: Parameters<NonNullable<LifecycleHost['registerScopedTools']>>[1],
+    ) => {
+      const ledger = participant.handoffFor(conversationId)
+      ledger.install()
+      agentCtx.tools.register(reportResultTool(ledger))
+    }
+  }
+  const lifecycle = new ConversationLifecycle(host)
+  runtime.lifecycle = lifecycle
 
   return {
     participant, lifecycle, port, storage, questions, ctx,
@@ -243,6 +297,10 @@ function host(definition: AgentDefinition, config: Partial<RuntimeConfig> = {}, 
     opened: () => openedIds,
     /** 最近一次建立句柄的会话 id。 */
     lastConversation: () => openedIds[openedIds.length - 1] ?? '',
+    /** 某个会话在 agent 作用域里注册进来的工具名（接线判据，见 `scopedTools` 的说明）。 */
+    scopedToolNames: (conversationId: string) => (scopedTools.get(conversationId) ?? []).map(tool => tool.name),
+    /** 某个会话应用过的工具限制（`allow` 列表），按调用顺序。 */
+    restrictionsOf: (conversationId: string) => restrictions.get(conversationId) ?? [],
     /**
      * **现在**求值所有注册进来的动态上下文——模拟宿主"每次装配"回去读 provider。
      * 断言"这一轮"与"打开会话那一次"的差别，全靠它。
@@ -370,11 +428,15 @@ describe('补交轮：没调交活工具时补一次，补不上就按投影兜�
     // `ledger.available` 是装配侧 `install()` 的结果。没注册工具时模型手里根本没有
     // `report_result`，补一次只会白花一轮（而那一轮吃的是同一个超时预算）。
     // 这条用例锁定那个门槛：有人把它改成"无条件补交"时，这里必须红。
-    const hosted = host(definitionOf())
+    //
+    // 第四个参数 = 关掉接线（生产路径是开的）。这一条**必须**关：它测的就是"没接线时的行为"，
+    // 而默认夹具已经与生产同形（接线开着）——不关的话模型手里有工具，补交轮会照常发生。
+    const hosted = host(definitionOf(), {}, new Map(), false)
     try {
       const promise = hosted.participant.run(hosted.request())
       const id = await accept(hosted, promise)
-      // 刻意**不** install。
+      // 接线已关 ⇒ 这个会话没有交活工具。
+      expect(hosted.scopedToolNames(id)).toEqual([])
       hosted.complete(id, '只答了一句')
       const result = await promise
       expect(hosted.followups().length).toBe(1)
@@ -382,6 +444,97 @@ describe('补交轮：没调交活工具时补一次，补不上就按投影兜�
       expect(result.text).toBe('只答了一句')
       // 没调工具 ⇒ 第 4 条如实标"未核验"，不冒充通过；业务侧也没有自检 ⇒ 汇总报 `absent`。
       expect(result.selfCheck?.status).toBe('absent')
+    } finally { await hosted.dispose() }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 交活工具的**接线**：三条断言，钉住"声明了却零接线"那一类静默失效
+// ---------------------------------------------------------------------------
+
+/**
+ * 这一组存在的理由，是本仓反复出现的那类缺陷（注释里数过 8 次以上）：
+ * **钩子声明了、实现也写了，中间的线没接，而且不报任何错。**
+ *
+ * 交活工具正是其中一例：`reportResultTool` 与账本早就实现完整、测试也全绿，但生产装配从不
+ * 注册它 ⇒ 补交轮、⑦ 的 `report-called`、超时兜底三条路径**一起消失**，而交付照常走投影兜底
+ * ⇒ 从外部看一切正常。
+ *
+ * ## 覆盖范围（如实登记，别把它当成全部）
+ *
+ * 这三条跑在**本文件的替身**上，而替身自己在 `host()` 末尾复刻了接线（与生产逐字同形）⇒
+ * 它们证明的是"**注入到 host 上之后**：`setup` 会调它、会按会话取账本、scoped 注册不受
+ * `restrict` 影响"。
+ *
+ * 它们**证明不了**"生产装配真的注入了"——把 `runtime.ts` 里那几行删掉，这三条**仍然是绿的**
+ * （本批变异验证实测如此）。那一环由 `runtime-assembly.test.ts` 的穿透断言覆盖（它读工厂
+ * 内部那个 host，删掉接线就会红）。两边合起来才是完整的：**装配那一环 + 注入之后的行为**。
+ */
+describe('交活工具的接线：注册到本会话的 agent 作用域', () => {
+  it('缺省夹具（与生产同形）在 setup 时注册 `report_result` 并装上账本', async () => {
+    const hosted = host(definitionOf())
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      // ① 工具**真的**挂到了这个会话的 agent 作用域里。判据是**注册记录**——不是"最终交付成不
+      //    成功"：没接线时交付照样成功（走投影兜底），所以那条路永远绿，看不出接线在不在。
+      expect(hosted.scopedToolNames(id)).toEqual(['report_result'])
+      // ② 账本标记为可用：补交轮的门槛就是它（`handoff.ts` 的 `available`）。
+      expect(hosted.participant.handoffFor(id).available).toBe(true)
+      // 收尾：用**模型真的调了工具**的语义交活（`submit` 同时置 `called`），否则运行时按设计
+      // 再注入一条补交提示、这一轮不会结束（`install` 只装门槛，不算交活——本批实测踩过）。
+      hosted.participant.handoffFor(id).submit({ status: 'completed', text: '答完了' })
+      hosted.complete(id, '答完了')
+      await expect(promise).resolves.toMatchObject({ text: '答完了' })
+    } finally { await hosted.dispose() }
+  })
+
+  it('按**会话**取账本：工具写进的是本会话的账本，不串到另一个会话', async () => {
+    // 这条钉的是接线里最容易写错的一格：账本按会话分（`handoffFor(conversationId)`），
+    // 若接线时用"最近一次"或"装配期那一个"，多会话并发下结论就会落到别人的账本上——
+    // 而那个错法是**静默**的：交付仍然成功，只是内容来自另一个会话。
+    const hosted = host(definitionOf())
+    try {
+      const first = hosted.participant.run(hosted.request({ requestId: 'r-a' }))
+      const firstId = await accept(hosted, first)
+      const firstLedger = hosted.participant.handoffFor(firstId)
+      expect(hosted.scopedToolNames(firstId)).toEqual(['report_result'])
+      firstLedger.submit({ status: 'completed', text: '第一个会话的结论' })
+      hosted.complete(firstId, '第一轮')
+      await expect(first).resolves.toMatchObject({ text: '第一个会话的结论' })
+
+      // 第二次派活（不同 requestId）走 `conversationId` 缺省 ⇒ `open(undefined, create=true)`
+      // 铸一条**新**会话，于是拿到另一个会话作用域与另一个账本。
+      const second = hosted.participant.run(hosted.request({ requestId: 'r-b' }))
+      const secondId = await accept(hosted, second, 1)
+      expect(secondId).not.toBe(firstId)
+      // 两个会话各注册了一次（同一份工具定义、两个会话作用域）。
+      expect(hosted.scopedToolNames(secondId)).toEqual(['report_result'])
+      // ★ 核心断言：第二个会话的账本是**空的**，第一个会话的结论没有漏过来。
+      expect(hosted.participant.handoffFor(secondId).result).toBeUndefined()
+      expect(firstLedger.result).toEqual({ status: 'completed', text: '第一个会话的结论' })
+
+      hosted.participant.handoffFor(secondId).submit({ status: 'completed', text: '第二个会话的结论' })
+      hosted.complete(secondId, '第二个会话的正文')
+      await expect(second).resolves.toMatchObject({ text: '第二个会话的结论' })
+    } finally { await hosted.dispose() }
+  })
+
+  it('`restrict` 的 allow 列表里**没有**它，但它仍然可用（宿主语义：scoped 注册不受限制影响）', async () => {
+    // 宿主 `tools.restrict()` 只作用于**全局**工具，scoped 注册始终可见（`dsh-tools` 的
+    // `register` 注释："Scoped tools shadow globals"、"scoped registrations remain visible"）。
+    // 这条断言把那个前提钉进本仓：将来宿主改了这条语义、或有人把工具改成全局注册 + 依赖
+    // allow 列表，这里会红——而不是让 `report_result` 静默地从模型手里消失。
+    const hosted = host(definitionOf())
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      const allow = hosted.restrictionsOf(id).flat()
+      expect(allow).not.toContain('report_result')
+      expect(hosted.scopedToolNames(id)).toContain('report_result')
+      hosted.participant.handoffFor(id).submit({ status: 'completed', text: '答完了' })
+      hosted.complete(id, '答完了')
+      await expect(promise).resolves.toMatchObject({ text: '答完了' })
     } finally { await hosted.dispose() }
   })
 })
@@ -767,9 +920,10 @@ describe('投影拿到的 actor 是**这一次派活**的那一个', () => {
     // actor"——那需要"同一 participant、两个不同 actor"，而夹具的鉴权与登录身份绑定不支持
     // （实测挂 vitest 的 testTimeout）。要补那条，先得让夹具支持多 actor 的身份绑定。
     const seen: Actor[] = []
+    // 关掉接线 ⇒ 一轮结束就交付、投影只被调一次（不触发补交轮）。
     const hosted = host(definitionOf({
       projectResult: async (context) => { seen.push(context.actor); return { status: 'completed', text: '答好了' } },
-    }))
+    }), {}, new Map(), false)
     try {
       // 刻意**不** install 交活账本 ⇒ 不触发补交轮，一轮结束就交付、投影只被调一次。
       const promise = hosted.participant.run(hosted.request())
@@ -793,6 +947,7 @@ describe('回合钩子与输入组合', () => {
     const order: string[] = []
     // 钩子要读 `hosted`，而 `host()` 的返回值在构造那一刻还没赋给变量 ⇒ 先留一个引用位。
     let hosted!: ReturnType<typeof host>
+    // 关掉接线：本用例数的是"钩子被调几次"，补交轮会让 `onTurnStart` 再来一次。
     hosted = host(definitionOf({
       onTurnStart: async ({ conversationId }) => {
         // ⚠️ 锚点必须是**同步可观测**的：`followups()` 的长度在这一刻直接可读。
@@ -800,7 +955,7 @@ describe('回合钩子与输入组合', () => {
         order.push(`start:${hosted.followups().length}`)
         expect(conversationId).not.toBe('')
       },
-    }))
+    }), {}, new Map(), false)
     try {
       const promise = hosted.participant.run(hosted.request())
       const id = await accept(hosted, promise)
@@ -850,7 +1005,8 @@ describe('回合钩子与输入组合', () => {
   })
 
   it('composeTurnInput 的返回就是注入的内容；缺省是单块正文（老口径）', async () => {
-    const swapped = host(definitionOf({ composeTurnInput: async () => [{ type: 'text', text: '来自钩子的正文' }] }))
+    // 两段都关掉接线：本用例数的是"哪一段正文被注入"，补交轮会多注入一条、把断言指向别的轮次。
+    const swapped = host(definitionOf({ composeTurnInput: async () => [{ type: 'text', text: '来自钩子的正文' }] }), {}, new Map(), false)
     try {
       const promise = swapped.participant.run(swapped.request({ message: '原始那一句' }))
       const id = await accept(swapped, promise)
@@ -859,7 +1015,7 @@ describe('回合钩子与输入组合', () => {
       expect(swapped.followups()[0]?.text).toBe('来自钩子的正文')
     } finally { await swapped.dispose() }
 
-    const plain = host(definitionOf())
+    const plain = host(definitionOf(), {}, new Map(), false)
     try {
       const promise = plain.participant.run(plain.request({ message: '原始那一句' }))
       const id = await accept(plain, promise)
@@ -871,7 +1027,8 @@ describe('回合钩子与输入组合', () => {
 
   it('onTurnFinish：正常交付调**一次**，outcome 是 completed', async () => {
     const outcomes: string[] = []
-    const hosted = host(definitionOf({ onTurnFinish: async ({ outcome }) => { outcomes.push(outcome) } }))
+    // 关掉接线：本用例数的就是"通知调了几次"，补交轮会让它多一次。
+    const hosted = host(definitionOf({ onTurnFinish: async ({ outcome }) => { outcomes.push(outcome) } }), {}, new Map(), false)
     try {
       const promise = hosted.participant.run(hosted.request())
       const id = await accept(hosted, promise)
@@ -898,7 +1055,8 @@ describe('回合钩子与输入组合', () => {
    * 查明之后再把它钉成用例。**在此之前不要写一条会因时序而红的断言来"占位"。**
    */
   it('onTurnFinish 抛错**不改变**已经定下的结论', async () => {
-    const hosted = host(definitionOf({ onTurnFinish: async () => { throw new Error('收尾钩子炸了') } }))
+    // 关掉接线：本用例要的是"一轮跑完直接交付"，补交轮会再跑一轮、把结论的来源换掉。
+    const hosted = host(definitionOf({ onTurnFinish: async () => { throw new Error('收尾钩子炸了') } }), {}, new Map(), false)
     try {
       const promise = hosted.participant.run(hosted.request())
       const id = await accept(hosted, promise)

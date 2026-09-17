@@ -193,6 +193,21 @@ export interface LifecycleHost {
   readonly storage?: AgentStoragePort | undefined
   /** 这个 Agent 能用的工具名（本分类 + 通用集），在 agent 作用域内应用。 */
   readonly allowedTools: () => readonly string[]
+  /**
+   * **按会话**注册 agent 作用域工具；缺省不注册任何东西。
+   *
+   * 为什么必须是"注入"而不是运行时自己去做：交活工具（`report_result`）是**按会话**的
+   * （账本 `handoffFor(conversationId)` 住在 `participant.ts`，而 `participant.ts` 已经
+   * import 本文件 ⇒ 本文件反向 import 它会成环）。所以"注册什么"由装配侧决定，本文件只
+   * 负责在最正确的时点调用它——`setup()` 天然就是**每会话一次**，而 `ctx.tools.register()`
+   * 的宿主语义正是"按调用时的作用域注册"（agent 作用域工具会遮蔽全局同名工具，且不受
+   * `restrict` 影响）。
+   *
+   * ⚠️ **非 readonly**：装配工厂要在构造 host 之后把它写进去（它不是构造参数），而 runtime 的
+   * `lifecycle` 也要在同一步补上。写成只读会让那两次赋值变成编译错误——而那两步正是本接口
+   * 存在的意义（"先 participant、后 lifecycle"的装配顺序）。
+   */
+  registerScopedTools?: (agentCtx: Context, conversationId: string) => void
 }
 
 /**
@@ -206,8 +221,15 @@ export interface AgentRuntime {
   readonly access: Access
   readonly store: ConversationPort
   readonly config: RuntimeConfig
-  /** 会话生命周期；协作入口与页面入口共用同一份。 */
-  readonly lifecycle: ConversationLifecycle
+  /**
+   * 会话生命周期；协作入口与页面入口共用同一份。
+   *
+   * ⚠️ **非 readonly**：装配顺序是"先 participant、后 lifecycle"（交活工具的按会话注册要
+   * participant 的 `handoffFor`），所以工厂先造一个占位对象、拿到 participant 之后再把这个
+   * 字段补上。写成只读会让那次赋值变成编译错误。**读它的人必须假定它在装配完成后才有值**——
+   * participant 只在回合运行时读它（见 `CreateParticipantInput.runtime`）。
+   */
+  lifecycle: ConversationLifecycle
   /** 这个 Agent 能用的工具名（本分类 + 通用集），在 agent 作用域内应用。 */
   readonly allowedTools: () => readonly string[]
 }
@@ -499,6 +521,18 @@ export class ConversationLifecycle {
     // 只允许调用属于本 Agent 标签的工具，外加约定好的通用集。在 agent 作用域里限制——
     // 插件级限制会波及所有 Agent，宿主会直接拒绝。
     agentCtx.tools.restrict({ allow: [...this.host.allowedTools()] })
+    /**
+     * **按会话**的 agent 作用域工具（交活工具 `report_result` 走这条）。
+     *
+     * 位置在 `restrict` **之后**是刻意的：这两件事在宿主里互不干扰（restriction 只作用于
+     * 全局工具，scoped 注册始终可见），而把注册放最后让"本会话到底有什么工具"的最终状态
+     * 一眼可见——前面那句是"减"，这一句是"加"，顺序反了会让读代码的人以为加进来的东西
+     * 会被上面的 allow 列表挡掉。
+     *
+     * 缺省（未注入）时**什么都不做**，保持与接线之前逐字一致的行为：这是兼容老装配侧的
+     * 逃生口，不是正常路径——生产装配由 `createAgentRuntime` 注入（见该字段的注释）。
+     */
+    this.host.registerScopedTools?.(agentCtx, conversationId)
   }
 
   private async options(id?: string, eventCount?: number) {

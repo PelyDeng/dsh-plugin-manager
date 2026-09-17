@@ -301,7 +301,10 @@ function fixture(options: FixtureOptions = {}): Harness {
   const lifecycle = new ConversationLifecycle({ ctx, definition, access, store: port, config, allowedTools })
   const participant = createParticipant({
     definition,
-    runtime: { ctx, definition, access, store: port, config, lifecycle, allowedTools },
+    // 惰性取值器（见 `CreateParticipantInput.runtime`）：生产的装配顺序是"先 participant、
+    // 后 lifecycle"，所以交出去的必须是函数而不是实例。本替身的 `lifecycle` 已经存在，
+    // 包一层只为与生产同形，不改变被测行为。
+    runtime: { ctx, definition, access, store: port, config, lifecycle: () => lifecycle, allowedTools },
     access,
     config,
   })

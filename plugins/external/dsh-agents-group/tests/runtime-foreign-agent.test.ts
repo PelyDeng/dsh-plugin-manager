@@ -80,6 +80,8 @@ interface FakeSession {
   readonly events: SessionEvent[]
   readonly prompts: { readonly name?: string; readonly order?: number; readonly text?: string }[]
   readonly restrictions: (readonly string[])[]
+  /** agent 作用域里注册过的工具（交活工具的接线口，与 `restrictions` 的"减"相对）。 */
+  readonly scopedTools: { readonly name: string }[]
   disposed: boolean
   agent: FakeAgent
 }
@@ -126,7 +128,7 @@ function fixture(definition: AgentDefinition, mount: (deps: MountDeps) => AgentP
   const sessionOf = (id: string): FakeSession => {
     const existing = sessions.get(id)
     if (existing !== undefined) return existing
-    const session = { id, events: [], prompts: [], restrictions: [], disposed: false } as unknown as FakeSession
+    const session = { id, events: [], prompts: [], restrictions: [], scopedTools: [], disposed: false } as unknown as FakeSession
     session.agent = {
       id,
       session: { id, snapshotEvents: () => session.events },
@@ -161,7 +163,11 @@ function fixture(definition: AgentDefinition, mount: (deps: MountDeps) => AgentP
   }
   const scopeOf = (session: FakeSession): Context => ({
     systemPrompt: { section: (section: FakeSession['prompts'][number]) => { session.prompts.push(section) } },
-    tools: { restrict: (input: { readonly allow: readonly string[] }) => { session.restrictions.push([...input.allow]) } },
+    tools: {
+      restrict: (input: { readonly allow: readonly string[] }) => { session.restrictions.push([...input.allow]) },
+      // 交活工具的接线口：宿主在 agent 作用域注册工具时走它（返回 disposer，与宿主契约一致）。
+      register: (tool: { readonly name: string }) => { session.scopedTools.push(tool); return () => {} },
+    },
   }) as unknown as Context
   const handleOf = (session: FakeSession) => ({
     agent: session.agent as unknown as Agent,
@@ -291,7 +297,15 @@ interface MountDeps {
 /** 默认路径：运行时造 participant。**新 Agent 必须走这条** —— A4 数的就是它。 */
 function mountOnDefaultPath(deps: MountDeps): RuntimeParticipant {
   mounts.defaultPath += 1
-  return createParticipant({ definition: deps.definition, runtime: deps.runtime, access: deps.access, config: deps.config })
+  return createParticipant({
+    definition: deps.definition,
+    // 生产的装配形状是"先 participant、后 lifecycle"，所以交出去的是**惰性取值器**
+    // （见 `CreateParticipantInput.runtime`）。本替身的 `deps.runtime` 已经拿得到实例，
+    // 这里包一层只是为了与生产同形——被断言的接线行为与生产逐字一致。
+    runtime: { ...deps.runtime, lifecycle: () => deps.runtime.lifecycle },
+    access: deps.access,
+    config: deps.config,
+  })
 }
 
 /**

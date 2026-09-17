@@ -48,7 +48,7 @@ import {
   type ParticipantResult,
   type ParticipantStatus,
 } from './contract.ts'
-import { historyOf, textOf, type AgentRuntime, type Conversation } from './conversation.ts'
+import { historyOf, textOf, type AgentRuntime, type Conversation, type ConversationLifecycle } from './conversation.ts'
 import type { AgentDefinition, ProjectedResult, ResultContext } from './definition.ts'
 import {
   createHandoffLedger,
@@ -64,7 +64,20 @@ import type { AgentStoragePort, OwnerKey, TurnResultRecord } from './storage/por
 
 export interface CreateParticipantInput {
   readonly definition: AgentDefinition
-  readonly runtime: AgentRuntime
+  /**
+   * 运行时能力。
+   *
+   * ⚠️ **`lifecycle` 在这里是惰性取值器，不是实例**。原因是一个装配顺序约束：交活工具按会话
+   * 注册，它的接线点（`runtime.ts` 的 `registerScopedTools`）要拿 participant 的 `handoffFor`，
+   * 而那个接线点又必须**在 lifecycle 造出来之前**就交给 lifecycle 的 host ⇒ 装配顺序只能是
+   * "先 participant、后 lifecycle"。
+   *
+   * 若这里直接收 `lifecycle: ConversationLifecycle`，构造期解构拿到的是占位 `undefined`
+   * （实测：所有用例在 `lifecycle.open` 处以 `Cannot read properties of undefined` 炸掉）。
+   * 取成函数之后，真正的读取推迟到**回合运行时**——那时装配早已完成。`runtime` 其余字段仍是
+   * 直接值。
+   */
+  readonly runtime: Omit<AgentRuntime, 'lifecycle'> & { readonly lifecycle: () => ConversationLifecycle }
   /** 可注入的存储门面；不注入时业务钩子拿到 `undefined`，工具与投影要自己处理这种情况。 */
   readonly storage?: AgentStoragePort
   readonly access: Access
@@ -123,7 +136,14 @@ type SettleOutcome =
  */
 export function createParticipant(input: CreateParticipantInput): RuntimeParticipant {
   const { definition, runtime, access, config } = input
-  const { ctx, lifecycle } = runtime
+  const { ctx } = runtime
+  /**
+   * 会话生命周期的**惰性取值**（见 `CreateParticipantInput.runtime` 的说明）。
+   *
+   * 在这里**按需**解引用，而不是构造期解一次：装配顺序是"先 participant、后 lifecycle"，
+   * 构造期拿到的会是占位值。每处用点都读一次 `runtime`，代价是一次属性读取。
+   */
+  const lifecycleOf = () => runtime.lifecycle()
   const storage = input.storage
   /**
    * 幂等缓存的上界（条）。缓存只为"进程内重试"服务，**持久化由 `dsh_turns` 承担**，所以给它一个
@@ -250,7 +270,7 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
           // 第四参数是这次派活的**任务身份**：声明了 `conversationAddressing: 'derived'` 的 Agent
           // 用它寻址会话（同一 mission 只有一条）并交叉核验 `request.conversationId`；其他 Agent
           // 上它一律被忽略（`missionKeyOf` 返回 `undefined`），行为与不传时逐字一致。
-          conversation = await lifecycle.open(
+          conversation = await lifecycleOf().open(
             request.conversationId === undefined || request.conversationId === '' ? undefined : request.conversationId,
             mode === 'run',
             request.actor,
@@ -262,7 +282,7 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
         try {
           request.signal.throwIfAborted()
           assertAccess(request.actor)
-          lifecycle.assertConversation(opened.id, request.actor)
+          lifecycleOf().assertConversation(opened.id, request.actor)
           if (opened.active) throw new AccessError(409, '智能体正在回答上一条问题')
         } catch (error) { reject(error); return }
 
@@ -355,12 +375,12 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
           // `outcome` 只喂给业务的 `onTurnFinish`：**只有协作入口知道**这一轮是正常结束、被取消
           // 还是失败（页面入口与其它 `finish` 调用方只做"放掉占用"，没有失败的语义）。三个标志
           // 里 `failed` 优先——一次 `fail` 之后再被取消，结论仍然是"失败"。
-          lifecycle.finish(opened.id, failed ? 'failed' : cancelled ? 'cancelled' : 'completed')
+          lifecycleOf().finish(opened.id, failed ? 'failed' : cancelled ? 'cancelled' : 'completed')
         }
         const fail = (error: unknown) => {
           if (finished || failed) return
           failed = true; failure = error
-          if (admitted) lifecycle.abort(opened.id)
+          if (admitted) lifecycleOf().abort(opened.id)
           // **一律在这里给出结论**，不再分 `settling` / `started` 两种情形：
           //  · `settling` 时收尾循环可能挂在 `waitTurnEnd()` 上——那一轮的 `turn/end` 可能永远不来；
           //  · 首轮已经开跑（`started && !settling`）时循环还没起来，而宿主**不保证**在 `abort`
@@ -373,18 +393,18 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
         const cancel = () => {
           if (finished) return
           cancelled = true
-          if (admitted) lifecycle.abort(opened.id)
+          if (admitted) lifecycleOf().abort(opened.id)
           if (!started) { cleanup(); reject(request.signal.reason) }
         }
         const close = async () => {
           if (finished) return
           cancelled = true
-          if (admitted) lifecycle.abort(opened.id)
+          if (admitted) lifecycleOf().abort(opened.id)
           try { if (started) { await continuation; await opened.handle.agent.whenIdle() } } catch { /* 关闭时统一报告插件已停止。 */ }
           if (!finished) { cleanup(); reject(new AccessError(503, '插件已停止')) }
         }
         pending.add(close)
-        const assert = () => { assertAccess(request.actor); lifecycle.assertConversation(opened.id, request.actor) }
+        const assert = () => { assertAccess(request.actor); lifecycleOf().assertConversation(opened.id, request.actor) }
         /** 实时上报：每条都在当前授权与归属下重新核验，失败按回合失败处理。 */
         const report = (value: ParticipantProgress) => {
           assert()
@@ -466,7 +486,7 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
           const status: ParticipantStatus = aborted
             ? 'cancelled'
             : reason === 'completed' && finalText.trim() ? 'completed' : 'failed'
-          const history = historyOf(lifecycle.events(opened), opened.id)
+          const history = historyOf(lifecycleOf().events(opened), opened.id)
           if (status === 'completed') { thinking.finish(); visible.finish() }
           const fallbackText = status === 'completed' ? (definition.redact?.(finalText) ?? finalText)
             : status === 'cancelled' ? '协作已取消。' : `${definition.displayName}未能完成本回合，请查看原会话。`
@@ -643,7 +663,7 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
               // ⚠️ `notify: false`：这一轮**还没有结束**，这里只是为了能注入下一轮而释放占用。
               // 缺省通知会让业务每注入一轮就收到一次假的"回合结束"，而它会据此解除绑定、写终态
               // ——把一个仍在跑的回合记成已结束。
-              lifecycle.finish(opened.id, 'completed', { notify: false })
+              lifecycleOf().finish(opened.id, 'completed', { notify: false })
               await waitUntilIdle()
               if (finished) return
               // 新一轮：重置这一轮的观测状态（交活账本、正文、回合标记）。
@@ -652,7 +672,7 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
               started = false
               finalText = ''
               try {
-                await lifecycle.followup(opened, outcome.prompt, request.actor)
+                await lifecycleOf().followup(opened, outcome.prompt, request.actor)
                 await opened.handle.agent.whenIdle()
               } catch (error) { cleanup(); reject(error); return }
             }
@@ -712,7 +732,7 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
             // 必须排在它的 `turn/end` 之前——否则循环拿到的是 `'aborted'`，那份结论又会被当成
             // "用户取消"。
             pushTurnEnd('timeout')
-            if (admitted) lifecycle.abort(opened.id)
+            if (admitted) lifecycleOf().abort(opened.id)
             return
           }
           // 循环还没起来（首轮进行中或尚未开始）：此刻**不可能**已有算好的结论可兜底，也没有
@@ -784,13 +804,13 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
            * ⚠️ 缺省字段用**条件展开**而不是写 `undefined`（`exactOptionalPropertyTypes`，且业务按
            * "属性在不在"判断有没有身份）。
            */
-          releaseTurn = lifecycle.retainTurn(opened, request.actor, {
+          releaseTurn = lifecycleOf().retainTurn(opened, request.actor, {
             requestId: settledKey,
             ...(turnId === undefined ? {} : { turnId }),
           })
           admitted = true
           sinks.set(opened.id, sink!)
-          continuation = lifecycle.followup(opened, message, request.actor)
+          continuation = lifecycleOf().followup(opened, message, request.actor)
           await continuation
         } catch (error) {
           if (finished) return
@@ -800,7 +820,7 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
             // 后续轮次取代），而 `abort(id)` 取消的正是"此刻的当前回合" —— 那会取消到别人的回合
             // 上，或对同一个 driver 补一次无人需要的取消。守卫用这一轮的回合凭据判定，见
             // `ConversationLifecycle.abortHeldTurn`。
-            lifecycle.abortHeldTurn(opened)
+            lifecycleOf().abortHeldTurn(opened)
             try { if (started) await opened.handle.agent.whenIdle() } catch { /* 保留原始接续错误。 */ }
           }
           if (!finished) { cleanup(); reject(error) }

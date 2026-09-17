@@ -295,7 +295,16 @@ export function createBlogParticipant(input: BlogParticipantInput) {
     },
     access,
   }
-  const participant = createRuntimeParticipant({ definition, runtime, storage: storagePort, access, config: runtimeConfig })
+  // 惰性取值器（见 `CreateParticipantInput.runtime`）：生产的装配顺序是"先 participant、
+  // 后 lifecycle"，所以交出去的必须是函数而不是实例。本夹具的 `lifecycle` 已经存在，
+  // 包一层只为与生产同形，不改变被测行为。
+  const participant = createRuntimeParticipant({
+    definition,
+    runtime: { ...runtime, lifecycle: () => lifecycle },
+    storage: storagePort,
+    access,
+    config: runtimeConfig,
+  })
 
   return {
     definition,

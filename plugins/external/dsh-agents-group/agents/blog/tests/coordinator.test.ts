@@ -267,7 +267,7 @@ async function fixture(t: TestContext): Promise<CoordinatorFixture> {
   const lifecycle = new ConversationLifecycle({ ctx, definition, access, store: conversations, config, allowedTools: () => [] })
   const runtime = { ctx, definition, access, store: conversations, config, lifecycle, allowedTools: () => [] }
   const storage = { db, access }
-  const participant = createParticipant({ definition, runtime, storage, access, config })
+  const participant = createParticipant({ definition, runtime: { ...runtime, lifecycle: () => lifecycle }, storage, access, config })
   t.after(async () => { await participant.dispose(); await lifecycle.dispose(); await host.disposeAll() })
 
   return {

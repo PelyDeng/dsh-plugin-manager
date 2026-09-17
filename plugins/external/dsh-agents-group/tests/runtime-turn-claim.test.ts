@@ -254,7 +254,10 @@ function host(options: HostOptions = {}) {
      * 少了 `context` 就是在 `open()` 里以 `TypeError` 炸掉 —— 表现成 `accept` 一直等不到接单。
      */
     systemPrompt: { section: () => {}, context: () => {} },
-    tools: { restrict: () => {} },
+    // `register` 是交活工具的接线口（`conversation.ts` 的 `registerScopedTools`）：
+    // 宿主在 agent 作用域注册工具时走它。替身不持有工具，但接口必须在位——否则接线一发生
+    // 就会在这里抛 `register is not a function`。
+    tools: { restrict: () => {}, register: () => () => {} },
   }) as unknown as Context
   const agents = {
     create: async (input: { readonly sessionId: unknown; readonly setup?: (ctx: Context, agent: Agent) => unknown }) => {
@@ -332,8 +335,8 @@ function host(options: HostOptions = {}) {
   const runtime: AgentRuntime = { ctx, definition, access, store: port, config: runtimeConfig, lifecycle, allowedTools: () => [] }
   // C6 靠"根本不传 storage"来验：少了这个守卫，接线处会以 TypeError 炸掉。
   const participant = options.withoutStorage === true
-    ? createParticipant({ definition, runtime, access, config: runtimeConfig })
-    : createParticipant({ definition, runtime, storage, access, config: runtimeConfig })
+    ? createParticipant({ definition, runtime: { ...runtime, lifecycle: () => lifecycle }, access, config: runtimeConfig })
+    : createParticipant({ definition, runtime: { ...runtime, lifecycle: () => lifecycle }, storage, access, config: runtimeConfig })
 
   return {
     participant, calls, settledFlag, lifecycle, port,

@@ -82,7 +82,10 @@ function runtimeHost(definition: AgentDefinition, questions = new Map<string, st
     session.events.push(value)
     for (const listener of [...(byEvent.get('session/event') ?? [])]) listener({ id: conversationId }, value)
   }
-  const scope = { systemPrompt: { section: () => {} }, tools: { restrict: () => {} } } as unknown as Context
+  // `register` 是交活工具的接线口（`conversation.ts` 的 `registerScopedTools`）。本文件的
+  // `agents` 替身**不调 `setup`**（会话不装配人设段），但接口仍放在位：将来一旦有人让替身
+  // 走上 setup，接线不会在这里以"register 不是函数"炸掉。
+  const scope = { systemPrompt: { section: () => {} }, tools: { restrict: () => {}, register: () => () => {} } } as unknown as Context
   const agents = {
     create: async (input: { readonly sessionId: unknown }) => {
       const session = sessionOf(String(input.sessionId))
@@ -161,7 +164,7 @@ function runtimeHost(definition: AgentDefinition, questions = new Map<string, st
   const config: RuntimeConfig = { routePrefix: '/closure-e2e', turnTimeoutMs: 30_000, authRecheckMs: 10_000, maxActiveConversations: 8, reasoningEffort: 'medium' }
   const lifecycle = new ConversationLifecycle({ ctx, definition, access, store: port, config, allowedTools: () => [] })
   const runtime: AgentRuntime = { ctx, definition, access, store: port, config, lifecycle, allowedTools: () => [] }
-  const participant: RuntimeParticipant = createParticipant({ definition, runtime, storage, access, config })
+  const participant: RuntimeParticipant = createParticipant({ definition, runtime: { ...runtime, lifecycle: () => lifecycle }, storage, access, config })
   void scope
   return {
     participant, lifecycle, questions,
