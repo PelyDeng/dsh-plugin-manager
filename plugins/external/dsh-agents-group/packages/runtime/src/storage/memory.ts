@@ -59,6 +59,7 @@ import type {
   ManagedConversationShape,
   OwnerKey,
   RemovalResultShape,
+  ConversationPayloadShape,
 } from './ports.ts'
 
 /** 围栏状态。空串表示没有围栏（真实实现里是 `removal_state` 列）。 */
@@ -80,6 +81,8 @@ interface MemoryRow {
   pinned: boolean
   deletedAt: number | null
   removalState: RemovalState
+  /** 业务载荷（真实实现里是 `dsh_conversations.payload`）。 */
+  payload: ConversationPayloadShape
 }
 
 /** busy 项的阻止理由：与 kit（`conversations.ts:86`）和 P2 的 PG 实现逐字相同。 */
@@ -135,7 +138,7 @@ export class MemoryConversationPort implements ConversationPort {
    * （真实实现靠部分唯一索引 + `SELECT` 回既有行，见 `postgres.ts:96-119`）。
    */
   async create(owner: OwnerKey, conversationId: string, requestId: string,
-    initial?: { readonly title?: string }): Promise<ConversationRecordShape> {
+    initial?: { readonly title?: string; readonly payload?: ConversationPayloadShape }): Promise<ConversationRecordShape> {
     if (requestId !== '') {
       const existingId = this.requestIds.get(`${ownerKey(owner)}\u0000${requestId}`)
       if (existingId !== undefined) return this.shapeOf(this.ownedRow(owner, existingId))
@@ -161,10 +164,23 @@ export class MemoryConversationPort implements ConversationPort {
       pinned: false,
       deletedAt: null,
       removalState: '',
+      payload: { ...(initial?.payload ?? {}) },
     }
     this.rows.set(conversationId, row)
     if (requestId !== '') this.requestIds.set(`${ownerKey(owner)}\u0000${requestId}`, conversationId)
     return this.shapeOf(row)
+  }
+
+  /**
+   * 合并写业务载荷：**浅合并**（与真实实现的 `payload || $1::jsonb` 同义）。
+   *
+   * 归属判定走 `ownedRow`（不存在 / 他人 / 别的 Agent ⇒ 404），与 `syncTitle` / `pin` 同一套。
+   */
+  async patchPayload(owner: OwnerKey, conversationId: string,
+    patch: ConversationPayloadShape): Promise<ConversationPayloadShape> {
+    const row = this.ownedRow(owner, conversationId)
+    row.payload = { ...row.payload, ...patch }
+    return { ...row.payload }
   }
 
   /** **发布段**：`ready` 翻真，并推进 `updated_at`。 */
@@ -393,6 +409,7 @@ export class MemoryConversationPort implements ConversationPort {
       pinned: false,
       deletedAt: updatedAt,
       removalState: '',
+      payload: {},
     }
     this.rows.set(conversationId, row)
   }
@@ -427,6 +444,7 @@ export class MemoryConversationPort implements ConversationPort {
       deletedAt: row.deletedAt,
       removalState: row.removalState,
       ready: row.ready,
+      payload: { ...row.payload },
     }
   }
 }

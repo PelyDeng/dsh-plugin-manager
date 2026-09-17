@@ -35,7 +35,7 @@ import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { AccessError, type Actor } from '@dsh-plugin-manager/plugin-kit'
-import type { ConversationRecordShape } from './ports.ts'
+import type { ConversationPayloadShape, ConversationRecordShape } from './ports.ts'
 
 /** 镜像行：本地对 PG 那一行的投影。 */
 export interface MirrorRow {
@@ -50,6 +50,15 @@ export interface MirrorRow {
   readonly removalState: string
   readonly deletedAt: number | null
   readonly updatedAt: number
+  /**
+   * 业务载荷的**本地副本**（PG 的 `dsh_conversations.payload`）。
+   *
+   * 为什么业务余项也要进镜像：`record` 是同步读，而业务侧有**同步**消费者
+   * （blog 的 `chat.ts:284` 从 `index.record(...)` 取 `inheritedRequests`）。载荷留在 PG
+   * 不进镜像，那个同步读就只能在"重启后、收敛完成前"读到空——与围栏字段缺镜像时是同一类
+   * 静默漂移。
+   */
+  readonly payload: ConversationPayloadShape
 }
 
 /** 一条待补写的围栏变更。 */
@@ -81,8 +90,16 @@ export interface OutboxDepth {
  *
  * 本地库**可以重建**（镜像与 outbox 都能从 PG + 未完成的指令重新收敛），所以这里的版本
  * 检查比 PG 侧宽松：认不出的版本直接拒绝启动，由运维删文件重建——不写迁移链。
+ *
+ * ⚠️ 但这个"可以重建"是**有代价**的：`fence_outbox` 里未补写的围栏指令只存在于本地
+ * （那正是"pending 窗口内本地权威"的全部意义）。所以**纯增列不在这里升版**——升版会让
+ * 运维删文件，而删掉的可能是"这个会话该被移除"这样一条宿主已经归档、PG 却毫不知情的指令。
+ * 增列走下面的幂等 `ALTER`（`ensureMirrorPayloadColumn`），旧库原样继续用。
  */
 const LOCAL_SCHEMA_VERSION = 1
+
+/** 增列前先看列在不在：`ALTER TABLE ... ADD COLUMN` 没有 `IF NOT EXISTS`。 */
+const MIRROR_PAYLOAD_COLUMN = 'payload'
 
 export class LocalFenceStore {
   private readonly db: DatabaseSync
@@ -105,7 +122,8 @@ export class LocalFenceStore {
         owner_namespace TEXT NOT NULL, owner_id TEXT NOT NULL,
         title TEXT NOT NULL DEFAULT '', title_source TEXT NOT NULL DEFAULT 'automatic',
         ready INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,
-        removal_state TEXT NOT NULL DEFAULT '', deleted_at INTEGER, updated_at INTEGER NOT NULL
+        removal_state TEXT NOT NULL DEFAULT '', deleted_at INTEGER, updated_at INTEGER NOT NULL,
+        payload TEXT NOT NULL DEFAULT '{}'
       );
       CREATE INDEX IF NOT EXISTS conversation_mirror_owner
         ON conversation_mirror(agent_id, owner_namespace, owner_id, updated_at DESC, id);
@@ -119,6 +137,24 @@ export class LocalFenceStore {
       );
       PRAGMA user_version = ${LOCAL_SCHEMA_VERSION};
     `)
+    this.ensureMirrorPayloadColumn()
+  }
+
+  /**
+   * 给**已存在**的 `conversation_mirror`（首版建的表）补上 `payload` 列。
+   *
+   * 为什么不升 `LOCAL_SCHEMA_VERSION`：那个版本号是**拒绝启动**的开关，升一版就意味着
+   * 运维必须删掉 `mirror.sqlite` 才能起来——而那个文件里有 `fence_outbox`（未补写的删除
+   * 指令，PG 那边什么都没有）。为了一列纯增字段付这个代价是错的，所以这里用幂等 `ALTER`
+   * 就地补上：老库一行不动地继续用，新库由上面的 `CREATE TABLE` 直接带出这一列。
+   *
+   * 列默认 `'{}'`（不是 NULL）：老库里那些行本来就没有业务载荷，"空对象"正是它们的真值，
+   * 而 `NOT NULL` 让读侧的 `decodeMirrorPayload` 只需要处理"形状漂移"一种异常。
+   */
+  private ensureMirrorPayloadColumn(): void {
+    const columns = this.db.prepare('PRAGMA table_info(conversation_mirror)').all() as unknown as { name?: unknown }[]
+    if (columns.some(column => column.name === MIRROR_PAYLOAD_COLUMN)) return
+    this.db.exec(`ALTER TABLE conversation_mirror ADD COLUMN payload TEXT NOT NULL DEFAULT '{}'`)
   }
 
   private assertOpen(): void {
@@ -153,6 +189,9 @@ export class LocalFenceStore {
       deletedAt: row.deletedAt,
       removalState: row.removalState,
       ready: row.ready,
+      // 同步读也要给出业务载荷：`payload` 是"业务余项"那一层的唯一来源，缺了它，
+      // 依赖它的同步消费者（blog 的 `inheritedRequests`）在重启后会读到空。
+      payload: row.payload,
     }
   }
 
@@ -195,7 +234,7 @@ export class LocalFenceStore {
 
   mirrorGet(id: string): MirrorRow | undefined {
     const row = this.db.prepare(
-      `SELECT id, agent_id, owner_namespace, owner_id, title, title_source, ready, pinned, removal_state, deleted_at, updated_at
+      `SELECT id, agent_id, owner_namespace, owner_id, title, title_source, ready, pinned, removal_state, deleted_at, updated_at, payload
          FROM conversation_mirror WHERE id = ?`,
     ).get(id) as Record<string, unknown> | undefined
     return row === undefined ? undefined : toMirrorRow(row)
@@ -204,7 +243,7 @@ export class LocalFenceStore {
   /** 该 Agent 的全部镜像行（启动时与 PG 对账用）。 */
   mirrorAll(): readonly MirrorRow[] {
     const rows = this.db.prepare(
-      `SELECT id, agent_id, owner_namespace, owner_id, title, title_source, ready, pinned, removal_state, deleted_at, updated_at
+      `SELECT id, agent_id, owner_namespace, owner_id, title, title_source, ready, pinned, removal_state, deleted_at, updated_at, payload
          FROM conversation_mirror WHERE agent_id = ?`,
     ).all(this.agentId) as unknown as Record<string, unknown>[]
     return rows.map(toMirrorRow)
@@ -224,16 +263,18 @@ export class LocalFenceStore {
       ? 'pending'
       : row.removalState
     this.db.prepare(
-      `INSERT INTO conversation_mirror(id, agent_id, owner_namespace, owner_id, title, title_source, ready, pinned, removal_state, deleted_at, updated_at)
-       VALUES(?,?,?,?,?,?,?,?,?,?,?)
+      `INSERT INTO conversation_mirror(id, agent_id, owner_namespace, owner_id, title, title_source, ready, pinned, removal_state, deleted_at, updated_at, payload)
+       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
        ON CONFLICT(id) DO UPDATE SET
          agent_id = excluded.agent_id, owner_namespace = excluded.owner_namespace, owner_id = excluded.owner_id,
          title = excluded.title, title_source = excluded.title_source, ready = excluded.ready,
          pinned = excluded.pinned, removal_state = excluded.removal_state,
-         deleted_at = excluded.deleted_at, updated_at = excluded.updated_at`,
+         deleted_at = excluded.deleted_at, updated_at = excluded.updated_at,
+         payload = excluded.payload`,
     ).run(
       row.id, row.agentId, row.ownerNamespace, row.ownerId, row.title, row.titleSource,
       row.ready ? 1 : 0, row.pinned ? 1 : 0, removalState, row.deletedAt, row.updatedAt,
+      JSON.stringify(row.payload ?? {}),
     )
   }
 
@@ -372,5 +413,20 @@ function toMirrorRow(row: Record<string, unknown>): MirrorRow {
     removalState: String(row.removal_state ?? ''),
     deletedAt: row.deleted_at == null ? null : Number(row.deleted_at),
     updatedAt: Number(row.updated_at ?? 0),
+    // `payload` 是本地列里的 JSON 文本；形状漂移（非对象 / 坏 JSON）一律退化成 `{}`——
+    // 载荷损坏不该让这个会话读不出来（读不出来等于整行从侧栏消失）。
+    payload: decodeMirrorPayload(row.payload),
+  }
+}
+
+function decodeMirrorPayload(value: unknown): ConversationPayloadShape {
+  if (typeof value !== 'string' || value === '') return {}
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? parsed as ConversationPayloadShape
+      : {}
+  } catch {
+    return {}
   }
 }

@@ -42,6 +42,7 @@ import { PostgresAgentDatabase, RUNTIME_SCHEMA_VERSION, toTitleSource } from './
 import type {
   AgentDatabasePort,
   ConversationPageShape,
+  ConversationPayloadShape,
   ConversationPort,
   ConversationProviderShape,
   ConversationQueryShape,
@@ -228,6 +229,9 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
       removalState: record.removalState,
       deletedAt: record.deletedAt,
       updatedAt: record.updatedAt,
+      // 载荷也要进镜像：`record` 是同步读，业务侧有同步消费者靠它（blog 的
+      // `inheritedRequests`）。漏了这一项，重启后收敛完成之前那个同步读会拿到空对象。
+      payload: record.payload ?? {},
     })
 
     return {
@@ -240,6 +244,26 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
         // 预留段也要进镜像：`record` 是同步读，它得能回答"这个会话存在"。
         local.mirrorUpsert(mirrorOf(record, owner))
         return record
+      },
+
+      /**
+       * 合并写业务载荷：与 `syncTitle` / `touch` / `pin` 同一条路子——**先写 PG，PG 成功后再
+       * 更新本地镜像**。
+       *
+       * ⚠️ 进镜像的必须是 **PG 返回的合并结果**，不是这里的 `patch`：`payload || $1` 是浅合并，
+       * 只拿 `patch` 覆盖镜像会把没提到的键**抹掉**（镜像里的载荷是整层，不是一个补丁），
+       * 于是同步 `record` 会在"这次只改了一个字段"之后丢掉其余字段。
+       *
+       * 这一行不存在或不属于本 owner 时**由 PG 抛 404**，镜像不动：镜像只装"本实例见过的行"，
+       * 凭空改一行等于伪造一次归属。
+       */
+      patchPayload: async (owner, conversationId, patch) => {
+        const merged = await pg.conversations.patchPayload(owner, conversationId, patch)
+        const row = local.mirrorGet(conversationId)
+        if (row !== undefined) {
+          local.mirrorUpsert({ ...row, payload: merged, updatedAt: Date.now() })
+        }
+        return merged
       },
 
       publish: async (owner, conversationId) => {
@@ -454,11 +478,12 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
   private async reconcileMirror(): Promise<void> {
     const rows = await this.pg.query<{
       id: string; ownerNamespace: string; ownerId: string; title: string; titleSource: string
-      ready: boolean; pinned: boolean; removalState: string; deletedAt: string | number | null; updatedAt: string | number
+      ready: boolean; pinned: boolean; removalState: string; deletedAt: string | number | null
+      updatedAt: string | number; payload: ConversationPayloadShape
     }>(
       `SELECT id, owner_namespace AS "ownerNamespace", owner_id AS "ownerId", title,
               title_source AS "titleSource", ready, pinned, removal_state AS "removalState",
-              deleted_at AS "deletedAt", updated_at AS "updatedAt"
+              deleted_at AS "deletedAt", updated_at AS "updatedAt", payload
          FROM dsh_conversations WHERE agent_id = $1`,
       [this.input.agentId],
     )
@@ -486,6 +511,9 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
         removalState: row.removalState,
         deletedAt: row.deletedAt === null ? null : Number(row.deletedAt),
         updatedAt: Number(row.updatedAt),
+        // 收敛是**全量**的：本地从来没有过的行也要连载荷一起装进来，否则 `record` 会为它
+        // 回答一个空载荷（业务字段丢失，而围栏字段却是对的——最难查的那种半对）。
+        payload: row.payload ?? {},
       }, stillQueued.has(row.id))
     }
     for (const stale of this.local.mirrorStale(keep)) this.local.mirrorRemove(stale)

@@ -90,6 +90,59 @@ describe('会话索引：运行时端口语义', () => {
     } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
+  it('★ 首版镜像库（无 payload 列）原地升级：旧库照用，不要求运维删文件', () => {
+    const root = mkdtempSync(join(tmpdir(), 'closedoff-mirror-v1-'))
+    const mirrorPath = join(root, 'mirror.sqlite')
+    try {
+      // ↓↓↓ 首版 `conversation_mirror` 的 DDL，逐字保留（**没有** `payload` 列）↓↓↓
+      const old = new DatabaseSync(mirrorPath)
+      old.exec(`PRAGMA journal_mode=WAL;
+        CREATE TABLE IF NOT EXISTS conversation_mirror (
+          id TEXT PRIMARY KEY, agent_id TEXT NOT NULL,
+          owner_namespace TEXT NOT NULL, owner_id TEXT NOT NULL,
+          title TEXT NOT NULL DEFAULT '', title_source TEXT NOT NULL DEFAULT 'automatic',
+          ready INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,
+          removal_state TEXT NOT NULL DEFAULT '', deleted_at INTEGER, updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS fence_outbox (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL,
+          conversation_id TEXT NOT NULL, state TEXT NOT NULL, created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS title_outbox (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL,
+          conversation_id TEXT NOT NULL, title TEXT NOT NULL, source TEXT NOT NULL, created_at INTEGER NOT NULL
+        );
+        PRAGMA user_version = 1;
+        INSERT INTO conversation_mirror(id, agent_id, owner_namespace, owner_id, title, title_source, ready, pinned, removal_state, deleted_at, updated_at)
+          VALUES('old-row','closedoff','user','one','旧镜像行','manual',1,0,'',NULL,20);
+        INSERT INTO fence_outbox(agent_id, conversation_id, state, created_at)
+          VALUES('closedoff','old-row','pending',30);`)
+      old.close()
+      // ↑↑↑ 到此为止 ↑↑↑
+
+      // 老库必须**开得起来**：升 `LOCAL_SCHEMA_VERSION` 才是"拒绝启动、要求删文件"，
+      // 而删文件会连带丢掉 `fence_outbox` 里那条未补写的 pending（PG 那边什么都没有）。
+      const fence = new LocalFenceStore(agent, mirrorPath)
+      try {
+        // 旧行原样还在，载荷是真值"空对象"（它本来就没有业务余项）。
+        const row = fence.mirrorGet('old-row')
+        expect(row?.title).toBe('旧镜像行')
+        expect(row?.payload).toEqual({})
+        // 那条围栏指令没被升级动作吃掉。
+        expect(fence.fencePendingConversations().has('old-row')).toBe(true)
+        // 补列之后**写得进去**：不补的话 `mirrorUpsert` 会因"表里没有这一列"直接抛。
+        fence.mirrorUpsert({ ...(row!), payload: { parent: 'p-1' }, updatedAt: 40 })
+        expect(fence.mirrorGet('old-row')?.payload).toEqual({ parent: 'p-1' })
+        // 同步 `record` 也要带得出它——这正是这一列存在的理由。
+        expect(fence.record(user, 'old-row').payload).toEqual({ parent: 'p-1' })
+      } finally { fence.close() }
+
+      // 幂等：再开一次不该重复 ALTER（重复补列会抛 "duplicate column name"）。
+      const again = new LocalFenceStore(agent, mirrorPath)
+      try { expect(again.mirrorGet('old-row')?.payload).toEqual({ parent: 'p-1' }) } finally { again.close() }
+    } finally { rmSync(root, { recursive: true, force: true }) }
+  })
+
   it('标题三道守卫：未发布不写、自动不覆盖手动、围栏标记后不复活', async () => {
     const store = port()
     const owner = { namespace: user.namespace, userId: user.userId }

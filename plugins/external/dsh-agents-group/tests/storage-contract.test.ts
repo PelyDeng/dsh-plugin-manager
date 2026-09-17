@@ -388,6 +388,119 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
     }
   })
 
+  // -------------------------------------------------------------------
+  // 四、会话业务载荷通道（`dsh_conversations.payload`）
+  //
+  // 这一层是"业务余项"（blog 的 parent / attachments / inheritedRequests / openingAt /
+  // sessionCreatedAt）在 PG 侧唯一的落点。运行时不认识任何一个键，只负责整层读写与合并——
+  // 所以这里断言的都是**形状与归属**，不是字段语义。
+  // -------------------------------------------------------------------
+
+  /** 直接查库读那一列，用来区分"真进了 PG"与"只在内存/接口返回值里看着对"。 */
+  async function payloadOf(id: string): Promise<Record<string, unknown> | string> {
+    const rows = await admin.query<{ payload: Record<string, unknown> }>(
+      'SELECT payload FROM dsh_conversations WHERE id = $1', [id])
+    return rows.rows[0]?.payload ?? '<missing>'
+  }
+
+  it('create 的 initial.payload 真的落进 PG，并从 record / create 两条路都读得回', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      const payload = { parent: 'blog-chat-parent', inheritedRequests: ['r-1', 'r-2'], openingAt: 1234 }
+      const created = await db.conversations.create(owner, id, '', { title: '带余项', payload })
+      expect(created.payload).toEqual(payload)
+      // 只断言返回值是不够的：把载荷留在 JS 里、不写列，返回值一样是对的。
+      expect(await payloadOf(id)).toEqual(payload)
+      // 同步 `record` 走本地镜像——载荷也必须在那条路上（业务侧有同步消费者）。
+      expect(db.conversations.record(actor, id).payload).toEqual(payload)
+    } finally { await db.close() }
+  })
+
+  it('省略 payload 时落空对象（不是 NULL）：读回一律是 {}，调用方不必分两种缺省', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      const created = await db.conversations.create(owner, id, '')
+      expect(created.payload).toEqual({})
+      expect(await payloadOf(id)).toEqual({})
+    } finally { await db.close() }
+  })
+
+  it('create 幂等命中既有行时返回的是**原来那一行**的载荷，不被这次传入的覆盖', async () => {
+    const { db } = await newFacade()
+    try {
+      const first = conversationId()
+      await db.conversations.create(owner, first, 'mission-p', { payload: { generation: 1 } })
+      const again = await db.conversations.create(owner, conversationId(), 'mission-p',
+        { payload: { generation: 2 } })
+      expect(again.id).toBe(first)
+      expect(again.payload).toEqual({ generation: 1 })
+      expect(await payloadOf(first)).toEqual({ generation: 1 })
+    } finally { await db.close() }
+  })
+
+  it('★ patchPayload 是**浅合并**：没提到的键必须留着，返回的是合并结果而不是补丁', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '', { payload: { a: 1, b: 2 } })
+      const merged = await db.conversations.patchPayload(owner, id, { b: 3, c: 4 })
+      // 返回 `{b:3,c:4}`（补丁本身）也是"看起来成功"的——但 `a` 会消失。三个面一起断言。
+      expect(merged).toEqual({ a: 1, b: 3, c: 4 })
+      expect(await payloadOf(id)).toEqual({ a: 1, b: 3, c: 4 })
+    } finally { await db.close() }
+  })
+
+  it('★ patchPayload 之后**同步** record 看到的是合并结果（镜像进的是合并层，不是补丁）', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '', { payload: { a: 1, b: 2 } })
+      await db.conversations.patchPayload(owner, id, { c: 3 })
+      // 把 `patch` 而不是 `merged` 写进镜像时，这里会读到 `{c:3}`（`a`/`b` 被抹掉）——
+      // 那正是"载荷在镜像里是整层、在入参里是补丁"这个形状差最容易踩的一脚。
+      expect(db.conversations.record(actor, id).payload).toEqual({ a: 1, b: 2, c: 3 })
+    } finally { await db.close() }
+  })
+
+  it('patchPayload 按 owner 隔离：别人的 owner 调它抛 404，且那一行一个字都不动', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '', { payload: { a: 1 } })
+      await expect(db.conversations.patchPayload(otherOwner, id, { a: 999, stolen: true }))
+        .rejects.toBeInstanceOf(AccessError)
+      expect(await payloadOf(id)).toEqual({ a: 1 })
+    } finally { await db.close() }
+  })
+
+  it('patchPayload 对不存在的会话抛 404（不静默成功）', async () => {
+    const { db } = await newFacade()
+    try {
+      await expect(db.conversations.patchPayload(owner, conversationId(), { a: 1 }))
+        .rejects.toBeInstanceOf(AccessError)
+    } finally { await db.close() }
+  })
+
+  it('★ 启动收敛是全量的：本地从来没有过的行，重开实例后同步 record 也要带得出载荷', async () => {
+    const { db, path } = await newFacade()
+    const id = conversationId()
+    try {
+      await db.conversations.create(owner, id, '', { payload: { fromPg: 'only' } })
+    } finally { await db.close() }
+    // 换一个**全新本地库**的实例（`reopen` 用的是同一个文件，镜像本来就在里面）——
+    // 这里要测的是 `reconcileMirror` 从 PG 装回来的那一步，所以必须让镜像从零开始。
+    const { db: fresh } = await newFacade()
+    try {
+      await fresh.open()
+      expect(fresh.conversations.record(actor, id).payload).toEqual({ fromPg: 'only' })
+    } finally {
+      await fresh.close()
+      rmSync(path, { force: true })
+    }
+  })
+
   it('轮次幂等：同 requestId 同输入 = duplicate，换输入 = 409', async () => {
     const { db } = await newFacade()
     try {

@@ -25,6 +25,7 @@ import { StorageError, mapStorageError, uniqueViolation } from './errors.ts'
 import type {
   AgentDatabasePort,
   ConversationPageShape,
+  ConversationPayloadShape,
   ConversationPort,
   ConversationQueryShape,
   ConversationRecordShape,
@@ -57,6 +58,30 @@ interface ConversationRow extends QueryResultRow {
   readonly deletedAt: string | number | null
   readonly updatedAt: string | number
   readonly state?: string
+  /** JSONB：正常读回就是对象；`null` / 字符串分支只是形状漂移的兜底。 */
+  readonly payload?: ConversationPayloadShape | string | null
+}
+
+/**
+ * 把 `payload` 列收敛成一层对象。
+ *
+ * `NULL` / 非对象 / 解析失败一律退化成 `{}`——载荷是**业务余项**，它损坏不该让会话本身读不出来
+ * （读不出来等于侧栏整行消失）。这一层兜底与 `turnResults` 对 `payload` 的处理同调。
+ */
+function decodePayload(value: ConversationPayloadShape | string | null | undefined): ConversationPayloadShape {
+  if (value === null || value === undefined) return {}
+  if (typeof value === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(value)
+      return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+        ? parsed as ConversationPayloadShape
+        : {}
+    } catch {
+      return {}
+    }
+  }
+  if (Array.isArray(value)) return {}
+  return value
 }
 
 function toRecord(row: ConversationRow): ConversationRecordShape {
@@ -67,6 +92,7 @@ function toRecord(row: ConversationRow): ConversationRecordShape {
     deletedAt: row.deletedAt === null ? null : Number(row.deletedAt),
     removalState: row.removalState,
     ready: row.ready === true,
+    payload: decodePayload(row.payload),
   }
 }
 
@@ -110,26 +136,26 @@ export class PgConversations implements PgConversationPart {
    * 冲突后 `SELECT` 回既有行——同一个 `requestId` 再来一次返回原来那条，不新建。
    */
   async create(owner: OwnerKey, conversationId: string, requestId: string,
-    initial?: { readonly title?: string }): Promise<ConversationRecordShape> {
+    initial?: { readonly title?: string; readonly payload?: ConversationPayloadShape }): Promise<ConversationRecordShape> {
     const now = Date.now()
     const title = initial?.title ?? ''
     // ⚠️ `agent_id` 必须显式写（无默认值）；`ON CONFLICT` 的目标必须**重复谓词**否则 42P10。
     await this.scoped.query(
       `INSERT INTO dsh_conversations(id, agent_id, owner_namespace, owner_id, request_id, title, title_source, ready, pinned, removal_state, created_at, updated_at, payload)
-       VALUES($1,$2,$3,$4,$5,$6,$7,FALSE,FALSE,'',$8,$8,'{}'::jsonb)
+       VALUES($1,$2,$3,$4,$5,$6,$7,FALSE,FALSE,'',$8,$8,$9::jsonb)
        ON CONFLICT (agent_id, owner_namespace, owner_id, request_id) WHERE request_id <> '' DO NOTHING`,
       [conversationId, this.agentId, owner.namespace, owner.userId, requestId, title,
         // 判定复用上一行算好的 `title`（= `initial?.title ?? ''`），两者必须**同源**。
         // 只看 `undefined` 会把空串当成人工标题：生产路径传的正是 `{ title: '' }`
         // （`conversation.ts` 新建会话处），于是每次新建都落 `manual`，`syncTitle(..., 'automatic')`
         // 被 `title_source = 'automatic'` 守卫拒绝 ⇒ 侧栏标题永久为空。
-        title === '' ? 'automatic' : 'manual', now],
+        title === '' ? 'automatic' : 'manual', now, JSON.stringify(initial?.payload ?? {})],
     )
     const existing = await this.readByRequest(owner, requestId)
     if (existing !== undefined) return existing
     const rows = await this.scoped.query<ConversationRow>(
       `SELECT id, title, title_source AS "titleSource", ready, pinned, removal_state AS "removalState",
-              deleted_at AS "deletedAt", updated_at AS "updatedAt"
+              deleted_at AS "deletedAt", updated_at AS "updatedAt", payload
          FROM dsh_conversations WHERE id = $1 AND agent_id = $2 AND owner_namespace = $3 AND owner_id = $4`,
       [conversationId, this.agentId, owner.namespace, owner.userId],
     )
@@ -138,11 +164,41 @@ export class PgConversations implements PgConversationPart {
     return toRecord(row)
   }
 
+  /**
+   * 合并写业务载荷（`payload || $1`），返回**合并后**的那一层。
+   *
+   * 三条要点：
+   * - **浅合并**而不是整层替换：调用方按字段更新（blog 的 `save(...)` 就是 `{...old, ...patch}`），
+   *   整层替换会让"两个页面各改一个字段"变成后写的吃掉先写的；
+   * - **`RETURNING payload` 是必须的**：返回值只能来自 PG 实际落下的那一层。在 JS 里做
+   *   `{...read, ...patch}` 会与并发写者打架，而这里的 `||` 与 `RETURNING` 在**同一条语句**里，
+   *   是原子的；
+   * - **三个 owner 列 + `agent_id` 全在 WHERE 里**：跨 Agent / 跨用户的行不会被动到。没有这一层，
+   *   `patchPayload` 就是一条"知道 id 就能改别人业务数据"的后门。
+   *
+   * 行不存在或不属于本 owner 时**抛 404**——与 `MemoryConversationPort.patchPayload` 的
+   * `ownedRow` 判定同一套。这里刻意**不**跟 `syncTitle` / `pin` 的"UPDATE 不管影响行数"走：
+   * 那两个是投影/标记（幂等、丢失无害），而载荷是**业务数据**，静默丢掉一个成功返回会让
+   * 调用方以为写进去了。返回 `undefined` 也不行——`{}` 与"没写"在下游同形。
+   */
+  async patchPayload(owner: OwnerKey, conversationId: string,
+    patch: ConversationPayloadShape): Promise<ConversationPayloadShape> {
+    const rows = await this.scoped.query<{ payload: ConversationPayloadShape | string | null }>(
+      `UPDATE dsh_conversations SET payload = payload || $1::jsonb, updated_at = $2
+        WHERE id = $3 AND agent_id = $4 AND owner_namespace = $5 AND owner_id = $6
+        RETURNING payload`,
+      [JSON.stringify(patch), Date.now(), conversationId, this.agentId, owner.namespace, owner.userId],
+    )
+    const row = rows[0]
+    if (row === undefined) throw new AccessError(404, '会话不存在或无权访问')
+    return decodePayload(row.payload)
+  }
+
   private async readByRequest(owner: OwnerKey, requestId: string): Promise<ConversationRecordShape | undefined> {
     if (requestId === '') return undefined
     const rows = await this.scoped.query<ConversationRow>(
       `SELECT id, title, title_source AS "titleSource", ready, pinned, removal_state AS "removalState",
-              deleted_at AS "deletedAt", updated_at AS "updatedAt"
+              deleted_at AS "deletedAt", updated_at AS "updatedAt", payload
          FROM dsh_conversations
         WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND request_id = $4`,
       [this.agentId, owner.namespace, owner.userId, requestId],
@@ -699,6 +755,8 @@ export class PostgresAgentDatabase implements Omit<AgentDatabasePort, 'conversat
       agentId: this.agentId,
       conversationOf: (owner, id) => scoped.conversationOf(owner, id),
       create: (owner, id, requestId, initial) => scoped.create(owner, id, requestId, initial),
+      // 载荷合并也是一条普通 `UPDATE ... RETURNING`，事务内可以直接跑（与 `touch` / `pin` 同理）。
+      patchPayload: (owner, id, patch) => scoped.patchPayload(owner, id, patch),
       publish: (owner, id) => scoped.publish(owner, id),
       missionRequestId: (owner, missionId) => scoped.missionRequestId(owner, missionId),
       list: (owner, query, scope) => scoped.list(owner, query, scope),

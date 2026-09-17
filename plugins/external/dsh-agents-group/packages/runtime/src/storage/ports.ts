@@ -31,6 +31,19 @@ export interface OwnerKey {
 }
 
 /**
+ * 业务载荷：`dsh_conversations.payload` / `dsh_turns.payload` 里那一层 JSON 对象。
+ *
+ * 它是**业务自己的字段**（blog 的 `parent` / `attachments` / `inheritedRequests` /
+ * `openingAt` / `sessionCreatedAt`，管家与 closedoff 的同类余项），运行时**不认识任何键**，
+ * 只负责整层读写与合并。所以这里是一个开放字典，不是一份需要跟着业务改的 schema。
+ *
+ * ⚠️ 与 `dsh_turns.status` 的分工是刻意的：**运行时的幂等状态机只占列**，业务状态只占载荷
+ * （例如 blog 的业务状态在 `payload.status`，而列的 `status` 恒为 `claimed` / `finished`）。
+ * 把业务状态写进列，等于让一台状态机有两个主人。
+ */
+export type ConversationPayloadShape = Record<string, unknown>
+
+/**
  * 会话索引行。
  *
  * ⚠️ 它必须能回答四件事，缺一个都会让上层出问题：
@@ -53,6 +66,17 @@ export interface ConversationRecordShape {
    * `ready = TRUE` 一步到位，否则它的会话会永久停在"创建未完成"：侧栏看不到，也删不掉。
    */
   readonly ready: boolean
+  /**
+   * 业务载荷（`dsh_conversations.payload`）。
+   *
+   * 它与上面六个字段走**同一条**可见性路径：`record` 是同步读，回答的是**本地镜像**，
+   * 所以载荷也必须进镜像（`conversation_mirror.payload`）——否则重启后、PG 收敛完成之前，
+   * 依赖载荷的业务字段（blog 的 `inheritedRequests` 就来自它）会读到空。
+   *
+   * 标成可选是为了兼容"只用框架字段、没有业务余项"的实现与调用方；`undefined` 与 `{}`
+   * 对调用方**同义**（都表示"没有业务字段"），实现不必两者都产出。
+   */
+  readonly payload?: ConversationPayloadShape
 }
 
 /** 会话归属的判据。返回 `undefined` 表示不存在或不属于该 owner。 */
@@ -192,9 +216,29 @@ export interface ConversationPort {
    *
    * `requestId` 是**创建幂等键**（部分唯一索引 `WHERE request_id <> ''`）：同一个 requestId
    * 再来一次返回已存在的那一行，不新建。管家没有这个语义，传空串。
+   *
+   * `initial.payload` 是**建行时**要落的业务载荷（`{}` 与省略同义）。它只在这一行**首次**
+   * 被创建时生效：幂等命中既有行时返回的是**原来那一行的载荷**，不是这次传进来的。
    */
   create(owner: OwnerKey, conversationId: string, requestId: string,
-    initial?: { readonly title?: string }): Promise<ConversationRecordShape>
+    initial?: { readonly title?: string; readonly payload?: ConversationPayloadShape }): Promise<ConversationRecordShape>
+
+  /**
+   * 合并写业务载荷：**浅合并**（`payload || $patch`，与 `jsonb` 的 `||` 同义），只覆盖给出的键。
+   *
+   * 为什么必须是"合并"而不是"整层替换"：业务侧的更新天然是**按字段**来的
+   * （blog 的 `save(owner, id, patch)` 就是 `{...old, ...patch}`），整层替换要求每个调用方
+   * 都先读一次再写回，那会出现"两个页面各改一个字段、后写的吃掉先写的"。
+   *
+   * 返回值是**合并后落下的那一层**（不是补丁本身）——调用方据此知道这次到底写进去了什么，
+   * 不必再读一次。
+   *
+   * ⚠️ 归属判定与存在性由实现自己保证（`agent_id` + owner 三列全参与 WHERE）；不是本 owner
+   * 的行**不会被改**。实现可以选择"不改也不抛"（幂等）或抛 404，但**不能**跨 owner 改到别人
+   * 的行——这是本方法与 `syncTitle` / `pin` 共有的硬要求。
+   */
+  patchPayload(owner: OwnerKey, conversationId: string,
+    patch: ConversationPayloadShape): Promise<ConversationPayloadShape>
 
   /**
    * **发布段**：把 `ready` 翻成 true，会话从此在侧栏可见、可以发送。
