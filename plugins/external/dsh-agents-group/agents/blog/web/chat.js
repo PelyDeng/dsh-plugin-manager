@@ -11,6 +11,17 @@ export function shouldSendChatEnter(event,{touch=false,composing=false}={}){
   return event.key==='Enter'&&!touch&&!event.shiftKey&&!event.isComposing&&!composing&&event.keyCode!==229
 }
 
+/**
+ * 深链接选中的会话 id：URL 里的 `conversationId` 优先，其次回落到调用方给的"上一次那条"。
+ *
+ * ⚠️ **`@param` 必须显式写**（`web/**` 是 `.js`，`checkJs:false`）：不写的话 TS 会**从默认值
+ * `null` 推出** `previous: null` ⇒ 调用方按真实契约传字符串时过不了类型——本文件 `:334`
+ * （`sessionStorage.getItem(...)` 是 `string | null`）与 `tests/participant.test.ts` 的
+ * 两条"有效值优先于旧值/没有 conversationId 时回落"用例都会报 TS2345。
+ * @param {string} search
+ * @param {string|null} [previous]
+ * @returns {string|null}
+ */
 export function chatConversationTarget(search,previous=null){
   return new URLSearchParams(search).get('conversationId')||previous||null
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { digest, ownerKey } from './store.mjs'
-import { invariant } from './settings.mjs'
+import { digest, ownerKey } from './store.ts'
+import { invariant } from './settings.ts'
 import type { Actor } from '@dsh-plugin-manager/plugin-kit'
 import type {
   AgentDatabasePort,

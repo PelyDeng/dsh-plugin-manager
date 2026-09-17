@@ -14,19 +14,19 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { agentResource } from '@dsh-agents-group/common'
 import { registerPlugin,registerConversations,AccessError,isAccessError,type Access,type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import type { ProtectedRoute } from '@dsh-plugin-manager/plugin-kit/http'
-import { loadSettings, invariant } from './settings.mjs'
-import { BlogApplication, PendingOperationsMirror } from './application.mjs'
-import { BlogClient,ImageClient,BackupClient } from './connectors.mjs'
-import { BlogJobs } from './jobs.mjs'
-import { BlogAttachments, MAX_ATTACHMENT_BYTES } from './attachments.mjs'
+import { loadSettings, invariant } from './settings.ts'
+import { BlogApplication, PendingOperationsMirror } from './application.ts'
+import { BlogClient,ImageClient,BackupClient } from './connectors.ts'
+import { BlogJobs } from './jobs.ts'
+import { BlogAttachments, MAX_ATTACHMENT_BYTES } from './attachments.ts'
 import { ChatStore } from './chat-store.ts'
 import { BlogChat, chatInstructions } from './chat.ts'
 // ⚠️ `createBlogParticipant`（`./participant.ts`）已**删除**：协作入口换成运行时的
 // `createAgentRuntime(...).participant`。文件头的历史说明见进度文档 §43 与本节注释。
 import { createBlogDefinition } from './definition.ts'
 import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
-import {selectBlogModel} from './models.mjs'
-import {reasoningLanguage} from './jobs.mjs'
+import {selectBlogModel} from './models.ts'
+import {reasoningLanguage} from './jobs.ts'
 import {ReasoningTranslations,reasoningOriginal} from './reasoning-translation.ts'
 // DSN 来源解析用**运行时那一份**：blog 的 `storage/dsn.mjs` 文件头自述"复制管家 butler-console
 // 的 dsn.ts 模式"，而 P4 已把它迁进运行时（`packages/runtime/src/storage/dsn.ts`）。两处各留一份
@@ -37,8 +37,8 @@ import { resolveStorageDsn } from '../../../packages/runtime/src/storage/dsn.ts'
 // 启动顺序（排空 outbox → PG 清理 → 按 PG 收敛镜像）也在它里面，blog 只调 `open()`。
 import { createAgentDatabase } from '../../../packages/runtime/src/storage/index.ts'
 import type { AgentDatabasePort } from '../../../packages/runtime/src/storage/ports.ts'
-import { StorageError, isStorageError } from './storage/errors.mjs'
-import { BlogPgStorage } from './storage/pg.mjs'
+import { StorageError, isStorageError } from './storage/errors.ts'
+import { BlogPgStorage } from './storage/pg.ts'
 // 协作入口与全局会话生命周期（P7 ③-B 的落点）：blog 只声明业务，机制全在运行时。
 import { createAgentRuntime, type AgentRuntimeAssembly } from '../../../packages/runtime/src/runtime.ts'
 import type { RuntimeConfig } from '../../../packages/runtime/src/conversation.ts'
@@ -555,7 +555,13 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/attachment',handler:async(req,res,actor)=>{
     if(req.method!=='POST')throw new AccessError(405,'只支持 POST')
     const query=new URL(req.url!,'http://localhost').searchParams
-    const result=await attachments.upload(actor,query.get('draftId'),query.get('name'),async(signal:AbortSignal)=>{
+    /**
+     * ⚠️ `query.get(...)` 是 `string | null`，而这三个方法的 id 形参是 `string`。这里用 `!` 收口
+     * ——**不是"断言值一定存在"**，而是**保持改前的行为**：改前就是把 `null` 原样透传（存储层按
+     * "查不到"处理，个别分支会先在 `null.startsWith` 上炸成 500）；`!` 只抹掉类型、运行时一字不变。
+     * 与同文件 `:548` 既有写法一致。**不在这里新增一条 400**（那是新行为，不属本批）。
+     */
+    const result=await attachments.upload(actor,query.get('draftId')!,query.get('name')!,async(signal:AbortSignal)=>{
       const cancel=()=>req.destroy();signal.addEventListener('abort',cancel,{once:true})
       try{return await body(req,MAX_ATTACHMENT_BYTES)}finally{signal.removeEventListener('abort',cancel)}
     });access.assert(actor);json(res,result)
@@ -563,8 +569,9 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/attachment-download',handler:async(req,res,actor)=>{
     if(req.method!=='GET')throw new AccessError(405,'只支持 GET')
     const query=new URL(req.url!,'http://localhost').searchParams
-    const file=await attachments.original(actor,query.get('draftId'),query.get('id'));access.assert(actor)
-    const record=await attachments.get(actor,query.get('draftId'),query.get('id'))
+    // 同 `/attachment`：`!` 只抹类型，运行时仍把 `null` 透传（保持改前行为）。
+    const file=await attachments.original(actor,query.get('draftId')!,query.get('id')!);access.assert(actor)
+    const record=await attachments.get(actor,query.get('draftId')!,query.get('id')!)
     const inline=query.get('inline')==='1'&&record.status==='ready'&&record.image&&['image/png','image/jpeg','image/webp','image/gif'].includes(record.kind)
     res.writeHead(200,{'content-type':inline?record.kind:'application/octet-stream','content-disposition':`${inline?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name)}`,'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"});res.end(file.bytes)
   }}))

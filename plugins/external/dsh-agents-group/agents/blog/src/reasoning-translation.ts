@@ -5,7 +5,7 @@ import { createUserMessage, ReasoningEffortId, BlockAssembler } from '@deepseek-
 import * as llm from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, actorKey, onRevoked, type Actor } from '@dsh-plugin-manager/plugin-kit'
-import type { BlogPgStorage } from './storage/pg.mjs'
+import type { BlogPgStorage } from './storage/pg.ts'
 
 export function needsChineseTranslation(text: string): boolean {
   const prose = text.replace(/```[\s\S]*?```|`[^`]*`|https?:\/\/\S+/g, '')

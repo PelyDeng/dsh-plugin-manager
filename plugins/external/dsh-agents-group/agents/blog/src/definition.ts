@@ -56,8 +56,8 @@
 import type { AgentDefinition, ProjectedResult, ResultContext } from '../../../packages/runtime/src/definition.ts'
 import { Config as ConfigSchema } from './config.ts'
 import { publicResultText } from './result-text.ts'
-import { searchContext } from './search.mjs'
-import { ownerKey } from './store.mjs'
+import { searchContext } from './search.ts'
+import { ownerKey } from './store.ts'
 
 /** 造声明要的东西：都是装配侧已有的实例与已定稿的配置。 */
 export interface BlogDefinitionInput {

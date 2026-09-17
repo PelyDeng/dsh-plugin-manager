@@ -61,7 +61,7 @@ jobs:
       - name: Group PG contracts
         run: pnpm --dir plugins/external/dsh-agents-group exec vitest run tests/migrate-blog-storage.test.ts
       - name: Blog PG contracts
-        run: node --test plugins/external/dsh-agents-group/agents/blog/tests/pg-smoke.test.mjs
+        run: node --test plugins/external/dsh-agents-group/agents/blog/tests/pg-smoke.test.ts
       # ---- 以下四步是 P7 判据 ④ 要求纳入发版清单的三条命令（外加它们的前置）----
       - name: Build blog plugin
         # ⚠️ 必须先构建：`test:host` 打的是 `agents/blog/dist/`（`tests/http-fixture.mjs` 里

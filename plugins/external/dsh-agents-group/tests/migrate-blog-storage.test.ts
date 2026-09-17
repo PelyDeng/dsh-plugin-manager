@@ -23,7 +23,7 @@ import { join } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { Pool } from 'pg'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { BlogPgStorage } from '../agents/blog/src/storage/pg.mjs'
+import { BlogPgStorage } from '../agents/blog/src/storage/pg.ts'
 import { main, runMigration } from '../scripts/migrate-blog-storage.ts'
 
 const DSN = process.env.AGENTS_GROUP_MIGRATE_PG_DSN ?? ''

@@ -8,7 +8,7 @@
  * （返回缓存且不再调用模型）；③running/failed 中间状态不参与命中。
  */
 import { describe, expect, it } from 'vitest'
-import { BlogStore } from '../agents/blog/src/store.mjs'
+import { BlogStore } from '../agents/blog/src/store.ts'
 import { ReasoningTranslations } from '../agents/blog/src/reasoning-translation.ts'
 
 const actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }

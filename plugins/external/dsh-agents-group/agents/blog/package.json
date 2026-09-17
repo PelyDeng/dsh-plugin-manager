@@ -40,9 +40,9 @@
   "scripts": {
     "build": "tsdown && tsdown --config tsdown.web.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --test-timeout=30000 tests/participant.test.mjs tests/native-drafts.test.mjs tests/management.test.mjs tests/clipboard.test.mjs tests/attachments.test.mjs tests/chat-store.test.mjs tests/chat.test.mjs tests/coordinator.test.mjs tests/chat-ui.test.mjs tests/article-diff.test.mjs tests/drafts.test.mjs tests/jobs.test.mjs tests/models.test.mjs tests/search.test.mjs tests/reports.test.mjs tests/storage-wiring.test.mjs tests/definition.test.mjs tests/turns-payload.test.mjs tests/schema-parity.test.mjs",
-    "test:host": "node --test --test-timeout=60000 tests/http.test.mjs tests/chat-history-native.test.mjs tests/chat-backup-native.test.mjs",
-    "test:pg": "node --test --test-timeout=60000 tests/pg-smoke.test.mjs",
+    "test": "node --test --test-timeout=30000 tests/participant.test.ts tests/native-drafts.test.ts tests/management.test.ts tests/clipboard.test.ts tests/attachments.test.ts tests/chat-store.test.ts tests/chat.test.ts tests/coordinator.test.ts tests/chat-ui.test.ts tests/article-diff.test.ts tests/drafts.test.ts tests/jobs.test.ts tests/models.test.ts tests/search.test.ts tests/reports.test.ts tests/storage-wiring.test.ts tests/definition.test.ts tests/turns-payload.test.ts tests/schema-parity.test.ts",
+    "test:host": "node --test --test-timeout=60000 tests/http.test.ts tests/chat-history-native.test.ts tests/chat-backup-native.test.ts",
+    "test:pg": "node --test --test-timeout=60000 tests/pg-smoke.test.ts",
     "test:bridge": "php -n -l typecho/DshBlogBridge/Plugin.php && php -n tests/management-bridge.test.php",
     "test:reports": "php tests/reports-bridge.test.php",
     "check": "pnpm typecheck && node --check web/app.js",

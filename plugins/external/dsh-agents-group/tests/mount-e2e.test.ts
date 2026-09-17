@@ -445,7 +445,7 @@ describe('群组端到端挂载', () => {
       return { status: response.statusCode, body: JSON.parse(response.body) }
     }
     const { AccessError } = await import('@dsh-plugin-manager/plugin-kit')
-    const { StorageError } = await import('../agents/blog/src/storage/errors.mjs')
+    const { StorageError } = await import('../agents/blog/src/storage/errors.ts')
     const unreachable = render(new StorageError('storage_unreachable', '存储连接失败'))
     expect(unreachable.status).toBe(503)
     expect(unreachable.body.code).toBe('storage_unreachable')

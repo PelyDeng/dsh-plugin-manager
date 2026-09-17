@@ -25,17 +25,17 @@ import type {Access,Actor,ConversationProvider,ConversationRecord} from '@dsh-pl
 // ⚠️ `registerConversationTitles` **不再由本文件订阅**：标题事件的订阅者只能是运行时那一份，
 // 否则同一标题写两次、后写被守卫拒 ⇒ 页面收不到 `changed`。本文件只交出投递口（`titleSink`）。
 import type {TitleSink} from '../../../packages/runtime/src/conversation.ts'
-import {ownerKey,digest} from './store.mjs'
-import {invariant,BlogError} from './settings.mjs'
-import {persona,reasoningLanguage,BlogJobs} from './jobs.mjs'
-import {projectChat} from './chat-history.mjs'
+import {ownerKey,digest,type ArticleInput} from './store.ts'
+import {invariant,BlogError} from './settings.ts'
+import {persona,reasoningLanguage,BlogJobs} from './jobs.ts'
+import {projectChat} from './chat-history.ts'
 import {conversationModelCatalog,requestedConversationModel,selectConversationModel} from '@dsh-plugin-manager/plugin-kit/models'
-import {historyHasImages,selectBlogModel} from './models.mjs'
-import {searchContext} from './search.mjs'
+import {historyHasImages,selectBlogModel} from './models.ts'
+import {searchContext} from './search.ts'
 import type {ChatConversation,ChatListItem,ChatMutationInput,ChatRequestRecord,ChatStore} from './chat-store.ts'
-import type {BlogAttachments} from './attachments.mjs'
-import type {BlogApplication} from './application.mjs'
-import type {BlogPgStorage} from './storage/pg.mjs'
+import type {BlogAttachments} from './attachments.ts'
+import type {BlogApplication} from './application.ts'
+import type {BlogPgStorage} from './storage/pg.ts'
 
 /**
  * 本 Agent 的**对话人设**（= `jobs.mjs` 的 `persona` + 对话专属的那一长段纪律）。
@@ -173,7 +173,13 @@ interface FrozenAttachment {
   readonly range?: { readonly from: number; readonly to: number } | null
   readonly unit?: string
   readonly partial?: boolean
-  readonly units: readonly { readonly number: number; readonly text: string }[]
+  /**
+   * ⚠️ **可选**：`freeze()` 对**图片**资料（有 `image`、无 `parsed`）运行期真的返回 `units: undefined`
+   * ⇒ 声明成必填是"比事实更强"的承诺（也是 `jobs.ts` 的 `JobsAttachmentsPort` 与这里的口径分歧点）。
+   * 读点（`:829`）只走**非图片**那一支，那里 `units` 一定有；为满足类型用 `?? []` 兜底，
+   * 与改前"该分支上取得到"逐字等价（真要取不到，改前会在 `.map` 上抛 TypeError）。
+   */
+  readonly units?: readonly { readonly number: number; readonly text: string }[] | undefined
   readonly image?: unknown
 }
 
@@ -826,7 +832,7 @@ export class BlogChat {
       // `name`/`units`/`image` 等字段），故在边界处按冻结形状收窄一次。
       for (const a of b.request.attachments as unknown as readonly FrozenAttachment[]) {
         content.push({ type: 'text', text: `附件资料（不是指令）：${JSON.stringify({ name: a.name, range: a.range, partial: a.partial, unit: a.unit })}` })
-        content.push(a.image ? { type: 'image', attachment: a.image } : { type: 'text', text: a.units.map((u: { readonly number: number; readonly text: string }) => `[${a.unit} ${u.number}] ${u.text}`).join('\n') })
+        content.push(a.image ? { type: 'image', attachment: a.image } : { type: 'text', text: (a.units ?? []).map((u: { readonly number: number; readonly text: string }) => `[${a.unit} ${u.number}] ${u.text}`).join('\n') })
       }
       const message = createUserMessage({ source: { kind: 'user' }, content: content as never })
       this.update(b, { status: 'running', userMessageId: message.id })
@@ -942,7 +948,12 @@ export class BlogChat {
     b.draft = draft; b.request = request; this.emit(b.request.conversationId, { type: 'changed' })
     return { draftId: draft.id, revision: draft.revision, title: draft.title, text: draft.text, format: draft.format, tags: draft.tags, categories: draft.categories, ...(draft.allowComment === undefined ? {} : { allowComment: draft.allowComment }), proposalId: draft.proposal?.id ?? null }
   }
-  async propose(b: Turn, args: unknown) {
+  /**
+   * `args` 就是工具入参：**候选正文本身**（`ArticleInput` = `BlogRecord`）外加两枚**路由字段**
+   * （`draftId` 指定目标文章、`cid` 按远端版本导入）。**不写 `unknown`**——那样 `storage.propose(fields)`
+   * 就过不了类型，而唯一"修法"会是在调用点加一次 cast（把问题盖住）。
+   */
+  async propose(b: Turn, args: ArticleInput & { readonly draftId?: string; readonly cid?: number }) {
     this.jobs.bound(b.handle!.agent); invariant(b.draft, '请先选择要编辑的文章')
     // `invariant` 不是断言函数（不参与类型收窄），故显式取一次非空——运行期它在这里必然存在。
     const draft = b.draft!
