@@ -311,7 +311,20 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],category:'agents',tools:jobs.chatTools}))
   for(const [suffix,file,mime] of [['','web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],['/style.css','web/style.css','text/css'],['/writing.css','web/writing.css','text/css'],['/chat-base.css','web/chat-base.css','text/css'],['/chat-theme.css','web/chat-theme.css','text/css'],...['chevron-down','copy','check','like','dislike','branch','database','clock','think','api','send','user','chat','stop'].map(name=>[`/media/icon-${name}.svg`,`web/media/icon-${name}.svg`,'image/svg+xml']),['/icons.svg','web/icons.svg','image/svg+xml']] as const){
     // `file` 已是相对子包根的路径（web/... 或 dist/web/...），直接相对 agentRoot 解析。
-    const content=(await readFile(blogResource(file),'utf8')).replaceAll('__BASE__',config.routePrefix)
+    /**
+     * ⚠️ **缺文件要报"缺构建产物"，不能让它以裸 `ENOENT` 冒出去。**
+     *
+     * `web/` 下的静态资源是**随包提交**的，而 `dist/web/*` 是**构建产物**（`dist/` 是 gitignored，
+     * 由 blog 的 `tsdown --config tsdown.web.config.ts` 生成）。少了它，`mount()` 会在
+     * **跑任何回合逻辑之前**就抛 `ENOENT: … agents/blog/dist/web/app.js` ——
+     * 而这条错误在现场看起来**像业务失败**（实测过：群组挂载用例报"blog 装载失败：ENOENT"，
+     * 排查方向被带偏；生产上同理，容器里忘了构建就是一条看不懂的装载失败）。
+     * ⇒ 在这里把它翻成一句**指明该做什么**的话。**不吞掉原因**（`cause` 原样保留）。
+     */
+    const asset = await readFile(blogResource(file),'utf8').catch((cause:unknown)=>{
+      throw new Error(`博客页面资源缺失：${file}（web/ 是随包提交的静态资源，dist/web/* 需要先构建——跑 \`pnpm --filter @dsh-agents-group/blog build\`）`,{cause})
+    })
+    const content=asset.replaceAll('__BASE__',config.routePrefix)
     ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+suffix,surface:suffix?'asset':'page',handler(req,res){if(req.method!=='GET')throw new AccessError(405,'只支持 GET');res.writeHead(200,{'content-type':`${mime}; charset=utf-8`,'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"});res.end(content)}}))
   }
   // 存活与就绪探针由群组统一提供（/agents/health、/agents/ready 与 /agents/blog/ready），
