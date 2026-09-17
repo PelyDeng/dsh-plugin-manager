@@ -25,23 +25,15 @@
  * 会话与草稿全都会 503）。测试侧用本文件导出的 {@link TEST_DSN} 门控并**打印跳过原因**
  * ——跳过与通过是两件事，不报通过。⚠️ 也别与 `pnpm test:pg` 并发跑：两者都会重建 `public`。
  *
- * ## 库形状：两块拼起来，而**它们的不一致本身就是待办**
+ * ## 库形状：**一份**，就是生产那份
  *
- * 夹具建的形状 = **今天代码的真实形状**：
+ * 夹具直接用 `private-deploy/db/0001_init.sql` 建出全部 15 张表（{@link provisionSchema}）。
  *
- * 1. 业务六表 + `blog_schema_version` 取自 blog 自己的迁移
- *    （`migrations/postgres/0001_init.sql`）——`src/storage/pg.mjs:76` 今天仍在读
- *    `blog_schema_version`，用的仍是 `owner` + `data` 旧列；
- * 2. 框架四表（`dsh_schema_versions` / `dsh_conversations` / `dsh_turns` / `dsh_turn_results`）
- *    取自新库 DDL（`private-deploy/db/0001_init.sql`）里的 `dsh_` 语句——索引侧走运行时端口，
- *    要的正是这一套。
- *
- * ⚠️ 新库 DDL 里 `blog_*` 六表**已经是新形状**（`owner_namespace` / `owner_id` / `payload`），
- * 而且**没有** `blog_schema_version`（设计 §5.1：每插件一张版本表 → `dsh_schema_versions` 一行）。
- * 两处对不上 ⇒ **业务存储还没迁到新形状**：今天用 `private-deploy/db/create.mjs` 建出的库里，
- * blog 会以 `storage_schema_missing` 永久未就绪（不是装载失败，是"未就绪"，界面上只是探针 503）。
- * 本夹具把现状如实拼出来（不拼的话这几条用例根本跑不起来），**切完之后它会红——那是正确信号**，
- * 届时跟着改的应该是 `src/storage/pg.mjs` 的版本核验与列名。
+ * ⚠️ 这里此前是"两块拼起来"：业务六表 + `blog_schema_version` 取自 blog 自己的旧迁移，框架四表
+ * 从新 DDL 里筛出来。那是**业务存储还没迁到新形状**时的如实写照（当时 `src/storage/pg.mjs` 仍在读
+ * `blog_schema_version`、仍用 `owner` + `data`）。业务六表切完之后那个拼接就没有理由了 ——
+ * 它会让测试跑在一个**只有测试才有**的中间结构上，而"测试全绿"于是证明的是那个结构。
+ * 现在夹具与生产是同一份 DDL，拼接逻辑与 `FRAMEWORK_STATEMENT` 一起删掉了。
  *
  * ## 其它两条约束
  *
@@ -56,7 +48,7 @@ import { join } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { Client } from 'pg'
 import { createAccess, createPluginHttp } from '@dsh-plugin-manager/plugin-kit'
-import { applySchema, splitStatements, sqlWithAppliedAt } from '../../../../../../private-deploy/db/create.mjs'
+import { applySchema } from '../../../../../../private-deploy/db/create.mjs'
 import { Config, blogStorageErrorHandler, mount } from '../dist/index.mjs'
 
 /** 真 PG 的门控变量：测试侧据此决定那几条依赖存储的用例跑还是跳过。 */
@@ -65,20 +57,16 @@ export const TEST_DSN = process.env.AGENTS_GROUP_TEST_PG_DSN ?? ''
 /** 夹具用的路由前缀：与 `Config` 的缺省值一致，显式写出来是因为临时服务按它拼路径。 */
 const ROUTE_PREFIX = '/blog'
 
-/** blog 自己的业务结构（旧形状：`owner` + `data` + `blog_schema_version`）。 */
-const BLOG_MIGRATION = new URL('../migrations/postgres/0001_init.sql', import.meta.url)
-/** 新库 DDL：框架四表与 `dsh_schema_versions` 的唯一来源。 */
-const PRIVATE_DDL = new URL('../../../../../../private-deploy/db/0001_init.sql', import.meta.url)
-
 /**
- * 只取"定义 `dsh_` 表/索引"和"写版本行"的语句。
+ * **唯一的**结构来源：新库 DDL（`private-deploy/db/0001_init.sql`，15 张表一次建出）。
  *
- * 不能按"语句里出现过 `dsh_`"来筛：`butler_tasks` 的复合外键指向 `dsh_conversations`，
- * 那样会把管家表一起拖进来（而它自己的外键目标不在集合里 ⇒ 建表失败）。按**语句开头**筛就只见
- * `CREATE TABLE dsh_*` / `CREATE INDEX dsh_*` / `INSERT INTO dsh_schema_versions`，
- * 文件的 `BEGIN;` / `COMMIT;` 自然被排除（`applySchema` 自己会套一对事务）。
+ * 本夹具此前把两块拼起来（旧 blog 迁移 + 新 DDL 里筛出的 `dsh_` 语句），那是**迁到一半**的形状。
+ * 业务六表切到新形状之后，"拼"这件事就没有理由了：整份 DDL 才是生产那份结构，而拼接会引入
+ * 一个只有测试才有的中间态 —— 那种结构一旦与生产不同，"测试全绿"证明的就是别的东西。
+ *
+ * 代价同 `tests/pg-smoke.test.mjs`：本文件因此依赖仓库布局（DDL 在 `private-deploy/` 下）。
  */
-const FRAMEWORK_STATEMENT = /^(?:CREATE (?:UNIQUE )?(?:TABLE|INDEX) dsh_|INSERT INTO dsh_schema_versions\b)/
+const PRIVATE_DDL = new URL('../../../../../../private-deploy/db/0001_init.sql', import.meta.url)
 
 /** 安静地应用结构：夹具不关心语句条数，`applySchema` 的日志会污染 `node --test` 的 TAP 输出。 */
 const QUIET = { log: () => {} }
@@ -100,11 +88,10 @@ async function provisionSchema(dsn) {
     }
     await client.query('DROP SCHEMA public CASCADE')
     await client.query('CREATE SCHEMA public')
-    await applySchema(client, await readFile(BLOG_MIGRATION, 'utf8'), QUIET)
-    const privateDdl = sqlWithAppliedAt(await readFile(PRIVATE_DDL, 'utf8'))
-    const framework = splitStatements(privateDdl).map(statement => statement.trim()).filter(statement => FRAMEWORK_STATEMENT.test(statement))
-    if (framework.length === 0) throw new Error(`新库 DDL（${PRIVATE_DDL.pathname}）里没有找到框架表语句：夹具的结构来源已失效`)
-    await applySchema(client, `${framework.join(';\n')};\n`, QUIET)
+    // ⚠️ 去掉文件自带的那对 `BEGIN;` / `COMMIT;`：`applySchema` 自己会套一对事务，两层叠起来会变成
+    // 嵌套 BEGIN（告警）与提前 COMMIT（后面的语句跑在事务外，失败就不回滚了）。
+    const ddl = (await readFile(PRIVATE_DDL, 'utf8')).replace(/^[ \t]*(?:BEGIN|COMMIT)[ \t]*;[ \t]*$/gim, '')
+    await applySchema(client, ddl, QUIET)
   } finally {
     await client.end()
   }

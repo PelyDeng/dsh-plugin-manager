@@ -703,26 +703,22 @@ describe.skipIf(DSN === '')('blog 存量迁移工具（agents_group_mig）', () 
     }
   })
 
-  it('迁移后首次启动：导入的 queued/running 任务与 uploading 附件被 BlogPgStorage 启动序列收成 failed', async () => {
-    const fx = fixture('first-start')
-    await resetTarget()
-    await runMigration({ blogPath: fx.blogPath, translationsPath: fx.translationsPath, dsn: DSN, log: silent })
-    const readStatus = async (table: string, id: string): Promise<string> => {
-      const result = await admin.query<{ data: string }>(`SELECT data FROM ${table} WHERE id=$1`, [id])
-      return String(JSON.parse(String(result.rows[0]?.data)).status)
-    }
-    // 导入落地时仍是在途状态——人工核对清单列的就是这几条（迁移不替业务做状态翻转）。
-    expect(await readStatus('blog_jobs', jobRecords.queued.id)).toBe('queued')
-    expect(await readStatus('blog_jobs', jobRecords.running.id)).toBe('running')
-    expect(await readStatus('blog_attachments', attachmentRecords.uploading.id)).toBe('uploading')
-    // 切换后首次启动（B2-2a 的启动序列）把它们收成 failed：迁移产出与启动恢复口径闭合。
-    const storage = new BlogPgStorage(DSN)
-    await storage.init()
-    await storage.close()
-    expect(await readStatus('blog_jobs', jobRecords.queued.id)).toBe('failed')
-    expect(await readStatus('blog_jobs', jobRecords.running.id)).toBe('failed')
-    expect(await readStatus('blog_attachments', attachmentRecords.uploading.id)).toBe('failed')
-    // 已完成的任务不被启动序列误伤。
-    expect(await readStatus('blog_jobs', jobRecords.done.id)).toBe('succeeded')
-  })
+  /**
+   * ⚠️ **这里曾有一条「迁移后首次启动」用例，已随 P7 ⑤ 删除。**
+   *
+   * 它先迁入**旧形状**（`data TEXT` / `owner`）再用 `BlogPgStorage` 启动，而 ⑤ 把实现切到**新形状**
+   * （`payload JSONB` + `dsh_schema_versions`）⇒ **「旧形状的目标库 + 新实现」这个组合不再被支持**，
+   * 用例的前提消失（实测：`relation "dsh_schema_versions" does not exist` ⇒ `storage_schema_missing`）。
+   *
+   * **覆盖面没有丢**，两半各有归宿：
+   * - 「在途 jobs / attachments 被启动序列收成 failed」⇒ 已在**新形状**上覆盖，见
+   *   `agents/blog/tests/pg-smoke.test.mjs` 的「启动翻转：jobs 置 running、attachments 置 uploading 后，
+   *   init 收成 failed」；
+   * - 「迁移不替业务做状态翻转」⇒ 由本文件的导入类用例覆盖。
+   *
+   * ⚠️ 顺带登记：本文件、被它测试的 `scripts/migrate-blog-storage.ts`、以及
+   * `agents/blog/migrations/postgres/0001_init.sql`（旧形状 DDL）**已被新库 DDL 取代**，
+   * 现在**零生产消费者**。按设计 §6.3 的过渡说明，管家切完新库之后它们就该一起退役 ——
+   * 那是一次独立的清理动作（含发布清单 `verifyFiles` 与包内 `files`），**不在本次范围内**。
+   */
 })
