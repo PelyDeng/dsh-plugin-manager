@@ -5,7 +5,7 @@
  *
  * blog 与 closedoff **不同构**：`closedoff/src/agent.ts`(488) 是**纯机制**（会话 Map / 打开合并 /
  * 占用回合 / fork / 模型选择，逐条 1:1 映射到 `ConversationLifecycle`），所以它的改造是"删机制 +
- * 写声明"。而 blog 的 `chat.mjs`(436) 是"**运行时生命周期 + blog 业务**"的**超集**：它用的是与
+ * 写声明"。而 blog 的 `chat.ts`(436) 是"**运行时生命周期 + blog 业务**"的**超集**：它用的是与
  * 运行时同一批原语，但自己还实现了回合状态机、`ctx.jobs` 绑定与等待、中断语义、草稿与来源、
  * 分支种子、并发排队、持久化检查点。⇒ **不能照 closedoff 的形状做**。
  *
@@ -17,12 +17,12 @@
  * | 钩子 | 旧实现 | 状态 |
  * | --- | --- | --- |
  * | `persona` | `index.ts` 读 `persona.txt` 并 trim | ✅ 由装配侧传入 |
- * | `tools` | `jobs.mjs` 的 `register(...)`（模块级注册） | ⏳ 由装配侧传入（本文件不注册任何东西） |
+ * | `tools` | `jobs.ts` 的 `register(...)`（模块级注册） | ⏳ 由装配侧传入（本文件不注册任何东西） |
  * | `liveMode` | `participant.ts:84-111`：实时通道给的是**本步累积**值 | ✅ `'delta'`（**2026-09-17 更正**：那句"累积值"说的是**旧载体的页面通道**；新载体的思考通道由宿主 `reasoning-delta` **增量帧**喂 ⇒ 声明为 `'delta'`，理由见 `:152-166`） |
  * | `config` | `config.ts` 的 `Config` | ✅ |
  * | `projectResult` | `participant.ts:12-27` + `:148-202` | ✅ 已落（答案取 `history.tail`；候选**跨轮**走注入的会话产出读取、**本轮正文**走 `loadResults()`；操作卡片走 `app.operations`；预算走 `result-text.ts`） |
- * | `turnContext` | `chat.mjs:525-528` 的 `operationContext` + `chat.ts:492` 的时间基准 | ✅ 已落（**每轮求值**；两者旧装配里都是每轮新的，见字段注释） |
- * | `projectHistory` | `chat-history.mjs` 的 `projectChat`（页面侧栏） | ⏳ 输出形状不同（含 `tool`/`status` 行），要适配或另立钩子 |
+ * | `turnContext` | `chat.ts:525-528` 的 `operationContext` + `chat.ts:492` 的时间基准 | ✅ 已落（**每轮求值**；两者旧装配里都是每轮新的，见字段注释） |
+ * | `projectHistory` | `chat-history.ts` 的 `projectChat`（页面侧栏） | ⏳ 输出形状不同（含 `tool`/`status` 行），要适配或另立钩子 |
  * | `stageText` | `participant.ts:130-131`/`:205-207` 的**状态行** | ⏳ 运行时的 `stageText` **只在 `tool/call` 上被问**，表达不了状态行 |
  * | `redact` | — | ❌ **不加**：全仓 `grep redact\|脱敏` 在 blog 的 `src/` **零命中**（blog 不做脱敏） |
  * | `needsReply` | — | ❌ **不加**：blog 没有"等用户补一句话"的语义（`waiting` 只出现在**工具描述**里，指"确认卡片待点击"） |
@@ -43,7 +43,7 @@
  *    `ctx.actor`（**每请求**，不能由闭包捕获）派生 owner 键。**缺口 A 已补**
  *    （`ResultContext.actor`，运行时加法式扩展）。
  * 3. **`external_pending` 的另一半** → **本批核实：缺口 B 不存在**。旧实现的 `history.operations`
- *    来自 `chat.mjs` 的 `operationCards`，而它就是 `app.operations(owner)` 按会话过滤出来的
+ *    来自 `chat.ts` 的 `operationCards`，而它就是 `app.operations(owner)` 按会话过滤出来的
  *    ⇒ 那些操作卡片在**业务库**里，`projectResult` 用闭包注入的 `app` 自己查即可，
  *    **不需要**运行时再开一层契约去承载它（`dsh_turn_results` 只承载 `results`，正好）。
  *
@@ -68,9 +68,9 @@ export interface BlogDefinitionInput {
    */
   readonly persona: string
   /**
-   * 业务工具（`jobs.mjs` 的 `register(...)` 在装配期注册一次）。
+   * 业务工具（`jobs.ts` 的 `register(...)` 在装配期注册一次）。
    *
-   * 由装配侧传入而**不在本文件里 import**：`jobs.mjs` 是**模块级注册**（import 即产生副作用），
+   * 由装配侧传入而**不在本文件里 import**：`jobs.ts` 是**模块级注册**（import 即产生副作用），
    * 而本文件的契约是"**一个副作用都没有**"——声明与调用点分家，正是"工具从未被注册"那类缺陷的
    * 反面。注册时机与顺序由装配侧掌握。
    */
@@ -79,7 +79,7 @@ export interface BlogDefinitionInput {
    * **业务**存储（`BlogPgStorage`）：投影要按 owner 读草稿。
    *
    * ⚠️ 它**不是**运行时的会话门面：业务表（`blog_*`）与会话/轮次（`dsh_*`）是两个库面，装配侧
-   * 同时持有两者。这里用最小结构类型描述用到的那个方法（`pg.mjs` 是 `.mjs`、没有类型）。
+   * 同时持有两者。这里用最小结构类型描述用到的那个方法（`pg.ts` 已是 `.ts`、有类型）。
    */
   readonly storage: {
     get(owner: string, id: string): Promise<{ proposal?: { id: string; fields: { title: string; text: string } } }>
@@ -88,7 +88,7 @@ export interface BlogDefinitionInput {
    * 业务应用（`BlogApplication`）：读这个会话里留下的**操作卡片**。
    *
    * ⚠️ 操作卡片来自**业务库**（`app.operations(owner)`），不是索引库——所以它不需要运行时再开一层
-   * 契约（本批核实过：`chat.mjs` 的 `operationCards` 就是 `app.operations(...)` 过滤出来的）。
+   * 契约（本批核实过：`chat.ts` 的 `operationCards` 就是 `app.operations(...)` 过滤出来的）。
    */
   readonly app: {
     operations(owner: string): Promise<readonly {
@@ -163,7 +163,7 @@ export function createBlogDefinition(input: BlogDefinitionInput): AgentDefinitio
      * 与已完成的同类物一致：`closedoff/src/definition.ts:113` 声明 `'delta'`（运行时的缺省也是它，
      * `participant.ts:333` 的 `definition.liveMode ?? 'delta'`）。
      * **改回 `'cumulative'` 之前先确认"谁在喂这条通道"**——设计文档 §:455/:504 里那句
-     * "blog 的 live 是累计值"写的是**旧载体**，已被本轮实测推翻（判据：`tests/participant.test.mjs`
+     * "blog 的 live 是累计值"写的是**旧载体**，已被本轮实测推翻（判据：`tests/participant.test.ts`
      * 的两条思考通道用例，它们现在喂的是**真增量**）。
      */
     liveMode: 'delta',
@@ -171,7 +171,7 @@ export function createBlogDefinition(input: BlogDefinitionInput): AgentDefinitio
      * 会话寻址：**由协调方的 `missionId` 派生**（旧实现自己维护那张映射表，本声明取代它）。
      *
      * 旧路径：`participant.ts:67` 把 `'pirate-conversation-' + digest({ missionId })` 当 requestId 传给
-     * `chat.create`，会话 id 仍是 `chat-store.mjs:41` 的 `'blog-chat-' + randomUUID()`。也就是说
+     * `chat.create`，会话 id 仍是 `chat-store.ts:41` 的 `'blog-chat-' + randomUUID()`。也就是说
      * **幂等键本来就派生自 mission** —— 这条声明是把那件事从业务侧收进运行时（设计 §3.2 line 357）。
      *
      * 收进来之后"同一 mission 只建一次会话"不再靠业务侧的表，而是靠 `dsh_conversations` 上的部分唯一
@@ -204,7 +204,7 @@ export function createBlogDefinition(input: BlogDefinitionInput): AgentDefinitio
      *
      * ## 两个来源与旧实现逐字对齐
      *
-     * - **操作记录**：`chat.mjs:525-528` 的 `operationContext`。同样按 `chat.conversationId`
+     * - **操作记录**：`chat.ts:525-528` 的 `operationContext`。同样按 `chat.conversationId`
      *   过滤本会话、同样 `slice(-10)` 只留最近十条、同样的字段与那句"`prepared` 尚未执行；
      *   `succeeded` 才表示完成"。空数组时**整段不发**（旧实现也是 `if (operationContext.length)`）。
      * - **时间基准**：旧实现把它拼在 `blog:persona` 段的末尾（`chat.ts:492`）。挪到本钩子里，
@@ -323,7 +323,7 @@ export function createBlogProjector(
       }
 
       // —— 操作卡片（**业务库**）——
-      // ⚠️ 本批核实过：`chat.mjs` 的 `operationCards` 就是 `app.operations(owner)` 按会话过滤
+      // ⚠️ 本批核实过：`chat.ts` 的 `operationCards` 就是 `app.operations(owner)` 按会话过滤
       // 出来的 ⇒ 它来自业务库，**不需要**运行时再开一层契约去承载它。
       const operations = await input.app.operations(owner)
       const confirmation = operations.some(operation => operation.chat?.conversationId === conversationId

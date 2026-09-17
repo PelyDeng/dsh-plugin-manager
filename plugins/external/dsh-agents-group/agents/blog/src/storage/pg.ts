@@ -10,13 +10,13 @@
  * - 启动序列 init()：版本校验（缺表 `storage_schema_missing` / 版本不符
  *   `storage_schema_version`，不自动建表、不自动改写版本）+ jobs / attachments 中断翻转
  *   （都在**本文件**的启动序列里：读 `blog_jobs` / `blog_attachments` 把在途状态收成 failed；
- *   替身 `src/store.mjs` 的 `init()` 做同一件事）——三环并入一次启动，单事务完成恢复写；
+ *   替身 `src/store.ts` 的 `init()` 做同一件事）——三环并入一次启动，单事务完成恢复写；
  *   未就绪即不服务。
- * - 业务语义与 SQLite 版 `BlogStore`（`src/store.mjs`）对齐：save 的 revision 条件更新守卫、
+ * - 业务语义与 SQLite 版 `BlogStore`（`src/store.ts`）对齐：save 的 revision 条件更新守卫、
  *   jobStart 的 `UNIQUE(owner_namespace, owner_id, caller, request_id)` 幂等（SELECT 先行 + INSERT 兜底）、
  *   audit append-only、损坏 JSON 不做分类（现状即直接 JSON.parse，如实抛出，沿用）。
  *   ⚠️ **两边不只是语义对齐，表结构也逐列对齐**（列名 / 生成列 / 两处多态 scope 的"恰一非空"）——
- *   判据是 `tests/schema-parity.test.mjs`：它从本文件配套的 `private-deploy/db/0001_init.sql` **反推**
+ *   判据是 `tests/schema-parity.test.ts`：它从本文件配套的 `private-deploy/db/0001_init.sql` **反推**
  *   期望值，与替身的 `pragma_table_xinfo` 逐表比对（替身此前整整落后一代形状，那正是它存在的意义）。
  * - 记录列改 **`payload JSONB`**（见下），时间为毫秒 bigint，驱动侧回传字符串，读出按需 `Number()`。
  *
@@ -25,7 +25,7 @@
  * 四处与前一代 DDL 不同，写 SQL 时每一条都得记住（漏一条就是运行期报错或静默错值）：
  *
  * 1. **归属是两列** `owner_namespace` + `owner_id`，不再是单个 `owner`。业务侧的 `owner` 字符串
- *    来自 `store.mjs:9` 的 `ownerKey`（`${namespace}:${userId}`），用 {@link ownerOf} 切**第一个**
+ *    来自 `store.ts:9` 的 `ownerKey`（`${namespace}:${userId}`），用 {@link ownerOf} 切**第一个**
  *    冒号。**不要**把它拼成一个合成串去比列。
  * 2. **载荷是 `payload JSONB`**（旧名 `data TEXT`）。写用 `$n::jsonb`；
  *    **读回来直接就是对象，不要再 `JSON.parse` 一次**（会抛 `Unexpected token o`）。
@@ -93,7 +93,7 @@ const DATABASE_GENERATED_COLUMNS = {
  *
  * `blog_attachments`：`draft_id` 指真实草稿，`conversation_id` 指会话（`blog-chat-*`，外键指向
  * `dsh_conversations`）。`blog_operations`：`draft_id` 指真实草稿，`scope_id` 指**合成 scope**
- * （`manage:<kind>:<id|new>` 来自 `application.mjs:203`、`remote:<rootCid>` 来自 `:239`）。
+ * （`manage:<kind>:<id|new>` 来自 `application.ts:203`、`remote:<rootCid>` 来自 `:239`）。
  * 两支各带一条 `CHECK (num_nonnulls(...) = 1)`，所以写错支不是"少一个字段"，是**整条 INSERT 失败**。
  */
 const SYNTHETIC_SCOPE = /^(?:manage|remote):/
@@ -128,7 +128,7 @@ type ColumnRow = { table: string; column: string }
 type OneRow = { one: number }
 
 /**
- * `owner` 字符串（`store.mjs:9` 的 `ownerKey`，形如 `user:alice`）→ 新形状的两个归属列。
+ * `owner` 字符串（`store.ts:9` 的 `ownerKey`，形如 `user:alice`）→ 新形状的两个归属列。
  *
  * 切**第一个**冒号：与 `chat-store.ts` 的同名派生逐字一致。两个消费方各切各的、切法不同，
  * 会让"同一条会话/草稿在两处落到不同 owner 列上"，而那种漂移**在页面上完全看不出来**。
@@ -253,8 +253,8 @@ export class BlogPgStorage {
 
   /**
    * 启动恢复写（原 SQLite 构造器行为迁 PG 后并入启动序列）：
-   * jobs 里 queued/running 的任务收成 failed（store.mjs:45-48），attachments 里
-   * uploading/parsing 的记录收成 failed（attachments.mjs:14-17），单事务完成。
+   * jobs 里 queued/running 的任务收成 failed（store.ts:45-48），attachments 里
+   * uploading/parsing 的记录收成 failed（attachments.ts:14-17），单事务完成。
    */
   async recoverInterrupted(): Promise<void> {
     const now = Date.now()
@@ -339,7 +339,7 @@ export class BlogPgStorage {
     return result.rows.map(row => row.payload).filter(d => !search || d.title.toLowerCase().includes(search) || d.text.toLowerCase().includes(search)).map(draftSummary)
   }
 
-  /** owner 名下全部草稿的完整记录（search.mjs:41 的检索入口，检索与排序在调用方）。 */
+  /** owner 名下全部草稿的完整记录（search.ts:41 的检索入口，检索与排序在调用方）。 */
   async draftRecords(owner: string): Promise<BlogDraft[]> {
     const { namespace, id: ownerId } = ownerOf(owner)
     const result = await this.run<DraftPayloadRow>('SELECT payload FROM blog_drafts WHERE owner_namespace=$1 AND owner_id=$2', [namespace, ownerId])
@@ -347,7 +347,7 @@ export class BlogPgStorage {
   }
 
   /**
-   * 按 cid 找已导入的博客原生草稿（application.mjs:139-145 importSnapshot 的 cid 幂等去重
+   * 按 cid 找已导入的博客原生草稿（application.ts:139-145 importSnapshot 的 cid 幂等去重
    * 存储侧支撑，四耦合点之 1）：过滤条件与现状逐字对齐——非原生、已删除、无该关联 cid 的跳过。
    * 返回完整记录，variant 与内容比对（sameBlogContent）仍由调用方完成。
    */
@@ -368,7 +368,7 @@ export class BlogPgStorage {
     invariant(old.revision === revision, '草稿已在其他窗口修改，请保留当前内容后重新加载', 409)
     const now = Date.now(), contentChanged = ['title', 'text', 'slug', 'format', 'tags', 'categories', 'allowComment'].some(key => Object.hasOwn(patch, key) && !isDeepStrictEqual(old[key], patch[key]))
     const next = { ...old, ...patch, id, revision: revision + 1, updatedAt: now, contentUpdatedAt: contentChanged ? now : draftContentUpdatedAt(old), contentTimeSource: contentChanged ? 'content' : draftContentTimeSource(old) }
-    // revision 条件更新守卫：并发下恰有一路 UPDATE 命中，另一路 0 行按 409 拒绝（store.mjs:68 语义）。
+    // revision 条件更新守卫：并发下恰有一路 UPDATE 命中，另一路 0 行按 409 拒绝（store.ts:68 语义）。
     // ⚠️ 旧的 `updated=$2` 没有了：新形状里 `updated_at` 是**生成列**，"更新时间"就是
     // `payload.updatedAt` 本身 —— 上面 `next.updatedAt = now` 已经写进载荷，派生列随之推进。
     // 换句话说：**改时间 = 改载荷那一个键**，单独再写一列既写不进去（428C9）也会与派生值打架。
@@ -415,13 +415,13 @@ export class BlogPgStorage {
   async jobStart(owner: string, caller: string, requestId: string, input: BlogRecord, actor: BlogRecord): Promise<{ job: BlogJob; fresh: boolean }> {
     invariant(/^[\w.-]{1,80}$/.test(caller) && /^[\w-]{8,100}$/.test(requestId), '调用标识无效')
     const { namespace, id: ownerId } = ownerOf(owner)
-    // SELECT 先行：已受理的请求直接回既有任务（store.mjs:97-98）。
+    // SELECT 先行：已受理的请求直接回既有任务（store.ts:97-98）。
     const prior = await this.run<JobPriorRow>('SELECT payload, input_hash AS "inputHash" FROM blog_jobs WHERE owner_namespace=$1 AND owner_id=$2 AND caller=$3 AND request_id=$4', [namespace, ownerId, caller, requestId])
     if (prior.rows[0]) {
       invariant(prior.rows[0].inputHash === digest(input), '同一请求标识不能用于不同输入', 409)
       return { job: prior.rows[0].payload, fresh: false }
     }
-    // ⚠️ 载荷里**保留** `owner` 这个业务字段：它现在与归属两列重复，但 `application.mjs` / `jobs.mjs`
+    // ⚠️ 载荷里**保留** `owner` 这个业务字段：它现在与归属两列重复，但 `application.ts` / `jobs.ts`
     // 读的是记录里的 `job.owner`（`ownerKey(actor)` 那个串），删掉会静默改变它们的输入。
     const job = { id: randomUUID(), owner, caller, requestId, input, actor, status: 'queued', text: '', sources: [], createdAt: Date.now(), updatedAt: Date.now() }
     // INSERT 兜底：UNIQUE(owner_namespace,owner_id,caller,request_id) + ON CONFLICT DO NOTHING，
@@ -446,7 +446,7 @@ export class BlogPgStorage {
     return result.rows[0].payload
   }
 
-  /** 只读探测：同 (owner,caller,requestId) 的既有任务（jobs.mjs 的 429 门在 jobStart 前先看它）。 */
+  /** 只读探测：同 (owner,caller,requestId) 的既有任务（jobs.ts 的 429 门在 jobStart 前先看它）。 */
   async jobLookup(owner: string, caller: string, requestId: string): Promise<BlogJob | undefined> {
     const { namespace, id: ownerId } = ownerOf(owner)
     const result = await this.run<JobPayloadRow>('SELECT payload FROM blog_jobs WHERE owner_namespace=$1 AND owner_id=$2 AND caller=$3 AND request_id=$4', [namespace, ownerId, caller, requestId])
@@ -469,7 +469,7 @@ export class BlogPgStorage {
     return result.rows.map(r => r.payload).filter(j => j.input.draftId === draftId).map(({ actor, owner: _owner, ...j }) => j)
   }
 
-  // ---------- 附件（attachments.mjs 的表读写；get/list 按 owner+draftId 双路径 scope，四耦合点之 4） ----------
+  // ---------- 附件（attachments.ts 的表读写；get/list 按 owner+draftId 双路径 scope，四耦合点之 4） ----------
 
   async attachmentInsert(a: BlogAttachment): Promise<BlogAttachment> {
     const { namespace, id: ownerId } = ownerOf(a.owner)
@@ -479,7 +479,7 @@ export class BlogPgStorage {
      * 草稿附件落 `draft_id`（指向 `blog_drafts`）。**写错支不是"少一个字段"，是整条 INSERT 失败**。
      *
      * 判据用前缀、不去查"草稿到底在不在"：`ChatStore.assertScope` 与 `index.ts` 的双路径分流
-     * 用的就是同一个前缀（`attachments.mjs:13` 的注释也是这一条），三处必须同一口径 ——
+     * 用的就是同一个前缀（`attachments.ts:13` 的注释也是这一条），三处必须同一口径 ——
      * 两处各判一套，会让"同一个 scope 在两处落到不同列上"，而那种错法是静默的。
      */
     const conversation = typeof a.draftId === 'string' && a.draftId.startsWith(CONVERSATION_PREFIX)
@@ -520,7 +520,7 @@ export class BlogPgStorage {
     return result.rows.map(r => r.payload).filter(a => a.status !== 'removed')
   }
 
-  /** 按 id 读原始记录（含 removed；attachments.mjs 上传失败路径要复核当前状态）。 */
+  /** 按 id 读原始记录（含 removed；attachments.ts 上传失败路径要复核当前状态）。 */
   async attachmentRaw(id: string): Promise<BlogAttachment | undefined> {
     const result = await this.run<AttachmentPayloadRow>('SELECT payload FROM blog_attachments WHERE id=$1', [id])
     return result.rows[0] === undefined ? undefined : result.rows[0].payload
@@ -551,7 +551,7 @@ export class BlogPgStorage {
       [id, cacheKey, namespace, ownerId, status, JSON.stringify(data)])
   }
 
-  // ---------- 操作记录（application.mjs 的 operations 读写 + pendingOperations，四耦合点之 2） ----------
+  // ---------- 操作记录（application.ts 的 operations 读写 + pendingOperations，四耦合点之 2） ----------
 
   /**
    * 写入侧入参是**开放记录**（不是 {@link BlogOperation}）：本存储只把载荷整层存下，不强制业务
@@ -612,7 +612,7 @@ export class BlogPgStorage {
   async operationsForDraft(owner: string, draftId: string, limit = 20): Promise<{ id: string; record: BlogOperation }[]> {
     const { namespace, id: ownerId } = ownerOf(owner)
     /**
-     * ⚠️ **两列一起比**。调用方（`application.mjs:93` 的 `operations` 动作）拿到的是同一个
+     * ⚠️ **两列一起比**。调用方（`application.ts:93` 的 `operations` 动作）拿到的是同一个
      * scope 字符串，它可能是真实草稿 id（插入时落 `draft_id`）也可能是合成 scope
      * （`manage:…` / `remote:…`，落 `scope_id`）。只比 `draft_id` 会让管理 / 远端操作
      * **静默查不出来**：页面显示"没有操作"，没有任何报错，而那条待核对的操作还在库里。
@@ -623,7 +623,7 @@ export class BlogPgStorage {
   }
 
   /**
-   * 有待核对操作的会话 id 集合（chat-store.mjs:32 pendingOperations 的存储侧支撑，
+   * 有待核对操作的会话 id 集合（chat-store.ts:32 pendingOperations 的存储侧支撑，
    * 四耦合点之 2 的启动/查询镜像源）。过滤条件与原 json_extract 语义一致：
    * running/uncertain，或 expiresAt 未过的 prepared；chat.conversationId 为空的丢弃。
    *

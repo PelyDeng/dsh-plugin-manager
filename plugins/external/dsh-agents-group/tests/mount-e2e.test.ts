@@ -458,7 +458,7 @@ describe('群组端到端挂载', () => {
     expect(render(new Error('boom'))).toEqual({ status: 500, body: { error: '请求处理失败' } })
 
     /**
-     * ⚠️ **跨副本**：上面那些 `StorageError` 全是 `errors.mjs` **自己那一份类**的实例，
+     * ⚠️ **跨副本**：上面那些 `StorageError` 全是 `errors.ts` **自己那一份类**的实例，
      * 所以 `instanceof` 当然认得出 —— 那样的断言**分不出两种实现**（正是"假绿"的形状）。
      * 而生产上索引侧的一切故障都由**运行时那一份类**抛出（`packages/runtime/src/storage/errors.ts`，
      * 与这一份是各自独立的 `class StorageError extends Error`）。用 `instanceof` 时它们会掉进

@@ -275,7 +275,7 @@ export interface ConversationPort {
    * 再来一次返回已存在的那一行，不新建。
    *
    * ⚠️ **id 由调用方铸，不是本方法生成的**：两个既有实现的铸点不同（blog 的
-   * `chat-store.mjs:41` 在 `create` 内部铸 `'blog-chat-' + randomUUID()`，closedoff 的
+   * `chat-store.ts:41` 在 `create` 内部铸 `'blog-chat-' + randomUUID()`，closedoff 的
    * `agent.ts:261` 与管家都在外面铸），统一后一律**外面铸、这里收**——因为格式契约是
    * 按 `agent_id` 参数化的（见 `conversation.ts` 的 `CONVERSATION_PREFIX`），而只有调用方
    * 知道自己是哪个 Agent。
@@ -319,7 +319,7 @@ export interface ConversationPort {
    * **发布段**：把 `ready` 翻成 true，会话从此在侧栏可见、可以发送。
    *
    * ⚠️ 这一项是实施时补上的：设计 §4.4 的端口清单里只有 `create`，但两个既有实现都是
-   * **两段握手**（blog 的 `chat-store.mjs:41` 写 `ready:false`，`chat.mjs` 随后翻真；
+   * **两段握手**（blog 的 `chat-store.ts:41` 写 `ready:false`，`chat.ts` 随后翻真；
    * closedoff 的 `conversation-store.ts:50-59` 是 `reserve` + `publish`）。只有"预留"没有
    * "发布"，会话会永久停在"创建未完成"：侧栏看不到，也删不掉。
    *
@@ -621,7 +621,7 @@ export interface TurnStorePort {
  */
 export interface AgentDatabasePort {
   /**
-   * 只核验，不建表（对齐 `blog/src/storage/pg.mjs:69-71` 的既定做法）。
+   * 只核验，不建表（对齐 `blog/src/storage/pg.ts:69-71` 的既定做法）。
    *
    * 缺表 / 版本不符分别归类为 `storage_schema_missing` / `storage_schema_version` 并**拒绝服务**；
    * 建表由建库脚本完成（`private-deploy/db/0001_init.sql`，一次性建出，不是迁移）。

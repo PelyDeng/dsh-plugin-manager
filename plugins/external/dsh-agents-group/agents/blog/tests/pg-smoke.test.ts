@@ -141,7 +141,7 @@ describe('blog PostgreSQL 存储冒烟（agents_group_test）', DSN === '' ? { s
   })
 
   it('新形状契约：建草稿 → 读回 → 改 → 读回，且派生列与载荷同步、版本行真的被读到', async () => {
-    // 版本行来自 `dsh_schema_versions`：把 `pg.mjs` 的查询改回 `blog_schema_version`（那张表在新库
+    // 版本行来自 `dsh_schema_versions`：把 `pg.ts` 的查询改回 `blog_schema_version`（那张表在新库
     // 里不存在）⇒ `before()` 里的 `storage.init()` 直接抛，**整个文件**变红。这就是这一条的变异探针。
     const version = await admin.query("SELECT plugin_id, version FROM dsh_schema_versions WHERE plugin_id = 'blog'")
     assert.equal(version.rows.length, 1)
@@ -222,7 +222,7 @@ describe('blog PostgreSQL 存储冒烟（agents_group_test）', DSN === '' ? { s
      * 新形状里 `blog_jobs.draft_id` 是**生成列**（`payload->'input'->>'draftId'`）且带复合外键
      * 指向 `blog_drafts`；载荷里那个 `input.draftId` 指向不存在的草稿会直接 **23503**。
      * 旧夹具顺手写的 `'draft-for-job-tests'` 在上一代 DDL 上没有外键所以能过 —— 而 DDL 的注释
-     * 明确写了"没有'无草稿的 job'这条路径"（`jobs.mjs` 先 `storage.get` 草稿、取不到就 404）。
+     * 明确写了"没有'无草稿的 job'这条路径"（`jobs.ts` 先 `storage.get` 草稿、取不到就 404）。
      * 本用例断的幂等 / fresh / 409 / 404 一条没变，变的只是"这条 job 指向哪个草稿"。
      */
     const draft = await storage.create(owner, { title: '任务用稿', text: '', slug: '', tags: [], categories: [] })
@@ -257,7 +257,7 @@ describe('blog PostgreSQL 存储冒烟（agents_group_test）', DSN === '' ? { s
     const found = await storage.findByRemoteCid(owner, 4242)
     assert.equal(found.length, 1)
     assert.equal(found[0]!.id, existing.id)
-    // 应用层语义（application.mjs:139-145）：命中即返回既有稿，不再创建第二份。
+    // 应用层语义（application.ts:139-145）：命中即返回既有稿，不再创建第二份。
     // 未关联的 cid 找不到 → 走新建分支。
     assert.equal((await storage.findByRemoteCid(owner, 9999)).length, 0)
     // 已删除的副本不算可去重目标。
@@ -432,7 +432,7 @@ describe('blog PostgreSQL 存储冒烟（agents_group_test）', DSN === '' ? { s
    * **两处多态 scope 的"恰一非空"在真 PG 上是硬的**（S1 登记的那条"零覆盖"）。
    *
    * 为什么必须有这条：`blog_operations.draft_id` 带**指向 `blog_drafts` 的复合外键**，而合成 scope
-   * （`manage:<kind>:<id|new>` / `remote:<rootCid>`，来自 `application.mjs`）**不是真实草稿 id**
+   * （`manage:<kind>:<id|new>` / `remote:<rootCid>`，来自 `application.ts`）**不是真实草稿 id**
    * ⇒ 它们只能落 `scope_id`。把两义值装进一列时，复合外键会把"合法地指向远端文章"的操作判成
    * **23503**（DDL 注释写明本机 PG18 实测过：`draft_id='manage:blog:new'` → 23503、
    * `draft_id='remote:12345'` → 23503）。

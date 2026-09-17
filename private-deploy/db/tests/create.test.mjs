@@ -626,7 +626,7 @@ test('真库行为 7：blog_operations 的多态 scope——两支各自成立�
   });
 
   // ② 合成 scope（管理 / 远端）：draft_id 留空 → MATCH SIMPLE 下外键不检查，插入**成功**。
-  //    这两条正是修复前会报 23503 的形状（application.mjs:203 / :239）。
+  //    这两条正是修复前会报 23503 的形状（application.ts:203 / :239）。
   for (const [id, scope] of [['b7-op-manage', 'manage:blog:new'], ['b7-op-remote', 'remote:12345']]) {
     await operation(id, 'user', 'alice', null, scope);
   }

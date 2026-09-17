@@ -71,7 +71,7 @@ const STORAGE_STATUS: Record<string,{status:number,message?:string}> = {
  * 其余错误保持 kit 默认渲染（AccessError 原状态、未知 500），对外契约不变。
  *
  * ⚠️ **存储故障用结构识别（`isStorageError`），不是 `instanceof`**：本边界要处理的错误
- * **来自两侧** —— 未配置占位抛的是 `./storage/errors.mjs` 那一份类，而配好之后索引侧的故障
+ * **来自两侧** —— 未配置占位抛的是 `./storage/errors.ts` 那一份类，而配好之后索引侧的故障
  * 全部由 **运行时那一份**（`packages/runtime/src/storage/errors.ts`）抛出。`instanceof` 认不出
  * 对方 ⇒ 本该 **503 + 稳定码** 的故障掉进"未知错误"分支变成 **500「请求处理失败」**，
  * 而 runbook 第 5 步恰恰要求运维"任一 503 都要看它的稳定码"（`storage_schema_missing` /
@@ -411,7 +411,7 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   })
   const definition: AgentDefinition = withTurnBinding(createBlogDefinition({
       // 人设＝**对话人设**（`chat.ts` 的 `chatInstructions`）+ 思考语言那一段。
-      // ⚠️ 只传 `jobs.mjs` 的裸 `persona` 会**静默丢掉**对话专属的那一长段纪律（页面路径仍带着它）
+      // ⚠️ 只传 `jobs.ts` 的裸 `persona` 会**静默丢掉**对话专属的那一长段纪律（页面路径仍带着它）
       // ⇒ 同一个 Agent 在页面上和在大总管那里收到的纪律不同。语言那一段本来由页面路径的 setup
       // 单独注册（order 10000），而运行时的 setup 只注册 `persona`（order 600）+ 每轮上下文 ⇒
       // 拼在这里，位置由 10000 变成 600（**已登记的行为变更**），内容一字未改。

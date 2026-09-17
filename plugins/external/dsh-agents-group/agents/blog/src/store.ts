@@ -213,7 +213,7 @@ export function article(value: ArticleInput): BlogArticle {
 /**
  * `owner` 字符串（`ownerKey` 的产物，形如 `user:alice`）→ 新形状的**两个**归属列。
  *
- * 切**第一个**冒号：与 `storage/pg.mjs` 的 `ownerOf` 逐字一致。两处切法不同，会让"同一条记录
+ * 切**第一个**冒号：与 `storage/pg.ts` 的 `ownerOf` 逐字一致。两处切法不同，会让"同一条记录
  * 在两处落到不同归属列上"，而那种漂移**在页面上完全看不出来**。
  * 没有冒号或冒号在开头 ⇒ **当场抛**：空 namespace 会让归属退化成"只按 userId 比"，
  * 跨命名空间的同名用户于是共享数据（`pg-smoke` 就是为此补了"同名不同域"那条用例）。
@@ -249,7 +249,7 @@ const nextSeq = (table: string): string => `(SELECT COALESCE(MAX(seq),0)+1 FROM 
  * ## ⚠️ 表结构**跟到新形状**（本文件此前是上一代结构，与生产分叉）
  *
  * 设计《…运行时重构方案-最终版》`:868` 的要求是"**SQLite 类（替身，跟新形状）**"。
- * 此前这里还是 `owner TEXT` + `data TEXT`，而生产 `storage/pg.mjs` 已是
+ * 此前这里还是 `owner TEXT` + `data TEXT`，而生产 `storage/pg.ts` 已是
  * `owner_namespace` + `owner_id` + `payload` + `dsh_schema_versions` —— 后果**不是"覆盖率低"，
  * 而是证据面与生产事实面不一致**：跑在本替身上的那批用例**碰不到**形状相关的代码路径，
  * 于是"两列归属 / 载荷缺键 / 生成了还去写 / 两处多态 scope 恰好一支"这些错法一条都抓不到。
@@ -265,7 +265,7 @@ const nextSeq = (table: string): string => `(SELECT COALESCE(MAX(seq),0)+1 FROM 
  * 3. **两处多态 scope**：`blog_operations` 的 `draft_id`(真实草稿) / `scope_id`(合成
  *    `manage:` / `remote:`) 与 `blog_attachments` 的 `draft_id` / `conversation_id`
  *    （`blog-chat-` 前缀），都是"**恰好一支非空**"的 CHECK；**写入按前缀分流、读取两列 OR**
- *    —— 与 `storage/pg.mjs` 的写读口径逐字一致。
+ *    —— 与 `storage/pg.ts` 的写读口径逐字一致。
  *
  * ## 三处**不能**对齐的，如实写在这里（不要以为"看起来一样"就是一样）
  * 1. **外键**：PG 有 `blog_jobs`/`blog_operations`/`blog_attachments` 的 `draft_id` →
@@ -275,7 +275,7 @@ const nextSeq = (table: string): string => `(SELECT COALESCE(MAX(seq),0)+1 FROM 
  *    而且 `node:sqlite` 的 `PRAGMA foreign_keys` **默认是开的**（实测 `=1`），
  *    真建了就会**真的**开始拒绝 —— 那不是"更严格"，是"用一半的约束改变行为"。
  *    ⚠️ **它掩盖了什么**：本替身因此**比生产宽松**。已实测到一处 ——
- *    `tests/storage-wiring.test.mjs` 的操作夹具用 `draftId:'draft-x'`（既不是真实草稿、
+ *    `tests/storage-wiring.test.ts` 的操作夹具用 `draftId:'draft-x'`（既不是真实草稿、
  *    也不是 `manage:`/`remote:` 合成 scope），**在 PG 上那是 23503**。该文件不在本次改动范围内，
  *    已回报主线。
  * 2. **`seq`**：PG 是 `GENERATED ALWAYS AS IDENTITY`（库生成、不写）。SQLite **没有第二个自增列**

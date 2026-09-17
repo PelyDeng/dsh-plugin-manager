@@ -6,18 +6,18 @@
  * 它**只是构造**：把 blog 的 `AgentDefinition`（`createBlogDefinition` + `withTurnBinding`）、
  * 运行时的 `ConversationLifecycle` 与 `createParticipant` 按装配的顺序拼起来，再把 `dispose`
  * 转发出去。**一行机制都不重新实现** —— 回合驱动、业务的回合绑定（`bindRuntimeTurn`）、
- * 结果行落库（`dsh_turn_results`）、授权（`jobs.mjs` 的 `authorize: agent => bound(agent)`）
+ * 结果行落库（`dsh_turn_results`）、授权（`jobs.ts` 的 `authorize: agent => bound(agent)`）
  * 全部来自产品代码。评审时按这条判：本文件里出现任何"回合状态机 / 绑定写入 / 结果落库"的
  * 逻辑，就是越界。
  *
  * ## 为什么需要它（而不是让测试各写一份）
  *
  * `agents/blog/src/participant.ts` 在 P7 被删除（协作入口收敛到运行时），而两个测试文件
- * （`participant.test.mjs`、`chat.test.mjs`）此前直接 `createBlogParticipant({access, chat, index,
+ * （`participant.test.ts`、`chat.test.ts`）此前直接 `createBlogParticipant({access, chat, index,
  * storage, routePrefix})`。**签名保持不变**是刻意的：那 27 条用例的用例体与断言因此可以**逐字不动**
  * ——"新入口能承载旧断言"这件事本身就是要证明的东西，改断言就把它抹掉了。
  *
- * ⚠️ 它**不**与 `coordinator.test.mjs` 共用夹具：那一边要的是**真** `BlogChat` / `BlogJobs`
+ * ⚠️ 它**不**与 `coordinator.test.ts` 共用夹具：那一边要的是**真** `BlogChat` / `BlogJobs`
  * 与真工具执行（钉"工具不 403"），这一边要的是旧用例的 `chat` 替身（钉协作入口的语义）。
  * 两份夹具的差别只有"业务边界换成替身"，产品代码那一侧是同一份。
  *
@@ -163,7 +163,7 @@ const titleRouter = {
 /**
  * 把业务自己的标题投递口装进槽位（**装配侧那一行的等价物**）。
  *
- * 导出它是为了让别的夹具（`chat.test.mjs`）用**同一份**槽位，而不是各自装一个——
+ * 导出它是为了让别的夹具（`chat.test.ts`）用**同一份**槽位，而不是各自装一个——
  * 模块级单槽，各装一个就是互相顶掉，最后谁生效取决于装配顺序。
  *
  * @returns 摘除自己的那一份（槽位本身不动，理由同上）。
@@ -196,7 +196,7 @@ const config = Object.freeze({
  * @param input.storage 业务存储（投影要按 owner 读草稿）。**没有** `db` / `turns` 时按缺省处理：
  *   运行时的存储端口是**另一个**参数（见 `input.database`），两者不要混。
  * @param input.database 运行时的存储端口（`AgentDatabasePort`：`conversations` / `turns`）。
- *   `participant.test.mjs` 的替身索引就是它。
+ *   `participant.test.ts` 的替身索引就是它。
  */
 export function createBlogParticipant(input: BlogParticipantInput) {
   const { access, chat, index, storage, routePrefix = '/blog', database, titleSink, ctx: host } = input
@@ -210,15 +210,15 @@ export function createBlogParticipant(input: BlogParticipantInput) {
     throw new Error('createBlogParticipant（运行时入口）：需要宿主 ctx（含 agents / on / effect）；页面路径的旧夹具没有它，要按假宿主补上')
   }
   /**
-   * ⚠️ **缺省保持现状：包 `withTurnBinding`**（`chat.test.mjs` 走页面路径、它的 `chat` 是真
+   * ⚠️ **缺省保持现状：包 `withTurnBinding`**（`chat.test.ts` 走页面路径、它的 `chat` 是真
    * `BlogChat`，`withTurnBinding` 在那里能工作，那 65 条是绿的）。**不要为了让协作路径通过而
-   * 把缺省改成"不包"** —— 那会**静默**改掉 `chat.test.mjs` 那一侧的行为，而且它可能一条断言都不红
+   * 把缺省改成"不包"** —— 那会**静默**改掉 `chat.test.ts` 那一侧的行为，而且它可能一条断言都不红
    * （"没红"与"没影响"在测试里不是一回事）。
    *
    * **协作路径显式退出**：本仓已完成的同一次迁移（`agents/closedoff/tests/participant.test.ts:35`）
    * 用的就是**朴素定义**、不包 `withTurnBinding`、全程不碰 `chat.send`。
    * 那里退出的理由有两条，都成立：
-   * 1. **业务工具的委派身份已由 `coordinator.test.mjs` 覆盖**（J5 / 阻塞1 / J7 / J7 负向对照，4/4 绿，
+   * 1. **业务工具的委派身份已由 `coordinator.test.ts` 覆盖**（J5 / 阻塞1 / J7 / J7 负向对照，4/4 绿，
    *    且 M1 变异可证伪：删掉绑定「阻塞 1」就红）⇒ **不重复覆盖**；
    * 2. 协作路径的 `chat` **替身**没有 `bindRuntimeTurn` / `unbindRuntimeTurn`（实现只有一份：
    *    `chat.ts` 的 `bindRuntimeTurn` / `unbindRuntimeTurn`）。**给替身补上就是第二份实现**，
@@ -265,7 +265,7 @@ export function createBlogParticipant(input: BlogParticipantInput) {
   /**
    * 生命周期**可以由调用方复用**（`input.lifecycle`）：一个夹具一个生命周期，与生产一致。
    *
-   * 什么时候要传：夹具自己已经建了一个（`chat.test.mjs` 的夹具为了让**页面路径**的标题事件
+   * 什么时候要传：夹具自己已经建了一个（`chat.test.ts` 的夹具为了让**页面路径**的标题事件
    * 有人订阅而必须建一个——`BlogChat` 自 P7 起不再自己订阅）。此时这里再建第二个，
    * 同一条标题会被两个订阅各投一次 ⇒ **写两次**（后一次被守卫拒 ⇒ 页面收不到 `changed`）。
    */

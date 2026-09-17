@@ -18,7 +18,7 @@ import { ChatStore } from '../src/chat-store.ts'
 import { BlogApplication, PendingOperationsMirror } from '../src/application.ts'
 import type { BlogOperation } from '../src/application.ts'
 import { BlogAttachments } from '../src/attachments.ts'
-// 索引库切 PG 之后夹具换成运行时的内存端口（见 `index-fixture.mjs`）：`ChatStore` 不再自己开库。
+// 索引库切 PG 之后夹具换成运行时的内存端口（见 `index-fixture.ts`）：`ChatStore` 不再自己开库。
 import { memoryIndex } from './index-fixture.ts'
 
 const owner='user:mirror'

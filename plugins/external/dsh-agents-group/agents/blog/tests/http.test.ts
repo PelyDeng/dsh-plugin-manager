@@ -126,7 +126,7 @@ test('history API searches renamed titles and retains records when official arch
  * `ok === false`，且原因点明该配哪个变量；④ 索引侧路由 503 + 稳定码；⑤ 业务侧路由 503 +
  * 同一稳定码；⑥ `dataPath` 下不出现任何 SQLite 文件。
  *
- * ⚠️ ⑤ 用的是 `create`（写）与 `draft`（读），**不是** `drafts`：`application.mjs:63` 的
+ * ⚠️ ⑤ 用的是 `create`（写）与 `draft`（读），**不是** `drafts`：`application.ts:63` 的
  * `drafts` 走的是远端博客桥接（Typecho 列表），根本不碰 `BlogPgStorage`——拿它当业务库的证据
  * 会变成一条永远绿的空断言。真正落业务库的是草稿的读写两条路。
  *
@@ -200,15 +200,15 @@ test('J6b：业务好、索引坏时探针必须 not-ok（不能只探业务那�
  * ## 为什么需要它
  *
  * 那一行是"协作入口驱动的那一轮里，业务工具拿得到委派身份"的**唯一来源**：
- * `jobs.mjs:51` 的授权口是 `authorize: agent => this.bound(agent)`，而 `bound()`
- * （`jobs.mjs:135`）在取不到绑定时一律 **403「博客工具没有有效的委派身份」**。
+ * `jobs.ts:51` 的授权口是 `authorize: agent => this.bound(agent)`，而 `bound()`
+ * （`jobs.ts:135`）在取不到绑定时一律 **403「博客工具没有有效的委派身份」**。
  * 绑定的写点只有两个：页面路径自己建的句柄（`chat.ts` 的 `run()`），以及
  * `withTurnBinding` 的 `onTurnStart` → `bindRuntimeTurn`。
  *
  * ⇒ 装配里删掉那一行，**生产上模型手里的每一个 blog 工具都会 403**，
  * 而界面看不出来、装载也不失败——这正是本仓反复出现的"**声明了却零接线**"。
  *
- * ## 为什么现有的 `coordinator.test.mjs` 挡不住它
+ * ## 为什么现有的 `coordinator.test.ts` 挡不住它
  *
  * 那个文件是**手搭** `ConversationLifecycle` + `createParticipant` 的，而且它**自己就调了
  * `withTurnBinding`**。它证明的是"**这个函数管用**"，**不是"装配真的调了它"**——
@@ -233,7 +233,7 @@ test('mount() 装配必须给协作入口建立委派身份（删掉 withTurnBin
      * `on` 必须**组合**、不能替换。`kit` 的 `createAccess` 用
      * `ctx.root.emit('ecosystem/providers', …)` 收集鉴权提供方
      * （`packages/plugin-kit/src/access.ts:127`），而本夹具的提供方就注册在这条 `on` 上
-     * （`http-fixture.mjs` 里紧随 `extendCtx` 之后那一行）。整条换掉 ⇒ 提供方收不到
+     * （`http-fixture.ts` 里紧随 `extendCtx` 之后那一行）。整条换掉 ⇒ 提供方收不到
      * ⇒ 鉴权解析恒失败。组合之后：夹具自己的 `emit` 照旧打到夹具那份；假宿主的 `emit`
      * 打到运行时订阅的那一份（`session/event`）。
      */

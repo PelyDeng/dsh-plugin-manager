@@ -236,7 +236,7 @@ test('legacy blog snapshots tolerate page views while preserving edits and rejec
  * 而 `n:u` 与 `user:u` 的 **`owner_id` 都是 `u`**：只比 `owner_id` 的实现会让这两个不同命名空间的
  * 用户**共享同一份草稿**，而页面上完全看不出来（查询"成功"、拿到的却是别人的数据）。
  *
- * 为什么必须有这一条：`pg-smoke.test.mjs` 那边就是因为原有的"跨 owner"用例**全部只差 `userId`**
+ * 为什么必须有这一条：`pg-smoke.test.ts` 那边就是因为原有的"跨 owner"用例**全部只差 `userId`**
  * （`u1` vs `u2`），**只比一列时照样全绿**，才补了同名不同域；替身这边此前**一条都没有**
  * —— 形状对齐之后这个洞会在替身上同样露出来。
  */

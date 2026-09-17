@@ -16,7 +16,7 @@
  * - `storage_closed`：存储已关闭（`close()` 之后拒绝继续读写），与未知故障区分；
  * - `storage_unknown`：其余未知故障。
  *
- * 业务拒绝（归属不存在、版本冲突、终态后写入）不属于这里：它们以 settings.mjs 的
+ * 业务拒绝（归属不存在、版本冲突、终态后写入）不属于这里：它们以 settings.ts 的
  * `BlogError`（DSH_ACCESS_ERROR）原样穿透，本模块不包装、不降级。
  */
 

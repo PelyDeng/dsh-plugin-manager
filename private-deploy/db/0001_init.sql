@@ -323,7 +323,7 @@ CREATE TABLE blog_jobs (
   --      就整条不校验，这正是想要的：**没有引用对象时无须校验**，不是隔离缺口。
   --      反过来 `MATCH FULL` 会因 `owner_namespace` / `owner_id` 是 NOT NULL 而**拒绝**这种行，
   --      把"合法地没有 draftId"变成 23503，与 §5.4.1"生成列留 NULL 语义"定稿相抵。
-  --      另外：job 的 `draftId` 在现有写路径上**必然存在**——`jobs.mjs:157-166` 先 `storage.get`
+  --      另外：job 的 `draftId` 在现有写路径上**必然存在**——`jobs.ts:157-166` 先 `storage.get`
   --      草稿（取不到就 404）再 `input = { draftId: d.id, … }`，没有"无草稿的 job"这条路径。
   --   2. **ON DELETE CASCADE**（与 `blog_operations` / `blog_attachments` 一致）：
   --      **不能选 RESTRICT**。删草稿是业务动作，RESTRICT 会让它变成 23503 失败；而且 job 的
@@ -347,7 +347,7 @@ CREATE TABLE blog_operations (
   owner_id        TEXT    NOT NULL,
   -- ⚠️ **多态 scope（与 `blog_attachments` 同一个标准解）**：这一列只装**真实草稿 id**；
   -- 管理 / 远端操作的合成 scope（`manage:<kind>:<id|new>` / `remote:<rootCid>`，
-  -- 来自 `application.mjs:203` / `:239`）落 `scope_id`。
+  -- 来自 `application.ts:203` / `:239`）落 `scope_id`。
   -- 两义值装不进一列：装进去之后复合外键就会把"合法地指向远端文章"的操作判成 23503
   -- （本机 PG18 实测：`draft_id='manage:blog:new'` → 23503、`draft_id='remote:12345'` → 23503）。
   -- 这两列都是**普通列、不是生成列**（`scope_id` 还要 DEFAULT ''），所以 INSERT 必须自己写对是哪一支。

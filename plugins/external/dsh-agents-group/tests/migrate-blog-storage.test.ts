@@ -7,7 +7,7 @@
  * `--clear-source` 备份先行（VACUUM INTO）再就地 DROP 业务 5 表，索引 3 表与协作映射表
  * 留库当索引库。
  *
- * 夹具按现状真实形状构造（DDL 取自 store.mjs / chat-store.mjs / participant.ts 的建表语句），
+ * 夹具按现状真实形状构造（DDL 取自 store.ts / chat-store.ts / participant.ts 的建表语句），
  * 含跨 owner、jobs 的 queued/running、attachments 的 uploading、非 ASCII 与 SQL 特殊字符、
  * 译文三态（running/failed/translated）。setval 用例不用「导入值 + 1」推断，而是导入后直接
  * 经 PG 插一条不带 seq 的记录，验证不撞 UNIQUE。
@@ -35,14 +35,14 @@ const ALICE = 'user:alice'
 const BOB = 'user:bob'
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
-/** 业务 5 表：与 store.mjs / attachments.mjs 拆库前的建表语句逐字一致。 */
+/** 业务 5 表：与 store.ts / attachments.ts 拆库前的建表语句逐字一致。 */
 const BUSINESS_DDL = `CREATE TABLE IF NOT EXISTS drafts(id TEXT PRIMARY KEY, owner TEXT NOT NULL, revision INTEGER NOT NULL, updated INTEGER NOT NULL, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY, owner TEXT NOT NULL, caller TEXT NOT NULL, requestId TEXT NOT NULL, inputHash TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(owner,caller,requestId));
   CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, owner TEXT NOT NULL, draftId TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, at INTEGER NOT NULL, owner TEXT NOT NULL, action TEXT NOT NULL, data TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY, owner TEXT NOT NULL, draftId TEXT NOT NULL, data TEXT NOT NULL);`
 
-/** 索引 3 表 + 协作映射表：与 chat-store.mjs / participant.ts 的建表语句逐字一致（迁后留库）。 */
+/** 索引 3 表 + 协作映射表：与 chat-store.ts / participant.ts 的建表语句逐字一致（迁后留库）。 */
 const INDEX_DDL = `CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,owner TEXT NOT NULL,requestId TEXT NOT NULL,updated INTEGER NOT NULL,data TEXT NOT NULL,UNIQUE(owner,requestId));
   CREATE INDEX IF NOT EXISTS chat_owner ON conversations(owner,updated DESC);
   CREATE TABLE IF NOT EXISTS chat_requests(id TEXT PRIMARY KEY,owner TEXT NOT NULL,conversationId TEXT NOT NULL,requestId TEXT NOT NULL,inputHash TEXT NOT NULL,data TEXT NOT NULL,UNIQUE(owner,requestId));
@@ -712,7 +712,7 @@ describe.skipIf(DSN === '')('blog 存量迁移工具（agents_group_mig）', () 
    *
    * **覆盖面没有丢**，两半各有归宿：
    * - 「在途 jobs / attachments 被启动序列收成 failed」⇒ 已在**新形状**上覆盖，见
-   *   `agents/blog/tests/pg-smoke.test.mjs` 的「启动翻转：jobs 置 running、attachments 置 uploading 后，
+   *   `agents/blog/tests/pg-smoke.test.ts` 的「启动翻转：jobs 置 running、attachments 置 uploading 后，
    *   init 收成 failed」；
    * - 「迁移不替业务做状态翻转」⇒ 由本文件的导入类用例覆盖。
    *

@@ -1,5 +1,5 @@
 /**
- * **形状一致性判据**：SQLite 替身（`src/store.mjs`）的六张业务表，与**生产建库脚本**
+ * **形状一致性判据**：SQLite 替身（`src/store.ts`）的六张业务表，与**生产建库脚本**
  * `private-deploy/db/0001_init.sql` 的列名 / 生成列**逐表比对**。
  *
  * ## 为什么需要它（这条用例要防的是什么）
@@ -7,7 +7,7 @@
  * `owner_namespace` + `owner_id` + `payload` + 生成列。后果不是"覆盖率低"，而是
  * **证据面与生产事实面不一致**：跑在替身上的那批用例**碰不到**形状相关的代码路径，
  * 于是"两列归属 / 载荷缺键 / 生成了还去写 / 两处多态 scope 恰好一支"这些错法一条都抓不到。
- * 靠"下一个改 `store.mjs` 的人记得同步"是防不住的 —— 判据必须**从生产 DDL 反推**，
+ * 靠"下一个改 `store.ts` 的人记得同步"是防不住的 —— 判据必须**从生产 DDL 反推**，
  * 而不是把期望值再手写一遍（手写的期望值会与实现一起漂移，那正是本仓反复踩的坑）。
  *
  * ## 判据的三层（逐层更强）
@@ -24,7 +24,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { BlogStore } from '../src/store.ts'
 
-/** 与 `tests/pg-smoke.test.mjs` 同一个相对位置（那条路径已实测可用）。 */
+/** 与 `tests/pg-smoke.test.ts` 同一个相对位置（那条路径已实测可用）。 */
 const DDL_URL = new URL('../../../../../../private-deploy/db/0001_init.sql', import.meta.url)
 const TABLES = ['blog_drafts', 'blog_jobs', 'blog_operations', 'blog_audit', 'blog_attachments', 'blog_translations']
 

@@ -219,7 +219,7 @@ provider 时不会自动生效。
 > ⚠️ **本包内的 `agents/blog/migrations/postgres/0001_init.sql` 是上一代 DDL**（`owner` + `data TEXT`
 > 旧列 + `blog_schema_version` 版本表），**不再被生产使用**，只为随包保留的迁移工具而留。
 > 别拿它当权威：生产形状以 `private-deploy/db/0001_init.sql` 为准。测试也必须按后者建 schema，
-> 否则"实现与生产 DDL 漂移"在测试里**永远发现不了**（`agents/blog/tests/pg-smoke.test.mjs` 已经改成读它）。
+> 否则"实现与生产 DDL 漂移"在测试里**永远发现不了**（`agents/blog/tests/pg-smoke.test.ts` 已经改成读它）。
 
 ### 存量迁移（SQLite → PostgreSQL）
 

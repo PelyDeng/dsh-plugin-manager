@@ -48,7 +48,7 @@ import type { ParticipantProgress, ParticipantResult } from '../../../packages/r
 import type { TitleSink } from '../../../packages/runtime/src/conversation.ts'
 import { createBlogParticipant } from './participant-harness.ts'
 import { createFakeHost, type FakeHost } from './fixtures/fake-host.ts'
-// 索引库切 PG 之后夹具换成运行时的内存端口（见 index-fixture.mjs）：ChatStore 不再自己开库，
+// 索引库切 PG 之后夹具换成运行时的内存端口（见 index-fixture.ts）：ChatStore 不再自己开库，
 // 所有读写都过端口（异步）。
 import { memoryIndex } from './index-fixture.ts'
 // .db.conversations 在用例里读内存替身独有的观测量（size），所以要那个类的类型（只导入类型）。
@@ -104,7 +104,7 @@ interface FixtureChat {
    * `participant-harness.ts` 的 `ChatBoundary` 读的那三个面。
    *
    * ⚠️ **`ctx` / `titleSink` 在这里必须是可选的**：真 `BlogChat` 实例**按结构**满足这个接口
-   * （`chat.test.mjs` 走的就是那条路），而 `BlogChat` 上没有 `ctx`、`titleSink` 也不是它自己的字段
+   * （`chat.test.ts` 走的就是那条路），而 `BlogChat` 上没有 `ctx`、`titleSink` 也不是它自己的字段
    * ⇒ 声明成必需就会把真类挡在门外（那正是"接口比实现窄"的反向错误）。
    * `bindRuntimeTurn` 同样可选：协作路径的替身**刻意没有**它（见 `participant-harness.ts` 的理由）。
    */
@@ -242,7 +242,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
   /**
    * 宿主 cordis root 与两个 registry：**运行时的驱动方需要它们**
    * （`ctx.agents.create/resume` 与 `ctx.on('session/event')`）。旧入口自己驱动，不需要；
-   * 载体切到运行时之后，夹具必须把这一半补上——这正是 `participant-harness.mjs` 里
+   * 载体切到运行时之后，夹具必须把这一半补上——这正是 `participant-harness.ts` 里
    * "缺 `ctx` 就抛"那条**响的守卫**在等的东西（它是守卫，不是缺陷，别改成静默兜底）。
    */
   const root = new Context(), registry = root.plugin(AgentRegistry)
@@ -256,7 +256,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
    */
   const db = memoryIndex(); const index = new ChatStore(db)
   t.after(async () => { await store.close(); await runtimeJobs.dispose(); await registry.dispose() })
-  // 假宿主只有一份（`coordinator.test.mjs` 与本文件共用）；口径与坑记在它的文件头上。
+  // 假宿主只有一份（`coordinator.test.ts` 与本文件共用）；口径与坑记在它的文件头上。
   const host = createFakeHost(root)
   t.after(() => host.disposeAll())
   /**
@@ -376,7 +376,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
     async history(current, id) {
       f.access.assert(current); index.get(ownerKey(current), id)
       // 收尾投影（`createBlogProjector`）读的是**业务库**的 `app.operations(owner)`，并按
-      // `operation.chat.conversationId` 筛出本会话 —— 真实现（`application.mjs` 的操作卡片）
+      // `operation.chat.conversationId` 筛出本会话 —— 真实现（`application.ts` 的操作卡片）
       // 本来就带这个字段。这里记下当前会话 id，供下面的 `app.operations` 替身补上。
       f.lastHistoryId = id
       f.historyEntered?.()
@@ -416,15 +416,15 @@ async function fixture(t: TestContext): Promise<Fixture> {
     // 载体切到运行时之后，构造胶水还要两样东西：宿主 ctx（驱动方）与运行时存储端口（会话/轮次）。
     // 缺 `ctx` 它会**当场抛**（响的守卫）；`database` 就是上面那个 `db`（端口本身，不是 ChatStore）。
     ctx: host.ctx, database: db,
-    // 协作路径**显式不绑**回合身份：这条链由 `coordinator.test.mjs` 覆盖（4/4 绿 + M1 变异可证伪），
+    // 协作路径**显式不绑**回合身份：这条链由 `coordinator.test.ts` 覆盖（4/4 绿 + M1 变异可证伪），
     // 且本文件的 `chat` 是替身、没有 `bindRuntimeTurn`；给替身补上就是第二份实现（红线 1）。
     // 依据：closedoff 同一次迁移的后继物用的就是朴素定义。
     bindTurn: false,
     /**
      * 业务应用的最小替身：收尾投影只用到 `operations(owner)`。
      *
-     * ⚠️ 真实现的记录**带 `chat.conversationId`**（`application.mjs` 的操作卡片就是这样，生产侧
-     * `chat.mjs` 也按它筛会话）⇒ 夹具在这里补上；漏了它会以"本该 external_pending 却报
+     * ⚠️ 真实现的记录**带 `chat.conversationId`**（`application.ts` 的操作卡片就是这样，生产侧
+     * `chat.ts` 也按它筛会话）⇒ 夹具在这里补上；漏了它会以"本该 external_pending 却报
      * completed"的形式红，而那是**夹具失真**，不是实现错。
      *
      * ⚠️ **补的来源必须是活跃那一轮的会话 id（`f.activeConversationId`）**。
@@ -483,7 +483,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
    * （协作路径本来就不经过它，见文件头），于是**没有任何人发 `turn/end`**
    * ⇒ 运行时永远等不到收尾 ⇒ `participant.run()` **永不 settle**。
    * 实测表现是 `node:test` 报 **`Promise resolution is still pending`**，而不是某条断言红
-   * （这条坑记在 `fixtures/fake-host.mjs` 的文件头，别改成"更简洁"的写法）。
+   * （这条坑记在 `fixtures/fake-host.ts` 的文件头，别改成"更简洁"的写法）。
    *
    * 所以自动收尾改由这里做：运行时把用户消息投给 Agent（`host.followups` 记下投递）
    * ⇒ 宿主发一条完整回合（`assistant/message` + `turn/end`）把它收掉。
@@ -529,7 +529,7 @@ async function fixture(t: TestContext): Promise<Fixture> {
             if (latest !== undefined) f.active.set(id, latest)
             /**
              * **本轮的会话 id**（正在被驱动的那一条）。收尾投影会调 `app.operations(owner)`，
-             * 而真实现的操作卡片**自带 `chat.conversationId`**（`application.mjs`）⇒ 夹具要补上它。
+             * 而真实现的操作卡片**自带 `chat.conversationId`**（`application.ts`）⇒ 夹具要补上它。
              *
              * ⚠️ **只能用它，不能只靠 `f.lastHistoryId`**：那个字段由**页面路径**的 `chat.history()` 填，
              * 而协作路径（`bindTurn: false`）**从不调 `chat`** ⇒ 它恒为 `undefined`，
@@ -756,7 +756,7 @@ test('rejects arbitrary user conversations, cross-mission references and other o
    * ⇒ **未发布的会话在可见性那一步就被拒**，报文是 `会话不存在或无权访问`，
    * **根本走不到 mission 核验**——那样这条用例就验不到它名字里说的"**跨任务引用**"了（实测就是这么红的）。
    * 发布之后可见性通过，才落到 `assertMission()` ⇒ `不属于当前协作任务`。
-   * （同一套两段式与同一组报文判据，`coordinator.test.mjs` 的 J5 反向用例已经用过：**403 vs 404 的二分**。）
+   * （同一套两段式与同一组报文判据，`coordinator.test.ts` 的 J5 反向用例已经用过：**403 vs 404 的二分**。）
    */
   await f.index.save(ownerKey(actor), unrelated.id, { ready: true })
   /**
@@ -1138,7 +1138,7 @@ test('本轮没跑完（没有 tail）时只交回未完成提示，被中断的
  *
  * 起因：那 10 条 `assert.equal(f.listeners.size, 0)` 是**空断言**——替身的 `subscribe`
  * （本文件 `:147-154`）**零调用点**，集合永远为空。"把断言变强"之后（换成宿主侧真哨兵
- * `host.listenerCount()`，见 `fixtures/fake-host.mjs:185`），**真问题立刻露出来**。
+ * `host.listenerCount()`，见 `fixtures/fake-host.ts:185`），**真问题立刻露出来**。
  *
  * **实测数字（临时探针，测完已删；三处都验过）**：
  * | 时点 | `listenerCount()` |
@@ -1214,7 +1214,7 @@ test('一轮收尾（运行时 cleanup 跑过）之后，participant 自己那�
   const after = f.host.listenerCount()
   /**
    * ⚠️ **为什么断言的时点在这里，而**不是**在 `disposeAll()` 之后**（这条归因我一开始搞错了）：
-   * - 本夹具的 `ctx.on`（`fixtures/fake-host.mjs:112-117`）**只往 `byEvent` 加监听，不登记 disposer**；
+   * - 本夹具的 `ctx.on`（`fixtures/fake-host.ts:112-117`）**只往 `byEvent` 加监听，不登记 disposer**；
    * - `disposeAll()`（`:188`）**只跑 `ctx.effect` 登记的那一份** ⇒ **它按构造就释放不了 `ctx.on` 订阅**
    *   ⇒ "`disposeAll()` 之后 == 0" 是**一个结构上做不到的期望**，**与运行时是否泄漏无关**。
    * - **真正该断言的时点**：`await running` ⇒ 运行时的 **per-run `cleanup()`**

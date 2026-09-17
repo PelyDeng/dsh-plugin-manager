@@ -38,7 +38,7 @@ import type {BlogApplication} from './application.ts'
 import type {BlogPgStorage} from './storage/pg.ts'
 
 /**
- * 本 Agent 的**对话人设**（= `jobs.mjs` 的 `persona` + 对话专属的那一长段纪律）。
+ * 本 Agent 的**对话人设**（= `jobs.ts` 的 `persona` + 对话专属的那一长段纪律）。
  *
  * ⚠️ **导出它是装配的要求，不是顺手**：启用运行时之后，Agent 的系统提示由运行时的
  * `setup()` 按 `AgentDefinition.persona` 注册（order 600），而**页面路径**仍然由本文件的
@@ -120,11 +120,11 @@ interface BlogDraft {
 }
 
 /**
- * 会话投影里的一条消息（`chat-history.mjs` 的 `projectChat` 产出的是**异构联合**）。
+ * 会话投影里的一条消息（`chat-history.ts` 的 `projectChat` 产出的是**异构联合**）。
  *
  * ⚠️ 它按"每一种节点都可能缺别的节点的字段"声明（`tool` 节点没有 `text`、`assistant` 节点才有
- * `interrupted`/`tail`）——这是 `projectChat` 尚在 `.mjs` 里、联合类型未被拆成判别式的后果。
- * P8 把 `chat-history.mjs` 转 TS 时应当把它改成**按 `role` 判别的联合**；那时这里的可选字段可以收回。
+ * `interrupted`/`tail`）——这是 `projectChat` 的联合类型未被拆成判别式的后果。
+ * P8 已把 `chat-history.ts` 转成 TS，但这条待办仍未做：应当把它改成**按 `role` 判别的联合**；那时这里的可选字段可以收回。
  */
 interface ChatMessage {
   readonly id: string
@@ -160,7 +160,7 @@ interface ChatResult {
 }
 
 /**
- * 冻结后的附件（`attachments.mjs` 的 `freeze()` 产出）。
+ * 冻结后的附件（`attachments.ts` 的 `freeze()` 产出）。
  *
  * ⚠️ 与 `ChatStore` 的 `ChatAttachmentRef`（只有 `requestId`+`id`，那是**落库的引用**）不是同一个形状：
  * 运行期塞进 `b.request.attachments` 的是**冻结后的完整附件**。转 TS 前这层差别不存在（没有类型可
@@ -183,7 +183,7 @@ interface FrozenAttachment {
   readonly image?: unknown
 }
 
-/** 业务库里的"待确认操作"（`application.mjs` 的投影，按本文件的用法声明）。 */
+/** 业务库里的"待确认操作"（`application.ts` 的投影，按本文件的用法声明）。 */
 interface OperationRecord {
   id: string
   title: string
@@ -395,7 +395,7 @@ export class BlogChat {
         const projection = projectChat(events, requests, this.sdk) as ChatProjection
         // `PreviewMessage.role` 是 `'user'|'assistant'|'tool'` 的**联合**（不是 `string`），而
         // `ChatMessage.role` 在 `projectChat` 转 TS 之前只能是 `string`——白名单过滤之后收窄一次。
-        // 同一次收窄还覆盖：`tool` 节点恒有 `name`/`status`、其余节点恒有 `text`（见 `chat-history.mjs`
+        // 同一次收窄还覆盖：`tool` 节点恒有 `name`/`status`、其余节点恒有 `text`（见 `chat-history.ts`
         // 的节点构造），所以这里不写 `?? ''` 兜底——那会把"不可能的缺值"悄悄变成空串，与改造前不一致。
         const previews = projection.messages
           .filter(m => ['user', 'assistant', 'tool'].includes(m.role))
@@ -713,7 +713,7 @@ export class BlogChat {
    *
    * ## 为什么必须有它（否则是**静默**的功能全失）
    *
-   * 业务工具的授权口是 `jobs.mjs` 的 `createPluginTools({ authorize: agent => this.bound(agent) })`，
+   * 业务工具的授权口是 `jobs.ts` 的 `createPluginTools({ authorize: agent => this.bound(agent) })`，
    * 而 `bound()` 要求 `bindings.get(agent)` 存在，否则一律 **403「博客工具没有有效的委派身份」**。
    * 那份绑定此前只在**本类自己创建句柄时**写（`run()` 里 `bindings.set(b.handle.agent, b)`）。
    * 换成运行时驱动之后句柄由 `ConversationLifecycle.open()` 创建 ⇒ **这一步不会发生**

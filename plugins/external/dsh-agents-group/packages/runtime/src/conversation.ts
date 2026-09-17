@@ -563,7 +563,7 @@ export class ConversationLifecycle {
       }
       try {
         access.assert(actor)
-        // 发布段：`ready` 翻真之前这个会话在侧栏不可见、也不能发消息（`chat.mjs` 的 409 围栏）。
+        // 发布段：`ready` 翻真之前这个会话在侧栏不可见、也不能发消息（`chat.ts` 的 409 围栏）。
         await store.publish(this.ownerOf(actor), id)
       } catch (error) { await handle.dispose(); throw error }
       this.pendingOpens -= 1

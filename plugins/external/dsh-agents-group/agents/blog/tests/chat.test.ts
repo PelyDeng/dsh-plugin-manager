@@ -17,12 +17,12 @@ import type {AgentDefinition} from '../../../packages/runtime/src/definition.ts'
 import {BlogApplication,PendingOperationsMirror} from '../src/application.ts'
 import {projectChat} from '../src/chat-history.ts'
 // 协作入口在 P7 收敛到运行时（`src/participant.ts` 已删除）。这两条用例断言的是**协作路径**
-// 上的行为，所以经构造胶水接回运行时入口——**用例体与断言一字未改**（`participant-harness.mjs`
+// 上的行为，所以经构造胶水接回运行时入口——**用例体与断言一字未改**（`participant-harness.ts`
 // 的文件头写了它只做构造、以及为什么签名保持不变）。
 import {createBlogParticipant,installTitleDelivery} from './participant-harness.ts'
 import {ConversationLifecycle} from '../../../packages/runtime/src/index.ts'
 import type {OwnerKey} from '../../../packages/runtime/src/storage/ports.ts'
-// 索引库切 PG 之后夹具换成运行时的内存端口（见 `index-fixture.mjs`）：`ChatStore` 不再自己开库，
+// 索引库切 PG 之后夹具换成运行时的内存端口（见 `index-fixture.ts`）：`ChatStore` 不再自己开库，
 // 所有读写都过端口（异步）。
 import {memoryIndex,ownerActor} from './index-fixture.ts'
 

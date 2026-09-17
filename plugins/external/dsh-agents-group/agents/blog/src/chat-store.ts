@@ -96,7 +96,7 @@ type ShapeInput = ConversationRecordShape & {
 }
 
 /**
- * `owner` 字符串（`namespace:userId`，见 `store.mjs` 的 `ownerKey`）→ 端口的归属值对象。
+ * `owner` 字符串（`namespace:userId`，见 `store.ts` 的 `ownerKey`）→ 端口的归属值对象。
  *
  * 端口侧一律双列 AND（`owner_namespace` + `owner_id`），所以这里必须切**第一个**冒号：
  * 用 `split(':')` 会在 userId 本身含冒号时切错，而那种错法是"别人的数据读不到"这类静默失效。

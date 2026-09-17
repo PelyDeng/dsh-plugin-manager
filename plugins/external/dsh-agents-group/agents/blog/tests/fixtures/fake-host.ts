@@ -3,7 +3,7 @@
  *
  * ## 为什么要抽成一份
  *
- * `coordinator.test.mjs` 与 `participant-harness.mjs` 都要一个假宿主。本仓的教训是
+ * `coordinator.test.ts` 与 `participant-harness.ts` 都要一个假宿主。本仓的教训是
  * **"两份等价实现的结局是某条路径改了另一条没改"**，所以这里只留一份，两边都 import 它。
  *
  * ## 它提供什么 / 边界在哪

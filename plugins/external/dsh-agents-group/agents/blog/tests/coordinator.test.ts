@@ -8,18 +8,18 @@
  * - 页面路径：`BlogChat.run()` 自己建句柄、自己写 `jobs.bindings`；
  * - 协作路径：句柄由运行时的 `ConversationLifecycle.open()` 建 ⇒ **`BlogChat` 那一步不会发生**。
  *
- * 于是 `jobs.mjs` 的授权口 `authorize: agent => this.bound(agent)` 在协作路径上永远取不到绑定，
+ * 于是 `jobs.ts` 的授权口 `authorize: agent => this.bound(agent)` 在协作路径上永远取不到绑定，
  * 模型手里的**每一个 blog 工具都 403**——不是装载失败、界面上看不出来（`chat.ts:705-732`
  * 那段注释记的就是这件事）。本文件用**真** `BlogChat` + **真** `BlogJobs` + **真**运行时
  * `createParticipant` 把这条缝钉住：删掉 `withTurnBinding`，第一个用例就红。
  *
- * ## 夹具为什么是手搭的（与 `participant.test.mjs` 不同源）
+ * ## 夹具为什么是手搭的（与 `participant.test.ts` 不同源）
  *
- * 这里**不**复用 `chat.test.mjs` 的夹具，而是照群组 `tests/runtime-reply-e2e.test.ts:162` 的既有做法
+ * 这里**不**复用 `chat.test.ts` 的夹具，而是照群组 `tests/runtime-reply-e2e.test.ts:162` 的既有做法
  * 手搭 `ConversationLifecycle` + `createParticipant`（那条路**不需要** `AgentDatabasePort`，
  * 因为端口是直接注入的）。代价是"两份夹具"，差别只有一处且是**刻意的**：
  *
- * | | `chat.test.mjs` 的夹具 | 本文件 |
+ * | | `chat.test.ts` 的夹具 | 本文件 |
  * | --- | --- | --- |
  * | 语义面 | 页面路径（`BlogChat.run`） | 协作路径（运行时 `participant.run`） |
  * | 模型校验 | 由 `BlogChat` 自己做 | 由 `lifecycle.options()` 做 |
@@ -60,7 +60,7 @@ import { memoryIndex } from './index-fixture.ts'
 import { ConversationLifecycle, createParticipant } from '../../../packages/runtime/src/index.ts'
 import type { ParticipantRequest, ParticipantResult } from '../../../packages/runtime/src/index.ts'
 import { MemoryConversationPort, MemoryTurnStore } from '../../../packages/runtime/src/storage/memory.ts'
-// 假宿主只有一份（`participant-harness.mjs` 也用它）：本仓的教训是"两份等价实现的结局是
+// 假宿主只有一份（`participant-harness.ts` 也用它）：本仓的教训是"两份等价实现的结局是
 // 某条路径改了另一条没改"。口径与坑都记在那个文件头上。
 import { createFakeHost } from './fixtures/fake-host.ts'
 
@@ -164,7 +164,7 @@ const portOwner = { namespace: actor.namespace, userId: actor.userId }
 const tick = () => new Promise(resolve => setTimeout(resolve, 10))
 
 /**
- * `projectChat` 只用得到这几个面（与 `chat.test.mjs` 的 sdk 同一份最小面）。
+ * `projectChat` 只用得到这几个面（与 `chat.test.ts` 的 sdk 同一份最小面）。
  *
  * ⚠️ 参数按**夹具自己广播的事件**声明（`FakeEventLike`），返回值按 `chat.ts` 的投影面收口：
  * 本替身把事件里的那份消息/流**原样转交**（真 sdk 会派生），所以在这两处把转交值
@@ -199,8 +199,8 @@ async function fixture(t: TestContext): Promise<CoordinatorFixture> {
 
   const store = new BlogStore(':memory:')
   await store.init()
-  // 索引门面就用运行时的两个内存端口（`index-fixture.mjs` 把它们拼成一个 `AgentDatabasePort`）：
-  // 与 `chat.test.mjs` 同一份后端，所以"页面那条读法"在这里没有第二套替身。
+  // 索引门面就用运行时的两个内存端口（`index-fixture.ts` 把它们拼成一个 `AgentDatabasePort`）：
+  // 与 `chat.test.ts` 同一份后端，所以"页面那条读法"在这里没有第二套替身。
   const db = memoryIndex('blog')
   const index = new ChatStore(db)
   const { conversations, turns } = db
@@ -212,7 +212,7 @@ async function fixture(t: TestContext): Promise<CoordinatorFixture> {
     await registry.dispose()
   })
 
-  // ---- 假宿主：与 `participant-harness.mjs` 共用的一份（`tests/fixtures/fake-host.mjs`） ----
+  // ---- 假宿主：与 `participant-harness.ts` 共用的一份（`tests/fixtures/fake-host.ts`） ----
   // 口径与坑（事件先写日志再广播、`setup` 必须 await、`tools.register` 不能是空壳）都记在那个文件头上。
   const host = createFakeHost(root)
   const { ctx, access, sessionOf, emit, complete, accept, followups, registeredTools, byEvent } = host
@@ -278,7 +278,7 @@ async function fixture(t: TestContext): Promise<CoordinatorFixture> {
       signal: new AbortController().signal, onProgress() { }, ...overrides,
     }),
     /**
-     * `accept` / `complete` / `sessionOf` / `emit` 都由共享夹具提供（`tests/fixtures/fake-host.mjs`）——
+     * `accept` / `complete` / `sessionOf` / `emit` 都由共享夹具提供（`tests/fixtures/fake-host.ts`）——
      * 口径只留一份。它们的说明（尤其"按**投递次数**算，不按会话 id 去重算"）也搬到了那里。
      */
     complete, accept,

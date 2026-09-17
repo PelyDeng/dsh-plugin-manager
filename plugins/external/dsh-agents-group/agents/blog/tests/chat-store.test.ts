@@ -11,7 +11,7 @@ const errorLike = (error: unknown): RuntimeErrorLike => error as RuntimeErrorLik
 
 /**
  * 索引库切 PG 之后，本文件的夹具从 `new ChatStore(':memory:')`（SQLite 三表）换成
- * **运行时的内存端口**（`tests/index-fixture.mjs`）。三处随之改变，都不是"顺手改改"：
+ * **运行时的内存端口**（`tests/index-fixture.ts`）。三处随之改变，都不是"顺手改改"：
  *
  * 1. **所有读写都是异步的**（PG 往返）⇒ 逐处 `await`；用 `assert.rejects` 取代 `assert.throws`。
  * 2. **`chats.db` 不存在了**：旧用例用 `db.prepare(...)` 往 `data` 列里塞"legacy 行"、用 SQL 触发器

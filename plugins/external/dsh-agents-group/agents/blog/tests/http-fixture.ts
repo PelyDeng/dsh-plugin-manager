@@ -30,7 +30,7 @@
  * 夹具直接用 `private-deploy/db/0001_init.sql` 建出全部 15 张表（{@link provisionSchema}）。
  *
  * ⚠️ 这里此前是"两块拼起来"：业务六表 + `blog_schema_version` 取自 blog 自己的旧迁移，框架四表
- * 从新 DDL 里筛出来。那是**业务存储还没迁到新形状**时的如实写照（当时 `src/storage/pg.mjs` 仍在读
+ * 从新 DDL 里筛出来。那是**业务存储还没迁到新形状**时的如实写照（当时 `src/storage/pg.ts` 仍在读
  * `blog_schema_version`、仍用 `owner` + `data`）。业务六表切完之后那个拼接就没有理由了 ——
  * 它会让测试跑在一个**只有测试才有**的中间结构上，而"测试全绿"于是证明的是那个结构。
  * 现在夹具与生产是同一份 DDL，拼接逻辑与 `FRAMEWORK_STATEMENT` 一起删掉了。
@@ -132,7 +132,7 @@ const ROUTE_PREFIX = '/blog'
  * 业务六表切到新形状之后，"拼"这件事就没有理由了：整份 DDL 才是生产那份结构，而拼接会引入
  * 一个只有测试才有的中间态 —— 那种结构一旦与生产不同，"测试全绿"证明的就是别的东西。
  *
- * 代价同 `tests/pg-smoke.test.mjs`：本文件因此依赖仓库布局（DDL 在 `private-deploy/` 下）。
+ * 代价同 `tests/pg-smoke.test.ts`：本文件因此依赖仓库布局（DDL 在 `private-deploy/` 下）。
  */
 const PRIVATE_DDL = new URL('../../../../../../private-deploy/db/0001_init.sql', import.meta.url)
 
@@ -142,7 +142,7 @@ const QUIET = { log: () => {} }
 /**
  * 在测试库里重建夹具需要的结构。
  *
- * 清库前核对库名确实以 `_test` 结尾（与 `tests/pg-smoke.test.mjs` 同一道闸）：配错 DSN 时
+ * 清库前核对库名确实以 `_test` 结尾（与 `tests/pg-smoke.test.ts` 同一道闸）：配错 DSN 时
  * 立即失败，绝不 `DROP` 别的库。
  */
 async function provisionSchema(dsn: string, { withIndex = true }: { withIndex?: boolean } = {}) {
@@ -287,7 +287,7 @@ export async function httpFixture({
          * 而 `mount()` 守卫那条用例原先只断言"错误信息里没有『委派身份』"⇒ 这个业务失败**被静默放过**
          * （错误文案里当然没有"委派身份"）。补上这个动作，守卫才能真正断言"工具**执行成功**"。
          *
-         * 形状照 `connectors.mjs:48-55` 的 `search()` 要的字段给：`items` 必填，`pageSize` 可省
+         * 形状照 `connectors.ts:48-55` 的 `search()` 要的字段给：`items` 必填，`pageSize` 可省
          * （省了按 30 算），条目里的 `created`/`modified` 是**秒**。
          */
         else if (input.action === 'search') data = { items: [], total: 0, page: 1, hasMore: false }

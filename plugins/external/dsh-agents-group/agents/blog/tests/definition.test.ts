@@ -100,7 +100,7 @@ test('实时通道声明为 delta：思考通道由宿主的**增量帧**喂（�
    * 声明成 `'cumulative'` 时 `projection.ts:191` 会**整段替换**该 step 的内容 ⇒ 每一步的思考
    * 只剩**最后一个片段**（协调方台面上就是被打碎的思考）。
    *
-   * 这条字段的判据**不只看它自己**：`tests/participant.test.mjs` 的两条思考通道用例喂的是
+   * 这条字段的判据**不只看它自己**：`tests/participant.test.ts` 的两条思考通道用例喂的是
    * **真增量**，把 `definition.ts:169` 改回 `'cumulative'` 它们会红（本轮变异验证过）。
    * 与已完成的同类物一致：`closedoff/src/definition.ts:113` 也是 `'delta'`（运行时的缺省）。
    */
@@ -129,7 +129,7 @@ test('⚠️ 不凭空加 blog 没有的钩子（脱敏 / 等待 / 隐藏主键�
    * 结束的回合变成等待。**但"不加"不等于"没问题"**——`opaqueFromToolResult`（以及 `projectReasoning`）
    * 的缺席是一个**开放缺口 Q2**：新载体的 `thinking` 通道装的是**原始推理**，而旧载体结构上不会
    * 转发推理（旧 `participant.ts:95-107` 只读 `live.text`）⇒ 协调方可见面因此变了。
-   * 证据、判定与修好后的动作见 `tests/participant.test.mjs` 里那条"特征登记"用例与切换记录。
+   * 证据、判定与修好后的动作见 `tests/participant.test.ts` 里那条"特征登记"用例与切换记录。
    */
   assert.equal('redact' in value,false)
   assert.equal('needsReply' in value,false)

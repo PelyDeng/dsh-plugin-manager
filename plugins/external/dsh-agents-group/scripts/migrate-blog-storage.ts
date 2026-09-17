@@ -40,7 +40,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
 import { Pool, type PoolClient } from 'pg'
 
-/** 目标库结构版本。与 `agents/blog/migrations/postgres/0001_init.sql` 写入的版本行、`agents/blog/src/storage/pg.mjs` 的 STORAGE_SCHEMA_VERSION 一致。 */
+/** 目标库结构版本。与 `agents/blog/migrations/postgres/0001_init.sql` 写入的版本行、`agents/blog/src/storage/pg.ts` 的 STORAGE_SCHEMA_VERSION 一致。 */
 const TARGET_SCHEMA_VERSION = 1
 /** 版本表名（库内表按插件前缀平铺，其他 Agent 迁入时各管各的版本行）。 */
 const VERSION_TABLE = 'blog_schema_version'
