@@ -17,7 +17,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
-import { ButlerConsole, REPLAY_REJECTED_PREFIX, dispatchFailureDetail, reportOf, taskAcceptanceFinding } from '../src/butler.ts'
+import { ButlerConsole, REPLAY_REJECTED_PREFIX, dispatchFailureDetail, planReworkAttempts, reportOf, taskAcceptanceFinding } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor } from '../src/protocol.ts'
 import { SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
@@ -370,14 +370,30 @@ describe('裁决要求重做 ⇒ 真的追加尝试并回调度', () => {
       logicalId: 'g1', goal: '写稿', agentId: 'blog', state: 'failed' as const,
       acceptance: GOOD, artifacts: [], result: '', memberReturnText: '', verdict: '',
     }
-    const { result } = await drain(applyRework(f.console_, {
-      taskId,
-      // 同一个目标已经有两条尝试（上限 2）⇒ 这一轮不该再追加。
-      subtasks: [{ id: 's1', ...base }, { id: 's2', supersedes: 's1', ...base }],
-      decisions: [{ subtaskId: 's2', verdict: 'rework', requested: 'rework' }],
-    }))
-    expect(result).toBe(false)
-    // 库里没有第三条：`false` 不是"追加了但没上报"。
+    /**
+     * ⚠️ **这条改成直调纯函数**，因为原构造用了一组真实链路不可能给出的输入。
+     *
+     * 原写法往 `applyReworkAttempts` 的 `subtasks` 里塞**同一 `logicalId` 的两条尝试**，
+     * 拿它们体现"预算已用满"。但真实链路传进来的是 `effectiveSubtasks()` 之后的集合 ——
+     * 它按 `supersedes` 链把被替代的旧尝试剔掉，同一目标永远只剩最新那条 ⇒ 那种输入在生产里
+     * 到不了这里。而预算**必须**按全部历史尝试算：只看有效集合会永远算成 1 条、预算永不耗尽，
+     * 于是每一轮裁决都追加一次（实测撞 `UNIQUE constraint failed: subtasks.id`），所以判定改从
+     * 库里的原始记录读（见 `applyReworkAttempts` 的调用点）。
+     * "真链路上追加有界、预算用尽按 `partial` 收尾"由端到端那条覆盖：
+     * `tests/verdict-e2e.test.ts` 的「预算用尽」。
+     */
+    const plan = planReworkAttempts({
+      decided: [{ subtaskId: 's2', verdict: 'rework', requested: 'rework' }],
+      // 有效尝试只剩最新那条（去重之后），而历史上有两条 —— 这正是真实链路的形状。
+      // `verdict: undefined` 覆盖 `base` 里的空串：`SettleTaskInput` 的该字段是
+      // `SubtaskVerdict | undefined`，`''` 不是合法取值（夹具只在这里借用 base）。
+      subtasks: [{ id: 's2', ...base, verdict: undefined }],
+      allSubtasks: [{ id: 's1', logicalId: 'g1' }, { id: 's2', logicalId: 'g1' }],
+      baseCount: 2,
+    })
+    expect(plan.appended).toEqual([])
+    expect(plan.exhausted).toEqual(['s2'])
+    // 库里没有第三条：`exhausted` 不是"追加了但没上报"。
     expect(f.store.task(actor, taskId)!.subtasks.map(item => item.id)).toEqual(['s1'])
     await f.settle()
   })

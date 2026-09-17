@@ -1077,8 +1077,19 @@ export type ReworkAttemptPlan = {
  *
  * **纯函数**：不读时钟、不碰存储、不调模型。追加的**动作**（写库 / 派单 / 回调度）在
  * `ButlerConsole#applyReworkAttempts` 里。这么拆是为了让"预算算得对不对""替代者换没换对"
- * 能被**直接测到**：把它埋在收尾里就只能靠"跑一整轮汇总"来验，而汇总轮要模型驱动 ——
- * 上一批已经实测过那条路会让用例挂在超时上（`dispatchFailureDetail` 的注释记了同一件事）。
+ * 能被**直接测到**：把它埋在收尾里就只能靠"跑一整轮汇总"来验。
+ *
+ * ⚠️ **在这里纠正一句被误传了三批的话**（原文写在 `dispatchFailureDetail` 的注释附近）：
+ * "汇总轮要模型驱动、那条路会让用例挂在超时上"。实测**不成立**，而且它是两件事被混成一件：
+ *
+ * - **`planTool.execute()` 不派单** —— 它只校验并登记计划，派单发生在 `turnBody` 的第二段。
+ *   所以"派单抛错会让 `planTool.execute` 挂住"这个说法本身就不成立（它根本没有派单那一步）。
+ * - **真正的原因是驱动轮数不够**：`settleTask` 在有观众时先置 `summarizing` 再跑 `summarize`，
+ *   而 `summarize` 等的是模型（`followup` + `turn/end`）；`rework` 还会经
+ *   `applyReworkAttempts` **再收尾一次**。只驱动一次就等不到终态，表现像"夹具坏了"。
+ *
+ * 可复用夹具见 `tests/helpers/butler-driver.ts`（文件头写了机制与"能/不能驱动什么"），
+ * 端到端判据见 `tests/verdict-e2e.test.ts`（含 409 区分、rework 追加、预算用尽、口径进提示词）。
  */
 export function planReworkAttempts(input: {
   readonly decided: readonly {
@@ -1088,14 +1099,28 @@ export function planReworkAttempts(input: {
     readonly newAgentId?: string | undefined
   }[]
   readonly subtasks: SettleTaskInput['subtasks']
+  /**
+   * **全部历史尝试**（未去重，含被替代掉的旧尝试）：预算统计必须用它。
+   *
+   * ⚠️ 缺省退回 `subtasks` 只为兼容既有调用，**真实调用点必须传它** —— 理由见下面统计处那段注释。
+   */
+  readonly allSubtasks?: readonly { readonly id: string; readonly logicalId?: string | undefined }[] | undefined
   /** 库里已有的子任务条数：新尝试的 id 从它往后编号（与补充轮同一套 `s${n}` 约定）。 */
   readonly baseCount: number
   readonly limit?: number | undefined
 }): ReworkAttemptPlan {
   const limit = input.limit ?? MAX_ATTEMPTS_PER_LOGICAL
   // **读时聚合**：每个目标（`logicalId`，缺省退回 `id`）现在已经有几条尝试。
+  //
+  // ⚠️ **必须统计全部历史，不能统计有效尝试**：`effectiveSubtasks()` 会把被替代的旧尝试剔除，
+  // 于是"同一个目标已经有 2 条尝试"在有效集合里只剩 1 条 ⇒ `used` 恒为 1 ⇒ **预算永不耗尽**，
+  // 每一轮裁决都追加一次；同时 `s${baseCount + …}` 的基数也被去重缩小，追加出来的 id 会与
+  // 历史撞车。设计 §5.4 第 798 行专门警告过"落字段会因重做新建行而每轮归零 ⇒ 内环无界"——
+  // 这里是**去重导致的同一种归零**，形态不同、后果相同。
+  // 实测（`tests/verdict-e2e.test.ts` 的"预算用尽"用例）：连续裁 `rework` 会撞
+  // `UNIQUE constraint failed: subtasks.task_id, subtasks.id` 并让整轮中断。
   const attempts = new Map<string, number>()
-  for (const item of input.subtasks) {
+  for (const item of input.allSubtasks ?? input.subtasks) {
     const key = item.logicalId === undefined || item.logicalId === '' ? item.id : item.logicalId
     attempts.set(key, (attempts.get(key) ?? 0) + 1)
   }
@@ -3825,7 +3850,7 @@ export class ButlerConsole {
       this.openVerdictContext(conversation.id, input)
       try {
         await this.storage.setTaskState(taskId, 'summarizing')
-        for await (const event of this.summarize(conversation, goal, subtasks, reports, signal)) {
+        for await (const event of this.summarize(conversation, goal, subtasks, reports, signal, input.acceptance ?? '')) {
           const inner = summaryTextOf(event)
           if (inner !== null) summaryText = inner
           else yield event as ButlerEvent
@@ -3916,10 +3941,16 @@ export class ButlerConsole {
     readonly problems: readonly string[]
   }): AsyncGenerator<ButlerEvent, boolean> {
     const { taskId, actor, goal, signal } = input.input
+    // ⚠️ 预算与 id 编号都取**全部历史尝试**（未去重）：`input.input.subtasks` 是
+    // `effectiveSubtasks()` 之后的集合，被替代的旧尝试不在里面 ⇒ 用它统计会让"同一目标已有
+    // 2 条尝试"缩成 1 条 ⇒ 预算永不耗尽、id 与历史撞车（实测：UNIQUE 约束失败、整轮中断）。
+    const raw = await this.storage.task(actor, taskId)
+    const allAttempts = raw?.subtasks ?? []
     const plan = planReworkAttempts({
       decided: input.decisions,
       subtasks: input.input.subtasks,
-      baseCount: input.input.subtasks.length,
+      allSubtasks: allAttempts,
+      baseCount: allAttempts.length,
     })
     if (plan.appended.length === 0) return false
     const appended: {
@@ -4089,8 +4120,25 @@ export class ButlerConsole {
     subtasks: readonly { readonly id: string; readonly goal: string; readonly agentId: string }[],
     reports: readonly string[],
     signal: AbortSignal,
+    /** 任务级验收口径；没有声明时传空串（§5.2 第一条消费点）。 */
+    acceptance: string,
   ): AsyncGenerator<ButlerInnerEvent, void> {
     const lines = subtasks.map((subtask, index) => `- 子任务「${subtask.goal}」由 ${subtask.agentId} 完成，结果：\n${reports[index] ?? '（没有结果）'}`)
+    /**
+     * §5.2 第一条消费点：**任务级验收口径要进汇总提示词**。
+     *
+     * 在这之前它是"只写不读"的字段（盘点 §5.3 实测编排层零消费）：模型拿不到老板当初写下的
+     * 口径，只能凭"这几个成员都返回了"自己猜算不算完成。带上它之后，汇总正文是对着口径写的，
+     * 而不是对着"都返回了"写的 —— 口径要的东西没交回来时，这一轮才可能自己说出来。
+     */
+    const acceptanceLines = acceptance.trim() === '' ? [] : [
+      '',
+      '# 这次任务的验收口径（老板写下的「交回什么才算完成」）',
+      '',
+      acceptance.trim(),
+      '',
+      '写汇总时对着它回答：口径要的东西有没有交回来、缺什么。**不要**在正文里复述这段指令。',
+    ]
     /**
      * 待裁决清单（设计 §5.4）：**同一轮里先裁决、再写汇总**。
      *
@@ -4118,6 +4166,7 @@ export class ButlerConsole {
       '各子 Agent 已经返回结果：',
       ...lines,
       ...verdictLines,
+      ...acceptanceLines,
       verdictLines.length === 0
         ? '请基于这些结果给出最终回答，直接回答我的目标，不要重复子任务清单，也不要提到这份指令。'
         : '裁完之后，再基于这些结果给出最终回答：直接回答我的目标，不要重复子任务清单，也不要提到这份指令。',
