@@ -1088,6 +1088,57 @@ function settleCardForSummary(state_, at) {
   syncCardTicker()
 }
 
+/**
+ * 成员交回内容的**唯一**渲染入口。
+ *
+ * 成功、失败、等你回话、待外部处理——四种结论的正文都从这里过受控 Markdown：
+ * 以前只有"成功"走渲染，其余走 `textContent`，于是成员交回的表格会被当成一行一竖线的
+ * 纯文本显示（业务方实测就是这么看到的）。**过程行**（工具行/进度）仍保持纯文本：
+ * 工具输出里的符号不该被解析成结构。
+ */
+function renderMemberContent(view, text) {
+  const body = typeof text === 'string' ? text : ''
+  if (body !== '') view.text = settleMarkdown(view.text, body)
+  else view.text.textContent = ''
+  view.body = body
+  return view
+}
+
+/**
+ * 视图状态压栈（会话 / 任务记录）。
+ *
+ * 支持 History API 时用真实栈，浏览器返回键与页面上的「← 返回会话」走同一条路径；
+ * 不支持（测试替身、极老环境）时静默降级——页面上的返回按钮仍然直接切视图。
+ */
+function pushViewState(value) {
+  try { history.pushState(value, '', location.href) } catch { /* 忽略。 */ }
+}
+
+function replaceViewState(value) {
+  try { history.replaceState(value, '', location.href) } catch { /* 忽略。 */ }
+}
+
+/** 任务记录视图的顶部条：返回入口 + 面包屑（进去之后要能出来）。 */
+function viewHead() {
+  const head = make('div', 'view-head')
+  const back = make('button', 'btn btn--tiny view-head__back', '← 返回会话')
+  back.type = 'button'
+  back.addEventListener('click', () => {
+    // 有栈就退栈（与浏览器返回键同一条路径），没有就按当前会话直接回。
+    if (canGoBack()) history.back()
+    else if (state.conversationId !== null) void openConversation(state.conversationId)
+    else renderWelcome()
+  })
+  head.appendChild(back)
+  head.appendChild(make('span', 'view-head__crumb', '会话 › 任务记录'))
+  return head
+}
+
+/** 有没有可退的视图栈：拿上一次压入的标记判断，避免退到站外。 */
+function canGoBack() {
+  try { return history.state?.butler === 'task' } catch { return false }
+}
+
 /** 状态刚变化的那一格做一次描边脉冲：看得见变化，但不打断阅读（不动滚动、不抢焦点）。 */
 function pulseCardCell(cell) {
   cell.classList.remove('dcard__cell--pulse')
@@ -1530,7 +1581,7 @@ function handleSubtask(event) {
 
   if (event.state === 'waiting_user') {
     view.bubble.classList.add('bubble--wait')
-    if (view.body === '') view.text.textContent = event.question ?? event.detail
+    if (view.body === '') renderMemberContent(view, event.question ?? event.detail)
     // 等你回话不是在计算：链路条给静态的等待态，不再转圈（方案 6.1）。
     setRail('work', 'waiting')
     announce(`${displayNameOf(event.agentId)} 等你回话`)
@@ -1542,7 +1593,7 @@ function handleSubtask(event) {
     // 材料交回来了，但还有事在外面办。这里**不给回复入口**：要办的事不在这一页，
     // 让用户在这里写一句话并不能把候选稿采用掉。也不显示成「完成」。
     view.bubble.classList.add('bubble--wait')
-    if (view.body === '') view.text.textContent = event.detail
+    if (view.body === '') renderMemberContent(view, event.detail)
     view.footer.appendChild(make('div', 'msg__meta', '待外部处理，办好之后可以新开一轮'))
     announce(`${displayNameOf(event.agentId)} 交回材料，还有事待外部处理`)
     return
@@ -1573,8 +1624,8 @@ function handleSubtask(event) {
     // classList.add('') 会抛 TypeError（取消态没样式类）：错误文本曾因此漏进线程。
     if (event.state === 'failed') view.bubble.classList.add('bubble--fail')
     // 已经有正文时，失败原因另起一行。这一行带 `msg__meta--keep`：**「只看结论」不能把它藏掉**
-    // ——那正是用户最需要看到的一句话（同一失败在"还没吐字"时走 `view.text`，本来就不会被藏）。
-    if (view.body === '') view.text.textContent = event.detail
+    // ——那正是用户最需要看到的一句话（同一失败在"还没吐字"时走正文，本来就不会被藏）。
+    if (view.body === '') renderMemberContent(view, event.detail)
     else view.bubble.appendChild(make('div', 'msg__meta msg__meta--keep', event.detail))
     announce(event.state === 'failed' ? `${displayNameOf(event.agentId)} 失败：${event.detail ?? '原因不明'}` : `${displayNameOf(event.agentId)} 的活已取消`)
     return
@@ -2817,6 +2868,8 @@ async function openConversation(id) {
   ])
   if (token !== state.viewToken) return
   placeholder.remove()
+  // 会话视图是"底"：进入时**替换**当前状态（不是压栈），免得栈里堆满同一个会话。
+  replaceViewState({ butler: 'conversation', conversationId: id })
   const head = make('div', 'history-head')
   threadInner().prepend(head)
   if (transcriptError !== null) {
@@ -2850,8 +2903,11 @@ async function openTask(id) {
     if (token !== state.viewToken) return
     state.conversationId = record.conversationId
     rememberConversation(record.conversationId)
+    // 视图压栈：进来之后要能出去。浏览器返回键与页面上的「← 返回会话」都退这一栈。
+    pushViewState({ butler: 'task', taskId: record.id, conversationId: record.conversationId })
     clear(el.thread)
-    threadInner()
+    const inner = threadInner()
+    inner.appendChild(viewHead())
     state.bubbles.clear()
     resetRail()
     resetFollowing()
@@ -2861,6 +2917,20 @@ async function openTask(id) {
     if (token !== state.viewToken) return
     append(make('p', 'error-line', error instanceof Error ? error.message : '打不开这条记录'))
   }
+}
+
+/**
+ * 浏览器返回键：按栈里的视图状态回到上一层。
+ *
+ * 只认自己压入的标记（`state.butler`）；不是自己的状态就什么都不做，绝不接管站内的其它历史。
+ */
+function bindViewHistory() {
+  window.addEventListener('popstate', event => {
+    const value = event.state
+    if (value === null || typeof value !== 'object') return
+    if (value.butler === 'task' && typeof value.taskId === 'string') { void openTask(value.taskId); return }
+    if (value.butler === 'conversation' && typeof value.conversationId === 'string') { void openConversation(value.conversationId) }
+  })
 }
 
 /**
@@ -2888,13 +2958,9 @@ function renderTaskCard(record, opts = {}) {
     const text = subtask.state === 'failed' || subtask.state === 'cancelled'
       ? (subtask.error || '失败')
       : (subtask.result || STATE_TEXT[subtask.state] || '')
-    // 成员终稿与实时同口径（C 批）：成功/待外部的结果走受控 Markdown；失败与状态占位保持纯文本。
-    if (subtask.state !== 'failed' && subtask.state !== 'cancelled' && subtask.result) {
-      view.text = settleMarkdown(view.text, text)
-    } else {
-      view.text.textContent = text
-    }
-    view.body = text
+    // 与实时同一个入口：成功、失败、等你回话、待外部处理的正文都走受控 Markdown
+    // （表格/列表/代码才显示成它本来的样子）。
+    renderMemberContent(view, text)
     if (['succeeded', 'failed', 'cancelled', 'external_pending'].includes(subtask.state)) view.terminal = true
     if (subtask.state === 'succeeded') {
       view.bubble.classList.add('bubble--done')
@@ -3198,6 +3264,8 @@ async function loadIdentity() {
 
 async function main() {
   bind()
+  // 浏览器返回键与页面上的「← 返回会话」走同一条栈（见 `bindViewHistory`）。
+  bindViewHistory()
   renderMotto()
   renderWelcome()
   autosize()

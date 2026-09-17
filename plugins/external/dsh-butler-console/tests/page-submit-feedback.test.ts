@@ -32,17 +32,20 @@ describe('视图切换的异步归属（I09）', () => {
       history: async () => ({ items: [], nextOffset: null }),
     }
     const noop = () => {}
+    // `openConversation` 现在会在成功回包后**替换**视图状态（会话是栈底，不压栈）。
+    const viewStates: unknown[] = []
+    const replaceViewState = (value: unknown) => { viewStates.push(value) }
     // mergeHistoryEntries 与 timeOf 用真实源码：合并排序本身就是被测行为的一部分。
     const openConversation = Function(
       'state', 'el', 'api', 'historyState', 'make', 'append', 'clear', 'threadInner', 'resetRail',
       'resetFollowing', 'renderWelcome', 'renderHistorySlice', 'rememberConversation', 'refreshChatList',
-      'updateLoadEarlier', 'scrollToBottom', 'TRANSCRIPT_PAGE_SIZE',
+      'updateLoadEarlier', 'scrollToBottom', 'TRANSCRIPT_PAGE_SIZE', 'replaceViewState',
       `${pick('timeOf')}\n${pick('compareHistoryEntries')}\n${pick('mergeHistoryEntries')}\n${pick('openConversation')} return openConversation`,
     )(state, el, api, historyState,
       () => ({ remove() {} }), (node: unknown) => node, noop, () => ({ prepend: noop }), noop,
       noop, noop,
       (entries: { text?: string }[]) => { rendered.push(entries.map(entry => entry.text ?? '').join('|')) },
-      noop, noop, noop, noop, 50) as
+      noop, noop, noop, noop, 50, replaceViewState) as
       (id: string) => Promise<void>
 
     const first = openConversation('conv-a')
@@ -50,6 +53,8 @@ describe('视图切换的异步归属（I09）', () => {
     await Promise.all([first, second])
 
     expect(rendered).toEqual(['t-conv-b'])
+    // 旧回包不许改写视图状态：只有 B 那一次算数（I09 的同一道守卫）。
+    expect(viewStates).toEqual([{ butler: 'conversation', conversationId: 'conv-b' }])
   })
 
   it('历史合并按时间排序，任务摘要标注为 task 不冒充对话（S13/C 批）', () => {

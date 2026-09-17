@@ -570,6 +570,56 @@ describe('调度卡', () => {
     expect(panel.states.get('s1')).toBe('running')
   })
 
+  it('成员交回内容统一走一个渲染入口：表格/列表在四种结论里都渲染成结构，不是一行文本', () => {
+    // 页面里只有一处把成员正文写成 Markdown：`renderMemberContent`。
+    expect(source).toContain('function renderMemberContent(view, text)')
+    expect(source).toMatch(/function renderMemberContent\(view, text\) \{[\s\S]{0,300}settleMarkdown\(view\.text, body\)/)
+    // 四种结论都必须过它：成功、失败、等你回话、待外部处理。
+    // 改造前只有"成功"走渲染，其余走 `textContent` —— 业务方看到的表格因此是一行竖线文本。
+    expect(source).toContain('renderMemberContent(view, text)')
+    expect(source).toContain('renderMemberContent(view, event.detail)')
+    expect(source).toContain('renderMemberContent(view, event.question ?? event.detail)')
+    expect(source).not.toMatch(/if \(view\.body === ''\) view\.text\.textContent = event\.(detail|question)/)
+    // 刷新重建走同一个入口（实时与重建不会各渲染一套）。
+    expect(source).toMatch(/function renderTaskCard\(record, opts = \{\}\) \{[\s\S]{0,2600}renderMemberContent\(view, text\)/)
+  })
+
+  it('Markdown 表格真的产出表格结构（业务方截图里那一段就是表格）', async () => {
+    // 用真渲染器 + 替身 document 跑一遍：节点计划里必须是 table/thead/tbody/tr/th/td。
+    const module = await import('../web/markdown.js') as unknown as {
+      markdownPlan(text: string): { tag?: string; className?: string; children?: unknown[] }[]
+    }
+    const plan = module.markdownPlan([
+      '| 项目 | 值 |',
+      '| --- | --- |',
+      '| 状态 | prepared |',
+      '',
+      '- 第一项',
+      '- 第二项',
+    ].join('\n'))
+    const tags = JSON.stringify(plan)
+    expect(tags).toContain('"tag":"table"')
+    expect(tags).toContain('"tag":"thead"')
+    expect(tags).toContain('"tag":"tbody"')
+    expect(tags).toContain('"tag":"th"')
+    expect(tags).toContain('"tag":"td"')
+    expect(tags).toContain('"tag":"ul"')
+    // 大表格套一层可聚焦的横向滚动容器（窄屏不破版）。
+    expect(tags).toContain('table-scroll')
+  })
+
+  it('任务记录视图有返回入口，且与浏览器返回键走同一条栈', () => {
+    expect(source).toContain('function viewHead()')
+    expect(source).toContain('会话 › 任务记录')
+    expect(source).toMatch(/function openTask\(id\) \{[\s\S]{0,900}pushViewState\(\{ butler: 'task', taskId: record\.id, conversationId: record\.conversationId \}\)/)
+    expect(source).toMatch(/function openTask\(id\) \{[\s\S]{0,1100}inner\.appendChild\(viewHead\(\)\)/)
+    // 返回按钮：优先退栈（与浏览器返回键同一条路径），没有栈就按当前会话回。
+    expect(source).toMatch(/viewHead\(\) \{[\s\S]{0,700}canGoBack\(\)\) history\.back\(\)/)
+    expect(source).toMatch(/function bindViewHistory\(\) \{[\s\S]{0,600}value\.butler === 'task'[\s\S]{0,200}openTask\(value\.taskId\)/)
+    // 会话是栈底：进入时替换而不是压栈（否则栈里会堆满同一个会话）。
+    expect(source).toMatch(/replaceViewState\(\{ butler: 'conversation', conversationId: id \}\)/)
+  })
+
   it('复制当前成员正文：成功报「已复制」，没有内容时如实报失败', async () => {
     const body = source.match(/async function copyDispatchText\([^)]*\) \{[\s\S]*?\n\}\n/)?.[0]
     if (body === undefined) throw new Error('copyDispatchText 源码未找到')
