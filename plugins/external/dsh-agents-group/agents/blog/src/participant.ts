@@ -45,17 +45,11 @@ export function createBlogParticipant({ access, chat, index, storage, app, route
      */
     results: { list: async (owner, conversationId) => index.results(owner, conversationId) },
   })
-  // 表名与两个请求前缀沿用协作入口改名前的写法：它们是**持久标识** —— 表里有线上数据、
-  // 请求前缀参与幂等去重，改名要迁移老库，还可能让升级窗口内的重试变成两次投递。
-  // 内部噪音不值得用这个代价换，所以只在代码与文档里换新说法。
-  // 映射表留在索引库（四耦合点之 3）：与 conversations 同库同事务，拆库后混事务自然消失。
-  index.db.exec(`CREATE TABLE IF NOT EXISTS pirate_blog_conversations (
-    owner TEXT NOT NULL, missionId TEXT NOT NULL, conversationId TEXT NOT NULL,
-    PRIMARY KEY(owner,missionId), UNIQUE(owner,conversationId))`)
-  const db = index.db
-  const binding = (owner: string, missionId: string) => db.prepare(
-    'SELECT conversationId FROM pirate_blog_conversations WHERE owner=? AND missionId=?',
-  ).get(owner, missionId) as { conversationId: string } | undefined
+  // ⚠️ 映射表（旧 `pirate_blog_conversations`）已**取消**：会话寻址改成"**派生 requestId +
+  // 创建幂等**"。`create` 的幂等身份是 `(agent_id, owner, request_id)` 上的部分唯一索引 ⇒
+  // 同一个 mission 再来一次返回**原来那一行**，会话 id 因此跨进程重启仍然稳定；
+  // 而幂等键里**不需要** owner——索引本身就带 owner 两列，换个用户派同一个 missionId 各建各的会话。
+  // 这样"会话与其协作任务的绑定"不再是一份需要迁移的持久数据，而是 requestId 的函数。
 
   return {
     protocol: 1, id: 'blog', displayName: '伊丽莎白 · 博客',
@@ -68,25 +62,18 @@ export function createBlogParticipant({ access, chat, index, storage, app, route
       invariant([missionId, requestId].every(id => typeof id === 'string' && id.length > 0 && id.length <= 200), '协作任务标识无效')
       invariant(typeof request.message === 'string' && request.message.trim() && request.message.length <= 8000, '请输入协作要求（最多 8000 字符）')
       const owner = ownerKey(actor)
-      let linked = binding(owner, missionId)
-      if (request.conversationId !== undefined) invariant(linked?.conversationId === request.conversationId, '博客会话不属于当前协作任务', 403)
-      if (!linked) {
-        // 映射与 conversations 同库：索引侧自己的事务，不再混业务库。
-        db.exec('BEGIN IMMEDIATE')
-        try {
-          const conversation = chat.create(actor, 'pirate-conversation-' + digest({ missionId }))
-          db.prepare('INSERT INTO pirate_blog_conversations VALUES(?,?,?)').run(owner, missionId, conversation.id)
-          linked = { conversationId: conversation.id }
-          db.exec('COMMIT')
-        } catch (error) { db.exec('ROLLBACK'); throw error }
+      // 派生的是 **requestId**（幂等身份），不是会话 id：会话 id 由 `create` 内部铸
+      //（`blog-chat-<uuid>`），并由上面那条部分唯一索引保证"同一 mission 只得一行"。
+      const conversation = await chat.create(actor, 'pirate-conversation-' + digest({ missionId }))
+      const conversationId = conversation.id
+      if (request.conversationId !== undefined) {
+        invariant(conversationId === request.conversationId, '博客会话不属于当前协作任务', 403)
       }
-      const conversationId = linked.conversationId
-      const assertBound = () => {
+      const assertBound = async () => {
         access.assert(actor)
-        invariant(binding(owner, missionId)?.conversationId === conversationId, '博客协作会话绑定已变化', 403)
-        index.get(owner, conversationId)
+        await index.get(owner, conversationId)
       }
-      assertBound()
+      await assertBound()
       signal.throwIfAborted()
       const path = routePrefix.replace(/\/$/, '') + '?conversationId=' + encodeURIComponent(conversationId)
       let turnId: string | undefined, wake: (() => void) | undefined, closed = false, updates = 0
@@ -122,8 +109,9 @@ export function createBlogParticipant({ access, chat, index, storage, app, route
       const notify = () => { updates++; wake?.(); wake = undefined }
       const stopOwned = async () => {
         if (!turnId) return
-        assertBound()
-        const turn = index.request(owner, turnId)
+        // `assertBound` 与 `index.request` 现在都是 PG 往返 ⇒ 本函数（本来就 async）逐处 await。
+        await assertBound()
+        const turn = await index.request(owner, turnId)
         invariant(turn.conversationId === conversationId, '博客请求不属于当前协作会话', 403)
         // 避免旧请求的迟到取消停止同一会话里后来开始的另一轮。
         if (pending.has(turn.status)) await chat.stop(actor, conversationId)
@@ -135,12 +123,12 @@ export function createBlogParticipant({ access, chat, index, storage, app, route
       signal.addEventListener('abort', abort, { once: true })
       try {
         unsubscribe = chat.subscribe(actor, conversationId, (event: unknown) => { forwardLive(event); notify() }, () => { closed = true; notify() })
-        assertBound()
+        await assertBound()
         signal.throwIfAborted()
         request.onProgress({ kind: 'status', text: '博客会话已连接', conversationId,
           conversationArtifact: { kind: 'conversation', title: '查看博客原对话', path } })
         signal.throwIfAborted()
-        assertBound()
+        await assertBound()
         const started = await chat.send(actor, {
           conversationId, requestId: 'pirate-turn-' + digest({ missionId, requestId }),
           text: request.message, research: false, attachments: [],
@@ -148,15 +136,15 @@ export function createBlogParticipant({ access, chat, index, storage, app, route
         turnId = started.id
         for (;;) {
           const observed = updates
-          assertBound()
+          await assertBound()
           if (signal.aborted) { stopPromise ??= stopOwned(); await stopPromise }
           invariant(!closed, '博客会话订阅已结束，请重新查看任务', 503)
           // `turnId` 刚在上面赋成 `started.id`；TS 因为闭包里也可能写它而放弃收窄，这里断言非空。
-          const turn = index.request(owner, turnId!)
+          const turn = await index.request(owner, turnId!)
           invariant(turn.conversationId === conversationId, '博客请求不属于当前协作会话', 403)
           if (!pending.has(turn.status)) {
             const history = await chat.history(actor, conversationId)
-            assertBound()
+            await assertBound()
             const start = history.messages.findIndex(message => message.role === 'user' && 'requestId' in message && message.requestId === turnId)
             invariant(start >= 0 || turn.status !== 'succeeded', '无法核验本轮博客回答，请查看原对话', 409)
             /**
@@ -280,7 +268,7 @@ export function createBlogParticipant({ access, chat, index, storage, app, route
               : status === 'failed' ? '博客本轮未完成，请在原对话查看并继续。' : ''
             const note = confirmation ? '博客操作仍需在原对话核对或确认；此处没有执行发布。'
               : candidate ? '候选稿已准备，须在博客原对话选择采用；候选稿不等于正文已保存或发布。' : ''
-            assertBound()
+            await assertBound()
             return {
               status, conversationId, text: publicResultText(text, [unfinished, note], [...currentCandidates.values()]),
               artifacts: [{ kind: confirmation ? 'confirmation' : candidate ? 'draft' : 'conversation',

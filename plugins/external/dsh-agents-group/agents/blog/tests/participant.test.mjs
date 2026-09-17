@@ -4,37 +4,40 @@ import { setImmediate as tick } from 'node:timers/promises'
 import { BlogStore, ownerKey } from '../src/store.mjs'
 import { ChatStore } from '../src/chat-store.ts'
 import { createBlogParticipant } from '../src/participant.ts'
+// 索引库切 PG 之后夹具换成运行时的内存端口（见 index-fixture.mjs）：ChatStore 不再自己开库，
+// 所有读写都过端口（异步）。
+import { memoryIndex } from './index-fixture.mjs'
 import { chatConversationTarget } from '../web/chat.js'
 import { renderMarkdown } from '../web/markdown.js'
 
 const actor = Object.freeze({ namespace: 'user', userId: 'writer', sessionId: 'login-a' })
 
 async function fixture(t) {
-  const store = new BlogStore(':memory:'); await store.init(); const index = new ChatStore(':memory:')
+  const store = new BlogStore(':memory:'); await store.init(); const index = new ChatStore(memoryIndex())
   t.after(() => store.close())
   const f = { store, index, denied: false, auto: true, runs: 0, stops: 0, creates: 0, listeners: new Set(), messages: new Map(), active: new Map(), operations: [] }
   f.access = { assert(current) { assert.equal(current.namespace, 'user'); if (f.denied) throw new Error('登录或授权已失效') } }
   f.emit = id => { for (const listener of [...f.listeners]) if (listener.id === id) listener.send({ type: 'changed' }) }
-  f.complete = (id, text = '本轮可显示的博客回答', status = 'succeeded') => {
+  f.complete = async (id, text = '本轮可显示的博客回答', status = 'succeeded') => {
     const turn = f.active.get(id)
     assert.ok(turn)
     f.messages.get(id).push({ id: 'answer-' + turn.id, role: 'assistant', text, reasoning: 'PRIVATE_REASONING' })
-    index.updateRequest(turn.id, { status }); f.active.delete(id); f.emit(id)
+    await index.updateRequest(turn.owner, turn.id, { status }); f.active.delete(id); f.emit(id)
   }
   f.chat = {
     index,
-    create(current, id) { f.access.assert(current); f.creates++; return index.create(ownerKey(current), id) },
+    async create(current, id) { f.access.assert(current); f.creates++; return await index.create(ownerKey(current), id) },
     async send(current, args) {
       f.access.assert(current)
       if (f.sendGate) await f.sendGate
       const owner = ownerKey(current)
-      const { request, fresh } = index.start(owner, args.conversationId, args.requestId, { text: args.text.trim(), research: args.research, attachments: args.attachments })
+      const { request, fresh } = await index.start(owner, args.conversationId, args.requestId, { text: args.text.trim(), research: args.research, attachments: args.attachments })
       if (fresh) {
         f.runs++; f.active.set(args.conversationId, request)
         const messages = f.messages.get(args.conversationId) ?? []
         messages.push({ id: 'user-' + request.id, role: 'user', requestId: request.id, text: args.text })
         f.messages.set(args.conversationId, messages)
-        index.updateRequest(request.id, { status: 'running' })
+        await index.updateRequest(request.owner, request.id, { status: 'running' })
         if (f.auto) queueMicrotask(() => f.complete(args.conversationId))
       }
       return { id: request.id, conversationId: args.conversationId }
@@ -56,19 +59,19 @@ async function fixture(t) {
       f.lastHistoryId = id
       f.historyEntered?.()
       if (f.historyGate) await f.historyGate
-      return { messages: f.messages.get(id) ?? [], requests: index.requests(ownerKey(current), id),
-        operations: f.operations, results: index.results(ownerKey(current), id), live: { reasoning: 'PRIVATE_LIVE_REASONING' } }
+      return { messages: f.messages.get(id) ?? [], requests: await index.requests(ownerKey(current), id),
+        operations: f.operations, results: await index.results(ownerKey(current), id), live: { reasoning: 'PRIVATE_LIVE_REASONING' } }
     },
     async stop(current, id) {
       f.access.assert(current); index.get(ownerKey(current), id)
       const turn = f.active.get(id)
-      if (turn) { f.stops++; index.updateRequest(turn.id, { status: 'interrupted' }); f.active.delete(id); f.emit(id) }
+      if (turn) { f.stops++; await index.updateRequest(turn.owner, turn.id, { status: 'interrupted' }); f.active.delete(id); f.emit(id) }
       return { stopped: true }
     },
     async settleAccepted(current, id, requestId) {
       const turn = f.active.get(id)
       if (turn?.owner === ownerKey(current) && turn.id === requestId) {
-        f.stops++; index.updateRequest(turn.id, { status: 'interrupted' }); f.active.delete(id); f.emit(id)
+        f.stops++; await index.updateRequest(turn.owner, turn.id, { status: 'interrupted' }); f.active.delete(id); f.emit(id)
       }
     },
   }
@@ -97,7 +100,13 @@ test('reuses a durable mission conversation and original request idempotency wit
   assert.ok(progress.every(value => value.conversationId === first.conversationId))
   await provider.run(input({ requestId: 'request-b', conversationId: first.conversationId, message: '再说明来源' }))
   const replay = await f.provider().run(input({ conversationId: first.conversationId }))
-  assert.equal(replay.text, first.text); assert.equal(f.runs, 2); assert.equal(f.creates, 1)
+  assert.equal(replay.text, first.text); assert.equal(f.runs, 2)
+  // ⚠️ 判据从"`create` 只被调用一次"改成"索引里**只有一行**会话"：旧实现靠
+  // `pirate_blog_conversations` 映射表保证"同一 mission 只得一条会话"，现在靠 `create` 的
+  // **创建幂等**（同一个派生 requestId 返回原来那一行，见 `participant.ts` 的说明）。
+  // 前者是实现的形状（每次 `run` 都会调一次 `create`），后者才是要保的性质。
+  assert.equal(replay.conversationId, first.conversationId)
+  assert.equal(f.index.db.conversations.size, 1)
   assert.equal(f.listeners.size, 0)
   await assert.rejects(provider.run(input({ message: '改变同一请求内容' })), /不能更改/)
   assert.equal(f.runs, 2)
@@ -111,7 +120,7 @@ test('successful retries return only committed answers for completed and externa
     const id = [...f.active.keys()][0]
     f.messages.get(id).push({ id: 'attempt-1', role: 'assistant', text: '废弃尝试内容', interrupted: true, reasoning: 'PRIVATE_ATTEMPT_REASONING' })
     if (expected === 'external_pending') f.operations = [{ status: 'prepared', nonce: 'PRIVATE_CONFIRM_NONCE' }]
-    f.complete(id, '已提交的最终回答')
+    await f.complete(id, '已提交的最终回答')
     const result = await running
     assert.equal(result.status, expected)
     assert.ok(result.text.startsWith('已提交的最终回答'))
@@ -139,9 +148,9 @@ test('failed and cancelled results retain interrupted text with an unfinished no
     f.operations = [{ status: 'prepared', nonce: 'PRIVATE_CONFIRM_NONCE' }]
     const owner = ownerKey(actor), turn = f.active.get(id), draft = await f.store.create(owner)
     await f.store.propose(owner, draft.id, draft.revision, { title: '本轮留存候选', text: '尚需复核的候选正文' }, [])
-    f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
+    await f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
     if (expected === 'cancelled') controller.abort()
-    else f.complete(id, '', 'interrupted')
+    else await f.complete(id, '', 'interrupted')
     const result = await running
     assert.equal(result.status, expected)
     assert.match(result.text, /尚未完成的回答片段/)
@@ -155,7 +164,7 @@ test('failed and cancelled results retain interrupted text with an unfinished no
 
 test('rejects arbitrary user conversations, cross-mission references and other owners before sending', async t => {
   const f = await fixture(t), provider = f.provider()
-  const unrelated = f.chat.create(actor, 'ordinary-conversation')
+  const unrelated = await f.chat.create(actor, 'ordinary-conversation')
   await assert.rejects(provider.run(input({ conversationId: unrelated.id })), /不属于当前协作任务/)
   assert.equal(f.runs, 0)
   const first = await provider.run(input())
@@ -174,12 +183,12 @@ test('pre-aborted requests create no conversation and install no subscription', 
 test('emits one bound native conversation link before sending and preserves its final artifact', async t => {
   const f = await fixture(t), progress = []; f.auto = false
   const running = f.provider('/native-blog/').run(input({ onProgress: value => {
-    f.index.get(ownerKey(actor), value.conversationId)
+    void f.index.get(ownerKey(actor), value.conversationId)
     progress.push({ value, runs: f.runs })
   } }))
   await tick()
   const id = [...f.active.keys()][0]
-  f.complete(id)
+  await f.complete(id)
   const result = await running
   const artifact = { kind: 'conversation', title: '查看博客原对话', path: '/native-blog?conversationId=' + encodeURIComponent(id) }
   assert.deepEqual(progress[0], { value: { kind: 'status', text: '博客会话已连接', conversationId: id, conversationArtifact: artifact }, runs: 0 })
@@ -202,7 +211,7 @@ test('过程按思考上报：完整覆盖，换段整段追加且不重复', as
   // 下一步重新累积：它不以已发布内容开头，整段追加；过程里不该丢掉这一段的开头。
   live({ text: '结论是甲稿更完整。', reasoning: 'PRIVATE_LIVE_REASONING' })
   live({ text: '结论是甲稿更完整。建议先改标题。', reasoning: 'PRIVATE_LIVE_REASONING' })
-  f.complete(id, '结论是甲稿更完整。建议先改标题。')
+  await f.complete(id, '结论是甲稿更完整。建议先改标题。')
   const result = await running
   const shots = progress.filter(value => value.kind === 'thinking').map(value => value.thinking)
   assert.equal(result.status, 'completed')
@@ -230,7 +239,7 @@ test('只带推理的分片把正文基准归零，下一步的叙述整段保�
   // 下一条只带推理：正文是空的，说明这一步的正文还没开始，基准跟着归零。
   live({ text: '', reasoning: '换一步再看。' })
   live({ text: '今天共有 12 辆车入园。', reasoning: '换一步再看。' })
-  f.complete(id, '今天共有 12 辆车入园。')
+  await f.complete(id, '今天共有 12 辆车入园。')
   await running
   const shots = progress.filter(value => value.kind === 'thinking').map(value => value.thinking)
   // 归零后这一步整段进快照；没有归零的话它会被当成「只多了后半段」，展开时开头就缺了。
@@ -253,7 +262,7 @@ test('交回的正文只取该回合最后一条，过程叙述不拼进材料',
     { id: 'tool-2', role: 'tool', name: 'blog_read_post' },
     { id: 'answer', role: 'assistant', text: '## 声明文件清单\n\n- `package.json`\n- `plugin.json`', tail: true },
   ])
-  f.index.updateRequest(turn.id, { status: 'succeeded' }); f.active.delete(id); f.emit(id)
+  await f.index.updateRequest(turn.owner, turn.id, { status: 'succeeded' }); f.active.delete(id); f.emit(id)
   const result = await running
   assert.equal(result.status, 'completed')
   assert.equal(result.text, '## 声明文件清单\n\n- `package.json`\n- `plugin.json`')
@@ -271,7 +280,7 @@ test('没有 tail（本轮没跑完）时保留全部已生成内容，不丢东
     { id: 'step-1', role: 'assistant', text: '先看资料。' },
     { id: 'step-2', role: 'assistant', text: '还没写完的回答片段' },
   ])
-  f.index.updateRequest(turn.id, { status: 'interrupted' }); f.active.delete(id); f.emit(id)
+  await f.index.updateRequest(turn.owner, turn.id, { status: 'interrupted' }); f.active.delete(id); f.emit(id)
   const result = await running
   assert.equal(result.status, 'failed')
   assert.match(result.text, /先看资料。/)
@@ -329,12 +338,10 @@ test('aborting from a running progress callback does not lose its completion not
 test('cancellation waits for an asynchronously settled job after stop has already returned', async t => {
   const f = await fixture(t), controller = new AbortController(); f.auto = false
   f.chat.stop = async (current, id) => {
-    f.access.assert(current); f.index.get(ownerKey(current), id)
+    f.access.assert(current); await f.index.get(ownerKey(current), id)
     const turn = f.active.get(id); f.stops++
-    f.index.updateRequest(turn.id, { status: 'stopping' }); f.emit(id)
-    setTimeout(() => {
-      f.index.updateRequest(turn.id, { status: 'interrupted' }); f.active.delete(id); f.emit(id)
-    }, 5)
+    await f.index.updateRequest(turn.owner, turn.id, { status: 'stopping' }); f.emit(id)
+    setTimeout(() => { void f.index.updateRequest(turn.owner, turn.id, { status: 'interrupted' }).then(() => { f.active.delete(id); f.emit(id) }) }, 5)
     return { stopped: true }
   }
   const running = f.provider().run(input({ signal: controller.signal }))
@@ -350,7 +357,7 @@ test('returns a native confirmation link without nonce, reasoning or remote oper
   await tick()
   const id = [...f.active.keys()][0]
   f.operations = [{ status: 'prepared', nonce: 'PRIVATE_CONFIRM_NONCE', before: { private: 'PRIVATE_REMOTE_SNAPSHOT' }, canConfirm: true }]
-  f.complete(id)
+  await f.complete(id)
   const result = await running, encoded = JSON.stringify(result)
   assert.equal(result.status, 'external_pending'); assert.equal(result.artifacts[0].kind, 'confirmation')
   assert.equal(result.artifacts[0].path, '/blog?conversationId=' + encodeURIComponent(id))
@@ -367,8 +374,8 @@ test('an unapplied proposal is reported as external_pending and never as a saved
   const [id, turn] = [...f.active.entries()][0], owner = ownerKey(actor)
   const draft = await f.store.create(owner, { title: 'PRIVATE_BEFORE_TITLE', text: 'PRIVATE_BEFORE_TEXT' })
   await f.store.propose(owner, draft.id, draft.revision, { title: '实际候选标题', text: '真实候选正文与 Agent 自述不同', tags: ['PRIVATE_TAG'] }, [{ text: 'PRIVATE_SOURCE' }])
-  f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
-  f.complete(id, '已提出文章修改建议')
+  await f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
+  await f.complete(id, '已提出文章修改建议')
   const result = await running
   assert.equal(result.status, 'external_pending'); assert.equal(result.artifacts[0].kind, 'draft')
   assert.match(result.text, /候选稿不等于正文已保存或发布/)
@@ -386,8 +393,8 @@ test('a later progress question preserves earlier unresolved candidates and conf
   const [id, turn] = [...f.active.entries()][0], owner = ownerKey(actor)
   const draft = await f.store.create(owner, { title: '仍待采用' })
   await f.store.propose(owner, draft.id, draft.revision, { text: '候选内容' }, [])
-  f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
-  f.complete(id)
+  await f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
+  await f.complete(id)
   assert.equal((await first).status, 'external_pending')
   f.auto = true
   const followup = await provider.run(input({ requestId: 'progress-request', conversationId: id, message: '现在等谁' }))
@@ -406,8 +413,8 @@ test('actual candidate paragraphs and headings render readably without JSON esca
   const [id, turn] = [...f.active.entries()][0], owner = ownerKey(actor), draft = await f.store.create(owner)
   const body = '## 数据来源\n\n这是实际候选的第一段。\n\n第二段包含 "引号" 和 C:\\reports。\n\n- 本页 2 条样例\n- 全量未知\n\n<script>不能执行</script>'
   await f.store.propose(owner, draft.id, draft.revision, { title: '候选标题 "样例"', text: body }, [])
-  f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
-  f.complete(id, 'Agent 的概述不能代替候选正文')
+  await f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
+  await f.complete(id, 'Agent 的概述不能代替候选正文')
   const result = await running, html = renderMarkdown(result.text)
   assert.ok(result.text.includes(body), 'candidate body must remain complete and unmodified')
   assert.match(html, /<h3>候选 1 · 待采用<\/h3>/)
@@ -426,13 +433,13 @@ test('only the current unapplied candidate of the requested turn is forwarded', 
     await tick()
     const [id, turn] = [...f.active.entries()][0], owner = ownerKey(actor), draft = await f.store.create(owner)
     const first = await f.store.propose(owner, draft.id, draft.revision, { text: '旧候选不应转交' }, [])
-    f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
+    await f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
     if (action === 'replace') {
       await f.store.propose(owner, draft.id, draft.revision, { text: '同轮替换后的实际候选' }, [], first.id)
-      f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
+      await f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
     } else if (action === 'apply') await f.store.applyProposal(owner, draft.id, draft.revision, first.id, ['text'])
     else await f.store.discardProposal(owner, draft.id, draft.revision, first.id)
-    f.complete(id)
+    await f.complete(id)
     const result = await running
     assert.doesNotMatch(result.text, /旧候选不应转交/)
     assert.equal(result.status, action === 'replace' ? 'external_pending' : 'completed')
@@ -451,10 +458,10 @@ test('multiple current draft candidates are deduplicated and forwarded together 
     for (const [i, body] of bodies.entries()) {
       const draft = await f.store.create(owner)
       await f.store.propose(owner, draft.id, draft.revision, { title: '候选标题' + i, text: body }, [])
-      f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
-      f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
+      await f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
+      await f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
     }
-    f.complete(id)
+    await f.complete(id)
     const result = await running
     assert.equal(result.status, 'external_pending')
     assert.ok(result.externalPending.reason.length > 0)
@@ -491,9 +498,9 @@ test('long responses preserve status and disclose omissions within the collabora
     if (body !== null) {
       const draft = await f.store.create(owner)
       await f.store.propose(owner, draft.id, draft.revision, { title: '需要核对的候选', text: body }, [])
-      f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
+      await f.index.result(owner, turn, 'candidate', await f.store.get(owner, draft.id))
     }
-    f.complete(id, answer)
+    await f.complete(id, answer)
     const result = await running
     assert.ok(result.text.length <= 64000, '转交正文不超过参与者自己的上限')
     assert.equal(result.status, body === null ? 'completed' : 'external_pending')

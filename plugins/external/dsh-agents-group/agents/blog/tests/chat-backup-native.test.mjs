@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto'
 import {mkdtemp,mkdir,readFile,writeFile,copyFile,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {native,exportChat,stageChat,restoreSnapshot} from '../backup/chat-state.mjs'
+import {native,exportChat,stageChat,restoreSnapshot,conversations} from '../backup/chat-state.mjs'
 
 const cwd='/data/workspace',id=()=> 'blog-chat-'+randomUUID()
 const header=(id,parent)=>({version:3,delegationDepth:0,id,createdAt:1000,cwd,isSeeded:!!parent,...(parent?{parentSession:parent}:{})})
@@ -18,13 +18,68 @@ const events=[
   {type:'turn/end',seq:5,time:1006,data:{turn:1,reason:{kind:'completed'}}},
 ]
 const row=()=>({session:{createdAt:1000,cwd},items:[{messageId:'a1',rating:'positive',note:'保留版本和时间',version:randomUUID(),createdAt:1100,updatedAt:1200}]})
+/**
+ * 造一份本地库夹具（离线备份读的那一个文件）。
+ *
+ * ⚠️ 索引库切 PG 之后，会话行的本地副本在运行时的**镜像表** `conversation_mirror` 里
+ * （`packages/runtime/src/storage/local.ts`），**不是**旧索引库的 `conversations` 表——后者只读留存、
+ * 不再更新。夹具必须跟着改，否则测的是"备份读一张不再更新的旧表"这条**已经不存在**的路径。
+ *
+ * 归属（`owner_namespace`/`owner_id`）与生命周期（`payload` 里的 `requestId`/`createdAt`/
+ * `sessionCreatedAt`/`openingAt`）分两处放，与真实写入的形状逐字对应。
+ */
 function index(database,items){
   const db=new DatabaseSync(database)
   try{
-    db.exec('CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,owner TEXT,data TEXT)')
-    for(const c of items)db.prepare('INSERT OR REPLACE INTO conversations VALUES(?,?,?)').run(c.id,c.owner,JSON.stringify(c))
+    db.exec(`CREATE TABLE IF NOT EXISTS conversation_mirror (
+      id TEXT PRIMARY KEY, agent_id TEXT NOT NULL,
+      owner_namespace TEXT NOT NULL, owner_id TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT '', title_source TEXT NOT NULL DEFAULT 'automatic',
+      ready INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,
+      removal_state TEXT NOT NULL DEFAULT '', deleted_at INTEGER, updated_at INTEGER NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}')`)
+    for(const c of items){
+      const at=c.owner.indexOf(':')
+      const {id,owner,...payload}=c
+      db.prepare(`INSERT OR REPLACE INTO conversation_mirror
+        (id,agent_id,owner_namespace,owner_id,ready,updated_at,payload) VALUES(?,?,?,?,?,?,?)`)
+        .run(id,'blog',c.owner.slice(0,at),c.owner.slice(at+1),c.ready===false?0:1,c.createdAt,JSON.stringify(payload))
+    }
   }finally{db.close()}
 }
+test('会话归属清单读的是运行时的镜像表（不再读旧索引库的 conversations 表）',async()=>{
+  // 这条**不需要官方离线包**（只碰 `node:sqlite`），所以能在本机真跑：本文件另外两条要
+  // `@deepseek-ai/cordis` 的用例在开发机上一直是 skip/fail，那条路径没法在这里验证。
+  const root=await mkdtemp(join(tmpdir(),'blog-backup-index-')),database=join(root,'blog.sqlite')
+  const a=id(),b=id()
+  // 旧索引库的 `conversations` 表**留着**（只读留存），里面故意放一条归属不同的记录：
+  // 备份若还在读它，就会拿到 `auth:stale-owner`——而镜像是权威的本地副本。
+  const legacy=new DatabaseSync(database)
+  try{
+    legacy.exec('CREATE TABLE IF NOT EXISTS conversations(id TEXT PRIMARY KEY,owner TEXT,data TEXT)')
+    legacy.prepare('INSERT OR REPLACE INTO conversations VALUES(?,?,?)')
+      .run(a,'auth:stale-owner',JSON.stringify({id:a,owner:'auth:stale-owner',requestId:'request-'+a,createdAt:900}))
+  }finally{legacy.close()}
+  index(database,[
+    {id:a,owner:'auth:user-a',requestId:'request-'+a,createdAt:900,ready:true,sessionCreatedAt:1000,parent:null},
+    {id:b,owner:'auth:user-b',requestId:'request-'+b,createdAt:901,ready:false,openingAt:900,openingUntil:2000,parent:null},
+  ])
+  const rows=conversations(database)
+  assert.equal(rows.size,2)
+  // 镜像赢，不是旧表里那条。
+  assert.equal(rows.get(a).owner,'auth:user-a')
+  assert.equal(rows.get(a).requestId,'request-'+a)
+  assert.equal(rows.get(a).createdAt,900)
+  assert.equal(rows.get(a).parent,null)
+  // 未发布的会话（只有 `openingAt`/`openingUntil`）也要带得出生命周期，否则恢复侧无法核验它。
+  assert.equal(rows.get(b).ready,false)
+  assert.equal(rows.get(b).openingUntil,2000)
+  // 旧部署（还没被运行时建过镜像表）⇒ 空 Map，不抛。
+  const empty=join(root,'empty.sqlite')
+  new DatabaseSync(empty).close()
+  assert.equal(conversations(empty).size,0)
+})
+
 test('V2 backups migrate with official system heads and remapped inherited boundaries',async()=>{
   const root=await mkdtemp(join(tmpdir(),'blog-backup-v2-')),sdk=await native(),sessionId=id(),parent=id()
   try{

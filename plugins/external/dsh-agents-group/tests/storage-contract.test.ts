@@ -581,6 +581,130 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
   // 这一节的每一条都对应一处**会被静默走错**的接线：读错列、覆盖既有载荷、滤掉等待行、
   // 把补丁当整层。
 
+  it('★ detail 读整行：titleSource / pinned / createdAt / requestId 四个列上的字段都读得到，别人的行读不到', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      // 不给标题 ⇒ `title_source` 是 `automatic`（这是"自动标题**能**覆盖"的起点）。
+      const bare = conversationId()
+      await db.conversations.create(owner, bare, 'req-bare')
+      expect((await db.conversations.detail(owner, bare))!.titleSource).toBe('automatic')
+      // 建会话时就给标题 ⇒ 直接记 `manual`：它是"自动标题**不**覆盖手动标题"那条守卫的起点。
+      const created = await db.conversations.create(owner, id, 'req-detail', { title: '详情标题' })
+      // 预留段：还没发布、没有围栏、没有置顶；`requestId` 与 `createdAt` 从**列**上读回。
+      const before = (await db.conversations.detail(owner, id))!
+      expect(before).toMatchObject({
+        id, title: '详情标题', ready: false, pinned: false, removalState: '', deletedAt: null,
+        titleSource: 'manual', requestId: 'req-detail', payload: {},
+      })
+      expect(created.ready).toBe(false)
+      // `created_at` 是 BIGINT：驱动读回字符串，不 `Number(...)` 就会让"展示 / 排序"静默退化成
+      // 字典序（与 `updatedAt` 同一条口径），所以类型本身也要钉。
+      expect(typeof before.createdAt).toBe('number')
+      expect(before.createdAt).toBeGreaterThan(0)
+
+      // 三个字段各自**真的**跟着列走。漏掉任何一个，业务侧就是"标题永远不自动更新 / 置顶徽标
+      // 消失 / 幂等键读不到"这类**用户可见**却不报错的失效——它们不会让任何别的用例变红。
+      await db.conversations.publish(owner, id)
+      await db.conversations.syncTitle(owner, id, '人工改的标题', 'manual')
+      await db.conversations.pin(owner, id, true)
+      const after = (await db.conversations.detail(owner, id))!
+      expect(after.title).toBe('人工改的标题')
+      expect(after.titleSource).toBe('manual')
+      expect(after.pinned).toBe(true)
+      expect(after.ready).toBe(true)
+
+      // 不存在 / 别人的行 ⇒ `undefined`（**不抛**：要不要摊开成 404 是调用方的语义）。
+      expect(await db.conversations.detail(otherOwner, id)).toBeUndefined()
+      expect(await db.conversations.detail(owner, randomUUID())).toBeUndefined()
+    } finally { await db.close() }
+  })
+
+  it('detail 的 `agent_id` 条件不能漏：同一个会话 id 在别的 Agent 的库里读不到', async () => {
+    // 三张 `dsh_*` 表是所有 Agent 共用的，而 `(owner_namespace, owner_id)` 只区分**人**、
+    // 不区分 Agent。漏掉这个条件的后果已经实测过一次：管家侧栏列出别的 Agent 的会话。
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, 'req-agent-scope', { title: '本 Agent 的' })
+      const other = await newFacade('blog')
+      try {
+        expect(await other.db.conversations.detail(owner, id)).toBeUndefined()
+        expect(await other.db.conversations.conversationOf(owner, id)).toBeUndefined()
+      } finally { await other.db.close() }
+    } finally { await db.close() }
+  })
+
+  it('★ create 的 titleSource：默认标题可以标成 automatic（否则官方首句标题永远盖不上）', async () => {
+    const { db } = await newFacade()
+    const scope = { busy: [], archived: [] }
+    try {
+      const id = conversationId()
+      // 显式给"默认标题 + automatic"：blog 的"新对话"正是这种组合（侧栏要先有它，官方首句标题
+      // 之后要能覆盖它）。缺了这个入口，业务只能二选一：空标题，或**永远盖不上**。
+      await db.conversations.create(owner, id, 'req-default-title', { title: '新对话', titleSource: 'automatic' })
+      await db.conversations.publish(owner, id)
+      await db.conversations.syncTitle(owner, id, '官方首句标题', 'automatic')
+      expect((await db.conversations.detail(owner, id))!.title).toBe('官方首句标题')
+      expect((await db.conversations.detail(owner, id))!.titleSource).toBe('automatic')
+      expect((await db.conversations.list(owner, { offset: 0, limit: 30, q: '', state: '' }, scope)).items[0]!.title)
+        .toBe('官方首句标题')
+      // 对照：**不**显式给来源时，非空标题按 `manual` 落库 ⇒ 自动标题被守卫挡住（既有口径不变）。
+      const kept = conversationId()
+      await db.conversations.create(owner, kept, 'req-manual-title', { title: '人工标题' })
+      await db.conversations.publish(owner, kept)
+      await db.conversations.syncTitle(owner, kept, '迟到的自动标题', 'automatic')
+      expect((await db.conversations.detail(owner, kept))!.title).toBe('人工标题')
+    } finally { await db.close() }
+  })
+
+  it('★ turnsByOperationId 跨会话按业务键读轮次：插入序降序、空串空数组、别人的读不到', async () => {
+    const { db } = await newFacade()
+    try {
+      const first = conversationId(), second = conversationId()
+      await db.conversations.create(owner, first, '')
+      await db.conversations.create(owner, second, '')
+      await db.turns.claim(owner, first, 'req-op-1', 'h1', { operationId: 'op-shared', draftId: 'd1' })
+      // 同一个操作在**另一个会话**里继续（分支会话会继承 `operationId`）⇒ 必须跨会话找得到它。
+      // 只在单个会话里找，会让"这个操作已经绑了哪份草稿"变成另一个答案 ⇒ 业务新建第二份草稿。
+      await db.turns.claim(owner, second, 'req-op-2', 'h2', { operationId: 'op-shared', draftId: 'd2' })
+      await db.turns.claim(owner, second, 'req-op-3', 'h3', { operationId: 'op-other', draftId: 'd3' })
+      const rows = await db.turns.turnsByOperationId(owner, 'op-shared')
+      expect(rows.map(row => row.conversationId)).toEqual([second, first])
+      expect(rows.map(row => row.payload.draftId)).toEqual(['d2', 'd1'])
+      // 空串是"没有操作身份"：不能把它当成一个查询键（`payload->>'operationId' = ''` 会把一堆
+      // 无关轮次捞回来）。
+      expect(await db.turns.turnsByOperationId(owner, '')).toEqual([])
+      expect(await db.turns.turnsByOperationId(owner, 'op-missing')).toEqual([])
+      expect(await db.turns.turnsByOperationId(otherOwner, 'op-shared')).toEqual([])
+    } finally { await db.close() }
+  })
+
+  it('★ includeUnready：缺省只列已发布（侧栏口径），打开后未发布的也在列表里且 ready 列如实', async () => {
+    const { db } = await newFacade()
+    const scope = { busy: [], archived: [] }
+    const base = { offset: 0, limit: 30, q: '', state: '' }
+    try {
+      const published = conversationId(), reserved = conversationId()
+      await db.conversations.create(owner, published, 'req-listed')
+      await db.conversations.publish(owner, published)
+      await db.conversations.create(owner, reserved, 'req-reserved')
+      // 缺省 = 侧栏 / closedoff 页面口径：预留段不可见（"不能发消息、也不可见"）。
+      expect((await db.conversations.list(owner, base, scope)).items.map(item => item.id)).toEqual([published])
+      // 页面口径：blog 的"新建对话 → 用户打完第一条消息才发布"之间必须看得见它，否则刷新一次
+      // 那个对话就"消失"了（旧 SQLite 实现的页面列表不过滤 `ready`）。
+      const page = await db.conversations.list(owner, { ...base, includeUnready: true }, scope)
+      expect([...page.items.map(item => item.id)].sort()).toEqual([published, reserved].sort())
+      // `state` 分不出"真已发布"与"还在创建握手"（未发布的行也落 `else` 分支 ⇒ `'ready'`），
+      // 所以列表项另给 `ready` 列。少了它，页面会把未发布会话标成"可以发消息"。
+      const byId = new Map(page.items.map(item => [item.id, item]))
+      expect(byId.get(published)!.ready).toBe(true)
+      expect(byId.get(reserved)!.ready).toBe(false)
+      expect(byId.get(reserved)!.state).toBe('ready')
+    } finally { await db.close() }
+  })
+
+
   it('★ turnById 按行 id 读整行：字段逐一对上、createdAt 是 number、换实例仍读得回', async () => {
     const id = conversationId()
     const first = await newFacade()
@@ -652,7 +776,7 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
     } finally { await db.close() }
   })
 
-  it('★ turnsOf 读会话的全部轮次：含 `request_id = \'\'` 的等待行，按 created_at 升序，跨会话/跨 owner 不串', async () => {
+  it('★ turnsOf 读会话的全部轮次：含 `request_id = \'\'` 的等待行，按插入序 `seq` 升序，跨会话/跨 owner 不串', async () => {
     const { db } = await newFacade()
     try {
       const id = conversationId()
@@ -664,9 +788,7 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
       expect(await db.turns.turnsOf(owner, id)).toEqual([])
 
       await db.turns.claim(owner, id, 'req-1', 'h1', { status: 'first' })
-      await delay(5)
       await db.turns.claim(owner, id, 'req-2', 'h2', { status: 'second' })
-      await delay(5)
       // 等待行由 `setPendingQuestion` 落（`request_id = ''`）——它也必须出现在列表里。
       await db.turns.setPendingQuestion(owner, id, '采用哪一版？')
       // 另一个会话的一轮：不该串进来。
@@ -674,7 +796,7 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
 
       const rows = await db.turns.turnsOf(owner, id)
       expect(rows).toHaveLength(3)
-      // 升序：先认领的在前（`created_at` 是排序键，中间留了 5ms 保证不会同毫秒）。
+      // 升序：先认领的在前。这里**不再留间隔**——顺序由插入序 `seq` 定，与毫秒时间戳无关。
       expect(rows.map(row => row.requestId)).toEqual(['req-1', 'req-2', ''])
       expect(rows.map(row => row.payload.status)).toEqual(['first', 'second', undefined])
       // 等待行**必须**在列表里，且带得出"在等什么"：在这里悄悄滤掉 `request_id = ''`，会让
@@ -685,6 +807,45 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
       // 每个会话各自成列表：按 owner 过滤掉一条都不剩（不泄露别人的轮次）。
       expect((await db.turns.turnsOf(owner, sibling)).map(row => row.requestId)).toEqual(['req-other'])
       expect(await db.turns.turnsOf(otherOwner, id)).toEqual([])
+    } finally { await db.close() }
+  })
+
+  it('★ 插入序稳定：时间戳被压平后 `turnsOf` 的顺序 = 认领顺序（毫秒时间戳不是排序权威）', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      const claimed: string[] = []
+      for (let index = 0; index < 8; index += 1) {
+        const requestId = `req-seq-${index}`
+        expect(await db.turns.claim(owner, id, requestId, `h${index}`)).toBe('claimed')
+        claimed.push(requestId)
+      }
+      // 等待行也是插入序的一部分（它排在最后被认领的那一轮之后）。
+      await db.turns.setPendingQuestion(owner, id, '最后一问？')
+
+      // ⚠️ 夹具必须**把 `created_at` 压平成同一个值**。第一版没压平、靠"连续 8 次 `claim` 落在同一
+      // 毫秒"——那是假绿：真 PG 上一次 `claim` 是一次往返（实测这段循环 ~700ms，每次约 85ms），
+      // 8 行天然分布在 8 个毫秒里，`ORDER BY created_at, id` 照样给出插入序，变异测不出来。
+      // 压平之后顺序**只能**来自插入序：8 个元素恰好排成插入序的概率是 1/8!。
+      const flat = Date.now()
+      await admin.query(
+        'UPDATE dsh_turns SET created_at = $1 WHERE agent_id = $2 AND conversation_id = $3',
+        [flat, AGENT, id],
+      )
+
+      const rows = await db.turns.turnsOf(owner, id)
+      expect(rows.map(row => row.requestId)).toEqual([...claimed, ''])
+      // 夹具自证：9 行确实同毫秒——没有这一条，上面那条断言可能又是在"时间戳恰好递增"上假绿。
+      expect(rows.map(row => row.createdAt)).toEqual(new Array(rows.length).fill(flat))
+      // `seq` 由库生成（`GENERATED ALWAYS AS IDENTITY`）：读回来必须是 **number**。真实现里它是
+      // `BIGINT`，pg 驱动按 `int8` 读成**字符串**，不 `Number(...)` 就会 `'10' < '9'` ⇒ 排序退化成
+      // 字典序，而且在个位数阶段看不出任何异常。
+      expect(rows.every(row => typeof row.seq === 'number')).toBe(true)
+      const seqs = rows.map(row => row.seq)
+      // 严格递增且互不相同：这是"顺序真的来自库里的插入序，而不是 JS 里碰巧排对的"的证据。
+      expect(new Set(seqs).size).toBe(rows.length)
+      expect(seqs).toEqual([...seqs].sort((left, right) => left - right))
     } finally { await db.close() }
   })
 
@@ -804,6 +965,48 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
     } finally { await db.close() }
   })
 
+  it('★ turnResultsOf 按**会话**读结果：跨轮次合并、按全局插入序、别的会话与别人读不到', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      const sibling = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.conversations.create(owner, sibling, '')
+      await db.turns.claim(owner, id, 'req-one', 'hash-one')
+      await db.turns.claim(owner, id, 'req-two', 'hash-two')
+      await db.turns.claim(owner, sibling, 'req-sibling', 'hash-sibling')
+      const one = (await db.turns.turnId(owner, 'req-one'))!
+      const two = (await db.turns.turnId(owner, 'req-two'))!
+      const siblingTurn = (await db.turns.turnId(owner, 'req-sibling'))!
+      // 一轮都没落过结果时是空数组（"没有结果"是常态，不是异常）。
+      expect(await db.turns.turnResultsOf(owner, id)).toEqual([])
+
+      // ⚠️ 刻意**交错**写：先往第二轮写、再往第一轮写。这样"按全局 `seq`（插入序）"与
+      // "先按轮次分组、轮次内再按 `seq`"给出的顺序**不同** —— 不交错的话两种实现恰好给出同一个
+      // 顺序，判据就没有区分力（本批次已经栽过一次"夹具太松 ⇒ 变异不红"）。
+      await db.turns.appendTurnResult(owner, {
+        conversationId: id, turnId: two, operationId: 'op-two', payload: { kind: 'two-first' },
+      })
+      await db.turns.appendTurnResult(owner, {
+        conversationId: id, turnId: one, operationId: 'op-one', payload: { kind: 'one-second' },
+      })
+      await db.turns.appendTurnResult(owner, {
+        conversationId: sibling, turnId: siblingTurn, operationId: 'op-sibling', payload: { kind: 'sibling' },
+      })
+
+      const rows = await db.turns.turnResultsOf(owner, id)
+      // 跨轮的判据：J7「跨轮候选读取」问的就是"这个会话还有没有未采用的候选稿"，两轮的结果
+      // 必须**一起**回来（这正是它相对 `turnResults(turnId)` 的意义，也是不做 N+1 的理由）。
+      expect(rows.map(row => row.payload.kind)).toEqual(['two-first', 'one-second'])
+      expect(rows.map(row => row.turnId)).toEqual([two, one])
+      expect(typeof rows[0]!.seq).toBe('number')
+      expect(rows[1]!.seq).toBeGreaterThan(rows[0]!.seq)
+      // 别的会话 / 别人的结果都不能串进来（按 id 与 owner 两道过滤）。
+      expect((await db.turns.turnResultsOf(owner, sibling)).map(row => row.payload.kind)).toEqual(['sibling'])
+      expect(await db.turns.turnResultsOf(otherOwner, id)).toEqual([])
+    } finally { await db.close() }
+  })
+
   it('结果层只认自己的 owner：别人的轮次读不到，也存在性也不泄露', async () => {
     const { db } = await newFacade()
     try {
@@ -861,9 +1064,8 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
       await db.conversations.create(owner, id, '')
       await db.turns.setPendingQuestion(owner, id, '第一问？')
       await db.turns.setPendingQuestion(owner, id, '第二问？')
-      // ⚠️ 这里**不能**只断言 `pendingQuestion` 答"第二问？"：两次写入几乎必然落在同一毫秒，
-      // 而旧实现靠 `ORDER BY created_at DESC, id DESC` 猜——同毫秒时退化成按 **UUID** 排，
-      // 答回来的是任意一条（断言会随机红）。判据要放在**结构与时间无关**的那一面：载体唯一。
+      // ⚠️ 这里**不能**只断言 `pendingQuestion` 答"第二问？"：它的"最新"按 `seq` 兜底，问不出一条
+      // 关于不变量的证据。判据要放在**结构那一面**：带 `question` 的行只有一条（不靠时间戳运气）。
       const carriers = await admin.query<{ total: string | number; question: string }>(
         `SELECT count(*) AS total, max(payload->>'question') AS question FROM dsh_turns
           WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND conversation_id = $4

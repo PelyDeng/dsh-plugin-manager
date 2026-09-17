@@ -11,6 +11,9 @@ import {BlogChat} from '../src/chat.ts'
 import {BlogApplication,PendingOperationsMirror} from '../src/application.mjs'
 import {projectChat} from '../src/chat-history.mjs'
 import {createBlogParticipant} from '../src/participant.ts'
+// 索引库切 PG 之后夹具换成运行时的内存端口（见 `index-fixture.mjs`）：`ChatStore` 不再自己开库，
+// 所有读写都过端口（异步）。
+import {memoryIndex,ownerActor} from './index-fixture.mjs'
 
 const actor={namespace:'user',userId:'writer',sessionId:'login'},owner='user:writer'
 const tick=()=>new Promise(r=>setTimeout(r,10))
@@ -48,7 +51,7 @@ test('saved attempts display authoritative original blocks with a stable partial
 async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=false}={}){
   const root=new Context(),registry=root.plugin(AgentRegistry);await registry
   const runtimeJobs=root.plugin(LocalJobRegistry);await runtimeJobs
-  const store=new BlogStore(':memory:');await store.init();const pending=new PendingOperationsMirror(),index=new ChatStore(':memory:',()=>pending.ids()),handles=[],saved=new Map(),headers=new Map(),disposers=[],tools=new Map(),feedbackCalls=[]
+  const store=new BlogStore(':memory:');await store.init();const pending=new PendingOperationsMirror(),index=new ChatStore(memoryIndex(),()=>pending.ids()),handles=[],saved=new Map(),headers=new Map(),disposers=[],tools=new Map(),feedbackCalls=[]
   let revoked=false,releaseOpen,releaseFlush,flushCount=0,nextFlushGate;const releaseGates=[]
   const access={assert(a){assert.ok(!revoked&&a.sessionId==='login','revoked')}}
   const openGate=delayedOpen?new Promise(r=>{releaseOpen=r}):Promise.resolve()
@@ -83,7 +86,7 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
   const jobs=new BlogJobs(ctx,access,store,blog,attachments,3000),app=new BlogApplication(store,access,blog,null,null,jobs,attachments,pending)
   const chat=new BlogChat(ctx,access,store,index,attachments,jobs,app,sdk,3000)
   t.after(async()=>{releaseOpen?.();releaseFlush?.();for(const release of releaseGates)release();await chat.close();await jobs.close();for(const dispose of disposers.reverse())await dispose?.();store.close();await runtimeJobs.dispose();await registry.dispose()})
-  const conversation=chat.create(actor,'conversation-123')
+  const conversation=await chat.create(actor,'conversation-123')
   return{root,store,index,chat,handles,tools,blog,feedbackCalls,conversation,releaseOpen,releaseFlush,
     holdModel(method){const target=method==='resolveCallConfig'?ctx.llm:ctx.sessionController,original=target[method],entered=Promise.withResolvers(),gate=Promise.withResolvers();releaseGates.push(gate.resolve);target[method]=async(...args)=>{entered.resolve();await gate.promise;return original.apply(target,args)};return{entered:entered.promise,release:gate.resolve}},
     holdNextFlush(){let release;nextFlushGate=new Promise(r=>{release=r});releaseGates.push(release);return release},revoke(){revoked=true},send:(extra={})=>chat.send(actor,{conversationId:conversation.id,requestId:'request-123',text:'看看博客最近情况',research:true,...extra})}
@@ -98,14 +101,14 @@ test('official first-prompt titles update after the answer closes and never over
   assert.equal(f.chat.active.size,0)
   const data={title:'博客近况与文章整理',messageSeqs:[0],source:{kind:'provider',provider:'first-prompt-llm'}}
   h.emit('session/title',data)
-  assert.equal(f.chat.list(actor,0,'博客近况').items[0].title,data.title)
-  f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'我的博客备忘'})
+  assert.equal((await f.chat.list(actor,0,'博客近况')).items[0].title,data.title)
+  await f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'我的博客备忘'})
   h.emit('session/title',{...data,title:'迟到的自动标题'})
-  assert.equal(f.index.get(owner,f.conversation.id).title,'我的博客备忘')
+  assert.equal((await f.index.get(owner,f.conversation.id)).title,'我的博客备忘')
   h.emit('session/title',{title:'宿主再次手动更名',messageSeqs:[],source:{kind:'user'}})
-  assert.equal(f.index.get(owner,f.conversation.id).title,'宿主再次手动更名')
+  assert.equal((await f.index.get(owner,f.conversation.id)).title,'宿主再次手动更名')
   f.root.emit('session/event',{id:'another-plugin-session'},{type:'session/title',data})
-  assert.equal(f.chat.list(actor,0,'').items.length,1)
+  assert.equal((await f.chat.list(actor,0,'')).items.length,1)
 })
 
 test('title broadcasts happen exactly when the index accepts the write (M21 regression guard)',async t=>{
@@ -122,19 +125,31 @@ test('title broadcasts happen exactly when the index accepts the write (M21 regr
   const data={title:'广播次数用例标题',messageSeqs:[0],source:{kind:'provider',provider:'first-prompt-llm'}}
   // ① 守卫接受 ⇒ 恰好广播一次。
   h.emit('session/title',data)
+  // ⚠️ 广播现在晚**一个微任务**：订阅回调里的归属校验要 `await`（索引已切 PG），见
+  // `BlogChat.subscribe` 的注释。多等一拍不改变被断言的东西（次数），少了它这条会以"0 次"红。
+  await tick()
   assert.equal(changed,1,'标题写入被接受时必须广播一次')
   // ② 无关会话：绝不广播到本会话。
   f.root.emit('session/event',{id:'another-plugin-session'},{type:'session/title',data})
+  await tick()
   assert.equal(changed,1,'无关会话的标题不该广播到本会话')
   // ③ **改坏就会红的那一条**：手动标题之后，迟到的自动标题会被索引的守卫挡住（`changes=0`），
   //    所以**不该**广播。把广播判据改成恒真（例如让 `syncTitle` 返回 true 或一个 Promise），
   //    这里会变成 1 ⇒ 红。
-  f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'手动名'})
+  await f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'手动名'})
+  // ⚠️ 重置计数**之前**必须先把 mutate 自己那次广播落地：广播回调现在晚一个微任务
+  //（`subscribe` 里的归属校验要 await），而"重置"与它同在一轮微任务里 ⇒ 少等这一拍，
+  // 残留的 1 会被算进下面那条"守卫挡住 ⇒ 不广播"的断言（实测就是这样红的）。
+  await tick()
   changed=0
   h.emit('session/title',{...data,title:'迟到的自动标题'})
+  // ⚠️ 这一拍**不能省**：少了它，`changed` 恒为 0，而"0"在这里既是期望值也是"回调还没跑"，
+  // 于是这条守卫断言变成**假绿**（改坏实现也照样过）。广播回调现在晚一个微任务（见 `subscribe`）。
+  await tick()
   assert.equal(changed,0,'被守卫挡住的标题不该广播')
   // ④ 可信用户改名（source.kind==='user'）能改写入 ⇒ 仍要广播。
   h.emit('session/title',{title:'宿主再次手动更名',messageSeqs:[],source:{kind:'user'}})
+  await tick()
   assert.equal(changed,1,'可信用户改名被接受时必须广播')
   unsubscribe()
 })
@@ -147,11 +162,11 @@ test('sending after model validation preserves titles changed while validation w
     const sending=f.send({requestId:'title-after-validation',modelSelection:{provider:'glm-fixture',model:'vision'}})
     await gate.entered
     const title=source==='manual'?'等待选模时手动保存的标题':'迟到的官方博客标题'
-    if(source==='manual')f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title})
+    if(source==='manual')await f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title})
     else f.handles[0].emit('session/title',{title,messageSeqs:[0],source:{kind:'provider',provider:'first-prompt-llm'}})
-    assert.equal(f.chat.list(actor,0,'').items[0].title,title)
+    assert.equal((await f.chat.list(actor,0,'')).items[0].title,title)
     gate.release();await sending;await tick()
-    assert.equal(f.chat.list(actor,0,'').items[0].title,title)
+    assert.equal((await f.chat.list(actor,0,'')).items[0].title,title)
   })
 })
 function complete(handle,id='answer-1'){
@@ -165,11 +180,11 @@ test('management previews without resuming and archives only owner sessions afte
   const userEvent=f.handles[0].events.find(event=>event.type==='user/message')
   userEvent.data={...userEvent.data,content:[{type:'text',text:'MODEL-ONLY-FROZEN-ATTACHMENT'}]}
   const p=f.chat.provider,id=f.conversation.id,query={offset:0,limit:30,q:'',state:''}
-  const original=structuredClone(f.handles[0].events),before=f.index.record(owner,id),handles=f.handles.length
+  const original=structuredClone(f.handles[0].events),before=f.index.record(ownerActor(owner),id),handles=f.handles.length
   const preview=await p.preview(actor,id)
   assert.ok(preview.messages.some(m=>m.text==='看看博客最近情况'))
   assert.ok(!JSON.stringify(preview).includes('MODEL-ONLY-FROZEN-ATTACHMENT'))
-  assert.deepEqual(f.index.record(owner,id),before);assert.equal(f.handles.length,handles)
+  assert.deepEqual(f.index.record(ownerActor(owner),id),before);assert.equal(f.handles.length,handles)
   await assert.rejects(p.preview({...actor,userId:'another'},id),e=>e.status===404)
   await f.chat.app.operationInsert({id:'pending',owner,draftId:'draft',revision:1,status:'prepared',expiresAt:Date.now()+60000,chat:{conversationId:id}})
   assert.equal((await p.list(actor,query)).items[0].canRemove,false)
@@ -239,7 +254,7 @@ test('confirmation rejects replaced proposals, another conversation, expired car
   const prepared=await f.tools.get('blog_publish_draft').execute({draftId:draft.id,proposalId:proposal.id},{agent:h.agent})
   complete(h);await tick()
   const card=(await f.chat.history(actor,f.conversation.id)).operations[0],request={conversationId:f.conversation.id,id:prepared.id,nonce:card.nonce,operation:'confirm'}
-  const other=f.chat.create(actor,'another-conversation')
+  const other=await f.chat.create(actor,'another-conversation')
   await assert.rejects(f.chat.operationAction(actor,{...request,conversationId:other.id}),/不属于/)
   await f.store.propose(owner,draft.id,1,{text:'新的候选'},[])
   await assert.rejects(f.chat.operationAction(actor,request),/候选稿已变化/)
@@ -285,16 +300,16 @@ test('cancelled cards cannot execute and unsupported bridges never prepare delet
 })
 
 test('history actions refuse active and finishing conversations before changing any selected row',async t=>{
-  const f=await fixture(t),idle=f.chat.create(actor,'history-idle')
+  const f=await fixture(t),idle=await f.chat.create(actor,'history-idle')
   await f.send();await tick()
-  for(const operation of ['rename','pin'])assert.throws(()=>f.chat.mutate(actor,{operation,ids:[f.conversation.id],title:'不应改名',pinned:true}),e=>e.status===409)
+  for(const operation of ['rename','pin'])await assert.rejects(f.chat.mutate(actor,{operation,ids:[f.conversation.id],title:'不应改名',pinned:true}),e=>e.status===409)
   await assert.rejects(f.chat.mutate(actor,{operation:'delete',ids:[idle.id,f.conversation.id]}),e=>e.status===409)
-  assert.equal(f.index.get(owner,idle.id).deletedAt,null)
+  assert.equal((await f.index.get(owner,idle.id)).deletedAt,null)
   const release=f.holdNextFlush(),stopping=f.chat.stop(actor,f.conversation.id);await tick()
   await assert.rejects(f.chat.mutate(actor,{operation:'delete',ids:[f.conversation.id]}),e=>e.status===409)
   release();await stopping
-  assert.deepEqual(f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'保留的历史'}),{ok:true})
-  assert.equal(f.chat.list(actor,0,'保留的历史').items[0].id,f.conversation.id)
+  assert.deepEqual(await f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'保留的历史'}),{ok:true})
+  assert.equal((await f.chat.list(actor,0,'保留的历史')).items[0].id,f.conversation.id)
 })
 
 test('fork source is protected during historical reads and both source and child remain protected until durable',async t=>{
@@ -305,9 +320,9 @@ test('fork source is protected during historical reads and both source and child
   persistence.open=async(...args)=>{await readGate;return open(...args)}
   const pending=f.chat.fork(actor,{conversationId:f.conversation.id,messageId:'answer-1',requestId:'history-fork'})
   await tick()
-  assert.throws(()=>f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'分支期间'}),e=>e.status===409)
+  await assert.rejects(f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'分支期间'}),e=>e.status===409)
   const releaseFlush=f.holdNextFlush();releaseRead();await tick()
-  const child=f.chat.list(actor).items.find(c=>c.id!==f.conversation.id)
+  const child=(await f.chat.list(actor)).items.find(c=>c.id!==f.conversation.id)
   assert.ok(child)
   for(const id of [f.conversation.id,child.id])await assert.rejects(f.chat.mutate(actor,{operation:'delete',ids:[id]}),e=>e.status===409)
   releaseFlush();await pending
@@ -317,11 +332,11 @@ test('fork source is protected during historical reads and both source and child
   await f.chat.mutate(actor,{operation:'delete',ids:[f.conversation.id]})
   assert.equal(ended,1);assert.equal(changed,0);unsubscribe()
   await assert.rejects(f.chat.history(actor,f.conversation.id),e=>e.status===404)
-  assert.throws(()=>f.chat.create(actor,'conversation-123'),e=>e.status===404)
+  await assert.rejects(f.chat.create(actor,'conversation-123'),e=>e.status===404)
   assert.deepEqual(f.handles[0].events,original)
   assert.equal((await f.chat.history(actor,child.id)).messages.at(-1).id,'answer-1')
   await f.chat.mutate(actor,{operation:'delete',ids:[child.id]})
-  assert.throws(()=>f.chat.create(actor,'history-fork'),e=>e.status===404)
+  await assert.rejects(f.chat.create(actor,'history-fork'),e=>e.status===404)
 })
 
 test('chat search tools preserve structured dates and return lossless imported draft references',async t=>{
@@ -370,7 +385,7 @@ test('article tools preserve explicit false and omit unavailable optional values
 test('concurrent conversations sharing an import cannot replace each others candidates',async t=>{
   const f=await fixture(t)
   f.blog.get=async()=>({published:{cid:338,title:'原文',text:'正文',slug:'338',format:'markdown',tags:[],categories:[]},savedDraft:null,version:'v'})
-  const second=f.chat.create(actor,'conversation-second')
+  const second=await f.chat.create(actor,'conversation-second')
   await f.send();await f.send({conversationId:second.id,requestId:'request-second'});await tick()
   const select=f.tools.get('blog_select_draft'),propose=f.tools.get('blog_propose'),args={cid:338,variant:'published'}
   const a=await select.execute(args,{agent:f.handles[0].agent}),b=await select.execute(args,{agent:f.handles[1].agent})
@@ -414,7 +429,7 @@ test('new draft and retry share one logical article; manual changes reject stale
   await f.send({requestId:'request-retry',retryFrom:request.id,text:'重新给出候选'});await tick()
   const next=await f.tools.get('blog_select_draft').execute({newArticle:true},{agent:f.handles[1].agent})
   assert.equal(next.draftId,first.draftId);assert.equal(next.text,'手写内容');assert.equal((await f.store.list(owner)).length,1)
-  const cards=f.index.results(owner,f.conversation.id);assert.equal(cards[0].proposal.fields.text,'第一版')
+  const cards=(await f.index.results(owner,f.conversation.id));assert.equal(cards[0].proposal.fields.text,'第一版')
 })
 
 test('feedback checks owner and completed message before the official service; branch uses a closed prefix',async t=>{
@@ -442,7 +457,7 @@ test('stop during Agent creation waits for that handle and does not release the 
   await assert.rejects(f.send({requestId:'request-456'}),/对话|上一轮/)
   f.releaseOpen();await stopping;assert.equal(f.handles[0].disposed,true);assert.equal(f.handles[0].message,undefined)
   assert.equal(f.chat.active.size,0)
-  assert.equal(f.index.get(owner,f.conversation.id).ready,true)
+  assert.equal((await f.index.get(owner,f.conversation.id)).ready,true)
   await f.send({requestId:'request-after-stop'});await tick();assert.equal(f.handles[1].options.resumeSessionId,f.conversation.id)
   await f.chat.settleAccepted(actor,f.conversation.id,original.id)
   assert.equal(f.chat.active.size,1);assert.equal(f.handles[1].cancelled,false);assert.equal(f.handles[1].disposed,false)
@@ -464,7 +479,7 @@ test('participant revocation waits for original Agent creation and durability be
   f.releaseOpen();await tick()
   assert.equal(settled,false);assert.equal(f.handles[0].disposed,false);assert.equal(f.handles[0].message,undefined)
   f.releaseFlush();await rejected
-  assert.equal(f.chat.active.size,0);assert.equal(f.index.request(owner,b.request.id).status,'interrupted')
+  assert.equal(f.chat.active.size,0);assert.equal((await f.index.request(owner,b.request.id)).status,'interrupted')
   assert.equal(f.handles[0].disposed,true);assert.equal(f.chat.listeners.size,0)
 })
 
@@ -476,17 +491,17 @@ test('stopping during first durability checkpoint never follows up or registers 
 
 test('missing durability participation fails the turn before any model request',async t=>{
   const f=await fixture(t,{noPersistence:true}),request=await f.send();await tick()
-  assert.equal(f.index.request(owner,request.id).status,'failed');assert.equal(f.handles[0].message,undefined)
-  assert.equal(f.index.get(owner,f.conversation.id).ready,false)
+  assert.equal((await f.index.request(owner,request.id)).status,'failed');assert.equal(f.handles[0].message,undefined)
+  assert.equal((await f.index.get(owner,f.conversation.id)).ready,false)
 })
 
 test('an unpublished durable session is recovered by lifecycle, while a replaced lifecycle is rejected',async t=>{
   const f=await fixture(t);await f.send();await tick();complete(f.handles[0]);await tick()
-  f.index.save(owner,f.conversation.id,{ready:false})
+  await f.index.save(owner,f.conversation.id,{ready:false})
   const history=await f.chat.history(actor,f.conversation.id);assert.equal(history.messages.at(-1).id,'answer-1')
   await f.send({requestId:'request-resume'});await tick();assert.equal(f.handles[1].options.resumeSessionId,f.conversation.id)
   await f.chat.stop(actor,f.conversation.id)
-  f.index.save(owner,f.conversation.id,{ready:false,sessionCreatedAt:1})
+  await f.index.save(owner,f.conversation.id,{ready:false,sessionCreatedAt:1})
   await assert.rejects(f.chat.history(actor,f.conversation.id),/生命周期/)
 })
 
@@ -513,7 +528,7 @@ test('remote import is deduplicated across retries, rejects oversize before writ
 test('native draft receipt survives failed logical binding and retry reuses the same article',async t=>{
   const f=await fixture(t);await f.send();await tick()
   const update=f.index.updateRequest.bind(f.index);let fail=true
-  f.index.updateRequest=(id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected binding write failure')}return update(id,patch)}
+  f.index.updateRequest=(o,id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected binding write failure')}return update(o,id,patch)}
   const execute=()=>f.tools.get('blog_select_draft').execute({newArticle:true},{agent:f.handles[0].agent})
   await assert.rejects(execute(),/injected/);assert.equal((await f.store.list(owner)).length,1);assert.ok((await f.store.get(owner,(await f.store.list(owner))[0].id)).blogNative)
   const selected=await execute();assert.ok(selected.draftId);assert.equal((await f.store.list(owner)).length,1)
@@ -551,7 +566,7 @@ test('new text chats follow the framework default while reopening and branching 
   await tick();assert.equal(f.handles[1].options.agentOptions.model,'test');complete(f.handles[1],'old-answer');await tick()
   await reopened.fork(actor,{conversationId:f.conversation.id,messageId:'old-answer',requestId:'model-branch'})
   assert.equal(f.handles[2].options.agentOptions.model,'test')
-  const fresh=reopened.create(actor,'new-model-conversation')
+  const fresh=await reopened.create(actor,'new-model-conversation')
   await reopened.send(actor,{conversationId:fresh.id,requestId:'fresh-default-model',text:'新对话',research:false})
   await tick();assert.equal(f.handles[3].options.agentOptions.model,'new-model');complete(f.handles[3],'new-answer');await tick()
 })
@@ -559,10 +574,10 @@ test('new text chats follow the framework default while reopening and branching 
 test('history waits for a pending fork checkpoint instead of publishing ready from stat',async t=>{
   const f=await fixture(t);await f.send();await tick();complete(f.handles[0]);await tick()
   const release=f.holdNextFlush(),fork=f.chat.fork(actor,{conversationId:f.conversation.id,messageId:'answer-1',requestId:'fork-delayed'})
-  await tick();const id=String(f.handles[1].agent.id);assert.equal(f.index.get(owner,id).ready,false)
+  await tick();const id=String(f.handles[1].agent.id);assert.equal((await f.index.get(owner,id)).ready,false)
   let read=false;const history=f.chat.history(actor,id).then(result=>{read=true;return result})
-  await tick();assert.equal(read,false);assert.equal(f.index.get(owner,id).ready,false)
-  release();await fork;assert.equal((await history).messages.at(-1).id,'answer-1');assert.equal(f.index.get(owner,id).ready,true)
+  await tick();assert.equal(read,false);assert.equal((await f.index.get(owner,id)).ready,false)
+  release();await fork;assert.equal((await history).messages.at(-1).id,'answer-1');assert.equal((await f.index.get(owner,id)).ready,true)
 })
 
 test('closing aborts pending fork model lookup and cannot create an Agent after it resolves',async t=>{
@@ -583,8 +598,8 @@ test('closing aborts pending fork model lookup and cannot create an Agent after 
   release();await Promise.all([closing,rejected])
   assert.equal(f.handles.length,1)
   assert.equal(chat.forks.size,0)
-  const branch=f.index.list(owner,0).items.find(c=>c.id!==f.conversation.id)
-  assert.equal(f.index.get(owner,branch.id).ready,false)
+  const branch=(await f.index.list(owner,0)).items.find(c=>c.id!==f.conversation.id)
+  assert.equal((await f.index.get(owner,branch.id)).ready,false)
 })
 
 
@@ -593,7 +608,7 @@ test('unsupported image model blocks submission before request creation and pres
   const capability=await f.chat.imageCapability(actor,f.conversation.id)
   assert.equal(capability.available,false);assert.match(capability.message,/未声明支持图片/)
   await assert.rejects(f.send(),/未声明支持图片/)
-  assert.equal(f.handles.length,0);assert.equal(f.chat.requests(owner,f.conversation.id).length,0)
+  assert.equal(f.handles.length,0);assert.equal((await f.chat.requests(owner,f.conversation.id)).length,0)
   f.chat.jobs.models.vision={provider:'vision-provider',model:'vision'}
   f.chat.ctx.llm.resolveModelInfo=async(p,m)=>({inputModalities:m==='vision'?['text','image']:['text']})
   assert.equal((await f.chat.imageCapability(actor,f.conversation.id)).available,false)
@@ -649,13 +664,13 @@ test('removed defaults and restored historical models fail before Agent creation
   const f=await fixture(t)
   f.chat.ctx.agentDefaultModel.currentSelection=()=>({provider:'test',model:'removed'})
   const invalid=await f.send();await tick()
-  assert.equal(f.handles.length,0);assert.match(f.index.request(owner,invalid.id).message,/不在当前目录/)
+  assert.equal(f.handles.length,0);assert.match((await f.index.request(owner,invalid.id)).message,/不在当前目录/)
   f.chat.ctx.agentDefaultModel.currentSelection=()=>({provider:'test',model:'test'})
   await f.send({requestId:'valid-before-removal'});await tick();complete(f.handles[0]);await tick()
   f.chat.ctx.sessionController.modelCatalog=async()=>({groups:[{id:'glm-fixture',name:'Vision',models:[{id:'vision',name:'Vision'}]}],failures:[]})
   const current={provider:'glm-fixture',model:'vision'};f.chat.ctx.agentDefaultModel.currentSelection=()=>current
   const restored=await f.send({requestId:'removed-history'});await tick()
-  assert.equal(f.handles.length,1);assert.match(f.index.request(owner,restored.id).message,/不在当前目录/)
+  assert.equal(f.handles.length,1);assert.match((await f.index.request(owner,restored.id)).message,/不在当前目录/)
   await assert.rejects(f.chat.fork(actor,{conversationId:f.conversation.id,messageId:'answer-1',requestId:'removed-history-fork'}),/不在当前目录/)
   assert.equal(f.handles.length,1);assert.deepEqual(f.chat.ctx.agentDefaultModel.currentSelection(),current)
 });
@@ -663,7 +678,7 @@ test('removed defaults and restored historical models fail before Agent creation
 for(const method of ['modelCatalog','resolveCallConfig'])test(`revocation during ${method} prevents an implicit Agent start`,async t=>{
   const f=await fixture(t),gate=f.holdModel(method),sent=await f.send(),b=f.chat.active.get(f.conversation.id)
   await gate.entered;f.revoke();gate.release();await b.runPromise
-  assert.equal(f.handles.length,0);assert.equal(f.index.request(owner,sent.id).status,'failed')
+  assert.equal(f.handles.length,0);assert.equal((await f.index.request(owner,sent.id)).status,'failed')
   assert.deepEqual(f.chat.ctx.agentDefaultModel.currentSelection(),{provider:'test',model:'test'})
 });
 
@@ -760,12 +775,12 @@ test('binding two-step after the split: a failed index write retries onto the sa
   complete(f.handles.at(-1),'binding-a1');await tick()
   // 新一轮操作：PG 侧建稿成功、索引侧 updateRequest 失败（注入）。
   const update=f.index.updateRequest.bind(f.index);let fail=true
-  f.index.updateRequest=(id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected index failure')}return update(id,patch)}
+  f.index.updateRequest=(o,id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected index failure')}return update(o,id,patch)}
   await assert.rejects(select('binding-retry'),/injected index failure/)
   await tick();complete(f.handles.at(-1),'binding-a2');await tick()
   // 重试（远端内容未变）：cid 幂等去重，复用同一草稿，不产生第二份。
   fail=true
-  f.index.updateRequest=(id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected index failure again')}return update(id,patch)}
+  f.index.updateRequest=(o,id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected index failure again')}return update(o,id,patch)}
   await assert.rejects(select('binding-retry-2'),/injected index failure again/)
   await tick();complete(f.handles.at(-1),'binding-a3');await tick()
   const recovered=await select('binding-retry-3')
@@ -782,7 +797,7 @@ test('binding retry with drifted remote content keeps the current dedup semantic
   const first=await select('drift-first')
   complete(f.handles.at(-1),'drift-a1');await tick()
   const update=f.index.updateRequest.bind(f.index);let fail=true
-  f.index.updateRequest=(id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected drift failure')}return update(id,patch)}
+  f.index.updateRequest=(o,id,patch)=>{if(patch.draftId&&fail){fail=false;throw new Error('injected drift failure')}return update(o,id,patch)}
   // 绑定失败期间远端内容漂移：重试导入时 sameBlogContent 不再匹配，按现行语义生成第二份副本
   //（方案 §2.1 声明的残余窗口，保持现状不加守卫）。
   remote={published:{...source,text:'远端已修改'},version:'v2'}
@@ -815,7 +830,7 @@ test('persona keeps the tag capability and the bridge field name the model was t
 test('the first automatic title is cut from the trimmed text, not the raw input',async t=>{
   const f=await fixture(t)
   await f.send({requestId:'title-trim',text:'  你好  '});await tick()
-  assert.equal(f.index.get(owner,f.conversation.id).title,'你好')
+  assert.equal((await f.index.get(owner,f.conversation.id)).title,'你好')
 })
 
 test('delete refuses a non-array ids instead of splitting it into single characters',async t=>{
@@ -829,5 +844,5 @@ test('delete refuses a non-array ids instead of splitting it into single charact
   // 先做浅拷贝会把「400 请选择 1–100 条不同的有效会话」静默降级成逐字符查找后的 404/409。
   assert.equal(error?.status,400)
   assert.match(String(error?.message),/请选择 1–100 条不同的有效会话/)
-  assert.equal(f.chat.list(actor,0,'').items.length,1,'非法入参不得移除任何会话')
+  assert.equal((await f.chat.list(actor,0,'')).items.length,1,'非法入参不得移除任何会话')
 })

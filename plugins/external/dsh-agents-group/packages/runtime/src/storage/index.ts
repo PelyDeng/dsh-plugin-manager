@@ -239,6 +239,17 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
 
       conversationOf: (owner, conversationId) => pg.conversations.conversationOf(owner, conversationId),
 
+      /**
+       * 单条业务读：走 PG，**不碰本地镜像**。
+       *
+       * 刻意不写镜像：这是**读**路径，而 `mirrorUpsert` 会覆盖围栏状态（它只在启动收敛时带
+       * `keepPending`）。让一次"读会话详情"有机会把本地仍是 `pending` 的围栏抹成 PG 里的空串，
+       * 就是"围栏失效而宿主可能已经归档"那个幽灵会话缺陷——读路径不该有这种副作用。
+       * 镜像的更新点保持为：`create` / `publish` / `patchPayload` / `syncTitle` / `touch` / `pin`
+       * / `mark` 与启动收敛。
+       */
+      detail: (owner, conversationId) => pg.conversations.detail(owner, conversationId),
+
       create: async (owner, conversationId, requestId, initial) => {
         const record = await pg.conversations.create(owner, conversationId, requestId, initial)
         // 预留段也要进镜像：`record` 是同步读，它得能回答"这个会话存在"。
@@ -333,6 +344,9 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
 
       // —— 三个同步面（kit 契约的硬要求）——
       record: (actor, conversationId) => local.record(actor, conversationId),
+      // 无归属判定的镜像读：官方标题事件是同步回调、只带会话 id，而"要不要广播 changed"必须
+      // 同步判定（详见 `ConversationPort.fenceOf` 的说明）。
+      fenceOf: conversationId => local.fenceOf(conversationId),
       /**
        * ⚠️ `mark` 的**同步契约**必须保持：kit 的 `conversationRemover` 在 `:141/:149` 同步调用它，
        * 返回 `Promise` 会让那边的分支判定失效（`ports.ts` 顶上写了这条）。

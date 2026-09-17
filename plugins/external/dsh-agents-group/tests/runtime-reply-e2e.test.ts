@@ -141,6 +141,8 @@ function runtimeHost(definition: AgentDefinition, questions = new Map<string, st
     // 会把"线接到了这里"伪装成成功（假绿）。真实覆盖在 `storage-contract.test.ts`（真 PG）。
     turnById: async () => { throw new Error('本文件的替身不实现 turnById') },
     turnsOf: async () => { throw new Error('本文件的替身不实现 turnsOf') },
+    turnResultsOf: async () => { throw new Error('本文件的替身不实现 turnResultsOf') },
+    turnsByOperationId: async () => { throw new Error('本文件的替身不实现 turnsByOperationId') },
     patchTurnPayload: async () => { throw new Error('本文件的替身不实现 patchTurnPayload') },
     pendingQuestion: async (owner, conversationId) => questions.get(`${owner.namespace}:${owner.userId}:${conversationId}`),
     setPendingQuestion: async (owner, conversationId, question) => {

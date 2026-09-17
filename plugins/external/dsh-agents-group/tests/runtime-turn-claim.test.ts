@@ -155,6 +155,8 @@ function host(options: HostOptions = {}) {
    */
   const turnRows = new Map<string, TurnRecord>()
   let resultSeq = 0
+  /** 轮次**行**的插入序。真实现里是库生成的 `IDENTITY`（`dsh_turns.seq`），替身照样单调递增。 */
+  let turnSeq = 0
   const appendRow = (turnId: string, payload: Record<string, unknown>): string => {
     resultSeq += 1
     const id = `res-${resultSeq}`
@@ -169,12 +171,14 @@ function host(options: HostOptions = {}) {
       const verdict = options.verdict ?? 'claimed'
       if (verdict === 'claimed') {
         turnIds.set(requestId, `turn-${requestId}`)
+        turnSeq += 1
         turnRows.set(`turn-${requestId}`, {
           id: `turn-${requestId}`,
           conversationId,
           requestId,
           inputHash,
           status: 'claimed',
+          seq: turnSeq,
           createdAt: 1000 + turnRows.size,
           payload: {},
         })
@@ -206,6 +210,21 @@ function host(options: HostOptions = {}) {
     turnById: async (_owner, turnId) => turnRows.get(turnId),
     turnsOf: async (_owner, conversationId) =>
       [...turnRows.values()].filter(row => row.conversationId === conversationId),
+    // 按会话读结果：真实现靠 `dsh_turn_results.conversation_id` **一条查询**（不是先查轮次再逐轮查），
+    // 替身按同一个语义从"轮次行 → 结果"拼——先按会话收轮次 id，再筛结果。
+    turnResultsOf: async (_owner, conversationId) => {
+      const ids = new Set([...turnRows.values()]
+        .filter(row => row.conversationId === conversationId)
+        .map(row => row.id))
+      return calls.results.filter(row => ids.has(row.turnId))
+    },
+    // 按业务键（载荷里的 `operationId`）跨会话读轮次：替身按同一口径过滤并按插入序降序。
+    turnsByOperationId: async (_owner, operationId) => {
+      if (operationId === '') return []
+      return [...turnRows.values()]
+        .filter(row => row.payload.operationId === operationId)
+        .sort((left, right) => right.seq - left.seq)
+    },
     // 本文件的用例不写轮次载荷；真实现是"行不存在 ⇒ 404"，所以这里也**不静默成功**。
     patchTurnPayload: async (_owner, turnId) => {
       const row = turnRows.get(turnId)

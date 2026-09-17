@@ -26,15 +26,34 @@ export async function native(){
   const snapshots=await import(pathToFileURL(manager.resolve('@dsh-plugin-manager/plugin-manager/session-snapshot')))
   return{...cordis,persistence,session,feedback,formats,codecs,snapshots}
 }
+/**
+ * 读本地库里的**博客会话归属清单**。
+ *
+ * ⚠️ 索引库切 PostgreSQL 之后，会话行**不再写进 `blog.sqlite` 的 `conversations` 表**：那张表是
+ * 旧索引库留下的，只读留存（迁移前的行还在，但不再更新）。会话行的本地副本现在在运行时的
+ * **镜像表** `conversation_mirror` 里（`packages/runtime/src/storage/local.ts`：会话行 + 同步围栏
+ * 标记 + 持久 outbox 三张表）。
+ *
+ * ⚠️ **窗口如实登记**：镜像里是"**本实例启动收敛时**读到的全量行"加上"之后它自己写过的行"，
+ * 不是实时 PG。备份容器**网络禁用**（见 README），所以这是离线侧唯一能读到的会话归属来源。
+ * 判据是"每条会话的归属与生命周期",不是"和 PG 逐字节一致"。
+ *
+ * 归属与生命周期必须齐全才认：`owner`（两列拼回）、`requestId`、`createdAt`，以及
+ * `sessionCreatedAt` / `openingAt`+`openingUntil`（后两组在 `payload` 里，由业务写入）。
+ */
 export function conversations(database){
   const db=new DatabaseSync(database,{readOnly:true})
   try{
-    if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversations'").get())return new Map()
-    const rows=db.prepare('SELECT id,owner,data FROM conversations ORDER BY id LIMIT ?').all(MAX_SESSIONS+1)
+    if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='conversation_mirror'").get())return new Map()
+    const rows=db.prepare('SELECT id,owner_namespace,owner_id,payload FROM conversation_mirror ORDER BY id LIMIT ?').all(MAX_SESSIONS+1)
     assert.ok(rows.length<=MAX_SESSIONS,'too many blog sessions for one snapshot')
     return new Map(rows.map(row=>{
-      const data=JSON.parse(row.data)
-      assert.ok(ID.test(row.id)&&data.id===row.id&&data.owner===row.owner&&typeof row.owner==='string'&&row.owner.length>0&&typeof data.requestId==='string'&&Number.isSafeInteger(data.createdAt),'invalid blog session ownership')
+      const payload=JSON.parse(String(row.payload))
+      const owner=`${row.owner_namespace}:${row.owner_id}`
+      // 归属是**两列拼回来的**：`owner` 这个字符串形状是本适配器对外的口径（与旧 `conversations`
+      // 表那一列的取值逐字相同：`namespace:userId`）。
+      const data={...payload,id:row.id,owner}
+      assert.ok(ID.test(row.id)&&data.owner===owner&&typeof owner==='string'&&owner.length>0&&typeof data.requestId==='string'&&Number.isSafeInteger(data.createdAt),'invalid blog session ownership')
       return[row.id,data]
     }))
   }finally{db.close()}

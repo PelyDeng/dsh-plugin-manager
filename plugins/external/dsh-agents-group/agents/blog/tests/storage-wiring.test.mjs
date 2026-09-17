@@ -15,6 +15,8 @@ import { BlogStore } from '../src/store.mjs'
 import { ChatStore } from '../src/chat-store.ts'
 import { BlogApplication, PendingOperationsMirror } from '../src/application.mjs'
 import { BlogAttachments } from '../src/attachments.mjs'
+// 索引库切 PG 之后夹具换成运行时的内存端口（见 `index-fixture.mjs`）：`ChatStore` 不再自己开库。
+import { memoryIndex } from './index-fixture.mjs'
 
 const owner='user:mirror'
 
@@ -26,7 +28,7 @@ function dualScope(conversations,storage){
 test('pending mirror tracks write paths, concurrent flips and prepared expiry like the old direct query',async t=>{
   const store=new BlogStore(':memory:');await store.init();t.after(()=>store.close())
   const pending=new PendingOperationsMirror()
-  const index=new ChatStore(':memory:',()=>pending.ids());t.after(()=>index.close())
+  const index=new ChatStore(memoryIndex(),()=>pending.ids())
   const app=new BlogApplication(store,{assert(){}},{call:async()=>{throw new Error('unused')}},null,null,null,null,pending)
   const op=(id,status,conversationId,expiresAt)=>({id,owner,draftId:'draft-x',revision:1,status,...(conversationId?{chat:{conversationId}}:{}),...(expiresAt===undefined?{}:{expiresAt})})
   // 初始为空：没有任何待核对操作。
@@ -53,7 +55,7 @@ test('pending mirror restores once from storage on restart, including prepared n
   const directory=await mkdtemp(join(tmpdir(),'blog-mirror-'))
   const file=join(directory,'business.sqlite')
   const first=new BlogStore(file);await first.init()
-  const conversations=new ChatStore(join(directory,'index.sqlite'))
+  const conversations=new ChatStore(memoryIndex())
   try{
     const app=new BlogApplication(first,{assert(){}},{call:async()=>{throw new Error('unused')}},null,null,null,null,new PendingOperationsMirror())
     const op=(id,status,conversationId,expiresAt)=>({id,owner,draftId:'draft-y',revision:1,status,chat:{conversationId},expiresAt})
@@ -62,11 +64,16 @@ test('pending mirror restores once from storage on restart, including prepared n
     await app.operationInsert(op('p3','prepared','k3',Date.now()-1000))
     await app.operationInsert(op('p4','succeeded','k4',Date.now()+60000))
     assert.deepEqual([...(await first.pendingOperations())].sort(),['k1','k2'])
-  }finally{first.close();conversations.close()}
-  // “重启”：新开业务库与索引库，镜像从存储恢复一次后与直查一致。
+  }finally{first.close()}
+  // “重启”：新开业务库与索引侧实例，镜像从存储恢复一次后与直查一致。
+  //
+  // ⚠️ 索引侧这里用的是**另一个内存门面**，不是"重开同一个 SQLite 文件"：内存端口不持久
+  //（`storage/memory.ts` 文件头那张表写着）。本用例真正要验的是 `PendingOperationsMirror` 从
+  // **业务库**恢复一次之后与直查一致，索引侧只是"有一个 pendingSource 的持有者"。
   const second=new BlogStore(file);await second.init();t.after(()=>second.close())
-  const restoredIndex=new ChatStore(join(directory,'index.sqlite'));t.after(()=>restoredIndex.close())
+  const restoredIndex=new ChatStore(memoryIndex())
   const mirror=await new PendingOperationsMirror().restore(second)
+  // `pendingSource` 是 `ChatStore` 的私有字段，运行期可写（TS 的 `private`/`readonly` 不落到 JS）。
   restoredIndex.pendingSource=()=>mirror.ids()
   assert.deepEqual([...restoredIndex.pendingOperations()].sort(),['k1','k2'])
   assert.deepEqual([...(await second.pendingOperations())].sort(),['k1','k2'])
@@ -74,11 +81,11 @@ test('pending mirror restores once from storage on restart, including prepared n
 
 test('attachment scope keeps both draft-id and conversation-id paths with unchanged rejection wording',async t=>{
   const store=new BlogStore(':memory:');await store.init();t.after(()=>store.close())
-  const index=new ChatStore(':memory:',()=>[]);t.after(()=>index.close())
+  const index=new ChatStore(memoryIndex(),()=>[])
   const actor={namespace:'user',userId:'mirror',sessionId:'login'}
   const foreign={...actor,userId:'other'}
   const draft=await store.create(owner)
-  const conversation=index.create(owner,'scope-conversation')
+  const conversation=await index.create(owner,'scope-conversation')
   const effects=[],files=new Map()
   const provider={async saveFileStream({data,name}){const parts=[];for await(const chunk of data)parts.push(chunk);const b=Buffer.concat(parts);files.set(name,b);return{attachmentId:name,name,bytes:b.length}},async *readFileStream(ref){yield files.get(ref.name)}}
   const ctx={effect(fn){effects.push(fn())},on(){return()=>{}},get(name){return name==='attachments'?provider:undefined},attachments:provider}

@@ -78,18 +78,17 @@ describe('MemoryTurnStore（内存轮次端口）', () => {
     expect(await turns.turnStatus(otherOwner, 'req-t')).toBeUndefined()
   })
 
-  it('★ turnsOf 读会话的全部轮次：含 `request_id = \'\'` 的等待行，按 created_at 升序，跨会话/跨 owner 不串', async () => {
+  it('★ turnsOf 读会话的全部轮次：含 `request_id = \'\'` 的等待行，按插入序 `seq` 升序，跨会话/跨 owner 不串', async () => {
     const turns = store()
     expect(await turns.turnsOf(owner, 'c1')).toEqual([])
     await turns.claim(owner, 'c1', 'req-1', 'h1', { status: 'first' })
     await turns.claim(owner, 'c1', 'req-2', 'h2', { status: 'second' })
     await turns.claim(owner, 'c2', 'req-other', 'h3')
     await turns.setPendingQuestion(owner, 'c1', '采用哪一版？')
-    // `createdAt` 可能同毫秒（内存实现就是同一毫秒），所以按 `requestId` 的断言只钉"集合",
-    // 顺序断言单独用 `createdAt` 的非递减来钉（与真实现的"同毫秒退化成按 id 排"同一条口径）。
+    // 顺序由**插入序 `seq`** 定：内存实现里这几条必然落在同一毫秒，`createdAt` 排不出先后，
+    // 所以这里能直接钉住**完整顺序**（不是"集合对了就行"）。
     const rows = await turns.turnsOf(owner, 'c1')
-    expect(rows.map(row => row.requestId).sort()).toEqual(['', 'req-1', 'req-2'])
-    expect(rows.map(row => row.createdAt)).toEqual([...rows.map(row => row.createdAt)].sort((a, b) => a - b))
+    expect(rows.map(row => row.requestId)).toEqual(['req-1', 'req-2', ''])
     // 等待行**必须**在列表里，且带得出"在等什么"：在这里滤掉 `request_id = ''`，会让"这个会话卡在
     // 等用户回话"那条线**静默消失**（重启后协调侧直接报 `waiting_expired`）。
     const waiting = rows.filter(row => row.requestId === '')
@@ -97,6 +96,32 @@ describe('MemoryTurnStore（内存轮次端口）', () => {
     expect(waiting.map(row => row.status)).toEqual(['waiting'])
     expect((await turns.turnsOf(owner, 'c2')).map(row => row.requestId)).toEqual(['req-other'])
     expect(await turns.turnsOf(otherOwner, 'c1')).toEqual([])
+  })
+
+  it('★ 插入序：同一毫秒内连着认领 8 轮，`turnsOf` 的输出顺序 = 认领顺序，且 `seq` 严格递增', async () => {
+    const turns = store()
+    const claimed: string[] = []
+    // 刻意**不打间隔**：内存实现里这 8 次认领的 `createdAt` 全是同一个毫秒（实测整文件 10 条用例
+    // 一共 10ms）。⚠️ 也正因为同毫秒，"顺序来自 `seq` 还是 `createdAt`"在这个实现上**不可观测**
+    // ——Map 迭代序就是插入序，而 `Array.prototype.sort` 稳定 ⇒ 按 `createdAt` 排照样得到正确顺序
+    // （把 `sort` 变异回 `createdAt` 实测不红）。这一条由真 PG 的例子钉住（那里把 `created_at`
+    // 主动压平成同一个值，顺序就只剩插入序可依）；本用例钉的是**`seq` 本身**：存在、是 number、
+    // 严格递增、互不相同，而且输出按它排。
+    for (let index = 0; index < 8; index += 1) {
+      const requestId = `req-seq-${index}`
+      expect(await turns.claim(owner, 'c1', requestId, `h${index}`)).toBe('claimed')
+      claimed.push(requestId)
+    }
+    await turns.setPendingQuestion(owner, 'c1', '最后一问？')
+    const rows = await turns.turnsOf(owner, 'c1')
+    expect(rows.map(row => row.requestId)).toEqual([...claimed, ''])
+    // `seq` 是插入序：必须是 number 且**严格递增**。前者挡"读回来是字符串"（真实现里 BIGINT 由
+    // 驱动读成字符串，`'10' < '9'` ⇒ 排序静默退化成字典序），后者挡"占位值/不递增"（变异成
+    // `seq: 0` 时 `new Set(...).size` 立刻红）。
+    expect(rows.every(row => typeof row.seq === 'number')).toBe(true)
+    const seqs = rows.map(row => row.seq)
+    expect(new Set(seqs).size).toBe(rows.length)
+    expect(seqs).toEqual([...seqs].sort((left, right) => left - right))
   })
 
   it('★ patchTurnPayload 是浅合并：没提到的键留着，返回合并结果而不是补丁；未知行抛 404', async () => {
@@ -138,6 +163,50 @@ describe('MemoryTurnStore（内存轮次端口）', () => {
     expect(await turns.turnResults(owner, turnB)).toEqual([])
     expect(await turns.turnResults(otherOwner, turnA)).toEqual([])
     expect(await turns.turnResults(owner, '')).toEqual([])
+  })
+
+  it('★ turnResultsOf 按**会话**读结果：跨轮次合并、按全局插入序、别的会话与别人读不到', async () => {
+    const turns = store()
+    await turns.claim(owner, 'c1', 'req-a', 'h')
+    await turns.claim(owner, 'c1', 'req-b', 'h')
+    await turns.claim(owner, 'c2', 'req-other', 'h')
+    const turnA = (await turns.turnId(owner, 'req-a'))!
+    const turnB = (await turns.turnId(owner, 'req-b'))!
+    const turnOther = (await turns.turnId(owner, 'req-other'))!
+    expect(await turns.turnResultsOf(owner, 'c1')).toEqual([])
+
+    // ⚠️ 刻意**交错**写（先第二轮、再第一轮）：这样"按全局 `seq`（插入序）"与"先按轮次分组、
+    // 轮次内再按 `seq`"给出的顺序**不同**。不交错的话两种实现恰好同序，判据就没有区分力。
+    await turns.appendTurnResult(owner, { conversationId: 'c1', turnId: turnB, operationId: 'op-b', payload: { kind: 'b-first' } })
+    await turns.appendTurnResult(owner, { conversationId: 'c1', turnId: turnA, operationId: 'op-a', payload: { kind: 'a-second' } })
+    await turns.appendTurnResult(owner, { conversationId: 'c2', turnId: turnOther, operationId: 'op-c', payload: { kind: 'c' } })
+
+    const rows = await turns.turnResultsOf(owner, 'c1')
+    // 跨轮：两轮的结果**一起**回来（这是它相对 `turnResults(turnId)` 的意义，也是不做 N+1 的理由）。
+    expect(rows.map(row => row.payload.kind)).toEqual(['b-first', 'a-second'])
+    expect(rows.map(row => row.turnId)).toEqual([turnB, turnA])
+    // 结果行**不该**把内部的 `owner` / `conversationId` 漏出去（端口形状是 `TurnResultRecord`）。
+    expect(Object.keys(rows[0]!).sort()).toEqual(['createdAt', 'id', 'operationId', 'payload', 'seq', 'turnId'])
+    expect(rows[1]!.seq).toBeGreaterThan(rows[0]!.seq)
+    // 别的会话 / 别人的会话都读不到。
+    expect((await turns.turnResultsOf(owner, 'c2')).map(row => row.payload.kind)).toEqual(['c'])
+    expect(await turns.turnResultsOf(otherOwner, 'c1')).toEqual([])
+    expect(await turns.turnResultsOf(owner, 'c-not-exist')).toEqual([])
+  })
+
+  it('★ turnsByOperationId 按业务键跨会话读轮次：插入序降序、空串空数组、别人的读不到', async () => {
+    const turns = store()
+    await turns.claim(owner, 'c1', 'req-op-a', 'h', { operationId: 'op-shared', draftId: 'd1' })
+    // 同一个操作在**另一个会话**里继续（分支会话继承 `operationId`）⇒ 必须跨会话找得到它。
+    await turns.claim(owner, 'c2', 'req-op-b', 'h', { operationId: 'op-shared', draftId: 'd2' })
+    await turns.claim(owner, 'c2', 'req-op-c', 'h', { operationId: 'op-other', draftId: 'd3' })
+    const rows = await turns.turnsByOperationId(owner, 'op-shared')
+    expect(rows.map(row => row.conversationId)).toEqual(['c2', 'c1'])
+    expect(rows.map(row => row.payload.draftId)).toEqual(['d2', 'd1'])
+    // 空串是"没有操作身份"：不能当成查询键（会把一堆无关轮次捞回来）。
+    expect(await turns.turnsByOperationId(owner, '')).toEqual([])
+    expect(await turns.turnsByOperationId(owner, 'op-missing')).toEqual([])
+    expect(await turns.turnsByOperationId(otherOwner, 'op-shared')).toEqual([])
   })
 
   it('待答问题：一个会话同时只有一个（后写的胜出）；undefined 把问题清掉，等待行本身留着', async () => {

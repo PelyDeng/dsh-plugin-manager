@@ -129,6 +129,10 @@ CREATE TABLE dsh_turns (
   request_id      TEXT   NOT NULL DEFAULT '',
   input_hash      TEXT   NOT NULL,
   status          TEXT   NOT NULL,
+  -- ⚠️ 插入序（与 `dsh_turn_results.seq` **同形**）：轮次列表的顺序是**用户可见**的，而
+  -- `created_at` 只到毫秒 ⇒ 同一毫秒内的两条轮次会退化成按 `id`（随机 UUID）排，
+  -- **显示顺序不确定**。由库生成，**不要写**。
+  seq             BIGINT GENERATED ALWAYS AS IDENTITY,
   created_at      BIGINT NOT NULL,
   payload         JSONB  NOT NULL DEFAULT '{}'::jsonb,
   FOREIGN KEY (conversation_id, owner_namespace, owner_id)
@@ -139,7 +143,7 @@ CREATE UNIQUE INDEX dsh_turns_request
   ON dsh_turns (agent_id, owner_namespace, owner_id, request_id)
   WHERE request_id <> '';
 CREATE INDEX dsh_turns_conversation
-  ON dsh_turns (agent_id, owner_namespace, owner_id, conversation_id, id);
+  ON dsh_turns (agent_id, owner_namespace, owner_id, conversation_id, seq);
 
 CREATE TABLE dsh_turn_results (
   id              TEXT   NOT NULL PRIMARY KEY,

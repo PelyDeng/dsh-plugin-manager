@@ -35,7 +35,7 @@ import type {
 } from '../packages/runtime/src/definition.ts'
 import { createParticipant, type RuntimeParticipant } from '../packages/runtime/src/participant.ts'
 import type { ConversationQueryShape, OwnerKey } from '../packages/runtime/src/storage/ports.ts'
-import { MemoryConversationPort } from './fixtures/memory-conversation-port.ts'
+import { MemoryConversationPort, MemoryTurnStore } from './fixtures/memory-conversation-port.ts'
 
 const AGENT_ID = 'minimal'
 const PERSONA = '你是一个最小 Agent：只回答一轮，不调用任何业务工具。'
@@ -858,6 +858,92 @@ describe('内存会话端口替身（P1 用它替代 P2 的真实实现）', () 
     expect(port.record(alice, 'minimal-1').removalState).toBe('removed')
     expect(port.record(alice, 'minimal-1').deletedAt).not.toBeNull()
     expect((await port.list(owner, query(), noScope)).items).toEqual([])
+  })
+
+  it('★ detail 是异步的业务读：多给 titleSource / pinned / createdAt / requestId，同步面 `record` 有意不给', async () => {
+    const port = new MemoryConversationPort('minimal')
+    // `create` 的返回形状（`ConversationRecordShape`）**没有** `createdAt` —— 那正是 `detail` 存在的
+    // 理由之一。所以这里用"建行前后的时刻"夹住它，而不是拿 `create` 的返回值当基准。
+    const reservedAt = Date.now()
+    await port.create(owner, 'minimal-detail', 'r-detail', { title: '详情', payload: { note: '业务余项' } })
+    // 同步面（kit 的围栏契约要的那一份）**不该**长出这四个字段：它一旦把业务字段带上，同步面就
+    // 成了第二个业务读入口，两边迟早漂移。这里钉住"两个面不混"。
+    const fence = port.record({ namespace: 'user', userId: 'alice', sessionId: 'alice-login' }, 'minimal-detail')
+    for (const key of ['titleSource', 'pinned', 'createdAt', 'requestId']) expect(Object.keys(fence)).not.toContain(key)
+    expect(fence.payload).toEqual({ note: '业务余项' })
+
+    const detail = (await port.detail(owner, 'minimal-detail'))!
+    // 建会话时就给了标题 ⇒ `titleSource` 是 `manual`（与真实现同一条口径：这是"自动标题不覆盖
+    // 手动标题"守卫的起点）。真 PG 侧的两条口径在 `storage-contract.test.ts` 的 detail 用例里。
+    expect(detail).toMatchObject({
+      id: 'minimal-detail', title: '详情', ready: false, pinned: false, titleSource: 'manual',
+      requestId: 'r-detail', payload: { note: '业务余项' },
+    })
+    expect(typeof detail.createdAt).toBe('number')
+    // 它是这一行的**创建**时刻（不是"读的时刻"、也不等于 `updatedAt` 的角色）。
+    expect(detail.createdAt).toBeGreaterThanOrEqual(reservedAt)
+    expect(detail.createdAt).toBeLessThanOrEqual(Date.now())
+
+    await port.publish(owner, 'minimal-detail')
+    await port.syncTitle(owner, 'minimal-detail', '人工标题', 'manual')
+    await port.pin(owner, 'minimal-detail', true)
+    // 三个字段各自跟着列走：漏掉任何一个，业务侧就是"标题永远不自动更新 / 置顶徽标消失"这类
+    // **用户可见**却不报错的失效。
+    expect(await port.detail(owner, 'minimal-detail')).toMatchObject({
+      title: '人工标题', titleSource: 'manual', pinned: true, ready: true,
+    })
+
+    // 别人的 / 别的 Agent 的 / 不存在的 ⇒ `undefined`（**不抛**：要不要摊开成 404 是调用方的语义）。
+    expect(await port.detail(otherOwner, 'minimal-detail')).toBeUndefined()
+    expect(await port.detail(owner, '没有这条会话')).toBeUndefined()
+    expect(await new MemoryConversationPort('blog').detail(owner, 'minimal-detail')).toBeUndefined()
+
+    // `fenceOf` 与 `record` 的分工：**不做归属判定**（官方的标题事件是同步回调、只带会话 id，
+    // 拿不到 `Actor`），未知 id 给 `undefined` 而**不抛**。它比 `ConversationRecordShape` 多一个
+    // `titleSource`——标题守卫要**同步**判它（判不了就只能恒真 ⇒ "标题变了才广播"退化成"总是广播"）。
+    expect(port.fenceOf('minimal-detail')).toMatchObject({ id: 'minimal-detail', titleSource: 'manual' })
+    expect(port.fenceOf('没有这条会话')).toBeUndefined()
+  })
+
+  it('★ list 的 includeUnready：缺省不列未发布的行（侧栏口径），打开后列出且 `ready` 字段如实', async () => {
+    const port = new MemoryConversationPort('minimal')
+    await port.create(owner, 'minimal-published', 'r-1')
+    await port.publish(owner, 'minimal-published')
+    await port.create(owner, 'minimal-reserved', 'r-2')
+    // 缺省 = 侧栏口径：预留段"不能发消息、也不可见"。
+    expect((await port.list(owner, query(), noScope)).items.map(item => item.id)).toEqual(['minimal-published'])
+    // 页面口径（blog 的"新建对话 → 打完第一条消息才发布"之间要看得见它）。
+    const page = await port.list(owner, query({ includeUnready: true }), noScope)
+    expect([...page.items.map(item => item.id)].sort()).toEqual(['minimal-published', 'minimal-reserved'])
+    // `state` 分不出"真已发布"与"还在创建握手"（未发布的行也走 `else` 分支 ⇒ `'ready'`）⇒ 另给一列。
+    const byId = new Map(page.items.map(item => [item.id, item]))
+    expect(byId.get('minimal-published')!.ready).toBe(true)
+    expect(byId.get('minimal-reserved')!.ready).toBe(false)
+    expect(byId.get('minimal-reserved')!.state).toBe('ready')
+  })
+
+  it('★ snapshot / restore 是夹具事务替身的那对能力：回滚后会话与轮次都回到那一刻', async () => {
+    // blog / closedoff 的测试夹具用它实现"能回滚的 `AgentDatabasePort`"（真实门面的
+    // `transaction()` 是 PG 的 `BEGIN` / `ROLLBACK`）。**能力本身要有用例**，否则它就是
+    // "声明了却零接线"——夹具里那次调用万一写错（例如 restore 只清了一半），没人会发现。
+    const port = new MemoryConversationPort('minimal')
+    const turns = new MemoryTurnStore('minimal')
+    const alice: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
+    await port.create(owner, 'minimal-rollback', 'r-1')
+    await port.publish(owner, 'minimal-rollback')
+    const snapshot = { conversations: port.snapshot(), turns: turns.snapshot() }
+    await turns.claim(owner, 'minimal-rollback', 'req-rollback', 'hash')
+    port.mark(alice, 'minimal-rollback', 'removed')
+    // 回滚前的两处改动都**看得见**（先证明它们真的发生了，否则"回滚成功"没有意义）。
+    expect(port.record(alice, 'minimal-rollback').removalState).toBe('removed')
+    expect(await turns.turnId(owner, 'req-rollback')).toBeDefined()
+    port.restore(snapshot.conversations)
+    turns.restore(snapshot.turns)
+    // 回滚后：围栏回到空、轮次整条不见（连幂等索引一起回滚，否则同一个 requestId 会被判成"已认领"）。
+    expect(port.record(alice, 'minimal-rollback').removalState).toBe('')
+    expect(await turns.turnId(owner, 'req-rollback')).toBeUndefined()
+    // 会话行本身还在（快照不是"清空"）。
+    expect(port.rawOf('minimal-rollback')?.ready).toBe(true)
   })
 
   it('list 真的用上 scope.busy 与 scope.archived', async () => {

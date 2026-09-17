@@ -53,6 +53,8 @@ import { randomUUID } from 'node:crypto'
 import { AccessError, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import type {
   AppendTurnResultInput,
+  ConversationDetailShape,
+  ConversationFenceShape,
   ConversationOwner,
   ConversationPageShape,
   ConversationPort,
@@ -139,13 +141,35 @@ export class MemoryConversationPort implements ConversationPort {
   }
 
   /**
+   * 按 id 读**一整行**（含 `titleSource` / `pinned` / `createdAt` / `requestId`）。
+   *
+   * 不存在或不属于该 owner ⇒ `undefined`（与真实实现的 owner 条件同一条口径：别人的行在这个
+   * 实例里根本读不到）。
+   */
+  async detail(owner: OwnerKey, conversationId: string): Promise<ConversationDetailShape | undefined> {
+    const row = this.rows.get(conversationId)
+    if (row === undefined || !sameOwner(row.owner, owner)) return undefined
+    return {
+      ...this.shapeOf(row),
+      titleSource: row.titleSource,
+      pinned: row.pinned,
+      createdAt: row.createdAt,
+      requestId: row.requestId,
+    }
+  }
+
+  /**
    * **预留段**：插入一行归属，`ready = false`——会话此时不可见、也不能发消息。
    *
    * `requestId` 非空时幂等：同一个 `(agent, owner, requestId)` 再来一次返回原来那一行
    * （真实实现靠部分唯一索引 + `SELECT` 回既有行，见 `postgres.ts:96-119`）。
    */
   async create(owner: OwnerKey, conversationId: string, requestId: string,
-    initial?: { readonly title?: string; readonly payload?: ConversationPayloadShape }): Promise<ConversationRecordShape> {
+    initial?: {
+      readonly title?: string
+      readonly payload?: ConversationPayloadShape
+      readonly titleSource?: TitleSource
+    }): Promise<ConversationRecordShape> {
     if (requestId !== '') {
       const existingId = this.requestIds.get(`${ownerKey(owner)}\u0000${requestId}`)
       if (existingId !== undefined) return this.shapeOf(this.ownedRow(owner, existingId))
@@ -162,8 +186,10 @@ export class MemoryConversationPort implements ConversationPort {
       id: conversationId,
       owner: { ...owner },
       title,
-      // 空标题 = 还没有标题（可被首条用户消息覆盖）；有值 = 调用方直接给的标题，按手动对待。
-      titleSource: title === '' ? 'automatic' : 'manual',
+      // 显式给的来源优先；否则沿用"空标题 = 还没有标题（可被首条用户消息覆盖）/ 有值 = 调用方直接
+      // 给的标题，按手动对待"。⚠️ 那个既有口径让"默认标题 + 之后可被自动标题覆盖"无法表达 ——
+      // 所以要显式传（见 `ConversationPort.create` 的说明）。
+      titleSource: initial?.titleSource ?? (title === '' ? 'automatic' : 'manual'),
       requestId,
       createdAt: now,
       updatedAt: now,
@@ -223,8 +249,10 @@ export class MemoryConversationPort implements ConversationPort {
     const needle = query.q.toLowerCase()
     const visible = [...this.rows.values()]
       .filter(row => sameOwner(row.owner, owner))
-      // 未发布的预留行在侧栏不可见（`conversation.ts:383`：发布前"不能发消息、也不可见"）。
-      .filter(row => row.ready)
+      // 未发布的预留行默认不可见（`conversation.ts:383`：发布前"不能发消息、也不可见"）。
+      // ⚠️ `includeUnready` 是**页面口径**的开关：blog 的"新建对话"要经过"建会话 → 用户打完
+      // 第一条消息才发布"两段，中间那段时间列表里必须看得见它（否则刷新一次对话就"消失"了）。
+      .filter(row => query.includeUnready === true || row.ready)
       .filter(row => row.removalState !== 'removed')
       // 已删除且**未被归档**的行不出现在列表里（它们等着被清）；这是 `archived` 的唯一落点。
       .filter(row => !(row.deletedAt !== null && row.removalState === '' && archived.has(row.id)))
@@ -251,6 +279,8 @@ export class MemoryConversationPort implements ConversationPort {
         // 替身少给字段会让"页面拿得到"这件事在单测里永远测不出来。
         pinned: row.pinned,
         titleSource: row.titleSource,
+        // `state` 里分不出"真已发布"与"还在创建握手"（未发布的行也是 `'ready'`）⇒ 单独给一列。
+        ready: row.ready,
         ...(state === 'busy' ? { blockedReason: BUSY_REASON }
           : state === 'pending' ? { blockedReason: PENDING_REASON } : {}),
       }
@@ -312,7 +342,26 @@ export class MemoryConversationPort implements ConversationPort {
 
   /** 标题投影：**自动标题不覆盖手动标题**。要求已发布、未删除、无围栏标记（与真实实现一致）。 */
   async syncTitle(owner: OwnerKey, conversationId: string, title: string, source: TitleSource): Promise<void> {
-    const row = this.ownedRow(owner, conversationId)
+    this.writeTitle(this.ownedRow(owner, conversationId), title, source)
+  }
+
+  /**
+   * 本地 outbox 的**补写点**替身：按会话 id 写标题，**不需要 owner**。
+   *
+   * 真实实现是门面 `drainOutboxes()` 里那条裸 `UPDATE … WHERE id = $3 AND agent_id = $4`
+   * （标题事件只带会话 id，补写点也就只能按 id 找）。缺了它，夹具里的 `titleSink` 无处落库：
+   * `syncTitle` 只负责"投递 + 判定"，**落库是补写点的事**——少了这一环，测试里标题永远写不进去，
+   * 而生产里那是"官方标题一直不落库"那个真实缺陷的形状。
+   *
+   * 守卫与前台同源（{@link writeTitle}），所以这里不会绕过"自动不覆盖手动"。
+   */
+  deliverTitle(conversationId: string, title: string, source: TitleSource): void {
+    const row = this.rows.get(conversationId)
+    if (row !== undefined) this.writeTitle(row, title, source)
+  }
+
+  /** 标题写入的**唯一**判定点（`syncTitle` 与 `deliverTitle` 共用，两处各写一份必然漂移）。 */
+  private writeTitle(row: MemoryRow, title: string, source: TitleSource): void {
     if (!row.ready || row.deletedAt !== null || row.removalState !== '') return
     if (row.titleSource !== 'automatic' && source !== 'manual') return
     row.title = title
@@ -365,6 +414,17 @@ export class MemoryConversationPort implements ConversationPort {
     this.setRemovalState({ namespace: actor.namespace, userId: actor.userId }, conversationId, state)
   }
 
+  /**
+   * 按 id 读镜像的投影，**不判定归属**（`ConversationPort.fenceOf` 的说明写了为什么需要它：
+   * 官方的标题事件是同步回调、只带会话 id，而"要不要广播 changed"必须同步判定）。
+   *
+   * 与真实实现（本地 `conversation_mirror`）同口径：未知的 id ⇒ `undefined`，**不抛 404**。
+   */
+  fenceOf(conversationId: string): ConversationFenceShape | undefined {
+    const row = this.rows.get(conversationId)
+    return row === undefined ? undefined : { ...this.shapeOf(row), titleSource: row.titleSource }
+  }
+
   // ---------------------------------------------------------------------
   // 仅供测试的检视与布置（不属于 ConversationPort）
   // ---------------------------------------------------------------------
@@ -372,6 +432,43 @@ export class MemoryConversationPort implements ConversationPort {
   /** 行数（断言"没有偷偷新建第二条会话"用）。 */
   get size(): number {
     return this.rows.size
+  }
+
+  /**
+   * 把整份状态快照成一个不透明值（**仅供测试**的事务替身用，不属于端口面）。
+   *
+   * 用途：测试夹具要一个"能回滚的 `AgentDatabasePort`"来验证业务的原子性（旧 SQLite 实现靠
+   * `BEGIN IMMEDIATE`）。内存实现没有事务，所以夹具在事务开始时 `snapshot()`、抛错时
+   * `restore()` —— 语义与 PG 的 `ROLLBACK` 在**单线程**下等价（真实实现可能被并发插入，
+   * 那是内存替身本来就不具备的能力，见文件头那张表）。
+   *
+   * 深一层就够：行与载荷都不与快照共享引用（`payload` 是扁平对象，业务不往里塞嵌套可变结构）。
+   */
+  snapshot(): unknown {
+    return {
+      rows: [...this.rows].map(([id, row]) => [id, { ...row, owner: { ...row.owner }, payload: { ...row.payload } }]),
+      requestIds: [...this.requestIds],
+      archived: [...this.archived],
+      touchCalls: this.touchCalls.map(call => ({ ...call })),
+    }
+  }
+
+  /** 恢复到 {@link snapshot} 的那一刻（仅供测试）。 */
+  restore(snapshot: unknown): void {
+    const value = snapshot as {
+      readonly rows: readonly (readonly [string, MemoryRow])[]
+      readonly requestIds: readonly (readonly [string, string])[]
+      readonly archived: readonly string[]
+      readonly touchCalls: readonly { readonly id: string; readonly at: number; readonly updatedAt: number }[]
+    }
+    this.rows.clear()
+    for (const [id, row] of value.rows) this.rows.set(id, row)
+    this.requestIds.clear()
+    for (const [key, id] of value.requestIds) this.requestIds.set(key, id)
+    this.archived.clear()
+    for (const id of value.archived) this.archived.add(id)
+    this.touchCalls.length = 0
+    this.touchCalls.push(...value.touchCalls)
   }
 
   /** 全部会话 id，按插入顺序。 */
@@ -464,6 +561,8 @@ interface MemoryTurnRow {
   readonly requestId: string
   readonly inputHash: string
   status: string
+  /** 插入序（真实实现是 `BIGINT GENERATED ALWAYS AS IDENTITY`）。 */
+  readonly seq: number
   readonly createdAt: number
   payload: ConversationPayloadShape
 }
@@ -488,8 +587,8 @@ interface MemoryTurnRow {
  *   一律静默返回（`undefined` / `[]`），与真实实现的前置早退一致；
  * - `turnStatus` 只认 `'claimed'` / `'finished'`，别的值（例如等待行的 `'waiting'`）答 `undefined`；
  * - `turnById` 与 `turnsOf` 都按 **owner** 过滤：别人的行在这个实例里根本读不到（真实实现是 SQL 条件）；
- * - `turnsOf` 按 `created_at, id` 升序、**含 `request_id = ''` 的等待行**，同一毫秒退化成按 `id` 排
- *   （这一点与真实实现**同样不确定**，见端口注释：`dsh_turns` 没有单调列）；
+ * - `turnsOf` 按 **`seq`** 升序、**含 `request_id = ''` 的等待行**——`seq` 是插入序（真实实现是库
+ *   生成的 IDENTITY），所以**同一毫秒内的顺序也是确定的**（这一点与真实实现一致）；
  * - `patchTurnPayload`：**浅合并**，返回**合并后那一层**（不是补丁），行不存在或不属于该 owner ⇒ 404；
  * - `appendTurnResult` / `turnResults`：`seq` 是每个实例内单调的插入序（真实实现是
  *   `GENERATED ALWAYS AS IDENTITY`，跨实例共享），按 `seq` 升序读；`createdAt` 缺省取当前时间；
@@ -503,10 +602,18 @@ export class MemoryTurnStore implements TurnStorePort {
   private readonly rows = new Map<string, MemoryTurnRow>()
   /** `owner + requestId` → 行 id：幂等身份（真实实现是部分唯一索引 `WHERE request_id <> ''`）。 */
   private readonly requestIds = new Map<string, string>()
-  /** 结果记录（`dsh_turn_results`）。 */
-  private readonly results: (TurnResultRecord & { readonly owner: OwnerKey })[] = []
+  /**
+   * 结果记录（`dsh_turn_results`）。
+   *
+   * 连 `conversationId` 一起存：真实实现里 `dsh_turn_results.conversation_id` 是**自己的列**
+   * （不是从 turn 上取的），`turnResultsOf` 就按它过滤。少了它，那个方法只能靠 `turnId` 反查，
+   * 而"靠反查"在真实实现里是不需要的一次 join。
+   */
+  private readonly results: (TurnResultRecord & { readonly owner: OwnerKey; readonly conversationId: string })[] = []
   /** 结果 `seq` 的替身（真实实现是库生成的 IDENTITY）。 */
   private resultSeq = 0
+  /** 轮次 `seq` 的替身（真实实现是 `dsh_turns.seq` 的 IDENTITY；`claim` 与等待行各占一个）。 */
+  private turnSeq = 0
 
   constructor(agentId: string) {
     this.agentId = agentId
@@ -542,6 +649,7 @@ export class MemoryTurnStore implements TurnStorePort {
       requestId,
       inputHash,
       status: 'claimed',
+      seq: (this.turnSeq += 1),
       createdAt: Date.now(),
       payload: { ...payload },
     })
@@ -573,11 +681,16 @@ export class MemoryTurnStore implements TurnStorePort {
     return row === undefined ? undefined : this.shapeOf(row)
   }
 
-  /** 读一个会话下的全部轮次（**含 `request_id = ''` 的等待行**），按 `created_at, id` 升序。 */
+  /**
+   * 读一个会话下的全部轮次（**含 `request_id = ''` 的等待行**），按 **`seq`** 升序。
+   *
+   * ⚠️ **按 `seq` 而不是 `createdAt`**：后者只到毫秒，同一毫秒内的两条会退化成按 `id`（随机
+   * UUID）排 ⇒ **列表顺序不确定**。真实实现里 `seq` 是库生成的 IDENTITY，这里由本实例递增。
+   */
   async turnsOf(owner: OwnerKey, conversationId: string): Promise<readonly TurnRecord[]> {
     return [...this.rows.values()]
       .filter(row => sameOwner(row.owner, owner) && row.conversationId === conversationId)
-      .sort((left, right) => left.createdAt - right.createdAt || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+      .sort((left, right) => left.seq - right.seq)
       .map(row => this.shapeOf(row))
   }
 
@@ -606,6 +719,7 @@ export class MemoryTurnStore implements TurnStorePort {
       createdAt: input.createdAt ?? Date.now(),
       payload: { ...input.payload },
       owner: { ...owner },
+      conversationId: input.conversationId,
     })
     return id
   }
@@ -616,14 +730,46 @@ export class MemoryTurnStore implements TurnStorePort {
     return this.results
       .filter(row => sameOwner(row.owner, owner) && row.turnId === turnId)
       .sort((left, right) => left.seq - right.seq)
-      .map(({ owner: _owner, ...row }) => ({ ...row, payload: { ...row.payload } }))
+      .map(({ owner: _owner, conversationId: _conversationId, ...row }) => ({ ...row, payload: { ...row.payload } }))
   }
 
-  /** 这个会话在等用户回什么；没有等待行时 `undefined`（取**最新**一条带问题的行）。 */
+  /**
+   * 读**一个会话下所有轮次**的结果记录，按 `seq`（插入序）升序。
+   *
+   * 与真实实现同一条口径：按 `conversation_id` 过滤（它自己的列），**不**先查轮次再逐轮查。
+   * 别人的会话读不到——这里按 owner 过滤（真实实现是 SQL 条件）。
+   */
+  async turnResultsOf(owner: OwnerKey, conversationId: string): Promise<readonly TurnResultRecord[]> {
+    return this.results
+      .filter(row => sameOwner(row.owner, owner) && row.conversationId === conversationId)
+      .sort((left, right) => left.seq - right.seq)
+      .map(({ owner: _owner, conversationId: _conversationId, ...row }) => ({ ...row, payload: { ...row.payload } }))
+  }
+
+  /**
+   * 按**业务操作标识**读轮次（跨会话），最新的在前。
+   *
+   * 与真实实现同一条口径：查的是载荷里的业务键（列上没有它）、按 `seq` 降序、空串直接返回空数组。
+   */
+  async turnsByOperationId(owner: OwnerKey, operationId: string): Promise<readonly TurnRecord[]> {
+    if (operationId === '') return []
+    return [...this.rows.values()]
+      .filter(row => sameOwner(row.owner, owner) && row.payload.operationId === operationId)
+      .sort((left, right) => right.seq - left.seq)
+      .map(row => this.shapeOf(row))
+  }
+
+  /**
+   * 这个会话在等用户回什么；没有等待行时 `undefined`（取**最新**一条带问题的行）。
+   *
+   * "最新"按 **`seq`** 定义（同真实实现）：`createdAt` 只到毫秒，内存实现里两次等待**必然同毫秒**，
+   * 按它排就退化成按随机 UUID 排。正常情况下这里最多命中一行（`setPendingQuestion` 先清键），
+   * 排序只是兜底。
+   */
   async pendingQuestion(owner: OwnerKey, conversationId: string): Promise<string | undefined> {
     const waiting = [...this.rows.values()]
       .filter(row => sameOwner(row.owner, owner) && row.conversationId === conversationId)
-      .sort((left, right) => right.createdAt - left.createdAt || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0))
+      .sort((left, right) => right.seq - left.seq)
     const question = waiting.find(row => typeof row.payload.question === 'string' && row.payload.question !== '')?.payload.question
     return typeof question === 'string' ? question : undefined
   }
@@ -634,7 +780,7 @@ export class MemoryTurnStore implements TurnStorePort {
    * 落一行 `request_id = ''` 的等待行（没有幂等语义，可以有多条），`status = 'waiting'`。
    *
    * ⚠️ 写入前**先清掉该会话上原有的 `question` 键**（与真实实现同一句 SQL 的等价物）。不清的话
-   * "此刻在等什么"就只能靠时间戳猜，而内存实现里两次等待**必然同毫秒** ⇒ 答回来的是任意一条。
+   * "此刻在等什么"就会命中多条，只能靠时间戳挑"最新"，而内存实现里两次等待**必然同毫秒**。
    */
   async setPendingQuestion(owner: OwnerKey, conversationId: string, question: string | undefined): Promise<void> {
     const rows = [...this.rows.values()]
@@ -649,6 +795,7 @@ export class MemoryTurnStore implements TurnStorePort {
       requestId: '',
       inputHash: '',
       status: 'waiting',
+      seq: (this.turnSeq += 1),
       createdAt: Date.now(),
       payload: { question },
     })
@@ -661,6 +808,36 @@ export class MemoryTurnStore implements TurnStorePort {
   /** 全部行的原始快照（含端口读不到的 `inputHash`），按插入序。 */
   get rawTurns(): readonly MemoryTurnRow[] {
     return [...this.rows.values()].map(row => ({ ...row, payload: { ...row.payload } }))
+  }
+
+  /** 整份状态快照（仅供测试的事务替身；语义见 `MemoryConversationPort.snapshot`）。 */
+  snapshot(): unknown {
+    return {
+      rows: [...this.rows].map(([id, row]) => [id, { ...row, owner: { ...row.owner }, payload: { ...row.payload } }]),
+      requestIds: [...this.requestIds],
+      results: this.results.map(row => ({ ...row, owner: { ...row.owner }, payload: { ...row.payload } })),
+      resultSeq: this.resultSeq,
+      turnSeq: this.turnSeq,
+    }
+  }
+
+  /** 恢复到 {@link snapshot} 的那一刻（仅供测试）。 */
+  restore(snapshot: unknown): void {
+    const value = snapshot as {
+      readonly rows: readonly (readonly [string, MemoryTurnRow])[]
+      readonly requestIds: readonly (readonly [string, string])[]
+      readonly results: readonly (TurnResultRecord & { readonly owner: OwnerKey; readonly conversationId: string })[]
+      readonly resultSeq: number
+      readonly turnSeq: number
+    }
+    this.rows.clear()
+    for (const [id, row] of value.rows) this.rows.set(id, row)
+    this.requestIds.clear()
+    for (const [key, id] of value.requestIds) this.requestIds.set(key, id)
+    this.results.length = 0
+    this.results.push(...value.results)
+    this.resultSeq = value.resultSeq
+    this.turnSeq = value.turnSeq
   }
 
   // ---------------------------------------------------------------------
@@ -686,6 +863,7 @@ export class MemoryTurnStore implements TurnStorePort {
       requestId: row.requestId,
       inputHash: row.inputHash,
       status: row.status,
+      seq: row.seq,
       createdAt: row.createdAt,
       payload: { ...row.payload },
     }

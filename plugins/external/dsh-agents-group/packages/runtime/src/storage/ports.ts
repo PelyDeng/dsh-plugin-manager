@@ -86,6 +86,39 @@ export interface ConversationOwner {
   readonly owner: OwnerKey
 }
 
+/**
+ * 单条会话的**完整**一行（{@link ConversationPort.detail} 的返回）。
+ *
+ * 它比 {@link ConversationRecordShape} 多四个**列上的**字段，理由是同步面 `record` **有意**
+ * 只回答围栏要的六个字段（见上面的说明），而按 id 读一条会话的业务需要它们：
+ *
+ * - `titleSource`：决定"这一轮的首句还能不能当标题"（blog 的 `chat.ts` 用它，读不到就
+ *   **用户可见地**永远不自动改标题，会话标题一直是"新对话"）；
+ * - `pinned`：页面置顶徽标；
+ * - `createdAt`：展示"什么时候建的"；
+ * - `requestId`：创建幂等键；离线备份的归属清单也用它（备份进程**网络禁用**，只能读本地）。
+ *
+ * ⚠️ 这四个字段**只来自列**，不是业务载荷的副本：载荷放的是业务余项，列才是框架字段的权威。
+ */
+export interface ConversationDetailShape extends ConversationRecordShape {
+  readonly titleSource: 'automatic' | 'generated' | 'manual'
+  readonly pinned: boolean
+  readonly createdAt: number
+  readonly requestId: string
+}
+
+/**
+ * 本地镜像里一行的形状（{@link ConversationPort.fenceOf} 的返回）。
+ *
+ * 比 {@link ConversationRecordShape} 多一个 `titleSource`：同步的标题回调要**同步**判断
+ * "这次写入会不会被守卫接受"（守卫里就有 `title_source` 这一条），拿不到它就只能恒真 ⇒
+ * "标题变了才广播"退化成"总是广播"。多给这一个，是因为镜像里**本来就有**这一列
+ *（`conversation_mirror.title_source`），不是为业务新加的数据。
+ */
+export interface ConversationFenceShape extends ConversationRecordShape {
+  readonly titleSource: 'automatic' | 'generated' | 'manual'
+}
+
 export interface ConversationQueryShape {
   readonly offset: number
   readonly limit: number
@@ -105,6 +138,17 @@ export interface ConversationQueryShape {
    * 会话。本端口只提供开关，不替业务决定。
    */
   readonly titleOnly?: boolean | undefined
+  /**
+   * 列表里**是否包含还没完成发布握手的行**（`ready = FALSE`）。
+   *
+   * 缺省（`undefined` / `false`）只列已发布的——那是 kit 侧栏与 closedoff 页面的口径：
+   * 预留段"不可见、也不能发消息"。**谁会传 `true`**：blog 的页面列表（`chat-store.ts` 的 `list`）。
+   * 它的"新建对话"是**两段**：先建会话、用户打完第一条消息才发布；中间那段时间旧实现能看到它，
+   * 切库后若按侧栏口径过滤，用户会看到刚建的对话在刷新后**消失**（用户可见的行为倒退）。
+   *
+   * 与 {@link titleOnly} 同性质：这是**页面口径的开关**，端口只提供，不替业务决定默认值。
+   */
+  readonly includeUnready?: boolean | undefined
 }
 
 /**
@@ -137,6 +181,14 @@ export interface ManagedConversationShape {
    * `alreadyRemoved` 分支）的形状，往里塞展示语义会让同步面承担它不该管的事。
    */
   readonly titleSource?: 'automatic' | 'generated' | 'manual'
+  /**
+   * 发布握手是否完成（`ready` 列）。**只给业务页面用**（kit 侧栏忽略）。
+   *
+   * 为什么列表项也要给：`state` 是"围栏 / busy / legacy / ready"那套 5 态，未发布的行落到
+   * `else` 分支也是 `'ready'` —— 光看 `state` 分不出"真已发布"和"还在创建握手"。而传了
+   * {@link ConversationQueryShape.includeUnready} 的调用方（blog 页面）恰恰要这个区分。
+   */
+  readonly ready?: boolean
 }
 
 export interface ConversationPageShape {
@@ -203,6 +255,20 @@ export interface ConversationPort {
   conversationOf(owner: OwnerKey, conversationId: string): Promise<ConversationOwner | undefined>
 
   /**
+   * 按 id 读**一整行**（{@link ConversationDetailShape}）；不存在或不属于该 owner ⇒ `undefined`。
+   *
+   * **与 `record` 的分工**：`record` 是**同步**的围栏读，只回答六个字段（kit 契约要求同步）；
+   * 本方法是**异步**的业务读，多给 `titleSource` / `pinned` / `createdAt` / `requestId`。
+   * 两者不是"快慢两个版本"，而是**两个面**：把 `record` 撑大去满足业务读，会让同步面承担它
+   * 不该管的事；反过来让业务只靠 `record`，就会在缺字段时**静默**给出错的行为（标题不再自动
+   * 更新、置顶徽标消失）。
+   *
+   * `undefined` 而**不是抛 404**：存在性要不要摊开成 404 是调用方的语义（"读会话详情"要 404，
+   * "读一下有没有这一行"不要），与 {@link conversationOf} / {@link TurnStorePort.turnById} 同一条口径。
+   */
+  detail(owner: OwnerKey, conversationId: string): Promise<ConversationDetailShape | undefined>
+
+  /**
    * **预留段**：插入一行归属，`ready = false`——会话此时还不可见、也不能发消息。
    *
    * `requestId` 参与**创建幂等**（部分唯一索引 `WHERE request_id <> ''`）：同一个 `requestId`
@@ -219,9 +285,18 @@ export interface ConversationPort {
    *
    * `initial.payload` 是**建行时**要落的业务载荷（`{}` 与省略同义）。它只在这一行**首次**
    * 被创建时生效：幂等命中既有行时返回的是**原来那一行的载荷**，不是这次传进来的。
+   *
+   * `initial.titleSource` 缺省按"标题非空 ⇒ `'manual'`，否则 `'automatic'`"判定（历史的
+   * "给了标题就是人工标题"口径）。**要显式给它是为了那种组合**：业务想落一个**默认标题**
+   * （"新对话"）又希望它之后能被官方首句标题覆盖——那是 `title` + `'automatic'`。缺了这个入口，
+   * 业务只能二选一：要么标题为空，要么永远盖不上（实测过一次：侧栏标题永久为空）。
    */
   create(owner: OwnerKey, conversationId: string, requestId: string,
-    initial?: { readonly title?: string; readonly payload?: ConversationPayloadShape }): Promise<ConversationRecordShape>
+    initial?: {
+      readonly title?: string
+      readonly payload?: ConversationPayloadShape
+      readonly titleSource?: 'automatic' | 'generated' | 'manual'
+    }): Promise<ConversationRecordShape>
 
   /**
    * 合并写业务载荷：**浅合并**（`payload || $patch`，与 `jsonb` 的 `||` 同义），只覆盖给出的键。
@@ -312,6 +387,21 @@ export interface ConversationPort {
   /** 删除围栏读：**同步**（kit 契约的硬要求，见上）。 */
   record(actor: Actor, conversationId: string): ConversationRecordShape
 
+  /**
+   * 按会话 id 读**本地镜像**里的一行；镜像里没有 ⇒ `undefined`。**同步**，且**不做归属判定**。
+   *
+   * 它与 {@link record} 的分工是刻意的：`record` 是 kit 的围栏读（要 `Actor`，未知 / 他人 /
+   * 别的 Agent 一律同一个 404）。本方法服务的是**本进程的同步回调**——
+   * `registerConversationTitles` 的回调只给会话 id（拿不到 `Actor`），而它必须**同步**判断
+   * "这次标题写入会不会被守卫接受"，才能决定"要不要广播 changed"。
+   * M21 记着这条：把那个判断改成异步（或恒真）会让"标题变了才广播"**静默**退化成"总是广播"。
+   *
+   * ⚠️ 所以它**不是**给业务查询用的读口：没有归属过滤。调用方必须是"本进程刚刚处理过这个
+   * 会话"的同步路径（标题事件正是如此）；要带归属判定的读一律走 {@link record} 或
+   * {@link detail}。
+   */
+  fenceOf(conversationId: string): ConversationFenceShape | undefined
+
   /** 删除围栏写：**同步**——写本地标记 + 写**持久 outbox**，后台按每会话 FIFO 补写 PG。 */
   mark(actor: Actor, conversationId: string, state: 'pending' | 'failed' | 'removed'): void
 }
@@ -369,6 +459,14 @@ export interface TurnRecord {
    * ——写进这一列等于让一台状态机有两个主人（`claim` / `finish` 会覆盖它）。
    */
   readonly status: string
+  /**
+   * 插入序（库生成的 `IDENTITY`，与 `dsh_turn_results.seq` **同形**）。
+   *
+   * ⚠️ **轮次列表按它排序，不要按 `createdAt`**：`createdAt` 只到毫秒，同一毫秒内的两条轮次按它
+   * 排会退化成按 `id`（随机 UUID）排 ⇒ **列表显示顺序不确定**。`createdAt` 仍回答"这一轮什么时候
+   * 发生的"，但它不是顺序的权威。
+   */
+  readonly seq: number
   readonly createdAt: number
   /** 业务载荷（`dsh_turns.payload`）；运行时**不理解**它的形状。 */
   readonly payload: ConversationPayloadShape
@@ -431,14 +529,14 @@ export interface TurnStorePort {
   turnById(owner: OwnerKey, turnId: string): Promise<TurnRecord | undefined>
 
   /**
-   * 读一个会话下的**全部轮次**，按 `created_at, id` 升序。
+   * 读一个会话下的**全部轮次**，按 **`seq`（插入序）**升序。
+   *
+   * 旧实现的排序是 `created_at, id`：`created_at` 只到毫秒，测试里两条轮次几乎必然落在同一毫秒，
+   * 于是退化成按随机 UUID 排 ⇒ **列表显示顺序不确定**。`dsh_turns` 原先没有单调列（旧 SQLite
+   * 索引库靠 `rowid`），`seq` 就是为补上它而加的，见 {@link TurnRecord.seq}。
    *
    * ⚠️ **包含 `request_id = ''` 的等待行**（`setPendingQuestion` 落的那种）。调用方按
    * `requestId === ''` 自行区分——在这里悄悄过滤掉，会让"这个会话在等什么"那条线**静默消失**。
-   *
-   * ⚠️ 排序只能用 `created_at, id`：`dsh_turns` **没有单调递增列**（`created_at` 是毫秒），
-   * 所以**同一毫秒内的两条轮次退化成按 `id`（UUID）排**。这是切库带来的**已知行为差异**
-   * （旧 SQLite 索引库用 `rowid`），不是遗漏。
    */
   turnsOf(owner: OwnerKey, conversationId: string): Promise<readonly TurnRecord[]>
 
@@ -469,6 +567,32 @@ export interface TurnStorePort {
   turnResults(owner: OwnerKey, turnId: string): Promise<readonly TurnResultRecord[]>
 
   /**
+   * 读**一个会话下所有轮次**的结果记录，按轮次插入序、再按结果插入序。
+   *
+   * 为什么不能只用 {@link turnResults} 拼：那要先 {@link turnsOf} 拿全部轮次、再逐轮查一次
+   * ——会话有几十轮时就是几十次 PG 往返，而这条路径在**每个 history 请求**上都会走
+   * （blog 的 `chat.ts` 用它回答"这个会话还有没有未采用的候选稿"）。这里一条 JOIN 就够。
+   *
+   * 只认自己的 owner（别人的结果读不到），与 {@link turnResults} 同一条口径。
+   */
+  turnResultsOf(owner: OwnerKey, conversationId: string): Promise<readonly TurnResultRecord[]>
+
+  /**
+   * 按**业务操作标识**读轮次（`payload.operationId`），按插入序**降序**（最新的在最前）。
+   *
+   * 为什么需要它："这个操作已经绑到哪份草稿/哪份产出"是**跨会话**的问题——同一轮操作会跨会话
+   * 延续（从某一轮创建分支、在分支里继续时 `operationId` 被继承，`chat.ts` 的 `send` 在
+   * `retryFrom` 路径上也是这么传的）。只在单个会话里找会漏掉那个绑定，结果是**新建第二份草稿**
+   * ——用户看到重复，而代码一路"成功"。
+   *
+   * ⚠️ 它查的是 **JSONB 里的业务键**（`payload->>'operationId'`），不是列：`operation_id` 那一列
+   * 在 `dsh_turn_results` 上，含义是"这条结果属于哪次操作"，与本方法问的不是同一件事。
+   *
+   * 空 `operationId` ⇒ 空数组（空串是"没有操作身份"的取值，不该把一堆无关轮次捞回来）。
+   */
+  turnsByOperationId(owner: OwnerKey, operationId: string): Promise<readonly TurnRecord[]>
+
+  /**
    * 待答问题：重启后仍能恢复"这个会话在等用户回什么"。
    *
    * **必须有**：协调侧要求子任务确实进入 `waiting_user`，而等待上下文以前只在内存
@@ -483,8 +607,8 @@ export interface TurnStorePort {
    * 记下"在等什么"；`undefined` / 空串表示不再等待。
    *
    * ⚠️ **一个会话同时只有一个待答问题**：写入前会先清掉该会话上原有的 `question` 键（与传
-   * `undefined` 时同一句 SQL）。不这样定，`pendingQuestion` 就只能靠 `created_at` 猜"最新"，
-   * 而它是**毫秒**——两次等待落在同一毫秒时，读回的是任意一条（测试里几乎必然同毫秒）。
+   * `undefined` 时同一句 SQL）。清掉之后 {@link pendingQuestion} 最多命中一行；读侧仍按 `seq`
+   * 定义"最新"，但那只是兜底——靠 `created_at` 猜"最新"是不行的，它只到**毫秒**。
    */
   setPendingQuestion(owner: OwnerKey, conversationId: string, question: string | undefined): Promise<void>
 }

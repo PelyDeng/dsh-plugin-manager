@@ -273,15 +273,15 @@ export class BlogChat {
         // 可选（缺省 = 尚未标记）。运行期它一直是**自有属性**：`chat-store.ts` 的 `record()` 用
         // `{removalState:'', ...JSON.parse(data)}` 构造，缺省即空串。这里只把这条**既有口径**交给类型
         // 系统，不复制对象、不改任何取值（转 TS 前这里就是直接 `return value`）。
-        record: (actor: Actor, id: string) => { const value = index.record(ownerKey(actor), id); invariant(value.ready, '对话尚未完成创建', 409); return value as unknown as ConversationRecord },
-        mark: (actor: Actor, id: string, state: string) => index.mark(ownerKey(actor), id, state),
-      }, busy: (id: string) => this.busy(id), inspect: async (actor: Actor, id: string) => { const c = index.record(ownerKey(actor), id); const known = await ctx.sessionPersistence.stat(SessionId(id)); invariant(known, '无法核验持久化会话', 409); this.assertLifecycle(c, known!.header) }, release: async () => { },
+        record: (actor: Actor, id: string) => { const value = index.record(actor, id); invariant(value.ready, '对话尚未完成创建', 409); return value as unknown as ConversationRecord },
+        mark: (actor: Actor, id: string, state: string) => index.mark(actor, id, state),
+      }, busy: (id: string) => this.busy(id), inspect: async (actor: Actor, id: string) => { const c = index.record(actor, id); const known = await ctx.sessionPersistence.stat(SessionId(id)); invariant(known, '无法核验持久化会话', 409); this.assertLifecycle(c, known!.header) }, release: async () => { },
     })
     this.provider = {
       protocol: 1, pluginId: 'blog', list: async (actor: Actor, query: never) => { access.assert(actor); return index.managed(ownerKey(actor), query, conversationArchive(ctx).archivedSessionIds, [...hostBusyConversationIds(ctx), ...this.active.keys(), ...this.forks.keys(), ...this.forkSources.keys(), ...index.pendingOperations()]) }, preview: async (actor: Actor, id: string, before?: number) => {
-        access.assert(actor); const c = index.record(ownerKey(actor), id); invariant(c.ready && c.removalState !== 'removed', '对话不存在或无权访问', 404)
-        const events = await this.persistedEvents(actor, c); access.assert(actor); invariant(index.record(ownerKey(actor), id).removalState !== 'removed', '会话已移除', 404)
-        const owner = ownerKey(actor), requests = [...((c.inheritedRequests as readonly string[] | undefined) ?? []).map((requestId: string) => index.request(owner, requestId)), ...index.requests(owner, id, true)]
+        access.assert(actor); const c = index.record(actor, id); invariant(c.ready && c.removalState !== 'removed', '对话不存在或无权访问', 404)
+        const events = await this.persistedEvents(actor, c); access.assert(actor); invariant(index.record(actor, id).removalState !== 'removed', '会话已移除', 404)
+        const owner = ownerKey(actor), requests = [...await Promise.all(((c.inheritedRequests as readonly string[] | undefined) ?? []).map((requestId: string) => index.request(owner, requestId))), ...await index.requests(owner, id, true)]
         const projection = projectChat(events, requests, this.sdk) as ChatProjection
         // `PreviewMessage.role` 是 `'user'|'assistant'|'tool'` 的**联合**（不是 `string`），而
         // `ChatMessage.role` 在 `projectChat` 转 TS 之前只能是 `string`——白名单过滤之后收窄一次。
@@ -295,10 +295,10 @@ export class BlogChat {
     }
   }
   busy(id: string): boolean { return this.active.has(id) || this.forks.has(id) || this.forkSources.has(id) || this.index.pendingOperations().includes(id) }
-  create(actor: Actor, requestId: string) { this.access.assert(actor); return this.publicConversation(this.index.create(ownerKey(actor), requestId)) }
+  async create(actor: Actor, requestId: string) { this.access.assert(actor); return this.publicConversation(await this.index.create(ownerKey(actor), requestId)) }
   publicConversation({ id, title, updatedAt, ready, parent, pinned }: ChatConversation) { return { id, title, updatedAt, ready, parent, pinned: !!pinned } }
-  list(actor: Actor, offset: number, query: string): { readonly items: readonly ChatListItem[]; readonly nextOffset: number | null } { this.access.assert(actor); return this.index.list(ownerKey(actor), offset, query) }
-  mutate(actor: Actor, input: ChatMutationInput) {
+  async list(actor: Actor, offset: number, query: string): Promise<{ readonly items: readonly ChatListItem[]; readonly nextOffset: number | null }> { this.access.assert(actor); return this.index.list(ownerKey(actor), offset, query) }
+  async mutate(actor: Actor, input: ChatMutationInput) {
     this.access.assert(actor); invariant(!this.closed, '博客助手正在停止', 503)
     // ⚠️ 这里**只能**传 `input.ids` 本身，不能先浅拷贝（`[...input.ids]`）：delete 分支不经过
     // `index.mutate` 的参数校验，唯一的类型校验在 `conversationRemover` → kit 的 `conversationIds(value)`
@@ -306,11 +306,11 @@ export class BlogChat {
     // 变成"字符串被拆成单字符数组"后的 404。`as unknown as string[]` 只是补 `remove` 要的
     // `string[]`（`ChatMutationInput.ids` 是只读的），运行期传的还是同一个数组。
     if (input.operation === 'delete') return this.remove(actor, input.ids as unknown as string[]).then(result => { for (const id of input.ids) this.emit(id, { type: 'changed' }); invariant(result.results.every(item => ['removed', 'alreadyRemoved'].includes(item.status)), '部分会话未移除，请在会话管理中查看并重试', 409); return { ok: true } })
-    this.index.mutate(ownerKey(actor), input, id => invariant(!this.active.has(id) && !this.forks.has(id) && !this.forkSources.has(id), '对话仍在回答或创建分支，请先停止或等待完成', 409))
+    await this.index.mutate(ownerKey(actor), input, id => invariant(!this.active.has(id) && !this.forks.has(id) && !this.forkSources.has(id), '对话仍在回答或创建分支，请先停止或等待完成', 409))
     for (const id of input.ids) this.emit(id, { type: 'changed' })
     return { ok: true }
   }
-  requests(owner: string, id: string): readonly ChatRequestRecord[] { const c = this.index.get(owner, id); return [...((c.inheritedRequests as readonly string[] | undefined) ?? []).map((r: string) => this.index.request(owner, r)), ...this.index.requests(owner, id)] }
+  async requests(owner: string, id: string): Promise<readonly ChatRequestRecord[]> { const c = await this.index.get(owner, id); return [...await Promise.all(((c.inheritedRequests as readonly string[] | undefined) ?? []).map((r: string) => this.index.request(owner, r))), ...await this.index.requests(owner, id)] }
   assertLifecycle(c: ChatConversation, header: { readonly id: unknown; readonly cwd?: string; readonly parentSession?: unknown; readonly isSeeded?: boolean; readonly createdAt: number }) {
     invariant(String(header.id) === c.id && header.cwd === process.cwd() && (header.parentSession ?? null) === c.parent && !!header.isSeeded === !!c.parent, '会话持久化归属或来源不匹配', 409)
     // `sessionCreatedAt` / `openingAt` / `openingUntil` 走 `ChatConversation` 的索引签名（`unknown`），
@@ -331,18 +331,36 @@ export class BlogChat {
     this.assertLifecycle(c, known.header)
     return this.index.save(ownerKey(actor), c.id, { ready: true, sessionCreatedAt: known.header.createdAt })
   }
-  beginCreation(owner: string, id: string): ChatConversation { const now = Date.now(); return this.index.save(owner, id, { openingAt: now, openingUntil: now + this.timeoutMs + 60000 }) }
+  async beginCreation(owner: string, id: string): Promise<ChatConversation> { const now = Date.now(); return this.index.save(owner, id, { openingAt: now, openingUntil: now + this.timeoutMs + 60000 }) }
   async durable(b: Turn) {
     invariant(await this.ctx.sessions.flush(b.handle!.agent.session) === true, '宿主没有完成会话持久化检查点', 503)
-    const header = b.handle!.agent.session.header, c = this.index.get(b.job.owner, b.request.conversationId)
+    const header = b.handle!.agent.session.header, c = await this.index.get(b.job.owner, b.request.conversationId)
     this.assertLifecycle(c, header)
-    this.index.save(b.job.owner, c.id, { ready: true, sessionCreatedAt: header.createdAt })
+    await this.index.save(b.job.owner, c.id, { ready: true, sessionCreatedAt: header.createdAt })
+  }
+  /**
+   * 首句当标题（**自动**标题，`titleSource = 'automatic'`）。
+   *
+   * ⚠️ **必须在 `durable`（发布）之后调用**：索引侧那条标题写入带守卫——已发布、未删除、无围栏
+   * 标记，且当前是自动标题。在发布之前写会被整条挡掉，而调用方看到的是一个"保存成功"的返回值，
+   * 表现是会话标题一直是"新对话"（用户可见、不报错）。旧 SQLite 实现没有这道守卫，所以它能把
+   * 这一步放在 `send` 的早期——切到端口之后就不能了。
+   *
+   * 条件与旧实现逐字相同：只覆盖"仍然叫新对话的自动标题"，手动命名 / 已生成标题一律不动。
+   */
+  async autoTitle(b: Turn): Promise<void> {
+    const current = await this.index.get(b.job.owner, b.request.conversationId)
+    if (current.titleSource !== 'automatic' || current.title !== '新对话') return
+    const text = typeof b.request.input.text === 'string' ? b.request.input.text : ''
+    const title = Array.from(text.replace(/\s+/g, ' ')).slice(0, 60).join('')
+    if (title === '') return
+    await this.index.save(b.job.owner, current.id, { title })
   }
   async events(actor: Actor, id: string): Promise<readonly SessionEvent[]> {
-    this.access.assert(actor); let c = this.index.get(ownerKey(actor), id); const b = this.active.get(id)
+    this.access.assert(actor); let c = await this.index.get(ownerKey(actor), id); const b = this.active.get(id)
     if (b?.handle) return b.handle.agent.session.snapshotEvents()
     if (b) return []
-    if (this.forks.has(id)) { await this.forks.get(id)!.promise; this.access.assert(actor); c = this.index.get(ownerKey(actor), id) }
+    if (this.forks.has(id)) { await this.forks.get(id)!.promise; this.access.assert(actor); c = await this.index.get(ownerKey(actor), id) }
     c = await this.recover(actor, c)
     if (!c.ready) return []
     return this.persistedEvents(actor, c)
@@ -352,17 +370,17 @@ export class BlogChat {
     try { this.assertLifecycle(c, handle.header); const { events } = await handle.read(); this.access.assert(actor); return events } finally { await handle.close() }
   }
   async history(actor: Actor, id: string): Promise<ChatHistoryResult> {
-    const events = await this.events(actor, id), owner = ownerKey(actor), c = this.index.get(owner, id)
-    const requests = this.requests(owner, id), projection = projectChat(events, requests, this.sdk) as ChatProjection, b = this.active.get(id)
+    const events = await this.events(actor, id), owner = ownerKey(actor), c = await this.index.get(owner, id)
+    const requests = await this.requests(owner, id), projection = projectChat(events, requests, this.sdk) as ChatProjection, b = this.active.get(id)
     this.access.assert(actor)
     return {
       conversation: this.publicConversation(c), ...projection, busy: !!b, live: b?.live ?? null,
       requests: requests.map(({ id, conversationId, status, message, createdAt, userMessageId, sources }) => ({ id, conversationId, status, message, createdAt, userMessageId, sources })),
-      results: [...((c.inheritedResults as readonly ChatResult[] | undefined) ?? []), ...(this.index.results(owner, id) as unknown as readonly ChatResult[])], operations: await this.operationCards(actor, id),
+      results: [...((c.inheritedResults as readonly ChatResult[] | undefined) ?? []), ...((await this.index.results(owner, id)) as unknown as readonly ChatResult[])], operations: await this.operationCards(actor, id),
     }
   }
   async operationCards(actor: Actor, id: string): Promise<readonly OperationRecord[]> {
-    this.access.assert(actor); this.index.get(ownerKey(actor), id)
+    this.access.assert(actor); await this.index.get(ownerKey(actor), id)
     const operations = await this.app.operations(ownerKey(actor)) as readonly OperationRecord[]
     return operations.filter(op => op.chat?.conversationId === id).map(op => {
       const { nonce, ...preview } = this.app.preview(op) as { readonly nonce?: string } & Record<string, unknown>
@@ -375,7 +393,7 @@ export class BlogChat {
     })
   }
   async operationAction(actor: Actor, args: { readonly conversationId: string; readonly id: string; readonly operation: string; readonly nonce?: string }) {
-    this.access.assert(actor); this.index.get(ownerKey(actor), args.conversationId)
+    this.access.assert(actor); await this.index.get(ownerKey(actor), args.conversationId)
     const op = await this.app.operation(ownerKey(actor), args.id) as OperationRecord
     invariant(op.chat?.conversationId === args.conversationId, '操作不属于当前对话', 403)
     invariant(!this.active.has(args.conversationId), '请等待本轮回答完成后再确认操作', 409)
@@ -420,46 +438,63 @@ export class BlogChat {
   }
   emit(id: string, value: unknown): void { for (const listener of this.listeners.get(id) ?? []) listener(value) }
   subscribe(actor: Actor, id: string, send: (value: unknown) => void, end: () => void) {
-    this.access.assert(actor); this.index.get(ownerKey(actor), id)
-    const listener = (value: unknown) => { try { this.access.assert(actor); this.index.get(ownerKey(actor), id); send(value) } catch { close(); end() } }
+    // 这一行是**同步**方法里的前置校验，所以走同步围栏读（`record`）。它不按 `removal_state`
+    // 过滤（`removed` 也返回）——真正的"这个会话还能不能读"由下面 listener 里的异步校验兜住。
+    this.access.assert(actor); this.index.record(actor, id)
+    // ⚠️ `emit` 是**同步**调用这个回调的，而归属校验现在要 await（索引已切 PG）。所以回调把
+    // 校验与投递放进一个立即执行的异步块：`send` 晚一个微任务，但校验失败时仍会走到
+    // `close()` / `end()`。**不能**把 await 去掉（例如只看本地镜像）：那会让已删除 / 已撤销的
+    // 订阅继续收到事件，是**静默**的越权推送。
+    const listener = (value: unknown) => { void (async () => { try { this.access.assert(actor); await this.index.get(ownerKey(actor), id); send(value) } catch { close(); end() } })() }
     const set = this.listeners.get(id) ?? new Set<(value: unknown) => void>(); this.listeners.set(id, set); set.add(listener)
     const timer = setInterval(() => listener({ type: 'ping' }), 1000); timer.unref()
     const close = () => { clearInterval(timer); set.delete(listener); if (!set.size) this.listeners.delete(id) }
     return close
   }
+  /**
+   * 更新这一轮的业务状态。
+   *
+   * **同步签名是刻意的**：`ctx.on('session/event', ...)` 的回调是同步的，它要在事件到达的那一刻
+   * 更新内存里的 `b.request`（`userSeq` / `userMessageId` 的读者随时会读它）并立即广播 `changed`。
+   * 索引切 PG 之后落库是异步的，所以这里**同步改内存 + 异步补写 PG**（失败只记日志：`finish` 的
+   * 收尾 patch 会再写一次最终状态）。
+   */
   update(b: Turn, patch: Record<string, unknown>) {
-    this.access.assert(b.job.actor); b.request = this.index.updateRequest(b.request.id, patch)
+    this.access.assert(b.job.actor)
+    b.request = { ...b.request, ...patch } as ChatRequestRecord
+    void this.index.updateRequest(b.request.owner, b.request.id, patch)
+      .catch(error => console.error('agents-group/blog: 回合状态落库失败', error))
     this.emit(b.request.conversationId, { type: 'changed' })
   }
   async models(actor: Actor, id?: string) {
     this.access.assert(actor)
-    const c = id ? this.index.get(ownerKey(actor), id) : null
+    const c = id ? await this.index.get(ownerKey(actor), id) : null
     const catalog = await conversationModelCatalog(this.ctx)
     const selected = c?.ready ? await conversationModel(this.ctx, id) : null
-    this.access.assert(actor); if (id) this.index.get(ownerKey(actor), id)
+    this.access.assert(actor); if (id) await this.index.get(ownerKey(actor), id)
     return { ...catalog, default: catalog.selected, selected }
   }
   async send(actor: Actor, args: { readonly conversationId: string; readonly requestId: string; readonly text: string; readonly research: boolean; readonly attachments?: readonly unknown[]; readonly retryFrom?: string; readonly modelSelection?: unknown }) {
     this.access.assert(actor); invariant(!this.closed, '博客助手正在停止', 503)
     invariant(typeof args.text === 'string' && args.text.trim() && args.text.length <= 8000, '请输入消息（最多 8000 字符）')
     invariant(typeof args.research === 'boolean', '联网选项无效')
-    const owner = ownerKey(actor), conversation = this.index.get(owner, args.conversationId)
-    invariant(!this.active.has(conversation.id) || this.index.hasRequest(owner, args.requestId), '此对话正在结束上一轮，请稍后再试', 409)
+    const owner = ownerKey(actor), conversation = await this.index.get(owner, args.conversationId)
+    invariant(!this.active.has(conversation.id) || await this.index.hasRequest(owner, args.requestId), '此对话正在结束上一轮，请稍后再试', 409)
     invariant(!this.forks.has(conversation.id), '分支正在准备，请稍后再试', 409)
     let operationId: string | undefined, draftId: string | null = null
     if (args.retryFrom) {
-      const old = this.index.request(owner, args.retryFrom)
-      invariant(this.requests(owner, conversation.id).some(r => r.id === old.id), '重试目标不属于此对话', 404)
+      const old = await this.index.request(owner, args.retryFrom)
+      invariant((await this.requests(owner, conversation.id)).some(r => r.id === old.id), '重试目标不属于此对话', 404)
       invariant(!['queued', 'running', 'stopping'].includes(old.status), '原请求尚未结束', 409)
       operationId = old.operationId; draftId = old.draftId
     }
     const input: Record<string, unknown> = { text: args.text.trim(), research: args.research, attachments: args.attachments ?? [], retryFrom: args.retryFrom ?? null, ...(operationId ? { operationId } : {}), ...(args.modelSelection !== undefined ? { modelSelection: args.modelSelection } : {}) }
     // Check duplicate requests before resolving current attachment selection: historical files may have been removed.
-    const duplicate = this.index.hasRequest(owner, args.requestId)
+    const duplicate = await this.index.hasRequest(owner, args.requestId)
     const selected = duplicate ? undefined : await requestedConversationModel(this.ctx, args.modelSelection)
-    this.access.assert(actor); this.index.get(owner, conversation.id)
+    this.access.assert(actor); await this.index.get(owner, conversation.id)
     invariant(!this.closed, '博客助手正在停止', 503)
-    invariant(!this.active.has(conversation.id) || this.index.hasRequest(owner, args.requestId), '此对话正在回答，请稍后再试', 409)
+    invariant(!this.active.has(conversation.id) || await this.index.hasRequest(owner, args.requestId), '此对话正在回答，请稍后再试', 409)
     invariant(!this.forks.has(conversation.id), '分支正在准备，请稍后再试', 409)
     invariant(duplicate || this.active.size < 4, '当前对话任务较多，请稍后再试', 429)
     const frozen = duplicate ? null : await this.attachments.freeze(actor, conversation.id, input.attachments as never) as readonly FrozenAttachment[] | null
@@ -468,16 +503,17 @@ export class BlogChat {
       invariant(capability.available, capability.message, 422)
       this.access.assert(actor)
       invariant(!this.closed, '博客助手正在停止', 503)
-      invariant(!this.active.has(conversation.id) || this.index.hasRequest(owner, args.requestId), '此对话正在回答，请稍后再试', 409)
+      invariant(!this.active.has(conversation.id) || await this.index.hasRequest(owner, args.requestId), '此对话正在回答，请稍后再试', 409)
       invariant(!this.forks.has(conversation.id), '分支正在准备，请稍后再试', 409)
     }
-    const { request, fresh } = this.index.start(owner, conversation.id, args.requestId, input)
+    const { request, fresh } = await this.index.start(owner, conversation.id, args.requestId, input)
     if (!fresh) return { id: request.id, status: request.status, conversationId: request.conversationId }
     const b: Turn = { chat: this, request, selected, job: { actor, owner, input: { research: input.research as boolean } }, sources: [], stopped: false, handle: null, live: null, unsub: [], abort: new AbortController(), draft: null }
     if (draftId) b.draft = await this.storage.get(owner, draftId) as unknown as BlogDraft
-    b.request = this.index.updateRequest(request.id, { attachments: frozen, draftId })
-    const current = this.index.get(owner, conversation.id)
-    this.index.save(owner, conversation.id, { title: current.titleSource === 'automatic' && current.title === '新对话' ? Array.from((input.text as string).replace(/\s+/g, ' ')).slice(0, 60).join('') : current.title })
+    b.request = await this.index.updateRequest(request.owner, request.id, { attachments: frozen, draftId })
+    // ⚠️ "首句当标题"**不在这里**：标题那条守卫要求会话已发布（`ready = TRUE`，未发布的会话不该
+    // 有官方标题），而发布发生在 `durable`（`run` 里）。放在这一步会被守卫挡掉，表现是会话标题
+    // 一直是"新对话"——用户可见，而且不报错。现在由 `autoTitle(b)` 在 `durable` 之后写。
     this.active.set(conversation.id, b)
     b.timer = setTimeout(() => void this.finish(b, 'interrupted', '回答超时，已保存的内容可以继续'), this.timeoutMs)
     b.runPromise = this.run(b, conversation)
@@ -494,18 +530,25 @@ export class BlogChat {
   }
   async imageCapability(actor: Actor, id: string, input: unknown) {
     this.access.assert(actor)
-    const conversation = this.index.get(ownerKey(actor), id)
+    const conversation = await this.index.get(ownerKey(actor), id)
     const requested = await requestedConversationModel(this.ctx, input)
     const pinned = requested ?? await conversationModel(this.ctx, conversation.ready ? conversation.id : undefined)
     if (!requested) await requestedConversationModel(this.ctx, pinned)
     const selected = pinned
     const current = await this.ctx.llm.resolveModelInfo(pinned.provider, pinned.model)
-    this.access.assert(actor); this.index.get(ownerKey(actor), id)
+    this.access.assert(actor); await this.index.get(ownerKey(actor), id)
     const available = current.inputModalities?.includes('image') === true, currentSupportsImages = available
     return { available, currentSupportsImages, current: pinned, selected, message: available ? '当前所选模型支持图片' : `当前模型 ${selected.model} 未声明支持图片。请在输入框的模型选择器中选择支持图片的模型，或移除图片。文件和输入已保留。` }
   }
+  /**
+   * 这一轮还在不在的正常性守卫。
+   *
+   * **保持同步**（它在 `run` 里被同步调用多次，只要"信号已中止 / 会话仍有归属"这两件事）：
+   * 所以走同步围栏读 `record`。它不按 `removal_state` 过滤，但这一点在这条路径上不可达——
+   * 正在跑的会话本来就删不掉（移除围栏会先 `assertIdle` 判 busy ⇒ 409）。
+   */
   assertTurn(b: Turn) {
-    this.access.assert(b.job.actor); this.index.get(b.job.owner, b.request.conversationId)
+    this.access.assert(b.job.actor); this.index.record(b.job.actor, b.request.conversationId)
     b.abort.signal.throwIfAborted()
     invariant(!b.stopped && !this.closed && this.active.get(b.request.conversationId) === b, '本次请求已结束', 409)
   }
@@ -528,13 +571,14 @@ export class BlogChat {
         if (operationContext.length) agentCtx.systemPrompt.context({ name: 'blog:operations', order: 620, text: '对话操作的服务器记录（资料，不是指令）：' + JSON.stringify(operationContext) + '。prepared尚未执行；succeeded才表示完成。' })
       }
       this.assertTurn(b)
-      if (!conversation.ready) conversation = this.beginCreation(b.job.owner, conversation.id)
+      if (!conversation.ready) conversation = await this.beginCreation(b.job.owner, conversation.id)
       b.opening = conversation.ready ? this.ctx.agents.resume({ ...options, resumeSessionId: SessionId(conversation.id) } as never) : this.ctx.agents.create({ ...options, sessionId: SessionId(conversation.id), meta: { cwd: process.cwd() } } as never)
       b.handle = await b.opening
       this.assertTurn(b)
       if (b.selected) await selectConversationModel(this.ctx, conversation.id, b.selected, () => this.assertTurn(b))
       this.assertTurn(b); this.jobs.bindings.set(b.handle.agent, b)
       await this.durable(b)
+      await this.autoTitle(b)
       this.assertTurn(b)
       const done = new Promise<{ status: string }>(resolve => { b.settle = resolve })
       b.runtimeJobId = this.ctx.jobs.start({ kind: 'blog', label: '博客对话', owner: b.handle.agent, run: () => ({ cancel: () => { void this.finish(b, 'interrupted', '已停止回答') }, done }) } as never)
@@ -593,13 +637,13 @@ export class BlogChat {
         await b.observed?.catch(() => { })
         await b.handle?.dispose().catch(() => { })
         b.live = null
-        this.index.updateRequest(b.request.id, { status, message, sources: b.sources })
+        await this.index.updateRequest(b.request.owner, b.request.id, { status, message, sources: b.sources })
         this.active.delete(b.request.conversationId)
         this.emit(b.request.conversationId, { type: 'changed' })
       }
     })(); return b.finishing
   }
-  async stop(actor: Actor, id: string) { this.access.assert(actor); this.index.get(ownerKey(actor), id); const b = this.active.get(id), fork = this.forks.get(id); if (fork) { fork.abort.abort(); await fork.promise?.catch(() => { }) } if (b) await this.finish(b, 'interrupted', '已停止回答'); this.access.assert(actor); return { stopped: true } }
+  async stop(actor: Actor, id: string) { this.access.assert(actor); await this.index.get(ownerKey(actor), id); const b = this.active.get(id), fork = this.forks.get(id); if (fork) { fork.abort.abort(); await fork.promise?.catch(() => { }) } if (b) await this.finish(b, 'interrupted', '已停止回答'); this.access.assert(actor); return { stopped: true } }
   /** 内部异常收尾只处理原身份已接纳的精确请求，不授予读取权限或返回业务内容。 */
   async settleAccepted(actor: Actor, conversationId: string, requestId: string) {
     const b = this.active.get(conversationId)
@@ -609,10 +653,10 @@ export class BlogChat {
     this.jobs.bound(b.handle!.agent); signal?.throwIfAborted()
     invariant([typeof args.draftId === 'string', Number.isSafeInteger(args.cid) && (args.cid ?? 0) > 0, args.newArticle === true].filter(Boolean).length === 1, '请选择一种文章来源')
     let snapshot: { readonly source: { readonly text: string } } | undefined, newDraft: BlogDraft | undefined
-    if (args.newArticle && !this.index.operationDraft(b.job.owner, b.request.operationId)) newDraft = await this.app.createBlogDraft(b.job.actor, 'chat:' + b.request.operationId) as unknown as BlogDraft
+    if (args.newArticle && !await this.index.operationDraft(b.job.owner, b.request.operationId)) newDraft = await this.app.createBlogDraft(b.job.actor, 'chat:' + b.request.operationId) as unknown as BlogDraft
     if (args.cid) {
       invariant(['published', 'savedDraft'].includes(args.variant ?? ''), '导入时需要明确公开版或保存稿')
-      if (!this.index.operationDraft(b.job.owner, b.request.operationId)) snapshot = await this.app.readImport(b.job.actor, args.cid, args.variant, signal)
+      if (!await this.index.operationDraft(b.job.owner, b.request.operationId)) snapshot = await this.app.readImport(b.job.actor, args.cid, args.variant, signal)
     }
     this.jobs.bound(b.handle!.agent); signal?.throwIfAborted()
     if (snapshot) invariant(snapshot.source.text.length <= 120000, '正文过长，请按章节编辑；完整原文仍保留', 413)
@@ -622,7 +666,7 @@ export class BlogChat {
      * 第二步（索引侧）单条条件 updateRequest。残余窗口：第一步成功、第二步失败后重试，
      * 若远端内容已漂移会生成第二份草稿副本（方案 §2.1 声明，保持现状语义）。
      */
-    const binding = this.index.operationDraft(b.job.owner, b.request.operationId)
+    const binding = await this.index.operationDraft(b.job.owner, b.request.operationId)
     let draft: BlogDraft
     if (binding) draft = await this.storage.get(b.job.owner, binding) as unknown as BlogDraft
     else if (args.draftId) draft = await this.storage.get(b.job.owner, args.draftId) as unknown as BlogDraft
@@ -632,7 +676,7 @@ export class BlogChat {
     if (args.cid) { const remote = draft.remote; invariant((remote?.published?.cid === args.cid || remote?.savedDraft?.cid === args.cid) && remote?.selectedVariant === args.variant, '本次操作已绑定另一篇文章', 409) }
     invariant(!b.draft || b.draft.id === draft.id, '本轮已绑定另一篇文章，请下一轮再处理', 409)
     invariant(draft.text.length <= 120000, '正文过长，请按章节编辑；完整原文仍保留', 413)
-    const request = this.index.updateRequest(b.request.id, { draftId: draft.id })
+    const request = await this.index.updateRequest(b.request.owner, b.request.id, { draftId: draft.id })
     b.draft = draft; b.request = request; this.emit(b.request.conversationId, { type: 'changed' })
     return { draftId: draft.id, revision: draft.revision, title: draft.title, text: draft.text, format: draft.format, tags: draft.tags, categories: draft.categories, ...(draft.allowComment === undefined ? {} : { allowComment: draft.allowComment }), proposalId: draft.proposal?.id ?? null }
   }
@@ -644,7 +688,7 @@ export class BlogChat {
     invariant(current.revision === draft.revision, '文章已被手动修改，请重新读取当前文章再提出候选', 409)
     const proposal = await this.storage.propose(b.job.owner, draft.id, draft.revision, args, b.sources, draft.proposal?.id ?? null)
     b.draft = { ...draft, proposal } as unknown as BlogDraft
-    this.index.result(b.job.owner, b.request, 'candidate', await this.storage.get(b.job.owner, draft.id))
+    await this.index.result(b.job.owner, b.request, 'candidate', await this.storage.get(b.job.owner, draft.id))
     this.update(b, { proposalId: proposal.id })
     return { draftId: draft.id, proposalId: proposal.id, savedAs: 'candidate', requiresUserAction: true }
   }
@@ -667,7 +711,7 @@ export class BlogChat {
   }
   async fork(actor: Actor, args: { readonly conversationId: string; readonly requestId: string; readonly messageId: string }) {
     this.access.assert(actor); invariant(!this.closed, '博客助手正在停止', 503)
-    this.index.get(ownerKey(actor), args.conversationId)
+    await this.index.get(ownerKey(actor), args.conversationId)
     const sourceId = args.conversationId
     this.forkSources.set(sourceId, (this.forkSources.get(sourceId) ?? 0) + 1)
     try { return await this.createFork(actor, args) } finally { const count = (this.forkSources.get(sourceId) ?? 1) - 1; if (count) this.forkSources.set(sourceId, count); else this.forkSources.delete(sourceId) }
@@ -678,36 +722,41 @@ export class BlogChat {
     invariant(target, '只能从已完成轮次的末条回答创建分支', 409)
     const events = await this.events(actor, args.conversationId), seed = events.slice(0, target!.forkCut!)
     invariant(seed.length === target!.forkCut && (seed.at(-1) as { type?: string } | undefined)?.type === 'turn/end', '分支边界已变化', 409)
-    const requests = this.requests(owner, args.conversationId).filter(r => r.userMessageId && seed.some(e => (e as { type?: string; data?: { id?: string } }).type === 'user/message' && (e as { data?: { id?: string } }).data?.id === r.userMessageId))
+    const requests = (await this.requests(owner, args.conversationId)).filter(r => r.userMessageId && seed.some(e => (e as { type?: string; data?: { id?: string } }).type === 'user/message' && (e as { data?: { id?: string } }).data?.id === r.userMessageId))
     this.access.assert(actor)
-    const c = this.index.create(owner, args.requestId, {
+    const c = await this.index.create(owner, args.requestId, {
       title: history.conversation.title + ' · 分支', parent: args.conversationId, forkCut: target!.forkCut,
       inheritedRequests: requests.map(r => r.id), attachments: requests.flatMap(r => r.attachments.map(a => ({ requestId: r.id, id: a.id }))),
       inheritedResults: (history.results as readonly { readonly requestId?: string }[]).filter(r => requests.some(q => q.id === r.requestId)),
     } as never)
     invariant(c.parent === args.conversationId && c.forkCut === target!.forkCut, '同一请求标识不能用于不同分支', 409)
     if (c.ready) return this.publicConversation(c)
-    if (this.forks.has(c.id)) { await this.forks.get(c.id)!.promise; this.access.assert(actor); return this.publicConversation(this.index.get(owner, c.id)) }
+    if (this.forks.has(c.id)) { await this.forks.get(c.id)!.promise; this.access.assert(actor); return this.publicConversation(await this.index.get(owner, c.id)) }
     const fork: Fork = { actor, job: { input: { research: true } }, abort: new AbortController(), promise: null }
-    const check = () => { fork.abort.signal.throwIfAborted(); invariant(!this.closed, '博客助手正在停止', 503); this.access.assert(actor); this.index.get(owner, args.conversationId); this.index.get(owner, c.id); invariant(this.forks.get(c.id) === fork, '分支任务已结束', 409) }
+    // ⚠️ `check` 从同步改成 `async`：里面的"会话还读得到吗"现在是一次 PG 往返。调用点都在异步
+    // 上下文里（本方法 / `pending`），所以逐处 `await check()`——漏掉一处就会让那一步的守卫
+    // 变成 fire-and-forget（抛出的 409 变成未处理的拒绝，而不是中止这一轮）。
+    const check = async () => { fork.abort.signal.throwIfAborted(); invariant(!this.closed, '博客助手正在停止', 503); this.access.assert(actor); await this.index.get(owner, args.conversationId); await this.index.get(owner, c.id); invariant(this.forks.get(c.id) === fork, '分支任务已结束', 409) }
     const pending = (async () => {
       const recovered = await this.recover(actor, c)
-      check()
+      await check()
       if (recovered.ready) return
       const pinned = await conversationModel(this.ctx, args.conversationId, seed.length)
       const selection = await selectBlogModel(this.ctx, { text: pinned, vision: pinned }, historyHasImages(seed), fork.abort.signal)
-      check()
-      this.beginCreation(owner, c.id)
+      await check()
+      await this.beginCreation(owner, c.id)
       const options = this.options(fork as unknown as Turn, selection)
       const handle = await this.ctx.agents.create({ ...options, sessionId: SessionId(c.id), seed, inheritedEventCount: seed.length, meta: { cwd: process.cwd(), parentSession: SessionId(args.conversationId), isSeeded: true } } as never)
-      try { check(); await this.durable({ handle, job: { owner }, request: { conversationId: c.id } } as unknown as Turn); check() } finally { await handle.dispose() }
+      try { await check(); await this.durable({ handle, job: { owner }, request: { conversationId: c.id } } as unknown as Turn); await check() } finally { await handle.dispose() }
     })()
     fork.promise = pending; this.forks.set(c.id, fork)
-    try { await pending; return this.publicConversation(this.index.get(owner, c.id)) } finally { this.forks.delete(c.id) }
+    try { await pending; return this.publicConversation(await this.index.get(owner, c.id)) } finally { this.forks.delete(c.id) }
   }
   async original(actor: Actor, conversationId: string, requestId: string, id: string) {
-    const guard = () => { this.access.assert(actor); return this.index.historyAttachment(ownerKey(actor), conversationId, requestId, id) }
-    return this.attachments.readOriginal(actor, guard(), guard)
+    // `guard` 现在返回 Promise（索引已切 PG），而它同时被当作"取值"和"再校验一次"的回调传给
+    // `readOriginal`；两次调用方都 await，所以形状自洽（见 `BlogAttachments.readOriginal`）。
+    const guard = async () => { this.access.assert(actor); return this.index.historyAttachment(ownerKey(actor), conversationId, requestId, id) }
+    return this.attachments.readOriginal(actor, await guard(), guard)
   }
   async close() { this.closed = true; const all = [...this.active.values()], forks = [...this.forks.values()]; for (const fork of forks) fork.abort.abort(); await Promise.all(all.map(b => this.finish(b, 'interrupted', '服务正在停止'))); await Promise.all(all.map(b => b.runPromise)); await Promise.allSettled(forks.map(fork => fork.promise)) }
 }

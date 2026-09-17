@@ -24,6 +24,8 @@ python3 /absolute/plugin/backup/install.py --config /absolute/private/executor.j
 
 `chat-state.tar.gz` 保存博客会话归属清单与官方 header、events、继承长度，评分、备注、版本和时间戳均保存在反馈事件中。逐会话通过官方 API 导出；每份最多 10,000 个会话、每会话 100,000 个事件和 64 MiB、总计 2 GiB，超限失败，不截断记录。恢复仅替换博客清单涉及的会话目录，其他插件和用户的会话保持原样。日志与 `blog.sqlite` 使用同一份恢复日志（journal）；失败时还原已替换或删除的目录，并撤出新建会话。旧备份缺少聊天组件而当前已有会话时拒绝恢复；auth 用户和权限不随博客恢复回退。
 
+**归属清单来自哪张表，以及它的时间窗口**：索引库已经切到 PostgreSQL，会话行**不再写进 `blog.sqlite` 的 `conversations` 表**（那张旧表只读留存，不再更新）。离线容器网络禁用，读不到 PG，所以清单改从运行时的**本地镜像表** `conversation_mirror` 读——它是会话行的本地副本，带 `owner` 两列、`ready`、`deleted_at`/`removal_state` 与业务载荷，载荷里有恢复侧要核验的 `requestId`、`createdAt`、`sessionCreatedAt` / `openingAt`+`openingUntil`。**这个副本是"本实例启动收敛时读到的全量行"加上"之后它自己写过的行"，不是实时 PostgreSQL**：切换后新会话在镜像里出现的时机取决于运行时的启动收敛与写入路径。缺失 `conversation_mirror` 表（尚未被运行时建过）时清单为空，按"没有会话"处理；镜像行缺少 `requestId` / `createdAt` 时**拒绝**该条（归属不完整不许进备份）。
+
 生产恢复在执行前通过 DSH 的内部 Token 接口重新验证原用户和备份管理权限。停写后若过程失败，恢复日志用于回滚目录和指定策略图片记录，之后再恢复服务。检查恢复失败与 `recoveryPending`，文件解压完成不代表网站已恢复可用。
 
 SQL 导出不携带服务器级 GTID 状态，旧归档若包含 `GTID_PURGED` 会在创建恢复数据库前拒绝。正常备份要求引用的附件存在；恢复前的保护备份允许记录当前已缺失的附件，清单中的 `missingAttachments` 明确列出缺失项，以便从选定备份补回，同时保留其余当前状态。

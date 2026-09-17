@@ -150,6 +150,8 @@ async function fixture(mode: 'standalone' | 'authenticated' = 'authenticated') {
           // 真实覆盖在 `dsh-agents-group/tests/storage-contract.test.ts`（真 PG）。
           turnById: async () => { throw new Error('本文件的替身不实现 turnById') },
           turnsOf: async () => { throw new Error('本文件的替身不实现 turnsOf') },
+          turnResultsOf: async () => { throw new Error('本文件的替身不实现 turnResultsOf') },
+    turnsByOperationId: async () => { throw new Error('本文件的替身不实现 turnsByOperationId') },
           patchTurnPayload: async () => { throw new Error('本文件的替身不实现 patchTurnPayload') },
           pendingQuestion: async () => undefined,
           setPendingQuestion: async () => {},

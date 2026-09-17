@@ -24,6 +24,7 @@ import { AccessError } from '@dsh-plugin-manager/plugin-kit'
 import { StorageError, mapStorageError, uniqueViolation } from './errors.ts'
 import type {
   AgentDatabasePort,
+  ConversationDetailShape,
   ConversationPageShape,
   ConversationPayloadShape,
   ConversationPort,
@@ -47,7 +48,7 @@ export const RUNTIME_SCHEMA_VERSION = 1
 const FRAMEWORK_TABLES = ['dsh_schema_versions', 'dsh_conversations', 'dsh_turns', 'dsh_turn_results'] as const
 
 /** PG 侧能独立完成的那部分：`record` / `mark` 走本地同步面，`managed` 走 adapter。 */
-export type PgConversationPart = Omit<ConversationPort, 'record' | 'mark' | 'managed'>
+export type PgConversationPart = Omit<ConversationPort, 'record' | 'mark' | 'managed' | 'fenceOf'>
 
 interface ConversationRow extends QueryResultRow {
   readonly id: string
@@ -64,6 +65,18 @@ interface ConversationRow extends QueryResultRow {
 }
 
 /**
+ * `dsh_conversations` 的一行**加上** `detail` 多要的三列（`created_at` / `request_id`）。
+ *
+ * 单列一条而不是把 `ConversationRow` 撑大：`toRecord` 是按 `ConversationRow` 写的，撑大它等于
+ * 让所有按行读的路径都"顺便"能看到 `request_id`（幂等键）——那正是最容易被误当成会话 id 的字段
+ * （两处同名不同义的教训已经出现过一次，见 `dsh_turn_results.turn_id` 的注释）。
+ */
+interface ConversationDetailRow extends ConversationRow {
+  readonly createdAt: string | number
+  readonly requestId: string
+}
+
+/**
  * `dsh_turns` 的一行（列名与 {@link TURN_COLUMNS} 逐字对应）。
  *
  * `createdAt` 是 `BIGINT` ⇒ pg 驱动读回**字符串**，与 `ConversationRow.updatedAt` 同一条口径。
@@ -74,6 +87,8 @@ interface TurnRow extends QueryResultRow {
   readonly requestId: string
   readonly inputHash: string
   readonly status: string
+  /** `BIGINT GENERATED ALWAYS AS IDENTITY` ⇒ 读回是**字符串**，与 `createdAt` 同一条口径。 */
+  readonly seq: string | number
   readonly createdAt: string | number
   readonly payload?: ConversationPayloadShape | string | null
 }
@@ -85,9 +100,9 @@ interface TurnRow extends QueryResultRow {
  * 出现的缺失——那种缺陷不会有测试变红。
  */
 const TURN_COLUMNS = `id, conversation_id AS "conversationId", request_id AS "requestId",
-          input_hash AS "inputHash", status, created_at AS "createdAt", payload`
+          input_hash AS "inputHash", status, seq, created_at AS "createdAt", payload`
 
-/** 把 `dsh_turns` 的一行收敛成 {@link TurnRecord}（`created_at` 是 BIGINT ⇒ 显式 `Number`）。 */
+/** 把 `dsh_turns` 的一行收敛成 {@link TurnRecord}（`seq` / `created_at` 是 BIGINT ⇒ 显式 `Number`）。 */
 function toTurnRecord(row: TurnRow): TurnRecord {
   return {
     id: row.id,
@@ -95,8 +110,45 @@ function toTurnRecord(row: TurnRow): TurnRecord {
     requestId: row.requestId,
     inputHash: row.inputHash,
     status: row.status,
+    seq: Number(row.seq),
     createdAt: Number(row.createdAt),
     payload: decodePayload(row.payload),
+  }
+}
+
+/**
+ * `dsh_turn_results` 的一行（列名与两条读路径的列清单逐字对应）。
+ *
+ * `seq` / `created_at` 是 `BIGINT` ⇒ pg 驱动读回**字符串**，与 `TurnRow` 同一条口径。
+ */
+interface TurnResultRow extends QueryResultRow {
+  readonly id: string
+  readonly turnId: string
+  readonly operationId: string
+  readonly seq: string | number
+  readonly createdAt: string | number
+  readonly payload: Record<string, unknown> | string
+}
+
+/**
+ * 把 `dsh_turn_results` 的一行收敛成 {@link TurnResultRecord}。
+ *
+ * 抽成函数是因为有两条读路径（按轮次 `turnResults` / 按会话 `turnResultsOf`），它们必须给出
+ * **同一个**形状：各写一份的漂移表现是"按轮次读得到、按会话读不到某个字段"这类只在一条路径上
+ * 出现的缺失——那种缺陷不会有测试变红。
+ */
+function toTurnResultRecord(row: TurnResultRow): TurnResultRecord {
+  return {
+    id: row.id,
+    turnId: row.turnId,
+    operationId: row.operationId,
+    seq: Number(row.seq),
+    createdAt: Number(row.createdAt),
+    // 列是 JSONB：正常读回就是对象。字符串分支是为"列形状与预期不一致"留的一层兜底，
+    // 而不是主路径（主路径若真读到字符串，那是 schema 漂移，不是这里能修的）。
+    payload: typeof row.payload === 'string'
+      ? JSON.parse(row.payload) as Record<string, unknown>
+      : row.payload,
   }
 }
 
@@ -168,26 +220,66 @@ export class PgConversations implements PgConversationPart {
   }
 
   /**
+   * 按 id 读**一整行**（含 `titleSource` / `pinned` / `createdAt` / `requestId`）。
+   *
+   * 与 {@link conversationOf} 的分工：那个只回答"这一行是不是你的"（授权判据，一个 `id` 列就够），
+   * 本方法回答"这一行现在是什么样"——业务按 id 读会话详情走它。
+   *
+   * ⚠️ 四个 owner/agent 条件一个都不能少：三张 `dsh_*` 表是所有 Agent 共用的，漏 `agent_id`
+   * 会让别的 Agent 的会话被读出来（实测过一次：管家侧栏列出别的 Agent 的会话）。
+   *
+   * 不存在 / 不属于本 owner ⇒ `undefined`（**不抛**）：要不要摊开成 404 是调用方的语义。
+   */
+  async detail(owner: OwnerKey, conversationId: string): Promise<ConversationDetailShape | undefined> {
+    const rows = await this.scoped.query<ConversationDetailRow>(
+      `SELECT id, title, title_source AS "titleSource", ready, pinned, removal_state AS "removalState",
+              deleted_at AS "deletedAt", created_at AS "createdAt", updated_at AS "updatedAt",
+              request_id AS "requestId", payload
+         FROM dsh_conversations
+        WHERE id = $1 AND agent_id = $2 AND owner_namespace = $3 AND owner_id = $4`,
+      [conversationId, this.agentId, owner.namespace, owner.userId],
+    )
+    const row = rows[0]
+    if (row === undefined) return undefined
+    return {
+      ...toRecord(row),
+      // `title_source` 走与 `list` / 镜像同一个收敛函数：三处各写一份，迟早漂移成
+      // "侧栏说 manual、详情说 automatic"。
+      titleSource: toTitleSource(row.titleSource),
+      pinned: row.pinned === true,
+      // `created_at` 是 BIGINT ⇒ 驱动读回字符串，与 `updatedAt` 同一条口径。
+      createdAt: Number(row.createdAt),
+      requestId: row.requestId,
+    }
+  }
+
+  /**
    * **预留段**：插入一行归属（`ready = false`）。
    *
    * 幂等：`requestId` 非空时靠 `dsh_conversations_request` 这个**部分**唯一索引去重，
    * 冲突后 `SELECT` 回既有行——同一个 `requestId` 再来一次返回原来那条，不新建。
    */
   async create(owner: OwnerKey, conversationId: string, requestId: string,
-    initial?: { readonly title?: string; readonly payload?: ConversationPayloadShape }): Promise<ConversationRecordShape> {
+    initial?: {
+      readonly title?: string
+      readonly payload?: ConversationPayloadShape
+      readonly titleSource?: 'automatic' | 'generated' | 'manual'
+    }): Promise<ConversationRecordShape> {
     const now = Date.now()
     const title = initial?.title ?? ''
+    // 标题来源：显式给的优先；否则沿用"非空标题 ⇒ 人工标题"的既有判定。
+    //
+    // ⚠️ 只看 `undefined` 会把空串当成人工标题：生产路径传的正是 `{ title: '' }`
+    //（`conversation.ts` 新建会话处），于是每次新建都落 `manual`，`syncTitle(..., 'automatic')`
+    // 被 `title_source = 'automatic'` 守卫拒绝 ⇒ 侧栏标题永久为空。
+    const titleSource = initial?.titleSource ?? (title === '' ? 'automatic' : 'manual')
     // ⚠️ `agent_id` 必须显式写（无默认值）；`ON CONFLICT` 的目标必须**重复谓词**否则 42P10。
     await this.scoped.query(
       `INSERT INTO dsh_conversations(id, agent_id, owner_namespace, owner_id, request_id, title, title_source, ready, pinned, removal_state, created_at, updated_at, payload)
        VALUES($1,$2,$3,$4,$5,$6,$7,FALSE,FALSE,'',$8,$8,$9::jsonb)
        ON CONFLICT (agent_id, owner_namespace, owner_id, request_id) WHERE request_id <> '' DO NOTHING`,
       [conversationId, this.agentId, owner.namespace, owner.userId, requestId, title,
-        // 判定复用上一行算好的 `title`（= `initial?.title ?? ''`），两者必须**同源**。
-        // 只看 `undefined` 会把空串当成人工标题：生产路径传的正是 `{ title: '' }`
-        // （`conversation.ts` 新建会话处），于是每次新建都落 `manual`，`syncTitle(..., 'automatic')`
-        // 被 `title_source = 'automatic'` 守卫拒绝 ⇒ 侧栏标题永久为空。
-        title === '' ? 'automatic' : 'manual', now, JSON.stringify(initial?.payload ?? {})],
+        titleSource, now, JSON.stringify(initial?.payload ?? {})],
     )
     const existing = await this.readByRequest(owner, requestId)
     if (existing !== undefined) return existing
@@ -282,15 +374,18 @@ export class PgConversations implements PgConversationPart {
     const values: unknown[] = [this.agentId, owner.namespace, owner.userId, scope.busy, scope.archived]
     const filters = [
       'agent_id = $1', 'owner_namespace = $2', 'owner_id = $3',
-      // ⚠️ `ready` 是**陷阱列**：它是"可见 / 可删"的门，三个消费方都靠它（列表过滤、移除围栏
-      // 的 409、`conversation-store.ts:63/99`）。kit 那套是把 `ready = 1` 放在**调用方提供的
-      // source SQL** 里的，所以这里必须自己写——漏了它，预留段（`ready = false`）的会话会
-      // 出现在侧栏里，点进去既不能发消息也不能删。
-      'ready = TRUE',
       `removal_state <> 'removed'`,
       // 已删除且未被归档：不出现（与 kit 的实现一致）。
       `NOT (deleted_at IS NOT NULL AND removal_state = '' AND id = ANY($5::text[]))`,
     ]
+    // ⚠️ `ready` 是**陷阱列**：它是"可见 / 可删"的门，三个消费方都靠它（列表过滤、移除围栏
+    // 的 409、`conversation-store.ts:63/99`）。kit 那套是把 `ready = 1` 放在**调用方提供的
+    // source SQL** 里的，所以这里必须自己写——漏了它，预留段（`ready = false`）的会话会
+    // 出现在侧栏里，点进去既不能发消息也不能删。
+    //
+    // ⚠️ 但**页面口径**要能关掉它（`includeUnready`）：blog 的"新建对话"是两段的，中间那段
+    // 时间页面上必须看得见那个会话。开关缺省关闭 ⇒ 侧栏与 closedoff 页面的行为一字不变。
+    if (query.includeUnready !== true) filters.push('ready = TRUE')
     if (query.q !== '') {
       values.push(query.q)
       const needle = `$${values.length}`
@@ -316,7 +411,7 @@ export class PgConversations implements PgConversationPart {
     // 状态过滤必须**下推到 SQL**：在 JS 里过滤会让每页条数少于 limit，`nextOffset` 跟着算错。
     values.push(query.state)
     const stateIndex = values.length
-    const visible = `SELECT id, title, pinned, title_source AS "titleSource", updated_at,
+    const visible = `SELECT id, title, pinned, ready, title_source AS "titleSource", updated_at,
         CASE
           WHEN removal_state = 'pending' THEN 'pending'
           WHEN removal_state = 'failed' THEN 'failed'
@@ -334,7 +429,7 @@ export class PgConversations implements PgConversationPart {
       // `pinned` / `"titleSource"` 是**给业务页面看的**（kit 侧栏忽略，见 `ports.ts` 的
       // `ManagedConversationShape`）：`pinned` 同时还是排序键，`title_source` 则决定业务页面
       // 要不要停止首句标题刷新。两列本来就在 `visible` 里，这里只是把它们带出到投影上。
-      `SELECT id, title, pinned, "titleSource", updated_at AS "updatedAt", state FROM (${visible}) AS v
+      `SELECT id, title, pinned, ready, "titleSource", updated_at AS "updatedAt", state FROM (${visible}) AS v
         WHERE ${stateFilter}
         ORDER BY pinned DESC, updated_at DESC, id
         LIMIT $${stateIndex + 1} OFFSET $${stateIndex + 2}`,
@@ -348,6 +443,9 @@ export class PgConversations implements PgConversationPart {
       canRemove: row.state !== 'busy' && row.state !== 'pending',
       pinned: row.pinned === true,
       titleSource: toTitleSource(row.titleSource),
+      // `state` 的 `else` 分支也是 `'ready'` ⇒ 未发布的行光看 state 分不出来。页面（传了
+      // `includeUnready` 的那个）要的就是这个区分。
+      ready: row.ready === true,
       ...(row.state === 'busy'
         ? { blockedReason: '会话正在运行或有未完成操作，请先处理或等待完成' }
         : row.state === 'pending'
@@ -535,16 +633,17 @@ export class PgTurns {
   }
 
   /**
-   * 读一个会话下的全部轮次，按 `created_at, id` 升序。
+   * 读一个会话下的全部轮次，按 **`seq`** 升序（库生成的插入序）。
    *
    * 包含 `request_id = ''` 的**等待行**（调用方按 `requestId === ''` 自己区分）。
-   * 排序说明见端口注释：`dsh_turns` 没有单调列，**同毫秒退化成按 `id` 排**。
+   * ⚠️ **按 `seq` 而不是 `created_at` 排**：后者只到毫秒，同一毫秒内的两条轮次按它排会退化成按
+   * `id`（随机 UUID）排 ⇒ **列表显示顺序不确定**。`seq` 就是为补上这一列而加的。
    */
   async turnsOf(owner: OwnerKey, conversationId: string): Promise<readonly TurnRecord[]> {
     const rows = await this.scoped.query<TurnRow>(
       `SELECT ${TURN_COLUMNS} FROM dsh_turns
         WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND conversation_id = $4
-        ORDER BY created_at, id`,
+        ORDER BY seq`,
       [this.agentId, owner.namespace, owner.userId, conversationId],
     )
     return rows.map(toTurnRecord)
@@ -591,43 +690,72 @@ export class PgTurns {
    */
   async turnResults(owner: OwnerKey, turnId: string): Promise<readonly TurnResultRecord[]> {
     if (turnId === '') return []
-    const rows = await this.scoped.query<{
-      id: string; turnId: string; operationId: string
-      seq: string | number; createdAt: string | number
-      payload: Record<string, unknown> | string
-    }>(
+    const rows = await this.scoped.query<TurnResultRow>(
       `SELECT id, turn_id AS "turnId", operation_id AS "operationId", seq, created_at AS "createdAt", payload
         FROM dsh_turn_results
         WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND turn_id = $4
         ORDER BY seq`,
       [this.agentId, owner.namespace, owner.userId, turnId],
     )
-    return rows.map(row => ({
-      id: row.id,
-      turnId: row.turnId,
-      operationId: row.operationId,
-      seq: Number(row.seq),
-      createdAt: Number(row.createdAt),
-      // 列是 JSONB：正常读回就是对象。字符串分支是为"列形状与预期不一致"留的一层兜底，
-      // 而不是主路径（主路径若真读到字符串，那是 schema 漂移，不是这里能修的）。
-      payload: typeof row.payload === 'string'
-        ? JSON.parse(row.payload) as Record<string, unknown>
-        : row.payload,
-    }))
+    return rows.map(toTurnResultRecord)
+  }
+
+  /**
+   * 读**一个会话下所有轮次**的结果记录，按 `seq`（插入序）升序。
+   *
+   * 不用 `JOIN dsh_turns` 再按轮次分组：`seq` 是**全局**自增的插入序，所以它天然给出
+   * "先按轮次、再按轮次内的写入顺序"——结果是在各自那一轮里写进去的，轮次的插入一定早于
+   * 它自己的结果。少一次 JOIN，也少一个会漂移的排序键。
+   *
+   * `conversation_id` 是 `dsh_turn_results` 自己的列（不是从 turn 上取），所以按它会话过滤
+   * 不需要 join；但**四个条件一个都不能少**（`agent_id` + owner 两列 + 会话 id）。
+   */
+  async turnResultsOf(owner: OwnerKey, conversationId: string): Promise<readonly TurnResultRecord[]> {
+    const rows = await this.scoped.query<TurnResultRow>(
+      `SELECT id, turn_id AS "turnId", operation_id AS "operationId", seq, created_at AS "createdAt", payload
+        FROM dsh_turn_results
+        WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND conversation_id = $4
+        ORDER BY seq`,
+      [this.agentId, owner.namespace, owner.userId, conversationId],
+    )
+    return rows.map(toTurnResultRecord)
+  }
+
+  /**
+   * 按**业务操作标识**读轮次（跨会话），最新的在前。
+   *
+   * `payload->>'operationId'` 是 JSONB 里的业务键（列上没有它）：同一轮操作会跨会话延续
+   * （分支会话继承 `operationId`），所以这里**不能**再按 `conversation_id` 收窄。
+   *
+   * 空串直接返回空数组：`payload` 里 `operationId: ''` 是"没有操作身份"（见 blog 的
+   * `EMPTY_TURN_PAYLOAD`），把它当一个查询键会把一堆无关轮次捞回来。
+   */
+  async turnsByOperationId(owner: OwnerKey, operationId: string): Promise<readonly TurnRecord[]> {
+    if (operationId === '') return []
+    const rows = await this.scoped.query<TurnRow>(
+      `SELECT ${TURN_COLUMNS} FROM dsh_turns
+        WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3
+          AND payload->>'operationId' = $4
+        ORDER BY seq DESC`,
+      [this.agentId, owner.namespace, owner.userId, operationId],
+    )
+    return rows.map(toTurnRecord)
   }
 
   /**
    * 这个会话在等用户回什么。
    *
    * 取该会话**最新**一条带 `question` 的行：等待可能发生多次（回一句、又等一句），
-   * 只有最后那次是"此刻在等的"。
+   * 只有最后那次是"此刻在等的"。"最新"按 `seq`（插入序）定义——`created_at` 只到毫秒，
+   * 同毫秒内的两次等待按它排会退化成按随机 UUID 排，答回来的是**任意一条**。
+   * 正常情况下这里最多命中一行（`setPendingQuestion` 写入前先清键），`ORDER BY` 只是兜底。
    */
   async pendingQuestion(owner: OwnerKey, conversationId: string): Promise<string | undefined> {
     const rows = await this.scoped.query<{ question: string | null }>(
       `SELECT payload->>'question' AS question FROM dsh_turns
         WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND conversation_id = $4
           AND payload ? 'question'
-        ORDER BY created_at DESC, id DESC LIMIT 1`,
+        ORDER BY seq DESC LIMIT 1`,
       [this.agentId, owner.namespace, owner.userId, conversationId],
     )
     const question = rows[0]?.question
@@ -642,10 +770,9 @@ export class PgTurns {
    * 否则 `prepareReply` 会直接报 `waiting_expired`，子任务永远停在 `waiting_user`。
    *
    * ⚠️ 写入前**先清掉该会话上原有的 `question` 键**（与传 `undefined` 时同一句 SQL）。不清的话
-   * "此刻在等什么"就靠 `ORDER BY created_at DESC, id DESC` 猜——`created_at` 是**毫秒**，两次等待
-   * 落在同一毫秒时退化成按 **UUID** 排，答回来的是**任意一条**（测试里几乎必然同毫秒）。
-   * 唯一真正的写入口就在 `participant.ts`，它的意图本来就是"一轮只有一个待答问题"
-   * （非 `waiting` 的那一轮传 `undefined`），这里把这个不变量落成结构而不是靠时间戳运气。
+   * "此刻在等什么"就会命中多条，只能靠时间戳挑"最新"——而 `created_at` 只到**毫秒**，同毫秒内
+   * 的两次等待根本分不出先后。真正该守的是业务不变量：一个会话同时只有一个待答问题（进入
+   * `waiting` 时写入、离开时传 `undefined`），这里把它落成结构而不是靠时间戳运气。
    */
   async setPendingQuestion(owner: OwnerKey, conversationId: string, question: string | undefined): Promise<void> {
     const clear = async (): Promise<void> => {
@@ -854,11 +981,13 @@ export class PostgresAgentDatabase implements Omit<AgentDatabasePort, 'conversat
     const scoped = new PgConversations(tx, this.agentId)
     const outOfScope = (what: string): never => {
       throw new AccessError(503,
-        `事务内不支持 ${what}：它要么是同步契约（record / mark，由本地围栏面提供），要么属于 adapter（managed）`)
+        `事务内不支持 ${what}：它要么是同步契约（record / fenceOf / mark，由本地围栏面提供），要么属于 adapter（managed）`)
     }
     const conversations: ConversationPort = {
       agentId: this.agentId,
       conversationOf: (owner, id) => scoped.conversationOf(owner, id),
+      // 单条业务读也是一条普通 `SELECT`，事务内可以直接跑（它不碰本地镜像，见 `index.ts` 的说明）。
+      detail: (owner, id) => scoped.detail(owner, id),
       create: (owner, id, requestId, initial) => scoped.create(owner, id, requestId, initial),
       // 载荷合并也是一条普通 `UPDATE ... RETURNING`，事务内可以直接跑（与 `touch` / `pin` 同理）。
       patchPayload: (owner, id, patch) => scoped.patchPayload(owner, id, patch),
@@ -872,6 +1001,8 @@ export class PostgresAgentDatabase implements Omit<AgentDatabasePort, 'conversat
       pin: (owner, id, pinned) => scoped.pin(owner, id, pinned),
       managed: () => outOfScope('managed'),
       record: () => outOfScope('record'),
+      // 与 `record` 同性：它读的是**本地镜像**，事务里没有镜像这回事。
+      fenceOf: () => outOfScope('fenceOf'),
       mark: () => outOfScope('mark'),
     }
     return {

@@ -35,7 +35,7 @@ import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { AccessError, type Actor } from '@dsh-plugin-manager/plugin-kit'
-import type { ConversationPayloadShape, ConversationRecordShape } from './ports.ts'
+import type { ConversationFenceShape, ConversationPayloadShape, ConversationRecordShape } from './ports.ts'
 
 /** 镜像行：本地对 PG 那一行的投影。 */
 export interface MirrorRow {
@@ -182,6 +182,26 @@ export class LocalFenceStore {
       || row.ownerNamespace !== actor.namespace || row.ownerId !== actor.userId) {
       throw new AccessError(404, '会话不存在或无权访问')
     }
+    return this.shapeOf(row)
+  }
+
+  /**
+   * 按 id 读镜像的投影，**不判定归属**（`ConversationPort.fenceOf` 的说明写了为什么需要它：
+   * 官方的标题事件是同步回调、只带会话 id，而"要不要广播 changed"必须同步判定）。
+   *
+   * 未知的 id ⇒ `undefined`（不是 404）：调用方是"本进程刚处理过这个会话"的路径，缺行只说明
+   * 镜像还没收敛到它，那不该让标题回调抛出去。
+   */
+  fenceOf(conversationId: string): ConversationFenceShape | undefined {
+    this.assertOpen()
+    const row = this.mirrorGet(conversationId)
+    return row === undefined || row.agentId !== this.agentId
+      ? undefined
+      : { ...this.shapeOf(row), titleSource: row.titleSource }
+  }
+
+  /** 镜像行的对外投影；`record` 与 `fenceOf` **共用一份**（两处各写一份迟早漂移）。 */
+  private shapeOf(row: MirrorRow): ConversationRecordShape {
     return {
       id: row.id,
       title: row.title,

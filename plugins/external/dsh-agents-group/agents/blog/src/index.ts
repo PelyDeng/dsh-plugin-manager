@@ -30,6 +30,10 @@ import {ReasoningTranslations,reasoningOriginal} from './reasoning-translation.t
 // 的代价是**语义会漂移**，而这一段的判据恰恰是最容易漂的地方：缺文件算"没配置"（不是错误）、
 // 非法 JSON 要如实抛、**绝不静默回退 SQLite**。副本已删。
 import { resolveStorageDsn } from '../../../packages/runtime/src/storage/dsn.ts'
+// 会话 / 轮次 / 结果三张表走运行时端口：门面把「本地同步围栏面」与「PG 异步面」组合起来，
+// 启动顺序（排空 outbox → PG 清理 → 按 PG 收敛镜像）也在它里面，blog 只调 `open()`。
+import { createAgentDatabase } from '../../../packages/runtime/src/storage/index.ts'
+import type { AgentDatabasePort } from '../../../packages/runtime/src/storage/ports.ts'
 import { StorageError } from './storage/errors.mjs'
 import { BlogPgStorage } from './storage/pg.mjs'
 import type { Config } from './config.ts'
@@ -86,6 +90,40 @@ function unconfiguredBusinessStorage(hint: string): BlogPgStorage {
       return reject
     },
   }) as unknown as BlogPgStorage
+}
+
+/**
+ * 未配置连接时占位的**索引端口**（`dsh_conversations` / `dsh_turns` / `dsh_turn_results`）。
+ *
+ * 与 `unconfiguredBusinessStorage` 同一套口径，但多一层：索引面是"门面 → conversations / turns"
+ * 两层结构，所以两层都要拒绝，否则 `index.conversations.list(...)` 会先拿到 `undefined` 再炸在
+ * 别处（错误码就丢了，页面拿到的是 500 而不是 503 + 稳定码）。
+ *
+ * ⚠️ **同步面**（`record` / `mark` / `fenceOf`）在这里抛的也必须是 `StorageError`：它们由 kit 的
+ * 移除围栏在**同步**上下文里调用，抛出别的类型就是一次未归类的 500。`titleSink` 返回 `undefined`
+ * （标题投递口是可选成员，未就绪时没有队列——投递被静默丢弃好过把它塞进一个假队列）。
+ */
+function unconfiguredIndex(): AgentDatabasePort {
+  const reject = () => {
+    throw new StorageError('storage_unconfigured',
+      '博客索引存储未就绪：需要在私有配置里提供 PostgreSQL 连接（环境变量 AGENTS_GROUP_PG_DSN 或 storage.json）；不会回退 SQLite。')
+  }
+  const nested = new Proxy({}, {
+    get(_target, property) {
+      if (property === 'then') return undefined
+      if (property === 'agentId') return 'blog'
+      return reject
+    },
+  })
+  return new Proxy({}, {
+    get(_target, property) {
+      if (property === 'then') return undefined
+      if (property === 'conversations' || property === 'turns') return nested
+      if (property === 'titleSink') return undefined
+      if (property === 'close') return async () => {}
+      return reject
+    },
+  }) as unknown as AgentDatabasePort
 }
 
 /**
@@ -180,10 +218,25 @@ export async function mount(mountContext:AgentMountContext):Promise<{
       return{ok:false,error:`博客业务存储不可用（${code}）：${error instanceof Error?error.message:String(error)}`}
     }
   }
-  // ---- 索引库独立开库；pending 镜像由业务操作写路径维护、启动从 PG 恢复一次 ----
+  // ---- 索引库切 PG：会话 / 轮次 / 结果三张表走运行时端口，本地 SQLite 降级为镜像 + outbox ----
+  //
+  // ⚠️ **本地 SQLite 没有消失**，它换了角色：`blog.sqlite` 现在是运行时门面的"会话行镜像 +
+  // 同步围栏标记 + 持久 outbox"（`LocalFenceStore`）。它保证 `record` / `mark` / `syncTitle`
+  // 这三个**同步契约**仍能同步回答（kit 的移除围栏与官方标题回调不能 await）。
+  //
+  // ⚠️ 未配置 PG 时**照常装载**（页面、目录条目、参与者都注册），索引侧的任何读写都以
+  // `storage_unconfigured` 拒绝并映射成 503——**绝不回退 SQLite**。所以这里不抛给群组。
   const pending=new PendingOperationsMirror()
   if(dsnSource)await pending.restore(storage).catch(error=>console.warn('agents-group/blog: 恢复待核对操作镜像失败',error))
-  const conversations=new ChatStore(join(root,'blog.sqlite'),()=>pending.ids())
+  const index=dsnSource?createAgentDatabase({dsn:dsnSource.dsn,agentId:'blog',localPath:join(root,'blog.sqlite')}):undefined
+  if(index){
+    try{await index.open()}
+    catch(error){
+      // 与业务存储同一条口径：结构核验 / 启动收敛失败 = blog 未就绪，索引读写按存储错误码拒绝。
+      console.warn(`agents-group/blog: 索引存储未就绪（${error instanceof Error?error.message:String(error)}）`)
+    }
+  }
+  const conversations=new ChatStore(index??unconfiguredIndex(),()=>pending.ids())
   const blog=new BlogClient(settings.blog),images=new ImageClient(settings.image,join(root,'image-token.json')),backups=new BackupClient(settings.backup,access)
   // ⚠️ 这个谓词在 `BlogAttachments` 里一律被 `await`（见其 `get` / `list` / `guard`）。
   // 会话路径走索引侧的**同步**核验（`assertScope` 直接返回记录），草稿路径走存储的异步查询
@@ -298,7 +351,9 @@ export async function mount(mountContext:AgentMountContext):Promise<{
       // 释放顺序与创建相反，与迁移前保持一致；业务存储与索引库句柄都纳入释放链
       // （索引库拆库后独立开库，句柄泄漏会以 database is locked 或目录占用暴露）。
       await translations.close(); await chat.close(); await jobs.close(); await attachments.close()
-      try{conversations.close()}catch{/* 未开库或已关闭 */}
+      // 索引门面的 `close()` 会**先排空 outbox 再关连接**（顺序反了，刚标记的删除与刚投递的标题
+      // 会留在本地队列里，用户看到的是"删了还在、标题没变"），所以必须 await 到它返回。
+      if(index)try{await index.close()}catch{/* PG 池与本地句柄已在 close 内部各自收尾 */}
       try{await storage.close()}catch{/* 未配置占位没有可关闭的池 */}
     },
   }
