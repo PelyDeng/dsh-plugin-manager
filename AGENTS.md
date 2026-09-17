@@ -1,5 +1,9 @@
 # 开发约定
 
+## 交流语言
+
+- 所有回答与思考过程都使用中文。代码、命令、路径、标识符保持原样，不翻译。
+
 公共库位于 `packages/*`，框架内置插件位于 `plugins/builtin/*`，私有/用户源码位于 `plugins/external/*`。依赖方向和公开接口见 [doc/architecture.md](doc/architecture.md)。
 
 - 修改前检查工作区，只提交任务文件。不得引入凭据、运行数据、生成归档或客户专属资源。
