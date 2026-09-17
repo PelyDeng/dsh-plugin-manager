@@ -109,6 +109,14 @@ jobs:
       - run: npm install --global pnpm@11.19.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - name: Typecheck external plugins
+        # ⚠️ `pnpm check`（`scripts/workspace.mjs check`）**只覆盖框架包与 builtin 插件**：
+        # 它以 `--external` 未给 ⇒ `scope='builtin'`、`requested='all'`，于是 `plugins/external/**`
+        # **不在任何 typecheck 里**。而私有侧的 `dsh-agents-group`（含 `packages/runtime`——本次重构的
+        # 核心，一万多行）与 `dsh-butler-console` 的**代码正确性判据恰恰是"四个 typecheck 全 0"**
+        # ⇒ 那条判据必须进 CI，否则它只是本地习惯，CI 绿说明不了它成立。
+        # 这里按 workspace 成员的 `typecheck` 脚本逐个跑（`--if-present` 跳过没声明的包）。
+        run: pnpm -r --filter "./plugins/external/**" run --if-present typecheck
       - name: Test release scripts
         id: script-tests
         shell: bash
