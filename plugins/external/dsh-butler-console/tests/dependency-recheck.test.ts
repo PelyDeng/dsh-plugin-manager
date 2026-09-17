@@ -112,7 +112,7 @@ const subtaskOf = (f: Fixture, id: string) =>
   f.store.task(actor, taskIdOf(f.store))?.subtasks.find(item => item.id === id)
 
 /** 记录全部派单请求、按子任务给固定结论的执行方。 */
-function recordingExecutor(bySubtask: Record<string, () => Promise<{ status: 'succeeded' | 'failed' | 'waiting_user'; summary: string; question?: string }>>) {
+function recordingExecutor(bySubtask: Record<string, () => Promise<{ status: 'succeeded' | 'failed' | 'cancelled' | 'waiting_user'; summary: string; question?: string }>>) {
   const requests: ButlerDispatchRequest[] = []
   const executor: ButlerAgentExecutor = {
     protocol: 1,
@@ -348,6 +348,128 @@ describe('等待超时后排队下游被结账', () => {
     expect(third.error).toBe('')
     // 任务状态按既有规则：还有非终态子任务，不强行结账。
     expect(f.store.task(actor, taskId)?.state).toBe('waiting_user')
+    await f.settleAll()
+  })
+})
+
+/**
+ * R9：等待超时的收尾判定必须与 `closeTask` 共用同一份实现。
+ *
+ * 这一组用例存在的理由：既有的两条真跑 `expireWaiting` 的用例（本文件上一组的
+ * `上游等待超时判 failed 后…` 与 `reply-close.test.ts` 的 `到点收成超时失败…`）都落在
+ * 「全部失败 ⇒ `failed`」这一格 —— 两份实现在这一格上答案相同，所以只做合并、不加用例时，
+ * 「合并接线了」与「合并没有接线」不可区分。
+ *
+ * 下面两条按**设计该有的行为**写断言（§5.4 终态规则：被停止 / 有取消 ⇒ `cancelled`；
+ * 还有已接受未处理的输入 ⇒ 先不结账），不按现状写。
+ */
+describe('等待超时的终态判定与收尾共用一份实现', () => {
+  it('子任务里有取消的：超时收尾仍按停止收成 cancelled，不改写成部分完成', async () => {
+    const { executor } = recordingExecutor({
+      s1: () => Promise.resolve({ status: 'cancelled', summary: '第一位已经不干了' }),
+      s2: () => Promise.resolve({ status: 'waiting_user', summary: '配图候选稿都在这里', question: '用哪一张？' }),
+    })
+    // 超时给得比别处长：要在闹钟响之前先读出「这一轮自己已经按停止收尾」。
+    const f = await fixture(executor, { waitingTimeoutMs: 500 })
+    await f.console_.start(conversationId, '写一篇园区封闭化管理介绍', actor)
+    await until(() => f.agent.followup.mock.calls.length >= 1, '大总管开始理解')
+    await f.planTool.execute({
+      reply: '两个人各起一版。',
+      note: '',
+      subtasks: [
+        { goal: '起草正文', agentId: 'blog', reason: '', logicalId: 'g1' },
+        { goal: '起草配图说明', agentId: 'blog', reason: '', logicalId: 'g2' },
+      ],
+    }, { signal: new AbortController().signal })
+    f.endTurn()
+    const taskId = await taskCreated(f)
+
+    // 一位被取消、一位在等人回话：这一轮自己的收尾按「子任务里有取消的同样按停止处理」写 cancelled。
+    await until(() => f.store.task(actor, taskId)?.state === 'cancelled', '这一轮按停止收尾')
+    await until(() => subtaskOf(f, 's2')?.state === 'waiting_user', 's2 停在等人回话')
+    expect(subtaskOf(f, 's1')?.state).toBe('cancelled')
+    const closedAt = f.store.task(actor, taskId)!.updatedAt
+
+    // 等待到点：s2 收成超时失败。收尾判定仍然要看得到那条已取消的子任务 ⇒ 结论还是 cancelled。
+    // 重复实现那一份只数失败数（1 失败 / 2 条）⇒ partial，把已经写下的结论改掉。
+    await until(() => subtaskOf(f, 's2')?.state === 'failed', 's2 等待超时')
+    await until(() => f.store.task(actor, taskId)!.updatedAt > closedAt, '超时收尾写回任务')
+    expect(f.store.task(actor, taskId)!.state).toBe('cancelled')
+    await f.settleAll()
+  })
+
+  it('还有已接受未处理的输入：超时收尾先不结账，不改写成部分完成', async () => {
+    const { executor } = recordingExecutor({
+      s1: () => Promise.resolve({ status: 'succeeded', summary: '正文写好了' }),
+      s2: () => Promise.resolve({ status: 'waiting_user', summary: '配图候选稿都在这里', question: '用哪一张？' }),
+    })
+    const f = await fixture(executor, { waitingTimeoutMs: 600 })
+    await f.console_.start(conversationId, '写一篇园区封闭化管理介绍', actor)
+    await until(() => f.agent.followup.mock.calls.length >= 1, '大总管开始理解')
+    await f.planTool.execute({
+      reply: '两个人各起一版。',
+      note: '',
+      subtasks: [
+        { goal: '起草正文', agentId: 'blog', reason: '', logicalId: 'g1' },
+        { goal: '起草配图说明', agentId: 'blog', reason: '', logicalId: 'g2' },
+      ],
+    }, { signal: new AbortController().signal })
+    f.endTurn()
+    const taskId = await taskCreated(f)
+    await until(() => f.store.task(actor, taskId)?.state === 'waiting_user', '停在等人回话')
+
+    // 老板刚补了一句：已接受、还没轮到处理。受理补充与收尾是两条异步路径，这一格能构造出来。
+    f.store.addInput(actor, taskId, '配图改成夜间的', 'supplement')
+
+    // 到点：s2 收成超时失败（子任务自己那一步照常结账），但这一轮**不能**就此结账 ——
+    // 按旧范围给结论等于把刚改的目标丢掉，留给那条输入自己的回合收尾。
+    await until(() => subtaskOf(f, 's2')?.state === 'failed', 's2 等待超时')
+    await new Promise(resolve => setTimeout(resolve, 60))
+    const record = f.store.task(actor, taskId)!
+    expect({
+      state: record.state, accepted: record.acceptedVersion, processed: record.processedVersion,
+    }).toEqual({ state: 'waiting_user', accepted: 2, processed: 1 })
+    await f.settleAll()
+  })
+
+  it('有材料交回、事情在别处办：超时收尾写 external_pending，不改判成部分完成', async () => {
+    // `external_pending` 是**终态**（`task-model.ts` 的 `isTerminal`）：`expireWaiting` 开头那道
+    // 「还有人没终结就返回」的守卫**挡不住它**，所以这一格真的会走到终态判定里来。
+    const executor: ButlerAgentExecutor = {
+      protocol: 1,
+      agentId: 'blog',
+      capabilities: ['写作'],
+      dispatch: async request => (request.subtaskId === 's1'
+        ? {
+          status: 'external_pending' as const,
+          summary: '候选稿已交回，等你去页面采用',
+          externalPending: { reason: '去博客页面采用这一版' },
+        }
+        : { status: 'waiting_user' as const, summary: '配图候选稿都在这里', question: '用哪一张？' }),
+    }
+    const f = await fixture(executor, { waitingTimeoutMs: 600 })
+    await f.console_.start(conversationId, '写一篇园区封闭化管理介绍', actor)
+    await until(() => f.agent.followup.mock.calls.length >= 1, '大总管开始理解')
+    await f.planTool.execute({
+      reply: '一位先交回材料，一位等你定。',
+      note: '',
+      subtasks: [
+        { goal: '起草正文', agentId: 'blog', reason: '', logicalId: 'g1' },
+        { goal: '起草配图说明', agentId: 'blog', reason: '', logicalId: 'g2' },
+      ],
+    }, { signal: new AbortController().signal })
+    f.endTurn()
+    const taskId = await taskCreated(f)
+
+    // 有人等着回话时，这一轮先停在 waiting_user（等用户回话优先于外部待办）。
+    await until(() => subtaskOf(f, 's2')?.state === 'waiting_user', 's2 停在等人回话')
+    expect(subtaskOf(f, 's1')?.state).toBe('external_pending')
+    expect(f.store.task(actor, taskId)?.state).toBe('waiting_user')
+
+    // 到点：结论按判定表走 —— 还有材料在别处办 ⇒ external_pending，而不是按失败数算出来的 partial。
+    await until(() => subtaskOf(f, 's2')?.state === 'failed', 's2 等待超时')
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(f.store.task(actor, taskId)!.state).toBe('external_pending')
     await f.settleAll()
   })
 })

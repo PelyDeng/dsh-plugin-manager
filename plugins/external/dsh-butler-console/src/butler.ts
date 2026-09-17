@@ -757,6 +757,22 @@ export function effectiveSubtasks(subtasks: readonly SubtaskRecord[]): readonly 
 }
 
 /**
+ * {@link ButlerConsole.decideSettlement} 的结论：要么落一个终态，要么还不到给结论的时候。
+ *
+ * `waiting_user` / `external_pending` 与 `defer` 都是「先不写终态」，它们之间只差停在哪一步；
+ * 分成四种而不是一个布尔，是为了让每条收尾路径都能照同一张表决定自己该做什么。
+ */
+type Settlement =
+  /** 到给结论的时候了：落 `state`，`failed` 用于拼用户可见的失败说明。 */
+  | { readonly kind: 'settle'; readonly state: TaskState; readonly failed: number; readonly stopped: boolean }
+  /** 还有已接受未处理的输入：先不结账，交给那条输入自己的回合。 */
+  | { readonly kind: 'defer' }
+  /** 还有人在等用户回话：停在 `waiting_user`，等补话那条路径回来。 */
+  | { readonly kind: 'waiting_user'; readonly waiting: number }
+  /** 材料已交回、剩下的事在别处办：停在 `external_pending`，本轮到此为止。 */
+  | { readonly kind: 'external_pending'; readonly external: number; readonly failed: number }
+
+/**
  * 从落库的子任务记录重建交给汇总的材料。 *
  * 补话之后要重新汇总，而那时派活阶段的 `reports` 早已不在内存里（进程可能都换过一次），
  * 所以按同一种口径从库里重建：成功取结果正文，失败与取消带上原因，还没答复的带上已交回的
@@ -2165,12 +2181,44 @@ export class ButlerConsole {
 
     const after = await this.storage.task(actor, taskId)
     if (after === undefined || after.subtasks.some(item => !isTerminal(item.state))) return
-    const active = effectiveSubtasks(after.subtasks)
-    const failed = active.filter(item => item.state === 'failed').length
-    await this.storage.setTaskState(taskId, failed === 0 ? 'completed' : failed === active.length ? 'failed' : 'partial', {
-      summary: (await this.storedReports(actor, taskId)).join('\n\n'),
-      error: WAITING_EXPIRED_TASK,
+    // 终态判定与 `closeTask` 共用同一处实现（{@link decideSettlement}）：这里不再自己数一遍
+    // 失败数 —— 那份重复缺了「有取消的按停止处理」与「还有未处理输入先不结账」，超时这条
+    // 路径会因此把已经写好的 `cancelled` 改写成 `partial`，或者按旧范围给新目标下结论。
+    const settlement = await this.decideSettlement({
+      taskId,
+      // 只看有效尝试：被替代掉的旧尝试不参与这一轮结论（与 closeTask 的调用方同口径）。
+      subtasks: effectiveSubtasks(after.subtasks),
+      // 这条路径没有「这一轮被喊停」这一说：会话上没有对应的 SSE 轮次，唯一的停止信号就是
+      // 子任务里的取消 —— 由判定内部从子任务状态里读出来。
+      stopped: false,
     })
+    const summary = (await this.storedReports(actor, taskId)).join('\n\n')
+
+    // `external_pending`：材料交回、剩下的事在别处办。与 closeTask 同一个分支：不跑汇总轮
+    // （没有观众，也没有会话句柄），只如实留下材料与外部待办。
+    if (settlement.kind === 'external_pending') {
+      await this.storage.setTaskState(taskId, 'external_pending', {
+        summary,
+        error: settlement.failed === 0 ? '' : `${settlement.failed} 个子任务失败`,
+      })
+      return
+    }
+    // 另外两种「先不写终态」的结论这里都不写：
+    // - `defer`：还有已接受未处理的输入，这一轮先不结账（交给那条输入自己的回合），与
+    //   closeTask 同一道屏障 —— 屏障是必需的：受理补充与收尾是两条异步路径；
+    // - `waiting_user`：这一格走不到（上面已经要求全部子任务终结，而 `waiting_user` 不是
+    //   终态），留着只是让上面那张判定表被逐条对齐，不由这条路径另作解释。
+    if (settlement.kind !== 'settle') return
+
+    /**
+     * 与汇总路径**同样的版本屏障**（设计 §5.4）：`completed` / `partial` 只在
+     * `accepted_version <= processed_version` 的行上生效。判定里那道读屏障挡的是「决策那一刻
+     * 已经有未处理输入」，这里挡的是决策与写入之间挤进来的补充 —— 少了它，这条路径就是
+     * 唯一一处可以绕过屏障宣称「干完了」的入口。取消与失败没有宣称成功，照常写入。
+     *
+     * 写不进去说明结论已经作废：什么都不写，任务停在原处，由那条补充自己的回合收尾。
+     */
+    await this.storage.commitTaskState(taskId, settlement.state, { summary, error: WAITING_EXPIRED_TASK })
   }
 
   /** 在会话上开一份新的事件日志，覆盖它的上一轮。 */  private beginLog(conversationId: string, runId: string): ConversationLog<ButlerEvent> {
@@ -3019,31 +3067,36 @@ export class ButlerConsole {
   }
 
   /**
-   * 汇总并给这一轮写下终态。
+   * 收尾判定的**唯一实现**（判据 R9）：从「有效子任务的结局 + 是不是被喊停」算出这一轮该
+   * 落什么结论。
    *
-   * 派活那一轮和补话之后都会走到这里，所以它只认「子任务各自到了什么状态」和「已经拿到
-   * 哪些结果」，不关心结果是怎么来的 —— 补话路径上的材料是从库里重建的，不是内存里那份。
+   * 收尾有四条路径（派活轮、补充轮、补话之后、等待超时），它们的差异只在「拿到结论之后做
+   * 什么」：`closeTask` 拿它决定要不要跑汇总轮，{@link expireWaiting} 拿同一个结论决定要不
+   * 要写终态。判定本身不再各写一份 —— 之前 `expireWaiting` 里内联的那份缺了「有取消的按
+   * 停止处理」与「还有未处理输入先不结账」两条，于是同一份输入在两条路径上会得到不同答案，
+   * 而且超时那条路径会把已经写好的 `cancelled` 改写成 `partial`。
    *
-   * 只要还有子任务在等用户回话，任务就不算收尾：不跑汇总轮，状态停在 `waiting_user`，
-   * 等补话那条路径把最后一位成员送走之后再回来调一次。
+   * 顺序就是优先级（设计 §5.4 / §5.10 的早退表）：
+   *
+   * - 0 被喊停，或子任务里有取消的 ⇒ `cancelled`；
+   * - 1 还有已接受未处理的输入 ⇒ `defer`：这一轮先不给结论，交给那条输入自己的回合。
+   *     取消与故障**不受**这道屏障约束 —— 它们没有宣称成功，可以带着未处理的输入结束；
+   * - 2 还有人在等用户回话 ⇒ `waiting_user`；
+   * - 3 还有材料交回、剩下的事在别处办 ⇒ `external_pending`（等用户回话优先于外部待办：
+   *     有人等着补一句话时，用户还没法把这一轮放下去开新活）；
+   * - 4 其余落终态：全失败 ⇒ `failed`；有失败 ⇒ `partial`；队列里还有没跑过的步骤同样降级
+   *     `partial`；否则 ⇒ `completed`。
+   *
+   * 调用方负责传**有效尝试**（`effectiveSubtasks()` 之后的那些）：被替代掉的旧尝试不参与
+   * 这一轮的结论。
    */
-  private async *closeTask(input: {
+  private async decideSettlement(input: {
     readonly taskId: string
-    /** 汇总要用的牛马大总管会话；拿不到时跳过汇总，仍然把终态落下。 */
-    readonly conversation: Conversation | undefined
-    readonly goal: string
-    readonly subtasks: readonly {
-      readonly id: string
-      readonly goal: string
-      readonly agentId: string
-      readonly state: SubtaskState
-    }[]
-    readonly reports: readonly string[]
-    readonly signal: AbortSignal
+    readonly subtasks: readonly { readonly state: SubtaskState }[]
     /** 这一轮是否已经被喊停。子任务里有取消的同样按停止处理。 */
     readonly stopped: boolean
-  }): AsyncGenerator<ButlerEvent> {
-    const { taskId, conversation, goal, subtasks, reports, signal } = input
+  }): Promise<Settlement> {
+    const { taskId, subtasks } = input
     const failed = subtasks.filter(item => item.state === 'failed').length
     const waiting = subtasks.filter(item => item.state === 'waiting_user').length
     const external = subtasks.filter(item => item.state === 'external_pending').length
@@ -3072,6 +3125,47 @@ export class ButlerConsole {
     const pendingInput = versions !== undefined && versions.accepted > versions.processed
     const undispatched = subtasks.filter(item => item.state === 'queued').length
     if (!stopped && pendingInput && (taskState === 'completed' || taskState === 'partial')) {
+      return { kind: 'defer' }
+    }
+    // 还留在队列里的步骤（前置没就绪）同样不能算完成：它们根本没跑过。
+    if (!stopped && undispatched > 0 && taskState === 'completed') taskState = 'partial'
+
+    if (waiting > 0 && !stopped) return { kind: 'waiting_user', waiting }
+    if (external > 0 && !stopped) return { kind: 'external_pending', external, failed }
+    return { kind: 'settle', state: taskState, failed, stopped }
+  }
+
+  /**
+   * 汇总并给这一轮写下终态。
+   *
+   * 派活那一轮和补话之后都会走到这里，所以它只认「子任务各自到了什么状态」和「已经拿到
+   * 哪些结果」，不关心结果是怎么来的 —— 补话路径上的材料是从库里重建的，不是内存里那份。
+   *
+   * 只要还有子任务在等用户回话，任务就不算收尾：不跑汇总轮，状态停在 `waiting_user`，
+   * 等补话那条路径把最后一位成员送走之后再回来调一次。
+   *
+   * 结论一律来自 {@link decideSettlement}：这里不再自己数一遍子任务。
+   */
+  private async *closeTask(input: {
+    readonly taskId: string
+    /** 汇总要用的牛马大总管会话；拿不到时跳过汇总，仍然把终态落下。 */
+    readonly conversation: Conversation | undefined
+    readonly goal: string
+    readonly subtasks: readonly {
+      readonly id: string
+      readonly goal: string
+      readonly agentId: string
+      readonly state: SubtaskState
+    }[]
+    readonly reports: readonly string[]
+    readonly signal: AbortSignal
+    /** 这一轮是否已经被喊停。子任务里有取消的同样按停止处理。 */
+    readonly stopped: boolean
+  }): AsyncGenerator<ButlerEvent> {
+    const { taskId, conversation, goal, subtasks, reports, signal } = input
+    const settlement = await this.decideSettlement({ taskId, subtasks, stopped: input.stopped })
+
+    if (settlement.kind === 'defer') {
       yield {
         type: 'chat', role: 'butler',
         text: '老大又补了一句，这一轮先不结账 —— 等新的说法处理完再给你结论。',
@@ -3079,11 +3173,9 @@ export class ButlerConsole {
       }
       return
     }
-    // 还留在队列里的步骤（前置没就绪）同样不能算完成：它们根本没跑过。
-    if (!stopped && undispatched > 0 && taskState === 'completed') taskState = 'partial'
 
-    if (waiting > 0 && !stopped) {
-      const message = `有 ${waiting} 位成员在等你回话，回完再给你汇总。`
+    if (settlement.kind === 'waiting_user') {
+      const message = `有 ${settlement.waiting} 位成员在等你回话，回完再给你汇总。`
       await this.storage.setTaskState(taskId, 'waiting_user', { summary: reports.join('\n\n') })
       if (reports.length > 0) yield { type: 'chat', role: 'butler', text: message, time: Date.now() }
       yield { type: 'summary', taskId, text: message, state: 'waiting_user', error: '', time: Date.now() }
@@ -3096,17 +3188,16 @@ export class ButlerConsole {
      * 这里**不跑汇总轮**：这一轮的目标并没有达成，让大总管「总结一下完成情况」很容易说出
      * 「已交付」这类结论，而实际上那件事还在外面等着。所以只如实留下材料与外部待办，
      * 状态写 `external_pending`，本轮到此结束、随后就能开新活。后续跟进是新任务。
-     *
-     * 等用户回话优先于外部待办：有人等着补一句话时，用户还没法把这一轮放下去开新活。
      */
-    if (external > 0 && !stopped) {
-      const message = `材料已经交回，还有 ${external} 件事要在外面办完。这一轮到此为止，想继续可以新开一轮。`
-      const error = failed === 0 ? '' : `${failed} 个子任务失败`
+    if (settlement.kind === 'external_pending') {
+      const message = `材料已经交回，还有 ${settlement.external} 件事要在外面办完。这一轮到此为止，想继续可以新开一轮。`
+      const error = settlement.failed === 0 ? '' : `${settlement.failed} 个子任务失败`
       await this.storage.setTaskState(taskId, 'external_pending', { summary: reports.join('\n\n'), error })
       yield { type: 'summary', taskId, text: message, state: 'external_pending', error, time: Date.now() }
       return
     }
 
+    const { state: taskState, failed, stopped } = settlement
     let summaryText = ''
     if (!stopped && conversation !== undefined) {
       await this.storage.setTaskState(taskId, 'summarizing')
