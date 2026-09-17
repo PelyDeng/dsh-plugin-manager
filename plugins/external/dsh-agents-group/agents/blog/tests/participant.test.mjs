@@ -50,6 +50,10 @@ async function fixture(t) {
     },
     async history(current, id) {
       f.access.assert(current); index.get(ownerKey(current), id)
+      // 收尾投影（`createBlogProjector`）读的是**业务库**的 `app.operations(owner)`，并按
+      // `operation.chat.conversationId` 筛出本会话 —— 真实现（`application.mjs` 的操作卡片）
+      // 本来就带这个字段。这里记下当前会话 id，供下面的 `app.operations` 替身补上。
+      f.lastHistoryId = id
       f.historyEntered?.()
       if (f.historyGate) await f.historyGate
       return { messages: f.messages.get(id) ?? [], requests: index.requests(ownerKey(current), id),
@@ -68,7 +72,17 @@ async function fixture(t) {
       }
     },
   }
-  f.provider = (routePrefix = '/blog') => createBlogParticipant({ access: f.access, chat: f.chat, index, storage: store, routePrefix })
+  f.provider = (routePrefix = '/blog') => createBlogParticipant({
+    access: f.access, chat: f.chat, index, storage: store, routePrefix,
+    /**
+     * 业务应用的最小替身：收尾投影只用到 `operations(owner)`。
+     *
+     * ⚠️ 真实现的记录**带 `chat.conversationId`**（`application.mjs` 的操作卡片就是这样，生产侧
+     * `chat.mjs` 也按它筛会话）⇒ 夹具在这里补上；漏了它会以"本该 external_pending 却报
+     * completed"的形式红，而那是**夹具失真**，不是实现错。
+     */
+    app: { operations: async () => f.operations.map(operation => ({ ...operation, chat: operation.chat ?? { conversationId: f.lastHistoryId } })) },
+  })
   return f
 }
 

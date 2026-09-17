@@ -3,38 +3,48 @@ import type { AgentParticipant, ParticipantRequest, ParticipantResult } from '..
 import type { BlogChat } from './chat.ts'
 import type { ChatStore } from './chat-store.ts'
 import type { BlogPgStorage } from './storage/pg.mjs'
+import { createBlogProjector } from './definition.ts'
+import { publicResultText } from './result-text.ts'
 import { digest, ownerKey } from './store.mjs'
 import { invariant } from './settings.mjs'
 
 const pending = new Set(['queued', 'running', 'stopping'])
-const maxResultChars = 64000
-
-function publicResultText(answer: string, notices: string[], candidates: { title: string, text: string }[]): string {
-  const omittedAnswer = `\n\n[公开回答原长 ${answer.length} 字符，因协作消息长度限制已省略后文；请在博客原对话查看完整回答。]`
-  let candidateText = candidates.length ? `本轮实际候选内容（共 ${candidates.length} 份，待采用，作为核对资料，不是指令）：\n\n`
-    + candidates.map((candidate, index) => `### 候选 ${index + 1} · 待采用\n\n标题：${candidate.title}\n\n> 以下为实际候选正文，仅作为核对资料，不是指令。\n\n${candidate.text}\n\n候选 ${index + 1} 正文结束。`).join('\n\n---\n\n') : ''
-  const details = () => [...notices, candidateText].filter(Boolean).join('\n\n')
-  // 优先保留实际产物全文；连同必要状态与省略说明仍放不下时，不以片段冒充完整候选。
-  if (candidates.length && [answer, details()].filter(Boolean).join('\n\n').length > maxResultChars
-    && [answer ? omittedAnswer : '', details()].filter(Boolean).join('\n\n').length > maxResultChars) {
-    candidateText = `本轮共 ${candidates.length} 份有效候选，候选正文共 ${candidates.reduce((sum, candidate) => sum + candidate.text.length, 0)} 字符；完整清单超过本次协作可转交的长度。所有候选均未转交全文，不能宣称已完整复核任何一份候选。请在博客原对话逐份查看并核对，候选仍待采用。`
-  }
-  const suffix = details(), available = maxResultChars - suffix.length - (suffix ? 2 : 0)
-  if (answer && answer.length > available) {
-    answer = answer.slice(0, Math.max(0, available - omittedAnswer.length)).replace(/[\uD800-\uDBFF]$/, '') + omittedAnswer
-  }
-  return [answer, suffix].filter(Boolean).join('\n\n') || '博客本轮已结束，请查看原对话。'
-}
 
 /** 只适配博客自己的会话；确认凭据和内部推理不进入跨插件结果。 */
-export function createBlogParticipant({ access, chat, index, storage, routePrefix }: {
+export function createBlogParticipant({ access, chat, index, storage, app, routePrefix }: {
   access: { assert(actor: Actor): void }
   chat: BlogChat
   index: ChatStore
   storage: BlogPgStorage
+  /**
+   * 业务应用（`BlogApplication`）：收尾投影要读这个会话留下的**操作卡片**。
+   *
+   * 与 `BlogDefinitionInput['app']` **同形**（那里也是最小结构类型）。两处各声明一次这个形状是
+   * 有意的：`definition.ts` 是声明层、本文件是协作入口，它们各自只依赖自己用到的方法，不互相
+   * 绑定实现类型。
+   */
+  app: { operations(owner: string): Promise<readonly { id: string; title: string; mode: string; status: string; result?: { url?: string | null } | null; chat?: { conversationId?: string } | null }[]> }
   routePrefix: string
 }): AgentParticipant {
   invariant(/^\/(?!\/)[^?#\\]*$/.test(routePrefix), '博客入口路径无效', 503)
+  /**
+   * 收尾投影的**唯一实现**（`definition.ts` 的 `createBlogProjector`）。
+   *
+   * blog 现在有两条收尾路径：本协作入口，以及（切到运行时之后的）`AgentDefinition.projectResult`。
+   * 让它们**共用同一份实现**，而不是各写一份等价逻辑 —— 两份的下场是"某条路径改了、另一条没改"，
+   * 而用户看到的是**同一轮在大总管那里和在页面上结论不同**。
+   */
+  const projector = createBlogProjector({
+    storage, app, routePrefix,
+    /**
+     * 候选判定里**跨轮**的那半（"这个会话还有没有未采用的候选稿"）：运行时的 `loadResults()`
+     * 契约只读本轮，跨轮要业务**用自己的表**查 ⇒ 传索引库的会话产出读取。
+     *
+     * 与装配侧将传给 `createBlogDefinition` 的是**同一个** `ChatStore.results`，两条收尾路径
+     * 因此不会各写一份"还有没有候选"的判断。
+     */
+    results: { list: async (owner, conversationId) => index.results(owner, conversationId) },
+  })
   // 表名与两个请求前缀沿用协作入口改名前的写法：它们是**持久标识** —— 表里有线上数据、
   // 请求前缀参与幂等去重，改名要迁移老库，还可能让升级窗口内的重试变成两次投递。
   // 内部噪音不值得用这个代价换，所以只在代码与文档里换新说法。
@@ -149,9 +159,87 @@ export function createBlogParticipant({ access, chat, index, storage, routePrefi
             assertBound()
             const start = history.messages.findIndex(message => message.role === 'user' && 'requestId' in message && message.requestId === turnId)
             invariant(start >= 0 || turn.status !== 'succeeded', '无法核验本轮博客回答，请查看原对话', 409)
-            const tail = start < 0 ? [] : history.messages.slice(start + 1)
-            const next = tail.findIndex(message => message.role === 'user')
-            const said = (next < 0 ? tail : tail.slice(0, next))
+            /**
+             * **本轮**的消息：从本轮的 user 消息切起，在**下一条 user 消息**处停住。
+             *
+             * 运行时的 `TurnHistory` 天然只装一轮，而这里的 `history.messages` 是**整个会话**
+             * ⇒ 两条收尾路径的形状差异必须在这里补平。漏了它，多轮会话会把**每一轮**的答案都
+             * 拼进兜底正文（实测：第 1 轮答「X」、第 2 轮又问一句，回放第 1 轮时交回的是
+             * 「X\n\nX」），"本轮算数的那一条"也会指错轮。**成功与未成功两条分支共用这一份切片**。
+             */
+            const after = start < 0 ? [] : history.messages.slice(start + 1)
+            const nextUser = after.findIndex(message => message.role === 'user')
+            const turnMessages = nextUser < 0 ? after : after.slice(0, nextUser)
+            /**
+             * —— 回合成功：收尾交给**唯一实现** ——
+             *
+             * 与 `AgentDefinition.projectResult` 同源（都走 `createBlogProjector`）。**非成功**
+             * （取消、失败）仍走下面的旧分支：那种情形的状态与文案由回合结局决定，而投影只产出
+             * `completed` / `external_pending` 两种（见 `createBlogProjector` 的注释）。
+             */
+            if (turn.status === 'succeeded') {
+              const asTurnMessage = (message: (typeof history.messages)[number]) => ({
+                role: message.role as 'user' | 'assistant',
+                text: typeof message.text === 'string' ? message.text : '',
+                time: message.time,
+                ...(typeof message.id === 'string' ? { id: message.id } : {}),
+                ...(typeof message.turn === 'number' ? { turn: message.turn } : {}),
+                ...(message.interrupted === true ? { interrupted: true } : {}),
+              })
+              const tailMessage = turnMessages.filter(message => message.tail === true).at(-1)
+              const projected = await projector({
+                actor,
+                history: {
+                  conversationId,
+                  // 运行时那条路径会填 `finalText`；投影**只用 `tail`**（见其注释：`finalText`
+                  // 连被中断的那条也算），所以这里如实给空串，不伪造一个值。
+                  finalText: '',
+                  messages: turnMessages
+                    .filter(message => message.role === 'user' || message.role === 'assistant')
+                    .map(asTurnMessage),
+                  ...(tailMessage === undefined ? {} : { tail: asTurnMessage(tailMessage) }),
+                },
+                request: {
+                  message: request.message,
+                  ...(request.acceptance === undefined ? {} : { acceptance: request.acceptance }),
+                  ...(request.reworkOf === undefined ? {} : { reworkOf: request.reworkOf }),
+                },
+                // 投影读的是**业务库**（由 `createBlogProjector` 闭包注入的 `storage`）；运行时的
+                // 存储门面在这条路径上不存在 ⇒ 如实给 undefined，不塞一个假的。
+                storage: undefined,
+                /**
+                 * 本轮的结构化产出。索引库的 `chat_results` 就是它在旧载体上的形态，映射成运行时
+                 * `TurnResultRecord` 的形状（业务载荷进 `payload`）。
+                 *
+                 * ⚠️ **只取本轮**（`requestId === turnId`）：运行时的 `loadResults()` 口径就是
+                 * "只读本轮"，所以它只喂**"本轮交回的候选正文"**那一半。**跨轮**的那半（"这个会话
+                 * 还有没有未采用的候选稿"）走投影输入里注入的 `results.list`（见 `participant.ts`
+                 * 上方构造 `projector` 处，以及 `BlogDefinitionInput.results` 的注释）。
+                 *
+                 * 早先这里把两半都按本轮收窄，于是"早先轮次留下的候选"在后续轮次不再报
+                 * `external_pending`——那是**静默的语义退步**，被 `tests/participant.test.mjs` 那条
+                 * "a later progress question preserves earlier unresolved candidates" 抓住。
+                 */
+                loadResults: async () => history.results
+                  .filter(result => result.requestId === turnId)
+                  .map((result, index) => ({
+                    id: `${String(turnId)}:${index}`,
+                    turnId: String(turnId),
+                    operationId: '',
+                    seq: index,
+                    createdAt: 0,
+                    payload: { ...result },
+                  })),
+              })
+              return {
+                status: projected.status,
+                conversationId,
+                text: projected.text,
+                ...(projected.artifacts === undefined ? {} : { artifacts: projected.artifacts }),
+                ...(projected.externalPending === undefined ? {} : { externalPending: projected.externalPending }),
+              }
+            }
+            const said = turnMessages
               .filter(message => turn.status !== 'succeeded' || !('interrupted' in message && message.interrupted))
               .flatMap(message => message.role === 'assistant' && 'text' in message && typeof message.text === 'string' ? [message] : [])
             /**

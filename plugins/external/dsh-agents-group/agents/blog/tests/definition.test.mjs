@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {publicResultText} from '../src/result-text.ts'
 import {createBlogDefinition} from '../src/definition.ts'
+import {ownerKey} from '../src/store.mjs'
 
 // ---------------------------------------------------------------------------
 // 交回正文的组装与长度预算
@@ -105,11 +106,12 @@ test('⚠️ 不凭空加 blog 没有的钩子（脱敏 / 等待 / 隐藏主键�
 // ---------------------------------------------------------------------------
 
 /** 跑一次 `projectResult`：只给这一个钩子需要的输入。 */
-async function projectOf({history,actor,request,storage,app,loadResults,routePrefix}={}){
+async function projectOf({history,actor,request,storage,app,loadResults,results,routePrefix}={}){
   const value=createBlogDefinition({
     persona:'你是伊丽莎白',tools:()=>[],routePrefix:routePrefix??'/agents/blog',
     storage:storage??{get:async()=>({})},
     app:app??{operations:async()=>[]},
+    results:results??{list:async()=>[]},
   })
   return value.projectResult({
     history:history??{messages:[{role:'assistant',text:'答案',time:1}],conversationId:'c',finalText:'答案'},
@@ -200,6 +202,42 @@ test('非 candidate 的结果不参与候选判定（kind 别的就当没看见�
   assert.equal(value.status,'completed')
 })
 
+test('⚠️ 早先轮次留下的候选（本轮没有新结果）⇒ 仍报 external_pending，但不把旧候选正文塞进本轮',async()=>{
+  // 候选是**跨轮**事实：第 1 轮准备的候选稿到第 3 轮仍待采用，那两轮都必须如实报 external_pending
+  // ——只报"本轮准备了什么"会让用户以为**没事了**。而**交回的正文**只该是本轮新准备的那几份：
+  // 把旧候选正文再塞一遍，"本轮实际候选内容"那句话就成了假话。
+  const value=await projectOf({
+    // 本轮没有新结果：`loadResults()` 空，跨轮那半只可能来自会话产出读取。
+    loadResults:async()=>[],
+    results:{list:async()=>[{kind:'candidate',draftId:'d1',proposal:{id:'p1'}}]},
+    storage:{get:async()=>({proposal:{id:'p1',fields:{title:'旧标题',text:'旧正文'}}})},
+  })
+  assert.equal(value.status,'external_pending')
+  assert.equal(value.artifacts[0].kind,'draft')
+  assert.match(value.externalPending.reason,/候选稿已准备，须在博客原对话选择采用/)
+  assert.equal(value.text.includes('旧正文'),false)
+  assert.equal(value.text.includes('本轮实际候选内容'),false)
+  // 跨轮那半也要**核对业务库**：只看会话产出会说"有候选"，而那份草稿可能已经被采用或丢弃。
+  const adopted=await projectOf({
+    loadResults:async()=>[],
+    results:{list:async()=>[{kind:'candidate',draftId:'d1',proposal:{id:'p1'}}]},
+    storage:{get:async()=>({proposal:{id:'p2',fields:{title:'旧标题',text:'旧正文'}}})},
+  })
+  assert.equal(adopted.status,'completed')
+  assert.equal('externalPending' in adopted,false)
+})
+
+test('跨轮候选按 owner 与**本会话**查（查错会话会把别的会话的候选算到这一轮头上）',async()=>{
+  const seen=[]
+  const value=await projectOf({
+    history:{conversationId:'c-9',finalText:'答案',messages:[{role:'assistant',text:'答案',time:1}]},
+    actor:{namespace:'user',userId:'alice',sessionId:'s1'},
+    results:{list:async(owner,conversationId)=>{seen.push([owner,conversationId]);return[]}},
+  })
+  assert.deepEqual(seen,[[ownerKey({namespace:'user',userId:'alice',sessionId:'s1'}),'c-9']])
+  assert.equal(value.status,'completed')
+})
+
 // ---------------------------------------------------------------------------
 // turnContext：每轮的资料（操作记录 + 时间基准）
 //
@@ -222,6 +260,7 @@ function turnContextWith(operations){
     persona:'你是伊丽莎白',tools:()=>[],routePrefix:'/agents/blog',
     storage:{get:async()=>({})},
     app:{operations:async()=>operations()},
+    results:{list:async()=>[]},
   })
   return (overrides={})=>value.turnContext({
     conversationId:'c1',

@@ -20,7 +20,7 @@
  * | `tools` | `jobs.mjs` 的 `register(...)`（模块级注册） | ⏳ 由装配侧传入（本文件不注册任何东西） |
  * | `liveMode` | `participant.ts:84-111`：实时通道给的是**本步累积**值 | ✅ `'cumulative'` |
  * | `config` | `config.ts` 的 `Config` | ✅ |
- * | `projectResult` | `participant.ts:12-27` + `:148-202` | ✅ 已落（答案取 `history.tail`；候选 = `loadResults()` + **业务库**草稿核对；操作卡片走 `app.operations`；预算走 `result-text.ts`） |
+ * | `projectResult` | `participant.ts:12-27` + `:148-202` | ✅ 已落（答案取 `history.tail`；候选**跨轮**走注入的会话产出读取、**本轮正文**走 `loadResults()`；操作卡片走 `app.operations`；预算走 `result-text.ts`） |
  * | `turnContext` | `chat.mjs:525-528` 的 `operationContext` + `chat.ts:492` 的时间基准 | ✅ 已落（**每轮求值**；两者旧装配里都是每轮新的，见字段注释） |
  * | `projectHistory` | `chat-history.mjs` 的 `projectChat`（页面侧栏） | ⏳ 输出形状不同（含 `tool`/`status` 行），要适配或另立钩子 |
  * | `stageText` | `participant.ts:130-131`/`:205-207` 的**状态行** | ⏳ 运行时的 `stageText` **只在 `tool/call` 上被问**，表达不了状态行 |
@@ -36,9 +36,11 @@
  *    `participant.ts:168` 那句"该回合最后一条未被中断、且有正文的 assistant 消息"。
  *    ⚠️ 它是一条**消息**（`TurnMessage`），取 `.text`；**不要**改用 `finalText`——被中断的那条
  *    也会被 `finalText` 取到。
- * 2. **候选判定** → `history.results` 由运行时的 `ctx.loadResults()` 提供（只读**本轮**，与旧实现
- *    按 `requestId === turnId` 过滤等价）；用结果里的 `draftId` 去**业务库**核对该草稿是否仍待采用
- *    ⇒ 需要 `ctx.actor`（**每请求**，不能由闭包捕获）派生 owner 键。**缺口 A 已补**
+ * 2. **候选判定** → 它其实有**两个口径**（本批修正：早先把两者混成一个，跨轮那半因此静默丢失）：
+ *    **"还有没有待采用的候选稿"是跨轮事实**，走装配侧注入的会话产出读取（运行时的 `loadResults()`
+ *    契约只读**本轮**，跨轮"由业务用自己的业务表查"）；**"本轮交回的候选正文"只本轮**，走
+ *    `ctx.loadResults()`。两者都要用结果里的 `draftId` 去**业务库**核对该草稿是否仍待采用 ⇒ 需要
+ *    `ctx.actor`（**每请求**，不能由闭包捕获）派生 owner 键。**缺口 A 已补**
  *    （`ResultContext.actor`，运行时加法式扩展）。
  * 3. **`external_pending` 的另一半** → **本批核实：缺口 B 不存在**。旧实现的 `history.operations`
  *    来自 `chat.mjs` 的 `operationCards`，而它就是 `app.operations(owner)` 按会话过滤出来的
@@ -51,7 +53,7 @@
  * `turn.status !== 'succeeded'` 分支），而运行时的历史里没有 attempt 正文 ⇒ 那段文本不再出现。
  * **接受它**：`tail` 的设计意图正是"算数的答案"，把被打断的半句当答案本身就是错的。
  */
-import type { AgentDefinition } from '../../../packages/runtime/src/definition.ts'
+import type { AgentDefinition, ProjectedResult, ResultContext } from '../../../packages/runtime/src/definition.ts'
 import { Config as ConfigSchema } from './config.ts'
 import { publicResultText } from './result-text.ts'
 import { searchContext } from './search.mjs'
@@ -100,6 +102,25 @@ export interface BlogDefinitionInput {
   }
   /** 页面入口前缀（会话材料的位置由它拼出来）。 */
   readonly routePrefix: string
+  /**
+   * 本会话的**运行产出记录**（跨轮）——"这个会话里还有没有**未采用**的候选稿"只能由它回答。
+   *
+   * ## 为什么不能只靠运行时的 `loadResults()`
+   *
+   * 候选是**跨轮**事实：第 1 轮准备好的候选稿到第 3 轮仍然待采用，那么这两轮都必须如实报
+   * `external_pending`——只报"本轮准备了什么"会让用户以为**没事了**（§18 那条用例锁的就是这个）。
+   * 而运行时的 `loadResults()` 契约明确**只读本轮**："跨轮查询没有上界，运行时不做；**要跨轮就
+   * 由业务用自己的业务表查**"（`packages/runtime/src/definition.ts:160-166`）。
+   *
+   * ⇒ 这份读取就是那句"业务自己的表"：blog 索引库的产出记录（`chat_results`），按**会话**查。
+   * 装配侧与旧协作入口传的是**同一个**读法（`ChatStore.results`），候选项判定因此只有一份口径。
+   *
+   * ⚠️ **挂载 `projectResult` 的前置条件**：它必须能读到运行时写进 `dsh_turn_results` 的那批产出
+   * （按会话 join 轮次），否则跨轮那半会静默失效——本轮那半仍由 `loadResults()` 兜住。
+   */
+  readonly results: {
+    list(owner: string, conversationId: string): Promise<readonly Record<string, unknown>[]>
+  }
 }
 
 /**
@@ -178,21 +199,33 @@ export function createBlogDefinition(input: BlogDefinitionInput): AgentDefinitio
           : []),
       ].join('\n')
     },
-    /**
-     * 结果投影：从旧协作入口的收尾段（`participant.ts:148-203`）逐条迁移。
-     *
-     * ## 只在"回合正常结束"时被调用
-     *
-     * 运行时的 `settleOnce` 只在回合正常结束时问 `projectResult`；取消与失败由它按回合结局判定
-     * （走它自己的兜底文案）。所以这里**只需区分** `completed` 与 `external_pending`，不需要
-     * 复现旧实现那三个分支的文案。
-     *
-     * ⚠️ **一处已知的行为变更（主线已定案、如实登记）**：旧实现在"回合未成功"时会把
-     * **失败尝试的正文**也拼进兜底文本（`participant.ts:155` 的 `turn.status !== 'succeeded'`
-     * 分支），而运行时的历史里没有 attempt 正文 ⇒ 那段文本不再出现。**接受它**：`tail` 的设计
-     * 意图正是"算数的答案"，把被打断的半句当答案本身就是错的。
-     */
-    projectResult: async (ctx) => {
+    projectResult: createBlogProjector(input),
+  }
+}
+
+/**
+ * blog 的结果投影（**唯一实现**）：两个消费者共用同一份。
+ *
+ * - 运行时的 `AgentDefinition.projectResult`（本文件上方：`createBlogProjector(input)`）；
+ * - blog 自己的协作入口（`participant.ts` 的收尾段）—— 在索引库切到运行时之前，它仍是生产路径上
+ *   的会话来源。**不能**只让 definition 用这份而让协作入口继续留着自己那一份：两份等价实现的下场
+ *   是"某条路径改了、另一条没改"，而用户看到的是**同一轮在大总管那里和在页面上结论不同**。
+ *
+ * ## 只在"回合正常结束"时被调用
+ *
+ * 运行时的 `settleOnce` 只在回合正常结束时问 `projectResult`；取消与失败由它按回合结局判定
+ * （走它自己的兜底文案）。所以这里**只产出** `completed` 与 `external_pending` 两种状态——
+ * **调用方必须在"回合成功"时才调它**。
+ *
+ * ⚠️ **一处已知的行为变更（主线已定案、如实登记）**：旧实现在"回合未成功"时会把
+ * **失败尝试的正文**也拼进兜底文本（`participant.ts:155` 的 `turn.status !== 'succeeded'`
+ * 分支），而运行时的历史里没有 attempt 正文 ⇒ 那段文本不再出现。**接受它**：`tail` 的设计
+ * 意图正是"算数的答案"，把被打断的半句当答案本身就是错的。
+ */
+export function createBlogProjector(
+  input: Pick<BlogDefinitionInput, 'storage' | 'app' | 'routePrefix' | 'results'>,
+): (ctx: ResultContext) => Promise<ProjectedResult> {
+  return async (ctx) => {
       const owner = ownerKey(ctx.actor)
       const conversationId = ctx.history.conversationId
       const path = input.routePrefix.replace(/\/$/, '') + '?conversationId=' + encodeURIComponent(conversationId)
@@ -212,28 +245,35 @@ export function createBlogDefinition(input: BlogDefinitionInput): AgentDefinitio
       // `tail` 是**那一条消息**（`TurnMessage`），不是正文——取它的 `.text`。
       const text = ctx.history.tail?.text ?? said.map(message => message.text).join('\n\n')
 
-      // —— 候选判定：这一轮准备了哪份候选稿 ——
-      // 结果记录在索引库（`dsh_turn_results`），而草稿在**业务库** ⇒ 两边都要核：只看结果会说
-      // "有候选"，而那份草稿可能已经被采用或丢弃。`loadResults()` 只读**本轮**，与旧实现按
-      // `result.requestId === turnId` 过滤等价（还省掉业务自己拿 id 去比）。
-      const results = await ctx.loadResults()
-      const candidateOf = (result: { readonly payload: Record<string, unknown> }): { draftId: string; proposalId: string } | undefined => {
-        if (result.payload['kind'] !== 'candidate') return undefined
-        const proposal = result.payload['proposal'] as { id?: unknown } | undefined
-        const draftId = result.payload['draftId']
-        if (typeof proposal?.id !== 'string' || typeof draftId !== 'string') return undefined
-        return { draftId, proposalId: proposal.id }
+      /**
+       * 候选判定分**两个口径**，混成一个就会报错状态：
+       *
+       * - **"还有没有待采用的候选稿"（`candidate`）是跨轮事实** ⇒ 看**整个会话**的产出记录；
+       * - **"本轮交回的候选正文"（`currentCandidates`）只是本轮新准备的那几份** ⇒ 看 `loadResults()`。
+       *
+       * 两个来源**并集**：`loadResults()`（本轮）保证"本轮刚准备的候选"在任何装配下都不会漏，
+       * `results.list`（会话）承载跨轮那部分。两者的判定口径完全相同（都要拿结果里的
+       * `proposal.id` 去**业务库**核对草稿是否仍待采用）——只看索引会说"有候选"，而那份草稿可能
+       * 已经被采用或丢弃。
+       */
+      const candidateOf = (record: Record<string, unknown>): { draftId: string; proposalId: string } | undefined => {
+        if (record['kind'] !== 'candidate') return undefined
+        const draftId = record['draftId'], proposal = record['proposal']
+        if (typeof draftId !== 'string' || typeof proposal !== 'object' || proposal === null) return undefined
+        const proposalId = (proposal as { id?: unknown }).id
+        return typeof proposalId === 'string' ? { draftId, proposalId } : undefined
       }
+      // 草稿在业务库里；`some()` 不等待异步谓词，候选判定必须逐条 await 核对。
+      const stillPending = async (found: { draftId: string; proposalId: string }): Promise<boolean> =>
+        (await input.storage.get(owner, found.draftId)).proposal?.id === found.proposalId
+      const currentTurn = (await ctx.loadResults()).map(result => candidateOf(result.payload))
+      const wholeConversation = (await input.results.list(owner, conversationId)).map(record => candidateOf(record))
       let candidate = false
-      for (const result of results) {
-        const found = candidateOf(result)
-        if (found === undefined) continue
-        // 草稿在业务库里；`some()` 不等待异步谓词，候选判定必须逐条 await 核对。
-        if ((await input.storage.get(owner, found.draftId)).proposal?.id === found.proposalId) { candidate = true; break }
+      for (const found of [...currentTurn, ...wholeConversation]) {
+        if (found !== undefined && await stillPending(found)) { candidate = true; break }
       }
       const currentCandidates = new Map<string, { title: string; text: string }>()
-      for (const result of results) {
-        const found = candidateOf(result)
+      for (const found of currentTurn) {
         if (found === undefined || currentCandidates.has(found.draftId)) continue
         const proposal = (await input.storage.get(owner, found.draftId)).proposal
         if (proposal?.id === found.proposalId) {
@@ -272,6 +312,5 @@ export function createBlogDefinition(input: BlogDefinitionInput): AgentDefinitio
           },
         } : {}),
       }
-    },
   }
 }

@@ -195,7 +195,7 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   const {chatSdk}=await import(blogResource('runtime/chat-sdk.mjs').href)
   const chat=new BlogChat(ctx,access,storage,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)
   // 群组直接把这个实例桥接成牛马大总管的执行入口，不再经过额外的发现事件。
-  const participant=createBlogParticipant({access,chat,index:conversations,storage,routePrefix:config.routePrefix})
+  const participant=createBlogParticipant({access,chat,index:conversations,storage,app,routePrefix:config.routePrefix})
   ctx.effect(()=>registerConversations(ctx,chat.provider))
   const translations=new ReasoningTranslations({ctx,pluginId:'blog',storage,access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
   const manifest=JSON.parse(await readFile(blogResource('package.json'),'utf8'))
