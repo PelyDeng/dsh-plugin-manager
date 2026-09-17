@@ -27,7 +27,7 @@ import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { AccessError, conversationModel, defaultConversationModel, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor, type AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, conversationModel, defaultConversationModel, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor, type AgentArtifact, type AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
 import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
 import type { Config } from './config.ts'
 import { ConversationLog, type LoggedEvent, type RunHead } from './event-log.ts'
@@ -40,6 +40,7 @@ import type {
   ConversationSummary,
   RequestRecord,
   SubtaskRecord,
+  SubtaskVerdict,
   TaskCounts,
   TaskInput,
   TaskSummary,
@@ -48,6 +49,15 @@ import { isTerminal, dependencyVerdict, type SubtaskState, type TaskState } from
 
 const CONVERSATION_ID = /^butler-web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const PLAN_TOOL = 'butler_plan'
+/**
+ * 裁决工具：**批量**裁决已经终结的子任务。
+ *
+ * 与 `butler_plan` 一样是"结构化交回"通道：模型要么给出结构化裁决，要么就是普通正文，
+ * 不从自然语言里解析。它**并入汇总轮**（设计 §5.4）：同一轮里先裁决，全 `accept` 才继续
+ * 写汇总正文；有 `rework`/`replace` 就不写汇总，交后端处置——不额外占一轮，用户不会为了
+ * 一次裁决多等一整轮。
+ */
+const VERDICT_TOOL = 'butler_verdict'
 /**
  * 思考快照的发布间隔。
  *
@@ -790,6 +800,14 @@ type Settlement =
  */
 type SettleTaskInput = {
   readonly taskId: string
+  /**
+   * 任务的归属。
+   *
+   * 收尾里有两处**必须按 owner 写库**：裁决结论（`setSubtaskVerdict` 的 owner 条件）与重做追加
+   * （`appendSubtasks` / `drainQueue` 都收 `actor`）。没有它，裁决就只能"记在内存里"而不能落地
+   * ——那正是本项目反复出现的"中间的线没接"。
+   */
+  readonly actor: Actor
   /** 汇总要用的牛马大总管会话；拿不到时跳过汇总，仍然把终态落下。 */
   readonly conversation: Conversation | undefined
   readonly goal: string
@@ -802,6 +820,24 @@ type SettleTaskInput = {
     readonly acceptance?: string | undefined
     /** 这一步交回的材料（定位型，不含内容）。 */
     readonly artifacts?: readonly AgentArtifact[] | undefined
+    /**
+     * 这一步的结果正文与协作返回原文。
+     *
+     * 裁决的 `evidence` 要**程序化核验**"能在该步结果里找得到"，靠的就是这两个字段 ——
+     * 少了它们，核验只能退化成"看模型给的理由像不像真的"。
+     */
+    readonly result?: string | undefined
+    readonly memberReturnText?: string | undefined
+    /**
+     * 成员自报的自检结论（执行侧的 `selfCheck`）。
+     *
+     * ⚠️ 它**不是**裁决结论：`selfCheck` 是成员对自己产出的自检，`verdict` 是牛马大总管对
+     * 这一步的裁决。D-2 的映射（`failed` ⇒ 强制 `rework`；`absent`/`unverifiable` ⇒ 最多
+     * `accept` 且降级 `unverified`）在 `verdictDecisionFor` 里。
+     */
+    readonly selfCheck?: AgentSelfCheck | undefined
+    /** 已经裁决过的结论；空串 = 还没裁决过（**不是"默认通过"**）。 */
+    readonly verdict?: SubtaskVerdict | undefined
   }[]
   /** 任务级验收口径；缺省 = 没有声明。 */
   readonly acceptance?: string | undefined
@@ -823,6 +859,45 @@ type SettleTaskInput = {
    * 所以停了"，而不是"N 个子任务失败"。
    */
   readonly settleErrorOverride?: string | undefined
+}
+
+/** 模型通过 `butler_verdict` 交回的一条裁决。 */
+type VerdictDecision = {
+  readonly subtaskId: string
+  /** ⚠️ 模型只能给这三种；`unverified` 是**我们**在核验不过时降级出来的，不接受模型自报。 */
+  readonly verdict: 'accept' | 'rework' | 'replace'
+  readonly evidence?: string
+  readonly reason?: string
+  /** `replace` 时必填：换给谁。 */
+  readonly newAgentId?: string
+}
+
+/**
+ * 一次汇总轮里"待裁决"的上下文。
+ *
+ * 它只活在**一轮收尾**之内：`settleTask` 在跑汇总**之前**设置、跑完（含异常）清除。
+ * `verdictTool.execute` 靠它判断"此刻是不是在裁决上下文里"——工具是**每会话注册一次、
+ * 对所有轮次都生效**的，没有这道判断，派活轮的模型也会去调 `butler_verdict`。
+ */
+type VerdictContext = {
+  readonly actor: Actor
+  readonly taskId: string
+  /** 这一轮**可以**裁决的步骤（已终结的有效尝试，且还没裁决过）。 */
+  readonly open: readonly {
+    readonly id: string
+    readonly goal: string
+    readonly agentId: string
+    readonly result: string
+    readonly artifacts: readonly AgentArtifact[]
+    readonly memberReturnText: string
+    readonly selfCheck: AgentSelfCheck | undefined
+  }[]
+  /** 已经裁决过的子任务 id：**同一个 id 不得重复裁决**（设计 §5.4）。 */
+  readonly decided: Set<string>
+  /** 这一轮落下的**最终**结论（已含 D-2 与证据核验带来的降级），供 `settleTask` 决定去路。 */
+  readonly decisions: { readonly subtaskId: string; readonly verdict: SubtaskVerdict }[]
+  /** 裁决过程里如实记下的问题（模型给了非法输入、写后核验为 0 行等）。 */
+  readonly problems: string[]
 }
 
 /**
@@ -862,6 +937,95 @@ function isReplayRejection(error: unknown): boolean {
  */
 export function dispatchFailureDetail(error: unknown, raw: string): string {
   return isReplayRejection(error) ? `${REPLAY_REJECTED_PREFIX}：${raw}` : raw
+}
+
+/**
+ * 把**执行侧**的自检结论渲染成给模型看的一句话（裁决提示词用）。
+ *
+ * ⚠️ **缺省不是"通过"**：它必须说清"这一步没有人核验过"，否则模型会把缺省当成"没问题"，
+ * 而 §4.6 的四态表明确写了缺省（`absent`）**不得等价于 `passed`**。
+ */
+export function selfCheckLabel(selfCheck: AgentSelfCheck | undefined): string {
+  const status = selfCheck?.status
+  if (status === 'passed') return '成员自检通过'
+  if (status === 'failed') {
+    const detail = selfCheck?.detail?.trim() ?? ''
+    return detail === '' ? '成员自检**不达标**' : `成员自检**不达标**：${detail}`
+  }
+  if (status === 'unverifiable') return '成员声明这一轮没有可核验的产出'
+  return '成员没有回报自检结论（缺省不等于通过）'
+}
+
+/**
+ * `accept` 的证据核验：那段证据要**原样出现**在该步的结果 / 材料位置 / 协作返回原文里。
+ *
+ * 核验的是"**这句话确实来自这一步**"，不是"这句话听起来像真的"。它挡不住成员自己写一段
+ * 漂亮的假结论（那需要业务侧的证据链），但它能挡住"模型凭印象编一个 evidence"——那是最常见
+ * 的一种：裁决者并没有真的去看那一步交回了什么。
+ */
+export function verdictEvidenceFound(evidence: string, input: {
+  readonly result: string
+  readonly memberReturnText: string
+  readonly artifacts: readonly AgentArtifact[]
+}): boolean {
+  const haystacks = [
+    input.result,
+    input.memberReturnText,
+    ...input.artifacts.flatMap(item => [item.title, item.path, item.kind]),
+  ]
+  return haystacks.some(text => text.includes(evidence))
+}
+
+/**
+ * 把"模型的裁决意图 + 这一步成员自报的自检"映射成**最终要落库的裁决**。
+ *
+ * 两条独立来源都要过：
+ *
+ * 1. **D-2（自检四态）**：`failed` ⇒ **强制 `rework`**（成员自己说产出和口径不符，证据看都不看）；
+ *    `absent`（含运行时内部的 `damaged`，落库时已归成它）/ `unverifiable` ⇒ 最多 `accept`，
+ *    且**强制降级 `unverified`**；`passed` ⇒ 允许 `accept`，但仍须过第 2 条。
+ * 2. **证据核验**：`accept` 必须附 `evidence`，且它要能在该步结果里找到；找不到 ⇒ 降级
+ *    `unverified` —— **不是静默 accept**。
+ *
+ * ⚠️ 三个同名的 "verdict" 别混：这里的输入 `selfCheck` 是**执行侧**的自检；`dependencyVerdict`
+ * 是**依赖侧**"前置能不能派"的判定；输出才是**裁决侧**的结论。
+ *
+ * 导出成纯函数是为了让它可直测：工具本身要经模型驱动，测起来又慢又脆。
+ */
+export function verdictDecisionFor(input: {
+  readonly requested: 'accept' | 'rework' | 'replace'
+  readonly evidence: string
+  readonly selfCheck: AgentSelfCheck | undefined
+  readonly result: string
+  readonly memberReturnText: string
+  readonly artifacts: readonly AgentArtifact[]
+}): { readonly verdict: SubtaskVerdict; readonly downgraded: boolean; readonly why: string } {
+  const status = input.selfCheck?.status
+  // 1. 自检不达标 ⇒ 强制重做。这条**优先于**模型给的 accept/replace：成员自己说产出不符口径。
+  if (status === 'failed') {
+    return {
+      verdict: 'rework',
+      downgraded: input.requested !== 'rework',
+      why: '成员自检不达标（selfCheck=failed）',
+    }
+  }
+  if (input.requested !== 'accept') return { verdict: input.requested, downgraded: false, why: '' }
+  // 2. 只有走到这里才是 accept 意图。
+  //    成员没有自检能力（缺省 / 显式 absent）或声明"这一轮没有可核验的产出"时，它**没有资格**
+  //    被称作"核验通过"—— 最多如实标"未核验"，而不进终态（设计 §5.4）。
+  if (status === undefined || status === 'absent') {
+    return { verdict: 'unverified', downgraded: true, why: '成员没有回报自检结论（缺省不等于通过）' }
+  }
+  if (status === 'unverifiable') {
+    return { verdict: 'unverified', downgraded: true, why: '成员声明这一轮没有可核验的产出' }
+  }
+  // 3. selfCheck === 'passed'：仍须过证据核验。
+  const evidence = input.evidence.trim()
+  if (evidence === '') return { verdict: 'unverified', downgraded: true, why: 'accept 没有附证据' }
+  if (!verdictEvidenceFound(evidence, input)) {
+    return { verdict: 'unverified', downgraded: true, why: `证据在该步结果里找不到：${clip(evidence, 40)}` }
+  }
+  return { verdict: 'accept', downgraded: false, why: '' }
 }
 
 /**
@@ -926,6 +1090,15 @@ export class ButlerConsole {
    * 要等回合收尾（或先停止）。页面各自持有的 streaming 标记只是反馈，不能当互斥依据。
    */
   private readonly claims = new Map<string, { readonly runId: string; readonly kind: 'turn' | 'reply' | 'supplement' }>()
+
+  /**
+   * 正在裁决的会话 → 这一次汇总轮的裁决上下文。
+   *
+   * 键是**牛马大总管自己的会话 id**（裁决工具就是注册在那个 agent 上的）。一代收尾开始前设置、
+   * 结束（含异常）时清除 —— 工具注册是每会话一次、对所有轮次生效的，靠这份上下文才分得清
+   * "现在这一轮该不该裁决"。
+   */
+  private readonly verdictContexts = new Map<string, VerdictContext>()
 
   /** 受理时同步占住执行权；拿不到返回 false，由调用方按 409 拒绝。 */
   private claimNow(conversationId: string, runId: string, kind: 'reply' | 'supplement'): boolean {
@@ -1155,6 +1328,9 @@ export class ButlerConsole {
       text: () => this.rosterText(sessionId),
     })
     agentCtx.tools.register(this.planTool(sessionId))
+    // 裁决工具：同一个会话上再注册一个。它只在收尾的汇总轮里有上下文（见 `verdictContexts`），
+    // 其余轮次调用它会拿到一句明确的拒绝，而不是静默什么都不做。
+    agentCtx.tools.register(this.verdictTool(sessionId))
     // 牛马大总管能直接调用的工具：派活工具 + 目录里的通用工具。
     //
     // 通用工具是约定好的公共集（分类标签 `通用工具`），任何智能体都能调。牛马大总管需要它们
@@ -1376,6 +1552,140 @@ export class ButlerConsole {
         return { accepted: true, subtasks: subtasks.length }
       },
     })
+  }
+
+  /**
+   * `butler_verdict` 工具：**批量**裁决已经终结的子任务。
+   *
+   * 它**并入汇总轮**（设计 §5.4）：提示词里给出待裁决清单，模型先裁、再写汇总正文，同一次
+   * 调用里完成 —— 不额外占一轮，用户不会为了一次裁决多等一整轮。
+   *
+   * ⚠️ 工具是**每会话注册一次、对所有轮次生效**的（`setup` 只在建 agent 时跑一遍），所以
+   * `execute` 必须自己判断"此刻是不是在裁决上下文里"：不在就**明确拒绝**。静默接受会给模型
+   * 一个"裁决成功"的假信号，而库里什么都没有。
+   */
+  private verdictTool(sessionId: string) {
+    return defineTool({
+      name: VERDICT_TOOL,
+      description: '对已经结束的子任务逐条给出裁决。**只在提示里给出「待裁决清单」时调用**：一次把清单里的每一步都裁掉，然后再写汇总正文。',
+      parameters: {
+        items: {
+          type: 'array',
+          required: true,
+          description: '裁决清单里**每一步**的结论，一步一条：不要漏，也不要重复。',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              subtaskId: { type: 'string', required: true, description: '要裁决的子任务 id，只能从待裁决清单里选。' },
+              verdict: { type: 'string', required: true, description: 'accept=产出可用、采纳；rework=同一位成员再做一次；replace=换一位成员重做。' },
+              evidence: { type: 'string', description: 'accept 必填：该步结果或材料里**原样出现**的一小段文字（或材料位置），用来核验产出真的存在。核验不过会被降级为 unverified。' },
+              reason: { type: 'string', description: '一句话说明为什么这样裁。' },
+              newAgentId: { type: 'string', description: 'replace 必填：换给谁，只能从可调度成员里选。' },
+            },
+          },
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { accepted: { type: 'boolean', required: true }, decided: { type: 'integer', required: true } },
+        },
+        render: (_args, value) => [{
+          type: 'text',
+          text: value.accepted ? `已记录 ${value.decided} 条裁决。` : '裁决未被接受。',
+        }],
+      },
+      execute: async (args, exec) => {
+        exec.signal.throwIfAborted()
+        const context = this.verdictContexts.get(sessionId)
+        if (context === undefined) {
+          // 派活轮的模型也可能调它（工具对所有轮次都注册着）。这里明确拒绝并指路。
+          throw new Error('现在没有待裁决的清单：只在收尾汇总那一轮、提示里给出待裁决清单时才能调用这个工具。')
+        }
+        const items = Array.isArray(args.items) ? args.items : []
+        if (items.length === 0) throw new Error('裁决清单不能为空')
+        // **先整批校验、再逐条落库**：半批落下去会留下"这一轮裁了一半"的中间态，而下一次
+        // 重试时清单可能已经变了（子任务被替代、任务被补充）。
+        const pending: VerdictDecision[] = []
+        for (const raw of items) pending.push(this.readVerdictDecision(raw, context))
+        const missing = context.open
+          .filter(item => !context.decided.has(item.id) && !pending.some(entry => entry.subtaskId === item.id))
+          .map(item => item.id)
+        if (missing.length > 0) {
+          // 漏掉的步骤没有结论 —— 汇总写下去就等于默认通过，所以这里拒绝整批。
+          throw new Error(`还有步骤没有裁决：${missing.join('、')}。清单里的每一步都要给出结论。`)
+        }
+        for (const decision of pending) await this.applyVerdictDecision(context, decision)
+        return { accepted: true, decided: pending.length }
+      },
+    })
+  }
+
+  /** 解析并校验**一条**模型给的裁决；不合法当场抛错（错误文案就是给模型的纠正指令）。 */
+  private readVerdictDecision(raw: unknown, context: VerdictContext): VerdictDecision {
+    if (typeof raw !== 'object' || raw === null) throw new Error('裁决条目必须是对象')
+    const item = raw as Record<string, unknown>
+    const subtaskId = typeof item.subtaskId === 'string' ? item.subtaskId.trim() : ''
+    const target = context.open.find(entry => entry.id === subtaskId)
+    if (target === undefined) {
+      throw new Error(`子任务 ${subtaskId === '' ? '(缺 id)' : subtaskId} 不在这一次的待裁决清单里；只能裁清单里列出的步骤。`)
+    }
+    if (context.decided.has(subtaskId)) {
+      // 同一子任务重复裁决：后一条会盖掉前一条，而"哪一条算数"没有任何依据可言。
+      throw new Error(`子任务 ${subtaskId} 已经裁决过了：同一个子任务不能重复裁决。`)
+    }
+    const verdict = item.verdict
+    if (verdict !== 'accept' && verdict !== 'rework' && verdict !== 'replace') {
+      throw new Error('verdict 只能是 accept / rework / replace')
+    }
+    const reason = typeof item.reason === 'string' ? clip(item.reason.trim(), 300) : ''
+    const evidence = typeof item.evidence === 'string' ? item.evidence.trim() : ''
+    const newAgentId = typeof item.newAgentId === 'string' ? item.newAgentId.trim() : ''
+    if (verdict === 'replace') {
+      if (newAgentId === '') throw new Error('replace 必须给 newAgentId：换给谁。')
+      // **预检可调度**：派不出去的替代方案不如当场拒绝 —— 否则问题要到下一轮派单才暴露，
+      // 而那时这一轮已经按"要重做"收尾了。
+      if (!this.dispatchableAgents().some(card => card.id === newAgentId)) {
+        throw new Error(`成员 ${newAgentId} 现在不可调度，不能作为替代者。`)
+      }
+    }
+    return {
+      subtaskId, verdict,
+      ...(reason === '' ? {} : { reason }),
+      ...(evidence === '' ? {} : { evidence }),
+      ...(newAgentId === '' ? {} : { newAgentId }),
+    }
+  }
+
+  /** 落**一条**裁决：D-2 与证据核验 → 写库 → **写后核验** → 记账。 */
+  private async applyVerdictDecision(context: VerdictContext, decision: VerdictDecision): Promise<void> {
+    const target = context.open.find(entry => entry.id === decision.subtaskId)
+    if (target === undefined) throw new Error(`子任务 ${decision.subtaskId} 不在这一次的待裁决清单里`)
+    const mapped = verdictDecisionFor({
+      requested: decision.verdict,
+      evidence: decision.evidence ?? '',
+      selfCheck: target.selfCheck,
+      result: target.result,
+      memberReturnText: target.memberReturnText,
+      artifacts: target.artifacts,
+    })
+    if (mapped.downgraded) {
+      // 降级**如实记下来**：否则页面上只看到"没裁决"，看不出是"模型想采纳但证据核验不过"。
+      context.problems.push(`子任务 ${decision.subtaskId}：${decision.verdict} → ${mapped.verdict}（${mapped.why}）`)
+    }
+    const rows = await this.storage.setSubtaskVerdict(context.actor, context.taskId, decision.subtaskId, {
+      verdict: mapped.verdict,
+      ...(decision.reason === undefined ? {} : { reason: decision.reason }),
+      ...(decision.evidence === undefined ? {} : { evidence: decision.evidence }),
+      ...(mapped.why === '' ? {} : { observation: mapped.why }),
+    })
+    // **写后核验**：受影响行数为 0 说明这条子任务根本不在库里（或不属于这个 owner）——
+    // 那是编程错误，不能静默吞掉，否则"裁决过了"只活在内存里（设计 §5.4）。
+    if (rows === 0) throw new Error(`裁决没有落到库里（受影响 0 行）：${decision.subtaskId}`)
+    context.decided.add(decision.subtaskId)
+    context.decisions.push({ subtaskId: decision.subtaskId, verdict: mapped.verdict })
   }
 
   /** 当前可调度（登记了执行入口且仍在目录中）的 Agent。 */
@@ -1692,6 +2002,7 @@ export class ButlerConsole {
       const acceptance = await this.storedAcceptance(actor, taskId)
       yield* this.closeTask({
         taskId,
+        actor,
         conversation,
         goal: text,
         subtasks: await this.storedSubtasks(actor, taskId, subtasks),
@@ -1996,6 +2307,7 @@ export class ButlerConsole {
       const acceptance = await this.storedAcceptance(actor, taskId)
       yield* this.closeTask({
         taskId,
+        actor,
         conversation,
         goal: (await this.storage.task(actor, taskId))?.goal ?? '',
         subtasks: await this.storedSubtasks(actor, taskId, []),
@@ -2308,6 +2620,7 @@ export class ButlerConsole {
      */
     for await (const _event of this.settleTask({
       taskId,
+      actor,
       // 后台路径拿不到会话句柄：`settleTask` 照常落终态，只是不跑汇总（`summarize` 已是 false）。
       conversation: undefined,
       goal: after.goal,
@@ -3180,21 +3493,29 @@ export class ButlerConsole {
     state: SubtaskState
     acceptance: string
     artifacts: readonly AgentArtifact[]
+    result: string
+    memberReturnText: string
+    selfCheck: AgentSelfCheck | undefined
+    verdict: SubtaskVerdict
   }[]> {
     const record = await this.storage.task(actor, taskId)
     if (record === undefined) {
       // 库里查不到：按「未跑完」回落。没有口径、也没有材料可谈 —— 空串与空数组就是"没有"。
       return planned.map(item => ({
         ...item, state: 'cancelled' as SubtaskState, acceptance: '', artifacts: [],
+        result: '', memberReturnText: '', selfCheck: undefined, verdict: '' as SubtaskVerdict,
       }))
     }
     return effectiveSubtasks(record.subtasks).map(item => ({
       id: item.id, goal: item.goal, agentId: item.agentId, state: item.state,
-      // 每步的验收口径与交回材料在这里一并带上：汇总侧的两条消费点（提示词带口径、汇总前核验
-      // 口径提到的产出物）排在下一批，本批先把数据从库里取到调用点，免得那条改动退化成
-      // "给 `summarize` 加一个永远为空的参数"。
+      // 每步的口径、材料、结果正文、协作返回原文、自检结论与已有裁决一并带上：裁决要靠它们做
+      // **证据核验**与 **D-2 映射** —— 少一个，"核验"就退化成"看模型给的理由像不像真的"。
       acceptance: item.acceptance,
       artifacts: item.artifacts,
+      result: item.result,
+      memberReturnText: item.memberReturn?.text ?? '',
+      selfCheck: item.memberReturn?.selfCheck,
+      verdict: item.verdict,
     }))
   }
 
@@ -3289,6 +3610,38 @@ export class ButlerConsole {
    *
    * 结论一律来自 {@link decideSettlement}：这里不再自己数一遍子任务。
    */
+  /**
+   * 打开这一次收尾的裁决上下文。
+   *
+   * 只收**已终结、且还没裁决过**的步骤：没结束的步骤没有结论可裁；已经裁过的（补话之后
+   * 汇总轮会重跑）不该被再裁一次——同一子任务重复裁决会让结论互相覆盖，而下一次裁决的依据
+   * 已经和上一次不同了。
+   */
+  private openVerdictContext(sessionId: string, input: SettleTaskInput): void {
+    const open = input.subtasks
+      .filter(item => isTerminal(item.state) && (item.verdict ?? '') === '')
+      .map(item => ({
+        id: item.id,
+        goal: item.goal,
+        agentId: item.agentId,
+        result: item.result ?? '',
+        artifacts: item.artifacts ?? [],
+        memberReturnText: item.memberReturnText ?? '',
+        selfCheck: item.selfCheck,
+      }))
+    this.verdictContexts.set(sessionId, {
+      actor: input.actor, taskId: input.taskId, open,
+      decided: new Set(), decisions: [], problems: [],
+    })
+  }
+
+  /** 关掉上下文并取回结论。**一定要关**：留在 Map 里，下一轮的模型会以为还能接着裁。 */
+  private closeVerdictContext(sessionId: string): VerdictContext | undefined {
+    const context = this.verdictContexts.get(sessionId)
+    this.verdictContexts.delete(sessionId)
+    return context
+  }
+
   private async *settleTask(input: SettleTaskInput): AsyncGenerator<ButlerEvent> {
     const { taskId, conversation, goal, subtasks, reports, signal } = input
     const settlement = await this.decideSettlement({ taskId, subtasks, stopped: input.stopped })
@@ -3327,14 +3680,53 @@ export class ButlerConsole {
 
     const { state: taskState, failed, stopped } = settlement
     let summaryText = ''
+    /**
+     * 裁决上下文（设计 §5.4）：**并入汇总轮** —— 同一轮里先裁决、再写汇总正文，不额外占一轮。
+     *
+     * 只在真的有观众、有会话句柄的路径上开（后台等待超时那条没有汇总轮，也就没有裁决）。
+     * `finally` 里一定关掉：留在 Map 里，下一轮的模型会以为还能接着裁。
+     */
+    let verdict: VerdictContext | undefined
     // 汇总只在**有观众**的路径上跑：后台等待超时（路径 4）传 `summarize: false`。
     if (input.summarize && !stopped && conversation !== undefined) {
-      await this.storage.setTaskState(taskId, 'summarizing')
-      for await (const event of this.summarize(conversation, goal, subtasks, reports, signal)) {
-        const inner = summaryTextOf(event)
-        if (inner !== null) summaryText = inner
-        else yield event as ButlerEvent
+      this.openVerdictContext(conversation.id, input)
+      try {
+        await this.storage.setTaskState(taskId, 'summarizing')
+        for await (const event of this.summarize(conversation, goal, subtasks, reports, signal)) {
+          const inner = summaryTextOf(event)
+          if (inner !== null) summaryText = inner
+          else yield event as ButlerEvent
+        }
+      } finally {
+        verdict = this.closeVerdictContext(conversation.id)
       }
+    }
+    /**
+     * 有 `rework` / `replace` ⇒ **不写汇总正文**。
+     *
+     * 那一轮正文是按"都成了"写出来的，写下去会把"还要重做"盖掉。终态如实落 `partial`
+     * （一部分成、一部分要重做）—— 裁决**不改终态规则本身**，它只决定这一轮要不要出汇总。
+     *
+     * ⚠️ 设计 §5.4 第 2 步的"追加尝试 + 回调度"排在下一批：本批**如实记录并落终态**，
+     * 不假装重做已经派出去。
+     */
+    const rework = (verdict?.decisions ?? []).filter(item => item.verdict === 'rework' || item.verdict === 'replace')
+    if (rework.length > 0) {
+      const problems = verdict?.problems ?? []
+      const detail = problems.length === 0 ? '' : `（${problems.join('；')}）`
+      const message = `有 ${rework.length} 个步骤被裁决为要重做，这一轮先不出汇总。${detail}`
+      // 与汇总路径同一道版本屏障：这中间进来的补充会让这份结论作废。
+      if (!(await this.storage.commitTaskState(taskId, 'partial', { summary: message, error: '' }))) {
+        await this.storage.setTaskState(taskId, 'running')
+        yield {
+          type: 'chat', role: 'butler',
+          text: '老大又补了一句，刚那份结论先当草稿 —— 等新的说法处理完再给你结论。',
+          time: Date.now(),
+        }
+        return
+      }
+      yield { type: 'summary', taskId, text: message, state: 'partial', error: '', time: Date.now() }
+      return
     }
     if (summaryText === '') {
       summaryText = reports.length === 0 ? '这次没有拿到可用的子任务结果。' : reports.join('\n\n')
@@ -3447,13 +3839,18 @@ export class ButlerConsole {
     const effective = effectiveSubtasks(record.subtasks)
     yield* this.closeTask({
       taskId: record.id,
+      actor: prepared.actor,
       conversation: this.conversations.get(prepared.conversationId),
       goal: record.goal,
       subtasks: effective.map(item => ({
         id: item.id, goal: item.goal, agentId: item.agentId, state: item.state,
-        // 每步的口径与交回材料一并带上（汇总侧的两条消费点排在下一批）。
+        // 与派活路径同一个口径：裁决要用的结果正文、协作原文、自检结论与已有裁决都带上。
         acceptance: item.acceptance,
         artifacts: item.artifacts,
+        result: item.result,
+        memberReturnText: item.memberReturn?.text ?? '',
+        selfCheck: item.memberReturn?.selfCheck,
+        verdict: item.verdict,
       })),
       ...(record.acceptance === '' ? {} : { acceptance: record.acceptance }),
       reports: effective.map(reportOf),
@@ -3475,11 +3872,36 @@ export class ButlerConsole {
     signal: AbortSignal,
   ): AsyncGenerator<ButlerInnerEvent, void> {
     const lines = subtasks.map((subtask, index) => `- 子任务「${subtask.goal}」由 ${subtask.agentId} 完成，结果：\n${reports[index] ?? '（没有结果）'}`)
+    /**
+     * 待裁决清单（设计 §5.4）：**同一轮里先裁决、再写汇总**。
+     *
+     * 清单只列"已终结且还没裁决过"的步骤。没有清单时（都裁过了、或这一轮本来就没有可裁的），
+     * 这一整段都不出现 —— 模型也就没有理由去调 `butler_verdict`（真调了会被明确拒绝）。
+     */
+    const verdictContext = this.verdictContexts.get(conversation.id)
+    const verdictLines = verdictContext === undefined || verdictContext.open.length === 0 ? [] : [
+      '',
+      '# 待裁决清单（**先裁决，再写汇总**）',
+      '',
+      '下面每一步都已经结束。**先调用 `butler_verdict` 把清单里的每一步都给出结论**，然后再写汇总正文。',
+      '清单里任何一步漏掉，你的整条回复都会被拒绝 —— 所以先裁完、再写。',
+      '',
+      '怎么裁：产出对得上这一步的目标、可以采纳 ⇒ `accept`，并附上**在该步结果里原样出现**的一小段证据（核验不过会降级成"未核验"）；该由同一位成员再做一次 ⇒ `rework`；该换一位成员重做 ⇒ `replace`（要给 `newAgentId`）。',
+      '',
+      ...verdictContext.open.map(item => [
+        `- \`${item.id}\`（${item.agentId}）目标：${item.goal}`,
+        `  结果：${clip(item.result, 400) === '' ? '（没有结果）' : clip(item.result, 400)}`,
+        `  成员自检：${selfCheckLabel(item.selfCheck)}`,
+      ].join('\n')),
+    ]
     const prompt = [
       `我的原始目标是：${goal}`,
       '各子 Agent 已经返回结果：',
       ...lines,
-      '请基于这些结果给出最终回答，直接回答我的目标，不要重复子任务清单，也不要提到这份指令。',
+      ...verdictLines,
+      verdictLines.length === 0
+        ? '请基于这些结果给出最终回答，直接回答我的目标，不要重复子任务清单，也不要提到这份指令。'
+        : '裁完之后，再基于这些结果给出最终回答：直接回答我的目标，不要重复子任务清单，也不要提到这份指令。',
     ].join('\n')
     const speech = progressQueue()
     const summaryTurn = this.runTurn(conversation, prompt, signal,

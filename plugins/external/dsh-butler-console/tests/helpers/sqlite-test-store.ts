@@ -26,6 +26,7 @@ import type {
   NewSubtask,
   RequestRecord,
   SubtaskRecord,
+  SubtaskVerdict,
   TaskCounts,
   TaskInput,
   TaskRecord,
@@ -509,6 +510,27 @@ export class TaskStore {
   }
 
   /** 读取一条任务的完整记录；不存在或不属于该用户时返回 undefined。 */
+  /**
+   * 落一条裁决结论（替身侧的同步写；与真实现的 scoped UPDATE 逐条对齐）。
+   *
+   * **返回受影响行数**：真实现靠 `tasks` 的 owner 条件过滤，这里同样先核 owner——0 行表示
+   * 这条子任务不存在或不属于该 owner，调用方必须做写后核验。
+   */
+  setSubtaskVerdict(
+    actor: Actor,
+    taskId: string,
+    subtaskId: string,
+    patch: { verdict: SubtaskVerdict; reason?: string; evidence?: string; observation?: string },
+  ): number {
+    const owned = this.db.prepare('SELECT 1 FROM tasks WHERE id=? AND owner_namespace=? AND owner_id=?')
+      .get(taskId, actor.namespace, actor.userId)
+    if (owned === undefined) return 0
+    const result = this.db.prepare(
+      'UPDATE subtasks SET verdict=?, verdict_reason=?, verdict_evidence=?, observation=? WHERE task_id=? AND id=?',
+    ).run(patch.verdict, patch.reason ?? '', patch.evidence ?? '', patch.observation ?? '', taskId, subtaskId)
+    return Number(result.changes)
+  }
+
   task(actor: Actor, id: string): TaskRecord | undefined {
     const row = this.db.prepare(`SELECT id,conversation_id AS conversationId,goal,acceptance,state,note,summary,error,
         accepted_version AS acceptedVersion,processed_version AS processedVersion,
@@ -520,7 +542,8 @@ export class TaskStore {
         agent_id AS agentId,reason,state,result,error,
         artifacts,conversation_id AS subtaskConversationId,started_at AS startedAt,finished_at AS finishedAt,
         requires_external_action AS requiresExternalActionRaw,
-        input_refs AS inputRefsRaw,member_return AS memberReturnRaw
+        input_refs AS inputRefsRaw,member_return AS memberReturnRaw,
+        verdict,verdict_reason AS verdictReason,verdict_evidence AS verdictEvidence,observation
       FROM subtasks WHERE task_id=? ORDER BY seq`).all(id) as unknown as (Omit<SubtaskRecord, 'artifacts' | 'conversationId' | 'dependsOn' | 'dependsOnState' | 'requiresExternalAction' | 'inputRefs' | 'inputRefsState' | 'memberReturn'> & {
         readonly artifacts: string
         readonly subtaskConversationId: string
@@ -948,6 +971,15 @@ export class SqliteButlerStorage implements ButlerStorage {
     patch?: Parameters<TaskStore['setSubtaskState']>[3],
   ): Promise<void> {
     this.store.setSubtaskState(taskId, subtaskId, state, patch)
+  }
+
+  async setSubtaskVerdict(
+    actor: Actor,
+    taskId: string,
+    subtaskId: string,
+    patch: Parameters<TaskStore['setSubtaskVerdict']>[3],
+  ): Promise<number> {
+    return this.store.setSubtaskVerdict(actor, taskId, subtaskId, patch)
   }
 
   async task(actor: Actor, id: string): Promise<TaskRecord | undefined> {

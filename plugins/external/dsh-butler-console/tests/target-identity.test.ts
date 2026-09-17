@@ -277,6 +277,8 @@ describe('聚合只看有效尝试', () => {
     state: state as SubtaskRecord['state'], result: '', error: '', artifacts: [], conversationId: '',
     startedAt: null, finishedAt: null,
     inputRefs: undefined, inputRefsState: 'unfixed', memberReturn: undefined,
+    // 裁决四列：**空串 = 还没裁决过**（不是「默认通过」），这里就是没裁决过的形状。
+    verdict: '', verdictReason: '', verdictEvidence: '', observation: '',
   })
 
   it('被替代掉的那条不算数，链末端的尝试才算', () => {

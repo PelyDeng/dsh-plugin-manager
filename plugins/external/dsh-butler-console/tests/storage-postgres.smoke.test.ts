@@ -177,6 +177,69 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
     }
   })
 
+  it('裁决四列落库往返：写入 → 换实例 → 四列都读得回（空串不等于「默认通过」）', async () => {
+    // `butler_verdict` 的结论落在这四列上（`subtasks` 表，v10 起）。这里证的是**真的落了库、
+    // 换个实例（等价重启）读得回**：上一批只把列加进 DDL 与迁移工具，而 PG 实现的读写映射
+    // 一个字都没有——那一版里"有列、无人读写"，正是本项目反复出现的"中间的线没接"。
+    const conversationId = randomUUID()
+    await storage.reserveConversation(conversationId, actor)
+    const taskId = `butler-task-${randomUUID()}`
+    await storage.createTask({
+      id: taskId,
+      conversationId,
+      actor,
+      goal: '把发布说明整理成三段',
+      note: '',
+      subtasks: [
+        { id: 's1', goal: '写草稿', agentId: 'blog', reason: '' },
+        { id: 's2', goal: '这一步没人裁决过', agentId: 'blog', reason: '' },
+      ],
+    })
+    // 先确认"没裁决过"的形状是**空串**，不是任何一种结论。
+    const before = await storage.task(actor, taskId)
+    expect(before?.subtasks.map(item => item.verdict)).toEqual(['', ''])
+
+    // 写后核验：写进去必须恰好 1 行；写一条不存在的子任务必须返回 0（**不静默**）。
+    expect(await storage.setSubtaskVerdict(actor, taskId, 's1', {
+      verdict: 'accept', reason: '产出对得上口径', evidence: '一篇已发布的发布说明链接', observation: '首发',
+    })).toBe(1)
+    expect(await storage.setSubtaskVerdict(actor, taskId, 's404', { verdict: 'accept' })).toBe(0)
+
+    const reopened = new PostgresTaskStorage(DSN)
+    try {
+      await reopened.init()
+      const record = await reopened.task(actor, taskId)
+      expect(record?.subtasks[0]).toMatchObject({
+        verdict: 'accept',
+        verdictReason: '产出对得上口径',
+        verdictEvidence: '一篇已发布的发布说明链接',
+        observation: '首发',
+      })
+      // 没裁决过的那条仍是空串：读写映射不许把缺省补成任何结论。
+      expect(record?.subtasks[1]).toMatchObject({
+        verdict: '', verdictReason: '', verdictEvidence: '', observation: '',
+      })
+    } finally {
+      await reopened.close()
+    }
+  })
+
+  it('裁决写入按 owner 隔离：别人的 owner 一行也改不动', async () => {
+    // 裁决由牛马大总管自己发起（不是用户请求），但写入必须带 owner 条件——漏了它，一次编程
+    // 错误就会改到别人 owner 的任务上，而且**不报错**（受影响行数只是不为 0）。
+    const otherActor: Actor = { namespace: 'user', userId: 'someone-else', sessionId: 'sess-other' }
+    const conversationId = randomUUID()
+    await storage.reserveConversation(conversationId, actor)
+    const taskId = `butler-task-${randomUUID()}`
+    await storage.createTask({
+      id: taskId, conversationId, actor, goal: '只有本人能裁决', note: '',
+      subtasks: [{ id: 's1', goal: '写草稿', agentId: 'blog', reason: '' }],
+    })
+    expect(await storage.setSubtaskVerdict(otherActor, taskId, 's1', { verdict: 'rework', reason: '越权' })).toBe(0)
+    const record = await storage.task(actor, taskId)
+    expect(record?.subtasks[0]?.verdict).toBe('')
+  })
+
   it('createTask 中途注入失败（子任务主键冲突）全回滚：任务与输入都不留痕', async () => {
     const conversationId = randomUUID()
     await storage.reserveConversation(conversationId, actor)

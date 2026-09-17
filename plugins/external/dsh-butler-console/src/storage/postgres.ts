@@ -33,6 +33,7 @@ import type {
   NewSubtask,
   RequestRecord,
   SubtaskRecord,
+  SubtaskVerdict,
   TaskCounts,
   TaskInput,
   TaskRecord,
@@ -96,6 +97,11 @@ interface SubtaskRow extends QueryResultRow {
   readonly requiresExternalActionRaw: string | number
   readonly inputRefsRaw: string
   readonly memberReturnRaw: string
+  /** 裁决四列（`subtasks` 表，v10 起）。空串表示**还没裁决过**。 */
+  readonly verdict: string
+  readonly verdictReason: string
+  readonly verdictEvidence: string
+  readonly observation: string
 }
 
 function toTimestamp(value: string | number | null): number | null {
@@ -130,6 +136,12 @@ function mapSubtaskRow(row: SubtaskRow): SubtaskRecord {
     inputRefs: snapshot.kind === 'fixed' ? snapshot.inputRefs : undefined,
     inputRefsState: snapshot.kind,
     memberReturn: parseMemberReturn(row.memberReturnRaw),
+    // 裁决四列原样读回：**空串就是"还没裁决过"**，不做任何"默认通过"的修补——把空串读成
+    // `accept` 会让所有历史行凭空获得一次没人做过的裁决。
+    verdict: row.verdict as SubtaskVerdict,
+    verdictReason: row.verdictReason,
+    verdictEvidence: row.verdictEvidence,
+    observation: row.observation,
     startedAt: toTimestamp(row.startedAt),
     finishedAt: toTimestamp(row.finishedAt),
     requiresExternalAction: Number(row.requiresExternalActionRaw) === 1,
@@ -500,6 +512,30 @@ export class PostgresTaskStorage implements ButlerStorage {
     )
   }
 
+  /**
+   * 落一条裁决结论（`butler_verdict` 的写入面）。
+   *
+   * 一条 scoped UPDATE：`task_id` 与 `id` 一起进 WHERE，**不另做一次预查询**（两套判定必然漂移）。
+   * 子任务表没有 owner 列，归属靠 `task_id` 挂在任务上，所以 owner 条件写在子查询里。
+   *
+   * **返回受影响行数** ⇒ 调用方做写后核验（0 = 这条子任务不存在或不属于该任务，是编程错误）。
+   */
+  async setSubtaskVerdict(
+    actor: Actor,
+    taskId: string,
+    subtaskId: string,
+    patch: { verdict: SubtaskVerdict; reason?: string; evidence?: string; observation?: string },
+  ): Promise<number> {
+    const result = await this.run(
+      `UPDATE subtasks SET verdict=$1, verdict_reason=$2, verdict_evidence=$3, observation=$4
+        WHERE task_id=$5 AND id=$6
+          AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=$5 AND t.owner_namespace=$7 AND t.owner_id=$8)`,
+      [patch.verdict, patch.reason ?? '', patch.evidence ?? '', patch.observation ?? '',
+        taskId, subtaskId, actor.namespace, actor.userId],
+    )
+    return result.rowCount ?? 0
+  }
+
   async task(actor: Actor, id: string): Promise<TaskRecord | undefined> {
     const taskResult = await this.run<TaskRow>(
       `SELECT id,conversation_id AS "conversationId",goal,acceptance,state,note,summary,error,
@@ -515,7 +551,8 @@ export class PostgresTaskStorage implements ButlerStorage {
          agent_id AS "agentId",reason,state,result,error,
          artifacts,conversation_id AS "subtaskConversationId",started_at AS "startedAt",finished_at AS "finishedAt",
          requires_external_action AS "requiresExternalActionRaw",
-         input_refs AS "inputRefsRaw",member_return AS "memberReturnRaw"
+         input_refs AS "inputRefsRaw",member_return AS "memberReturnRaw",
+         verdict,verdict_reason AS "verdictReason",verdict_evidence AS "verdictEvidence",observation
        FROM subtasks WHERE task_id=$1 ORDER BY seq`,
       [id],
     )

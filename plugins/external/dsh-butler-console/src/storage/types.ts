@@ -126,6 +126,24 @@ export interface ButlerMemberReturn {
 export type ButlerDependsOnKind = 'valid' | 'damaged'
 
 /** 一条子任务记录。 */
+/**
+ * 一条子任务的裁决结论。
+ *
+ * ⚠️ **与另外两个同名的 "verdict" 不是一回事**，读代码时别混：
+ * - 执行侧的 `selfCheck`（`AgentSelfCheck`，运行时回报的四态）—— 是**成员自己**对产出的自检；
+ * - 依赖侧的 `dependencyVerdict`（`butler.ts`）—— 是"前置能不能派"的判定；
+ * - 这里的 `SubtaskVerdict` —— 是**协调方（牛马大总管）对已终结子任务的裁决**。
+ *
+ * 取值：
+ * - `''`：**还没裁决过**（列默认值），**不是**"默认通过"；
+ * - `accept`：采纳，但必须附 `evidence` 且程序化核验它能在该步结果里找到；
+ * - `rework`：重做（追加一次尝试）；
+ * - `replace`：换人重做（要预检 `newAgentId` 可调度）；
+ * - `unverified`：如实标注"没顾上过目"——`accept` 的证据核验不过、或成员没有自检能力时**降级**
+ *   到这里。它**不进终态**（设计 §5.4）。
+ */
+export type SubtaskVerdict = '' | 'accept' | 'rework' | 'replace' | 'unverified'
+
 export interface SubtaskRecord {
   readonly id: string
   readonly seq: number
@@ -182,6 +200,24 @@ export interface SubtaskRecord {
   readonly inputRefsState: ButlerInputRefsKind
   /** 员工协作返回原文与结构化外部待办；`undefined` 表示未知（旧记录）。 */
   readonly memberReturn: ButlerMemberReturn | undefined
+  /**
+   * 裁决结论（`butler_verdict` 写入面的读回值）。
+   *
+   * **空串 = 还没裁决过**，不是"默认通过"——这一列从建库起默认就是空串，把空串读成 `accept`
+   * 会让所有历史行凭空获得一次没人做过的裁决。
+   */
+  readonly verdict: SubtaskVerdict
+  /** 裁决理由（模型给的一句话）；没裁决过时为空串。 */
+  readonly verdictReason: string
+  /**
+   * `accept` 的证据。
+   *
+   * 它与 `reason` 分开存：`accept` 必须**程序化核验**证据能在该步结果里找到，核验不过要
+   * 降级成 `unverified`，而"为什么降级"要能看出来是"证据找不到"而不是"模型没说理由"。
+   */
+  readonly verdictEvidence: string
+  /** 裁决时的观察记录（当前留给后续期用）；没裁决过时为空串。 */
+  readonly observation: string
   readonly startedAt: number | null
   readonly finishedAt: number | null
 }
@@ -385,6 +421,36 @@ export interface ButlerStorage {
       conversationId?: string
     },
   ): Promise<void>
+
+  /**
+   * 落一条裁决结论（`butler_verdict` 的写入面）。
+   *
+   * **一次只写一条**：裁决是按子任务给出的，批量裁决由调用方逐条调用——这样"哪一条写不进去"
+   * 能精确定位，一条失败也不会让整批静默回滚。
+   *
+   * **返回受影响行数**，调用方必须做**写后核验**：0 表示这条子任务不存在或不属于该任务，
+   * 那是编程错误，不能静默吞掉（设计 §5.4）。
+   *
+   * 与 `setSubtaskState` 同样保持**单条 UPDATE** 写法。这里**没有状态迁移守卫**：裁决发生在
+   * 子任务已经终结之后，它不改状态，只记结论。
+   *
+   * ⚠️ **`actor` 是任务的归属，不是"谁点的裁决"**：裁决由牛马大总管自己发起（不是用户请求），
+   * 但写入必须带 owner 条件——漏了它，一次编程错误就会改到别人 owner 的任务上。
+   */
+  setSubtaskVerdict(
+    actor: Actor,
+    taskId: string,
+    subtaskId: string,
+    patch: {
+      verdict: SubtaskVerdict
+      /** 裁决理由（模型给的一句话）。 */
+      reason?: string
+      /** `accept` 的证据；程序化核验能在该步结果里找到才允许 `accept`。 */
+      evidence?: string
+      /** 观察记录，留给后续期。 */
+      observation?: string
+    },
+  ): Promise<number>
 
   /** 读取一条任务的完整记录；不存在或不属于该用户时返回 undefined。 */
   task(actor: Actor, id: string): Promise<TaskRecord | undefined>
