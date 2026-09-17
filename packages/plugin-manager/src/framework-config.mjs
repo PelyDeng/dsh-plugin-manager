@@ -37,7 +37,7 @@ export const deploymentFields = [
   ['DSH_CONTAINER_IMAGE', 'containerImage', 'string', '仅独立apply-compose输入：不可变镜像ID或仓库摘要。源码一键构建自动生成，必须留空。'],
   ['DSH_MANIFEST', 'manifest', 'string', '仅独立归档消费：发布清单路径。源码一键构建自动生成，必须留空。'],
   ['DSH_BASE_URL', 'baseUrl', 'string', '独立健康验收的宿主地址；留空沿用相应启动入口的原默认行为。'],
-  ['DSH_PLUGIN_CONFIG', 'pluginConfig', 'object', '插件业务配置：按插件ID组织的JSON对象，值是该插件运行配置文件的完整内容（JSON）。插件业务参数只在这里人工维护一份，部署时派生到各插件运行位置；已存在的运行配置文件不覆盖，需要以文件为准时先删除它。'],
+  ['DSH_PLUGIN_CONFIG', 'pluginConfig', 'object', '插件业务配置：按插件ID组织的JSON对象，值是该插件运行配置文件的完整内容（JSON）。插件业务参数只在这里人工维护一份，部署时派生到各插件运行位置；写了某个插件就以它为准，没写的插件沿用现场文件。'],
 ];
 
 export const imageFields = [

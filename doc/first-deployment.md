@@ -54,7 +54,7 @@ dsh-deployment/
 | .local/data | 账号、会话、业务数据，沿用与独立备份 |
 | incoming | 完整候选发布目录，框架不自动清空 |
 
-插件业务参数只在 `DSH_PLUGIN_CONFIG` 里维护一份：构建时按插件 ID 派生到各插件运行位置（实例显式引用的 `runtimeConfig`，否则数据根下 `plugins/<id>/env.conf`）。目标文件已存在时不覆盖，因此现场有更具体的文件时以文件为准，删掉它才会重新采用站点配置里的值。
+插件业务参数只在 `DSH_PLUGIN_CONFIG` 里维护一份：构建时按插件 ID 派生到各插件运行位置（实例显式引用的 `runtimeConfig`，否则数据根下 `plugins/<id>/env.conf`）。在站点配置里写了某个插件就以它为准——内容一致时不重写，内容不同时覆盖，改了配置在下次构建生效；没有写进 `DSH_PLUGIN_CONFIG` 的插件沿用现场文件。
 
 公网访问应配置代理或 SSH 转发，并核对 `.local/env.conf` 的 public URL、origin、trusted hosts；自定义端口时同步核对 URL。字段及 source/archives/CLI 默认值差异只在[框架配置](framework-configuration.md)维护。新部署包默认 archives，全新源码检出默认 source，两种入口的选集规则相同（留空即全部候选），差异只在候选材料来自源码检出还是发行包。
 

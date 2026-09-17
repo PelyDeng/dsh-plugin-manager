@@ -25,14 +25,27 @@ test('站点配置里的插件业务配置派生到插件运行位置', t => {
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), section);
 });
 
-test('部署机上已有的运行配置不被覆盖', t => {
+test('站点配置里写了就以它为准：内容一致不重写，内容不同则覆盖', t => {
+  const { root, home } = fixture();
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const file = join(home, 'plugins', 'sample', 'env.conf');
+  mkdirSync(join(home, 'plugins', 'sample'), { recursive: true });
+  const section = { dsn: '站点值' };
+  writeFileSync(file, JSON.stringify(section, null, 2) + '\n');
+  assert.deepEqual(materializePluginConfigs({ root, home, plugins: [plugin('sample')], site: { pluginConfig: { sample: section } }, ...ids }), [],
+    '内容一致时不重写，保留既有权限与属主');
+  writeFileSync(file, '{"dsn":"现场旧值"}\n');
+  assert.deepEqual(materializePluginConfigs({ root, home, plugins: [plugin('sample')], site: { pluginConfig: { sample: section } }, ...ids }), [file]);
+  assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), section, '改了站点配置必须生效');
+});
+
+test('没有写进站点配置的插件沿用现场文件', t => {
   const { root, home } = fixture();
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const file = join(home, 'plugins', 'sample', 'env.conf');
   mkdirSync(join(home, 'plugins', 'sample'), { recursive: true });
   writeFileSync(file, '{"dsn":"现场值"}\n');
-  const derived = materializePluginConfigs({ root, home, plugins: [plugin('sample')], site: { pluginConfig: { sample: { dsn: '站点值' } } }, ...ids });
-  assert.deepEqual(derived, []);
+  assert.deepEqual(materializePluginConfigs({ root, home, plugins: [plugin('sample')], site: { pluginConfig: { other: { dsn: 'x' } } }, ...ids }), []);
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), { dsn: '现场值' });
 });
 

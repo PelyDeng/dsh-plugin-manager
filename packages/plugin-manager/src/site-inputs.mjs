@@ -42,9 +42,12 @@ export function initializeArchiveSettings(root, site, release, { fresh }) {
  * 于是派生结果同时满足两条既有读取路径：DSH 按 `runtimeConfig` 挂载给容器，插件自己也从默认
  * 路径读到同一份内容。
  *
- * 只在目标不存在时派生：站点现场已经有更具体的文件时以文件为准，不覆盖用户内容。容器以非 root
- * 用户读取这份配置，所以新建的目录与文件都要交给容器用户，否则部署机上的 0700 root 目录会挡住
- * 容器内的进程。
+ * **在站点配置里写了某个插件的配置，就以它为准**：内容一致时不重写（保留既有权限与属主），
+ * 内容不同时覆盖。否则改了站点配置却不生效，站点配置也就不再是唯一来源；没有写进
+ * `DSH_PLUGIN_CONFIG` 的插件完全不受影响，仍然沿用现场文件。
+ *
+ * 容器以非 root 用户读取这份配置，所以新建的目录与文件都要交给容器用户，否则部署机上的
+ * 0700 root 目录会挡住容器内的进程。
  */
 export function materializePluginConfigs({ root, site, plugins, home, uid, gid }) {
   const derived = [];
@@ -53,10 +56,11 @@ export function materializePluginConfigs({ root, site, plugins, home, uid, gid }
     const section = site.pluginConfig?.[plugin.id];
     if (section === undefined || !plugin.runtimeConfig) continue;
     const file = canonical(resolve(root, site.instances?.[plugin.id]?.runtimeConfig ?? join(home, 'plugins', plugin.id, 'env.conf')));
-    if (existsSync(file)) continue;
+    const content = JSON.stringify(section, null, 2) + '\n';
+    if (existsSync(file) && readFileSync(file, 'utf8') === content) continue;
     const fresh = [];
     for (let path = dirname(file); within(home, path); path = dirname(path)) if (!existsSync(path)) fresh.push(path);
-    writePrivateFile(file, JSON.stringify(section, null, 2) + '\n', { flag: 'wx' });
+    writePrivateFile(file, content);
     if (asRoot) {
       for (const path of fresh.reverse()) chownSync(path, uid, gid);
       chownSync(file, uid, gid);
