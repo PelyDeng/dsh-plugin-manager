@@ -915,6 +915,37 @@ test('an unpublished durable session is recovered by lifecycle, while a replaced
   await assert.rejects(f.chat.history(actor,f.conversation.id),/生命周期/)
 })
 
+/**
+ * 运行时派单建出来的会话在生产库里的形状：`ready = true`，但 `sessionCreatedAt` / `openingAt` /
+ * `openingUntil` **一个都没有**（那一半走 `store.create → publish`，不经过本插件的两段握手，
+ * `payload` 是空对象）。改造前这类行会在"未发布会话的创建窗口"上被判 409，表现是**经群聊派单
+ * 产生的会话在博客页面上一律打不开**（读历史报"无法核验未发布会话的创建记录"、续发在检查点处
+ * 失败）。这条用例把两种调用都钉住，并钉住"读一次就把创建时刻补记回索引"的收敛行为。
+ */
+test('a runtime-published session without lifecycle fields still reads and resumes, and gets its creation time recorded',async t=>{
+  const f=await fixture(t);await f.send();await tick();complete(f.handles[0]);await tick()
+  // 抹掉**三个**字段才等于生产形状：只抹 `sessionCreatedAt` 是没用的——`openingAt`/`openingUntil`
+  // 还在行上（那是本插件两段握手写下的），窗口校验照样通过，用例就压不到这条分支。
+  const erase=()=>f.index.save(owner,f.conversation.id,{sessionCreatedAt:undefined,openingAt:undefined,openingUntil:undefined})
+  await erase()
+  const degraded=await f.index.get(owner,f.conversation.id)
+  assert.equal(degraded.ready,true,'发布状态保持真（运行时已经发布过）')
+  assert.equal(degraded.sessionCreatedAt,undefined,'这一行没有创建时刻')
+  assert.equal(degraded.openingAt,undefined,'这一行也没有创建窗口')
+  // ① 这类会话还能继续发消息：改造前 `persistedEvents` 在这里判 409，被 `run` 的 catch 降级成
+  //    "无法启动对话，请检查宿主模型与插件配置"（用户看到的是一条失败，而不是原因）。
+  const next=await f.send({requestId:'request-after-runtime'})
+  await tick()
+  assert.equal((await f.index.request(owner,next.id)).status,'running')
+  complete(f.handles[1]);await tick()
+  assert.equal((await f.index.request(owner,next.id)).status,'succeeded')
+  // ② 读历史不再 409；顺带把创建时刻补记进索引（下一次核对走等式，不再靠"已发布就放行"）。
+  await erase()
+  const history=await f.chat.history(actor,f.conversation.id)
+  assert.equal(history.messages.at(-1)!.id,'answer-1')
+  assert.equal((await f.index.get(owner,f.conversation.id)).sessionCreatedAt,f.handles[0].agent.session.header.createdAt)
+})
+
 test('remote import is deduplicated across retries, rejects oversize before writing and honors tool abort',async t=>{
   const f=await fixture(t),request=await f.send();await tick();complete(f.handles[0]);await tick()
   const source={cid:42,title:'已有文章',text:'正文',slug:'post',format:'markdown',tags:[],categories:[]}

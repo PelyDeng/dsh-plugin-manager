@@ -465,6 +465,14 @@ export class BlogChat {
     const sessionCreatedAt = c.sessionCreatedAt as number | undefined
     if (sessionCreatedAt !== undefined) invariant(header.createdAt === sessionCreatedAt, '会话生命周期已变化，不能恢复旧索引', 409)
     else {
+      // ⚠️ **已发布的行不走"创建窗口"那一套**：发布握手不是只有本插件会做。运行时派单那一半
+      // （`runtime/src/conversation.ts` 的 `store.create → publish`）直接在共享索引里建行并发布，
+      // 既不写 `openingAt`/`openingUntil`（那是本插件两段握手的产物），也不写 `sessionCreatedAt`
+      // ——生产库里这类行的 `payload` 就是空对象。按"未发布"去要求创建窗口，会让**每一条经群聊
+      // 派单产生的会话在博客页面上都打不开**（历史/回放一律 409 "无法核验未发布会话的创建记录"，
+      // 重新发消息也会在检查点处失败）。这些行的归属与来源已由上面那条 `invariant` 核过，
+      // 创建时刻由 `recover`/`durable` 补记进索引（补记之后就走上面那条等式）。
+      if (c.ready === true) return
       // ⚠️ `?? 0` 会改变缺值时的比较结果（`createdAt <= undefined` 恒 false，`<= 0` 只在时间戳为负时才不同），
       // 所以这里不做归一化：`as number` 只是类型层的收窄，运行期取值与改造前逐字段一致。
       const openingAt = c.openingAt, openingUntil = c.openingUntil
@@ -472,7 +480,10 @@ export class BlogChat {
     }
   }
   async recover(actor: Actor, c: ChatConversation): Promise<ChatConversation> {
-    if (c.ready) return c
+    // 已发布、且创建时刻已经记下的行没有任何要核的：`assertLifecycle` 的等式手里有权威值。
+    // 已发布但**没有**创建时刻的行（运行时派单建的）要继续往下走：核对归属、并把时刻补记进索引，
+    // 否则这类行永远停在"缺值 ⇒ 每次读取都只能靠 `ready` 放行"的状态。
+    if (c.ready && c.sessionCreatedAt !== undefined) return c
     const known = await this.ctx.sessionPersistence.stat(SessionId(c.id)); this.access.assert(actor)
     if (!known) return c
     this.assertLifecycle(c, known.header)
