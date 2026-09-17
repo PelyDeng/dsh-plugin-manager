@@ -8,12 +8,16 @@
  *   lock_timeout=2000。多步写单连接单事务（checkout/BEGIN/COMMIT/ROLLBACK），禁止
  *   pool.query 逐条拼业务序列。
  * - 启动序列 init()：版本校验（缺表 `storage_schema_missing` / 版本不符
- *   `storage_schema_version`，不自动建表、不自动改写版本）+ jobs 中断翻转
- *   （store.mjs:45-48）与 attachments 中断翻转（attachments.mjs:14-17）并入启动序列，
- *   单事务完成恢复写；未就绪即不服务。
- * - 业务语义与 SQLite 版 BlogStore 逐字对齐：save 的 revision 条件更新守卫、jobStart 的
- *   UNIQUE(owner,caller,request_id) 幂等（SELECT 先行 + INSERT 兜底）、audit append-only、
- *   损坏 JSON 不做分类（现状即直接 JSON.parse，如实抛出，沿用）。
+ *   `storage_schema_version`，不自动建表、不自动改写版本）+ jobs / attachments 中断翻转
+ *   （都在**本文件**的启动序列里：读 `blog_jobs` / `blog_attachments` 把在途状态收成 failed；
+ *   替身 `src/store.mjs` 的 `init()` 做同一件事）——三环并入一次启动，单事务完成恢复写；
+ *   未就绪即不服务。
+ * - 业务语义与 SQLite 版 `BlogStore`（`src/store.mjs`）对齐：save 的 revision 条件更新守卫、
+ *   jobStart 的 `UNIQUE(owner_namespace, owner_id, caller, request_id)` 幂等（SELECT 先行 + INSERT 兜底）、
+ *   audit append-only、损坏 JSON 不做分类（现状即直接 JSON.parse，如实抛出，沿用）。
+ *   ⚠️ **两边不只是语义对齐，表结构也逐列对齐**（列名 / 生成列 / 两处多态 scope 的"恰一非空"）——
+ *   判据是 `tests/schema-parity.test.mjs`：它从本文件配套的 `private-deploy/db/0001_init.sql` **反推**
+ *   期望值，与替身的 `pragma_table_xinfo` 逐表比对（替身此前整整落后一代形状，那正是它存在的意义）。
  * - 记录列改 **`payload JSONB`**（见下），时间为毫秒 bigint，驱动侧回传字符串，读出按需 `Number()`。
  *
  * ## ⚠️ 库结构是**新形状**（`private-deploy/db/0001_init.sql` §5.4），不是 `data TEXT` 那一版

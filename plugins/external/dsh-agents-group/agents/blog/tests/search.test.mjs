@@ -59,22 +59,22 @@ test('Shanghai midnight resolves today separately from literal keyword and yeste
 })
 test('combined draft filters retain ownership, dates, taxonomy, literal wildcards and pagination',async t=>{
   const store=new BlogStore(':memory:');t.after(()=>store.close());await store.init();const now=Date.parse('2026-09-07T16:00:49Z')
-  for(let i=0;i<32;i++){const d=await store.create('u',{title:'Java 日期 '+i,text:'今天说明 100%_ 原文',categories:[7],tags:['后端']},{published:{cid:338}});store.db.prepare('UPDATE drafts SET data=? WHERE id=?').run(JSON.stringify({...d,createdAt:now-86400000,updatedAt:now-100000,contentUpdatedAt:now-100000}),d.id)}
-  await store.create('other',{title:'不允许泄露'})
+  for(let i=0;i<32;i++){const d=await store.create('user:u',{title:'Java 日期 '+i,text:'今天说明 100%_ 原文',categories:[7],tags:['后端']},{published:{cid:338}});store.db.prepare('UPDATE blog_drafts SET payload=? WHERE id=?').run(JSON.stringify({...d,createdAt:now-86400000,updatedAt:now-100000,contentUpdatedAt:now-100000}),d.id)}
+  await store.create('user:other',{title:'不允许泄露'})
   const args={period:'yesterday',title:'Java',content:'100%_',category:'技术',tag:'后端'}
-  const r=await searchDrafts(store,'u',args,now,[{id:7,name:'技术'}]);assert.equal(r.total,32);assert.equal(r.items.length,30);assert.equal(r.hasMore,true);assert.deepEqual(r,JSON.parse(JSON.stringify(r)))
+  const r=await searchDrafts(store,'user:u',args,now,[{id:7,name:'技术'}]);assert.equal(r.total,32);assert.equal(r.items.length,30);assert.equal(r.hasMore,true);assert.deepEqual(r,JSON.parse(JSON.stringify(r)))
   assert.equal(r.items[0].localTime.modified,'2026-09-07 23:59:09')
-  assert.equal((await searchDrafts(store,'u',{...args,page:2},now,[{id:7,name:'技术'}])).items.length,2)
+  assert.equal((await searchDrafts(store,'user:u',{...args,page:2},now,[{id:7,name:'技术'}])).items.length,2)
   const pages=[]
-  for(const page of [1,2,3,4])pages.push(await searchDrafts(store,'u',{...args,page,pageSize:10},now,[{id:7,name:'技术'}]))
+  for(const page of [1,2,3,4])pages.push(await searchDrafts(store,'user:u',{...args,page,pageSize:10},now,[{id:7,name:'技术'}]))
   assert.deepEqual(pages.map(p=>p.items.length),[10,10,10,2]);assert.deepEqual(pages.map(p=>p.hasMore),[true,true,true,false])
   assert.ok(pages.every(p=>p.pageSize===10&&p.filters.pageSize===10&&p.total===32))
   assert.equal(new Set(pages.flatMap(p=>p.items.map(d=>d.id))).size,32)
-  assert.equal((await searchDrafts(store,'u',{period:'today'},now)).total,0)
-  assert.equal((await searchDrafts(store,'u',{...args,category:'未知'},now,[])).total,0)
-  assert.equal((await searchDrafts(store,'u',{status:'published'},now)).total,0)
-  const d=await store.create('u',{title:'legacy'});const old={...d};delete old.createdAt;store.db.prepare('UPDATE drafts SET data=? WHERE id=?').run(JSON.stringify(old),d.id)
-  assert.equal((await searchDrafts(store,'u',{dateField:'created',period:'today'},now)).unknownDateCount,1)
+  assert.equal((await searchDrafts(store,'user:u',{period:'today'},now)).total,0)
+  assert.equal((await searchDrafts(store,'user:u',{...args,category:'未知'},now,[])).total,0)
+  assert.equal((await searchDrafts(store,'user:u',{status:'published'},now)).total,0)
+  const d=await store.create('user:u',{title:'legacy'});const old={...d};delete old.createdAt;store.db.prepare('UPDATE blog_drafts SET payload=? WHERE id=?').run(JSON.stringify(old),d.id)
+  assert.equal((await searchDrafts(store,'user:u',{dateField:'created',period:'today'},now)).unknownDateCount,1)
 })
 
 
@@ -83,7 +83,7 @@ test('library passes status and page to bridge and rejects silently ignored filt
   const client=new BlogClient({url:'https://example.invalid',username:'u',password:'p'},async(url,options)=>{payload=JSON.parse(options.body);return Response.json({ok:true,data:{items:[],hasMore:false,status:payload.status}})})
   await client.list('文章',2,undefined,'published')
   assert.equal(payload.status,'published');assert.equal(payload.page,2);assert.equal(payload.query,'文章')
-  await assert.rejects(client.list('',1,undefined,'other'),/检索参数/)
+  await assert.rejects(client.list('',1,undefined,'user:other'),/检索参数/)
   client.fetch=async()=>Response.json({ok:true,data:{items:[],hasMore:false}})
   await assert.rejects(client.list('',1,undefined,'draft'),/0.3.1/)
 })

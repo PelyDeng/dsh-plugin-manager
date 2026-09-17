@@ -40,7 +40,7 @@
   "scripts": {
     "build": "tsdown && tsdown --config tsdown.web.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/participant.test.mjs tests/native-drafts.test.mjs tests/management.test.mjs tests/clipboard.test.mjs tests/attachments.test.mjs tests/chat-store.test.mjs tests/chat.test.mjs tests/chat-ui.test.mjs tests/article-diff.test.mjs tests/drafts.test.mjs tests/jobs.test.mjs tests/models.test.mjs tests/search.test.mjs tests/reports.test.mjs tests/storage-wiring.test.mjs tests/definition.test.mjs tests/turns-payload.test.mjs",
+    "test": "node --test tests/participant.test.mjs tests/native-drafts.test.mjs tests/management.test.mjs tests/clipboard.test.mjs tests/attachments.test.mjs tests/chat-store.test.mjs tests/chat.test.mjs tests/chat-ui.test.mjs tests/article-diff.test.mjs tests/drafts.test.mjs tests/jobs.test.mjs tests/models.test.mjs tests/search.test.mjs tests/reports.test.mjs tests/storage-wiring.test.mjs tests/definition.test.mjs tests/turns-payload.test.mjs tests/schema-parity.test.mjs",
     "test:host": "node --test tests/http.test.mjs tests/chat-history-native.test.mjs tests/chat-backup-native.test.mjs",
     "test:pg": "node --test tests/pg-smoke.test.mjs",
     "test:bridge": "php -n -l typecho/DshBlogBridge/Plugin.php && php -n tests/management-bridge.test.php",
