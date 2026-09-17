@@ -211,6 +211,17 @@ function host(options: HostOptions = {}) {
   const lifecycle = new ConversationLifecycle({
     ctx, definition: definitionOf(), access, store: port, config: runtimeConfig, allowedTools: () => [],
   })
+  // 记录"占用回合"的时刻：这是 `claim` 真正要抢先的第一个副作用。
+  //
+  // ⚠️ 不能拿假 `followup` 的 push 顺序当顺序判据：`lifecycle.followup()` 是**异步启动**的，
+  // 真正注入消息的 `agent.followup` 要到微任务里才被调到，而 `claim` 替身是同步 push。实测
+  // 把 claim 块整体挪到 `followup` 之后，`events` 仍然是 `["claim","followup"]` —— 那样写出来
+  // 的顺序断言**天然没有约束力**（变异不会让它变红）。
+  const originalRetain = lifecycle.retainTurn.bind(lifecycle)
+  lifecycle.retainTurn = ((...args: Parameters<typeof originalRetain>) => {
+    calls.events.push('retainTurn')
+    return originalRetain(...args)
+  }) as typeof lifecycle.retainTurn
   const runtime: AgentRuntime = { ctx, definition: definitionOf(), access, store: port, config: runtimeConfig, lifecycle, allowedTools: () => [] }
   // C6 靠"根本不传 storage"来验：少了这个守卫，接线处会以 TypeError 炸掉。
   const participant = options.withoutStorage === true
@@ -284,7 +295,7 @@ describe('判据：轮次幂等真的接在运行时上（`dsh_turns`）', () =>
     } finally { await h.dispose() }
   })
 
-  it('C2 顺序：claim 发生在第一个副作用（followup 注入）之前 —— 放晚就等于没接', async () => {
+  it('C2 顺序：claim 发生在第一个副作用（retainTurn 占用回合）之前 —— 放晚就等于没接', async () => {
     const h = host()
     try {
       const promise = h.participant.run(h.request())
@@ -292,12 +303,12 @@ describe('判据：轮次幂等真的接在运行时上（`dsh_turns`）', () =>
       h.complete(id, '正文')
       await promise
       const claimAt = h.calls.events.indexOf('claim')
-      const followAt = h.calls.events.indexOf('followup')
+      const retainAt = h.calls.events.indexOf('retainTurn')
       expect(claimAt).toBeGreaterThanOrEqual(0)
-      expect(followAt).toBeGreaterThanOrEqual(0)
-      // 这是本文件的核心断言：`followup` 一执行模型就开跑、外部副作用已经发生，
-      // 此时再 claim 只能丢结果。两者顺序反了，接线就是装饰。
-      expect(claimAt).toBeLessThan(followAt)
+      expect(retainAt).toBeGreaterThanOrEqual(0)
+      // 这是本文件的核心断言：`retainTurn` 一旦执行，这一轮就被算作"已接单"（`admitted`），
+      // 之后再 claim 出 409 也收不回来。顺序反了，接线就只是装饰。
+      expect(claimAt).toBeLessThan(retainAt)
     } finally { await h.dispose() }
   })
 
