@@ -291,7 +291,13 @@ export class BlogApplication {
   declare readonly attachments: AttachmentsPort
   declare readonly pending: PendingOperationsMirror | null
   declare mutex: Promise<unknown>
-  constructor(storage: BlogStoragePort, access: AccessPort, blog: BlogClientPort | null = null, images: ImageClientPort | null = null, backups: BackupClientPort | null = null, jobs: JobsPort | null = null, attachments: AttachmentsPort | null = null, pending: PendingOperationsMirror | null = null) {
+  /**
+   * ⚠️ 后 6 个协作者**必须用 TS 的可选形参 `?`**，不能用 JS 默认值 `= null`：
+   * 改造前（`.mjs`）没有默认值，**省略的实参就是 `undefined`**；写成 `= null` 会把 `undefined` 换成 `null`，
+   * 并把 `BlogApplication.length` 从 8 变成 2（默认值之后的形参不再计入 `length`）。
+   * 可选形参在运行期没有任何痕迹 ⇒ 省略仍是 `undefined`、`length` 仍是 8，与改造前逐字一致。
+   */
+  constructor(storage: BlogStoragePort, access: AccessPort, blog?: BlogClientPort | null, images?: ImageClientPort | null, backups?: BackupClientPort | null, jobs?: JobsPort | null, attachments?: AttachmentsPort | null, pending?: PendingOperationsMirror | null) {
     Object.assign(this,{storage,access,blog,images,backups,jobs,attachments,pending})
     /** confirm / prepare 的「读-核-占」互斥段串行链（原 SQLite 同步段的原子性，异步化后显式化）。 */
     this.mutex = Promise.resolve()
@@ -549,9 +555,10 @@ export class BlogApplication {
       await this.storage.record(owner,'submit-success',{operationId:claimed.id,version:result.version})
       await this.applyResult(claimed,result)
       this.access.assert(actor);return {status:claimed.status,result}
-    } catch(error: any) {
+    } catch(error: unknown) {
       if(claimed.status==='succeeded')throw error
-      claimed.status=error?.status===409?'conflict':'uncertain';await this.operationSave(claimed.id,claimed)
+      // 捕获变量按 `unknown` 收（`useUnknownInCatchVariables`）；这里只读 `status`，读法与判定同改造前逐字一致。
+      claimed.status=(error as {status?: unknown})?.status===409?'conflict':'uncertain';await this.operationSave(claimed.id,claimed)
       throw error
     }
   }

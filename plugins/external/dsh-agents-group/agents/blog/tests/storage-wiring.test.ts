@@ -162,7 +162,9 @@ test('attachment scope keeps both draft-id and conversation-id paths with unchan
   const conversation=await index.create(owner,'scope-conversation')
   const effects:(() => unknown)[]=[],files=new Map<string,Buffer>()
   const provider:AttachmentProvider={async saveFileStream({data,name}){const parts:Uint8Array[]=[];for await(const chunk of data)parts.push(chunk);const b=Buffer.concat(parts);files.set(name,b);return{attachmentId:name,name,bytes:b.length}},readFileStream(ref){return readFixtureFile(files,ref.name)}}
-  const ctx={effect(fn:() => unknown){effects.push(fn)},on(){return()=>{}},get(name:string){return name==='attachments'?provider:undefined},attachments:provider}
+  // `ctx.effect(callback)` 必须**当场执行** callback 并登记其返回的清理函数（同 `tests/http-fixture.ts:259`）；
+  // P8 转 TS 时这里一度写成 `effects.push(fn)`（拆除时才执行）⇒ 注册期副作用在用例里不发生，属弱化夹具，已改回。
+  const ctx={effect(fn:() => unknown){const dispose=fn();if(typeof dispose==='function')effects.push(dispose as () => unknown);return dispose},on(){return()=>{}},get(name:string){return name==='attachments'?provider:undefined},attachments:provider}
   const attachments=new BlogAttachments(ctx,{assert(){}},store,dualScope(index,store))
   t.after(async()=>{await attachments.close();for(const dispose of effects)await dispose?.()})
   const bytes=Buffer.from('资料内容')

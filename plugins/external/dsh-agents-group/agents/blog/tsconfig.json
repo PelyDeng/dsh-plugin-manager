@@ -1,10 +1,13 @@
 {
   "compilerOptions": {
     "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
-    // `lib` 显式写出来（不靠 target 推断）：P8 转 TS 后测试用了 `Promise.withResolvers`（**ES2024**），
-    // 而 `target: ES2022` 的默认 lib 里没有它 ⇒ 会报 TS2550。运行时是 Node 22，本来就有这个 API。
-    // 保留 `DOM` / `DOM.Iterable` 是为了与推断出的默认 lib **等价**（不缩小可用全局）。
-    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    // `lib` 显式写出来（不靠 target 推断）：P8 转 TS 后测试用了 `Promise.withResolvers`，
+    // 它属于 **ES2024 的 Promise 增量**，而 `target: ES2022` 的推断默认 lib
+    // （`["ES2022","DOM","DOM.Iterable"]`）里没有它 ⇒ 会报 TS2550；运行时是 Node 22，本来就有这个 API。
+    // 所以这里**只补需要的那一块**：`ES2024.Promise`（TS 支持的粒度 lib 名）。
+    // ⚠️ 不要写成整份 `ES2024`：那会把 2023/2024 的**其它全局面**一并放进来，是**放宽**而不是等价。
+    // `DOM` / `DOM.Iterable` 保持与推断默认一致（本包跑在 Node 侧，但既有代码读 `Response` 等 DOM 面）。
+    "lib": ["ES2022", "ES2024.Promise", "DOM", "DOM.Iterable"],
     "allowImportingTsExtensions": true, "allowJs": true, "checkJs": false, "strict": true, "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true, "verbatimModuleSyntax": true,
     "declaration": true, "noEmit": true, "types": ["node", "vitest/globals"]

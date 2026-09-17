@@ -17,30 +17,37 @@ export function origin(value: string, field: string, local = false): string {
 /**
  * 读博客配置。返回**解析后的 JSON 对象**（结构由运行期不变量逐个把关，见下），
  * 所以类型是"任意键的对象"而不是一个逐字段接口——这里的检查就是它的形状契约。
+ *
+ * ⚠️ 类型层只有两步：`JSON.parse` 的结果先按 `unknown` 收（`any → unknown` 是放大），
+ * 各小节的读取点再按它自己的形状断言一次（`as {...}`；`any` 本来也不做检查），
+ * 取值、键名与校验顺序一字不变。
  */
-export function loadSettings(path: string): Record<string, any> {
-  let value: any
+export function loadSettings(path: string): Record<string, unknown> {
+  let value: unknown
   try { value = JSON.parse(readFileSync(path, 'utf8').replace(/^\uFEFF/, '')) } catch { throw new BlogError(503, '无法读取博客 config/config.json，请检查配置路径与 JSON 格式') }
-  invariant(value?.schemaVersion === 1, '配置 schemaVersion 必须为 1', 503)
-  if(value.models!==undefined){
-    // 显式收成 `Record<string, any>`：`value` 是 JSON.parse 的结果，逐字段校验全在下面这行里，
-    // 类型只是让"按字符串键读一个 model 的 provider/model"这件事可表达（不是把校验挪到编译期）。
-    const models: Record<string, any> = value.models
+  const settings = value as {schemaVersion?: unknown; models?: unknown; blog?: unknown; image?: unknown; backup?: unknown} & Record<string, unknown>
+  invariant(settings?.schemaVersion === 1, '配置 schemaVersion 必须为 1', 503)
+  if(settings.models!==undefined){
+    // 逐字段校验全在下面这行里，类型只是让"按字符串键读一个 model 的 provider/model"这件事可表达
+    // （不是把校验挪到编译期）。
+    const models = settings.models as Record<string, unknown>
     invariant(models&&typeof models==='object'&&!Array.isArray(models),'配置 models 无效',503)
-    for(const [kind,model] of Object.entries(models))invariant(['text','vision'].includes(kind)&&model&&['provider','model'].every(k=>typeof model[k]==='string'&&model[k].length>0&&model[k].length<=200),'配置 models 需要有效的 text/vision provider 和 model',503)
+    for(const [kind,model] of Object.entries(models))invariant(['text','vision'].includes(kind)&&model&&['provider','model'].every(k=>typeof (model as Record<string, unknown>)[k]==='string'&&((model as Record<string, unknown>)[k] as string).length>0&&((model as Record<string, unknown>)[k] as string).length<=200),'配置 models 需要有效的 text/vision provider 和 model',503)
   }
   for (const section of ['blog', 'image']) {
-    const c = value[section]
+    const c = settings[section] as Record<string, unknown>
     invariant(c && typeof c === 'object', `缺少配置 ${section}`, 503)
-    c.url = origin(c.url, `${section}.url`)
+    c.url = origin(c.url as string, `${section}.url`)
     for (const field of ['username', 'password']) invariant(typeof c[field] === 'string' && c[field].length > 0, `缺少配置 ${section}.${field}`, 503)
   }
-  invariant(Number.isSafeInteger(value.image.strategyId) && value.image.strategyId > 0, '配置 image.strategyId 无效', 503)
-  value.image.maxBytes ??= 10 * 1024 * 1024
-  invariant(Number.isSafeInteger(value.image.maxBytes) && value.image.maxBytes > 0 && value.image.maxBytes <= 30 * 1024 * 1024, '配置 image.maxBytes 无效', 503)
-  invariant(Array.isArray(value.backup?.allowedUserIds) && value.backup.allowedUserIds.every((v: unknown) => typeof v === 'string' && v), '配置 backup.allowedUserIds 无效', 503)
-  if (value.backup.url) value.backup.url = origin(value.backup.url, 'backup.url', true)
-  return value
+  const image = settings.image as {strategyId: number; maxBytes: number}
+  invariant(Number.isSafeInteger(image.strategyId) && image.strategyId > 0, '配置 image.strategyId 无效', 503)
+  image.maxBytes ??= 10 * 1024 * 1024
+  invariant(Number.isSafeInteger(image.maxBytes) && image.maxBytes > 0 && image.maxBytes <= 30 * 1024 * 1024, '配置 image.maxBytes 无效', 503)
+  const backup = settings.backup as {allowedUserIds?: unknown; url?: string; token?: string}
+  invariant(Array.isArray(backup?.allowedUserIds) && backup.allowedUserIds.every((v: unknown) => typeof v === 'string' && v), '配置 backup.allowedUserIds 无效', 503)
+  if (backup.url) backup.url = origin(backup.url, 'backup.url', true)
+  return settings
 }
 /** 远端响应体：只要求"能异步迭代出字节块 + 可选 body"（`fetch` 的 `Response` 与宿主给出的流都满足）。 */
 export interface ByteStream {

@@ -264,9 +264,14 @@ export class BlogAttachments {
       invariant(s && typeof s.id==='string'&&!ids.has(s.id),'资料选择无效或重复');ids.add(s.id)
       const a=await this.get(actor,draftId,s.id);invariant(a.status==='ready','所选资料尚未完成解析',409)
       invariant(a.version===s.version,'资料版本已变化，请重新选择',409)
-      // 就绪附件的 `bytes` 恒为数字（`upload()` 在解析前写入）；`Number()` 只为把可选的声明收成数字
-      //（真取到 `undefined` 时结果仍是 `NaN`，与改造前的 `+= undefined` 逐字一致）。
-      bytes+=Number(a.bytes)
+      /**
+       * 与改造前的 `bytes += a.bytes` 在**所有**取值下逐字等价：
+       * - `undefined` ⇒ `NaN`（JS 的 `number + undefined` 本来就是 `NaN`）；
+       * - 其余取值（数字、**字符串**、`null`）保持 `+` 的原样规则（字符串是**拼接**、`null` 当 0）。
+       * ⚠️ 两种"看起来更整齐"的写法都不等价：`Number(a.bytes)` 会把字符串从拼接改成数值相加；
+       * `a.bytes ?? NaN` 会把 `null` 从"当 0"改成 `NaN`（`??` 同时顶替 `null`）。
+       */
+      bytes+=a.bytes===undefined?NaN:a.bytes
       if(a.parsed?.partial)invariant(s.range,'部分解析的资料必须明确选择已解析范围')
       if(s.range)this.validateRange(a,s.range)
       const units=a.parsed?.units.filter((u: ParsedUnit)=>!s.range||u.number>=s.range.from&&u.number<=s.range.to)

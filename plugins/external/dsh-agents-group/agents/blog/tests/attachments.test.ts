@@ -70,7 +70,13 @@ async function fixture(t: TestContext,provider: Partial<AttachmentProvider>={}) 
   let authorized=true
   const access={assert(a:FixtureActor){assert.equal(authorized,true);assert.ok(a?.sessionId)}}
   const attachments={async saveFileStream({data,name}:{data:AsyncIterable<Uint8Array>;name:string}){const b:Uint8Array[]=[];for await(const c of data)b.push(c);files.set(name,Buffer.concat(b));return {attachmentId:name,name,bytes:files.get(name)?.length??0}},readFileStream(ref:{name:string}){return readFixtureFile(files,ref.name)},...provider}
-  const ctx={effect(f:() => unknown){cleanups.push(f)},on(){return()=>{}},get(){return attachments},attachments}
+  /**
+   * ⚠️ `ctx.effect(callback)` 的真实语义是**当场执行** callback、并把它的返回（清理函数）登记下来
+   * （真实用法见 `src/attachments.ts:187`：定时器就是在 callback 里注册的）。
+   * P8 转 TS 时这里一度写成 `cleanups.push(f)`（把 callback 推迟到拆除时才执行）——那是**用弱化夹具换类型通过**，
+   * 会让注册期副作用在用例里根本不发生。此处按 `tests/http-fixture.ts:259` 的既成写法恢复"当场执行"。
+   */
+  const ctx={effect(f:() => unknown){const dispose=f();if(typeof dispose==='function')cleanups.push(dispose as () => unknown);return dispose},on(){return()=>{}},get(){return attachments},attachments}
   const service=attachmentsService(new BlogAttachments(ctx,access,store))
   t.after(async()=>{await service.close();for(const f of cleanups)await f?.();store.close()})
   return {service,store,draft,files,revoke(){authorized=false}}

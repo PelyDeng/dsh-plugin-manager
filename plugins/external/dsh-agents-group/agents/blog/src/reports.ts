@@ -1,5 +1,6 @@
 import {invariant} from './settings.ts'
 import {normalizeSearch,searchParameters} from './search.ts'
+import type {SearchInput} from './search.ts'
 
 /**
  * 一个统计参数的模式。**故意写得宽松**：这里的对象字面量混了两类形状——
@@ -36,27 +37,34 @@ export const reportTools: readonly ReportTool[] =[
   {name:'blog_activity_statistics',label:'统计写作时间分布',report:'timeline',description:'按上海时区日/月/年统计所选版本的时间分布。默认modified，只代表各版本最后修改时间，不是修改次数；created是文章设定时间，不代表首次发布。无记录的时间桶不返回；需要总数无需拉取文章。',parameters:{groupBy:{type:'string',enum:['day','month','year']},...paging,filters}},
   {name:'blog_query_article_titles',label:'查询精简文章与排行',report:'ranking',description:'查询最近修改、最早文章、评论最多/最少、缺分类标签或有待发布修改的文章。只返回标题、ID、时间与评论数；评论只统计原生comment，不含pingback/trackback。不提供没有可靠来源的阅读量排行榜。',parameters:{sortBy:{type:'string',enum:['modified','created','comments']},order:{type:'string',enum:['asc','desc']},...paging,filters}},
 ]
-export function normalizeReport(report: string,input: Readonly<Record<string, any>>={},now=Date.now()){
+export function normalizeReport(report: string,input: Readonly<Record<string, unknown>>={},now=Date.now()){
   const definition=reportTools.find(tool=>tool.report===report)
   invariant(definition&&input&&typeof input==='object'&&!Array.isArray(input),'统计参数无效')
   invariant(Object.keys(input).every(key=>Object.hasOwn(definition.parameters,key)),'不支持的统计条件')
-  const filter: Record<string, any> = input.filters??{}
+  const filter = (input.filters ?? {}) as Record<string, unknown>
   invariant(filter&&typeof filter==='object'&&!Array.isArray(filter)&&Object.keys(filter).every(key=>Object.hasOwn(filters.properties,key)),'统计筛选条件无效')
   const {categoryId,tagId,includeDescendants,missing,hasSavedDraft,...search}=filter
-  const normalized=normalizeSearch({...search,status:search.status??'published'} as any,now)
+  // `search.status` 是 `unknown`（`Readonly<Record<string, unknown>>` 的读数），`??` 会把 `unknown` 收敛成 `{}`
+  // ⇒ 这里只把**已经算好的表达式**按 `SearchInput` 声明一次，取值与缺省判定（`??` 只认 null/undefined）逐字不变。
+  const normalized=normalizeSearch({...search,status:search.status??'published'} as SearchInput,now)
   for(const [key,value] of Object.entries({categoryId,tagId}))if(value!==undefined)invariant(Number.isSafeInteger(value)&&(value as number)>0,`${key}无效`)
   invariant(!(categoryId&&normalized.filters.category)&&!(tagId&&normalized.filters.tag),'名称和 ID 只能选择一种筛选方式')
   for(const value of [includeDescendants,hasSavedDraft])invariant(value===undefined||typeof value==='boolean','统计布尔条件无效')
   invariant(!includeDescendants||categoryId||normalized.filters.category,'包含子级需要指定分类')
-  invariant(missing===undefined||['category','tag','either','both'].includes(missing),'缺失信息筛选无效')
+  // `missing` 是 `unknown`（开放字典的读数）：只把它**已算好的判断**整段声明成 `string | undefined`
+  // （`any` 本来也不做检查），取值集合与判定结论一字不变。
+  const missingName = missing as string | undefined
+  invariant(missingName===undefined||['category','tag','either','both'].includes(missingName),'缺失信息筛选无效')
   const options: Record<string, unknown>={}
   for(const [key,param] of Object.entries(definition.parameters)){
     if(key==='filters')continue
     const value=input[key]
     if(value===undefined)continue
-    if(param.enum)invariant(param.enum.includes(value),`${key}统计参数无效`)
-    if(param.type==='boolean')invariant(typeof value==='boolean',`${key}统计参数无效`)
-    if(param.type==='integer')invariant(Number.isSafeInteger(value)&&value>=1&&value<=(key==='pageSize'?500:10000),`${key}统计参数无效`)
+    // `value` 也是 `unknown`：与上面同一手法，按 `ReportParam` 已声明的取值类型收一次（纯类型动作）。
+    const option = value as string | number | boolean
+    if(param.enum)invariant(param.enum.includes(option as string),`${key}统计参数无效`)
+    if(param.type==='boolean')invariant(typeof option==='boolean',`${key}统计参数无效`)
+    if(param.type==='integer')invariant(Number.isSafeInteger(option)&&(option as number)>=1&&(option as number)<=(key==='pageSize'?500:10000),`${key}统计参数无效`)
     options[key]=value
   }
   const {page:_,sortBy:__,order:___,pageSize:____,...base}=normalized.filters

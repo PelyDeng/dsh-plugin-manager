@@ -17,6 +17,7 @@ import type { ProtectedRoute } from '@dsh-plugin-manager/plugin-kit/http'
 import { loadSettings, invariant } from './settings.ts'
 import { BlogApplication, PendingOperationsMirror } from './application.ts'
 import { BlogClient,ImageClient,BackupClient } from './connectors.ts'
+import type { BlogBridgeConfig, ImageBridgeConfig, BackupBridgeConfig } from './connectors.ts'
 import { BlogJobs } from './jobs.ts'
 import { BlogAttachments, MAX_ATTACHMENT_BYTES } from './attachments.ts'
 import { ChatStore } from './chat-store.ts'
@@ -26,6 +27,7 @@ import { BlogChat, chatInstructions } from './chat.ts'
 import { createBlogDefinition } from './definition.ts'
 import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
 import {selectBlogModel} from './models.ts'
+import type {BlogModelChoices} from './models.ts'
 import {reasoningLanguage} from './jobs.ts'
 import {ReasoningTranslations,reasoningOriginal} from './reasoning-translation.ts'
 // DSN 来源解析用**运行时那一份**：blog 的 `storage/dsn.mjs` 文件头自述"复制管家 butler-console
@@ -321,7 +323,15 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   const config=mountContext.config
   // 不再在这里断言 accessMode：群组会为强制认证的 Agent 建 authenticated 的 access。
   // 若把群组配成 standalone，它会以「认证不可用」如实报错，而不是被误判成装载失败。
-  const settings=loadSettings(config.runtimeConfig||process.env.BLOG_CONFIG_PATH||'')
+  // `loadSettings()` 的返回类型是开放字典；各小节的形状由它自己的不变量逐个把关。这里**只按本文件
+  // 要读的五个小节各收一次类型**（纯类型断言，取值与改造前逐字相同；类型写偏了仍是同一条装配期报错）。
+  const raw=loadSettings(config.runtimeConfig||process.env.BLOG_CONFIG_PATH||'') as Record<string, unknown>
+  const settings={
+    models: raw.models as BlogModelChoices,
+    blog: raw.blog as BlogBridgeConfig,
+    image: raw.image as ImageBridgeConfig,
+    backup: raw.backup as BackupBridgeConfig & {token?: string},
+  }
   const root=config.dataPath||dshHomePath('plugins','blog')
   // ---- 业务存储（PG；Q4：无配置=blog 未就绪而非抛群组） ----
   const dsnSource=await resolveStorageDsn(process.env,dshHomePath('plugins','agents-group','storage.json'),(path:string)=>readFile(path,'utf8'))
