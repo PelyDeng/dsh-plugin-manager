@@ -216,6 +216,20 @@ interface AgentOptions {
   setup: (agentCtx: AgentSetupContext) => void
 }
 
+/**
+ * `BlogChat.occupancy` 的形状：**另一个**回合驱动方（运行时的 `ConversationLifecycle`）此刻占着哪些会话。
+ *
+ * 页面侧与运行时侧都能在同一个会话上起一轮：页面走本类的 `send`，运行时走它自己的生命周期。
+ * 本类看不见运行时那一半，于是"页面显示空闲、点下去 409"和"两个驱动方同时往一个会话里跑一轮"
+ * 都只表现为偶发。这个端口把那一半的占用查询注入进来，好让 `busy()` 只有一个判据来源。
+ */
+export interface OccupancyPort {
+  /** 这个会话此刻是否被外部驱动方占着（有回合在跑、正在准备分支等）。 */
+  isBusy(id: string): boolean
+  /** 外部驱动方此刻占着的**全部**会话（侧栏要一次拿到整个忙集合，逐个问太慢）。 */
+  busyIds(): readonly string[]
+}
+
 export class BlogChat {
   // —— 装配期注入的协作者（原来是 `Object.assign(this,{...})` 动态挂的）——
   readonly ctx: Context
@@ -241,8 +255,16 @@ export class BlogChat {
   readonly remove: ReturnType<typeof conversationRemover>
   /** 侧栏入口。 */
   readonly provider: ConversationProvider
+  /**
+   * 外部回合驱动方的占用查询（形状见 `OccupancyPort`）。
+   *
+   * ⚠️ 缺省实现恒为"都不忙"，且**只能**从构造函数最后一个位置参数注入——装配点
+   * （`src/index.ts`）接真实现是下一批的事。本批只留接缝，所以今天的行为与改造前
+   * **逐点等价**（见 `busy()` 的三档注释）。
+   */
+  readonly occupancy: OccupancyPort
 
-  constructor(ctx: Context, access: Access, storage: BlogPgStorage, index: ChatStore, attachments: BlogAttachments, jobs: BlogJobs, app: BlogApplication, sdk: ChatSdk, timeoutMs = 240000) {
+  constructor(ctx: Context, access: Access, storage: BlogPgStorage, index: ChatStore, attachments: BlogAttachments, jobs: BlogJobs, app: BlogApplication, sdk: ChatSdk, timeoutMs = 240000, occupancy?: OccupancyPort) {
     this.ctx = ctx
     this.access = access
     this.storage = storage
@@ -252,6 +274,7 @@ export class BlogChat {
     this.app = app
     this.sdk = sdk
     this.timeoutMs = timeoutMs
+    this.occupancy = occupancy ?? { isBusy: () => false, busyIds: () => [] }
     this.active = new Map()
     this.forks = new Map()
     this.forkSources = new Map()
@@ -278,7 +301,7 @@ export class BlogChat {
       }, busy: (id: string) => this.busy(id), inspect: async (actor: Actor, id: string) => { const c = index.record(actor, id); const known = await ctx.sessionPersistence.stat(SessionId(id)); invariant(known, '无法核验持久化会话', 409); this.assertLifecycle(c, known!.header) }, release: async () => { },
     })
     this.provider = {
-      protocol: 1, pluginId: 'blog', list: async (actor: Actor, query: never) => { access.assert(actor); return index.managed(ownerKey(actor), query, conversationArchive(ctx).archivedSessionIds, [...hostBusyConversationIds(ctx), ...this.active.keys(), ...this.forks.keys(), ...this.forkSources.keys(), ...index.pendingOperations()]) }, preview: async (actor: Actor, id: string, before?: number) => {
+      protocol: 1, pluginId: 'blog', list: async (actor: Actor, query: never) => { access.assert(actor); return index.managed(ownerKey(actor), query, conversationArchive(ctx).archivedSessionIds, [...hostBusyConversationIds(ctx), ...this.busyIds()]) }, preview: async (actor: Actor, id: string, before?: number) => {
         access.assert(actor); const c = index.record(actor, id); invariant(c.ready && c.removalState !== 'removed', '对话不存在或无权访问', 404)
         const events = await this.persistedEvents(actor, c); access.assert(actor); invariant(index.record(actor, id).removalState !== 'removed', '会话已移除', 404)
         const owner = ownerKey(actor), requests = [...await Promise.all(((c.inheritedRequests as readonly string[] | undefined) ?? []).map((requestId: string) => index.request(owner, requestId))), ...await index.requests(owner, id, true)]
@@ -294,7 +317,33 @@ export class BlogChat {
       }, remove: this.remove,
     }
   }
-  busy(id: string): boolean { return this.active.has(id) || this.forks.has(id) || this.forkSources.has(id) || this.index.pendingOperations().includes(id) }
+  /**
+   * **唯一**的"这个会话忙不忙"判定入口。三档只差"算上哪几层占用"，所有层都在这一个函数里合成：
+   *
+   * - `'turn'`：本实例正在为它跑一轮（等价于改造前各点位的 `this.active.has(id)`）。
+   * - `'local'`：本实例占用 = `active` ∪ `forks` ∪ `forkSources`（改造前 `mutate` 用的是这一档）。
+   * - `'all'`（缺省，也是对外口径）：`'local'` ∪ 待核对操作 ∪ **外部驱动方**。
+   *
+   * 外部那一层（`this.occupancy`）三档都算：它表示"运行时的回合驱动方此刻占着这个会话"，
+   * 漏掉任何一档都会让页面显示空闲、点下去才 409，或者两个驱动方同时往一个会话里跑一轮。
+   *
+   * ⚠️ `pendingOperations`（"有待核对的操作"）**只**在 `'all'` 里算。改造前它在 **且仅在**对外口径
+   * 里（`busy()` 与侧栏忙集合），内部各点位只查 `active`/`forks`/`forkSources`，所以它们显式传
+   * `'turn'`/`'local'`——顺手把 `pendingOperations` 也并进去会让"有待核对操作时不能发消息、不能改名"
+   * 变成新的 409，那是行为变更，不属于"只加接缝"这一批。
+   */
+  busy(id: string, scope: 'turn' | 'local' | 'all' = 'all'): boolean {
+    const local = scope === 'turn' ? this.active.has(id) : this.active.has(id) || this.forks.has(id) || this.forkSources.has(id)
+    const occupied = local || this.occupancy.isBusy(id)
+    return scope === 'all' ? occupied || this.index.pendingOperations().includes(id) : occupied
+  }
+  /**
+   * 侧栏要**一次**拿到整个忙集合（`provider.list` 用），逐个 `busy()` 问太慢。
+   *
+   * ⚠️ 拼接顺序与改造前一致（`active` → `forks` → `forkSources` → `pendingOperations`），外部那一层
+   * 插在 `pendingOperations` 之前：不去重、不排序，免得下游（`index.managed`）看到的序列与今天不同。
+   */
+  busyIds(): readonly string[] { return [...this.active.keys(), ...this.forks.keys(), ...this.forkSources.keys(), ...this.occupancy.busyIds(), ...this.index.pendingOperations()] }
   async create(actor: Actor, requestId: string) { this.access.assert(actor); return this.publicConversation(await this.index.create(ownerKey(actor), requestId)) }
   publicConversation({ id, title, updatedAt, ready, parent, pinned }: ChatConversation) { return { id, title, updatedAt, ready, parent, pinned: !!pinned } }
   async list(actor: Actor, offset: number, query: string): Promise<{ readonly items: readonly ChatListItem[]; readonly nextOffset: number | null }> { this.access.assert(actor); return this.index.list(ownerKey(actor), offset, query) }
@@ -306,7 +355,7 @@ export class BlogChat {
     // 变成"字符串被拆成单字符数组"后的 404。`as unknown as string[]` 只是补 `remove` 要的
     // `string[]`（`ChatMutationInput.ids` 是只读的），运行期传的还是同一个数组。
     if (input.operation === 'delete') return this.remove(actor, input.ids as unknown as string[]).then(result => { for (const id of input.ids) this.emit(id, { type: 'changed' }); invariant(result.results.every(item => ['removed', 'alreadyRemoved'].includes(item.status)), '部分会话未移除，请在会话管理中查看并重试', 409); return { ok: true } })
-    await this.index.mutate(ownerKey(actor), input, id => invariant(!this.active.has(id) && !this.forks.has(id) && !this.forkSources.has(id), '对话仍在回答或创建分支，请先停止或等待完成', 409))
+    await this.index.mutate(ownerKey(actor), input, id => invariant(!this.busy(id, 'local'), '对话仍在回答或创建分支，请先停止或等待完成', 409))
     for (const id of input.ids) this.emit(id, { type: 'changed' })
     return { ok: true }
   }
@@ -374,7 +423,7 @@ export class BlogChat {
     const requests = await this.requests(owner, id), projection = projectChat(events, requests, this.sdk) as ChatProjection, b = this.active.get(id)
     this.access.assert(actor)
     return {
-      conversation: this.publicConversation(c), ...projection, busy: !!b, live: b?.live ?? null,
+      conversation: this.publicConversation(c), ...projection, busy: this.busy(id, 'turn'), live: b?.live ?? null,
       requests: requests.map(({ id, conversationId, status, message, createdAt, userMessageId, sources }) => ({ id, conversationId, status, message, createdAt, userMessageId, sources })),
       results: [...((c.inheritedResults as readonly ChatResult[] | undefined) ?? []), ...((await this.index.results(owner, id)) as unknown as readonly ChatResult[])], operations: await this.operationCards(actor, id),
     }
@@ -389,14 +438,14 @@ export class BlogChat {
       // `op.title ?? op.payload.content?.title ?? ''`，重写会把它换成 `op.title`，缺标题的操作卡
       // 就从"用正文标题兜底"变成 `undefined`。`OperationRecord` 要的三个字段运行期由 `preview` 提供，
       // 所以只在类型层收窄一次（转 TS 前就是直接展开 `preview`）。
-      return { ...preview, status: op.status, requestId: op.chat!.requestId, canConfirm: available && !this.active.has(id), nonce: available ? nonce : null, result: op.result ? { cid: op.result.cid ?? null, url: op.result.url ?? null } : null } as unknown as OperationRecord
+      return { ...preview, status: op.status, requestId: op.chat!.requestId, canConfirm: available && !this.busy(id, 'turn'), nonce: available ? nonce : null, result: op.result ? { cid: op.result.cid ?? null, url: op.result.url ?? null } : null } as unknown as OperationRecord
     })
   }
   async operationAction(actor: Actor, args: { readonly conversationId: string; readonly id: string; readonly operation: string; readonly nonce?: string }) {
     this.access.assert(actor); await this.index.get(ownerKey(actor), args.conversationId)
     const op = await this.app.operation(ownerKey(actor), args.id) as OperationRecord
     invariant(op.chat?.conversationId === args.conversationId, '操作不属于当前对话', 403)
-    invariant(!this.active.has(args.conversationId), '请等待本轮回答完成后再确认操作', 409)
+    invariant(!this.busy(args.conversationId, 'turn'), '请等待本轮回答完成后再确认操作', 409)
     invariant(['confirm', 'cancel', 'reconcile'].includes(args.operation), '操作无效')
     try {
       if (args.operation === 'confirm') return await this.app.confirm(actor, args, args.conversationId)
@@ -479,7 +528,7 @@ export class BlogChat {
     invariant(typeof args.text === 'string' && args.text.trim() && args.text.length <= 8000, '请输入消息（最多 8000 字符）')
     invariant(typeof args.research === 'boolean', '联网选项无效')
     const owner = ownerKey(actor), conversation = await this.index.get(owner, args.conversationId)
-    invariant(!this.active.has(conversation.id) || await this.index.hasRequest(owner, args.requestId), '此对话正在结束上一轮，请稍后再试', 409)
+    invariant(!this.busy(conversation.id, 'turn') || await this.index.hasRequest(owner, args.requestId), '此对话正在结束上一轮，请稍后再试', 409)
     invariant(!this.forks.has(conversation.id), '分支正在准备，请稍后再试', 409)
     let operationId: string | undefined, draftId: string | null = null
     if (args.retryFrom) {
@@ -494,7 +543,7 @@ export class BlogChat {
     const selected = duplicate ? undefined : await requestedConversationModel(this.ctx, args.modelSelection)
     this.access.assert(actor); await this.index.get(owner, conversation.id)
     invariant(!this.closed, '博客助手正在停止', 503)
-    invariant(!this.active.has(conversation.id) || await this.index.hasRequest(owner, args.requestId), '此对话正在回答，请稍后再试', 409)
+    invariant(!this.busy(conversation.id, 'turn') || await this.index.hasRequest(owner, args.requestId), '此对话正在回答，请稍后再试', 409)
     invariant(!this.forks.has(conversation.id), '分支正在准备，请稍后再试', 409)
     invariant(duplicate || this.active.size < 4, '当前对话任务较多，请稍后再试', 429)
     const frozen = duplicate ? null : await this.attachments.freeze(actor, conversation.id, input.attachments as never) as readonly FrozenAttachment[] | null
@@ -503,7 +552,7 @@ export class BlogChat {
       invariant(capability.available, capability.message, 422)
       this.access.assert(actor)
       invariant(!this.closed, '博客助手正在停止', 503)
-      invariant(!this.active.has(conversation.id) || await this.index.hasRequest(owner, args.requestId), '此对话正在回答，请稍后再试', 409)
+      invariant(!this.busy(conversation.id, 'turn') || await this.index.hasRequest(owner, args.requestId), '此对话正在回答，请稍后再试', 409)
       invariant(!this.forks.has(conversation.id), '分支正在准备，请稍后再试', 409)
     }
     const { request, fresh } = await this.index.start(owner, conversation.id, args.requestId, input)

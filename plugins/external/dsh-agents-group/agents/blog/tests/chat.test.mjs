@@ -48,7 +48,7 @@ test('saved attempts display authoritative original blocks with a stable partial
   assert.deepEqual(events,before,'translation source projection must not rewrite the official event log')
 })
 
-async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=false}={}){
+async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=false,occupancy}={}){
   const root=new Context(),registry=root.plugin(AgentRegistry);await registry
   const runtimeJobs=root.plugin(LocalJobRegistry);await runtimeJobs
   const store=new BlogStore(':memory:');await store.init();const pending=new PendingOperationsMirror(),index=new ChatStore(memoryIndex(),()=>pending.ids()),handles=[],saved=new Map(),headers=new Map(),disposers=[],tools=new Map(),feedbackCalls=[]
@@ -84,7 +84,7 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
   const nativeRecords=new Map();let nativeCid=900
   const attachments={freeze:()=>[]},blog={list:async()=>({items:[{cid:337,title:'现有文章'}]}),get:async id=>structuredClone(nativeRecords.get(id)),async call(action,args){if(action==='status')return{nativeDrafts:true};assert.equal(action,'save');const id=args.base?.savedDraft?.cid??nativeCid++,snapshot={published:null,savedDraft:{...args.content,cid:id},version:String(nativeCid),selectedVariant:'savedDraft'};nativeRecords.set(id,snapshot);return{cid:id,snapshot}}}
   const jobs=new BlogJobs(ctx,access,store,blog,attachments,3000),app=new BlogApplication(store,access,blog,null,null,jobs,attachments,pending)
-  const chat=new BlogChat(ctx,access,store,index,attachments,jobs,app,sdk,3000)
+  const chat=new BlogChat(ctx,access,store,index,attachments,jobs,app,sdk,3000,occupancy)
   t.after(async()=>{releaseOpen?.();releaseFlush?.();for(const release of releaseGates)release();await chat.close();await jobs.close();for(const dispose of disposers.reverse())await dispose?.();store.close();await runtimeJobs.dispose();await registry.dispose()})
   const conversation=await chat.create(actor,'conversation-123')
   return{root,store,index,chat,handles,tools,blog,feedbackCalls,conversation,releaseOpen,releaseFlush,
@@ -689,6 +689,53 @@ test('a concurrent turn that starts during explicit route validation retains the
   await gate.entered;await f.send({requestId:'concurrent-turn'});gate.release();await rejected;await tick()
   assert.equal(f.handles.length,1);assert.equal(f.handles[0].options.agentOptions.model,'test')
   assert.equal(f.handles[0].events.filter(e=>e.type==='model/selection').length,0)
+});
+
+// —— `occupancy` 端口（页面侧与运行时侧共用一个会话的接缝）——
+// 三条一组：不注入时读数与改造前逐点一致；注入"本会话忙"要挡住并发；注入"别的会话忙"不许误伤。
+
+test('without an occupancy port every busy reading stays exactly as before',async t=>{
+  const f=await fixture(t)
+  assert.deepEqual([...f.chat.occupancy.busyIds()],[])
+  assert.equal(f.chat.occupancy.isBusy(f.conversation.id),false)
+  assert.deepEqual([...f.chat.busyIds()],[])
+  assert.equal(f.chat.busy(f.conversation.id),false)
+  assert.equal(f.chat.busy(f.conversation.id,'local'),false)
+  assert.equal((await f.chat.history(actor,f.conversation.id)).busy,false)
+  const sent=await f.send();await tick()
+  assert.equal(sent.status,'queued')
+  assert.deepEqual([...f.chat.busyIds()],[f.conversation.id])
+  assert.equal(f.chat.busy(f.conversation.id),true)
+  assert.equal(f.chat.busy(f.conversation.id,'local'),true)
+  assert.equal((await f.chat.history(actor,f.conversation.id)).busy,true)
+  await assert.rejects(f.send({requestId:'while-busy'}),/正在结束上一轮/)
+});
+
+test('a conversation occupied on the runtime side is refused with the existing wording and reads busy',async t=>{
+  const busy=new Set()
+  const f=await fixture(t,{occupancy:{isBusy:id=>busy.has(id),busyIds:()=>[...busy]}})
+  busy.add(f.conversation.id)
+  await assert.rejects(f.send(),/正在结束上一轮/)
+  assert.equal(f.handles.length,0)
+  assert.equal(f.chat.busy(f.conversation.id),true)
+  assert.equal(f.chat.busy(f.conversation.id,'local'),true)
+  assert.deepEqual([...f.chat.busyIds()],[f.conversation.id])
+  assert.equal((await f.chat.history(actor,f.conversation.id)).busy,true)
+});
+
+test('occupancy recorded for another conversation leaves this conversation usable',async t=>{
+  const busy=new Set()
+  const f=await fixture(t,{occupancy:{isBusy:id=>busy.has(id),busyIds:()=>[...busy]}})
+  const other=await f.chat.create(actor,'conversation-other')
+  assert.notEqual(other.id,f.conversation.id)
+  busy.add(other.id)
+  assert.deepEqual([...f.chat.busyIds()],[other.id])
+  assert.equal(f.chat.busy(f.conversation.id),false)
+  assert.equal((await f.chat.history(actor,f.conversation.id)).busy,false)
+  const sent=await f.send();await tick()
+  assert.equal(sent.status,'queued')
+  assert.equal(f.handles.length,1)
+  assert.equal([...f.chat.busyIds()].includes(other.id),true)
 });
 
 test('revocation inside official selection prevents session log and default writes before followup',async t=>{
