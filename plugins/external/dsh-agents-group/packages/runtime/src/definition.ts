@@ -318,6 +318,27 @@ export interface AgentDefinition {
    */
   readonly liveMode?: 'delta' | 'cumulative'
 
+  /**
+   * 会话寻址方式：协调方给的 `missionId` 能不能**直接寻址到会话**，缺省 `'per-dispatch'`。
+   *
+   * - `'per-dispatch'`（缺省）：**每次打开都铸一个新 id**。要再开同一个任务的会话，调用方得自己
+   *   记住上一次那个 `conversationId`（`ParticipantRequest.conversationId` 就是干这个的）。
+   * - `'derived'`：会话由 `missionRequestId(owner, missionId)` **派生**——它是 `missionId` 的纯函数，
+   *   在 `dsh_conversations` 的部分唯一索引（`WHERE request_id <> ''`）上保证"**同一 mission 只有
+   *   一条会话**"，跨进程、跨重启都成立，**不需要任何映射表**。命中既有行时恢复那一条，绝不再建。
+   *
+   * ⚠️ **为什么是一条声明，而不是 `if (agentId === 'blog')`**：这条统一**只对 blog 成立**
+   * （设计 §3.2 line 359）：closedoff 首次派活时拿不到协调方给的 id（它自己铸），管家也自己铸；
+   * 而 blog 的 `blog-chat-` 前缀被备份/恢复的正则硬绑（`conversation.ts` 的 `CONVERSATION_PREFIX`），
+   * 只有"会话 id 仍由 Agent 自己铸、幂等键由 mission 派生"这个组合能同时满足两边。写成按 agentId
+   * 的分支，等于让"下一个 Agent 要不要派生"变成没人知道该改哪里的隐式约定。
+   *
+   * ⚠️ **它只改"新建与恢复的寻址"，不改会话 id 的格式**：id 永远由 Agent 自己的前缀 + v4 UUID
+   * 铸（`newConversationId`），派生出来的是**幂等键（`requestId`）而不是 id**。两者不是一回事，
+   * 混起来会以为"会话 id 变成可重算的了"。
+   */
+  readonly conversationAddressing?: 'derived' | 'per-dispatch'
+
   // —— 结果投影：一个钩子，覆盖四件事 ——
 
   /**

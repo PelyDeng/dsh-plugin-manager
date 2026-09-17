@@ -193,6 +193,13 @@ export interface AgentRuntime {
 export class ConversationLifecycle {
   private readonly conversations = new Map<string, Conversation>()
   private readonly openings = new Map<string, Promise<Conversation | undefined>>()
+  /**
+   * 派生寻址的在飞打开（键 = `missionRequestId(owner, missionId)`，见 {@link openByMission}）。
+   *
+   * **不能复用 `openings`**：那张表按**会话 id** 分桶，而派生的两次调用各自铸一个 id ⇒ 两个键
+   * 不同，合并不了。两张表的键不同源，所以是两个 Map，不是一张。
+   */
+  private readonly missionOpenings = new Map<string, Promise<Conversation | undefined>>()
   private readonly forks = new Set<string>()
   private readonly heldTurns = new Map<string, { turn?: PendingTurn }>()
   private readonly turns = new WeakMap<Conversation, PendingTurn>()
@@ -292,6 +299,20 @@ export class ConversationLifecycle {
   }
 
   /**
+   * 把这次派活的 `missionId` 派生成**创建幂等键**；本 Agent 不走派生寻址时返回 `undefined`。
+   *
+   * 返回 `undefined` 的两条路都必须**如实退化**（不派生、也不核验），**不能编一个键**：编出来的键
+   * 会建出一条谁也找不到的会话，而调用方手里那个 id 还是"对"的——那是最难查的一类漂移。
+   * - `conversationAddressing !== 'derived'`：这条统一只对 blog 成立（见 `definition.ts` 字段注释）；
+   * - `missionId` 为空 / 缺省：协调方没给任务身份，就没有可派生的东西。
+   */
+  private missionKeyOf(actor: Actor, missionId: string | undefined): string | undefined {
+    if (this.host.definition.conversationAddressing !== 'derived') return undefined
+    if (missionId === undefined || missionId === '') return undefined
+    return this.host.store.missionRequestId(this.ownerOf(actor), missionId)
+  }
+
+  /**
    * 协作调用前的归属与可见性复核。
    *
    * 与 `closedoff/src/conversation-store.ts:63` 的 `assertOwner` 同一套判定：**不泄露存在性**
@@ -303,6 +324,30 @@ export class ConversationLifecycle {
     const row = this.host.store.record(actor, this.validateId(id))
     if (row.ready !== true || row.deletedAt !== null || row.removalState !== '') {
       throw new AccessError(404, '会话不存在或无权访问')
+    }
+  }
+
+  /**
+   * 派生寻址的**交叉核验**：调用方给的会话必须真的就是这个 mission 的会话。
+   *
+   * 为什么需要它：派生寻址把"同一 mission 只有一条会话"的保证落在**创建**上，而续问（`reply`）带
+   * 的是协调方自己存的 `conversationId`。两个 mission 的会话被张冠李戴时（协调方串了引用、或调用方
+   * 自己记错），没有这道闸就会**静默**把 A 任务的会话当成 B 任务的继续问下去——用户看到的是另一个
+   * 任务的上下文，两边却都不报错。
+   *
+   * ⚠️ **只在能证伪时拒绝**（`missionKey` 为空时整段不跑，见 `missionKeyOf`）；两种情形必须放过：
+   * - 这一行**不是派生建的**（`requestId` 为空：页面侧开的会话，或派生寻址之前建的）——拿它跟派生
+   *   键比一定不等，但那不是"串了"，只是"这条会话没有 mission 身份"；
+   * - `detail` 查不到（`assertConversation` 刚放行，理论上不该发生）——**不在这里补一次 404/403**：
+   *   存在性要不要摊开由 `assertConversation` **一处**权威决定，这里再抛一次就是多开一个泄露口。
+   */
+  private async assertMission(actor: Actor, id: string, missionKey: string | undefined): Promise<void> {
+    if (missionKey === undefined) return
+    const row = await this.host.store.detail(this.ownerOf(actor), id)
+    if (row === undefined || row.requestId === '') return
+    if (row.requestId !== missionKey) {
+      // 归属与可见性都已通过（否则上面就 404 了）：这里给出的是"存在、是你的，但不是这个任务的"。
+      throw new AccessError(403, '这条会话属于另一个协作任务')
     }
   }
 
@@ -482,13 +527,28 @@ export class ConversationLifecycle {
     }
   }
 
-  /** 打开一个活跃句柄：先尝试恢复持久化会话，必要时新建。 */
-  async open(requestedId: string | undefined, createMissing: boolean, actor: Actor): Promise<Conversation | undefined> {
+  /**
+   * 打开一个活跃句柄：先尝试恢复持久化会话，必要时新建。
+   *
+   * `missionId`（可选）是协调方这一次派活的**任务身份**。只有声明了
+   * `conversationAddressing: 'derived'` 的 Agent 才用得上它：那时它既决定新建哪条会话
+   * （{@link openByMission}），也用来交叉核验调用方给的 `requestedId`（{@link assertMission}）。
+   * 缺省（`undefined`）时本方法的**行为**与加入这个参数之前一致：不派生、不核验、不新增挂起点
+   * （"既有会话"那条路的代码只是原样搬进了 {@link openExisting}，供派遣生那条路共用）。
+   */
+  async open(requestedId: string | undefined, createMissing: boolean, actor: Actor,
+    missionId?: string): Promise<Conversation | undefined> {
     if (this.disposed) throw new Error('conversation lifecycle is disposed')
     this.host.access.assert(actor)
     if (requestedId === undefined && !createMissing) return undefined
+    const missionKey = this.missionKeyOf(actor, missionId)
+    // 派生寻址：没有调用方给的 id 时，会话由 mission 寻址（而不是每次铸一个新的）。
+    if (requestedId === undefined && missionKey !== undefined) return this.openByMission(missionKey, actor)
     const id = requestedId === undefined ? this.createId() : this.validateId(requestedId)
-    if (requestedId !== undefined) this.assertConversation(id, actor)
+    // 调用方给了 id：走"既有会话"那条路（含本实例已有句柄的直接复用与并发合并）。
+    if (requestedId !== undefined) return this.openExisting(id, actor, missionKey)
+    // 新建路径：`id` 是刚铸的，所以下面两次查表在**这条路上**不可能命中（两张表都按会话 id 分桶）——
+    // 与改造前逐字一致地留着它们，是因为它们本来就是这条路与"既有会话"那条路共用的代码。
     const active = this.conversations.get(id)
     if (active !== undefined) {
       active.lastUsedAt = Date.now()
@@ -501,17 +561,84 @@ export class ConversationLifecycle {
       this.host.access.assert(actor)
       return conversation
     }
-    if (requestedId === undefined) {
-      // 预留段：先把归属落库（`ready = false`）。中途失败留下的行不会被误用——
-      // `assertConversation` 会把它挡在外面。
-      await this.host.store.create(this.ownerOf(actor), id, '', { title: '' })
-    }
-    const created = (requestedId !== undefined
-      ? this.resumeExisting(id, actor)
-      : this.openReserved(id, this.reserveSlot(), actor))
+    // 预留段：先把归属落库（`ready = false`）。中途失败留下的行不会被误用——
+    // `assertConversation` 会把它挡在外面。派生寻址不在这条路上（它走上面的 `openByMission`）。
+    await this.host.store.create(this.ownerOf(actor), id, '', { title: '' })
+    const created = this.openReserved(id, this.reserveSlot(), actor)
       .finally(() => { this.openings.delete(id) })
     this.openings.set(id, created)
     return created
+  }
+
+  /**
+   * **既有会话**的打开路径：本实例已经有句柄就直接复用，正在打开就合并，否则 `resume`。
+   *
+   * 它是 `open` 与{@link openByMission}（幂等命中既有行时）**共用**的一条路，所以"句柄复用 + 并发
+   * 合并"只有一份实现。少了这一步、让派生寻址直接去 `resumeExisting`，同一进程里第二次派同一个
+   * mission 就会**再 resume 一个句柄**，而旧句柄还活着——同一个会话两个 Agent 实例，事件流分叉。
+   *
+   * ⚠️ `assertMission` 那个 `await` 必须跑在**下面整段同步逻辑之前**，不能插在中间。下面从读
+   * `active` 到 `openings.set(id, created)` 之间**一个 await 都没有**，那正是"两次并发打开合并成
+   * 一个"的前提：先到的那次在同一个同步块里把 promise 登记进 `openings`，后到的那次才看得见它。
+   * 一旦有挂起点插在中间，两次调用都会各自 `resumeExisting` 一遍 ⇒ 第二个必然撞会话身份。
+   * `missionKey` 为空时这里根本不 await（`assertMission` 立刻返回），老路径零变化。
+   */
+  private async openExisting(id: string, actor: Actor, missionKey: string | undefined): Promise<Conversation | undefined> {
+    this.assertConversation(id, actor)
+    await this.assertMission(actor, id, missionKey)
+    const active = this.conversations.get(id)
+    if (active !== undefined) {
+      active.lastUsedAt = Date.now()
+      return active
+    }
+    const opening = this.openings.get(id)
+    if (opening !== undefined) {
+      const conversation = await opening
+      this.host.access.assert(actor)
+      return conversation
+    }
+    const created = this.resumeExisting(id, actor).finally(() => { this.openings.delete(id) })
+    this.openings.set(id, created)
+    return created
+  }
+
+  /**
+   * 派生寻址的打开路径：`requestId` 是 mission 的纯函数，靠**部分唯一索引**保证"同一 mission 只有
+   * 一条会话"——不建映射表，调用方也不必记住 `conversationId`。
+   *
+   * 判据是 **`create` 返回行的 id**（幂等命中时它返回的是**已存在的那一行**，见 `ports.ts` 的 `create`）：
+   * - 返回的就是刚铸的那个 id ⇒ 真的是新行 ⇒ 走常规的预留 + 发布两段握手；
+   * - 返回别的 id ⇒ 这个 mission 已经有会话（上一次调用、或**另一个进程**建的）⇒ 恢复它，绝不建第二条。
+   *
+   * 同进程内的并发同一 mission 也要合并：两次调用各自铸一个 id，所以上面那张按会话 id 分桶的
+   * `openings` **合并不了**它们（两个键不同）——这也是 {@link missionOpenings} 单独一张表的原因。
+   */
+  private async openByMission(missionKey: string, actor: Actor): Promise<Conversation | undefined> {
+    const opening = this.missionOpenings.get(missionKey)
+    if (opening !== undefined) {
+      const conversation = await opening
+      this.host.access.assert(actor)
+      return conversation
+    }
+    const created = this.reserveMissionRow(missionKey, actor)
+      .finally(() => { this.missionOpenings.delete(missionKey) })
+    this.missionOpenings.set(missionKey, created)
+    return created
+  }
+
+  /** 派生寻址的预留段（**单独一个方法**是为了让 `openByMission` 的合并段全程同步）。 */
+  private async reserveMissionRow(missionKey: string, actor: Actor): Promise<Conversation | undefined> {
+    const minted = this.createId()
+    const row = await this.host.store.create(this.ownerOf(actor), minted, missionKey, { title: '' })
+    if (row.id === minted) return this.openReserved(minted, this.reserveSlot(), actor)
+    /**
+     * 幂等命中：`ready = false` ⇒ 那次创建没走完两段握手（进程死在预留与发布之间）。
+     * **409 而不是再建一条**：再建一条会同时破坏"同一 mission 一条会话"和"这个 mission 到底在
+     * 哪条会话里"——而后者的错法是静默的（协调方拿着新 id，旧行永远停在未发布）。
+     */
+    if (row.ready !== true) throw new AccessError(409, '该协作任务的会话尚未完成创建，请稍后重试')
+    // 命中既有行 ⇒ 走"既有会话"那条路（句柄复用 + 并发合并），**不要**直接 `resumeExisting`。
+    return this.openExisting(row.id, actor, missionKey)
   }
 
   async models(actor: Actor, id?: string) {
@@ -893,6 +1020,9 @@ export class ConversationLifecycle {
     this.disposed = true
     this.stopTitles()
     await Promise.allSettled([...this.openings.values()])
+    // 派生寻址在飞的那几次也必须等：它们的 promise **不在** `openings` 里（那张表按会话 id 分桶，
+    // 而派生路径要等 `create` 回来才知道最终 id），漏掉就等于"停止时还有一次 create 在飞"。
+    await Promise.allSettled([...this.missionOpenings.values()])
     const handles = [...this.conversations.values()].map(conversation => conversation.handle)
     this.conversations.clear()
     await Promise.allSettled(handles.map(handle => handle.dispose()))

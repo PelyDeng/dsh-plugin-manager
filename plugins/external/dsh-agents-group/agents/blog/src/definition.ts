@@ -115,8 +115,16 @@ export interface BlogDefinitionInput {
    * ⇒ 这份读取就是那句"业务自己的表"：blog 索引库的产出记录（`chat_results`），按**会话**查。
    * 装配侧与旧协作入口传的是**同一个**读法（`ChatStore.results`），候选项判定因此只有一份口径。
    *
-   * ⚠️ **挂载 `projectResult` 的前置条件**：它必须能读到运行时写进 `dsh_turn_results` 的那批产出
-   * （按会话 join 轮次），否则跨轮那半会静默失效——本轮那半仍由 `loadResults()` 兜住。
+   * ⚠️ **挂载 `projectResult` 的前置条件**：`dsh_turn_results` 里必须真的有这个会话的产出记录。
+   *
+   * ⚠️ **这句话订正过一次，旧说法在此显式作废**：本节早先写着"否则跨轮那半会静默失效——**本轮那半
+   * 仍由 `loadResults()` 兜住**"，**后半句是错的**。`loadResults()`（`participant.ts:465`）读的
+   * **也是** `dsh_turn_results`（`turns.turnResults`，按本轮 turn 行读），两个来源是**同一张表的
+   * 两种查询口径**，不是"一张业务表 + 一张运行时表"。而这张表的**唯一生产写入点**是
+   * `chat-store.ts:514`（`appendTurnResult`），它**唯一**的业务触发点是 `chat.ts:691` 的
+   * `propose` —— 也就是 **blog 自己的 job 路径**。所以一旦某一轮不由 blog 的 job 路径驱动，
+   * **两个来源会一起空**：`candidate` 与 `currentCandidates` 同时为空，`external_pending`
+   * 永不出现。那是**用户可见的静默语义丢失**（用户以为没事了），不是"少一半"。
    */
   readonly results: {
     list(owner: string, conversationId: string): Promise<readonly Record<string, unknown>[]>
@@ -149,6 +157,29 @@ export function createBlogDefinition(input: BlogDefinitionInput): AgentDefinitio
      * 业务不再自己维护 `sentLive`/`process` 那两个基准——**这正是它该由机制承担的部分**。
      */
     liveMode: 'cumulative',
+    /**
+     * 会话寻址：**由协调方的 `missionId` 派生**（旧实现自己维护那张映射表，本声明取代它）。
+     *
+     * 旧路径：`participant.ts:67` 把 `'pirate-conversation-' + digest({ missionId })` 当 requestId 传给
+     * `chat.create`，会话 id 仍是 `chat-store.mjs:41` 的 `'blog-chat-' + randomUUID()`。也就是说
+     * **幂等键本来就派生自 mission** —— 这条声明是把那件事从业务侧收进运行时（设计 §3.2 line 357）。
+     *
+     * 收进来之后"同一 mission 只建一次会话"不再靠业务侧的表，而是靠 `dsh_conversations` 上的部分唯一
+     * 索引（`WHERE request_id <> ''`）：跨进程、跨重启都成立，命中既有行时恢复那一条。
+     *
+     * ⚠️ **派生值会变，如实登记一处行为变更**：旧值是
+     * `'pirate-conversation-' + digest({ missionId })`，新值是运行时的
+     * `mission:blog:<namespace>:<userId>:<missionId>`（`postgres.ts:354`）——**不是同一个值**。
+     * ⇒ 切换之后，同一个 mission 会**再建一条**会话（旧库那条不会被认领）。
+     * 设计已定案"全新库没有历史数据"（最终版 line 352），所以**接受**它；这里登记的是它的确切范围：
+     * 只影响"切换前已经在跑的 mission"，对切换后新派的活没有影响（新库第一条就是派生键）。
+     *
+     * ⚠️ **`'derived'` 只声明"寻址"，不声明 id 格式**：会话 id 仍是 `blog-chat-<v4 UUID>`
+     * （`conversation.ts` 的 `CONVERSATION_PREFIX`），因为 `backup/chat-state.mjs` 与
+     * `backup/executor.py` 的正则 `^blog-chat-[a-f0-9-]{36}$` 硬绑这个形状——**改 id 形状要等备份
+     * 与页面入口一并升级**，不在本次范围内。
+     */
+    conversationAddressing: 'derived',
     /**
      * 本轮的**资料**（不是指令）：对话操作的服务器记录 + 本轮时间基准。
      *

@@ -14,7 +14,9 @@
  * 3. `reply` 续问沿原会话；**缺 `conversationId` 时拒绝**，不新建会话；
  * 4. `acceptance` / `reworkOf` 原样到达参与者（P0 契约在运行时路径上的延续）；
  * 5. `opaqueFromToolResult` 是**安全钩子**：工具结果里的标识进 opaque 集合，
- *    之后发布的思考快照里它必须已被替换（钩子没被调就必然红）。
+ *    之后发布的思考快照里它必须已被替换（钩子没被调就必然红）；
+ * 6. P7 新增的**派生寻址**：声明了 `conversationAddressing: 'derived'` 的 Agent，由协调方的
+ *    `missionId` 派生创建幂等键 ⇒ "同一 mission 只有一条会话"（用例在文件末尾那一组）。
  *
  * 会话存储用 `./fixtures/memory-conversation-port.ts` 的**测试替身**（P2 的真实 PG 实现不在这里），
  * 替身与真身的语义差写在那个文件头上，别把替身当"存储已经实现"的证据。
@@ -436,6 +438,8 @@ interface DefinitionInput {
   readonly opaqueFromToolResult?: (resultText: string, meta: unknown) => readonly string[]
   readonly projectReasoning?: (raw: string, ctx: ReasoningProjectionContext) => string
   readonly redact?: (text: string) => string
+  /** 会话寻址声明；缺省（`undefined`）= `'per-dispatch'`，与加这个字段之前逐字一致。 */
+  readonly conversationAddressing?: 'derived' | 'per-dispatch'
 }
 
 /** 最小声明：身份 + persona + 空工具集 + 一个结果投影（其余钩子按需覆盖）。 */
@@ -453,6 +457,9 @@ function define(input: DefinitionInput = {}): AgentDefinition {
     ...(input.opaqueFromToolResult === undefined ? {} : { opaqueFromToolResult: input.opaqueFromToolResult }),
     ...(input.projectReasoning === undefined ? {} : { projectReasoning: input.projectReasoning }),
     ...(input.redact === undefined ? {} : { redact: input.redact }),
+    // 缺省**不写这个键**（而不是写 `'per-dispatch'`）：默认值必须由实现自己兜，替身替它兜住
+    // 就等于把"缺省口径"这件事从被测代码里搬到了测试里（见派生寻址那组用例的缺省守护）。
+    ...(input.conversationAddressing === undefined ? {} : { conversationAddressing: input.conversationAddressing }),
   }
 }
 
@@ -1047,5 +1054,150 @@ describe('内存会话端口替身（P1 用它替代 P2 的真实实现）', () 
     expect((await provider.list(alice, query())).items).toEqual([])
     // 重复移除走 alreadyRemoved（kit 的围栏依赖这一条，不能算失败）。
     expect(await provider.remove(alice, ['minimal-1'])).toEqual({ results: [{ id: 'minimal-1', status: 'alreadyRemoved' }] })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// P7 ③-B-1：派生寻址（`missionRequestId` 从"声明了零接线"接到 `open`）
+//
+// 这组用例守的是**一条线**：协调方的 `missionId` → 派生 requestId → `dsh_conversations` 上的部分
+// 唯一索引 ⇒ "同一 mission 只有一条会话"。逐条对应一种**静默**错法：
+//
+// | 用例 | 少了这一步会怎样 |
+// | --- | --- |
+// | 缺省不派生 | 声明是唯一开关；缺省被当成 `'derived'` 会**悄悄**改掉另外两个 Agent 的寻址 |
+// | 同一 mission 两次派活 | 每个子任务建一条新会话（旧映射表已取消，没人再兜这件事） |
+// | 幂等命中未发布的行 | 建出**第二条**会话，而"这个 mission 在哪条会话里"从此有两个答案 |
+// | 续问带别的 mission 的引用 | A 任务的会话被 B 任务的话注入，两边都不报错 |
+// | 页面侧会话（requestId 为空） | 把"这条会话没有 mission 身份"误判成"串了任务"，续问全被 403 |
+// | 并发同一 mission | 两个句柄指向同一个会话，事件流分叉 |
+// ---------------------------------------------------------------------------
+describe('P7 ③-B-1：派生寻址（missionRequestId 接到 open）', () => {
+  const owner: OwnerKey = { namespace: actor.namespace, userId: actor.userId }
+  /** 一个合法的 `minimal-` 会话 id（`validateId` 要求前缀 + v4 UUID，缺一不可）。 */
+  const crashLeftover = 'minimal-33333333-3333-4333-8333-333333333333'
+  const pageSide = 'minimal-22222222-2222-4222-8222-222222222222'
+
+  /**
+   * 等"这一轮被拒绝"或"用户消息已经注入"两件事里**先**发生的那件。
+   *
+   * 为什么不直接 `await expect(...).rejects`：被测行为一旦退步，那一轮会**正常跑起来**并一直等
+   * 用户回话 ⇒ 红是 30s 超时，而不是"B 的话已经落进 A 的会话"。这个等待给的是**当场**的结论：
+   * 拒绝时返回那个错误对象，注入时返回 `'injected'`，两者都没发生（有界等待到期）返回 `'silent'`。
+   *
+   * 正常路径上它零成本：拒绝在 1ms 内到达，`Promise.race` 不会等那个有界分支。
+   */
+  const outcomeOf = async (f: Harness, attempt: Promise<unknown>): Promise<unknown> => {
+    const before = f.followups().length
+    const injected = (async (): Promise<'injected' | 'silent'> => {
+      const deadline = Date.now() + 3_000
+      while (f.followups().length === before) {
+        if (Date.now() > deadline) return 'silent'
+        await new Promise<void>(resolve => { setTimeout(resolve, 1) })
+      }
+      return 'injected'
+    })()
+    return Promise.race([attempt.then(() => undefined, (error: unknown) => error), injected])
+  }
+
+  it('缺省与显式 per-dispatch 都不派生：同一个 mission 会建两条会话', async () => {
+    const fallback = fixture(define())
+    const explicit = fixture(define({ conversationAddressing: 'per-dispatch' }))
+    for (const f of [fallback, explicit]) {
+      const opened = await f.lifecycle.open(undefined, true, actor, 'mission-A')
+      const again = await f.lifecycle.open(undefined, true, actor, 'mission-A')
+      expect(opened?.id).toMatch(/^minimal-/)
+      // 不派生 = 每次铸一个新 id：这正是加这个参数之前的行为，也是 closedoff / 管家的行为。
+      expect(again?.id).not.toBe(opened?.id)
+      expect(f.port.size).toBe(2)
+    }
+  })
+
+  it('声明 derived 之后：同一 mission 的两次派活落在同一条会话里', async () => {
+    const f = fixture(define({ conversationAddressing: 'derived' }))
+    const first = f.run(f.call({ missionId: 'mission-A', requestId: 'turn-1', message: '第一轮' }).request)
+    const id = await f.accept()
+    await f.answer(id, '答一')
+    expect((await first).conversationId).toBe(id)
+    await f.settle(id)
+
+    const second = f.run(f.call({ missionId: 'mission-A', requestId: 'turn-2', message: '第二轮' }).request)
+    /**
+     * ⚠️ 先等"第二轮有结果"（被接单 **或** 以失败告终）再断言——顺序反了，"第二条会话已经建出来"
+     * 或"第二轮直接失败"这两种退步就会表现为一个 10s 的"第 2 轮接单"超时，把真正的原因藏起来。
+     */
+    const arrival = await outcomeOf(f, second)
+    expect(f.port.size).toBe(1)
+    expect(arrival).toBe('injected')
+    expect(await f.accept(1)).toBe(id)
+    // 命中的是**同一个句柄**（本实例已经在用这条会话，就不该再 resume 一个）——少了这一步会得到
+    // 两个 Agent 实例指向同一个会话，事件流分叉。
+    expect(f.opened()).toEqual([id])
+    expect(f.resumed()).toEqual([])
+    await f.answer(id, '答二')
+    expect((await second).conversationId).toBe(id)
+    await f.settle(id)
+  })
+
+  it('幂等命中未发布的行 ⇒ 409，绝不建第二条', async () => {
+    const f = fixture(define({ conversationAddressing: 'derived' }))
+    // 上一次创建死在"预留"与"发布"之间：行在，`ready` 还是 false。
+    const key = f.port.missionRequestId(owner, 'mission-crashed')
+    await f.port.create(owner, crashLeftover, key, { title: '' })
+
+    const outcome = await outcomeOf(f, f.run(f.call({ missionId: 'mission-crashed' }).request))
+    // 先断言"没有第二条会话"（被测的东西），再说结论是不是 409。
+    expect(f.port.size).toBe(1)
+    expect(outcome).toMatchObject({ status: 409 })
+    // 也没有替那条残行补一次发布——"这个 mission 在哪条会话里"必须唯一。
+    expect(f.port.rawOf(crashLeftover)?.ready).toBe(false)
+    expect(f.opened()).toEqual([])
+  })
+
+  it('续问带别的 mission 的会话引用 ⇒ 403，不静默接着问', async () => {
+    const f = fixture(define({ conversationAddressing: 'derived' }))
+    const first = f.run(f.call({ missionId: 'mission-A', requestId: 'turn-1', message: '第一轮' }).request)
+    const id = await f.accept()
+    await f.answer(id, '答一')
+    await first
+    await f.settle(id)
+
+    // 协调方把 B 任务的 missionId 与 A 任务的会话引用配在了一起。
+    const wrong = f.call({ missionId: 'mission-B', requestId: 'reply-1', conversationId: id, message: '接着 A 说' })
+    const outcome = await outcomeOf(f, f.reply(wrong.request))
+    // 拒绝必须发生在**注入之前**：否则 B 的话已经落进 A 的会话，而两边都不会报错。
+    expect(f.followups()).toHaveLength(1)
+    expect(outcome).toMatchObject({ status: 403 })
+  })
+
+  it('页面侧开的会话（requestId 为空）不被误判成"串了 mission"', async () => {
+    const f = fixture(define({ conversationAddressing: 'derived' }))
+    // 页面侧（`chat.ts`）的会话不是派生建的：它没有 mission 身份。此时"跟派生键不等"**不是证据**，
+    // 判定必须让路（存在性/归属由 `assertConversation` 一处权威决定）。
+    await f.port.create(owner, pageSide, '', { title: '页面开的会话' })
+    await f.port.publish(owner, pageSide)
+
+    const call = f.call({ missionId: 'mission-A', requestId: 'reply-1', conversationId: pageSide, message: '接着聊' })
+    const pending = f.reply(call.request)
+    // 这一条必须先看"是不是被拒绝了"：误判的退步表现就是**这一轮直接被 403 掉**，
+    // 而"等接单"只会给出一个 10s 超时。
+    expect(await outcomeOf(f, pending)).toBe('injected')
+    expect(await f.accept()).toBe(pageSide)
+    await f.answer(pageSide, '答')
+    expect((await pending).conversationId).toBe(pageSide)
+    await f.settle(pageSide)
+  })
+
+  it('并发打开同一 mission 合并成一个：只 create 一次，两条调用拿到同一条会话', async () => {
+    const f = fixture(define({ conversationAddressing: 'derived' }))
+    const [left, right] = await Promise.all([
+      f.lifecycle.open(undefined, true, actor, 'mission-race'),
+      f.lifecycle.open(undefined, true, actor, 'mission-race'),
+    ])
+    expect(left?.id).toMatch(/^minimal-/)
+    expect(right?.id).toBe(left?.id)
+    expect(f.port.size).toBe(1)
+    // 合并的证据在**宿主调用次数**上：第二次是复用同一个 promise，不是又建一个 Agent。
+    expect(f.opened()).toEqual([left?.id])
   })
 })

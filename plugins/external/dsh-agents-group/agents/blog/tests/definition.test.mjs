@@ -81,6 +81,14 @@ test('实时通道声明为 cumulative（blog 给的是本步累积值，不是�
   assert.equal(definition().liveMode,'cumulative')
 })
 
+test('会话寻址声明为 derived：同一 mission 只建一条会话（取代旧映射表）',()=>{
+  // 这条声明的**唯一作用**是让运行时用 `missionRequestId(owner, missionId)` 做创建幂等键
+  // （`conversation.ts` 的 `openByMission`）。旧实现靠 `pirate_blog_conversations` 映射表保证
+  // "同一 mission 一条会话"，而那张表**已经取消**（设计 §3.2）⇒ 这条声明一旦丢失，退步是
+  // **静默**的：每个子任务各建一条会话，协调方下次派活找不到上一次的上下文。
+  assert.equal(definition().conversationAddressing,'derived')
+})
+
 test('persona 与 tools 原样透传（本文件不注册任何东西）',()=>{
   const tools=()=>[{name:'blog_propose'}]
   const value=definition({persona:' 人设 ',tools})

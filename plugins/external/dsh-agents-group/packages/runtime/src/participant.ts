@@ -231,10 +231,14 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
         } catch (error) { reject(error); return }
         let conversation: Conversation | undefined
         try {
+          // 第四参数是这次派活的**任务身份**：声明了 `conversationAddressing: 'derived'` 的 Agent
+          // 用它寻址会话（同一 mission 只有一条）并交叉核验 `request.conversationId`；其他 Agent
+          // 上它一律被忽略（`missionKeyOf` 返回 `undefined`），行为与不传时逐字一致。
           conversation = await lifecycle.open(
             request.conversationId === undefined || request.conversationId === '' ? undefined : request.conversationId,
             mode === 'run',
             request.actor,
+            request.missionId,
           )
         } catch (error) { reject(error); return }
         if (conversation === undefined) { reject(new AccessError(404, '会话不存在或无权访问')); return }

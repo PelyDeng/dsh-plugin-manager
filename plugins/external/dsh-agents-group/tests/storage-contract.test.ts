@@ -387,6 +387,28 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
     } finally { await db.close() }
   })
 
+  it('★ 派生寻址的落点：派生键当 requestId 时同一个 mission 只有一行，且 detail 读得回那个键', async () => {
+    const { db } = await newFacade()
+    try {
+      // 运行时（`conversation.ts` 的 `openByMission`）只依赖三件事实，这里是它们在真 PG 上的证据：
+      // ① 键是纯函数派生的；② 拿同一个键 create 会命中既有行（部分唯一索引）；③ `detail` 读得回它。
+      const key = db.conversations.missionRequestId(owner, 'mission-1')
+      const first = conversationId()
+      const reserved = await db.conversations.create(owner, first, key, { title: '' })
+      // 预留段：`ready = false` —— 运行时的 409 判据就在这一列上（"这个 mission 已有会话但没发布完"）。
+      expect(reserved.ready).toBe(false)
+      // 另一个进程（换个会话 id、拿同一个派生键）再 create：必须命中同一行，不新建。
+      const second = await db.conversations.create(owner, conversationId(), key, { title: '' })
+      expect(second.id).toBe(first)
+      const rows = await admin.query<{ total: number }>('SELECT count(*)::int AS total FROM dsh_conversations')
+      expect(rows.rows[0]?.total).toBe(1)
+      // 交叉核验读的是 `detail().requestId`：它必须**就是**派生键，读错列会让核验永远放行。
+      expect((await db.conversations.detail(owner, first))?.requestId).toBe(key)
+      await db.conversations.publish(owner, first)
+      expect((await db.conversations.detail(owner, first))?.ready).toBe(true)
+    } finally { await db.close() }
+  })
+
   it('missionRequestId 是纯函数，且跨 Agent / 跨 owner 不撞键', async () => {
     const { db } = await newFacade()
     const other = await newFacade('blog')
