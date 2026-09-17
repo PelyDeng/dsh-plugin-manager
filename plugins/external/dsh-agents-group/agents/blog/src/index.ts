@@ -5,7 +5,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage,ServerResponse } from 'node:http'
 import type {} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
-import type {} from '@deepseek-ai/dsh-host-webserver'
+import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-jobs'
@@ -150,6 +150,17 @@ export interface AgentMountContext {
    */
   readonly http: {
     register(route: ProtectedRoute): () => void
+    /**
+     * 注册**显式公开**的路由（不走登录 cookie 的那一类）。
+     *
+     * 群组给的就是 kit 的 `createPluginHttp` 那个对象，它本来就带这个方法（群组自己的
+     * `/agents/health`、`/agents/ready` 也走它，见 `src/index.ts:231/240/264`），此前这里的接口
+     * 只是写得比实际窄。宽度不够的代价是实打实的：备份执行器是 systemd 拉起的进程，**没有 cookie
+     * 也不带 Origin**，走 `register` 会在进入处理器之前就被 `access.resolve` 挡成 401
+     * （`packages/plugin-kit/src/http.ts:42`、`access.ts:236`）——它的凭据是下面那条
+     * `Authorization: Bearer <备份 token>`，只能由处理器自己核验。
+     */
+    registerPublic(route: WebRoute): () => void
   }
   /** 群组解析后的完整配置。 */
   readonly config: Config
@@ -166,7 +177,21 @@ export interface AgentMountContext {
   readonly groupConfigPath?: string
 }
 
-function json(res:ServerResponse,data:unknown){res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(data))}
+/**
+ * 统一的 JSON 响应写法。
+ *
+ * ⚠️ 响应体是 thenable ⇒ **当场抛**，绝不 `JSON.stringify` 它：`JSON.stringify(Promise)` 得到的是
+ * `'{}'`，而 HTTP 状态仍是 **200**，于是页面上看到的是"空结果"而不是错误（侧栏显示"没有会话"、
+ * 操作"点了没反应"），日志里也一行都没有。这正是 `/api` 的 `chat-list` 那一支漏 `await` 时的
+ * 实际表现（响应体 `{}`、状态 200）。
+ *
+ * 抛出的错误走群组注入的 `onError`：`blogStorageErrorHandler` 对非存储 / 非访问错误落
+ * **500 + 一条 error 日志**，所以这一道把"静默的空响应"变成了"响亮的 500"。
+ */
+function json(res:ServerResponse,data:unknown){
+  if(data!==null&&typeof data==='object'&&typeof (data as {then?:unknown}).then==='function')throw new Error('响应体是 Promise：路由处理器漏了 await')
+  res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(data))
+}
 async function body(req:IncomingMessage,max:number){const chunks:Buffer[]=[];let size=0;for await(const b of req){const chunk=Buffer.from(b);size+=chunk.length;if(size>max)throw new AccessError(413,'请求超过大小限制');chunks.push(chunk)}return Buffer.concat(chunks)}
 
 /**
@@ -261,7 +286,10 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   // 存活与就绪探针由群组统一提供（/agents/health、/agents/ready 与 /agents/blog/ready），
   // 这里不再注册：容器级探针是群组的职责，重复一份还会因前缀来源不同而冲突。
   // `/backup-authorize` 不是探针而是业务端点（systemd 执行器用它换授权），所以保留。
-  ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/backup-authorize',handler:async(req,res)=>{
+  // ⚠️ 必须走 `registerPublic`：调用它的是**没有登录 cookie、也没有 Origin 头**的执行器进程，
+  // 走受保护注册会在进入处理器之前就被挡成 401（或 Origin 校验的 403），而处理器里那条
+  // `Bearer <备份 token>` 的定长比较才是它真正的凭据。端点自身仍然只认 POST + 正确 token。
+  ctx.effect(()=>http.registerPublic({kind:'exact',path:config.routePrefix+'/backup-authorize',handler:async(req,res)=>{
     const expected=settings.backup.token?`Bearer ${settings.backup.token}`:''
     const supplied=req.headers.authorization??''
     if(req.method!=='POST'||!expected||!timingSafeEqual(createHash('sha256').update(expected).digest(),createHash('sha256').update(supplied).digest())){res.writeHead(403);res.end();return}
@@ -287,7 +315,11 @@ export async function mount(mountContext:AgentMountContext):Promise<{
     let result
     switch(input.action){
       case 'chat-create':result=await chat.create(actor,args.requestId);break
-      case 'chat-list':result=chat.list(actor,args.offset??0,args.query??'');break
+      // ⚠️ `list` 在 P7 ③-A 步骤 3 跟着 `chat-store.ts` 一起变成 async（三表全走运行时端口），
+      // 这里的 `await` 是那次转换漏掉的一处。少了它响应体是 `Promise` 序列化出来的 `{}`
+      // （HTTP 仍然 200）：侧栏拿到空对象、`items` 是 undefined，看起来像"没有会话"而不是报错。
+      // 其余分支本来就已经 await，所以这是补齐，不是语义变更。
+      case 'chat-list':result=await chat.list(actor,args.offset??0,args.query??'');break
       case 'chat-models':result=await chat.models(actor,args.conversationId);break
       case 'chat-update':result=await chat.mutate(actor,args);break
       case 'chat-history':result=await chat.history(actor,args.conversationId);break
