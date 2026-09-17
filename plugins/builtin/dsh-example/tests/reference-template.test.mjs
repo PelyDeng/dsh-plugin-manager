@@ -10,16 +10,18 @@ test('public reference indexes only exact reviewed env defaults and excludes pri
   const root = referenceWorkspace()
   try {
     const template = renderFrameworkConfig()
-    writeFileSync(join(root, 'env.conf'), template)
-    mkdirSync(join(root, '.local')); writeFileSync(join(root, '.local/env.conf'), 'DEEPSEEK_API_KEY=private-sentinel\n')
+    writeFileSync(join(root, 'env.conf.example'), template)
+    // 站点私有配置含真实凭据：公开源码索引只收随包分发的模板，不收它。
+    writeFileSync(join(root, 'env.conf'), 'DEEPSEEK_API_KEY=private-sentinel\n')
     const output = join(root, 'reference.json')
     buildReference(root, output)
     const snapshot = JSON.parse(readFileSync(output))
-    expect(snapshot.files.find(file => file.path === 'env.conf').text).toBe(template)
+    expect(snapshot.files.find(file => file.path === 'env.conf.example').text).toBe(template)
+    expect(snapshot.files.some(file => file.path === 'env.conf')).toBe(false)
     expect(JSON.stringify(snapshot)).not.toContain('private-sentinel')
     for (const change of ['DEEPSEEK_API_KEY=private-sentinel', 'REGISTRY_PASSWORD=private-sentinel', 'DSH_PORT=27913', 'DSH_IMAGE_PLATFORM=linux/arm64', 'DSH_CONTAINER_IMAGE=private-sentinel']) {
       const key = change.split('=')[0]
-      writeFileSync(join(root, 'env.conf'), template.replace(new RegExp(`^${key}=.*$`, 'm'), change))
+      writeFileSync(join(root, 'env.conf.example'), template.replace(new RegExp(`^${key}=.*$`, 'm'), change))
       expect(() => buildReference(root, output)).toThrow('公开env.conf')
       expect(JSON.stringify(JSON.parse(readFileSync(output)))).not.toContain('private-sentinel')
     }

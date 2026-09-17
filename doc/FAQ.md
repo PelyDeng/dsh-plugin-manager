@@ -32,7 +32,7 @@
 
 ## 控制台能打开，但模型和插件报 HTTP 403 怎么办？
 
-检查实际访问域名是否进入官方 DSH 的 `trustedHosts`。仅配置 `publicUrl`、`publicOrigin` 不会自动允许公网域名调用控制台 API。在私有 `.local/env.conf` 中填写 `DSH_TRUSTED_HOSTS=["dsh.example.com"]`，将示例域名替换为实际主机名，保留其他设置及已有信任项。旧显式站点 JSON 仍使用 `trustedHosts` 字段；已有站点先让部署入口导入旧文件，不能复制默认模板，使部署入口忽略旧配置。值不带协议或路径；需要限定端口时，使用与请求 Host 一致的 `主机名:端口`。
+检查实际访问域名是否进入官方 DSH 的 `trustedHosts`。仅配置 `publicUrl`、`publicOrigin` 不会自动允许公网域名调用控制台 API。在私有 `env.conf` 中填写 `DSH_TRUSTED_HOSTS=["dsh.example.com"]`，将示例域名替换为实际主机名，保留其他设置及已有信任项。旧显式站点 JSON 仍使用 `trustedHosts` 字段；已有站点先让部署入口导入旧文件，不能复制默认模板，使部署入口忽略旧配置。值不带协议或路径；需要限定端口时，使用与请求 Host 一致的 `主机名:端口`。
 
 按正常部署流程应用配置并受控重启，再读取当前认证地址，验证模型、插件及工作区接口。不要修改生成的 Compose 或临时运行文件来代替持久配置。仍返回 403 时检查代理和 Host/Origin 是否一致；不要关闭认证。字段和示例见[访问地址配置](framework-configuration.md#首次填写)。
 
@@ -46,7 +46,7 @@
 
 ## 为什么显示外部环境只读？
 
-当前值来自文件或启动环境覆盖。核对实际 .local/env.conf 和原服务管理者配置，按[来源规则](framework-configuration.md#密钥由谁管理)调整后受控应用。不要通过清空官方凭据存储来排错。
+当前值来自文件或启动环境覆盖。核对实际 env.conf 和原服务管理者配置，按[来源规则](framework-configuration.md#密钥由谁管理)调整后受控应用。不要通过清空官方凭据存储来排错。
 
 ## 密钥已保存，为什么问答仍然失败？
 

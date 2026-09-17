@@ -174,7 +174,7 @@ export function renderFrameworkConfig({ config = {}, image = {}, credentials = {
   if (!privateInput) { config = { ...publicDeploymentDefaults, ...config }; image = { ...imageDefaults, ...image }; }
   const lines = [
     privateInput ? '# DSH框架站点配置' : '# DSH框架配置入口（公开默认模板）',
-    privateInput ? '# 站点唯一的配置源：框架参数与插件业务配置都在这里维护，随仓库分发到部署机；不要复制到镜像。' : '# 固定公开默认值已填写；站点真实配置与业务凭据保存在 .local/env.conf，不在此修改。',
+    privateInput ? '# 站点唯一的配置源：框架参数与插件业务配置都在这里维护，随仓库分发到部署机；不要复制到镜像。' : '# 固定公开默认值已填写；站点真实配置与业务凭据保存在 env.conf，不在此修改。',
     '# KEY=VALUE是字面量，不执行shell；复杂值用单行JSON，路径相对显式项目root。',
     '# 留空采用该入口默认行为；修改文件后通过正常部署流程受控重启。',
     '# API空值不是删除；若启动环境有同名密钥，官方仍会优先使用且网页只读。',
@@ -199,7 +199,7 @@ export function renderFrameworkConfig({ config = {}, image = {}, credentials = {
 export function renderSiteTemplate(inputKind = 'archives') {
   if (inputKind === 'source') return renderFrameworkConfig({ config: siteDefaults('source') });
   const defaults = siteDefaults(inputKind), fields = new Set(['publicUrl', 'publicOrigin', 'plugins', 'port', 'profile', 'dataRoot', 'artifacts', 'composeProject', 'containerUid', 'containerGid', 'containerImage', 'offline']);
-  const lines = ['# DSH 插件产物部署配置示例', '# 真实配置由 build 初始化到 .local/env.conf；不要把凭据写入公开模板。', '# KEY=VALUE 是字面量；插件业务参数各自在 .local/config/plugins 下填写。'];
+  const lines = ['# DSH 插件产物部署配置示例', '# 真实配置由 build 初始化到 env.conf；不要把凭据写入公开模板。', '# KEY=VALUE 是字面量；插件业务参数各自在 .local/config/plugins 下填写。'];
   for (const [key, field, , comment] of deploymentFields) if (fields.has(field)) lines.push('', `# ${comment}`, `${key}=${defaults[field] == null ? '' : JSON.stringify(defaults[field])}`);
   return lines.join('\n') + '\n';
 }
@@ -209,7 +209,7 @@ export function assertPublicFrameworkConfig(text) {
   const values = parseLiteralConfig(text, frameworkKeys);
   const defaults = parseLiteralConfig(renderFrameworkConfig(), frameworkKeys);
   if (Object.keys(values).length !== frameworkKeys.size || [...frameworkKeys].some(key => values[key] !== defaults[key])) {
-    throw new Error('公开env.conf只能包含完整受控默认值和空凭据；站点真实配置保存在.local/env.conf，不进入公开源码索引。');
+    throw new Error('公开env.conf.example只能包含完整受控默认值和空凭据；站点真实配置保存在项目根env.conf，不进入公开源码索引与发行包。');
   }
 }
 

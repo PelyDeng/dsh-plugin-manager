@@ -16,7 +16,7 @@ bash build.sh
 
 后续自行确认更新源码，再运行同一 build。源码操作使用已提交输入；正常全量构建准备 manager、选中业务插件和宿主镜像，不要求宿主等于预设 gitlink，但记录实际提交。仅指定 publishImage 时推送镜像；默认使用本机不可变镜像 ID。宿主升级约束见[兼容说明](../doc/host-compatibility.md)。
 
-首次创建 .local/env.conf，已有文件不覆盖；旧 JSON 导入保留解析后的数据路径。两种入口都构建全部内置插件（archives 用随包公开构建视图，并在视图内装工作区依赖，需要网络或完整缓存），DSH_PLUGINS 决定运行选集、留空即全部候选；incoming 只放外部作者的完整发布目录。源码树中缺少工具时只准备 manager 工具依赖。两种模式不混合输入，字段规则见[框架配置](../doc/framework-configuration.md)。
+首次创建 env.conf，已有文件不覆盖；旧 JSON 导入保留解析后的数据路径。两种入口都构建全部内置插件（archives 用随包公开构建视图，并在视图内装工作区依赖，需要网络或完整缓存），DSH_PLUGINS 决定运行选集、留空即全部候选；incoming 只放外部作者的完整发布目录。源码树中缺少工具时只准备 manager 工具依赖。两种模式不混合输入，字段规则见[框架配置](../doc/framework-configuration.md)。
 
 ### 内置构建与外部产物
 
@@ -42,11 +42,11 @@ bash build.sh
 
 ## 运行配置
 
-日常只编辑 .local/env.conf 和实际插件配置，deployment.json、清单、Compose、patch 由编排生成。root 从脚本位置明确传入；独立 CLI 必须指定 --root，不从工具安装目录猜项目根。完整字段、入口默认和凭据优先级只在[框架配置](../doc/framework-configuration.md)维护。
+日常只编辑 env.conf 和实际插件配置，deployment.json、清单、Compose、patch 由编排生成。root 从脚本位置明确传入；独立 CLI 必须指定 --root，不从工具安装目录猜项目根。完整字段、入口默认和凭据优先级只在[框架配置](../doc/framework-configuration.md)维护。
 
 source/archives 切换须无未完成操作，核验原 home/profile/引擎/归属及旧归档。已有实例 settingsFile/runtimeConfig 原样沿用，不自动迁移。数据路径调整按[迁移流程](../doc/migration.md)处理。
 
-插件配置、环境变量和 patch 都在容器启动时读取，改完需要一次受控重启才会生效。改哪一层、几层之间谁覆盖谁、环境变量按什么顺序取值，只在[框架配置](../doc/framework-configuration.md#插件配置与环境变量的生效路径)维护；插件字段本身见[插件运行配置](../doc/plugin-configuration.md)。此处只保留操作口径：日常改 `.local/env.conf`、`instances.<id>.settingsFile` 与插件的 `runtimeConfig` 文件，改完按下面的正常流程重新发布。
+插件配置、环境变量和 patch 都在容器启动时读取，改完需要一次受控重启才会生效。改哪一层、几层之间谁覆盖谁、环境变量按什么顺序取值，只在[框架配置](../doc/framework-configuration.md#插件配置与环境变量的生效路径)维护；插件字段本身见[插件运行配置](../doc/plugin-configuration.md)。此处只保留操作口径：日常改 `env.conf`、`instances.<id>.settingsFile` 与插件的 `runtimeConfig` 文件，改完按下面的正常流程重新发布。
 
 插件归档按内容哈希命名，profile 以 `file:` 引用它们，由部署流程一起改写。不要单独替换归档目录或手工改 profile；中断后的恢复按下一节的入口处理。
 

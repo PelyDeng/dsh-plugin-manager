@@ -268,10 +268,10 @@ test('legacy update preserves data and site values and applies immediately after
 test('repeated execution keeps the site file and the established binding', t => {
   const f = fixture(t, { fresh: true });
   release({ root: f.root }, f.execute, f.buildHost, f.tooling);
-  const site = readFileSync(resolve(f.root, '.local/env.conf'), 'utf8');
+  const site = readFileSync(resolve(f.root, 'env.conf'), 'utf8');
   const binding = JSON.parse(readFileSync(resolve(f.root, '.local/site-binding.json')));
   release({ root: f.root }, f.execute, f.buildHost, f.tooling);
-  assert.equal(readFileSync(resolve(f.root, '.local/env.conf'), 'utf8'), site);
+  assert.equal(readFileSync(resolve(f.root, 'env.conf'), 'utf8'), site);
   assert.deepEqual(JSON.parse(readFileSync(resolve(f.root, '.local/site-binding.json'))), binding);
   assert.equal(f.result().status, 'ready');
 });
@@ -288,7 +288,7 @@ test('a partial site override uses the same effective paths on repeated deployme
 test('changing the established data location is rejected before stopping the service', t => {
   const f = fixture(t, { fresh: true });
   release({ root: f.root }, f.execute, f.buildHost, f.tooling);
-  f.put('.local/env.conf', renderFrameworkConfig({ config: { ...defaults, home: '.local/data/another-home' } }));
+  f.put('env.conf', renderFrameworkConfig({ config: { ...defaults, home: '.local/data/another-home' } }));
   assert.throws(() => release({ root: f.root }, f.execute, f.buildHost, f.tooling), /站点绑定/);
   assert.equal(f.calls.some(call => call.includes('stop')), false);
 });
@@ -405,7 +405,7 @@ test('unified source keeps exact private input backup while generated records co
   const f = fixture(t, { fresh: true });
   // 手写的统一配置要像真实运维那样声明容器用户：默认 1000 在非 1000 的运行器上会被访问核对判成不可访问。
   const text = renderFrameworkConfig({ config: { containerUid: process.getuid?.() ?? 1000, containerGid: process.getgid?.() ?? 1000 }, credentials: { DEEPSEEK_API_KEY: 'sk-source-private-sentinel' }, privateInput: true });
-  f.put('.local/env.conf', text);
+  f.put('env.conf', text);
   const result = release({ root: f.root }, f.execute, f.buildHost, f.tooling);
   assert.equal(readFileSync(result.inputs.find(input => input.kind === 'site').path, 'utf8'), text);
   assert.equal(JSON.stringify(result).includes('private-sentinel'), false);
@@ -419,7 +419,7 @@ test('unsupported legacy business fields reject migration before creating a unif
   const previous = { instances: { example: { apiKey: 'private-sentinel' } } };
   f.put('.local/site.json', previous);
   assert.throws(() => loadSite(f.root), error => /DSH_INSTANCES/.test(error.message) && !error.message.includes('private-sentinel'));
-  assert.equal(existsSync(resolve(f.root, '.local/env.conf')), false);
+  assert.equal(existsSync(resolve(f.root, 'env.conf')), false);
   assert.deepEqual(JSON.parse(readFileSync(resolve(f.root, '.local/site.json'))), previous);
 });
 
@@ -439,7 +439,7 @@ test('legacy image preferences import once and retain the original source', t =>
 
 test('new unified source derives unset home and workspace from dataRoot, while explicit JSON keeps its defaults', t => {
   const f = fixture(t, { fresh: true });
-  f.put('.local/env.conf', 'DSH_DATA_DIR=data/custom\n');
+  f.put('env.conf', 'DSH_DATA_DIR=data/custom\n');
   const { site } = loadSite(f.root);
   assert.equal(site.home, resolve(f.root, 'data/custom/dsh-home'));
   assert.equal(site.workspace, resolve(f.root, 'data/custom/workspace'));

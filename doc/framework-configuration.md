@@ -1,18 +1,18 @@
 # 框架统一配置
 
-根目录 [env.conf](../env.conf) 是可提交的公开默认值模板，每项有中文注释；固定非秘密默认值已直接填入。运行时使用 Git 忽略的 `.local/env.conf`，通常只需核对访问地址、信任域名和所用模型密钥。真实域名、账号、密码和密钥只填私有文件，不能写入公共模板。
+根目录 [env.conf](../env.conf) 是可提交的公开默认值模板，每项有中文注释；固定非秘密默认值已直接填入。运行时使用 Git 忽略的 `env.conf`，通常只需核对访问地址、信任域名和所用模型密钥。真实域名、账号、密码和密钥只填私有文件，不能写入公共模板。
 
 ## 首次填写
 
-新站点直接执行 Windows 的 `./build.ps1` 或 macOS/Linux 的 `./build.sh`，脚本自动创建私有配置；精简部署包默认 archives，框架源码检出默认 source，写入本次模式与平台的实际默认值。已有 `.local/env.conf` 不覆盖；旧站点先由部署入口导入旧 JSON，保留原路径和文件。
+新站点直接执行 Windows 的 `./build.ps1` 或 macOS/Linux 的 `./build.sh`，脚本自动创建私有配置；精简部署包默认 archives，框架源码检出默认 source，写入本次模式与平台的实际默认值。已有 `env.conf` 不覆盖；旧站点先由部署入口导入旧 JSON，保留原路径和文件。
 
 确需手工复制时，仅用于尚无配置与数据的新站点。公开模板的 UID/GID 为 1000、镜像架构为 `linux/amd64`，不会因为复制动作自动探测平台；macOS 用户及 ARM Docker 引擎应核对并修改这些值。显式填写的值会被保留。
 
 ```sh
 # 仅用于尚无配置与数据的新站点
 mkdir -p .local
-cp -n env.conf .local/env.conf
-chmod 600 .local/env.conf
+cp -n env.conf env.conf
+chmod 600 env.conf
 ```
 
 公网部署按实际地址填写以下字段，保留已有信任项；此处域名仅为示例：
@@ -32,7 +32,7 @@ ZHIPU_API_KEY=
 ## 密钥由谁管理
 
 <!-- excerpt:model-credentials -->
-私有 .local/env.conf 中的 DEEPSEEK_API_KEY / ZHIPU_API_KEY 非空时：文件为准，只注入官方DSH子进程，网页只读；改文件后受控部署。留空不添加覆盖、不删除官方凭据、不清除继承环境密钥。没有外部环境覆盖时，管理员可在 /auth 的“模型设置”管理 DeepSeek/智谱，写入官方存储时默认无需重启。
+私有 env.conf 中的 DEEPSEEK_API_KEY / ZHIPU_API_KEY 非空时：文件为准，只注入官方DSH子进程，网页只读；改文件后受控部署。留空不添加覆盖、不删除官方凭据、不清除继承环境密钥。没有外部环境覆盖时，管理员可在 /auth 的“模型设置”管理 DeepSeek/智谱，写入官方存储时默认无需重启。
 
 网页只返回状态与 SHA-256 指纹，不返回原密钥。指纹不能还原密钥；“已配置”不代表余额、网络或调用通过。命令行 set-api-key 只支持 DeepSeek，密钥使用隐藏输入，不放在 argv。在安装 manager 的工具目录使用 `pnpm exec dsh-plugin-manager set-api-key --root <站点根> --config .local/deployment.json`。
 
@@ -94,7 +94,7 @@ build 只允许 release。source 禁止手填 manifest/containerImage；archives
 
 ## 旧站点导入与恢复
 
-默认入口首次发现没有 `.local/env.conf` 时，优先导入 `.local/site.json`，其次导入 `.local/deployment.json`，保留已解析的数据路径、profile 和原文件。旧 `hostImageConfig` 的镜像字段一并导入，之后以统一文件为准。无法表示的旧字段拒绝自动导入，可以继续显式传原 JSON，不能静默丢弃。
+默认入口首次发现没有 `env.conf` 时，优先导入 `.local/site.json`，其次导入 `.local/deployment.json`，保留已解析的数据路径、profile 和原文件。旧 `hostImageConfig` 的镜像字段一并导入，之后以统一文件为准。无法表示的旧字段拒绝自动导入，可以继续显式传原 JSON，不能静默丢弃。
 
 `.local/deployment.json`、清单、Compose 和官方 patch 是生成输入，不替代人工入口。站点目标与数据位置由 `.local/site-binding.json` 稳定绑定，每个持久目录根带 `.dsh-site-id` 标记；绑定或标记损坏必须通过 `dsh-plugin-manager migrate-site` 显式修复，普通 build 只读核对。旧 schema 2 受管状态经同一工具一次性迁移为 schema 3 managed 授权集合。配置格式导入不搬迁数据，更换数据路径仍须遵守[正式迁移流程](migration.md)。
 

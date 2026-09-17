@@ -38,10 +38,11 @@ export function buildReference(root, output) {
     visit(path);
   }
   // Private integrations replace the root build wrappers; index the shared deploy entries instead.
-  for (const path of ['README.md', 'README.en.md', 'package.json', 'pnpm-workspace.yaml', 'env.conf', 'test-report.sh', ...versionTemplates]) if (existsSync(join(root, path))) {
+  // 站点实际配置 env.conf 是私有文件，不进公开源码索引；索引里收的是随包分发的模板。
+  for (const path of ['README.md', 'README.en.md', 'package.json', 'pnpm-workspace.yaml', 'env.conf.example', 'test-report.sh', ...versionTemplates]) if (existsSync(join(root, path))) {
     if (lstatSync(join(root, path)).isSymbolicLink()) throw new Error('公开源码索引不接受符号链接。');
     const text = readFileSync(join(root, path), 'utf8');
-    if (path === 'env.conf') assertPublicFrameworkConfig(text);
+    if (path === 'env.conf.example') assertPublicFrameworkConfig(text);
     files.push({ path, text });
   }
   files.sort((a, b) => a.path.localeCompare(b.path));

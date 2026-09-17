@@ -33,7 +33,7 @@ test('a new site adopts the current non-root user as its container user, and exi
   // 已有站点沿用自己记录的值，初始化逻辑不改写它。
   const other = fixture(t);
   mkdirSync(join(other, '.local'), { recursive: true });
-  writeFileSync(join(other, '.local/env.conf'), 'DSH_CONTAINER_UID=1234\nDSH_CONTAINER_GID=1234\n', { mode: 0o600 });
+  writeFileSync(join(other, 'env.conf'), 'DSH_CONTAINER_UID=1234\nDSH_CONTAINER_GID=1234\n', { mode: 0o600 });
   assert.equal(readFrameworkConfig(loadSite(other, undefined, { imagePlatform: 'linux/amd64' }).sitePath).config.containerUid, 1234);
 });
 
@@ -55,7 +55,7 @@ test('new private env records effective site and image defaults without secrets 
 });
 
 test('existing env bytes and explicit platform/user choices survive new initialization defaults', t => {
-  const root = fixture(t), path = join(root, '.local/env.conf');
+  const root = fixture(t), path = join(root, 'env.conf');
   const text = renderFrameworkConfig({ config: { publicUrl: 'http://127.0.0.1:27913', port: 27913, plugins: [], containerUid: 2001, containerGid: 2002 }, image: { DSH_IMAGE_PLATFORM: 'linux/amd64' }, privateInput: true });
   writeFileSync(path, text, { mode: 0o600 });
   const result = loadSite(root, undefined, { imagePlatform: 'linux/arm64', desktop: true });

@@ -18,7 +18,7 @@
 
 ## 配置
 
-全新产物站点按 build 提示填写自动生成的 runtimeConfig 文件。**本项目及其全部子 Agent 的配置统一在[项目根 env.conf](../../env.conf)**，blog 的字段是其中的「博客 blog」段；子 Agent 不另建 env.conf。站点部署时实际值维护在站点 `.local/env.conf` 的 `DSH_PLUGIN_CONFIG.agents-group.blog`，构建时派生成运行配置文件，管理器只读挂载后由 `BLOG_CONFIG_PATH` 指明读取路径，已有实例沿用原路径。填写博客和图床地址、账号、密码；真实值不提交、不进镜像或插件归档。
+全新产物站点按 build 提示填写自动生成的 runtimeConfig 文件。**本项目及其全部子 Agent 的配置统一在[项目根 env.conf](../../env.conf)**，blog 的字段是其中的「博客 blog」段；子 Agent 不另建 env.conf。站点部署时实际值维护在站点 `env.conf` 的 `DSH_PLUGIN_CONFIG.agents-group.blog`，构建时派生成运行配置文件，管理器只读挂载后由 `BLOG_CONFIG_PATH` 指明读取路径，已有实例沿用原路径。填写博客和图床地址、账号、密码；真实值不提交、不进镜像或插件归档。
 
 本插件强制 `authenticated`。给需要写作的账号授予 `blog` 插件权限；备份管理另外检查 `backup.allowedUserIds` 中的 auth 稳定用户 ID，空列表拒绝所有交互备份和恢复。模型可以准备文章发布、删除确认卡片，但不能自行确认执行或恢复网站。配置更改通过管理器重新应用并重启生效。
 

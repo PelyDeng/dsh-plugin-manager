@@ -4,7 +4,7 @@
 
 本目录维护 example 与配套 auth 的业务配置，适用于框架 0.19.5。下方 JSON 保留独立 CLI 集成的兼容模板，站点 build 不需要复制它。模板与本页随应用版本交付。JSON 不支持注释，因此模板只保存真实配置字段，逐项备注、是否必填和默认值在下表说明。模板可提交 Git；复制后的实例配置只保存在 `.local/`，不会随源码或归档自动生效。
 
-站点 build 在 Windows PowerShell 执行根 `.\build.ps1`，macOS/Linux 执行根 `./build.sh`；站点和插件文件按实际模式初始化，无需复制下方模板。新 archives 站点可编辑文件在 .local/config/plugins/<id>，已有站点和显式路径不迁移。站点选项修改 `.local/env.conf`，根 `env.conf` 提供固定非秘密默认值，首次生成的私有文件写入实际平台默认值，已有配置不覆盖。
+站点 build 在 Windows PowerShell 执行根 `.\build.ps1`，macOS/Linux 执行根 `./build.sh`；站点和插件文件按实际模式初始化，无需复制下方模板。新 archives 站点可编辑文件在 .local/config/plugins/<id>，已有站点和显式路径不迁移。站点选项修改 `env.conf`，根 `env.conf` 提供固定非秘密默认值，首次生成的私有文件写入实际平台默认值，已有配置不覆盖。
 
 插件参数按字段表修改各自 `plugin.json`；不要用 `deployment.json.example` 覆盖脚本生成的 `.local/deployment.json`。下方复制流程适用于自定义管理器集成，完整站点默认值、各平台实际验证情况及恢复说明见[一键部署](https://github.com/PelyDeng/dsh-plugin-manager/blob/v0.19.5/doc/first-deployment.md)。
 

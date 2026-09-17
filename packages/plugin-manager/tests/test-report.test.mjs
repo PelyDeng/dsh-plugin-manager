@@ -13,7 +13,7 @@ function fixture() {
   put('cli.mjs', "console.log('0.0.0-fixture');");
   put('package.json', '{"name":"entry-fixture","private":true,"packageManager":"pnpm@11.19.0"}');
   put('pnpm-lock.yaml', "lockfileVersion: '9.0'\nsettings:\n  autoInstallPeers: true\n  excludeLinksFromLockfile: false\nimporters:\n  .: {}\n");
-  put('.local/env.conf', 'this file must not be parsed');
+  put('env.conf', 'this file must not be parsed');
   put('.local/data/sentinel', 'preserve');
   for (const [path, stage, outputFlag, outputName] of [
     ['scripts/package-plugins.mjs', 'pack', '--output', 'manifest.json'],
@@ -65,7 +65,7 @@ test('显式CLI相对root解析，每次使用新目录，按顺序交付且保�
     assert.equal(operations.length, 2);
     for (const op of operations) assert.ok(existsSync(join(f.root, '.local/artifacts', op, 'delivery/manifest.json')));
     assert.equal(readFileSync(join(f.root, '.local/data/sentinel'), 'utf8'), 'preserve');
-    assert.equal(readFileSync(join(f.root, '.local/env.conf'), 'utf8'), 'this file must not be parsed');
+    assert.equal(readFileSync(join(f.root, 'env.conf'), 'utf8'), 'this file must not be parsed');
   } finally { f.close(); }
 });
 

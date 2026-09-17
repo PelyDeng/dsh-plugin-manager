@@ -31,7 +31,7 @@ if(args.includes('fail')) process.exitCode=7;
     $without=(& (Join-Path $scriptRoot 'start.ps1')) | ConvertFrom-Json
     if ('development' -notin $without.args) {throw '无配置默认开发模式丢失'}
     New-Item -ItemType Directory -Path (Join-Path $testRoot '.local') | Out-Null
-    [IO.File]::WriteAllText((Join-Path $testRoot '.local/env.conf'),"DSH_MODE=release`n")
+    [IO.File]::WriteAllText((Join-Path $testRoot 'env.conf'),"DSH_MODE=release`n")
     $automatic=(& (Join-Path $scriptRoot 'start.ps1')) | ConvertFrom-Json
     if ('--config' -notin $automatic.args -or '--mode' -in $automatic.args) {throw '私有配置自动发现或模式优先级错误'}
     $explicit=(& (Join-Path $scriptRoot 'start.ps1') -Mode development) | ConvertFrom-Json

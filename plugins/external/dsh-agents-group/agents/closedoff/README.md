@@ -134,7 +134,7 @@ pnpm dsh plugin --profile web add "file:$pluginRoot"
 
 ## 配置业务参数
 
-业务配置保存网关地址和两阶段认证参数。**本项目及其全部子 Agent 的配置统一在 [项目根 env.conf](../../env.conf)**，closedoff 的字段是其中的「封闭化 closedoff」段；子 Agent 不另建 env.conf。全新产物站点按 build 提示填写自动生成的 runtimeConfig 文件；站点部署时实际值维护在站点 `.local/env.conf` 的 `DSH_PLUGIN_CONFIG.agents-group.closedoff`，构建时派生成运行配置文件。已有实例沿用当前配置路径，不覆盖配置文件。
+业务配置保存网关地址和两阶段认证参数。**本项目及其全部子 Agent 的配置统一在 [项目根 env.conf](../../env.conf)**，closedoff 的字段是其中的「封闭化 closedoff」段；子 Agent 不另建 env.conf。全新产物站点按 build 提示填写自动生成的 runtimeConfig 文件；站点部署时实际值维护在站点 `env.conf` 的 `DSH_PLUGIN_CONFIG.agents-group.closedoff`，构建时派生成运行配置文件。已有实例沿用当前配置路径，不覆盖配置文件。
 
 Node 开发或独立运行时，可在仓库根新建 `.local/closedoff.deployment.json`，再通过下文的 `-Config` 指定；这份文件与 Docker 自动生成的部署配置分开：
 

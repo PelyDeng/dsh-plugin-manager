@@ -11,7 +11,7 @@ test('public template records exact fixed defaults and leaves secrets, derived p
   const values = parseLiteralConfig(text, frameworkKeys);
   assert.equal(Object.keys(values).length, frameworkKeys.size);
   assertPublicFrameworkConfig(text);
-  assert.equal(readFileSync(new URL('../../../env.conf', import.meta.url), 'utf8').replaceAll('\r\n', '\n'), text);
+  assert.equal(readFileSync(new URL('../../../env.conf.example', import.meta.url), 'utf8').replaceAll('\r\n', '\n'), text);
   assert.deepEqual(decodeFrameworkConfig(text), { config: { ...publicDeploymentDefaults, publicOrigin: publicDeploymentDefaults.publicUrl }, image: imageDefaults, credentials: {} });
   for (const key of ['DEEPSEEK_API_KEY', 'ZHIPU_API_KEY', 'REGISTRY_USERNAME', 'REGISTRY_PASSWORD', 'DSH_PUBLIC_ORIGIN', 'DSH_HOME', 'DSH_WORKSPACE', 'DSH_AUTH_URL_FILE', 'DSH_HOST_IMAGE', 'DSH_CONTAINER_IMAGE', 'DSH_MANIFEST']) assert.equal(values[key], '');
   assert.equal(values.DSH_CONTAINER_UID, '1000'); assert.equal(values.DSH_IMAGE_PLATFORM, 'linux/amd64');

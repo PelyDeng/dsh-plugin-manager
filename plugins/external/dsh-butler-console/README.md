@@ -381,5 +381,5 @@ pnpm check --external --plugins "butler"
 pnpm --filter dsh-butler-console test   # --filter 属于 pnpm，写在 test 后面会被透传给 vitest
 ```
 
-纳入源码部署选集时，在私有 `.local/env.conf` 的 `DSH_PLUGINS` 里加入 `butler`（不要改
+纳入源码部署选集时，在私有 `env.conf` 的 `DSH_PLUGINS` 里加入 `butler`（不要改
 公开的根 `env.conf`）。发版到服务器需要用户明确要求后才执行。

@@ -89,7 +89,7 @@ test('unknown, missing, repeated and nested excerpts fail before any output is c
   const f = fixture(t);
   frameworkVersion(f.root, { mode: 'sync' });
   const previous = f.read('package.json');
-  for (const id of ['../../.local/env.conf', 'constructor']) {
+  for (const id of ['../../env.conf', 'constructor']) {
     f.write('plugins/builtin/dsh-example/knowledge/guide.md.tmpl', `# FAQ {{FRAMEWORK_VERSION}}\n<!-- include:${id} -->\n`);
     assert.throws(() => frameworkVersion(f.root, { mode: 'set', version: '0.14.0' }), /未知文档片段/);
     assert.equal(f.read('package.json'), previous);

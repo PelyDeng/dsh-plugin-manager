@@ -118,7 +118,7 @@ test('real fresh worker reaches the pinned install and releases its lock after a
   assert.deepEqual(observed.args, ['install', '--frozen-lockfile']);
   assert.equal(observed.pin, 'pnpm@11.19.0');
   assert.equal(existsSync(resolve(f.root, '.local/source-release.node.lock')), false);
-  assert.equal(existsSync(resolve(f.root, '.local/env.conf')), false);
+  assert.equal(existsSync(resolve(f.root, 'env.conf')), false);
   f.absent();
 });
 
@@ -133,7 +133,7 @@ test('source deployment rejects unsynchronized framework versions before install
   assert.equal(result.status, 1);
   assert.match(result.stderr, /框架版本或文档未同步/);
   assert.equal(existsSync(f.marker), false);
-  assert.equal(existsSync(resolve(f.root, '.local/env.conf')), false);
+  assert.equal(existsSync(resolve(f.root, 'env.conf')), false);
   assert.match(command(process.execPath, ['deploy/scripts/build.mjs', '--help'], f.root, f.env), /build\.ps1/);
   f.absent();
 });

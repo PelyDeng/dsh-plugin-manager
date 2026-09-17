@@ -321,5 +321,5 @@ pnpm check --external --plugins "agents-group"
 pnpm test --filter dsh-agents-group
 ```
 
-纳入源码部署选集时，在私有 `.local/env.conf` 的 `DSH_PLUGINS` 里加入 `agents-group`
+纳入源码部署选集时，在私有 `env.conf` 的 `DSH_PLUGINS` 里加入 `agents-group`
 （不要改公开的根 `env.conf`）。发版到服务器需要用户明确要求后才执行。

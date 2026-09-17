@@ -148,7 +148,7 @@ test('help and management need no sync or deployment preflight while removed rec
   writeFileSync(join(dist, 'cli.mjs'), '// saved CLI');
   writeFileSync(join(dist, 'site-release.mjs'), workerSource('saved-recovery'));
   writeFileSync(join(operation, 'result.json'), JSON.stringify({ schemaVersion: 3, operation, status: 'prepared', inputKind: 'source',
-    toolRoot, managerArchive, managerHash: fileHash(managerArchive), toolHash: toolTreeIdentity(toolRoot), sitePath: join(f.checkout, '.local/env.conf') }));
+    toolRoot, managerArchive, managerHash: fileHash(managerArchive), toolHash: toolTreeIdentity(toolRoot), sitePath: join(f.checkout, 'env.conf') }));
   const pointer = join(f.checkout, '.local/source-release.json'), original = JSON.stringify({ status: 'prepared', operation });
   writeFileSync(pointer, original);
   // 恢复参数已移除：明确拒绝，不套用旧 worker、不改动旧记录、不更新源码（设计 3 节）。
@@ -168,7 +168,7 @@ test('a removed source-mode field is rejected before any source update or build'
   f.git(f.checkout, 'remote', 'set-url', 'origin', join(f.root, 'missing-origin'));
   mkdirSync(join(f.checkout, '.local'), { recursive: true });
   // 输入形态由入口决定，站点配置不再有 pluginSource；旧字段必须明确报错而不是静默忽略。
-  writeFileSync(join(f.checkout, '.local/env.conf'), 'DSH_PLUGIN_SOURCE="archives"\n', { mode: 0o600 });
+  writeFileSync(join(f.checkout, 'env.conf'), 'DSH_PLUGIN_SOURCE="archives"\n', { mode: 0o600 });
   const result = f.run();
   assert.equal(result.status, 1, result.stdout + result.stderr);
   assert.match(result.stderr, /已移除/);

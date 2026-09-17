@@ -29,7 +29,7 @@ function fixture(t, { legacyState = true, pending = false, explicitPlugins = fal
   stoppedManager(t);
   const put = (path, value) => { path = resolve(root, path); mkdirSync(resolve(path, '..'), { recursive: true }); writeFileSync(path, typeof value === 'string' ? value : JSON.stringify(value), { mode: 0o600 }); return path; };
   const config = conf
-    ? put('.local/env.conf', `# 旧站点配置\nDSH_PLUGIN_SOURCE=source\nDSH_HOME=${JSON.stringify(resolve(root, '.local/data/dsh-home'))}\n${explicitPlugins ? 'DSH_PLUGINS=["auth"]\n' : ''}`)
+    ? put('env.conf', `# 旧站点配置\nDSH_PLUGIN_SOURCE=source\nDSH_HOME=${JSON.stringify(resolve(root, '.local/data/dsh-home'))}\n${explicitPlugins ? 'DSH_PLUGINS=["auth"]\n' : ''}`)
     : put('.local/site.json', JSON.stringify({ ...(explicitPlugins ? { plugins: ['auth'] } : {}), ...(conf ? {} : {}) }));
   const profile = resolve(root, '.local/data/dsh-home/profiles/web');
   if (legacyState) put(join(profile, '.deepseek-plugin-state.json'), { schemaVersion: 2, candidates: ['auth', 'example'], plugins: [{ id: 'auth', package: 'dsh-auth' }, { id: 'example', package: 'dsh-example' }] });
@@ -132,11 +132,11 @@ test('the CLI passes stopping evidence through to apply', t => {
 
 test('a legacy .conf entry is migrated and loses the removed source-mode field', t => {
   const f = fixture(t, { conf: true });
-  const preview = migrateSitePreview(f.root, { config: '.local/env.conf' });
+  const preview = migrateSitePreview(f.root, { config: 'env.conf' });
   assert.equal(preview.legacyMode, 'source');
-  const result = migrateSiteApply(f.root, { config: '.local/env.conf', stoppedFile: f.stoppedFile });
+  const result = migrateSiteApply(f.root, { config: 'env.conf', stoppedFile: f.stoppedFile });
   assert.deepEqual(result.selection, ['auth', 'example']);
-  const text = readFileSync(resolve(f.root, '.local/env.conf'), 'utf8');
+  const text = readFileSync(resolve(f.root, 'env.conf'), 'utf8');
   assert.equal(text.includes('DSH_PLUGIN_SOURCE'), false);
   assert.equal(text.includes('DSH_PLUGINS=["auth","example"]'), true);
 });
@@ -248,7 +248,7 @@ test('an interrupted conversion keeps the confirmed selection when it is re-run'
   assert.deepEqual(first.selection, ['auth', 'example']);
   // 重建「schema 3 已写、配置替换失败」的中断现场：配置回到转换前的内容，并且抹掉计划的完成标记
   // （完成标记是最后一步写的，真实中断时它一定不存在）。
-  const configPath = resolve(f.root, '.local/env.conf');
+  const configPath = resolve(f.root, 'env.conf');
   writeFileSync(configPath, `# 旧站点配置\nDSH_PLUGIN_SOURCE=source\nDSH_HOME=${JSON.stringify(resolve(f.root, '.local/data/dsh-home'))}\n`);
   const planPath = resolve(first.backup, 'plan.json');
   const plan = read(planPath); delete plan.completedAt;

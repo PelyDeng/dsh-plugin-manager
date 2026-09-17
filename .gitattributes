@@ -7,7 +7,8 @@ Dockerfile text eol=lf
 /plugins/builtin/dsh-example/knowledge/*.md text eol=lf
 # 配置按字节参与解析与输入快照摘要，换行必须跨平台一致；没有这些规则时 Windows 的
 # core.autocrlf 会让它们随检出变化，并在每次 git add 时报 LF/CRLF 转换警告。
-/.local/env.conf text eol=lf
+/env.conf text eol=lf
+/env.conf.example text eol=lf
 /plugins/external/*/env.conf text eol=lf
 
 /data export-ignore

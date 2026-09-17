@@ -1,5 +1,5 @@
 {
-  "$comment": "群组唯一的业务配置模板：各 Agent 从自己的小节读取，字段名与该 Agent 原有的环境变量一致；顶层 dsn 供群组存储层使用。实际值在站点配置 .local/env.conf 的 DSH_PLUGIN_CONFIG.agents-group 里维护，敏感凭据只留在私有库。",
+  "$comment": "群组唯一的业务配置模板：各 Agent 从自己的小节读取，字段名与该 Agent 原有的环境变量一致；顶层 dsn 供群组存储层使用。实际值在站点配置 env.conf 的 DSH_PLUGIN_CONFIG.agents-group 里维护，敏感凭据只留在私有库。",
   "closedoff": {
     "CLOSEDOFF_BASE_URL": "https://your-gateway.example/",
     "CLOSEDOFF_OPEN_CLIENT_ID": "REPLACE_ME",

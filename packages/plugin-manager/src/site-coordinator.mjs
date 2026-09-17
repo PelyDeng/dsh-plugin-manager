@@ -50,10 +50,10 @@ export async function sourceRelease({ root, args = [], beforeBuild, preflight, p
   const buildArgs = args[0] === 'release' ? args.slice(1) : [...args];
   if (buildArgs.includes('--help')) {
     if (existsSync(resolve(root, 'deploy/scripts/build.mjs'))) return runEntry(root, 'build.mjs', ['--help']);
-    console.log('build [--config <env.conf>]\n产物放入 incoming/<发布目录>/；首次自动创建 .local/env.conf。构建只做构建与打包，插件检查由仓库 CI 与 check 命令承担。'); return 0;
+    console.log('build [--config <env.conf>]\n产物放入 incoming/<发布目录>/；首次自动创建项目根 env.conf。构建只做构建与打包，插件检查由仓库 CI 与 check 命令承担。'); return 0;
   }
   const options = siteArguments(buildArgs);
-  const configPath = resolve(root, options.config ?? '.local/env.conf');
+  const configPath = resolve(root, options.config ?? 'env.conf');
   const framework = existsSync(configPath) && configPath.endsWith('.conf') ? readFrameworkConfig(configPath) : undefined;
   const config = framework?.config ?? (existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf8')) : {});
   // 输入形态由入口决定（源码检出入口 source、发行包入口 archives），站点配置不再有 pluginSource 字段。

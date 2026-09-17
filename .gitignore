@@ -22,10 +22,9 @@ deploy-artifacts/
 !.env.example
 env.conf
 !/env.conf
-# 配置归属：站点配置是仓库根下的 .local/env.conf；私有库中每个项目的配置是该项目根目录的
-# env.conf（子 Agent 并入所属项目，不另建），两者都进版本控制；其余 .local/ 内容
-# （运行数据、产物、凭据缓存）仍然忽略。
-!.local/env.conf
+# 配置归属：私有库中每个项目的配置是该项目根目录的 env.conf（子 Agent 并入所属项目，不另建），
+# 站点配置就是仓库根下的那一份；随公开材料分发的模板是 env.conf.example。
+# 其余 .local/ 内容（运行数据、产物、凭据缓存）仍然忽略。
 !plugins/external/*/env.conf
 !deploy/config/*.conf.example
 *.tgz

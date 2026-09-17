@@ -31,13 +31,17 @@ let checked = 0;
 for (const name of new Set(files)) {
   if (name === 'deepseek-harness') continue;
   const path = resolve(root, name);
-  assert.ok(name === 'env.conf' || !name.split('/').some(part => ['.local', 'data', 'deploy-artifacts', 'node_modules', 'dist', 'env.conf', '.env'].includes(part)), `Non-source file: ${name}`);
+  // 私有配置按配置归属约定只有两处：仓库根 env.conf（框架这个项目的配置）与
+  // plugins/external/<项目>/env.conf（各插件项目自己的配置）。它们按定义含真实值，不做公开断言。
+  const privateConfig = name === 'env.conf' || /^plugins\/external\/[^/]+\/env\.conf$/u.test(name);
+  assert.ok(privateConfig || !name.split('/').some(part => ['.local', 'data', 'deploy-artifacts', 'node_modules', 'dist', 'env.conf', '.env'].includes(part)), `Non-source file: ${name}`);
   assert.ok(!name.endsWith('.tgz') || vendorArchives.has(path), `Undeclared vendor archive in Git: ${name}`);
   assert.ok(existsSync(path) && lstatSync(path).isFile(), `Expected regular source file: ${name}`);
-  if (name === 'env.conf') {
+  // 随公开材料分发的模板必须等于纯默认值；站点配置与项目配置不适用这项检查。
+  if (name === 'env.conf.example') {
     assertPublicFrameworkConfig(readFileSync(path, 'utf8'));
   }
-  if (!/\.(?:md|mjs|js|ts|json|ya?ml|sh|ps1)$/.test(name)) continue;
+  if (!/\.(?:md|mjs|js|ts|json|ya?ml|sh|ps1|conf|example)$/u.test(name)) continue;
   const content = readFileSync(path, 'utf8');
   assert.ok(content.endsWith('\n') && !content.endsWith('\n\n'), `Expected one final newline: ${name}`);
   if (name.endsWith('.md')) {

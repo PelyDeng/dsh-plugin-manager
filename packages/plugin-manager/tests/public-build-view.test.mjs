@@ -28,9 +28,10 @@ test('视图收录公开材料，不含 external 与运行产物', t => {
   }
   // 公开边界按目录与文件清单确定，不按扩展名裁剪：无扩展名的交付材料与 example 源码索引读取的
   // 根级文件都必须在视图里（设计 2.8、7.4）。
-  for (const entry of ['LICENSE', 'NOTICE', 'env.conf', 'test-report.sh', 'packages/plugin-manager/LICENSE', 'plugins/builtin/dsh-auth/LICENSE']) {
+  for (const entry of ['LICENSE', 'NOTICE', 'env.conf.example', 'test-report.sh', 'packages/plugin-manager/LICENSE', 'plugins/builtin/dsh-auth/LICENSE']) {
     assert.ok(existsSync(join(f.output, entry)), `缺少 ${entry}`);
   }
+  assert.ok(!existsSync(join(f.output, 'env.conf')), '视图不得包含站点私有配置');
   assert.ok(!existsSync(join(f.output, 'plugins/external')), '视图不得包含 external 源码');
   assert.ok(!existsSync(join(f.output, 'node_modules')), '视图不得包含已安装依赖');
   assert.ok(!existsSync(join(f.output, 'plugins/builtin/dsh-example/dist')), '视图不得包含构建产物');
@@ -288,9 +289,10 @@ test('没有插件声明构建输入时，公开视图仍能产出完整离线�
   execFileSync(process.execPath, [join(plugin, 'scripts/build-reference.mjs'), '--root', f.output], { windowsHide: true });
   const index = JSON.parse(readFileSync(join(plugin, 'dist/framework-reference.json'), 'utf8'));
   const paths = new Set(index.files.map(file => file.path));
-  for (const path of ['doc/plugin-development.md', 'deploy/README.md', 'scripts/version.mjs', 'packages/plugin-manager/src/plugins.mjs', 'plugins/builtin/dsh-auth/README.md', 'plugins/builtin/dsh-example/README.md', 'env.conf', 'test-report.sh']) {
+  for (const path of ['doc/plugin-development.md', 'deploy/README.md', 'scripts/version.mjs', 'packages/plugin-manager/src/plugins.mjs', 'plugins/builtin/dsh-auth/README.md', 'plugins/builtin/dsh-example/README.md', 'env.conf.example', 'test-report.sh']) {
     assert.ok(paths.has(path), `源码索引缺少公开材料：${path}`);
   }
   assert.ok(!index.files.some(file => file.path.startsWith('plugins/external/')), '源码索引不得包含 external 源码');
   assert.ok(!index.files.some(file => file.path.split('/').includes('.local')), '源码索引不得包含运行数据');
+  assert.ok(!paths.has('env.conf'), '源码索引不得包含站点私有配置');
 });

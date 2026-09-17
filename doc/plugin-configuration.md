@@ -66,7 +66,7 @@
 
 ## 一次配置站点，之后统一应用
 
-站点 build 以私有 `.local/env.conf` 为入口并生成 `.local/deployment.json`；插件业务配置仍各自维护，详见[统一配置](framework-configuration.md)。生成文件保存候选清单和公共参数，不需要手工填写。首次部署及站点字段见[一键部署](first-deployment.md)。以下运行配置仅供自定义管理器集成参考：
+站点 build 以私有 `env.conf` 为入口并生成 `.local/deployment.json`；插件业务配置仍各自维护，详见[统一配置](framework-configuration.md)。生成文件保存候选清单和公共参数，不需要手工填写。首次部署及站点字段见[一键部署](first-deployment.md)。以下运行配置仅供自定义管理器集成参考：
 
 ```json
 {

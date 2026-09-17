@@ -26,7 +26,7 @@ dsh-deployment/
 
 产物合规由**作者在交付前**自检，部署侧不重复检查：作者打包后执行 `dsh-plugin-manager verify-release --release <发布目录>`，它只读目录，退出码 0 表示清单格式、产物摘要、包结构与包内元数据一致。部署者收到目录后想再确认一次，可在**停服前**对 incoming 下的目录跑同一条命令；它不接触部署状态，也不改动任何文件。
 
-首次自动创建 .local/env.conf。新 archives 站点的可编辑业务配置在 .local/config/plugins/<id>/，错误提示会给出实际文件、插件 ID、已知缺项和下一条命令。填写真实必需参数后再执行同一个 build；已有配置不覆盖。无必需业务配置的最小插件应一次执行完成。业务 Schema 错误可能在加载阶段才发现，不能把模板存在当作配置正确。
+首次自动创建 env.conf。新 archives 站点的可编辑业务配置在 .local/config/plugins/<id>/，错误提示会给出实际文件、插件 ID、已知缺项和下一条命令。填写真实必需参数后再执行同一个 build；已有配置不覆盖。无必需业务配置的最小插件应一次执行完成。业务 Schema 错误可能在加载阶段才发现，不能把模板存在当作配置正确。
 
 成功输出访问地址、选中插件、声明探针结果及发布记录。未声明探针的 not-provided 表示未提供业务就绪检查。默认本机地址为 http://127.0.0.1:7902；实际请求和响应还需按插件 README 验证。
 <!-- /excerpt:deployment-start -->
@@ -45,7 +45,7 @@ dsh-deployment/
 
 | 位置 | 操作方式 |
 | --- | --- |
-| .local/env.conf | 站点唯一配置源：站点地址、选集、插件业务配置（DSH_PLUGIN_CONFIG）；随仓库分发，部署机拉取后直接使用 |
+| env.conf | 站点唯一配置源：站点地址、选集、插件业务配置（DSH_PLUGIN_CONFIG）；随仓库分发，部署机拉取后直接使用 |
 | .local/config/plugins/<id>/ | 全新 archives 站点的 plugin.json/runtimeConfig，按提示编辑 |
 | 旧站点或显式 instances 路径 | 沿用原位置，不因换入口自动迁移 |
 | .local/deployment.json、artifacts 内清单/Compose/快照 | 自动生成，不手改 |
@@ -54,7 +54,7 @@ dsh-deployment/
 
 插件业务参数只在 `DSH_PLUGIN_CONFIG` 里维护一份：构建时按插件 ID 派生到各插件运行位置（实例显式引用的 `runtimeConfig`，否则数据根下 `plugins/<id>/env.conf`）。在站点配置里写了某个插件就以它为准——内容一致时不重写，内容不同时覆盖，改了配置在下次构建生效；没有写进 `DSH_PLUGIN_CONFIG` 的插件沿用现场文件。
 
-公网访问应配置代理或 SSH 转发，并核对 `.local/env.conf` 的 public URL、origin、trusted hosts；自定义端口时同步核对 URL。字段及 source/archives/CLI 默认值差异只在[框架配置](framework-configuration.md)维护。新部署包默认 archives，全新源码检出默认 source，两种入口的选集规则相同（留空即全部候选），差异只在候选材料来自源码检出还是发行包。
+公网访问应配置代理或 SSH 转发，并核对 `env.conf` 的 public URL、origin、trusted hosts；自定义端口时同步核对 URL。字段及 source/archives/CLI 默认值差异只在[框架配置](framework-configuration.md)维护。新部署包默认 archives，全新源码检出默认 source，两种入口的选集规则相同（留空即全部候选），差异只在候选材料来自源码检出还是发行包。
 
 ## 更新与恢复
 

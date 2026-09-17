@@ -22,9 +22,9 @@ export function saveJson(path, value) {
 export function loadSite(root, filename, { imagePlatform, desktop = false, inputKind = 'source', legacy = false, initialize = true } = {}) {
   const defaults = siteDefaults(inputKind);
   const runtimePath = resolve(root, '.local/deployment.json');
-  // 旧运行记录不再决定输入来源：站点偏好固定为 .local/env.conf（或显式 --config）。
-  const sitePath = resolve(root, filename ?? '.local/env.conf');
-  if (sitePath === runtimePath) throw new Error('Use .local/env.conf for site preferences; .local/deployment.json is generated.');
+  // 旧运行记录不再决定输入来源：站点偏好固定为项目根 env.conf（或显式 --config）。
+  const sitePath = resolve(root, filename ?? 'env.conf');
+  if (sitePath === runtimePath) throw new Error('Use env.conf for site preferences; .local/deployment.json is generated.');
   if (!existsSync(sitePath)) {
     if (!initialize) {
       const existing = [resolve(root, '.local/site.json'), runtimePath].find(path => existsSync(path));

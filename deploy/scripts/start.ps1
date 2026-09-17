@@ -14,7 +14,7 @@ param(
 )
 $ErrorActionPreference='Stop'
 $arguments=@((Join-Path $PSScriptRoot 'deployment.mjs'),'start')
-$frameworkConfig=Join-Path $PSScriptRoot '../../.local/env.conf'
+$frameworkConfig=Join-Path $PSScriptRoot '../../env.conf'
 $useFrameworkConfig=-not $Config -and -not $env:DEPLOYMENT_CONFIG -and (Test-Path -LiteralPath $frameworkConfig -PathType Leaf)
 if ($PSBoundParameters.ContainsKey('Mode') -or (-not $Config -and -not $env:DEPLOYMENT_CONFIG -and -not $useFrameworkConfig)) {$arguments+=@('--mode',$Mode)}
 if ($useFrameworkConfig) {$arguments+=@('--config',$frameworkConfig)}

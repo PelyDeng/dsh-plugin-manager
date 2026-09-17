@@ -1,4 +1,4 @@
 {
-  "$comment": "牛马大总管的业务存储（PostgreSQL）配置模板：实际值在站点配置 .local/env.conf 的 DSH_PLUGIN_CONFIG.butler 里维护一份，构建时派生成运行配置文件；开发测试也可以直接用环境变量 BUTLER_PG_DSN 传连接串，或用 BUTLER_PG_CONFIG 指向别处的私有文件。dsn 形如 postgresql://用户:密码@主机:5432/库名，每个插件使用独立数据库与独立运行账号；凭据只走环境变量与私有配置，绝不写进插件配置（plugin.json）。",
+  "$comment": "牛马大总管的业务存储（PostgreSQL）配置模板：实际值在站点配置 env.conf 的 DSH_PLUGIN_CONFIG.butler 里维护一份，构建时派生成运行配置文件；开发测试也可以直接用环境变量 BUTLER_PG_DSN 传连接串，或用 BUTLER_PG_CONFIG 指向别处的私有文件。dsn 形如 postgresql://用户:密码@主机:5432/库名，每个插件使用独立数据库与独立运行账号；凭据只走环境变量与私有配置，绝不写进插件配置（plugin.json）。",
   "dsn": "postgresql://用户:密码@主机:5432/库名"
 }

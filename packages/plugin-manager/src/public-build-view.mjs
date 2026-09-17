@@ -20,9 +20,10 @@ import { fileURLToPath } from 'node:url';
 
 /** 公开目录与文件：视图只收录这些顶层项。 */
 export const publicEntries = ['packages', 'plugins/builtin', 'scripts', 'deploy', 'integrations', 'examples', 'doc', '.github'];
-// 根级公开构建文件与模板：含 example 源码索引读取的 env.conf / test-report.sh，
+// 根级公开构建文件与模板：含 example 源码索引读取的 env.conf.example / test-report.sh，
 // 以及 LICENSE/NOTICE 这类没有扩展名、靠扩展名过滤会被丢掉的交付材料。
-export const publicFiles = ['package.json', 'pnpm-workspace.yaml', 'pnpm-lock.yaml', 'README.md', 'README.en.md', 'AGENTS.md', 'LICENSE', 'NOTICE', 'env.conf', 'test-report.sh', '.gitattributes', '.npmrc', '.nvmrc', 'tsconfig.base.json'];
+// 站点实际配置 env.conf 是私有文件，不在这里，也不会进入公开视图或发行包。
+export const publicFiles = ['package.json', 'pnpm-workspace.yaml', 'pnpm-lock.yaml', 'README.md', 'README.en.md', 'AGENTS.md', 'LICENSE', 'NOTICE', 'env.conf.example', 'test-report.sh', '.gitattributes', '.npmrc', '.nvmrc', 'tsconfig.base.json'];
 /** 公开构建元数据：视图清单、workspace 定义与匹配锁；三者必须来自同一份公共框架输入。 */
 export const publicInputFiles = ['package.json', 'pnpm-workspace.yaml', 'pnpm-lock.yaml'];
 /** 交付记录文件名与换行规则：交付物按 Git 规范形式（LF）落盘并记录摘要。 */

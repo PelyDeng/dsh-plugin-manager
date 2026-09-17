@@ -219,10 +219,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         const value = args.shift(); if (!value || value.startsWith('--')) throw new Error(`Missing value for ${arg}.`);
         options[arg === '--operation-id' ? 'operationId' : arg.slice(2)] = value;
       } else if (arg === '--help') {
-        console.log('build-host-image.sh [--config <root-relative-file>] [--publish] [--resume <host-image.json>] [--artifacts <directory>] [--operation-id <id>] [--working-tree]\nDefaults to <root>/.local/env.conf when present; explicit legacy image conf is supported.'); process.exit(0);
+        console.log('build-host-image.sh [--config <root-relative-file>] [--publish] [--resume <host-image.json>] [--artifacts <directory>] [--operation-id <id>] [--working-tree]\nDefaults to <root>/env.conf when present; explicit legacy image conf is supported.'); process.exit(0);
       } else throw new Error(`Unknown argument: ${arg}`);
     }
-    const configured = resolve(repositoryRoot, options.root ?? '.', '.local/env.conf');
+    const configured = resolve(repositoryRoot, options.root ?? '.', 'env.conf');
     if (!options.config && existsSync(configured)) options.config = configured;
     console.log(JSON.stringify(buildHostImage(options), null, 2));
   } catch (error) { console.error(error.message); process.exitCode = 1; }

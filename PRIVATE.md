@@ -96,7 +96,7 @@ DeepSeek-V4.1-Flash 使用公共框架提供的[模型声明](deploy/models/deep
 
 ## 已部署实例的运维
 
-实例插件选集以私有 `.local/env.conf` 的 `DSH_PLUGINS` 及生成的发布清单为准；各插件认证模式按自己的 `plugin.json` 维护。管理员管理普通账号的应用授权。默认更新入口会一次导入旧 site.json/deployment.json，保留已解析路径与原文件；已有未完成操作继续使用原输入恢复。当前镜像与发布清单由 `.local/deployment.json` 记录。
+实例插件选集以私有 `env.conf` 的 `DSH_PLUGINS` 及生成的发布清单为准；各插件认证模式按自己的 `plugin.json` 维护。管理员管理普通账号的应用授权。默认更新入口会一次导入旧 site.json/deployment.json，保留已解析路径与原文件；已有未完成操作继续使用原输入恢复。当前镜像与发布清单由 `.local/deployment.json` 记录。
 
 Compose 项目名为 `dsh-plugin-manager`，实际配置路径由 `.local/artifacts/active-compose.json` 指向，不使用固定的历史产物目录。启用 example 时健康检查包含 `/example/ready`。在仓库根操作：
 
