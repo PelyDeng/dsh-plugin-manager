@@ -965,9 +965,13 @@ body[data-settings="open"] .settings {
 .dcard[open] > .dcard__bar::before { content: '▾'; }
 .dcard__bar:hover { background: #ffffff8c; border-radius: var(--bt-wobble-sm); }
 .dcard__bar-text { font-family: var(--bt-hand); font-size: 12.5px; color: var(--bt-ink-soft); }
-/* 收起之后又有新进展：一个小圆点，展开即消失。 */
-.dcard__fresh { margin-left: 2px; }
+/* 收起之后又有新进展：**看得见的文字**加一个小圆点，展开即消失（120ms 淡入）。 */
+.dcard__fresh {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: 2px;
+  font-size: 11px; color: var(--bt-sky); animation: dcard-fade 120ms ease-out 1;
+}
 .dcard__fresh[hidden] { display: none; }
+@keyframes dcard-fade { from { opacity: 0 } to { opacity: 1 } }
 
 .dcard__tools { display: inline-flex; gap: 6px; margin-left: auto; }
 .dcard__tool {
@@ -992,17 +996,28 @@ body[data-settings="open"] .settings {
   min-height: 44px; padding: 6px 8px; text-align: left;
   font-family: inherit; color: inherit;
   background: #ffffffb8; border: 1.5px solid var(--bt-line); border-radius: var(--bt-wobble-sm);
-  cursor: pointer;
+  cursor: pointer; position: relative;
   transition: background 120ms ease-out, border-color 120ms ease-out, transform 90ms ease-out;
 }
 .dcard__cell:hover { background: #fff; border-color: var(--bt-stroke); }
 .dcard__cell:active { transform: translateY(1px); background: var(--bt-paper); }
 .dcard__cell:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 2px; }
+/*
+ * 选中态：强调色描边 + 8% 强调色底 + 右上角小对勾。
+ *
+ * ⚠️ **不能用 `box-shadow` 画选中框**：状态变化时的脉冲动画也动画 `box-shadow`，而 CSS 动画
+ * 声明优先于普通声明——脉冲那 600ms 里选中框会消失，看起来像"选中被取消了"。所以选中走
+ * 边框与底色，脉冲独占 `box-shadow`。
+ */
 .dcard__cell--active {
-  border-color: var(--bt-stroke); background: #fff;
-  box-shadow: inset 0 0 0 1px var(--bt-stroke);
+  border-color: var(--bt-sky);
+  background: #fff;
+  background: color-mix(in srgb, var(--bt-sky) 8%, #fff);
 }
-.dcard__avatar { flex: none; }
+.dcard__cell--active::after {
+  content: '✓'; position: absolute; top: 3px; right: 5px;
+  font-size: 10px; line-height: 1; color: var(--bt-sky);
+}
 .dcard__col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .dcard__head { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
 .dcard__name { font-size: 12.5px; font-weight: 700; }
@@ -1028,20 +1043,32 @@ body[data-settings="open"] .settings {
   font-family: var(--bt-hand); font-size: 12.5px; color: var(--bt-ink-soft);
   padding: 0 2px 4px;
 }
-/* 结果区高度稳定：换成员时卡片不会跳（超出在区内滚动）。 */
-.dcard__slots { min-height: 76px; max-height: 340px; overflow: auto; }
+/*
+ * 结果区高度**固定**：换成员、秒数跳动都不会让卡片长高变矮（超出在区内滚动）。
+ *
+ * 与设计图一致（三到四行的窗口），高度写死是有意的：`min-height/max-height` 那种写法下，
+ * 一行的结论与十行的过程会让卡片在两档之间来回弹，用户点的每一格都在改变页面的高度。
+ */
+.dcard__slots { height: 172px; overflow: auto; }
 .dcard__slot { display: block; }
 .dcard__slot[hidden] { display: none; }
+/* 还没有内容的格子：不留空白框，直接说明现在是什么状况。 */
+.dcard__empty { margin: 0; font-size: 12px; color: var(--bt-ink-faint); }
 /* 成员名字与头像已经在格子里了，结果区不再重复一遍。 */
 .dcard__slot .msg__head, .dcard__slot > .msg > .avatar { display: none; }
 .dcard__slot .bubble { margin-top: 0; }
 
-/* 「只看结论」：把过程行收起来，交回的内容照旧。 */
+/*
+ * 「只看结论」：把过程行收起来，交回的内容照旧。
+ *
+ * ⚠️ 失败/取消的**原因原文**也住在 `.msg__meta` 里（成员已经有正文时另起一行），那是用户最
+ * 需要看到的一句话 ⇒ 带 `--keep` 的那种不藏（同一失败在"还没吐字"时走正文，本来也不会被藏）。
+ */
 .dcard__slots--result-only .think,
 .dcard__slots--result-only .tool-line,
 .dcard__slots--result-only .typing,
 .dcard__slots--result-only .progress,
-.dcard__slots--result-only .msg__meta { display: none; }
+.dcard__slots--result-only .msg__meta:not(.msg__meta--keep) { display: none; }
 
 /* 窄屏：一行两个，再窄一个（格子里的目标行本来就只留一行）。 */
 @media (max-width: 720px) {
@@ -1051,9 +1078,9 @@ body[data-settings="open"] .settings {
   .dcard__grid { grid-template-columns: minmax(0, 1fr); }
 }
 
-/* 「减少动态效果」：只保留底色与描边的变化，去掉位移、脉冲与高度动画。 */
+/* 「减少动态效果」：只保留底色与描边的变化，去掉位移、脉冲与淡入。 */
 @media (prefers-reduced-motion: reduce) {
   .dcard, .dcard__cell, .dcard__tool { transition: none; }
   .dcard__cell:active, .dcard__tool:active { transform: none; }
-  .dcard__cell--pulse { animation: none; }
+  .dcard__cell--pulse, .dcard__fresh { animation: none; }
 }

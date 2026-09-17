@@ -21,7 +21,9 @@ const source = readFileSync(fileURLToPath(new URL('../web/app.js', import.meta.u
 interface StubNode {
   tag: string
   className: string
+  id: string
   children: StubNode[]
+  parent: StubNode | null
   dataset: Record<string, string>
   hidden: boolean
   open: boolean
@@ -44,6 +46,7 @@ interface StubNode {
   removeAttribute(name: string): void
   appendChild(child: StubNode): StubNode
   prepend(child: StubNode): void
+  replaceChildren(...children: StubNode[]): void
   addEventListener(name: string, run: (event: StubEvent) => void): void
   fire(name: string, event?: Partial<StubEvent>): void
   querySelector(selector: string): StubNode | null
@@ -76,8 +79,13 @@ function node(tag = '', className = ''): StubNode {
     deleteProperty: (_target, key) => { delete attrs[`data-${kebab(String(key))}`]; return true },
   })
   const element: StubNode = {
-    tag, className, children: [], dataset, hidden: false, open: false, type: '', textContent: '', title: '', tabIndex: -1,
+    tag, className, id: '', children: [], parent: null, dataset, hidden: false, open: false, type: '', textContent: '', title: '', tabIndex: -1,
     focused: false, attrs, handlers: {},
+    replaceChildren(...children: StubNode[]) {
+      // 真 DOM 的 replaceChildren：一次换掉全部子节点（历史卡升级用的就是它）。
+      for (const child of children) child.parent = element
+      element.children = children
+    },
     classList: {
       add(name) { classes.add(name); element.className = [...classes].join(' ') },
       remove(name) { classes.delete(name); element.className = [...classes].join(' ') },
@@ -91,8 +99,8 @@ function node(tag = '', className = ''): StubNode {
     setAttribute(name, value) { element.attrs[name] = String(value) },
     getAttribute(name) { return element.attrs[name] ?? null },
     removeAttribute(name) { delete element.attrs[name] },
-    appendChild(child) { element.children.push(child); return child },
-    prepend(child) { element.children.unshift(child) },
+    appendChild(child) { child.parent = element; element.children.push(child); return child },
+    prepend(child) { child.parent = element; element.children.unshift(child) },
     addEventListener(name, run) { (element.handlers[name] ??= []).push(run) },
     fire(name, event = {}) {
       const full: StubEvent = {
@@ -105,7 +113,14 @@ function node(tag = '', className = ''): StubNode {
     },
     querySelector(selector) { return find(element, selector) },
     focus() { element.focused = true },
-    remove() { element.children = [] },
+    // 真实 DOM 的 remove() 是**从父节点摘掉自己**（不是清空自己的子节点）：占位说明被撤掉
+    // 这件事只有按这个语义才测得到。
+    remove() {
+      const parent = element.parent
+      if (parent === null) return
+      parent.children = parent.children.filter(child => child !== element)
+      element.parent = null
+    },
   }
   return element
 }
@@ -149,6 +164,9 @@ interface Loaded {
   toggleDispatchResultOnly(panel: unknown, on: boolean): void
   attachToDispatch(view: unknown, event: Record<string, unknown>, panel?: unknown): void
   updateCardCell(panel: unknown, id: string): void
+  settleCardForSummary(state: string, at: number): void
+  cardPrefs(taskId: string): Record<string, unknown>
+  saveCardPref(taskId: string, patch: Record<string, unknown>): void
   state: { dispatch: unknown; taskId: string | null }
   localStorage: ReturnType<typeof storage>
 }
@@ -175,7 +193,9 @@ function load(now = 1_000_000): Loaded {
     state, localStorage, make,
     displayNameOf: (id: string) => `成员-${id}`,
     avatarNode: (id: string) => make('div', 'avatar avatar--sm', id),
-    formatElapsed: (from: number, to: number) => `${Math.max(0, Math.round((to - from) / 1000))} 秒`,
+    // 与真实现同一个签名：`to` 缺省是"现在"（进行中的秒数按它算），替身不能少这个默认值，
+    // 否则"定格"与"跳表"这两条断言测的就不是同一件事。
+    formatElapsed: (from: number, to: number = now) => `${Math.max(0, Math.round((to - from) / 1000))} 秒`,
     STATE_TEXT: { queued: '排队中', running: '在干活', succeeded: '已完成', failed: '失败', cancelled: '已停止', waiting_user: '等你回话', external_pending: '待外部处理', completed: '已完成' },
     DISPATCH_TONE: { succeeded: 'ok', completed: 'ok', failed: 'error', cancelled: 'error', waiting_user: 'warn', external_pending: 'warn' },
     CARD_STATE_TEXT: { queued: '排队', dispatched: '已收到', running: '进行中', waiting_user: '等你回话', external_pending: '待外部处理', partial: '部分完成', succeeded: '已完成', completed: '已完成', failed: '失败', cancelled: '已停止', summarizing: '在总结' },
@@ -189,13 +209,13 @@ function load(now = 1_000_000): Loaded {
   const names = Object.keys(globals)
   const body = [
     // 模块级的那一个定时器与偏好前缀：取函数时一并声明，免得替身里没有它们。
-    'let cardTicker = null', "const CARD_PREF_PREFIX = 'butler.card.'",
-    pick('cardPrefs'), pick('saveCardPref'), pick('cardStateText'), pick('cardWorking'), pick('cardSettled'),
+    'let cardTicker = null', 'let cardSeq = 0', "const CARD_PREF_PREFIX = 'butler.card.'", "const TASK_CARD_CACHE_LIMIT = 50",
+    pick('cardPrefs'), pick('saveCardPref'), pick('cardStateText'), pick('cardSettled'), pick('emptySlotHint'),
     pick('cardElapsedText'), pick('syncCardTicker'), pick('mountDispatch'), pick('updateCardCell'),
     pick('toggleDispatchResultOnly'), pick('renderDispatchHeader'), pick('selectDispatch'),
-    pick('attachToDispatch'), pick('pulseCardCell'),
+    pick('attachToDispatch'), pick('pulseCardCell'), pick('settleCardForSummary'),
   ].join('\n')
-  const loaded = Function(...names, `${body}\nreturn { mountDispatch, selectDispatch, renderDispatchHeader, toggleDispatchResultOnly, attachToDispatch, updateCardCell, cardPrefs, saveCardPref }`)(
+  const loaded = Function(...names, `${body}\nreturn { mountDispatch, selectDispatch, renderDispatchHeader, toggleDispatchResultOnly, attachToDispatch, updateCardCell, cardPrefs, saveCardPref, settleCardForSummary }`)(
     ...names.map(name => globals[name]),
   ) as Loaded
   loaded.state = state
@@ -373,8 +393,9 @@ describe('调度卡', () => {
       if (body === undefined) throw new Error(`${name} 源码未找到`)
       return body
     }
-    const loadUpgrade = (task: Record<string, unknown>, record: Record<string, unknown> | Error) => {
-      const calls: { cards: unknown[]; replaced: unknown[][] } = { cards: [], replaced: [] }
+    const loadUpgrade = (task: Record<string, unknown>, records: (Record<string, unknown> | Error)[]) => {
+      const calls: { cards: { value: Record<string, unknown>; options: { live?: boolean } }[]; replaced: StubNode[][]; fetches: number } =
+        { cards: [], replaced: [], fetches: 0 }
       const makeNode = (tag: string, className?: string, text?: string) => {
         const element = node(tag, className ?? '')
         if (text !== undefined) element.textContent = String(text)
@@ -384,33 +405,169 @@ describe('调度卡', () => {
       const wrap = node('div', 'entry-task')
       ;(wrap as unknown as { isConnected: boolean }).isConnected = true
       wrap.replaceChildren = ((...nodes: StubNode[]) => { calls.replaced.push(nodes); wrap.children = nodes }) as never
-      const api = { task: async () => { if (record instanceof Error) throw record; return record } }
-      const renderTaskCard = (value: unknown, options: unknown) => { calls.cards.push({ value, options }); return makeNode('details', 'dcard') }
-      const loaded = Function('api', 'renderTaskCard', 'taskSummaryCard', 'cardPrefs', 'make',
+      const api = {
+        task: async () => {
+          const next = records.length > 1 ? records.shift()! : records[0]!
+          calls.fetches += 1
+          if (next instanceof Error) throw next
+          return next
+        },
+      }
+      const renderTaskCard = (value: Record<string, unknown>, options: { live?: boolean }) => { calls.cards.push({ value, options }); return makeNode('details', 'dcard') }
+      const loaded = Function('api', 'renderTaskCard', 'taskSummaryCard', 'cardPrefs', 'make', 'stabilizeViewport',
         `const taskCardRequests = new Map()\n${pickFn('taskRecord')}\n${pickFn('upgradeTaskEntry')}\nreturn { upgradeTaskEntry, taskCardRequests }`,
-      )(api, renderTaskCard, (value: unknown) => makeNode('button', 'task-card'), () => ({}), makeNode) as {
+      )(api, renderTaskCard, (value: unknown) => makeNode('button', 'task-card'), () => ({}), makeNode, (mutate: () => void) => { mutate() }) as {
         upgradeTaskEntry(wrap: StubNode, task: Record<string, unknown>): Promise<void>
         taskCardRequests: Map<string, unknown>
       }
-      return { ...loaded, wrap, calls, task }
+      /** 另一个「活在文档里」的条目节点：并发/再次渲染都要走真实形状（`isConnected` 守卫）。 */
+      const connected = () => {
+        const other = makeNode('div', 'entry-task')
+        ;(other as unknown as { isConnected: boolean }).isConnected = true
+        return other
+      }
+      return { ...loaded, wrap, calls, task, connected }
     }
 
     // 正常：详情回来之后换成调度卡，并且**不接管**实时那一张的位置（历史可能同时有好几张）。
-    const ok = loadUpgrade({ id: 'task-h1' }, { id: 'task-h1', subtasks: [] })
+    const ok = loadUpgrade({ id: 'task-h1' }, [{ id: 'task-h1', state: 'running', subtasks: [] }])
     await ok.upgradeTaskEntry(ok.wrap, ok.task)
     expect(ok.calls.cards).toHaveLength(1)
-    expect((ok.calls.cards[0] as { options: { live: boolean } }).options.live).toBe(false)
-    expect(ok.calls.replaced.at(-1)![0]!.className).toBe('dcard')
-    // 同一批任务只取一次详情。
-    expect(ok.taskCardRequests.size).toBe(1)
+    expect(ok.calls.cards[0]!.options.live).toBe(false)
+    expect((ok.calls.replaced.at(-1)! as StubNode[])[0]!.className).toBe('dcard')
+
+    // 并发渲染同一个任务只问一次服务端；**但不把结果长期缓存**：结局会变，缓存住第一次的
+    // 快照，用户切走再切回就会看到一张"永远进行中、秒数还在跳"的历史卡（评审 R2）。
+    const fresh = loadUpgrade({ id: 'task-h3' }, [
+      { id: 'task-h3', state: 'running', subtasks: [] },
+      { id: 'task-h3', state: 'completed', subtasks: [] },
+    ])
+    await Promise.all([fresh.upgradeTaskEntry(fresh.wrap, fresh.task), fresh.upgradeTaskEntry(fresh.connected(), fresh.task)])
+    expect(fresh.calls.fetches).toBe(1)
+    const later = fresh.connected()
+    await fresh.upgradeTaskEntry(later, fresh.task)
+    expect(fresh.calls.fetches).toBe(2)
+    expect(fresh.calls.cards.at(-1)!.value.state).toBe('completed')
+    expect(later.children[0]!.className).toBe('dcard')
 
     // 读不到：摘要卡留着 + 如实说明（不是空白，也不是假成功）。
-    const bad = loadUpgrade({ id: 'task-h2' }, new Error('网络异常'))
+    const bad = loadUpgrade({ id: 'task-h2' }, [new Error('网络异常')])
     await bad.upgradeTaskEntry(bad.wrap, bad.task)
     expect(bad.calls.cards).toHaveLength(0)
-    const shown = bad.calls.replaced.at(-1)!
+    const shown = bad.calls.replaced.at(-1)! as StubNode[]
     expect(shown[0]!.className).toBe('task-card')
     expect(shown[1]!.textContent).toContain('调度卡读不到')
+  })
+
+  it('折叠态挂在按钮的 aria-expanded 上，且随折叠同步（读屏拿得到同一份事实）', () => {
+    const page = load()
+    const card = page.mountDispatch(subtasks, { taskId: 'task-10' })
+    const fold = panelOf(card).foldButton as StubNode
+    expect(fold.getAttribute('aria-expanded')).toBe('true')
+    fold.fire('click')
+    card.fire('toggle')
+    expect(fold.getAttribute('aria-expanded')).toBe('false')
+    expect(fold.textContent).toBe('展开')
+    fold.fire('click')
+    card.fire('toggle')
+    expect(fold.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('tab 与它控制的结果格成对（aria-controls ↔ aria-labelledby），折叠时焦点不留在隐藏格子上', () => {
+    const page = load()
+    const card = page.mountDispatch(subtasks, { taskId: 'task-11' })
+    const panel = panelOf(card)
+    const cell = cellOf(card, 's1')
+    const slot = panel.slots.get('s1') as StubNode
+    expect(cell.getAttribute('aria-controls')).toBe(slot.id)
+    expect(slot.getAttribute('role')).toBe('tabpanel')
+    expect(slot.getAttribute('aria-labelledby')).toBe(cell.id)
+    expect(slot.id).not.toBe('')
+    // Esc 收起之后焦点交给还看得见的折叠按钮（不能停在看不见的格子上）。
+    card.open = true
+    card.fire('keydown', { key: 'Escape' })
+    expect(card.open).toBe(false)
+    expect((panel.foldButton as StubNode).focused).toBe(true)
+  })
+
+  it('还没有内容的格子给一句说明，内容一到就撤掉（不留空白框）', () => {
+    const page = load()
+    const card = page.mountDispatch(subtasks, { taskId: 'task-12' })
+    const panel = panelOf(card)
+    const slot = panel.slots.get('s3') as StubNode
+    expect(slot.querySelector!('.dcard__empty')!.textContent).toBe('还没开始，等前一步交回材料。')
+    // 成员第一段输出到了：占位说明撤掉，气泡进来。
+    const view = { msg: node('div', 'msg'), body: '在写了', terminal: false }
+    page.attachToDispatch(view, { id: 's3', state: 'running', time: 1_005_000 }, panel)
+    expect(slot.children).toContain(view.msg)
+    expect(slot.querySelector('.dcard__empty')).toBe(null)
+  })
+
+  it('等你回话/待外部处理/终态的秒数都定格（等你回话可能挂几小时，不能一直往上加）', () => {
+    const page = load()
+    const card = page.mountDispatch(subtasks, { taskId: 'task-13' })
+    const panel = panelOf(card)
+    const view = { msg: node('div', 'msg'), body: '先看了一部分', terminal: false }
+    // 夹具的"现在"是 1_000_000；进行中的秒数按 now - since 走，所以事件时间取在这之前。
+    page.attachToDispatch(view, { id: 's3', state: 'dispatched', time: 900_000 }, panel)
+    page.attachToDispatch(view, { id: 's3', state: 'running', time: 903_000 }, panel)
+    const elapsed = cellOf(card, 's3').querySelector('.dcard__elapsed')!
+    expect(elapsed.getAttribute('data-live')).toBe('1')
+    expect(elapsed.textContent).toBe('100 秒')
+    // 进入等待：秒数在这里定格（按进入等待那一刻算），不再往上走。
+    page.attachToDispatch(view, { id: 's3', state: 'waiting_user', time: 905_000 }, panel)
+    expect(elapsed.textContent).toBe('5 秒')
+    expect(elapsed.getAttribute('data-live')).toBe(null)
+    // 回来接着干：照旧跳表。
+    page.attachToDispatch(view, { id: 's3', state: 'running', time: 906_000 }, panel)
+    expect(elapsed.getAttribute('data-live')).toBe('1')
+    // 收尾的状态也定格。
+    page.attachToDispatch(view, { id: 's3', state: 'external_pending', time: 908_000 }, panel)
+    expect(elapsed.textContent).toBe('8 秒')
+    expect(elapsed.getAttribute('data-live')).toBe(null)
+  })
+
+  it('一轮收尾的汇总让还在动的格子收口成「已停止」；暂停中的汇总不动它们', () => {
+    const page = load()
+    const card = page.mountDispatch(subtasks, { taskId: 'task-14' })
+    const panel = panelOf(card)
+    const view = { msg: node('div', 'msg'), body: '', terminal: false }
+    page.attachToDispatch(view, { id: 's2', state: 'running', time: 900_000 }, panel)
+    expect(cellOf(card, 's2').querySelector('.dcard__statetext')!.textContent).toBe('进行中')
+    // 暂停（等你回话/待外部处理）不是收尾：成员真的还在等，不能说成已停止。
+    page.settleCardForSummary('waiting_user', 950_000)
+    expect(cellOf(card, 's2').querySelector('.dcard__statetext')!.textContent).toBe('进行中')
+    // 收尾：还没定论的格子一律收口，秒数也停。
+    page.settleCardForSummary('failed', 960_000)
+    expect(cellOf(card, 's2').querySelector('.dcard__statetext')!.textContent).toBe('已停止')
+    expect(cellOf(card, 's2').querySelector('.dcard__elapsed')!.getAttribute('data-live')).toBe(null)
+    expect(panel.title.textContent).toBe('4 位成员 · 4 位没成')
+  })
+
+  it('「只看结论」不藏失败原因的原文（CSS 与行内类名成对，改任一侧就红）', () => {
+    const css = readFileSync(fileURLToPath(new URL('../web/style.css', import.meta.url)), 'utf8')
+    // 失败/取消的原因原文住在 `.msg__meta` 里；「只看结论」按通配藏 `.msg__meta` 会把它一起藏掉，
+    // 而那是用户最需要看到的一句话 ⇒ 这一条必须带 `--keep` 豁免。
+    expect(css).toContain('.dcard__slots--result-only .msg__meta:not(.msg__meta--keep) { display: none; }')
+    expect(source).toContain("make('div', 'msg__meta msg__meta--keep', event.detail)")
+  })
+
+  it('卡片已被清掉就不再往里写成员消息（`state.dispatch` 不会自己归零）', () => {
+    const page = load()
+    const card = page.mountDispatch(subtasks, { taskId: 'task-15' })
+    const panel = panelOf(card)
+    const view = { msg: node('div', 'msg'), body: '', terminal: false }
+    // 线程被清空：卡片已经不在文档里（真实 DOM 里 `isConnected === false`）。
+    ;(card as unknown as { isConnected: boolean }).isConnected = false
+    page.attachToDispatch(view, { id: 's1', state: 'running', time: 999_000 }, panel)
+    // 结果格里只有那句占位说明，成员消息没有被搬进来（状态也没被改）。
+    expect(panel.slots.get('s1').children).not.toContain(view.msg)
+    expect(panel.states.get('s1')).toBe('dispatched')
+    // 重建路径在卡片挂进线程之前就在填内容：`building` 显式放行。
+    panel.building = true
+    page.attachToDispatch(view, { id: 's1', state: 'running', time: 999_000 }, panel)
+    expect(panel.slots.get('s1').children).toContain(view.msg)
+    expect(panel.states.get('s1')).toBe('running')
   })
 
   it('复制当前成员正文：成功报「已复制」，没有内容时如实报失败', async () => {

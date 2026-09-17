@@ -591,6 +591,9 @@ function butlerSettle(text, time) {
  */
 const CARD_PREF_PREFIX = 'butler.card.'
 
+/** 卡片元素 id 的自增序号：tab 与它控制的结果格要成对，id 必须唯一。 */
+let cardSeq = 0
+
 function cardPrefs(taskId) {
   if (typeof taskId !== 'string' || taskId === '') return {}
   try {
@@ -627,14 +630,26 @@ function cardStateText(value) {
   return CARD_STATE_TEXT[value] ?? STATE_TEXT[value] ?? String(value ?? '')
 }
 
-/** 还在动的状态（用于"几位在干活"、秒数跳动与「有更新」提示）。 */
-function cardWorking(value) {
-  return value === undefined || ['queued', 'dispatched', 'running', 'summarizing'].includes(value)
+/** 有定论的状态：到了这些状态，秒数不再往上走。
+ *
+ * ⚠️ `waiting_user` 必须算在内：等你回话可能挂几个小时，秒数一直往上加是在骗人
+ * （它已经不是"正在算"了）。`partial` 是任务级的收尾态，子任务层到不了，一并收进来无妨。
+ */
+function cardSettled(value) {
+  return ['succeeded', 'completed', 'failed', 'cancelled', 'external_pending', 'waiting_user', 'partial'].includes(value ?? '')
 }
 
-/** 有定论的状态：到了这些状态，秒数不再往上走。 */
-function cardSettled(value) {
-  return ['succeeded', 'completed', 'failed', 'cancelled', 'external_pending'].includes(value ?? '')
+/**
+ * 结果区里还没有内容时的说明。
+ *
+ * 不留空白框：排队/进行中都是有意义的状态，直接写清楚；成员的第一段输出到达后由
+ * ttachToDispatch 撤掉这句话。
+ */
+function emptySlotHint(value) {
+  if (value === 'queued' || value === undefined) return '还没开始，等前一步交回材料。'
+  if (value === 'waiting_user') return '在等你回话。'
+  if (value === 'external_pending') return '材料交回来了，还有事在别处办。'
+  return '正在做，还没有可看的内容。'
 }
 
 /** 结果区标题：跟着选中成员的状态变，用户不用猜自己在看什么。 */
@@ -714,13 +729,16 @@ function mountDispatch(subtasks, options = {}) {
   const taskId = typeof options.taskId === 'string' && options.taskId !== '' ? options.taskId : (state.taskId ?? '')
   const prefs = cardPrefs(taskId)
   const open = typeof prefs.open === 'boolean' ? prefs.open : options.defaultOpen !== false
+  const panelId = `c${++cardSeq}`
   const details = make('details', 'dcard')
   details.open = open
   if (taskId !== '') details.dataset.taskId = taskId
   const bar = make('summary', 'dcard__bar')
   const title = make('span', 'dcard__bar-text')
-  /** 「有更新」小圆点：收起时才有东西可提示（展开时更新看得见）。 */
-  const fresh = make('span', 'dcard__fresh dot dot--running')
+  /** 「有更新」提示：收起时才有东西可提示（展开时更新看得见）。文字 + 小圆点，不只是个点。 */
+  const fresh = make('span', 'dcard__fresh')
+  fresh.appendChild(make('span', 'dot dot--running'))
+  fresh.appendChild(make('span', null, '有更新'))
   fresh.hidden = true
   fresh.title = '收起之后又有了新进展'
   const tools = make('div', 'dcard__tools')
@@ -734,6 +752,8 @@ function mountDispatch(subtasks, options = {}) {
   result.appendChild(slots)
   const slots_ = new Map()
   const buttons = new Map()
+  /** 成员 id → 结果区里那句"还没开始/正在做"的占位说明（成员输出到达时撤掉）。 */
+  const empty = new Map()
   /** 每位成员当前可复制的正文：取的是它的累积正文（流式期间也成立）。 */
   const texts = new Map()
 
@@ -752,6 +772,8 @@ function mountDispatch(subtasks, options = {}) {
     texts,
     /** 成员 id → 当前状态：状态条计数、结果区标题、秒数都从它读。 */
     states: new Map(),
+    /** 与上面那个 `empty` 是同一张表（`attachToDispatch` 从面板对象上读它）。 */
+    empty,
     /** 成员 id → 开始/结束时刻（重派会重置开始时刻）。 */
     since: new Map(),
     until: new Map(),
@@ -762,15 +784,18 @@ function mountDispatch(subtasks, options = {}) {
   }
 
   const select = id => selectDispatch(panel, id)
+  // 卡片内的元素 id：tab 与它控制的结果格要成对（读屏才知道"这个选项对应哪一块内容"）。
+  const idPrefix = `dcard-${panelId}`
   for (const subtask of subtasks) {
     const cell = make('button', 'dcard__cell')
     cell.type = 'button'
+    cell.id = `${idPrefix}-tab-${subtask.id}`
     cell.dataset.id = subtask.id
     cell.dataset.handle = `@${subtask.agentId}`
     cell.setAttribute('role', 'tab')
     cell.setAttribute('aria-selected', 'false')
+    cell.setAttribute('aria-controls', `${idPrefix}-panel-${subtask.id}`)
     const avatar = avatarNode(subtask.agentId, 'sm')
-    avatar.classList.add('dcard__avatar')
     cell.appendChild(avatar)
     const col = make('span', 'dcard__col')
     const head = make('span', 'dcard__head')
@@ -792,7 +817,14 @@ function mountDispatch(subtasks, options = {}) {
     grid.appendChild(cell)
 
     const slot = make('section', 'dcard__slot')
+    slot.id = `${idPrefix}-panel-${subtask.id}`
+    slot.setAttribute('role', 'tabpanel')
+    slot.setAttribute('aria-labelledby', `${idPrefix}-tab-${subtask.id}`)
     slot.hidden = true
+    // 还没有交回内容时不留空白框：写清楚现在是什么状况，内容一到就撤掉这句话。
+    const hint = make('p', 'dcard__empty', emptySlotHint(subtask.state))
+    slot.appendChild(hint)
+    empty.set(subtask.id, hint)
     slots.appendChild(slot)
 
     panel.states.set(subtask.id, subtask.state ?? 'queued')
@@ -818,6 +850,8 @@ function mountDispatch(subtasks, options = {}) {
     if (event.key !== 'Escape' || !details.open) return
     event.preventDefault()
     details.open = false
+    // 收起之后焦点不能留在看不见的格子里：交给还看得见的折叠按钮。
+    fold.focus?.()
   })
 
   // 「只看结论」：过程行（思考、工具行、打字点）收起来，只留成员交回的结论。
@@ -850,6 +884,9 @@ function mountDispatch(subtasks, options = {}) {
   fold.type = 'button'
   fold.textContent = open ? '折叠' : '展开'
   fold.title = '收起或展开这张卡（Esc 也能收起）'
+  // 折叠态同时挂在按钮上（`aria-expanded`）：原生 `<details>` 只把状态给状态条那一层，
+  // 读屏走到这个按钮时得有同一份事实。
+  fold.setAttribute('aria-expanded', open ? 'true' : 'false')
   fold.addEventListener('click', event => {
     event.preventDefault()
     event.stopPropagation()
@@ -870,6 +907,7 @@ function mountDispatch(subtasks, options = {}) {
   // 折叠状态落到本机偏好；重新展开时「有更新」提示收掉（更新已经看得见了）。
   details.addEventListener('toggle', () => {
     fold.textContent = details.open ? '折叠' : '展开'
+    fold.setAttribute('aria-expanded', details.open ? 'true' : 'false')
     if (details.open) fresh.hidden = true
     saveCardPref(taskId, { open: details.open })
   })
@@ -882,6 +920,8 @@ function mountDispatch(subtasks, options = {}) {
   renderDispatchHeader(panel)
   toggleDispatchResultOnly(panel, panel.resultOnly)
   if (panel.active !== null) select(panel.active)
+  // 挂进线程之后那些 `data-live` 的格子才数得到；这里补一次，免得计时器要等第一个事件才起表。
+  syncCardTicker()
   return details
 }
 
@@ -986,8 +1026,18 @@ function selectDispatch(panel, id) {
  */
 function attachToDispatch(view, event, panel = state.dispatch) {
   if (panel === null || panel === undefined || !panel.slots.has(event.id)) return
+  // 卡片已经被清掉（切会话、开新对话把线程整棵子树移走了）就不再往里写：`state.dispatch`
+  // 不会自己归零，只靠调用方的守卫不够。重建路径在卡片挂进线程**之前**就在填内容，
+  // 所以那时用 `building` 显式放行。
+  if (panel.details.isConnected === false && panel.building !== true) return
   const slot = panel.slots.get(event.id)
   if (view.msg.parentNode !== slot) slot.appendChild(view.msg)
+  // 内容到了，"还没开始/正在做"那句占位说明就撤掉（否则它会一直躺在结果区顶上）。
+  const hint = panel.empty?.get(event.id)
+  if (hint !== undefined) {
+    hint.remove()
+    panel.empty.delete(event.id)
+  }
   // 卡片「复制」按成员取正文：`view.body` 是累积正文，流式期间也在长。
   panel.texts.set(event.id, () => view.body ?? '')
   const value = event.state ?? 'queued'
@@ -1011,6 +1061,31 @@ function attachToDispatch(view, event, panel = state.dispatch) {
     if (!panel.details.open) panel.fresh.hidden = false
     if (panel.active === event.id) selectDispatch(panel, event.id)
   }
+}
+
+/**
+ * 一轮汇总到达时收口卡片：还在动的格子按这一轮的结局收尾。
+ *
+ * 成员各自的终态事件不一定都到得了（取消、失败、连接断了），留着"进行中 + 秒数在跳"会让
+ * 用户在已经结束的一轮里看到一个永远在干活的成员。这里只动还没定论的格子：成功的成员
+ * （已经有终态）一律不动——不能把真实结果改成别的说法。
+ */
+function settleCardForSummary(state_, at) {
+  const panel = state.dispatch
+  if (panel === null || panel === undefined) return
+  // 只有**收尾**的汇总才收口：`waiting_user` / `external_pending` 是暂停（这一轮还活着，
+  // 成员真的还在等），把它们说成"已停止"是假话。
+  if (!['completed', 'failed', 'cancelled', 'partial'].includes(state_)) return
+  for (const id of panel.order) {
+    const value = panel.states.get(id)
+    if (cardSettled(value)) continue
+    // 明确说"已停止"：这一轮结束了，而这一格没有交回结果，不去替它编一个成功。
+    panel.states.set(id, 'cancelled')
+    panel.until.set(id, at)
+    updateCardCell(panel, id)
+  }
+  renderDispatchHeader(panel)
+  syncCardTicker()
 }
 
 /** 状态刚变化的那一格做一次描边脉冲：看得见变化，但不打断阅读（不动滚动、不抢焦点）。 */
@@ -1368,6 +1443,9 @@ function handleEvent(event) {
       // 汇总是这一轮的定论：链路条按最终状态推进，已走过的步骤保持点亮。
       applySummaryRail(event.state)
       for (const view of state.bubbles.values()) view.caret.hidden = true
+      // 还在"进行中/排队"的格子在这一刻一律收口：这一轮已经有了定论，不能让某一格继续
+      // 显示进行中、秒数还往上跳（成员自己那条终态事件可能因为取消/失败没有到达）。
+      settleCardForSummary(event.state, event.time ?? Date.now())
       announce(`这一轮${
         event.state === 'completed' ? '已完成' : event.state === 'failed' ? '失败' : event.state === 'cancelled' ? '已喊停' : event.state === 'partial' ? '部分完成' : event.state === 'waiting_user' ? '等你回话' : '待外部处理'}`)
       // 正文只展示一次（S12）：总结气泡已经承载的正文，汇总卡不再整段重复；
@@ -1494,8 +1572,10 @@ function handleSubtask(event) {
     view.terminal = true
     // classList.add('') 会抛 TypeError（取消态没样式类）：错误文本曾因此漏进线程。
     if (event.state === 'failed') view.bubble.classList.add('bubble--fail')
+    // 已经有正文时，失败原因另起一行。这一行带 `msg__meta--keep`：**「只看结论」不能把它藏掉**
+    // ——那正是用户最需要看到的一句话（同一失败在"还没吐字"时走 `view.text`，本来就不会被藏）。
     if (view.body === '') view.text.textContent = event.detail
-    else view.bubble.appendChild(make('div', 'msg__meta', event.detail))
+    else view.bubble.appendChild(make('div', 'msg__meta msg__meta--keep', event.detail))
     announce(event.state === 'failed' ? `${displayNameOf(event.agentId)} 失败：${event.detail ?? '原因不明'}` : `${displayNameOf(event.agentId)} 的活已取消`)
     return
   }
@@ -2028,7 +2108,7 @@ async function finishTurn() {
 
 /* ── 右栏 ─────────────────────────────────────────────────────────────── */
 
-/** 右栏的紧凑成员行：只看是谁；改名换脸去设置页。名单上的人都能接活，所以这里没有状态点。 */
+/** 右栏的紧凑成员行：只看是谁；改名换脸去设置页。名单上的人都能接活，所以这里**没有状态**。 */
 function renderMembers() {
   clear(el.memberList)
   if (state.members.length === 0) {
@@ -2306,14 +2386,17 @@ function renderCrew() {
   clear(el.crewFaces)
   for (const member of state.members) {
     const face = avatarNode(member.agentId, 'sm')
-    // 名单上的人都能接活，所以这里只说手上有没有活。
-    const working = member.busy === null ? '' : ` · ${STATE_TEXT[member.busy.state] ?? '在忙'}`
-    face.title = `${member.displayName}（@${member.agentId}）${working}`
+    // 头像只说"这是谁"：**逐人本轮状态只在调度卡的格子上**（唯一来源）。这里再挂一份来自
+    // `members[].busy` 快照的状态，会和卡片的事件流各说各话，用户看到两处不一致。
+    face.title = `${member.displayName}（@${member.agentId}）`
     el.crewFaces.appendChild(face)
   }
   const busy = state.members.filter(member => member.busy !== null).length
   const total = state.members.length
-  const working = busy > 0 ? ` · ${busy} 位在忙` : ''
+  // ⚠️ 这里的计数是**页面级事实**（名单上此刻手上有活的人，跨任务，来自 `/members` 快照），
+  // 与调度卡里"本次派活有几位进行中"（本轮事件流）不是同一件事，所以用词也不同：
+  // 「手上有活」对名单，「进行中」对本次派活。混用会让用户在两处看到不同的数字。
+  const working = busy > 0 ? ` · ${busy} 位手上有活` : ''
   el.crewLine.textContent = `${total} 个牛马${working}`
   el.crewNote.textContent = `共 ${total} 位${working}`
   el.groupSub.textContent = `${total} 位成员${working}`
@@ -2554,7 +2637,13 @@ function taskHistoryEntry(task) {
   return wrap
 }
 
-/** 同一批任务只取一次详情：翻页、重复渲染都复用同一个在途请求。 */
+/**
+ * 读一条任务详情，**只对并发的同一批请求去重**。
+ *
+ * ⚠️ 不能把已取到的结果长期留在表里：任务的结局会变，缓存住第一次的快照，用户切走再切回
+ * 就会看到一张"永远进行中、秒数还在跳"的历史卡（同页的任务摘要卡却已经是收尾时间）。
+ * 所以落地即删——下一次渲染重新问一次服务端。
+ */
 const taskCardRequests = new Map()
 
 function taskRecord(id) {
@@ -2562,8 +2651,8 @@ function taskRecord(id) {
   if (known !== undefined) return known
   const pending = api.task(id)
   taskCardRequests.set(id, pending)
-  // 失败不留在缓存里：下一次翻到它还能重试（缓存一个拒绝的 Promise 等于永久失败）。
-  pending.catch(() => { taskCardRequests.delete(id) })
+  const forget = () => { taskCardRequests.delete(id) }
+  pending.then(forget, forget)
   return pending
 }
 
@@ -2573,14 +2662,18 @@ async function upgradeTaskEntry(wrap, task) {
     // 换会话、翻页之后这个包装节点可能已经被丢弃：那就什么都不做（不往游离节点里写）。
     if (!wrap.isConnected) return
     const card = renderTaskCard(record, { live: false, liveResume: false, defaultOpen: cardPrefs(task.id).open === true })
-    wrap.replaceChildren(card)
+    // 摘要卡换成调度卡是**高度变化**：用户正读到上面几屏时会被顶走，所以与翻页同一口径，
+    // 在视口钉扎里替换（I11）。
+    stabilizeViewport(() => { wrap.replaceChildren(card) }, { forceAnchor: true })
   } catch (error) {
     if (!wrap.isConnected) return
-    wrap.replaceChildren(
-      taskSummaryCard(task),
-      make('p', 'history-head__error',
-        `调度卡读不到：${error instanceof Error && error.message ? error.message : '网络异常'}，点上面的摘要看完整记录`),
-    )
+    stabilizeViewport(() => {
+      wrap.replaceChildren(
+        taskSummaryCard(task),
+        make('p', 'history-head__error',
+          `调度卡读不到：${error instanceof Error && error.message ? error.message : '网络异常'}，点上面的摘要看完整记录`),
+      )
+    }, { forceAnchor: true })
   }
 }
 
@@ -2784,6 +2877,8 @@ function renderTaskCard(record, opts = {}) {
     { taskId: record.id, live: opts.live !== false, defaultOpen: opts.defaultOpen !== false },
   )
   const panel = card.__dcard
+  // 卡片这时还没挂进线程（调用方负责挂）：显式放行往它里面填内容（见 `attachToDispatch` 的守卫）。
+  panel.building = true
   for (const subtask of record.subtasks) {
     const view = memberMessage(subtask.agentId, subtask.id)
     // 恢复出来的成员输出同样收进卡片：与实时视图一致，群里不再有单独的成员行。
@@ -2819,6 +2914,7 @@ function renderTaskCard(record, opts = {}) {
       }
     }
   }
+  panel.building = false
   return card
 }
 

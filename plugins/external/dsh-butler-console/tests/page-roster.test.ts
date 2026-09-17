@@ -78,9 +78,9 @@ describe('成员名单的页面文案', () => {
     const page = loadRoster()
     page.state.members = members
     page.renderCrew()
-    expect(page.el.crewLine.textContent).toBe('3 个牛马 · 2 位在忙')
-    expect(page.el.crewNote.textContent).toBe('共 3 位 · 2 位在忙')
-    expect(page.el.groupSub.textContent).toBe('3 位成员 · 2 位在忙')
+    expect(page.el.crewLine.textContent).toBe('3 个牛马 · 2 位手上有活')
+    expect(page.el.crewNote.textContent).toBe('共 3 位 · 2 位手上有活')
+    expect(page.el.groupSub.textContent).toBe('3 位成员 · 2 位手上有活')
     expect(page.el.crewFaces.children).toHaveLength(3)
   })
 
