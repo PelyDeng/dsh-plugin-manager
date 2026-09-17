@@ -170,10 +170,26 @@ describe('执行入口的字段翻译', () => {
     const controller = new AbortController()
     await executor.dispatch(request({ signal: controller.signal }))
     expect(seen.missionId).toBe('task-1')
-    expect(seen.requestId).toBe('sub-1')
+    // 幂等身份是 `<taskId>:<subtaskId>`，**不是**光秃秃的子任务 id：子任务 id 只在任务内唯一
+    // （s1/s2…），直接拿来当 requestId 会让两个任务的第一个子任务撞同一个键 ⇒ 运行时 409
+    // 「同一请求身份不能用在不同内容上」（生产实测 2026-09-17）。
+    expect(seen.requestId).toBe('task-1:sub-1')
     // message 用完整简报而不是光秃秃的 goal：它含整体目标与产出要求。
     expect(String(seen.message)).toContain('你负责')
     expect(seen.signal).toBe(controller.signal)
+  })
+
+  it('跨任务不再撞幂等身份：同一 subtaskId 在两个任务里必须给出不同 requestId', async () => {
+    const ids: string[] = []
+    const executor = executorFor(manifest, stubParticipant({}, value => { ids.push(String((value as { requestId?: unknown }).requestId)) }))
+    await executor.dispatch(request({ taskId: 'task-A', subtaskId: 's1' }))
+    await executor.dispatch(request({ taskId: 'task-B', subtaskId: 's1' }))
+    expect(ids).toEqual(['task-A:s1', 'task-B:s1'])
+    expect(new Set(ids).size).toBe(2)
+    // 同一个任务里的同一子任务**重派**仍是同一个键（幂等语义不能被这次修复破坏）。
+    ids.length = 0
+    await executor.dispatch(request({ taskId: 'task-A', subtaskId: 's1' }))
+    expect(ids).toEqual(['task-A:s1'])
   })
 
   it('简报为空时回落到目标', async () => {

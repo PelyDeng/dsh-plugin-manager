@@ -199,7 +199,20 @@ export function executorFor(manifest: AgentManifest, participant: AgentParticipa
       const result = await participant.run({
         actor: request.actor,
         missionId: request.taskId,
-        requestId: request.subtaskId,
+        /**
+         * ⚠️ **幂等身份必须唯一到 `(agent, owner)`，不能只用子任务 id。**
+         *
+         * `subtaskId` 只在**任务内**唯一（`s1`、`s2`…），而运行时的存储（`dsh_turns` 的部分唯一索引
+         * `(agent_id, owner_namespace, owner_id, request_id)`）与进程内幂等缓存都按 `(agent, owner, requestId)` 分桶。
+         * 直接拿 `subtaskId` 当 `requestId`，两个任务的第一个子任务就会撞同一个键，内容又必然不同
+         * ⇒ 运行时按契约抛 `AccessError(409, '同一请求身份不能用在不同内容上')`。
+         * **生产实测（2026-09-17）**：任务 A 的 `s1` 成功后，任务 B 的 `s1` 必然失败（换新 id 的 `s2` 重试则成功）。
+         *
+         * 用 `<taskId>:<subtaskId>`：任务 id 全局唯一（`butler-task-<uuid>`），
+         * 同一子任务**重派仍是同一个键**（幂等语义不变），跨任务不再互撞。
+         * `missionId` 仍是 `taskId`（会话派生按任务走），不受影响。
+         */
+        requestId: `${request.taskId}:${request.subtaskId}`,
         message,
         // 验收口径与重做溯源逐字段透传：它们决定执行方要不要自检、以及是不是换做法重跑，
         // 悄悄丢掉只会让执行方以为这是一次普通派活（而契约测试在 participant 侧取证）。
