@@ -110,4 +110,4 @@ bash build.sh
 
 `.local/source-release.json` 记录最近一次源码部署状态，成功状态为 `ready`；其 `operation` 指向操作目录，目录内 `result.json` 的 `revision` 对应服务器构建的源码提交。实际容器由 `.local/artifacts/active-compose.json` 指向的 Compose 配置管理。
 
-启用 auth、example、closedoff 时，就绪地址分别是 `/auth/health`、`/example/ready`、`/closedoff-qa/ready`。认证模式的业务历史接口要求登录；健康探针不执行模型问答。账号、授权和历史保存在现有数据目录，服务更新继续沿用该目录。
+启用 auth、example、closedoff 时，就绪地址分别是 `/auth/health`、`/example/ready`、`/agents/closedoff/ready`（群组子包的就绪探针由群组统一提供：`/agents/health`、`/agents/ready` 与 `/agents/<id>/ready`；子包自己不再注册探针，`/closedoff-qa/ready` 会返回 404）。认证模式的业务历史接口要求登录；健康探针不执行模型问答。账号、授权和历史保存在现有数据目录，服务更新继续沿用该目录。
