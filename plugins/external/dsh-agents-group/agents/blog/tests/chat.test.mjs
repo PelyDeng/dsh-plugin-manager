@@ -5,7 +5,7 @@ import AgentRegistry from '@deepseek-ai/dsh-agent'
 import {Session,SessionId} from '@deepseek-ai/dsh-session'
 import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local'
 import {BlogStore} from '../src/store.mjs'
-import {ChatStore} from '../src/chat-store.mjs'
+import {ChatStore} from '../src/chat-store.ts'
 import {BlogJobs} from '../src/jobs.mjs'
 import {BlogChat} from '../src/chat.mjs'
 import {BlogApplication,PendingOperationsMirror} from '../src/application.mjs'
@@ -106,6 +106,37 @@ test('official first-prompt titles update after the answer closes and never over
   assert.equal(f.index.get(owner,f.conversation.id).title,'宿主再次手动更名')
   f.root.emit('session/event',{id:'another-plugin-session'},{type:'session/title',data})
   assert.equal(f.chat.list(actor,0,'').items.length,1)
+})
+
+test('title broadcasts happen exactly when the index accepts the write (M21 regression guard)',async t=>{
+  // 设计 §10.1 点名要求的那条：**广播次数**断言。既有的标题用例只看"标题有没有写进索引"，
+  // 它订阅不到 `changed`，所以**抓不住"总是广播"**——而那正是 `syncTitle` 一旦异步化之后的
+  // 静默退化形态（返回值变恒真的 Promise ⇒ 守卫挡住也照样广播 ⇒ 页面无谓刷新）。
+  const f=await fixture(t)
+  await f.send();await tick()
+  const h=f.handles[0]
+  h.emit('turn/end',{turn:'title-broadcast',reason:{kind:'completed'}})
+  await tick()
+  let changed=0
+  const unsubscribe=f.chat.subscribe(actor,f.conversation.id,value=>{if(value.type==='changed')changed++},()=>{})
+  const data={title:'广播次数用例标题',messageSeqs:[0],source:{kind:'provider',provider:'first-prompt-llm'}}
+  // ① 守卫接受 ⇒ 恰好广播一次。
+  h.emit('session/title',data)
+  assert.equal(changed,1,'标题写入被接受时必须广播一次')
+  // ② 无关会话：绝不广播到本会话。
+  f.root.emit('session/event',{id:'another-plugin-session'},{type:'session/title',data})
+  assert.equal(changed,1,'无关会话的标题不该广播到本会话')
+  // ③ **改坏就会红的那一条**：手动标题之后，迟到的自动标题会被索引的守卫挡住（`changes=0`），
+  //    所以**不该**广播。把广播判据改成恒真（例如让 `syncTitle` 返回 true 或一个 Promise），
+  //    这里会变成 1 ⇒ 红。
+  f.chat.mutate(actor,{operation:'rename',ids:[f.conversation.id],title:'手动名'})
+  changed=0
+  h.emit('session/title',{...data,title:'迟到的自动标题'})
+  assert.equal(changed,0,'被守卫挡住的标题不该广播')
+  // ④ 可信用户改名（source.kind==='user'）能改写入 ⇒ 仍要广播。
+  h.emit('session/title',{title:'宿主再次手动更名',messageSeqs:[],source:{kind:'user'}})
+  assert.equal(changed,1,'可信用户改名被接受时必须广播')
+  unsubscribe()
 })
 
 test('sending after model validation preserves titles changed while validation was waiting',async t=>{

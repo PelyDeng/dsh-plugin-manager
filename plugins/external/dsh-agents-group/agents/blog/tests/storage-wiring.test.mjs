@@ -12,7 +12,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { BlogStore } from '../src/store.mjs'
-import { ChatStore } from '../src/chat-store.mjs'
+import { ChatStore } from '../src/chat-store.ts'
 import { BlogApplication, PendingOperationsMirror } from '../src/application.mjs'
 import { BlogAttachments } from '../src/attachments.mjs'
 

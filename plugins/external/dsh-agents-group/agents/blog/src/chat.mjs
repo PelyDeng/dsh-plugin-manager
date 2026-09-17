@@ -28,7 +28,13 @@ export class BlogChat {
   constructor(ctx,access,storage,index,attachments,jobs,app,sdk,timeoutMs=240000){
     Object.assign(this,{ctx,access,storage,index,attachments,jobs,app,sdk,timeoutMs})
     this.active=new Map();this.forks=new Map();this.forkSources=new Map();this.listeners=new Map();this.closed=false
-    ctx.effect(()=>registerConversationTitles(ctx,(id,title,manual,complete)=>{if(!this.closed&&index.syncTitle(id,title,manual,complete))this.emit(id,{type:'changed'})}))
+    // ⚠️ 广播判据必须**同步可得**（M21）：`index.syncTitle(...)` 的返回值是"这次写入**被守卫接受**了吗"
+    //（本地 SQLite 的 `changes>0`，同步返回）。`registerConversationTitles` 的回调是**同步**的、
+    // 不能 await，所以 `syncTitle` **不能**被改成异步方法：那样返回值会变成恒真的 Promise
+    //（truthy），"被守卫挡住就不广播"会**静默**退化成"每次都广播"，页面跟着无谓刷新。
+    // 切索引库到 PG 时按运行时 `TitleSink` 的形状改：**同步改本地镜像 + 投递队列**，返回值取自
+    // 本地那一步，后台按 FIFO 补写 PG。详见 `src/chat-store.ts` 的类注释。
+    ctx.effect(()=>registerConversationTitles(ctx,(id,title,manual,complete)=>{const applied=index.syncTitle(id,title,manual,complete);if(!this.closed&&applied)this.emit(id,{type:'changed'})}))
     const recheck=()=>{for(const b of this.active.values())try{access.assert(b.job.actor)}catch{void this.finish(b,'interrupted','登录或授权已失效')}for(const fork of this.forks.values())try{access.assert(fork.actor)}catch{fork.abort.abort()}}
     ctx.effect(()=>onRevoked(ctx,recheck))
     ctx.effect(()=>{const timer=setInterval(recheck,1000);timer.unref();return()=>clearInterval(timer)})

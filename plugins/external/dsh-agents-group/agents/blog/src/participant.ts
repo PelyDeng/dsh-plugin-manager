@@ -1,7 +1,7 @@
 import type { Actor } from '@dsh-plugin-manager/plugin-kit'
 import type { AgentParticipant, ParticipantRequest, ParticipantResult } from '../../../packages/common/src/participant.ts'
 import type { BlogChat } from './chat.mjs'
-import type { ChatStore } from './chat-store.mjs'
+import type { ChatStore } from './chat-store.ts'
 import type { BlogPgStorage } from './storage/pg.mjs'
 import { digest, ownerKey } from './store.mjs'
 import { invariant } from './settings.mjs'
@@ -141,7 +141,8 @@ export function createBlogParticipant({ access, chat, index, storage, routePrefi
           assertBound()
           if (signal.aborted) { stopPromise ??= stopOwned(); await stopPromise }
           invariant(!closed, '博客会话订阅已结束，请重新查看任务', 503)
-          const turn = index.request(owner, turnId)
+          // `turnId` 刚在上面赋成 `started.id`；TS 因为闭包里也可能写它而放弃收窄，这里断言非空。
+          const turn = index.request(owner, turnId!)
           invariant(turn.conversationId === conversationId, '博客请求不属于当前协作会话', 403)
           if (!pending.has(turn.status)) {
             const history = await chat.history(actor, conversationId)

@@ -19,7 +19,7 @@ import { BlogApplication, PendingOperationsMirror } from './application.mjs'
 import { BlogClient,ImageClient,BackupClient } from './connectors.mjs'
 import { BlogJobs } from './jobs.mjs'
 import { BlogAttachments, MAX_ATTACHMENT_BYTES } from './attachments.mjs'
-import { ChatStore } from './chat-store.mjs'
+import { ChatStore } from './chat-store.ts'
 import { BlogChat } from './chat.mjs'
 import { createBlogParticipant } from './participant.ts'
 import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
@@ -181,7 +181,11 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   if(dsnSource)await pending.restore(storage).catch(error=>console.warn('agents-group/blog: 恢复待核对操作镜像失败',error))
   const conversations=new ChatStore(join(root,'blog.sqlite'),()=>pending.ids())
   const blog=new BlogClient(settings.blog),images=new ImageClient(settings.image,join(root,'image-token.json')),backups=new BackupClient(settings.backup,access)
-  const attachments=new BlogAttachments(ctx,access,storage,(owner:string,id:string)=>id.startsWith('blog-chat-')?conversations.assertScope(owner,id):storage.get(owner,id))
+  // ⚠️ 这个谓词在 `BlogAttachments` 里一律被 `await`（见其 `get` / `list` / `guard`）。
+  // 会话路径走索引侧的**同步**核验（`assertScope` 直接返回记录），草稿路径走存储的异步查询
+  // ⇒ 两条分支的返回类型不同，转 TS 时被暴露出来。统一成 `async` 让类型自洽：调用方本来就
+  // `await` 异步分支，行为不变（同步分支也只是多一个微任务）。
+  const attachments=new BlogAttachments(ctx,access,storage,async(owner:string,id:string)=>id.startsWith('blog-chat-')?conversations.assertScope(owner,id):storage.get(owner,id))
   const jobs=new BlogJobs(ctx,access,storage,blog,attachments,config.turnTimeoutMs,settings.models,mountContext.category,mountContext.allowedTools)
   const app=new BlogApplication(storage,access,blog,images,backups,jobs,attachments,pending)
   const {chatSdk}=await import(blogResource('runtime/chat-sdk.mjs').href)

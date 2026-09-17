@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {BlogStore,ownerKey} from '../src/store.mjs'
-import {ChatStore} from '../src/chat-store.mjs'
+import {ChatStore} from '../src/chat-store.ts'
 import {BlogAttachments} from '../src/attachments.mjs'
 
 test('host titles complete new conversations without replacing manual, legacy or removed history',()=>{
