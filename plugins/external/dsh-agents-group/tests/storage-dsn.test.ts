@@ -120,6 +120,14 @@ describe('运行时存储 DSN 的来源解析', () => {
       .rejects.toThrow(missing)
   })
 
+  it('群组业务配置里的 dsn 小节也能读出（DSH 把 AGENTS_GROUP_CONFIG 指向这类文件）', async () => {
+    const resolved = await resolveStorageDsn({}, '/home/default.json', async () => JSON.stringify({
+      closedoff: { CLOSEDOFF_BASE_URL: 'https://example.invalid' },
+      dsn: { dsn: 'postgres://nested' },
+    }))
+    expect(resolved).toEqual({ dsn: 'postgres://nested', origin: 'file' })
+  })
+
   it('origin 如实反映来源（env / file），dsn 两端的空白被去掉', async () => {
     const byEnv = await resolveStorageDsn({ AGENTS_GROUP_PG_DSN: '  postgres://padded  ' }, '/home/default.json', noFile)
     expect(byEnv?.origin).toBe('env')

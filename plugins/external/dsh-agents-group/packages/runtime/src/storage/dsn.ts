@@ -75,12 +75,16 @@ export async function resolveStorageDsn(
 /**
  * 从配置文件内容里读出 DSN。**先 JSON、后 KEY=VALUE**（顺序与理由见文件头）。
  *
- * 两个刻意的细节：
+ * ## JSON 的三种形状都认（这是 DSH 部署下的实际需要）
  *
- * - **JSON 解析失败不算错**，那正是 `env.conf` 这种写法的正常入口，所以继续尝试 K/V；
- * - **JSON 解析成功但 `dsn` 不是非空字符串时，直接按"没有 DSN"返回空串**，不再回退 K/V ——
- *   文件已经明确是 JSON 了，还去按 K/V 找一遍只会把"字段名写错"（例如写成 `DSN`）这种
- *   配置错误伪装成"文件格式不对"，而前者的提示更接近真因。
+ * - `{"dsn":"postgres://…"}` —— 本插件自己的 storage.json / env.conf 约定；
+ * - `{"dsn":{"dsn":"postgres://…"}}` —— 部署层把 `AGENTS_GROUP_CONFIG` 指向一份**群组业务配置**
+ *   （`{"closedoff":{…},"blog":{…}}`）时，DSN 可能落在它的 `dsn` 小节里。DSH 的
+ *   `runtimeConfig.variable` 语义就是"这个变量指向插件的**业务配置文件**"，所以同一个文件
+ *   既要给群组装配读，也要给存储层读 —— 认下这一层嵌套比要求运维再摆一个文件实在。
+ * - 其它形状（缺字段 / 空串 / 非字符串）一律按"没有 DSN"处理，**不回退**去按 K/V 再找 ——
+ *   文件已经明确是 JSON 了，还去按 KEY=VALUE 找只会把"字段名写错"这种配置错误伪装成
+ *   "格式不对"，而前者的提示更接近真因。
  */
 function readDsn(text: string, path: string): string {
   let parsed: unknown
@@ -91,9 +95,15 @@ function readDsn(text: string, path: string): string {
     isJson = false // 不是 JSON：按 env.conf 的 KEY=VALUE 继续。
   }
   if (isJson) {
-    return typeof parsed === 'object' && parsed !== null && typeof (parsed as { dsn?: unknown }).dsn === 'string'
-      ? (parsed as { dsn: string }).dsn.trim()
-      : ''
+    if (typeof parsed !== 'object' || parsed === null) return ''
+    const value = (parsed as { dsn?: unknown }).dsn
+    if (typeof value === 'string') return value.trim()
+    // 嵌套一层：群组业务配置里的 `dsn` 小节。
+    if (typeof value === 'object' && value !== null) {
+      const nested = (value as { dsn?: unknown }).dsn
+      return typeof nested === 'string' ? nested.trim() : ''
+    }
+    return ''
   }
   // `node:util` 的 parseEnv 是 Node 内置实现：注释、空行、引号、`export ` 前缀都能正确处理，
   // 不在这里重写一份解析器（项目里 closedoff 的业务凭据也走它）。
