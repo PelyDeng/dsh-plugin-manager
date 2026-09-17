@@ -16,7 +16,6 @@
   "files": [
     "dist/",
     "web/",
-    "env.conf.example",
     "persona.txt",
     "README.md"
   ],

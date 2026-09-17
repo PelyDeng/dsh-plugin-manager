@@ -36,7 +36,6 @@ describe('子包资源定位', () => {
     for (const [id, relative] of [
       ['closedoff', 'persona.txt'],
       ['closedoff', 'web/index.html'],
-      ['closedoff', 'env.conf.example'],
       ['blog', 'runtime/chat-sdk.mjs'],
       ['blog', 'web/index.html'],
       ['blog', 'package.json'],

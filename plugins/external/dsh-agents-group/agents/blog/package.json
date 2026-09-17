@@ -20,8 +20,6 @@
   "files": [
     "dist/",
     "web/",
-    "config/config.example.json",
-    "config/README.md",
     "backup/archive.py",
     "backup/executor.py",
     "backup/chat-state.mjs",

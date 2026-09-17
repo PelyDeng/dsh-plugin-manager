@@ -22,9 +22,11 @@ deploy-artifacts/
 !.env.example
 env.conf
 !/env.conf
-# 站点配置是唯一的配置源：站点地址、选集与插件业务配置都在这里维护并随仓库分发，
-# 部署机只需要拉取，不再现场创建配置文件。其余 .local/ 内容（运行数据、产物、凭据）仍然忽略。
+# 配置归属：站点配置是仓库根下的 .local/env.conf；私有库中每个项目的配置是该项目根目录的
+# env.conf（子 Agent 并入所属项目，不另建），两者都进版本控制；其余 .local/ 内容
+# （运行数据、产物、凭据缓存）仍然忽略。
 !.local/env.conf
+!plugins/external/*/env.conf
 !deploy/config/*.conf.example
 *.tgz
 *.log

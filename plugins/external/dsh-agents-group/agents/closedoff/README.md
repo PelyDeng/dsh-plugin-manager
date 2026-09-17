@@ -134,16 +134,7 @@ pnpm dsh plugin --profile web add "file:$pluginRoot"
 
 ## 配置业务参数
 
-业务配置保存网关地址和两阶段认证参数。全新产物站点按 build 提示填写自动生成的 runtimeConfig 文件。源码站点和下文 Node 开发环境可在私有仓库根创建独立文件，避免提前向空数据目录写入内容：
-
-```powershell
-New-Item -ItemType Directory -Force .local/secrets | Out-Null
-if (-not (Test-Path .local/secrets/closedoff.env.conf)) {
-  Copy-Item plugins/external/dsh-agents-group/agents/closedoff/env.conf.example .local/secrets/closedoff.env.conf
-}
-```
-
-填写该文件，并在私有 `.local/env.conf` 的 DSH_INSTANCES 中设置 `closedoff.runtimeConfig` 为 `.local/secrets/closedoff.env.conf`。旧站点 JSON 使用 `instances.closedoff.runtimeConfig`。首次站点配置与服务器更新见私有仓库根 `PRIVATE.md`。已有实例沿用当前配置路径，不覆盖配置文件。
+业务配置保存网关地址和两阶段认证参数。**本项目及其全部子 Agent 的配置统一在 [项目根 env.conf](../../env.conf)**，closedoff 的字段是其中的「封闭化 closedoff」段；子 Agent 不另建 env.conf。全新产物站点按 build 提示填写自动生成的 runtimeConfig 文件；站点部署时实际值维护在站点 `.local/env.conf` 的 `DSH_PLUGIN_CONFIG.agents-group.closedoff`，构建时派生成运行配置文件。已有实例沿用当前配置路径，不覆盖配置文件。
 
 Node 开发或独立运行时，可在仓库根新建 `.local/closedoff.deployment.json`，再通过下文的 `-Config` 指定；这份文件与 Docker 自动生成的部署配置分开：
 
@@ -164,7 +155,7 @@ Node 开发或独立运行时，可在仓库根新建 `.local/closedoff.deployme
 
 `env.conf` 包含 `CLOSEDOFF_BASE_URL`、阶段一 `clientId/clientSecret`，以及阶段二 `appCode/clientId/clientSecret/username`。插件每次激活时读取并校验该文件；缺失文件、空字段、非 HTTPS 网关地址都会使插件明确启动失败。
 
-真实 `env.conf` 由用户维护，不进入 Git、tgz 或镜像；[env.conf.example](env.conf.example) 仅提供字段模板。部署配置可以覆盖文件位置，启动时通过 CLOSEDOFF_ENV_CONF 传入路径。
+字段模板见[项目根 env.conf](../../env.conf) 的 closedoff 段；真实文件由用户维护，不进入 Git、tgz 或镜像。部署配置可以覆盖文件位置，启动时通过 `CLOSEDOFF_ENV_CONF` 传入路径。
 
 ## 启动与访问
 
