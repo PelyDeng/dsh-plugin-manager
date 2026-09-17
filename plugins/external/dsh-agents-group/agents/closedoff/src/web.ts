@@ -9,8 +9,10 @@ import { MessageId } from '@deepseek-ai/dsh-llm/brand'
 import type {} from '@deepseek-ai/dsh-message-feedback'
 import { SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import type { ConversationManager } from './agent.ts'
-import { onAssistantDelta, type AssistantDelta } from '../../../packages/runtime/src/index.ts'
+import type { Conversation, ConversationLifecycle } from '../../../packages/runtime/src/conversation.ts'
+import type { ConversationPort, RemovalResultShape } from '../../../packages/runtime/src/storage/ports.ts'
+import type { AssistantDelta } from '../../../packages/runtime/src/index.ts'
+import { onAssistantDelta } from '../../../packages/runtime/src/index.ts'
 import type { Config } from './config.ts'
 import { fencesFromResult, isFenceTool } from './fences.ts'
 import {
@@ -98,6 +100,101 @@ function presentationValue(meta: unknown): unknown {
     : undefined
 }
 
+/**
+ * 页面入口用到的运行时能力。
+ *
+ * 三项都是**可选**的：存储未就绪（缺 PG 配置或连不上）时装配不会产出运行时，而页面本身
+ * 照常装载、探针照常报未就绪。所以每个业务端点在使用前都要显式回答"没有运行时该怎么办"——
+ * 这里统一给 503 并说明原因，而不是让一个 `undefined` 在深处变成 `TypeError`（那会报成 500，
+ * 前端分不清"服务炸了"与"这个 Agent 没起来"）。
+ */
+export interface WebRuntimeDeps {
+  readonly lifecycle?: ConversationLifecycle | undefined
+  readonly store?: ConversationPort | undefined
+  /**
+   * 侧栏入口（kit 的 `ConversationProvider`）；页面上的"删除"走它，与侧栏是同一道围栏
+   * （`storage/adapter.ts` 是唯一的移除装配点）。
+   *
+   * 只声明用到的那一个方法：本文件不需要 `list` / `preview`（页面自己有 `/conversations`
+   * 与 `/history` 两个走端口的端点）。写全接口会把"页面依赖侧栏入口的哪一部分"藏起来。
+   */
+  readonly provider?: {
+    remove(actor: Actor, ids: readonly string[]): Promise<{ readonly results: readonly RemovalResultShape[] }>
+  } | undefined
+}
+
+/** 取运行时；没有就按"未就绪"拒绝，且理由与探针一致。 */
+function runtimeOf(deps: WebRuntimeDeps): { lifecycle: ConversationLifecycle; store: ConversationPort } {
+  if (deps.lifecycle === undefined || deps.store === undefined) {
+    throw new HttpError(503, '本 Agent 的业务存储未就绪：请先配置 PostgreSQL（AGENTS_GROUP_PG_DSN 或 AGENTS_GROUP_PG_CONFIG）')
+  }
+  return { lifecycle: deps.lifecycle, store: deps.store }
+}
+
+/**
+ * 侧栏改动（重命名 / 置顶 / 删除）的适配层。
+ *
+ * ## 为什么需要它，而不是把校验搬到存储端口
+ *
+ * 端口（`ConversationPort`）只提供**原子写**：`syncTitle` / `pin` / `record`。而"操作名是否
+ * 合法、一次只能改一条、标题长度、置顶参数必须是布尔"这些是**这个页面的入参契约**，不是存储
+ * 的语义——blog 的页面没有置顶，管家也不用 `conversation-action`。搬进端口会让一个业务页面的
+ * 参数规则变成所有 Agent 共享的实现。
+ *
+ * ## 逐条对齐旧实现（`conversation-store.ts:89-96` 的 `mutate` + `agent.ts:457-471` 的 `update`）
+ *
+ * | 判定 | 旧位置 | 现在的落点 | 失败 |
+ * | --- | --- | --- | --- |
+ * | `operation ∈ {rename, pin}` 且 `ids.length === 1` | `mutate:90` | 本函数 | 400「请选择一条对话」 |
+ * | `rename` 标题 `trim()` 后 1–100 字符 | `mutate:91` | 本函数 | 400「标题应为 1–100 个字符」 |
+ * | `pin` 的 `pinned` 必须是 boolean | `mutate:92` | 本函数 | 400「置顶参数无效」 |
+ * | 归属与存在性（未知 / 未发布 / 他人一律 404） | `mutate:93`（`assertOwner`） | `lifecycle.assertConversation` | 404 |
+ * | 忙碌会话不能改名 | `agent.ts:468` | `lifecycle.isBusy` | 409「请等待回答完成或先停止」 |
+ *
+ * **归属判定选 `lifecycle.assertConversation` 而不是 `store.record`**：两条路的 404 文案与
+ * 判据完全相同（`conversation.ts:263` 逐字对应 `conversation-store.ts:63`），但前者是运行时
+ * 为"页面入口"提供的**唯一**入口——它把 `validateId`（不许寻址别的 DSH 会话）与围栏复核打包
+ * 在一起，与 `/chat`、`/history`、`/branch` 走的是同一套。直接用 `store.record` 会绕开 id
+ * 形状校验，于是"别的插件的会话 id"这类输入会以 404 而不是 400 返回，和 `/chat` 的口径分叉。
+ */
+async function applyConversationAction(
+  deps: WebRuntimeDeps,
+  actor: Actor,
+  input: { operation: string; ids: readonly string[]; title?: string; pinned?: boolean },
+): Promise<void> {
+  const { lifecycle, store } = runtimeOf(deps)
+  const id = input.ids[0]!
+  // 删除**不是**端口原子写：它要走 kit 的移除围栏（宿主归档 + 持久标记），入口与侧栏同一个
+  // （`storage/adapter.ts` 是唯一装配点）。旧实现在这里调 `manager.update` 的 delete 分支，
+  // 而那条分支会落到一个 `ConversationStore` 并不满足的 `ConversationRemovalStore` 契约上
+  // （缺 `conversationOf`），结果是 TypeError 被 kit 收成 `failed` ⇒ 一律 409。换成运行时
+  // 的入口之后这条路径才真的可用。
+  if (input.operation === 'delete') {
+    if (input.ids.length === 0) throw new HttpError(400, '请选择一条对话')
+    if (deps.provider === undefined) throw new HttpError(503, '会话管理入口未就绪')
+    // 归属先判一次（404），**不能只靠移除围栏**：围栏对"别人已经移除过的会话"回答的是
+    // `alreadyRemoved`（成功语义），于是一个外人能拿到 200、或拿到 409，就是拿不到 404。
+    // 旧实现在这里逐个 `assertOwner`，判定与文案都一致，所以这一步是等价性要求，不是补丁。
+    for (const id of input.ids) await lifecycle.assertConversation(id, actor)
+    const result = await deps.provider.remove(actor, [...input.ids])
+    if (result.results.some(item => item.status === 'failed' || item.status === 'blocked')) {
+      throw new HttpError(409, '部分会话未移除，请在会话管理中查看并重试')
+    }
+    return
+  }
+  // 校验顺序与旧实现一致：先判操作与条数，再判参数，最后才是归属与忙碌。
+  if (!['rename', 'pin'].includes(input.operation) || input.ids.length !== 1) throw new HttpError(400, '请选择一条对话')
+  if (input.operation === 'rename'
+    && (typeof input.title !== 'string' || !input.title.trim() || input.title.trim().length > 100)) {
+    throw new HttpError(400, '标题应为 1–100 个字符')
+  }
+  if (input.operation === 'pin' && typeof input.pinned !== 'boolean') throw new HttpError(400, '置顶参数无效')
+  await lifecycle.assertConversation(id, actor)
+  if (lifecycle.isBusy(id)) throw new HttpError(409, '请等待回答完成或先停止')
+  if (input.operation === 'rename') await store.syncTitle(actor, id, input.title!.trim(), 'manual')
+  else await store.pin(actor, id, input.pinned!)
+}
+
 const ASSET_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.gif': 'image/gif',
@@ -121,11 +218,14 @@ type EventSink = (event: SessionEvent | { type: 'assistant/live-chunk'; time: nu
  *
  * `http` 由群组注入（已经绑定好该 Agent 的访问校验与页面前缀），不再在这里创建：
  * 迁移进群组后，一个 Agent 只应有一套鉴权实例，重复创建会带来不一致的隐患。
+ *
+ * `deps` 换成**运行时的三个面**（生命周期 / 会话端口 / 侧栏入口），不再收一个业务管理器：
+ * 会话生命周期、归属判定、移除围栏现在都只有运行时那一份实现，页面只调用它。
  */
 export async function installWeb(
   ctx: Context,
   config: Config,
-  manager: ConversationManager,
+  deps: WebRuntimeDeps,
   access: Access,
   http: ReturnType<typeof createPluginHttp>,
 ): Promise<void> {
@@ -143,7 +243,6 @@ export async function installWeb(
   const webAssetRoot = agentResourcePath(import.meta.url, 'closedoff', 'web/assets/')
   const webAssetPath = `${config.routePrefix}/assets`
   const waiters = new Map<string, Set<EventSink>>()
-  const active = new Set<string>()
   const closeStreams = new Set<() => void>()
   const recheckStreams = new Set<() => void>()
   const recheck = () => { for (const check of [...recheckStreams]) check() }
@@ -165,7 +264,7 @@ export async function installWeb(
     kind: 'exact', path: `${config.routePrefix}/models`, handler: async (req, res, actor) => {
       method(req, 'GET')
       const id = new URL(req.url ?? '/', 'http://localhost').searchParams.get('conversationId') || undefined
-      respond(actor, res, 200, await manager.models(actor, id))
+      respond(actor, res, 200, await runtimeOf(deps).lifecycle.models(actor, id))
     },
   }))
   ctx.effect(() => register({
@@ -174,7 +273,7 @@ export async function installWeb(
     },
   }))
   ctx.effect(() => register({
-    kind: 'exact', path: `${config.routePrefix}/conversations`, handler: (req, res, actor) => {
+    kind: 'exact', path: `${config.routePrefix}/conversations`, handler: async (req, res, actor) => {
       method(req, 'GET')
       const params = new URL(req.url ?? '/', 'http://localhost').searchParams
       const offset = Number(params.get('offset') ?? '0')
@@ -182,8 +281,34 @@ export async function installWeb(
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new HttpError(400, '历史分页参数无效')
       const query = params.get('q') ?? ''
       if (query.length > 120) throw new HttpError(400, '搜索文字过长')
-      const items = manager.list(actor, offset, limit + 1, query.trim())
-      respond(actor, res, 200, { items: items.slice(0, limit), nextOffset: items.length > limit ? offset + limit : null })
+      /**
+       * 分页口径与旧实现逐字相同：**多取一条看还有没有下一页**。
+       *
+       * 旧实现是 `store.list(actor, offset, limit + 1, q)` 后按 `items.length > limit` 判断；
+       * 现在走运行时的 `lifecycle.list`，它把查询交给会话端口（PG）并自带"本实例忙集合"的
+       * 合并。`hostBusy` 与 `archived` 传空数组是**刻意的**：那两个集合只有侧栏入口
+       * （`storage/adapter.ts` 的 `provider.list`）才需要——它们决定 `canRemove` 与"已归档但
+       * 未标记移除的行是否出现"，而本端点只回 `id/title/updatedAt/pinned/titleSource`，
+       * 页面不显示可移除性。顺带一个好处：这条只读端点不依赖宿主的归档能力，宿主没有
+       * `workspaceRegistry` 时不会像 provider 那样抛 503（列表还是能看）。
+       */
+      const { lifecycle } = runtimeOf(deps)
+      const page = await lifecycle.list(actor, {
+        offset, limit: limit + 1, q: query.trim(), state: '',
+      }, { hostBusy: [], archived: [] })
+      const items = page.items
+      respond(actor, res, 200, {
+        items: items.slice(0, limit).map(item => ({
+          id: item.id,
+          title: item.title,
+          updatedAt: item.updatedAt,
+          // `pinned` 的形状换了载体：端口给的是 boolean，旧 SQLite 行给的是 0|1。
+          // 页面用的是真假判断（`if (item.pinned)`），语义没变；用例跟着改成 `true`。
+          pinned: item.pinned === true,
+          ...(item.titleSource === undefined ? {} : { titleSource: item.titleSource }),
+        })),
+        nextOffset: items.length > limit ? offset + limit : null,
+      })
     },
   }))
 
@@ -192,13 +317,20 @@ export async function installWeb(
       method(req, 'POST')
       const input = await body(req, 24000)
       if (typeof input.operation !== 'string' || !Array.isArray(input.ids) || input.ids.some(id => typeof id !== 'string')) throw new HttpError(400, '对话操作无效')
-      await manager.update(actor, { operation: input.operation, ids: input.ids as string[], ...(typeof input.title === 'string' ? { title: input.title } : {}), ...(typeof input.pinned === 'boolean' ? { pinned: input.pinned } : {}) })
+      await applyConversationAction(deps, actor, {
+        operation: input.operation,
+        ids: input.ids as string[],
+        ...(typeof input.title === 'string' ? { title: input.title } : {}),
+        ...(typeof input.pinned === 'boolean' ? { pinned: input.pinned } : {}),
+      })
       respond(actor, res, 200, { ok: true })
     },
   }))
 
   ctx.on('session/event', (session, event) => {
-    if (event.type === 'turn/end') manager.finish(String(session.id))
+    // ⚠️ 这里**不能**用 `runtimeOf`（它会抛）：`session/event` 是宿主的事件分发，抛出去会变成
+    // 宿主侧的未处理异常。未就绪时没有本实例的会话句柄要收尾，跳过即可。
+    if (event.type === 'turn/end') deps.lifecycle?.finish(String(session.id))
     for (const sink of waiters.get(String(session.id)) ?? []) sink(event)
   })
   onAssistantDelta(ctx, (sessionId, delta) => {
@@ -258,7 +390,8 @@ export async function installWeb(
         const requestUrl = new URL(req.url ?? config.routePrefix, 'http://localhost')
         const rawId = requestUrl.searchParams.get('conversationId')
         if (rawId === null || rawId === '') return respond(actor, res, 200, { history: [] })
-        const conversation = await manager.open(rawId, false, actor)
+        const { lifecycle } = runtimeOf(deps)
+        const conversation = await lifecycle.open(rawId, false, actor)
         let feedback: Array<{ messageId: MessageId; rating: 'positive' | 'negative' }> = []
         let feedbackUnavailable = false
         if (conversation !== undefined) {
@@ -273,7 +406,7 @@ export async function installWeb(
         respond(actor, res, 200, {
           history: conversation === undefined
             ? []
-            : projectHistory(manager.events(conversation), config.trackDeviceRadiusMeters),
+            : projectHistory(lifecycle.events(conversation), config.trackDeviceRadiusMeters),
           feedback,
           feedbackUnavailable,
         })
@@ -296,7 +429,7 @@ export async function installWeb(
         if (typeof rawId !== 'string') throw new HttpError(400, 'conversationId 必须是字符串')
         if (typeof rawMessageId !== 'string' || rawMessageId === '') throw new HttpError(400, 'messageId 必须是非空字符串')
         if (rating !== 'positive' && rating !== 'negative') throw new HttpError(400, 'rating 必须是 positive 或 negative')
-        const conversation = await manager.open(rawId, false, actor)
+        const conversation = await runtimeOf(deps).lifecycle.open(rawId, false, actor)
         if (conversation === undefined) throw new HttpError(404, '会话不存在')
         const sessionId = SessionId(conversation.id)
         const messageId = MessageId(rawMessageId)
@@ -331,10 +464,12 @@ export async function installWeb(
         const atSeq = payload.atSeq
         if (typeof rawId !== 'string') throw new HttpError(400, 'conversationId 必须是字符串')
         if (typeof atSeq !== 'number' || !Number.isSafeInteger(atSeq) || atSeq < 0) throw new HttpError(400, 'atSeq 必须是非负安全整数')
-        const source = await manager.open(rawId, false, actor)
+        const source = await runtimeOf(deps).lifecycle.open(rawId, false, actor)
         if (source === undefined) throw new HttpError(404, '会话不存在')
-        if (active.has(rawId)) throw new HttpError(409, '智能体仍在回答，暂时不能创建分支')
-        const child = await manager.fork(source, SessionSeq(atSeq), actor)
+        // 忙碌判定统一走运行时的 `isBusy`：它把"活跃 + 正在打开 + 正在分支"三种占用算在一起，
+        // 而页面侧的 `active` 集合只看得到"这条 SSE 还在推"。两套算法必然会漂移。
+        if (runtimeOf(deps).lifecycle.isBusy(rawId)) throw new HttpError(409, '智能体仍在回答，暂时不能创建分支')
+        const child = await runtimeOf(deps).lifecycle.fork(source, SessionSeq(atSeq), actor)
         respond(actor, res, 200, { conversationId: child.id })
       } catch (caught: unknown) {
         error(res, caught)
@@ -351,7 +486,7 @@ export async function installWeb(
         const payload = await body(req, config.maxRequestBodyBytes)
         const rawId = payload.conversationId
         if (typeof rawId !== 'string') throw new HttpError(400, 'conversationId 必须是字符串')
-        manager.cancel(rawId, actor)
+        runtimeOf(deps).lifecycle.cancel(rawId, actor)
         respond(actor, res, 200, { ok: true })
       } catch (caught: unknown) {
         error(res, caught)
@@ -370,14 +505,18 @@ export async function installWeb(
         if (message === '') throw new HttpError(400, '消息不能为空')
         const rawId = payload.conversationId
         if (rawId !== undefined && typeof rawId !== 'string') throw new HttpError(400, 'conversationId 必须是字符串')
-        const conversation = await manager.open(rawId === '' ? undefined : rawId, true, actor)
+        const { lifecycle } = runtimeOf(deps)
+        const conversation = await lifecycle.open(rawId === '' ? undefined : rawId, true, actor)
         if (conversation === undefined) throw new Error('failed to create business conversation')
         access.assert(actor)
-        if (active.has(conversation.id) || conversation.active) throw new HttpError(409, '智能体正在回答上一条问题，请稍候或点击停止')
-        const selected = await manager.selectModel(conversation, payload.modelSelection, actor)
+        // 忙碌判定统一走 `lifecycle.isBusy`（活跃 + 正在打开 + 正在分支）：页面侧原来还额外看
+        // 一个"这条 SSE 还在推"的本地集合，那是一个**同一个事实的第二份状态**——两个请求同时
+        // 进来时它们会各判各的，而真正的占用只有运行时知道。`conversation.active` 是本实例
+        // 这一份的状态，`isBusy` 已经把同一个字段算进去了（`conversation.ts:189`）。
+        if (lifecycle.isBusy(conversation.id)) throw new HttpError(409, '智能体正在回答上一条问题，请稍候或点击停止')
+        const selected = await lifecycle.selectModel(conversation, payload.modelSelection, actor)
         access.assert(actor)
-        if (active.has(conversation.id) || conversation.active) throw new HttpError(409, '智能体正在回答上一条问题，请稍候或点击停止')
-        active.add(conversation.id)
+        if (lifecycle.isBusy(conversation.id)) throw new HttpError(409, '智能体正在回答上一条问题，请稍候或点击停止')
 
         res.writeHead(200, {
           'content-type': 'text/event-stream; charset=utf-8',
@@ -388,7 +527,7 @@ export async function installWeb(
           if (finished) return
           try { access.assert(actor) } catch {
             finish()
-            manager.abort(conversation.id)
+            lifecycle.abort(conversation.id)
             return
           }
           if (!res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(value)}\n\n`)
@@ -452,17 +591,16 @@ export async function installWeb(
           if (thinkingTimer !== undefined) clearTimeout(thinkingTimer)
           listeners.delete(sink)
           if (listeners.size === 0) waiters.delete(conversation.id)
-          active.delete(conversation.id)
           closeStreams.delete(close)
           recheckStreams.delete(checkAccess)
           if (!res.writableEnded) res.end()
         }
-        const close = () => { manager.abort(conversation.id); finish() }
-        const timeout = setTimeout(() => manager.abort(conversation.id), config.turnTimeoutMs)
+        const close = () => { lifecycle.abort(conversation.id); finish() }
+        const timeout = setTimeout(() => lifecycle.abort(conversation.id), config.turnTimeoutMs)
         const checkAccess = () => {
           try { access.assert(actor) } catch {
             finish()
-            manager.abort(conversation.id)
+            lifecycle.abort(conversation.id)
           }
         }
 
@@ -616,12 +754,12 @@ export async function installWeb(
         recheckStreams.add(checkAccess)
         send({ type: 'conversation', conversationId: conversation.id, model: selected })
         res.once('close', () => {
-          if (!finished) manager.abort(conversation.id)
+          if (!finished) lifecycle.abort(conversation.id)
           finish()
         })
         try {
           if (finished) return
-          await manager.followup(conversation, message, actor)
+          await lifecycle.followup(conversation, message, actor)
         } catch (caught: unknown) {
           send({ type: 'error', message: redactVisibleText(caught instanceof Error ? caught.message : '消息发送失败，请重试') })
           finish()
@@ -634,9 +772,10 @@ export async function installWeb(
     },
   }))
 
+  // 释放本页面登记的 SSE：`close()` 会各自 `lifecycle.abort` 掉自己的会话，
+  // 所以这里不需要（也不该）再维护一份"哪些会话在推"的本地集合。
   ctx.effect(() => () => {
     for (const close of [...closeStreams]) close()
     waiters.clear()
-    active.clear()
   })
 }

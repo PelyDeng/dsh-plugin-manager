@@ -182,7 +182,14 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
 
   /** 结果投影：业务钩子优先，缺省用兜底投影（**"没调交活工具"不等于失败**）。 */
   const project = async (requestContext: ResultContext): Promise<ProjectedResult> => {
-    if (definition.projectResult === undefined) return fallbackProjection(requestContext)
+    // ⚠️ 缺省投影**必须自己**走一遍 `definition.redact`（见 `fallbackProjection`）：漏掉它，
+    // 业务没声明 `projectResult` 时交回的 `result.text` 就是模型正文的**原文** —— 敏感值直接
+    // 交给协调方，是安全口径的退步（旧实现 `closedoff/src/participant.ts` 是无条件脱敏的）。
+    //
+    // 反过来，业务投影那条路径**不能**在运行时再补一次脱敏：`redact` 的契约是"无状态文本变换"
+    // （`definition.ts:185`），**没有承诺幂等**，而业务投影本来就按自己的口径脱敏
+    // （closedoff 的投影就是 `redactVisibleText(finalText)`）。两条路径各自只脱敏一次。
+    if (definition.projectResult === undefined) return fallbackProjection(requestContext, definition.redact)
     const projected = await definition.projectResult(requestContext)
     // 等待的唯一来源是 needsReply：业务给了问题但没声明要等时，不能自行把状态改成等待。
     if (projected.status === 'completed' && definition.needsReply?.(requestContext) === true) {
@@ -715,7 +722,12 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
         } catch (error) {
           if (finished) return
           if (admitted) {
-            lifecycle.abort(opened.id)
+            // ⚠️ 用 `abortHeldTurn(opened)` 而不是 `abort(opened.id)`：失败到达时这个会话上的
+            // **当前**回合可能已经不是这一轮的了（这一轮的回合被页面入口的 `cancel` 摘掉、或已被
+            // 后续轮次取代），而 `abort(id)` 取消的正是"此刻的当前回合" —— 那会取消到别人的回合
+            // 上，或对同一个 driver 补一次无人需要的取消。守卫用这一轮的回合凭据判定，见
+            // `ConversationLifecycle.abortHeldTurn`。
+            lifecycle.abortHeldTurn(opened)
             try { if (started) await opened.handle.agent.whenIdle() } catch { /* 保留原始接续错误。 */ }
           }
           if (!finished) { cleanup(); reject(error) }
@@ -746,10 +758,20 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
   }
 }
 
-/** 缺省的结果投影：按回合结局判定，正文取最终消息。 */
-function fallbackProjection(context: ResultContext): ProjectedResult {
+/**
+ * 缺省的结果投影：按回合结局判定，正文取最终消息。
+ *
+ * 正文**一律过一遍 `definition.redact`**（未声明时原样返回）：这条路径与业务投影是并列的
+ * 两条交付来源，脱敏不能只做在业务那一侧。`redact` 只在这里调一次——调用方（`project`）
+ * 对业务投影的返回值不做任何改写，所以交付正文恰好脱敏一次。
+ *
+ * 结局判定看的是**脱敏前**的正文：脱敏把整段正文清空（全敏感）时，那一轮仍然是"模型答了"，
+ * 不该被记成 `failed`。
+ */
+function fallbackProjection(context: ResultContext, redact?: (text: string) => string): ProjectedResult {
   const text = context.history.finalText.trim()
-  return { status: text === '' ? 'failed' : 'completed', text: text === '' ? '没有拿到可交付的结果。' : text }
+  if (text === '') return { status: 'failed', text: '没有拿到可交付的结果。' }
+  return { status: 'completed', text: redact === undefined ? text : redact(text) }
 }
 
 /** `needsReply` 声明要等、但投影没给问题时，用一句兜底问题，避免用户面对一个没有问题的"等待"。 */

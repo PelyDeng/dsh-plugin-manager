@@ -1,7 +1,8 @@
 /**
  * 封闭化助手在群组里的适配层。
  *
- * 这一层很薄，只做两件事：把群组注入的公共字段补进子包配置、把子包的释放函数接出去。
+ * 这一层很薄，只做三件事：把群组注入的公共字段补进子包配置、把子包的释放函数接出去、
+ * 把就绪探针转交给群组的 per-agent 汇总。
  * 业务代码全在 `agents/closedoff/` 里，不要上移到这个文件，否则群组又会变成一个大泥球。
  */
 
@@ -52,5 +53,12 @@ export const mountClosedoff: AgentMount = async context => {
     ...(context.groupConfigPath === undefined ? {} : { groupConfigPath: context.groupConfigPath }),
   })
 
-  return { tools: instance.tools, participant: instance.participant, dispose: instance.dispose }
+  return {
+    tools: instance.tools,
+    participant: instance.participant,
+    // Q4 口径（与 blog 同一处口径）：缺 PG 配置 = **本 Agent 未就绪**，装载照常。
+    // 探针交给群组的 per-agent 汇总（`/agents/closedoff/ready`），它据此 503 并说明原因。
+    health: instance.health,
+    dispose: instance.dispose,
+  }
 }

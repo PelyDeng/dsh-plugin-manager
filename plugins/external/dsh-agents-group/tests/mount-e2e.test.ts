@@ -300,7 +300,7 @@ describe('群组端到端挂载', () => {
     expect(host.routes.map(route => route.path)).toContain('/agents/closedoff')
   }, 30000)
 
-  it('Q4 口径：缺 PG 配置时 blog 未就绪（503+稳定码）但群组照常装载', async () => {
+  it('Q4 口径：缺 PG 配置时 blog 与 closedoff 都未就绪（503+稳定原因）但群组照常装载', async () => {
     const host = fakeHost()
     writeGroupConfig()
     installProvider(host.ctx)
@@ -318,50 +318,104 @@ describe('群组端到端挂载', () => {
       else process.env.AGENTS_GROUP_PG_DSN = previousDsn
     }
 
-    // 群组照常装载：页面与探针都在，blog 的路由也已注册（未就绪 ≠ 不装载）。
+    // 群组照常装载：页面与探针都在，两个 Agent 的路由也都已注册（未就绪 ≠ 不装载）。
     const paths = host.routes.map(route => route.path)
     expect(paths).toContain('/agents/blog')
     expect(paths).toContain('/agents/blog/ready')
     expect(paths).toContain('/agents/closedoff')
+    expect(paths).toContain('/agents/closedoff/ready')
     const blogReady = await probe(host, '/agents/blog/ready')
     expect(blogReady.status).toBe(503)
     expect(blogReady.body.ok).toBe(false)
     expect(blogReady.body.error).toContain('未配置')
-    // 群组就绪汇总：closedoff 仍就绪，群组整体 200；明细如实标出 blog 未就绪。
+    /**
+     * ⚠️ **P4 的行为变更，断言必须跟着改（不是把 `toBe(true)` 改成 `toBe(false)` 就完事）**。
+     *
+     * 迁移前 closedoff 的会话索引是它自己的 SQLite 文件 ⇒ 不依赖任何外部服务 ⇒ **永远就绪**，
+     * 所以这里原来断的是 `ready === true`。P4 之后它和其他私有 Agent 一样用 PG 的
+     * `dsh_conversations`（设计 §3.2），**缺配置就是未就绪**。
+     *
+     * 断言强度刻意保留在**原因**上：只断 `ready === false` 的话，"未配置"与"配了但连不上"
+     * 这两件事在测试里就分不开了，而它们对运维是两个完全不同的动作（去写配置 / 去查网络与库）。
+     * 所以下一条在 PG 不可达场景里断的是 `storage_unreachable`，两条合起来才钉住"原因如实上报"。
+     */
+    const closedoffReady = await probe(host, '/agents/closedoff/ready')
+    expect(closedoffReady.status).toBe(503)
+    expect(closedoffReady.body.ok).toBe(false)
+    expect(closedoffReady.body.error).toContain('未配置')
+    // 原因里必须带**配置方法**：只说"未配置"会让接手的人不知道去配哪个变量。
+    expect(closedoffReady.body.error).toContain('AGENTS_GROUP_PG_DSN')
+    expect(closedoffReady.body.error).toContain('AGENTS_GROUP_PG_CONFIG')
+    /**
+     * ⚠️ **未就绪也必须注册业务工具**，这条是判据而不是补充。
+     *
+     * `createAgentRuntime` 是 `definition.tools` 的唯一调用点，而它只在存储建好之后才走到那里。
+     * 所以"缺配置"这条路径上如果不同样注册一次，`runtime.tools` 就是空数组 ⇒ 群组算出的
+     * `allowedTools` 里一个 closedoff 工具都没有 ⇒ 模型手里空无一物，**而且不报错**（限制一份
+     * 空集合是合法的）。同时，群组的 `/ready` 只依据探针，页面也不显示工具数，所以这件事在
+     * 界面上完全看不出来。
+     *
+     * 实测：把未就绪路径上那次显式调用删掉，**只有这条断言变红**。
+     */
+    expect(host.registeredTools).toContain('closedoff_park_status')
+    expect(host.registeredTools.filter(name => name.startsWith('closedoff_')).length).toBeGreaterThan(0)
+    // 群组就绪汇总：两个 Agent 都未就绪 ⇒ 整体 503 且 `ok` 为假，明细如实标出各自原因。
+    // （`authReady` 仍然是真：认证本身是好的，坏的是两个 Agent 的存储。）
     const groupReady = await probe(host, '/agents/ready')
-    expect(groupReady.status).toBe(200)
+    expect(groupReady.status).toBe(503)
     expect(groupReady.body.authReady).toBe(true)
+    expect(groupReady.body.ok).toBe(false)
     const agents = (groupReady.body as { agents?: { id: string, ready: boolean, error?: string }[] }).agents ?? []
-    const blog = agents.find(agent => agent.id === 'blog')
-    expect(blog!.ready).toBe(false)
-    expect(blog!.error).toContain('未配置')
-    const closedoff = agents.find(agent => agent.id === 'closedoff')
-    expect(closedoff!.ready).toBe(true)
+    for (const id of ['blog', 'closedoff']) {
+      const agent = agents.find(item => item.id === id)
+      expect(agent?.ready, id).toBe(false)
+      expect(agent?.error, id).toContain('未配置')
+    }
   }, 30000)
 
-  it('Q4 口径：PG 不可达（127.0.0.1:1）时 blog 探针 503+storage_unreachable，群组仍在线', async () => {
+  it('Q4 口径：PG 不可达（127.0.0.1:1）时 blog 与 closedoff 探针都是 503+storage_unreachable，群组仍在线', async () => {
     const host = fakeHost()
     writeGroupConfig()
     installProvider(host.ctx)
     const previousDsn = process.env.AGENTS_GROUP_PG_DSN
+    const previousConfig = process.env.AGENTS_GROUP_PG_CONFIG
     process.env.AGENTS_GROUP_PG_DSN = 'postgres://127.0.0.1:1/agents_group'
+    // 顺手把配置文件指到不存在的位置：这条场景要验的是"**配了但连不上**"，
+    // 不该因为开发机上恰好存在缺省配置文件而变成另一条路径。
+    process.env.AGENTS_GROUP_PG_CONFIG = join(tmpdir(), 'agents-group-test-missing-storage.json')
     try {
       await applyGroup(host.ctx, groupConfig())
     } finally {
       if (previousDsn === undefined) delete process.env.AGENTS_GROUP_PG_DSN
       else process.env.AGENTS_GROUP_PG_DSN = previousDsn
+      if (previousConfig === undefined) delete process.env.AGENTS_GROUP_PG_CONFIG
+      else process.env.AGENTS_GROUP_PG_CONFIG = previousConfig
     }
 
-    // init 连接被拒：blog 已装载但未就绪，healthPath 按稳定码说明原因。
+    // 连接被拒：两个 Agent 都已装载但未就绪，healthPath 按稳定码说明原因。
     const blogReady = await probe(host, '/agents/blog/ready')
     expect(blogReady.status).toBe(503)
     expect(blogReady.body.ok).toBe(false)
     expect(blogReady.body.error).toContain('storage_unreachable')
+    /**
+     * closedoff 同上（P4 的行为变更）：它现在依赖 PG，所以"PG 不可达"对它同样是未就绪。
+     * 断的是**稳定码**而不是一句布尔：`storage_unreachable` 与上一条的"未配置"是两种不同的
+     * 故障，运维看到的原因必须能区分它们（这是改写这条断言时唯一被允许的改动方向）。
+     */
+    const closedoffReady = await probe(host, '/agents/closedoff/ready')
+    expect(closedoffReady.status).toBe(503)
+    expect(closedoffReady.body.ok).toBe(false)
+    expect(closedoffReady.body.error).toContain('storage_unreachable')
     const groupReady = await probe(host, '/agents/ready')
-    expect(groupReady.status).toBe(200)
-    const agents = (groupReady.body as { agents?: { id: string, ready: boolean }[] }).agents ?? []
-    const closedoff = agents.find(agent => agent.id === 'closedoff')
-    expect(closedoff!.ready).toBe(true)
+    // 两个 Agent 都未就绪 ⇒ 汇总 503（迁移前 closedoff 恒就绪，这里是 200）。
+    expect(groupReady.status).toBe(503)
+    expect(groupReady.body.ok).toBe(false)
+    const agents = (groupReady.body as { agents?: { id: string, ready: boolean, error?: string }[] }).agents ?? []
+    for (const id of ['blog', 'closedoff']) {
+      const agent = agents.find(item => item.id === id)
+      expect(agent?.ready, id).toBe(false)
+      expect(agent?.error, id).toContain('storage_unreachable')
+    }
   }, 30000)
 
   it('Q4 口径：blog 的 HTTP 错误渲染把存储稳定码映射为 503/409，其余保持 kit 默认', async () => {

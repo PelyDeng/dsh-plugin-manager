@@ -42,7 +42,10 @@ describe('official DSH answer actions', () => {
     expect(server).toContain('ctx.messageFeedback.delete')
     expect(server).toContain('feedbackUnavailable = true')
     expect(server).toContain('catch {')
-    expect(server).toContain('manager.fork(source, SessionSeq(atSeq), actor)')
+    // P4：分支不再走业务管理器（`manager.fork(...)` 与被删的 `agent.ts` 一起消失），改为
+    // 运行时的会话生命周期。断的仍是同一件事——**服务端真的接了这条路由并带着 atSeq 分支**，
+    // 而不是只把按钮画在页面上。
+    expect(server).toContain('runtimeOf(deps).lifecycle.fork(source, SessionSeq(atSeq), actor)')
     expect(server).toContain('turnUsageSummary(turnEvents)')
   })
 

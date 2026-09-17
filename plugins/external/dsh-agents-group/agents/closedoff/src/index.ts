@@ -20,17 +20,15 @@ import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
-import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { agentResource } from '@dsh-agents-group/common'
-import { createPluginHttp, onRevoked, registerPlugin, registerConversations, type Access, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, createPluginHttp, onRevoked, registerPlugin, registerConversations, type Access, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
-import { ConversationManager } from './agent.ts'
-import { ConversationStore } from './conversation-store.ts'
+import type { ConversationLifecycle, RuntimeConfig } from '../../../packages/runtime/src/conversation.ts'
 import { Config as ConfigSchema, type Config as PluginConfig } from './config.ts'
+import { createClosedoffDefinition } from './definition.ts'
 import { loadEnvConf, parseEnvConf } from './env.ts'
 import { ClosedoffGateway } from './gateway.ts'
-import { registerTools, TOOL_NAMES } from './tools.ts'
-import { createClosedoffParticipant } from './participant.ts'
+import { installClosedoffRuntime, unconfiguredStorageHint } from './runtime.ts'
 import { installWeb } from './web.ts'
 
 export { ConfigSchema as Config }
@@ -136,11 +134,50 @@ async function loadEnvironment(groupConfigPath: string | undefined): Promise<Ret
  */
 const agentResourceUrl = (relative: string): URL => agentResource(import.meta.url, 'closedoff', relative)
 
-/** 装载封闭化助手，返回群组用于卸载的释放函数、工具条目与参与者。 */
+/**
+ * 把业务 `Config` 映射成运行时的 `RuntimeConfig`。
+ *
+ * 五个字段**一一对应且同名**（比对 `packages/runtime/src/conversation.ts` 的 `RuntimeConfig`
+ * 声明），所以这里只取值、不换算、不补默认值：默认值已经由 `schemaDefaults()` 应用过，
+ * 再补一次就会出现"两处默认值各自漂移"。
+ *
+ * 其余业务字段（三维地图、网关超时、分页上限…）**不进**运行时配置：运行时不碰业务网关，
+ * 把用不到的字段塞进去只会让"运行时到底依赖什么"变得看不清。
+ */
+function runtimeConfigOf(config: PluginConfig): RuntimeConfig {
+  return {
+    routePrefix: config.routePrefix,
+    turnTimeoutMs: config.turnTimeoutMs,
+    authRecheckMs: config.authRecheckMs,
+    maxActiveConversations: config.maxActiveConversations,
+    reasoningEffort: config.reasoningEffort,
+  }
+}
+
+/**
+ * 未就绪时的协作入口占位。
+ *
+ * 它**不伪造能力**：`assertAccess` 与 `run` 一律以 503 + 稳定原因拒绝，协作侧拿到的是
+ * "这个成员现在不能用、因为存储没起来"，而不是"这个成员不存在"，也不是一句空结果。
+ */
+function unavailableParticipant(): AgentParticipant {
+  const refuse = (): never => { throw new AccessError(503, unconfiguredStorageHint) }
+  return {
+    protocol: 1,
+    id: 'closedoff',
+    displayName: '封闭化管理智能助手',
+    description: '业务存储未就绪：无法派活，也无法读取会话。',
+    assertAccess: refuse,
+    run: async () => refuse(),
+  }
+}
+
+/** 装载封闭化助手，返回群组用于卸载的释放函数、工具条目、参与者与就绪探针。 */
 export async function mount(context: AgentMountContext): Promise<{
   dispose(): Promise<void>
   tools: readonly ToolDescriptor[]
   participant: AgentParticipant
+  health(): Promise<{ ok: boolean; error?: string }>
 }> {
   const { ctx, access, http, groupConfigPath } = context
   const config: PluginConfig = { ...schemaDefaults(), ...context.config }
@@ -153,15 +190,39 @@ export async function mount(context: AgentMountContext): Promise<{
   if (persona === '') throw new Error('closedoff persona.txt must not be empty')
 
   const gateway = new ClosedoffGateway(config, environment)
-  // 数据路径保持 plugins/closedoff 不变：本次不迁移数据，旧记录仍可读，
-  // 同时它也是回滚到旧插件时的保险。
-  const store = new ConversationStore(dshHomePath('plugins', 'closedoff', 'conversations.sqlite'))
-  const manager = new ConversationManager(ctx, config, persona, TOOL_NAMES, access, store, context.allowedTools)
-  // 群组直接把这个实例桥接成牛马大总管的执行入口，不再经过额外的发现事件。
-  const participant = createClosedoffParticipant(ctx, config, manager, access)
-  if (access.mode === 'authenticated') ctx.effect(() => registerConversations(ctx, manager.management()))
+  /**
+   * 工具授权复核：判定与旧实现（`agent => manager.authorizeAgent(agent)`）逐字相同，只是从
+   * 业务管理器挪到了运行时的会话生命周期（`lifecycle.authorizeAgent`，`conversation.ts:598`）。
+   *
+   * ⚠️ **惰性取**：`definition.tools` 是在 `createAgentRuntime` 内部、也就是生命周期造出来
+   * **之前**被调用的（注册期），而本函数只在工具执行时被调用，那时 `lifecycle` 必然已经就位。
+   * 写成直接引用会让装配顺序变成一个隐藏约束——而那种约束一旦被打破是静默的（工具照常注册，
+   * 只是在执行时拿到 undefined）。
+   */
+  let lifecycle: ConversationLifecycle | undefined
+  const definition = createClosedoffDefinition({
+    gateway,
+    config,
+    persona,
+    authorize: agent => lifecycle?.authorizeAgent(agent),
+    category: context.category,
+  })
+  const runtime = await installClosedoffRuntime({
+    ctx,
+    definition,
+    access,
+    config: runtimeConfigOf(config),
+    allowedTools: context.allowedTools,
+  })
+  // 未就绪（缺 PG 配置或连不上）时 `assembly` 是 undefined：目录条目、页面与探针照常注册，
+  // 只是本 Agent 未就绪。Q4 口径与理由见 `runtime.ts` 的文件头。
+  const assembly = runtime.assembly
+  if (assembly !== undefined) {
+    lifecycle = assembly.lifecycle
+    // 侧栏入口只在 authenticated 下登记（旧实现同样如此）；运行时不替业务做这个决定。
+    if (access.mode === 'authenticated') ctx.effect(() => registerConversations(ctx, assembly.provider))
+  }
 
-  const tools = registerTools(ctx, gateway, config, agent => manager.authorizeAgent(agent), context.category)
   const manifest = JSON.parse(await readFile(agentResourceUrl('package.json'), 'utf8')) as {
     name: string; version: string; description: string
   }
@@ -175,20 +236,30 @@ export async function mount(context: AgentMountContext): Promise<{
     permissions: ['closedoff:access'],
     // 子包没有独立的 deepseekPlugin 声明，分类在推导点直接声明：它是牛马大总管可以对话的成员。
     category: 'agents',
-    tools,
+    // 工具条目由运行时装配返回：`definition.tools` 已在装配期注册过一次，这里只登记清单。
+    tools: runtime.tools,
   }))
-  ctx.effect(() => onRevoked(ctx, () => manager.revokeInvalid()))
-  await installWeb(ctx, config, manager, access, http)
+  ctx.effect(() => onRevoked(ctx, () => assembly?.lifecycle.revokeInvalid()))
+  await installWeb(ctx, config, {
+    lifecycle: assembly?.lifecycle,
+    store: assembly?.store,
+    provider: assembly?.provider,
+  }, access, http)
+
+  if (assembly === undefined) {
+    console.warn('agents-group/closedoff: 已装载但未就绪——业务会话端点与侧栏入口不可用；页面、目录条目与探针照常')
+  }
 
   return {
     // 群组据此算「本分类 + 通用」的工具可见性限制，所以如实返回全部已注册工具。
-    tools,
+    tools: runtime.tools,
     // 参与者交给群组桥接成牛马大总管的执行入口：牛马大总管按「一个 Agent 一个执行入口」工作，
     // 而参与者已经实现了「派一轮活、拿回结论」的全部逻辑，桥接只做字段翻译。
-    participant,
-    dispose: async () => {
-      // 会话与存储由本子包负责释放；注册的路由随 ctx 作用域回收。
-      await manager.dispose()
-    },
+    // 未就绪时给一个**一律 503** 的诚实入口，而不是把自己从名单里抹掉——后者会让群组把
+    // "没配存储"误报成"这个 Agent 没有协作能力"。
+    participant: assembly?.participant ?? unavailableParticipant(),
+    // Q4 口径的就绪探针：群组的 healthPath 与 /ready 汇总据此如实反映存储状态。
+    health: () => runtime.ready(),
+    dispose: () => runtime.dispose(),
   }
 }

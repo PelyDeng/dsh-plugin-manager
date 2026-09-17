@@ -4,6 +4,7 @@
  * ```
  * 建存储（createAgentDatabase + await open()）
  *   → 调 definition.tools(...) 取业务工具描述符        ← ★ 这个钩子的唯一调用点
+ *   → 把存储端口的 titleSink() 接上 installTitleSink    ← ★ 标题投递的唯一装配点（经进程级路由）
  *   → new ConversationLifecycle({ ctx, definition, access, store, config, allowedTools })
  *   → createParticipant({ definition, runtime, access, config, storage })
  *   → createConversationProvider(...) 侧栏入口
@@ -39,9 +40,11 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Access, ConversationProvider, ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import {
   ConversationLifecycle,
+  installTitleSink,
   type AgentRuntime,
   type LifecycleHost,
   type RuntimeConfig,
+  type TitleSink,
 } from './conversation.ts'
 import type { AgentDefinition } from './definition.ts'
 import { createParticipant, type RuntimeParticipant } from './participant.ts'
@@ -106,6 +109,30 @@ export interface AgentRuntimeAssembly {
 }
 
 /**
+ * 标题投递口的**进程级路由**。
+ *
+ * `installTitleSink` 是**模块级单槽**（`conversation.ts:122`），而生命周期是**每个 Agent 一份**。
+ * 所以"在工厂里直接 `installTitleSink(db.titleSink())`"会互踩：同进程里每装配一个 Agent 就把
+ * 上一个的投递口顶掉，而被顶掉那些 Agent 的标题会被**静默丢弃** ——
+ * `AgentDatabaseFacade.titleSink()` 只接受自己 `agentId` 的投递（`storage/index.ts:147`），
+ * 别人的投递到了它手里一律 `return`。标题不可重建（宿主不会再发同一条事件），丢一条就是侧栏
+ * 少一个标题，且不报错。
+ *
+ * 槽位里装的因此是这层**分发器**，不是第二份投递口实现：真正落库的仍然是存储端口已有的
+ * `titleSink()`（它底层是本地持久 outbox，装配侧不重写）。`TitleSink.submit` 的第一个参数
+ * 就是 agentId，分发是一对一的；每个运行时登记自己那一份，释放时摘掉自己那一份。
+ *
+ * **释放时不移除槽位**：槽位可能已经被别的装配方（业务 `mount()`）装上了它自己的投递口，
+ * `installTitleSink(undefined)` 会把别人的一起抹掉。空转的分发器没有任何副作用。
+ */
+const titleSinks = new Map<string, TitleSink>()
+const titleRouter: TitleSink = {
+  submit: (agentId, conversationId, title, source) => {
+    titleSinks.get(agentId)?.submit(agentId, conversationId, title, source)
+  },
+}
+
+/**
  * 装配一个 Agent 运行时。
  *
  * 这是 `definition.tools` 的**唯一调用点**：删掉下面那次调用，业务工具就一个都不会被注册，
@@ -118,6 +145,21 @@ export async function createAgentRuntime(input: CreateAgentRuntimeInput): Promis
 
   // ★ 业务工具：装配期调用一次。返回值原样交给装配侧登记。
   const tools = definition.tools({ ctx, storage, conversationId: undefined })
+
+  // ★ 标题投递口：装配期接一次。此前全仓只有 `installTitleSink` 的**定义与测试调用**、没有任何
+  //   装配点 ⇒ `registerConversationTitles` 的回调（生命周期的构造函数里注册）投出去就消失，
+  //   宿主标题永不落库，侧栏标题永久停在首句压缩值。这与 `definition.tools` 是同一类"零接线"
+  //   缺陷（声明与实现都在、中间的线没接，而且完全静默）。
+  //
+  //   端点直接用存储端口已有的那一份（`AgentDatabaseFacade.titleSink()`，底层是本地持久
+  //   outbox：内存队列会在崩溃或卸载时丢标题），不另写实现；槽位为什么要路由见 `titleRouter`。
+  //   装在 `new ConversationLifecycle(...)` **之前**：标题订阅就是那个构造函数注册的，
+  //   投递口必须在任何事件可能到达之前就在位。
+  const sink = db.titleSink?.()
+  if (sink !== undefined) {
+    titleSinks.set(definition.id, sink)
+    installTitleSink(titleRouter)
+  }
 
   const host: LifecycleHost = { ctx, definition, access, store: db.conversations, config, allowedTools }
   const lifecycle = new ConversationLifecycle(host)
@@ -149,6 +191,10 @@ export async function createAgentRuntime(input: CreateAgentRuntimeInput): Promis
         // 最后关存储。反过来的话，收尾里的存储调用会落在一个已经关掉的门面上。
         await participant.dispose()
         await lifecycle.dispose()
+        // 标题投递口要在关存储**之前**摘掉：它指向的就是这个即将关闭的门面。只摘**自己那一份**
+        // （同一 agentId 可能已经换了新装配，那张表里已经不是这个 sink 了）；槽位本身不动，
+        // 理由见 `titleRouter`。
+        if (sink !== undefined && titleSinks.get(definition.id) === sink) titleSinks.delete(definition.id)
         await db.close()
       })()
       return disposing

@@ -18,7 +18,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ParticipantRequest, ParticipantResult } from '../packages/runtime/src/contract.ts'
 import { ConversationLifecycle, type AgentRuntime, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
 import { createParticipant, type RuntimeParticipant } from '../packages/runtime/src/participant.ts'
@@ -101,6 +101,10 @@ function host(definition: AgentDefinition, config: Partial<RuntimeConfig> = {}, 
   const followups: { readonly id: string; readonly text: string }[] = []
   const disposers: (() => Promise<void> | void)[] = []
   const openedIds: string[] = []
+  /** 每个句柄被 `dispose` 的次数（"泄漏 / 恰好一次"这类判据要看它）。 */
+  const disposals = new Map<string, number>()
+  /** 投给 driver 的取消（`agent.cancel`），按会话记。 */
+  const cancels: { readonly id: string; readonly cause: unknown }[] = []
   let seq = 0
 
   const sessionOf = (id: string): FakeSession => {
@@ -117,7 +121,7 @@ function host(definition: AgentDefinition, config: Partial<RuntimeConfig> = {}, 
         session.events.push({ type: 'user/message', data: message, time: Date.now(), seq } as unknown as SessionEvent)
       },
       whenIdle: async () => {},
-      cancel: () => {},
+      cancel: (cause: unknown) => { cancels.push({ id, cause }) },
     } as unknown as Agent
     sessions.set(id, session)
     return session
@@ -143,12 +147,12 @@ function host(definition: AgentDefinition, config: Partial<RuntimeConfig> = {}, 
       const session = sessionOf(String(input.sessionId))
       openedIds.push(session.id)
       await input.setup?.(scopeOf(), session.agent)
-      return { agent: session.agent, dispose: async () => { session.disposed = true } }
+      return { agent: session.agent, dispose: async () => { session.disposed = true; disposals.set(session.id, (disposals.get(session.id) ?? 0) + 1) } }
     },
     resume: async (input: { readonly resumeSessionId: unknown; readonly setup?: (ctx: Context, agent: Agent) => unknown }) => {
       const session = sessionOf(String(input.resumeSessionId))
       await input.setup?.(scopeOf(), session.agent)
-      return { agent: session.agent, dispose: async () => { session.disposed = true } }
+      return { agent: session.agent, dispose: async () => { session.disposed = true; disposals.set(session.id, (disposals.get(session.id) ?? 0) + 1) } }
     },
     list: () => [],
     get: () => undefined,
@@ -208,8 +212,10 @@ function host(definition: AgentDefinition, config: Partial<RuntimeConfig> = {}, 
   const participant: RuntimeParticipant = createParticipant({ definition, runtime, storage, access, config: runtimeConfig })
 
   return {
-    participant, lifecycle, port, storage, questions,
+    participant, lifecycle, port, storage, questions, ctx,
     followups: () => followups,
+    cancels: () => cancels,
+    disposals: () => disposals,
     opened: () => openedIds,
     /** 最近一次建立句柄的会话 id。 */
     lastConversation: () => openedIds[openedIds.length - 1] ?? '',
@@ -622,6 +628,100 @@ describe('⑧ 有界自修正', () => {
       expect(judgeCalls).toBeLessThanOrEqual(4)
       expect(hosted.followups().length).toBeLessThanOrEqual(4)
       expect(result.selfCheck?.status).toBe('failed')
+    } finally { await hosted.dispose() }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 句柄回收：发布段失败时不能留下永不释放的 driver
+// ---------------------------------------------------------------------------
+
+/**
+ * `openReserved`（新建路径）在 `store.publish` 失败时会 `await handle.dispose()`；`fork`（分支路径）
+ * 曾经没有这一步。后果不是"多了一个对象"，而是**进程里留下一个永不释放的 driver**：那个 Agent
+ * 既不进活跃表（`publish()` 没被调用，`publish(id, handle, options)` 走不到）、也不会被 LRU 回收
+ * （`reserveSlot` 只在活跃表里挑），`finally` 只管 `pendingOpens` 与 `forks` 两个计数。
+ */
+describe('fork 的发布段失败', () => {
+  it('发布失败时那个句柄必须被销毁（照 openReserved 的形状）', async () => {
+    const hosted = host(definitionOf())
+    try {
+      const conversation = (await hosted.lifecycle.open(undefined, true, ACTOR))!
+      hosted.complete(conversation.id, '第一轮完成')
+      // 分支边界必须是**已完成回合**的 `turn/end`。
+      const boundary = [...hosted.lifecycle.events(conversation)].reverse().find(event => event.type === 'turn/end')!.seq
+
+      // 发布段失败（真实现是 PG 往返失败；本地围栏写不进去也一样）。
+      vi.spyOn(hosted.port, 'publish').mockRejectedValueOnce(new Error('PG 不可用'))
+      await expect(hosted.lifecycle.fork(conversation, boundary, ACTOR)).rejects.toThrow('PG 不可用')
+
+      const childId = hosted.opened().at(-1)!
+      expect(childId).not.toBe(conversation.id)
+      // ★ 判据：删掉 `fork` 里发布段那次 `handle.dispose()`，这一条立刻变红（句柄泄漏）。
+      expect(hosted.disposals().get(childId)).toBe(1)
+      // 预留行还在、但没发布：与 `openReserved` 的失败路径同一形状（侧栏看不到这条会话）。
+      expect(hosted.port.record(ACTOR, childId).ready).toBe(false)
+    } finally { await hosted.dispose() }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 取消的作用范围：只取消这一轮自己的回合
+// ---------------------------------------------------------------------------
+
+/**
+ * 协作入口的接续失败分支（`participant.ts` 的 IIFE catch）里那句 `lifecycle.abort(...)` 取消的是
+ * **这个会话此刻的当前回合**，不是"这一轮的回合"。这里把守卫（`abortHeldTurn`：句柄仍是当前句柄
+ * **且**当前回合就是这一轮 `retainTurn` 之后派发出去的那一个）钉在**可达**的那一半上：
+ *
+ * 这一轮的回合已经被别人（页面入口的 `cancel`）中止过 ⇒ `turns` 里已经没有它了 ⇒ 迟到的接续失败
+ * 不能再对同一个 driver 补一次取消。少了守卫就会多出一次 `agent.cancel`，而"取消"是会被页面与
+ * 宿主观察到的动作；在守卫的另一个条件上（句柄已被换掉 / 当前回合是别人的），补的那一次取消会
+ * 直接打断**别人**的回合——那一条按下面的不变式不可达，所以这里不断言它，只保留守卫本身。
+ *
+ * 不可达的理由（写入本仓库的推理链，供以后改动核对）：① 从 `admitted = true` 到
+ * `lifecycle.followup(...)` 之间**没有 await**，而 `followup` 在第一个 await 之前就
+ * `turns.set(...)` 且 `active = true`，所以别人插不进来；② 一旦登记了回合，`active` 为真，
+ * 页面的 `followup` 与 LRU 驱逐都被挡住；③ 这一轮释放凭据（`releaseTurn`）只发生在
+ * `cleanup()` 里，而 `cleanup()` 首先把 `finished` 置真 —— catch 开头的 `if (finished) return`
+ * 因此已经拦住了"收尾之后才到的失败"。
+ */
+describe('接续失败的取消只作用于这一轮自己的回合', () => {
+  it('这一轮的回合已被页面取消时，迟到的失败不再补一次取消', async () => {
+    const hosted = host(definitionOf())
+    try {
+      // 让**这一轮**的模型路由挂住（第一次调目录是打开会话用的，正常返回）：`followup` 在第一个
+      // await 之前就登记了回合，所以挂在这里就能拿到"回合已登记、还没派发"那个窗口。
+      const controller = hosted.ctx.get('sessionController') as { modelCatalog: () => Promise<unknown> }
+      const real = controller.modelCatalog
+      let calls = 0
+      let rejectTurn!: (error: unknown) => void
+      controller.modelCatalog = () => {
+        calls += 1
+        return calls === 1 ? real() : new Promise((_resolve, reject) => { rejectTurn = reject })
+      }
+
+      const promise = hosted.participant.run(hosted.request())
+      void promise.catch(() => {})
+      await until(() => rejectTurn !== undefined, '这一轮的模型路由已经开始等目录')
+      const id = hosted.opened().at(-1)!
+      // 回合已经登记（占用是真的）但还没派发给 driver。
+      expect(hosted.followups()).toHaveLength(0)
+      expect(hosted.lifecycle.isBusy(id)).toBe(true)
+
+      // 页面入口在这个窗口里取消这一轮：pending 回合被摘掉，driver 收到**一次**取消。
+      hosted.lifecycle.cancel(id, ACTOR)
+      expect(hosted.cancels()).toEqual([{ id, cause: { kind: 'user' } }])
+
+      // 迟到的目录失败：这一轮的接续失败分支执行 —— 它的回合已经不在 `turns` 里了。
+      controller.modelCatalog = real
+      rejectTurn(new Error('目录已下线'))
+      await expect(promise).rejects.toThrow('目录已下线')
+
+      // ★ 判据：把 `abortHeldTurn` 换回 `abort(id)`，这里会变成 2 次（对已经中止的回合补一次取消）。
+      expect(hosted.cancels()).toHaveLength(1)
+      // 这一轮自己的占用如实放掉，会话回到空闲。
+      expect(hosted.lifecycle.isBusy(id)).toBe(false)
     } finally { await hosted.dispose() }
   })
 })

@@ -15,7 +15,7 @@ kind: "package-bundle"
 
 支持明确选择的独立运行和统一认证模式。启用认证后，页面通过 `/auth` 登录，全部业务 API 和工具要求 `closedoff:access`，历史对话按账号隔离；不安装 auth 时可使用独立模式。身份、存储及旧数据规则见 [认证与个人历史](doc/architecture.md#认证与个人历史)。
 
-实时输出使用官方 `agent/assistant-stream`，历史使用 `expandAssistantStream` 展开 Session V3 的 message/attempt 记录，保留思考预览、工具提示、失败或取消的部分输出和首 token 时间。瞬时帧不写入持久日志，开发依赖与运行宿主均固定为 `0.1.6-alpha.1`。旧会话由官方持久化接口转换，升级和回退约束见[宿主兼容说明](../../../../../doc/host-compatibility.md)。
+会话机制（Agent 生命周期、工具限制、事件投影、协作入口）由智能体群组的运行时 `packages/runtime` 代管，本包只提供一份 `src/definition.ts` 声明与业务实现。实时输出走官方 `agent/assistant-stream`，历史走 Session V3 的 message/attempt 记录展开，保留思考预览、工具提示、失败或取消的部分输出和首 token 时间；瞬时帧不写入持久日志。开发依赖与运行宿主均固定为 `0.1.6-alpha.1`，升级和回退约束见[宿主兼容说明](../../../../../doc/host-compatibility.md)。
 
 ## 对话模型
 
@@ -72,7 +72,8 @@ closedoff 在 authenticated 模式接入 auth 的[会话管理](../../../../../d
 - “在园车辆最新位置”只用于明确的当前状态问题；该接口返回缓存最新值，不表述为无延迟实时坐标。
 - 浏览器会话使用 `closedoff-web-<UUID>` 命名空间，服务端同时检查持久化的会话归属，不能读取其他用户或其他 DSH 会话。
 - 达到进程内会话上限时只回收最久未使用的空闲 handle，不删除持久会话，也不打断正在回答的会话。
-- 对话正文通过 DSH session persistence 保存，历史列表及归属保存在本插件 SQLite 索引中；服务重启或更换浏览器后登录相同账号可恢复个人历史。
+- 对话正文通过 DSH session persistence 保存；历史索引（归属、标题、置顶与移除围栏）落在 PostgreSQL 的 `dsh_conversations`，本地只留围栏镜像与待补写队列。服务重启或更换浏览器后登录相同账号可恢复个人历史。
+- 存储未配置或连不上时本 Agent **未就绪**（`/agents/closedoff/ready` 返回 503 并说明配置方法），页面与探针照常在线；不存在其他存储后端，不会回退 SQLite。
 - 页面资源均由本包本地提供，不依赖 CDN。
 - 视频播放器默认开启 AI 识别框，并提供开启／关闭按钮；画框依赖视频流携带的 SEI 识别数据，开关只控制前端识别框显示，不启停后台算法。
 
@@ -81,12 +82,13 @@ closedoff 在 authenticated 模式接入 auth 的[会话管理](../../../../../d
 ```mermaid
 flowchart LR
   U[业务用户浏览器] -->|HTTP + SSE| W[本包 Web 路由]
-  W --> M[ConversationManager]
+  W --> M[群组运行时<br/>会话生命周期 + 存储端口]
   M --> A[DSH Agent + Agent Loop]
   A --> T[本包 37 个只读 Tool]
   T --> G[ClosedoffGateway]
   G -->|HTTPS| B[封闭化业务网关]
   A --> S[DSH Session Persistence]
+  M --> D[(PostgreSQL<br/>dsh_conversations)]
   G --> C[插件私有 env.conf]
   W --> P[纯展示投影<br/>卡片/轨迹/历史]
   S --> P

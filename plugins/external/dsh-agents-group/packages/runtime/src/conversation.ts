@@ -549,7 +549,12 @@ export class ConversationLifecycle {
         await handle.dispose()
         throw new Error('conversation lifecycle is disposed')
       }
-      await this.host.store.publish(this.ownerOf(actor), id)
+      try {
+        // 发布段：照 `openReserved` 的形状——发布失败时句柄**必须**在这里销毁。少了这一步，
+        // 分支的发布一失败，那个 Agent 就既不进活跃表（`publish()` 没被调用）也没人回收
+        // ⇒ 进程里留下一个永不释放的 driver（`finally` 只管 `pendingOpens` 与 `forks` 两个计数）。
+        await this.host.store.publish(this.ownerOf(actor), id)
+      } catch (error) { await handle.dispose(); throw error }
       this.pendingOpens -= 1
       reserved = false
       return this.publish(id, handle, options)
@@ -592,6 +597,33 @@ export class ConversationLifecycle {
       if (turn.pending) { this.turns.delete(conversation!); conversation!.active = this.heldTurns.has(id) }
     }
     conversation?.handle.agent.cancel({ kind: 'user' })
+  }
+
+  /**
+   * 中止**这一轮自己持有的那个回合**：只有"这个句柄仍是这个 id 的当前句柄、且它上面的当前回合
+   * 就是这一轮 `retainTurn` 之后派发出去的那一个"时才取消，否则**什么都不做**。
+   *
+   * 与 {@link abort} 的差别只有守卫这一个，而它是必要的：`abort(id)` 取消的是"这个 id **此刻**的
+   * 当前回合"。协作入口的接续失败分支（旧目录 / 旧接续的**迟到**失败）在失败到达时，这一轮自己的
+   * 回合可能已经不在了（被页面入口的 `cancel` 摘掉、或被 `finish` 收掉），那一下就会取消到
+   * **别人**的回合上，或者对同一个 driver 补一次无人需要的取消。
+   *
+   * 判据用的是这一轮的**回合凭据**（`retainTurn` 的 `held` 记录），不是标志位或时间窗：
+   *
+   * - `conversations.get(id) !== conversation` ⇒ 这个句柄已被 LRU 驱逐 / 侧栏移除，id 上此刻的
+   *   句柄是**另一个对象**（`turns` 是 `WeakMap<Conversation, …>`，按对象算，不对上就一定是别人的）；
+   * - `held.turn === undefined` ⇒ 这一轮还没派发过任何回合（`followup` 在第一个 await 之前就登记，
+   *   没登记说明它当时就抛了），这一轮没有任何东西可取消；
+   * - `turns.get(conversation) !== held.turn` ⇒ 当前回合不是这一轮派发的那一个（已被摘掉，或已被
+   *   后续轮次取代）。
+   *
+   * 三条都不成立时才走 {@link abort}：那时当前回合**就是**这一轮的回合，取消它是这一轮的本分。
+   */
+  abortHeldTurn(conversation: Conversation): void {
+    if (this.conversations.get(conversation.id) !== conversation) return
+    const held = this.heldTurns.get(conversation.id)
+    if (held?.turn === undefined || this.turns.get(conversation) !== held.turn) return
+    this.abort(conversation.id)
   }
 
   /** 复核启动当前回合的那个登录会话。 */

@@ -20,7 +20,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Access, ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import { describe, expect, it } from 'vitest'
-import type { RuntimeConfig } from '../packages/runtime/src/conversation.ts'
+import { installTitleSink, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
 import type { AgentDefinition, AgentToolContext } from '../packages/runtime/src/definition.ts'
 import { createAgentRuntime } from '../packages/runtime/src/runtime.ts'
 import type { AgentDatabasePort, AgentStoragePort, TurnStorePort } from '../packages/runtime/src/storage/ports.ts'
@@ -48,6 +48,10 @@ function fakeHost() {
     byEvent.set(name, group)
     return () => { group.delete(listener) }
   }
+  /** 投递一条事件（与真实 cordis 一致：只给订阅了这个名字的监听器）。 */
+  const emit = (name: string, ...args: unknown[]): void => {
+    for (const listener of [...(byEvent.get(name) ?? [])]) listener(...args)
+  }
   const ctx = {
     effect: (execute: () => unknown) => {
       const disposable = execute()
@@ -58,12 +62,21 @@ function fakeHost() {
     get: () => undefined,
     root: { emit: () => {} },
   } as unknown as Context
-  return { ctx, registeredEffects, listeners: () => [...byEvent.keys()] }
+  return { ctx, registeredEffects, emit, listeners: () => [...byEvent.keys()] }
+}
+
+/** 一条投递到标题口的记录（真实实现里它会被写进本地 `title_outbox`，再后台补写 PG）。 */
+interface TitleDelivery {
+  readonly agentId: string
+  readonly conversationId: string
+  readonly title: string
+  readonly source: string
 }
 
 /** 内存存储门面：会话走替身，其余面是最小实现。 */
 function fakeDatabase(agentId: string) {
   const port = new MemoryConversationPort(agentId)
+  const titles: TitleDelivery[] = []
   let closes = 0
   const turns: TurnStorePort = {
     claim: async () => 'claimed',
@@ -76,11 +89,24 @@ function fakeDatabase(agentId: string) {
     assertSchema: async () => {},
     conversations: port,
     turns,
+    /**
+     * 标题投递口。
+     *
+     * 真实现是 `AgentDatabaseFacade.titleSink()`：**只接收自己 agentId 的投递**（别人的会话在
+     * 这个门面上根本不存在），落点是本地 `title_outbox`（持久，后台补写 PG）。这里只记录投递，
+     * 够断言"装配有没有把线接上"。
+     */
+    titleSink: () => ({
+      submit: (sinkAgentId: string, conversationId: string, title: string, source: string) => {
+        if (sinkAgentId !== agentId) return
+        titles.push({ agentId: sinkAgentId, conversationId, title, source })
+      },
+    }),
     query: async () => [],
     transaction: async (fn: (tx: AgentDatabasePort) => Promise<unknown>) => fn(db as unknown as AgentDatabasePort),
     close: async () => { closes += 1 },
   } as unknown as AgentDatabasePort
-  return { db, port, closes: () => closes }
+  return { db, port, titles, closes: () => closes }
 }
 
 const config: RuntimeConfig = {
@@ -99,16 +125,16 @@ const access: Access = {
 }
 
 /** 装配一个被测运行时。`tools` 钩子的返回值是固定的那一份数组——② 要按**引用**比。 */
-function fixture() {
+function fixture(agentId = AGENT_ID) {
   const host = fakeHost()
-  const database = fakeDatabase(AGENT_ID)
+  const database = fakeDatabase(agentId)
   /** 每次调用记一条：`ctx` 一并记下，判据①要的就是"拿到的是装配 ctx"。 */
   const hookCalls: AgentToolContext[] = []
   const hookResult: readonly ToolDescriptor[] = [
     { name: 'assembly_demo', displayName: '装配用例工具', description: '装配用例用', parameters: {}, permission: '' },
   ]
   const definition: AgentDefinition = {
-    id: AGENT_ID,
+    id: agentId,
     displayName: '装配用例 Agent',
     description: '只用来验证装配链',
     persona: '你是一个装配用例。',
@@ -201,5 +227,80 @@ describe('createAgentRuntime 的装配链', () => {
     expect(first).toBe(second)
     await expect(first).resolves.toBeUndefined()
     expect(f.database.closes()).toBe(1)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 判据③：标题投递口真的被接上了（与 definition.tools 同源的"零接线"缺口）
+// ---------------------------------------------------------------------------
+
+/**
+ * `installTitleSink` 此前全仓只有**定义与测试调用**、没有任何装配点：`registerConversationTitles`
+ * 的回调投出去就消失，宿主标题永不落库，侧栏标题永久停在首句压缩值——不报错、完全静默。
+ *
+ * 下面两条用例分别钉住两件事：**线接上了**（删掉工厂里那次 `installTitleSink(...)` ⇒ 红），
+ * 以及**模块级单槽没有互踩**（改回"直接装 `db.titleSink()`" ⇒ 同进程两个 Agent 时先装配那个的
+ * 标题被顶掉 ⇒ 红）。
+ */
+describe('createAgentRuntime 接上标题投递口', () => {
+  /** 造一条宿主的标题事件（形状照 `registerConversationTitles` 的判据：provider + 单条 messageSeqs）。 */
+  const titleEvent = (title: string, source: { readonly kind: string }, messageSeqs: readonly number[] = [0]) => ({
+    type: 'session/title',
+    data: { title, messageSeqs: [...messageSeqs], source },
+    time: Date.now(),
+    seq: 1,
+  })
+
+  it('宿主标题经 TitleSink 投到存储端口的投递口（装配之后标题回调真的走通了）', async () => {
+    const f = fixture()
+    // 标题口是**进程级单槽**，同一个测试文件里前面的用例可能已经把它装上了（模块状态不随用例
+    // 重置）。这里先显式清空，否则"这次装配到底有没有装它"就测不出来 —— 前一条用例留下的路由
+    // 会替它装上，把缺口掩盖成绿灯。
+    installTitleSink(undefined)
+    const assembly = await f.assemble()
+    const conversationId = 'assembly-agent-01234567-89ab-4cde-8fab-0123456789ab'
+    // 装配期就装上了：标题回调是同步的，投递口必须在任何事件到达之前就在位。
+    expect(f.database.titles).toHaveLength(0)
+
+    f.host.emit('session/event', { id: conversationId }, titleEvent('车辆轨迹查询', { kind: 'provider' }))
+    // ★ 判据：删掉工厂里那次 `installTitleSink(...)`，投递就进了模块级单槽的空值 ⇒ 静默丢弃，
+    //   下面的断言必然红。
+    expect(f.database.titles).toEqual([
+      { agentId: AGENT_ID, conversationId, title: '车辆轨迹查询', source: 'generated' },
+    ])
+
+    // 手动改名走同一条路（`source.kind === 'user'` ⇒ `manual`），来源映射不能写反。
+    f.host.emit('session/event', { id: conversationId }, titleEvent('我的车辆记录', { kind: 'user' }, []))
+    expect(f.database.titles.at(-1)).toMatchObject({ title: '我的车辆记录', source: 'manual' })
+    expect(f.database.titles).toHaveLength(2)
+
+    await assembly.dispose()
+  })
+
+  it('同进程两个 Agent：标题按 agentId 各归各的投递口，后装配的不会顶掉先装配的', async () => {
+    const a = fixture('assembly-agent-a')
+    const b = fixture('assembly-agent-b')
+    // 同上：从空槽位开始，这样"装的是不是可分发的那一个"才由这两次装配决定。
+    installTitleSink(undefined)
+    const first = await a.assemble()
+    const second = await b.assemble()
+    const idOf = (agentId: string): string => `${agentId}-01234567-89ab-4cde-8fab-0123456789ab`
+
+    // `installTitleSink` 是**模块级单槽**，而每个 Agent 的投递口只管自己 agentId 的会话。
+    // 所以"直接装 `db.titleSink()`"会让 A 的标题落进 B 的投递口、被它按 agentId 丢掉（静默）。
+    // ★ 判据：把工厂里的路由换成直接 `installTitleSink(sink)`，第一条断言必然红。
+    a.host.emit('session/event', { id: idOf('assembly-agent-a') }, titleEvent('A 的标题', { kind: 'provider' }))
+    expect(a.database.titles).toHaveLength(1)
+    expect(b.database.titles).toHaveLength(0)
+
+    // B 有自己的那条：两边都收得到，谁也不挡谁。
+    b.host.emit('session/event', { id: idOf('assembly-agent-b') }, titleEvent('B 的标题', { kind: 'provider' }))
+    expect(b.database.titles).toEqual([
+      { agentId: 'assembly-agent-b', conversationId: idOf('assembly-agent-b'), title: 'B 的标题', source: 'generated' },
+    ])
+    expect(a.database.titles).toHaveLength(1)
+
+    await first.dispose()
+    await second.dispose()
   })
 })

@@ -19,16 +19,18 @@ kind: "package-bundle"
 | `src/gateway.ts` | 本包 | 使用已校验的私有参数完成两阶段登录、token 缓存、请求限制和响应归一化 |
 | `src/tools.ts` | 本包 | 把 catalog 转成 DSH Tool，并注册到 `ctx.tools` |
 | `src/redaction.ts` | 本包 | 对模型可见结果、卡片和旧历史正文执行确定性脱敏 |
-| `src/agent.ts` | 本包 + DSH | 为专用页面创建或恢复 Agent；限定 persona、模型选择和 Tool allowlist |
-| `src/conversation-store.ts` | 本包 | 持久化账号归属和历史列表摘要，正文继续由 DSH 保存 |
+| `src/definition.ts` | 本包 | 声明本 Agent 的 persona、工具注册、脱敏、思考投影与结果投影；不注册任何东西 |
+| `src/runtime.ts` | 本包 + 群组运行时 | 解析 PostgreSQL 存储配置、装配运行时、提供就绪探针；缺配置时本 Agent 未就绪而不装载失败 |
 | `src/web.ts` | 本包 + DSH | 在 `ctx.webServer` 注册静态页面、历史、SSE 对话、回答反馈、会话分支与停止路由 |
 | `src/presentation.ts` | 本包 | 只读取持久 session event，整理成页面历史、卡片和轨迹点 |
 | `src/fences.ts` | 本包 | 解析围栏标绘，向实时页面与历史恢复提供完整边界和不可展示提示 |
+| `packages/runtime` | 群组运行时 | 会话生命周期、Agent 句柄与工具限制、事件投影、协作入口、存储端口与侧栏入口的唯一实现 |
 | `web/index.html`、`web/app.css` | 本包 | 定义专用页面的语义骨架和视觉规则，不承载业务事件处理 |
 | `web/app.js` | 本包 | 管理会话、SSE 事件、思考与 Tool 状态、卡片、回答操作和历史恢复 |
 | `web/trajectory.js` | 本包 | 封装轨迹三维、串行自动截图、全屏手动截图、设备组和摄像头播放器生命周期 |
 | Agent Loop / LLM | DSH | 组织回合、调用模型、执行 Tool、产生结构化 session event |
 | Session Persistence | DSH | 保存并恢复对话事件，不由本包另建聊天数据库 |
+| PostgreSQL `dsh_conversations` | 群组运行时 | 会话归属、标题、置顶与移除围栏的权威数据；三个私有 Agent 共用，靠 `agent_id` 区分 |
 
 ## 一次问答的数据流
 
@@ -108,7 +110,7 @@ sequenceDiagram
 
 ## 持久化和恢复
 
-浏览器只保存符合 `closedoff-web-<UUIDv4>` 的 `conversationId`，本地编号按当前身份分开。服务重启后，历史接口先检查 SQLite 中的归属，再要求 `ConversationManager` 通过 DSH persistence 恢复相同 session，从持久保存的事件日志重建页面。浏览器不能提交任意 DSH session ID，也不能指定未知 ID 创建或认领会话。
+浏览器只保存符合 `closedoff-web-<UUIDv4>` 的 `conversationId`，本地编号按当前身份分开。服务重启后，历史接口先在会话端口上复核归属与围栏状态（`ready`、`deletedAt`、`removalState`），再要求群组运行时通过 DSH persistence 恢复相同 session，从持久保存的事件日志重建页面。浏览器不能提交任意 DSH session ID，也不能指定未知 ID 创建或认领会话；不属于本 Agent 前缀的 id 在入口处即被拒。
 
 Agent handle 是进程内资源；销毁 handle 会移除活动对象，不等于删除磁盘 session 日志。专用页面不维护第二套消息表，避免 DSH 日志和业务页面历史不一致。
 
@@ -120,13 +122,17 @@ Agent handle 是进程内资源；销毁 handle 会移除活动对象，不等�
 
 所有 37 个工具统一要求 `closedoff:access`。运行目录从实际工具定义登记名称、描述和参数，在 auth 的“已注册插件”中展示。全局工具执行入口在调用业务网关前和返回结果前复核权限；认证模式没有绑定身份的官方或外部 Agent 无法调用它们。该授权只表示可以使用封闭化插件，不定义园区或企业级数据权限。
 
-`$DSH_HOME/plugins/closedoff/conversations.sqlite` 保存会话 ID、身份命名空间、用户 ID、创建和更新时间以及历史标题，不复制聊天正文。归属先保留，DSH Agent 创建成功后才发布索引；创建失败或进程中断留下的未完成索引不可访问，不自动认领。历史列表在服务端按归属分页查询。用户的不同浏览器共享同一用户 ID，登录会话 ID 不写入历史归属，因此退出或重启不改变记录主人。
+会话索引的权威数据在 PostgreSQL 的 `dsh_conversations`（三个私有 Agent 共用一张表，靠 `agent_id` 区分），保存会话 ID、身份命名空间、用户 ID、创建和更新时间、历史标题、置顶标记与移除围栏状态，不复制聊天正文。归属先保留（`ready = false`），DSH Agent 创建成功后才发布索引；创建失败或进程中断留下的未完成索引不可访问，不自动认领。历史列表在服务端按归属分页查询。用户的不同浏览器共享同一用户 ID，登录会话 ID 不写入历史归属，因此退出或重启不改变记录主人。
+
+本地只保留一份**同步面**所需的状态：会话行镜像（供 kit 的移除围栏同步读）与待补写队列（围栏标记、标题），落 `$DSH_HOME/plugins/closedoff/mirror.sqlite`，可删除重建。PG 连接配置来自环境变量 `AGENTS_GROUP_PG_DSN`，或 `AGENTS_GROUP_PG_CONFIG` 指向的私有配置文件（缺省 `$DSH_HOME/plugins/agents-group/storage.json`，内容形如 `{"dsn":"postgres://…"}`）。缺配置或连不上时本 Agent **未就绪**：页面、目录条目与 `/agents/closedoff/ready` 探针照常注册，探针返回 503 并给出原因与配置方法，业务端点与侧栏入口以 503 拒绝；不会回退到 SQLite 或其他后端。
+
+迁移前的 `$DSH_HOME/plugins/closedoff/conversations.sqlite`（本包自己那份归属索引）**不再读写**，存量按设计决策直接删除，内容不迁移。
 
 运行中的 Agent 和 SSE 绑定发起该回合的具体登录会话。同一用户另一登录可读取历史，但正在回答时不能重新绑定身份。退出、密码修改、账号停用、授权撤销或认证提供者卸载会取消对应回合并关闭流；输出前仍复核授权，定时检查的间隔由 `authRecheckMs` 配置，默认为 1000 毫秒。连接关闭不代表 Agent 已结束，只有 DSH 的 `turn/end` 才释放活动状态，防止未结束工具被另一次登录重新授权。
 
 独立模式使用安装级 `standalone:local` 身份，不提供浏览器之间的多用户隔离；其新记录与账号用户的私有记录分开。移除 auth 不删除数据库或 DSH 日志，也不公开账号用户的历史。升级前没有归属的历史保留为未分配数据，不自动划给管理员或第一个提供 UUID 的用户。首次回退旧无鉴权版本必须关闭旧业务入口或使用上线前独立快照挂载，不能让旧版挂载新增私有会话的数据目录。
 
-`/closedoff-qa/health` 是公开存活探针，仅返回服务状态；部署探针 `/closedoff-qa/ready` 额外检查认证提供者的可用性，认证模式缺失提供者时返回 503。`/closedoff-qa/identity` 和业务 API 仍检查当前用户的实际访问权限。
+探针由群组统一提供：`/agents/health` 是公开存活探针，`/agents/ready` 汇总各 Agent，`/agents/closedoff/ready` 是本 Agent 的就绪探针（存储未配置或不可达时返回 503 并说明原因）。本包不再注册自己的探针：容器级探针是群组的职责，重复一份还会因前缀来源不同而冲突。`/closedoff-qa/identity` 和业务 API 仍检查当前用户的实际访问权限。
 
 ## 凭据与日志
 
@@ -142,6 +148,8 @@ Agent handle 是进程内资源；销毁 handle 会移除活动对象，不等�
 | 业务认证协议变化 | `src/gateway.ts`、gateway 测试 | 否 |
 | 页面骨架或样式变化 | `web/index.html`、`web/app.css` | 否 |
 | 会话交互或卡片渲染变化 | `web/app.js`、`src/presentation.ts` | 否 |
+| 会话生命周期、协作入口或存储端口的行为 | `packages/runtime`（群组运行时，机制只实现一次），本包只改 `src/definition.ts` 的声明 | 否 |
+| 本 Agent 的存储配置来源或就绪口径 | `src/runtime.ts` | 否 |
 | 轨迹三维、截图或摄像头变化 | `web/trajectory.js`、`src/presentation.ts` | 否 |
 | 新增业务写操作 | 独立 Tool、权限/审批/审计设计、测试与文档 | 通常否，但不能直接复用当前只读策略 |
 | DSH Tool/Agent/Session API 破坏性升级 | 本包适配层 | 否，除非上游本身缺少必要扩展点 |

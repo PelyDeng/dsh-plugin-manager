@@ -435,6 +435,7 @@ interface DefinitionInput {
   readonly needsReply?: (ctx: ResultContext) => boolean
   readonly opaqueFromToolResult?: (resultText: string, meta: unknown) => readonly string[]
   readonly projectReasoning?: (raw: string, ctx: ReasoningProjectionContext) => string
+  readonly redact?: (text: string) => string
 }
 
 /** 最小声明：身份 + persona + 空工具集 + 一个结果投影（其余钩子按需覆盖）。 */
@@ -451,6 +452,7 @@ function define(input: DefinitionInput = {}): AgentDefinition {
     ...(input.needsReply === undefined ? {} : { needsReply: input.needsReply }),
     ...(input.opaqueFromToolResult === undefined ? {} : { opaqueFromToolResult: input.opaqueFromToolResult }),
     ...(input.projectReasoning === undefined ? {} : { projectReasoning: input.projectReasoning }),
+    ...(input.redact === undefined ? {} : { redact: input.redact }),
   }
 }
 
@@ -741,6 +743,61 @@ describe('P1 判据①：最小 Agent 跑通一轮', () => {
     const idle = await f.lifecycle.list(actor, query(), hostScope)
     expect(idle.items[0]).toMatchObject({ id, state: 'ready', canRemove: true })
     expect(idle.items[0]?.blockedReason).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 缺省投影：`projectResult` 是**可选**的，缺省路径也必须走业务的脱敏
+// ---------------------------------------------------------------------------
+
+/**
+ * 这两条用例断的是**安全口径**，不是展示口径。
+ *
+ * 缺省投影（`participant.ts` 的 `fallbackProjection`）此前直接取 `history.finalText` 的**原文**，
+ * 于是"业务没声明 `projectResult`"⇒ 交付给协调方的 `result.text` 是模型正文原文，敏感值
+ * （手机号、内部地址）随之外泄。旧实现（已删除的 `closedoff/src/participant.ts`）是无条件
+ * `redactVisibleText(finalText)` 的，所以这是运行时相对旧实现的行为退步。
+ */
+describe('缺省投影（没有声明 projectResult）也走 definition.redact', () => {
+  const RAW = '联系 13800138000 处理这条记录'
+  const MASKED = '联系 138****8000 处理这条记录'
+
+  it('交付正文是脱敏后的，且不等于原文', async () => {
+    const definition = define({ redact: text => text.replace('13800138000', '138****8000') })
+    const f = fixture(definition)
+    const call = f.call({ message: '查一下这条记录' })
+    const pending = f.run(call.request)
+    const id = await f.accept()
+    await f.answer(id, RAW)
+    const result = await pending
+
+    // ★ 判据：删掉 `fallbackProjection` 里的 `redact(...)`，这一条立刻变红（正文是原文）。
+    expect(result.status).toBe('completed')
+    expect(result.text).toBe(MASKED)
+    expect(result.text).not.toContain('13800138000')
+    // 脱敏是**投影**这一步做的，不是把会话里的正文改掉：历史仍然如实保留原文。
+    expect(f.port.size).toBe(1)
+    await f.settle(id)
+  })
+
+  it('反向对照：声明了 projectResult 时，运行时**不会**再脱敏一次', async () => {
+    // 业务投影本来就要按自己的口径脱敏（closedoff 的投影就是 `redactVisibleText(finalText)`）。
+    // `definition.redact` 的契约只承诺"无状态文本变换"，**没有承诺幂等**，所以这里用一个
+    // **非幂等**的变换当探针：一旦运行时对业务投影的返回值又补一次脱敏，交付正文就会变成
+    // `[[…]]`。这条与上一条配对，防止修复"缺省投影不脱敏"时顺手把两条路径都套上脱敏。
+    const definition = define({
+      redact: text => `[${text}]`,
+      projectResult: async context => ({ status: 'completed', text: `[${context.history.finalText}]` }),
+    })
+    const f = fixture(definition)
+    const call = f.call({ message: '查一下这条记录' })
+    const pending = f.run(call.request)
+    const id = await f.accept()
+    await f.answer(id, RAW)
+    const result = await pending
+
+    expect(result.text).toBe(`[${RAW}]`)
+    await f.settle(id)
   })
 })
 

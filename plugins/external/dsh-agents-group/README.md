@@ -36,7 +36,7 @@ plugins/external/dsh-agents-group/
 └── tests/
 ```
 
-## 两条必须理解的约定
+## 三条必须理解的约定
 
 ### 1. 路径、权限、id 由同一处推导
 
@@ -61,6 +61,17 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
 用静态清单而不是扫描目录：构建产物要可树摇、类型要可检查、装载顺序要确定，动态扫描在
 打包后不可靠。
 
+### 3. 进程级的槽位由运行时收口，业务不要自己装
+
+群组在**同一个进程**里装载多个 Agent，而运行时有些东西是**进程级单槽**的。已知一处：
+`installTitleSink`（官方标题的落库口）。若让每个 Agent 各装一次，后装配的会把先装配的顶掉，
+被顶掉那个 Agent 的标题又会被对方门面的 `agentId` 过滤**静默丢弃**——页面上只表现为标题永远
+停在首句占位，而宿主不会再发一次同一条事件，标题不可重建。
+
+处置是**在装配工厂里收口**：`createAgentRuntime` 在装配期装一份按 `agentId` 路由的分发器
+（`packages/runtime/src/runtime.ts` 的 `titleRouter`），释放时只摘自己那一份。
+**子包不要直接调 `installTitleSink`**：那是单槽写入，会把分发器顶掉。
+
 ## 当前群组里的 Agent
 
 | id | 显示名 | 页面 | 权限 | 说明 |
@@ -73,8 +84,16 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
 它照常挂载、路由照常注册，请求时才以「认证服务不可用」失败 —— 这样运维能看出是谁在那儿，
 而不是子包凭空消失。
 
+存储：三个私有 Agent（群组内的两个，加上管家工作台）统一用 PostgreSQL 的 `dsh_conversations`，
+连接来自环境变量 `AGENTS_GROUP_PG_DSN`，或 `AGENTS_GROUP_PG_CONFIG` 指向的私有文件
+（缺省 `<DSH 主目录>/plugins/agents-group/storage.json`，内容形如 `{"dsn":"postgres://…"}`）。
+
 探针：群组级 `/agents/health`、`/agents/ready`（正文列出每个 Agent 的状态），
 以及每个 Agent 自己的 `/agents/<id>/ready`。子包不再注册探针。
+
+**未就绪 ≠ 不装载。** 缺配置或连不上时 Agent 照常装载：页面、目录条目、探针与工具注册都在，
+只有业务端点与侧栏入口以 503 拒绝，探针按稳定原因（「未配置」 / `storage_unreachable`）如实
+上报。把失败抛给群组只会让子包凭空消失，运维反而看不到原因。
 
 ## 工具分类与可见性限制
 

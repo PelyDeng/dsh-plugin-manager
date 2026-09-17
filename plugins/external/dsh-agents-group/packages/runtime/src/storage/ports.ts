@@ -22,6 +22,7 @@
  * Agent 串数据（实测：管家侧栏会列出别的 Agent 的会话）。
  */
 import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
+import type { TitleSink } from '../conversation.ts'
 
 /** 归属键。端口内用一个值对象表达，落库时展开成两列。 */
 export interface OwnerKey {
@@ -285,8 +286,23 @@ export interface AgentDatabasePort {
    *
    * 缺表 / 版本不符分别归类为 `storage_schema_missing` / `storage_schema_version` 并**拒绝服务**；
    * 建表由建库脚本完成（`private-deploy/db/0001_init.sql`，一次性建出，不是迁移）。
+   *
+   * 它同时是本门面上唯一一个**只读的连通性往返**：就绪探针在运行期可以用它核实"此刻还连得上"，
+   * 而不必去碰业务数据、也不必另开一条探活 SQL。
    */
   assertSchema(): Promise<void>
+
+  /**
+   * 标题投递口：官方标题（`session/event` 的 `session/title`）经它落库。
+   *
+   * `ConversationLifecycle` 的回调是**同步**的（`conversations.ts:36`），而标题最终要落 PG，
+   * 所以装配侧必须把这个口子接到 `installTitleSink(...)` 上——不接，标题就被静默丢弃
+   * （`conversation.ts` 的 `TitleSink` 注释写了这条）。
+   *
+   * **可选**：注入式替身（测试用的内存门面）没有标题队列，也不该为了满足接口凭空造一个。
+   * 真实实现（`AgentDatabaseFacade.titleSink()`）必有——它底层是本地 `title_outbox` 表。
+   */
+  titleSink?(): TitleSink
 
   /** **框架级**会话索引——所有 Agent 共用 `dsh_conversations`，靠 `agent_id` 区分。 */
   readonly conversations: ConversationPort
