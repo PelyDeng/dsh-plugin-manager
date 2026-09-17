@@ -1,0 +1,88 @@
+{
+  "name": "@dsh-agents-group/huiyu",
+  "version": "0.1.0",
+  "description": "绘语图片智能体：图片理解与生成（智能体群组的子包）",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist/",
+    "migrations/",
+    "README.md"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "pnpm typecheck",
+    "clean": "node ../../../../scripts/clean-plugin.mjs dist coverage"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "3.18.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-attachment": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-home-paths": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-host-webserver": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-llm": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-message-feedback": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-session": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-session-persistence": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-system-prompt": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-token-meter": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-tools": "0.1.6-alpha.1"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": { "optional": true },
+    "@deepseek-ai/dsh-agent": { "optional": true },
+    "@deepseek-ai/dsh-agent-default-model": { "optional": true },
+    "@deepseek-ai/dsh-attachment": { "optional": true },
+    "@deepseek-ai/dsh-home-paths": { "optional": true },
+    "@deepseek-ai/dsh-host-webserver": { "optional": true },
+    "@deepseek-ai/dsh-llm": { "optional": true },
+    "@deepseek-ai/dsh-message-feedback": { "optional": true },
+    "@deepseek-ai/dsh-session": { "optional": true },
+    "@deepseek-ai/dsh-session-persistence": { "optional": true },
+    "@deepseek-ai/dsh-system-prompt": { "optional": true },
+    "@deepseek-ai/dsh-token-meter": { "optional": true },
+    "@deepseek-ai/dsh-tools": { "optional": true }
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-agent": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-agent-default-model": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-attachment": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-home-paths": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-host-webserver": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-llm": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-message-feedback": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-session": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-session-persistence": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-system-prompt": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-token-meter": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-tools": "0.1.6-alpha.1",
+    "@dsh-agents-group/common": "workspace:*",
+    "@dsh-agents-group/runtime": "workspace:*",
+    "@dsh-plugin-manager/plugin-kit": "workspace:*",
+    "@types/node": "^22.20.0",
+    "@types/pg": "^8.15.0",
+    "pg": "^8.16.0",
+    "tsdown": "^0.22.2",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

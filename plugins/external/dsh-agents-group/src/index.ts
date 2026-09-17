@@ -60,6 +60,7 @@ async function loadAgent(manifest: AgentManifest): Promise<AgentMount | undefine
   switch (manifest.id) {
     case 'closedoff': return (await import('./agents/closedoff.ts')).mountClosedoff
     case 'blog': return (await import('./agents/blog.ts')).mountBlog
+    case 'huiyu': return (await import('./agents/huiyu.ts')).mountHuiyu
     default: return undefined
   }
 }
@@ -70,6 +71,8 @@ async function errorHandlerOf(agentId: string) {
     case 'closedoff': return (await import('./agents/closedoff.ts')).closedoffErrorHandler
     // blog：存储层稳定码 → 503/409/500（Q4 口径的 HTTP 错误映射）。
     case 'blog': return (await import('./agents/blog.ts')).blogStorageErrorHandler
+    // huiyu：业务错误分类 → 400/404/502/503（设计文档 §9 的错误口径）。
+    case 'huiyu': return (await import('./agents/huiyu.ts')).huiyuErrorHandler
     default: return undefined
   }
 }

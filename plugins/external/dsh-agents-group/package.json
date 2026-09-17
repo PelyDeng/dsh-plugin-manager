@@ -49,6 +49,7 @@
       "agents/blog/runtime/chat-sdk.mjs",
       "agents/blog/dist/web/app.js",
       "agents/blog/migrations/postgres/0001_init.sql",
+      "agents/huiyu/package.json",
       "dist/migrate-blog-storage.mjs"
     ],
     "configuration": {
@@ -65,7 +66,7 @@
     }
   },
   "scripts": {
-    "build": "pnpm --filter @dsh-agents-group/closedoff run build && pnpm --filter @dsh-agents-group/blog run build && tsdown",
+    "build": "pnpm --filter @dsh-agents-group/closedoff run build && pnpm --filter @dsh-agents-group/blog run build && pnpm --filter @dsh-agents-group/huiyu run build && tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check": "pnpm typecheck",

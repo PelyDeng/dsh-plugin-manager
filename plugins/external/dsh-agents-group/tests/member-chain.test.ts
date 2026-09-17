@@ -197,10 +197,13 @@ describe('成员链路贯通（真实装配 + 测试内替身）', () => {
   it('随包名单里没有任何验收专用成员，成员都从真实装配拿到目录条目与执行入口', async () => {
     // 回归护栏：接入期的验收替身只活在测试里，不再随包发布。
     expect(AGENT_MANIFESTS.filter(item => item.verificationOnly === true)).toEqual([])
-    expect(AGENT_MANIFESTS.map(item => item.id)).toEqual(['closedoff', 'blog'])
+    expect(AGENT_MANIFESTS.map(item => item.id)).toEqual(['closedoff', 'blog', 'huiyu'])
 
     const { executors, catalog } = await assembleWithMember()
-    for (const id of ['closedoff', 'blog']) {
+    // huiyu 与 closedoff / blog 同一条判据：两条装配路径都必须产出目录条目与执行入口。
+    // 执行入口这条尤其关键——它就是"能被牛马大总管调用"的判据：缺了它，群组侧不会登记
+    // 执行器，牛马大总管的成员名单里就没有绘语，它连计划都不会做。
+    for (const id of ['closedoff', 'blog', 'huiyu']) {
       expect(catalog.some(plugin => plugin.id === id), `${id} 缺少目录条目`).toBe(true)
       expect(executors.some(executor => executor.agentId === id), `${id} 缺少执行入口`).toBe(true)
     }

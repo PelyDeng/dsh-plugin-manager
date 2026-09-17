@@ -1,11 +1,12 @@
 -- 牛马生态单库 `dsh` 初始 DDL（v1，一次性建库）。
 --
 -- 用途
---   在空库（或与目标库同名、但尚无任何 `butler_` / `blog_` / `closedoff_` / `dsh_` 表的新库）里
---   一次建出全部 15 张表、20 个显式 `CREATE INDEX`，并在结尾写入 `dsh_schema_versions` 四行
---   （`butler` / `blog` / `closedoff` / `runtime` = 1）。
+--   在空库（或与目标库同名、但尚无任何 `butler_` / `blog_` / `closedoff_` / `huiyu_` / `dsh_` 表的新库）里
+--   一次建出全部 16 张表、21 个显式 `CREATE INDEX`，并在结尾写入 `dsh_schema_versions` 五行
+--   （`butler` / `blog` / `closedoff` / `huiyu` / `runtime` = 1）。
 --   表与列逐字取自《牛马生态数据库重构设计》§5（§5.1 框架级、§5.2 管家、§5.3 会话索引与轮次幂等、
---   §5.4 blog 业务表）——**本文件是那份 DDL 的落地，不在这里做设计决策**。
+--   §5.4 blog 业务表；⑤ 段为 huiyu 业务表）——**本文件是那份 DDL 的落地，不在这里做设计决策**。
+--   ⚠️ 已建过库的站点补 huiyu 表用 `0002_huiyu.sql`，不要重跑本文件（重复建库被拒绝）。
 --
 -- ⚠️ 与 §5 唯一的顺序差异（必需，不是可选）
 --   §5 按"框架 → 管家 → 会话索引 → blog"的**叙述顺序**给 DDL，但外键要求**被引用表先存在**：
@@ -424,6 +425,24 @@ CREATE TABLE blog_translations (
 CREATE INDEX blog_translation_cache ON blog_translations (cache_key, status, seq DESC);
 
 -- ---------------------------------------------------------------------------
+-- ⑤ huiyu（绘语图片智能体）：生成图片的业务记录
+--    图片本体在 MinIO，本表只存对象键、访问地址与生成记录，因此无 BLOB 列。
+--    提升列刻意很少：`seq` 供稳定排序与分页，其余（地址、会话、提示词、模型、尺寸、花费）
+--    都在 `payload` 里——它们只被读取展示，不参与条件查询，提升出去只会多一份要同步的列。
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE huiyu_images (
+  id              TEXT   NOT NULL PRIMARY KEY,
+  owner_namespace TEXT   NOT NULL,
+  owner_id        TEXT   NOT NULL,
+  created_at      BIGINT NOT NULL,
+  seq             BIGINT GENERATED ALWAYS AS IDENTITY,
+  payload         JSONB  NOT NULL
+);
+-- 列表按 owner 倒序翻页，与 blog 各表的索引口径一致。
+CREATE INDEX huiyu_images_owner ON huiyu_images (owner_namespace, owner_id, seq DESC);
+
+-- ---------------------------------------------------------------------------
 -- 版本行：每插件一行（`dsh_*` 框架表的归属是 `runtime`）
 -- ---------------------------------------------------------------------------
 
@@ -431,6 +450,7 @@ INSERT INTO dsh_schema_versions (plugin_id, version, applied_at) VALUES
   ('butler',    1, :applied_at),
   ('blog',      1, :applied_at),
   ('closedoff', 1, :applied_at),
+  ('huiyu',     1, :applied_at),
   ('runtime',   1, :applied_at);
 
 COMMIT;

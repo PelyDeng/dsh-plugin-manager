@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
+    // `lib` 与 blog 子包保持一致：`ES2024.Promise` 只为 `Promise.withResolvers` 补一块，
+    // 不写成整份 `ES2024`（那会顺带放宽其它全局面）。
+    "lib": ["ES2022", "ES2024.Promise", "DOM", "DOM.Iterable"],
+    "allowImportingTsExtensions": true, "allowJs": true, "checkJs": false, "strict": true, "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true, "verbatimModuleSyntax": true,
+    "declaration": true, "noEmit": true, "types": ["node", "vitest/globals"]
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}

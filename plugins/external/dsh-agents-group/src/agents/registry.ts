@@ -58,6 +58,15 @@ export const AGENT_MANIFESTS: readonly AgentManifest[] = [
     // 博客按用户隔离草稿、附件与备份，业务前提是必须有可信身份。
     requiresAuthentication: true,
   },
+  {
+    id: 'huiyu',
+    displayName: '绘语（图片智能体）',
+    directory: 'huiyu',
+    category: '图片与视觉',
+    description: '图片理解与生成：看懂图片内容，也能按描述生成图片',
+    // 生成图落 MinIO、业务记录按归属隔离，前提同样是必须有可信身份。
+    requiresAuthentication: true,
+  },
 ]
 
 /**
