@@ -330,12 +330,24 @@ export class ChatStore {
    *   把 id 也算命中项会让 `-` / `chat` / 单个数字这类短查询命中全部会话。
    *
    * `managed`（kit 侧栏）**两个都不传**：侧栏没有这两个口径要求，替它改等于改它的行为。
+   *
+   * ⚠️ **`state: 'ready'` 不是"只列已发布的"**，它就是旧页面列表的那条口径：
+   * 端口的 5 态 `CASE`（`postgres.ts:415-420`）里 `pending` / `failed` / `busy` / `legacy` 各占一支，
+   * 其余落 `ELSE 'ready'` —— **未发布的行也落在 `'ready'` 里**（`ports.ts:186-189` 专门写了这条），
+   * 所以它与 `includeUnready: true` 不冲突。合起来正好等于旧 SQLite 页面列表的
+   * `deletedAt IS NULL AND removalState = ''`。
+   *
+   * ⚠️ 这里**不能传 `state: ''`**（原实现就是空串）：空串在端口侧等于"不过滤状态"，于是
+   * 两处**用户可见的倒退**同时发生 —— ① 移除中途 / 移除失败（`pending` / `failed`）的会话
+   * 会出现在页面里、点进去 404，而 `failed` **没有任何清除路径**，它会永久赖在列表上；
+   * ② 已软删除（`deleted_at` 非空）的会话也回来（`busy` 为空集时那条 `NOT (...)` 恒真）。
+   * 两者都是"页面有、打不开"。（红队评审 `e78e285` 第 2 条只报了 ①；② 是同一条口径的漏网。）
    */
   async list(owner: string, offset = 0, query = ''): Promise<{ items: readonly ChatListItem[]; nextOffset: number | null }> {
     invariant(Number.isSafeInteger(offset) && offset >= 0, '分页参数无效')
     invariant(typeof query === 'string' && query.length <= 120, '搜索文字应不超过 120 个字符')
     const page = await this.db.conversations.list(ownerOf(owner), {
-      offset, limit: PAGE_SIZE, q: query.trim(), state: '', titleOnly: true, includeUnready: true,
+      offset, limit: PAGE_SIZE, q: query.trim(), state: 'ready', titleOnly: true, includeUnready: true,
     }, { busy: [], archived: [] })
     return {
       items: page.items.map(item => ({
@@ -458,7 +470,27 @@ export class ChatStore {
       attachments: [],
       userSeq: null,
     }
-    await this.db.turns.claim(key, conversationId, requestId, hash, encodeTurnPayload(payload))
+    /**
+     * ⚠️ **`claim` 的返回值不能丢**——丢掉它是一次 **loud → silent 回归**（红队评审 `e78e285` 第 1 条）。
+     *
+     * 上面那道 `existing !== undefined` 的预检查**挡不住并发**：两次带同一 `requestId` 的受理
+     * （重试、双击、两个页面）可以都越过它（中间隔着 `get` / `turnId` / `requests` 三次 PG 往返的
+     * 窗口），然后在 `claim` 上分胜负。`claim` 自己会回答 `'claimed' | 'duplicate'`，
+     * 忽略它就意味着**败者也返回 `fresh: true`**，而调用方（`chat.ts:559` 的 `if (!fresh) return`）
+     * 正是靠 `fresh` 决定"要不要真的起一轮" ⇒ **同一个 `requestId` 静默跑两遍**（外部副作用两遍）。
+     * 并发时正文不同还会绕过上面那条 409：那时那一行**还不存在**，业务判定没机会做
+     * （`claim` 内部自己会按 `input_hash` 报 409，两种实现都是）。
+     *
+     * 旧实现（`e78e285^` 的 SQLite）靠 `UNIQUE(owner, requestId)` **抛约束错**，是响的；
+     * 切到端口之后这个响度必须由**用返回值**补回来，不能靠库。
+     *
+     * ⚠️ 并发时**正文不同**的那条 409 由 `claim` 自己按 `input_hash` 抛出（两种实现都抛，
+     * 见 `ports.ts` 的 `claim` 契约），文案是存储层那句"同一个请求标识不能换正文"，与上面
+     * 串行分支的业务文案不同。**刻意不在这里再包一层翻译**：那要求业务去匹配另一个层的消息文本，
+     * 比两句都能看懂的提示更脆。测试对两条路径各断言各的。
+     */
+    const verdict = await this.db.turns.claim(key, conversationId, requestId, hash, encodeTurnPayload(payload))
+    if (verdict === 'duplicate') return { request: this.requestOf(owner, await this.turnOf(key, requestId)), fresh: false }
     return { request: this.requestOf(owner, await this.turnOf(key, requestId)), fresh: true }
   }
 

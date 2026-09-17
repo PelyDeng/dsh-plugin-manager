@@ -107,6 +107,74 @@ test('chat requests reject changed replay and concurrency; regeneration reuses i
   assert.equal(await chats.operationDraft('user:bob',request.operationId),null)
 })
 
+/**
+ * **并发受理同一个 `requestId`**：只有一个能赢，败者必须**不是 `fresh`**。
+ *
+ * 为什么这条必须单独钉（红队评审 `e78e285` 第 1 条）：`start` 前面那道
+ * `existing !== undefined` 幂等预检隔着三次 PG 往返，**挡不住并发** —— 两次受理会同时越过它，
+ * 然后在 `claim` 上分胜负。而 `claim` 的返回值一旦被丢掉，败者也返回 `fresh: true`，
+ * 调用方（`chat.ts:559` 的 `if (!fresh) return`）就会在同一轮上**起第二次执行**（副作用两遍）。
+ * 旧实现靠 SQLite 的 `UNIQUE(owner, requestId)` **抛约束错**，所以这是切库引入的
+ * **loud → silent 回归**；修复方式是"用 `claim` 的返回值"，不是"相信库会拦"。
+ *
+ * ⚠️ 断言刻意**不看行数**：`claim` 的 `ON CONFLICT DO NOTHING` 让"两行"这件事在存储层
+ * 根本不可能发生，只断行数的话变异不会红（败者照样只留一行）。红的是 `fresh`。
+ */
+test('concurrent claims with one request id: exactly one is fresh, the loser replays the same row',async()=>{
+  const {chats}=fixture()
+  const owner='user:alice',conversation=await chats.create(owner,'concurrent-claim')
+  const same=[...await Promise.all([
+    chats.start(owner,conversation.id,'concurrent-request',{text:'同一句'}),
+    chats.start(owner,conversation.id,'concurrent-request',{text:'同一句'}),
+  ])]
+  assert.deepEqual(same.map(r=>r.fresh).sort(),[false,true])
+  assert.equal(same[0].request.id,same[1].request.id)
+  assert.equal((await chats.requests(owner,conversation.id)).length,1)
+  // 并发且**正文不同**：败者必须报 409，不能拿自己的正文起跑。
+  // ⚠️ 两条路径的文案**不同，是刻意的**：串行重放换正文走 `start` 预检里的业务那一句
+  // （`相同请求标识不能更改问题或附件`，见上面 `assert.rejects(...)`）；并发时那一行还不存在，
+  // 判定落在 `claim` 里，报的是存储层那句 `同一个请求标识不能换正文`。这里断言**并发那一句**，
+  // 免得有人以为两处该一致而把其中一处改掉。
+  const other=await chats.create(owner,'concurrent-claim-2')
+  await assert.rejects(Promise.all([
+    chats.start(owner,other.id,'concurrent-request-2',{text:'甲'}),
+    chats.start(owner,other.id,'concurrent-request-2',{text:'乙'}),
+  ]),/不能换正文/)
+  assert.equal((await chats.requests(owner,other.id)).length,1)
+})
+
+/**
+ * 页面列表的**口径**：围栏态（`pending` / `failed`）与已软删除（`deleted_at` 非空）的会话
+ * **不进页面列表**，而**未发布**的会话照旧要看得见（`includeUnready`）。
+ *
+ * 这三条是一组，缺一条就会让"修好一条、弄坏另一条"看不出来：
+ * 旧 SQLite 页面列表的口径是 `deletedAt IS NULL AND removalState = ''`，
+ * 而端口侧的 `state: ''` 是"**不**过滤状态" ⇒ 换成端口时这一条口径整体丢了（红队评审
+ * `e78e285` 第 2 条报的是 `pending`/`failed` 那一半；`deleted_at` 那一半是本用例补上的）。
+ */
+test('page list hides fenced and soft-deleted conversations while keeping unpublished ones',async()=>{
+  const {chats}=fixture()
+  const owner='user:alice'
+  const visible=await chats.create(owner,'list-visible')
+  const unpublished=await chats.create(owner,'list-unpublished')
+  const fenced=await chats.create(owner,'list-fenced')
+  const failed=await chats.create(owner,'list-failed')
+  const removed=await chats.create(owner,'list-removed')
+  chats.mark(ownerActor(owner),fenced.id,'pending')
+  chats.mark(ownerActor(owner),failed.id,'failed')
+  chats.mark(ownerActor(owner),removed.id,'removed')
+  const ids=(await chats.list(owner)).items.map(item=>item.id)
+  assert.ok(ids.includes(visible.id),'普通会话必须在列表里')
+  // `includeUnready: true`：新建对话是两段的，用户打完第一条消息之前也不能"消失"。
+  assert.ok(ids.includes(unpublished.id),'未发布的会话仍必须在列表里（includeUnready）')
+  assert.ok(!ids.includes(fenced.id),'移除中途的会话不该出现在页面列表（点进去只能 404）')
+  assert.ok(!ids.includes(failed.id),'移除失败的会话不该出现在页面列表（它没有清除路径，会永久赖着）')
+  assert.ok(!ids.includes(removed.id),'已移除的会话不该出现在页面列表')
+  // 逐条复核"打不开"这件事本身没变：围栏态与已删除都是 404。
+  await assert.rejects(chats.get(owner,fenced.id),/不存在或无权访问/)
+  await assert.rejects(chats.get(owner,removed.id),/不存在或无权访问/)
+})
+
 test('history search is literal and case insensitive, with pin ordering and filtered pagination',async t=>{
   const {db,chats}=fixture()
   const owner='user:alice'
