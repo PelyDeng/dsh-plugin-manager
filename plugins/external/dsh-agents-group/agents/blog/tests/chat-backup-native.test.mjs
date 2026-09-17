@@ -2,10 +2,33 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {DatabaseSync} from 'node:sqlite'
 import {randomUUID} from 'node:crypto'
+import {existsSync} from 'node:fs'
 import {mkdtemp,mkdir,readFile,writeFile,copyFile,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {native,exportChat,stageChat,restoreSnapshot,conversations} from '../backup/chat-state.mjs'
+
+/**
+ * 调用 `native()` 的两条用例**只在部署后的离线备份容器里才跑得起来**。
+ *
+ * `backup/chat-state.mjs:12` 的解析器是 `createRequire('/opt/dsh-runtime/package.json')` 与
+ * `/opt/dsh-runtime/node_modules/.pnpm/runtime-helper.cjs`——那是**备份容器里的路径**，
+ * 本机与 GitHub runner 上都不存在 ⇒ `native()` 在 `:19` 的 `assert.ok(require,...)` 上失败，
+ * 报 `official offline package is missing: @deepseek-ai/cordis`。
+ *
+ * ⇒ 缺那个目录时**跳过并写明原因**（与 `closedoff/tests/page-layout.node.mjs:30` 的 Chromium SKIP
+ * 同一形状：`t.skip(reason)` 之后 `return`）。**断言一字不改**，改的只是**前置条件判定**——
+ * 容器里跑才是真验证，**跳过 ≠ 通过**（本地与 CI 的报告都必须把 skipped 单独计数）。
+ *
+ * ⚠️ 判定刻意**只看目录是否存在**，不去复制 `chat-state.mjs` 的解析逻辑：目录在、但包不可解析
+ * （容器里装坏了）时**必须真跑并如实失败**——那正是这两条用例要抓的情形，不能被跳过掩盖。
+ * 实测：把该目录造出来之后，两条**真的跑起来并如实失败**（`official offline package is missing`）。
+ *
+ * ⚠️ Windows 上 `/opt/dsh-runtime` 会被解析成**当前盘符**下的 `\opt\dsh-runtime`（实测 `E:\opt\dsh-runtime`），
+ * 不是字面的 `/opt`。不影响结论（两种解析下都不存在 ⇒ 跳过），但**别在 Windows 上把它当"绝对路径"用**。
+ */
+const OFFLINE_RUNTIME='/opt/dsh-runtime'
+const SKIP_REASON=`本机不在离线备份容器内（缺 ${OFFLINE_RUNTIME}），官方离线包不可解析；这两条只在部署后的备份容器里才真跑`
 
 const cwd='/data/workspace',id=()=> 'blog-chat-'+randomUUID()
 const header=(id,parent)=>({version:3,delegationDepth:0,id,createdAt:1000,cwd,isSeeded:!!parent,...(parent?{parentSession:parent}:{})})
@@ -80,7 +103,8 @@ test('会话归属清单读的是运行时的镜像表（不再读旧索引库�
   assert.equal(conversations(empty).size,0)
 })
 
-test('V2 backups migrate with official system heads and remapped inherited boundaries',async()=>{
+test('V2 backups migrate with official system heads and remapped inherited boundaries',async t=>{
+  if(!existsSync(OFFLINE_RUNTIME)){t.skip(SKIP_REASON);return}
   const root=await mkdtemp(join(tmpdir(),'blog-backup-v2-')),sdk=await native(),sessionId=id(),parent=id()
   try{
     const database=join(root,'saved.sqlite'),snapshot=join(root,'snapshot'),output=join(root,'staged')
@@ -135,7 +159,8 @@ async function putFeedback(service,id,item){
     await handle.append([{type:'feedback/message-put',seq:events.length,time:item.updatedAt,data:{sessionId:id,item}}]);await handle.flush()
   }finally{await handle.close()}
 }
-test('native offline backup restores two owners, seeded logs, exact feedback and leaves unrelated state untouched',async()=>{
+test('native offline backup restores two owners, seeded logs, exact feedback and leaves unrelated state untouched',async t=>{
+  if(!existsSync(OFFLINE_RUNTIME)){t.skip(SKIP_REASON);return}
   const root=await mkdtemp(join(tmpdir(),'blog-backup-native-')),sdk=await native()
   try{
     const sessions=join(root,'sessions'),storage=join(root,'storage'),database=join(root,'blog.sqlite'),snapshot=join(root,'snapshot')

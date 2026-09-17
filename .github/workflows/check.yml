@@ -6,6 +6,12 @@ jobs:
   postgres-contracts:
     # PostgreSQL 门控契约测试（无 DSN 时自动跳过的那批）在真实 PG 上跑一遍。
     # 独立 job 的原因：service 容器只在 Linux runner 可用，现有三系统矩阵保持原样。
+    #
+    # ⚠️ **本 job 的命令清单就是本仓"发版要跑什么"的权威位置**（设计《…最终版》§8 的 P2 判据 ⑥
+    # 原话就是"把私有侧存储契约测试加入 `.github/workflows/check.yml` 的命令清单"）。
+    # ⇒ **P7 判据 ④**（`test:host` / `bridge` / `reports` 纳入指定的发版清单文件）落在**本文件本 job**，
+    # 不是新加一份清单。加命令时请一并想清楚：它要不要 PG（要 ⇒ 放本 job）、要不要构建产物、
+    # 要不要额外运行时（如 PHP）。
     strategy:
       fail-fast: false
       matrix:
@@ -56,6 +62,35 @@ jobs:
         run: pnpm --dir plugins/external/dsh-agents-group exec vitest run tests/migrate-blog-storage.test.ts
       - name: Blog PG contracts
         run: node --test plugins/external/dsh-agents-group/agents/blog/tests/pg-smoke.test.mjs
+      # ---- 以下四步是 P7 判据 ④ 要求纳入发版清单的三条命令（外加它们的前置）----
+      - name: Build blog plugin
+        # ⚠️ 必须先构建：`test:host` 打的是 `agents/blog/dist/`（`tests/http-fixture.mjs` 里
+        # `import { … } from '../dist/index.mjs'`），不构建就是"模块不存在"，而不是用例失败。
+        run: pnpm --dir plugins/external/dsh-agents-group/agents/blog build
+      - name: Blog host tests (HTTP routes + official SDK projection)
+        # 三条真 PG 用例用本 job 已设的 `AGENTS_GROUP_TEST_PG_DSN`（夹具会 `DROP SCHEMA public CASCADE`
+        # 重建，**不能与别的用例并发** —— 本 job 的步骤天然串行）。
+        # ⚠️ 另有两条离线包用例在本机 / runner 上会因缺 `/opt/dsh-runtime` 而**跳过并写明原因**
+        # （见 `tests/chat-backup-native.test.mjs` 的 `SKIP_REASON`）—— **跳过 ≠ 通过**，
+        # 那两条的真验证只在部署后的离线备份容器里做，看报告时必须把 skipped 单独计数。
+        run: pnpm --dir plugins/external/dsh-agents-group/agents/blog test:host
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          # ⚠️ 两个脚本对扩展的要求**不一样**，这一条是本批实测/推断出来的：
+          # - `test:bridge` 用 **`php -n`**（不加载 php.ini）⇒ 它**只能**靠 PHP 自带的扩展。
+          #   它需要的 `mb_strlen`（`Plugin.php:179/207/304/308`，而 `Plugin.php` **没有 namespace**、
+          #   是全局类 ⇒ 解析到**全局** `mb_strlen`）由 `tests/bridge.test.php` 顶部**全局命名空间**里的
+          #   兜底提供（本批顺手修掉了原先写在 `namespace Typecho {…}` 里、**根本没生效**的那一份）。
+          #   ⇒ 因此这里**不需要**为它额外装扩展；`-n` 也就保住了"不依赖宿主 php.ini"的可复现性。
+          # - `test:reports` **不带 `-n`**（走 php.ini），而它要 `new PDO('sqlite::memory:')` 与
+          #   `mb_strlen`（`reports-bridge.test.php:64`）⇒ **必须**有 `pdo_sqlite` 与 `mbstring`。
+          extensions: pdo_sqlite, sqlite3, mbstring
+          coverage: none
+      - name: Blog Typecho bridge tests
+        run: pnpm --dir plugins/external/dsh-agents-group/agents/blog test:bridge
+      - name: Blog reports tests
+        run: pnpm --dir plugins/external/dsh-agents-group/agents/blog test:reports
   public-workspace:
     strategy:
       fail-fast: false

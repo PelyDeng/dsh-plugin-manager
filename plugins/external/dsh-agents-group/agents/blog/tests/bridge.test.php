@@ -1,5 +1,25 @@
 <?php
 /** PHP bridge unit test with in-memory Db/native-widget doubles; no site or database connection. */
+
+/**
+ * ⚠️ `mb_strlen` 的兜底**必须声明在全局命名空间**里（`namespace { … }`）。
+ *
+ * `typecho/DshBlogBridge/Plugin.php` **没有 `namespace` 声明**（Typecho 的遗留命名风格：
+ * `DshBlogBridge_Action` 等全局类），所以它方法体里那句不带前缀的 `mb_strlen(...)` 按 PHP 的
+ * 函数回退规则解析到的是**全局**函数。原先这条兜底写在下面的 `namespace Typecho { … }` 块里
+ * ⇒ 定义出来的是 **`Typecho\mb_strlen`**，而守卫 `function_exists('mb_strlen')` 查的是**全局**
+ * 那一个 —— **两者不是同一个符号**，兜底其实没有生效。
+ *
+ * 后果：在没有 mbstring 的环境里（`php -n`、CI runner）`Plugin.php:179/207/304/308` 仍是
+ * `Call to undefined function mb_strlen()`。本机没有 PHP ⇒ **这一条是推断**（依据只有两条静态事实：
+ * PHP 的函数回退规则 + `Plugin.php` 无 `namespace`）；判据是**下一次 CI 运行**。
+ *
+ * ⚠️ 在装了 mbstring 的环境里这段是**惰性**的（守卫为真 ⇒ 不声明）⇒ 对既有行为**零影响**。
+ */
+namespace {
+    if (!function_exists('mb_strlen')) { function mb_strlen($s) { return strlen($s); } }
+}
+
 namespace Typecho\Plugin { interface PluginInterface {} }
 namespace Widget { interface ActionInterface {} }
 namespace Typecho {
@@ -78,7 +98,6 @@ namespace {
             return true;
         }
     }
-    if (!function_exists('mb_strlen')) { function mb_strlen($s) { return strlen($s); } }
     define('__TYPECHO_ROOT_DIR__', __DIR__);
     require __DIR__ . '/../typecho/DshBlogBridge/Plugin.php';
     function check($value, $message) { if (!$value) throw new \RuntimeException($message); }
