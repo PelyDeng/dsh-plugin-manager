@@ -50,9 +50,9 @@ blog 候选材料交回后，本轮可结束为 `external_pending`（待外部�
 从仓库根目录运行已有的独立设计校验器：
 
 ```powershell
-& .local/dsh-niuma-boss/validation-venv/Scripts/python.exe -B plugins/dsh-niuma-boss/scripts/validate-design.py --root plugins/dsh-niuma-boss --self-test
+& .local/dsh-niuma-boss/validation-venv/Scripts/python.exe -B plugins/external/dsh-niuma-boss/scripts/validate-design.py --root plugins/dsh-niuma-boss --self-test
 ```
 
-首次使用时按 `plugins/dsh-niuma-boss/scripts/design-requirements.txt` 建立独立 Python 环境。校验覆盖 Schema、机制引用、状态路径、任务依赖与聚合、交互条件及 NPC 边界；它不执行真实宿主、模型、业务或游戏。美术原生导出、静态几何、浏览器与独立评审的证据统一从[美术规范](./03-美术/README.md)进入。
+首次使用时按 `plugins/external/dsh-niuma-boss/scripts/design-requirements.txt` 建立独立 Python 环境。校验覆盖 Schema、机制引用、状态路径、任务依赖与聚合、交互条件及 NPC 边界；它不执行真实宿主、模型、业务或游戏。美术原生导出、静态几何、浏览器与独立评审的证据统一从[美术规范](./03-美术/README.md)进入。
 
 设计流程可借助 [game-design MCP](../08-工具与研究/工具/MCP游戏设计.md)，工具模板不替代用户需求和本项目契约。

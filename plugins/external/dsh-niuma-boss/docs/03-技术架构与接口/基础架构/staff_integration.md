@@ -3,7 +3,7 @@
 niuma-boss 不替员工创建业务 Agent 会话，员工由各自插件通过 Cordis 事件 `butler/executors` 提供执行入口。游戏牛马大总管的会话与调度复用方式仍在架构范围内，不能据此理解成牛马大总管也没有会话。
 本文件说明这个协议怎么翻译成游戏事件，以及**哪里翻译不过去**。
 
-协议定义在 `plugins/dsh-butler-console/src/protocol.ts`，不由本项目重新定义。
+协议定义在 `plugins/external/dsh-butler-console/src/protocol.ts`，不由本项目重新定义。
 参照实现是 `plugins/external/dsh-agents-group/src/butler-bridge.ts`。
 
 ## 一、先说清楚「桥」是什么
