@@ -942,6 +942,36 @@ body[data-settings="open"] .settings {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
 
+/* ---------- 待确认操作卡 ----------
+ *
+ * 一个组件渲染所有"要用户点确认"的操作：只认呈现字段（标题/摘要/详情/字段/按钮文案/状态），
+ * 不认 kind。理由见 app.js 的 `actionCard`：新增一种操作不该再写一遍前端。
+ */
+.act-host { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.act {
+  padding: 9px 11px 10px;
+  background: #fffdf6;
+  border: 1.5px solid var(--bt-amber);
+  border-radius: var(--bt-wobble-sm);
+  display: flex; flex-direction: column; gap: 6px;
+}
+/* 状态决定边框与底色：等确认是"要你动手"，办完了就该安静下来。 */
+.act[data-state='succeeded'] { border-color: var(--bt-ok); background: var(--bt-ok-bg); }
+.act[data-state='failed'] { border-color: var(--bt-error); background: var(--bt-error-bg); }
+.act[data-state='cancelled'], .act[data-state='expired'] { border-color: var(--bt-line); background: var(--bt-card); }
+.act__head { display: flex; align-items: baseline; gap: 8px; }
+.act__title { font-family: var(--bt-hand); font-size: 13.5px; font-weight: 700; }
+.act__state { margin-left: auto; flex: none; font-size: 11px; color: var(--bt-warn); }
+.act[data-state='succeeded'] .act__state { color: var(--bt-ok); }
+.act[data-state='failed'] .act__state { color: var(--bt-error); }
+.act__summary { margin: 0; font-size: 12.5px; color: var(--bt-ink-soft); }
+.act__detail, .act__result { font-size: 12.5px; }
+.act__error { margin: 0; font-size: 12.5px; color: var(--bt-error); }
+.act__note { margin: 0; font-size: 11.5px; color: var(--bt-ink-faint); }
+.act__row { display: flex; gap: 8px; }
+/* 字段表沿用 `.md table` 那一套，这里只保证它在卡里有边距。 */
+.act .table-scroll { margin: 2px 0; }
+
 /* ---------- 视图顶部条（二级视图的返回入口）----------
  *
  * 二级视图必须能出去：浏览器返回键（`popstate`）与这里的按钮走同一条路径。

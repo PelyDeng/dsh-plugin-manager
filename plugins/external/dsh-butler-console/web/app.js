@@ -10,7 +10,7 @@
  * 所有用户可见文本都用 textContent 写入，不使用 innerHTML，避免把模型输出当成标记解析。
  */
 
-import { ApiError, api, avatarUrl, chat, events, eventsHead, reply, uploadAvatar, ROUTE_PREFIX, TRANSCRIPT_PAGE_SIZE } from './api.js'
+import { ApiError, api, avatarUrl, act, chat, events, eventsHead, reply, uploadAvatar, ROUTE_PREFIX, TRANSCRIPT_PAGE_SIZE } from './api.js'
 import { renderMarkdownInto } from './markdown.js'
 
 /** 成员配色：按 agentId 稳定取色，所以同一个插件每次都是同一个颜色。 */
@@ -1089,7 +1089,136 @@ function settleCardForSummary(state_, at) {
 }
 
 /**
- * 成员交回内容的**唯一**渲染入口。
+ * 待确认操作卡（**唯一**的渲染入口）。
+ *
+ * 这是"新增一种操作不用再写前端"的落点：卡片只认 `AgentAction` 的呈现字段
+ * （`title` / `summary` / `detail` / `fields` / 按钮文案 / `state`），**不认 `kind`**——
+ * 成员插件多做一种操作，这里一行都不用改。想加视觉差异时按 `kind` 前缀挑图标即可，
+ * 那是装饰，不是分支逻辑。
+ *
+ * 确认与取消走同一个端点（`/butler/action`），**凭据从不经过前端**：这里只送出一个决策，
+ * 执行方自己核验归属并从自己的记录里取凭据。
+ */
+function actionCard(action, context) {
+  const card = make('section', 'act')
+  card.dataset.actionId = action.id
+  card.dataset.kind = action.kind ?? ''
+  card.dataset.state = action.state ?? 'prepared'
+  const head = make('div', 'act__head')
+  head.appendChild(make('span', 'act__title', action.title ?? '待确认的操作'))
+  head.appendChild(make('span', 'act__state', ACTION_STATE_TEXT[action.state] ?? action.state ?? ''))
+  card.appendChild(head)
+  if (typeof action.summary === 'string' && action.summary !== '') {
+    card.appendChild(make('p', 'act__summary', action.summary))
+  }
+  if (typeof action.detail === 'string' && action.detail !== '') {
+    const detail = make('div', 'act__detail md')
+    renderMarkdownInto(detail, action.detail)
+    card.appendChild(detail)
+  }
+  if (Array.isArray(action.fields) && action.fields.length > 0) {
+    // 结构化字段走**同一套**表格样式（`.md table`），不另立一种表。
+    const wrap = make('div', 'table-scroll')
+    wrap.setAttribute('tabindex', '0')
+    wrap.setAttribute('role', 'region')
+    wrap.setAttribute('aria-label', '操作详情')
+    const table = make('table')
+    const body = make('tbody')
+    for (const field of action.fields) {
+      const row = make('tr')
+      row.appendChild(make('th', null, field.label ?? ''))
+      row.appendChild(make('td', null, field.value ?? ''))
+      body.appendChild(row)
+    }
+    table.appendChild(body)
+    wrap.appendChild(table)
+    card.appendChild(wrap)
+  }
+  if (typeof action.resultText === 'string' && action.resultText !== '') {
+    const result = make('div', 'act__result md')
+    renderMarkdownInto(result, action.resultText)
+    card.appendChild(result)
+  }
+  if (typeof action.errorText === 'string' && action.errorText !== '') {
+    card.appendChild(make('p', 'act__error', action.errorText))
+  }
+  // 只有 `prepared` 才给按钮：执行中的、办完的、过期的都不该再点（点了也只会拿到 409）。
+  if ((action.state ?? 'prepared') === 'prepared') {
+    const expired = typeof action.expiresAt === 'number' && action.expiresAt <= Date.now()
+    if (expired) {
+      card.dataset.state = 'expired'
+      card.appendChild(make('p', 'act__note', '这条确认已经过期，让它重新生成一次再确认。'))
+    } else {
+      if (typeof action.expiresAt === 'number') {
+        card.appendChild(make('p', 'act__note', `请在 ${formatTime(action.expiresAt)} 之前确认`))
+      }
+      const row = make('div', 'act__row')
+      const confirm = make('button', 'btn btn--tiny btn--primary', action.confirmLabel ?? '确认')
+      confirm.type = 'button'
+      const cancel = make('button', 'btn btn--tiny', action.cancelLabel ?? '先不办')
+      cancel.type = 'button'
+      row.appendChild(confirm)
+      row.appendChild(cancel)
+      card.appendChild(row)
+      const lock = () => { confirm.disabled = true; cancel.disabled = true }
+      confirm.addEventListener('click', () => { lock(); void runAction(action, 'confirm', context, card) })
+      cancel.addEventListener('click', () => { lock(); void runAction(action, 'cancel', context, card) })
+    }
+  }
+  return card
+}
+
+/** 操作状态 → 卡片上的短词。 */
+const ACTION_STATE_TEXT = {
+  prepared: '等你确认',
+  executing: '正在办',
+  succeeded: '已办完',
+  failed: '没办成',
+  cancelled: '先不办',
+  expired: '已过期',
+}
+
+/** 把一次决策交给服务端，并把事件当成这一轮来消费（与 reply 同一条通道）。 */
+async function runAction(action, decision, context, card) {
+  const note = make('p', 'act__note', decision === 'confirm' ? '正在办理…' : '正在撤回…')
+  card.appendChild(note)
+  try {
+    await runAct({
+      taskId: context.taskId,
+      subtaskId: context.subtaskId,
+      actionId: action.id,
+      decision,
+      requestId: newConversationId(),
+    })
+  } catch (error) {
+    // 失败不把卡片留在"点了没反应"的状态：解锁并如实说明。
+    note.textContent = `${decision === 'confirm' ? '确认' : '撤回'}没成功：${error instanceof Error && error.message ? error.message : '网络异常'}`
+    for (const button of card.querySelectorAll('.act__row button')) button.disabled = false
+  }
+}
+
+/**
+ * 把一位成员名下的待确认操作画进它的结果区（**唯一**的挂载点）。
+ *
+ * 挂 `view.footer`：它在成员消息内部，会跟着消息一起搬进调度卡的格子，所以"成员的结果 + 它的
+ * 待办"永远在一起；结果区高度固定、区内滚动，多一张卡也不会把页面撑开。
+ *
+ * 每次调用**整块重画**：服务端返回的是这条操作的当前全量状态（`prepared` → `executing` →
+ * `succeeded`/`failed`/`cancelled`/`expired`），局部改反而容易与服务端不一致。
+ */
+function renderActionsInto(view, actions, context) {
+  if (!Array.isArray(actions) || actions.length === 0) return
+  let host = view.actionHost
+  if (host === undefined || host.parentNode === null) {
+    host = make('div', 'act-host')
+    view.footer.appendChild(host)
+    view.actionHost = host
+  }
+  clear(host)
+  for (const action of actions) host.appendChild(actionCard(action, context))
+}
+
+/** 成员交回内容的**唯一**渲染入口。
  *
  * 成功、失败、等你回话、待外部处理——四种结论的正文都从这里过受控 Markdown：
  * 以前只有"成功"走渲染，其余走 `textContent`，于是成员交回的表格会被当成一行一竖线的
@@ -1520,8 +1649,9 @@ function handleEvent(event) {
 
 function handleSubtask(event) {
   const view = state.bubbles.get(event.id) ?? memberMessage(event.agentId, event.id)
-  // 成员的真实输出收进分派面板；群里这行只剩状态与入口。
+  // 成员的真实输出收进调度卡；成员名下待确认的操作也画在同一个结果区里。
   attachToDispatch(view, event)
+  mountMemberActions(view, event)
   view.status.textContent = STATE_TEXT[event.state] ?? event.state
   view.status.style.color =
     event.state === 'failed' ? 'var(--bt-error)'
@@ -1630,6 +1760,17 @@ function handleSubtask(event) {
     announce(event.state === 'failed' ? `${displayNameOf(event.agentId)} 失败：${event.detail ?? '原因不明'}` : `${displayNameOf(event.agentId)} 的活已取消`)
     return
   }
+}
+
+/**
+ * 一位成员的输出挂进卡片之后，把它名下的待确认操作画出来。
+ *
+ * 单独一步、两种状态都走它（`external_pending` 与"succeeded 但还有后续待办"）：画的是服务端
+ * 给的**全量**列表，所以确认完一张、剩下还在的会自然留下，全部办完则整块消失。
+ */
+function mountMemberActions(view, event) {
+  if (!Array.isArray(event.actions) || event.actions.length === 0) return
+  renderActionsInto(view, event.actions, { taskId: event.taskId ?? state.taskId ?? '', subtaskId: event.id })
 }
 
 /**
@@ -1909,6 +2050,35 @@ function retryEntry(text, message, staleBubble, requestId) {
   })
   row.appendChild(button)
   append(row)
+}
+
+/**
+ * 把一条操作决策交给服务端，并跟完这一轮（与 `runReply` 同一条消费路径）。
+ *
+ * 差别只在事件源：`act` 送的是一个结构化决策，服务端受理之后执行在后台跑，这条连接只把事件
+ * 推回来。**不受理任何凭据**：卡片上只有呈现数据，执行方从自己的记录里取确认凭据。
+ */
+async function runAct(input) {
+  setBusy(true)
+  state.abort = new AbortController()
+  state.lastSeq = 0
+  state.lastRunId = ''
+  resetFollowing()
+  let accepted = false
+  let sawTerminal = false
+  try {
+    for await (const event of act({ ...input, signal: state.abort.signal })) {
+      if (event.type === 'summary') sawTerminal = true
+      traceEvent('receive', event)
+      accepted = true
+      consumeTurnEvent(event)
+    }
+    if (!sawTerminal && accepted && state.abort.signal.aborted === false && state.conversationId !== null) {
+      await followUntilTerminal(state.conversationId, { from: state.lastSeq, expectedRunId: state.lastRunId, signal: state.abort.signal })
+    }
+  } finally {
+    finishTurn()
+  }
 }
 
 async function runReply(input, hooks = {}) {
@@ -2961,6 +3131,8 @@ function renderTaskCard(record, opts = {}) {
     // 与实时同一个入口：成功、失败、等你回话、待外部处理的正文都走受控 Markdown
     // （表格/列表/代码才显示成它本来的样子）。
     renderMemberContent(view, text)
+    // 刷新重建同样画出待确认的操作（`/task` 里带的是留存投影出来的那一份）。
+    renderActionsInto(view, subtask.actions, { taskId: record.id, subtaskId: subtask.id })
     if (['succeeded', 'failed', 'cancelled', 'external_pending'].includes(subtask.state)) view.terminal = true
     if (subtask.state === 'succeeded') {
       view.bubble.classList.add('bubble--done')

@@ -786,6 +786,39 @@ export async function installWeb(
     },
   }))
 
+  /**
+   * 对一条待确认操作做决策（就地确认 / 取消）。
+   *
+   * 与 `/reply` 同一套语义：受理走一遍校验，执行在后台跑，连接只把事件推给这个观察者。
+   * 请求体里**没有凭据**：确认凭据留在执行方自己的记录里，协调方只转交"用户点了确认"这件事。
+   */
+  ctx.effect(() => register({
+    kind: 'exact',
+    path: `${config.routePrefix}/action`,
+    handler: async (request, response, actor) => {
+      method(request, 'POST')
+      const payload = await body(request, config.maxRequestBodyBytes)
+      const taskId = stringField(payload, 'taskId', 80)
+      const subtaskId = stringField(payload, 'subtaskId', 40)
+      const actionId = stringField(payload, 'actionId', 120)
+      const decision = payload.decision === 'cancel' ? 'cancel' : 'confirm'
+      const note = stringField(payload, 'note', 500, false).trim()
+
+      access.assert(actor)
+      const started = await console_.startAction({
+        taskId, subtaskId, actionId, decision, actor,
+        ...(note === '' ? {} : { note }),
+        requestId: stringField(payload, 'requestId', 120, false).trim(),
+      })
+      if (reportUnknownRun(actor, response, started)) return
+      await streamRun({
+        response,
+        after: started.from,
+        watch: async signal => await console_.watch(started.conversationId, actor, started.from, signal),
+      })
+    },
+  }))
+
   // 可用模型，供页面复用官方模型选择器。
   ctx.effect(() => register({
     kind: 'exact',

@@ -135,6 +135,24 @@ export async function* reply({ taskId, subtaskId, text, decideByAgent, requestId
 }
 
 /**
+ * 对一条待确认操作做决策（就地确认 / 取消）。
+ *
+ * 与 {@link reply} 同一套：受理之后执行在后台跑，这条连接只负责把事件推回来。
+ * `requestId` 是受理幂等身份（同一次点击的重试复用同一个 ID，换一条操作换新 ID）——
+ * 用户在卡片上双击时，服务端按它去重，不会把同一件事办两遍。
+ */
+export async function* act({ taskId, subtaskId, actionId, decision, note, requestId, signal }) {
+  yield* postStream('/action', {
+    taskId,
+    subtaskId,
+    actionId,
+    decision,
+    ...(note === undefined || note === '' ? {} : { note }),
+    ...(requestId === undefined ? {} : { requestId }),
+  }, signal)
+}
+
+/**
  * 只读订阅一个会话最近一轮的事件。
  *
  * 它不启动任何执行，所以刷新页面、或者第二个入口想看同一轮，用它接上即可，

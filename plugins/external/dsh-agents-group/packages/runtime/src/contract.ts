@@ -9,7 +9,18 @@
  * 契约与实现同包，机制只实现一次，业务只写 `AgentDefinition`。common 里的同名声明由本文件
  * 取代，common 的退役在 P4/P7 完成 import 切换后进行。
  */
-import type { Actor, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
+import type { Actor, AgentAction, AgentActionDecision, AgentActionField, AgentActionState, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
+
+/**
+ * 待用户确认的操作：**直接复用 kit 的形状**，不再抄一份。
+ *
+ * 抄一份的下场在 `agent-resources` 那一批已经出现过：两边靠人眼对齐字段名，类型检查全绿而
+ * 第一条数据就抛 `TypeError`。协调方（牛马大总管）与执行方必须看到同一个 `AgentAction`。
+ */
+export type ParticipantAction = AgentAction
+export type ParticipantActionDecision = AgentActionDecision
+export type ParticipantActionField = AgentActionField
+export type ParticipantActionState = AgentActionState
 
 /**
  * 协作契约的版本号。
@@ -103,6 +114,14 @@ export interface ParticipantResult {
   /** `status: 'external_pending'` 时**必须**给出，理由见 {@link ParticipantExternalPending}。 */
   readonly externalPending?: ParticipantExternalPending
   /**
+   * 等用户确认的操作（可空）。见 {@link ParticipantAction}。
+   *
+   * 与 `artifacts` 的分工：artifact 是"去那个页面看"，action 是"**在这里就能办**"。
+   * 群组把它桥接成牛马大总管的执行入口结果，台账据此渲染一张确认卡——**新增一种操作
+   * 不需要台账改一行代码**。
+   */
+  readonly actions?: readonly ParticipantAction[]
+  /**
    * 对照 {@link ParticipantRequest.acceptance} 的自检结论；形状与语义沿用 kit 的定义。
    *
    * 缺省表示这一轮没有做自检（老参与者）——群组按未核验如实标记，不判不达标。
@@ -126,4 +145,26 @@ export interface AgentParticipant {
    * 幂等身份：同一次回话的重试复用同一 ID，新的回话用新 ID；同 ID 不同内容应拒绝。
    */
   reply?(request: ParticipantRequest): Promise<ParticipantResult>
+  /**
+   * 列出一位 owner 现在待确认的操作（刷新后补画用）。没实现时协调方只显示已收到的那一份。
+   */
+  listActions?(owner: string, actor: Actor): Promise<readonly ParticipantAction[]>
+  /**
+   * 执行用户对一条操作的决策。
+   *
+   * 与 `run`/`reply` 同一个身份链路：`request.actor` 是委派身份，实现方按它核验归属
+   * （**不能**因为"协调方说可以"就放行）。**必须幂等**：同一 `actionId` 的重复确认返回同一结果。
+   */
+  applyAction?(request: ParticipantActionRequest): Promise<ParticipantResult>
+}
+
+/** 执行方收到的一次决策请求（由协调方转交）。 */
+export interface ParticipantActionRequest extends ParticipantActionDecision {
+  /** 这条操作属于哪一次派活：执行方用它核对归属，也用于日志与幂等。 */
+  readonly taskId: string
+  readonly subtaskId: string
+  readonly actor: Actor
+  /** 原业务会话引用；没有时缺省。 */
+  readonly conversationId?: string
+  readonly signal: AbortSignal
 }

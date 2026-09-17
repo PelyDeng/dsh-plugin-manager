@@ -9,7 +9,7 @@
  * 不在别处另造。
  */
 
-import type { Actor, AgentArtifact, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
+import type { Actor, AgentAction, AgentArtifact, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
 import type { SubtaskState, TaskState } from '../task-model.ts'
 
 /** 侧栏里的一条会话。 */
@@ -113,6 +113,13 @@ export interface ButlerMemberReturn {
   readonly protocol: 1
   readonly text: string
   readonly externalPending?: { readonly reason: string; readonly next?: string }
+  /**
+   * 待用户确认的操作（**呈现数据**，形状来自 kit 的 `AgentAction`）。
+   *
+   * 它与 `text`/`externalPending` 一起落库：操作卡必须在**刷新之后**还能画出来，而事件日志只
+   * 保证"当时发过"。这里存的是呈现面；确认凭据（nonce）不在其中——它始终留在执行方自己的记录里。
+   */
+  readonly actions?: readonly AgentAction[]
   readonly selfCheck?: AgentSelfCheck
 }
 

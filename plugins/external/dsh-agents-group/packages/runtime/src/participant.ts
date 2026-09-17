@@ -41,6 +41,8 @@ import { AccessError, type Access, type Actor, type AgentSelfCheck } from '@dsh-
 import {
   PARTICIPANT_PROTOCOL,
   type AgentParticipant,
+  type ParticipantAction,
+  type ParticipantActionRequest,
   type ParticipantProgress,
   type ParticipantRequest,
   type ParticipantResult,
@@ -517,6 +519,8 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
             ...(projected.question === undefined ? {} : { question: projected.question }),
             ...(projected.artifacts === undefined ? { artifacts: [conversationArtifact(opened.id)] } : { artifacts: projected.artifacts }),
             ...(projected.externalPending === undefined ? {} : { externalPending: projected.externalPending }),
+            // 待确认的操作：与 artifacts 一起上交给协调方，让它就地渲染确认卡（不再逼用户跳页面）。
+            ...(projected.actions === undefined || projected.actions.length === 0 ? {} : { actions: projected.actions }),
             // 回报给协调方的是**运行时跑完 ⑦ 与 ⑧ 之后的汇总**，不是业务自报的那一份。
             selfCheck,
           })
@@ -812,6 +816,68 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
     path: `${config.routePrefix}?conversationId=${encodeURIComponent(conversationId)}`,
   })
 
+  /**
+   * 列出待确认的操作（刷新后补画）。
+   *
+   * **只走业务实现**：运行时不自己推断"哪个操作还没办"——那属于业务状态（博客的操作记录在
+   * 它自己的库里）。没实现就如实返回空数组，协调方只显示它已经收到的那一份，不编造。
+   */
+  const listActions = async (owner: string, actor: Actor): Promise<readonly ParticipantAction[]> => {
+    assertAccessAllowed(actor)
+    if (definition.listActions === undefined) return []
+    return await definition.listActions({ actor, owner, storage })
+  }
+
+  /**
+   * 执行用户对一条操作的决策。
+   *
+   * 三件事按顺序做，缺一不可：
+   * 1. **权限与停止状态**：与 `run`/`reply` 同一个 `assertAccess`（插件被停用、权限被撤之后
+   *    一律拒绝）；
+   * 2. **交给业务**：`definition.applyAction` 自己核验归属并执行（凭据在它自己的记录里，
+   *    **不经协调方、也不经模型**）；
+   * 3. **结果照原样上交**：返回的是一个完整的 {@link ParticipantResult}，因此执行完之后
+   *    新的待办（或没有待办）会自动回到协调方，不需要另一条通路。
+   */
+  const applyAction = async (request: ParticipantActionRequest): Promise<ParticipantResult> => {
+    assertAccessAllowed(request.actor)
+    request.signal.throwIfAborted()
+    if (definition.applyAction === undefined) {
+      throw new AccessError(409, `${definition.displayName} 没有实现就地确认，请到它的页面里办理`)
+    }
+    if (disposed) throw new AccessError(503, '这个协作入口正在停止')
+    const result = await definition.applyAction({
+      actionId: request.actionId,
+      decision: request.decision,
+      ...(request.note === undefined ? {} : { note: request.note }),
+      taskId: request.taskId,
+      subtaskId: request.subtaskId,
+      actor: request.actor,
+      ...(request.conversationId === undefined ? {} : { conversationId: request.conversationId }),
+      storage,
+      signal: request.signal,
+    })
+    // 业务返回的是"投影形状"（与 `projectResult` 同形），这里补上会话引用后按同一口径上交。
+    const fallbackText = result.text === '' ? '操作已处理。' : result.text
+    return {
+      status: result.status,
+      conversationId: request.conversationId ?? '',
+      text: fallbackText,
+      ...(result.question === undefined ? {} : { question: result.question }),
+      ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+      ...(result.externalPending === undefined ? {} : { externalPending: result.externalPending }),
+      ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
+      // 就地确认不是模型跑的一轮：自检结论按"这一轮没有可核验产出"如实标，不冒充通过。
+      selfCheck: { status: 'unverifiable', detail: '这是用户对已准备操作的确认，不是一次模型回合。' },
+    }
+  }
+
+  /** 与 `run`/`reply` 同一道权限与停止检查（抽出来避免三处各写一份）。 */
+  const assertAccessAllowed = (actor: Actor): void => {
+    assertAccess(actor)
+    if (disposed) throw new AccessError(503, '这个协作入口正在停止')
+  }
+
   return {
     protocol: PARTICIPANT_PROTOCOL,
     id: definition.id,
@@ -820,6 +886,8 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
     assertAccess,
     run: request => runTurn(request, 'run'),
     reply: request => runTurn(request, 'reply'),
+    listActions,
+    applyAction,
     get handoff() { return lastLedger },
     handoffFor: conversationId => ledgerOf(conversationId),
     get settledRequests() { return settledTurns.size },

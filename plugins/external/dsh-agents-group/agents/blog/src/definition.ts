@@ -53,6 +53,7 @@
  * `turn.status !== 'succeeded'` 分支），而运行时的历史里没有 attempt 正文 ⇒ 那段文本不再出现。
  * **接受它**：`tail` 的设计意图正是"算数的答案"，把被打断的半句当答案本身就是错的。
  */
+import type { ParticipantAction } from '../../../packages/runtime/src/contract.ts'
 import type { AgentDefinition, ProjectedResult, ResultContext } from '../../../packages/runtime/src/definition.ts'
 import { Config as ConfigSchema } from './config.ts'
 import { publicResultText } from './result-text.ts'
@@ -96,9 +97,39 @@ export interface BlogDefinitionInput {
       title: string
       mode: string
       status: string
+      expiresAt?: number
+      payload?: { content?: { title?: string; text?: string; format?: string; slug?: string; tags?: readonly unknown[]; categories?: readonly unknown[] } } | undefined
+      impact?: unknown
+      source?: unknown
       result?: { url?: string | null } | null
       chat?: { conversationId?: string } | null
     }[]>
+    /**
+     * 取一条操作卡片的**预览**（发布前/删除前后的对比、管理变更的字段与影响）。
+     *
+     * 它已经在博客页面用了很久（`chat.ts` 的 `operationCards`）；待确认操作卡把它复用同一份，
+     * 于是台账与博客页面看到的是同一条操作的**同一份**说明，不会各写一套措辞。
+     */
+    preview?(operation: never): {
+      readonly id: string
+      readonly mode?: string
+      readonly title?: string
+      readonly expiresAt?: number
+      readonly before?: unknown
+      readonly after?: { title?: string; text?: string } | null
+      readonly hasSavedDraft?: boolean
+      readonly source?: string
+      readonly management?: unknown
+      readonly impact?: unknown
+      readonly deletedArticles?: readonly { cid?: number; title?: string; type?: string }[]
+    }
+    /**
+     * 读一条操作记录。
+     *
+     * 确认路径用它取**凭据**（`nonce`）与当前状态；未实现时确认会如实报错，不静默当成功。
+     * 之所以可选：投影（画卡片）不需要它，夹具可以只实现画卡所需的那几个方法。
+     */
+    operation?(owner: string, id: string): Promise<{ readonly id: string; readonly mode: string; readonly title: string; readonly status: string; readonly nonce?: string; readonly expiresAt?: number; readonly sessionId?: string; readonly chat?: { conversationId?: string } | null }>
   }
   /** 页面入口前缀（会话材料的位置由它拼出来）。 */
   readonly routePrefix: string
@@ -334,8 +365,13 @@ export function createBlogProjector(
        * 完成了"之间的关键区分；只落一半会让它**永远不出现**——那是**静默的语义退步，比不落更糟**。
        * 两个来源都要看：**待确认的操作**（`confirmation`）与**待采用的候选稿**（`candidate`）。
        */
+      // —— 待确认操作（**本地就能办**，不用跳页面）——
+      // 操作记录本来就在业务库里；这里把它投影成台账能直接渲染的呈现面（`AgentAction`）。
+      // 新增一种操作只需要在这里多一档措辞，**台账一行都不用改**。
+      const actions = await pendingActionsOf(input.app, owner, conversationId)
+
       const external = confirmation || candidate
-      const note = confirmation ? '博客操作仍需在原对话核对或确认；此处没有执行发布。'
+      const note = confirmation ? '博客操作仍需核对或确认；此处没有执行发布。'
         : candidate ? '候选稿已准备，须在博客原对话选择采用；候选稿不等于正文已保存或发布。' : ''
       return {
         status: external ? 'external_pending' : 'completed',
@@ -345,13 +381,101 @@ export function createBlogProjector(
           title: confirmation ? '在博客核对并确认' : candidate ? '在博客查看并采用候选稿' : '查看博客原对话',
           path,
         }],
+        // 待确认的操作随结果交回：协调方（牛马大总管）就地把它们画成确认卡，
+        // 用户不必再跳到博客页面。凭据不在其中（它留在 `blog_operations` 里）。
+        ...(actions.length > 0 ? { actions } : {}),
         // 声明里的理由是给用户看的原话，与 `text` 里那句同源，不另编一份。
         ...(external ? {
           externalPending: {
             reason: note,
-            next: '在博客里采用或确认之后，可以再派一轮继续处理后续。',
+            next: '在这里确认，或者到博客原对话里处理；办完之后可以再派一轮继续后续。',
           },
         } : {}),
       }
   }
+}
+
+/**
+ * 这个会话里**还没办完**的操作 → 台账能直接渲染的呈现面（`AgentAction`）。
+ *
+ * 两处共用同一份：
+ * - 结果投影（`createBlogProjector`）：把待办随这一轮结果交回协调方；
+ * - 就地确认（`index.ts` 的 `applyAction`）：办完一条之后重算"还剩哪些"，一起交回。
+ *
+ * ⚠️ 形状里**没有凭据**（`nonce` 留在 `blog_operations`）：协调方与模型都拿不到它，
+ * 这是"Agent 不能自己确认自己的操作"这条性质的落点。
+ */
+export async function pendingActionsOf(
+  app: BlogDefinitionInput['app'],
+  owner: string,
+  conversationId: string,
+): Promise<ParticipantAction[]> {
+  const operations = await app.operations(owner)
+  const pending = operations.filter(operation => operation.chat?.conversationId === conversationId
+    && ['prepared', 'running', 'uncertain', 'conflict'].includes(operation.status))
+  const actions: ParticipantAction[] = []
+  for (const operation of pending) {
+    // 预览是可选能力：夹具/老装配没有它时，卡片退化成"标题 + 一句话"，**照样画得出来**
+    // （这正是通用渲染的意义：缺详情不影响用户做决定）。
+    const preview = app.preview?.(operation as never)
+    const mode = operation.mode
+    const title = preview?.title ?? operation.title ?? (mode === 'delete' ? '删除文章' : mode === 'manage' ? '修改分类/标签/评论' : '发布文章')
+    const expiresAt = preview?.expiresAt ?? operation.expiresAt
+    actions.push({
+      id: operation.id,
+      kind: `blog.${mode === 'manage' ? 'manage' : mode === 'delete' ? 'delete' : 'publish'}`,
+      title,
+      summary: mode === 'delete'
+        ? '确认后会永久删除这篇文章（含保存稿与评论），无法恢复。'
+        : mode === 'manage'
+          ? '确认后会按下面列出的内容改动博客的分类、标签或评论。'
+          : '确认后会把这篇内容公开发布到博客；在此之前它只是草稿。',
+      ...(preview === undefined ? {} : { detail: actionDetailOf(preview, mode) }),
+      ...(preview === undefined ? {} : { fields: actionFieldsOf(preview, mode) }),
+      ...(mode === 'delete' ? { confirmLabel: '删除', cancelLabel: '先不删' } : { confirmLabel: '确认' }),
+      state: 'prepared',
+      ...(typeof expiresAt === 'number' ? { expiresAt } : {}),
+    })
+  }
+  return actions
+}
+
+/**
+ * 操作卡片的**详情**（受控 Markdown，台账用同一个渲染器画）。
+ *
+ * 内容一律来自 `app.preview` 这条既有通路：台账与博客页面看到的是同一份说明，不各写一套措辞。
+ */
+function actionDetailOf(preview: NonNullable<ReturnType<NonNullable<BlogDefinitionInput['app']['preview']>>>, mode: string): string {
+  const lines: string[] = []
+  if (mode === 'publish' || mode === 'delete') {
+    const after = preview.after
+    if (after !== null && after !== undefined && (after.title !== undefined || after.text !== undefined)) {
+      const body = typeof after.text === 'string' ? after.text : ''
+      const clipped = body.length > 600 ? `${body.slice(0, 600)}…` : body
+      lines.push('**将要发布的内容**：', '', `# ${after.title ?? preview.title ?? ''}`, '', clipped)
+    }
+    if (preview.hasSavedDraft === true && mode === 'delete') lines.push('', '这篇文章还有一份**保存稿**，会一起删掉。')
+  }
+  if (mode === 'manage') {
+    if (preview.impact !== undefined) lines.push('**影响**：', '', '```json', JSON.stringify(preview.impact, null, 2), '```')
+  }
+  return lines.join('\n')
+}
+
+/** 操作卡片的**结构化字段**（台账渲染成两列表格，不认 kind 也能画）。 */
+function actionFieldsOf(preview: NonNullable<ReturnType<NonNullable<BlogDefinitionInput['app']['preview']>>>, mode: string): { label: string; value: string }[] {
+  const fields: { label: string; value: string }[] = []
+  const push = (label: string, value: unknown): void => {
+    if (value === undefined || value === null || value === '') return
+    fields.push({ label, value: typeof value === 'string' ? value : JSON.stringify(value) })
+  }
+  push('操作', mode === 'delete' ? '删除文章' : mode === 'manage' ? '修改分类/标签/评论' : '发布文章')
+  push('标题', preview.after?.title ?? preview.title)
+  if (preview.source !== undefined) push('发布来源', preview.source === 'proposal' ? 'AI 候选稿' : '当前草稿正文')
+  if (preview.deletedArticles !== undefined && preview.deletedArticles.length > 0) {
+    const items: readonly { cid?: number; title?: string; type?: string }[] = preview.deletedArticles
+    push('将被删除', items.map(item => `${item.title ?? item.cid ?? ''}（${item.type ?? ''}）`).join('、'))
+  }
+  if (typeof preview.expiresAt === 'number') push('确认有效期至', new Date(preview.expiresAt).toLocaleString('zh-CN', { hour12: false }))
+  return fields
 }

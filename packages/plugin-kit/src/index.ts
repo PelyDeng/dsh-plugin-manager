@@ -40,6 +40,11 @@ export * from './conversations.ts'
 export * from './models.ts'
 // 跨插件派活契约：只有类型，显式列出（与 access.ts 同理，避免星号导出把同一份声明走两条路径）。
 export type {
+  AgentAction,
+  AgentActionDecision,
+  AgentActionField,
+  AgentActionRequest,
+  AgentActionState,
   AgentArtifact,
   AgentDispatchRequest,
   AgentExecutionPhase,

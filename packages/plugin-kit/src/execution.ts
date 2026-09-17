@@ -196,6 +196,101 @@ export interface AgentSelfCheck {
   readonly detail?: string
 }
 
+/**
+ * 一条**等用户确认的操作**（呈现面）。
+ *
+ * ## 为什么要有它
+ *
+ * 在它之前，"还有一件事要用户点确认"只能用 {@link AgentArtifact} 表达，而 artifact 只有
+ * `{ title, path }` ——**只有位置**。于是每个执行方都只能在**自己的页面**里造一套确认 UI，
+ * 协调方（牛马大总管）既看不到也点不了；用户被迫"从这个入口跳到那个入口"，而每新增一种
+ * 操作都要再写一遍前端。
+ *
+ * `AgentAction` 把这件事提升成协议里的一等公民：字段全是**呈现数据**，协调方按它们渲染
+ * 一张卡即可，不认识 `kind` 也能画出来。
+ *
+ * ## 安全口径（不可让步）
+ *
+ * - 这里**只放呈现数据**：确认凭据（`nonce` / 会话凭证）不进这个结构，也就不进模型上下文、
+ *   不进任何前端。用户在协调方那边点确认产生的是 {@link AgentActionDecision} —— 一次**决策**，
+ *   由服务端到服务端交回执行方；执行方自己核验归属，并从自己的记录里取凭据。
+ * - 模型只能看到卡片长什么样，**看不到**执行能力。
+ */
+export interface AgentAction {
+  /** 执行方内唯一；`applyAction` 按它幂等（重复确认返回同一结果，不重复执行）。 */
+  readonly id: string
+  /**
+   * 操作类型，命名空间化（例如 `blog.publish` / `blog.delete` / `blog.manage`）。
+   *
+   * 协调方**不得**按它硬编码分支：它只用来挑文案与图标，不认识的 kind 走同一套通用渲染。
+   */
+  readonly kind: string
+  /** 卡片标题，例如「发布《测试1》」。 */
+  readonly title: string
+  /** 一句话说清会发生什么（用户只读这一句也能做决定）。 */
+  readonly summary: string
+  /** 详情：受控 Markdown（可含表格、列表、代码），由协调方的统一渲染器渲染。 */
+  readonly detail?: string
+  /** 结构化字段：渲染成两列表格（适合"目标文章 / 分类 / 评论开关"这种键值）。 */
+  readonly fields?: readonly AgentActionField[]
+  /** 确认按钮文案；缺省由协调方给「确认」。 */
+  readonly confirmLabel?: string
+  /** 取消按钮文案；缺省由协调方给「先不办」。 */
+  readonly cancelLabel?: string
+  /** 这条操作现在的状态；`prepared` 之外的都不该再给按钮。 */
+  readonly state: AgentActionState
+  /** 过期的绝对时刻（毫秒）；过期后按钮禁用并说明原因。 */
+  readonly expiresAt?: number
+  /** 执行完的结论（受控 Markdown），`succeeded` / `failed` 时有值。 */
+  readonly resultText?: string
+  /** 失败时给用户看的原因；只在不该暴露内部细节时用泛化措辞。 */
+  readonly errorText?: string
+}
+
+/** 结构化字段的一行。 */
+export interface AgentActionField {
+  readonly label: string
+  readonly value: string
+}
+
+/**
+ * 操作状态。
+ *
+ * `expired` 是**过期的确认**（执行方的凭据有有效期）：它不进终态统计，但必须与"取消"分开，
+ * 否则用户会以为自己取消过。
+ */
+export type AgentActionState =
+  | 'prepared'
+  | 'executing'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'expired'
+
+/**
+ * 用户对一条操作的决策。
+ *
+ * **不带任何凭据**：归属校验与一次性校验都在执行方（它本来就持有那条操作记录）。
+ */
+export interface AgentActionDecision {
+  readonly actionId: string
+  readonly decision: 'confirm' | 'cancel'
+  /** 用户可选的补充说明（例如「换成 5 月再发」）；没有时缺省。 */
+  readonly note?: string
+}
+
+/** 执行方收到的一次决策请求（协调方转交）。 */
+export interface AgentActionRequest extends AgentActionDecision {
+  /** 这条操作属于哪一次派活：执行方用它核对归属，也用于日志与幂等。 */
+  readonly taskId: string
+  readonly subtaskId: string
+  /** 委派身份：与 dispatch/reply 同一条链路，执行方按它核验归属。 */
+  readonly actor: Actor
+  /** 业务会话标识（执行方自己的会话），用于把决策落到同一段上下文里；没有时缺省。 */
+  readonly conversationId?: string
+  readonly signal: AbortSignal
+}
+
 /** 一次派活的结论。 */
 export interface AgentExecutionResult {
   /** `succeeded` 表示拿到了可用结果；其余按失败、取消或等待处理。 */
@@ -210,6 +305,13 @@ export interface AgentExecutionResult {
   readonly artifacts?: readonly AgentArtifact[]
   /** `external_pending` 时必填，理由见 {@link AgentExternalPending}。 */
   readonly externalPending?: AgentExternalPending
+  /**
+   * 等用户确认的操作（可空）。
+   *
+   * 与 `artifacts` 的区别：artifact 说「去那个页面看」，action 说「**在这里就能办**」。
+   * 两者可以同时给：协调方把 action 渲染成主按钮，artifact 渲染成次按钮（想去原页面也行）。
+   */
+  readonly actions?: readonly AgentAction[]
   /** 对照 {@link AgentDispatchRequest.acceptance} 的自检结论；缺省见 {@link AgentSelfCheck}。 */
   readonly selfCheck?: AgentSelfCheck
 }
@@ -224,4 +326,20 @@ export interface AgentExecutor {
   dispatch(request: AgentDispatchRequest): Promise<AgentExecutionResult>
   /** 可选：实现了才允许用户中途追问。 */
   reply?(request: AgentReplyRequest): Promise<AgentExecutionResult>
+  /**
+   * 可选：列出一位 owner 现在待确认的操作。
+   *
+   * 用途是**刷新后补画**：实时那一次已经随 {@link AgentExecutionResult.actions} 交回过，
+   * 但用户刷新页面、或者服务重启之后，协调方需要能重新问一次"现在还有哪些待办"。
+   * 没实现时协调方只显示已收到的那一份，不编造。
+   */
+  listActions?(owner: string, actor: Actor): Promise<readonly AgentAction[]>
+  /**
+   * 可选：执行用户对一条操作的决策。
+   *
+   * 与 `dispatch`/`reply` 同一个身份链路：`request.actor` 是委派身份，执行方按它核验归属
+   * （**不能**因为"协调方说可以"就放行）。**必须幂等**：同一个 `actionId` 的重复确认返回
+   * 同一结果，不重复执行副作用。
+   */
+  applyAction?(request: AgentActionRequest): Promise<AgentExecutionResult>
 }

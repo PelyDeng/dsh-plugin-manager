@@ -29,6 +29,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type Schema from '@deepseek-ai/schemastery'
 import type { ToolDescriptor, AgentSelfCheck, Actor } from '@dsh-plugin-manager/plugin-kit'
 import type {
+  ParticipantAction,
   ParticipantArtifact,
   ParticipantExternalPending,
   ParticipantStatus,
@@ -175,6 +176,14 @@ export interface ProjectedResult {
   readonly text: string
   readonly artifacts?: readonly ParticipantArtifact[]
   readonly externalPending?: ParticipantExternalPending
+  /**
+   * 等用户确认的操作（可空）。
+   *
+   * 投影是**唯一**的产出点：业务在自己的业务库里查"现在还有哪些待确认的操作"，投影成
+   * {@link ParticipantAction} 交回来。协调方（牛马大总管）据此就地渲染确认卡——**新增一种
+   * 操作不需要协调方改一行代码**，这是本字段存在的全部理由。
+   */
+  readonly actions?: readonly ParticipantAction[]
   /** `status: 'waiting'` 时要用户回答的问题。 */
   readonly question?: string
   /**
@@ -202,6 +211,38 @@ export interface JudgeResult {
   readonly ok: boolean
   /** 不达标时交给下一次尝试的说明（会进重做请求）。 */
   readonly reason?: string
+}
+
+/**
+ * 列出待确认操作时的上下文。
+ *
+ * `owner` 是业务库的 owner 键（由协调方按 actor 派生）；`actor` 是**原始委派身份**：
+ * 需要它做二次鉴权（例如"这个登录会话还是不是发起那次预览的那一个"）时用它。
+ */
+export interface ActionListContext {
+  readonly actor: Actor
+  readonly owner: string
+  readonly storage: AgentStoragePort | undefined
+}
+
+/**
+ * 执行一次操作决策时的上下文。
+ *
+ * 与 {@link ActionListContext} 同一套身份口径，另加"是哪一次派活的哪一条操作"（`taskId` /
+ * `subtaskId`）与决策本身。**凭据不在这里**：业务从自己的记录里取（见
+ * `AgentDefinition.applyAction` 的三条口径）。
+ */
+export interface ActionApplyContext {
+  readonly actionId: string
+  readonly decision: 'confirm' | 'cancel'
+  readonly note?: string
+  readonly taskId: string
+  readonly subtaskId: string
+  readonly actor: Actor
+  /** 原业务会话引用；没有时缺省（业务按自己的寻址规则处理）。 */
+  readonly conversationId?: string
+  readonly storage: AgentStoragePort | undefined
+  readonly signal: AbortSignal
 }
 
 /** 思考投影的上下文。 */
@@ -471,6 +512,32 @@ export interface AgentDefinition {
    * ⚠️ 抛错 ⇒ 这一轮按失败收尾（与 {@link onTurnStart} 同理：此时消息还没注入，还来得及）。
    */
   readonly turnContext?: (ctx: TurnHookContext) => Promise<string> | string
+
+  // —— 就地确认的操作（可选）——
+
+  /**
+   * 列出这位 owner 现在待确认的操作（刷新后补画用）。
+   *
+   * **可选**：没实现的 Agent 就让协调方只显示它已经收到的那一份结果，不编造。实现它意味着
+   * 业务能从自己的库里读出"还没办的事"，这是把操作卡片做成**跨刷新一致**的前提。
+   */
+  readonly listActions?: (ctx: ActionListContext) => Promise<readonly ParticipantAction[]>
+
+  /**
+   * 执行用户对一条操作的决策（就地确认 / 取消）。
+   *
+   * ## 三条不可让步的口径
+   *
+   * 1. **归属自己核**：`ctx.actor` 是协调方转交的委派身份，实现方必须按它核验（"这条操作是不是
+   *    这次登录发起的、这个 owner 能不能办"）。**不能**因为"协调方说可以"就放行。
+   * 2. **凭据不出业务**：确认用的 `nonce` / 一次性令牌住在业务自己的记录里，
+   *    **不经协调方、不进模型上下文**。这也是模型永远拿不到确认能力的原因。
+   * 3. **幂等**：同一个 `actionId` 的重复确认必须返回同一结果，不重复执行副作用
+   *    （用户会双击，网络会重试）。
+   *
+   * 返回值与 {@link projectResult} 同形：执行完之后新的待办（或没有待办）由它一并交回。
+   */
+  readonly applyAction?: (ctx: ActionApplyContext) => Promise<ProjectedResult>
 
   // —— 存储与配置 ——
 

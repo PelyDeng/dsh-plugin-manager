@@ -15,6 +15,7 @@ import { agentResource } from '@dsh-agents-group/common'
 import { registerPlugin,registerConversations,AccessError,isAccessError,type Access,type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import type { ProtectedRoute } from '@dsh-plugin-manager/plugin-kit/http'
 import { loadSettings, invariant } from './settings.ts'
+import { ownerKey } from './store.ts'
 import { BlogApplication, PendingOperationsMirror } from './application.ts'
 import { BlogClient,ImageClient,BackupClient } from './connectors.ts'
 import type { BlogBridgeConfig, ImageBridgeConfig, BackupBridgeConfig } from './connectors.ts'
@@ -24,7 +25,8 @@ import { ChatStore } from './chat-store.ts'
 import { BlogChat, chatInstructions } from './chat.ts'
 // ⚠️ `createBlogParticipant`（`./participant.ts`）已**删除**：协作入口换成运行时的
 // `createAgentRuntime(...).participant`。文件头的历史说明见进度文档 §43 与本节注释。
-import { createBlogDefinition } from './definition.ts'
+import { createBlogDefinition, pendingActionsOf } from './definition.ts'
+import { createApplyAction } from './actions.ts'
 import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
 import {selectBlogModel} from './models.ts'
 import type {BlogModelChoices} from './models.ts'
@@ -435,13 +437,34 @@ export async function mount(mountContext:AgentMountContext):Promise<{
       // 跨轮候选判定要按**会话**读产出记录（运行时的 `loadResults()` 只读本轮）。
       results: { list: async (owner, conversationId) => conversations.results(owner, conversationId) },
   }), chat)
+  /**
+   * 就地确认：用户在**台账**上点的那一下落在这里（实现见 `./actions.ts`，三条口径都在那里）。
+   *
+   * 装配侧只做接线：把"读操作记录 / 执行 / 重算待办 / owner 键"四件事交给它——
+   * 于是"新增一种操作要改哪里"这个问题有唯一答案：改 `actions.ts` 与 `definition.ts` 的投影，
+   * **协调方（台账）一行都不用改**。
+   */
+  const applyAction = createApplyAction({
+    operation: async (owner, id) => await app.operation(owner, id) as never,
+    perform: async input => {
+      await chat.operationAction(input.actor, {
+        conversationId: input.conversationId,
+        id: input.id,
+        operation: input.decision,
+        ...(input.nonce === undefined ? {} : { nonce: input.nonce }),
+      })
+    },
+    remaining: async (owner, conversationId) => await pendingActionsOf(app, owner, conversationId),
+    ownerOf: ownerKey,
+  })
+  const definitionWithActions: AgentDefinition = { ...definition, applyAction }
   const allowedTools = mountContext.allowedTools
   let tools: readonly ToolDescriptor[]
   let participant: AgentParticipant
   if (index !== undefined) {
     assembly = await createAgentRuntime({
       ctx,
-      definition,
+      definition: definitionWithActions,
       access,
       config: runtimeConfigOf(config),
       allowedTools,

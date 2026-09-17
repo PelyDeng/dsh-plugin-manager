@@ -28,10 +28,26 @@ import type {
   AgentExecutionProgress,
   AgentExecutionResult,
   AgentExecutor,
+  AgentAction,
+  AgentActionRequest,
   AgentReplyRequest,
+  Actor,
 } from '@dsh-plugin-manager/plugin-kit'
-import type { AgentParticipant, ParticipantArtifact, ParticipantResult } from '../packages/common/src/participant.ts'
-import { PARTICIPANT_PROTOCOL } from '@dsh-agents-group/common'
+/**
+ * 协作契约的来源：**运行时的 `contract.ts`**（不是 `common` 里那份同名旧拷贝）。
+ *
+ * 两处各写一份的代价，本文件开头已经写过一遍：字段靠人眼对齐、类型检查全绿而线上 `TypeError`。
+ * 本批新增的字段（待确认操作 `actions` / 就地确认 `applyAction`）以运行时契约为**权威形状**，
+ * 所以桥接层从这里取；`common` 那份遗留拷贝的退役按既定计划在后续批次完成。
+ */
+import type {
+  AgentParticipant,
+  ParticipantAction,
+  ParticipantActionRequest,
+  ParticipantArtifact,
+  ParticipantResult,
+} from '../packages/runtime/src/contract.ts'
+import { PARTICIPANT_PROTOCOL } from '../packages/runtime/src/contract.ts'
 import type { AgentManifest } from './agents/registry.ts'
 
 /**
@@ -123,6 +139,9 @@ function toButlerResult(result: ParticipantResult): ButlerDispatchResult {
     ...(result.question === undefined ? {} : { question: result.question }),
     ...(result.artifacts === undefined ? {} : { artifacts: toButlerArtifacts(result.artifacts) }),
     ...(result.externalPending === undefined ? {} : { externalPending: result.externalPending }),
+    // 待确认的操作原样透传（形状本就是 kit 的 `AgentAction`，见运行时 `contract.ts`）：
+    // 协调方据此就地渲染确认卡，"新增一种操作不用改协调方"靠的就是这一行不改形状。
+    ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
     // 自检结论原样透传，缺声明就不传：协调方据此把「没自检」与「自检通过」分开，
     // 这里替参与者补一个 passed 会把一次没人核验过的交付显示成已核验。
     ...(result.selfCheck === undefined ? {} : { selfCheck: result.selfCheck }),
@@ -189,6 +208,9 @@ export function executorFor(manifest: AgentManifest, participant: AgentParticipa
   const capabilities = [manifest.category, manifest.description].filter(part => part.trim() !== '')
   // 续问入口：参与者显式实现了 reply 才暴露（G01）。提为 const 以便闭包内保持收窄。
   const participantReply = participant.reply
+  // 就地确认同样"实现了才暴露"：没实现时协调方如实说"请到它的页面里办理"，不假装能办。
+  const participantListActions = participant.listActions
+  const participantApplyAction = participant.applyAction
   return {
     protocol: 1,
     agentId: manifest.id,
@@ -244,6 +266,28 @@ export function executorFor(manifest: AgentManifest, participant: AgentParticipa
           ...(request.conversationId === undefined ? {} : { conversationId: request.conversationId }),
           signal: request.signal,
           onProgress: update => request.onProgress?.(toButlerProgress(asProgressFields(update))),
+        })
+        return toButlerResult(result)
+      },
+    }),
+    // 待办列表与就地确认：参与者实现才暴露（与 reply 同一口径）。协调方**不自己推断**
+    // 哪条操作还没办——那属于业务状态；这里只做透传，凭据不进这一层（见 `AgentAction` 的口径）。
+    ...(participantListActions === undefined ? {} : {
+      async listActions(owner: string, actor: Actor): Promise<readonly AgentAction[]> {
+        return await participantListActions(owner, actor)
+      },
+    }),
+    ...(participantApplyAction === undefined ? {} : {
+      async applyAction(request: AgentActionRequest): Promise<ButlerDispatchResult> {
+        const result = await participantApplyAction({
+          actionId: request.actionId,
+          decision: request.decision,
+          ...(request.note === undefined ? {} : { note: request.note }),
+          taskId: request.taskId,
+          subtaskId: request.subtaskId,
+          actor: request.actor,
+          ...(request.conversationId === undefined ? {} : { conversationId: request.conversationId }),
+          signal: request.signal,
         })
         return toButlerResult(result)
       },

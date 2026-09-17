@@ -27,7 +27,7 @@ import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { AccessError, conversationModel, defaultConversationModel, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor, type AgentArtifact, type AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, conversationModel, defaultConversationModel, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor, type AgentAction, type AgentArtifact, type AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
 import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
 import type { Config } from './config.ts'
 import { ConversationLog, type LoggedEvent, type RunHead } from './event-log.ts'
@@ -157,6 +157,13 @@ export type ButlerEvent =
      * 而**不是**「已完成」。
      */
     readonly pending?: { readonly reason: string; readonly next?: string }
+    /**
+     * 等用户确认的操作（可空）。
+     *
+     * 页面据此就地渲染确认卡——**不认 `kind` 也能画**（标题/摘要/详情/字段/按钮文案都是呈现数据）。
+     * 确认凭据不在其中：它始终留在执行方自己的记录里，前端与模型都拿不到。
+     */
+    readonly actions?: readonly AgentAction[]
     readonly time: number
   }
   /**
@@ -349,6 +356,23 @@ interface PreparedReply {
    * 续问沿用派单时那一份：口径描述的是「交回什么才算完成」，用户补一句话不会改变它。
    */
   readonly acceptance?: string
+  readonly runId: string
+  readonly abort: AbortController
+}
+
+/** 一次已经受理的操作决策：确认或取消某一条待办。 */
+interface PreparedAction {
+  readonly conversationId: string
+  readonly taskId: string
+  readonly subtaskId: string
+  readonly actionId: string
+  readonly decision: 'confirm' | 'cancel'
+  readonly note?: string
+  readonly actor: Actor
+  readonly executor: ButlerAgentExecutor
+  readonly agentId: string
+  readonly displayName: string
+  readonly memberConversationId?: string
   readonly runId: string
   readonly abort: AbortController
 }
@@ -678,6 +702,8 @@ function memberReturnOf(result: ButlerDispatchResult): ButlerMemberReturn {
     protocol: 1,
     text: result.summary ?? '',
     ...(reason === '' ? {} : { externalPending: { reason, ...(next === '' ? {} : { next }) } }),
+    // 待确认的操作随留存一起落库：事件日志只保证"当时发过"，刷新后要靠这一份重画确认卡。
+    ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
     // 自检结论必须随留存一起落库：以前这里只留原文与外部待办，`selfCheck` 在落库那刻被丢掉，
     // 于是重启后的判据永远拿不到它，只能按"缺省 = 通过"处理——那等于所有交付都被标记为已核验。
     ...(result.selfCheck === undefined ? {} : { selfCheck: result.selfCheck }),
@@ -1241,7 +1267,7 @@ export class ButlerConsole {
    * 不允许：回合还活着时回话会换掉运行引用和事件日志，把在跑的活变成不可停止，所以回话
    * 要等回合收尾（或先停止）。页面各自持有的 streaming 标记只是反馈，不能当互斥依据。
    */
-  private readonly claims = new Map<string, { readonly runId: string; readonly kind: 'turn' | 'reply' | 'supplement' }>()
+  private readonly claims = new Map<string, { readonly runId: string; readonly kind: 'turn' | 'reply' | 'supplement' | 'action' }>()
 
   /**
    * 正在裁决的会话 → 这一次汇总轮的裁决上下文。
@@ -1253,7 +1279,7 @@ export class ButlerConsole {
   private readonly verdictContexts = new Map<string, VerdictContext>()
 
   /** 受理时同步占住执行权；拿不到返回 false，由调用方按 409 拒绝。 */
-  private claimNow(conversationId: string, runId: string, kind: 'reply' | 'supplement'): boolean {
+  private claimNow(conversationId: string, runId: string, kind: 'reply' | 'supplement' | 'action'): boolean {
     const holder = this.claims.get(conversationId)
     if (holder !== undefined && holder.runId !== runId) return false
     this.claims.set(conversationId, { runId, kind })
@@ -1950,7 +1976,13 @@ export class ButlerConsole {
       ...record,
       subtasks: record.subtasks.map(({
         inputRefs: _inputRefs, inputRefsState: _inputRefsState, memberReturn: _memberReturn, ...rest
-      }) => rest),
+      }) => ({
+        ...rest,
+        // 待确认的操作是**呈现数据**，与内部材料（派单原文、协作返回原文）分开处理：
+        // 它必须能到页面（刷新后还要重画确认卡），所以在这里从留存里投影出来，而不是把
+        // 整份 `memberReturn` 原样外传。
+        actions: (_memberReturn as { readonly actions?: readonly AgentAction[] } | undefined)?.actions ?? [],
+      })),
     }
   }
 
@@ -2223,6 +2255,52 @@ export class ButlerConsole {
       .then(() => { if (requestId !== '') void this.finishRequestWithRetry(actor, 'chat', requestId) })
       .catch(error => { console.error(`butler-console: 回合收尾链失败（${turn.conversationId}/${turn.runId}）：${visibleError(error, 300)}\n${stackOf(error)}`) })
     return { runId: turn.runId, conversationId: turn.conversationId, from: 0 }
+  }
+
+  /**
+   * 用户对一条待确认操作的决策（就地确认 / 取消）。
+   *
+   * **与 `startReply` 同一套语义**（幂等受理 + 后台执行 + 事件流），差别只在把"用户说的话"
+   * 换成"一个结构化决策"。它会：
+   *
+   * 1. 核验任务与子任务归属（Actor 口径与读记录一致，不泄露存在性）；
+   * 2. 找**执行方自己的**执行入口（`resolveExecutor`），把决策交给它——**协调方不替它执行**，
+   *    凭据也从不经过这里（`AgentAction` 只有呈现数据）；
+   * 3. 把返回的新状态与新的待办按同一条 `subtask` 事件通道下发，顺带更新留存（刷新后仍画得出）。
+   */
+  async startAction(input: {
+    taskId: string
+    subtaskId: string
+    actionId: string
+    decision: 'confirm' | 'cancel'
+    note?: string
+    actor: Actor
+    requestId?: string
+  }): Promise<StartedRun> {
+    const requestId = input.requestId ?? ''
+    const digest = digestOf([input.taskId, input.subtaskId, input.actionId, input.decision, input.note ?? ''])
+    if (requestId !== '') {
+      const existing = await this.storage.request(input.actor, 'action', requestId)
+      if (existing !== undefined) return this.replayRequest(existing, digest, requestId)
+    }
+    const runId = `butler-run-${randomUUID()}`
+    if (requestId !== '') {
+      const winner = await this.storage.claimRequest(input.actor, 'action', requestId, digest, runId, '', this.config.idempotencyTtlMs)
+      if (winner !== undefined) return this.replayRequest(winner, digest, requestId)
+    }
+    let prepared: PreparedAction
+    try {
+      prepared = await this.prepareAction(input, runId)
+    } catch (error) {
+      if (requestId !== '') this.releaseRequestQuietly(input.actor, 'action', requestId)
+      throw error
+    }
+    if (requestId !== '') await this.storage.bindRequest(input.actor, 'action', requestId, prepared.runId, prepared.conversationId)
+    const log = this.beginLog(prepared.conversationId, prepared.runId)
+    void this.pump(prepared.abort.signal, log, this.actionBody(prepared))
+      .then(() => { if (requestId !== '') void this.finishRequestWithRetry(input.actor, 'action', requestId) })
+      .catch(error => { console.error(`butler-console: 确认收尾链失败（${prepared.conversationId}/${prepared.runId}）：${visibleError(error, 300)}\n${stackOf(error)}`) })
+    return { runId: prepared.runId, conversationId: prepared.conversationId, from: 0 }
   }
 
   /** 受理一次补话并在后台执行。幂等规则同 {@link start}。 */
@@ -3484,6 +3562,156 @@ export class ButlerConsole {
   }
 
   /**
+   * 受理一次操作决策（就地确认 / 取消）。
+   *
+   * 与 `prepareReply` 的三点不同，都是有意的：
+   *
+   * 1. **不要求"正在等待"**：这类操作的典型形态是 `external_pending`（材料已交回、事情在别处
+   *    等着办）——那一轮**已经收尾**了，等待登记也早就清了。所以执行方按**注册表**找
+   *    （`resolveExecutor`），不依赖内存里的等待上下文；服务重启后依然能确认。
+   * 2. **不写 `running` 抢占这一轮**：确认不是"再跑一轮"，它只把一条决策交给执行方；
+   *    子任务状态由返回的结果决定（可能仍然是 `external_pending`——还有别的待办）。
+   * 3. **凭据不经过这里**：`AgentAction` 只有呈现数据，执行方从自己的记录里取确认凭据。
+   */
+  private async prepareAction(input: {
+    taskId: string
+    subtaskId: string
+    actionId: string
+    decision: 'confirm' | 'cancel'
+    note?: string
+    actor: Actor
+  }, runId: string): Promise<PreparedAction> {
+    this.access.assert(input.actor)
+    const record = await this.storage.task(input.actor, input.taskId)
+    if (record === undefined) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
+    const subtask = record.subtasks.find(item => item.id === input.subtaskId)
+    if (subtask === undefined) throw new AccessError(404, '这个子任务不存在', 'subtask_not_found')
+    // 归属之外再核一次"这条操作确实属于这一步"：客户端传来的 actionId 不能越权去动别人的待办。
+    const actions = (subtask.memberReturn as { readonly actions?: readonly AgentAction[] } | undefined)?.actions ?? []
+    if (!actions.some(action => action.id === input.actionId)) {
+      throw new AccessError(404, '这条待办不存在或已经办完了', 'action_not_found')
+    }
+    const executor = resolveExecutor(this.ctx, subtask.agentId)
+    if (executor?.applyAction === undefined) {
+      throw new AccessError(409, `${subtask.agentId} 没有实现就地确认，请到它的页面里办理`, 'action_unsupported')
+    }
+    // 同会话执行互斥：一次只允许一个决策/回话/补充在跑（防止同一个确认被并发执行两次）。
+    if (!this.claimNow(record.conversationId, runId, 'action')) {
+      const holder = this.claims.get(record.conversationId)
+      throw new AccessError(409, holder?.kind === 'turn'
+        ? '这一轮还在执行，等它收尾或先停止再确认'
+        : '这个会话已有一次操作在执行，等它完成或先停止', 'conversation_busy')
+    }
+    const abort = new AbortController()
+    this.runs.set(record.conversationId, { runId, abort })
+    const memberConversationId = subtask.conversationId === '' ? undefined : subtask.conversationId
+    return {
+      conversationId: record.conversationId,
+      taskId: input.taskId,
+      subtaskId: input.subtaskId,
+      actionId: input.actionId,
+      decision: input.decision,
+      ...(input.note === undefined || input.note === '' ? {} : { note: input.note }),
+      actor: input.actor,
+      executor,
+      agentId: subtask.agentId,
+      displayName: await this.displayNameOf(input.actor, subtask.agentId),
+      ...(memberConversationId === undefined ? {} : { memberConversationId }),
+      runId,
+      abort,
+    }
+  }
+
+  /**
+   * 把决策交给执行方，按发生顺序产出事件。
+   *
+   * 结果按与派活/回话**同一套**分支处理：这样"确认之后还剩别的待办""确认之后这一轮才算成"
+   * 这些情形都不需要另写一套状态机。
+   */
+  private async *actionBody(prepared: PreparedAction): AsyncGenerator<ButlerEvent> {
+    const { taskId, subtaskId, agentId, displayName } = prepared
+    try {
+      yield {
+        type: 'subtask', taskId, id: subtaskId, state: 'running',
+        agentId, displayName,
+        detail: prepared.decision === 'confirm' ? '你点了确认' : '你选择先不办',
+        phase: 'analyzing', time: Date.now(),
+      }
+      const result = await prepared.executor.applyAction!({
+        taskId,
+        subtaskId,
+        actionId: prepared.actionId,
+        decision: prepared.decision,
+        ...(prepared.note === undefined ? {} : { note: prepared.note }),
+        ...(prepared.memberConversationId === undefined ? {} : { conversationId: prepared.memberConversationId }),
+        actor: prepared.actor,
+        signal: prepared.abort.signal,
+      })
+      // 结果落库：待办的最新状态要能在刷新后重画（与派活那条路径同一个写法）。
+      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, result.status === 'succeeded' ? 'succeeded' : result.status === 'external_pending' ? 'external_pending' : result.status === 'waiting_user' ? 'waiting_user' : result.status === 'cancelled' ? 'cancelled' : 'failed', {
+        result: clip(result.summary ?? '', this.config.maxResultChars),
+        memberReturn: memberReturnOf(result),
+        ...(result.conversationId === undefined ? {} : { conversationId: result.conversationId }),
+      }))
+      yield* this.emitResultEvents(prepared, result)
+    } catch (error) {
+      const detail = visibleError(error, this.config.maxResultChars)
+      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
+      yield { type: 'subtask', taskId, id: subtaskId, state: 'failed', agentId, displayName, detail, time: Date.now() }
+    } finally {
+      if (this.runs.get(prepared.conversationId)?.runId === prepared.runId) this.runs.delete(prepared.conversationId)
+      this.releaseClaim(prepared.conversationId, prepared.runId)
+    }
+  }
+
+  /**
+   * 把一次执行的结论变成事件（派活 / 回话 / 确认三条路径共用）。
+   *
+   * 抽出来的理由：三条路径的**事件形状必须一致**（页面用的是同一个渲染器），而"外部待办"
+   * 与"等你回话"两种暂停语义、以及待确认操作的下发，都在这里收口一次。
+   */
+  private async *emitResultEvents(
+    prepared: { readonly taskId: string; readonly subtaskId: string; readonly agentId: string; readonly displayName: string },
+    result: ButlerDispatchResult,
+  ): AsyncGenerator<ButlerEvent> {
+    const { taskId, subtaskId, agentId, displayName } = prepared
+    const actionsOf = result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }
+    if (result.status === 'waiting_user') {
+      const question = clip(result.question ?? result.summary, 500)
+      yield {
+        type: 'subtask', taskId, id: subtaskId, state: 'waiting_user',
+        agentId, displayName, detail: question, phase: 'waiting_user', question, time: Date.now(), ...actionsOf,
+      }
+      return
+    }
+    if (result.status === 'succeeded') {
+      yield { type: 'subtask', taskId, id: subtaskId, state: 'succeeded', agentId, displayName, detail: clip(result.summary, this.config.maxResultChars), time: Date.now(), ...actionsOf }
+      return
+    }
+    if (result.status === 'external_pending') {
+      const reason = typeof result.externalPending?.reason === 'string' ? result.externalPending.reason.trim() : ''
+      const failed = reason === ''
+      yield {
+        type: 'subtask', taskId, id: subtaskId, state: failed ? 'failed' : 'external_pending',
+        agentId, displayName,
+        detail: failed ? clip(`${displayName} 说还有外部待办，但没说明在等什么`, this.config.maxResultChars) : reason,
+        time: Date.now(),
+        ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+        ...actionsOf,
+        ...(!failed && result.externalPending?.next !== undefined ? { pending: { reason, next: result.externalPending.next } } : {}),
+      }
+      return
+    }
+    yield {
+      type: 'subtask', taskId, id: subtaskId,
+      state: result.status === 'cancelled' ? 'cancelled' : 'failed',
+      agentId, displayName,
+      detail: clip(result.summary === '' ? `${displayName} 没接上这活` : result.summary, this.config.maxResultChars),
+      time: Date.now(),
+    }
+  }
+
+  /**
    * 把用户的回复交回原执行方，按发生顺序产出事件。
    *
    * 与 `dispatch` 分开：`dispatch` 是派活，这里是补话。牛马大总管不参与执行方的内部处理，
@@ -3584,7 +3812,11 @@ export class ButlerConsole {
         this.waiting.delete(key)
         if (result.status === 'succeeded') {
           const summary = clip(result.summary, this.config.maxResultChars)
-          yield { type: 'subtask', taskId, id: subtaskId, state: 'succeeded', agentId, displayName, detail: summary, time: Date.now() }
+          yield {
+            type: 'subtask', taskId, id: subtaskId, state: 'succeeded', agentId, displayName, detail: summary, time: Date.now(),
+            // 有的操作确认完就整轮成功了（例如"交给它去发布"），那一步也可能带新的待办。
+            ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
+          }
           yield* this.closeAfterReply(prepared)
           return
         }
@@ -3598,6 +3830,8 @@ export class ButlerConsole {
             type: 'subtask', taskId, id: subtaskId, state: failed ? 'failed' : 'external_pending',
             agentId, displayName, detail, time: Date.now(),
             ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+            // 待确认的操作跟着结果一起下发：页面**当场**就能画出确认卡（不必等刷新）。
+            ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
             ...(!failed && result.externalPending?.next !== undefined ? { pending: { reason, next: result.externalPending.next } } : {}),
           }
           yield* this.closeAfterReply(prepared)

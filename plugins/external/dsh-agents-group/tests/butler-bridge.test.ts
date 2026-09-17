@@ -11,7 +11,9 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentParticipant } from '@dsh-agents-group/common'
+// 契约来自**运行时**（与 src/butler-bridge.ts 同一份）：common 里那份旧拷贝没有本批新增的
+// 待确认操作字段，用它做夹具会让「桥接透传了什么」这件事在类型上就测不到。
+import type { AgentParticipant } from '../packages/runtime/src/contract.ts'
 import { executorFor, BUTLER_EXECUTORS_EVENT } from '../src/butler-bridge.ts'
 import type { AgentManifest } from '../src/agents/registry.ts'
 
@@ -256,6 +258,66 @@ describe('执行入口的字段翻译', () => {
     const executor = executorFor(manifest, stubParticipant({ status: 'external_pending', artifacts: [...artifacts], externalPending: { reason: '等确认' } }))
     const result = await executor.dispatch(request())
     expect(result.artifacts).toEqual([...artifacts])
+  })
+
+  it('待确认操作原样带过去：协调方据此就地渲染，不认 kind 也画得出来', async () => {
+    // 形状就是 kit 的 `AgentAction`：桥接层**不改名、不裁剪**——一旦这里少一个字段，
+    // 页面上的按钮或字段表就会缺一块，而类型检查全绿（跨包的类型来自同一份定义）。
+    const actions = [{
+      id: 'op-1',
+      kind: 'blog.publish',
+      title: '发布《测试1》',
+      summary: '确认后会把这篇内容公开发布到博客。',
+      detail: '将要发布的内容',
+      fields: [{ label: '标题', value: '测试1' }],
+      confirmLabel: '确认',
+      state: 'prepared' as const,
+      expiresAt: 1_800_000_000_000,
+    }]
+    const executor = executorFor(manifest, stubParticipant({ status: 'external_pending', externalPending: { reason: '等确认' }, actions }))
+    const result = await executor.dispatch(request())
+    expect(result.actions).toEqual(actions)
+    // 没有待办时不带这个字段（`[]` 与缺省对页面是同一件事，但契约上保持"没有就不发"）。
+    const none = executorFor(manifest, stubParticipant({ status: 'completed' }))
+    expect((await none.dispatch(request())).actions).toBeUndefined()
+  })
+
+  it('就地确认只在参与者实现时暴露；决策原样转交、结果原样带回', async () => {
+    const decisions: unknown[] = []
+    const bare = executorFor(manifest, stubParticipant({ status: 'completed' }))
+    expect(bare.applyAction).toBeUndefined()
+    expect(bare.listActions).toBeUndefined()
+
+    // 参与者实现 `applyAction` 才暴露（与 reply 同一个口径：显式能力，不推断）。
+    const participant = {
+      ...stubParticipant({ status: 'completed' }),
+      applyAction: async (input: never) => {
+        decisions.push(input)
+        return { status: 'completed', conversationId: 'blog-chat-1', text: '已经按你确认的办了。' }
+      },
+    } as unknown as AgentParticipant
+    const executor = executorFor(manifest, participant)
+    const result = await executor.applyAction!({
+      actionId: 'op-1',
+      decision: 'confirm',
+      taskId: 'task-1',
+      subtaskId: 's1',
+      actor: { namespace: 'user', userId: 'writer', sessionId: 'login' } as never,
+      conversationId: 'blog-chat-1',
+      signal: new AbortController().signal,
+    })
+    expect(result.status).toBe('succeeded')
+    expect(result.summary).toBe('已经按你确认的办了。')
+    // 转交的是同一个身份链路：执行方按 `actor` 自己核归属，桥接层不替它判断。
+    expect(decisions).toEqual([{
+      actionId: 'op-1',
+      decision: 'confirm',
+      taskId: 'task-1',
+      subtaskId: 's1',
+      actor: { namespace: 'user', userId: 'writer', sessionId: 'login' },
+      conversationId: 'blog-chat-1',
+      signal: expect.anything(),
+    }])
   })
 
   it('参与者没给声明时，桥接不替它编一份', async () => {
