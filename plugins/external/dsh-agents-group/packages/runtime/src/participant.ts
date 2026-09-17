@@ -466,6 +466,8 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
           }
           const context: ResultContext = {
             history,
+            // 每请求的 actor：投影要"按 owner 读业务库"时必须用它派生 owner 键（见 `ResultContext`）。
+            actor: request.actor,
             request: {
               message,
               ...(request.acceptance === undefined ? {} : { acceptance: request.acceptance }),

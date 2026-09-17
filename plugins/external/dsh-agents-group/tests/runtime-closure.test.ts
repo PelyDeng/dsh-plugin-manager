@@ -731,3 +731,27 @@ describe('接续失败的取消只作用于这一轮自己的回合', () => {
     } finally { await hosted.dispose() }
   })
 })
+
+describe('投影拿到的 actor 是**这一次派活**的那一个', () => {
+  it('⚠️ 传进 `ResultContext` 的是请求的 actor（不是装配期的占位值）', async () => {
+    // `definition` 是**每 Agent 一份**（装配期造一次），而 `actor` 是**每请求**的 ⇒ 业务不能靠闭包
+    // 捕获它：闭包只能拿到装配期的值，拿它去查业务库会查到**别人的**数据（或者静默查不到、返回空）。
+    //
+    // ⚠️ **这条覆盖的边界（如实登记）**：它证明"传进去的是请求的 actor、不是占位值"（把
+    // `context.actor` 换成固定值就会红）。它**证明不了**"同一实例里第二个请求拿到的是第二个
+    // actor"——那需要"同一 participant、两个不同 actor"，而夹具的鉴权与登录身份绑定不支持
+    // （实测挂 vitest 的 testTimeout）。要补那条，先得让夹具支持多 actor 的身份绑定。
+    const seen: Actor[] = []
+    const hosted = host(definitionOf({
+      projectResult: async (context) => { seen.push(context.actor); return { status: 'completed', text: '答好了' } },
+    }))
+    try {
+      // 刻意**不** install 交活账本 ⇒ 不触发补交轮，一轮结束就交付、投影只被调一次。
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      hosted.complete(id, '正文')
+      await expect(promise).resolves.toMatchObject({ text: '答好了' })
+      expect(seen).toEqual([ACTOR])
+    } finally { await hosted.dispose() }
+  })
+})

@@ -26,7 +26,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type Schema from '@deepseek-ai/schemastery'
-import type { ToolDescriptor, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
+import type { ToolDescriptor, AgentSelfCheck, Actor } from '@dsh-plugin-manager/plugin-kit'
 import type {
   ParticipantArtifact,
   ParticipantExternalPending,
@@ -123,6 +123,17 @@ export interface TurnHistory {
 /** 结果投影的输入。 */
 export interface ResultContext {
   readonly history: TurnHistory
+  /**
+   * **发起这一次派活**的 actor。
+   *
+   * ⚠️ 它必须在上下文里，而**不能由业务闭包捕获**：`definition` 是**每 Agent 一份**（装配期造
+   * 一次），而 `actor` 是**每请求**的。闭包捕获只能拿到装配期的占位值、或"第一个请求的 actor"，
+   * 于是业务的投影会拿它去查**别人的**数据（或者干脆查不到，静默返回空）。
+   *
+   * 需要"按 owner 读业务库"的投影（例如「这份候选稿是不是当前 owner 的」）必须用它派生 owner 键。
+   * 转发给别人用之前先想一次：**鉴权用的是同一个 actor 吗**。
+   */
+  readonly actor: Actor
   /**
    * 派单时收到的请求。
    *
