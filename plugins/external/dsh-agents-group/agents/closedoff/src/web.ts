@@ -146,6 +146,7 @@ function runtimeOf(deps: WebRuntimeDeps): { lifecycle: ConversationLifecycle; st
  * | 判定 | 旧位置 | 现在的落点 | 失败 |
  * | --- | --- | --- | --- |
  * | `operation ∈ {rename, pin}` 且 `ids.length === 1` | `mutate:90` | 本函数 | 400「请选择一条对话」 |
+ * | `delete` 的 `ids` 非空、≤100、全字符串、**无重复** | `update:459` | 本函数（delete 分支） | 400「对话操作无效」 |
  * | `rename` 标题 `trim()` 后 1–100 字符 | `mutate:91` | 本函数 | 400「标题应为 1–100 个字符」 |
  * | `pin` 的 `pinned` 必须是 boolean | `mutate:92` | 本函数 | 400「置顶参数无效」 |
  * | 归属与存在性（未知 / 未发布 / 他人一律 404） | `mutate:93`（`assertOwner`） | `lifecycle.assertConversation` | 404 |
@@ -171,6 +172,14 @@ async function applyConversationAction(
   // 的入口之后这条路径才真的可用。
   if (input.operation === 'delete') {
     if (input.ids.length === 0) throw new HttpError(400, '请选择一条对话')
+    // 旧实现（`agent.ts:459-460`）在**进入操作分支之前**就把这条一起判掉了：`ids` 非空、
+    // **≤100**、全字符串、**无重复**，否则 400「对话操作无效」。切换载体时只留下了"非空"，
+    // 于是 `[a, a]`（重复）和 101 条这两种入参一路走到移除围栏，报出来的是围栏自己的
+    // 400/409 与另一套文案，前端拿到的分类就和旧实现分叉了。字符串那一条在路由层
+    // （`web.ts` 的 `conversation-action` 处理）已经判过一次，这里不复述。
+    if (input.ids.length > 100 || new Set(input.ids).size !== input.ids.length) {
+      throw new HttpError(400, '对话操作无效')
+    }
     if (deps.provider === undefined) throw new HttpError(503, '会话管理入口未就绪')
     // 归属先判一次（404），**不能只靠移除围栏**：围栏对"别人已经移除过的会话"回答的是
     // `alreadyRemoved`（成功语义），于是一个外人能拿到 200、或拿到 409，就是拿不到 404。
@@ -288,20 +297,43 @@ export async function installWeb(
        * 现在走运行时的 `lifecycle.list`，它把查询交给会话端口（PG）并自带"本实例忙集合"的
        * 合并。`hostBusy` 与 `archived` 传空数组是**刻意的**：那两个集合只有侧栏入口
        * （`storage/adapter.ts` 的 `provider.list`）才需要——它们决定 `canRemove` 与"已归档但
-       * 未标记移除的行是否出现"，而本端点只回 `id/title/updatedAt/pinned/titleSource`，
-       * 页面不显示可移除性。顺带一个好处：这条只读端点不依赖宿主的归档能力，宿主没有
-       * `workspaceRegistry` 时不会像 provider 那样抛 503（列表还是能看）。
+       * 未标记移除的行是否出现"，而本端点不回可移除性。顺带一个好处：这条只读端点不依赖宿主
+       * 的归档能力，宿主没有 `workspaceRegistry` 时不会像 provider 那样抛 503（列表还是能看）。
+       *
+       * `state` 传空串（端口的过滤是 `removal_state <> 'removed'`）⇒ 回来的行里既有
+       * `ready` / `busy`，也有 `pending`（移除还没完成）/ `failed`（移除失败）/ `legacy`
+       * （宿主已归档但没标移除）。**只有前两种是页面能打开的**：后三种点开会 404、在本页再删
+       * 也 404（`lifecycle.assertConversation` 挡住），回给页面就是一条点不出东西、也删不掉的
+       * 死行。旧实现（`conversation-store.ts` 的 `deletedAt IS NULL AND removal_state = ''`）
+       * 正好是前两种，所以这里照同一判据滤掉后三种。
+       *
+       * ⚠️ **不要改成给端口传 `state: 'ready'` 这条"更小"的路**：`lifecycle.list` 会把本实例的
+       * 忙集合合进 `scope.busy`（`conversation.ts:216`），于是 `ready` 会**连 `busy` 一起滤掉**
+       * ——正在回答的那条会话会从侧栏凭空消失（刷新列表时尤其明显），比死行更糟。而 `busy` 是
+       * 运行时现算出来的状态、旧 SQL 里没有对应的列，所以旧行为就是"保留它"。
        */
       const { lifecycle } = runtimeOf(deps)
       const page = await lifecycle.list(actor, {
-        offset, limit: limit + 1, q: query.trim(), state: '',
+        offset,
+        limit: limit + 1,
+        q: query.trim(),
+        state: '',
+        // 搜索框的 placeholder 写的是"搜索对话标题"，而端口缺省是"**标题 OR 会话 id**"。会话 id
+        // 形如 `closedoff-web-<uuid>`，于是 `-` / `web` / 单个数字这类短 ASCII 查询会命中**全部**
+        // 会话——搜索看起来完全没生效。口径开关由端口给（`ConversationQueryShape.titleOnly`），
+        // 业务侧只声明"这个入口搜的是标题"。
+        titleOnly: true,
       }, { hostBusy: [], archived: [] })
       const items = page.items
       respond(actor, res, 200, {
-        items: items.slice(0, limit).map(item => ({
+        items: items.slice(0, limit).filter(item => item.state === 'ready' || item.state === 'busy').map(item => ({
           id: item.id,
           title: item.title,
           updatedAt: item.updatedAt,
+          // `state` 一并回给页面：它决定这一行能不能打开。页面侧照同一判据再跳一次（见
+          // `web/conversation-history.js` 的 `conversationRowVisible`），两道都留着是因为
+          // 页面可能连着旧服务端、服务端也可能连着一个更老/更新的端口实现。
+          state: item.state,
           // `pinned` 的形状换了载体：端口给的是 boolean，旧 SQLite 行给的是 0|1。
           // 页面用的是真假判断（`if (item.pinned)`），语义没变；用例跟着改成 `true`。
           pinned: item.pinned === true,

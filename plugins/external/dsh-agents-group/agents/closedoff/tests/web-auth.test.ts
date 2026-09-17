@@ -209,6 +209,57 @@ describe('HTTP authentication and conversation ownership', () => {
     expect((await request('/closedoff-qa/conversation-action', 'alice', { operation: 'delete', ids: [target.id] })).status).toBe(200)
     expect((await lifecycle.list(actor, { offset: 0, limit: 30, q: '', state: '' }, { hostBusy: [], archived: [] })).items).toEqual([])
     expect((await request('/closedoff-qa/conversation-action', 'bob', { operation: 'delete', ids: [target.id] })).status).toBe(404)
+
+    // 旧 `manager.update`（`agent.ts:459`）在进入操作分支**之前**就把这三条一起判掉了：`ids` 非空、
+    // ≤100、全字符串、**无重复** ⇒ 400「对话操作无效」。切换载体时只剩"非空"，重复 id 会一路走到
+    // 移除围栏，报出来的是围栏自己的 400/409 与另一套文案 —— 前端拿到的分类就和旧实现分叉了。
+    const other = (await lifecycle.open(undefined, true, actor))!
+    const duplicate = await request('/closedoff-qa/conversation-action', 'alice', { operation: 'delete', ids: [other.id, other.id] })
+    expect(duplicate.status).toBe(400)
+    expect((await duplicate.json()).error).toBe('对话操作无效')
+    // 同一条上限（101 条）也走同一个 400，而不是让围栏去回答。
+    const tooMany = Array.from({ length: 101 }, (_, index) => `closedoff-web-00000000-0000-4000-8000-0000000000${String(index).padStart(2, '0')}`)
+    const oversized = await request('/closedoff-qa/conversation-action', 'alice', { operation: 'delete', ids: tooMany })
+    expect(oversized.status).toBe(400)
+    expect((await oversized.json()).error).toBe('对话操作无效')
+    // 被拦住的两条都没有真的移除任何东西。
+    expect((await lifecycle.list(actor, { offset: 0, limit: 30, q: '', state: '' }, { hostBusy: [], archived: [] })).items.map(item => item.id)).toEqual([other.id])
+  })
+  it('lists only the conversations the page can open, and keeps the busy one', async () => {
+    const { request, actors, lifecycle, port } = await fixture()
+    const actor = actors.get('alice')!
+    const ready = (await lifecycle.open(undefined, true, actor))!
+    const doomed = (await lifecycle.open(undefined, true, actor))!
+    // 端口那一层（真实现同样是 `removal_state <> 'removed'`）**会**把这条查出来，而它点开是 404、
+    // 在本页再删也是 404（`assertConversation` 挡住）⇒ 页面上的死行。旧实现的列表判据是
+    // `deletedAt IS NULL AND removal_state = ''`，本来就不含它。
+    port.mark(actor, doomed.id, 'failed')
+    const listed = await (await request('/closedoff-qa/conversations')).json()
+    expect(listed.items.map((item: { id: string }) => item.id)).toEqual([ready.id])
+    // 留下的行必须带 `state`：页面靠它决定能不能打开（把 `state` 丢掉，就退回"看着能点、点开 404"）。
+    expect(listed.items[0]).toMatchObject({ id: ready.id, state: 'ready' })
+
+    // `busy`（正在回答）**照旧出现**，而且必须带 `state: 'busy'`：这条路不能退回"给端口传
+    // `state: 'ready'`"——`lifecycle.list` 会把本实例的忙集合合进 `scope.busy`，那样切会把正在
+    // 回答的这一条也滤掉（列表刷新时它凭空消失）。旧实现里 `busy` 是运行时现算的，不参与过滤。
+    ready.active = true
+    const busy = await (await request('/closedoff-qa/conversations')).json()
+    expect(busy.items.map((item: { id: string }) => item.id)).toEqual([ready.id])
+    expect(busy.items[0]).toMatchObject({ state: 'busy' })
+  })
+  it('searches conversation titles instead of ids', async () => {
+    const { request, actors, lifecycle, port } = await fixture()
+    const actor = actors.get('alice')!
+    const titled = (await lifecycle.open(undefined, true, actor))!
+    await lifecycle.open(undefined, true, actor)
+    await port.syncTitle({ namespace: 'user', userId: 'alice' }, titled.id, '园区概览', 'manual')
+
+    // 页面的 placeholder 是"搜索对话标题"，端口缺省却是"标题 OR 会话 id"。id 形如
+    // `closedoff-web-<uuid>` ⇒ `titleOnly` 没传下去时 `q=web` 会命中**全部**会话（搜索框看起来
+    // 完全没生效），而单看标题时一条都不该命中。
+    expect((await (await request('/closedoff-qa/conversations?q=web')).json()).items).toEqual([])
+    const searched = await (await request('/closedoff-qa/conversations?q=' + encodeURIComponent('园区'))).json()
+    expect(searched.items.map((item: { id: string }) => item.id)).toEqual([titled.id])
   })
   it('reports a removed cached model as an SSE error without dispatching a followup', async () => {
     const { request, actors, lifecycle, bus, followup } = await fixture()

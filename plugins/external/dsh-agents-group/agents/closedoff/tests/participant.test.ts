@@ -31,6 +31,9 @@ import type { ParticipantProgress, ParticipantRequest, ParticipantResult } from 
 import { ConversationLifecycle, type Conversation, type RuntimeConfig } from '../../../packages/runtime/src/conversation.ts'
 import type { AgentDefinition, ProjectedResult, ResultContext } from '../../../packages/runtime/src/definition.ts'
 import { createParticipant, type RuntimeParticipant } from '../../../packages/runtime/src/participant.ts'
+import { Config as ConfigSchema, type Config } from '../src/config.ts'
+import { createClosedoffDefinition } from '../src/definition.ts'
+import type { ClosedoffGateway } from '../src/gateway.ts'
 import { collectOpaqueResultValues, projectReasoning } from '../src/presentation.ts'
 import { redactVisibleText } from '../src/redaction.ts'
 import { MemoryConversationPort } from '../../../tests/fixtures/memory-conversation-port.ts'
@@ -99,7 +102,10 @@ interface Harness {
   }): { readonly request: ParticipantRequest; readonly progress: ParticipantProgress[] }
   /** `participant.run`：外挂一个已消化的影子 promise，避免失败路径上的"未处理拒绝"噪音。 */
   run(request: ParticipantRequest): Promise<ParticipantResult>
-  /** 等到第 `since + 1` 轮接单（用户消息已经投给 Agent），返回它的会话 id。 */
+  /**
+   * 等到第 `since + 1` 轮接单（用户消息已经投给 Agent），返回它的会话 id；**并核验到此刻为止
+   * 恰好接单了 `since + 1` 次**（重复接单必须变红，见实现里的说明）。
+   */
   accept(since?: number): Promise<string>
   /** 等到会话回到空闲。 */
   settle(conversationId: string): Promise<void>
@@ -135,9 +141,15 @@ interface FixtureOptions {
   readonly projectResult?: (context: ResultContext) => Promise<ProjectedResult>
   readonly projectReasoningHook?: AgentDefinition['projectReasoning']
   readonly opaqueFromToolResult?: AgentDefinition['opaqueFromToolResult']
+  /**
+   * 整份声明的替身。给"必须用**真** `createClosedoffDefinition`"的用例用（材料标题这类
+   * 业务文案只在真声明里，机制用例的替身声明给不出它）。
+   */
+  readonly definition?: AgentDefinition
 }
 
 function definitionOf(options: FixtureOptions = {}): AgentDefinition {
+  if (options.definition !== undefined) return options.definition
   return {
     id: AGENT_ID,
     displayName: '封闭化管理智能助手',
@@ -334,6 +346,10 @@ function fixture(options: FixtureOptions = {}): Harness {
     run: request => track(participant.run(request)),
     async accept(since = 0) {
       await until(() => followupCalls.length > since, `第 ${since + 1} 轮接单`)
+      // ⚠️ 只等"有 followup"是不够的：旧用例的判据是 `expect(followup).toHaveBeenCalledOnce()`，
+      // 换载体时被降成了"等到 ≥1 条"，于是**重复接单**（同一轮把问题投给 Agent 两次）这类回归
+      // 不再变红。等到第 `since + 1` 轮就等于断言到此刻**恰好** `since + 1` 条。
+      expect(followupCalls, `第 ${since + 1} 轮接单必须恰好一次`).toHaveLength(since + 1)
       const last = followupCalls.at(-1)
       if (last === undefined) throw new Error('接单记录为空')
       return last.id
@@ -521,20 +537,63 @@ describe('封闭化协作适配（运行时载体）', () => {
 
   it('归属核验后、接续前只提供一次自身会话链接，最终入口保持兼容', async () => {
     const f = fixture()
+    // 把接续压在夹具里：这样能在"问题还没投给 Agent"的那一刻观察进度序列。
+    const hold = f.holdFollowup()
     const call = f.call()
     const pending = f.run(call.request)
-    const id = await f.accept()
+    await vi.waitFor(() => expect(hold.calls).toBe(1))
+    const id = f.port.ids()[0]!
+    const artifact = { kind: 'conversation', title: '查看会话', path: `${ROUTE_PREFIX}?conversationId=${id}` }
+    /**
+     * **顺序不变式**（旧用例的 `beforeFollowup[0] === 0`）：会话材料必须先于接续上报。
+     * 反过来的话用户在还没有会话入口时先看到"已接单"，而接续一旦失败，那条材料指向的会话
+     * 可能根本没跑起来。观测点就是这里：`lifecycle.followup` 已经进入（接续在飞），但
+     * **一条问题都还没投给 Agent**，此刻接单那条已经带着材料在进度里了。
+     */
+    expect(f.followups()).toHaveLength(0)
+    expect(statusOf(call.progress)[0]).toEqual({ kind: 'status', text: '已接单。', conversationId: id, conversationArtifact: artifact })
+    hold.take()!.resolve()
+    await vi.waitFor(() => expect(f.followups()).toHaveLength(1))
+
     f.emit('tool/call', { name: 'closedoff_query' }, id)
     f.toolResult('', {}, id)
     f.emit('assistant/message', { message: { content: [{ type: 'text', text: '查询结果' }] } }, id)
     f.complete(id, '查询结果')
     const result = await pending
 
-    const artifact = { kind: 'conversation', title: '查看会话', path: `${ROUTE_PREFIX}?conversationId=${id}` }
-    expect(statusOf(call.progress)[0]).toEqual({ kind: 'status', text: '已接单。', conversationId: id, conversationArtifact: artifact })
+    // 会话材料**只上报一次**（旧用例的 `filter(value => value.conversationArtifact)).toHaveLength(1)`）：
+    // 每一条增量都带一次入口的话，页面上会反复登记同一个会话。
     expect(call.progress.filter(value => value.conversationArtifact !== undefined)).toHaveLength(1)
     expect(deltasOf(call.progress).every(value => value.conversationId === undefined)).toBe(true)
     expect(result).toMatchObject({ status: 'completed', conversationId: id, text: '查询结果', artifacts: [artifact] })
+  })
+
+  it('接单上报的会话材料与交付材料的标题一致（真声明：同一会话不能有两个标签）', async () => {
+    // 接单那一条的文案由**运行时**给（`participant.ts` 的 `conversationArtifact`），交付材料由业务的
+    // `projectResult` 给。两边各写一份，同一张卡片上就会出现两个指向同一个会话、文案却不同的链接
+    // （旧实现只有业务那一份，所以不会分叉）。这里用**真** `createClosedoffDefinition` 端到端钉住
+    // 「两个标题逐字相等」——只用替身声明的话这条永远测不出来（替身声明里根本没有这份业务文案）。
+    const f = fixture({
+      definition: createClosedoffDefinition({
+        gateway: {} as unknown as ClosedoffGateway,
+        config: ConfigSchema({} as Config),
+        persona: PERSONA,
+        authorize: () => {},
+        category: 'agents',
+      }),
+    })
+    const call = f.call()
+    const pending = f.run(call.request)
+    const id = await f.accept()
+    f.emit('assistant/message', { message: { content: [{ type: 'text', text: '今天共有 12 辆车入园。' }] } }, id)
+    f.complete(id, '今天共有 12 辆车入园。')
+    const result = await pending
+
+    const accepted = statusOf(call.progress)[0]?.conversationArtifact
+    expect(accepted).toEqual({ kind: 'conversation', title: '查看会话', path: `${ROUTE_PREFIX}?conversationId=${id}` })
+    expect(result.status).toBe('completed')
+    // 交付材料与接单那一条是**同一条**材料：形状相同 ⇒ 标题相同。
+    expect(result.artifacts).toEqual([accepted])
   })
 
   it('把本会话的正文增量在回合结束前上报，忽略别的会话与迟到帧', async () => {
@@ -885,7 +944,10 @@ describe('封闭化协作适配（运行时载体）', () => {
     f.complete(id, '', 'aborted')
     const result = await pending
     expect(result).toMatchObject({ status: 'cancelled', conversationId: id })
-    expect(result.text).not.toContain('迟到成果')
+    // 文案**精确**断言（`packages/runtime/src/participant.ts:448` 的 `'协作已取消。'`）。
+    // 这一条曾经被降成 `not.toContain('迟到成果')`：那样"正文换成别的错文案"与"正文成了空串"
+    // 都不会红。精确值顺带覆盖了那条否定式——它当然不等于迟到的那条成果。
+    expect(result.text).toBe('协作已取消。')
     await f.settle(id)
   })
 
@@ -917,15 +979,19 @@ describe('封闭化协作适配（运行时载体）', () => {
     expect(JSON.stringify(call.progress)).not.toContain('撤销授权后的资料')
   })
 
-  it('超时发出取消请求，但不提前释放运行身份', async () => {
-    // 真实计时器 + 很短的预算：契约是"超时后仍然占着，直到 turn/end"。
+  it('超时立即失败并释放运行身份，且发出取消请求', async () => {
+    // 真实计时器 + 很短的预算。**这一条钉的是运行时的现状，不是旧实现的语义**：旧实现在超时后
+    // 仍然占着运行身份，一直保留到 `turn/end`（旧用例标题正是「超时发出取消请求，但不提前释放
+    // 运行身份」，断言的是 `conversation.active === true`）。新载体在收尾循环还没起来时**直接**
+    // `fail(new Error('协作超时'))`（`packages/runtime/src/participant.ts:670`），收尾随即放掉
+    // 运行身份 ⇒ 标题与断言都改写成事实（原标题与正文曾经互相矛盾：标题说"不释放"、正文断"已释放"）。
+    // 后果另记（本文件不修，属于运行时的语义取舍）：超时之后同一会话可以**立刻**续发，而宿主的
+    // 上一轮 driver 可能还没退干净——旧实现靠"保留到 turn/end"挡住的正是这个窗口。
     const f = fixture({ turnTimeoutMs: 150 })
     const call = f.call()
     const pending = f.run(call.request)
     const id = await f.accept()
     f.emit('turn/start', { turn: 1 }, id)
-    // 超时**会**放掉运行身份（旧实现是"保留到 turn/end"）：这一条如实钉住当前语义，
-  // 后果另记（超时之后同会话可以立刻续发，而宿主的上一轮可能还没退干净）。
     await expect(pending).rejects.toThrow('超时')
     expect(f.cancels()).toEqual([{ id, cause: { kind: 'user' } }])
     expect(f.lifecycle.isBusy(id)).toBe(false)

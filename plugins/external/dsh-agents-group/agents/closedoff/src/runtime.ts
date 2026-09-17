@@ -126,8 +126,8 @@ export async function installClosedoffRuntime(input: ClosedoffRuntimeInput): Pro
 
   if (source === undefined) {
     // 没有存储 ⇒ 工厂不会走到它内部的 `definition.tools` 调用点，所以这里显式调一次。
-    // 这是**唯一**在工厂之外调用该钩子的地方，理由是"未就绪仍要登记工具目录"；调用点仍然
-    // 只有装配期这两处，与"声明与调用点分家"那条缺陷不是同一件事。
+    // 未就绪的**两条**路径（缺配置 / 配了但不可达）各调一次，加上工厂内部那一次，装配期一共
+    // 三个调用点；它们互斥（每次装配只可能走其中一条），所以"注册一次"这件事仍然成立。
     console.warn(`agents-group/closedoff: ${unconfiguredStorageHint}`)
     tools = definition.tools({ ctx, storage: undefined, conversationId: undefined })
   } else {
@@ -153,7 +153,14 @@ export async function installClosedoffRuntime(input: ClosedoffRuntimeInput): Pro
       // 要么抛出"的语义，抛出的那一刻已经不再交出门面，所以工厂外拿不到那个句柄。本地 SQLite
       // 的文件句柄会随进程退出释放，PG 池的 socket 也一样；而按"未就绪即不服务"的口径，这个
       // 进程本来就要带着这条错误去修配置（真正的兜底是重启，不是局部回收）。
+      //
+      // ⚠️ **这条分支也必须登记工具目录**（与"缺配置"那条一样）。异步工厂内部的
+      // `definition.tools` 只在存储建好之后才被走到，所以不可达路径上不同样登记一次，
+      // `tools` 就是空数组 ⇒ 群组算出空的 `allowedTools` ⇒ 模型手里一个业务工具都没有，
+      // **而且不报错**（限制一份空集合是合法的）。这与"缺配置"那条是同一个失效形态，只是
+      // 触发条件更难碰到：线上 PG 抖一下就会静默降级成"没有工具"。
       console.error('agents-group/closedoff: 业务存储未就绪', error)
+      tools = definition.tools({ ctx, storage: undefined, conversationId: undefined })
     }
   }
 

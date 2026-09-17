@@ -69,6 +69,18 @@ export interface ConversationQueryShape {
   readonly from?: number | undefined
   readonly to?: number | undefined
   readonly state: string
+  /**
+   * 搜索只匹配**标题**，不匹配会话 id。
+   *
+   * 缺省（`undefined` / `false`）保留"标题 OR id"的既有口径——kit 侧栏没有"只搜标题"这个
+   * 要求，改默认值等于替它改行为。
+   *
+   * ⚠️ **谁该传 `true`**：业务页面的搜索入口，也就是 `agents/closedoff/src/web.ts` 里构造列表
+   * 查询的那一处（页面 placeholder 写的是"搜索对话标题"）。会话 id 形如
+   * `closedoff-web-<uuid>`，把 id 也算命中项会让 `-` / `web` / 单个数字这类短查询命中**全部**
+   * 会话。本端口只提供开关，不替业务决定。
+   */
+  readonly titleOnly?: boolean | undefined
 }
 
 /**
@@ -148,8 +160,13 @@ export interface ConversationProviderShape {
  *
  * ⚠️ `record` / `mark` 是**同步**的——这不是遗漏，是 kit 契约的硬要求
  * （`conversations.ts:90-93`，被 `conversationRemover` 在 `:130/:139/:141/:149` 同步调用）。
- * 实现分两段：**同步写本地 SQLite**（满足契约、原子），再由 adapter 异步把权威状态补进 PG
- * 的 `removal_state`；启动时**先排空 outbox、再**按 PG 收敛。
+ * 实现分两段：**同步写本地 SQLite**（满足契约、原子），再由**门面自己的后台排空**
+ * （`AgentDatabaseFacade.scheduleDrain()`，`mark` 与 `titleSink().submit` 之后各触发一次）
+ * 把权威状态补进 PG 的 `removal_state`；启动时**先排空 outbox、再**按 PG 收敛。
+ *
+ * ⚠️ 那句"由 adapter 异步补写"曾经是**反的**：adapter 只装 `managed`（`conversationRemover`），
+ * 它不碰 outbox。补写点只有门面一处，而它此前只被 `open()` 调过一次 ⇒ 运行期的 `mark` 与标题
+ * 投递**在本进程内永不落 PG**。改动这一层时请一起看 `storage/index.ts` 的 `scheduleDrain()`。
  *
  * ⚠️ 围栏的真值方向：**pending 窗口内本地权威**。写成"PG 权威 + 本地可从 PG 重建"是**反的**——
  * 崩溃窗口里 PG 什么都没有，按 PG 重建会把本地 pending 抹成空串，围栏失效而宿主可能已经归档，
@@ -216,6 +233,22 @@ export interface ConversationPort {
   /** 标题投影；`source` 决定它能否覆盖手动标题。 */
   syncTitle(owner: OwnerKey, conversationId: string, title: string,
     source: 'automatic' | 'generated' | 'manual'): Promise<void>
+
+  /**
+   * 推进 `updated_at`：**"这个会话刚受理了一条用户消息"的时间戳**。
+   *
+   * 侧栏排序是 `pinned DESC, updated_at DESC, id`，`from` / `to` 过滤也按这一列。而
+   * {@link syncTitle} 的 `UPDATE` **不碰它**（守卫只认 `title` / `title_source`），
+   * 所以"续问一条消息"如果只调 `syncTitle`，排序键就退化成**创建时间**：刚说过话的会话沉在
+   * 下面，时间范围过滤也算错。`ConversationLifecycle.followup` 因此必须两步都做。
+   *
+   * `at` 是调用方给的时刻（缺省由实现取当前时间）。**实现要保证这一列单调不减**：倒退会让
+   * 分页窗口重叠或跳空，表现为"翻页时某些会话凭空消失"。
+   *
+   * 与 {@link pin} 一样，它**没有** `ready` / `deleted_at` / `removal_state` 守卫：归属与
+   * 存在性由那条 `UPDATE` 的 owner 条件保证，两套判定必然漂移。
+   */
+  touch(owner: OwnerKey, conversationId: string, at?: number): Promise<void>
 
   /**
    * 置顶标记。它只影响侧栏排序，不改变会话内容与围栏状态。

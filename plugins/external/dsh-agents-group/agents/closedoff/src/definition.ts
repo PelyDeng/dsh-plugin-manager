@@ -62,11 +62,22 @@ export interface ClosedoffDefinitionInput {
   readonly category: string
 }
 
-/** 会话材料定位：告诉用户在哪能看到这场对话。与旧实现（`participant.ts:133-136`）逐字相同。 */
+/**
+ * 会话材料定位：告诉用户在哪能看到这场对话。
+ *
+ * 标题与运行时那条**必须逐字相同**（`packages/runtime/src/participant.ts` 的 `conversationArtifact`：
+ * `'查看会话'`）。同一个会话在同一张卡片上会出现两个链接——接单状态行由运行时给（那一句用
+ * 运行时的默认标题），交付材料由本钩子给——两边各写一份文案就会出现"查看会话"和
+ * "查看封闭化会话"并排指向同一个会话。**旧实现只有一份**（业务侧全包），所以统一到运行时那一份。
+ *
+ * 为什么不反过来让运行时那条也能被本声明覆盖：那要改运行时的契约（`AgentDefinition` 增加一个
+ * 材料标题钩子），而运行时正在被另一条改动线动，且"两个链接同一个会话"用统一文案就够了。
+ * 路径由业务给（`routePrefix` 是业务配置），运行时那条也用同一个前缀拼。
+ */
 function conversationArtifact(routePrefix: string, conversationId: string) {
   return {
     kind: 'conversation' as const,
-    title: '查看封闭化会话',
+    title: '查看会话',
     path: `${routePrefix}?conversationId=${encodeURIComponent(conversationId)}`,
   }
 }
@@ -102,7 +113,7 @@ export function createClosedoffDefinition(input: ClosedoffDefinitionInput): Agen
     liveMode: 'delta',
     /**
      * 结果投影：与旧实现（`participant.ts:125-136`）逐字等价——正文取最终消息并脱敏，
-     * 材料固定一条"查看封闭化会话"。
+     * 材料固定一条会话链接（标题与运行时那条相同，见 `conversationArtifact`）。
      *
      * ⚠️ **边界：它只负责 `status === 'completed'` 的那一支。**
      * 运行时只在回合结局是 `completed` 时才调用本钩子

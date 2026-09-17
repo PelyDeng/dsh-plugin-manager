@@ -140,7 +140,7 @@ describe('封闭化助手的 AgentDefinition', () => {
       .toBe('第一句已经稳定。第二句还没写完')
   })
 
-  it('projectResult 只负责 completed 那一支：正文脱敏、材料固定一条封闭化会话', async () => {
+  it('projectResult 只负责 completed 那一支：正文脱敏、材料固定一条会话链接', async () => {
     const hook = definitionOf({ config: { routePrefix: '/closedoff-qa' } }).projectResult
     expect(hook).toBeDefined()
     const conversationId = 'closedoff-web-1f0f7f74-6f2e-4a6e-9a4c-2a1a5c1f0b11'
@@ -152,10 +152,11 @@ describe('封闭化助手的 AgentDefinition', () => {
     expect(projected?.status).toBe('completed')
     expect(projected?.text).toBe('渝A12345 当前在园。联系电话 138****5678，轨迹见 [地址已隐藏]')
     // 材料必须**显式给出**：为 `undefined` 时运行时会补一条 `title: '查看会话'` 的通用材料，
-    // 侧栏标题与路径都会跟着变。
+    // 侧栏标题与路径都会跟着变。标题必须与运行时那条**逐字相同**——同一张卡片上接单状态行
+    // （运行时给）与交付材料（本钩子给）指向同一个会话，两边文案不同就是两个标签指同一件事。
     expect(projected?.artifacts).toEqual([{
       kind: 'conversation',
-      title: '查看封闭化会话',
+      title: '查看会话',
       path: `/closedoff-qa?conversationId=${conversationId}`,
     }])
     // 会话 id 进 URL 前要编码（业务 id 实际上只有 `[\\w-]`，但这里不靠"实际上"）。

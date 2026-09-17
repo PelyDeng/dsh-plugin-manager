@@ -26,6 +26,14 @@
  *
  * ②在①之后：①刚把本地 pending 补成 PG pending，②正好把它们翻成 failed——这就是
  * "**本地遗留的 pending 升格为 PG pending**，再由 PG 的清理规则收尾"，而不是被抹掉。
+ *
+ * ## 排空有**两个**调用点，不是只有启动
+ *
+ * `mark` 与 `titleSink().submit` 都是**同步契约**（kit 的 `conversationRemover` 同步调它们），
+ * 因此它们只能写本地 SQLite；而侧栏 `list` 读的是 PG。若"排空"只在 `open()` 里发生一次，
+ * 这两个同步面在本进程内就**永远不会**到达 PG，表现是：移除接口返回 200 而那行还在侧栏
+ * （点开 404）、官方标题一直不落库（页面标题刷新空转到超时）。所以同步写之后一律
+ * {@link AgentDatabaseFacade.scheduleDrain} 一次，`close()` 之前再等待最后一次。
  */
 import { AccessError } from '@dsh-plugin-manager/plugin-kit'
 import type { TitleSink } from '../conversation.ts'
@@ -69,12 +77,27 @@ export interface StorageHealth {
   readonly mirrorSize: number
 }
 
+/**
+ * 后台排空的延迟。**不能为 0**（`setTimeout(…, 0)` 会在当前宏任务之后立刻跑，等于把一次 PG
+ * 往返塞回请求路径上）；也不能太大，否则"删了但侧栏还在"会持续到用户第二次操作才消失。
+ */
+const DRAIN_DELAY_MS = 25
+
 export class AgentDatabaseFacade implements AgentDatabasePort {
   private readonly pg: PostgresAgentDatabase
   private readonly conversationsPort: ConversationPort
   private managedFactory: ManagedProviderFactory | undefined
   private busyProbe: BusyProbe = () => false
   private opened = false
+  /** 正在跑的那一次排空（**单飞**：并发的触发只置 `drainAgain`，不再开第二条）。 */
+  private draining: Promise<void> | undefined
+  /** 排空途中又来了新条目（或 `close()` 要求最后一次），跑完当前轮再跑一轮。 */
+  private drainAgain = false
+  private drainTimer: ReturnType<typeof setTimeout> | undefined
+  /** 关停中：不再接受新的排空触发（`close()` 自己会在最后 await 一次）。 */
+  private closing = false
+  /** 已 `close()`；后台排空据此收尾（它可能在 close 的 await 之间被唤醒）。 */
+  private closed = false
 
   constructor(
     private readonly input: CreateAgentDatabaseInput,
@@ -140,6 +163,9 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
    *
    * 它只写本地 outbox（同步、原子），后台再补写 PG。内存队列会在崩溃或插件卸载时丢标题，
    * 所以必须是持久的。
+   *
+   * ⚠️ 写完**必须**触发一次后台排空（{@link scheduleDrain}）：只写本地队列而不排空，
+   * 官方标题在本次进程内永远进不了 PG——而 `list` 读的是 PG，于是页面标题刷新一直空转到超时。
    */
   titleSink(): TitleSink {
     return {
@@ -150,14 +176,35 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
         } catch (error) {
           // 同步回调里不能抛给宿主的事件分发：投递失败记一条日志，主链路继续。
           console.error(`agents-group/runtime(${this.input.agentId}): 标题投递失败`, error)
+          return
         }
+        this.scheduleDrain()
       },
     }
   }
 
+  /**
+   * 关闭：**先把 outbox 排空再关连接**。
+   *
+   * 反过来的话，`mark` / `titleSink` 刚写进本地队列的条目会随着池关闭而永远补不上——
+   * 本地队列是持久的，下一次 `open()` 还能补，但那要等到下一次进程启动，而这一次进程里
+   * 用户看到的仍是"删了还在、标题没变"。
+   *
+   * 排空失败**不抛**：关停期间抛错会让调用方的释放链断在半路（PG 池与本地句柄都不关）。
+   * 失败的那一刻队列里还留着条目，下次 `open()` 会重试。
+   */
   async close(): Promise<void> {
+    this.closing = true
+    if (this.drainTimer !== undefined) { clearTimeout(this.drainTimer); this.drainTimer = undefined }
+    try {
+      await this.drainOutboxes()
+    } catch (error) {
+      this.reportDrainFailure(error)
+    }
+    await this.draining?.catch(() => { /* 失败已在 drainOnce 里报过 */ })
     await this.pg.close()
     this.local.close()
+    this.closed = true
   }
 
   // ---------------------------------------------------------------------
@@ -230,6 +277,24 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
       },
 
       /**
+       * 推进 `updated_at`：与 `syncTitle` / `pin` 同一条路子——**先写 PG，PG 成功后再更新本地
+       * 镜像**。镜像那一列是 `record`（同步读）的回答来源之一，不一致只在"重启后镜像收敛"之前
+       * 可见，但那段时间里侧栏与围栏读的就是它。
+       *
+       * ⚠️ 写进镜像的时刻必须是**PG 实际落下的那个值**（`GREATEST(updated_at, at)` 的结果），
+       * 不是这里的 `at`：`at` 更早时 PG 会保留原来的值，而按 `at` 改镜像等于显示一个 PG 里
+       * 并不存在的时刻。差一个最大值，就是"本地比 PG 新"这类只在同一实例里显现的漂移。
+       */
+      touch: async (owner, conversationId, at) => {
+        const value = at ?? Date.now()
+        await pg.conversations.touch(owner, conversationId, value)
+        const row = local.mirrorGet(conversationId)
+        if (row !== undefined && value > row.updatedAt) {
+          local.mirrorUpsert({ ...row, updatedAt: value })
+        }
+      },
+
+      /**
        * 置顶：与 `syncTitle` 同一条路子——**先写 PG，PG 成功后再更新本地镜像**。
        *
        * 镜像里只有"本实例见过的行"（`create` / `publish` / 启动收敛写进去的），所以先问
@@ -244,8 +309,76 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
 
       // —— 三个同步面（kit 契约的硬要求）——
       record: (actor, conversationId) => local.record(actor, conversationId),
-      mark: (actor, conversationId, state) => { local.mark(actor, conversationId, state) },
+      /**
+       * ⚠️ `mark` 的**同步契约**必须保持：kit 的 `conversationRemover` 在 `:141/:149` 同步调用它，
+       * 返回 `Promise` 会让那边的分支判定失效（`ports.ts` 顶上写了这条）。
+       *
+       * 但"同步写本地"只解决了围栏的**当前进程内**有效性：PG 那一侧（侧栏 `list` 读的正是它）
+       * 要有人补写。补写就是后面这一次**后台排空**——不触发的话，移除接口返回 200 而
+       * `dsh_conversations` 里那行还在，侧栏照样列出它、点进去 404。
+       */
+      mark: (actor, conversationId, state) => {
+        local.mark(actor, conversationId, state)
+        this.scheduleDrain()
+      },
     }
+  }
+
+  // ---------------------------------------------------------------------
+  // 后台排空（单飞 + 合并触发）
+  // ---------------------------------------------------------------------
+
+  /**
+   * 安排一次后台排空。
+   *
+   * 三条约束，都是"运行期没有任何排空点"这个缺陷的直接后果：
+   *
+   * - **触发点只有 `mark` / `titleSink().submit` 这两处**（它们都是同步回调，改不成 async）；
+   * - **合并多次触发**：一次移除会连续 `mark('pending')`、`mark('removed')`，标题也可能连发几条
+   *   ——每条各开一次排空等于把两次 PG 往返变成四次的排队；
+   * - **单飞**：同一时刻只允许一条排空链，否则两次并发排空会各自读到同一批待补写条目、
+   *   各自补写一遍（幂等 UPDATE 无害，但每条会多做一次往返）。
+   *
+   * 失败**只告警**：它跑在后台，没有人 await 它，抛出去就是 unhandledRejection（宿主级错误）。
+   * 队列里的条目失败时不会被 ack，所以下次触发或下次启动还会重试。
+   */
+  private scheduleDrain(): void {
+    if (this.closing) return
+    this.drainAgain = true
+    if (this.draining !== undefined || this.drainTimer !== undefined) return
+    const timer = setTimeout(() => {
+      this.drainTimer = undefined
+      void this.drainOnce()
+    }, DRAIN_DELAY_MS)
+    // 定时器不能拖住进程退出：它只是一个"稍后补写"的调度，进程退出时队列是持久的。
+    timer.unref?.()
+    this.drainTimer = timer
+  }
+
+  /** 跑排空链，直到没有新的触发；单飞，重复触发合并进当前这一条。 */
+  private drainOnce(): Promise<void> {
+    this.draining ??= (async () => {
+      try {
+        while (this.drainAgain && !this.closed) {
+          this.drainAgain = false
+          try {
+            await this.drainOutboxes()
+          } catch (error) {
+            // 一条条目失败 ⇒ 整批停在这里（顺序不能跳过，见 `drainOutboxes` 的说明），
+            // 记一条告警后结束本轮，等下一次触发或下次启动重试。
+            this.reportDrainFailure(error)
+            return
+          }
+        }
+      } finally {
+        this.draining = undefined
+      }
+    })()
+    return this.draining
+  }
+
+  private reportDrainFailure(error: unknown): void {
+    console.error(`agents-group/runtime(${this.input.agentId}): 后台补写 outbox 失败（条目保留，稍后重试）`, error)
   }
 
   // ---------------------------------------------------------------------
@@ -254,6 +387,13 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
 
   /**
    * ① 排空 outbox：按**每会话 FIFO** 补写。
+   *
+   * 两个调用点，缺任何一个都会静默失效：
+   *
+   * - **启动时一次**（`open()` 的第一件事）——补上一次进程留下的残留；
+   * - **运行期后台**（{@link scheduleDrain} → {@link drainOnce}）——`mark` 与 `titleSink().submit`
+   *   是同步回调，只能写本地队列，PG 那一侧全靠这里补。此前唯一调用点是 `open()`，于是
+   *   "移除返回 200 但侧栏那行还在"、"官方标题在本次进程内永不落 PG"两件事都真实发生过。
    *
    * 每会话 FIFO 而不是全局：同一会话上 `pending → removed` 必须按序（反了会让会话永久删不掉
    * 也打不开）；跨会话之间没有顺序要求，按全局顺序取反而会被一个卡住的会话拖住全部。

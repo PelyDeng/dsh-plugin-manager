@@ -92,6 +92,46 @@ async function pinnedOf(id: string): Promise<boolean | string> {
   return rows.rows[0]?.pinned ?? '<missing>'
 }
 
+/** `updated_at` 是排序键，也直接查库读——`list` 之外的路径（`touch`）看不到它。 */
+async function updatedAtOf(id: string): Promise<number> {
+  const rows = await admin.query<{ updated_at: string | number }>('SELECT updated_at FROM dsh_conversations WHERE id = $1', [id])
+  return Number(rows.rows[0]?.updated_at ?? Number.NaN)
+}
+
+async function titleOf(id: string): Promise<string> {
+  const rows = await admin.query<{ title: string }>('SELECT title FROM dsh_conversations WHERE id = $1', [id])
+  return rows.rows[0]?.title ?? '<missing>'
+}
+
+/**
+ * 等一个条件成立，**上限 ~2 秒**后放弃。
+ *
+ * 用于"运行期后台排空"这类**没有返回 promise 可以 await**的路径：排空是 `mark` / `titleSink`
+ * 触发的后台动作，调用方拿不到句柄（那正是"同步契约 + 后台补写"的形状）。用有界轮询而不是
+ * 固定 `delay()`：固定等待在慢一点的环境上会随机红，而这里要测的是"最终会到"，不是延迟值。
+ */
+async function waitFor(check: () => Promise<boolean>, label = '后台补写没有在 2 秒内到达 PG'): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (await check()) return
+    await delay(10)
+  }
+  throw new Error(label)
+}
+
+/**
+ * 同上，但判据是**同步的**（本地队列深度这类零往返的观测）。
+ *
+ * 两个版本分开是因为代价差一个数量级：异步版每轮一次 PG 往返（跳板机上几百毫秒），
+ * 用它等"队列清空"会在一条用例里打满 5 秒超时。
+ */
+async function waitForSync(check: () => boolean, label = '条件没有在 5 秒内成立'): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (check()) return
+    await delay(10)
+  }
+  throw new Error(label)
+}
+
 describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
   beforeAll(async () => {
     dir = mkdtempSync(join(tmpdir(), 'dsh-runtime-storage-'))
@@ -585,6 +625,225 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
       await db.open()
       const page = await db.conversations.list(owner, { offset: 0, limit: 10, q: '', state: '' }, { busy: [], archived: [] })
       expect(page.items).toHaveLength(0)
+    } finally { await db.close() }
+  })
+
+  it('★ 运行期删除：同一个已 open 的实例上 mark(\'removed\') 之后，PG 那行必须自己消失', async () => {
+    // 这一条与上一条的**唯一**区别是它**不调 `await db.open()`**：上一条靠启动排空把 outbox
+    // 补进 PG，所以它证明的是"启动收敛会补写"，**证明不了运行期**——而真实用户从不重启进程。
+    // 此前的实现里 `drainOutboxes()` 的唯一调用点就是 `open()`，于是：移除接口返回 200、
+    // `mark('removed')` 也真的生效（本地），但 `dsh_conversations` 里那行还在 ⇒ 侧栏照样列出它、
+    // 点进去 404。删掉 `mark` 之后的 `scheduleDrain()`，本条即红。
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.conversations.publish(owner, id)
+      db.conversations.mark(actor, id, 'removed')   // 同步，不 await
+      // 后台排空是"稍后跑"的，不在这里 await 任何排空入口：等它就等于把运行期又测成启动期。
+      await waitFor(async () => (await removalStateOf(id)) === 'removed')
+      const page = await db.conversations.list(owner, { offset: 0, limit: 10, q: '', state: '' }, { busy: [], archived: [] })
+      expect(page.items.map(item => item.id)).toEqual([])
+      // 队列也要真的被 ack（没 ack 说明是"碰巧 PG 里已经是 removed"，那就是假绿）。
+      expect(db.health().fence.depth).toBe(0)
+    } finally { await db.close() }
+  })
+
+  it('★ 运行期标题：官方标题经 titleSink 投递后，同一个实例内 PG 的 title 必须自己更新', async () => {
+    // 与"标题 outbox"那条的分工同上：那条靠重启排空，本条只用**同一个实例**。
+    // 投递口是同步回调（`registerConversationTitles` 的硬要求），只能写本地队列；
+    // 没有运行期排空点的话，官方标题在本次进程内永远进不了 PG——而页面标题刷新等的就是它
+    // （`title_source` 一直是 `automatic`，前端会一直空转到超时）。
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.conversations.publish(owner, id)
+      db.titleSink().submit(AGENT, id, '官方给的名字', 'generated')
+      await waitFor(async () => (await titleOf(id)) === '官方给的名字')
+      expect(await titleSourceOf(id)).toBe('generated')
+      expect(db.health().title.depth).toBe(0)
+    } finally { await db.close() }
+  })
+
+  it('同一个实例里不会只排空"某一次"：一次触发要把两条队列、多个会话的条目全部补完', async () => {
+    // 合并触发的代价必须被钉住：`titleSink` 两条（两个会话）+ `mark` 三条（其中一个会话连发
+    // 两条），若实现只补"最后一次触发时的那一批"、或提前退出循环，这里会留下没补完的条目。
+    //
+    // ⚠️ 标题与删除**必须落在不同的会话上**：删除会话会让那条标题 UPDATE 的守卫
+    // （`ready AND deleted_at IS NULL AND removal_state = ''`）不成立——那是对的行为（不给正在
+    // 删除的会话改标题），不是本用例要测的东西。第一版就是踩了这个，读到的是空标题。
+    //
+    // ⚠️ 本用例**同时**投了标题，所以它能在"标题那一侧触发排空"时通过；只标记删除、不投标题的
+    // 路径由下一条（`mark` 单独触发）覆盖，两条合起来才钉住两个触发点各自有效。
+    //
+    // 等待用**本地队列深度**（同步 SQLite 读，零网络）而不是轮询 PG：后者每轮一次往返，
+    // 在跳板机上一条用例就能打满 5000ms 超时。队列空了之后一次性读回 PG 断言。
+    const { db } = await newFacade()
+    try {
+      const titled = conversationId()
+      const second = conversationId()
+      for (const id of [titled, second]) {
+        await db.conversations.create(owner, id, '')
+        await db.conversations.publish(owner, id)
+      }
+      db.titleSink().submit(AGENT, titled, '第一条的标题', 'generated')
+      db.conversations.mark(actor, titled, 'pending')
+      db.conversations.mark(actor, titled, 'removed')
+      db.conversations.mark(actor, second, 'removed')
+      expect(db.health().fence.depth).toBe(3)
+      expect(db.health().title.depth).toBe(1)
+
+      await waitForSync(() => db.health().fence.depth === 0 && db.health().title.depth === 0,
+        '后台排空没有在 5 秒内把两个 outbox 清空')
+
+      // 每条都必须真的到了 PG（"队列空了"也可能是被错误地 ack 掉的）。
+      expect(await removalStateOf(titled)).toBe('removed')
+      expect(await removalStateOf(second)).toBe('removed')
+    } finally { await db.close() }
+  })
+
+  it('★ `close()` 之前必须把队列排空：关掉实例不丢刚标记的删除', async () => {
+    // 真实场景是"用户点了移除、进程随即重启/卸载插件"：排空是延迟 25ms 调度的，`close()` 不等它
+    // 就等于丢掉这条指令——PG 里那行**永久**停在标记之前的状态（侧栏还能列出它、点开 404），
+    // 而本地队列已经随进程消失。断言用**独立的 admin 连接**读（不经过待关闭的门面）。
+    const { db } = await newFacade()
+    const id = conversationId()
+    await db.conversations.create(owner, id, '')
+    await db.conversations.publish(owner, id)
+    db.conversations.mark(actor, id, 'removed')
+    // 立刻关：不给那次 25ms 的延迟排空任何机会。
+    await db.close()
+
+    await waitFor(async () => (await removalStateOf(id)) === 'removed')
+  })
+
+  it('标题 outbox 与围栏 outbox 互不阻塞：删除别的会话不影响本次标题落库', async () => {
+    const { db } = await newFacade()
+    try {
+      const titled = conversationId()
+      const doomed = conversationId()
+      for (const id of [titled, doomed]) {
+        await db.conversations.create(owner, id, '')
+        await db.conversations.publish(owner, id)
+      }
+      db.titleSink().submit(AGENT, titled, '正常会话的官方标题', 'generated')
+      db.conversations.mark(actor, doomed, 'removed')
+      await waitForSync(() => db.health().fence.depth === 0 && db.health().title.depth === 0,
+        '后台排空没有在 5 秒内把两个 outbox 清空')
+      expect(await titleOf(titled)).toBe('正常会话的官方标题')
+      expect(await removalStateOf(doomed)).toBe('removed')
+    } finally { await db.close() }
+  })
+
+  it('★ `mark` 单独触发排空：只标记删除、不投标题，PG 那行也必须自己消失', async () => {
+    // 与上一条的分工：那条同时投了标题（于是"标题那一侧"也能触发排空）。本用例**只**标记删除，
+    // 于是唯一可能的触发点就是 `mark` 里那一次 `scheduleDrain()`——把它去掉，本条即红。
+    // 断开"删除"这条路径的代价最高：移除接口返回 200 而侧栏那行还在（点开 404）。
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.conversations.publish(owner, id)
+      db.conversations.mark(actor, id, 'pending')
+      db.conversations.mark(actor, id, 'removed')
+      expect(db.health().title.depth).toBe(0)
+      expect(db.health().fence.depth).toBe(2)
+      await waitForSync(() => db.health().fence.depth === 0,
+        '后台排空没有在 5 秒内把围栏队列清空（`mark` 之后没人触发排空？）')
+      expect(await removalStateOf(id)).toBe('removed')
+    } finally { await db.close() }
+  })
+
+  // -------------------------------------------------------------------
+  // 一·补二、用户发言推进 updated_at（侧栏排序 / 时间范围过滤的依据）
+  // -------------------------------------------------------------------
+
+  it('★ touch 推进 updated_at：严格变大，且 list 把刚发言的会话排到最前', async () => {
+    // `syncTitle` 那条 UPDATE **不碰 `updated_at`**（它的守卫也只认 title / title_source），
+    // 而列表排序是 `pinned DESC, updated_at DESC, id`。所以"受理一条用户消息"如果只调
+    // `syncTitle`，侧栏的排序键就退化成创建时间：刚说过话的会话沉在下面，`from` / `to`
+    // 过滤也按创建时间算。`followup` 里漏掉 `touch` 的话本条即红。
+    const { db } = await newFacade()
+    try {
+      const older = conversationId()
+      const newer = conversationId()
+      const page = (): Promise<ConversationPageShape> =>
+        db.conversations.list(owner, { offset: 0, limit: 10, q: '', state: '' }, { busy: [], archived: [] })
+
+      await db.conversations.create(owner, older, '')
+      await db.conversations.publish(owner, older)
+      await db.conversations.syncTitle(owner, older, '旧会话', 'automatic')
+      // 让 `newer` 的两个时刻严格大于 `older`（真实路径上也是这样：两行建在不同时刻）。
+      await delay(5)
+      await db.conversations.create(owner, newer, '')
+      await db.conversations.publish(owner, newer)
+      const before = await updatedAtOf(older)
+      expect((await page()).items.map(item => item.id)).toEqual([newer, older])
+
+      // 显式给一个"更晚"的时刻：不靠毫秒时钟碰运气，本用例要证的是**这一列被推进了**。
+      const at = before + 1000
+      await db.conversations.touch(owner, older, at)
+      expect(await updatedAtOf(older)).toBe(at)
+      expect(at).toBeGreaterThan(before)
+      expect((await page()).items.map(item => item.id)).toEqual([older, newer])
+
+      // ⚠️ **倒退必须被挡住**（`GREATEST`）：分页是 `from` / `to` 两个窗口，`updated_at` 一旦
+      // 回退就会与上一页重叠或跳空——表现是"翻页时某些会话凭空消失"，而那一刻没有任何报错。
+      await db.conversations.touch(owner, older, at - 500)
+      expect(await updatedAtOf(older)).toBe(at)
+      expect((await page()).items.map(item => item.id)).toEqual([older, newer])
+    } finally { await db.close() }
+  })
+
+  it('touch 只认自己的 owner：别人的 owner 调它一行都不动', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.conversations.publish(owner, id)
+      const before = await updatedAtOf(id)
+      // 同一个 namespace、只有 `userId` 不同：能挡住它的只有 `owner_id` 那一列。
+      await db.conversations.touch(otherOwner, id, before + 5000)
+      expect(await updatedAtOf(id)).toBe(before)
+      // 反向对照：本人调必须真的推进（少了这条，上面那个"没生效"可能只是整条路径没通）。
+      await db.conversations.touch(owner, id, before + 5000)
+      expect(await updatedAtOf(id)).toBe(before + 5000)
+    } finally { await db.close() }
+  })
+
+  // -------------------------------------------------------------------
+  // 一·补三、搜索口径：`titleOnly` 决定要不要把 id 也当命中项
+  // -------------------------------------------------------------------
+
+  it('★ titleOnly：为真时按 id 片段搜不到，为假时能搜到（保住既有行为）', async () => {
+    // 页面的 placeholder 写着"搜索对话标题"，而 PG 侧此前是 `title OR id`。会话 id 是
+    // `closedoff-web-<uuid>`，所以输入 `-`、`web`、`e`、甚至单个数字都会命中**全部**会话——
+    // 用户搜"标题"却得到整个列表。`titleOnly` 就是那个开关；忽略它（永远带上 id 分支）时
+    // 本用例的第一条断言即红。
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '', { title: '园区设备巡检' })
+      await db.conversations.publish(owner, id)
+      const search = (q: string, titleOnly?: boolean): Promise<ConversationPageShape> =>
+        db.conversations.list(owner, {
+          offset: 0, limit: 10, q, state: '', ...(titleOnly === undefined ? {} : { titleOnly }),
+        }, { busy: [], archived: [] })
+      // 取 id 里**一定不会出现在标题里**的一段（`closedoff-web-` 是 `CONVERSATION_PREFIX` 给的）。
+      const fragment = 'closedoff-web'
+
+      expect((await search(fragment)).items.map(item => item.id)).toEqual([id])
+      expect((await search(fragment, false)).items.map(item => item.id)).toEqual([id])
+      expect((await search(fragment, true)).items).toEqual([])
+      expect((await search(fragment, true)).total).toBe(0)
+
+      // 反向对照：同一个开关下标题命中必须照样有效——否则"搜不到"可以只是"搜索整体坏了"。
+      expect((await search('设备', true)).items.map(item => item.id)).toEqual([id])
+      expect((await search('设备', false)).items.map(item => item.id)).toEqual([id])
+      // 大小写仍由 `lower()` 归一（带上这个开关不该改变匹配口径的任何其他部分）。
+      expect((await search('CLOSEDOFF-WEB', true)).items).toEqual([])
+      expect((await search('园区设备巡检', true)).items.map(item => item.id)).toEqual([id])
     } finally { await db.close() }
   })
 

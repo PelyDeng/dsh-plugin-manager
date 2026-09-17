@@ -10,6 +10,19 @@ export function historyGroup(item,now=Date.now()){
 }
 export function conversationMarkdown(title,messages){return `# ${String(title||'对话记录').replace(/[\r\n]/g,' ')}\n\n`+messages.filter(m=>['user','assistant'].includes(m.role)&&m.text?.trim()).map(m=>`## ${m.role==='user'?'我':'助手'}\n\n${m.text}`).join('\n\n---\n\n')+'\n'}
 
+/**
+ * 列表里只显示**打得开**的会话行。
+ *
+ * `state` 由服务端给（`/conversations`）：`pending`（上一次移除还没完成）/`failed`（移除失败）/
+ * `legacy`（宿主已归档但没标移除）这三种，点开会 404、在本页再删也 404（服务端的
+ * `assertConversation` 挡住）——列出来就是一条点不出内容、也删不掉的死行。
+ * `busy`（正在回答）**必须留下**：旧实现里它照常出现，而它是运行时现算的状态，
+ * 用 `state==='ready'` 一刀切会把它一起滤掉，正在回答的那条会话会凭空消失。
+ *
+ * `state` 缺失按"可显示"处理：服务端与页面各自的升级不同步时，少一个字段不该把整个列表清空。
+ */
+export function conversationRowVisible(item){return item.state===undefined||item.state==='ready'||item.state==='busy'}
+
 /** Sidebar owns only navigation UI. Hosts provide authenticated list/update/read operations. */
 export function createConversationHistory({mount,toggle,newConversation,openConversation,currentId,list,mutate,read,onDeleted,label='历史对话',storageKey='chat-history'}){
   const panel=element('dialog',undefined,'qa-history'),heading=element('strong',label),head=element('div',undefined,'qh-head'),tools=element('div',undefined,'qh-head-tools'),search=button('search','搜索对话'),collapse=button('panel','收起历史对话'),create=button('plus','开启新对话',false),searchBox=element('input'),rows=element('div',undefined,'qh-rows'),status=element('p',undefined,'qh-status'),more=element('button','加载更多','qh-more'),batch=element('div',undefined,'qh-batch'),footer=element('p','对话按最近活动时间分组','qh-footer')
@@ -38,15 +51,16 @@ export function createConversationHistory({mount,toggle,newConversation,openConv
   }
   function render(){
     const scrollTop=rows.scrollTop;rows.replaceChildren();let group
-    for(const item of items){const next=historyGroup(item);if(next!==group){group=next;rows.append(element('h3',group))}
+    const shown=items.filter(conversationRowVisible)
+    for(const item of shown){const next=historyGroup(item);if(next!==group){group=next;rows.append(element('h3',group))}
       const row=element('div',undefined,'qh-row');row.dataset.conversation=item.id;row.classList.toggle('current',currentId()===item.id)
       if(multi){const check=element('input');check.type='checkbox';check.checked=selected.has(item.id);check.disabled=!check.checked&&selected.size>=100;check.setAttribute('aria-label','选择 '+item.title);check.onchange=()=>{check.checked?selected.add(item.id):selected.delete(item.id);render()};row.append(check)}
       const link=element('button',item.title||'新对话','qh-title');link.type='button';link.disabled=blocked;link.title=blocked?'请等待回答完成或先停止':item.title;link.setAttribute('aria-current',String(currentId()===item.id));link.onclick=async()=>{try{await openConversation(item.id);if(mobile.matches)hide();render()}catch(e){report(e.message)}};row.append(link)
       const options=button('more','操作 '+(item.title||'新对话'));options.setAttribute('aria-haspopup','menu');options.onclick=()=>openMenu(item,options);row.append(options);rows.append(row)
     }
-    if(!items.length)rows.append(element('p',query?'没有匹配的对话':'还没有历史对话','qh-empty'));rows.scrollTop=scrollTop;more.hidden=offset===null;renderBatch()
+    if(!shown.length)rows.append(element('p',query?'没有匹配的对话':'还没有历史对话','qh-empty'));rows.scrollTop=scrollTop;more.hidden=offset===null;renderBatch()
   }
-  function renderBatch(){batch.replaceChildren();batch.hidden=!multi;if(!multi)return;batch.append(element('span',`已选 ${selected.size} 条`));for(const [label,fn] of [['选择已加载',()=>{items.slice(0,100).forEach(i=>selected.add(i.id));render()}],['导出',()=>exportItems(items.filter(i=>selected.has(i.id)))],['删除',()=>confirmDelete([...selected])],['取消',()=>{multi=false;selected.clear();render()}]]){const b=element('button',label);b.type='button';b.disabled=mutating||(['导出','删除'].includes(label)&&!selected.size);b.onclick=fn;batch.append(b)}}
+  function renderBatch(){batch.replaceChildren();batch.hidden=!multi;if(!multi)return;batch.append(element('span',`已选 ${selected.size} 条`));for(const [label,fn] of [['选择已加载',()=>{items.filter(conversationRowVisible).slice(0,100).forEach(i=>selected.add(i.id));render()}],['导出',()=>exportItems(items.filter(i=>selected.has(i.id)))],['删除',()=>confirmDelete([...selected])],['取消',()=>{multi=false;selected.clear();render()}]]){const b=element('button',label);b.type='button';b.disabled=mutating||(['导出','删除'].includes(label)&&!selected.size);b.onclick=fn;batch.append(b)}}
   function openMenu(item,anchor){
     menu.replaceChildren();for(const [icon,label,fn] of [['edit','重命名',()=>rename(item)],['pin',item.pinned?'取消置顶':'置顶',()=>update({operation:'pin',ids:[item.id],pinned:!item.pinned})],['share','分享 / 导出',()=>exportItems([item])],['select','多选',()=>{multi=true;selected.add(item.id);render()}],['trash','删除',()=>confirmDelete([item.id])]]){const b=button(icon,label,false);b.className='qh-menu-item'+(icon==='trash'?' danger':'');b.setAttribute('role','menuitem');b.disabled=mutating;b.onclick=()=>{menu.hidePopover();void fn()};menu.append(b)}
     menu.showPopover();const r=anchor.getBoundingClientRect();menu.style.left=Math.max(8,Math.min(innerWidth-200,r.left))+'px';menu.style.top=Math.max(8,Math.min(innerHeight-menu.offsetHeight-8,r.bottom+5))+'px';menu.querySelector('button').focus()

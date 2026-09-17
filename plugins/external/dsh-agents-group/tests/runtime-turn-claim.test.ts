@@ -13,12 +13,18 @@
  *   C4 `duplicate` + `claimed`（上一轮崩在半路）⇒ 视为中断，允许重跑；
  *   C5 `finish` 发生在 `resolve` **之前**（反了会留下 `claimed` 行，下次被判可重跑 ⇒ 重复副作用）；
  *   C6 没有存储门面时整层跳过，不炸。
+ *   C9 受理一条用户消息**推进 `updated_at`**（侧栏排序键；`syncTitle` 不碰那一列）；
+ *
+ * C7（幂等缓存上界）与 C9 不是 `claim` 的判据，但它们的接线点同在这条路径上（`participant` →
+ * `lifecycle`），另建文件会把同一套夹具抄第二遍 —— 夹具的用途是"让接线可见"，不是"一个文件
+ * 只测一件事"。C8 号被本文件末尾那条"已知无覆盖"的说明占用了（当时尝试补的
+ * `ledger.available` 告警），所以这里从 C9 续号，不重排既有编号。
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ParticipantRequest, ParticipantResult } from '../packages/runtime/src/contract.ts'
 import { ConversationLifecycle, type AgentRuntime, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
 import { createParticipant } from '../packages/runtime/src/participant.ts'
@@ -229,7 +235,7 @@ function host(options: HostOptions = {}) {
     : createParticipant({ definition: definitionOf(), runtime, storage, access, config: runtimeConfig })
 
   return {
-    participant, calls, settledFlag,
+    participant, calls, settledFlag, lifecycle, port,
     followups: () => followups,
     lastConversation: () => openedIds[openedIds.length - 1] ?? '',
     /** 发一轮完整回合（单轮就够：没装交活工具 ⇒ 不做补交轮，直接按投影交付）。 */
@@ -370,6 +376,52 @@ describe('判据：轮次幂等真的接在运行时上（`dsh_turns`）', () =>
       // 淘汰的只是"进程内回放"：三轮都真的走了 `claim`，一次都没被缓存短路。
       expect(h.calls.claimed.map(entry => entry.requestId)).toEqual(['run:a', 'run:b', 'run:c'])
     } finally { await h.dispose() }
+  })
+
+  it('C9 受理一条用户消息必须推进 `updated_at`（`syncTitle` 不碰那一列）', async () => {
+    /**
+     * 判据：**侧栏排序键**。
+     *
+     * `lifecycle.followup` 里两次存储调用缺一不可，而它们管的事完全不同：
+     * - `syncTitle` 把首条消息压成标题（官方标题随后覆盖它），**守卫只认 `title` / `title_source`，
+     *   完全不碰 `updated_at`**；
+     * - `touch` 才推进 `updated_at`，而列表排序是 `pinned DESC, updated_at DESC, id`、
+     *   `from` / `to` 过滤也按这一列。
+     *
+     * 所以只留 `syncTitle` 的话，侧栏排序键退化成**创建时间**：刚续问过的会话沉在下面，
+     * 时间范围过滤也算错——而且**静默**（没有任何报错）。删掉 `followup` 里那一次 `touch`，
+     * 本条即红。真实 PG 侧的同一件事由 `tests/storage-contract.test.ts` 的 `touch` 用例覆盖
+     * （那里是真 SQL）。
+     *
+     * ⚠️ 把 `Date.now` 钉成递增而不是"让替身自己取时钟"：`followup` 传给端口的是它开头记下的
+     * `lastUsedAt`（**显式时刻**），端口根本不会去读时钟——第一版就是这么写的，于是断言读到
+     * 两个相同的毫秒值而红（`Math.max(old, at)` 里 `at` 来自真实时钟，和 `publish` 撞在同一
+     * 毫秒）。钉住真实的 `Date.now` 才能让"严格变大"成为确定的事实，而不是碰运气。
+     */
+    const h = host()
+    const base = Date.now() + 1_000_000_000
+    let ticks = 0
+    // 钉住真实的 `Date.now`（递增，保证"严格变大"是确定的事实）。恢复放在 `dispose()` **之前**：
+    // 时钟一旦泄漏到别的用例，那边所有依赖真实时间的断言都会变成另一个故事。
+    vi.spyOn(Date, 'now').mockImplementation(() => base + (ticks += 1))
+    try {
+      const conversation = (await h.lifecycle.open(undefined, true, ACTOR))!
+      const before = h.port.rawOf(conversation.id)!.updatedAt
+
+      await h.lifecycle.followup(conversation, '第二问', ACTOR)
+
+      const after = h.port.rawOf(conversation.id)!.updatedAt
+      expect(after).toBeGreaterThan(before)
+      // 再钉一次"是谁推进的"：只有 `touch` 往这条痕迹里写东西（`publish` / `create` 都不写）。
+      expect(h.port.touched.map(entry => entry.id)).toEqual([conversation.id])
+      // 调用方给的时刻必须**晚于**改动前的值（给一个陈旧时刻会被 `Math.max` 挡下 ⇒ 上面那条
+      // `toBeGreaterThan` 也会红，但那是"没推进"，与"传错了时刻"是两件事）。
+      expect(h.port.touched[0]!.at).toBeGreaterThan(before)
+      expect(h.port.touched[0]!.updatedAt).toBe(after)
+    } finally {
+      vi.restoreAllMocks()
+      await h.dispose()
+    }
   })
 
   // ⚠️ **已知无覆盖（如实记录，不是遗漏）**：`participant.ts` 的 `ledger.available` 告警

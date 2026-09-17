@@ -501,6 +501,16 @@ export class ConversationLifecycle {
       } finally { turn.dispatching = false }
       // 首条用户消息决定标题（官方标题随后经 TitleSink 覆盖；自动标题不覆盖手动标题）。
       await this.host.store.syncTitle(this.ownerOf(actor), conversation.id, firstLine(text), 'automatic')
+      /**
+       * ⚠️ `syncTitle` 的 `UPDATE` **不碰 `updated_at`**（守卫只认 `title` / `title_source`），
+       * 而侧栏排序是 `pinned DESC, updated_at DESC, id`、`from` / `to` 过滤也按这一列。少了这
+       * 一次 `touch`，"刚说过话的会话"在列表里按**创建时间**排：新会话永远压在旧会话下面，
+       * 时间范围过滤同样算错。
+       *
+       * 时刻用 `followup` 开头记下的 `lastUsedAt`（本轮的受理时刻），不用 `Date.now()`：
+       * 中间隔了模型目录解析与发布检查两次 await，取当下会让时间戳晚于真实受理点。
+       */
+      await this.host.store.touch(this.ownerOf(actor), conversation.id, conversation.lastUsedAt)
       if (turn.finishRequested) this.finish(conversation.id)
     } catch (error: unknown) {
       if (this.turns.get(conversation) === turn) {

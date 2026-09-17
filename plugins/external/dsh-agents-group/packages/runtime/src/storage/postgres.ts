@@ -197,7 +197,17 @@ export class PgConversations implements PgConversationPart {
     ]
     if (query.q !== '') {
       values.push(query.q)
-      filters.push(`(strpos(lower(title), lower($${values.length})) > 0 OR strpos(lower(id), lower($${values.length})) > 0)`)
+      const needle = `$${values.length}`
+      // ⚠️ `titleOnly` 是**页面口径**的开关，不是优化：会话 id 是 `closedoff-web-<uuid>`，把 id
+      // 也算命中项会让 `-` / `web` / 单个数字这类短查询命中**全部**会话（而页面 placeholder
+      // 写的是"搜索对话标题"）。默认 false = 保留"标题 OR id"的既有行为（kit 侧栏没有这个
+      // 口径要求，改默认值会动它）。
+      //
+      // 谁该传：业务页面的搜索入口，即 `agents/closedoff/src/web.ts` 构造列表查询的地方。
+      // 本文件只提供开关，不替它决定（`ports.ts` 里同一句话）。
+      filters.push(query.titleOnly === true
+        ? `strpos(lower(title), lower(${needle})) > 0`
+        : `(strpos(lower(title), lower(${needle})) > 0 OR strpos(lower(id), lower(${needle})) > 0)`)
     }
     if (query.from !== undefined) {
       values.push(query.from)
@@ -270,6 +280,35 @@ export class PgConversations implements PgConversationPart {
           AND ready = TRUE AND deleted_at IS NULL AND removal_state = ''
           AND (title_source = 'automatic' OR $2 = 'manual')`,
       [title, source, conversationId, this.agentId, owner.namespace, owner.userId],
+    )
+  }
+
+  /**
+   * 推进 `updated_at`：**"这个会话刚刚受理了一条用户消息"的时间戳**。
+   *
+   * 为什么必须单独一个方法：列表排序是 `pinned DESC, updated_at DESC, id`，`from` / `to` 过滤
+   * 也按这一列。建会话之后这一列只在 `publish` / `pin` 里被推进，而 `syncTitle` 是**不碰它**的
+   * ——它的守卫只认 `title` / `title_source`。所以"续问一条消息"如果只调 `syncTitle`，侧栏的
+   * 排序键就永久停在创建时刻：刚说过话的会话沉在下面、时间范围过滤按创建时间算。
+   *
+   * 三处与 `pin` 一致、一处不同：
+   *
+   * - 归属与存在性**由这条 `UPDATE` 的 owner 条件保证**（`id` + `agent_id` +
+   *   `owner_namespace` + `owner_id` 四列 AND），不另做预查询——两套判定必然漂移，而漂移的
+   *   表现是"查得到、改不动"这类只在页面上显示为"点了没反应"的缺陷；
+   * - **没有** `ready` / `deleted_at` / `removal_state` 守卫：它是"这条会话刚被用到"的记账，
+   *   与"此刻能不能写业务内容"无关。加守卫只会让一个刚被移除的会话在列表里永远停在旧时刻；
+   * - 与 `publish` / `syncTitle` 一样用显式 `$2` 而不是 `now()`：调用方（`followup`）算出来的
+   *   那个时刻就是"本轮开始"的时刻，用库时间会让它晚于真实受理点；
+   * - ⚠️ **`GREATEST` 不是装饰**：传进来的时刻可能比库里那一列更早（时钟回拨、或调用方复用了
+   *   一个更早的时间戳），而 `updated_at` **倒退**会让分页 `from` / `to` 的窗口重叠或跳空——
+   *   表现为"翻页时某些会话凭空消失"。所以这一列**只允许单调不减**。
+   */
+  async touch(owner: OwnerKey, conversationId: string, at?: number): Promise<void> {
+    await this.scoped.query(
+      `UPDATE dsh_conversations SET updated_at = GREATEST(updated_at, $1)
+        WHERE id = $2 AND agent_id = $3 AND owner_namespace = $4 AND owner_id = $5`,
+      [at ?? Date.now(), conversationId, this.agentId, owner.namespace, owner.userId],
     )
   }
 
@@ -599,6 +638,8 @@ export class PostgresAgentDatabase implements Omit<AgentDatabasePort, 'conversat
       missionRequestId: (owner, missionId) => scoped.missionRequestId(owner, missionId),
       list: (owner, query, scope) => scoped.list(owner, query, scope),
       syncTitle: (owner, id, title, source) => scoped.syncTitle(owner, id, title, source),
+      // 推进 `updated_at` 也是一条普通 `UPDATE`，事务内可以直接跑（与 `pin` 同理）。
+      touch: (owner, id, at) => scoped.touch(owner, id, at),
       // 置顶是一条普通 `UPDATE`，事务内可以直接跑（不像 record / mark 是同步契约、managed 属于 adapter）。
       pin: (owner, id, pinned) => scoped.pin(owner, id, pinned),
       managed: () => outOfScope('managed'),

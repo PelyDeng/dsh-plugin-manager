@@ -406,6 +406,19 @@ describe('群组端到端挂载', () => {
     expect(closedoffReady.status).toBe(503)
     expect(closedoffReady.body.ok).toBe(false)
     expect(closedoffReady.body.error).toContain('storage_unreachable')
+    /**
+     * ⚠️ **"配了但不可达"也必须登记业务工具目录**，这条是与上面"未配置"那条并列的判据。
+     *
+     * `createAgentRuntime` 是 `definition.tools` 的唯一调用点，而它只在存储建好之后才走到那里。
+     * 不可达路径（`runtime.ts` 的 `catch` 分支）此前**只记日志**：`tools` 空数组 ⇒ 群组算出空
+     * 的 `allowedTools` ⇒ 模型手里一个 closedoff 工具都没有，而且**完全静默**（限制一份空集合
+     * 是合法的、页面也不显示工具数）。这个缺口比"未配置"那条更危险：线上 PG 抖一次就会走到它。
+     *
+     * 实测：把 `catch` 分支里那次显式调用删掉，**只有本条断言变红**（上面"未配置"那条走的是另一条
+     * 分支，不受影响）。
+     */
+    expect(host.registeredTools).toContain('closedoff_park_status')
+    expect(host.registeredTools.filter(name => name.startsWith('closedoff_')).length).toBeGreaterThan(0)
     const groupReady = await probe(host, '/agents/ready')
     // 两个 Agent 都未就绪 ⇒ 汇总 503（迁移前 closedoff 恒就绪，这里是 200）。
     expect(groupReady.status).toBe(503)

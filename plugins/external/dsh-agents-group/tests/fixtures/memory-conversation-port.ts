@@ -14,7 +14,7 @@
  * | 跨进程 / 多实例 | PG 行 + 部分唯一索引，互斥与可见性由 PG 保证 | **无**：一个进程内的一张 `Map`，两个实例互不可见 |
  * | 启动收敛 | 先排空 outbox、再按 PG 收敛、镜像与 PG 对账 | **无** |
  * | 真正的异步往返 | `create` / `publish` / `list` / `syncTitle` 都是 PG 往返 | 方法签名是 `async`，内部**同步**完成：**不要据此推断真实实现的时序**（真实实现在 await 之间可能被并发插入） |
- * | `updated_at` 的来源 | 建会话、发布、以及"受理一条用户消息"等路径分别维护（`touch` 语义） | 只在 `create` / `publish` 时推进；**没有** `touch` 这一步 |
+ * | `updated_at` 的来源 | 建会话、发布、受理一条用户消息（`touch`）、置顶分别维护 | 同样四个路径都推进；`touch` 的**单调不减**语义与真实实现的 `GREATEST` 等价（`Math.max`） |
  * | 宿主忙碌集合 | 调用方把 `hostBusyConversationIds(ctx)` 合进 `scope.busy` 后再传进来 | 完全依赖调用方传入的 `scope`；它自己看不到宿主 |
  * | 业务表 / 事务 / 健康探针 | `query()` / `transaction()` / outbox 积压深度 | **无** |
  *
@@ -35,6 +35,9 @@
  *   `archived` 两道过滤、`canRemove` 与 `blockedReason`；
  * - `syncTitle` 的"自动标题不覆盖手动标题"（`title_source = 'automatic'` 或本次来源是 `manual`
  *   才写，且要求已发布、未删除、无围栏标记）；
+ * - `touch` 推进 `updated_at`（**单调不减**），**不**要求已发布、未删除、无围栏标记——真实实现
+ *   那条 `UPDATE` 同样只有 owner 条件，且用 `GREATEST` 保证不倒退；
+ * - `list` 的 `titleOnly`：为真时只匹配标题，否则"标题 OR id"（真实实现是 `strpos(lower(...))`）；
  * - `pin` 只改置顶标记并推进 `updated_at`（列表排序是 `pinned DESC, updated_at DESC, id`），
  *   **不**要求已发布、未删除、无围栏标记——真实实现那条 `UPDATE` 同样只有 owner 条件；
  * - `missionRequestId` 是 `(agentId, owner, missionId)` 的**纯函数**：含 `agentId`，避免跨 Agent
@@ -103,6 +106,8 @@ export class MemoryConversationPort implements ConversationPort {
   private readonly requestIds = new Map<string, string>()
   /** 宿主归档清单的替身：只有 `setArchived` 与 `seedLegacy` 会碰它。 */
   private readonly archived = new Set<string>()
+  /** 每一次 `touch` 收到的时刻与落下的值（断言"`followup` 真的推进了 `updated_at`"用）。 */
+  private readonly touchCalls: { readonly id: string; readonly at: number; readonly updatedAt: number }[] = []
 
   constructor(agentId: string) {
     this.agentId = agentId
@@ -196,7 +201,9 @@ export class MemoryConversationPort implements ConversationPort {
       .filter(row => row.removalState !== 'removed')
       // 已删除且**未被归档**的行不出现在列表里（它们等着被清）；这是 `archived` 的唯一落点。
       .filter(row => !(row.deletedAt !== null && row.removalState === '' && archived.has(row.id)))
-      .filter(row => needle === '' || row.title.toLowerCase().includes(needle) || row.id.toLowerCase().includes(needle))
+      .filter(row => needle === '' || row.title.toLowerCase().includes(needle)
+        // `titleOnly` 为真时**只**看标题：会话 id 里那一段（`closedoff-web-`）会让短查询命中全部。
+        || (query.titleOnly !== true && row.id.toLowerCase().includes(needle)))
       .filter(row => query.from === undefined || row.updatedAt >= query.from)
       .filter(row => query.to === undefined || row.updatedAt < query.to)
       .filter(row => query.state === '' || stateOf(row) === query.state)
@@ -286,6 +293,23 @@ export class MemoryConversationPort implements ConversationPort {
   }
 
   /**
+   * 推进 `updated_at`：**"这个会话刚受理了一条用户消息"的时间戳**。
+   *
+   * 与真实实现（`postgres.ts` 的 `touch`）逐条对齐：只有 owner 条件（`ownedRow` 之外没有
+   * `ready` / `deletedAt` / `removalState` 守卫）、显式时刻、以及**单调不减**（`Math.max`）。
+   */
+  async touch(owner: OwnerKey, conversationId: string, at?: number): Promise<void> {
+    const row = this.ownedRow(owner, conversationId)
+    const requested = at ?? Date.now()
+    const value = Math.max(row.updatedAt, requested)
+    row.updatedAt = value
+    // 两个都记：`at` 是"调用方给了什么时刻"，`updatedAt` 是"这一列最后是什么值"。
+    // 只记后者的话，"`touch` 收到了一个陈旧的时刻、被 `Math.max` 挡下"与"收到了正确的时刻"
+    // 在断言里长得一模一样。
+    this.touchCalls.push({ id: conversationId, at: requested, updatedAt: value })
+  }
+
+  /**
    * 置顶标记：只改排序用的标记，**不**改变内容与围栏状态。
    *
    * 守卫只有"存在 + 归属"（`ownedRow`），与真实实现那条只带 owner 条件的 `UPDATE` 一致：
@@ -326,6 +350,16 @@ export class MemoryConversationPort implements ConversationPort {
   /** 全部会话 id，按插入顺序。 */
   ids(): readonly string[] {
     return [...this.rows.keys()]
+  }
+
+  /**
+   * 每一次 `touch` 的痕迹（`id` + 调用方给的时刻 + 落下的值）。
+   *
+   * 用它而不是只读 `updatedAt`：`updatedAt` 是"结果"，而这里能区分"没推进"与"根本没调
+   * `touch`"——两者在只读 `updatedAt` 的断言下是同一种红。
+   */
+  get touched(): readonly { readonly id: string; readonly at: number; readonly updatedAt: number }[] {
+    return [...this.touchCalls]
   }
 
   /** 一行的原始快照（含 `titleSource` / `requestId` 这两个不在 `ConversationRecordShape` 里的字段）。 */
