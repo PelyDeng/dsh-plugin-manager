@@ -70,6 +70,12 @@ export interface ConversationQueryShape {
   readonly state: string
 }
 
+/**
+ * 侧栏列表项。
+ *
+ * 前六个字段是 **kit 的契约**（`ConversationProvider.list` 的返回项）；最后两个不是——
+ * 它们是**给业务自己的页面**用的，见各自的说明。
+ */
 export interface ManagedConversationShape {
   readonly id: string
   readonly title: string
@@ -77,6 +83,23 @@ export interface ManagedConversationShape {
   readonly state: string
   readonly canRemove: boolean
   readonly blockedReason?: string
+  /**
+   * 置顶标记：**只有业务自己的页面用它**（`closedoff/web/conversation-history.js` 的"置顶"徽标
+   * 与置顶菜单文案）。**kit 的侧栏忽略它**，也没有对应的调用口——它不改变会话内容、不改变围栏
+   * 状态，只影响列表排序（`postgres.ts` 的 `ORDER BY pinned DESC, updated_at DESC, id`）。
+   *
+   * 可选而不是必填：kit 侧栏只要前六个字段，把业务字段做成必填等于让 kit 的契约跟着业务需求
+   * 走——那正是 `ports.ts` 顶上"私有需求与框架契约解耦"要避免的事。
+   */
+  readonly pinned?: boolean
+  /**
+   * 标题来源：**同样只给业务页面用**（`closedoff/web/app.js` 靠 `titleSource !== 'automatic'`
+   * 决定要不要停止首句标题刷新）。**kit 的侧栏忽略它**。
+   *
+   * 不放进 `ConversationRecordShape`：那是**围栏读**（`record`，同步、返回值参与 kit 的
+   * `alreadyRemoved` 分支）的形状，往里塞展示语义会让同步面承担它不该管的事。
+   */
+  readonly titleSource?: 'automatic' | 'generated' | 'manual'
 }
 
 export interface ConversationPageShape {
@@ -192,6 +215,21 @@ export interface ConversationPort {
   /** 标题投影；`source` 决定它能否覆盖手动标题。 */
   syncTitle(owner: OwnerKey, conversationId: string, title: string,
     source: 'automatic' | 'generated' | 'manual'): Promise<void>
+
+  /**
+   * 置顶标记。它只影响侧栏排序，不改变会话内容与围栏状态。
+   *
+   * ⚠️ 归属与存在性**由同一条 `UPDATE` 的 owner 条件保证**（`id` + `agent_id` +
+   * `owner_namespace` + `owner_id` 一起 AND），这里**不另做一次预查询**：两套判定必然漂移，
+   * 而漂移的表现是"查得到、改不动"这类只在页面上显示为"点了没反应"的缺陷。
+   *
+   * 与标题不同，它**没有**"谁能覆盖谁"的守卫，也不要求会话已发布：置顶是纯展示状态，
+   * 未发布的会话本来也不在侧栏里，拦一道只会让调用方多一个失败分支。
+   *
+   * 落库与镜像的顺序与 {@link syncTitle} 一致：**先写 PG，PG 成功后再更新本地镜像**——
+   * 无条件改本地会让镜像显示一个 PG 里并不存在的状态。
+   */
+  pin(owner: OwnerKey, conversationId: string, pinned: boolean): Promise<void>
 
   /** 删除围栏读：**同步**（kit 契约的硬要求，见上）。 */
   record(actor: Actor, conversationId: string): ConversationRecordShape

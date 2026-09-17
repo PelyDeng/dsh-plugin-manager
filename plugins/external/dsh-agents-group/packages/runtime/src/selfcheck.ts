@@ -42,8 +42,21 @@ import type { AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
 import type { ParticipantArtifact } from './contract.ts'
 import type { ProjectedResult } from './definition.ts'
 
-/** 自检结论的**四态**（`absent` 是缺省——执行方没实现自检，不是任何一种声明过的结论）。 */
-export type SelfCheckState = 'passed' | 'unverifiable' | 'failed' | 'absent'
+/**
+ * 自检结论的取值。
+ *
+ * 前四态是**对外语义**（`absent` 是缺省——执行方没实现自检，不是任何一种声明过的结论）；
+ * `damaged` 是**内部**多出来的一态：上游回报的形状非法（`status` 拼错、缺 `status`、不是对象、
+ * 是 `null`）。它既不等于"执行方声明自己没有自检能力"，也不等于"执行方没实现自检"。
+ *
+ * ⚠️ **它为什么必须单独一态**：把损坏归进 `absent`，等于上游写错一个枚举值、协调方就记下一条
+ * 关于"这个执行方能力"的断言——**静默**，而且没有任何计数或分类看得出来。本仓对"损坏"的
+ * 既有处置是先例（`storage/parse.ts` 的 `inputRefs` / `dependsOn` 都给 `damaged` 分类，
+ * 编排层据此拒派而不是降级）。对外的 `AgentSelfCheck.status` 仍是**四态**：`damaged` 与
+ * `absent` 都报 `absent`（协调方视角一样是"没有可用的自检结论"），但 `detail` 与
+ * {@link SelfCheckOutcome.selfCheck} 能把"形状损坏（上游的 bug）"与"声明缺省"分开。
+ */
+export type SelfCheckState = 'passed' | 'unverifiable' | 'failed' | 'absent' | 'damaged'
 
 /** 四条规则的标识。 */
 export type SelfCheckRule =
@@ -93,19 +106,25 @@ export interface SelfCheckInput {
 }
 
 /**
- * 把执行方的自检结论归到**四态**。
+ * 把执行方的自检结论归类。
  *
  * 缺省**不是** `passed`——它表示"执行方没有自检能力"（老执行方），与"自检通过"是两件事。
- * 状态名拼错、不是对象、`status` 缺失，一律按 `absent` 处理：**不猜、不降级成通过**。
- *
  * `status: 'absent'` 与整个字段缺省归到同一态：前者是执行方**显式声明**自己没有自检能力
- * （运行时把内部四态透出去时就写这个值），后者是它压根没报。协调方对两者的处置相同。
+ * （运行时把内部结论透出去时就写这个值），后者是它压根没报；协调方对两者的处置相同。
+ *
+ * ⚠️ **形状损坏单独归 `damaged`**，不混进 `absent`：`{}`、`'PASSED'`（拼错）、`null`、非对象
+ * 都是**上游的 bug**，不是"这个执行方没有自检能力"。混在一起会让一个写错的枚举值变成一条关于
+ * 能力的断言，且完全静默。`null` 尤其要在这里挡住——`typeof null === 'object'`，直接读
+ * `.status` 会抛 `TypeError`，整轮以一条看不懂的异常 reject。
+ *
+ * **不猜、不降级成通过**：这条对四态与 `damaged` 一视同仁。
  */
 export function selfCheckState(selfCheck: AgentSelfCheck | undefined): SelfCheckState {
-  if (selfCheck === undefined || typeof selfCheck !== 'object') return 'absent'
+  if (selfCheck === undefined) return 'absent'
+  if (selfCheck === null || typeof selfCheck !== 'object') return 'damaged'
   const status = (selfCheck as { status?: unknown }).status
   if (status === 'passed' || status === 'unverifiable' || status === 'failed' || status === 'absent') return status
-  return 'absent'
+  return 'damaged'
 }
 
 /** 逐条跑四条规则。**纯函数**：不读时钟、不碰存储、不调用模型。 */
@@ -143,7 +162,7 @@ export function runSelfCheck(input: SelfCheckInput): SelfCheckOutcome {
   return { findings, failed, unverified, selfCheck: state }
 }
 
-/** 自检那一条的结论：只有 `passed` 算通过；`absent` / `unverifiable` 未核验；`failed` 不达标。 */
+/** 自检那一条的结论：只有 `passed` 算通过；`unverifiable` / `absent` / `damaged` 未核验；`failed` 不达标。 */
 function stateFinding(state: SelfCheckState, selfCheck: AgentSelfCheck | undefined): SelfCheckFinding {
   switch (state) {
     case 'passed':
@@ -160,6 +179,13 @@ function stateFinding(state: SelfCheckState, selfCheck: AgentSelfCheck | undefin
       return { rule: 'self-check', verdict: 'unverified', detail: '执行方声明这一轮没有可核验的产出' }
     case 'absent':
       return { rule: 'self-check', verdict: 'unverified', detail: '执行方没有回报自检结论（缺省不等于通过）' }
+    case 'damaged':
+      // 措辞必须与 `absent` 明显不同：这是**上游的 bug**，不是"这个执行方没有自检能力"。
+      return {
+        rule: 'self-check',
+        verdict: 'unverified',
+        detail: '执行方回报的自检结论形状非法（status 拼错、缺字段、不是对象或为 null）：如实按未核验处理——不猜成通过，也不记成"执行方没有自检能力"',
+      }
   }
 }
 
@@ -209,7 +235,11 @@ export function toSelfCheck(outcome: SelfCheckOutcome): AgentSelfCheck {
     // `unverifiable` 是**这一轮的性质**（没有可核验的产出）。折成一个值之后，协调方只能去
     // 读 `detail` 文本才能分清——而文本不能当判据（P3 评审 P-2）。`absent` 优先于
     // `unverifiable`：能力事实比这一轮的具体原因更根本，而具体原因仍全在 `detail` 里。
-    return outcome.selfCheck === 'absent'
+    //
+    // `damaged`（上游形状损坏）对外也报 `absent`——协调方视角都是"没有可用的自检结论"；两者
+    // 的区别留在 `detail` 与 {@link SelfCheckOutcome.selfCheck} 里，运行时另外对 `damaged`
+    // 发一次告警（那是上游的 bug，不该静默）。
+    return outcome.selfCheck === 'absent' || outcome.selfCheck === 'damaged'
       ? { status: 'absent', detail }
       : { status: 'unverifiable', detail }
   }

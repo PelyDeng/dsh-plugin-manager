@@ -10,7 +10,7 @@ import type {} from '@deepseek-ai/dsh-message-feedback'
 import { SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import type { ConversationManager } from './agent.ts'
-import { onAssistantDelta, type AssistantDelta } from './assistant-stream.ts'
+import { onAssistantDelta, type AssistantDelta } from '../../../packages/runtime/src/index.ts'
 import type { Config } from './config.ts'
 import { fencesFromResult, isFenceTool } from './fences.ts'
 import {

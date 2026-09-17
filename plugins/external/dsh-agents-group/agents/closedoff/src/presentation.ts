@@ -2,7 +2,7 @@
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
-import { historyAssistantDeltas } from './assistant-stream.ts'
+import { historyAssistantDeltas } from '../../../packages/runtime/src/index.ts'
 import { deriveTurnTokenUsage } from '@deepseek-ai/dsh-token-meter/client'
 import { redactJsonValue, redactVisibleText } from './redaction.ts'
 import { TOOL_BY_NAME } from './specs.ts'

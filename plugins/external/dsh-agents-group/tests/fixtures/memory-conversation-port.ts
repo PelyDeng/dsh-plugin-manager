@@ -35,6 +35,8 @@
  *   `archived` 两道过滤、`canRemove` 与 `blockedReason`；
  * - `syncTitle` 的"自动标题不覆盖手动标题"（`title_source = 'automatic'` 或本次来源是 `manual`
  *   才写，且要求已发布、未删除、无围栏标记）；
+ * - `pin` 只改置顶标记并推进 `updated_at`（列表排序是 `pinned DESC, updated_at DESC, id`），
+ *   **不**要求已发布、未删除、无围栏标记——真实实现那条 `UPDATE` 同样只有 owner 条件；
  * - `missionRequestId` 是 `(agentId, owner, missionId)` 的**纯函数**：含 `agentId`，避免跨 Agent
  *   撞键；同一输入恒等，且不读任何可变状态。
  */
@@ -68,6 +70,7 @@ interface MemoryRow {
   readonly createdAt: number
   updatedAt: number
   ready: boolean
+  pinned: boolean
   deletedAt: number | null
   removalState: RemovalState
 }
@@ -146,6 +149,7 @@ export class MemoryConversationPort implements ConversationPort {
       createdAt: now,
       updatedAt: now,
       ready: false,
+      pinned: false,
       deletedAt: null,
       removalState: '',
     }
@@ -196,7 +200,10 @@ export class MemoryConversationPort implements ConversationPort {
       .filter(row => query.from === undefined || row.updatedAt >= query.from)
       .filter(row => query.to === undefined || row.updatedAt < query.to)
       .filter(row => query.state === '' || stateOf(row) === query.state)
-      .sort((left, right) => right.updatedAt - left.updatedAt || (left.id < right.id ? -1 : 1))
+      // 排序必须与真实实现同序（`ORDER BY pinned DESC, updated_at DESC, id`）：反了的话
+      // 置顶在页面上的效果就差一半，而两个实现不会同时被测到。
+      .sort((left, right) => (right.pinned ? 1 : 0) - (left.pinned ? 1 : 0)
+        || right.updatedAt - left.updatedAt || (left.id < right.id ? -1 : 1))
     const page = visible.slice(query.offset, query.offset + query.limit)
     const items: ManagedConversationShape[] = page.map(row => {
       const state = stateOf(row)
@@ -206,6 +213,10 @@ export class MemoryConversationPort implements ConversationPort {
         updatedAt: row.updatedAt,
         state,
         canRemove: state !== 'busy' && state !== 'pending',
+        // 这两个字段只给业务页面用（kit 侧栏忽略），这里填上是为了与真实实现的 `list` 对等：
+        // 替身少给字段会让"页面拿得到"这件事在单测里永远测不出来。
+        pinned: row.pinned,
+        titleSource: row.titleSource,
         ...(state === 'busy' ? { blockedReason: BUSY_REASON }
           : state === 'pending' ? { blockedReason: PENDING_REASON } : {}),
       }
@@ -275,6 +286,18 @@ export class MemoryConversationPort implements ConversationPort {
   }
 
   /**
+   * 置顶标记：只改排序用的标记，**不**改变内容与围栏状态。
+   *
+   * 守卫只有"存在 + 归属"（`ownedRow`），与真实实现那条只带 owner 条件的 `UPDATE` 一致：
+   * 这里多加一道 `ready` 检查就会让"未发布也能置顶"在替身里静默失败，而真实现是能写进去的。
+   */
+  async pin(owner: OwnerKey, conversationId: string, pinned: boolean): Promise<void> {
+    const row = this.ownedRow(owner, conversationId)
+    row.pinned = pinned
+    row.updatedAt = Date.now()
+  }
+
+  /**
    * 删除围栏读：**同步**。
    *
    * 未知、他人、别的 Agent 一律同一个 404（不泄露存在性）。`removed` 的行**照常返回**——
@@ -329,6 +352,7 @@ export class MemoryConversationPort implements ConversationPort {
       createdAt: updatedAt,
       updatedAt,
       ready: true,
+      pinned: false,
       deletedAt: updatedAt,
       removalState: '',
     }

@@ -381,8 +381,17 @@ describe('判据②：补交轮不撑破 turnTimeoutMs', () => {
       expect(result.text).toBe('第一轮正文')
       expect(result.conversationId).toBe(id)
       // 判据四：没调交活工具这件事如实标注（⑦ 的 `report-called: unverified`），不冒充通过。
+      // ⚠️ 断言必须**指名到 `absent`**：业务侧没有自检能力，`toSelfCheck` 只会报 `absent`。
+      // 原先写的是 `not.toBe('passed')`，它被上一行的 detail 断言完全蕴含——`unverifiable`、
+      // `failed` 甚至 `undefined` 都能过，等于这一条没有鉴别力（P3 收口评审 F2：把兜底那份
+      // `selfCheck` 硬编码成 `unverifiable` 都照样绿）。
       expect(result.selfCheck?.detail ?? '').toContain('没有调用交活工具')
-      expect(result.selfCheck?.status).not.toBe('passed')
+      expect(result.selfCheck?.status).toBe('absent')
+      // 判据五：这一轮的占用**真的放掉了**。补交轮之后 `releaseTurn` 已经是空函数，只有
+      // `lifecycle.finish()` 会清 `active`——少了它，同会话后续的 `run`/`reply` 一律 409
+      // 「正在回答上一条问题」，而 LRU 也永远驱逐不掉它（`reserveSlot` 只挑 `!active` 的会话）。
+      // 红队实测过这个静默后果：走两轮的交付 `isBusy=true`，单轮的 `false`。
+      expect(hosted.lifecycle.isBusy(id)).toBe(false)
     } finally { await hosted.dispose() }
   })
 
@@ -393,6 +402,28 @@ describe('判据②：补交轮不撑破 turnTimeoutMs', () => {
       await accept(hosted, promise)
       await expect(promise).rejects.toThrow(/超时/)
       expect(hosted.followups().length).toBe(1)
+    } finally { await hosted.dispose() }
+  })
+
+  it('自修正轮超时 → 整条失败，且不把首轮结论当成功交出去', async () => {
+    // 规则：自修正轮开始前会清掉兜底（首轮结论**已被判定不达标**，不能再当"成功交付"）。
+    // 这条规则此前**零覆盖**——红队变异 M3（把清空那一行改成空操作）预期 0 条变红，实测确认。
+    //
+    // 路径要避开补交轮：模型**调了交活工具**，第 1 轮直接进 ⑧ 的自修正判定。
+    const hosted = host(definitionOf({
+      judge: async () => ({ ok: false, reason: '缺少发布链接' }),
+    }), { turnTimeoutMs: 200 })
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      install(hosted, id)
+      report(hosted, id, { status: 'completed', text: '第一版' })
+      hosted.complete(id, '第一轮正文')
+      await until(() => hosted.followups().length >= 2, '重做提示已注入')
+      // 自修正轮不给任何事件 ⇒ 超时。
+      await expect(promise).rejects.toThrow(/超时/)
+      // 整条失败，而不是把不达标的结论送出去，也不是无限重开自修正轮。
+      expect(hosted.followups().length).toBe(2)
     } finally { await hosted.dispose() }
   })
 })
@@ -482,6 +513,33 @@ describe('待答问题的持久化（重启后仍能恢复"在等什么"）', ()
         { status: 'completed', text: '做完了' }, 1)
       expect(done.status).toBe('completed')
       expect(questions.has(ownerKey(OWNER, id))).toBe(false)
+    } finally { await hosted.dispose() }
+  })
+
+  it('⚠️ 补交轮超时走兜底交付时，待答问题**也必须落库**', async () => {
+    // 兜底交付那条路径曾经整段跳过 `setPendingQuestion`：结果带着 `question` 交回，而载体里
+    // 什么都没有 ⇒ 协调方进了 `waiting_user`、重启后读不到"在等什么"，只会报 `waiting_expired`
+    // ——静默。两个独立评审都点到了这一条（红队 B2 / 收口评审 F3）。
+    //
+    // 走法：第 1 轮**不调交活工具**（于是进补交轮），业务投影显式产出 `waiting` + `question`；
+    // 补交轮不给任何事件 ⇒ 超时 ⇒ 用第 1 轮那份结论兜底交付。
+    const questions = new Map<string, string>()
+    const hosted = host(
+      definitionOf({ projectResult: async () => ({ status: 'waiting', text: '阶段成果', question: '采用哪一版？' }) }),
+      { turnTimeoutMs: 150 },
+      questions,
+    )
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      install(hosted, id)
+      hosted.complete(id, '第一轮正文')
+      await until(() => hosted.followups().length >= 2, '补交提示已注入')
+      const result = await promise
+      expect(result.status).toBe('waiting')
+      expect(result.question).toBeTruthy()
+      // **这条就是缺口本身的判据**：接线缺失时载体里什么都没有。
+      expect(questions.get(ownerKey(OWNER, id))).toBe(result.question)
     } finally { await hosted.dispose() }
   })
 })

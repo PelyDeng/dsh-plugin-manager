@@ -68,6 +68,20 @@ function toRecord(row: ConversationRow): ConversationRecordShape {
   }
 }
 
+/**
+ * `title_source` 列的取值收敛成端口的三态。
+ *
+ * 列本身有 CHECK 约束（`0001_init.sql:98`），但**端口这一侧的承诺不能依赖"库里一定是对的"**：
+ * 消费方只看 `!== 'automatic'`（`closedoff/web/app.js` 判要不要停止首句标题刷新），任何认不出的
+ * 值都会被当成"人工标题"而**永久停掉刷新**。所以认不出的一律收敛成 `automatic`（= 允许被覆盖）。
+ *
+ * 镜像侧（`index.ts` 的 `reconcileMirror`）用的是同一个函数：两处若各写一份，迟早漂移成
+ * "侧栏说 manual、镜像说 automatic"，而那种不一致只在重启后显现。
+ */
+export function toTitleSource(value: unknown): 'automatic' | 'generated' | 'manual' {
+  return value === 'manual' || value === 'generated' ? value : 'automatic'
+}
+
 export class PgConversations implements PgConversationPart {
   constructor(
     private readonly scoped: ScopedDatabase,
@@ -196,7 +210,7 @@ export class PgConversations implements PgConversationPart {
     // 状态过滤必须**下推到 SQL**：在 JS 里过滤会让每页条数少于 limit，`nextOffset` 跟着算错。
     values.push(query.state)
     const stateIndex = values.length
-    const visible = `SELECT id, title, pinned, updated_at,
+    const visible = `SELECT id, title, pinned, title_source AS "titleSource", updated_at,
         CASE
           WHEN removal_state = 'pending' THEN 'pending'
           WHEN removal_state = 'failed' THEN 'failed'
@@ -211,7 +225,10 @@ export class PgConversations implements PgConversationPart {
     )
     const total = Number(counted[0]?.total ?? 0)
     const rows = await this.scoped.query<ConversationRow>(
-      `SELECT id, title, updated_at AS "updatedAt", state FROM (${visible}) AS v
+      // `pinned` / `"titleSource"` 是**给业务页面看的**（kit 侧栏忽略，见 `ports.ts` 的
+      // `ManagedConversationShape`）：`pinned` 同时还是排序键，`title_source` 则决定业务页面
+      // 要不要停止首句标题刷新。两列本来就在 `visible` 里，这里只是把它们带出到投影上。
+      `SELECT id, title, pinned, "titleSource", updated_at AS "updatedAt", state FROM (${visible}) AS v
         WHERE ${stateFilter}
         ORDER BY pinned DESC, updated_at DESC, id
         LIMIT $${stateIndex + 1} OFFSET $${stateIndex + 2}`,
@@ -223,6 +240,8 @@ export class PgConversations implements PgConversationPart {
       updatedAt: Number(row.updatedAt),
       state: String(row.state),
       canRemove: row.state !== 'busy' && row.state !== 'pending',
+      pinned: row.pinned === true,
+      titleSource: toTitleSource(row.titleSource),
       ...(row.state === 'busy'
         ? { blockedReason: '会话正在运行或有未完成操作，请先处理或等待完成' }
         : row.state === 'pending'
@@ -251,6 +270,27 @@ export class PgConversations implements PgConversationPart {
           AND ready = TRUE AND deleted_at IS NULL AND removal_state = ''
           AND (title_source = 'automatic' OR $2 = 'manual')`,
       [title, source, conversationId, this.agentId, owner.namespace, owner.userId],
+    )
+  }
+
+  /**
+   * 置顶标记。
+   *
+   * 一条 `UPDATE` 完成，条件与参数顺序照抄 `publish` / `syncTitle`：`id` + `agent_id` +
+   * `owner_namespace` + `owner_id` 四列 AND。**归属与存在性全靠它**——不加预查询，也不在
+   * 调用方另判一次：两套判定必然漂移，而漂移表现为"点了没反应"。
+   *
+   * 与 `syncTitle` 不同，这里**没有** `ready` / `deleted_at` / `removal_state` 守卫：置顶是纯
+   * 展示状态（未发布的会话本来就不在侧栏里），拦一道只会多一个调用方要处理的失败分支。
+   *
+   * `updated_at` 一起推进是刻意的：列表排序是 `pinned DESC, updated_at DESC, id`，置顶要立刻
+   * 生效就得让这一行"变新"。
+   */
+  async pin(owner: OwnerKey, conversationId: string, pinned: boolean): Promise<void> {
+    await this.scoped.query(
+      `UPDATE dsh_conversations SET pinned = $1, updated_at = $2
+        WHERE id = $3 AND agent_id = $4 AND owner_namespace = $5 AND owner_id = $6`,
+      [pinned, Date.now(), conversationId, this.agentId, owner.namespace, owner.userId],
     )
   }
 }
@@ -559,6 +599,8 @@ export class PostgresAgentDatabase implements Omit<AgentDatabasePort, 'conversat
       missionRequestId: (owner, missionId) => scoped.missionRequestId(owner, missionId),
       list: (owner, query, scope) => scoped.list(owner, query, scope),
       syncTitle: (owner, id, title, source) => scoped.syncTitle(owner, id, title, source),
+      // 置顶是一条普通 `UPDATE`，事务内可以直接跑（不像 record / mark 是同步契约、managed 属于 adapter）。
+      pin: (owner, id, pinned) => scoped.pin(owner, id, pinned),
       managed: () => outOfScope('managed'),
       record: () => outOfScope('record'),
       mark: () => outOfScope('mark'),

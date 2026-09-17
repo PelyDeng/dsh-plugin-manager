@@ -29,8 +29,9 @@
  * ```
  *
  * **整个循环共用一个 `turnTimeoutMs` 预算**：超时定时器只在 `cleanup()` 里清，补交轮与
- * 自修正轮都不另开预算。超时发生时收尾循环被直接中断（见 `fail` 里的 `settling` 分支），
- * 不会挂在"等下一个 `turn/end`"上。
+ * 自修正轮都不另开预算。超时发生时把 `'timeout'` 交给收尾循环，由 `settleOnce` **无条件**
+ * 决定去路；循环还没起来时（首轮进行中或尚未开始）直接整条失败——那两种情形下都**不可能**
+ * 已有算好的结论，也没有循环能接住那个标记。
  *
  * **但超时不等于整条失败**：超时落在**补交轮**（运行时自己的补救动作）上、而首轮已经产出可用
  * 结论时，用那一份兜底交付（见 `handoffFallback`）——补交没跑完不该毁掉一次已经成功的交付。
@@ -97,6 +98,13 @@ export interface RuntimeParticipant extends AgentParticipant {
   handoffFor(conversationId: string): HandoffLedger
   /** 已受理过的请求身份数（诊断用；幂等缓存的大小）。 */
   readonly settledRequests: number
+  /**
+   * 停止这个入口：在飞轮次按 503 收尾，之后的 `run` / `reply` / `assertAccess` 一律拒绝。
+   *
+   * 与插件卸载走的是**同一条**清理路径（`ctx.effect` 的释放器就是它），所以先释放谁都不会漏；
+   * 幂等，重复调用不抛。装配工厂（`createAgentRuntime`）的 `dispose()` 调它。
+   */
+  dispose(): Promise<void>
 }
 
 /** 收尾循环里一次"再跑一轮"的结论。 */
@@ -122,6 +130,21 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
   const settledCacheMax = config.settledCacheMax ?? 256
   let disposed = false
   const pending = new Set<() => Promise<void>>()
+  /**
+   * 停止这个入口：置停止标志，并让**在飞轮次**按 503 收尾（`assertAccess` 随后一律拒绝）。
+   *
+   * 有两条路径调它，**必须是同一个实现**：插件卸载（`ctx.effect` 的释放器）与装配工厂的
+   * `dispose()`（`RuntimeParticipant.dispose`）——两条路径各写一份的话，"插件卸载时不收尾"
+   * 或"工厂释放时不收尾"这种偏差只会在某一条上出现。
+   *
+   * **幂等**：`disposed` 只是重复置位，而 `pending` 里的 `close` 在第一次收尾时就各自调了
+   * `cleanup()` 把自己摘掉，所以第二次进来是一个空集合。
+   */
+  const stop = async (): Promise<void> => {
+    disposed = true
+    await Promise.allSettled([...pending].map(close => close()))
+  }
+  ctx.effect(() => stop)
   /** 正在协作的业务会话 → 这一轮的增量出口。同一会话不会有两轮同时跑。 */
   const sinks = new Map<string, (delta: AssistantDelta) => void>()
   /**
@@ -138,6 +161,8 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
   let warnedHandoffMissing = false
   /** 中断轮次的告警也只发一次：同一进程里反复刷同一个崩溃信号没有意义。 */
   let warnedResumedTurn = false
+  /** 自检结论形状非法的告警同样只发一次：那是上游的 bug，按会话刷屏只会淹掉别的信号。 */
+  let warnedDamagedSelfCheck = false
   let lastLedger = createHandoffLedger()
   const ledgerOf = (conversationId: string): HandoffLedger => {
     const existing = ledgers.get(conversationId)
@@ -147,10 +172,6 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
     lastLedger = created
     return created
   }
-  ctx.effect(() => async () => {
-    disposed = true
-    await Promise.allSettled([...pending].map(close => close()))
-  })
   onAssistantDelta(ctx, (sessionId, delta) => { sinks.get(sessionId)?.(delta) })
 
   const assertAccess = (actor: Actor) => {
@@ -297,17 +318,26 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
           request.signal.removeEventListener('abort', cancel)
           pending.delete(close)
           releaseTurn()
+          // ⚠️ `releaseTurn()` 只对**首轮**有效：第 2 轮起它已被重置成空函数，而那一轮的
+          // `active` 是 `followup` 自己置上的——只有 `finish()` 会放掉它。少了这一句，凡是
+          // 走过第 2 轮的交付（补交轮 / 自修正轮 / 超时兜底）都会把会话永久留在"运行中"：
+          // 同会话的 `run` 与 `reply` 此后一律 409「正在回答上一条问题」，而 `reserveSlot`
+          // 只驱逐 `!active` 的会话 ⇒ 它同时永久占住一个 `maxActiveConversations` 槽位。
+          // **实测**：单轮交付后 `isBusy=false`，走两轮的交付 `isBusy=true` 且同会话下一轮 409。
+          lifecycle.finish(opened.id)
         }
         const fail = (error: unknown) => {
           if (finished || failed) return
           failed = true; failure = error
           if (admitted) lifecycle.abort(opened.id)
-          if (settling) {
-            // 收尾循环里出错（含**超时**、含补交轮本身失败）：必须在这里直接结束。
-            // 否则循环会挂在 `waitTurnEnd()` 上——那一轮的 `turn/end` 可能永远不会来。
-            cleanup(); reject(error); return
-          }
-          if (!started) { cleanup(); reject(error) }
+          // **一律在这里给出结论**，不再分 `settling` / `started` 两种情形：
+          //  · `settling` 时收尾循环可能挂在 `waitTurnEnd()` 上——那一轮的 `turn/end` 可能永远不来；
+          //  · 首轮已经开跑（`started && !settling`）时循环还没起来，而宿主**不保证**在 `abort`
+          //    之后补一个 `turn/end`：不补就是永久挂起（实测 900ms 仍 pending），补了则会把它
+          //    交付成"用户取消"，与文件头"首轮超时整条失败"的契约相反。
+          // 两种情形下都只有这里能收尾——原实现只在 `settling` 或 `!started` 时收尾，于是
+          // "首轮进行中失败"既不交付也不失败，**静默挂起**。
+          cleanup(); reject(error)
         }
         const cancel = () => {
           if (finished) return
@@ -356,6 +386,28 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
         }
 
         /**
+         * 待答问题的持久化（`waiting` 的载体）。**两条交付路径共用这一处**：正常交付与超时兜底。
+         *
+         * ⚠️ 这一处接线曾经缺失：接口（`TurnStorePort`）与实现（`storage/postgres.ts`）都有、
+         * 两侧的测试各自绿，但运行时**从不调用它**。后果是重启之后子任务**永远停在
+         * `waiting_user`**——不报错、静默不动，而协调侧的 `prepareReply` 只会报
+         * `waiting_expired`（"重启后仍能恢复在等什么"是协调侧的硬要求）。
+         * 非 `waiting` 的那一轮必须**清空**：否则上一轮的问题会被下一轮读回来。
+         *
+         * **抽成函数而不是留在调用处**：超时兜底那条路径曾经整段跳过它，于是"首轮投影是
+         * `waiting`、补交轮又超时"会交回一个带 `question` 的结果，而 PG 里什么都没有——
+         * 协调方进了 `waiting_user`，重启后却读不到"在等什么"。
+         */
+        const persistPendingQuestion = async (
+          value: { readonly status: ParticipantStatus; readonly question?: string | undefined },
+        ): Promise<void> => {
+          if (storage === undefined) return
+          await storage.db.turns.setPendingQuestion(
+            ownerOf(request.actor), opened.id, value.status === 'waiting' ? value.question : undefined,
+          )
+        }
+
+        /**
          * 跑完一轮的收尾判定：投影 → ⑦ → ⑧ → 交付或再来一轮。
          *
          * ⚠️ **"没调交活工具"不等于失败**：先补交一次；补交后仍未调，就按投影的兜底交付，
@@ -363,12 +415,20 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
          * 判定本来就来自客观投影，改成"没调工具就判失败"是语义降级。
          */
         const settleOnce = async (reason: string): Promise<SettleOutcome> => {
-          // 补交轮超时：首轮结论已经算好，只是运行时自己的补救动作没跑完 ⇒ 用那一份兜底交付。
-          // 这一段必须在 `status` 计算之前：`reason` 是我们自造的 `'timeout'`，按普通分支走会
-          // 落进"这一轮失败"，把一份已经成功的交付说成没干完。
-          if (reason === 'timeout' && handoffFallback !== undefined) {
+          // 超时：**无条件**在这里定去路，不看兜底在不在。
+          //  · 有兜底（补交轮已经开始、首轮结论已经算好）⇒ 用那一份兜底交付；
+          //  · 没有兜底 ⇒ 如实整条失败（抛出去由 `settleLoop` 收成 reject）。
+          // ⚠️ 不能写成"没有兜底就继续走下面的普通分支"：`'timeout'` 既不是 `'aborted'` 也不是
+          // `'completed'`，`status` 会被算成 `failed` —— 于是交付一份正文是"未能完成本回合"的
+          // 结果，**首轮已经跑完的结论一个字都不出现**，还把自修正轮又跑起来；而那个一次性定时器
+          // 已经烧掉了，自修正额度未尽时就**既不交付也不失败**（红队实测：预算 300ms 却跑了
+          // 1240ms；把额度调大后 2.6s 仍 pending）。
+          if (reason === 'timeout') {
             const fallback = handoffFallback
             handoffFallback = undefined
+            if (fallback === undefined) throw new Error('协作超时')
+            // 待答问题与正常交付**同源落库**，否则"重启后仍能恢复在等什么"在兜底路径上不成立。
+            await persistPendingQuestion(fallback)
             return { kind: 'deliver', result: fallback }
           }
           const aborted = cancelled || reason === 'aborted'
@@ -421,6 +481,17 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
             reported: taken.called,
           })
 
+          // 自检结论**形状非法**（`status` 拼错、缺字段、不是对象、是 `null`）是**上游的 bug**，
+          // 与"这个执行方没有自检能力"是两件事：⑦ 之外再发一次告警（只发一次，不按会话刷屏），
+          // 否则一个写错的枚举值只会留下一条 `absent`，谁也看不出上游写错了。
+          if (outcome.selfCheck === 'damaged' && !warnedDamagedSelfCheck) {
+            warnedDamagedSelfCheck = true
+            console.warn(
+              `[agents-group/runtime] ${definition.id} 回报的自检结论形状非法（status 拼错、缺字段、`
+              + '不是对象或为 null）：已如实按"未核验"处理，不猜成通过。请检查执行方回报 selfCheck 的地方。',
+            )
+          }
+
           // —— 补交轮：这一轮正常跑完、但模型**能**交活却没交 ——
           // 只补一次；取消与失败没有可补的结论，不补；**没接线（工具没注册）也不补** ——
           // 那时模型手里没有那个工具，补交只会让它把同一件事再答一遍，白花一轮预算。
@@ -463,15 +534,8 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
             : toSelfCheck(outcome)
 
           // —— 待答问题的持久化（`waiting` 的载体）——
-          // ⚠️ 这一处接线曾经缺失：接口（`TurnStorePort`）与实现（`storage/postgres.ts`）都有、
-          // 两侧的测试各自绿，但运行时**从不调用它**。后果是重启之后子任务**永远停在
-          // `waiting_user`**——不报错、静默不动，而协调侧的 `prepareReply` 只会报
-          // `waiting_expired`（"重启后仍能恢复在等什么"是协调侧的硬要求）。
-          // 非 `waiting` 的那一轮必须**清空**：否则上一轮的问题会被下一轮读回来。
-          if (storage !== undefined) {
-            const question = projected.status === 'waiting' ? projected.question : undefined
-            await storage.db.turns.setPendingQuestion(ownerOf(request.actor), opened.id, question)
-          }
+          // 落库口径与"为什么抽成函数"写在 `persistPendingQuestion` 上，这里只把这一轮的投影交给它。
+          await persistPendingQuestion(projected)
 
           return { kind: 'deliver', result: resultOf(selfCheck) }
         }
@@ -578,15 +642,24 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
         recheck.unref()
         // 整个收尾循环共用这一个预算：补交轮与自修正轮都不另开定时器。
         timeout = setTimeout(() => {
-          // 首轮已经产出可用结论、只是运行时自己的补交补救没跑完 ⇒ **不整条失败**：唤醒收尾
-          // 循环，让它按兜底交付走完（见 `settleOnce` 的 `'timeout'` 分支）。先入队再 abort：
-          // 补交轮可能正在跑，不打断它就还会继续产生副作用，但 `'timeout'` 必须排在它的
-          // `turn/end` 前面——否则循环拿到的是 `'aborted'`，那份结论又会被当成"这一轮失败"。
-          if (handoffFallback !== undefined) {
+          if (settling) {
+            // 收尾循环已经在跑 ⇒ 把 `'timeout'` 交给它，由 `settleOnce` **无条件**定去路
+            // （有兜底就兜底交付，没有就整条失败）。**不在这里看"此刻有没有兜底"**：
+            // 循环可能正挂在 `await project` / `await judge` 这类业务钩子上，标记只能先压在
+            // 队列里、等下一轮才被取到；而下一轮也许已被判定为要自修正（兜底同时被清掉），
+            // 标记就会以"普通 reason"的身份参与状态判定，交出一份**首轮正文一个字都没有**的
+            // "这一轮失败"（红队实测 1240ms / 预算 300ms），自修正额度未尽时还会因为一次性
+            // 定时器已烧掉而**既不交付也不失败**（实测 2.6s 仍 pending）。
+            //
+            // 先入队再 `abort`：补交轮可能正在跑，不打断它就还会继续产生副作用；而 `'timeout'`
+            // 必须排在它的 `turn/end` 之前——否则循环拿到的是 `'aborted'`，那份结论又会被当成
+            // "用户取消"。
             pushTurnEnd('timeout')
             if (admitted) lifecycle.abort(opened.id)
             return
           }
+          // 循环还没起来（首轮进行中或尚未开始）：此刻**不可能**已有算好的结论可兜底，也没有
+          // 循环能接住标记 ⇒ 直接在这里整条失败，而不是把标记放进队列等一个可能永不推进的循环。
           fail(new Error('协作超时'))
         }, config.turnTimeoutMs)
         timeout.unref()
@@ -669,6 +742,7 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
     get handoff() { return lastLedger },
     handoffFor: conversationId => ledgerOf(conversationId),
     get settledRequests() { return settledTurns.size },
+    dispose: stop,
   }
 }
 

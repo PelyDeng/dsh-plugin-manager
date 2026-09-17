@@ -23,6 +23,7 @@
  * （blog 判候选稿要 `await storage.get()`，组装又要用同一批候选取长度预算），拆开会让业务在
  * 四处重复查询同一份数据。
  */
+import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type Schema from '@deepseek-ai/schemastery'
 import type { ToolDescriptor, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
@@ -35,10 +36,29 @@ import type { AgentStoragePort } from './storage/ports.ts'
 
 /** 业务注册工具时拿到的上下文。 */
 export interface AgentToolContext {
-  /** 业务自己的存储门面；`createParticipant` 没有注入 storage 时为 `undefined`。 */
+  /**
+   * 业务自己的存储门面。
+   *
+   * 装配侧（`createAgentRuntime`）总是带着存储调用本钩子；`undefined` 只为"装配侧没有存储"
+   * 这一种情况保留，业务要自己处理它。
+   */
   readonly storage: AgentStoragePort | undefined
-  /** 当前会话 id；工具在会话作用域外被调用时为 `undefined`。 */
+  /**
+   * 会话 id。
+   *
+   * ⚠️ 注册发生在**装配期**、那时还没有任何会话，所以这里**恒为 `undefined`**。它留在签名里
+   * 是因为同一个钩子在"每会话"语境下也说得通（工具执行时能拿到会话）；**不要**据此把注册
+   * 挪到会话路径上去——见 {@link AgentDefinition.tools}。
+   */
   readonly conversationId: string | undefined
+  /**
+   * 注册工具用的 cordis Context：装配侧传进来的那一份，也就是**这个 Agent 自己的作用域**。
+   *
+   * ⚠️ 它**不是**某个会话的 agent 作用域——那个要等 `ctx.agents.create()` 才存在，而注册在
+   * 装配期只发生一次。所以 `ctx.effect(...)` 登记的东西跟着**装配**释放，不跟着某个会话释放；
+   * 会话级的东西（人设段、工具限制）由运行时在 `setup()` 里做。
+   */
+  readonly ctx: Context
 }
 
 /** 会话历史里的一条消息。 */
@@ -146,8 +166,17 @@ export interface AgentDefinition {
   /**
    * 业务工具。
    *
-   * 运行时在 **agent 作用域**内注册与限制：宿主不允许在插件上下文里做工具限制，
-   * 落到插件级会波及所有 Agent 并被直接拒绝。
+   * **注册**：由**装配侧**做——`createAgentRuntime()` 在装配期调用本钩子**一次**
+   * （`{ ctx, storage, conversationId: undefined }`），把返回的描述符交回来，装配代码再用
+   * `registerPlugin({ tools })` 登记。它发生在**插件级**、整条进程只发生一次。
+   *
+   * **限制**：由**运行时**在每个会话的 **agent 作用域**内做——
+   * `ConversationLifecycle.setup()` 里的 `agentCtx.tools.restrict({ allow: allowedTools() })`。
+   * 宿主不允许在插件上下文里做工具限制，落到插件级会波及所有 Agent 并被直接拒绝。
+   *
+   * ⚠️ 两件事都不在 `createParticipant()`（每会话路径）里。工具注册属于装配期，放进每会话
+   * 路径会重复注册、改变工具的生命周期语义；本钩子此前**没有任何调用点**，工具因此不会被注册，
+   * 而且不报错——唯一调用点就是 `createAgentRuntime()`。
    */
   readonly tools: (ctx: AgentToolContext) => readonly ToolDescriptor[]
 
@@ -230,8 +259,14 @@ export interface AgentDefinition {
   /** 业务表迁移（PG，按版本顺序）。机制表由运行时管理。 */
   readonly businessMigrations?: readonly string[]
 
-  /** 业务配置 schema；运行时用它校验 `mount()` 收到的原始配置。 */
-  readonly config: Schema<unknown>
+  /**
+   * 业务配置 schema；运行时用它校验 `mount()` 收到的原始配置。
+   *
+   * 类型参数刻意留空（= `Schema<any, any>`）而不是写 `Schema<unknown>`：`Schemastery<S, T>`
+   * 的调用签名在 `S` 上是**逆变**的，写成 `Schema<unknown>` 会让**任何**真实 schema
+   * （`Schema<Config>`、`Schema<BlogConfig>`）都不可赋值——那等于这个字段只收得下手造的值。
+   */
+  readonly config: Schema
 
   /**
    * ⑥ 观察的声明位，缺省 `'signal'`（本期只给信号：进度、耗时、重试次数）。

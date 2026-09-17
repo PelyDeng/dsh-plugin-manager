@@ -371,4 +371,12 @@ describe('判据：轮次幂等真的接在运行时上（`dsh_turns`）', () =>
       expect(h.calls.claimed.map(entry => entry.requestId)).toEqual(['run:a', 'run:b', 'run:c'])
     } finally { await h.dispose() }
   })
+
+  // ⚠️ **已知无覆盖（如实记录，不是遗漏）**：`participant.ts` 的 `ledger.available` 告警
+  // （装配侧漏调 `install()` 时只警告一次）目前**没有断言**。尝试补 C8 时用例在夹具的
+  // `accept`/`complete` 时序上挂住（表现为 vitest 的 testTimeout），排查成本超过这条观测的
+  // 价值，故按本仓规矩"做不到就如实标注未验证"，不留半成品、也不写成已覆盖。
+  // 判据：把 `participant.ts` 里那段 `console.warn` 删掉，**不会有任何用例变红**。
+  // 要补的话，落点应在 `runtime-turn-claim.test.ts`，用 `vi.spyOn(console, 'warn')` +
+  // 一个**不 install** 的 host 跑一轮。
 })

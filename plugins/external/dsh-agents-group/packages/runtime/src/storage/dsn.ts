@@ -1,0 +1,63 @@
+/**
+ * Agent 业务库 PostgreSQL 连接配置的来源解析。
+ *
+ * 机制只实现一次：这是运行时对「DSN 从哪来」的唯一实现，closedoff（P4）与 blog（P7）共用，
+ * 各自只传自己的 `defaultConfigPath`。
+ *
+ * 优先级两路：
+ *
+ * 1. 环境变量 `AGENTS_GROUP_PG_DSN`（开发/测试）：trim 后非空即用，`origin: 'env'`；
+ * 2. 私有配置文件：环境变量 `AGENTS_GROUP_PG_CONFIG` 指定路径，未指定时用调用方传入的缺省
+ *    路径（由调用方用 `dshHomePath` 解析，群组侧是
+ *    `<DSH 主目录>/plugins/agents-group/storage.json`），内容形如 `{"dsn":"postgres://…"}`，
+ *    `origin: 'file'`。
+ *
+ * 两处都没有返回 `undefined`，由装载方按「该 Agent 未就绪」处理并说明配置方法——**绝不静默
+ * 回退 SQLite**。文件存在但读不出合法 DSN 属于配置错误：如实抛出（消息里带路径与原因），
+ * 不当作「没有配置」。DSN 是凭据，只走环境变量与该私有文件：不进 cordis 配置、不进 Git，
+ * 也不进日志。
+ *
+ * 三个入参都是注入的（`env` / `defaultConfigPath` / `readTextFile`），这是刻意的可测试性
+ * 设计：本文件**不** `import node:fs`，读文件由调用方给，于是优先级与全部错误分支都能在纯
+ * 内存里钉住，不必碰真实文件系统或真实 PG。
+ */
+
+/** 解析结果：DSN 与它来自哪一路；与函数签名里的内联返回类型是同一个类型。 */
+export interface ResolvedDsn {
+  readonly dsn: string
+  readonly origin: 'env' | 'file'
+}
+
+/** 只看这两个变量的环境（`process.env` 天然满足）。 */
+export interface DsnEnv {
+  readonly AGENTS_GROUP_PG_DSN?: string | undefined
+  readonly AGENTS_GROUP_PG_CONFIG?: string | undefined
+}
+
+export async function resolveStorageDsn(
+  env: DsnEnv,
+  defaultConfigPath: string,
+  readTextFile: (path: string) => Promise<string>,
+): Promise<{ readonly dsn: string; readonly origin: 'env' | 'file' } | undefined> {
+  const fromEnv = env.AGENTS_GROUP_PG_DSN?.trim() ?? ''
+  if (fromEnv !== '') return { dsn: fromEnv, origin: 'env' }
+
+  const path = env.AGENTS_GROUP_PG_CONFIG?.trim() || defaultConfigPath
+  let text: string
+  try {
+    text = await readTextFile(path)
+  } catch {
+    return undefined // 文件不存在：视为没有配置，由调用方按「未就绪」说明。
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch (error) {
+    throw new Error(`PostgreSQL 配置文件不是有效 JSON（${path}）：${error instanceof Error ? error.message : String(error)}`)
+  }
+  const dsn = typeof parsed === 'object' && parsed !== null && typeof (parsed as { dsn?: unknown }).dsn === 'string'
+    ? (parsed as { dsn: string }).dsn.trim()
+    : ''
+  if (dsn === '') throw new Error(`PostgreSQL 配置文件（${path}）缺少非空的 "dsn" 字段`)
+  return { dsn, origin: 'file' }
+}

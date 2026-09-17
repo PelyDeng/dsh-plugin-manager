@@ -616,6 +616,23 @@ export class ConversationLifecycle {
     return conversation.handle.agent.session.snapshotEvents()
   }
 
+  /**
+   * 释放**一个**会话的句柄（侧栏移除会话时由装配侧调用）。
+   *
+   * 与 {@link dispose} 的差别只有一个：只动这一个会话，不停本实例、也不碰其他会话。
+   *
+   * **必须真的把句柄销毁**，不能只让围栏标记落库：句柄还活着的话这条会话仍然占着活跃表、
+   * 也可能还在跑，而围栏已经宣称它被移除了——那是"删了却还在"的幽灵会话。
+   *
+   * 已知会话不存在时**静默返回**：移除路径可能对同一个 id 重试，第二次没有句柄可释放不是错误。
+   */
+  async release(conversationId: string): Promise<void> {
+    const conversation = this.conversations.get(conversationId)
+    if (conversation === undefined) return
+    this.conversations.delete(conversationId)
+    await Promise.allSettled([conversation.handle.dispose()])
+  }
+
   /** 停止本实例持有的全部 Agent。它不关存储——存储由插件在更外层释放。 */
   async dispose(): Promise<void> {
     this.disposed = true

@@ -35,6 +35,7 @@ import { Client } from 'pg'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { AccessError } from '@dsh-plugin-manager/plugin-kit'
 import { createAgentDatabase, type AgentDatabaseFacade } from '../packages/runtime/src/storage/index.ts'
+import type { ConversationPageShape } from '../packages/runtime/src/storage/ports.ts'
 import { applySchema } from '../../../../private-deploy/db/create.mjs'
 
 const DSN = process.env.DSH_RUNTIME_TEST_PG_DSN ?? ''
@@ -83,6 +84,12 @@ async function removalStateOf(id: string): Promise<string> {
 async function titleSourceOf(id: string): Promise<string> {
   const rows = await admin.query<{ title_source: string }>('SELECT title_source FROM dsh_conversations WHERE id = $1', [id])
   return rows.rows[0]?.title_source ?? '<missing>'
+}
+
+/** 同上：`pinned` 也不在 `ConversationRecordShape` 里，往返只能直接查库。 */
+async function pinnedOf(id: string): Promise<boolean | string> {
+  const rows = await admin.query<{ pinned: boolean }>('SELECT pinned FROM dsh_conversations WHERE id = $1', [id])
+  return rows.rows[0]?.pinned ?? '<missing>'
 }
 
 describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
@@ -232,6 +239,70 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
       await db.conversations.publish(owner, id)
       const after = await db.conversations.list(owner, { offset: 0, limit: 10, q: '', state: '' }, { busy: [], archived: [] })
       expect(after.items.map(item => item.id)).toEqual([id])
+    } finally { await db.close() }
+  })
+
+  // -------------------------------------------------------------------
+  // 一·补、置顶与列表暴露的展示字段（业务页面依赖，kit 侧栏不用）
+  // -------------------------------------------------------------------
+
+  it('pin 往返：置位 / 复位都落 PG，换个实例（等价重启）仍读得回', async () => {
+    const id = conversationId()
+    const first = await newFacade()
+    try {
+      await first.db.conversations.create(owner, id, '')
+      await first.db.conversations.publish(owner, id)
+      expect(await pinnedOf(id)).toBe(false)
+      await first.db.conversations.pin(owner, id, true)
+      expect(await pinnedOf(id)).toBe(true)
+    } finally { await first.db.close() }
+
+    // 换一个实例（等价于重启）：置顶不是进程内状态，新实例的 `list` 也必须带着它。
+    const second = reopen(first.path)
+    try {
+      const page = await second.conversations.list(owner, { offset: 0, limit: 10, q: '', state: '' }, { busy: [], archived: [] })
+      expect(page.items.find(item => item.id === id)?.pinned).toBe(true)
+      await second.conversations.pin(owner, id, false)
+      expect(await pinnedOf(id)).toBe(false)
+    } finally { await second.close() }
+  })
+
+  it('pin 按 owner 隔离：别人的 owner 调它一行都不动', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.conversations.publish(owner, id)
+      // 两个 owner 的 namespace 相同、只有 `userId` 不同：能挡住这次写入的只有 `owner_id` 那一列
+      // （删掉它，本条即红——这正是变异验证要确认的事）。方法不抛错，所以只能查库看有没有被改动。
+      await db.conversations.pin(otherOwner, id, true)
+      expect(await pinnedOf(id)).toBe(false)
+
+      // 反向对照：本人调必须真的置上。少了这一条，上面那个"没生效"可能只是整条路径没通（天然假绿）。
+      await db.conversations.pin(owner, id, true)
+      expect(await pinnedOf(id)).toBe(true)
+    } finally { await db.close() }
+  })
+
+  it('list 带出 pinned 与 titleSource（业务页面的置顶徽标与标题刷新靠这两个字段）', async () => {
+    const { db } = await newFacade()
+    const page = (): Promise<ConversationPageShape> =>
+      db.conversations.list(owner, { offset: 0, limit: 10, q: '', state: '' }, { busy: [], archived: [] })
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')     // 空标题 ⇒ title_source = 'automatic'
+      await db.conversations.publish(owner, id)
+      // 未置顶时必须是 `false`（不是 `undefined`）：页面拿 `undefined` 会当成"不是置顶"，
+      // 于是这条断言在"字段根本没带出来"和"带了但恒假"两种缺陷下各红一次。
+      expect((await page()).items.find(item => item.id === id)).toMatchObject({ pinned: false, titleSource: 'automatic' })
+      await db.conversations.pin(owner, id, true)
+      expect((await page()).items.find(item => item.id === id)).toMatchObject({ pinned: true, titleSource: 'automatic' })
+
+      // 反向对照：把 `titleSource` 写成常量 `'automatic'` 也能让上面两条通过，所以再来一条 manual 的会话。
+      const manualId = conversationId()
+      await db.conversations.create(owner, manualId, '', { title: '人工标题' })
+      await db.conversations.publish(owner, manualId)
+      expect((await page()).items.find(item => item.id === manualId)).toMatchObject({ pinned: false, titleSource: 'manual' })
     } finally { await db.close() }
   })
 

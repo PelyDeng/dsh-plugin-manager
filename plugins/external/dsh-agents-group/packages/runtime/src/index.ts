@@ -18,6 +18,7 @@ export * from './conversation.ts'
 export * from './participant.ts'
 export * from './selfcheck.ts'
 export * from './handoff.ts'
+export * from './runtime.ts'
 
 export { PARTICIPANT_PROTOCOL } from './contract.ts'
 export type {

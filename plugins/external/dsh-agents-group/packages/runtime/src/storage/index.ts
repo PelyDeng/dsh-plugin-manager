@@ -7,7 +7,7 @@
  * | 能力 | 落在哪 | 原因 |
  * | --- | --- | --- |
  * | `record` / `mark` | **本地 SQLite**（`local.ts`） | kit 契约要求**同步**，PG 做不到 |
- * | `conversationOf` / `create` / `publish` / `list` / `syncTitle` | PG | 权威数据在 PG，多实例共享 |
+ * | `conversationOf` / `create` / `publish` / `list` / `syncTitle` / `pin` | PG | 权威数据在 PG，多实例共享 |
  * | `managed` | adapter（`adapter.ts`） | 它要用 kit 的 `conversationRemover`，那是全仓唯一接触点 |
  * | `busy(id)` | 进程内镜像（注入） | **同步布尔**：做成 PG 查询会返回 `Promise`（恒真）⇒ 移除永远 409 |
  *
@@ -30,7 +30,7 @@
 import { AccessError } from '@dsh-plugin-manager/plugin-kit'
 import type { TitleSink } from '../conversation.ts'
 import { LocalFenceStore, type MirrorRow, type OutboxDepth } from './local.ts'
-import { PostgresAgentDatabase, RUNTIME_SCHEMA_VERSION } from './postgres.ts'
+import { PostgresAgentDatabase, RUNTIME_SCHEMA_VERSION, toTitleSource } from './postgres.ts'
 import type {
   AgentDatabasePort,
   ConversationPageShape,
@@ -229,6 +229,19 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
         }
       },
 
+      /**
+       * 置顶：与 `syncTitle` 同一条路子——**先写 PG，PG 成功后再更新本地镜像**。
+       *
+       * 镜像里只有"本实例见过的行"（`create` / `publish` / 启动收敛写进去的），所以先问
+       * `mirrorGet`；没有这一行就不必凭空造一行——`record` 的回答靠镜像，而造一行等于伪造
+       * 一次"我见过这个会话"。归属与存在性由 PG 那条 `UPDATE` 的 owner 条件保证。
+       */
+      pin: async (owner, conversationId, pinned) => {
+        await pg.conversations.pin(owner, conversationId, pinned)
+        const row = local.mirrorGet(conversationId)
+        if (row !== undefined) local.mirrorUpsert({ ...row, pinned, updatedAt: Date.now() })
+      },
+
       // —— 三个同步面（kit 契约的硬要求）——
       record: (actor, conversationId) => local.record(actor, conversationId),
       mark: (actor, conversationId, state) => { local.mark(actor, conversationId, state) },
@@ -327,7 +340,7 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
         ownerNamespace: row.ownerNamespace,
         ownerId: row.ownerId,
         title: row.title,
-        titleSource: (row.titleSource === 'manual' || row.titleSource === 'generated' ? row.titleSource : 'automatic'),
+        titleSource: toTitleSource(row.titleSource),
         ready: row.ready === true,
         pinned: row.pinned === true,
         removalState: row.removalState,

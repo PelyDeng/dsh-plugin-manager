@@ -64,11 +64,32 @@ describe('规则 2：自检必须真的通过（四态，不是"非 unverifiable
     expect(runSelfCheck(input()).failed).toBe(false)
   })
 
-  it('状态名拼错 / 形状不对 → 归到 absent，按未核验处理（不猜、不降级成通过）', () => {
-    expect(selfCheckState({ status: 'PASSED' } as never)).toBe('absent')
-    expect(selfCheckState({} as never)).toBe('absent')
+  it('缺省 → absent（执行方没有自检能力）', () => {
     expect(selfCheckState(undefined)).toBe('absent')
+  })
+
+  it('⚠️ 状态名拼错 / 缺字段 / `null` / 非对象 → **damaged**（上游的 bug），不混进 absent', () => {
+    // 混进 `absent` 会让"写错一个枚举值"变成一条关于**这个执行方能力**的断言，而且完全静默：
+    // 协调方看到 `absent` 只会想"它没实现自检"，不会想到"它回报的形状是坏的"。
+    // `null` 尤其必须在这里挡住：`typeof null === 'object'`，直接读 `.status` 会抛 `TypeError`，
+    // 整轮以一条看不懂的异常 reject（红队实测过）。
+    expect(selfCheckState({ status: 'PASSED' } as never)).toBe('damaged')
+    expect(selfCheckState({} as never)).toBe('damaged')
+    expect(selfCheckState(null as never)).toBe('damaged')
+    expect(selfCheckState('absent' as never)).toBe('damaged')
+    // 损坏同样按"未核验"处理：不猜、不降级成通过、也不计入不达标。
     expect(verdictOf(input({ selfCheck: { status: 'PASSED' } as never }), 'self-check')).toBe('unverified')
+    expect(runSelfCheck(input({ selfCheck: null as never })).failed).toBe(false)
+  })
+
+  it('损坏与"缺省"在 detail 上分得开（不靠 status 猜）', () => {
+    const damaged = runSelfCheck(input({ selfCheck: {} as never })).findings
+      .find(item => item.rule === 'self-check')?.detail ?? ''
+    const absent = runSelfCheck(input()).findings
+      .find(item => item.rule === 'self-check')?.detail ?? ''
+    expect(damaged).toContain('形状非法')
+    expect(absent).toContain('没有回报自检结论')
+    expect(damaged).not.toBe(absent)
   })
 })
 
@@ -140,6 +161,14 @@ describe('汇总：回报给协调方的 selfCheck', () => {
   it('显式 `absent` 与整个字段缺省归到同一态（协调方不必分两种写法）', () => {
     expect(selfCheckState({ status: 'absent' })).toBe('absent')
     expect(toSelfCheck(runSelfCheck(input({ selfCheck: { status: 'absent' } }))).status).toBe('absent')
+  })
+
+  it('损坏（damaged）对外也报 absent，但 detail 说的是"形状非法"', () => {
+    // 协调方视角：`absent` 与 `damaged` 都是"没有可用的自检结论"；区别留在 `detail` 与
+    // `SelfCheckOutcome.selfCheck` 里（能力缺省 vs 上游 bug），运行时另外对 damaged 发一次告警。
+    const summary = toSelfCheck(runSelfCheck(input({ selfCheck: null as never })))
+    expect(summary.status).toBe('absent')
+    expect(summary.detail ?? '').toContain('形状非法')
   })
 
   it('`unverifiable` 优先于 `absent` 的只是"这一轮的性质"：有自检能力时照实报 unverifiable', () => {
