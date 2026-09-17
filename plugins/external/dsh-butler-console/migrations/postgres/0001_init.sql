@@ -19,7 +19,13 @@
 --   - v8 加 input_refs / member_return 时旧值一律留空 '' = 未知（unknown），不反推、不补造；
 --   - v9 加 acceptance（验收口径）时旧值一律留空 '' = 没有声明口径（**不是**「默认通过」）：
 --     协调方据此不施加「口径提到的产出物必须交回」那条校验，与加这一列之前的行为一致；
---   - 子任务 artifacts / depends_on 留空 = 空数组；tasks.finished_at 允许 NULL。
+--   - 子任务 artifacts / depends_on 留空 = 空数组；tasks.finished_at 允许 NULL；
+--   - v10 加裁决四列（verdict / verdict_reason / verdict_evidence / observation）时旧值一律留空：
+--     verdict 留空 = **还没裁决过**（不是「默认通过」），与加这四列之前的行为一致；
+--     ⚠️ 新库（private-deploy/db/0001_init.sql）的 verdict_evidence / observation 是 JSONB
+--     （默认 [] / {}），本文件的对应列是 TEXT（默认 ''）—— 空值形态与返回类型都不同，
+--     切库时必须按 pg 驱动对 JSONB 的返回形状（数组/对象，不是字符串）调整解析，
+--     否则会与 artifacts / member_return 一样走「损坏即拒」。
 --
 -- 版本号与建表在同一批语句内完成：schema_version 用 id=0 单行约束（CHECK 保证只有一行），
 -- 版本号最后写、与结构同事务的性质由迁移工具保持。
@@ -78,6 +84,10 @@ CREATE TABLE subtasks (
   requires_external_action SMALLINT NOT NULL DEFAULT 0,
   input_refs TEXT NOT NULL DEFAULT '',
   member_return TEXT NOT NULL DEFAULT '',
+  verdict TEXT NOT NULL DEFAULT '',
+  verdict_reason TEXT NOT NULL DEFAULT '',
+  verdict_evidence TEXT NOT NULL DEFAULT '',
+  observation TEXT NOT NULL DEFAULT '',
   started_at BIGINT,
   finished_at BIGINT,
   PRIMARY KEY (task_id, id)
@@ -128,4 +138,4 @@ CREATE TABLE schema_version (
 );
 
 INSERT INTO schema_version(id, version, applied_at)
-VALUES (0, 9, (CAST(EXTRACT(EPOCH FROM now()) AS BIGINT) * 1000));
+VALUES (0, 10, (CAST(EXTRACT(EPOCH FROM now()) AS BIGINT) * 1000));

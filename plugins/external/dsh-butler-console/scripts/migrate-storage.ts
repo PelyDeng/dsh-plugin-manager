@@ -33,9 +33,9 @@ import { pathToFileURL } from 'node:url'
 import { Pool, type PoolClient } from 'pg'
 
 /** 目标库结构版本。与 `migrations/postgres/0001_init.sql` 写入的版本行、`src/storage/postgres.ts` 的 STORAGE_SCHEMA_VERSION 保持一致。 */
-const TARGET_SCHEMA_VERSION = 9
+const TARGET_SCHEMA_VERSION = 10
 /** 可迁移的源库 `PRAGMA user_version` 上限；0 表示空库。 */
-const MAX_SOURCE_VERSION = 9
+const MAX_SOURCE_VERSION = 10
 /** 这四张表自 v1 就存在；user_version ≥ 1 的源库缺任何一张即视为来历不明。 */
 const BASE_TABLES: readonly string[] = ['conversations', 'tasks', 'subtasks', 'agent_aliases']
 
@@ -98,7 +98,8 @@ const TABLE_SPECS: readonly TableSpec[] = [
       text('reason'), text('state'),
       text('result'), text('error'), text('artifacts'), text('conversation_id'), text('logical_id'),
       text('supersedes'), text('depends_on'), int('requires_external_action'), text('input_refs'),
-      text('member_return'), int('started_at', true), int('finished_at', true),
+      text('member_return'), text('verdict'), text('verdict_reason'), text('verdict_evidence'),
+      text('observation'), int('started_at', true), int('finished_at', true),
     ],
   },
   {

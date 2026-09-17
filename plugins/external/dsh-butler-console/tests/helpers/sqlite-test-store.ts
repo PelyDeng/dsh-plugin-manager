@@ -44,7 +44,7 @@ import type {
  * 8：子任务增加 `input_refs`（派单材料快照）与 `member_return`（协作返回原文）。
  * 9：任务与子任务增加 `acceptance`（验收口径：交回什么才算完成）。
  */
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 10
 
 /**
  * 能从这些旧版本就地升上来。
@@ -52,7 +52,7 @@ const SCHEMA_VERSION = 9
  * 不在这张表里的版本（比当前新、或者来历不明）一律拒绝：拿错版本的结构去读写，比起不来
  * 严重得多。这条链只服务于等价性验收，生产升级走 migrations/postgres/。
  */
-const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8]
+const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
 /**
  * 牛马大总管工作台的 SQLite 索引。
@@ -124,6 +124,10 @@ export class TaskStore {
         requires_external_action INTEGER NOT NULL DEFAULT 0,
         input_refs TEXT NOT NULL DEFAULT '',
         member_return TEXT NOT NULL DEFAULT '',
+        verdict TEXT NOT NULL DEFAULT '',
+        verdict_reason TEXT NOT NULL DEFAULT '',
+        verdict_evidence TEXT NOT NULL DEFAULT '',
+        observation TEXT NOT NULL DEFAULT '',
         started_at INTEGER,
         finished_at INTEGER,
         PRIMARY KEY (task_id, id)
@@ -220,6 +224,11 @@ export class TaskStore {
         // 9：验收口径。旧库从来没有声明过口径，一律空串 = 没有口径（**不是**「默认通过」）：
         // 协调方据此不施加「口径提到的产出物必须交回」那条校验，与加这一列之前的行为一致。
         this.db.exec("ALTER TABLE tasks ADD COLUMN acceptance TEXT NOT NULL DEFAULT ''; ALTER TABLE subtasks ADD COLUMN acceptance TEXT NOT NULL DEFAULT '';")
+      }
+      if (from <= 9) {
+        // 10：裁决四列。旧库从来没有裁决过，verdict 一律空串 = **还没裁决过**（不是「默认通过」）：
+        // 没有裁决的任务照旧走终态判定，不因为「缺裁决」被判成不达标，与加这四列之前的行为一致。
+        this.db.exec("ALTER TABLE subtasks ADD COLUMN verdict TEXT NOT NULL DEFAULT ''; ALTER TABLE subtasks ADD COLUMN verdict_reason TEXT NOT NULL DEFAULT ''; ALTER TABLE subtasks ADD COLUMN verdict_evidence TEXT NOT NULL DEFAULT ''; ALTER TABLE subtasks ADD COLUMN observation TEXT NOT NULL DEFAULT '';")
       }
 
       this.db.exec('COMMIT')

@@ -40,7 +40,7 @@ import type {
 } from './types.ts'
 
 /** 本实现对应的库结构版本（与 `migrations/postgres/0001_init.sql` 写入的版本行一致）。 */
-export const STORAGE_SCHEMA_VERSION = 9
+export const STORAGE_SCHEMA_VERSION = 10
 /** init 版本校验使用的期望版本（与 {@link STORAGE_SCHEMA_VERSION} 同源，/ready 汇报同一数值）。 */
 const EXPECTED_SCHEMA_VERSION = STORAGE_SCHEMA_VERSION
 

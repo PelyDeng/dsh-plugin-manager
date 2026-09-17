@@ -85,12 +85,12 @@ function rawColumn(path: string, column: 'input_refs' | 'member_return'): string
   return row.value
 }
 
-describe('schema 9：当前结构', () => {
-  it('新库为 schema 9，口径列与快照列都存在', () => {
+describe('schema 10：当前结构', () => {
+  it('新库为 schema 10，口径列、快照列与裁决四列都存在', () => {
     const path = tempDb()
     const store = new TaskStore(path)
     const db = new DatabaseSync(path)
-    expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 9 })
+    expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 10 })
     const columns = (db.prepare('PRAGMA table_info(subtasks)').all() as unknown as { name: string }[]).map(row => row.name)
     expect(columns).toContain('input_refs')
     expect(columns).toContain('member_return')
