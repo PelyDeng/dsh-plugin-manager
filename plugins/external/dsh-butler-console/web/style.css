@@ -503,22 +503,6 @@ textarea:focus-visible,
   background: #fff; font-size: 13px;
 }
 
-.plan-note {
-  margin-top: 7px; padding: 10px 11px 9px;
-  max-width: 560px;
-  background: #fff8dc;
-  border: 2px solid var(--bt-stroke);
-  border-radius: var(--bt-wobble-sm);
-  transform: rotate(-0.4deg);
-  box-shadow: 1px 2px 0 #0000000d;
-  position: relative;
-}
-
-.plan-note__title { font-family: var(--bt-hand); font-size: 13.5px; font-weight: 700; margin-bottom: 4px; color: #8a6100; }
-.plan-note ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
-.plan-note li { font-size: 13px; }
-.plan-note__handle { font-family: var(--bt-mono); font-size: 11.5px; font-weight: 700; }
-
 .summary {
   padding: 11px 13px;
   border-left: 4px solid var(--bt-ok);
@@ -770,11 +754,6 @@ textarea:focus-visible,
 .metric__value { display: block; font-family: var(--bt-hand); font-size: 18px; font-weight: 700; line-height: 1.2; }
 .metric__label { display: block; font-size: 10.5px; color: var(--bt-ink-faint); }
 
-.status-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; font-size: 12.5px; }
-.status-row + .status-row { border-top: 1px dashed var(--bt-line); }
-.status-row__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-row__state { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--bt-ink-soft); white-space: nowrap; }
-
 .failure-row {
   display: block; width: 100%; padding: 7px 9px;
   text-align: left;
@@ -963,54 +942,118 @@ body[data-settings="open"] .settings {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
 
-/* ---------- 本次已调度成员面板 ---------- */
+/* ---------- 调度卡 ---------- */
 /*
- * 群里只留大总管的结论和每位成员的一行状态；成员在查什么、交回了什么，都收进这块面板，
- * 用 tab 切换着看。默认折叠：不关心过程时看不到它，关心时点开就是完整流式输出与结论。
+ * 本次派活**唯一**的一张卡：状态条 + 成员格子（一行最多三个）+ 选中成员的结果区。
+ * 它替掉了原先三处重复（「已分派」计划贴纸、群里每位成员的一行状态、折叠面板），
+ * 所以样式只有这一份。纸面风格沿用本页既有的手写体与虚线描边。
  */
-.dispatch {
+.dcard {
   margin-top: 7px; max-width: 620px;
   background: var(--bt-paper);
   border: 2px dashed var(--bt-stroke);
   border-radius: var(--bt-wobble-sm);
+  /* 交互反馈统一在这里收口：位移/高度动画尊重"减少动态效果"偏好（见文件末尾）。 */
+  transition: border-color 160ms ease-out;
 }
-.dispatch__summary {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+.dcard__bar {
+  display: flex; align-items: center; gap: 8px;
   padding: 6px 10px; cursor: pointer; list-style: none;
 }
-.dispatch__summary::-webkit-details-marker { display: none; }
-.dispatch__summary::before { content: '▸'; color: var(--bt-ink-faint); font-size: 11px; }
-.dispatch[open] > .dispatch__summary::before { content: '▾'; }
-.dispatch__title { font-family: var(--bt-hand); font-size: 12.5px; color: var(--bt-ink-soft); }
-.dispatch__tabs { display: flex; gap: 6px; flex-wrap: wrap; }
-.dispatch__tab {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-family: inherit; font-size: 12px; color: var(--bt-ink-soft);
-  background: #ffffff9c; border: 1.5px solid var(--bt-line); border-radius: 999px;
-  padding: 2px 9px 2px 7px; cursor: pointer;
-}
-.dispatch__tab--active { color: var(--bt-ink); border-color: var(--bt-stroke); background: #fff; font-weight: 700; }
-.dispatch__body { padding: 2px 10px 10px; }
-.dispatch__panel { display: block; }
-.dispatch__panel[hidden] { display: none; }
-.dispatch__panel .bubble { margin-top: 4px; }
-.msg--dispatchable { cursor: pointer; }
-.msg--dispatchable:hover .msg__name { text-decoration: underline dotted; }
-@media (max-width: 720px) {
-  .dispatch__tabs { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
-}
-/* 面板上的两个小开关：只看结论 / 复制当前成员正文 */
-.dispatch__tools { display: inline-flex; gap: 6px; margin-left: auto; }
-.dispatch__tool {
+.dcard__bar::-webkit-details-marker { display: none; }
+.dcard__bar::before { content: '▸'; color: var(--bt-ink-faint); font-size: 11px; }
+.dcard[open] > .dcard__bar::before { content: '▾'; }
+.dcard__bar:hover { background: #ffffff8c; border-radius: var(--bt-wobble-sm); }
+.dcard__bar-text { font-family: var(--bt-hand); font-size: 12.5px; color: var(--bt-ink-soft); }
+/* 收起之后又有新进展：一个小圆点，展开即消失。 */
+.dcard__fresh { margin-left: 2px; }
+.dcard__fresh[hidden] { display: none; }
+
+.dcard__tools { display: inline-flex; gap: 6px; margin-left: auto; }
+.dcard__tool {
   font-family: inherit; font-size: 11.5px; color: var(--bt-ink-soft);
   background: #ffffff9c; border: 1.5px solid var(--bt-line); border-radius: 999px;
   padding: 1px 8px; cursor: pointer;
+  transition: color 120ms ease-out, border-color 120ms ease-out, transform 90ms ease-out;
 }
-.dispatch__tool:hover { color: var(--bt-ink); border-color: var(--bt-stroke); }
-.dispatch__tool--on { color: var(--bt-ink); border-color: var(--bt-stroke); background: #fff; font-weight: 700; }
-/* 「只看结论」：把过程行收起来，结论照旧。 */
-.dispatch__body--result-only .think,
-.dispatch__body--result-only .tool-line,
-.dispatch__body--result-only .typing,
-.dispatch__body--result-only .progress,
-.dispatch__body--result-only .msg__meta { display: none; }
+.dcard__tool:hover { color: var(--bt-ink); border-color: var(--bt-stroke); }
+/* 按下就立刻反馈（不等任何请求），并给键盘焦点一个看得见的光环。 */
+.dcard__tool:active { transform: translateY(1px); background: var(--bt-paper); }
+.dcard__tool:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 2px; }
+.dcard__tool--on { color: var(--bt-ink); border-color: var(--bt-stroke); background: #fff; font-weight: 700; }
+
+.dcard__grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+  padding: 0 10px 10px;
+}
+.dcard__cell {
+  display: flex; align-items: center; gap: 8px;
+  /* 整块可点：点击目标不小于 44px 高，头像与状态点不再各自绑事件（避免误触）。 */
+  min-height: 44px; padding: 6px 8px; text-align: left;
+  font-family: inherit; color: inherit;
+  background: #ffffffb8; border: 1.5px solid var(--bt-line); border-radius: var(--bt-wobble-sm);
+  cursor: pointer;
+  transition: background 120ms ease-out, border-color 120ms ease-out, transform 90ms ease-out;
+}
+.dcard__cell:hover { background: #fff; border-color: var(--bt-stroke); }
+.dcard__cell:active { transform: translateY(1px); background: var(--bt-paper); }
+.dcard__cell:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 2px; }
+.dcard__cell--active {
+  border-color: var(--bt-stroke); background: #fff;
+  box-shadow: inset 0 0 0 1px var(--bt-stroke);
+}
+.dcard__avatar { flex: none; }
+.dcard__col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.dcard__head { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+.dcard__name { font-size: 12.5px; font-weight: 700; }
+.dcard__handle { font-family: var(--bt-mono); font-size: 10.5px; color: var(--bt-ink-faint); }
+/* 目标只留一行：卡片要紧凑，完整目标在 title 里（鼠标悬停可见）。 */
+.dcard__goal {
+  font-size: 11.5px; color: var(--bt-ink-soft);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dcard__status { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--bt-ink-soft); }
+.dcard__elapsed { color: var(--bt-ink-faint); font-variant-numeric: tabular-nums; }
+.dcard__elapsed[hidden] { display: none; }
+
+/* 状态刚变化的那一格：描边呼吸一次（不位移、不抢焦点、不动滚动）。 */
+@keyframes dcard-pulse {
+  0% { box-shadow: 0 0 0 0 #4d96ff66; }
+  100% { box-shadow: 0 0 0 6px #4d96ff00; }
+}
+.dcard__cell--pulse { animation: dcard-pulse 600ms ease-out 1; }
+
+.dcard__result { padding: 0 10px 10px; }
+.dcard__result-title {
+  font-family: var(--bt-hand); font-size: 12.5px; color: var(--bt-ink-soft);
+  padding: 0 2px 4px;
+}
+/* 结果区高度稳定：换成员时卡片不会跳（超出在区内滚动）。 */
+.dcard__slots { min-height: 76px; max-height: 340px; overflow: auto; }
+.dcard__slot { display: block; }
+.dcard__slot[hidden] { display: none; }
+/* 成员名字与头像已经在格子里了，结果区不再重复一遍。 */
+.dcard__slot .msg__head, .dcard__slot > .msg > .avatar { display: none; }
+.dcard__slot .bubble { margin-top: 0; }
+
+/* 「只看结论」：把过程行收起来，交回的内容照旧。 */
+.dcard__slots--result-only .think,
+.dcard__slots--result-only .tool-line,
+.dcard__slots--result-only .typing,
+.dcard__slots--result-only .progress,
+.dcard__slots--result-only .msg__meta { display: none; }
+
+/* 窄屏：一行两个，再窄一个（格子里的目标行本来就只留一行）。 */
+@media (max-width: 720px) {
+  .dcard__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 460px) {
+  .dcard__grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 「减少动态效果」：只保留底色与描边的变化，去掉位移、脉冲与高度动画。 */
+@media (prefers-reduced-motion: reduce) {
+  .dcard, .dcard__cell, .dcard__tool { transition: none; }
+  .dcard__cell:active, .dcard__tool:active { transform: none; }
+  .dcard__cell--pulse { animation: none; }
+}

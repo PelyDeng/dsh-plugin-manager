@@ -2,8 +2,11 @@
  * 成员名单在页面上的说法。
  *
  * 名单只收能接活的成员（服务端按调度执行入口过滤，见 `member-busy.test.ts`），所以页面上
- * 没有「在场但派不了活」这一档：群头、右栏与状态列表只说成员数、谁在忙。开场示例话题同理，
- * 只写群里真有人能接的活。
+ * 没有「在场但派不了活」这一档：群头只说成员数、谁在忙。开场示例话题同理，只写群里真有人
+ * 能接的活。
+ *
+ * 右栏不再有"谁此刻在干什么"那一列：本次派活的逐人状态只有一个来源——群里的调度卡格子
+ * （见 `page-dispatch.test.ts`）。这条分工在本文件里用"源码里已经没有那一列"钉住。
  *
  * 本插件没有浏览器工装，按仓库既有做法把函数取出来、用替身 DOM 跑一遍。
  */
@@ -45,7 +48,7 @@ function loadRoster() {
     if (body === undefined) throw new Error(`${name} 源码未找到`)
     return body
   }
-  const el = { crewFaces: node(), crewLine: node(), crewNote: node(), groupSub: node(), memberList: node(), statusList: node() }
+  const el = { crewFaces: node(), crewLine: node(), crewNote: node(), groupSub: node(), memberList: node() }
   const state: { members: unknown[] } = { members: [] }
   const avatarNode = (agentId: string) => {
     const face = node('span', 'avatar')
@@ -55,12 +58,11 @@ function loadRoster() {
   const clear = (parent: StubNode) => { parent.children = [] }
   const stateText = { running: '在干活', waiting_user: '等你回话' }
   const api = Function('state', 'el', 'make', 'clear', 'avatarNode', 'STATE_TEXT',
-    `${pick('renderMembers')}\n${pick('renderCrew')}\n${pick('renderStatuses')}\n`
-    + 'return { renderMembers, renderCrew, renderStatuses }',
+    `${pick('renderMembers')}\n${pick('renderCrew')}\n`
+    + 'return { renderMembers, renderCrew }',
   )(state, el, make, clear, avatarNode, stateText) as {
     renderMembers(): void
     renderCrew(): void
-    renderStatuses(): void
   }
   return { ...api, el, state }
 }
@@ -70,9 +72,6 @@ const members = [
   { agentId: 'closedoff', displayName: '封闭化助手', declaredName: '封闭化助手', busy: { taskId: 't', subtaskId: 's', state: 'running' } },
   { agentId: 'helper', displayName: '第三位', declaredName: '第三位', busy: { taskId: 't', subtaskId: 's2', state: 'waiting_user' } },
 ]
-
-/** 状态行：头像、名字、状态（状态格在第 3 个位置）。 */
-const stateTextOf = (row: StubNode) => row.children[2]?.textContent
 
 describe('成员名单的页面文案', () => {
   it('群头只说成员数与在忙数，不再分「能干活」', () => {
@@ -89,18 +88,19 @@ describe('成员名单的页面文案', () => {
     const page = loadRoster()
     page.state.members = [{ agentId: 'blog', displayName: '博客', declaredName: '博客工作台', busy: null }]
     page.renderCrew()
-    page.renderStatuses()
     expect(page.el.groupSub.textContent).toBe('1 位成员')
     expect(page.el.crewLine.textContent).toBe('1 个牛马')
-    expect(page.el.statusList.children.map(stateTextOf)).toEqual(['待命'])
-    expect(JSON.stringify(page.el.statusList.children)).not.toContain('未接入调度')
+    expect(JSON.stringify(page.el.crewFaces.children)).not.toContain('未接入调度')
   })
 
-  it('状态列表按手上有没有活说话', () => {
-    const page = loadRoster()
-    page.state.members = members
-    page.renderStatuses()
-    expect(page.el.statusList.children.map(stateTextOf)).toEqual(['待命', '在干活', '等你回话'])
+  it('右栏不再有"谁此刻在干什么"那一列：逐人状态只在群里的调度卡上', () => {
+    // 改造前这里有一列逐人状态行，与群里的成员行、调度卡面板重复了同一件事，且三处口径
+    // 还可能不一致；现在删掉了。源码级钉住：函数、容器 id、样式三样都不在。
+    expect(source).not.toContain('renderStatuses')
+    expect(source).not.toContain('status-list')
+    expect(source).not.toContain('status-row')
+    // 计数那一栏留着：它是"一眼看完"的页面级事实，不是逐人状态。
+    expect(source).toContain('renderMetrics(overview.counts)')
   })
 
   it('右栏成员行只列人，不再挂一个恒亮的状态点', () => {

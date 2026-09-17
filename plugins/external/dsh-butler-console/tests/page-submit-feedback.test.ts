@@ -71,7 +71,7 @@ describe('视图切换的异步归属（I09）', () => {
 describe('A 批源码守卫', () => {
   it('计划事件不再编造任务数量与派发事实（S02）', () => {
     const planCase = source.slice(source.indexOf("case 'plan':"), source.indexOf("case 'subtask':"))
-    expect(planCase).toContain('planNote(event)')
+    expect(planCase).toContain('mountDispatch(event.subtasks, { taskId: event.taskId, live: true })')
     expect(planCase).not.toContain('已经喊人')
     expect(planCase).not.toContain('拆成三份')
   })
@@ -640,9 +640,9 @@ describe('D 批「交互和动效收尾」守卫', () => {
     const state = { members: [] }
     const cards = new Map()
     const save = Function('settingsCards', 'api', 'state', 'accentOf', 'displayNameOf', 'declaredNameOf',
-      'renderMembers', 'renderCrew', 'renderStatuses', 'announce', 'setCardStatus', 'make',
+      'renderMembers', 'renderCrew', 'announce', 'setCardStatus', 'make',
       `${pick('setCardStatus')}\n${pick('saveMemberCard')} return saveMemberCard`,
-    )(cards, api, state, () => '#000000', () => '名字', () => '声明', noop, noop, noop, noop,
+    )(cards, api, state, () => '#000000', () => '名字', () => '声明', noop, noop, noop,
       Function(`${pick('setCardStatus')}\nreturn setCardStatus`)(), () => ({})) as
       (agentId: string) => Promise<void>
 
@@ -687,10 +687,10 @@ describe('D 批「交互和动效收尾」守卫', () => {
     }
     const state = { members: [] }
     const save = Function('settingsCards', 'api', 'state', 'accentOf', 'displayNameOf', 'declaredNameOf',
-      'renderMembers', 'renderCrew', 'renderStatuses', 'announce', 'setCardStatus', 'make',
+      'renderMembers', 'renderCrew', 'announce', 'setCardStatus', 'make',
       `${pick('setCardStatus')}\n${pick('saveMemberCard')} return saveMemberCard`,
     )(new Map([['blog', view]]), { setAlias: async () => ({ items: [] }) }, state, () => '#000000', () => '名字', () => '声明',
-      noop, noop, noop, noop, Function(`${pick('setCardStatus')}\nreturn setCardStatus`)(), () => ({})) as
+      noop, noop, noop, Function(`${pick('setCardStatus')}\nreturn setCardStatus`)(), () => ({})) as
       (agentId: string) => Promise<void>
     await save('blog')
     expect(view.status.dataset.kind).toBe('ok')

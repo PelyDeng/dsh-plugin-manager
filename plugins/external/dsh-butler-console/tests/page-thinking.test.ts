@@ -69,66 +69,107 @@ describe('成员气泡里的思考行', () => {
 
 describe('大总管气泡里的思考行', () => {
   /**
-   * 取出 `butlerThinking` 与 `attachButlerThinking`：两者依赖页面状态、气泡与思考行，
-   * 用替身注入后单独跑。
+   * 取出 `butlerThinking` / `attachButlerThinking` / `dropThinkingOnlySpeech`：三者依赖页面状态、
+   * 气泡与思考行，用替身注入后单独跑。
    */
   function loadButlerThinking() {
-    const thinkingBody = source.match(/function butlerThinking\(thinking\) \{[\s\S]*?\n\}\n/)?.[0]
-    const attachBody = source.match(/function attachButlerThinking\(speech\) \{[\s\S]*?\n\}\n/)?.[0]
-    if (thinkingBody === undefined || attachBody === undefined) throw new Error('大总管思考行源码未找到')
-    const calls: { inserted: string[]; thinking: string[]; areaMade: number } = { inserted: [], thinking: [], areaMade: 0 }
-    const speech: { think?: unknown; bubble: { insertBefore(node: unknown, before: unknown): void }; body: object } = {
+    const pick = (name: string) => {
+      const body = source.match(new RegExp(`function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`))?.[0]
+      if (body === undefined) throw new Error(`${name} 源码未找到`)
+      return body
+    }
+    const thinkingBody = pick('butlerThinking')
+    const attachBody = pick('attachButlerThinking')
+    const dropBody = pick('dropThinkingOnlySpeech')
+    const calls: { inserted: string[]; thinking: string[]; areaMade: number; removed: number; speechMade: number } =
+      { inserted: [], thinking: [], areaMade: 0, removed: 0, speechMade: 0 }
+    const caret = { hidden: true }
+    const speech: {
+      think?: unknown
+      text: string
+      thinkingOnly?: boolean
+      caret: { hidden: boolean }
+      bubble: { insertBefore(node: unknown, before: unknown): void }
+      body: object
+      msg: { remove(): void }
+    } = {
+      text: '',
+      caret,
       bubble: { insertBefore: (node: unknown, before: unknown) => { calls.inserted.push(String(before === speech.body ? 'before-body' : 'elsewhere')); void node } },
       body: {},
+      msg: { remove: () => { calls.removed += 1 } },
     }
     const state = { butlerSpeech: null as unknown, butlerThinking: '' }
     const thinkingArea = () => { calls.areaMade += 1; return { node: { name: 'think' }, preview: {}, body: {} } }
     const setThinking = (_view: unknown, thinking: string) => { calls.thinking.push(thinking) }
-    const loaded = Function('state', 'thinkingArea', 'setThinking',
-      `${attachBody}\n${thinkingBody}\nreturn { butlerThinking, attachButlerThinking }`)(state, thinkingArea, setThinking) as {
-        butlerThinking(thinking: string): void
-        attachButlerThinking(view: unknown): void
-      }
+    // 页面里的 `butlerSpeech()` 会先建一条大总管气泡再返回它；替身只记"开了一条"。
+    const butlerSpeech = () => { calls.speechMade += 1; state.butlerSpeech = speech; return speech }
+    const loaded = Function('state', 'thinkingArea', 'setThinking', 'butlerSpeech',
+      `${attachBody}\n${dropBody}\n${thinkingBody}\nreturn { butlerThinking, attachButlerThinking, dropThinkingOnlySpeech }`)(
+      state, thinkingArea, setThinking, butlerSpeech,
+    ) as {
+      butlerThinking(thinking: string): void
+      attachButlerThinking(view: unknown): void
+      dropThinkingOnlySpeech(): void
+    }
     return { ...loaded, state, speech, calls }
   }
 
-  it('只有思考、还没有正文时不新开气泡（重试掉的那版不留空消息）', () => {
-    const f = loadButlerThinking()
-    // 状态里没有当前气泡：思考只入缓冲，不建行、不插 DOM。
-    f.butlerThinking('先看通行记录。')
-    expect(f.state.butlerThinking).toBe('先看通行记录。')
-    expect(f.calls.areaMade).toBe(0)
-    expect(f.calls.inserted).toEqual([])
-    expect(f.calls.thinking).toEqual([])
-    expect(f.state.butlerSpeech).toBeNull()
-  })
-
-  it('气泡出现后才挂思考行：按需创建一次，位置在正文之前', () => {
+  it('第一条思考就开气泡并把思考行挂上：用户看得到"在想"（改造前是卡着不动、结果突然出现）', () => {
     const f = loadButlerThinking()
     f.butlerThinking('先看通行记录。')
-    f.state.butlerSpeech = f.speech
-    f.attachButlerThinking(f.speech)
+    expect(f.calls.speechMade).toBe(1)
+    expect(f.state.butlerSpeech).toBe(f.speech)
     expect(f.calls.areaMade).toBe(1)
     expect(f.calls.inserted).toEqual(['before-body'])
     expect(f.calls.thinking).toEqual(['先看通行记录。'])
+    // 还没吐字 ⇒ 这条气泡算"只有思考"，换尝试时要能撤掉。
+    expect(f.speech.thinkingOnly).toBe(true)
+    expect(f.speech.caret.hidden).toBe(false)
   })
 
-  it('已存在的思考行不再重复插入，快照仍按覆盖语义交给 setThinking', () => {
+  it('气泡里已经有正文之后，思考行照旧挂（覆盖语义）', () => {
     const f = loadButlerThinking()
+    f.speech.text = '我按下面的方式拆了任务。'
     f.butlerThinking('第一段。')
-    f.state.butlerSpeech = f.speech
-    f.attachButlerThinking(f.speech)
     f.butlerThinking('第一段。\n第二段。')
+    expect(f.calls.speechMade).toBe(1)
     expect(f.calls.areaMade).toBe(1)
     expect(f.calls.inserted).toEqual(['before-body'])
     expect(f.calls.thinking).toEqual(['第一段。', '第一段。\n第二段。'])
+    expect(f.speech.thinkingOnly).toBe(false)
   })
 
-  it('换尝试或开新一轮时清空缓冲，旧思考不挂到新气泡上', () => {
-    // 源码级锁住接线：reset/user 清缓冲，增量与落定各自把缓冲挂上去。
-    expect(source).toContain("case 'chat_reset':")
-    expect(source).toMatch(/case 'chat_reset':[\s\S]{0,260}state\.butlerThinking = ''/)
-    expect(source).toMatch(/case 'user':[\s\S]{0,600}state\.butlerThinking = ''/)
+  it('撤掉"只有思考、还没有正文"的气泡；有正文的不撤', () => {
+    const f = loadButlerThinking()
+    f.butlerThinking('只推理、还没吐字。')
+    f.dropThinkingOnlySpeech()
+    expect(f.calls.removed).toBe(1)
+    expect(f.state.butlerSpeech).toBeNull()
+    // 有正文的那条：换尝试时留给落定替换，不在这里删（删了正文就没了）。
+    const g = loadButlerThinking()
+    g.butlerThinking('第一段。')
+    g.speech.text = '正文已经出来了。'
+    g.dropThinkingOnlySpeech()
+    expect(g.calls.removed).toBe(0)
+  })
+
+  it('思考行只创建一次：重复挂同一份快照不会插入第二行', () => {
+    const f = loadButlerThinking()
+    // 直接调 attach（落定正文那条路径就是这么挂的）：思考行按需创建，第二次只是重写内容。
+    f.state.butlerThinking = '第一段。'
+    f.attachButlerThinking(f.speech)
+    f.attachButlerThinking(f.speech)
+    expect(f.calls.areaMade).toBe(1)
+    expect(f.calls.inserted).toEqual(['before-body'])
+    expect(f.calls.thinking).toEqual(['第一段。', '第一段。'])
+  })
+
+  it('换尝试、开新一轮、派出任务时都撤掉只有思考的那条气泡，缓冲一并清空', () => {
+    // 源码级锁住接线：三条清场路径都走同一个函数（不能只清缓冲、把空气泡留在页面上）。
+    expect(source).toMatch(/case 'chat_reset':[\s\S]{0,400}dropThinkingOnlySpeech\(\)/)
+    expect(source).toMatch(/case 'user':[\s\S]{0,600}dropThinkingOnlySpeech\(\)/)
+    expect(source).toMatch(/case 'plan':[\s\S]{0,900}dropThinkingOnlySpeech\(\)/)
     expect(source).toMatch(/function butlerDelta\(text\) \{[\s\S]{0,200}attachButlerThinking\(speech\)/)
     expect(source).toMatch(/function butlerSettle\(text, time\) \{[\s\S]{0,400}attachButlerThinking\(view\)/)
   })
