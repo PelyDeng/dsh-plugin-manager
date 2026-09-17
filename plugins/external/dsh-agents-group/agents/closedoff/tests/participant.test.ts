@@ -980,5 +980,3 @@ describe('封闭化协作适配（运行时载体）', () => {
     await expect(f.run(f.call({ requestId: 'request-2' }).request)).rejects.toMatchObject({ status: 503 })
   })
 })
-
-

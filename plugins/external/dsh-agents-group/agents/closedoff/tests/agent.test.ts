@@ -1037,4 +1037,3 @@ describe('owned business conversation lifecycle', () => {
     expect(f.disposals.get(branch.id)).toBe(1)
   })
 })
-
