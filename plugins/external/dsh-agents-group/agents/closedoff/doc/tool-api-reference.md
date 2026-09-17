@@ -43,7 +43,7 @@ kind: "package-reference"
 
 | 文件 | 用途 |
 | --- | --- |
-| `../../env.conf` | 本项目及其全部子 Agent 的唯一配置，closedoff 字段在「封闭化 closedoff」段 |
+| `../../../env.conf` | 本项目及其全部子 Agent 的唯一配置，closedoff 字段在「封闭化 closedoff」段 |
 | `env.conf` | 独立运行时当前部署使用的真实配置；不得复制到公开文档或不受控系统 |
 | `cordis.patch.yml` | 将插件插入 DSH `web` profile，并设置地图及轨迹分析参数 |
 | `src/config.ts` | 所有插件配置字段、校验范围和默认值的源文件 |
@@ -52,7 +52,7 @@ kind: "package-reference"
 | `src/tools.ts` | DSH Tool Schema、公共回答提示、轨迹特殊执行逻辑 |
 | `persona.txt` | Agent 的中文回答、Tool 选择、时间范围和重试纪律 |
 
-独立运行时从[项目根 env.conf](../../env.conf) 的 closedoff 段复制字段，写成自己的私有文件（路径由 `CLOSEDOFF_ENV_CONF` 指定）。
+独立运行时从[项目根 env.conf](../../../env.conf) 的 closedoff 段复制字段，写成自己的私有文件（路径由 `CLOSEDOFF_ENV_CONF` 指定）。
 
 `env.conf` 字段：
 
