@@ -37,6 +37,7 @@ import { createImageProvider } from './image/index.ts'
 import { createMinioClient, type MinioClient } from './minio/index.ts'
 import { createHuiyuStore, type HuiyuStore } from './store.ts'
 import { attachmentsOf, readImageBytes } from './media/attachments.ts'
+import { renderPage } from './page.ts'
 import { registerHuiyuTools } from './tools/index.ts'
 import type { HuiyuToolContext } from './tools/context.ts'
 
@@ -275,6 +276,27 @@ export async function mount(mountContext: AgentMountContext): Promise<{
     permissions: ['huiyu:access'],
     category: mountContext.category,
     tools,
+  }))
+
+  /**
+   * 页面。
+   *
+   * `surface: 'page'` 不能省：未登录时 kit 会据此把 401 转成跳认证的 303，而不是抛一个
+   * JSON 错误。少了它，用户在地址栏直接打开 `/agents/huiyu` 会看到一段 JSON。
+   *
+   * 页面内容里**不含任何密钥**，只展示桶名、访问前缀与模型名这类非敏感项。
+   */
+  ctx.effect(() => mountContext.http.register({
+    kind: 'exact',
+    path: config.routePrefix,
+    surface: 'page',
+    handler: (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' })
+      res.end(renderPage({
+        ...(configFailure === undefined ? {} : { unavailable: configFailure }),
+        ...(environment === undefined ? {} : { environment }),
+      }))
+    },
   }))
 
   /**

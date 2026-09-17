@@ -1,0 +1,19 @@
+# 发布时忽略什么。
+#
+# 归档由「群组根 package.json 的 files 含 agents/」收进来，而 npm 对 files 里的目录是
+# **整目录递归**，不会自动套用子包自己的 files 字段。所以子包必须显式排除源码与开发资源
+# ——否则它们会一起进归档，包白白变大，而且源码会随部署分发到运行环境。
+#
+# 有 .npmignore 时 npm 不沿用 .gitignore（closedoff 的注释记着这条的反面教训：它需要
+# web/assets 这类构建产物随包发布，而它们在 .gitignore 里）。本子包没有这类例外。
+node_modules/
+dist/
+coverage/
+.tmp/
+*.log
+# 源码与开发资源不随包发布：运行时用的是群组 dist 里内联的产物。
+src/
+tests/
+tsconfig.json
+tsdown.config.ts
+vitest.config.ts
