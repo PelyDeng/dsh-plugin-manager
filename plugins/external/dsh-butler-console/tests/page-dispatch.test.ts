@@ -585,11 +585,14 @@ describe('调度卡', () => {
   })
 
   it('Markdown 表格真的产出表格结构（业务方截图里那一段就是表格）', async () => {
-    // 用真渲染器 + 替身 document 跑一遍：节点计划里必须是 table/thead/tbody/tr/th/td。
-    const module = await import('../web/markdown.js') as unknown as {
-      markdownPlan(text: string): { tag?: string; className?: string; children?: unknown[] }[]
-    }
-    const plan = module.markdownPlan([
+    // 用真渲染器跑一遍节点计划（`markdownPlan` 是纯数据、不碰 DOM）：必须是 table/thead/tbody/tr/th/td。
+    // `web/` 是浏览器源码（无类型声明），按仓库既有做法取出函数、把解析器注入后执行。
+    const mdSource = readFileSync(fileURLToPath(new URL('../web/markdown.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+    const MarkdownIt = (await import('markdown-it')).default
+    // 去掉 import 与 `export` 关键字（取出来的是一个函数体，不是模块）。
+    const body = mdSource.replace(/^import .*$/m, '').replace(/^export /gm, '')
+    const planOf = Function('MarkdownIt', `${body}\nreturn markdownPlan`)(MarkdownIt) as (text: string) => unknown[]
+    const plan = planOf([
       '| 项目 | 值 |',
       '| --- | --- |',
       '| 状态 | prepared |',
