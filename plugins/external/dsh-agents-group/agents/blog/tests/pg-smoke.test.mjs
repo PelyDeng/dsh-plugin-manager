@@ -424,4 +424,38 @@ describe('blog PostgreSQL 存储冒烟（agents_group_test）', DSN === '' ? { s
     await assert.rejects(disposable.jobStart('user:x', 'web', 'closedrequest01', { draftId: 'd', expectedRevision: 1, instruction: 'x', research: false, attachments: [] }, {}), error => hasStorageCode(error, 'storage_closed'))
     await disposable.close()
   })
+
+  /**
+   * **两处多态 scope 的"恰一非空"在真 PG 上是硬的**（S1 登记的那条"零覆盖"）。
+   *
+   * 为什么必须有这条：`blog_operations.draft_id` 带**指向 `blog_drafts` 的复合外键**，而合成 scope
+   * （`manage:<kind>:<id|new>` / `remote:<rootCid>`，来自 `application.mjs`）**不是真实草稿 id**
+   * ⇒ 它们只能落 `scope_id`。把两义值装进一列时，复合外键会把"合法地指向远端文章"的操作判成
+   * **23503**（DDL 注释写明本机 PG18 实测过：`draft_id='manage:blog:new'` → 23503、
+   * `draft_id='remote:12345'` → 23503）。
+   * ⚠️ 而"**合法的那一支能插进去**"从来没被断言过 —— 只断"非法被拒"的话，一个**永远抛错**的实现
+   * 也照样绿 ⇒ 本条**成对断言**（同一条链上既要有成功的、也要有被拒的）。
+   */
+  it('多态 scope：合成 scope 必须落 scope_id（落 draft_id 则 23503），"恰一非空"两个方向都拦', async () => {
+    const owner = 'user:scope'
+    const draft = await storage.create(owner, { title: '有主草稿', text: '', slug: '', tags: [], categories: [] })
+    const [namespace, id] = owner.split(':')
+    const insert = (rowId, draftId, scopeId) => admin.query(
+      `INSERT INTO blog_operations(id, owner_namespace, owner_id, draft_id, scope_id, revision, payload)
+       VALUES($1,$2,$3,$4,$5,1,'{"status":"prepared"}'::jsonb)`,
+      [rowId, namespace, id, draftId, scopeId ?? ''])
+    // ① 合成 scope 落 `scope_id` ⇒ 合法（`manage:` / `remote:` 那一支的归宿）。
+    await insert(randomUUID(), null, 'manage:blog:new')
+    await insert(randomUUID(), null, 'remote:12345')
+    // ② 同一个合成值落 `draft_id` ⇒ 复合外键拒绝（23503）—— "两义值装不进一列"的实证。
+    await assert.rejects(insert(randomUUID(), 'manage:blog:new', null),
+      error => error.code === '23503', '合成 scope 落 draft_id 必须被复合外键拒')
+    // ③ 真实草稿那一支 ⇒ 合法。
+    await insert(randomUUID(), draft.id, null)
+    // ④ "恰一非空"两个方向由 **CHECK** 拦（23514）—— 与 ② 的 23503 是**两个不同的约束**，分开断言。
+    await assert.rejects(insert(randomUUID(), draft.id, 'manage:blog:new'),
+      error => error.code === '23514', '两支都非空必须被 CHECK 拒')
+    await assert.rejects(insert(randomUUID(), null, null),
+      error => error.code === '23514', '两支都为空必须被 CHECK 拒')
+  })
 })
