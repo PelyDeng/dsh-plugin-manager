@@ -350,7 +350,7 @@ describe('补交轮：没调交活工具时补一次，补不上就按投影兜�
 })
 
 describe('判据②：补交轮不撑破 turnTimeoutMs', () => {
-  it('补交轮迟迟不结束 → 总时长仍受 turnTimeoutMs 约束', async () => {
+  it('补交轮迟迟不结束 → 总时长仍受 turnTimeoutMs 约束，且用首轮结论兜底交付', async () => {
     // 预算 120ms，且**先把首轮拖到 ~90ms 才结束** —— 这样共用预算只剩 ~30ms，而"每轮重设
     // 预算"会拿到完整 120ms，两者差一个数量级。只测总时长是区分不开的：两种行为的总时长都
     // 远小于任何宽松上界（这正是变异验证发现的假绿 —— 一个不会因实现被改坏而变红的用例，
@@ -366,11 +366,23 @@ describe('判据②：补交轮不撑破 turnTimeoutMs', () => {
       await until(() => hosted.followups().length >= 2, '补交提示已注入')
       const injectedAt = Date.now()
       // 补交轮不结束：不发第二轮的任何事件。
-      await expect(promise).rejects.toThrow(/超时/)
+      //
+      // ⚠️ 这里**不再是整条 reject**：首轮已经产出可用结论，而补交是运行时自己的补救动作，
+      // 它没跑完不该毁掉那一份交付（P3 红队攻击 3）。超时改成用首轮投影兜底交付，并把 ⑦ 的
+      // `report-called` 如实标成未核验——所以旧断言 `rejects.toThrow(/超时/)` 与新语义相反，
+      // 必须随之改写；不改就是拿旧语义的绿灯冒充新语义的覆盖。
+      const result = await promise
       // 判据一：补交轮**没有拿到一份新预算**。共用 ⇒ 距注入约 30ms；每轮重设 ⇒ 约 120ms。
       expect(Date.now() - injectedAt).toBeLessThan(80)
       // 判据二：整体仍然有界，防止"其实一直在等"被上面那条掩盖。
       expect(Date.now() - started).toBeLessThan(1_000)
+      // 判据三：交付的是**首轮**的结论（补交轮的正文一个字都没进来），不是"这一轮失败"。
+      expect(result.status).toBe('completed')
+      expect(result.text).toBe('第一轮正文')
+      expect(result.conversationId).toBe(id)
+      // 判据四：没调交活工具这件事如实标注（⑦ 的 `report-called: unverified`），不冒充通过。
+      expect(result.selfCheck?.detail ?? '').toContain('没有调用交活工具')
+      expect(result.selfCheck?.status).not.toBe('passed')
     } finally { await hosted.dispose() }
   })
 

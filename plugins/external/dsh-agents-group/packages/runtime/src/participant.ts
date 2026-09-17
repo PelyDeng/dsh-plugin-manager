@@ -31,8 +31,12 @@
  * **整个循环共用一个 `turnTimeoutMs` 预算**：超时定时器只在 `cleanup()` 里清，补交轮与
  * 自修正轮都不另开预算。超时发生时收尾循环被直接中断（见 `fail` 里的 `settling` 分支），
  * 不会挂在"等下一个 `turn/end`"上。
+ *
+ * **但超时不等于整条失败**：超时落在**补交轮**（运行时自己的补救动作）上、而首轮已经产出可用
+ * 结论时，用那一份兜底交付（见 `handoffFallback`）——补交没跑完不该毁掉一次已经成功的交付。
+ * 首轮本身超时、或自修正轮超时，仍然整条失败：那两种情况下都没有"已经成功的交付"。
  */
-import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, type Access, type Actor, type AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
 import {
   PARTICIPANT_PROTOCOL,
   type AgentParticipant,
@@ -234,6 +238,14 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
         let selfRetries = 0
         /** 补交只补一次：用标志而不是计数，避免和自修正的计数混在一起。 */
         let retriedHandoff = false
+        /**
+         * 补交轮开始前先存下的"不再重试会交付什么"。
+         *
+         * 补交轮是**运行时自己的补救动作**（模型这一轮没调交活工具，运行时再问它一次）。它超时
+         * 不该毁掉一次已经成功的交付：那份结果在补交之前就算好了。超时时用它兜底交付。
+         * 自修正轮开始前会清掉它——那时这份结论**已经被判定不达标**，不能再拿去交。
+         */
+        let handoffFallback: ParticipantResult | undefined
         /** 本轮的交活账本（按会话取；补交轮与自修正轮共用同一个）。 */
         const ledger = ledgerOf(opened.id)
         // 门槛 `ledger.available` 只有装配侧注册过 `report_result` 时才为真（`handoff.ts:88-89`）。
@@ -351,6 +363,14 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
          * 判定本来就来自客观投影，改成"没调工具就判失败"是语义降级。
          */
         const settleOnce = async (reason: string): Promise<SettleOutcome> => {
+          // 补交轮超时：首轮结论已经算好，只是运行时自己的补救动作没跑完 ⇒ 用那一份兜底交付。
+          // 这一段必须在 `status` 计算之前：`reason` 是我们自造的 `'timeout'`，按普通分支走会
+          // 落进"这一轮失败"，把一份已经成功的交付说成没干完。
+          if (reason === 'timeout' && handoffFallback !== undefined) {
+            const fallback = handoffFallback
+            handoffFallback = undefined
+            return { kind: 'deliver', result: fallback }
+          }
           const aborted = cancelled || reason === 'aborted'
           const status: ParticipantStatus = aborted
             ? 'cancelled'
@@ -374,21 +394,44 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
             ? await project(context)
             : { status, text: fallbackText })
 
-          // —— 补交轮：这一轮正常跑完、但模型**能**交活却没交 ——
-          // 只补一次；取消与失败没有可补的结论，不补；**没接线（工具没注册）也不补** ——
-          // 那时模型手里没有那个工具，补交只会让它把同一件事再答一遍，白花一轮预算。
-          if (!taken.called && status === 'completed' && !retriedHandoff && ledger.available) {
-            retriedHandoff = true
-            return { kind: 'retry', attempt: 'report_retry', prompt: HANDOFF_RETRY_PROMPT }
-          }
+          /**
+           * 把"这一轮的投影 + ⑦ 的汇总结论"组装成要交回协调方的结果。
+           *
+           * 它有两个调用点：正常交付，以及补交轮超时的兜底交付（`handoffFallback`）。必须是
+           * 同一份组装逻辑，否则兜底交付会悄悄少字段。
+           */
+          const resultOf = (selfCheck: AgentSelfCheck): ParticipantResult => ({
+            status: projected.status,
+            conversationId: opened.id,
+            text: projected.text === '' ? fallbackText : projected.text,
+            ...(projected.question === undefined ? {} : { question: projected.question }),
+            ...(projected.artifacts === undefined ? { artifacts: [conversationArtifact(opened.id)] } : { artifacts: projected.artifacts }),
+            ...(projected.externalPending === undefined ? {} : { externalPending: projected.externalPending }),
+            // 回报给协调方的是**运行时跑完 ⑦ 与 ⑧ 之后的汇总**，不是业务自报的那一份。
+            selfCheck,
+          })
 
           // —— ⑦ 程序性校验 ——
+          // ⚠️ 它排在**补交轮判断之前**：补交轮要顺手把"不再重试会交付什么"存成兜底，而那份
+          // 结果必须带着 ⑦ 的结论。`runSelfCheck` 是纯函数——不读时钟、不碰存储、不花模型调用。
           const outcome = runSelfCheck({
             result: projected,
             acceptance: request.acceptance,
             selfCheck: projected.selfCheck,
             reported: taken.called,
           })
+
+          // —— 补交轮：这一轮正常跑完、但模型**能**交活却没交 ——
+          // 只补一次；取消与失败没有可补的结论，不补；**没接线（工具没注册）也不补** ——
+          // 那时模型手里没有那个工具，补交只会让它把同一件事再答一遍，白花一轮预算。
+          if (!taken.called && status === 'completed' && !retriedHandoff && ledger.available) {
+            retriedHandoff = true
+            // 补交轮超时时的兜底：这一份结论已经算好了，不该因为运行时自己的补救动作没跑完而
+            // 被丢掉（P3 红队攻击 3）。⑦ 的 `report-called` 本就是 `unverified`（这一轮确实
+            // 没调交活工具），如实带上，不冒充通过。
+            handoffFallback = resultOf(toSelfCheck(outcome))
+            return { kind: 'retry', attempt: 'report_retry', prompt: HANDOFF_RETRY_PROMPT }
+          }
 
           // —— ⑧ 有界自修正 ——
           const judged = definition.judge === undefined
@@ -397,6 +440,9 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
           const needsRework = outcome.failed || judged?.ok === false
           const maxSelfRetries = Math.min(Math.max(definition.maxSelfRetries ?? 1, 0), 3)
           if (needsRework && !aborted && selfRetries < maxSelfRetries) {
+            // 首轮结论到这一步**已经被判定不达标**，不能再当作超时兜底交出去——那会把一次不达标
+            // 的交付伪装成"运行时没来得及补救"。自修正轮超时就整条失败，如实说没跑完。
+            handoffFallback = undefined
             const why = judged?.reason?.trim()
             const finding = outcome.findings.find(item => item.verdict === 'failed')?.detail
             return { kind: 'retry', attempt: 'self_retry', prompt: reworkPrompt(why !== undefined && why !== '' ? why : (finding ?? '')) }
@@ -427,19 +473,7 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
             await storage.db.turns.setPendingQuestion(ownerOf(request.actor), opened.id, question)
           }
 
-          return {
-            kind: 'deliver',
-            result: {
-              status: projected.status,
-              conversationId: opened.id,
-              text: projected.text === '' ? fallbackText : projected.text,
-              ...(projected.question === undefined ? {} : { question: projected.question }),
-              ...(projected.artifacts === undefined ? { artifacts: [conversationArtifact(opened.id)] } : { artifacts: projected.artifacts }),
-              ...(projected.externalPending === undefined ? {} : { externalPending: projected.externalPending }),
-              // 回报给协调方的是**运行时跑完 ⑦ 与 ⑧ 之后的汇总**，不是业务自报的那一份。
-              selfCheck,
-            },
-          }
+          return { kind: 'deliver', result: resultOf(selfCheck) }
         }
 
         /**
@@ -543,7 +577,18 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
         recheck = setInterval(() => { try { assert() } catch (error) { fail(error) } }, config.authRecheckMs)
         recheck.unref()
         // 整个收尾循环共用这一个预算：补交轮与自修正轮都不另开定时器。
-        timeout = setTimeout(() => fail(new Error('协作超时')), config.turnTimeoutMs)
+        timeout = setTimeout(() => {
+          // 首轮已经产出可用结论、只是运行时自己的补交补救没跑完 ⇒ **不整条失败**：唤醒收尾
+          // 循环，让它按兜底交付走完（见 `settleOnce` 的 `'timeout'` 分支）。先入队再 abort：
+          // 补交轮可能正在跑，不打断它就还会继续产生副作用，但 `'timeout'` 必须排在它的
+          // `turn/end` 前面——否则循环拿到的是 `'aborted'`，那份结论又会被当成"这一轮失败"。
+          if (handoffFallback !== undefined) {
+            pushTurnEnd('timeout')
+            if (admitted) lifecycle.abort(opened.id)
+            return
+          }
+          fail(new Error('协作超时'))
+        }, config.turnTimeoutMs)
         timeout.unref()
         void (async () => { try {
           request.signal.throwIfAborted()
