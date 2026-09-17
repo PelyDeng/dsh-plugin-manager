@@ -20,7 +20,7 @@ import { BlogClient,ImageClient,BackupClient } from './connectors.mjs'
 import { BlogJobs } from './jobs.mjs'
 import { BlogAttachments, MAX_ATTACHMENT_BYTES } from './attachments.mjs'
 import { ChatStore } from './chat-store.ts'
-import { BlogChat } from './chat.mjs'
+import { BlogChat } from './chat.ts'
 import { createBlogParticipant } from './participant.ts'
 import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
 import {selectBlogModel} from './models.mjs'
@@ -263,7 +263,7 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/chat-attachment',handler:async(req,res,actor)=>{
     if(req.method!=='GET')throw new AccessError(405,'只支持 GET')
     const query=new URL(req.url!,'http://localhost').searchParams
-    const file=await chat.original(actor,query.get('conversationId'),query.get('requestId'),query.get('id'));access.assert(actor)
+    const file=await chat.original(actor,query.get('conversationId')!,query.get('requestId')!,query.get('id')!);access.assert(actor)
     res.writeHead(200,{'content-type':'application/octet-stream','content-disposition':`attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`,'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'none'; sandbox"});res.end(file.bytes)
   }}))
   ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+'/upload',handler:async(req,res,actor)=>{

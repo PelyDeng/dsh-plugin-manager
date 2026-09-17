@@ -1,6 +1,6 @@
 import type { Actor } from '@dsh-plugin-manager/plugin-kit'
 import type { AgentParticipant, ParticipantRequest, ParticipantResult } from '../../../packages/common/src/participant.ts'
-import type { BlogChat } from './chat.mjs'
+import type { BlogChat } from './chat.ts'
 import type { ChatStore } from './chat-store.ts'
 import type { BlogPgStorage } from './storage/pg.mjs'
 import { digest, ownerKey } from './store.mjs'
@@ -166,7 +166,9 @@ export function createBlogParticipant({ access, chat, index, storage, routePrefi
              * 全部已生成内容，不丢东西。
              */
             const final = said.filter(message => 'tail' in message && message.tail === true).at(-1)
-            const text = final !== undefined ? final.text : said.map(message => message.text).join('\n\n')
+            // `tail` 只标在该回合最后一条**有正文**的 assistant 消息上（会话投影保证非空字符串），
+            // 所以这里的 `!` 只是把投影的不变量告诉类型系统，运行期取值与改造前完全一致。
+            const text = final !== undefined ? final.text! : said.map(message => message.text).join('\n\n')
             const confirmation = history.operations.some((operation: { status: string }) => ['prepared', 'running', 'uncertain', 'conflict'].includes(operation.status))
             // some() 不等待异步谓词，候选判定必须逐条 await 核对（草稿在业务库里）。
             let candidate = false

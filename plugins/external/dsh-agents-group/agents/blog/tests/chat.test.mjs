@@ -7,7 +7,7 @@ import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local'
 import {BlogStore} from '../src/store.mjs'
 import {ChatStore} from '../src/chat-store.ts'
 import {BlogJobs} from '../src/jobs.mjs'
-import {BlogChat} from '../src/chat.mjs'
+import {BlogChat} from '../src/chat.ts'
 import {BlogApplication,PendingOperationsMirror} from '../src/application.mjs'
 import {projectChat} from '../src/chat-history.mjs'
 import {createBlogParticipant} from '../src/participant.ts'
@@ -794,4 +794,40 @@ test('binding retry with drifted remote content keeps the current dedup semantic
   assert.notEqual(recovered.draftId,first.draftId)
   assert.equal(recovered.text,'远端已修改')
   assert.equal((await f.store.list(owner)).length,2)
+})
+
+/**
+ * 以下三条钉住 `.mjs → .ts` 转换里**测试套件原本抓不到**的漂移（都不在类型层，纯文本/形状问题）。
+ * 它们不是新增功能断言，而是把"转换必须逐字保真"这条要求变成可回归的判据：
+ * 每条都在改造过程中**真的红过**（见 `git log`/交接文档记录），改动上面任一处实现都会重新变红。
+ */
+test('persona keeps the tag capability and the bridge field name the model was told to use',async t=>{
+  const f=await fixture(t)
+  await f.send();await tick()
+  const persona=f.handles[0].sections.find(s=>s.name==='blog:persona')
+  assert.ok(persona,'persona section must be installed')
+  assert.equal(persona.order,600)
+  // 「标签」是查询能力的提示；`remote关联ID` 是桥接返回的字段名，不能意译。
+  assert.match(persona.text,/标题、正文、关键词、分类、标签、时间可组合查询/)
+  assert.match(persona.text,/只有明确的共同rootCid或remote关联ID才能去重/)
+})
+
+test('the first automatic title is cut from the trimmed text, not the raw input',async t=>{
+  const f=await fixture(t)
+  await f.send({requestId:'title-trim',text:'  你好  '});await tick()
+  assert.equal(f.index.get(owner,f.conversation.id).title,'你好')
+})
+
+test('delete refuses a non-array ids instead of splitting it into single characters',async t=>{
+  const f=await fixture(t)
+  let error
+  // ⚠️ 这个字符串里的字符**必须互不相同**（且每个字符都满足 kit 的 `/^[\w-]{1,160}$/`），否则判据无效：
+  // 被拆成数组后若含重复字符，`conversationIds` 的"互不相同"这一条也会把它挡回同一个 400，
+  // 于是"先浅拷贝"这个漂移在测试里看不出来（本文件第一版就是这么写的，变异不红才发现）。
+  try{await f.chat.mutate(actor,{operation:'delete',ids:'blogchat0123456789'})}catch(caught){error=caught}
+  // `mutate` 的 delete 分支不经过 `index.mutate` 的入参校验，唯一的类型校验在 kit 的 `conversationIds`：
+  // 先做浅拷贝会把「400 请选择 1–100 条不同的有效会话」静默降级成逐字符查找后的 404/409。
+  assert.equal(error?.status,400)
+  assert.match(String(error?.message),/请选择 1–100 条不同的有效会话/)
+  assert.equal(f.chat.list(actor,0,'').items.length,1,'非法入参不得移除任何会话')
 })
