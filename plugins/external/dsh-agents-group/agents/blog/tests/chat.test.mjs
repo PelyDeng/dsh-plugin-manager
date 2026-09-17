@@ -893,3 +893,134 @@ test('delete refuses a non-array ids instead of splitting it into single charact
   assert.match(String(error?.message),/请选择 1–100 条不同的有效会话/)
   assert.equal((await f.chat.list(actor,0,'')).items.length,1,'非法入参不得移除任何会话')
 })
+
+/**
+ * ③-B 批次 B（一）：**起轮窗口**。守卫 → `index.start`（内部三次 PG 往返）→ `active.set`
+ * 之间全是挂起点，两次并发 `send` 因此可以都越过守卫：各自的 `claim` 用的是**不同**的
+ * `requestId`，谁也拦不住谁。
+ *
+ * 修复前实测：两条都返回 `{status:'queued'}`、落下**两行**轮次、`active` 只记得后一条
+ * （前一条的 `b` 被覆盖 ⇒ `assertTurn` 把它判成"本次请求已结束"）⇒ **两条消息一起失败**。
+ *
+ * 断言刻意落在"**只起一轮**"上：只断"有一条被拒"是不够的 —— 修复前的形态里两条都成功。
+ * 变异：把 `starting` 的登记（或那道原子检查）去掉 ⇒ 本用例必须红。
+ */
+test('两条并发 send 不能在同一个会话上各起一轮（起轮窗口）',async t=>{
+  const f=await fixture(t)
+  const results=await Promise.allSettled([
+    f.chat.send(actor,{conversationId:f.conversation.id,requestId:'window-a',text:'第一条',research:true}),
+    f.chat.send(actor,{conversationId:f.conversation.id,requestId:'window-b',text:'第二条',research:true}),
+  ])
+  const rejected=results.filter(r=>r.status==='rejected'),accepted=results.filter(r=>r.status==='fulfilled')
+  assert.equal(rejected.length,1,'后到的那条必须在守卫上被挡下，而不是也排上队')
+  assert.equal(rejected[0].reason.status,409)
+  assert.match(String(rejected[0].reason.message),/正在回答|正在结束上一轮/)
+  assert.equal(accepted[0].value.status,'queued')
+  await tick()
+  assert.equal(f.handles.length,1,'同一会话只允许起一轮')
+  const rows=await f.index.requests(owner,f.conversation.id)
+  assert.equal(rows.length,1,'被挡下的那条不许在索引里留下轮次行')
+  assert.equal(f.chat.active.size,1)
+  // 留下的是**被接受**的那条（先前那种"两条都留下、`active` 只记得后一条"的形态下，这条会红）。
+  assert.equal(rows[0].id,accepted[0].value.id)
+})
+
+/**
+ * ③-B 批次 B（二）：**移除被接受之后的 `release` 真的要收起本实例的回合**。
+ *
+ * 顺序照 kit（`packages/plugin-kit/src/conversations.ts:141-149`）：
+ * `mark(pending)` → `await release(id)` → `archiveSession(id)` → `mark(removed)`。
+ * 而 blog 原先传的 `release` 是**空函数** ⇒ 移除已生效、本实例仍攥着那一轮。
+ *
+ * ⚠️ 本用例**直接调 `releaseConversation`**，因为链级走不到这个状态：`remove` 在 `:134`/`:140`
+ * 有两道 busy 守卫，而 `busy()` 已经算了 `active` ⇒ "有一轮在跑"的会话**根本进不到 `release`**。
+ * 这一点在下半段用链级断言钉住（如实登记，而不是假装链级也覆盖了）。
+ *
+ * ⚠️ 关键的第二条断言是 `status === 'interrupted'`：那一刻会话已被 `mark(pending)`，
+ * `durable` 里的 `index.get` 必然 404，`finish` 的 catch 会把状态降级成 `failed` 并把消息换成
+ * "对话持久化未完成…" ⇒ 一次**正常**的移除会在页面上留下误导性的失败。
+ * 变异：`release` 退回空函数 ⇒ 第一条断言红；`finish(..., {persist:false})` 去掉 ⇒ 第二条红。
+ */
+test('移除被接受后的 release 真的收起本实例的回合，且不把正常移除写成失败',async t=>{
+  const f=await fixture(t)
+  await f.send();await tick()
+  const id=f.conversation.id
+  assert.equal(f.chat.active.size,1,'前置：有一轮在跑')
+  f.index.mark(ownerActor(owner),id,'pending')
+  // 那一刻会话已经不可见 —— 这正是 `release` 里不能走 `durable`（它会 `index.get`）的原因。
+  await assert.rejects(f.index.get(owner,id),/不存在或无权访问/)
+  await f.chat.releaseConversation(id)
+  assert.equal(f.chat.active.size,0,'release 之后本实例不再攥着这一轮')
+  assert.equal(f.handles[0].disposed,true)
+  const row=(await f.index.requests(owner,id,true))[0]
+  assert.equal(row.status,'interrupted','正常移除不得被降级成 failed')
+  assert.equal(row.message,'会话已移除')
+  // 链级：有一轮在跑时 `remove` 在 kit 的 busy 守卫上就被挡下 ⇒ 走不到"release 时还在跑"。
+  const g=await fixture(t)
+  await g.send();await tick()
+  assert.equal((await g.chat.remove(actor,[g.conversation.id])).results[0].status,'blocked')
+  assert.equal(g.chat.active.size,1,'被挡下时不得动到那一轮')
+})
+
+/**
+ * ③-B 批次 B（三）：**`stop` 不再谎报成功**。
+ *
+ * 外部驱动方（运行时的会话生命周期）占着会话时，本实例**没有东西可停** —— 那要
+ * `lifecycle.abort`，属装配之后的事（批次 C）。原先恒返回 `{stopped:true}` 会让页面显示
+ * "已停止"，而那一轮还在跑。
+ *
+ * `occupancy` 今天缺省恒假（批次 A 留的接缝）⇒ 这里**显式注入**来构造"只有外部忙"的状态。
+ * 变异：`stop` 恒返回 `{stopped:true}` ⇒ 本条红。
+ */
+test('stop 不再谎报：只有外部驱动方忙而本实例无物可停时返回 stopped:false',async t=>{
+  let target=''
+  const f=await fixture(t,{occupancy:{isBusy:id=>id===target,busyIds:()=>target?[target]:[]}})
+  target=f.conversation.id
+  const before=await f.index.requests(owner,f.conversation.id)
+  assert.deepEqual(await f.chat.stop(actor,f.conversation.id),{stopped:false})
+  assert.equal(f.chat.active.size,0)
+  assert.equal(f.handles.length,0,'本实例没起过 Agent ⇒ 确实没有可停的东西')
+  assert.deepEqual(await f.index.requests(owner,f.conversation.id),before,'谎报之外也不许顺手改状态')
+  // 反面：本实例真的有一轮时，必须如实报 true 并把它收掉。
+  const g=await fixture(t)
+  const started=await g.send();await tick()
+  assert.deepEqual(await g.chat.stop(actor,g.conversation.id),{stopped:true})
+  assert.equal(g.chat.active.size,0)
+  assert.equal((await g.index.request(owner,started.id)).status,'interrupted')
+})
+/**
+ * ③-B 批次 B（一·补）：**起轮窗口内，这个会话必须已经被算作忙**。
+ *
+ * 上面那条测的是"不许起两轮"，靠的是那道**原子检查并登记**；而登记还必须在 `busy()` 里可见 ——
+ * 否则窗口里（`start` 正在跑、`active` 还没设）改名与移除都能插进来：移除一旦被接受
+ * （`mark(pending)`），这一轮随后照样会跑起来，落在一个已经被移除的会话上。
+ *
+ * 怎么把那个窗口**稳定地**撑开：把 `index.start` 本身挡在门上（纯测试侧打桩，不改生产代码）。
+ * 打桩是必要的——那个窗口在生产里只有几次 PG 往返那么长，靠 `Promise.all` 抢不到稳定观测。
+ *
+ * 变异：`busy()`/`busyIds()` 不再算 `starting` ⇒ 本条红。
+ */
+test('起轮窗口内该会话已经算忙：改名与侧栏移除判定都插不进来',async t=>{
+  const f=await fixture(t)
+  const id=f.conversation.id
+  // 先跑完一轮：会话只有在 `durable`（发布）之后才会出现在**侧栏**口径里（`managed` 过滤 `ready`），
+  // 而"起轮窗口"这条断言要的正是"一个用户在侧栏看得见、正准备再发一条"的会话。
+  await f.send();await tick();complete(f.handles[0]);await tick()
+  assert.equal(f.chat.active.size,0,'前置：上一轮已经收尾')
+  const original=f.index.start.bind(f.index)
+  const entered=Promise.withResolvers(),gate=Promise.withResolvers()
+  f.index.start=async(...args)=>{entered.resolve();await gate.promise;return original(...args)}
+  const sending=f.send({requestId:'window-inside'})
+  await entered.promise
+  assert.equal(f.chat.active.size,0,'前置：这一轮还没进 active（窗口就开在这里）')
+  assert.equal(f.chat.busy(id),true,'窗口内必须已经算忙')
+  assert.ok(f.chat.busyIds().includes(id),'侧栏的忙集合也要带上它')
+  const page=await f.chat.provider.list(actor,{offset:0,limit:30,q:'',state:''})
+  assert.equal(page.items[0].canRemove,false,'起轮当中不许被移除')
+  await assert.rejects(f.chat.mutate(actor,{operation:'rename',ids:[id],title:'窗口里改名'}),/仍在回答|请先停止/)
+  gate.resolve()
+  await sending
+  await tick()
+  assert.equal(f.chat.active.size,1)
+  assert.equal(f.handles.length,2)
+})

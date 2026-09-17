@@ -248,6 +248,32 @@ export class BlogChat {
   readonly forks: Map<string, Fork>
   /** 源会话 → 正在为它准备的分支数（`busy()` 要算上它，否则分支准备期间能发起新一轮）。 */
   readonly forkSources: Map<string, number>
+  /**
+   * 会话 → "本实例**正在为它起一轮**"的登记（`active` 的前身）。
+   *
+   * ## 为什么必须有它
+   *
+   * `send` 从**守卫**到 `active.set` 之间隔着好几个 await —— `index.start` 一个方法内部就有
+   * **三次 PG 往返**（`turnId` / `requests` / `claim`）。两次并发 `send`（双击、两个标签页）
+   * 因此可以**都**越过守卫：那时 `active` 里还没有东西，各自的 `claim` 用的是**不同**的
+   * `requestId` ⇒ 谁也拦不住谁。**实测过**（同一会话、不同 requestId、`Promise.all`）：
+   * 两条都返回 `{status:'queued'}`、落下**两行**轮次、`active` 只记得后一条（前一条的 `b`
+   * 被覆盖 ⇒ 它再也停不掉、`assertTurn` 随后把它判成"本次请求已结束"）⇒ **两条消息一起失败**。
+   *
+   * ⇒ 把"起轮"也登记成占用，并且是**同步**登记（紧跟最后一道守卫、在同一段同步执行里），
+   * 后到的那次就会在守卫上拿到 409，而不是双跑。
+   *
+   * ## 一处**有意的行为变更**（如实登记）
+   *
+   * 登记期间（`start` 到 `active.set`）**同一个 `requestId`** 的并发重放也拿不到幂等放行：
+   * 守卫走的是"忙 ⇒ 必须 `hasRequest`"，而那一刻 `claim` 还没发生、`hasRequest` 必然为假 ⇒
+   * 它会拿到 409。**409 而不是双跑，是更好的取舍**：重放方本来就该等第一次落地后再重试，
+   * 而"双跑"会真的产生两轮副作用。
+   *
+   * `stop` 在这段窗口里仍然停不掉（那时还没有 `b` 可停）——**这是本批未关的一个窄口**，
+   * 已登记在报告里。
+   */
+  readonly starting: Set<string>
   /** 会话 → 该会话的 SSE 订阅者。 */
   readonly listeners: Map<string, Set<(value: unknown) => void>>
   closed: boolean
@@ -276,6 +302,7 @@ export class BlogChat {
     this.timeoutMs = timeoutMs
     this.occupancy = occupancy ?? { isBusy: () => false, busyIds: () => [] }
     this.active = new Map()
+    this.starting = new Set()
     this.forks = new Map()
     this.forkSources = new Map()
     this.listeners = new Map()
@@ -298,7 +325,7 @@ export class BlogChat {
         // 系统，不复制对象、不改任何取值（转 TS 前这里就是直接 `return value`）。
         record: (actor: Actor, id: string) => { const value = index.record(actor, id); invariant(value.ready, '对话尚未完成创建', 409); return value as unknown as ConversationRecord },
         mark: (actor: Actor, id: string, state: string) => index.mark(actor, id, state),
-      }, busy: (id: string) => this.busy(id), inspect: async (actor: Actor, id: string) => { const c = index.record(actor, id); const known = await ctx.sessionPersistence.stat(SessionId(id)); invariant(known, '无法核验持久化会话', 409); this.assertLifecycle(c, known!.header) }, release: async () => { },
+      }, busy: (id: string) => this.busy(id), inspect: async (actor: Actor, id: string) => { const c = index.record(actor, id); const known = await ctx.sessionPersistence.stat(SessionId(id)); invariant(known, '无法核验持久化会话', 409); this.assertLifecycle(c, known!.header) }, release: async (id: string) => { await this.releaseConversation(id) },
     })
     this.provider = {
       protocol: 1, pluginId: 'blog', list: async (actor: Actor, query: never) => { access.assert(actor); return index.managed(ownerKey(actor), query, conversationArchive(ctx).archivedSessionIds, [...hostBusyConversationIds(ctx), ...this.busyIds()]) }, preview: async (actor: Actor, id: string, before?: number) => {
@@ -320,8 +347,9 @@ export class BlogChat {
   /**
    * **唯一**的"这个会话忙不忙"判定入口。三档只差"算上哪几层占用"，所有层都在这一个函数里合成：
    *
-   * - `'turn'`：本实例正在为它跑一轮（等价于改造前各点位的 `this.active.has(id)`）。
-   * - `'local'`：本实例占用 = `active` ∪ `forks` ∪ `forkSources`（改造前 `mutate` 用的是这一档）。
+   * - `'turn'`：本实例正在为它跑一轮（等价于改造前各点位的 `this.active.has(id)`），
+   *   外加"**正在起轮**"（`starting`，见字段注释）。
+   * - `'local'`：本实例占用 = `active` ∪ `starting` ∪ `forks` ∪ `forkSources`（改造前 `mutate` 用的是这一档）。
    * - `'all'`（缺省，也是对外口径）：`'local'` ∪ 待核对操作 ∪ **外部驱动方**。
    *
    * 外部那一层（`this.occupancy`）三档都算：它表示"运行时的回合驱动方此刻占着这个会话"，
@@ -331,9 +359,12 @@ export class BlogChat {
    * 里（`busy()` 与侧栏忙集合），内部各点位只查 `active`/`forks`/`forkSources`，所以它们显式传
    * `'turn'`/`'local'`——顺手把 `pendingOperations` 也并进去会让"有待核对操作时不能发消息、不能改名"
    * 变成新的 409，那是行为变更，不属于"只加接缝"这一批。
+   *
+   * ⚠️ `starting` 三档都算（它是 `active` 的**前身**）：起轮与跑轮对"这个会话忙不忙"是同一件事。
+   * 只算 `'turn'` 而不算 `'local'` 会让"起轮当中还能改名/还能删"重新变成可能，而那正是本批要关的口子。
    */
   busy(id: string, scope: 'turn' | 'local' | 'all' = 'all'): boolean {
-    const local = scope === 'turn' ? this.active.has(id) : this.active.has(id) || this.forks.has(id) || this.forkSources.has(id)
+    const local = this.active.has(id) || this.starting.has(id) || (scope !== 'turn' && (this.forks.has(id) || this.forkSources.has(id)))
     const occupied = local || this.occupancy.isBusy(id)
     return scope === 'all' ? occupied || this.index.pendingOperations().includes(id) : occupied
   }
@@ -342,8 +373,9 @@ export class BlogChat {
    *
    * ⚠️ 拼接顺序与改造前一致（`active` → `forks` → `forkSources` → `pendingOperations`），外部那一层
    * 插在 `pendingOperations` 之前：不去重、不排序，免得下游（`index.managed`）看到的序列与今天不同。
+   * `starting` 紧跟在 `active` 之后——它与 `active` 同属"本实例在跑/要跑一轮"，两者不会同时命中。
    */
-  busyIds(): readonly string[] { return [...this.active.keys(), ...this.forks.keys(), ...this.forkSources.keys(), ...this.occupancy.busyIds(), ...this.index.pendingOperations()] }
+  busyIds(): readonly string[] { return [...this.active.keys(), ...this.starting.keys(), ...this.forks.keys(), ...this.forkSources.keys(), ...this.occupancy.busyIds(), ...this.index.pendingOperations()] }
   async create(actor: Actor, requestId: string) { this.access.assert(actor); return this.publicConversation(await this.index.create(ownerKey(actor), requestId)) }
   publicConversation({ id, title, updatedAt, ready, parent, pinned }: ChatConversation) { return { id, title, updatedAt, ready, parent, pinned: !!pinned } }
   async list(actor: Actor, offset: number, query: string): Promise<{ readonly items: readonly ChatListItem[]; readonly nextOffset: number | null }> { this.access.assert(actor); return this.index.list(ownerKey(actor), offset, query) }
@@ -528,7 +560,12 @@ export class BlogChat {
     invariant(typeof args.text === 'string' && args.text.trim() && args.text.length <= 8000, '请输入消息（最多 8000 字符）')
     invariant(typeof args.research === 'boolean', '联网选项无效')
     const owner = ownerKey(actor), conversation = await this.index.get(owner, args.conversationId)
-    invariant(!this.busy(conversation.id, 'turn') || await this.index.hasRequest(owner, args.requestId), '此对话正在结束上一轮，请稍后再试', 409)
+    // ⚠️ 这三道守卫写成"**先同步判忙、忙了才 await 幂等**"，不是风格问题：
+    // `!busy || await hasRequest(...)` 与它等价，但**只要写成 `await`，不忙的那条路也会挂起一次**，
+    // 而"检查—登记"必须落在同一段同步执行里（见 `starting`）。所以要保住短路求值的形状。
+    if (this.busy(conversation.id, 'turn')) {
+      invariant(await this.index.hasRequest(owner, args.requestId), '此对话正在结束上一轮，请稍后再试', 409)
+    }
     invariant(!this.forks.has(conversation.id), '分支正在准备，请稍后再试', 409)
     let operationId: string | undefined, draftId: string | null = null
     if (args.retryFrom) {
@@ -543,7 +580,9 @@ export class BlogChat {
     const selected = duplicate ? undefined : await requestedConversationModel(this.ctx, args.modelSelection)
     this.access.assert(actor); await this.index.get(owner, conversation.id)
     invariant(!this.closed, '博客助手正在停止', 503)
-    invariant(!this.busy(conversation.id, 'turn') || await this.index.hasRequest(owner, args.requestId), '此对话正在回答，请稍后再试', 409)
+    if (this.busy(conversation.id, 'turn')) {
+      invariant(await this.index.hasRequest(owner, args.requestId), '此对话正在回答，请稍后再试', 409)
+    }
     invariant(!this.forks.has(conversation.id), '分支正在准备，请稍后再试', 409)
     invariant(duplicate || this.active.size < 4, '当前对话任务较多，请稍后再试', 429)
     const frozen = duplicate ? null : await this.attachments.freeze(actor, conversation.id, input.attachments as never) as readonly FrozenAttachment[] | null
@@ -552,21 +591,41 @@ export class BlogChat {
       invariant(capability.available, capability.message, 422)
       this.access.assert(actor)
       invariant(!this.closed, '博客助手正在停止', 503)
-      invariant(!this.busy(conversation.id, 'turn') || await this.index.hasRequest(owner, args.requestId), '此对话正在回答，请稍后再试', 409)
+      if (this.busy(conversation.id, 'turn')) {
+        invariant(await this.index.hasRequest(owner, args.requestId), '此对话正在回答，请稍后再试', 409)
+      }
       invariant(!this.forks.has(conversation.id), '分支正在准备，请稍后再试', 409)
     }
-    const { request, fresh } = await this.index.start(owner, conversation.id, args.requestId, input)
-    if (!fresh) return { id: request.id, status: request.status, conversationId: request.conversationId }
-    const b: Turn = { chat: this, request, selected, job: { actor, owner, input: { research: input.research as boolean } }, sources: [], stopped: false, handle: null, live: null, unsub: [], abort: new AbortController(), draft: null }
-    if (draftId) b.draft = await this.storage.get(owner, draftId) as unknown as BlogDraft
-    b.request = await this.index.updateRequest(request.owner, request.id, { attachments: frozen, draftId })
-    // ⚠️ "首句当标题"**不在这里**：标题那条守卫要求会话已发布（`ready = TRUE`，未发布的会话不该
-    // 有官方标题），而发布发生在 `durable`（`run` 里）。放在这一步会被守卫挡掉，表现是会话标题
-    // 一直是"新对话"——用户可见，而且不报错。现在由 `autoTitle(b)` 在 `durable` 之后写。
-    this.active.set(conversation.id, b)
-    b.timer = setTimeout(() => void this.finish(b, 'interrupted', '回答超时，已保存的内容可以继续'), this.timeoutMs)
-    b.runPromise = this.run(b, conversation)
-    return { id: request.id, status: 'queued', conversationId: conversation.id, model: selected }
+    /**
+     * ★ **最后一道闸：检查并登记，两者必须在同一段同步执行里**（中间一个 await 都不能有）。
+     *
+     * 上面那两道 `busy()` 守卫挡不住全部：它们各自与这里之间**还有 await**（`freeze`、图片能力
+     * 查询），所以两次并发 `send` 可以都越过它们。真正定胜负的是这一次**原子**的检查并登记 ——
+     * 先到的那次登记完，后到的那次在**同一段同步执行**里就能看见（JS 单线程，`has` 与 `add`
+     * 之间没有挂起点）。
+     *
+     * 登记之后到 `active.set` 之间还有 `start`（内部三次 PG 往返）、`storage.get`、
+     * `updateRequest` 三个挂起点 —— 那些正是原来"两条都 queued、两条都失败"的窗口
+     * （见 `starting` 的字段注释，实测过）。
+     *
+     * `finally` 在 `active.set` 之后才跑，所以两段之间没有"既不在 `starting` 也不在 `active`"的缝。
+     */
+    invariant(!this.starting.has(conversation.id), '此对话正在回答，请稍后再试', 409)
+    this.starting.add(conversation.id)
+    try {
+      const { request, fresh } = await this.index.start(owner, conversation.id, args.requestId, input)
+      if (!fresh) return { id: request.id, status: request.status, conversationId: request.conversationId }
+      const b: Turn = { chat: this, request, selected, job: { actor, owner, input: { research: input.research as boolean } }, sources: [], stopped: false, handle: null, live: null, unsub: [], abort: new AbortController(), draft: null }
+      if (draftId) b.draft = await this.storage.get(owner, draftId) as unknown as BlogDraft
+      b.request = await this.index.updateRequest(request.owner, request.id, { attachments: frozen, draftId })
+      // ⚠️ "首句当标题"**不在这里**：标题那条守卫要求会话已发布（`ready = TRUE`，未发布的会话不该
+      // 有官方标题），而发布发生在 `durable`（`run` 里）。放在这一步会被守卫挡掉，表现是会话标题
+      // 一直是"新对话"——用户可见，而且不报错。现在由 `autoTitle(b)` 在 `durable` 之后写。
+      this.active.set(conversation.id, b)
+      b.timer = setTimeout(() => void this.finish(b, 'interrupted', '回答超时，已保存的内容可以继续'), this.timeoutMs)
+      b.runPromise = this.run(b, conversation)
+      return { id: request.id, status: 'queued', conversationId: conversation.id, model: selected }
+    } finally { this.starting.delete(conversation.id) }
   }
   options(b: Turn, selection: unknown): AgentOptions {
     return {
@@ -669,7 +728,18 @@ export class BlogChat {
       b.handle.agent.followup(message)
     } catch (error) { await this.finish(b, 'failed', (error as { readonly code?: string } | null | undefined)?.code === 'DSH_ACCESS_ERROR' ? (error as Error).message : '无法启动对话，请检查宿主模型与插件配置') }
   }
-  finish(b: Turn, status: string, message: string | null = null): Promise<void> {
+  /**
+   * 一轮的**唯一收尾实现**。
+   *
+   * @param options.persist 是否在收尾里做"会话持久化检查点"（`durable`）。缺省 `true`。
+   *   **移除围栏的 `release` 传 `false`**，理由不是省事：那一刻会话已经被 `mark(pending)`，
+   *   而 `durable` 第一步就是 `index.get`（`ChatStore.get` 的可见性守卫要求
+   *   `deletedAt === null && removalState === ''`）⇒ 必然 404，被下面的 catch 降级成
+   *   `status = 'failed'` 并把消息换成"对话持久化未完成，请核对宿主日志后继续"。
+   *   一次**正常**的移除会因此在页面上留下一条**误导性的失败**。会话马上要被宿主编档，
+   *   检查点本来也没有意义。
+   */
+  finish(b: Turn, status: string, message: string | null = null, options: { readonly persist?: boolean } = {}): Promise<void> {
     if (b.finishing) return b.finishing
     b.stopped = true; clearTimeout(b.timer); b.abort.abort(); for (const off of b.unsub) off()
     b.finishing = (async () => {
@@ -678,7 +748,7 @@ export class BlogChat {
         if (b.handle) {
           this.jobs.bindings.delete(b.handle.agent)
           if (status !== 'succeeded') b.handle.agent.cancel({ kind: 'user' })
-          await b.handle.agent.whenIdle(); await this.durable(b)
+          await b.handle.agent.whenIdle(); if (options.persist !== false) await this.durable(b)
         }
       } catch { status = 'failed'; message = '对话持久化未完成，请核对宿主日志后继续' }
       finally {
@@ -692,7 +762,44 @@ export class BlogChat {
       }
     })(); return b.finishing
   }
-  async stop(actor: Actor, id: string) { this.access.assert(actor); await this.index.get(ownerKey(actor), id); const b = this.active.get(id), fork = this.forks.get(id); if (fork) { fork.abort.abort(); await fork.promise?.catch(() => { }) } if (b) await this.finish(b, 'interrupted', '已停止回答'); this.access.assert(actor); return { stopped: true } }
+  /**
+   * `stop`：停本实例在这个会话上的回合与分支准备。
+   *
+   * ⚠️ **返回值必须如实**：改了 `{ stopped: true }` 恒真之后，页面在"其实什么都没停"的时候也
+   * 会显示"已停止"。而**外部驱动方**（运行时的会话生命周期）占着这个会话时，本实例确实没有
+   * 东西可停 —— 那要 `lifecycle.abort`，属装配之后的事（批次 C），本批**只要求不谎报**。
+   */
+  async stop(actor: Actor, id: string) {
+    this.access.assert(actor); await this.index.get(ownerKey(actor), id)
+    const b = this.active.get(id), fork = this.forks.get(id)
+    if (fork) { fork.abort.abort(); await fork.promise?.catch(() => { }) }
+    if (b) await this.finish(b, 'interrupted', '已停止回答')
+    this.access.assert(actor)
+    return { stopped: fork !== undefined || b !== undefined }
+  }
+  /**
+   * 移除围栏的 `release`：kit 在**接受移除**（`mark(pending)` 已落）之后 `await` 它。
+   *
+   * 不接真时的后果不是"少做一件事"：移除被接受、围栏已写，而本实例**仍攥着那个会话的回合**，
+   * 宿主的 `archiveSession` 与"移除已生效"因此脱节（`packages/plugin-kit/src/conversations.ts:126-157`
+   * 的顺序是 busy → snapshot → inspect → busy → mark(pending) → **release** → archive → mark(removed)）。
+   *
+   * ⚠️ **此刻会话已经不可见**：`mark(pending)` 之后任何走可见性的读写（`index.get` / `save` /
+   * `assertScope`）都是 404。所以收尾走 `finish(..., { persist: false })`：它内部只碰
+   * `index.updateRequest`（按 owner + 行 id 查，不看可见性）。
+   *
+   * ⚠️ **失败只记日志**：`release` 抛错会让 kit 把这次移除记成 `failed`
+   * （`conversations.ts:151-154`），而 `failed` 在页面列表里**没有任何清除路径**（红队 `e78e285`
+   * 第 2 条已登记）⇒ 一次收尾失败会把会话永久钉在"移除失败"上。收尾失败远没有"移除卡住"严重。
+   */
+  async releaseConversation(id: string): Promise<void> {
+    try {
+      const fork = this.forks.get(id)
+      if (fork) { fork.abort.abort(); await fork.promise?.catch(() => { }) }
+      const b = this.active.get(id)
+      if (b) await this.finish(b, 'interrupted', '会话已移除', { persist: false })
+    } catch (error) { console.error('agents-group/blog: 移除会话时收尾回合失败', error) }
+  }
   /** 内部异常收尾只处理原身份已接纳的精确请求，不授予读取权限或返回业务内容。 */
   async settleAccepted(actor: Actor, conversationId: string, requestId: string) {
     const b = this.active.get(conversationId)
