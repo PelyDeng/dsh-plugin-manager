@@ -214,10 +214,17 @@ export interface SubtaskRecord {
    *
    * 它与 `reason` 分开存：`accept` 必须**程序化核验**证据能在该步结果里找到，核验不过要
    * 降级成 `unverified`，而"为什么降级"要能看出来是"证据找不到"而不是"模型没说理由"。
+   *
+   * ⚠️ 类型是 `unknown` 而不是 `string`：**新库这一列是 JSONB**（pg 驱动读回对象/数组），
+   * 插件自带的旧表本次仍是 TEXT（读回字符串）。当字符串用会在切库后静默出错。
    */
-  readonly verdictEvidence: string
-  /** 裁决时的观察记录（当前留给后续期用）；没裁决过时为空串。 */
-  readonly observation: string
+  readonly verdictEvidence: unknown
+  /**
+   * 裁决时的观察记录（当前留给后续期用）；没裁决过时为空串。
+   *
+   * ⚠️ 同 {@link verdictEvidence}：新库是 JSONB，类型不能标成 `string`。
+   */
+  readonly observation: unknown
   readonly startedAt: number | null
   readonly finishedAt: number | null
 }

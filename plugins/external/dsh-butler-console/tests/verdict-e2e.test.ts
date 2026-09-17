@@ -12,6 +12,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AccessError } from '@dsh-plugin-manager/plugin-kit'
 import type { ButlerAgentExecutor } from '../src/protocol.ts'
+import { isTerminal } from '../src/task-model.ts'
 import { driveToTerminal, runPlannedTask, startButler } from './helpers/butler-driver.ts'
 
 const draft = { kind: 'draft', title: '在博客查看候选稿', path: '/blog?conversationId=c-1' }
@@ -32,6 +33,13 @@ describe('端到端：主路径与 D-1（重启重放被拒）', () => {
         acceptance: '一篇园区封闭化管理介绍',
         subtasks: [{ goal: '起草园区封闭化管理介绍', agentId: 'blog', acceptance: '一份 800 字以上的候选稿' }],
       },
+      // 模型按设计 §5.4 的流程**先裁决、再写汇总**。证据取执行方 `summary` 里的原文——程序化
+      // 核验要找得到它，找不到会被降级成 `unverified`（那是另一条判据的用例）。
+      onSummarize: async (_round, api) => {
+        await api.callTool('butler_verdict', {
+          items: [{ subtaskId: 's1', verdict: 'accept', evidence: '候选稿已交回' }],
+        })
+      },
     })
     try {
       // 判据一：真的落终态（不是停在 running/summarizing）。
@@ -40,6 +48,29 @@ describe('端到端：主路径与 D-1（重启重放被拒）', () => {
       expect(record.subtasks[0]!.state).toBe('succeeded')
       // 判据二：汇总只跑了一轮 —— 多驱动一次就会变成 2，说明"按需驱动"没有多推。
       expect(driver.followups()).toBe(2)
+    } finally { driver.close() }
+  })
+
+  it('⚠️ 模型完全不裁决 ⇒ 说明里如实写出，不静默当成"全通过"', async () => {
+    // 工具内部那道"漏裁拒绝整批"只在**模型调了工具**时生效；一条都不裁时 `decisions` 为空、
+    // `rework` 也就是空 ⇒ 原先会被当成"全部通过"：照写汇总正文、落 `completed`，而库里四列全空、
+    // 页面不显示、汇总材料也不提 —— **没有任何"这一轮没裁决过"的痕迹**（静默）。设计 §5.4 的
+    // 流程约定是"先调 `butler_verdict` 再写汇总"，所以这里必须由编排层兜住。
+    const { driver, state } = await runPlannedTask({
+      executor: succeeded(),
+      plan: { subtasks: [{ goal: '起草介绍', agentId: 'blog' }] },
+      // 刻意**不**调 `butler_verdict`：模拟模型忘了裁决。
+      onSummarize: async () => {},
+    })
+    try {
+      // 终态**仍是 `completed`**："没裁决"是流程缺失、不是子任务没成（取舍理由见 `butler.ts`
+      // 里 `undecidedNote` 上的注释），但说明里**如实写出来**：任务详情与汇总材料都看得到。
+      expect(state).toBe('completed')
+      const record = driver.store.task(driver.actor, driver.taskId())!
+      expect(record.error ?? '').toContain('没有裁决')
+      expect(record.error ?? '').toContain('1 个步骤等待裁决')
+      // 四列仍然是空的 —— 留痕的是**说明**，不是伪造一条裁决出来。
+      expect(record.subtasks.every(item => (item.verdict ?? '') === '')).toBe(true)
     } finally { driver.close() }
   })
 
@@ -100,10 +131,18 @@ describe('端到端：裁决的动作面（① 追加尝试 / replace / 预算�
       executor: succeeded('第二版写好了'),
       plan: { subtasks: [{ goal: '起草介绍', agentId: 'blog', logicalId: 'g1', acceptance: '一份候选稿' }] },
       onSummarize: async (round, api) => {
-        // 只在第一轮裁 rework：第二轮（新尝试跑完后的再收尾）不裁，于是这一轮正常落终态。
-        if (round > 1) return
+        // 第一轮裁 `rework`（要求重做）；第二轮（新尝试跑完后的**再收尾**）裁 `accept`（重做通过）。
+        // ⚠️ 第二轮**必须**裁：不裁会被"这一轮没有裁决"的守卫如实降级成 `partial`。
+        if (round === 1) {
+          await api.callTool('butler_verdict', {
+            items: [{ subtaskId: 's1', verdict: 'rework', reason: '再改一版' }],
+          })
+          return
+        }
+        const record = api.store.task(api.actor, api.taskId())!
+        const latest = record.subtasks.at(-1)!
         await api.callTool('butler_verdict', {
-          items: [{ subtaskId: 's1', verdict: 'rework', reason: '再改一版' }],
+          items: [{ subtaskId: latest.id, verdict: 'accept', evidence: '第二版写好了' }],
         })
       },
     })
@@ -147,7 +186,22 @@ describe('端到端：裁决的动作面（① 追加尝试 / replace / 预算�
       // 判据：追加次数有界（不是每一轮都追加），且最终如实落 `partial`（"要重做但做不了"）。
       expect(appended).toBeGreaterThanOrEqual(1)
       expect(state).toBe('partial')
-      expect(driver.store.task(driver.actor, driver.taskId())!.subtasks.length).toBeLessThanOrEqual(4)
+      const rows = driver.store.task(driver.actor, driver.taskId())!.subtasks
+      expect(rows.length).toBeLessThanOrEqual(4)
+      /**
+       * 顺带**证伪**一条评审提出的担忧：收尾触发点用**未去重**的 `record.subtasks` 判断"是否
+       * 全部终结"（`if (record.subtasks.some(item => !isTerminal(item.state))) return`），而结论用
+       * 去重后的 `effectiveSubtasks` ⇒ 若"被替代的旧尝试"停在非终态（例如 `queued`），任务可能
+       * **永远不收尾**。
+       *
+       * 实测不成立，依据是这条不变量：**要成为"被替代"，那一行必须先经过一次裁决，而裁决只收
+       * 已终结的步骤**（`openVerdictContext` 的筛选条件）⇒ 库里不存在"被替代且非终态"的行。
+       * 本用例连续裁了两轮 `rework`，库里确实有被替代的行 —— 直接把不变量钉在这里：将来若有人
+       * 让"未终结的步骤也能被替代"，这一条会立刻红。
+       */
+      const superseded = rows.filter(item => rows.some(other => other.supersedes === item.id))
+      expect(superseded.length).toBeGreaterThanOrEqual(1)
+      expect(superseded.every(item => isTerminal(item.state))).toBe(true)
     } finally { driver.close() }
   })
 })

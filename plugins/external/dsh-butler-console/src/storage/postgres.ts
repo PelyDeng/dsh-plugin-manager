@@ -100,8 +100,13 @@ interface SubtaskRow extends QueryResultRow {
   /** 裁决四列（`subtasks` 表，v10 起）。空串表示**还没裁决过**。 */
   readonly verdict: string
   readonly verdictReason: string
-  readonly verdictEvidence: string
-  readonly observation: string
+  /**
+   * ⚠️ `unknown` 而不是 `string`：**新库这两列是 JSONB**（`private-deploy/db/0001_init.sql`），
+   * pg 驱动读回的是对象/数组；插件自带的旧表本次仍是 TEXT（读回是字符串）。标注成 `string`
+   * 等于对切库后的读侧撒谎。消费方不要当字符串用——要么走 `parse…`，要么自己判类型。
+   */
+  readonly verdictEvidence: unknown
+  readonly observation: unknown
 }
 
 function toTimestamp(value: string | number | null): number | null {

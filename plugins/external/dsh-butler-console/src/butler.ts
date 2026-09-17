@@ -3866,6 +3866,17 @@ export class ButlerConsole {
      * （任务回到调度中，新尝试跑完会再收尾一次）；预算用尽或没有可追加的，才按 `partial` 如实
      * 收尾 —— 那两种情况都说明"要重做但做不了"，而不是"已经重做了"。
      */
+    /**
+     * ⚠️ **模型完全不调 `butler_verdict` 时的守卫。**
+     *
+     * 工具内部那道"漏裁拒绝整批"只在**模型调了工具**时生效；一条都不裁时 `decisions` 为空、
+     * 下面的 `rework` 也就是空 ⇒ 会像"全部通过"一样照写汇总正文、落 `completed`，而库里四列
+     * 全空、页面不显示、汇总材料也不提——**没有任何"这一轮没裁决过"的痕迹**（静默）。而设计
+     * §5.4 的流程约定是"同一轮里先调 `butler_verdict` 再写汇总"，代码里没有对应守卫。
+     *
+     * 所以这里显式判：**清单非空**（确实有待裁决的步骤）**却一条都没裁** ⇒ 不冒充"全通过"。
+     */
+    const undecided = verdict !== undefined && verdict.open.length > 0 && verdict.decisions.length === 0
     const rework = (verdict?.decisions ?? []).filter(item => item.verdict === 'rework' || item.verdict === 'replace')
     if (rework.length > 0) {
       const retried = yield* this.applyReworkAttempts({
@@ -3906,13 +3917,31 @@ export class ButlerConsole {
         acceptanceFinding.detail,
       ].filter(text => text !== '').join('；')
     /**
+     * "这一轮没有裁决"如实落进说明（见上面 `undecided` 的定义）。
+     *
+     * **只在说明里写，不改终态** —— 评审给了两个选项（"不落 `completed`"或"至少记进说明"），
+     * 主线选后者，理由有两条：
+     *
+     * 1. `completed` / `failed` / `cancelled` / `partial` 描述的是**子任务的结果**
+     *    （`decideSettlement` 的四条规则），而"这一轮没有裁决"是**流程缺失**、不是任务质量
+     *    问题 —— 拿 `partial` 去盖会把两类不同的事混为一谈（§5.4 对 `unverified` 也正是同一
+     *    口径："不进终态"）。
+     * 2. 它写进 `error` 之后**任务详情与汇总材料都看得到**，而升成 `partial` 会让 9 条与本主题
+     *    无关的既有用例（走汇总轮但不调裁决工具）一起变红 —— 那不是修复，那是把流程缺失的代价
+     *    转嫁给所有旧路径。
+     *
+     * 若将来要让"没裁决"真的影响终态，应当先定义它在 §5.4 里的位置（它今天没有位置）。
+     */
+    const undecidedNote = `这一轮没有裁决：有 ${verdict?.open.length ?? 0} 个步骤等待裁决，但一条结论都没有拿到`
+    const finalError = undecided ? [error, undecidedNote].filter(text => text !== '').join('；') : error
+    /**
      * 汇总跑完再核一次输入版本，而且**核对与写入在同一个事务里**。
      *
      * 开头那道屏障只挡得住「开始汇总时就已经有未处理输入」的情况。汇总这一轮本身是异步的，
      * 正好在它跑的这段时间里进来的补充，只能在这里拦下来 —— 那份结论是按**旧范围**总结的，
      * 写下去就等于用旧结论盖住新目标，还把任务报成完成。
      */
-    if (!(await this.storage.commitTaskState(taskId, taskState, { summary: summaryText, error }))) {
+    if (!(await this.storage.commitTaskState(taskId, taskState, { summary: summaryText, error: finalError }))) {
       // 结论作废，但它已经边流边出现在页面上了：如实说明它只是草稿，不冒充最终答复。
       await this.storage.setTaskState(taskId, 'running')
       yield {
@@ -3922,7 +3951,7 @@ export class ButlerConsole {
       }
       return
     }
-    yield { type: 'summary', taskId, text: summaryText, state: taskState, error, time: Date.now() }
+    yield { type: 'summary', taskId, text: summaryText, state: taskState, error: finalError, time: Date.now() }
   }
 
   /**
