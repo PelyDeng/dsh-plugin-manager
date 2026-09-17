@@ -289,6 +289,43 @@ describe('createAgentRuntime 接上标题投递口', () => {
     await assembly.dispose()
   })
 
+  it('调用方自带的标题投递口优先：投递只进注入的那一份，存储端口那一份一次都不收', async () => {
+    const f = fixture('assembly-agent-own')
+    installTitleSink(undefined)
+    const delivered: { readonly title: string; readonly source: string }[] = []
+    const assembly = await createAgentRuntime({
+      ctx: f.host.ctx,
+      definition: f.definition,
+      access,
+      config,
+      allowedTools: () => ['assembly_demo'],
+      storage: f.storage,
+      /**
+       * 业务自带投递口。
+       *
+       * 场景是真实的：blog 的 `chat.ts` 自己注册 `registerConversationTitles`，在回调里
+       * ①写 `index.syncTitle`（落库）②给页面发 `changed`（通知）。此时运行时若还按存储端口
+       * 另装一份，同一条标题会被**写两次**：第二次被"自动标题不覆盖手动标题"的守卫拒掉，
+       * 业务那次判定的 `applied` 于是变成假 ⇒ **页面不刷新**，而两边都不报错。
+       */
+      titleSink: { submit: (_agentId, _conversationId, title, source) => { delivered.push({ title, source }) } },
+    })
+    const conversationId = 'assembly-agent-own-01234567-89ab-4cde-8fab-0123456789ab'
+    f.host.emit('session/event', { id: conversationId }, titleEvent('自带投递口的标题', { kind: 'provider' }))
+
+    expect(delivered).toEqual([{ title: '自带投递口的标题', source: 'generated' }])
+    // ★ 判据（对应变异 M4）：把工厂里的 `input.titleSink ??` 去掉、恒用 `db.titleSink()`，
+    //   投递就会落进存储端口那一份 ⇒ 下面这条必然红（而上面那条也会红）。
+    expect(f.database.titles).toHaveLength(0)
+
+    // 路由仍然按 `agentId` 分发：自带的那一份也要能被同进程的其它 Agent 分辨开
+    // （槽位装的是 `titleRouter`，不是「最近一次装配的那一份」）。
+    f.host.emit('session/event', { id: conversationId }, titleEvent('我的车辆记录', { kind: 'user' }, []))
+    expect(delivered.at(-1)).toEqual({ title: '我的车辆记录', source: 'manual' })
+
+    await assembly.dispose()
+  })
+
   it('同进程两个 Agent：标题按 agentId 各归各的投递口，后装配的不会顶掉先装配的', async () => {
     const a = fixture('assembly-agent-a')
     const b = fixture('assembly-agent-b')

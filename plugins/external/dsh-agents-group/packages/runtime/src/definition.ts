@@ -238,6 +238,39 @@ export interface TurnHookContext {
   readonly agent: Agent
   /** 业务自己的存储门面；未注入时为 `undefined`。 */
   readonly storage: AgentStoragePort | undefined
+  /**
+   * 这一轮的**幂等身份**（协作入口驱动的一轮才有）。
+   *
+   * 它是这次派活的幂等键，也是落 `dsh_turns.request_id` 的那个值；协作入口用
+   * `run:<requestId>` / `reply:<requestId>` 两个命名空间（见 `participant.ts` 的 `settledKey`），
+   * 所以**续问与首次派活的身份不会互撞**。
+   *
+   * ⚠️ **两条驱动路径不一样，缺省是常态而不是异常**：
+   * - **协作入口**（`participant.ts`）驱动的一轮：有。
+   * - **页面路径**（`closedoff/src/web.ts` 直接调 `lifecycle.followup`）：**没有** —— 用户点一下
+   *   发一条消息，没有可重放的幂等身份。这里是 `undefined`，运行时**不会**替它编一个
+   *   （编出来的键会被业务当成稳定凭据）。
+   */
+  readonly requestId?: string
+  /**
+   * 这一轮在 `dsh_turns` 里的**行 id**（`TurnRecord.id`）。
+   *
+   * ## ⚠️ 它不是 `requestId`（DDL 专门写了这条"同名不同义"）
+   * `dsh_turn_results.turn_id` 指向的是**行 id**，而幂等身份是
+   * `(agent_id, owner_namespace, owner_id, request_id)` 上的**部分唯一索引**。两者可以完全不同。
+   * 而 `claim` 只回答"认领成功 / 重复"、**不返回行 id** ⇒ 运行时用
+   * `turns.turnId(owner, requestId)` **回查一次**、随三个钩子原样下传（不是每个钩子查一次 PG）。
+   *
+   * ## 什么时候是 `undefined`（三种，都不是异常）
+   * 装配没注入存储门面 · 页面路径（没有幂等身份，无从回查） · 这一行还没落地。
+   *
+   * ## 业务为什么需要它
+   * ①把**宿主任务系统的句柄与这一轮绑起来**（句柄是按 agent 索引的，而"这一轮是哪一行"只有它有）；
+   * ②把结构化产出写进 `dsh_turn_results`（`turn_id` 要的正是行 id）。
+   * 少了它，"按回合记账"的业务能力在运行时接管回合之后会**静默失效**：工具拿不到绑定就**全部 403**，
+   * 结果一行都落不下 ⇒ 依赖结果记录的状态（例如"候选稿待采用"）永远不出现。
+   */
+  readonly turnId?: string
 }
 
 /**

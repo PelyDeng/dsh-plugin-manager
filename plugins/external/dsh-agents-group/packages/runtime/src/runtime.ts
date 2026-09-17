@@ -81,6 +81,19 @@ export interface CreateAgentRuntimeInput {
    * 漂移，而漂移的后果是会话落到别的 Agent 名下。
    */
   readonly database?: Omit<CreateAgentDatabaseInput, 'agentId'>
+  /**
+   * **调用方自带的标题投递口**；缺省用存储端口那一份（`db.titleSink()`）。
+   *
+   * 什么时候需要它：业务**自己已经有完整的标题路径**——既落库、又通知页面（blog 的
+   * `chat.ts` 就是：它注册 `registerConversationTitles`，写 `index.syncTitle` 之后再给页面发
+   * `changed`）。此时若运行时再按存储端口另装一份，同一条标题会被**写两次**：第二次被守卫
+   * （"自动标题不覆盖手动标题"）拒掉 ⇒ 业务那次判定的 `applied` 变成假 ⇒ **页面不刷新**，
+   * 用户看到的是"改了名但列表里还是旧的"，而两边都不报错。
+   *
+   * ⚠️ 它**不改变**槽位的路由方式：传进来的这一份仍按 `agentId` 登记进 `titleRouter`，
+   * 所以一个进程里多个 Agent 各用各的投递口、互不顶掉（见 `titleRouter` 的注释）。
+   */
+  readonly titleSink?: TitleSink
 }
 
 /** 装配结果。 */
@@ -151,11 +164,14 @@ export async function createAgentRuntime(input: CreateAgentRuntimeInput): Promis
   //   宿主标题永不落库，侧栏标题永久停在首句压缩值。这与 `definition.tools` 是同一类"零接线"
   //   缺陷（声明与实现都在、中间的线没接，而且完全静默）。
   //
-  //   端点直接用存储端口已有的那一份（`AgentDatabaseFacade.titleSink()`，底层是本地持久
-  //   outbox：内存队列会在崩溃或卸载时丢标题），不另写实现；槽位为什么要路由见 `titleRouter`。
+  //   端点缺省用存储端口已有的那一份（`AgentDatabaseFacade.titleSink()`，底层是本地持久
+  //   outbox：内存队列会在崩溃或卸载时丢标题），不另写实现；也可以由调用方自带一份
+  //   （`input.titleSink`，见那个字段的注释：业务自己有"落库 + 通知页面"的完整标题路径时，
+  //   再让运行时另装一份就是**双写**——同一条标题被写两次，后写那次会被守卫拒 ⇒ `applied`
+  //   为假 ⇒ 页面不刷新，表现成"标题还是旧的"而没有任何报错）；槽位为什么要路由见 `titleRouter`。
   //   装在 `new ConversationLifecycle(...)` **之前**：标题订阅就是那个构造函数注册的，
   //   投递口必须在任何事件可能到达之前就在位。
-  const sink = db.titleSink?.()
+  const sink = input.titleSink ?? db.titleSink?.()
   if (sink !== undefined) {
     titleSinks.set(definition.id, sink)
     installTitleSink(titleRouter)

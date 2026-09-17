@@ -22,7 +22,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ParticipantRequest, ParticipantResult } from '../packages/runtime/src/contract.ts'
 import { ConversationLifecycle, type AgentRuntime, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
 import { createParticipant, type RuntimeParticipant } from '../packages/runtime/src/participant.ts'
-import type { AgentDefinition, ProjectedResult } from '../packages/runtime/src/definition.ts'
+import type { AgentDefinition, ProjectedResult, TurnHookContext } from '../packages/runtime/src/definition.ts'
 import type { HandoffLedger } from '../packages/runtime/src/handoff.ts'
 import type { AgentDatabasePort, AgentStoragePort, ConversationPort, OwnerKey, TurnStorePort } from '../packages/runtime/src/storage/ports.ts'
 import { MemoryConversationPort } from './fixtures/memory-conversation-port.ts'
@@ -945,6 +945,43 @@ describe('回合钩子的通知：发出者与次数', () => {
       await new Promise(resolve => setTimeout(resolve, 20))
       // ⚠️ 回归：曾经收 `['completed']`——释放闭包的缺省 outcome 抢走了显式那条带正确结论的通知。
       expect(outcomes).toEqual(['failed'])
+    } finally { await hosted.dispose() }
+  })
+
+  /**
+   * ⚠️ **页面路径**：`closedoff/src/web.ts:794` 是**直接**调 `lifecycle.followup(...)` 的，
+   * 既不 `retainTurn`、也没有幂等身份。这条用例钉的是**如实缺省**：
+   * 两个身份字段都必须是 `undefined`，而**不是**运行时替它编一个。
+   *
+   * 为什么值得单独一条：批次 C 要让 blog 的业务按 `turnId` 记账。如果运行时在"没有身份"时
+   * 编一个（例如临时 `randomUUID()`），业务会把它当成稳定凭据用 —— 而它每次都不一样，
+   * 于是"按轮绑定"会在页面路径上静默错位，且**没有任何报错**。
+   */
+  it('页面路径（直接 `lifecycle.followup`，没有协作入口）⇒ 身份字段**如实缺省**，不编一个', async () => {
+    /** 存**上下文原对象**而不是挑几个字段：判据要的是"两个键在不在"，挑字段就把这件事丢了。 */
+    const contexts: TurnHookContext[] = []
+    const hosted = host(definitionOf({
+      onTurnStart: (ctx) => { contexts.push(ctx) },
+      turnContext: (ctx) => { contexts.push(ctx); return '资料' },
+    }))
+    try {
+      // 页面入口自己开句柄（不是协作入口那条 `open(..., createMissing)` 的路）。
+      const conversation = await hosted.lifecycle.open(undefined, true, ACTOR)
+      expect(conversation).toBeDefined()
+      const pending = hosted.lifecycle.followup(conversation!, '页面里说一句', ACTOR)
+      await until(() => hosted.followups().length > 0, '页面路径的消息已注入')
+      hosted.complete(conversation!.id, '正文')
+      await pending
+      await until(() => contexts.length === 2, '页面路径的两个钩子都跑过')
+
+      for (const ctx of contexts) {
+        // 上下文本身必须在（否则下面的"键不在"就成了空断言）。
+        expect(ctx.conversationId).toBe(conversation!.id)
+        // ★ 判据：**两个键都不存在**，而且不是"存在但值为 undefined"。
+        //   `exactOptionalPropertyTypes` 下这两件事在类型上不等价，业务也按"键在不在"判断。
+        expect(Object.hasOwn(ctx, 'requestId')).toBe(false)
+        expect(Object.hasOwn(ctx, 'turnId')).toBe(false)
+      }
     } finally { await hosted.dispose() }
   })
 })

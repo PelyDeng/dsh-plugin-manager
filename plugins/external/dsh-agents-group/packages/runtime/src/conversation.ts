@@ -31,7 +31,7 @@ import {
   type ConversationModel,
 } from '@dsh-plugin-manager/plugin-kit'
 import { conversationModelCatalog, requestedConversationModel, selectConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
-import type { AgentDefinition, TurnHistory, TurnMessage, TurnOutcome } from './definition.ts'
+import type { AgentDefinition, TurnHistory, TurnHookContext, TurnMessage, TurnOutcome } from './definition.ts'
 import type { AgentStoragePort, ConversationPageShape, ConversationPort, ConversationQueryShape, OwnerKey } from './storage/ports.ts'
 
 /**
@@ -79,10 +79,38 @@ export interface Conversation {
   active: boolean
 }
 
+/**
+ * 一轮的**身份**：驱动方在 `retainTurn` 时交给运行时，运行时**原样**随回合钩子下传。
+ *
+ * ## 为什么身份要由驱动方给，而不是运行时自己就知道
+ *
+ * 运行时确实知道"哪一轮在跑"，但**只有协作入口那条路**才知道这一轮的幂等身份与行 id：
+ * 幂等身份来自 `participant.ts` 的 `settledKey`（`run:<requestId>` / `reply:<requestId>`），
+ * 行 id 要从 `dsh_turns` 回查。而**页面路径**（`closedoff/src/web.ts:794` 直接调 `followup`）
+ * 是"用户点一下发一条"，**没有**可重放的幂等身份。⇒ 两个字段都可选，缺省即"这一轮没有这个身份"。
+ *
+ * ⚠️ **缺省时如实给 `undefined`，不许编**：编出来的键会被业务当成可重放的凭据（幂等、按轮记账），
+ * 而它并不稳定；本仓已经为"编一个键"付过代价（见 `open` 的 `missionKeyOf` 注释里那段）。
+ */
+export interface TurnIdentity {
+  /** 这一轮的幂等身份（落 `dsh_turns.request_id` 的那个值）。页面路径没有。 */
+  readonly requestId?: string
+  /** 这一轮在 `dsh_turns` 里的**行 id**；查不到时缺省。⚠️ 它不是 `requestId`（同名不同义）。 */
+  readonly turnId?: string
+}
+
 interface PendingTurn {
   pending: boolean
   dispatching: boolean
   cancelled: boolean
+  /**
+   * 这一轮的身份（见 {@link TurnIdentity}）。
+   *
+   * 由 `retainTurn` 记到回合凭据上、`followup` 拷进这里，**收尾通知也从这里读** ——
+   * 不能现读 `heldTurns`：协作入口的 `cleanup()` 是"先放凭据、再带结论收尾"，
+   * 到 `notifyTurnFinish` 那一刻 `heldTurns` 里已经没有它了（那条注释写在 `retainTurn` 里）。
+   */
+  identity?: TurnIdentity
   /**
    * 回合被要求结束时记下的**通知参数**——**不是布尔**。
    *
@@ -201,7 +229,7 @@ export class ConversationLifecycle {
    */
   private readonly missionOpenings = new Map<string, Promise<Conversation | undefined>>()
   private readonly forks = new Set<string>()
-  private readonly heldTurns = new Map<string, { turn?: PendingTurn }>()
+  private readonly heldTurns = new Map<string, { turn?: PendingTurn; identity?: TurnIdentity }>()
   private readonly turns = new WeakMap<Conversation, PendingTurn>()
   private readonly initialModels = new WeakMap<Conversation, ConversationModel>()
   /**
@@ -351,11 +379,18 @@ export class ConversationLifecycle {
     }
   }
 
-  /** 协作调用在宿主 whenIdle 后释放，期间沿用 active 的并发及移除围栏。 */
-  retainTurn(conversation: Conversation, actor: Actor): () => void {
+  /**
+   * 协作调用在宿主 whenIdle 后释放，期间沿用 active 的并发及移除围栏。
+   *
+   * `identity` 是**这一轮的身份**（见 {@link TurnIdentity}）：记在回合凭据上，由随后的
+   * `followup` 拷进 `PendingTurn`，再随三个回合钩子（`onTurnStart` / `turnContext` /
+   * `onTurnFinish`）原样下传。缺省即"驱动方没有身份可给"（页面路径就是这样）。
+   */
+  retainTurn(conversation: Conversation, actor: Actor, identity?: TurnIdentity): () => void {
     this.assertCurrent(conversation, actor)
     if (conversation.active || this.heldTurns.has(conversation.id)) throw new AccessError(409, '智能体正在回答上一条问题')
-    const held: { turn?: PendingTurn } = {}
+    const held: { turn?: PendingTurn; identity?: TurnIdentity } = {}
+    if (identity !== undefined) held.identity = identity
     this.heldTurns.set(conversation.id, held)
     let released = false
     return () => {
@@ -382,6 +417,29 @@ export class ConversationLifecycle {
       if (this.turns.get(conversation) === held.turn || !this.turns.has(conversation)) {
         this.finish(conversation.id, 'completed', { notify: false })
       }
+    }
+  }
+
+  /**
+   * 回合钩子的上下文（**三处共用一份构造**）。
+   *
+   * 抽出来的理由不是好看：`onTurnStart` / `turnContext` / `onTurnFinish` 三处原来各写一份字面量，
+   * 而本批要往上下文里加**两个**字段 —— 三份字面量意味着"加一个字段、漏一处"是必然会发生的事
+   * （本仓把这类缺陷叫"声明了却零接线"，已经踩过 8 次）。形状收成一处之后，
+   * 字段与它的三个消费点在同一条链上。
+   *
+   * ⚠️ `requestId` / `turnId` 用**条件展开**而不是写 `undefined`：本包开着
+   * `exactOptionalPropertyTypes`，"显式写 `undefined`"与"没有这个属性"在类型上不等价；
+   * 而业务要按"属性在不在"判断这一轮有没有身份（见 {@link TurnIdentity}）。
+   */
+  private hookContext(conversation: Conversation, actor: Actor, identity: TurnIdentity | undefined): TurnHookContext {
+    return {
+      conversationId: conversation.id,
+      actor,
+      agent: conversation.handle.agent,
+      storage: this.host.storage,
+      ...(identity?.requestId === undefined ? {} : { requestId: identity.requestId }),
+      ...(identity?.turnId === undefined ? {} : { turnId: identity.turnId }),
     }
   }
 
@@ -694,6 +752,14 @@ export class ConversationLifecycle {
     this.turns.set(conversation, turn)
     const held = this.heldTurns.get(conversation.id)
     if (held) held.turn = turn
+    /**
+     * 这一轮的**身份**：`retainTurn` 记在回合凭据上，这里拷进回合本身。
+     *
+     * ⚠️ 必须先拷进 `turn` 再往下走：收尾通知（`notifyTurnFinish`）发生在协作入口
+     * "先放凭据、再带结论收尾"之后，那时 `heldTurns` 里已经没有这一轮了。
+     */
+    if (held?.identity !== undefined) turn.identity = held.identity
+    const identity = turn.identity
     this.identities.set(conversation.handle.agent, actor)
     conversation.lastUsedAt = Date.now()
     conversation.active = true
@@ -707,20 +773,9 @@ export class ConversationLifecycle {
        * 位置是刻意的：放这里失败还来得及（消息还没进去，本轮按失败收尾即可）；放到注入之后就只剩
        * "收拾残局"——业务会看到一条已经进了会话、却没能完成记账的消息。
        */
-      /**
-       * 回合开始时的业务钩子，**在消息注入之前**。
-       *
-       * 位置是刻意的：放这里失败还来得及（消息还没进去，本轮按失败收尾即可）；放到注入之后就只剩
-       * "收拾残局"——业务会看到一条已经进了会话、却没能完成记账的消息。
-       */
       const startHook = this.host.definition.onTurnStart
       if (startHook !== undefined) {
-        await startHook({
-          conversationId: conversation.id,
-          actor,
-          agent: conversation.handle.agent,
-          storage: this.host.storage,
-        })
+        await startHook(this.hookContext(conversation, actor, identity))
         // 钩子是异步的：期间可能被取消/顶掉，注入前要再核一次（与上面 `requestedConversationModel`
         // 之后那次同一理由）。
         this.assertCurrent(conversation, actor)
@@ -735,12 +790,7 @@ export class ConversationLifecycle {
        */
       const turnContext = this.host.definition.turnContext
       if (turnContext !== undefined) {
-        this.turnContexts.set(conversation.id, await turnContext({
-          conversationId: conversation.id,
-          actor,
-          agent: conversation.handle.agent,
-          storage: this.host.storage,
-        }))
+        this.turnContexts.set(conversation.id, await turnContext(this.hookContext(conversation, actor, identity)))
         // 钩子是异步的：期间可能被取消/顶掉，注入前要再核一次（与上面同一理由）。
         this.assertCurrent(conversation, actor)
         if (turn.cancelled || this.turns.get(conversation) !== turn) throw new AccessError(409, '本轮操作已停止')
@@ -898,7 +948,7 @@ export class ConversationLifecycle {
       this.turns.delete(conversation)
       conversation.active = false
       conversation.lastUsedAt = Date.now()
-      if (inFlight.notify) this.notifyTurnFinish(conversation, inFlight.outcome)
+      if (inFlight.notify) this.notifyTurnFinish(conversation, inFlight.outcome, turn.identity)
     }, () => { /* 宿主未确认空闲时保留占用。 */ })
   }
 
@@ -908,7 +958,7 @@ export class ConversationLifecycle {
    * ⚠️ **不等待、也不让业务的失败改变结论**：收到终态之后翻案，会让协调方按前一个结论记过的账
    * 对不上（协调方可能已经据此派了下一步）。所以这里只记日志。
    */
-  private notifyTurnFinish(conversation: Conversation, outcome: TurnOutcome): void {
+  private notifyTurnFinish(conversation: Conversation, outcome: TurnOutcome, identity: TurnIdentity | undefined): void {
     const hook = this.host.definition.onTurnFinish
     if (hook === undefined) return
     // ⚠️ 拿不到 actor 就**不调**：`identities` 只在 `followup` 里写入，所以"没有 actor"恰好等价于
@@ -917,13 +967,7 @@ export class ConversationLifecycle {
     const actor = this.identities.get(conversation.handle.agent)
     if (actor === undefined) return
     const notify = async (): Promise<void> => {
-      await hook({
-        conversationId: conversation.id,
-        actor,
-        agent: conversation.handle.agent,
-        storage: this.host.storage,
-        outcome,
-      })
+      await hook({ ...this.hookContext(conversation, actor, identity), outcome })
     }
     void notify().catch((error: unknown) => {
       console.warn(`[agents-group/runtime] ${this.host.definition.id} 的 onTurnFinish 抛错（不改变已定结论）：`, error)

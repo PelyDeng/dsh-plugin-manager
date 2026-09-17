@@ -247,7 +247,13 @@ function host(options: HostOptions = {}) {
   const storage: AgentStoragePort = { db, access: { mode: 'authenticated' } as unknown as Access }
 
   const scopeOf = (): Context => ({
-    systemPrompt: { section: () => {} },
+    /**
+     * `section` 与 `context` **两个都要**：`setup()` 注册人设段用前者，而声明了
+     * `definition.turnContext` 的 Agent 还会用后者注册"每轮求值"的动态上下文
+     * （`conversation.ts` 的 `setup()`）。本文件的回合身份用例要用 `turnContext`，
+     * 少了 `context` 就是在 `open()` 里以 `TypeError` 炸掉 —— 表现成 `accept` 一直等不到接单。
+     */
+    systemPrompt: { section: () => {}, context: () => {} },
     tools: { restrict: () => {} },
   }) as unknown as Context
   const agents = {
@@ -359,21 +365,38 @@ function host(options: HostOptions = {}) {
   }
 }
 
-const definitionOf = (): AgentDefinition => ({
+/**
+ * 默认定义：什么都不做。
+ *
+ * `hooks` 用于**按需**加钩子（回合身份的用例要 `onTurnStart` / `turnContext` / `onTurnFinish`
+ * 三处都记一份）——这样不必为每个用例手写整份定义，也不会让默认定义悄悄变胖。
+ */
+const definitionOf = (hooks: Partial<AgentDefinition> = {}): AgentDefinition => ({
   id: AGENT_ID,
   displayName: '认领 Agent',
   description: '只跑一轮',
   persona: '你好',
   tools: () => [],
   config: {} as never,
+  ...hooks,
 })
 
-/** 跑完一轮并返回结果；同时登记"结果已 resolve"供 C5 使用。 */
-async function runOnce(h: ReturnType<typeof host>): Promise<ParticipantResult> {
+/**
+ * 跑完一轮并返回结果；同时登记"结果已 resolve"供 C5 使用。
+ *
+ * `lookupsAfterAccept`（可选）回填**接单之后、投影之前**的 `turnId` 查询次数。
+ *
+ * ⚠️ 结果层的三条判据（只给本轮 / 惰性 / 记忆化）要看的是"**投影这一步**查了几次库"，而自从回合
+ * 身份上线之后，每一轮在 `claim` 之后**必然先查一次** `turnId`（把行 id 交给回合钩子）。所以那三条
+ * 不能再用**绝对次数**：绝对次数会把"身份那一次"算进去，而它对结果层毫无意义 —— 于是断言会随着身份
+ * 机制的增删而漂移（本批实测到 +1 的三条假红）。改成**相对量**才是它们本来想说的那句话。
+ */
+async function runOnce(h: ReturnType<typeof host>, lookupsAfterAccept?: { value: number }): Promise<ParticipantResult> {
   const promise = h.participant.run(h.request())
   // 登记"结果已 settle"，供 C5 判定 `finish` 是在它之前还是之后被调的。
   promise.then(() => { h.settledFlag.value = true })
   const id = await h.accept(promise)
+  if (lookupsAfterAccept !== undefined) lookupsAfterAccept.value = h.calls.turnIdLookups
   h.complete(id, '这一轮的正文')
   return promise
 }
@@ -529,6 +552,116 @@ describe('判据：轮次幂等真的接在运行时上（`dsh_turns`）', () =>
 })
 
 // ---------------------------------------------------------------------------
+// 回合的**身份**：`TurnHookContext.requestId` / `.turnId`
+// ---------------------------------------------------------------------------
+//
+// 为什么单独一组：批次 C 要把 blog 的协作入口换成运行时的 participant，而 blog 的业务工具
+// **按 agent 句柄索引**一份"这一轮是谁"的绑定（`jobs.bindings`，`authorize: agent => bound(agent)`）。
+// 句柄由运行时的生命周期创建时，那份绑定建立不起来 ⇒ **模型手里的工具全部 403**；同理，
+// 结构化产出要落 `dsh_turn_results` 也需要**这一轮的行 id**。两者都靠这两个字段。
+//
+// ⚠️ 判据刻意用**回查到的行 id**（替身把它铸成 `turn-<幂等键>`，见 `host` 里的 `claim` 替身），
+// 而不是"非空字符串"——`turnId 直接给 requestId` 这种错法（变异 M1）只有前者能抓到。
+
+describe('回合钩子拿到**这一轮的身份**', () => {
+  /** 三个钩子按调用顺序把身份记下来。 */
+  const recorder = (seen: { hook: string; requestId?: string; turnId?: string }[]) => ({
+    onTurnStart: ({ requestId, turnId }: { requestId?: string; turnId?: string }) => {
+      seen.push({ hook: 'onTurnStart', ...(requestId === undefined ? {} : { requestId }), ...(turnId === undefined ? {} : { turnId }) })
+    },
+    turnContext: ({ requestId, turnId }: { requestId?: string; turnId?: string }) => {
+      seen.push({ hook: 'turnContext', ...(requestId === undefined ? {} : { requestId }), ...(turnId === undefined ? {} : { turnId }) })
+      return '本轮资料'
+    },
+    onTurnFinish: ({ requestId, turnId }: { requestId?: string; turnId?: string }) => {
+      seen.push({ hook: 'onTurnFinish', ...(requestId === undefined ? {} : { requestId }), ...(turnId === undefined ? {} : { turnId }) })
+    },
+  })
+
+  it('C10 三个钩子拿到**同一份**身份：requestId 是幂等键、turnId 是 `dsh_turns` 的**行 id**', async () => {
+    const seen: { hook: string; requestId?: string; turnId?: string }[] = []
+    const h = host({ definition: definitionOf(recorder(seen) as Partial<AgentDefinition>) })
+    try {
+      const promise = h.participant.run(h.request())
+      const conversationId = await h.accept(promise)
+      h.complete(conversationId, '正文')
+      await promise
+      // `onTurnFinish` 是 fire-and-forget（`finish` 同步返回），所以要有界地等它跑完。
+      await until(() => seen.length === 3, '三个钩子都跑过')
+
+      expect(seen.map(item => item.hook)).toEqual(['onTurnStart', 'turnContext', 'onTurnFinish'])
+      // 替身的 `claim` 把行 id 铸成 `turn-<幂等键>`（见 `host`）⇒ "回查到的行 id"是确定值。
+      const expectedTurnId = `turn-${EXPECTED_KEY}`
+      // ⚠️ 先钉住这两个值**本来就不一样**：相等的话下面那三条断言对"turnId 直接给 requestId"
+      // 这种错法（M1）就没有分辨力了（会变成一条永远绿的断言）。
+      expect(expectedTurnId).not.toBe(EXPECTED_KEY)
+      for (const item of seen) {
+        expect(item.requestId, item.hook).toBe(EXPECTED_KEY)
+        expect(item.turnId, item.hook).toBe(expectedTurnId)
+      }
+      /**
+       * ★ **只回查一次**（M1b 的判据）。
+       *
+       * `onTurnStart` 与 `turnContext` 在同一轮里都会问身份；"每个钩子各查一次库"是这件事最自然
+       * 的错写法，而它在功能上**完全看不出来**（每处都拿得到值），只多烧两次 PG 往返。
+       */
+      expect(h.calls.turnIdLookups).toBe(1)
+    } finally { await h.dispose() }
+  })
+
+  it('C11 续问（`reply`）的身份与首次派活**分开**，且 turnId 是**续问那一轮**的行 id', async () => {
+    const seen: { hook: string; requestId?: string; turnId?: string }[] = []
+    const h = host({ definition: definitionOf(recorder(seen) as Partial<AgentDefinition>) })
+    try {
+      const first = h.participant.run(h.request())
+      const conversationId = await h.accept(first)
+      h.complete(conversationId, '第一轮')
+      await first
+      await until(() => seen.length === 3, '首轮的三个钩子')
+
+      seen.length = 0
+      const since = h.followups().length
+      const second = h.participant.reply!(h.request({ requestId: 'r2', conversationId }))
+      await h.accept(second, since)
+      h.complete(conversationId, '第二轮')
+      await second
+      await until(() => seen.length === 3, '续问的三个钩子')
+
+      for (const item of seen) {
+        expect(item.requestId, item.hook).toBe('reply:r2')
+        expect(item.turnId, item.hook).toBe('turn-reply:r2')
+      }
+      // ⚠️ 这两条把"两个命名空间互不冒充"钉死：续问既不能复用首轮的幂等键，
+      // 也不能把首轮的行 id 当成自己那一轮（M2 就是这两种错法）。
+      expect(seen[0]!.requestId).not.toBe(EXPECTED_KEY)
+      expect(seen[0]!.turnId).not.toBe(`turn-${EXPECTED_KEY}`)
+    } finally { await h.dispose() }
+  })
+
+  it('C12 没有存储门面 ⇒ 身份里**没有 turnId**（如实缺省、不编一个），requestId 照常有', async () => {
+    const seen: { hook: string; requestId?: string; turnId?: string }[] = []
+    const h = host({ withoutStorage: true, definition: definitionOf(recorder(seen) as Partial<AgentDefinition>) })
+    try {
+      const promise = h.participant.run(h.request())
+      const conversationId = await h.accept(promise)
+      h.complete(conversationId, '正文')
+      await promise
+      await until(() => seen.length === 3, '三个钩子都跑过')
+
+      for (const item of seen) {
+        // 幂等键不依赖存储：它由驱动方给。
+        expect(item.requestId, item.hook).toBe(EXPECTED_KEY)
+        // ★ 判据（M3 是"未注入存储就抛错"；这一条同时钉住"不许编一个 id"）：
+        //   连 `claim` 都没发生过，所以既没有行 id、也不该去查。
+        expect(item.turnId, item.hook).toBeUndefined()
+      }
+      expect(h.calls.claimed).toHaveLength(0)
+      expect(h.calls.turnIdLookups).toBe(0)
+    } finally { await h.dispose() }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // 结果层（`dsh_turn_results`）：业务在 `projectResult` 里读本轮的结构化产出
 // ---------------------------------------------------------------------------
 //
@@ -572,7 +705,9 @@ describe('结果层：projectResult 读本轮结果', () => {
     const h = host({ definition: resultReadingDefinition(seen), seedResults: requestId => requestId === EXPECTED_KEY ? [{ kind: 'candidate' }] : [] })
     try {
       // 第一轮：种了结果 ⇒ 读得到。
-      await runOnce(h)
+      const first = { value: 0 }
+      await runOnce(h, first)
+      const afterFirst = h.calls.turnIdLookups
       expect(seen.rows).toHaveLength(1)
       // 第二轮：**换一个 requestId**（`claim` 不种结果）⇒ 必须读不到上一轮那条。
       //
@@ -581,12 +716,15 @@ describe('结果层：projectResult 读本轮结果', () => {
       const before = h.followups().length
       const promise = h.participant.run(h.request({ requestId: 'r2' }))
       const id = await h.accept(promise, before)
+      const second = h.calls.turnIdLookups
       h.complete(id, '第二轮正文')
       await promise
       expect(seen.count).toBe(2)
       expect(seen.rows).toEqual([])
-      // 两轮都真的查了（各自一轮一次），不是"第二轮没查所以为空"。
-      expect(h.calls.turnIdLookups).toBe(2)
+      // 两轮都真的**为结果层**查了一次（各自一轮一次），不是"第二轮没查所以为空"。
+      // 判据是**相对量**：身份那一次已经被各自的基线排除（见 `runOnce` 的注释）。
+      expect(afterFirst - first.value).toBe(1)
+      expect(h.calls.turnIdLookups - second).toBe(1)
     } finally { await h.dispose() }
   })
 
@@ -594,8 +732,10 @@ describe('结果层：projectResult 读本轮结果', () => {
     // 缺省定义没有 `projectResult` ⇒ 走兜底投影 ⇒ 不该碰结果层。
     const h = host({ seedResults: () => [{ kind: 'candidate' }] })
     try {
-      await runOnce(h)
-      expect(h.calls.turnIdLookups).toBe(0)
+      const baseline = { value: 0 }
+      await runOnce(h, baseline)
+      // 接单之后是 1（身份那一次），投影走完仍是 1 ⇒ 结果层一次都没查。
+      expect(h.calls.turnIdLookups - baseline.value).toBe(0)
     } finally { await h.dispose() }
   })
 
@@ -613,9 +753,11 @@ describe('结果层：projectResult 读本轮结果', () => {
       seedResults: () => [{ kind: 'candidate' }],
     })
     try {
-      await runOnce(h)
+      const baseline = { value: 0 }
+      await runOnce(h, baseline)
       expect(seen.rows).toHaveLength(1)
-      expect(h.calls.turnIdLookups).toBe(1)
+      // 读两遍只查一次（+1 是那次唯一的**结果层**查询；身份那一次在基线里）。
+      expect(h.calls.turnIdLookups - baseline.value).toBe(1)
     } finally { await h.dispose() }
   })
 

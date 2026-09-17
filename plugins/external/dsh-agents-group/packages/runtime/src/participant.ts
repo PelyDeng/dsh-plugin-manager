@@ -726,9 +726,23 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
           //
           // `settledKey`（含 `run:`/`reply:` 前缀）整体当作 `requestId`：这样 DB 里就是两个不同
           // 身份，与现有"`run` 与 `reply` 分开算"逐字一致；传裸 `requestId` 会让两者互相冲突。
+          /**
+           * 这一轮的**行 id**：`claim` **不返回它**（那个返回值被存储契约测试固化），要用
+           * `turns.turnId(owner, settledKey)` **回查一次**。查到的值随回合钩子下传
+           * （`TurnHookContext.turnId`），业务按它把自己的记账绑到**这一轮**上、并把结构化产出
+           * 写进 `dsh_turn_results`（`turn_id` 要的正是行 id，不是幂等键）。
+           *
+           * ⚠️ **只在这里查一次**：`onTurnStart` 与 `turnContext` 在同一轮里都会跑，各查一次就是
+           * 白烧往返。运行时把它存进回合凭据，三个钩子共用同一份（见 `retainTurn` 的 `identity`）。
+           * ⚠️ 查不到就**如实给 `undefined`**（未注入存储、或这一行还没落地），不编一个：
+           * 编出来的行 id 会让业务的写入落到别人/不存在的轮次上，而数据库**没有**指向 `dsh_turns`
+           * 的外键（`dsh_turn_results` 只挂了 `conversation_id`），写错**不会报错**、只会查不出来。
+           */
+          let turnId: string | undefined
           if (storage !== undefined) {
             const owner = ownerOf(request.actor)
             const verdict = await storage.db.turns.claim(owner, opened.id, settledKey, message)
+            turnId = await storage.db.turns.turnId(owner, settledKey)
             if (verdict === 'duplicate') {
               const status = await storage.db.turns.turnStatus(owner, settledKey)
               if (status === 'finished') {
@@ -746,7 +760,16 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
               }
             }
           }
-          releaseTurn = lifecycle.retainTurn(opened, request.actor)
+          /**
+           * 把这一轮的**身份**交给生命周期：它随三个回合钩子（`onTurnStart` / `turnContext` /
+           * `onTurnFinish`）原样下传，业务据此把"按回合的业务绑定"与"结构化产出的落点"绑到**这一轮**上。
+           * ⚠️ 缺省字段用**条件展开**而不是写 `undefined`（`exactOptionalPropertyTypes`，且业务按
+           * "属性在不在"判断有没有身份）。
+           */
+          releaseTurn = lifecycle.retainTurn(opened, request.actor, {
+            requestId: settledKey,
+            ...(turnId === undefined ? {} : { turnId }),
+          })
           admitted = true
           sinks.set(opened.id, sink!)
           continuation = lifecycle.followup(opened, message, request.actor)
