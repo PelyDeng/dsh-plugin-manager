@@ -17,7 +17,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
-import { ButlerConsole, REPLAY_REJECTED_PREFIX, dispatchFailureDetail, reportOf } from '../src/butler.ts'
+import { ButlerConsole, REPLAY_REJECTED_PREFIX, dispatchFailureDetail, reportOf, taskAcceptanceFinding } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor } from '../src/protocol.ts'
 import { SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
@@ -293,5 +293,356 @@ describe('重启重放被拒（409）与成员失败要分得开（判据 D-1）
     // 反向对照：普通失败仍然带「失败：」，说明上一条的 not.toContain 不是恒真。
     const normal = reportOf({ state: 'failed', agentId: 'blog', result: '', error: '成员内部崩了' })
     expect(normal).toContain('失败：')
+  })
+})
+
+/**
+ * 设计 §5.4 第 2 步的**动作面**：有 `rework` / `replace` 且预算允许 ⇒ 追加尝试、回调度。
+ *
+ * 这里直调 `applyReworkAttempts`（收尾里那段动作的唯一实现），不经过汇总轮 —— 汇总轮要模型
+ * 驱动，而本文件的替身一律回 `waiting_user`（见 `recordingExecutor` 的注释：那一轮进不去）。
+ * 传 `conversation: undefined` 让递归收尾走"没有观众"的分支：不跑汇总、直接落终态，用例能收干净。
+ */
+describe('裁决要求重做 ⇒ 真的追加尝试并回调度', () => {
+  /** 迭代一个异步生成器、收集它 yield 的事件，并拿到它的返回值。 */
+  async function drain(source: AsyncGenerator<unknown, boolean>): Promise<{ events: { type?: string }[]; result: boolean }> {
+    const events: { type?: string }[] = []
+    let step = await source.next()
+    while (!step.done) {
+      events.push(step.value as { type?: string })
+      step = await source.next()
+    }
+    return { events, result: step.value }
+  }
+
+  /** 直接调收尾里那段"追加 + 派单 + 回调度"的动作。 */
+  const applyRework = (console_: unknown, args: {
+    readonly taskId: string
+    readonly subtasks: readonly Record<string, unknown>[]
+    readonly decisions: readonly Record<string, unknown>[]
+  }) => (console_ as { applyReworkAttempts(input: unknown): AsyncGenerator<unknown, boolean> })
+    .applyReworkAttempts({
+      input: {
+        taskId: args.taskId, actor, conversation: undefined,
+        goal: '写一篇关于园区安全的稿子',
+        subtasks: args.subtasks,
+        reports: ['【blog】第一版正文'], signal: new AbortController().signal,
+        stopped: false, summarize: false,
+      },
+      decisions: args.decisions,
+      problems: [],
+    })
+
+  it('追加的新尝试真的落库：沿用 logicalId、supersedes 指向被裁的那条', async () => {
+    const f = await fixture(recordingExecutor().executor)
+    const taskId = await f.planAndSettle({
+      reply: '这就安排。',
+      subtasks: [{ goal: '写稿', agentId: 'blog', reason: '写作', acceptance: GOOD }],
+    })
+    const { events, result } = await drain(applyRework(f.console_, {
+      taskId,
+      subtasks: [{
+        id: 's1', logicalId: 'g1', goal: '写稿', agentId: 'blog', state: 'succeeded',
+        acceptance: GOOD, artifacts: [], result: '第一版正文', memberReturnText: '', verdict: '',
+      }],
+      decisions: [{ subtaskId: 's1', verdict: 'rework', requested: 'rework' }],
+    }))
+    // `true` = 已经重新派出去了，这一轮**不该再落终态**（新尝试跑完会再收尾一次）。
+    expect(result).toBe(true)
+    // 页面要看得见"重做已经派出去了"：只写库不上报，用户会以为任务就停在 partial。
+    expect(events.some(event => event.type === 'plan')).toBe(true)
+
+    const record = f.store.task(actor, taskId)!
+    expect(record.subtasks.map(item => [item.id, item.logicalId, item.supersedes]))
+      .toEqual([['s1', 'g1', ''], ['s2', 'g1', 's1']])
+    // 口径沿用原步的那一份：重做的是同一件事。
+    expect(record.subtasks[1]!.acceptance).toBe(GOOD)
+    await f.settle()
+  })
+
+  it('预算用尽 ⇒ 不追加、返回 false（调用方按 partial 如实收尾，不冒充已重做）', async () => {
+    const f = await fixture(recordingExecutor().executor)
+    const taskId = await f.planAndSettle({
+      reply: '这就安排。',
+      subtasks: [{ goal: '写稿', agentId: 'blog', reason: '写作', acceptance: GOOD }],
+    })
+    const base = {
+      logicalId: 'g1', goal: '写稿', agentId: 'blog', state: 'failed' as const,
+      acceptance: GOOD, artifacts: [], result: '', memberReturnText: '', verdict: '',
+    }
+    const { result } = await drain(applyRework(f.console_, {
+      taskId,
+      // 同一个目标已经有两条尝试（上限 2）⇒ 这一轮不该再追加。
+      subtasks: [{ id: 's1', ...base }, { id: 's2', supersedes: 's1', ...base }],
+      decisions: [{ subtaskId: 's2', verdict: 'rework', requested: 'rework' }],
+    }))
+    expect(result).toBe(false)
+    // 库里没有第三条：`false` 不是"追加了但没上报"。
+    expect(f.store.task(actor, taskId)!.subtasks.map(item => item.id)).toEqual(['s1'])
+    await f.settle()
+  })
+})
+
+/**
+ * §5.2 第二条消费点：汇总前**程序化核验**"任务级口径提到的产出物有没有交回"。
+ *
+ * ⚠️ 强度只有"**口径非空 ⇒ 材料非空**"这一档（与运行时 ⑦ 第 3 条同强度）：`acceptance` 是自由
+ * 文本、`kind` 是固定枚举，契约里没有"文本 → kind"的映射。断言按这个强度写，**不许**写成
+ * "交错了种类"。
+ */
+describe('任务级口径的产出物核验（§5.2 第二条消费点）', () => {
+  const ARTIFACT = { title: '候选稿', path: '/agents/blog/drafts/1', kind: 'draft' }
+
+  it('没有口径 ⇒ 不施加这条，也不记问题', () => {
+    expect(taskAcceptanceFinding({ acceptance: undefined, artifacts: [] }))
+      .toEqual({ applied: false, ok: true, detail: '' })
+    expect(taskAcceptanceFinding({ acceptance: '   ', artifacts: [] }))
+      .toEqual({ applied: false, ok: true, detail: '' })
+  })
+
+  it('口径非空 + 有材料 ⇒ 通过', () => {
+    expect(taskAcceptanceFinding({ acceptance: '一篇已发布的文章链接', artifacts: [ARTIFACT] }))
+      .toEqual({ applied: true, ok: true, detail: '' })
+  })
+
+  it('口径非空 + 一份材料都没有 ⇒ 不通过，说明里**带上口径原文**（可追溯）', () => {
+    const finding = taskAcceptanceFinding({ acceptance: '一篇已发布的文章链接', artifacts: [] })
+    expect(finding.applied).toBe(true)
+    expect(finding.ok).toBe(false)
+    expect(finding.detail).toContain('没有任何材料交回')
+    expect(finding.detail).toContain('一篇已发布的文章链接')
+    // 强度不夸大：它证明的是"有没有材料"，不是"交的是不是那一种"。
+    expect(finding.detail).not.toContain('kind')
+  })
+
+  it('核验结论进终态说明：口径非空却零材料 ⇒ `error` 里如实写出来', async () => {
+    const f = await fixture(recordingExecutor().executor)
+    const taskId = await f.planAndSettle({
+      reply: '这就安排。',
+      acceptance: '一篇已发布的博客文章链接',
+      subtasks: [{ goal: '写稿', agentId: 'blog', reason: '写作' }],
+    })
+    const inner = f.console_ as unknown as {
+      settleTask(input: unknown): AsyncGenerator<unknown, unknown>
+    }
+    const source = inner.settleTask({
+      taskId, actor, conversation: undefined, goal: '写一篇关于园区安全的稿子',
+      subtasks: [{
+        id: 's1', logicalId: 'g1', goal: '写稿', agentId: 'blog', state: 'succeeded',
+        acceptance: '', artifacts: [], result: '写好了', memberReturnText: '', verdict: '',
+      }],
+      acceptance: '一篇已发布的博客文章链接',
+      reports: ['【blog】写好了'], signal: new AbortController().signal,
+      stopped: false, summarize: false,
+    })
+    let step = await source.next()
+    while (!step.done) step = await source.next()
+    expect(f.store.task(actor, taskId)!.error).toContain('没有任何材料交回')
+    await f.settle()
+  })
+
+  it('反向对照：口径为空时 `error` 里**不出现**那句话（说明上一条不是恒真）', async () => {
+    const f = await fixture(recordingExecutor().executor)
+    const taskId = await f.planAndSettle({
+      reply: '这就安排。',
+      subtasks: [{ goal: '写稿', agentId: 'blog', reason: '写作' }],
+    })
+    const inner = f.console_ as unknown as {
+      settleTask(input: unknown): AsyncGenerator<unknown, unknown>
+    }
+    const source = inner.settleTask({
+      taskId, actor, conversation: undefined, goal: '写一篇关于园区安全的稿子',
+      subtasks: [{
+        id: 's1', logicalId: 'g1', goal: '写稿', agentId: 'blog', state: 'succeeded',
+        acceptance: '', artifacts: [], result: '写好了', memberReturnText: '', verdict: '',
+      }],
+      reports: ['【blog】写好了'], signal: new AbortController().signal,
+      stopped: false, summarize: false,
+    })
+    let step = await source.next()
+    while (!step.done) step = await source.next()
+    expect(f.store.task(actor, taskId)!.error).not.toContain('没有任何材料交回')
+    await f.settle()
+  })
+})
+
+/**
+ * `butler_verdict` 工具的**接线**：判定本身由 `tests/verdict.test.ts` 的纯函数用例覆盖，
+ * 这里管的是"工具里真的调了那些判定"—— 上一批如实登记过这块**只有静态保证**。
+ *
+ * 做法：直取 `verdictTool`（工具对所有轮次都注册着）并注入裁决上下文（`verdictContexts`），
+ * 这样不必走汇总轮 —— 汇总轮要模型驱动，而本文件的替身一律回 `waiting_user`，进不去。
+ */
+describe('butler_verdict 工具的接线（判定真的被调到）', () => {
+  const toolOf = (console_: unknown) =>
+    (console_ as { verdictTool(id: string): { execute(args: unknown, exec: unknown): Promise<unknown> } })
+      .verdictTool(conversationId)
+  const contextsOf = (console_: unknown) =>
+    (console_ as { verdictContexts: Map<string, Record<string, unknown>> }).verdictContexts
+  const openStep = (over: Record<string, unknown> = {}) => ({
+    id: 's1', goal: '写稿', agentId: 'blog', result: '写好了', artifacts: [],
+    memberReturnText: '', selfCheck: { status: 'passed' as const }, ...over,
+  })
+  const contextFor = (taskId: string, open: readonly Record<string, unknown>[]) => ({
+    actor, taskId, open, decided: new Set<string>(), decisions: [] as unknown[], problems: [] as string[],
+  })
+
+  it('不在裁决上下文里调用 ⇒ 明确拒绝（工具对所有轮次都注册着，派活轮也可能调它）', async () => {
+    const f = await fixture(recordingExecutor().executor)
+    await expect(toolOf(f.console_).execute({ items: [{ subtaskId: 's1', verdict: 'accept' }] }, run))
+      .rejects.toThrow(/没有待裁决的清单/)
+    await f.settle()
+  })
+
+  it('空清单 / 不在清单里 / 重复裁决 ⇒ 都在落库之前被拒', async () => {
+    const f = await fixture(recordingExecutor().executor)
+    const taskId = await f.planAndSettle({
+      reply: '好', subtasks: [{ goal: '写稿', agentId: 'blog', reason: '写作' }],
+    })
+    const tool = toolOf(f.console_)
+    contextsOf(f.console_).set(conversationId, contextFor(taskId, [openStep()]))
+    await expect(tool.execute({ items: [] }, run)).rejects.toThrow(/裁决清单不能为空/)
+    await expect(tool.execute({ items: [{ subtaskId: 'nope', verdict: 'accept' }] }, run))
+      .rejects.toThrow(/不在这一次的待裁决清单里/)
+    // ⚠️ 漏裁：清单里两步只裁一步 —— 汇总写下去就等于默认通过，所以整批拒绝。
+    contextsOf(f.console_).set(conversationId, contextFor(taskId, [openStep(), openStep({ id: 's2' })]))
+    await expect(tool.execute({ items: [{ subtaskId: 's1', verdict: 'accept', evidence: '写好了' }] }, run))
+      .rejects.toThrow(/还有步骤没有裁决/)
+    // 被拒的这几批一条都没落库（"半批落下去"会让重试面对已经变了的清单）。
+    expect(f.store.task(actor, taskId)!.subtasks.every(item => item.verdict === '')).toBe(true)
+    await f.settle()
+  })
+
+  it('重复裁决被拒：同一个子任务不能裁两次', async () => {
+    const f = await fixture(recordingExecutor().executor)
+    const taskId = await f.planAndSettle({
+      reply: '好', subtasks: [{ goal: '写稿', agentId: 'blog', reason: '写作' }],
+    })
+    const context = contextFor(taskId, [openStep()])
+    context.decided.add('s1')
+    contextsOf(f.console_).set(conversationId, context)
+    await expect(toolOf(f.console_).execute({ items: [{ subtaskId: 's1', verdict: 'accept', evidence: '写好了' }] }, run))
+      .rejects.toThrow(/不能重复裁决/)
+    await f.settle()
+  })
+
+  it('写后核验：affected 行数为 0 ⇒ 报错，不静默当成"裁决过了"', async () => {
+    const f = await fixture(recordingExecutor().executor)
+    const taskId = await f.planAndSettle({
+      reply: '好', subtasks: [{ goal: '写稿', agentId: 'blog', reason: '写作' }],
+    })
+    // 清单里那条**不在库里**（模拟两边对不上）：判定都过，但写库 0 行。
+    contextsOf(f.console_).set(conversationId, contextFor(taskId, [openStep({ id: 'ghost' })]))
+    await expect(toolOf(f.console_).execute({ items: [{ subtaskId: 'ghost', verdict: 'accept', evidence: '写好了' }] }, run))
+      .rejects.toThrow(/没有落到库里/)
+    await f.settle()
+  })
+
+  it('成功路径：D-2 与证据核验真的被调到，结论落库', async () => {
+    const f = await fixture(recordingExecutor().executor)
+    // 两步：一条走成功路径、一条走"证据找不到 ⇒ 降级"的反向对照（两条都必须在库里，
+    // 否则会先撞上写后核验的 0 行报错 —— 那正是上一条用例在测的东西）。
+    const taskId = await f.planAndSettle({
+      reply: '好', subtasks: [
+        { goal: '写稿', agentId: 'blog', reason: '写作' },
+        { goal: '校对', agentId: 'blog', reason: '编辑' },
+      ],
+    })
+    const context = contextFor(taskId, [openStep()])
+    contextsOf(f.console_).set(conversationId, context)
+    await expect(toolOf(f.console_).execute(
+      { items: [{ subtaskId: 's1', verdict: 'accept', evidence: '写好了' }] }, run,
+    )).resolves.toEqual({ accepted: true, decided: 1 })
+    expect(f.store.task(actor, taskId)!.subtasks.find(item => item.id === 's1')!.verdict).toBe('accept')
+    // 结论文里记下了这一条（`settleTask` 之后靠它决定去路）。
+    expect(context.decisions).toEqual([
+      { subtaskId: 's1', verdict: 'accept', requested: 'accept' },
+    ])
+    // 反向对照：证据在该步结果里找不到 ⇒ **降级 unverified**，不静默 accept。
+    contextsOf(f.console_).set(conversationId, contextFor(taskId, [openStep({ id: 's2' })]))
+    await toolOf(f.console_).execute(
+      { items: [{ subtaskId: 's2', verdict: 'accept', evidence: '这句话结果里没有' }] }, run,
+    )
+    expect(f.store.task(actor, taskId)!.subtasks.find(item => item.id === 's2')!.verdict).toBe('unverified')
+    await f.settle()
+  })
+})
+
+/**
+ * **判据 R8 第二半**（D-7 的两条之一）：裁决与汇总**在同一轮内**，且裁决发生在汇总正文之前。
+ *
+ * 锚点用**方法调用序**（同步可观测），不用"`butler_verdict` 被调用"—— 那是模型驱动的，
+ * 而且裁决上下文的开合已经把"模型只能在上下文开着时裁决"这件事钉住了。
+ * ⚠️ 这一条**不能**拿"调用 `summarize`"当异步时序的锚点：本文件把 `summarize` 换成假生成器
+ * （真汇总轮要模型驱动，替身一律回 `waiting_user` 进不去），所以它测的是**结构**：
+ * 上下文开 → 汇总正文 → 上下文关 → 落终态，且汇总**只跑一次**（不额外占一轮）。
+ */
+describe('R8 第二半：裁决并入汇总轮（同一轮、裁决在前）', () => {
+  it('裁决上下文在汇总正文之前开启、之后关闭；汇总只跑一次；落终态在其后', async () => {
+    const f = await fixture(recordingExecutor().executor)
+    const taskId = await f.planAndSettle({
+      reply: '好', subtasks: [{ goal: '写稿', agentId: 'blog', reason: '写作' }],
+    })
+    const inner = f.console_ as unknown as {
+      settleTask(input: unknown): AsyncGenerator<unknown, unknown>
+      summarize: (...args: unknown[]) => AsyncGenerator<unknown, void>
+      openVerdictContext(...args: unknown[]): void
+      closeVerdictContext(...args: unknown[]): unknown
+    }
+    const order: string[] = []
+    // 真 `summarize` 会调模型、等一个不会来的回合 ⇒ 换成只 yield 一条正文的假生成器。
+    inner.summarize = async function * (): AsyncGenerator<unknown, void> {
+      order.push('summarize')
+      yield { type: 'summary', taskId, text: '汇总正文', state: 'completed', error: '', time: 0 }
+    }
+    const realOpen = inner.openVerdictContext.bind(f.console_)
+    inner.openVerdictContext = (...args: unknown[]) => { order.push('open-verdict'); realOpen(...args) }
+    const realClose = inner.closeVerdictContext.bind(f.console_)
+    inner.closeVerdictContext = (...args: unknown[]) => { order.push('close-verdict'); return realClose(...args) }
+
+    const source = inner.settleTask({
+      taskId, actor, conversation: { id: conversationId }, goal: '写一篇关于园区安全的稿子',
+      subtasks: [{
+        id: 's1', logicalId: 'g1', goal: '写稿', agentId: 'blog', state: 'succeeded',
+        acceptance: '', artifacts: [], result: '写好了', memberReturnText: '', verdict: '',
+      }],
+      reports: ['【blog】写好了'], signal: new AbortController().signal,
+      stopped: false, summarize: true,
+    })
+    let step = await source.next()
+    while (!step.done) step = await source.next()
+
+    expect(order).toEqual(['open-verdict', 'summarize', 'close-verdict'])
+    // 落终态在上下文关闭之后：任务已经是终态（这条同时说明"不额外占一轮"——汇总只出现一次）。
+    expect(f.store.task(actor, taskId)!.state).toBe('completed')
+    await f.settle()
+  })
+
+  it('反向对照：`summarize: false`（后台等待超时那条路径）不开裁决上下文', async () => {
+    const f = await fixture(recordingExecutor().executor)
+    const taskId = await f.planAndSettle({
+      reply: '好', subtasks: [{ goal: '写稿', agentId: 'blog', reason: '写作' }],
+    })
+    const inner = f.console_ as unknown as {
+      settleTask(input: unknown): AsyncGenerator<unknown, unknown>
+      openVerdictContext(...args: unknown[]): void
+    }
+    const order: string[] = []
+    const realOpen = inner.openVerdictContext.bind(f.console_)
+    inner.openVerdictContext = (...args: unknown[]) => { order.push('open-verdict'); realOpen(...args) }
+    const source = inner.settleTask({
+      taskId, actor, conversation: undefined, goal: '写一篇关于园区安全的稿子',
+      subtasks: [{
+        id: 's1', logicalId: 'g1', goal: '写稿', agentId: 'blog', state: 'failed',
+        acceptance: '', artifacts: [], result: '', memberReturnText: '', verdict: '',
+      }],
+      reports: [], signal: new AbortController().signal,
+      stopped: false, summarize: false, settleErrorOverride: '等用户回话超时，材料保留',
+    })
+    let step = await source.next()
+    while (!step.done) step = await source.next()
+    // 没有观众的后台路径不该开裁决上下文（也就不会让模型去裁）。
+    expect(order).toEqual([])
+    await f.settle()
   })
 })

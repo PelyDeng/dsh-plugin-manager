@@ -798,7 +798,7 @@ type Settlement =
  * 产出物）预留的：**本批只把数据取到签名里**，提示词改动排在下一批。先扩签名再写提示词，
  * 否则会退化成"给 `summarize` 加一个永远为空的参数"。
  */
-type SettleTaskInput = {
+export type SettleTaskInput = {
   readonly taskId: string
   /**
    * 任务的归属。
@@ -813,6 +813,13 @@ type SettleTaskInput = {
   readonly goal: string
   readonly subtasks: readonly {
     readonly id: string
+    /**
+     * 这一步所属的**目标**标识（同一目标重做时不变）。
+     *
+     * 裁决要求重做时，追加的新尝试**沿用**它 —— 预算按它读时聚合（{@link planReworkAttempts}），
+     * 少了它，"这个目标已经试过几次"就只能按 `id` 数，而每次重做都是新 `id` ⇒ 内环无界。
+     */
+    readonly logicalId?: string | undefined
     readonly goal: string
     readonly agentId: string
     readonly state: SubtaskState
@@ -894,8 +901,19 @@ type VerdictContext = {
   }[]
   /** 已经裁决过的子任务 id：**同一个 id 不得重复裁决**（设计 §5.4）。 */
   readonly decided: Set<string>
-  /** 这一轮落下的**最终**结论（已含 D-2 与证据核验带来的降级），供 `settleTask` 决定去路。 */
-  readonly decisions: { readonly subtaskId: string; readonly verdict: SubtaskVerdict }[]
+  /**
+   * 这一轮落下的**最终**结论（已含 D-2 与证据核验带来的降级），供 `settleTask` 决定去路。
+   *
+   * `requested` / `newAgentId` 保留**模型这一次的原始意图**：`verdict` 可能已被降级成
+   * `unverified`，而"要不要追加尝试"只认最终的 `rework` / `replace`；但 `replace` 换给谁
+   * 只在原始意图里（降级不该抹掉它，否则追加时会把它当成 `rework` 派回原成员）。
+   */
+  readonly decisions: {
+    readonly subtaskId: string
+    readonly verdict: SubtaskVerdict
+    readonly requested: 'accept' | 'rework' | 'replace'
+    readonly newAgentId?: string | undefined
+  }[]
   /** 裁决过程里如实记下的问题（模型给了非法输入、写后核验为 0 行等）。 */
   readonly problems: string[]
 }
@@ -1026,6 +1044,115 @@ export function verdictDecisionFor(input: {
     return { verdict: 'unverified', downgraded: true, why: `证据在该步结果里找不到：${clip(evidence, 40)}` }
   }
   return { verdict: 'accept', downgraded: false, why: '' }
+}
+
+/**
+ * 同一个目标（`logicalId`）最多允许几条尝试。
+ *
+ * **D-3 的定案**：协调侧按 `logicalId` 数"已有尝试条数"设硬限，**不做 0.5 折算** —— 那次折算
+ * 只影响运行时侧的内部记账（`definition.ts` 的 `maxSelfRetries` 注释），协调侧不引入第二个
+ * 记账口径。计数一律**读时聚合**（设计 §5.4）：落成字段的话，每次重做新建一行都会把它归零
+ * ⇒ 内环无界。
+ */
+export const MAX_ATTEMPTS_PER_LOGICAL = 2
+
+/** {@link planReworkAttempts} 的结论：要追加哪些、哪些因为预算用尽而不追加。 */
+export type ReworkAttemptPlan = {
+  readonly appended: readonly {
+    readonly id: string
+    readonly goal: string
+    readonly agentId: string
+    /** 沿用原目标的标识：聚合按它算"这是同一个目标的第几条尝试"。 */
+    readonly logicalId: string
+    /** 被替代的那条尝试。`supersedes` 与派单时的 `reworkOf` **同源于它**。 */
+    readonly supersedes: string
+    readonly acceptance?: string | undefined
+  }[]
+  /** 预算用尽、不再追加的步骤 id（**如实说清**，不静默丢弃）。 */
+  readonly exhausted: readonly string[]
+}
+
+/**
+ * 从裁决结论算出"要追加哪些尝试"（设计 §5.4 第 2 步：有重做且预算允许 ⇒ 追加尝试、回调度）。
+ *
+ * **纯函数**：不读时钟、不碰存储、不调模型。追加的**动作**（写库 / 派单 / 回调度）在
+ * `ButlerConsole#applyReworkAttempts` 里。这么拆是为了让"预算算得对不对""替代者换没换对"
+ * 能被**直接测到**：把它埋在收尾里就只能靠"跑一整轮汇总"来验，而汇总轮要模型驱动 ——
+ * 上一批已经实测过那条路会让用例挂在超时上（`dispatchFailureDetail` 的注释记了同一件事）。
+ */
+export function planReworkAttempts(input: {
+  readonly decided: readonly {
+    readonly subtaskId: string
+    readonly verdict: SubtaskVerdict
+    readonly requested: 'accept' | 'rework' | 'replace'
+    readonly newAgentId?: string | undefined
+  }[]
+  readonly subtasks: SettleTaskInput['subtasks']
+  /** 库里已有的子任务条数：新尝试的 id 从它往后编号（与补充轮同一套 `s${n}` 约定）。 */
+  readonly baseCount: number
+  readonly limit?: number | undefined
+}): ReworkAttemptPlan {
+  const limit = input.limit ?? MAX_ATTEMPTS_PER_LOGICAL
+  // **读时聚合**：每个目标（`logicalId`，缺省退回 `id`）现在已经有几条尝试。
+  const attempts = new Map<string, number>()
+  for (const item of input.subtasks) {
+    const key = item.logicalId === undefined || item.logicalId === '' ? item.id : item.logicalId
+    attempts.set(key, (attempts.get(key) ?? 0) + 1)
+  }
+  const appended: ReworkAttemptPlan['appended'][number][] = []
+  const exhausted: string[] = []
+  for (const decision of input.decided) {
+    // 只认**已经落地的结论**：`accept` / `unverified` 都不追加（降级出来的 `unverified` 不是重做）。
+    if (decision.verdict !== 'rework' && decision.verdict !== 'replace') continue
+    const target = input.subtasks.find(item => item.id === decision.subtaskId)
+    if (target === undefined) continue
+    const key = target.logicalId === undefined || target.logicalId === '' ? target.id : target.logicalId
+    const used = attempts.get(key) ?? 0
+    if (used >= limit) { exhausted.push(decision.subtaskId); continue }
+    attempts.set(key, used + 1)
+    // `replace` 换人、`rework` 沿用原成员；替代者在 `readVerdictDecision` 里已经预检过可调度。
+    const agentId = decision.verdict === 'replace' ? (decision.newAgentId ?? target.agentId) : target.agentId
+    appended.push({
+      id: `s${input.baseCount + appended.length + 1}`,
+      goal: target.goal,
+      agentId,
+      logicalId: key,
+      supersedes: target.id,
+      // 口径沿用原步的那一份：重做的是同一件事，换一份口径等于换了个目标。
+      ...(target.acceptance === undefined || target.acceptance === ''
+        ? {}
+        : { acceptance: target.acceptance }),
+    })
+  }
+  return { appended, exhausted }
+}
+
+/**
+ * §5.2 第二条消费点：汇总前**程序化核验**"任务级口径提到的产出物是否交回了"。
+ *
+ * ⚠️ **强度必须如实说明**（不许在注释或报告里夸大）：`acceptance` 是**自由文本**（模型写中文，
+ * 如"一篇已发布的博客文章链接"），而 `AgentArtifact.kind` 是**固定英文枚举**，契约里**没有
+ * "文本 → kind"的映射** ⇒ 这一版只能证明"**有材料交回**"，**不**证明"交回的正是口径点名的那
+ * 一种"。要做到逐 `kind` 对照，得先把 `acceptance` 结构化（后续期）。
+ *
+ * 这与运行时 ⑦ 第 3 条是**同一条强度**（交接文档 §10 的 D2 决策）——两边口径必须一致，否则
+ * 同一件事在协调侧与执行侧会得到不同结论。
+ *
+ * 纯函数：不读时钟、不碰存储、不调模型。
+ */
+export function taskAcceptanceFinding(input: {
+  readonly acceptance: string | undefined
+  readonly artifacts: readonly AgentArtifact[]
+}): { readonly applied: boolean; readonly ok: boolean; readonly detail: string } {
+  const acceptance = (input.acceptance ?? '').trim()
+  // 没有声明口径 ⇒ **不施加**这条（老协调方、或这件事本来就没有可核验的产出），也不记问题。
+  if (acceptance === '') return { applied: false, ok: true, detail: '' }
+  if (input.artifacts.length > 0) return { applied: true, ok: true, detail: '' }
+  return {
+    applied: true,
+    ok: false,
+    detail: `任务级口径要求交回产出物，但整条任务没有任何材料交回（口径：${clip(acceptance, 60)}）`,
+  }
 }
 
 /**
@@ -1685,7 +1812,12 @@ export class ButlerConsole {
     // 那是编程错误，不能静默吞掉，否则"裁决过了"只活在内存里（设计 §5.4）。
     if (rows === 0) throw new Error(`裁决没有落到库里（受影响 0 行）：${decision.subtaskId}`)
     context.decided.add(decision.subtaskId)
-    context.decisions.push({ subtaskId: decision.subtaskId, verdict: mapped.verdict })
+    context.decisions.push({
+      subtaskId: decision.subtaskId,
+      verdict: mapped.verdict,
+      requested: decision.verdict,
+      ...(decision.newAgentId === undefined ? {} : { newAgentId: decision.newAgentId }),
+    })
   }
 
   /** 当前可调度（登记了执行入口且仍在目录中）的 Agent。 */
@@ -3488,6 +3620,7 @@ export class ButlerConsole {
     planned: readonly { readonly id: string; readonly goal: string; readonly agentId: string }[],
   ): Promise<{
     id: string
+    logicalId: string
     goal: string
     agentId: string
     state: SubtaskState
@@ -3502,12 +3635,12 @@ export class ButlerConsole {
     if (record === undefined) {
       // 库里查不到：按「未跑完」回落。没有口径、也没有材料可谈 —— 空串与空数组就是"没有"。
       return planned.map(item => ({
-        ...item, state: 'cancelled' as SubtaskState, acceptance: '', artifacts: [],
+        ...item, logicalId: item.id, state: 'cancelled' as SubtaskState, acceptance: '', artifacts: [],
         result: '', memberReturnText: '', selfCheck: undefined, verdict: '' as SubtaskVerdict,
       }))
     }
     return effectiveSubtasks(record.subtasks).map(item => ({
-      id: item.id, goal: item.goal, agentId: item.agentId, state: item.state,
+      id: item.id, logicalId: item.logicalId, goal: item.goal, agentId: item.agentId, state: item.state,
       // 每步的口径、材料、结果正文、协作返回原文、自检结论与已有裁决一并带上：裁决要靠它们做
       // **证据核验**与 **D-2 映射** —— 少一个，"核验"就退化成"看模型给的理由像不像真的"。
       acceptance: item.acceptance,
@@ -3702,19 +3835,21 @@ export class ButlerConsole {
       }
     }
     /**
-     * 有 `rework` / `replace` ⇒ **不写汇总正文**。
+     * 有 `rework` / `replace` ⇒ **不写汇总正文**，先按设计 §5.4 第 2 步**追加尝试、回调度**。
      *
-     * 那一轮正文是按"都成了"写出来的，写下去会把"还要重做"盖掉。终态如实落 `partial`
-     * （一部分成、一部分要重做）—— 裁决**不改终态规则本身**，它只决定这一轮要不要出汇总。
-     *
-     * ⚠️ 设计 §5.4 第 2 步的"追加尝试 + 回调度"排在下一批：本批**如实记录并落终态**，
-     * 不假装重做已经派出去。
+     * 那一轮正文是按"都成了"写出来的，写下去会把"还要重做"盖掉。追加成功时这一轮**不落终态**
+     * （任务回到调度中，新尝试跑完会再收尾一次）；预算用尽或没有可追加的，才按 `partial` 如实
+     * 收尾 —— 那两种情况都说明"要重做但做不了"，而不是"已经重做了"。
      */
     const rework = (verdict?.decisions ?? []).filter(item => item.verdict === 'rework' || item.verdict === 'replace')
     if (rework.length > 0) {
+      const retried = yield* this.applyReworkAttempts({
+        input, decisions: rework, problems: verdict?.problems ?? [],
+      })
+      if (retried) return
       const problems = verdict?.problems ?? []
       const detail = problems.length === 0 ? '' : `（${problems.join('；')}）`
-      const message = `有 ${rework.length} 个步骤被裁决为要重做，这一轮先不出汇总。${detail}`
+      const message = `有 ${rework.length} 个步骤被裁决为要重做，但重做预算已经用尽，这一轮先不出汇总。${detail}`
       // 与汇总路径同一道版本屏障：这中间进来的补充会让这份结论作废。
       if (!(await this.storage.commitTaskState(taskId, 'partial', { summary: message, error: '' }))) {
         await this.storage.setTaskState(taskId, 'running')
@@ -3733,7 +3868,18 @@ export class ButlerConsole {
     }
     // 后台等待超时那条路径用固定的超时说明（`settleErrorOverride`）：它的结论对用户来说是
     // "没人回话所以停了"，而不是"N 个子任务失败"。其余路径照旧按失败数拼。
-    const error = input.settleErrorOverride ?? (failed === 0 ? '' : `${failed} 个子任务失败`)
+    //
+    // §5.2 第二条消费点：口径非空但整条任务一份材料都没有 ⇒ **如实写进这一轮的说明**。
+    // 它是"没交回口径要的东西"，与"N 个子任务失败"是两件事，所以两句并列而不是互相覆盖。
+    const acceptanceFinding = taskAcceptanceFinding({
+      acceptance: input.acceptance,
+      artifacts: subtasks.flatMap(item => item.artifacts ?? []),
+    })
+    const error = input.settleErrorOverride
+      ?? [
+        failed === 0 ? '' : `${failed} 个子任务失败`,
+        acceptanceFinding.detail,
+      ].filter(text => text !== '').join('；')
     /**
      * 汇总跑完再核一次输入版本，而且**核对与写入在同一个事务里**。
      *
@@ -3752,6 +3898,79 @@ export class ButlerConsole {
       return
     }
     yield { type: 'summary', taskId, text: summaryText, state: taskState, error, time: Date.now() }
+  }
+
+  /**
+   * 按裁决**追加尝试并回调度**（设计 §5.4 第 2 步）。
+   *
+   * 返回 `true` 表示"已经重新派出去了、这一轮不该再落终态"（新尝试跑完之后会**再收尾一次**）；
+   * 返回 `false` 表示没有可追加的（预算用尽 / 没有匹配的步骤）—— 调用方按 `partial` 如实收尾。
+   *
+   * 三件事的顺序不能换：**先写库、再派单、最后排空队列**。写库在派单之前，是因为派单会
+   * 立刻驱动成员干活，而"这一步存在"必须以库里的记录为准（`drainQueue` 内部保持同一顺序）。
+   * 排空队列在最后，是因为新尝试可能让排队的下游重新就绪（依赖重判方案 §3.2）。
+   */
+  private async *applyReworkAttempts(input: {
+    readonly input: SettleTaskInput
+    readonly decisions: VerdictContext['decisions']
+    readonly problems: readonly string[]
+  }): AsyncGenerator<ButlerEvent, boolean> {
+    const { taskId, actor, goal, signal } = input.input
+    const plan = planReworkAttempts({
+      decided: input.decisions,
+      subtasks: input.input.subtasks,
+      baseCount: input.input.subtasks.length,
+    })
+    if (plan.appended.length === 0) return false
+    const appended: {
+      id: string
+      goal: string
+      agentId: string
+      reason: string
+      displayName: string
+      acceptance?: string
+      logicalId: string
+      supersedes: string
+    }[] = []
+    for (const item of plan.appended) {
+      appended.push({
+        id: item.id,
+        goal: item.goal,
+        agentId: item.agentId,
+        logicalId: item.logicalId,
+        supersedes: item.supersedes,
+        // ⚠️ 条件展开而不是 `acceptance: item.acceptance`：本仓开着
+        // `exactOptionalPropertyTypes`，显式 `undefined` 与"没有这个字段"是两回事。
+        ...(item.acceptance === undefined ? {} : { acceptance: item.acceptance }),
+        reason: '裁决要求重做',
+        displayName: await this.displayNameOf(actor, item.agentId),
+      })
+    }
+    await this.storage.appendSubtasks(actor, taskId, appended)
+    yield { type: 'plan', taskId, goal, note: '裁决要求重做：已经追加新的尝试并重新派出。', subtasks: appended, time: Date.now() }
+    for (const item of appended) {
+      if (signal.aborted) break
+      yield* this.dispatchSubtask({
+        taskId, subtaskId: item.id, goal: item.goal, agentId: item.agentId,
+        displayName: item.displayName, taskGoal: goal, actor, signal,
+        ...(item.acceptance === undefined ? {} : { acceptance: item.acceptance }),
+        // `supersedes` 与 `reworkOf` 同源：都取被替代的那条尝试（见 `dispatchSubtask` 的说明）。
+        reworkOf: item.supersedes,
+      })
+    }
+    yield* this.drainQueue({ taskId, actor, goal, signal })
+    if (signal.aborted) return true
+    const after = await this.storage.task(actor, taskId)
+    if (after === undefined) return true
+    // 新尝试已经跑完（`dispatchSubtask` 会等到成员交回结论）⇒ 按同一张表**再收尾一次**。
+    // 递归有界：每次追加都让该 `logicalId` 的尝试数 +1，`MAX_ATTEMPTS_PER_LOGICAL` 是硬上限；
+    // 再被裁 `rework` 时 `planReworkAttempts` 会说"预算用尽"，这一轮就按 `partial` 收尾。
+    yield* this.settleTask({
+      ...input.input,
+      subtasks: await this.storedSubtasks(actor, taskId, []),
+      reports: await this.storedReports(actor, taskId),
+    })
+    return true
   }
 
   /**
