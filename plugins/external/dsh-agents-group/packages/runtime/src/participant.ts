@@ -154,6 +154,10 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
    * `requestId` 重试时又跑一遍，就等于对同一个请求产生第二轮副作用（先例见
    * `tests/fixtures/chain-member.ts:117-122`：先查同 ID 异文、再回缓存）。
    */
+  /**
+   * ⚠️ **键必须含 owner**（理由见 `runTurn` 里 `settledCacheKey` 的说明）：这是**进程级**缓存，
+   * 一个插件实例服务所有用户；只按 `settledKey` 分桶会变成**跨用户读取**。
+   */
   const settledTurns = new Map<string, { readonly message: string; readonly result: ParticipantResult }>()
   /** 按会话分的交活账本。 */
   const ledgers = new Map<string, HandoffLedger>()
@@ -202,6 +206,16 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
     // `run` 与 `reply` 分开算：子任务 id 与回话身份是两套命名空间。`settledKey` 留在 executor
     // **外面** —— 收尾循环写幂等缓存时还要用它。
     const settledKey = `${mode}:${request.requestId}`
+    /**
+     * ⚠️ **缓存的键必须含 owner。** `settledKey` 只在"同一个人重试"这一语义下唯一，
+     * 而 `settledTurns` 是**进程级**的（一个插件实例服务所有用户）。若只按 `settledKey` 分桶，
+     * 另一个 owner 只要拿到同一个 `requestId` 且正文**逐字相同**，就会拿到第一个 owner 的结论
+     * （会话 id + 投影正文 + artifacts）——**那是跨用户读取**。
+     * 存储层本来就按 `(agent_id, owner, request_id)` 分桶（内存见 `storage/memory.ts:104`，
+     * PG 见 `storage/postgres.ts` 的部分唯一索引），这里补齐同一口径。
+     */
+    const settledOwner = ownerOf(request.actor)
+    const settledCacheKey = `${settledOwner.namespace}\u0000${settledOwner.userId}\u0000${settledKey}`
     return new Promise<ParticipantResult>((resolve, reject) => {
       void (async () => {
         // ⚠️ 这一整段校验与幂等判断必须在 Promise **内部**。写在 `new Promise` 之前的话，它们会
@@ -218,7 +232,7 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
             throw new AccessError(400, '续问缺少原会话引用（conversationId）')
           }
           // —— 幂等：同 `requestId` 的重试直接回上一次的结论，**不重跑一轮** ——
-          const cached = settledTurns.get(settledKey)
+          const cached = settledTurns.get(settledCacheKey)
           if (cached !== undefined) {
             if (cached.message !== message) {
               // 同一个身份换了内容 = 调用方把幂等身份生成错了。按契约拒绝，不静默当同一次：
@@ -595,7 +609,7 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
               const outcome = await settleOnce(reason)
               if (outcome.kind === 'deliver') {
                 cleanup()
-                settledTurns.set(settledKey, { message, result: outcome.result })
+                settledTurns.set(settledCacheKey, { message, result: outcome.result })
                 // 先进先出淘汰：`Map` 的迭代顺序就是插入顺序，第一个键即最旧的一条。
                 // 淘汰掉的只是"进程内回放"能力，重启后的幂等仍由 `dsh_turns` 保证。
                 while (settledTurns.size > settledCacheMax) {

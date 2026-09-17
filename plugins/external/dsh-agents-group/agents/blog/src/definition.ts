@@ -18,7 +18,7 @@
  * | --- | --- | --- |
  * | `persona` | `index.ts` 读 `persona.txt` 并 trim | ✅ 由装配侧传入 |
  * | `tools` | `jobs.mjs` 的 `register(...)`（模块级注册） | ⏳ 由装配侧传入（本文件不注册任何东西） |
- * | `liveMode` | `participant.ts:84-111`：实时通道给的是**本步累积**值 | ✅ `'cumulative'` |
+ * | `liveMode` | `participant.ts:84-111`：实时通道给的是**本步累积**值 | ✅ `'delta'`（**2026-09-17 更正**：那句"累积值"说的是**旧载体的页面通道**；新载体的思考通道由宿主 `reasoning-delta` **增量帧**喂 ⇒ 声明为 `'delta'`，理由见 `:152-166`） |
  * | `config` | `config.ts` 的 `Config` | ✅ |
  * | `projectResult` | `participant.ts:12-27` + `:148-202` | ✅ 已落（答案取 `history.tail`；候选**跨轮**走注入的会话产出读取、**本轮正文**走 `loadResults()`；操作卡片走 `app.operations`；预算走 `result-text.ts`） |
  * | `turnContext` | `chat.mjs:525-528` 的 `operationContext` + `chat.ts:492` 的时间基准 | ✅ 已落（**每轮求值**；两者旧装配里都是每轮新的，见字段注释） |
@@ -150,13 +150,23 @@ export function createBlogDefinition(input: BlogDefinitionInput): AgentDefinitio
     config: ConfigSchema,
     tools: input.tools,
     /**
-     * 实时通道给的是**本步累积**的正文，不是增量（`participant.ts:84-95` 那段注释逐字说明了
-     * 这件事：新一轮的累积不再以已发布内容开头时整段追加，空正文只出现在只带推理的片段里）。
+     * 实时通道的**块语义**：`'delta'`（增量），不是 `'cumulative'`。
      *
-     * 交给运行时代管之后，"按前缀算差"这一步由它做（`projection.ts` 的 `cumulative` 分支），
-     * 业务不再自己维护 `sentLive`/`process` 那两个基准——**这正是它该由机制承担的部分**。
+     * ⚠️ **2026-09-17 更正（原值 `'cumulative'`）**：旧载体的确是"本步累积值"——那是**页面通道**
+     * （`chat.ts` 自己 `b.live[type] += …` 累积）的事实，旧 `participant.ts:93-107` 也因此要按前缀算差。
+     * 但新载体的思考通道**不由页面喂**：它由宿主的 `reasoning-delta` 帧经
+     * `participant.ts:399`（`thinking.push(step, chunk.text)`）直接喂——**那是增量**
+     * （DSH 的 `StreamChunk` 定义：`{ type: 'reasoning-delta'; text }`，官方用例是 `'r1'` 后接 `'r2'`）。
+     * 声明成 `cumulative` 时 `projection.ts:191` 会**整段替换**该 step 的内容
+     * ⇒ 每一步的思考只剩**最后一个增量片段**（协调方台面上就是"被打碎的思考"）。
+     *
+     * 与已完成的同类物一致：`closedoff/src/definition.ts:113` 声明 `'delta'`（运行时的缺省也是它，
+     * `participant.ts:333` 的 `definition.liveMode ?? 'delta'`）。
+     * **改回 `'cumulative'` 之前先确认"谁在喂这条通道"**——设计文档 §:455/:504 里那句
+     * "blog 的 live 是累计值"写的是**旧载体**，已被本轮实测推翻（判据：`tests/participant.test.mjs`
+     * 的两条思考通道用例，它们现在喂的是**真增量**）。
      */
-    liveMode: 'cumulative',
+    liveMode: 'delta',
     /**
      * 会话寻址：**由协调方的 `missionId` 派生**（旧实现自己维护那张映射表，本声明取代它）。
      *

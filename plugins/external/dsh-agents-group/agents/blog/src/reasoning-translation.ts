@@ -83,7 +83,16 @@ export class ReasoningTranslations {
   private closed = false
   private timer: ReturnType<typeof setInterval>
   private off: () => void
-  constructor(private options: Options) {
+  /**
+   * ⚠️ **不能写参数属性**（`constructor(private options: Options)`）：那是 TS 的**代码生成**语法，
+   * `node --test` 的类型剥离（strip-only）会以 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` 拒绝整个模块。
+   * 而本模块在 `chat.ts` → `definition.ts` 的 import 链上 ⇒ 一处参数属性会让所有 import 到
+   * `chat.ts` / `index.ts` 的 `.mjs` 用例**整个文件加载失败**（表现为"套件变小"，而不是某条红）。
+   * 显式声明 + 赋值与它逐字等价。
+   */
+  private readonly options: Options
+  constructor(options: Options) {
+    this.options = options
     const check = () => { for (const entry of this.active.values()) { try { this.check(entry) } catch { entry.controller.abort() } } }
     this.timer = setInterval(check, 1000); this.timer.unref()
     this.off = onRevoked(options.ctx, check)

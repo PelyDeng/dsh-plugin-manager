@@ -24,7 +24,7 @@
  * 四处重复查询同一份数据。
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type Schema from '@deepseek-ai/schemastery'
 import type { ToolDescriptor, AgentSelfCheck, Actor } from '@dsh-plugin-manager/plugin-kit'
@@ -236,6 +236,19 @@ export interface TurnHookContext {
   readonly actor: Actor
   /** 本轮的 agent 句柄：交给宿主任务系统、或读会话事件时用它。 */
   readonly agent: Agent
+  /**
+   * 本轮所在会话的**宿主句柄**（`Conversation.handle`）。
+   *
+   * 与 {@link TurnHookContext.agent} 的关系：`agent` 就是 `handle.agent`；而句柄本身还要用来做
+   * 别的事——读会话事件（`handle.read()`）、等宿主空闲、释放句柄。业务**按 Agent 建业务绑定**
+   * （`WeakMap<Agent, …>`）时键取 `agent`，但绑定对象里往往也要留下句柄。
+   *
+   * ⚠️ **为什么必须由运行时给**：句柄是 `lifecycle.open()` 创建的，业务**拿不到创建点**，
+   * 它只在钩子上被叫醒。少了这个字段，业务只能自己造一个"只有 `agent` 的假句柄"——那是**类型上
+   * 的谎**：一旦有别的读点（`whenIdle` / `dispose` / `read`）就在运行期炸，而且指向别处。
+   * 运行时调用钩子时手上正拿着这个会话 ⇒ 原样给出，零成本、无歧义。
+   */
+  readonly handle: AgentHandle
   /** 业务自己的存储门面；未注入时为 `undefined`。 */
   readonly storage: AgentStoragePort | undefined
   /**

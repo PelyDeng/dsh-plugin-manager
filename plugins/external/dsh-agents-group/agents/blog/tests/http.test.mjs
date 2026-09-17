@@ -2,7 +2,11 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { Context } from '@deepseek-ai/cordis'
+import AgentRegistry from '@deepseek-ai/dsh-agent'
+import LocalJobRegistry from '@deepseek-ai/dsh-jobs-local'
 import { TEST_DSN,httpFixture } from './http-fixture.mjs'
+import { createFakeHost } from './fixtures/fake-host.mjs'
 
 /**
  * 真 PG 门控：下面三条老用例的证据全部落在业务库与索引库上（会话、草稿、附件、备份授权），
@@ -137,4 +141,133 @@ test('J6b：业务好、索引坏时探针必须 not-ok（不能只探业务那�
   assert.equal((await conversation.json()).code,'storage_schema_missing')
   // 业务侧**确实是好的**（这条把"探针 not-ok"与"整个存储都坏了"区分开：否则随便一个坏法都能让本用例绿）。
   assert.equal((await f.api('create',{requestId:'j6b-business-ok'})).status,200)
+})
+
+/**
+ * ⭐ **守卫 `mount()` 里那一行 `withTurnBinding`**（`src/index.ts:412`）。
+ *
+ * ## 为什么需要它
+ *
+ * 那一行是"协作入口驱动的那一轮里，业务工具拿得到委派身份"的**唯一来源**：
+ * `jobs.mjs:51` 的授权口是 `authorize: agent => this.bound(agent)`，而 `bound()`
+ * （`jobs.mjs:135`）在取不到绑定时一律 **403「博客工具没有有效的委派身份」**。
+ * 绑定的写点只有两个：页面路径自己建的句柄（`chat.ts` 的 `run()`），以及
+ * `withTurnBinding` 的 `onTurnStart` → `bindRuntimeTurn`。
+ *
+ * ⇒ 装配里删掉那一行，**生产上模型手里的每一个 blog 工具都会 403**，
+ * 而界面看不出来、装载也不失败——这正是本仓反复出现的"**声明了却零接线**"。
+ *
+ * ## 为什么现有的 `coordinator.test.mjs` 挡不住它
+ *
+ * 那个文件是**手搭** `ConversationLifecycle` + `createParticipant` 的，而且它**自己就调了
+ * `withTurnBinding`**。它证明的是"**这个函数管用**"，**不是"装配真的调了它"**——
+ * 把 `src/index.ts` 里那一行删掉，它不会变红（已实测）。⇒ 守卫必须走**真 `mount()`**。
+ *
+ * ## 判别力来自**成对断言**（不是"跑绿就算"）
+ *
+ * - **负向对照**：一个**没有任何绑定**的 Agent 调同一个工具必须被 403 —— 它证明探针不是恒真；
+ * - **正向**：真跑出来的那一轮里，同一个工具**不得**报"委派身份"。
+ *
+ * ⇒ 删掉 `withTurnBinding` 时**正向**那条变红（负向仍绿）；而"工具压根没注册"时**负向**先红。
+ * 两条都在，就没有"因为探针是废的所以恒绿"这种假绿。
+ */
+test('mount() 装配必须给协作入口建立委派身份（删掉 withTurnBinding 这条就红）',pgOnly,async t=>{
+  const root=new Context()
+  const agentRegistry=root.plugin(AgentRegistry);await agentRegistry
+  const jobRegistry=root.plugin(LocalJobRegistry);await jobRegistry
+  const host=createFakeHost(root)
+  t.after(async()=>{await host.disposeAll();await jobRegistry.dispose();await agentRegistry.dispose()})
+  const f=await httpFixture({extendCtx:ctx=>{
+    /**
+     * `on` 必须**组合**、不能替换。`kit` 的 `createAccess` 用
+     * `ctx.root.emit('ecosystem/providers', …)` 收集鉴权提供方
+     * （`packages/plugin-kit/src/access.ts:127`），而本夹具的提供方就注册在这条 `on` 上
+     * （`http-fixture.mjs` 里紧随 `extendCtx` 之后那一行）。整条换掉 ⇒ 提供方收不到
+     * ⇒ 鉴权解析恒失败。组合之后：夹具自己的 `emit` 照旧打到夹具那份；假宿主的 `emit`
+     * 打到运行时订阅的那一份（`session/event`）。
+     */
+    const own=ctx.on
+    ctx.on=(name,listener,...rest)=>{const first=own(name,listener,...rest),second=host.ctx.on(name,listener,...rest);return()=>{first?.();second?.()}}
+    /**
+     * 把假宿主**除 `jobs` / `root` / `on` 之外**的面全部并入。
+     *
+     * 少并一个就是一个静默的坑：运行时的 `options()` 走 `conversationModel()` →
+     * `agentDefaultModel` / `sessionProjections`，鉴权走 `access`，工具注册走 `tools`。
+     * 只补 `agents` + `llm` 时 `run()` 会在接单之前**挂住**（表现为 `accept()` 超时，
+     * 而不是某条断言红）。
+     *
+     * `jobs` **不能**并：本夹具的 `{attachController}` 是页面那半要用的，假宿主那份是 `root.jobs`。
+     */
+    for(const key of ['agents','llm','agentDefaultModel','sessionController','sessionProjections','sessions','sessionPersistence','messageFeedback','workspaceRegistry','tools'])ctx[key]=host.ctx[key]
+    ctx.get=host.ctx.get
+  }})
+  t.after(()=>f.close())
+
+  /** 可执行的那一份：kit 交给 `ctx.tools.register` 的（**目录条目上没有 `execute`**）。 */
+  const executable=host.tool('blog_search_posts')
+  assert.ok(executable!==undefined,'blog_search_posts 的可执行体必须由装配经 ctx.tools.register 交出')
+  assert.ok(f.mounted.tools.some(tool=>tool.name==='blog_search_posts'),'目录条目里必须有 blog_search_posts')
+
+  // ① 负向对照：没有委派身份的 Agent 一律 403 ⇒ 证明下面那条正向断言**有判别力**。
+  await assert.rejects(
+    () => executable.execute({query:'测试'},{agent:{}}),
+    error=>/委派身份/.test(String(error?.message)),
+    '未绑定身份的 Agent 必须被 403 拒绝（否则本用例是恒真的）',
+  )
+
+  // ② 驱动**真装配**出来的一轮协作。
+  const controller=new AbortController()
+  const running=f.mounted.participant.run({
+    actor:{namespace:'user',userId:'alice',sessionId:'session-a'},
+    missionId:'mission-turn-binding',requestId:'request-turn-binding',
+    message:'查一下最近的博客',signal:controller.signal,onProgress(){},
+  })
+  /**
+   * 只等一个**确定**的事件，不做"轮询到绿"：`onTurnStart` 在**注入之前**被 `await`
+   * （`packages/runtime/src/conversation.ts:789`），而 `followup` 在它**之后**才发生（`:819`）
+   * ⇒ `accept()` 返回时绑定**必然**已经写好（前提正是装配真的调了 `withTurnBinding`）。
+   */
+  /**
+   * 等这一轮**接单**（用户消息投给 Agent）。
+   *
+   * 同时把 `run()` 的结局记下来：否则"**挂住**"与"**提前失败**"看起来一模一样
+   * （都表现为"等接单超时"）。这两种情况的排查方向完全不同，所以这里把它写进失败信息里。
+   *
+   * 等的是**确定**的事件，不是"轮询到绿"：`onTurnStart` 在**注入之前**被 `await`
+   * （`packages/runtime/src/conversation.ts:789`），`followup` 在它**之后**才发生（`:819`）
+   * ⇒ 接单发生时绑定**必然**已经写好（前提正是装配真的调了 `withTurnBinding`）。
+   */
+  let runOutcome
+  void running.then(()=>(runOutcome='resolved'),error=>(runOutcome=error))
+  const deadline=Date.now()+6000
+  while(host.followups.length===0&&runOutcome===undefined&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,10))
+  const settledEarly=runOutcome!==undefined
+  if(host.followups.length===0)assert.fail(`装配出来的一轮没有接单；run() ${settledEarly?'提前结束了':'仍在挂住（未 settle）'}：${settledEarly?String(runOutcome?.stack??runOutcome):'（装配少并了宿主面时就是这一种）'}`)
+  const conversationId=host.followups[0].id
+  const outcome=await executable.execute({query:'测试'},{agent:host.sessionOf(conversationId).agent})
+    .then(value=>({ok:true,value}),error=>({ok:false,error}))
+  /**
+   * ⚠️ 这里**必须断言"工具真的执行成功了"**，不能只断言"错误信息里没有『委派身份』"。
+   *
+   * 只查字符串时，工具因**别的**原因失败（DB 错、其它路径的 403、参数问题…）也会让本用例变绿
+   * —— 那种"虚假安心"恰恰是这条守卫要防的东西：它挡得住"删掉 `withTurnBinding`"这个**已知**变异，
+   * 却对同一条路径上的**其它**回归完全免疫。
+   *
+   * 所以判据取"成功"，并把 `outcome.error` 写进失败信息便于诊断（删掉那一行时它会带出
+   * 「博客工具没有有效的委派身份」，一眼能认）。
+   */
+  assert.equal(
+    outcome.ok,true,
+    'mount() 装配出来的那一轮里，业务工具必须**真的执行成功**（这正是 withTurnBinding 那一行的作用）；'
+    +`实际失败：${String(outcome.error?.stack??outcome.error)}`,
+  )
+
+  // ③ 收尾：把这一轮正常结束掉，别把未 settle 的 run 留过用例
+  //    （假宿主文件头 §⚠️1 记的那个"静默挂死"形态：少了 `turn/end` ⇒ `run()` 永不 settle）。
+  host.complete(conversationId,'好的')
+  const settled=await Promise.race([
+    running.then(()=>true,()=>true),
+    new Promise(resolve=>setTimeout(()=>resolve(false),8000)),
+  ])
+  assert.equal(settled,true,'回合结束后 participant.run() 必须 settle（否则是把未完成的一轮留给了下一个用例）')
 })

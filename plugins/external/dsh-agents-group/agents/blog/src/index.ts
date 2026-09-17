@@ -14,16 +14,19 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { agentResource } from '@dsh-agents-group/common'
 import { registerPlugin,registerConversations,AccessError,isAccessError,type Access,type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import type { ProtectedRoute } from '@dsh-plugin-manager/plugin-kit/http'
-import { loadSettings } from './settings.mjs'
+import { loadSettings, invariant } from './settings.mjs'
 import { BlogApplication, PendingOperationsMirror } from './application.mjs'
 import { BlogClient,ImageClient,BackupClient } from './connectors.mjs'
 import { BlogJobs } from './jobs.mjs'
 import { BlogAttachments, MAX_ATTACHMENT_BYTES } from './attachments.mjs'
 import { ChatStore } from './chat-store.ts'
-import { BlogChat } from './chat.ts'
-import { createBlogParticipant } from './participant.ts'
+import { BlogChat, chatInstructions } from './chat.ts'
+// ⚠️ `createBlogParticipant`（`./participant.ts`）已**删除**：协作入口换成运行时的
+// `createAgentRuntime(...).participant`。文件头的历史说明见进度文档 §43 与本节注释。
+import { createBlogDefinition } from './definition.ts'
 import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
 import {selectBlogModel} from './models.mjs'
+import {reasoningLanguage} from './jobs.mjs'
 import {ReasoningTranslations,reasoningOriginal} from './reasoning-translation.ts'
 // DSN 来源解析用**运行时那一份**：blog 的 `storage/dsn.mjs` 文件头自述"复制管家 butler-console
 // 的 dsn.ts 模式"，而 P4 已把它迁进运行时（`packages/runtime/src/storage/dsn.ts`）。两处各留一份
@@ -36,6 +39,11 @@ import { createAgentDatabase } from '../../../packages/runtime/src/storage/index
 import type { AgentDatabasePort } from '../../../packages/runtime/src/storage/ports.ts'
 import { StorageError, isStorageError } from './storage/errors.mjs'
 import { BlogPgStorage } from './storage/pg.mjs'
+// 协作入口与全局会话生命周期（P7 ③-B 的落点）：blog 只声明业务，机制全在运行时。
+import { createAgentRuntime, type AgentRuntimeAssembly } from '../../../packages/runtime/src/runtime.ts'
+import type { RuntimeConfig } from '../../../packages/runtime/src/conversation.ts'
+import type { AgentDefinition } from '../../../packages/runtime/src/definition.ts'
+import { PARTICIPANT_PROTOCOL } from '../../../packages/runtime/src/contract.ts'
 import type { Config } from './config.ts'
 export { Config } from './config.ts'
 /** 同 closedoff 的约定：适配层需要类型名 `PluginConfig`。 */
@@ -133,6 +141,88 @@ function unconfiguredIndex(): AgentDatabasePort {
       return reject
     },
   }) as unknown as AgentDatabasePort
+}
+
+/**
+ * 业务配置 → 运行时的 `RuntimeConfig`。
+ *
+ * ⚠️ **只取运行时真正用到的五个字段**，其余业务字段（`dataPath` / `runtimeConfig` / `publicOrigin` …）
+ * 一概不进：把用不到的字段塞进去只会让"运行时到底依赖什么"变得看不清。
+ *
+ * ⚠️ blog 的 `Config` 里**没有**后三个字段，所以取值要**对齐它既有的行为**、不能拍脑袋：
+ * - `authRecheckMs: 1000` —— `chat.ts` 的授权重核定时器本来就是 `setInterval(recheck, 1000)`；
+ * - `maxActiveConversations: 4` —— `chat.ts` 的并发上限本来就是 `active.size < 4`（超出 429）；
+ * - `reasoningEffort: ''` —— 运行时的用法是"这个值不被宿主认出来就回落到**按会话选择**的结果"
+ *   （`conversation.ts` 的 `wanted` / `efforts.some(...)` 那两行）。blog **正是**按会话选模型
+ *   （`selectBlogModel` / `selectConversationModel`），所以给空串＝**不要**在这里插一脚，
+ *   与它改造前的行为一致。给一个真值会让所有会话被钉死在同一个 effort 上。
+ */
+function runtimeConfigOf(config: Config): RuntimeConfig {
+  return {
+    routePrefix: config.routePrefix,
+    turnTimeoutMs: config.turnTimeoutMs,
+    authRecheckMs: 1000,
+    maxActiveConversations: 4,
+    reasoningEffort: '',
+  }
+}
+
+/**
+ * 未就绪（缺 PG 配置）时的协作入口占位。
+ *
+ * 它**不伪造能力**：`assertAccess` 与 `run` 一律以 503 + 稳定原因拒绝，协作侧拿到的是
+ * "这个成员现在不能用、因为存储没起来"，而不是"这个成员不存在"，也不是一句空结果。
+ * 身份三项与 `createBlogDefinition` **逐字相同**——改名会让协调方与用户看到两个不同的成员。
+ *
+ * ⚠️ 这一支**不建运行时**（与 closedoff 同一个范式）：`createAgentRuntime` 的存储是硬输入，
+ * 拿一个"什么都抛"的代理对象去赌它装配期不碰存储，是把不确定性引进装配顺序里。
+ */
+function unavailableParticipant(hint: string): AgentParticipant {
+  const refuse = (): never => { throw new AccessError(503, `博客未就绪：${hint}`) }
+  return {
+    protocol: PARTICIPANT_PROTOCOL,
+    id: 'blog',
+    displayName: '伊丽莎白 · 博客',
+    description: '查询博客、整理资料并提出文章候选；采用候选和发布确认仍在博客原页面完成。',
+    assertAccess: refuse,
+    run: async () => refuse(),
+  }
+}
+
+/**
+ * 给业务声明补上**回合钩子**：协作路径的业务绑定。
+ *
+ * ## 为什么导出它（而不是写在 `mount()` 里）
+ *
+ * 这是"工具为什么能用"的全部接线，而**验证它的用例必须在 blog 包里**（跨包 import 测试夹具
+ * 本仓做不到——内存端口当初从 `tests/` 提升进 `src/` 就是这个原因）。写两份等价实现的下场是
+ * "测试验的不是装配跑的那一份"，而这类偏差恰好只会在协调方驱动时暴露。
+ *
+ * ## 绑定的两端
+ *
+ * - **建立**（`onTurnStart`）：运行时驱动的一轮开始时，按"本轮的 agent + 本轮的**行 id**"写下
+ *   `jobs.bindings`。工具的授权口 `authorize: agent => bound(agent)` 靠它；缺了它，模型手里
+ *   **每一个 blog 工具都 403**（不是装载失败，界面上看不出来）。
+ * - **摘除**（`onTurnFinish`）：成功 / 取消 / 失败三条路都会调 ✔。不摘会让 `WeakMap` 之外的
+ *   一切照旧、但下一轮的同名 Agent 复用旧绑定（`request` 指向上一轮的行 id）⇒ 产出写错轮次。
+ *
+ * ⚠️ **页面路径不经过这里**（它自己建句柄、自己 `bindings.set`），所以两条路各写一次是必须的，
+ * 但**实现只有一份**（`chat.ts` 的 `bindRuntimeTurn` / `unbindRuntimeTurn`）。
+ */
+export function withTurnBinding(definition: AgentDefinition, chat: BlogChat): AgentDefinition {
+  return {
+    ...definition,
+    onTurnStart: async hook => {
+      // `turnId` 是这一轮在 `dsh_turns` 里的**行 id**：工具的 `b.request.id` 与
+      // `dsh_turn_results.turn_id` 都要它。协作路径上它必然存在（运行时的 `claim` 先于钩子），
+      // 缺了就是装配错了 —— **当场抛**比"每个工具各 403 一次"更容易查。
+      // `invariant` 不是断言函数（不参与类型收窄），故显式取一次非空（chat.ts 里同一写法）。
+      const turnId = hook.turnId
+      invariant(turnId !== undefined, '协作入口驱动的一轮缺少行 id，无法建立业务工具的委派身份')
+      await chat.bindRuntimeTurn({ agent: hook.agent, handle: hook.handle, actor: hook.actor, turnId: turnId! })
+    },
+    onTurnFinish: hook => { chat.unbindRuntimeTurn(hook.agent) },
+  }
 }
 
 /**
@@ -302,13 +392,76 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   const jobs=new BlogJobs(ctx,access,storage,blog,attachments,config.turnTimeoutMs,settings.models,mountContext.category,mountContext.allowedTools)
   const app=new BlogApplication(storage,access,blog,images,backups,jobs,attachments,pending)
   const {chatSdk}=await import(blogResource('runtime/chat-sdk.mjs').href)
-  const chat=new BlogChat(ctx,access,storage,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs)
+  /**
+   * ⚠️ **装配顺序是被两头钉死的**（照 `agents/closedoff/src/runtime.ts` 的范式）：
+   *
+   * - 运行时需要 `definition`，而 definition 的 `storage` / `app` / `results` 都要等业务对象造好；
+   * - `chat` 需要 `occupancy`（= 运行时的 `lifecycle`），而运行时又要等 `definition` ⇒ **成环**。
+   *
+   * ⇒ 环用**晚绑定**解开：`occupancy` 与 `release` 都是闭包，读的是 `assembly` 这个 `let`，
+   * 而它们只在**回合真的跑起来之后**才被调用——那时装配早已完成。（写成"先造个假的再替换"
+   * 会让"装配期还没就绪"变成一个隐式的时序假设，破了也不会报错。）
+   */
+  let assembly: AgentRuntimeAssembly | undefined
+  const chat=new BlogChat(ctx,access,storage,conversations,attachments,jobs,app,chatSdk,config.turnTimeoutMs,{
+    isBusy:id=>assembly?.lifecycle.isBusy(id)===true,
+    busyIds:()=>assembly?.lifecycle.busyIds()??[],
+    // 移除被接受后，运行时那一半也要放（它缓存着句柄）；本类那一半由 `chat.ts` 自己放。
+    release:async id=>{await assembly?.lifecycle.release(id)},
+  })
+  const definition: AgentDefinition = withTurnBinding(createBlogDefinition({
+      // 人设＝**对话人设**（`chat.ts` 的 `chatInstructions`）+ 思考语言那一段。
+      // ⚠️ 只传 `jobs.mjs` 的裸 `persona` 会**静默丢掉**对话专属的那一长段纪律（页面路径仍带着它）
+      // ⇒ 同一个 Agent 在页面上和在大总管那里收到的纪律不同。语言那一段本来由页面路径的 setup
+      // 单独注册（order 10000），而运行时的 setup 只注册 `persona`（order 600）+ 每轮上下文 ⇒
+      // 拼在这里，位置由 10000 变成 600（**已登记的行为变更**），内容一字未改。
+      persona: chatInstructions + '\n' + reasoningLanguage,
+      // 业务工具：`BlogJobs` 的构造函数里已经注册过（`registerTools`），这里只交回目录条目。
+      // 运行时的装配工厂会在装配期调它一次，返回值交给装配侧 `registerPlugin({tools})`。
+      tools: () => jobs.chatTools,
+      storage,
+      app,
+      routePrefix: config.routePrefix,
+      // 跨轮候选判定要按**会话**读产出记录（运行时的 `loadResults()` 只读本轮）。
+      results: { list: async (owner, conversationId) => conversations.results(owner, conversationId) },
+  }), chat)
+  const allowedTools = mountContext.allowedTools
+  let tools: readonly ToolDescriptor[]
+  let participant: AgentParticipant
+  if (index !== undefined) {
+    assembly = await createAgentRuntime({
+      ctx,
+      definition,
+      access,
+      config: runtimeConfigOf(config),
+      allowedTools,
+      // ⚠️ **注入**而不是让工厂自建：blog 的索引门面要**先 `open()`**（启动收敛的顺序在它里面），
+      // 而且页面侧那一整套（`ChatStore` / `attachments` / `chat`）都建在同一个门面上——
+      // 自建会让工厂再开一个门面、两套镜像与 outbox 互相看不见。
+      storage: { db: index, access },
+      // 标题投递口交**自己那一份**（落库 + 给页面广播 `changed`），并且本文件不再自己订阅标题事件：
+      // 两份订阅会让同一标题写两次、后写被守卫拒 ⇒ 页面永远收不到 `changed`（静默的"标题还是旧的"）。
+      titleSink: chat.titleSink,
+    })
+    tools = assembly.tools
+    participant = assembly.participant
+  } else {
+    // Q4：缺 PG 配置 ⇒ **不建运行时**，但装载照常（页面、目录条目、探针都在）。
+    // ⚠️ 又：**必须显式调一次 `definition.tools(...)`**。工厂内部那次调用这条路上走不到，
+    // 而工具一个都不注册**是静默的**（限制一份空集合是合法的）⇒ 群组会算出空的 `allowedTools`，
+    // 模型手里一个业务工具都没有，界面上完全看不出来。
+    tools = definition.tools({ ctx, storage: undefined, conversationId: undefined })
+    participant = unavailableParticipant(unconfiguredHint)
+    console.warn(`agents-group/blog: 已装载但未就绪——协作入口与页面读写会以稳定码拒绝。${unconfiguredHint}`)
+  }
   // 群组直接把这个实例桥接成牛马大总管的执行入口，不再经过额外的发现事件。
-  const participant=createBlogParticipant({access,chat,index:conversations,storage,app,routePrefix:config.routePrefix})
+  // 侧栏入口**仍然只登记 `chat.provider`**：它有自己的 `preview`（`projectChat` 投影出
+  // `tool`/`status` 行）、`list`（host busy + pending 操作 + forks）与 `remove`（自己的
+  // `conversationRemover`），运行时的 `provider` 复现不了这些。**登记两个会出现两个侧栏条目。**
   ctx.effect(()=>registerConversations(ctx,chat.provider))
   const translations=new ReasoningTranslations({ctx,pluginId:'blog',storage,access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
   const manifest=JSON.parse(await readFile(blogResource('package.json'),'utf8'))
-  ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],category:'agents',tools:jobs.chatTools}))
+  ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],category:'agents',tools}))
   for(const [suffix,file,mime] of [['','web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],['/style.css','web/style.css','text/css'],['/writing.css','web/writing.css','text/css'],['/chat-base.css','web/chat-base.css','text/css'],['/chat-theme.css','web/chat-theme.css','text/css'],...['chevron-down','copy','check','like','dislike','branch','database','clock','think','api','send','user','chat','stop'].map(name=>[`/media/icon-${name}.svg`,`web/media/icon-${name}.svg`,'image/svg+xml']),['/icons.svg','web/icons.svg','image/svg+xml']] as const){
     // `file` 已是相对子包根的路径（web/... 或 dist/web/...），直接相对 agentRoot 解析。
     /**
@@ -418,7 +571,9 @@ export async function mount(mountContext:AgentMountContext):Promise<{
 
   return {
     // 群组据此算「本分类 + 通用」的工具可见性限制，所以如实返回全部已注册工具。
-    tools: jobs.chatTools,
+    // 取 `tools`（装配结果）而**不是** `jobs.chatTools`：未就绪那条路上前者来自显式调用的
+    // `definition.tools(...)`，是**同一次注册**的返回值，两者内容相同但来源只有一个。
+    tools,
     // 参与者交给群组桥接成牛马大总管的执行入口。
     participant,
     // Q4 口径的就绪探针：群组的 healthPath 与 /ready 汇总据此如实反映 blog 状态。
@@ -427,9 +582,11 @@ export async function mount(mountContext:AgentMountContext):Promise<{
       // 释放顺序与创建相反，与迁移前保持一致；业务存储与索引库句柄都纳入释放链
       // （索引库拆库后独立开库，句柄泄漏会以 database is locked 或目录占用暴露）。
       await translations.close(); await chat.close(); await jobs.close(); await attachments.close()
-      // 索引门面的 `close()` 会**先排空 outbox 再关连接**（顺序反了，刚标记的删除与刚投递的标题
-      // 会留在本地队列里，用户看到的是"删了还在、标题没变"），所以必须 await 到它返回。
-      if(index)try{await index.close()}catch{/* PG 池与本地句柄已在 close 内部各自收尾 */}
+      // ⚠️ 索引门面的 `close()` **由运行时装配的 `dispose()` 负责**（我们注入的门面就是它的
+      // `db`）：它同样是"**先排空 outbox 再关连接**"（顺序反了，刚标记的删除与刚投递的标题会留在
+      // 本地队列里，用户看到的是"删了还在、标题没变"）。这里**不再单独调 `index.close()`** ——
+      // 两次 close 会在同一批句柄上重跑排空与关池。
+      await assembly?.dispose()
       try{await storage.close()}catch{/* 未配置占位没有可关闭的池 */}
     },
   }

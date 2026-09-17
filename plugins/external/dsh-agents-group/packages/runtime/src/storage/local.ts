@@ -104,8 +104,19 @@ const MIRROR_PAYLOAD_COLUMN = 'payload'
 export class LocalFenceStore {
   private readonly db: DatabaseSync
   private closed = false
+  /**
+   * ⚠️ **参数属性是被禁的语法**（`constructor(private readonly agentId: string, …)`）。
+   *
+   * 参数属性要靠 TS **代码生成**才存在，而 `node --test` 的类型剥离是 strip-only ⇒ 整个模块以
+   * `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` 被拒。它在本模块上的后果特别大：本类在
+   * `storage/index.ts` → `runtime/src/index.ts` 的导出链上，而 **blog 的整套 `.mjs` 用例**都从
+   * 那条链 import（`chat.ts` / `definition.ts` / 运行时入口）⇒ 一处参数属性会让它们**整个文件
+   * 加载失败**，报出来的是"套件变小"而不是某条红。显式声明 + 赋值与它逐字等价。
+   */
+  private readonly agentId: string
 
-  constructor(private readonly agentId: string, path: string) {
+  constructor(agentId: string, path: string) {
+    this.agentId = agentId
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
     if (path !== ':memory:' && process.platform !== 'win32') chmodSync(path, 0o600)

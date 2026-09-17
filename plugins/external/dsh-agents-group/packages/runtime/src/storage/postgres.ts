@@ -201,10 +201,22 @@ export function toTitleSource(value: unknown): 'automatic' | 'generated' | 'manu
 }
 
 export class PgConversations implements PgConversationPart {
+  /**
+   * ⚠️ **不用参数属性**（`constructor(private readonly scoped: …)`）：那是 TS 的代码生成语法，
+   * `node --test` 的 strip-only 类型剥离会以 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` 拒绝整个模块。
+   * 本文件在 `packages/runtime/src/index.ts` 的导出链上 ⇒ 一处参数属性会让 blog 的整套 `.mjs`
+   * 用例**整个文件加载失败**（报"套件变小"，不是某条红）。显式声明 + 赋值逐字等价。
+   */
+  private readonly scoped: ScopedDatabase
+  readonly agentId: string
+
   constructor(
-    private readonly scoped: ScopedDatabase,
-    readonly agentId: string,
-  ) {}
+    scoped: ScopedDatabase,
+    agentId: string,
+  ) {
+    this.scoped = scoped
+    this.agentId = agentId
+  }
 
   /** 会话归属——授权判据。返回 `undefined` 表示不存在或不属于该 owner。 */
   async conversationOf(owner: OwnerKey, conversationId: string) {
@@ -542,10 +554,17 @@ export class PgConversations implements PgConversationPart {
 
 /** 轮次幂等与待答问题（`dsh_turns`）。 */
 export class PgTurns {
+  /** 同上：不用参数属性（strip-only 剥离会拒绝整个模块）。 */
+  private readonly scoped: ScopedDatabase
+  readonly agentId: string
+
   constructor(
-    private readonly scoped: ScopedDatabase,
-    readonly agentId: string,
-  ) {}
+    scoped: ScopedDatabase,
+    agentId: string,
+  ) {
+    this.scoped = scoped
+    this.agentId = agentId
+  }
 
   /**
    * 认领一轮。
@@ -839,7 +858,14 @@ export class PgTurns {
  * 而不是开新事务（PG 不支持真正的嵌套事务；用 SAVEPOINT 的收益在这里不值那份复杂度）。
  */
 export class ScopedDatabase {
-  constructor(private readonly source: Pool | PoolClient, private readonly transactional: boolean) {}
+  /** 同上：不用参数属性（strip-only 剥离会拒绝整个模块）。 */
+  private readonly source: Pool | PoolClient
+  private readonly transactional: boolean
+
+  constructor(source: Pool | PoolClient, transactional: boolean) {
+    this.source = source
+    this.transactional = transactional
+  }
 
   async query<T>(sql: string, values: readonly unknown[] = []): Promise<T[]> {
     try {
@@ -885,16 +911,23 @@ export class PostgresAgentDatabase implements Omit<AgentDatabasePort, 'conversat
   private inited = false
   readonly conversations: PgConversations
   readonly turns: PgTurns
+  /** 同上：不用参数属性（strip-only 剥离会拒绝整个模块）。 */
+  readonly agentId: string
+  /** 本 Agent 业务表的结构版本；与它自己的版本行做**严格相等**比较。 */
+  readonly agentVersion: number
+  /** 插件内联的运行时版本；与 `runtime` 版本行做 **≥** 比较。 */
+  readonly runtimeVersion: number
 
   constructor(
     dsn: string,
-    readonly agentId: string,
-    /** 本 Agent 业务表的结构版本；与它自己的版本行做**严格相等**比较。 */
-    readonly agentVersion: number = 1,
-    /** 插件内联的运行时版本；与 `runtime` 版本行做 **≥** 比较。 */
-    readonly runtimeVersion: number = RUNTIME_SCHEMA_VERSION,
+    agentId: string,
+    agentVersion: number = 1,
+    runtimeVersion: number = RUNTIME_SCHEMA_VERSION,
     onError?: (error: Error) => void,
   ) {
+    this.agentId = agentId
+    this.agentVersion = agentVersion
+    this.runtimeVersion = runtimeVersion
     this.pool = new Pool({
       connectionString: dsn,
       max: 5,

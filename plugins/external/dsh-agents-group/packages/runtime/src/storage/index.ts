@@ -99,11 +99,22 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
   private closing = false
   /** 已 `close()`；后台排空据此收尾（它可能在 close 的 await 之间被唤醒）。 */
   private closed = false
+  /**
+   * ⚠️ 这两个字段**不能**写成构造函数的参数属性（`constructor(private readonly input: …)`）：
+   * 参数属性是 TS 的代码生成语法，`node --test` 的 strip-only 类型剥离会以
+   * `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` 拒绝整个模块——而本文件在
+   * `packages/runtime/src/index.ts` 的导出链上，blog 的整套 `.mjs` 用例都从那里 import
+   * ⇒ 一处参数属性让它们**整个文件加载失败**（表现为"套件变小"，不是某条红）。
+   */
+  private readonly input: CreateAgentDatabaseInput
+  private readonly local: LocalFenceStore
 
   constructor(
-    private readonly input: CreateAgentDatabaseInput,
-    private readonly local: LocalFenceStore,
+    input: CreateAgentDatabaseInput,
+    local: LocalFenceStore,
   ) {
+    this.input = input
+    this.local = local
     this.pg = new PostgresAgentDatabase(
       input.dsn,
       input.agentId,

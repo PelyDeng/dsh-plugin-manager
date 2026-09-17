@@ -126,8 +126,24 @@ async function provisionSchema(dsn, { withIndex = true } = {}) {
  *
  * @param options.storage `'test-database'`（真 PG，缺省）或 `'unconfigured'`（没有存储配置）
  * @param options.hostname 对外 origin 里的主机名（与 `publicOrigin` 一致）
+ * @param options.extendCtx 可选：`(ctx) => void`，在 `mount()` **之前**就地扩展 `ctx`。
+ *
+ * 存在的理由只有一个：本夹具原本只服务 HTTP 用例，`ctx` 里**没有 `agents` 与 `llm`**——
+ * 那两个面只有"真的跑一轮协作"（`mounted.participant.run(...)`）时才用得到。用例要验
+ * "`mount()` 真的给协作入口建立了委派身份"（`agents/blog/src/index.ts` 里那一行 `withTurnBinding`），
+ * 就必须能把这两个面递给装配。
+ *
+ * 给的是**回调**而不是一个待合并的键值表：`on` 这一格**只能被"组合"、不能被"替换"**。
+ * `kit` 的 `createAccess` 在 `access.ts:127` 用 **`ctx.root.emit('ecosystem/providers', …)`**
+ * 收集鉴权提供方，而本夹具的提供方正是注册在下面那条 `ctx.on('ecosystem/providers', …)` 上的；
+ * 一旦把 `on` 整个换成假宿主那一份，`ctx.root.emit` 就再也打不到它 ⇒ 鉴权解析恒失败。
+ *
+ * **并入的时机也是刻意的**：必须在下面注册 `ecosystem/providers` **之前**。
+ *
+ * ⚠️ **不要动 `webServer` 与 `jobs`**：路由表与 `attachController` 必须还是本夹具那两份，
+ * 换掉它们破坏的是既有 HTTP 用例。协作路径真正要补的是 `agents` / `llm` / `tools`。
  */
-export async function httpFixture({ hostname = '127.0.0.1', storage = 'test-database' } = {}) {
+export async function httpFixture({ hostname = '127.0.0.1', storage = 'test-database', extendCtx } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'dsh-blog-http-')), routes = new Map(), listeners = new Map(), effects = [], files = new Map(), revoked = new Set()
   const actors = { alice: { namespace: 'user', userId: 'alice', sessionId: 'session-a' }, bob: { namespace: 'user', userId: 'bob', sessionId: 'session-b' }, eve: { namespace: 'user', userId: 'eve', sessionId: 'session-e' } }
   const token = randomBytes(32).toString('hex'), configPath = join(directory, 'config.json')
@@ -166,6 +182,8 @@ export async function httpFixture({ hostname = '127.0.0.1', storage = 'test-data
   }
   const ctx = { on(event, fn) { const group = listeners.get(event) ?? new Set(); group.add(fn); listeners.set(event, group); return () => group.delete(fn) }, emit(event, ...args) { for (const f of [...listeners.get(event) ?? []]) f(...args) }, effect(fn) { const cleanup = fn(); if (typeof cleanup === 'function') effects.push(cleanup); return cleanup ?? (() => { }) }, get(name) { return name === 'attachments' ? attachments : undefined }, attachments, jobs: { attachController() { return () => { } } }, tools: { register() { return () => { } } }, webServer: { register(route) { routes.set(route.path, route); return () => routes.delete(route.path) } } }
   ctx.root = ctx
+  // 就地扩展（见 `extendCtx` 的说明）：必须在下面那条 `ecosystem/providers` 之前。
+  extendCtx?.(ctx)
   ctx.on('ecosystem/providers', accept => accept({ protocol: 1, ready() { }, resolve(req) { return actors[req.headers.cookie] }, assertAccess(actor, pluginId) { if (pluginId !== 'blog' || !Object.values(actors).some(a => a.userId === actor.userId && a.sessionId === actor.sessionId) || actor.userId === 'eve' || revoked.has(actor.sessionId)) { const error = new Error('没有授权'); error.code = 'DSH_ACCESS_ERROR'; error.status = 403; throw error } } }))
   const server = createServer((req, res) => {
     const path = new URL(req.url, 'http://localhost').pathname
@@ -182,6 +200,16 @@ export async function httpFixture({ hostname = '127.0.0.1', storage = 'test-data
         else if (input.action === 'manage-list') data = { items: [], hasMore: false, page: 1 }
         else if (input.action === 'manage-preview') data = { title: input.fields?.name ?? '条目', input: { kind: input.kind, operation: input.operation, fields: input.fields }, impact: { note: '测试数据' } }
         else if (input.action === 'manage-write') data = { id: 1, kind: input.kind }
+        /**
+         * ⚠️ `search` 这个动作**此前没有实现**（落进下面的 `else` ⇒ 400 `{ok:false,code:'invalid'}`
+         * ⇒ 连接层报 `博客请求字段无效`）。后果：`blog_search_posts` 在本夹具里**从来没有成功执行过**，
+         * 而 `mount()` 守卫那条用例原先只断言"错误信息里没有『委派身份』"⇒ 这个业务失败**被静默放过**
+         * （错误文案里当然没有"委派身份"）。补上这个动作，守卫才能真正断言"工具**执行成功**"。
+         *
+         * 形状照 `connectors.mjs:48-55` 的 `search()` 要的字段给：`items` 必填，`pageSize` 可省
+         * （省了按 30 算），条目里的 `created`/`modified` 是**秒**。
+         */
+        else if (input.action === 'search') data = { items: [], total: 0, page: 1, hasMore: false }
         else { res.writeHead(400); res.end(JSON.stringify({ ok: false, code: 'invalid' })); return }
         res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify({ ok: true, data }))
       })().catch(() => { res.writeHead(500); res.end() }); return

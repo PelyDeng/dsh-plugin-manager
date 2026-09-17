@@ -154,7 +154,7 @@ interface Harness {
  *
  * 只造这条最小路径需要的那几个面：**没有**宿主会话存储、**没有** schedule 投影、**没有**真实模型。
  */
-function fixture(definition: AgentDefinition): Harness {
+function fixture(definition: AgentDefinition, extraActors: readonly Actor[] = []): Harness {
   const byEvent = new Map<string, Set<Listener>>()
   const disposers: (() => Promise<void> | void)[] = []
   const sessions = new Map<string, FakeSession>()
@@ -285,7 +285,18 @@ function fixture(definition: AgentDefinition): Harness {
     mode: 'authenticated',
     ready: () => {},
     resolve: () => actor,
-    assert: value => { if (revoked || value !== actor) throw new AccessError(403, '无权访问') },
+    /**
+     * ⚠️ 这个替身比**生产**更严：生产里 `access.assert` 是"这个 actor 能不能用这个插件"
+     * （`plugin-kit/src/access.ts:228` 的 `provider().assertAccess(actor, pluginId)`），
+     * **不含会话归属** ⇒ 任何被授权的用户都通过。替身默认只放行 `actor`；
+     * `extraActors` 用来在需要时模拟"**另一个同样被授权的用户**"（Q6 的跨用户读取用例要用它，
+     * 否则第二个用户会在授权这步就被挡下，根本走不到幂等缓存）。
+     */
+    assert: value => {
+      const allowed = value === actor
+        || extraActors.some(extra => extra.namespace === value.namespace && extra.userId === value.userId)
+      if (revoked || !allowed) throw new AccessError(403, '无权访问')
+    },
   }
   const port = new MemoryConversationPort(AGENT_ID)
   const config: RuntimeConfig = {
@@ -1199,5 +1210,97 @@ describe('P7 ③-B-1：派生寻址（missionRequestId 接到 open）', () => {
     expect(f.port.size).toBe(1)
     // 合并的证据在**宿主调用次数**上：第二次是复用同一个 promise，不是又建一个 Agent。
     expect(f.opened()).toEqual([left?.id])
+  })
+})
+
+/**
+ * **Q6（跨用户读取候选）：进程内幂等缓存 `settledTurns` 的键不含 owner。**
+ *
+ * 存储层是干净的：内存实现用 `` `${ownerKey(owner)}\u0000${requestId}` ``、PG 的部分唯一索引含
+ * `owner_namespace/owner_id` ⇒ **两个存储实现都按 owner 分桶**。
+ * 但 `participant.ts` 的缓存不是：`settledKey = `${mode}:${request.requestId}``（**不含 owner**），
+ * 命中后**只比正文、不看归属** ⇒ 另一个 owner 只要拿到同一个 `requestId` 且正文**逐字相同**，
+ * 就会收到第一个 owner 的 `ParticipantResult`（会话 id、投影正文、artifacts）。
+ *
+ * **可达性（关键）**：这次缓存读发生在 `assertAccess` **之后**，而生产的 `access.assert` 只是
+ * "这个 actor 能不能用这个插件"（`plugin-kit/src/access.ts:228` 的 `provider().assertAccess(actor, pluginId)`），
+ * **不含会话归属** ⇒ **两个不同的已授权用户都会通过**，所以这条缺口在生产里是**可达的**。
+ * 本文件原来的 `access` 替身是 `value !== actor` 就拒（**比生产更严**）⇒ 第二个用户会在授权那步被挡下、
+ * 根本走不到缓存，**于是这条缺口被替身掩盖了**。所以本组显式用 `fixture(define(), [otherActor])`
+ * 放行"另一个同样被授权的用户"。
+ *
+ * 判据刻意写成**不会挂住**的形状：用 `Promise.race` 把"从缓存回"与"接了新一轮"分开——
+ * - **命中缓存** ⇒ 立刻 settle（同正文直接 resolve；换正文则 409）⇒ 断言失败**且不挂**；
+ * - **缓存按 owner 分桶** ⇒ 走正常路径 ⇒ 会**接一轮新的** ⇒ `accept()` 兑现。
+ *
+ * 409「同一请求身份不能用在不同内容上」是**缓存的指纹**：存储层按 `(agent_id, owner, request_id)` 认，
+ * bob 在存储层根本不是 duplicate ⇒ 那个 409 只可能来自这段进程内缓存。
+ */
+describe('Q6：幂等缓存 `settledTurns` 必须按 owner 分桶（跨用户读取）', () => {
+  it('另一 owner 用同一 requestId + 逐字相同正文，不得拿到第一个 owner 的结论', async () => {
+    const f = fixture(define(), [otherActor])
+    const callA = f.call({ message: '同一句话' })
+    const pendingA = f.run(callA.request)
+    const idA = await f.accept()
+    await f.answer(idA, 'A 的答复')
+    const resultA = await pendingA
+    await f.settle(idA)
+    expect(resultA.conversationId).toBe(idA)
+
+    const callB = f.call({ actor: otherActor, message: '同一句话', requestId: callA.request.requestId })
+    const pendingB = f.run(callB.request)
+    // 先 settle 就说明"没接新一轮"；把**原因**记下来带进断言消息——
+    // 否则"被拒（例如无权限）"与"命中缓存"会被同一个 `'from-cache'` 糊在一起，看不出真因。
+    let settledWhy = ''
+    const settled = pendingB.then(
+      () => { settledWhy = 'resolved'; return 'settled' as const },
+      (error: unknown) => { settledWhy = `${(error as Error)?.name ?? 'Error'}: ${(error as Error)?.message ?? ''}`; return 'settled' as const },
+    )
+    const raced = await Promise.race([
+      settled,
+      f.accept(1).then(() => 'accepted-new-turn' as const),
+      new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), 5_000)),
+    ])
+    // 关键断言：bob 必须**走正常路径**（接一轮新的），而不是从缓存里拿到 alice 的结论。
+    // ⚠️ `accept(1)`：`accept(since = 0)` 只等 `followups.length > since` 并取 `at(-1)`，
+    // 对"第二轮"必须传 1，否则拿到的是 alice 那一轮的 id（这一条差点让本用例挂死 30s）。
+    expect(raced, `bob 的一轮既没从缓存回、也没被接单（提前 settle 的原因：${settledWhy}）`).toBe('accepted-new-turn')
+
+    const idB = await f.accept(1)
+    await f.answer(idB, 'B 的答复')
+    const resultB = await pendingB
+    expect(resultB.conversationId).toBe(idB)
+    expect(resultB.conversationId).not.toBe(idA)
+    expect(resultB.text).not.toBe(resultA.text)
+  })
+
+  it('强判别器：另一 owner 同 requestId 换正文 ⇒ 修复后不得再出 409（那是缓存的指纹）', async () => {
+    const f = fixture(define(), [otherActor])
+    const callA = f.call({ message: '第一句' })
+    const pendingA = f.run(callA.request)
+    const idA = await f.accept()
+    await f.answer(idA, 'A 的答复')
+    await pendingA
+    await f.settle(idA)
+
+    const callB = f.call({ actor: otherActor, message: '另一句', requestId: callA.request.requestId })
+    const pendingB = f.run(callB.request)
+    let settledWhy = ''
+    const settled = pendingB.then(
+      () => { settledWhy = 'resolved'; return 'settled' as const },
+      (error: unknown) => { settledWhy = `${(error as Error)?.name ?? 'Error'}: ${(error as Error)?.message ?? ''}`; return 'settled' as const },
+    )
+    const raced = await Promise.race([
+      settled,
+      f.accept(1).then(() => 'accepted-new-turn' as const),
+      new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), 5_000)),
+    ])
+    expect(raced, `bob 的一轮既没从缓存回、也没被接单（提前 settle 的原因：${settledWhy}）`).toBe('accepted-new-turn')
+
+    const idB = await f.accept(1)
+    await f.answer(idB, 'B 的答复')
+    const resultB = await pendingB
+    expect(resultB.conversationId).toBe(idB)
+    expect(f.port.size).toBe(2)
   })
 })

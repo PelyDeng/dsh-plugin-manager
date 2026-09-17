@@ -77,8 +77,19 @@ test('身份与旧协作入口逐字相同（改名会让协调方与用户看�
   assert.equal(value.description,'查询博客、整理资料并提出文章候选；采用候选和发布确认仍在博客原页面完成。')
 })
 
-test('实时通道声明为 cumulative（blog 给的是本步累积值，不是增量）',()=>{
-  assert.equal(definition().liveMode,'cumulative')
+test('实时通道声明为 delta：思考通道由宿主的**增量帧**喂（不是本步累积值）',()=>{
+  /**
+   * ⚠️ **2026-09-17 更正（原断言写的是 `'cumulative'`）**：旧载体说的"本步累积值"是**页面通道**的
+   * 事实（`chat.ts` 自己 `b.live[type] += …`）。新载体的思考通道**不由页面喂**：它由宿主的
+   * `reasoning-delta` 帧经 `participant.ts:399` 直接喂，那是**增量**。
+   * 声明成 `'cumulative'` 时 `projection.ts:191` 会**整段替换**该 step 的内容 ⇒ 每一步的思考
+   * 只剩**最后一个片段**（协调方台面上就是被打碎的思考）。
+   *
+   * 这条字段的判据**不只看它自己**：`tests/participant.test.mjs` 的两条思考通道用例喂的是
+   * **真增量**，把 `definition.ts:169` 改回 `'cumulative'` 它们会红（本轮变异验证过）。
+   * 与已完成的同类物一致：`closedoff/src/definition.ts:113` 也是 `'delta'`（运行时的缺省）。
+   */
+  assert.equal(definition().liveMode,'delta')
 })
 
 test('会话寻址声明为 derived：同一 mission 只建一条会话（取代旧映射表）',()=>{
@@ -98,8 +109,13 @@ test('persona 与 tools 原样透传（本文件不注册任何东西）',()=>{
 
 test('⚠️ 不凭空加 blog 没有的钩子（脱敏 / 等待 / 隐藏主键）',()=>{
   const value=definition()
-  // 三条都是"看起来更完整、实际改变了行为"的钩子：加 `redact` 会改变正文，加 `needsReply`
-  // 会让本该结束的回合变成等待，加 `opaqueFromToolResult` 会动思考通道。
+  /**
+   * 三条都**不是**"顺手补上就更完整"的钩子：加 `redact` 会改变交回正文，加 `needsReply` 会让本该
+   * 结束的回合变成等待。**但"不加"不等于"没问题"**——`opaqueFromToolResult`（以及 `projectReasoning`）
+   * 的缺席是一个**开放缺口 Q2**：新载体的 `thinking` 通道装的是**原始推理**，而旧载体结构上不会
+   * 转发推理（旧 `participant.ts:95-107` 只读 `live.text`）⇒ 协调方可见面因此变了。
+   * 证据、判定与修好后的动作见 `tests/participant.test.mjs` 里那条"特征登记"用例与切换记录。
+   */
   assert.equal('redact' in value,false)
   assert.equal('needsReply' in value,false)
   assert.equal('opaqueFromToolResult' in value,false)

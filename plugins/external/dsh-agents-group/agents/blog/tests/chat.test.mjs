@@ -10,7 +10,11 @@ import {BlogJobs} from '../src/jobs.mjs'
 import {BlogChat} from '../src/chat.ts'
 import {BlogApplication,PendingOperationsMirror} from '../src/application.mjs'
 import {projectChat} from '../src/chat-history.mjs'
-import {createBlogParticipant} from '../src/participant.ts'
+// 协作入口在 P7 收敛到运行时（`src/participant.ts` 已删除）。这两条用例断言的是**协作路径**
+// 上的行为，所以经构造胶水接回运行时入口——**用例体与断言一字未改**（`participant-harness.mjs`
+// 的文件头写了它只做构造、以及为什么签名保持不变）。
+import {createBlogParticipant,installTitleDelivery} from './participant-harness.mjs'
+import {ConversationLifecycle} from '../../../packages/runtime/src/index.ts'
 // 索引库切 PG 之后夹具换成运行时的内存端口（见 `index-fixture.mjs`）：`ChatStore` 不再自己开库，
 // 所有读写都过端口（异步）。
 import {memoryIndex,ownerActor} from './index-fixture.mjs'
@@ -51,7 +55,7 @@ test('saved attempts display authoritative original blocks with a stable partial
 async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=false,occupancy}={}){
   const root=new Context(),registry=root.plugin(AgentRegistry);await registry
   const runtimeJobs=root.plugin(LocalJobRegistry);await runtimeJobs
-  const store=new BlogStore(':memory:');await store.init();const pending=new PendingOperationsMirror(),index=new ChatStore(memoryIndex(),()=>pending.ids()),handles=[],saved=new Map(),headers=new Map(),disposers=[],tools=new Map(),feedbackCalls=[]
+  const store=new BlogStore(':memory:');await store.init();const pending=new PendingOperationsMirror(),indexDb=memoryIndex(),index=new ChatStore(indexDb,()=>pending.ids()),handles=[],saved=new Map(),headers=new Map(),disposers=[],tools=new Map(),feedbackCalls=[]
   let revoked=false,releaseOpen,releaseFlush,flushCount=0,nextFlushGate;const releaseGates=[]
   const access={assert(a){assert.ok(!revoked&&a.sessionId==='login','revoked')}}
   const openGate=delayedOpen?new Promise(r=>{releaseOpen=r}):Promise.resolve()
@@ -85,9 +89,22 @@ async function fixture(t,{delayedOpen=false,delayedFlush=false,noPersistence=fal
   const attachments={freeze:()=>[]},blog={list:async()=>({items:[{cid:337,title:'现有文章'}]}),get:async id=>structuredClone(nativeRecords.get(id)),async call(action,args){if(action==='status')return{nativeDrafts:true};assert.equal(action,'save');const id=args.base?.savedDraft?.cid??nativeCid++,snapshot={published:null,savedDraft:{...args.content,cid:id},version:String(nativeCid),selectedVariant:'savedDraft'};nativeRecords.set(id,snapshot);return{cid:id,snapshot}}}
   const jobs=new BlogJobs(ctx,access,store,blog,attachments,3000),app=new BlogApplication(store,access,blog,null,null,jobs,attachments,pending)
   const chat=new BlogChat(ctx,access,store,index,attachments,jobs,app,sdk,3000,occupancy)
-  t.after(async()=>{releaseOpen?.();releaseFlush?.();for(const release of releaseGates)release();await chat.close();await jobs.close();for(const dispose of disposers.reverse())await dispose?.();store.close();await runtimeJobs.dispose();await registry.dispose()})
+  /**
+   * 标题订阅的**唯一**持有者：运行时的 `ConversationLifecycle`。
+   *
+   * ⚠️ 这是 P7 的一处**装配形状变化**，夹具必须照生产来：`BlogChat` 自本批起**不再自己订阅**
+   * 标题（它只交出投递口 `chat.titleSink`），订阅由运行时的生命周期注册（`registerConversationTitles`），
+   * 装配侧用 `titleSink: chat.titleSink` 把投递口接上去（`src/index.ts` 的同名那一行）。
+   *
+   * ⇒ 页面路径的夹具也**必须**有一个生命周期，否则 `session/title` 事件**没有任何订阅者**：
+   * 迟到的官方标题不生效、`changed` 一次都不广播 —— 这正是"声明了却零接线"在夹具里的同一形状，
+   * 而不是产品缺陷（生产侧那一行由 `createAgentRuntime` 做）。
+   */
+  const lifecycle=new ConversationLifecycle({ctx,definition:{id:'blog'},access,store:indexDb.conversations,allowedTools:()=>[],config:{routePrefix:'/blog',turnTimeoutMs:3000,authRecheckMs:1000,maxActiveConversations:4,reasoningEffort:''}})
+  const uninstallTitle=installTitleDelivery('blog',chat.titleSink)
+  t.after(async()=>{releaseOpen?.();releaseFlush?.();for(const release of releaseGates)release();await chat.close();await jobs.close();uninstallTitle();await lifecycle.dispose();for(const dispose of disposers.reverse())await dispose?.();store.close();await runtimeJobs.dispose();await registry.dispose()})
   const conversation=await chat.create(actor,'conversation-123')
-  return{root,store,index,chat,handles,tools,blog,feedbackCalls,conversation,releaseOpen,releaseFlush,
+  return{root,ctx,store,index,indexDb,lifecycle,chat,handles,tools,blog,feedbackCalls,conversation,releaseOpen,releaseFlush,
     holdModel(method){const target=method==='resolveCallConfig'?ctx.llm:ctx.sessionController,original=target[method],entered=Promise.withResolvers(),gate=Promise.withResolvers();releaseGates.push(gate.resolve);target[method]=async(...args)=>{entered.resolve();await gate.promise;return original.apply(target,args)};return{entered:entered.promise,release:gate.resolve}},
     holdNextFlush(){let release;nextFlushGate=new Promise(r=>{release=r});releaseGates.push(release);return release},revoke(){revoked=true},send:(extra={})=>chat.send(actor,{conversationId:conversation.id,requestId:'request-123',text:'看看博客最近情况',research:true,...extra})}
 }
@@ -463,24 +480,88 @@ test('stop during Agent creation waits for that handle and does not release the 
   assert.equal(f.chat.active.size,1);assert.equal(f.handles[1].cancelled,false);assert.equal(f.handles[1].disposed,false)
 })
 
-test('participant revocation waits for original Agent creation and durability before rejecting',async t=>{
+/**
+ * ⚠️ **用例名变更登记（2026-09-17，期级评审判）**：原名
+ * `participant revocation waits for original Agent creation and durability before rejecting`
+ * 里的 **"and durability" 已不再成立**，故去掉。
+ * **依据**：**载体切换**（页面路径 → 运行时入口）之后，撤销复查**紧跟 `agents.create` 就发生**，
+ * 这一轮**走不到持久化检查点**（详见本用例中段的**行为差异登记**，
+ * 以及 `packages/runtime/src/conversation.ts` 中 `open()` 的那条复查）。
+ * **理由**：**一个断言了系统已不再具备的行为的用例名，就是套件里的一句假话**，会误导评审。
+ * 新名字表达**被保留下来的两条语义**：①撤销不打断**进行中**的 Agent 创建；②**在开任何回合之前**就被拒绝。
+ */
+test('participant revocation does not interrupt an in-flight Agent creation and is rejected before any turn starts',async t=>{
   const f=await fixture(t,{delayedOpen:true,delayedFlush:true})
-  const participant=createBlogParticipant({access:f.chat.access,chat:f.chat,index:f.index,storage:f.store,routePrefix:'/blog'})
+  const participant=createBlogParticipant({
+    access:f.chat.access,chat:f.chat,index:f.index,storage:f.store,routePrefix:'/blog',
+    // 运行时入口要**宿主的两个面**（旧的 `createBlogParticipant` 只要业务替身）：
+    // `ctx` 是夹具那个近真假宿主，`database` 是运行时的存储端口（内存会话/轮次端口）。
+    // 旧的 `index` 仍然收（投影按会话读产出记录要用它）——两者不是一回事，见 harness 的文件头。
+    ctx:f.ctx ?? f.root,database:f.indexDb,lifecycle:f.lifecycle,
+  })
   let settled=false
   const running=participant.run({actor,missionId:'mission-revoked',requestId:'request-revoked',message:'查询博客',signal:new AbortController().signal,onProgress(){}})
   const rejected=assert.rejects(running,/revoked/).then(()=>{settled=true})
   await tick()
-  const [conversationId,b]=[...f.chat.active.entries()][0]
-  await f.chat.settleAccepted({...actor,userId:'another-user'},conversationId,b.request.id)
-  assert.equal(b.stopped,false)
-  f.revoke();f.chat.emit(conversationId,{type:'changed'})
+  /**
+   * ⚠️ **占用改读运行时，不再读 `chat.active`**（P7 入口改造后的形状变化，见 harness 文件头）：
+   * 协作路径的句柄由 `lifecycle.open()` 建，而 `BlogChat` 的绑定**不进 `chat.active`** ——
+   * `chat.ts` 在 `active` 的声明处写死了这件事："绑定不进 `this.active`：这一轮的占用与收尾
+   * 归运行时（`lifecycle`），本类的 `active` 只装**页面路径**自己驱动的轮次"。
+   * ⇒ 读 `chat.active` 拿到的是**空表**（旧写法在这里解构出 `undefined`，报
+   * `TypeError: undefined is not iterable`）。运行时的**同源**读法是 `busyIds()`：
+   * "活跃 ∪ 正在打开 ∪ 正在分支"，与 `isBusy()` 同一个判据（`conversation.ts` 里两者相邻且有注释说明）。
+   */
+  const [conversationId]=f.lifecycle.busyIds()
+  assert.ok(conversationId,'运行时必须已把该会话登记为在飞（此刻正卡在 `agents.create` 上）')
+  /**
+   * 旧写法在这里调 `f.chat.settleAccepted(外来 actor, …)` 并断言 `b.stopped===false`。
+   * 那两样都**只存在于页面路径**：`settleAccepted` 的实现第一步就是 `this.active.get(conversationId)`，
+   * `b.stopped` 也是页面路径那个 `Turn` 的字段 ⇒ 对协作路径**恒为空操作/无对应物**。
+   * 同一语义（"外来身份不能停掉这一轮"）在新架构里由运行时的 `cancel(id, actor)` 负责
+   * （它先 `access.assert` 再 `assertConversation`），属**另一条**覆盖面，本用例不代它断言。
+   */
+  f.revoke()
   await tick()
-  assert.equal(settled,false);assert.equal(f.chat.active.size,1);assert.equal(f.handles.length,0)
-  f.releaseOpen();await tick()
-  assert.equal(settled,false);assert.equal(f.handles[0].disposed,false);assert.equal(f.handles[0].message,undefined)
-  f.releaseFlush();await rejected
-  assert.equal(f.chat.active.size,0);assert.equal((await f.index.request(owner,b.request.id)).status,'interrupted')
-  assert.equal(f.handles[0].disposed,true);assert.equal(f.chat.listeners.size,0)
+  /* ① 创建完成前：撤销**不得**让这一轮提前拒绝 —— 这是本用例的核心语义，必须保留。 */
+  assert.equal(settled,false);assert.ok(f.lifecycle.busyIds().includes(conversationId));assert.equal(f.handles.length,0)
+  f.releaseOpen()
+  /**
+   * ② ⚠️ **行为差异登记（期级评审请重点看这一条）**：旧页面路径把**持久化检查点**也纳入撤销复查
+   * ——"Agent 创建**与**一次持久化检查点都完成"之后才复查身份，所以旧注释的措辞是
+   * "creation **and durability**"。运行时**复查得更早**：`lifecycle.open()` 在
+   * `await agents.create` **之后紧接着**就复查身份
+   * （`packages/runtime/src/conversation.ts` 里 `open()` 的那条 `this.host.access.assert(actor)`，
+   * 即 TOCTOU 守卫）⇒ 这一轮**根本走不到持久化检查点**就带着 `/revoked/` 拒绝了，
+   * 旧的第 ②③ 两步在这里合并成一步，`f.releaseFlush()` 已经没有人在等它。
+   *
+   * **我的判断**：就"不给已撤销的身份继续做事"这一点而言，**更早复查 = 更早 fail-closed，是更严的**
+   * —— 它不必先替一个身份已经失效的轮次**完成一次持久化**，就把这轮打住。
+   *
+   * ⚠️ **但随之而来有一个窗口问题，必须一并记下**：**复查通过之后、持久化之前**若发生撤销，
+   * **这一层不再兜**（运行时在那个窗口里不会再查一次身份）。
+   * **该窗口是否有补偿守卫，需期级评审确认**——我**没有**核查运行时以外的其它层，
+   * 因此**不断言"别处一定兜住了"**。这一条是留给评审的**核对项**，不是本用例要解决的问题。
+   *
+   * **被保留下来的语义**（①）仍然成立，而且它才是这个用例真正的价值：
+   * **撤销不能打断正在进行中的 Agent 创建。**
+   */
+  await rejected
+  assert.equal(f.handles[0].disposed,true,'拒绝之后运行时必须已经收尾掉那个句柄')
+  assert.equal(f.handles[0].message,undefined,'被撤销的那一轮不得再给 Agent 补发消息')
+  assert.equal(f.lifecycle.busyIds().includes(conversationId),false,'拒绝之后占用必须释放')
+  f.releaseFlush()
+  /**
+   * ③ 旧写法在这里断言"业务索引里那条请求的状态为 `interrupted`"。运行时**没有对应物**：
+   * 这一轮在 `lifecycle.open()` 的身份复查处就被拒绝，**压根没有 claim 过轮次行**
+   * （`turnsOf` 为空、`turnStatus('request-revoked')` 为 `undefined`）。
+   * **登记为"仅旧入口成立"**：新架构里"轮次行的 claim / 收尾"由运行时的轮次端口负责
+   * （夹具是 `MemoryTurnStore`，生产是 `dsh_turns`），而**本路径下它从未开始**。
+   * 换上的可观测断言比旧断言更强：**被拒绝的那一轮不得留下半写的轮次行。**
+   */
+  assert.deepEqual(await f.indexDb.turns.turnsOf(owner,conversationId),[],'被拒绝的那一轮不得留下半写的轮次行')
+  assert.equal(await f.indexDb.turns.turnStatus(owner,'request-revoked'),undefined)
+  assert.equal(f.chat.listeners.size,0,'协作路径不得在页面路径的订阅表上留下东西')
 })
 
 test('stopping during first durability checkpoint never follows up or registers a new Job',async t=>{
@@ -753,9 +834,28 @@ test('revocation inside official selection prevents session log and default writ
 test('participant uses the same validated default and blocks an unroutable model before a native turn',async t=>{
   const f=await fixture(t)
   f.chat.ctx.llm.resolveCallConfig=async()=>{throw new Error('fixture route unavailable')}
-  const participant=createBlogParticipant({access:f.chat.access,chat:f.chat,index:f.index,storage:f.store,routePrefix:'/blog'})
-  const result=await participant.run({actor,missionId:'route-blocked-mission',requestId:'route-blocked-request',message:'查询博客',signal:new AbortController().signal,onProgress(){}})
-  assert.equal(result.status,'failed');assert.equal(f.handles.length,0)
+  const participant=createBlogParticipant({access:f.chat.access,chat:f.chat,index:f.index,storage:f.store,routePrefix:'/blog',ctx:f.ctx??f.root,database:f.indexDb,lifecycle:f.lifecycle})
+  /**
+   * ⚠️ **入口契约变化（登记，见交付报告）——它是"两处"，不是一处整体变化。**
+   *
+   * 1. **入场期**失败（这里的"模型路由不可用"就是这一类）：旧入口把它**吞成** `run()` 的返回值
+   *    `{status:'failed'}`；运行时**抛** `AccessError`（`code==='DSH_ACCESS_ERROR'`，由 kit 的
+   *    `requestedConversationModel` 抛，位置在 `ConversationLifecycle` 的 `options()` →
+   *    预留会话那一段，**早于 `agents.create`**）。
+   * 2. **回合结束之后**的失败：**仍然返回** `{status:'failed'}`，这一类**没有变** ——
+   *    `packages/runtime/src/participant.ts:828`（`fallbackProjection`）：
+   *    正文为空 ⇒ `{status:'failed', text:'没有拿到可交付的结果。'}`。
+   *
+   * ⚠️ **不要把这条写成"失败态返回值 → 抛错"就完了**：那会让人以为**所有**失败都改成了抛错，
+   * 从而漏掉第 2 类（回合后的失败仍走返回值）。**这是措辞层面的收窄，不是行为变更。**
+   *
+   * 所以这里断言的是**运行时真实且被认可的契约（拒绝）**，而不是把断言改松：
+   * 用例名那句"**before a native turn**"的核心语义**原样保留**在下面 `f.handles.length===0` 上。
+   * 第 1 类变化对协调方**可见**（butler 桥接不 catch ⇒ 协调方看到的仍是子任务失败），已单列登记。
+   */
+  await assert.rejects(async()=>participant.run({actor,missionId:'route-blocked-mission',requestId:'route-blocked-request',message:'查询博客',signal:new AbortController().signal,onProgress(){}}),
+    error=>error?.code==='DSH_ACCESS_ERROR'&&/模型路由当前不可用/.test(String(error?.message)))
+  assert.equal(f.handles.length,0,'路由不可用时不得开原生回合')
   assert.equal(f.chat.listeners.size,0);assert.deepEqual(f.chat.ctx.agentDefaultModel.currentSelection(),{provider:'test',model:'test'})
 });
 

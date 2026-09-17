@@ -228,6 +228,21 @@ export class ConversationLifecycle {
    * 不同，合并不了。两张表的键不同源，所以是两个 Map，不是一张。
    */
   private readonly missionOpenings = new Map<string, Promise<Conversation | undefined>>()
+  /**
+   * **派生寻址在飞那一次铸出的会话 id**（会话 id 一族，不是 missionKey 一族）。
+   *
+   * 为什么必须有它：{@link missionOpenings} 的键是 `missionRequestId`，而"某个会话此刻忙不忙"
+   * 是**按会话 id** 问的（`busyIds()` → 侧栏 `busy` 集合、移除围栏 `conversationRemover` 的
+   * `busy(id)`）。派生路径在 `await store.create` 回来**之前**就已经铸出 id、并且存储里已经有
+   * 那一行 `ready = false` 的预留行——那段时间它**正在被创建**，而 `openings` 还没登记它
+   * （`openings.set` 要等 `openReserved`，那时 create 已经返回了）⇒ 不并上这张表，移除围栏
+   * 在那段窗口里**看不见**它，用户可以在创建途中把会话删掉（移除与创建各写同一行）。
+   *
+   * ⚠️ **不能把 `missionOpenings` 直接并进 `busyIds()`**：它的键是 missionKey，不是会话 id，
+   * 并进去等于把一串**不是 id 的东西**当成会话 id 交给侧栏与移除围栏。
+   * ⚠️ 清理必须在 `finally`（见 {@link reserveMissionRow}），否则会留下**永不释放的忙 id**。
+   */
+  private readonly openingIds = new Set<string>()
   private readonly forks = new Set<string>()
   private readonly heldTurns = new Map<string, { turn?: PendingTurn; identity?: TurnIdentity }>()
   private readonly turns = new WeakMap<Conversation, PendingTurn>()
@@ -244,8 +259,16 @@ export class ConversationLifecycle {
   private disposed = false
   private readonly identities = new WeakMap<object, Actor>()
   private readonly stopTitles: () => void
+  /**
+   * ⚠️ **不能写参数属性**（`constructor(private readonly host: LifecycleHost)`）：参数属性要靠
+   * TS 代码生成，而 `node --test` 是 strip-only ⇒ 整个模块以 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`
+   * 被拒。本文件在运行时入口的导出链上，blog 的 `.mjs` 用例全都要 import 它 ⇒ 一处参数属性会让
+   * 它们**整个文件加载失败**（报"套件变小"，不是某条红）。显式声明 + 赋值逐字等价。
+   */
+  private readonly host: LifecycleHost
 
-  constructor(private readonly host: LifecycleHost) {
+  constructor(host: LifecycleHost) {
+    this.host = host
     this.stopTitles = registerConversationTitles(host.ctx, (id, title, manual, complete) => {
       if (this.disposed) return
       // 同步回调不能 await：投递给持久队列，后台按会话 FIFO 落库（见 TitleSink）。
@@ -260,19 +283,20 @@ export class ConversationLifecycle {
     return { namespace: actor.namespace, userId: actor.userId }
   }
 
-  /** 某个会话此刻是否被本实例占用（活跃、正在打开或正在分支）。 */
+  /** 某个会话此刻是否被本实例占用（活跃、正在打开、正在分支，或**派生寻址正在创建**）。 */
   isBusy(id: string): boolean {
-    return this.conversations.get(id)?.active === true || this.openings.has(id) || this.forks.has(id)
+    return this.conversations.get(id)?.active === true || this.openings.has(id) || this.forks.has(id) || this.openingIds.has(id)
   }
 
   /**
    * 本实例此刻占用的全部会话 id。
    *
    * 侧栏 `list` 的 `busy` 集合要带上它们（adapter 装配时用 `localBusyIds` 传进去），
-   * 与 {@link isBusy} **同源**：活跃、正在打开、正在分支三者都算——两处各算一遍迟早会漂移。
+   * 与 {@link isBusy} **同源**：活跃、正在打开、正在分支、**派生正在创建**四者都算——
+   * 两处各算一遍迟早会漂移（`isBusy` 是本函数的过滤谓词，所以这里只需把 id 候选并齐）。
    */
   busyIds(): readonly string[] {
-    return [...new Set([...this.conversations.keys(), ...this.openings.keys(), ...this.forks])].filter(id => this.isBusy(id))
+    return [...new Set([...this.conversations.keys(), ...this.openings.keys(), ...this.forks, ...this.openingIds])].filter(id => this.isBusy(id))
   }
 
   /**
@@ -437,6 +461,9 @@ export class ConversationLifecycle {
       conversationId: conversation.id,
       actor,
       agent: conversation.handle.agent,
+      // 句柄本身也原样给出（见 `TurnHookContext.handle` 的注释）：业务拿不到创建点，
+      // 而"造一个只有 `agent` 的假句柄"是类型上的谎，会在别的读点上运行期炸。
+      handle: conversation.handle,
       storage: this.host.storage,
       ...(identity?.requestId === undefined ? {} : { requestId: identity.requestId }),
       ...(identity?.turnId === undefined ? {} : { turnId: identity.turnId }),
@@ -687,16 +714,35 @@ export class ConversationLifecycle {
   /** 派生寻址的预留段（**单独一个方法**是为了让 `openByMission` 的合并段全程同步）。 */
   private async reserveMissionRow(missionKey: string, actor: Actor): Promise<Conversation | undefined> {
     const minted = this.createId()
-    const row = await this.host.store.create(this.ownerOf(actor), minted, missionKey, { title: '' })
-    if (row.id === minted) return this.openReserved(minted, this.reserveSlot(), actor)
     /**
-     * 幂等命中：`ready = false` ⇒ 那次创建没走完两段握手（进程死在预留与发布之间）。
-     * **409 而不是再建一条**：再建一条会同时破坏"同一 mission 一条会话"和"这个 mission 到底在
-     * 哪条会话里"——而后者的错法是静默的（协调方拿着新 id，旧行永远停在未发布）。
+     * ⚠️ **必须在 `await store.create` 之前同步登记**：`isBusy()`/`busyIds()` **必须同步可判**
+     * （它是移除围栏的一部分，见 `ports.ts` 的说明），而"正在创建"这件事只有在这一刻才知道 id。
+     * 没有这一步，创建途中那条预留行对移除围栏与侧栏 `busy` 集合**都不可见**（§77 的真缺陷）。
+     * 清理在 `finally`：**幂等命中分支也必须清**（那时 `minted` 并没有落成行）。
      */
-    if (row.ready !== true) throw new AccessError(409, '该协作任务的会话尚未完成创建，请稍后重试')
-    // 命中既有行 ⇒ 走"既有会话"那条路（句柄复用 + 并发合并），**不要**直接 `resumeExisting`。
-    return this.openExisting(row.id, actor, missionKey)
+    this.openingIds.add(minted)
+    try {
+      const row = await this.host.store.create(this.ownerOf(actor), minted, missionKey, { title: '' })
+      /**
+       * ⚠️ **必须 `return await`，不能 `return <promise>`**：在 `try/finally` 里 `return p` 会**先跑
+       * `finally`、再等 `p` 落定**（JS 的 abrupt completion 语义）⇒ 那样 `openingIds` 会在
+       * `openReserved` **还没走完**时就被删掉，整个修复等于没做（实测：`add` 时 `size=1`、
+       * 紧随其后的 `busyIds()` 里已经是空集）。
+       */
+      if (row.id === minted) return await this.openReserved(minted, this.reserveSlot(), actor)
+      /**
+       * 幂等命中：`ready = false` ⇒ 那次创建没走完两段握手（进程死在预留与发布之间）。
+       * **409 而不是再建一条**：再建一条会同时破坏"同一 mission 一条会话"和"这个 mission 到底在
+       * 哪条会话里"——而后者的错法是静默的（协调方拿着新 id，旧行永远停在未发布）。
+       */
+      if (row.ready !== true) throw new AccessError(409, '该协作任务的会话尚未完成创建，请稍后重试')
+      // 命中既有行 ⇒ 走"既有会话"那条路（句柄复用 + 并发合并），**不要**直接 `resumeExisting`。
+      // 同样用 `return await`（理由见上）。
+      return await this.openExisting(row.id, actor, missionKey)
+    } finally {
+      // 铸出来但没落成行的那个 id 必须摘掉；真实 id 那条路已经由 `openReserved`/`openExisting` 接管。
+      this.openingIds.delete(minted)
+    }
   }
 
   async models(actor: Actor, id?: string) {

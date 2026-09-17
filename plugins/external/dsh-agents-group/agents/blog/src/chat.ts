@@ -16,12 +16,15 @@
 import {createUserMessage} from '@deepseek-ai/dsh-llm'
 import {SessionId,type SessionEvent} from '@deepseek-ai/dsh-session'
 import type {Context} from '@deepseek-ai/cordis'
-import type {AgentHandle} from '@deepseek-ai/dsh-agent'
+import type {Agent,AgentHandle} from '@deepseek-ai/dsh-agent'
 // 事件增强：`ctx.jobs` / `ctx.messageFeedback` / `ctx.sessions` / `ctx.sessionPersistence` 等宿主服务
 // 由官方包声明合并进来，**不 import 就没有这些属性**（这是 index.ts 已有的同一套写法）。
 import type {} from '@deepseek-ai/dsh-message-feedback'
-import {onRevoked,conversationModel,conversationArchive,conversationRemover,previewPage,hostBusyConversationIds,registerConversationTitles} from '@dsh-plugin-manager/plugin-kit'
+import {onRevoked,conversationModel,conversationArchive,conversationRemover,previewPage,hostBusyConversationIds} from '@dsh-plugin-manager/plugin-kit'
 import type {Access,Actor,ConversationProvider,ConversationRecord} from '@dsh-plugin-manager/plugin-kit'
+// ⚠️ `registerConversationTitles` **不再由本文件订阅**：标题事件的订阅者只能是运行时那一份，
+// 否则同一标题写两次、后写被守卫拒 ⇒ 页面收不到 `changed`。本文件只交出投递口（`titleSink`）。
+import type {TitleSink} from '../../../packages/runtime/src/conversation.ts'
 import {ownerKey,digest} from './store.mjs'
 import {invariant,BlogError} from './settings.mjs'
 import {persona,reasoningLanguage,BlogJobs} from './jobs.mjs'
@@ -34,7 +37,15 @@ import type {BlogAttachments} from './attachments.mjs'
 import type {BlogApplication} from './application.mjs'
 import type {BlogPgStorage} from './storage/pg.mjs'
 
-const instructions=`${persona}
+/**
+ * 本 Agent 的**对话人设**（= `jobs.mjs` 的 `persona` + 对话专属的那一长段纪律）。
+ *
+ * ⚠️ **导出它是装配的要求，不是顺手**：启用运行时之后，Agent 的系统提示由运行时的
+ * `setup()` 按 `AgentDefinition.persona` 注册（order 600），而**页面路径**仍然由本文件的
+ * `options()` 注册同一段。两处必须**逐字同源**——各写一份的下场是"同一个 Agent 在页面上和
+ * 在大总管那里收到的纪律不同"，而那种漂移在界面上完全看不出来。
+ */
+export const chatInstructions=`${persona}
 这是可持续多轮的博客对话。用户不需要先创建文章即可提问或分析资料。
 查询博客近况先使用 blog_search_posts；只报告工具实际提供的信息，不猜测访问量。
 标题、正文、关键词、分类、标签、时间可组合查询。query只匹配字面文字；今天/昨天用period，日期范围用dateFrom/dateTo，默认以modified表示写作/修改活动。不要把修改时间说成新建/首次发表时间。
@@ -228,6 +239,16 @@ export interface OccupancyPort {
   isBusy(id: string): boolean
   /** 外部驱动方此刻占着的**全部**会话（侧栏要一次拿到整个忙集合，逐个问太慢）。 */
   busyIds(): readonly string[]
+  /**
+   * 会话**被移除时**，让外部驱动方释放它持有的那一半（缺省不接＝没有外部驱动方）。
+   *
+   * 与 `isBusy` 是同一个接缝的两面，所以放在同一个端口上：移除围栏的顺序是
+   * `busy` 守卫 → `mark(pending)` → **`release`** → 宿主归档 → `mark(removed)`
+   * （`packages/plugin-kit/src/conversations.ts:126-150`）。本类只能释放**自己**那一半
+   * （`active` / `forks`），运行时那一半（它在 `lifecycle` 里缓存的句柄）只有它自己能放。
+   * 少了这一步，会话被接受移除之后**运行时仍攥着句柄**，与"移除已生效"的语义脱节。
+   */
+  release?(id: string): Promise<void>
 }
 
 export class BlogChat {
@@ -289,6 +310,22 @@ export class BlogChat {
    * **逐点等价**（见 `busy()` 的三档注释）。
    */
   readonly occupancy: OccupancyPort
+  /**
+   * **标题投递口**：官方标题事件 → 落库 + 告诉页面。
+   *
+   * ## 为什么它从"自己订阅"改成"交出去一份投递口"
+   *
+   * 宿主标题事件（`registerConversationTitles`）的**订阅者只能是运行时那一份**：标题最终要落
+   * `dsh_conversations`，而运行时的 `ConversationLifecycle` 构造时就订阅了、并且只经**模块级
+   * 单槽**（`installTitleSink`）投递。两边各订阅一次 = **同一标题写两次**，后写那次被守卫拒 ⇒
+   * 返回 `applied === false` ⇒ **页面不广播 `changed`**，用户看到"标题还是旧的"——而这条失效
+   * 完全静默（HTTP 200、无日志）。
+   *
+   * ⇒ 装配侧把本投递口交给 `createAgentRuntime` 的 `titleSink`，由**运行时那唯一的订阅**驱动它。
+   * 一份订阅、一个写入者（本方法）、一次广播。`syncTitle` 的同步返回值仍然是"这次写入被守卫
+   * 接受了吗"的判据（M21），**不是** Promise——那样它恒真，"被挡住就不广播"会静默退化成"每次都广播"。
+   */
+  readonly titleSink: TitleSink
 
   constructor(ctx: Context, access: Access, storage: BlogPgStorage, index: ChatStore, attachments: BlogAttachments, jobs: BlogJobs, app: BlogApplication, sdk: ChatSdk, timeoutMs = 240000, occupancy?: OccupancyPort) {
     this.ctx = ctx
@@ -308,12 +345,23 @@ export class BlogChat {
     this.listeners = new Map()
     this.closed = false
     // ⚠️ 广播判据必须**同步可得**（M21）：`index.syncTitle(...)` 的返回值是"这次写入**被守卫接受**了吗"
-    //（本地 SQLite 的 `changes>0`，同步返回）。`registerConversationTitles` 的回调是**同步**的、
-    // 不能 await，所以 `syncTitle` **不能**被改成异步方法：那样返回值会变成恒真的 Promise
-    //（truthy），"被守卫挡住就不广播"会**静默**退化成"每次都广播"，页面跟着无谓刷新。
+    //（本地 SQLite 的 `changes>0`，同步返回）。标题事件的回调是**同步**的、不能 await，所以
+    // `syncTitle` **不能**被改成异步方法：那样返回值会变成恒真的 Promise（truthy），
+    // "被守卫挡住就不广播"会**静默**退化成"每次都广播"，页面跟着无谓刷新。
     // 切索引库到 PG 时按运行时 `TitleSink` 的形状改：**同步改本地镜像 + 投递队列**，返回值取自
     // 本地那一步，后台按 FIFO 补写 PG。详见 `src/chat-store.ts` 的类注释。
-    ctx.effect(() => registerConversationTitles(ctx, (id, title, manual, complete) => { const applied = index.syncTitle(id, title, manual, complete); if (!this.closed && applied) this.emit(id, { type: 'changed' }) }))
+    //
+    // ⚠️ 这里**只交出投递口、不再自己订阅**（理由见 `titleSink` 的注释）：订阅由运行时的
+    // `ConversationLifecycle` 唯一持有，两份订阅会让页面收不到 `changed`。
+    this.titleSink = {
+      submit: (_agentId, conversationId, title, source) => {
+        // `TitleSink` 的三态 → `ChatStore.syncTitle` 的两个布尔。映射与
+        // `conversation.ts` 里"源码 → 三态"那一处**互为逆**，两处必须一起改。
+        const manual = source === 'manual', complete = source === 'generated'
+        const applied = index.syncTitle(conversationId, title, manual, complete)
+        if (!this.closed && applied) this.emit(conversationId, { type: 'changed' })
+      },
+    }
     const recheck = () => { for (const b of this.active.values()) try { access.assert(b.job.actor) } catch { void this.finish(b, 'interrupted', '登录或授权已失效') } for (const fork of this.forks.values()) try { access.assert(fork.actor) } catch { fork.abort.abort() } }
     ctx.effect(() => onRevoked(ctx, recheck))
     ctx.effect(() => { const timer = setInterval(recheck, 1000); timer.unref(); return () => clearInterval(timer) })
@@ -325,7 +373,13 @@ export class BlogChat {
         // 系统，不复制对象、不改任何取值（转 TS 前这里就是直接 `return value`）。
         record: (actor: Actor, id: string) => { const value = index.record(actor, id); invariant(value.ready, '对话尚未完成创建', 409); return value as unknown as ConversationRecord },
         mark: (actor: Actor, id: string, state: string) => index.mark(actor, id, state),
-      }, busy: (id: string) => this.busy(id), inspect: async (actor: Actor, id: string) => { const c = index.record(actor, id); const known = await ctx.sessionPersistence.stat(SessionId(id)); invariant(known, '无法核验持久化会话', 409); this.assertLifecycle(c, known!.header) }, release: async (id: string) => { await this.releaseConversation(id) },
+      }, busy: (id: string) => this.busy(id), inspect: async (actor: Actor, id: string) => { const c = index.record(actor, id); const known = await ctx.sessionPersistence.stat(SessionId(id)); invariant(known, '无法核验持久化会话', 409); this.assertLifecycle(c, known!.header) }, release: async (id: string) => {
+        // 两半都要放：本类这一半（`releaseConversation`）与**外部驱动方那一半**
+        // （运行时的 `lifecycle.release` —— 它缓存着句柄）。顺序无所谓，但两半都不能漏：
+        // 只放一半 ⇒ 会话已被接受移除、另一半仍占着它。
+        await this.releaseConversation(id)
+        await this.occupancy.release?.(id)
+      },
     })
     this.provider = {
       protocol: 1, pluginId: 'blog', list: async (actor: Actor, query: never) => { access.assert(actor); return index.managed(ownerKey(actor), query, conversationArchive(ctx).archivedSessionIds, [...hostBusyConversationIds(ctx), ...this.busyIds()]) }, preview: async (actor: Actor, id: string, before?: number) => {
@@ -633,7 +687,7 @@ export class BlogChat {
       // `signal` 与 `agentOptions` 是**并列**的两个字段，不能并进模型选择里：
       // 并进去会让 `agentOptions` 多出一个键，路由比较与会话上的模型选择随之漂移。
       signal: b.abort.signal,
-      setup: (agentCtx: AgentSetupContext) => { agentCtx.systemPrompt.section({ name: 'blog:persona', order: 600, text: instructions + '\n本轮时间基准：' + JSON.stringify(searchContext()) }); agentCtx.systemPrompt.section({ name: 'blog:language', order: 10000, text: reasoningLanguage }); agentCtx.systemPrompt.context({ name: 'blog:language', order: 10000, text: '当前交互界面的语言是简体中文。' + reasoningLanguage }); agentCtx.tools.restrict({ allow: this.jobs.toolNamesFor(b.job.input.research) }) },
+      setup: (agentCtx: AgentSetupContext) => { agentCtx.systemPrompt.section({ name: 'blog:persona', order: 600, text: chatInstructions + '\n本轮时间基准：' + JSON.stringify(searchContext()) }); agentCtx.systemPrompt.section({ name: 'blog:language', order: 10000, text: reasoningLanguage }); agentCtx.systemPrompt.context({ name: 'blog:language', order: 10000, text: '当前交互界面的语言是简体中文。' + reasoningLanguage }); agentCtx.tools.restrict({ allow: this.jobs.toolNamesFor(b.job.input.research) }) },
     }
   }
   async imageCapability(actor: Actor, id: string, input: unknown) {
@@ -648,6 +702,58 @@ export class BlogChat {
     const available = current.inputModalities?.includes('image') === true, currentSupportsImages = available
     return { available, currentSupportsImages, current: pinned, selected, message: available ? '当前所选模型支持图片' : `当前模型 ${selected.model} 未声明支持图片。请在输入框的模型选择器中选择支持图片的模型，或移除图片。文件和输入已保留。` }
   }
+  /**
+   * 为**运行时驱动**的一轮建立业务绑定（工具经 `jobs.bound(agent)` 取它）。
+   *
+   * ## 为什么必须有它（否则是**静默**的功能全失）
+   *
+   * 业务工具的授权口是 `jobs.mjs` 的 `createPluginTools({ authorize: agent => this.bound(agent) })`，
+   * 而 `bound()` 要求 `bindings.get(agent)` 存在，否则一律 **403「博客工具没有有效的委派身份」**。
+   * 那份绑定此前只在**本类自己创建句柄时**写（`run()` 里 `bindings.set(b.handle.agent, b)`）。
+   * 换成运行时驱动之后句柄由 `ConversationLifecycle.open()` 创建 ⇒ **这一步不会发生**
+   * ⇒ 协调方驱动的那一轮里**模型手里的每一个 blog 工具都 403**——不是装载失败，界面上看不出来。
+   *
+   * ## 绑定对象为什么复用 `Turn`
+   *
+   * 各工具体读的是 `b.chat` / `b.handle.agent` / `b.job` / `b.request` / `b.sources`，
+   * 而 `b.chat.*`（`propose` / `prepareOperation` / `selectDraft`）与 `b.chat.update(b, patch)`
+   * 走的都是**本类已经有的业务路径**——包括 `propose` 里那条 `index.result(...)`
+   * （它才是 `dsh_turn_results` 的**唯一生产写入点**）。所以"造一个形状相同的绑定"就同时修好了
+   * 另一件事：**协调方驱动的一轮也会把结构化产出写进结果表**，否则结果投影的两个来源一起为空、
+   * `external_pending` 永不出现。
+   *
+   * ⚠️ **`request.id` 必须是这一轮的「行 id」**（`dsh_turns.id`，运行时给的 `turnId`），
+   * 不是幂等键：`dsh_turn_results.turn_id` 要的正是行 id（DDL 专门写了这条"同名不同义"）。
+   * 传错的结果是"结果写进了另一轮"或写不进去，而且不报错。
+   *
+   * ⚠️ **绑定不进 `this.active`**：这一轮的占用与收尾归运行时（`lifecycle`），
+   * 本类的 `active` 只装**页面路径**自己驱动的轮次。放进去会让 `finish` 去 dispose 一个
+   * 不属于它的句柄。`bindings` 是 `WeakMap<Agent, …>`，会话结束时由 `unbindRuntimeTurn` 摘掉。
+   */
+  async bindRuntimeTurn(input: { readonly agent: Agent; readonly handle: AgentHandle; readonly actor: Actor; readonly turnId: string }): Promise<void> {
+    const owner = ownerKey(input.actor)
+    // 行 id → 整行业务记录。`ChatStore.request` 按 owner + 行 id 查（不按可见性过滤），
+    // 所以即使会话正在被移除也能读到自己那一轮。
+    const request = await this.index.request(owner, input.turnId)
+    const b: Turn = {
+      chat: this,
+      request,
+      selected: undefined,
+      // `research: false`：协作任务不启用联网查证（与旧协作入口逐字一致）；联网工具自身另有
+      // 守卫（`blog_web_search` 会以"当前任务未启用联网查证"403）。
+      job: { actor: input.actor, owner, input: { research: false } },
+      sources: [],
+      stopped: false,
+      handle: input.handle,
+      live: null,
+      unsub: [],
+      abort: new AbortController(),
+      draft: null,
+    }
+    this.jobs.bindings.set(input.agent, b)
+  }
+  /** 摘掉运行时驱动那一轮的绑定（`onTurnFinish`）。幂等：没有也成功。 */
+  unbindRuntimeTurn(agent: Agent): void { this.jobs.bindings.delete(agent) }
   /**
    * 这一轮还在不在的正常性守卫。
    *
