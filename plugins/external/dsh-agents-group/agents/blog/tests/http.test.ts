@@ -136,8 +136,8 @@ test('history API searches renamed titles and retains records when official arch
 test('J6：未配置 PG 时装载照常、探针与业务端点按 storage_unconfigured 拒绝、绝不回退 SQLite',async t=>{
   const previousDsn=process.env.AGENTS_GROUP_PG_DSN,previousConfig=process.env.AGENTS_GROUP_PG_CONFIG
   delete process.env.AGENTS_GROUP_PG_DSN
-  // 显式指向不存在的文件：开发机上恰好存在缺省 storage.json 也不该改变结论。
-  process.env.AGENTS_GROUP_PG_CONFIG=join(tmpdir(),'dsh-blog-http-missing-storage.json')
+  // 显式指向不存在的文件：开发机上恰好存在缺省 env.conf 也不该改变结论。
+  process.env.AGENTS_GROUP_PG_CONFIG=join(tmpdir(),'dsh-blog-http-missing-env.conf')
   t.after(()=>{
     if(previousDsn===undefined)delete process.env.AGENTS_GROUP_PG_DSN;else process.env.AGENTS_GROUP_PG_DSN=previousDsn
     if(previousConfig===undefined)delete process.env.AGENTS_GROUP_PG_CONFIG;else process.env.AGENTS_GROUP_PG_CONFIG=previousConfig

@@ -127,7 +127,7 @@ function unconfiguredBusinessStorage(hint: string): BlogPgStorage {
 function unconfiguredIndex(): AgentDatabasePort {
   const reject = () => {
     throw new StorageError('storage_unconfigured',
-      '博客索引存储未就绪：需要在私有配置里提供 PostgreSQL 连接（环境变量 AGENTS_GROUP_PG_DSN 或 storage.json）；不会回退 SQLite。')
+      '博客索引存储未就绪：需要在私有配置里提供 PostgreSQL 连接（环境变量 AGENTS_GROUP_PG_DSN 或 env.conf）；不会回退 SQLite。')
   }
   const nested = new Proxy({}, {
     get(_target, property) {
@@ -336,8 +336,8 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   }
   const root=config.dataPath||dshHomePath('plugins','blog')
   // ---- 业务存储（PG；Q4：无配置=blog 未就绪而非抛群组） ----
-  const dsnSource=await resolveStorageDsn(process.env,dshHomePath('plugins','agents-group','storage.json'),(path:string)=>readFile(path,'utf8'))
-  const unconfiguredHint='设置环境变量 AGENTS_GROUP_PG_DSN，或在私有配置文件（环境变量 AGENTS_GROUP_PG_CONFIG 指定路径，缺省 <DSH 主目录>/plugins/agents-group/storage.json）里写 {"dsn":"postgres://…"}。不会回退其他存储后端。'
+  const dsnSource=await resolveStorageDsn(process.env,dshHomePath('plugins','agents-group','env.conf'),(path:string)=>readFile(path,'utf8'))
+  const unconfiguredHint='设置环境变量 AGENTS_GROUP_PG_DSN，或在私有配置文件（环境变量 AGENTS_GROUP_PG_CONFIG 指定路径，缺省 <DSH 主目录>/plugins/agents-group/env.conf）里写一行 AGENTS_GROUP_PG_DSN=postgresql://…（旧的 {"dsn":"…"} 写法仍被接受）。不会回退其他存储后端。'
   const storage=dsnSource?new BlogPgStorage(dsnSource.dsn):unconfiguredBusinessStorage(`缺少 PostgreSQL 存储配置。${unconfiguredHint}`)
   if(dsnSource){
     try{await storage.init()}

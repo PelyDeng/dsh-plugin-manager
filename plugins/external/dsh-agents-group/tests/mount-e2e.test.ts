@@ -307,7 +307,7 @@ describe('群组端到端挂载', () => {
     const previousConfig = process.env.AGENTS_GROUP_PG_CONFIG
     const previousDsn = process.env.AGENTS_GROUP_PG_DSN
     // 显式指向不存在的配置文件：默认路径是否存在不应影响测试结果。
-    process.env.AGENTS_GROUP_PG_CONFIG = join(tmpdir(), 'agents-group-test-missing-storage.json')
+    process.env.AGENTS_GROUP_PG_CONFIG = join(tmpdir(), 'agents-group-test-missing-env.conf')
     delete process.env.AGENTS_GROUP_PG_DSN
     try {
       await applyGroup(host.ctx, groupConfig())
@@ -382,7 +382,7 @@ describe('群组端到端挂载', () => {
     process.env.AGENTS_GROUP_PG_DSN = 'postgres://127.0.0.1:1/agents_group'
     // 顺手把配置文件指到不存在的位置：这条场景要验的是"**配了但连不上**"，
     // 不该因为开发机上恰好存在缺省配置文件而变成另一条路径。
-    process.env.AGENTS_GROUP_PG_CONFIG = join(tmpdir(), 'agents-group-test-missing-storage.json')
+    process.env.AGENTS_GROUP_PG_CONFIG = join(tmpdir(), 'agents-group-test-missing-env.conf')
     try {
       await applyGroup(host.ctx, groupConfig())
     } finally {

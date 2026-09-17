@@ -50,8 +50,11 @@ const AGENT_ID = 'closedoff'
  *
  * 与 blog 用**同一个**默认文件：三个私有 Agent 统一用 PG 的 `dsh_conversations`，配置来源
  * 也应该只有一处，否则运维要为每个 Agent 各写一份 `{"dsn":…}`。
+ *
+ * 文件名与全项目一致用 `env.conf`（DSH 的配置约定），内容写 `AGENTS_GROUP_PG_DSN=postgresql://…`
+ * 一行；旧的 JSON 写法仍被读取（见 `resolveStorageDsn` 的格式说明），改名不会让既有部署失效。
  */
-const storageConfigPath = (): string => dshHomePath('plugins', 'agents-group', 'storage.json')
+const storageConfigPath = (): string => dshHomePath('plugins', 'agents-group', 'env.conf')
 
 /**
  * 运行时的**本地围栏库**路径。
@@ -69,8 +72,8 @@ export const closedoffLocalMirrorPath = (): string => dshHomePath('plugins', AGE
  */
 export const unconfiguredStorageHint
   = '封闭化助手业务存储未配置。设置环境变量 AGENTS_GROUP_PG_DSN，或在私有配置文件'
-  + '（环境变量 AGENTS_GROUP_PG_CONFIG 指定路径，缺省 <DSH 主目录>/plugins/agents-group/storage.json）'
-  + '里写 {"dsn":"postgres://…"}。不会回退 SQLite。'
+  + '（环境变量 AGENTS_GROUP_PG_CONFIG 指定路径，缺省 <DSH 主目录>/plugins/agents-group/env.conf）'
+  + '里写一行 AGENTS_GROUP_PG_DSN=postgresql://…（旧的 {"dsn":"…"} 写法仍被接受）。不会回退 SQLite。'
 
 /** 装配一个已就绪的 closedoff 运行时需要的东西。 */
 export interface ClosedoffRuntimeInput {

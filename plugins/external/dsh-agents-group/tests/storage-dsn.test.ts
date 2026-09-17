@@ -25,7 +25,7 @@ const onlyPath = (expected: string, body: string) => async (path: string): Promi
 describe('运行时存储 DSN 的来源解析', () => {
   it('环境变量 AGENTS_GROUP_PG_DSN 非空即用，且根本不读文件', async () => {
     const resolved = await resolveStorageDsn(
-      { AGENTS_GROUP_PG_DSN: 'postgres://from-env', AGENTS_GROUP_PG_CONFIG: '/x/storage.json' },
+      { AGENTS_GROUP_PG_DSN: 'postgres://from-env', AGENTS_GROUP_PG_CONFIG: '/x/env.conf' },
       '/home/default.json',
       noFile, // 真读了文件就会落进"没有配置"，这条断言随即变红。
     )
@@ -34,18 +34,18 @@ describe('运行时存储 DSN 的来源解析', () => {
 
   it('环境变量是空白串时视为没配，回落到配置文件', async () => {
     const resolved = await resolveStorageDsn(
-      { AGENTS_GROUP_PG_DSN: '   ', AGENTS_GROUP_PG_CONFIG: '/x/storage.json' },
+      { AGENTS_GROUP_PG_DSN: '   ', AGENTS_GROUP_PG_CONFIG: '/x/env.conf' },
       '/home/default.json',
-      onlyPath('/x/storage.json', JSON.stringify({ dsn: 'postgres://by-env-path' })),
+      onlyPath('/x/env.conf', JSON.stringify({ dsn: 'postgres://by-env-path' })),
     )
     expect(resolved).toEqual({ dsn: 'postgres://by-env-path', origin: 'file' })
   })
 
   it('env 缺省时读 AGENTS_GROUP_PG_CONFIG 指定的路径', async () => {
     const resolved = await resolveStorageDsn(
-      { AGENTS_GROUP_PG_CONFIG: '/x/storage.json' },
+      { AGENTS_GROUP_PG_CONFIG: '/x/env.conf' },
       '/home/default.json',
-      onlyPath('/x/storage.json', JSON.stringify({ dsn: 'postgres://by-env-path' })),
+      onlyPath('/x/env.conf', JSON.stringify({ dsn: 'postgres://by-env-path' })),
     )
     expect(resolved).toEqual({ dsn: 'postgres://by-env-path', origin: 'file' })
   })
@@ -77,15 +77,37 @@ describe('运行时存储 DSN 的来源解析', () => {
     expect(await resolveStorageDsn({ AGENTS_GROUP_PG_DSN: '   ' }, '/home/default.json', noFile)).toBeUndefined()
   })
 
-  it('文件存在但不是合法 JSON 时抛出，消息里带路径与原因', async () => {
-    await expect(resolveStorageDsn({}, '/home/default.json', onlyPath('/home/default.json', '{not json')))
-      .rejects.toThrow(/不是有效 JSON/)
-    await expect(resolveStorageDsn({}, '/home/default.json', async () => '{not json'))
-      .rejects.toThrow(/不是有效 JSON（\/home\/default\.json）/)
+  it('配置文件不是 JSON 时按 env.conf 的 KEY=VALUE 解析（不改名也能换成新格式）', async () => {
+    const resolved = await resolveStorageDsn(
+      {},
+      '/home/default.json',
+      async () => 'AGENTS_GROUP_PG_DSN=postgres://by-key-value\n',
+    )
+    expect(resolved).toEqual({ dsn: 'postgres://by-key-value', origin: 'file' })
+  })
+
+  it('env.conf 写法带注释与引号也能读出 DSN', async () => {
+    const resolved = await resolveStorageDsn({}, '/home/default.json', async () => [
+      '# 群组业务库（PostgreSQL）',
+      '',
+      'AGENTS_GROUP_PG_DSN="postgres://from-conf"',
+      '',
+    ].join('\n'))
+    expect(resolved).toEqual({ dsn: 'postgres://from-conf', origin: 'file' })
+  })
+
+  it('两种写法都没有 DSN 时抛出，消息里带路径', async () => {
+    // 既不是 JSON、K/V 里也没有那个键 ⇒ 配置错误，如实抛出（不能当成"没有配置"而静默未就绪）。
+    await expect(resolveStorageDsn({}, '/home/default.json', async () => '# 只有注释\n'))
+      .rejects.toThrow(/没有可用的 DSN/)
+    await expect(resolveStorageDsn({}, '/home/default.json', async () => 'OTHER_KEY=x'))
+      .rejects.toThrow(/\/home\/default\.json/)
   })
 
   it('JSON 合法但没有非空 dsn 时抛出（缺字段 / 空串 / 空白 / 非字符串 / 顶层非对象）', async () => {
-    const missing = /配置文件（\/home\/default\.json）缺少非空的 "dsn" 字段/
+    // ⚠️ 这一支**不**回退去按 K/V 再找一遍：文件已经明确是 JSON 了，还去按 KEY=VALUE 找只会把
+    // "字段名写错"这种配置错误伪装成"格式不对"，而前者的提示更接近真因。
+    const missing = /\/home\/default\.json/
     await expect(resolveStorageDsn({}, '/home/default.json', async () => '{"host":"only-host"}'))
       .rejects.toThrow(missing)
     await expect(resolveStorageDsn({}, '/home/default.json', async () => '{"dsn":""}'))

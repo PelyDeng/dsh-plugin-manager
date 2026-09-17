@@ -233,9 +233,9 @@ export async function httpFixture({
   }
   /** 起不来时把环境与临时目录收干净，别把宿主的配置漏给后面的用例。 */
   const abandon = async (message: string) => { restoreEnv(); await rm(directory, { recursive: true, force: true }); throw new Error(message) }
-  // 缺文件 = "没有配置"（`storage/dsn.ts:47-51`），所以指向夹具目录里一个**不存在**的文件：
-  // 开发机上恰好存在缺省 storage.json 时也不改变结论。
-  process.env.AGENTS_GROUP_PG_CONFIG = join(directory, 'no-such-storage.json')
+  // 缺文件 = "没有配置"（`storage/dsn.ts` 的头一段），所以指向夹具目录里一个**不存在**的文件：
+  // 开发机上恰好存在缺省 env.conf 时也不改变结论。
+  process.env.AGENTS_GROUP_PG_CONFIG = join(directory, 'no-such-env.conf')
   if (storage === 'test-database') {
     if (TEST_DSN === '') await abandon("storage:'test-database' 需要 AGENTS_GROUP_TEST_PG_DSN（真 PostgreSQL 测试库）；测试侧应先按 TEST_DSN 门控")
     process.env.AGENTS_GROUP_PG_DSN = TEST_DSN
