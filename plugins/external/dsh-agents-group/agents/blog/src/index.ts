@@ -244,13 +244,33 @@ export async function mount(mountContext:AgentMountContext):Promise<{
       console.warn(`agents-group/blog: 业务存储未就绪（${error instanceof Error?error.message:String(error)}）`)
     }
   }
+  /**
+   * **索引侧**（`dsh_conversations` / `dsh_turns` / `dsh_turn_results`）装载期的失败原因。
+   *
+   * ⚠️ 它必须被记下来并进探针，不能只 `console.warn`（原来的写法就是这样）：索引与业务**共用一个 DSN**，
+   * 但要求的是**不同的表与不同的版本行**（业务读 `blog_schema_version`→`dsh_schema_versions` 的 `blog`，
+   * 索引读 `runtime`）。只探业务那一侧的后果是 —— **PG 短暂不可达时 `open()` 失败、业务探针随后恢复，
+   * 探针就报"就绪"，而索引**整个进程**再没打开过**：侧栏列表 / 历史 / 发消息全失败，探针却是绿的。
+   * 而 runbook 第 5 步正是拿这个探针判断切换成功与否 ⇒ 探针说谎等于把"切换成功"判错。
+   */
+  let indexFailure:string|undefined
+  /** 存储故障的稳定码：跨副本（运行时那一份类）也要认得出来，见 `isStorageError`。 */
+  const codeOf=(error:unknown):string=>isStorageError(error)?String((error as {code:unknown}).code):'storage_unknown'
   const health=async():Promise<{ok:boolean;error?:string}>=>{
     if(!dsnSource)return{ok:false,error:`博客业务存储未配置。${unconfiguredHint}`}
-    try{await storage.readyProbe();return{ok:true}}
+    try{await storage.readyProbe()}
     catch(error){
-      const code=error instanceof StorageError?error.code:'storage_unknown'
-      return{ok:false,error:`博客业务存储不可用（${code}）：${error instanceof Error?error.message:String(error)}`}
+      return{ok:false,error:`博客业务存储不可用（${codeOf(error)}）：${error instanceof Error?error.message:String(error)}`}
     }
+    // —— 索引侧：装载期失败就用那条原始原因；装载成功则**此刻再往返一次**（"装的时候好、现在坏了"）。——
+    if(indexFailure!==undefined)return{ok:false,error:`博客索引存储未就绪。${indexFailure}`}
+    if(index!==undefined){
+      try{await index.assertSchema()}
+      catch(error){
+        return{ok:false,error:`博客索引存储不可用（${codeOf(error)}）：${error instanceof Error?error.message:String(error)}`}
+      }
+    }
+    return{ok:true}
   }
   // ---- 索引库切 PG：会话 / 轮次 / 结果三张表走运行时端口，本地 SQLite 降级为镜像 + outbox ----
   //
@@ -267,7 +287,9 @@ export async function mount(mountContext:AgentMountContext):Promise<{
     try{await index.open()}
     catch(error){
       // 与业务存储同一条口径：结构核验 / 启动收敛失败 = blog 未就绪，索引读写按存储错误码拒绝。
-      console.warn(`agents-group/blog: 索引存储未就绪（${error instanceof Error?error.message:String(error)}）`)
+      // ⚠️ 这里**必须把原因记进 `indexFailure`**（不能只 warn）：探针要如实反映它，理由见 `indexFailure` 的注释。
+      indexFailure=`（${codeOf(error)}）${error instanceof Error?error.message:String(error)}`
+      console.warn(`agents-group/blog: 索引存储未就绪${indexFailure}`)
     }
   }
   const conversations=new ChatStore(index??unconfiguredIndex(),()=>pending.ids())

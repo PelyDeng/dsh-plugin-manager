@@ -112,3 +112,29 @@ test('J6：未配置 PG 时装载照常、探针与业务端点按 storage_uncon
   // ⑥ 绝不回退 SQLite：夹具目录（含 config.dataPath）下不能出现任何 SQLite 文件。
   assert.deepEqual(await f.sqliteFiles(),[])
 })
+
+/**
+ * 判据：**就绪探针不许说谎** —— 业务存储好、索引存储坏时，探针必须是 not-ok。
+ *
+ * 为什么单列一条：索引与业务**共用一个 DSN**，但要求的是**不同的表与不同的版本行**
+ * （业务读 `dsh_schema_versions` 的 `blog` 行，索引读 `runtime` 行 + 三张 `dsh_*` 表）。
+ * 只探业务那一侧的实现在这里会报 **ready**，而侧栏列表 / 历史 / 发消息（都走索引侧）全失败
+ * —— 而 runbook 第 5 步正是拿这个探针判断"切换成功没有"。
+ *
+ * 触发条件是**真实可达**的：PG 短暂不可达时 `index.open()` 在装载期失败（原来只 `console.warn`），
+ * 业务探针随后恢复 ⇒ 探针绿、索引**整个进程**再没打开过。
+ */
+test('J6b：业务好、索引坏时探针必须 not-ok（不能只探业务那一侧）',pgOnly,async t=>{
+  const f=await httpFixture({storage:'business-only'});t.after(()=>f.close())
+  // 装载照常：页面在（与"缺配置"同一条口径）。
+  assert.equal((await f.request('')).status,200)
+  const health=await f.health()
+  assert.equal(health.ok,false,'索引侧不可用时必须 not-ok')
+  assert.match(health.error,/索引/)
+  // 索引侧端点：稳定码拒绝，而不是 500、也不是"看起来成功"。
+  const conversation=await f.api('chat-create',{requestId:'j6b-index-broken'})
+  assert.equal(conversation.status,503)
+  assert.equal((await conversation.json()).code,'storage_schema_missing')
+  // 业务侧**确实是好的**（这条把"探针 not-ok"与"整个存储都坏了"区分开：否则随便一个坏法都能让本用例绿）。
+  assert.equal((await f.api('create',{requestId:'j6b-business-ok'})).status,200)
+})

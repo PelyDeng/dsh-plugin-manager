@@ -77,7 +77,7 @@ const QUIET = { log: () => {} }
  * 清库前核对库名确实以 `_test` 结尾（与 `tests/pg-smoke.test.mjs` 同一道闸）：配错 DSN 时
  * 立即失败，绝不 `DROP` 别的库。
  */
-async function provisionSchema(dsn) {
+async function provisionSchema(dsn, { withIndex = true } = {}) {
   const client = new Client({ connectionString: dsn })
   await client.connect()
   try {
@@ -90,8 +90,32 @@ async function provisionSchema(dsn) {
     await client.query('CREATE SCHEMA public')
     // ⚠️ 去掉文件自带的那对 `BEGIN;` / `COMMIT;`：`applySchema` 自己会套一对事务，两层叠起来会变成
     // 嵌套 BEGIN（告警）与提前 COMMIT（后面的语句跑在事务外，失败就不回滚了）。
-    const ddl = (await readFile(PRIVATE_DDL, 'utf8')).replace(/^[ \t]*(?:BEGIN|COMMIT)[ \t]*;[ \t]*$/gim, '')
+    let ddl = (await readFile(PRIVATE_DDL, 'utf8')).replace(/^[ \t]*(?:BEGIN|COMMIT)[ \t]*;[ \t]*$/gim, '')
     await applySchema(client, ddl, QUIET)
+    /**
+     * `withIndex: false` ⇒ **业务那半好、索引那半坏**。
+     *
+     * 用途只有一个：构造"**业务存储可用、索引存储不可用**"这个组合，验证就绪探针**不会说谎**。
+     * 它与"缺配置"（没有 DSN）是两件事：那时两侧都不可用；这里是**业务侧确实可用**，
+     * 只有索引侧坏了 —— 只探业务那一侧的实现会在这里报"就绪"，而侧栏列表 / 历史（都走索引侧）全失败。
+     *
+     * 做法：**删掉索引侧那三张表**（`CASCADE` 会一并去掉 `blog_attachments` 上指向
+     * `dsh_conversations` 的复合外键，但**不删业务表本身**）。于是
+     * ① 索引侧 `assertSchema()` 抛 `storage_schema_missing`；② 索引侧的读写也抛同一个码（表真的没了）
+     * —— 两侧一致，这正是"索引死了"该有的形状。
+     *
+     * ⚠️ **不要**改成"按 `dsh_` 前缀筛 DDL 语句"：那样会连**引用** `dsh_conversations` 的
+     * `blog_attachments` 一起筛掉，业务那半自己就先建不起来（实测报
+     * `relation "butler_tasks" does not exist` —— 被引用者被筛掉了）。
+     *
+     * ⚠️ **也不要用"只删 `dsh_schema_versions` 的 `runtime` 那一行"** 来构造：实测那样
+     * `chat-create` 会**返回 200** —— 版本行只在 `open()` 里核验一次，而 `AgentDatabaseFacade`
+     * **没有把端口方法门禁在 `opened` 上**（`storage/index.ts:131-139` 只置标志位，没有任何读取
+     * 检查它）⇒ `open()` 失败之后门面**照常读写**。那是另一条独立的缺口，已登记，不要在夹具里依赖它。
+     */
+    if (!withIndex) {
+      await client.query('DROP TABLE IF EXISTS dsh_turn_results, dsh_turns, dsh_conversations CASCADE')
+    }
   } finally {
     await client.end()
   }
@@ -124,6 +148,16 @@ export async function httpFixture({ hostname = '127.0.0.1', storage = 'test-data
     if (TEST_DSN === '') await abandon("storage:'test-database' 需要 AGENTS_GROUP_TEST_PG_DSN（真 PostgreSQL 测试库）；测试侧应先按 TEST_DSN 门控")
     process.env.AGENTS_GROUP_PG_DSN = TEST_DSN
     await provisionSchema(TEST_DSN)
+  } else if (storage === 'business-only') {
+    /**
+     * **业务存储好、索引存储坏**：只建 `blog_*`，不建 `dsh_*`。
+     *
+     * 用来验证就绪探针**不会说谎**：只探业务那一侧的实现会在这里报"就绪"，
+     * 而侧栏列表 / 历史 / 发消息（都走索引侧）全失败。见 `provisionSchema` 的 `withIndex`。
+     */
+    if (TEST_DSN === '') await abandon("storage:'business-only' 需要 AGENTS_GROUP_TEST_PG_DSN（真 PostgreSQL 测试库）；测试侧应先按 TEST_DSN 门控")
+    process.env.AGENTS_GROUP_PG_DSN = TEST_DSN
+    await provisionSchema(TEST_DSN, { withIndex: false })
   } else if (storage === 'unconfigured') {
     if ((previous.dsn ?? '').trim() !== '') await abandon("storage:'unconfigured' 要求调用方先清掉 AGENTS_GROUP_PG_DSN：否则这一支会静默变成'配置好了'的运行")
     delete process.env.AGENTS_GROUP_PG_DSN
