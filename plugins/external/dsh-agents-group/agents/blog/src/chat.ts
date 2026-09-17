@@ -83,6 +83,12 @@ interface Turn {
   readonly unsub: (() => void)[]
   readonly abort: AbortController
   draft: BlogDraft | null
+  /**
+   * **本轮自己新建**的那篇草稿的 id（`selectDraft({newArticle:true})` 建的）。
+   * 编辑既有文章时缺省。用途只有一个：`propose` 据此决定"这份候选要不要当场应用" ——
+   * 新建的文章没有既有内容可覆盖，所以在同一个入口里一步做完；编辑既有文章仍等用户在卡片上采用。
+   */
+  createdDraftId?: string | undefined
   timer?: ReturnType<typeof setTimeout>
   runPromise?: Promise<void>
   opening?: Promise<AgentHandle>
@@ -740,7 +746,21 @@ export class BlogChat {
     const owner = ownerKey(input.actor)
     // 行 id → 整行业务记录。`ChatStore.request` 按 owner + 行 id 查（不按可见性过滤），
     // 所以即使会话正在被移除也能读到自己那一轮。
-    const request = await this.index.request(owner, input.turnId)
+    const row = await this.index.request(owner, input.turnId)
+    /**
+     * ⚠️ **运行时驱动的轮次里，行上的 `operationId` 是空的**（页面路径由 `chat-store.start`
+     * 生成或从重试目标继承，协调方这条路径没有那一步）。而下游把它当**业务身份**用：
+     * - `selectDraft({newArticle:true})` 用它拼创建键（`'chat:' + operationId`，要求 ≥8 字符）
+     *   —— 空了就只剩 `'chat:'`（5 字符）被正则拒掉，**生产实测**（2026-09-17）报的正是
+     *   「新建草稿需要有效请求标识」，于是协调方那一轮根本没法新建文章；
+     * - `operationDraft(owner, operationId)` 按它查"这个身份已经绑了哪篇草稿"。
+     *
+     * 用这一轮**自己的 `requestId`** 兜底：它是运行时给的 `run:<taskId>:<subtaskId>`，
+     * 字符集与长度都合规，且**重试同一子任务时不变** ⇒ 幂等语义与页面路径一致。
+     */
+    const request = row.operationId !== ''
+      ? row
+      : await this.index.updateRequest(owner, row.id, { operationId: row.requestId })
     const b: Turn = {
       chat: this,
       request,
@@ -944,6 +964,8 @@ export class BlogChat {
     if (args.cid) { const remote = draft.remote; invariant((remote?.published?.cid === args.cid || remote?.savedDraft?.cid === args.cid) && remote?.selectedVariant === args.variant, '本次操作已绑定另一篇文章', 409) }
     invariant(!b.draft || b.draft.id === draft.id, '本轮已绑定另一篇文章，请下一轮再处理', 409)
     invariant(draft.text.length <= 120000, '正文过长，请按章节编辑；完整原文仍保留', 413)
+    // 记下"这篇是**本轮新建**的"：`propose` 据此把候选稿当场应用（新文章无既有内容可覆盖）。
+    if (newDraft !== undefined && draft.id === newDraft.id) b.createdDraftId = draft.id
     const request = await this.index.updateRequest(b.request.owner, b.request.id, { draftId: draft.id })
     b.draft = draft; b.request = request; this.emit(b.request.conversationId, { type: 'changed' })
     return { draftId: draft.id, revision: draft.revision, title: draft.title, text: draft.text, format: draft.format, tags: draft.tags, categories: draft.categories, ...(draft.allowComment === undefined ? {} : { allowComment: draft.allowComment }), proposalId: draft.proposal?.id ?? null }
@@ -961,6 +983,26 @@ export class BlogChat {
     invariant(current.revision === draft.revision, '文章已被手动修改，请重新读取当前文章再提出候选', 409)
     const proposal = await this.storage.propose(b.job.owner, draft.id, draft.revision, args, b.sources, draft.proposal?.id ?? null)
     b.draft = { ...draft, proposal } as unknown as BlogDraft
+    /**
+     * **本轮新建的文章：候选稿当场应用**（同一次派活里就把文章写出来，不需要用户再去另一个入口点"采用"）。
+     *
+     * 判据只有一条：这篇草稿是**这一轮自己新建的**（`b.createdDraftId`）⇒ 没有既有内容可覆盖，
+     * 应用它不会改掉用户已经写好的东西。**编辑既有文章时 `createdDraftId` 缺省** ⇒ 仍然只生成候选稿、
+     * 等用户在对话卡片上采用 —— 那道闸门是防止 AI 擅自改动原文的，不拆。
+     *
+     * 应用走的就是页面"采用"用的同一个 `applyBlogProposal`，所以两条入口的语义与守卫完全一致。
+     */
+    const appliedFields = Object.keys((proposal as { readonly fields?: Record<string, unknown> }).fields ?? {})
+    if (b.createdDraftId === draft.id && appliedFields.length > 0) {
+      const applied = await this.app.applyBlogProposal(b.job.actor, { id: draft.id, revision: draft.revision, proposalId: proposal.id, fields: appliedFields }) as unknown as BlogDraft
+      b.draft = applied
+      await this.index.result(b.job.owner, b.request, 'draft', await this.storage.get(b.job.owner, draft.id))
+      this.update(b, { proposalId: proposal.id })
+      return {
+        draftId: draft.id, proposalId: proposal.id, savedAs: 'draft', requiresUserAction: false,
+        appliedFields, cid: applied.remote?.savedDraft?.cid ?? null, title: applied.title,
+      }
+    }
     await this.index.result(b.job.owner, b.request, 'candidate', await this.storage.get(b.job.owner, draft.id))
     this.update(b, { proposalId: proposal.id })
     return { draftId: draft.id, proposalId: proposal.id, savedAs: 'candidate', requiresUserAction: true }

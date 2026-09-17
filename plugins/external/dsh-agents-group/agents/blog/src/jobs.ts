@@ -257,7 +257,7 @@ export class BlogJobs {
         if (!b.sources.includes(source)) b.sources.push(source)
         this.update(b, { sources: b.sources }); return result
       }),
-      register('blog_propose', '生成候选稿', '提交标题、正文、标签、分类和评论开关候选稿，等待用户选择应用；不公开发布。', {
+      register('blog_propose', '生成候选稿', '提交标题、正文、标签、分类和评论开关候选稿；不公开发布。**本轮新建的文章会当场写入草稿**（返回 savedAs="draft"、requiresUserAction=false，可直接汇报已写好），**编辑既有文章只生成候选稿**、须用户在卡片上采用（返回 requiresUserAction=true）。', {
         title: { type: 'string' }, text: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } }, categories:{type:'array',items:{type:'integer'}},allowComment:{type:'boolean'},
       }, async (args,b) => {
         this.bound(b.handle.agent)

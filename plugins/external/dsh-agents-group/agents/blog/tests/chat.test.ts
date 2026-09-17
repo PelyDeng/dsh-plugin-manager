@@ -758,15 +758,23 @@ test('new draft and retry share one logical article; manual changes reject stale
   const h=f.handles[0],execute=(name: string,args: FixturePayload)=>f.tools.get(name).execute(args,{agent:h.agent})
   const first=await execute('blog_select_draft',{newArticle:true}),second=await execute('blog_select_draft',{newArticle:true})
   assert.equal(first.draftId,second.draftId)
-  await execute('blog_propose',{title:'标题',text:'第一版'})
-  await f.store.save(owner,first.draftId,first.revision,{text:'手写内容'})
-  await assert.rejects(execute('blog_propose',{text:'迟到的候选'}),/手动修改/)
+  // **本轮新建**的文章：候选稿当场写入（同一个入口一步做完，不再要求去博客页面点"采用"）
+  const applied=await execute('blog_propose',{title:'标题',text:'第一版'}) as unknown as { readonly requiresUserAction: boolean; readonly savedAs: string }
+  assert.equal(applied.requiresUserAction,false);assert.equal(applied.savedAs,'draft')
+  const written=await f.store.get(owner,first.draftId)
+  assert.equal(written.title,'标题');assert.equal(written.text,'第一版')
   complete(h);await tick()
   await f.send({requestId:'request-retry',retryFrom:request.id,text:'重新给出候选'});await tick()
   const next=await f.tools.get('blog_select_draft').execute({newArticle:true},{agent:f.handles[1].agent})
-  assert.equal(next.draftId,first.draftId);assert.equal(next.text,'手写内容');assert.equal((await f.store.list(owner)).length,1)
+  assert.equal(next.draftId,first.draftId);assert.equal(next.text,'第一版');assert.equal((await f.store.list(owner)).length,1)
+  // **编辑既有文章**这条路上，人工采用闸门原样保留：手动改动之后旧候选被拒，新候选仍等用户采用。
+  await f.store.save(owner,first.draftId,next.revision,{text:'手写内容'})
+  await assert.rejects(f.tools.get('blog_propose').execute({text:'迟到的候选'},{agent:f.handles[1].agent}),/手动修改/)
+  await f.tools.get('blog_select_draft').execute({draftId:first.draftId},{agent:f.handles[1].agent})
+  const waiting=await f.tools.get('blog_propose').execute({text:'第二版'},{agent:f.handles[1].agent}) as unknown as { readonly requiresUserAction: boolean; readonly savedAs: string }
+  assert.equal(waiting.requiresUserAction,true);assert.equal(waiting.savedAs,'candidate')
   // `results()` 的产出是 `Record<string, unknown>`，按业务字段往下读一次要过类型边界。
-  const cards=(await f.index.results(owner,f.conversation.id));assert.equal((cards[0]!.proposal as unknown as FixtureJson).fields.text,'第一版')
+  const cards=(await f.index.results(owner,f.conversation.id));assert.equal((cards.at(-1)!.proposal as unknown as FixtureJson).fields.text,'第二版')
 })
 
 test('feedback checks owner and completed message before the official service; branch uses a closed prefix',async t=>{
@@ -936,8 +944,45 @@ test('native draft receipt survives failed logical binding and retry reuses the 
   const selected=await execute();assert.ok(selected.draftId);assert.equal((await f.store.list(owner)).length,1)
 })
 
-test('image model survives removed selection, native history reopening and branch continuation',async t=>{
-  const f=await fixture(t),chat=f.chat
+/**
+ * 协调方（台账）驱动的轮次：这一轮要能在**同一个入口**里把文章写出来。
+ *
+ * 生产实测（2026-09-17）这条链断在两处：① 运行时建的轮次行里 `operationId` 是空的，
+ * `selectDraft({newArticle:true})` 因此拼出只有 5 字符的 `'chat:'` 被正则拒掉
+ * （报「新建草稿需要有效请求标识」）；② 即使候选稿生成成功，`propose` 也只返回
+ * `requiresUserAction: true`，整轮停在 `external_pending`，用户被要求去博客页面点"采用"。
+ */
+test('协调方驱动的轮次：补上业务身份后能新建文章，并当场写入（不再要求去第二个入口采用）',async t=>{
+  const f=await fixture(t);await f.send();await tick()
+  const rows=await f.index.requests(owner,f.conversation.id),row=rows[rows.length-1]!
+  // 模拟运行时建的那一行：业务身份是空的（页面路径由 chat-store 生成，协调方这条没有那一步）
+  await f.index.updateRequest(owner,row.id,{operationId:''})
+  await f.chat.bindRuntimeTurn({agent:f.handles[0].agent,handle:f.handles[0],actor,turnId:row.id} as unknown as Parameters<BlogChat['bindRuntimeTurn']>[0])
+  const bound=await f.index.request(owner,row.id)
+  // 绑定这一步必须把业务身份补齐（用这一轮自己的 requestId），否则下面第一步就挂
+  assert.equal(bound.operationId,bound.requestId)
+  const selected=await f.tools.get('blog_select_draft').execute({newArticle:true},{agent:f.handles[0].agent})
+  assert.ok(selected.draftId)
+  const proposed=await f.tools.get('blog_propose').execute({title:'测试1',text:'测试2'},{agent:f.handles[0].agent}) as unknown as { readonly requiresUserAction: boolean; readonly savedAs: string }
+  assert.equal(proposed.requiresUserAction,false)
+  assert.equal(proposed.savedAs,'draft')
+  const stored=await f.store.get(owner,selected.draftId)
+  assert.equal(stored.title,'测试1');assert.equal(stored.text,'测试2')
+})
+
+test('编辑既有文章仍只生成候选稿：人工采用闸门不拆',async t=>{
+  const f=await fixture(t);await f.send();await tick()
+  const created=await f.tools.get('blog_select_draft').execute({newArticle:true},{agent:f.handles[0].agent})
+  complete(f.handles[0]);await tick()
+  await f.send({requestId:'second-turn'});await tick()
+  // 第二轮编辑的是**上一轮建的**文章 ⇒ 不是"本轮新建"，必须仍然等用户采用
+  await f.tools.get('blog_select_draft').execute({draftId:created.draftId},{agent:f.handles[1].agent})
+  const proposed=await f.tools.get('blog_propose').execute({title:'改一下'},{agent:f.handles[1].agent}) as unknown as { readonly requiresUserAction: boolean; readonly savedAs: string }
+  assert.equal(proposed.requiresUserAction,true)
+  assert.equal(proposed.savedAs,'candidate')
+})
+
+test('image model survives removed selection, native history reopening and branch continuation',async t=>{  const f=await fixture(t),chat=f.chat
   ;(chat.jobs as unknown as JobsWithModels).models={text:{provider:'glm-fixture',model:'text'},vision:{provider:'glm-fixture',model:'vision'}}
   chat.ctx.llm.resolveModelInfo=(async(provider: string,model: string)=>{assert.ok(['test','glm-fixture'].includes(provider));return{inputModalities:model==='vision'?['text','image']:['text']}}) as unknown as ResolveModelInfo
   await f.send();await tick();assert.equal(f.handles[0].options.agentOptions.model,'test');complete(f.handles[0],'text-answer');await tick()
