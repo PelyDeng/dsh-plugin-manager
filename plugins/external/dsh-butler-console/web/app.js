@@ -1218,6 +1218,21 @@ function renderActionsInto(view, actions, context) {
   for (const action of actions) host.appendChild(actionCard(action, context))
 }
 
+/**
+ * 成员交回内容之后**落定**它的正文（把流式期间的纯文本预览换成受控 Markdown）。
+ *
+ * ⚠️ 这是 P1 漏掉的一条，**生产截图抓到的**：流式增量走 `appendPreviewText`（纯文本），
+ * 只有 `succeeded` 那条路径做了 `settleMarkdown`；于是"待外部处理/等你回话/失败"这几种
+ * **已经流完正文**的结局里，成员交回的 Markdown 表格仍然显示成一行竖线文本。
+ *
+ * 落定之后再调它是安全的：`settleMarkdown` 只是把正文节点换成新的 `.md` 容器，内容不变。
+ */
+function settleMemberBody(view, fallback) {
+  const body = view.body !== '' ? view.body : (typeof fallback === 'string' ? fallback : '')
+  if (body !== '') renderMemberContent(view, body)
+  return body
+}
+
 /** 成员交回内容的**唯一**渲染入口。
  *
  * 成功、失败、等你回话、待外部处理——四种结论的正文都从这里过受控 Markdown：
@@ -1711,7 +1726,7 @@ function handleSubtask(event) {
 
   if (event.state === 'waiting_user') {
     view.bubble.classList.add('bubble--wait')
-    if (view.body === '') renderMemberContent(view, event.question ?? event.detail)
+    settleMemberBody(view, event.question ?? event.detail)
     // 等你回话不是在计算：链路条给静态的等待态，不再转圈（方案 6.1）。
     setRail('work', 'waiting')
     announce(`${displayNameOf(event.agentId)} 等你回话`)
@@ -1723,7 +1738,7 @@ function handleSubtask(event) {
     // 材料交回来了，但还有事在外面办。这里**不给回复入口**：要办的事不在这一页，
     // 让用户在这里写一句话并不能把候选稿采用掉。也不显示成「完成」。
     view.bubble.classList.add('bubble--wait')
-    if (view.body === '') renderMemberContent(view, event.detail)
+    settleMemberBody(view, event.detail)
     view.footer.appendChild(make('div', 'msg__meta', '待外部处理，办好之后可以新开一轮'))
     announce(`${displayNameOf(event.agentId)} 交回材料，还有事待外部处理`)
     return
@@ -1756,7 +1771,11 @@ function handleSubtask(event) {
     // 已经有正文时，失败原因另起一行。这一行带 `msg__meta--keep`：**「只看结论」不能把它藏掉**
     // ——那正是用户最需要看到的一句话（同一失败在"还没吐字"时走正文，本来就不会被藏）。
     if (view.body === '') renderMemberContent(view, event.detail)
-    else view.bubble.appendChild(make('div', 'msg__meta msg__meta--keep', event.detail))
+    else {
+      // 正文照旧落定成 Markdown（表格/列表要显示成它们本来的样子），失败原因另起一行。
+      renderMemberContent(view, view.body)
+      view.bubble.appendChild(make('div', 'msg__meta msg__meta--keep', event.detail))
+    }
     announce(event.state === 'failed' ? `${displayNameOf(event.agentId)} 失败：${event.detail ?? '原因不明'}` : `${displayNameOf(event.agentId)} 的活已取消`)
     return
   }

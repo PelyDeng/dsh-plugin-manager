@@ -577,8 +577,10 @@ describe('调度卡', () => {
     // 四种结论都必须过它：成功、失败、等你回话、待外部处理。
     // 改造前只有"成功"走渲染，其余走 `textContent` —— 业务方看到的表格因此是一行竖线文本。
     expect(source).toContain('renderMemberContent(view, text)')
-    expect(source).toContain('renderMemberContent(view, event.detail)')
-    expect(source).toContain('renderMemberContent(view, event.question ?? event.detail)')
+    // 四种结局：成功走 renderMemberContent，其余三种走 settleMemberBody（先落定流式预览，
+    // 没有预览时用服务端给的说明）——都不再直接写 textContent。
+    expect(source).toContain('settleMemberBody(view, event.question ?? event.detail)')
+    expect(source).toContain('settleMemberBody(view, event.detail)')
     expect(source).not.toMatch(/if \(view\.body === ''\) view\.text\.textContent = event\.(detail|question)/)
     // 刷新重建走同一个入口（实时与重建不会各渲染一套）。
     expect(source).toMatch(/function renderTaskCard\(record, opts = \{\}\) \{[\s\S]{0,2600}renderMemberContent\(view, text\)/)
@@ -621,6 +623,17 @@ describe('调度卡', () => {
     expect(source).toMatch(/function bindViewHistory\(\) \{[\s\S]{0,600}value\.butler === 'task'[\s\S]{0,200}openTask\(value\.taskId\)/)
     // 会话是栈底：进入时替换而不是压栈（否则栈里会堆满同一个会话）。
     expect(source).toMatch(/replaceViewState\(\{ butler: 'conversation', conversationId: id \}\)/)
+  })
+
+  it('流式预览在「待外部处理/等你回话/失败」结束时也要落定成 Markdown（生产截图抓到的那条）', () => {
+    // 流式增量是纯文本（`appendPreviewText`），只有 succeeded 那条路径落定过 —— 于是成员
+    // 交回的 Markdown 表格在"待外部处理"里仍然是一行竖线文本。这条钉住四种结局都落定。
+    expect(source).toContain('function settleMemberBody(view, fallback)')
+    expect(source).toMatch(/function settleMemberBody\(view, fallback\) \{[\s\S]{0,400}renderMemberContent\(view, body\)/)
+    expect(source).toContain('settleMemberBody(view, event.question ?? event.detail)')
+    expect(source).toContain('settleMemberBody(view, event.detail)')
+    // 有正文的失败：正文落定 + 失败原因另起一行（那一行不被「只看结论」藏掉）。
+    expect(source).toMatch(/renderMemberContent\(view, view\.body\)[\s\S]{0,200}msg__meta msg__meta--keep/)
   })
 
   it('复制当前成员正文：成功报「已复制」，没有内容时如实报失败', async () => {
