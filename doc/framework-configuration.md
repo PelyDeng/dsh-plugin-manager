@@ -63,9 +63,12 @@ ZHIPU_API_KEY=
 | 宿主与插件文件引用 | `DSH_HARNESS_ROOT`、`DSH_CLI_JS`、`DSH_CLI`、`DSH_PATCHES`、`DSH_INSTANCES` |
 | 离线与缓存 | `DSH_OFFLINE`、`DSH_STORE_DIR`、`DSH_CACHE_DIR`、`DSH_OFFLINE_STORE_DIR`、`DSH_OFFLINE_CACHE_DIR` |
 | 容器与独立交付 | `DSH_COMPOSE_PROJECT`、`DSH_CONTAINER_UID`、`DSH_CONTAINER_GID`、`DSH_HOST_IMAGE`、`DSH_PUBLISH_IMAGE`、`DSH_CONTAINER_IMAGE`、`DSH_MANIFEST`、`DSH_BASE_URL` |
+| 插件业务配置 | `DSH_PLUGIN_CONFIG` |
 | 可选镜像构建 | `HARBOR_ENABLED`、`ALLOW_UPSTREAM`、`REGISTRY_HOST`、`BASE_PROJECT`、`APP_PROJECT`、`IMAGE_NAME`、`REGISTRY_USERNAME`、`REGISTRY_PASSWORD`、`DSH_SOURCE_BASE_IMAGE`、`DSH_DEBIAN_MIRROR`、`DSH_IMAGE_PLATFORM` |
 
-`DSH_INSTANCES` 仅支持按插件 ID 引用 `settingsFile`、`runtimeConfig` 和 `configRevision`。注册插件的业务参数继续由插件自己的 `plugin.json`、运行配置及 Schema 管理；框架不接管其密钥和业务规则。账号、会话、历史及官方动态模型设置也不迁入此文件。
+`DSH_PLUGIN_CONFIG` 是插件业务参数的唯一人工维护处：按插件 ID 组织的 JSON 对象，值是该插件运行配置文件的完整内容。构建时按插件 ID 派生到各插件运行位置（实例显式引用的 `runtimeConfig`，否则数据根下 `plugins/<id>/env.conf`），目标文件已存在时不覆盖，删掉它才会重新采用这里的值。站点配置因此可以随仓库分发，部署机不再需要现场创建运行配置文件。
+
+`DSH_INSTANCES` 仅支持按插件 ID 引用 `settingsFile`、`runtimeConfig` 和 `configRevision`。注册插件的业务参数由 `DSH_PLUGIN_CONFIG`、插件自己的 `plugin.json` 及 Schema 管理；框架不接管其密钥和业务规则。账号、会话、历史及官方动态模型设置也不迁入此文件。
 
 镜像仓库账号和密码仅用于临时 Docker 登录，不传入 DSH。推送部署镜像时，凭据目标必须与 `DSH_PUBLISH_IMAGE` 的仓库主机一致；未填写凭据时沿用 Docker 已有登录。部署 JSON、Compose 和普通操作记录仅保存供容器读取的模型凭据文件路径与摘要，原值保存在 `.local/secrets/framework-credentials/` 的私有文件中，并以只读挂载提供给容器。备份恢复时须保留这些被引用的原文件，不要手改或清理它们。
 

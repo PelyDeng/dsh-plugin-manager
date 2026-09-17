@@ -1,7 +1,26 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, existsSync, lstatSync, rmdirSync, writeFileSync, renameSync, linkSync, rmSync } from 'node:fs';
+import { mkdirSync, existsSync, lstatSync, rmdirSync, writeFileSync, renameSync, linkSync, rmSync, chmodSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+
+/**
+ * 读取前把私有配置收紧到 0600。
+ *
+ * 站点配置随仓库分发，而 Git 只记录可执行位、不携带 0600：部署机首次检出得到的通常是 0644，
+ * 直接读取会被权限检查拒绝。这里只**收紧**、绝不放宽，所以安全检查仍然有效，新部署机也做到
+ * 拉取即可用，不必手工 chmod。
+ *
+ * 失败一律交给读取方：文件不存在、不是普通文件或不允许修改属主时，`readPrivateConfig` 给出的
+ * 诊断比这里更准确。
+ */
+export function tightenPrivateFile(path) {
+  if (process.platform === 'win32') return;
+  try {
+    const absolute = resolve(path);
+    const info = lstatSync(absolute);
+    if (info.isFile() && (info.mode & 0o077) !== 0) chmodSync(absolute, 0o600);
+  } catch { /* 交由 readPrivateConfig 诊断。 */ }
+}
 
 /** Protect only a newly created private directory; existing data permissions stay intact. */
 export function ensurePrivateDirectory(path) {

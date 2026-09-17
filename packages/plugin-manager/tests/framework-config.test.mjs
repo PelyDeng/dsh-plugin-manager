@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { decodeFrameworkConfig, renderFrameworkConfig, frameworkKeys, imageDefaults, publicDeploymentDefaults, assertPublicFrameworkConfig } from '../src/framework-config.mjs';
+import { readFileSync, mkdtempSync, writeFileSync, chmodSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { decodeFrameworkConfig, renderFrameworkConfig, frameworkKeys, imageDefaults, publicDeploymentDefaults, assertPublicFrameworkConfig, readFrameworkConfig } from '../src/framework-config.mjs';
 import { parseLiteralConfig } from '../src/literal-config.mjs';
 
 test('public template records exact fixed defaults and leaves secrets, derived paths and generated fields empty', () => {
@@ -33,7 +35,7 @@ test('instance references do not absorb plugin business configuration', () => {
     assert.throws(() => decodeFrameworkConfig(renderFrameworkConfig({ config: { instances } })), error => !error.message.includes('private-sentinel'));
   }
   assert.throws(() => decodeFrameworkConfig('DSH_PATCHES=[true]'), /非空字符串/);
-  assert.match(renderFrameworkConfig({ privateInput: true }), /私有运行配置/);
+  assert.match(renderFrameworkConfig({ privateInput: true }), /框架站点配置/);
 });
 
 test('public config guard refuses configured credentials, nondefault environment values and missing or duplicate fields', () => {
@@ -47,4 +49,17 @@ test('public config guard refuses configured credentials, nondefault environment
   assert.throws(() => assertPublicFrameworkConfig(template + 'UNKNOWN_SECRET=private-sentinel\n'), error => !error.message.includes('private-sentinel'));
   const privateEmpty = parseLiteralConfig(renderFrameworkConfig({ privateInput: true }), frameworkKeys);
   assert.ok(Object.values(privateEmpty).every(value => value === ''), 'private migration must not add public defaults');
+});
+
+test('Git 检出的宽松权限不会挡住站点配置读取', t => {
+  const root = mkdtempSync(join(tmpdir(), 'dsh-site-config-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const path = join(root, 'env.conf');
+  writeFileSync(path, 'DSH_PORT=7902\nDSH_PLUGIN_CONFIG={"sample":{"dsn":"postgresql://user:pw@127.0.0.1:5432/db"}}\n');
+  // Git 只记录可执行位：部署机首次检出的站点配置通常是 0644，读取必须照样成功。
+  if (process.platform !== 'win32') chmodSync(path, 0o644);
+  const read = readFrameworkConfig(path);
+  assert.equal(read.config.port, 7902);
+  assert.deepEqual(read.config.pluginConfig, { sample: { dsn: 'postgresql://user:pw@127.0.0.1:5432/db' } });
+  if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600, '读取后权限收紧为 0600');
 });

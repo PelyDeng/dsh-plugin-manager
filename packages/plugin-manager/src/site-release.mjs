@@ -15,7 +15,7 @@ import { resolvePluginSettings } from './plugin-settings.mjs';
 import { loadSite, saveJson } from './site-config.mjs';
 import { siteArguments, sitePointer, fileHash, readSiteJson, verifySavedTooling, toolTreeIdentity, removedArguments } from './site-record.mjs';
 import { prepareDeployment } from './site-archives.mjs';
-import { initializeArchiveSettings, freezeSiteInputs, verifySiteInputs, materializeSiteDefaults } from './site-inputs.mjs';
+import { initializeArchiveSettings, freezeSiteInputs, verifySiteInputs, materializeSiteDefaults, materializePluginConfigs } from './site-inputs.mjs';
 import { buildStep, buildMessage } from './site-output.mjs';
 import { readBinding, assertBindingMatches, assertSiteMarks, initializeBinding } from './site-binding.mjs';
 import { checkCompose } from './apply-compose.mjs';
@@ -134,6 +134,8 @@ export function releaseSite(options = {}, execute = command, adapter) {
     }
     const configured = resolveDeployment({ root, config: sitePath, 'data-root': site.dataRoot, home: site.home, workspace: site.workspace, artifacts: site.artifacts, profile: site.profile }, {});
     configured.config = site; configured.instances = site.instances ?? {};
+    // 插件运行配置由站点配置派生：站点配置是唯一人工维护处，部署机不需要预置这些文件（设计 5.3）。
+    buildStep('派生插件运行配置', () => materializePluginConfigs({ root, site, plugins: release.plugins, home: configured.home, uid: site.containerUid, gid: site.containerGid }));
     const settings = resolvePluginSettings(configured, release);
     // 选区核对在停旧之前完成（设计 5.3 第 2 步）：显式选集必须都能在合并后的候选里找到；
     // 没有显式选集时，上次仍启用的插件不能在本次候选中消失。两条来源路径共用同一份规则。

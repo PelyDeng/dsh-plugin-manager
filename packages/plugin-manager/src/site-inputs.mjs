@@ -1,7 +1,7 @@
 /** Freeze declared configuration inputs; configuration semantics stay in their existing owners. */
 import { existsSync, readFileSync, lstatSync, chownSync } from 'node:fs';
-import { resolve, join } from 'node:path';
-import { hash, canonical, readArchive } from './state.mjs';
+import { resolve, join, dirname } from 'node:path';
+import { hash, canonical, within, readArchive } from './state.mjs';
 import { resolveDeployment, runtimeEnvironment } from './config.mjs';
 import { resolvePluginSettings } from './plugin-settings.mjs';
 import { prepareFrameworkCredentials, rememberFrameworkInput } from './framework-credentials.mjs';
@@ -30,6 +30,40 @@ export function initializeArchiveSettings(root, site, release, { fresh }) {
     if (Object.keys(instance).length) instances[plugin.id] = instance;
   }
   return { site: { ...site, instances }, missing };
+}
+
+/**
+ * 把站点配置里的插件业务配置（`DSH_PLUGIN_CONFIG`）派生为各插件的运行配置文件。
+ *
+ * 站点配置是插件业务参数**唯一**的人工维护处：运行配置文件只是它的机械投影，不需要单独维护，
+ * 也不需要在部署机上手工创建。部署机因此可以只靠站点配置收敛，不再依赖现场已有的运行文件。
+ *
+ * 目标路径与 `runtimeEnvironment` 的解析规则一致（实例显式引用优先，否则数据根下的插件目录），
+ * 于是派生结果同时满足两条既有读取路径：DSH 按 `runtimeConfig` 挂载给容器，插件自己也从默认
+ * 路径读到同一份内容。
+ *
+ * 只在目标不存在时派生：站点现场已经有更具体的文件时以文件为准，不覆盖用户内容。容器以非 root
+ * 用户读取这份配置，所以新建的目录与文件都要交给容器用户，否则部署机上的 0700 root 目录会挡住
+ * 容器内的进程。
+ */
+export function materializePluginConfigs({ root, site, plugins, home, uid, gid }) {
+  const derived = [];
+  const asRoot = process.platform !== 'win32' && process.getuid?.() === 0;
+  for (const plugin of plugins ?? []) {
+    const section = site.pluginConfig?.[plugin.id];
+    if (section === undefined || !plugin.runtimeConfig) continue;
+    const file = canonical(resolve(root, site.instances?.[plugin.id]?.runtimeConfig ?? join(home, 'plugins', plugin.id, 'env.conf')));
+    if (existsSync(file)) continue;
+    const fresh = [];
+    for (let path = dirname(file); within(home, path); path = dirname(path)) if (!existsSync(path)) fresh.push(path);
+    writePrivateFile(file, JSON.stringify(section, null, 2) + '\n', { flag: 'wx' });
+    if (asRoot) {
+      for (const path of fresh.reverse()) chownSync(path, uid, gid);
+      chownSync(file, uid, gid);
+    }
+    derived.push(file);
+  }
+  return derived;
 }
 
 export function freezeSiteInputs({ root, operation, site, sitePath, source, release }) {

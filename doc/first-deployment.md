@@ -47,12 +47,14 @@ dsh-deployment/
 
 | 位置 | 操作方式 |
 | --- | --- |
-| .local/env.conf | 站点地址、选集等人工输入；真实值不入 Git |
+| .local/env.conf | 站点唯一配置源：站点地址、选集、插件业务配置（DSH_PLUGIN_CONFIG）；随仓库分发，部署机拉取后直接使用 |
 | .local/config/plugins/<id>/ | 全新 archives 站点的 plugin.json/runtimeConfig，按提示编辑 |
 | 旧站点或显式 instances 路径 | 沿用原位置，不因换入口自动迁移 |
 | .local/deployment.json、artifacts 内清单/Compose/快照 | 自动生成，不手改 |
 | .local/data | 账号、会话、业务数据，沿用与独立备份 |
 | incoming | 完整候选发布目录，框架不自动清空 |
+
+插件业务参数只在 `DSH_PLUGIN_CONFIG` 里维护一份：构建时按插件 ID 派生到各插件运行位置（实例显式引用的 `runtimeConfig`，否则数据根下 `plugins/<id>/env.conf`）。目标文件已存在时不覆盖，因此现场有更具体的文件时以文件为准，删掉它才会重新采用站点配置里的值。
 
 公网访问应配置代理或 SSH 转发，并核对 `.local/env.conf` 的 public URL、origin、trusted hosts；自定义端口时同步核对 URL。字段及 source/archives/CLI 默认值差异只在[框架配置](framework-configuration.md)维护。新部署包默认 archives，全新源码检出默认 source，两种入口的选集规则相同（留空即全部候选），差异只在候选材料来自源码检出还是发行包。
 

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { parseLiteralConfig, readPrivateConfig } from './literal-config.mjs';
+import { tightenPrivateFile } from './private-files.mjs';
 
 // Each mapping is shared by parsing, migration and the public Chinese template.
 export const deploymentFields = [
@@ -36,6 +37,7 @@ export const deploymentFields = [
   ['DSH_CONTAINER_IMAGE', 'containerImage', 'string', '仅独立apply-compose输入：不可变镜像ID或仓库摘要。源码一键构建自动生成，必须留空。'],
   ['DSH_MANIFEST', 'manifest', 'string', '仅独立归档消费：发布清单路径。源码一键构建自动生成，必须留空。'],
   ['DSH_BASE_URL', 'baseUrl', 'string', '独立健康验收的宿主地址；留空沿用相应启动入口的原默认行为。'],
+  ['DSH_PLUGIN_CONFIG', 'pluginConfig', 'object', '插件业务配置：按插件ID组织的JSON对象，值是该插件运行配置文件的完整内容（JSON）。插件业务参数只在这里人工维护一份，部署时派生到各插件运行位置；已存在的运行配置文件不覆盖，需要以文件为准时先删除它。'],
 ];
 
 export const imageFields = [
@@ -150,6 +152,9 @@ export function decodeFrameworkConfig(text, { allowRemovedFields = false } = {})
     if (instance.configRevision !== undefined && (!Number.isSafeInteger(instance.configRevision) || instance.configRevision < 0)) throw new Error('DSH_INSTANCES的configRevision必须是非负整数。');
   }
   for (const [key, field, type] of deploymentFields) if (type === 'array' && config[field]?.some(value => typeof value !== 'string' || !value.trim())) throw new Error(`${key}必须只包含非空字符串。`);
+  if (config.pluginConfig) for (const [id, section] of Object.entries(config.pluginConfig)) {
+    if (!/^[a-z0-9][a-z0-9_-]*$/u.test(id) || !section || typeof section !== 'object' || Array.isArray(section)) throw new Error('DSH_PLUGIN_CONFIG只能按插件ID组织，且每个插件的配置必须是JSON对象。');
+  }
   if (!config.publicOrigin && config.publicUrl) config.publicOrigin = config.publicUrl;
   const image = { ...imageDefaults };
   for (const [key] of imageFields) if (values[key]) image[key] = values[key];
@@ -158,6 +163,8 @@ export function decodeFrameworkConfig(text, { allowRemovedFields = false } = {})
 }
 
 export function readFrameworkConfig(path, options) {
+  // 站点配置随仓库分发，Git 不携带 0600：读取前先收紧权限，新部署机不必手工 chmod。
+  tightenPrivateFile(path);
   const bytes = readPrivateConfig(path);
   return { ...decodeFrameworkConfig(bytes.toString('utf8'), options), bytes, sha256: createHash('sha256').update(bytes).digest('hex') };
 }
@@ -166,12 +173,12 @@ export function readFrameworkConfig(path, options) {
 export function renderFrameworkConfig({ config = {}, image = {}, credentials = {}, privateInput = false } = {}) {
   if (!privateInput) { config = { ...publicDeploymentDefaults, ...config }; image = { ...imageDefaults, ...image }; }
   const lines = [
-    privateInput ? '# DSH框架私有运行配置' : '# DSH框架配置入口（公开默认模板）',
-    privateInput ? '# 此文件可能含凭据，保存在Git忽略目录；不得提交、公开或复制到镜像。' : '# 固定公开默认值已填写；真实环境配置和凭据保存在Git忽略的.local/env.conf，不在此修改。',
+    privateInput ? '# DSH框架站点配置' : '# DSH框架配置入口（公开默认模板）',
+    privateInput ? '# 站点唯一的配置源：框架参数与插件业务配置都在这里维护，随仓库分发到部署机；不要复制到镜像。' : '# 固定公开默认值已填写；站点真实配置与业务凭据保存在 .local/env.conf，不在此修改。',
     '# KEY=VALUE是字面量，不执行shell；复杂值用单行JSON，路径相对显式项目root。',
     '# 留空采用该入口默认行为；修改文件后通过正常部署流程受控重启。',
     '# API空值不是删除；若启动环境有同名密钥，官方仍会优先使用且网页只读。',
-    '# 注册插件的业务配置各自维护；账号、授权、会话和历史不是此文件的配置。',
+    '# 注册插件的业务参数在DSH_PLUGIN_CONFIG里维护一份，部署时派生到各插件运行位置。',
     '# 通常只需检查访问地址与所用模型凭据；自动新站点按平台初始化，手工复制模板需核对UID、GID和镜像架构。',
   ];
   const append = (key, comment, value) => {
@@ -202,7 +209,7 @@ export function assertPublicFrameworkConfig(text) {
   const values = parseLiteralConfig(text, frameworkKeys);
   const defaults = parseLiteralConfig(renderFrameworkConfig(), frameworkKeys);
   if (Object.keys(values).length !== frameworkKeys.size || [...frameworkKeys].some(key => values[key] !== defaults[key])) {
-    throw new Error('公开env.conf只能包含完整受控默认值和空凭据；真实配置必须保存在.local/env.conf，不能进入源码索引。');
+    throw new Error('公开env.conf只能包含完整受控默认值和空凭据；站点真实配置保存在.local/env.conf，不进入公开源码索引。');
   }
 }
 
