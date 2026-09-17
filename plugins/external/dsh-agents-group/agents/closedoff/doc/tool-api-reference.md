@@ -33,7 +33,7 @@ kind: "package-reference"
 
 1. **业务 HTTP 接口**：另一个程序可以完成两阶段认证后，直接请求 `{CLOSEDOFF_BASE_URL}<接口路径>`。
 2. **DSH Tool**：37 个 `closedoff_*` Tool 注册在 DSH 进程内部，由 Agent Loop 调用；插件没有公开“按 Tool 名直接调用”的 REST 路由。
-3. **专用 Agent 页面接口**：外部客户端可以向 `/closedoff-qa/chat` 发送自然语言，接收 SSE。Agent 根据提示词选择 Tool、调用业务接口并生成分析。
+3. **专用 Agent 页面接口**：外部客户端可以向**群组推导出的页面前缀** `<入口>/chat` 发送自然语言，接收 SSE（群里入口是 `/agents/closedoff`；只有独立运行本包时才是它自己的默认前缀 `/closedoff-qa`，见下文示例的限定）。Agent 根据提示词选择 Tool、调用业务接口并生成分析。
 
 如果另一个 AI 平台支持自定义函数或 Tool，最接近当前行为的做法是：把本文中的 Tool 名、说明和参数 Schema 注册给该平台，再由统一执行器完成认证和 HTTP 请求。如果只需要原始数据，也可以绕过 DSH Tool，直接调用业务 HTTP 接口；此时必须自行实现时间范围、token 缓存、失败重试和结果分析规则。
 

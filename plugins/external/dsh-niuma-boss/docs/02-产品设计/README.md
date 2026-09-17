@@ -1,5 +1,8 @@
 # 牛马-老板 · 设计总入口
 
+> 注：下文的 `04-资源/美术资源包/` 素材与交付包**不入库**（仓库根 `.gitignore` 单独忽略，见 `docs/README.md`），
+> 因此指向它们的标题在仓库里不可点击；本机目录里仍可打开原文件。
+
 > 注：本目录引用的阶段性评审／验收／交接文档已按仓库约定移出 Git（保留在本机 `.local/dsh-niuma-boss/docs/`），
 > 因此这些标题在仓库里不再可点击；要查阅原文请到上面那个目录。
 
@@ -18,7 +21,7 @@
 | 五 游戏编码 | 完整游戏与真实业务接入未开始 | 本轮包含本地场景演出预览所需实现，不以它代替真实 DSH 接入 |
 | 六 游戏测试与部署 | 未开始 | 美术浏览器与编辑器检查不等于真实游戏、宿主、模型或生产验收 |
 
-第三阶段入口：[素材浏览器](../../04-资源/美术资源包/delivery/index.html)、[办公楼活动页](../../04-资源/美术资源包/delivery/office-live/index.html)、[美术规范](./03-美术/README.md)、最终独立美术复核。图册可直接双击打开；素材、源文件和制作证据保存在 `docs/04-资源/美术资源包/`。
+第三阶段入口：素材浏览器、办公楼活动页、[美术规范](./03-美术/README.md)、最终独立美术复核。图册可直接双击打开；素材、源文件和制作证据保存在 `docs/04-资源/美术资源包/`。
 
 本轮布局参考见现代科技办公室布局参考，新增职员见[办公楼场景职员](./01-叙事/character_bible/office_npcs.md)。
 
@@ -26,7 +29,7 @@
 
 ## 推荐阅读顺序
 
-1. [原始需求](../../01-需求/多%20Agent%20像素风职场模拟游戏.txt)与[六阶段参考材料](../../01-需求/新建%20文本文档.txt)。原文保留，参考工具名单不是当前依赖。
+1. [原始需求](../01-需求/多 Agent 像素风职场模拟游戏.txt)与[六阶段参考材料](../01-需求/新建 文本文档.txt)。原文保留，参考工具名单不是当前依赖。
 2. [核心概念](./01-叙事/核心概念书.md)、[术语](./CONTEXT.md)、[建筑与 NPC](./01-叙事/建筑与NPC扩展.md)。
 3. [能力映射](./01-叙事/能力与人设映射表.md)、[员工接入](../03-技术架构与接口/基础架构/staff_integration.md)，区分能力、接口、授权与验证。
 4. [四人声音差异](./01-叙事/四人声音差异表.md)、[角色设定](./01-叙事/character_bible/)、[语气指南](./01-叙事/语气与幽默指南.md)。
@@ -50,7 +53,7 @@ blog 候选材料交回后，本轮可结束为 `external_pending`（待外部�
 从仓库根目录运行已有的独立设计校验器：
 
 ```powershell
-& .local/dsh-niuma-boss/validation-venv/Scripts/python.exe -B plugins/external/dsh-niuma-boss/scripts/validate-design.py --root plugins/dsh-niuma-boss --self-test
+& .local/dsh-niuma-boss/validation-venv/Scripts/python.exe -B plugins/external/dsh-niuma-boss/scripts/validate-design.py --root plugins/external/dsh-niuma-boss --self-test
 ```
 
 首次使用时按 `plugins/external/dsh-niuma-boss/scripts/design-requirements.txt` 建立独立 Python 环境。校验覆盖 Schema、机制引用、状态路径、任务依赖与聚合、交互条件及 NPC 边界；它不执行真实宿主、模型、业务或游戏。美术原生导出、静态几何、浏览器与独立评审的证据统一从[美术规范](./03-美术/README.md)进入。
