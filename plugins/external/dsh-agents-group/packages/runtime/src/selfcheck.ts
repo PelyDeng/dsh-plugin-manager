@@ -71,6 +71,14 @@ export interface SelfCheckOutcome {
   readonly failed: boolean
   /** 如实标记为"未核验"的条数（`unverified`）。 */
   readonly unverified: number
+  /**
+   * **执行方自报**的那份结论归到哪一态（`selfCheckState()` 的结果）。
+   *
+   * 单列出来是因为汇总（`toSelfCheck`）必须把 `absent` 与 `unverifiable` 分开报出去，而只看
+   * `findings` 时两者都是 `unverified`——折成一个值之后，协调方就只剩 `detail` 文本能区分
+   * 「执行方说这一轮没有可核验的产出」与「执行方根本没有自检能力」，而文本不能当判据。
+   */
+  readonly selfCheck: SelfCheckState
 }
 
 /** 这一步的自检结论。 */
@@ -89,11 +97,14 @@ export interface SelfCheckInput {
  *
  * 缺省**不是** `passed`——它表示"执行方没有自检能力"（老执行方），与"自检通过"是两件事。
  * 状态名拼错、不是对象、`status` 缺失，一律按 `absent` 处理：**不猜、不降级成通过**。
+ *
+ * `status: 'absent'` 与整个字段缺省归到同一态：前者是执行方**显式声明**自己没有自检能力
+ * （运行时把内部四态透出去时就写这个值），后者是它压根没报。协调方对两者的处置相同。
  */
 export function selfCheckState(selfCheck: AgentSelfCheck | undefined): SelfCheckState {
   if (selfCheck === undefined || typeof selfCheck !== 'object') return 'absent'
   const status = (selfCheck as { status?: unknown }).status
-  if (status === 'passed' || status === 'unverifiable' || status === 'failed') return status
+  if (status === 'passed' || status === 'unverifiable' || status === 'failed' || status === 'absent') return status
   return 'absent'
 }
 
@@ -129,7 +140,7 @@ export function runSelfCheck(input: SelfCheckInput): SelfCheckOutcome {
 
   const failed = findings.some(finding => finding.verdict === 'failed')
   const unverified = findings.filter(finding => finding.verdict === 'unverified').length
-  return { findings, failed, unverified }
+  return { findings, failed, unverified, selfCheck: state }
 }
 
 /** 自检那一条的结论：只有 `passed` 算通过；`absent` / `unverifiable` 未核验；`failed` 不达标。 */
@@ -180,18 +191,27 @@ function clip(value: string, limit: number): string {
 /**
  * 把 ⑦ 的结论整理成要回报给协调方的 `selfCheck`。
  *
- * 约定：**有 `failed` 就报 `failed`**；否则只要有一条 `unverified` 就报 `unverifiable`
- * （"没顾上过目"）；全通过才报 `passed`。这样协调方拿到的四态是**这一步真实的强弱**，
- * 而不是一个恒为"通过"的字段。
+ * 约定：**有 `failed` 就报 `failed`**；否则只要执行方没有自检能力（`absent`）就报 `absent`；
+ * 再否则只要有一条 `unverified` 就报 `unverifiable`（"没顾上过目"）；全通过才报 `passed`。
+ * 这样协调方拿到的结论是**这一步真实的强弱**，而不是一个恒为"通过"的字段；而"执行方有没有
+ * 自检能力"与"这一轮有没有可核验的产出"也**跨边界分得开**，不用靠 `detail` 文本去猜。
  */
 export function toSelfCheck(outcome: SelfCheckOutcome): AgentSelfCheck {
   const failed = outcome.findings.filter(finding => finding.verdict === 'failed')
   if (failed.length > 0) {
     return { status: 'failed', detail: failed.map(finding => finding.detail).join('；') }
   }
-  if (outcome.unverified > 0) {
-    const unverified = outcome.findings.filter(finding => finding.verdict === 'unverified')
-    return { status: 'unverifiable', detail: unverified.map(finding => finding.detail).join('；') }
+  const unverified = outcome.findings.filter(finding => finding.verdict === 'unverified')
+  if (unverified.length > 0) {
+    const detail = unverified.map(finding => finding.detail).join('；')
+    // **执行方没有自检能力时报 `absent`，不折成 `unverifiable`。** 两者在"不计入不达标"上
+    // 相同，含义却不同：`absent` 是这个**执行方的能力事实**（自检这一环没落地），
+    // `unverifiable` 是**这一轮的性质**（没有可核验的产出）。折成一个值之后，协调方只能去
+    // 读 `detail` 文本才能分清——而文本不能当判据（P3 评审 P-2）。`absent` 优先于
+    // `unverifiable`：能力事实比这一轮的具体原因更根本，而具体原因仍全在 `detail` 里。
+    return outcome.selfCheck === 'absent'
+      ? { status: 'absent', detail }
+      : { status: 'unverifiable', detail }
   }
   return { status: 'passed' }
 }

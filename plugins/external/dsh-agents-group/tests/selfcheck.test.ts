@@ -120,10 +120,33 @@ describe('汇总：回报给协调方的 selfCheck', () => {
     expect(toSelfCheck(runSelfCheck(value))).toEqual({ status: 'passed' })
   })
 
-  it('有未核验但没有不达标 → unverifiable（并带上原因）', () => {
-    const summary = toSelfCheck(runSelfCheck(input()))
+  it('执行方声明「这一轮没有可核验的产出」→ unverifiable（并带上原因）', () => {
+    const summary = toSelfCheck(runSelfCheck(input({ selfCheck: { status: 'unverifiable' } })))
     expect(summary.status).toBe('unverifiable')
     expect(summary.detail ?? '').not.toBe('')
+  })
+
+  it('⚠️ 执行方**没有自检能力**（缺省）→ absent，**不得**折成 unverifiable', () => {
+    // 这正是 P3 评审 P-2：只有三态时两者都被折成 `unverifiable`，协调方只能读 `detail`
+    // 文本才能分清「执行方说这一轮没有可核验的产出」与「执行方根本没有自检能力」——而文本
+    // 不能当判据。**这条用例是那个区分的唯一覆盖**：把 `toSelfCheck` 里
+    // `outcome.selfCheck === 'absent'` 那一支改回 `unverifiable`，它必须变红。
+    const summary = toSelfCheck(runSelfCheck(input()))
+    expect(summary.status).toBe('absent')
+    // 未核验的具体原因仍然要写清楚：`absent` 只回答"谁没有自检能力"，不回答"这一轮为什么没核验"。
+    expect(summary.detail ?? '').not.toBe('')
+  })
+
+  it('显式 `absent` 与整个字段缺省归到同一态（协调方不必分两种写法）', () => {
+    expect(selfCheckState({ status: 'absent' })).toBe('absent')
+    expect(toSelfCheck(runSelfCheck(input({ selfCheck: { status: 'absent' } }))).status).toBe('absent')
+  })
+
+  it('`unverifiable` 优先于 `absent` 的只是"这一轮的性质"：有自检能力时照实报 unverifiable', () => {
+    // 反向对照：只有**执行方这一侧**是 absent 才报 absent。执行方报了 unverifiable（有自检
+    // 能力、这一轮没有可核验产出）时报 unverifiable —— 两条分支必须真的分开。
+    expect(toSelfCheck(runSelfCheck(input({ selfCheck: { status: 'unverifiable' } }))).status).toBe('unverifiable')
+    expect(toSelfCheck(runSelfCheck(input({ selfCheck: { status: 'passed' } }))).status).toBe('unverifiable')
   })
 
   it('有不达标 → failed（且优先于未核验）', () => {

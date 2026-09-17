@@ -116,14 +116,19 @@ export function parseMemberReturn(raw: string): ButlerMemberReturn | undefined {
 /**
  * 解析自检结论。
  *
- * 三种合法取值之外的一切（缺字段、拼错的状态名、不是对象）都返回 `undefined`——它表示
+ * 四种合法取值之外的一切（缺字段、拼错的状态名、不是对象）都返回 `undefined`——它表示
  * **「这一轮没有自检结论」**，而不是任何一档结论。**绝不降级成 `passed`**：那会把一次没人
  * 核验过的交付显示成已核验，正是这条判据要防的事。
+ *
+ * ⚠️ `absent` 必须留在白名单里：运行时把内部四态透出边界时写的就是它（执行方没有自检能力）。
+ * 漏掉它，这个区分会在**落库这一刻**退化成"没有自检结论"——上游改了、下游没接，正是本仓
+ * 反复出现的"中间的线没接"。
  */
 function parseSelfCheck(value: unknown): AgentSelfCheck | undefined {
   if (typeof value !== 'object' || value === null) return undefined
   const candidate = value as { status?: unknown; detail?: unknown }
-  if (candidate.status !== 'passed' && candidate.status !== 'unverifiable' && candidate.status !== 'failed') return undefined
+  if (candidate.status !== 'passed' && candidate.status !== 'unverifiable'
+    && candidate.status !== 'failed' && candidate.status !== 'absent') return undefined
   return {
     status: candidate.status,
     ...(typeof candidate.detail === 'string' && candidate.detail !== '' ? { detail: candidate.detail } : {}),

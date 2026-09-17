@@ -292,8 +292,9 @@ describe('补交轮：没调交活工具时补一次，补不上就按投影兜�
       const result = await promise
       expect(result.text).toBe('工具交回的正文')
       expect(result.status).toBe('completed')
-      // 交活过 ⇒ 第 4 条通过；没有口径、没有业务自检 ⇒ 第 2/3 条未核验 ⇒ 汇总如实说"未核验"。
-      expect(result.selfCheck?.status).toBe('unverifiable')
+      // 交活过 ⇒ 第 4 条通过；没有口径 ⇒ 第 3 条未核验；业务侧没有自检 ⇒ 第 2 条 **absent**。
+      // 汇总如实报 `absent`（"这个执行方没有自检能力"），不折成 `unverifiable`。
+      expect(result.selfCheck?.status).toBe('absent')
     } finally { await hosted.dispose() }
   })
 
@@ -311,7 +312,8 @@ describe('补交轮：没调交活工具时补一次，补不上就按投影兜�
       expect(hosted.followups().length).toBe(2)
       expect(result.status).toBe('completed')
       expect(result.text).toBe('第二轮正文')
-      expect(result.selfCheck?.status).toBe('unverifiable')
+      // 两轮都没自检能力 ⇒ 汇总报 `absent`（同样是"未核验、不计入不达标"的那一档）。
+      expect(result.selfCheck?.status).toBe('absent')
     } finally { await hosted.dispose() }
   })
 
@@ -341,8 +343,8 @@ describe('补交轮：没调交活工具时补一次，补不上就按投影兜�
       expect(hosted.followups().length).toBe(1)
       expect(result.status).toBe('completed')
       expect(result.text).toBe('只答了一句')
-      // 没调工具 ⇒ 第 4 条如实标"未核验"，不冒充通过。
-      expect(result.selfCheck?.status).toBe('unverifiable')
+      // 没调工具 ⇒ 第 4 条如实标"未核验"，不冒充通过；业务侧也没有自检 ⇒ 汇总报 `absent`。
+      expect(result.selfCheck?.status).toBe('absent')
     } finally { await hosted.dispose() }
   })
 })

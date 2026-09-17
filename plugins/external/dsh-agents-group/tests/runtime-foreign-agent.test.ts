@@ -432,9 +432,9 @@ describe('A3：口径-产物自洽（未调交活工具时仍触发）', () => {
     f.complete(id, `在线 42 台（哨兵 ${POLL_SENTINEL}）`)
 
     const result = await pending
-    // 材料交回了 ⇒ 第 3 条通过；但执行方没有自报自检（`absent`）⇒ 汇总如实退为 `unverifiable`，
+    // 材料交回了 ⇒ 第 3 条通过；但执行方没有自报自检（`absent`）⇒ 汇总如实报 `absent`，
     // **不是 failed**。这一条同时钉住两件事：第 3 条确实看材料，且 `absent` 不计入不达标。
-    expect(result.selfCheck?.status).toBe('unverifiable')
+    expect(result.selfCheck?.status).toBe('absent')
   })
 
   it('A3-3 豁免规则：没有声明口径时第 3 条不施加（如实标未核验）', async () => {
@@ -445,7 +445,9 @@ describe('A3：口径-产物自洽（未调交活工具时仍触发）', () => {
     f.complete(id, `在线 42 台（哨兵 ${POLL_SENTINEL}）`)
 
     const result = await pending
-    expect(result.selfCheck?.status).toBe('unverifiable')
+    // 第 3 条未施加（豁免）这件事如实记在 `detail` 里；整轮结论仍是 `absent`——「执行方没有
+    // 自检能力」是比「这一轮没有可核验的口径」更根本的事实，两者不互相覆盖。
+    expect(result.selfCheck?.status).toBe('absent')
     expect(result.selfCheck?.detail ?? '').toContain('没有声明验收口径')
   })
 })

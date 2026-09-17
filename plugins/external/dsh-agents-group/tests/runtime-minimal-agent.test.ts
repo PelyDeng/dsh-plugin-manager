@@ -507,8 +507,9 @@ describe('P1 判据①：最小 Agent 跑通一轮', () => {
     // 没有交产物时回落到"查看会话"这一条材料定位。
     expect(result.artifacts).toEqual([{ kind: 'conversation', title: '查看会话', path: `/minimal-agent?conversationId=${id}` }])
     expect(result.question).toBeUndefined()
-    // ⑦ 的结论如实回报：没有业务自检（absent ⇒ unverified）⇒ 整轮"未核验"。
-    expect(result.selfCheck).toMatchObject({ status: 'unverifiable' })
+    // ⑦ 的结论如实回报：业务侧没有自检能力（`absent`）⇒ 汇总报 `absent`，**不折成
+    // `unverifiable`** —— 协调方要能分清"这个执行方没有自检能力"与"这一轮没有可核验的产出"。
+    expect(result.selfCheck).toMatchObject({ status: 'absent' })
     // 投影拿到的是完整一轮历史 + 派单请求 + 未注入的存储。
     expect(seen).toHaveLength(1)
     expect(seen[0]?.history.conversationId).toBe(id)

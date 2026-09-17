@@ -138,6 +138,45 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
     }
   })
 
+  it('selfCheck 四态落库往返：`absent` 不在落库那刻被吃掉（换实例仍读得回）', async () => {
+    // `absent`（执行方没有自检能力）是四态里唯一由**运行时代执行方**声明的态：老执行方什么都
+    // 不报，两侧的解析白名单若只认三态，它就在落库那刻退化成"没有自检结论"——上游改了、下游
+    // 没接。纯解析层在 `selfcheck-four-state.test.ts` 覆盖；这里证的是真的落了库、换实例读得回。
+    const conversationId = randomUUID()
+    await storage.reserveConversation(conversationId, actor)
+    const taskId = `butler-task-${randomUUID()}`
+    await storage.createTask({
+      id: taskId,
+      conversationId,
+      actor,
+      goal: '看看今天园区的情况',
+      note: '',
+      subtasks: [{ id: 's1', goal: '查一下在线设备数', agentId: 'poller', reason: '' }],
+    })
+    // 状态机要求逐级推进（queued 不能直接到 succeeded），照真实派单路径走三步。
+    await storage.setSubtaskState(taskId, 's1', 'dispatched')
+    await storage.setSubtaskState(taskId, 's1', 'running')
+    await storage.setSubtaskState(taskId, 's1', 'succeeded', {
+      result: '在线 42 台',
+      memberReturn: {
+        protocol: 1,
+        text: '在线 42 台',
+        selfCheck: { status: 'absent', detail: '执行方没有回报自检结论（缺省不等于通过）' },
+      },
+    })
+    const reopened = new PostgresTaskStorage(DSN)
+    try {
+      await reopened.init()
+      const record = await reopened.task(actor, taskId)
+      expect(record?.subtasks[0]?.memberReturn?.selfCheck).toEqual({
+        status: 'absent',
+        detail: '执行方没有回报自检结论（缺省不等于通过）',
+      })
+    } finally {
+      await reopened.close()
+    }
+  })
+
   it('createTask 中途注入失败（子任务主键冲突）全回滚：任务与输入都不留痕', async () => {
     const conversationId = randomUUID()
     await storage.reserveConversation(conversationId, actor)
