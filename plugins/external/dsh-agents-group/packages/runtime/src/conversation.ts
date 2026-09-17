@@ -92,6 +92,19 @@ interface PendingTurn {
    * **假的**"回合结束"。实测抓到过：补交轮注入之后多出一条 `completed`。
    */
   finishRequested: false | { readonly outcome: TurnOutcome; readonly notify: boolean }
+  /**
+   * **已经在飞的收尾**（`whenIdle()` 回调已登记、还没跑）：记下这一次要用的通知参数。
+   *
+   * ⚠️ 为什么必须有它：同一个回合上 `finish` 会被调用**多次**（协作入口 `cleanup()` 里先
+   * `releaseTurn()` 再 `lifecycle.finish(id, outcome)`；补交轮之间还有一次"释放占用"）。若每次都各
+   * 登记一个 `whenIdle()` 回调，**谁先登记谁的回调先跑**，而它删掉回合之后，后面那些回调全被
+   * `turns.get(conversation) !== turn` 守卫挡掉 ⇒ 通知的**次数与结论都由登记顺序决定**。
+   * 而先登记的往往**不是**知道结论的那一个（释放凭据只知道"我放开了"，不知道这一轮成功还是失败）。
+   * 实测抓到过两次：补交轮收到**两条** `completed`；失败回合收到 `completed`。
+   *
+   * 合并成一条在飞记录、**后到的调用更新它**（后到的信息更完整），通知就只发一次、且发的是最终结论。
+   */
+  finishInFlight?: { outcome: TurnOutcome; notify: boolean }
 }
 
 /** 运行时可注入的配置。 */
@@ -184,6 +197,14 @@ export class ConversationLifecycle {
   private readonly heldTurns = new Map<string, { turn?: PendingTurn }>()
   private readonly turns = new WeakMap<Conversation, PendingTurn>()
   private readonly initialModels = new WeakMap<Conversation, ConversationModel>()
+  /**
+   * 每个会话**这一轮**的动态上下文文本（`AgentDefinition.turnContext` 的返回值）。
+   *
+   * 宿主**每次装配**都来读它（注册进去的是一个 provider），所以它必须在**注入消息之前**更新到位：
+   * 否则模型看到的是上一次那一份（"资料过期"这种失效在界面上完全看不出来）。键是会话 id；
+   * 会话被 LRU 驱逐或释放时一并清掉，不留无主快照。
+   */
+  private readonly turnContexts = new Map<string, string>()
   private pendingOpens = 0
   private disposed = false
   private readonly identities = new WeakMap<object, Actor>()
@@ -297,16 +318,54 @@ export class ConversationLifecycle {
       released = true
       if (this.heldTurns.get(conversation.id) !== held) return
       this.heldTurns.delete(conversation.id)
-      if (this.turns.get(conversation) === held.turn || !this.turns.has(conversation)) this.finish(conversation.id)
+      /**
+       * ⚠️ `{ notify: false }` —— **"我放开了这一轮的回合凭据"不是"这一轮结束了"**。
+       *
+       * 这个闭包在两种时机被调用：真正收尾时（`cleanup()` 里紧跟着一句带正确 `outcome` 的
+       * `lifecycle.finish(...)`）与**为注入补交轮/自修正轮而释放占用**时（那一轮还在继续）。
+       * 它两个都不知道结论，所以**不声明任何结论**；通知交给知道结论的那一次显式调用
+       * （`finish` 会把意图合并到同一条在飞记录上，见 `PendingTurn.finishInFlight`）。
+       *
+       * 早先这里用缺省参数（`notify` 缺省 true、`outcome` 缺省 `'completed'`），实测抓到两个后果：
+       * 补交轮收到**两条** `completed`；失败回合收到 `completed`。
+       *
+       * ⚠️ **诚实标注**：这一句**单独**变异**不会**让用例变红——同批加的意图合并已经能挡住那两个后果
+       * （释放的 `notify: true` 会被紧接着的显式调用覆盖掉）。所以它与意图合并是**两道互相兜底**
+       * （与 P5 收尾屏障同一形态）。保留它的理由是**语义**：让"释放凭据"在语法上就不声明结论，
+       * 将来若有人只释放、不再显式收尾，也不会冒出一条假通知。
+       */
+      if (this.turns.get(conversation) === held.turn || !this.turns.has(conversation)) {
+        this.finish(conversation.id, 'completed', { notify: false })
+      }
     }
   }
 
-  private setup(agentCtx: Context): void {
+  private setup(agentCtx: Context, conversationId: string): void {
     agentCtx.systemPrompt.section({
       name: `${this.host.definition.id}:persona`,
       order: 600,
       text: this.host.definition.persona,
     })
+    /**
+     * 每轮的**动态上下文**（`AgentDefinition.turnContext`）。
+     *
+     * ⚠️ 注册进去的是**provider 函数**、不是当时的文本：DSH 的 `PromptContext.text` 支持
+     * "evaluated for each assembly"，所以宿主**每次装配**都回来读 `turnContexts` ⇒ 模型看到的是
+     * **这一轮**的快照。这正是"长驻句柄"能承载 blog 原来"一轮一命 + 每轮 setup 注入"那条路的原因
+     * （`setup` 只在打开会话时跑一次）。
+     *
+     * 位置取 620：宿主的策略类上下文在 110–120，业务资料性上下文排在它们之后才不会被误读成策略
+     * （blog 原来那份操作快照也在 620）。
+     *
+     * 只有声明了 `turnContext` 的 Agent 才注册 ⇒ 对 closedoff / butler **零影响**。
+     */
+    if (this.host.definition.turnContext !== undefined) {
+      agentCtx.systemPrompt.context({
+        name: `${this.host.definition.id}:turn-context`,
+        order: 620,
+        text: () => this.turnContexts.get(conversationId) ?? '',
+      })
+    }
     // 只允许调用属于本 Agent 标签的工具，外加约定好的通用集。在 agent 作用域里限制——
     // 插件级限制会波及所有 Agent，宿主会直接拒绝。
     agentCtx.tools.restrict({ allow: [...this.host.allowedTools()] })
@@ -347,6 +406,7 @@ export class ConversationLifecycle {
       throw new Error(`active conversation limit ${String(limit)} reached`)
     }
     this.conversations.delete(idle.id)
+    this.turnContexts.delete(idle.id)
     this.pendingOpens += 1
     return idle.handle
   }
@@ -365,7 +425,7 @@ export class ConversationLifecycle {
         sessionId: SessionId(id),
         meta: { cwd: process.cwd() },
         agentOptions: options,
-        setup: agentCtx => this.setup(agentCtx),
+        setup: agentCtx => this.setup(agentCtx, id),
       })
       if (this.disposed) {
         await handle.dispose()
@@ -403,7 +463,7 @@ export class ConversationLifecycle {
       handle = await ctx.agents.resume({
         resumeSessionId: SessionId(id),
         agentOptions: options,
-        setup: agentCtx => this.setup(agentCtx),
+        setup: agentCtx => this.setup(agentCtx, id),
       })
       if (this.disposed) throw new Error('conversation lifecycle is disposed')
       access.assert(actor)
@@ -540,6 +600,25 @@ export class ConversationLifecycle {
         if (turn.cancelled || this.turns.get(conversation) !== turn) throw new AccessError(409, '本轮操作已停止')
       }
       /**
+       * 每轮的**动态上下文**（`AgentDefinition.turnContext`）：在**注入之前**求值并落到槽位上，
+       * 宿主随后的装配读到的就是这一份。
+       *
+       * 与 `onTurnStart` 同一位置理由：放这里失败还来得及（消息还没进去，本轮按失败收尾即可）；
+       * 放到注入之后，模型可能已经带着**上一轮**的资料开跑了——而"资料过期"在界面上看不出来。
+       */
+      const turnContext = this.host.definition.turnContext
+      if (turnContext !== undefined) {
+        this.turnContexts.set(conversation.id, await turnContext({
+          conversationId: conversation.id,
+          actor,
+          agent: conversation.handle.agent,
+          storage: this.host.storage,
+        }))
+        // 钩子是异步的：期间可能被取消/顶掉，注入前要再核一次（与上面同一理由）。
+        this.assertCurrent(conversation, actor)
+        if (turn.cancelled || this.turns.get(conversation) !== turn) throw new AccessError(409, '本轮操作已停止')
+      }
+      /**
        * 本轮的内容块：业务可以组合多块（附件文本 / 图片），缺省**逐字**保持老口径的单块正文。
        */
       const compose = this.host.definition.composeTurnInput
@@ -608,7 +687,7 @@ export class ConversationLifecycle {
         inheritedEventCount: SessionLogOffset(seed.length),
         meta: { cwd: process.cwd(), parentSession: SessionId(conversation.id), isSeeded: true },
         agentOptions: options,
-        setup: agentCtx => this.setup(agentCtx),
+        setup: agentCtx => this.setup(agentCtx, id),
       })
       if (this.disposed) {
         await handle.dispose()
@@ -662,13 +741,37 @@ export class ConversationLifecycle {
      * 补交轮注入之后多出一条 `completed`。
      */
     if (!turn) { conversation.active = false; return }
+    /**
+     * ⚠️ **已经在飞就只更新意图**，不再登记第二个回调。
+     *
+     * 同一回合上 `finish` 会被调用多次（`cleanup()` 里先释放凭据、再带结论收尾；补交轮之间还有一次
+     * "释放占用"）。各登记一个回调的话，**先跑的那个赢**——它删掉回合，后面的全被下面的守卫挡掉。
+     * 而先登记的往往不是知道结论的那一个 ⇒ 通知的次数与结论都由登记顺序决定。
+     *
+     * 判据是「**后到的信息更完整**」：释放凭据只知道"我放开了"，不知道这一轮成功还是失败；带
+     * `outcome` 的那次收尾才知道。所以合并的规则只能是"更新"，不能是"先到先得"。
+     * ⚠️ 这条也意味着**不要在收尾回调里放业务副作用**——它可能被后到的调用改写意图后只跑一次，
+     * 也可能因为守卫提前返回而根本不跑；副作用属于业务钩子（`onTurnFinish`），不属于这里。
+     *
+     * 这两个后果（补交轮收到**两条** `completed`；失败回合收到 `completed`）实测都抓到过。
+     * ⚠️ **诚实归类**：它们不是运行时的老问题，而是**本轮新加的回合缝引入的**——`onTurnFinish`
+     * 这条缝上线时，通知的发出者与顺序还没有收敛到"唯一在飞记录"上。修复即本节，回归见
+     * `tests/runtime-closure.test.ts` 的「回合钩子的通知：发出者与次数」。
+     */
+    if (turn.finishInFlight !== undefined) {
+      turn.finishInFlight.outcome = outcome
+      turn.finishInFlight.notify = notify
+      return
+    }
+    const inFlight = { outcome, notify }
+    turn.finishInFlight = inFlight
     // 同步 followup 可能发出 turn/end；必须等它返回后再取得当前 driver 的空闲承诺。
     void conversation.handle.agent.whenIdle().then(() => {
       if (this.conversations.get(id) !== conversation || this.turns.get(conversation) !== turn || this.heldTurns.has(id)) return
       this.turns.delete(conversation)
       conversation.active = false
       conversation.lastUsedAt = Date.now()
-      if (notify) this.notifyTurnFinish(conversation, outcome)
+      if (inFlight.notify) this.notifyTurnFinish(conversation, inFlight.outcome)
     }, () => { /* 宿主未确认空闲时保留占用。 */ })
   }
 
@@ -781,6 +884,7 @@ export class ConversationLifecycle {
     const conversation = this.conversations.get(conversationId)
     if (conversation === undefined) return
     this.conversations.delete(conversationId)
+    this.turnContexts.delete(conversationId)
     await Promise.allSettled([conversation.handle.dispose()])
   }
 

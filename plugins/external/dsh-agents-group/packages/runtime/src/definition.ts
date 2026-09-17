@@ -389,6 +389,22 @@ export interface AgentDefinition {
    */
   readonly composeTurnInput?: (input: TurnInput) => Promise<readonly unknown[]> | readonly unknown[]
 
+  /**
+   * 这一轮的**系统提示动态上下文**（资料性，不是指令），见 {@link TurnHookContext}。
+   *
+   * 运行时在**注入消息之前**求值，把它交给宿主作为系统提示的动态上下文（DSH 的
+   * `systemPrompt.context`，其 `text` 可以是**每次装配时求值**的 provider）⇒ 模型看到的是
+   * **这一轮**的快照，而不是"打开会话那一次"的那份。返回空串表示这一轮不贡献上下文。
+   *
+   * ⚠️ **它存在的理由**：业务原来可以"一轮一命"（每轮 `create`/`resume`、每轮跑一遍 `setup`）把
+   * 每轮才有的资料（操作快照、时间基准）注册进系统提示；换成运行时的**长驻句柄复用**之后，
+   * `setup` 只在打开会话时跑一次，那条路就没了。这个钩子就是那座桥——**内容与是否贡献由业务决定，
+   * 而"每轮求值"由运行时保证**。
+   *
+   * ⚠️ 抛错 ⇒ 这一轮按失败收尾（与 {@link onTurnStart} 同理：此时消息还没注入，还来得及）。
+   */
+  readonly turnContext?: (ctx: TurnHookContext) => Promise<string> | string
+
   // —— 存储与配置 ——
 
   /** 业务表迁移（PG，按版本顺序）。机制表由运行时管理。 */

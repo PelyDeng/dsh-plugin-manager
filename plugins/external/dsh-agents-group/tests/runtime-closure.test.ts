@@ -144,8 +144,18 @@ function host(definition: AgentDefinition, config: Partial<RuntimeConfig> = {}, 
     dispatch('session/event', { id: conversationId }, value)
   }
 
+  /**
+   * 记录注册进来的**动态上下文**（`systemPrompt.context`）。
+   *
+   * ⚠️ 它的 `text` 是 **provider**：宿主**每次装配**都回来求值——本文件用它验证"模型看到的是
+   * **这一轮**的快照"，而不是"打开会话那一次"的那份（后者在界面上完全看不出来）。
+   */
+  const registeredContexts: { name: string; order: number; text: string | ((context: unknown) => string) }[] = []
   const scopeOf = (): Context => ({
-    systemPrompt: { section: () => {} },
+    systemPrompt: {
+      section: () => {},
+      context: (value: { name: string; order: number; text: string | ((context: unknown) => string) }) => { registeredContexts.push(value) },
+    },
     tools: { restrict: () => {} },
   }) as unknown as Context
   const agents = {
@@ -225,6 +235,13 @@ function host(definition: AgentDefinition, config: Partial<RuntimeConfig> = {}, 
     opened: () => openedIds,
     /** 最近一次建立句柄的会话 id。 */
     lastConversation: () => openedIds[openedIds.length - 1] ?? '',
+    /**
+     * **现在**求值所有注册进来的动态上下文——模拟宿主"每次装配"回去读 provider。
+     * 断言"这一轮"与"打开会话那一次"的差别，全靠它。
+     */
+    contextTexts: () => registeredContexts.map(entry => typeof entry.text === 'function' ? entry.text({}) : entry.text),
+    /** 注册进来的动态上下文条目（名字与位置）。 */
+    contexts: () => registeredContexts.map(entry => ({ name: entry.name, order: entry.order })),
     /** 发一轮完整回合：`turn/start` → `assistant/message` → `turn/end`。 */
     complete: (conversationId: string, text: string, reason = 'completed') => {
       emit('turn/start', { turn: 1 }, conversationId)
@@ -795,6 +812,35 @@ describe('回合钩子与输入组合', () => {
     } finally { await hosted.dispose() }
   })
 
+  it('turnContext：**每轮求值** —— 模型看到的是这一轮的资料，不是打开会话那次的那份', async () => {
+    let round = 0
+    const hosted = host(definitionOf({ turnContext: () => `第 ${++round} 轮的资料` }))
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      install(hosted, id)
+      // 注册进去的是 **provider**（不是当时的文本）：宿主每次装配都回来读它。
+      expect(hosted.contexts()).toEqual([{ name: `${AGENT_ID}:turn-context`, order: 620 }])
+      expect(hosted.contextTexts()).toEqual(['第 1 轮的资料'])
+      hosted.complete(id, '第一轮正文')
+      await until(() => hosted.followups().length >= 2, '补交提示已注入')
+      // ⚠️ 关键：补交轮开始之后，**同一个 provider** 必须给出第 2 轮的值。
+      // 这就是"长驻句柄能不能承载每轮资料"的判据——把它注册成静态文本的实现会一直返回第 1 轮。
+      expect(hosted.contextTexts()).toEqual(['第 2 轮的资料'])
+      hosted.complete(id, '第二轮正文')
+      await promise
+    } finally { await hosted.dispose() }
+  })
+
+  it('turnContext 抛错 ⇒ 这一轮失败，且**一条消息都没注入**', async () => {
+    const hosted = host(definitionOf({ turnContext: () => { throw new Error('快照取不到') } }))
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      await expect(promise).rejects.toThrow(/快照取不到/)
+      expect(hosted.followups()).toHaveLength(0)
+    } finally { await hosted.dispose() }
+  })
+
   it('composeTurnInput 的返回就是注入的内容；缺省是单块正文（老口径）', async () => {
     const swapped = host(definitionOf({ composeTurnInput: async () => [{ type: 'text', text: '来自钩子的正文' }] }))
     try {
@@ -850,6 +896,47 @@ describe('回合钩子与输入组合', () => {
       const id = await accept(hosted, promise)
       hosted.complete(id, '正文')
       await expect(promise).resolves.toMatchObject({ status: 'completed', text: '正文' })
+    } finally { await hosted.dispose() }
+  })
+})
+
+/**
+ * 回合钩子的**通知发出者与次数**。
+ *
+ * 这两条钉的是同一族缺陷：**"释放回合凭据"与"回合结束"是两件事**，而释放闭包
+ * （`retainTurn` 返回的那个函数）曾经用缺省参数调 `finish()` ⇒ 它既声明了"结束"（`notify` 缺省 true）
+ * 又声明了结论（`outcome` 缺省 `'completed'`），并且因为它是**先**登记 `whenIdle()` 回调的那一个，
+ * 它抢走了本该由显式调用发出的那条通知。两个可观测后果都实测抓到过：
+ * ① 补交轮收到 **两条** `completed`（那一轮只结束一次）；② 失败/取消的回合收到 **`completed`**。
+ */
+describe('回合钩子的通知：发出者与次数', () => {
+  it('补交轮全程只通知**一次**（注入下一轮时释放占用不算"这一轮结束了"）', async () => {
+    const outcomes: string[] = []
+    const hosted = host(definitionOf({ onTurnFinish: async ({ outcome }) => { outcomes.push(outcome) } }))
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      install(hosted, id)
+      hosted.complete(id, '第一轮正文')
+      await until(() => hosted.followups().length >= 2, '补交提示已注入')
+      hosted.complete(id, '第二轮正文')
+      await promise
+      await new Promise(resolve => setTimeout(resolve, 20))
+      // ⚠️ 回归：曾经收 `['completed','completed']`。
+      expect(outcomes).toEqual(['completed'])
+    } finally { await hosted.dispose() }
+  })
+
+  it('失败回合的 outcome 是 failed（不是缺省的 completed）', async () => {
+    const outcomes: string[] = []
+    const hosted = host(definitionOf({ onTurnFinish: async ({ outcome }) => { outcomes.push(outcome) } }), { turnTimeoutMs: 40 })
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      await accept(hosted, promise)
+      await expect(promise).rejects.toThrow(/超时/)
+      await new Promise(resolve => setTimeout(resolve, 20))
+      // ⚠️ 回归：曾经收 `['completed']`——释放闭包的缺省 outcome 抢走了显式那条带正确结论的通知。
+      expect(outcomes).toEqual(['failed'])
     } finally { await hosted.dispose() }
   })
 })
