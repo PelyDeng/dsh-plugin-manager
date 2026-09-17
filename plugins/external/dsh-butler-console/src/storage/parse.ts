@@ -18,7 +18,7 @@
  * 实现在这一点上保持一致。
  */
 
-import type { AgentArtifact, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
+import type { AgentAction, AgentArtifact, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
 import { SUBTASK_STATES, type SubtaskState } from '../task-model.ts'
 import type { ButlerDependsOnKind, ButlerInputRef, ButlerInputRefsKind, ButlerMemberReturn } from './types.ts'
 
@@ -122,15 +122,58 @@ export function parseMemberReturn(raw: unknown): ButlerMemberReturn | undefined 
     const pending = parsePending(candidate.externalPending)
     if (pending === null) return undefined
     const selfCheck = parseSelfCheck(candidate.selfCheck)
+    const actions = parseActions(candidate.actions)
+    if (actions === null) return undefined
     return {
       protocol: 1,
       text: candidate.text,
       ...(pending === undefined ? {} : { externalPending: pending }),
+      ...(actions === undefined ? {} : { actions }),
       ...(selfCheck === undefined ? {} : { selfCheck }),
     }
   } catch {
     return undefined
   }
+}
+
+/** 一条待确认操作最多留几条：防止一条异常记录把留存撑成无界载荷。 */
+const ACTION_LIMIT = 50
+
+/**
+ * 校验待确认操作（写入口是 `memberReturnOf`，读入口只有这一个）。
+ *
+ * ⚠️ **这一条是本批端到端验证抓出来的**：列是 JSONB，写入时带上了 `actions`，但读路径的校验
+ * 白名单当时没有它 ⇒ `member_return->'actions'` 在库里躺着，页面拿到的却是空数组（"确认卡
+ * 又不见了"，而这次不是没生成）。**加字段时读写两侧都要过一遍**，只改写入面等于没改。
+ *
+ * 口径与 `externalPending` 一致：缺字段 = 没有待办（`undefined`）；形状非法（不是数组、
+ * 条数超限、某条缺必需字段、`state` 不在已知集合里）= `null`，由调用方按"这份留存损坏"处理
+ * ——不逐条静默丢弃：那会让"少了一条待办"永远没人发现。
+ */
+function parseActions(value: unknown): ButlerMemberReturn['actions'] | null | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length > ACTION_LIMIT) return null
+  const states = new Set(['prepared', 'executing', 'succeeded', 'failed', 'cancelled', 'expired'])
+  const actions: AgentAction[] = []
+  for (const item of value) {
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) return null
+    const action = item as Partial<AgentAction>
+    if (typeof action.id !== 'string' || action.id === '') return null
+    if (typeof action.kind !== 'string' || action.kind === '') return null
+    if (typeof action.title !== 'string' || typeof action.summary !== 'string') return null
+    if (typeof action.state !== 'string' || !states.has(action.state)) return null
+    if (action.detail !== undefined && typeof action.detail !== 'string') return null
+    if (action.fields !== undefined) {
+      if (!Array.isArray(action.fields)) return null
+      for (const field of action.fields) {
+        if (typeof field !== 'object' || field === null) return null
+        const pair = field as { label?: unknown; value?: unknown }
+        if (typeof pair.label !== 'string' || typeof pair.value !== 'string') return null
+      }
+    }
+    actions.push(action as AgentAction)
+  }
+  return actions
 }
 
 /**

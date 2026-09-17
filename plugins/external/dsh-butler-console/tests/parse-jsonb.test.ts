@@ -63,6 +63,45 @@ describe('解析器：TEXT（旧库）与 JSONB（新库）必须同结论', () 
     expect(fromText?.externalPending?.reason).toBe('等发布')
   })
 
+  it('parseMemberReturn：待确认操作不能被读路径丢掉（本批端到端验证抓到的真缺陷）', () => {
+    // 写入口（`memberReturnOf`）带上了 `actions`，而读路径的校验白名单当时没有它 ⇒
+    // 库里躺着、页面拿到空数组：表现是"确认卡又不见了"，而这次不是没生成。
+    // 这条用例钉住"写进去的字段读得回来"，加字段时读写两侧都要过一遍。
+    const withActions = {
+      ...MEMBER_RETURN,
+      actions: [{
+        id: 'op-1',
+        kind: 'blog.publish',
+        title: '发布《测试1》',
+        summary: '确认后公开。',
+        detail: '详情',
+        fields: [{ label: '标题', value: '测试1' }],
+        confirmLabel: '确认',
+        state: 'prepared',
+        expiresAt: 1_800_000_000_000,
+      }],
+    }
+    const parsed = parseMemberReturn(withActions)
+    expect(parsed?.actions).toHaveLength(1)
+    expect(parsed?.actions?.[0]?.id).toBe('op-1')
+    expect(parsed?.actions?.[0]?.fields?.[0]).toEqual({ label: '标题', value: '测试1' })
+    // JSON 文本形态同结论（旧库 TEXT 列）。
+    expect(parseMemberReturn(JSON.stringify(withActions))?.actions).toHaveLength(1)
+  })
+
+  it('parseMemberReturn：待确认操作形状非法时整份留存按损坏处理，不逐条静默丢弃', () => {
+    const base = { ...MEMBER_RETURN }
+    // 不是数组、条数超限、缺必需字段、state 不认识的，一律判损坏（`undefined`）——
+    // 悄悄丢一条会让"少了一张卡"永远没人发现。
+    expect(parseMemberReturn({ ...base, actions: 'nope' })).toBeUndefined()
+    expect(parseMemberReturn({ ...base, actions: [{ id: 'x' }] })).toBeUndefined()
+    expect(parseMemberReturn({ ...base, actions: [{ id: 'x', kind: 'k', title: 't', summary: 's', state: '别猜' }] })).toBeUndefined()
+    expect(parseMemberReturn({ ...base, actions: new Array(51).fill({ id: 'x', kind: 'k', title: 't', summary: 's', state: 'prepared' }) })).toBeUndefined()
+    // 没有这个字段：与"没有待办"同结论，不影响其它字段。
+    expect(parseMemberReturn(base)?.actions).toBeUndefined()
+    expect(parseMemberReturn(base)?.text).toBe('在线 42 台')
+  })
+
   it('parseMemberReturn：空值与非法形状都按"没有结论"处理，不补造', () => {
     for (const empty of ['', null, undefined]) expect(parseMemberReturn(empty)).toBeUndefined()
     expect(parseMemberReturn(42)).toBeUndefined()
