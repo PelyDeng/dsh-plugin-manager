@@ -54,6 +54,12 @@ function memoryStorage(port: ConversationPort, questions: Map<string, string>) {
     // （接线后它们仍全绿）。`runtime-turn-claim.test.ts` 里那个可编程替身是唯一覆盖 ——
     // 这正是"实现与测试各自都在、中间的线没接"能连续发生三次的结构性原因。
     turnStatus: async () => undefined,
+    // 结果层（`dsh_turn_results`）：这个替身不实现它——本文件的用例都不投影结果，
+    // 如实返回"没有这一轮 / 没有结果"。**结果层的真实覆盖在 `runtime-turn-results.test.ts`**
+    // （那里有一个按轮次真存取的替身），不要拿这里的空实现当成"结果层被测过了"。
+    turnId: async () => undefined,
+    appendTurnResult: async () => '',
+    turnResults: async () => [],
     pendingQuestion: async (owner, conversationId) => questions.get(ownerKey(owner, conversationId)),
     setPendingQuestion: async (owner, conversationId, question) => {
       const key = ownerKey(owner, conversationId)

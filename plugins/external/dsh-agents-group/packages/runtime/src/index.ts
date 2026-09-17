@@ -46,6 +46,7 @@ export type {
 export type {
   AgentDatabasePort,
   AgentStoragePort,
+  AppendTurnResultInput,
   ConversationOwner,
   ConversationPageShape,
   ConversationPort,
@@ -56,6 +57,7 @@ export type {
   OwnerKey,
   PreviewMessageShape,
   RemovalResultShape,
+  TurnResultRecord,
   TurnStorePort,
 } from './storage/ports.ts'
 

@@ -30,6 +30,8 @@ import type {
   ConversationRecordShape,
   ManagedConversationShape,
   OwnerKey,
+  AppendTurnResultInput,
+  TurnResultRecord,
 } from './ports.ts'
 
 /** 语句/锁上限（连接启动参数注入）。与 blog / 管家同一套取值。 */
@@ -398,6 +400,69 @@ export class PgTurns {
     )
     const status = rows[0]?.status
     return status === 'claimed' || status === 'finished' ? status : undefined
+  }
+
+  /**
+   * 这一轮的**行 id**（`dsh_turns.id`）；没有这一轮时 `undefined`。
+   *
+   * 只读查回，不碰 `claim` 的返回值（那个被存储契约测试固化）。`dsh_turn_results.turn_id`
+   * 要的是**行 id**，而幂等身份是 `(agent, owner, request_id)` 上的部分唯一索引——两者
+   * 同名不同义（DDL 第 150 行）。
+   */
+  async turnId(owner: OwnerKey, requestId: string): Promise<string | undefined> {
+    if (requestId === '') return undefined
+    const rows = await this.scoped.query<{ id: string }>(
+      `SELECT id FROM dsh_turns
+        WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND request_id = $4`,
+      [this.agentId, owner.namespace, owner.userId, requestId],
+    )
+    return rows[0]?.id
+  }
+
+  /** 落一条结果记录；返回它的 id。`seq` 由库生成（`GENERATED ALWAYS AS IDENTITY`），不写。 */
+  async appendTurnResult(owner: OwnerKey, input: AppendTurnResultInput): Promise<string> {
+    const id = randomUUID()
+    await this.scoped.query(
+      `INSERT INTO dsh_turn_results(id, agent_id, owner_namespace, owner_id, conversation_id, turn_id, operation_id, created_at, payload)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)`,
+      [id, this.agentId, owner.namespace, owner.userId, input.conversationId, input.turnId,
+        input.operationId, input.createdAt ?? Date.now(), JSON.stringify(input.payload)],
+    )
+    return id
+  }
+
+  /**
+   * 读某一轮的全部结果记录，按 `seq`（插入序）升序。
+   *
+   * ⚠️ `seq` / `created_at` 是 `BIGINT`，pg 驱动按 `int8` 读回**字符串**——这里显式 `Number(...)`，
+   * 与 `PgConversations` 读 `updated_at` 的做法一致。漏了它，调用方拿到的是字符串，
+   * 排序与比较会静默退化成字典序。
+   */
+  async turnResults(owner: OwnerKey, turnId: string): Promise<readonly TurnResultRecord[]> {
+    if (turnId === '') return []
+    const rows = await this.scoped.query<{
+      id: string; turnId: string; operationId: string
+      seq: string | number; createdAt: string | number
+      payload: Record<string, unknown> | string
+    }>(
+      `SELECT id, turn_id AS "turnId", operation_id AS "operationId", seq, created_at AS "createdAt", payload
+        FROM dsh_turn_results
+        WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND turn_id = $4
+        ORDER BY seq`,
+      [this.agentId, owner.namespace, owner.userId, turnId],
+    )
+    return rows.map(row => ({
+      id: row.id,
+      turnId: row.turnId,
+      operationId: row.operationId,
+      seq: Number(row.seq),
+      createdAt: Number(row.createdAt),
+      // 列是 JSONB：正常读回就是对象。字符串分支是为"列形状与预期不一致"留的一层兜底，
+      // 而不是主路径（主路径若真读到字符串，那是 schema 漂移，不是这里能修的）。
+      payload: typeof row.payload === 'string'
+        ? JSON.parse(row.payload) as Record<string, unknown>
+        : row.payload,
+    }))
   }
 
   /**

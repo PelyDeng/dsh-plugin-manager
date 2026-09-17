@@ -32,7 +32,7 @@ import type {
   ParticipantExternalPending,
   ParticipantStatus,
 } from './contract.ts'
-import type { AgentStoragePort } from './storage/ports.ts'
+import type { AgentStoragePort, TurnResultRecord } from './storage/ports.ts'
 
 /** 业务注册工具时拿到的上下文。 */
 export interface AgentToolContext {
@@ -68,6 +68,33 @@ export interface TurnMessage {
   /** 可展示的思考快照（已按业务口径脱敏）。 */
   readonly thinking?: string
   readonly time: number
+  /**
+   * 官方消息 id（`user/message` 的事件载荷本身就是消息，`assistant/message` 是
+   * `{ message, … }` 包装）。
+   *
+   * 业务用它把自己的记录与消息对上（例如"这条用户消息对应我的哪一行请求"）。**不是**业务
+   * 自己的 `requestId`：官方事件里没有那个字段，业务侧的对应关系要靠它自己去查。
+   */
+  readonly id?: string
+  /**
+   * 这条消息属于哪一回合（`turn/start` 的 `turn`）。
+   *
+   * 缺省表示历史里**没有** `turn/start` 事件（例如只发消息与 `turn/end` 的测试替身），
+   * 此时全部消息同属一个**隐式回合**（`TurnHistory.turn` 也是 `undefined`）。
+   *
+   * ⚠️ "哪几条消息属于本轮"必须按它判定，**不要**拿 `finalText` 或"最后一条 assistant"近似：
+   * 一轮里每一步的正文后面都跟着一次工具调用，只有**最后一条**才是答案。
+   */
+  readonly turn?: number
+  /**
+   * 这一条是**被中断**（或失败重试）的产出：官方 `assistant/message` 的 `data.interrupted`，
+   * 以及 `assistant/attempt`（后者恒为 `true`）。
+   *
+   * ⚠️ 它**不**参与 `TurnHistory.tail`：被中断的正文不是这一轮的答案。但
+   * {@link TurnHistory.finalText} **仍会取它**——"最后一条 message 的正文"与"算数的答案"
+   * 是两件事，别拿前者当后者。
+   */
+  readonly interrupted?: boolean
 }
 
 /** 一轮会话的历史，供结果投影与自检使用。 */
@@ -77,6 +104,20 @@ export interface TurnHistory {
   readonly conversationId: string
   /** 本轮模型给出的最终正文（可能为空：模型只调了工具没说话）。 */
   readonly finalText: string
+  /** 最后一轮的回合号（最后一次 `turn/start` 的 `turn`）；没有 `turn/start` 时为 `undefined`。 */
+  readonly turn?: number
+  /**
+   * 这一轮**算数的正文**是哪一条：本回合内**最后一条未被中断、且有正文**的 assistant 消息。
+   *
+   * 它与 {@link finalText} 的区别是**刻意的**：`finalText` 取"最后一条 `assistant/message` 的
+   * 正文"，被中断的那条也算；`tail` 只在**未被中断**的消息里取。所以
+   * "最后一条 `assistant/message` 带了 `interrupted`"这种情形下，两者**不同**——拿 `finalText`
+   * 当答案会**静默改变答案提取语义**（把一次被中断的产出当成最终回答交出去）。
+   *
+   * 没有可算数的正文（例如本轮被停止、或只调了工具没说话）时为 `undefined`；此时调用方按
+   * 自己的口径兜底（运行时的兜底投影用 `finalText`）。
+   */
+  readonly tail?: TurnMessage
 }
 
 /** 结果投影的输入。 */
@@ -95,6 +136,25 @@ export interface ResultContext {
   }
   /** 业务自己的存储门面；「查候选稿」这类投影需要它读业务状态。 */
   readonly storage: AgentStoragePort | undefined
+  /**
+   * 读**本轮**交回的结果记录（`dsh_turn_results`）——本轮的结构化产出，例如
+   * "这一轮准备了哪份候选稿"「这一轮留下了哪条待确认的操作」。
+   *
+   * ## 为什么是函数而不是数组
+   *
+   * **惰性**：不是每个 Agent 的投影都需要它（`closedoff` 就不需要），而每轮多一次查询对它们
+   * 是纯开销。给一个读取函数，由业务按需 `await`。
+   *
+   * ## 口径
+   *
+   * - 只读**本轮**（按 `dsh_turns.id` 那一行筛）：跨轮查询没有上界，运行时不做；要跨轮就由
+   *   业务用自己的业务表查。
+   * - 没有存储门面、这一轮还没落地、或这一轮没落过结果时都返回**空数组**（都不抛错）：
+   *   "没有结果"是常态（多数轮次只交一段正文），不是异常。
+   * - 同一轮内按插入序（`seq`）返回。⚠️ 一轮里**同一次操作可以有多条结果**（不同 `kind` /
+   *   `revision`），结果是**追加**的：同一个 `operationId` 出现多次是正常的，别假设唯一。
+   */
+  readonly loadResults: () => Promise<readonly TurnResultRecord[]>
 }
 
 /** 一轮会话投影出的交回结果。 */

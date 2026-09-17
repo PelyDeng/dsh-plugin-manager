@@ -25,7 +25,11 @@ import { createBlogParticipant } from './participant.ts'
 import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
 import {selectBlogModel} from './models.mjs'
 import {ReasoningTranslations,reasoningOriginal} from './reasoning-translation.ts'
-import { resolveStorageDsn } from './storage/dsn.mjs'
+// DSN 来源解析用**运行时那一份**：blog 的 `storage/dsn.mjs` 文件头自述"复制管家 butler-console
+// 的 dsn.ts 模式"，而 P4 已把它迁进运行时（`packages/runtime/src/storage/dsn.ts`）。两处各留一份
+// 的代价是**语义会漂移**，而这一段的判据恰恰是最容易漂的地方：缺文件算"没配置"（不是错误）、
+// 非法 JSON 要如实抛、**绝不静默回退 SQLite**。副本已删。
+import { resolveStorageDsn } from '../../../packages/runtime/src/storage/dsn.ts'
 import { StorageError } from './storage/errors.mjs'
 import { BlogPgStorage } from './storage/pg.mjs'
 import type { Config } from './config.ts'

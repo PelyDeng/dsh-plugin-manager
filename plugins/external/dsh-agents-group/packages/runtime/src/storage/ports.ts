@@ -272,7 +272,40 @@ export interface ConversationPort {
   mark(actor: Actor, conversationId: string, state: 'pending' | 'failed' | 'removed'): void
 }
 
-/** 轮次幂等与待答问题（落 `dsh_turns`）。 */
+/**
+ * 一条**结果记录**（`dsh_turn_results` 的一行）。
+ *
+ * 业务载荷（`kind` / `proposal` / `draftId` …）全在 {@link payload} 里：运行时**不理解**它的
+ * 形状，只负责按轮次存取——理解它的是写出它的那个业务的 `projectResult`。
+ */
+export interface TurnResultRecord {
+  readonly id: string
+  /** 属于哪一轮：`dsh_turns.id`（**行 id**，不是幂等键，见 {@link TurnStorePort.turnId}）。 */
+  readonly turnId: string
+  readonly operationId: string
+  /** 插入序（`GENERATED ALWAYS AS IDENTITY`）：同轮内按它排就是业务写入的顺序。 */
+  readonly seq: number
+  readonly createdAt: number
+  readonly payload: Record<string, unknown>
+}
+
+/** 落一条结果记录的入参。 */
+export interface AppendTurnResultInput {
+  readonly conversationId: string
+  /** `dsh_turns.id`：由 {@link TurnStorePort.turnId} 查回来的那个值。 */
+  readonly turnId: string
+  readonly operationId: string
+  readonly payload: Record<string, unknown>
+  /** 缺省取当前时间（由实现决定）。 */
+  readonly createdAt?: number
+}
+
+/**
+ * 轮次幂等与待答问题（落 `dsh_turns`），以及一轮的业务产出（`dsh_turn_results`）。
+ *
+ * 两张表都**只在 PG**：本地侧没有镜像（`local.ts` 里 `dsh_turns` 零命中）——它们是运行期的
+ * 记账，不是"会话行"那种要参与同步围栏的东西。结果层沿用这一点。
+ */
 export interface TurnStorePort {
   /** 幂等：同一 `requestId` 只跑一轮。同 ID 不同 `inputHash` 应报冲突而不是重跑。 */
   claim(owner: OwnerKey, conversationId: string, requestId: string, inputHash: string)
@@ -292,6 +325,36 @@ export interface TurnStorePort {
    * （未 `finish` 与已 `finish` 都返回 `'duplicate'`），改返回值会动既有断言。
    */
   turnStatus(owner: OwnerKey, requestId: string): Promise<'claimed' | 'finished' | undefined>
+
+  /**
+   * 这一轮的**行 id**（`dsh_turns.id`）；没有这一轮时 `undefined`。
+   *
+   * ⚠️ **它不等同于幂等键**。幂等身份是 `(agent, owner, request_id)` 上的**部分唯一索引**，
+   * 而 `dsh_turn_results.turn_id` 指向的是 **turn 的行 id**——DDL 第 150 行专门写了这条
+   * "同名不同义"，别把两者当同一个东西。
+   *
+   * 为什么需要它：`claim` 只回答"认领成功 / 重复"，**不返回行 id**（那个返回值已被存储契约
+   * 测试固化，改它会动既有断言）；而结果层要按 `turn_id` 读写。所以用一个**只读**查回补上，
+   * 不碰 `claim` 的语义。
+   *
+   * 空 `requestId` 与不存在的轮次都返回 `undefined`（不抛）：调用方按"这一轮还没落地"处理。
+   */
+  turnId(owner: OwnerKey, requestId: string): Promise<string | undefined>
+
+  /**
+   * 落一条**结果记录**（`dsh_turn_results`）：一轮里交回的一条结构化产出。
+   *
+   * 与 `dsh_turns` 的分工：`dsh_turns` 回答"这一轮跑没跑过、跑完没有"（幂等与状态），
+   * `dsh_turn_results` 存**业务产出**（`chat_results` 那类：候选稿引用、操作确认……）。
+   *
+   * ⚠️ **刻意没有 `(turn_id, operation_id)` 唯一约束**（DDL 第 156 行）：一轮里同一次操作
+   * 可以有多条结果（不同 `kind` / `revision`），结果的真实身份就是它自己的 `id`。
+   * 所以重复调用**会插入多行**，防重复是调用方的事。
+   */
+  appendTurnResult(owner: OwnerKey, input: AppendTurnResultInput): Promise<string>
+
+  /** 读某一轮的全部结果记录，按 `seq` 升序（`seq` 是插入序，同轮内天然有序）。 */
+  turnResults(owner: OwnerKey, turnId: string): Promise<readonly TurnResultRecord[]>
 
   /**
    * 待答问题：重启后仍能恢复"这个会话在等用户回什么"。

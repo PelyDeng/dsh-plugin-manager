@@ -448,6 +448,101 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
   })
 
   // -------------------------------------------------------------------
+  // 二·补、结果层（`dsh_turn_results`）：一轮交回的结构化产出
+  // -------------------------------------------------------------------
+  //
+  // 这一层此前在运行时里**只出现在建表核验清单里、零读写方法**（`FRAMEWORK_TABLES` 有它）。
+  // 下面钉住四件事：**行 id 与幂等键不同**（DDL 第 150 行的"同名不同义"）、JSONB 往返、
+  // **按轮次隔离**、owner 隔离。
+
+  it('结果层往返：行 id ≠ 幂等键；结果按轮次落库、JSONB 读回是对象、换实例仍读得回', async () => {
+    const id = conversationId()
+    const first = await newFacade()
+    try {
+      await first.db.conversations.create(owner, id, '')
+      expect(await first.db.turns.claim(owner, id, 'req-res', 'hash')).toBe('claimed')
+      const turnId = await first.db.turns.turnId(owner, 'req-res')
+      expect(turnId).toBeDefined()
+      // ⚠️ 这一条就是 DDL 第 150 行写的"同名不同义"：`turn_id` 装的是 turn 的**行 id**，
+      // 而幂等身份是 `(agent, owner, request_id)` 上的部分唯一索引。接错了两者，"按轮次筛结果"
+      // 会静默筛不到。
+      expect(turnId).not.toBe('req-res')
+      // 没落过结果时是空数组（"没有结果"是常态，不是异常）。
+      expect(await first.db.turns.turnResults(owner, turnId!)).toEqual([])
+
+      await first.db.turns.appendTurnResult(owner, {
+        conversationId: id, turnId: turnId!, operationId: 'op-1',
+        payload: { kind: 'candidate', draftId: 'd1', proposal: { id: 'p1' } },
+      })
+      await first.db.turns.appendTurnResult(owner, {
+        conversationId: id, turnId: turnId!, operationId: 'op-1',
+        payload: { kind: 'operation', status: 'prepared' },
+      })
+      const rows = await first.db.turns.turnResults(owner, turnId!)
+      expect(rows).toHaveLength(2)
+      // **同一次操作两条结果是允许的**（DDL 刻意不加 `(turn_id, operation_id)` 唯一约束：
+      // 一轮同一操作可以有多条结果，身份是各自的 `id`）。
+      expect(rows.map(row => row.operationId)).toEqual(['op-1', 'op-1'])
+      expect(rows.map(row => row.payload.kind)).toEqual(['candidate', 'operation'])
+      // JSONB 往返：读回是**对象**、字段还在（不是字符串，也不是被 parse 坏的形状）。
+      expect(rows[0]!.payload.proposal).toEqual({ id: 'p1' })
+      expect(rows[0]!.payload.draftId).toBe('d1')
+      // `seq` / `createdAt` 是 BIGINT ⇒ 必须是 number：字符串会让排序静默退化成字典序
+      // （"10" < "9"），而调用方按 `seq` 判插入序。
+      expect(typeof rows[0]!.seq).toBe('number')
+      expect(rows[1]!.seq).toBeGreaterThan(rows[0]!.seq)
+      expect(typeof rows[0]!.createdAt).toBe('number')
+    } finally { await first.db.close() }
+
+    // 换实例（等价于重启）：结果仍在，且仍按插入序。
+    const second = reopen(first.path)
+    try {
+      const turnId = await second.turns.turnId(owner, 'req-res')
+      expect(turnId).toBeDefined()
+      expect((await second.turns.turnResults(owner, turnId!)).map(row => row.payload.kind))
+        .toEqual(['candidate', 'operation'])
+    } finally { await second.close() }
+  })
+
+  it('结果层按**轮次**隔离：两轮各自只看得到自己的结果', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.turns.claim(owner, id, 'req-a', 'hash-a')
+      await db.turns.claim(owner, id, 'req-b', 'hash-b')
+      const turnA = (await db.turns.turnId(owner, 'req-a'))!
+      const turnB = (await db.turns.turnId(owner, 'req-b'))!
+      // 同一个会话的两轮，行 id 不同（这是"按轮次筛"能成立的前提）。
+      expect(turnA).not.toBe(turnB)
+      await db.turns.appendTurnResult(owner, {
+        conversationId: id, turnId: turnA, operationId: 'op-a', payload: { kind: 'a' },
+      })
+      expect((await db.turns.turnResults(owner, turnA)).map(row => row.payload.kind)).toEqual(['a'])
+      // 另一轮看不到 —— 这是"结果串轮次"（把上一轮的材料当本轮交回）的判据。
+      expect(await db.turns.turnResults(owner, turnB)).toEqual([])
+    } finally { await db.close() }
+  })
+
+  it('结果层只认自己的 owner：别人的轮次读不到，也存在性也不泄露', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.turns.claim(owner, id, 'req-own', 'hash')
+      const turnId = (await db.turns.turnId(owner, 'req-own'))!
+      await db.turns.appendTurnResult(owner, {
+        conversationId: id, turnId, operationId: 'op', payload: { kind: 'secret' },
+      })
+      // 同一个 requestId、不同的人：答出行 id 会让别人的重试被判成"已结算"而静默丢活。
+      expect(await db.turns.turnId(otherOwner, 'req-own')).toBeUndefined()
+      expect(await db.turns.turnResults(otherOwner, turnId)).toEqual([])
+      // 空 requestId 表示"没有幂等身份" ⇒ 不该答出任何行 id。
+      expect(await db.turns.turnId(owner, '')).toBeUndefined()
+    } finally { await db.close() }
+  })
+
+  // -------------------------------------------------------------------
   // 三、待答问题：重启后仍能恢复"在等什么"
   // -------------------------------------------------------------------
 

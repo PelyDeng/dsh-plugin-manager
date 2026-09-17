@@ -29,7 +29,7 @@ import type { ParticipantRequest, ParticipantResult } from '../packages/runtime/
 import { ConversationLifecycle, type AgentRuntime, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
 import { createParticipant } from '../packages/runtime/src/participant.ts'
 import type { AgentDefinition } from '../packages/runtime/src/definition.ts'
-import type { AgentDatabasePort, AgentStoragePort, TurnStorePort } from '../packages/runtime/src/storage/ports.ts'
+import type { AgentDatabasePort, AgentStoragePort, TurnResultRecord, TurnStorePort } from '../packages/runtime/src/storage/ports.ts'
 import { MemoryConversationPort } from './fixtures/memory-conversation-port.ts'
 
 const AGENT_ID = 'claim-agent'
@@ -65,6 +65,14 @@ interface Calls {
   readonly finished: string[]
   /** `finish` 被调用那一刻，"结果是否已经 resolve"（C5 必须是 `false`）。 */
   finishSawResolved: boolean
+  /**
+   * 结果层（`dsh_turn_results`）：`turnId` 被查了几次。
+   *
+   * **它是"惰性"与"记忆化"的判据**：业务不读结果 ⇒ 0 次；同一轮读两次 ⇒ 仍 1 次。
+   */
+  turnIdLookups: number
+  /** 结果层：落过的行（按落库顺序）。 */
+  readonly results: TurnResultRecord[]
 }
 
 interface HostOptions {
@@ -76,6 +84,15 @@ interface HostOptions {
   readonly withoutStorage?: boolean
   /** 幂等缓存上界，供 C7 验"淘汰真的发生"。 */
   readonly settledCacheMax?: number
+  /**
+   * 结果层：`claim` 成功后**立刻**往这一轮落的结果。
+   *
+   * 这样最贴近生产——业务是在**这一轮进行中**写结果的（工具处理器里落库），而不是跑完之后。
+   * 入参是这一轮的 `requestId`，所以可以按轮次区分（"这一轮写了、那一轮没写"）。
+   */
+  readonly seedResults?: (requestId: string) => readonly Record<string, unknown>[]
+  /** 换一个定义（结果层的用例要自己的 `projectResult`）；缺省是那个什么都不做的定义。 */
+  readonly definition?: AgentDefinition
 }
 
 function host(options: HostOptions = {}) {
@@ -84,7 +101,7 @@ function host(options: HostOptions = {}) {
   const followups: { readonly id: string; readonly text: string }[] = []
   const disposers: (() => Promise<void> | void)[] = []
   const openedIds: string[] = []
-  const calls: Calls = { events: [], claimed: [], finished: [], finishSawResolved: false }
+  const calls: Calls = { events: [], claimed: [], finished: [], finishSawResolved: false, turnIdLookups: 0, results: [] }
   /** 判定 C5 用：`resolve` 之后由调用方的 `.then` 置真。 */
   const settledFlag = { value: false }
   let seq = 0
@@ -122,11 +139,33 @@ function host(options: HostOptions = {}) {
     dispatch('session/event', { id: conversationId }, value)
   }
 
+  /**
+   * 结果层替身的状态。
+   *
+   * `turnIds` 与真实现同形：**turn 行 id 是在 `claim` 插入那一行时产生的**（不是幂等键本身）。
+   * 这个区别是 DDL 第 150 行专门写下的"同名不同义"，替身也照它建模——否则"按行 id 筛结果"
+   * 这类错误在测试里看不出来。
+   */
+  const turnIds = new Map<string, string>()
+  let resultSeq = 0
+  const appendRow = (turnId: string, payload: Record<string, unknown>): string => {
+    resultSeq += 1
+    const id = `res-${resultSeq}`
+    calls.results.push({ id, turnId, operationId: `op-${resultSeq}`, seq: resultSeq, createdAt: 1000 + resultSeq, payload })
+    return id
+  }
+
   const turns: TurnStorePort = {
     claim: async (_owner, conversationId, requestId, inputHash) => {
       calls.events.push('claim')
       calls.claimed.push({ requestId, inputHash, conversationId })
-      return options.verdict ?? 'claimed'
+      const verdict = options.verdict ?? 'claimed'
+      if (verdict === 'claimed') {
+        turnIds.set(requestId, `turn-${requestId}`)
+        // 业务是在**这一轮进行中**写结果的（工具处理器里落库），所以种在 `claim` 这一刻。
+        for (const payload of options.seedResults?.(requestId) ?? []) appendRow(`turn-${requestId}`, payload)
+      }
+      return verdict
     },
     finish: async (_owner, requestId) => {
       calls.finished.push(requestId)
@@ -137,6 +176,14 @@ function host(options: HostOptions = {}) {
       calls.finishSawResolved = settledFlag.value
     },
     turnStatus: async () => options.status,
+    // 结果层（`dsh_turn_results`）：**真的**按轮次存取。这样"接线到底接没接"能被观测到，
+    // 而不是靠一个恒空的替身把缺口藏住（本文件开头那段注释说的就是这个教训）。
+    turnId: async (_owner, requestId) => {
+      calls.turnIdLookups += 1
+      return turnIds.get(requestId)
+    },
+    appendTurnResult: async (_owner, input) => appendRow(input.turnId, input.payload),
+    turnResults: async (_owner, turnId) => calls.results.filter(row => row.turnId === turnId),
     pendingQuestion: async () => undefined,
     setPendingQuestion: async () => {},
   }
@@ -214,8 +261,9 @@ function host(options: HostOptions = {}) {
     maxActiveConversations: 8, reasoningEffort: 'medium',
     ...(options.settledCacheMax === undefined ? {} : { settledCacheMax: options.settledCacheMax }),
   }
+  const definition = options.definition ?? definitionOf()
   const lifecycle = new ConversationLifecycle({
-    ctx, definition: definitionOf(), access, store: port, config: runtimeConfig, allowedTools: () => [],
+    ctx, definition, access, store: port, config: runtimeConfig, allowedTools: () => [],
   })
   // 记录"占用回合"的时刻：这是 `claim` 真正要抢先的第一个副作用。
   //
@@ -228,11 +276,11 @@ function host(options: HostOptions = {}) {
     calls.events.push('retainTurn')
     return originalRetain(...args)
   }) as typeof lifecycle.retainTurn
-  const runtime: AgentRuntime = { ctx, definition: definitionOf(), access, store: port, config: runtimeConfig, lifecycle, allowedTools: () => [] }
+  const runtime: AgentRuntime = { ctx, definition, access, store: port, config: runtimeConfig, lifecycle, allowedTools: () => [] }
   // C6 靠"根本不传 storage"来验：少了这个守卫，接线处会以 TypeError 炸掉。
   const participant = options.withoutStorage === true
-    ? createParticipant({ definition: definitionOf(), runtime, access, config: runtimeConfig })
-    : createParticipant({ definition: definitionOf(), runtime, storage, access, config: runtimeConfig })
+    ? createParticipant({ definition, runtime, access, config: runtimeConfig })
+    : createParticipant({ definition, runtime, storage, access, config: runtimeConfig })
 
   return {
     participant, calls, settledFlag, lifecycle, port,
@@ -431,4 +479,105 @@ describe('判据：轮次幂等真的接在运行时上（`dsh_turns`）', () =>
   // 判据：把 `participant.ts` 里那段 `console.warn` 删掉，**不会有任何用例变红**。
   // 要补的话，落点应在 `runtime-turn-claim.test.ts`，用 `vi.spyOn(console, 'warn')` +
   // 一个**不 install** 的 host 跑一轮。
+})
+
+// ---------------------------------------------------------------------------
+// 结果层（`dsh_turn_results`）：业务在 `projectResult` 里读本轮的结构化产出
+// ---------------------------------------------------------------------------
+//
+// 为什么值得单独一组：结果记录是"这一轮交回了什么结构化产出"的唯一载体（候选稿引用、
+// 待确认的操作……），而它此前在运行时里**只出现在建表核验清单里、零读写方法**。这一组钉住
+// 四件事：**接线真的在**、**只给本轮**、**惰性**（不读就不查库）、**记忆化**（读两次只查一次）。
+
+describe('结果层：projectResult 读本轮结果', () => {
+  /** 记录投影里读到的结果，供断言。 */
+  function resultReadingDefinition(seen: { count: number; rows: readonly TurnResultRecord[] }): AgentDefinition {
+    return {
+      ...definitionOf(),
+      projectResult: async (ctx) => {
+        seen.count += 1
+        seen.rows = await ctx.loadResults()
+        return { status: 'completed', text: '读完了' }
+      },
+    }
+  }
+
+  it('读得到**本轮**的结果，按插入序返回', async () => {
+    const seen = { count: 0, rows: [] as readonly TurnResultRecord[] }
+    const h = host({
+      definition: resultReadingDefinition(seen),
+      seedResults: () => [{ kind: 'candidate', draftId: 'd1' }, { kind: 'operation', status: 'prepared' }],
+    })
+    try {
+      await runOnce(h)
+      expect(seen.rows).toHaveLength(2)
+      expect(seen.rows.map(row => row.payload.kind)).toEqual(['candidate', 'operation'])
+      // 按 `seq` 升序（插入序），不是按 id 或时间戳的字典序。
+      expect(seen.rows.map(row => row.seq)).toEqual([...seen.rows.map(row => row.seq)].sort((a, b) => a - b))
+      // 行 id 与幂等键**不同**：`turnId` 是 `claim` 那一行的 id（DDL 第 150 行专门写的同名不同义）。
+      expect(seen.rows[0]!.turnId).toBe(`turn-${EXPECTED_KEY}`)
+      expect(seen.rows[0]!.turnId).not.toBe(EXPECTED_KEY)
+    } finally { await h.dispose() }
+  })
+
+  it('**只给本轮**：别的轮次落的结果读不出来', async () => {
+    const seen = { count: 0, rows: [] as readonly TurnResultRecord[] }
+    const h = host({ definition: resultReadingDefinition(seen), seedResults: requestId => requestId === EXPECTED_KEY ? [{ kind: 'candidate' }] : [] })
+    try {
+      // 第一轮：种了结果 ⇒ 读得到。
+      await runOnce(h)
+      expect(seen.rows).toHaveLength(1)
+      // 第二轮：**换一个 requestId**（`claim` 不种结果）⇒ 必须读不到上一轮那条。
+      //
+      // ⚠️ `since` 必须在 `run` **之前**取：`accept` 的判据是 `followups.length > since`，
+      // 而第一轮已经留下一条记录 ⇒ 传当前长度会让它立刻返回**上一轮**的会话。
+      const before = h.followups().length
+      const promise = h.participant.run(h.request({ requestId: 'r2' }))
+      const id = await h.accept(promise, before)
+      h.complete(id, '第二轮正文')
+      await promise
+      expect(seen.count).toBe(2)
+      expect(seen.rows).toEqual([])
+      // 两轮都真的查了（各自一轮一次），不是"第二轮没查所以为空"。
+      expect(h.calls.turnIdLookups).toBe(2)
+    } finally { await h.dispose() }
+  })
+
+  it('**惰性**：投影不读结果时，一次都不查（不替所有 Agent 付这次查询）', async () => {
+    // 缺省定义没有 `projectResult` ⇒ 走兜底投影 ⇒ 不该碰结果层。
+    const h = host({ seedResults: () => [{ kind: 'candidate' }] })
+    try {
+      await runOnce(h)
+      expect(h.calls.turnIdLookups).toBe(0)
+    } finally { await h.dispose() }
+  })
+
+  it('**记忆化**：同一轮里读两次只查一次库', async () => {
+    const seen = { count: 0, rows: [] as readonly TurnResultRecord[] }
+    const h = host({
+      definition: {
+        ...definitionOf(),
+        projectResult: async (ctx) => {
+          seen.rows = await ctx.loadResults()
+          seen.rows = await ctx.loadResults()
+          return { status: 'completed', text: '读了两遍' }
+        },
+      },
+      seedResults: () => [{ kind: 'candidate' }],
+    })
+    try {
+      await runOnce(h)
+      expect(seen.rows).toHaveLength(1)
+      expect(h.calls.turnIdLookups).toBe(1)
+    } finally { await h.dispose() }
+  })
+
+  it('没有存储门面 ⇒ 空数组，不抛错（"没有结果"是常态，不是异常）', async () => {
+    const seen = { count: 0, rows: [] as readonly TurnResultRecord[] }
+    const h = host({ withoutStorage: true, definition: resultReadingDefinition(seen) })
+    try {
+      await runOnce(h)
+      expect(seen.rows).toEqual([])
+    } finally { await h.dispose() }
+  })
 })

@@ -58,7 +58,7 @@ import {
 } from './handoff.ts'
 import { createVisibleStream, createVisibleThinking, onAssistantDelta, type AssistantDelta } from './projection.ts'
 import { runSelfCheck, toSelfCheck } from './selfcheck.ts'
-import type { AgentStoragePort, OwnerKey } from './storage/ports.ts'
+import type { AgentStoragePort, OwnerKey, TurnResultRecord } from './storage/ports.ts'
 
 export interface CreateParticipantInput {
   readonly definition: AgentDefinition
@@ -446,6 +446,24 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
           if (status === 'completed') { thinking.finish(); visible.finish() }
           const fallbackText = status === 'completed' ? (definition.redact?.(finalText) ?? finalText)
             : status === 'cancelled' ? '协作已取消。' : `${definition.displayName}未能完成本回合，请查看原会话。`
+          /**
+           * 读**本轮**的结果记录（`dsh_turn_results`）。
+           *
+           * 惰性（业务不读就不查库）+ **记忆化**（同一轮里读两次不该查两次）。按 `settledKey`
+           * 查行 id——那是与 `claim` **同一个**幂等身份（含 `run:`/`reply:` 前缀），所以查到的
+           * 就是这一轮的 turn 行。
+           */
+          let resultsCache: Promise<readonly TurnResultRecord[]> | undefined
+          const loadResults = (): Promise<readonly TurnResultRecord[]> => {
+            resultsCache ??= (async () => {
+              if (storage === undefined) return []
+              const owner = ownerOf(request.actor)
+              const turnId = await storage.db.turns.turnId(owner, settledKey)
+              if (turnId === undefined) return []
+              return storage.db.turns.turnResults(owner, turnId)
+            })()
+            return resultsCache
+          }
           const context: ResultContext = {
             history,
             request: {
@@ -454,6 +472,7 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
               ...(request.reworkOf === undefined ? {} : { reworkOf: request.reworkOf }),
             },
             storage,
+            loadResults,
           }
           const taken = ledger.take()
           // **交活工具的结果优先，投影兜底**：模型显式说了交回什么就用它；没说才回去看会话。

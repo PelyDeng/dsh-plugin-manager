@@ -82,6 +82,10 @@ function fakeDatabase(agentId: string) {
     claim: async () => 'claimed',
     finish: async () => {},
     turnStatus: async () => undefined,
+    // 结果层（`dsh_turn_results`）本文件用不到；真实覆盖在 `runtime-turn-results.test.ts`。
+    turnId: async () => undefined,
+    appendTurnResult: async () => '',
+    turnResults: async () => [],
     pendingQuestion: async () => undefined,
     setPendingQuestion: async () => {},
   }

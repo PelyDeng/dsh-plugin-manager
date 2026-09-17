@@ -141,6 +141,10 @@ async function fixture(mode: 'standalone' | 'authenticated' = 'authenticated') {
           claim: async () => 'claimed',
           finish: async () => {},
           turnStatus: async () => undefined,
+          // 结果层本文件不涉及；真实覆盖在 `dsh-agents-group/tests/runtime-turn-results.test.ts`。
+          turnId: async () => undefined,
+          appendTurnResult: async () => '',
+          turnResults: async () => [],
           pendingQuestion: async () => undefined,
           setPendingQuestion: async () => {},
         } as TurnStorePort,

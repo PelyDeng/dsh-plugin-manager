@@ -58,6 +58,8 @@ function resultContext(conversationId: string, finalText: string): ResultContext
     history: { messages: [], conversationId, finalText },
     request: { message: '查一下这辆车' },
     storage: undefined,
+    // 封闭化助手不读结果记录（它的投影只看历史正文）⇒ 如实返回空。
+    loadResults: async () => [],
   }
 }
 

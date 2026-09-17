@@ -132,6 +132,11 @@ function runtimeHost(definition: AgentDefinition, questions = new Map<string, st
     finish: async () => {},
     // 与恒 `'claimed'` 自洽：没有"已存在"的轮次，也就没有状态可答。
     turnStatus: async () => undefined,
+    // 结果层（`dsh_turn_results`）本文件用不到，如实返回"没有这一轮 / 没有结果"。
+    // 结果层的真实覆盖在 `runtime-turn-results.test.ts`。
+    turnId: async () => undefined,
+    appendTurnResult: async () => '',
+    turnResults: async () => [],
     pendingQuestion: async (owner, conversationId) => questions.get(`${owner.namespace}:${owner.userId}:${conversationId}`),
     setPendingQuestion: async (owner, conversationId, question) => {
       const key = `${owner.namespace}:${owner.userId}:${conversationId}`

@@ -31,7 +31,7 @@ import {
   type ConversationModel,
 } from '@dsh-plugin-manager/plugin-kit'
 import { conversationModelCatalog, requestedConversationModel, selectConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
-import type { AgentDefinition, TurnHistory } from './definition.ts'
+import type { AgentDefinition, TurnHistory, TurnMessage } from './definition.ts'
 import type { ConversationPageShape, ConversationPort, ConversationQueryShape, OwnerKey } from './storage/ports.ts'
 
 /**
@@ -727,18 +727,76 @@ export function previewMessages(events: readonly SessionEvent[]): readonly { rol
   return messages
 }
 
-/** 从会话事件里读一轮历史（供结果投影与自检使用）。 */
+/**
+ * 从会话事件里读一轮历史（供结果投影与自检使用）。
+ *
+ * ## 为什么必须带**回合归属**与 `tail`
+ *
+ * 一轮里每一步的正文后面都跟着一次工具调用（「让我先看看…」「找到了！」），只有**最后一条**
+ * 才是答案。业务原来的做法是靠"本轮起点"切片（它自己有一张请求表、用 `requestId` 对消息 id），
+ * 而运行时看不见那张表——但运行时**看得见 `turn/start`**，所以"哪几条属于本轮"由 `turn` 直接
+ * 回答，比让每个业务各切一次更可靠。
+ *
+ * `tail` 是"这一轮**算数的正文**"：本回合内最后一条**未被中断**、且有正文的 assistant 消息。
+ * 它与 {@link TurnHistory.finalText} **不同**（后者取最后一条 `assistant/message` 的正文，
+ * 被中断的也算）——把这个区别抹平会**静默改变答案提取语义**。
+ *
+ * ## `assistant/attempt` 为什么**不**进历史（刻意的，别顺手加）
+ *
+ * 1. 它按定义就是 `interrupted`（失败、重试或取消的尝试），**永远不可能**是 `tail`；
+ * 2. 它的正文要从 `data.stream` 展开（`llm.expandAssistantStream` + 块装配），那是**另一套
+ *    机制**；运行时对它现在的处置是"丢弃该步的思考累积"（`thinking.discard(step)`）；
+ * 3. 真要把失败尝试的过程叙述也交回，那是业务口径问题，应当由业务在自己的钩子里声明——
+ *    不要由运行时替所有 Agent 决定。
+ */
 export function historyOf(events: readonly SessionEvent[], conversationId: string): TurnHistory {
-  const messages: { role: 'user' | 'assistant'; text: string; thinking?: string; time: number }[] = []
+  const messages: TurnMessage[] = []
   let finalText = ''
+  /** 最后一次 `turn/start` 的回合号；`undefined` = 历史里没有回合边界（隐式单回合）。 */
+  let turn: number | undefined
   for (const event of events) {
-    if (event.type === 'user/message') {
+    if (event.type === 'turn/start') {
+      const value = (event.data as { turn?: unknown }).turn
+      if (typeof value === 'number') turn = value
+    } else if (event.type === 'user/message') {
       const text = textOf(event.data.content)
-      if (text !== '') messages.push({ role: 'user', text, time: event.time })
+      if (text !== '') {
+        messages.push({
+          role: 'user', text, time: event.time,
+          ...identify((event.data as { id?: unknown }).id),
+          ...attribute(turn),
+        })
+      }
     } else if (event.type === 'assistant/message') {
-      finalText = textOf(event.data.message.content)
-      if (finalText !== '') messages.push({ role: 'assistant', text: finalText, time: event.time })
+      const data = event.data as { message?: { content?: unknown; id?: unknown }; interrupted?: unknown }
+      finalText = textOf(data.message?.content)
+      if (finalText !== '') {
+        messages.push({
+          role: 'assistant', text: finalText, time: event.time,
+          ...identify(data.message?.id),
+          ...attribute(turn),
+          ...(data.interrupted === true ? { interrupted: true } : {}),
+        })
+      }
     }
   }
-  return { messages, conversationId, finalText }
+  // `tail` 只在**本回合**里找：跨回合回退会把上一轮的答案当成这一轮的（业务原实现的
+  // `findLast(m => m.turn === turn.turn)` 就是这个口径）。
+  let tail: TurnMessage | undefined
+  for (const message of messages) {
+    if (message.role !== 'assistant' || message.interrupted === true) continue
+    if (message.turn !== turn) continue
+    tail = message
+  }
+  return { messages, conversationId, finalText, ...(turn === undefined ? {} : { turn }), ...(tail === undefined ? {} : { tail }) }
+}
+
+/** 官方消息 id 是字符串时带上它；形状不对就不带（业务侧按"没有 id"处理）。 */
+function identify(value: unknown): { id?: string } {
+  return typeof value === 'string' && value !== '' ? { id: value } : {}
+}
+
+/** 回合归属：`undefined` 时不带这个字段（与"隐式单回合"同义）。 */
+function attribute(turn: number | undefined): { turn?: number } {
+  return turn === undefined ? {} : { turn }
 }
