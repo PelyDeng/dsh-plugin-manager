@@ -29,7 +29,7 @@ import type { ParticipantRequest, ParticipantResult } from '../packages/runtime/
 import { ConversationLifecycle, type AgentRuntime, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
 import { createParticipant } from '../packages/runtime/src/participant.ts'
 import type { AgentDefinition } from '../packages/runtime/src/definition.ts'
-import type { AgentDatabasePort, AgentStoragePort, TurnResultRecord, TurnStorePort } from '../packages/runtime/src/storage/ports.ts'
+import type { AgentDatabasePort, AgentStoragePort, TurnRecord, TurnResultRecord, TurnStorePort } from '../packages/runtime/src/storage/ports.ts'
 import { MemoryConversationPort } from './fixtures/memory-conversation-port.ts'
 
 const AGENT_ID = 'claim-agent'
@@ -147,6 +147,13 @@ function host(options: HostOptions = {}) {
    * 这类错误在测试里看不出来。
    */
   const turnIds = new Map<string, string>()
+  /**
+   * 轮次**行**（`dsh_turns`）的替身，按行 id 存。
+   *
+   * 与 `turnIds` 的关系就是真实现里"幂等键 → 行 id"那一步：`turnIds` 回答"这一轮的行 id 是哪个"，
+   * 这张表回答"那个行 id 现在是什么样"。③-A 的 `turnById` / `turnsOf` 读它。
+   */
+  const turnRows = new Map<string, TurnRecord>()
   let resultSeq = 0
   const appendRow = (turnId: string, payload: Record<string, unknown>): string => {
     resultSeq += 1
@@ -162,6 +169,15 @@ function host(options: HostOptions = {}) {
       const verdict = options.verdict ?? 'claimed'
       if (verdict === 'claimed') {
         turnIds.set(requestId, `turn-${requestId}`)
+        turnRows.set(`turn-${requestId}`, {
+          id: `turn-${requestId}`,
+          conversationId,
+          requestId,
+          inputHash,
+          status: 'claimed',
+          createdAt: 1000 + turnRows.size,
+          payload: {},
+        })
         // 业务是在**这一轮进行中**写结果的（工具处理器里落库），所以种在 `claim` 这一刻。
         for (const payload of options.seedResults?.(requestId) ?? []) appendRow(`turn-${requestId}`, payload)
       }
@@ -169,6 +185,8 @@ function host(options: HostOptions = {}) {
     },
     finish: async (_owner, requestId) => {
       calls.finished.push(requestId)
+      const row = turnRows.get(turnIds.get(requestId) ?? '')
+      if (row !== undefined) turnRows.set(row.id, { ...row, status: 'finished' })
       // ⚠️ 必须先让出一个微任务再读。少了这一步，`finish` 与 `resolve` 在同一个同步块里，
       // 调用方的 `.then` 回调根本还没机会跑，读到的**永远是 `false`** —— 用例就成了假绿：
       // 把 `finish` 挪到 `resolve` 之后它照样通过。让出之后，顺序错了才会被观察到。
@@ -184,6 +202,16 @@ function host(options: HostOptions = {}) {
     },
     appendTurnResult: async (_owner, input) => appendRow(input.turnId, input.payload),
     turnResults: async (_owner, turnId) => calls.results.filter(row => row.turnId === turnId),
+    // ③-A 的端口增量：本文件的用例不读整行，但替身**照样按行真存**（恒空替身会把缺口藏住）。
+    turnById: async (_owner, turnId) => turnRows.get(turnId),
+    turnsOf: async (_owner, conversationId) =>
+      [...turnRows.values()].filter(row => row.conversationId === conversationId),
+    // 本文件的用例不写轮次载荷；真实现是"行不存在 ⇒ 404"，所以这里也**不静默成功**。
+    patchTurnPayload: async (_owner, turnId) => {
+      const row = turnRows.get(turnId)
+      if (row === undefined) throw new AccessError(404, '轮次不存在或无权访问')
+      return row.payload
+    },
     pendingQuestion: async () => undefined,
     setPendingQuestion: async () => {},
   }

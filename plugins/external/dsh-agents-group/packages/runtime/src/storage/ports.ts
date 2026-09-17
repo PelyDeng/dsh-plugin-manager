@@ -345,14 +345,51 @@ export interface AppendTurnResultInput {
 }
 
 /**
+ * 一轮的**记录**（`dsh_turns` 的一行）。
+ *
+ * ⚠️ **`id` 与 `requestId` 是同名不同义的两个东西**，DDL 第 150 行专门写了这条：
+ * `id` 是**行 id**（`dsh_turn_results.turn_id` 指向它），`requestId` 是**幂等键**
+ * （部分唯一索引 `WHERE request_id <> ''`）。把两者当同一个东西，结果层就会拿幂等键去当
+ * `turn_id`，**查不到任何结果**。
+ */
+export interface TurnRecord {
+  /** `dsh_turns.id` —— **行 id**，不是幂等键。 */
+  readonly id: string
+  readonly conversationId: string
+  /**
+   * 幂等键。**空串是"等待行"**（`setPendingQuestion` 落的那种：没有幂等语义、可以有多条）。
+   * 调用方按它区分"真正的轮次"与"等待占位"。
+   */
+  readonly requestId: string
+  readonly inputHash: string
+  /**
+   * 运行时**自己的**记账状态（`claimed` / `finished` / `waiting`…）。
+   *
+   * ⚠️ **业务状态不在这里**：业务要记的状态（"排队 / 进行 / 停止中"那一类）住 `payload.status`
+   * ——写进这一列等于让一台状态机有两个主人（`claim` / `finish` 会覆盖它）。
+   */
+  readonly status: string
+  readonly createdAt: number
+  /** 业务载荷（`dsh_turns.payload`）；运行时**不理解**它的形状。 */
+  readonly payload: ConversationPayloadShape
+}
+
+/**
  * 轮次幂等与待答问题（落 `dsh_turns`），以及一轮的业务产出（`dsh_turn_results`）。
  *
  * 两张表都**只在 PG**：本地侧没有镜像（`local.ts` 里 `dsh_turns` 零命中）——它们是运行期的
  * 记账，不是"会话行"那种要参与同步围栏的东西。结果层沿用这一点。
  */
 export interface TurnStorePort {
-  /** 幂等：同一 `requestId` 只跑一轮。同 ID 不同 `inputHash` 应报冲突而不是重跑。 */
-  claim(owner: OwnerKey, conversationId: string, requestId: string, inputHash: string)
+  /**
+   * 幂等：同一 `requestId` 只跑一轮。同 ID 不同 `inputHash` 应报冲突而不是重跑。
+   *
+   * `payload` 是**建行时**要落的业务载荷（`{}` 与省略同义）。⚠️ 它只在这一行**首次**被创建时
+   * 生效：幂等命中既有行时返回的是**原来那一行**，载荷**不被覆盖**（与 `ConversationPort.create`
+   * 的 `initial` 同一条口径）。要改已有行的载荷，用 {@link patchTurnPayload}。
+   */
+  claim(owner: OwnerKey, conversationId: string, requestId: string, inputHash: string,
+    payload?: ConversationPayloadShape)
     : Promise<'claimed' | 'duplicate'>
 
   /** 这一轮跑完了。 */
@@ -386,6 +423,37 @@ export interface TurnStorePort {
   turnId(owner: OwnerKey, requestId: string): Promise<string | undefined>
 
   /**
+   * 按**行 id** 读一轮；没有这一行（或不属于本 owner）时 `undefined`。
+   *
+   * 与 {@link turnId} 配对使用：`turnId` 回答"幂等键对应哪个行 id"，本方法回答"这个行 id 现在
+   * 是什么样"。业务据此读回自己写在 `payload` 里的字段（含业务状态）。
+   */
+  turnById(owner: OwnerKey, turnId: string): Promise<TurnRecord | undefined>
+
+  /**
+   * 读一个会话下的**全部轮次**，按 `created_at, id` 升序。
+   *
+   * ⚠️ **包含 `request_id = ''` 的等待行**（`setPendingQuestion` 落的那种）。调用方按
+   * `requestId === ''` 自行区分——在这里悄悄过滤掉，会让"这个会话在等什么"那条线**静默消失**。
+   *
+   * ⚠️ 排序只能用 `created_at, id`：`dsh_turns` **没有单调递增列**（`created_at` 是毫秒），
+   * 所以**同一毫秒内的两条轮次退化成按 `id`（UUID）排**。这是切库带来的**已知行为差异**
+   * （旧 SQLite 索引库用 `rowid`），不是遗漏。
+   */
+  turnsOf(owner: OwnerKey, conversationId: string): Promise<readonly TurnRecord[]>
+
+  /**
+   * 合并写一轮的业务载荷：**浅合并**（`payload || $patch`，与 `jsonb` 的 `||` 同义），只覆盖
+   * 给出的键。
+   *
+   * 与会话的 `patchPayload` 同一条口径：**行不存在或不属于本 owner ⇒ 404**。载荷是**业务数据**，
+   * 静默丢掉一个"成功"返回会让调用方以为写进去了；返回 `undefined` 也不行——`{}` 与"没写"在
+   * 下游同形。返回值是**合并后落下的那一层**（不是补丁本身）。
+   */
+  patchTurnPayload(owner: OwnerKey, turnId: string, patch: ConversationPayloadShape)
+    : Promise<ConversationPayloadShape>
+
+  /**
    * 落一条**结果记录**（`dsh_turn_results`）：一轮里交回的一条结构化产出。
    *
    * 与 `dsh_turns` 的分工：`dsh_turns` 回答"这一轮跑没跑过、跑完没有"（幂等与状态），
@@ -411,6 +479,13 @@ export interface TurnStorePort {
    * 永远停在 `waiting_user`。这三样必须**一起**恢复，"重启不再丢"这句话才成立。
    */
   pendingQuestion(owner: OwnerKey, conversationId: string): Promise<string | undefined>
+  /**
+   * 记下"在等什么"；`undefined` / 空串表示不再等待。
+   *
+   * ⚠️ **一个会话同时只有一个待答问题**：写入前会先清掉该会话上原有的 `question` 键（与传
+   * `undefined` 时同一句 SQL）。不这样定，`pendingQuestion` 就只能靠 `created_at` 猜"最新"，
+   * 而它是**毫秒**——两次等待落在同一毫秒时，读回的是任意一条（测试里几乎必然同毫秒）。
+   */
   setPendingQuestion(owner: OwnerKey, conversationId: string, question: string | undefined): Promise<void>
 }
 

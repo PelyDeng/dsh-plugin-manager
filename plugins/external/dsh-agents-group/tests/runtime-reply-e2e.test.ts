@@ -137,6 +137,11 @@ function runtimeHost(definition: AgentDefinition, questions = new Map<string, st
     turnId: async () => undefined,
     appendTurnResult: async () => '',
     turnResults: async () => [],
+    // ③-A 的端口增量本文件用不到。**故意抛**而不是返回空值：静默返回 `undefined` / `[]` / `{}`
+    // 会把"线接到了这里"伪装成成功（假绿）。真实覆盖在 `storage-contract.test.ts`（真 PG）。
+    turnById: async () => { throw new Error('本文件的替身不实现 turnById') },
+    turnsOf: async () => { throw new Error('本文件的替身不实现 turnsOf') },
+    patchTurnPayload: async () => { throw new Error('本文件的替身不实现 patchTurnPayload') },
     pendingQuestion: async (owner, conversationId) => questions.get(`${owner.namespace}:${owner.userId}:${conversationId}`),
     setPendingQuestion: async (owner, conversationId, question) => {
       const key = `${owner.namespace}:${owner.userId}:${conversationId}`

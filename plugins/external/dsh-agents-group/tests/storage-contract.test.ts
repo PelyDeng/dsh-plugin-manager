@@ -104,6 +104,18 @@ async function titleOf(id: string): Promise<string> {
 }
 
 /**
+ * 一轮的载荷**原样**读库（不走端口）。
+ *
+ * 端口把 `payload` 解成对象，`NULL` 与 `{}` 在端口那一侧**同形**；这里要区分的是"库里到底
+ * 落的哪种"，所以只能直接查，并把 `jsonb_typeof` 一起带回来（`NULL` 时它是 `null`）。
+ */
+async function turnPayloadOf(turnId: string): Promise<{ payload: unknown; type: string | null }> {
+  const rows = await admin.query<{ payload: unknown; type: string | null }>(
+    'SELECT payload, jsonb_typeof(payload) AS type FROM dsh_turns WHERE id = $1', [turnId])
+  return rows.rows[0] ?? { payload: '<missing>', type: '<missing>' }
+}
+
+/**
  * 等一个条件成立，**上限 ~2 秒**后放弃。
  *
  * 用于"运行期后台排空"这类**没有返回 promise 可以 await**的路径：排空是 `mark` / `titleSink`
@@ -561,6 +573,161 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
   })
 
   // -------------------------------------------------------------------
+  // 二·补零、轮次行读取与业务载荷（P7 ③-A 的端口增量）
+  // -------------------------------------------------------------------
+  //
+  // 三表切 PG 之前先把"读回自己写进去的东西"补齐：`turnById`（行 id → 整行）、
+  // `claim` 的建行载荷、`turnsOf`（会话 → 全部轮次）、`patchTurnPayload`（浅合并）。
+  // 这一节的每一条都对应一处**会被静默走错**的接线：读错列、覆盖既有载荷、滤掉等待行、
+  // 把补丁当整层。
+
+  it('★ turnById 按行 id 读整行：字段逐一对上、createdAt 是 number、换实例仍读得回', async () => {
+    const id = conversationId()
+    const first = await newFacade()
+    let turnId = ''
+    try {
+      await first.db.conversations.create(owner, id, '')
+      expect(await first.db.turns.claim(owner, id, 'req-row', 'hash-row', { status: 'running' })).toBe('claimed')
+      turnId = (await first.db.turns.turnId(owner, 'req-row'))!
+      const row = await first.db.turns.turnById(owner, turnId)
+      expect(row).toBeDefined()
+      // `id` 与 `requestId` 是**两个**东西（DDL 第 150 行的"同名不同义"）：读回来的 `id` 必须是
+      // 行 id。把 `request_id` 当成 `id` 回填，结果层会拿幂等键去查 `turn_id`，**一条都查不到**。
+      expect(row!.id).toBe(turnId)
+      expect(row!.id).not.toBe('req-row')
+      expect(row!.requestId).toBe('req-row')
+      expect(row!.conversationId).toBe(id)
+      expect(row!.inputHash).toBe('hash-row')
+      expect(row!.status).toBe('claimed')
+      expect(row!.payload).toEqual({ status: 'running' })
+      // `created_at` 是 BIGINT：驱动给的是字符串，不解成 number 会让"按时间排"退化成字典序。
+      expect(typeof row!.createdAt).toBe('number')
+    } finally { await first.db.close() }
+
+    // 换实例（等价于重启）：轮次行只在 PG，重启后必须照样读得回。
+    const second = reopen(first.path)
+    try {
+      expect((await second.turns.turnById(owner, turnId))!.payload).toEqual({ status: 'running' })
+    } finally { await second.close() }
+  })
+
+  it('turnById 只认自己的 owner，不存在的行 / 空行 id 一律 undefined（不抛、不泄露存在性）', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.turns.claim(owner, id, 'req-iso', 'hash')
+      const turnId = (await db.turns.turnId(owner, 'req-iso'))!
+      // 同一个行 id、不同的人：答出内容就是越权读别人的业务载荷。
+      expect(await db.turns.turnById(otherOwner, turnId)).toBeUndefined()
+      expect(await db.turns.turnById(owner, randomUUID())).toBeUndefined()
+      expect(await db.turns.turnById(owner, '')).toBeUndefined()
+      // 结算之后同一行读回来是 `finished`：运行期状态确实在 `status` 列上（业务状态不在那里）。
+      await db.turns.finish(owner, 'req-iso')
+      expect((await db.turns.turnById(owner, turnId))!.status).toBe('finished')
+    } finally { await db.close() }
+  })
+
+  it('★ claim 的建行载荷真的落 PG；幂等命中既有行时**不覆盖**原来那一层', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      expect(await db.turns.claim(owner, id, 'req-p', 'hash', { status: 'running', attempt: 1 })).toBe('claimed')
+      const turnId = (await db.turns.turnId(owner, 'req-p'))!
+      expect((await db.turns.turnById(owner, turnId))!.payload).toEqual({ status: 'running', attempt: 1 })
+
+      // 幂等命中回的是**原来那一行**：这次传的载荷不许盖掉它 —— 否则一次重放就能把业务状态改回去
+      // （`claim` 的返回值已经固化成 `'duplicate'`，看不出载荷被谁写的）。
+      expect(await db.turns.claim(owner, id, 'req-p', 'hash', { status: 'done' })).toBe('duplicate')
+      expect((await db.turns.turnById(owner, turnId))!.payload).toEqual({ status: 'running', attempt: 1 })
+      expect((await turnPayloadOf(turnId)).payload).toEqual({ status: 'running', attempt: 1 })
+
+      // 省略载荷（与 `{}` 同义）：库里落的必须是**空对象**，不是 NULL。
+      expect(await db.turns.claim(owner, id, 'req-q', 'hash')).toBe('claimed')
+      const bare = (await db.turns.turnId(owner, 'req-q'))!
+      expect((await db.turns.turnById(owner, bare))!.payload).toEqual({})
+      // 端口那一侧 NULL 与 `{}` 同形，所以"到底落了哪种"只能看 `jsonb_typeof`。
+      expect(await turnPayloadOf(bare)).toEqual({ payload: {}, type: 'object' })
+    } finally { await db.close() }
+  })
+
+  it('★ turnsOf 读会话的全部轮次：含 `request_id = \'\'` 的等待行，按 created_at 升序，跨会话/跨 owner 不串', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      const sibling = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.conversations.create(owner, sibling, '')
+      await db.conversations.create(otherOwner, conversationId(), '')
+      // 一轮都没有时是空数组（"还没跑过"是常态，不是异常）。
+      expect(await db.turns.turnsOf(owner, id)).toEqual([])
+
+      await db.turns.claim(owner, id, 'req-1', 'h1', { status: 'first' })
+      await delay(5)
+      await db.turns.claim(owner, id, 'req-2', 'h2', { status: 'second' })
+      await delay(5)
+      // 等待行由 `setPendingQuestion` 落（`request_id = ''`）——它也必须出现在列表里。
+      await db.turns.setPendingQuestion(owner, id, '采用哪一版？')
+      // 另一个会话的一轮：不该串进来。
+      await db.turns.claim(owner, sibling, 'req-other', 'h3')
+
+      const rows = await db.turns.turnsOf(owner, id)
+      expect(rows).toHaveLength(3)
+      // 升序：先认领的在前（`created_at` 是排序键，中间留了 5ms 保证不会同毫秒）。
+      expect(rows.map(row => row.requestId)).toEqual(['req-1', 'req-2', ''])
+      expect(rows.map(row => row.payload.status)).toEqual(['first', 'second', undefined])
+      // 等待行**必须**在列表里，且带得出"在等什么"：在这里悄悄滤掉 `request_id = ''`，会让
+      // "这个会话卡在等用户回话"那条线**静默消失**（重启后 `prepareReply` 直接报 `waiting_expired`）。
+      const waiting = rows.filter(row => row.requestId === '')
+      expect(waiting.map(row => row.payload.question)).toEqual(['采用哪一版？'])
+      expect(waiting.map(row => row.status)).toEqual(['waiting'])
+      // 每个会话各自成列表：按 owner 过滤掉一条都不剩（不泄露别人的轮次）。
+      expect((await db.turns.turnsOf(owner, sibling)).map(row => row.requestId)).toEqual(['req-other'])
+      expect(await db.turns.turnsOf(otherOwner, id)).toEqual([])
+    } finally { await db.close() }
+  })
+
+  it('★ patchTurnPayload 是**浅合并**：没提到的键必须留着，返回的是合并结果而不是补丁', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.turns.claim(owner, id, 'req-patch', 'hash',
+        { status: 'running', keep: 'x', nested: { a: 1 } })
+      const turnId = (await db.turns.turnId(owner, 'req-patch'))!
+
+      const merged = await db.turns.patchTurnPayload(owner, turnId, { status: 'done' })
+      // 返回 `{status:'done'}`（补丁本身）也是"看起来成功"的 —— 但 `keep` / `nested` 会消失。
+      expect(merged).toEqual({ status: 'done', keep: 'x', nested: { a: 1 } })
+      expect((await db.turns.turnById(owner, turnId))!.payload).toEqual(merged)
+      expect((await turnPayloadOf(turnId)).payload).toEqual(merged)
+
+      // **浅**合并（与 `jsonb ||` 同义）：`nested` 整层被替换，不是递归合并。
+      expect(await db.turns.patchTurnPayload(owner, turnId, { nested: { b: 2 } }))
+        .toEqual({ status: 'done', keep: 'x', nested: { b: 2 } })
+      // 空补丁是恒等（不动任何键），不是清空。
+      expect(await db.turns.patchTurnPayload(owner, turnId, {})).toEqual({ status: 'done', keep: 'x', nested: { b: 2 } })
+    } finally { await db.close() }
+  })
+
+  it('patchTurnPayload 对不存在的轮次 / 别人的轮次抛 404，且那一行一个字都不动', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.turns.claim(owner, id, 'req-404', 'hash', { status: 'running' })
+      const turnId = (await db.turns.turnId(owner, 'req-404'))!
+      // 静默成功（或返回 undefined）会让调用方以为写进去了 —— 载荷是业务数据，不能这样丢。
+      await expect(db.turns.patchTurnPayload(owner, randomUUID(), { status: 'done' }))
+        .rejects.toBeInstanceOf(AccessError)
+      await expect(db.turns.patchTurnPayload(otherOwner, turnId, { status: 'done', stolen: true }))
+        .rejects.toBeInstanceOf(AccessError)
+      expect((await db.turns.turnById(owner, turnId))!.payload).toEqual({ status: 'running' })
+    } finally { await db.close() }
+  })
+
+  // -------------------------------------------------------------------
   // 二·补、结果层（`dsh_turn_results`）：一轮交回的结构化产出
   // -------------------------------------------------------------------
   //
@@ -684,6 +851,39 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
       await db.conversations.create(owner, id, '')
       await db.turns.setPendingQuestion(owner, id, '等你确认')
       expect(await db.turns.pendingQuestion(otherOwner, id)).toBeUndefined()
+    } finally { await db.close() }
+  })
+
+  it('★ 一个会话同时只有一个待答问题：连着写两次，只留下一行带 `question` 的（不靠时间戳猜最新）', async () => {
+    const { db } = await newFacade()
+    try {
+      const id = conversationId()
+      await db.conversations.create(owner, id, '')
+      await db.turns.setPendingQuestion(owner, id, '第一问？')
+      await db.turns.setPendingQuestion(owner, id, '第二问？')
+      // ⚠️ 这里**不能**只断言 `pendingQuestion` 答"第二问？"：两次写入几乎必然落在同一毫秒，
+      // 而旧实现靠 `ORDER BY created_at DESC, id DESC` 猜——同毫秒时退化成按 **UUID** 排，
+      // 答回来的是任意一条（断言会随机红）。判据要放在**结构与时间无关**的那一面：载体唯一。
+      const carriers = await admin.query<{ total: string | number; question: string }>(
+        `SELECT count(*) AS total, max(payload->>'question') AS question FROM dsh_turns
+          WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND conversation_id = $4
+            AND payload ? 'question'`,
+        [AGENT, owner.namespace, owner.userId, id],
+      )
+      expect(Number(carriers.rows[0]!.total)).toBe(1)
+      expect(carriers.rows[0]!.question).toBe('第二问？')
+      expect(await db.turns.pendingQuestion(owner, id)).toBe('第二问？')
+      // 两个等待**行**都在（只清 `question` 键，不删行）：行本身是"这一轮在等什么"的痕迹。
+      expect((await db.turns.turnsOf(owner, id)).filter(row => row.requestId === '')).toHaveLength(2)
+      // 清空之后一行带问题的都不剩。
+      await db.turns.setPendingQuestion(owner, id, undefined)
+      const after = await admin.query<{ total: string | number }>(
+        `SELECT count(*) AS total FROM dsh_turns
+          WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND conversation_id = $4
+            AND payload ? 'question'`,
+        [AGENT, owner.namespace, owner.userId, id],
+      )
+      expect(Number(after.rows[0]!.total)).toBe(0)
     } finally { await db.close() }
   })
 

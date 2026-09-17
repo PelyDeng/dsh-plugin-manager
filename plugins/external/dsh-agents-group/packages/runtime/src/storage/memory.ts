@@ -1,11 +1,13 @@
 /**
- * 内存版 `ConversationPort` —— 运行时的**非持久实现**（不是 P2 的权威实现）。
+ * 内存版存储端口 —— 运行时的**非持久实现**（不是 P2 的权威实现）。
  *
- * 用途：给"还没有（或不该有）存储后端"的装配与测试一个可用的 `ConversationPort`。本轮把它从
- * `tests/fixtures/` **提升进运行时**，理由是**跨包**：blog 的 24 个测试文件 / 192 条用例原本跑在
- * SQLite `:memory:` 上，索引库切到 PG 端口之后它们会**失去后端**，而 `storage/local.ts` 是
- * "移除围栏的本地镜像 + outbox"、**不是**可用的内存端口实现；跨包 import 另一个包的测试夹具不可行。
- * （`tests/fixtures/memory-conversation-port.ts` 现在只是转发到本文件，保住既有 import 路径。）
+ * 本文件两个类：{@link MemoryConversationPort}（会话索引）与 {@link MemoryTurnStore}（轮次与结果）。
+ * 用途：给"还没有（或不该有）存储后端"的装配与测试一个可用的 `ConversationPort` / `TurnStorePort`。
+ * 本轮把 `ConversationPort` 从 `tests/fixtures/` **提升进运行时**，理由是**跨包**：blog 的 24 个测试
+ * 文件 / 192 条用例原本跑在 SQLite `:memory:` 上，索引库切到 PG 端口之后它们会**失去后端**，而
+ * `storage/local.ts` 是"移除围栏的本地镜像 + outbox"、**不是**可用的内存端口实现；跨包 import 另一个
+ * 包的测试夹具不可行。（`tests/fixtures/memory-conversation-port.ts` 现在只是转发到本文件，保住既有
+ * import 路径。）
  *
  * ⚠️ 它**不是**"存储已经实现"的证据 —— 它连持久化都没有。**不要**拿它推断真实实现的时序或并发行为。
  *
@@ -47,8 +49,10 @@
  * - `missionRequestId` 是 `(agentId, owner, missionId)` 的**纯函数**：含 `agentId`，避免跨 Agent
  *   撞键；同一输入恒等，且不读任何可变状态。
  */
+import { randomUUID } from 'node:crypto'
 import { AccessError, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import type {
+  AppendTurnResultInput,
   ConversationOwner,
   ConversationPageShape,
   ConversationPort,
@@ -60,6 +64,9 @@ import type {
   OwnerKey,
   RemovalResultShape,
   ConversationPayloadShape,
+  TurnRecord,
+  TurnResultRecord,
+  TurnStorePort,
 } from './ports.ts'
 
 /** 围栏状态。空串表示没有围栏（真实实现里是 `removal_state` 列）。 */
@@ -444,6 +451,242 @@ export class MemoryConversationPort implements ConversationPort {
       deletedAt: row.deletedAt,
       removalState: row.removalState,
       ready: row.ready,
+      payload: { ...row.payload },
+    }
+  }
+}
+
+/** 一行的内存形状（对应真实实现里的 `dsh_turns` 行）。 */
+interface MemoryTurnRow {
+  readonly id: string
+  readonly owner: OwnerKey
+  readonly conversationId: string
+  readonly requestId: string
+  readonly inputHash: string
+  status: string
+  readonly createdAt: number
+  payload: ConversationPayloadShape
+}
+
+/**
+ * 内存版 `TurnStorePort` —— `dsh_turns` + `dsh_turn_results` 的**非持久实现**。
+ *
+ * 与 {@link MemoryConversationPort} 同一处境、同一用途：给"还没有（或不该有）存储后端"的装配与
+ * 测试一个可用的轮次端口。**它存在的理由是跨包**——blog 的 24 个测试文件原本跑在 SQLite
+ * `:memory:` 上，索引库切到 PG 端口之后它们会失去后端，而 `storage/local.ts` 是"围栏镜像 + outbox"、
+ * **不实现轮次**；跨包 import 另一个包的测试夹具不可行。
+ *
+ * ⚠️ 它**不是**"轮次已经落库"的证据：没有持久化、没有并发、没有跨进程。**不要**拿它推断真实实现
+ * 的时序（真实实现在两次 `await` 之间可能被并发插入）。
+ *
+ * ## 与真实实现**逐条对齐**的部分（对齐是刻意的）
+ *
+ * - `claim`：空 `requestId` ⇒ 400（不伪造幂等身份）；同 `(owner, requestId)` 幂等，命中既有行时
+ *   比对 `inputHash`——相同答 `'duplicate'`，不同抛 409（同一次受理换正文必须报冲突，否则带副作用
+ *   的活会干两遍）；`payload` **只在首次建行时**生效（真实实现靠 `ON CONFLICT DO NOTHING`）；
+ * - `finish` / `turnId` / `turnStatus` / `turnById` / `turnResults` 的**空 `requestId` / 空行 id**
+ *   一律静默返回（`undefined` / `[]`），与真实实现的前置早退一致；
+ * - `turnStatus` 只认 `'claimed'` / `'finished'`，别的值（例如等待行的 `'waiting'`）答 `undefined`；
+ * - `turnById` 与 `turnsOf` 都按 **owner** 过滤：别人的行在这个实例里根本读不到（真实实现是 SQL 条件）；
+ * - `turnsOf` 按 `created_at, id` 升序、**含 `request_id = ''` 的等待行**，同一毫秒退化成按 `id` 排
+ *   （这一点与真实实现**同样不确定**，见端口注释：`dsh_turns` 没有单调列）；
+ * - `patchTurnPayload`：**浅合并**，返回**合并后那一层**（不是补丁），行不存在或不属于该 owner ⇒ 404；
+ * - `appendTurnResult` / `turnResults`：`seq` 是每个实例内单调的插入序（真实实现是
+ *   `GENERATED ALWAYS AS IDENTITY`，跨实例共享），按 `seq` 升序读；`createdAt` 缺省取当前时间；
+ * - `pendingQuestion`：取该会话**最新**一条带非空 `question` 的行；`setPendingQuestion` 写入前先清掉
+ *   该会话原有的 `question` 键（真实实现是同一句 `payload - 'question'`），所以正常情况下只有一行带着它
+ *   ——"此刻在等什么"由这个不变量定，不靠时间戳运气（毫秒级同刻是常见情形）。
+ */
+export class MemoryTurnStore implements TurnStorePort {
+  readonly agentId: string
+  /** 行 id → 行。真实实现是 `dsh_turns`。 */
+  private readonly rows = new Map<string, MemoryTurnRow>()
+  /** `owner + requestId` → 行 id：幂等身份（真实实现是部分唯一索引 `WHERE request_id <> ''`）。 */
+  private readonly requestIds = new Map<string, string>()
+  /** 结果记录（`dsh_turn_results`）。 */
+  private readonly results: (TurnResultRecord & { readonly owner: OwnerKey })[] = []
+  /** 结果 `seq` 的替身（真实实现是库生成的 IDENTITY）。 */
+  private resultSeq = 0
+
+  constructor(agentId: string) {
+    this.agentId = agentId
+  }
+
+  // ---------------------------------------------------------------------
+  // TurnStorePort
+  // ---------------------------------------------------------------------
+
+  /**
+   * 认领一轮：空 `requestId` 拒绝；同 `(owner, requestId)` 幂等；换正文报 409。
+   *
+   * `payload` 只在**首次建行**时落，命中既有行时原样保留（与 `ConversationPort.create` 的
+   * `initial` 同一条口径）。
+   */
+  async claim(owner: OwnerKey, conversationId: string, requestId: string, inputHash: string,
+    payload?: ConversationPayloadShape)
+    : Promise<'claimed' | 'duplicate'> {
+    if (requestId === '') throw new AccessError(400, '轮次缺少幂等身份（requestId）')
+    const key = `${ownerKey(owner)}\u0000${requestId}`
+    const existingId = this.requestIds.get(key)
+    if (existingId !== undefined) {
+      const row = this.rows.get(existingId)!
+      // 同一次受理换了正文：必须报冲突而不是重跑（重跑会让带副作用的活干两遍）。
+      if (row.inputHash !== inputHash) throw new AccessError(409, '同一个请求标识不能换正文')
+      return 'duplicate'
+    }
+    const id = randomUUID()
+    this.rows.set(id, {
+      id,
+      owner: { ...owner },
+      conversationId,
+      requestId,
+      inputHash,
+      status: 'claimed',
+      createdAt: Date.now(),
+      payload: { ...payload },
+    })
+    this.requestIds.set(key, id)
+    return 'claimed'
+  }
+
+  /** 这一轮跑完了。空 `requestId` 与不存在的轮次都是**静默无操作**（与真实实现一致）。 */
+  async finish(owner: OwnerKey, requestId: string): Promise<void> {
+    const row = this.rowByRequest(owner, requestId)
+    if (row === undefined) return
+    row.status = 'finished'
+  }
+
+  /** 这一轮的状态；没有行、空 `requestId`、或状态不是 `claimed`/`finished` 时 `undefined`。 */
+  async turnStatus(owner: OwnerKey, requestId: string): Promise<'claimed' | 'finished' | undefined> {
+    const status = this.rowByRequest(owner, requestId)?.status
+    return status === 'claimed' || status === 'finished' ? status : undefined
+  }
+
+  /** 这一轮的**行 id**；没有这一轮（或 `requestId` 为空）时 `undefined`。 */
+  async turnId(owner: OwnerKey, requestId: string): Promise<string | undefined> {
+    return this.rowByRequest(owner, requestId)?.id
+  }
+
+  /** 按**行 id** 读一轮；没有这一行（或不属于本 owner）时 `undefined`。 */
+  async turnById(owner: OwnerKey, turnId: string): Promise<TurnRecord | undefined> {
+    const row = this.ownedRow(owner, turnId)
+    return row === undefined ? undefined : this.shapeOf(row)
+  }
+
+  /** 读一个会话下的全部轮次（**含 `request_id = ''` 的等待行**），按 `created_at, id` 升序。 */
+  async turnsOf(owner: OwnerKey, conversationId: string): Promise<readonly TurnRecord[]> {
+    return [...this.rows.values()]
+      .filter(row => sameOwner(row.owner, owner) && row.conversationId === conversationId)
+      .sort((left, right) => left.createdAt - right.createdAt || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+      .map(row => this.shapeOf(row))
+  }
+
+  /**
+   * 合并写一轮的业务载荷（**浅合并**）；返回合并后落下的那一层。
+   *
+   * 行不存在或不属于本 owner ⇒ **404**（静默成功会让调用方以为写进去了）。
+   */
+  async patchTurnPayload(owner: OwnerKey, turnId: string, patch: ConversationPayloadShape)
+    : Promise<ConversationPayloadShape> {
+    const row = this.ownedRow(owner, turnId)
+    if (row === undefined) throw new AccessError(404, '轮次不存在或无权访问')
+    row.payload = { ...row.payload, ...patch }
+    return { ...row.payload }
+  }
+
+  /** 落一条结果记录；返回它的 id。`seq` 由本实例生成（真实实现是库生成的 IDENTITY）。 */
+  async appendTurnResult(owner: OwnerKey, input: AppendTurnResultInput): Promise<string> {
+    this.resultSeq += 1
+    const id = randomUUID()
+    this.results.push({
+      id,
+      turnId: input.turnId,
+      operationId: input.operationId,
+      seq: this.resultSeq,
+      createdAt: input.createdAt ?? Date.now(),
+      payload: { ...input.payload },
+      owner: { ...owner },
+    })
+    return id
+  }
+
+  /** 读某一轮的全部结果记录，按 `seq`（插入序）升序。 */
+  async turnResults(owner: OwnerKey, turnId: string): Promise<readonly TurnResultRecord[]> {
+    if (turnId === '') return []
+    return this.results
+      .filter(row => sameOwner(row.owner, owner) && row.turnId === turnId)
+      .sort((left, right) => left.seq - right.seq)
+      .map(({ owner: _owner, ...row }) => ({ ...row, payload: { ...row.payload } }))
+  }
+
+  /** 这个会话在等用户回什么；没有等待行时 `undefined`（取**最新**一条带问题的行）。 */
+  async pendingQuestion(owner: OwnerKey, conversationId: string): Promise<string | undefined> {
+    const waiting = [...this.rows.values()]
+      .filter(row => sameOwner(row.owner, owner) && row.conversationId === conversationId)
+      .sort((left, right) => right.createdAt - left.createdAt || (left.id < right.id ? 1 : left.id > right.id ? -1 : 0))
+    const question = waiting.find(row => typeof row.payload.question === 'string' && row.payload.question !== '')?.payload.question
+    return typeof question === 'string' ? question : undefined
+  }
+
+  /**
+   * 记下"在等什么"；`undefined` / 空串表示不再等待。
+   *
+   * 落一行 `request_id = ''` 的等待行（没有幂等语义，可以有多条），`status = 'waiting'`。
+   *
+   * ⚠️ 写入前**先清掉该会话上原有的 `question` 键**（与真实实现同一句 SQL 的等价物）。不清的话
+   * "此刻在等什么"就只能靠时间戳猜，而内存实现里两次等待**必然同毫秒** ⇒ 答回来的是任意一条。
+   */
+  async setPendingQuestion(owner: OwnerKey, conversationId: string, question: string | undefined): Promise<void> {
+    const rows = [...this.rows.values()]
+      .filter(row => sameOwner(row.owner, owner) && row.conversationId === conversationId)
+    for (const row of rows) delete row.payload.question
+    if (question === undefined || question === '') return
+    const id = randomUUID()
+    this.rows.set(id, {
+      id,
+      owner: { ...owner },
+      conversationId,
+      requestId: '',
+      inputHash: '',
+      status: 'waiting',
+      createdAt: Date.now(),
+      payload: { question },
+    })
+  }
+
+  // ---------------------------------------------------------------------
+  // 观测（测试用；不属于端口面）
+  // ---------------------------------------------------------------------
+
+  /** 全部行的原始快照（含端口读不到的 `inputHash`），按插入序。 */
+  get rawTurns(): readonly MemoryTurnRow[] {
+    return [...this.rows.values()].map(row => ({ ...row, payload: { ...row.payload } }))
+  }
+
+  // ---------------------------------------------------------------------
+  // 内部
+  // ---------------------------------------------------------------------
+
+  private rowByRequest(owner: OwnerKey, requestId: string): MemoryTurnRow | undefined {
+    if (requestId === '') return undefined
+    const id = this.requestIds.get(`${ownerKey(owner)}\u0000${requestId}`)
+    return id === undefined ? undefined : this.rows.get(id)
+  }
+
+  private ownedRow(owner: OwnerKey, turnId: string): MemoryTurnRow | undefined {
+    if (turnId === '') return undefined
+    const row = this.rows.get(turnId)
+    return row === undefined || !sameOwner(row.owner, owner) ? undefined : row
+  }
+
+  private shapeOf(row: MemoryTurnRow): TurnRecord {
+    return {
+      id: row.id,
+      conversationId: row.conversationId,
+      requestId: row.requestId,
+      inputHash: row.inputHash,
+      status: row.status,
+      createdAt: row.createdAt,
       payload: { ...row.payload },
     }
   }

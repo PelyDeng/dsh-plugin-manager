@@ -32,6 +32,7 @@ import type {
   ManagedConversationShape,
   OwnerKey,
   AppendTurnResultInput,
+  TurnRecord,
   TurnResultRecord,
 } from './ports.ts'
 
@@ -60,6 +61,43 @@ interface ConversationRow extends QueryResultRow {
   readonly state?: string
   /** JSONB：正常读回就是对象；`null` / 字符串分支只是形状漂移的兜底。 */
   readonly payload?: ConversationPayloadShape | string | null
+}
+
+/**
+ * `dsh_turns` 的一行（列名与 {@link TURN_COLUMNS} 逐字对应）。
+ *
+ * `createdAt` 是 `BIGINT` ⇒ pg 驱动读回**字符串**，与 `ConversationRow.updatedAt` 同一条口径。
+ */
+interface TurnRow extends QueryResultRow {
+  readonly id: string
+  readonly conversationId: string
+  readonly requestId: string
+  readonly inputHash: string
+  readonly status: string
+  readonly createdAt: string | number
+  readonly payload?: ConversationPayloadShape | string | null
+}
+
+/**
+ * 读 `dsh_turns` 的列清单：**只写一次**，`turnById` 与 `turnsOf` 共用。
+ *
+ * 两份列清单迟早漂移，而漂移的表现是"按 id 读得到、按会话读不到某个字段"这类只在一条路径上
+ * 出现的缺失——那种缺陷不会有测试变红。
+ */
+const TURN_COLUMNS = `id, conversation_id AS "conversationId", request_id AS "requestId",
+          input_hash AS "inputHash", status, created_at AS "createdAt", payload`
+
+/** 把 `dsh_turns` 的一行收敛成 {@link TurnRecord}（`created_at` 是 BIGINT ⇒ 显式 `Number`）。 */
+function toTurnRecord(row: TurnRow): TurnRecord {
+  return {
+    id: row.id,
+    conversationId: row.conversationId,
+    requestId: row.requestId,
+    inputHash: row.inputHash,
+    status: row.status,
+    createdAt: Number(row.createdAt),
+    payload: decodePayload(row.payload),
+  }
 }
 
 /**
@@ -406,16 +444,20 @@ export class PgTurns {
    * - 已有同 `requestId` 的行 → 比对 `inputHash`：相同 → `'duplicate'`；不同 → 409
    *   （同一次受理换了正文，必须报冲突而不是重跑——那会让带副作用的活干两遍）。
    */
-  async claim(owner: OwnerKey, conversationId: string, requestId: string, inputHash: string)
+  async claim(owner: OwnerKey, conversationId: string, requestId: string, inputHash: string,
+    payload?: ConversationPayloadShape)
     : Promise<'claimed' | 'duplicate'> {
     if (requestId === '') throw new AccessError(400, '轮次缺少幂等身份（requestId）')
     const now = Date.now()
     const inserted = await this.scoped.query<{ id: string }>(
       `INSERT INTO dsh_turns(id, agent_id, owner_namespace, owner_id, conversation_id, request_id, input_hash, status, created_at, payload)
-       VALUES($1,$2,$3,$4,$5,$6,$7,'claimed',$8,'{}'::jsonb)
+       VALUES($1,$2,$3,$4,$5,$6,$7,'claimed',$8,$9::jsonb)
        ON CONFLICT (agent_id, owner_namespace, owner_id, request_id) WHERE request_id <> '' DO NOTHING
        RETURNING id`,
-      [randomUUID(), this.agentId, owner.namespace, owner.userId, conversationId, requestId, inputHash, now],
+      [randomUUID(), this.agentId, owner.namespace, owner.userId, conversationId, requestId, inputHash, now,
+        // `payload` 只在**首次建行**时落：`DO NOTHING` 命中既有行时这一列原样保留
+        // （与 `ConversationPort.create` 的 `initial` 同一条口径）。
+        JSON.stringify(payload ?? {})],
     )
     if (inserted.length > 0) return 'claimed'
     const existing = await this.scoped.query<{ inputHash: string }>(
@@ -473,6 +515,59 @@ export class PgTurns {
       [this.agentId, owner.namespace, owner.userId, requestId],
     )
     return rows[0]?.id
+  }
+
+  /**
+   * 按**行 id** 读一轮；没有这一行（或不属于本 owner）时 `undefined`。
+   *
+   * 与 `turnId` 配对：那个用幂等键换行 id，这个用行 id 换整行。业务据此读回自己写在
+   * `payload` 里的字段（含**业务状态**——它只住 `payload.status`）。
+   */
+  async turnById(owner: OwnerKey, turnId: string): Promise<TurnRecord | undefined> {
+    if (turnId === '') return undefined
+    const rows = await this.scoped.query<TurnRow>(
+      `SELECT ${TURN_COLUMNS} FROM dsh_turns
+        WHERE id = $1 AND agent_id = $2 AND owner_namespace = $3 AND owner_id = $4`,
+      [turnId, this.agentId, owner.namespace, owner.userId],
+    )
+    const row = rows[0]
+    return row === undefined ? undefined : toTurnRecord(row)
+  }
+
+  /**
+   * 读一个会话下的全部轮次，按 `created_at, id` 升序。
+   *
+   * 包含 `request_id = ''` 的**等待行**（调用方按 `requestId === ''` 自己区分）。
+   * 排序说明见端口注释：`dsh_turns` 没有单调列，**同毫秒退化成按 `id` 排**。
+   */
+  async turnsOf(owner: OwnerKey, conversationId: string): Promise<readonly TurnRecord[]> {
+    const rows = await this.scoped.query<TurnRow>(
+      `SELECT ${TURN_COLUMNS} FROM dsh_turns
+        WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND conversation_id = $4
+        ORDER BY created_at, id`,
+      [this.agentId, owner.namespace, owner.userId, conversationId],
+    )
+    return rows.map(toTurnRecord)
+  }
+
+  /**
+   * 合并写一轮的业务载荷（**浅合并**，只覆盖给出的键）；返回合并后落下的那一层。
+   *
+   * 与会话的 `patchPayload` 同一套判定：**行不存在或不属于本 owner ⇒ 404**。
+   * `RETURNING payload` 是必须的——返回值只能来自 PG 实际落下的那一层，在 JS 里
+   * `{...read, ...patch}` 会与并发写者打架。
+   */
+  async patchTurnPayload(owner: OwnerKey, turnId: string, patch: ConversationPayloadShape)
+    : Promise<ConversationPayloadShape> {
+    const rows = await this.scoped.query<{ payload: ConversationPayloadShape | string | null }>(
+      `UPDATE dsh_turns SET payload = payload || $1::jsonb
+        WHERE id = $2 AND agent_id = $3 AND owner_namespace = $4 AND owner_id = $5
+        RETURNING payload`,
+      [JSON.stringify(patch), turnId, this.agentId, owner.namespace, owner.userId],
+    )
+    const row = rows[0]
+    if (row === undefined) throw new AccessError(404, '轮次不存在或无权访问')
+    return decodePayload(row.payload)
   }
 
   /** 落一条结果记录；返回它的 id。`seq` 由库生成（`GENERATED ALWAYS AS IDENTITY`），不写。 */
@@ -545,17 +640,27 @@ export class PgTurns {
    * 落一行 `request_id = ''` 的 turn：它没有幂等语义（部分唯一索引排除空串，所以可以有多条），
    * 只承载"这一轮在等什么"。**不能只留在内存**——协调侧要求重启后仍能恢复等待上下文，
    * 否则 `prepareReply` 会直接报 `waiting_expired`，子任务永远停在 `waiting_user`。
+   *
+   * ⚠️ 写入前**先清掉该会话上原有的 `question` 键**（与传 `undefined` 时同一句 SQL）。不清的话
+   * "此刻在等什么"就靠 `ORDER BY created_at DESC, id DESC` 猜——`created_at` 是**毫秒**，两次等待
+   * 落在同一毫秒时退化成按 **UUID** 排，答回来的是**任意一条**（测试里几乎必然同毫秒）。
+   * 唯一真正的写入口就在 `participant.ts`，它的意图本来就是"一轮只有一个待答问题"
+   * （非 `waiting` 的那一轮传 `undefined`），这里把这个不变量落成结构而不是靠时间戳运气。
    */
   async setPendingQuestion(owner: OwnerKey, conversationId: string, question: string | undefined): Promise<void> {
-    if (question === undefined || question === '') {
+    const clear = async (): Promise<void> => {
       await this.scoped.query(
         `UPDATE dsh_turns SET payload = payload - 'question'
           WHERE agent_id = $1 AND owner_namespace = $2 AND owner_id = $3 AND conversation_id = $4
             AND payload ? 'question'`,
         [this.agentId, owner.namespace, owner.userId, conversationId],
       )
+    }
+    if (question === undefined || question === '') {
+      await clear()
       return
     }
+    await clear()
     await this.scoped.query(
       `INSERT INTO dsh_turns(id, agent_id, owner_namespace, owner_id, conversation_id, request_id, input_hash, status, created_at, payload)
        VALUES($1,$2,$3,$4,$5,'','','waiting',$6,jsonb_build_object('question', $7::text))`,
