@@ -211,9 +211,15 @@ provider 时不会自动生效。
 
 ### 初始化结构
 
-对空库执行一次 `agents/blog/migrations/postgres/0001_init.sql`（迁移工具会自动完成，也可以
-`psql -f` 手动执行）。版本行随建表写进 `blog_schema_version`；插件启动只核验版本，缺表或
-版本不符即拒绝读写，不自动建表、不自动改版本。
+生产库由 `private-deploy/db/create.mjs` 按 `private-deploy/db/0001_init.sql` **一次建出**
+（15 张表 + 20 个显式 `CREATE INDEX`，含约束隐式共 39 个），版本行写进 **`dsh_schema_versions`**
+的四行（`butler` / `blog` / `closedoff` / `runtime` = 1）。插件启动只核验版本，缺表或版本不符即
+拒绝读写，不自动建表、不自动改版本。
+
+> ⚠️ **本包内的 `agents/blog/migrations/postgres/0001_init.sql` 是上一代 DDL**（`owner` + `data TEXT`
+> 旧列 + `blog_schema_version` 版本表），**不再被生产使用**，只为随包保留的迁移工具而留。
+> 别拿它当权威：生产形状以 `private-deploy/db/0001_init.sql` 为准。测试也必须按后者建 schema，
+> 否则"实现与生产 DDL 漂移"在测试里**永远发现不了**（`agents/blog/tests/pg-smoke.test.mjs` 已经改成读它）。
 
 ### 存量迁移（SQLite → PostgreSQL）
 

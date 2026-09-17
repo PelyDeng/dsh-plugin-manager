@@ -50,6 +50,12 @@ AI 任务由官方 Jobs controller 管理，并绑定实际执行任务的 Agent
 
 `pnpm test` 运行可在已发布开发依赖上执行的行为测试；`pnpm test:host` 必须在锁定 DSH 0.1.6-alpha.1 运行环境中运行，覆盖真实公开 SDK 的历史/Token 投影及受保护 HTTP 路由。HTTP 测试使用隔离数据与身份替身，不等于正式浏览器或真实模型验收。
 
+> ⚠️ **`test:host` 里有三条用例要求真 PostgreSQL**（会话、草稿、附件、备份授权都只有 PG 一种后端）：
+> 设 `AGENTS_GROUP_TEST_PG_DSN`（**库名必须以 `_test` 结尾**，夹具会 `DROP SCHEMA public CASCADE` 重建）
+> 时它们真的跑；不设时是 **skipped 并写明原因** —— **跳过不等于通过**，报告里要按 skipped 计数。
+> ⚠️ 该库因此**不能与 `pnpm test:pg` 并发跑**（后者同样清 schema）。
+> 另有两条用例要求宿主离线包 `@deepseek-ai/cordis`，缺包时**保持红**（不跳过）。
+
 联网查证复用宿主 `web`，需要挂载一个明确的搜索 provider 和抓取 provider。多个未指定默认 provider 的配置会报歧义，不能当作已有联网能力。公开网页抓取应使用官方限制私网地址和重定向的 `web-fetch-http`。来源记录区分搜索摘要和实际抓取原文。
 
 ## 手机与桌面工作台
