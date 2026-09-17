@@ -141,6 +141,47 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
     } finally { await db.close() }
   })
 
+  it('syncTitle 的三道守卫：未发布 / 已删除 / 有围栏标记的会话都不写标题', async () => {
+    // 守卫是 `ready = TRUE AND deleted_at IS NULL AND removal_state = ''`，此前**零覆盖**：
+    // 既有"标题 outbox"用例覆盖的是"自动标题不覆盖手动标题"，删掉这三道里的任意一道都不会有
+    // 用例变红。三道各自对应一个真实后果：给未发布的预留会话起标题会让它在侧栏提前可见；
+    // 给已删除或待移除的会话改标题，会让移除围栏看到一条还在变的记录。
+    const { db } = await newFacade()
+    const titleOf = async (id: string): Promise<string> =>
+      (await admin.query<{ title: string }>('SELECT title FROM dsh_conversations WHERE id = $1', [id])).rows[0]?.title ?? '<missing>'
+    try {
+      // ① 未发布（预留段，`ready = FALSE`）⇒ 写不进去。
+      const reserved = conversationId()
+      await db.conversations.create(owner, reserved, '')
+      await db.conversations.syncTitle(owner, reserved, '预留段的标题', 'automatic')
+      expect(await titleOf(reserved)).toBe('')
+
+      // ② 已发布但已删除（`deleted_at` 非空）⇒ 写不进去。
+      const deleted = conversationId()
+      await db.conversations.create(owner, deleted, '')
+      await db.conversations.publish(owner, deleted)
+      await admin.query('UPDATE dsh_conversations SET deleted_at = $1 WHERE id = $2', [Date.now(), deleted])
+      await db.conversations.syncTitle(owner, deleted, '删除后的标题', 'automatic')
+      expect(await titleOf(deleted)).toBe('')
+
+      // ③ 已发布但有围栏标记（`removal_state` 非空）⇒ 写不进去。
+      const fenced = conversationId()
+      await db.conversations.create(owner, fenced, '')
+      await db.conversations.publish(owner, fenced)
+      await admin.query("UPDATE dsh_conversations SET removal_state = 'pending' WHERE id = $1", [fenced])
+      await db.conversations.syncTitle(owner, fenced, '围栏里的标题', 'automatic')
+      expect(await titleOf(fenced)).toBe('')
+
+      // 反向对照：同一条调用在**已发布、未删除、无围栏**的会话上必须真的写进去。少了这一条，
+      // 上面三个"没写进去"可能只是整条路径没通（那就是三个天然假绿）。
+      const healthy = conversationId()
+      await db.conversations.create(owner, healthy, '')
+      await db.conversations.publish(owner, healthy)
+      await db.conversations.syncTitle(owner, healthy, '正常标题', 'automatic')
+      expect(await titleOf(healthy)).toBe('正常标题')
+    } finally { await db.close() }
+  })
+
   it('同步 record：他人 actor 与「不是本 Agent 的行」都抛同一个 404', async () => {
     const { db } = await newFacade()
     const other = await newFacade('blog')

@@ -17,11 +17,10 @@
  * | `updated_at` 的来源 | 建会话、发布、以及"受理一条用户消息"等路径分别维护（`touch` 语义） | 只在 `create` / `publish` 时推进；**没有** `touch` 这一步 |
  * | 宿主忙碌集合 | 调用方把 `hostBusyConversationIds(ctx)` 合进 `scope.busy` 后再传进来 | 完全依赖调用方传入的 `scope`；它自己看不到宿主 |
  * | 业务表 / 事务 / 健康探针 | `query()` / `transaction()` / outbox 积压深度 | **无** |
- * | 标题来源映射 | `create` 收到 `{ title: '' }` 时被记成 `manual`（`postgres.ts:106`：`initial?.title === undefined ? 'automatic' : 'manual'`），于是首条用户消息的自动标题再也写不进去 | 按**空标题 = `automatic`** 实现（见下面的差异说明） |
- * | 列表过滤 | 现版 `postgres.ts` 的 `list` **没有**过滤 `ready = false` | 过滤掉未发布的预留行（`conversation.ts:383` 的"发布段"注释要求"`ready` 翻真之前这个会话在侧栏不可见"） |
  *
- * 最后两条是**替身与 P2 现版实现故意不一致**的地方，因为那两处现版实现与本仓自己的约定相矛盾
- * （差异与复现方式已随 P1 验收报告一起上报，不要在没核对的情况下把替身改成"跟现版一样"）。
+ * 上表只列**真实差异**。P1 时期这里还记过两条"替身与现版实现故意不一致"的地方（`create` 收到
+ * `{ title: '' }` 被记成 `manual`、`list` 不过滤 `ready = false`）——两处真实现都已修正
+ * （D4 与 P2 的 `ready = TRUE`），差异消失，替身与真实现现在按同一口径工作。
  *
  * ## 与真实实现**逐条对齐**的部分（对齐是刻意的，不是巧合）
  *

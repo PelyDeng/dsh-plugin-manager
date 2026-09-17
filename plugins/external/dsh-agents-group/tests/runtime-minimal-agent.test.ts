@@ -495,9 +495,8 @@ describe('P1 判据①：最小 Agent 跑通一轮', () => {
     expect(f.restrictionsOf(id)).toEqual([['dsh_tool_read']])
     // 模型路由：默认选择 + 宿主認可的 reasoningEffort 一起进 create 选项。
     expect(f.agentOptionsOf(id)).toMatchObject({ ...DEFAULT_MODEL, reasoningEffort: 'medium' })
-    // 首条用户消息压成标题（自动来源）。
-    // ⚠️ P2 现版的 `postgres.ts:106` 会把 `{ title: '' }` 记成 `manual`，这条断言在真实实现上会红，
-    //    已作为发现上报；替身按"空标题 = automatic"实现（见替身文件头的差异清单）。
+    // 首条用户消息压成标题（自动来源）。"空标题 = automatic" 是 D4 的修复口径（`a5b580f`）：
+    // 真实现与这个替身在这里已经一致，真 PG 回归在 `storage-contract.test.ts` 的 D4 用例里守着。
     expect(f.port.rawOf(id)).toMatchObject({ title: '跑一轮最小会话', titleSource: 'automatic' })
 
     await f.answer(id, '最小 Agent 已跑通一轮')
