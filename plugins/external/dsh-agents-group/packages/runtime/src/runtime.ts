@@ -161,7 +161,9 @@ export async function createAgentRuntime(input: CreateAgentRuntimeInput): Promis
     installTitleSink(titleRouter)
   }
 
-  const host: LifecycleHost = { ctx, definition, access, store: db.conversations, config, allowedTools }
+  // `storage` 一并交给生命周期：回合钩子（`onTurnStart` / `onTurnFinish`）要把它给业务，
+  // 而业务在那个时点只能靠它读自己的表（`definition` 是每 Agent 一份，拿不到每请求的东西）。
+  const host: LifecycleHost = { ctx, definition, access, store: db.conversations, config, allowedTools, storage }
   const lifecycle = new ConversationLifecycle(host)
   const runtime: AgentRuntime = { ...host, lifecycle }
   const participant = createParticipant({ definition, runtime, storage, access, config })

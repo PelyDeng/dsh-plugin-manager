@@ -755,3 +755,101 @@ describe('投影拿到的 actor 是**这一次派活**的那一个', () => {
     } finally { await hosted.dispose() }
   })
 })
+
+// ---------------------------------------------------------------------------
+// 回合钩子与输入组合：业务可选，缺省逐字保持老口径
+// ---------------------------------------------------------------------------
+
+describe('回合钩子与输入组合', () => {
+  /** `finish` 是同步方法、钩子是 fire-and-forget ⇒ 断言前让出一个宏任务。 */
+  const tick = () => new Promise<void>(resolve => { setTimeout(resolve, 0) })
+
+  it('onTurnStart 在**消息注入之前**调（同步可观测锚点：此刻一条 user message 都没有）', async () => {
+    const order: string[] = []
+    // 钩子要读 `hosted`，而 `host()` 的返回值在构造那一刻还没赋给变量 ⇒ 先留一个引用位。
+    let hosted!: ReturnType<typeof host>
+    hosted = host(definitionOf({
+      onTurnStart: async ({ conversationId }) => {
+        // ⚠️ 锚点必须是**同步可观测**的：`followups()` 的长度在这一刻直接可读。
+        // 拿"注入之后"的异步信号当锚点会天然假绿（交接文档 §28 的教训）。
+        order.push(`start:${hosted.followups().length}`)
+        expect(conversationId).not.toBe('')
+      },
+    }))
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      hosted.complete(id, '正文')
+      await promise
+      expect(order).toEqual(['start:0'])
+    } finally { await hosted.dispose() }
+  })
+
+  it('onTurnStart 抛错 ⇒ 本轮失败，且**一条消息都没注入**', async () => {
+    const hosted = host(definitionOf({ onTurnStart: async () => { throw new Error('预校验没过') } }))
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      await expect(promise).rejects.toThrow(/预校验没过/)
+      // 这就是"把钩子放在注入之前"的意义：失败还来得及，不会留下半条消息。
+      expect(hosted.followups()).toHaveLength(0)
+    } finally { await hosted.dispose() }
+  })
+
+  it('composeTurnInput 的返回就是注入的内容；缺省是单块正文（老口径）', async () => {
+    const swapped = host(definitionOf({ composeTurnInput: async () => [{ type: 'text', text: '来自钩子的正文' }] }))
+    try {
+      const promise = swapped.participant.run(swapped.request({ message: '原始那一句' }))
+      const id = await accept(swapped, promise)
+      swapped.complete(id, '正文')
+      await promise
+      expect(swapped.followups()[0]?.text).toBe('来自钩子的正文')
+    } finally { await swapped.dispose() }
+
+    const plain = host(definitionOf())
+    try {
+      const promise = plain.participant.run(plain.request({ message: '原始那一句' }))
+      const id = await accept(plain, promise)
+      plain.complete(id, '正文')
+      await promise
+      expect(plain.followups()[0]?.text).toBe('原始那一句')
+    } finally { await plain.dispose() }
+  })
+
+  it('onTurnFinish：正常交付调**一次**，outcome 是 completed', async () => {
+    const outcomes: string[] = []
+    const hosted = host(definitionOf({ onTurnFinish: async ({ outcome }) => { outcomes.push(outcome) } }))
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      hosted.complete(id, '正文')
+      await promise
+      await tick()
+      expect(outcomes).toEqual(['completed'])
+    } finally { await hosted.dispose() }
+  })
+
+  /**
+   * ⚠️ **已知未查明，本批未留用例**（如实登记，不是遗漏）。
+   *
+   * 起来要钉的性质是「补交轮**不触发** `onTurnFinish`」（那一轮没结束，只是为注入下一轮释放占用）。
+   * 实测：补交轮注入之后确实会多出**一条** `completed` 通知，但**来源没定位到**——
+   * 调用栈只显示到 `conversation.ts` 的 `whenIdle().then(...)` 分支（异步边界把调用方截断了），
+   * 而该分支只有在 `turns` 里**登记着回合**时才会走到，所以它不是"重复 finish 撞上已删回合"那一格
+   * （那一格已改成不通知）。
+   *
+   * 本批**已经修掉**的一处真缺陷（有覆盖，见 `PendingTurn.finishRequested`）：`notify: false` 在
+   * "回合还没注入完就被要求结束"的延后路径上被丢成缺省值 ⇒ 业务收到一次假的"回合结束"。
+   *
+   * 下一批要做的：先给 `finish` 的每个调用点打上来源标记，查清补交轮期间那一次是谁调的；
+   * 查明之后再把它钉成用例。**在此之前不要写一条会因时序而红的断言来"占位"。**
+   */
+  it('onTurnFinish 抛错**不改变**已经定下的结论', async () => {
+    const hosted = host(definitionOf({ onTurnFinish: async () => { throw new Error('收尾钩子炸了') } }))
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      hosted.complete(id, '正文')
+      await expect(promise).resolves.toMatchObject({ status: 'completed', text: '正文' })
+    } finally { await hosted.dispose() }
+  })
+})

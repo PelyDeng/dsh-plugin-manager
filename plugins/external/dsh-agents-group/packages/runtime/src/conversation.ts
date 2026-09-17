@@ -31,8 +31,8 @@ import {
   type ConversationModel,
 } from '@dsh-plugin-manager/plugin-kit'
 import { conversationModelCatalog, requestedConversationModel, selectConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
-import type { AgentDefinition, TurnHistory, TurnMessage } from './definition.ts'
-import type { ConversationPageShape, ConversationPort, ConversationQueryShape, OwnerKey } from './storage/ports.ts'
+import type { AgentDefinition, TurnHistory, TurnMessage, TurnOutcome } from './definition.ts'
+import type { AgentStoragePort, ConversationPageShape, ConversationPort, ConversationQueryShape, OwnerKey } from './storage/ports.ts'
 
 /**
  * 各 Agent 的会话前缀。**不可改。**
@@ -79,7 +79,20 @@ export interface Conversation {
   active: boolean
 }
 
-interface PendingTurn { pending: boolean; dispatching: boolean; cancelled: boolean; finishRequested: boolean }
+interface PendingTurn {
+  pending: boolean
+  dispatching: boolean
+  cancelled: boolean
+  /**
+   * 回合被要求结束时记下的**通知参数**——**不是布尔**。
+   *
+   * ⚠️ 存参数而不是 `true`：这条路径是"回合还没注入完就被要求结束"，`finish` 会**提前返回**，真正的
+   * 通知发生在随后的 `followup` 收尾里（`if (turn.finishRequested) this.finish(...)`）。若那里用
+   * 缺省值，调用方明确要求的 `notify: false`（"只是为注入下一轮释放占用"）就被丢掉，业务会收到一次
+   * **假的**"回合结束"。实测抓到过：补交轮注入之后多出一条 `completed`。
+   */
+  finishRequested: false | { readonly outcome: TurnOutcome; readonly notify: boolean }
+}
 
 /** 运行时可注入的配置。 */
 export interface RuntimeConfig {
@@ -130,6 +143,13 @@ export interface LifecycleHost {
   readonly access: Access
   readonly store: ConversationPort
   readonly config: RuntimeConfig
+  /**
+   * 业务自己的存储门面；只用于喂给回合钩子（`onTurnStart` / `onTurnFinish`）。
+   *
+   * 可选：不注入时钩子拿到 `undefined`（它们本来就要处理这种情形，见 `AgentToolContext.storage`
+   * 的同一约定）。会话机制本身**不用**它——会话走 `store`。
+   */
+  readonly storage?: AgentStoragePort | undefined
   /** 这个 Agent 能用的工具名（本分类 + 通用集），在 agent 作用域内应用。 */
   readonly allowedTools: () => readonly string[]
 }
@@ -449,7 +469,7 @@ export class ConversationLifecycle {
     if (input === undefined) return
     this.assertCurrent(conversation, actor)
     if (conversation.active) throw new AccessError(409, '智能体正在回答上一条问题')
-    const turn = { pending: true, dispatching: false, cancelled: false, finishRequested: false }
+    const turn: PendingTurn = { pending: true, dispatching: false, cancelled: false, finishRequested: false }
     this.turns.set(conversation, turn)
     conversation.active = true
     try {
@@ -483,7 +503,7 @@ export class ConversationLifecycle {
   async followup(conversation: Conversation, text: string, actor: Actor): Promise<void> {
     this.assertCurrent(conversation, actor)
     if (conversation.active) throw new AccessError(409, '智能体正在回答上一条问题')
-    const turn = { pending: true, dispatching: false, cancelled: false, finishRequested: false }
+    const turn: PendingTurn = { pending: true, dispatching: false, cancelled: false, finishRequested: false }
     this.turns.set(conversation, turn)
     const held = this.heldTurns.get(conversation.id)
     if (held) held.turn = turn
@@ -494,10 +514,42 @@ export class ConversationLifecycle {
       await requestedConversationModel(this.host.ctx, await this.effectiveModel(conversation))
       this.assertCurrent(conversation, actor)
       if (turn.cancelled || this.turns.get(conversation) !== turn) throw new AccessError(409, '本轮操作已停止')
+      /**
+       * 回合开始时的业务钩子，**在消息注入之前**。
+       *
+       * 位置是刻意的：放这里失败还来得及（消息还没进去，本轮按失败收尾即可）；放到注入之后就只剩
+       * "收拾残局"——业务会看到一条已经进了会话、却没能完成记账的消息。
+       */
+      /**
+       * 回合开始时的业务钩子，**在消息注入之前**。
+       *
+       * 位置是刻意的：放这里失败还来得及（消息还没进去，本轮按失败收尾即可）；放到注入之后就只剩
+       * "收拾残局"——业务会看到一条已经进了会话、却没能完成记账的消息。
+       */
+      const startHook = this.host.definition.onTurnStart
+      if (startHook !== undefined) {
+        await startHook({
+          conversationId: conversation.id,
+          actor,
+          agent: conversation.handle.agent,
+          storage: this.host.storage,
+        })
+        // 钩子是异步的：期间可能被取消/顶掉，注入前要再核一次（与上面 `requestedConversationModel`
+        // 之后那次同一理由）。
+        this.assertCurrent(conversation, actor)
+        if (turn.cancelled || this.turns.get(conversation) !== turn) throw new AccessError(409, '本轮操作已停止')
+      }
+      /**
+       * 本轮的内容块：业务可以组合多块（附件文本 / 图片），缺省**逐字**保持老口径的单块正文。
+       */
+      const compose = this.host.definition.composeTurnInput
+      const content: readonly unknown[] = compose === undefined
+        ? [{ type: 'text', text }]
+        : await compose({ text, conversationId: conversation.id, actor })
       turn.pending = false
       turn.dispatching = true
       try {
-        conversation.handle.agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
+        conversation.handle.agent.followup(createUserMessage({ content: content as never, source: { kind: 'user' } }))
       } finally { turn.dispatching = false }
       // 首条用户消息决定标题（官方标题随后经 TitleSink 覆盖；自动标题不覆盖手动标题）。
       await this.host.store.syncTitle(this.ownerOf(actor), conversation.id, firstLine(text), 'automatic')
@@ -511,7 +563,10 @@ export class ConversationLifecycle {
        * 中间隔了模型目录解析与发布检查两次 await，取当下会让时间戳晚于真实受理点。
        */
       await this.host.store.touch(this.ownerOf(actor), conversation.id, conversation.lastUsedAt)
-      if (turn.finishRequested) this.finish(conversation.id)
+      // 延后收尾：把要求结束时记下的**通知参数**原样带上（`notify` 丢成缺省会给业务一次假通知）。
+      if (turn.finishRequested) {
+        this.finish(conversation.id, turn.finishRequested.outcome, { notify: turn.finishRequested.notify })
+      }
     } catch (error: unknown) {
       if (this.turns.get(conversation) === turn) {
         if (turn.pending) {
@@ -574,13 +629,38 @@ export class ConversationLifecycle {
     }
   }
 
-  /** 把一个结束或断开的回合标成可被 LRU 驱逐。 */
-  finish(id: string): void {
+  /**
+   * 把一个结束或断开的回合标成可被 LRU 驱逐。
+   *
+   * `outcome` 只喂给 {@link AgentDefinition.onTurnFinish}：**协作入口知道**这一轮是正常结束、被取消
+   * 还是失败，所以由它传；页面入口与其它调用方只做"放掉占用"，不传时按 `'completed'` 处理。
+   *
+   * ⚠️ 若这一轮还在 `pending`/`dispatching`（回合已被要求结束、但消息还没注入完），这里只能把
+   * **`outcome` 与 `notify` 一起记进 `turn.finishRequested`**，由随后的 `followup` 收尾原样带上。
+   * 早先这里只记一个布尔，`notify: false`（"只是为注入下一轮释放占用"）会在那条路径上被丢成缺省值
+   * ⇒ 业务收到一次**假的**"回合结束"（实测抓到过，见 `PendingTurn.finishRequested` 的注释）。
+   */
+  finish(id: string, outcome: TurnOutcome = 'completed', options: { readonly notify?: boolean } = {}): void {
     if (this.heldTurns.has(id)) return
     const conversation = this.conversations.get(id)
     if (conversation === undefined) return
+    /**
+     * ⚠️ `notify: false` 的用处：这个方法在协作入口里被**两种语义**共用——①「这一轮结束了」；
+     * ②「为注入下一轮而释放占用」（补交轮 / 自修正轮之间）。只有 ① 该触发 `onTurnFinish`；
+     * ② 若也触发，业务每注入一轮就会收到一次假的"回合结束"（而这一轮其实还在继续），
+     * 它按那个信号去解除绑定、写终态，就会把还在跑的回合记成已结束。
+     */
+    const notify = options.notify ?? true
     const turn = this.turns.get(conversation)
-    if (turn?.pending || turn?.dispatching) { turn.finishRequested = true; return }
+    if (turn?.pending || turn?.dispatching) { turn.finishRequested = { outcome, notify }; return }
+    /**
+     * `!turn` ⇒ **这个会话上没有登记中的回合** ⇒ 没有"结束"可通知。
+     *
+     * 这一格是两个来源共用的：① 从没 `followup` 过的会话；② **重复的 `finish` 调用**（最典型的是
+     * `turn/end` 的监听器在协作入口已经收尾之后再调一次）。若在这里也通知，业务会收到一次**假的**
+     * "回合结束"——它据此解除绑定、写终态，而那一轮其实早就结束了（或压根没开始）。实测抓到过：
+     * 补交轮注入之后多出一条 `completed`。
+     */
     if (!turn) { conversation.active = false; return }
     // 同步 followup 可能发出 turn/end；必须等它返回后再取得当前 driver 的空闲承诺。
     void conversation.handle.agent.whenIdle().then(() => {
@@ -588,7 +668,36 @@ export class ConversationLifecycle {
       this.turns.delete(conversation)
       conversation.active = false
       conversation.lastUsedAt = Date.now()
+      if (notify) this.notifyTurnFinish(conversation, outcome)
     }, () => { /* 宿主未确认空闲时保留占用。 */ })
+  }
+
+  /**
+   * 通知业务"这一轮结束了"。
+   *
+   * ⚠️ **不等待、也不让业务的失败改变结论**：收到终态之后翻案，会让协调方按前一个结论记过的账
+   * 对不上（协调方可能已经据此派了下一步）。所以这里只记日志。
+   */
+  private notifyTurnFinish(conversation: Conversation, outcome: TurnOutcome): void {
+    const hook = this.host.definition.onTurnFinish
+    if (hook === undefined) return
+    // ⚠️ 拿不到 actor 就**不调**：`identities` 只在 `followup` 里写入，所以"没有 actor"恰好等价于
+    // "这一轮**从来没注入过消息**"——那不是一次真正的回合，没有"结束"可通知。造一个假 actor 去调，
+    // 会让业务按一个不存在的身份记账。
+    const actor = this.identities.get(conversation.handle.agent)
+    if (actor === undefined) return
+    const notify = async (): Promise<void> => {
+      await hook({
+        conversationId: conversation.id,
+        actor,
+        agent: conversation.handle.agent,
+        storage: this.host.storage,
+        outcome,
+      })
+    }
+    void notify().catch((error: unknown) => {
+      console.warn(`[agents-group/runtime] ${this.host.definition.id} 的 onTurnFinish 抛错（不改变已定结论）：`, error)
+    })
   }
 
   /** 取消某个业务会话上正在进行的操作。 */

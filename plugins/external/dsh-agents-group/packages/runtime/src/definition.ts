@@ -24,6 +24,7 @@
  * 四处重复查询同一份数据。
  */
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type Schema from '@deepseek-ai/schemastery'
 import type { ToolDescriptor, AgentSelfCheck, Actor } from '@dsh-plugin-manager/plugin-kit'
@@ -216,6 +217,42 @@ export interface ReasoningProjectionContext {
   readonly releaseTail: boolean
 }
 
+/** 一次回合的结局；只在 {@link AgentDefinition.onTurnFinish} 上出现。 */
+export type TurnOutcome = 'completed' | 'cancelled' | 'failed'
+
+/**
+ * 回合**起止时点**给业务的上下文。
+ *
+ * 为什么需要这两个时点：`projectResult` / `judge` / `stageText` 都挂在"回合已经结束、要交回什么"
+ * 这一点上，而有些业务在**回合开始时**就要做事（把宿主任务系统的句柄与本轮绑起来、落一条"本轮
+ * 已受理"的镜像、预校验模型能力），在**回合结束时**还要做另一件（把最终状态写回自己的表、解除绑定）。
+ *
+ * ⚠️ 运行时**不知道**业务在这两个时点做什么，它只保证"**时点准确、拿到本轮的身份**"。例如 blog 会在
+ * 这里绑宿主的任务句柄（`ctx.jobs`）——那是**业务语义**，不是运行时的概念，所以这个上下文里
+ * **没有**任何"任务 / 作业"字段：业务用闭包拿自己的东西，只从运行时取**它才知道的东西**。
+ */
+export interface TurnHookContext {
+  readonly conversationId: string
+  readonly actor: Actor
+  /** 本轮的 agent 句柄：交给宿主任务系统、或读会话事件时用它。 */
+  readonly agent: Agent
+  /** 业务自己的存储门面；未注入时为 `undefined`。 */
+  readonly storage: AgentStoragePort | undefined
+}
+
+/**
+ * 本轮要送进会话的内容。
+ *
+ * 缺省时运行时自己造"单块正文"——这与老口径逐字一致。业务要送**附件块 / 图片块**、或要按本轮
+ * 状态决定送什么时，覆盖 {@link AgentDefinition.composeTurnInput}。
+ */
+export interface TurnInput {
+  /** 调用方给的那句话（已 `trim`）。 */
+  readonly text: string
+  readonly conversationId: string
+  readonly actor: Actor
+}
+
 /**
  * 一个 Agent 的全部业务声明。
  *
@@ -324,6 +361,33 @@ export interface AgentDefinition {
 
   /** 会话标题的来源与更新；运行时复用 kit 的 `registerConversationTitles`。 */
   readonly title?: (history: TurnHistory) => string | undefined
+
+  // —— 回合的起止时点与输入组合（业务可选，缺省行为与老口径逐字一致）——
+
+  /**
+   * **回合开始时**（用户消息注入**之前**）调一次，见 {@link TurnHookContext}。
+   *
+   * 抛错 ⇒ 这一轮按失败收尾（不会把消息注入进去）。这就是"回合开始时的业务记账/预校验"该在的位置：
+   * 放在这里失败还来得及，放在消息注入之后就只剩"收拾残局"。
+   */
+  readonly onTurnStart?: (ctx: TurnHookContext) => void | Promise<void>
+
+  /**
+   * **回合结束时**调一次（成功 / 取消 / 失败**三条路都会调**），见 {@link TurnHookContext}。
+   *
+   * ⚠️ **它的失败不改变已经定下的结论**：收尾路径上的钩子如果能把回合改成失败，就等于给业务一个
+   * "在终态之后翻案"的口子，协调方可能已经按前一个结论记过账了。所以抛错只记日志。
+   * ⚠️ 调用是**不等待**的（`finish` 是同步方法）：业务要保证自己做过的事不依赖它完成。
+   */
+  readonly onTurnFinish?: (ctx: TurnHookContext & { readonly outcome: TurnOutcome }) => void | Promise<void>
+
+  /**
+   * 组合本轮要送进会话的**内容块**，见 {@link TurnInput}。
+   *
+   * 缺省 = `[{ type: 'text', text }]`（与老口径逐字一致）。业务要送附件块 / 图片块时覆盖它。
+   * 抛错 ⇒ 这一轮按失败收尾（与 {@link onTurnStart} 同理，此时消息还没注入）。
+   */
+  readonly composeTurnInput?: (input: TurnInput) => Promise<readonly unknown[]> | readonly unknown[]
 
   // —— 存储与配置 ——
 

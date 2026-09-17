@@ -331,7 +331,11 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
           // 同会话的 `run` 与 `reply` 此后一律 409「正在回答上一条问题」，而 `reserveSlot`
           // 只驱逐 `!active` 的会话 ⇒ 它同时永久占住一个 `maxActiveConversations` 槽位。
           // **实测**：单轮交付后 `isBusy=false`，走两轮的交付 `isBusy=true` 且同会话下一轮 409。
-          lifecycle.finish(opened.id)
+          //
+          // `outcome` 只喂给业务的 `onTurnFinish`：**只有协作入口知道**这一轮是正常结束、被取消
+          // 还是失败（页面入口与其它 `finish` 调用方只做"放掉占用"，没有失败的语义）。三个标志
+          // 里 `failed` 优先——一次 `fail` 之后再被取消，结论仍然是"失败"。
+          lifecycle.finish(opened.id, failed ? 'failed' : cancelled ? 'cancelled' : 'completed')
         }
         const fail = (error: unknown) => {
           if (finished || failed) return
@@ -614,7 +618,10 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
               // 能过、**"补交两次以上"就会 409**——本轮的多轮自修正用例正是这么抓到的。
               releaseTurn()
               releaseTurn = () => {}
-              lifecycle.finish(opened.id)
+              // ⚠️ `notify: false`：这一轮**还没有结束**，这里只是为了能注入下一轮而释放占用。
+              // 缺省通知会让业务每注入一轮就收到一次假的"回合结束"，而它会据此解除绑定、写终态
+              // ——把一个仍在跑的回合记成已结束。
+              lifecycle.finish(opened.id, 'completed', { notify: false })
               await waitUntilIdle()
               if (finished) return
               // 新一轮：重置这一轮的观测状态（交活账本、正文、回合标记）。

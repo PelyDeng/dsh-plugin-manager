@@ -52,12 +52,14 @@ function definitionOf(overrides: {
   })
 }
 
-/** 结果投影的输入：只有历史与派单请求，存储可以不注入。 */
+/** 结果投影的输入：只有历史、派单请求与发起人，存储可以不注入。 */
 function resultContext(conversationId: string, finalText: string): ResultContext {
   return {
     history: { messages: [], conversationId, finalText },
     request: { message: '查一下这辆车' },
     storage: undefined,
+    // 封闭化助手不按 actor 查业务库（它的投影只看历史正文）⇒ 给一个固定身份即可。
+    actor: { namespace: 'user', userId: 'alice', sessionId: 'alice-login' },
     // 封闭化助手不读结果记录（它的投影只看历史正文）⇒ 如实返回空。
     loadResults: async () => [],
   }
