@@ -147,7 +147,11 @@ describe.skipIf(DSN === '')('§7 验收合同（butler_test，ButlerConsole 级 
       expect(databaseName.endsWith('_test'), `DSN 指向的数据库「${databaseName}」不是 *_test 测试库，拒绝 DROP SCHEMA public CASCADE`).toBe(true)
       await client.query('DROP SCHEMA public CASCADE')
       await client.query('CREATE SCHEMA public')
-      const sql = await readFile(new URL('../migrations/postgres/0001_init.sql', import.meta.url), 'utf8')
+      // ⚠️ 同 `storage-postgres.smoke.test.ts`：必须读**新库形状**，否则测的是旧库（假绿）；
+      // 且必须替换 `:applied_at` 占位符（与 `private-deploy/db/create.mjs` 同源），否则 pg 驱动报
+      // `syntax error at or near ":"`。
+      const raw = await readFile(new URL('../../../../private-deploy/db/0001_init.sql', import.meta.url), 'utf8')
+      const sql = raw.replaceAll(':applied_at', String(Date.now()))
       await client.query(sql)
     } finally {
       client.release()
@@ -194,7 +198,7 @@ describe.skipIf(DSN === '')('§7 验收合同（butler_test，ButlerConsole 级 
       .rejects.toSatisfy(error => isAccessRejection(error, 404, 'task_not_found'))
     await expect(storage.appendSubtasks(bob, taskId, [{ id: 'intruder', goal: '塞私货', agentId: 'blog', reason: '' }]))
       .rejects.toSatisfy(error => isAccessRejection(error, 404, 'task_not_found'))
-    const intruded = await admin.query<{ total: string }>('SELECT count(*) AS total FROM subtasks WHERE task_id=$1 AND id=$2', [taskId, 'intruder'])
+    const intruded = await admin.query<{ total: string }>('SELECT count(*) AS total FROM butler_subtasks WHERE task_id=$1 AND id=$2', [taskId, 'intruder'])
     expect(Number(intruded.rows[0]?.total)).toBe(0)
 
     // 列表与计数同样按 owner 过滤：bob 的历史与指标里没有 alice 的任务。
@@ -278,14 +282,14 @@ describe.skipIf(DSN === '')('§7 验收合同（butler_test，ButlerConsole 级 
 
     // 三表直查（绕过存储实现）：一个事务同落，没有半个计划。
     const taskRow = await admin.query<{ state: string; accepted: string | number }>(
-      'SELECT state, accepted_version AS accepted FROM tasks WHERE id=$1', [taskId],
+      'SELECT state, accepted_version AS accepted FROM butler_tasks WHERE id=$1', [taskId],
     )
     expect(taskRow.rows[0]?.state).toBe('running')
     expect(Number(taskRow.rows[0]?.accepted)).toBe(1)
-    const subtaskRows = await admin.query<{ total: string }>('SELECT count(*) AS total FROM subtasks WHERE task_id=$1', [taskId])
+    const subtaskRows = await admin.query<{ total: string }>('SELECT count(*) AS total FROM butler_subtasks WHERE task_id=$1', [taskId])
     expect(Number(subtaskRows.rows[0]?.total)).toBe(2)
     const inputRows = await admin.query<{ version: number; text: string; source: string }>(
-      'SELECT version, text, source FROM task_inputs WHERE task_id=$1 ORDER BY version', [taskId],
+      'SELECT version, text, source FROM butler_task_inputs WHERE task_id=$1 ORDER BY version', [taskId],
     )
     expect(inputRows.rows).toEqual([{ version: 1, text: goal, source: 'chat' }])
 
@@ -361,25 +365,28 @@ describe.skipIf(DSN === '')('§7 验收合同（butler_test，ButlerConsole 级 
 
     // 5.3 版本不符：schema_version 改 99 后新存储 init 与已装载探针都以
     // storage_schema_version 拒绝；改完恢复，后续用例不受影响。
-    await admin.query('UPDATE schema_version SET version = 99')
+    await admin.query(`UPDATE dsh_schema_versions SET version = 99 WHERE plugin_id = 'butler'`)
     const wrongVersion = new PostgresTaskStorage(DSN)
     try {
       await expect(wrongVersion.init()).rejects.toSatisfy(error => hasStorageCode(error, 'storage_schema_version'))
       await expect(wrongVersion.readyProbe()).rejects.toSatisfy(error => hasStorageCode(error, 'storage_schema_version'))
     } finally {
       await wrongVersion.close()
-      await admin.query('UPDATE schema_version SET version = $1', [STORAGE_SCHEMA_VERSION])
+      await admin.query(`UPDATE dsh_schema_versions SET version = $1 WHERE plugin_id = 'butler'`, [STORAGE_SCHEMA_VERSION])
     }
 
-    // 5.4 缺表：tasks 暂时改名（保留数据），init 的表存在性核验以 storage_schema_missing
+    // 5.4 缺表：任务表暂时改名（保留数据），init 的表存在性核验以 storage_schema_missing
     // 拒绝、不自动建表；恢复后主存储继续可用。
-    await admin.query('ALTER TABLE tasks RENAME TO tasks_hidden')
+    // ⚠️ 恢复语句里的目标表名**必须与改名前的名字一致**（`butler_tasks`）：写成旧名 `tasks`
+    // 会把表恢复成"一个没人认识的名字"，后续用例全部以 storage_schema_missing 挂掉
+    // ——本批实测踩过这一处（`TO tasks` 不在批量替换的模式里）。
+    await admin.query('ALTER TABLE butler_tasks RENAME TO tasks_hidden')
     const missingTable = new PostgresTaskStorage(DSN)
     try {
       await expect(missingTable.init()).rejects.toSatisfy(error => hasStorageCode(error, 'storage_schema_missing'))
     } finally {
       await missingTable.close()
-      await admin.query('ALTER TABLE tasks_hidden RENAME TO tasks')
+      await admin.query('ALTER TABLE tasks_hidden RENAME TO butler_tasks')
     }
     await expect(storage.counts(alice)).resolves.toBeDefined()
   })

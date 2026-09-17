@@ -44,7 +44,16 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
       expect(databaseName.endsWith('_test'), `DSN 指向的数据库「${databaseName}」不是 *_test 测试库，拒绝 DROP SCHEMA public CASCADE`).toBe(true)
       await client.query('DROP SCHEMA public CASCADE')
       await client.query('CREATE SCHEMA public')
-      const sql = await readFile(new URL('../migrations/postgres/0001_init.sql', import.meta.url), 'utf8')
+      // ⚠️ 读的是**新库形状**（`private-deploy/db/0001_init.sql`，15 表）：切库后管家的真实现走的是
+      // `butler_*` + `dsh_conversations` + `dsh_schema_versions`。若这里仍读插件自带的**旧形状** DDL，
+      // 这两个契约文件测的就是另一个库形状 —— 拿旧绿灯冒充新覆盖。旧 DDL 按 D-6 保留（回退路径需要），
+      // 但它只服务于 `migrate-storage` 那一侧。该文件与插件同在**私有库**且被 git 跟踪，路径安全。
+      const raw = await readFile(new URL('../../../../private-deploy/db/0001_init.sql', import.meta.url), 'utf8')
+      // ⚠️ 这份 DDL **不是纯 SQL**：唯一的占位符 `:applied_at`（版本行的毫秒时间戳）由 psql 的 `-v`
+      // 供给，`private-deploy/db/create.mjs` 在执行前把它替换成 `Date.now()` 的字面量（替换后仍是
+      // 合法 SQL）。这里与建库脚本**同源处理**——不替换的话 pg 驱动直接报
+      // `syntax error at or near ":"`（实测），而不是静默少写一行版本。
+      const sql = raw.replaceAll(':applied_at', String(Date.now()))
       await client.query(sql)
     } finally {
       client.release()
@@ -56,14 +65,14 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
   it('初始化：0001 迁移执行后版本校验通过，且可正常读写', async () => {
     // 幂等：再次 init 也应通过。
     await expect(storage.init()).resolves.toBeUndefined()
-    const version = await admin.query<{ version: string | number }>('SELECT version FROM schema_version')
+    const version = await admin.query<{ version: string | number }>(`SELECT version FROM dsh_schema_versions WHERE plugin_id = 'butler'`)
     expect(Number(version.rows[0]?.version)).toBe(STORAGE_SCHEMA_VERSION)
     const counts = await storage.counts(actor)
     expect(counts.completed).toBe(0)
   })
 
   it('版本不符（schema_version=99）时初始化与读写都以 storage_schema_version 拒绝', async () => {
-    await admin.query('UPDATE schema_version SET version = 99')
+    await admin.query(`UPDATE dsh_schema_versions SET version = 99 WHERE plugin_id = 'butler'`)
     const rejected = new PostgresTaskStorage(DSN)
     try {
       await expect(rejected.init()).rejects.toSatisfy((error: unknown) => hasStorageCode(error, 'storage_schema_version'))
@@ -74,7 +83,7 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
       )
     } finally {
       await rejected.close()
-      await admin.query('UPDATE schema_version SET version = $1', [STORAGE_SCHEMA_VERSION])
+      await admin.query(`UPDATE dsh_schema_versions SET version = $1 WHERE plugin_id = 'butler'`, [STORAGE_SCHEMA_VERSION])
     }
   })
 
@@ -209,15 +218,18 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
     try {
       await reopened.init()
       const record = await reopened.task(actor, taskId)
+      // ⚠️ 期望值按**新库的 JSONB 形态**写：`verdict_evidence` 是数组、`observation` 是对象
+      // （两列的 DDL 默认值分别是 `'[]'::jsonb` 与 `'{}'::jsonb`）。旧库那两列是 TEXT、读回是
+      // 裸字符串——切库后"读回什么形状"变了，这条断言正是那个变化的落点。
       expect(record?.subtasks[0]).toMatchObject({
         verdict: 'accept',
         verdictReason: '产出对得上口径',
-        verdictEvidence: '一篇已发布的发布说明链接',
-        observation: '首发',
+        verdictEvidence: ['一篇已发布的发布说明链接'],
+        observation: { why: '首发' },
       })
-      // 没裁决过的那条仍是空串：读写映射不许把缺省补成任何结论。
+      // 没裁决过的那条仍是**列默认值**：读写映射不许把缺省补成任何结论。
       expect(record?.subtasks[1]).toMatchObject({
-        verdict: '', verdictReason: '', verdictEvidence: '', observation: '',
+        verdict: '', verdictReason: '', verdictEvidence: [], observation: {},
       })
     } finally {
       await reopened.close()
@@ -258,7 +270,7 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
     // 三张表都不留半个计划。
     expect(await storage.task(actor, taskId)).toBeUndefined()
     expect(await storage.inputs(taskId)).toEqual([])
-    const left = await admin.query<{ total: string }>('SELECT count(*) AS total FROM tasks WHERE id=$1', [taskId])
+    const left = await admin.query<{ total: string }>('SELECT count(*) AS total FROM butler_tasks WHERE id=$1', [taskId])
     expect(Number(left.rows[0]?.total)).toBe(0)
   })
 
@@ -291,24 +303,28 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
       note: '',
       subtasks: [{ id: 's1', goal: '坏数据行', agentId: 'writer', reason: '' }],
     })
-    // 绕过存储层直插损坏 JSON，模拟历史脏数据。depends_on 用「字符串混非字符串项」的数组，
-    // 验证损坏分类下取值与 SQLite 测试双实现（helpers/sqlite-test-store.ts）一致：宽松过滤
-    // 出能读的字符串项。
+    // ⚠️ **切库带来的语义变化（如实记录，不是放宽断言）**：
+    //  ① `input_refs` 在新库是 **JSONB** ⇒ `'{oops'` 这类非法 JSON **根本写不进去**（Postgres 报
+    //     22P02）。旧库那条"直插损坏数据、再由解析器按 `damaged` 拒派"的手法在新库**无法构造** ——
+    //     这个缺口被 **DB 的类型系统**关掉了（更强，不是更弱）。改为断言"写入被拒"。
+    //  ② `input_refs = ''` 同样不再合法（空串不是 JSON）⇒ 新库表示"没落过值"的是列默认 `'[]'::jsonb`。
+    await expect(
+      admin.query(`UPDATE butler_subtasks SET input_refs = '{oops' WHERE task_id = $1 AND id = 's1'`, [taskId]),
+    ).rejects.toThrow(/invalid input syntax for type json/u)
+    // `depends_on` 仍是**合法 JSON**（数组里混了非字符串项）⇒ 损坏分类照旧可测。
     await admin.query(
-      `UPDATE subtasks SET input_refs = '{oops', depends_on = '[ "g9", 42, true ]', state = 'dispatched',
+      `UPDATE butler_subtasks SET depends_on = '[ "g9", 42, true ]', state = 'dispatched',
          started_at = $1 WHERE task_id = $2 AND id = 's1'`,
       [Date.now(), taskId],
     )
     const damaged = await storage.task(actor, taskId)
     const row = damaged?.subtasks[0]
-    expect(row?.inputRefsState).toBe('damaged')
-    expect(row?.inputRefs).toBeUndefined()
     // depends_on 严格化（依赖重判方案 §3 条目 4）：损坏归类 damaged，编排层据此拒派。
     expect(row?.dependsOnState).toBe('damaged')
     // 取值与 SQLite 测试双实现的兜底一致：宽松过滤只留字符串项，不整列丢弃、也不伪装成空计划。
     expect(row?.dependsOn).toEqual(['g9'])
-    // 派出过却留空 = 旧记录未知，不是「等着首次固定」。
-    await admin.query(`UPDATE subtasks SET input_refs = '' WHERE task_id = $1 AND id = 's1'`, [taskId])
+    // `input_refs` 停在列默认值（空数组）= 没落过值；这条记录**派出过** ⇒ 归类 unknown。
+    await admin.query(`UPDATE butler_subtasks SET input_refs = '[]'::jsonb WHERE task_id = $1 AND id = 's1'`, [taskId])
     const unknown = await storage.task(actor, taskId)
     expect(unknown?.subtasks[0]?.inputRefsState).toBe('unknown')
     // 重建一条干净的 queued 行验证首次固定：只有 unfixed 才允许写入，此后原样保留。
@@ -417,7 +433,7 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
     ])).rejects.toSatisfy((error: unknown) =>
       error instanceof AccessError && error.status === 404 && error.reason === 'task_not_found',
     )
-    const left = await admin.query<{ total: string }>('SELECT count(*) AS total FROM subtasks WHERE task_id=$1', [ghostId])
+    const left = await admin.query<{ total: string }>('SELECT count(*) AS total FROM butler_subtasks WHERE task_id=$1', [ghostId])
     expect(Number(left.rows[0]?.total)).toBe(0)
   })
 
@@ -540,5 +556,30 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
     // 关闭后拒绝带专属稳定码，与 storage_unknown 区分。
     await expect(disposable.counts(actor)).rejects.toSatisfy((error: unknown) => hasStorageCode(error, 'storage_closed'))
     await expect(disposable.close()).resolves.toBeUndefined()
+  })
+
+  it('会话隔离：同一个 owner 下，别的 agent_id 的会话管家既读不到、也不列出来', async () => {
+    // `dsh_conversations` 是**所有 Agent 共用**的一张表，而 `(owner_namespace, owner_id)` 只区分
+    // **人**、不区分 Agent —— 所以"只按 owner + id 查"会把别的 Agent 的会话判成管家自己的
+    // （设计 §8.1 的实测结论：串 Agent）。这条用例就是那个缺口本身的判据：把 `agent_id` 从任一
+    // 查询里去掉，它必须变红。
+    const mine = `butler-web-${randomUUID()}`
+    await storage.reserveConversation(mine, actor)
+    const foreign = `blog-chat-${randomUUID()}`
+    await admin.query(
+      `INSERT INTO dsh_conversations(id, agent_id, owner_namespace, owner_id, ready, created_at, updated_at)
+       VALUES($1,'blog',$2,$3,TRUE,$4,$4)`,
+      [foreign, actor.namespace, actor.userId, Date.now()],
+    )
+
+    // ① 读别人的会话 ⇒ 与"不存在"同一个 404（不泄露存在性）。
+    await expect(storage.assertOwner(foreign, actor))
+      .rejects.toSatisfy((error: unknown) => error instanceof AccessError && error.status === 404)
+    // 自己的照常读得到。
+    await expect(storage.assertOwner(mine, actor)).resolves.toBeUndefined()
+    // ② 侧栏列表里不许出现别的 Agent 的会话（漏 `agent_id` 时它会混进来）。
+    const listed = await storage.listConversations(actor, 50)
+    expect(listed.map(item => item.id)).toContain(mine)
+    expect(listed.map(item => item.id)).not.toContain(foreign)
   })
 })

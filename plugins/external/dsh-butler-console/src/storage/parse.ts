@@ -69,7 +69,12 @@ export function parseInputRefs(
   neverDispatched: boolean,
 ): { readonly kind: ButlerInputRefsKind; readonly inputRefs?: readonly ButlerInputRef[] } {
   // 空串与"什么都没写"是同一件事（列没落过值）；JSONB 的 `null` 也走这里。
+  //
+  // ⚠️ **空数组也是"什么都没写"**：新库这几列是 JSONB、默认值是 `'[]'::jsonb`（旧库是 TEXT、默认
+  // 空串）。少了这一句，默认值会被下面判成 `fixed`（"已固定"）——而 `fixed` **不允许首次固定**，
+  // 于是派单材料快照**永远固定不上**，且不报错（静默）。同理 `'{}'::jsonb` 对 `member_return`。
   if (raw === '' || raw === null || raw === undefined) return { kind: neverDispatched ? 'unfixed' : 'unknown' }
+  if (Array.isArray(raw) && raw.length === 0) return { kind: neverDispatched ? 'unfixed' : 'unknown' }
   try {
     // ⚠️ **入参是 `unknown` 而不是 `string`**：新库的 `input_refs` / `artifacts` / `member_return` /
     // `verdict_evidence` / `observation` 是 **JSONB**，pg 驱动直接返回数组/对象、**不是文本**。

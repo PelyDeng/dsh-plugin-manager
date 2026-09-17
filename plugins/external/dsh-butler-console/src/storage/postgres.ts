@@ -41,12 +41,42 @@ import type {
 } from './types.ts'
 
 /** 本实现对应的库结构版本（与 `migrations/postgres/0001_init.sql` 写入的版本行一致）。 */
-export const STORAGE_SCHEMA_VERSION = 10
+/**
+ * 目标库的数据结构版本。
+ *
+ * ⚠️ **切库后这里读的是新库**（`private-deploy/db/0001_init.sql` 的 `dsh_schema_versions`，
+ * 管家的行是 `('butler', 1)`）——所以它是 **1**，不是旧形状表的 10。
+ *
+ * 旧形状的 `schema_version`（单行 `id = 0`、版本 10）与插件自带的 `migrations/postgres/0001_init.sql`
+ * 按 D-6 **保留一期**（部署回退路径"指回旧 DSN"时还需要它们），但**运行时代码不再读那张表**：
+ * 指到旧形状库会得到"版本不符"的**响亮失败**，而不是静默降级。
+ */
+export const STORAGE_SCHEMA_VERSION = 1
 /** init 版本校验使用的期望版本（与 {@link STORAGE_SCHEMA_VERSION} 同源，/ready 汇报同一数值）。 */
 const EXPECTED_SCHEMA_VERSION = STORAGE_SCHEMA_VERSION
 
 /** 业务表清单：init 时逐一核验存在性（插件 schema 固定 public），缺表归类 `storage_schema_missing`。 */
-const EXPECTED_TABLES = ['conversations', 'tasks', 'subtasks', 'agent_aliases', 'requests', 'task_inputs'] as const
+const EXPECTED_TABLES = [
+  'dsh_schema_versions',
+  // 会话并入框架级表（设计 §5.3：管家同样是"一个 Agent"，没有理由单独一张会话表）。
+  'dsh_conversations',
+  'butler_tasks',
+  'butler_subtasks',
+  'butler_agent_aliases',
+  'butler_requests',
+  'butler_task_inputs',
+] as const
+
+/**
+ * 管家在 `dsh_conversations` 里的 `agent_id`。
+ *
+ * ⚠️ `dsh_conversations` 是**所有 Agent 共用**的一张表，而 `(owner_namespace, owner_id)` 只区分
+ * **人**、不区分 Agent ⇒ **每一个**面向会话的查询都必须带 `agent_id`（设计 §3.2 登记的第 1 条约束）。
+ * 漏了它的三个后果都是实测记录在案的：`assertOwner` 会把别的 Agent 的会话判成管家自己的（**串 Agent**）、
+ * `touchConversation` 会去改别的 Agent 的会话行（`title` / `updated_at`，而后者是 blog 侧栏的排序键）、
+ * `listConversations` 会把 blog / closedoff 的会话**列进管家侧栏**。
+ */
+const BUTLER_AGENT_ID = 'butler'
 
 /** 有界关闭上限（§2.6）：超时后放弃等待并记录，池终结交给进程退出。 */
 const CLOSE_TIMEOUT_MS = 5000
@@ -158,10 +188,34 @@ function subtaskInsertValues(taskId: string, subtask: NewSubtask, seq: number, l
   return [
     taskId, subtask.id, seq, subtask.goal, subtask.agentId, subtask.reason, 'queued',
     logicalId, subtask.supersedes ?? '', JSON.stringify(subtask.dependsOn ?? []),
-    subtask.requiresExternalAction === true ? 1 : 0,
-    // 验收口径：没声明就写空串（列是 NOT NULL DEFAULT ''），读路径靠空串区分「没有口径」。
+    // ⚠️ 直接传**布尔**：新库这一列是 `BOOLEAN`（旧库是 `SMALLINT`）。写 `1`/`0` 数字会得到
+    // `column "requires_external_action" is of type boolean but expression is of type integer`
+    // （42804）——**响亮失败**，不是静默错。读侧 `Number(raw) === 1` 对 `true`/`false` 同样成立。
+    subtask.requiresExternalAction === true,
+    // 验收口径：没声明就写空串（列是 NOT NULL DEFAULT ''，普通 TEXT 列，不是 JSONB）。
     subtask.acceptance ?? '',
   ]
+}
+
+/**
+ * `verdict_evidence` 是 **JSONB**（新库 DDL 默认 `'[]'::jsonb`，语义是"证据片段列表"）。
+ *
+ * ⚠️ 不能直接写文本：**空串不是合法 JSON**，写进去得到 22P02；而调用方（裁决链路）传的是模型给的
+ * **一段原样文字**。这里把它包成数组——与列默认值同形，读侧不必猜是"字符串还是数组"。
+ * 旧库那一列是 TEXT（存裸文本），但**全新库不迁移旧数据**，两种形态不会混在同一张表里。
+ */
+function verdictEvidenceJson(evidence: string | undefined): string {
+  const text = evidence ?? ''
+  return text === '' ? '[]' : JSON.stringify([text])
+}
+
+/**
+ * `observation` 同样是 **JSONB**（默认 `'{}'::jsonb`）。调用方传的是"为什么这么裁"的**一句话**，
+ * 这里包成 `{ why }`：保持对象形状（与列默认值一致），将来要加别的观察字段不必改列。
+ */
+function observationJson(observation: string | undefined): string {
+  const text = observation ?? ''
+  return text === '' ? '{}' : JSON.stringify({ why: text })
 }
 
 const SUBTASK_INSERT_COLUMNS = 'task_id,id,seq,goal,agent_id,reason,state,logical_id,supersedes,depends_on,requires_external_action,acceptance'
@@ -200,7 +254,7 @@ export class PostgresTaskStorage implements ButlerStorage {
     this.assertOpen()
     let failure: StorageError
     try {
-      const versionResult = await this.pool.query<{ version: string | number }>('SELECT version FROM schema_version')
+      const versionResult = await this.pool.query<{ version: string | number }>('SELECT version FROM dsh_schema_versions WHERE plugin_id = \'butler\'')
       const versionRow = versionResult.rows[0]
       if (versionRow === undefined) {
         throw new StorageError('storage_schema_version', 'schema_version 表没有版本行，无法确认工作台数据结构版本')
@@ -269,7 +323,7 @@ export class PostgresTaskStorage implements ButlerStorage {
           if (one.rows[0]?.one !== 1) {
             throw new StorageError('storage_unknown', '就绪探针收到异常应答')
           }
-          const versionResult = await client.query<{ version: string | number }>('SELECT version FROM schema_version')
+          const versionResult = await client.query<{ version: string | number }>('SELECT version FROM dsh_schema_versions WHERE plugin_id = \'butler\'')
           const versionRow = versionResult.rows[0]
           if (versionRow === undefined) {
             throw new StorageError('storage_schema_version', 'schema_version 表没有版本行，无法确认工作台数据结构版本')
@@ -299,7 +353,7 @@ export class PostgresTaskStorage implements ButlerStorage {
   async aliases(actor: Actor): Promise<Map<string, { displayName: string; accent: string }>> {
     const result = await this.run<{ agentId: string; displayName: string; accent: string }>(
       `SELECT agent_id AS "agentId", display_name AS "displayName", accent
-       FROM agent_aliases WHERE owner_namespace=$1 AND owner_id=$2`,
+       FROM butler_agent_aliases WHERE owner_namespace=$1 AND owner_id=$2`,
       [actor.namespace, actor.userId],
     )
     return new Map(result.rows.map(row => [row.agentId, { displayName: row.displayName, accent: row.accent }]))
@@ -309,12 +363,12 @@ export class PostgresTaskStorage implements ButlerStorage {
     const name = Array.from(displayName.replace(/\s+/gu, ' ').trim()).slice(0, 24).join('')
     const color = /^#[0-9a-f]{6}$/iu.test(accent) ? accent.toLowerCase() : ''
     if (name === '' && color === '') {
-      await this.run('DELETE FROM agent_aliases WHERE owner_namespace=$1 AND owner_id=$2 AND agent_id=$3',
+      await this.run('DELETE FROM butler_agent_aliases WHERE owner_namespace=$1 AND owner_id=$2 AND agent_id=$3',
         [actor.namespace, actor.userId, agentId])
       return
     }
     await this.run(
-      `INSERT INTO agent_aliases(owner_namespace,owner_id,agent_id,display_name,accent,updated_at)
+      `INSERT INTO butler_agent_aliases(owner_namespace,owner_id,agent_id,display_name,accent,updated_at)
        VALUES($1,$2,$3,$4,$5,$6)
        ON CONFLICT (owner_namespace,owner_id,agent_id)
        DO UPDATE SET display_name=excluded.display_name, accent=excluded.accent, updated_at=excluded.updated_at`,
@@ -324,7 +378,7 @@ export class PostgresTaskStorage implements ButlerStorage {
 
   async setAvatar(actor: Actor, agentId: string, bytes: Uint8Array, contentType: string): Promise<void> {
     await this.run(
-      `INSERT INTO agent_aliases(owner_namespace,owner_id,agent_id,avatar,avatar_type,updated_at)
+      `INSERT INTO butler_agent_aliases(owner_namespace,owner_id,agent_id,avatar,avatar_type,updated_at)
        VALUES($1,$2,$3,$4,$5,$6)
        ON CONFLICT (owner_namespace,owner_id,agent_id)
        DO UPDATE SET avatar=excluded.avatar, avatar_type=excluded.avatar_type, updated_at=excluded.updated_at`,
@@ -334,7 +388,7 @@ export class PostgresTaskStorage implements ButlerStorage {
 
   async avatar(actor: Actor, agentId: string): Promise<{ bytes: Uint8Array; contentType: string } | undefined> {
     const result = await this.run<{ bytes: Buffer; contentType: string }>(
-      `SELECT avatar AS bytes, avatar_type AS "contentType" FROM agent_aliases
+      `SELECT avatar AS bytes, avatar_type AS "contentType" FROM butler_agent_aliases
        WHERE owner_namespace=$1 AND owner_id=$2 AND agent_id=$3 AND avatar IS NOT NULL`,
       [actor.namespace, actor.userId, agentId],
     )
@@ -345,17 +399,24 @@ export class PostgresTaskStorage implements ButlerStorage {
 
   async clearAvatar(actor: Actor, agentId: string): Promise<void> {
     await this.run(
-      'UPDATE agent_aliases SET avatar=NULL, avatar_type=\'\', updated_at=$1 WHERE owner_namespace=$2 AND owner_id=$3 AND agent_id=$4',
+      'UPDATE butler_agent_aliases SET avatar=NULL, avatar_type=\'\', updated_at=$1 WHERE owner_namespace=$2 AND owner_id=$3 AND agent_id=$4',
       [Date.now(), actor.namespace, actor.userId, agentId],
     )
   }
 
   async reserveConversation(id: string, actor: Actor): Promise<void> {
     // §3：INSERT OR IGNORE → ON CONFLICT (id) DO NOTHING，只吞目标约束冲突。
+    //
+    // ⚠️ 两列**必须显式写**（设计 §8.1 的管家侧清单，都是"漏了会静默出事"的那一类）：
+    //  · `agent_id = 'butler'`——该列 `NOT NULL` **且无默认值**，漏写报 **23502**；
+    //  · `ready = TRUE`——`dsh_conversations` 把它建成默认 FALSE 的"陷阱列"（新库 DDL 的原话），
+    //    而管家**没有"预留—发布"两段握手**（closedoff/blog 才有）：不一步到位，它的会话会永久
+    //    停在"创建未完成"——**侧栏看不到、也删不掉**。
+    // `title_source` 不写，用 DDL 默认的 `'automatic'`（管家建的会话标题本来就是自动来源）。
     await this.run(
-      `INSERT INTO conversations(id, owner_namespace, owner_id, created_at, updated_at)
-       VALUES($1,$2,$3,$4,$4) ON CONFLICT (id) DO NOTHING`,
-      [id, actor.namespace, actor.userId, Date.now()],
+      `INSERT INTO dsh_conversations(id, agent_id, owner_namespace, owner_id, ready, created_at, updated_at)
+       VALUES($1,$2,$3,$4,TRUE,$5,$5) ON CONFLICT (id) DO NOTHING`,
+      [id, BUTLER_AGENT_ID, actor.namespace, actor.userId, Date.now()],
     )
   }
 
@@ -364,11 +425,18 @@ export class PostgresTaskStorage implements ButlerStorage {
     await this.assertOwner(id, actor)
   }
 
-  /** 校验会话归属。未知、他人或已删除的会话返回同一个结果，不泄露存在性。 */
+  /**
+   * 校验会话归属。未知、他人或已删除的会话返回同一个结果，不泄露存在性。
+   *
+   * ⚠️ `agent_id` 这一列不能省：`dsh_conversations` 是所有 Agent 共用的，`(owner, id)` 只区分人
+   * ——**只写双列会把别的 Agent 的会话判成管家自己的**（设计 §8.1 的实测结论）。
+   * 这里**不**按 `removal_state` / `deleted_at` 过滤：管家的旧表根本没有这两列，加进来会改变行为
+   * （属于"切库顺带改语义"，不是本期目标）；跨 Agent 那部分已经由 `agent_id` 挡住。
+   */
   async assertOwner(conversationId: string, actor: Actor): Promise<void> {
     const result = await this.run<{ one: number }>(
-      'SELECT 1 AS one FROM conversations WHERE id=$1 AND owner_namespace=$2 AND owner_id=$3',
-      [conversationId, actor.namespace, actor.userId],
+      'SELECT 1 AS one FROM dsh_conversations WHERE id=$1 AND owner_namespace=$2 AND owner_id=$3 AND agent_id=$4',
+      [conversationId, actor.namespace, actor.userId, BUTLER_AGENT_ID],
     )
     if (result.rows[0] === undefined) throw new AccessError(404, '会话不存在或无权访问', 'conversation_not_found')
   }
@@ -376,20 +444,23 @@ export class PostgresTaskStorage implements ButlerStorage {
   async touchConversation(conversationId: string, actor: Actor, title?: string): Promise<void> {
     await this.assertOwner(conversationId, actor)
     const trimmed = Array.from((title ?? '').replace(/\s+/gu, ' ').trim()).slice(0, 80).join('')
+    // 归属与 `agent_id` 在 UPDATE 里再写一次：`assertOwner` 与本语句之间是有窗口的，
+    // 而漏 `agent_id` 的后果是**去改别的 Agent 的会话行**（`updated_at` 还是 blog 侧栏的排序键）。
     await this.run(
-      'UPDATE conversations SET updated_at=$1, title=CASE WHEN title=\'\' THEN $2 ELSE title END WHERE id=$3',
-      [Date.now(), trimmed, conversationId],
+      `UPDATE dsh_conversations SET updated_at=$1, title=CASE WHEN title='' THEN $2 ELSE title END
+        WHERE id=$3 AND owner_namespace=$4 AND owner_id=$5 AND agent_id=$6`,
+      [Date.now(), trimmed, conversationId, actor.namespace, actor.userId, BUTLER_AGENT_ID],
     )
   }
 
   async listConversations(actor: Actor, limit: number): Promise<ConversationSummary[]> {
     const result = await this.run<{ id: string; title: string; createdAt: string | number; updatedAt: string | number; taskCount: string | number }>(
       `SELECT c.id AS "id", c.title AS "title", c.created_at AS "createdAt", c.updated_at AS "updatedAt",
-         (SELECT count(*) FROM tasks t WHERE t.conversation_id = c.id) AS "taskCount"
-       FROM conversations c
-       WHERE c.owner_namespace=$1 AND c.owner_id=$2
+         (SELECT count(*) FROM butler_tasks t WHERE t.conversation_id = c.id) AS "taskCount"
+       FROM dsh_conversations c
+       WHERE c.owner_namespace=$1 AND c.owner_id=$2 AND c.agent_id=$4
        ORDER BY c.updated_at DESC, c.id LIMIT $3`,
-      [actor.namespace, actor.userId, limit],
+      [actor.namespace, actor.userId, limit, BUTLER_AGENT_ID],
     )
     return result.rows.map(row => ({
       id: row.id,
@@ -415,19 +486,19 @@ export class PostgresTaskStorage implements ButlerStorage {
       // 任务行的锁由本次 INSERT 取得：并发的追加编号（appendSubtasks 的 FOR UPDATE）会
       // 排队到本事务提交之后，seq/logicalId 不会撞号（§3 createTask 规格）。
       await client.query(
-        `INSERT INTO tasks(id,conversation_id,owner_namespace,owner_id,goal,acceptance,state,note,created_at,updated_at)
+        `INSERT INTO butler_tasks(id,conversation_id,owner_namespace,owner_id,goal,acceptance,state,note,created_at,updated_at)
          VALUES($1,$2,$3,$4,$5,$6,'running',$7,$8,$8)`,
         [input.id, input.conversationId, input.actor.namespace, input.actor.userId, input.goal, input.acceptance ?? '', input.note, now],
       )
       // 开头那条需求就是版本 1，与任务一起落库：输入历史要完整。
       await client.query(
-        'INSERT INTO task_inputs(task_id,version,text,source,created_at) VALUES($1,1,$2,$3,$4)',
+        'INSERT INTO butler_task_inputs(task_id,version,text,source,created_at) VALUES($1,1,$2,$3,$4)',
         [input.id, input.goal, 'chat', now],
       )
       for (const [index, subtask] of input.subtasks.entries()) {
         // 没给目标标识就按顺序分配：首次计划里一条子任务就是一个目标。
         await client.query(
-          `INSERT INTO subtasks(${SUBTASK_INSERT_COLUMNS}) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          `INSERT INTO butler_subtasks(${SUBTASK_INSERT_COLUMNS}) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
           subtaskInsertValues(input.id, subtask, index + 1, subtask.logicalId ?? `g${index + 1}`),
         )
       }
@@ -438,7 +509,7 @@ export class PostgresTaskStorage implements ButlerStorage {
     const terminal = isTerminal(state)
     const now = Date.now()
     await this.run(
-      `UPDATE tasks SET state=$1, updated_at=$2,
+      `UPDATE butler_tasks SET state=$1, updated_at=$2,
          note=COALESCE($3,note), summary=COALESCE($4,summary), error=COALESCE($5,error),
          finished_at=CASE WHEN $6::boolean THEN COALESCE(finished_at,$2::bigint) ELSE finished_at END
        WHERE id=$7`,
@@ -455,7 +526,7 @@ export class PostgresTaskStorage implements ButlerStorage {
     // §3：版本守卫与终态写入合并为单条条件 UPDATE + RETURNING，消灭 check-then-write 竞态。
     // 只对宣称成功的终态设关卡：accepted <= processed 才允许落「这一轮干完了」。
     const result = await this.run<{ id: string }>(
-      `UPDATE tasks SET state=$1, updated_at=$2,
+      `UPDATE butler_tasks SET state=$1, updated_at=$2,
          note=COALESCE($3,note), summary=COALESCE($4,summary), error=COALESCE($5,error),
          finished_at=COALESCE(finished_at,$2::bigint)
        WHERE id=$6 AND accepted_version<=processed_version
@@ -487,13 +558,13 @@ export class PostgresTaskStorage implements ButlerStorage {
     // 双实现的 SET 表达式逐字等价。
     const inputRefs = patch.inputRefs === undefined ? null : JSON.stringify(patch.inputRefs)
     await this.run(
-      `UPDATE subtasks SET state=$1,
+      `UPDATE butler_subtasks SET state=$1,
          result=COALESCE($2,result), error=COALESCE($3,error),
          artifacts=COALESCE($4,artifacts), conversation_id=COALESCE($5,conversation_id),
-         input_refs=CASE WHEN $6::text IS NULL THEN input_refs
-           WHEN input_refs<>'' THEN input_refs
+         input_refs=CASE WHEN $6::jsonb IS NULL THEN input_refs
+           WHEN input_refs <> '[]'::jsonb THEN input_refs
            WHEN started_at IS NOT NULL OR state<>'queued' THEN input_refs
-           ELSE $6::text END,
+           ELSE $6::jsonb END,
          member_return=COALESCE($7,member_return),
          started_at=CASE WHEN $8::boolean THEN COALESCE(started_at,$9::bigint) ELSE started_at END,
          finished_at=CASE WHEN $10::boolean THEN COALESCE(finished_at,$9::bigint) ELSE finished_at END
@@ -532,10 +603,10 @@ export class PostgresTaskStorage implements ButlerStorage {
     patch: { verdict: SubtaskVerdict; reason?: string; evidence?: string; observation?: string },
   ): Promise<number> {
     const result = await this.run(
-      `UPDATE subtasks SET verdict=$1, verdict_reason=$2, verdict_evidence=$3, observation=$4
+      `UPDATE butler_subtasks SET verdict=$1, verdict_reason=$2, verdict_evidence=$3, observation=$4
         WHERE task_id=$5 AND id=$6
-          AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=$5 AND t.owner_namespace=$7 AND t.owner_id=$8)`,
-      [patch.verdict, patch.reason ?? '', patch.evidence ?? '', patch.observation ?? '',
+          AND EXISTS (SELECT 1 FROM butler_tasks t WHERE t.id=$5 AND t.owner_namespace=$7 AND t.owner_id=$8)`,
+      [patch.verdict, patch.reason ?? '', verdictEvidenceJson(patch.evidence), observationJson(patch.observation),
         taskId, subtaskId, actor.namespace, actor.userId],
     )
     return result.rowCount ?? 0
@@ -546,7 +617,7 @@ export class PostgresTaskStorage implements ButlerStorage {
       `SELECT id,conversation_id AS "conversationId",goal,acceptance,state,note,summary,error,
          accepted_version AS "acceptedVersion",processed_version AS "processedVersion",
          created_at AS "createdAt",updated_at AS "updatedAt",finished_at AS "finishedAt"
-       FROM tasks WHERE id=$1 AND owner_namespace=$2 AND owner_id=$3`,
+       FROM butler_tasks WHERE id=$1 AND owner_namespace=$2 AND owner_id=$3`,
       [id, actor.namespace, actor.userId],
     )
     const row = taskResult.rows[0]
@@ -558,7 +629,7 @@ export class PostgresTaskStorage implements ButlerStorage {
          requires_external_action AS "requiresExternalActionRaw",
          input_refs AS "inputRefsRaw",member_return AS "memberReturnRaw",
          verdict,verdict_reason AS "verdictReason",verdict_evidence AS "verdictEvidence",observation
-       FROM subtasks WHERE task_id=$1 ORDER BY seq`,
+       FROM butler_subtasks WHERE task_id=$1 ORDER BY seq`,
       [id],
     )
     const subtasks = subResult.rows.map(mapSubtaskRow)
@@ -598,7 +669,7 @@ export class PostgresTaskStorage implements ButlerStorage {
       filters.push(`t.conversation_id=$${values.length}`)
     }
     const where = filters.join(' AND ')
-    const totalResult = await this.run<{ total: string | number }>(`SELECT count(*) AS total FROM tasks t WHERE ${where}`, values)
+    const totalResult = await this.run<{ total: string | number }>(`SELECT count(*) AS total FROM butler_tasks t WHERE ${where}`, values)
     const total = Number(totalResult.rows[0]?.total ?? 0)
     const itemsResult = await this.run<{
       id: string; conversationId: string; goal: string; state: string
@@ -606,9 +677,9 @@ export class PostgresTaskStorage implements ButlerStorage {
     }>(
       `SELECT t.id AS "id", t.conversation_id AS "conversationId", t.goal AS "goal", t.state AS "state",
          t.created_at AS "createdAt", t.updated_at AS "updatedAt",
-         (SELECT count(*) FROM subtasks s WHERE s.task_id=t.id) AS "subtaskTotal",
-         (SELECT count(*) FROM subtasks s WHERE s.task_id=t.id AND s.state IN ('succeeded','failed','cancelled','external_pending')) AS "subtaskDone"
-       FROM tasks t WHERE ${where} ORDER BY t.created_at DESC, t.id LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+         (SELECT count(*) FROM butler_subtasks s WHERE s.task_id=t.id) AS "subtaskTotal",
+         (SELECT count(*) FROM butler_subtasks s WHERE s.task_id=t.id AND s.state IN ('succeeded','failed','cancelled','external_pending')) AS "subtaskDone"
+       FROM butler_tasks t WHERE ${where} ORDER BY t.created_at DESC, t.id LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, query.limit, query.offset],
     )
     const items = itemsResult.rows.map(row => ({
@@ -628,7 +699,7 @@ export class PostgresTaskStorage implements ButlerStorage {
   async busy(actor: Actor): Promise<Map<string, { taskId: string; subtaskId: string; state: SubtaskState }>> {
     const result = await this.run<{ agentId: string; taskId: string; subtaskId: string; state: string }>(
       `SELECT s.agent_id AS "agentId", s.task_id AS "taskId", s.id AS "subtaskId", s.state AS "state"
-       FROM subtasks s JOIN tasks t ON t.id = s.task_id
+       FROM butler_subtasks s JOIN butler_tasks t ON t.id = s.task_id
        WHERE t.owner_namespace=$1 AND t.owner_id=$2
          AND s.state IN ('dispatched','running','waiting_user')
        ORDER BY s.started_at NULLS FIRST, s.task_id, s.id`,
@@ -650,7 +721,7 @@ export class PostgresTaskStorage implements ButlerStorage {
     return this.withTransaction(async (client) => {
       // 行锁内复核终态与期望版本（§3）：受理前打开会话是异步窗口，事务外的旧结论不可信。
       const locked = await client.query<{ acceptedVersion: string | number; state: string }>(
-        `SELECT accepted_version AS "acceptedVersion", state FROM tasks
+        `SELECT accepted_version AS "acceptedVersion", state FROM butler_tasks
          WHERE id=$1 AND owner_namespace=$2 AND owner_id=$3 FOR UPDATE`,
         [taskId, actor.namespace, actor.userId],
       )
@@ -665,15 +736,15 @@ export class PostgresTaskStorage implements ButlerStorage {
       }
       const next = accepted + 1
       try {
-        await client.query('UPDATE tasks SET accepted_version=$1, updated_at=$2 WHERE id=$3', [next, now, taskId])
+        await client.query('UPDATE butler_tasks SET accepted_version=$1, updated_at=$2 WHERE id=$3', [next, now, taskId])
         await client.query(
-          'INSERT INTO task_inputs(task_id,version,text,source,created_at) VALUES($1,$2,$3,$4,$5)',
+          'INSERT INTO butler_task_inputs(task_id,version,text,source,created_at) VALUES($1,$2,$3,$4,$5)',
           [taskId, next, text, source, now],
         )
       } catch (error) {
         // (task_id,version) 主键兜底（§3）：正常并发已被任务行锁串行化，真撞上说明
         // accepted_version 与输入表已不一致。按版本冲突映射 409 语义，不是 500。
-        if (uniqueViolation(error, 'task_inputs') !== undefined) {
+        if (uniqueViolation(error, 'butler_task_inputs') !== undefined) {
           throw new AccessError(409, `这一轮已经接受过第 ${next} 版输入，请按最新内容重新提交`, 'version_conflict')
         }
         throw error
@@ -684,7 +755,7 @@ export class PostgresTaskStorage implements ButlerStorage {
 
   async inputVersions(taskId: string): Promise<{ accepted: number; processed: number } | undefined> {
     const result = await this.run<{ accepted: string | number; processed: string | number }>(
-      'SELECT accepted_version AS accepted, processed_version AS processed FROM tasks WHERE id=$1',
+      'SELECT accepted_version AS accepted, processed_version AS processed FROM butler_tasks WHERE id=$1',
       [taskId],
     )
     const row = result.rows[0]
@@ -694,7 +765,7 @@ export class PostgresTaskStorage implements ButlerStorage {
 
   async inputs(taskId: string): Promise<TaskInput[]> {
     const result = await this.run<{ version: string | number; text: string; source: string; createdAt: string | number }>(
-      'SELECT version,text,source,created_at AS "createdAt" FROM task_inputs WHERE task_id=$1 ORDER BY version',
+      'SELECT version,text,source,created_at AS "createdAt" FROM butler_task_inputs WHERE task_id=$1 ORDER BY version',
       [taskId],
     )
     return result.rows.map(row => ({
@@ -708,7 +779,7 @@ export class PostgresTaskStorage implements ButlerStorage {
   async setProcessedVersion(taskId: string, version: number): Promise<void> {
     // 只往前追：回调乱序或者重放时不可能把已经处理过的输入退回未处理。
     await this.run(
-      'UPDATE tasks SET processed_version=$1, updated_at=$2 WHERE id=$3 AND processed_version < $1',
+      'UPDATE butler_tasks SET processed_version=$1, updated_at=$2 WHERE id=$3 AND processed_version < $1',
       [version, Date.now(), taskId],
     )
   }
@@ -719,18 +790,18 @@ export class PostgresTaskStorage implements ButlerStorage {
       // 串行化，编号接着现有的往下排，不复用也不跳号。owner 过滤同一把锁完成：任务不存在
       // 或不属于该用户都是同一个结果，不泄露存在性。
       const locked = await client.query<{ id: string }>(
-        'SELECT id FROM tasks WHERE id=$1 AND owner_namespace=$2 AND owner_id=$3 FOR UPDATE',
+        'SELECT id FROM butler_tasks WHERE id=$1 AND owner_namespace=$2 AND owner_id=$3 FOR UPDATE',
         [taskId, actor.namespace, actor.userId],
       )
       if (locked.rows[0] === undefined) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
       const seqResult = await client.query<{ maxSeq: string | number | null }>(
-        'SELECT max(seq) AS "maxSeq" FROM subtasks WHERE task_id=$1', [taskId],
+        'SELECT max(seq) AS "maxSeq" FROM butler_subtasks WHERE task_id=$1', [taskId],
       )
       const start = Number(seqResult.rows[0]?.maxSeq ?? 0)
       const logicalResult = await client.query<{ logicalId: string }>(
         // SQL 空串字面量：JS 侧两个 \' 转义出 <>''（曾误写成一个引号导致整条语句 42601）；
         // 列别名为驼峰（曾漏写别名，读 row.logicalId 拿到 undefined）。
-        'SELECT DISTINCT logical_id AS "logicalId" FROM subtasks WHERE task_id=$1 AND logical_id<>\'\'', [taskId],
+        'SELECT DISTINCT logical_id AS "logicalId" FROM butler_subtasks WHERE task_id=$1 AND logical_id<>\'\'', [taskId],
       )
       // 新目标的标识从现有最大值往下排，不与已有的撞号。
       const nextLogical = logicalResult.rows.reduce((max, row) => {
@@ -740,19 +811,19 @@ export class PostgresTaskStorage implements ButlerStorage {
       const ids: string[] = []
       for (const [index, subtask] of subtasks.entries()) {
         await client.query(
-          `INSERT INTO subtasks(${SUBTASK_INSERT_COLUMNS}) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          `INSERT INTO butler_subtasks(${SUBTASK_INSERT_COLUMNS}) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
           subtaskInsertValues(taskId, subtask, start + index + 1, subtask.logicalId ?? `g${nextLogical + index + 1}`),
         )
         ids.push(subtask.id)
       }
-      await client.query('UPDATE tasks SET updated_at=$1 WHERE id=$2', [Date.now(), taskId])
+      await client.query('UPDATE butler_tasks SET updated_at=$1 WHERE id=$2', [Date.now(), taskId])
       return ids
     })
   }
 
   async counts(actor: Actor): Promise<TaskCounts> {
     const result = await this.run<{ state: string; total: string | number }>(
-      'SELECT state, count(*) AS total FROM tasks WHERE owner_namespace=$1 AND owner_id=$2 GROUP BY state',
+      'SELECT state, count(*) AS total FROM butler_tasks WHERE owner_namespace=$1 AND owner_id=$2 GROUP BY state',
       [actor.namespace, actor.userId],
     )
     const rows = result.rows.map(row => ({ state: row.state as TaskState, total: Number(row.total) }))
@@ -771,9 +842,9 @@ export class PostgresTaskStorage implements ButlerStorage {
   async recentFailures(actor: Actor, limit: number): Promise<{ id: string; goal: string; error: string; updatedAt: number }[]> {
     const result = await this.run<{ id: string; goal: string; error: string; updatedAt: string | number }>(
       `SELECT t.id AS "id", t.goal AS "goal",
-         COALESCE(NULLIF(t.error,''), (SELECT s.error FROM subtasks s WHERE s.task_id=t.id AND s.error!='' ORDER BY s.seq LIMIT 1), '') AS error,
+         COALESCE(NULLIF(t.error,''), (SELECT s.error FROM butler_subtasks s WHERE s.task_id=t.id AND s.error!='' ORDER BY s.seq LIMIT 1), '') AS error,
          t.updated_at AS "updatedAt"
-       FROM tasks t WHERE t.owner_namespace=$1 AND t.owner_id=$2 AND t.state='failed'
+       FROM butler_tasks t WHERE t.owner_namespace=$1 AND t.owner_id=$2 AND t.state='failed'
        ORDER BY t.updated_at DESC LIMIT $3`,
       [actor.namespace, actor.userId, limit],
     )
@@ -785,13 +856,13 @@ export class PostgresTaskStorage implements ButlerStorage {
     return this.withTransaction(async (client) => {
       // §3 重启恢复规格：任务与子任务两条 UPDATE 并为一个事务，避免「任务收了、子任务还转圈」。
       const tasks = await client.query(
-        `UPDATE tasks SET state='failed', error=$1, updated_at=$2, finished_at=COALESCE(finished_at,$2)
+        `UPDATE butler_tasks SET state='failed', error=$1, updated_at=$2, finished_at=COALESCE(finished_at,$2)
          WHERE state IN ('queued','running','waiting_user','summarizing')`,
         ['服务已重启，这次任务没有跑完', now],
       )
       if ((tasks.rowCount ?? 0) > 0) {
         await client.query(
-          `UPDATE subtasks SET state='failed', error=$1, finished_at=COALESCE(finished_at,$2)
+          `UPDATE butler_subtasks SET state='failed', error=$1, finished_at=COALESCE(finished_at,$2)
            WHERE state IN ('queued','dispatched','running','waiting_user')`,
           ['服务已重启，这个子任务没有跑完', now],
         )
@@ -803,7 +874,7 @@ export class PostgresTaskStorage implements ButlerStorage {
   async request(actor: Actor, kind: string, requestId: string): Promise<RequestRecord | undefined> {
     const result = await this.run<RequestRow>(
       `SELECT kind,digest,state,run_id AS "runId",conversation_id AS "conversationId",updated_at AS "updatedAt"
-       FROM requests WHERE owner_namespace=$1 AND owner_id=$2 AND kind=$3 AND request_id=$4`,
+       FROM butler_requests WHERE owner_namespace=$1 AND owner_id=$2 AND kind=$3 AND request_id=$4`,
       [actor.namespace, actor.userId, kind, requestId],
     )
     const row = result.rows[0]
@@ -817,13 +888,13 @@ export class PostgresTaskStorage implements ButlerStorage {
       // 顺带清掉过期记录，**只清已完成的**：claimed 意味着「可能已经执行过、结果不明」，
       // 它是防重的唯一依据，永不按时间清除（§3）。
       await client.query(
-        `DELETE FROM requests WHERE owner_namespace=$1 AND owner_id=$2 AND state='finished' AND updated_at < $3`,
+        `DELETE FROM butler_requests WHERE owner_namespace=$1 AND owner_id=$2 AND state='finished' AND updated_at < $3`,
         [actor.namespace, actor.userId, now - ttlMs],
       )
       // §3：库级唯一约束 (owner_namespace,owner_id,kind,request_id) + ON CONFLICT DO NOTHING，
       // 同事务回读决出胜者；两个并发请求不再可能双双通过「先查有没有」。
       const inserted = await client.query(
-        `INSERT INTO requests(owner_namespace,owner_id,kind,request_id,digest,state,run_id,conversation_id,created_at,updated_at)
+        `INSERT INTO butler_requests(owner_namespace,owner_id,kind,request_id,digest,state,run_id,conversation_id,created_at,updated_at)
          VALUES($1,$2,$3,$4,$5,'claimed',$6,$7,$8,$8)
          ON CONFLICT (owner_namespace,owner_id,kind,request_id) DO NOTHING`,
         [actor.namespace, actor.userId, kind, requestId, digest, runId, conversationId, now],
@@ -832,7 +903,7 @@ export class PostgresTaskStorage implements ButlerStorage {
       // 败者同事务回读胜者记录：调用方据它做 digest 冲突与结果不明判定。
       const existing = await client.query<RequestRow>(
         `SELECT kind,digest,state,run_id AS "runId",conversation_id AS "conversationId",updated_at AS "updatedAt"
-         FROM requests WHERE owner_namespace=$1 AND owner_id=$2 AND kind=$3 AND request_id=$4`,
+         FROM butler_requests WHERE owner_namespace=$1 AND owner_id=$2 AND kind=$3 AND request_id=$4`,
         [actor.namespace, actor.userId, kind, requestId],
       )
       const row = existing.rows[0]
@@ -846,7 +917,7 @@ export class PostgresTaskStorage implements ButlerStorage {
   async bindRequest(actor: Actor, kind: string, requestId: string, runId: string, conversationId: string): Promise<void> {
     // 条件更新语义保持：只补空标识，不覆盖已绑定的（§3）。
     await this.run(
-      `UPDATE requests SET run_id=$1, conversation_id=$2, updated_at=$3
+      `UPDATE butler_requests SET run_id=$1, conversation_id=$2, updated_at=$3
        WHERE owner_namespace=$4 AND owner_id=$5 AND kind=$6 AND request_id=$7 AND conversation_id=''`,
       [runId, conversationId, Date.now(), actor.namespace, actor.userId, kind, requestId],
     )
@@ -854,7 +925,7 @@ export class PostgresTaskStorage implements ButlerStorage {
 
   async finishRequest(actor: Actor, kind: string, requestId: string): Promise<void> {
     await this.run(
-      `UPDATE requests SET state='finished', updated_at=$1
+      `UPDATE butler_requests SET state='finished', updated_at=$1
        WHERE owner_namespace=$2 AND owner_id=$3 AND kind=$4 AND request_id=$5`,
       [Date.now(), actor.namespace, actor.userId, kind, requestId],
     )
@@ -862,7 +933,7 @@ export class PostgresTaskStorage implements ButlerStorage {
 
   async releaseRequest(actor: Actor, kind: string, requestId: string): Promise<void> {
     await this.run(
-      'DELETE FROM requests WHERE owner_namespace=$1 AND owner_id=$2 AND kind=$3 AND request_id=$4',
+      'DELETE FROM butler_requests WHERE owner_namespace=$1 AND owner_id=$2 AND kind=$3 AND request_id=$4',
       [actor.namespace, actor.userId, kind, requestId],
     )
   }
@@ -870,7 +941,7 @@ export class PostgresTaskStorage implements ButlerStorage {
   /** 【§3 新增专用原子操作】等待超时原子结账：单条条件 UPDATE，只写 error 不碰 result。 */
   async expireWaitingSubtask(taskId: string, subtaskId: string, error: string): Promise<boolean> {
     const result = await this.run(
-      `UPDATE subtasks SET state='failed', error=$1, finished_at=COALESCE(finished_at,$2)
+      `UPDATE butler_subtasks SET state='failed', error=$1, finished_at=COALESCE(finished_at,$2)
        WHERE task_id=$3 AND id=$4 AND state='waiting_user'`,
       [error, Date.now(), taskId, subtaskId],
     )
