@@ -17,8 +17,7 @@ plugins/external/dsh-agents-group/
 ├── package.json             # 群组的 DSH 声明（包 id = agents-group）
 ├── cordis.patch.yml         # Bundle 默认配置
 ├── dev/dev-hmr.patch.yml    # 开发期热重载（群组级统一开发根）
-├── config/group.example.json# 业务配置模板；实际文件用 AGENTS_GROUP_CONFIG 指向
-├── config/storage.example.json # 业务存储（PostgreSQL）配置模板；见「业务存储配置与迁移」
+├── config/group.example.json# 唯一的业务配置模板（各 Agent 小节 + 存储 dsn）；实际值在站点配置维护
 ├── scripts/hmr-observer.mjs # 开发期工具，不随归档交付
 ├── scripts/migrate-blog-storage.ts # 存量迁移工具，构建成 dist/migrate-blog-storage.mjs
 ├── src/
@@ -199,15 +198,15 @@ provider 时不会自动生效。
 ### PostgreSQL 配置（三路来源，按优先级）
 
 1. 环境变量 `AGENTS_GROUP_PG_DSN`：直接给连接串（开发/测试最方便）。
-2. 私有配置文件 + 环境变量 `AGENTS_GROUP_PG_CONFIG` 指向它：文件内容形如
-   `{"dsn":"postgresql://用户:密码@主机:5432/库名"}`。
-3. 都没设时的缺省路径：`<DSH 主目录>/plugins/agents-group/storage.json`（存在才读，格式同上）。
+2. 环境变量 `AGENTS_GROUP_PG_CONFIG` 指向的私有配置文件。
+3. 都没设时的缺省路径：`<DSH 主目录>/plugins/agents-group/env.conf`（存在才读）。
 
-模板见 `config/storage.example.json`（复制后填写，不要提交 Git）。凭据只走环境变量与私有
-文件，**绝不写进 cordis 配置或 `plugin.json`**。注意：群组 manifest 的 `runtimeConfig` 槽位
-已被 `AGENTS_GROUP_CONFIG`（`config/group.example.json`）占用，所以存储配置**不由管理器挂载
-模板**——它是手写的私有文件或环境变量。每组独立数据库与独立运行账号，库内表按插件前缀平铺
-（博客用 `blog_` 前缀），将来其他 Agent 迁入各管各的表与版本行。
+文件两种写法都认：一行 `AGENTS_GROUP_PG_DSN=postgresql://…`，或 `{"dsn":"postgresql://…"}`。
+站点部署推荐把 dsn 直接写在群组配置的顶层——`DSH_PLUGIN_CONFIG.agents-group` 里与各 Agent
+小节并列（模板见 `config/group.example.json`）——构建时派生成上面第 3 路的文件，DSH 同时把
+它挂载给群组装配，一份文件满足两条读取路径。凭据只走环境变量与私有配置，**绝不写进 cordis
+配置或 `plugin.json`**。每组独立数据库与独立运行账号，库内表按插件前缀平铺（博客用 `blog_`
+前缀），将来其他 Agent 迁入各管各的表与版本行。
 
 ### 初始化结构
 

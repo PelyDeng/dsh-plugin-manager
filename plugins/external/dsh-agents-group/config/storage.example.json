@@ -1,4 +1,0 @@
-{
-  "$comment": "智能体群组的业务存储（PostgreSQL）配置模板。复制为实际文件（不要提交 Git）：默认位置 <DSH 主目录>/plugins/agents-group/storage.json，或用环境变量 AGENTS_GROUP_PG_CONFIG 指向别处；开发测试也可以直接用环境变量 AGENTS_GROUP_PG_DSN 传连接串（优先级高于本文件）。dsn 形如 postgresql://用户:密码@主机:5432/库名，群组内各智能体共用这一个库、表按插件前缀平铺（博客用 blog_ 前缀），每个群组使用独立数据库与独立运行账号。凭据只走环境变量与该私有文件，绝不写进群组配置（AGENTS_GROUP_CONFIG 指向的 group.json）或 Git。注意：群组根 manifest 的 runtimeConfig 槽位已被 AGENTS_GROUP_CONFIG 占用，本模板不由管理器挂载，只作手写私有文件的样例。",
-  "dsn": "postgresql://用户:密码@主机:5432/库名"
-}

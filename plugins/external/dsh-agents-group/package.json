@@ -19,7 +19,6 @@
     "dist/",
     "agents/",
     "config/group.example.json",
-    "config/storage.example.json",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -45,7 +44,6 @@
     ],
     "verifyFiles": [
       "config/group.example.json",
-      "config/storage.example.json",
       "agents/closedoff/persona.txt",
       "agents/closedoff/web/index.html",
       "agents/blog/runtime/chat-sdk.mjs",
