@@ -197,7 +197,13 @@ export class ChatStore {
    * 标题投影：**同步返回**"这次写入被守卫接受了吗"。
    *
    * 判定读**本地镜像**（`fenceOf`，无归属过滤——标题事件只带会话 id），与 PG 侧那条 `UPDATE`
-   * 的守卫逐字对应：已发布、未删除、无围栏标记，且（当前是自动标题 **或** 本次是人工改名）。
+   * 的守卫逐字对应：未删除、无围栏标记，且（**已发布 _或_ 本次是人工改名**），
+   * 且（当前是自动标题 **或** 本次是人工改名）。
+   *
+   * ⚠️ `ready` 那一半**只约束自动 / 生成标题**：页面列表自 `e78e285` 起包含未发布会话
+   * （`includeUnready`），`mutate` 的改名路径也只要求未删除、无围栏 ⇒ 用户在页面上能看见
+   * "新建对话"、能改它的名字。此时若这里返回 `false`，页面**不会广播 `changed`**，改名要等
+   * 手动刷新才出现；而 PG 那一侧同样会把它拒掉（两处同改，见 `postgres.ts` 的 `syncTitle`）。
    *
    * ⚠️ 镜像可能**滞后于 PG**（后台排空补写 PG 之后不会回头改镜像）。所以这里的分工是：
    * - **返回值**（要不要广播 `changed`）取自镜像：滞后最多让页面少刷一次或多刷一次；
@@ -213,7 +219,8 @@ export class ChatStore {
     // `titleSource` 已经被这次投递改掉，再判"当前是不是 automatic"就变成问**写入之后**的状态
     // ——自动标题会被自己刚写下的值挡住。本批次实测过一次（`complete=true` 的那条断言红了）。
     const row = this.db.conversations.fenceOf(id)
-    const accepted = row !== undefined && row.ready && row.deletedAt === null && row.removalState === ''
+    const accepted = row !== undefined && row.deletedAt === null && row.removalState === ''
+      && (row.ready || manual)
       && (row.titleSource === 'automatic' || manual)
     // 投递**总是**发生：镜像里没有这一行也照投（队列是持久的，PG 侧守卫会拒绝不该写的）。
     this.db.titleSink?.().submit(this.db.conversations.agentId, id, title, source)

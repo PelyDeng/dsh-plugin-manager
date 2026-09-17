@@ -465,13 +465,25 @@ export class PgConversations implements PgConversationPart {
    * **自动标题不覆盖手动标题**：只有当前 `title_source = 'automatic'`（或本次来源是 `manual`）
    * 才写。这是"自动结果不覆盖手动、分支和既有标题"那条约定的落点，与 kit 的
    * `registerConversationTitles` 语义配套。
+   *
+   * ⚠️ **`ready` 只约束自动 / 生成标题**（`ready = TRUE OR $2 = 'manual'`）。这不是放宽，而是让
+   * **两层的准入判定一致**：`ChatStore.mutate` 的改名路径只要求 `deleted_at IS NULL AND
+   * removal_state = ''`，而页面列表自 `e78e285` 起**包含未发布会话**（`includeUnready`）——
+   * 于是用户看得见"新建对话"、改得了它的名字，却在写这一层被**静默**拒绝（`UPDATE` 影响 0 行、
+   * 无异常、HTTP 200，刷新后名字又变回"新对话"）。
+   * 原始理由"未发布的会话不该有官方标题、避免侧栏提前可见"针对的是**宿主事件驱动的**自动标题；
+   * 而 `manual` 是用户在**他看得见**的对象上做的显式动作。
+   *
+   * ⚠️ **`deleted_at` / `removal_state` 两道不放宽**：它们是**移除围栏**，与"发布握手"不是一回事
+   * （给待移除的会话改标题，会让移除围栏看到一条还在变的记录）。
    */
   async syncTitle(owner: OwnerKey, conversationId: string, title: string,
     source: 'automatic' | 'generated' | 'manual'): Promise<void> {
     await this.scoped.query(
       `UPDATE dsh_conversations SET title = $1, title_source = $2
         WHERE id = $3 AND agent_id = $4 AND owner_namespace = $5 AND owner_id = $6
-          AND ready = TRUE AND deleted_at IS NULL AND removal_state = ''
+          AND deleted_at IS NULL AND removal_state = ''
+          AND (ready = TRUE OR $2 = 'manual')
           AND (title_source = 'automatic' OR $2 = 'manual')`,
       [title, source, conversationId, this.agentId, owner.namespace, owner.userId],
     )

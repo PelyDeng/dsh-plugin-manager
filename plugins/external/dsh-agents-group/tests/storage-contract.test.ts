@@ -200,39 +200,62 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
     } finally { await db.close() }
   })
 
-  it('syncTitle 的三道守卫：未发布 / 已删除 / 有围栏标记的会话都不写标题', async () => {
-    // 守卫是 `ready = TRUE AND deleted_at IS NULL AND removal_state = ''`，此前**零覆盖**：
-    // 既有"标题 outbox"用例覆盖的是"自动标题不覆盖手动标题"，删掉这三道里的任意一道都不会有
-    // 用例变红。三道各自对应一个真实后果：给未发布的预留会话起标题会让它在侧栏提前可见；
-    // 给已删除或待移除的会话改标题，会让移除围栏看到一条还在变的记录。
+  it('syncTitle 的守卫：`ready` 只约束自动 / 生成标题，围栏两道对两种来源都成立', async () => {
+    /**
+     * 守卫是 `deleted_at IS NULL AND removal_state = '' AND (ready = TRUE OR $2='manual')
+     * AND (title_source = 'automatic' OR $2='manual')`。
+     *
+     * ⚠️ **`ready` 那一半只约束自动 / 生成标题**（`e78e285` 之后的定案）：页面列表自那次起
+     * **包含未发布会话**（`includeUnready`），而 `ChatStore.mutate` 的改名路径只要求
+     * `deletedAt === null && removalState === ''` ⇒ 用户在页面上**看得见**"新建对话"、也**改得了**
+     * 它的名字。若这里仍要求 `ready`，那次改名会被**静默丢弃**（`UPDATE` 影响 0 行、无异常、
+     * HTTP 200，刷新后名字又变回"新对话"）。
+     *
+     * ⚠️ **围栏两道（`deleted_at` / `removal_state`）不放宽**：它们不是"发布握手"，而是移除围栏；
+     * 给待移除的会话改标题，会让围栏看到一条还在变的记录。
+     */
     const { db } = await newFacade()
-    const titleOf = async (id: string): Promise<string> =>
-      (await admin.query<{ title: string }>('SELECT title FROM dsh_conversations WHERE id = $1', [id])).rows[0]?.title ?? '<missing>'
     try {
-      // ① 未发布（预留段，`ready = FALSE`）⇒ 写不进去。
+      // ① 未发布（预留段，`ready = FALSE`）：自动 / 生成标题写不进去，**人工改名写得进去**。
       const reserved = conversationId()
       await db.conversations.create(owner, reserved, '')
-      await db.conversations.syncTitle(owner, reserved, '预留段的标题', 'automatic')
+      await db.conversations.syncTitle(owner, reserved, '迟到的自动标题', 'automatic')
       expect(await titleOf(reserved)).toBe('')
+      await db.conversations.syncTitle(owner, reserved, '迟到的生成标题', 'generated')
+      expect(await titleOf(reserved)).toBe('')
+      await db.conversations.syncTitle(owner, reserved, '用户自己改的名字', 'manual')
+      expect(await titleOf(reserved)).toBe('用户自己改的名字')
+      expect(await titleSourceOf(reserved)).toBe('manual')
 
-      // ② 已发布但已删除（`deleted_at` 非空）⇒ 写不进去。
+      // ② 已发布但已删除（`deleted_at` 非空）：**两种来源都写不进去**。
       const deleted = conversationId()
       await db.conversations.create(owner, deleted, '')
       await db.conversations.publish(owner, deleted)
       await admin.query('UPDATE dsh_conversations SET deleted_at = $1 WHERE id = $2', [Date.now(), deleted])
-      await db.conversations.syncTitle(owner, deleted, '删除后的标题', 'automatic')
+      await db.conversations.syncTitle(owner, deleted, '删除后的自动标题', 'automatic')
+      expect(await titleOf(deleted)).toBe('')
+      await db.conversations.syncTitle(owner, deleted, '删除后的人工改名', 'manual')
       expect(await titleOf(deleted)).toBe('')
 
-      // ③ 已发布但有围栏标记（`removal_state` 非空）⇒ 写不进去。
+      // ③ 已发布但有围栏标记（`removal_state` 非空）：**两种来源都写不进去**。
       const fenced = conversationId()
       await db.conversations.create(owner, fenced, '')
       await db.conversations.publish(owner, fenced)
       await admin.query("UPDATE dsh_conversations SET removal_state = 'pending' WHERE id = $1", [fenced])
-      await db.conversations.syncTitle(owner, fenced, '围栏里的标题', 'automatic')
+      await db.conversations.syncTitle(owner, fenced, '围栏里的自动标题', 'automatic')
+      expect(await titleOf(fenced)).toBe('')
+      await db.conversations.syncTitle(owner, fenced, '围栏里的人工改名', 'manual')
       expect(await titleOf(fenced)).toBe('')
 
+      // ④ 未发布的人工改名之后**再发布**，那条人工标题必须还在（不能被发布流程或后续自动标题抹掉）。
+      await db.conversations.publish(owner, reserved)
+      expect(await titleOf(reserved)).toBe('用户自己改的名字')
+      expect(await titleSourceOf(reserved)).toBe('manual')
+      await db.conversations.syncTitle(owner, reserved, '发布后的官方标题', 'automatic')
+      expect(await titleOf(reserved)).toBe('用户自己改的名字')
+
       // 反向对照：同一条调用在**已发布、未删除、无围栏**的会话上必须真的写进去。少了这一条，
-      // 上面三个"没写进去"可能只是整条路径没通（那就是三个天然假绿）。
+      // 上面那些"没写进去"可能只是整条路径没通（那就是天然假绿）。
       const healthy = conversationId()
       await db.conversations.create(owner, healthy, '')
       await db.conversations.publish(owner, healthy)
@@ -1215,6 +1238,37 @@ describe.skipIf(DSN === '')('私有侧存储契约（真 PG）', () => {
         'SELECT title, title_source FROM dsh_conversations WHERE id = $1', [id])
       expect(rows.rows[0]?.title).toBe('老板取的名字')
       expect(rows.rows[0]?.title_source).toBe('manual')
+      expect(second.health().title.depth).toBe(0)
+    } finally { await second.close() }
+  })
+
+  it('★ 标题 outbox 的守卫与前台同形：未发布会话的**人工改名**要补进 PG，自动标题仍不补', async () => {
+    /**
+     * 这一条专门盯**排空那条 SQL 里的守卫拷贝**（`storage/index.ts` 的 `drainOutboxes`）。
+     *
+     * 为什么必须单独盯：那份守卫是前台（`postgres.ts` 的 `syncTitle`）那条 SQL 的**第二份拷贝**，
+     * 而 **blog 的人工改名正是走队列这条路**（`ChatStore.syncTitle → titleSink → outbox → drain`，
+     * 它**不**直接调端口）。于是"前台改了、拷贝没改"会表现成：页面上改了名字、队列里也确实排了、
+     * 补写时被**静默丢掉**，刷新后又变回旧名字——没有任何报错。
+     */
+    const manualId = conversationId()
+    const autoId = conversationId()
+    const first = await newFacade()
+    await first.db.conversations.create(owner, manualId, '')
+    await first.db.conversations.create(owner, autoId, '')
+    // 两个会话都**未发布**（`ready = FALSE`）。
+    first.db.titleSink().submit(AGENT, manualId, '队列里的人工改名', 'manual')
+    first.db.titleSink().submit(AGENT, autoId, '队列里的自动标题', 'automatic')
+    expect(first.db.health().title.depth).toBe(2)
+    await first.db.close()
+
+    const second = reopen(first.path)
+    try {
+      await second.open()
+      expect(await titleOf(manualId)).toBe('队列里的人工改名')
+      expect(await titleSourceOf(manualId)).toBe('manual')
+      // 自动标题在未发布会话上**仍然**不补（`ready` 那一半没有对它放宽）。
+      expect(await titleOf(autoId)).toBe('')
       expect(second.health().title.depth).toBe(0)
     } finally { await second.close() }
   })

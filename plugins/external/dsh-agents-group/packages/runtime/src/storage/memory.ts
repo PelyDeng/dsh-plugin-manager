@@ -362,7 +362,11 @@ export class MemoryConversationPort implements ConversationPort {
 
   /** 标题写入的**唯一**判定点（`syncTitle` 与 `deliverTitle` 共用，两处各写一份必然漂移）。 */
   private writeTitle(row: MemoryRow, title: string, source: TitleSource): void {
-    if (!row.ready || row.deletedAt !== null || row.removalState !== '') return
+    // 围栏两道**不放宽**（与 PG 同源）：已删除 / 有围栏标记的会话不写标题。
+    if (row.deletedAt !== null || row.removalState !== '') return
+    // ⚠️ `ready` 只约束自动 / 生成标题：**人工改名在未发布会话上也要写得进去**
+    // （页面自 `e78e285` 起包含未发布会话，而改名是用户看得见的显式动作）。
+    if (!row.ready && source !== 'manual') return
     if (row.titleSource !== 'automatic' && source !== 'manual') return
     row.title = title
     row.titleSource = source

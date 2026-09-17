@@ -464,10 +464,19 @@ export class AgentDatabaseFacade implements AgentDatabasePort {
       const batch = this.local.titlePending(100)
       if (batch.length === 0) break
       for (const entry of batch) {
-        // 补写走与前台同一条路径（它自带"自动标题不覆盖手动标题"的守卫）。
+        /**
+         * 补写走与前台同一条路径（它自带"自动标题不覆盖手动标题"的守卫）。
+         *
+         * ⚠️ **这份守卫是前台那条 SQL 的拷贝，两处必须逐字同形**——判据也一样：
+         * `ready` 只约束自动 / 生成标题，**人工改名在未发布会话上也要写得进去**（blog 的改名走
+         * `ChatStore.syncTitle → titleSink → 本队列`，而页面自 `e78e285` 起看得见未发布会话）。
+         * 围栏两道（`deleted_at` / `removal_state`）不放宽。
+         * 详见 `postgres.ts` 的 `syncTitle` 注释。
+         */
         await this.pg.query(
           `UPDATE dsh_conversations SET title = $1, title_source = $2
-            WHERE id = $3 AND agent_id = $4 AND ready = TRUE AND deleted_at IS NULL AND removal_state = ''
+            WHERE id = $3 AND agent_id = $4 AND deleted_at IS NULL AND removal_state = ''
+              AND (ready = TRUE OR $2 = 'manual')
               AND (title_source = 'automatic' OR $2 = 'manual')`,
           [entry.title, entry.source, entry.conversationId, this.input.agentId],
         )

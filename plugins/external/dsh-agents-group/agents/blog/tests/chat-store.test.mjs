@@ -29,6 +29,8 @@ test('host titles complete new conversations without replacing manual, legacy or
   const owner='user:alice'
   const c=await chats.create(owner,'title-conversation')
   // 未发布（还在创建握手里）⇒ 不广播：`syncTitle` 返回 `false`，标题投递仍会排队（PG 侧守卫兜底）。
+  // ⚠️ 这一条是**自动标题**的口径；**人工改名**在未发布会话上要放行（见下面那条用例与 `chat-store.ts`
+  // 的守卫注释：页面列表自 `e78e285` 起包含未发布会话，用户在页面上看得见它、也改得了它的名字）。
   assert.equal(chats.syncTitle(c.id,'尚未创建'),false)
   await chats.save(owner,c.id,{ready:true,title:'首句占位'})
   const updated=(await chats.get(owner,c.id)).updatedAt
@@ -56,6 +58,44 @@ test('host titles complete new conversations without replacing manual, legacy or
   assert.equal(chats.syncTitle(removed.id,'不能复活已删除记录',false,true),false)
   assert.equal(chats.syncTitle(removed.id,'手动事件也不能复活',true,true),false)
   assert.equal(chats.syncTitle('another-plugin-session','无关会话',false,true),false)
+})
+
+/**
+ * ⚠️ **未发布会话的人工改名**：镜像侧的判定也要放行，否则页面**不广播 `changed`**。
+ *
+ * 为什么：页面列表自 `e78e285` 起包含未发布会话（`includeUnready`），而 `mutate` 的改名路径
+ * 只要求"未删除、无围栏" ⇒ 用户在页面上**看得见**"新建对话"、也**改得了**它的名字。
+ * 此时若镜像这一份判定仍要求 `ready`，`syncTitle` 返回 `false` ⇒ 页面不刷新（改名要手动刷新
+ * 才出现）；而 PG 那一侧同样会把它拒掉、**静默不落库**。两处（严格说是四处）守卫必须同改，
+ * 真 PG 侧的对照在 `tests/storage-contract.test.ts` 的同名用例。
+ *
+ * ⚠️ 自动 / 生成标题**不受影响**：未发布会话上它们仍然返回 `false`（原始理由"避免侧栏提前可见"
+ * 针对的正是宿主事件驱动的自动标题）。这条是"只有 manual 放宽"的护栏。
+ */
+test('未发布会话的人工改名在镜像侧也放行，自动/生成标题仍不放行',async()=>{
+  const {chats}=fixture()
+  const owner='user:alice'
+  const c=await chats.create(owner,'unpublished-rename')
+  assert.equal((await chats.get(owner,c.id)).ready,false)
+  // 自动 / 生成：仍被 `ready` 挡住。
+  assert.equal(chats.syncTitle(c.id,'迟到的自动标题',false,false),false)
+  assert.equal(chats.syncTitle(c.id,'迟到的生成标题',false,true),false)
+  assert.notEqual((await chats.get(owner,c.id)).title,'迟到的生成标题')
+  // 人工改名：放行 ⇒ 页面会广播 `changed`，而且镜像里的标题真的变了。
+  assert.equal(chats.syncTitle(c.id,'用户改的名字',true,false),true)
+  const after=await chats.get(owner,c.id)
+  assert.equal(after.title,'用户改的名字')
+  assert.equal(after.titleSource,'manual')
+  // 放行之后到达的自动 / 生成标题**不能覆盖**它（自动不覆盖手动那条约定的落点）。
+  assert.equal(chats.syncTitle(c.id,'发布后的官方标题',false,true),false)
+  assert.equal((await chats.get(owner,c.id)).title,'用户改的名字')
+  // 围栏**不放宽**：已删除 / 待移除的会话上，人工改名仍然拒绝。
+  const removed=await chats.create(owner,'unpublished-removed',{ready:true})
+  chats.mark(ownerActor(owner),removed.id,'removed')
+  assert.equal(chats.syncTitle(removed.id,'已删除会话的人工改名',true,false),false)
+  const fenced=await chats.create(owner,'unpublished-fenced',{ready:true})
+  chats.mark(ownerActor(owner),fenced.id,'pending')
+  assert.equal(chats.syncTitle(fenced.id,'待移除会话的人工改名',true,false),false)
 })
 
 test('a conversation owns attachments before any article exists; sent references survive removal and stay private',async t=>{
