@@ -456,6 +456,29 @@ describe('群组端到端挂载', () => {
     expect(business.status).toBe(404)
     expect(business.body.error).toBe('草稿不存在或无权访问')
     expect(render(new Error('boom'))).toEqual({ status: 500, body: { error: '请求处理失败' } })
+
+    /**
+     * ⚠️ **跨副本**：上面那些 `StorageError` 全是 `errors.mjs` **自己那一份类**的实例，
+     * 所以 `instanceof` 当然认得出 —— 那样的断言**分不出两种实现**（正是"假绿"的形状）。
+     * 而生产上索引侧的一切故障都由**运行时那一份类**抛出（`packages/runtime/src/storage/errors.ts`，
+     * 与这一份是各自独立的 `class StorageError extends Error`）。用 `instanceof` 时它们会掉进
+     * "未知错误"分支变成 **500**，把 runbook 第 5 步要看的那颗稳定码抹掉。
+     * 这里直接用**运行时真正的那个类**构造，所以它只在 `isStorageError` 生效时才是绿的。
+     */
+    const { StorageError: RuntimeStorageError } = await import('../packages/runtime/src/storage/errors.ts')
+    const foreign = render(new RuntimeStorageError('storage_schema_missing', '索引库结构未初始化'))
+    expect(foreign.status).toBe(503)
+    expect(foreign.body.code).toBe('storage_schema_missing')
+    // 未发布/不可达也各走一遍，确认不是"恰好那条码被特判"。
+    expect(render(new RuntimeStorageError('storage_unreachable', '连接被拒绝')).status).toBe(503)
+    expect(render(new RuntimeStorageError('storage_constraint', '唯一约束冲突')).status).toBe(409)
+    // 未知码仍要有归宿：500 且**带上原码**（不能既降级又丢码）。
+    // 这一条刻意**不用任何一份类**构造：运行时的 `StorageErrorCode` 是一个联合类型，本来就**写不出**
+    // 未知码 —— 而 `isStorageError` 认的是三个稳定字段、不是原型链，所以"第三份副本"（形状相同、
+    // 类不同、码不在联合里）也必须被认出来。
+    const thirdCopy = Object.assign(new Error('没见过的码'), { name: 'StorageError', code: 'storage_something_new' })
+    expect(render(thirdCopy))
+      .toEqual({ status: 500, body: { error: '服务处理请求失败', code: 'storage_something_new' } })
   }, 30000)
 })
 

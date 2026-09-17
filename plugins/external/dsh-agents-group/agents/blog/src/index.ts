@@ -34,7 +34,7 @@ import { resolveStorageDsn } from '../../../packages/runtime/src/storage/dsn.ts'
 // 启动顺序（排空 outbox → PG 清理 → 按 PG 收敛镜像）也在它里面，blog 只调 `open()`。
 import { createAgentDatabase } from '../../../packages/runtime/src/storage/index.ts'
 import type { AgentDatabasePort } from '../../../packages/runtime/src/storage/ports.ts'
-import { StorageError } from './storage/errors.mjs'
+import { StorageError, isStorageError } from './storage/errors.mjs'
 import { BlogPgStorage } from './storage/pg.mjs'
 import type { Config } from './config.ts'
 export { Config } from './config.ts'
@@ -61,24 +61,33 @@ const STORAGE_STATUS: Record<string,{status:number,message?:string}> = {
  *
  * 存储层故障按稳定码归类：可用性类 503、约束冲突 409、未知 500，稳定码进响应体；
  * 其余错误保持 kit 默认渲染（AccessError 原状态、未知 500），对外契约不变。
+ *
+ * ⚠️ **存储故障用结构识别（`isStorageError`），不是 `instanceof`**：本边界要处理的错误
+ * **来自两侧** —— 未配置占位抛的是 `./storage/errors.mjs` 那一份类，而配好之后索引侧的故障
+ * 全部由 **运行时那一份**（`packages/runtime/src/storage/errors.ts`）抛出。`instanceof` 认不出
+ * 对方 ⇒ 本该 **503 + 稳定码** 的故障掉进"未知错误"分支变成 **500「请求处理失败」**，
+ * 而 runbook 第 5 步恰恰要求运维"任一 503 都要看它的稳定码"（`storage_schema_missing` /
+ * `storage_schema_version` / `storage_unreachable`）—— 降级成 500 等于把那条诊断路径**整条抹掉**。
  */
 export function blogStorageErrorHandler(response: ServerResponse, error: unknown): void {
+  const storage = isStorageError(error)
   const known = isAccessError(error)
-  if (!(error instanceof StorageError) && !known) {
+  if (!storage && !known) {
     console.error('agents-group/blog: 请求处理失败', error)
     response.writeHead(500, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'})
     response.end(JSON.stringify({error:'请求处理失败'}))
     return
   }
-  if (!(error instanceof StorageError)) {
+  if (!storage) {
     response.writeHead((error as {status:number}).status, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'})
     response.end(JSON.stringify({error:(error as Error).message}))
     return
   }
-  const mapped = STORAGE_STATUS[error.code] ?? STORAGE_STATUS.storage_unknown!
+  const code = (error as {code:string}).code
+  const mapped = STORAGE_STATUS[code] ?? STORAGE_STATUS.storage_unknown!
   if (mapped.status >= 500) console.error('agents-group/blog: 存储请求失败', error)
   response.writeHead(mapped.status, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'})
-  response.end(JSON.stringify({error:mapped.message ?? error.message,code:error.code}))
+  response.end(JSON.stringify({error:mapped.message ?? (error as Error).message,code}))
 }
 
 /** 未配置连接时占位的业务存储：任何读写都以 `storage_unconfigured` 拒绝（blog 未就绪，Q4）。 */

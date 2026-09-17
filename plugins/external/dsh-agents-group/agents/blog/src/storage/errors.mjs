@@ -39,6 +39,31 @@ export class StorageError extends Error {
   }
 }
 
+/**
+ * **结构识别**一份存储故障——**不是 `instanceof`**。
+ *
+ * 为什么必须有它：同一个协议在本仓有**至少三份独立实现**（本模块、
+ * `packages/runtime/src/storage/errors.ts`、`dsh-butler-console/src/storage/errors.ts`，
+ * 后者自己的注释就写明"这是私有运行时的自有实现，不是从别处复制"）。
+ * 而 blog 的 HTTP 边界（`index.ts` 的 `blogStorageErrorHandler`）要处理的错误**来自两侧**：
+ * 未配置占位抛的是**本模块**的类，而配好之后索引侧的一切故障都由**运行时那一份**抛出。
+ * `instanceof` 认不出对方那一份 ⇒ 本该是 **503 + 稳定码** 的存储故障会掉进"未知错误"分支变成
+ * **500「请求处理失败」**，把 runbook 第 5 步要运维去看的那个稳定码**整条抹掉**。
+ *
+ * kit 为同一个问题早就做过同样的选择：`isAccessError`（`packages/plugin-kit/src/access.ts:112-117`）
+ * 的注释就是 "Recognize errors emitted by another independently bundled copy of this protocol"。
+ * 这里与它逐条对齐：认 `name` + `code` + `message` 三个**稳定字段**，不认原型链。
+ *
+ * 判据刻意**不要求 `code` 在 `STORAGE_ERROR_CODES` 里**：未知码在映射表里本来就有归宿
+ * （`storage_unknown` → 500 + 带上原码），提前拒掉会让它反而失去那个归宿。
+ */
+export function isStorageError(error) {
+  return typeof error === 'object' && error !== null
+    && error.name === 'StorageError'
+    && typeof error.code === 'string'
+    && typeof error.message === 'string'
+}
+
 function pgField(error, field) {
   if (typeof error !== 'object' || error === null) return undefined
   const value = error[field]
