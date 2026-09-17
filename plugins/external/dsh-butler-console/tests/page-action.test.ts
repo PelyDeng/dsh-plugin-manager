@@ -188,7 +188,7 @@ describe('待确认操作卡', () => {
 
   it('重画整块替换：确认完只剩一张，不会越叠越多', () => {
     const page = load()
-    const view: Record<string, unknown> = { footer: make('div') }
+    const view: Record<string, unknown> = { footer: make('div', 'msg__col') }
     page.renderActionsInto(view, [{ id: 'a', kind: 'x', title: '一', summary: 's', state: 'prepared' }], context)
     page.renderActionsInto(view, [{ id: 'b', kind: 'x', title: '二', summary: 's', state: 'prepared' }], context)
     const host = view.footer as StubNode
