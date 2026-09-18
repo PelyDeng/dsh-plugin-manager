@@ -56,8 +56,13 @@ function dispatchContext(executor: ButlerAgentExecutor): Context {
  */
 function consoleFor(executor: ButlerAgentExecutor) {
   const states: string[] = []
+  /** 落库补丁（含 `result` / `memberReturn`），用来核"事件与库同源"。 */
+  const writes: { readonly state: string; readonly patch: Record<string, unknown> }[] = []
   const store = {
-    setSubtaskState: vi.fn((_taskId: string, _subtaskId: string, state: string) => { states.push(state) }),
+    setSubtaskState: vi.fn((_taskId: string, _subtaskId: string, state: string, patch?: Record<string, unknown>) => {
+      states.push(state)
+      if (patch !== undefined) writes.push({ state, patch })
+    }),
     // 派单前要核验这条子任务有没有已固定的材料快照；本文件不涉及派单材料，
     // 按「排队中、还没派出去过」算 —— 也就是唯一允许首次固定的那一种。
     task: vi.fn(() => ({
@@ -82,7 +87,7 @@ function consoleFor(executor: ButlerAgentExecutor) {
       signal: AbortSignal
     }): AsyncGenerator<ButlerEvent, unknown>
   }).dispatchSubtask.bind(console_)
-  return { dispatchSubtask, states }
+  return { dispatchSubtask, states, writes }
 }
 
 /** 让已经就绪的微任务与宏任务跑一轮，模拟页面在等待期间收到 SSE。 */
@@ -197,5 +202,57 @@ describe('子任务的进度事件实时到达页面', () => {
     expect(events[1]).toMatchObject({ type: 'subtask', state: 'running', tool: 'closedoff_vehicle_track' })
     // 状态迁移仍然只在第一条进度上报时写一次库。
     expect(states).toEqual(['dispatched', 'running', 'succeeded'])
+  })
+})
+
+/**
+ * 判据：**实时事件与落库记录同源**——正文与待确认操作都不能"刷新前一套、刷新后一套"。
+ *
+ * ## 两条真实的生产症状（用户截图报的）
+ *
+ * 1. **正文不一致**：落库拼的是 `正文 + 外部待办：理由`，而实时事件只发那句 `reason`
+ *    ⇒ 刷新前的卡片里没有"外部待办"那一段，刷新后有了。
+ * 2. **按钮只在刷新后出现**：`memberReturnOf` 把 `actions` 存进了库（回看那条路能取回来），
+ *    而 `emit` 的 extra 里**根本没有 actions 字段** ⇒ 实时那条路永远画不出确认按钮。
+ *
+ * 根因是同一个：**结构化的东西有两条路，各写各的**。所以判据也必须同时压两条路：
+ * 事件里的 `detail` 与库里的 `result` 逐字相同、`actions` 两边都在。
+ */
+describe('实时与落库同源：正文与待确认操作', () => {
+  const action = { id: 'op-1', kind: 'blog.publish', title: '发布文章', summary: '确认后公开发布。', state: 'prepared' as const }
+
+  it('external_pending：事件正文 == 落库正文，且 actions 两条路都在', async () => {
+    const { dispatchSubtask, writes } = consoleFor(executor(async () => ({
+      status: 'external_pending',
+      summary: '卡片已生成，尚未执行。',
+      externalPending: { reason: '发布确认还没点', next: '点完再派一轮' },
+      actions: [action],
+    }) as never))
+    const events: ButlerEvent[] = []
+    for await (const event of dispatchSubtask(input)) events.push(event)
+
+    const terminal = events.filter((event): event is Extract<ButlerEvent, { type: 'subtask' }> => event.type === 'subtask' && event.state === 'external_pending').at(-1)
+    expect(terminal, '没有 external_pending 的终态事件').toBeDefined()
+    // ① 正文两边一致：事件里就该有"外部待办"那一段（旧实现只有 reason）。
+    expect(terminal?.detail).toContain('外部待办：发布确认还没点')
+    expect(writes.at(-1)?.patch.result, '事件正文与落库正文漂移了').toBe(terminal?.detail)
+    // ② 待确认操作两边都在：事件里没有它，用户就只看到"要确认"却没有按钮。
+    expect(terminal?.actions, '实时事件丢了待确认操作（按钮画不出来）').toEqual([action])
+    expect((writes.at(-1)?.patch.memberReturn as { actions?: unknown } | undefined)?.actions, '落库丢了待确认操作（刷新后按钮消失）').toEqual([action])
+  })
+
+  it('succeeded：正文两边一致，带 actions 时也一并透传', async () => {
+    const { dispatchSubtask, writes } = consoleFor(executor(async () => ({
+      status: 'succeeded',
+      summary: '材料已交回。',
+      actions: [action],
+    }) as never))
+    const events: ButlerEvent[] = []
+    for await (const event of dispatchSubtask(input)) events.push(event)
+
+    const terminal = events.filter((event): event is Extract<ButlerEvent, { type: 'subtask' }> => event.type === 'subtask' && event.state === 'succeeded').at(-1)
+    expect(terminal?.detail).toBe('材料已交回。')
+    expect(writes.at(-1)?.patch.result).toBe(terminal?.detail)
+    expect(terminal?.actions).toEqual([action])
   })
 })

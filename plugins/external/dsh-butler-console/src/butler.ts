@@ -522,6 +522,31 @@ function clip(value: string, limit: number): string {
 }
 
 /**
+ * 一条子任务**对用户展示的结论正文**——落库与实时事件共用这一份拼法。
+ *
+ * ## 为什么必须只有一份
+ *
+ * 这个位置原本是两份：`applyMemberResult` 落库时写 `正文 + 外部待办：理由`，而
+ * `dispatchSubtask` 发事件时 `detail` 只发那句理由。用户在生产上直接看到了后果——
+ * **同一条子任务，刷新前卡片里没有"外部待办"那一段，刷新后有了**。两份拼法必然漂移，
+ * 所以合成一份，并由 `applyMemberResult` 把它**返回**给事件（调用方拿到的就是写进库的那个值，
+ * 结构上不可能不一致）。
+ *
+ * @param result 成员交回的结论
+ * @param limit 正文长度上限（`maxResultChars`）
+ * @param emptyText 正文为空时的兜底话术（失败分支用；缺省给空串，由调用方决定要不要兜）
+ */
+function subtaskResultText(result: ButlerDispatchResult, limit: number, emptyText = ''): string {
+  const reason = typeof result.externalPending?.reason === 'string' ? result.externalPending.reason.trim() : ''
+  if (result.status === 'external_pending' && reason !== '') {
+    // 拼法与历史记录一致（`\n\n` 会被 `clip` 压成空格）：老记录读起来也是这个形状。
+    return clip(`${result.summary}\n\n外部待办：${reason}`, limit)
+  }
+  const text = clip(result.summary, limit)
+  return text === '' ? emptyText : text
+}
+
+/**
  * 去掉标点与空白后的最少字数：只挡住「好」「行」这类连表态都算不上的输入。
  *
  * ⚠️ 它**不是**主要判据。早先的版本只数长度 + 比一张无信息词表，独立评审逐字重放实测
@@ -3085,42 +3110,58 @@ export class ButlerConsole {
    * 写入经 {@link queueSubtaskWrite} 入队（§3 同子任务写入顺序）：结果必须排在 fire-and-forget
    * 的进度写入之后落地，否则一次迟到的 running 上报会盖掉终态。
    */
-  private async applyMemberResult(taskId: string, subtaskId: string, result: ButlerDispatchResult): Promise<void> {
+  /**
+   * 把成员的结论落到子任务记录上。
+   *
+   * @returns **写进库里的那份正文**。调用方必须用它做事件里的 `detail`——实时与回看同源，
+   *   靠的就是"返回同一个值"，而不是两处各拼一次（那份不一致用户已经看见过了）。
+   */
+  private async applyMemberResult(taskId: string, subtaskId: string, result: ButlerDispatchResult, emptyText = ''): Promise<string> {
     const max = this.config.maxResultChars
     const artifacts = result.artifacts === undefined ? {} : { artifacts: result.artifacts }
     const conversation = result.conversationId === undefined || result.conversationId === ''
       ? {}
       : { conversationId: result.conversationId }
+    /**
+     * ⚠️ 正文**只在这里拼一次**（{@link subtaskResultText}），事件里的 `detail` 用它的返回值。
+     *
+     * 这条注释是花钱买来的：曾经落库拼的是 `正文 + "\n\n外部待办：…"`，而实时事件发的是
+     * 那句 `reason`——于是**同一条子任务，刷新前和刷新后看到的正文不一样**（用户在生产上直接
+     * 看到：刷新前卡片里没有"外部待办"那一段，刷新后有了）。两份拼法必然漂移，所以合成一份。
+     */
+    const text = subtaskResultText(result, max, emptyText)
     if (result.status === 'succeeded') {
-      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'succeeded', { result: clip(result.summary, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation }))
-      return
+      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'succeeded', { result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation }))
+      return text
     }
     if (result.status === 'waiting_user') {
-      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'waiting_user', { result: clip(result.summary, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation }))
-      return
+      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'waiting_user', { result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation }))
+      return text
     }
     if (result.status === 'external_pending') {
       const reason = typeof result.externalPending?.reason === 'string' ? result.externalPending.reason.trim() : ''
       if (reason === '') {
         // 声明了外部待办却没说明在等什么，按「返回不满足协作契约」收：猜一个理由等于
         // 给用户显示一件没发生过的外部事项。材料仍然保留。
+        const error = '说还有外部待办，但没说明在等什么'
         await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', {
-          error: '说还有外部待办，但没说明在等什么',
-          result: clip(result.summary, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation,
+          error, result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation,
         }))
-        return
+        return error
       }
       await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'external_pending', {
-        result: clip(`${result.summary}\n\n外部待办：${reason}`, max), memberReturn: memberReturnOf(result), ...artifacts, ...conversation,
+        result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation,
       }))
-      return
+      return text
     }
     const cancelled = result.status === 'cancelled'
     // 失败/取消只写 error，result 由 COALESCE 保留先前交回的阶段性成果。
+    const written = cancelled && text === '' ? '已停止' : text
     await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, cancelled ? 'cancelled' : 'failed', {
-      error: cancelled && clip(result.summary, max) === '' ? '已停止' : clip(result.summary, max),
+      error: written,
       memberReturn: memberReturnOf(result),
     }))
+    return written
   }
 
   /**
@@ -3171,6 +3212,15 @@ export class ButlerConsole {
         question?: string
         artifacts?: readonly AgentArtifact[]
         pending?: { readonly reason: string; readonly next?: string }
+        /**
+         * 成员交回的**待确认操作**。
+         *
+         * ⚠️ 这个字段曾经**漏在 emit 里**：落库那条路有（`memberReturnOf` 存了，回看时从
+         * `memberReturn.actions` 取回来），实时这条路没有 —— 于是用户在生产上看到的是
+         * "卡片上写着要确认，但一个按钮都没有"，刷新之后按钮才出现（回看路把它补上了）。
+         * 结构化的东西**两条路都要带**，缺哪条都会表现成"有时有、有时没有"。
+         */
+        actions?: readonly AgentAction[]
       } = {},
     ): ButlerEvent => ({
       type: 'subtask', taskId, id: subtaskId, state, agentId, displayName, detail,
@@ -3179,6 +3229,7 @@ export class ButlerConsole {
       ...(extra.question === undefined ? {} : { question: extra.question }),
       ...(extra.artifacts === undefined ? {} : { artifacts: extra.artifacts }),
       ...(extra.pending === undefined ? {} : { pending: extra.pending }),
+      ...(extra.actions === undefined || extra.actions.length === 0 ? {} : { actions: extra.actions }),
       time: Date.now(),
     })
     /**
@@ -3409,15 +3460,19 @@ export class ButlerConsole {
         return { state: 'cancelled', report: `【${displayName}】${detail}` }
       }
       if (result.status === 'failed') {
-        const detail = clip(result.summary === '' ? `${displayName} 没干成这活` : result.summary, this.config.maxResultChars)
-        await this.applyMemberResult(taskId, subtaskId, result)
-        yield emit('failed', detail)
+        // `detail` 用落库返回的**同一个值**：实时与刷新后看到的是同一段正文。
+        const detail = await this.applyMemberResult(taskId, subtaskId, result, `${displayName} 没干成这活`)
+        yield emit('failed', detail, {
+          ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
+        })
         return { state: 'failed', report: `【${displayName}】失败：${detail}` }
       }
       if (result.status === 'waiting_user') {
         const question = clip(result.question ?? result.summary, 500)
         // 落库走统一矩阵（G04）：正文、原会话与材料一次写全，刷新和重启都找得回。
-        await this.applyMemberResult(taskId, subtaskId, result)
+        // ⚠️ 事件里的 `detail` 用它的返回值（正文），问题走 `question` 字段——前端请示卡优先
+        // 显示 `question`（`askCard`），所以这里改成正文不会影响等待态的界面。
+        const detail = await this.applyMemberResult(taskId, subtaskId, result)
         // 记下等待上下文，用户回复时据此把话交回同一位成员；带上原会话引用供续问（G01）。
         this.waiting.set(`${taskId}:${subtaskId}`, {
           executor, agentId, displayName,
@@ -3425,10 +3480,11 @@ export class ButlerConsole {
         })
         // 等待不是终态，执行的定时器已经撤了，这里另起一个等回话的。
         await this.scheduleWaitingTimeout(taskId, subtaskId, displayName, input.actor)
-        yield emit('waiting_user', question, {
+        yield emit('waiting_user', detail, {
           phase: 'waiting_user',
           question,
           ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+          ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
         })
         return { state: 'waiting_user', report: `【${displayName}】等着你回话：${question}` }
       }
@@ -3436,27 +3492,28 @@ export class ButlerConsole {
         // 判定来源只有一个：员工给出的结构化声明。**不从正文措辞里猜**，也不因为
         // 「结果里带着材料」就自行把这一轮当成可以在外部收尾 —— 那正是要避免的混用。
         const reason = typeof result.externalPending?.reason === 'string' ? result.externalPending.reason.trim() : ''
-        await this.applyMemberResult(taskId, subtaskId, result)
+        const detail = await this.applyMemberResult(taskId, subtaskId, result)
         if (reason === '') {
           if (!signal.aborted) console.warn(`butler-console: 子任务 ${taskId}:${subtaskId}（${agentId}）声明 external_pending 但没有给出理由`)
-          const detail = clip(`${displayName} 说还有外部待办，但没说明在等什么`, this.config.maxResultChars)
           yield emit('failed', detail, { ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }) })
           return { state: 'failed', report: `【${displayName}】失败：${detail}` }
         }
         // 待办理由随结果落库（applyMemberResult）：只留在事件里的话，刷新之后任务详情
         // 就只剩一段正文，看不出还等着谁做什么。
-        yield emit('external_pending', reason, {
+        yield emit('external_pending', detail, {
           ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
+          ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
           pending: {
             reason,
             ...(result.externalPending?.next === undefined ? {} : { next: result.externalPending.next }),
           },
         })
-        return { state: 'external_pending', report: `【${displayName}】${clip(result.summary, this.config.maxResultChars)}\n外部待办：${reason}` }
+        return { state: 'external_pending', report: `【${displayName}】${detail}` }
       }
-      const summary = clip(result.summary, this.config.maxResultChars)
-      await this.applyMemberResult(taskId, subtaskId, result)
-      yield emit('succeeded', summary)
+      const summary = await this.applyMemberResult(taskId, subtaskId, result)
+      yield emit('succeeded', summary, {
+        ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
+      })
       return { state: 'succeeded', report: summary }
     } catch (error) {
       const stopped = signal.aborted || timedOut

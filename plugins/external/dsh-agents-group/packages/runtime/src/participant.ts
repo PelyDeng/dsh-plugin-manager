@@ -546,10 +546,30 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
             loadResults,
           }
           const taken = ledger.take()
-          // **交活工具的结果优先，投影兜底**：模型显式说了交回什么就用它；没说才回去看会话。
-          const projected: ProjectedResult = taken.result ?? (status === 'completed'
-            ? await project(context)
-            : { status, text: fallbackText })
+          /**
+           * 结论有**两个来源**，各自管哪些字段是有分工的。
+           *
+           * - **模型交回的**（`report_result`）：正文、状态、问题。它知道这一轮干了什么，
+           *   但它**复述不出结构化事实**——用户在生产上看到的就是这个后果：模型说
+           *   "发布确认卡片已生成"，而卡片上一个按钮都没有，因为 `actions` 是空的。
+           * - **业务投影**（`definition.projectResult`）：`actions` / `artifacts` /
+           *   `externalPending`。**只有业务**知道有哪些待确认操作、材料放在哪、
+           *   还等谁做什么（博客那张确认卡片的 id/字段/有效期全在业务库里）。
+           *
+           * 所以模型交活时**也要跑一次投影**，把结构化字段按业务的来；模型只保留它对正文与
+           * 状态的判断。合并规则见 {@link mergeBusinessFacts}。投影抛错**不牵连交付**：
+           * 那一轮正文已经拿到了，降级成"没有结构化字段"并留下告警。
+           */
+          const businessFacts = taken.result !== undefined && status === 'completed'
+            ? await project(context).catch((error: unknown) => {
+              console.warn(`[agents-group/runtime] ${definition.id} 的 projectResult 在模型交活后抛错（本轮仍按模型交回的内容交付）：`, error)
+              return undefined
+            })
+            : undefined
+          // **交活工具的结果优先，投影兜底**：模型没交活时才整份走投影。
+          const projected: ProjectedResult = taken.result === undefined
+            ? (status === 'completed' ? await project(context) : { status, text: fallbackText })
+            : mergeBusinessFacts(taken.result, businessFacts)
 
           /**
            * 把"这一轮的投影 + ⑦ 的汇总结论"组装成要交回协调方的结果。
@@ -957,6 +977,48 @@ function fallbackProjection(context: ResultContext, redact?: (text: string) => s
   const text = context.history.finalText.trim()
   if (text === '') return { status: 'failed', text: '没有拿到可交付的结果。' }
   return { status: 'completed', text: redact === undefined ? text : redact(text) }
+}
+
+/**
+ * 把**业务的结构化事实**合并进模型交回的结论。
+ *
+ * ## 为什么必须合并，而不是"模型交活了就不看投影"
+ *
+ * 交活工具是模型**口头**交回的一份摘要；而 `actions` / `artifacts` / `externalPending`
+ * 是**结构化事实**，只有业务知道。让模型转述它们等于让信息不在手的一方替在手的一方回答——
+ * 生产上就是这么丢的：模型说"发布确认卡片已生成"，而卡片上一个按钮都没有（`actions` 空），
+ * 用户守着一条永远点不了的发布确认。
+ *
+ * ## 合并规则
+ *
+ * | 字段 | 谁说了算 | 为什么 |
+ * | --- | --- | --- |
+ * | `text` / `question` | 模型 | 它知道这一轮实际做了什么，投影的正文常是兜底拼的 |
+ * | `actions` / `artifacts` / `externalPending` | 业务投影 | 结构化事实，模型复述不可靠 |
+ * | `status` | 模型，**但被业务事实校正** | 有待确认操作/材料时不能报 `completed` |
+ *
+ * ⚠️ 最后一条是"诚实归类"：模型看不见 `actions`，它说"完成"只是因为它把正文写完了；
+ * 而业务手里还压着一条没办的发布确认。这种时候报完成会让用户以为事情结束了。
+ *
+ * @param model 模型交回的结论（`report_result`）
+ * @param facts 业务投影的结论；投影没跑或抛错时为 undefined（降级：保持模型那一份）
+ * @returns 合并后的结论
+ */
+function mergeBusinessFacts(model: ProjectedResult, facts: ProjectedResult | undefined): ProjectedResult {
+  if (facts === undefined) return model
+  const actions = facts.actions === undefined || facts.actions.length === 0 ? undefined : facts.actions
+  const artifacts = facts.artifacts === undefined || facts.artifacts.length === 0 ? undefined : facts.artifacts
+  const merged: ProjectedResult = {
+    ...model,
+    ...(actions === undefined ? {} : { actions }),
+    ...(artifacts === undefined ? {} : { artifacts }),
+    ...(facts.externalPending === undefined ? {} : { externalPending: facts.externalPending }),
+  }
+  // 有待确认操作或外部待办时，"完成"是错的：事情还有一步在用户手里。
+  if (merged.status === 'completed' && (actions !== undefined || facts.externalPending !== undefined)) {
+    return { ...merged, status: 'external_pending' }
+  }
+  return merged
 }
 
 /** `needsReply` 声明要等、但投影没给问题时，用一句兜底问题，避免用户面对一个没有问题的"等待"。 */

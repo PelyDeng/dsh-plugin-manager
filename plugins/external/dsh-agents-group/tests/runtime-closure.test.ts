@@ -456,6 +456,49 @@ describe('补交轮：没调交活工具时补一次，补不上就按投影兜�
     } finally { await hosted.dispose() }
   })
 
+  /**
+   * 判据：**模型交活了，业务的结构化事实也不能丢**（2026-09-18 生产截图抓到的）。
+   *
+   * ## 缺陷长什么样
+   *
+   * 交活工具（`report_result`）是模型**口头**交回的一份摘要；`actions`（待确认操作）、
+   * `artifacts`（材料）、`externalPending`（外部待办）是**结构化事实**，只有业务知道。
+   * 而运行时原来的口径是"模型交活了就整份用它"——于是模型说"发布确认卡片已生成"，
+   * 卡片上却一个按钮都没有：`actions` 是空的，用户守着一条永远点不了的发布确认。
+   *
+   * ## 判据
+   *
+   * 模型交回 `completed` + 正文；业务投影交回一条 `prepared` 操作。断言：
+   * 正文用**模型的**、`actions` 用**业务的**、状态被校正成 `external_pending`
+   * （有待办就不能报完成，否则用户以为事情结束了）。
+   */
+  it('模型交活时仍合并业务的结构化事实：actions 不丢，状态被校正为非完成', async () => {
+    const action = { id: 'op-1', kind: 'blog.publish', title: '发布文章', state: 'prepared' as const }
+    const hosted = host(definitionOf({
+      projectResult: async () => ({
+        status: 'external_pending',
+        text: '这一份是投影拼的兜底正文（不该被采用）',
+        actions: [action],
+        externalPending: { reason: '发布确认还没点' },
+      }),
+    }))
+    try {
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      // 模型**自己交活**：正文与状态由它给，且它没带 actions（它也带不出来）。
+      report(hosted, id, { status: 'completed', text: '卡片已生成，你去点一下确认。' })
+      hosted.complete(id, '卡片已生成，你去点一下确认。')
+      const result = await promise
+
+      // ★ 旧实现：actions 为空、状态 completed —— 用户看到"待外部处理"却没有按钮。
+      expect(result.actions, '业务交回的待确认操作被模型的口头结论覆盖掉了').toEqual([action])
+      expect(result.status, '有待确认操作时不能报完成').toBe('external_pending')
+      expect(result.externalPending?.reason).toBe('发布确认还没点')
+      // 正文仍以模型交回的为准（投影那份是兜底拼的，不该盖掉它）。
+      expect(result.text).toBe('卡片已生成，你去点一下确认。')
+    } finally { await hosted.dispose() }
+  })
+
   it('取消的回合不触发补交（没有可补的结论）', async () => {
     const hosted = host(definitionOf())
     try {
