@@ -195,12 +195,13 @@ class DamagedStore extends TaskStore {
     subtaskId: string,
     state: SubtaskState,
     patch: Parameters<TaskStore['setSubtaskState']>[3] = {},
-  ): void {
-    super.setSubtaskState(taskId, subtaskId, state, patch)
-    if (patch.memberReturn === undefined) return
+  ): number {
+    const written = super.setSubtaskState(taskId, subtaskId, state, patch)
+    if (patch.memberReturn === undefined) return written
     const db = (this as unknown as { db: DatabaseSync }).db
     db.prepare('UPDATE subtasks SET member_return=? WHERE task_id=? AND id=?')
       .run('{"protocol":1,"text":"协作原文正常","externalPending":null}', taskId, subtaskId)
+    return written
   }
 }
 

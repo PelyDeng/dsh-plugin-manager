@@ -18,7 +18,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Actor } from '@dsh-plugin-manager/plugin-kit'
-import { TaskStore } from './helpers/sqlite-test-store.ts'
+import { advanceSubtask, TaskStore } from './helpers/sqlite-test-store.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
@@ -228,14 +228,19 @@ describe('派单材料快照与协作返回留存', () => {
     newTask(path)
     const store = new TaskStore(path)
     const long = '长'.repeat(12000)
-    store.setSubtaskState('task-1', 's1', 'succeeded', {
+    advanceSubtask(store, 'task-1', 's1', 'succeeded', {
       result: '裁剪后的展示摘要',
       memberReturn: { protocol: 1, text: long },
     })
     expect(subtaskOf(store)?.result).toBe('裁剪后的展示摘要')
     expect(subtaskOf(store)?.memberReturn?.text).toHaveLength(12000)
-    store.setSubtaskState('task-1', 's1', 'waiting_user', { memberReturn: { protocol: 1, text: '' } })
-    expect(subtaskOf(store)?.memberReturn).toEqual({ protocol: 1, text: '' })
+    // 空文本那一条另起一份库：`succeeded` 是终态，同一条子任务不能再被改写（迁移表守着）。
+    const other = tempDb()
+    newTask(other)
+    const second = new TaskStore(other)
+    advanceSubtask(second, 'task-1', 's1', 'waiting_user', { memberReturn: { protocol: 1, text: '' } })
+    expect(subtaskOf(second)?.memberReturn).toEqual({ protocol: 1, text: '' })
+    second.close()
     store.close()
   })
 

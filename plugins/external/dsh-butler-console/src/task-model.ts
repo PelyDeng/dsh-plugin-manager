@@ -20,8 +20,11 @@ export type SubtaskState =
  * 整个牛马大总管任务的状态。
  *
  * `external_pending` 与 `waiting_user` 是两种不同的「没办完」：前者是材料已经交回、剩下的事
- * 在别处办（去原页面采用、确认或发布），本轮到此结束、可以开新活；后者是等着用户在这里补
- * 一句话，不补就进行不下去。前者**不是**成功 —— 那件事没有办完。
+ * 在别处办（去原页面采用、确认或发布），等老板去点那一下；后者是等着用户在这里补一句话。
+ * 两者都**不是**成功 —— 那件事没有办完。
+ *
+ * 停在 `external_pending` **不等于这一轮收摊**：同一轮里排在后面的步骤正按就绪表 `wait`
+ * 等着这一下。老板办掉了就接着往下走完（下游重新核验依赖后派出），没人办就停在这里。
  */
 export type TaskState =
   | 'queued'
@@ -34,7 +37,12 @@ export type TaskState =
   | 'failed'
   | 'cancelled'
 
-/** 子任务或任务是否已经结束，结束时不再接受新的状态事件。 */
+/**
+ * 子任务或任务是否**自己**不会再往下走，结束时不再接受新的状态事件。
+ *
+ * ⚠️ 它不是「谁都改不动它」：`external_pending` 是**暂停**（等人在别处把那件事办掉），
+ * 老板去办那件事正是把它推下去的那一步 —— 迁移表里 `external_pending` 因此有出边。
+ */
 export function isTerminal(state: SubtaskState | TaskState): boolean {
   return state === 'succeeded' || state === 'failed' || state === 'cancelled'
     || state === 'completed' || state === 'external_pending' || state === 'partial'
@@ -43,8 +51,15 @@ export function isTerminal(state: SubtaskState | TaskState): boolean {
 /**
  * 允许的状态迁移表。表里没有的迁移一律拒绝，避免前端渲染出来的状态和真实执行脱节。
  *
+ * **存储层的写入白名单由这张表生成**（{@link subtaskTransitionSources}），不另抄一份：
+ * 表和 SQL 各写一遍，改了一处忘了另一处，条件 UPDATE 会**影响 0 行且不报错** —— 这一次的
+ * 现场就是 `external_pending → succeeded` 漏在 SQL 白名单里，"老板点了确认"在库里从没发生过。
+ *
  * - `waiting_user` 可以继续执行，也可以被取消或被判定失败。
- * - `external_pending` 是终态：材料已经交回，这一轮到此为止，后续跟进是新任务。
+ * - `external_pending`（材料已交回、剩下的事在外面办）不是"谁都改不动"的墓碑：老板点了确认
+ *   或撤回之后，这一步要落到**真实终态**（办成了 `succeeded`、他选择不办 `cancelled`、
+ *   办砸了 `failed`、又冒出别的问题 `waiting_user`），等它的下游才谈得上"重新核验依赖"。
+ *   没人去办时它自己不会再变 —— 就绪表里下游按 `wait` 排队等它。
  * - 结束态之间不能互相迁移，重试是新建子任务，不是改写旧状态。
  */
 const SUBTASK_TRANSITIONS: Readonly<Record<SubtaskState, readonly SubtaskState[]>> = {
@@ -52,7 +67,7 @@ const SUBTASK_TRANSITIONS: Readonly<Record<SubtaskState, readonly SubtaskState[]
   dispatched: ['running', 'waiting_user', 'external_pending', 'succeeded', 'failed', 'cancelled'],
   running: ['waiting_user', 'external_pending', 'succeeded', 'failed', 'cancelled'],
   waiting_user: ['running', 'dispatched', 'external_pending', 'succeeded', 'failed', 'cancelled'],
-  external_pending: [],
+  external_pending: ['waiting_user', 'succeeded', 'failed', 'cancelled'],
   succeeded: [],
   failed: [],
   cancelled: [],
@@ -65,6 +80,18 @@ const SUBTASK_TRANSITIONS: Readonly<Record<SubtaskState, readonly SubtaskState[]
  */
 export const SUBTASK_STATES: readonly SubtaskState[] = Object.keys(SUBTASK_TRANSITIONS) as SubtaskState[]
 
+/**
+ * 能迁到 `to` 的来源状态（含 `to` 自身，供相同状态的幂等重放）。
+ *
+ * 存储层的写入白名单**由它生成**（PG 侧的条件 UPDATE、SQLite 替身同一份），于是"哪条迁移
+ * 合法"只有迁移表这一处实现。曾经 PG 里手抄过一份 SQL 白名单，表里加了 `external_pending`
+ * 的出边而 SQL 没跟上：`setSubtaskState` 影响 0 行、没人核验，调用方以为写成了 ——
+ * 下游于是永远等一个"已经办结"的上游。
+ */
+export function subtaskTransitionSources(to: SubtaskState): readonly SubtaskState[] {
+  return SUBTASK_STATES.filter(from => canTransitionSubtask(from, to))
+}
+
 const TASK_TRANSITIONS: Readonly<Record<TaskState, readonly TaskState[]>> = {
   queued: ['running', 'cancelled', 'failed'],
   running: ['waiting_user', 'summarizing', 'external_pending', 'partial', 'completed', 'failed', 'cancelled'],
@@ -72,7 +99,10 @@ const TASK_TRANSITIONS: Readonly<Record<TaskState, readonly TaskState[]>> = {
   // `summarizing` 可以回到 `running`：汇总跑到一半又进来一条补充时，这份结论作废，任务回到
   // 执行中，由那条补充自己的回合继续 —— 停在「在写总结」会让大家以为还有人在写。
   summarizing: ['running', 'external_pending', 'partial', 'completed', 'failed', 'cancelled'],
-  external_pending: [],
+  // 这一轮停在"等外面办完"时**不是收摊**：同一轮里还有步骤排在它后面等着。老板去办了那件事，
+  // 本轮要接着往下走完再收尾（`completed`/`partial`/`failed`），或者又停回 `external_pending`
+  // —— 还有下一件要办的时候。
+  external_pending: ['running', 'summarizing', 'waiting_user', 'external_pending', 'partial', 'completed', 'failed', 'cancelled'],
   partial: [],
   completed: [],
   failed: [],

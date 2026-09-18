@@ -14,7 +14,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
-import { SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
+import type { SubtaskState } from '../src/task-model.ts'
+import { advanceSubtask, SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
@@ -51,14 +52,14 @@ function fixture() {
   const config = { subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000, maxConversationEvents: 200, waitingTimeoutMs: 600_000 } as Config
   const console_ = new ButlerConsole(context(), config, access, new SqliteButlerStorage(store), '')
 
-  /** 给某位用户开一条会话并派一个子任务。 */
-  const assign = (owner: Actor, taskId: string, agentId: string, state: string) => {
+  /** 给某位用户开一条会话并派一个子任务（状态走合法路径推到 `state`）。 */
+  const assign = (owner: Actor, taskId: string, agentId: string, state: SubtaskState) => {
     store.openOrReserveConversation(conversationId, owner)
     store.createTask({
       id: taskId, conversationId, actor: owner, goal: '写一篇介绍', note: '',
       subtasks: [{ id: 's1', goal: '起草', agentId, reason: '' }],
     })
-    store.setSubtaskState(taskId, 's1', state as never)
+    advanceSubtask(store, taskId, 's1', state)
   }
   return { store, console_, assign }
 }

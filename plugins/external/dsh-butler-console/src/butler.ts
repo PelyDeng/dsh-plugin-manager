@@ -3131,11 +3131,11 @@ export class ButlerConsole {
      */
     const text = subtaskResultText(result, max, emptyText)
     if (result.status === 'succeeded') {
-      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'succeeded', { result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation }))
+      await this.settleSubtaskState(taskId, subtaskId, 'succeeded', { result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation })
       return text
     }
     if (result.status === 'waiting_user') {
-      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'waiting_user', { result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation }))
+      await this.settleSubtaskState(taskId, subtaskId, 'waiting_user', { result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation })
       return text
     }
     if (result.status === 'external_pending') {
@@ -3144,24 +3144,47 @@ export class ButlerConsole {
         // 声明了外部待办却没说明在等什么，按「返回不满足协作契约」收：猜一个理由等于
         // 给用户显示一件没发生过的外部事项。材料仍然保留。
         const error = '说还有外部待办，但没说明在等什么'
-        await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', {
+        await this.settleSubtaskState(taskId, subtaskId, 'failed', {
           error, result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation,
-        }))
+        })
         return error
       }
-      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'external_pending', {
+      await this.settleSubtaskState(taskId, subtaskId, 'external_pending', {
         result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation,
-      }))
+      })
       return text
     }
     const cancelled = result.status === 'cancelled'
     // 失败/取消只写 error，result 由 COALESCE 保留先前交回的阶段性成果。
     const written = cancelled && text === '' ? '已停止' : text
-    await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, cancelled ? 'cancelled' : 'failed', {
+    await this.settleSubtaskState(taskId, subtaskId, cancelled ? 'cancelled' : 'failed', {
       error: written,
       memberReturn: memberReturnOf(result),
-    }))
+    })
     return written
+  }
+
+  /**
+   * 结账写入：这一步的状态变化**必须真的落到库里**。
+   *
+   * 条件 UPDATE 在迁移不合法时**影响 0 行、而且不报错**。2026-09-18 的生产现场就是这一条：
+   * `external_pending → succeeded` 漏在存储层的写入白名单里，老板点掉确认卡之后库里那一步
+   * 还是 `external_pending` —— 表面上"点了没反应"，实际是"办完了"这件事被静默丢掉，等它的
+   * 下游永远留在队列里。
+   *
+   * 白名单现在由迁移表生成（{@link import('./task-model.ts').subtaskTransitionSources}，
+   * 只有一份实现），能挡掉的只剩"并发抢先改写"；那一种也必须有声音，不能继续无声无息。
+   */
+  private async settleSubtaskState(
+    taskId: string,
+    subtaskId: string,
+    state: SubtaskState,
+    patch?: Parameters<ButlerStorage['setSubtaskState']>[3],
+  ): Promise<void> {
+    const written = await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, state, patch))
+    if (written === 0) {
+      console.warn(`butler-console: 子任务 ${subtaskId} 的结论没写进库里（目标状态 ${state}）—— 迁移不合法，或已被并发改写；接下来的依赖核验会读到旧状态`)
+    }
   }
 
   /**
@@ -3705,11 +3728,11 @@ export class ButlerConsole {
         signal: prepared.abort.signal,
       })
       // 结果落库：待办的最新状态要能在刷新后重画（与派活那条路径同一个写法）。
-      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, result.status === 'succeeded' ? 'succeeded' : result.status === 'external_pending' ? 'external_pending' : result.status === 'waiting_user' ? 'waiting_user' : result.status === 'cancelled' ? 'cancelled' : 'failed', {
+      await this.settleSubtaskState(taskId, subtaskId, result.status === 'succeeded' ? 'succeeded' : result.status === 'external_pending' ? 'external_pending' : result.status === 'waiting_user' ? 'waiting_user' : result.status === 'cancelled' ? 'cancelled' : 'failed', {
         result: clip(result.summary ?? '', this.config.maxResultChars),
         memberReturn: memberReturnOf(result),
         ...(result.conversationId === undefined ? {} : { conversationId: result.conversationId }),
-      }))
+      })
       yield* this.emitResultEvents(prepared, result)
       /**
        * 办完这一条之后**把依赖传导下去**：正等这条前置的步骤可能就绪了。
@@ -3720,7 +3743,7 @@ export class ButlerConsole {
       yield* this.settleAfterTurn(prepared, { deferToBusyTurn: true })
     } catch (error) {
       const detail = visibleError(error, this.config.maxResultChars)
-      await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
+      await this.settleSubtaskState(taskId, subtaskId, 'failed', { error: detail })
       yield { type: 'subtask', taskId, id: subtaskId, state: 'failed', agentId, displayName, detail, time: Date.now() }
       // 失败同样是一次结账：等它的下游该按真实状态重判（该派的派、该收的收）。
       yield* this.settleAfterTurn(prepared, { deferToBusyTurn: true })

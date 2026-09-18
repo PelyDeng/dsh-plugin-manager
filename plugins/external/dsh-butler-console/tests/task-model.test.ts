@@ -13,6 +13,7 @@ import {
   dependencyVerdict,
   isTerminal,
   StateTransitionError,
+  subtaskTransitionSources,
   type SubtaskState,
   type TaskState,
 } from '../src/task-model.ts'
@@ -38,6 +39,43 @@ describe('子任务状态机', () => {
   it('等待用户之后可以继续执行，也可以被取消', () => {
     expect(canTransitionSubtask('waiting_user', 'running')).toBe(true)
     expect(canTransitionSubtask('waiting_user', 'cancelled')).toBe(true)
+  })
+
+  /**
+   * 老板把卡片办掉之后，这一步要能落到**真实终态**。
+   *
+   * 这一行曾经缺在迁移表里（`external_pending` 写成空数组），代价是一次生产事故：确认卡点掉了，
+   * 上游那一步在库里纹丝不动，等它的下游永远留在队列里 —— "点了没反应"其实是"写入被丢掉了"。
+   */
+  it('等外部办的那一步，被办掉之后可以落成真实终态', () => {
+    expect(canTransitionSubtask('external_pending', 'succeeded')).toBe(true)
+    expect(canTransitionSubtask('external_pending', 'cancelled')).toBe(true)
+    expect(canTransitionSubtask('external_pending', 'failed')).toBe(true)
+    expect(canTransitionSubtask('external_pending', 'waiting_user')).toBe(true)
+  })
+
+  it('等外部办的那一步不能被"退回"到没派过的样子', () => {
+    expect(canTransitionSubtask('external_pending', 'queued')).toBe(false)
+    expect(canTransitionSubtask('external_pending', 'dispatched')).toBe(false)
+    expect(canTransitionSubtask('external_pending', 'running')).toBe(false)
+  })
+
+  /**
+   * 存储层的写入白名单**由迁移表生成**，不另抄一份。
+   *
+   * 抄出来的那一份会漂移：表里加了迁移、SQL 没跟上，条件 UPDATE 影响 0 行且不报错。
+   * 所以"能迁到某个状态"这件事只能有一个来源 —— 这条断言钉住它。
+   */
+  it('写入白名单来自迁移表本身，逐条一致', () => {
+    for (const to of SUBTASK_STATES) {
+      const sources = subtaskTransitionSources(to)
+      expect(sources).toContain(to)
+      for (const from of SUBTASK_STATES) {
+        expect(sources.includes(from), `${from} → ${to}`).toBe(canTransitionSubtask(from, to))
+      }
+    }
+    // 出边加上了，白名单就得跟着说得出"external_pending 也能迁到 succeeded"。
+    expect(subtaskTransitionSources('succeeded')).toContain('external_pending')
   })
 
   it('结束态之间不能互相迁移', () => {

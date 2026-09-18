@@ -15,7 +15,7 @@ import { chmodSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { AccessError, type Actor, type AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
-import { isTerminal, type SubtaskState, type TaskState } from '../../src/task-model.ts'
+import { isTerminal, subtaskTransitionSources, type SubtaskState, type TaskState } from '../../src/task-model.ts'
 import { parseArtifacts, parseDependsOn, parseDependsOnStrict, parseInputRefs, parseMemberReturn } from '../../src/storage/parse.ts'
 import type {
   ButlerInputRef,
@@ -54,6 +54,38 @@ const SCHEMA_VERSION = 10
  * 严重得多。这条链只服务于等价性验收，生产升级走 migrations/postgres/。
  */
 const MIGRATABLE_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+/**
+ * 把夹具里的一条子任务推到目标状态 —— **走合法路径**，不越级。
+ *
+ * 真实路径一定先写 `dispatched`（派单那一刻），再由成员那一轮写成 `running` / `waiting_user`
+ * / `external_pending` / 终态。夹具直接往终态写会绕过迁移表：替身从前没有写入门槛，这种越级
+ * 写法一直是绿的；而生产那条 UPDATE 由迁移表守着，越级写入**影响 0 行且不报错**。替身与生产
+ * 用同一份白名单之后，夹具摆出来的形态必须和生产真会出现的形态一致 —— 否则"验的不是真东西"。
+ */
+export function advanceSubtask(
+  store: TaskStore,
+  taskId: string,
+  subtaskId: string,
+  state: SubtaskState,
+  patch?: Parameters<TaskStore['setSubtaskState']>[3],
+): void {
+  /** 每个状态在真实生命周期里的来路（末项即目标状态，只有它带 patch）。 */
+  const route: Readonly<Record<SubtaskState, readonly SubtaskState[]>> = {
+    queued: [],
+    dispatched: ['dispatched'],
+    running: ['dispatched', 'running'],
+    waiting_user: ['dispatched', 'running', 'waiting_user'],
+    external_pending: ['dispatched', 'running', 'external_pending'],
+    succeeded: ['dispatched', 'running', 'succeeded'],
+    failed: ['dispatched', 'failed'],
+    cancelled: ['dispatched', 'cancelled'],
+  }
+  const steps = route[state]
+  for (const [index, step] of steps.entries()) {
+    store.setSubtaskState(taskId, subtaskId, step, index === steps.length - 1 ? patch : undefined)
+  }
+}
 
 /**
  * 牛马大总管工作台的 SQLite 索引。
@@ -445,6 +477,11 @@ export class TaskStore {
    *
    * `artifacts` 与 `conversationId` 只在传了的时候覆盖：状态事件是多次上报的，后面那些
    * 没带材料的上报不该把先前交回的材料擦掉。
+   *
+   * ⚠️ 写入白名单**与生产同一份**（{@link subtaskTransitionSources}）。这里原先漏了这道守卫
+   * （`WHERE task_id=? AND id=?`），于是替身比生产"宽松"：「老板点确认之后上游写成 succeeded」
+   * 这条用例在替身上绿着，生产上那条 UPDATE 因为迁移不合法影响 0 行、静默丢弃 —— 一次真实点击
+   * 就把整条链钉死在"下游永远排队"。替身抄近路，验的就不是真东西。
    */
   setSubtaskState(
     taskId: string,
@@ -466,7 +503,7 @@ export class TaskStore {
       memberReturn?: ButlerMemberReturn
       conversationId?: string
     } = {},
-  ): void {
+  ): number {
     const now = Date.now()
     const started = state === 'dispatched' || state === 'running'
     const terminal = isTerminal(state)
@@ -474,7 +511,8 @@ export class TaskStore {
     // （`started_at` 为空、状态还是排队中）。已固定的、旧已派出却留空的、以及损坏的值一律
     // 原样保留。`state`、`started_at` 在这个 CASE 里都是**更新前**的旧值。
     const inputRefs = patch.inputRefs === undefined ? null : JSON.stringify(patch.inputRefs)
-    this.db.prepare(`UPDATE subtasks SET state=?,
+    const sources = subtaskTransitionSources(state)
+    const info = this.db.prepare(`UPDATE subtasks SET state=?,
         result=COALESCE(?,result), error=COALESCE(?,error),
         artifacts=COALESCE(?,artifacts), conversation_id=COALESCE(?,conversation_id),
         input_refs=CASE WHEN ? IS NULL THEN input_refs
@@ -484,7 +522,7 @@ export class TaskStore {
         member_return=COALESCE(?,member_return),
         started_at=CASE WHEN ?=1 THEN COALESCE(started_at,?) ELSE started_at END,
         finished_at=CASE WHEN ?=1 THEN COALESCE(finished_at,?) ELSE finished_at END
-      WHERE task_id=? AND id=?`).run(
+      WHERE task_id=? AND id=? AND state IN (${sources.map(() => '?').join(',')})`).run(
       state,
       patch.result ?? null, patch.error ?? null,
       patch.artifacts === undefined ? null : JSON.stringify(patch.artifacts),
@@ -493,8 +531,9 @@ export class TaskStore {
       patch.memberReturn === undefined ? null : JSON.stringify(patch.memberReturn),
       started ? 1 : 0, now,
       terminal ? 1 : 0, now,
-      taskId, subtaskId,
+      taskId, subtaskId, ...sources,
     )
+    return Number(info.changes)
   }
 
   /**
@@ -969,8 +1008,8 @@ export class SqliteButlerStorage implements ButlerStorage {
     subtaskId: string,
     state: Parameters<TaskStore['setSubtaskState']>[2],
     patch?: Parameters<TaskStore['setSubtaskState']>[3],
-  ): Promise<void> {
-    this.store.setSubtaskState(taskId, subtaskId, state, patch)
+  ): Promise<number> {
+    return this.store.setSubtaskState(taskId, subtaskId, state, patch)
   }
 
   async setSubtaskVerdict(

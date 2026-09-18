@@ -1142,7 +1142,8 @@
         "materialsReady": true,
         "requiresExternalAction": true
       },
-      "expected": "fail"
+      "expected": "wait",
+      "note": "等老板去点那张确认卡：他随时能点掉，判失败会把一条本来能走完的链整条判死（2026-09-18 生产事故）。这一行曾经是 fail，改判定表时漏了这里 —— 校验脚本一直红着没人跑。"
     },
     {
       "facts": {

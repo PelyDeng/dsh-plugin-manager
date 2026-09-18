@@ -15,9 +15,13 @@ task:
   initial: running
   transitions:
     - { on: all_subtasks_terminal_and_reply_done, from: running, to: completed, guard: aggregation 得出 completed }
-    - { on: all_subtasks_terminal_and_reply_done, from: running, to: external_pending, guard: aggregation 得出 external_pending }
     - { on: all_subtasks_terminal_and_reply_done, from: running, to: partial, guard: aggregation 得出 partial }
     - { on: all_subtasks_terminal_and_reply_done, from: running, to: failed, guard: aggregation 得出 failed }
+    - { on: all_subtasks_terminal_and_reply_done, from: running, to: external_pending, guard: aggregation 得出 external_pending }
+    - { on: boss.settles_action, from: external_pending, to: running, note: 老板在确认卡上办了那件事（确认 / 撤回）；同一轮里还有排在后面等它的步骤，接着走完再按 aggregation 收尾。这一笔必须真的落库：写不进去就等于"办结了"从没发生过，下游永远等不到（2026-09-18 生产事故） }
+    - { on: all_subtasks_terminal_and_reply_done, from: external_pending, to: completed, guard: 老板办掉那件事之后，本轮剩下的步骤也走完了，aggregation 得出 completed }
+    - { on: all_subtasks_terminal_and_reply_done, from: external_pending, to: partial, guard: 同上，aggregation 得出 partial }
+    - { on: all_subtasks_terminal_and_reply_done, from: external_pending, to: failed, guard: 同上，aggregation 得出 failed }
     - { on: boss.cancel, from: running, to: stopping, note: 保存 stopReason=user_cancel，发出中止请求 }
     - { on: boss.cancel, from: stopping, to: stopping, note: 重复取消幂等，不跳过子任务收尾 }
     - { on: timeout, from: running, to: stopping, note: 保存 stopReason=timeout }
@@ -38,7 +42,7 @@ task:
     - { id: one-running-task, statement: 同一老板最多一个 running 或 stopping 任务；原子判定和创建，不靠前端按钮保证。 }
     - { id: terminal-after-children, statement: 所有进入任务终态的路径均要求子任务已终结。 }
     - { id: terminal-persisted-first, statement: 结果和终态先持久化，再发事件；刷新可恢复一致状态。 }
-    - { id: terminal-immutable, statement: 终态不被迟到事件或外部确认改写；后续跟进是新任务。 }
+    - { id: terminal-immutable, statement: 终态不被迟到事件或外部确认改写；后续跟进是新任务。停在 external_pending（等老板去外面办那件事）时**本轮还没收摊**：老板办掉那一下正是把同一轮接着走完的那一步（排队的下游重新核验依赖后接上），办完再按 completed/partial/failed 收尾；已经收摊的任务不再被任何事件改写，跟进作为新任务。 }
     - { id: process-accepted-input-before-terminal, statement: running 中接受的补充必须处理后再汇总；停止路径保留尚未处理的输入并明确未执行，不把取消说成处理完成。 }
     - { id: restart-reconciles, statement: 重启将遗留任务及未终结子任务记为 orphaned 失败并保留已有成果；旧执行停止证据单独核验。 }
 
@@ -57,7 +61,7 @@ subtask:
     executing: { description: 收到真实进度，尚未返回, owner: 锁定的员工 }
     waiting_user: { description: 有明确问题和可用 reply，需要本轮文本补充, owner: 锁定的员工 }
     succeeded: { description: 取得本轮可用结果 }
-    external_pending: { description: 返回材料或未决操作，后续要在外部页面处理；本子任务终结但不表示业务成功 }
+    external_pending: { description: 返回材料或未决操作，后续要在外部页面处理；本子任务本轮不再自己往下走，但不表示业务成功。老板真的去办了那件事（确认 / 撤回）之后按 boss.settles_action 落成本轮真实终态 }
     failed: { description: 执行失败或返回无法解释 }
     cancelled: { description: 本轮已取消，保留已有材料 }
   terminal: [succeeded, external_pending, failed, cancelled]
@@ -68,6 +72,10 @@ subtask:
     - { on: result.ok, from: [dispatched, executing], to: succeeded }
     - { on: result.external_pending, from: [dispatched, executing], to: external_pending }
     - { on: needs_user_input, from: [dispatched, executing], to: waiting_user, guard: 有非空问题且 reply 可用，明确属于文本补充 }
+    - { on: boss.settles_action, from: external_pending, to: succeeded, note: 老板在确认卡上确认了那件事，办成了。这一笔必须**真的落库**：写不进去就等于"办结了"从没发生过，等它的下游会永远留在计划里（2026-09-18 生产事故）。落定后重新核验依赖并把同一轮走完 }
+    - { on: boss.settles_action, from: external_pending, to: cancelled, note: 老板选择不办那件事；材料与已有成果保留 }
+    - { on: boss.settles_action, from: external_pending, to: failed, note: 办那件事时失败；写明原因，不把失败说成没办 }
+    - { on: boss.settles_action, from: external_pending, to: waiting_user, note: 办的过程中冒出新的问题，改成在这里等用户补一句话 }
     - { on: boss.reply, from: waiting_user, to: dispatched, note: 新 replyRequestId；会话归属沿用，不重发原任务；发 subtask.reply_started 而非重复派单事件 }
     - { on: result.error, from: [planned, dispatched, executing, waiting_user], to: failed }
     - { on: result.cancelled, from: [dispatched, executing], to: cancelled }

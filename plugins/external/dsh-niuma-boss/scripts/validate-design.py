@@ -220,7 +220,13 @@ def validate(docs):
         require(definition['initial'] in states and terminals <= states.keys(), f'{name}: unknown state')
         for edge in edges:
             require(edge['to'] in states and set(sources(edge)) <= states.keys(), f'{name}: broken transition')
-            require(not terminals.intersection(sources(edge)), f'{name}: terminal is mutable')
+            # 终态不被迟到事件或外部确认改写 —— 唯一的例外是 `external_pending`：它是「材料已交回、
+            # 等老板去外面办那件事」的暂停终态，老板办掉那一下（boss.settles_action）以及"本轮剩下的
+            # 步骤也走完了"（all_subtasks_terminal_and_reply_done）要能把同一轮接着推完。
+            # 其余终态一律不可变，跟进是新任务。
+            pause_exits = ('boss.settles_action', 'all_subtasks_terminal_and_reply_done')
+            mutable = {'external_pending'} if edge['on'] in pause_exits else set()
+            require(not (terminals - mutable).intersection(sources(edge)), f'{name}: terminal is mutable')
             if name == 'task' and edge['to'] in terminals:
                 require(edge['on'] in ('all_subtasks_terminal_and_reply_done', 'cleanup_done'), 'task bypasses child cleanup')
         for state in states:
@@ -437,7 +443,9 @@ def self_test(docs):
         ('broken reference', lambda d: d['task_protocol.yaml']['retry'].update(max_attempts='balance_params.yaml#missing')),
         ('busy butler roaming', lambda d: d['agent_fsm.yaml']['machines']['butler']['allowed_locomotion'].update(awaiting=['roaming'])),
         ('missing direct success', lambda d: d['task_protocol.yaml']['subtask']['transitions'].__setitem__(2, {'on': 'result.ok', 'from': 'executing', 'to': 'succeeded'})),
-        ('unsafe cancel', lambda d: d['task_protocol.yaml']['task']['transitions'][5].update(to='cancelled')),
+        # 按事件名挑那一条，不按下标：插入新迁移行不该让自检改到别的行上去（"取消必须先
+        # stopping 收尾子任务"这件事与行的顺序无关）。
+        ('unsafe cancel', lambda d: next(t for t in d['task_protocol.yaml']['task']['transitions'] if t['on'] == 'boss.cancel' and t['from'] == 'running').update(to='cancelled')),
         ('false publication', lambda d: d['task_protocol.yaml']['result_mapping']['waiting_user'].update(blog='result.ok')),
         ('NPC fixed origin', lambda d: d['npc_rules.yaml']['profiles']['explorer'].update(fixed_origin_required=True)),
         ('missing map entry', lambda d: d['map_rules.yaml']['connections'][0]['to'].update(entry_id='missing')),

@@ -21,7 +21,7 @@
 import { Buffer } from 'node:buffer'
 import { Client, Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg'
 import { AccessError, type Actor, type AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
-import { isTerminal, type SubtaskState, type TaskState } from '../task-model.ts'
+import { isTerminal, subtaskTransitionSources, type SubtaskState, type TaskState } from '../task-model.ts'
 import { mapStorageError, StorageError, uniqueViolation } from './errors.ts'
 import { parseArtifacts, parseDependsOn, parseDependsOnStrict, parseInputRefs, parseMemberReturn } from './parse.ts'
 import type {
@@ -560,7 +560,7 @@ export class PostgresTaskStorage implements ButlerStorage {
       memberReturn?: ButlerMemberReturn
       conversationId?: string
     } = {},
-  ): Promise<void> {
+  ): Promise<number> {
     const now = Date.now()
     const started = state === 'dispatched' || state === 'running'
     const terminal = isTerminal(state)
@@ -569,7 +569,15 @@ export class PostgresTaskStorage implements ButlerStorage {
     // 原样保留。state、started_at 在这个 CASE 里都是**更新前**的旧值 —— 与 SQLite 测试
     // 双实现的 SET 表达式逐字等价。
     const inputRefs = patch.inputRefs === undefined ? null : JSON.stringify(patch.inputRefs)
-    await this.run(
+    /**
+     * 写入白名单**由迁移表生成**（{@link subtaskTransitionSources}），这里不再手抄一份。
+     *
+     * 手抄的那一份漏了 `external_pending` 的出边：老板点了确认之后
+     * `setSubtaskState(s1, 'succeeded')` 条件不成立、影响 0 行、**不报错**，于是"办结了"在库里
+     * 从没发生过，等 s1 的下游永远停在队列里。查这段历史花了整整一轮生产验证。
+     */
+    const sources = subtaskTransitionSources(state)
+    const result = await this.run(
       `UPDATE butler_subtasks SET state=$1,
          result=COALESCE($2,result), error=COALESCE($3,error),
          artifacts=COALESCE($4,artifacts), conversation_id=COALESCE($5,conversation_id),
@@ -580,12 +588,7 @@ export class PostgresTaskStorage implements ButlerStorage {
          member_return=COALESCE($7,member_return),
          started_at=CASE WHEN $8::boolean THEN COALESCE(started_at,$9::bigint) ELSE started_at END,
          finished_at=CASE WHEN $10::boolean THEN COALESCE(finished_at,$9::bigint) ELSE finished_at END
-       WHERE task_id=$11 AND id=$12
-         AND (state=$1
-           OR (state='queued' AND $1 IN ('dispatched','cancelled','failed'))
-           OR (state='dispatched' AND $1 IN ('running','waiting_user','external_pending','succeeded','failed','cancelled'))
-           OR (state='running' AND $1 IN ('waiting_user','external_pending','succeeded','failed','cancelled'))
-           OR (state='waiting_user' AND $1 IN ('running','dispatched','external_pending','succeeded','failed','cancelled')))`,
+       WHERE task_id=$11 AND id=$12 AND state = ANY($13::text[])`,
       [
         state,
         patch.result ?? null,
@@ -595,9 +598,12 @@ export class PostgresTaskStorage implements ButlerStorage {
         inputRefs,
         patch.memberReturn === undefined ? null : JSON.stringify(patch.memberReturn),
         started, now, terminal,
-        taskId, subtaskId,
+        taskId, subtaskId, [...sources],
       ],
     )
+    // 影响 0 行 = 迁移不合法（或这条子任务不存在）。返回行数是为了让**结账写入**能核验：
+    // 静默丢弃过一次，代价是整条链永远等一个已经办结的上游。
+    return result.rowCount ?? 0
   }
 
   /**

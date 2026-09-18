@@ -419,6 +419,11 @@ export interface ButlerStorage {
    * - 状态迁移按 `task-model.ts` 的转移表设守卫（依赖重判方案 §3 条目 5）：表外迁移与
    *   相同状态幂等重放之外的条件不满足时，本条 UPDATE 不生效（保持原样返回，不抛错、
    *   不产生新的拒绝路径）；`failed→queued` 不放开。
+   *
+   * **返回受影响行数**：0 表示这次迁移不合法（或这条子任务不存在）。写入白名单由迁移表生成
+   * （{@link import('../task-model.ts').subtaskTransitionSources}），所以 0 行只该出现在
+   * "并发抢先改写"上 —— **结账写入**（成员交回结论、老板办完确认）必须核验它，否则一次
+   * 静默丢弃就等于"这件事从没发生过"，等它的下游会永远留在队列里。
    */
   setSubtaskState(
     taskId: string,
@@ -434,7 +439,7 @@ export interface ButlerStorage {
       memberReturn?: ButlerMemberReturn
       conversationId?: string
     },
-  ): Promise<void>
+  ): Promise<number>
 
   /**
    * 落一条裁决结论（`butler_verdict` 的写入面）。

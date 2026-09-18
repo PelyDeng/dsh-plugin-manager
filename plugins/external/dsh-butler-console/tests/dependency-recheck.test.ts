@@ -14,7 +14,7 @@ import { ButlerConsole } from '../src/butler.ts'
 import type { Config } from '../src/config.ts'
 import type { ButlerAgentExecutor, ButlerDispatchRequest } from '../src/protocol.ts'
 import type { ButlerMemberReturn } from '../src/storage/types.ts'
-import { SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
+import { advanceSubtask, SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
 
 const conversationId = 'butler-web-01234567-89ab-4cde-8fab-0123456789ab'
 const actor: Actor = { namespace: 'user', userId: 'alice', sessionId: 'alice-login' }
@@ -556,7 +556,8 @@ describe('老板办掉确认之后，排队等它的下游自动接上', () => {
       ],
     })
     // s1 已经跑到"等你确认"：材料交回了，并挂着一条待确认操作。
-    f.store.setSubtaskState(taskId, 's1', 'external_pending', {
+    // （走合法路径推过去：真实生命周期一定先写 `dispatched`，替身与生产同一份写入白名单。）
+    advanceSubtask(f.store, taskId, 's1', 'external_pending', {
       result: '确认卡片已生成，等你点确认。',
       memberReturn: {
         protocol: 1,
@@ -576,6 +577,14 @@ describe('老板办掉确认之后，排队等它的下游自动接上', () => {
 
     // ② 老板点确认 → 上游结账 → 依赖重判 → 下游自动接上。
     await f.console_.startAction({ taskId, subtaskId: 's1', actionId, decision: 'confirm', actor })
+    /**
+     * 先验**上游的结账真的落到了库里**。
+     *
+     * 这一步写不进去时（迁移不合法 ⇒ 条件 UPDATE 影响 0 行），后面那句"等下游"会一直等下去，
+     * 报出来只是一句超时 —— 现场是 2026-09-18 的生产：老板点掉确认卡，库里那一步还是
+     * `external_pending`，等它的下游永远留在队列里。先钉住这一条，失败原因才指得准。
+     */
+    await until(() => subtaskOf(f, 's1')?.state === 'succeeded', '上游办完之后写成 succeeded')
     await until(() => requests.some(item => item.subtaskId === 's2'), '下游被派出去')
     await until(() => subtaskOf(f, 's2')?.state === 'succeeded', '下游干完')
     expect(subtaskOf(f, 's1')?.state).toBe('succeeded')
