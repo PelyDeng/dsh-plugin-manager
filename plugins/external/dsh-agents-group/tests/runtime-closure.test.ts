@@ -410,6 +410,52 @@ describe('补交轮：没调交活工具时补一次，补不上就按投影兜�
     } finally { await hosted.dispose() }
   })
 
+  /**
+   * 判据：**补交轮与首轮拿到同一份身份**（2026-09-18 生产实测的那个缺陷）。
+   *
+   * ## 缺陷长什么样
+   *
+   * 为了注入补交轮，参与者先 `releaseTurn()` 放掉回合凭据（不放的话 `followup` 会以"正在回答
+   * 上一条问题"拒绝），再调 `followup`。而首轮的身份**只挂在凭据上** ⇒ 新一轮的 `PendingTurn`
+   * 没有身份 ⇒ `onTurnStart` 收到 `turnId === undefined`。
+   *
+   * 后果是**只有需要行 id 的业务才炸**：blog 的钩子当场抛
+   * `BlogError: 协作入口驱动的一轮缺少行 id，无法建立业务工具的委派身份`，整轮失败——模型连
+   * 一个工具都没跑，界面上看起来像"这个成员坏了"；而 huiyu / closedoff 没有这个钩子，一切正常。
+   *
+   * ## 为什么夹具要自己给 `turnId`
+   *
+   * 内存端口的 `turnId` 恒返回 `undefined`（它不实现"行 id"语义），身份里就只剩 `requestId`。
+   * 为了让判据直接对准生产症状（`turnId`），这里显式让回查返回一个值——生产上它来自 `dsh_turns`
+   * 的行 id。断言同时覆盖 `requestId`：身份是**整体**丢失的，两个字段一起验才说明修的是根因。
+   */
+  it('补交轮拿到与首轮**同一份身份**（requestId 与 turnId 都跟到底）', async () => {
+    const hooks: { readonly requestId?: string; readonly turnId?: string }[] = []
+    const hosted = host(definitionOf({
+      onTurnStart: hook => { hooks.push({ ...(hook.requestId === undefined ? {} : { requestId: hook.requestId }), ...(hook.turnId === undefined ? {} : { turnId: hook.turnId }) }) },
+    }))
+    try {
+      ;(hosted.storage.db.turns as { turnId: (owner: unknown, requestId: string) => Promise<string | undefined> }).turnId =
+        async () => 'turn-row-1'
+      const promise = hosted.participant.run(hosted.request())
+      const id = await accept(hosted, promise)
+      install(hosted, id)
+      hosted.complete(id, '第一轮正文')
+      await until(() => hosted.followups().length >= 2, '补交提示已注入')
+      hosted.complete(id, '第二轮正文')
+      await promise
+
+      // 首轮 + 补交轮各一次；补交轮要再发一次 `turn/end` 才收尾。
+      expect(hooks.length).toBeGreaterThanOrEqual(2)
+      const [first, second] = hooks
+      expect(first?.requestId).toBe('run:r1')
+      expect(first?.turnId).toBe('turn-row-1')
+      // ★ 旧实现这里两行都是 undefined：凭据一放，身份就没了。
+      expect(second?.requestId, '补交轮丢了幂等身份').toBe(first?.requestId)
+      expect(second?.turnId, '补交轮丢了行 id —— 生产上就是这条让 blog 整轮失败').toBe(first?.turnId)
+    } finally { await hosted.dispose() }
+  })
+
   it('取消的回合不触发补交（没有可补的结论）', async () => {
     const hosted = host(definitionOf())
     try {

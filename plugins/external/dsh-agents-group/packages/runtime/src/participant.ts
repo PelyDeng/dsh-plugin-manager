@@ -49,7 +49,7 @@ import {
   type ParticipantResult,
   type ParticipantStatus,
 } from './contract.ts'
-import { historyOf, textOf, type AgentRuntime, type Conversation, type ConversationLifecycle } from './conversation.ts'
+import { historyOf, textOf, type AgentRuntime, type Conversation, type ConversationLifecycle, type TurnIdentity } from './conversation.ts'
 import type { AgentDefinition, ProjectedResult, ResultContext } from './definition.ts'
 import {
   createHandoffLedger,
@@ -312,6 +312,16 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
         let continuation: Promise<void> | undefined
         let unsubscribe = () => {}
         let releaseTurn = () => {}
+        /**
+         * 这一轮的**身份**，供后续轮次复用（补交轮 / 自修正轮）。
+         *
+         * ⚠️ 必须存在这一层，不能只交给生命周期的回合凭据：注入下一轮之前会先 `releaseTurn()`
+         * （否则 `followup` 会以"正在回答上一条问题"拒绝），凭据一放，身份就没了 ⇒ 下一轮的
+         * `onTurnStart` 收到 `turnId === undefined`。2026-09-18 生产实测：blog 的钩子当场抛
+         * `BlogError: 协作入口驱动的一轮缺少行 id`，整轮失败（模型一个工具都没跑），而
+         * huiyu / closedoff 因为没有这个钩子看起来一切正常。
+         */
+        let turnIdentity: TurnIdentity | undefined
         let sink: ((delta: AssistantDelta) => void) | undefined
         let timeout: ReturnType<typeof setTimeout> | undefined
         let recheck: ReturnType<typeof setInterval> | undefined
@@ -687,7 +697,9 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
               started = false
               finalText = ''
               try {
-                await lifecycleOf().followup(opened, outcome.prompt, request.actor)
+                // ⚠️ 身份必须显式带上：补交轮/自修正轮与首轮**属于同一轮**（同一个 `requestId`、
+                // 同一行 id），而上面刚 `releaseTurn()` 放掉了携带来历的回合凭据。
+                await lifecycleOf().followup(opened, outcome.prompt, request.actor, turnIdentity)
                 await opened.handle.agent.whenIdle()
               } catch (error) { cleanup(); reject(error); return }
             }
@@ -819,10 +831,11 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
            * ⚠️ 缺省字段用**条件展开**而不是写 `undefined`（`exactOptionalPropertyTypes`，且业务按
            * "属性在不在"判断有没有身份）。
            */
-          releaseTurn = lifecycleOf().retainTurn(opened, request.actor, {
+          turnIdentity = {
             requestId: settledKey,
             ...(turnId === undefined ? {} : { turnId }),
-          })
+          }
+          releaseTurn = lifecycleOf().retainTurn(opened, request.actor, turnIdentity)
           admitted = true
           sinks.set(opened.id, sink!)
           continuation = lifecycleOf().followup(opened, message, request.actor)

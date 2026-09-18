@@ -827,8 +827,23 @@ export class ConversationLifecycle {
     return conversationModel(this.host.ctx, conversation.id)
   }
 
-  /** 给一个活跃的业务 Agent 追加一条用户消息。 */
-  async followup(conversation: Conversation, text: string, actor: Actor): Promise<void> {
+  /**
+   * 给一个活跃的业务 Agent 追加一条用户消息。
+   *
+   * @param identity **这一轮的显式身份**，用于"同一轮的再次注入"——补交轮与自修正轮。
+   *
+   * ⚠️ 这个参数不是可选的装饰，它补的是一个真实缺陷（2026-09-18 生产实测）：
+   *
+   * 首轮的身份走 {@link retainTurn} 记下的凭据，而**为了注入下一轮**，参与者会先放掉凭据
+   * （`releaseTurn()`）再调本方法。那时凭据已经不在了 ⇒ 新一轮的 `PendingTurn` 没有身份 ⇒
+   * `onTurnStart` 收到的 `turnId` 是 `undefined`。后果是**只有需要行 id 的业务**才会炸：
+   * blog 的钩子当场抛 `BlogError: 协作入口驱动的一轮缺少行 id`，整轮失败（模型连一个工具都没跑），
+   * 而 huiyu / closedoff 没有这个钩子，看起来一切正常——症状与"这个成员坏了"无法区分。
+   *
+   * 补交轮/自修正轮与首轮**属于同一轮**（同一个 `requestId`、同一行 id），所以身份必须跟着走：
+   * 由调用方显式传进来，比"靠会话级残留状态猜"更安全（页面路径不传 ⇒ 永远不会有身份）。
+   */
+  async followup(conversation: Conversation, text: string, actor: Actor, identity?: TurnIdentity): Promise<void> {
     this.assertCurrent(conversation, actor)
     if (conversation.active) throw new AccessError(409, '智能体正在回答上一条问题')
     const turn: PendingTurn = { pending: true, dispatching: false, cancelled: false, finishRequested: false }
@@ -836,13 +851,13 @@ export class ConversationLifecycle {
     const held = this.heldTurns.get(conversation.id)
     if (held) held.turn = turn
     /**
-     * 这一轮的**身份**：`retainTurn` 记在回合凭据上，这里拷进回合本身。
-     *
-     * ⚠️ 必须先拷进 `turn` 再往下走：收尾通知（`notifyTurnFinish`）发生在协作入口
-     * "先放凭据、再带结论收尾"之后，那时 `heldTurns` 里已经没有这一轮了。
+     * 这一轮的**身份**：首轮来自 `retainTurn` 记在回合凭据上的那一份，续注入的轮次由调用方
+     * 显式给（见参数说明）。先拷进 `turn` 再往下走：收尾通知（`notifyTurnFinish`）发生在
+     * 协作入口"先放凭据、再带结论收尾"之后，那时 `heldTurns` 里已经没有这一轮了。
      */
-    if (held?.identity !== undefined) turn.identity = held.identity
-    const identity = turn.identity
+    const resolved = identity ?? held?.identity
+    if (resolved !== undefined) turn.identity = resolved
+    const turnIdentity = turn.identity
     this.identities.set(conversation.handle.agent, actor)
     conversation.lastUsedAt = Date.now()
     conversation.active = true
@@ -858,7 +873,7 @@ export class ConversationLifecycle {
        */
       const startHook = this.host.definition.onTurnStart
       if (startHook !== undefined) {
-        await startHook(this.hookContext(conversation, actor, identity))
+        await startHook(this.hookContext(conversation, actor, turnIdentity))
         // 钩子是异步的：期间可能被取消/顶掉，注入前要再核一次（与上面 `requestedConversationModel`
         // 之后那次同一理由）。
         this.assertCurrent(conversation, actor)
@@ -873,7 +888,7 @@ export class ConversationLifecycle {
        */
       const turnContext = this.host.definition.turnContext
       if (turnContext !== undefined) {
-        this.turnContexts.set(conversation.id, await turnContext(this.hookContext(conversation, actor, identity)))
+        this.turnContexts.set(conversation.id, await turnContext(this.hookContext(conversation, actor, turnIdentity)))
         // 钩子是异步的：期间可能被取消/顶掉，注入前要再核一次（与上面同一理由）。
         this.assertCurrent(conversation, actor)
         if (turn.cancelled || this.turns.get(conversation) !== turn) throw new AccessError(409, '本轮操作已停止')
