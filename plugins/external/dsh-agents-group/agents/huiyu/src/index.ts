@@ -229,12 +229,16 @@ export async function mount(mountContext: AgentMountContext): Promise<{
 
   // 工具**无论是否就绪都注册**：未就绪时它们各自以稳定的 503 拒绝并说清缺什么，
   // 而不是从目录里消失——"工具不见了"是最难查的一类失效。
+  //
+  // ⚠️ 注册**只在这里发生一次**，`AgentDefinition.tools` 只交回下面这份条目。在定义里再
+  // 注册一次会撞上宿主的同名保护（`is already registered`），那会把整个运行时装配打成失败。
+  const tools = registerHuiyuTools(toolContext, mountContext.category, 'huiyu:access')
   const definition = createHuiyuDefinition({
     category: mountContext.category,
     permission: 'huiyu:access',
     tools: toolContext,
+    registered: tools,
   })
-  const tools = registerHuiyuTools(toolContext, mountContext.category, 'huiyu:access')
 
   /** 能否建运行时：需要私有配置与 PG 两样都在。 */
   const runnable = environment !== undefined && store !== undefined && storageFailure === undefined

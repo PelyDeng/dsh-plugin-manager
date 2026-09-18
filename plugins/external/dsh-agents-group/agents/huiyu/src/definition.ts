@@ -12,7 +12,6 @@ import Schema from '@deepseek-ai/schemastery'
 import type { AgentDefinition, ProjectedResult, ResultContext } from '../../../packages/runtime/src/definition.ts'
 import type { ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import type { HuiyuToolContext } from './tools/context.ts'
-import { registerHuiyuTools } from './tools/index.ts'
 import { HuiyuError } from './errors.ts'
 
 /** 绘制的人格。写作口径：说清它是谁、怎么做事、以及**不要**做什么。 */
@@ -38,8 +37,20 @@ export const HUIYU_PERSONA = [
 export interface HuiyuDefinitionInput {
   readonly category: string
   readonly permission: string
-  /** 工具的装配上下文。 */
+  /**
+   * 工具的装配上下文。
+   *
+   * ⚠️ **工具不在这里注册**。注册发生在装配期（`src/index.ts` 调 `registerHuiyuTools`），
+   * 本定义只**交回已注册的目录条目**——与 blog 同一口径（它的注释写着"业务工具在
+   * `BlogJobs` 的构造函数里已经注册过，这里只交回目录条目"）。
+   *
+   * 在定义里再注册一次会撞上宿主的保护：
+   * `tool "x" is already registered (for a per-agent variant, register through that agent's agent.ctx instead)`。
+   * 那条保护是对的：同一个工具名在插件作用域注册两次，第二次会被当成"跨 Agent 的名字冲突"。
+   */
   readonly tools: HuiyuToolContext
+  /** 装配期已注册并交回的目录条目。 */
+  readonly registered: readonly ToolDescriptor[]
 }
 
 /**
@@ -65,19 +76,19 @@ export type PluginConfig = { accessMode: 'authenticated', publicOrigin: string, 
  * @returns 可直接交给 `createAgentRuntime` 的定义
  */
 export function createHuiyuDefinition(input: HuiyuDefinitionInput): AgentDefinition {
-  /** 工具只注册一次：装配期调用本钩子，之后由运行时按会话施加可见性限制。 */
-  let registered: readonly ToolDescriptor[] | undefined
-
   return {
     id: 'huiyu',
     displayName: '绘语',
     description: '图片理解与生成：看懂图片内容，也能按描述生成图片',
     persona: HUIYU_PERSONA,
     config: Config as unknown as AgentDefinition['config'],
-    tools: (): readonly ToolDescriptor[] => {
-      registered ??= registerHuiyuTools(input.tools, input.category, input.permission)
-      return registered
-    },
+    /**
+     * 交回装配期已注册的目录条目。
+     *
+     * 运行时会调它一次来算"这个 Agent 能用哪些工具"，**返回值必须与真正注册的一致**；
+     * 少报会让对应工具对该 Agent 不可见，而那种失效在界面上看不出来。
+     */
+    tools: () => input.registered,
     /**
      * 一轮的结果投影。
      *
