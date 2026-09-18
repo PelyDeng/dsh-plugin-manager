@@ -63,12 +63,19 @@ function context(executor: ButlerAgentExecutor): Context {
 }
 
 /** 成员的就地确认：**交回会话级清单**（与博客 `createApplyAction` 同一个形状）。 */
-function memberExecutor(): ButlerAgentExecutor {
+type StubDispatch = { status: 'succeeded' | 'external_pending'; summary: string; actions?: AgentAction[]; externalPending?: { reason: string } }
+
+function memberExecutor(dispatchResults: Record<string, StubDispatch> = {}): ButlerAgentExecutor {
   const executor: ButlerAgentExecutor = {
     protocol: 1,
     agentId: 'blog',
     capabilities: ['写作'],
-    dispatch: async () => ({ status: 'succeeded' as const, summary: '第一步好了' }),
+    dispatch: async request => {
+      const fixed = dispatchResults[request.subtaskId]
+      // 派单请求不带原会话引用：这一步的会话就是成员自己的会话（与生产同形）。
+      if (fixed !== undefined) return { ...fixed, conversationId: memberConversationId }
+      return { status: 'succeeded' as const, summary: '第一步好了' }
+    },
     applyAction: async request => {
       // 与真实桥接同一个口径：把协调方给的原会话引用**原样带回**（会话级待办要靠它归属）。
       const echoed = request.conversationId ?? ''
@@ -89,14 +96,14 @@ function memberExecutor(): ButlerAgentExecutor {
   return executor
 }
 
-async function fixture() {
+async function fixture(dispatchResults: Record<string, StubDispatch> = {}) {
   const store = new TaskStore(':memory:')
   const access = { mode: 'authenticated', ready() {}, resolve: () => actor, assert() {} } as unknown as Access
   const config = {
     subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000, maxConversationEvents: 200,
     waitingTimeoutMs: 600_000, idempotencyTtlMs: 600_000,
   } as Config
-  const executor = memberExecutor()
+  const executor = memberExecutor(dispatchResults)
   const console_ = new ButlerConsole(context(executor), config, access, new SqliteButlerStorage(store), '')
   const background: Promise<unknown>[] = []
   const agent = { session: { id: conversationId }, followup: vi.fn(), cancel: vi.fn(), dispose: vi.fn(async () => {}) }
@@ -169,6 +176,48 @@ describe('办完一张卡之后，待办只归声明过它的那一步', () => {
     const after = f.store.task(actor, taskId)
     expect(after?.subtasks.every(item => item.state === 'succeeded')).toBe(true)
     expect((after?.subtasks ?? []).flatMap(item => item.memberReturn?.actions ?? []).length, '办完之后不该还剩待办').toBe(0)
+    await f.settleAll()
+  })
+
+  it('派活那一路同样不搬：后一步的清单里带着前一步的卡，也不挂到自己名下', async () => {
+    // 第二步那一轮交回的是会话级清单：第一步刚做出来的 A 也在里面（生产上就是这样冒出两张同样的卡）。
+    const f = await fixture({
+      s2: {
+        status: 'external_pending',
+        summary: '已生成 343 的确认卡片，等你确认。',
+        externalPending: { reason: '还有确认卡等你点。' },
+        actions: [card(CARD_A, '删除草稿 342'), card(CARD_B, '删除草稿 343')],
+      },
+      s1: {
+        status: 'external_pending',
+        summary: '已生成 342 的确认卡片，等你确认。',
+        externalPending: { reason: '还有确认卡等你点。' },
+        actions: [card(CARD_A, '删除草稿 342')],
+      },
+    })
+    const taskId = `butler-task-${randomUUID()}`
+    f.store.openOrReserveConversation(conversationId, actor)
+    f.store.createTask({
+      id: taskId, conversationId, actor, goal: '343、342 这两篇需要删除，但是需要我一个一个确认删除', note: '',
+      subtasks: [
+        { id: 's1', goal: '删 342', agentId: 'blog', reason: '', logicalId: 'g1' },
+        { id: 's2', goal: '删 343', agentId: 'blog', reason: '', logicalId: 'g2' },
+      ],
+    })
+
+    // 队列把两步依次派出去（与生产同一条路）。
+    const drainQueue = (f.console_ as unknown as {
+      drainQueue(input: { taskId: string; actor: Actor; goal: string; signal: AbortSignal }): AsyncGenerator<unknown>
+    }).drainQueue.bind(f.console_)
+    for await (const _event of drainQueue({ taskId, actor, goal: '删两篇', signal: new AbortController().signal })) { /* 无观众 */ }
+
+    const task = f.store.task(actor, taskId)
+    const s1 = task?.subtasks.find(item => item.id === 's1')
+    const s2 = task?.subtasks.find(item => item.id === 's2')
+    expect(s1?.state).toBe('external_pending')
+    expect(s2?.state).toBe('external_pending')
+    expect((s1?.memberReturn?.actions ?? []).map(action => action.id), '第一步只该有自己那张卡').toEqual([CARD_A])
+    expect((s2?.memberReturn?.actions ?? []).map(action => action.id), '第二步不该把第一步那张卡也挂过来').toEqual([CARD_B])
     await f.settleAll()
   })
 })

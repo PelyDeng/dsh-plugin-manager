@@ -715,23 +715,31 @@ export function visibleError(error: unknown, limit: number): string {
 const DISPATCH_MESSAGE_LIMIT = 8000
 
 /**
- * 一步自己的待办：**只留它声明过的那些**，取值以成员刚交回的清单为准。
+ * 一步自己的待办：**此前声明过的** ∪ 这次交回的里**没有别步声明过**的那些（取值以这次交回为准）。
  *
- * 成员的清单是**会话级**的（它一个会话里所有还没办的待办），不能整份挂到刚办完的那一步名下
- * ——挂过去会让同一张卡在两个步骤下面各画一遍，用户点了挂在错步骤下的那张，结算的就是错的
- * 那一步（2026-09-18 生产现场：点掉 342 的卡，成员交回的"还剩 343"被挂到第一步下面，用户
- * 再点 343 时结算的又是第一步，真正等 343 的第二步永远停在"待外部处理"，界面上那张卡点了
- * 也没用）。清单里没有的，说明办完了或撤回了，快照跟着去掉，不留死卡。
+ * 成员的清单是**会话级**的（它一个会话里所有还没办的待办），而台账按**步骤**显示。整份收下就会
+ * 让同一张卡在两个步骤下面各画一遍，用户点了挂在错步骤下的那张，结算的就是错的那一步
+ * （2026-09-18 生产现场：点掉 342 的卡，成员交回的"还剩 343"被挂到第一步下面，用户再点 343 时
+ * 结算的又是第一步，真正等 343 的第二步永远停在"待外部处理"，界面上那张卡点了也没用）。
+ *
+ * "第一次声明就算它的"这条规则够用：一张卡只会被**先跑的那一步**先声明 —— 后跑的步骤能看到它，
+ * 说明它在那一刻已经存在，不是这一步做出来的。清单里没有的，说明办完了或撤回了，快照跟着去掉，
+ * 不留死卡。
  */
 function ownPendingActions(
   declared: readonly AgentAction[],
   fresh: readonly AgentAction[],
+  claimedElsewhere: ReadonlySet<string>,
 ): AgentAction[] {
-  const current = new Map(fresh.map(action => [action.id, action]))
-  return declared.flatMap(action => {
-    const latest = current.get(action.id)
-    return latest === undefined ? [] : [latest]
-  })
+  const mine = new Set(declared.map(action => action.id))
+  return fresh.filter(action => mine.has(action.id) || !claimedElsewhere.has(action.id))
+}
+
+/** 除这一步之外，同一轮里其他步骤声明过的待办 id（判"第一次声明"用）。 */
+function claimedByOthers(record: { readonly subtasks: readonly SubtaskRecord[] } | undefined, subtaskId: string): Set<string> {
+  return new Set((record?.subtasks ?? [])
+    .filter(item => item.id !== subtaskId)
+    .flatMap(item => (item.memberReturn?.actions ?? []).map(action => action.id)))
 }
 
 /**
@@ -3136,7 +3144,15 @@ export class ButlerConsole {
    * @returns **写进库里的那份正文**。调用方必须用它做事件里的 `detail`——实时与回看同源，
    *   靠的就是"返回同一个值"，而不是两处各拼一次（那份不一致用户已经看见过了）。
    */
-  private async applyMemberResult(taskId: string, subtaskId: string, result: ButlerDispatchResult, emptyText = ''): Promise<string> {
+  private async applyMemberResult(input: {
+    actor: Actor
+    taskId: string
+    subtaskId: string
+    result: ButlerDispatchResult
+    emptyText?: string
+  }): Promise<string> {
+    const { actor, taskId, subtaskId, result } = input
+    const emptyText = input.emptyText ?? ''
     const max = this.config.maxResultChars
     const artifacts = result.artifacts === undefined ? {} : { artifacts: result.artifacts }
     const conversation = result.conversationId === undefined || result.conversationId === ''
@@ -3150,12 +3166,25 @@ export class ButlerConsole {
      * 看到：刷新前卡片里没有"外部待办"那一段，刷新后有了）。两份拼法必然漂移，所以合成一份。
      */
     const text = subtaskResultText(result, max, emptyText)
+    /**
+     * 成员交回的待办清单是**会话级**的：另一个步骤刚做出来的卡也会出现在这一步的清单里。
+     * 整份收下就会让同一张卡在两个步骤下面各画一遍（用户生产上看到的就是两张一样的卡），
+     * 而画在错步骤下面的那张，点了结算的是错的那一步。归属规则见 {@link ownPendingActions}。
+     */
+    const record = await this.storage.task(actor, taskId)
+    const declared = (record?.subtasks.find(item => item.id === subtaskId)?.memberReturn as
+      { readonly actions?: readonly AgentAction[] } | undefined)?.actions ?? []
+    const actions = ownPendingActions(declared, result.actions ?? [], claimedByOthers(record, subtaskId))
+    const memberReturn: ButlerMemberReturn = {
+      ...memberReturnOf(result),
+      ...(actions.length === 0 ? { actions: [] } : { actions }),
+    }
     if (result.status === 'succeeded') {
-      await this.settleSubtaskState(taskId, subtaskId, 'succeeded', { result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation })
+      await this.settleSubtaskState(taskId, subtaskId, 'succeeded', { result: text, memberReturn, ...artifacts, ...conversation })
       return text
     }
     if (result.status === 'waiting_user') {
-      await this.settleSubtaskState(taskId, subtaskId, 'waiting_user', { result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation })
+      await this.settleSubtaskState(taskId, subtaskId, 'waiting_user', { result: text, memberReturn, ...artifacts, ...conversation })
       return text
     }
     if (result.status === 'external_pending') {
@@ -3165,12 +3194,12 @@ export class ButlerConsole {
         // 给用户显示一件没发生过的外部事项。材料仍然保留。
         const error = '说还有外部待办，但没说明在等什么'
         await this.settleSubtaskState(taskId, subtaskId, 'failed', {
-          error, result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation,
+          error, result: text, memberReturn, ...artifacts, ...conversation,
         })
         return error
       }
       await this.settleSubtaskState(taskId, subtaskId, 'external_pending', {
-        result: text, memberReturn: memberReturnOf(result), ...artifacts, ...conversation,
+        result: text, memberReturn, ...artifacts, ...conversation,
       })
       return text
     }
@@ -3179,7 +3208,7 @@ export class ButlerConsole {
     const written = cancelled && text === '' ? '已停止' : text
     await this.settleSubtaskState(taskId, subtaskId, cancelled ? 'cancelled' : 'failed', {
       error: written,
-      memberReturn: memberReturnOf(result),
+      memberReturn,
     })
     return written
   }
@@ -3234,7 +3263,7 @@ export class ButlerConsole {
       if (step.conversationId !== input.conversationId) continue
       const declared = step.memberReturn?.actions ?? []
       if (declared.length === 0 || step.memberReturn === undefined) continue
-      const own = ownPendingActions(declared, input.fresh)
+      const own = ownPendingActions(declared, input.fresh, claimedByOthers(record, step.id))
       const unchanged = own.length === declared.length
         && own.every((action, index) => action.id === declared[index]?.id && action.state === declared[index]?.state)
       if (unchanged) continue
@@ -3542,7 +3571,7 @@ export class ButlerConsole {
       }
       if (result.status === 'failed') {
         // `detail` 用落库返回的**同一个值**：实时与刷新后看到的是同一段正文。
-        const detail = await this.applyMemberResult(taskId, subtaskId, result, `${displayName} 没干成这活`)
+        const detail = await this.applyMemberResult({ actor: input.actor, taskId, subtaskId, result, emptyText: `${displayName} 没干成这活` })
         yield emit('failed', detail, {
           ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
         })
@@ -3553,7 +3582,7 @@ export class ButlerConsole {
         // 落库走统一矩阵（G04）：正文、原会话与材料一次写全，刷新和重启都找得回。
         // ⚠️ 事件里的 `detail` 用它的返回值（正文），问题走 `question` 字段——前端请示卡优先
         // 显示 `question`（`askCard`），所以这里改成正文不会影响等待态的界面。
-        const detail = await this.applyMemberResult(taskId, subtaskId, result)
+        const detail = await this.applyMemberResult({ actor: input.actor, taskId, subtaskId, result })
         // 记下等待上下文，用户回复时据此把话交回同一位成员；带上原会话引用供续问（G01）。
         this.waiting.set(`${taskId}:${subtaskId}`, {
           executor, agentId, displayName,
@@ -3573,7 +3602,7 @@ export class ButlerConsole {
         // 判定来源只有一个：员工给出的结构化声明。**不从正文措辞里猜**，也不因为
         // 「结果里带着材料」就自行把这一轮当成可以在外部收尾 —— 那正是要避免的混用。
         const reason = typeof result.externalPending?.reason === 'string' ? result.externalPending.reason.trim() : ''
-        const detail = await this.applyMemberResult(taskId, subtaskId, result)
+        const detail = await this.applyMemberResult({ actor: input.actor, taskId, subtaskId, result })
         if (reason === '') {
           if (!signal.aborted) console.warn(`butler-console: 子任务 ${taskId}:${subtaskId}（${agentId}）声明 external_pending 但没有给出理由`)
           yield emit('failed', detail, { ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }) })
@@ -3591,7 +3620,7 @@ export class ButlerConsole {
         })
         return { state: 'external_pending', report: `【${displayName}】${detail}` }
       }
-      const summary = await this.applyMemberResult(taskId, subtaskId, result)
+      const summary = await this.applyMemberResult({ actor: input.actor, taskId, subtaskId, result })
       yield emit('succeeded', summary, {
         ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
       })
@@ -3805,7 +3834,7 @@ export class ButlerConsole {
         ? (result.actions === undefined || result.actions.length === 0 ? declared : result.actions)
         // 没说还有待办（成功）/失败/取消：这个会话里没有未办的事了，或者状态无从判断。
         : result.status === 'failed' || result.status === 'cancelled' ? declared : []
-      const own = ownPendingActions(declared, fresh)
+      const own = ownPendingActions(declared, fresh, claimedByOthers(record, subtaskId))
       const state: SubtaskState = result.status === 'cancelled'
         ? 'cancelled'
         : result.status === 'failed'
@@ -3979,7 +4008,7 @@ export class ButlerConsole {
         const result = await execution
         if (result.conversationId !== undefined && result.conversationId !== '') latestConversationId = result.conversationId
         // 落库走与派发同一份结果矩阵（G04）：每种合法状态都写全正文、原会话与材料。
-        await this.applyMemberResult(taskId, subtaskId, result)
+        await this.applyMemberResult({ actor: prepared.actor, taskId, subtaskId, result })
         if (result.status === 'waiting_user') {
           const question = clip(result.question ?? result.summary, 500)
           // 回话又引出新的等待：重新登记等待上下文与闹钟，用户可以继续回话。
