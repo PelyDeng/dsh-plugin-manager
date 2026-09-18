@@ -1219,16 +1219,26 @@ function renderActionsInto(view, actions, context) {
 }
 
 /**
- * 成员交回内容之后**落定**它的正文（把流式期间的纯文本预览换成受控 Markdown）。
+ * 落定一条成员发言的正文。
  *
- * ⚠️ 这是 P1 漏掉的一条，**生产截图抓到的**：流式增量走 `appendPreviewText`（纯文本），
- * 只有 `succeeded` 那条路径做了 `settleMarkdown`；于是"待外部处理/等你回话/失败"这几种
- * **已经流完正文**的结局里，成员交回的 Markdown 表格仍然显示成一行竖线文本。
+ * ## 取值顺序：**服务端给的正文优先**（2026-09-18 生产截图改正）
  *
- * 落定之后再调它是安全的：`settleMarkdown` 只是把正文节点换成新的 `.md` 容器，内容不变。
+ * 卡片正文在流式期间是客户端一段段攒出来的（`subtask_delta`），攒的是**模型在回合里说过的话**
+ * ——包括它中途的分析、自我怀疑、"我再看看"这类过程发言。而**权威结论**是服务端在终态事件里
+ * 给的 `detail`（落库那一份，也是刷新后重新读到的那一份）。
+ *
+ * 原来这里是反的：`view.body` 优先，服务端正文只在"客户端一个字都没攒到"时才用。后果是同一张
+ * 卡片**刷新前显示模型的自言自语、刷新后显示真正的结论**——用户报了两次，我上一轮只改了服务端
+ * 两条路（落库与推送），把客户端这第三条路漏了。
+ *
+ * 现在：终态一律以服务端正文为准；它为空（例如取消、或者成员什么都没交回）时才回落到攒下来的
+ * 内容，不让卡片变成空白。
+ *
+ * ⚠️ 判断要用"非空字符串"而不是 `??`：`''` 是合法值，`??` 不会把它当成缺失。
  */
 function settleMemberBody(view, fallback) {
-  const body = view.body !== '' ? view.body : (typeof fallback === 'string' ? fallback : '')
+  const authoritative = typeof fallback === 'string' ? fallback.trim() : ''
+  const body = authoritative !== '' ? fallback : view.body
   if (body !== '') renderMemberContent(view, body)
   return body
 }
@@ -1726,7 +1736,9 @@ function handleSubtask(event) {
 
   if (event.state === 'waiting_user') {
     view.bubble.classList.add('bubble--wait')
-    settleMemberBody(view, event.question ?? event.detail)
+    // 卡片正文用服务端给的正文（`detail`），**不要用 `question`**：问题是请示卡的内容
+    // （`askCard` 自己会渲染），混进正文会让"正文"变成一句提问，与刷新后读到的不一样。
+    settleMemberBody(view, event.detail)
     // 等你回话不是在计算：链路条给静态的等待态，不再转圈（方案 6.1）。
     setRail('work', 'waiting')
     announce(`${displayNameOf(event.agentId)} 等你回话`)
@@ -1749,7 +1761,9 @@ function handleSubtask(event) {
     view.terminal = true
     // 终态正文是权威结论（S09）：成功那一刻按它校准并落成受控 Markdown（C 批）——
     // 丢段或重试残留的预览不会留在页面上；落定前后的布局变化不抢阅读位置（I11）。
-    const finalText = event.detail ?? view.body
+    // ⚠️ 用"非空"判断而不是 `??`：服务端给的正文是空串时 `??` 不会回落，卡片会被清空。
+    const authoritative = typeof event.detail === 'string' ? event.detail.trim() : ''
+    const finalText = authoritative !== '' ? event.detail : view.body
     stabilizeViewport(() => {
       view.text = settleMarkdown(view.text, finalText)
       if (view.progress !== null) {
@@ -1768,12 +1782,16 @@ function handleSubtask(event) {
     view.terminal = true
     // classList.add('') 会抛 TypeError（取消态没样式类）：错误文本曾因此漏进线程。
     if (event.state === 'failed') view.bubble.classList.add('bubble--fail')
-    // 已经有正文时，失败原因另起一行。这一行带 `msg__meta--keep`：**「只看结论」不能把它藏掉**
-    // ——那正是用户最需要看到的一句话（同一失败在"还没吐字"时走正文，本来就不会被藏）。
-    if (view.body === '') renderMemberContent(view, event.detail)
-    else {
-      // 正文照旧落定成 Markdown（表格/列表要显示成它们本来的样子），失败原因另起一行。
-      renderMemberContent(view, view.body)
+    /**
+     * 正文同样以**服务端那一份**为准（它才是刷新后会重新读到的内容）。
+     *
+     * 失败/取消时服务端给的 `detail` 是这一轮的结论正文（可能是一句兜底话术），而攒下来的
+     * 内容常常只是模型半路说的话——两者不一致正是"刷新前后不一样"的来源之一。
+     * 只在服务端什么都没给时，才回落到攒下来的内容，别让卡片空着。
+     */
+    const settled = settleMemberBody(view, event.detail)
+    // 「只看结论」不能把这一行藏掉——那是用户最需要看到的一句话。
+    if (settled !== '' && typeof event.detail === 'string' && event.detail.trim() !== '' && event.detail.trim() !== settled) {
       view.bubble.appendChild(make('div', 'msg__meta msg__meta--keep', event.detail))
     }
     announce(event.state === 'failed' ? `${displayNameOf(event.agentId)} 失败：${event.detail ?? '原因不明'}` : `${displayNameOf(event.agentId)} 的活已取消`)

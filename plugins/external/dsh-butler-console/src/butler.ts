@@ -1625,11 +1625,11 @@ export class ButlerConsole {
               dependsOn: {
                 type: 'array',
                 items: { type: 'string' },
-                description: '前置的目标标识（例如 g1）。派这一步之前逐个核验：前置还没结束（含等人回话）就留在队列里等，不判失败；前置失败、取消或被替代才不派，并如实记下缺失的前提。不填表示没有前置。只能引用这一轮里已经存在的目标，或者本次计划中排在它前面的目标。',
+                description: '前置的目标标识（例如 g1）。派这一步之前逐个核验：前置还没结束（含等人回话、等人在卡片上确认）就留在队列里等，不判失败；前置失败、取消或被替代才不派，并如实记下缺失的前提。不填表示没有前置。只能引用这一轮里已经存在的目标，或者本次计划中排在它前面的目标。**彼此独立的步骤不要互相依赖**：删掉五篇不同的文章、给五篇文章各配一张图，都是五件独立的事，应该并列成五个没有 dependsOn 的步骤，而不是串成一条链 —— 串起来之后，第一件卡住（例如等你确认），后面每一件都动不了。',
               },
               requiresExternalAction: {
                 type: 'boolean',
-                description: '这一步是否真的需要外部动作（在原页面采用、确认、发布）已经办完。默认 false：前置交了材料就可以拿材料继续干。当前置带着「外部待办」时这条才起作用 —— 填 true 表示这一步要的是已经办完的结果（例如「报道一下已经发布的版本」），材料本身不够用；不填表示材料够用（例如「拿候选稿写个摘要」）。',
+                description: '这一步是否真的需要外部动作（在原页面采用、确认、发布）已经办完。默认 false：前置交了材料就可以拿材料继续干。当前置带着「外部待办」时这条才起作用 —— 填 true 表示这一步要的是已经办完的结果（例如「报道一下已经发布的版本」），材料本身不够用；不填表示材料够用（例如「拿候选稿写个摘要」）。填 true 时，前置还在等外部动作的期间这一步会**排队等着**（不会判失败），办完之后自动接上。',
               },
             },
           },
@@ -2555,7 +2555,7 @@ export class ButlerConsole {
 
       // 收尾前先排空队列（依赖重判方案 §3.2，Q3 已批准）：补充追加的新行（含 supersedes
       // 新尝试）派完之后，既有排队下游的依赖状态可能已经变化 —— 新尝试成功、旧失败不再算数。
-      // 与 closeAfterReply 复用同一 drainQueue，传导给排队下游之后才谈收尾。
+      // 与 settleAfterTurn 复用同一 drainQueue，传导给排队下游之后才谈收尾。
       yield* this.drainQueue({
         taskId,
         actor,
@@ -2845,7 +2845,7 @@ export class ButlerConsole {
     // 上游判 failed 之后，同任务的非终态下游先走一次依赖判定结账（依赖重判方案 §3.2，
     // Q3 已批准）：fail 的下游写明原因收成 failed，wait 的保持 queued 如实挂起，放行的
     // 照常派出去 —— 之前这里直接返回，排队下游会悬空到老板下一次人工过问。复用 drainQueue
-    // （与 closeAfterReply 同一实现，不另造一套）。会话上正有回话或补充在执行时让位：那一轮
+    // （与 settleAfterTurn 同一实现，不另造一套）。会话上正有回话或补充在执行时让位：那一轮
     // 自己的收尾会排空队列，两条路径同时派同一步会把它派两遍。
     const settled = await this.storage.task(actor, taskId)
     if (settled !== undefined) {
@@ -3711,10 +3711,19 @@ export class ButlerConsole {
         ...(result.conversationId === undefined ? {} : { conversationId: result.conversationId }),
       }))
       yield* this.emitResultEvents(prepared, result)
+      /**
+       * 办完这一条之后**把依赖传导下去**：正等这条前置的步骤可能就绪了。
+       *
+       * 少了这一步，用户点掉第一张卡、上游变成"已办完"，而后面排队的步骤没有人回头看它们
+       * ——2026-09-18 的现场就是这样：一次「删六篇草稿」点了第一张，其余五张永远停在失败。
+       */
+      yield* this.settleAfterTurn(prepared, { deferToBusyTurn: true })
     } catch (error) {
       const detail = visibleError(error, this.config.maxResultChars)
       await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
       yield { type: 'subtask', taskId, id: subtaskId, state: 'failed', agentId, displayName, detail, time: Date.now() }
+      // 失败同样是一次结账：等它的下游该按真实状态重判（该派的派、该收的收）。
+      yield* this.settleAfterTurn(prepared, { deferToBusyTurn: true })
     } finally {
       if (this.runs.get(prepared.conversationId)?.runId === prepared.runId) this.runs.delete(prepared.conversationId)
       this.releaseClaim(prepared.conversationId, prepared.runId)
@@ -3874,7 +3883,7 @@ export class ButlerConsole {
             // 有的操作确认完就整轮成功了（例如"交给它去发布"），那一步也可能带新的待办。
             ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
           }
-          yield* this.closeAfterReply(prepared)
+          yield* this.settleAfterTurn(prepared)
           return
         }
         if (result.status === 'external_pending') {
@@ -3891,19 +3900,19 @@ export class ButlerConsole {
             ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
             ...(!failed && result.externalPending?.next !== undefined ? { pending: { reason, next: result.externalPending.next } } : {}),
           }
-          yield* this.closeAfterReply(prepared)
+          yield* this.settleAfterTurn(prepared)
           return
         }
         const detail = clip(result.summary === '' ? `${displayName} 没接上这活` : result.summary, this.config.maxResultChars)
         const state: SubtaskState = result.status === 'cancelled' ? 'cancelled' : 'failed'
         yield { type: 'subtask', taskId, id: subtaskId, state, agentId, displayName, detail, time: Date.now() }
-        yield* this.closeAfterReply(prepared)
+        yield* this.settleAfterTurn(prepared)
       } catch (error) {
         const detail = visibleError(error, this.config.maxResultChars)
         await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
         this.waiting.delete(key)
         yield { type: 'subtask', taskId, id: subtaskId, state: 'failed', agentId, displayName, detail, time: Date.now() }
-        yield* this.closeAfterReply(prepared)
+        yield* this.settleAfterTurn(prepared)
       }
     } finally {
       // 释放自己的占用：核对 runId，不清理别的执行在这份会话上留下的引用。
@@ -4395,13 +4404,39 @@ export class ButlerConsole {
     }
   }
 
-  private async *closeAfterReply(prepared: PreparedReply): AsyncGenerator<ButlerEvent> {
+  /**
+   * 一位成员的那一轮**了结之后**：先重判依赖，再按需收尾。
+   *
+   * 三条路径共用：用户补了话、用户在卡片上办了确认/撤回、以及等待超时后的后台收尾（那条走
+   * `settleTask`，不经过这里）。
+   *
+   * ## 为什么"用户办了确认"也要走这里（2026-09-18 生产事故）
+   *
+   * 之前只有"补话"和"上游失败"两条路会重判依赖。于是"上游还在等你确认"时排队/被判死的下游，
+   * 在你**点掉那张卡之后**没有人回头看它们 —— 一次「删六篇草稿」的活，点掉第一张，剩下五张永远
+   * 停在失败。确认办理同样会让上游结账，那就同样得把依赖传导下去。
+   *
+   * 让位规则只对**确认办理**这一条路径生效（`deferToBusyTurn`）：它会话上可能正有回话或补充在
+   * 执行，那种情况让那一轮自己的收尾去排空队列 —— 两条路径同时派同一步会把它派两遍。
+   * 回话/补充这两条路径本身就是"说完话之后排空队列"的那一环，**不判断让位**：它们此刻的占用者
+   * 就是自己，把自己当成"别人在跑"会让队列永远不动（写这条时踩过一次，队列卡住的用例当场变红）。
+   */
+  private async *settleAfterTurn(prepared: {
+    readonly taskId: string
+    readonly actor: Actor
+    readonly conversationId: string
+    readonly abort: AbortController
+  }, options: { readonly deferToBusyTurn?: boolean } = {}): AsyncGenerator<ButlerEvent> {
     const before = await this.storage.task(prepared.actor, prepared.taskId)
     if (before === undefined) return
-    // 有人回完话之后，之前「前置还没终结」而留在队列里的步骤可能就绪了：先核验再派。
-    yield* this.drainQueue({
-      taskId: before.id, actor: prepared.actor, goal: before.goal, signal: prepared.abort.signal,
-    })
+    const holder = this.claims.get(prepared.conversationId)
+    const defer = options.deferToBusyTurn === true && (holder?.kind === 'reply' || holder?.kind === 'supplement')
+    if (!defer) {
+      // 有人回完话、或者刚办完一条确认之后，之前「前置还没终结」而留在队列里的步骤可能就绪了。
+      yield* this.drainQueue({
+        taskId: before.id, actor: prepared.actor, goal: before.goal, signal: prepared.abort.signal,
+      })
+    }
     const record = await this.storage.task(prepared.actor, prepared.taskId)
     if (record === undefined) return
     if (record.subtasks.some(item => !isTerminal(item.state))) return

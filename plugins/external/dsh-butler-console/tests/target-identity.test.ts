@@ -430,13 +430,14 @@ describe('依赖：按就绪表核验前置', () => {
     await f.settle()
   })
 
-  it('确需外部已办完时，带外部待办的前置不算就绪', async () => {
+  it('确需外部已办完时，带外部待办的前置**排队等**，不判失败', async () => {
+    // 2026-09-18 改（设计表同步改）：上游停在"等老板确认"是**老板随时能点掉**的状态，不是终局。
+    // 原来这里判 failed，于是「删六篇草稿」点掉第一张之后，其余五张永远停在失败。
     const executor = executorByGoal({ 甲: { status: 'external_pending', summary: '候选稿已交回' } })
     const { f, taskId } = await startWith(executor, { requiresExternalActionOnSecond: true })
     expect(dispatched(executor)).toEqual(['甲'])
     const second = f.store.task(actor, taskId)!.subtasks[1]!
-    expect(second.state).toBe('failed')
-    expect(second.error).toContain('external_pending')
+    expect(second.state, '上游只是等老板点确认，这一步不该被判死').toBe('queued')
     await f.settle()
   })
 

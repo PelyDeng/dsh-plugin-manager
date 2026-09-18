@@ -522,3 +522,63 @@ describe('前置声明损坏', () => {
     await f.settleAll()
   })
 })
+
+/**
+ * 老板办掉一张确认卡之后，**等它的下游要自动接上**。
+ *
+ * ## 现场（2026-09-18）
+ *
+ * 一次「把这六篇草稿删掉」被拆成了 g1→g2→…→g6 一条链。g1 停在"等你确认"时，后五步全被判成
+ * `failed`（就绪表里 `external_pending + requiresExternalAction` 那一行当时写的是 `fail`）。
+ * 老板点掉第一张卡之后，**没有人回头看那五步** —— 它们永远停在失败，只能重新派活。
+ *
+ * 这条判据压两件事：
+ * 1. 上游停在"等你确认"时，下游**排队等**（判失败不在选项里 —— 老板随时能点掉它）；
+ * 2. 老板点掉确认、上游结账之后，**依赖重判真的被跑了一遍**，下游被派出去。
+ */
+describe('老板办掉确认之后，排队等它的下游自动接上', () => {
+  const actionId = 'op-delete-1'
+
+  it('上游停在等你确认：下游排队等（不判失败）；点掉确认后下游被派出', async () => {
+    const { executor, requests } = recordingExecutor({
+      s2: () => Promise.resolve({ status: 'succeeded' as const, summary: '第二篇也删掉了' }),
+    })
+    // 执行方要支持"就地确认"（老板在卡片上点的那一下）。
+    ;(executor as { applyAction?: unknown }).applyAction = async () => ({ status: 'succeeded' as const, summary: '已按你确认的办了' })
+    const f = await fixture(executor)
+    const taskId = `butler-task-${randomUUID()}`
+    f.store.openOrReserveConversation(conversationId, actor)
+    f.store.createTask({
+      id: taskId, conversationId, actor, goal: '删掉这两篇草稿', note: '',
+      subtasks: [
+        { id: 's1', goal: '删第一篇', agentId: 'blog', reason: '', logicalId: 'g1' },
+        { id: 's2', goal: '删第二篇', agentId: 'blog', reason: '', logicalId: 'g2', dependsOn: ['g1'], requiresExternalAction: true },
+      ],
+    })
+    // s1 已经跑到"等你确认"：材料交回了，并挂着一条待确认操作。
+    f.store.setSubtaskState(taskId, 's1', 'external_pending', {
+      result: '确认卡片已生成，等你点确认。',
+      memberReturn: {
+        protocol: 1,
+        text: '确认卡片已生成，等你点确认。',
+        actions: [{ id: actionId, kind: 'blog.delete', title: '删除文章', summary: '确认后永久删除这篇文章', state: 'prepared' }],
+      },
+    })
+
+    // ① 排空队列：这一步该**等**，不该被判死。
+    const drainQueue = (f.console_ as unknown as {
+      drainQueue(input: { taskId: string; actor: Actor; goal: string; signal: AbortSignal }): AsyncGenerator<unknown>
+    }).drainQueue.bind(f.console_)
+    for await (const _event of drainQueue({ taskId, actor, goal: '删掉这两篇草稿', signal: new AbortController().signal })) { /* 无观众 */ }
+
+    expect(subtaskOf(f, 's2')?.state, '上游只是等老板点确认，下游却被判死了').toBe('queued')
+    expect(requests.some(item => item.subtaskId === 's2'), '上游还没办完，下游不该被派出去').toBe(false)
+
+    // ② 老板点确认 → 上游结账 → 依赖重判 → 下游自动接上。
+    await f.console_.startAction({ taskId, subtaskId: 's1', actionId, decision: 'confirm', actor })
+    await until(() => requests.some(item => item.subtaskId === 's2'), '下游被派出去')
+    await until(() => subtaskOf(f, 's2')?.state === 'succeeded', '下游干完')
+    expect(subtaskOf(f, 's1')?.state).toBe('succeeded')
+    await f.settleAll()
+  })
+})

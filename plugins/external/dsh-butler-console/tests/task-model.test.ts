@@ -109,6 +109,11 @@ describe('任务状态机', () => {
  *
  * 逐行照游戏侧 `design/02-机制/task_protocol.yaml#scheduling.ready_rules` 那张表驱动 ——
  * 两边各写一份实现迟早会分家，所以这张表本身就是判据：表变了，这里跟着红。
+ *
+ * ⚠️ 其中 `external_pending + requiresExternalAction` 这一行 2026-09-18 从 `fail` 改成了
+ * `wait`（设计表同步改了，判据跟着改）：原来判失败，于是"等老板在卡片上点确认"被当成
+ * "前置永远完不成"，把它后面排队的每一步全判死。现场是一次「删六篇草稿」——点掉第一张，
+ * 其余五张永远停在失败。老板能点掉的状态不是终局。
  */
 describe('依赖就绪判定与既定就绪表一致', () => {
   const rows: readonly {
@@ -120,7 +125,7 @@ describe('依赖就绪判定与既定就绪表一致', () => {
     { upstream: 'succeeded', materialsReady: true, requiresExternalAction: false, action: 'dispatch' },
     { upstream: 'succeeded', materialsReady: false, requiresExternalAction: false, action: 'fail' },
     { upstream: 'external_pending', materialsReady: true, requiresExternalAction: false, action: 'dispatch' },
-    { upstream: 'external_pending', materialsReady: true, requiresExternalAction: true, action: 'fail' },
+    { upstream: 'external_pending', materialsReady: true, requiresExternalAction: true, action: 'wait' },
     { upstream: 'external_pending', materialsReady: false, requiresExternalAction: false, action: 'fail' },
     { upstream: 'unfinished', materialsReady: false, requiresExternalAction: false, action: 'wait' },
     { upstream: 'unfinished', materialsReady: true, requiresExternalAction: false, action: 'wait' },

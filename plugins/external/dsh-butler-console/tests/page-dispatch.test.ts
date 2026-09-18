@@ -577,10 +577,13 @@ describe('调度卡', () => {
     // 四种结论都必须过它：成功、失败、等你回话、待外部处理。
     // 改造前只有"成功"走渲染，其余走 `textContent` —— 业务方看到的表格因此是一行竖线文本。
     expect(source).toContain('renderMemberContent(view, text)')
-    // 四种结局：成功走 renderMemberContent，其余三种走 settleMemberBody（先落定流式预览，
-    // 没有预览时用服务端给的说明）——都不再直接写 textContent。
-    expect(source).toContain('settleMemberBody(view, event.question ?? event.detail)')
+    // 四种结局：成功走 renderMemberContent 按服务端正文校准，其余三种走 settleMemberBody
+    // ——都不再直接写 textContent。
+    // ⚠️ 2026-09-18 改：这三个终态**一律以服务端正文为准**。原来 waiting 用 `event.question`、
+    // 另两条优先用攒下来的流式预览，于是同一张卡片"刷新前显示模型中途说的话、刷新后显示结论"。
+    expect(source).not.toMatch(/settleMemberBody\(view, event\.question/)
     expect(source).toContain('settleMemberBody(view, event.detail)')
+    expect(source).toContain('const settled = settleMemberBody(view, event.detail)')
     expect(source).not.toMatch(/if \(view\.body === ''\) view\.text\.textContent = event\.(detail|question)/)
     // 刷新重建走同一个入口（实时与重建不会各渲染一套）。
     expect(source).toMatch(/function renderTaskCard\(record, opts = \{\}\) \{[\s\S]{0,2600}renderMemberContent\(view, text\)/)
@@ -629,11 +632,13 @@ describe('调度卡', () => {
     // 流式增量是纯文本（`appendPreviewText`），只有 succeeded 那条路径落定过 —— 于是成员
     // 交回的 Markdown 表格在"待外部处理"里仍然是一行竖线文本。这条钉住四种结局都落定。
     expect(source).toContain('function settleMemberBody(view, fallback)')
-    expect(source).toMatch(/function settleMemberBody\(view, fallback\) \{[\s\S]{0,400}renderMemberContent\(view, body\)/)
-    expect(source).toContain('settleMemberBody(view, event.question ?? event.detail)')
+    expect(source).toMatch(/function settleMemberBody\(view, fallback\) \{[\s\S]{0,500}renderMemberContent\(view, body\)/)
+    // 2026-09-18：落定的取值为**服务端正文**（见 `settleMemberBody` 的说明）。
+    expect(source).not.toMatch(/settleMemberBody\(view, event\.question/)
     expect(source).toContain('settleMemberBody(view, event.detail)')
+    expect(source).toContain('const settled = settleMemberBody(view, event.detail)')
     // 有正文的失败：正文落定 + 失败原因另起一行（那一行不被「只看结论」藏掉）。
-    expect(source).toMatch(/renderMemberContent\(view, view\.body\)[\s\S]{0,200}msg__meta msg__meta--keep/)
+    expect(source).toMatch(/settleMemberBody\(view, event\.detail\)[\s\S]{0,400}msg__meta msg__meta--keep/)
   })
 
   it('复制当前成员正文：成功报「已复制」，没有内容时如实报失败', async () => {

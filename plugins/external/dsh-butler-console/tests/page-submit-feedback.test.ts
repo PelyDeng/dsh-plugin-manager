@@ -175,7 +175,8 @@ describe('B 批恢复一致性守卫（S05–S09/S12）', () => {
     // 迟到帧双重放弃：终态（已校准）或已离开执行态（等待中光标复亮的根因）。
     expect(source).toMatch(/view\.terminal === true \|\| view\.live === false\) break/u)
     expect(source).toMatch(/if \(view\.terminal === true \|\| view\.live === false\) return/u)
-    expect(source).toMatch(/const finalText = event\.detail \?\? view\.body/u)
+    // 2026-09-18 改：`??` 换成"非空判断"——服务端给的正文是空串时 `??` 不会回落，卡片会被清空。
+    expect(source).toMatch(/const finalText = authoritative !== '' \? event\.detail : view\.body/u)
     expect(source).toMatch(/settleMarkdown\(view\.text, finalText\)/u)
     // 模型重试隔离：旧尝试帧丢弃 + chat_reset 重置预览。
     expect(source).toContain("case 'chat_reset'")

@@ -85,7 +85,7 @@ scheduling:
     - { upstream: succeeded, materialsReady: true, requiresExternalAction: false, action: dispatch }
     - { upstream: succeeded, materialsReady: false, requiresExternalAction: false, action: fail }
     - { upstream: external_pending, materialsReady: true, requiresExternalAction: false, action: dispatch }
-    - { upstream: external_pending, materialsReady: true, requiresExternalAction: true, action: fail }
+    - { upstream: external_pending, materialsReady: true, requiresExternalAction: true, action: wait }
     - { upstream: external_pending, materialsReady: false, requiresExternalAction: false, action: fail }
     - { upstream: unfinished, materialsReady: false, requiresExternalAction: false, action: wait }
     - { upstream: unfinished, materialsReady: true, requiresExternalAction: false, action: wait }
@@ -96,6 +96,7 @@ scheduling:
   dependency_rules:
     - 就绪表逐个依赖核对，全部通过才可派单；无依赖直接核验入口与容量。上游尚未终结时始终等待，不因途中已有部分材料就提前失败或派单；unfinished 包括牛马大总管已决定且额度允许的安全重试，仍受本轮和 planned 截止时间约束。
     - external_pending 只有本轮已交回的完整材料足以支持下游目标且不依赖外部操作时才可用；在 inputRefs 记录材料来源和未采用、未发布等真实状态，不能宣称外部操作已成功。
+    - 上游停在 external_pending（等外部动作）而下游要的是「已经办完的结果」时，下游**排队等待**，判失败不在选项里：外部动作是老板随时能点掉的东西（点确认、点采用、点发布），拿它当终局会把一条本来能走完的链整条判死。上游被办结（确认、撤回、外部办完）之后重新核验依赖并接上，办不成的再按失败收尾。
     - 上游失败后先按 retry 决定是否还有本轮恢复机会；不能恢复则将尚未派出的依赖步骤以 result.error 结束，说明没有执行及缺失的前提，不伪造员工报错或一直等待。
     - 上游有效尝试被替代时，使用旧 inputRefs 的下游不能直接参与当前成功判定。已派出的 inputRefs 不变；受影响目标先标 unmetGoals，必要时终结旧下游并另建使用当前材料的新尝试。仅改表达而不替代上游时，仍可复用原有适用结果。
     - 下游材料只取最新有效尝试，保留来源、范围、正文或引用；超出员工可接收内容时明确缺失并停止或经老板缩小范围，不能悄悄截断为完整结果。

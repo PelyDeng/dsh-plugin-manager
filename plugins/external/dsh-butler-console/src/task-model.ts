@@ -121,7 +121,21 @@ export function dependencyVerdict(facts: {
   const { upstream, materialsReady, requiresExternalAction } = facts
   if (upstream === 'succeeded') return materialsReady ? 'dispatch' : 'fail'
   if (upstream === 'external_pending') {
-    return materialsReady && !requiresExternalAction ? 'dispatch' : 'fail'
+    // 上游材料都没交回：那确实没戏，别让下游空等。
+    if (!materialsReady) return 'fail'
+    // 材料够用、下游也不要外部动作：照派。
+    if (!requiresExternalAction) return 'dispatch'
+    /**
+     * 上游交回了材料、正**等人去办**那件事（确认、采用、发布），而这一步要的正是"已经办完的结果"。
+     *
+     * ⚠️ 这里从 `'fail'` 改成 `'wait'`（2026-09-18 生产事故）：原来判失败，于是"等人点确认"被当成
+     * "前置永远完不成"，把后面排队的每一步都**判死**。可"等你确认"分明是**用户随时能点掉**的中间
+     * 状态——它跟"等你回话"一样会被人往前推，唯一的区别只是那个人在哪个页面点。
+     *
+     * 真实现场：一次「把六篇草稿删掉」被拆成 g1→g2→…→g6 一条链，g1 停在等确认，后五步全判 failed；
+     * 用户点掉 g1 之后，那五步再也没人回头看，只能重新派活。
+     */
+    return 'wait'
   }
   if (upstream === 'failed' || upstream === 'cancelled') return 'fail'
   // 其余都是还没终结：排队中、已派出、正在干、等人回话。
