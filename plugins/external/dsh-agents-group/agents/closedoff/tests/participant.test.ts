@@ -304,7 +304,10 @@ function fixture(options: FixtureOptions = {}): Harness {
     // 惰性取值器（见 `CreateParticipantInput.runtime`）：生产的装配顺序是"先 participant、
     // 后 lifecycle"，所以交出去的必须是函数而不是实例。本替身的 `lifecycle` 已经存在，
     // 包一层只为与生产同形，不改变被测行为。
-    runtime: { ctx, definition, access, store: port, config, lifecycle: () => lifecycle, allowedTools },
+    //
+    // ⚠️ 这里只给 `ctx` 与 `lifecycle`：入参类型就是这么窄的——**故意**。多给一份"整份 runtime"
+    // 曾经让生产把 lifecycle 实例当取值器传进去（`TypeError: runtime.lifecycle is not a function`）。
+    runtime: { ctx, lifecycle: () => lifecycle },
     access,
     config,
   })

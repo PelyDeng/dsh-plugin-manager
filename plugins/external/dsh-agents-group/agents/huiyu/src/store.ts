@@ -73,8 +73,18 @@ export interface ImageRecordPayload {
   readonly prompt: string
   readonly provider: string
   readonly model: string
+  /**
+   * **请求**的尺寸（`宽x高`）。
+   *
+   * ⚠️ 它不是"这张图多大"。渠道可能不按请求出图（2026-09-18 实测：请求 `1536x864` 的封面
+   * 落地成 `2048x768`）。要看真实尺寸用 {@link ImageRecordPayload.width} / `height`，
+   * 那是从交付字节里读出来的。
+   */
   readonly size: string
   readonly mediaType: string
+  /** 只在"渠道没按请求出图"时写：交付的真实尺寸，便于统计渠道行为。 */
+  readonly deliveredSize?: string
+  /** 交付图片的真实宽高（从字节头读出）。认不出容器格式时留空，**不用请求值顶替**。 */
   readonly width?: number
   readonly height?: number
   readonly bucket: string

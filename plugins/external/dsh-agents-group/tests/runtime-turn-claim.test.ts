@@ -332,7 +332,7 @@ function host(options: HostOptions = {}) {
     calls.events.push('retainTurn')
     return originalRetain(...args)
   }) as typeof lifecycle.retainTurn
-  const runtime: AgentRuntime = { ctx, definition, access, store: port, config: runtimeConfig, lifecycle, allowedTools: () => [] }
+  const runtime: AgentRuntime = { ctx, definition, access, store: port, config: runtimeConfig, allowedTools: () => [] }
   // C6 靠"根本不传 storage"来验：少了这个守卫，接线处会以 TypeError 炸掉。
   const participant = options.withoutStorage === true
     ? createParticipant({ definition, runtime: { ...runtime, lifecycle: () => lifecycle }, access, config: runtimeConfig })

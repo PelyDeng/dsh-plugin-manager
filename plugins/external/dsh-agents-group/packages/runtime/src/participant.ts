@@ -37,6 +37,7 @@
  * 结论时，用那一份兜底交付（见 `handoffFallback`）——补交没跑完不该毁掉一次已经成功的交付。
  * 首轮本身超时、或自修正轮超时，仍然整条失败：那两种情况下都没有"已经成功的交付"。
  */
+import type { Context } from '@deepseek-ai/cordis'
 import { AccessError, type Access, type Actor, type AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
 import {
   PARTICIPANT_PROTOCOL,
@@ -65,19 +66,33 @@ import type { AgentStoragePort, OwnerKey, TurnResultRecord } from './storage/por
 export interface CreateParticipantInput {
   readonly definition: AgentDefinition
   /**
-   * 运行时能力。
+   * 运行时能力：**只收 participant 真正会读的那两样**（`ctx` 与 `lifecycle`）。
    *
-   * ⚠️ **`lifecycle` 在这里是惰性取值器，不是实例**。原因是一个装配顺序约束：交活工具按会话
-   * 注册，它的接线点（`runtime.ts` 的 `registerScopedTools`）要拿 participant 的 `handoffFor`，
-   * 而那个接线点又必须**在 lifecycle 造出来之前**就交给 lifecycle 的 host ⇒ 装配顺序只能是
-   * "先 participant、后 lifecycle"。
+   * ## 为什么只收两样，而不是整份 `AgentRuntime`
    *
-   * 若这里直接收 `lifecycle: ConversationLifecycle`，构造期解构拿到的是占位 `undefined`
-   * （实测：所有用例在 `lifecycle.open` 处以 `Cannot read properties of undefined` 炸掉）。
-   * 取成函数之后，真正的读取推迟到**回合运行时**——那时装配早已完成。`runtime` 其余字段仍是
-   * 直接值。
+   * 这里曾经写的是 `Omit<AgentRuntime, 'lifecycle'> & { lifecycle: () => ConversationLifecycle }`：
+   * 形状上要求"取值器"，字段上却把整份 runtime 都摆出来。于是装配侧很自然地把**整个 runtime
+   * 对象**传了进来（`runtime.lifecycle` 是**实例**不是取值器），再用一个
+   * `as unknown as Parameters<typeof createParticipant>[0]['runtime']` 把类型检查关掉——
+   * 结果是第一次真实回合就 `TypeError: runtime.lifecycle is not a function`（2026-09-18 生产实测）。
+   *
+   * 只在接口里留下真正被读的字段，那条错路就不存在了：没有 `lifecycle` 实例可以顺手传进来，
+   * 形状不对是**编译错误**。`participant.ts` 读 `runtime` 的地方只有两处——构造期的 `ctx`，
+   * 以及回合运行时的 `lifecycle()`。
    */
-  readonly runtime: Omit<AgentRuntime, 'lifecycle'> & { readonly lifecycle: () => ConversationLifecycle }
+  readonly runtime: {
+    readonly ctx: Context
+    /**
+     * 会话生命周期的**惰性取值器**，不是实例。
+     *
+     * 原因是装配顺序：交活工具按会话注册，它的接线点（`runtime.ts` 的 `registerScopedTools`）
+     * 要拿 participant 的 `handoffFor`，而那个接线点又必须**在 lifecycle 造出来之前**交给
+     * lifecycle 的 host ⇒ 装配顺序只能是"先 participant、后 lifecycle"。
+     *
+     * 取成函数之后，真正的读取推迟到**回合运行时**——那时装配早已完成。
+     */
+    readonly lifecycle: () => ConversationLifecycle
+  }
   /** 可注入的存储门面；不注入时业务钩子拿到 `undefined`，工具与投影要自己处理这种情况。 */
   readonly storage?: AgentStoragePort
   readonly access: Access

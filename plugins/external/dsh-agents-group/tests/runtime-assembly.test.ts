@@ -200,7 +200,6 @@ describe('createAgentRuntime 的装配链', () => {
     // 装配链的其余部分都拿到了同一个存储：会话端口由生命周期与侧栏入口共用一份。
     expect(assembly.db).toBe(f.database.db)
     expect(assembly.store).toBe(f.database.port)
-    expect(assembly.lifecycle).toBe(assembly.runtime.lifecycle)
     expect(assembly.runtime.store).toBe(assembly.store)
     // 侧栏入口的装配只发生一次（`conversationRemover` 的移除互斥是进程内的）。
     expect(assembly.provider.protocol).toBe(1)
@@ -381,49 +380,36 @@ describe('createAgentRuntime 接上标题投递口', () => {
   })
 
   /**
-   * 判据：`runtime.lifecycle` 必须是**取值即最新**的访问器，不能是"先占位、后赋值"。
+   * 判据：**运行时能力对象上不许有 `lifecycle`**。
    *
-   * ## 这条判据的由来（生产事故，2026-09-18）
+   * ## 这条判据的由来（两次生产事故，2026-09-18）
    *
-   * 曾经的写法是 `{ ...host, lifecycle: undefined as never }` + 装配末尾
-   * `runtime.lifecycle = lifecycle`。它依赖一条**跨模块的对象同一性约定**：传进
-   * `createParticipant` 的必须是这同一个对象引用。那条约定没有任何东西保证——上游一旦传的是
-   * 展开副本或别处重建的同形对象，赋值就落在一个**谁都不再读**的对象上，participant 闭包里的
-   * `runtime.lifecycle` 永远是 `undefined`，直到某次真实回合才炸成
-   * `TypeError: runtime.lifecycle is not a function`。
+   * `AgentRuntime.lifecycle` 曾经存在过，而且与 `createParticipant` 入参里的
+   * `lifecycle: () => ConversationLifecycle` **同名不同形**（一个是实例、一个是取值器）。
+   * 两次线上事故都出在这里：
    *
-   * 线上就是这么炸的：`butler-console` 派活给 blog 时整轮失败。而当时装配测试**全绿**——
-   * `expect(assembly.lifecycle).toBe(assembly.runtime.lifecycle)` 验的是**返回出去的那个**
-   * 对象，恰好没覆盖 participant 内部持有的那一份。
+   * 1. 先是"装配期先占位、末尾再赋值"，依赖一条跨模块的对象同一性约定；约定被展开副本破坏后
+   *    participant 读到 `undefined`，第一次真实回合炸成
+   *    `TypeError: runtime.lifecycle is not a function`；
+   * 2. 改成 getter 之后**报错一模一样**——因为真正的成因是**形状**（实例不是取值器），
+   *    而当时那个 `as unknown as` 断言把类型检查关掉了。
    *
-   * ## 为什么断言"描述符"而不是"跑一轮回合"
+   * 两次都是"入口在、探针绿、一派活就炸"。修法不是再补一条更聪明的判据，而是**让错路不存在**：
+   * 字段删掉、生命周期只从 `assembly.lifecycle` 出、participant 的入参收到只剩两样
+   * （`ctx` 与取值器）。这条判据就是那个决定的守卫——字段一旦被加回来，它变红。
    *
-   * `participant` 里所有 `lifecycleOf()` 都在回合路径上（`open` / `finish` / `events` …），
-   * 要触发它们得造出完整的事件序列与宿主面。而这条缺陷的**结构特征**是确定可判的：
-   * 靠事后赋值的实现里 `lifecycle` 是**数据属性**，getter 实现里它是**访问器**。
-   * 断言描述符既精准又不依赖回合夹具——而且它正好在有人改回旧写法时变红。
-   *
-   * ⚠️ **这条判据只覆盖了缺陷的一半**：它验的是"取到的是不是最新那一份"，验不出"取到的形状
-   * 对不对"。2026-09-18 第二次事故就是另一半——`runtime.lifecycle` 是 lifecycle **对象**，
-   * 而 `participant` 要的是 `() => ConversationLifecycle`；当时用 `as unknown as` 把类型检查
-   * 关掉，报错与第一次**逐字相同**，于是又被当成同一条修了一遍而没修好。
-   * 形状那一半由 `huiyu-dispatch-e2e.test.ts` 覆盖：它用真装配 + 真桥接 + 真大总管**真调一次**
-   * 执行入口，对本文件修好之前的代码实测变红（`TypeError: runtime.lifecycle is not a function`）。
+   * 形状那一半（"入口真的能被调用"）由 `huiyu-dispatch-e2e.test.ts` 覆盖：真装配 + 真桥接 +
+   * 真大总管真调一次，对本文件引入的旧实现实测变红。
    */
-  it('runtime.lifecycle 是取值即最新的访问器，不是依赖对象同一性的事后赋值', async () => {
+  it('运行时能力对象上不暴露 lifecycle：生命周期只从 assembly.lifecycle 出，形状不再有两种', async () => {
     const f = fixture()
     const assembly = await f.assemble()
 
-    const descriptor = Object.getOwnPropertyDescriptor(assembly.runtime, 'lifecycle')
-    expect(descriptor, 'runtime.lifecycle 必须是自有属性').toBeDefined()
-    expect(typeof descriptor?.get, 'runtime.lifecycle 必须是访问器（getter），不能是事后赋值的数据属性').toBe('function')
-
-    // 访问器每次取值都返回同一个真实实例——不是 undefined、也不是每次新建。
-    expect(assembly.runtime.lifecycle).toBe(assembly.lifecycle)
-    expect(assembly.runtime.lifecycle).toBe(assembly.runtime.lifecycle)
-    // 该实例上确有 participant 回合路径要用的方法（`open` / `finish` / `assertConversation`）。
+    expect('lifecycle' in assembly.runtime, 'AgentRuntime 上不该再有 lifecycle —— 那正是两种形状的来源').toBe(false)
+    // 生命周期本身照旧可用，只是出口唯一。
+    expect(assembly.lifecycle).toBeDefined()
     for (const method of ['open', 'finish', 'assertConversation', 'events', 'followup'] as const) {
-      expect(typeof (assembly.runtime.lifecycle as unknown as Record<string, unknown>)[method], `lifecycle.${method} 应是函数`).toBe('function')
+      expect(typeof (assembly.lifecycle as unknown as Record<string, unknown>)[method], `lifecycle.${method} 应是函数`).toBe('function')
     }
 
     await assembly.dispose()

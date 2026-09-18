@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { EnvConfError, parseEnvConf } from '../src/env.ts'
-import { bannerSize, dimensionsOf, resolveSize, sizeNames } from '../src/media/size.ts'
+import { bannerSize, deliveredSize, dimensionsOf, resolveSize, sizeNames } from '../src/media/size.ts'
 import { ownerKey, ownerOf } from '../src/store.ts'
 
 /** 一份完整的、能通过校验的配置。用例在它上面做单点变化。 */
@@ -125,6 +125,57 @@ describe('尺寸换算', () => {
   it('宽高能拆出来，拆不出时不报错（尺寸已校验过，记账不该让生成失败）', () => {
     expect(dimensionsOf('1536x864')).toEqual({ width: 1536, height: 864 })
     expect(dimensionsOf('不是尺寸')).toEqual({})
+  })
+})
+
+/**
+ * 交付尺寸的读取。
+ *
+ * 这一组判据的由来：正式环境第一张头图请求 `1536x864`，落地的文件却是 `2048x768`，而记录与
+ * 工具文案都在报请求值——**文件不会说话，文案会**。所以"实际多大"必须从交付的字节里读出来。
+ */
+describe('从交付字节读真实尺寸', () => {
+  /** 造一张只有头部的最小 PNG：签名 + IHDR（宽高在 16/20 字节处，大端）。 */
+  function pngHeader(width: number, height: number): Uint8Array {
+    const bytes = new Uint8Array(24)
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
+    bytes.set([0x49, 0x48, 0x44, 0x52], 12) // 'IHDR'
+    new DataView(bytes.buffer).setUint32(16, width)
+    new DataView(bytes.buffer).setUint32(20, height)
+    return bytes
+  }
+
+  /** 造一张只有 SOF0 的最小 JPEG：SOI + SOF0 段（高在前、宽在后）。 */
+  function jpegHeader(width: number, height: number): Uint8Array {
+    const bytes = new Uint8Array(21)
+    const view = new DataView(bytes.buffer)
+    view.setUint16(0, 0xffd8) // SOI
+    view.setUint16(2, 0xffc0) // SOF0
+    view.setUint16(4, 11)     // 段长
+    view.setUint8(6, 8)       // 精度
+    view.setUint16(7, height)
+    view.setUint16(9, width)
+    return bytes
+  }
+
+  it('PNG：读 IHDR 的宽高', () => {
+    expect(deliveredSize(pngHeader(2048, 768))).toEqual({ width: 2048, height: 768, format: 'png' })
+  })
+
+  it('JPEG：读 SOF0 的宽高（高在前）', () => {
+    expect(deliveredSize(jpegHeader(1536, 1024))).toEqual({ width: 1536, height: 1024, format: 'jpeg' })
+  })
+
+  it('认不出的格式返回 undefined——如实说不知道，不拿请求值顶替', () => {
+    expect(deliveredSize(new Uint8Array(64))).toBeUndefined()
+    expect(deliveredSize(new Uint8Array(4))).toBeUndefined()
+    expect(deliveredSize(pngHeader(8, 8).subarray(0, 12))).toBeUndefined()
+  })
+
+  it('PNG 与 JPEG 的宽高不会被读反', () => {
+    // 长方形：读反了两者会互换，而 768x2048 与 2048x768 在页面上是两种完全不同的排版。
+    expect(deliveredSize(pngHeader(2048, 768))).toMatchObject({ width: 2048, height: 768 })
+    expect(deliveredSize(jpegHeader(768, 2048))).toMatchObject({ width: 768, height: 2048 })
   })
 })
 

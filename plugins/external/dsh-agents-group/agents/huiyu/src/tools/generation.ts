@@ -23,7 +23,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { bannerSize, dimensionsOf, resolveSize, sizeNames } from '../media/size.ts'
+import { bannerSize, deliveredSize, resolveSize, sizeNames } from '../media/size.ts'
 import type { HuiyuToolContext, HuiyuTool, ToolExecution } from './context.ts'
 import { invalid, optionalString, ownerFor, requiredString, requiredStringArray } from './context.ts'
 import { ImageGenerationError } from '../image/spec.ts'
@@ -35,8 +35,11 @@ import { ownerOf } from '../store.ts'
 interface GeneratedArtifact {
   readonly url: string
   readonly objectKey: string
+  /** 响应用户/模型时说的尺寸——**从交付字节里读出来的**，不是请求值。 */
   readonly width?: number
   readonly height?: number
+  /** 请求的尺寸（`宽x高`）。渠道可能不按它出图，所以要留着说清"我请求了什么"。 */
+  readonly requestedSize: string
   readonly mediaType: string
   readonly data: Uint8Array
 }
@@ -81,23 +84,37 @@ async function generate(
     throw error
   }
 
-  const dimensions = dimensionsOf(size)
   const artifacts: GeneratedArtifact[] = []
   for (const image of result.images) {
     const key = objectKeyOf(image.mediaType)
     const stored = await minio.put({ key, data: image.data, contentType: image.mediaType }, execution.signal)
+    /**
+     * 尺寸**从交付的字节里读**，不用请求值。
+     *
+     * 2026-09-18 实测：本渠道不按 `size` 出图（请求 1536x864 的封面落地成 2048x768，
+     * 另一次同样请求回来 1536x1024）。拿请求值当结果汇报，等于告诉用户"这是 16:9 的头图"，
+     * 而拿到的可能是 8:3——**文件本身不会说话，文案会**。
+     */
+    const delivered = deliveredSize(image.data)
+    const dims = delivered === undefined ? {} : { width: delivered.width, height: delivered.height }
     artifacts.push({
       url: stored.url,
       objectKey: stored.key,
       mediaType: image.mediaType,
       data: image.data,
-      ...dimensions,
+      requestedSize: size,
+      ...dims,
     })
     // 记账失败不影响已经拿到的地址（见文件头第 4 点）。
     await record(context, {
       tool, prompt, url: stored.url, objectKey: stored.key, bucket: context.environment.minio.bucket,
       model: result.model, provider: context.imageProvider.kind, size, mediaType: image.mediaType,
-      sessionId: execution.sessionId, ...dimensions,
+      sessionId: execution.sessionId,
+      ...dims,
+      // 只在"渠道没按请求出图"时留一行证据，方便以后按它统计渠道行为。
+      ...(delivered !== undefined && `${delivered.width}x${delivered.height}` !== size
+        ? { deliveredSize: `${delivered.width}x${delivered.height}` }
+        : {}),
     }, execution.signal)
   }
   return artifacts
@@ -156,6 +173,7 @@ function toRecordPayload(input: {
   readonly mediaType: string
   readonly sessionId: string
   readonly messageId?: string
+  readonly deliveredSize?: string
   readonly width?: number
   readonly height?: number
 }): import('../store.ts').ImageRecordPayload {
@@ -168,12 +186,30 @@ function toRecordPayload(input: {
     model: input.model,
     size: input.size,
     mediaType: input.mediaType,
+    ...(input.deliveredSize === undefined ? {} : { deliveredSize: input.deliveredSize }),
     ...(input.width === undefined ? {} : { width: input.width }),
     ...(input.height === undefined ? {} : { height: input.height }),
     bucket: input.bucket,
     objectKey: input.objectKey,
     tool: input.tool,
   }
+}
+
+/**
+ * 尺寸那一小段文案。
+ *
+ * 三种情形分开写，因为它们的含义不同：
+ *
+ * - 读得出尺寸且与请求一致 → 只说尺寸；
+ * - 读得出尺寸但与请求不一致 → 说清"交付的是这个、我请求的是那个"——
+ *   本渠道实测会这样（见 `media/size.ts` 的文件头），瞒着会让用户按错误的比例去排版；
+ * - 读不出尺寸（容器认不出）→ **什么都不说**，绝不用请求值冒充结果。
+ */
+function describeSize(artifact: GeneratedArtifact): string {
+  if (artifact.width === undefined || artifact.height === undefined) return ''
+  const delivered = `${artifact.width}×${artifact.height}`
+  const requested = artifact.requestedSize.replace('x', '×')
+  return delivered === requested ? `（${delivered}）` : `（${delivered}；渠道未按请求的 ${requested} 出图）`
 }
 
 /**
@@ -187,7 +223,7 @@ async function present(
   lead: string,
 ): Promise<readonly unknown[]> {
   const lines = artifacts.map((artifact, index) => {
-    const dims = artifact.width === undefined ? '' : `（${artifact.width}×${artifact.height}）`
+    const dims = describeSize(artifact)
     return artifacts.length === 1
       ? `${lead}：${artifact.url}${dims}`
       : `${index + 1}. ${artifact.url}${dims}`
@@ -229,7 +265,7 @@ export function createGenerationTools(context: HuiyuToolContext): readonly Huiyu
         type: 'object',
         properties: {
           prompt: { type: 'string', description: '图片描述。写清主体、风格、构图、氛围；越具体效果越好。' },
-          size: { type: 'string', description: `尺寸。可填 ${sizeNames().join(' / ')}，或写成 1024x1024 这样的具体像素。缺省为方图。` },
+          size: { type: 'string', description: `期望尺寸。可填 ${sizeNames().join(' / ')}，或写成 1024x1024 这样的具体像素。缺省为方图。这是**请求**：渠道可能按自己的规格出图，实际尺寸见返回文案。` },
           count: { type: 'number', description: `生成张数，1 到 ${MAX_BATCH}，缺省 1。生成需要时间与费用，不要一次要很多张。` },
         },
         required: ['prompt'],
@@ -248,7 +284,7 @@ export function createGenerationTools(context: HuiyuToolContext): readonly Huiyu
     spec: {
       name: 'huiyu_cover',
       displayName: '生成文章头图',
-      description: '为文章生成头图或封面图，尺寸固定为横幅。用户说“给这篇文章配个头图”“生成封面图”时用它。'
+      description: '为文章生成头图或封面图，按横幅比例请求。用户说“给这篇文章配个头图”“生成封面图”时用它。'
         + '只需给标题和摘要，提示词由工具按横幅构图组织。'
         + '要生成普通图片（不限定横幅）时用 huiyu_draw；要给正文段落逐段配图时用 huiyu_illustrate。',
       parameters: {
@@ -296,10 +332,7 @@ export function createGenerationTools(context: HuiyuToolContext): readonly Huiyu
         const one = await generate(context, paragraphPrompt(paragraph, style), resolveSize('landscape'), 1, execution, 'huiyu_illustrate')
         artifacts.push(...one)
       }
-      const lines = artifacts.map((artifact, index) => {
-        const dims = artifact.width === undefined ? '' : `（${artifact.width}×${artifact.height}）`
-        return `第 ${index + 1} 段配图${dims}：${artifact.url}`
-      })
+      const lines = artifacts.map((artifact, index) => `第 ${index + 1} 段配图${describeSize(artifact)}：${artifact.url}`)
       const content = await present(context, artifacts, '配图已生成')
       return [{ type: 'text', text: `建议插入位置（按原段落顺序）：\n${lines.join('\n')}` }, ...content.slice(1)]
     },

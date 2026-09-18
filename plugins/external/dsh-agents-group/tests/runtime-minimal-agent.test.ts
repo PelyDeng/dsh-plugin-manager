@@ -323,7 +323,7 @@ function fixture(definition: AgentDefinition, extraActors: readonly Actor[] = []
   }
   const allowedTools = () => ['dsh_tool_read']
   const lifecycle = new ConversationLifecycle({ ctx, definition, access, store: port, config, allowedTools })
-  const runtime: AgentRuntime = { ctx, definition, access, store: port, config, lifecycle, allowedTools }
+  const runtime: AgentRuntime = { ctx, definition, access, store: port, config, allowedTools }
   const participant = createParticipant({ definition, runtime: { ...runtime, lifecycle: () => lifecycle }, access, config })
 
   /**

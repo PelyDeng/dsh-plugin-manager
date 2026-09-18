@@ -16,9 +16,9 @@
  */
 import type { Access, Actor, ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import { registerPlugin } from '@dsh-plugin-manager/plugin-kit'
-import { PARTICIPANT_PROTOCOL } from '@dsh-agents-group/common'
+import { PARTICIPANT_PROTOCOL } from '../../packages/runtime/src/contract.ts'
 import type { AgentManifest } from '../../src/agents/registry.ts'
-import type { AgentParticipant, ParticipantRequest, ParticipantResult } from '../../packages/common/src/participant.ts'
+import type { AgentParticipant, ParticipantRequest, ParticipantResult } from '../../packages/runtime/src/contract.ts'
 
 /** 替身在群组名单里的形状：分类必须是 `agents`，否则牛马大总管发现不了它。 */
 export const CHAIN_MEMBER_MANIFEST: AgentManifest = {

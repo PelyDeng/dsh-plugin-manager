@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import type { AgentParticipant } from '@dsh-agents-group/common'
+import type { AgentParticipant } from '../packages/runtime/src/contract.ts'
 import { collectExecutors, listAgentCards } from '../../dsh-butler-console/src/agents.ts'
 import { executorFor, BUTLER_EXECUTORS_EVENT } from '../src/butler-bridge.ts'
 import type { AgentManifest } from '../src/agents/registry.ts'

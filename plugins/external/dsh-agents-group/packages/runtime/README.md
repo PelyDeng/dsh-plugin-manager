@@ -34,18 +34,19 @@
 
 ## 与 `@dsh-agents-group/common` 的关系
 
-本包**取代** common 的协作契约与共享能力，是机制的唯一落点：
+本包是机制与契约的唯一落点：
 
 | 能力 | 原位置 | 现位置 |
 | --- | --- | --- |
-| 协作契约（`AgentParticipant` 等） | `common/src/participant.ts` | `src/contract.ts` |
+| 协作契约（`AgentParticipant` 等） | `common/src/participant.ts`（**已删除**） | `src/contract.ts` |
+| 未就绪占位参与者 | 三个子包各写一份（**已合并**） | `src/unavailable.ts` |
 | 用户可读的错误整理 | `common/src/index.ts` | `src/errors.ts` |
 | 子包资源定位 | `common/src/agent-resources.ts` | `src/resources.ts` |
 | 通用天气工具 | `common/src/weather.ts` | **留在 common** |
 
-common 从此只保留 `weather.ts`：不要再往 common 加协作相关的声明或能力。common 的**退役**
-（删包、把所有引用切过来）留到 P4/P7 完成 import 切换之后，本包不代做 —— 在那之前两个包并存，
-`@dsh-agents-group/common` 仍然可用。
+common 现在只保留 `weather.ts` 与 `agent-resources.ts`：不要再往 common 加协作相关的声明或能力。
+两份协作契约（common 的旧拷贝 vs 本包）已于 2026-09-18 归一——旧那份缺 `listActions` /
+`applyAction`，用它的子包**看不见**自己已经实现的能力，编译期全绿而判据写不出来。
 
 ## 目录
 

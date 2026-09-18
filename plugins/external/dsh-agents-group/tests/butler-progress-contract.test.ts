@@ -12,7 +12,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import type { AgentParticipant } from '@dsh-agents-group/common'
+import type { AgentParticipant } from '../packages/runtime/src/contract.ts'
 import { AccessError, type Access } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole, type ButlerEvent } from '../../dsh-butler-console/src/butler.ts'
 import type { Config } from '../../dsh-butler-console/src/config.ts'

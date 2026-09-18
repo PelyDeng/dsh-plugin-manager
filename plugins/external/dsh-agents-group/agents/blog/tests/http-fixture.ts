@@ -54,7 +54,7 @@ import { createAccess, createPluginHttp } from '@dsh-plugin-manager/plugin-kit'
 import type { Actor, ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import { applySchema } from '../../../../../../private-deploy/db/create.mjs'
 import { Config, blogStorageErrorHandler, mount } from '../dist/index.mjs'
-import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
+import type { AgentParticipant } from '../../../packages/runtime/src/contract.ts'
 
 /**
  * `mount()` 返回面里**本夹具与用例用到的那几面**，显式写出来。
@@ -62,9 +62,9 @@ import type { AgentParticipant } from '../../../packages/common/src/participant.
  * ⚠️ **不能写成 `Awaited<ReturnType<typeof mount>>`**：`mount` 来自 **`dist/index.mjs`**，而那棵
  * 声明树把 `AgentParticipant` 声明成**未导出**的 interface ⇒ 本函数是 `export` 的，导出签名里出现
  * 一个"叫不出名字"的类型，`tsc` 直接报 **TS4058**（`declaration: true` 下必然发生）。
- * 这里改用**源头**的 `AgentParticipant`（`packages/common/src/participant.ts`，那边是导出的）
- * 并按 `src/index.ts:314-319` 的返回面逐字声明 ⇒ 与 dist 的返回值**结构等价**（赋值照样成立），
- * 但名字是可命名的。
+ * 这里改用**源头**的 `AgentParticipant`（`packages/runtime/src/contract.ts`，契约的唯一归属，
+ * 那边是导出的）并按 `src/index.ts` 的返回面逐字声明 ⇒ 与 dist 的返回值**结构等价**（赋值照样
+ * 成立），但名字是可命名的。
  */
 type MountedBlog = {
   dispose(): Promise<void>

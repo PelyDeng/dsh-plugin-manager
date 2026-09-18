@@ -19,7 +19,7 @@ import { readFile, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { ServerResponse } from 'node:http'
 import { AccessError, createPluginHttp, onRevoked, registerPlugin, type Access, type Actor, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
-import { createAgentDatabase, createAgentRuntime } from '@dsh-agents-group/runtime'
+import { createAgentDatabase, createAgentRuntime, unavailableParticipant } from '@dsh-agents-group/runtime'
 /**
  * 协作契约按**源码相对路径**引入，不走包名。
  *
@@ -150,19 +150,6 @@ async function readCredential(ctx: { get(name: string): unknown }, key: string):
   }
 }
 
-/** 未就绪时的协作入口占位。身份三项与正式定义逐字相同，只把能力换成明确拒绝。 */
-function unavailableParticipant(reason: string): AgentParticipant {
-  const refuse = (): never => { throw new AccessError(503, `绘语未就绪：${reason}`) }
-  return {
-    protocol: 1,
-    id: 'huiyu',
-    displayName: '绘语',
-    description: '图片理解与生成：看懂图片内容，也能按描述生成图片',
-    assertAccess: refuse,
-    run: async () => refuse(),
-  }
-}
-
 /** HTTP 错误渲染：只有本子包知道哪些错误是可预期的。 */
 export function renderHttpError(response: ServerResponse, error: unknown): boolean {
   if (!isHuiyuError(error)) return false
@@ -261,7 +248,7 @@ export async function mount(mountContext: AgentMountContext): Promise<{
   let disposeRuntime: (() => Promise<void>) | undefined
   if (!runnable) {
     const reason = configFailure ?? storageFailure ?? '私有配置或数据库未就绪'
-    participant = unavailableParticipant(reason)
+    participant = unavailableParticipant({ definition, reason })
   } else {
     try {
       // 索引侧三张框架表由运行时自己建库句柄；`localPath` 是本地围栏存储（同步契约的
@@ -301,7 +288,7 @@ export async function mount(mountContext: AgentMountContext): Promise<{
        */
       const reason = error instanceof Error ? error.message : String(error)
       console.warn(`agents-group/huiyu: 运行时装配失败，已按未就绪装载（${reason}）`)
-      participant = unavailableParticipant(reason)
+      participant = unavailableParticipant({ definition, reason })
     }
   }
 

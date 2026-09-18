@@ -235,9 +235,9 @@ function fixture(definition: AgentDefinition, mount: (deps: MountDeps) => AgentP
   }
   const allowedTools = () => ['poller_fetch']
   const lifecycle = new ConversationLifecycle({ ctx, definition, access, store: port, config, allowedTools })
-  const runtime: AgentRuntime = { ctx, definition, access, store: port, config, lifecycle, allowedTools }
+  const runtime: AgentRuntime = { ctx, definition, access, store: port, config, allowedTools }
   // 装配：走默认路径还是逃生通道由调用方决定（A4 数的就是这一步）。
-  const participant = mount({ definition, runtime, access, config }) as RuntimeParticipant
+  const participant = mount({ definition, runtime, lifecycle, access, config }) as RuntimeParticipant
 
   const until = async (check: () => boolean, label: string): Promise<void> => {
     const deadline = Date.now() + 10_000
@@ -289,7 +289,15 @@ function fixture(definition: AgentDefinition, mount: (deps: MountDeps) => AgentP
 
 interface MountDeps {
   readonly definition: AgentDefinition
+  /** 运行时能力对象（**不含 lifecycle**——它与装配结果上的生命周期是两个出口，见 `AgentRuntime`）。 */
   readonly runtime: AgentRuntime
+  /**
+   * 会话生命周期实例。
+   *
+   * 它单独一项，而不是挂在 `runtime` 上：生产的装配顺序是"先 participant、后 lifecycle"，
+   * participant 拿到的是**取值器**。夹具与生产同形，才不会出现"替身能跑、生产炸"。
+   */
+  readonly lifecycle: ConversationLifecycle
   readonly access: Access
   readonly config: RuntimeConfig
 }
@@ -299,10 +307,10 @@ function mountOnDefaultPath(deps: MountDeps): RuntimeParticipant {
   mounts.defaultPath += 1
   return createParticipant({
     definition: deps.definition,
-    // 生产的装配形状是"先 participant、后 lifecycle"，所以交出去的是**惰性取值器**
-    // （见 `CreateParticipantInput.runtime`）。本替身的 `deps.runtime` 已经拿得到实例，
-    // 这里包一层只是为了与生产同形——被断言的接线行为与生产逐字一致。
-    runtime: { ...deps.runtime, lifecycle: () => deps.runtime.lifecycle },
+    // 生产的装配形状是"先 participant、后 lifecycle"，所以这里交出去的是**惰性取值器**
+    // （见 `CreateParticipantInput.runtime`）。本替身已经把 lifecycle 造好了，包一层的意义
+    // 只是与生产同形——被断言的接线行为与生产逐字一致。
+    runtime: { ctx: deps.runtime.ctx, lifecycle: () => deps.lifecycle },
     access: deps.access,
     config: deps.config,
   })

@@ -163,7 +163,7 @@ function runtimeHost(definition: AgentDefinition, questions = new Map<string, st
   const storage: AgentStoragePort = { db, access }
   const config: RuntimeConfig = { routePrefix: '/closure-e2e', turnTimeoutMs: 30_000, authRecheckMs: 10_000, maxActiveConversations: 8, reasoningEffort: 'medium' }
   const lifecycle = new ConversationLifecycle({ ctx, definition, access, store: port, config, allowedTools: () => [] })
-  const runtime: AgentRuntime = { ctx, definition, access, store: port, config, lifecycle, allowedTools: () => [] }
+  const runtime: AgentRuntime = { ctx, definition, access, store: port, config, allowedTools: () => [] }
   const participant: RuntimeParticipant = createParticipant({ definition, runtime: { ...runtime, lifecycle: () => lifecycle }, storage, access, config })
   void scope
   return {

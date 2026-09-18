@@ -184,57 +184,22 @@ export async function createAgentRuntime(input: CreateAgentRuntimeInput): Promis
   // ⚠️ **装配顺序：先 participant、后 lifecycle**。交活工具是**按会话**的，账本住在 participant
   // 里（`handoffFor(conversationId)`），而工具注册发生在 lifecycle 的 `setup()` 里 ⇒ 先造
   // participant，才能把那个闭包交给 lifecycle。`createParticipant` 只在**回合运行时**读
-  // `runtime.lifecycle`（`participant.ts` 里 `lifecycle.*` 全在 `runTurn` 内），构造期不读，
+  // `lifecycle()`（`participant.ts` 里 `lifecycle.*` 全在 `runTurn` 内），构造期不读，
   // 所以"先给取值器、后让 `const lifecycle` 初始化"这个顺序成立。
   const host: LifecycleHost = { ctx, definition, access, store: db.conversations, config, allowedTools, storage }
   /**
-   * 对外那份 `runtime`：`lifecycle` 用 **getter** 暴露，而不是"先占位、后赋值"。
+   * 交给 participant 的只有两样：装配上下文与**lifecycle 的惰性取值器**。
    *
-   * 曾经的写法是 `{ ...host, lifecycle: undefined as never }` + 后面 `runtime.lifecycle = lifecycle`，
-   * 它依赖一条**跨模块的对象同一性**约定：读到的必须是同一个对象引用。约定一旦被展开副本破坏，
-   * 读到的是 `undefined`。getter 把这件事从约定变成结构：谁读都现取一次。
+   * 这两行是本文件最容易出事故的地方（2026-09-18 两次线上事故都在这附近），所以刻意写窄：
    *
-   * ⚠️ 但 getter 只解决了"取到的是不是最新的那一份"，**没有**解决"取到的形状对不对"：
-   * 这里给的是 lifecycle **对象**（`AgentRuntime.lifecycle` 就是这么声明的），而 participant
-   * 要的是 `() => ConversationLifecycle`。两者同名不同形，见下面 `participantRuntime`。
-   * 2026-09-18 的生产事故正是只修了前者、漏了后者——错误信息一模一样，很容易当成同一条。
+   * - 不传 `host`、更不传 `runtime`：`AgentRuntime` **没有** `lifecycle` 字段了，"顺手把整份
+   *   运行时传进去"这条路不存在；
+   * - 取值器而不是实例：`const lifecycle` 在这一行之后才初始化；
+   * - 不留任何 `as unknown as`：形状不对就是编译错误。
    */
-  const runtime: AgentRuntime = {
-    ...host,
-    get lifecycle(): ConversationLifecycle {
-      return lifecycle
-    },
-  }
-  /**
-   * 交给 participant 的那一份：**形状与对外的 `runtime` 不同，不能直接传上面那个对象**。
-   *
-   * ⚠️ `CreateParticipantInput.runtime.lifecycle` 是**惰性取值器** `() => ConversationLifecycle`，
-   * 而 `AgentRuntime.lifecycle` 是 lifecycle **对象本身**（`conversation.ts:232`）。两者同名不同形。
-   *
-   * 曾经的写法是 `runtime as unknown as Parameters<typeof createParticipant>[0]['runtime']` ——
-   * 断言把类型检查关掉，于是上面那个对象（`lifecycle` 是对象）被当成取值器传了进去，
-   * `participant.ts:146` 的 `runtime.lifecycle()` 到第一次真实回合就炸：
-   *
-   *     TypeError: runtime.lifecycle is not a function
-   *     at lifecycleOf (participant.ts:146) → runTurn → Object.run → Object.dispatch
-   *
-   * **生产实测（2026-09-18 11:57）**：`butler_subtasks` 里两个 blog 子任务就是这条错误，整轮
-   * 子任务失败；而当时所有装配测试与探针全绿——它们验的是"入口在不在"，没验"入口能不能调"。
-   *
-   * 所以这里**当场把形状补对**，并且不留断言：`{ ...host, lifecycle: () => lifecycle }` 必须
-   * 直接满足 participant 的入参类型，形状一旦再漂移就是**编译错误**，而不是线上 TypeError。
-   *
-   * 展开 `host` 而不是展开 `runtime` 是有意的：展开 `runtime` 会触发上面那个 getter，
-   * 而此刻 `const lifecycle` 还在 TDZ。`host` 是普通对象，且 participant 只读它的 `ctx`
-   * 与 `lifecycle` —— `registerScopedTools` 是给 lifecycle 用的，那边拿的是 `host` 本身。
-   */
-  const participantRuntime: Parameters<typeof createParticipant>[0]['runtime'] = {
-    ...host,
-    lifecycle: () => lifecycle,
-  }
   const participant = createParticipant({
     definition,
-    runtime: participantRuntime,
+    runtime: { ctx, lifecycle: () => lifecycle },
     storage,
     access,
     config,
@@ -264,7 +229,6 @@ export async function createAgentRuntime(input: CreateAgentRuntimeInput): Promis
     agentCtx.tools.register(reportResultTool(ledger))
   }
   const lifecycle = new ConversationLifecycle(host)
-  // 不再需要 `runtime.lifecycle = lifecycle`：上面的 getter 直接读这个 `const`。
   const provider = createConversationProvider({
     ctx,
     port: db.conversations,
@@ -278,7 +242,7 @@ export async function createAgentRuntime(input: CreateAgentRuntimeInput): Promis
 
   let disposing: Promise<void> | undefined
   return {
-    runtime,
+    runtime: host,
     participant,
     lifecycle,
     store: db.conversations,

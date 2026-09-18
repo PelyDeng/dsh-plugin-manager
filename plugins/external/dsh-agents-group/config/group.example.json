@@ -11,16 +11,16 @@
   },
   "blog": {},
   "huiyu": {
+    "$credentials": "生图密钥不放这里：它走 DSH 凭据系统（CIYUAN_API_KEY），在模型设置界面维护。HUIYU_IMAGE_API_KEY 只为没有凭据服务的独立开发环境保留。",
     "HUIYU_MINIO_ENDPOINT": "http://127.0.0.1:3101",
     "HUIYU_MINIO_BUCKET": "huiyu",
     "HUIYU_MINIO_REGION": "us-east-1",
     "HUIYU_MINIO_ACCESS_KEY": "REPLACE_ME",
     "HUIYU_MINIO_SECRET_KEY": "REPLACE_ME",
     "HUIYU_PUBLIC_BASE_URL": "https://img.pelycloud.com",
-    "HUIYU_IMAGE_PROVIDER": "openai-images",
-    "HUIYU_IMAGE_BASE_URL": "REPLACE_ME",
-    "HUIYU_IMAGE_MODEL": "gpt-image-1.5",
-    "HUIYU_IMAGE_API_KEY": "REPLACE_ME"
+    "HUIYU_IMAGE_PROVIDER": "ciyuan-images",
+    "HUIYU_IMAGE_BASE_URL": "https://img.ciyuan.fast",
+    "HUIYU_IMAGE_MODEL": "gpt-image-2"
   },
   "dsn": "postgresql://用户:密码@主机:5432/库名"
 }

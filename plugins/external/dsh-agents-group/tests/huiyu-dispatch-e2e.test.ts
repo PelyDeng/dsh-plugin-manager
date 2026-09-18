@@ -301,7 +301,6 @@ describe('绘语被牛马大总管派活：真执行入口 + 真装配 + 真桥�
 
     try {
       // 前置断言：装配出来的是"绘语"，八件工具一件不少，且分类就是群组注入的那个。
-      expect(assembly.runtime.lifecycle).toBe(assembly.lifecycle)
       expect(assembly.participant.id).toBe(HUIYU)
       expect(registered.map(tool => tool.name).sort()).toEqual([...HUIYU_TOOL_NAMES].sort())
       expect(registered.every(tool => tool.category === TOOL_CATEGORY)).toBe(true)

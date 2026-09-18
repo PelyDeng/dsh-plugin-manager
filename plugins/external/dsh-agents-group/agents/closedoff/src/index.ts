@@ -22,13 +22,14 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { agentResource } from '@dsh-agents-group/common'
 import { AccessError, createPluginHttp, onRevoked, registerPlugin, registerConversations, type Access, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
-import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
+import type { AgentParticipant } from '../../../packages/runtime/src/contract.ts'
 import type { ConversationLifecycle, RuntimeConfig } from '../../../packages/runtime/src/conversation.ts'
 import { Config as ConfigSchema, type Config as PluginConfig } from './config.ts'
 import { createClosedoffDefinition } from './definition.ts'
 import { loadEnvConf, parseEnvConf } from './env.ts'
 import { ClosedoffGateway } from './gateway.ts'
 import { installClosedoffRuntime, unconfiguredStorageHint } from './runtime.ts'
+import { unavailableParticipant } from '../../../packages/runtime/src/unavailable.ts'
 import { installWeb } from './web.ts'
 
 export { ConfigSchema as Config }
@@ -161,24 +162,6 @@ function runtimeConfigOf(config: PluginConfig): RuntimeConfig {
   }
 }
 
-/**
- * 未就绪时的协作入口占位。
- *
- * 它**不伪造能力**：`assertAccess` 与 `run` 一律以 503 + 稳定原因拒绝，协作侧拿到的是
- * "这个成员现在不能用、因为存储没起来"，而不是"这个成员不存在"，也不是一句空结果。
- */
-function unavailableParticipant(): AgentParticipant {
-  const refuse = (): never => { throw new AccessError(503, unconfiguredStorageHint) }
-  return {
-    protocol: 1,
-    id: 'closedoff',
-    displayName: '封闭化管理智能助手',
-    description: '业务存储未就绪：无法派活，也无法读取会话。',
-    assertAccess: refuse,
-    run: async () => refuse(),
-  }
-}
-
 /** 装载封闭化助手，返回群组用于卸载的释放函数、工具条目、参与者与就绪探针。 */
 export async function mount(context: AgentMountContext): Promise<{
   dispose(): Promise<void>
@@ -264,7 +247,7 @@ export async function mount(context: AgentMountContext): Promise<{
     // 而参与者已经实现了「派一轮活、拿回结论」的全部逻辑，桥接只做字段翻译。
     // 未就绪时给一个**一律 503** 的诚实入口，而不是把自己从名单里抹掉——后者会让群组把
     // "没配存储"误报成"这个 Agent 没有协作能力"。
-    participant: assembly?.participant ?? unavailableParticipant(),
+    participant: assembly?.participant ?? unavailableParticipant({ definition, reason: unconfiguredStorageHint }),
     // Q4 口径的就绪探针：群组的 healthPath 与 /ready 汇总据此如实反映存储状态。
     health: () => runtime.ready(),
     dispose: () => runtime.dispose(),

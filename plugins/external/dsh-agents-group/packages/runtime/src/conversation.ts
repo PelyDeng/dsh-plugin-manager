@@ -214,6 +214,18 @@ export interface LifecycleHost {
  * 协作入口与页面入口共用的那部分运行时能力。
  *
  * 它**不暴露存储的内部结构**：业务要么用 `definition` 的钩子，要么用 `storage` 端口。
+ *
+ * ## 这里为什么**没有** `lifecycle`
+ *
+ * 曾经有，而且是"装配期先占位、末尾再赋值"。那个字段带来过两次线上事故：同一个生命周期对象
+ * 在这份能力对象上是**实例**，在 `createParticipant` 的入参里却是**取值器**，两种形状同名，
+ * 于是有人把整份 runtime 传进 participant、再用类型断言把检查关掉，第一次真实回合就
+ * `TypeError: runtime.lifecycle is not a function`（见 `participant.ts` 的
+ * `CreateParticipantInput.runtime`）。
+ *
+ * 现在生命周期只有一个出口：{@link AgentRuntimeAssembly.lifecycle}。需要它的地方（页面、
+ * 会话管理）从装配结果上取；participant 需要的是"惰性取值器"这件装配期细节，由工厂在内部
+ * 现造，不外泄。
  */
 export interface AgentRuntime {
   readonly ctx: Context
@@ -221,15 +233,6 @@ export interface AgentRuntime {
   readonly access: Access
   readonly store: ConversationPort
   readonly config: RuntimeConfig
-  /**
-   * 会话生命周期；协作入口与页面入口共用同一份。
-   *
-   * ⚠️ **非 readonly**：装配顺序是"先 participant、后 lifecycle"（交活工具的按会话注册要
-   * participant 的 `handoffFor`），所以工厂先造一个占位对象、拿到 participant 之后再把这个
-   * 字段补上。写成只读会让那次赋值变成编译错误。**读它的人必须假定它在装配完成后才有值**——
-   * participant 只在回合运行时读它（见 `CreateParticipantInput.runtime`）。
-   */
-  lifecycle: ConversationLifecycle
   /** 这个 Agent 能用的工具名（本分类 + 通用集），在 agent 作用域内应用。 */
   readonly allowedTools: () => readonly string[]
 }

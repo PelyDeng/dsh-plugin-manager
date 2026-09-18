@@ -10,19 +10,15 @@
 
 export * from './weather.ts'
 export * from './agent-resources.ts'
+
 /**
- * 协作契约显式列出，而不是 `export *`：这个模块**只有类型**（外加一个版本常量），
- * 打包器在生成声明时会把纯类型转发丢掉，子包构建就会报 `AgentParticipant is not exported`。
+ * 协作契约（`AgentParticipant` 等）**不在这里**：它是运行时与协调方之间的协议，唯一归属是
+ * `packages/runtime/src/contract.ts`。
+ *
+ * 这里曾经有一份同名拷贝（旧版、缺「待确认操作」那几个成员）。两份契约的代价不是多写几行，
+ * 而是**漂移后无人察觉**：runtime 那份加了 `listActions` / `applyAction`，blog 通过这份旧类型
+ * 看不见自己已经实现的能力——编译期全绿、判据写不出来、运行时却真的在跑。契约只留一份。
  */
-export { PARTICIPANT_PROTOCOL } from './participant.ts'
-export type {
-  AgentParticipant,
-  ParticipantArtifact,
-  ParticipantProgress,
-  ParticipantRequest,
-  ParticipantResult,
-  ParticipantStatus,
-} from './participant.ts'
 
 /** 包版本，用于确认内联生效（构建后不应依赖外部解析）。 */
 export const COMMON_VERSION = '0.1.0'

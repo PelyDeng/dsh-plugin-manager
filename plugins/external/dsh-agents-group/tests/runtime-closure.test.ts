@@ -20,7 +20,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { describe, expect, it, vi } from 'vitest'
 import type { ParticipantRequest, ParticipantResult } from '../packages/runtime/src/contract.ts'
-import { ConversationLifecycle, type AgentRuntime, type LifecycleHost, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
+import { ConversationLifecycle, type LifecycleHost, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
 import { createParticipant, type RuntimeParticipant } from '../packages/runtime/src/participant.ts'
 import type { AgentDefinition, ProjectedResult, TurnHookContext } from '../packages/runtime/src/definition.ts'
 import { reportResultTool, type HandoffLedger } from '../packages/runtime/src/handoff.ts'
@@ -273,8 +273,7 @@ function host(
    * 对象换掉了。生产装配本身的等价性由 `runtime-assembly.test.ts` 走真工厂核验。
    */
   const host: LifecycleHost = { ctx, definition, access, store: port, config: runtimeConfig, allowedTools: () => [] }
-  const runtime: AgentRuntime = { ...host, lifecycle: undefined as never }
-  const participant: RuntimeParticipant = createParticipant({ definition, runtime: { ...runtime, lifecycle: () => lifecycle }, storage, access, config: runtimeConfig })
+  const participant: RuntimeParticipant = createParticipant({ definition, runtime: { ctx, lifecycle: () => lifecycle }, storage, access, config: runtimeConfig })
   // 与 `runtime.ts` 的接线点逐字同形（见该处注释：两件事必须一起做完，缺一件都是静默失效）。
   if (registerScopedTools) {
     host.registerScopedTools = (
@@ -287,7 +286,6 @@ function host(
     }
   }
   const lifecycle = new ConversationLifecycle(host)
-  runtime.lifecycle = lifecycle
 
   return {
     participant, lifecycle, port, storage, questions, ctx,

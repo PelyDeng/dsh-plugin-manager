@@ -27,7 +27,7 @@ import { BlogChat, chatInstructions } from './chat.ts'
 // `createAgentRuntime(...).participant`。文件头的历史说明见进度文档 §43 与本节注释。
 import { createBlogDefinition, pendingActionsOf } from './definition.ts'
 import { createApplyAction } from './actions.ts'
-import type { AgentParticipant } from '../../../packages/common/src/participant.ts'
+import type { AgentParticipant } from '../../../packages/runtime/src/contract.ts'
 import {selectBlogModel} from './models.ts'
 import type {BlogModelChoices} from './models.ts'
 import {reasoningLanguage} from './jobs.ts'
@@ -45,6 +45,7 @@ import { StorageError, isStorageError } from './storage/errors.ts'
 import { BlogPgStorage } from './storage/pg.ts'
 // 协作入口与全局会话生命周期（P7 ③-B 的落点）：blog 只声明业务，机制全在运行时。
 import { createAgentRuntime, type AgentRuntimeAssembly } from '../../../packages/runtime/src/runtime.ts'
+import { unavailableParticipant } from '../../../packages/runtime/src/unavailable.ts'
 import type { RuntimeConfig } from '../../../packages/runtime/src/conversation.ts'
 import type { AgentDefinition } from '../../../packages/runtime/src/definition.ts'
 import { PARTICIPANT_PROTOCOL } from '../../../packages/runtime/src/contract.ts'
@@ -172,26 +173,13 @@ function runtimeConfigOf(config: Config): RuntimeConfig {
 }
 
 /**
- * 未就绪（缺 PG 配置）时的协作入口占位。
+ * ⚠️ 未就绪（缺 PG 配置）时**不建运行时**（与 closedoff 同一个范式）：`createAgentRuntime`
+ * 的存储是硬输入，拿一个"什么都抛"的代理对象去赌它装配期不碰存储，是把不确定性引进装配顺序里。
  *
- * 它**不伪造能力**：`assertAccess` 与 `run` 一律以 503 + 稳定原因拒绝，协作侧拿到的是
- * "这个成员现在不能用、因为存储没起来"，而不是"这个成员不存在"，也不是一句空结果。
- * 身份三项与 `createBlogDefinition` **逐字相同**——改名会让协调方与用户看到两个不同的成员。
- *
- * ⚠️ 这一支**不建运行时**（与 closedoff 同一个范式）：`createAgentRuntime` 的存储是硬输入，
- * 拿一个"什么都抛"的代理对象去赌它装配期不碰存储，是把不确定性引进装配顺序里。
+ * 占位参与者本身是共享实现（`packages/runtime` 的 `unavailableParticipant`）：身份三项从
+ * `createBlogDefinition` 的结果里取，不再手抄。手抄的代价是"同一个成员两种身份"——协调方与
+ * 用户在成员列表、任务卡片上看到的 displayName 与本子包定义里的不一致，而两边都不报错。
  */
-function unavailableParticipant(hint: string): AgentParticipant {
-  const refuse = (): never => { throw new AccessError(503, `博客未就绪：${hint}`) }
-  return {
-    protocol: PARTICIPANT_PROTOCOL,
-    id: 'blog',
-    displayName: '伊丽莎白 · 博客',
-    description: '查询博客、整理资料并提出文章候选；采用候选和发布确认仍在博客原页面完成。',
-    assertAccess: refuse,
-    run: async () => refuse(),
-  }
-}
 
 /**
  * 给业务声明补上**回合钩子**：协作路径的业务绑定。
@@ -491,7 +479,7 @@ export async function mount(mountContext:AgentMountContext):Promise<{
     // 而工具一个都不注册**是静默的**（限制一份空集合是合法的）⇒ 群组会算出空的 `allowedTools`，
     // 模型手里一个业务工具都没有，界面上完全看不出来。
     tools = definition.tools({ ctx, storage: undefined, conversationId: undefined })
-    participant = unavailableParticipant(unconfiguredHint)
+    participant = unavailableParticipant({ definition, reason: unconfiguredHint })
     console.warn(`agents-group/blog: 已装载但未就绪——协作入口与页面读写会以稳定码拒绝。${unconfiguredHint}`)
   }
   // 群组直接把这个实例桥接成牛马大总管的执行入口，不再经过额外的发现事件。
