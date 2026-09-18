@@ -89,18 +89,15 @@ function itemType(type: string | undefined): 'string' | 'number' | 'boolean' | '
   }
 }
 
-/** 工具输出的规范化值：一个内容块数组。 */
-interface ToolOutput {
-  readonly blocks: readonly ContentBlock[]
-}
-
 /**
- * 输出规格。
+ * 工具输出的规范化值：一个内容块数组。
  *
- * `blocks` 用一个宽松的数组描述：块的内部结构属于宿主的内容块词汇，由 `render` 交回宿主自己
- * 解释，本层不重复声明一遍（声明一份就等于多一处会漂移的定义）。
+ * `blocks` 只声明为"数组"，不细化每个块的内部结构——那是宿主的内容块词汇，由 `render`
+ * 交回宿主自己解释。声明一份就等于多一处会漂移的定义。
+ *
+ * 导出它是为了让用例能断言**生产这一份**（而不是抄一份副本去验）。
  */
-const OUTPUT_SCHEMA: ValueSchemaSpec = {
+export const OUTPUT_SCHEMA: ValueSchemaSpec = {
   type: 'object',
   additionalProperties: false,
   properties: {
