@@ -188,14 +188,37 @@ export async function createAgentRuntime(input: CreateAgentRuntimeInput): Promis
   // 所以下面那个"先占位、后补上"的写法成立；`runtime` 是同一个对象引用，participant 看到的
   // 就是补好之后的那一份。
   const host: LifecycleHost = { ctx, definition, access, store: db.conversations, config, allowedTools, storage }
-  const runtime: AgentRuntime = { ...host, lifecycle: undefined as never }
+  /**
+   * `lifecycle` 用 **getter** 暴露，而不是"先占位、后赋值"。
+   *
+   * ## 为什么不能靠事后赋值
+   *
+   * 曾经的写法是 `{ ...host, lifecycle: undefined as never }` + 下面 `runtime.lifecycle = lifecycle`。
+   * 它依赖一条**跨模块的对象同一性**约定：传进 `createParticipant` 的必须是这同一个对象引用。
+   * 那条约定没有任何东西保证——`createParticipant` 里是 `const { runtime } = input`，只要上游
+   * 传的是展开副本、拷贝或别处重建的同形对象，赋值就落在一个**谁都不再读**的对象上，
+   * `participant` 闭包里的 `runtime.lifecycle` 永远是 `undefined`，直到某次真实回合才炸成
+   * `TypeError: runtime.lifecycle is not a function`。
+   *
+   * 生产实测（2026-09-18）就是这么炸的：`butler-console` 派活给 blog 时整轮失败。而当时的
+   * 装配测试**全绿**——它断言的是 `assembly.runtime.lifecycle`（返回出去的那个对象），
+   * 恰好没覆盖 participant 内部持有的那一份。
+   *
+   * getter 把"同一性"这件事从**约定**变成**结构**：谁读 `runtime.lifecycle` 都现取一次，
+   * 不依赖谁在什么时候给哪个对象赋过值。`lifecycle` 在 TDZ 期不会被读到——getter 只在
+   * 回合运行时触发，那时下面的 `const lifecycle` 早已初始化。
+   */
+  const runtime: AgentRuntime = {
+    ...host,
+    get lifecycle(): ConversationLifecycle {
+      return lifecycle
+    },
+  }
   /**
    * 交给 participant 的是**惰性取值器**（`CreateParticipantInput.runtime` 的说明）。
    *
-   * 这里直接把 `runtime.lifecycle` 那个 getter 交出去（它下面被定义成 `() => lifecycle`），
-   * 于是"什么时候真的读到实例"由 participant 决定——它在回合运行时读，那时装配早已完成。
-   * 不能写成 `lifecycle: () => lifecycle`：那会在这一行就捕获**尚未初始化的 `const lifecycle`**
-   * （TDZ），运行期报 `Cannot access 'lifecycle' before initialization`。
+   * `createParticipant` 解构 `runtime` 但**不读** `lifecycle`（它在 `runTurn` 里才读），
+   * 所以这里传原始对象即可，上面的 getter 保证它读到的是补好之后的那一份。
    */
   const participant = createParticipant({
     definition,
@@ -229,7 +252,7 @@ export async function createAgentRuntime(input: CreateAgentRuntimeInput): Promis
     agentCtx.tools.register(reportResultTool(ledger))
   }
   const lifecycle = new ConversationLifecycle(host)
-  runtime.lifecycle = lifecycle
+  // 不再需要 `runtime.lifecycle = lifecycle`：上面的 getter 直接读这个 `const`。
   const provider = createConversationProvider({
     ctx,
     port: db.conversations,

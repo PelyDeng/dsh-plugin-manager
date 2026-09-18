@@ -379,4 +379,46 @@ describe('createAgentRuntime 接上标题投递口', () => {
     await first.dispose()
     await second.dispose()
   })
+
+  /**
+   * 判据：`runtime.lifecycle` 必须是**取值即最新**的访问器，不能是"先占位、后赋值"。
+   *
+   * ## 这条判据的由来（生产事故，2026-09-18）
+   *
+   * 曾经的写法是 `{ ...host, lifecycle: undefined as never }` + 装配末尾
+   * `runtime.lifecycle = lifecycle`。它依赖一条**跨模块的对象同一性约定**：传进
+   * `createParticipant` 的必须是这同一个对象引用。那条约定没有任何东西保证——上游一旦传的是
+   * 展开副本或别处重建的同形对象，赋值就落在一个**谁都不再读**的对象上，participant 闭包里的
+   * `runtime.lifecycle` 永远是 `undefined`，直到某次真实回合才炸成
+   * `TypeError: runtime.lifecycle is not a function`。
+   *
+   * 线上就是这么炸的：`butler-console` 派活给 blog 时整轮失败。而当时装配测试**全绿**——
+   * `expect(assembly.lifecycle).toBe(assembly.runtime.lifecycle)` 验的是**返回出去的那个**
+   * 对象，恰好没覆盖 participant 内部持有的那一份。
+   *
+   * ## 为什么断言"描述符"而不是"跑一轮回合"
+   *
+   * `participant` 里所有 `lifecycleOf()` 都在回合路径上（`open` / `finish` / `events` …），
+   * 要触发它们得造出完整的事件序列与宿主面。而这条缺陷的**结构特征**是确定可判的：
+   * 靠事后赋值的实现里 `lifecycle` 是**数据属性**，getter 实现里它是**访问器**。
+   * 断言描述符既精准又不依赖回合夹具——而且它正好在有人改回旧写法时变红。
+   */
+  it('runtime.lifecycle 是取值即最新的访问器，不是依赖对象同一性的事后赋值', async () => {
+    const f = fixture()
+    const assembly = await f.assemble()
+
+    const descriptor = Object.getOwnPropertyDescriptor(assembly.runtime, 'lifecycle')
+    expect(descriptor, 'runtime.lifecycle 必须是自有属性').toBeDefined()
+    expect(typeof descriptor?.get, 'runtime.lifecycle 必须是访问器（getter），不能是事后赋值的数据属性').toBe('function')
+
+    // 访问器每次取值都返回同一个真实实例——不是 undefined、也不是每次新建。
+    expect(assembly.runtime.lifecycle).toBe(assembly.lifecycle)
+    expect(assembly.runtime.lifecycle).toBe(assembly.runtime.lifecycle)
+    // 该实例上确有 participant 回合路径要用的方法（`open` / `finish` / `assertConversation`）。
+    for (const method of ['open', 'finish', 'assertConversation', 'events', 'followup'] as const) {
+      expect(typeof (assembly.runtime.lifecycle as unknown as Record<string, unknown>)[method], `lifecycle.${method} 应是函数`).toBe('function')
+    }
+
+    await assembly.dispose()
+  })
 })
