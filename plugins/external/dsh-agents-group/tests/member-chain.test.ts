@@ -23,6 +23,7 @@ import { AGENT_MANIFESTS } from '../src/agents/registry.ts'
 import { Config as GroupConfig } from '../src/config.ts'
 import { executorFor, onButlerExecutors } from '../src/butler-bridge.ts'
 import { ButlerConsole } from '../../dsh-butler-console/src/butler.ts'
+import { listAgentCards } from '../../dsh-butler-console/src/agents.ts'
 import type { Config } from '../../dsh-butler-console/src/config.ts'
 import type { ButlerAgentExecutor } from '../../dsh-butler-console/src/protocol.ts'
 import { SqliteButlerStorage, TaskStore } from '../../dsh-butler-console/tests/helpers/sqlite-test-store.ts'
@@ -224,6 +225,50 @@ describe('成员链路贯通（真实装配 + 测试内替身）', () => {
     expect(entry?.category).toBe('agents')
     expect(entry?.entryPath).toBe(`/agents/${MEMBER}`)
     expect(executors.some(executor => executor.agentId === MEMBER)).toBe(true)
+  })
+
+  /**
+   * 成员卡片的**每个字段**都要真的能派活。
+   *
+   * ## 为什么单独断一张卡片
+   *
+   * 上一条判据只核了"目录条目 + 执行入口"，就漏掉了 `category`（2026-09-18 绘语的实际缺陷）。
+   * 卡片是牛马大总管真正读的东西，它的字段各有用途，缺一个就是一处静默失效：
+   *
+   * | 字段 | 缺了会怎样 |
+   * | --- | --- |
+   * | `dispatchable` | 不进可派活名单（`resolveExecutor` 直接拒绝） |
+   * | `capabilities` | 拼进提示词时显示"未声明，按子任务语义自行判断"（`butler.ts:1559`）⇒ 大总管不知道该派什么活给它 |
+   * | `entryPath` | 卡片上的入口点不开 |
+   * | `toolCount` | 界面显示"0 个工具"，看起来这个成员什么都不会 |
+   *
+   * 这里调**真实的** `listAgentCards`，不手工拼卡片——手拼就验不到 `filter(category)` 那一步。
+   */
+  it('绘语在牛马大总管的成员卡片里，字段足以被派活', async () => {
+    const { ctx } = await assembleWithMember()
+    const cards = listAgentCards(ctx)
+    const card = cards.find(item => item.id === 'huiyu')
+
+    expect(card, '绘语没有出现在牛马大总管的成员列表里').toBeDefined()
+    expect(card?.dispatchable, '绘语不可派活').toBe(true)
+    // 提示词靠它决定"把什么活派给谁"；空数组会让大总管按语义自己猜。
+    expect(card?.capabilities.length, '绘语没有声明能力，大总管不知道该派什么活').toBeGreaterThan(0)
+    // 八个工具都要被数进去——显示 0 会让界面上看起来它什么都不会。
+    expect(card?.toolCount, '工具数不对').toBe(8)
+    expect(card?.entryPath).toBe('/agents/huiyu')
+    expect(card?.permissions).toContain('huiyu:access')
+    expect(card?.displayName.trim()).not.toBe('')
+    expect(card?.description.trim()).not.toBe('')
+  })
+
+  it('三个随包成员都在成员列表里且都可派活', async () => {
+    const { ctx } = await assembleWithMember()
+    const cards = listAgentCards(ctx)
+    for (const id of ['closedoff', 'blog', 'huiyu']) {
+      const card = cards.find(item => item.id === id)
+      expect(card, `${id} 不在成员列表里`).toBeDefined()
+      expect(card?.dispatchable, `${id} 不可派活`).toBe(true)
+    }
   })
 
   it('装配→派发→早期引用→两次续问→交差，全程不丢会话与材料', async () => {
