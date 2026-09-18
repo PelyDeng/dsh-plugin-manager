@@ -248,7 +248,8 @@ export function createGenerationTools(context: HuiyuToolContext): readonly Huiyu
       name: 'huiyu_cover',
       displayName: '生成文章头图',
       description: '为文章生成头图或封面图，尺寸固定为横幅。用户说“给这篇文章配个头图”“生成封面图”时用它。'
-        + '只需给标题和摘要，提示词由工具按横幅构图组织。',
+        + '只需给标题和摘要，提示词由工具按横幅构图组织。'
+        + '要生成普通图片（不限定横幅）时用 huiyu_draw；要给正文段落逐段配图时用 huiyu_illustrate。',
       parameters: {
         type: 'object',
         properties: {
@@ -274,7 +275,8 @@ export function createGenerationTools(context: HuiyuToolContext): readonly Huiyu
       name: 'huiyu_illustrate',
       displayName: '为段落配图',
       description: '为文章的若干段落各生成一张配图，并给出建议的插入位置。'
-        + '用户说“给这几段配图”“每段来一张插图”时用它。段落较多时不要一次全做，先问用户要配哪几段。',
+        + '用户说“给这几段配图”“每段来一张插图”时用它。段落较多时不要一次全做，先问用户要配哪几段。'
+        + '整篇文章只要一张头图时用 huiyu_cover，只要一张普通图片时用 huiyu_draw。',
       parameters: {
         type: 'object',
         properties: {
