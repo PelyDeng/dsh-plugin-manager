@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { ServerResponse } from 'node:http'
-import { AccessError, createPluginHttp, onRevoked, registerPlugin, type Access, type Actor, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, AGENT_PLUGIN_CATEGORY, createPluginHttp, onRevoked, registerPlugin, type Access, type Actor, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import { createAgentDatabase, createAgentRuntime } from '@dsh-agents-group/runtime'
 /**
  * 协作契约按**源码相对路径**引入，不走包名。
@@ -291,13 +291,28 @@ export async function mount(mountContext: AgentMountContext): Promise<{
     }
   }
 
-  // 目录条目：由本子包注册（与 blog 同一范式）。分类用群组注入的那一个——它是唯一权威来源，
-  // 自己再写一份字符串就与清单漂移，而漂移的后果是"该 Agent 的工具全部不可见"。
   const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')) as {
     readonly name: string
     readonly version: string
     readonly description: string
   }
+
+  /**
+   * 目录条目：由本子包注册（与 closedoff、blog 同一范式）。
+   *
+   * ⚠️ **`category` 必须逐字是 `'agents'`，不能用群组注入的分类标签。**
+   *
+   * 这是两个不同的分类，很容易混：
+   *
+   * | 分类 | 取值 | 谁在用 |
+   * | --- | --- | --- |
+   * | 目录条目的分类 | **`'agents'`**（`AGENT_PLUGIN_CATEGORY`） | 牛马大总管按它筛成员：`listAgentCards` 只收 `category === 'agents'` 的插件 |
+   * | 工具分类标签 | 清单里的 `manifest.category`（如"图片与视觉"） | 群组按它算"这个 Agent 能看见哪些工具" |
+   *
+   * 写成后者的话，条目本身还在、探针也正常，但**牛马大总管的成员列表里没有这个成员**，
+   * 于是它永远不会被派活——而这一点在任何探针上都看不出来。closedoff 与 blog 注册时同样写死
+   * `'agents'`，就是这个原因。
+   */
   ctx.effect(() => registerPlugin(ctx, {
     id: 'huiyu',
     packageName: manifest.name,
@@ -306,7 +321,7 @@ export async function mount(mountContext: AgentMountContext): Promise<{
     description: manifest.description,
     entryPath: config.routePrefix,
     permissions: ['huiyu:access'],
-    category: mountContext.category,
+    category: AGENT_PLUGIN_CATEGORY,
     tools,
   }))
 

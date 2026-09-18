@@ -16,7 +16,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
-import type { Access, Actor, PluginDescriptor } from '@dsh-plugin-manager/plugin-kit'
+import { AGENT_PLUGIN_CATEGORY, type Access, type Actor, type PluginDescriptor } from '@dsh-plugin-manager/plugin-kit'
 // 群组侧的真实装配与管家实现（仅测试内跨插件引用；运行时两插件互不导入业务源码）。
 import { apply as applyGroup } from '../src/index.ts'
 import { AGENT_MANIFESTS } from '../src/agents/registry.ts'
@@ -204,8 +204,20 @@ describe('成员链路贯通（真实装配 + 测试内替身）', () => {
     // 执行入口这条尤其关键——它就是"能被牛马大总管调用"的判据：缺了它，群组侧不会登记
     // 执行器，牛马大总管的成员名单里就没有绘语，它连计划都不会做。
     for (const id of ['closedoff', 'blog', 'huiyu']) {
-      expect(catalog.some(plugin => plugin.id === id), `${id} 缺少目录条目`).toBe(true)
+      const entry = catalog.find(plugin => plugin.id === id)
+      expect(entry, `${id} 缺少目录条目`).toBeDefined()
       expect(executors.some(executor => executor.agentId === id), `${id} 缺少执行入口`).toBe(true)
+      /**
+       * ★ **条目的分类必须逐字是 `'agents'`。**
+       *
+       * 牛马大总管按它筛成员——`listAgentCards` 只收 `category === AGENT_PLUGIN_CATEGORY`
+       * （值就是 `'agents'`）的插件。写成别的值（例如清单里的业务分类"图片与视觉"）时，
+       * 条目还在、探针也正常、执行入口也登记了，**但成员列表里没有它**，于是永远不会被派活。
+       *
+       * 这条判据是补出来的：2026-09-18 绘语就是这么错的——`registerPlugin` 传了群组注入的
+       * 业务分类而非 `'agents'`，而当时这里只验了条目与执行入口，全绿。
+       */
+      expect(entry?.category, `${id} 的目录分类必须是 'agents'，否则进不了牛马大总管的成员列表`).toBe(AGENT_PLUGIN_CATEGORY)
     }
     // 替身自己那条也必须齐：分类是 agents，条目路径落在群组前缀下。
     const entry = catalog.find(plugin => plugin.id === MEMBER)
