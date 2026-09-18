@@ -16,8 +16,9 @@
 
 import { randomUUID } from 'node:crypto'
 import type { HuiyuToolContext, HuiyuTool } from './context.ts'
-import { invalid, optionalString, requiredString } from './context.ts'
+import { invalid, optionalString, ownerFor, requiredString } from './context.ts'
 import { attachmentsOf, readImageBytes } from '../media/attachments.ts'
+import { ownerOf } from '../store.ts'
 import { HuiyuError } from '../errors.ts'
 
 /** 列表默认返回条数。太多了会把上下文撑满，而模型只需要看个大概。 */
@@ -60,9 +61,9 @@ export function createMaterialTools(context: HuiyuToolContext): readonly HuiyuTo
       }
       const limit = limitOf(args)
       const keyword = optionalString(args, 'keyword', 200)
-      // 归属按会话派生（与记账同一口径），空会话归到占位分组。
-      const owner = execution.sessionId === '' ? 'unknown' : execution.sessionId
-      const rows = await store.list(`huiyu:${owner}`, MAX_LIMIT)
+      // 归属与记账共用 `ownerFor` 一份规则：取会话的所有者，于是同一用户的不同会话共享素材库。
+      // 这正是这个工具存在的理由——用户在**新会话**里说"上次那张再给我来一张"时也找得到。
+      const rows = await store.list(await ownerFor(context, execution.sessionId), MAX_LIMIT)
       const filtered = keyword === undefined
         ? rows
         : rows.filter(row => row.payload.prompt.includes(keyword) || row.payload.url.includes(keyword))
@@ -106,12 +107,12 @@ export function createMaterialTools(context: HuiyuToolContext): readonly HuiyuTo
       const service = attachmentsOf(context.ctx)
       // 先读一次确认这张图真的存在且可读：登记一条指向不存在附件的记录，比拒绝登记更糟。
       const { ref } = await readImageBytes(service, attachmentId, execution.signal)
-      const owner = execution.sessionId === '' ? 'unknown' : execution.sessionId
+      const { namespace, id: ownerId } = ownerOf(await ownerFor(context, execution.sessionId))
       const recordedAt = Date.now()
       await store.record({
         id: randomUUID(),
-        ownerNamespace: 'huiyu',
-        ownerId: owner,
+        ownerNamespace: namespace,
+        ownerId,
         createdAt: recordedAt,
         payload: {
           // 上传图**没有** MinIO 直链：它的访问要走带鉴权的读图路由（见 `media/attachments.ts`）。

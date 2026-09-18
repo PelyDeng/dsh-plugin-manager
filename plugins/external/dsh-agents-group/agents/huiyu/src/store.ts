@@ -122,9 +122,23 @@ export interface HuiyuStore {
   record(input: ImageRecord): Promise<void>
   /** 按归属列出最近的记录，倒序。 */
   list(owner: string, limit: number): Promise<readonly ImageRecord[]>
+  /**
+   * 查一个会话属于谁。
+   *
+   * 运行时把归属写在 `dsh_conversations` 上（`owner_namespace` + `owner_id`），而工具执行面
+   * 拿不到本轮 `actor`，只拿得到会话 id。所以归属只能从这里反查。
+   *
+   * @param conversationId 会话 id
+   * @param agentId 只认属于该 Agent 的会话，避免跨插件误认
+   * @returns 归属键 `<namespace>:<userId>`；查不到时为 undefined（调用方回落到会话级归属）
+   */
+  conversationOwner(conversationId: string, agentId: string): Promise<string | undefined>
   /** 关闭连接池。 */
   close(): Promise<void>
 }
+
+/** `dsh_conversations` 里查归属用到的列。 */
+type OwnerRow = { owner_namespace: string; owner_id: string }
 
 /** `payload` 的读取形状（PG 的 JSONB 回传已经是对象）。 */
 type ImageRow = { id: string; owner_namespace: string; owner_id: string; created_at: string | number; payload: ImageRecordPayload }
@@ -234,6 +248,21 @@ export function createHuiyuStore(dsn: string, onError?: (error: unknown) => void
         return result.rows.map(toRecord)
       } catch (error: unknown) {
         throw new StorageError('storage_failed', '读取图片记录失败', { cause: error })
+      }
+    },
+    async conversationOwner(conversationId: string, agentId: string) {
+      assertReady()
+      try {
+        const result = await pool.query<OwnerRow>(
+          'SELECT owner_namespace, owner_id FROM dsh_conversations WHERE id = $1 AND agent_id = $2',
+          [conversationId, agentId])
+        const row = result.rows[0]
+        if (row === undefined) return undefined
+        return `${row.owner_namespace}:${row.owner_id}`
+      } catch (error: unknown) {
+        // 查不到归属不该让整次调用失败：调用方回落到会话级归属，功能仍可用（只是列表范围小）。
+        console.warn('agents-group/huiyu: 反查会话归属失败', error)
+        return undefined
       }
     },
     async close() {

@@ -127,3 +127,30 @@ export interface HuiyuTool {
   readonly spec: ToolSpec
   readonly run: (args: Record<string, unknown>, execution: ToolExecution) => Promise<readonly unknown[]>
 }
+
+/**
+ * 求一条记录的归属键。**写入与查询必须走这一个函数。**
+ *
+ * ## 为什么不能直接用会话 id
+ *
+ * 工具执行面拿不到本轮 `actor`（它只在结果投影阶段出现），所以最初用会话 id 当归属。那让
+ * `huiyu_library` 的**核心用例失效**——用户在新会话里说"上次那张再给我来一张"，查不到，
+ * 而设计里写明这个工具存在的理由就是"生图要花钱，能翻出来就别重画"。
+ *
+ * ## 规则
+ *
+ * 归属取**会话的所有者**（运行时把它写在 `dsh_conversations` 上），于是同一用户的所有会话
+ * 共享一个素材库。反查不到时回落到会话级归属而不是报错：退化成"看得少"好过"用不了"。
+ *
+ * ⚠️ 这是**授权范围内的**共享：只有通过 `huiyu:access` 校验的调用方才走得到这里。记录里仍
+ * 保留 `sessionId`，所以按会话追溯源头不受影响。
+ *
+ * @param context 工具装配上下文（提供存储）
+ * @param sessionId 本轮会话 id
+ * @returns 归属键；连会话 id 都没有时给一个占位分组
+ */
+export async function ownerFor(context: HuiyuToolContext, sessionId: string): Promise<string> {
+  if (sessionId === '') return 'huiyu:unknown'
+  const resolved = await context.store?.conversationOwner(sessionId, 'huiyu').catch(() => undefined)
+  return resolved ?? `huiyu:${sessionId}`
+}

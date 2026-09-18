@@ -25,10 +25,11 @@
 import { randomUUID } from 'node:crypto'
 import { bannerSize, dimensionsOf, resolveSize, sizeNames } from '../media/size.ts'
 import type { HuiyuToolContext, HuiyuTool, ToolExecution } from './context.ts'
-import { invalid, optionalString, requiredString, requiredStringArray } from './context.ts'
+import { invalid, optionalString, ownerFor, requiredString, requiredStringArray } from './context.ts'
 import { ImageGenerationError } from '../image/spec.ts'
 import { HuiyuError } from '../errors.ts'
 import { attachmentsOf, saveGeneratedImage } from '../media/attachments.ts'
+import { ownerOf } from '../store.ts'
 
 /** 一次生图的产物，供上层组装结果与记账。 */
 interface GeneratedArtifact {
@@ -125,15 +126,15 @@ async function record(
 ): Promise<void> {
   const store = context.store
   if (store === undefined) return
-  // 归属按会话派生（原因见 `ToolExecution` 的说明）：会话即归属键，空会话归到占位分组，
-  // 避免所有匿名调用挤在同一行上互相覆盖。
-  const sessionId = payload.sessionId === '' ? 'unknown' : payload.sessionId
   try {
     signal.throwIfAborted()
+    // 归属与查询共用 `ownerFor` 一份规则（见那里的说明）；两边漂移会让刚生成的图在
+    // `huiyu_library` 里查不到。
+    const { namespace, id } = ownerOf(await ownerFor(context, payload.sessionId))
     await store.record({
       id: randomUUID(),
-      ownerNamespace: 'huiyu',
-      ownerId: sessionId,
+      ownerNamespace: namespace,
+      ownerId: id,
       createdAt: Date.now(),
       payload: toRecordPayload(payload),
     })
