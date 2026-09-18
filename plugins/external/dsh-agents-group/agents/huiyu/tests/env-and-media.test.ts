@@ -17,9 +17,8 @@ const COMPLETE = [
   'HUIYU_MINIO_ACCESS_KEY=ak',
   'HUIYU_MINIO_SECRET_KEY=sk',
   'HUIYU_PUBLIC_BASE_URL=https://img.pelycloud.com',
-  'HUIYU_IMAGE_BASE_URL=https://relay.example.com',
-  'HUIYU_IMAGE_MODEL=gpt-image-1.5',
-  'HUIYU_IMAGE_API_KEY=ik',
+  'HUIYU_IMAGE_BASE_URL=https://img.ciyuan.fast',
+  'HUIYU_IMAGE_MODEL=gpt-image-2',
 ].join('\n')
 
 describe('env.conf 解析', () => {
@@ -28,8 +27,18 @@ describe('env.conf 解析', () => {
     expect(env.minio.endpoint).toBe('http://127.0.0.1:3101')
     expect(env.minio.bucket).toBe('huiyu')
     expect(env.minio.publicBaseUrl).toBe('https://img.pelycloud.com')
-    expect(env.image.provider).toBe('openai-images')
-    expect(env.image.model).toBe('gpt-image-1.5')
+    expect(env.image.provider).toBe('ciyuan-images')
+    expect(env.image.model).toBe('gpt-image-2')
+  })
+
+  it('生图密钥不是必填——它由 DSH 凭据系统提供', () => {
+    // 把密钥写进 env.conf 会让它随配置进私有库；正常路径是凭据服务。
+    const env = parseEnvConf(COMPLETE)
+    expect(env.image.apiKey).toBe('')
+  })
+
+  it('env.conf 里显式给了密钥时也会读进来（独立开发环境的退路）', () => {
+    expect(parseEnvConf(`${COMPLETE}\nHUIYU_IMAGE_API_KEY=sk-local`).image.apiKey).toBe('sk-local')
   })
 
   it('region 缺省为 us-east-1（MinIO 默认区域）', () => {
@@ -69,19 +78,21 @@ describe('env.conf 解析', () => {
 
   it('取值仍是 REPLACE_ME 时按缺失处理', () => {
     // 占位符被当成真值用，错误会推迟到调用上游时才以"认证失败"出现，那时看不出是没填。
-    const placeholder = COMPLETE.replace('HUIYU_IMAGE_API_KEY=ik', 'HUIYU_IMAGE_API_KEY=REPLACE_ME')
+    const placeholder = COMPLETE.replace('HUIYU_MINIO_SECRET_KEY=sk', 'HUIYU_MINIO_SECRET_KEY=REPLACE_ME')
     expect(() => parseEnvConf(placeholder)).toThrow(/REPLACE_ME/)
   })
 
   it('错误消息不回显取值本身（那是凭据）', () => {
-    const withSecret = COMPLETE.replace('HUIYU_IMAGE_API_KEY=ik', 'HUIYU_IMAGE_API_KEY=')
+    // 用一个**看起来像密钥**的值，确认它不会出现在错误消息里。
+    const withSecret = COMPLETE.replace('HUIYU_MINIO_SECRET_KEY=sk', 'HUIYU_MINIO_SECRET_KEY=')
     const message = (() => { try { parseEnvConf(withSecret); return '' } catch (e: unknown) { return (e as Error).message } })()
-    expect(message).toContain('HUIYU_IMAGE_API_KEY')
-    expect(message).not.toContain('ik')
+    expect(message).toContain('HUIYU_MINIO_SECRET_KEY')
+    expect(message).not.toContain('sk')
   })
 
-  it('provider 缺省为 openai-images', () => {
-    expect(parseEnvConf(COMPLETE).image.provider).toBe('openai-images')
+  it('provider 缺省为 ciyuan-images', () => {
+    expect(parseEnvConf(COMPLETE).image.provider).toBe('ciyuan-images')
+    expect(parseEnvConf(`${COMPLETE}\nHUIYU_IMAGE_PROVIDER=openai-images`).image.provider).toBe('openai-images')
   })
 })
 

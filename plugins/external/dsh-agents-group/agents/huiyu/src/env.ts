@@ -29,6 +29,13 @@ export interface HuiyuEnvironment {
     readonly provider: string
     readonly baseUrl: string
     readonly model: string
+    /**
+     * 生图密钥。
+     *
+     * ⚠️ **正常运行时是空串**：密钥走 DSH 的凭据系统（`CIYUAN_API_KEY`），由装配侧取好后
+     * 注入 provider，不进 `env.conf`。保留这个字段只为独立的开发环境——那里没有凭据服务，
+     * 可以直接在文件里给一个。
+     */
     readonly apiKey: string
   }
 }
@@ -85,10 +92,11 @@ export function parseEnvConf(content: string): HuiyuEnvironment {
       publicBaseUrl: required(values, 'HUIYU_PUBLIC_BASE_URL'),
     },
     image: {
-      provider: optional(values, 'HUIYU_IMAGE_PROVIDER', 'openai-images'),
+      provider: optional(values, 'HUIYU_IMAGE_PROVIDER', 'ciyuan-images'),
       baseUrl: required(values, 'HUIYU_IMAGE_BASE_URL'),
       model: required(values, 'HUIYU_IMAGE_MODEL'),
-      apiKey: required(values, 'HUIYU_IMAGE_API_KEY'),
+      // 可选：正常情况下密钥由 DSH 凭据系统提供，`env.conf` 里不写它。
+      apiKey: optional(values, 'HUIYU_IMAGE_API_KEY', ''),
     },
   }
 }

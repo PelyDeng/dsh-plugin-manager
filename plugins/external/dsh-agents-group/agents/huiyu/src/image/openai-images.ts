@@ -13,6 +13,7 @@ import type {
   ImageGenerationProvider,
   ImageGenerationResult,
   ImageGenerationSpec,
+  ImageProviderDescriptor,
 } from './spec.ts'
 import { ImageGenerationError } from './spec.ts'
 import { postImageGeneration, type ImageRequestConfig } from './request.ts'
@@ -37,6 +38,14 @@ function mediaTypeOf(raw: unknown): GeneratedImage['mediaType'] {
 
 export interface OpenAiImagesOptions extends ImageRequestConfig {
   readonly model: string
+  /**
+   * 覆盖实例上报的 kind。
+   *
+   * 同族的其他渠道（如火山方舟）复用本构造函数，但它们在注册表里有**自己的** kind——实例
+   * 上报成 `openai-images` 会让注册表里出现两个看起来一样的条目，配置界面与错误提示都会
+   * 指向错的那一家。
+   */
+  readonly kind?: string
 }
 
 /**
@@ -45,6 +54,7 @@ export interface OpenAiImagesOptions extends ImageRequestConfig {
  * @param options 端点、凭据与模型；`apiKey` 为空表示未配置
  */
 export function createOpenAiImagesProvider(options: OpenAiImagesOptions): ImageGenerationProvider {
+  const kind = options.kind ?? OPENAI_IMAGES_KIND
   const available = (): { ok: boolean; error?: string } => {
     if (options.baseUrl.trim() === '') return { ok: false, error: 'HUIYU_IMAGE_BASE_URL 未配置' }
     if (options.model.trim() === '') return { ok: false, error: 'HUIYU_IMAGE_MODEL 未配置' }
@@ -53,7 +63,7 @@ export function createOpenAiImagesProvider(options: OpenAiImagesOptions): ImageG
   }
 
   return {
-    kind: OPENAI_IMAGES_KIND,
+    kind,
     available,
     async generate(spec: ImageGenerationSpec): Promise<ImageGenerationResult> {
       const state = available()
@@ -74,4 +84,27 @@ export function createOpenAiImagesProvider(options: OpenAiImagesOptions): ImageG
       }
     },
   }
+}
+
+/**
+ * 本适配器的自述。
+ *
+ * 与 Ciyuan 的差别只在这里声明，选择逻辑不看 kind：本家**必须**给端点（它服务的是任意兼容
+ * 实现，没有"默认域名"这回事），且要求密钥。
+ */
+export const OPENAI_IMAGES_DESCRIPTOR: ImageProviderDescriptor = {
+  kind: OPENAI_IMAGES_KIND,
+  displayName: 'OpenAI 兼容（/v1/images/generations）',
+  unavailableReason: (input) => {
+    if (input.baseUrl.trim() === '') return 'HUIYU_IMAGE_BASE_URL 未配置（本适配器没有默认端点）'
+    if (input.model.trim() === '') return 'HUIYU_IMAGE_MODEL 未配置'
+    if (input.apiKey.trim() === '') return '未取到 API 密钥'
+    return undefined
+  },
+  create: input => createOpenAiImagesProvider({
+    baseUrl: input.baseUrl,
+    model: input.model,
+    apiKey: input.apiKey,
+    ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
+  }),
 }

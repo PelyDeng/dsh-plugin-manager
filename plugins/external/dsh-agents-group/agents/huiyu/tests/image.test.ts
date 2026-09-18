@@ -150,17 +150,17 @@ describe('失败分类', () => {
 describe('provider 选择', () => {
   const environment = (provider: string): HuiyuEnvironment => ({
     minio: { endpoint: 'http://127.0.0.1:3101', bucket: 'huiyu', region: 'us-east-1', accessKey: 'a', secretKey: 'b', publicBaseUrl: 'https://img.pelycloud.com' },
-    image: { provider, baseUrl: 'https://relay.example.com', model: 'gpt-image-1.5', apiKey: 'sk' },
+    image: { provider, baseUrl: 'https://relay.example.com', model: 'gpt-image-1.5', apiKey: '' },
   })
 
-  it('已实现的取值建出可用 provider', () => {
-    const provider = createImageProvider(environment('openai-images'))
+  it('OpenAI 兼容族建出可用 provider（密钥由参数传入）', () => {
+    const provider = createImageProvider(environment('openai-images'), 'sk-key')
     expect(provider.kind).toBe('openai-images')
     expect(provider.available()).toEqual({ ok: true })
   })
 
   it('未识别的取值明确报错并列出可用取值，不回落默认适配器', () => {
-    const provider = createImageProvider(environment('some-unknown-vendor'))
+    const provider = createImageProvider(environment('some-unknown-vendor'), 'sk-key')
     const state = provider.available()
     expect(state.ok).toBe(false)
     expect(state.error).toContain('some-unknown-vendor')

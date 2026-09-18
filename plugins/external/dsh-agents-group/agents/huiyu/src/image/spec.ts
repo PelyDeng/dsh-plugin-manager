@@ -87,3 +87,44 @@ export interface ImageGenerationProvider {
    */
   generate(spec: ImageGenerationSpec): Promise<ImageGenerationResult>
 }
+
+/**
+ * 一个 provider 适配器的**自述**。
+ *
+ * ## 为什么要有这层描述
+ *
+ * 新增一家生图 API 时，改动应当只有"加一个实现文件 + 在这里注册一条"，**不动选择逻辑**。
+ * 所以选择逻辑不许出现 `if (kind === 'xxx')`：凡是"这家是谁、怎么建、缺什么算不可用"的
+ * 信息，都由适配器自己声明，注册表只负责按 kind 查表。
+ */
+export interface ImageProviderDescriptor {
+  /** 稳定标识，写进 `HUIYU_IMAGE_PROVIDER`。改它等于让已有配置失效。 */
+  readonly kind: string
+  /** 配置界面与诊断里显示的名字。 */
+  readonly displayName: string
+  /**
+   * 它说自己缺什么才算不可用。
+   *
+   * 返回 `undefined` 表示齐备。**由适配器自己判断**：不同渠道要求的字段不同（有的要密钥、
+   * 有的走内网免密），注册表不该替它猜。
+   */
+  readonly unavailableReason: (input: ImageProviderInput) => string | undefined
+  /** 建一个 provider。只在 `unavailableReason` 返回 `undefined` 时调用。 */
+  readonly create: (input: ImageProviderInput) => ImageGenerationProvider
+}
+
+/**
+ * 建一个 provider 需要的输入。
+ *
+ * 刻意只有四项：**密钥不进配置文件**，由装配侧从 DSH 凭据系统取出后从这里传入；
+ * 其余三项来自 `HUIYU_IMAGE_*`。新增适配器若需要别的配置，加在 `extras` 里，
+ * 不要往这个对象上偷偷挂字段。
+ */
+export interface ImageProviderInput {
+  readonly baseUrl: string
+  readonly model: string
+  /** 密钥；可能为空串（未配置）。 */
+  readonly apiKey: string
+  /** 便于测试注入网络实现。 */
+  readonly fetchImpl?: typeof fetch
+}

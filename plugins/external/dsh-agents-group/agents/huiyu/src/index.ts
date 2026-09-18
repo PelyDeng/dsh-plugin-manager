@@ -112,6 +112,30 @@ async function loadEnvironment(groupConfigPath: string | undefined): Promise<Hui
   return loadEnvConf()
 }
 
+/**
+ * 从 DSH 的凭据系统取一个密钥。
+ *
+ * 用 `ctx.get` 而不是 `ctx.credentials`：凭据服务是**可选**依赖，群组在 standalone 或裁剪过
+ * 的宿主里可能没挂它，而属性代理在服务缺席时会抛错。取不到就如实返回空串，让 provider 的
+ * `available()` 去报"未取到密钥"——那是用户能看懂、也能自己修的一句话。
+ *
+ * @param ctx 宿主上下文
+ * @param key 凭据键名
+ * @returns 密钥，取不到时为空串
+ */
+async function readCredential(ctx: { get(name: string): unknown }, key: string): Promise<string> {
+  const service = ctx.get('credentials') as { resolve?: (ref: string) => Promise<{ value?: string } | undefined> } | undefined
+  if (typeof service?.resolve !== 'function') return ''
+  try {
+    const resolved = await service.resolve(key)
+    return typeof resolved?.value === 'string' ? resolved.value : ''
+  } catch (error: unknown) {
+    // 凭据文件损坏或权限不对时不该让整个成员装载失败：识图仍然可用。
+    console.warn(`agents-group/huiyu: 读取凭据 ${key} 失败`, error)
+    return ''
+  }
+}
+
 /** 未就绪时的协作入口占位。身份三项与正式定义逐字相同，只把能力换成明确拒绝。 */
 function unavailableParticipant(reason: string): AgentParticipant {
   const refuse = (): never => { throw new AccessError(503, `绘语未就绪：${reason}`) }
@@ -158,9 +182,13 @@ export async function mount(mountContext: AgentMountContext): Promise<{
   }
 
   // ---- 三个接缝：任何一个缺配置都只影响对应的能力，不让整体装载失败 ----
+  // 生图密钥走 DSH 凭据系统（`CIYUAN_API_KEY`），不进 env.conf——这样它在模型设置界面里
+  // 统一管理、可轮换，也不会随配置文件进私有库。凭据服务未挂载或没配该键时取到空串，
+  // 由 provider 的 `available()` 明确报告"未取到密钥"，而不是让装配失败。
+  const imageApiKey = environment === undefined ? '' : await readCredential(ctx, 'CIYUAN_API_KEY')
   const imageProvider = environment === undefined
     ? undefined
-    : createImageProvider(environment)
+    : createImageProvider(environment, imageApiKey)
   const minio: MinioClient | undefined = environment === undefined
     ? undefined
     : createMinioClient({
