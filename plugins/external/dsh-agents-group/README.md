@@ -27,10 +27,12 @@ plugins/external/dsh-agents-group/
 │   └── agents/
 │       ├── registry.ts      # ★ Agent 静态清单与端点推导
 │       ├── closedoff.ts     # 封闭化的装载适配层
-│       └── blog.ts          # 博客的装载适配层
+│       ├── blog.ts          # 博客的装载适配层
+│       └── huiyu.ts         # 绘语的装载适配层
 ├── agents/                  # ★ 各 Agent 的实体，独立 pnpm 子包
 │   ├── closedoff/           # @dsh-agents-group/closedoff
-│   └── blog/                # @dsh-agents-group/blog（migrations/postgres/ 是业务库建表 SQL）
+│   ├── blog/                # @dsh-agents-group/blog（migrations/postgres/ 是业务库建表 SQL）
+│   └── huiyu/               # @dsh-agents-group/huiyu（图片理解与生成）
 ├── packages/common/         # ★ 群组内部共享组件包，构建期内联
 └── tests/
 ```
