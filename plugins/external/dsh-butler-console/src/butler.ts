@@ -715,6 +715,26 @@ export function visibleError(error: unknown, limit: number): string {
 const DISPATCH_MESSAGE_LIMIT = 8000
 
 /**
+ * 一步自己的待办：**只留它声明过的那些**，取值以成员刚交回的清单为准。
+ *
+ * 成员的清单是**会话级**的（它一个会话里所有还没办的待办），不能整份挂到刚办完的那一步名下
+ * ——挂过去会让同一张卡在两个步骤下面各画一遍，用户点了挂在错步骤下的那张，结算的就是错的
+ * 那一步（2026-09-18 生产现场：点掉 342 的卡，成员交回的"还剩 343"被挂到第一步下面，用户
+ * 再点 343 时结算的又是第一步，真正等 343 的第二步永远停在"待外部处理"，界面上那张卡点了
+ * 也没用）。清单里没有的，说明办完了或撤回了，快照跟着去掉，不留死卡。
+ */
+function ownPendingActions(
+  declared: readonly AgentAction[],
+  fresh: readonly AgentAction[],
+): AgentAction[] {
+  const current = new Map(fresh.map(action => [action.id, action]))
+  return declared.flatMap(action => {
+    const latest = current.get(action.id)
+    return latest === undefined ? [] : [latest]
+  })
+}
+
+/**
  * 协作返回的内部留存：原文照录 + 结构化外部待办。
  *
  * 页面展示用的 `result` 仍按 `maxResultChars` 裁剪；这里保存的是**未裁剪**的协作返回原文，
@@ -3188,6 +3208,44 @@ export class ButlerConsole {
   }
 
   /**
+   * 用成员刚交回的清单，刷新**同一个成员会话里其他步骤**的待办快照。
+   *
+   * 待办是**会话级**的：一次「删 342、343」分成两步、共用同一个成员会话时，342 的卡办掉之后，
+   * 第二步手上那张 342 的卡就是死卡了。不清掉它，界面上会一直留着一张点了只回
+   * "这条操作已经办完了"的卡，用户还以为事情没办完。
+   *
+   * 两条边界：
+   * - 只清"已经不在成员清单里"的，**不把清单里那些这一步没声明过的搬过来**（见
+   *   {@link ownPendingActions}：搬过来就会在错步骤下面多画一张卡）；
+   * - 只刷新**同一个成员会话**里的步骤 —— 待办按会话归属，别的会话的清单套不上来。
+   */
+  private async refreshSiblingPendingActions(input: {
+    taskId: string
+    actor: Actor
+    conversationId: string
+    fresh: readonly AgentAction[]
+    /** 刚刚办完的那一步：它自己那份由调用方连同结果一起写入，这里跳过。 */
+    skipSubtaskId: string
+  }): Promise<void> {
+    const record = await this.storage.task(input.actor, input.taskId)
+    if (record === undefined) return
+    for (const step of record.subtasks) {
+      if (step.id === input.skipSubtaskId) continue
+      if (step.conversationId !== input.conversationId) continue
+      const declared = step.memberReturn?.actions ?? []
+      if (declared.length === 0 || step.memberReturn === undefined) continue
+      const own = ownPendingActions(declared, input.fresh)
+      const unchanged = own.length === declared.length
+        && own.every((action, index) => action.id === declared[index]?.id && action.state === declared[index]?.state)
+      if (unchanged) continue
+      // 状态不动（相同状态是合法迁移），只把待办快照换成成员此刻的真实清单。
+      await this.settleSubtaskState(input.taskId, step.id, step.state, {
+        memberReturn: { ...step.memberReturn, actions: own },
+      })
+    }
+  }
+
+  /**
    * 调度一个子任务，实时产出状态事件。
    *
    * 状态先写库再上报：页面上的每个状态都对应一次已持久化的迁移，刷新后仍然一致。
@@ -3727,12 +3785,50 @@ export class ButlerConsole {
         actor: prepared.actor,
         signal: prepared.abort.signal,
       })
+      /**
+       * 办完一张卡之后，待办快照按成员交回的清单刷新，而且**只留在声明过它的步骤名下**。
+       *
+       * 2026-09-18 生产现场：一次「删 342、343」分成两步。点掉 342 的卡，成员交回的
+       * "这个会话里还剩 343"被整份挂到**第一步**名下；界面于是在第一步下面又画了一张 343 的卡，
+       * 用户点的是它 —— 结算的成了第一步，真正等 343 的第二步永远停在"待外部处理"，界面上的
+       * 卡点了也只回一句"已经按你确认的办了"。
+       *
+       * 规则两句话：
+       * - 这一步自己那份 = `它声明过的 ∩ 成员刚交回的`（见 {@link ownPendingActions}）；
+       * - 这一步**自己还有没办完的待办**才停在"待外部处理"，别的步骤的待办由它们自己交回。
+       */
+      const record = await this.storage.task(prepared.actor, taskId)
+      const acting = record?.subtasks.find(item => item.id === subtaskId)
+      const declared = (acting?.memberReturn as { readonly actions?: readonly AgentAction[] } | undefined)?.actions ?? []
+      const fresh = result.status === 'external_pending'
+        // 成员说"还有别的待办"却没交回清单：不知道还剩什么，原样留着，不凭空清空。
+        ? (result.actions === undefined || result.actions.length === 0 ? declared : result.actions)
+        // 没说还有待办（成功）/失败/取消：这个会话里没有未办的事了，或者状态无从判断。
+        : result.status === 'failed' || result.status === 'cancelled' ? declared : []
+      const own = ownPendingActions(declared, fresh)
+      const state: SubtaskState = result.status === 'cancelled'
+        ? 'cancelled'
+        : result.status === 'failed'
+          ? 'failed'
+          : result.status === 'waiting_user'
+            ? 'waiting_user'
+            : own.length > 0 ? 'external_pending' : 'succeeded'
       // 结果落库：待办的最新状态要能在刷新后重画（与派活那条路径同一个写法）。
-      await this.settleSubtaskState(taskId, subtaskId, result.status === 'succeeded' ? 'succeeded' : result.status === 'external_pending' ? 'external_pending' : result.status === 'waiting_user' ? 'waiting_user' : result.status === 'cancelled' ? 'cancelled' : 'failed', {
+      await this.settleSubtaskState(taskId, subtaskId, state, {
         result: clip(result.summary ?? '', this.config.maxResultChars),
-        memberReturn: memberReturnOf(result),
+        memberReturn: { ...memberReturnOf(result), actions: own },
         ...(result.conversationId === undefined ? {} : { conversationId: result.conversationId }),
       })
+      /**
+       * 同一个成员会话里的**其他步骤**也要跟着刷新：342 的卡办掉之后，第二步手上那张 342 的卡
+       * 已经成了死卡，不清掉的话界面留着它，用户点它只会得到"这条操作已经办完了"，
+       * 还会以为事情没办完。
+       */
+      if (result.conversationId !== undefined && result.conversationId !== '') {
+        await this.refreshSiblingPendingActions({
+          taskId, actor: prepared.actor, conversationId: result.conversationId, fresh, skipSubtaskId: subtaskId,
+        })
+      }
       yield* this.emitResultEvents(prepared, result)
       /**
        * 办完这一条之后**把依赖传导下去**：正等这条前置的步骤可能就绪了。
