@@ -268,13 +268,20 @@ export interface AgentMountContext {
   /** 群组解析后的完整配置。 */
   readonly config: Config
   /**
-   * 本 Agent 的工具分类标签，由群组从清单注入。
+   * 本 Agent 的**工具**分类标签，由群组从清单注入。
    *
    * 子包注册工具时原样使用，**不要自己写字符串**：两处各写一份会漂移，而漂移的后果是
    * 本 Agent 的工具全部对其不可见，且这种失效在界面上完全看不出来。
    */
-  readonly category: string
-  /** 本 Agent 能用的工具名（本分类 + 通用集）。惰性取值，理由同 category。 */
+  readonly toolCategory: string
+  /**
+   * **目录条目**的分类，由群组注入。
+   *
+   * 与上面的 `toolCategory` 是两件事：那个是工具可见性用的业务分类，这个是"它是不是一个成员"
+   * （值恒为 `'agents'`）。群组注入它，是因为只有群组手里有成员名单。
+   */
+  readonly memberCategory: string
+  /** 本 Agent 能用的工具名（本分类 + 通用集）。惰性取值，理由同 toolCategory。 */
   readonly allowedTools: () => readonly string[]
   /** 群组级配置文件的路径；存在时业务凭据从它的 `blog` 小节读取。 */
   readonly groupConfigPath?: string
@@ -401,7 +408,7 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   // ⇒ 两条分支的返回类型不同，转 TS 时被暴露出来。统一成 `async` 让类型自洽：调用方本来就
   // `await` 异步分支，行为不变（同步分支也只是多一个微任务）。
   const attachments=new BlogAttachments(ctx,access,storage,async(owner:string,id:string)=>id.startsWith('blog-chat-')?conversations.assertScope(owner,id):storage.get(owner,id))
-  const jobs=new BlogJobs(ctx,access,storage,blog,attachments,config.turnTimeoutMs,settings.models,mountContext.category,mountContext.allowedTools)
+  const jobs=new BlogJobs(ctx,access,storage,blog,attachments,config.turnTimeoutMs,settings.models,mountContext.toolCategory,mountContext.allowedTools)
   const app=new BlogApplication(storage,access,blog,images,backups,jobs,attachments,pending)
   const {chatSdk}=await import(blogResource('runtime/chat-sdk.mjs').href)
   /**
@@ -494,7 +501,7 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   ctx.effect(()=>registerConversations(ctx,chat.provider))
   const translations=new ReasoningTranslations({ctx,pluginId:'blog',storage,access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
   const manifest=JSON.parse(await readFile(blogResource('package.json'),'utf8'))
-  ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],category:'agents',tools}))
+  ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客智能体',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],category:mountContext.memberCategory,tools}))
   for(const [suffix,file,mime] of [['','web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],['/style.css','web/style.css','text/css'],['/writing.css','web/writing.css','text/css'],['/chat-base.css','web/chat-base.css','text/css'],['/chat-theme.css','web/chat-theme.css','text/css'],...['chevron-down','copy','check','like','dislike','branch','database','clock','think','api','send','user','chat','stop'].map(name=>[`/media/icon-${name}.svg`,`web/media/icon-${name}.svg`,'image/svg+xml']),['/icons.svg','web/icons.svg','image/svg+xml']] as const){
     // `file` 已是相对子包根的路径（web/... 或 dist/web/...），直接相对 agentRoot 解析。
     /**

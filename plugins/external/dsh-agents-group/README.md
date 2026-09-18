@@ -108,8 +108,21 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
 | 博客标签 | `博客工作台` | 同上 |
 
 **分类只有一个权威来源。** 子包注册工具用的标签由群组从 `AGENT_MANIFESTS[i].category`
-注入（`AgentMountContext.category`），子包不自己写字符串。两处各写一份会漂移，而漂移的后果是
+注入（`AgentMountContext.toolCategory`），子包不自己写字符串。两处各写一份会漂移，而漂移的后果是
 **该 Agent 的工具全部对它自己不可见**，且这种失效在界面上完全看不出来。
+
+### 两个"分类"不是一回事
+
+`AgentMountContext` 上有两个 `*Category` 字段，名字像、服务对象完全不同，**不能互换**：
+
+| 字段 | 值 | 用在哪 |
+| --- | --- | --- |
+| `toolCategory` | 清单里的业务分类（`封闭化园区` / `博客工作台` / `图片与视觉`） | 注册工具的分类标签、算可见性 |
+| `memberCategory` | 恒为 `'agents'`（kit 的 `AGENT_PLUGIN_CATEGORY`） | `registerPlugin()` 的 `category`：牛马大总管按它筛成员 |
+
+把 `toolCategory` 传给 `registerPlugin()` 的后果是**静默**的：目录条目还在、页面能开、探针全绿，
+但牛马大总管的成员列表里没有它，于是永远不会被派活（2026-09-18 绘语就是这么错的）。所以
+`memberCategory` 由群组注入 —— "这个插件是不是一个成员"的答案在群组的成员名单里，子包没有这个信息。
 
 可见性列表由 `toolsForCategory(全部条目, 本分类)` 算出，规则是「本分类 + 通用集」。两个容易
 写错的地方：通用集必须并进来（否则 Agent 连天气都查不了）；**未分类的工具不自动放行** ——
@@ -154,7 +167,7 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
    `registerConversations()` 注册会话管理 provider。**id、路径、权限都从
    `endpointsOf()` 取，不要手写。**
 4. 子包在 `mount()` 的返回值里必须带上两样东西，**漏一样都会静默失效**：
-   - `tools`：本次注册的工具条目，用 `context.category` 作为分类标签。漏了分类，该 Agent
+   - `tools`：本次注册的工具条目，用 `context.toolCategory` 作为分类标签。漏了分类，该 Agent
      的工具会全部对它自己不可见。
    - `participant`：协作参与者（`AgentParticipant`）。群组把它桥接成牛马大总管的执行入口；漏了
      这位 Agent 在牛马大总管名单里会变成「不可调度」，牛马大总管于是不会把专业活派给它。

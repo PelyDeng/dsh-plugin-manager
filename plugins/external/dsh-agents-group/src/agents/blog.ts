@@ -68,7 +68,8 @@ export const mountBlog: AgentMount = async context => {
     access: context.access,
     http: context.http,
     config,
-    category: context.category,
+    toolCategory: context.toolCategory,
+    memberCategory: context.memberCategory,
     allowedTools: context.allowedTools,
     ...(context.groupConfigPath === undefined ? {} : { groupConfigPath: context.groupConfigPath }),
   })

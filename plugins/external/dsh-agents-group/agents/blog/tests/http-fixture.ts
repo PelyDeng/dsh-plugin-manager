@@ -316,7 +316,9 @@ export async function httpFixture({
       // `Schema<Config>` 的调用签名要完整的 `Config`，而 `accessMode` / `turnTimeoutMs` 由 schema 的
       // `.default(...)` 补齐（`src/config.ts:20/26`）——部署侧只覆盖这四个键，故在此越界一次。
       config: Config({ runtimeConfig: configPath, dataPath: join(directory, 'data'), publicOrigin: origin, routePrefix: ROUTE_PREFIX } as unknown as Config),
-      category: 'agents',
+      toolCategory: '博客工作台',
+      // 目录条目的分类。夹具照群组的注入值写（恒为 `'agents'`）。
+      memberCategory: 'agents',
       // 惰性取值（群组也是惰性的：取值发生在子包创建 Agent 时，那时通用工具已注册）。
       // 夹具没有工具目录，如实回本子包自己注册的工具名——它是"本分类"的唯一已知集合。
       // `instance` 的类型是非空的（`Awaited<ReturnType<typeof mount>>`），`?.` / `?? []` 留在这里

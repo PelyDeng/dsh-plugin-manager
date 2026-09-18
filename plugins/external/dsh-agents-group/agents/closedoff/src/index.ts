@@ -61,12 +61,19 @@ export interface AgentMountContext {
   /** 群组解析后的完整配置：Schema 默认值 + 部署覆盖 + 群组注入的公共字段。 */
   readonly config: PluginConfig
   /**
-   * 本 Agent 的工具分类标签，由群组从清单注入。
+   * 本 Agent 的**工具**分类标签，由群组从清单注入。
    *
    * 子包注册工具时原样使用，**不要自己写字符串**：两处各写一份会漂移，而漂移的后果是
    * 本 Agent 的工具全部对其不可见，且这种失效在界面上完全看不出来。
    */
-  readonly category: string
+  readonly toolCategory: string
+  /**
+   * **目录条目**的分类，由群组注入。
+   *
+   * 与上面的 `toolCategory` 是两件事：那个是工具可见性用的业务分类，这个是"它是不是一个成员"
+   * （值恒为 `'agents'`）。群组注入它，是因为只有群组手里有成员名单。
+   */
+  readonly memberCategory: string
   /**
    * 本 Agent 能用的工具名（本分类 + 通用集），由群组注入。
    *
@@ -205,7 +212,7 @@ export async function mount(context: AgentMountContext): Promise<{
     config,
     persona,
     authorize: agent => lifecycle?.authorizeAgent(agent),
-    category: context.category,
+    category: context.toolCategory,
   })
   const runtime = await installClosedoffRuntime({
     ctx,
@@ -234,8 +241,8 @@ export async function mount(context: AgentMountContext): Promise<{
     description: manifest.description,
     entryPath: config.routePrefix,
     permissions: ['closedoff:access'],
-    // 子包没有独立的 deepseekPlugin 声明，分类在推导点直接声明：它是牛马大总管可以对话的成员。
-    category: 'agents',
+    // 子包没有独立的 deepseekPlugin 声明；条目分类由群组注入 —— "我是不是成员"的答案在群组手里。
+    category: context.memberCategory,
     // 工具条目由运行时装配返回：`definition.tools` 已在装配期注册过一次，这里只登记清单。
     tools: runtime.tools,
   }))

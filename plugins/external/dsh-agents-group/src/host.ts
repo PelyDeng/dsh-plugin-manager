@@ -8,7 +8,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { createAccess, createPluginHttp, type Access, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
+import { AGENT_PLUGIN_CATEGORY, createAccess, createPluginHttp, type Access, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 /**
  * 协作契约按**源码相对路径**引入，不走包名。
  *
@@ -49,12 +49,28 @@ export interface AgentMountContext {
   /** 该 Agent 的清单项。适配层用它推导自己的页面前缀等标识。 */
   readonly manifest: AgentManifest
   /**
-   * 该 Agent 的工具分类标签。
+   * 该 Agent 的**工具**分类标签（`AGENT_MANIFESTS[i].category`）。
    *
-   * 由群组从清单注入，子包注册工具时原样使用。**分类只有这一个权威来源** —— 子包自己
-   * 再写一份字符串就会与清单漂移，而漂移的后果是「该 Agent 的工具全部不可见」，   * 且这种失效在界面上完全看不出来。
+   * 由群组从清单注入，子包注册工具时原样使用。**分类只有这一个权威来源**——子包自己
+   * 再写一份字符串就会与清单漂移，而漂移的后果是「该 Agent 的工具全部不可见」，
+   * 且这种失效在界面上完全看不出来。
+   *
+   * 与 {@link AgentMountContext.memberCategory} 是两件事：那个回答"它是不是一个成员"，
+   * 这个回答"它的工具归到哪一类"。**别把这里的值传给 `registerPlugin`** ——
+   * 2026-09-18 绘语就是这么错的：条目还在、探针全绿，但牛马大总管的成员列表里没有它。
    */
-  readonly category: string
+  readonly toolCategory: string
+  /**
+   * 该 Agent **目录条目**的分类，子包注册条目时原样使用。
+   *
+   * 值恒为 `AGENT_PLUGIN_CATEGORY`（`'agents'`）——牛马大总管按它筛成员，其余插件
+   * （认证、控制台、工具集）不是人，不该出现在成员名单里。
+   *
+   * **为什么由群组注入而不是子包自己写**：这个答案是"这个插件是不是一个成员"，
+   * 而只有群组手里有成员名单。让每个子包各抄一遍同一个常量，是让**信息不在手的一方**
+   * 替**信息在手的一方**回答——重复必然漏，2026-09-18 绘语就是这么错的。
+   */
+  readonly memberCategory: string
   /**
    * 该 Agent 能用的工具名（本分类 + 通用集）。
    *
@@ -113,7 +129,9 @@ export type AgentMount = (context: AgentMountContext) => Promise<{
 export async function mountAgents(
   ctx: Context,
   manifests: readonly AgentManifest[],
-  shared: Omit<AgentMountContext, 'ctx' | 'access' | 'http' | 'agentConfig' | 'manifest' | 'category' | 'allowedTools'> & {
+  // `toolCategory` / `memberCategory` / `allowedTools` 都在这里现算现注入，调用方传不进来：
+  // 分类的权威来源是清单与群组，不是装载现场。
+  shared: Omit<AgentMountContext, 'ctx' | 'access' | 'http' | 'agentConfig' | 'manifest' | 'toolCategory' | 'memberCategory' | 'allowedTools'> & {
     /** 按 Agent id 取它自己的部署字段。 */
     readonly agentConfigOf: (agentId: string) => Record<string, unknown>
     /**
@@ -172,7 +190,9 @@ export async function mountAgents(
       const instance = await mount({
         ctx,
         manifest,
-        category: manifest.category,
+        toolCategory: manifest.category,
+        // 目录条目的分类是"它是不是一个成员"，答案由群组给：清单里的都是成员。
+        memberCategory: AGENT_PLUGIN_CATEGORY,
         // 惰性包装：真实取值发生在子包创建 Agent 时，那时通用工具已注册。
         allowedTools: () => shared.allowedToolsOf?.(manifest.id) ?? [],
         config: shared.config,

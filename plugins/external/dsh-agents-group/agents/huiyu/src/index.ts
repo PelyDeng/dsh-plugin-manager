@@ -18,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile, mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { ServerResponse } from 'node:http'
-import { AccessError, AGENT_PLUGIN_CATEGORY, createPluginHttp, onRevoked, registerPlugin, type Access, type Actor, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, createPluginHttp, onRevoked, registerPlugin, type Access, type Actor, type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
 import { createAgentDatabase, createAgentRuntime } from '@dsh-agents-group/runtime'
 /**
  * 协作契约按**源码相对路径**引入，不走包名。
@@ -66,7 +66,21 @@ export interface AgentMountContext {
   /** 一个只允许注册本 Agent 前缀下路由的 HTTP 注册器（群组已按页面前缀限好）。 */
   readonly http: ReturnType<typeof createPluginHttp>
   readonly config: PluginConfig
-  readonly category: string
+  /**
+   * 本 Agent 的**工具**分类标签，由群组从清单注入（如"图片与视觉"）。
+   *
+   * 子包注册工具时原样使用，**不要自己写字符串**：两处各写一份会漂移，而漂移的后果是
+   * 本 Agent 的工具全部对其不可见，且这种失效在界面上完全看不出来。
+   */
+  readonly toolCategory: string
+  /**
+   * **目录条目**的分类，由群组注入。
+   *
+   * 与上面的 `toolCategory` 是两件事：那个是工具可见性用的业务分类，这个是"它是不是一个成员"
+   * （值恒为 `'agents'`）。群组注入它，是因为只有群组手里有成员名单——子包自己抄一遍常量
+   * 就是让信息不在手的一方替信息在手的一方回答。
+   */
+  readonly memberCategory: string
   readonly allowedTools: () => readonly string[]
   /** 群组级配置文件的路径；绘语从中读 `HUIYU_` 段。 */
   readonly groupConfigPath?: string
@@ -232,9 +246,9 @@ export async function mount(mountContext: AgentMountContext): Promise<{
   //
   // ⚠️ 注册**只在这里发生一次**，`AgentDefinition.tools` 只交回下面这份条目。在定义里再
   // 注册一次会撞上宿主的同名保护（`is already registered`），那会把整个运行时装配打成失败。
-  const tools = registerHuiyuTools(toolContext, mountContext.category, 'huiyu:access')
+  const tools = registerHuiyuTools(toolContext, mountContext.toolCategory, 'huiyu:access')
   const definition = createHuiyuDefinition({
-    category: mountContext.category,
+    category: mountContext.toolCategory,
     permission: 'huiyu:access',
     tools: toolContext,
     registered: tools,
@@ -300,18 +314,18 @@ export async function mount(mountContext: AgentMountContext): Promise<{
   /**
    * 目录条目：由本子包注册（与 closedoff、blog 同一范式）。
    *
-   * ⚠️ **`category` 必须逐字是 `'agents'`，不能用群组注入的分类标签。**
+   * ⚠️ **`category` 必须用群组注入的 `memberCategory`，不能用 `toolCategory`。**
    *
    * 这是两个不同的分类，很容易混：
    *
-   * | 分类 | 取值 | 谁在用 |
+   * | 分类 | 取值来源 | 谁在用 |
    * | --- | --- | --- |
-   * | 目录条目的分类 | **`'agents'`**（`AGENT_PLUGIN_CATEGORY`） | 牛马大总管按它筛成员：`listAgentCards` 只收 `category === 'agents'` 的插件 |
-   * | 工具分类标签 | 清单里的 `manifest.category`（如"图片与视觉"） | 群组按它算"这个 Agent 能看见哪些工具" |
+   * | 目录条目的分类 | **`mountContext.memberCategory`**（恒为 `'agents'`） | 牛马大总管按它筛成员：`listAgentCards` 只收 `category === 'agents'` 的插件 |
+   * | 工具分类标签 | **`mountContext.toolCategory`**（清单里的"图片与视觉"） | 群组按它算"这个 Agent 能看见哪些工具" |
    *
-   * 写成后者的话，条目本身还在、探针也正常，但**牛马大总管的成员列表里没有这个成员**，
-   * 于是它永远不会被派活——而这一点在任何探针上都看不出来。closedoff 与 blog 注册时同样写死
-   * `'agents'`，就是这个原因。
+   * 用错成后者的话，条目本身还在、探针也正常，但**牛马大总管的成员列表里没有这个成员**，
+   * 于是它永远不会被派活——而这一点在任何探针上都看不出来（2026-09-18 绘语的实际缺陷）。
+   * 所以这个值由群组注入：只有群组手里有成员名单，子包没有回答"我是不是成员"的信息。
    */
   ctx.effect(() => registerPlugin(ctx, {
     id: 'huiyu',
@@ -321,7 +335,7 @@ export async function mount(mountContext: AgentMountContext): Promise<{
     description: manifest.description,
     entryPath: config.routePrefix,
     permissions: ['huiyu:access'],
-    category: AGENT_PLUGIN_CATEGORY,
+    category: mountContext.memberCategory,
     tools,
   }))
 
