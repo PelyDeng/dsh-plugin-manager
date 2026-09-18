@@ -402,6 +402,13 @@ describe('createAgentRuntime 接上标题投递口', () => {
    * 要触发它们得造出完整的事件序列与宿主面。而这条缺陷的**结构特征**是确定可判的：
    * 靠事后赋值的实现里 `lifecycle` 是**数据属性**，getter 实现里它是**访问器**。
    * 断言描述符既精准又不依赖回合夹具——而且它正好在有人改回旧写法时变红。
+   *
+   * ⚠️ **这条判据只覆盖了缺陷的一半**：它验的是"取到的是不是最新那一份"，验不出"取到的形状
+   * 对不对"。2026-09-18 第二次事故就是另一半——`runtime.lifecycle` 是 lifecycle **对象**，
+   * 而 `participant` 要的是 `() => ConversationLifecycle`；当时用 `as unknown as` 把类型检查
+   * 关掉，报错与第一次**逐字相同**，于是又被当成同一条修了一遍而没修好。
+   * 形状那一半由 `huiyu-dispatch-e2e.test.ts` 覆盖：它用真装配 + 真桥接 + 真大总管**真调一次**
+   * 执行入口，对本文件修好之前的代码实测变红（`TypeError: runtime.lifecycle is not a function`）。
    */
   it('runtime.lifecycle 是取值即最新的访问器，不是依赖对象同一性的事后赋值', async () => {
     const f = fixture()

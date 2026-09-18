@@ -172,22 +172,38 @@ async function butlerFixture(executors: readonly ButlerAgentExecutor[], catalog:
   let planningDone = false
   agent.followup.mockImplementation(() => { if (planningDone) queueMicrotask(endTurn) })
   const tasks = () => store.history(actor, { offset: 0, limit: 10, keyword: '', state: '' }).items
-  const planTowardMember = async () => {
+  /**
+   * 让大总管把一条子任务派给指定成员，返回落库的任务 id。
+   *
+   * `waitFor` 描述"这一单走到哪一步算到了"：随包的链路替身会停在等人回话，而未就绪的成员
+   * 会当场失败——两者的终态不同，所以等待条件由调用方给，不写死。
+   */
+  const planToward = async (
+    agentId: string,
+    waitFor: (taskId: string) => boolean,
+    label: string,
+    goal = '走完等待与续问',
+  ) => {
     await console_.start(conversationId, '验收一次群组接入', actor)
     await until(() => agent.followup.mock.calls.length === 1, '大总管开始理解')
     await planTool.execute({
       reply: '让链路替身走一遍。',
       note: '',
-      subtasks: [{ goal: '走完等待与续问', agentId: MEMBER, reason: '' }],
+      subtasks: [{ goal, agentId, reason: '' }],
     }, { signal: new AbortController().signal })
     endTurn()
     planningDone = true
     await until(() => tasks().length === 1, '任务落库')
     const taskId = tasks()[0]!.id
-    await until(() => store.task(actor, taskId)?.state === 'waiting_user', '替身停在等人回话')
+    await until(() => waitFor(taskId), label)
     return taskId
   }
-  return { console_, store, tasks, planTowardMember, subtaskOf: (taskId: string) => store.task(actor, taskId)!.subtasks[0]! }
+  const planTowardMember = () =>
+    planToward(MEMBER, taskId => store.task(actor, taskId)?.state === 'waiting_user', '替身停在等人回话')
+  return {
+    console_, store, tasks, planToward, planTowardMember,
+    subtaskOf: (taskId: string) => store.task(actor, taskId)!.subtasks[0]!,
+  }
 }
 
 describe('成员链路贯通（真实装配 + 测试内替身）', () => {
@@ -293,6 +309,35 @@ describe('成员链路贯通（真实装配 + 测试内替身）', () => {
     expect(done.result).toContain('封面用蓝色')
     expect(done.artifacts.some(item => item.kind === 'report')).toBe(true)
     await until(() => ['completed', 'partial'].includes(f.store.task(actor, taskId)!.state), '任务收尾')
+  })
+
+  /**
+   * 成员**未就绪**时，大总管拿到的是"这个成员现在不能用、因为缺什么"，而不是静默的空结果。
+   *
+   * 这是本次判据的第二个半边：上一条核的是"入口在、可派活"，这条核的是"真的调它一次会怎样"。
+   * 本文件的群组配置里没有 `HUIYU_` 段的凭据 ⇒ 绘语按**未就绪**装载（目录条目、执行入口、
+   * 八个工具都在，只有协作入口以 503 明确拒绝）——正是生产上"配置漏了一个键"时的样子。
+   *
+   * 判据落在**大总管这一侧**：失败被收在**这一个子任务**上（`failed` + 明确原因），
+   * 任务与其余子任务不受影响。如果执行入口的失败直接穿出去，整轮派活会崩，用户看不到原因。
+   */
+  it('成员未就绪时派活：失败收在这一个子任务上，原因写明是绘语未就绪', async () => {
+    const { executors, catalog } = await assembleWithMember()
+    const f = await butlerFixture(executors, catalog)
+    const taskId = await f.planToward(
+      'huiyu',
+      id => f.subtaskOf(id).state === 'failed',
+      '绘语这一单落到 failed',
+      '给这篇文章画一张头图',
+    )
+
+    const subtask = f.subtaskOf(taskId)
+    expect(subtask.agentId).toBe('huiyu')
+    expect(subtask.state).toBe('failed')
+    // 原因来自绘语自己的稳定拒绝（`unavailableParticipant`），不是一句泛化的 500。
+    expect(subtask.error).toContain('绘语未就绪')
+    // 反向判据：不许把"没跑成"说成"跑完了"。
+    expect(subtask.result).not.toContain('绘语未就绪')
   })
 
   it('同一次回话重试不重复执行业务，同 ID 异文被成员拒绝', async () => {
