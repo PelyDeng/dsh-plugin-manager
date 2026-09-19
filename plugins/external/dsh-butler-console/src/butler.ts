@@ -1651,7 +1651,7 @@ export class ButlerConsole {
       description: '把这一次的任务拆解交回宿主。只在确实需要把任务派给子 Agent 时调用；不需要调度的普通问答不要调用。',
       parameters: {
         reply: { type: 'string', required: true, description: '给用户看的说明：你如何理解目标，以及打算怎么做。' },
-        acceptance: { type: 'string', description: '这一次任务的验收口径：交回什么才算完成。写清产出物的种类、数量或必须包含的要点（例如「一篇已发布的博客文章链接」「一份含全部字段的统计表」）。不要写「完成即可」「没问题」这类没有信息量的话——那种口径等于没有，会被拒绝。确实要不到可核验的产出物（例如只是问一句话）就不要传这个参数。' },
+        acceptance: { type: 'string', description: '这一次任务的验收口径：交回什么才算完成。写清产出物的种类、数量或必须包含的要点（例如「一条已发布版本的链接」「一份含全部字段的统计表」「一张图片：可访问的地址与尺寸，画面与关键词对应」）。不要写「完成即可」「没问题」这类没有信息量的话——那种口径等于没有，会被拒绝。确实要不到可核验的产出物（例如只是问一句话）就不要传这个参数。' },
         note: { type: 'string', description: '拆解依据的补充说明，可以留空。' },
         subtasks: {
           type: 'array',
@@ -1661,8 +1661,8 @@ export class ButlerConsole {
             type: 'object',
             additionalProperties: false,
             properties: {
-              goal: { type: 'string', required: true, description: '交给子 Agent 的完整目标，要自带必要上下文，不要用“同上”“继续”这类指代。' },
-              acceptance: { type: 'string', description: '这一步自己的验收口径：交回什么才算完成。各步的产出物不同，所以要分别写（例如「一份 800 字以上的候选稿」「已发布版本的链接」）。**不填就是这一步没有口径**——它不沿用上面的任务级口径，所以需要核验的步骤必须自己写出来。确实没有可核验产出物时不要填。' },
+              goal: { type: 'string', required: true, description: '交给子 Agent 的完整目标，要自带必要上下文，不要用“同上”“继续”这类指代。**用途、场景和规格以老大的原话为准**：老大没说的使用场景（如“配在文章里”“给博客用”）、尺寸、比例、风格，不要替他补写——目标只转述老大要的产出本身。' },
+              acceptance: { type: 'string', description: '这一步自己的验收口径：交回什么才算完成。各步的产出物不同，所以要分别写（例如「一份 800 字以上的候选稿」「一条已发布版本的链接」「一张图片：可访问的地址与尺寸」）。**不填就是这一步没有口径**——它不沿用上面的任务级口径，所以需要核验的步骤必须自己写出来。确实没有可核验产出物时不要填。' },
               agentId: { type: 'string', required: true, description: '目标 Agent 的 id，只能从本轮可调度的 Agent 列表中选择。' },
               reason: { type: 'string', description: '为什么把这个子任务派给这个 Agent。' },
               logicalId: { type: 'string', description: '同一个目标重做时沿用原来的目标标识（例如 g1）。新目标不要填，管家会分配。' },
