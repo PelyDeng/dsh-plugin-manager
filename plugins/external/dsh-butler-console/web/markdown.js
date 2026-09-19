@@ -8,14 +8,26 @@
  *
  * 首版边界：标题、段落、粗斜体、删除线、行内代码、代码块、列表、引用、分隔线、简单
  * 表格（表头/单元格/对齐）。外链只出可复制的纯文本（标题 + 完整地址），不生成可点击
- * 链接、不开自动链接；图片出清晰占位文本，不发起任何远程请求；原生 HTML 原样显示为
- * 文本。未闭合围栏、半张表格按不完整输入处理，markdown-it 的容错解析不会抛错。
+ * 链接、不开自动链接；原生 HTML 原样显示为文本。未闭合围栏、半张表格按不完整输入
+ * 处理，markdown-it 的容错解析不会抛错。
+ *
+ * **图片是链接之外的唯一例外**（2026-09-19）：图片地址渲染成受控缩略图并接入
+ * kkFileView 在线预览。安全口径不变的部分：不执行任何 HTML、`<img>` 只由本文件按
+ * 协议白名单（http/https）创建、DOM 全部由白名单标签构建。变化的部分：正文中的图片
+ * 地址会发起一次图片请求（`loading=lazy`、`referrerpolicy=no-referrer`），点击新窗口
+ * 进 kkFileView 看大图——抓取原图的是 kkFileView 服务端，不受本页的混合内容限制。
  */
 import MarkdownIt from 'markdown-it'
 
 // html:false 让模型输出的 HTML 全部变成待显示文本；linkify:false 关掉裸地址自动链接；
 // breaks:true 与 example 一致，单个换行视为换行。
 const markdown = new MarkdownIt({ html: false, linkify: false, breaks: true })
+
+/**
+ * 图片预览服务（kkFileView，站点私有部署）：聊天里的图片地址渲染成缩略图，点击新窗口
+ * 打开在线预览。kkFileView 的约定是 `onlinePreview?url=<Base64(encodeURIComponent(原始地址))>`。
+ */
+const KKFILEVIEW_BASE = 'http://preview.pelycloud.com'
 
 /** 块级标签白名单：标签由渲染器固定，模型只能决定文本与结构。 */
 const BLOCK_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'table', 'thead', 'tbody', 'tr', 'th', 'td'])
@@ -35,18 +47,65 @@ function alignOf(token) {
   return match === null ? '' : match[1]
 }
 
+/** 裸文本里的 URL：只认 RFC 允许字符，中文标点天然截断（URL 后面跟"，。"不会吃进来）。 */
+const IMAGE_URL_RE = /https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/gu
+/** 自动识别为图片的后缀（裸 URL 靠它收窄；markdown 图片语法不必带这些后缀）。 */
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp)(?:[?#].*)?$/iu
+
+/** kkFileView 的预览地址：先 encodeURIComponent（保证纯 ASCII）再 Base64，按它的约定。 */
+function kkFileViewUrl(src) {
+  return `${KKFILEVIEW_BASE}/onlinePreview?url=${encodeURIComponent(btoa(encodeURIComponent(src)))}`
+}
+
+/**
+ * 受控图片节点：`a.md-pic` 包一张缩略图，点击新窗口进 kkFileView。
+ *
+ * 只由本函数创建（协议白名单 http/https，`javascript:` 之类进不来）；`referrerpolicy`
+ * 与 `rel` 收紧引用面；`alt`/`title` 是纯文本属性，注入不了标签。
+ */
+function imageSpec(src, alt) {
+  return {
+    tag: 'a',
+    className: 'md-pic',
+    attrs: {
+      href: kkFileViewUrl(src),
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      ...(alt === '' ? {} : { title: alt }),
+    },
+    children: [{ tag: 'img', attrs: { src, alt, loading: 'lazy', referrerpolicy: 'no-referrer' } }],
+  }
+}
+
 function pushText(parent, text) {
   if (text !== '') parent.children.push({ text })
 }
 
-/** 行内 token：文本、行内代码、粗斜体删除线、换行；链接与图片降级为纯文本。 */
+/** 带图片识别的文本写入：文本里的裸图片地址（https://…/x.png）替换成受控图片节点。 */
+function pushTextWithImages(parent, text) {
+  let cursor = 0
+  for (const match of text.matchAll(IMAGE_URL_RE)) {
+    const raw = match[0]
+    // 句尾标点是文章的，不是地址的：修剪后判断后缀，修剪掉的部分还给文本。
+    const url = raw.replace(/[.,;:!?]+$/u, '')
+    if (!IMAGE_EXT_RE.test(url)) continue
+    const start = match.index ?? 0
+    if (start > cursor) pushText(parent, text.slice(cursor, start))
+    parent.children.push(imageSpec(url, ''))
+    cursor = start + url.length
+  }
+  if (cursor === 0) { pushText(parent, text); return }
+  if (cursor < text.length) pushText(parent, text.slice(cursor))
+}
+
+/** 行内 token：文本、行内代码、粗斜体删除线、换行；链接降级为纯文本，图片出受控缩略图。 */
 function planInline(parent, tokens) {
   const stack = [parent]
   for (const token of tokens ?? []) {
     const top = stack[stack.length - 1]
     switch (token.type) {
       case 'text':
-        pushText(top, token.content)
+        pushTextWithImages(top, token.content)
         break
       case 'code_inline':
         top.children.push({ tag: 'code', text: token.content })
@@ -60,10 +119,12 @@ function planInline(parent, tokens) {
         pushText(top, token.content)
         break
       case 'image': {
-        // 不建 img、不发请求：占位文本把描述和地址都给全。alt 在 token.content 里。
+        // markdown 图片语法是明确的图片意图：http(s) 直接出受控缩略图；其余（相对路径、
+        // data: 等）维持占位文本，把描述和地址都给全。alt 在 token.content 里。
         const src = token.attrGet?.('src') ?? ''
         const alt = token.content ?? token.attrGet?.('alt') ?? ''
-        pushText(top, alt === '' ? `[图片：${src}]` : `[图片：${alt} ${src}]`)
+        if (/^https?:\/\//iu.test(src) && !/\s/u.test(src)) top.children.push(imageSpec(src, alt))
+        else pushText(top, alt === '' ? `[图片：${src}]` : `[图片：${alt} ${src}]`)
         break
       }
       case 'link_open': {
@@ -81,7 +142,7 @@ function planInline(parent, tokens) {
         parentOfLink.children.push(...link.children)
         const visible = link.children.map(child => child.text ?? '').join('')
         // 地址本身已是正文（如 `<https://…>` 自动链接）时不再重复一遍。
-        if (link.href !== '' && link.href !== visible) pushText(parentOfLink, `（${link.href}）`)
+        if (link.href !== '' && link.href !== visible) pushTextWithImages(parentOfLink, `（${link.href}）`)
         break
       }
       default:

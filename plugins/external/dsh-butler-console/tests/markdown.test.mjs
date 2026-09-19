@@ -29,6 +29,15 @@ function plain(plan) {
   return out.join('')
 }
 
+/** 深度摊平节点计划。 */
+function flatten(nodes, out = []) {
+  for (const node of nodes ?? []) {
+    out.push(node)
+    flatten(node.children, out)
+  }
+  return out
+}
+
 test('结构化内容映射为白名单标签：标题、强调、行内代码、列表、引用、表格、代码块、分隔线', () => {
   const plan = markdownPlan('# 接入\n\n**加粗**与*斜体*、`userId`、~~旧~~\n\n- 安装\n  - 配置\n\n> 保留数据\n\n| 应用 | 权限 |\n| :--- | ---: |\n| example | access |\n\n```json\n{"enabled": true}\n```\n\n---')
   const all = tags(plan)
@@ -75,14 +84,19 @@ test('危险输入：HTML 全部变成待显示文本，零脚本标签、零锚
   expect(text).toContain('点这里（https://evil.example/next）')
 })
 
-test('图片出占位文本，不发起请求；裸地址不自动链接；地址即正文时不重复', () => {
+test('图片出受控缩略图（kkFileView 预览）；非图片裸地址保持纯文本；地址即正文时不重复', () => {
+  // 2026-09-19 行为变更（有意）：http(s) 图片地址从「占位文本」改为受控缩略图，点击新窗口
+  // 进 kkFileView 在线预览；安全边界（不执行 HTML、协议白名单、非图片不自动化）见 markdown-image.test.ts。
   const plan = markdownPlan('![示意图](https://cdn.example.com/a.png)\n\n看这个 https://example.com/info\n\n<https://example.com/docs>')
   const all = tags(plan)
-  expect(all).not.toContain('img')
-  expect(all).not.toContain('a')
+  expect(all).toContain('img')
+  expect(all).toContain('a')
+  const pics = flatten(plan).filter(node => node.tag === 'a' && node.className === 'md-pic')
+  expect(pics).toHaveLength(1)
+  expect(pics[0].children[0].attrs).toMatchObject({ src: 'https://cdn.example.com/a.png', alt: '示意图' })
+  expect(pics[0].attrs.href).toContain('/onlinePreview?url=')
   const text = plain(plan)
-  expect(text).toContain('[图片：示意图 https://cdn.example.com/a.png]')
-  // linkify 关闭：裸 URL 保持普通文本，没有被包成链接再补地址。
+  // linkify 关闭：裸 URL 保持普通文本，没有被包成链接再补地址（非图片后缀不自动图片化）。
   expect(text).toContain('看这个 https://example.com/info')
   expect(text).not.toContain('https://example.com/info（')
   // 自动链接 <url>：正文已是地址，不再追加（url）。

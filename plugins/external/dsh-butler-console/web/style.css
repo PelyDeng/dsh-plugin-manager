@@ -350,7 +350,7 @@ textarea:focus-visible,
 }
 
 .thread__inner {
-  width: 100%; max-width: 760px; margin: 0 auto;
+  width: 100%; max-width: 960px; margin: 0 auto;
   display: flex; flex-direction: column; gap: 14px;
 }
 
@@ -493,7 +493,15 @@ textarea:focus-visible,
   transform: rotate(16deg);
 }
 
-.ask__row { display: flex; gap: 6px; align-items: center; }
+/* 与确认卡同款：问题长、输入行滚出视野时，按钮贴在可视区底部。 */
+.ask__row {
+  position: sticky; bottom: 0;
+  display: flex; gap: 6px; align-items: center;
+  margin: 2px -11px -9px; padding: 6px 11px 9px;
+  background: #fff3e0;
+  border-top: 1px dashed var(--bt-warn);
+  border-radius: 0 0 var(--bt-wobble-sm) var(--bt-wobble-sm);
+}
 
 .ask input {
   flex: 1; min-width: 0;
@@ -522,6 +530,11 @@ textarea:focus-visible,
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md p { margin: 0 0 8px; }
+/* 聊天里的图片（受控渲染的缩略图）：点击新窗口进 kkFileView 看大图。
+   宽度封顶 380px、高度封顶 280px：预览够看清内容，不把会话撑成长图墙。 */
+.md .md-pic { display: inline-block; margin: 4px 0; max-width: min(100%, 380px); line-height: 0; border-radius: 8px; }
+.md .md-pic img { display: block; width: auto; height: auto; max-width: 100%; max-height: 280px; border: 1px solid var(--bt-line); border-radius: 8px; background: var(--bt-card); }
+.md .md-pic:hover img { border-color: var(--bt-sky); }
 .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
   margin: 10px 0 6px; font-family: var(--bt-hand); font-weight: 700; line-height: 1.4;
 }
@@ -614,7 +627,7 @@ textarea:focus-visible,
 .composer { padding: 0 16px 14px; }
 
 .composer__box {
-  max-width: 760px; margin: 0 auto;
+  max-width: 960px; margin: 0 auto;
   display: flex; align-items: flex-end; gap: 8px;
   padding: 7px 8px 7px 13px;
   background: var(--bt-card);
@@ -666,7 +679,7 @@ textarea:focus-visible,
 .send:disabled { background: var(--bt-line); cursor: not-allowed; }
 
 .composer__hint {
-  max-width: 760px; margin: 6px auto 0;
+  max-width: 960px; margin: 6px auto 0;
   display: flex; justify-content: space-between; gap: 10px;
   font-size: 11.5px; color: var(--bt-ink-faint);
 }
@@ -968,7 +981,19 @@ body[data-settings="open"] .settings {
 .act__detail, .act__result { font-size: 12.5px; }
 .act__error { margin: 0; font-size: 12.5px; color: var(--bt-error); }
 .act__note { margin: 0; font-size: 11.5px; color: var(--bt-ink-faint); }
-.act__row { display: flex; gap: 8px; }
+/*
+ * 确认卡的操作按钮**钉在可视区底部**（sticky）：detail/字段表很长的卡滚到中段时，
+ * 「确认 / 先不办」依然贴在滚动容器底部可见——不用滑到卡片末尾才找得到按钮。
+ * 吸附参照是最近的滚动容器（聊天流或调度卡结果区），卡片本身滚出视口时按钮跟着走。
+ */
+.act__row {
+  position: sticky; bottom: 0;
+  display: flex; gap: 8px;
+  margin: 4px -11px -10px; padding: 8px 11px 10px;
+  background: #fffdf6;
+  border-top: 1px dashed var(--bt-line);
+  border-radius: 0 0 var(--bt-wobble-sm) var(--bt-wobble-sm);
+}
 /* 字段表沿用 `.md table` 那一套，这里只保证它在卡里有边距。 */
 .act .table-scroll { margin: 2px 0; }
 
