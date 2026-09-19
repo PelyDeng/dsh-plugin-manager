@@ -58,17 +58,20 @@ function consoleFor(executor: ButlerAgentExecutor) {
   const states: string[] = []
   /** 落库补丁（含 `result` / `memberReturn`），用来核"事件与库同源"。 */
   const writes: { readonly state: string; readonly patch: Record<string, unknown> }[] = []
+  /** 最近一次落库的子任务形态：persistedActionsForEmit 事件取数要读它（事件与库同源）。 */
+  let lastSubtask: Record<string, unknown> | undefined
   const store = {
     setSubtaskState: vi.fn((_taskId: string, _subtaskId: string, state: string, patch?: Record<string, unknown>) => {
       states.push(state)
       if (patch !== undefined) writes.push({ state, patch })
+      lastSubtask = { ...lastSubtask, state, ...(patch ?? {}) }
     }),
     // 派单前要核验这条子任务有没有已固定的材料快照；本文件不涉及派单材料，
     // 按「排队中、还没派出去过」算 —— 也就是唯一允许首次固定的那一种。
     task: vi.fn(() => ({
       subtasks: [{
         id: 's1', supersedes: '', state: 'queued', startedAt: null,
-        inputRefs: undefined, inputRefsState: 'unfixed',
+        inputRefs: undefined, inputRefsState: 'unfixed', ...lastSubtask,
       }],
     })),
   } as unknown as ButlerStorage

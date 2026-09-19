@@ -447,10 +447,17 @@ export async function mount(mountContext:AgentMountContext):Promise<{
         id: input.id,
         operation: input.decision,
         ...(input.nonce === undefined ? {} : { nonce: input.nonce }),
+        // 台账卡上的「确认」就是显式同意：卡片对"发布会消费当前保存稿"有专门披露行
+        // （definition.ts 投影），发布一篇已发布文章的未发布修改稿需要这个标记，
+        // 不传的话 confirm 的守卫会把每次 publish+保存稿的确认都拒掉（生产 2026-09-19）。
+        // 守卫只在该场景读它，其余操作传了也是空操作。
+        ...(input.decision === 'confirm' ? { consumeSavedDraft: true } : {}),
       })
     },
     remaining: async (owner, conversationId) => await pendingActionsOf(app, owner, conversationId),
     ownerOf: ownerKey,
+    // 材料行里"在成员页面打开"的位置：与结果投影（definition.ts）同一路由拼法，只写这一处口径。
+    materialPath: conversationId => config.routePrefix.replace(/\/$/, '') + '?conversationId=' + encodeURIComponent(conversationId),
   })
   const definitionWithActions: AgentDefinition = { ...definition, applyAction }
   const allowedTools = mountContext.allowedTools

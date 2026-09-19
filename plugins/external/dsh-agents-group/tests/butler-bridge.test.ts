@@ -260,6 +260,23 @@ describe('执行入口的字段翻译', () => {
     expect(result.artifacts).toEqual([...artifacts])
   })
 
+  it('材料的核验字段（url/state/fields）逐项透传，缺省不产生空键', async () => {
+    // 「办了，但没递东西给我核」的桥接半边：发布结果的可访问链接与状态必须一路带到
+    // 协调方，否则台账只能证明「有材料」，证明不了「口径要的那种东西交回来了」。
+    const artifacts = [
+      { kind: 'article', title: '《测试1》已发布', path: '/blog?conversationId=c', state: 'published', url: 'https://blog.example/p/1.html', fields: [{ label: '发布状态', value: '已发布' }] },
+      // 老形状（只有位置）：不带新字段的成员照旧工作，桥接不补空串、不补空表。
+      { kind: 'conversation', title: '查看原对话', path: '/blog?conversationId=c' },
+      // 只有 state 没有 url：状态是事实，链接缺失照实缺着。
+      { kind: 'draft', title: '《测试2》草稿', path: '/blog?conversationId=c', state: 'draft' },
+    ]
+    const executor = executorFor(manifest, stubParticipant({ status: 'completed', artifacts }))
+    const result = await executor.dispatch(request())
+    expect(result.artifacts).toEqual(artifacts)
+    // 缺省字段不得出现 `undefined` 键（exactOptionalPropertyTypes 的运行期对照）。
+    expect(Object.keys(result.artifacts![1]!).sort()).toEqual(['kind', 'path', 'title'])
+  })
+
   it('待确认操作原样带过去：协调方据此就地渲染，不认 kind 也画得出来', async () => {
     // 形状就是 kit 的 `AgentAction`：桥接层**不改名、不裁剪**——一旦这里少一个字段，
     // 页面上的按钮或字段表就会缺一块，而类型检查全绿（跨包的类型来自同一份定义）。
@@ -293,7 +310,14 @@ describe('执行入口的字段翻译', () => {
       ...stubParticipant({ status: 'completed' }),
       applyAction: async (input: never) => {
         decisions.push(input)
-        return { status: 'completed', conversationId: 'blog-chat-1', text: '已经按你确认的办了。' }
+        return {
+          status: 'completed',
+          conversationId: 'blog-chat-1',
+          text: '已经按你确认的办了。《测试1》已发布。',
+          // 批 2：办结材料随就地确认结果上交（链接 + 状态 + 自检结论），桥接原样带回。
+          artifacts: [{ kind: 'article', title: '《测试1》已发布', path: '/blog?conversationId=blog-chat-1', state: 'published', url: 'https://blog.example/p/1.html', fields: [{ label: '发布状态', value: '已发布' }] }],
+          selfCheck: { status: 'passed', detail: '材料取自业务库操作记录' },
+        }
       },
     } as unknown as AgentParticipant
     const executor = executorFor(manifest, participant)
@@ -307,7 +331,9 @@ describe('执行入口的字段翻译', () => {
       signal: new AbortController().signal,
     })
     expect(result.status).toBe('succeeded')
-    expect(result.summary).toBe('已经按你确认的办了。')
+    expect(result.summary).toBe('已经按你确认的办了。《测试1》已发布。')
+    expect(result.artifacts?.[0]).toMatchObject({ kind: 'article', state: 'published', url: 'https://blog.example/p/1.html' })
+    expect(result.selfCheck).toEqual({ status: 'passed', detail: '材料取自业务库操作记录' })
     // 转交的是同一个身份链路：执行方按 `actor` 自己核归属，桥接层不替它判断。
     expect(decisions).toEqual([{
       actionId: 'op-1',

@@ -935,8 +935,12 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
       ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
       ...(result.externalPending === undefined ? {} : { externalPending: result.externalPending }),
       ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
-      // 就地确认不是模型跑的一轮：自检结论按"这一轮没有可核验产出"如实标，不冒充通过。
-      selfCheck: { status: 'unverifiable', detail: '这是用户对已准备操作的确认，不是一次模型回合。' },
+      // 就地确认不是模型跑的一轮：默认按"这一轮没有可核验产出"如实标，不冒充通过。
+      // 业务交回了结构化材料并附自检结论时按它交回的——那是业务对照**自己的操作记录**
+      // 给出的（不是模型自评），运行时不猜也不拦。
+      ...(result.selfCheck === undefined
+        ? { selfCheck: { status: 'unverifiable' as const, detail: '这是用户对已准备操作的确认，不是一次模型回合。' } }
+        : { selfCheck: result.selfCheck }),
     }
   }
 

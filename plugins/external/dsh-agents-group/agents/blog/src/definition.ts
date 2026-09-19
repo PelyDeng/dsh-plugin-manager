@@ -53,7 +53,7 @@
  * `turn.status !== 'succeeded'` 分支），而运行时的历史里没有 attempt 正文 ⇒ 那段文本不再出现。
  * **接受它**：`tail` 的设计意图正是"算数的答案"，把被打断的半句当答案本身就是错的。
  */
-import type { ParticipantAction } from '../../../packages/runtime/src/contract.ts'
+import type { ParticipantAction, ParticipantArtifact } from '../../../packages/runtime/src/contract.ts'
 import type { AgentDefinition, ProjectedResult, ResultContext } from '../../../packages/runtime/src/definition.ts'
 import { Config as ConfigSchema } from './config.ts'
 import { publicResultText } from './result-text.ts'
@@ -373,14 +373,54 @@ export function createBlogProjector(
       const external = confirmation || candidate
       const note = confirmation ? '博客操作仍需核对或确认；此处没有执行发布。'
         : candidate ? '候选稿已准备，须在博客原对话选择采用；候选稿不等于正文已保存或发布。' : ''
+      /**
+       * 核验字段（批 1）：`state` / `fields` 补「产出长什么样」，让协调方能对照口径——
+       * 没有它们，台账只能证明「有材料」，证明不了「口径点名要的那种东西交回来了」。
+       *
+       * 已发布文章的事实来源是**业务库操作记录**（`status: 'succeeded'` 且带 `result.url`），
+       * 不从正文措辞猜：同一会话里此前确认发布过的文章，后续任何一轮都照实交回，
+       * 台账的"产出区"因此能看到可点开核对的链接。
+       */
+      const published: readonly ParticipantArtifact[] = operations.flatMap(operation => {
+        if (operation.chat?.conversationId !== conversationId) return []
+        if (operation.mode !== 'publish' || operation.status !== 'succeeded') return []
+        const url = operation.result?.url
+        if (typeof url !== 'string' || url === '') return []
+        return [{
+          kind: 'article',
+          title: `《${operation.title}》已发布`,
+          path,
+          state: 'published',
+          url,
+          fields: [
+            { label: '发布状态', value: '已发布' },
+            { label: '链接', value: url },
+          ],
+        }]
+      })
+      // 主材料仍是"去哪里看"：待确认 → 核对入口；有候选 → 候选入口；否则原对话。
+      // 候选态补上 `state: 'draft'`，让"要的是已发布链接、交回的是草稿"这类对照有依据。
+      const primary: ParticipantArtifact = {
+        kind: confirmation ? 'confirmation' : candidate ? 'draft' : 'conversation',
+        title: confirmation ? '在博客核对并确认' : candidate ? '在博客查看并采用候选稿' : '查看博客原对话',
+        path,
+        ...(candidate && currentCandidates.size > 0
+          ? {
+            state: 'draft',
+            fields: [
+              { label: '状态', value: '候选稿待采用（不是已发布）' },
+              ...[...currentCandidates.keys()].slice(0, 3).map(draftId => {
+                const found = currentCandidates.get(draftId)
+                return { label: '候选稿', value: found?.title ?? draftId }
+              }),
+            ],
+          }
+          : {}),
+      }
       return {
         status: external ? 'external_pending' : 'completed',
         text: publicResultText(text, [note], [...currentCandidates.values()]),
-        artifacts: [{
-          kind: confirmation ? 'confirmation' : candidate ? 'draft' : 'conversation',
-          title: confirmation ? '在博客核对并确认' : candidate ? '在博客查看并采用候选稿' : '查看博客原对话',
-          path,
-        }],
+        artifacts: [primary, ...published],
         // 待确认的操作随结果交回：协调方（牛马大总管）就地把它们画成确认卡，
         // 用户不必再跳到博客页面。凭据不在其中（它留在 `blog_operations` 里）。
         ...(actions.length > 0 ? { actions } : {}),
@@ -455,6 +495,10 @@ function actionDetailOf(preview: NonNullable<ReturnType<NonNullable<BlogDefiniti
       lines.push('**将要发布的内容**：', '', `# ${after.title ?? preview.title ?? ''}`, '', clipped)
     }
     if (preview.hasSavedDraft === true && mode === 'delete') lines.push('', '这篇文章还有一份**保存稿**，会一起删掉。')
+    // 发布一篇「已发布文章的未发布修改稿」会**消费**那份保存稿（发布后草稿并入正文）——
+    // 卡片不披露的话，用户在不知道后果的情况下确认；确认侧（applyAction）也以这张卡的
+    // 披露为 consent 依据传 consumeSavedDraft（此前两边都没接，publish+保存稿的卡必失败）。
+    if (preview.hasSavedDraft === true && mode === 'publish') lines.push('', '发布将**消费当前保存稿**（草稿内容并入正文后，未发布的修改不再保留）。')
   }
   if (mode === 'manage') {
     if (preview.impact !== undefined) lines.push('**影响**：', '', '```json', JSON.stringify(preview.impact, null, 2), '```')

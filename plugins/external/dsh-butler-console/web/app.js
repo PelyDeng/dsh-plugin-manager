@@ -299,6 +299,10 @@ function declaredNameOf(agentId) {
   return member?.declaredName ?? agentId
 }
 
+/** 上传头像 404 过一次的成员（本页生命周期内）：右栏轮询会反复重渲染头像，不记住的话
+ *  一张 404 的图每十秒就再请求一遍（实测后台十分钟重试 174 次）。 */
+const avatarFailed = new Set()
+
 /** 成员头像：上传过就用图片，失败或没上传时落到默认涂鸦，最后才是首字配色圆。 */
 function avatarNode(agentId, size = '') {
   const node = make('div', `avatar${size ? ` avatar--${size}` : ''}`)
@@ -309,11 +313,14 @@ function avatarNode(agentId, size = '') {
   image.alt = ''
   image.addEventListener('error', () => {
     // 上传图的加载失败先落到默认涂鸦；默认图也没有才退回首字。
+    avatarFailed.add(agentId)
     if (image.dataset.fallback === 'default' || defaultUrl === null) { image.remove(); return }
     image.dataset.fallback = 'default'
     image.src = defaultUrl
   })
-  if (stamp !== undefined) image.src = avatarUrl(agentId, stamp)
+  // 本页已经 404 过的不再发请求：直接走默认涂鸦，直到本页刷新重置。
+  const wantUpload = stamp !== undefined && !avatarFailed.has(agentId)
+  if (wantUpload) image.src = avatarUrl(agentId, stamp)
   else if (defaultUrl !== null) image.src = defaultUrl
   if (image.getAttribute('src') !== null) node.appendChild(image)
   node.appendChild(make('span', null, [...displayNameOf(agentId)][0] ?? '?'))
@@ -1102,6 +1109,10 @@ function settleCardForSummary(state_, at) {
 function actionCard(action, context) {
   const card = make('section', 'act')
   card.dataset.actionId = action.id
+  // 渲染时固化归属（2026-09-19）：卡片可能被复制/残留到别的步骤格子里，点击时若从
+  // DOM 位置反推 subtaskId 就会提交错步骤（404「这条待办不存在」）。dataset 是权威。
+  card.dataset.subtaskId = context.subtaskId
+  card.dataset.taskId = context.taskId
   card.dataset.kind = action.kind ?? ''
   card.dataset.state = action.state ?? 'prepared'
   const head = make('div', 'act__head')
@@ -1184,8 +1195,8 @@ async function runAction(action, decision, context, card) {
   card.appendChild(note)
   try {
     await runAct({
-      taskId: context.taskId,
-      subtaskId: context.subtaskId,
+      taskId: card.dataset.taskId || context.taskId,
+      subtaskId: card.dataset.subtaskId || context.subtaskId,
       actionId: action.id,
       decision,
       requestId: newConversationId(),
@@ -1207,15 +1218,120 @@ async function runAction(action, decision, context, card) {
  * `succeeded`/`failed`/`cancelled`/`expired`），局部改反而容易与服务端不一致。
  */
 function renderActionsInto(view, actions, context) {
-  if (!Array.isArray(actions) || actions.length === 0) return
-  let host = view.actionHost
+  const host = view.actionHost
+  // 空清单也要**清掉旧卡**（2026-09-19 生产：s1 结算 succeeded 时 actions=[]，此处直接
+  // return 让此前会话级清单里画下的第二张卡残留在 s1 名下，点它提交的是错步骤 → 404
+  // 「这条待办不存在」）。host 还没建过时才无事可做。
   if (host === undefined || host.parentNode === null) {
-    host = make('div', 'act-host')
-    view.footer.appendChild(host)
-    view.actionHost = host
+    if (!Array.isArray(actions) || actions.length === 0) return
+  } else if (!Array.isArray(actions) || actions.length === 0) {
+    // 已有 host：整块清空（卡已办完/已从本步名下移除）。
+    clear(host)
+    return
   }
-  clear(host)
-  for (const action of actions) host.appendChild(actionCard(action, context))
+  const target = host ?? (() => {
+    const made = make('div', 'act-host')
+    view.footer.appendChild(made)
+    view.actionHost = made
+    return made
+  })()
+  clear(target)
+  for (const action of actions) target.appendChild(actionCard(action, context))
+}
+
+/** 材料状态标识 → 给人看的标签。不认识的值**原样显示**：那是执行方自己的词表，不猜语义。 */
+const MATERIAL_STATE_TEXT = { published: '已发布', draft: '草稿' }
+
+/**
+ * 材料链接只认 http(s)。
+ *
+ * `url` 由执行方提供，但渲染是本页的责任：协议不认识（`javascript:`、`data:` 等）一律按
+ * 纯文本降级，绝不渲染成可点的链接。用 `URL` 解析后再看协议，不靠字符串前缀。
+ */
+function safeMaterialUrl(url) {
+  if (typeof url !== 'string' || url === '') return null
+  try {
+    const parsed = new URL(url, location.href)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : null
+  } catch {
+    return null
+  }
+}
+
+/** 一份材料（`AgentArtifact`）画成一行：标题、状态标签、可点的链接、结构化字段表。 */
+function materialRow(artifact) {
+  const row = make('section', 'mat')
+  row.dataset.kind = artifact.kind ?? ''
+  if (typeof artifact.state === 'string' && artifact.state !== '') row.dataset.state = artifact.state
+  const head = make('div', 'mat__head')
+  head.appendChild(make('span', 'mat__title', typeof artifact.title === 'string' && artifact.title !== '' ? artifact.title : '交回的材料'))
+  if (typeof artifact.state === 'string' && artifact.state !== '') {
+    head.appendChild(make('span', 'mat__state', MATERIAL_STATE_TEXT[artifact.state] ?? artifact.state))
+  }
+  row.appendChild(head)
+  const url = safeMaterialUrl(artifact.url)
+  if (url !== null) {
+    const link = make('a', 'mat__link', url)
+    link.href = url
+    link.target = '_blank'
+    link.rel = 'noopener noreferrer'
+    let external = false
+    try { external = new URL(url).origin !== location.origin } catch { /* 解析失败上面已经拦掉了 */ }
+    if (external) link.title = '这个链接不在本站，点开前请确认来源'
+    row.appendChild(link)
+  } else if (typeof artifact.url === 'string' && artifact.url !== '') {
+    // 协议不认识：照给用户看（能复制），但不可点。
+    row.appendChild(make('span', 'mat__link mat__link--plain', artifact.url))
+  }
+  if (Array.isArray(artifact.fields) && artifact.fields.length > 0) {
+    // 与操作卡的 fields 同一套表格样式，不另立一种表。
+    const wrap = make('div', 'table-scroll')
+    wrap.setAttribute('tabindex', '0')
+    wrap.setAttribute('role', 'region')
+    wrap.setAttribute('aria-label', '材料详情')
+    const table = make('table')
+    const body = make('tbody')
+    for (const field of artifact.fields) {
+      const tr = make('tr')
+      tr.appendChild(make('th', null, field.label ?? ''))
+      tr.appendChild(make('td', null, field.value ?? ''))
+      body.appendChild(tr)
+    }
+    table.appendChild(body)
+    wrap.appendChild(table)
+    row.appendChild(wrap)
+  }
+  if (typeof artifact.path === 'string' && artifact.path.startsWith('/')) {
+    const open = make('a', 'mat__path', '在成员页面打开 ↗')
+    open.href = artifact.path
+    open.target = '_blank'
+    open.rel = 'noopener noreferrer'
+    row.appendChild(open)
+  }
+  return row
+}
+
+/**
+ * 成员交回的材料（产出区）。
+ *
+ * 与待确认卡同一套挂法：host 常驻、每次**整块重画**（服务端给的是全量清单），并排在
+ * 待确认卡**上方**——先看产出了什么，再看还有什么要办的。
+ *
+ * 空数组是权威信号（这一步没有材料），要清掉旧材料；`undefined`（老事件/老记录没这个
+ * 字段）什么都不做，不倒退成"擦掉"。
+ */
+function renderMemberMaterials(view, artifacts) {
+  if (!Array.isArray(artifacts) || artifacts.length === 0) {
+    if (Array.isArray(artifacts) && view.materialHost !== undefined) clear(view.materialHost)
+    return
+  }
+  if (view.materialHost === undefined || view.materialHost.parentNode === null) {
+    view.materialHost = make('div', 'mat-host')
+    // 已有待确认卡时插到它前面：产出在上、待办在下。
+    view.footer.insertBefore(view.materialHost, view.actionHost ?? null)
+  }
+  clear(view.materialHost)
+  for (const artifact of artifacts) view.materialHost.appendChild(materialRow(artifact))
 }
 
 /**
@@ -1677,6 +1793,8 @@ function handleSubtask(event) {
   // 成员的真实输出收进调度卡；成员名下待确认的操作也画在同一个结果区里。
   attachToDispatch(view, event)
   mountMemberActions(view, event)
+  // 材料行（产出区）：终态事件带 artifacts 时整块重画；undefined（老事件）不动。
+  renderMemberMaterials(view, event.artifacts)
   view.status.textContent = STATE_TEXT[event.state] ?? event.state
   view.status.style.color =
     event.state === 'failed' ? 'var(--bt-error)'
@@ -1686,12 +1804,13 @@ function handleSubtask(event) {
 
   if (event.state === 'dispatched') {
     // 新一次尝试从头开始（S08）：同一子任务重派时清掉上次的预览与终态标记，
-    // 旧尝试的迟到增量不串进新版。
+    // 旧尝试的迟到增量不串进新版。上一轮交回的材料也一并撤下——它属于被重做的那次尝试。
     view.body = ''
     view.rendered = ''
     view.text.textContent = ''
     view.terminal = false
     view.live = true
+    renderMemberMaterials(view, [])
     view.bubble.appendChild(make('div', 'typing')).appendChild(make('i'))
     const typing = view.bubble.querySelector('.typing')
     typing.appendChild(make('i'))
@@ -1806,7 +1925,10 @@ function handleSubtask(event) {
  * 给的**全量**列表，所以确认完一张、剩下还在的会自然留下，全部办完则整块消失。
  */
 function mountMemberActions(view, event) {
-  if (!Array.isArray(event.actions) || event.actions.length === 0) return
+  if (!Array.isArray(event.actions)) return
+  // 空清单也要送进 renderActionsInto：它会**清掉**此前挂在名下的卡（会话级清单曾把别的
+  // 步骤的卡带进来，结算成功后 own=[] 正是"本步已无卡"的权威信号——不送就残留可点的
+  // 死卡，点了提交错步骤 → 404（2026-09-19 两卡 404 的前端根因）。
   renderActionsInto(view, event.actions, { taskId: event.taskId ?? state.taskId ?? '', subtaskId: event.id })
 }
 
@@ -2919,7 +3041,11 @@ async function upgradeTaskEntry(wrap, task) {
     const record = await taskRecord(task.id)
     // 换会话、翻页之后这个包装节点可能已经被丢弃：那就什么都不做（不往游离节点里写）。
     if (!wrap.isConnected) return
-    const card = renderTaskCard(record, { live: false, liveResume: false, defaultOpen: cardPrefs(task.id).open === true })
+    // 还没终的任务是"活的"：等待中的成员要重新拿到回复入口（点开历史也能回话），
+    // 调度卡也默认展开——收起会把确认按钮和等待输入框一起藏进折叠区，用户面对
+    // "在等"的任务却找不到任何入口（#7/#16）。终态任务沿用用户自己的展开偏好。
+    const active = !['completed', 'failed', 'cancelled', 'partial'].includes(record.state)
+    const card = renderTaskCard(record, { live: false, liveResume: active, defaultOpen: active || cardPrefs(task.id).open === true })
     // 摘要卡换成调度卡是**高度变化**：用户正读到上面几屏时会被顶走，所以与翻页同一口径，
     // 在视口钉扎里替换（I11）。
     stabilizeViewport(() => { wrap.replaceChildren(card) }, { forceAnchor: true })
@@ -3168,6 +3294,8 @@ function renderTaskCard(record, opts = {}) {
     // 与实时同一个入口：成功、失败、等你回话、待外部处理的正文都走受控 Markdown
     // （表格/列表/代码才显示成它本来的样子）。
     renderMemberContent(view, text)
+    // 交回的材料（产出区）与实时同一条路：刷新重建后照样能看到链接、状态与字段表。
+    renderMemberMaterials(view, subtask.artifacts)
     // 刷新重建同样画出待确认的操作（`/task` 里带的是留存投影出来的那一份）。
     renderActionsInto(view, subtask.actions, { taskId: record.id, subtaskId: subtask.id })
     if (['succeeded', 'failed', 'cancelled', 'external_pending'].includes(subtask.state)) view.terminal = true

@@ -972,6 +972,37 @@ body[data-settings="open"] .settings {
 /* 字段表沿用 `.md table` 那一套，这里只保证它在卡里有边距。 */
 .act .table-scroll { margin: 2px 0; }
 
+/* ---------- 成员交回的材料（产出区） ----------
+ *
+ * 与 `.act`（要你动手的事）区分开：材料是"已经交回来的东西"，安静、可核对——
+ * 链接可点、状态有标签、字段走 `.md table`。排在待确认卡上方。
+ */
+.mat-host { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.mat {
+  padding: 8px 11px 9px;
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-line);
+  border-radius: var(--bt-wobble-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+/* 已发布的产出给一个"办成了"的收口色，其余保持中性：状态标签来自执行方词表，不猜。 */
+.mat[data-state='published'] { border-color: var(--bt-ok); background: var(--bt-ok-bg); }
+.mat__head { display: flex; align-items: baseline; gap: 8px; }
+.mat__title { font-family: var(--bt-hand); font-size: 13px; font-weight: 700; }
+.mat__state { margin-left: auto; flex: none; font-size: 11px; color: var(--bt-ink-soft); }
+.mat[data-state='published'] .mat__state { color: var(--bt-ok); }
+.mat__link {
+  font-size: 12.5px;
+  color: var(--bt-ok);
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+.mat__link--plain { color: var(--bt-ink-soft); }
+.mat__path { font-size: 11.5px; color: var(--bt-ink-faint); align-self: flex-start; }
+.mat .table-scroll { margin: 2px 0; }
+
 /* ---------- 视图顶部条（二级视图的返回入口）----------
  *
  * 二级视图必须能出去：浏览器返回键（`popstate`）与这里的按钮走同一条路径。

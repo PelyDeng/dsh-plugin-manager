@@ -1,6 +1,6 @@
 {
   "name": "dsh-agents-group",
-  "version": "0.6.7",
+  "version": "0.8.0",
   "description": "DSH 智能体群组：统一分包管理多个智能体，共享公共组件，各自独立页面与授权",
   "license": "UNLICENSED",
   "private": true,

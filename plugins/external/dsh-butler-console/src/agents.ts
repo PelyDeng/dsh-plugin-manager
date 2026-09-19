@@ -55,13 +55,19 @@ export interface AgentCard {
  * 收集当前登记的调度入口。
  *
  * 同一个 id 重复登记按错误处理：静默覆盖会让页面显示一个实际从未被使用的入口。
- * 协议版本不兼容同样拒绝，避免用错误的约定去派活。
+ * 协议版本不兼容则**跳过该入口并告警**而不是抛出：成员来源多样化后，一个不兼容者
+ * 不该让整份名单都读不出来（其余成员照常可用）；重复登记仍属真错误，保留抛出。
  */
 export function collectExecutors(ctx: Context): Map<string, ButlerAgentExecutor> {
   const executors = new Map<string, ButlerAgentExecutor>()
   ctx.root.emit(BUTLER_EXECUTORS_EVENT, (executor: ButlerAgentExecutor) => {
-    if (executor.protocol !== 1) throw new Error(`调度协议版本不兼容：${String(executor.protocol)}`)
-    const id = executor.agentId.trim()
+    // 容错读取：不兼容的登记连 agentId 都不一定给了，严格取值恰好在这里抛 TypeError、
+    // 击穿整个容错目标（一个坏登记拖垮全名单）。
+    const id = typeof executor?.agentId === 'string' ? executor.agentId.trim() : ''
+    if (executor.protocol !== 1) {
+      console.warn(`butler-console: 跳过协议不兼容的调度入口（${id === '' ? '缺 id' : id}，protocol ${String(executor.protocol)}）`)
+      return
+    }
     if (id === '') throw new Error('调度执行入口缺少 agentId')
     if (executors.has(id)) throw new Error(`调度执行入口重复登记：${id}`)
     executors.set(id, executor)

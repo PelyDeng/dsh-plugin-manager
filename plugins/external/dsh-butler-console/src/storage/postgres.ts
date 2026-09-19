@@ -524,7 +524,11 @@ export class PostgresTaskStorage implements ButlerStorage {
       `UPDATE butler_tasks SET state=$1, updated_at=$2,
          note=COALESCE($3,note), summary=COALESCE($4,summary), error=COALESCE($5,error),
          finished_at=CASE WHEN $6::boolean THEN COALESCE(finished_at,$2::bigint) ELSE finished_at END
-       WHERE id=$7`,
+       WHERE id=$7
+         /* 非终态目标不覆盖终态行：后台收尾读到的快照可能已被并发的喊停/收尾写成终态，
+            拿旧快照把 cancelled 拉回 waiting_user 会造出一个无闹钟、无入口的死任务
+            （终态→终态的幂等重放不受此限）。 */
+         AND ($6::boolean OR state NOT IN ('completed','failed','cancelled','partial'))`,
       [state, now, patch.note ?? null, patch.summary ?? null, patch.error ?? null, terminal, id],
     )
   }
@@ -968,6 +972,58 @@ export class PostgresTaskStorage implements ButlerStorage {
       [error, Date.now(), taskId, subtaskId],
     )
     return (result.rowCount ?? 0) > 0
+  }
+
+  /** 【喊停收等待】按会话批量收掉等待中的子任务（cancelled，材料不动），返回受影响清单。`taskId` 非空时只收该任务。 */
+  async cancelWaitingSubtasks(actor: Actor, conversationId: string, error: string, taskId = ''): Promise<readonly { taskId: string; subtaskId: string }[]> {
+    const result = await this.run<{ task_id: string; subtask_id: string }>(
+      `UPDATE butler_subtasks AS s SET state='cancelled', error=$1, finished_at=COALESCE(s.finished_at,$2)
+       FROM butler_tasks AS t
+       WHERE s.task_id=t.id AND t.conversation_id=$3
+         AND t.owner_namespace=$4 AND t.owner_id=$5
+         AND s.state='waiting_user'
+         AND ($6='' OR t.id=$6)
+       RETURNING s.task_id AS task_id, s.id AS subtask_id`,
+      [error, Date.now(), conversationId, actor.namespace, actor.userId, taskId],
+    )
+    return result.rows.map(row => ({ taskId: row.task_id, subtaskId: row.subtask_id }))
+  }
+
+  /** 【等待超时兜底】列出明显超期仍挂着的等待（只读，结账仍走原子路径）。 */
+  async staleWaitingSubtasks(actor: Actor, minAgeMs: number): Promise<readonly { taskId: string; subtaskId: string; agentId: string }[]> {
+    const result = await this.run<{ task_id: string; subtask_id: string; agent_id: string }>(
+      `SELECT s.task_id AS task_id, s.id AS subtask_id, s.agent_id AS agent_id
+       FROM butler_subtasks AS s
+       JOIN butler_tasks AS t ON s.task_id=t.id
+       WHERE t.owner_namespace=$1 AND t.owner_id=$2
+         AND s.state='waiting_user' AND s.started_at IS NOT NULL AND s.started_at < $3`,
+      [actor.namespace, actor.userId, Date.now() - minAgeMs],
+    )
+    return result.rows.map(row => ({ taskId: row.task_id, subtaskId: row.subtask_id, agentId: row.agent_id }))
+  }
+
+  /**
+   * 【跨任务待办归属】同一成员会话里、**别的任务**已经声明过的待办 id。
+   *
+   * 待办清单是会话级的，但「一张卡只归第一次声明它的那一步」此前只在本任务的步骤之间
+   * 判定（claimedByOthers）——同一会话先后开出两个任务时，后一个任务的步骤会把前一个
+   * 任务已声明的卡整份收进自己名下：页面上同一张卡挂两处，点挂在后出任务下的那张，
+   * 结算的就是后出任务的步骤（生产 #13）。
+   */
+  async siblingClaimedActionIds(actor: Actor, memberConversationId: string, excludeTaskId: string): Promise<ReadonlyMap<string, string>> {
+    // 值是这张卡的 op 的 logicalId（形如 run:<taskId>:<subtaskId>）——归属的唯一判据：
+    // 它声明这张卡时写下的"这张卡属于哪个执行单元"。同一会话跨任务排重、以及
+    // "成员交回的卡该挂在哪一步"都以它为准（2026-09-19 两卡 404 间歇 bug 的根修）。
+    const result = await this.run<{ action_id: string; logical_id: string | null }>(
+      `SELECT entry->>'id' AS action_id, entry->'chat'->>'logicalId' AS logical_id
+       FROM butler_subtasks AS s
+       JOIN butler_tasks AS t ON s.task_id=t.id
+       CROSS JOIN LATERAL jsonb_array_elements(COALESCE(s.member_return->'actions', '[]'::jsonb)) AS entry
+       WHERE t.owner_namespace=$1 AND t.owner_id=$2
+         AND s.conversation_id=$3 AND s.task_id<>$4`,
+      [actor.namespace, actor.userId, memberConversationId, excludeTaskId],
+    )
+    return new Map(result.rows.map(row => [row.action_id, row.logical_id ?? '']))
   }
 
   /**

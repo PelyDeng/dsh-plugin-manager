@@ -59,6 +59,8 @@ function fixture() {
     assertOwner: vi.fn(),
     task: vi.fn(() => undefined),
     setSubtaskState: vi.fn(),
+    cancelWaitingSubtasks: vi.fn(async () => []),
+    staleWaitingSubtasks: vi.fn(async () => []),
   } as unknown as ButlerStorage
   const access = { mode: 'authenticated', ready() {}, resolve: () => undefined, assert() {} } as unknown as Access
   const config = {

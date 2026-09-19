@@ -209,3 +209,33 @@ describe('读不到时如实报错', () => {
       .rejects.toMatchObject({ reason: 'conversation_not_found', status: 404 })
   })
 })
+
+describe('汇总轮的内部提示词不进对话正文（#1）', () => {
+  // 汇总提示词经宿主记成 source=user（与真人输入同款），按 source 过滤拦不住它；
+  // 判内件靠拼装处的两个固定标志（SUMMARY_PROMPT_GOAL / SUMMARY_PROMPT_RESULTS）。
+  const summaryPrompt = `我的原始目标是：删掉测试废稿\n各子 Agent 已经返回结果：\n- 子任务「出卡」由 blog 完成……\n# 待裁决清单（先裁决，再写汇总）……不要提到这份指令。`
+  const logWithLeak = [
+    turnStart(0, 1),
+    said(1, '删掉测试废稿'),
+    answered(2, '已派活。', 1),
+    { type: 'turn/end', seq: 3, time: 1003, data: { turn: 1, reason: { kind: 'completed' } } },
+    turnStart(4, 2),
+    { ...said(5, summaryPrompt), data: { ...said(5, '').data, id: 'msg-u-5', role: 'user', content: text(summaryPrompt), source: { kind: 'user' } } },
+    answered(6, '已删除。', 2),
+  ]
+  it('两个标志同时命中的 user 消息被滤掉：正文里看不到裁决指令', async () => {
+    const page = await fixture(logWithLeak).transcript(conversationId, actor, 0, 50)
+    expect(page.items.map(item => item.text)).toEqual(['删掉测试废稿', '已派活。', '已删除。'])
+    expect(JSON.stringify(page)).not.toContain('待裁决清单')
+    expect(JSON.stringify(page)).not.toContain('我的原始目标是')
+  })
+  it('只含一个标志的真人消息保留：过滤不会误伤普通输入', async () => {
+    const onlyOne = logWithLeak.map(event =>
+      event.type === 'user/message' && event.seq === 5
+        ? { ...event, data: { ...event.data, content: text('我的原始目标是：把标题改短一点') } }
+        : event,
+    )
+    const page = await fixture(onlyOne).transcript(conversationId, actor, 0, 50)
+    expect(page.items.some(item => item.text === '我的原始目标是：把标题改短一点')).toBe(true)
+  })
+})

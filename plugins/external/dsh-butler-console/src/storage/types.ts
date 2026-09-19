@@ -338,6 +338,35 @@ export interface ButlerStorage {
    */
   expireWaitingSubtask(taskId: string, subtaskId: string, error: string): Promise<boolean>
 
+  /**
+   * 【喊停收等待】把一个会话里所有「等你回话」的子任务收成 `cancelled`。
+   *
+   * 等待中的步骤没有活跃 run，喊停只看执行中的轮次时它们永远喊不停（#14）。这里按
+   * **会话 + owner** 圈定范围，单条条件 UPDATE 批量收掉（守卫与 `expireWaitingSubtask`
+   * 同款：只有此刻仍是 `waiting_user` 的行会被改写），返回受影响的 `(taskId, subtaskId)`
+   * 列表供调用方做任务级收尾。材料（`result` / `memberReturn`）不动。
+   */
+  cancelWaitingSubtasks(actor: Actor, conversationId: string, error: string, taskId?: string): Promise<readonly { taskId: string; subtaskId: string }[]>
+
+  /**
+   * 【等待超时兜底】列出该 owner 名下明显超过时限仍挂在等待里的子任务。
+   *
+   * 等待超时靠进程内存闹钟；闹钟丢失时（挂不上、进程内被清）等待会挂到下次重启
+   * （生产实测 50+ 分钟，#6）。这里按 `started_at < now - minAgeMs` 圈定：`started_at`
+   * 是首次进入执行的时间，等待必然发生在它之后，拿它当兜底口径只会提前收、不会漏收。
+   * 只读不改写：结账仍走 {@link expireWaitingSubtask} 的原子路径。
+   */
+  staleWaitingSubtasks(actor: Actor, minAgeMs: number): Promise<readonly { taskId: string; subtaskId: string; agentId: string }[]>
+
+  /**
+   * 【跨任务待办归属】同一成员会话里、别的任务已经声明过的待办 id 集合。
+   *
+   * 待办清单按成员会话共享，而「一张卡只归第一次声明它的那一步」的判定此前只在本任务
+   * 内做——同会话先后两个任务时，后者的步骤会把前者已声明的卡整份收进名下（生产 #13：
+   * 点挂错的那张卡，结算的是错的任务）。返回集合供派发落库前过滤。
+   */
+  siblingClaimedActionIds(actor: Actor, memberConversationId: string, excludeTaskId: string): Promise<ReadonlyMap<string, string>>
+
   /** 读取该用户的成员别名；没有配过别名的成员不在表里。 */
   aliases(actor: Actor): Promise<Map<string, { displayName: string; accent: string }>>
 

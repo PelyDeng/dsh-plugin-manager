@@ -42,7 +42,20 @@ export interface ParticipantArtifact {
   readonly title: string
   /** 只允许本站插件内的路径，由发布方经过权限检查后提供。 */
   readonly path: string
-  readonly kind: 'conversation' | 'draft' | 'confirmation' | 'report'
+  /**
+   * 材料种类，由执行方自己定义（例如 `conversation`、`draft`、`article`）。
+   *
+   * 以前是封闭联合（`conversation` / `draft` / `confirmation` / `report`），改成开放字符串与
+   * kit 的 `AgentArtifact` 对齐：新成员的业务产出（如「已发布的文章」）不需要来这里改一次
+   * 联合再发版。`conversationArtifact` 用 `& { kind: 'conversation' }` 收窄，不受影响。
+   */
+  readonly kind: string
+  /** 可核验的访问地址（如已发布文章的 URL）；渲染方白名单 http(s)，语义见 kit 的 `AgentArtifact`。 */
+  readonly url?: string
+  /** 材料状态标识（执行方自己的词表，如 `published` / `draft`）；供协调方程序对照。 */
+  readonly state?: string
+  /** 给人看的结构化行（复用 kit 的 `AgentActionField`），如「发布状态：已发布」。 */
+  readonly fields?: readonly AgentActionField[]
 }
 
 /**

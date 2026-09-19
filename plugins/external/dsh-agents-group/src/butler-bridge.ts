@@ -117,11 +117,19 @@ function toButlerStatus(status: string): ButlerDispatchResult['status'] {
 /**
  * 材料的字段映射。
  *
- * 参与者的 `kind` 是它自己的有限集合，协调方的 `kind` 是开放的字符串；这里原样搬过去，
- * 不替对方归并成几类 —— 分类的含义只有发布方清楚。
+ * 参与者的 `kind` 是它自己的词表，协调方的 `kind` 是开放的字符串；这里原样搬过去，
+ * 不替对方归并成几类 —— 分类的含义只有发布方清楚。核验字段（`url` / `state` / `fields`）
+ * 同样原样透传：缺了它们，协调方只能证明「有材料」，证明不了「口径要的那种东西交回来了」。
  */
 function toButlerArtifacts(artifacts: readonly ParticipantArtifact[]): AgentArtifact[] {
-  return artifacts.map(artifact => ({ title: artifact.title, path: artifact.path, kind: artifact.kind }))
+  return artifacts.map(artifact => ({
+    title: artifact.title,
+    path: artifact.path,
+    kind: artifact.kind,
+    ...(artifact.url === undefined ? {} : { url: artifact.url }),
+    ...(artifact.state === undefined ? {} : { state: artifact.state }),
+    ...(artifact.fields === undefined || artifact.fields.length === 0 ? {} : { fields: artifact.fields }),
+  }))
 }
 
 /**

@@ -328,11 +328,14 @@ class DshBlogBridge_Action extends \Typecho\Widget implements \Widget\ActionInte
             $rootCid = $current['published']['cid'] ?? $current['savedDraft']['cid'];
         }
         $options = \Widget\Options::alloc(); $raw = $source['raw'] ?? [];
+        // created<=0 视为「未设置」：经桥接创建的草稿首次落库时 created 为 0，若原样带过，
+        // 发布后文章时间会是 1970-01-01 并在按时间排序的列表里沉底（生产 2026-09-19）。
+        $created = (int) ($raw['created'] ?? 0);
         $contents = [
             'title' => $content['title'], 'text' => ($content['format'] === 'markdown' ? '<!--markdown-->' : '') . $content['text'],
             'slug' => $content['slug'], 'tags' => implode(',', $content['tags']), 'category' => $content['categories'],
             'type' => $mode === 'publish' ? 'post' : 'post_draft',
-            'created' => (int) ($raw['created'] ?? ($mode === 'publish' ? $options->time : 0)),
+            'created' => $created > 0 ? $created : ($mode === 'publish' ? (int) $options->time : 0),
             'allowComment' => (int) ($content['allowComment'] ?? $raw['allowComment'] ?? $options->defaultAllowComment),
             'allowPing' => (int) ($raw['allowPing'] ?? $options->defaultAllowPing),
             'allowFeed' => (int) ($raw['allowFeed'] ?? $options->defaultAllowFeed),

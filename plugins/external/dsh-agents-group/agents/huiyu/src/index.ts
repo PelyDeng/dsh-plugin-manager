@@ -246,6 +246,7 @@ export async function mount(mountContext: AgentMountContext): Promise<{
 
   let participant: AgentParticipant
   let disposeRuntime: (() => Promise<void>) | undefined
+  let revokeInvalid: (() => void) | undefined
   if (!runnable) {
     const reason = configFailure ?? storageFailure ?? '私有配置或数据库未就绪'
     participant = unavailableParticipant({ definition, reason })
@@ -278,6 +279,8 @@ export async function mount(mountContext: AgentMountContext): Promise<{
       })
       participant = assembly.participant
       disposeRuntime = () => assembly.dispose()
+      // 装配成功才有可撤销的在飞轮次；失败路径保持 undefined（没有可收的）。
+      revokeInvalid = () => assembly.lifecycle.revokeInvalid()
     } catch (error: unknown) {
       /**
        * ⚠️ **装配失败不能让整个成员装载失败。**
@@ -404,7 +407,7 @@ export async function mount(mountContext: AgentMountContext): Promise<{
   }))
 
   /** 权限被撤时让在飞轮次尽早收尾（与 closedoff / blog 同一口径）。 */
-  ctx.effect(() => onRevoked(ctx, () => { void 0 }))
+  ctx.effect(() => onRevoked(ctx, () => { revokeInvalid?.() }))
 
   const health = async (): Promise<{ ok: boolean; error?: string }> => {
     if (configFailure !== undefined) return { ok: false, error: configFailure }

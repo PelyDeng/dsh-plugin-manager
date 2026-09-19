@@ -53,3 +53,14 @@ describe('端点推导', () => {
     expect(endpointsOf(sample, '/platform/agents').entryPath).toBe('/platform/agents/closedoff')
   })
 })
+
+describe('清单与装载 switch 的机器守护', () => {
+  it('每个成员的 id 在 loadAgent 与 errorHandlerOf 的 switch 里都有 case（漏加=静默缺席）', async () => {
+    const { readFileSync } = await import('node:fs')
+    const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+    for (const manifest of AGENT_MANIFESTS) {
+      const cases = source.split(`case '${manifest.id}':`).length - 1
+      expect(cases, `${manifest.id} 应同时出现在 loadAgent 与 errorHandlerOf 两个 switch`).toBeGreaterThanOrEqual(2)
+    }
+  })
+})

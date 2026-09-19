@@ -174,6 +174,8 @@ async function fixture(options: {
       if (found !== undefined) found.state = 'finished'
     },
     releaseRequest: (who: Actor, kind: string, id: string) => { requests.delete(requestKey(who, kind, id)) },
+    cancelWaitingSubtasks: async () => [],
+    staleWaitingSubtasks: async () => [],
   } as unknown as ButlerStorage
   const access = {
     mode: 'authenticated',

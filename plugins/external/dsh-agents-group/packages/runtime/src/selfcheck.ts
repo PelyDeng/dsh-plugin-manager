@@ -29,8 +29,8 @@
  *
  * **2. 第 3 条是"口径非空 ⇒ 材料非空"，不是"逐 `kind` 对照"。**
  * 主方案写的是"验收口径提到的产出物 `kind` 必须在该步 `artifacts` 里出现"，但 `acceptance`
- * 是**自由文本（中文）**、`ParticipantArtifact.kind` 是固定英文枚举
- * （`'conversation' | 'draft' | 'confirmation' | 'report'`），契约里**没有"文本 → kind"的映射**。
+ * 是**自由文本（中文）**、`ParticipantArtifact.kind` 是执行方自定义的开放字符串（2026-09-19
+ * 起不再是固定枚举），契约里**没有"文本 → kind"的映射**。
  * 按字面实现只有三条路，都不行：不实现 / 搜英文 kind（中文口径永远搜不到 ⇒ 系统性误伤全部
  * 口径）/ 新增词表（设计里没有）。
  *

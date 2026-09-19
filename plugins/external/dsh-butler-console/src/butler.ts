@@ -31,6 +31,7 @@ import { AccessError, conversationModel, defaultConversationModel, listPlugins, 
 import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
 import type { Config } from './config.ts'
 import { ConversationLog, type LoggedEvent, type RunHead } from './event-log.ts'
+import { MergedEvents } from './merged-events.ts'
 import type { ButlerAgentExecutor, ButlerDispatchResult, ButlerMember, ButlerPhase, ButlerProgressUpdate, ButlerReplyRequest } from './protocol.ts'
 import type {
   ButlerInputRef,
@@ -459,6 +460,12 @@ const WAITING_EXPIRED = '等太久了，这次等待已经过期；材料都还�
 /** 等待超时后任务级的失败说明，比子任务那句短。 */
 const WAITING_EXPIRED_TASK = '等用户回话超时，材料保留'
 
+/** 喊停收掉等待中步骤时给用户看的说明。 */
+const WAITING_STOPPED = '老板喊停：这一轮的等待作废，材料都保留着，重述目标就能接着办。'
+
+/** 喊停后任务级的说明。 */
+const WAITING_STOPPED_TASK = '老板喊停，等待中的步骤已作废，材料保留'
+
 /**
  * 读对话正文时往前多读多少个事件，用来重建「这条消息属于第几回合」。
  *
@@ -467,6 +474,11 @@ const WAITING_EXPIRED_TASK = '等用户回话超时，材料保留'
  * 只是一个回合的事件量。
  */
 const TRANSCRIPT_LEAD_EVENTS = 200
+
+/** 汇总轮提示词的开头两句（{@link summarize} 拼装）：transcript 据此识别"这是发给模型的
+ * 内件"而不是老板的话（两个标志同时命中才滤）。改这两句必须连同 transcript 过滤一起改。 */
+const SUMMARY_PROMPT_GOAL = '我的原始目标是：'
+const SUMMARY_PROMPT_RESULTS = '各子 Agent 已经返回结果'
 
 /** 一次最多返回多少条对话；也是 `/transcript` 的 `limit` 上限。 */
 export const TRANSCRIPT_MAX_ITEMS = 200
@@ -1068,7 +1080,9 @@ export function verdictEvidenceFound(evidence: string, input: {
   const haystacks = [
     input.result,
     input.memberReturnText,
-    ...input.artifacts.flatMap(item => [item.title, item.path, item.kind]),
+    // 材料的核验字段也算"这一步交回的话"：证据引用的是链接或状态（`https://…/p/1.html`、
+    // `published`）时，它们就在 url / state 里，不在 title / path 里——不比这两处会把真证据判成编的。
+    ...input.artifacts.flatMap(item => [item.title, item.path, item.kind, ...(item.url === undefined ? [] : [item.url]), ...(item.state === undefined ? [] : [item.state])]),
   ]
   return haystacks.some(text => text.includes(evidence))
 }
@@ -1610,7 +1624,10 @@ export class ButlerConsole {
     }
     const lines = members.map(member => {
       const caps = member.capabilities.length > 0 ? member.capabilities.join('、') : '未声明，按子任务语义自行判断'
-      const summary = member.description.trim() === '' ? '' : `；简介：${member.description.trim()}`
+      // 简介是插件自述、无长度约束；成员一多，全文拼接会静默吃掉每轮的系统提示词预算。
+      // 与 capabilities 同等待遇截断（能力 12 条×60 字），成员自己想写长介绍就写进自己的页面。
+      const brief = clip(member.description.trim(), 120)
+      const summary = brief === '' ? '' : `；简介：${brief}`
       return `- id \`${member.id}\`（${member.displayName}）：能接 ${caps}${summary}`
     })
     return [
@@ -2064,7 +2081,15 @@ export class ButlerConsole {
       if (record === undefined || record.conversationId !== id) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
     }
     const active = this.runs.get(id)
-    if (active === undefined) return { accepted: false, reason: '现在没有正在执行的一轮' }
+    if (active === undefined) {
+      // 没有正在跑的一轮，但会话里可能还挂着「等你回话」的步骤——等待没有活跃 run，
+      // 只看 runs 就永远喊不停它（#14）。等待作废（材料保留），这才是喊停的完整语义。
+      // 带了 taskId 就只收那个任务（与下方活跃分支同一副防误伤：旧任务迟到的停止
+      // 请求不该碰到该会话随后开的新任务）。
+      const stopped = await this.stopWaitingSubtasks(id, actor, taskId)
+      if (stopped > 0) return { accepted: true, reason: '已把等待中的任务喊停，材料保留' }
+      return { accepted: false, reason: '现在没有正在执行的一轮' }
+    }
     if (taskId !== '') {
       // 必须严格对上。当前这一轮还在理解阶段（日志里还没有 taskId）时也算对不上：
       // 那多半是另一个新任务刚起步，拿旧任务的取消去掐它才是真的误伤。
@@ -2072,7 +2097,10 @@ export class ButlerConsole {
       if (current !== taskId) return { accepted: false, reason: '这个任务已经不在执行了' }
     }
     this.abort(id)
-    return { accepted: true, reason: '' }
+    // 正在跑的一轮停了；同会话挂着的等待也一并收掉——它们占着成员与计数，
+    // 喊停的语义是"这个会话现在别忙"，不该留下喊不动的等待。带了 taskId 时同样只动那个任务。
+    const stopped = await this.stopWaitingSubtasks(id, actor, taskId)
+    return { accepted: true, reason: stopped > 0 ? '已停止，等待中的任务一并喊停（材料保留）' : '' }
   }
 
   /** 中止所有正在跑的会话；登录被撤销和插件卸载时使用。 */
@@ -2214,25 +2242,22 @@ export class ButlerConsole {
       })
       yield { type: 'plan', taskId, goal: text, note: plan.note, subtasks, time: Date.now() }
 
-      // 第二段：按顺序调度。
-      for (const subtask of subtasks) {
-        if (abort.signal.aborted) {
+      // 第二段：调度。走与后续派发（回话/点卡后的下游、补充追加）**同一条** drainQueue：
+      // 一批互不依赖、不同成员的步骤并发派出（串行会让独立步骤排队，每步最坏一个执行超时）。
+      // 依赖核验、依赖拒派与排队语义都在 drainQueue 里，这里不再另写一份循环。
+      yield* this.drainQueue({ taskId, actor, goal: text, signal: abort.signal })
+      // 中途喊停：还没派出去的排队步骤如实标「已停止」（drainQueue 让位时不会动它们，
+      // 原来的逐个循环是在派发前逐条标记的，这里补齐同一语义）。
+      if (abort.signal.aborted) {
+        const remaining = (await this.storage.task(actor, taskId))?.subtasks ?? []
+        for (const subtask of remaining) {
+          if (subtask.state !== 'queued') continue
+          const displayName = await this.displayNameOf(actor, subtask.agentId)
           await this.queueSubtaskWrite(taskId, subtask.id, () => this.storage.setSubtaskState(taskId, subtask.id, 'cancelled', { error: '已停止' }))
           yield {
             type: 'subtask', taskId, id: subtask.id, state: 'cancelled',
-            agentId: subtask.agentId, displayName: subtask.displayName, detail: '已停止', time: Date.now(),
+            agentId: subtask.agentId, displayName, detail: '已停止', time: Date.now(),
           }
-          continue
-        }
-        for await (const event of this.dispatchSubtask({
-          taskId, subtaskId: subtask.id, goal: subtask.goal, agentId: subtask.agentId,
-          displayName: subtask.displayName, taskGoal: text, actor, signal: abort.signal,
-          ...(subtask.acceptance === undefined ? {} : { acceptance: subtask.acceptance }),
-          ...(subtask.supersedes === undefined ? {} : { reworkOf: subtask.supersedes }),
-          ...(subtask.dependsOn === undefined ? {} : { dependsOn: subtask.dependsOn }),
-          ...(subtask.requiresExternalAction === true ? { requiresExternalAction: true } : {}),
-        })) {
-          yield event
         }
       }
 
@@ -2280,6 +2305,8 @@ export class ButlerConsole {
    * 会让两条不同的需求合成一条。
    */
   async start(conversationId: string, message: string, actor: Actor, requestId = ''): Promise<StartedRun> {
+    // 顺手兜一遍过期等待（#6）：内存闹钟丢了也不会再挂到重启，正常时晚 60 秒、轮不到它。
+    void this.sweepStaleWaitings(actor).catch(() => {})
     const digest = digestOf([conversationId, message])
     if (requestId !== '') {
       const existing = await this.storage.request(actor, 'chat', requestId)
@@ -2365,6 +2392,7 @@ export class ButlerConsole {
     actor: Actor
     requestId?: string
   }): Promise<StartedRun> {
+    void this.sweepStaleWaitings(input.actor).catch(() => {})
     const requestId = input.requestId ?? ''
     const digest = digestOf([input.taskId, input.subtaskId, input.text, String(input.decideByAgent)])
     if (requestId !== '') {
@@ -2403,6 +2431,7 @@ export class ButlerConsole {
    * 受理与处理是分开的：这里返回的是「已经收下」，随后的事件流才说明处理到哪一步。
    */
   async submitSupplement(input: SupplementRequest): Promise<StartedRun> {
+    void this.sweepStaleWaitings(input.actor).catch(() => {})
     const requestId = input.requestId ?? ''
     const digest = digestOf([input.taskId, input.text])
     if (requestId !== '') {
@@ -2835,6 +2864,11 @@ export class ButlerConsole {
       if (event.data.source.kind !== 'user') return null
       const text = textOf(event.data.content)
       if (text.trim() === '') return null
+      // 汇总轮的内部提示词同样被宿主记成 source=user：它带着裁决指令与验收口径，出现在
+      // 正文里等于把给模型的指令念给老板听（生产 #1）。标志串与 {@link summarize} 的拼装
+      // 共用同一组常量——改提示词必须连同这里一起改。两个标志同时命中才判内件，真人恰好
+      // 打出这两句的概率可以忽略。
+      if (text.includes(SUMMARY_PROMPT_GOAL) && text.includes(SUMMARY_PROMPT_RESULTS)) return null
       return { seq: event.seq, messageId: String(event.data.id), role: 'user', text, time: event.time, turn }
     }
     // 只取已提交的助手答复；`assistant/attempt` 是没进过历史面的尝试，不该出现在对话里。
@@ -2875,58 +2909,100 @@ export class ButlerConsole {
     // 照常派出去 —— 之前这里直接返回，排队下游会悬空到老板下一次人工过问。复用 drainQueue
     // （与 settleAfterTurn 同一实现，不另造一套）。会话上正有回话或补充在执行时让位：那一轮
     // 自己的收尾会排空队列，两条路径同时派同一步会把它派两遍。
-    const settled = await this.storage.task(actor, taskId)
-    if (settled !== undefined) {
-      const holder = this.claims.get(settled.conversationId)
-      if (holder?.kind !== 'reply' && holder?.kind !== 'supplement') {
-        // 这是无人观看的后台收尾：没有对应的 SSE 轮次，事件如实产出后不外推，状态与原因
-        // 都以先写库的记录为准（先写库后上报的顺序在 drainQueue 内部保持）。
-        for await (const _event of this.drainQueue({
-          taskId, actor, goal: settled.goal, signal: new AbortController().signal,
-        })) { /* 后台收尾没有 SSE 观众 */ }
-      }
-    }
+    // 会话上正有回话或补充在执行时让位（判断在 finishTaskAfterBackgroundWrite 内）：
+    // 那一轮自己的收尾会排空队列，两条路径同时派同一步会把它派两遍。
+    await this.finishTaskAfterBackgroundWrite(taskId, actor, WAITING_EXPIRED_TASK)
+  }
 
+  /**
+   * 后台写完一条子任务终态之后的收尾：依赖重判（排队的下游结账）+ 全终结时的任务结账。
+   *
+   * 从 {@link expireWaiting} 抽出：等待超时、喊停收等待、兜底扫描三条后台路径共用同一副
+   * 骨架——三处各抄一份的后果就是其中一处忘了核验依赖（排队的下游悬空到老板下次过问）。
+   *
+   * 事件全部丢弃：后台路径没有 SSE 观众，状态与原因都以先写库的记录为准。
+   */
+  private async finishTaskAfterBackgroundWrite(taskId: string, actor: Actor, settleErrorOverride: string): Promise<void> {
+    const record = await this.storage.task(actor, taskId)
+    if (record === undefined) return
+    const holder = this.claims.get(record.conversationId)
+    // 会话上有**任何**占用（回话/补充/一轮/另一次点卡）都先不派发排队步骤：两条路径同时
+    // 派同一步会把它派两遍（dispatched→dispatched 幂等合法，挡不住第二个写者）。占用方自己
+    // 的收尾会排空队列。任务级结账照走——它有版本与终态守卫，覆盖不了才留给下一轮兜底。
+    if (holder === undefined) {
+      // 这是无人观看的后台收尾：没有对应的 SSE 轮次，事件如实产出后不外推。
+      for await (const _event of this.drainQueue({
+        taskId, actor, goal: record.goal, signal: new AbortController().signal,
+      })) { /* 后台收尾没有 SSE 观众 */ }
+    }
     const after = await this.storage.task(actor, taskId)
     if (after === undefined || after.subtasks.some(item => !isTerminal(item.state))) return
-    /**
-     * 收尾走**与其余三条路径同一个实现**（{@link settleTask}）。差异只有两个，都以参数表达：
-     *
-     * - `summarize: false`：这是无人观看的后台收尾，没有对应的 SSE 轮次，跑汇总只会白烧一次
-     *   模型调用（设计 §5.4 的既定口径）；
-     * - `settleErrorOverride`：这条路径的结论对用户来说是"没人回话所以停了"，而不是
-     *   "N 个子任务失败"。
-     *
-     * 结论与写入一律由 `settleTask` 负责，**包括那道与汇总路径同样的版本屏障**
-     * （`completed` / `partial` 只在 `accepted_version <= processed_version` 的行上生效）。
-     * 这里不再自己算失败数、也不自己写终态：判定与写入各留一份的后果，实测就是这条路径把
-     * 已经写好的 `cancelled` 覆盖成 `partial`、或者按旧范围给新目标下结论。
-     *
-     * 事件全部丢弃：后台路径没有观众（先写库、后上报的顺序在 `drainQueue` 内部保持）。
-     * 合并顺带统一了一处细节：材料为空时 `settleTask` 会用兜底正文（"这次没有拿到可用的子任务
-     * 结果。"），而这条路径原先写空串 —— 统一到同一条口径是合并的收益，不是顺手改动。
-     */
     for await (const _event of this.settleTask({
       taskId,
       actor,
-      // 后台路径拿不到会话句柄：`settleTask` 照常落终态，只是不跑汇总（`summarize` 已是 false）。
       conversation: undefined,
       goal: after.goal,
-      // 只看有效尝试：被替代掉的旧尝试不参与这一轮结论（与 closeTask 的调用方同口径）。
       subtasks: effectiveSubtasks(after.subtasks),
-      // 任务级口径与每步口径一并取到：本批只扩签名，消费点（汇总提示词）排在下一批。
       ...(after.acceptance === '' ? {} : { acceptance: after.acceptance }),
       reports: await this.storedReports(actor, taskId),
       signal: new AbortController().signal,
-      // 这条路径没有「这一轮被喊停」这一说：会话上没有对应的 SSE 轮次，唯一的停止信号就是
-      // 子任务里的取消 —— 由判定内部从子任务状态里读出来。
       stopped: false,
       summarize: false,
-      settleErrorOverride: WAITING_EXPIRED_TASK,
+      settleErrorOverride,
     })) { /* 后台收尾没有 SSE 观众 */ }
   }
 
-  /** 在会话上开一份新的事件日志，覆盖它的上一轮。 */  private beginLog(conversationId: string, runId: string): ConversationLog<ButlerEvent> {
+  /**
+   * 喊停时把这个会话里挂着「等你回话」的步骤一并收掉（收成 `cancelled`，材料保留）。
+   *
+   * 等待中的步骤没有活跃 run，`cancel` 只看 `this.runs` 时它们喊不停（#14）——等待又
+   * 不设执行定时器，用户面对一条永远挂着且无处回话的任务没有任何收尾手段。喊停是老板
+   * 的明确意志，等待作废（材料保留）是它最贴近的语义。
+   *
+   * 返回收掉的条数；0 表示这个会话本来就没有等待中的步骤。
+   */
+  private async stopWaitingSubtasks(conversationId: string, actor: Actor, taskId = ''): Promise<number> {
+    const stopped = await this.storage.cancelWaitingSubtasks(actor, conversationId, WAITING_STOPPED, taskId)
+    if (stopped.length === 0) return 0
+    for (const item of stopped) {
+      this.clearWaitingTimeout(`${item.taskId}:${item.subtaskId}`)
+      this.waiting.delete(`${item.taskId}:${item.subtaskId}`)
+    }
+    for (const taskId of new Set(stopped.map(item => item.taskId))) {
+      await this.finishTaskAfterBackgroundWrite(taskId, actor, WAITING_STOPPED_TASK)
+    }
+    return stopped.length
+  }
+
+  /**
+   * 兜底：收掉明显超过 `waitingTimeoutMs` 仍挂在等待里的步骤。
+   *
+   * 等待超时靠内存 `setTimeout`（{@link scheduleWaitingTimeout}），闹钟挂不上或进程内
+   * 丢失时，等待会挂到下一次服务重启才被 `failInterrupted` 收敛——生产实测挂过 50+ 分钟
+   * （#6）。这里在用户动作的入口上再扫一遍：晚于闹钟 60 秒才动手（正常情况轮不到它），
+   * 只收"闹钟明显不在了"的。`started_at` 是首次进入执行的时间，等待必然发生在它之后，
+   * 拿它当兜底口径只会提前收、不会漏收。
+   */
+  private async sweepStaleWaitings(actor: Actor): Promise<void> {
+    if (this.disposed) return
+    // 阈值取两倍时限：闹钟活着的话，等待最多存活一个时限就被它收掉；超过两倍还挂着，
+    // 只可能是闹钟真丢了。用时限本身会把「执行很久后才提问」「回话后的第二次等待」误收
+    // （它们的 started_at 是首次派发时间，比等待本身早得多）。
+    const stale = await this.storage.staleWaitingSubtasks(actor, this.config.waitingTimeoutMs * 2 + 60_000)
+    for (const item of stale) {
+      const key = `${item.taskId}:${item.subtaskId}`
+      // 闹钟还在内存里就轮不到兜底：二次等待刚挂上时 started_at 早已很老，时间条件分不出
+      // 「新等待」和「死闹钟」，内存表分得出（#6）。
+      if (this.waitingTimers.has(key)) continue
+      const displayName = await this.displayNameOf(actor, item.agentId)
+      await this.expireWaiting(key, item.taskId, item.subtaskId, displayName, actor).catch(error => {
+        console.error(`butler-console: 兜底超时收尾失败（${key}）：${visibleError(error, 300)}`)
+      })
+    }
+  }
+
+  /** 在会话上开一份新的事件日志，覆盖它的上一轮。 */
+  private beginLog(conversationId: string, runId: string): ConversationLog<ButlerEvent> {
     const log = new ConversationLog<ButlerEvent>(this.config.maxConversationEvents)
     log.begin(runId)
     this.logs.set(conversationId, log)
@@ -3174,7 +3250,34 @@ export class ButlerConsole {
     const record = await this.storage.task(actor, taskId)
     const declared = (record?.subtasks.find(item => item.id === subtaskId)?.memberReturn as
       { readonly actions?: readonly AgentAction[] } | undefined)?.actions ?? []
-    const actions = ownPendingActions(declared, result.actions ?? [], claimedByOthers(record, subtaskId))
+    // 归属判定还要跨**任务**看一圈：待办清单按成员会话共享，同会话先开的任务已经声明过的卡，
+    // 后开任务的步骤不能再整份收进名下——收了就是同一张卡挂两处，点挂在后出任务下的那张，
+    // 结算的是错的任务（生产 #13）。
+    //
+    // ⚠️ 但排除表**不能把"成员本轮真的新做出来的卡"也排掉**：同一成员会话先后跑两个任务时，
+    // 成员为新任务做的卡 id 是新的，不在任何旧声明里，正常进入本步名下；真正要防的只有
+    // "别的任务**声明过**的卡"被重复挂载。此前这里的排除表按"同会话所有任务的声明"取全集，
+    // 会把**成员刚做出来、但恰好与旧任务同会话**的新卡一并排掉——卡片在界面上无处安放，
+    // op 却活着，用户点确认得 404「这条待办不存在」（生产 2026-09-19 清理任务，365/369 三连）。
+    // 修正：跨任务排除只取"旧任务里**当前仍是 prepared 且还没被本会话之外消费**"太复杂，
+    // 且归属的真正判据是 op 的 logicalId 指向哪一步。改为：排除表中只保留
+    // "memberReturn 明文声明过"的那些 id（siblingClaimedActionIds 已按此实现），
+    // 同时把"本轮 result.actions 里 id 是新的、不等于任何旧声明"的卡**强制归属本步**
+    // ——声明权按"谁先把它画给用户"算。
+    const claimed = new Set(claimedByOthers(record, subtaskId))
+    const memberConversationId = result.conversationId ?? record?.subtasks.find(item => item.id === subtaskId)?.conversationId ?? ''
+    const siblingClaims = memberConversationId === ''
+      ? new Map<string, string>()
+      : await this.storage.siblingClaimedActionIds(actor, memberConversationId, taskId)
+    // 归属唯一判据是 op 的 logicalId（成员声明这张卡时写下的 "run:<taskId>:<subtaskId>"）：
+    // - 指向**别的任务/别的步骤** → 进排除表（重复挂载面，#13）；
+    // - 指向**本步** → 从排除表放行（本步快照即便被清过，成员交回时也要归位）。
+    // 没有 logicalId 的老数据按排除表处理。豁免语义由此精确，不再按"新卡"猜。
+    for (const [id, logical] of siblingClaims) {
+      if (logical === `run:${taskId}:${subtaskId}`) claimed.delete(id)
+      else if (logical !== '') claimed.add(id)
+    }
+    const actions = ownPendingActions(declared, result.actions ?? [], claimed)
     const memberReturn: ButlerMemberReturn = {
       ...memberReturnOf(result),
       ...(actions.length === 0 ? { actions: [] } : { actions }),
@@ -3255,9 +3358,10 @@ export class ButlerConsole {
     fresh: readonly AgentAction[]
     /** 刚刚办完的那一步：它自己那份由调用方连同结果一起写入，这里跳过。 */
     skipSubtaskId: string
-  }): Promise<void> {
+  }): Promise<readonly { subtaskId: string; state: SubtaskState; actions: readonly AgentAction[]; agentId: string; displayName: string }[]> {
     const record = await this.storage.task(input.actor, input.taskId)
-    if (record === undefined) return
+    if (record === undefined) return []
+    const refreshed: { subtaskId: string; state: SubtaskState; actions: readonly AgentAction[]; agentId: string; displayName: string }[] = []
     for (const step of record.subtasks) {
       if (step.id === input.skipSubtaskId) continue
       if (step.conversationId !== input.conversationId) continue
@@ -3271,7 +3375,15 @@ export class ButlerConsole {
       await this.settleSubtaskState(input.taskId, step.id, step.state, {
         memberReturn: { ...step.memberReturn, actions: own },
       })
+      // 快照变了必须**发事件**：实时视图里这张卡还画在兄弟步骤名下（随会话级清单进的），
+      // 不发事件它就残留在界面上可点，点了提交的是错步骤 → 404「这条待办不存在」
+      // （生产 2026-09-19，同一会话两张删除卡第二张必挂；刷新后一切正常，正是缺这条事件）。
+      refreshed.push({
+        subtaskId: step.id, state: step.state, actions: own, agentId: step.agentId,
+        displayName: await this.displayNameOf(input.actor, step.agentId),
+      })
     }
+    return refreshed
   }
 
   /**
@@ -3479,6 +3591,10 @@ export class ButlerConsole {
 
     const controller = new AbortController()
     const onAbort = () => controller.abort()
+    // addEventListener 对"已经 aborted"的 signal 不会回调：并行派发后，喊停可能落在这条
+    // 流被选出与注册监听之间（批前检查之后的窗口）——不补这一句，它会白跑一整轮模型
+    // 调用直到执行超时，与喊停语义相悖。
+    if (signal.aborted) controller.abort()
     signal.addEventListener('abort', onAbort, { once: true })
     let timedOut = false
     const timer = setTimeout(() => { timedOut = true; controller.abort() }, this.config.subtaskTimeoutMs)
@@ -3572,8 +3688,11 @@ export class ButlerConsole {
       if (result.status === 'failed') {
         // `detail` 用落库返回的**同一个值**：实时与刷新后看到的是同一段正文。
         const detail = await this.applyMemberResult({ actor: input.actor, taskId, subtaskId, result, emptyText: `${displayName} 没干成这活` })
+        // 事件里的待办只发**落库归这一步**的那份（见 persistedActionsForEmit）：原始 result.actions
+        // 是会话级清单，原样发出去会把别的步骤的卡画到这一步名下，点了结算错步骤（生产 2026-09-19）。
+        const actions = await this.persistedActionsForEmit(input.actor, taskId, subtaskId)
         yield emit('failed', detail, {
-          ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
+          ...(actions.length > 0 ? { actions } : {}),
         })
         return { state: 'failed', report: `【${displayName}】失败：${detail}` }
       }
@@ -3590,11 +3709,12 @@ export class ButlerConsole {
         })
         // 等待不是终态，执行的定时器已经撤了，这里另起一个等回话的。
         await this.scheduleWaitingTimeout(taskId, subtaskId, displayName, input.actor)
+        const actions = await this.persistedActionsForEmit(input.actor, taskId, subtaskId)
         yield emit('waiting_user', detail, {
           phase: 'waiting_user',
           question,
           ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
-          ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
+          ...(actions.length > 0 ? { actions } : {}),
         })
         return { state: 'waiting_user', report: `【${displayName}】等着你回话：${question}` }
       }
@@ -3610,9 +3730,10 @@ export class ButlerConsole {
         }
         // 待办理由随结果落库（applyMemberResult）：只留在事件里的话，刷新之后任务详情
         // 就只剩一段正文，看不出还等着谁做什么。
+        const actions = await this.persistedActionsForEmit(input.actor, taskId, subtaskId)
         yield emit('external_pending', detail, {
           ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
-          ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
+          ...(actions.length > 0 ? { actions } : {}),
           pending: {
             reason,
             ...(result.externalPending?.next === undefined ? {} : { next: result.externalPending.next }),
@@ -3621,8 +3742,9 @@ export class ButlerConsole {
         return { state: 'external_pending', report: `【${displayName}】${detail}` }
       }
       const summary = await this.applyMemberResult({ actor: input.actor, taskId, subtaskId, result })
+      const actions = await this.persistedActionsForEmit(input.actor, taskId, subtaskId)
       yield emit('succeeded', summary, {
-        ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
+        ...(actions.length > 0 ? { actions } : {}),
       })
       return { state: 'succeeded', report: summary }
     } catch (error) {
@@ -3703,7 +3825,10 @@ export class ButlerConsole {
     // 必须在写 running 让出执行权**之前**撤：写库的 await 窗口里闹钟一旦触发，超时的条件
     // 更新先落地，running 会被转移守卫挡成 no-op，这一步就被钉死在超时结局上。
     this.clearWaitingTimeout(`${input.taskId}:${input.subtaskId}`)
-    await this.queueSubtaskWrite(input.taskId, input.subtaskId, () => this.storage.setSubtaskState(input.taskId, input.subtaskId, 'running'))
+    // 转移核验：准备期间等待可能已被喊停/兜底收掉（它们不占会话 claim，claimNow 挡不住
+    // 这个窗口）。写不进 running（0 行）就如实拒绝，不再驱动成员白跑一轮。
+    const moved = await this.queueSubtaskWrite(input.taskId, input.subtaskId, () => this.storage.setSubtaskState(input.taskId, input.subtaskId, 'running'))
+    if (moved === 0) throw new AccessError(409, '这次等待刚刚被喊停或收掉了，重新描述你的目标就能接着办', 'waiting_gone')
     const abort = new AbortController()
     this.runs.set(record.conversationId, { runId, abort })
     // 原成员会话引用（G01）：等待登记里的早期上报优先，库里落的结果引用兜底。
@@ -3754,13 +3879,24 @@ export class ButlerConsole {
     const subtask = record.subtasks.find(item => item.id === input.subtaskId)
     if (subtask === undefined) throw new AccessError(404, '这个子任务不存在', 'subtask_not_found')
     // 归属之外再核一次"这条操作确实属于这一步"：客户端传来的 actionId 不能越权去动别人的待办。
-    const actions = (subtask.memberReturn as { readonly actions?: readonly AgentAction[] } | undefined)?.actions ?? []
-    if (!actions.some(action => action.id === input.actionId)) {
+    // ⚠️ **归属以 actionId 在全任务内的真实宿主为准，而不是客户端传来的 subtaskId**：
+    // 同一会话的待办清单按成员会话共享，前端可能把同一张卡画到多个步骤名下（实时视图与
+    // 刷新重建各一份）；用户点的永远是"他看到的那张卡"——卡只有一个，结算就该落在它的
+    // 真实宿主上（生产 2026-09-19：第二张卡被画进第一步的格子，按提交的 s1 找不到 → 404，
+    // 卡永远办不掉）。actionId 在多步同时出现（理论上不该有）时按最早声明的那步算。
+    const owner = record.subtasks.find(item =>
+      ((item.memberReturn as { readonly actions?: readonly AgentAction[] } | undefined)?.actions ?? [])
+        .some(action => action.id === input.actionId))
+    if (owner === undefined) {
       throw new AccessError(404, '这条待办不存在或已经办完了', 'action_not_found')
     }
-    const executor = resolveExecutor(this.ctx, subtask.agentId)
+    const subtaskId = owner.id
+    const subtaskForAction = owner
+    void subtask
+    const actions = (subtaskForAction.memberReturn as { readonly actions?: readonly AgentAction[] } | undefined)?.actions ?? []
+    const executor = resolveExecutor(this.ctx, subtaskForAction.agentId)
     if (executor?.applyAction === undefined) {
-      throw new AccessError(409, `${subtask.agentId} 没有实现就地确认，请到它的页面里办理`, 'action_unsupported')
+      throw new AccessError(409, `${subtaskForAction.agentId} 没有实现就地确认，请到它的页面里办理`, 'action_unsupported')
     }
     // 同会话执行互斥：一次只允许一个决策/回话/补充在跑（防止同一个确认被并发执行两次）。
     if (!this.claimNow(record.conversationId, runId, 'action')) {
@@ -3832,20 +3968,47 @@ export class ButlerConsole {
       const fresh = result.status === 'external_pending'
         // 成员说"还有别的待办"却没交回清单：不知道还剩什么，原样留着，不凭空清空。
         ? (result.actions === undefined || result.actions.length === 0 ? declared : result.actions)
-        // 没说还有待办（成功）/失败/取消：这个会话里没有未办的事了，或者状态无从判断。
-        : result.status === 'failed' || result.status === 'cancelled' ? declared : []
-      const own = ownPendingActions(declared, fresh, claimedByOthers(record, subtaskId))
-      const state: SubtaskState = result.status === 'cancelled'
-        ? 'cancelled'
-        : result.status === 'failed'
-          ? 'failed'
-          : result.status === 'waiting_user'
-            ? 'waiting_user'
-            : own.length > 0 ? 'external_pending' : 'succeeded'
+        // 撤回：成员没交清单就等于没有剩余（成功同款）——留着 declared 会留一张
+        // 点了只回"已经办完了"的死卡；交了清单就清到只剩清单里的。
+        : result.status === 'cancelled'
+          ? (result.actions ?? [])
+          // 失败：操作没办成，卡还在原地。
+          : result.status === 'failed' ? declared : []
+      // 点卡结算与派发落库同一张归属排除表：本任务其他步骤 + **同成员会话其他任务**声明过的
+      // 卡都要排除（跨任务不排除的话，成员交回的会话级清单会把别的任务已声明的卡又挂到
+      // 这一步名下——同一张卡两处，点错的结算错任务，#13 在点卡路径的复发面）。
+      const actionClaimed = new Set(claimedByOthers(record, subtaskId))
+      const actionMemberConversation = result.conversationId ?? acting?.conversationId ?? ''
+      if (actionMemberConversation !== '') {
+        const siblingClaims = await this.storage.siblingClaimedActionIds(prepared.actor, actionMemberConversation, taskId)
+        for (const [id, logical] of siblingClaims) {
+          if (logical === `run:${taskId}:${subtaskId}`) actionClaimed.delete(id)
+          else if (logical !== '') actionClaimed.add(id)
+        }
+      }
+      const own = ownPendingActions(declared, fresh, actionClaimed)
+      // 撤回与办成同款：这一步自己还有别的卡在等就停在"待外部处理"等下一张；
+      // 一张都不剩时，确认 → succeeded，撤回 → cancelled（老板的"不要"是终态结论）。
+      const state: SubtaskState = result.status === 'failed'
+        ? 'failed'
+        : result.status === 'waiting_user'
+          ? 'waiting_user'
+          : own.length > 0
+            ? 'external_pending'
+            : result.status === 'cancelled' ? 'cancelled' : 'succeeded'
+      // 用户在确认卡上的决策是这一步的亲历事实：成员只转述结果，裁决与汇总只认材料。
+      // 写进 result 一处，裁决清单、任务快照与刷新后的页面读到同一句话（单一来源，
+      // 不在提示词里另行拼装）——没有它，裁决会把"点了确认"读成"没经过确认"（#12）。
+      const decisionFact = prepared.decision === 'confirm'
+        ? `用户已在确认卡上点了「确认」（操作 ${prepared.actionId.slice(0, 8)}）。`
+        : `用户已在确认卡上点了「先不办」，这一步按撤回收尾（操作 ${prepared.actionId.slice(0, 8)}）。`
       // 结果落库：待办的最新状态要能在刷新后重画（与派活那条路径同一个写法）。
+      // 材料同样要落库（批 2）：成员办结时交回的 `{ url, state, fields }` 写进步骤记录，
+      // 刷新后产出区才有得画、裁决才有 url/state 可比——只进事件不进库，重启就全丢。
       await this.settleSubtaskState(taskId, subtaskId, state, {
-        result: clip(result.summary ?? '', this.config.maxResultChars),
+        result: clip(`${decisionFact}${result.summary ?? ''}`, this.config.maxResultChars),
         memberReturn: { ...memberReturnOf(result), actions: own },
+        ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
         ...(result.conversationId === undefined ? {} : { conversationId: result.conversationId }),
       })
       /**
@@ -3854,9 +4017,21 @@ export class ButlerConsole {
        * 还会以为事情没办完。
        */
       if (result.conversationId !== undefined && result.conversationId !== '') {
-        await this.refreshSiblingPendingActions({
+        const refreshed = await this.refreshSiblingPendingActions({
           taskId, actor: prepared.actor, conversationId: result.conversationId, fresh, skipSubtaskId: subtaskId,
         })
+        // 兄弟步骤的待办快照变了就要**发事件**：实时视图里那张卡还画在兄弟名下（随会话级
+        // 清单进来的），不发事件它就残留在界面上可点，点了提交错步骤 → 404（生产 2026-09-19）。
+        // 状态不动、只换待办快照（同状态幂等迁移），事件让前端把兄弟名下的卡整块重画。
+        for (const item of refreshed) {
+          yield {
+            type: 'subtask', taskId, id: item.subtaskId, state: item.state,
+            agentId: item.agentId, displayName: item.displayName,
+            detail: item.state === 'external_pending' ? '会话里还有别的待确认操作，已按刚才的确认更新' : `待办已更新`,
+            time: Date.now(),
+            ...(item.actions.length > 0 ? { actions: item.actions } : {}),
+          }
+        }
       }
       yield* this.emitResultEvents(prepared, result)
       /**
@@ -3876,6 +4051,21 @@ export class ButlerConsole {
       if (this.runs.get(prepared.conversationId)?.runId === prepared.runId) this.runs.delete(prepared.conversationId)
       this.releaseClaim(prepared.conversationId, prepared.runId)
     }
+  }
+
+  /**
+   * 事件里的待办清单**只发落库后归这一步的那份**。
+   *
+   * `result.actions` 是成员交回的**会话级**清单（可能含别的步骤/别的卡的待办），事件里原样
+   * 发出去，前端就会把别人的卡画到这一步名下；用户点这张错位的卡，提交的是（这一步，这张卡），
+   * 而这一步的留存里没有它 → 404「这条待办不存在」（生产 2026-09-19，同一会话两张删除卡
+   * 第二张必挂）。落库路径（applyMemberResult）已经做过 own 归属过滤，这里直接**读回落库
+   * 的那份**——页面拿到的一定是库里那份。
+   */
+  private async persistedActionsForEmit(actor: Actor, taskId: string, subtaskId: string): Promise<readonly AgentAction[]> {
+    const record = await this.storage.task(actor, taskId)
+    return (record?.subtasks.find(item => item.id === subtaskId)?.memberReturn as
+      { readonly actions?: readonly AgentAction[] } | undefined)?.actions ?? []
   }
 
   /**
@@ -4029,7 +4219,7 @@ export class ButlerConsole {
           yield {
             type: 'subtask', taskId, id: subtaskId, state: 'succeeded', agentId, displayName, detail: summary, time: Date.now(),
             // 有的操作确认完就整轮成功了（例如"交给它去发布"），那一步也可能带新的待办。
-            ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
+            ...(await this.persistedActionsForEmit(prepared.actor, prepared.taskId, prepared.subtaskId)),
           }
           yield* this.settleAfterTurn(prepared)
           return
@@ -4045,7 +4235,7 @@ export class ButlerConsole {
             agentId, displayName, detail, time: Date.now(),
             ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }),
             // 待确认的操作跟着结果一起下发：页面**当场**就能画出确认卡（不必等刷新）。
-            ...(result.actions === undefined || result.actions.length === 0 ? {} : { actions: result.actions }),
+            ...(await this.persistedActionsForEmit(prepared.actor, prepared.taskId, prepared.subtaskId)),
             ...(!failed && result.externalPending?.next !== undefined ? { pending: { reason, next: result.externalPending.next } } : {}),
           }
           yield* this.settleAfterTurn(prepared)
@@ -4528,27 +4718,56 @@ export class ButlerConsole {
     for (;;) {
       const record = await this.storage.task(input.actor, input.taskId)
       if (record === undefined) return
-      const next = record.subtasks.find(item => item.state === 'queued' && !suspended.has(item.id))
-      if (next === undefined) return
+      // 取一批互不依赖候选里的**不同成员**步骤并发派出：计划工具鼓励把独立的事拆成并列
+      // 步骤，串行派发会让它们排队（每步最坏一个执行超时），成员一多吞吐先崩在这里。
+      // 同一成员每批只取一个（保守：执行方有自己的会话互斥，没必要让同成员多轮并发）。
+      const batch: SubtaskRecord[] = []
+      const seenAgents = new Set<string>()
+      for (const item of record.subtasks) {
+        if (item.state !== 'queued' || suspended.has(item.id)) continue
+        if (seenAgents.has(item.agentId)) continue
+        batch.push(item)
+        seenAgents.add(item.agentId)
+      }
+      if (batch.length === 0) return
       if (input.signal.aborted) return
-      yield* this.dispatchSubtask({
-        taskId: input.taskId, subtaskId: next.id, goal: next.goal, agentId: next.agentId,
-        displayName: await this.displayNameOf(input.actor, next.agentId), taskGoal: input.goal,
-        actor: input.actor, signal: input.signal,
-        // 从库里读回来的口径：进程重启后补派这一步时仍要带上（空串 = 这一步没有口径）。
-        ...(next.acceptance === '' ? {} : { acceptance: next.acceptance }),
-        // 重做溯源同样从库里读回（重启后补派这一步时也要带）。
-        ...(next.supersedes === '' ? {} : { reworkOf: next.supersedes }),
-        ...(next.dependsOn.length === 0 ? {} : { dependsOn: next.dependsOn }),
-        ...(next.requiresExternalAction ? { requiresExternalAction: true } : {}),
-      })
-      const after = (await this.storage.task(input.actor, input.taskId))?.subtasks.find(item => item.id === next.id)
-      if (after === undefined) return
-      // 派完仍排队中：前置仍未就绪，如实挂起，继续核验排在后面的。
-      if (after.state === 'queued') suspended.add(next.id)
+      const merged = new MergedEvents<ButlerEvent>()
+      for (const item of batch) {
+        merged.open()
+        void (async () => {
+          try {
+            for await (const event of this.dispatchSubtask({
+              taskId: input.taskId, subtaskId: item.id, goal: item.goal, agentId: item.agentId,
+              displayName: await this.displayNameOf(input.actor, item.agentId), taskGoal: input.goal,
+              actor: input.actor, signal: input.signal,
+              // 从库里读回来的口径：进程重启后补派这一步时仍要带上（空串 = 这一步没有口径）。
+              ...(item.acceptance === '' ? {} : { acceptance: item.acceptance }),
+              // 重做溯源同样从库里读回（重启后补派这一步时也要带）。
+              ...(item.supersedes === '' ? {} : { reworkOf: item.supersedes }),
+              ...(item.dependsOn.length === 0 ? {} : { dependsOn: item.dependsOn }),
+              ...(item.requiresExternalAction ? { requiresExternalAction: true } : {}),
+            })) {
+              merged.push(event)
+            }
+          } catch (error) {
+            merged.fail(error)
+          } finally {
+            merged.close()
+          }
+        })()
+      }
+      yield* merged.drain()
+      const after = (await this.storage.task(input.actor, input.taskId))?.subtasks ?? []
+      let settledAny = false
+      for (const item of batch) {
+        const state = after.find(entry => entry.id === item.id)?.state
+        // 派完仍排队中：前置仍未就绪，如实挂起，继续核验排在后面的。
+        if (state === 'queued') suspended.add(item.id)
+        else if (state !== undefined) settledAny = true
+      }
       // 有步骤真的结账（派出或判失败）：挂起中的那些前置可能因此就绪，全部重新核验一轮。
       // 结账最多发生排队项数那么多次，循环必然收敛。
-      else suspended.clear()
+      if (settledAny) suspended.clear()
     }
   }
 
@@ -4657,6 +4876,7 @@ export class ButlerConsole {
       '清单里任何一步漏掉，你的整条回复都会被拒绝 —— 所以先裁完、再写。',
       '',
       '怎么裁：产出对得上这一步的目标、可以采纳 ⇒ `accept`，并附上**在该步结果里原样出现**的一小段证据（核验不过会降级成"未核验"）；该由同一位成员再做一次 ⇒ `rework`；该换一位成员重做 ⇒ `replace`（要给 `newAgentId`）。',
+      '结果里写明「用户已在确认卡上点了『确认』/『先不办』」的步骤：那是老板亲自做的决定，一律 `accept`，附上那句话作证据；点了「先不办」的更不要 `rework` —— 老板的"不要"就是结论。',
       '',
       ...verdictContext.open.map(item => [
         `- \`${item.id}\`（${item.agentId}）目标：${item.goal}`,
@@ -4665,8 +4885,8 @@ export class ButlerConsole {
       ].join('\n')),
     ]
     const prompt = [
-      `我的原始目标是：${goal}`,
-      '各子 Agent 已经返回结果：',
+      `${SUMMARY_PROMPT_GOAL}${goal}`,
+      `${SUMMARY_PROMPT_RESULTS}：`,
       ...lines,
       ...verdictLines,
       ...acceptanceLines,

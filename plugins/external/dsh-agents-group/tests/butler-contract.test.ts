@@ -91,10 +91,20 @@ describe('群组执行入口被牛马大总管接受', () => {
     expect(blog?.entryPath).toBe('/agents/blog')
   })
 
-  it('协议版本不匹配时牛马大总管明确拒绝，而不是静默忽略', () => {
-    // 静默忽略会让「插件装了但牛马大总管看不见」变成一个查不出原因的现象。
-    const wrong = [{ ...executors[0]!, protocol: 2 }]
-    expect(() => collectExecutors(fakeContext(wrong))).toThrow(/协议版本不兼容/u)
+  it('协议版本不匹配时该入口被跳过并告警，其余成员不受牵连', () => {
+    // 容错口径：一个不兼容的入口不该让整份名单读不出来（跳过 + 服务端告警，可查原因），
+    // 也不能静默当它不存在——告警里带 id 与协议号。兼容入口照常可用。
+    const mixed = [{ ...executors[0]!, protocol: 2 }, ...executors.slice(1)]
+    const originalWarn = console.warn
+    const calls: unknown[] = []
+    console.warn = (value: unknown) => { calls.push(value) }
+    try {
+      const accepted = collectExecutors(fakeContext(mixed))
+      expect(accepted.size, '不兼容的那一个不进名单').toBe(executors.length - 1)
+      expect(String(calls[0] ?? ''), '告警可查原因').toMatch(/协议不兼容/u)
+    } finally {
+      console.warn = originalWarn
+    }
   })
 
   it('缺少 agentId 时牛马大总管明确拒绝', () => {

@@ -5,7 +5,7 @@
  * 目录里有但没有登记入口的 Agent 仍然会被列出来（标为不可调度）——这是「谁在生态里」的
  * 事实来源；但群成员名单只收可调度的那些，页面与成员提示词里都不会出现不可调度的应用。
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { agentCard, collectExecutors, listAgentCards, resolveExecutor } from '../src/agents.ts'
 import type { ButlerAgentExecutor } from '../src/protocol.ts'
@@ -188,9 +188,23 @@ describe('执行入口登记', () => {
     expect(() => collectExecutors(ctx)).toThrow(/重复登记/u)
   })
 
-  it('拒绝协议版本不兼容的登记', () => {
-    const ctx = fakeContext([], [{ protocol: 2, agentId: 'blog', dispatch: async () => ({ status: 'succeeded', summary: '' }) } as unknown as ButlerAgentExecutor])
-    expect(() => collectExecutors(ctx)).toThrow(/协议版本/u)
+  it('跳过协议版本不兼容的登记并告警，不拖垮其余成员', () => {
+    // 一个不兼容的入口不该让整份名单读不出来（成员多样化后的容错要求）；
+    // 兼容入口照常收进来。
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const ctx = fakeContext([], [
+        { protocol: 2, agentId: 'stranger', dispatch: async () => ({ status: 'succeeded', summary: '' }) } as unknown as ButlerAgentExecutor,
+        executor('blog'),
+      ])
+      const executors = collectExecutors(ctx)
+      expect(executors.has('stranger')).toBe(false)
+      expect(executors.has('blog')).toBe(true)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/协议不兼容/)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('拒绝缺少 agentId 的登记', () => {

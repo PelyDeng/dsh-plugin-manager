@@ -150,8 +150,12 @@ export type AgentExecutionStatus =
 /**
  * 执行方交回的一份材料。
  *
- * 只带位置，不带内容：正文由执行方自己的页面负责呈现与鉴权，协调方只做定位，
- * 不复制一份可能已经过期的副本。
+ * 基础三字段只带位置，不带内容：正文由执行方自己的页面负责呈现与鉴权，协调方只做定位，
+ * 不复制一份可能已经过期的副本。可选的核验字段（`url` / `state` / `fields`）补的是
+ * 「办完了之后，产出长什么样」：没有它们，协调方只能证明「有材料交回」，证明不了
+ * 「口径点名要的那种东西交回来了」。
+ *
+ * 全部可选 ⇒ 老执行方缺省即原状；这类**只加不改**的扩张不升协议版本，破坏性变更才升。
  */
 export interface AgentArtifact {
   /** 给用户看的标题，例如「在博客查看并采用候选稿」。 */
@@ -160,6 +164,23 @@ export interface AgentArtifact {
   readonly path: string
   /** 材料种类，由执行方自己定义（例如 `draft`、`confirmation`）。 */
   readonly kind: string
+  /**
+   * 可核验的访问地址（例如已发布文章的 URL），由执行方从**自己的业务记录**里取。
+   *
+   * 渲染方必须白名单 `http(s)` 并带 `rel="noopener noreferrer"`，外域给显式提示；
+   * 协议不认识（`javascript:`、`data:` 等）时按纯文本降级，绝不渲染成可点的链接。
+   * 这里永远不放凭据——它是给用户点开核对的公开位置。
+   */
+  readonly url?: string
+  /**
+   * 材料的状态标识，取自执行方**自己的词表**（例如 `published` / `draft`）。
+   *
+   * 供程序对照（验收口径点名「已发布」时拿它比，而不是解析正文措辞）；协调方不猜
+   * 不认识的值的语义，原样落库、原样显示。
+   */
+  readonly state?: string
+  /** 给人看的结构化行（与操作卡的 {@link AgentActionField} 同形），如「发布状态：已发布」。 */
+  readonly fields?: readonly AgentActionField[]
 }
 
 /**

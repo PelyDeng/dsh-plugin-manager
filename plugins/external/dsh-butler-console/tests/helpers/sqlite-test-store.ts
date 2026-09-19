@@ -424,10 +424,10 @@ export class TaskStore {
     this.db.prepare(`UPDATE tasks SET state=?, updated_at=?,
         note=COALESCE(?,note), summary=COALESCE(?,summary), error=COALESCE(?,error),
         finished_at=CASE WHEN ?=1 THEN COALESCE(finished_at,?) ELSE finished_at END
-      WHERE id=?`).run(
+      WHERE id=? AND (?=1 OR state NOT IN ('completed','failed','cancelled','partial'))`).run(
       state, Date.now(),
       patch.note ?? null, patch.summary ?? null, patch.error ?? null,
-      terminal ? 1 : 0, Date.now(), id,
+      terminal ? 1 : 0, Date.now(), id, terminal ? 1 : 0,
     )
   }
 
@@ -944,6 +944,46 @@ export class SqliteButlerStorage implements ButlerStorage {
     return true
   }
 
+  async cancelWaitingSubtasks(actor: Actor, conversationId: string, error: string, taskId = ''): Promise<readonly { taskId: string; subtaskId: string }[]> {
+    // 与 expireWaitingSubtask 同款「读-核-写」替身：同步调用内完成，无 await 窗口。
+    const stopped: { taskId: string; subtaskId: string }[] = []
+    for (const item of this.store.history(actor, { offset: 0, limit: 1000, keyword: '', state: '' }).items) {
+      if (item.conversationId !== conversationId) continue
+      if (taskId !== '' && item.id !== taskId) continue
+      for (const subtask of this.store.task(actor, item.id)?.subtasks ?? []) {
+        if (subtask.state !== 'waiting_user') continue
+        this.store.setSubtaskState(item.id, subtask.id, 'cancelled', { error })
+        stopped.push({ taskId: item.id, subtaskId: subtask.id })
+      }
+    }
+    return stopped
+  }
+
+  async staleWaitingSubtasks(actor: Actor, minAgeMs: number): Promise<readonly { taskId: string; subtaskId: string; agentId: string }[]> {
+    const cutoff = Date.now() - minAgeMs
+    const stale: { taskId: string; subtaskId: string; agentId: string }[] = []
+    for (const item of this.store.history(actor, { offset: 0, limit: 1000, keyword: '', state: '' }).items) {
+      for (const subtask of this.store.task(actor, item.id)?.subtasks ?? []) {
+        if (subtask.state !== 'waiting_user' || subtask.startedAt === null || subtask.startedAt >= cutoff) continue
+        stale.push({ taskId: item.id, subtaskId: subtask.id, agentId: subtask.agentId })
+      }
+    }
+    return stale
+  }
+
+  async siblingClaimedActionIds(actor: Actor, memberConversationId: string, excludeTaskId: string): Promise<ReadonlyMap<string, string>> {
+    // 与 PG 版同语义：返回 actionId → logicalId（声明这张卡时写下的归属）。
+    const claimed = new Map<string, string>()
+    for (const item of this.store.history(actor, { offset: 0, limit: 1000, keyword: '', state: '' }).items) {
+      if (item.id === excludeTaskId) continue
+      for (const subtask of this.store.task(actor, item.id)?.subtasks ?? []) {
+        if (subtask.conversationId !== memberConversationId) continue
+        for (const action of subtask.memberReturn?.actions ?? []) claimed.set(action.id, `run:${item.id}:${subtask.id}`)
+      }
+    }
+    return claimed
+  }
+
   async aliases(actor: Actor): Promise<Map<string, { displayName: string; accent: string }>> {
     return this.store.aliases(actor)
   }
@@ -1088,4 +1128,13 @@ export class SqliteButlerStorage implements ButlerStorage {
   async close(): Promise<void> {
     this.store.close()
   }
+}
+
+/**
+ * 把子任务的 `started_at` 拨回到 ageMs 之前：兜底扫描的判定读它，测试里要摆出"等了很久"。
+ * 真实生命周期里这个时间不可回拨，所以只在测试助手里直写。
+ */
+export function ageStartedAt(store: TaskStore, taskId: string, subtaskId: string, ageMs: number): void {
+  const db = (store as unknown as { db: import('node:sqlite').DatabaseSync }).db
+  db.prepare('UPDATE subtasks SET started_at = ? WHERE task_id = ? AND id = ?').run(Date.now() - ageMs, taskId, subtaskId)
 }
