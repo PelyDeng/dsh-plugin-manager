@@ -73,12 +73,14 @@ describe('聊天图片预览：受控渲染边界', () => {
     expect(texts.join('')).toContain('。后续文字。')
   })
 
-  it('预览地址按 kkFileView 实测约定拼装：url=直接 Base64（不 encodeURIComponent，编码版 403）', () => {
+  it('预览地址按 kkFileView 实测约定拼装：url=encodeURIComponent(Base64(明文))——官方可行形态', () => {
     const found = pics(IMG)
     const href = found[0]!.attrs?.href ?? ''
     expect(href.startsWith('https://preview.pelycloud.com/onlinePreview?url=')).toBe(true)
-    // 实测（2026-09-19）：kkFileView 只认「直接 Base64」；编码后 %3A 会被拒成 403。
-    expect(Buffer.from(href.split('url=')[1] ?? '', 'base64').toString()).toBe(IMG)
+    // 实测（2026-09-19，kkFileView 5.0.2）：Base64 里装**明文**地址；内层 encode 的
+    // 编码态地址会被拒成 403/UNKNOWN。外层 encodeURIComponent 防止 Base64 的 "+" 被
+    // query 解析成空格（官方约定形态，服务端实测 ✅）。
+    expect(Buffer.from(decodeURIComponent(href.split('url=')[1] ?? ''), 'base64').toString()).toBe(IMG)
     // data-preview 供点击弹窗取原始地址；href/target 只是 JS 失效时的回退。
     expect(found[0]!.attrs?.['data-preview']).toBe(IMG)
     expect(found[0]!.attrs?.target).toBe('_blank')

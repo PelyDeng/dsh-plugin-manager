@@ -44,7 +44,9 @@ const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp)(?:[?#].*)?$/iu
 
 function kkFileViewUrl(src) {
   const ascii = /^[\x00-\x7F]*$/.test(src) ? src : encodeURI(src)
-  return `${KKFILEVIEW_BASE}/onlinePreview?url=${btoa(ascii)}`
+  // 外层 encodeURIComponent 是官方可行形态（实测 ✅）：裸 Base64 里的 "+" 进 query 会被
+  // 解析成空格——KK 5.0.2 有空格兜底，但不赌它。
+  return `${KKFILEVIEW_BASE}/onlinePreview?url=${encodeURIComponent(btoa(ascii))}`
 }
 
 /** 块级标签白名单：标签由渲染器固定，模型只能决定文本与结构。 */

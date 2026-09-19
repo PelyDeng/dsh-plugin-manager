@@ -30,7 +30,9 @@ const URL_RE = /https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/gu
 
 export function kkFileViewUrl(src) {
   const ascii = /^[\x00-\x7F]*$/.test(src) ? src : encodeURI(src)
-  return `${KKFILEVIEW_BASE}/onlinePreview?url=${btoa(ascii)}`
+  // 外层 encodeURIComponent 是官方可行形态（实测 ✅）：裸 Base64 的 "+" 进 query 有被
+  // 解析成空格的风险（KK 5.0.2 有兜底，不赌它）。
+  return `${KKFILEVIEW_BASE}/onlinePreview?url=${encodeURIComponent(btoa(ascii))}`
 }
 
 /** 地址末段的扩展名（小写）；没有按「文件」理解的扩展名时返回 undefined。 */

@@ -13,10 +13,13 @@ import assert from 'node:assert/strict'
 // 渲染层是无类型 JS；这里只 import 纯函数。
 const { kkFileViewUrl, fileExtensionOf } = await import('../web/file-preview.js')
 
-test('kkFileViewUrl：https 基址 + 直接 Base64（实测编码版会被拒 403）', () => {
+test('kkFileViewUrl：https 基址 + encodeURIComponent(Base64(明文))——官方可行形态', () => {
   const href = kkFileViewUrl('https://img.pelycloud.com/huiyu/report.pdf')
   assert.match(href, /^https:\/\/preview\.pelycloud\.com\/onlinePreview\?url=/)
-  assert.equal(Buffer.from(href.split('url=')[1] ?? '', 'base64').toString(), 'https://img.pelycloud.com/huiyu/report.pdf')
+  // Base64 里必须是**明文**地址（内层 encode 的编码态地址被 KK 拒成 403/UNKNOWN）；
+  // 外层 encodeURIComponent 防止 Base64 的 "+" 被 query 解析成空格。
+  const b64 = decodeURIComponent(href.split('url=')[1] ?? '')
+  assert.equal(Buffer.from(b64, 'base64').toString(), 'https://img.pelycloud.com/huiyu/report.pdf')
 })
 
 test('kkFileViewUrl：地址含非 ASCII 时先 encodeURI 再 Base64（btoa 不吃非 ASCII）', () => {
