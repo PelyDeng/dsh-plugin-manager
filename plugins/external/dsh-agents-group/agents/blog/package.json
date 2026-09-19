@@ -38,7 +38,7 @@
   "scripts": {
     "build": "tsdown && tsdown --config tsdown.web.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --test-timeout=30000 tests/actions.test.ts tests/conversation-history.test.mjs tests/participant.test.ts tests/native-drafts.test.ts tests/management.test.ts tests/clipboard.test.ts tests/attachments.test.ts tests/chat-store.test.ts tests/chat.test.ts tests/coordinator.test.ts tests/chat-ui.test.ts tests/article-diff.test.ts tests/drafts.test.ts tests/jobs.test.ts tests/models.test.ts tests/search.test.ts tests/reports.test.ts tests/storage-wiring.test.ts tests/definition.test.ts tests/turns-payload.test.ts tests/schema-parity.test.ts",
+    "test": "node --test --test-timeout=30000 tests/actions.test.ts tests/conversation-history.test.mjs tests/participant.test.ts tests/native-drafts.test.ts tests/management.test.ts tests/clipboard.test.ts tests/attachments.test.ts tests/chat-store.test.ts tests/chat.test.ts tests/coordinator.test.ts tests/chat-ui.test.ts tests/article-diff.test.ts tests/drafts.test.ts tests/jobs.test.ts tests/models.test.ts tests/search.test.ts tests/reports.test.ts tests/storage-wiring.test.ts tests/definition.test.ts tests/turns-payload.test.ts tests/schema-parity.test.ts tests/file-preview.test.ts",
     "test:host": "node --test --test-timeout=60000 tests/http.test.ts tests/chat-history-native.test.ts tests/chat-backup-native.test.ts",
     "test:pg": "node --test --test-timeout=60000 tests/pg-smoke.test.ts",
     "test:bridge": "php -n -l typecho/DshBlogBridge/Plugin.php && php -n tests/management-bridge.test.php",

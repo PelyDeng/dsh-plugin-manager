@@ -530,7 +530,65 @@ textarea:focus-visible,
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md p { margin: 0 0 8px; }
-/* 聊天里的图片（受控渲染的缩略图）：点击新窗口进 kkFileView 看大图。
+/* 聊天里的文件卡（非图片文件的地址）：着重显示 + 点击弹窗预览。
+   与图片缩略图的分工：图片「直接看得见」，文件「着重 + 点击」——长会话里一眼分出。 */
+.md .md-file {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin: 3px 0; padding: 5px 10px;
+  max-width: 100%;
+  background: var(--bt-card);
+  border: 1.5px dashed var(--bt-sky);
+  border-radius: 8px;
+  font-size: 12.5px; line-height: 1.4;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.md .md-file:hover { border-style: solid; background: #f0f7ff; }
+.md .md-file__ext {
+  flex: none;
+  padding: 0 5px; border-radius: 4px;
+  background: var(--bt-sky); color: #fff;
+  font-family: var(--bt-mono); font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.5px; text-transform: uppercase;
+}
+.md .md-file__name { color: var(--bt-ink); font-weight: 600; min-width: 0; }
+
+/* kkFileView 页内预览弹窗：图片与文件共用。全屏遮罩 + 居中面板，Esc/遮罩/按钮关闭。 */
+.kkp { position: fixed; inset: 0; z-index: 999; }
+.kkp[hidden] { display: none; }
+.kkp__backdrop { position: absolute; inset: 0; background: #0009; }
+.kkp__panel {
+  position: absolute; inset: 4vh 4vw;
+  display: flex; flex-direction: column;
+  background: var(--bt-card);
+  border: 2px solid var(--bt-stroke);
+  border-radius: 12px;
+  box-shadow: 6px 8px 0 #00000026;
+  overflow: hidden;
+}
+.kkp__bar {
+  flex: none;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px dashed var(--bt-line);
+  background: #fffdf6;
+}
+.kkp__title {
+  flex: 1; min-width: 0;
+  font-family: var(--bt-hand); font-size: 13.5px; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kkp__close {
+  flex: none;
+  padding: 3px 10px;
+  border: 1.5px solid var(--bt-stroke); border-radius: 8px;
+  background: #fff; font-size: 12px;
+}
+.kkp__close:hover { background: var(--bt-error-bg); }
+.kkp__frame { flex: 1; width: 100%; border: 0; background: #fff; }
+@media (max-width: 640px) { .kkp__panel { inset: 2vh 2vw; } }
+
+/* 聊天里的图片（受控渲染的缩略图）：点击进页内预览弹窗（kkFileView）。
    宽度封顶 380px、高度封顶 280px：预览够看清内容，不把会话撑成长图墙。 */
 .md .md-pic { display: inline-block; margin: 4px 0; max-width: min(100%, 380px); line-height: 0; border-radius: 8px; }
 .md .md-pic img { display: block; width: auto; height: auto; max-width: 100%; max-height: 280px; border: 1px solid var(--bt-line); border-radius: 8px; background: var(--bt-card); }

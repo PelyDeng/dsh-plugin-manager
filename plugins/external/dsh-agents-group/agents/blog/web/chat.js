@@ -26,6 +26,8 @@ export function chatConversationTarget(search,previous=null){
   return new URLSearchParams(search).get('conversationId')||previous||null
 }
 
+import { enhancePreviews } from './file-preview.js'
+
 export function initChat({api,request,identity,openDraft,renderMarkdown}){
   const $=id=>document.getElementById(id),base=document.body.dataset.base
   const state={id:null,epoch:0,history:null,files:[],feedback:new Map(),feedbackReady:false,stream:null,offset:null,sending:false,stopping:false,uploading:false,liveClock:0,pending:null}
@@ -106,7 +108,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
     if(!data.busy){const feedback=await api('chat-feedback',{conversationId:id,operation:'list'});if(epoch!==state.epoch||version!==refreshVersion)return;if(feedback.ok){state.feedback=new Map(feedback.value.items.map(i=>[i.messageId,i]));state.feedbackReady=true;render()}}
     if(titleChanged||wasBusy&&!data.busy)void conversations().catch(error)
   }
-  function prose(text){const el=element('div',undefined,'prose qa-prose');el.innerHTML=renderMarkdown(text??'');return el}
+  function prose(text){const el=element('div',undefined,'prose qa-prose');el.innerHTML=renderMarkdown(text??'');enhancePreviews(el);return el}
   function reasoning(text,id){const d=thinking(text,{className:'chat-reasoning'});d.dataset.detail=id;d.dataset.originalText=text;return d}
   function bubble(node,user=false){node.classList.add('qa-message');if(user)node.classList.add('qa-user');const avatar=element('span',undefined,'qa-avatar');avatar.setAttribute('aria-hidden','true');avatar.append(glyph(user?'user':'chat'));const content=element('div',undefined,'qa-bubble');node.append(avatar,content);return content}
   function renderLive(live=state.history?.live,{follow=nearBottom(),scrollTop=$('chat-scroll').scrollTop}={}){
@@ -124,7 +126,7 @@ export function initChat({api,request,identity,openDraft,renderMarkdown}){
       if(!thought){thought=reasoning('','live');(inline?card.querySelector('.qa-bubble'):content).prepend(thought)}
       if(live.reasoning)translations.watch(thought,{text:live.reasoning,conversationId:state.id,done:!!live.text})
       if(!text){text=prose('');text.classList.add('chat-live-text');content.append(text)}
-      text.innerHTML=renderMarkdown(live.text??'')
+      text.innerHTML=renderMarkdown(live.text??'');enhancePreviews(text)
       if(!status){status=element('small',undefined,'chat-stream-status');status.setAttribute('role','status');content.append(status)}
       status.textContent=state.stopping?'正在停止，保留已生成内容…':live.text?'正在回答…':live.reasoning?'正在思考…':'正在连接模型…'
     }else box.replaceChildren()

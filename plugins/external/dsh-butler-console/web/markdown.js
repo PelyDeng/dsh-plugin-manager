@@ -24,10 +24,28 @@ import MarkdownIt from 'markdown-it'
 const markdown = new MarkdownIt({ html: false, linkify: false, breaks: true })
 
 /**
- * 图片预览服务（kkFileView，站点私有部署）：聊天里的图片地址渲染成缩略图，点击新窗口
- * 打开在线预览。kkFileView 的约定是 `onlinePreview?url=<Base64(encodeURIComponent(原始地址))>`。
+ * 图片预览服务（kkFileView，站点私有部署）：聊天里的地址按两类渲染——
+ *
+ * - **图片**（http(s) 且图片后缀）：受控缩略图直接在会话里预览；
+ * - **其他文件**（地址末段带扩展名：pdf/office/压缩包/音视频等）：渲染成着重文件卡，
+ *   点击打开**页内预览弹窗**（iframe 嵌 kkFileView 的 onlinePreview）。
+ *
+ * 实测约定（2026-09-19，preview.pelycloud.com）：`url` 参数是**直接 Base64** 的地址，
+ * 先做 encodeURIComponent 会被它拒成 403；且必须走 https（http 端口不响应）——弹窗的
+ * iframe 也因此必须 https，否则被本页的混合内容策略拦掉。地址含非 ASCII 字符时先
+ * encodeURI 转成纯 ASCII 再 Base64。
  */
-const KKFILEVIEW_BASE = 'http://preview.pelycloud.com'
+const KKFILEVIEW_BASE = 'https://preview.pelycloud.com'
+
+/** 裸文本里的 URL：只认 RFC 允许字符，中文标点天然截断（URL 后面跟"，。"不会吃进来）。 */
+const IMAGE_URL_RE = /https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/gu
+/** 自动识别为图片的后缀（裸 URL 靠它收窄；markdown 图片语法不必带这些后缀）。 */
+const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp)(?:[?#].*)?$/iu
+
+function kkFileViewUrl(src) {
+  const ascii = /^[\x00-\x7F]*$/.test(src) ? src : encodeURI(src)
+  return `${KKFILEVIEW_BASE}/onlinePreview?url=${btoa(ascii)}`
+}
 
 /** 块级标签白名单：标签由渲染器固定，模型只能决定文本与结构。 */
 const BLOCK_TAGS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'table', 'thead', 'tbody', 'tr', 'th', 'td'])
@@ -47,21 +65,30 @@ function alignOf(token) {
   return match === null ? '' : match[1]
 }
 
-/** 裸文本里的 URL：只认 RFC 允许字符，中文标点天然截断（URL 后面跟"，。"不会吃进来）。 */
-const IMAGE_URL_RE = /https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/gu
-/** 自动识别为图片的后缀（裸 URL 靠它收窄；markdown 图片语法不必带这些后缀）。 */
-const IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp)(?:[?#].*)?$/iu
+/** 地址末段的扩展名（小写）；没有按「文件」理解的扩展名时返回 undefined。 */
+function fileExtensionOf(url) {
+  const last = (url.split(/[?#]/)[0] ?? '').split('/').pop() ?? ''
+  // 首位必须字母（`v1.2` 的 `.2` 不算扩展名），长度 1–7；`7z` 这类数字开头归入特例。
+  const match = /\.([a-z][a-z0-9]{0,6}|7z)$/i.exec(last)
+  return match === null ? undefined : match[1].toLowerCase()
+}
 
-/** kkFileView 的预览地址：先 encodeURIComponent（保证纯 ASCII）再 Base64，按它的约定。 */
-function kkFileViewUrl(src) {
-  return `${KKFILEVIEW_BASE}/onlinePreview?url=${encodeURIComponent(btoa(encodeURIComponent(src)))}`
+/** 展示用的文件名：取地址末段并解百分号编码；解不了就用原样。 */
+function displayNameOf(url) {
+  const last = (url.split(/[?#]/)[0] ?? '').split('/').pop() || url
+  try { return decodeURIComponent(last) } catch { return last }
+}
+
+function pushText(parent, text) {
+  if (text !== '') parent.children.push({ text })
 }
 
 /**
- * 受控图片节点：`a.md-pic` 包一张缩略图，点击新窗口进 kkFileView。
+ * 受控图片节点：`a.md-pic` 包一张缩略图，点击打开页内预览弹窗。
  *
  * 只由本函数创建（协议白名单 http/https，`javascript:` 之类进不来）；`referrerpolicy`
- * 与 `rel` 收紧引用面；`alt`/`title` 是纯文本属性，注入不了标签。
+ * 与 `rel` 收紧引用面；`alt`/`title` 是纯文本属性，注入不了标签。`target=_blank` 只是
+ * JS 失效时的回退——正常点击被渲染器接管成弹窗。
  */
 function imageSpec(src, alt) {
   return {
@@ -71,27 +98,50 @@ function imageSpec(src, alt) {
       href: kkFileViewUrl(src),
       target: '_blank',
       rel: 'noopener noreferrer',
+      'data-preview': src,
       ...(alt === '' ? {} : { title: alt }),
     },
     children: [{ tag: 'img', attrs: { src, alt, loading: 'lazy', referrerpolicy: 'no-referrer' } }],
   }
 }
 
-function pushText(parent, text) {
-  if (text !== '') parent.children.push({ text })
+/**
+ * 受控文件卡：非图片文件的地址渲染成着重卡片，点击打开页内预览弹窗。
+ *
+ * 与图片的分界：图片「直接预览」，文件「着重 + 点击预览」——长会话里一排地址能一眼
+ * 分出哪个能看图、哪个要点击。扩展名徽标取自地址本身，不猜格式。
+ */
+function fileSpec(url, ext) {
+  return {
+    tag: 'a',
+    className: 'md-file',
+    attrs: {
+      href: url,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      'data-preview': url,
+      title: '点击预览这个文件',
+    },
+    children: [
+      { tag: 'span', className: 'md-file__ext', text: ext },
+      { tag: 'span', className: 'md-file__name', text: displayNameOf(url) },
+    ],
+  }
 }
 
-/** 带图片识别的文本写入：文本里的裸图片地址（https://…/x.png）替换成受控图片节点。 */
+/** 带预览识别的文本写入：图片地址→缩略图，文件地址→文件卡，其余保持纯文本。 */
 function pushTextWithImages(parent, text) {
   let cursor = 0
   for (const match of text.matchAll(IMAGE_URL_RE)) {
     const raw = match[0]
     // 句尾标点是文章的，不是地址的：修剪后判断后缀，修剪掉的部分还给文本。
     const url = raw.replace(/[.,;:!?]+$/u, '')
-    if (!IMAGE_EXT_RE.test(url)) continue
     const start = match.index ?? 0
+    const image = IMAGE_EXT_RE.test(url)
+    const ext = fileExtensionOf(url)
+    if (!image && ext === undefined) continue
     if (start > cursor) pushText(parent, text.slice(cursor, start))
-    parent.children.push(imageSpec(url, ''))
+    parent.children.push(image ? imageSpec(url, '') : fileSpec(url, ext))
     cursor = start + url.length
   }
   if (cursor === 0) { pushText(parent, text); return }
@@ -119,11 +169,15 @@ function planInline(parent, tokens) {
         pushText(top, token.content)
         break
       case 'image': {
-        // markdown 图片语法是明确的图片意图：http(s) 直接出受控缩略图；其余（相对路径、
-        // data: 等）维持占位文本，把描述和地址都给全。alt 在 token.content 里。
+        // markdown 图片语法是明确的展示意图：http(s) 的地址按后缀分流——图片出受控缩略图，
+        // 非图片（pdf 等被当成"图"写出来的地址）出文件卡；其余（相对路径、data: 等）维持
+        // 占位文本，把描述和地址都给全。alt 在 token.content 里。
         const src = token.attrGet?.('src') ?? ''
         const alt = token.content ?? token.attrGet?.('alt') ?? ''
-        if (/^https?:\/\//iu.test(src) && !/\s/u.test(src)) top.children.push(imageSpec(src, alt))
+        const httpLike = /^https?:\/\//iu.test(src) && !/\s/u.test(src)
+        const ext = httpLike ? fileExtensionOf(src) : undefined
+        if (httpLike && (IMAGE_EXT_RE.test(src) || ext === undefined)) top.children.push(imageSpec(src, alt))
+        else if (httpLike) top.children.push(fileSpec(src, ext))
         else pushText(top, alt === '' ? `[图片：${src}]` : `[图片：${alt} ${src}]`)
         break
       }
@@ -232,6 +286,14 @@ function buildNode(spec) {
   if (spec.align !== undefined) node.style.textAlign = spec.align
   for (const [name, value] of Object.entries(spec.attrs ?? {})) node.setAttribute(name, value)
   for (const child of spec.children ?? []) node.appendChild(buildNode(child))
+  // 预览类节点（图片缩略图 / 文件卡）把点击接管成**页内弹窗**：href 只作为 JS 失效时的
+  // 回退（新窗口）。流式渲染会反复重建节点，监听器跟着节点走，不会累积。
+  if (spec.className === 'md-pic' || spec.className === 'md-file') {
+    node.addEventListener('click', event => {
+      event.preventDefault()
+      openPreviewModal(node.getAttribute('data-preview') ?? node.getAttribute('href') ?? '')
+    })
+  }
   return node
 }
 
@@ -240,4 +302,73 @@ export function renderMarkdownInto(target, text) {
   while (target.firstChild !== null) target.removeChild(target.firstChild)
   for (const spec of markdownPlan(text)) target.appendChild(buildNode(spec))
   return target
+}
+
+/* ── kkFileView 页内预览弹窗 ─────────────────────────────────────────────
+ *
+ * 全页只有一个弹窗（按 id 复用）：图片与文件共用，iframe 嵌 kkFileView 的 onlinePreview。
+ * 关闭有三条路：右上角按钮、点遮罩、Esc。iframe 的 src 在关闭时清空——停掉还在加载的
+ * 预览，也不让关掉的文档继续占着内存。
+ */
+function openPreviewModal(url) {
+  if (url === '') return
+  let mask = document.getElementById('kk-preview')
+  if (mask === null) {
+    mask = buildPreviewModal()
+    document.body.appendChild(mask)
+  }
+  const title = mask.querySelector('.kkp__title')
+  const frame = mask.querySelector('iframe')
+  if (title !== null) title.textContent = displayNameOf(url)
+  if (frame !== null) frame.src = kkFileViewUrl(url)
+  mask.hidden = false
+}
+
+function closePreviewModal() {
+  const mask = document.getElementById('kk-preview')
+  if (mask === null) return
+  mask.hidden = true
+  const frame = mask.querySelector('iframe')
+  if (frame !== null) frame.src = 'about:blank'
+}
+
+function buildPreviewModal() {
+  const mask = document.createElement('div')
+  mask.id = 'kk-preview'
+  mask.className = 'kkp'
+  mask.hidden = true
+
+  const backdrop = document.createElement('div')
+  backdrop.className = 'kkp__backdrop'
+  backdrop.addEventListener('click', closePreviewModal)
+
+  const panel = document.createElement('div')
+  panel.className = 'kkp__panel'
+  panel.addEventListener('click', event => event.stopPropagation())
+
+  const bar = document.createElement('div')
+  bar.className = 'kkp__bar'
+  const title = document.createElement('span')
+  title.className = 'kkp__title'
+  const close = document.createElement('button')
+  close.type = 'button'
+  close.className = 'kkp__close'
+  close.textContent = '✕ 关闭'
+  close.addEventListener('click', closePreviewModal)
+  bar.appendChild(title)
+  bar.appendChild(close)
+
+  const frame = document.createElement('iframe')
+  frame.className = 'kkp__frame'
+  frame.title = '文件预览'
+  frame.src = 'about:blank'
+
+  panel.appendChild(bar)
+  panel.appendChild(frame)
+  mask.appendChild(backdrop)
+  mask.appendChild(panel)
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && mask.hidden === false) closePreviewModal()
+  })
+  return mask
 }
