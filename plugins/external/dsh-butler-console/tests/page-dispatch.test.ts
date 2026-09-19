@@ -233,8 +233,11 @@ const subtasks = [
 /** 面板对象：从卡片节点上取（卡片把它挂在自己的节点上，历史那一页可能同时有好几张）。 */
 const panelOf = (card: StubNode) => (card as unknown as { __dcard: Record<string, any> }).__dcard
 
-const cellOf = (card: StubNode, id: string) =>
-  card.children.flatMap(child => child.children).find(child => child.dataset.id === id)!
+// 格子住进折叠头（summary）之后不再躺在卡的直接子节点里：一律从面板对象拿网格。
+const cellOf = (card: StubNode, id: string) => {
+  const grid = panelOf(card).grid as StubNode
+  return grid.children.find(child => child.dataset.id === id)!
+}
 
 describe('调度卡', () => {
   it('一张卡装下所有成员：格子按状态给词给点，状态条给计数', () => {
@@ -245,7 +248,7 @@ describe('调度卡', () => {
     expect(panel.order).toEqual(['s1', 's2', 's3', 's4'])
     // 四个成员在四个格子里，不再有"计划贴纸 + 独立成员行 + 折叠面板"三处重复。
     expect(panel.buttons.size).toBe(4)
-    const grid = card.children.find(child => child.tag === 'div')!
+    const grid = panel.grid as StubNode
     expect(grid.children).toHaveLength(4)
     expect(grid.children.map(cell => cell.querySelector('.dcard__statetext')!.textContent))
       .toEqual(['已收到', '进行中', '排队', '排队'])
@@ -275,7 +278,7 @@ describe('调度卡', () => {
     const page = load()
     const card = page.mountDispatch(subtasks, { taskId: 'task-4' })
     const panel = panelOf(card)
-    const grid = card.children.find(child => child.tag === 'div')!
+    const grid = panel.grid as StubNode
     grid.fire('keydown', { key: 'ArrowRight' })
     expect(panel.active).toBe('s2')
     expect(cellOf(card, 's2').focused).toBe(true)
@@ -290,8 +293,11 @@ describe('调度卡', () => {
     const page = load()
     const card = page.mountDispatch(subtasks, { taskId: 'task-5' })
     const panel = panelOf(card)
-    // 默认展开：正在干活时用户要看得到谁在干。
-    expect(card.open).toBe(true)
+    // 默认收起：格子住在折叠头里，谁在干、干到什么状态收着也看得见；交回的内容才要点开。
+    expect(card.open).toBe(false)
+    // 先展开再收起，偏好记下的是用户这一下「折叠」。
+    card.open = true
+    card.fire('toggle')
     const fold = panel.foldButton as StubNode
     fold.fire('click')
     expect(card.open).toBe(false)
@@ -309,9 +315,9 @@ describe('调度卡', () => {
     expect(again.open).toBe(false)
     expect(panelOf(again).resultOnly).toBe(true)
     expect(panelOf(again).resultOnlyButton.textContent).toBe('看完整过程')
-    // 另一个任务不受影响。
+    // 另一个任务不受影响（同样默认收起）。
     const other = page.mountDispatch(subtasks, { taskId: 'task-6' })
-    expect(other.open).toBe(true)
+    expect(other.open).toBe(false)
   })
 
   it('默认折叠留给历史那种"一次好几张卡"的场景', () => {
@@ -348,9 +354,13 @@ describe('调度卡', () => {
     const panel = panelOf(card)
     const fresh = panel.fresh as StubNode
     expect(fresh.hidden).toBe(true)
+    // 展开中来进展：更新看得见，不用提示。
+    card.open = true
+    card.fire('toggle')
     page.attachToDispatch({ msg: node(), body: '' }, { id: 's3', state: 'running', time: 1_003_000 }, panel)
     expect(fresh.hidden).toBe(true)
     card.open = false
+    card.fire('toggle')
     page.attachToDispatch({ msg: node(), body: '' }, { id: 's3', state: 'succeeded', time: 1_004_000 }, panel)
     expect(fresh.hidden).toBe(false)
     card.open = true
@@ -463,14 +473,15 @@ describe('调度卡', () => {
     const page = load()
     const card = page.mountDispatch(subtasks, { taskId: 'task-10' })
     const fold = panelOf(card).foldButton as StubNode
+    // 默认收起：aria 从初始就与事实一致。
+    expect(fold.getAttribute('aria-expanded')).toBe('false')
+    fold.fire('click')
+    card.fire('toggle')
     expect(fold.getAttribute('aria-expanded')).toBe('true')
+    expect(fold.textContent).toBe('折叠')
     fold.fire('click')
     card.fire('toggle')
     expect(fold.getAttribute('aria-expanded')).toBe('false')
-    expect(fold.textContent).toBe('展开')
-    fold.fire('click')
-    card.fire('toggle')
-    expect(fold.getAttribute('aria-expanded')).toBe('true')
   })
 
   it('tab 与它控制的结果格成对（aria-controls ↔ aria-labelledby），折叠时焦点不留在隐藏格子上', () => {

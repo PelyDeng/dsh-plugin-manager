@@ -729,18 +729,22 @@ const DISPATCH_TONE = {
  * 大总管汇总时不必再复述成员原文。
  *
  * 交互（与设计文档 §7 一致）：点格子选中、点已选中的格子不变（要收起用卡片自己的折叠，
- * 避免"没有选中"这种半吊子态）、左右方向键换人、Esc 收起、格子整块可点且 ≥44px。
- * 折叠状态与「只看结论」按 `taskId` 存本机，刷新重建时先读偏好再渲染。
+ * 避免"没有选中"这种半吊子态）、左右方向键换人、Esc 收起、格子整块可点。
+ * 格子住进折叠头：**收起时也看得见谁被调了、干到什么状态**，收起来的只是交回的内容。
+ * 因此默认收起——要细看过程再展开。折叠状态与「只看结论」按 `taskId` 存本机，刷新重建
+ * 时先读偏好再渲染。
  */
 function mountDispatch(subtasks, options = {}) {
   const taskId = typeof options.taskId === 'string' && options.taskId !== '' ? options.taskId : (state.taskId ?? '')
   const prefs = cardPrefs(taskId)
-  const open = typeof prefs.open === 'boolean' ? prefs.open : options.defaultOpen !== false
+  const open = typeof prefs.open === 'boolean' ? prefs.open : options.defaultOpen === true
   const panelId = `c${++cardSeq}`
   const details = make('details', 'dcard')
   details.open = open
   if (taskId !== '') details.dataset.taskId = taskId
   const bar = make('summary', 'dcard__bar')
+  /** 折叠头第一行：状态条 + 「有更新」+ 工具。格子网格也在折叠头里（第二行）。 */
+  const barline = make('div', 'dcard__barline')
   const title = make('span', 'dcard__bar-text')
   /** 「有更新」提示：收起时才有东西可提示（展开时更新看得见）。文字 + 小圆点，不只是个点。 */
   const fresh = make('span', 'dcard__fresh')
@@ -767,6 +771,7 @@ function mountDispatch(subtasks, options = {}) {
   const panel = {
     details,
     bar,
+    barline,
     title,
     fresh,
     tools,
@@ -809,7 +814,9 @@ function mountDispatch(subtasks, options = {}) {
     head.appendChild(make('span', 'dcard__name', displayNameOf(subtask.agentId)))
     head.appendChild(make('span', 'dcard__handle', `@${subtask.agentId}`))
     col.appendChild(head)
-    col.appendChild(make('span', 'dcard__goal', subtask.goal ?? ''))
+    // 第二行：目标（超长省略）+ 状态挤同一行——名称行必须独占，格子两行就够紧凑。
+    const meta = make('span', 'dcard__meta')
+    meta.appendChild(make('span', 'dcard__goal', subtask.goal ?? ''))
     const status = make('span', 'dcard__status')
     const dot = make('span', `dot dot--${DISPATCH_TONE[subtask.state] ?? 'queued'}`)
     status.appendChild(dot)
@@ -817,10 +824,16 @@ function mountDispatch(subtasks, options = {}) {
     const elapsed = make('span', 'dcard__elapsed')
     elapsed.hidden = true
     status.appendChild(elapsed)
-    col.appendChild(status)
+    meta.appendChild(status)
+    col.appendChild(meta)
     cell.appendChild(col)
     cell.title = `${subtask.goal ?? ''} @${subtask.agentId}`.trim()
-    cell.addEventListener('click', () => { select(subtask.id) })
+    // 格子在折叠头里：点格子只换人，不能顺带把卡片展开/收起（同 tools 按钮的拦截口径）。
+    cell.addEventListener('click', event => {
+      event.preventDefault()
+      event.stopPropagation()
+      select(subtask.id)
+    })
     grid.appendChild(cell)
 
     const slot = make('section', 'dcard__slot')
@@ -905,11 +918,13 @@ function mountDispatch(subtasks, options = {}) {
   tools.appendChild(copy)
   tools.appendChild(fold)
 
-  bar.appendChild(title)
-  bar.appendChild(fresh)
-  bar.appendChild(tools)
+  barline.appendChild(title)
+  barline.appendChild(fresh)
+  barline.appendChild(tools)
+  // 折叠头两行：状态条一行、成员格一行——**收起时格子仍在**，只藏交回的内容。
+  bar.appendChild(barline)
+  bar.appendChild(grid)
   details.appendChild(bar)
-  details.appendChild(grid)
   details.appendChild(result)
   // 折叠状态落到本机偏好；重新展开时「有更新」提示收掉（更新已经看得见了）。
   details.addEventListener('toggle', () => {
@@ -3277,7 +3292,7 @@ function renderTaskCard(record, opts = {}) {
   const liveResume = opts.liveResume === true
   const card = mountDispatch(
     record.subtasks.map(item => ({ id: item.id, goal: item.goal, agentId: item.agentId, state: item.state, startedAt: item.startedAt, finishedAt: item.finishedAt })),
-    { taskId: record.id, live: opts.live !== false, defaultOpen: opts.defaultOpen !== false },
+    { taskId: record.id, live: opts.live !== false, defaultOpen: opts.defaultOpen === true },
   )
   const panel = card.__dcard
   // 卡片这时还没挂进线程（调用方负责挂）：显式放行往它里面填内容（见 `attachToDispatch` 的守卫）。
