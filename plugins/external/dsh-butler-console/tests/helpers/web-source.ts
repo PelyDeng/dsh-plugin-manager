@@ -33,6 +33,10 @@ const MODULES: readonly string[] = [
   'modules/speech.js',    // 大总管气泡 + 但勒思考挂载（原 50-180、1136-1178）
   'modules/member.js',    // 成员气泡/思考/材料 + settle 三件套（原 151-159、854-987、1033-1226）
   'modules/dcard.js',     // 调度卡 + 描边脉冲（原 182-708、1024-1031）
+  // 批 1c（环簇二整批 + 附件独立域）
+  'modules/attachments.js', // 待发附件全家桶（原 711-990）
+  'modules/panels.js',    // 右栏/设置/列表（原 1363-1788）
+  'modules/history.js',   // 历史与视图栈（原 189-223、1790-2231）
 ]
 
 /** 入口 + 全部已拆模块的拼接全文（源码断言型测试的默认读取口）。 */
