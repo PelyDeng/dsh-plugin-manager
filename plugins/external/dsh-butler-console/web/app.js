@@ -103,9 +103,14 @@ function doodleSvg(markup, className) {
 }
 
 /** 开场示例话题：只写群里真有人能接的活，免得用户照着问了却没人接。 */
+/** 快捷问答：撕条上写短标签，点击把完整话填进输入框——撕一条拿去用。 */
 const SUGGESTIONS = [
-  '整理一篇园区封闭化管理介绍，再给点博客发布建议',
-  '帮我查一下园区最近的通行情况，顺便说说异常',
+  { label: '园区介绍', text: '整理一篇园区封闭化管理介绍，再给点博客发布建议' },
+  { label: '查通行情况', text: '查一下园区最近的通行情况，顺便说说异常' },
+  { label: '归拢周报', text: '把这周的零散材料归拢成一篇周报' },
+  { label: '博客选题', text: '给我的博客挑三个可写的选题' },
+  { label: '盯通报', text: '盯着园区通报，有异常随时叫我' },
+  { label: '捋今日跟进', text: '帮我捋一遍今天该跟进没跟进的事' },
 ]
 
 const MOTTO_KEY = 'butler.motto'
@@ -149,6 +154,9 @@ const el = {
   rightPanel: document.getElementById('drawer'),
   settingsTitle: document.getElementById('settings-title'),
   settingsLive: document.getElementById('settings-live-note'),
+  /** @ 提及选择器浮层（在 composer 里，静态骨架见 index.html）。 */
+  mentionPop: document.getElementById('mention-pop'),
+  mentionItems: document.getElementById('mention-items'),
 }
 
 const state = {
@@ -2051,27 +2059,43 @@ function summaryCard(event) {
 
 function renderWelcome() {
   clear(el.thread)
-  const box = make('div', 'welcome')
-  const mascot = document.createElement('img')
-  mascot.className = 'welcome__mascot'
-  mascot.alt = ''
-  mascot.src = `${ROUTE_PREFIX}/assets/media/avatars/mascot-welcome.png`
-  mascot.addEventListener('error', () => { mascot.remove() })
-  box.appendChild(mascot)
-  box.appendChild(make('h2', null, '说说你要做什么'))
-  box.appendChild(make('p', null, '把活说清楚就行。牛马大总管先听懂需求，再替你分派成员，你只管收结果。'))
-  const list = make('div', 'welcome__list')
-  for (const text of SUGGESTIONS) {
-    const item = make('button', 'welcome__item', text)
-    item.type = 'button'
-    item.addEventListener('click', () => {
-      el.input.value = text
+  // 告示可撕条（E3 一比一复刻，绘语纯净底版资产）：底色由绘语直接出成均一米白
+  // （容器底色对齐图的底色采样值，边缘零色差），标题/说明/撕条文字是真实 DOM
+  // ——任何分辨率下文字都清晰，窗口缩放时容器整体等比跟随。
+  const box = make('div', 'welcome welcome--board')
+  const board = make('div', 'board')
+  const top = make('div', 'board__top')
+  top.style.backgroundImage = `url(${ROUTE_PREFIX}/assets/media/welcome/clean-top.png)`
+  board.appendChild(top)
+  const title = make('h2', 'board__title')
+  // 红波浪压「做什么」三个字（E3 设计稿的强调方式，砖红）。
+  title.appendChild(document.createTextNode('说说你要'))
+  title.appendChild(Object.assign(make('span', 'red-wavy'), { textContent: '做什么' }))
+  // 标题两侧的竖排批注（E3 设计稿的手写边注，位图纯净底没带，用 DOM 补）。
+  board.appendChild(Object.assign(make('p', 'board__note board__note--left'), { textContent: '一些想法，也许就是下一个好的开始。' }))
+  board.appendChild(Object.assign(make('p', 'board__note board__note--right'), { textContent: '好的开始，就是把想法说出来。' }))
+  const sub = make('p', 'board__sub')
+  sub.appendChild(document.createTextNode('查资料、理思路、写文案、做总结'))
+  sub.appendChild(make('br'))
+  sub.appendChild(document.createTextNode('也可以盯进展、提建议，陪你把事做成'))
+  board.appendChild(title)
+  board.appendChild(sub)
+  const tears = make('div', 'board__tears')
+  SUGGESTIONS.forEach((item, index) => {
+    const tear = make('button', 'board__tear')
+    tear.type = 'button'
+    tear.title = item.text
+    tear.style.backgroundImage = `url(${ROUTE_PREFIX}/assets/media/welcome/clean-tear-${index + 1}.png)`
+    tear.appendChild(make('span', 'board__tear-text', item.text))
+    tear.addEventListener('click', () => {
+      el.input.value = item.text
       autosize()
       el.input.focus()
     })
-    list.appendChild(item)
-  }
-  box.appendChild(list)
+    tears.appendChild(tear)
+  })
+  board.appendChild(tears)
+  box.appendChild(board)
   el.thread.appendChild(box)
   renderRail()
 }
@@ -2898,6 +2922,8 @@ async function refreshPanels() {
     for (const member of members.items) {
       if (!state.avatarStamps.has(member.agentId)) state.avatarStamps.set(member.agentId, 1)
     }
+    // 名单变了（新成员、换外号），开着的点名簿跟着换页。
+    renderMention()
     // 设置页开着时不重画右栏成员卡，免得把没保存的外号冲掉。
     if (!state.settingsOpen) renderMembers()
     renderCrew()
@@ -3422,6 +3448,142 @@ function autosize() {
   el.count.textContent = length > 0 ? `${length} 字` : ''
 }
 
+/* ── @ 提及选择器：输入 @ 翻出点名簿，键盘上下选 ─────────────────────── */
+
+/** 提及会话：null=关着；否则 { start: 「@」的下标, query: @ 到光标之间的词, index: 高亮项, items: 过滤结果 }。 */
+let mention = null
+
+/** 光标前是否有一个未闭合的 @：「@」之前须是行首、空白或非 ASCII 字符（中文书写不打空格），
+ *  「@」与光标之间不许再出现空白；唯独英文/数字后不触发，免得邮箱被当点名。 */
+function detectMention() {
+  const text = el.input.value
+  const pos = el.input.selectionStart ?? text.length
+  for (let i = pos - 1; i >= 0; i -= 1) {
+    const ch = text[i]
+    if (ch === '@') {
+      const prev = i === 0 ? '' : text[i - 1]
+      if (prev === '' || /[^\x00-\x7f]/.test(prev) || /\s/.test(prev)) {
+        return { start: i, query: text.slice(i + 1, pos) }
+      }
+      return null
+    }
+    if (/\s/.test(ch)) return null
+  }
+  return null
+}
+
+/** 过滤口径：外号、报名名、agentId 任一命中即可。 */
+function mentionCandidates(query) {
+  const q = query.trim().toLowerCase()
+  return state.members.filter(member =>
+    member.displayName.toLowerCase().includes(q)
+    || member.declaredName.toLowerCase().includes(q)
+    || member.agentId.toLowerCase().includes(q))
+}
+
+function openMention(hit) {
+  mention = { start: hit.start, query: hit.query, index: 0, items: [] }
+  renderMention()
+}
+
+function closeMention() {
+  if (mention === null) return
+  mention = null
+  el.mentionPop.hidden = true
+  el.mentionPop.removeAttribute('aria-activedescendant')
+}
+
+function renderMention() {
+  if (mention === null) return
+  mention.items = mentionCandidates(mention.query)
+  if (mention.index >= mention.items.length) mention.index = 0
+  clear(el.mentionItems)
+  if (mention.items.length === 0) {
+    // 留着浮层说一声而不是直接关：空名单（还没装成员）和打错过滤词是两种情况，关了就说不出来。
+    el.mentionItems.appendChild(make('p', 'mention__none',
+      state.members.length === 0 ? '还没有可点名的成员' : '没有对得上的成员'))
+    el.mentionPop.hidden = false
+    el.mentionPop.removeAttribute('aria-activedescendant')
+    return
+  }
+  mention.items.forEach((member, index) => {
+    const item = make('div', 'mention__item')
+    item.id = `mention-option-${index}`
+    item.dataset.index = String(index)
+    item.setAttribute('role', 'option')
+    item.appendChild(avatarNode(member.agentId, 'sm'))
+    const col = make('div', 'member__col')
+    col.appendChild(make('div', 'member__name', member.displayName))
+    col.appendChild(make('div', 'member__declared', member.declaredName))
+    item.appendChild(col)
+    item.appendChild(make('span', 'mention__handle', `@${member.agentId}`))
+    el.mentionItems.appendChild(item)
+  })
+  el.mentionPop.hidden = false
+  paintMentionActive()
+}
+
+/** 只切高亮不重建：键盘连按时文字不闪。 */
+function paintMentionActive() {
+  if (mention === null) return
+  for (const item of el.mentionItems.children) {
+    const active = Number(item.dataset.index) === mention.index
+    item.setAttribute('aria-selected', active ? 'true' : 'false')
+    item.classList.toggle('mention__item--active', active)
+    if (active) {
+      el.mentionPop.setAttribute('aria-activedescendant', item.id)
+      item.scrollIntoView({ block: 'nearest' })
+    }
+  }
+}
+
+/** input 事件入口：光标挪走、补空格都等于放弃这次提及。 */
+function updateMention() {
+  const hit = detectMention()
+  if (hit === null) { closeMention(); return }
+  if (mention === null || hit.start !== mention.start) { openMention(hit); return }
+  mention.query = hit.query
+  mention.index = 0
+  renderMention()
+}
+
+/** 落纸用外号：服务端成员清单就是「id（外号）」的对照表，外号即点名。 */
+function acceptMention() {
+  if (mention === null) return
+  const member = mention.items[mention.index]
+  if (member === undefined) { closeMention(); return }
+  const text = el.input.value
+  const pos = el.input.selectionStart ?? text.length
+  const insert = `@${member.displayName} `
+  el.input.value = text.slice(0, mention.start) + insert + text.slice(pos)
+  const caret = mention.start + insert.length
+  el.input.setSelectionRange(caret, caret)
+  closeMention()
+  autosize()
+  el.input.focus()
+}
+
+function bindMention() {
+  el.input.addEventListener('input', updateMention)
+  el.input.addEventListener('blur', closeMention)
+  // 点名簿上的交互：悬停即高亮，点击即选中；按下先拦默认，别让输入框失焦。
+  el.mentionItems.addEventListener('mouseover', event => {
+    if (mention === null) return
+    const item = event.target.closest('.mention__item')
+    if (item === null) return
+    const index = Number(item.dataset.index)
+    if (mention.index !== index) { mention.index = index; paintMentionActive() }
+  })
+  el.mentionItems.addEventListener('mousedown', event => event.preventDefault())
+  el.mentionItems.addEventListener('click', event => {
+    if (mention === null) return
+    const item = event.target.closest('.mention__item')
+    if (item === null) return
+    mention.index = Number(item.dataset.index)
+    acceptMention()
+  })
+}
+
 function openNewChat() {
   if (state.streaming) return
   // 换新视图同样作废在途回包（方案 I09）。
@@ -3443,13 +3605,39 @@ function openNewChat() {
 }
 
 function bind() {
+  bindMention()
   el.composer.addEventListener('submit', event => {
     event.preventDefault()
+    // 送出去的正文里 @ 词已随发送定稿，点名簿不再悬着。
+    closeMention()
     void sendMessage(el.input.value)
   })
 
   el.input.addEventListener('input', autosize)
   el.input.addEventListener('keydown', event => {
+    // 点名簿开着先服务导航：↑↓ 移动、Enter/Tab 选中、Esc 关闭；输入法组合期间一概不拦（选字要用这些键）。
+    if (mention !== null && !event.isComposing) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        const count = mention.items.length
+        if (count > 0) {
+          const delta = event.key === 'ArrowDown' ? 1 : -1
+          mention.index = (mention.index + delta + count) % count
+          paintMentionActive()
+        }
+        return
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault()
+        acceptMention()
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeMention()
+        return
+      }
+    }
     // Enter 发送，Shift+Enter 换行；输入法组合期间不拦截。
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault()
@@ -3506,7 +3694,7 @@ function bind() {
     state.selecting = selection !== null && !selection.isCollapsed && el.thread.contains(selection.anchorNode)
   })
 
-  // 在光标处插一个 @：分派时点名成员用的，不是装饰。
+  // 在光标处插一个 @：分派时点名成员用的，不是装饰。插完顺手把点名簿翻出来。
   el.at?.addEventListener('click', () => {
     const start = el.input.selectionStart ?? el.input.value.length
     const end = el.input.selectionEnd ?? start
@@ -3514,6 +3702,7 @@ function bind() {
     el.input.setSelectionRange(start + 1, start + 1)
     el.input.focus()
     autosize()
+    openMention({ start, query: '' })
   })
 
   el.newChat.addEventListener('click', openNewChat)

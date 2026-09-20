@@ -807,30 +807,105 @@ textarea:focus-visible,
 .jump-latest:hover { transform: translate(-1px, -1px); box-shadow: 2px 3px 0 #00000018; }
 .jump-latest[hidden] { display: none; }
 
-.welcome { max-width: 520px; margin: 4vh auto 0; text-align: center; }
-.welcome__mascot { width: 132px; height: auto; margin: 0 auto 6px; display: block; }
-.welcome h2 { font-family: var(--bt-hand); font-size: 24px; margin: 0 0 6px; }
-.welcome p { margin: 0 0 16px; color: var(--bt-ink-soft); font-size: 13.5px; }
-.welcome__list { display: flex; flex-direction: column; gap: 8px; text-align: left; }
+/* 空状态：告示可撕条（E3 一比一复刻，绘语纯净底版）。底色 rgb(245,236,219) 是
+   资产图实测底色（8 点采样波动 ±1），与页面 --bt-paper 差 ≤3——边缘零色差。
+   容器与裁切区同比例（1182:883），元素按原图坐标换算百分比定位，字号跟容器宽
+   （cqw）——任意分辨率整体等比、文字不糊。 */
+.welcome--board { margin: 5vh auto 0; width: min(760px, 96%); }
 
-.welcome__item {
-  padding: 9px 13px;
-  background: var(--bt-card);
-  border: 1.5px solid var(--bt-stroke);
-  border-radius: var(--bt-wobble-sm);
-  font-size: 13.5px;
-  box-shadow: 2px 2px 0 #0000000d;
+.board {
+  position: relative;
+  aspect-ratio: 1182 / 883;
+  container-type: size;
+  background: rgb(245, 236, 219);
 }
 
-/* 便签墙的松弛感：一张正一张歪地贴。 */
-.welcome__item:nth-child(odd) { transform: rotate(-0.7deg); }
-.welcome__item:nth-child(even) { transform: rotate(0.6deg); }
+/* 告示上部：纸面 + 边框 + 枝纹胶带（位图，占容器高 60.6%）。 */
+.board__top {
+  position: absolute; left: 0; right: 0; top: 0; height: 60.6%;
+  background: center / 100% 100% no-repeat;
+}
 
-.welcome__item:hover { transform: translate(-1px, -1px) rotate(0deg); box-shadow: 3px 3px 0 #00000014; }
+/* 标题与说明落在位图预留的空白区；「做什么」带红波浪（E3 设计稿元素）。 */
+.board__title {
+  position: absolute; left: 4%; right: 4%; top: 15%;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0; font-family: var(--bt-hand); font-weight: 400;
+  font-size: 5.5cqw; color: var(--bt-ink); letter-spacing: 0.4cqw;
+}
+
+.board__title .red-wavy {
+  text-underline-offset: 0.55cqw;
+  /* 设计稿的波浪是砖红（比页面红笔批注深一档）。 */
+  text-decoration-color: #b5544a;
+}
+
+/* 标题右上角的两道手绘撇线（强调记号，E3 设计稿元素）。 */
+.board__title::before, .board__title::after {
+  content: ''; position: absolute; width: 0.22cqw; height: 1.7cqw;
+  background: var(--bt-ink); border-radius: 1px;
+  transform: rotate(18deg);
+}
+.board__title::before { right: 4.5%; top: 12%; }
+.board__title::after { right: 2.2%; top: 34%; }
+
+/* 标题两侧的竖排手写批注。 */
+.board__note {
+  position: absolute; margin: 0;
+  writing-mode: vertical-rl;
+  font-family: var(--bt-hand); font-size: clamp(8px, 1.3cqw, 12px);
+  color: var(--bt-ink-soft); opacity: .85; letter-spacing: 0.1cqw;
+  pointer-events: none;
+}
+.board__note--left { left: 6.5%; top: 26%; height: 26%; }
+.board__note--right { right: 6.5%; top: 30%; height: 26%; }
+
+.board__sub {
+  position: absolute; left: 6%; right: 6%; top: 33%;
+  margin: 0; text-align: center;
+  font-size: 2.5cqw; line-height: 1.75; color: var(--bt-ink-soft);
+}
+
+/* 六条可撕电话条：区域按原图 x200-1330 / y585-940 换算；条宽不一，flex 按实测宽度分。 */
+.board__tears {
+  position: absolute; left: 1.9%; right: 2.5%; top: 59.8%; bottom: 0;
+  display: flex;
+}
+
+.board__tear {
+  position: relative; flex: 190 1 0;
+  padding: 0; border: 0; background: center / 100% 100% no-repeat;
+  cursor: pointer; font: inherit;
+  transition: transform .15s ease, filter .15s ease;
+}
+
+.board__tear:nth-child(2) { flex-grow: 178; }
+.board__tear:nth-child(5) { flex-grow: 192; }
+
+.board__tear:hover { transform: translateY(3px); filter: brightness(1.02) drop-shadow(1px 3px 4px #00000024); }
+.board__tear:focus-visible { outline: 2px dashed var(--bt-ink-soft); outline-offset: -4px; }
+
+/* 撕条文字：竖排两列（22 字自动折列），落在序号+图标带之下、撕口之上。 */
+.board__tear-text {
+  position: absolute; left: 14%; right: 14%; top: 38%; bottom: 10%;
+  writing-mode: vertical-rl;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--bt-hand); color: var(--bt-ink);
+  font-size: clamp(9px, 2.1cqw, 14px); line-height: 1.55; letter-spacing: 0.14cqw;
+}
+
+/* 窄屏：整体等比缩小，字号有保底。 */
+@media (max-width: 640px) {
+  .welcome--board { margin-top: 3vh; }
+  .board__title { font-size: clamp(20px, 5.5cqw, 34px); }
+  .board__sub { font-size: clamp(10px, 2.5cqw, 13px); }
+  .board__tear-text { font-size: clamp(9px, 2.15cqw, 12px); }
+}
 
 .composer { padding: 0 16px 22px; }
 
 .composer__box {
+  position: relative;
   max-width: 960px; margin: 0 auto;
   display: flex; align-items: flex-end; gap: 8px;
   padding: 7px 8px 7px 13px;
@@ -838,6 +913,44 @@ textarea:focus-visible,
   border: 2px solid transparent;
   border-image: var(--bt-ink-frame) 6 / 4px round;
   box-shadow: 3px 4px 0 #00000010;
+}
+
+/* @ 提及选择器：贴着输入框上沿翻出来的一页点名簿，与输入框同一副墨线框。 */
+.mention[hidden] { display: none; }
+
+.mention {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 10px);
+  z-index: 30;
+  background: var(--bt-card);
+  border: 2px solid transparent;
+  border-image: var(--bt-ink-frame) 6 / 4px round;
+  box-shadow: 3px 4px 0 #00000018;
+}
+
+.mention__hint {
+  margin: 0; padding: 5px 12px 4px;
+  border-bottom: 1px dashed var(--bt-line);
+  color: var(--bt-ink-faint); font-size: 11.5px;
+}
+
+.mention__items { max-height: 264px; overflow-y: auto; padding: 4px; }
+
+.mention__none { margin: 0; padding: 10px 12px; color: var(--bt-ink-soft); font-size: 13px; }
+
+.mention__item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 9px; cursor: pointer;
+  border-radius: 6px;
+}
+
+.mention__item--active { background: #f3ead2; }
+
+.mention__item .member__name { font-size: 13.5px; }
+.mention__item .member__declared { font-size: 11.5px; }
+
+.mention__handle {
+  margin-left: auto;
+  color: var(--bt-ink-faint); font-size: 11.5px; font-family: var(--bt-mono);
 }
 
 .composer__box:focus-within { border-image: none; border-color: var(--bt-ink-soft); }
