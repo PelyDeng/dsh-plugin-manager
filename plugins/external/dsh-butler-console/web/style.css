@@ -71,7 +71,7 @@ body {
   font-family: var(--bt-font);
   font-size: 14px;
   line-height: 1.7;
-  -webkit-font-smoothing: antialiased;
+  /* 不开 antialiased：Windows 上灰度抗锯齿会把细笔画手写体渲淡发虚，交给系统 ClearType 更锐。 */
 }
 
 button, input, textarea { font: inherit; color: inherit; }
