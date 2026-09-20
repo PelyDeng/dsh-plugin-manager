@@ -829,19 +829,24 @@ const ATTACHMENT_SECTION_TITLE = '老板这次带的文件：'
  *
  * 正文照录上游协作返回原文；位置型材料只给出位置并注明需在执行方页面打开（不宣称员工已取得）；
  * 外部待办照录上游权威声明。内容全部来自派单时固定的快照或这一轮老板带的附件，不重读可变上游。
+ *
+ * `refsDigest`：goal 充实（中继轮）跑过时为 true——材料的要点已经织进目标正文，照录全文
+ * 变成同一份信息的双份携带（2026-09-21 线上：充实 goal + 原文 + 老板附件叠加把派单顶破
+ * 8000 上限）。此时材料段降级为可溯源的摘要，完整原文仍在任务记录的材料快照里。
  */
 function dispatchBrief(
   taskGoal: string,
   subtaskGoal: string,
   refs: readonly ButlerInputRef[],
   attachmentSection: string,
+  refsDigest = false,
 ): string {
   const lines = [briefFor(taskGoal, subtaskGoal)]
   if (attachmentSection !== '') lines.push('', attachmentSection)
   if (refs.length > 0) {
-    lines.push('', '可用材料（来自上游，原文照录）：')
+    lines.push('', refsDigest ? '可用材料（来自上游，要点已织入你的目标；以下是可溯源摘要，完整原文在任务记录里）：' : '可用材料（来自上游，原文照录）：')
     for (const ref of refs) {
-      lines.push(`【${ref.logicalId}】${ref.text}`)
+      lines.push(`【${ref.logicalId}】${refsDigest ? clip(ref.text, 500) : ref.text}`)
       for (const artifact of ref.artifacts) {
         lines.push(`（位置型材料：${artifact.title}（${artifact.kind}）${artifact.path}；需在执行方页面打开，归属由执行方核验）`)
       }
@@ -1746,7 +1751,7 @@ export class ButlerConsole {
               dependsOn: {
                 type: 'array',
                 items: { type: 'string' },
-                description: '前置的目标标识（例如 g1）。派这一步之前逐个核验：前置还没结束（含等人回话、等人在卡片上确认）就留在队列里等，不判失败；前置失败、取消或被替代才不派，并如实记下缺失的前提。不填表示没有前置。只能引用这一轮里已经存在的目标，或者本次计划中排在它前面的目标。**彼此独立的步骤不要互相依赖**：删掉五篇不同的文章、给五篇文章各配一张图，都是五件独立的事，应该并列成五个没有 dependsOn 的步骤，而不是串成一条链 —— 串起来之后，第一件卡住（例如等你确认），后面每一件都动不了。',
+                description: '前置的目标标识（例如 g1）。补充/替代某一步的新尝试会自动继承原步骤的前置，不必重写、丢了也不会断料。派这一步之前逐个核验：前置还没结束（含等人回话、等人在卡片上确认）就留在队列里等，不判失败；前置失败、取消或被替代才不派，并如实记下缺失的前提。不填表示没有前置。只能引用这一轮里已经存在的目标，或者本次计划中排在它前面的目标。**彼此独立的步骤不要互相依赖**：删掉五篇不同的文章、给五篇文章各配一张图，都是五件独立的事，应该并列成五个没有 dependsOn 的步骤，而不是串成一条链 —— 串起来之后，第一件卡住（例如等你确认），后面每一件都动不了。',
               },
               requiresExternalAction: {
                 type: 'boolean',
@@ -1813,6 +1818,8 @@ export class ButlerConsole {
           const acceptance = requireAcceptance(item.acceptance, `子任务「${clip(goal, 20)}」`)
           let logicalId = typeof item.logicalId === 'string' ? item.logicalId.trim() : ''
           const supersedes = typeof item.supersedes === 'string' ? item.supersedes.trim() : ''
+          /** 补充尝试（supersedes）从原步骤继承的依赖，见赋值处的说明。 */
+          let inheritedDependsOn: readonly string[] = []
           if (supersedes !== '') {
             const attempts = turn.context?.subtasks
             if (attempts === undefined) throw new Error('这一轮还没有可以替代的旧尝试，不要填 supersedes')
@@ -1827,6 +1834,13 @@ export class ButlerConsole {
               throw new Error(`子任务 ${supersedes} 属于目标 ${target.logicalId}，不能改成 ${logicalId}；要换目标请用新的标识并去掉 supersedes`)
             }
             logicalId = target.logicalId
+            /**
+             * 补充尝试**继承原步骤的依赖**。2026-09-21 线上实测：模型重派时漏写
+             * `dependsOn`，新尝试收不到上游材料，下游只能反过来问老板要数据——
+             * 「上一轮明明拿到了」的东西凭空消失。原步骤的依赖是这一步的事实需求，
+             * 重做并不改变它。真要解除依赖，换一个新的目标标识重新拆，别替代原步骤。
+             */
+            inheritedDependsOn = target.dependsOn === undefined ? [] : [...target.dependsOn]
           } else if (logicalId === '') {
             // 新目标：**在这里就分配标识**，不留给存储层。同一个计划里后面的项要能依赖前面的项，
             // 而依赖校验就发生在下面几行 —— 标识要等落库时才知道的话，`dependsOn` 里的 `g1`
@@ -1835,11 +1849,15 @@ export class ButlerConsole {
             logicalId = `g${nextLogical}`
           }
           const dependsOn = Array.isArray(item.dependsOn)
-            ? [...new Set(item.dependsOn
-              .filter((value): value is string => typeof value === 'string')
-              .map(value => value.trim())
-              .filter(value => value !== ''))]
-            : []
+            ? [...new Set([
+              ...item.dependsOn
+                .filter((value): value is string => typeof value === 'string')
+                .map(value => value.trim())
+                .filter(value => value !== ''),
+              // 补充尝试继承的原步骤依赖并进来（说明见赋值处）。
+              ...inheritedDependsOn,
+            ])]
+            : [...inheritedDependsOn]
           // 先查自依赖：它看起来像「引用了一个还不存在的目标」，报错会指向错误的方向。
           if (logicalId !== '' && dependsOn.includes(logicalId)) throw new Error('不能把自己当作前置')
           for (const dependency of dependsOn) {
@@ -3327,7 +3345,8 @@ export class ButlerConsole {
       const turn = await this.runTurn(conversation, prompt, budget)
       if (turn.outcome.kind !== 'completed') return null
       const text = turn.text.trim()
-      if (text === '' || text.length > 2000) return null
+      // 上限收紧到 1200：充实目标是"要点织入"不是"材料搬运"，留太多反而把派单顶破成员上限。
+      if (text === '' || text.length > 1200) return null
       return text
     } catch {
       return null
@@ -3806,7 +3825,7 @@ export class ButlerConsole {
         goalRefined = true
       }
     }
-    const brief = dispatchBrief(input.taskGoal, dispatchGoal, inputRefs, attachmentSection)
+    const brief = dispatchBrief(input.taskGoal, dispatchGoal, inputRefs, attachmentSection, goalRefined)
     if (brief.length > DISPATCH_MESSAGE_LIMIT) {
       const detail = `派单材料超过成员接收上限（${brief.length} > ${DISPATCH_MESSAGE_LIMIT} 字符），已停止派单，请缩小范围后重试`
       await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
