@@ -1,9 +1,10 @@
 /**
-import { CONVERSATION_KEY } from './config.js'
  * 页面共享单例（拆分设计 v2 批 1a）：el（DOM 句柄）、state（会话状态）、historyState
  * （历史翻页簿记）与本地会话记忆。可变共享靠 ES 模块的 live binding：只改属性、
  * 不重新赋值，各域 import 到的是同一个对象。
  */
+
+import { CONVERSATION_KEY } from './config.js'
 export const el = {
   thread: document.getElementById('thread'),
   rail: document.getElementById('rail'),

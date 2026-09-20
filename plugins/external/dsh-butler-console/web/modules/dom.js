@@ -1,10 +1,11 @@
 /**
-import { DEFAULT_AVATAR_FILES, PALETTE } from './config.js'
-import { el, state } from './state.js'
-import { ROUTE_PREFIX, api, avatarUrl } from '../api.js'
  * DOM 与帧工具（拆分设计 v2 批 1a）：节点工厂、时间/人名格式化、头像、滚动跟随、
  * 视口锚定（stabilizeViewport）、rAF 合帧与流式诊断 trace。依赖 config/state/api（叶子边）。
  */
+
+import { DEFAULT_AVATAR_FILES, PALETTE } from './config.js'
+import { el, state } from './state.js'
+import { ROUTE_PREFIX, api, avatarUrl } from '../api.js'
 export function defaultAvatarUrl(agentId) {
   const file = DEFAULT_AVATAR_FILES.get(String(agentId))
   return file === undefined ? null : `${ROUTE_PREFIX}/assets/media/avatars/${file}`
