@@ -224,7 +224,7 @@ describe('可用性', () => {
 describe('provider 注册表', () => {
   const environment = (provider: string): HuiyuEnvironment => ({
     minio: { endpoint: 'http://127.0.0.1:3101', bucket: 'huiyu', region: 'us-east-1', accessKey: 'a', secretKey: 'b', publicBaseUrl: 'https://img.pelycloud.com' },
-    image: { provider, baseUrl: 'https://img.ciyuan.fast', model: 'gpt-image-2', apiKey: '' },
+    image: { provider, baseUrl: 'https://img.ciyuan.fast', model: 'gpt-image-2', apiKey: '', coverStyle: '' },
   })
 
   it('已注册的 kind 都能建出可用 provider（给齐输入时）', () => {

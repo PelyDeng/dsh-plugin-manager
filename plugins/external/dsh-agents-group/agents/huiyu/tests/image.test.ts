@@ -150,7 +150,7 @@ describe('失败分类', () => {
 describe('provider 选择', () => {
   const environment = (provider: string): HuiyuEnvironment => ({
     minio: { endpoint: 'http://127.0.0.1:3101', bucket: 'huiyu', region: 'us-east-1', accessKey: 'a', secretKey: 'b', publicBaseUrl: 'https://img.pelycloud.com' },
-    image: { provider, baseUrl: 'https://relay.example.com', model: 'gpt-image-1.5', apiKey: '' },
+    image: { provider, baseUrl: 'https://relay.example.com', model: 'gpt-image-1.5', apiKey: '', coverStyle: '' },
   })
 
   it('OpenAI 兼容族建出可用 provider（密钥由参数传入）', () => {

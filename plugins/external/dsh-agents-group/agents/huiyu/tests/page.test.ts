@@ -27,6 +27,7 @@ const ENVIRONMENT: HuiyuEnvironment = {
     baseUrl: 'https://relay.example.com',
     model: 'gpt-image-1.5',
     apiKey: 'SECRET-IMAGE-KEY',
+    coverStyle: '',
   },
 }
 

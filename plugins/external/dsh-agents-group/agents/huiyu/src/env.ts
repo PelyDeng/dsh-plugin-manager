@@ -37,6 +37,12 @@ export interface HuiyuEnvironment {
      * 可以直接在文件里给一个。
      */
     readonly apiKey: string
+    /**
+     * 文章头图的默认画风（`huiyu_cover` 在调用方没给 style 时用它）。站点有固定视觉
+     * 语言时在 env.conf 配一句完整描述，例如「米白纸面手账线稿风：墨线勾勒、少量水彩
+     * 点缀、留白多、文字用手写楷体」。空串表示用代码里的通用缺省。
+     */
+    readonly coverStyle: string
   }
 }
 
@@ -97,6 +103,8 @@ export function parseEnvConf(content: string): HuiyuEnvironment {
       model: required(values, 'HUIYU_IMAGE_MODEL'),
       // 可选：正常情况下密钥由 DSH 凭据系统提供，`env.conf` 里不写它。
       apiKey: optional(values, 'HUIYU_IMAGE_API_KEY', ''),
+      // 可选：文章头图的默认画风（站点有固定视觉语言时配一句完整描述）。空串走代码缺省。
+      coverStyle: optional(values, 'HUIYU_COVER_STYLE', ''),
     },
   }
 }

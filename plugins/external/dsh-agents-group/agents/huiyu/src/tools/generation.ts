@@ -292,7 +292,7 @@ export function createGenerationTools(context: HuiyuToolContext): readonly Huiyu
         properties: {
           title: { type: 'string', description: '文章标题。' },
           summary: { type: 'string', description: '文章摘要或核心内容，用于让头图贴合主题。留空则只按标题构思。' },
-          style: { type: 'string', description: '风格偏好，例如“扁平插画”“写实摄影”“科技感”。留空则由工具按标题判断。' },
+          style: { type: 'string', description: '风格偏好，例如“扁平插画”“写实摄影”“手账线稿风”。留空用站点配置的默认画风（HUIYU_COVER_STYLE，未配置则按标题判断）。头图会把文章标题文字排进画面。' },
         },
         required: ['title'],
       },
@@ -301,7 +301,7 @@ export function createGenerationTools(context: HuiyuToolContext): readonly Huiyu
       const title = requiredString(args, 'title', 300)
       const summary = optionalString(args, 'summary', 2000)
       const style = optionalString(args, 'style', 200)
-      const prompt = coverPrompt(title, summary, style)
+      const prompt = coverPrompt(title, summary, style, context.environment.image.coverStyle)
       const artifacts = await generate(context, prompt, bannerSize(), 1, execution, 'huiyu_cover')
       return present(context, artifacts, '文章头图已生成，地址')
     },
@@ -326,12 +326,10 @@ export function createGenerationTools(context: HuiyuToolContext): readonly Huiyu
     run: async (args, execution) => {
       const paragraphs = requiredStringArray(args, 'paragraphs', MAX_BATCH, 2000)
       const style = optionalString(args, 'style', 200)
-      const artifacts: GeneratedArtifact[] = []
-      // 逐段串行：并发请求容易触发上游限流，而配图本来就是可以等的活。
-      for (const paragraph of paragraphs) {
-        const one = await generate(context, paragraphPrompt(paragraph, style), resolveSize('landscape'), 1, execution, 'huiyu_illustrate')
-        artifacts.push(...one)
-      }
+      // 并行一批：段数上限与 ciyuan 适配器的分批上限（4）一致，上游 4 路并行已实测安全。
+      const batches = await Promise.all(paragraphs.map(paragraph =>
+        generate(context, paragraphPrompt(paragraph, style, context.environment.image.coverStyle), resolveSize('landscape'), 1, execution, 'huiyu_illustrate')))
+      const artifacts: GeneratedArtifact[] = batches.flat()
       const lines = artifacts.map((artifact, index) => `第 ${index + 1} 段配图${describeSize(artifact)}：${artifact.url}`)
       const content = await present(context, artifacts, '配图已生成')
       return [{ type: 'text', text: `建议插入位置（按原段落顺序）：\n${lines.join('\n')}` }, ...content.slice(1)]
@@ -353,27 +351,29 @@ function countOf(args: Record<string, unknown>): number {
 /**
  * 按标题与摘要组织横幅提示词。
  *
- * 这段组装就是"专用工具比通用工具好用"的地方：模型只说标题，工具负责补上"横幅构图 + 无文字 +
- * 留白"这些它容易忘的约束。**明确要求不要在图里写字**——生成模型写字多半是糊的，
- * 而头图上的错字比没有字难看得多。
+ * 这段组装就是"专用工具比通用工具好用"的地方：模型只说标题，工具负责补上构图与叙事
+ * 约束。**标题文字要上图**（2026-09-21 老板要求：头图要带文章标题、要能看出文章讲什么，
+ * 万能贴纸拼贴不算配图）——短中文标题的渲染质量可用；除标题外的文字仍然禁止，防乱码。
  */
-function coverPrompt(title: string, summary: string | undefined, style: string | undefined): string {
-  const styleHint = style ?? '简洁的编辑插画风格，色彩克制、有明确视觉焦点'
-  const parts = [
+function coverPrompt(title: string, summary: string | undefined, style: string | undefined, configStyle: string): string {
+  const styleHint = style ?? (configStyle.trim() !== '' ? configStyle.trim() : '编辑插画风格：造型简练、色彩克制、有明确视觉焦点')
+  return [
     `为一篇文章设计横幅头图。文章标题：${title}`,
     ...(summary === undefined ? [] : [`文章摘要：${summary}`]),
-    `画面要求：横幅构图，主体居中偏左、右侧留出呼吸空间；${styleHint}。`,
-    '不要在画面中出现任何文字、字母或水印。',
-  ]
-  return parts.join('\n')
+    '画面要求：',
+    `1. 图上必须出现这篇文章的标题「${title}」，作为画面主体之一认真排版：位置醒目、字体气质与画风一致；除这个标题外不要出现其他文字、字母或水印。`,
+    '2. 从标题与摘要里提炼一两个**具体的核心概念**，转成看得懂的画面元素——读者看图 10 秒内应该能说出"这篇文章讲什么"；禁止堆砌齿轮、机器人、电路、灯泡这类放在任何科技文章上都成立的万能贴纸。',
+    '3. 横幅构图：画面元素与标题字相互呼应，留出呼吸空间，整体像一张杂志专栏的题图。',
+    `4. 画风：${styleHint}。`,
+  ].join('\n')
 }
 
-/** 按段落内容组织配图提示词。同样明确排除文字。 */
-function paragraphPrompt(paragraph: string, style: string | undefined): string {
-  const styleHint = style ?? '与文章气质一致的插画风格'
+/** 按段落内容组织配图提示词。段落插图不带文字（那是头图的事），但意象要具体、对应段落观点。 */
+function paragraphPrompt(paragraph: string, style: string | undefined, configStyle: string): string {
+  const styleHint = style ?? (configStyle.trim() !== '' ? configStyle.trim() : '与文章气质一致的编辑插画风格')
   return [
     '为下面这段文章内容配一张插图：',
     paragraph,
-    `画面要求：${styleHint}；横构图；不要出现任何文字、字母或水印；不要直白复述段落，用意象表达。`,
+    `画面要求：${styleHint}；横构图；不要出现任何文字、字母或水印；插图要表达这段内容的具体观点或场景，不要直白复述段落，也不要用放在任何文章上都成立的通用装饰元素。`,
   ].join('\n')
 }
