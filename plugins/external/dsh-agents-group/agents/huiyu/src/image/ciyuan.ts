@@ -44,9 +44,16 @@ export const CIYUAN_KIND = 'ciyuan-images'
 /** Ciyuan 的默认端点。真实调用验证过这个域名。 */
 export const CIYUAN_DEFAULT_BASE_URL = 'https://img.ciyuan.fast'
 
-/** 轮询间隔与整体超时。生成一张高分辨率图通常十几秒到一分钟。 */
+/** 轮询间隔与整体超时。生成一张高分辨率图通常十几秒到一分钟，排队高峰会到三分钟上下。 */
 const POLL_INTERVAL_MS = 3000
-const DEFAULT_TIMEOUT_MS = 240_000
+/**
+ * 内层预算（单个任务的创建+轮询+下载）。要和 participant 层的外层协作预算错开
+ * （见 huiyu 的 `TURN_TIMEOUT_MS`）：外层从接单起算、先烧完，等长会让内层那个
+ * 更精确的"生图超时"永远轮不到报——线上只能看到笼统的"协作超时"。
+ */
+const DEFAULT_TIMEOUT_MS = 300_000
+/** 多张图并行的单批上限。4 路并行实测安全；再多分批排队，不一次性烧爆渠道配额。 */
+const MAX_PARALLEL_JOBS = 4
 /** 刚创建的任务可能短暂 404，这段宽限期内重试。 */
 const NOT_FOUND_GRACE_MS = 15_000
 
@@ -133,52 +140,73 @@ export function createCiyuanProvider(options: CiyuanOptions): ImageGenerationPro
       if (!state.ok) throw new ImageGenerationError('unconfigured', `图片生成未配置：${state.error ?? '缺少必要参数'}`)
       const signal = spec.signal ?? AbortSignal.timeout(timeoutMs)
 
-      // ---- 第一步：创建任务 ----
-      const created = await call('/v1/images/generations', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ model: options.model, prompt: spec.prompt, size: spec.size, n: spec.count }),
-      }, signal) as CreatePayload
-      const jobId = typeof created.id === 'string' ? created.id : ''
-      if (jobId === '') {
-        throw new ImageGenerationError('upstream', `Ciyuan 创建任务未返回 id：${excerpt(JSON.stringify(created))}`)
-      }
+      /**
+       * 一个单图任务从创建到拿到图片地址。每个任务固定 `n: 1`——渠道的任务制一次 job
+       * 只稳定产出一张图，多张靠多个任务并行（分批上限 {@link MAX_PARALLEL_JOBS}）。
+       */
+      const runOne = async (): Promise<readonly string[]> => {
+        // ---- 第一步：创建任务 ----
+        const created = await call('/v1/images/generations', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model: options.model, prompt: spec.prompt, size: spec.size, n: 1 }),
+        }, signal) as CreatePayload
+        const jobId = typeof created.id === 'string' ? created.id : ''
+        if (jobId === '') {
+          throw new ImageGenerationError('upstream', `Ciyuan 创建任务未返回 id：${excerpt(JSON.stringify(created))}`)
+        }
 
-      // ---- 第二步：轮询到终态 ----
-      const deadline = now() + timeoutMs
-      const graceUntil = now() + NOT_FOUND_GRACE_MS
-      let job: JobPayload
-      for (;;) {
-        try {
-          job = await call(`/v1/image-jobs/${encodeURIComponent(jobId)}`, { method: 'GET' }, signal) as JobPayload
-        } catch (error: unknown) {
-          // 刚创建的任务可能短暂 404：宽限期内继续等，超过后按原错误失败。
-          if (now() < graceUntil && error instanceof ImageGenerationError && error.message.includes('HTTP 404')) {
-            await sleep(POLL_INTERVAL_MS)
-            continue
+        // ---- 第二步：轮询到终态 ----
+        const deadline = now() + timeoutMs
+        const graceUntil = now() + NOT_FOUND_GRACE_MS
+        let job: JobPayload
+        for (;;) {
+          try {
+            job = await call(`/v1/image-jobs/${encodeURIComponent(jobId)}`, { method: 'GET' }, signal) as JobPayload
+          } catch (error: unknown) {
+            // 刚创建的任务可能短暂 404：宽限期内继续等，超过后按原错误失败。
+            if (now() < graceUntil && error instanceof ImageGenerationError && error.message.includes('HTTP 404')) {
+              await sleep(POLL_INTERVAL_MS)
+              continue
+            }
+            throw error
           }
-          throw error
+          const status = typeof job.status === 'string' ? job.status : ''
+          if (status === 'succeeded') break
+          if (status === TERMINAL_FAILED) {
+            throw new ImageGenerationError('upstream', `Ciyuan 生图任务失败：${excerpt(JSON.stringify(job))}`)
+          }
+          if (now() >= deadline) {
+            throw new ImageGenerationError('upstream', `Ciyuan 生图超时（${Math.round(timeoutMs / 1000)} 秒，任务 ${jobId} 最后状态 ${status || '未知'}）`)
+          }
+          await sleep(POLL_INTERVAL_MS)
         }
-        const status = typeof job.status === 'string' ? job.status : ''
-        if (status === 'succeeded') break
-        if (status === TERMINAL_FAILED) {
-          throw new ImageGenerationError('upstream', `Ciyuan 生图任务失败：${excerpt(JSON.stringify(job))}`)
+
+        // ---- 拿到图片地址 ----
+        const urls = (job.result?.data ?? [])
+          .map(entry => (typeof entry.url === 'string' ? entry.url : ''))
+          .filter(url => url !== '')
+        if (urls.length === 0) {
+          throw new ImageGenerationError('upstream', `Ciyuan 任务成功但没有返回图片地址：${excerpt(JSON.stringify(job))}`)
         }
-        if (now() >= deadline) {
-          throw new ImageGenerationError('upstream', `Ciyuan 生图超时（${Math.round(timeoutMs / 1000)} 秒，任务 ${jobId} 最后状态 ${status || '未知'}）`)
-        }
-        await sleep(POLL_INTERVAL_MS)
+        return urls
       }
 
-      // ---- 第三步：下载图片 ----
-      const urls = (job.result?.data ?? [])
-        .map(entry => (typeof entry.url === 'string' ? entry.url : ''))
-        .filter(url => url !== '')
-      if (urls.length === 0) {
-        throw new ImageGenerationError('upstream', `Ciyuan 任务成功但没有返回图片地址：${excerpt(JSON.stringify(job))}`)
+      /**
+       * 多张 = 多个单图任务并行（一批最多 {@link MAX_PARALLEL_JOBS} 路，再多分批排队——
+       * 并行路数实测 4 路安全，也不一次性烧爆渠道配额）。批内任何一路失败整轮失败，
+       * 与单张语义一致，不交付"缺几张"的结果。
+       */
+      const count = Math.max(1, Math.floor(spec.count))
+      const urls: string[] = []
+      for (let done = 0; done < count; done += MAX_PARALLEL_JOBS) {
+        const size = Math.min(MAX_PARALLEL_JOBS, count - done)
+        const batch = await Promise.all(Array.from({ length: size }, () => runOne()))
+        for (const part of batch) urls.push(...part)
       }
-      const images: GeneratedImage[] = []
-      for (const url of urls) {
+
+      // ---- 第三步：并行下载图片 ----
+      const images = await Promise.all(urls.map(async url => {
         let response: Response
         try {
           response = await doFetch(url, { redirect: 'error', signal })
@@ -192,8 +220,8 @@ export function createCiyuanProvider(options: CiyuanOptions): ImageGenerationPro
         if (buffer.byteLength === 0) {
           throw new ImageGenerationError('upstream', 'Ciyuan 返回了空的图片数据')
         }
-        images.push({ data: buffer, mediaType: mediaTypeOf(response.headers.get('content-type')) })
-      }
+        return { data: buffer, mediaType: mediaTypeOf(response.headers.get('content-type')) } satisfies GeneratedImage
+      }))
       return { model: options.model, images }
     },
   }

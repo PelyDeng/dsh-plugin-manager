@@ -637,6 +637,8 @@ export class TaskStore {
       /** 协作返回原文：不传表示保留旧值；合法空文本要编码成含 protocol/text 的 JSON。 */
       memberReturn?: ButlerMemberReturn
       conversationId?: string
+      /** goal 充实（中继轮）的 v2 目标：不传表示保留旧值。与 PG 实现逐字对齐。 */
+      goal?: string
     } = {},
   ): number {
     const now = Date.now()
@@ -655,6 +657,7 @@ export class TaskStore {
           WHEN started_at IS NOT NULL OR state<>'queued' THEN input_refs
           ELSE ? END,
         member_return=COALESCE(?,member_return),
+        goal=COALESCE(?,goal),
         started_at=CASE WHEN ?=1 THEN COALESCE(started_at,?) ELSE started_at END,
         finished_at=CASE WHEN ?=1 THEN COALESCE(finished_at,?) ELSE finished_at END
       WHERE task_id=? AND id=? AND state IN (${sources.map(() => '?').join(',')})`).run(
@@ -664,6 +667,7 @@ export class TaskStore {
       patch.conversationId === undefined || patch.conversationId === '' ? null : patch.conversationId,
       inputRefs, inputRefs,
       patch.memberReturn === undefined ? null : JSON.stringify(patch.memberReturn),
+      patch.goal === undefined ? null : patch.goal,
       started ? 1 : 0, now,
       terminal ? 1 : 0, now,
       taskId, subtaskId, ...sources,

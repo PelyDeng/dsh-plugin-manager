@@ -565,6 +565,8 @@ export interface ButlerStorage {
       /** 协作返回原文：不传表示保留旧值；合法空文本要编码成含 protocol/text 的 JSON。 */
       memberReturn?: ButlerMemberReturn
       conversationId?: string
+      /** goal 充实（中继轮）的 v2 目标：不传表示保留旧值。v1 留痕在计划快照里。 */
+      goal?: string
     },
   ): Promise<number>
 

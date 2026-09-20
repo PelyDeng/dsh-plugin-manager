@@ -3278,6 +3278,65 @@ export class ButlerConsole {
   }
 
   /**
+   * goal 充实（中继轮）：派下一棒之前，让大总管读着上游交回的原文，把这一步在拆解时
+   * 预写的目标织具体——「用 A 查来的数据配图」变成「用 A 交回的那三个数字配图」。
+   *
+   * 在**临时会话**里跑：不经 butler 的会话表（不进用户的对话列表），也不占用户会话——
+   * 并行派发时多个中继轮互不相撞，内部指令也绝不落进用户看得到的对话流。留痕是两份：
+   * 原目标在计划快照里（`butler_plan` 落库的原文），充实版随 `dispatched` 写进子任务行。
+   *
+   * 中继只是增益：开不出会话、超时、被打断、空文或超长，一律回落原目标，不阻塞派单。
+   */
+  private async relayGoalEnrich(
+    taskGoal: string,
+    goal: string,
+    refs: readonly ButlerInputRef[],
+    signal: AbortSignal,
+  ): Promise<string | null> {
+    let handle: AgentHandle | undefined
+    try {
+      // `?? 45000`：旧配置对象（如测试手写的 config）没有这个新字段——中继预算兜个默认，别让增益功能变成派单门槛。
+      const budget = AbortSignal.any([signal, AbortSignal.timeout(this.config.goalRelayTimeoutMs ?? 45_000)])
+      const selection = await defaultConversationModel(this.ctx)
+      const effort = selection.reasoningEffort ?? this.config.reasoningEffort
+      const id = this.createId()
+      handle = await this.ctx.agents.create({
+        sessionId: SessionId(id),
+        meta: { cwd: process.cwd() },
+        agentOptions: {
+          provider: selection.provider,
+          model: selection.model,
+          ...(effort ? { reasoningEffort: ReasoningEffortId(effort) } : {}),
+        },
+        setup: agentCtx => this.setup(agentCtx, id),
+      })
+      const conversation: Conversation = { id, handle, selection, active: false, lastUsedAt: Date.now() }
+      const prompt = [
+        '【内部中继指令·目标充实】一个多步骤任务里的一步即将派给执行方。上游步骤已经交回结果，请把这一步的目标结合上游产出改写得更具体。',
+        '只输出改写后的目标正文本身：不要解释、不要前后缀、不要引号、不要调任何工具。',
+        `整体目标：${clip(taskGoal, 1000)}`,
+        `这一步在拆解时预写的目标：${goal}`,
+        '上游交回的材料（原文照录）：',
+        ...refs.map(ref => `【${ref.logicalId}】${clip(ref.text, 2000)}`),
+        '改写规则：',
+        '- 把上游交回里对这一步有用的具体信息（数字、结论、文件名、地址、口径、已确认的决定）织进目标正文；',
+        '- 删掉与这一步无关的上游内容；',
+        '- 上游材料里没有可用信息、或原目标已经足够具体时，原样重抄原目标；',
+        '- 目标只转述要做的产出本身，老板没说的要求不要添加。',
+      ].join('\n')
+      const turn = await this.runTurn(conversation, prompt, budget)
+      if (turn.outcome.kind !== 'completed') return null
+      const text = turn.text.trim()
+      if (text === '' || text.length > 2000) return null
+      return text
+    } catch {
+      return null
+    } finally {
+      void handle?.dispose().catch(() => { /* 中继会话用完即弃，释放失败不影响派单。 */ })
+    }
+  }
+
+  /**
    * 宿主实时帧入口，由 `index.ts` 注册到 `ctx.on('agent/assistant-stream')`。
    *
    * 只处理牛马大总管当前回合的帧：其他插件 Agent 的帧与工具参数都不进页面。
@@ -3736,7 +3795,18 @@ export class ButlerConsole {
     // 外部待办全部计入）。超限一律不派单，也不静默或显式截断后继续；由老板缩小范围后走既有
     // 「新尝试」规则。
     const attachmentSection = await this.attachmentSection(input.actor, taskId)
-    const brief = dispatchBrief(input.taskGoal, input.goal, inputRefs, attachmentSection)
+    // goal 充实（方案 B）：带上游材料的派单先过一次中继轮，把拆解时预写的目标织具体。
+    // 充实版落进子任务行（原目标留痕在计划快照），派单简报与页面显示都用充实版。
+    let dispatchGoal = input.goal
+    let goalRefined = false
+    if (inputRefs.length > 0) {
+      const refined = await this.relayGoalEnrich(input.taskGoal, input.goal, inputRefs, signal)
+      if (refined !== null && refined !== input.goal) {
+        dispatchGoal = refined
+        goalRefined = true
+      }
+    }
+    const brief = dispatchBrief(input.taskGoal, dispatchGoal, inputRefs, attachmentSection)
     if (brief.length > DISPATCH_MESSAGE_LIMIT) {
       const detail = `派单材料超过成员接收上限（${brief.length} > ${DISPATCH_MESSAGE_LIMIT} 字符），已停止派单，请缩小范围后重试`
       await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
@@ -3753,9 +3823,12 @@ export class ButlerConsole {
 
     // 同子任务写入顺序（§3 / T1-2 不变量 b）：dispatched（含 inputRefs 首次固定）必须先于
     // onProgress 触发的任何 running 写入落地。这里入队并 await；后续进度写入排进同一条
-    // 队列，天然晚于本条。
-    await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'dispatched', { inputRefs }))
-    yield emit('dispatched', `已把活交给 ${displayName}`, { phase: 'analyzing' })
+    // 队列，天然晚于本条。goal 只在中继充实过时才覆盖（v1 在计划快照里，v2 是派出去的这份）。
+    await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'dispatched', {
+      inputRefs,
+      ...(goalRefined ? { goal: dispatchGoal } : {}),
+    }))
+    yield emit('dispatched', `已把活交给 ${displayName}${goalRefined ? '（目标已结合上游产出充实）' : ''}`, { phase: 'analyzing' })
 
     const controller = new AbortController()
     const onAbort = () => controller.abort()

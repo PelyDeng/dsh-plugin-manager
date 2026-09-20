@@ -46,6 +46,8 @@ export interface Config {
   visionModel: string
   /** 抓取 URL 的超时。对方不响应时不能让一个上传请求挂在那里。 */
   attachmentFetchTimeoutMs: number
+  /** goal 充实中继轮的预算。超时回落原目标，不阻塞派单。 */
+  goalRelayTimeoutMs: number
   /** 同时保留的牛马大总管会话数。 */
   maxActiveConversations: number
   /** 运行历史每页条数上限。 */
@@ -89,6 +91,7 @@ export const Config: Schema<Config> = Schema.object({
   // 空串是合法取值（表示自动挑），所以这里不加 pattern：加了会把默认值本身判成非法。
   visionModel: Schema.string().default(''),
   attachmentFetchTimeoutMs: Schema.natural().min(1000).max(120000).default(15000),
+  goalRelayTimeoutMs: Schema.natural().min(5000).max(120000).default(45000),
   maxActiveConversations: Schema.natural().min(1).max(500).default(32),
   maxHistoryPageSize: Schema.natural().min(1).max(100).default(30),
   maxConversationEvents: Schema.natural().min(50).max(20000).default(2000),

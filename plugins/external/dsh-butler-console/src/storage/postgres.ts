@@ -644,6 +644,8 @@ export class PostgresTaskStorage implements ButlerStorage {
       inputRefs?: readonly ButlerInputRef[]
       memberReturn?: ButlerMemberReturn
       conversationId?: string
+      /** goal 充实（中继轮）的 v2 目标：只在确实充实过时传，否则保留旧值。 */
+      goal?: string
     } = {},
   ): Promise<number> {
     const now = Date.now()
@@ -671,6 +673,7 @@ export class PostgresTaskStorage implements ButlerStorage {
            WHEN started_at IS NOT NULL OR state<>'queued' THEN input_refs
            ELSE $6::jsonb END,
          member_return=COALESCE($7,member_return),
+         goal=COALESCE($14,goal),
          started_at=CASE WHEN $8::boolean THEN COALESCE(started_at,$9::bigint) ELSE started_at END,
          finished_at=CASE WHEN $10::boolean THEN COALESCE(finished_at,$9::bigint) ELSE finished_at END
        WHERE task_id=$11 AND id=$12 AND state = ANY($13::text[])`,
@@ -684,6 +687,7 @@ export class PostgresTaskStorage implements ButlerStorage {
         patch.memberReturn === undefined ? null : JSON.stringify(patch.memberReturn),
         started, now, terminal,
         taskId, subtaskId, [...sources],
+        patch.goal === undefined ? null : patch.goal,
       ],
     )
     // 影响 0 行 = 迁移不合法（或这条子任务不存在）。返回行数是为了让**结账写入**能核验：
