@@ -40,7 +40,7 @@ describe('聊天图片预览：受控渲染边界', () => {
   it('正文里的裸图片地址渲染成受控图片节点（截图病灶：地址只是一行文本）', () => {
     const found = pics(`图出来了，老大：\n\n${IMG}\n\n- 尺寸 1672×941`)
     expect(found).toHaveLength(1)
-    expect(found[0]!.children?.[0]?.attrs).toMatchObject({ src: IMG, loading: 'lazy' })
+    expect(found[0]!.children?.[0]?.attrs).toMatchObject({ src: IMG, loading: 'eager' })
     expect(found[0]!.attrs?.target).toBe('_blank')
     expect(found[0]!.attrs?.rel).toContain('noopener')
   })

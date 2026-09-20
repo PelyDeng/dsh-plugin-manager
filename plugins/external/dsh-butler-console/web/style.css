@@ -718,7 +718,9 @@ textarea:focus-visible,
   position: relative;
   display: block; float: right;
   margin: 2px 0 8px 14px;
-  max-width: min(56%, 380px);
+  /* 定宽（不是 max-width）：图未加载时高度为 0，float 收缩宽会塌成 2px；
+     定宽让加载前后尺寸稳定，也保证 eager 图有正确的布局框。 */
+  width: min(56%, 380px);
   line-height: 0;
 }
 .md .md-pic img { display: block; width: 100%; height: auto; border: 1.5px solid var(--bt-stroke); border-radius: 8px; background: var(--bt-card); }

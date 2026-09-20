@@ -103,7 +103,8 @@ function imageSpec(src, alt) {
       'data-preview': src,
       ...(alt === '' ? {} : { title: alt }),
     },
-    children: [{ tag: 'img', attrs: { src, alt, loading: 'lazy', referrerpolicy: 'no-referrer' } }],
+    // eager：聊天缩略图要立刻可见——lazy 在 float+line-height:0 布局下永不触发加载（0.10.0 起的回归）。
+    children: [{ tag: 'img', attrs: { src, alt, loading: 'eager', referrerpolicy: 'no-referrer' } }],
   }
 }
 
