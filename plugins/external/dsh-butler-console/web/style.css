@@ -1,20 +1,30 @@
 /*
  * 牛马大总管群聊样式。
  *
- * 画风：奶油纸底 + 手绘描边 + 贴纸点缀。目标是「这是我的地盘」的松弛感，而不是公司
- * 内部工具。笑点主要落在文案上，视觉只做点缀。
+ * 画风：墨线手账（原型 C，2026-09-20）——暖米白纸面 + 墨色手绘勾边 + 红笔批注 +
+ * 手写体标题 + 荧光笔小节标记。目标是一页「认真写的手帐」，而不是公司内部工具。
  *
  * 可读性是硬约束：正文字号不小于 13.5px，因为这是要长时间盯着的聊天页面。
  */
 
+/* 手写体：Ma Shan Zheng（毛笔楷书，OFL），unicode-range 分片按需加载；
+   仅标题/批注/状态词等「手写字」元素使用，正文保持系统字体保证可读性。 */
+@import url("media/fonts/ma-shan-zheng/ma-shan-zheng.css");
+
 :root {
-  --bt-paper: #fdf8ef;
+  --bt-paper: #f6efdd;
   --bt-card: #ffffff;
-  --bt-ink: #3d3630;
+  --bt-ink: #2f2b26;
   --bt-ink-soft: #7d7468;
   --bt-ink-faint: #a89f92;
-  --bt-line: #e8e0d2;
-  --bt-stroke: #4a423a;
+  --bt-line: #ddd2bc;
+  --bt-stroke: #2f2b26;
+  /* 红笔批注：圈注、波浪线、页脚红心（原型 C 的批注层）。 */
+  --bt-red: #d2493f;
+
+  /* 手绘勾边框（border-image 九宫格）：线条带轻微波动，是「笔画」而不是「线框」。
+     源图 24×24、线条画在 6px 环带内，切片 6 / 显示 4px，缩放后线宽约 1.4px。 */
+  --bt-ink-frame: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Cpath d='M2.5 4.5 C 8 2.6, 16 3.1, 21.6 4.1 C 22.5 9, 21.7 15, 20.9 21.5 C 15 22.4, 8.5 21.9, 2.7 21.1 C 1.5 15, 2.1 8.5, 2.5 4.5 Z' fill='none' stroke='%232f2b26' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
 
   --bt-coral: #ff6b57;
   --bt-amber: #ffb703;
@@ -29,9 +39,13 @@
   --bt-error-bg: #fdeceb;
   --bt-ok-bg: #e8f6ef;
 
-  --bt-font: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
-  /* 手写标题字：拉丁字符走 Segoe Print/Comic Sans，中文落到楷体，才有「随手写的」味。 */
-  --bt-hand: "Segoe Print", "Comic Sans MS", "KaiTi", "STKaiti", "Kaiti SC", "DFKai-SB", "BiauKai", cursive;
+  /* 正文也走手写体（原型 C 全页手写）：Ma Shan Zheng 对长文可读性靠字号补偿，
+     输入框等需要精确辨识的位置单独回落系统字体。 */
+  --bt-font: "Ma Shan Zheng", "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  /* 系统字体栈：输入框等「用户打字」与需要严格辨识的位置使用。 */
+  --bt-ui-font: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  /* 手写标题字：Ma Shan Zheng（毛笔楷）打头，拉丁/缺字回落 Segoe Print 与楷体。 */
+  --bt-hand: "Ma Shan Zheng", "Segoe Print", "Comic Sans MS", "KaiTi", "STKaiti", "Kaiti SC", "DFKai-SB", "BiauKai", cursive;
   --bt-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
   /* 手绘感来自两条略有差异的圆角，看起来像随手画的 */
@@ -46,12 +60,13 @@ html, body { height: 100%; }
 
 body {
   margin: 0;
-  /* 小白板：近白底 + 极淡方格，像一块干净的写字板。 */
-  background-color: #fbfbf8;
+  /* 桌面：高明度暖米色（原型 C 的桌面与纸片色差很小，层次靠墨线与投影表达，
+     不是靠桌面压暗衬白纸）+ 极轻暗角 + 更淡的纸纹。 */
+  background-color: #f3edde;
   background-image:
-    linear-gradient(#3d36300a 1px, transparent 1px),
-    linear-gradient(90deg, #3d36300a 1px, transparent 1px);
-  background-size: 26px 26px;
+    radial-gradient(120% 90% at 8% 0%, #0000000d 0%, transparent 46%),
+    radial-gradient(120% 100% at 100% 100%, #0000000a 0%, transparent 50%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.42 0 0 0 0 0.37 0 0 0 0 0.28 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E");
   color: var(--bt-ink);
   font-family: var(--bt-font);
   font-size: 14px;
@@ -62,10 +77,18 @@ body {
 button, input, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 
+/* 纸感滚动条：细圆条 + 纸色轨道，别让一根系统灰条戳破手帐画面。 */
+* { scrollbar-width: thin; scrollbar-color: #c9b998 transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #c9b998; border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: #b3a17e; }
+
+/* 焦点环用墨系虚线：批注层（红）与状态色不参与"这是键盘在这"的表达。 */
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
-[tabindex]:focus-visible { outline: 2px dashed var(--bt-sky); outline-offset: 2px; }
+[tabindex]:focus-visible { outline: 2px dashed var(--bt-ink-soft); outline-offset: 2px; }
 
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
@@ -77,32 +100,31 @@ textarea:focus-visible,
 .paper {
   position: relative;
   background: var(--bt-card);
-  /* 白板笔描边：比手账风略粗、略平滑，圆角更大更规整。 */
-  border: 2px solid var(--bt-stroke);
-  border-radius: 10px 14px 9px 13px;
+  /* 手绘墨线勾边：border-image 手绘框（线条波动）替代平直实线。
+     布局仍按 2px 占位，图像画到 4px——多出的 2px 侵入自身 padding 边缘，不挤压内容。 */
+  border: 2px solid transparent;
+  border-image: var(--bt-ink-frame) 6 / 4px round;
   box-shadow: 0 2px 0 #00000008, 0 6px 16px #00000012;
 }
 
-/* 圆磁铁：把纸卡按在白板上（原和纸胶带在此风格里换成磁铁）。
-   栏本身 overflow 裁剪，磁铁贴在边框内侧压住描边。 */
+/* 纸胶带：把纸卡按在页面上。颜色加浓一档，保证撕边纸上的存在感。 */
 .column--left::before,
-.column--right .paper:first-of-type::after {
+.column--right > section:first-child::after {
   content: '';
-  position: absolute; top: 10px; width: 17px; height: 17px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #ffffffd9 0 22%, transparent 46%), #ffb703;
-  box-shadow: 0 2px 4px #00000030, inset 0 0 0 1.5px #00000026;
+  position: absolute; top: -6px; width: 76px; height: 22px;
+  background: linear-gradient(100deg, #dbc79ecd, #e5d3aebe 55%, #d6c097bd);
+  box-shadow: 0 1px 3px #00000030;
+  transform: rotate(-4deg);
   pointer-events: none;
 }
 
-.column--left::before { left: 20px; }
+.column--left::before { left: 24px; }
 
-.column--right .paper:first-of-type::after {
-  right: 20px;
-  background: radial-gradient(circle at 35% 30%, #ffffffd9 0 22%, transparent 46%), #ff6b57;
+.column--right > section:first-child::after {
+  right: 28px;
+  background: linear-gradient(100deg, #a3c6e5, #bedcf2cc 55%, #9cc2e0);
+  transform: rotate(5deg);
 }
-
-/* 中栏顶部被标题和喊停占满，没有空白角给磁铁，刻意不加。 */
 
 .sticker {
   display: inline-flex; align-items: center; gap: 4px;
@@ -132,13 +154,16 @@ textarea:focus-visible,
 .btn--ghost { border-color: transparent; background: transparent; font-weight: 500; color: var(--bt-ink-soft); }
 .btn--ghost:hover:not(:disabled) { background: #00000008; box-shadow: none; transform: none; }
 .btn--tiny { padding: 3px 10px; font-size: 12px; }
-/* 左栏顶上那颗大手绘按钮：原型里的「派活 +」。 */
+/* 左栏顶上那颗大手绘按钮：马克笔涂的橙色块，深色底边压出厚度（原型 C）。 */
 .btn--chunky {
-  padding: 9px 20px;
+  padding: 14px 20px;
   border-width: 2px;
-  font-family: var(--bt-hand); font-size: 16px; font-weight: 700; letter-spacing: 2px;
-  box-shadow: 2.5px 3.5px 0 #00000020;
+  border-radius: 12px 10px 13px 9px / 10px 13px 9px 12px;
+  background: #f59a3c; color: #fff;
+  font-family: var(--bt-hand); font-size: 20px; font-weight: 700; letter-spacing: 2px;
+  box-shadow: 0 3px 0 #b5651d, 2px 4px 0 #00000020;
 }
+.btn--chunky:active:not(:disabled) { box-shadow: 0 1px 0 #b5651d; }
 
 .dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--bt-ink-faint); }
 .dot--running, .dot--dispatched, .dot--summarizing { background: var(--bt-sky); }
@@ -166,24 +191,64 @@ textarea:focus-visible,
 .shell { display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden; }
 
 .topbar {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 18px 0;
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 18px 0;
   background: transparent;
 }
+
+/* 顶栏（原型 C 头部）：左三枚圆点 + 两行座右铭 + 右侧口号与笑脸。
+   文字内容全部来自 Figma 转换稿的文字图层（坐标逐一对齐）。 */
+.topbar__dots { display: inline-flex; gap: 7px; align-items: center; }
+.topbar__dots i { width: 13px; height: 13px; border-radius: 50%; border: 1.4px solid #4a423a55; }
+.topbar__dots i:nth-child(1) { background: #b9322b; }
+.topbar__dots i:nth-child(2) { background: #e9aa35; }
+.topbar__dots i:nth-child(3) { background: #75ad56; }
+.topbar__motto {
+  margin: 0; font-family: var(--bt-hand); font-size: 19px; line-height: 1.3;
+  color: var(--bt-ink); transform: rotate(-0.5deg); user-select: none;
+}
+.topbar__slogan {
+  margin: 0; font-family: var(--bt-hand); font-size: 19px; line-height: 1.3;
+  color: var(--bt-ink); transform: rotate(0.4deg); user-select: none;
+}
+.topbar__smile { font-family: var(--bt-hand); font-size: 26px; color: var(--bt-ink-soft); transform: rotate(6deg); }
+@media (max-width: 900px) { .topbar__motto, .topbar__slogan, .topbar__smile, .topbar__dots { display: none; } }
 
 /* 宽屏下标题由左栏品牌块承担，顶栏只留状态；窄屏左栏收起，标题回到顶栏。 */
 .topbar__brand { display: none; align-items: center; gap: 8px; }
 .topbar h1 { margin: 0; font-family: var(--bt-hand); font-size: 18px; font-weight: 700; }
 .topbar__crown { font-size: 18px; line-height: 1; }
-.topbar__status { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--bt-ink-soft); }
+.topbar__status { display: inline-flex; align-items: center; gap: 6px; font-family: var(--bt-hand); font-size: 13px; color: var(--bt-ink-soft); }
 .spacer { flex: 1; }
-.identity { font-size: 12.5px; color: var(--bt-ink-soft); white-space: nowrap; }
+.identity { font-family: var(--bt-hand); font-size: 13px; color: var(--bt-ink-soft); white-space: nowrap; }
 .identity a { color: var(--bt-sky); }
+
+/* 三张手帐纸（原型 C/B 的核心质感）：撕痕不规则（幅度与间距抖动，左右边也有起伏）、
+   双层柔和投影浮起、每张微微歪斜——「随手摊在桌上」的样子。 */
+.desk .column {
+  position: relative;
+  background-color: #fdf9f0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.36 0 0 0 0 0.32 0 0 0 0 0.26 0 0 0 0.045 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E");
+  clip-path: polygon(0.2% 1.4%, 1.5% 0.9%, 3% 2.3%, 4.5% 0.6%, 6% 1.4%, 8% 0.4%, 10% 1.8%, 13% 2.4%, 15% 0.6%, 18% 1.3%, 21% 0.3%, 24% 2.8%, 26% 0.7%, 29% 1.7%, 32% 0.6%, 35% 2.6%, 37% 0.4%, 40% 1.4%, 43% 0.5%, 46% 2.2%, 48% 0.7%, 51% 1.5%, 54% 0.4%, 57% 2.9%, 59% 0.8%, 62% 1.3%, 65% 0.4%, 68% 1.9%, 70% 0.6%, 73% 2.6%, 75% 0.5%, 78% 1.4%, 81% 0.4%, 84% 2.4%, 86% 0.7%, 89% 1.3%, 91% 0.4%, 94% 2.7%, 96% 0.6%, 98.5% 1.6%, 100% 1.0%, 99.4% 12%, 100.4% 34%, 99.2% 52%, 100.5% 71%, 99.5% 89%, 97.5% 98.9%, 95% 99.7%, 93% 98.3%, 91% 99.9%, 89% 98.5%, 87% 99.8%, 85% 98.2%, 83% 99.9%, 80% 98.5%, 78% 99.8%, 76% 98.3%, 74% 99.9%, 71% 98.5%, 69% 99.8%, 66% 98.2%, 64% 99.9%, 61% 98.4%, 59% 99.9%, 56% 98.2%, 54% 99.9%, 51% 98.5%, 49% 99.8%, 46% 98.3%, 44% 99.9%, 41% 98.5%, 39% 99.8%, 36% 98.2%, 34% 99.9%, 31% 98.4%, 29% 99.8%, 26% 98.2%, 24% 99.9%, 21% 98.5%, 19% 99.8%, 16% 98.3%, 14% 99.9%, 11% 98.4%, 9% 99.8%, 6% 98.2%, 4% 99.9%, -0.5% 90%, 0.8% 72%, -0.6% 54%, 0.6% 36%, -0.4% 18%);
+  /* 四向紧贴的 drop-shadow 叠成沿撕边的一圈深棕细墨线（原型手绘描边），
+     再叠两层柔和投影把纸浮起来——clip-path 画不了 border，这是唯一路径。 */
+  filter: drop-shadow(0.6px 0 0 rgba(70, 57, 41, 0.55))
+    drop-shadow(-0.6px 0 0 rgba(70, 57, 41, 0.55))
+    drop-shadow(0 0.6px 0 rgba(70, 57, 41, 0.55))
+    drop-shadow(0 -0.6px 0 rgba(70, 57, 41, 0.55))
+    drop-shadow(0 2px 4px rgba(90, 74, 48, 0.14))
+    drop-shadow(0 8px 18px rgba(90, 74, 48, 0.12));
+}
+/* 三张纸各自微微歪斜：左栏左倾、中栏近乎水平、右栏右倾——与原型的扇形错落同向。 */
+.desk .column--left { transform: rotate(-0.5deg); }
+.desk .column--center { transform: rotate(0.15deg); }
+.desk .column--right { transform: rotate(0.45deg); }
 
 .columns {
   display: grid;
-  grid-template-columns: 252px minmax(0, 1fr) 288px;
-  gap: 12px; padding: 12px;
+  /* 三栏宽度按原型 C 实测占比（354/807/342 @1536）折算到 1600 视口：364/自动/352。 */
+  grid-template-columns: 364px minmax(0, 1fr) 352px;
+  gap: 10px; padding: 10px 12px;
   min-height: 0; overflow: hidden;
 }
 
@@ -192,26 +257,35 @@ textarea:focus-visible,
 .column--right { overflow-y: auto; gap: 10px; }
 
 .section-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
-.section-title { margin: 0; font-family: var(--bt-hand); font-size: 13.5px; font-weight: 700; color: var(--bt-ink-soft); }
+/* 荧光笔标记：小节标题下半截一道粉红，原型里「认真圈过重点」的样子。 */
+.section-title {
+  margin: 0; font-family: var(--bt-hand); font-size: 23px; font-weight: 700; color: var(--bt-ink);
+  background: linear-gradient(transparent 58%, #f7c9c2b3 58%);
+  padding: 0 3px; align-self: flex-start;
+}
 
 /* ── 左栏 ─────────────────────────────────────────────────────────────── */
 
-.left__top { padding: 14px 12px 10px; display: flex; flex-direction: column; gap: 10px; }
+.left__top { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 9px; }
 
-/* 品牌块：星形磁铁 + 手写标题 + 波浪线，原型左上角的招牌。 */
+/* 品牌块：星形磁铁 + 手写大标题 + 蓝色波浪线，原型左上角的招牌。 */
 .brand { position: relative; padding: 4px 2px 0; }
-.brand__badge { position: absolute; top: -10px; right: 4px; width: 28px; height: 27px; transform: rotate(14deg); filter: drop-shadow(1px 2px 0 #00000022); }
-.brand__title { margin: 0; font-family: var(--bt-hand); font-size: 21px; font-weight: 700; letter-spacing: 1px; }
-.brand__wave { display: block; width: 152px; height: 8px; margin-top: 2px; color: var(--bt-sky); }
-.left__brandline { font-size: 12.5px; color: var(--bt-ink-soft); }
+.brand__badge { position: absolute; top: -16px; right: 6px; width: 38px; height: 37px; transform: rotate(14deg); filter: drop-shadow(1px 2px 0 #00000022); }
+/* 描摹版大标题：字形逐笔取自原型 C（位图墨迹 → 矢量描摹），显示尺寸按原型实测字形高度（65px@1536 → ~64px@1600）。 */
+.brand__title { margin: 0; line-height: 0; }
+.brand__title img { display: block; height: 80px; width: auto; }
+.brand__wave { display: block; width: 158px; height: 8px; margin-top: 2px; color: #4d96ff; }
+.left__brandline { font-family: var(--bt-hand); font-size: 14px; color: var(--bt-ink-soft); margin-top: 2px; }
 
 .doodle-input {
-  padding: 6px 10px;
-  border: 1.5px solid var(--bt-line);
+  padding: 9px 10px 9px 32px;
+  border: 1.5px solid var(--bt-stroke);
   border-radius: var(--bt-wobble-sm);
-  background: #fff; font-size: 13px;
+  /* 放大镜涂鸦（原型搜索框左侧那只）。 */
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.2' fill='none' stroke='%237d7468' stroke-width='1.7'/%3E%3Cpath d='M10.2 10.2 L14 14' stroke='%237d7468' stroke-width='1.7' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat 9px center / 15px;
+  font-size: 14px;
 }
-.doodle-input:focus { border-color: var(--bt-sky); outline: none; }
+.doodle-input:focus { border-color: var(--bt-ink-soft); outline: none; }
 
 .left__list {
   flex: 1; min-height: 0; overflow-y: auto;
@@ -221,26 +295,37 @@ textarea:focus-visible,
 
 .chat-row {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px;
-  width: 100%; padding: 8px 10px;
-  background: transparent;
-  border: 1.5px solid transparent;
-  border-radius: var(--bt-wobble-sm);
+  width: 100%; padding: 11px 14px;
+  background: #fffef8;
+  border: 1.5px solid #2f2b2640;
+  border-radius: 14px 12px 15px 11px;
   text-align: left;
 }
 
-.chat-row:hover { background: #00000007; }
-/* 选中的会话：荧光笔在白板上划了一道。 */
+.chat-row:hover { background: #fffef8; border-color: #2f2b2670; }
+/* 选中的会话：琥珀便签底（原型 Figma #fff0ad 实测），标题补一笔红波浪。 */
 .chat-row[aria-current="true"] {
-  background: linear-gradient(100deg, #fff2b0f2 0%, #ffefa5f2 90%, #fff2b000 100%);
+  background: #fff0ad;
   border-color: transparent;
   transform: none;
 }
-.chat-row__title { display: block; font-size: 13.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-row__preview { display: block; margin-top: 1px; font-size: 12px; color: var(--bt-ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-row__time { font-size: 11px; color: var(--bt-ink-faint); white-space: nowrap; padding-top: 2px; }
+.chat-row[aria-current="true"] .chat-row__title {
+  text-decoration: underline wavy var(--bt-red);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 4px;
+}
+.chat-row__title { display: block; font-size: 18px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-row__preview { display: block; margin-top: 1px; font-size: 13.5px; color: var(--bt-ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-row__time { font-size: 10.5px; color: var(--bt-ink-faint); white-space: nowrap; padding-top: 2px; }
 
 .crew { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
-.crew__faces { display: flex; gap: 6px; flex-wrap: wrap; }
+.crew__row { display: flex; align-items: center; gap: 10px; }
+.crew__faces { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
+/* 头像旁的三行小欢呼（原型 C 左栏底部「好的/牛马们！/辛苦啦! ♡」），纯装饰。 */
+.crew__cheers {
+  flex: none; font-family: var(--bt-hand); font-size: 14px; line-height: 1.45;
+  color: var(--bt-ink-soft); transform: rotate(-2deg); user-select: none;
+}
 .crew__line { font-size: 12px; color: var(--bt-ink-soft); }
 
 /* ── 头像 ─────────────────────────────────────────────────────────────── */
@@ -273,13 +358,30 @@ textarea:focus-visible,
 .avatar--butler { background: var(--bt-mint); }
 
 .avatar--sm { width: 26px; height: 26px; font-size: 12px; }
+.member .avatar { width: 44px; height: 44px; font-size: 18px; }
 .avatar--lg { width: 40px; height: 40px; font-size: 17px; }
 
 /* ── 中栏 ─────────────────────────────────────────────────────────────── */
 
-.center__head { display: flex; align-items: center; gap: 10px; padding: 11px 14px; }
-.center__head h2 { margin: 0; font-family: var(--bt-hand); font-size: 16px; font-weight: 700; }
-.center__sub { font-size: 12px; color: var(--bt-ink-soft); }
+.center__head {
+  display: flex; align-items: center; gap: 10px; padding: 11px 14px;
+  border-bottom: 1.5px solid var(--bt-line);
+}
+.center__head h2 { margin: 0; font-family: var(--bt-hand); font-size: 24px; font-weight: 800; -webkit-text-stroke: 0.7px var(--bt-stroke); text-shadow: 0.5px 0.5px 0 var(--bt-stroke); }
+/* 红笔圈注：罩在「牛马调度群」标题上的手绘椭圆（index.html 内联 SVG）。 */
+.center__title { position: relative; padding: 2px 10px; line-height: 0; }
+.center__title img { display: block; height: 86px; width: auto; }
+.center__circle {
+  position: absolute; inset: -4px -6px; width: calc(100% + 12px); height: calc(100% + 8px);
+  pointer-events: none;
+}
+.center__sub { font-size: 15px; color: var(--bt-ink); font-family: var(--bt-hand); font-weight: 700; }
+
+/* 喊停：浅红底墨框——「要按住」的事必须比普通按钮显眼一档。 */
+#stop-button {
+  background: #fbe3e0; border-color: var(--bt-stroke);
+  color: #a33535; font-weight: 700;
+}
 
 .rail { display: flex; align-items: flex-start; gap: 2px; flex-wrap: wrap; padding: 10px 14px 8px; }
 
@@ -371,25 +473,26 @@ textarea:focus-visible,
 .msg__col { min-width: 0; display: flex; flex-direction: column; gap: 3px; max-width: 84%; }
 .msg--user .msg__col { align-items: flex-end; }
 .msg__head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 12.5px; color: var(--bt-ink-soft); }
-.msg__name { font-weight: 700; font-size: 13px; }
+.msg__name { font-weight: 700; font-size: 15px; }
 .msg__handle { font-family: var(--bt-mono); font-size: 11px; color: var(--bt-ink-faint); }
 .msg__tag { font-size: 11px; padding: 0 6px; border: 1px solid var(--bt-line); border-radius: 999px; color: var(--bt-ink-soft); }
-.msg__meta { font-size: 11px; color: var(--bt-ink-faint); }
+.msg__meta { font-size: 11px; color: var(--bt-ink-faint); font-family: var(--bt-hand); }
 
 .bubble {
   padding: 8px 13px;
   background: var(--bt-card);
   border: 1.5px solid var(--bt-stroke);
   border-radius: var(--bt-wobble);
-  font-size: 13.5px;
+  font-size: 15px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.msg--user .bubble { background: #fff6d8; }
+.msg--user .bubble { background: #f9e9a8; }
 .bubble--wait { background: var(--bt-warn-bg); border-color: var(--bt-warn); }
 .bubble--fail { background: var(--bt-error-bg); border-color: var(--bt-error); }
-.bubble--done { border-color: var(--bt-ok); }
+/* 成功不需要彩色描边（C 墨线统一）：成功与否由格子的状态灯与耗时行表达。 */
+.bubble--done { border-color: var(--bt-stroke); }
 
 .caret {
   display: inline-block; width: 7px; height: 14px; margin-left: 2px;
@@ -516,10 +619,20 @@ textarea:focus-visible,
 }
 
 .summary {
+  position: relative;
   padding: 11px 13px;
   border-left: 4px solid var(--bt-ok);
   background: var(--bt-ok-bg);
   border-radius: var(--bt-wobble-sm);
+}
+/* 汇总卡左缘一条小胶带（原型「交回的内容」收尾处的贴法）。 */
+.summary::before {
+  content: '';
+  position: absolute; left: -8px; top: -5px;
+  width: 10px; height: 20px;
+  background: linear-gradient(100deg, #e8d9b8cc, #efdfc0bb);
+  transform: rotate(-6deg);
+  pointer-events: none;
 }
 
 .summary[data-state="failed"] { border-left-color: var(--bt-error); background: var(--bt-error-bg); }
@@ -592,11 +705,27 @@ textarea:focus-visible,
 .kkp__frame { flex: 1; width: 100%; border: 0; background: #fff; }
 @media (max-width: 640px) { .kkp__panel { inset: 2vh 2vw; } }
 
-/* 聊天里的图片（受控渲染的缩略图）：点击进页内预览弹窗（kkFileView）。
-   宽度封顶 380px、高度封顶 280px：预览够看清内容，不把会话撑成长图墙。 */
-.md .md-pic { display: inline-block; margin: 4px 0; max-width: min(100%, 380px); line-height: 0; border-radius: 8px; }
-.md .md-pic img { display: block; width: auto; height: auto; max-width: 100%; max-height: 280px; border: 1px solid var(--bt-line); border-radius: 8px; background: var(--bt-card); }
-.md .md-pic:hover img { border-color: var(--bt-sky); }
+/* 聊天里的图片（受控渲染的缩略图）：贴原型 C 的「文左图右」混排——图片右浮，
+   文本环绕，右上角一枚回形针涂鸦；窄屏取消浮动恢复全宽。 */
+.md .md-pic {
+  position: relative;
+  display: block; float: right;
+  margin: 2px 0 8px 14px;
+  max-width: min(56%, 380px);
+  line-height: 0;
+}
+.md .md-pic img { display: block; width: 100%; height: auto; border: 1.5px solid var(--bt-stroke); border-radius: 8px; background: var(--bt-card); }
+.md .md-pic::after {
+  content: '';
+  position: absolute; top: -8px; right: 10px;
+  width: 15px; height: 22px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 24'%3E%3Cpath d='M11.4 6.2 5.8 11.8 C 4.4 13.2, 4.4 15.2, 5.8 16.4 C 7.2 17.6, 9 17.4, 10.2 16.2 L 15.8 10.4 C 18 8.2, 18 4.8, 15.8 2.6 C 13.6 0.6, 10 0.8, 7.8 3 L 2.2 8.6' fill='none' stroke='%237d7468' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat;
+  filter: drop-shadow(1px 1px 0 #00000030);
+}
+.md .md-pic:hover img { border-color: var(--bt-ink-soft); }
+@media (max-width: 640px) {
+  .md .md-pic { float: none; margin: 6px 0; max-width: 100%; }
+}
 .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
   margin: 10px 0 6px; font-family: var(--bt-hand); font-weight: 700; line-height: 1.4;
 }
@@ -652,22 +781,29 @@ textarea:focus-visible,
   font-family: var(--bt-hand); font-weight: 700; font-size: 11px; color: #8a6100;
   border: 1px solid var(--bt-amber); border-radius: 999px; padding: 0 8px;
 }
-.task-card__goal { font-size: 13px; margin-top: 3px; font-weight: 600; }
-.task-card__meta { font-size: 11px; color: var(--bt-ink-faint); margin-top: 3px; }
+.task-card__goal { font-size: 15px; margin-top: 3px; font-weight: 600; }
+.task-card__meta { font-size: 12px; color: var(--bt-ink-faint); margin-top: 3px; }
 
-/* 回到最新：跟随暂停时浮在线程右下角。 */
+/* 回到最新：跟随暂停时浮在线程右下角；左侧三道黄色短线是「注意这里」的涂鸦（原型 C）。 */
 .jump-latest {
   position: absolute; right: 18px; bottom: 10px; z-index: 5;
   background: var(--bt-card); border: 1.5px solid var(--bt-stroke); border-radius: 999px;
   padding: 4px 12px; font-family: var(--bt-hand); font-size: 12px; font-weight: 700; color: var(--bt-ink);
   box-shadow: 1px 2px 0 #00000018; cursor: pointer;
 }
+.jump-latest::before {
+  content: '';
+  position: absolute; top: 50%; left: -20px;
+  width: 15px; height: 15px; transform: translateY(-50%);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 15'%3E%3Cpath d='M6 1.5 L7.5 5 M11 3 L9 6.5 M13.5 8 L10 8.5' stroke='%23f4b942' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat;
+  pointer-events: none;
+}
 .jump-latest:hover { transform: translate(-1px, -1px); box-shadow: 2px 3px 0 #00000018; }
 .jump-latest[hidden] { display: none; }
 
 .welcome { max-width: 520px; margin: 4vh auto 0; text-align: center; }
 .welcome__mascot { width: 132px; height: auto; margin: 0 auto 6px; display: block; }
-.welcome h2 { font-family: var(--bt-hand); font-size: 21px; margin: 0 0 6px; }
+.welcome h2 { font-family: var(--bt-hand); font-size: 24px; margin: 0 0 6px; }
 .welcome p { margin: 0 0 16px; color: var(--bt-ink-soft); font-size: 13.5px; }
 .welcome__list { display: flex; flex-direction: column; gap: 8px; text-align: left; }
 
@@ -686,19 +822,19 @@ textarea:focus-visible,
 
 .welcome__item:hover { transform: translate(-1px, -1px) rotate(0deg); box-shadow: 3px 3px 0 #00000014; }
 
-.composer { padding: 0 16px 14px; }
+.composer { padding: 0 16px 22px; }
 
 .composer__box {
   max-width: 960px; margin: 0 auto;
   display: flex; align-items: flex-end; gap: 8px;
   padding: 7px 8px 7px 13px;
   background: var(--bt-card);
-  border: 1.5px solid var(--bt-stroke);
-  border-radius: var(--bt-wobble);
+  border: 2px solid transparent;
+  border-image: var(--bt-ink-frame) 6 / 4px round;
   box-shadow: 3px 4px 0 #00000010;
 }
 
-.composer__box:focus-within { border-color: var(--bt-sky); }
+.composer__box:focus-within { border-image: none; border-color: var(--bt-ink-soft); }
 
 .composer textarea {
   flex: 1; min-width: 0;
@@ -708,7 +844,7 @@ textarea:focus-visible,
   font-size: 13.5px; line-height: 1.65;
 }
 
-.composer textarea::placeholder { color: var(--bt-ink-faint); }
+.composer textarea::placeholder { color: var(--bt-ink-faint); font-family: var(--bt-hand); }
 .composer__actions { display: flex; align-items: center; gap: 4px; }
 
 /* 输入框左边的手绘咖啡杯：装饰，桌上总得有杯咖啡。 */
@@ -730,11 +866,12 @@ textarea:focus-visible,
 .composer__clip svg { width: 17px; height: 17px; }
 
 .send {
-  flex: none; width: 38px; height: 38px;
+  flex: none; width: 40px; height: 40px;
   display: grid; place-items: center;
   border: 1.5px solid var(--bt-stroke);
+  /* 以 C 原型为准：橙色圆形 + 白色纸飞机（与新建任务同色系）。 */
   border-radius: 50%;
-  background: var(--bt-coral); color: #fff;
+  background: #f08a3c; color: #fff;
 }
 
 .send:hover:not(:disabled) { transform: translate(-1px, -1px); box-shadow: 2px 2px 0 #00000018; }
@@ -746,19 +883,60 @@ textarea:focus-visible,
   font-size: 11.5px; color: var(--bt-ink-faint);
 }
 
+/* 页脚手写批注的落款小红心（原型 C）。 */
+#composer-hint::after { content: ' ❤'; color: var(--bt-red); }
+/* 红波浪那半句再垫一道黄色荧光（原型 C：荧光 + 红线双重标注）。 */
+#composer-hint .red-wavy { background: linear-gradient(transparent 58%, #ffe98ab3 58%); }
+
 /* ── 右栏 ─────────────────────────────────────────────────────────────── */
 
 .panel { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 9px; }
 .panel__note { font-size: 11.5px; color: var(--bt-ink-faint); line-height: 1.6; }
+/* 红笔波浪：批注重点（原型里「设置里改」那一笔）。 */
+.red-wavy {
+  text-decoration: underline wavy var(--bt-red);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+
+/* 右栏小节标题旁的墨线涂鸦（原型 C：纸飞机 / 柱状图 / 哭脸），纯图形点缀。 */
+.section-title--members::after,
+.section-title--metrics::after,
+.column--left .section-title { background: linear-gradient(transparent 58%, #ffe9a8c9 58%); }
+.column--right .section-title { background: none; }
+.column--left .crew .section-title { background: linear-gradient(transparent 58%, #f7c9c2b3 58%); }
+.section-title--failures::after {
+  content: '';
+  display: inline-block; width: 15px; height: 15px; margin-left: 7px;
+  vertical-align: -2px;
+  background: var(--bt-doodle, none) center/contain no-repeat;
+}
+.section-title--members { --bt-doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='3' y='2.5' width='10.5' height='12' rx='1.5' fill='%23cfe3f2' stroke='%234a7fb5' stroke-width='1.4'/%3E%3Cpath d='M5.5 5.5 h5.5 M5.5 8 h5.5 M5.5 10.5 h3.5' stroke='%234a7fb5' stroke-width='1.3' stroke-linecap='round'/%3E%3Cpath d='M5.2 1.6 V3.4 M8 1.6 V3.4 M10.8 1.6 V3.4' stroke='%234a7fb5' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E"); }
+.section-title--metrics { --bt-doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.5 14 h11.5 M4.5 13.5 V8 M8 13.5 V5 M11.5 13.5 V2.5' stroke='%232f2b26' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E"); }
+.section-title--failures { --bt-doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6.4' fill='none' stroke='%232f2b26' stroke-width='1.5'/%3E%3Cpath d='M5.2 6.3 c.9-1 1.9-1 2.8 0 M8.9 6.3 c.9-1 1.9-1 2.8 0 M5.4 11 c1.6-1.6 3.6-1.6 5.2 0' fill='none' stroke='%232f2b26' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E"); }
 
 /* 紧凑成员行：设置页接管了编辑，这里只留「是谁 + 在不在」。 */
 .member {
+  position: relative;
   display: flex; align-items: center; gap: 8px;
-  padding: 7px 9px;
-  border: 1.5px solid var(--bt-line);
+  padding: 12px;
+  border: 1.5px solid var(--bt-stroke);
   border-radius: var(--bt-wobble-sm);
   background: var(--bt-card);
 }
+
+/* 成员卡右上角的小胶带：每张颜色略不同，像随手贴的（原型 C）。 */
+.member::after {
+  content: '';
+  position: absolute; top: -6px; right: 12px;
+  width: 34px; height: 12px;
+  background: linear-gradient(100deg, #cfe3f2cc, #dcedf8bb);
+  box-shadow: 0 1px 2px #00000018;
+  transform: rotate(4deg);
+  pointer-events: none;
+}
+.member:nth-of-type(2)::after { background: linear-gradient(100deg, #f4bcc9, #f9d6de 55%, #f2c3cf); transform: rotate(-3deg); }
+.member:nth-of-type(3)::after { background: linear-gradient(100deg, #c3e3c7, #d9efdc 55%, #b8dcbd); transform: rotate(5deg); }
 
 .member + .member { margin-top: 6px; }
 .member__col { flex: 1; min-width: 0; }
@@ -779,8 +957,8 @@ textarea:focus-visible,
 .member__camera:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 1px; }
 .member__avatar-slot { display: grid; place-items: center; }
 
-.member__name { font-size: 12.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.member__declared { font-size: 10.5px; color: var(--bt-ink-faint); font-family: var(--bt-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member__name { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member__declared { font-size: 14px; color: var(--bt-ink-soft); font-family: var(--bt-hand); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 1.4; }
 
 .field { display: flex; flex-direction: column; gap: 3px; }
 .field label { font-size: 11.5px; color: var(--bt-ink-soft); }
@@ -817,31 +995,84 @@ textarea:focus-visible,
 
 .swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--bt-card), 0 0 0 4.5px var(--bt-stroke); }
 
-.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+/* 统计格：原型 C 是 3×2；数字用「批注彩墨」着色（与状态灯体系并行——
+   圆点说的是状态灯，数字是手帐里的彩色标注，同词不同色是原型事实）：
+   在干活/等你回话/待外部处理/已完成=蓝，部分完成=绿，失败=红。 */
+.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
 
 .metric {
-  padding: 7px 4px; text-align: center;
-  border: 1.5px solid var(--bt-line);
+  padding: 8px 4px; text-align: center;
+  border: 1.5px solid var(--bt-stroke);
   border-radius: var(--bt-wobble-sm);
   background: var(--bt-card);
 }
 
-.metric__value { display: block; font-family: var(--bt-hand); font-size: 18px; font-weight: 700; line-height: 1.2; }
-.metric__label { display: block; font-size: 10.5px; color: var(--bt-ink-faint); }
+.metric__value { display: block; font-family: var(--bt-hand); font-size: 26px; font-weight: 700; line-height: 1.2; }
+/* 原型 C 彩墨（以原型图为准）：在干活/等你回话/待外部处理=橙，部分完成=绿，失败=红，已完成=蓝。 */
+/* 六格彩墨逐一对原型（高清裁剪定案）：1-2-4=橙、3-6=蓝、5=红。 */
+.metric:nth-child(1) .metric__value { color: #d9822b; }
+.metric:nth-child(2) .metric__value { color: #d9822b; }
+.metric:nth-child(3) .metric__value { color: #2b6cb0; }
+.metric:nth-child(4) .metric__value { color: #d9822b; }
+.metric:nth-child(5) .metric__value { color: var(--bt-error); }
+.metric:nth-child(6) .metric__value { color: #2b6cb0; }
+/* 统计标签在原型里也是手写体。 */
+.metric__label { display: block; font-family: var(--bt-hand); font-size: 15px; color: var(--bt-ink); }
+
+/* 失败记录：原型是一整张粉色撕边便签，红字条目逐行列在里面（不再一张条一个小卡）。
+   容器即便签（撕边+右上胶带）；每条 goal 一行、原因最多 3 行，区域限高滚动。 */
+#failure-list {
+  max-height: 300px; overflow-y: auto; overflow-x: hidden;
+  padding: 10px 12px;
+  position: relative;
+  background: #fbdcd8;
+  clip-path: polygon(0.4% 3%, 4% 1%, 9% 2.4%, 15% 0.6%, 22% 2.6%, 29% 0.8%, 36% 2.2%, 44% 0.5%, 52% 2.4%, 60% 0.9%, 68% 2.3%, 76% 0.7%, 84% 2.2%, 92% 0.8%, 100% 2%, 99.6% 40%, 100.3% 75%, 99.5% 96%, 94% 99%, 87% 97.8%, 79% 99.6%, 71% 98.2%, 63% 99.7%, 55% 98.4%, 47% 99.8%, 39% 98.3%, 31% 99.7%, 23% 98.4%, 15% 99.8%, 7% 98.6%, 0.3% 99.4%);
+  filter: drop-shadow(0 2px 3px rgba(74, 58, 34, 0.18));
+}
+#failure-list::after {
+  content: '';
+  position: absolute; top: -9px; right: 12px;
+  width: 28px; height: 21px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 20'%3E%3Cpath d='M2 3 L24 2.4 L23 17 L1.4 17.6 Z' fill='%23fbe3e0' stroke='%23d2493f' stroke-width='1.5'/%3E%3Cpath d='M2 3 L12 10 L23.8 2.6 M12 10 L11.6 17.4' fill='none' stroke='%23d2493f' stroke-width='1.3'/%3E%3C/svg%3E") center/contain no-repeat;
+  transform: rotate(6deg);
+  pointer-events: none;
+}
+/* 左上角一条蓝胶带把便签按住（原型 C 失败便签：撕边 + 蓝胶带 + 右上信封涂鸦）。 */
+#failure-list::before {
+  content: '';
+  position: absolute; top: -8px; left: 18px;
+  width: 64px; height: 18px;
+  background: linear-gradient(100deg, #a8c4ddcc, #c3d6e8d9 55%, #9dbdd8cc);
+  box-shadow: 0 1px 2px #00000022;
+  transform: rotate(-4deg);
+  pointer-events: none;
+}
+#failure-list .failure-row + .failure-row { margin-top: 8px; }
 
 .failure-row {
-  display: block; width: 100%; padding: 7px 9px;
+  position: relative;
+  display: block; width: 100%; padding: 2px 2px;
   text-align: left;
-  background: var(--bt-error-bg);
-  border: 1.5px dashed var(--bt-error);
-  border-radius: var(--bt-wobble-sm);
+  background: none;
+  border: none;
+  border-radius: 0;
+  transform: none;
 }
 
-.failure-row + .failure-row { margin-top: 6px; }
-.failure-row__goal { display: block; font-size: 12.5px; color: #a33535; }
-.failure-row__meta { display: block; margin-top: 2px; font-size: 11px; color: #b56a6a; }
+.failure-row:nth-child(even) { transform: none; }
+.failure-row__goal {
+  display: block; font-size: 13.5px; color: #a33535; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.failure-row__meta {
+  display: -webkit-box; margin-top: 2px; font-size: 14px; color: #b56a6a;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+  overflow-wrap: anywhere;
+}
 
 .motto {
+  position: sticky; bottom: 8px; flex: none; z-index: 3;
+  margin-top: 10px;
   padding: 10px 12px;
   transform: rotate(-1deg);
   background: #fff6d8;
@@ -907,7 +1138,7 @@ body[data-settings="open"] .settings {
   gap: 14px;
 }
 
-/* 成员设置卡：右上角一颗磁铁按住，和母版一致。 */
+/* 成员设置卡：右上角一条胶带按住（C 版贴法，同母版）。 */
 .set-card {
   position: relative;
   display: flex; flex-direction: column; gap: 9px;
@@ -920,11 +1151,12 @@ body[data-settings="open"] .settings {
 
 .set-card::after {
   content: '';
-  position: absolute; top: -7px; right: 14px;
-  width: 15px; height: 15px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #ffffffd9 0 22%, transparent 46%), var(--bt-sky);
-  box-shadow: 0 2px 4px #00000030, inset 0 0 0 1.5px #00000026;
+  position: absolute; top: -8px; right: 16px;
+  width: 64px; height: 18px;
+  background: linear-gradient(100deg, #cfe3f2cc, #dcedf8bb 55%, #c4dcf0b8);
+  box-shadow: 0 1px 3px #00000022;
+  transform: rotate(4deg);
+  pointer-events: none;
 }
 
 .set-card__head { display: flex; align-items: center; gap: 10px; }
@@ -970,6 +1202,8 @@ body[data-settings="open"] .settings {
     transform: translateX(101%);
     transition: transform 170ms ease;
   }
+  /* 抽屉摊平：不再歪斜（贴边滑入的抽屉歪着很怪），保留纸面与撕边。 */
+  .desk .column--right { transform: none; }
 
   body[data-drawer="open"] .column--right { transform: none; }
   .drawer-toggle { display: inline-flex; }
@@ -996,6 +1230,7 @@ body[data-settings="open"] .settings {
   }
 
   body[data-sidebar="open"] .column--left { transform: none; }
+  .desk .column--left { transform: none; }
   .sidebar-toggle { display: inline-flex; }
 
   .thread { padding: 4px 10px 10px; }
@@ -1108,13 +1343,19 @@ body[data-settings="open"] .settings {
  * 所以样式只有这一份。纸面风格沿用本页既有的手写体与虚线描边。
  */
 .dcard {
-  margin-top: 7px; max-width: 620px;
-  background: var(--bt-paper);
+  margin-top: 7px;
+  /* 与消息气泡同宽（thread__inner 的 960px）：交回的内容一屏看得全，不挤在窄栏里滚动。 */
+  max-width: 960px;
+  position: relative;
+  background: var(--bt-card);
   border: 2px dashed var(--bt-stroke);
   border-radius: var(--bt-wobble-sm);
   /* 交互反馈统一在这里收口：位移/高度动画尊重"减少动态效果"偏好（见文件末尾）。 */
   transition: border-color 160ms ease-out;
 }
+
+/* 胶带改贴「交回的内容」标题左端（原型 C 的贴法），斜贴不遮字。 */
+.dcard::before { content: none; }
 .dcard__bar {
   display: block; cursor: pointer; list-style: none; padding: 0;
 }
@@ -1135,8 +1376,8 @@ body[data-settings="open"] .settings {
 
 .dcard__tools { display: inline-flex; gap: 6px; margin-left: auto; }
 .dcard__tool {
-  font-family: inherit; font-size: 11.5px; color: var(--bt-ink-soft);
-  background: #ffffff9c; border: 1.5px solid var(--bt-line); border-radius: 999px;
+  font-family: var(--bt-hand); font-size: 12.5px; color: var(--bt-ink-soft);
+  background: #ffffff9c; border: 1.5px solid var(--bt-stroke); border-radius: 999px;
   padding: 1px 8px; cursor: pointer;
   transition: color 120ms ease-out, border-color 120ms ease-out, transform 90ms ease-out;
 }
@@ -1151,9 +1392,9 @@ body[data-settings="open"] .settings {
   padding: 3px 10px 7px;
 }
 .dcard__cell {
-  display: flex; align-items: center; gap: 7px;
-  /* 整块可点：紧凑但不低于 40px 的可点高度，头像与状态点不再各自绑事件（避免误触）。 */
-  min-height: 40px; padding: 4px 7px; text-align: left;
+  display: flex; align-items: center; gap: 9px;
+  /* 整块可点：贴原型 C 的舒展比例（大头像 + 两行信息），不低于 48px 可点高度。 */
+  min-height: 52px; padding: 7px 9px; text-align: left;
   font-family: inherit; color: inherit;
   background: #ffffffb8; border: 1.5px solid var(--bt-line); border-radius: var(--bt-wobble-sm);
   cursor: pointer; position: relative;
@@ -1170,13 +1411,14 @@ body[data-settings="open"] .settings {
  * 边框与底色，脉冲独占 `box-shadow`。
  */
 .dcard__cell--active {
-  border-color: var(--bt-sky);
+  /* C 版选中态：淡黄荧光底 + 墨框，批注对勾也是墨色——不引入蓝色系。 */
+  border-color: var(--bt-stroke);
   background: #fff;
-  background: color-mix(in srgb, var(--bt-sky) 8%, #fff);
+  background: color-mix(in srgb, #ffd94d 14%, #fff);
 }
 .dcard__cell--active::after {
   content: '✓'; position: absolute; top: 3px; right: 5px;
-  font-size: 10px; line-height: 1; color: var(--bt-sky);
+  font-size: 10px; line-height: 1; color: var(--bt-stroke);
 }
 .dcard__col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .dcard__head { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
@@ -1207,8 +1449,27 @@ body[data-settings="open"] .settings {
 
 .dcard__result { padding: 4px 10px 9px; }
 .dcard__result-title {
+  position: relative;
   font-family: var(--bt-hand); font-size: 12.5px; color: var(--bt-ink-soft);
   padding: 0 2px 4px;
+}
+/* 「交回的内容」标题旁的红笔小闪电（原型 C 的批注涂鸦）。 */
+.dcard__result-title::after {
+  content: '';
+  display: inline-block; width: 12px; height: 12px; margin-left: 5px;
+  vertical-align: -2px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8.5 1.5 L3.5 9 h3.4 L6 14.5 L12.8 6 H8.2 L10.6 1.5 Z' fill='%23d2493f'/%3E%3C/svg%3E") center/contain no-repeat;
+  opacity: 0.9;
+}
+/* 标题左端一条竖斜胶带（原型贴法），压住便签边但不遮字。 */
+.dcard__result-title::before {
+  content: '';
+  position: absolute; left: -18px; top: -4px;
+  width: 12px; height: 22px;
+  background: linear-gradient(100deg, #e8d9b8cc, #efdfc0bb);
+  box-shadow: 0 1px 3px #00000022;
+  transform: rotate(-8deg);
+  pointer-events: none;
 }
 /*
  * 结果区高度：**跟着内容走，但有一个上限**。

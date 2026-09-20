@@ -85,6 +85,9 @@ function node(tag = '', className = ''): StubNode {
       // 真 DOM 的 replaceChildren：一次换掉全部子节点（历史卡升级用的就是它）。
       for (const child of children) child.parent = element
       element.children = children
+      // 真 DOM 的 textContent 是子节点文本的计算值（红笔批注拆 span 后断言仍按文本判）：
+      // 替身按同一语义在替换子节点时重新合成，保持与真 DOM 同步。
+      element.textContent = children.map(child => child.textContent).join('')
     },
     classList: {
       add(name) { classes.add(name); element.className = [...classes].join(' ') },
@@ -201,7 +204,12 @@ function load(now = 1_000_000): Loaded {
     CARD_STATE_TEXT: { queued: '排队', dispatched: '已收到', running: '进行中', waiting_user: '等你回话', external_pending: '待外部处理', partial: '部分完成', succeeded: '已完成', completed: '已完成', failed: '失败', cancelled: '已停止', summarizing: '在总结' },
     CARD_RESULT_TITLE: { queued: '还没开始', dispatched: '正在做的事', running: '正在做的事', summarizing: '正在总结', succeeded: '交回的内容', completed: '交回的内容', external_pending: '交回的内容（还有事在外面办）', waiting_user: '等你回话', partial: '交回的部分', failed: '失败原因', cancelled: '已经停下' },
     Date: { now: () => now },
-    document: { querySelectorAll: () => [] as unknown[] },
+    document: {
+      querySelectorAll: () => [] as unknown[],
+      // 「已交回」红笔批注要拆文本节点：替身同样提供这两个最小 API。
+      createElement: (tag: string) => make(tag, null),
+      createTextNode: (text: string) => make('#text', null, text),
+    },
     setInterval: (run: () => void) => { ticker = run; return 1 },
     clearInterval: () => { ticker = null },
     setTimeout: () => 1,

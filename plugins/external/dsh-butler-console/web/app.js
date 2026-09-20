@@ -109,7 +109,7 @@ const SUGGESTIONS = [
 ]
 
 const MOTTO_KEY = 'butler.motto'
-const DEFAULT_MOTTO = '你负责说清楚，牛马负责干明白'
+const DEFAULT_MOTTO = '没关系，牛再来！换个姿势再来！'
 /** 上次用过的会话。刷新后要拿它去问「这一轮还在跑吗」。 */
 const CONVERSATION_KEY = 'butler.conversationId'
 
@@ -504,9 +504,9 @@ function butlerMessage(text, time) {
   const col = make('div', 'msg__col')
   const head = make('div', 'msg__head')
   const name = make('span', 'msg__name', '牛马大总管')
-  name.style.color = 'var(--bt-mint)'
+  name.style.color = 'var(--bt-ink)'
   head.appendChild(name)
-  head.appendChild(make('span', 'msg__tag', '负责听你说人话'))
+  head.appendChild(make('span', 'msg__tag', '负责听懂你的意图'))
   col.appendChild(head)
   const bubble = make('div', 'bubble')
   const body = make('span', null, text)
@@ -807,7 +807,7 @@ function mountDispatch(subtasks, options = {}) {
     cell.setAttribute('role', 'tab')
     cell.setAttribute('aria-selected', 'false')
     cell.setAttribute('aria-controls', `${idPrefix}-panel-${subtask.id}`)
-    const avatar = avatarNode(subtask.agentId, 'sm')
+    const avatar = avatarNode(subtask.agentId)
     cell.appendChild(avatar)
     const col = make('span', 'dcard__col')
     const head = make('span', 'dcard__head')
@@ -1014,7 +1014,15 @@ function renderDispatchHeader(panel) {
   if (waiting > 0) parts.push(`${waiting} 位在等`)
   if (done > 0) parts.push(`${done} 位已交回`)
   if (failed > 0) parts.push(`${failed} 位没成`)
-  panel.title.textContent = parts.join(' · ')
+  // 「已交回」带红笔下划线（原型 C 的批注）：用 span 包住末段，textContent 保持不变。
+  const text = parts.join(' · ')
+  const idx = text.lastIndexOf('位已交回')
+  if (idx === -1) { panel.title.textContent = text; return }
+  panel.title.replaceChildren(
+    document.createTextNode(text.slice(0, idx)),
+    make('span', 'red-wavy', '位已交回'),
+    document.createTextNode(text.slice(idx + '位已交回'.length)),
+  )
 }
 
 /**
@@ -1629,6 +1637,9 @@ const PROGRESS_SETTLE_TEXT = {
 const railNodes = new Map()
 
 function renderRail() {
+  // 链路条节点已从页面移除（UI 重设计）：没有容器就不渲染；setRail/applySummaryRail
+  // 的状态推进原样保留，恢复节点后链路条自动回来。
+  if (el.rail === null) return
   if (el.rail.childElementCount === 0) {
     RAIL_STEPS.forEach((step, index) => {
       if (index > 0) el.rail.appendChild(doodleSvg(DOODLE_PATHS.railArrow, 'rail__arrow'))
@@ -2048,7 +2059,7 @@ function renderWelcome() {
   mascot.addEventListener('error', () => { mascot.remove() })
   box.appendChild(mascot)
   box.appendChild(make('h2', null, '说说你要做什么'))
-  box.appendChild(make('p', null, '把活说清楚就行。牛马大总管先听懂，再替你把人喊来，你只管收结果。'))
+  box.appendChild(make('p', null, '把活说清楚就行。牛马大总管先听懂需求，再替你分派成员，你只管收结果。'))
   const list = make('div', 'welcome__list')
   for (const text of SUGGESTIONS) {
     const item = make('button', 'welcome__item', text)
@@ -2074,7 +2085,13 @@ function setBusy(on) {
   el.topStatus.textContent = on ? '正在处理' : '已上线'
   // 只锁发送不锁输入（I02/C 批预编辑）：执行中可以写下一句，输入法组合不受影响；
   // 这句草稿也不会被异步完成、恢复或视图切换清掉——清空只发生在真正送出的那次提交。
-  el.hint.textContent = on ? '正在处理；下一句可以先写好，这轮完事再发' : '牛马大总管先听明白，再替你把人喊来'
+  // 提示带红笔批注（空闲态「先听明白需求」红波浪）：固定文案走 DOM 构建，不拼 HTML。
+  if (on) el.hint.textContent = '正在处理；下一句可以先写好，这轮完事再发'
+  else el.hint.replaceChildren(
+    document.createTextNode('牛马大总管'),
+    Object.assign(make('span', 'red-wavy'), { textContent: '先听明白需求' }),
+    document.createTextNode('，再替你分派成员'),
+  )
   // 执行中进设置页的提示随状态同步（方案 I18）。
   el.settingsLive.hidden = !(state.settingsOpen && on)
   el.settingsLive.textContent = state.settingsOpen && on ? '有任务正在执行：回群聊可查看进度或喊停' : ''
@@ -2493,8 +2510,9 @@ async function finishTurn() {
   // 异步结束不抢焦点（方案 I05）：只在用户仍停留在会话区域时回到输入框；
   // 正在设置页、开着抽屉或选着字，都保持他现在的位置。
   const active = document.activeElement
+  // 链路条节点已从页面移除（UI 重设计）：el.rail 为 null，contains 前必须判空。
   const inConversationArea = active === null || active === document.body
-    || el.composer.contains(active) || el.thread.contains(active) || el.rail.contains(active)
+    || el.composer.contains(active) || el.thread.contains(active) || (el.rail !== null && el.rail.contains(active))
   const selection = document.getSelection()
   const selecting = selection !== null && !selection.isCollapsed
   if (!state.settingsOpen && document.body.dataset.drawer !== 'open' && document.body.dataset.sidebar !== 'open'
@@ -2780,7 +2798,8 @@ function setOpenSettings(open) {
 function renderCrew() {
   clear(el.crewFaces)
   for (const member of state.members) {
-    const face = avatarNode(member.agentId, 'sm')
+    // 「我的成员」用大头像（贴原型 C 的比例），带墨色描边圆框。
+    const face = avatarNode(member.agentId)
     // 头像只说"这是谁"：**逐人本轮状态只在调度卡的格子上**（唯一来源）。这里再挂一份来自
     // `members[].busy` 快照的状态，会和卡片的事件流各说各话，用户看到两处不一致。
     face.title = `${member.displayName}（@${member.agentId}）`
@@ -2832,8 +2851,9 @@ function renderFailures(items) {
   for (const item of items) {
     const row = make('button', 'failure-row')
     row.type = 'button'
-    row.appendChild(make('span', 'failure-row__goal', item.goal))
-    row.appendChild(make('span', 'failure-row__meta', `${formatTime(item.updatedAt)} · ${item.error || '没给原因'}`))
+    // 头行=「时间 任务名」（原型 C 与 Figma 稿均为日期在前），正文=失败原因。
+    row.appendChild(make('span', 'failure-row__goal', `${formatTime(item.updatedAt)}　${item.goal}`))
+    row.appendChild(make('span', 'failure-row__meta', item.error || '没给原因'))
     row.addEventListener('click', () => { void openTask(item.id) })
     el.failureList.appendChild(row)
   }

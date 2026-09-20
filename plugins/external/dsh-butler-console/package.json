@@ -1,6 +1,6 @@
 {
   "name": "dsh-butler-console",
-  "version": "0.9.4",
+  "version": "0.10.0",
   "description": "DSH 牛马大总管：统一对话入口、任务拆解与子 Agent 调度状态页",
   "license": "UNLICENSED",
   "private": true,
@@ -72,7 +72,8 @@
     "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "3.18.2"
+    "@deepseek-ai/schemastery": "3.18.2",
+    "@fontsource/ma-shan-zheng": "^5.3.1"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.2",
@@ -133,9 +134,9 @@
     "@types/node": "^22.20.0",
     "@types/pg": "^8.15.0",
     "markdown-it": "15.0.1",
+    "pg": "^8.16.0",
     "tsdown": "^0.22.2",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8",
-    "pg": "^8.16.0"
+    "vitest": "^4.1.8"
   }
 }
