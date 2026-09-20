@@ -41,7 +41,8 @@
 
   /* 正文也走手写体（原型 C 全页手写）：Ma Shan Zheng 对长文可读性靠字号补偿，
      输入框等需要精确辨识的位置单独回落系统字体。 */
-  --bt-font: "Ma Shan Zheng", "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  /* 正文用霞鹜文楷：比毛笔楷收敛耐读（Ma Shan Zheng 只留给标题与手写装饰）。 */
+  --bt-font: "LXGW WenKai", "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
   /* 系统字体栈：输入框等「用户打字」与需要严格辨识的位置使用。 */
   --bt-ui-font: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
   /* 手写标题字：Ma Shan Zheng（毛笔楷）打头，拉丁/缺字回落 Segoe Print 与楷体。 */
@@ -156,11 +157,11 @@ textarea:focus-visible,
 .btn--tiny { padding: 3px 10px; font-size: 12px; }
 /* 左栏顶上那颗大手绘按钮：马克笔涂的橙色块，深色底边压出厚度（原型 C）。 */
 .btn--chunky {
-  padding: 14px 20px;
+  padding: 8px 14px;
   border-width: 2px;
   border-radius: 12px 10px 13px 9px / 10px 13px 9px 12px;
   background: #f59a3c; color: #fff;
-  font-family: var(--bt-hand); font-size: 20px; font-weight: 700; letter-spacing: 2px;
+  font-family: var(--bt-hand); font-size: 16px; font-weight: 700; letter-spacing: 2px;
   box-shadow: 0 3px 0 #b5651d, 2px 4px 0 #00000020;
 }
 .btn--chunky:active:not(:disabled) { box-shadow: 0 1px 0 #b5651d; }
@@ -297,10 +298,10 @@ textarea:focus-visible,
 
 .chat-row {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px;
-  width: 100%; padding: 11px 14px;
+  width: 100%; padding: 6px 10px;
   background: #fffef8;
   border: 1.5px solid #2f2b2640;
-  border-radius: 14px 12px 15px 11px;
+  border-radius: 10px 9px 11px 8px;
   text-align: left;
 }
 
@@ -316,9 +317,9 @@ textarea:focus-visible,
   text-decoration-thickness: 1.5px;
   text-underline-offset: 4px;
 }
-.chat-row__title { display: block; font-size: 18px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-row__preview { display: block; margin-top: 1px; font-size: 13.5px; color: var(--bt-ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-row__time { font-size: 10.5px; color: var(--bt-ink-faint); white-space: nowrap; padding-top: 2px; }
+.chat-row__title { display: block; font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-row__preview { display: block; margin-top: 1px; font-size: 12px; color: var(--bt-ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-row__time { font-size: 10px; color: var(--bt-ink-faint); white-space: nowrap; padding-top: 2px; }
 
 .crew { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
 .crew__row { display: flex; align-items: center; gap: 10px; }
@@ -811,7 +812,12 @@ textarea:focus-visible,
    资产图实测底色（8 点采样波动 ±1），与页面 --bt-paper 差 ≤3——边缘零色差。
    容器与裁切区同比例（1182:883），元素按原图坐标换算百分比定位，字号跟容器宽
    （cqw）——任意分辨率整体等比、文字不糊。 */
-.welcome--board { margin: 5vh auto 0; width: min(760px, 96%); }
+.welcome--board {
+  /* 宽度受视口高约束：窗口矮时告示整体等比缩小，空状态页不出现纵向滚动条。
+     480px 是顶栏+输入框+上下留白的实测合计，再留一档余量。 */
+  margin: 2vh auto 0;
+  width: min(760px, 96%, calc((100vh - 480px) * 1.339));
+}
 
 .board {
   position: relative;
@@ -1037,7 +1043,7 @@ textarea:focus-visible,
 .member {
   position: relative;
   display: flex; align-items: center; gap: 8px;
-  padding: 12px;
+  padding: 7px 10px;
   border: 1.5px solid var(--bt-stroke);
   border-radius: var(--bt-wobble-sm);
   background: var(--bt-card);
@@ -1056,7 +1062,7 @@ textarea:focus-visible,
 .member:nth-of-type(2)::after { background: linear-gradient(100deg, #f4bcc9, #f9d6de 55%, #f2c3cf); transform: rotate(-3deg); }
 .member:nth-of-type(3)::after { background: linear-gradient(100deg, #c3e3c7, #d9efdc 55%, #b8dcbd); transform: rotate(5deg); }
 
-.member + .member { margin-top: 6px; }
+.member + .member { margin-top: 4px; }
 .member__col { flex: 1; min-width: 0; }
 .member .spacer { flex: 1; }
 .member__avatar { position: relative; }
@@ -1116,16 +1122,16 @@ textarea:focus-visible,
 /* 统计格：原型 C 是 3×2；数字用「批注彩墨」着色（与状态灯体系并行——
    圆点说的是状态灯，数字是手帐里的彩色标注，同词不同色是原型事实）：
    在干活/等你回话/待外部处理/已完成=蓝，部分完成=绿，失败=红。 */
-.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
 
 .metric {
-  padding: 8px 4px; text-align: center;
+  padding: 4px 2px; text-align: center;
   border: 1.5px solid var(--bt-stroke);
   border-radius: var(--bt-wobble-sm);
   background: var(--bt-card);
 }
 
-.metric__value { display: block; font-family: var(--bt-hand); font-size: 26px; font-weight: 700; line-height: 1.2; }
+.metric__value { display: block; font-family: var(--bt-hand); font-size: 19px; font-weight: 700; line-height: 1.2; }
 /* 原型 C 彩墨（以原型图为准）：在干活/等你回话/待外部处理=橙，部分完成=绿，失败=红，已完成=蓝。 */
 /* 六格彩墨逐一对原型（高清裁剪定案）：1-2-4=橙、3-6=蓝、5=红。 */
 .metric:nth-child(1) .metric__value { color: #d9822b; }
@@ -1135,7 +1141,7 @@ textarea:focus-visible,
 .metric:nth-child(5) .metric__value { color: var(--bt-error); }
 .metric:nth-child(6) .metric__value { color: #2b6cb0; }
 /* 统计标签在原型里也是手写体。 */
-.metric__label { display: block; font-family: var(--bt-hand); font-size: 15px; color: var(--bt-ink); }
+.metric__label { display: block; font-family: var(--bt-hand); font-size: 12px; color: var(--bt-ink); }
 
 /* 失败记录：原型是一整张粉色撕边便签，红字条目逐行列在里面（不再一张条一个小卡）。
    容器即便签（撕边+右上胶带）；每条 goal 一行、原因最多 3 行，区域限高滚动。 */
