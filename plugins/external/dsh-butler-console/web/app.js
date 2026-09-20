@@ -3388,7 +3388,7 @@ function renderMotto() {
   clear(el.motto)
   let current = DEFAULT_MOTTO
   try { current = localStorage.getItem(MOTTO_KEY) ?? DEFAULT_MOTTO } catch { /* 忽略。 */ }
-  const button = make('button', null, `${current} ✏️`)
+  const button = make('button', null, `${current} ☺`)
   button.type = 'button'
   button.title = '点一下改掉'
   button.addEventListener('click', () => {

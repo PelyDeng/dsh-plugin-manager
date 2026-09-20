@@ -192,8 +192,10 @@ textarea:focus-visible,
 
 .topbar {
   display: flex; align-items: center; gap: 12px;
-  padding: 8px 18px 0;
+  padding: 8px 18px 6px;
   background: transparent;
+  /* 顶栏底部一道手绘墨线（原型实测 y64 有横贯横线），微斜像一笔画出来的。 */
+  border-bottom: 1.7px solid #2f2b26c9;
 }
 
 /* 顶栏（原型 C 头部）：左三枚圆点 + 两行座右铭 + 右侧口号与笑脸。
@@ -379,7 +381,7 @@ textarea:focus-visible,
 
 /* 喊停：浅红底墨框——「要按住」的事必须比普通按钮显眼一档。 */
 #stop-button {
-  background: #fbe3e0; border-color: var(--bt-stroke);
+  background: #fbe3e0; border-color: #8b2f36;
   color: #a33535; font-weight: 700;
 }
 
@@ -488,7 +490,11 @@ textarea:focus-visible,
   overflow-wrap: anywhere;
 }
 
-.msg--user .bubble { background: #f9e9a8; }
+/* 用户气泡的时间戳缩进气泡内右下角（原型口径），气泡留出底部空间避免压字；
+   整体再歪 -0.5°，像随手贴的便利贴（原型带轻微旋转）。 */
+.msg--user .msg__col { position: relative; }
+.msg--user .bubble { background: #faedbe; padding-bottom: 22px; transform: rotate(-0.5deg); }
+.msg--user .msg__meta { position: absolute; right: 13px; bottom: 5px; }
 .bubble--wait { background: var(--bt-warn-bg); border-color: var(--bt-warn); }
 .bubble--fail { background: var(--bt-error-bg); border-color: var(--bt-error); }
 /* 成功不需要彩色描边（C 墨线统一）：成功与否由格子的状态灯与耗时行表达。 */
@@ -899,18 +905,17 @@ textarea:focus-visible,
   text-underline-offset: 3px;
 }
 
-/* 右栏小节标题旁的墨线涂鸦（原型 C：纸飞机 / 柱状图 / 哭脸），纯图形点缀。 */
+/* 右栏小节标题旁的墨线涂鸦（原型 C：记事本 / 柱状图 / 哭脸），纯图形点缀。 */
 .section-title--members::after,
 .section-title--metrics::after,
-.column--left .section-title { background: linear-gradient(transparent 58%, #ffe9a8c9 58%); }
-.column--right .section-title { background: none; }
-.column--left .crew .section-title { background: linear-gradient(transparent 58%, #f7c9c2b3 58%); }
 .section-title--failures::after {
   content: '';
   display: inline-block; width: 15px; height: 15px; margin-left: 7px;
   vertical-align: -2px;
   background: var(--bt-doodle, none) center/contain no-repeat;
 }
+/* 小节标题的荧光统一粉色（原型高清裁剪定案：「任务记录」亦为粉），右栏回黑字。 */
+.column--right .section-title { background: none; }
 .section-title--members { --bt-doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='3' y='2.5' width='10.5' height='12' rx='1.5' fill='%23cfe3f2' stroke='%234a7fb5' stroke-width='1.4'/%3E%3Cpath d='M5.5 5.5 h5.5 M5.5 8 h5.5 M5.5 10.5 h3.5' stroke='%234a7fb5' stroke-width='1.3' stroke-linecap='round'/%3E%3Cpath d='M5.2 1.6 V3.4 M8 1.6 V3.4 M10.8 1.6 V3.4' stroke='%234a7fb5' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E"); }
 .section-title--metrics { --bt-doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.5 14 h11.5 M4.5 13.5 V8 M8 13.5 V5 M11.5 13.5 V2.5' stroke='%232f2b26' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E"); }
 .section-title--failures { --bt-doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6.4' fill='none' stroke='%232f2b26' stroke-width='1.5'/%3E%3Cpath d='M5.2 6.3 c.9-1 1.9-1 2.8 0 M8.9 6.3 c.9-1 1.9-1 2.8 0 M5.4 11 c1.6-1.6 3.6-1.6 5.2 0' fill='none' stroke='%232f2b26' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E"); }
@@ -1029,22 +1034,24 @@ textarea:focus-visible,
   clip-path: polygon(0.4% 3%, 4% 1%, 9% 2.4%, 15% 0.6%, 22% 2.6%, 29% 0.8%, 36% 2.2%, 44% 0.5%, 52% 2.4%, 60% 0.9%, 68% 2.3%, 76% 0.7%, 84% 2.2%, 92% 0.8%, 100% 2%, 99.6% 40%, 100.3% 75%, 99.5% 96%, 94% 99%, 87% 97.8%, 79% 99.6%, 71% 98.2%, 63% 99.7%, 55% 98.4%, 47% 99.8%, 39% 98.3%, 31% 99.7%, 23% 98.4%, 15% 99.8%, 7% 98.6%, 0.3% 99.4%);
   filter: drop-shadow(0 2px 3px rgba(74, 58, 34, 0.18));
 }
-#failure-list::after {
+/* 外包层：便签整体微倾 + 胶带/信封贴在包层上——`#failure-list` 自带 clip-path 撕边，
+   装饰若挂在它自己身上会被裁掉（这正是前几轮"胶带缺失"的根因）。 */
+.failure-note { position: relative; transform: rotate(-1.2deg); }
+.failure-note::before {
   content: '';
-  position: absolute; top: -9px; right: 12px;
-  width: 28px; height: 21px;
-  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 20'%3E%3Cpath d='M2 3 L24 2.4 L23 17 L1.4 17.6 Z' fill='%23fbe3e0' stroke='%23d2493f' stroke-width='1.5'/%3E%3Cpath d='M2 3 L12 10 L23.8 2.6 M12 10 L11.6 17.4' fill='none' stroke='%23d2493f' stroke-width='1.3'/%3E%3C/svg%3E") center/contain no-repeat;
-  transform: rotate(6deg);
+  position: absolute; top: -7px; left: -10px;
+  width: 58px; height: 16px; z-index: 1;
+  background: linear-gradient(100deg, #f2b8c6d4, #f8cdd8e0 55%, #eeadc0d4);
+  box-shadow: 0 1px 2px #00000022;
+  transform: rotate(-38deg);
   pointer-events: none;
 }
-/* 左上角一条蓝胶带把便签按住（原型 C 失败便签：撕边 + 蓝胶带 + 右上信封涂鸦）。 */
-#failure-list::before {
+.failure-note::after {
   content: '';
-  position: absolute; top: -8px; left: 18px;
-  width: 64px; height: 18px;
-  background: linear-gradient(100deg, #a8c4ddcc, #c3d6e8d9 55%, #9dbdd8cc);
-  box-shadow: 0 1px 2px #00000022;
-  transform: rotate(-4deg);
+  position: absolute; top: -12px; right: 10px;
+  width: 34px; height: 26px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 20'%3E%3Cpath d='M2 3 L24 2.4 L23 17 L1.4 17.6 Z' fill='%23fbe3e0' stroke='%23d2493f' stroke-width='1.5'/%3E%3Cpath d='M2 3 L12 10 L23.8 2.6 M12 10 L11.6 17.4' fill='none' stroke='%23d2493f' stroke-width='1.3'/%3E%3C/svg%3E") center/contain no-repeat;
+  transform: rotate(6deg);
   pointer-events: none;
 }
 #failure-list .failure-row + .failure-row { margin-top: 8px; }
@@ -1070,16 +1077,17 @@ textarea:focus-visible,
   overflow-wrap: anywhere;
 }
 
+/* 鼓励语：失败便签下方右对齐的一行手写小字+笑脸（原型口径），
+   仍是按钮——点一下就能改（app.js renderMotto），只是不再包成便签卡。 */
 .motto {
   position: sticky; bottom: 8px; flex: none; z-index: 3;
-  margin-top: 10px;
-  padding: 10px 12px;
-  transform: rotate(-1deg);
-  background: #fff6d8;
-  border: 1.5px solid var(--bt-stroke);
-  border-radius: var(--bt-wobble-sm);
-  font-family: var(--bt-hand); font-size: 13px; text-align: center;
-  box-shadow: 2px 2px 0 #00000010;
+  margin-top: 8px;
+  padding: 2px 10px;
+  transform: rotate(-0.8deg);
+  background: none;
+  border: none;
+  font-family: var(--bt-hand); font-size: 13.5px; text-align: right;
+  color: var(--bt-ink-soft);
 }
 
 .motto button { display: block; width: 100%; background: none; border: 0; font: inherit; padding: 0; }
