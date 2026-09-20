@@ -417,13 +417,41 @@ test('a warning about an entry the manager does not own leaves startup successfu
 test('a required startup failure is reported with the authoritative diagnostics', async t => {
   const f = fixture(t);
   await synchronize(f.deployment, f.release, options(f));
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
   const cliFile = join(f.root, 'required-failure-host.mjs');
   // 逐字取自真实 0.1.6 宿主：必需条目失败的抬头前面还有调用方的前缀（boot 包装 + Node 未捕获异常），
-  // 所以解析必须按行内匹配，否则这段诊断永远读不到。
+  // 所以解析必须按行内匹配，否则这段诊断永远读不到。探测端口占用一个已释放的空闲端口，
+  // 不用默认 7902——开发机上常有真实 DSH 在监听，fetch 会意外成功。
   writeFileSync(cliFile, `process.stderr.write('Error: dsh: plugin tree failed to load: required startup failure: 1 entry did not activate\\nsdk-jsonrpc-server (dsh-plugin-that-does-not-exist): failed to import\\n    at boot (/opt/dsh-runtime/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js:2579:9)\\n');
     setTimeout(() => process.exit(1), 500);`);
   f.deployment.options['dsh-cli-js'] = cliFile;
+  f.deployment.options.port = port;
   await assert.rejects(supervise(f.deployment, f.release), /未激活的必需条目：[\s\S]*sdk-jsonrpc-server \(dsh-plugin-that-does-not-exist\): failed to import/);
+});
+
+test('a grouped required failure as of 0.1.6-alpha.2 still reports managed entries', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const cliFile = join(f.root, 'required-failure-alpha2-host.mjs');
+  // 逐字对应 0.1.6-alpha.2 宿主的分组诊断：抬头由 StartupError 直接抛出、不再加 boot 前缀；
+  // 明细按 Failed plugins 分组缩进（2 空格条目、4 空格 Package 与原因），可选条目也并入这份
+  // 诊断。托管插件混在分组里时必须比对出来，官方必需失败块也要一并转报。
+  writeFileSync(cliFile, `process.stderr.write('dsh: startup failed: 2 required plugins did not activate\\n\\nFailed plugins (2):\\n  sdk-jsonrpc-server (required)\\n    Package: dsh-plugin-that-does-not-exist\\n    Error: Cannot find module \\'dsh-plugin-that-does-not-exist\\'\\n  alpha\\n    Package: fixture-alpha\\n    failed to import\\n');
+    setTimeout(() => process.exit(1), 500);`);
+  f.deployment.options['dsh-cli-js'] = cliFile;
+  f.deployment.options.port = port;
+  await assert.rejects(supervise(f.deployment, f.release), error => {
+    assert.match(error.message, /托管插件未激活：alpha \(fixture-alpha\) failed to import/);
+    assert.match(error.message, /未激活的必需条目：[\s\S]*Failed plugins \(2\):[\s\S]*sdk-jsonrpc-server \(required\)/);
+    return true;
+  });
 });
 
 test('a decoy line inside a failure reason cannot hide a later managed plugin', async t => {

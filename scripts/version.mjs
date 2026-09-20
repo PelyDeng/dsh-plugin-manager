@@ -1,5 +1,6 @@
 /** Synchronize the framework release unit; custom plugins keep their own versions. */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -70,6 +71,34 @@ function isOlder(version, previous) {
   return false;
 }
 
+// 发版输入核验：tools/builtin-build 是发版交付物，其 frameworkVersion 必须与框架版本一起走
+// （发行包没有子模块也要检查）。
+function checkDeliveredInputs(root, read, framework) {
+  if (!existsSync(resolve(root, 'tools/builtin-build/input.json'))) return [];
+  return JSON.parse(read('tools/builtin-build/input.json')).frameworkVersion === framework ? []
+    : ['tools/builtin-build/input.json 的 frameworkVersion 与框架版本不一致（发版输入须随发版提交一起更新）'];
+}
+
+// 宿主锚点核验：deepseek-harness/package.json 的版本是宿主侧唯一事实源，根 workspace 的
+// 供应链豁免、兼容文档与私有仓说明都引用它。历史上升级宿主时漏改过这些锚点，这里在 check 时
+// 集中比对，升级只需保证各锚点与子模块一致。发行包检出没有子模块，天然跳过。
+function checkHostAnchors(root, read, framework) {
+  if (!existsSync(resolve(root, 'deepseek-harness/package.json'))) return [];
+  const host = JSON.parse(read('deepseek-harness/package.json')).version;
+  const problems = [];
+  const excludes = [...read('pnpm-workspace.yaml').matchAll(/'(@deepseek-ai\/[^']+)@([^']+)'/g)];
+  const stale = excludes.filter(([, , versions]) => !versions.split(' || ').includes(host));
+  if (stale.length) problems.push(`pnpm-workspace.yaml 的宿主豁免未包含 ${host}：${[...new Set(stale.map(([, name]) => name))].join('、')}`);
+  const compatibility = existsSync(resolve(root, 'doc/host-compatibility.md')) ? read('doc/host-compatibility.md') : '';
+  if (compatibility && !compatibility.includes(`\`${host}\``)) problems.push(`doc/host-compatibility.md 未提及宿主版本 ${host}`);
+  if (existsSync(resolve(root, 'PRIVATE.md')) && !read('PRIVATE.md').includes(host)) problems.push(`PRIVATE.md 未提及宿主版本 ${host}`);
+  try {
+    const gitlink = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD:deepseek-harness'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (compatibility && /^[0-9a-f]{40}$/.test(gitlink) && !compatibility.includes(gitlink)) problems.push(`doc/host-compatibility.md 未提及子模块提交 ${gitlink.slice(0, 12)}`);
+  } catch { /* 无 git 或未提交 gitlink 时跳过提交号比对 */ }
+  return problems;
+}
+
 export function frameworkVersion(root, { mode = 'check', version } = {}) {
   if (!['check', 'sync', 'set'].includes(mode) || (mode !== 'set' && version !== undefined)) {
     throw new Error('用法：node scripts/version.mjs check | sync | set X.Y.Z');
@@ -99,8 +128,9 @@ export function frameworkVersion(root, { mode = 'check', version } = {}) {
   }
   // Read and validate every input before writing anything, including on set.
   const changed = [...planned].filter(([name, content]) => !existsSync(resolve(root, name)) || read(name) !== content);
-  if (mode === 'check' && changed.length) {
-    throw new Error(`框架版本或文档未同步：\n${changed.map(([name]) => `  ${name}`).join('\n')}\n请运行 node scripts/version.mjs sync 并提交结果。`);
+  if (mode === 'check') {
+    const problems = [...changed.length ? [`框架版本或文档未同步：\n${changed.map(([name]) => `  ${name}`).join('\n')}\n请运行 node scripts/version.mjs sync 并提交结果。`] : [], ...checkHostAnchors(root, read, target), ...checkDeliveredInputs(root, read, target)];
+    if (problems.length) throw new Error(problems.join('\n'));
   }
   if (mode !== 'check') for (const [name, content] of changed) writeFileSync(resolve(root, name), content);
   return { version: target, changed: changed.map(([name]) => name) };

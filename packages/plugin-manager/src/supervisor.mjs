@@ -89,10 +89,16 @@ export async function supervise(deployment, release, { locked = false, unlock } 
   else rmSync(deployment.authUrlFile, { force: true });
   for (const signal of signals) process.on(signal, stop);
   const publicUrl = options['public-url'] ?? process.env.DSH_PUBLIC_URL ?? deployment.config.publicUrl ?? `http://127.0.0.1:${port}`;
-  // 官方诊断的抬头：可失败条目是 `dsh: warning: N entries did not activate`，必需条目是
-  // `Error: dsh: plugin tree failed to load: required startup failure: N entry did not activate`
-  // （前缀层数由调用方决定，所以只匹配行内最后一次出现的抬头）；随后每行是
-  // `<入口 id> (<模块名>): <原因>`，而原因用 error.stack，本身可以多行。
+  // 官方诊断的抬头与明细有两个世代（0.1.6-alpha.1 → alpha.2）：
+  // - 可选警告两代相同：`dsh: warning: N entr(y|ies) did not activate`，随后每行是
+  //   `<入口 id> (<模块名>): <原因>`，而原因用 error.stack，本身可以多行。
+  // - 必需失败 alpha.1：`... required startup failure: N entry did not activate` + 同款平铺明细行。
+  // - 必需失败 alpha.2：`dsh: startup failed: N required plugin(s) did not activate` + 分组明细——
+  //   `Failed plugins (N):` 下每项是 2 空格缩进的 `<id>[ (required)]`，其 `Package:` 与原因行 4 空格
+  //   缩进；`Plugins waiting for services (N):` 是 2 空格缩进的两列表，可选条目也并入这份诊断。
+  //
+  // 宿主对必需失败一律非零退出，失败判定不依赖文案；解析只为两件事——把诊断块原样转报，
+  // 并把未激活条目的 id/包名比对进托管名单。
   //
   // 这里**不能**按抬头里的条数收行：原因里的换行可能长得就像一条明细行，会把真正的条目挤掉，
   // 结果托管插件没激活却被当成成功（用真实 0.1.6 宿主复现过）。受管条目本来就有限，任何一条
@@ -100,13 +106,30 @@ export async function supervise(deployment, release, { locked = false, unlock } 
   const inactive = new Map();
   const requiredFailures = [];
   let severity = 'warning';
+  let unnamedEntry = null;
   const noteActivation = line => {
-    const header = /(?:^|: )(warning|required startup failure): \d+ entr(?:y|ies) did not activate$/.exec(line);
-    if (header) { severity = header[1] === 'warning' ? 'warning' : 'required'; return; }
+    const header = /(?:^|: )((?:warning|required startup failure): \d+ entr(?:y|ies) did not activate|startup failed: \d+ required plugins? did not activate)$/.exec(line);
+    if (header) {
+      severity = header[1].startsWith('warning') ? 'warning' : 'required';
+      unnamedEntry = null;
+      if (severity === 'required') requiredFailures.push(line);
+      return;
+    }
+    if (severity === 'required') {
+      requiredFailures.push(line);
+      const flat = /^(\S+) \(([^)]*)\): /.exec(line);
+      const failedEntry = /^ {2}(\S+?)(?: \(required\))?$/.exec(line);
+      const waitingEntry = /^ {2}(\S+?)(?: \(required\))? {2,}(\S.*)$/.exec(line);
+      const packageLine = /^ {4}Package: (\S+)$/.exec(line);
+      if (flat) inactive.set(flat[1], { name: flat[2], reason: '' });
+      else if (failedEntry) { unnamedEntry = { name: '', reason: '' }; inactive.set(failedEntry[1], unnamedEntry); }
+      else if (waitingEntry && waitingEntry[1] !== 'Plugin') inactive.set(waitingEntry[1], { name: '', reason: `waiting for services: ${waitingEntry[2]}` });
+      else if (packageLine && unnamedEntry) unnamedEntry.name = packageLine[1];
+      else if (unnamedEntry && /^ {4}\S/.test(line)) unnamedEntry.reason ||= line.trim();
+      return;
+    }
     const entry = /^(\S+) \(([^)]*)\): (.*)$/.exec(line);
-    if (!entry) return;
-    if (severity === 'required') requiredFailures.push(line);
-    else inactive.set(entry[1], { name: entry[2], reason: entry[3] });
+    if (entry) inactive.set(entry[1], { name: entry[2], reason: entry[3] });
   };
   // 托管条目未激活就一定是失败；返回 undefined 表示没有证据说明托管插件没起来。
   const activationError = () => {
@@ -117,9 +140,10 @@ export async function supervise(deployment, release, { locked = false, unlock } 
   let reportActivationFailure; const activationFailed = new Promise(resolvePromise => { reportActivationFailure = resolvePromise; });
   const output = line => {
     noteActivation(line);
-    const error = activationError();
     // 激活审计在 Loader 结算之后，可能晚于就绪探测；警告什么时候到都要立刻判定。
-    if (error) reportActivationFailure({ error });
+    // 分组诊断的条目身份跨多行到达（id 行先到、Package 行后到），这里只发信号，
+    // 消息在最终抛出时按最新状态构造。
+    if (activationError()) reportActivationFailure({});
     if (line.includes('?token=')) {
       const match = line.match(/\?token=([A-Za-z0-9_-]{43})(?:\s|$)/);
       if (match) privateFile(deployment.authUrlFile, `${publicUrl.replace(/\/$/, '')}/?token=${match[1]}\n`, deployment.config.authUrlDirectWrite === true);
@@ -131,12 +155,10 @@ export async function supervise(deployment, release, { locked = false, unlock } 
     deployment.baseUrl ??= deployment.profile === 'web' ? `http://127.0.0.1:${port}` : undefined;
     let verified = false;
     let lastError;
-    let activationFailure;
     const startupDeadline = performance.now() + 60_000;
     while (!stopped && performance.now() < startupDeadline) {
       // 就绪探测可能早于宿主的激活审计，所以在写"已启动"之前先核对已有诊断。
-      activationFailure = activationError();
-      if (activationFailure) break;
+      if (activationError()) break;
       try {
         if (deployment.baseUrl) {
           const response = await fetch(deployment.baseUrl, { signal: AbortSignal.timeout(1000), redirect: 'manual' });
@@ -147,13 +169,25 @@ export async function supervise(deployment, release, { locked = false, unlock } 
     }
     if (!verified) {
       child.kill('SIGTERM');
-      if (activationFailure) throw activationFailure;
+      const activationFailure = activationError();
+      if (activationFailure) {
+        // alpha.2 起必需失败的官方诊断会把可选条目并进同一份分组，托管插件可能混在其中：
+        // 托管判定优先，官方必需失败块跟随转报，两份证据都要出现在最终错误里。
+        if (requiredFailures.length) activationFailure.message += `\n未激活的必需条目：\n${requiredFailures.join('\n')}`;
+        throw activationFailure;
+      }
       throw new Error((stopped ? 'DSH 在启动验证前退出。' : 'DSH 在 60 秒内未通过启动验证，请检查宿主日志；修正后直接重新运行普通 build。') + (requiredFailures.length ? `\n未激活的必需条目：\n${requiredFailures.join('\n')}` : ''), { cause: lastError });
     }
     startupUnlock(); startupLocked = false;
     process.stdout.write(`${JSON.stringify({ status: 'running', activated: 'unknown', profile: deployment.profile })}\n`);
     const outcome = await Promise.race([exited.then(result => ({ result })), activationFailed]);
-    if (outcome.error) { child.kill('SIGTERM'); throw outcome.error; }
+    if (!('result' in outcome)) {
+      child.kill('SIGTERM');
+      // 走到这里时诊断流已稳定，按最终状态构造托管失败消息；必需失败块同样跟随转报。
+      const lateActivationFailure = activationError() ?? new Error('托管插件未激活。');
+      if (requiredFailures.length) lateActivationFailure.message += `\n未激活的必需条目：\n${requiredFailures.join('\n')}`;
+      throw lateActivationFailure;
+    }
     const result = outcome.result;
     if (result.error) throw result.error;
     if (result.code && !result.signal) fail(`DSH 退出码 ${result.code}`);
