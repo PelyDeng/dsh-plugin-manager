@@ -293,3 +293,115 @@ export function verdictDecisionFor(input: {
   }
   return { verdict: 'accept', downgraded: false, why: '' }
 }
+
+import { defineTool } from '@deepseek-ai/dsh-tools'
+import type { AgentCard } from '../agents.ts'
+
+/**
+ * `butler_verdict` 工具的工厂（批 3 从 ButlerConsole.verdictTool 上提，行为不变）：
+ * **批量**裁决已经终结的子任务，并入汇总轮。
+ *
+ * ⚠️ 工具是每会话注册一次、对所有轮次生效的，execute 必须自己判断"此刻是不是在
+ * 裁决上下文里"：不在就明确拒绝。
+ */
+
+export function makeVerdictTool(input: {
+  readonly name: string
+  readonly sessionId: string
+  readonly verdictContexts: ReadonlyMap<string, VerdictContext>
+  readonly dispatchableAgents: () => readonly AgentCard[]
+  readonly readVerdictDecision: (raw: unknown, context: VerdictContext, dispatchableAgents: () => readonly AgentCard[]) => VerdictDecision
+  readonly applyVerdictDecision: (context: VerdictContext, decision: VerdictDecision) => Promise<void>
+ }) {
+    return defineTool({
+      name: input.name,
+      description: '对已经结束的子任务逐条给出裁决。**只在提示里给出「待裁决清单」时调用**：一次把清单里的每一步都裁掉，然后再写汇总正文。',
+      parameters: {
+        items: {
+          type: 'array',
+          required: true,
+          description: '裁决清单里**每一步**的结论，一步一条：不要漏，也不要重复。',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              subtaskId: { type: 'string', required: true, description: '要裁决的子任务 id，只能从待裁决清单里选。' },
+              verdict: { type: 'string', required: true, description: 'accept=产出可用、采纳；rework=同一位成员再做一次；replace=换一位成员重做。' },
+              evidence: { type: 'string', description: 'accept 必填：该步结果或材料里**原样出现**的一小段文字（或材料位置），用来核验产出真的存在。核验不过会被降级为 unverified。' },
+              reason: { type: 'string', description: '一句话说明为什么这样裁。' },
+              newAgentId: { type: 'string', description: 'replace 必填：换给谁，只能从可调度成员里选。' },
+            },
+          },
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { accepted: { type: 'boolean', required: true }, decided: { type: 'integer', required: true } },
+        },
+        render: (_args, value) => [{
+          type: 'text',
+          text: value.accepted ? `已记录 ${value.decided} 条裁决。` : '裁决未被接受。',
+        }],
+      },
+      execute: async (args, exec) => {
+        exec.signal.throwIfAborted()
+        const context = input.verdictContexts.get(input.sessionId)
+        if (context === undefined) {
+          // 派活轮的模型也可能调它（工具对所有轮次都注册着）。这里明确拒绝并指路。
+          throw new Error('现在没有待裁决的清单：只在收尾汇总那一轮、提示里给出待裁决清单时才能调用这个工具。')
+        }
+        const items = Array.isArray(args.items) ? args.items : []
+        if (items.length === 0) throw new Error('裁决清单不能为空')
+        // **先整批校验、再逐条落库**：半批落下去会留下"这一轮裁了一半"的中间态，而下一次
+        // 重试时清单可能已经变了（子任务被替代、任务被补充）。
+        const pending: VerdictDecision[] = []
+        for (const raw of items) pending.push(input.readVerdictDecision(raw, context, input.dispatchableAgents))
+        const missing = context.open
+          .filter(item => !context.decided.has(item.id) && !pending.some(entry => entry.subtaskId === item.id))
+          .map(item => item.id)
+        if (missing.length > 0) {
+          // 漏掉的步骤没有结论 —— 汇总写下去就等于默认通过，所以这里拒绝整批。
+          throw new Error(`还有步骤没有裁决：${missing.join('、')}。清单里的每一步都要给出结论。`)
+        }
+        for (const decision of pending) await input.applyVerdictDecision(context, decision)
+        return { accepted: true, decided: pending.length }
+      },
+    })
+  }
+
+export function readVerdictDecision(raw: unknown, context: VerdictContext, dispatchableAgents: () => readonly AgentCard[]): VerdictDecision {
+  if (typeof raw !== 'object' || raw === null) throw new Error('裁决条目必须是对象')
+  const item = raw as Record<string, unknown>
+  const subtaskId = typeof item.subtaskId === 'string' ? item.subtaskId.trim() : ''
+  const target = context.open.find(entry => entry.id === subtaskId)
+  if (target === undefined) {
+    throw new Error(`子任务 ${subtaskId === '' ? '(缺 id)' : subtaskId} 不在这一次的待裁决清单里；只能裁清单里列出的步骤。`)
+  }
+  if (context.decided.has(subtaskId)) {
+    // 同一子任务重复裁决：后一条会盖掉前一条，而"哪一条算数"没有任何依据可言。
+    throw new Error(`子任务 ${subtaskId} 已经裁决过了：同一个子任务不能重复裁决。`)
+  }
+  const verdict = item.verdict
+  if (verdict !== 'accept' && verdict !== 'rework' && verdict !== 'replace') {
+    throw new Error('verdict 只能是 accept / rework / replace')
+  }
+  const reason = typeof item.reason === 'string' ? clip(item.reason.trim(), 300) : ''
+  const evidence = typeof item.evidence === 'string' ? item.evidence.trim() : ''
+  const newAgentId = typeof item.newAgentId === 'string' ? item.newAgentId.trim() : ''
+  if (verdict === 'replace') {
+    if (newAgentId === '') throw new Error('replace 必须给 newAgentId：换给谁。')
+    // **预检可调度**：派不出去的替代方案不如当场拒绝 —— 否则问题要到下一轮派单才暴露，
+    // 而那时这一轮已经按"要重做"收尾了。
+    if (!dispatchableAgents().some((card: AgentCard) => card.id === newAgentId)) {
+      throw new Error(`成员 ${newAgentId} 现在不可调度，不能作为替代者。`)
+    }
+  }
+  return {
+    subtaskId, verdict,
+    ...(reason === '' ? {} : { reason }),
+    ...(evidence === '' ? {} : { evidence }),
+    ...(newAgentId === '' ? {} : { newAgentId }),
+  }
+}
