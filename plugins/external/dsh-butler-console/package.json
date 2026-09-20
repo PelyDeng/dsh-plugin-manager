@@ -68,7 +68,7 @@
     "build": "tsdown && tsdown --config tsdown.web.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && node --check web/app.js && node --check web/api.js && node --check web/stream.js && node --check web/markdown.js && node scripts/check-web-cycles.mjs",
+    "check": "pnpm typecheck && node --check web/app.js && node --check web/api.js && node --check web/stream.js && node --check web/markdown.js && node --check web/modules/config.js && node --check web/modules/state.js && node --check web/modules/dom.js && node scripts/check-web-cycles.mjs",
     "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
   },
   "dependencies": {

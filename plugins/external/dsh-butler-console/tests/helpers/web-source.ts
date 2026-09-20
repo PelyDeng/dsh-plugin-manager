@@ -25,15 +25,12 @@ import { fileURLToPath } from 'node:url'
  */
 const MODULES: readonly string[] = [
   // 批 1a（底层，打样）：原 app.js 行号序
-  // 'modules/config.js',    // 常量（约 20-124 行区间）
-  // 'modules/state.js',     // el/state/historyState + 会话记忆
-  // 'modules/dom.js',       // make/滚动/帧/stabilize
+  'modules/config.js',    // 常量（原 25-128 行区间）
+  'modules/state.js',     // el/state/historyState + 会话记忆（原 130-249、2173-2187）
+  'modules/dom.js',       // make/滚动/帧/stabilize（原 39-42、251-502）
   // 批 1b（环簇一：events+send+cards 同一次提交）
-  // 'modules/speech.js' / 'modules/member.js' / 'modules/dcard.js' / 'modules/rail.js' / 'modules/cards.js' / 'modules/events.js' / 'modules/send.js'
   // 批 1c（环簇二：panels+history 同一次提交）
-  // 'modules/panels.js' / 'modules/history.js'
   // 批 1d（独立域）
-  // 'modules/attachments.js' / 'modules/composer.js'
 ]
 
 /** 入口 + 全部已拆模块的拼接全文（源码断言型测试的默认读取口）。 */
