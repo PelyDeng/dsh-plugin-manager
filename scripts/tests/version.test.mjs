@@ -101,3 +101,26 @@ test('unknown, missing, repeated and nested excerpts fail before any output is c
   f.write('doc/plugin-development.md.tmpl', '# 作者 {{FRAMEWORK_VERSION}}\n<!-- excerpt:author-pack -->x<!-- /excerpt:author-pack -->\n<!-- excerpt:author-pack -->y<!-- /excerpt:author-pack -->\n');
   assert.throws(() => frameworkVersion(f.root), /缺失或重复文档片段/);
 });
+
+test('check verifies host anchors against the submodule version and skips without one', t => {
+  const f = fixture(t);
+  frameworkVersion(f.root, { mode: 'sync' });
+  f.write('deepseek-harness/package.json', '{"version":"0.1.6-alpha.2"}\n');
+  f.write('pnpm-workspace.yaml', "minimumReleaseAgeExclude:\n  - '@deepseek-ai/dsh-agent@0.1.6-alpha.1 || 0.1.6-alpha.2'\n  - '@deepseek-ai/dsh-session@0.1.6-alpha.2'\n");
+  f.write('doc/host-compatibility.md', '当前框架使用 DeepSeek Harness `0.1.6-alpha.2`。\n');
+  f.write('PRIVATE.md', '宿主子模块锁定 DSH `0.1.6-alpha.2`。\n');
+  f.write('tools/builtin-build/input.json', '{"frameworkVersion":"0.13.0"}\n');
+  frameworkVersion(f.root);
+  f.write('pnpm-workspace.yaml', "minimumReleaseAgeExclude:\n  - '@deepseek-ai/dsh-agent@0.1.6-alpha.1'\n");
+  f.write('doc/host-compatibility.md', '当前框架使用 DeepSeek Harness `0.1.6-alpha.1`。\n');
+  assert.throws(() => frameworkVersion(f.root), error => {
+    assert.match(error.message, /宿主豁免未包含 0\.1\.6-alpha\.2：@deepseek-ai\/dsh-agent/);
+    assert.match(error.message, /host-compatibility\.md 未提及宿主版本 0\.1\.6-alpha\.2/);
+    return true;
+  });
+  f.write('tools/builtin-build/input.json', '{"frameworkVersion":"0.12.0"}\n');
+  assert.throws(() => frameworkVersion(f.root), /builtin-build\/input\.json 的 frameworkVersion 与框架版本不一致/);
+  // 发行包检出没有子模块：宿主核验整体跳过，发版输入核验仍单独报告。
+  rmSync(join(f.root, 'deepseek-harness'), { recursive: true, force: true });
+  assert.throws(() => frameworkVersion(f.root), /builtin-build\/input\.json 的 frameworkVersion 与框架版本不一致/);
+});
