@@ -28,7 +28,7 @@
 
 ## 宿主能力
 
-通过官方 `dsh` profile 运行。宿主需提供 agents、agentDefaultModel、llm、tools、systemPrompt、webServer、jobs、attachments、sessions、sessionPersistence 和 messageFeedback。开发依赖与运行宿主均为 DSH `0.1.6-alpha.1`；附件通过 `saveFileStream/readFileStream` 访问，历史和用量使用官方公开子路径。实时输出订阅 `agent/assistant-stream`，持久历史使用 Session V3 的 message/attempt 流；不再订阅 `assistant/chunk`。
+通过官方 `dsh` profile 运行。宿主需提供 agents、agentDefaultModel、llm、tools、systemPrompt、webServer、jobs、attachments、sessions、sessionPersistence 和 messageFeedback。开发依赖与运行宿主均为 DSH `0.1.6-alpha.2`；附件通过 `saveFileStream/readFileStream` 访问，历史和用量使用官方公开子路径。实时输出订阅 `agent/assistant-stream`，持久历史使用 Session V3 的 message/attempt 流；不再订阅 `assistant/chunk`。
 
 旧会话经官方持久化层转换后读取，不能直接改写日志或沿用升级前缓存的分支序号。生产升级的备份、镜像更新和回退步骤见[宿主兼容说明](../../../../../doc/host-compatibility.md)。
 
@@ -48,7 +48,7 @@ AI 任务由官方 Jobs controller 管理，并绑定实际执行任务的 Agent
 
 对话附件不要求先创建文章。发送时冻结资料版本及阅读范围；移除待发送选择不删除历史消息中的原件引用。新对话不继承旧资料，分支只继承切点之前的消息与资料。
 
-`pnpm test` 运行可在已发布开发依赖上执行的行为测试；`pnpm test:host` 必须在锁定 DSH 0.1.6-alpha.1 运行环境中运行，覆盖真实公开 SDK 的历史/Token 投影及受保护 HTTP 路由。HTTP 测试使用隔离数据与身份替身，不等于正式浏览器或真实模型验收。
+`pnpm test` 运行可在已发布开发依赖上执行的行为测试；`pnpm test:host` 必须在锁定 DSH 0.1.6-alpha.2 运行环境中运行，覆盖真实公开 SDK 的历史/Token 投影及受保护 HTTP 路由。HTTP 测试使用隔离数据与身份替身，不等于正式浏览器或真实模型验收。
 
 > ⚠️ **`test:host` 里有三条用例要求真 PostgreSQL**（会话、草稿、附件、备份授权都只有 PG 一种后端）：
 > 设 `AGENTS_GROUP_TEST_PG_DSN`（**库名必须以 `_test` 结尾**，夹具会 `DROP SCHEMA public CASCADE` 重建）

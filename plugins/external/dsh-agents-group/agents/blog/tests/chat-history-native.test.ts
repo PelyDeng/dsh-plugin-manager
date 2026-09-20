@@ -32,7 +32,7 @@ type ChatProjection = {
   }[]
 }
 
-test('official 0.1.6-alpha.1 surface and token fold preserve multi-step, retries and per-turn accounting',()=>{
+test('official 0.1.6-alpha.2 surface and token fold preserve multi-step, retries and per-turn accounting',()=>{
   const events: ProjectedEvent[]=[],add=(type: string,data: Record<string, unknown>,surfaceOp?: string)=>{events.push({type,data,time:1000+events.length*100,seq:events.length,...(surfaceOp?{surfaceOp}:{})})}
   const usage={inputTokens:10,outputTokens:4,cacheReadTokens:2,cacheWriteTokens:0,reasoningTokens:1,totalTokens:16}
   const stream=(text: string)=>[{type:'chunk',time:950+events.length*100,chunk:{type:'text-delta',text}}]
