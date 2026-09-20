@@ -17,7 +17,7 @@ import {
 import { richText } from './markdown.js'
 import { BUILTIN_AVATARS, DEFAULT_MOTTO, DOODLE_PATHS, MOTTO_KEY, PALETTE, RAIL_ICON_PATHS, RAIL_STEPS, STATE_TEXT, SUGGESTIONS, SVG_NS } from './modules/config.js'
 import { el, historyState, newConversationId, recallConversation, rememberConversation, state } from './modules/state.js'
-import { accentOf, announce, append, avatarNode, clear, declaredNameOf, defaultAvatarUrl, displayNameOf, distanceFromBottom, formatElapsed, formatTime, make, noteStabilize, programmaticScroll, resetFollowing, scheduleFollowScroll, scheduleFrame, scrollToBottom, stabilizeViewport, streamTraceEnabled, threadInner, traceEvent, updateJumpLatest } from './modules/dom.js'
+import { accentOf, announce, append, avatarNode, clear, declaredNameOf, defaultAvatarUrl, autosize, displayNameOf, distanceFromBottom, formatElapsed, formatTime, make, noteStabilize, programmaticScroll, resetFollowing, scheduleFollowScroll, scheduleFrame, scrollToBottom, stabilizeViewport, streamTraceEnabled, threadInner, traceEvent, updateJumpLatest } from './modules/dom.js'
 import { applySummaryRail, renderRail, resetRail, setRail } from './modules/rail.js'
 import { appendPreviewText, butlerDelta, butlerMessage, butlerSettle, butlerThinking, dropThinkingOnlySpeech, userMessage } from './modules/speech.js'
 import { ensureProgress, memberMessage, renderMemberContent, renderMemberMaterials, setThinking, settleMarkdown, settleMemberBody, settleMemberDynamics } from './modules/member.js'
