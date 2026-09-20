@@ -263,3 +263,10 @@ export function scheduleFrame(job) {
 export function scheduleFollowScroll() {
   scheduleFrame(() => {})
 }
+
+export function autosize() {
+  el.input.style.height = 'auto'
+  el.input.style.height = `${Math.min(el.input.scrollHeight, 160)}px`
+  const length = [...el.input.value].length
+  el.count.textContent = length > 0 ? `${length} 字` : ''
+}

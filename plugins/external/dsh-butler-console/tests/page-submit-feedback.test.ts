@@ -198,7 +198,14 @@ describe('恢复链路边界（复核轮代码核对发现的两个缺口）', (
    * 事件流/探测/重建替身，验证换轮、快照失败、探测窗口三个边界的行为。
    */
   const start = source.indexOf('async function followUntilTerminal(')
-  const end = source.indexOf('\nasync function finishTurn', start)
+  // 拆分后函数搬进域模块并带 export 前缀：终点锚点取两种形态里先到的那个。
+  const end = (() => {
+    const plain = source.indexOf('\nasync function finishTurn', start)
+    const exported = source.indexOf('\nexport async function finishTurn', start)
+    const candidates = [plain, exported].filter(index => index !== -1)
+    if (candidates.length === 0) return -1
+    return Math.min(...candidates)
+  })()
   const followBody = source.slice(start, end)
 
   async function play(batches: Iterable<unknown>[], head: unknown, from: number, expectedRunId: string | undefined, rebuildResult: unknown) {

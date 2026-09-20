@@ -37,6 +37,11 @@ const MODULES: readonly string[] = [
   'modules/attachments.js', // 待发附件全家桶（原 711-990）
   'modules/panels.js',    // 右栏/设置/列表（原 1363-1788）
   'modules/history.js',   // 历史与视图栈（原 189-223、1790-2231）
+  // 批 1d（环簇一整批 + composer，web 拆分收官）
+  'modules/cards.js',     // 操作卡/提问卡/汇总卡/欢迎板（原 48-192、456-605）
+  'modules/events.js',    // handleEvent/handleSubtask（原 198-454）
+  'modules/send.js',      // 发送与回合流（原 607-677、680-1051）
+  'modules/composer.js',  // 座右铭/@提及/开新会话（原 1054-1082、1093-1250）
 ]
 
 /** 入口 + 全部已拆模块的拼接全文（源码断言型测试的默认读取口）。 */
