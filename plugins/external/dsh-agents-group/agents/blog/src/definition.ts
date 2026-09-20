@@ -165,10 +165,10 @@ export interface BlogDefinitionInput {
 /**
  * 造伊丽莎白 · 博客的 `AgentDefinition`。
  *
- * ⚠️ 目前只声明：身份 · `persona` · `tools` · `config` · `liveMode`。
- * **`projectResult` / `projectHistory` / `stageText` 待补齐**（原因见文件头），它们缺席时运行时
- * 走**兜底投影**（正文取最终消息、状态按回合结局判定、材料为空）——那是**已知的、当前就存在**的
- * 行为，不是本文件引入的退步。
+ * ⚠️ 已落：身份 · `persona` · `tools` · `config` · `liveMode` · `conversationAddressing` ·
+ * `turnContext` · `projectResult`（落点见文件头那张表）。**`projectHistory` / `stageText` 待补齐**
+ * （原因见文件头），它们缺席时运行时走**兜底投影**（正文取最终消息、状态按回合结局判定、材料为空）
+ * ——那是**已知的、当前就存在**的行为，不是本文件引入的退步。
  */
 export function createBlogDefinition(input: BlogDefinitionInput): AgentDefinition {
   return {
@@ -276,12 +276,13 @@ export function createBlogDefinition(input: BlogDefinitionInput): AgentDefinitio
 }
 
 /**
- * blog 的结果投影（**唯一实现**）：两个消费者共用同一份。
+ * blog 的结果投影（**唯一实现**），调用方是运行时的 `AgentDefinition.projectResult`
+ * （本文件上方：`createBlogProjector(input)`）。
  *
- * - 运行时的 `AgentDefinition.projectResult`（本文件上方：`createBlogProjector(input)`）；
- * - blog 自己的协作入口（`participant.ts` 的收尾段）—— 在索引库切到运行时之前，它仍是生产路径上
- *   的会话来源。**不能**只让 definition 用这份而让协作入口继续留着自己那一份：两份等价实现的下场
- *   是"某条路径改了、另一条没改"，而用户看到的是**同一轮在大总管那里和在页面上结论不同**。
+ * 旧的 blog 协作入口（`participant.ts`）**已删除**，所以现在只有这一个消费者。当初留这份注释是因为
+ * 有两条路径并存：**不能**只让 definition 用这份、而让协作入口留着自己那一份，两份等价实现的下场
+ * 是"某条路径改了、另一条没改"，用户看到的是**同一轮在大总管那里和在页面上结论不同**。路径合并之后
+ * 这条约束自然满足，但它是"只留一个实现"的由来，所以保留。
  *
  * ## 只在"回合正常结束"时被调用
  *

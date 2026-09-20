@@ -317,9 +317,9 @@ export class BlogChat {
   /**
    * 外部回合驱动方的占用查询（形状见 `OccupancyPort`）。
    *
-   * ⚠️ 缺省实现恒为"都不忙"，且**只能**从构造函数最后一个位置参数注入——装配点
-   * （`src/index.ts`）接真实现是下一批的事。本批只留接缝，所以今天的行为与改造前
-   * **逐点等价**（见 `busy()` 的三档注释）。
+   * ⚠️ 只能从构造函数最后一个位置参数注入。装配点（`src/index.ts`）**已注入**运行时的
+   * `lifecycle`（`isBusy` / `busyIds` / `release`，晚绑定）；缺省实现只留给没有注入的装配，
+   * 行为是"都不忙"（见 `busy()` 的三档注释）。
    */
   readonly occupancy: OccupancyPort
   /**
