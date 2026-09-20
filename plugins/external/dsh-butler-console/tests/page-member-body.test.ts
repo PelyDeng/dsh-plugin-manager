@@ -15,9 +15,10 @@
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { webSource } from './helpers/web-source.ts'
 import { describe, expect, it } from 'vitest'
 
-const source = readFileSync(fileURLToPath(new URL('../web/app.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+const source = webSource()
 const css = readFileSync(fileURLToPath(new URL('../web/style.css', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
 
 interface StubNode {
@@ -40,9 +41,11 @@ function load() {
   })
   const make = (_tag: string, className: string) => node(className)
   const renderMarkdownInto = (target: StubNode, text: string) => { target.textContent = text }
-  const api = Function('make', 'renderMarkdownInto',
+  // richText 替身：settleMarkdown 的两条路径（原地重渲 / 新建替换）都走它了。
+  const richText = (target: StubNode, text: string) => { target.textContent = text; target.className = 'md'; return target }
+  const api = Function('make', 'renderMarkdownInto', 'richText',
     `${pick('settleMarkdown')}\n${pick('renderMemberContent')}\n${pick('settleMemberBody')}\nreturn { settleMemberBody, renderMemberContent }`,
-  )(make, renderMarkdownInto) as {
+  )(make, renderMarkdownInto, richText) as {
     settleMemberBody(view: { body: string; text: StubNode }, fallback?: unknown): string
     renderMemberContent(view: { body: string; text: StubNode }, text: unknown): unknown
   }

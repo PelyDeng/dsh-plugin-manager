@@ -11,16 +11,30 @@
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { webSource } from './helpers/web-source.ts'
 import { describe, expect, it } from 'vitest'
 
 // 工作副本在 Windows 上是 CRLF：先统一换行，按行匹配的片段才取得到（同 closedoff 的做法）。
-const source = readFileSync(fileURLToPath(new URL('../web/app.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+const source = webSource()
 
-/** 取出 `setThinking` 的实现：页面是浏览器模块，测试只拿这一个函数的行为。 */
-function loadSetThinking(): (view: unknown, thinking: string) => void {
+/** 取出 `setThinking` 的实现：页面是浏览器模块，测试只拿这一个函数的行为。
+ *
+ * 思考渲染并入帧合并（设计 v2：快照高频到达，richText 全量重渲每帧最多一次）：
+ * 沙盒注入 scheduleFrame（手动冲洗）与 richText 替身（把快照写进 body.textContent）。
+ */
+function loadSetThinking(): { setThinking(view: unknown, thinking: string): void; flush(): void; pending(): number } {
   const body = source.match(/function setThinking\(view, thinking\) \{[\s\S]*?\n\}\n/)?.[0]
   if (body === undefined) throw new Error('setThinking 源码未找到')
-  return Function(`${body}; return setThinking`)() as (view: unknown, thinking: string) => void
+  const jobs: (() => void)[] = []
+  const scheduleFrame = (job: () => void) => { jobs.push(job) }
+  const richText = (target: { textContent: string }, text: string) => { target.textContent = text; return target }
+  const setThinking = Function('scheduleFrame', 'richText', `${body}; return setThinking`)(scheduleFrame, richText) as
+    (view: unknown, thinking: string) => void
+  return {
+    setThinking,
+    pending: () => jobs.length,
+    flush: () => { for (const run of jobs.splice(0, jobs.length)) run() },
+  }
 }
 
 /** 一个成员气泡的思考行替身。 */
@@ -35,28 +49,33 @@ function bubble() {
 }
 
 describe('成员气泡里的思考行', () => {
-  it('快照替换整行，不追加', () => {
-    const setThinking = loadSetThinking()
+  it('快照替换整行，不追加；渲染按帧合并（一帧最多渲一次）', () => {
+    const f = loadSetThinking()
     const view = bubble()
-    setThinking(view, '先看今天的通行记录。')
-    setThinking(view, '先看今天的通行记录。再核对危化车。')
+    f.setThinking(view, '先看今天的通行记录。')
+    f.setThinking(view, '先看今天的通行记录。再核对危化车。')
+    // 两次快照只排了一帧；帧没冲之前 body 还是旧的。
+    expect(f.pending()).toBe(1)
+    f.flush()
     expect(view.think.body.textContent).toBe('先看今天的通行记录。再核对危化车。')
     expect(view.think.node.hidden).toBe(false)
   })
 
   it('摘要行只留最后一行非空内容', () => {
-    const setThinking = loadSetThinking()
+    const f = loadSetThinking()
     const streaming = bubble()
-    setThinking(streaming, '先看今天的通行记录。\n正在生成…')
+    f.setThinking(streaming, '先看今天的通行记录。\n正在生成…')
+    f.flush()
     expect(streaming.think.preview.textContent).toBe('正在生成…')
     const trailing = bubble()
-    setThinking(trailing, '先看今天的通行记录。\n\n   ')
+    f.setThinking(trailing, '先看今天的通行记录。\n\n   ')
+    f.flush()
     expect(trailing.think.preview.textContent).toBe('先看今天的通行记录。')
   })
 
   it('汇总后清空气泡时，迟到的快照不抛错', () => {
-    const setThinking = loadSetThinking()
-    expect(() => setThinking(undefined, '迟到的思考')).not.toThrow()
+    const f = loadSetThinking()
+    expect(() => f.setThinking(undefined, '迟到的思考')).not.toThrow()
   })
 
   it('正文仍然是追加，思考行不改写正文', () => {

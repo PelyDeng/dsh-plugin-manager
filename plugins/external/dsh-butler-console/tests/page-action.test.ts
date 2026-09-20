@@ -11,9 +11,10 @@
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { webSource } from './helpers/web-source.ts'
 import { describe, expect, it } from 'vitest'
 
-const source = readFileSync(fileURLToPath(new URL('../web/app.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+const source = webSource()
 
 interface StubNode {
   tag: string
@@ -118,6 +119,7 @@ function load(): Loaded {
     make, clear, state,
     // 受控 Markdown：这一步只记"渲染过"，内容解析由 `page-dispatch` 那条用例负责。
     renderMarkdownInto: (target: StubNode, text: string) => { marked.push(text); target.textContent = text; return target },
+    richText: (target: StubNode, text: string) => { marked.push(text); target.textContent = text; return target },
     formatTime: (value: number) => `时间戳${value}`,
     runAct: async (input: Record<string, unknown>) => { acts.push(input) },
     newConversationId: () => 'req-1',

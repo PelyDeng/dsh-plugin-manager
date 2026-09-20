@@ -22,6 +22,9 @@ import MarkdownIt from 'markdown-it'
 // html:false 让模型输出的 HTML 全部变成待显示文本；linkify:false 关掉裸地址自动链接；
 // breaks:true 与 example 一致，单个换行视为换行。
 const markdown = new MarkdownIt({ html: false, linkify: false, breaks: true })
+// 窄配置（thinking 变体）：关掉 4 空格缩进代码块（markdown-it 的 'code' 块规则；fence 围栏
+// 是独立规则不受影响）——模型思考输出里缩进伪结构密度高，整段变成代码块是信息变形。
+const markdownNarrow = new MarkdownIt({ html: false, linkify: false, breaks: true }).disable('code')
 
 /**
  * 图片预览服务（kkFileView，站点私有部署）：聊天里的地址按两类渲染——
@@ -132,8 +135,9 @@ function fileSpec(url, ext) {
   }
 }
 
-/** 带预览识别的文本写入：图片地址→缩略图，文件地址→文件卡，其余保持纯文本。 */
-function pushTextWithImages(parent, text) {
+/** 带预览识别的文本写入：图片地址→缩略图，文件地址→文件卡，其余保持纯文本。images=false 时地址一律保持文本（thinking/ask 变体）。 */
+function pushTextWithImages(parent, text, images) {
+  if (images === false) { pushText(parent, text); return }
   let cursor = 0
   for (const match of text.matchAll(IMAGE_URL_RE)) {
     const raw = match[0]
@@ -151,14 +155,14 @@ function pushTextWithImages(parent, text) {
   if (cursor < text.length) pushText(parent, text.slice(cursor))
 }
 
-/** 行内 token：文本、行内代码、粗斜体删除线、换行；链接降级为纯文本，图片出受控缩略图。 */
-function planInline(parent, tokens) {
+/** 行内 token：文本、行内代码、粗斜体删除线、换行；链接降级为纯文本，图片出受控缩略图（images=false 时按占位文本）。 */
+function planInline(parent, tokens, images) {
   const stack = [parent]
   for (const token of tokens ?? []) {
     const top = stack[stack.length - 1]
     switch (token.type) {
       case 'text':
-        pushTextWithImages(top, token.content)
+        pushTextWithImages(top, token.content, images)
         break
       case 'code_inline':
         top.children.push({ tag: 'code', text: token.content })
@@ -174,9 +178,11 @@ function planInline(parent, tokens) {
       case 'image': {
         // markdown 图片语法是明确的展示意图：http(s) 的地址按后缀分流——图片出受控缩略图，
         // 非图片（pdf 等被当成"图"写出来的地址）出文件卡；其余（相对路径、data: 等）维持
-        // 占位文本，把描述和地址都给全。alt 在 token.content 里。
+        // 占位文本，把描述和地址都给全。alt 在 token.content 里。关闭图片卡的变体
+        // （thinking/ask）一律按占位文本，不出可点卡片。
         const src = token.attrGet?.('src') ?? ''
         const alt = token.content ?? token.attrGet?.('alt') ?? ''
+        if (images === false) { pushText(top, alt === '' ? `[图片：${src}]` : `[图片：${alt} ${src}]`); break }
         const httpLike = /^https?:\/\//iu.test(src) && !/\s/u.test(src)
         const ext = httpLike ? fileExtensionOf(src) : undefined
         if (httpLike && (IMAGE_EXT_RE.test(src) || ext === undefined)) top.children.push(imageSpec(src, alt))
@@ -199,7 +205,7 @@ function planInline(parent, tokens) {
         parentOfLink.children.push(...link.children)
         const visible = link.children.map(child => child.text ?? '').join('')
         // 地址本身已是正文（如 `<https://…>` 自动链接）时不再重复一遍。
-        if (link.href !== '' && link.href !== visible) pushTextWithImages(parentOfLink, `（${link.href}）`)
+        if (link.href !== '' && link.href !== visible) pushTextWithImages(parentOfLink, `（${link.href}）`, images)
         break
       }
       default:
@@ -227,13 +233,15 @@ function planInline(parent, tokens) {
  * 每个节点是 `{ tag, text?, className?, align?, attrs?, children? }`；`text` 表示纯文本
  * 内容。这样安全映射可以脱离浏览器单测。
  */
-export function markdownPlan(text) {
+export function markdownPlan(text, opts = {}) {
+  const parser = opts.narrow === true ? markdownNarrow : markdown
+  const images = opts.images !== false
   const root = { tag: 'div', children: [] }
   const stack = [root]
-  for (const token of markdown.parse(text ?? '', {})) {
+  for (const token of parser.parse(text ?? '', {})) {
     const top = stack[stack.length - 1]
     if (token.type === 'inline') {
-      planInline(top, token.children)
+      planInline(top, token.children, images)
       continue
     }
     if (token.type === 'fence' || token.type === 'code_block') {
@@ -300,11 +308,95 @@ function buildNode(spec) {
   return node
 }
 
-/** 把 Markdown 渲染进目标容器：先清空，再按节点计划建受控 DOM。 */
-export function renderMarkdownInto(target, text) {
+/** 把 Markdown 渲染进目标容器：先清空，再按节点计划建受控 DOM。opts 透传 markdownPlan（narrow/images）。 */
+export function renderMarkdownInto(target, text, opts) {
   while (target.firstChild !== null) target.removeChild(target.firstChild)
-  for (const spec of markdownPlan(text)) target.appendChild(buildNode(spec))
+  for (const spec of markdownPlan(text, opts)) target.appendChild(buildNode(spec))
   return target
+}
+
+/* ── richText：模型文本的统一渲染入口 ─────────────────────────────────────
+ *
+ * 任何“显示模型文本”的地方都走这里：场景变体决定解析宽窄与图片卡开关，streaming
+ * 修饰叠加流式保护（选区冻结、后台降频、错误降级记忆）。终态与流式同一渲染路径，
+ * 不再“先纯文本、后排版”。
+ *
+ * - 变体：message（气泡正文，缺省）/ thinking（思考区：窄解析、无图卡）/ ask（提问卡：
+ *   无图卡）/ card（任务卡明细）。
+ * - span→div 升级：受控 Markdown 产块级子元素，老调用的 span 容器首帧换成 div 并
+ *   **返回新节点**——调用方必须用返回值更新引用（speech.body = richText(...)）。
+ * - 图片防闪：渲染前收集已加载的 <img>（按 src），渲染后把新树里同 src 的节点置换回
+ *   旧节点（保留已解码位图）；同 src 第二次出现用新节点（DOM 节点只能挂一处）。
+ * - kkFileView 基址仍是本站私有部署常量；群组接入需要参数化时再开放注入（无消费者
+ *   不预设接口）。
+ */
+const RICH_VARIANTS = {
+  message: { narrow: false, images: true, className: 'md' },
+  thinking: { narrow: true, images: false, className: 'md md--think' },
+  ask: { narrow: false, images: false, className: 'md md--ask' },
+  card: { narrow: false, images: true, className: 'md' },
+}
+
+/** 已降级纯文本的容器：同一容器不再反复尝试渲染，避免持续性异常每帧刷 console。 */
+const richDegraded = new WeakSet()
+
+/** 非折叠选区落在容器内（用户正在选字/复制）：当帧跳过重渲，下一帧补上。 */
+function selectionTouches(container) {
+  if (typeof document === 'undefined' || typeof document.getSelection !== 'function') return false
+  const selection = document.getSelection()
+  if (selection === null || selection.isCollapsed) return false
+  return container.contains(selection.anchorNode) || container.contains(selection.focusNode)
+}
+
+function collectLoadedImages(container) {
+  const pool = new Map()
+  for (const img of container.querySelectorAll('img')) {
+    if (img.complete && img.naturalWidth > 0) pool.set(img.getAttribute('src'), img)
+  }
+  return pool
+}
+
+function reuseLoadedImages(container, pool) {
+  for (const img of container.querySelectorAll('img')) {
+    const src = img.getAttribute('src')
+    const loaded = pool.get(src)
+    if (loaded !== undefined && loaded !== img) {
+      pool.delete(src)
+      img.replaceWith(loaded)
+    }
+  }
+}
+
+/** 已降级容器的纯文本写入：容器本身已坏时也吞掉异常——降级是最后防线，不能再抛。 */
+function writePlainText(node, text) {
+  try { node.textContent = text ?? '' } catch { /* 容器已坏：放弃本帧，流式不断流。 */ }
+}
+
+export function richText(container, text, opts = {}) {
+  const variant = RICH_VARIANTS[opts.variant ?? 'message'] ?? RICH_VARIANTS.message
+  if (opts.streaming === true) {
+    // 选区冻结与后台降频：文本照常累积在调用方内存里，下一帧（或回前台）一次性补渲。
+    if (selectionTouches(container)) return container
+    if (typeof document !== 'undefined' && document.hidden) return container
+  }
+  let host = container
+  if (richDegraded.has(host)) { writePlainText(host, text); return host }
+  try {
+    if (host.tagName === 'SPAN') {
+      const upgraded = document.createElement('div')
+      host.replaceWith(upgraded)
+      host = upgraded
+    }
+    for (const name of variant.className.split(' ')) host.classList.add(name)
+    const pool = collectLoadedImages(host)
+    renderMarkdownInto(host, text ?? '', { narrow: variant.narrow, images: variant.images })
+    reuseLoadedImages(host, pool)
+  } catch (error) {
+    richDegraded.add(host)
+    writePlainText(host, text)
+    console.warn('richText 渲染失败，本容器降级纯文本', error)
+  }
+  return host
 }
 
 /* ── kkFileView 页内预览弹窗 ─────────────────────────────────────────────

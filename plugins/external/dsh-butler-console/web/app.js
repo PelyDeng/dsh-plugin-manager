@@ -14,7 +14,13 @@ import {
   ApiError, api, attachFromUrl, avatarUrl, act, chat, events, eventsHead, reply, uploadAttachment, uploadAvatar,
   MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, ROUTE_PREFIX, TRANSCRIPT_PAGE_SIZE,
 } from './api.js'
-import { renderMarkdownInto } from './markdown.js'
+import { richText } from './markdown.js'
+
+/**
+ * 流式正文逐帧重渲的字符上限（设计 v2 §4.3）：模型正文没有服务端上限（maxMessageChars
+ * 只约束用户输入），超长输出放弃逐帧 Markdown 重渲、降级为纯文本追加，终态照常排版。
+ */
+const STREAM_RICH_LIMIT = 12000
 
 /** 成员配色：按 agentId 稳定取色，所以同一个插件每次都是同一个颜色。 */
 const PALETTE = ['#4d96ff', '#2ec4a6', '#ff6b57', '#9b5de5', '#ffb703', '#e8709a']
@@ -589,14 +595,19 @@ function butlerDelta(text) {
   scheduleFrame(() => {
     speech.framePending = false
     if (state.butlerSpeech !== speech) return
-    appendPreviewText(speech.body, speech, speech.text)
+    // 流式与终态同一格式（richText 每帧全量重渲）；超长正文降级纯文本追加（STREAM_RICH_LIMIT）。
+    // richText 可能首帧把 span 升级成 div——用返回值更新引用，光标是 body 的兄弟不受影响。
+    if (speech.text.length > STREAM_RICH_LIMIT) appendPreviewText(speech.body, speech, speech.text)
+    else speech.body = richText(speech.body, speech.text, { streaming: true })
   })
 }
 
-/** 落定正文换受控 Markdown（方案 5.4）：预览是纯文本，终态统一排版。 */
+/** 落定正文换受控 Markdown（方案 5.4）：流式期间已被 richText 升级成 .md 容器的原地终态
+ * 重渲（同一容器，图片池与引用都连续、不闪一次）；老调用（纯文本 span）按原状新建替换。 */
 function settleMarkdown(plainNode, text) {
-  const body = make('div', 'md')
-  renderMarkdownInto(body, text)
+  if (plainNode.classList !== undefined && plainNode.classList.contains('md')) return richText(plainNode, text)
+  const body = make('div')
+  richText(body, text)
   plainNode.replaceWith(body)
   return body
 }
@@ -1179,7 +1190,7 @@ function actionCard(action, context) {
   }
   if (typeof action.detail === 'string' && action.detail !== '') {
     const detail = make('div', 'act__detail md')
-    renderMarkdownInto(detail, action.detail)
+    richText(detail, action.detail, { variant: 'card' })
     card.appendChild(detail)
   }
   if (Array.isArray(action.fields) && action.fields.length > 0) {
@@ -1202,7 +1213,7 @@ function actionCard(action, context) {
   }
   if (typeof action.resultText === 'string' && action.resultText !== '') {
     const result = make('div', 'act__result md')
-    renderMarkdownInto(result, action.resultText)
+    richText(result, action.resultText, { variant: 'card' })
     card.appendChild(result)
   }
   if (typeof action.errorText === 'string' && action.errorText !== '') {
@@ -1554,17 +1565,26 @@ function thinkingArea() {
 /**
  * 成员的可展示思考。
  *
- * 快照是**覆盖**语义：整行文本被替换，不做追加。默认收起，摘要行只留最新一行预览，
- * 免得长推理把气泡撑开、把正文挤下去。
+ * 快照是**覆盖**语义：整行文本被替换，不做追加。快照高频到达且 Markdown 渲染是全量
+ * 重渲——渲染并入 `scheduleFrame` 合帧（一帧最多渲一次），摘要行的提取同帧更新。
+ * 默认收起，摘要行只留最新一行预览，免得长推理把气泡撑开、把正文挤下去。
  */
 function setThinking(view, thinking) {
   if (view === undefined) return
   view.think.node.hidden = false
-  view.think.body.textContent = thinking
-  const lines = thinking.split('\n').map(line => line.trim()).filter(line => line !== '')
-  const latest = lines.length === 0 ? '' : lines[lines.length - 1]
-  view.think.preview.textContent = latest
-  view.think.preview.hidden = latest === ''
+  view.thinkLatest = thinking
+  if (view.thinkPending === true) return
+  view.thinkPending = true
+  scheduleFrame(() => {
+    view.thinkPending = false
+    const snapshot = view.thinkLatest
+    // thinking 变体：窄解析（4 空格缩进不是代码块）+ 无图卡——思考是半结构化密度最高的地方。
+    view.think.body = richText(view.think.body, snapshot, { variant: 'thinking' })
+    const lines = snapshot.split('\n').map(line => line.trim()).filter(line => line !== '')
+    const latest = lines.length === 0 ? '' : lines[lines.length - 1]
+    view.think.preview.textContent = latest
+    view.think.preview.hidden = latest === ''
+  })
 }
 
 /**
@@ -1805,7 +1825,9 @@ function handleEvent(event) {
         // terminal（已校准）或 live=false（已离开执行态，如等待）都不再写：
         // 迟到帧会把刚收起的光标重新点亮（浏览器验证发现的等待态复亮）。
         if (view.terminal === true || view.live === false) return
-        appendPreviewText(view.text, view, view.body)
+        // 流式与终态同一格式；超长正文降级纯文本追加（与 butlerDelta 同一分级）。
+        if (view.body.length > STREAM_RICH_LIMIT) appendPreviewText(view.text, view, view.body)
+        else view.text = richText(view.text, view.body, { streaming: true })
         view.caret.hidden = false
         // 不确定指示（复核 3）：增量不再换算百分比——没有可信分母不显示伪精度，
         // 真实阶段由工具行文字表达。
@@ -1998,7 +2020,10 @@ function mountMemberActions(view, event) {
 function askCard(view, event) {
   if (state.asks.has(event.id)) return
   const card = make('div', 'ask')
-  card.appendChild(make('div', null, event.question ?? event.detail ?? '需要你补充点信息'))
+  // 提问正文也走统一渲染（ask 变体：无图卡——等待卡里出可点缩略图/文件卡是交互噪音）。
+  const question = make('div')
+  richText(question, event.question ?? event.detail ?? '需要你补充点信息', { variant: 'ask' })
+  card.appendChild(question)
 
   const row = make('div', 'ask__row')
   const input = document.createElement('input')
@@ -2072,7 +2097,7 @@ function summaryCard(event) {
   // 汇总正文与错误信息都走受控 Markdown（C 批）；同帧排版，不逐字重建。
   if (event.text || event.error) {
     const body = make('div', 'summary__body md')
-    renderMarkdownInto(body, event.text || event.error)
+    richText(body, event.text || event.error, { variant: 'card' })
     card.appendChild(body)
   }
   if (event.error && event.text) card.appendChild(make('div', 'msg__meta', event.error))

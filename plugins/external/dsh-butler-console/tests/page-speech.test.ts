@@ -8,9 +8,10 @@
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { webSource } from './helpers/web-source.ts'
 import { describe, expect, it } from 'vitest'
 
-const source = readFileSync(fileURLToPath(new URL('../web/app.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+const source = webSource()
 
 interface StubNode {
   className: string
@@ -44,7 +45,11 @@ function load() {
   const stabilizeViewport = (mutate: () => void) => { mutate() }
   const make = (_tag: string, className: string) => node(className)
   const rendered: string[] = []
+  // 受控渲染替身：renderMarkdownInto 与 richText 都记录（richText 是统一入口，settleMarkdown
+  // 两条路径现在都走它，替身同步模拟「容器加上 md 类」）。选区冻结/图片池等 DOM 细节
+  // 由 rich-text.test.ts 在 happy-dom 里覆盖。
   const renderMarkdownInto = (target: StubNode, text: string) => { target.textContent = text; rendered.push(text) }
+  const richText = (target: StubNode, text: string) => { target.textContent = text; target.className = 'md'; rendered.push(text); return target }
   // 追加写替身：语义与真实实现一致（写入由帧回调驱动），节点细节由浏览器验证覆盖。
   const appendPreviewText = (target: StubNode, book: { rendered?: string }, text: string) => { target.textContent = text; book.rendered = text }
   /**
@@ -53,9 +58,9 @@ function load() {
    */
   const attached: unknown[] = []
   const attachButlerThinking = (view: unknown) => { attached.push(view) }
-  const api = Function('state', 'butlerMessage', 'scheduleFrame', 'stabilizeViewport', 'make', 'renderMarkdownInto', 'appendPreviewText', 'attachButlerThinking',
+  const api = Function('state', 'butlerMessage', 'scheduleFrame', 'stabilizeViewport', 'make', 'renderMarkdownInto', 'richText', 'STREAM_RICH_LIMIT', 'appendPreviewText', 'attachButlerThinking',
     `${pick('butlerSpeech')}\n${pick('butlerDelta')}\n${pick('settleMarkdown')}\n${pick('butlerSettle')}\nreturn { butlerDelta, butlerSettle }`,
-  )(state, butlerMessage, scheduleFrame, stabilizeViewport, make, renderMarkdownInto, appendPreviewText, attachButlerThinking) as
+  )(state, butlerMessage, scheduleFrame, stabilizeViewport, make, renderMarkdownInto, richText, 12000, appendPreviewText, attachButlerThinking) as
     { butlerDelta(text: string): void; butlerSettle(text: string, time?: number): void }
   return {
     ...api,

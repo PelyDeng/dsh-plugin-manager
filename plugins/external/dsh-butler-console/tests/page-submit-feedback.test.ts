@@ -7,9 +7,10 @@
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { webSource } from './helpers/web-source.ts'
 import { describe, expect, it } from 'vitest'
 
-const source = readFileSync(fileURLToPath(new URL('../web/app.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+const source = webSource()
 
 function pick(name: string): string {
   const body = source.match(new RegExp(`(?:async )?function ${name}\\([^)]*\\) \\{[\\s\\S]*?\\n\\}\\n`))?.[0]
@@ -361,9 +362,11 @@ describe('C 批「内容可读与历史阅读」守卫', () => {
   })
 
   it('受控 Markdown（方案 5.4）：管家、成员、汇总落定走 renderMarkdownInto', () => {
-    expect(source).toContain("import { renderMarkdownInto } from './markdown.js'")
+    // markdown.js 是唯一受控渲染源：页面统一走 richText 入口（终态与流式同一路径）。
+    expect(source).toContain("import { richText } from './markdown.js'")
+    expect(source).not.toMatch(/renderMarkdownInto\(/u)
     expect(source).toMatch(/function settleMarkdown/u)
-    expect(source).toMatch(/renderMarkdownInto\(body, event\.text \|\| event\.error\)/u)
+    expect(source).toMatch(/richText\(body, event\.text \|\| event\.error, \{ variant: 'card' \}\)/u)
     // 模型正文不回退到 innerHTML：唯一的 innerHTML 是固定 SVG 常量。
     const htmlAssignments = source.match(/innerHTML = [^=]/gu) ?? []
     expect(htmlAssignments).toHaveLength(1)

@@ -55,6 +55,22 @@ const CONVERSATION_PREFIX: Readonly<Record<string, string>> = {
 
 const V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
+/**
+ * 回话与汇报的排版约定（`setup` 注入的 `:answer-format` 段，order 610）。
+ *
+ * 聊天界面（但勒侧 richText）按 Markdown 渲染成员回话：约定把要点写清楚，模型不写
+ * Markdown 时渲染统一也救不回来。**交回正文不受约束**——它是交付物（如 blog 直接发布
+ * 的文章），为聊天渲染优化的格式不能进交付物。
+ */
+export const ANSWER_FORMAT_PROMPT = `## 回话与汇报格式
+
+回给老板看的话用 Markdown 写（聊天界面会按格式渲染）：
+- 要点用列表，段落保持短；关键结论和数字加粗。
+- 代码用围栏代码块，不要用缩进对齐（缩进会被渲染成代码块或普通段落）。
+- 交付的文件或图片地址单独占一行，界面会渲染成可点击的卡片。
+
+交回正文（report_result 交回的内容）是交付物本身，按任务要求组织，不受上面的排版约束。`
+
 /** 这个 Agent 的会话前缀。 */
 export function conversationPrefix(agentId: string): string {
   return CONVERSATION_PREFIX[agentId] ?? `${agentId}-`
@@ -500,6 +516,21 @@ export class ConversationLifecycle {
       name: `${this.host.definition.id}:persona`,
       order: 600,
       text: this.host.definition.persona,
+    })
+    /**
+     * 回话与汇报的排版约定（聊天界面按 Markdown 渲染，设计 v2 §5.4）。
+     *
+     * 加在 runtime 一处，覆盖全部现存与未来新增的 Agent——各 Agent 的 persona 不重复写。
+     * 边界写在文案里：**交回正文（report_result 的内容）是交付物本身，不受排版约束**——
+     * blog 的产出会按原文发布到 typecho，为聊天渲染优化的格式（图片地址单独成行等）
+     * 不能进发布产物。
+     *
+     * 位置取 610：persona（600）之后、turn-context（620）之前。
+     */
+    agentCtx.systemPrompt.section({
+      name: `${this.host.definition.id}:answer-format`,
+      order: 610,
+      text: ANSWER_FORMAT_PROMPT,
     })
     /**
      * 每轮的**动态上下文**（`AgentDefinition.turnContext`）。

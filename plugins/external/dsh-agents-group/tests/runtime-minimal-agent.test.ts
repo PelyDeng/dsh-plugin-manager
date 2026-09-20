@@ -27,7 +27,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import type { ParticipantProgress, ParticipantRequest, ParticipantResult } from '../packages/runtime/src/contract.ts'
-import { ConversationLifecycle, type AgentRuntime, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
+import { ANSWER_FORMAT_PROMPT, ConversationLifecycle, type AgentRuntime, type RuntimeConfig } from '../packages/runtime/src/conversation.ts'
 import type {
   AgentDefinition,
   AgentToolContext,
@@ -525,8 +525,11 @@ describe('P1 判据①：最小 Agent 跑通一轮', () => {
     expect(f.port.size).toBe(1)
     expect(f.port.rawOf(id)?.ready).toBe(true)
     expect(id).toMatch(/^minimal-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
-    // agent 作用域在这个会话上装配了 persona 段与工具限制（不是插件级限制）。
-    expect(f.promptsOf(id)).toEqual([{ name: `${AGENT_ID}:persona`, order: 600, text: PERSONA }])
+    // agent 作用域在这个会话上装配了 persona、回话排版约定与工具限制（不是插件级限制）。
+    expect(f.promptsOf(id)).toEqual([
+      { name: `${AGENT_ID}:persona`, order: 600, text: PERSONA },
+      { name: `${AGENT_ID}:answer-format`, order: 610, text: ANSWER_FORMAT_PROMPT },
+    ])
     expect(f.restrictionsOf(id)).toEqual([['dsh_tool_read']])
     // 模型路由：默认选择 + 宿主認可的 reasoningEffort 一起进 create 选项。
     expect(f.agentOptionsOf(id)).toMatchObject({ ...DEFAULT_MODEL, reasoningEffort: 'medium' })

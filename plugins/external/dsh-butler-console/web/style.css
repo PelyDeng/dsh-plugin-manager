@@ -768,6 +768,25 @@ textarea:focus-visible,
 .md th { font-family: var(--bt-hand); font-weight: 700; background: #faf6ec; }
 .md hr { border: none; border-top: 1.5px dashed var(--bt-line); margin: 8px 0; }
 
+/* ── richText 场景变体（设计 v2）──────────────────────────────────────
+ *
+ * 思考区（.md--think）：沿用 think__body 的紧凑弱色口径，间距比正文档再收一档；
+ * 换行交给 Markdown 结构（覆盖纯文本时代的 pre-wrap）。
+ * 提问卡（.md--ask）：字号贴合原 ask 卡正文，段落间距紧凑。
+ */
+.md--think { font-size: 12px; line-height: 1.55; color: var(--bt-ink-soft); white-space: normal; }
+.md--think p { margin: 0 0 5px; }
+.md--think ul, .md--think ol { margin: 0 0 5px; padding-left: 16px; }
+.md--think li { margin: 1px 0; }
+.md--think h1, .md--think h2, .md--think h3, .md--think h4, .md--think h5, .md--think h6 { font-size: 12.5px; margin: 5px 0 3px; }
+.md--think pre.md-code { margin: 0 0 5px; }
+.md--think pre.md-code > code { font-size: 11px; padding: 5px 8px; }
+.md--think blockquote { margin: 0 0 5px; padding: 2px 8px; }
+.md--think .table-scroll { margin: 0 0 5px; }
+.md--ask { font-size: 13px; }
+.md--ask p { margin: 0 0 5px; }
+.md--ask > :last-child { margin-bottom: 0; }
+
 /* ── 历史阅读（C 批 I10/S13）────────────────────────────────────────── */
 
 /* 加载更早记录：线程顶部的分界入口。 */
