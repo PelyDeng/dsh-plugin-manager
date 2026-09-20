@@ -15,6 +15,7 @@
  */
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
+import { webSource } from './helpers/web-source.ts'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Access, Actor } from '@dsh-plugin-manager/plugin-kit'
@@ -130,6 +131,7 @@ function injectedConfig(html: string): { historyPageSize?: number; routePrefix?:
 }
 
 const source = (name: string) => readFile(new URL(`../web/${name}`, import.meta.url), 'utf8')
+const wholeApp = () => webSource()
 
 describe('分页上限只有一个来源：服务端配置', () => {
   it('页面拿到的上限就是服务端的上限，而且这个值真的能被服务端接受', async () => {
@@ -162,7 +164,7 @@ describe('分页上限只有一个来源：服务端配置', () => {
   })
 
   it('页面里不再有写死的分页数', async () => {
-    const [api, app] = await Promise.all([source('api.js'), source('app.js')])
+    const [api, app] = await Promise.all([source('api.js'), wholeApp()])
     // 默认值取自注入的配置，而不是一个字面量。
     expect(api).toContain('config.historyPageSize')
     expect(api).not.toMatch(/limit\s*=\s*\d/u)

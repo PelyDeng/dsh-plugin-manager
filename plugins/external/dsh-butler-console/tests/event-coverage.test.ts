@@ -7,6 +7,7 @@
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { webSource } from './helpers/web-source.ts'
 import { describe, expect, it } from 'vitest'
 
 const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8')
@@ -25,7 +26,7 @@ function serverEventTypes(): string[] {
 
 /** 页面已处理的事件类型：`handleEvent` 里的 `case '...'`。 */
 function handledEventTypes(): string[] {
-  const source = read('../web/app.js')
+  const source = webSource()
   const handler = source.slice(source.indexOf('function handleEvent'))
   const body = handler.slice(0, handler.indexOf('\n}\n'))
   return [...new Set([...body.matchAll(/case '([a-z_]+)':/g)].map(match => match[1]!))].sort()

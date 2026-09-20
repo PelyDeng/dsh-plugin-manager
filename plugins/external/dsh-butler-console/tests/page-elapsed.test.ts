@@ -9,9 +9,10 @@
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { webSource } from './helpers/web-source.ts'
 import { describe, expect, it } from 'vitest'
 
-const source = readFileSync(fileURLToPath(new URL('../web/app.js', import.meta.url)), 'utf8').replace(/\r\n/g, '\n')
+const source = webSource()
 
 /** 取出 `formatElapsed`：页面是浏览器模块，测试只拿这一个函数的行为。 */
 function loadFormatElapsed(): (from: number, to?: number) => string {
