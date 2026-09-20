@@ -47,34 +47,78 @@ const probe = createServer()
 await new Promise((resolve, reject) => { probe.once('error', reject); probe.listen(port, '127.0.0.1', resolve) })
 await new Promise(resolve => probe.close(resolve))
 const requests = []
+// 官方宿主从 0.1.6-alpha.2 起 deepseek-official 默认协议是 Messages（Anthropic 风格，请求
+// 路径以 /messages 结尾），chat-completions 需显式选择。替身按请求路径分发两种响应形状，
+// 回归覆盖宿主默认协议；两种协议的 tool result 形状不同（chat 是 role:'tool' 消息，
+// Messages 是 user 消息里的 tool_result 块），工具轮次判定兼容两者。
 const model = createServer(async (req, res) => {
   const chunks = []; for await (const chunk of req) chunks.push(chunk)
   const value = JSON.parse(Buffer.concat(chunks).toString('utf8')); requests.push(value)
-  res.writeHead(200, { 'content-type': 'text/event-stream' })
-  res.write('data: {"choices":[{"delta":{"role":"assistant","content":null}}]}\n\n')
-  const lastUser = value.messages.findLastIndex(message => message.role === 'user')
-  if (JSON.stringify(value.messages[lastUser]).includes('源码工具验收')) {
-    const toolResults = value.messages.slice(lastUser + 1).filter(message => message.role === 'tool')
-    if (toolResults.length < 2) {
-      const name = toolResults.length ? 'example_read_framework' : 'example_search_framework'
-      const args = toolResults.length ? { path: 'packages/plugin-manager/src/verification.mjs', startLine: 1, lines: 120 } : { query: 'verificationSubjects' }
-      res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `reference_${toolResults.length}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: 'tool_calls' }] })}\n\n`)
+  const messages = Array.isArray(value.messages) ? value.messages : []
+  const history = JSON.stringify(messages)
+  const isToolResult = message => message.role === 'tool' || JSON.stringify(message.content ?? '').includes('"tool_result"')
+  const toolResults = messages.filter(isToolResult)
+  const isMessages = /\/messages\/?$/.test(req.url ?? '')
+  const toolTurn = history.includes('源码工具验收') && toolResults.length < 2
+  const userCount = messages.filter(message => message.role === 'user' && !isToolResult(message)).length
+  const toolArgs = toolResults.length ? { path: 'packages/plugin-manager/src/verification.mjs', startLine: 1, lines: 120 } : { query: 'verificationSubjects' }
+  const toolName = toolResults.length ? 'example_read_framework' : 'example_search_framework'
+  const reasoningTexts = ['先理解问题。', '再组织回答。']
+  const answerTexts = ['你好！', '这是本地测试模型的回答。', `已收到 ${userCount} 条用户消息。`, '我们可以继续探索这个问题。']
+  if (!isMessages) {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.write('data: {"choices":[{"delta":{"role":"assistant","content":null}}]}\n\n')
+    if (toolTurn) {
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `reference_${toolResults.length}`, type: 'function', function: { name: toolName, arguments: JSON.stringify(toolArgs) } }] }, finish_reason: 'tool_calls' }] })}\n\n`)
       res.end('data: [DONE]\n\n'); return
     }
+    for (const text of reasoningTexts) {
+      if (res.destroyed) return
+      await delay(180)
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: text } }] })}\n\n`)
+    }
+    for (const text of answerTexts) {
+      if (res.destroyed) return
+      await delay(180)
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`)
+    }
+    res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":20}}\n\n')
+    res.end('data: [DONE]\n\n'); return
   }
-  const count = value.messages.filter(m => m.role === 'user').length
-  for (const text of ['先理解问题。', '再组织回答。']) {
+  res.writeHead(200, { 'content-type': 'text/event-stream' })
+  const emit = (name, data) => res.write(`event: ${name}\ndata: ${JSON.stringify({ type: name, ...data })}\n\n`)
+  emit('message_start', { message: { usage: { input_tokens: 20, output_tokens: 0 } } })
+  const block = (start, deltas) => {
+    emit('content_block_start', { index: 0, content_block: start })
+    return deltas
+  }
+  if (toolTurn) {
+    // Messages 协议下宿主以 content_block_start 的 input 为权威参数，input_json_delta 只是流式呈现。
+    block({ type: 'tool_use', id: `reference_${toolResults.length}`, name: toolName, input: toolArgs }, [
+      { type: 'input_json_delta', partial_json: JSON.stringify(toolArgs) },
+    ])
+    emit('content_block_stop', { index: 0 })
+    emit('message_delta', { delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 20 } })
+    emit('message_stop', {})
+    res.end(); return
+  }
+  block({ type: 'thinking', thinking: '' }, [])
+  for (const text of reasoningTexts) {
     if (res.destroyed) return
     await delay(180)
-    res.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: text } }] })}\n\n`)
+    emit('content_block_delta', { index: 0, delta: { type: 'thinking_delta', thinking: text } })
   }
-  for (const text of ['你好！', '这是本地测试模型的回答。', `已收到 ${count} 条用户消息。`, '我们可以继续探索这个问题。']) {
+  emit('content_block_stop', { index: 0 })
+  emit('content_block_start', { index: 1, content_block: { type: 'text', text: '' } })
+  for (const text of answerTexts) {
     if (res.destroyed) return
     await delay(180)
-    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`)
+    emit('content_block_delta', { index: 1, delta: { type: 'text_delta', text } })
   }
-  res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":20}}\n\n')
-  res.end('data: [DONE]\n\n')
+  emit('content_block_stop', { index: 1 })
+  emit('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 20 } })
+  emit('message_stop', {})
+  res.end()
 })
 await new Promise(resolve => model.listen(0, '127.0.0.1', resolve))
 const env = { ...process.env, DSH_HOME: home, DSH_AUTH_STATE_DIR: join(home, 'auth'), DEEPSEEK_API_KEY: 'keyless-example-local-fixture',
@@ -166,10 +210,19 @@ try {
   const personal = await chat('个人模式问题', alice)
   const toolRequestStart = requests.length
   await chat('源码工具验收：检索并读取验证模块', alice, personal)
-  const toolMessages = requests.slice(toolRequestStart).flatMap(request => request.messages).filter(message => message.role === 'tool')
-  assert.ok(toolMessages.some(message => JSON.stringify(message).includes('packages/plugin-manager/src/verification.mjs')), 'real Agent must receive source search results')
-  assert.ok(toolMessages.some(message => JSON.stringify(message).includes('verificationSubjects')), 'real Agent must receive source content')
-  assert.ok(toolMessages.some(message => String(message.content).includes('"nextLine":101')), 'oversized source reads must return the first page and continuation')
+  // chat-completions 的 tool result 是 role:'tool' 消息，Messages 协议是 user 消息里的 tool_result 块；
+  // 内容可能是字符串或块数组，取全部字符串值再匹配，避免对整条消息做 JSON 转义后误判。
+  const collect = (value, into) => {
+    if (typeof value === 'string') into.push(value)
+    else if (Array.isArray(value)) for (const item of value) collect(item, into)
+    else if (value && typeof value === 'object') for (const item of Object.values(value)) collect(item, into)
+  }
+  const toolTexts = requests.slice(toolRequestStart).flatMap(request => request.messages ?? [])
+    .filter(message => message.role === 'tool' || JSON.stringify(message.content ?? '').includes('"tool_result"'))
+    .map(message => { const parts = []; collect(message.content, parts); return parts.join('\n') })
+  assert.ok(toolTexts.some(text => text.includes('packages/plugin-manager/src/verification.mjs')), 'real Agent must receive source search results')
+  assert.ok(toolTexts.some(text => text.includes('verificationSubjects')), 'real Agent must receive source content')
+  assert.ok(toolTexts.some(text => text.includes('"nextLine":101')), 'oversized source reads must return the first page and continuation')
   assert.deepEqual(await list(bob), [])
   assert.equal((await request('/example/history?id=' + personal, undefined, bob)).status, 404)
   const catalog = await (await request('/auth/api/plugins', undefined, alice)).json()
@@ -209,8 +262,10 @@ try {
   assert.ok(partial.messages.some(message => message.text.startsWith('你好！')), 'completed answer must survive restart')
   await chat('重新登录后继续追问', alice, personal)
   assert.ok(JSON.stringify(requests.at(-1).messages).includes('个人模式问题'), 'resumed model request must contain previous personal question')
-  const modelInput = JSON.stringify(requests.at(-1).messages)
-  for (const text of ['你是 DSH Plugin Manager 开发者接入助手', '第二个应用到底少写什么', 'compose-release', '可复制的开发提示词', '会话管理', 'registerConversations']) {
+  // 知识词组取自当前随包知识文件（knowledge.ts 的开发者指令、guide.md 与 prompts.md）里
+  // 稳定存在的代表词；不引用源码索引才有的内容，知识文件改版时同步更新这里。
+  const modelInput = JSON.stringify(requests.at(-1))
+  for (const text of ['你是 DSH Plugin Manager 开发者接入助手', '第二个应用加入、升级与停用', 'compose-release', '可复制的开发提示词', '会话管理']) {
     assert.ok(modelInput.includes(text), `Real DSH model request must contain shipped knowledge: ${text}`)
   }
   const managementPath = '/auth/api/conversations?pluginId=example'
