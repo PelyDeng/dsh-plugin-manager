@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { tarCommand } from '../src/state.mjs';
 import { readPlugin } from '../src/plugins.mjs';
 import { loadRelease, loadReleaseInputs } from '../src/release.mjs';
 import { release, validateBase } from '../../../deploy/scripts/build.mjs';
@@ -48,7 +49,7 @@ function fixture(t, { fresh = false, fail } = {}) {
     put(resolve(stage, 'dist/index.mjs'), 'export function apply() {}\n');
     mkdirSync(output, { recursive: true });
     const path = resolve(output, archive);
-    const tar = spawnSync('tar', ['-czf', path, '-C', resolve(stage, '..'), 'package'], { encoding: 'utf8', windowsHide: true });
+    const tar = spawnSync(tarCommand, ['-czf', path, '-C', resolve(stage, '..'), 'package'], { encoding: 'utf8', windowsHide: true });
     assert.equal(tar.status, 0, tar.stderr);
     const { directory, ...plugin } = readPlugin(stage);
     return { ...plugin, archive, sha256: digest(readFileSync(path)) };
@@ -141,7 +142,7 @@ test('the source entry merges incoming external archives into the same candidate
   f.put(resolve(stage, 'index.js'), 'export const external = true;\n');
   f.put(resolve(stage, 'cordis.patch.yml'), '{}\n');
   const archive = resolve(f.root, 'incoming/stage/external.tgz');
-  const tar = spawnSync('tar', ['-czf', archive, '-C', dirname(stage), 'package'], { encoding: 'utf8', windowsHide: true });
+  const tar = spawnSync(tarCommand, ['-czf', archive, '-C', dirname(stage), 'package'], { encoding: 'utf8', windowsHide: true });
   assert.equal(tar.status, 0, tar.stderr);
   f.put(resolve(f.root, 'incoming/stage/manifest.json'), { schemaVersion: 2, plugins: [
     { id: 'external-one', package: 'fixture-external', version: '1.0.0', archive: 'external.tgz', sha256: digest(readFileSync(archive)), verifyFiles: ['package.json', 'index.js', 'cordis.patch.yml'] },
