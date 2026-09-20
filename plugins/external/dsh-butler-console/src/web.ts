@@ -17,9 +17,11 @@ import type {} from '@deepseek-ai/dsh-host-webserver'
 import { actorKey, createPluginHttp, isAccessError, onRevoked, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { conversationModelCatalog } from '@dsh-plugin-manager/plugin-kit/models'
 import { listAgentCards } from './agents.ts'
+import type { ButlerAttachments } from './attachments.ts'
 import { TRANSCRIPT_MAX_ITEMS, type ButlerConsole, type RunWatch, type StartedRun } from './butler.ts'
 import type { Config } from './config.ts'
 import { canResume } from './event-log.ts'
+import { FetchFailure, fetchPublicResource, htmlToText } from './fetch-url.ts'
 import { StorageError } from './storage/errors.ts'
 
 /**
@@ -158,21 +160,21 @@ const AVATAR_TYPES: Record<string, string> = {
 /**
  * 读取原始请求体。
  *
- * 与 `body()` 的区别是不解析 JSON，并额外在超过上限时立即中断：头像上传不能先把
- * 整个文件读进内存再判断大小。
+ * 与 `body()` 的区别是不解析 JSON，并额外在超过上限时立即中断：上传不能先把整个文件读进内存
+ * 再判断大小。`label` 只影响文案（头像说"图片"、附件说"文件"）。
  */
-async function rawBody(request: IncomingMessage, limit: number): Promise<Buffer> {
+async function rawBody(request: IncomingMessage, limit: number, label = '内容'): Promise<Buffer> {
   const declared = Number(request.headers['content-length'] ?? '0')
-  if (Number.isFinite(declared) && declared > limit) throw new HttpError(413, '图片超出大小限制', 'payload_too_large')
+  if (Number.isFinite(declared) && declared > limit) throw new HttpError(413, `${label}超出大小限制`, 'payload_too_large')
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array)
     size += buffer.length
-    if (size > limit) throw new HttpError(413, '图片超出大小限制', 'payload_too_large')
+    if (size > limit) throw new HttpError(413, `${label}超出大小限制`, 'payload_too_large')
     chunks.push(buffer)
   }
-  if (size === 0) throw new HttpError(400, '没有收到图片内容', 'invalid_body')
+  if (size === 0) throw new HttpError(400, `没有收到${label}内容`, 'invalid_body')
   return Buffer.concat(chunks)
 }
 
@@ -213,6 +215,21 @@ function integerField(input: Record<string, unknown>, name: string, fallback: nu
   return value
 }
 
+/** 解析一个字符串数组字段（附件 id 列表）。缺省返回空数组；有非法项一律拒。 */
+function stringArrayField(input: Record<string, unknown>, name: string, max: number): string[] {
+  const value = input[name]
+  if (value === undefined || value === null) return []
+  if (!Array.isArray(value) || value.length > max) throw new HttpError(400, `字段 ${name} 无效`, 'invalid_field')
+  const items: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || item === '' || item.length > 120) {
+      throw new HttpError(400, `字段 ${name} 无效`, 'invalid_field')
+    }
+    items.push(item)
+  }
+  return items
+}
+
 /** 解析事件游标。必须是 0 或正整数；空白按「从头」处理。 */
 function cursorField(value: string): number {
   const text = value.trim()
@@ -245,6 +262,32 @@ const ASSET_TYPES: Record<string, string> = {
 /** 静态资源不做长期缓存，插件升级后页面不会继续引用旧脚本。 */
 const NO_CACHE = 'no-cache'
 
+/**
+ * URL 抓取接受的媒体类型前缀。
+ *
+ * 不收 `application/octet-stream`：那等于"什么都可以"，白名单也就没有意义了。要求对方说清楚
+ * 自己是什么——说不清就拒，用户仍然可以把文件下载下来再上传。
+ */
+const FETCH_MEDIA_TYPES = [
+  'image/',
+  'text/',
+  'application/pdf',
+  'application/json',
+  'application/xml',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+] as const
+
+/** 抓取失败 → HTTP 状态。`code` 原样进响应的 `code` 字段，客户端按它分支。 */
+const FETCH_STATUS: Record<string, number> = {
+  url_invalid: 400,
+  dns_failed: 502,
+  unreachable: 502,
+  http_error: 502,
+  too_large: 413,
+  unsupported_type: 415,
+  redirect_refused: 502,
+}
+
 /** 安装页面、接口与取消路由。 */
 export async function installWeb(
   ctx: Context,
@@ -253,6 +296,9 @@ export async function installWeb(
   access: Access,
   storageReady: StorageReadiness,
 ): Promise<void> {
+  // 附件服务从这一份应用对象上取，不另开一个参数：路由只是它的一个入口，另造实例等于让
+  // 两处各持一份状态。`console_` 本身要在上面构造时就绪，所以这里直接读。
+  const attachments: ButlerAttachments = console_.attachments
   const sourceHtml = await readFile(new URL('../web/index.html', import.meta.url), 'utf8')
   // 页面里的 `/butler/...` 是包内默认前缀，部署改前缀时一并替换。
   // 配置注到 head 里而不是替换占位符：index.html 因此可以被浏览器直接打开预览。
@@ -263,6 +309,10 @@ export async function installWeb(
   const pageConfig = {
     routePrefix: config.routePrefix,
     historyPageSize: config.maxHistoryPageSize,
+    // 附件的上限一并注进去：页面要在**选文件之前**就知道能传多大，等传上去被服务端 413 拒掉
+    // 才发现，那已经是白等一次上传了。头像上限写死在前端是一处既有不一致，这里不重犯。
+    maxAttachmentBytes: config.maxAttachmentBytes,
+    maxAttachmentsPerMessage: config.maxAttachmentsPerMessage,
   }
   const injection = `<script>globalThis.__BUTLER_CONFIG__=${JSON.stringify(pageConfig).replaceAll('<', '\\u003c')};</script>`
   const html = sourceHtml
@@ -525,6 +575,9 @@ export async function installWeb(
         routePrefix: config.routePrefix,
         contractVersion: CONTRACT_VERSION,
         historyPageSize: config.maxHistoryPageSize,
+        // 页面上限从服务端取：写死一个比服务端小的值会白跑一次上传，写大则被 413 拒。
+        maxAttachmentBytes: config.maxAttachmentBytes,
+        maxAttachmentsPerMessage: config.maxAttachmentsPerMessage,
       })
     },
   }))
@@ -605,7 +658,7 @@ export async function installWeb(
       const declared = (request.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase() ?? ''
       const contentType = AVATAR_TYPES[declared]
       if (contentType === undefined) throw new HttpError(415, '头像只支持 PNG / JPEG / WebP', 'unsupported_media_type')
-      const bytes = await rawBody(request, config.maxAvatarBytes)
+      const bytes = await rawBody(request, config.maxAvatarBytes, '图片')
       if (!matchesImageSignature(bytes, declared)) throw new HttpError(415, '文件内容与图片格式不符', 'unsupported_media_type')
       await console_.setAvatar(actor, agentId, bytes, contentType)
       respond(actor, response, 200, { items: await console_.members(actor) })
@@ -619,6 +672,129 @@ export async function installWeb(
     handler: async (request, response, actor) => {
       method(request, 'GET')
       respond(actor, response, 200, await console_.overview(actor))
+    },
+  }))
+
+  /**
+   * 附件：上传走 POST，下载走 GET，删除走 DELETE。
+   *
+   * 三种方法合成**一个** exact 路由，理由与头像那条一样：宿主的 WebServer 要求 (kind, path)
+   * 唯一，同一路径注册两次会以 `webserver: duplicate exact route` 让插件装载失败。
+   *
+   * 正文是**裸文件字节**，不是 multipart：省掉一个解析器，也避免把整个文件 base64 一遍
+   * （base64 会让内存占用涨三分之一，还多一次编解码）。
+   */
+  ctx.effect(() => register({
+    kind: 'exact',
+    path: `${config.routePrefix}/attachments`,
+    handler: async (request, response, actor) => {
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams
+      if (request.method === 'GET') {
+        const id = (params.get('id') ?? '').trim()
+        if (id === '') throw new HttpError(400, '缺少附件 id', 'missing_field')
+        const found = await attachments.download(actor, id)
+        response.writeHead(200, {
+          'content-type': found.mediaType === '' ? 'application/octet-stream' : found.mediaType,
+          'content-length': String(found.bytes.byteLength),
+          // 下载而不是内联打开：附件是用户自己传上来的东西，别让浏览器猜它的类型去执行它。
+          'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(found.name)}`,
+          'x-content-type-options': 'nosniff',
+          'cache-control': 'private, max-age=60',
+        })
+        response.end(Buffer.from(found.bytes))
+        return
+      }
+      if (request.method === 'DELETE') {
+        const id = (params.get('id') ?? '').trim()
+        if (id === '') throw new HttpError(400, '缺少附件 id', 'missing_field')
+        await attachments.remove(actor, id)
+        respond(actor, response, 200, { ok: true })
+        return
+      }
+      method(request, 'POST')
+      const name = (params.get('name') ?? '').trim()
+      if (name === '') throw new HttpError(400, '缺少文件名', 'missing_field')
+      const conversationId = (params.get('conversationId') ?? '').trim()
+      const declared = (request.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase() ?? ''
+      const bytes = await rawBody(request, config.maxAttachmentBytes, '文件')
+      const item = await attachments.upload(actor, {
+        name,
+        bytes,
+        ...(declared === '' ? {} : { mediaType: declared }),
+        conversationId,
+      })
+      respond(actor, response, 200, { item })
+    },
+  }))
+
+  /**
+   * 从 URL 取一个附件。
+   *
+   * 与上传分开一条路由：那条收的是裸字节，这条收 JSON。抓取本身在 `fetch-url.ts`——地址先校验
+   * 再钉住、不跟跨源跳转、只接未压缩的响应、字节与时间都有上限。
+   *
+   * 网页（`text/html`）在这里就地剥成纯文本再存：原始 HTML 对模型来说是几千行标签噪声，
+   * 真正有用的那几段埋在中间。剥得粗，这一点在 `htmlToText` 的注释里写明了。
+   */
+  ctx.effect(() => register({
+    kind: 'exact',
+    path: `${config.routePrefix}/attachments/url`,
+    handler: async (request, response, actor) => {
+      method(request, 'POST')
+      const payload = await body(request, config.maxRequestBodyBytes)
+      const url = stringField(payload, 'url', 2048).trim()
+      if (url === '') throw new HttpError(400, '请填写地址', 'missing_field')
+      const conversationId = stringField(payload, 'conversationId', 200, false).trim()
+      access.assert(actor)
+
+      let fetched
+      try {
+        fetched = await fetchPublicResource(url, {
+          maxBytes: config.maxAttachmentBytes,
+          timeoutMs: config.attachmentFetchTimeoutMs,
+          allowedMediaTypes: FETCH_MEDIA_TYPES,
+        })
+      } catch (error) {
+        if (error instanceof FetchFailure) {
+          throw new HttpError(
+            FETCH_STATUS[error.code] ?? 502,
+            error.message,
+            `attachment_fetch_${error.code}`,
+          )
+        }
+        throw error
+      }
+
+      let { name, mediaType, bytes } = fetched
+      if (mediaType === 'text/html' || mediaType === 'application/xhtml+xml') {
+        const text = htmlToText(Buffer.from(bytes).toString('utf8'))
+        bytes = new Uint8Array(Buffer.from(text, 'utf8'))
+        name = `${name.replace(/\.[^.]*$/u, '')}.txt`
+        mediaType = 'text/plain'
+      }
+      const item = await attachments.uploadFromUrl(actor, {
+        url: fetched.url,
+        name,
+        mediaType,
+        bytes,
+        conversationId,
+      })
+      respond(actor, response, 200, { item })
+    },
+  }))
+
+  /**
+   * 这个会话下还没删除的附件。
+   *
+   * 页面刷新后靠它把输入框上方的附件条重建出来——附件是服务端的事实，不能只活在页面的内存里。
+   */
+  ctx.effect(() => register({
+    kind: 'exact',
+    path: `${config.routePrefix}/attachments/list`,
+    handler: async (request, response, actor) => {
+      method(request, 'GET')
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams
+      respond(actor, response, 200, { items: await attachments.list(actor, (params.get('conversationId') ?? '').trim()) })
     },
   }))
 
@@ -890,11 +1066,19 @@ export async function installWeb(
       const message = stringField(payload, 'message', config.maxMessageChars).trim()
       if (message === '') throw new HttpError(400, '消息不能为空', 'message_empty')
       const conversationId = stringField(payload, 'conversationId', 200)
+      // 附件是**加字段**：老客户端不带它，行为与原来逐字一致。加字段不升契约版本（见文件头）。
+      const attachmentIds = stringArrayField(payload, 'attachmentIds', config.maxAttachmentsPerMessage)
 
       access.assert(actor)
       // 受理与执行分开：这一步之后谁断线都不影响这一轮继续跑完。
       // `requestId` 让重试拿到同一轮，而不是把同一条需求再派一次。
-      const started = await console_.start(conversationId, message, actor, stringField(payload, 'requestId', 120, false).trim())
+      const started = await console_.start(
+        conversationId,
+        message,
+        actor,
+        stringField(payload, 'requestId', 120, false).trim(),
+        attachmentIds,
+      )
       if (reportUnknownRun(actor, response, started)) return
       await streamRun({
         response,

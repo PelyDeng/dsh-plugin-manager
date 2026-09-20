@@ -507,6 +507,15 @@ importers:
         specifier: ^6.0.3
         version: 6.0.3
 
+  plugins/external/dsh-agents-group/packages/document-parse:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.0
+        version: 22.20.1
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+
   plugins/external/dsh-agents-group/packages/runtime:
     devDependencies:
       '@deepseek-ai/cordis':
@@ -557,6 +566,15 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: 3.18.2
         version: 3.18.2
+      mammoth:
+        specifier: 1.12.2
+        version: 1.12.2
+      pdfjs-dist:
+        specifier: 6.3.289
+        version: 6.3.289
+      yauzl:
+        specifier: 3.4.0
+        version: 3.4.0
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: 4.0.2
@@ -567,6 +585,9 @@ importers:
       '@deepseek-ai/dsh-agent-default-model':
         specifier: 0.1.6-alpha.2
         version: 0.1.6-alpha.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-agent@0.1.6-alpha.2(44110910133b3cc261ea9dfdcaed39ee))(@deepseek-ai/dsh-llm@0.1.6-alpha.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-settings@0.1.6-alpha.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.6-alpha.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-invariants@0.1.6-alpha.2(@deepseek-ai/cordis@4.0.2))(@deepseek-ai/dsh-session@0.1.6-alpha.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-scope@0.1.6-alpha.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-invariants@0.1.6-alpha.2(@deepseek-ai/cordis@4.0.2))))(@deepseek-ai/schemastery@3.18.2))
+      '@deepseek-ai/dsh-attachment':
+        specifier: 0.1.6-alpha.2
+        version: 0.1.6-alpha.2(@deepseek-ai/cordis@4.0.2)(@deepseek-ai/dsh-brand@0.1.6-alpha.2(@deepseek-ai/cordis@4.0.2))
       '@deepseek-ai/dsh-home-paths':
         specifier: 0.1.6-alpha.2
         version: 0.1.6-alpha.2(@deepseek-ai/cordis@4.0.2)
@@ -588,6 +609,9 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: 0.1.6-alpha.2
         version: 0.1.6-alpha.2(e8d664b8446198a3dac4043bd11091d7)
+      '@dsh-agents-group/document-parse':
+        specifier: workspace:*
+        version: link:../dsh-agents-group/packages/document-parse
       '@dsh-plugin-manager/plugin-kit':
         specifier: workspace:*
         version: link:../../../packages/plugin-kit

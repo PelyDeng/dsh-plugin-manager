@@ -3,8 +3,8 @@
  *
  * 职责边界（与设计文档一致）：
  *
- * - 牛马大总管自己只带一个 `butler_plan` 工具，用来把计划交回宿主。它不决定子 Agent
- *   调用什么工具，也不创建子 Agent 的会话。
+ * - 牛马大总管自己只带两个工具：`butler_plan`（把计划交回宿主）与 `butler_verdict`（收尾裁决）。
+ *   它不决定子 Agent 调用什么工具，也不创建子 Agent 的会话。
  * - 每个子任务交给对应插件登记的 executor；由那个插件创建和驱动自己的 Agent。
  * - 子任务状态只在真实事件上迁移：派发前是 `queued`，交给 executor 后是
  *   `dispatched`，收到第一条进度后是 `running`，settle 之后才是成功或失败。
@@ -12,7 +12,7 @@
  * 一轮完整对话由三段组成，中间的状态都来自真实事件：
  *
  * 1. 理解与拆解：牛马大总管回答，需要调度时调用 `butler_plan` 交回计划。
- * 2. 调度：按计划顺序把子任务交给各插件登记的 executor。
+ * 2. 调度：按依赖就绪情况分批派发（同批取互不依赖、不同成员的步骤并发），交给各插件登记的 executor。
  * 3. 汇总：把子任务结果交回给牛马大总管，由它输出最终回答。
  */
 
@@ -22,18 +22,23 @@ import type { AgentHandle } from '@deepseek-ai/dsh-agent'
 import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { AccessError, conversationModel, defaultConversationModel, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor, type AgentAction, type AgentArtifact, type AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
+import type { ConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
 import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
+import { ButlerAttachments } from './attachments.ts'
+import { modelTakesImages } from './vision.ts'
 import type { Config } from './config.ts'
 import { ConversationLog, type LoggedEvent, type RunHead } from './event-log.ts'
 import { MergedEvents } from './merged-events.ts'
 import type { ButlerAgentExecutor, ButlerDispatchResult, ButlerMember, ButlerPhase, ButlerProgressUpdate, ButlerReplyRequest } from './protocol.ts'
 import type {
+  ButlerAttachmentRecord,
   ButlerInputRef,
   ButlerInputRefsKind,
   ButlerMemberReturn,
@@ -250,6 +255,13 @@ function progressQueue() {
 interface Conversation {
   readonly id: string
   readonly handle: AgentHandle
+  /**
+   * 这个会话当前用的模型路由。
+   *
+   * 留着它是为了回答一个只有这里知道的问题：**这个会话的模型收不收图片**。会话模型可以中途
+   * 切换（页面上的模型选择器），所以判断要现查，不能缓存成布尔。
+   */
+  readonly selection: ConversationModel
   active: boolean
   lastUsedAt: number
 }
@@ -329,10 +341,41 @@ interface WaitingMember {
  * 如果校验也挪进后台，页面与游戏侧只会看到一条 SSE 错误，分不清是自己参数写错了、
  * 还是前一轮还没跑完、还是服务本身坏了。
  */
+/**
+ * 一轮执行的可选挂接。
+ *
+ * 参数从"七个位置参数"改成对象，是因为这一轮要加第五件可选的东西（随消息发出去的图片）：
+ * 位置参数的调用点已经要看注释才知道第几个是什么，再加一个只会更糟。
+ */
+interface RunHooks {
+  /** 正文增量：页面边说边出字。 */
+  readonly onDelta?: (text: string) => void
+  /** 这一轮的正文要重置（重试换了尝试）：页面清掉旧预览。 */
+  readonly onReset?: () => void
+  /** 补充轮才传：这一轮改的是哪个已存在的任务。 */
+  readonly context?: { readonly taskId: string; readonly subtasks: readonly SubtaskRecord[] }
+  /** 思考快照（覆盖语义），由调用方脱敏后展示。 */
+  readonly onThinking?: (thinking: string) => void
+  /**
+   * 随这条消息一起发给模型的图片。
+   *
+   * **只在当前对话模型收图片时才会非空**：调用方先问过 `modelTakesImages`。模型收不了图片时
+   * 宿主在发请求前会直接拒（`llm/src/index.ts:1052`），整轮对话会当场失败。
+   */
+  readonly images?: readonly ImageAttachmentRef[]
+}
+
 interface PreparedTurn {
   readonly conversationId: string
   readonly conversation: Conversation
+  /** 老板的原话。页面上显示的是它，任务的目标也是它——附件不往里掺。 */
   readonly text: string
+  /** 发给模型的正文：原话 + 附件正文段。图片另走 {@link PreparedTurn.images}。 */
+  readonly prompt: string
+  /** 这一轮带的附件（可能为空）。落库后要绑到任务上，所以留在这里。 */
+  readonly attachments: readonly ButlerAttachmentRecord[]
+  /** 随消息直接交给模型的图片；**只有当前模型收图片时才非空**。 */
+  readonly images: readonly ImageAttachmentRef[]
   readonly actor: Actor
   readonly runId: string
   readonly abort: AbortController
@@ -776,13 +819,25 @@ function memberReturnOf(result: ButlerDispatchResult): ButlerMemberReturn {
 }
 
 /**
- * 派单简报：在原有说明之后接上**可用材料**段。
+ * 附件段的标题。提示词与派单简报用**同一句**：两处都要能一眼看出"下面是文件内容，不是老板
+ * 说的话"，各写一句迟早会漂移成两种说法。
+ */
+const ATTACHMENT_SECTION_TITLE = '老板这次带的文件：'
+
+/**
+ * 派单简报：在原有说明之后接上**老板带的文件**与**可用材料**段。
  *
  * 正文照录上游协作返回原文；位置型材料只给出位置并注明需在执行方页面打开（不宣称员工已取得）；
- * 外部待办照录上游权威声明。内容全部来自派单时固定的快照，不重读可变上游。
+ * 外部待办照录上游权威声明。内容全部来自派单时固定的快照或这一轮老板带的附件，不重读可变上游。
  */
-function dispatchBrief(taskGoal: string, subtaskGoal: string, refs: readonly ButlerInputRef[]): string {
+function dispatchBrief(
+  taskGoal: string,
+  subtaskGoal: string,
+  refs: readonly ButlerInputRef[],
+  attachmentSection: string,
+): string {
   const lines = [briefFor(taskGoal, subtaskGoal)]
+  if (attachmentSection !== '') lines.push('', attachmentSection)
   if (refs.length > 0) {
     lines.push('', '可用材料（来自上游，原文照录）：')
     for (const ref of refs) {
@@ -1249,9 +1304,10 @@ export function planReworkAttempts(input: {
  * §5.2 第二条消费点：汇总前**程序化核验**"任务级口径提到的产出物是否交回了"。
  *
  * ⚠️ **强度必须如实说明**（不许在注释或报告里夸大）：`acceptance` 是**自由文本**（模型写中文，
- * 如"一篇已发布的博客文章链接"），而 `AgentArtifact.kind` 是**固定英文枚举**，契约里**没有
- * "文本 → kind"的映射** ⇒ 这一版只能证明"**有材料交回**"，**不**证明"交回的正是口径点名的那
- * 一种"。要做到逐 `kind` 对照，得先把 `acceptance` 结构化（后续期）。
+ * 如"一篇已发布的博客文章链接"），而 `AgentArtifact.kind` 是**执行方自定义的开放字符串**
+ * （2026-09-19 起不再是固定枚举），契约里**没有 "文本 → kind" 的映射** ⇒ 这一版只能证明
+ * "**有材料交回**"，**不**证明"交回的正是口径点名的那一种"。要做到逐 `kind` 对照，得先把
+ * `acceptance` 结构化（后续期）。
  *
  * 这与运行时 ⑦ 第 3 条是**同一条强度**（交接文档 §10 的 D2 决策）——两边口径必须一致，否则
  * 同一件事在协调侧与执行侧会得到不同结论。
@@ -1398,6 +1454,14 @@ export class ButlerConsole {
   private readonly subtaskWrites = new Map<string, Promise<void>>()
   private disposed = false
 
+  /**
+   * 附件服务：老板丢进输入框的文件与图片，进这一轮的理解与派单。
+   *
+   * **公开**（不是 private）：页面那条 HTTP 面（`web.ts`）要的就是同一个实例——附件是这份
+   * 应用的对象，路由只是它的一个入口，另造一个实例等于让两处各持一份状态。
+   */
+  readonly attachments: ButlerAttachments
+
   constructor(
     private readonly ctx: Context,
     private readonly config: Config,
@@ -1405,7 +1469,19 @@ export class ButlerConsole {
     /** 异步业务存储（生产为 PostgresTaskStorage；测试注入过渡适配器或替身）。 */
     private readonly storage: ButlerStorage,
     private readonly persona: string,
-  ) {}
+  ) {
+    // 附件服务按**每一次调用**去问"此刻的存储"，而不是把 `storage` 抓在手里：这个字段是可变的
+    // （测试在重开库之后会整只换掉它），抓住旧的那一个，换库之后读到的就是一张已经关掉的库
+    // ——报出来的是 `database is not open`，离真正的原因很远。
+    this.attachments = new ButlerAttachments(ctx, config, access, {
+      attachmentInsert: (actor, record) => this.storage.attachmentInsert(actor, record),
+      attachmentWrite: (actor, record) => this.storage.attachmentWrite(actor, record),
+      attachment: (actor, id) => this.storage.attachment(actor, id),
+      attachments: (actor, conversationId) => this.storage.attachments(actor, conversationId),
+      attachmentBind: (actor, ids, taskId, conversationId) => this.storage.attachmentBind(actor, ids, taskId, conversationId),
+      taskAttachments: taskId => this.storage.taskAttachments(taskId),
+    })
+  }
 
   /**
    * 把一次子任务存储写排进该子任务的串行队列（§3 同子任务写入顺序不变量）。
@@ -1549,7 +1625,7 @@ export class ButlerConsole {
       await handle.dispose()
       throw new AccessError(503, '插件正在停止', 'plugin_stopping')
     }
-    const conversation: Conversation = { id, handle, active: false, lastUsedAt: Date.now() }
+    const conversation: Conversation = { id, handle, selection, active: false, lastUsedAt: Date.now() }
     this.conversations.set(id, conversation)
     return conversation
   }
@@ -2145,7 +2221,13 @@ export class ButlerConsole {
    * 到这一步为止的失败都是同步可见的（参数不对、上一轮还没完、会话不属于这个登录），
    * 调用方能直接给出 `400`／`409`，不必让用户去一条 SSE 流里找原因。
    */
-  private async prepareTurn(conversationId: string, message: string, actor: Actor, runId: string): Promise<PreparedTurn> {
+  private async prepareTurn(
+    conversationId: string,
+    message: string,
+    actor: Actor,
+    runId: string,
+    attachmentIds: readonly string[] = [],
+  ): Promise<PreparedTurn> {
     this.access.assert(actor)
     const text = message.trim()
     if (text === '') throw new AccessError(400, '消息不能为空', 'message_empty')
@@ -2154,6 +2236,13 @@ export class ButlerConsole {
     const conversation = await this.open(conversationId, true, actor)
     if (conversation === undefined) throw new AccessError(500, '无法打开牛马大总管会话', 'conversation_open_failed')
     this.access.assert(actor)
+
+    // 附件在互斥标志**之前**处理完：这一段里有 await（读库，模型收不了图片时还有一次读图
+    // 调用），插在「检查 active」与「置位 active」之间会让同一会话的两个回合同时进来。
+    const attachments = await this.attachments.select(actor, attachmentIds)
+    const images = await this.attachImages(conversation, actor, attachments)
+    const prompt = await this.promptFor(text, attachments)
+
     // 同会话执行互斥（T1-2 不变量 a）：`conversation.active` 检查到置位、`claims` 检查到
     // 占用之间不得插入任何 await——中间让出执行权，一次回话或补充会挤进来换掉运行引用和
     // 事件日志，把在跑的回合变成不可停止。会话标题的写入因此挪到全部互斥标志立好之后。
@@ -2166,27 +2255,79 @@ export class ButlerConsole {
     this.runs.set(conversationId, { runId, abort })
     this.claims.set(conversationId, { runId, kind: 'turn' })
     await this.storage.touchConversation(conversationId, actor, text)
-    return { conversationId, conversation, text, actor, runId, abort }
+    return { conversationId, conversation, text, prompt, attachments, images, actor, runId, abort }
+  }
+
+  /**
+   * 这一轮的图片要不要直接交给模型。
+   *
+   * 两条路**必须二选一**，不能都走：
+   *
+   * - **模型收图片** → 直接把图片引用交出去，**不做读图**。读一遍等于让模型看二手转述，
+   *   还白花一次调用。
+   * - **模型不收图片** → 先把图片读成文字（读一次落库，下一轮复用），图片引用不再交出去。
+   *   宿主在发请求前会拒掉"模型不支持却带图片"的消息（`llm/src/index.ts:1052`），硬塞会让
+   *   整轮对话当场失败，而失败原因离用户很远。
+   */
+  private async attachImages(
+    conversation: Conversation,
+    actor: Actor,
+    records: readonly ButlerAttachmentRecord[],
+  ): Promise<readonly ImageAttachmentRef[]> {
+    const refs = this.attachments.imageRefs(records)
+    if (refs.length === 0) return []
+    if (await modelTakesImages(this.ctx, conversation.selection.provider, conversation.selection.model)) return refs
+    await this.attachments.ensureImageText(actor, records)
+    return []
+  }
+
+  /** 发给模型的正文：原话之后接一段附件说明，没有附件就原样返回。 */
+  private async promptFor(text: string, records: readonly ButlerAttachmentRecord[]): Promise<string> {
+    if (records.length === 0) return text
+    const block = await this.attachments.promptBlock(records, this.config.attachmentBriefChars)
+    if (block === '') return text
+    return [text, '', ATTACHMENT_SECTION_TITLE, block].join('\n')
+  }
+
+  /**
+   * 派单简报里的附件段：这一轮老板带的文件，按任务取。
+   *
+   * 派单前先补一次读图（`ensureImageText`）：成员拿到的是**文字**，看不见图片，一张没有文字的
+   * 图片对它等于没有。读一次落库，同一张图不会读第二次。当前对话模型是多模态时，图片已经直接
+   * 交给过协调方，但成员这条路仍然需要文字，所以这里照样读。
+   */
+  private async attachmentSection(actor: Actor, taskId: string): Promise<string> {
+    const records = await this.attachments.forTask(taskId)
+    if (records.length === 0) return ''
+    try {
+      await this.attachments.ensureImageText(actor, records)
+    } catch (error) {
+      // 读图失败不阻断派单：附件正文照给，缺的部分由 `promptBlock` 如实标出来。
+      console.error(`butler-console: 派单前读图失败：${visibleError(error, 300)}`)
+    }
+    const block = await this.attachments.promptBlock(records, this.config.attachmentBriefChars)
+    return block === '' ? '' : `${ATTACHMENT_SECTION_TITLE}\n${block}`
   }
 
   /**
    * 跑完一轮，按发生顺序产出事件。
    *
-   * 串行调度：计划本身表达的是先后关系，而且并行会让右栏状态难以解释。需要并行
-   * 时再作为独立改动引入。
+   * 调度交给 {@link drainQueue}：互不依赖、成员不同的步骤**批内并发**，同一成员每批只取一个
+   * （执行方有自己的会话互斥）。第一版曾经是严格串行，改成并发的理由写在第二段那段注释里。
    */
   private async *turnBody(turn: PreparedTurn): AsyncGenerator<ButlerEvent> {
-    const { conversation, conversationId, text, actor, abort } = turn
+    const { conversation, conversationId, text, prompt, attachments, images, actor, abort } = turn
     yield { type: 'user', text, time: Date.now() }
 
     try {
       // 第一段：理解与拆解。它自己的话边收边上：回合还没结束就把增量发给页面。
       const speech = progressQueue()
-      const planningTurn = this.runTurn(conversation, text, abort.signal,
-        delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
-        () => speech.push({ type: 'chat_reset', time: Date.now() }),
-        undefined,
-        thinking => speech.push({ type: 'chat_thinking', role: 'butler', thinking, time: Date.now() }))
+      const planningTurn = this.runTurn(conversation, prompt, abort.signal, {
+        onDelta: delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
+        onReset: () => speech.push({ type: 'chat_reset', time: Date.now() }),
+        onThinking: thinking => speech.push({ type: 'chat_thinking', role: 'butler', thinking, time: Date.now() }),
+        ...(images.length === 0 ? {} : { images }),
+      })
       void planningTurn.then(() => speech.settle(), () => speech.settle())
       for await (const event of speech.drain()) yield event
       const planning = await planningTurn
@@ -2240,6 +2381,18 @@ export class ButlerConsole {
       await this.storage.createTask({
         id: taskId, conversationId, actor, goal: text, acceptance: plan.acceptance, note: plan.note, subtasks,
       })
+      // 附件绑到任务上：派单时要靠这个绑定把文件正文放进成员的简报里。绑定失败**不阻断**
+      // 这一轮——活该派还是要派，只是成员看不到附件内容；这里如实记一行日志。
+      if (attachments.length > 0) {
+        try {
+          const bound = await this.attachments.bindToTask(actor, attachments.map(item => item.id), taskId, conversationId)
+          if (bound !== attachments.length) {
+            console.warn(`butler-console: 附件绑定数量不符（${bound}/${attachments.length}），${taskId}`)
+          }
+        } catch (error) {
+          console.error(`butler-console: 附件绑定失败：${visibleError(error, 300)}`)
+        }
+      }
       yield { type: 'plan', taskId, goal: text, note: plan.note, subtasks, time: Date.now() }
 
       // 第二段：调度。走与后续派发（回话/点卡后的下游、补充追加）**同一条** drainQueue：
@@ -2304,7 +2457,13 @@ export class ButlerConsole {
    * `requestId` 一旦用在别的请求上就直接拒绝：那多半是客户端把 id 生成错了，静默当成同一次
    * 会让两条不同的需求合成一条。
    */
-  async start(conversationId: string, message: string, actor: Actor, requestId = ''): Promise<StartedRun> {
+  async start(
+    conversationId: string,
+    message: string,
+    actor: Actor,
+    requestId = '',
+    attachmentIds: readonly string[] = [],
+  ): Promise<StartedRun> {
     // 顺手兜一遍过期等待（#6）：内存闹钟丢了也不会再挂到重启，正常时晚 60 秒、轮不到它。
     void this.sweepStaleWaitings(actor).catch(() => {})
     const digest = digestOf([conversationId, message])
@@ -2321,7 +2480,7 @@ export class ButlerConsole {
     }
     let turn: PreparedTurn
     try {
-      turn = await this.prepareTurn(conversationId, message, actor, runId)
+      turn = await this.prepareTurn(conversationId, message, actor, runId, attachmentIds)
     } catch (error) {
       // 受理没成功（会话打不开、参数不合法）：撤掉占位，同一个 requestId 还能再提交。
       if (requestId !== '') this.releaseRequestQuietly(actor, 'chat', requestId)
@@ -2530,11 +2689,12 @@ export class ButlerConsole {
       const prompt = supplementPrompt(await this.storage.inputs(taskId), record.subtasks)
 
       const speech = progressQueue()
-      const turn = this.runTurn(conversation, prompt, prepared.abort.signal,
-        delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
-        () => speech.push({ type: 'chat_reset', time: Date.now() }),
-        { taskId, subtasks: record.subtasks },
-        thinking => speech.push({ type: 'chat_thinking', role: 'butler', thinking, time: Date.now() }))
+      const turn = this.runTurn(conversation, prompt, prepared.abort.signal, {
+        onDelta: delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
+        onReset: () => speech.push({ type: 'chat_reset', time: Date.now() }),
+        context: { taskId, subtasks: record.subtasks },
+        onThinking: thinking => speech.push({ type: 'chat_thinking', role: 'butler', thinking, time: Date.now() }),
+      })
       void turn.then(() => speech.settle(), () => speech.settle())
       for await (const event of speech.drain()) yield event
       const outcome = await turn
@@ -3060,11 +3220,9 @@ export class ButlerConsole {
     conversation: Conversation,
     text: string,
     signal: AbortSignal,
-    onDelta?: (text: string) => void,
-    onReset?: () => void,
-    context?: { readonly taskId: string; readonly subtasks: readonly SubtaskRecord[] },
-    onThinking?: (thinking: string) => void,
+    hooks: RunHooks = {},
   ): Promise<{ outcome: TurnOutcome; text: string; plans: readonly PlanSubmission[] }> {
+    const { onDelta, onReset, context, onThinking, images } = hooks
     const sessionId = String(conversation.handle.agent.session.id)
     const turn: Turn = {
       // 名单在组装提示词时读取，所以这里取的是「这一轮开始时」的在场情况。
@@ -3091,7 +3249,15 @@ export class ButlerConsole {
     })
     try {
       if (signal.aborted) return { outcome: { kind: 'cancelled' }, text: '', plans: [] }
-      conversation.handle.agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
+      // 图片随消息一起发出去（只有当前模型收图片时才有内容）。**顺序是"文字在前、图片在后"**：
+      // 先给模型看要它干什么，再看图，比反过来少一次"这些图是干嘛的"的猜测。
+      conversation.handle.agent.followup(createUserMessage({
+        content: [
+          { type: 'text', text },
+          ...(images ?? []).map(attachment => ({ type: 'image' as const, attachment })),
+        ],
+        source: { kind: 'user' },
+      }))
       const outcome = await finished
       return { outcome, text: turn.text, plans: turn.plans }
     } catch (error) {
@@ -3566,9 +3732,11 @@ export class ButlerConsole {
       }
     }
 
-    // 容量：按**完整派单 message** 计（整体目标、本步、材料原文、位置来源、外部待办全部计入）。
-    // 超限一律不派单，也不静默或显式截断后继续；由老板缩小范围后走既有「新尝试」规则。
-    const brief = dispatchBrief(input.taskGoal, input.goal, inputRefs)
+    // 容量：按**完整派单 message** 计（整体目标、本步、老板带的附件、材料原文、位置来源、
+    // 外部待办全部计入）。超限一律不派单，也不静默或显式截断后继续；由老板缩小范围后走既有
+    // 「新尝试」规则。
+    const attachmentSection = await this.attachmentSection(input.actor, taskId)
+    const brief = dispatchBrief(input.taskGoal, input.goal, inputRefs, attachmentSection)
     if (brief.length > DISPATCH_MESSAGE_LIMIT) {
       const detail = `派单材料超过成员接收上限（${brief.length} > ${DISPATCH_MESSAGE_LIMIT} 字符），已停止派单，请缩小范围后重试`
       await this.queueSubtaskWrite(taskId, subtaskId, () => this.storage.setSubtaskState(taskId, subtaskId, 'failed', { error: detail }))
@@ -4895,11 +5063,11 @@ export class ButlerConsole {
         : '裁完之后，再基于这些结果给出最终回答：直接回答我的目标，不要重复子任务清单，也不要提到这份指令。',
     ].join('\n')
     const speech = progressQueue()
-    const summaryTurn = this.runTurn(conversation, prompt, signal,
-      delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
-      () => speech.push({ type: 'chat_reset', time: Date.now() }),
-      undefined,
-      thinking => speech.push({ type: 'chat_thinking', role: 'butler', thinking, time: Date.now() }))
+    const summaryTurn = this.runTurn(conversation, prompt, signal, {
+      onDelta: delta => speech.push({ type: 'chat_delta', role: 'butler', text: delta, time: Date.now() }),
+      onReset: () => speech.push({ type: 'chat_reset', time: Date.now() }),
+      onThinking: thinking => speech.push({ type: 'chat_thinking', role: 'butler', thinking, time: Date.now() }),
+    })
     void summaryTurn.then(() => speech.settle(), () => speech.settle())
     for await (const event of speech.drain()) yield event
     const outcome = await summaryTurn

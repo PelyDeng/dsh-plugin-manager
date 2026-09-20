@@ -2,11 +2,12 @@
 --
 -- 用途
 --   在空库（或与目标库同名、但尚无任何 `butler_` / `blog_` / `closedoff_` / `huiyu_` / `dsh_` 表的新库）里
---   一次建出全部 16 张表、21 个显式 `CREATE INDEX`，并在结尾写入 `dsh_schema_versions` 五行
+--   一次建出全部 17 张表、23 个显式 `CREATE INDEX`，并在结尾写入 `dsh_schema_versions` 五行
 --   （`butler` / `blog` / `closedoff` / `huiyu` / `runtime` = 1）。
 --   表与列逐字取自《牛马生态数据库重构设计》§5（§5.1 框架级、§5.2 管家、§5.3 会话索引与轮次幂等、
 --   §5.4 blog 业务表；⑤ 段为 huiyu 业务表）——**本文件是那份 DDL 的落地，不在这里做设计决策**。
---   ⚠️ 已建过库的站点补 huiyu 表用 `0002_huiyu.sql`，不要重跑本文件（重复建库被拒绝）。
+--   ⚠️ 已建过库的站点补表用增量脚本，不要重跑本文件（重复建库被拒绝）：
+--   `0002_huiyu.sql` 补 huiyu、`0003_butler_attachments.sql` 补 `butler_attachments`。
 --
 -- ⚠️ 与 §5 唯一的顺序差异（必需，不是可选）
 --   §5 按"框架 → 管家 → 会话索引 → blog"的**叙述顺序**给 DDL，但外键要求**被引用表先存在**：
@@ -278,6 +279,48 @@ CREATE TABLE butler_requests (
   updated_at      BIGINT NOT NULL,
   PRIMARY KEY (owner_namespace, owner_id, kind, request_id)
 );
+
+-- 老板丢进输入框的附件（本地上传或 URL 抓取）。字节本体**不在这里**：它按内容寻址存在宿主的
+-- 附件服务里（`<DSH 主目录>/attachments/v1/file-objects/`），本表只存引用与解析结果。
+--
+-- ⚠️ `conversation_id` / `task_id` **不给外键、都允许空串**，这是有意的：
+--   · 上传发生在"还没开新会话"的时刻（输入框里先拖文件、再写需求），此时 `dsh_conversations`
+--     里还没有那一行，挂外键会让"先传文件"这条正常路径报 23503；
+--   · `task_id` 在计划落库之后才回填（同一轮里附件先于任务存在）。
+--   代价是"引用对象不存在"数据库拦不住，改由读路径按 owner 过滤兜住——跨用户读不到，这一点
+--   比"会话/任务不存在"重要得多。与 `0003_butler_attachments.sql` 逐字一致，两处必须一起改。
+CREATE TABLE butler_attachments (
+  id              TEXT    NOT NULL PRIMARY KEY,
+  owner_namespace TEXT    NOT NULL,
+  owner_id        TEXT    NOT NULL,
+  conversation_id TEXT    NOT NULL DEFAULT '',
+  task_id         TEXT    NOT NULL DEFAULT '',
+  name            TEXT    NOT NULL,
+  -- 解析种类（`text` / `markdown` / `pdf` / `docx` / `image` / `binary` …），由字节与扩展名共同判定。
+  kind            TEXT    NOT NULL,
+  -- HTTP 媒体类型，只用于回放下载与展示；类型判定**不看它**（客户端声明不可信）。
+  media_type      TEXT    NOT NULL DEFAULT '',
+  bytes           BIGINT  NOT NULL DEFAULT 0,
+  -- `uploading` → `parsing` → `ready`；失败 `failed`，用户删除 `removed`。失败与删除都留行。
+  -- 取值用 CHECK 钉住：读路径按字面量用这一列，允许写进第六种值会让页面拿到一个它不认识的态。
+  status          TEXT    NOT NULL
+                    CHECK (status IN ('uploading','parsing','ready','failed','removed')),
+  message         TEXT    NOT NULL DEFAULT '',
+  -- 由 URL 抓取而来时记下原地址（本地上传为空串）；只用于展示，不参与任何请求。
+  source_url      TEXT    NOT NULL DEFAULT '',
+  -- 宿主附件服务写回的引用（不透明结构，管家只负责原样交回读接口）。
+  original        JSONB,
+  -- 解析结果（`units` / `totalUnits` / `unit` / `characters` / `partial`）。
+  parsed          JSONB,
+  created_at      BIGINT  NOT NULL,
+  updated_at      BIGINT  NOT NULL
+);
+-- 列表按会话倒序翻页，与 blog 各表的索引口径一致。
+CREATE INDEX butler_attachments_owner
+  ON butler_attachments (owner_namespace, owner_id, conversation_id, created_at DESC);
+-- 派单时按任务找附件；部分索引，因为绝大多数行的 task_id 是空串（还没派出去）。
+CREATE INDEX butler_attachments_task
+  ON butler_attachments (task_id) WHERE task_id <> '';
 
 -- ---------------------------------------------------------------------------
 -- ④ §5.4 blog 业务表：提升查询列（生成列）+ `payload` 改 JSONB

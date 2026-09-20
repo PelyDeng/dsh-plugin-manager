@@ -39,6 +39,8 @@ describe('同子任务的存储写入串行化', () => {
       task: vi.fn(() => ({
         subtasks: [{ id: 's1', supersedes: '', state: 'queued', startedAt: null, inputRefs: undefined, inputRefsState: 'unfixed' }],
       })),
+      // 派单前要读这一轮老板带的附件；本文件不涉及附件，按「没有附件」算。
+      taskAttachments: vi.fn(() => []),
       async setSubtaskState(_taskId: string, _subtaskId: string, state: string) {
         ticket += 1
         const delay = ticket % 2 === 0 ? 4 : 0

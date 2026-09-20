@@ -1,0 +1,27 @@
+{
+  "name": "@dsh-agents-group/document-parse",
+  "version": "0.2.0",
+  "description": "共享的文件解析工具集：纯文本 / PDF / DOCX / 图片各一件，产出同一种形状",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./text": "./src/text.ts",
+    "./pdf": "./src/pdf.ts",
+    "./docx": "./src/docx.ts",
+    "./image": "./src/image.ts",
+    "./render": "./src/render.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node -e \"console.log('document-parse 由消费方产物内联，无需单独构建')\"",
+    "check": "pnpm typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "typescript": "^6.0.3"
+  }
+}

@@ -23,8 +23,10 @@ import { Client, Pool, type PoolClient, type QueryResult, type QueryResultRow } 
 import { AccessError, type Actor, type AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
 import { isTerminal, subtaskTransitionSources, type SubtaskState, type TaskState } from '../task-model.ts'
 import { mapStorageError, StorageError, uniqueViolation } from './errors.ts'
-import { parseArtifacts, parseDependsOn, parseDependsOnStrict, parseInputRefs, parseMemberReturn } from './parse.ts'
+import { parseArtifacts, parseAttachmentParsed, parseDependsOn, parseDependsOnStrict, parseInputRefs, parseMemberReturn } from './parse.ts'
 import type {
+  ButlerAttachmentRecord,
+  ButlerAttachmentStatus,
   ButlerInputRef,
   ButlerMemberReturn,
   ButlerStorage,
@@ -65,6 +67,10 @@ const EXPECTED_TABLES = [
   'butler_agent_aliases',
   'butler_requests',
   'butler_task_inputs',
+  // 附件索引（字节本体在宿主的附件服务里）。已建库的站点用
+  // `private-deploy/db/0003_butler_attachments.sql` 补；没补的会在这里以
+  // `storage_schema_missing` 响亮失败，而不是半可用。
+  'butler_attachments',
 ] as const
 
 /**
@@ -412,6 +418,81 @@ export class PostgresTaskStorage implements ButlerStorage {
       'UPDATE butler_agent_aliases SET avatar=NULL, avatar_type=\'\', updated_at=$1 WHERE owner_namespace=$2 AND owner_id=$3 AND agent_id=$4',
       [Date.now(), actor.namespace, actor.userId, agentId],
     )
+  }
+
+  // ── 附件（`butler_attachments`）───────────────────────────────────────────────
+  //
+  // 字节本体不在这张表里：它按内容寻址存在宿主的附件服务中，这里只有 `original` 那个引用。
+  // 表结构与两条索引见 `private-deploy/db/0001_init.sql`（增量补丁是 `0003_butler_attachments.sql`）。
+
+  async attachmentInsert(actor: Actor, record: ButlerAttachmentRecord): Promise<void> {
+    await this.run(
+      `INSERT INTO butler_attachments(
+         id, owner_namespace, owner_id, conversation_id, task_id, name, kind, media_type,
+         bytes, status, message, source_url, original, parsed, created_at, updated_at)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+      attachmentValues(actor, record),
+    )
+  }
+
+  /**
+   * 整条改写可变列。
+   *
+   * ⚠️ `original` / `parsed` 传 `null` 就是**真的置空**（不是"没打算改"）：这两列用
+   * `COALESCE` 式补丁写就再也分不出"还没存好"与"存过又清了"，而失败路径正要靠这个区分。
+   */
+  async attachmentWrite(actor: Actor, record: ButlerAttachmentRecord): Promise<number> {
+    const result = await this.run(
+      `UPDATE butler_attachments SET
+         conversation_id=$1, task_id=$2, name=$3, kind=$4, media_type=$5, bytes=$6,
+         status=$7, message=$8, source_url=$9, original=$10, parsed=$11, updated_at=$12
+       WHERE id=$13 AND owner_namespace=$14 AND owner_id=$15`,
+      [record.conversationId, record.taskId, record.name, record.kind, record.mediaType, record.bytes,
+        record.status, record.message, record.sourceUrl,
+        attachmentJson(record.original), attachmentJson(record.parsed), record.updatedAt,
+        record.id, actor.namespace, actor.userId],
+    )
+    return result.rowCount ?? 0
+  }
+
+  async attachment(actor: Actor, id: string): Promise<ButlerAttachmentRecord | undefined> {
+    const result = await this.run<AttachmentRow>(
+      `${ATTACHMENT_SELECT} WHERE id=$1 AND owner_namespace=$2 AND owner_id=$3`,
+      [id, actor.namespace, actor.userId],
+    )
+    const row = result.rows[0]
+    return row === undefined ? undefined : toAttachment(row)
+  }
+
+  async attachments(actor: Actor, conversationId: string): Promise<ButlerAttachmentRecord[]> {
+    // 只取**还没绑到任务**的（`task_id = ''`）：绑上去的已经在某一轮里发出去了，不该再出现在
+    // 输入框上方的"待发"里——那会让用户以为它还没交出去、又发一遍。
+    const result = await this.run<AttachmentRow>(
+      `${ATTACHMENT_SELECT} WHERE owner_namespace=$1 AND owner_id=$2 AND conversation_id=$3
+         AND task_id = '' AND status <> 'removed'
+       ORDER BY created_at DESC, id`,
+      [actor.namespace, actor.userId, conversationId],
+    )
+    return result.rows.map(toAttachment)
+  }
+
+  async attachmentBind(actor: Actor, ids: readonly string[], taskId: string, conversationId: string): Promise<number> {
+    if (ids.length === 0) return 0
+    // 已删除的不绑：绑上去之后派单简报里会出现一个用户以为已经删掉的文件。
+    const result = await this.run(
+      `UPDATE butler_attachments SET task_id=$1, conversation_id=$2, updated_at=$3
+       WHERE owner_namespace=$4 AND owner_id=$5 AND id = ANY($6::text[]) AND status <> 'removed'`,
+      [taskId, conversationId, Date.now(), actor.namespace, actor.userId, [...ids]],
+    )
+    return result.rowCount ?? 0
+  }
+
+  async taskAttachments(taskId: string): Promise<ButlerAttachmentRecord[]> {
+    const result = await this.run<AttachmentRow>(
+      `${ATTACHMENT_SELECT} WHERE task_id=$1 AND status <> 'removed' ORDER BY created_at, id`,
+      [taskId],
+    )
+    return result.rows.map(toAttachment)
   }
 
   async reserveConversation(id: string, actor: Actor): Promise<void> {
@@ -1122,4 +1203,67 @@ interface RequestRow extends QueryResultRow {
   readonly runId: string
   readonly conversationId: string
   readonly updatedAt: string | number
+}
+
+/** 附件行的公共列清单：读路径与"按任务取"共用同一份，避免两处列顺序各自漂移。 */
+const ATTACHMENT_SELECT = `SELECT id, conversation_id AS "conversationId", task_id AS "taskId", name, kind,
+    media_type AS "mediaType", bytes, status, message, source_url AS "sourceUrl",
+    original, parsed, created_at AS "createdAt", updated_at AS "updatedAt"
+  FROM butler_attachments`
+
+interface AttachmentRow extends QueryResultRow {
+  readonly id: string
+  readonly conversationId: string
+  readonly taskId: string
+  readonly name: string
+  readonly kind: string
+  readonly mediaType: string
+  /** BIGINT：驱动回传字符串。 */
+  readonly bytes: string | number
+  readonly status: string
+  readonly message: string
+  readonly sourceUrl: string
+  readonly original: unknown
+  readonly parsed: unknown
+  readonly createdAt: string | number
+  readonly updatedAt: string | number
+}
+
+/** INSERT 的取值顺序与那条语句的列清单逐字对应。 */
+function attachmentValues(actor: Actor, record: ButlerAttachmentRecord): unknown[] {
+  return [
+    record.id, actor.namespace, actor.userId, record.conversationId, record.taskId, record.name,
+    record.kind, record.mediaType, record.bytes, record.status, record.message, record.sourceUrl,
+    attachmentJson(record.original), attachmentJson(record.parsed), record.createdAt, record.updatedAt,
+  ]
+}
+
+/** JSONB 列的写入取值：`undefined` 写成 SQL NULL，而不是字符串 `'undefined'`。 */
+function attachmentJson(value: unknown): string | null {
+  return value === undefined ? null : JSON.stringify(value)
+}
+
+/**
+ * 行 → 记录。
+ *
+ * `status` 直接当字面量用：这一列在 DDL 里有 `CHECK` 约束（`0001_init.sql` / `0003`），
+ * 库里的取值只有那五个。`original` 是**不透明结构**，原样交回宿主附件服务，不在这里解释它。
+ */
+function toAttachment(row: AttachmentRow): ButlerAttachmentRecord {
+  return {
+    id: row.id,
+    conversationId: row.conversationId,
+    taskId: row.taskId,
+    name: row.name,
+    kind: row.kind,
+    mediaType: row.mediaType,
+    bytes: Number(row.bytes),
+    status: row.status as ButlerAttachmentStatus,
+    message: row.message,
+    sourceUrl: row.sourceUrl,
+    original: row.original === null ? undefined : row.original,
+    parsed: parseAttachmentParsed(row.parsed),
+    createdAt: Number(row.createdAt),
+    updatedAt: Number(row.updatedAt),
+  }
 }

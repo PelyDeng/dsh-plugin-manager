@@ -40,12 +40,15 @@ describe('视图切换的异步归属（I09）', () => {
       'state', 'el', 'api', 'historyState', 'make', 'append', 'clear', 'threadInner', 'resetRail',
       'resetFollowing', 'renderWelcome', 'renderHistorySlice', 'rememberConversation', 'refreshChatList',
       'updateLoadEarlier', 'scrollToBottom', 'TRANSCRIPT_PAGE_SIZE', 'replaceViewState',
+      'hideAttachUrl', 'clearAttachments', 'loadAttachments',
       `${pick('timeOf')}\n${pick('compareHistoryEntries')}\n${pick('mergeHistoryEntries')}\n${pick('openConversation')} return openConversation`,
     )(state, el, api, historyState,
       () => ({ remove() {} }), (node: unknown) => node, noop, () => ({ prepend: noop }), noop,
       noop, noop,
       (entries: { text?: string }[]) => { rendered.push(entries.map(entry => entry.text ?? '').join('|')) },
-      noop, noop, noop, noop, 50, replaceViewState) as
+      noop, noop, noop, noop, 50, replaceViewState,
+      // 附件条：本用例验的是视图归属，附件的三个挂接点给空实现即可。
+      noop, noop, async () => {}) as
       (id: string) => Promise<void>
 
     const first = openConversation('conv-a')

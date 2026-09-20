@@ -104,6 +104,8 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     await storage.close().catch(() => {})
     throw error
   }
+  // 附件服务由 ButlerConsole 自己在构造时装配（页面那条路读 `console_.attachments`），
+  // 这里不再单独造一个：两处各造一个就会各持一份状态。
   const console_ = new ButlerConsole(ctx, config, access, storage, persona)
   // 就绪状态来自启动序列的缓存结果（§2.5 口径：已装载未就绪 → 业务与 /ready 503）；
   // probe 供 /ready 在运行期核实 PG 此刻真的可达（已配置但运行中不可达 = 已装载未就绪）。

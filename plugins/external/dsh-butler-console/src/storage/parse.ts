@@ -20,7 +20,14 @@
 
 import type { AgentAction, AgentArtifact, AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
 import { SUBTASK_STATES, type SubtaskState } from '../task-model.ts'
-import type { ButlerDependsOnKind, ButlerInputRef, ButlerInputRefsKind, ButlerMemberReturn } from './types.ts'
+import type {
+  ButlerAttachmentParsed,
+  ButlerAttachmentUnit,
+  ButlerDependsOnKind,
+  ButlerInputRef,
+  ButlerInputRefsKind,
+  ButlerMemberReturn,
+} from './types.ts'
 
 /**
  * 校验外部待办声明。
@@ -254,5 +261,45 @@ export function parseDependsOnStrict(raw: unknown): { readonly kind: ButlerDepen
     return { kind: 'valid', items: parsed }
   } catch {
     return { kind: 'damaged', items: [] }
+  }
+}
+
+/**
+ * 解析附件的解析结果（`butler_attachments.parsed`）。
+ *
+ * **读不出来就给 `undefined`**（宽松），与 {@link parseArtifacts} 同一档：这一列是辅助信息——
+ * 有它页面能显示"共 12 段"，派单简报能少一次重解析；没有它，附件本身照样能下载、能转交，
+ * 只是要重新解析一遍。为一条读不出的 JSON 让整个附件列表报错，代价明显更大。
+ *
+ * 逐项核验而不是整体 `as`：`units` 是要逐字进提示词的东西，混进非字符串项会在下游变成
+ * `[object Object]`。
+ */
+export function parseAttachmentParsed(raw: unknown): ButlerAttachmentParsed | undefined {
+  if (raw === '' || raw === null || raw === undefined) return undefined
+  try {
+    const parsed: unknown = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
+    const candidate = parsed as Partial<ButlerAttachmentParsed>
+    if (typeof candidate.unit !== 'string') return undefined
+    if (typeof candidate.totalUnits !== 'number' || !Number.isSafeInteger(candidate.totalUnits)) return undefined
+    if (typeof candidate.characters !== 'number' || !Number.isSafeInteger(candidate.characters)) return undefined
+    if (!Array.isArray(candidate.units)) return undefined
+    const units: ButlerAttachmentUnit[] = []
+    for (const item of candidate.units) {
+      if (typeof item !== 'object' || item === null) return undefined
+      const unit = item as Partial<ButlerAttachmentUnit>
+      if (typeof unit.number !== 'number' || !Number.isSafeInteger(unit.number) || typeof unit.text !== 'string') return undefined
+      units.push({ number: unit.number, text: unit.text })
+    }
+    return {
+      kind: typeof candidate.kind === 'string' ? candidate.kind : '',
+      unit: candidate.unit,
+      totalUnits: candidate.totalUnits,
+      characters: candidate.characters,
+      partial: candidate.partial === true,
+      units,
+    }
+  } catch {
+    return undefined
   }
 }

@@ -11,7 +11,8 @@ DSH 生态里的智能体群聊。你当老板，牛马大总管负责听懂你�
 - **左栏**：任务记录。会话标题取用户的第一句提问（由宿主首句标题服务生成），每行还带
   最新一条消息预览，所以一眼能看出这次派的是什么任务。可搜索、可切换。
 - **中栏**：群聊。你的话右对齐，牛马大总管和每位成员各占一个气泡，头像与名字颜色区分身份。
-  顶部一条协同链路：`提需求 → 听懂 → 分派 → 执行 → 汇总`。
+  顶部一条协同链路：`提需求 → 听懂 → 分派 → 执行 → 汇总`。输入框上方是附件条：拖文件、点回形针、
+  粘截图、粘链接都行，选完就上传，发出去之后附件跟着你的那条消息走。
 - **右栏**：成员档案。给每位成员改外号、换头像、挑配色；下面是状态计数与最近的失败记录。
 - 窄屏下右栏收成抽屉、左栏收成侧边栏，主要流程仍然可用。
 
@@ -109,11 +110,17 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | `maxResultChars` | 8000 | 单个子任务结果写回页面的字符数上限 |
 | `maxSubtasks` | 6 | 一次计划允许的子任务数 |
 | `maxAvatarBytes` | 262144 | 成员头像大小上限 |
+| `maxAttachmentBytes` | 16777216 | 单个附件大小上限（16 MiB）。URL 抓取也按它卡 |
+| `maxAttachmentsPerMessage` | 5 | 一条消息最多带几个附件；也是"待发附件"最多攒几个——攒了发不出去没有意义 |
+| `attachmentParseChars` | 120000 | 一次解析最多收多少字符（落库的那一份） |
+| `attachmentBriefChars` | 20000 | 附件正文进提示词与派单简报的字符上限（按文件数平分，是硬预算） |
+| `visionModel` | 空 | 读图用哪条模型路由，写成 `provider/model`；留空表示在官方模型目录里自动挑第一个支持图片的 |
+| `attachmentFetchTimeoutMs` | 15000 | 抓取 URL 的超时 |
 | `maxRequestBodyBytes` | 65536 | 请求体上限 |
 | `maxActiveConversations` | 32 | 同时保留的会话数 |
 | `maxHistoryPageSize` | 30 | 历史每页条数上限 |
 | `maxConversationEvents` | 2000 | 每个会话最多保留的事件条数，供断线续传与第二个入口回放 |
-| `idempotencyTtlMs` | 600000 | 写请求的幂等记录保留多久；记录只在内存里 |
+| `idempotencyTtlMs` | 600000 | 写请求的幂等记录保留多久；记录与任务同库落盘（`butler_requests` 表），重启后仍能识别同一次提交 |
 
 ## 接口
 
@@ -124,7 +131,7 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | GET | `/butler/health`、`/butler/ready` | 存活与就绪探针，公开 |
 | GET | `/butler/identity` | 当前登录身份，以及 `routePrefix` 与 `contractVersion`（供第二客户端发现入口） |
 | GET | `/butler` | 群聊页面 |
-| POST | `/butler/chat` | 分派任务，SSE 事件流 |
+| POST | `/butler/chat` | 分派任务，SSE 事件流；正文可带 `attachmentIds`（这一轮带的附件） |
 | GET | `/butler/events` | **只读**订阅一个会话最近一轮的事件，可多入口同时观察 |
 | GET | `/butler/transcript` | 按当前登录身份读对话正文（用户原话与管家答复），分页可续 |
 | POST | `/butler/reply` | 回应正在等你的成员，SSE 事件流 |
@@ -135,18 +142,25 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | POST/DELETE | `/butler/members/avatar` | 上传或删除成员头像 |
 | GET | `/butler/members/avatar?agentId=` | 读取成员头像；按当前登录用户鉴权，不能靠猜 id 读到别人的 |
 | GET | `/butler/members/avatar` | 读取成员头像，按登录用户鉴权 |
+| POST | `/butler/attachments?name=` | 上传附件（裸文件字节）；当场解析，解析失败也返回 200 并带上原因 |
+| POST | `/butler/attachments/url` | 从一个 http(s) 链接取回附件（服务端抓取，有地址校验与各种上限） |
+| GET | `/butler/attachments?id=` | 下载附件原文件；按登录用户鉴权 |
+| DELETE | `/butler/attachments?id=` | 移除附件（标记删除，行保留） |
+| GET | `/butler/attachments/list` | 这个会话下**还没发出去**的附件，供页面刷新后重建附件条 |
 | GET | `/butler/overview` | 状态计数与最近失败 |
 | GET | `/butler/conversations` | 任务记录 |
 | GET | `/butler/history` | 运行历史分页 |
 | GET | `/butler/task` | 单次任务的完整记录 |
 | GET | `/butler/models` | 宿主模型目录 |
 
-`/butler/chat` 与 `/butler/reply` 的 SSE 事件类型：`conversation`、`user`、`chat`、`chat_delta`、
+`/butler/chat` 与 `/butler/reply` 的 SSE 事件类型：`user`、`chat`、`chat_delta`、`chat_reset`、
 `chat_thinking`、`plan`、`subtask`、`subtask_delta`、`subtask_thinking`、`summary`、`error`，
-以 `[DONE]` 结束。`/butler/events` 还会先给一条 `run`（这一轮的头部）；游标接不上时给 `reset`。
+以 `[DONE]` 结束。`input` 只在 `/butler/supplement` 路径上发。`conversation` 不是业务事件，是
+`/butler/chat` 的前导帧；`/butler/events` 还会先给一条 `run`（这一轮的头部）；游标接不上时给 `reset`。
 
-牛马大总管自己的发言也是边收边上的：`chat_delta` 开一条气泡并逐段追加，回合结束时到达的
-`chat` 用它落定后的正文**替换**预览，所以被重试掉的那一版不会留在页面上。
+牛马大总管自己的发言也是边收边上的：`chat_delta` 开一条气泡并逐段追加；模型重试时先发一条
+`chat_reset` 作废当前预览，回合结束时到达的 `chat` 用它落定后的正文**替换**预览，所以被重试掉的
+那一版不会留在页面上。
 
 它自己的思考同样边收边上，走 `chat_thinking`：这是一条**覆盖语义**的整段快照（不是增量），
 只发完整行，末行还在生成时带「正在生成…」占位，回合结束时补发一次完整快照。页面把它挂在
@@ -323,6 +337,42 @@ POST /butler/supplement
 进程异常退出时，上次遗留的执行中任务会在下次启动收敛为失败，不会永远转圈。
 `external_pending` 不会被这次收敛改写：那是等外面的事，收敛它没有依据。
 
+## 附件
+
+老板可以直接把文件拖进输入框、点回形针选文件、粘贴截图，也可以粘一个 http(s) 链接让服务端去取。
+文件立刻上传并解析出文字，管家据此理解需求、拆解任务，成员在派单简报里直接读到这份文字。
+
+**字节不进程**：按内容寻址存在宿主的附件服务里（`ctx.attachments`），`butler_attachments` 只存引用
+与解析结果。`original` 那个引用从不外泄给页面。
+
+**图片分两条路走**，二选一，不重复：
+
+| 当前对话模型 | 图片怎么处理 |
+| --- | --- |
+| 支持图片（多模态） | 作为消息的一部分**直接发给模型**，不做任何解析——读一遍等于让模型看二手转述 |
+| 不支持图片 | 上传时只存不读；到确实需要文字那一刻（理解这一轮、派活给成员）才读一次，读完落库复用 |
+
+判断"支持不支持"用的是宿主给的模态声明（`ctx.llm.resolveModelInfo().inputModalities`），
+**没声明的一律按不支持处理**——宁可多走一次读图，也不要把图片塞给一个会当场拒它的模型。
+读图走 `visionModel` 配的那条路由，没配就在官方模型目录里自动挑第一个支持图片的；挑不到就如实
+告诉用户"这个部署读不了图"，而不是把图片当成没有内容。
+
+**要装的两个依赖**（`dependencies`，部署时由 pnpm 装）：`pdfjs-dist`（PDF 文本层）、
+`mammoth` + `yauzl`（DOCX）。解析工具在 `@dsh-agents-group/document-parse` 里，纯文本那条路
+零依赖；缺哪个依赖只会让那一种格式报 `unavailable`，插件照常装载。
+
+**URL 抓取是自己的实现**（`src/fetch-url.ts`），因为宿主的 `ctx.web.fetch` 拿不到二进制——
+它的返回体是闭合联合，只有 `html` 和 `text`。防护口径：只接 http(s)、域名解析出的**每一个**地址
+都必须是公网地址并**钉住**这批地址去连（不给 DNS 重绑定的机会）、只跟同源跳转且跳数有上限、
+响应不接压缩、字节与时间都有上限。网页（`text/html`）就地剥成纯文本再存。
+
+**上限**都从服务端下发（`/identity` 与页面配置），页面不写死：写死一个比服务端大的数会白跑一次
+上传再被 413 拒掉。
+
+**已知不做**：xlsx 不解析（表格转文字是有损的，做不好不如不做）；不做 OCR（`DSH_OFFLINE` 下
+不能下模型，扫描件 PDF 报 `no_text`，提示先 OCR）。删掉的附件只标记删除——宿主附件服务没有删除
+接口，字节留在磁盘上等将来的保留策略回收。
+
 ## 数据放在哪里
 
 工作台业务数据放在 **PostgreSQL**（会话归属、任务计划、子任务状态、材料引用、成员别名与头像），
@@ -330,14 +380,21 @@ POST /butler/supplement
 （业务与 `/butler/ready` 返回 503）」的口径工作，不会回退别的存储后端。牛马大总管与用户的对话正文
 仍然存放在 DSH 官方会话日志里，本插件不复制一份，也不改写宿主日志。
 
-目标结构由 `migrations/postgres/0001_init.sql` 一次建出（六张业务表 + `schema_version` 版本表，
-版本 **9**，与源 SQLite schema 9 对应），不走旧库 v1..v8 的逐版迁移链。插件启动只校验版本、
-不自动建表：缺表或版本不符要先执行迁移 SQL 或用下面的迁移工具处理。
+目标结构由 `private-deploy/db/0001_init.sql` 一次建出（单库 `dsh`，表名带 `butler_` 前缀、
+版本行按插件分，`dsh_*` 框架表另归 `runtime`）。管家在 `dsh_schema_versions` 里的版本行是
+**`('butler', 1)`**，运行时期望 8 张表：`dsh_schema_versions`、`dsh_conversations`、
+`butler_tasks`、`butler_subtasks`、`butler_agent_aliases`、`butler_requests`、`butler_task_inputs`、
+`butler_attachments`。
+插件启动只校验版本、不自动建表：缺表或版本不符要先建库再启动。
 
-> ⚠️ 这份 `0001_init.sql` 是**过渡态**：本次重构的目标结构是单库 `dsh` 的 15 张表
-> （`private-deploy/db/0001_init.sql`，表名带 `butler_` 前缀、版本行按插件分、`dsh_*` 三张
-> 框架表另归 `runtime`）。管家切到新库的 `butler_*` 表之后，本文件与两个迁移工具一起退役。
-> 两套 DDL 的版本号语义不同（这里 9 = 管家单库的第 9 版；那里全为 1 = 新库首版），别混。
+> 已建过库的站点补表用增量脚本，不要重跑建库脚本：
+> `private-deploy/db/0003_butler_attachments.sql`（幂等，重复执行零改动；没有占位符，不需要
+> `-v applied_at=…`）。没跑的站点会在启动时以 `storage_schema_missing` 响亮失败，而不是半可用。
+
+> 插件自带的 `migrations/postgres/0001_init.sql`（旧形状：单行 `id = 0`、版本 10）按 D-6
+> **保留一期**，只用于部署回退路径"指回旧 DSN"；**运行时代码不再读那张表**，指到旧形状库会得到
+> "版本不符"的明确失败，而不是静默降级。两套 DDL 的版本号语义不同（旧的是单库第 10 版，新的
+> 全为 1），别混。
 
 ## 业务存储配置与迁移
 
@@ -354,8 +411,9 @@ POST /butler/supplement
 
 ### 初始化 SQL 的执行方式
 
-对空库执行一次 `migrations/postgres/0001_init.sql`（`psql -f` 或迁移工具自动完成），版本行
-随建表一起写入。之后插件启动只做校验；将来结构变化会以新的编号 SQL 提供，版本不符时拒绝读写。
+对空库执行一次 `private-deploy/db/0001_init.sql`（`psql -f` 或部署脚本完成），版本行随建表一起
+写入。之后插件启动只做校验；将来结构变化会以新的编号 SQL 提供，版本不符时拒绝读写。**不要**用
+插件自带的 `migrations/postgres/0001_init.sql` 建新库——那是旧形状，管家启动时会因版本不符而失败。
 
 ### 存量迁移（SQLite → PostgreSQL）
 

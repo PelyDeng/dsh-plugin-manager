@@ -988,9 +988,57 @@ textarea:focus-visible,
 .doodle-btn:hover { color: var(--bt-ink-soft); background: #00000008; }
 .doodle-btn svg { width: 19px; height: 19px; }
 
-/* 回形针：纯装饰（现在没有上传功能），降低存在感避免被当成按钮。 */
-.composer__clip { flex: none; display: grid; place-items: center; width: 24px; height: 30px; color: var(--bt-ink-faint); opacity: 0.55; }
-.composer__clip svg { width: 17px; height: 17px; }
+/* ── 待发附件条 ───────────────────────────────────────────────────────── */
+
+/* 与输入框同宽同中心：它是输入框的一部分，不是另一块面板。 */
+.attach { max-width: 960px; margin: 0 auto 6px; display: flex; flex-direction: column; gap: 5px; }
+.attach__items { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.attach__item {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%;
+  padding: 3px 4px 3px 10px;
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-ink-soft);
+  border-radius: 999px;
+  font-size: 12px; line-height: 1.5;
+}
+/* 名字可以长，但一行只让它占这么多：再长就省略，别把整条挤到换行。 */
+.attach__name { font-weight: 600; color: var(--bt-ink); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach__size, .attach__note { color: var(--bt-ink-faint); font-size: 11.5px; }
+.attach__item[data-phase="uploading"] { opacity: 0.75; }
+/* 读不出内容的那一条用红框标出来：它还能交出去，只是管家看不到里面写了什么，用户得知道。 */
+.attach__item[data-phase="failed"] { border-color: var(--bt-error); }
+.attach__item[data-phase="failed"] .attach__note { color: var(--bt-error); }
+
+.attach__remove {
+  flex: none; width: 18px; height: 18px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 50%; background: transparent;
+  color: var(--bt-ink-faint); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.attach__remove:hover { background: #00000012; color: var(--bt-ink); }
+
+/* 已经随消息发出去的那一行：虚线、去掉移除按钮，读起来像"附件清单"而不是"待办"。 */
+.attach--sent { margin: 6px 0 0; }
+.attach--sent .attach__item { background: transparent; border-style: dashed; }
+.attach--sent .attach__remove { display: none; }
+
+.attach__url { display: flex; align-items: center; gap: 6px; }
+.attach__url input {
+  flex: 1; min-width: 0;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  color: var(--bt-ink);
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-ink-soft);
+  border-radius: 999px;
+  outline: none;
+}
+.attach__url input:focus { border-color: var(--bt-ink); }
+
+/* 拖拽悬停：整块输入区亮一下，让人知道"松手就放这儿"。 */
+.composer--drop .composer__box { border-image: none; border-color: var(--bt-coral); background: #fff7f4; }
 
 .send {
   flex: none; width: 40px; height: 40px;

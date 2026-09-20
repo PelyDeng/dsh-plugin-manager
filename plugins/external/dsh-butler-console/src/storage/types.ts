@@ -299,6 +299,65 @@ export interface HistoryQuery {
 }
 
 /**
+ * 附件状态。
+ *
+ * `uploading` → `parsing` → `ready` 是正常路径；`failed` 与 `removed` **都留行**：
+ * 失败要能说清"这个文件没成、为什么"，用户删掉的要能证明它确实被删过，而不是凭空消失。
+ */
+export type ButlerAttachmentStatus = 'uploading' | 'parsing' | 'ready' | 'failed' | 'removed'
+
+/** 解析出来的一个单元（`页` / `段` / `行` / `图`）。 */
+export interface ButlerAttachmentUnit {
+  readonly number: number
+  readonly text: string
+}
+
+/**
+ * 附件的解析结果。
+ *
+ * 形状与 `@dsh-agents-group/document-parse` 的 `ParsedDocument` 一致，**原样落库**：存下来有两个
+ * 用处——同一份文件不必每轮重解析；页面能直接显示"解析了多少页/段"。
+ */
+export interface ButlerAttachmentParsed {
+  readonly kind: string
+  readonly unit: string
+  readonly totalUnits: number
+  readonly characters: number
+  readonly partial: boolean
+  readonly units: readonly ButlerAttachmentUnit[]
+}
+
+/**
+ * 一条附件记录。
+ *
+ * 字节本体**不在这里**：它按内容寻址存在宿主的附件服务里，这里只有 {@link original} 那个引用。
+ * 表结构见 `private-deploy/db/0001_init.sql` 的 `butler_attachments`。
+ */
+export interface ButlerAttachmentRecord {
+  readonly id: string
+  /** 上传时所在的会话；还没开新会话时是空串（先传文件、再写需求是正常路径）。 */
+  readonly conversationId: string
+  /** 派出去时绑定的任务；还没派出去时是空串。 */
+  readonly taskId: string
+  readonly name: string
+  /** 解析种类（`text` / `pdf` / `docx` / `image` / `binary` …）。 */
+  readonly kind: string
+  /** HTTP 媒体类型；只用于回放下载与展示，类型判定不看它。 */
+  readonly mediaType: string
+  readonly bytes: number
+  readonly status: ButlerAttachmentStatus
+  /** 给用户看的一句话（失败原因、解析范围提示等）。 */
+  readonly message: string
+  /** 由 URL 抓取而来时的原地址；本地上传为空串。 */
+  readonly sourceUrl: string
+  /** 宿主附件服务写回的引用（不透明结构，只原样交回读接口）；还没存好时是 undefined。 */
+  readonly original: unknown
+  readonly parsed: ButlerAttachmentParsed | undefined
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+/**
  * 牛马大总管工作台的异步业务存储。
  *
  * 所有查询都按 owner 过滤：会话和任务属于登录用户，不因为知道 id 就能读到。所有权校验、
@@ -385,6 +444,45 @@ export interface ButlerStorage {
 
   /** 删除一位成员的头像，保留别名。 */
   clearAvatar(actor: Actor, agentId: string): Promise<void>
+
+  /** 新建一条附件记录。此时字节还没存好，状态是 `uploading`。 */
+  attachmentInsert(actor: Actor, record: ButlerAttachmentRecord): Promise<void>
+
+  /**
+   * 整条改写一条附件记录的可变列，返回受影响行数。
+   *
+   * 做成"整条写"而不是"按字段打补丁"：调用方本来就持有整条记录，而 `original` / `parsed`
+   * 是 JSONB，用 `COALESCE` 式的补丁写法分不出"没打算改"和"要写成 null"——那正是这一列
+   * 最需要分清的地方。
+   */
+  attachmentWrite(actor: Actor, record: ButlerAttachmentRecord): Promise<number>
+
+  /** 读一条附件；不存在或不属于该用户时返回 undefined。 */
+  attachment(actor: Actor, id: string): Promise<ButlerAttachmentRecord | undefined>
+
+  /**
+   * 某个会话下**还没绑到任务**的附件（也就是输入框上方那一条"待发"），按创建时间倒序。
+   *
+   * 绑上去的已经发出去了，不再算待发：混进来的话，用户刷新页面会看到一个自己明明已经发出去的
+   * 文件还挂在输入框上，于是又发一遍。
+   */
+  attachments(actor: Actor, conversationId: string): Promise<ButlerAttachmentRecord[]>
+
+  /**
+   * 把若干附件绑到一个任务上（写 `task_id` 与会话），返回真正被改写的行数。
+   *
+   * ⚠️ **已删除的附件不绑**：把一条 `removed` 的行绑上去，派单简报里就会出现一个用户以为
+   * 已经删掉的文件。调用方据返回的行数核对"是不是都绑上了"。
+   */
+  attachmentBind(actor: Actor, ids: readonly string[], taskId: string, conversationId: string): Promise<number>
+
+  /**
+   * 某个任务收到的附件（派单时读）。
+   *
+   * 只有 `taskId` 没有 actor，与 `inputs(taskId)` 同一口径：`butler_tasks.id` 是主键，
+   * 一个 task 只对应一个 owner，任务归属在派单之前已经核验过。
+   */
+  taskAttachments(taskId: string): Promise<ButlerAttachmentRecord[]>
 
   /** 为用户登记一个牛马大总管会话；重复登记不改变已有归属。 */
   reserveConversation(id: string, actor: Actor): Promise<void>

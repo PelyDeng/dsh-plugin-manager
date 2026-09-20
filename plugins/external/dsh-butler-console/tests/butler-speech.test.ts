@@ -35,11 +35,29 @@ function fixture() {
   const console_ = new ButlerConsole(context(), config, access, store, '')
   const agent = { session: { id: conversationId }, followup: vi.fn(), whenIdle: vi.fn(async () => {}) }
   const conversation = { id: conversationId, handle: { agent } }
-  const runTurn = (console_ as unknown as {
-    runTurn(value: unknown, text: string, signal: AbortSignal, onDelta?: (text: string) => void, onReset?: () => void,
-      context?: unknown, onThinking?: (thinking: string) => void):
-    Promise<{ outcome: { kind: string }; text: string }>
-  }).runTurn.bind(console_)
+  // `runTurn` 的可选挂接已经从位置参数改成对象（多了一件"随消息发出去的图片"）。这里保留
+  // 位置参数的写法只是为了不改下面十几处调用点，转发时现拼一个 hooks 对象。
+  const runTurn = (
+    value: unknown,
+    text: string,
+    signal: AbortSignal,
+    onDelta?: (text: string) => void,
+    onReset?: () => void,
+    context?: unknown,
+    onThinking?: (thinking: string) => void,
+  ) => (console_ as unknown as {
+    runTurn(value: unknown, text: string, signal: AbortSignal, hooks: {
+      onDelta?: (text: string) => void
+      onReset?: () => void
+      context?: unknown
+      onThinking?: (thinking: string) => void
+    }): Promise<{ outcome: { kind: string }; text: string }>
+  }).runTurn(value, text, signal, {
+    ...(onDelta === undefined ? {} : { onDelta }),
+    ...(onReset === undefined ? {} : { onReset }),
+    ...(context === undefined ? {} : { context }),
+    ...(onThinking === undefined ? {} : { onThinking }),
+  })
   return { console_, conversation, agent, runTurn }
 }
 

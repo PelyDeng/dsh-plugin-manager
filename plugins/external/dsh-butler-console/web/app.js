@@ -10,7 +10,10 @@
  * 所有用户可见文本都用 textContent 写入，不使用 innerHTML，避免把模型输出当成标记解析。
  */
 
-import { ApiError, api, avatarUrl, act, chat, events, eventsHead, reply, uploadAvatar, ROUTE_PREFIX, TRANSCRIPT_PAGE_SIZE } from './api.js'
+import {
+  ApiError, api, attachFromUrl, avatarUrl, act, chat, events, eventsHead, reply, uploadAttachment, uploadAvatar,
+  MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE, ROUTE_PREFIX, TRANSCRIPT_PAGE_SIZE,
+} from './api.js'
 import { renderMarkdownInto } from './markdown.js'
 
 /** 成员配色：按 agentId 稳定取色，所以同一个插件每次都是同一个颜色。 */
@@ -125,6 +128,15 @@ const el = {
   input: document.getElementById('message-input'),
   send: document.getElementById('send-button'),
   at: document.getElementById('at-button'),
+  /** 回形针（选文件）、链接（把远处的文件取回来）与它们共用的附件条。 */
+  attachButton: document.getElementById('attach-button'),
+  attachLinkButton: document.getElementById('attach-link-button'),
+  attachInput: document.getElementById('attach-input'),
+  attachStrip: document.getElementById('attach-strip'),
+  attachItems: document.getElementById('attach-items'),
+  attachUrl: document.getElementById('attach-url'),
+  attachUrlInput: document.getElementById('attach-url-input'),
+  attachUrlCancel: document.getElementById('attach-url-cancel'),
   stop: document.getElementById('stop-button'),
   hint: document.getElementById('composer-hint'),
   count: document.getElementById('composer-count'),
@@ -170,6 +182,18 @@ const state = {
   viewToken: 0,
   /** 发送时预渲染、等服务端回放确认的那条用户消息；失败时用它恢复草稿。 */
   pendingUser: null,
+  /**
+   * 待发附件（输入框上方那一条）。
+   *
+   * 每项的形态：`{ key, name, size, phase, message, item }`。
+   * - `key` 是页面自己的身份（上传中还没有服务端 id）；
+   * - `phase` 是 `uploading` / `ready` / `failed`；
+   * - `item` 是服务端回来的那条记录（含 id），上传中为 `null`。
+   *
+   * 只活在内存里会有一个后果：刷新页面后附件条没了，但文件其实还在服务端等着——所以打开会话
+   * 时用 `/attachments/list` 重建一次。
+   */
+  attachments: [],
   /** 本轮事件消费进度：seq 用于断线重订的游标，taskId 用于 reset 后取快照。 */
   lastSeq: 0,
   lastRunTaskId: '',
@@ -2187,6 +2211,287 @@ async function resumeLiveTurn() {
   }
 }
 
+/* ── 待发附件 ──────────────────────────────────────────────────────────── */
+/**
+ * 附件的三个来源最后都落到同一个地方：**一份服务端记录**。
+ *
+ * - 选文件 / 拖进来 / 粘贴文件 → `uploadAttachment`（裸字节 POST）；
+ * - 粘链接 → `attachFromUrl`（服务端去抓，页面不管地址合不合法、能跳几跳、多大）。
+ *
+ * 页面自己不解析文件、不判断类型：那些规则只有一处实现才不会两边不一致。页面只负责把
+ * "上传中 / 就绪 / 读不出来"画出来，以及把用户的选择如实送出去。
+ */
+
+/** 页面的附件身份。上传中还没有服务端 id，所以不能拿 id 当键。 */
+function attachmentKey() {
+  return `att-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/** 字节数的人话说法；与服务端 `sizeText` 同一口径。 */
+function fileSizeText(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return ''
+  if (bytes < 1024) return `${bytes} 字节`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+/** 一条附件的状态行文字。空串表示"没什么要说的"。 */
+function attachmentNote(entry) {
+  if (entry.phase === 'uploading') return entry.message === '' ? '上传中…' : entry.message
+  if (entry.phase === 'failed') return entry.message === '' ? '没成' : entry.message
+  return entry.message
+}
+
+function attachmentChip(entry) {
+  const chip = make('span', 'attach__item')
+  chip.dataset.phase = entry.phase
+  chip.appendChild(make('span', 'attach__name', entry.name))
+  const size = fileSizeText(entry.size)
+  if (size !== '') chip.appendChild(make('span', 'attach__size', size))
+  const note = attachmentNote(entry)
+  if (note !== '') chip.appendChild(make('span', 'attach__note', note))
+  const remove = make('button', 'attach__remove', '×')
+  remove.type = 'button'
+  remove.title = '移除'
+  remove.setAttribute('aria-label', `移除 ${entry.name}`)
+  remove.addEventListener('click', () => { void dropAttachment(entry.key) })
+  chip.appendChild(remove)
+  return chip
+}
+
+/** 附件条为空时整块收起来，不白占输入框上方的地方。 */
+function syncAttachStrip() {
+  el.attachStrip.hidden = state.attachments.length === 0 && el.attachUrl.hidden
+}
+
+function renderAttachments() {
+  clear(el.attachItems)
+  for (const entry of state.attachments) el.attachItems.appendChild(attachmentChip(entry))
+  syncAttachStrip()
+}
+
+/** 把已经发出去的那几条画在用户消息下面：发完就从输入框挪到消息里，不留一份重复的。 */
+function attachmentChipsRow(entries) {
+  const row = make('div', 'attach attach--sent')
+  const items = make('div', 'attach__items')
+  for (const entry of entries) items.appendChild(attachmentChip({ ...entry, phase: 'ready' }))
+  row.appendChild(items)
+  return row
+}
+
+/** 收下服务端回来的那条记录；期间附件被移除时结果直接丢弃。 */
+function settleAttachment(key, item) {
+  const current = state.attachments.find(value => value.key === key)
+  if (current === undefined) return
+  current.item = item
+  current.name = item.name
+  current.size = item.bytes
+  current.message = item.message ?? ''
+  // 服务端说读不出内容（`failed`）时页面照实标出来：它还是能交出去的，只是管家看不到里面写了什么。
+  current.phase = item.status === 'ready' ? 'ready' : 'failed'
+  renderAttachments()
+}
+
+function failAttachment(key, message) {
+  const current = state.attachments.find(value => value.key === key)
+  if (current === undefined) return
+  current.phase = 'failed'
+  current.message = message
+  renderAttachments()
+}
+
+/** 还能再收几个。上限是服务端配置，页面只跟着它走。 */
+function attachmentRoom() {
+  return MAX_ATTACHMENTS_PER_MESSAGE - state.attachments.length
+}
+
+/**
+ * 收下一批文件。
+ *
+ * **一次只传一个**（按选择顺序）：并发上传时服务端那边的"待发附件"计数会被几个请求同时读到
+ * 同一个旧值，多出来的会被 413 拒掉，而页面上的失败顺序还跟选择顺序对不上。
+ */
+async function addFiles(files) {
+  const list = [...files]
+  if (list.length === 0) return
+  const room = attachmentRoom()
+  if (room <= 0) {
+    reportFailure(new Error(`一次最多带 ${MAX_ATTACHMENTS_PER_MESSAGE} 个附件`), '没加上')
+    return
+  }
+  for (const file of list.slice(0, room)) {
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      state.attachments.push({
+        key: attachmentKey(), name: file.name, size: file.size, phase: 'failed',
+        message: `超过 ${fileSizeText(MAX_ATTACHMENT_BYTES)}`, item: null,
+      })
+      renderAttachments()
+      continue
+    }
+    const entry = { key: attachmentKey(), name: file.name, size: file.size, phase: 'uploading', message: '', item: null }
+    state.attachments.push(entry)
+    renderAttachments()
+    try {
+      settleAttachment(entry.key, await uploadAttachment(file, state.conversationId ?? ''))
+    } catch (error) {
+      failAttachment(entry.key, error instanceof Error && error.message ? error.message : '上传失败')
+    }
+  }
+  if (list.length > room) {
+    reportFailure(new Error(`一次最多带 ${MAX_ATTACHMENTS_PER_MESSAGE} 个附件，多出来的没有加`), '没全加上')
+  }
+}
+
+/** 从一个链接取回附件。地址的合法性由服务端判断，页面只做"看起来是不是个 http 地址"的预检。 */
+async function addUrl(raw) {
+  const url = raw.trim()
+  if (url === '') return
+  if (!/^https?:\/\/\S+$/iu.test(url)) {
+    reportFailure(new Error('只支持 http 或 https 链接'), '没取回来')
+    return
+  }
+  if (attachmentRoom() <= 0) {
+    reportFailure(new Error(`一次最多带 ${MAX_ATTACHMENTS_PER_MESSAGE} 个附件`), '没取回来')
+    return
+  }
+  const entry = { key: attachmentKey(), name: url, size: 0, phase: 'uploading', message: '取回中…', item: null }
+  state.attachments.push(entry)
+  renderAttachments()
+  try {
+    settleAttachment(entry.key, await attachFromUrl(url, state.conversationId ?? ''))
+  } catch (error) {
+    failAttachment(entry.key, error instanceof Error && error.message ? error.message : '取回失败')
+  }
+}
+
+/** 移除一条。有服务端记录的顺手通知服务端删掉；删不掉也不假装成功，下次刷新它还会出现。 */
+async function dropAttachment(key) {
+  const index = state.attachments.findIndex(value => value.key === key)
+  if (index < 0) return
+  const [entry] = state.attachments.splice(index, 1)
+  renderAttachments()
+  if (entry.item === null) return
+  try {
+    await api.removeAttachment(entry.item.id)
+  } catch { /* 服务端没删掉：那是服务端的事实，下次打开会话它会回来。 */ }
+}
+
+/** 这一轮要带上的附件 id：只带服务端已经收下、而且读得出内容的那几条。 */
+function attachmentsForSend() {
+  return state.attachments
+    .filter(entry => entry.item !== null && entry.item.status === 'ready')
+    .map(entry => entry.item.id)
+}
+
+/** 发送时把已经交出去的那几条从输入框上摘掉（它们随即画到用户消息下面）。 */
+function takeSentAttachments(ids) {
+  const sent = new Set(ids)
+  const taken = state.attachments.filter(entry => entry.item !== null && sent.has(entry.item.id))
+  state.attachments = state.attachments.filter(entry => !(entry.item !== null && sent.has(entry.item.id)))
+  renderAttachments()
+  return taken
+}
+
+function clearAttachments() {
+  state.attachments = []
+  renderAttachments()
+}
+
+function hideAttachUrl() {
+  el.attachUrl.hidden = true
+  el.attachUrlInput.value = ''
+  syncAttachStrip()
+}
+
+/**
+ * 从服务端重建附件条。
+ *
+ * 附件是服务端的事实，不是页面的内存：刷新、换个入口、另一台设备打开同一个会话，看到的都该是
+ * 同一份"还没发出去的文件"。
+ */
+async function loadAttachments() {
+  const conversationId = state.conversationId
+  clearAttachments()
+  if (conversationId === null) return
+  try {
+    const { items } = await api.attachments(conversationId)
+    // 期间切了会话：这份结果作废，不许写进新视图。
+    if (state.conversationId !== conversationId) return
+    state.attachments = (items ?? []).map(item => ({
+      key: attachmentKey(),
+      name: item.name,
+      size: item.bytes,
+      phase: item.status === 'ready' ? 'ready' : 'failed',
+      message: item.message ?? '',
+      item,
+    }))
+    renderAttachments()
+  } catch { /* 读不到就当没有待发附件：不因为这一条失败挡住整个页面。 */ }
+}
+
+/**
+ * 附件入口：回形针、链接、拖拽、粘贴。
+ *
+ * 拖拽区挂在**整块输入区**（`el.composer`）上，不是只挂那个按钮：用户拖文件时瞄的是"输入框
+ * 那一片"，而按钮只有二十几像素宽，要求精确落在它上面等于让功能时灵时不灵。
+ */
+function bindAttachments() {
+  el.attachButton.addEventListener('click', () => { el.attachInput.click() })
+  el.attachInput.addEventListener('change', () => {
+    const files = [...(el.attachInput.files ?? [])]
+    // 清空 value：同一个文件选第二次也要能触发 change，否则第二次什么都不发生。
+    el.attachInput.value = ''
+    void addFiles(files)
+  })
+
+  el.attachLinkButton.addEventListener('click', () => {
+    el.attachUrl.hidden = false
+    syncAttachStrip()
+    el.attachUrlInput.focus()
+  })
+  el.attachUrlCancel.addEventListener('click', () => { hideAttachUrl() })
+  el.attachUrlInput.addEventListener('keydown', event => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      hideAttachUrl()
+      return
+    }
+    if (event.key !== 'Enter' || event.isComposing) return
+    // 回车是"取回这个链接"，不是"发送"：这里只是在填一个链接，不该把还没写完的消息发出去。
+    event.preventDefault()
+    const url = el.attachUrlInput.value
+    hideAttachUrl()
+    void addUrl(url)
+  })
+
+  el.composer.addEventListener('dragover', event => {
+    if (event.dataTransfer?.types?.includes('Files') !== true) return
+    event.preventDefault()
+    el.composer.classList.add('composer--drop')
+  })
+  el.composer.addEventListener('dragleave', event => {
+    // 在子元素之间移动也会触发 dragleave：只有真的离开整块区域时才撤掉反馈。
+    const next = event.relatedTarget
+    if (next !== null && next instanceof Node && el.composer.contains(next)) return
+    el.composer.classList.remove('composer--drop')
+  })
+  el.composer.addEventListener('drop', event => {
+    const files = [...(event.dataTransfer?.files ?? [])]
+    if (files.length === 0) return
+    event.preventDefault()
+    el.composer.classList.remove('composer--drop')
+    void addFiles(files)
+  })
+
+  // 粘贴：截图与复制过来的文件走同一条路。纯文字粘贴不拦——用户很可能就是在贴一段话。
+  el.composer.addEventListener('paste', event => {
+    const files = [...(event.clipboardData?.files ?? [])]
+    if (files.length === 0) return
+    event.preventDefault()
+    void addFiles(files)
+  })
+}
+
 async function sendMessage(text, reuseRequestId) {
   const trimmed = text.trim()
   if (trimmed === '' || state.streaming) return
@@ -2215,15 +2520,26 @@ async function sendMessage(text, reuseRequestId) {
   // 提交幂等身份（S07）：同一次提交的重试复用，新的提交换新 ID——服务端按它认出
   // 「同一句话」，重试不会把活再派一遍。
   const requestId = reuseRequestId ?? newConversationId()
+  // 这一轮带的附件。**空数组也照发**：老客户端不带这个字段，服务端按"没有附件"处理，
+  // 与加这个功能之前逐字一致。
+  const attachmentIds = attachmentsForSend()
   el.input.value = ''
   autosize()
   // 提交内容先就地呈现，配一行「正在发送」：受理与否是服务端事实，客户端不编（方案 S03）。
   const bubble = userMessage(trimmed, Date.now())
+  // 附件随用户消息一起出现：它们和这句话是同一件事，分开放会让人以为文件还没交出去。
+  const sentEntries = attachmentIds.length === 0 ? [] : takeSentAttachments(attachmentIds)
+  if (sentEntries.length > 0) {
+    const column = bubble.querySelector('.msg__col')
+    const meta = column?.querySelector('.msg__meta')
+    if (column !== null && meta !== null) column.insertBefore(attachmentChipsRow(sentEntries), meta)
+    hideAttachUrl()
+  }
   const note = append(make('p', 'msg__meta', '正在发送…'))
   state.pendingUser = { text: trimmed, bubble }
   let sawTerminal = false
   try {
-    for await (const event of chat({ conversationId: state.conversationId, message: trimmed, requestId, signal: state.abort.signal })) {
+    for await (const event of chat({ conversationId: state.conversationId, message: trimmed, requestId, attachmentIds, signal: state.abort.signal })) {
       if (event.type === 'summary') sawTerminal = true
       consumeTurnEvent(event, note)
     }
@@ -2237,9 +2553,13 @@ async function sendMessage(text, reuseRequestId) {
     if (note.isConnected) note.remove()
     if (state.pendingUser !== null) {
       // 还没受理就失败了：草稿回到输入框（用户后来打过字就不覆盖），并给出重试入口；
-      // 重试复用同一个 requestId，不会把活再派一遍。
+      // 重试复用同一个 requestId，不会把活再派一遍。附件也一并退回输入框上方——它们确实还没交出去。
       state.pendingUser = null
       if (el.input.value.trim() === '') { el.input.value = trimmed; autosize() }
+      if (sentEntries.length > 0) {
+        state.attachments = [...sentEntries, ...state.attachments]
+        renderAttachments()
+      }
       retryEntry(trimmed, error instanceof Error && error.message ? error.message : '没送出去', bubble, requestId)
     } else {
       // 已受理后连接断掉：这一轮还在服务端跑，重订事件流跟到终态，不自动重发。
@@ -3237,6 +3557,11 @@ async function openConversation(id) {
   const token = ++state.viewToken
   state.conversationId = id
   rememberConversation(id)
+  // 附件跟着会话走：先立刻清空（别让上一个会话的待发文件挂在新会话上），再去服务端把这一轮的
+  // 待发附件取回来。取的过程是异步的，所以上面那句"立刻清空"不能省。
+  hideAttachUrl()
+  clearAttachments()
+  void loadAttachments()
   clear(el.thread)
   threadInner()
   state.bubbles.clear()
@@ -3590,6 +3915,9 @@ function openNewChat() {
   state.viewToken += 1
   state.conversationId = null
   state.taskId = null
+  // 新会话没有待发附件：上一个会话攒下的那些跟着上一个会话走。
+  hideAttachUrl()
+  clearAttachments()
   historyState.conversationId = null
   historyState.transcriptBefore = null
   historyState.taskOffset = null
@@ -3606,6 +3934,7 @@ function openNewChat() {
 
 function bind() {
   bindMention()
+  bindAttachments()
   el.composer.addEventListener('submit', event => {
     event.preventDefault()
     // 送出去的正文里 @ 词已随发送定稿，点名簿不再悬着。

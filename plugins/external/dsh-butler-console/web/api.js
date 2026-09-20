@@ -24,6 +24,18 @@ export const HISTORY_PAGE_SIZE = config.historyPageSize ?? 30
  */
 export const TRANSCRIPT_PAGE_SIZE = 50
 
+/**
+ * 单个附件的大小上限。
+ *
+ * 服务端会在 `/identity` 与页面配置里下发真实值，这里只作为**拿不到时的兜底**。写死一个比
+ * 服务端大的数会白跑一次上传、再被 413 拒掉；写小了会让本来能传的文件传不上去。
+ * （头像那条路把 262144 写死在 `uploadAvatar` 里，是同一类问题的既有例子，这里不重犯。）
+ */
+export const MAX_ATTACHMENT_BYTES = config.maxAttachmentBytes ?? 16 * 1024 * 1024
+
+/** 一条消息最多带几个附件。 */
+export const MAX_ATTACHMENTS_PER_MESSAGE = config.maxAttachmentsPerMessage ?? 5
+
 /** 一次接口调用失败。带上状态码，页面据此区分未登录和真正的服务错误。 */
 export class ApiError extends Error {
   constructor(status, message) {
@@ -81,11 +93,67 @@ export const api = {
     request('/members/alias', { method: 'POST', body: JSON.stringify({ agentId, displayName, accent }) }),
   clearAvatar: agentId =>
     request(`/members/avatar?agentId=${encodeURIComponent(agentId)}`, { method: 'DELETE' }),
+  /** 待发附件（还没绑到任务的那些）。刷新页面后靠它把附件条重建出来。 */
+  attachments: (conversationId = '') =>
+    request(`/attachments/list?conversationId=${encodeURIComponent(conversationId)}`),
+  removeAttachment: id =>
+    request(`/attachments?id=${encodeURIComponent(id)}`, { method: 'DELETE' }),
 }
 
 /** 头像地址；带上更新时间戳避免换图后浏览器继续用旧缓存。 */
 export function avatarUrl(agentId, stamp) {
   return `${ROUTE_PREFIX}/members/avatar?agentId=${encodeURIComponent(agentId)}&v=${stamp ?? 0}`
+}
+
+/**
+ * 上传一个附件。
+ *
+ * 与头像同一条路子：直接把文件字节发过去，**不是 multipart、不 base64**，类型由服务端按字节
+ * 判定（不信这里的 content-type）。文件名走 query——正文只能有一个，而名字是元信息。
+ *
+ * 返回服务端的附件记录：`status` 是 `ready` 或 `failed`。**解析失败也返回 200**：一次选三个
+ * 文件，坏一个不该让另外两个也传不上去，所以每个文件自己带状态回来，页面按状态画。
+ */
+export async function uploadAttachment(file, conversationId = '') {
+  const params = new URLSearchParams({ name: file.name })
+  if (conversationId !== '') params.set('conversationId', conversationId)
+  const response = await fetch(`${ROUTE_PREFIX}/attachments?${params.toString()}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': file.type || 'application/octet-stream', accept: 'application/json' },
+    body: file,
+  })
+  if (!response.ok) throw await apiFailure(response, '上传失败')
+  const payload = await response.json()
+  return payload.item
+}
+
+/**
+ * 从一个链接取回附件（服务端抓取）。
+ *
+ * 与上传的区别只在"字节从哪来"：地址的合法性、能不能跟跳转、多大、多长都由服务端把关，
+ * 页面不做判断——那些规则只有一处实现才不会两边不一致。
+ */
+export async function attachFromUrl(url, conversationId = '') {
+  const response = await fetch(`${ROUTE_PREFIX}/attachments/url`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ url, ...(conversationId === '' ? {} : { conversationId }) }),
+  })
+  if (!response.ok) throw await apiFailure(response, '取回失败')
+  const payload = await response.json()
+  return payload.item
+}
+
+/** 非 2xx 响应 → `ApiError`：优先用服务端那句给人看的话。 */
+async function apiFailure(response, fallback) {
+  let message = `${fallback}（HTTP ${response.status}）`
+  try {
+    const payload = await response.json()
+    if (typeof payload?.error === 'string' && payload.error !== '') message = payload.error
+  } catch { /* 非 JSON 错误体时保留上面的通用提示。 */ }
+  return new ApiError(response.status, message)
 }
 
 /**
@@ -119,9 +187,15 @@ export async function uploadAvatar(agentId, file) {
  * 服务端会在连接断开时中止这一轮。
  * `requestId` 是提交幂等身份（S07）：同一次提交的每次重试复用同一个 ID，
  * 服务端据此认出「同一句话」而不是再派一遍活。
+ * `attachmentIds` 是这一轮带的附件（按上传时拿到的 id）；不带就是没有附件。
  */
-export async function* chat({ conversationId, message, requestId, signal }) {
-  yield* postStream('/chat', { conversationId, message, ...(requestId === undefined ? {} : { requestId }) }, signal)
+export async function* chat({ conversationId, message, requestId, attachmentIds, signal }) {
+  yield* postStream('/chat', {
+    conversationId,
+    message,
+    ...(requestId === undefined ? {} : { requestId }),
+    ...(attachmentIds === undefined || attachmentIds.length === 0 ? {} : { attachmentIds }),
+  }, signal)
 }
 
 /**

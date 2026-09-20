@@ -16,8 +16,10 @@ import { dirname } from 'node:path'
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { AccessError, type Actor, type AgentArtifact } from '@dsh-plugin-manager/plugin-kit'
 import { isTerminal, subtaskTransitionSources, type SubtaskState, type TaskState } from '../../src/task-model.ts'
-import { parseArtifacts, parseDependsOn, parseDependsOnStrict, parseInputRefs, parseMemberReturn } from '../../src/storage/parse.ts'
+import { parseArtifacts, parseAttachmentParsed, parseDependsOn, parseDependsOnStrict, parseInputRefs, parseMemberReturn } from '../../src/storage/parse.ts'
 import type {
+  ButlerAttachmentRecord,
+  ButlerAttachmentStatus,
   ButlerInputRef,
   ButlerMemberReturn,
   ButlerStorage,
@@ -84,6 +86,61 @@ export function advanceSubtask(
   const steps = route[state]
   for (const [index, step] of steps.entries()) {
     store.setSubtaskState(taskId, subtaskId, step, index === steps.length - 1 ? patch : undefined)
+  }
+}
+
+/** 附件行的公共列清单：与 PostgreSQL 实现的 `ATTACHMENT_SELECT` 同名同序。 */
+const ATTACHMENT_COLUMNS = `id, conversation_id AS conversationId, task_id AS taskId, name, kind,
+  media_type AS mediaType, bytes, status, message, source_url AS sourceUrl,
+  original, parsed, created_at AS createdAt, updated_at AS updatedAt`
+
+interface AttachmentRow {
+  readonly id: string
+  readonly conversationId: string
+  readonly taskId: string
+  readonly name: string
+  readonly kind: string
+  readonly mediaType: string
+  readonly bytes: number
+  readonly status: string
+  readonly message: string
+  readonly sourceUrl: string
+  readonly original: string | null
+  readonly parsed: string | null
+  readonly createdAt: number
+  readonly updatedAt: number
+}
+
+function attachmentValues(actor: Actor, record: ButlerAttachmentRecord): (string | number | null)[] {
+  return [
+    record.id, actor.namespace, actor.userId, record.conversationId, record.taskId, record.name,
+    record.kind, record.mediaType, record.bytes, record.status, record.message, record.sourceUrl,
+    attachmentJson(record.original), attachmentJson(record.parsed), record.createdAt, record.updatedAt,
+  ]
+}
+
+/** JSON 列的写入取值：`undefined` 写成 SQL NULL，而不是字符串 `'undefined'`。 */
+function attachmentJson(value: unknown): string | null {
+  return value === undefined ? null : JSON.stringify(value)
+}
+
+/** 行 → 记录；与 PostgreSQL 实现逐字同口径，解析仍走同一份 `parseAttachmentParsed`。 */
+function toAttachment(row: AttachmentRow): ButlerAttachmentRecord {
+  return {
+    id: row.id,
+    conversationId: row.conversationId,
+    taskId: row.taskId,
+    name: row.name,
+    kind: row.kind,
+    mediaType: row.mediaType,
+    bytes: row.bytes,
+    status: row.status as ButlerAttachmentStatus,
+    message: row.message,
+    sourceUrl: row.sourceUrl,
+    original: row.original === null ? undefined : JSON.parse(row.original) as unknown,
+    parsed: parseAttachmentParsed(row.parsed),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
   }
 }
 
@@ -198,6 +255,30 @@ export class TaskStore {
         created_at INTEGER NOT NULL,
         PRIMARY KEY (task_id, version)
       );
+      -- 附件索引（字节本体在宿主的附件服务里，替身不模拟那一边）。列与
+      -- private-deploy/db/0001_init.sql 的 butler_attachments 一一对应；两个 JSON 列在这里
+      -- 存 TEXT（SQLite 没有 jsonb），读时按同一套解析函数处理。
+      CREATE TABLE IF NOT EXISTS attachments (
+        id TEXT NOT NULL PRIMARY KEY,
+        owner_namespace TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL DEFAULT '',
+        task_id TEXT NOT NULL DEFAULT '',
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        media_type TEXT NOT NULL DEFAULT '',
+        bytes INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        message TEXT NOT NULL DEFAULT '',
+        source_url TEXT NOT NULL DEFAULT '',
+        original TEXT,
+        parsed TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS attachments_owner
+        ON attachments(owner_namespace, owner_id, conversation_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS attachments_task ON attachments(task_id);
     `)
     // 版本号**最后**才写：迁移中途失败时它不该已经前移，否则下次启动会跳过迁移、
     // 直接去查一个还不存在的列。
@@ -324,6 +405,60 @@ export class TaskStore {
     this.db.prepare(`UPDATE agent_aliases SET avatar=NULL, avatar_type='', updated_at=?
       WHERE owner_namespace=? AND owner_id=? AND agent_id=?`)
       .run(Date.now(), actor.namespace, actor.userId, agentId)
+  }
+
+  attachmentInsert(actor: Actor, record: ButlerAttachmentRecord): void {
+    this.db.prepare(`INSERT INTO attachments(
+        id, owner_namespace, owner_id, conversation_id, task_id, name, kind, media_type,
+        bytes, status, message, source_url, original, parsed, created_at, updated_at)
+      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(...attachmentValues(actor, record))
+  }
+
+  attachmentWrite(actor: Actor, record: ButlerAttachmentRecord): number {
+    const info = this.db.prepare(`UPDATE attachments SET
+        conversation_id=?, task_id=?, name=?, kind=?, media_type=?, bytes=?,
+        status=?, message=?, source_url=?, original=?, parsed=?, updated_at=?
+      WHERE id=? AND owner_namespace=? AND owner_id=?`).run(
+      record.conversationId, record.taskId, record.name, record.kind, record.mediaType, record.bytes,
+      record.status, record.message, record.sourceUrl,
+      attachmentJson(record.original), attachmentJson(record.parsed), record.updatedAt,
+      record.id, actor.namespace, actor.userId,
+    )
+    return Number(info.changes)
+  }
+
+  attachment(actor: Actor, id: string): ButlerAttachmentRecord | undefined {
+    const row = this.db.prepare(`SELECT ${ATTACHMENT_COLUMNS} FROM attachments
+      WHERE id=? AND owner_namespace=? AND owner_id=?`)
+      .get(id, actor.namespace, actor.userId) as unknown as AttachmentRow | undefined
+    return row === undefined ? undefined : toAttachment(row)
+  }
+
+  attachments(actor: Actor, conversationId: string): ButlerAttachmentRecord[] {
+    // 只取还没绑到任务的（与 PostgreSQL 实现同一口径）。
+    const rows = this.db.prepare(`SELECT ${ATTACHMENT_COLUMNS} FROM attachments
+      WHERE owner_namespace=? AND owner_id=? AND conversation_id=? AND task_id='' AND status <> 'removed'
+      ORDER BY created_at DESC, id`).all(actor.namespace, actor.userId, conversationId) as unknown as AttachmentRow[]
+    return rows.map(toAttachment)
+  }
+
+  attachmentBind(actor: Actor, ids: readonly string[], taskId: string, conversationId: string): number {
+    if (ids.length === 0) return 0
+    // 已删除的不绑（与 PostgreSQL 实现同一口径）：绑上去之后派单简报里会出现一个用户以为
+    // 已经删掉的文件。
+    const statement = this.db.prepare(`UPDATE attachments SET task_id=?, conversation_id=?, updated_at=?
+      WHERE owner_namespace=? AND owner_id=? AND id=? AND status <> 'removed'`)
+    let changed = 0
+    for (const id of ids) {
+      changed += Number(statement.run(taskId, conversationId, Date.now(), actor.namespace, actor.userId, id).changes)
+    }
+    return changed
+  }
+
+  taskAttachments(taskId: string): ButlerAttachmentRecord[] {
+    const rows = this.db.prepare(`SELECT ${ATTACHMENT_COLUMNS} FROM attachments
+      WHERE task_id=? AND status <> 'removed' ORDER BY created_at, id`).all(taskId) as unknown as AttachmentRow[]
+    return rows.map(toAttachment)
   }
 
   /** 为用户登记一个牛马大总管会话；重复登记不改变已有归属。 */
@@ -1002,6 +1137,32 @@ export class SqliteButlerStorage implements ButlerStorage {
 
   async clearAvatar(actor: Actor, agentId: string): Promise<void> {
     this.store.clearAvatar(actor, agentId)
+  }
+
+  // 附件：全部转给 `TaskStore` 的同名方法。替身只管索引，字节本体在宿主附件服务里，
+  // 测试里由假的 provider 承担（见 tests/helpers 的附件夹具）。
+  async attachmentInsert(actor: Actor, record: ButlerAttachmentRecord): Promise<void> {
+    this.store.attachmentInsert(actor, record)
+  }
+
+  async attachmentWrite(actor: Actor, record: ButlerAttachmentRecord): Promise<number> {
+    return this.store.attachmentWrite(actor, record)
+  }
+
+  async attachment(actor: Actor, id: string): Promise<ButlerAttachmentRecord | undefined> {
+    return this.store.attachment(actor, id)
+  }
+
+  async attachments(actor: Actor, conversationId: string): Promise<ButlerAttachmentRecord[]> {
+    return this.store.attachments(actor, conversationId)
+  }
+
+  async attachmentBind(actor: Actor, ids: readonly string[], taskId: string, conversationId: string): Promise<number> {
+    return this.store.attachmentBind(actor, ids, taskId, conversationId)
+  }
+
+  async taskAttachments(taskId: string): Promise<ButlerAttachmentRecord[]> {
+    return this.store.taskAttachments(taskId)
   }
 
   async reserveConversation(id: string, actor: Actor): Promise<void> {

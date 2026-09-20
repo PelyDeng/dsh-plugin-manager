@@ -74,6 +74,8 @@ function consoleFor(executor: ButlerAgentExecutor) {
         inputRefs: undefined, inputRefsState: 'unfixed', ...lastSubtask,
       }],
     })),
+    // 派单前要读这一轮老板带的附件；本文件不涉及附件，按「没有附件」算。
+    taskAttachments: vi.fn(() => []),
   } as unknown as ButlerStorage
   const access = { mode: 'authenticated', ready() {}, resolve: () => undefined, assert() {} } as unknown as Access
   const config = { subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000 } as Config
