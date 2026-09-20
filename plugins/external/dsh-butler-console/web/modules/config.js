@@ -92,3 +92,9 @@ export const MOTTO_KEY = 'butler.motto'
 export const DEFAULT_MOTTO = '没关系，牛再来！换个姿势再来！'
 /** 上次用过的会话。刷新后要拿它去问「这一轮还在跑吗」。 */
 export const CONVERSATION_KEY = 'butler.conversationId'
+
+/**
+ * 流式正文逐帧重渲的字符上限（设计 v2 §4.3）：模型正文没有服务端上限（maxMessageChars
+ * 只约束用户输入），超长输出放弃逐帧 Markdown 重渲、降级为纯文本追加，终态照常排版。
+ */
+export const STREAM_RICH_LIMIT = 12000

@@ -24,13 +24,15 @@ import { fileURLToPath } from 'node:url'
  * readFileSync 完全一致，509 基线必须原样绿。
  */
 const MODULES: readonly string[] = [
-  // 批 1a（底层，打样）：原 app.js 行号序
+  // 批 1a（底层，打样）
   'modules/config.js',    // 常量（原 25-128 行区间）
   'modules/state.js',     // el/state/historyState + 会话记忆（原 130-249、2173-2187）
   'modules/dom.js',       // make/滚动/帧/stabilize（原 39-42、251-502）
-  // 批 1b（环簇一：events+send+cards 同一次提交）
-  // 批 1c（环簇二：panels+history 同一次提交）
-  // 批 1d（独立域）
+  // 批 1b（展示域四件）
+  'modules/rail.js',      // 链路条 + doodleSvg（原 36-43、1228-1287）
+  'modules/speech.js',    // 大总管气泡 + 但勒思考挂载（原 50-180、1136-1178）
+  'modules/member.js',    // 成员气泡/思考/材料 + settle 三件套（原 151-159、854-987、1033-1226）
+  'modules/dcard.js',     // 调度卡 + 描边脉冲（原 182-708、1024-1031）
 ]
 
 /** 入口 + 全部已拆模块的拼接全文（源码断言型测试的默认读取口）。 */
