@@ -257,7 +257,14 @@ textarea:focus-visible,
 
 .column { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .column--left, .column--center { gap: 10px; }
-.column--right { overflow-y: auto; gap: 10px; }
+.column--right { overflow: hidden; gap: 10px; }
+/* 0.12.2 右栏自适应：面板弹性伸缩，成员档案与失败记录各自在内容区里滚，整栏不出滚动条。 */
+.column--right > section { display: flex; flex-direction: column; min-height: 0; }
+.column--right > section:first-child { flex: 1 1 0; overflow: hidden; }
+.column--right > section:nth-child(3) { flex: 1 1 0; overflow: hidden; }
+.column--right > section .panel { flex: 1; min-height: 0; }
+#member-list { overflow-y: auto; min-height: 0; flex: 1; }
+#failure-list { overflow-y: auto; min-height: 0; flex: 1; }
 
 .section-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
 /* 荧光笔标记：小节标题下半截一道粉红，原型里「认真圈过重点」的样子。 */
@@ -270,13 +277,17 @@ textarea:focus-visible,
 /* ── 左栏 ─────────────────────────────────────────────────────────────── */
 
 .left__top { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 9px; }
+/* 0.12.2 搜索与新建同行：左 2/3 搜索、右 1/3 新建。 */
+.left__actions { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; align-items: stretch; }
+.left__actions .btn--chunky { padding: 6px 6px; font-size: 14.5px; letter-spacing: 1px; border-width: 2px; white-space: nowrap; }
+.left__actions .doodle-input { padding-top: 7px; padding-bottom: 7px; }
 
 /* 品牌块：星形磁铁 + 手写大标题 + 蓝色波浪线，原型左上角的招牌。 */
 .brand { position: relative; padding: 4px 2px 0; }
 .brand__badge { position: absolute; top: -16px; right: 6px; width: 38px; height: 37px; transform: rotate(14deg); filter: drop-shadow(1px 2px 0 #00000022); }
 /* 描摹版大标题：字形逐笔取自原型 C（位图墨迹 → 矢量描摹），显示尺寸按原型实测字形高度（65px@1536 → ~64px@1600）。 */
 .brand__title { margin: 0; line-height: 0; }
-.brand__title img { display: block; height: 80px; width: auto; }
+.brand__title img { display: block; height: 53px; width: auto; transform: rotate(-3.5deg); transform-origin: 20% 90%; }
 .brand__wave { display: block; width: 158px; height: 8px; margin-top: 2px; color: #4d96ff; }
 .left__brandline { font-family: var(--bt-hand); font-size: 14px; color: var(--bt-ink-soft); margin-top: 2px; }
 
@@ -1108,6 +1119,14 @@ textarea:focus-visible,
 .section-title--metrics { --bt-doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.5 14 h11.5 M4.5 13.5 V8 M8 13.5 V5 M11.5 13.5 V2.5' stroke='%232f2b26' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E"); }
 .section-title--failures { --bt-doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6.4' fill='none' stroke='%232f2b26' stroke-width='1.5'/%3E%3Cpath d='M5.2 6.3 c.9-1 1.9-1 2.8 0 M8.9 6.3 c.9-1 1.9-1 2.8 0 M5.4 11 c1.6-1.6 3.6-1.6 5.2 0' fill='none' stroke='%232f2b26' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E"); }
 
+/* 0.12.2 成员档案两列紧凑卡：合理运用右栏宽度，名字超长省略、悬浮看全称。 */
+#member-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 6px; align-content: start; }
+#member-list .member { flex-direction: column; align-items: stretch; gap: 3px; padding: 6px 8px 7px; }
+#member-list .member__name { font-size: 13.5px; }
+#member-list .member__declared { font-size: 11px; -webkit-line-clamp: 1; line-height: 1.35; }
+#member-list .member::after { width: 22px; height: 9px; top: -5px; right: 9px; }
+#member-list .empty { grid-column: 1 / -1; }
+
 /* 紧凑成员行：设置页接管了编辑，这里只留「是谁 + 在不在」。 */
 .member {
   position: relative;
@@ -1132,6 +1151,7 @@ textarea:focus-visible,
 .member:nth-of-type(3)::after { background: linear-gradient(100deg, #c3e3c7, #d9efdc 55%, #b8dcbd); transform: rotate(5deg); }
 
 .member + .member { margin-top: 4px; }
+#member-list .member + .member { margin-top: 0; }
 .member__col { flex: 1; min-width: 0; }
 .member .spacer { flex: 1; }
 .member__avatar { position: relative; }
@@ -1402,6 +1422,12 @@ body[data-settings="open"] .settings {
   .desk .column--right { transform: none; }
 
   body[data-drawer="open"] .column--right { transform: none; }
+  /* 抽屉形态恢复整栏滚动；成员卡回单列（窄抽屉放不下两列）。 */
+  .column--right { overflow-y: auto; }
+  .column--right > section, .column--right > section:first-child, .column--right > section:nth-child(3) { flex: none; }
+  .column--right > section .panel { flex: none; }
+  #member-list { grid-template-columns: 1fr; max-height: none; overflow: visible; flex: none; }
+  #failure-list { max-height: none; overflow: visible; flex: none; }
   .drawer-toggle { display: inline-flex; }
 
   .drawer-backdrop { position: fixed; inset: 0; z-index: 30; background: #3d363033; }

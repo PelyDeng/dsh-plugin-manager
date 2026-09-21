@@ -33,16 +33,18 @@
             <path d="M17 2.6 C 18 6.2, 19 8.4, 21.4 9.6 C 24.2 10.8, 27.4 10.6, 30.8 10 C 28.6 12.8, 27.2 15, 26.8 17.4 C 26.4 19.8, 27.2 22.4, 28.8 25.4 C 25.6 24.4, 23 24.2, 20.6 25.2 C 18.2 26.2, 16.4 28.2, 14.6 30.4 C 14.2 27, 13.4 24.6, 11.6 22.8 C 9.8 21, 7.2 20, 3.6 19.6 C 6.6 17.6, 8.6 15.6, 9.6 13.2 C 10.6 10.8, 10.4 8, 9.4 4.8 C 12.4 6.4, 14.8 6.8, 17 2.6 Z" fill="#ffb703" stroke="#4a423a" stroke-width="1.7" stroke-linejoin="round"/>
           </svg>
           <h2 class="brand__title" aria-label="牛马台账">
-            <img src="/butler/assets/media/titles/title-left.png" alt="" height="72">
+            <img src="/butler/assets/media/titles/title-left.png" alt="" height="52">
           </h2>
           <svg class="brand__wave" viewBox="0 0 150 8" preserveAspectRatio="none" aria-hidden="true">
             <path d="M2 5 C 15 1, 28 8, 42 4 S 70 1, 84 5 S 112 8, 126 4 S 142 2, 148 5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
           </svg>
           <div class="left__brandline" id="crew-line">—</div>
         </div>
-        <button type="button" class="btn btn--primary btn--chunky" id="new-chat">＋ 新建任务</button>
-        <label class="visually-hidden" for="chat-search">搜索任务记录</label>
-        <input type="search" id="chat-search" class="doodle-input" placeholder="搜索任务记录" autocomplete="off">
+        <div class="left__actions">
+          <label class="visually-hidden" for="chat-search">搜索任务记录</label>
+          <input type="search" id="chat-search" class="doodle-input" placeholder="搜索任务记录" autocomplete="off">
+          <button type="button" class="btn btn--primary btn--chunky" id="new-chat">＋ 新建</button>
+        </div>
         <h2 class="section-title">任务记录</h2>
       </div>
       <div class="left__list" id="chat-list"></div>
@@ -136,7 +138,6 @@
       <section>
         <div class="panel">
           <h2 class="section-title section-title--members">成员档案</h2>
-          <p class="panel__note">外号、头像、配色在右上角的<span class="red-wavy">设置里改</span>。</p>
           <div id="member-list"></div>
         </div>
       </section>

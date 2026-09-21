@@ -26,7 +26,7 @@ export function renderMembers() {
     col.appendChild(make('div', 'member__name', member.displayName))
     col.appendChild(make('div', 'member__declared', member.declaredName))
     row.appendChild(col)
-    row.title = `${member.displayName}（@${member.agentId}）`
+    row.title = `${member.displayName}（@${member.agentId}）：${member.declaredName}`
     el.memberList.appendChild(row)
   }
 }
