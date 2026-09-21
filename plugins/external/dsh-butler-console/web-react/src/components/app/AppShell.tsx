@@ -9,11 +9,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api.ts'
 import { recallConversation } from '../../lib/turn-event.ts'
-import { openConversation, resumeLiveTurn } from '../../hooks/use-turn.ts'
+import { openConversation, openNewChat, refreshChatList, refreshPanelsData, resumeLiveTurn } from '../../hooks/use-turn.ts'
 import { useSessionStore } from '../../stores/session.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { Thread } from '../chat/Thread.tsx'
 import { Avatar } from '../chat/entries.tsx'
+import { ChatList, ChatManageToggle, ChatSearch, FailureList, ManageBar, Motto } from '../panels/left-right.tsx'
 
 const DRAWER_QUERY = '(max-width: 1200px)'
 const SIDEBAR_QUERY = '(max-width: 880px)'
@@ -29,9 +30,8 @@ function formatTime(value: number): string {
 export function AppShell() {
   const identityLabel = useSessionStore(state => state.identityLabel)
   const members = useSessionStore(state => state.members)
-  const conversations = useSessionStore(state => state.conversations)
+  const topStatus = useSessionStore(state => state.topStatus)
   const overview = useSessionStore(state => state.overview)
-  const conversationId = useTurnStore(state => state.conversationId)
   const streaming = useTurnStore(state => state.streaming)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -46,19 +46,16 @@ export function AppShell() {
     let cancelled = false
     const refresh = async () => {
       try {
-        const [memberPage, overviewPage, conversationsPage] = await Promise.all([
-          api.members(),
-          api.overview(),
-          api.conversations(),
-        ])
+        const [memberPage, overviewPage] = await Promise.all([api.members(), api.overview()])
         if (cancelled) return
         const session = useSessionStore.getState()
         session.setMembers(memberPage.items)
         session.setOverview(overviewPage)
-        session.setConversations(conversationsPage.items)
       } catch { /* 右栏读不到保持现状：下一轮轮询再试。 */ }
     }
     void refresh()
+    void refreshPanelsData()
+    void refreshChatList()
     const timer = setInterval(() => { if (!useTurnStore.getState().streaming) void refresh() }, 15000)
     // 不 await：接续要跟到那一轮结束，不能把页面启动卡在这里。
     void resumeLiveTurn()
@@ -135,7 +132,7 @@ export function AppShell() {
         <span className="topbar__dots" aria-hidden="true"><i /><i /><i /></span>
         <h1 className="topbar__brand">牛马台账</h1>
         <p className="topbar__motto">牛马虽苦，但一起干，<br />　　就不孤单了~加油!</p>
-        <span className="topbar__status"><span className="dot dot--online" aria-hidden="true" /><span>{streaming ? '正在处理' : '已上线'}</span></span>
+        <span className="topbar__status"><span className="dot dot--online" aria-hidden="true" /><span>{topStatus !== '' ? topStatus : streaming ? '正在处理' : '已上线'}</span></span>
         <span className="spacer" />
         <p className="topbar__slogan">把重复的事，<span className="red-wavy">交给牛马们!</span></p>
         <span className="topbar__smile" aria-hidden="true">☺</span>
@@ -161,39 +158,23 @@ export function AppShell() {
               </svg>
             </div>
             <div className="left__actions">
-              <input type="search" id="chat-search" className="doodle-input" placeholder="搜索任务记录" autoComplete="off" aria-label="搜索任务记录" />
+              <ChatSearch />
               <button
                 type="button"
                 className="btn btn--primary btn--chunky"
-                onClick={() => {
-                  useTurnStore.getState().switchConversation(null)
-                  recallConversation()
-                }}
+                onClick={() => { void openNewChat() }}
               >
                 ＋ 新建
               </button>
             </div>
             <div className="left__records">
               <h2 className="section-title">任务记录</h2>
+              <ChatManageToggle />
             </div>
+            <ManageBar />
           </div>
           <div className="left__list" id="chat-list">
-            {conversations.length === 0
-              ? <p className="empty">还没有任务记录</p>
-              : conversations.map(item => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="chat-row"
-                  aria-current={item.id === conversationId ? 'true' : undefined}
-                  onClick={() => { void openConversation(item.id) }}
-                >
-                  <span>
-                    <span className="chat-row__title">{item.title || '（还没起名）'}</span>
-                  </span>
-                  <span className="chat-row__time">{formatTime(item.updatedAt)}</span>
-                </button>
-              ))}
+            <ChatList />
           </div>
           <div className="crew">
             <h2 className="section-title">我的成员</h2>
@@ -286,19 +267,10 @@ export function AppShell() {
           <section>
             <div className="panel">
               <h2 className="section-title section-title--failures">失败记录</h2>
-              <div className="failure-note">
-                <div>
-                  {(overview?.failures ?? []).map(item => (
-                    <button key={item.id} type="button" className="failure-row">
-                      <span className="failure-row__goal">{formatTime(item.updatedAt)}　{item.goal}</span>
-                      <span className="failure-row__meta">{item.error || '没给原因'}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <div className="failure-note"><div><FailureList /></div></div>
             </div>
           </section>
-          <div className="motto" id="motto">没关系，牛再来！换个姿势再来！</div>
+          <Motto />
         </aside>
       </div>
 
@@ -308,7 +280,7 @@ export function AppShell() {
         hidden={!backdropVisible}
         onClick={() => { if (drawerOpen) closeDrawer(); else if (sidebarOpen) closeSidebar() }}
       />
-      <div className="visually-hidden" role="status" aria-live="polite" />
+      <div className="visually-hidden" id="sr-status" role="status" aria-live="polite" />
     </div>
   )
 }

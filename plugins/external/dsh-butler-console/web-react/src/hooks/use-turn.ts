@@ -6,13 +6,14 @@
  * controller，store.switchConversation 的原子动作负责完整 cleanup，after=lastSeq 保证
  * 重订不重复消费。
  */
-import { api, eventsHead } from '../lib/api.ts'
+import { api, eventsHead, ApiError } from '../lib/api.ts'
 import { followUntilTerminal, productionLinks, type TurnEngineHost } from '../lib/turn-engine.ts'
 import { newConversationId, recallConversation, rememberConversation } from '../lib/turn-event.ts'
 import { mergeHistoryEntries } from '../lib/history-merge.ts'
 import type { HistoryEntry } from '../lib/history-merge.ts'
 import { useTurnStore, type ThreadEntry } from '../stores/turn.ts'
 import { useSessionStore } from '../stores/session.ts'
+import { announce } from '../lib/announce.ts'
 
 let hostEntrySeq = 0
 
@@ -105,7 +106,10 @@ export function historyEntryToThreadEntry(entry: HistoryEntry): ThreadEntry {
     return { key: `task-${entry.task.id}`, kind: 'task', task: entry.task }
   }
   if (entry.kind === 'butler') {
-    return { key: entry.id, kind: 'butler', text: entry.text, thinking: '', streaming: false, time: Number(entry.time) || undefined }
+    return {
+      key: entry.id, kind: 'butler', text: entry.text, thinking: '', streaming: false,
+      time: Number(entry.time) || undefined, interrupted: entry.interrupted,
+    }
   }
   return { key: entry.id, kind: 'user', text: entry.text, time: Number(entry.time) || undefined }
 }
@@ -196,12 +200,88 @@ export async function finishTurn(): Promise<void> {
   await refreshPanelsData()
 }
 
-/** 右栏数据装配（批 1 基础渲染；交互与轮询细化批 2）。 */
+/** 右栏数据装配（批 2：401 时给「去登录」入口，其余错误置顶栏「读取失败」）。 */
 export async function refreshPanelsData(): Promise<void> {
   try {
-    const { items } = await api.members()
-    useSessionStore.getState().setMembers(items)
-  } catch { /* 成员读不到保持现状：右栏下次轮询会再试。 */ }
+    const [members, overview] = await Promise.all([api.members(), api.overview()])
+    const session = useSessionStore.getState()
+    session.setMembers(members.items)
+    session.setOverview(overview)
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) {
+      const session = useSessionStore.getState()
+      session.setIdentity('')
+      session.setTopStatus('没登录')
+      return
+    }
+    useSessionStore.getState().setTopStatus('读取失败')
+  }
+}
+
+/**
+ * 左栏列表聚合（旧 refreshChatList 语义）：会话标题来自宿主首句标题服务，预览取该会话
+ * 最近一条任务的目标——每行都能看出「这次派的是什么活」。
+ */
+export async function refreshChatList(): Promise<void> {
+  try {
+    const [conversations, history] = await Promise.all([api.conversations(), api.history()])
+    const byConversation = new Map<string, string>()
+    for (const task of history.items) {
+      if (!byConversation.has(task.conversationId)) byConversation.set(task.conversationId, task.goal)
+    }
+    useSessionStore.getState().setChatList(conversations.items.map(item => ({
+      id: item.id,
+      title: item.title,
+      updatedAt: item.updatedAt,
+      preview: byConversation.get(item.id) ?? '',
+    })))
+  } catch (error) {
+    // 把服务端给的原因一并显示：只说「读取记录失败」等于什么都没有。
+    const reason = error instanceof Error ? error.message : ''
+    useSessionStore.getState().setChatList(reason === '' ? [] : [{
+      id: `error-${reason}`, title: `读取记录失败：${reason}`, updatedAt: 0, preview: '',
+    }])
+  }
+}
+
+/**
+ * 批量/单条删除共用（旧 removeConversationsWithFeedback 语义）：调围栏接口、按结果
+ * 播报；当前会话被删时回新会话，别让中栏挂在已删除的对话上。
+ */
+export async function removeConversationsWithFeedback(ids: string[]): Promise<Array<{ id: string; status: string; message?: string }> | null> {
+  let results
+  try {
+    results = (await api.removeConversations(ids)).results
+  } catch (error) {
+    announce(error instanceof ApiError ? error.message : '删除失败，稍后再试')
+    return null
+  }
+  const removed = results.filter(result => result.status === 'removed')
+  const blocked = results.filter(result => result.status === 'blocked')
+  if (removed.length > 0) announce(`已删除 ${removed.length} 条任务记录`)
+  if (blocked.length > 0) announce(blocked.length === 1 ? '有 1 条正在执行，先停止再删' : `有 ${blocked.length} 条正在执行，先停止再删`)
+  if (removed.some(result => result.id === useTurnStore.getState().conversationId)) {
+    useSessionStore.getState().clearPicked()
+    await openNewChat()
+    return results
+  }
+  useSessionStore.getState().clearPicked()
+  await refreshChatList()
+  return results
+}
+
+/** 管理模式的「删除所选」（确认态在按钮上，两段式）。 */
+export async function deletePickedConversations(): Promise<void> {
+  const ids = useSessionStore.getState().chatPicked
+  if (ids.length === 0) return
+  await removeConversationsWithFeedback(ids)
+}
+
+/** 新建会话（旧 openNewChat 语义）：执行中禁止；原子切换到 null 会话并刷新列表。 */
+export async function openNewChat(): Promise<void> {
+  if (useTurnStore.getState().streaming) return
+  useTurnStore.getState().switchConversation(null)
+  await refreshChatList()
 }
 
 export async function loadIdentity(): Promise<void> {

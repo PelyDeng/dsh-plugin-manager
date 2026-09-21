@@ -12,18 +12,39 @@ export interface OverviewData {
   failures: Array<{ id: string; goal: string; updatedAt: number; error: string | null }>
 }
 
+/** 左栏列表行：会话标题 + 预览（该会话最近一条任务的目标，refreshChatList 聚合）。 */
+export interface ChatListItem {
+  id: string
+  title: string
+  updatedAt: number
+  preview: string
+}
+
 export interface SessionState {
   identityLabel: string
   members: MemberItem[]
   /** agentId → 头像版本号，用于破缓存。 */
   avatarStamps: Map<string, number>
-  /** 左栏任务记录列表（批 1 基础渲染；删除/批量/管理模式批 2）。 */
-  conversations: ConversationItem[]
+  /** 左栏任务记录列表（聚合 preview 后的行）。 */
+  chatList: ChatListItem[]
+  /** 搜索关键词（小写；空串不过滤）。 */
+  chatKeyword: string
+  /** 管理模式：开着时行首出复选框、批量操作条可见。 */
+  chatManage: boolean
+  /** 管理模式下勾选的会话 id。 */
+  chatPicked: string[]
   overview: OverviewData | null
+  /** 顶栏状态词（已上线/正在处理/没登录/读取失败）。streaming 优先，错误态覆盖。 */
+  topStatus: string
   setIdentity: (label: string) => void
   setMembers: (members: MemberItem[]) => void
-  setConversations: (items: ConversationItem[]) => void
+  setChatList: (items: ChatListItem[]) => void
+  setChatKeyword: (keyword: string) => void
+  setChatManage: (on: boolean) => void
+  togglePicked: (id: string, picked: boolean) => void
+  clearPicked: () => void
   setOverview: (data: OverviewData | null) => void
+  setTopStatus: (status: string) => void
   stampAvatar: (agentId: string) => void
 }
 
@@ -31,13 +52,26 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   identityLabel: '',
   members: [],
   avatarStamps: new Map(),
-  conversations: [],
+  chatList: [],
+  chatKeyword: '',
+  chatManage: false,
+  chatPicked: [],
   overview: null,
+  topStatus: '',
 
   setIdentity: label => set({ identityLabel: label }),
   setMembers: members => set({ members }),
-  setConversations: conversations => set({ conversations }),
+  setChatList: chatList => set({ chatList }),
+  setChatKeyword: chatKeyword => set({ chatKeyword }),
+  // 退出管理模式时清空选中（旧 setChatManage 语义）。
+  setChatManage: on => set(on ? { chatManage: on } : { chatManage: on, chatPicked: [] }),
+  togglePicked: (id, picked) => {
+    const rest = get().chatPicked.filter(entry => entry !== id)
+    set({ chatPicked: picked ? [...rest, id] : rest })
+  },
+  clearPicked: () => set({ chatPicked: [] }),
   setOverview: overview => set({ overview }),
+  setTopStatus: topStatus => set({ topStatus }),
   stampAvatar: agentId => {
     const next = new Map(get().avatarStamps)
     next.set(agentId, (next.get(agentId) ?? 0) + 1)
