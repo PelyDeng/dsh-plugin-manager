@@ -28,7 +28,7 @@ export function AskCard({ subtaskId, taskId, question, detail }: AskCardProps) {
   const lastTriedRef = useRef<string | null>(null)
 
   const submit = async (text: string, decideByAgent: boolean) => {
-    if (useTurnStore.getState().streaming) return
+    // streaming 占用时由 runReply 内部等待复位（确认卡出现先于回合收尾的窗口）。
     // 空文本不提交（I03）：「你看着办」是显式语义，单独走按钮。
     if (!decideByAgent && text === '') {
       inputRef.current?.focus()

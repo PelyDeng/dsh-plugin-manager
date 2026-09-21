@@ -168,8 +168,13 @@ const confirmBtn = await evaluate(`(() => { const b = document.querySelector('.a
 check('确认按钮存在且可点', confirmBtn !== null, confirmBtn === null ? '' : `label=${confirmBtn.label}`)
 if (confirmBtn === null) { await shot('prod-ad-p2-no-btn'); process.exit(1) }
 await click({ x: confirmBtn.x, y: confirmBtn.y })
-await sleep(2500)
-const afterCount = await evaluate("document.querySelectorAll('.action-deck .action-deck__card').length")
+// 受理→摘卡要等回合收尾（waitForTurnIdle 窗口）+POST 受理，轮询最多 15s
+let afterCount = -1
+for (let i = 0; i < 5; i++) {
+  await sleep(3000)
+  afterCount = await evaluate("document.querySelectorAll('.action-deck .action-deck__card').length")
+  if (afterCount < beforeCount || afterCount === 0) break
+}
 check('点击确认后该项从 deck 消失', afterCount < beforeCount, `before=${beforeCount} after=${afterCount}`)
 await shot('prod-ad-p2-after-confirm')
 
@@ -182,8 +187,12 @@ const cancelLabel = await evaluate(`(() => { const b = [...document.querySelecto
 check('「先不办」按钮存在', cancelLabel !== null)
 if (cancelLabel !== null) {
   await click(cancelLabel)
-  await sleep(2500)
-  check('点击先不办后该项从 deck 消失', await evaluate("document.querySelector('.action-deck') === null") === true)
+  let gone = false
+  for (let i = 0; i < 5; i++) {
+    await sleep(3000)
+    if (await evaluate("document.querySelector('.action-deck') === null") === true) { gone = true; break }
+  }
+  check('点击先不办后该项从 deck 消失', gone)
 }
 await shot('prod-ad-p3-after-cancel')
 
@@ -195,8 +204,12 @@ if (sentP4) {
   const btn = await evaluate(`(() => { const b = document.querySelector('.action-deck .btn--primary'); if (b === null) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`)
   if (btn !== null) {
     await click(btn)
-    await sleep(2500)
-    check('确认删除后 deck 项消失', await evaluate("document.querySelector('.action-deck') === null") === true)
+    let gone = false
+    for (let i = 0; i < 5; i++) {
+      await sleep(3000)
+      if (await evaluate("document.querySelector('.action-deck') === null") === true) { gone = true; break }
+    }
+    check('确认删除后 deck 项消失', gone)
   }
 }
 await shot('prod-ad-p4-after-cleanup')

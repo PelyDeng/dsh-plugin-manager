@@ -493,6 +493,19 @@ export async function stopTurn(): Promise<void> {
   }
 }
 
+/**
+ * 等待当前跟随收尾（streaming 复位）。确认卡出现（subtask 终态）先于回合收尾
+ * （summary + run finished + finishTurn）——用户看到卡立即点击会撞进这个窗口，
+ * 静默丢弃点击等于按钮坏了；等待复位后再发起，超时抛错让卡面提示。
+ */
+async function waitForTurnIdle(timeoutMs = 15000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (useTurnStore.getState().streaming) {
+    if (Date.now() > deadline) throw new Error('上一轮还没收尾，稍等一下再点')
+    await new Promise(resolve => setTimeout(resolve, 200))
+  }
+}
+
 /** 操作卡决策入口（ActionDeck 用）：走 /action，requestId 幂等；跟随到终态。 */
 export async function runActionDecision(input: {
   taskId: string
@@ -501,7 +514,7 @@ export async function runActionDecision(input: {
   decision: 'confirm' | 'cancel'
   requestId?: string | undefined
 }, hooks: { onAccepted?: () => void } = {}): Promise<void> {
-  if (useTurnStore.getState().streaming) return
+  await waitForTurnIdle()
   useTurnStore.setState({ streaming: true, abort: new AbortController(), lastSeq: 0, lastRunId: '', following: true })
   const host = await makeEngineHost()
   try {
@@ -530,7 +543,7 @@ export async function runReply(input: { taskId: string; subtaskId: string; text:
   onAccepted?: () => void
   onRejected?: (error: unknown) => void
 }): Promise<void> {
-  if (useTurnStore.getState().streaming) return
+  await waitForTurnIdle()
   useTurnStore.setState({
     streaming: true,
     abort: new AbortController(),

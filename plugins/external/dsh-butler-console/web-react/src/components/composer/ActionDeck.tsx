@@ -86,7 +86,7 @@ function PendingCard({ item }: { item: PendingItem }) {
     }
   }
   const runReplyThis = async (text: string, decideByAgent: boolean) => {
-    if (useTurnStore.getState().streaming) return
+    // streaming 占用时由 runReply 内部等待复位（确认卡出现先于回合收尾的窗口）。
     setLocked(true)
     setNote('正在送出回话…')
     try {
