@@ -422,7 +422,8 @@ export async function sendMessage(text: string, reuseRequestId?: string): Promis
   }
   let sawTerminal = false
   try {
-    for await (const event of chat({ conversationId: useTurnStore.getState().conversationId ?? '', message: trimmed, requestId, signal: abortSignal })) {
+    // 附件随消息送出（S-attach）：空数组也照发，后端按「没有附件」处理（老客户端兼容形态）。
+    for await (const event of chat({ conversationId: useTurnStore.getState().conversationId ?? '', message: trimmed, requestId, attachmentIds, signal: abortSignal })) {
       if (event.type === 'summary') sawTerminal = true
       useTurnStore.getState().applyTurnEvent(event)
       // 占位 note 的撤除口径与旧 consumeTurnEvent 一致：受理（conversation）推进文案，
