@@ -74,7 +74,12 @@ export async function resumeLiveTurn(): Promise<void> {
     })
     return
   }
-  if (head === null || head.state !== 'running') return
+  if (head === null || head.state !== 'running') {
+    // 没有活轮：刷新不能把用户扔回空白新会话（0.13.6 用户反馈）——恢复上次会话的
+    // 历史视图，确认卡/状态框随 openConversation 的任务详情一并回来。
+    await openConversation(conversationId)
+    return
+  }
   if (tokenAtProbe !== useTurnStore.getState().viewToken || useTurnStore.getState().streaming) return
 
   const controller = new AbortController()
