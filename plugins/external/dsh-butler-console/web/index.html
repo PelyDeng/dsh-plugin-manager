@@ -49,15 +49,15 @@
         </div>
         <div class="left__records">
           <h2 class="section-title">任务记录</h2>
+        </div>
+        <!-- 0.12.6：复选框常驻；⋯ 操作按钮在全选框行的右端，菜单挂在操作条上。 -->
+        <div class="chat-manage-bar" id="chat-manage-bar">
+          <input type="checkbox" id="chat-manage-all" class="chat-manage-bar__all" aria-label="全选本页">
+          <span class="chat-manage-bar__count" id="chat-manage-count">已选 0 条</span>
           <span class="chat-records-actions">
             <button type="button" class="chat-manage-menu-btn" id="records-menu" aria-haspopup="true" aria-expanded="false" title="操作">⋯</button>
             <span class="chat-manage-menu" id="records-menu-pop" hidden role="menu"></span>
           </span>
-        </div>
-        <!-- 0.12.5：复选框常驻（无管理模式），全选+计数与 ⋯ 操作同级常在。 -->
-        <div class="chat-manage-bar" id="chat-manage-bar">
-          <input type="checkbox" id="chat-manage-all" class="chat-manage-bar__all" aria-label="全选本页">
-          <span class="chat-manage-bar__count" id="chat-manage-count">已选 0 条</span>
         </div>
       </div>
       <div class="left__list" id="chat-list"></div>

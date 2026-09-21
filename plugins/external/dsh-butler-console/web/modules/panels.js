@@ -455,9 +455,24 @@ function updateManageBar() {
   el.chatManageAll.indeterminate = checked > 0 && checked < rows.length
 }
 
-/** 菜单开着时勾选变了（删除/重命名的可用态取决于选中数），就地重建菜单项。 */
+/** 菜单开着时勾选变了（删除/重命名的可用态取决于选中数），就地重建菜单项。
+ *  ⚠️ 只在「菜单确实开着」时刷新，且不动 hidden 态——0.12.5 的竞态：真实点击 checkbox 的
+ *  click 先冒泡到 document 级监听关掉菜单，随后 change 的 refreshOpenMenu 又把它重开，
+ *  用户看到「菜单关不上/点 ⋯ 状态乱」。重建项时不改 hidden，关闭权只归 toggle 与外点。 */
 function refreshOpenMenu() {
-  if (!el.recordsMenuPop.hidden) toggleRecordsMenu(true)
+  if (el.recordsMenuPop.hidden) return
+  const items = []
+  const addItem = (text, options = {}) => {
+    const item = make('button', `chat-manage-menu__item${options.danger === true ? ' chat-manage-menu__item--danger' : ''}`, text)
+    item.type = 'button'
+    item.setAttribute('role', 'menuitem')
+    if (options.disabled === true) item.disabled = true
+    item.addEventListener('click', () => { void options.run?.() })
+    items.push(item)
+  }
+  addItem('删除所选', { danger: true, disabled: state.chatPicked.size === 0, run: () => { closeRecordsMenu(); void deletePickedConversations() } })
+  addItem('重命名', { disabled: state.chatPicked.size !== 1, run: () => { closeRecordsMenu(); startRename() } })
+  el.recordsMenuPop.replaceChildren(...items)
 }
 
 /** 全选框切换：同步当前页（或搜索结果）所有行——选中集只在可见行里维护。 */

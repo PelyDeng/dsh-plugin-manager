@@ -384,12 +384,13 @@ textarea:focus-visible,
 
 .center__head {
   display: flex; align-items: center; gap: 10px; padding: 11px 14px;
+  position: relative; z-index: 1; /* 自成层叠上下文，标题装饰不溢出到邻栏 */
   border-bottom: 1.5px solid var(--bt-line);
 }
 .center__head h2 { margin: 0; font-family: var(--bt-hand); font-size: 24px; font-weight: 800; -webkit-text-stroke: 0.7px var(--bt-stroke); text-shadow: 0.5px 0.5px 0 var(--bt-stroke); }
 /* 红笔圈注：罩在「牛马调度群」标题上的手绘椭圆（index.html 内联 SVG）。 */
-.center__title { position: relative; padding: 2px 10px; line-height: 0; }
-.center__title img { display: block; height: 86px; width: auto; }
+.center__title { position: relative; padding: 2px 10px; line-height: 0; overflow: hidden; }
+.center__title img { display: block; height: 86px; width: auto; pointer-events: none; /* 装饰图（红圈+毛笔字）几何溢出到邻栏上空，禁掉命中让点击穿到下面的控件（0.12.6） */ }
 .center__circle {
   position: absolute; inset: -4px -6px; width: calc(100% + 12px); height: calc(100% + 8px);
   pointer-events: none;
@@ -1752,13 +1753,14 @@ body[data-settings="open"] .settings {
 
 /* ── 0.12.4 任务记录管理：全选复选框 + ⋯ 操作菜单 + 分页 ─────────────── */
 
-/* 任务记录标题行（0.12.4 合并版）：标题 + 唯一的 ⋯ 操作入口。 */
-.left__records { display: flex; align-items: center; gap: 8px; }
+/* 任务记录标题行（0.12.6）：仅标题；⋯ 按钮与菜单移至全选操作条右端。 */
+.left__records { display: flex; align-items: center; }
 .left__records .section-title { flex: 1; }
-.chat-records-actions { position: relative; display: inline-flex; }
+
 
 /* 批量操作条：全选复选框 + 计数 + ⋯ 操作按钮（菜单挂在它下面）。 */
 .chat-manage-bar {
+  position: relative; /* 菜单的定位锚 */
   display: flex;
   align-items: center;
   gap: 8px;
