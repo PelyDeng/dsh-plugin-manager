@@ -17,6 +17,7 @@ import { Thread } from '../chat/Thread.tsx'
 import { Avatar } from '../common/Avatar.tsx'
 import { ChatList, ChatPager, ChatSearch, FailureList, ManageBar, Motto } from '../panels/left-right.tsx'
 import { Composer, StopButton } from '../composer/Composer.tsx'
+import { ActionDeck } from '../composer/ActionDeck.tsx'
 
 const DRAWER_QUERY = '(max-width: 1200px)'
 const SIDEBAR_QUERY = '(max-width: 880px)'
@@ -232,6 +233,7 @@ export function AppShell() {
             </button>
           </div>
           <Thread />
+          <ActionDeck />
           <Composer />
         </main>
 

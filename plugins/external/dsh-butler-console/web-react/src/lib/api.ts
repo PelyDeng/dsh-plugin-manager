@@ -113,7 +113,18 @@ export interface TaskSubtask {
   result: string | null
   error: string | null
   artifacts?: unknown[]
-  actions?: unknown[]
+  actions?: ReadonlyArray<{
+    id: string
+    kind?: string
+    title?: string
+    summary?: string
+    detail?: string
+    fields?: ReadonlyArray<{ label?: string; value?: string }>
+    state?: string
+    expiresAt?: number
+    confirmLabel?: string
+    cancelLabel?: string
+  }>
 }
 
 export interface TranscriptItem {

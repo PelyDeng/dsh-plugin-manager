@@ -40,6 +40,22 @@ export interface TurnEvent {
   [key: string]: unknown
 }
 
+/** 操作确认卡协议（plugin-kit AgentAction 呈现数据面；确认产生决策走 /action）。 */
+export interface AgentAction {
+  id: string
+  kind?: string
+  title?: string
+  summary?: string
+  detail?: string
+  fields?: ReadonlyArray<{ label?: string; value?: string }>
+  resultText?: string
+  errorText?: string
+  state?: string
+  expiresAt?: number
+  confirmLabel?: string
+  cancelLabel?: string
+}
+
 /** 提交幂等身份：与旧前端同一格式（state.js newConversationId）。 */
 export function newConversationId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16))

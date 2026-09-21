@@ -12,6 +12,7 @@ import { create } from 'zustand'
 import { rememberConversation } from '../lib/turn-event.ts'
 import type { TurnEvent } from '../lib/turn-event.ts'
 import type { TaskRecord, TaskSummary } from '../lib/api.ts'
+import type { AgentAction } from '../lib/turn-event.ts'
 import { STATE_TEXT, STREAM_RICH_LIMIT } from '../lib/config.ts'
 
 /** 消息流条目：React 渲染的统一数据面（旧 DOM 追加模型的范式转换）。 */
@@ -60,6 +61,8 @@ export interface SubtaskEntry {
   error?: string | null | undefined
   /** waiting_user 的回话入口（ask 卡）：question 是卡面问题，detail 是正文口径。 */
   ask?: { taskId: string; question?: string | undefined; detail?: string | undefined } | undefined
+  /** 待用户确认的操作卡（AgentAction 协议呈现面；prepared 态出确认/取消按钮）。 */
+  actions?: ReadonlyArray<AgentAction> | undefined
 }
 
 export interface NoteEntry {
@@ -290,6 +293,7 @@ export const useTurnStore = create<TurnState>((set, get) => ({
           : (subtask.result || STATE_TEXT[subtask.state] || ''),
         thinking: '', terminal: terminalSub, live: false, toolLine: null,
         artifacts: Array.isArray(subtask.artifacts) ? subtask.artifacts : [],
+        actions: Array.isArray(subtask.actions) ? subtask.actions : undefined,
         startedAt: subtask.startedAt, finishedAt: subtask.finishedAt,
         detail: subtask.result, error: subtask.error,
         // 快照接续的等待是活的：回话入口重新给出（历史回放则提示重新描述目标）。
@@ -566,6 +570,7 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
       key, kind: 'subtask', subtaskId, agentId: event.agentId ?? '', goal: '',
       state: event.state ?? '', body: '', thinking: '', terminal: false, live: true,
       toolLine: null, artifacts: [], startedAt: event.startedAt, detail: null, error: null,
+      actions: Array.isArray(event.actions) ? (event.actions as ReadonlyArray<AgentAction>) : undefined,
     })
   }
 
@@ -606,6 +611,7 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
       toolLine: event.tool !== undefined || event.detail !== undefined
         ? { tool: event.tool, detail: event.detail ?? undefined }
         : entry.toolLine,
+      actions: Array.isArray(event.actions) ? (event.actions as ReadonlyArray<AgentAction>) : entry.actions,
       startedAt: entry.startedAt ?? event.startedAt ?? null,
     }))
     return

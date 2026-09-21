@@ -6,7 +6,8 @@
  * controller，store.switchConversation 的原子动作负责完整 cleanup，after=lastSeq 保证
  * 重订不重复消费。
  */
-import { api, eventsHead, ApiError, chat, reply } from '../lib/api.ts'
+import { api, eventsHead, ApiError, chat, reply, act } from '../lib/api.ts'
+export { act }
 import { followUntilTerminal, productionLinks, type TurnEngineHost } from '../lib/turn-engine.ts'
 import { newConversationId, recallConversation, rememberConversation } from '../lib/turn-event.ts'
 import { mergeHistoryEntries, planHistoryInsertion } from '../lib/history-merge.ts'
@@ -489,6 +490,32 @@ export async function stopTurn(): Promise<void> {
     useSessionStore.getState().setTopStatus('停止请求失败')
     useTurnStore.getState().appendEntry({ key: `error-stop-${Date.now()}`, kind: 'error', text: '停止请求没送到，可以再试一次；取消不能回滚已经发生的操作。' })
     announce('停止请求没送到，可以再试一次')
+  }
+}
+
+/** 操作卡决策入口（ActionDeck 用）：走 /action，requestId 幂等；跟随到终态。 */
+export async function runActionDecision(input: {
+  taskId: string
+  subtaskId: string
+  actionId: string
+  decision: 'confirm' | 'cancel'
+  requestId?: string | undefined
+}): Promise<void> {
+  if (useTurnStore.getState().streaming) return
+  useTurnStore.setState({ streaming: true, abort: new AbortController(), lastSeq: 0, lastRunId: '', following: true })
+  const host = await makeEngineHost()
+  try {
+    for await (const event of act({ ...input, requestId: input.requestId ?? newConversationId(), signal: useTurnStore.getState().abort?.signal })) {
+      useTurnStore.getState().applyTurnEvent(event)
+    }
+    const st = useTurnStore.getState()
+    if (st.abort?.signal.aborted !== true && st.conversationId !== null) {
+      await followUntilTerminal(st.conversationId, { from: st.lastSeq, expectedRunId: st.lastRunId, signal: st.abort?.signal }, productionLinks, host)
+    }
+  } catch (error) {
+    reportFailure(error, '操作没送出去')
+  } finally {
+    void finishTurn()
   }
 }
 

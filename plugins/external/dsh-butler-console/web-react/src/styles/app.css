@@ -1977,3 +1977,39 @@ body[data-settings="open"] .settings {
 }
 .follow-chip:hover { background: var(--bt-warn-bg); border-color: var(--bt-stroke); }
 .follow-chip:active { transform: translate(1px, 1px); }
+
+/* ── 待办交互区（ActionDeck，用户反馈 1/2）：固定在输入框上方的醒目确认区。────
+ * 所有智能体的「待用户处理」交互（确认发布/确认删除/回复提问）统一在此呈现，
+ * 不随消息流滚动——消息体再长也一眼可见。手账贴纸风：虚线墨框+暖底+硬阴影。 */
+.action-deck {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 10px 8px;
+  padding: 10px 12px;
+  background: var(--bt-warn-bg);
+  border: 1.5px dashed var(--bt-warn);
+  border-radius: 10px 8px 12px 9px / 9px 12px 8px 10px;
+  box-shadow: 2px 3px 0 #00000014;
+}
+.action-deck__card { display: flex; flex-direction: column; gap: 6px; }
+.action-deck__head { display: flex; align-items: baseline; gap: 8px; }
+.action-deck__agent { font-weight: 600; color: var(--bt-ink); }
+.action-deck__hint { font-size: 12px; color: var(--bt-warn); }
+.action-deck__title { font-family: var(--bt-hand); font-size: 15px; color: var(--bt-ink); }
+.action-deck__question { font-size: 13.5px; }
+.action-deck__row { display: flex; gap: 6px; align-items: center; }
+.action-deck__row input {
+  flex: 1; min-width: 0;
+  padding: 4px 8px;
+  border: 1.5px solid var(--bt-line);
+  border-radius: 7px 6px 8px 5px;
+  background: var(--bt-card);
+  color: var(--bt-ink);
+  font-family: var(--bt-font);
+  font-size: 13px;
+}
+.action-deck__note { margin: 4px 0 0; font-size: 12px; color: var(--bt-ink-soft); }
