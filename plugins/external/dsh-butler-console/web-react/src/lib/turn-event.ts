@@ -28,6 +28,8 @@ export interface TurnEvent {
   finishedAt?: number | null
   phase?: string
   tool?: string
+  /** waiting_user 的卡面问题。 */
+  question?: string
   artifacts?: unknown[]
   actions?: unknown[]
   /** input 事件。 */

@@ -37,7 +37,7 @@ export interface ButlerEntry {
   interrupted?: boolean | undefined
 }
 
-/** 成员子任务气泡（批 1 降级视图；调度卡在批 4b 收编）。 */
+/** 成员子任务气泡（批 3：含等待回话入口；调度卡在批 4b 收编）。 */
 export interface SubtaskEntry {
   key: string
   kind: 'subtask'
@@ -56,6 +56,8 @@ export interface SubtaskEntry {
   finishedAt?: number | string | null | undefined
   detail?: string | null | undefined
   error?: string | null | undefined
+  /** waiting_user 的回话入口（ask 卡）：question 是卡面问题，detail 是正文口径。 */
+  ask?: { taskId: string; question?: string | undefined; detail?: string | undefined } | undefined
 }
 
 export interface NoteEntry {
@@ -68,6 +70,8 @@ export interface ErrorEntry {
   key: string
   kind: 'error'
   text: string
+  /** 发送失败的重试行：携带原文与幂等身份，重试复用同一 requestId（S07）。 */
+  retryFor?: { requestText: string; requestId: string } | undefined
 }
 
 /** 汇总卡：text 已按 S12 去重（与最后一条 butler 正文相同时置空）。 */
@@ -276,6 +280,15 @@ export const useTurnStore = create<TurnState>((set, get) => ({
       }
       case 'user': {
         // 受理回放对得上预渲染的那条就不重复画（对不上：历史回放、其他入口，照常渲染）。
+        // 与旧 events.js 同口径：user 到达即撤「只有思考」的预览并清思考快照。
+        const speechKey = get().butlerSpeechKey
+        if (speechKey !== null) {
+          const speech = get().entries.find(entry => entry.key === speechKey)
+          if (speech?.kind === 'butler' && speech.text === '') {
+            frameBuffer.delete(speechKey)
+            set(st => ({ entries: st.entries.filter(entry => entry.key !== speechKey), butlerSpeechKey: null }))
+          }
+        }
         const pending = get().pendingUser
         if (pending !== null && pending.text === event.text) {
           set({ pendingUser: null })
@@ -317,12 +330,17 @@ export const useTurnStore = create<TurnState>((set, get) => ({
         return
       }
       case 'chat_thinking': {
-        // 思考快照覆盖语义：批 1 存进流式条目随正文展示（窄变体批 3）。
+        // 思考常早于第一段正文（模型先推理后说话）：只推理还没吐字时也开气泡，
+        // 让「在想」可见；这条可能是会被重试掉的尝试（chat_reset 时撤，thinkingOnly 语义）。
+        const thinking = event.thinking ?? ''
+        if (thinking === '') return
         const speechKey = get().butlerSpeechKey
-        if (speechKey !== null) {
-          const thinking = event.thinking ?? ''
-          set(st => ({ entries: st.entries.map(entry => entry.key === speechKey && entry.kind === 'butler' ? { ...entry, thinking } : entry) }))
+        if (speechKey === null) {
+          const key = nextKey('butler')
+          set(st => ({ butlerSpeechKey: key, entries: [...st.entries, { key, kind: 'butler', text: '', thinking, streaming: true, time: undefined }] }))
+          return
         }
+        set(st => ({ entries: st.entries.map(entry => entry.key === speechKey && entry.kind === 'butler' ? { ...entry, thinking } : entry) }))
         return
       }
       case 'chat_reset': {
@@ -338,6 +356,7 @@ export const useTurnStore = create<TurnState>((set, get) => ({
         return
       }
       case 'input': {
+        if (event.taskId !== undefined) set({ taskId: event.taskId })
         get().appendEntry({
           key: nextKey('note'), kind: 'note',
           text: event.source === 'supplement' ? `补充已收到（第 ${String(event.version)} 版）：${event.text ?? ''}` : event.text ?? '',
@@ -477,6 +496,11 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
       error: event.error ?? entry.error,
       finishedAt: event.finishedAt ?? undefined,
       artifacts: Array.isArray(event.artifacts) ? event.artifacts : entry.artifacts,
+      // 等你回话不是在计算：给回复入口（ask 卡）。卡面问题用 question，正文用 detail，
+      // 混用会让「正文」变成一句提问（旧 handleSubtask 的告诫）。
+      ask: event.state === 'waiting_user'
+        ? { taskId: event.taskId ?? get().taskId ?? '', question: event.question as string | undefined, detail: event.detail ?? undefined }
+        : undefined,
     }))
   }
 }

@@ -7,6 +7,7 @@
 
 import { readEventStream } from './sse.ts'
 import { DEFAULT_AVATAR_FILES } from './config.ts'
+import type { TurnEvent } from './turn-event.ts'
 
 const config = (globalThis as { __BUTLER_CONFIG__?: Record<string, unknown> }).__BUTLER_CONFIG__ ?? {}
 export const ROUTE_PREFIX: string = typeof config.routePrefix === 'string' ? config.routePrefix : '/butler'
@@ -22,6 +23,9 @@ export const MAX_ATTACHMENT_BYTES: number = typeof config.maxAttachmentBytes ===
 
 /** 一条消息最多带几个附件。 */
 export const MAX_ATTACHMENTS_PER_MESSAGE: number = typeof config.maxAttachmentsPerMessage === 'number' ? config.maxAttachmentsPerMessage : 5
+
+/** 任务记录分页大小（0.12.4）：与后端 conversationsPageSize 同步，identity 未下发时的缺省。 */
+export const CHAT_PAGE_SIZE: number = typeof config.chatPageSize === 'number' ? config.chatPageSize : 10
 
 /** 一次接口调用失败。带上状态码，页面据此区分未登录和真正的服务错误。 */
 export class ApiError extends Error {
@@ -55,6 +59,12 @@ export interface ConversationItem {
   id: string
   title: string
   updatedAt: number
+}
+
+/** /conversations 的分页信封（0.12.4：offset+total，identity 下发页大小）。 */
+export interface ConversationPage {
+  items: ConversationItem[]
+  total?: number
 }
 
 export interface MemberItem {
@@ -123,10 +133,16 @@ export interface RunHead {
 }
 
 export const api = {
-  identity: () => request<{ label: string }>('/identity'),
+  identity: () => request<{ label: string; chatPageSize?: number }>('/identity'),
   members: () => request<{ items: MemberItem[] }>('/members'),
   overview: () => request<{ counts: Record<string, number>; failures: Array<{ id: string; goal: string; updatedAt: number; error: string | null }> }>('/overview'),
-  conversations: () => request<{ items: ConversationItem[] }>('/conversations'),
+  conversations: (offset = 0, limit?: number) => {
+    const query = `?offset=${String(offset)}${limit === undefined ? '' : `&limit=${String(limit)}`}`
+    return request<ConversationPage>(`/conversations${query}`)
+  },
+  /** 会话重命名（0.12.4）：仅服务端持有标题写权。 */
+  renameConversation: (id: string, title: string) =>
+    request<{ items: ConversationItem[] }>('/conversations/rename', { method: 'POST', body: JSON.stringify({ id, title }) }),
   history: ({ offset = 0, limit = HISTORY_PAGE_SIZE, keyword = '', state = '', conversationId = '' } = {}) => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
     if (keyword !== '') params.set('q', keyword)
@@ -186,9 +202,9 @@ export function chat({ conversationId, message, requestId, attachmentIds, signal
   message: string
   requestId?: string
   attachmentIds?: string[]
-  signal?: AbortSignal
-}): AsyncGenerator<unknown> {
-  return postStream('/chat', {
+  signal?: AbortSignal | undefined
+}): AsyncGenerator<TurnEvent> {
+  return postStream<TurnEvent>('/chat', {
     conversationId,
     message,
     ...(requestId === undefined ? {} : { requestId }),
@@ -203,9 +219,9 @@ export function reply({ taskId, subtaskId, text, decideByAgent, requestId, signa
   text: string
   decideByAgent?: boolean
   requestId?: string
-  signal?: AbortSignal
-}): AsyncGenerator<unknown> {
-  return postStream('/reply', { taskId, subtaskId, text, decideByAgent, ...(requestId === undefined ? {} : { requestId }) }, signal)
+  signal?: AbortSignal | undefined
+}): AsyncGenerator<TurnEvent> {
+  return postStream<TurnEvent>('/reply', { taskId, subtaskId, text, decideByAgent, ...(requestId === undefined ? {} : { requestId }) }, signal)
 }
 
 /** 对一条待确认操作做决策。requestId 是受理幂等身份。 */
@@ -216,9 +232,9 @@ export function act({ taskId, subtaskId, actionId, decision, note, requestId, si
   decision: string
   note?: string
   requestId?: string
-  signal?: AbortSignal
-}): AsyncGenerator<unknown> {
-  return postStream('/action', {
+  signal?: AbortSignal | undefined
+}): AsyncGenerator<TurnEvent> {
+  return postStream<TurnEvent>('/action', {
     taskId,
     subtaskId,
     actionId,
@@ -236,7 +252,7 @@ export function events({ conversationId, after, signal }: {
 }): AsyncGenerator<unknown> {
   const params = new URLSearchParams({ conversationId })
   if (after !== undefined) params.set('after', String(after))
-  return eventStream(`/events?${params.toString()}`, signal)
+  return eventStream<TurnEvent>(`/events?${params.toString()}`, signal)
 }
 
 /** 只问「这个会话现在有没有在跑的一轮」。null 表示没有可观察的一轮。 */
@@ -245,17 +261,17 @@ export async function eventsHead(conversationId: string, signal?: AbortSignal): 
   return run ?? null
 }
 
-async function* eventStream(path: string, signal?: AbortSignal): AsyncGenerator<unknown> {
+async function* eventStream<T = TurnEvent>(path: string, signal?: AbortSignal | undefined): AsyncGenerator<T> {
   const response = await fetch(`${ROUTE_PREFIX}${path}`, {
     credentials: 'same-origin',
     headers: { accept: 'text/event-stream' },
     ...(signal === undefined ? {} : { signal }),
   })
   if (!response.ok) throw await streamFailure(response)
-  yield* readEventStream(response, signal)
+  yield* readEventStream<T>(response, signal)
 }
 
-async function* postStream(path: string, payload: unknown, signal?: AbortSignal): AsyncGenerator<unknown> {
+async function* postStream<T = TurnEvent>(path: string, payload: unknown, signal?: AbortSignal | undefined): AsyncGenerator<T> {
   const response = await fetch(`${ROUTE_PREFIX}${path}`, {
     method: 'POST',
     credentials: 'same-origin',

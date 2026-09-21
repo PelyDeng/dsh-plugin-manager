@@ -8,6 +8,8 @@
  */
 import { useEffect, useRef } from 'react'
 import { useTurnStore } from '../../stores/turn.ts'
+import { useSessionStore } from '../../stores/session.ts'
+import { loadEarlier } from '../../hooks/use-turn.ts'
 import { renderEntry, Welcome } from './entries.tsx'
 
 export function Thread() {
@@ -57,7 +59,12 @@ export function Thread() {
     <div className="thread-wrap">
       <div className="thread" id="thread" ref={threadRef} onScroll={onScroll}>
         <div className="thread__inner">
-          {entries.length === 0 ? <Welcome /> : entries.map(renderEntry)}
+          {entries.length === 0 ? <Welcome /> : (
+            <>
+              <EarlierControl />
+              {entries.map(renderEntry)}
+            </>
+          )}
         </div>
       </div>
       {/* 跟随暂停时出现（I11）：点一下回到最新并恢复跟随。 */}
@@ -73,6 +80,28 @@ export function Thread() {
       >
         ↓ 回到最新
       </button>
+    </div>
+  )
+}
+
+
+/** 「加载更早记录」入口（I10）：两个游标都到底换分界说明；失败保留重试。 */
+function EarlierControl() {
+  const earlier = useSessionStore(state => state.earlier)
+  const entries = useTurnStore(state => state.entries)
+  if (entries.length === 0) return null
+  if (earlier.phase === 'done') return <div className="history-head"><span className="history-head__note">没有更早的记录了</span></div>
+  return (
+    <div className="history-head">
+      <button
+        type="button"
+        className="btn btn--tiny history-head__more"
+        disabled={earlier.phase === 'loading'}
+        onClick={() => { void loadEarlier() }}
+      >
+        {earlier.phase === 'loading' ? '正在读取…' : '加载更早记录'}
+      </button>
+      {earlier.phase === 'error' && <span className="history-head__error">读取更早记录失败：{earlier.message}，可以重试</span>}
     </div>
   )
 }

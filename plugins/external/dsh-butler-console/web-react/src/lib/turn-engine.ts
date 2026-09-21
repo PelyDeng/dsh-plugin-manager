@@ -57,7 +57,7 @@ export interface TurnEngineHost {
 export interface FollowOptions {
   from: number
   expectedRunId: string
-  signal?: AbortSignal
+  signal?: AbortSignal | undefined
 }
 
 const RETRY_BUDGET = { base: 1000, cap: 4000, maxReconnects: 4, deadline: 120_000 }

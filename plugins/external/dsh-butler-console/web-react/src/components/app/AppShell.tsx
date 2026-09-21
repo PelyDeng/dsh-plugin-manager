@@ -9,12 +9,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api.ts'
 import { recallConversation } from '../../lib/turn-event.ts'
-import { openConversation, openNewChat, refreshChatList, refreshPanelsData, resumeLiveTurn } from '../../hooks/use-turn.ts'
+import { loadIdentity, openConversation, openNewChat, refreshChatList, refreshPanelsData, resumeLiveTurn } from '../../hooks/use-turn.ts'
 import { useSessionStore } from '../../stores/session.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { Thread } from '../chat/Thread.tsx'
 import { Avatar } from '../chat/entries.tsx'
-import { ChatList, ChatManageToggle, ChatSearch, FailureList, ManageBar, Motto } from '../panels/left-right.tsx'
+import { ChatList, ChatPager, ChatSearch, FailureList, ManageBar, Motto } from '../panels/left-right.tsx'
+import { Composer, StopButton } from '../composer/Composer.tsx'
 
 const DRAWER_QUERY = '(max-width: 1200px)'
 const SIDEBAR_QUERY = '(max-width: 880px)'
@@ -54,6 +55,7 @@ export function AppShell() {
       } catch { /* 右栏读不到保持现状：下一轮轮询再试。 */ }
     }
     void refresh()
+    void loadIdentity()
     void refreshPanelsData()
     void refreshChatList()
     const timer = setInterval(() => { if (!useTurnStore.getState().streaming) void refresh() }, 15000)
@@ -169,13 +171,13 @@ export function AppShell() {
             </div>
             <div className="left__records">
               <h2 className="section-title">任务记录</h2>
-              <ChatManageToggle />
             </div>
             <ManageBar />
           </div>
           <div className="left__list" id="chat-list">
             <ChatList />
           </div>
+          <ChatPager />
           <div className="crew">
             <h2 className="section-title">我的成员</h2>
             <div className="crew__row">
@@ -199,7 +201,7 @@ export function AppShell() {
             </h2>
             <span className="center__sub">{total > 0 ? `${total} 位成员${working}` : '—'}</span>
             <span className="spacer" />
-            <button type="button" className="btn btn--tiny btn--ghost" hidden>喊停</button>
+            <StopButton />
             <button type="button" className="icon-btn" title="设置" aria-label="设置" aria-expanded={false}>
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <circle cx="10" cy="10" r="3.1" fill="none" stroke="currentColor" strokeWidth="1.8" />
@@ -208,23 +210,7 @@ export function AppShell() {
             </button>
           </div>
           <Thread />
-          {/* composer 完整化在批 3/4a：批 1 只立骨架位（发送路径未接，无真人入口）。 */}
-          <form className="composer" onSubmit={event => event.preventDefault()}>
-            <div className="composer__box">
-              <textarea id="message-input" rows={1} placeholder="说说你要做什么" autoComplete="off" aria-label="说句话" />
-              <div className="composer__actions">
-                <button type="submit" className="send" aria-label="发送">
-                  <svg width="20" height="18" viewBox="0 0 20 18" fill="none" aria-hidden="true">
-                    <path d="M18.2 2.2 C 12.6 4.6, 7 7.4, 2.4 10.2 C 5.2 11.2, 7.6 12.2, 9.6 13.4 C 12.4 9.6, 15.2 5.8, 18.2 2.2 Z M9.6 13.4 C 10 12.4, 10.6 10.8, 11.4 9 C 13.6 6.6, 15.8 4.4, 18.2 2.2 Z" fill="#fff" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-            <div className="composer__hint">
-              <span>牛马大总管<span className="red-wavy">先听明白需求</span>，再替你分派成员</span>
-              <span />
-            </div>
-          </form>
+          <Composer />
         </main>
 
         <aside className="column column--right" id="drawer" ref={rightPanelRef} tabIndex={-1} aria-label="成员档案">
@@ -266,8 +252,7 @@ export function AppShell() {
           </section>
           <section>
             <div className="panel">
-              <h2 className="section-title section-title--failures">失败记录</h2>
-              <div className="failure-note"><div><FailureList /></div></div>
+              <FailureList />
             </div>
           </section>
           <Motto />

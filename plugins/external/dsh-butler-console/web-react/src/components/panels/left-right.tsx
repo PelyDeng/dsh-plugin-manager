@@ -1,16 +1,16 @@
 /**
- * 左右栏交互组件（批 2：任务记录删除/批量删除/管理模式/搜索、失败记录删除、座右铭）。
- * 类名与语义对齐旧 panels.js；两段式确认（armRowDelete）在 React 里以组件状态承载。
+ * 左右栏交互组件（批 2.5 回灌：对齐 main 0.12.4-0.12.7 的任务记录/失败记录重构——
+ * 复选框常驻、⋯ 操作菜单、行内重命名、分页、搜索全量、失败菜单统一）。
+ * 类名与语义对齐 main 版 panels.js；两段式行内删除已被 0.12.4 淘汰（删除统一走菜单）。
  */
 import { useEffect, useRef, useState } from 'react'
 import { MOTTO_KEY, DEFAULT_MOTTO } from '../../lib/config.ts'
 import type { ChatListItem } from '../../stores/session.ts'
 import { useSessionStore } from '../../stores/session.ts'
-import { useTurnStore } from '../../stores/turn.ts'
 import {
-  deletePickedConversations, openConversation, openNewChat, refreshChatList, removeConversationsWithFeedback,
+  deletePickedConversations, gotoChatPage, loadEarlier, openConversation, refreshChatList, refreshPanelsData,
+  removeConversationsWithFeedback, removePickedFailures, renameConversation,
 } from '../../hooks/use-turn.ts'
-import { api, ApiError } from '../../lib/api.ts'
 import { announce } from '../../lib/announce.ts'
 
 function formatTime(value: number): string {
@@ -21,190 +21,289 @@ function formatTime(value: number): string {
   return `${date.getMonth() + 1}-${String(date.getDate()).padStart(2, '0')} ${clock}`
 }
 
-/**
- * 行内删除的两段式确认：第一段武装（亮起并提示再点确认），3 秒没确认就还原；
- * 第二段执行。与旧 armRowDelete 同语义，状态从 Map 换成组件 state。
- */
-export function RowDelete({ title, onConfirm }: { title: string; onConfirm: () => Promise<void> | void }) {
-  const [armed, setArmed] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => () => { if (timerRef.current !== null) clearTimeout(timerRef.current) }, [])
-  const activate = async () => {
-    if (armed) {
-      if (timerRef.current !== null) clearTimeout(timerRef.current)
-      setArmed(false)
-      setBusy(true)
-      await onConfirm()
-      setBusy(false)
-      return
-    }
-    setArmed(true)
-    timerRef.current = setTimeout(() => setArmed(false), 3000)
-  }
-  return (
-    <span
-      role="button"
-      tabIndex={0}
-      className={`row-delete${armed ? ' row-delete--armed' : ''}`}
-      title={title}
-      onClick={event => { event.stopPropagation(); void activate() }}
-      onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void activate() } }}
-    >
-      {busy ? '…' : armed ? '确认删除' : '×'}
-    </span>
-  )
-}
-
-/** 单条会话删除（围栏接口；列表刷新在 removeConversationsWithFeedback 内）。 */
-function deleteOneConversation(id: string): Promise<void> {
-  return removeConversationsWithFeedback([id]).then(() => {})
-}
-
-/** 左栏任务记录列表：preview 行/关键词过滤/管理模式行形态/aria-current/单条删除。 */
-export function ChatList() {
-  const chatList = useSessionStore(state => state.chatList)
-  const keyword = useSessionStore(state => state.chatKeyword)
-  const manage = useSessionStore(state => state.chatManage)
-  const picked = useSessionStore(state => state.chatPicked)
-  const togglePicked = useSessionStore(state => state.togglePicked)
-  const conversationId = useTurnStore(state => state.conversationId)
-
-  const filtered = keyword === ''
+/** 可见行（keyword 过滤后）：全选三态与搜索态判定共用这份口径。 */
+export function visibleChatList(chatList: ChatListItem[], keyword: string): ChatListItem[] {
+  return keyword === ''
     ? chatList
     : chatList.filter(item =>
       (item.title ?? '').toLowerCase().includes(keyword) ||
       (item.preview ?? '').toLowerCase().includes(keyword))
-  if (filtered.length === 0) {
+}
+
+/**
+ * ⋯ 操作菜单（0.12.5：没有管理模式了，菜单固定「删除所选 / 重命名」）。
+ * 再点 ⋯ 关闭（标准 toggle）；勾选变化的可用态由 picked 派生（React 声明式天然满足，
+ * 旧 refreshOpenMenu 的竞态防护不再需要——关闭权只归 toggle 与外点，语义保留）。
+ */
+function RecordsMenu() {
+  const picked = useSessionStore(state => state.chatPicked)
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onOutside = (event: MouseEvent) => {
+      if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener('click', onOutside)
+    return () => document.removeEventListener('click', onOutside)
+  }, [open])
+  return (
+    <span className="chat-records-actions" ref={rootRef}>
+      <button
+        type="button"
+        className="chat-manage-menu-btn"
+        id="records-menu"
+        aria-haspopup="true"
+        aria-expanded={open}
+        title="操作"
+        onClick={() => setOpen(!open)}
+      >
+        ⋯
+      </button>
+      <span className="chat-manage-menu" id="records-menu-pop" hidden={!open} role="menu">
+        <button
+          type="button"
+          role="menuitem"
+          className="chat-manage-menu__item chat-manage-menu__item--danger"
+          disabled={picked.length === 0}
+          onClick={() => { setOpen(false); void deletePickedConversations() }}
+        >
+          删除所选
+        </button>
+        {/* 重命名只在恰好选中一条时可用（多条没有一致的改名语义）。 */}
+        <button
+          type="button"
+          role="menuitem"
+          className="chat-manage-menu__item"
+          disabled={picked.length !== 1}
+          onClick={() => {
+            setOpen(false)
+            useSessionStore.getState().setRenamingId(picked[0] ?? null)
+            void refreshChatList()
+          }}
+        >
+          重命名
+        </button>
+      </span>
+    </span>
+  )
+}
+
+/** 操作条（0.12.6 常驻）：全选三态（作用域=当前可见行）+ 已选计数 + ⋯ 菜单。 */
+export function ManageBar() {
+  const chatList = useSessionStore(state => state.chatList)
+  const keyword = useSessionStore(state => state.chatKeyword)
+  const picked = useSessionStore(state => state.chatPicked)
+  const togglePicked = useSessionStore(state => state.togglePicked)
+  const allRef = useRef<HTMLInputElement>(null)
+  const visible = visibleChatList(chatList, keyword)
+  const checked = visible.filter(item => picked.includes(item.id)).length
+  const allChecked = visible.length > 0 && checked === visible.length
+  const someChecked = checked > 0 && checked < visible.length
+  return (
+    <div className="chat-manage-bar" id="chat-manage-bar">
+      <input
+        type="checkbox"
+        id="chat-manage-all"
+        className="chat-manage-bar__all"
+        aria-label="全选本页"
+        checked={allChecked}
+        ref={node => { if (node !== null) node.indeterminate = someChecked }}
+        onChange={event => {
+          // 全选作用于可见行（搜索态下不会选中并删除用户看不见的会话）。
+          for (const item of visible) togglePicked(item.id, event.target.checked)
+        }}
+      />
+      <span className="chat-manage-bar__count" id="chat-manage-count">已选 {picked.length} 条</span>
+      <RecordsMenu />
+    </div>
+  )
+}
+
+/** 左栏任务记录列表（0.12.4/0.12.5）：复选框常驻、行内重命名、正文点击打开。 */
+export function ChatList() {
+  const chatList = useSessionStore(state => state.chatList)
+  const keyword = useSessionStore(state => state.chatKeyword)
+  const picked = useSessionStore(state => state.chatPicked)
+  const togglePicked = useSessionStore(state => state.togglePicked)
+  const renamingId = useSessionStore(state => state.renamingId)
+  const conversationId = useTurnStoreCurrentId()
+  const visible = visibleChatList(chatList, keyword)
+  if (visible.length === 0) {
     return <p className="empty">{chatList.length === 0 ? '还没有任务记录' : '没有匹配结果'}</p>
   }
-  if (manage) {
-    // 管理模式：整行是 label（点击即勾选），不再承担「打开会话」。
-    return (
-      <>
-        {filtered.map(item => (
-          <label key={item.id} className={`chat-row chat-row--manage${picked.includes(item.id) ? ' chat-row--picked' : ''}`}>
+  return (
+    <>
+      {visible.map(item => {
+        const renaming = item.id === renamingId
+        return (
+          <div
+            key={item.id}
+            className={`chat-row chat-row--pickable${picked.includes(item.id) ? ' chat-row--picked' : ''}${renaming ? ' chat-row--renaming' : ''}`}
+            aria-current={item.id === conversationId ? 'true' : undefined}
+          >
             <input
               type="checkbox"
               className="chat-row__check"
               checked={picked.includes(item.id)}
               onChange={event => togglePicked(item.id, event.target.checked)}
             />
-            <span>
-              <span className="chat-row__title">{item.title || '（还没起名）'}</span>
-              {item.preview !== '' && <span className="chat-row__preview">{item.preview}</span>}
+            <span className="chat-row__body" onClick={() => { if (!renaming) void openConversation(item.id) }}>
+              {renaming
+                ? <RenameInput id={item.id} current={item.title} />
+                : (
+                    <>
+                      <span className="chat-row__title">{item.title || '（还没起名）'}</span>
+                      {item.preview !== '' && <span className="chat-row__preview">{item.preview}</span>}
+                      <span className="chat-row__time">{formatTime(item.updatedAt)}</span>
+                    </>
+                  )}
             </span>
-          </label>
-        ))}
-      </>
-    )
-  }
-  return (
-    <>
-      {filtered.map(item => (
-        <button
-          key={item.id}
-          type="button"
-          className="chat-row"
-          aria-current={item.id === conversationId ? 'true' : undefined}
-          onClick={() => { void openConversation(item.id) }}
-        >
-          <span>
-            <span className="chat-row__title">{item.title || '（还没起名）'}</span>
-            {item.preview !== '' && <span className="chat-row__preview">{item.preview}</span>}
-          </span>
-          <span className="chat-row__time">{formatTime(item.updatedAt)}</span>
-          <RowDelete title="删除这条任务记录" onConfirm={() => deleteOneConversation(item.id)} />
-        </button>
-      ))}
+          </div>
+        )
+      })}
     </>
   )
 }
 
-/** 管理模式操作条：全选/已选计数/删除所选（按钮上两段式）/退出。 */
-export function ManageBar() {
-  const manage = useSessionStore(state => state.chatManage)
-  const picked = useSessionStore(state => state.chatPicked)
-  const chatList = useSessionStore(state => state.chatList)
-  const clearPicked = useSessionStore(state => state.clearPicked)
-  const togglePicked = useSessionStore(state => state.togglePicked)
-  const [armed, setArmed] = useState(false)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => { if (!manage) setArmed(false) }, [manage])
-
-  if (!manage) return null
-  const allPicked = chatList.length > 0 && chatList.every(item => picked.includes(item.id))
-  const toggleAll = () => {
-    for (const item of chatList) togglePicked(item.id, !allPicked)
+/** 行内改名（0.12.4）：Enter 提交、Escape 取消、blur 提交；空值视为取消。 */
+function RenameInput({ id, current }: { id: string; current: string }) {
+  const [value, setValue] = useState(current)
+  const ref = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    ref.current?.focus()
+    ref.current?.select()
+  }, [])
+  const submit = () => {
+    useSessionStore.getState().setRenamingId(null)
+    void renameConversation(id, value)
   }
-  const confirmDelete = async () => {
-    if (!armed) {
-      setArmed(true)
-      timerRef.current = setTimeout(() => setArmed(false), 3000)
-      return
-    }
-    if (timerRef.current !== null) clearTimeout(timerRef.current)
-    setArmed(false)
-    await deletePickedConversations()
+  const cancel = () => {
+    useSessionStore.getState().setRenamingId(null)
+    void refreshChatList()
   }
   return (
-    <div className="chat-manage-bar" id="chat-manage-bar">
-      <button type="button" className="chat-manage-bar__pick" id="chat-manage-all" onClick={toggleAll}>全选</button>
-      <span className="chat-manage-bar__count" id="chat-manage-count">已选 {picked.length} 条</span>
+    <input
+      ref={ref}
+      type="text"
+      className="chat-row__rename"
+      value={value}
+      placeholder="起个新名字"
+      maxLength={80}
+      onChange={event => setValue(event.target.value)}
+      onKeyDown={event => {
+        if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); submit() }
+        else if (event.key === 'Escape') { event.preventDefault(); cancel() }
+      }}
+      onBlur={() => { if (useSessionStore.getState().renamingId === id) submit() }}
+    />
+  )
+}
+
+/** 分页条（0.12.4）：搜索态或多于一页才出现；翻页清选中（跨页选中容易误删）。 */
+export function ChatPager() {
+  const chatPage = useSessionStore(state => state.chatPage)
+  const chatTotal = useSessionStore(state => state.chatTotal)
+  const chatPageSize = useSessionStore(state => state.chatPageSize)
+  const keyword = useSessionStore(state => state.chatKeyword)
+  const searching = keyword !== ''
+  const pages = Math.max(1, Math.ceil(chatTotal / chatPageSize))
+  if (searching || pages <= 1) return null
+  return (
+    <div className="chat-pager" id="chat-pager">
       <button
         type="button"
-        className="chat-manage-bar__delete"
-        id="chat-manage-delete"
-        disabled={picked.length === 0}
-        onClick={() => { void confirmDelete() }}
+        className="chat-pager__btn"
+        id="chat-pager-prev"
+        aria-label="上一页"
+        disabled={chatPage === 0}
+        onClick={() => { void gotoChatPage(chatPage - 1) }}
       >
-        {armed ? `确认删除 ${picked.length} 条` : '删除所选'}
+        ‹
       </button>
+      <span className="chat-pager__info" id="chat-pager-info">{chatPage + 1} / {pages}</span>
       <button
         type="button"
-        className="chat-manage-bar__exit"
-        id="chat-manage-exit"
-        onClick={() => { useSessionStore.getState().setChatManage(false) }}
+        className="chat-pager__btn"
+        id="chat-pager-next"
+        aria-label="下一页"
+        disabled={chatPage >= pages - 1}
+        onClick={() => { void gotoChatPage(chatPage + 1) }}
       >
-        退出管理
+        ›
       </button>
     </div>
   )
 }
 
-/** 失败记录列表：行点击进任务详情（批 3 接 openTask），行内删除两段式（终态任务）。 */
+/** 失败记录（0.12.7 与任务记录同款）：failure-head ⋯ 菜单 + 行前复选框 + 正文点击进详情。 */
 export function FailureList() {
   const overview = useSessionStore(state => state.overview)
+  const failurePicked = useSessionStore(state => state.failurePicked)
+  const toggleFailurePicked = useSessionStore(state => state.toggleFailurePicked)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const headRef = useRef<HTMLDivElement>(null)
   const items = overview?.failures ?? []
-  if (items.length === 0) return <p className="empty">暂无失败记录</p>
-  const removeFailed = async (taskId: string) => {
-    try {
-      await api.removeTask(taskId)
-      announce('失败记录已删除')
-    } catch (error) {
-      announce(error instanceof ApiError ? error.message : '删除失败，稍后再试')
+  useEffect(() => {
+    if (!menuOpen) return
+    const onOutside = (event: MouseEvent) => {
+      if (headRef.current !== null && !headRef.current.contains(event.target as Node)) setMenuOpen(false)
     }
-    await refreshChatList()
-    // 失败计数与列表同源于 /overview：删除后刷新右栏。
-    try {
-      const next = await api.overview()
-      useSessionStore.getState().setOverview(next)
-    } catch { /* 下一轮轮询会再试。 */ }
-  }
+    document.addEventListener('click', onOutside)
+    return () => document.removeEventListener('click', onOutside)
+  }, [menuOpen])
   return (
     <>
-      {items.map(item => (
-        <button key={item.id} type="button" className="failure-row">
-          <span className="failure-row__goal">{formatTime(item.updatedAt)}　{item.goal}</span>
-          <span className="failure-row__meta">{item.error || '没给原因'}</span>
-          <RowDelete title="删除这条失败记录" onConfirm={() => removeFailed(item.id)} />
-        </button>
-      ))}
+      <div className="failure-head" ref={headRef}>
+        <h2 className="section-title section-title--failures">失败记录</h2>
+        <span className="chat-records-actions">
+          <button
+            type="button"
+            className="chat-manage-menu-btn chat-manage-menu-btn--sm"
+            id="failure-menu"
+            aria-haspopup="true"
+            aria-expanded={menuOpen}
+            title="操作"
+            onClick={() => setMenuOpen(!menuOpen)}
+          >
+            ⋯
+          </button>
+          <span className="chat-manage-menu" id="failure-menu-pop" hidden={!menuOpen} role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              className="chat-manage-menu__item chat-manage-menu__item--danger"
+              disabled={failurePicked.length === 0}
+              onClick={() => { setMenuOpen(false); void removePickedFailures() }}
+            >
+              删除所选
+            </button>
+          </span>
+        </span>
+      </div>
+      <div className="failure-note"><div id="failure-list">
+        {items.length === 0
+          ? <p className="empty">暂无失败记录</p>
+          : items.map(item => (
+            <label key={item.id} className="failure-row failure-row--pick">
+              <input
+                type="checkbox"
+                className="failure-row__check"
+                checked={failurePicked.includes(item.id)}
+                onChange={event => toggleFailurePicked(item.id, event.target.checked)}
+              />
+              <span className="failure-row__body" onClick={() => { announce('任务详情视图在批 3 接入') }}>
+                <span className="failure-row__goal">{formatTime(item.updatedAt)}　{item.goal}</span>
+                <span className="failure-row__meta">{item.error || '没给原因'}</span>
+              </span>
+            </label>
+          ))}
+      </div></div>
     </>
   )
 }
 
-/** 座右铭：点击就地编辑，blur/回车提交，空值回落默认（旧 renderMotto 语义）。 */
+/** 座右铭：点击就地编辑，blur/回车提交，空值回落默认（旧 renderMotto 语义；Esc 退出编辑为增强）。 */
 export function Motto() {
   const [current, setCurrent] = useState(() => {
     try { return localStorage.getItem(MOTTO_KEY) ?? DEFAULT_MOTTO } catch { return DEFAULT_MOTTO }
@@ -238,7 +337,7 @@ export function Motto() {
         onChange={event => setDraft(event.target.value)}
         onBlur={commit}
         onKeyDown={event => {
-          if (event.key === 'Enter') commit()
+          if (event.key === 'Enter' && !event.nativeEvent.isComposing) commit()
           if (event.key === 'Escape') setEditing(false)
         }}
       />
@@ -246,7 +345,7 @@ export function Motto() {
   )
 }
 
-/** 搜索框（200ms 防抖过滤；数据在 ChatList 内按 keyword 过滤）。 */
+/** 搜索框（200ms 防抖；0.12.5 搜索拉全量再本地过滤，分页条隐藏）。 */
 export function ChatSearch() {
   const setKeyword = useSessionStore(state => state.setChatKeyword)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -261,26 +360,17 @@ export function ChatSearch() {
       onChange={event => {
         const value = event.target.value
         if (timerRef.current !== null) clearTimeout(timerRef.current)
-        timerRef.current = setTimeout(() => { setKeyword(value.trim().toLowerCase()) }, 200)
+        timerRef.current = setTimeout(() => {
+          setKeyword(value.trim().toLowerCase())
+          void refreshChatList()
+        }, 200)
       }}
     />
   )
 }
 
-/** 管理模式开关按钮（管理/管理中 + aria-pressed）。 */
-export function ChatManageToggle() {
-  const manage = useSessionStore(state => state.chatManage)
-  return (
-    <button
-      type="button"
-      className="chat-manage-toggle"
-      id="chat-manage-toggle"
-      aria-pressed={manage}
-      onClick={() => useSessionStore.getState().setChatManage(!manage)}
-    >
-      {manage ? '管理中' : '管理'}
-    </button>
-  )
+/** 当前会话 id（aria-current 标记用）。 */
+function useTurnStoreCurrentId(): string | null {
+  return useTurnStoreForId(state => state.conversationId)
 }
-
-export { openNewChat, refreshChatList }
+import { useTurnStore as useTurnStoreForId } from '../../stores/turn.ts'

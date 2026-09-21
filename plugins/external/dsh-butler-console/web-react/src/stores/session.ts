@@ -29,20 +29,32 @@ export interface SessionState {
   chatList: ChatListItem[]
   /** 搜索关键词（小写；空串不过滤）。 */
   chatKeyword: string
-  /** 管理模式：开着时行首出复选框、批量操作条可见。 */
-  chatManage: boolean
-  /** 管理模式下勾选的会话 id。 */
+  /** 0.12.4 分页：页码/总数/页大小（identity 下发）。 */
+  chatPage: number
+  chatTotal: number
+  chatPageSize: number
+  /** 0.12.5：复选框常驻，勾选的会话 id（跨勾选累积，翻页清空）。 */
   chatPicked: string[]
+  /** 行内重命名：正在编辑的会话 id（同一时刻至多一处）。 */
+  renamingId: string | null
+  /** 失败记录勾选（0.12.7 与任务记录同款）。 */
+  failurePicked: string[]
   overview: OverviewData | null
   /** 顶栏状态词（已上线/正在处理/没登录/读取失败）。streaming 优先，错误态覆盖。 */
   topStatus: string
+  /** 「加载更早记录」控件状态（I10：两个游标都到底后换分界说明）。 */
+  earlier: { phase: 'idle' | 'loading' | 'done' | 'error'; message?: string }
+  setEarlier: (earlier: { phase: 'idle' | 'loading' | 'done' | 'error'; message?: string }) => void
   setIdentity: (label: string) => void
   setMembers: (members: MemberItem[]) => void
   setChatList: (items: ChatListItem[]) => void
   setChatKeyword: (keyword: string) => void
-  setChatManage: (on: boolean) => void
+  setChatPageMeta: (meta: { chatPage?: number; chatTotal?: number; chatPageSize?: number }) => void
   togglePicked: (id: string, picked: boolean) => void
   clearPicked: () => void
+  setRenamingId: (id: string | null) => void
+  toggleFailurePicked: (id: string, picked: boolean) => void
+  clearFailurePicked: () => void
   setOverview: (data: OverviewData | null) => void
   setTopStatus: (status: string) => void
   stampAvatar: (agentId: string) => void
@@ -54,24 +66,35 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   avatarStamps: new Map(),
   chatList: [],
   chatKeyword: '',
-  chatManage: false,
+  chatPage: 0,
+  chatTotal: 0,
+  chatPageSize: 10,
   chatPicked: [],
+  renamingId: null,
+  failurePicked: [],
   overview: null,
   topStatus: '',
+  earlier: { phase: 'idle' },
 
   setIdentity: label => set({ identityLabel: label }),
   setMembers: members => set({ members }),
   setChatList: chatList => set({ chatList }),
   setChatKeyword: chatKeyword => set({ chatKeyword }),
-  // 退出管理模式时清空选中（旧 setChatManage 语义）。
-  setChatManage: on => set(on ? { chatManage: on } : { chatManage: on, chatPicked: [] }),
+  setChatPageMeta: meta => set(meta),
   togglePicked: (id, picked) => {
     const rest = get().chatPicked.filter(entry => entry !== id)
     set({ chatPicked: picked ? [...rest, id] : rest })
   },
   clearPicked: () => set({ chatPicked: [] }),
+  setRenamingId: renamingId => set({ renamingId }),
+  toggleFailurePicked: (id, picked) => {
+    const rest = get().failurePicked.filter(entry => entry !== id)
+    set({ failurePicked: picked ? [...rest, id] : rest })
+  },
+  clearFailurePicked: () => set({ failurePicked: [] }),
   setOverview: overview => set({ overview }),
   setTopStatus: topStatus => set({ topStatus }),
+  setEarlier: earlier => set({ earlier }),
   stampAvatar: agentId => {
     const next = new Map(get().avatarStamps)
     next.set(agentId, (next.get(agentId) ?? 0) + 1)
