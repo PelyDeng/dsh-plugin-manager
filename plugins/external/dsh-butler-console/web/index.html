@@ -49,16 +49,22 @@
         </div>
         <div class="left__records">
           <h2 class="section-title">任务记录</h2>
-          <button type="button" class="chat-manage-toggle" id="chat-manage-toggle" aria-pressed="false">管理</button>
+          <span class="chat-records-actions">
+            <button type="button" class="chat-manage-menu-btn" id="records-menu" aria-haspopup="true" aria-expanded="false" title="操作">⋯</button>
+            <span class="chat-manage-menu" id="records-menu-pop" hidden role="menu"></span>
+          </span>
         </div>
         <div class="chat-manage-bar" id="chat-manage-bar" hidden>
-          <button type="button" class="chat-manage-bar__pick" id="chat-manage-all">全选</button>
+          <input type="checkbox" id="chat-manage-all" class="chat-manage-bar__all" aria-label="全选本页">
           <span class="chat-manage-bar__count" id="chat-manage-count">已选 0 条</span>
-          <button type="button" class="chat-manage-bar__delete" id="chat-manage-delete">删除所选</button>
-          <button type="button" class="chat-manage-bar__exit" id="chat-manage-exit">退出管理</button>
         </div>
       </div>
       <div class="left__list" id="chat-list"></div>
+      <div class="chat-pager" id="chat-pager" hidden>
+        <button type="button" class="chat-pager__btn" id="chat-pager-prev" aria-label="上一页">‹</button>
+        <span class="chat-pager__info" id="chat-pager-info">1 / 1</span>
+        <button type="button" class="chat-pager__btn" id="chat-pager-next" aria-label="下一页">›</button>
+      </div>
       <div class="crew">
         <h2 class="section-title">我的成员</h2>
         <div class="crew__row">
@@ -163,7 +169,10 @@
 
       <section>
         <div class="panel">
-          <h2 class="section-title section-title--failures">失败记录</h2>
+          <div class="failure-head">
+            <h2 class="section-title section-title--failures">失败记录</h2>
+            <button type="button" class="chat-manage-menu-btn chat-manage-menu-btn--sm" id="failure-menu" aria-haspopup="true" aria-expanded="false" title="操作">⋯</button>
+          </div>
           <div class="failure-note"><div id="failure-list"></div></div>
         </div>
       </section>

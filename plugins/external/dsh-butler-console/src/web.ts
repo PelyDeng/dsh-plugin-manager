@@ -309,6 +309,7 @@ export async function installWeb(
   const pageConfig = {
     routePrefix: config.routePrefix,
     historyPageSize: config.maxHistoryPageSize,
+    chatPageSize: config.conversationsPageSize,
     // 附件的上限一并注进去：页面要在**选文件之前**就知道能传多大，等传上去被服务端 413 拒掉
     // 才发现，那已经是白等一次上传了。头像上限写死在前端是一处既有不一致，这里不重犯。
     maxAttachmentBytes: config.maxAttachmentBytes,
@@ -575,6 +576,7 @@ export async function installWeb(
         routePrefix: config.routePrefix,
         contractVersion: CONTRACT_VERSION,
         historyPageSize: config.maxHistoryPageSize,
+    chatPageSize: config.conversationsPageSize,
         // 页面上限从服务端取：写死一个比服务端小的值会白跑一次上传，写大则被 413 拒。
         maxAttachmentBytes: config.maxAttachmentBytes,
         maxAttachmentsPerMessage: config.maxAttachmentsPerMessage,
@@ -827,13 +829,28 @@ export async function installWeb(
     },
   }))
 
-  // 左栏：会话列表。
+  // 左栏：会话列表（分页，0.12.4）。`offset` 缺省 0；响应带 `total` 供分页控件计算页数。
   ctx.effect(() => register({
     kind: 'exact',
     path: `${config.routePrefix}/conversations`,
     handler: async (request, response, actor) => {
       method(request, 'GET')
-      respond(actor, response, 200, { items: await console_.listConversations(actor) })
+      const offset = Number(new URL(request.url ?? '/', 'http://localhost').searchParams.get('offset') ?? '0')
+      respond(actor, response, 200, await console_.listConversations(actor, offset))
+    },
+  }))
+
+  // 左栏：改会话标题（管理操作「重命名」，仅前端单选时可用）。
+  ctx.effect(() => register({
+    kind: 'exact',
+    path: `${config.routePrefix}/conversations/rename`,
+    handler: async (request, response, actor) => {
+      method(request, 'POST')
+      const payload = await body(request, config.maxRequestBodyBytes)
+      const id = stringField(payload, 'id', 60).trim()
+      if (id === '') throw new HttpError(400, '缺少 id', 'missing_field')
+      await console_.renameConversation(actor, id, stringField(payload, 'title', 200))
+      respond(actor, response, 200, { items: (await console_.listConversations(actor, 0)).items, ok: true })
     },
   }))
 

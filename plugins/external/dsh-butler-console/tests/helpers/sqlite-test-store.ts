@@ -514,6 +514,28 @@ export class TaskStore {
       .all(actor.namespace, actor.userId, limit) as unknown as ConversationSummary[]
   }
 
+  /** 分页版侧栏列表（0.12.4 管理分页）：offset 偏移 + 全量计数。 */
+  listConversationsPaged(actor: Actor, limit: number, offset: number): { items: ConversationSummary[]; total: number } {
+    const items = this.db.prepare(`SELECT c.id AS id, c.title AS title, c.created_at AS createdAt, c.updated_at AS updatedAt,
+        (SELECT count(*) FROM tasks t WHERE t.conversation_id = c.id) AS taskCount
+      FROM conversations c
+      WHERE c.owner_namespace=? AND c.owner_id=? AND COALESCE(c.removal_state,'') <> 'removed'
+      ORDER BY c.updated_at DESC, c.id LIMIT ? OFFSET ?`)
+      .all(actor.namespace, actor.userId, limit, offset) as unknown as ConversationSummary[]
+    const row = this.db.prepare(`SELECT count(*) AS total FROM conversations c
+      WHERE c.owner_namespace=? AND c.owner_id=? AND COALESCE(c.removal_state,'') <> 'removed'`)
+      .get(actor.namespace, actor.userId) as { total: number } | undefined
+    return { items, total: Number(row?.total ?? 0) }
+  }
+
+  /** 显式改会话标题（管理操作）：无条件覆写（与 touchConversation 只写空标题不同）。 */
+  renameConversation(conversationId: string, actor: Actor, title: string): void {
+    this.assertOwner(conversationId, actor)
+    const trimmed = Array.from(title.replace(/\s+/gu, ' ').trim()).slice(0, 80).join('')
+    this.db.prepare(`UPDATE conversations SET title=?, updated_at=? WHERE id=? AND owner_namespace=? AND owner_id=?`)
+      .run(trimmed, Date.now(), conversationId, actor.namespace, actor.userId)
+  }
+
   /** 全量会话与围栏状态（同步镜像加载用；键拼法与 PG 版一致：`ns:uid:id`）。 */
   conversationRemovals(): { key: string; state: string }[] {
     return (this.db.prepare(`SELECT owner_namespace || ':' || owner_id || ':' || id AS key,
@@ -1252,8 +1274,12 @@ export class SqliteButlerStorage implements ButlerStorage {
     this.store.touchConversation(conversationId, actor, title)
   }
 
-  async listConversations(actor: Actor, limit: number): Promise<ConversationSummary[]> {
-    return this.store.listConversations(actor, limit)
+  async listConversations(actor: Actor, limit: number, offset = 0): Promise<{ items: ConversationSummary[]; total: number }> {
+    return this.store.listConversationsPaged(actor, limit, offset)
+  }
+
+  async renameConversation(actor: Actor, conversationId: string, title: string): Promise<void> {
+    this.store.renameConversation(conversationId, actor, title)
   }
 
   async createTask(input: {

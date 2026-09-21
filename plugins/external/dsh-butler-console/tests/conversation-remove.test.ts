@@ -12,7 +12,8 @@
 import { AccessError, type Access, type Actor } from '@dsh-plugin-manager/plugin-kit'
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import type { Config, Context } from '../src/butler.ts'
+import type { Config } from '../src/config.ts'
+import type { Context } from '@deepseek-ai/cordis'
 import { ButlerConsole } from '../src/butler.ts'
 import { SqliteButlerStorage, TaskStore } from './helpers/sqlite-test-store.ts'
 
@@ -22,7 +23,7 @@ function makeConsole(store: TaskStore) {
   const access = { mode: 'authenticated', ready() {}, resolve: () => actor, assert() {} } as unknown as Access
   const config = {
     subtaskTimeoutMs: 10_000, maxResultChars: 8000, maxMessageChars: 8000,
-    maxConversationEvents: 200, waitingTimeoutMs: 600_000,
+    maxConversationEvents: 200, waitingTimeoutMs: 600_000, conversationsPageSize: 10,
   } as Config
   const archived: string[] = []
   const context = {
@@ -71,7 +72,7 @@ describe('会话删除（移除围栏）', () => {
     expect(archived).toEqual([idA])
 
     const listed = await console_.listConversations(actor)
-    expect(listed.some(item => item.id === idA)).toBe(false)
+    expect(listed.items.some(item => item.id === idA)).toBe(false)
 
     const raw = store.conversationRemovals()
     expect(raw.find(row => row.key.endsWith(idA))?.state).toBe('removed')
@@ -111,7 +112,7 @@ describe('会话删除（移除围栏）', () => {
     expect(results[0]?.status).toBe('blocked')
     // 业务数据原样保留。
     const listed = await console_.listConversations(actor)
-    expect(listed.some(item => item.id === idC)).toBe(true)
+    expect(listed.items.some(item => item.id === idC)).toBe(true)
   })
 
   it('重启（重建 ButlerConsole + 重新加载镜像）后已删会话仍不出现', async () => {
@@ -125,7 +126,7 @@ describe('会话删除（移除围栏）', () => {
     const second = makeConsole(store)
     await second.console_.loadConversationIndex()
     const listed = await second.console_.listConversations(actor)
-    expect(listed.some(item => item.id === idD)).toBe(false)
+    expect(listed.items.some(item => item.id === idD)).toBe(false)
     // 再删一次是 alreadyRemoved，不是 404：镜像从库里加载回了 removed 状态。
     const again = await second.console_.deleteConversations(actor, [idD])
     expect(again).toMatchObject([{ id: idD, status: 'alreadyRemoved' }])
@@ -144,7 +145,7 @@ describe('失败记录删除（任务级）', () => {
 
     expect(await store.task(actor, taskId)).toBeUndefined()
     const listed = await console_.listConversations(actor)
-    expect(listed.some(item => item.id === idE)).toBe(true)
+    expect(listed.items.some(item => item.id === idE)).toBe(true)
   })
 
   it('活跃任务 409；不存在 404', async () => {

@@ -41,12 +41,16 @@ export const el = {
   identity: document.getElementById('identity'),
   topStatus: document.getElementById('top-status'),
   newChat: document.getElementById('new-chat'),
-  chatManageToggle: document.getElementById('chat-manage-toggle'),
+  recordsMenu: document.getElementById('records-menu'),
+  recordsMenuPop: document.getElementById('records-menu-pop'),
   chatManageBar: document.getElementById('chat-manage-bar'),
   chatManageAll: document.getElementById('chat-manage-all'),
   chatManageCount: document.getElementById('chat-manage-count'),
-  chatManageDelete: document.getElementById('chat-manage-delete'),
-  chatManageExit: document.getElementById('chat-manage-exit'),
+  chatPager: document.getElementById('chat-pager'),
+  chatPagerPrev: document.getElementById('chat-pager-prev'),
+  chatPagerNext: document.getElementById('chat-pager-next'),
+  chatPagerInfo: document.getElementById('chat-pager-info'),
+  failureMenuBtn: document.getElementById('failure-menu'),
   sidebarToggle: document.getElementById('sidebar-toggle'),
   drawerToggle: document.getElementById('drawer-toggle'),
   backdrop: document.getElementById('drawer-backdrop'),
@@ -114,12 +118,19 @@ export const state = {
   /** 当前任务的链路状态。 */
   rail: { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' },
   settingsOpen: false,
-  /** 左栏「任务记录」管理模式：开着时行首出复选框、批量操作条可见。 */
+  /** 左栏「任务记录」管理模式：开着时行首出复选框、操作条可见。 */
   chatManage: false,
   /** 管理模式下勾选的会话 id（live 集合，渲染与计数都读它）。 */
   chatPicked: new Set(),
-  /** 行内删除按钮的两段式确认状态：`元素 → 还原计时器`，避免误触（手账风的轻量确认）。 */
-  deleteArmed: new Map(),
+  /** 任务记录分页（0.12.4）：页码从 0 计，total 由 /conversations 回包维护。 */
+  chatPage: 0,
+  chatTotal: 0,
+  /** 每页条数：与后端 conversationsPageSize 同步（identity 未下发时的缺省）。 */
+  chatPageSize: 10,
+  /** 失败记录的勾选（0.12.4 统一上方操作：行前复选框 + 操作图标删除）。 */
+  failurePicked: new Set(),
+  /** 行内重命名：正在编辑的会话 id（同一时刻至多一处）。 */
+  renamingId: null,
   /** 滚动跟随（I11）：用户上滚或选字时暂停，「回到最新」恢复；跟随判断在 DOM 增长前做。 */
   following: true,
   selecting: false,

@@ -578,7 +578,7 @@ describe.skipIf(DSN === '')('butler PostgreSQL 存储冒烟（butler_test）', (
     // 自己的照常读得到。
     await expect(storage.assertOwner(mine, actor)).resolves.toBeUndefined()
     // ② 侧栏列表里不许出现别的 Agent 的会话（漏 `agent_id` 时它会混进来）。
-    const listed = await storage.listConversations(actor, 50)
+    const listed = (await storage.listConversations(actor, 50)).items
     expect(listed.map(item => item.id)).toContain(mine)
     expect(listed.map(item => item.id)).not.toContain(foreign)
   })

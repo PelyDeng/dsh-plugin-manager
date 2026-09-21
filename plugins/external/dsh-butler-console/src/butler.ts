@@ -854,10 +854,20 @@ export class ButlerConsole {
     await this.storage.clearAvatar(actor, agentId)
   }
 
-  /** 侧栏列表。 */
-  async listConversations(actor: Actor): Promise<ConversationSummary[]> {
+  /** 侧栏列表（分页，0.12.4 管理分页）。 */
+  async listConversations(actor: Actor, offset = 0): Promise<{ items: ConversationSummary[]; total: number }> {
     this.access.assert(actor)
-    return await this.storage.listConversations(actor, 50)
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10000) throw new AccessError(400, '分页参数无效', 'list_offset_invalid')
+    return await this.storage.listConversations(actor, this.config.conversationsPageSize ?? 10, offset)
+  }
+
+  /** 改会话标题（管理操作）。空标题被拒——「改成无名」没有合理场景，防误触把标题清空。 */
+  async renameConversation(actor: Actor, conversationId: string, title: string): Promise<void> {
+    this.access.assert(actor)
+    const id = this.validateId(conversationId)
+    const trimmed = title.replace(/\s+/gu, ' ').trim()
+    if (trimmed === '') throw new AccessError(400, '标题不能为空', 'rename_empty')
+    await this.storage.renameConversation(actor, id, trimmed)
   }
 
   /** 运行历史分页。 */

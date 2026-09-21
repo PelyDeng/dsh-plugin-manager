@@ -503,7 +503,10 @@ export interface ButlerStorage {
   touchConversation(conversationId: string, actor: Actor, title?: string): Promise<void>
 
   /** 侧栏列表；按最近使用排序。 */
-  listConversations(actor: Actor, limit: number): Promise<ConversationSummary[]>
+  listConversations(actor: Actor, limit: number, offset?: number): Promise<{ items: ConversationSummary[]; total: number }>
+
+  /** 显式改会话标题（管理操作）。与 touchConversation 的区别：无条件覆写，不只写空标题。 */
+  renameConversation(actor: Actor, conversationId: string, title: string): Promise<void>
 
   /**
    * **全量**管家会话与移除围栏状态（正常会话 `state=''`）。启动时加载进同步镜像——

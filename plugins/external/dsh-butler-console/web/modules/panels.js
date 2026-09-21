@@ -337,59 +337,30 @@ export function renderFailures(items) {
   clear(el.failureList)
   if (items.length === 0) {
     el.failureList.appendChild(make('p', 'empty', '暂无失败记录'))
+    el.failureMenuBtn.disabled = true
     return
   }
+  el.failureMenuBtn.disabled = state.failurePicked.size === 0
   for (const item of items) {
-    const row = make('button', 'failure-row')
-    row.type = 'button'
-    // 头行=「时间 任务名」（原型 C 与 Figma 稿均为日期在前），正文=失败原因。
-    row.appendChild(make('span', 'failure-row__goal', `${formatTime(item.updatedAt)}　${item.goal}`))
-    row.appendChild(make('span', 'failure-row__meta', item.error || '没给原因'))
-    // 删除这条失败记录（终态任务）：两段式确认，别让一次手滑把记录抹了。
-    const del = make('span', 'row-delete')
-    del.setAttribute('role', 'button')
-    del.tabIndex = 0
-    del.title = '删除这条失败记录'
-    del.textContent = '×'
-    del.addEventListener('click', event => { event.stopPropagation(); armRowDelete(del, () => { void removeFailedTask(item.id, del) }) })
-    del.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); del.click() } })
-    row.appendChild(del)
-    row.addEventListener('click', () => { void openTask(item.id) })
+    // 0.12.4：行前复选框勾选、删除统一走标题行的操作图标（⋯），行内不再放 ×。
+    const row = make('label', 'failure-row failure-row--pick')
+    const check = make('input', 'failure-row__check')
+    check.type = 'checkbox'
+    check.checked = state.failurePicked.has(item.id)
+    check.addEventListener('change', () => {
+      if (check.checked) state.failurePicked.add(item.id)
+      else state.failurePicked.delete(item.id)
+      el.failureMenuBtn.disabled = state.failurePicked.size === 0
+    })
+    row.appendChild(check)
+    // 头行=「时间 任务名」（原型 C 与 Figma 稿均为日期在前），正文=失败原因。点击文本仍可打开任务。
+    const body = make('span', 'failure-row__body')
+    body.appendChild(make('span', 'failure-row__goal', `${formatTime(item.updatedAt)}　${item.goal}`))
+    body.appendChild(make('span', 'failure-row__meta', item.error || '没给原因'))
+    body.addEventListener('click', () => { void openTask(item.id) })
+    row.appendChild(body)
     el.failureList.appendChild(row)
   }
-}
-
-/** 行内删除的两段式确认：第一段武装（按钮亮起并提示再点确认），3 秒没确认就还原。 */
-function armRowDelete(node, onConfirm) {
-  const armed = state.deleteArmed.get(node)
-  if (armed !== undefined) {
-    clearTimeout(armed.timer)
-    state.deleteArmed.delete(node)
-    node.classList.remove('row-delete--armed')
-    node.textContent = '×'
-    onConfirm()
-    return
-  }
-  node.classList.add('row-delete--armed')
-  node.textContent = '确认删除'
-  state.deleteArmed.set(node, { timer: setTimeout(() => {
-    node.classList.remove('row-delete--armed')
-    node.textContent = '×'
-    state.deleteArmed.delete(node)
-  }, 3000) })
-}
-
-/** 删除一条失败记录后，就近刷新失败列表与计数。 */
-async function removeFailedTask(taskId, node) {
-  node.textContent = '…'
-  try {
-    await api.removeTask(taskId)
-    announce('失败记录已删除')
-  } catch (error) {
-    node.textContent = '×'
-    announce(error instanceof ApiError ? error.message : '删除失败，稍后再试')
-  }
-  await refreshPanels()
 }
 
 export function renderChatList(items, keyword) {
@@ -414,6 +385,25 @@ export function renderChatList(items, keyword) {
       check.addEventListener('change', () => { pickConversation(item.id, check.checked, row) })
       row.appendChild(check)
       const left = make('span')
+      // 行内重命名（0.12.4）：正在改名的这条，标题位换成一个手账风输入框。
+      if (state.renamingId === item.id) {
+        const input = make('input', 'chat-row__rename')
+        input.value = item.title || ''
+        input.placeholder = '起个新名字'
+        input.maxLength = 80
+        row.classList.add('chat-row--renaming')
+        left.appendChild(input)
+        row.appendChild(left)
+        el.chatList.appendChild(row)
+        input.focus()
+        input.select()
+        input.addEventListener('keydown', event => {
+          if (event.key === 'Enter') { event.preventDefault(); void submitRename(input.value) }
+          else if (event.key === 'Escape') { event.preventDefault(); cancelRename() }
+        })
+        input.addEventListener('blur', () => { if (state.renamingId === item.id) void submitRename(input.value) })
+        continue
+      }
       left.appendChild(make('span', 'chat-row__title', item.title || '（还没起名）'))
       if (item.preview) left.appendChild(make('span', 'chat-row__preview', item.preview))
       row.appendChild(left)
@@ -428,51 +418,111 @@ export function renderChatList(items, keyword) {
     if (item.preview) left.appendChild(make('span', 'chat-row__preview', item.preview))
     row.appendChild(left)
     row.appendChild(make('span', 'chat-row__time', formatTime(item.updatedAt)))
-    const del = make('span', 'row-delete')
-    del.setAttribute('role', 'button')
-    del.tabIndex = 0
-    del.title = '删除这条任务记录'
-    del.textContent = '×'
-    del.addEventListener('click', event => { event.stopPropagation(); armRowDelete(del, () => { void removeOneConversation(item.id, del) }) })
-    del.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); del.click() } })
-    row.appendChild(del)
     row.addEventListener('click', () => { void openConversation(item.id) })
     el.chatList.appendChild(row)
   }
 }
 
-/** 管理模式勾选变化：维护选中集并刷新计数与行样式。 */
+/** 分页条（0.12.4）：只在多于一页时出现；按钮态随页码。 */
+export function renderPager() {
+  const pages = Math.max(1, Math.ceil(state.chatTotal / state.chatPageSize))
+  el.chatPager.hidden = pages <= 1
+  el.chatPagerInfo.textContent = `${state.chatPage + 1} / ${pages}`
+  el.chatPagerPrev.disabled = state.chatPage === 0
+  el.chatPagerNext.disabled = state.chatPage >= pages - 1
+}
+
+/** 翻页（0.12.4）：切页清选中（跨页选中容易误删）、回到列表顶部重拉。 */
+export function gotoChatPage(page) {
+  const pages = Math.max(1, Math.ceil(state.chatTotal / state.chatPageSize))
+  const next = Math.min(Math.max(0, page), pages - 1)
+  if (next === state.chatPage) return
+  state.chatPage = next
+  state.chatPicked.clear()
+  closeRecordsMenu()
+  void refreshChatList()
+}
+
+/** 勾选变化：维护选中集并刷新计数、全选三态。 */
 function pickConversation(id, picked, row) {
   if (picked) state.chatPicked.add(id)
   else state.chatPicked.delete(id)
   row.classList.toggle('chat-row--picked', picked)
   updateManageBar()
+  refreshOpenMenu()
 }
 
 function updateManageBar() {
+  const rows = [...el.chatList.querySelectorAll('.chat-row__check')]
+  const checked = rows.filter(check => check.checked).length
   el.chatManageCount.textContent = `已选 ${state.chatPicked.size} 条`
-  el.chatManageDelete.disabled = state.chatPicked.size === 0
+  // 全选框三态：本页全选勾、部分半选、空不选。
+  el.chatManageAll.checked = rows.length > 0 && checked === rows.length
+  el.chatManageAll.indeterminate = checked > 0 && checked < rows.length
+}
+// 83dc53555f00774065f652fe900953d84e86Ff0c5c31573091cd5efa83dc53559879Ff0852209664/91cd547d540d53ef7528600153d651b34e8e90094e2d6570Ff093002
+function refreshOpenMenu() {
+  if (!el.recordsMenuPop.hidden) toggleRecordsMenu(true)
 }
 
-/** 开关管理模式：退出时清空选中；重画列表让行形态切换。 */
+/** 全选框切换：同步当前页所有行（选中集跨页保留，全选只影响本页可见行）。 */
+export function togglePickAll(picked) {
+  for (const check of el.chatList.querySelectorAll('.chat-row__check')) {
+    if (check.checked !== picked) {
+      check.checked = picked
+      check.dispatchEvent(new Event('change'))
+    }
+  }
+}
+
+/**
+ * ⋯ 菜单（0.12.4 合并版：「管理」与「操作」是同一个入口）：
+ * 非管理态只有「管理」一项；管理态是「删除所选 / 重命名 / 完成」。
+ * 菜单项每次打开按当下状态重建。
+ */
+export function toggleRecordsMenu(open = el.recordsMenuPop.hidden) {
+  if (open) {
+    clear(el.recordsMenuPop)
+    const addItem = (text, options = {}) => {
+      const item = make('button', `chat-manage-menu__item${options.danger === true ? ' chat-manage-menu__item--danger' : ''}`, text)
+      item.type = 'button'
+      item.setAttribute('role', 'menuitem')
+      if (options.disabled === true) item.disabled = true
+      item.addEventListener('click', () => { void options.run?.() })
+      el.recordsMenuPop.appendChild(item)
+      return item
+    }
+    if (state.chatManage) {
+      addItem('删除所选', { danger: true, disabled: state.chatPicked.size === 0, run: () => { closeRecordsMenu(); void deletePickedConversations() } })
+      // 重命名只在恰好选中一条时可用（多条没有一致的改名语义）。
+      addItem('重命名', { disabled: state.chatPicked.size !== 1, run: () => { closeRecordsMenu(); startRename() } })
+      addItem('完成', { run: () => { closeRecordsMenu(); setChatManage(false) } })
+    } else {
+      addItem('管理', { run: () => { closeRecordsMenu(); setChatManage(true) } })
+    }
+  }
+  el.recordsMenuPop.hidden = !open
+  el.recordsMenu.setAttribute('aria-expanded', String(open))
+}
+
+function closeRecordsMenu() {
+  el.recordsMenuPop.hidden = true
+  el.recordsMenu.setAttribute('aria-expanded', 'false')
+}
+
+/** 开关管理模式：进入时行前出复选框+操作条；退出清空选中与改名态。 */
 export function setChatManage(on) {
   state.chatManage = on
-  if (!on) state.chatPicked.clear()
-  el.chatManageToggle.textContent = on ? '管理中' : '管理'
-  el.chatManageToggle.setAttribute('aria-pressed', String(on))
+  if (!on) {
+    state.chatPicked.clear()
+    state.renamingId = null
+  }
+  closeRecordsMenu()
   el.chatManageBar.hidden = !on
-  updateManageBar()
-  void refreshChatList()
+  void refreshChatList().then(() => { if (on) updateManageBar() })
 }
 
-/** 单条删除（复用同一条围栏接口）。 */
-async function removeOneConversation(id, node) {
-  node.textContent = '…'
-  const results = await removeConversationsWithFeedback([id])
-  if (!results) node.textContent = '×'
-}
-
-/** 批量/单条删除共用：调围栏接口、按结果提示、刷新列表；当前会话被删时另起新会话。 */
+/** 批量删除共用：调围栏接口、按结果提示、刷新列表；当前会话被删时另起新会话。 */
 async function removeConversationsWithFeedback(ids) {
   let results
   try {
@@ -485,10 +535,11 @@ async function removeConversationsWithFeedback(ids) {
   const blocked = results.filter(result => result.status === 'blocked')
   if (removed.length > 0) announce(`已删除 ${removed.length} 条任务记录`)
   if (blocked.length > 0) announce(blocked.length === 1 ? '有 1 条正在执行，先停止再删' : `有 ${blocked.length} 条正在执行，先停止再删`)
+  closeRecordsMenu()
   if (removed.some(result => result.id === state.conversationId)) {
     // 当前打开的会话被删掉了：回新会话，别让中栏挂在已删除的对话上。
     state.chatPicked.clear()
-    await openNewConversation()
+    openNewChat()
     return results
   }
   state.chatPicked.clear()
@@ -496,17 +547,76 @@ async function removeConversationsWithFeedback(ids) {
   return results
 }
 
-/** 管理模式的「删除所选」：确认态在按钮上（两段式），防一次误触批量删。 */
+/** 操作菜单的「删除所选」。 */
 export async function deletePickedConversations() {
   const ids = [...state.chatPicked]
   if (ids.length === 0) return
   await removeConversationsWithFeedback(ids)
 }
 
-/** 当前会话被删后的收尾：清选中、回新会话（openNewChat 自带视图重置与列表刷新）。 */
-async function openNewConversation() {
+/** 操作菜单的「重命名」：把唯一选中项切进行内编辑态。 */
+export function startRename() {
+  if (state.chatPicked.size !== 1) return
+  state.renamingId = [...state.chatPicked][0]
+  closeRecordsMenu()
+  void refreshChatList()
+}
+
+/** 行内改名提交：空值视为取消；成功后刷新列表（服务端返回新标题）。 */
+async function submitRename(title) {
+  const id = state.renamingId
+  if (id === null) return
+  state.renamingId = null
+  const trimmed = title.trim()
+  if (trimmed === '') { await refreshChatList(); return }
+  try {
+    await api.renameConversation(id, trimmed)
+    announce('已改名')
+  } catch (error) {
+    announce(error instanceof ApiError ? error.message : '改名失败，稍后再试')
+  }
   state.chatPicked.clear()
-  openNewChat()
+  await refreshChatList()
+}
+
+function cancelRename() {
+  state.renamingId = null
+  void refreshChatList()
+}
+
+/** 失败记录的操作图标（⋯）：两段式确认（点亮 3 秒），确认后删所选。 */
+export function armFailureMenu() {
+  const button = el.failureMenuBtn
+  if (button.dataset.armed === '1') {
+    delete button.dataset.armed
+    button.textContent = '⋯'
+    void removePickedFailures()
+    return
+  }
+  const count = state.failurePicked.size
+  if (count === 0) return
+  button.dataset.armed = '1'
+  button.textContent = `确认删 ${count} 条`
+  setTimeout(() => {
+    if (button.dataset.armed === '1') { delete button.dataset.armed; button.textContent = '⋯' }
+  }, 3000)
+}
+
+async function removePickedFailures() {
+  const ids = [...state.failurePicked]
+  if (ids.length === 0) return
+  let removed = 0
+  for (const id of ids) {
+    try {
+      await api.removeTask(id)
+      removed += 1
+      state.failurePicked.delete(id)
+    } catch (error) {
+      announce(error instanceof ApiError ? error.message : '删除失败，稍后再试')
+    }
+  }
+  if (removed > 0) announce(`已删除 ${removed} 条失败记录`)
+  await refreshPanels()
 }
 
 /* ── 右栏操作 ─────────────────────────────────────────────────────────── */
@@ -551,7 +661,14 @@ export async function refreshPanels() {
  */
 export async function refreshChatList() {
   try {
-    const [conversations, history] = await Promise.all([api.conversations(), api.history()])
+    // 分页（0.12.4）：按当前页取；删除后当前页空且非首页时回退一页重拉。
+    const offset = state.chatPage * state.chatPageSize
+    const [conversations, history] = await Promise.all([api.conversations(offset), api.history()])
+    if (conversations.items.length === 0 && state.chatPage > 0) {
+      state.chatPage -= 1
+      return await refreshChatList()
+    }
+    state.chatTotal = conversations.total ?? conversations.items.length
     const byConversation = new Map()
     for (const task of history.items) {
       if (!byConversation.has(task.conversationId)) byConversation.set(task.conversationId, task)
@@ -564,6 +681,8 @@ export async function refreshChatList() {
       }
     })
     renderChatList(items, el.chatSearch.value.trim().toLowerCase())
+    renderPager()
+    if (state.chatManage) updateManageBar()
   } catch (error) {
     // 把服务端给的原因一并显示：只说「读取记录失败」，排查时等于什么都没有。
     const reason = error instanceof Error ? error.message : ''
