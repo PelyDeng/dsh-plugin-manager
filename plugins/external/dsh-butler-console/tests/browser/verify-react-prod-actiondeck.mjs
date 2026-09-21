@@ -193,8 +193,13 @@ const sentP3 = await sendAndWaitDeck(`请删除标题为《${title}》的博客�
 check('deck 出现（删除任务触发确认卡）', sentP3)
 if (!sentP3) { await shot('prod-ad-p3-no-deck'); done(1) }
 await sleep(1500)
-const cancelLabel = await evaluate(`(() => { const b = [...document.querySelectorAll('.action-deck button')].find(b => b.textContent.trim() === '先不办'); if (b === undefined) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`)
-check('「先不办」按钮存在', cancelLabel !== null)
+// cancel 按钮文案来自协议 cancelLabel（删除任务是「先不删」、发布是「先不办」），
+// 按钮定位不能用写死文案：cancel = 非 primary 的那颗。
+const cancelLabel = await evaluate(`(() => { const b = document.querySelector('.action-deck .action-deck__row button:not(.btn--primary)'); if (b === null) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, label: b.textContent.trim() } })()`)
+check('cancel 按钮存在', cancelLabel !== null, cancelLabel === null ? '' : `label=${cancelLabel.label}`)
+if (cancelLabel === null) {
+  console.log('  [deck HTML]', await evaluate("document.querySelector('.action-deck')?.outerHTML.replace(/\\s+/g, ' ').slice(0, 900)"))
+}
 if (cancelLabel !== null) {
   await click(cancelLabel)
   let gone = false
