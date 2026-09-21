@@ -286,8 +286,9 @@ textarea:focus-visible,
 .brand { position: relative; padding: 4px 2px 0; }
 .brand__badge { position: absolute; top: -16px; right: 6px; width: 38px; height: 37px; transform: rotate(14deg); filter: drop-shadow(1px 2px 0 #00000022); }
 /* 描摹版大标题：字形逐笔取自原型 C（位图墨迹 → 矢量描摹），显示尺寸按原型实测字形高度（65px@1536 → ~64px@1600）。 */
+/* 绘语重绘版大标题：图自带左下→右上约 8 度上扬动势（毛笔字 + 亮度抠像透明底），不再叠加 CSS 旋转。 */
 .brand__title { margin: 0; line-height: 0; }
-.brand__title img { display: block; height: 53px; width: auto; transform: rotate(-3.5deg); transform-origin: 20% 90%; }
+.brand__title img { display: block; height: 60px; width: auto; }
 .brand__wave { display: block; width: 158px; height: 8px; margin-top: 2px; color: #4d96ff; }
 .left__brandline { font-family: var(--bt-hand); font-size: 14px; color: var(--bt-ink-soft); margin-top: 2px; }
 
