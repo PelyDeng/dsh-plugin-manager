@@ -67,7 +67,7 @@ export const api = {
   identity: () => request('/identity'),
   members: () => request('/members'),
   overview: () => request('/overview'),
-  conversations: (offset = 0) => request(`/conversations?offset=${offset}`),
+  conversations: (offset = 0, limit) => request(`/conversations?offset=${offset}${limit === undefined ? '' : `&limit=${limit}`}`),
   /** 改会话标题（管理操作「重命名」）。回包带最新一页列表。 */
   renameConversation: (id, title) =>
     request('/conversations/rename', { method: 'POST', body: JSON.stringify({ id, title }) }),

@@ -375,58 +375,52 @@ export function renderChatList(items, keyword) {
     return
   }
   for (const item of filtered) {
-    if (state.chatManage) {
-      // 管理模式：整行是 label（点击即勾选），不再承担「打开会话」。
-      const row = make('label', 'chat-row chat-row--manage')
-      if (state.chatPicked.has(item.id)) row.classList.add('chat-row--picked')
-      const check = make('input', 'chat-row__check')
-      check.type = 'checkbox'
-      check.checked = state.chatPicked.has(item.id)
-      check.addEventListener('change', () => { pickConversation(item.id, check.checked, row) })
-      row.appendChild(check)
-      const left = make('span')
-      // 行内重命名（0.12.4）：正在改名的这条，标题位换成一个手账风输入框。
-      if (state.renamingId === item.id) {
-        const input = make('input', 'chat-row__rename')
-        input.value = item.title || ''
-        input.placeholder = '起个新名字'
-        input.maxLength = 80
-        row.classList.add('chat-row--renaming')
-        left.appendChild(input)
-        row.appendChild(left)
-        el.chatList.appendChild(row)
-        input.focus()
-        input.select()
-        input.addEventListener('keydown', event => {
-          if (event.key === 'Enter') { event.preventDefault(); void submitRename(input.value) }
-          else if (event.key === 'Escape') { event.preventDefault(); cancelRename() }
-        })
-        input.addEventListener('blur', () => { if (state.renamingId === item.id) void submitRename(input.value) })
-        continue
-      }
-      left.appendChild(make('span', 'chat-row__title', item.title || '（还没起名）'))
-      if (item.preview) left.appendChild(make('span', 'chat-row__preview', item.preview))
-      row.appendChild(left)
+    // 0.12.5：复选框常驻（没有管理模式了）——行首勾选、正文点击打开会话，两不误。
+    const row = make('div', 'chat-row chat-row--pickable')
+    if (state.chatPicked.has(item.id)) row.classList.add('chat-row--picked')
+    if (item.id === state.conversationId) row.setAttribute('aria-current', 'true')
+    const check = make('input', 'chat-row__check')
+    check.type = 'checkbox'
+    check.checked = state.chatPicked.has(item.id)
+    check.addEventListener('change', () => { pickConversation(item.id, check.checked, row) })
+    row.appendChild(check)
+    const body = make('span', 'chat-row__body')
+    // 行内重命名（0.12.4）：正在改名的这条，标题位换成一个手账风输入框。
+    if (state.renamingId === item.id) {
+      const input = make('input', 'chat-row__rename')
+      input.value = item.title || ''
+      input.placeholder = '起个新名字'
+      input.maxLength = 80
+      row.classList.add('chat-row--renaming')
+      body.appendChild(input)
+      row.appendChild(body)
       el.chatList.appendChild(row)
+      input.focus()
+      input.select()
+      input.addEventListener('keydown', event => {
+        if (event.key === 'Enter') { event.preventDefault(); void submitRename(input.value) }
+        else if (event.key === 'Escape') { event.preventDefault(); cancelRename() }
+      })
+      input.addEventListener('blur', () => { if (state.renamingId === item.id) void submitRename(input.value) })
       continue
     }
-    const row = make('button', 'chat-row')
-    row.type = 'button'
-    if (item.id === state.conversationId) row.setAttribute('aria-current', 'true')
     const left = make('span')
     left.appendChild(make('span', 'chat-row__title', item.title || '（还没起名）'))
     if (item.preview) left.appendChild(make('span', 'chat-row__preview', item.preview))
-    row.appendChild(left)
-    row.appendChild(make('span', 'chat-row__time', formatTime(item.updatedAt)))
-    row.addEventListener('click', () => { void openConversation(item.id) })
+    body.appendChild(left)
+    body.appendChild(make('span', 'chat-row__time', formatTime(item.updatedAt)))
+    body.addEventListener('click', () => { void openConversation(item.id) })
+    row.appendChild(body)
     el.chatList.appendChild(row)
   }
 }
 
 /** 分页条（0.12.4）：只在多于一页时出现；按钮态随页码。 */
 export function renderPager() {
+  // 搜索态（0.12.5）：结果来自全量过滤，页码失去意义，收起分页条。
+  const searching = el.chatSearch.value.trim() !== ''
   const pages = Math.max(1, Math.ceil(state.chatTotal / state.chatPageSize))
-  el.chatPager.hidden = pages <= 1
+  el.chatPager.hidden = searching || pages <= 1
   el.chatPagerInfo.textContent = `${state.chatPage + 1} / ${pages}`
   el.chatPagerPrev.disabled = state.chatPage === 0
   el.chatPagerNext.disabled = state.chatPage >= pages - 1
@@ -460,12 +454,13 @@ function updateManageBar() {
   el.chatManageAll.checked = rows.length > 0 && checked === rows.length
   el.chatManageAll.indeterminate = checked > 0 && checked < rows.length
 }
-// 83dc53555f00774065f652fe900953d84e86Ff0c5c31573091cd5efa83dc53559879Ff0852209664/91cd547d540d53ef7528600153d651b34e8e90094e2d6570Ff093002
+
+/** 菜单开着时勾选变了（删除/重命名的可用态取决于选中数），就地重建菜单项。 */
 function refreshOpenMenu() {
   if (!el.recordsMenuPop.hidden) toggleRecordsMenu(true)
 }
 
-/** 全选框切换：同步当前页所有行（选中集跨页保留，全选只影响本页可见行）。 */
+/** 全选框切换：同步当前页（或搜索结果）所有行——选中集只在可见行里维护。 */
 export function togglePickAll(picked) {
   for (const check of el.chatList.querySelectorAll('.chat-row__check')) {
     if (check.checked !== picked) {
@@ -476,9 +471,8 @@ export function togglePickAll(picked) {
 }
 
 /**
- * ⋯ 菜单（0.12.4 合并版：「管理」与「操作」是同一个入口）：
- * 非管理态只有「管理」一项；管理态是「删除所选 / 重命名 / 完成」。
- * 菜单项每次打开按当下状态重建。
+ * ⋯ 菜单（0.12.5：没有管理模式了，菜单固定为「删除所选 / 重命名」）。
+ * 再点 ⋯ 关闭（标准 toggle）；菜单项每次打开按当下选中数重建。
  */
 export function toggleRecordsMenu(open = el.recordsMenuPop.hidden) {
   if (open) {
@@ -492,14 +486,9 @@ export function toggleRecordsMenu(open = el.recordsMenuPop.hidden) {
       el.recordsMenuPop.appendChild(item)
       return item
     }
-    if (state.chatManage) {
-      addItem('删除所选', { danger: true, disabled: state.chatPicked.size === 0, run: () => { closeRecordsMenu(); void deletePickedConversations() } })
-      // 重命名只在恰好选中一条时可用（多条没有一致的改名语义）。
-      addItem('重命名', { disabled: state.chatPicked.size !== 1, run: () => { closeRecordsMenu(); startRename() } })
-      addItem('完成', { run: () => { closeRecordsMenu(); setChatManage(false) } })
-    } else {
-      addItem('管理', { run: () => { closeRecordsMenu(); setChatManage(true) } })
-    }
+    addItem('删除所选', { danger: true, disabled: state.chatPicked.size === 0, run: () => { closeRecordsMenu(); void deletePickedConversations() } })
+    // 重命名只在恰好选中一条时可用（多条没有一致的改名语义）。
+    addItem('重命名', { disabled: state.chatPicked.size !== 1, run: () => { closeRecordsMenu(); startRename() } })
   }
   el.recordsMenuPop.hidden = !open
   el.recordsMenu.setAttribute('aria-expanded', String(open))
@@ -508,18 +497,6 @@ export function toggleRecordsMenu(open = el.recordsMenuPop.hidden) {
 function closeRecordsMenu() {
   el.recordsMenuPop.hidden = true
   el.recordsMenu.setAttribute('aria-expanded', 'false')
-}
-
-/** 开关管理模式：进入时行前出复选框+操作条；退出清空选中与改名态。 */
-export function setChatManage(on) {
-  state.chatManage = on
-  if (!on) {
-    state.chatPicked.clear()
-    state.renamingId = null
-  }
-  closeRecordsMenu()
-  el.chatManageBar.hidden = !on
-  void refreshChatList().then(() => { if (on) updateManageBar() })
 }
 
 /** 批量删除共用：调围栏接口、按结果提示、刷新列表；当前会话被删时另起新会话。 */
@@ -661,10 +638,14 @@ export async function refreshPanels() {
  */
 export async function refreshChatList() {
   try {
-    // 分页（0.12.4）：按当前页取；删除后当前页空且非首页时回退一页重拉。
-    const offset = state.chatPage * state.chatPageSize
-    const [conversations, history] = await Promise.all([api.conversations(offset), api.history()])
-    if (conversations.items.length === 0 && state.chatPage > 0) {
+    // 0.12.5：浏览=按页取；搜索=拉全量（后端显式 limit）再本地过滤——只筛当页会漏掉后面页的记录。
+    const searching = el.chatSearch.value.trim() !== ''
+    const offset = searching ? 0 : state.chatPage * state.chatPageSize
+    const [conversations, history] = await Promise.all([
+      searching ? api.conversations(0, 200) : api.conversations(offset),
+      api.history(),
+    ])
+    if (conversations.items.length === 0 && state.chatPage > 0 && !searching) {
       state.chatPage -= 1
       return await refreshChatList()
     }
@@ -682,7 +663,7 @@ export async function refreshChatList() {
     })
     renderChatList(items, el.chatSearch.value.trim().toLowerCase())
     renderPager()
-    if (state.chatManage) updateManageBar()
+    updateManageBar()
   } catch (error) {
     // 把服务端给的原因一并显示：只说「读取记录失败」，排查时等于什么都没有。
     const reason = error instanceof Error ? error.message : ''

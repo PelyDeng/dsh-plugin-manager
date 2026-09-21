@@ -119,7 +119,6 @@ export const state = {
   rail: { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' },
   settingsOpen: false,
   /** 左栏「任务记录」管理模式：开着时行首出复选框、操作条可见。 */
-  chatManage: false,
   /** 管理模式下勾选的会话 id（live 集合，渲染与计数都读它）。 */
   chatPicked: new Set(),
   /** 任务记录分页（0.12.4）：页码从 0 计，total 由 /conversations 回包维护。 */

@@ -835,8 +835,12 @@ export async function installWeb(
     path: `${config.routePrefix}/conversations`,
     handler: async (request, response, actor) => {
       method(request, 'GET')
-      const offset = Number(new URL(request.url ?? '/', 'http://localhost').searchParams.get('offset') ?? '0')
-      respond(actor, response, 200, await console_.listConversations(actor, offset))
+      const params = new URL(request.url ?? '/', 'http://localhost').searchParams
+      const offset = Number(params.get('offset') ?? '0')
+      // 0.12.5：limit 由前端在搜索（全量拉取再本地过滤）时显式给出；浏览态缺省用配置页大小。
+      const limitParam = params.get('limit')
+      const limit = limitParam === null ? undefined : Number(limitParam)
+      respond(actor, response, 200, await console_.listConversations(actor, offset, limit))
     },
   }))
 

@@ -855,10 +855,13 @@ export class ButlerConsole {
   }
 
   /** 侧栏列表（分页，0.12.4 管理分页）。 */
-  async listConversations(actor: Actor, offset = 0): Promise<{ items: ConversationSummary[]; total: number }> {
+  async listConversations(actor: Actor, offset = 0, limit?: number): Promise<{ items: ConversationSummary[]; total: number }> {
     this.access.assert(actor)
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10000) throw new AccessError(400, '分页参数无效', 'list_offset_invalid')
-    return await this.storage.listConversations(actor, this.config.conversationsPageSize ?? 10, offset)
+    // 0.12.5：搜索场景由前端显式放开 limit 拉全量（分页浏览仍用配置页大小）。
+    const size = limit === undefined ? this.config.conversationsPageSize ?? 10 : limit
+    if (!Number.isSafeInteger(size) || size < 1 || size > 200) throw new AccessError(400, '每页条数无效', 'list_limit_invalid')
+    return await this.storage.listConversations(actor, size, offset)
   }
 
   /** 改会话标题（管理操作）。空标题被拒——「改成无名」没有合理场景，防误触把标题清空。 */
