@@ -66,12 +66,12 @@
     }
   },
   "scripts": {
-    "build": "tsdown && tsdown --config tsdown.web.config.ts",
-    "build:react": "tsdown && tsdown --config tsdown.web-react.config.ts && tailwindcss -i web-react/src/styles/app.css -o dist/web/app.css --minify",
+    "build": "tsdown && tsdown --config tsdown.web-react.config.ts && tailwindcss -i web-react/src/styles/app.css -o dist/web/app.css --minify",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check": "pnpm typecheck && node --check web/app.js && node --check web/api.js && node --check web/stream.js && node --check web/markdown.js && node --check web/modules/config.js && node --check web/modules/state.js && node --check web/modules/dom.js && node --check web/modules/rail.js && node --check web/modules/speech.js && node --check web/modules/member.js && node --check web/modules/dcard.js && node --check web/modules/attachments.js && node --check web/modules/panels.js && node --check web/modules/history.js && node --check web/modules/cards.js && node --check web/modules/events.js && node --check web/modules/send.js && node --check web/modules/composer.js && node scripts/check-web-cycles.mjs && node scripts/check-module-leaks.mjs",
-    "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
+    "clean": "node ../../scripts/clean-plugin.mjs dist coverage",
+    "build:web": "tsdown && tsdown --config tsdown.web.config.ts"
   },
   "dependencies": {
     "@deepseek-ai/schemastery": "3.18.2",
