@@ -7,6 +7,7 @@ import { memo, type CSSProperties, useState } from 'react'
 import { RichText } from './RichText.tsx'
 import { Avatar } from '../common/Avatar.tsx'
 import { AskCard } from './AskCard.tsx'
+import { ActionCard } from './ActionCard.tsx'
 import { SUGGESTIONS, STATE_TEXT, DEFAULT_AVATAR_FILES, STREAM_RICH_LIMIT } from '../../lib/config.ts'
 import type { ThreadEntry, SubtaskEntry } from '../../stores/turn.ts'
 import { useTurnStore } from '../../stores/turn.ts'
@@ -155,6 +156,9 @@ function SubtaskEntryViewFn({ entry }: { entry: SubtaskEntry }) {
             detail={entry.ask.detail}
           />
         )}
+        {Array.isArray(entry.actions) && entry.actions.map(action => (
+          <ActionCard key={action.id} action={action} taskId={entry.taskId ?? ''} subtaskId={entry.subtaskId} />
+        ))}
         {entry.state === 'external_pending' && <div className="msg__meta">待外部处理，办好之后可以新开一轮</div>}
       </div>
     </div>

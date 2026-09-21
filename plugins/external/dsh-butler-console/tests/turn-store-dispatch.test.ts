@@ -5,7 +5,7 @@
  */
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from 'vitest'
-import { readCardPrefs, saveCardPref, useTurnStore } from '../web-react/src/stores/turn.ts'
+import { readCardPrefs, resolveActionLocally, saveCardPref, useTurnStore } from '../web-react/src/stores/turn.ts'
 import type { TurnEvent } from '../web-react/src/lib/turn-event.ts'
 
 function apply(event: TurnEvent): void {
@@ -111,6 +111,22 @@ describe('调度卡数据面（plan/subtask/summary）', () => {
     expect(entry.actions).toBeDefined()
     expect(entry.actions?.[0]?.state).toBe('prepared')
     expect(entry.actions?.[0]?.confirmLabel).toBe('确认')
+  })
+
+  it('决策受理本地摘卡：resolveActionLocally 移除对应操作卡，其他成员不受影响（0.13.3）', () => {
+    seedPlan()
+    const preparedA = [{ id: 'act-a', kind: 'blog.publish', state: 'prepared', title: '发布' }]
+    const preparedB = [{ id: 'act-b', kind: 'blog.publish', state: 'prepared', title: '发布' }]
+    apply({ type: 'subtask', id: 'c1', agentId: 'blog', state: 'external_pending', actions: preparedA, time: 1 } as unknown as TurnEvent)
+    apply({ type: 'subtask', id: 'c2', agentId: 'huiyu', state: 'external_pending', actions: preparedB, time: 2 } as unknown as TurnEvent)
+    // 受理 c1 的确认：只有 c1 的卡被摘下
+    resolveActionLocally('c1', 'act-a')
+    const entries = useTurnStore.getState().entries
+    const c1 = entries.find(entry => entry.kind === 'subtask' && entry.subtaskId === 'c1')
+    const c2 = entries.find(entry => entry.kind === 'subtask' && entry.subtaskId === 'c2')
+    if (c1?.kind !== 'subtask' || c2?.kind !== 'subtask') throw new Error('missing')
+    expect(c1.actions).toEqual([])
+    expect(c2.actions?.[0]?.id).toBe('act-b')
   })
 
   it('偏好读写（butler.card.{taskId}）：折叠/只看结论落本机', () => {

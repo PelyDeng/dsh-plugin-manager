@@ -5,7 +5,7 @@
  * 所有智能体通用：不按 kind 硬编码，按钮文案取自协议字段。
  */
 import { useMemo, useState } from 'react'
-import { useTurnStore } from '../../stores/turn.ts'
+import { useTurnStore, resolveActionLocally, resolveAskLocally } from '../../stores/turn.ts'
 import { useSessionStore, displayNameOf } from '../../stores/session.ts'
 import { runActionDecision, runReply } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
@@ -32,26 +32,22 @@ interface PendingItem {
 function usePendingItems(): PendingItem[] {
   const entries = useTurnStore(state => state.entries)
   return useMemo(() => {
-    const subtaskTask = new Map<string, string>()
-    for (const entry of entries) {
-      if (entry.kind === 'dispatch') {
-        for (const id of entry.order) subtaskTask.set(id, entry.taskId)
-      }
-    }
     const items: PendingItem[] = []
     for (const entry of entries) {
-      if (entry.kind === 'subtask' && entry.state === 'waiting_user' && entry.ask !== undefined) {
+      if (entry.kind !== 'subtask') continue
+      const taskId = entry.taskId ?? ''
+      if (entry.state === 'waiting_user' && entry.ask !== undefined) {
         items.push({
           key: `reply-${entry.subtaskId}`, kind: 'reply', taskId: entry.ask.taskId,
           subtaskId: entry.subtaskId, agentId: entry.agentId,
           question: entry.ask.question, detail: entry.ask.detail,
         })
       }
-      if (entry.kind === 'subtask' && Array.isArray(entry.actions)) {
+      if (Array.isArray(entry.actions)) {
         for (const action of entry.actions) {
           if (action.state === 'prepared') {
             items.push({
-              key: `action-${action.id}`, kind: 'confirm', taskId: subtaskTask.get(entry.subtaskId) ?? '',
+              key: `action-${action.id}`, kind: 'confirm', taskId,
               subtaskId: entry.subtaskId, agentId: entry.agentId,
               actionId: action.id,
               title: action.title, summary: action.summary, detail: action.detail,
@@ -80,8 +76,10 @@ function PendingCard({ item }: { item: PendingItem }) {
         taskId: item.taskId, subtaskId: item.subtaskId,
         actionId: item.actionId ?? '', decision,
         requestId: newConversationId(),
+      }, {
+        // 受理即摘卡：后端把子任务重新调度要数分钟，prepared 卡挂着只会诱导重复点击。
+        onAccepted: () => { resolveActionLocally(item.subtaskId, item.actionId ?? ''); setNote(decision === 'confirm' ? '已受理，正在办理' : '已撤回') },
       })
-      setNote(decision === 'confirm' ? '已确认，正在办理' : '已撤回')
     } catch (error) {
       setNote(`${decision === 'confirm' ? '确认' : '撤回'}没成功：${error instanceof Error && error.message !== '' ? error.message : '网络异常'}`)
       setLocked(false)
@@ -95,7 +93,7 @@ function PendingCard({ item }: { item: PendingItem }) {
       await runReply(
         { taskId: item.taskId, subtaskId: item.subtaskId, text, decideByAgent, requestId: newConversationId() },
         {
-          onAccepted: () => { setNote(null); setLocked(false); setReplyText(''); announce(`已回复 ${agentName}`) },
+          onAccepted: () => { resolveAskLocally(item.subtaskId); setNote(null); setLocked(false); setReplyText(''); announce(`已回复 ${agentName}`) },
           onRejected: error => { setNote(`没送出去：${error instanceof Error && error.message !== '' ? error.message : '网络异常'}`); setLocked(false) },
         },
       )

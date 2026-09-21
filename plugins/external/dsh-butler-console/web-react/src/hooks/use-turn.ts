@@ -500,12 +500,18 @@ export async function runActionDecision(input: {
   actionId: string
   decision: 'confirm' | 'cancel'
   requestId?: string | undefined
-}): Promise<void> {
+}, hooks: { onAccepted?: () => void } = {}): Promise<void> {
   if (useTurnStore.getState().streaming) return
   useTurnStore.setState({ streaming: true, abort: new AbortController(), lastSeq: 0, lastRunId: '', following: true })
   const host = await makeEngineHost()
   try {
+    let accepted = false
     for await (const event of act({ ...input, requestId: input.requestId ?? newConversationId(), signal: useTurnStore.getState().abort?.signal })) {
+      // 决策流的第一个事件即受理回执：deck 卡就地摘下（乐观更新），不等执行期结束。
+      if (!accepted) {
+        accepted = true
+        hooks.onAccepted?.()
+      }
       useTurnStore.getState().applyTurnEvent(event)
     }
     const st = useTurnStore.getState()

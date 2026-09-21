@@ -45,6 +45,8 @@ export interface SubtaskEntry {
   key: string
   kind: 'subtask'
   subtaskId: string
+  /** 所属任务 id（subtask 事件自带；决策 /action 入参需要，避免渲染层再派生）。 */
+  taskId?: string | undefined
   agentId: string
   goal: string
   state: string
@@ -567,7 +569,7 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
     next.set(subtaskId, key)
     useTurnStore.setState({ bubbleKeys: next })
     get().appendEntry({
-      key, kind: 'subtask', subtaskId, agentId: event.agentId ?? '', goal: '',
+      key, kind: 'subtask', subtaskId, taskId: event.taskId ?? undefined, agentId: event.agentId ?? '', goal: '',
       state: event.state ?? '', body: '', thinking: '', terminal: false, live: true,
       toolLine: null, artifacts: [], startedAt: event.startedAt, detail: null, error: null,
       actions: Array.isArray(event.actions) ? (event.actions as ReadonlyArray<AgentAction>) : undefined,
@@ -648,6 +650,30 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
         : undefined,
     }))
   }
+}
+
+/**
+ * 决策受理后本地摘卡（乐观更新）：确认/先不办已受理，prepared 操作卡从 deck 撤下，
+ * 不等后端把子任务重新调度完（分钟级）才收——挂着只会诱导重复点击。
+ * 后端后续事件若再带同 id 操作卡会按事件重建，本地摘除不与事件流冲突。
+ */
+export function resolveActionLocally(subtaskId: string, actionId: string): void {
+  if (subtaskId === '' || actionId === '') return
+  useTurnStore.setState(st => ({
+    entries: st.entries.map(entry => entry.kind === 'subtask' && entry.subtaskId === subtaskId && Array.isArray(entry.actions)
+      ? { ...entry, actions: entry.actions.filter(action => action.id !== actionId) }
+      : entry),
+  }))
+}
+
+/** 回话受理后本地摘卡：waiting_user 提问卡撤下（runReply 的 onAccepted 语义配套）。 */
+export function resolveAskLocally(subtaskId: string): void {
+  if (subtaskId === '') return
+  useTurnStore.setState(st => ({
+    entries: st.entries.map(entry => entry.kind === 'subtask' && entry.subtaskId === subtaskId && entry.ask !== undefined
+      ? { ...entry, ask: undefined }
+      : entry),
+  }))
 }
 
 /** 卡片偏好（butler.card.{taskId}）：折叠与只看结论，键名与格式与旧前端一致（方案批 5）。 */

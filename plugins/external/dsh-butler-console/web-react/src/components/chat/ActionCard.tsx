@@ -5,7 +5,8 @@
  * 决策走 /action（幂等，requestId 同一回话复用）；确认产生的是一次决策，凭据不进前端。
  */
 import { useState } from 'react'
-import { act } from '../../hooks/use-turn.ts'
+import { runActionDecision } from '../../hooks/use-turn.ts'
+import { resolveActionLocally } from '../../stores/turn.ts'
 import { newConversationId } from '../../lib/turn-event.ts'
 import { RichText } from './RichText.tsx'
 
@@ -46,8 +47,12 @@ export function ActionCard({ action, taskId, subtaskId }: {
     setLocked(true)
     setNote(decision === 'confirm' ? '正在办理…' : '正在撤回…')
     try {
-      await act({ taskId, subtaskId, actionId: action.id, decision, requestId: newConversationId() })
-      setNote(decision === 'confirm' ? '已确认，正在办理' : '已撤回')
+      // 与 ActionDeck 同款：走 runActionDecision（事件进 store+跟随到终态），受理即本地摘卡。
+      await runActionDecision({
+        taskId, subtaskId, actionId: action.id, decision, requestId: newConversationId(),
+      }, {
+        onAccepted: () => { resolveActionLocally(subtaskId, action.id); setNote(decision === 'confirm' ? '已受理，正在办理' : '已撤回') },
+      })
     } catch (error) {
       setNote(`${decision === 'confirm' ? '确认' : '撤回'}没成功：${error instanceof Error && error.message !== '' ? error.message : '网络异常'}`)
       setLocked(false)
