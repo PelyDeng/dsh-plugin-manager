@@ -638,6 +638,9 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
       error: event.error ?? entry.error,
       finishedAt: event.finishedAt ?? undefined,
       artifacts: Array.isArray(event.artifacts) ? event.artifacts : entry.artifacts,
+      // 终态（尤其 external_pending）才带 prepared 操作卡——确认按钮全靠它；
+      // running 事件不带 actions，这里不透传会让 deck 永远派生不出确认项。
+      actions: Array.isArray(event.actions) ? (event.actions as ReadonlyArray<AgentAction>) : entry.actions,
       // 等你回话不是在计算：给回复入口（ask 卡）。卡面问题用 question，正文用 detail，
       // 混用会让「正文」变成一句提问（旧 handleSubtask 的告诫）。
       ask: event.state === 'waiting_user'

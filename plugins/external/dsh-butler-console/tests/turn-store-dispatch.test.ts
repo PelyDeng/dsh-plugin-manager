@@ -96,6 +96,23 @@ describe('调度卡数据面（plan/subtask/summary）', () => {
     expect(entry.live).toBe(true)
   })
 
+  it('终态（external_pending）事件的 prepared 操作卡必须写入 entry——deck 派生源（0.13.1 生产实证）', () => {
+    seedPlan()
+    // 生产时序：running 事件先建立条目（不带 actions），终态才带 prepared 操作卡。
+    apply({ type: 'subtask', id: 'c1', agentId: 'blog', state: 'running', time: 1 } as TurnEvent)
+    const prepared = [{ id: 'act-1', kind: 'blog.publish', state: 'prepared', title: '发布', confirmLabel: '确认' }]
+    apply({
+      type: 'subtask', id: 'c1', agentId: 'blog', state: 'external_pending',
+      detail: '已写入草稿，等待确认', actions: prepared, time: 2,
+    } as unknown as TurnEvent)
+    const key = useTurnStore.getState().bubbleKeys.get('c1')
+    const entry = useTurnStore.getState().entries.find(candidate => candidate.key === key)
+    if (entry?.kind !== 'subtask') throw new Error('missing')
+    expect(entry.actions).toBeDefined()
+    expect(entry.actions?.[0]?.state).toBe('prepared')
+    expect(entry.actions?.[0]?.confirmLabel).toBe('确认')
+  })
+
   it('偏好读写（butler.card.{taskId}）：折叠/只看结论落本机', () => {
     saveCardPref('task-p', { open: false })
     expect(readCardPrefs('task-p').open).toBe(false)
