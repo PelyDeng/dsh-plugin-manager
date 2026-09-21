@@ -5,7 +5,7 @@
  * 是文本节点内容，链接/图片降级为可复制文本。浏览器侧的排版观感见验收记录。
  */
 import { expect, test } from 'vitest'
-import { markdownPlan } from '../web/markdown.js'
+import { markdownPlan } from '../web-react/src/lib/markdown.js'
 
 /** 计划里出现过的所有标签；纯文本节点（只有 text 没有 tag）记为 '#text'。 */
 function tags(plan) {

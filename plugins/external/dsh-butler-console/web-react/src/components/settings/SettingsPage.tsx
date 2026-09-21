@@ -13,7 +13,7 @@ import { accentOf, displayNameOf, useSessionStore } from '../../stores/session.t
 import { useTurnStore } from '../../stores/turn.ts'
 import { refreshPanelsData } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
-import { Avatar } from '../chat/entries.tsx'
+import { Avatar } from '../common/Avatar.tsx'
 
 type CardStatusKind = '' | 'dirty' | 'busy' | 'ok' | 'error'
 

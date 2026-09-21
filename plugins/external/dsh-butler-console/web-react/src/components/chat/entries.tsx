@@ -5,6 +5,7 @@
  */
 import { memo, type CSSProperties, useState } from 'react'
 import { RichText } from './RichText.tsx'
+import { Avatar } from '../common/Avatar.tsx'
 import { AskCard } from './AskCard.tsx'
 import { SUGGESTIONS, STATE_TEXT, DEFAULT_AVATAR_FILES, STREAM_RICH_LIMIT } from '../../lib/config.ts'
 import type { ThreadEntry, SubtaskEntry } from '../../stores/turn.ts'
@@ -22,26 +23,6 @@ function formatTime(value?: number): string {
   const clock = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
   if (date.toDateString() === new Date().toDateString()) return clock
   return `${date.getMonth() + 1}-${String(date.getDate()).padStart(2, '0')} ${clock}`
-}
-
-/** 成员头像：上传图 → 默认涂鸦 → 首字配色圆。img 失败用 state/样式隐藏（React fiber
- *  仍持引用，不能直接 remove 节点——stamp 变化后的属性更新会落在游离节点上）。 */
-export function Avatar({ agentId, size = '' }: { agentId: string; size?: string }) {
-  const members = useSessionStore(state => state.members)
-  const stamps = useSessionStore(state => state.avatarStamps)
-  const [failed, setFailed] = useState(false)
-  const style: CSSProperties = { background: accentOf(members, agentId) }
-  const file = DEFAULT_AVATAR_FILES.get(agentId)
-  const stamp = stamps.get(agentId)
-  const src = file === undefined || failed
-    ? null
-    : `${ROUTE_PREFIX}/assets/media/avatars/${file}${stamp === undefined ? '' : `?v=${stamp}`}`
-  return (
-    <div className={`avatar${size === '' ? '' : ` avatar--${size}`}`} style={style}>
-      {src !== null && <img alt="" src={src} onError={() => setFailed(true)} />}
-      <span>{[...displayNameOf(members, agentId)][0] ?? '?'}</span>
-    </div>
-  )
 }
 
 /** 成员行的状态色（旧 handleSubtask 的 status 颜色语义）。 */

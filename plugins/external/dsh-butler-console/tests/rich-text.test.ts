@@ -8,7 +8,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 // @ts-expect-error 渲染器是 JS 模块（无声明文件），行为断言在 DOM 层宽松读取。
-import { markdownPlan, renderMarkdownInto, richText } from '../web/markdown.js'
+import { markdownPlan, renderMarkdownInto, richText } from '../web-react/src/lib/markdown.js'
 
 const IMG = 'https://img.pelycloud.com/huiyu/2026/09/21/pool-reuse.png'
 

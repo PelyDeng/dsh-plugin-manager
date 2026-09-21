@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest'
 // 渲染器是 JS 模块（无声明文件）；计划函数是纯数据输出，形状在用例里宽松读取。
 // @ts-expect-error 见上。
-import { markdownPlan } from '../web/markdown.js'
+import { markdownPlan } from '../web-react/src/lib/markdown.js'
 
 /** 深度摊平节点计划。计划来自无类型的 JS 渲染器，这里按宽松结构读取。 */
 /* eslint-disable @typescript-eslint/no-explicit-any */

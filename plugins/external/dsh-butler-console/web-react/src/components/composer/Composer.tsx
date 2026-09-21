@@ -318,6 +318,8 @@ export function Composer() {
             id="at-button"
             title="插入 @，点名成员"
             aria-label="插入 @"
+            /* mousedown 不夺焦：textarea 保持焦点，点名簿不被 onBlur 清掉。 */
+            onMouseDown={event => event.preventDefault()}
             onClick={() => {
               const input = inputRef.current
               if (input === null) return

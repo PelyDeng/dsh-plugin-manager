@@ -18,7 +18,7 @@ import { useEffect, useRef } from 'react'
 // web/markdown.js 是旧前端的受控资产（JS 无声明文件，方案 §2 原样保留）：桥接处的
 // 类型缺口由这一行 @ts-expect-error 单点承担，渲染行为断言由 rich-text.test.ts 守护。
 // @ts-expect-error JS 资产无类型声明（tests/rich-text.test.ts 是它的行为护城河）
-import { richText } from '../../../../web/markdown.js'
+import { richText } from '../../lib/markdown.js'
 
 export interface RichTextProps {
   /** 全量正文（不是增量）：richText 每次调用都按全量重排内部 DOM。 */

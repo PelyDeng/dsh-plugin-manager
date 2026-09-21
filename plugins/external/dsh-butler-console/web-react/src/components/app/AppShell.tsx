@@ -14,7 +14,7 @@ import { SettingsPage } from '../settings/SettingsPage.tsx'
 import { useSessionStore } from '../../stores/session.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { Thread } from '../chat/Thread.tsx'
-import { Avatar } from '../chat/entries.tsx'
+import { Avatar } from '../common/Avatar.tsx'
 import { ChatList, ChatPager, ChatSearch, FailureList, ManageBar, Motto } from '../panels/left-right.tsx'
 import { Composer, StopButton } from '../composer/Composer.tsx'
 
