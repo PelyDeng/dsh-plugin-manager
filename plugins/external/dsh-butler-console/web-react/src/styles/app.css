@@ -1961,3 +1961,19 @@ body[data-settings="open"] .settings {
 .failure-row__body { flex: 1; min-width: 0; cursor: pointer; }
 .failure-row__body .failure-row__goal,
 .failure-row__body .failure-row__meta { display: block; }
+
+/* 追问芯片样张（批 4b，Suggestion 手账化占位）：贴纸风小签，点击填入输入框。 */
+.summary__followups { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.follow-chip {
+  border: 1.5px dashed var(--bt-ink-soft);
+  border-radius: 9px 7px 10px 8px / 8px 10px 7px 9px;
+  background: var(--bt-paper);
+  color: var(--bt-ink);
+  font-family: var(--bt-font);
+  font-size: 12.5px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: transform 90ms ease;
+}
+.follow-chip:hover { background: var(--bt-warn-bg); border-color: var(--bt-stroke); }
+.follow-chip:active { transform: translate(1px, 1px); }

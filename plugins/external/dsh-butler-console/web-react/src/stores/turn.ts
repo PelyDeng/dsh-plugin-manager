@@ -15,7 +15,7 @@ import type { TaskRecord, TaskSummary } from '../lib/api.ts'
 import { STATE_TEXT, STREAM_RICH_LIMIT } from '../lib/config.ts'
 
 /** 消息流条目：React 渲染的统一数据面（旧 DOM 追加模型的范式转换）。 */
-export type ThreadEntry = UserEntry | ButlerEntry | SubtaskEntry | NoteEntry | ErrorEntry | SummaryEntry | TaskEntry
+export type ThreadEntry = UserEntry | ButlerEntry | SubtaskEntry | NoteEntry | ErrorEntry | SummaryEntry | TaskEntry | DispatchEntry
 
 export interface UserEntry {
   key: string
@@ -83,6 +83,31 @@ export interface SummaryEntry {
   state: string
   text: string
   time?: number | undefined
+  /** 追问芯片占位（0.13.x 完整功能；本战役只做样张，方案 §3.6）。 */
+  followups?: string[] | undefined
+}
+
+/**
+ * 调度卡条目（批 4b，旧 mountDispatch 的声明式对应物）：**本次派活唯一的一张卡**。
+ * 成员的输出数据仍在 subtask entries（bubbleKeys 索引），本条目持顺序/选中/折叠——
+ * 旧版靠「把成员消息 DOM 搬进 slot」的地方，React 版由 DispatchCard 按数据派生渲染。
+ */
+export interface DispatchEntry {
+  key: string
+  kind: 'dispatch'
+  taskId: string
+  /** 子任务顺序（卡片格子顺序）。 */
+  order: string[]
+  /** 当前选中的成员（点已选中的不变——收起用折叠，一条动作一个语义）。 */
+  active: string | null
+  /** 折叠态：偏好（butler.card.{taskId}.open）优先，缺省收起。 */
+  open: boolean
+  /** 只看结论偏好（butler.card.{taskId}.resultOnly）。 */
+  resultOnly: boolean
+  /** 「有更新」：收起后状态又变了（展开即清）。 */
+  fresh: boolean
+  /** 状态变化过但未读的成员（描边脉冲用，600ms 自清）。 */
+  pulses: string[]
 }
 
 /** 历史任务摘要卡（点开看详情，批 3 完整调度卡回放）：列表投影形状。 */
@@ -113,6 +138,8 @@ export interface TurnState {
   /** 大总管流式那条的 key；落定的 `chat` 收走置 null。 */
   butlerSpeechKey: string | null
   taskId: string | null
+  /** 任务详情二级视图（openTask 进入，view-head/popstate 返回）。 */
+  taskView: { taskId: string } | null
   /** 滚动跟随：用户上滚或选字时暂停，「回到最新」恢复。 */
   following: boolean
   selecting: boolean
@@ -165,6 +192,7 @@ function scheduleFlush(getState: () => TurnState): void {
 
 export const useTurnStore = create<TurnState>((set, get) => ({
   conversationId: null,
+  taskView: null,
   streaming: false,
   abort: null,
   viewToken: 0,
@@ -195,6 +223,7 @@ export const useTurnStore = create<TurnState>((set, get) => ({
       lastRunTaskId: '',
       lastChatText: '',
       taskId: null,
+      taskView: null,
       streaming: false,
       abort: null,
       following: opts.keepFollowing === true ? get().following : true,
@@ -366,9 +395,32 @@ export const useTurnStore = create<TurnState>((set, get) => ({
         return
       }
       case 'plan': {
-        // 调度卡批 4b；批 1 降级：按计划为每个子任务开成员行（ queued 态），后续
-        // subtask 事件原地更新——成员的真实输出不丢。
-        set(st => ({ taskId: event.taskId ?? st.taskId, bubbleKeys: new Map(), entries: st.entries }))
+        // 调度卡（批 4b）：一张卡 + 每个子任务一条 subtask entry（数据面），格子即那一行。
+        const taskId = event.taskId ?? get().taskId ?? ''
+        const entryKey = nextKey('dispatch')
+        const subtasks = Array.isArray(event.subtasks) ? event.subtasks as Array<{ id: string; agentId: string; goal?: string; state?: string; startedAt?: number }> : []
+        const prefs = readCardPrefs(taskId)
+        const dispatch: DispatchEntry = {
+          key: entryKey, kind: 'dispatch', taskId,
+          order: subtasks.map(subtask => subtask.id),
+          active: subtasks.length > 0 ? subtasks[0]?.id ?? null : null,
+          open: typeof prefs.open === 'boolean' ? prefs.open : false,
+          resultOnly: prefs.resultOnly === true,
+          fresh: false, pulses: [],
+        }
+        set(st => {
+          const nextKeys = new Map(st.bubbleKeys)
+          const memberEntries: ThreadEntry[] = subtasks.map(subtask => {
+            const key = nextKey('subtask')
+            nextKeys.set(subtask.id, key)
+            return {
+              key, kind: 'subtask', subtaskId: subtask.id, agentId: subtask.agentId ?? '', goal: subtask.goal ?? '',
+              state: subtask.state ?? 'queued', body: '', thinking: '', terminal: false, live: true,
+              toolLine: null, artifacts: [], startedAt: subtask.startedAt ?? null, detail: null, error: null,
+            }
+          })
+          return { taskId, bubbleKeys: nextKeys, entries: [...st.entries, dispatch, ...memberEntries] }
+        })
         return
       }
       case 'subtask': {
@@ -399,9 +451,21 @@ export const useTurnStore = create<TurnState>((set, get) => ({
         const dedup = text !== '' && text === get().lastChatText
         // 所有流式条目此刻收口：帧缓冲里的残留增量全部作废。
         frameBuffer.clear()
-        get().appendEntry({ key: nextKey('summary'), kind: 'summary', state: event.state ?? '', text: dedup ? '' : text, time: event.time })
+        get().appendEntry({
+          key: nextKey('summary'), kind: 'summary', state: event.state ?? '', text: dedup ? '' : text, time: event.time,
+          ...(Array.isArray(event.followups) ? { followups: event.followups as string[] } : {}),
+        })
+        // 调度卡收口（settleCardForSummary）：只有收尾汇总才收口——waiting_user/external_pending
+        // 是暂停不是结束；还没定论的格子明确说「已停止」，不替它编一个成功。
+        const summaryState = event.state ?? ''
         set(st => ({
-          entries: st.entries.map(entry => entry.kind === 'subtask' && !entry.terminal ? { ...entry, live: false } : entry),
+          entries: st.entries.map(entry => {
+            if (entry.kind === 'subtask' && !entry.terminal) return { ...entry, live: false }
+            if (entry.kind === 'dispatch' && ['completed', 'failed', 'cancelled', 'partial'].includes(summaryState)) {
+              return { ...entry, fresh: !entry.open }
+            }
+            return entry
+          }),
           bubbleKeys: new Map(),
           butlerSpeechKey: null,
         }))
@@ -465,7 +529,29 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
   }
 
   const apply = (patch: (entry: SubtaskEntry) => SubtaskEntry) => {
-    useTurnStore.setState(st => ({ entries: st.entries.map(entry => entry.key === key && entry.kind === 'subtask' ? patch(entry) : entry) }))
+    useTurnStore.setState(st => ({
+      entries: st.entries.map(entry => {
+        if (entry.key === key && entry.kind === 'subtask') return patch(entry)
+        // 状态变化标注到调度卡：收起时亮「有更新」，变化格描边脉冲（600ms 自清）。
+        if (entry.kind === 'dispatch' && entry.order.includes(subtaskId)) {
+          const changed = entry.pulses.includes(subtaskId) === false
+          return {
+            ...entry,
+            fresh: entry.open ? false : true,
+            pulses: changed ? [...entry.pulses, subtaskId] : entry.pulses,
+          }
+        }
+        return entry
+      }),
+    }))
+    // 脉冲 600ms 自清（旧 pulseCardCell 的 setTimeout 语义）。
+    window.setTimeout(() => {
+      useTurnStore.setState(st => ({
+        entries: st.entries.map(entry => entry.kind === 'dispatch'
+          ? { ...entry, pulses: entry.pulses.filter(id => id !== subtaskId) }
+          : entry),
+      }))
+    }, 600)
   }
 
   if (event.state === 'dispatched') {
@@ -505,6 +591,20 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
         : undefined,
     }))
   }
+}
+
+/** 卡片偏好（butler.card.{taskId}）：折叠与只看结论，键名与格式与旧前端一致（方案批 5）。 */
+export function readCardPrefs(taskId: string): { open?: boolean; resultOnly?: boolean } {
+  if (taskId === '') return {}
+  try {
+    const parsed = JSON.parse(localStorage.getItem('butler.card.' + taskId) ?? 'null')
+    return typeof parsed === 'object' && parsed !== null ? parsed : {}
+  } catch { return {} }
+}
+
+export function saveCardPref(taskId: string, patch: { open?: boolean; resultOnly?: boolean }): void {
+  if (taskId === '') return
+  try { localStorage.setItem('butler.card.' + taskId, JSON.stringify({ ...readCardPrefs(taskId), ...patch })) } catch { /* 隐私模式忽略。 */ }
 }
 
 /** 判断超长降级（渲染层用）：与旧前端同一阈值与语义。 */

@@ -205,6 +205,7 @@ export async function finishTurn(): Promise<void> {
   useTurnStore.setState({ streaming: false, abort: null })
   useSessionStore.getState().setTopStatus('')
   await refreshPanelsData()
+  void refreshChatList()
 }
 
 /** 右栏数据装配（批 2：401 时给「去登录」入口，其余错误置顶栏「读取失败」）。 */
@@ -488,7 +489,7 @@ export async function stopTurn(): Promise<void> {
 }
 
 /** 回应等待中的成员（runReply 语义：受理确认才收卡，失败卡内恢复，输入不丢）。 */
-export async function runReply(input: { taskId: string; subtaskId: string; text: string; decideByAgent: boolean }, hooks: {
+export async function runReply(input: { taskId: string; subtaskId: string; text: string; decideByAgent: boolean; requestId?: string | null }, hooks: {
   onAccepted?: () => void
   onRejected?: (error: unknown) => void
 }): Promise<void> {
@@ -504,7 +505,8 @@ export async function runReply(input: { taskId: string; subtaskId: string; text:
   let sawTerminal = false
   const host = await makeEngineHost()
   try {
-    for await (const event of reply({ ...input, requestId: newConversationId(), signal: useTurnStore.getState().abort?.signal })) {
+    const requestId = input.requestId ?? newConversationId()
+    for await (const event of reply({ taskId: input.taskId, subtaskId: input.subtaskId, text: input.text, decideByAgent: input.decideByAgent, requestId, signal: useTurnStore.getState().abort?.signal })) {
       if (event.type === 'summary') sawTerminal = true
       if (!accepted) {
         accepted = true
@@ -519,6 +521,11 @@ export async function runReply(input: { taskId: string; subtaskId: string; text:
   } catch (error) {
     reportFailure(error, '回复没送出去')
     if (!accepted) hooks.onRejected?.(error)
+    else if (useTurnStore.getState().abort?.signal.aborted !== true && useTurnStore.getState().conversationId !== null) {
+      // 已受理后断连：这一轮还在服务端跑，重订事件流跟到终态，不自动重发（S06）。
+      const st = useTurnStore.getState()
+      await followUntilTerminal(st.conversationId ?? '', { from: st.lastSeq, expectedRunId: st.lastRunId, signal: st.abort?.signal }, productionLinks, host)
+    }
   } finally {
     void finishTurn()
   }
@@ -551,6 +558,44 @@ async function makeEngineHost(): Promise<TurnEngineHost> {
       useTurnStore.setState({ streaming: true })
     },
   }
+}
+
+/**
+ * 任务详情视图（旧 openTask）：点失败记录/任务摘要卡进来，view-head 返回。
+ * 守卫与 openConversation 同款（I08：执行中禁止切换；视图代次核对）。
+ * History API 压栈：浏览器返回键与「← 返回会话」走同一条路径。
+ */
+export async function openTask(id: string): Promise<void> {
+  if (useTurnStore.getState().streaming) return
+  const token = useTurnStore.getState().viewToken + 1
+  useTurnStore.setState({ viewToken: token })
+  let record: import('../lib/api.ts').TaskRecord
+  try {
+    record = await api.task(id)
+  } catch (error) {
+    if (token !== useTurnStore.getState().viewToken) return
+    useTurnStore.getState().appendEntry({ key: `error-task-${id}`, kind: 'error', text: error instanceof Error ? error.message : '打不开这条记录' })
+    return
+  }
+  if (token !== useTurnStore.getState().viewToken) return
+  useTurnStore.setState({ conversationId: record.conversationId })
+  rememberConversation(record.conversationId)
+  try { history.pushState({ butler: 'task', taskId: record.id, conversationId: record.conversationId }, '', location.href) } catch { /* 不支持即静默降级。 */ }
+  useTurnStore.getState().beginRebuild()
+  // 视图头（返回入口 + 面包屑）由 Thread 按 taskView 状态渲染。
+  useTurnStore.setState({ taskView: { taskId: record.id } })
+  useTurnStore.getState().renderTaskRecord(record)
+  useTurnStore.setState({ following: true })
+}
+
+/** 浏览器返回键：按栈里的视图状态回层（只认自己压入的标记）。 */
+export function bindViewHistory(): void {
+  window.addEventListener('popstate', event => {
+    const value = event.state
+    if (value === null || typeof value !== 'object') return
+    if (value.butler === 'task' && typeof value.taskId === 'string') { void openTask(value.taskId); return }
+    if (value.butler === 'conversation' && typeof value.conversationId === 'string') { void openConversation(value.conversationId) }
+  })
 }
 
 /** 加载一页更早的记录（I10/复核 1/复核 3）：定位插入、归属核对、失败保留重试。 */

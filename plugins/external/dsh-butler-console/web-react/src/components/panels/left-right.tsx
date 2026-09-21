@@ -8,7 +8,7 @@ import { MOTTO_KEY, DEFAULT_MOTTO } from '../../lib/config.ts'
 import type { ChatListItem } from '../../stores/session.ts'
 import { useSessionStore } from '../../stores/session.ts'
 import {
-  deletePickedConversations, gotoChatPage, loadEarlier, openConversation, refreshChatList, refreshPanelsData,
+  deletePickedConversations, gotoChatPage, loadEarlier, openConversation, openTask, refreshChatList, refreshPanelsData,
   removeConversationsWithFeedback, removePickedFailures, renameConversation,
 } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
@@ -292,7 +292,7 @@ export function FailureList() {
                 checked={failurePicked.includes(item.id)}
                 onChange={event => toggleFailurePicked(item.id, event.target.checked)}
               />
-              <span className="failure-row__body" onClick={() => { announce('任务详情视图在批 3 接入') }}>
+              <span className="failure-row__body" onClick={() => { void openTask(item.id) }}>
                 <span className="failure-row__goal">{formatTime(item.updatedAt)}　{item.goal}</span>
                 <span className="failure-row__meta">{item.error || '没给原因'}</span>
               </span>

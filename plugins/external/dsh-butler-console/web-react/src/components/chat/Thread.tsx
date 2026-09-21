@@ -10,6 +10,7 @@ import { useEffect, useRef } from 'react'
 import { useTurnStore } from '../../stores/turn.ts'
 import { useSessionStore } from '../../stores/session.ts'
 import { loadEarlier } from '../../hooks/use-turn.ts'
+import { useTurnStore as useTurnStoreFull } from '../../stores/turn.ts'
 import { renderEntry, Welcome } from './entries.tsx'
 
 export function Thread() {
@@ -59,6 +60,7 @@ export function Thread() {
     <div className="thread-wrap">
       <div className="thread" id="thread" ref={threadRef} onScroll={onScroll}>
         <div className="thread__inner">
+          <TaskViewHead />
           {entries.length === 0 ? <Welcome /> : (
             <>
               <EarlierControl />
@@ -102,6 +104,21 @@ function EarlierControl() {
         {earlier.phase === 'loading' ? '正在读取…' : '加载更早记录'}
       </button>
       {earlier.phase === 'error' && <span className="history-head__error">读取更早记录失败：{earlier.message}，可以重试</span>}
+    </div>
+  )
+}
+
+
+/** 任务详情二级视图的返回条（view-head）：浏览器返回键与它同一条栈。 */
+function TaskViewHead() {
+  const taskView = useTurnStoreFull(state => state.taskView)
+  if (taskView === null) return null
+  return (
+    <div className="view-head">
+      <button type="button" className="btn btn--tiny view-head__back" onClick={() => { if (history.state?.butler === 'task') history.back() }}>
+        ← 返回会话
+      </button>
+      <span className="view-head__crumb">会话 › 任务记录</span>
     </div>
   )
 }

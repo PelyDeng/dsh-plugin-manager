@@ -42,7 +42,7 @@ export function AskCard({ subtaskId, taskId, question, detail }: AskCardProps) {
     setErrorText(null)
     setNote('正在送出回话…')
     await runReply(
-      { taskId, subtaskId, text, decideByAgent },
+      { taskId, subtaskId, text, decideByAgent, requestId: requestIdRef.current },
       {
         onAccepted: () => {
           // 受理：收卡（ask 字段清掉由 waiting_user → 新状态事件或这里显式清）。

@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api.ts'
 import { recallConversation } from '../../lib/turn-event.ts'
-import { loadIdentity, openConversation, openNewChat, refreshChatList, refreshPanelsData, resumeLiveTurn } from '../../hooks/use-turn.ts'
+import { bindViewHistory, loadIdentity, openConversation, openNewChat, refreshChatList, refreshPanelsData, resumeLiveTurn } from '../../hooks/use-turn.ts'
 import { useSessionStore } from '../../stores/session.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { Thread } from '../chat/Thread.tsx'
@@ -54,6 +54,7 @@ export function AppShell() {
         session.setOverview(overviewPage)
       } catch { /* 右栏读不到保持现状：下一轮轮询再试。 */ }
     }
+    bindViewHistory()
     void refresh()
     void loadIdentity()
     void refreshPanelsData()

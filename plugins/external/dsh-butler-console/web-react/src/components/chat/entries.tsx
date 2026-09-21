@@ -11,7 +11,8 @@ import type { ThreadEntry, SubtaskEntry } from '../../stores/turn.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { accentOf, displayNameOf, useSessionStore } from '../../stores/session.ts'
 import { ROUTE_PREFIX } from '../../lib/api.ts'
-import { sendMessage } from '../../hooks/use-turn.ts'
+import { openTask, sendMessage } from '../../hooks/use-turn.ts'
+import { DispatchCard } from '../dcard/DispatchCard.tsx'
 import { fileSizeText } from '../../stores/attachments.ts'
 
 function formatTime(value?: number): string {
@@ -197,6 +198,8 @@ function ErrorEntryViewFn({ text, retryFor }: {
         onClick={() => {
           // 撤掉失败的痕迹，原样重发同一句话（同一幂等身份，S07）。
           useTurnStore.getState().removeEntry(`error-${retryFor.requestId}`)
+          // 失败的那条 user 预渲染一并撤掉：重发会重新就地呈现（旧 retryEntry 先撤气泡）。
+          useTurnStore.getState().removeEntry(`user-send-${retryFor.requestId}`)
           void sendMessage(retryFor.requestText, retryFor.requestId)
         }}
       >
@@ -207,7 +210,12 @@ function ErrorEntryViewFn({ text, retryFor }: {
 }
 
 /** 汇总卡（旧 summaryCard：标题按状态、正文受控 Markdown、去重后为空不显示占位）。 */
-function SummaryEntryViewFn({ state, text, error }: { state: string; text: string; error?: string | null }) {
+function SummaryEntryViewFn({ state, text, error, followups }: {
+  state: string
+  text: string
+  error?: string | null
+  followups?: string[] | undefined
+}) {
   const title = state === 'completed' ? '已完成'
     : state === 'failed' ? '这一轮失败'
       : state === 'cancelled' ? '已喊停'
@@ -219,6 +227,16 @@ function SummaryEntryViewFn({ state, text, error }: { state: string; text: strin
     <div className="summary" data-state={state}>
       <div className="summary__title">{title}</div>
       {body !== '' && <div className="summary__body md"><RichText text={body} variant="card" /></div>}
+      {/* 追问芯片样张（Suggestion 手账化占位，mock 驱动；点击把话填进输入框）。 */}
+      {followups !== undefined && followups.length > 0 && (
+        <div className="summary__followups">
+          {followups.map(item => (
+            <button key={item} type="button" className="follow-chip" onClick={() => tearTapFill(item)}>
+              {item}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -226,7 +244,7 @@ function SummaryEntryViewFn({ state, text, error }: { state: string; text: strin
 /** 历史任务摘要卡（点开详情批 3）：列表投影是 TaskSummary（无 subtasks），收尾计数 x/y。 */
 function TaskEntryViewFn({ task }: { task: import('../../lib/api.ts').TaskSummary }) {
   return (
-    <button type="button" className="task-card" data-state={task.state}>
+    <button type="button" className="task-card" data-state={task.state} onClick={() => { void openTask(task.id) }}>
       <div className="task-card__head">
         <span className="task-card__badge">任务摘要</span>
         <span className="task-card__state">{STATE_TEXT[task.state] ?? task.state}</span>
@@ -276,6 +294,9 @@ let tearTap: ((text: string) => void) | null = null
 export function registerTearTap(handler: (text: string) => void): void {
   tearTap = handler
 }
+function tearTapFill(text: string): void {
+  tearTap?.(text)
+}
 function registerDraftRestoreTap(text: string): void {
   tearTap?.(text)
 }
@@ -295,8 +316,9 @@ export function renderEntry(entry: ThreadEntry): React.ReactNode {
     case 'subtask': return <SubtaskEntryView key={entry.key} entry={entry} />
     case 'note': return <NoteEntryView key={entry.key} text={entry.text} />
     case 'error': return <ErrorEntryView key={entry.key} text={entry.text} retryFor={entry.retryFor} />
-    case 'summary': return <SummaryEntryView key={entry.key} state={entry.state} text={entry.text} />
+    case 'summary': return <SummaryEntryView key={entry.key} state={entry.state} text={entry.text} followups={entry.followups} />
     case 'task': return <TaskEntryView key={entry.key} task={entry.task} />
+    case 'dispatch': return <DispatchCard key={entry.key} entry={entry} />
     default: return null
   }
 }
