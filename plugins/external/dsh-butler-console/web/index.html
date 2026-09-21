@@ -172,7 +172,10 @@
         <div class="panel">
           <div class="failure-head">
             <h2 class="section-title section-title--failures">失败记录</h2>
-            <button type="button" class="chat-manage-menu-btn chat-manage-menu-btn--sm" id="failure-menu" aria-haspopup="true" aria-expanded="false" title="操作">⋯</button>
+            <span class="chat-records-actions">
+              <button type="button" class="chat-manage-menu-btn chat-manage-menu-btn--sm" id="failure-menu" aria-haspopup="true" aria-expanded="false" title="操作">⋯</button>
+              <span class="chat-manage-menu" id="failure-menu-pop" hidden role="menu"></span>
+            </span>
           </div>
           <div class="failure-note"><div id="failure-list"></div></div>
         </div>

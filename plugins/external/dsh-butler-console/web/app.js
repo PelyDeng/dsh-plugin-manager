@@ -23,7 +23,7 @@ import { appendPreviewText, butlerDelta, butlerMessage, butlerSettle, butlerThin
 import { ensureProgress, memberMessage, renderMemberContent, renderMemberMaterials, setThinking, settleMarkdown, settleMemberBody, settleMemberDynamics } from './modules/member.js'
 import { attachToDispatch, cardPrefs, mountDispatch, settleCardForSummary } from './modules/dcard.js'
 import { attachmentChipsRow, attachmentsForSend, bindAttachments, clearAttachments, hideAttachUrl, renderAttachments, takeSentAttachments } from './modules/attachments.js'
-import { armFailureMenu, gotoChatPage, refreshChatList, refreshPanels, setOpenSettings, togglePickAll, toggleRecordsMenu } from './modules/panels.js'
+import { gotoChatPage, refreshChatList, refreshPanels, setOpenSettings, toggleFailureMenu, togglePickAll, toggleRecordsMenu } from './modules/panels.js'
 import { bindViewHistory, renderTaskRecord } from './modules/history.js'
 import { renderWelcome } from './modules/cards.js'
 import { resumeLiveTurn, sendMessage } from './modules/send.js'
@@ -180,7 +180,14 @@ function bind() {
   el.chatPagerNext.addEventListener('click', () => { gotoChatPage(state.chatPage + 1) })
 
   // 失败记录：行前复选框勾选，⋯ 操作图标两段式删除所选。
-  el.failureMenuBtn.addEventListener('click', armFailureMenu)
+  // 失败记录 ⋯：与任务记录同款 toggle 菜单（开/再点关/外点关），勾选实时刷可用态。
+  el.failureMenuBtn.addEventListener('click', event => {
+    event.stopPropagation()
+    toggleFailureMenu()
+  })
+  document.addEventListener('click', event => {
+    if (!el.failureMenuPop.hidden && !el.failureMenuBtn.contains(event.target) && !el.failureMenuPop.contains(event.target)) toggleFailureMenu(false)
+  })
 
   // 设置页开关：右上角齿轮进，左上角「回群聊」出。
   el.settingsButton.addEventListener('click', () => setOpenSettings(!state.settingsOpen))

@@ -260,10 +260,12 @@ textarea:focus-visible,
 .column--right { overflow: hidden; gap: 6px; } /* 0.12.4：收紧栏间距，运行状态上提 */
 /* 0.12.2 右栏自适应：面板弹性伸缩，成员档案与失败记录各自在内容区里滚，整栏不出滚动条。 */
 .column--right > section { display: flex; flex-direction: column; min-height: 0; }
-.column--right > section:first-child { flex: 1 1 0; overflow: hidden; }
+.column--right > section:first-child { flex: none; overflow: hidden; max-height: 244px; /* 3 行成员自适应：标题+3×(32px 头像+padding)+gap，超出内部滚 */ }
+/* 0.12.7：运行状态内容固定高度，flex:none 紧跟成员档案之后（不再被成员区挤下去）。 */
+.column--right > section:nth-child(2) { flex: none; }
 .column--right > section:nth-child(3) { flex: 1 1 0; overflow: hidden; }
 .column--right > section .panel { flex: 1; min-height: 0; }
-#member-list { overflow-y: auto; min-height: 0; flex: 1; }
+#member-list { overflow-y: auto; min-height: 0; }
 #failure-list { overflow-y: auto; min-height: 0; flex: 1; }
 
 .section-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
@@ -1790,6 +1792,7 @@ body[data-settings="open"] .settings {
 .chat-manage-menu-btn:hover:not(:disabled) { background: #f3ead2; }
 .chat-manage-menu-btn:disabled { opacity: 0.35; cursor: default; }
 .chat-manage-menu-btn--sm { width: 24px; height: 22px; font-size: 13px; }
+.chat-manage-menu[hidden] { display: none; } /* hidden 属性被 flex 覆盖，必须显式压回（0.12.6 滚动条+关不掉的元凶） */
 .chat-manage-menu {
   position: absolute;
   top: calc(100% + 4px);
@@ -1877,6 +1880,7 @@ body[data-settings="open"] .settings {
 
 /* 失败记录（0.12.4）：行前复选框 + 标题行 ⋯ 操作按钮两段式删除。 */
 .failure-head { display: flex; align-items: center; gap: 8px; }
+.failure-head .chat-records-actions { position: relative; display: inline-flex; }
 .failure-head .section-title { flex: 1; }
 .failure-row--pick { cursor: pointer; align-items: flex-start; }
 .failure-row__check {

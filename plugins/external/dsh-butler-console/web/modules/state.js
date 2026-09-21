@@ -51,6 +51,7 @@ export const el = {
   chatPagerNext: document.getElementById('chat-pager-next'),
   chatPagerInfo: document.getElementById('chat-pager-info'),
   failureMenuBtn: document.getElementById('failure-menu'),
+  failureMenuPop: document.getElementById('failure-menu-pop'),
   sidebarToggle: document.getElementById('sidebar-toggle'),
   drawerToggle: document.getElementById('drawer-toggle'),
   backdrop: document.getElementById('drawer-backdrop'),

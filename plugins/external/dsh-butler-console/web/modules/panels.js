@@ -337,10 +337,9 @@ export function renderFailures(items) {
   clear(el.failureList)
   if (items.length === 0) {
     el.failureList.appendChild(make('p', 'empty', '暂无失败记录'))
-    el.failureMenuBtn.disabled = true
+    closeFailureMenu()
     return
   }
-  el.failureMenuBtn.disabled = state.failurePicked.size === 0
   for (const item of items) {
     // 0.12.4：行前复选框勾选、删除统一走标题行的操作图标（⋯），行内不再放 ×。
     const row = make('label', 'failure-row failure-row--pick')
@@ -350,7 +349,7 @@ export function renderFailures(items) {
     check.addEventListener('change', () => {
       if (check.checked) state.failurePicked.add(item.id)
       else state.failurePicked.delete(item.id)
-      el.failureMenuBtn.disabled = state.failurePicked.size === 0
+      refreshOpenFailureMenu()
     })
     row.appendChild(check)
     // 头行=「时间 任务名」（原型 C 与 Figma 稿均为日期在前），正文=失败原因。点击文本仍可打开任务。
@@ -576,22 +575,38 @@ function cancelRename() {
   void refreshChatList()
 }
 
-/** 失败记录的操作图标（⋯）：两段式确认（点亮 3 秒），确认后删所选。 */
-export function armFailureMenu() {
-  const button = el.failureMenuBtn
-  if (button.dataset.armed === '1') {
-    delete button.dataset.armed
-    button.textContent = '⋯'
-    void removePickedFailures()
-    return
+/**
+ * 失败记录的操作菜单（0.12.7 与任务记录同款交互）：⋯ 点开「删除所选」（未选禁用）、
+ * 再点 ⋯ 关闭；勾选变化实时刷新可用态。菜单弹层复用 records-menu-pop？不——两个锚点
+ * 各自持有独立弹层，避免「一个 hidden 管两处」的状态混乱。失败弹层挂在 failure-head。
+ */
+export function toggleFailureMenu(open = el.failureMenuPop.hidden) {
+  if (open) {
+    clear(el.failureMenuPop)
+    const item = make('button', 'chat-manage-menu__item chat-manage-menu__item--danger', '删除所选')
+    item.type = 'button'
+    item.setAttribute('role', 'menuitem')
+    item.disabled = state.failurePicked.size === 0
+    item.addEventListener('click', () => {
+      closeFailureMenu()
+      void removePickedFailures()
+    })
+    el.failureMenuPop.appendChild(item)
   }
-  const count = state.failurePicked.size
-  if (count === 0) return
-  button.dataset.armed = '1'
-  button.textContent = `确认删 ${count} 条`
-  setTimeout(() => {
-    if (button.dataset.armed === '1') { delete button.dataset.armed; button.textContent = '⋯' }
-  }, 3000)
+  el.failureMenuPop.hidden = !open
+  el.failureMenuBtn.setAttribute('aria-expanded', String(open))
+}
+
+function closeFailureMenu() {
+  el.failureMenuPop.hidden = true
+  el.failureMenuBtn.setAttribute('aria-expanded', 'false')
+}
+
+/** 勾选变化时菜单开着 → 就地刷新可用态（不动 hidden，同任务记录的竞态防护）。 */
+function refreshOpenFailureMenu() {
+  if (el.failureMenuPop.hidden) return
+  const item = el.failureMenuPop.querySelector('.chat-manage-menu__item')
+  if (item) item.disabled = state.failurePicked.size === 0
 }
 
 async function removePickedFailures() {
