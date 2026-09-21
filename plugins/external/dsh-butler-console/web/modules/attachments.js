@@ -3,6 +3,7 @@
  * 类型判定与抓取都在服务端，页面只画「上传中/就绪/读不出来」并把选择送出去。
  */
 
+import { reportFailure } from './dom.js'
 import { clear, make } from './dom.js'
 import { el, state } from './state.js'
 import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_BYTES, api, attachFromUrl, uploadAttachment } from '../api.js'

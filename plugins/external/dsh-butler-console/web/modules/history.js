@@ -3,6 +3,7 @@
  * 会话与任务详情视图、History API 栈。与 panels 构成文档化环簇二。
  */
 
+import { askCard, renderActionsInto, renderWelcome, summaryCard } from './cards.js'
 import { STATE_TEXT } from './config.js'
 import { attachToDispatch, cardPrefs, mountDispatch } from './dcard.js'
 import { append, clear, formatElapsed, formatTime, make, resetFollowing, scrollToBottom, stabilizeViewport, threadInner } from './dom.js'

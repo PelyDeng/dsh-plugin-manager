@@ -270,3 +270,13 @@ export function autosize() {
   const length = [...el.input.value].length
   el.count.textContent = length > 0 ? `${length} 字` : ''
 }
+
+/** 往消息流追加一行错误提示（批 1d 修正时从 send 域上提：纯 DOM 呈现工具，供 send/attachments 共用）。 */
+export function reportFailure(error, fallback) {
+  if (error?.name === 'AbortError') {
+    // 连接被本地中断只说明「不再观察」，不等于任务停了；终态以服务端事件为准。
+    append(make('p', 'error-line', '连接已中断，这一轮是否结束以右栏状态为准。'))
+    return
+  }
+  append(make('p', 'error-line', error instanceof Error && error.message ? error.message : fallback))
+}

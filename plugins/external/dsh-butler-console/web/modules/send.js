@@ -4,7 +4,7 @@
  */
 
 import { attachmentChipsRow, attachmentsForSend, hideAttachUrl, renderAttachments, takeSentAttachments } from './attachments.js'
-import { announce, append, autosize, clear, make, resetFollowing, scheduleFollowScroll, scrollToBottom, streamTraceEnabled, threadInner, traceEvent } from './dom.js'
+import { announce, append, autosize, reportFailure, clear, make, resetFollowing, scheduleFollowScroll, scrollToBottom, streamTraceEnabled, threadInner, traceEvent } from './dom.js'
 import { renderTaskRecord } from './history.js'
 import { refreshChatList, refreshPanels } from './panels.js'
 import { applySummaryRail, resetRail, setRail } from './rail.js'
@@ -246,14 +246,6 @@ export async function runReply(input, hooks = {}) {
   }
 }
 
-export function reportFailure(error, fallback) {
-  if (error?.name === 'AbortError') {
-    // 连接被本地中断只说明「不再观察」，不等于任务停了；终态以服务端事件为准。
-    append(make('p', 'error-line', '连接已中断，这一轮是否结束以右栏状态为准。'))
-    return
-  }
-  append(make('p', 'error-line', error instanceof Error && error.message ? error.message : fallback))
-}
 
 /* ── 恢复一致性（B 批 S05/S06/S09/S12）────────────────────────────────── */
 

@@ -15,10 +15,17 @@ import { fileURLToPath } from 'node:url'
 
 const WEB_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../web')
 
-/** 文档化环簇（拆分设计 v2）：簇内节点构成的环豁免。 */
+/**
+ * 文档化环簇（拆分设计 v2 + 0.12.1 修正）：簇内节点构成的环豁免。
+ *
+ * 0.12.1 起 {events,cards,send}、{panels,history}、{panels,composer} 三簇因 history→cards
+ * （历史回放复用实时渲染的卡）连通为一个核心团：渲染(cards)↔回合流(send)↔历史(history)
+ * ↔事件分发(events)↔面板(panels)↔输入区(composer)。团的运行时安全论证与簇相同：全部
+ * 只含函数声明、无顶层求值互依、调用都发生在模块求值之后。白名单按「团」豁免——团外
+ * 或把新模块卷进环仍会红。
+ */
 const CYCLE_WHITELIST = [
-  new Set(['events', 'cards', 'send']),
-  new Set(['panels', 'history']),
+  new Set(['events', 'cards', 'send', 'history', 'panels', 'composer']),
 ]
 
 function moduleGraph() {

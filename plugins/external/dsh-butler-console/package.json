@@ -1,6 +1,6 @@
 {
   "name": "dsh-butler-console",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "description": "DSH 牛马大总管：统一对话入口、任务拆解与子 Agent 调度状态页",
   "license": "UNLICENSED",
   "private": true,
@@ -68,7 +68,7 @@
     "build": "tsdown && tsdown --config tsdown.web.config.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && node --check web/app.js && node --check web/api.js && node --check web/stream.js && node --check web/markdown.js && node --check web/modules/config.js && node --check web/modules/state.js && node --check web/modules/dom.js && node --check web/modules/rail.js && node --check web/modules/speech.js && node --check web/modules/member.js && node --check web/modules/dcard.js && node --check web/modules/attachments.js && node --check web/modules/panels.js && node --check web/modules/history.js && node --check web/modules/cards.js && node --check web/modules/events.js && node --check web/modules/send.js && node --check web/modules/composer.js && node scripts/check-web-cycles.mjs",
+    "check": "pnpm typecheck && node --check web/app.js && node --check web/api.js && node --check web/stream.js && node --check web/markdown.js && node --check web/modules/config.js && node --check web/modules/state.js && node --check web/modules/dom.js && node --check web/modules/rail.js && node --check web/modules/speech.js && node --check web/modules/member.js && node --check web/modules/dcard.js && node --check web/modules/attachments.js && node --check web/modules/panels.js && node --check web/modules/history.js && node --check web/modules/cards.js && node --check web/modules/events.js && node --check web/modules/send.js && node --check web/modules/composer.js && node scripts/check-web-cycles.mjs && node scripts/check-module-leaks.mjs",
     "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
   },
   "dependencies": {

@@ -3,6 +3,7 @@
  * 会话列表与刷新。与 history 构成文档化环簇二（列表点击进详情、详情刷新列表）。
  */
 
+import { renderMention } from './composer.js'
 import { BUILTIN_AVATARS, PALETTE } from './config.js'
 import { accentOf, announce, avatarNode, clear, declaredNameOf, displayNameOf, formatTime, make } from './dom.js'
 import { el, state } from './state.js'
