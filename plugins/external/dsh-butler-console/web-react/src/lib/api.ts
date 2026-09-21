@@ -227,6 +227,22 @@ export async function attachFromUrl(url: string, conversationId = ''): Promise<A
   return (await response.json()).item as AttachmentRecord
 }
 
+/**
+ * 上传成员头像：直接把图片字节发过去，服务端按魔数核验类型，不信 content-type。
+ * 上限写死 256KB 是既有口径（服务端同样核验）。
+ */
+export async function uploadAvatar(agentId: string, file: File): Promise<unknown> {
+  if (file.size > 262144) throw new ApiError(413, '图片太大了，换张小于 256KB 的')
+  const response = await fetch(`${ROUTE_PREFIX}/members/avatar?agentId=${encodeURIComponent(agentId)}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': file.type, accept: 'application/json' },
+    body: file,
+  })
+  if (!response.ok) throw await streamFailure(response)
+  return await response.json()
+}
+
 /** 头像地址；带上更新时间戳避免换图后浏览器继续用旧缓存。 */
 export function avatarUrl(agentId: string, stamp?: number): string {
   return `${ROUTE_PREFIX}/members/avatar?agentId=${encodeURIComponent(agentId)}&v=${stamp ?? 0}`

@@ -10,6 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../../lib/api.ts'
 import { recallConversation } from '../../lib/turn-event.ts'
 import { bindViewHistory, loadIdentity, openConversation, openNewChat, refreshChatList, refreshPanelsData, resumeLiveTurn } from '../../hooks/use-turn.ts'
+import { SettingsPage } from '../settings/SettingsPage.tsx'
 import { useSessionStore } from '../../stores/session.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { Thread } from '../chat/Thread.tsx'
@@ -33,6 +34,7 @@ export function AppShell() {
   const members = useSessionStore(state => state.members)
   const topStatus = useSessionStore(state => state.topStatus)
   const overview = useSessionStore(state => state.overview)
+  const settingsOpen = useSessionStore(state => state.settingsOpen)
   const streaming = useTurnStore(state => state.streaming)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -89,6 +91,7 @@ export function AppShell() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing) return
+      if (useSessionStore.getState().settingsOpen) { event.preventDefault(); useSessionStore.getState().setSettingsOpen(false); return }
       if (drawerOpen) { event.preventDefault(); closeDrawer(); return }
       if (sidebarOpen) { event.preventDefault(); closeSidebar() }
     }
@@ -203,7 +206,19 @@ export function AppShell() {
             <span className="center__sub">{total > 0 ? `${total} 位成员${working}` : '—'}</span>
             <span className="spacer" />
             <StopButton />
-            <button type="button" className="icon-btn" title="设置" aria-label="设置" aria-expanded={false}>
+            <button
+              type="button"
+              className="icon-btn"
+              title="设置"
+              aria-label="设置"
+              aria-expanded={settingsOpen}
+              onClick={() => {
+                const next = !settingsOpen
+                useSessionStore.getState().setSettingsOpen(next)
+                if (next) window.requestAnimationFrame(() => { (document.getElementById('settings-title') as HTMLElement | null)?.focus() })
+                else window.requestAnimationFrame(() => { (document.querySelector('.icon-btn') as HTMLElement | null)?.focus() })
+              }}
+            >
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <circle cx="10" cy="10" r="3.1" fill="none" stroke="currentColor" strokeWidth="1.8" />
                 <path d="M10 2 v2.4 M10 15.6 V18 M2 10 h2.4 M15.6 10 H18 M4.2 4.2 l1.7 1.7 M14.1 14.1 l1.7 1.7 M15.8 4.2 l-1.7 1.7 M5.9 14.1 l-1.7 1.7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -259,6 +274,8 @@ export function AppShell() {
           <Motto />
         </aside>
       </div>
+
+      <SettingsPage />
 
       <div
         className="drawer-backdrop"

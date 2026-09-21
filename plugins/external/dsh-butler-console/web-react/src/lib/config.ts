@@ -11,6 +11,25 @@ export const DEFAULT_AVATAR_FILES = new Map([
   ['__boss__', 'avatar-boss.png'],
 ])
 
+/** 内置头像清单：预生成的 15 个涂鸦形象，设置页里一键换上。 */
+export const BUILTIN_AVATARS = [
+  { file: 'builtin-01.png', label: '柴犬' },
+  { file: 'builtin-02.png', label: '猫咪' },
+  { file: 'builtin-03.png', label: '熊猫' },
+  { file: 'builtin-04.png', label: '兔子' },
+  { file: 'builtin-05.png', label: '青蛙' },
+  { file: 'builtin-06.png', label: '小鸡' },
+  { file: 'builtin-07.png', label: '猫头鹰' },
+  { file: 'builtin-08.png', label: '机器人' },
+  { file: 'builtin-09.png', label: '云朵' },
+  { file: 'builtin-10.png', label: '太阳' },
+  { file: 'builtin-11.png', label: '咖啡' },
+  { file: 'builtin-12.png', label: '书本' },
+  { file: 'builtin-13.png', label: '信封' },
+  { file: 'builtin-14.png', label: '蜗牛' },
+  { file: 'builtin-15.png', label: '草莓' },
+]
+
 export const STATE_TEXT: Record<string, string> = {
   queued: '排队中',
   dispatched: '已收到',

@@ -492,9 +492,12 @@ export const useTurnStore = create<TurnState>((set, get) => ({
         // 干活的成员+秒数在跳；成功成员（已有终态）一律不动——不把真实结果改成别的说法。
         const summaryState = event.state ?? ''
         const at = typeof event.time === 'number' ? event.time : Date.now()
+        // 收尾守卫：只有 completed/failed/cancelled/partial 才改写未定论格子——
+        // waiting_user 汇总是暂停，把还在跑的成员说成「已停止」是假话（旧 :523 守卫）。
+        const isFinal = ['completed', 'failed', 'cancelled', 'partial'].includes(summaryState)
         set(st => ({
           entries: st.entries.map(entry => {
-            if (entry.kind === 'subtask') {
+            if (entry.kind === 'subtask' && isFinal) {
               if (entry.terminal) return entry
               if (['waiting_user', 'external_pending'].includes(entry.state)) return { ...entry, live: false }
               return { ...entry, live: false, state: 'cancelled', finishedAt: at }

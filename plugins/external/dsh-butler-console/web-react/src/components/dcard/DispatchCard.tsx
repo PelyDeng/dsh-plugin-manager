@@ -173,7 +173,10 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
             const next = entry.order[(index + step + entry.order.length) % entry.order.length]
             if (next === undefined) return
             select(next)
-            gridRef.current?.querySelector(`[data-id="${next}"]`)?.scrollIntoView({ block: 'nearest' })
+            // 焦点跟着走（roving tabindex）：aria-selected 在哪、焦点环就在哪，读屏不失配。
+            const target = gridRef.current?.querySelector(`[data-id="${next}"]`)
+            target?.scrollIntoView({ block: 'nearest' })
+            ;(target as HTMLElement | null)?.focus()
           }}
         >
           {entry.order.map(subtaskId => {

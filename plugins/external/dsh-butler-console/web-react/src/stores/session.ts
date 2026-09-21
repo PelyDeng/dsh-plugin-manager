@@ -45,7 +45,10 @@ export interface SessionState {
   topStatus: string
   /** 「加载更早记录」控件状态（I10：两个游标都到底后换分界说明）。 */
   earlier: { phase: 'idle' | 'loading' | 'done' | 'error'; message?: string }
+  /** 设置页开关（I18：页面切换非模态）。 */
+  settingsOpen: boolean
   setEarlier: (earlier: { phase: 'idle' | 'loading' | 'done' | 'error'; message?: string }) => void
+  setSettingsOpen: (open: boolean) => void
   setIdentity: (label: string) => void
   setMembers: (members: MemberItem[]) => void
   setChatList: (items: ChatListItem[]) => void
@@ -76,6 +79,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   overview: null,
   topStatus: '',
   earlier: { phase: 'idle' },
+  settingsOpen: false,
 
   setIdentity: label => set({ identityLabel: label }),
   setMembers: members => set({ members }),
@@ -96,6 +100,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setOverview: overview => set({ overview }),
   setTopStatus: topStatus => set({ topStatus }),
   setEarlier: earlier => set({ earlier }),
+  setSettingsOpen: settingsOpen => set({ settingsOpen }),
   stampAvatar: agentId => {
     const next = new Map(get().avatarStamps)
     next.set(agentId, (next.get(agentId) ?? 0) + 1)

@@ -138,6 +138,9 @@ export async function openConversation(id: string): Promise<void> {
   if (turn.streaming) return
   turn.switchConversation(id)
   rememberConversation(id)
+  // 会话视图是「底」：进入时替换当前状态（不是压栈）。有了这个标记，任务详情返回键
+  // 的 popstate 才能命中 conversation 分支恢复会话（批 4b 复验指出的断链修复）。
+  try { history.replaceState({ butler: 'conversation', conversationId: id }, '', location.href) } catch { /* 不支持即静默降级。 */ }
   // 附件跟着会话走：先立刻清空（别让上一个会话的待发文件挂在新会话上），再取回这一轮的。
   clearAttachments()
   void loadAttachments(id)
