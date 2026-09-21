@@ -49,10 +49,13 @@ export function newConversationId(): string {
   return `butler-web-${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
+/** 存储键（与旧前端逐字一致，config.ts 的 MOTTO_KEY 同族）。 */
+export const CONVERSATION_KEY = 'butler.conversationId'
+
 export function rememberConversation(id: string): void {
-  try { localStorage.setItem('butler.conversationId', id) } catch { /* 隐私模式下忽略。 */ }
+  try { localStorage.setItem(CONVERSATION_KEY, id) } catch { /* 隐私模式下忽略。 */ }
 }
 
 export function recallConversation(): string | null {
-  try { return localStorage.getItem('butler.conversationId') } catch { return null /* 隐私模式下当作没有。 */ }
+  try { return localStorage.getItem(CONVERSATION_KEY) } catch { return null /* 隐私模式下当作没有。 */ }
 }

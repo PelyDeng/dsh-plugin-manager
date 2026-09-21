@@ -197,6 +197,7 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
                 data-handle={`@${subtask?.agentId ?? ''}`}
                 role="tab"
                 aria-selected={selected ? 'true' : 'false'}
+                tabIndex={selected ? 0 : -1}
                 aria-controls={`${idPrefix}-panel-${subtaskId}`}
                 className={`dcard__cell${selected ? ' dcard__cell--active' : ''}${pulsing ? ' dcard__cell--pulse' : ''}`}
                 title={`${subtask?.goal ?? ''} @${subtask?.agentId ?? ''}`.trim()}

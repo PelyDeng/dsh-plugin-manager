@@ -82,7 +82,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   settingsOpen: false,
 
   setIdentity: label => set({ identityLabel: label }),
-  setMembers: members => set({ members }),
+  // 成员名单落地时为每人补头像版本号初值（旧 refreshPanels 口径）：有 stamp 才视为
+  // 「可能有自定义头像」，设置页的「删除头像」入口据此显示。
+  setMembers: members => set(state => {
+    const stamps = new Map(state.avatarStamps)
+    for (const member of members) {
+      if (!stamps.has(member.agentId)) stamps.set(member.agentId, 1)
+    }
+    return { members, avatarStamps: stamps }
+  }),
   setChatList: chatList => set({ chatList }),
   setChatKeyword: chatKeyword => set({ chatKeyword }),
   setChatPageMeta: meta => set(meta),

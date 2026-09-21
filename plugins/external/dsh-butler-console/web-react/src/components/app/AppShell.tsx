@@ -91,7 +91,13 @@ export function AppShell() {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing) return
-      if (useSessionStore.getState().settingsOpen) { event.preventDefault(); useSessionStore.getState().setSettingsOpen(false); return }
+      if (useSessionStore.getState().settingsOpen) {
+        event.preventDefault()
+        useSessionStore.getState().setSettingsOpen(false)
+        // 关页后焦点送回齿轮，不落空（main setOpenSettings(false) 同口径）。
+        ;(document.querySelector('.icon-btn') as HTMLElement | null)?.focus()
+        return
+      }
       if (drawerOpen) { event.preventDefault(); closeDrawer(); return }
       if (sidebarOpen) { event.preventDefault(); closeSidebar() }
     }
