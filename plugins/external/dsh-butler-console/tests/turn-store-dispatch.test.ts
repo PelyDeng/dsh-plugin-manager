@@ -113,6 +113,20 @@ describe('调度卡数据面（plan/subtask/summary）', () => {
     expect(entry.actions?.[0]?.confirmLabel).toBe('确认')
   })
 
+  it('taskId 在终态事件补齐：running 先建（不带 taskId）不能让 /action 带空 taskId（0.13.4 生产实证 404 根因）', () => {
+    seedPlan()
+    // 生产时序：running 事件建条目时不带 taskId，终态才带。
+    apply({ type: 'subtask', id: 'c1', agentId: 'blog', state: 'running', time: 1 } as TurnEvent)
+    apply({
+      type: 'subtask', id: 'c1', agentId: 'blog', state: 'external_pending',
+      taskId: 'task-real', detail: '等待确认', time: 2,
+    } as unknown as TurnEvent)
+    const key = useTurnStore.getState().bubbleKeys.get('c1')
+    const entry = useTurnStore.getState().entries.find(candidate => candidate.key === key)
+    if (entry?.kind !== 'subtask') throw new Error('missing')
+    expect(entry.taskId).toBe('task-real')
+  })
+
   it('决策受理本地摘卡：resolveActionLocally 移除对应操作卡，其他成员不受影响（0.13.3）', () => {
     seedPlan()
     const preparedA = [{ id: 'act-a', kind: 'blog.publish', state: 'prepared', title: '发布' }]

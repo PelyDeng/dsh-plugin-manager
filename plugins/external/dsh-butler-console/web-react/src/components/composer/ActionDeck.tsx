@@ -79,6 +79,7 @@ function PendingCard({ item }: { item: PendingItem }) {
       }, {
         // 受理即摘卡：后端把子任务重新调度要数分钟，prepared 卡挂着只会诱导重复点击。
         onAccepted: () => { resolveActionLocally(item.subtaskId, item.actionId ?? ''); setNote(decision === 'confirm' ? '已受理，正在办理' : '已撤回') },
+        onRejected: error => { setNote(`${decision === 'confirm' ? '确认' : '撤回'}没成功：${error instanceof Error && error.message !== '' ? error.message : '网络异常'}`); setLocked(false) },
       })
     } catch (error) {
       setNote(`${decision === 'confirm' ? '确认' : '撤回'}没成功：${error instanceof Error && error.message !== '' ? error.message : '网络异常'}`)

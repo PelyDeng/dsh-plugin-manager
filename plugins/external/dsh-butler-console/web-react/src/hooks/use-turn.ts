@@ -513,7 +513,7 @@ export async function runActionDecision(input: {
   actionId: string
   decision: 'confirm' | 'cancel'
   requestId?: string | undefined
-}, hooks: { onAccepted?: () => void } = {}): Promise<void> {
+}, hooks: { onAccepted?: () => void; onRejected?: (error: unknown) => void } = {}): Promise<void> {
   await waitForTurnIdle()
   useTurnStore.setState({ streaming: true, abort: new AbortController(), lastSeq: 0, lastRunId: '', following: true })
   const host = await makeEngineHost()
@@ -533,6 +533,8 @@ export async function runActionDecision(input: {
     }
   } catch (error) {
     reportFailure(error, '操作没送出去')
+    // 卡面也要知道失败：否则 note 停在「正在办理…」、按钮锁死，用户以为点了没反应。
+    hooks.onRejected?.(error)
   } finally {
     void finishTurn()
   }

@@ -91,16 +91,26 @@ const check = (label, ok, detail = '') => {
   console.log(`  ${ok ? '✅' : '❌'} ${label}${detail !== '' ? ` — ${detail}` : ''}`)
   ok ? pass++ : fail++
 }
+/** 退出前关掉自己的 tab：不堆积（后台 tab 会让鼠标注入与截图失效）。 */
+const done = code => {
+  void fetch(`${CDP}/json/close/${target.id}`).catch(() => {}).then(() => process.exit(code))
+}
 
 await send('Page.enable')
 await send('Runtime.enable')
 await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false })
+// 新开 tab 默认落在 780×580 的小窗口：模拟视口 1280×900 的下半部分（deck 按钮区）
+// 超出真实窗口高度，鼠标注入会被窗口裁剪——必须把真实窗口调大到容纳模拟视口。
+const win = await send('Browser.getWindowForTarget', { targetId: target.id })
+await send('Browser.setWindowBounds', { windowId: win.result?.windowId, bounds: { width: 1400, height: 1000, windowState: 'normal' } })
 await send('Network.enable')
 await send('Network.setCookie', { name: 'dsh_auth_session', value: COOKIE, domain: 'dsh.pelycloud.com', path: '/', httpOnly: true, secure: true, sameSite: 'Strict' })
+// 鼠标注入只对前台 tab 生效：必须先把本 tab 提到前台（9223 常驻多 tab 时尤其致命）。
+await send('Page.bringToFront', {})
 await send('Page.navigate', { url: `${ORIGIN}/butler` })
 const loaded = await waitFor("document.readyState === 'complete' && document.getElementById('message-input') !== null", 60000, 1500)
 check('会话注入且 /butler 加载出输入框', loaded)
-if (!loaded) { await shot('prod-ad-0-load-fail'); process.exit(1) }
+if (!loaded) { await shot('prod-ad-0-load-fail'); done(1) }
 await sleep(3000)
 
 console.log('\n===== P1 空态：deck 不渲染 =====')
@@ -133,7 +143,7 @@ const sentP2 = await sendAndWaitDeck(
   8 * 60 * 1000,
 )
 check('deck 出现（发布任务触发确认卡）', sentP2)
-if (!sentP2) { await shot('prod-ad-p2-no-deck'); process.exit(1) }
+if (!sentP2) { await shot('prod-ad-p2-no-deck'); done(1) }
 await sleep(1500)
 
 // 几何断言：deck 在输入框上方、在视口内
@@ -166,7 +176,7 @@ console.log('  [deck] ', String(deckText).slice(0, 120))
 const beforeCount = await evaluate("document.querySelectorAll('.action-deck .action-deck__card').length")
 const confirmBtn = await evaluate(`(() => { const b = document.querySelector('.action-deck .btn--primary'); if (b === null) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2, label: b.textContent.trim() } })()`)
 check('确认按钮存在且可点', confirmBtn !== null, confirmBtn === null ? '' : `label=${confirmBtn.label}`)
-if (confirmBtn === null) { await shot('prod-ad-p2-no-btn'); process.exit(1) }
+if (confirmBtn === null) { await shot('prod-ad-p2-no-btn'); done(1) }
 await click({ x: confirmBtn.x, y: confirmBtn.y })
 // 受理→摘卡要等回合收尾（waitForTurnIdle 窗口）+POST 受理，轮询最多 15s
 let afterCount = -1
@@ -181,7 +191,7 @@ await shot('prod-ad-p2-after-confirm')
 console.log('\n===== P3 删除任务 → cancel 路径 =====')
 const sentP3 = await sendAndWaitDeck(`请删除标题为《${title}》的博客文章。`, 8 * 60 * 1000)
 check('deck 出现（删除任务触发确认卡）', sentP3)
-if (!sentP3) { await shot('prod-ad-p3-no-deck'); process.exit(1) }
+if (!sentP3) { await shot('prod-ad-p3-no-deck'); done(1) }
 await sleep(1500)
 const cancelLabel = await evaluate(`(() => { const b = [...document.querySelectorAll('.action-deck button')].find(b => b.textContent.trim() === '先不办'); if (b === undefined) return null; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`)
 check('「先不办」按钮存在', cancelLabel !== null)
@@ -215,4 +225,4 @@ if (sentP4) {
 await shot('prod-ad-p4-after-cleanup')
 
 console.log(`\n===== 结果：${pass} 通过 / ${fail} 失败 =====`)
-process.exit(fail === 0 ? 0 : 1)
+done(fail === 0 ? 0 : 1)

@@ -52,6 +52,7 @@ export function ActionCard({ action, taskId, subtaskId }: {
         taskId, subtaskId, actionId: action.id, decision, requestId: newConversationId(),
       }, {
         onAccepted: () => { resolveActionLocally(subtaskId, action.id); setNote(decision === 'confirm' ? '已受理，正在办理' : '已撤回') },
+        onRejected: error => { setNote(`${decision === 'confirm' ? '确认' : '撤回'}没成功：${error instanceof Error && error.message !== '' ? error.message : '网络异常'}`); setLocked(false) },
       })
     } catch (error) {
       setNote(`${decision === 'confirm' ? '确认' : '撤回'}没成功：${error instanceof Error && error.message !== '' ? error.message : '网络异常'}`)

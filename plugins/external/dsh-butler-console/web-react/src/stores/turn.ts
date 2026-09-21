@@ -610,6 +610,7 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
     apply(entry => ({
       ...entry,
       state: 'running',
+      taskId: event.taskId ?? entry.taskId,
       toolLine: event.tool !== undefined || event.detail !== undefined
         ? { tool: event.tool, detail: event.detail ?? undefined }
         : entry.toolLine,
@@ -633,6 +634,8 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
     apply(entry => ({
       ...entry,
       state: event.state ?? entry.state,
+      // running 事件往往不带 taskId、终态才带——不在终态补一次，/action 会带空 taskId 404。
+      taskId: event.taskId ?? entry.taskId,
       terminal: true,
       live: false,
       body: finalText !== undefined ? finalText : entry.body,
