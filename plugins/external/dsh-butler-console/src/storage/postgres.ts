@@ -544,22 +544,41 @@ export class PostgresTaskStorage implements ButlerStorage {
     )
   }
 
-  async listConversations(actor: Actor, limit: number): Promise<ConversationSummary[]> {
+  async listConversations(actor: Actor, limit: number, offset = 0): Promise<{ items: ConversationSummary[]; total: number }> {
     const result = await this.run<{ id: string; title: string; createdAt: string | number; updatedAt: string | number; taskCount: string | number }>(
       `SELECT c.id AS "id", c.title AS "title", c.created_at AS "createdAt", c.updated_at AS "updatedAt",
          (SELECT count(*) FROM butler_tasks t WHERE t.conversation_id = c.id) AS "taskCount"
        FROM dsh_conversations c
        WHERE c.owner_namespace=$1 AND c.owner_id=$2 AND c.agent_id=$4 AND COALESCE(c.removal_state,'') <> 'removed'
-       ORDER BY c.updated_at DESC, c.id LIMIT $3`,
-      [actor.namespace, actor.userId, limit, BUTLER_AGENT_ID],
+       ORDER BY c.updated_at DESC, c.id LIMIT $3 OFFSET $5`,
+      [actor.namespace, actor.userId, limit, BUTLER_AGENT_ID, offset],
     )
-    return result.rows.map(row => ({
-      id: row.id,
-      title: row.title,
-      createdAt: Number(row.createdAt),
-      updatedAt: Number(row.updatedAt),
-      taskCount: Number(row.taskCount),
-    }))
+    const counted = await this.run<{ total: string | number }>(
+      `SELECT count(*) AS "total" FROM dsh_conversations c
+       WHERE c.owner_namespace=$1 AND c.owner_id=$2 AND c.agent_id=$3 AND COALESCE(c.removal_state,'') <> 'removed'`,
+      [actor.namespace, actor.userId, BUTLER_AGENT_ID],
+    )
+    return {
+      items: result.rows.map(row => ({
+        id: row.id,
+        title: row.title,
+        createdAt: Number(row.createdAt),
+        updatedAt: Number(row.updatedAt),
+        taskCount: Number(row.taskCount),
+      })),
+      total: Number(counted.rows[0]?.total ?? 0),
+    }
+  }
+
+  /** 显式改会话标题（管理操作）：无条件覆写，与 touchConversation 的「只写空标题」不同。 */
+  async renameConversation(actor: Actor, conversationId: string, title: string): Promise<void> {
+    await this.assertOwner(conversationId, actor)
+    const trimmed = Array.from(title.replace(/\s+/gu, ' ').trim()).slice(0, 80).join('')
+    await this.run(
+      `UPDATE dsh_conversations SET title=$4, updated_at=$5
+       WHERE id=$1 AND owner_namespace=$2 AND owner_id=$3 AND agent_id=$6`,
+      [conversationId, actor.namespace, actor.userId, trimmed, Date.now(), BUTLER_AGENT_ID],
+    )
   }
 
   async conversationRemovals(): Promise<{ key: string; state: string }[]> {

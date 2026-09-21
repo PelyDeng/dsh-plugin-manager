@@ -67,7 +67,10 @@ export const api = {
   identity: () => request('/identity'),
   members: () => request('/members'),
   overview: () => request('/overview'),
-  conversations: () => request('/conversations'),
+  conversations: (offset = 0, limit) => request(`/conversations?offset=${offset}${limit === undefined ? '' : `&limit=${limit}`}`),
+  /** 改会话标题（管理操作「重命名」）。回包带最新一页列表。 */
+  renameConversation: (id, title) =>
+    request('/conversations/rename', { method: 'POST', body: JSON.stringify({ id, title }) }),
   history: ({ offset = 0, limit = HISTORY_PAGE_SIZE, keyword = '', state = '', conversationId = '' } = {}) => {
     const params = new URLSearchParams({ offset: String(offset), limit: String(limit) })
     if (keyword !== '') params.set('q', keyword)

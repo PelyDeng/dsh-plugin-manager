@@ -23,7 +23,7 @@ import { appendPreviewText, butlerDelta, butlerMessage, butlerSettle, butlerThin
 import { ensureProgress, memberMessage, renderMemberContent, renderMemberMaterials, setThinking, settleMarkdown, settleMemberBody, settleMemberDynamics } from './modules/member.js'
 import { attachToDispatch, cardPrefs, mountDispatch, settleCardForSummary } from './modules/dcard.js'
 import { attachmentChipsRow, attachmentsForSend, bindAttachments, clearAttachments, hideAttachUrl, renderAttachments, takeSentAttachments } from './modules/attachments.js'
-import { deletePickedConversations, refreshChatList, refreshPanels, setChatManage, setOpenSettings } from './modules/panels.js'
+import { gotoChatPage, refreshChatList, refreshPanels, setOpenSettings, toggleFailureMenu, togglePickAll, toggleRecordsMenu } from './modules/panels.js'
 import { bindViewHistory, renderTaskRecord } from './modules/history.js'
 import { renderWelcome } from './modules/cards.js'
 import { resumeLiveTurn, sendMessage } from './modules/send.js'
@@ -167,30 +167,26 @@ function bind() {
   })
 
   el.newChat.addEventListener('click', openNewChat)
-
-  // 任务记录管理：开关、全选、批量删除（两段式确认）、退出。
-  el.chatManageToggle.addEventListener('click', () => { setChatManage(!state.chatManage) })
-  el.chatManageExit.addEventListener('click', () => { setChatManage(false) })
-  el.chatManageAll.addEventListener('click', () => {
-    const rows = [...el.chatList.querySelectorAll('.chat-row__check')]
-    const allPicked = rows.length > 0 && rows.every(check => check.checked)
-    for (const check of rows) { check.checked = !allPicked; check.dispatchEvent(new Event('change')) }
+  // 任务记录（0.12.4 合并版）：⋯ 唯一入口（非管理态=[管理]；管理态=[删除/重命名/完成]）、全选复选框、分页。
+  el.recordsMenu.addEventListener('click', event => {
+    event.stopPropagation()
+    toggleRecordsMenu()
   })
-  el.chatManageDelete.addEventListener('click', () => {
-    if (state.chatPicked.size === 0) return
-    const button = el.chatManageDelete
-    if (button.dataset.armed === '1') {
-      delete button.dataset.armed
-      button.textContent = '删除所选'
-      void deletePickedConversations()
-      return
-    }
-    button.dataset.armed = '1'
-    const count = state.chatPicked.size
-    button.textContent = `确认删除 ${count} 条`
-    setTimeout(() => {
-      if (button.dataset.armed === '1') { delete button.dataset.armed; button.textContent = '删除所选' }
-    }, 3000)
+  document.addEventListener('click', event => {
+    if (!el.recordsMenuPop.hidden && !el.recordsMenu.contains(event.target) && !el.recordsMenuPop.contains(event.target)) toggleRecordsMenu(false)
+  })
+  el.chatManageAll.addEventListener('change', () => { togglePickAll(el.chatManageAll.checked) })
+  el.chatPagerPrev.addEventListener('click', () => { gotoChatPage(state.chatPage - 1) })
+  el.chatPagerNext.addEventListener('click', () => { gotoChatPage(state.chatPage + 1) })
+
+  // 失败记录：行前复选框勾选，⋯ 操作图标两段式删除所选。
+  // 失败记录 ⋯：与任务记录同款 toggle 菜单（开/再点关/外点关），勾选实时刷可用态。
+  el.failureMenuBtn.addEventListener('click', event => {
+    event.stopPropagation()
+    toggleFailureMenu()
+  })
+  document.addEventListener('click', event => {
+    if (!el.failureMenuPop.hidden && !el.failureMenuBtn.contains(event.target) && !el.failureMenuPop.contains(event.target)) toggleFailureMenu(false)
   })
 
   // 设置页开关：右上角齿轮进，左上角「回群聊」出。
@@ -303,7 +299,10 @@ function bind() {
 
 async function loadIdentity() {
   try {
-    el.identity.textContent = (await api.identity()).label
+    const identity = await api.identity()
+    el.identity.textContent = identity.label
+    // 每页条数从服务端取（0.12.4 分页）：前端猜错会造成「页码与内容对不上」。
+    if (Number.isSafeInteger(identity.chatPageSize) && identity.chatPageSize >= 5) state.chatPageSize = identity.chatPageSize
   } catch {
     el.identity.textContent = ''
   }

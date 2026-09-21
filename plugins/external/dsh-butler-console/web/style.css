@@ -257,13 +257,15 @@ textarea:focus-visible,
 
 .column { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .column--left, .column--center { gap: 10px; }
-.column--right { overflow: hidden; gap: 10px; }
+.column--right { overflow: hidden; gap: 6px; } /* 0.12.4：收紧栏间距，运行状态上提 */
 /* 0.12.2 右栏自适应：面板弹性伸缩，成员档案与失败记录各自在内容区里滚，整栏不出滚动条。 */
 .column--right > section { display: flex; flex-direction: column; min-height: 0; }
-.column--right > section:first-child { flex: 1 1 0; overflow: hidden; }
+.column--right > section:first-child { flex: none; overflow: hidden; max-height: 244px; /* 3 行成员自适应：标题+3×(32px 头像+padding)+gap，超出内部滚 */ }
+/* 0.12.7：运行状态内容固定高度，flex:none 紧跟成员档案之后（不再被成员区挤下去）。 */
+.column--right > section:nth-child(2) { flex: none; }
 .column--right > section:nth-child(3) { flex: 1 1 0; overflow: hidden; }
 .column--right > section .panel { flex: 1; min-height: 0; }
-#member-list { overflow-y: auto; min-height: 0; flex: 1; }
+#member-list { overflow-y: auto; min-height: 0; }
 #failure-list { overflow-y: auto; min-height: 0; flex: 1; }
 
 .section-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
@@ -384,12 +386,13 @@ textarea:focus-visible,
 
 .center__head {
   display: flex; align-items: center; gap: 10px; padding: 11px 14px;
+  position: relative; z-index: 1; /* 自成层叠上下文，标题装饰不溢出到邻栏 */
   border-bottom: 1.5px solid var(--bt-line);
 }
 .center__head h2 { margin: 0; font-family: var(--bt-hand); font-size: 24px; font-weight: 800; -webkit-text-stroke: 0.7px var(--bt-stroke); text-shadow: 0.5px 0.5px 0 var(--bt-stroke); }
 /* 红笔圈注：罩在「牛马调度群」标题上的手绘椭圆（index.html 内联 SVG）。 */
-.center__title { position: relative; padding: 2px 10px; line-height: 0; }
-.center__title img { display: block; height: 86px; width: auto; }
+.center__title { position: relative; padding: 2px 10px; line-height: 0; overflow: hidden; }
+.center__title img { display: block; height: 86px; width: auto; pointer-events: none; /* 装饰图（红圈+毛笔字）几何溢出到邻栏上空，禁掉命中让点击穿到下面的控件（0.12.6） */ }
 .center__circle {
   position: absolute; inset: -4px -6px; width: calc(100% + 12px); height: calc(100% + 8px);
   pointer-events: none;
@@ -1273,7 +1276,7 @@ textarea:focus-visible,
 
 .failure-row {
   position: relative;
-  display: block; width: 100%; padding: 2px 2px;
+  display: flex; width: 100%; padding: 2px 2px; gap: 6px;
   text-align: left;
   background: none;
   border: none;
@@ -1750,79 +1753,108 @@ body[data-settings="open"] .settings {
   .dcard__cell--pulse, .dcard__fresh { animation: none; }
 }
 
-/* ── 0.12.3 任务记录管理：删除/批量删除 ─────────────────────────────── */
+/* ── 0.12.4 任务记录管理：全选复选框 + ⋯ 操作菜单 + 分页 ─────────────── */
 
-/* 行内删除按钮（任务记录行尾与失败记录行尾共用）：平时只是淡淡的 ×，hover 才显形；
- * 武装态（两段式确认）换成红笔批注胶囊。 */
-.row-delete {
-  flex: 0 0 auto;
-  align-self: center;
-  font-size: 15px;
-  line-height: 1;
-  color: var(--bt-ink-faint);
-  cursor: pointer;
-  padding: 3px 5px;
-  border-radius: var(--bt-wobble-sm);
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-.chat-row:hover .row-delete, .failure-row:hover .row-delete,
-.row-delete:focus-visible, .row-delete--armed { opacity: 1; }
-.row-delete--armed {
-  color: var(--bt-red);
-  font-size: 11px;
-  font-weight: 600;
-  background: #f6ded9;
-  border: 1.5px solid var(--bt-red);
-  white-space: nowrap;
-}
-.row-delete--armed::before { content: none; }
-
-/* 任务记录标题行：标题与「管理」开关同一行。 */
-.left__records { display: flex; align-items: baseline; gap: 8px; }
+/* 任务记录标题行（0.12.6）：仅标题；⋯ 按钮与菜单移至全选操作条右端。 */
+.left__records { display: flex; align-items: center; }
 .left__records .section-title { flex: 1; }
-.chat-manage-toggle {
-  font-family: var(--bt-hand);
-  font-size: 12.5px;
-  color: var(--bt-ink-soft);
-  background: none;
-  border: none;
-  border-bottom: 2px dashed var(--bt-ink-faint);
-  cursor: pointer;
-  padding: 0 1px 1px;
-}
-.chat-manage-toggle[aria-pressed="true"] { color: var(--bt-red); border-bottom-color: var(--bt-red); }
 
-/* 批量操作条：管理模式的工具行，贴纸感的小条。 */
+
+/* 批量操作条：全选复选框 + 计数 + ⋯ 操作按钮（菜单挂在它下面）。 */
 .chat-manage-bar {
+  position: relative; /* 菜单的定位锚 */
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 6px;
-  padding: 5px 8px;
+  padding: 4px 8px;
   background: var(--bt-card);
   border: 1.5px solid var(--bt-stroke);
   border-radius: var(--bt-wobble-sm);
   box-shadow: 2px 2px 0 #2f2b2622;
 }
-.chat-manage-bar__count { flex: 1; font-size: 11.5px; color: var(--bt-ink-soft); text-align: center; }
-.chat-manage-bar button {
+.chat-manage-bar__all { width: 15px; height: 15px; margin: 0; accent-color: var(--bt-red); cursor: pointer; }
+.chat-manage-bar__count { flex: 1; font-size: 11.5px; color: var(--bt-ink-soft); }
+.chat-manage-actions { position: relative; display: inline-flex; }
+.chat-manage-menu-btn {
   font-family: var(--bt-hand);
-  font-size: 12.5px;
+  font-size: 15px;
+  line-height: 1;
   cursor: pointer;
-  background: none;
+  background: var(--bt-paper);
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: 50% 46% 52% 48% / 48% 52% 46% 50%;
+  width: 26px;
+  height: 24px;
+  color: var(--bt-ink);
+  padding: 0 0 2px;
+}
+.chat-manage-menu-btn:hover:not(:disabled) { background: #f3ead2; }
+.chat-manage-menu-btn:disabled { opacity: 0.35; cursor: default; }
+.chat-manage-menu-btn--sm { width: 24px; height: 22px; font-size: 13px; }
+.chat-manage-menu[hidden] { display: none; } /* hidden 属性被 flex 覆盖，必须显式压回（0.12.6 滚动条+关不掉的元凶） */
+.chat-manage-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 108px;
+  background: var(--bt-card);
   border: 1.5px solid var(--bt-stroke);
   border-radius: var(--bt-wobble-sm);
-  padding: 2px 8px;
+  box-shadow: 2px 3px 0 #2f2b2633;
+  padding: 3px;
+}
+.chat-manage-menu__item {
+  font-family: var(--bt-hand);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-radius: 8px 7px 9px 6px;
+  padding: 5px 10px;
   color: var(--bt-ink);
 }
-.chat-manage-bar button:disabled { opacity: 0.4; cursor: default; }
-.chat-manage-bar__delete:not(:disabled) { color: var(--bt-red); border-color: var(--bt-red); }
-.chat-manage-bar__delete:not(:disabled):hover { background: #f6ded9; }
-.chat-manage-bar__pick, .chat-manage-bar__exit:hover { background: var(--bt-paper); }
+.chat-manage-menu__item:hover:not(:disabled) { background: #f3ead2; }
+.chat-manage-menu__item:disabled { opacity: 0.4; cursor: default; }
+.chat-manage-menu__item--danger:not(:disabled) { color: var(--bt-red); }
 
-/* 管理模式的行：label 承载复选框，勾中的行加淡底与描边。 */
-.chat-row--manage { cursor: pointer; }
+/* 分页条（0.12.4）：钉在左栏底部，随列表滚动常驻可见。 */
+.chat-pager {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 5px 8px 4px;
+  background: linear-gradient(to top, var(--bt-paper) 78%, rgba(246, 239, 221, 0));
+}
+.chat-pager__btn {
+  font-family: var(--bt-hand);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  width: 24px;
+  height: 22px;
+  color: var(--bt-ink);
+  padding: 0 0 2px;
+}
+.chat-pager__btn:hover:not(:disabled) { background: #f3ead2; }
+.chat-pager__btn:disabled { opacity: 0.35; cursor: default; }
+.chat-pager__info { font-family: var(--bt-hand); font-size: 12px; color: var(--bt-ink-soft); }
+
+/* 0.12.5：复选框常驻的行——行首勾选、正文点击打开会话。 */
+.chat-row--pickable { display: flex; align-items: flex-start; gap: 8px; }
+.chat-row__body { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; cursor: pointer; text-align: left; }
+.chat-row__body > span:first-child { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .chat-row--picked { background: #f3ead2; border-color: var(--bt-red); }
 .chat-row__check {
   flex: 0 0 auto;
@@ -1832,3 +1864,33 @@ body[data-settings="open"] .settings {
   accent-color: var(--bt-red);
   cursor: pointer;
 }
+/* 行内重命名（0.12.4）：标题位换手账输入框。 */
+.chat-row__rename {
+  width: 100%;
+  font-family: var(--bt-font);
+  font-size: 13px;
+  color: var(--bt-ink);
+  background: var(--bt-card);
+  border: 1.5px dashed var(--bt-red);
+  border-radius: 7px 6px 8px 5px;
+  padding: 2px 6px;
+  outline: none;
+}
+.chat-row--renaming { border-color: var(--bt-red); background: #fffdf5; }
+
+/* 失败记录（0.12.4）：行前复选框 + 标题行 ⋯ 操作按钮两段式删除。 */
+.failure-head { display: flex; align-items: center; gap: 8px; }
+.failure-head .chat-records-actions { position: relative; display: inline-flex; }
+.failure-head .section-title { flex: 1; }
+.failure-row--pick { cursor: pointer; align-items: flex-start; }
+.failure-row__check {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  accent-color: var(--bt-red);
+  cursor: pointer;
+}
+.failure-row__body { flex: 1; min-width: 0; cursor: pointer; }
+.failure-row__body .failure-row__goal,
+.failure-row__body .failure-row__meta { display: block; }

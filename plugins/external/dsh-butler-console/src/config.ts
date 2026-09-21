@@ -52,6 +52,8 @@ export interface Config {
   maxActiveConversations: number
   /** 运行历史每页条数上限。 */
   maxHistoryPageSize: number
+  /** 任务记录侧栏每页条数（0.12.4 管理分页）。 */
+  conversationsPageSize: number
   /**
    * 每个会话最多保留的事件条数。
    *
@@ -94,6 +96,7 @@ export const Config: Schema<Config> = Schema.object({
   goalRelayTimeoutMs: Schema.natural().min(5000).max(120000).default(45000),
   maxActiveConversations: Schema.natural().min(1).max(500).default(32),
   maxHistoryPageSize: Schema.natural().min(1).max(100).default(30),
+  conversationsPageSize: Schema.natural().min(5).max(50).default(10),
   maxConversationEvents: Schema.natural().min(50).max(20000).default(2000),
   idempotencyTtlMs: Schema.natural().min(1000).max(86400000).default(600000),
 })
