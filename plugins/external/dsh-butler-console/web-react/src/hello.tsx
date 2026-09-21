@@ -1,5 +1,5 @@
-// 构建验证载体（批 0 实测项④）：被 app.tsx 以无扩展名 `./hello` 导入，
-// 验证 tsdown/oxc 的无扩展名 import 能解析到 .tsx。
+// 构建验证载体（批 0 实测项④）：被 app.tsx 以显式 `.tsx` 扩展名导入——仓库 NodeNext
+// 纪律定型显式扩展名，oxc/rolldown 构建链同样解析（无扩展名形态也实测通过，见验收记录）。
 
 interface HelloProps {
   config: Record<string, unknown> | null

@@ -121,8 +121,7 @@ if (trigger !== null) {
     if (popup === null) return { open: false }
     const style = getComputedStyle(popup)
     return {
-      open: popup.getAttribute('data-open') !== null || popup !== null,
-      inkFrame: style.borderImageSource.includes('svg'),
+      open: popup !== null,      inkFrame: style.borderImageSource.includes('svg'),
       hardShadow: style.boxShadow.includes('2px 3px'),
       handTitle: title !== null && getComputedStyle(title).fontFamily.includes('Ma Shan Zheng'),
       text: title?.textContent ?? '',

@@ -33,3 +33,15 @@ for (const file of walk(root)) {
   }
 }
 console.log(`fix-shadcn-imports: ${changed} file(s) updated`)
+
+// CLI（shadcn / ai-elements）add 会把组件的第三方依赖塞进**运行时** dependencies——
+// 本仓纪律是前端包全部进 devDependencies（tsdown alwaysBundle 打进产物，运行时零污染）。
+// 这里只检查并报出，不动 package.json：命中即手工 `pnpm remove <包> && pnpm add -D <包>`。
+// 白名单 = 插件后端的真运行时依赖（附件解析等），它们本就该在 dependencies。
+const BACKEND_RUNTIME = new Set(['@deepseek-ai/schemastery', 'mammoth', 'pdfjs-dist', 'yauzl'])
+const pkg = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../package.json'), 'utf8'))
+const polluted = Object.keys(pkg.dependencies ?? {}).filter(name => !BACKEND_RUNTIME.has(name))
+if (polluted.length > 0) {
+  console.error(`[dependencies 污染] 以下包必须移到 devDependencies（或删除）：\n  ${polluted.join('\n  ')}`)
+  process.exitCode = 1
+}

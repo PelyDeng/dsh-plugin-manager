@@ -10,7 +10,8 @@ nodeLinker: hoisted
 # 平台二进制只装当前平台（lightningcss/esbuild/oxide 等 native 可选依赖都是全平台
 # optional 列表；不限定时 hoisted 安装会去拉 freebsd/arm64-musl 等永远用不到的
 # 二进制，镜像一缺文件整个 install 失败）。开发机 Windows 与构建服务器 Linux 各自
-# 解析 current，互不影响。
+# 解析 current，互不影响。⚠️ 前提是构建始终在目标机本机跑（build.sh 如此）；
+# 未来若出现「A 机为 B 平台构建」（跨平台容器/交叉打包），要把目标平台显式列进来。
 supportedArchitectures:
   os:
     - current
