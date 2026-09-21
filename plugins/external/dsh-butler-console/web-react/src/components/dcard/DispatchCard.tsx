@@ -34,7 +34,7 @@ function useCardTicker(active: boolean): number {
 export function DispatchCard({ entry }: { entry: DispatchEntry }) {
   const entries = useTurnStore(state => state.entries)
   const members = useSessionStore(state => state.members)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'idle' | 'ok' | 'fail'>('idle')
   const gridRef = useRef<HTMLDivElement>(null)
 
   const memberBySubtask = useMemo(() => {
@@ -67,13 +67,14 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
     const current = entry.active === null ? undefined : memberBySubtask.get(entry.active)
     const text = current?.body ?? ''
     try {
-      if (text.trim() === '') throw new Error('no content')
+      if (text.trim() === '') throw new Error('还没有可复制的内容')
       await navigator.clipboard.writeText(text)
-      setCopied(true)
+      setCopied('ok')
     } catch {
-      setCopied(false)
+      // 剪贴板不可用（非安全上下文等）时如实报失败，不假装成功。
+      setCopied('fail')
     }
-    setTimeout(() => setCopied(false), 1500)
+    setTimeout(() => setCopied('idle'), 1500)
   }
 
   // 状态条：几位成员、几个还在干、几个排队、几个在等、几个交回了——一行看完。
@@ -144,7 +145,7 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
               title="复制当前这位成员交回的内容"
               onClick={event => { event.preventDefault(); event.stopPropagation(); void copyCurrent() }}
             >
-              {copied ? '已复制' : '复制'}
+              {copied === 'ok' ? '已复制' : copied === 'fail' ? '复制失败' : '复制'}
             </button>
             <button
               type="button"
@@ -237,7 +238,7 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
                 {subtask === undefined || !hasBody ? (
                   <p className="dcard__empty">{emptySlotHint(subtask?.state)}</p>
                 ) : (
-                  <div className={subtask.state === 'succeeded' ? 'bubble bubble--done' : subtask.state === 'failed' ? 'bubble bubble--fail' : 'bubble'}>
+                  <div className={`bubble${subtask.state === 'succeeded' ? ' bubble--done' : ''}${subtask.state === 'failed' ? ' bubble--fail' : ''}${subtask.state === 'waiting_user' || subtask.state === 'external_pending' ? ' bubble--wait' : ''}`}>
                     {subtask.thinking !== '' && !entry.resultOnly && (
                       <details className="think" open>
                         <summary className="think__summary"><span className="think__title">思考</span></summary>

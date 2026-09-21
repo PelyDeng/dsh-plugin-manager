@@ -45,7 +45,7 @@ const evaluate = async expression => {
   }
   return reply.result?.result?.value
 }
-const centerOf = async selector => evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el === null) return null; const rect = el.getBoundingClientRect(); return rect.width === 0 || rect.height === 0 ? null : { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } })()`)
+const centerOf = async selector => evaluate(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el === null) return null; el.scrollIntoView({ block: 'nearest' }); const rect = el.getBoundingClientRect(); return rect.width === 0 || rect.height === 0 ? null : { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 } })()`)
 const click = async point => {
   if (point === null) return false
   await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y })
@@ -135,10 +135,11 @@ if (askShown.card) {
   await new Promise(resolve => setTimeout(resolve, 3000))
   const afterReply = await evaluate(`(() => ({
     cardGone: document.querySelector('.ask') === null,
-    succeeded: [...document.querySelectorAll('.msg__tag')].some(node => node.textContent === '已完成'),
-    summary: document.querySelector('.summary[data-state="completed"]') !== null,
+    succeeded: [...document.querySelectorAll('.dcard__statetext')].some(node => node.textContent === '已完成'),
+    lastSummary: [...document.querySelectorAll('.summary')].pop()?.dataset.state ?? '',
   }))()`)
-  check('[C2] 回话受理（收卡+收尾）', afterReply.cardGone && afterReply.succeeded && afterReply.summary, JSON.stringify(afterReply))
+  // 会话是多回合连续的：只认「最后一个」汇总的状态（旧回合的 completed 一直在页面上）。
+  check('[C2] 回话受理（收卡+收尾）', afterReply.cardGone && afterReply.succeeded && afterReply.lastSummary === 'completed', JSON.stringify(afterReply))
 }
 
 // [E] 幂等粗检：整页 user 气泡数与发送次数一致（StrictMode 双调用不重复渲染）。

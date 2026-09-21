@@ -309,6 +309,22 @@ const ErrorEntryView = memo(ErrorEntryViewFn)
 const SummaryEntryView = memo(SummaryEntryViewFn)
 const TaskEntryView = memo(TaskEntryViewFn)
 
+/**
+ * 消息流渲染（批 4b 收编）：被调度卡关联的成员行不再单独渲染——旧版「成员的真实输出
+ * 收进调度卡，群里不再有每位成员一行」（格子就是那一行）。plan 前的孤立成员行（无 plan
+ * 的降级面）仍独立呈现。
+ */
+export function renderEntries(entries: ThreadEntry[]): React.ReactNode {
+  const dispatchOrders = new Set<string>()
+  for (const entry of entries) {
+    if (entry.kind === 'dispatch') for (const id of entry.order) dispatchOrders.add(id)
+  }
+  return entries.map(entry =>
+    entry.kind === 'subtask' && dispatchOrders.has(entry.subtaskId)
+      ? null
+      : renderEntry(entry))
+}
+
 export function renderEntry(entry: ThreadEntry): React.ReactNode {
   switch (entry.kind) {
     case 'user': return <UserEntryView key={entry.key} text={entry.text} time={entry.time} attachments={entry.attachments} />

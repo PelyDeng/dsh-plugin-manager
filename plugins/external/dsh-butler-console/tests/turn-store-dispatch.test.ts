@@ -75,9 +75,12 @@ describe('调度卡数据面（plan/subtask/summary）', () => {
     const c1Entry = entries.find(entry => entry.key === c1)
     const c2Entry = entries.find(entry => entry.key === c2)
     if (c1Entry?.kind !== 'subtask' || c2Entry?.kind !== 'subtask') throw new Error('entries missing')
-    // 成功的不动（真实结果不改写）；还在跑的按取消收口（live=false 由 summary 分支统一收）
+    // 成功的不动（真实结果不改写）；还在跑的明确改写为「已停止」并定格秒数
+    // （settleCardForSummary 语义：结束的一轮里不能有永远在干活的成员）。
     expect(c1Entry.state).toBe('succeeded')
+    expect(c2Entry.state).toBe('cancelled')
     expect(c2Entry.live).toBe(false)
+    expect(c2Entry.finishedAt).toBeDefined()
   })
 
   it('重派（dispatched）清空正文：旧尝试的迟到增量不串进新版', () => {

@@ -11,7 +11,7 @@ import { useTurnStore } from '../../stores/turn.ts'
 import { useSessionStore } from '../../stores/session.ts'
 import { loadEarlier } from '../../hooks/use-turn.ts'
 import { useTurnStore as useTurnStoreFull } from '../../stores/turn.ts'
-import { renderEntry, Welcome } from './entries.tsx'
+import { renderEntries, Welcome } from './entries.tsx'
 
 export function Thread() {
   const entries = useTurnStore(state => state.entries)
@@ -64,7 +64,7 @@ export function Thread() {
           {entries.length === 0 ? <Welcome /> : (
             <>
               <EarlierControl />
-              {entries.map(renderEntry)}
+              {renderEntries(entries)}
             </>
           )}
         </div>

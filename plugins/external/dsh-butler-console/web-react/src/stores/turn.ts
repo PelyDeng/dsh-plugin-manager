@@ -166,6 +166,12 @@ export interface TurnState {
 let entrySeq = 0
 const nextKey = (prefix: string) => `${prefix}-${++entrySeq}`
 
+function newKeysMerge(base: Map<string, string>, extra: Map<string, string>): Map<string, string> {
+  const merged = new Map(base)
+  for (const [key, value] of extra) merged.set(key, value)
+  return merged
+}
+
 /**
  * 帧缓冲（非响应式）：delta 先落这里，flushFrame 一次性并入 entries。
  * 两条规则与旧 events.js 一致：terminal（已校准）或 live=false 的气泡不再追加。
@@ -256,11 +262,12 @@ export const useTurnStore = create<TurnState>((set, get) => ({
     set(state => ({ entries: state.entries.filter(entry => entry.key !== key) }))
   },
 
+  /** 渲染一条任务记录（历史回放/快照接续/任务详情页三处共用）：调度卡 + 成员数据面。 */
   renderTaskRecord: (record, opts = {}) => {
     const liveResume = opts.liveResume === true
     const terminalRecord = ['completed', 'failed', 'cancelled', 'partial'].includes(record.state)
+    const prefs = readCardPrefs(record.id)
     const entries: ThreadEntry[] = []
-    // 与旧 renderTaskRecord 同序：目标 → 拆解说明 → 调度卡（批 1 以降级成员行呈现）→ 终态卡。
     entries.push({ key: nextKey('user'), kind: 'user', text: record.goal, time: Number(record.createdAt) || undefined })
     entries.push({
       key: nextKey('butler'), kind: 'butler',
@@ -268,25 +275,47 @@ export const useTurnStore = create<TurnState>((set, get) => ({
       thinking: '', streaming: false,
       time: Number(record.createdAt) || undefined,
     })
+    // 成员数据面（与实时同一份结构）：快照接续时 waiting 成员重新拿到回话入口。
+    const memberEntries: ThreadEntry[] = []
+    const order: string[] = []
     for (const subtask of record.subtasks) {
-      entries.push({
+      order.push(subtask.id)
+      const terminalSub = ['succeeded', 'failed', 'cancelled', 'external_pending'].includes(subtask.state)
+      const waiting = subtask.state === 'waiting_user'
+      memberEntries.push({
         key: nextKey('subtask'), kind: 'subtask', subtaskId: subtask.id, agentId: subtask.agentId,
         goal: subtask.goal, state: subtask.state,
-        // 与实时同一入口的正文口径：服务端没给结论时回落状态词（旧 history.js 同语义）。
         body: subtask.state === 'failed' || subtask.state === 'cancelled'
           ? (subtask.error || '失败')
           : (subtask.result || STATE_TEXT[subtask.state] || ''),
-        thinking: '', terminal: ['succeeded', 'failed', 'cancelled', 'external_pending'].includes(subtask.state),
-        live: false, toolLine: null,
+        thinking: '', terminal: terminalSub, live: false, toolLine: null,
         artifacts: Array.isArray(subtask.artifacts) ? subtask.artifacts : [],
-        startedAt: subtask.startedAt,
+        startedAt: subtask.startedAt, finishedAt: subtask.finishedAt,
         detail: subtask.result, error: subtask.error,
+        // 快照接续的等待是活的：回话入口重新给出（历史回放则提示重新描述目标）。
+        ...(waiting && liveResume
+          ? { ask: { taskId: record.id, question: subtask.result || '需要你补充点信息', detail: subtask.result ?? '' } }
+          : {}),
       })
     }
+    entries.push({
+      key: `dispatch-${record.id}`, kind: 'dispatch', taskId: record.id,
+      order, active: order[0] ?? null,
+      // 未终任务是「活的」：默认展开（收起会把确认入口/等待输入藏进折叠区）；
+      // 终态任务沿用用户自己的折叠偏好（刷新重建先读偏好再渲染）。
+      open: !terminalRecord || prefs.open === true,
+      resultOnly: prefs.resultOnly === true,
+      fresh: false, pulses: [],
+    })
+    entries.push(...memberEntries)
     if (terminalRecord || !liveResume) {
       entries.push({ key: nextKey('summary'), kind: 'summary', state: record.state, text: record.summary ?? '', time: Number(record.updatedAt) || undefined })
     }
-    set(state => ({ entries: [...state.entries, ...entries], taskId: record.id, bubbleKeys: new Map(state.bubbleKeys) }))
+    const nextKeys = new Map<string, string>()
+    for (const entry of memberEntries) {
+      if (entry.kind === 'subtask') nextKeys.set(entry.subtaskId, entry.key)
+    }
+    set(state => ({ entries: [...state.entries, ...entries], taskId: record.id, bubbleKeys: newKeysMerge(state.bubbleKeys, nextKeys) }))
   },
 
   applyTurnEvent: event => {
@@ -457,10 +486,19 @@ export const useTurnStore = create<TurnState>((set, get) => ({
         })
         // 调度卡收口（settleCardForSummary）：只有收尾汇总才收口——waiting_user/external_pending
         // 是暂停不是结束；还没定论的格子明确说「已停止」，不替它编一个成功。
+        // 调度卡收口（settleCardForSummary 完整语义）：只有**收尾**的汇总才收口——
+        // waiting_user/external_pending 是暂停（这一轮还活着），说成「已停止」是假话；
+        // 还没定论的格子改写为 cancelled 并定格 finishedAt：结束的一轮里不能有永远在
+        // 干活的成员+秒数在跳；成功成员（已有终态）一律不动——不把真实结果改成别的说法。
         const summaryState = event.state ?? ''
+        const at = typeof event.time === 'number' ? event.time : Date.now()
         set(st => ({
           entries: st.entries.map(entry => {
-            if (entry.kind === 'subtask' && !entry.terminal) return { ...entry, live: false }
+            if (entry.kind === 'subtask') {
+              if (entry.terminal) return entry
+              if (['waiting_user', 'external_pending'].includes(entry.state)) return { ...entry, live: false }
+              return { ...entry, live: false, state: 'cancelled', finishedAt: at }
+            }
             if (entry.kind === 'dispatch' && ['completed', 'failed', 'cancelled', 'partial'].includes(summaryState)) {
               return { ...entry, fresh: !entry.open }
             }
@@ -532,14 +570,13 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
     useTurnStore.setState(st => ({
       entries: st.entries.map(entry => {
         if (entry.key === key && entry.kind === 'subtask') return patch(entry)
-        // 状态变化标注到调度卡：收起时亮「有更新」，变化格描边脉冲（600ms 自清）。
+        // 只有状态**真变化**才标注到调度卡（旧 attachToDispatch 的 changed 口径）：
+        // running 的工具行更新不算变化，不反复点亮「有更新」与脉冲。
         if (entry.kind === 'dispatch' && entry.order.includes(subtaskId)) {
-          const changed = entry.pulses.includes(subtaskId) === false
-          return {
-            ...entry,
-            fresh: entry.open ? false : true,
-            pulses: changed ? [...entry.pulses, subtaskId] : entry.pulses,
-          }
+          const before = st.entries.find(candidate => candidate.key === key)
+          const changed = before?.kind !== 'subtask' || before.state !== (event.state ?? '')
+          if (!changed) return entry
+          return { ...entry, fresh: !entry.open, pulses: entry.pulses.includes(subtaskId) ? entry.pulses : [...entry.pulses, subtaskId] }
         }
         return entry
       }),
@@ -571,6 +608,14 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
     return
   }
   // 终态/半终态：光标收起（live=false），正文以服务端那份为权威（S09——空串判断不是 ??）。
+  if (event.state === 'waiting_user') {
+    // 回话入口必须可见：卡收着时等待卡被折叠区藏住（不可点）。自动展开一次。
+    useTurnStore.setState(st => ({
+      entries: st.entries.map(entry => entry.kind === 'dispatch' && entry.order.includes(subtaskId) && !entry.open
+        ? { ...entry, open: true }
+        : entry),
+    }))
+  }
   if (event.state === 'waiting_user' || event.state === 'external_pending' || event.state === 'succeeded' || event.state === 'failed' || event.state === 'cancelled') {
     const authoritative = typeof event.detail === 'string' ? event.detail.trim() : ''
     const finalText = authoritative !== '' ? event.detail ?? '' : undefined
