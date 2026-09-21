@@ -6,6 +6,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useTurnStore } from '../../stores/turn.ts'
+import { useSessionStore, displayNameOf } from '../../stores/session.ts'
 import { runActionDecision, runReply } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
 import { newConversationId } from '../../lib/turn-event.ts'
@@ -65,10 +66,11 @@ function usePendingItems(): PendingItem[] {
 }
 
 function PendingCard({ item }: { item: PendingItem }) {
+  const members = useSessionStore(state => state.members)
   const [locked, setLocked] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const [replyText, setReplyText] = useState('')
-  const agentName = item.agentId
+  const agentName = displayNameOf(members, item.agentId)
 
   const runDecision = async (decision: 'confirm' | 'cancel') => {
     setLocked(true)
