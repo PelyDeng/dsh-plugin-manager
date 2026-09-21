@@ -4,6 +4,7 @@
  */
 import { create } from 'zustand'
 import type { MemberItem, ConversationItem } from '../lib/api.ts'
+export type { MemberItem }
 import { PALETTE } from '../lib/config.ts'
 
 /** 右栏运行状态计数（/overview 的 counts 与失败记录）。 */

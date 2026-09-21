@@ -22,6 +22,8 @@ export interface UserEntry {
   kind: 'user'
   text: string
   time?: number | undefined
+  /** 随消息发出的附件芯片（发送时从输入框摘下画到这里）。 */
+  attachments?: Array<{ key: string; name: string; size: number }> | undefined
 }
 
 /** 大总管气泡：streaming 期 text 逐帧增长，落定的 `chat` 收走（streaming=false）。 */

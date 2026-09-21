@@ -12,6 +12,7 @@ import { useTurnStore } from '../../stores/turn.ts'
 import { accentOf, displayNameOf, useSessionStore } from '../../stores/session.ts'
 import { ROUTE_PREFIX } from '../../lib/api.ts'
 import { sendMessage } from '../../hooks/use-turn.ts'
+import { fileSizeText } from '../../stores/attachments.ts'
 
 function formatTime(value?: number): string {
   if (value === undefined || value === 0) return ''
@@ -50,12 +51,28 @@ function statusColor(state: string): string {
   return 'var(--bt-ink-soft)'
 }
 
-function UserEntryViewFn({ text, time }: { text: string; time?: number | undefined }) {
+function UserEntryViewFn({ text, time, attachments }: {
+  text: string
+  time?: number | undefined
+  attachments?: Array<{ key: string; name: string; size: number }> | undefined
+}) {
   const file = DEFAULT_AVATAR_FILES.get('__boss__')
   return (
     <div className="msg msg--user">
       <div className="msg__col">
         <div className="bubble">{text}</div>
+        {attachments !== undefined && attachments.length > 0 && (
+          <div className="attach attach--sent">
+            <div className="attach__items">
+              {attachments.map(entry => (
+                <span key={entry.key} className="attach__item" data-phase="ready">
+                  <span className="attach__name">{entry.name}</span>
+                  {fileSizeText(entry.size) !== '' && <span className="attach__size">{fileSizeText(entry.size)}</span>}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="msg__meta">{formatTime(time)}</div>
       </div>
       <div className="avatar avatar--sm avatar--boss">
@@ -273,7 +290,7 @@ const TaskEntryView = memo(TaskEntryViewFn)
 
 export function renderEntry(entry: ThreadEntry): React.ReactNode {
   switch (entry.kind) {
-    case 'user': return <UserEntryView key={entry.key} text={entry.text} time={entry.time} />
+    case 'user': return <UserEntryView key={entry.key} text={entry.text} time={entry.time} attachments={entry.attachments} />
     case 'butler': return <ButlerEntryView key={entry.key} text={entry.text} thinking={entry.thinking} streaming={entry.streaming} time={entry.time} interrupted={entry.interrupted} />
     case 'subtask': return <SubtaskEntryView key={entry.key} entry={entry} />
     case 'note': return <NoteEntryView key={entry.key} text={entry.text} />

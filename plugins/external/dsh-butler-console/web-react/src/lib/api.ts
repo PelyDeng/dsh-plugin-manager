@@ -183,7 +183,48 @@ export const api = {
   clearAvatar: (agentId: string) =>
     request(`/members/avatar?agentId=${encodeURIComponent(agentId)}`, { method: 'DELETE' }),
   attachments: (conversationId = '') =>
-    request(`/attachments/list?conversationId=${encodeURIComponent(conversationId)}`),
+    request<{ items: AttachmentRecord[] }>(`/attachments/list?conversationId=${encodeURIComponent(conversationId)}`),
+  removeAttachment: (id: string) =>
+    request(`/attachments?id=${encodeURIComponent(id)}`, { method: 'DELETE' }),
+}
+
+/**
+ * 上传一个附件：直接把文件字节发过去（不是 multipart、不 base64），类型由服务端按字节
+ * 判定。文件名走 query——正文只能有一个，而名字是元信息。**解析失败也返回 200**：
+ * 一次选三个文件，坏一个不该让另外两个也传不上去。
+ */
+export async function uploadAttachment(file: File, conversationId = ''): Promise<AttachmentRecord> {
+  const params = new URLSearchParams({ name: file.name })
+  if (conversationId !== '') params.set('conversationId', conversationId)
+  const response = await fetch(`${ROUTE_PREFIX}/attachments?${params.toString()}`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': file.type || 'application/octet-stream', accept: 'application/json' },
+    body: file,
+  })
+  if (!response.ok) throw await streamFailure(response)
+  return (await response.json()).item as AttachmentRecord
+}
+
+/** 服务端附件记录。 */
+export interface AttachmentRecord {
+  id: string
+  name: string
+  bytes: number
+  status: string
+  message?: string
+}
+
+/** 从一个链接取回附件（服务端抓取）：地址合法性、跳转、大小、时长都由服务端把关。 */
+export async function attachFromUrl(url: string, conversationId = ''): Promise<AttachmentRecord> {
+  const response = await fetch(`${ROUTE_PREFIX}/attachments/url`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ url, ...(conversationId === '' ? {} : { conversationId }) }),
+  })
+  if (!response.ok) throw await streamFailure(response)
+  return (await response.json()).item as AttachmentRecord
 }
 
 /** 头像地址；带上更新时间戳避免换图后浏览器继续用旧缓存。 */

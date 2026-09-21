@@ -149,8 +149,10 @@ check('[F] console 无错误', consoleErrors.length === 0, consoleErrors.slice(0
 const shot = await send('Page.captureScreenshot', { format: 'png' })
 const { writeFileSync } = await import('node:fs')
 const stamp = new Date().toISOString().replaceAll(':', '').slice(0, 17)
-const shotPath = process.env.BATCH3_SHOT ?? `batch3-chat-${stamp}.png`
-writeFileSync(shotPath, Buffer.from(shot.result.data, 'base64'))
-console.log(`截图：${shotPath}`)
+// 截图是私有物不入 Git：必须显式传 env（约定写到 .local/butler-console/mock/）。
+if (process.env.BATCH3_SHOT !== undefined) {
+  writeFileSync(process.env.BATCH3_SHOT, Buffer.from(shot.result.data, 'base64'))
+  console.log(`截图：${process.env.BATCH3_SHOT}`)
+}
 ws.close()
 process.exit(failed === 0 ? 0 : 1)

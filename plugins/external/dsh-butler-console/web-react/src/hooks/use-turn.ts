@@ -14,6 +14,7 @@ import type { HistoryEntry } from '../lib/history-merge.ts'
 import { useTurnStore, type ThreadEntry } from '../stores/turn.ts'
 import { useSessionStore } from '../stores/session.ts'
 import { announce } from '../lib/announce.ts'
+import { attachmentsForSend, clearAttachments, loadAttachments, takeSentAttachments, useAttachmentsStore } from '../stores/attachments.ts'
 
 let hostEntrySeq = 0
 
@@ -137,6 +138,9 @@ export async function openConversation(id: string): Promise<void> {
   if (turn.streaming) return
   turn.switchConversation(id)
   rememberConversation(id)
+  // 附件跟着会话走：先立刻清空（别让上一个会话的待发文件挂在新会话上），再取回这一轮的。
+  clearAttachments()
+  void loadAttachments(id)
   const token = useTurnStore.getState().viewToken
 
   historyCursor = { transcriptBefore: null, taskOffset: null, loading: false, error: null, entriesCache: [] }
@@ -337,6 +341,8 @@ export async function deletePickedConversations(): Promise<void> {
 export async function openNewChat(): Promise<void> {
   if (useTurnStore.getState().streaming) return
   useTurnStore.getState().switchConversation(null)
+  // 新会话没有待发附件：上一个会话攒下的那些跟着上一个会话走。
+  clearAttachments()
   await refreshChatList()
 }
 
@@ -395,11 +401,21 @@ export async function sendMessage(text: string, reuseRequestId?: string): Promis
   // 提交幂等身份（S07）：重试复用，新提交换新 ID。
   const requestId = reuseRequestId ?? newConversationId()
   const abortSignal = useTurnStore.getState().abort?.signal
+  // 这一轮带的附件。**空数组也照发**：老客户端不带这个字段，服务端按「没有附件」处理。
+  const attachmentIds = attachmentsForSend()
   // 受理与否是服务端事实：先就地呈现这句话与「正在发送…」（S03），正文不本地编。
   const userKey = `user-send-${requestId}`
   const noteKey = `note-send-${requestId}`
-  useTurnStore.getState().appendEntry({ key: userKey, kind: 'user', text: trimmed, time: Date.now() })
+  // 附件随用户消息一起出现：发完就从输入框挪到消息里，不留重复的一份。
+  const sentEntries = attachmentIds.length === 0 ? [] : takeSentAttachments(attachmentIds)
+  useTurnStore.getState().appendEntry({
+    key: userKey, kind: 'user', text: trimmed, time: Date.now(),
+    ...(sentEntries.length > 0 ? { attachments: sentEntries } : {}),
+  })
   useTurnStore.getState().appendEntry({ key: noteKey, kind: 'note', text: '正在发送…' })
+  if (sentEntries.length > 0) {
+    useAttachmentsStore.getState().setUrlInputVisible(false)
+  }
   let sawTerminal = false
   try {
     for await (const event of chat({ conversationId: useTurnStore.getState().conversationId ?? '', message: trimmed, requestId, signal: abortSignal })) {
@@ -425,9 +441,16 @@ export async function sendMessage(text: string, reuseRequestId?: string): Promis
     useTurnStore.getState().removeEntry(noteKey)
     const pending = useTurnStore.getState().pendingUser
     if (pending !== null) {
-      // 还没受理就失败：草稿回输入框（用户后来打过字就不覆盖），给重试入口（同幂等身份）。
+      // 还没受理就失败：草稿回输入框（用户后来打过字就不覆盖），附件退回输入框上方；
+      // 重试入口复用同一幂等身份，不会把活再派一遍。
       useTurnStore.setState({ pendingUser: null })
       draftRestore?.(trimmed)
+      if (sentEntries.length > 0) {
+        useAttachmentsStore.getState().add(sentEntries.map(entry => ({
+          key: entry.key, name: entry.name, size: entry.size,
+          phase: 'ready' as const, message: '', item: null,
+        })))
+      }
       useTurnStore.getState().appendEntry({
         key: `error-${requestId}`, kind: 'error',
         text: `${error instanceof Error && error.message !== '' ? error.message : '没送出去'}`,

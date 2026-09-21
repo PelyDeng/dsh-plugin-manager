@@ -1,24 +1,76 @@
 /**
- * 输入区（批 3 基础发送链路）：autosize、Enter 发送/Shift+Enter 换行、IME 组合不拦、
- * 字数统计、失败草稿回填。@提及与附件在批 4a。
+ * 输入区（批 3 基础发送 + 批 4a 完整化）：@提及选择器（键盘导航/IME/aria）、附件条
+ * （回形针/链接/拖拽/粘贴三通道三态）、autosize、字数、快捷键。
  *
- * 只锁发送不锁输入（I02）：执行中可以写下一句，这句草稿不会被异步完成/恢复/切换清掉
- * ——清空只发生在真正送出的那次提交。
+ * 语义对齐旧 composer.js/attachments.js/app.js：
+ * - 提及检测：光标前未闭合 @，其前须是行首/空白/非 ASCII（中文不打空格），@ 与光标间
+ *   无空白；英文数字后不触发（防邮箱）。
+ * - 键盘：菜单开着时 ↑↓ 移动、Enter/Tab 选中、Esc 关闭；输入法组合期间一概不拦。
+ * - 落纸用外号：服务端成员清单就是「id（外号）」对照表，外号即点名。
+ * - 附件三通道最后都落到一份服务端记录；拖拽区挂整块输入区（用户瞄的是"那一片"）。
+ * - I02：只锁发送不锁输入，执行中可写下一句，草稿不被异步动作清掉。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { registerDraftRestore, sendMessage, stopTurn } from '../../hooks/use-turn.ts'
-import { useSessionStore } from '../../stores/session.ts'
+import { useSessionStore, type MemberItem } from '../../stores/session.ts'
 import { useTurnStore } from '../../stores/turn.ts'
+import {
+  addFiles, addUrl, dropAttachment, fileSizeText,
+  useAttachmentsStore,
+} from '../../stores/attachments.ts'
 import { registerTearTap } from '../chat/entries.tsx'
+
+interface MentionState {
+  start: number
+  query: string
+  index: number
+}
+
+/** 光标前是否有一个未闭合的 @（旧 detectMention 口径）。 */
+function detectMention(text: string, pos: number): { start: number; query: string } | null {
+  for (let i = pos - 1; i >= 0; i -= 1) {
+    const ch = text[i] ?? ''
+    if (ch === '@') {
+      const prev = i === 0 ? '' : text[i - 1] ?? ''
+      if (prev === '' || /[^\x00-\x7f]/.test(prev) || /\s/.test(prev)) {
+        return { start: i, query: text.slice(i + 1, pos) }
+      }
+      return null
+    }
+    if (/\s/.test(ch)) return null
+  }
+  return null
+}
+
+/** 过滤口径：外号、报名名、agentId 任一命中即可。 */
+function mentionCandidates(members: MemberItem[], query: string): MemberItem[] {
+  const q = query.trim().toLowerCase()
+  return members.filter(member =>
+    member.displayName.toLowerCase().includes(q)
+    || member.declaredName.toLowerCase().includes(q)
+    || member.agentId.toLowerCase().includes(q))
+}
 
 export function Composer() {
   const streaming = useTurnStore(state => state.streaming)
+  const conversationId = useTurnStore(state => state.conversationId)
+  const members = useSessionStore(state => state.members)
+  const attachments = useAttachmentsStore(state => state.items)
+  const urlInputVisible = useAttachmentsStore(state => state.urlInputVisible)
   const [draft, setDraft] = useState('')
+  const [mention, setMention] = useState<MentionState | null>(null)
+  const [dropping, setDropping] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const urlInputRef = useRef<HTMLInputElement>(null)
   const composingRef = useRef(false)
+  const composerRef = useRef<HTMLDivElement>(null)
+  const mentionItemsRef = useRef<HTMLDivElement>(null)
 
-  // 失败草稿回填（hook 层在未受理失败时调用；用户后来打过字就不覆盖由 hook 判断时机，
-  // 这里只负责把值放回并聚焦）。欢迎板撕条点击也走同一通道填入完整话。
+  const candidates = useMemo(() => (mention === null ? [] : mentionCandidates(members, mention.query)), [mention, members])
+  const mentionItems = candidates.length > 0 ? candidates : members
+
+  // 失败草稿回填与欢迎板撕条填入：同一通道（I02——用户后来打过字就不覆盖由此处判断）。
   useEffect(() => {
     registerDraftRestore(text => {
       setDraft(current => (current === '' ? text : current))
@@ -37,10 +89,47 @@ export function Composer() {
     input.style.height = `${Math.min(input.scrollHeight, 160)}px`
   }
 
+  /** 提及检测入口（input 时）：光标挪走、补空格都等于放弃这次提及。 */
+  const updateMention = () => {
+    const input = inputRef.current
+    if (input === null) return
+    const hit = detectMention(input.value, input.selectionStart ?? input.value.length)
+    if (hit === null) { setMention(null); return }
+    if (mention === null || hit.start !== mention.start) {
+      setMention({ start: hit.start, query: hit.query, index: 0 })
+      return
+    }
+    setMention({ start: mention.start, query: hit.query, index: 0 })
+  }
+
+  const closeMention = () => setMention(null)
+
+  /** 落纸用外号：@外号 + 空格，光标落在插入之后。 */
+  const acceptMention = () => {
+    const input = inputRef.current
+    if (mention === null || input === null) return
+    const member = (candidates.length > 0 ? candidates : mentionItems)[mention.index]
+    if (member === undefined) { setMention(null); return }
+    const text = input.value
+    const pos = input.selectionStart ?? text.length
+    const insert = `@${member.displayName} `
+    const next = text.slice(0, mention.start) + insert + text.slice(pos)
+    const caret = mention.start + insert.length
+    setDraft(next)
+    closeMention()
+    window.requestAnimationFrame(() => {
+      if (inputRef.current === null) return
+      inputRef.current.setSelectionRange(caret, caret)
+      autosize()
+      inputRef.current.focus()
+    })
+  }
+
   const submit = () => {
     const text = draft
     if (text.trim() === '') return
     setDraft('')
+    closeMention()
     window.requestAnimationFrame(autosize)
     void sendMessage(text)
   }
@@ -51,8 +140,129 @@ export function Composer() {
     : null
 
   return (
-    <div className="composer" id="composer">
+    <div
+      className={`composer${dropping ? ' composer--drop' : ''}`}
+      id="composer"
+      ref={composerRef}
+      onDragOver={event => {
+        if (event.dataTransfer?.types?.includes('Files') !== true) return
+        event.preventDefault()
+        setDropping(true)
+      }}
+      onDragLeave={event => {
+        // 在子元素之间移动也会触发 dragleave：真的离开整块区域才撤反馈。
+        const next = event.relatedTarget
+        if (next !== null && next instanceof Node && composerRef.current?.contains(next) === true) return
+        setDropping(false)
+      }}
+      onDrop={event => {
+        const files = [...(event.dataTransfer?.files ?? [])]
+        if (files.length === 0) return
+        event.preventDefault()
+        setDropping(false)
+        void addFiles(files, conversationId)
+      }}
+      onPaste={event => {
+        // 粘贴：截图与复制过来的文件走同一条路；纯文字不拦（用户可能就在贴一段话）。
+        const files = [...(event.clipboardData?.files ?? [])]
+        if (files.length === 0) return
+        event.preventDefault()
+        void addFiles(files, conversationId)
+      }}
+    >
+      {/* 待发附件条：选文件、拖进来、粘链接都落到这里；空时整块收起。 */}
+      {(attachments.length > 0 || urlInputVisible) && (
+        <div className="attach" id="attach-strip">
+          <div className="attach__items" id="attach-items">
+            {attachments.map(entry => (
+              <span key={entry.key} className="attach__item" data-phase={entry.phase}>
+                <span className="attach__name">{entry.name}</span>
+                {fileSizeText(entry.size) !== '' && <span className="attach__size">{fileSizeText(entry.size)}</span>}
+                {(entry.phase !== 'ready' || entry.message !== '') && (
+                  <span className="attach__note">
+                    {entry.phase === 'uploading' ? (entry.message === '' ? '上传中…' : entry.message)
+                      : entry.phase === 'failed' ? (entry.message === '' ? '没成' : entry.message)
+                        : entry.message}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="attach__remove"
+                  title="移除"
+                  aria-label={`移除 ${entry.name}`}
+                  onClick={() => { void dropAttachment(entry.key) }}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+          {urlInputVisible && (
+            <div className="attach__url" id="attach-url">
+              <input
+                ref={urlInputRef}
+                type="url"
+                id="attach-url-input"
+                placeholder="粘贴文件或图片的链接，回车取回"
+                autoComplete="off"
+                spellCheck={false}
+                onKeyDown={event => {
+                  if (event.key === 'Escape') { event.preventDefault(); useAttachmentsStore.getState().setUrlInputVisible(false); return }
+                  if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
+                  // 回车是「取回这个链接」，不是发送（不该把没写完的消息发出去）。
+                  event.preventDefault()
+                  const url = urlInputRef.current?.value ?? ''
+                  useAttachmentsStore.getState().setUrlInputVisible(false)
+                  void addUrl(url, conversationId)
+                }}
+              />
+              <button type="button" className="btn btn--tiny btn--ghost" id="attach-url-cancel" onClick={() => useAttachmentsStore.getState().setUrlInputVisible(false)}>
+                取消
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       <div className="composer__box">
+        {/* @ 提及选择器（aria：listbox/option/activedescendant）。 */}
+        {mention !== null && (
+          <div className="mention" id="mention-pop" role="listbox" aria-label="点名成员" aria-activedescendant={`mention-option-${mention.index}`}>
+            <p className="mention__hint" aria-hidden="true">↑↓ 选 · 回车点名 · Esc 关</p>
+            <div className="mention__items" id="mention-items" ref={mentionItemsRef}>
+              {candidates.length === 0 && (
+                <p className="mention__none">
+                  {members.length === 0 ? '还没有可点名的成员' : '没有对得上的成员'}
+                </p>
+              )}
+              {candidates.map((member, index) => (
+                <div
+                  key={member.agentId}
+                  id={`mention-option-${index}`}
+                  data-index={index}
+                  role="option"
+                  aria-selected={index === mention.index}
+                  className={`mention__item${index === mention.index ? ' mention__item--active' : ''}`}
+                  onMouseEnter={() => { if (mention.index !== index) setMention({ ...mention, index }) }}
+                  onMouseDown={event => event.preventDefault()}
+                  onClick={() => {
+                    setMention({ ...mention, index })
+                    // 点击选中：先同步 index 再落纸（acceptMention 读当前 state）。
+                    window.requestAnimationFrame(() => acceptMentionWithIndex(index))
+                  }}
+                >
+                  <span className="avatar avatar--sm" style={{ background: 'var(--bt-ink-faint)' }}>
+                    <span>{[...member.displayName][0] ?? '?'}</span>
+                  </span>
+                  <div className="member__col">
+                    <div className="member__name">{member.displayName}</div>
+                    <div className="member__declared">{member.declaredName}</div>
+                  </div>
+                  <span className="mention__handle">@{member.agentId}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <label className="visually-hidden" htmlFor="message-input">说句话</label>
         <textarea
           id="message-input"
@@ -61,12 +271,41 @@ export function Composer() {
           placeholder="说说你要做什么"
           autoComplete="off"
           value={draft}
-          onChange={() => { setDraft(inputRef.current?.value ?? ''); autosize() }}
+          onChange={() => { setDraft(inputRef.current?.value ?? ''); autosize(); updateMention() }}
           onCompositionStart={() => { composingRef.current = true }}
           onCompositionEnd={() => { composingRef.current = false }}
+          onBlur={() => {
+            // 点名簿上的交互在 mousedown 已拦默认，blur 到菜单项不会发生；真失焦即放弃提及。
+            window.requestAnimationFrame(() => {
+              if (mentionItemsRef.current?.contains(document.activeElement) !== true) setMention(null)
+            })
+          }}
           onKeyDown={event => {
-            // 点名簿（批 4a）优先；Enter 发送，Shift+Enter 换行；输入法组合期间不拦截。
-            if (event.key === 'Enter' && !event.shiftKey && !composingRef.current) {
+            // 点名簿开着先服务导航（输入法组合期间一概不拦：选字要用这些键）。
+            if (mention !== null && !event.nativeEvent.isComposing) {
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault()
+                const list = candidates.length > 0 ? candidates : members
+                const count = list.length
+                if (count > 0) {
+                  const delta = event.key === 'ArrowDown' ? 1 : -1
+                  setMention({ ...mention, index: (mention.index + delta + count) % count })
+                }
+                return
+              }
+              if (event.key === 'Enter' || event.key === 'Tab') {
+                event.preventDefault()
+                acceptMention()
+                return
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                setMention(null)
+                return
+              }
+            }
+            // Enter 发送，Shift+Enter 换行；输入法组合期间不拦截。
+            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault()
               submit()
             }
@@ -75,7 +314,73 @@ export function Composer() {
         <div className="composer__actions">
           <button
             type="button"
+            className="doodle-btn"
+            id="at-button"
+            title="插入 @，点名成员"
+            aria-label="插入 @"
+            onClick={() => {
+              const input = inputRef.current
+              if (input === null) return
+              const start = input.selectionStart ?? input.value.length
+              const end = input.selectionEnd ?? start
+              const next = input.value.slice(0, start) + '@' + input.value.slice(end)
+              setDraft(next)
+              input.setSelectionRange(start + 1, start + 1)
+              input.focus()
+              autosize()
+              setMention({ start, query: '', index: 0 })
+            }}
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M13.6 5.4 C 12.4 4.2, 10.8 3.8, 9.2 4.4 C 6.4 5.4, 4.8 8.2, 5.6 11 C 6.4 13.8, 9.2 15.4, 12 14.6 C 13.4 14.2, 14.4 13.2, 14.9 12 M14.6 8.4 C 14.9 9.9, 14.7 11.5, 15.4 12.6 C 16 13.4, 17.2 13.2, 17.8 12.2 C 18.9 10.2, 18.6 7.4, 16.9 5.6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+            </svg>
+          </button>
+          {/* 回形针：选文件。拖拽与粘贴也走同一条路。 */}
+          <button
+            type="button"
+            className="doodle-btn"
+            id="attach-button"
+            title="上传文件（也可以直接把文件拖进来）"
+            aria-label="上传文件"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M13.4 8.2 9 12.6 C 8 13.6, 8 15, 9 15.8 C 10 16.7, 11.4 16.6, 12.3 15.7 L 16.6 11.3 C 18.2 9.7, 18.2 7.2, 16.6 5.7 C 15 4.2, 12.5 4.3, 10.9 5.8 L 6.5 10.2 C 4.9 11.7, 4.9 14.3, 6.4 15.9" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {/* 链接：把远处的文件取回来，和上传落到同一条路。 */}
+          <button
+            type="button"
+            className="doodle-btn"
+            id="attach-link-button"
+            title="粘贴链接，把远处的文件取回来"
+            aria-label="从链接取回文件"
+            onClick={() => {
+              useAttachmentsStore.getState().setUrlInputVisible(true)
+              window.requestAnimationFrame(() => urlInputRef.current?.focus())
+            }}
+          >
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="M8.4 11.6 C 7.2 10.4, 7.3 8.5, 8.5 7.3 L 11 4.8 C 12.2 3.6, 14.1 3.6, 15.3 4.8 C 16.5 6, 16.5 7.9, 15.3 9.1 L 14.2 10.2 M11.6 8.4 C 12.8 9.6, 12.7 11.5, 11.5 12.7 L 9 15.2 C 7.8 16.4, 5.9 16.4, 4.7 15.2 C 3.5 14, 3.5 12.1, 4.7 10.9 L 5.8 9.8" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+          </button>
+          <input
+            type="file"
+            id="attach-input"
+            multiple
+            hidden
+            ref={fileInputRef}
+            onChange={() => {
+              const files = [...(fileInputRef.current?.files ?? [])]
+              // 清空 value：同一个文件选第二次也要能触发 change。
+              if (fileInputRef.current !== null) fileInputRef.current.value = ''
+              void addFiles(files, conversationId)
+            }}
+          />
+          <button
+            type="button"
             className="send"
+            id="send-button"
             aria-label="发送"
             disabled={streaming}
             onClick={submit}
@@ -96,6 +401,27 @@ export function Composer() {
       </div>
     </div>
   )
+
+  /** 点击菜单项时的落纸：React 闭包取不到最新 index，这里按传入下标直接完成。 */
+  function acceptMentionWithIndex(index: number) {
+    const input = inputRef.current
+    if (mention === null || input === null) return
+    const member = (candidates.length > 0 ? candidates : members)[index]
+    if (member === undefined) { setMention(null); return }
+    const text = input.value
+    const pos = input.selectionStart ?? text.length
+    const insert = `@${member.displayName} `
+    const next = text.slice(0, mention.start) + insert + text.slice(pos)
+    const caret = mention.start + insert.length
+    setDraft(next)
+    setMention(null)
+    window.requestAnimationFrame(() => {
+      if (inputRef.current === null) return
+      inputRef.current.setSelectionRange(caret, caret)
+      autosize()
+      inputRef.current.focus()
+    })
+  }
 }
 
 /** 喊停（执行中显形，I04/I08）：停止对象绑定当前会话；结果以这一轮最终状态为准。 */
