@@ -3,7 +3,7 @@
  * 不碰 React 与 DOM——vitest 直接覆盖这里的排序与翻页语义。
  */
 
-import type { TaskRecord, TranscriptItem } from './api.ts'
+import type { TaskRecord, TaskSummary, TranscriptItem } from './api.ts'
 
 /** 历史条目：对话（user/butler）与任务摘要，带稳定标识供跨页去重与定位插入。 */
 export interface HistoryEntry {
@@ -14,8 +14,8 @@ export interface HistoryEntry {
   text: string
   time: number | string
   interrupted: boolean
-  /** 任务条目才有。 */
-  task?: TaskRecord
+  /** 任务条目才有：列表投影（无 subtasks，方案 P0-1 修复后的真实契约）。 */
+  task?: TaskSummary
 }
 
 /** 历史条目的时间锚点：对话用消息时间，任务用收尾时间（摘要属于结局）。 */
@@ -46,7 +46,7 @@ export function compareHistoryEntries(a: HistoryEntry, b: HistoryEntry): number 
  * 任务是摘要不是对话（S13）：在序列里以 `task` 出现，渲染成明确标注的摘要卡；
  * 被打断的管家答复标出来，不冒充完整结论。
  */
-export function mergeHistoryEntries(transcriptItems: TranscriptItem[] | null | undefined, taskItems: TaskRecord[] | null | undefined): HistoryEntry[] {
+export function mergeHistoryEntries(transcriptItems: TranscriptItem[] | null | undefined, taskItems: TaskSummary[] | null | undefined): HistoryEntry[] {
   const entries: HistoryEntry[] = []
   for (const item of transcriptItems ?? []) {
     entries.push({

@@ -13,20 +13,25 @@ import { renderEntry, Welcome } from './entries.tsx'
 export function Thread() {
   const entries = useTurnStore(state => state.entries)
   const following = useTurnStore(state => state.following)
+  const selecting = useTurnStore(state => state.selecting)
   const setFollowing = useTurnStore(state => state.setFollowing)
   const setSelecting = useTurnStore(state => state.setSelecting)
   const threadRef = useRef<HTMLDivElement>(null)
   const programmaticRef = useRef(false)
 
-  // 跟随中内容增长贴底：程序化标记 + 下一帧释放（与旧 scrollToBottom 同竞态口径）。
+  // 跟随中内容增长贴底：程序化标记 + 下一帧释放。释放用 rAF+250ms 计时器双保险
+  // （旧 nextFrame 语义）：后台窗格 rAF 永不回调，标记滞留会吞掉用户回前台后的第一次滚动。
   useEffect(() => {
     const thread = threadRef.current
-    if (thread === null || !following) return
+    if (thread === null || !following || selecting) return
     programmaticRef.current = true
     thread.scrollTop = thread.scrollHeight
-    const timer = requestAnimationFrame(() => { programmaticRef.current = false })
-    return () => cancelAnimationFrame(timer)
-  }, [entries, following])
+    let done = false
+    const release = () => { if (done) return; done = true; clearTimeout(timer); programmaticRef.current = false }
+    const timer = setTimeout(release, 250)
+    const raf = requestAnimationFrame(release)
+    return () => { cancelAnimationFrame(raf); clearTimeout(timer); programmaticRef.current = false }
+  }, [entries, following, selecting])
 
   // 选字判定：selectionchange 挂 document（旧语义：锚点在线程内才算选字）。
   useEffect(() => {

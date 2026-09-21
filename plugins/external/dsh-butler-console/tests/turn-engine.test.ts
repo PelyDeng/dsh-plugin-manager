@@ -98,7 +98,7 @@ describe('followUntilTerminal', () => {
   })
 
   it('旧 seq 丢弃（after 之后不重复消费）：别的轮次重放事件不应用', async () => {
-    const { links, applied } = scriptedLinks([[
+    const { links } = scriptedLinks([[
       { type: 'chat', runId: 'run-other', text: '别人的轮次', seq: 6 },
       { type: 'chat', runId: RUN, text: '新内容', seq: 7 },
       { type: 'chat', runId: RUN, text: '重放', seq: 7 },

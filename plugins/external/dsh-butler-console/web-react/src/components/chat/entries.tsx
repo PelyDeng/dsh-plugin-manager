@@ -3,6 +3,7 @@
  * 结构参照旧 speech.js/cards.js/history.js/member.js 的 DOM，渲染范式换成声明式。
  */
 import type { CSSProperties } from 'react'
+import { useState } from 'react'
 import { RichText } from './RichText.tsx'
 import { SUGGESTIONS, STATE_TEXT, DEFAULT_AVATAR_FILES, STREAM_RICH_LIMIT } from '../../lib/config.ts'
 import type { ThreadEntry, SubtaskEntry } from '../../stores/turn.ts'
@@ -18,19 +19,21 @@ function formatTime(value?: number): string {
   return `${date.getMonth() + 1}-${String(date.getDate()).padStart(2, '0')} ${clock}`
 }
 
-/** 成员头像：上传图 → 默认涂鸦 → 首字配色圆（旧 avatarNode 语义，失败回落省略为 img error 隐藏）。 */
+/** 成员头像：上传图 → 默认涂鸦 → 首字配色圆。img 失败用 state 隐藏（React fiber 仍持引用，
+ *  不能直接 remove 节点——stamp 变化后的属性更新会落在游离节点上）。 */
 export function Avatar({ agentId, size = '' }: { agentId: string; size?: string }) {
   const members = useSessionStore(state => state.members)
   const stamps = useSessionStore(state => state.avatarStamps)
+  const [failed, setFailed] = useState(false)
   const style: CSSProperties = { background: accentOf(members, agentId) }
   const file = DEFAULT_AVATAR_FILES.get(agentId)
   const stamp = stamps.get(agentId)
-  const src = file === undefined
+  const src = file === undefined || failed
     ? null
     : `${ROUTE_PREFIX}/assets/media/avatars/${file}${stamp === undefined ? '' : `?v=${stamp}`}`
   return (
     <div className={`avatar${size === '' ? '' : ` avatar--${size}`}`} style={style}>
-      {src !== null && <img alt="" src={src} onError={event => { event.currentTarget.remove() }} />}
+      {src !== null && <img alt="" src={src} onError={() => setFailed(true)} />}
       <span>{[...displayNameOf(members, agentId)][0] ?? '?'}</span>
     </div>
   )
@@ -65,11 +68,12 @@ export function UserEntryView({ text, time }: { text: string; time?: number | un
   )
 }
 
-export function ButlerEntryView({ text, thinking, streaming, time }: {
+export function ButlerEntryView({ text, thinking, streaming, time, interrupted }: {
   text: string
   thinking: string
   streaming: boolean
   time?: number | undefined
+  interrupted?: boolean | undefined
 }) {
   return (
     <div className="msg msg--butler">
@@ -97,6 +101,7 @@ export function ButlerEntryView({ text, thinking, streaming, time }: {
             : <RichText text={text} streaming={streaming} />}
           <span className="caret" hidden={!streaming} />
         </div>
+        {interrupted === true && <div className="msg__meta">这一轮被打断，正文是已流出的部分</div>}
         {time !== undefined && <div className="msg__meta">{formatTime(time)}</div>}
       </div>
     </div>
@@ -170,8 +175,8 @@ export function SummaryEntryView({ state, text, error }: { state: string; text: 
   )
 }
 
-/** 历史任务摘要卡（点开详情批 3；先按旧 taskSummaryCard 的视觉呈现）。 */
-export function TaskEntryView({ task }: { task: import('../../lib/api.ts').TaskRecord }) {
+/** 历史任务摘要卡（点开详情批 3）：列表投影是 TaskSummary（无 subtasks），收尾计数 x/y。 */
+export function TaskEntryView({ task }: { task: import('../../lib/api.ts').TaskSummary }) {
   return (
     <button type="button" className="task-card" data-state={task.state}>
       <div className="task-card__head">
@@ -180,7 +185,7 @@ export function TaskEntryView({ task }: { task: import('../../lib/api.ts').TaskR
         <span className="task-card__time">{formatTime(Number(task.updatedAt) || undefined)}</span>
       </div>
       <div className="task-card__goal">{task.goal}</div>
-      <div className="task-card__meta">{formatTime(Number(task.createdAt) || undefined)} 分派 · {task.subtasks.length} 项收尾</div>
+      <div className="task-card__meta">{formatTime(Number(task.createdAt) || undefined)} 分派 · {task.subtaskDone}/{task.subtaskTotal} 项收尾</div>
     </button>
   )
 }
@@ -220,7 +225,7 @@ export function Welcome() {
 export function renderEntry(entry: ThreadEntry): React.ReactNode {
   switch (entry.kind) {
     case 'user': return <UserEntryView key={entry.key} text={entry.text} time={entry.time} />
-    case 'butler': return <ButlerEntryView key={entry.key} text={entry.text} thinking={entry.thinking} streaming={entry.streaming} time={entry.time} />
+    case 'butler': return <ButlerEntryView key={entry.key} text={entry.text} thinking={entry.thinking} streaming={entry.streaming} time={entry.time} interrupted={entry.interrupted} />
     case 'subtask': return <SubtaskEntryView key={entry.key} entry={entry} />
     case 'note': return <NoteEntryView key={entry.key} text={entry.text} />
     case 'error': return <ErrorEntryView key={entry.key} text={entry.text} />

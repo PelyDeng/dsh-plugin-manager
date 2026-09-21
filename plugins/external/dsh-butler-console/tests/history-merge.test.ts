@@ -4,16 +4,17 @@
  */
 import { describe, expect, it } from 'vitest'
 import { compareHistoryEntries, mergeHistoryEntries, planHistoryInsertion, timeOf } from '../web-react/src/lib/history-merge.ts'
-import type { TaskRecord, TranscriptItem } from '../web-react/src/lib/api.ts'
+import type { TaskSummary, TranscriptItem } from '../web-react/src/lib/api.ts'
 
 function transcript(seq: string, text: string, time: number, role = 'butler'): TranscriptItem {
   return { seq, role, text, time, interrupted: false }
 }
 
-function task(id: string, goal: string, updatedAt: number): TaskRecord {
+/** 列表投影（/history 真实形状：无 subtasks，只有收尾计数——批 1 评审 P0-1 后的契约）。 */
+function task(id: string, goal: string, updatedAt: number): TaskSummary {
   return {
-    id, conversationId: 'conv-1', goal, note: null, state: 'completed',
-    createdAt: updatedAt - 1000, updatedAt, summary: null, error: null, subtasks: [],
+    id, conversationId: 'conv-1', goal, state: 'completed',
+    createdAt: updatedAt - 1000, updatedAt, subtaskTotal: 2, subtaskDone: 2,
   }
 }
 

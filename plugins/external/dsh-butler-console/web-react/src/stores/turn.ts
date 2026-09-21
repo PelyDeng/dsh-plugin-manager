@@ -11,8 +11,8 @@
 import { create } from 'zustand'
 import { rememberConversation } from '../lib/turn-event.ts'
 import type { TurnEvent } from '../lib/turn-event.ts'
-import type { TaskRecord } from '../lib/api.ts'
-import { STREAM_RICH_LIMIT } from '../lib/config.ts'
+import type { TaskRecord, TaskSummary } from '../lib/api.ts'
+import { STATE_TEXT, STREAM_RICH_LIMIT } from '../lib/config.ts'
 
 /** 消息流条目：React 渲染的统一数据面（旧 DOM 追加模型的范式转换）。 */
 export type ThreadEntry = UserEntry | ButlerEntry | SubtaskEntry | NoteEntry | ErrorEntry | SummaryEntry | TaskEntry
@@ -33,6 +33,8 @@ export interface ButlerEntry {
   streaming: boolean
   /** 超长正文降级纯文本追加（STREAM_RICH_LIMIT 分级判断在渲染层执行）。 */
   time?: number | undefined
+  /** 被打断的管家答复（S13：标注出来，不冒充完整结论）。 */
+  interrupted?: boolean | undefined
 }
 
 /** 成员子任务气泡（批 1 降级视图；调度卡在批 4b 收编）。 */
@@ -77,11 +79,11 @@ export interface SummaryEntry {
   time?: number | undefined
 }
 
-/** 历史任务摘要卡（点开看详情，批 3 完整调度卡回放）。 */
+/** 历史任务摘要卡（点开看详情，批 3 完整调度卡回放）：列表投影形状。 */
 export interface TaskEntry {
   key: string
   kind: 'task'
-  task: TaskRecord
+  task: TaskSummary
 }
 
 export interface TurnState {
@@ -235,7 +237,10 @@ export const useTurnStore = create<TurnState>((set, get) => ({
       entries.push({
         key: nextKey('subtask'), kind: 'subtask', subtaskId: subtask.id, agentId: subtask.agentId,
         goal: subtask.goal, state: subtask.state,
-        body: subtask.state === 'failed' || subtask.state === 'cancelled' ? (subtask.error || '失败') : (subtask.result || ''),
+        // 与实时同一入口的正文口径：服务端没给结论时回落状态词（旧 history.js 同语义）。
+        body: subtask.state === 'failed' || subtask.state === 'cancelled'
+          ? (subtask.error || '失败')
+          : (subtask.result || STATE_TEXT[subtask.state] || ''),
         thinking: '', terminal: ['succeeded', 'failed', 'cancelled', 'external_pending'].includes(subtask.state),
         live: false, toolLine: null,
         artifacts: Array.isArray(subtask.artifacts) ? subtask.artifacts : [],
@@ -281,8 +286,10 @@ export const useTurnStore = create<TurnState>((set, get) => ({
       }
       case 'chat': {
         // 落定：收走流式那条；没有就新起一条（直接回答、接续回放）。
+        // 帧缓冲里该条的残留 delta 一并作废——落定正文是权威，不被残帧覆盖。
         const speechKey = get().butlerSpeechKey
         const text = event.text ?? ''
+        if (speechKey !== null) frameBuffer.delete(speechKey)
         if (speechKey !== null) {
           set(st => ({
             butlerSpeechKey: null,
@@ -369,6 +376,8 @@ export const useTurnStore = create<TurnState>((set, get) => ({
         // 汇总是这一轮的定论：正文只展示一次（S12）——与最后一条 butler 正文相同时置空。
         const text = event.text ?? ''
         const dedup = text !== '' && text === get().lastChatText
+        // 所有流式条目此刻收口：帧缓冲里的残留增量全部作废。
+        frameBuffer.clear()
         get().appendEntry({ key: nextKey('summary'), kind: 'summary', state: event.state ?? '', text: dedup ? '' : text, time: event.time })
         set(st => ({
           entries: st.entries.map(entry => entry.kind === 'subtask' && !entry.terminal ? { ...entry, live: false } : entry),
@@ -394,14 +403,17 @@ export const useTurnStore = create<TurnState>((set, get) => ({
       entries: state.entries.map(entry => {
         if (entry.kind === 'butler' && updates.has(entry.key)) {
           const patch = updates.get(entry.key)
-          if (patch?.butlerText !== undefined) return { ...entry, text: patch.butlerText }
+          // 迟到帧守卫（flush 侧再查一次，与旧 events.js 帧回调同口径）：
+          // 落定的 `chat` 已收走该条（streaming=false），残帧不得覆盖权威正文。
+          if (patch?.butlerText !== undefined && entry.streaming) return { ...entry, text: patch.butlerText }
+          return entry
         }
         if (entry.kind === 'subtask' && updates.has(entry.key)) {
           const patch = updates.get(entry.key)
-          if (patch?.subtaskBody !== undefined) {
-            // 引擎/守卫已保证不写 terminal/live=false 的条目；这里只合并正文。
-            return { ...entry, body: patch.subtaskBody }
-          }
+          // terminal（已校准）或 live=false（已离开执行态）不写：迟到帧不把半截增量
+          // 追加到 S09 权威结论上，也不把已收起的光标重新点亮。
+          if (patch?.subtaskBody !== undefined && !entry.terminal && entry.live) return { ...entry, body: patch.subtaskBody }
+          return entry
         }
         return entry
       }),

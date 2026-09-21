@@ -78,6 +78,21 @@ export interface TaskRecord {
   subtasks: TaskSubtask[]
 }
 
+/**
+ * 任务列表投影（/history 返回，方案护栏「不导入业务源码」的存储投影形状）：
+ * **没有 subtasks**——逐条子任务只在 /task 详情里有。
+ */
+export interface TaskSummary {
+  id: string
+  conversationId: string
+  goal: string
+  state: string
+  createdAt: number | string
+  updatedAt: number | string
+  subtaskTotal: number
+  subtaskDone: number
+}
+
 export interface TaskSubtask {
   id: string
   agentId: string
@@ -117,7 +132,7 @@ export const api = {
     if (keyword !== '') params.set('q', keyword)
     if (state !== '') params.set('state', state)
     if (conversationId !== '') params.set('conversationId', conversationId)
-    return request<{ items: TaskRecord[]; nextOffset: number | null }>(`/history?${params.toString()}`)
+    return request<{ items: TaskSummary[]; nextOffset: number | null }>(`/history?${params.toString()}`)
   },
   /**
    * 对话正文（历史阅读）：官方会话日志里的真人输入与已提交答复，不另存副本。
