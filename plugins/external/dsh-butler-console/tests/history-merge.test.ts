@@ -3,8 +3,8 @@
  * 语义对齐 web/modules/history.js（复核 1/复核 2 的教训都在断言里）。
  */
 import { describe, expect, it } from 'vitest'
-import { compareHistoryEntries, mergeHistoryEntries, planHistoryInsertion, timeOf } from '../web-react/src/lib/history-merge.ts'
-import type { TaskSummary, TranscriptItem } from '../web-react/src/lib/api.ts'
+import { compareHistoryEntries, mergeHistoryEntries, mergeTaskDetails, planHistoryInsertion, subtaskEntry, timeOf } from '../web-react/src/lib/history-merge.ts'
+import type { TaskRecord, TaskSubtask, TaskSummary, TranscriptItem } from '../web-react/src/lib/api.ts'
 
 function transcript(seq: string, text: string, time: number, role = 'butler'): TranscriptItem {
   return { seq, role, text, time, interrupted: false }
@@ -50,6 +50,51 @@ describe('mergeHistoryEntries', () => {
     expect(timeOf('不是时间')).toBe(0)
     expect(timeOf(0)).toBe(0)
     expect(timeOf('2026-09-21T00:00:00Z')).toBeGreaterThan(0)
+  })
+})
+
+describe('mergeTaskDetails（0.13.6 刷新恢复确认卡）', () => {
+  const sub = (overrides: Partial<TaskSubtask> = {}): TaskSubtask => ({
+    id: 's1', agentId: 'blog', goal: '发布文章', state: 'external_pending',
+    startedAt: 1000, finishedAt: 2000, result: '已写入草稿，等待确认', error: null,
+    ...overrides,
+  })
+  const record = (subtasks: TaskSubtask[]): TaskRecord => ({
+    id: 'task-x', conversationId: 'conv-1', goal: '发文章', state: 'external_pending',
+    createdAt: 900, updatedAt: 2000, subtasks, note: '', summary: '', error: '',
+  })
+
+  it('子任务卡锚定收尾时间，插到同刻对话之后、更新更晚的对话之前（用户要求的位置语义）', () => {
+    const base = mergeHistoryEntries(
+      [transcript('1', '第 2 条', 1500), transcript('2', '第 4 条', 3000)],
+      [],
+    )
+    const merged = mergeTaskDetails(base, [record([sub()])])
+    // 子任务 finishedAt=2000：排在 1500 的对话（第 2 条）之后、3000 的对话（第 4 条）之前
+    expect(merged.map(entry => entry.id)).toEqual(['t:1', 'subtask:2000:task-x:s1', 't:2'])
+  })
+
+  it('actions 随详情投影带到条目上——刷新后确认卡的数据源', () => {
+    const actions = [{ id: 'act-1', kind: 'blog.publish', state: 'prepared', confirmLabel: '确认' }]
+    const merged = mergeTaskDetails([], [record([sub({ actions })])])
+    expect(merged[0]?.subtask?.sub.actions).toEqual(actions)
+  })
+
+  it('同刻多任务子任务卡按 id 稳定排序，同一任务跨页去重不重复', () => {
+    const a = subtaskEntry('task-a', sub({ id: 's1' }))
+    const b = subtaskEntry('task-b', sub({ id: 's1' }))
+    expect(a.id).not.toBe(b.id)
+    // 同一任务的同一子任务重复并入（跨页重取）：稳定标识去重后只留一份
+    const once = mergeTaskDetails([a], [record([sub({ id: 's1' })])].map(r => ({ ...r, id: 'task-a' })))
+    expect(once.filter(entry => entry.kind === 'subtask')).toHaveLength(1)
+    // 不同任务的同号子任务：都保留（各自独立的卡）
+    const both = mergeTaskDetails([], [record([sub({ id: 's1' })]), { ...record([sub({ id: 's1' })]), id: 'task-b' }])
+    expect(both.filter(entry => entry.kind === 'subtask')).toHaveLength(2)
+  })
+
+  it('没跑完的子任务用开始时刻锚定（waiting/running 也有位置）', () => {
+    const entry = subtaskEntry('task-w', sub({ state: 'waiting_user', finishedAt: null, result: '在等你回话' }))
+    expect(entry.at).toBe(1000)
   })
 })
 

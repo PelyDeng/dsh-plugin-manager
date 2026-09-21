@@ -637,6 +637,8 @@ button:focus-visible {
 
 .tool-line { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 12px; color: var(--bt-ink-soft); }
 .tool-line__name { font-family: var(--bt-mono); font-size: 11.5px; }
+/* 历史恢复的子任务卡：目标行（实时卡没有——goal 在调度卡里，恢复卡没有调度卡上下文）。 */
+.subtask__goal { margin: 2px 0 4px; font-size: 12.5px; color: var(--bt-ink-soft); font-family: var(--bt-hand); font-weight: 700; }
 /* 终态后的工具行改过去式（方案 I06）：淡出「正在做」的口吻，不再冒充进行中。 */
 .tool-line--past { color: var(--bt-ink-faint); }
 
@@ -1988,7 +1990,8 @@ body[data-settings="open"] .settings {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin: 0 10px 8px;
+  /* 与消息流同一条内容轴：宽屏走 thread__inner 的 960 居中，窄屏留出与 .thread 一致的 16px 边距。 */
+  width: min(960px, 100% - 32px); margin: 0 auto 8px;
   padding: 10px 12px;
   background: var(--bt-warn-bg);
   border: 1.5px dashed var(--bt-warn);

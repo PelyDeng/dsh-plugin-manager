@@ -11,6 +11,7 @@ import { runActionDecision, runReply } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
 import { newConversationId } from '../../lib/turn-event.ts'
 import { RichText } from '../chat/RichText.tsx'
+import { actionExpired } from '../chat/ActionCard.tsx'
 
 interface PendingItem {
   key: string
@@ -24,6 +25,8 @@ interface PendingItem {
   detail?: string | undefined
   confirmLabel?: string | undefined
   cancelLabel?: string | undefined
+  /** 确认有效期（绝对毫秒）：过期的卡显示已过期、不可点（恢复的历史卡常见）。 */
+  expiresAt?: number | undefined
   /** reply 型：提问内容。 */
   question?: string | undefined
 }
@@ -45,13 +48,14 @@ function usePendingItems(): PendingItem[] {
       }
       if (Array.isArray(entry.actions)) {
         for (const action of entry.actions) {
-          if (action.state === 'prepared') {
+          if (action.state === 'prepared' && !actionExpired(action)) {
             items.push({
               key: `action-${action.id}`, kind: 'confirm', taskId,
               subtaskId: entry.subtaskId, agentId: entry.agentId,
               actionId: action.id,
               title: action.title, summary: action.summary, detail: action.detail,
               confirmLabel: action.confirmLabel, cancelLabel: action.cancelLabel,
+              expiresAt: action.expiresAt,
             })
           }
         }

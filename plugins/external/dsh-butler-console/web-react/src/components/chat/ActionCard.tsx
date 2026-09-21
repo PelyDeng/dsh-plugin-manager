@@ -31,6 +31,14 @@ const STATE_TEXT: Record<string, string> = {
   succeeded: '已办完',
   failed: '没办成',
   cancelled: '先不办',
+  expired: '确认已过期',
+}
+
+/** prepared 但已过确认有效期：恢复的历史卡常见（expiresAt 只有 10 分钟），不可再点。 */
+export function actionExpired(action: { state?: string; expiresAt?: number }): boolean {
+  return (action.state ?? 'prepared') === 'prepared'
+    && typeof action.expiresAt === 'number'
+    && action.expiresAt < Date.now()
 }
 
 export function ActionCard({ action, taskId, subtaskId }: {
@@ -40,7 +48,8 @@ export function ActionCard({ action, taskId, subtaskId }: {
 }) {
   const [locked, setLocked] = useState(false)
   const [note, setNote] = useState<string | null>(null)
-  const state = action.state ?? 'prepared'
+  const expired = actionExpired(action)
+  const state = expired ? 'expired' : action.state ?? 'prepared'
   const actionable = state === 'prepared' && !locked
 
   const run = async (decision: 'confirm' | 'cancel') => {

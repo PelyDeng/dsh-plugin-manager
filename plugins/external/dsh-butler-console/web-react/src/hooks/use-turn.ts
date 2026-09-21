@@ -7,10 +7,11 @@
  * 重订不重复消费。
  */
 import { api, eventsHead, ApiError, chat, reply, act } from '../lib/api.ts'
+import type { TaskRecord } from '../lib/api.ts'
 export { act }
 import { followUntilTerminal, productionLinks, type TurnEngineHost } from '../lib/turn-engine.ts'
 import { newConversationId, recallConversation, rememberConversation } from '../lib/turn-event.ts'
-import { mergeHistoryEntries, planHistoryInsertion } from '../lib/history-merge.ts'
+import { mergeHistoryEntries, mergeTaskDetails, planHistoryInsertion } from '../lib/history-merge.ts'
 import type { HistoryEntry } from '../lib/history-merge.ts'
 import { useTurnStore, type ThreadEntry } from '../stores/turn.ts'
 import { useSessionStore } from '../stores/session.ts'
@@ -107,6 +108,27 @@ export function historyEntryToThreadEntry(entry: HistoryEntry): ThreadEntry {
   if (entry.kind === 'task' && entry.task !== undefined) {
     return { key: `task-${entry.task.id}`, kind: 'task', task: entry.task }
   }
+  if (entry.kind === 'subtask' && entry.subtask !== undefined) {
+    const { taskId, sub } = entry.subtask
+    // subtaskId 必须是纯子任务 id：决策 /action 的入参用它，拼前缀会重演 taskId 404。
+    // key 才承担跨任务去重（含任务 id 与时间锚点）。
+    return {
+      key: entry.id, kind: 'subtask', subtaskId: sub.id, taskId, agentId: sub.agentId, goal: sub.goal,
+      state: sub.state,
+      body: sub.state === 'failed' || sub.state === 'cancelled'
+        ? (sub.error || '失败')
+        : (sub.result || ''),
+      thinking: '', terminal: true, live: false,
+      toolLine: null, artifacts: Array.isArray(sub.artifacts) ? sub.artifacts : [],
+      startedAt: sub.startedAt ?? null, finishedAt: sub.finishedAt ?? null,
+      detail: sub.result ?? null, error: sub.error ?? null,
+      actions: Array.isArray(sub.actions) ? sub.actions : undefined,
+      // 会话视图里恢复的等待是活的：回话入口重新给出（taskId 从详情投影带来）。
+      ...(sub.state === 'waiting_user'
+        ? { ask: { taskId, question: sub.result || '需要你补充点信息', detail: sub.result ?? undefined } }
+        : {}),
+    }
+  }
   if (entry.kind === 'butler') {
     return {
       key: entry.id, kind: 'butler', text: entry.text, thinking: '', streaming: false,
@@ -183,7 +205,13 @@ export async function openConversation(id: string): Promise<void> {
     historyCursor = { transcriptBefore: null, taskOffset: null, loading: false, error: null, entriesCache: [] }
     return
   }
-  for (const item of merged) entries.push(historyEntryToThreadEntry(item))
+  // 刷新/切会话后确认卡要能重画（0.13.6）：对本会话的任务拉详情（子任务终态+确认操作
+  // 投影），按各自时间锚点插回消息流——第 3 条记录后面返回的确认框，恢复后还在那里。
+  // 详情读不到的单个任务跳过（摘要卡仍在），不阻塞会话打开。
+  const records = await loadTaskDetails(taskPage?.items ?? [])
+  if (token !== useTurnStore.getState().viewToken) return
+  const withSubs = mergeTaskDetails(merged, records)
+  for (const item of withSubs) entries.push(historyEntryToThreadEntry(item))
   const store = useTurnStore.getState()
   for (const entry of entries) store.appendEntry(entry)
   historyCursor = {
@@ -191,8 +219,18 @@ export async function openConversation(id: string): Promise<void> {
     taskOffset: taskPage?.nextOffset ?? null,
     loading: false,
     error: null,
-    entriesCache: merged,
+    entriesCache: withSubs,
   }
+}
+
+/** 详情防御上限：会话里任务再多也只恢复最近这些（摘要卡不受影响，翻页可及）。 */
+const TASK_DETAIL_LIMIT = 8
+
+/** 拉一页任务摘要对应的详情（并行，单个失败静默跳过）。 */
+async function loadTaskDetails(items: ReadonlyArray<{ id: string }>): Promise<TaskRecord[]> {
+  const picked = items.slice(-TASK_DETAIL_LIMIT)
+  const records = await Promise.all(picked.map(item => api.task<TaskRecord>(item.id).catch(() => null)))
+  return records.filter((record): record is TaskRecord => record !== null)
 }
 
 /** 发送失败的用户可见呈现（旧 dom.js reportFailure 语义：中断≠任务停了）。 */

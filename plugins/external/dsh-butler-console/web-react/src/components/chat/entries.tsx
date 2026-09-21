@@ -140,6 +140,8 @@ function SubtaskEntryViewFn({ entry }: { entry: SubtaskEntry }) {
               <span className="tool-line__name">{entry.toolLine.tool ?? entry.toolLine.detail}</span>
             </div>
           )}
+          {/* 历史恢复的子任务卡没有调度卡上下文：把目标亮出来，用户知道这格是干嘛的。 */}
+          {entry.goal !== '' && <div className="subtask__goal">{entry.goal}</div>}
           {entry.body === ''
             ? entry.state === 'running' && <div className="typing"><i /><i /><i /></div>
             : entry.body.length > STREAM_RICH_LIMIT
