@@ -1,0 +1,103 @@
+/*
+ * 手账 token 层（批 0 起步）：--bt-* 变量自 web/style.css :root 原样搬运——
+ * 数值一处不改，保证新旧前端同一套手账语言。shadcn 主题变量只映射能对上的槽，
+ * 五彩色与双线制留在 --bt-* 命名空间（方案 §3.5：映射不硬做）。
+ */
+
+:root {
+  --bt-paper: #f6efdd;
+  --bt-card: #ffffff;
+  --bt-ink: #2f2b26;
+  --bt-ink-soft: #7d7468;
+  --bt-ink-faint: #a89f92;
+  --bt-line: #ddd2bc;
+  --bt-stroke: #2f2b26;
+  /* 红笔批注：圈注、波浪线、页脚红心（原型 C 的批注层）。 */
+  --bt-red: #d2493f;
+
+  /* 手绘勾边框（border-image 九宫格）：线条带轻微波动，是「笔画」而不是「线框」。 */
+  --bt-ink-frame: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24'%3E%3Cpath d='M2.5 4.5 C 8 2.6, 16 3.1, 21.6 4.1 C 22.5 9, 21.7 15, 20.9 21.5 C 15 22.4, 8.5 21.9, 2.7 21.1 C 1.5 15, 2.1 8.5, 2.5 4.5 Z' fill='none' stroke='%232f2b26' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+
+  --bt-coral: #ff6b57;
+  --bt-amber: #ffb703;
+  --bt-mint: #2ec4a6;
+  --bt-sky: #4d96ff;
+  --bt-grape: #9b5de5;
+
+  --bt-ok: #1f9d6b;
+  --bt-warn: #d98324;
+  --bt-error: #d94f4f;
+  --bt-warn-bg: #fdf3e0;
+  --bt-error-bg: #fdeceb;
+  --bt-ok-bg: #e8f6ef;
+
+  /* 正文用霞鹜文楷；系统字体栈给「用户打字」与需要严格辨识的位置；
+     手写标题字 Ma Shan Zheng 只留给标题与手写装饰；第四轨 --bt-ui-font 消费面
+     迁移中重估（方案 §3.5：四轨字体第四轨已定义未消费）。 */
+  --bt-font: "LXGW WenKai", "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  --bt-ui-font: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+  --bt-hand: "Ma Shan Zheng", "Segoe Print", "Comic Sans MS", "KaiTi", "STKaiti", "Kaiti SC", "DFKai-SB", "BiauKai", cursive;
+  --bt-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* 手绘感来自两条略有差异的圆角（多档 8 值椭圆按档定义，不做单值派生）。 */
+  --bt-wobble: 14px 12px 15px 11px / 12px 15px 11px 14px;
+  --bt-wobble-sm: 9px 7px 10px 8px / 8px 10px 7px 9px;
+
+  /* ── shadcn 主题变量映射（能对上的槽才映射）────────────────────────── */
+  --background: var(--bt-paper);
+  --foreground: var(--bt-ink);
+  --card: var(--bt-card);
+  --card-foreground: var(--bt-ink);
+  --primary: var(--bt-ink);
+  --primary-foreground: var(--bt-card);
+  --secondary: #f0e8d6;
+  --secondary-foreground: var(--bt-ink);
+  --muted: #f0e8d6;
+  --muted-foreground: var(--bt-ink-soft);
+  --accent: #f0e8d6;
+  --accent-foreground: var(--bt-ink);
+  --destructive: var(--bt-error);
+  --destructive-foreground: #ffffff;
+  --border: var(--bt-line);
+  --input: var(--bt-line);
+  --ring: var(--bt-ink-soft);
+
+  color-scheme: light;
+}
+
+/* Tailwind v4 主题桥：把上面的语义变量接进 Tailwind 的颜色/圆角体系，
+   组件里写 bg-card text-foreground border-border 即落在手账色上。 */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  /* 五彩色按 Tailwind 色桥暴露，命名保留 --bt-* 语义。 */
+  --color-bt-red: var(--bt-red);
+  --color-bt-coral: var(--bt-coral);
+  --color-bt-amber: var(--bt-amber);
+  --color-bt-mint: var(--bt-mint);
+  --color-bt-sky: var(--bt-sky);
+  --color-bt-grape: var(--bt-grape);
+  --color-bt-ink: var(--bt-ink);
+  --color-bt-ink-soft: var(--bt-ink-soft);
+  --color-bt-ink-faint: var(--bt-ink-faint);
+  --color-bt-line: var(--bt-line);
+  --color-bt-stroke: var(--bt-stroke);
+  --color-bt-ok: var(--bt-ok);
+  --color-bt-warn: var(--bt-warn);
+  --color-bt-error: var(--bt-error);
+  --color-bt-paper: var(--bt-paper);
+}

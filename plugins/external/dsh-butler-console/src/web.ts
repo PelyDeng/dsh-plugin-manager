@@ -8,6 +8,7 @@
  * 裁剪成可展示内容。
  */
 
+import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
@@ -299,7 +300,12 @@ export async function installWeb(
   // 附件服务从这一份应用对象上取，不另开一个参数：路由只是它的一个入口，另造实例等于让
   // 两处各持一份状态。`console_` 本身要在上面构造时就绪，所以这里直接读。
   const attachments: ButlerAttachments = console_.attachments
-  const sourceHtml = await readFile(new URL('../web/index.html', import.meta.url), 'utf8')
+  // 前端双轨开关（React 迁移，方案 §3.1 唯一定型的信号）：dist/web/app.css 只由
+  // React 构建链（tsdown.web-react + tailwindcss）产出，且两条构建链都以 dist/web
+  // 为清空再产出的目录——构建哪个前端，那里就只有哪个前端的产物。以此选页面骨架，
+  // 切一次构建即切前端，这里不需要自己的开关配置。
+  const reactSkeleton = existsSync(fileURLToPath(new URL('../dist/web/app.css', import.meta.url)))
+  const sourceHtml = await readFile(new URL(reactSkeleton ? '../web-react/index.html' : '../web/index.html', import.meta.url), 'utf8')
   // 页面里的 `/butler/...` 是包内默认前缀，部署改前缀时一并替换。
   // 配置注到 head 里而不是替换占位符：index.html 因此可以被浏览器直接打开预览。
   //
@@ -527,6 +533,9 @@ export async function installWeb(
   // 裸包名（markdown-it 等依赖），走 tsdown.web 的打包产物 dist/web/app.js——与
   // dsh-example 服务 dist/web 入口是同一模式。
   const entryBundle = fileURLToPath(new URL('../dist/web/app.js', import.meta.url))
+  // React 前端的样式单文件（Tailwind v4 产物），与 app.js 同一套 /assets 特例；
+  // 旧前端没有这个文件，请求会落进下面的 readFile 404，行为安全。
+  const appStyles = fileURLToPath(new URL('../dist/web/app.css', import.meta.url))
   ctx.effect(() => register({
     kind: 'prefix',
     path: `${config.routePrefix}/assets`,
@@ -538,6 +547,8 @@ export async function installWeb(
       let file: string
       if (suffix === 'app.js') {
         file = entryBundle
+      } else if (suffix === 'app.css') {
+        file = appStyles
       } else {
         file = resolve(assetRoot, suffix)
         const local = relative(assetRoot, file)

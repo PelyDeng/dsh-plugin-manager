@@ -1,0 +1,158 @@
+/*
+ * React 前端 CSS 入口：Tailwind v4 单文件产物（构建内联 @import 链），
+ * 输出 dist/web/app.css，页面经 /butler/assets/app.css 引用。
+ *
+ * 分层：preflight（Tailwind 自带）→ tokens（手账 token + shadcn 映射）→
+ * 手账全局修正层（本文件）→ 组件样式（Tailwind 类 + @utility 基元，批 1 起）。
+ */
+@import "tailwindcss";
+@import "./tokens.css";
+
+/* 内容探测圈定在 web-react/，不扫全仓（v4 自动探测从 git 根扫，过广）。 */
+@source "../../";
+
+/* ── preflight 冲突修正层（批 0 清单，方案 §3.5）────────────────────────
+ * Tailwind v4 preflight 的全局样式与手账设计决定冲突的点，在这里显式压回。
+ * 每条都对应旧 style.css 的一个明确设计决定，不是装饰。 */
+
+/* ① antialiased：不开。Windows 上灰度抗锯齿把细笔画手写体渲淡发虚，
+   交给系统 ClearType 更锐（style.css:75 的设计决定）。
+   preflight 若注入 font-smoothing，在此显式回到 auto。 */
+html {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
+/* ② 纸感滚动条：细圆条 + 纸色轨道，别让一根系统灰条戳破手帐画面。 */
+* { scrollbar-width: thin; scrollbar-color: #c9b998 transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #c9b998; border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: #b3a17e; }
+
+/* ③ 焦点环用墨系虚线（替代 preflight/ring 的实线焦点样式）：批注层（红）
+   与状态色不参与「这是键盘在这」的表达。 */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible { outline: 2px dashed var(--bt-ink-soft); outline-offset: 2px; }
+
+/* ── 手账基底（对应旧 style.css 的全局段）──────────────────────────── */
+
+html, body { height: 100%; }
+body {
+  margin: 0;
+  /* 高明度暖米色桌面 + 极轻暗角 + 更淡的纸纹（与旧前端同一配方）。 */
+  background-color: #f3edde;
+  background-image:
+    radial-gradient(120% 90% at 8% 0%, #0000000d 0%, transparent 46%),
+    radial-gradient(120% 100% at 100% 100%, #0000000a 0%, transparent 50%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.42 0 0 0 0 0.37 0 0 0 0 0.28 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E");
+  color: var(--bt-ink);
+  font-family: var(--bt-font);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* 墨线勾边纸卡基元（旧 .paper 的最小子集；材质解耦批 1 全量化）。 */
+.paper {
+  position: relative;
+  background: var(--bt-card);
+  border: 2px solid transparent;
+  border-image: var(--bt-ink-frame) 6 / 4px round;
+  box-shadow: 0 2px 0 #00000008, 0 6px 16px #00000012;
+}
+
+/* ── 批 0 hello 页（临时验证面，批 1 骨架落地后删除）────────────────── */
+
+.bt-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.bt-hello { padding: 32px 40px; max-width: 640px; }
+.bt-hello__title {
+  margin: 0 0 8px;
+  font-family: var(--bt-hand);
+  font-size: 34px;
+  font-weight: 400;
+  line-height: 1.3;
+}
+.bt-hello__note { margin: 0 0 12px; color: var(--bt-ink-soft); }
+.bt-hello__config { margin: 0; }
+.bt-hello__config--mono { font-family: var(--bt-mono); font-size: 12.5px; color: var(--bt-ink-faint); }
+
+/* ── bt-overrides：Base UI/base-nova 默认皮肤 → 手账皮肤（方案 §3.5 覆写层）─────
+ * 产物组件的默认形态（ring 焦点环、柔和阴影、blur 遮罩、zoom 动效）不在主题变量
+ * 覆盖面，统一在这里按 data-slot 逐组件压回手账形态。本段不修改 CLI 产物的 tsx。
+ * 本层是 unlayered 样式，优先级天然高于 Tailwind utilities 层，无需 !important。 */
+
+/* 焦点：墨系虚线（全局修正层的兄弟条款），并把 shadcn 按钮的 ring 焦点环归零。 */
+button:focus-visible {
+  outline: 2px dashed var(--bt-ink-soft);
+  outline-offset: 2px;
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-ring-color: transparent;
+}
+
+/* 遮罩：墨色纸罩，不要毛玻璃（手账是纸面不是玻璃）。 */
+[data-slot="dialog-overlay"] {
+  background: #2f2b2638;
+  backdrop-filter: none;
+}
+
+/* 弹层：墨线勾边纸卡 + 硬阴影；border-image 与 border-radius 不共存（CSS 特性），
+   弹层取直角墨框形态，歪圆角留给内部按钮。 */
+[data-slot="dialog-content"] {
+  background: var(--bt-card);
+  border: 2px solid transparent;
+  border-image: var(--bt-ink-frame) 6 / 4px round;
+  border-radius: 0;
+  box-shadow: 2px 3px 0 #00000018, 0 6px 16px #00000012;
+  outline: none;
+  transition: opacity 90ms ease, transform 90ms ease;
+}
+
+/* 标题/正文：标题走手写体（手账的批注位），描述保持霞鹜正文。 */
+[data-slot="dialog-title"] {
+  font-family: var(--bt-hand);
+  font-size: 24px;
+  font-weight: 400;
+  color: var(--bt-ink);
+}
+[data-slot="dialog-description"] { color: var(--bt-ink-soft); }
+
+/* 底部按钮行：细淡线分割（双线制的淡线），纸色底。 */
+[data-slot="dialog-footer"] {
+  border-top: 1px dashed var(--bt-line);
+  background: var(--bt-paper);
+}
+
+/* 按钮（样张两枚 + 关闭钮）：歪圆角 + 墨线描边 + 硬阴影 + 90ms 按压位移，
+   替代 base-nova 的 rounded-lg + ring + 柔影 + scale 动效。 */
+.bt-page button,
+[data-slot="dialog-content"] button {
+  border-radius: var(--bt-wobble-sm);
+  transition: transform 90ms ease, box-shadow 90ms ease;
+}
+.bt-page button:active,
+[data-slot="dialog-content"] button:active { transform: translate(1px, 2px); }
+
+.bt-sample-open {
+  background: var(--bt-amber);
+  color: var(--bt-ink);
+  border: 2px solid var(--bt-stroke);
+  box-shadow: 2px 3px 0 #00000022;
+  font-family: var(--bt-hand);
+  font-size: 16px;
+  padding: 8px 18px;
+}
+.bt-sample-danger {
+  background: var(--bt-red);
+  color: #fff;
+  border: 2px solid var(--bt-stroke);
+  box-shadow: 2px 3px 0 #00000022;
+}

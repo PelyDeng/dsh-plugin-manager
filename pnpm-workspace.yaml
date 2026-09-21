@@ -7,6 +7,17 @@ packages:
   - 'plugins/external/*/agents/*'
   - 'plugins/external/*/packages/*'
 nodeLinker: hoisted
+# 平台二进制只装当前平台（lightningcss/esbuild/oxide 等 native 可选依赖都是全平台
+# optional 列表；不限定时 hoisted 安装会去拉 freebsd/arm64-musl 等永远用不到的
+# 二进制，镜像一缺文件整个 install 失败）。开发机 Windows 与构建服务器 Linux 各自
+# 解析 current，互不影响。
+supportedArchitectures:
+  os:
+    - current
+  cpu:
+    - current
+  libc:
+    - current
 # 宿主内部包随 dsh 版本一起发布，npm 的 minimumReleaseAge 冷静期会拦下刚发布的版本。
 # pnpm 的豁免只接受精确版本的并集（不支持区间），宿主升级时在这里并列新旧版本；
 # scripts/version.mjs check 会核验清单与子模块版本一致。
@@ -51,4 +62,7 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-sandbox-policy@0.1.6-alpha.1 || 0.1.6-alpha.2'
   - '@deepseek-ai/dsh-sandbox@0.1.6-alpha.1 || 0.1.6-alpha.2'
 allowBuilds:
+  # @parcel/watcher 是 @tailwindcss/cli 的 watch 依赖；一次性构建用不到原生
+  # watcher（真要 watch 时再改 true 并重装）。
+  '@parcel/watcher': false
   esbuild: true
