@@ -1,0 +1,47 @@
+/** 页面常量（自 web/modules/config.js 按需迁移，批 1 只带 React 侧消费的子集）。 */
+
+/** 成员配色：按 agentId 稳定取色，同一个成员每次都是同一个颜色。 */
+export const PALETTE = ['#4d96ff', '#2ec4a6', '#ff6b57', '#9b5de5', '#ffb703', '#e8709a']
+
+/** 默认涂鸦头像：已知插件映射到 web/media/avatars/ 下的生成素材（资产路径不变，方案 §6.1）。 */
+export const DEFAULT_AVATAR_FILES = new Map([
+  ['butler', 'avatar-butler.png'],
+  ['blog', 'avatar-blog.png'],
+  ['closedoff', 'avatar-closedoff.png'],
+  ['__boss__', 'avatar-boss.png'],
+])
+
+export const STATE_TEXT: Record<string, string> = {
+  queued: '排队中',
+  dispatched: '已收到',
+  running: '在干活',
+  waiting_user: '等你回话',
+  external_pending: '待外部处理',
+  partial: '部分完成',
+  succeeded: '已完成',
+  failed: '失败',
+  cancelled: '已停止',
+  summarizing: '在写总结',
+  completed: '已完成',
+}
+
+export const MOTTO_KEY = 'butler.motto'
+export const DEFAULT_MOTTO = '没关系，牛再来！换个姿势再来！'
+/** 上次用过的会话。刷新后要拿它去问「这一轮还在跑吗」。 */
+export const CONVERSATION_KEY = 'butler.conversationId'
+
+/**
+ * 流式正文逐帧重渲的字符上限（与旧前端同值）：超长输出放弃逐帧 Markdown 重渲、
+ * 降级为纯文本追加，终态照常排版。分级判断在调用方（方案 §3.4）。
+ */
+export const STREAM_RICH_LIMIT = 12000
+
+/** 开场示例话题（撕条）：点击把完整话填进输入框。 */
+export const SUGGESTIONS = [
+  { label: '园区介绍', text: '整理一篇园区封闭化管理介绍，再给点博客发布建议' },
+  { label: '查通行情况', text: '查一下园区最近的通行情况，顺便说说异常' },
+  { label: '归拢周报', text: '把这周的零散材料归拢成一篇周报' },
+  { label: '博客选题', text: '给我的博客挑三个可写的选题' },
+  { label: '盯通报', text: '盯着园区通报，有异常随时叫我' },
+  { label: '捋今日跟进', text: '帮我捋一遍今天该跟进没跟进的事' },
+]

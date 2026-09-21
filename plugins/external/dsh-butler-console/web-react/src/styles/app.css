@@ -156,3 +156,1747 @@ button:focus-visible {
   border: 2px solid var(--bt-stroke);
   box-shadow: 2px 3px 0 #00000022;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 手账组件层（批 1 全量搬运自 web/style.css:99 起，类名与旧前端同源）：
+ * React 组件沿用旧类名，视觉与旧前端口径一致（迁架构不迁皮肤，方案 §0）。
+ * 批 3-5 按「材质解耦（伪元素/nth-child → bt-* 公共类 + @utility）」逐段
+ * Tailwind 化；每段迁移由截图对照保护。未迁移前这里的规则是唯一视觉事实。
+ * ═══════════════════════════════════════════════════════════════════════
+ */
+/* ── 手绘小件 ─────────────────────────────────────────────────────────── */
+
+.paper {
+  position: relative;
+  background: var(--bt-card);
+  /* 手绘墨线勾边：border-image 手绘框（线条波动）替代平直实线。
+     布局仍按 2px 占位，图像画到 4px——多出的 2px 侵入自身 padding 边缘，不挤压内容。 */
+  border: 2px solid transparent;
+  border-image: var(--bt-ink-frame) 6 / 4px round;
+  box-shadow: 0 2px 0 #00000008, 0 6px 16px #00000012;
+}
+
+/* 纸胶带：把纸卡按在页面上。颜色加浓一档，保证撕边纸上的存在感。 */
+.column--left::before,
+.column--right > section:first-child::after {
+  content: '';
+  position: absolute; top: -6px; width: 76px; height: 22px;
+  background: linear-gradient(100deg, #dbc79ecd, #e5d3aebe 55%, #d6c097bd);
+  box-shadow: 0 1px 3px #00000030;
+  transform: rotate(-4deg);
+  pointer-events: none;
+}
+
+.column--left::before { left: 24px; }
+
+.column--right > section:first-child::after {
+  right: 28px;
+  background: linear-gradient(100deg, #a3c6e5, #bedcf2cc 55%, #9cc2e0);
+  transform: rotate(5deg);
+}
+
+.sticker {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 8px;
+  background: var(--bt-amber); color: #4a3a05;
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  font-size: 11.5px; font-weight: 700;
+  transform: rotate(-2deg);
+}
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 6px 14px;
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  font-size: 13px; font-weight: 600;
+  transition: transform 90ms ease, box-shadow 90ms ease;
+}
+
+.btn:hover:not(:disabled) { transform: translate(-1px, -1px); box-shadow: 2px 3px 0 #00000014; }
+.btn:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: none; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn--primary { background: var(--bt-coral); color: #fff; }
+.btn--amber { background: var(--bt-amber); color: #4a3a05; }
+.btn--ghost { border-color: transparent; background: transparent; font-weight: 500; color: var(--bt-ink-soft); }
+.btn--ghost:hover:not(:disabled) { background: #00000008; box-shadow: none; transform: none; }
+.btn--tiny { padding: 3px 10px; font-size: 12px; }
+/* 左栏顶上那颗大手绘按钮：马克笔涂的橙色块，深色底边压出厚度（原型 C）。 */
+.btn--chunky {
+  padding: 8px 14px;
+  border-width: 2px;
+  border-radius: 12px 10px 13px 9px / 10px 13px 9px 12px;
+  background: #f59a3c; color: #fff;
+  font-family: var(--bt-hand); font-size: 16px; font-weight: 700; letter-spacing: 2px;
+  box-shadow: 0 3px 0 #b5651d, 2px 4px 0 #00000020;
+}
+.btn--chunky:active:not(:disabled) { box-shadow: 0 1px 0 #b5651d; }
+
+.dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--bt-ink-faint); }
+.dot--running, .dot--dispatched, .dot--summarizing { background: var(--bt-sky); }
+.dot--waiting_user, .dot--external_pending { background: var(--bt-warn); }
+.dot--partial { background: var(--bt-amber); }
+.dot--succeeded, .dot--completed, .dot--online { background: var(--bt-ok); }
+.dot--failed { background: var(--bt-error); }
+/* 调度卡格子按 tone 给类名（ok/warn/error，见 app.js 的 DISPATCH_TONE），同样有色：完成的绿、等回话的琥珀、失败的砖红。 */
+.dot--ok { background: var(--bt-ok); }
+.dot--warn { background: var(--bt-warn); }
+.dot--error { background: var(--bt-error); }
+
+.empty { padding: 18px 14px; text-align: center; color: var(--bt-ink-faint); font-size: 13px; line-height: 1.9; }
+
+.error-line {
+  margin: 0; padding: 8px 12px;
+  background: var(--bt-error-bg);
+  border: 1.5px dashed var(--bt-error);
+  border-radius: var(--bt-wobble-sm);
+  color: #a33535; font-size: 13px;
+}
+
+/* ── 骨架 ─────────────────────────────────────────────────────────────── */
+
+.shell { display: grid; grid-template-rows: auto 1fr; height: 100vh; overflow: hidden; }
+
+.topbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 18px 6px;
+  background: transparent;
+  /* 顶栏底部一道手绘墨线（原型实测 y64 有横贯横线），微斜像一笔画出来的。 */
+  border-bottom: 1.7px solid #2f2b26c9;
+}
+
+/* 顶栏（原型 C 头部）：左三枚圆点 + 两行座右铭 + 右侧口号与笑脸。
+   文字内容全部来自 Figma 转换稿的文字图层（坐标逐一对齐）。 */
+.topbar__dots { display: inline-flex; gap: 7px; align-items: center; }
+.topbar__dots i { width: 13px; height: 13px; border-radius: 50%; border: 1.4px solid #4a423a55; }
+.topbar__dots i:nth-child(1) { background: #b9322b; }
+.topbar__dots i:nth-child(2) { background: #e9aa35; }
+.topbar__dots i:nth-child(3) { background: #75ad56; }
+.topbar__motto {
+  margin: 0; font-family: var(--bt-hand); font-size: 19px; line-height: 1.3;
+  color: var(--bt-ink); transform: rotate(-0.5deg); user-select: none;
+}
+.topbar__slogan {
+  margin: 0; font-family: var(--bt-hand); font-size: 19px; line-height: 1.3;
+  color: var(--bt-ink); transform: rotate(0.4deg); user-select: none;
+}
+.topbar__smile { font-family: var(--bt-hand); font-size: 26px; color: var(--bt-ink-soft); transform: rotate(6deg); }
+@media (max-width: 900px) { .topbar__motto, .topbar__slogan, .topbar__smile, .topbar__dots { display: none; } }
+
+/* 宽屏下标题由左栏品牌块承担，顶栏只留状态；窄屏左栏收起，标题回到顶栏。 */
+.topbar__brand { display: none; align-items: center; gap: 8px; }
+.topbar h1 { margin: 0; font-family: var(--bt-hand); font-size: 18px; font-weight: 700; }
+.topbar__crown { font-size: 18px; line-height: 1; }
+.topbar__status { display: inline-flex; align-items: center; gap: 6px; font-family: var(--bt-hand); font-size: 13px; color: var(--bt-ink-soft); }
+.spacer { flex: 1; }
+.identity { font-family: var(--bt-hand); font-size: 13px; color: var(--bt-ink-soft); white-space: nowrap; }
+.identity a { color: var(--bt-sky); }
+
+/* 三张手帐纸（原型 C/B 的核心质感）：撕痕不规则（幅度与间距抖动，左右边也有起伏）、
+   双层柔和投影浮起、每张微微歪斜——「随手摊在桌上」的样子。 */
+.desk .column {
+  position: relative;
+  background-color: #fdf9f0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.36 0 0 0 0 0.32 0 0 0 0 0.26 0 0 0 0.045 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E");
+  clip-path: polygon(0.2% 1.4%, 1.5% 0.9%, 3% 2.3%, 4.5% 0.6%, 6% 1.4%, 8% 0.4%, 10% 1.8%, 13% 2.4%, 15% 0.6%, 18% 1.3%, 21% 0.3%, 24% 2.8%, 26% 0.7%, 29% 1.7%, 32% 0.6%, 35% 2.6%, 37% 0.4%, 40% 1.4%, 43% 0.5%, 46% 2.2%, 48% 0.7%, 51% 1.5%, 54% 0.4%, 57% 2.9%, 59% 0.8%, 62% 1.3%, 65% 0.4%, 68% 1.9%, 70% 0.6%, 73% 2.6%, 75% 0.5%, 78% 1.4%, 81% 0.4%, 84% 2.4%, 86% 0.7%, 89% 1.3%, 91% 0.4%, 94% 2.7%, 96% 0.6%, 98.5% 1.6%, 100% 1.0%, 99.4% 12%, 100.4% 34%, 99.2% 52%, 100.5% 71%, 99.5% 89%, 97.5% 98.9%, 95% 99.7%, 93% 98.3%, 91% 99.9%, 89% 98.5%, 87% 99.8%, 85% 98.2%, 83% 99.9%, 80% 98.5%, 78% 99.8%, 76% 98.3%, 74% 99.9%, 71% 98.5%, 69% 99.8%, 66% 98.2%, 64% 99.9%, 61% 98.4%, 59% 99.9%, 56% 98.2%, 54% 99.9%, 51% 98.5%, 49% 99.8%, 46% 98.3%, 44% 99.9%, 41% 98.5%, 39% 99.8%, 36% 98.2%, 34% 99.9%, 31% 98.4%, 29% 99.8%, 26% 98.2%, 24% 99.9%, 21% 98.5%, 19% 99.8%, 16% 98.3%, 14% 99.9%, 11% 98.4%, 9% 99.8%, 6% 98.2%, 4% 99.9%, -0.5% 90%, 0.8% 72%, -0.6% 54%, 0.6% 36%, -0.4% 18%);
+  /* 四向紧贴的 drop-shadow 叠成沿撕边的一圈深棕细墨线（原型手绘描边），
+     再叠两层柔和投影把纸浮起来——clip-path 画不了 border，这是唯一路径。 */
+  filter: drop-shadow(0.6px 0 0 rgba(70, 57, 41, 0.55))
+    drop-shadow(-0.6px 0 0 rgba(70, 57, 41, 0.55))
+    drop-shadow(0 0.6px 0 rgba(70, 57, 41, 0.55))
+    drop-shadow(0 -0.6px 0 rgba(70, 57, 41, 0.55))
+    drop-shadow(0 2px 4px rgba(90, 74, 48, 0.14))
+    drop-shadow(0 8px 18px rgba(90, 74, 48, 0.12));
+}
+/* 三张纸各自微微歪斜：左栏左倾、中栏近乎水平、右栏右倾——与原型的扇形错落同向。 */
+.desk .column--left { transform: rotate(-0.5deg); }
+.desk .column--center { transform: rotate(0.15deg); }
+.desk .column--right { transform: rotate(0.45deg); }
+
+.columns {
+  display: grid;
+  /* 三栏宽度按原型 C 实测占比（354/807/342 @1536）折算到 1600 视口：364/自动/352。 */
+  grid-template-columns: 364px minmax(0, 1fr) 352px;
+  gap: 10px; padding: 10px 12px;
+  min-height: 0; overflow: hidden;
+}
+
+.column { min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.column--left, .column--center { gap: 10px; }
+.column--right { overflow: hidden; gap: 10px; }
+/* 0.12.2 右栏自适应：面板弹性伸缩，成员档案与失败记录各自在内容区里滚，整栏不出滚动条。 */
+.column--right > section { display: flex; flex-direction: column; min-height: 0; }
+.column--right > section:first-child { flex: 1 1 0; overflow: hidden; }
+.column--right > section:nth-child(3) { flex: 1 1 0; overflow: hidden; }
+.column--right > section .panel { flex: 1; min-height: 0; }
+#member-list { overflow-y: auto; min-height: 0; flex: 1; }
+#failure-list { overflow-y: auto; min-height: 0; flex: 1; }
+
+.section-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px 6px; }
+/* 荧光笔标记：小节标题下半截一道粉红，原型里「认真圈过重点」的样子。 */
+.section-title {
+  margin: 0; font-family: var(--bt-hand); font-size: 23px; font-weight: 700; color: var(--bt-ink);
+  background: linear-gradient(transparent 58%, #f7c9c2b3 58%);
+  padding: 0 3px; align-self: flex-start;
+}
+
+/* ── 左栏 ─────────────────────────────────────────────────────────────── */
+
+.left__top { padding: 12px 12px 8px; display: flex; flex-direction: column; gap: 9px; }
+/* 0.12.2 搜索与新建同行：左 2/3 搜索、右 1/3 新建。 */
+.left__actions { display: grid; grid-template-columns: 2fr 1fr; gap: 8px; align-items: stretch; }
+.left__actions .btn--chunky { padding: 6px 6px; font-size: 14.5px; letter-spacing: 1px; border-width: 2px; white-space: nowrap; }
+.left__actions .doodle-input { padding-top: 7px; padding-bottom: 7px; }
+
+/* 品牌块：星形磁铁 + 手写大标题 + 蓝色波浪线，原型左上角的招牌。 */
+.brand { position: relative; padding: 4px 2px 0; }
+.brand__badge { position: absolute; top: -16px; right: 6px; width: 38px; height: 37px; transform: rotate(14deg); filter: drop-shadow(1px 2px 0 #00000022); }
+/* 描摹版大标题：字形逐笔取自原型 C（位图墨迹 → 矢量描摹），显示尺寸按原型实测字形高度（65px@1536 → ~64px@1600）。 */
+/* 绘语重绘版大标题：图自带左下→右上约 8 度上扬动势（毛笔字 + 亮度抠像透明底），不再叠加 CSS 旋转。 */
+.brand__title { margin: 0; line-height: 0; }
+.brand__title img { display: block; height: 60px; width: auto; }
+/* 标题图与「N 个牛马」同一行（0.12.3）：图在左，数量靠右下坐——右端上扬的斜纸条正好留出这个角。 */
+.brand__row { display: flex; align-items: flex-end; gap: 10px; }
+.brand__row .left__brandline { margin: 0 0 5px auto; white-space: nowrap; }
+.brand__row .brand__title { flex: 0 0 auto; }
+.brand__wave { display: block; width: 158px; height: 8px; margin-top: 2px; color: #4d96ff; }
+.left__brandline { font-family: var(--bt-hand); font-size: 14px; color: var(--bt-ink-soft); margin-top: 2px; }
+
+.doodle-input {
+  padding: 9px 10px 9px 32px;
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  /* 放大镜涂鸦（原型搜索框左侧那只）。 */
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.8' cy='6.8' r='4.2' fill='none' stroke='%237d7468' stroke-width='1.7'/%3E%3Cpath d='M10.2 10.2 L14 14' stroke='%237d7468' stroke-width='1.7' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat 9px center / 15px;
+  font-size: 14px;
+}
+.doodle-input:focus { border-color: var(--bt-ink-soft); outline: none; }
+
+.left__list {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 0 8px 10px;
+  display: flex; flex-direction: column; gap: 3px;
+}
+
+.chat-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px;
+  width: 100%; padding: 6px 10px;
+  background: #fffef8;
+  border: 1.5px solid #2f2b2640;
+  border-radius: 10px 9px 11px 8px;
+  text-align: left;
+}
+
+.chat-row:hover { background: #fffef8; border-color: #2f2b2670; }
+/* 选中的会话：琥珀便签底（原型 Figma #fff0ad 实测），标题补一笔红波浪。 */
+.chat-row[aria-current="true"] {
+  background: #fff0ad;
+  border-color: transparent;
+  transform: none;
+}
+.chat-row[aria-current="true"] .chat-row__title {
+  text-decoration: underline wavy var(--bt-red);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 4px;
+}
+.chat-row__title { display: block; font-size: 14.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-row__preview { display: block; margin-top: 1px; font-size: 12px; color: var(--bt-ink-faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-row__time { font-size: 10px; color: var(--bt-ink-faint); white-space: nowrap; padding-top: 2px; }
+
+.crew { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.crew__row { display: flex; align-items: center; gap: 10px; }
+.crew__faces { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
+/* 头像旁的三行小欢呼（原型 C 左栏底部「好的/牛马们！/辛苦啦! ♡」），纯装饰。 */
+.crew__cheers {
+  flex: none; font-family: var(--bt-hand); font-size: 14px; line-height: 1.45;
+  color: var(--bt-ink-soft); transform: rotate(-2deg); user-select: none;
+}
+.crew__line { font-size: 12px; color: var(--bt-ink-soft); }
+
+/* ── 头像 ─────────────────────────────────────────────────────────────── */
+
+.avatar {
+  position: relative; flex: none;
+  display: grid; place-items: center;
+  width: 34px; height: 34px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bt-stroke);
+  background: var(--bt-sky); color: #fff;
+  font-family: var(--bt-hand); font-size: 15px; font-weight: 700;
+  box-shadow: inset 0 0 0 2px #ffffff45;
+  overflow: hidden; user-select: none;
+}
+
+/* 上传过头像时用图片盖住首字；图片加载失败会自动移除，首字自然露出来。 */
+.avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+}
+
+/* 使用者头像：简笔人脸 + 领带，奶油纸底。 */
+.avatar--boss { background: #fdf3dd; }
+.avatar--boss svg { width: 88%; height: 88%; }
+
+/* 管家头像：原型里的薄荷绿。 */
+.avatar--butler { background: var(--bt-mint); }
+
+.avatar--sm { width: 26px; height: 26px; font-size: 12px; }
+.member .avatar { width: 44px; height: 44px; font-size: 18px; }
+.avatar--lg { width: 40px; height: 40px; font-size: 17px; }
+
+/* ── 中栏 ─────────────────────────────────────────────────────────────── */
+
+.center__head {
+  display: flex; align-items: center; gap: 10px; padding: 11px 14px;
+  border-bottom: 1.5px solid var(--bt-line);
+}
+.center__head h2 { margin: 0; font-family: var(--bt-hand); font-size: 24px; font-weight: 800; -webkit-text-stroke: 0.7px var(--bt-stroke); text-shadow: 0.5px 0.5px 0 var(--bt-stroke); }
+/* 红笔圈注：罩在「牛马调度群」标题上的手绘椭圆（index.html 内联 SVG）。 */
+.center__title { position: relative; padding: 2px 10px; line-height: 0; }
+.center__title img { display: block; height: 86px; width: auto; }
+.center__circle {
+  position: absolute; inset: -4px -6px; width: calc(100% + 12px); height: calc(100% + 8px);
+  pointer-events: none;
+}
+.center__sub { font-size: 15px; color: var(--bt-ink); font-family: var(--bt-hand); font-weight: 700; }
+
+/* 喊停：浅红底墨框——「要按住」的事必须比普通按钮显眼一档。 */
+#stop-button {
+  background: #fbe3e0; border-color: #8b2f36;
+  color: #a33535; font-weight: 700;
+}
+
+.rail { display: flex; align-items: flex-start; gap: 2px; flex-wrap: wrap; padding: 10px 14px 8px; }
+
+/* 链路条：小圆徽章在上、手写字在下，歪箭头相连，照原型画的。 */
+.rail__step { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 52px; }
+
+.rail__badge {
+  position: relative;
+  display: grid; place-items: center;
+  width: 30px; height: 30px;
+  border: 1.7px solid var(--bt-line);
+  border-radius: 50%;
+  background: #fff; color: var(--bt-ink-faint);
+  box-shadow: inset 2px 3px 0 #ffffffb0, 0 1px 3px #0000001c;
+}
+
+.rail__badge svg { width: 15px; height: 15px; }
+
+.rail__label { font-size: 11px; line-height: 1.2; color: var(--bt-ink-faint); white-space: nowrap; }
+
+.rail__step[data-state="done"] .rail__badge,
+.rail__step[data-state="active"] .rail__badge,
+.rail__step[data-state="waiting"] .rail__badge,
+.rail__step[data-state="partial"] .rail__badge { border-color: transparent; color: #fff; }
+
+/* 等待与部分结束不是执行中（方案 6.1「等待仍旋转」的纠正）：静态底色，不转圈。 */
+.rail__step[data-state="waiting"] .rail__badge { background: var(--bt-warn); }
+.rail__step[data-state="partial"] .rail__badge { background: var(--bt-warn); }
+
+.rail__step[data-key="ask"][data-state="done"] .rail__badge,
+.rail__step[data-key="ask"][data-state="active"] .rail__badge { background: var(--bt-coral); }
+.rail__step[data-key="parse"][data-state="done"] .rail__badge,
+.rail__step[data-key="parse"][data-state="active"] .rail__badge { background: var(--bt-mint); }
+.rail__step[data-key="dispatch"][data-state="done"] .rail__badge,
+.rail__step[data-key="dispatch"][data-state="active"] .rail__badge { background: var(--bt-sky); }
+.rail__step[data-key="work"][data-state="done"] .rail__badge,
+.rail__step[data-key="work"][data-state="active"] .rail__badge { background: var(--bt-amber); }
+.rail__step[data-key="sum"][data-state="done"] .rail__badge,
+.rail__step[data-key="sum"][data-state="active"] .rail__badge { background: var(--bt-ok); }
+
+/* 当前那一步：外圈一道转动的虚线，像还在转的齿轮。 */
+.rail__step[data-state="active"] .rail__badge::after {
+  content: '';
+  position: absolute; inset: -5px;
+  border: 2px dashed var(--bt-amber);
+  border-radius: 50%;
+  animation: bt-spin 7s linear infinite;
+}
+
+@keyframes bt-spin { to { transform: rotate(360deg); } }
+
+.rail__step[data-state="done"] .rail__label,
+.rail__step[data-state="active"] .rail__label,
+.rail__step[data-state="waiting"] .rail__label,
+.rail__step[data-state="partial"] .rail__label { color: var(--bt-ink-soft); font-weight: 700; }
+
+.rail__arrow {
+  flex: none; width: 22px; height: 12px; margin-top: 9px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 12'%3E%3Cpath d='M1.5 6.5 C 6 5.4, 11 5.7, 20.5 6.2 M16.5 2.6 C 18.2 4, 19.7 5.2, 21.8 6.2 C 19.8 7.2, 18.2 8.4, 16.6 10' fill='none' stroke='%23b9ad9c' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat center / contain;
+}
+
+/* 滚动容器外包一层：给「回到最新」一个不随内容滚动的定位锚（C 批 I11）。 */
+.thread-wrap { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+.thread {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 4px 16px 12px;
+  display: flex; flex-direction: column; gap: 14px;
+  /* 视口钉扎由应用自己做（stabilizeViewport）：关掉浏览器原生 scroll anchoring，
+     避免两套锚定互相改写 scrollTop（浏览器实测发现的静默漂移来源）。 */
+  overflow-anchor: none;
+}
+
+.thread__inner {
+  width: 100%; max-width: 960px; margin: 0 auto;
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+.divider {
+  align-self: center;
+  font-size: 11.5px; color: var(--bt-ink-faint);
+  background: var(--bt-card);
+  border: 1px dashed var(--bt-line);
+  border-radius: 999px; padding: 1px 12px;
+}
+
+.msg { display: flex; gap: 9px; max-width: 100%; }
+.msg--user { justify-content: flex-end; }
+.msg__col { min-width: 0; display: flex; flex-direction: column; gap: 3px; max-width: 84%; }
+.msg--user .msg__col { align-items: flex-end; }
+.msg__head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 12.5px; color: var(--bt-ink-soft); }
+.msg__name { font-weight: 700; font-size: 15px; }
+.msg__handle { font-family: var(--bt-mono); font-size: 11px; color: var(--bt-ink-faint); }
+.msg__tag { font-size: 11px; padding: 0 6px; border: 1px solid var(--bt-line); border-radius: 999px; color: var(--bt-ink-soft); }
+.msg__meta { font-size: 11px; color: var(--bt-ink-faint); font-family: var(--bt-hand); }
+
+.bubble {
+  padding: 8px 13px;
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble);
+  font-size: 15px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 用户气泡的时间戳缩进气泡内右下角（原型口径），气泡留出底部空间避免压字；
+   整体再歪 -0.5°，像随手贴的便利贴（原型带轻微旋转）。 */
+.msg--user .msg__col { position: relative; }
+.msg--user .bubble { background: #faedbe; padding-bottom: 22px; transform: rotate(-0.5deg); }
+.msg--user .msg__meta { position: absolute; right: 13px; bottom: 5px; }
+.bubble--wait { background: var(--bt-warn-bg); border-color: var(--bt-warn); }
+.bubble--fail { background: var(--bt-error-bg); border-color: var(--bt-error); }
+/* 成功不需要彩色描边（C 墨线统一）：成功与否由格子的状态灯与耗时行表达。 */
+.bubble--done { border-color: var(--bt-stroke); }
+
+.caret {
+  display: inline-block; width: 7px; height: 14px; margin-left: 2px;
+  vertical-align: -2px; background: var(--bt-ink-soft);
+  animation: bt-blink 1s steps(2, start) infinite;
+}
+
+/* display 会压过 hidden 的默认样式，这里必须显式关掉。 */
+.caret[hidden] { display: none; }
+
+@keyframes bt-blink { 50% { opacity: 0; } }
+
+.typing { display: inline-flex; gap: 4px; align-items: center; }
+.typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--bt-ink-faint); animation: bt-bounce 1.2s ease-in-out infinite; }
+.typing i:nth-child(2) { animation-delay: 0.15s; }
+.typing i:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes bt-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+.progress { display: flex; align-items: center; gap: 7px; margin-top: 5px; }
+.progress__track {
+  flex: 1; height: 12px;
+  background: #fff;
+  border: 1.7px solid var(--bt-stroke);
+  border-radius: 7px 9px 6px 8px / 9px 6px 8px 7px;
+  overflow: hidden;
+}
+/* 白板笔涂出来的道道：轻微透铅的感觉，比蜡笔版更平整。 */
+.progress__fill {
+  height: 100%; background: var(--bt-sky);
+  border-radius: 6px 8px 5px 7px / 8px 5px 7px 6px;
+  opacity: 0.92;
+  transition: width 240ms ease;
+}
+/* 不确定指示（复核 3）：没有可信分母就不显示伪百分比，让一段短条来回滑；
+ * 真实阶段由工具行文字表达，终态文字由进度标签收口。 */
+.progress__fill--indeterminate {
+  width: 34%;
+  animation: bt-progress-slide 1.6s ease-in-out infinite;
+}
+@keyframes bt-progress-slide {
+  0% { margin-left: -34%; }
+  100% { margin-left: 100%; }
+}
+.progress__label { font-size: 12.5px; color: var(--bt-ink-soft); font-family: var(--bt-hand); font-weight: 700; }
+
+.tool-line { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 12px; color: var(--bt-ink-soft); }
+.tool-line__name { font-family: var(--bt-mono); font-size: 11.5px; }
+/* 终态后的工具行改过去式（方案 I06）：淡出「正在做」的口吻，不再冒充进行中。 */
+.tool-line--past { color: var(--bt-ink-faint); }
+
+/* 成员的可展示思考：默认收起，摘要行只留最新一行预览。 */
+.think {
+  margin-bottom: 6px;
+  border-left: 2px solid var(--bt-line);
+  padding-left: 8px;
+}
+.think__summary {
+  display: flex; align-items: baseline; gap: 6px;
+  cursor: pointer; list-style: none;
+  font-size: 11.5px; color: var(--bt-ink-faint);
+}
+.think__summary::-webkit-details-marker { display: none; }
+.think__title { flex: none; font-family: var(--bt-hand); font-weight: 700; }
+.think__preview {
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-style: italic;
+}
+.think__body {
+  margin-top: 4px; padding: 6px 8px;
+  max-height: 180px; overflow-y: auto;
+  background: #00000006;
+  border-radius: var(--bt-wobble-sm);
+  font-size: 12px; line-height: 1.55; color: var(--bt-ink-soft);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+.ask {
+  margin-top: 7px; padding: 9px 11px;
+  background: #fff3e0;
+  border: 1.7px solid var(--bt-warn);
+  border-radius: var(--bt-wobble-sm);
+  display: flex; flex-direction: column; gap: 7px;
+  position: relative;
+}
+
+/* 气泡尾巴 + 举手涂鸦：原型里「请示」的样子。 */
+.ask::before {
+  content: '';
+  position: absolute; left: 20px; bottom: -7.5px;
+  width: 12px; height: 12px;
+  background: #fff3e0;
+  border-right: 1.7px solid var(--bt-warn);
+  border-bottom: 1.7px solid var(--bt-warn);
+  transform: rotate(45deg);
+}
+
+.ask::after {
+  content: '✋';
+  position: absolute; top: -13px; right: 8px;
+  font-size: 16px;
+  transform: rotate(16deg);
+}
+
+/* 与确认卡同款：问题长、输入行滚出视野时，按钮贴在可视区底部。 */
+.ask__row {
+  position: sticky; bottom: 0;
+  display: flex; gap: 6px; align-items: center;
+  margin: 2px -11px -9px; padding: 6px 11px 9px;
+  background: #fff3e0;
+  border-top: 1px dashed var(--bt-warn);
+  border-radius: 0 0 var(--bt-wobble-sm) var(--bt-wobble-sm);
+}
+
+.ask input {
+  flex: 1; min-width: 0;
+  padding: 5px 9px;
+  border: 1.5px solid var(--bt-line);
+  border-radius: var(--bt-wobble-sm);
+  background: #fff; font-size: 13px;
+}
+
+.summary {
+  position: relative;
+  padding: 11px 13px;
+  border-left: 4px solid var(--bt-ok);
+  background: var(--bt-ok-bg);
+  border-radius: var(--bt-wobble-sm);
+}
+/* 汇总卡左缘一条小胶带（原型「交回的内容」收尾处的贴法）。 */
+.summary::before {
+  content: '';
+  position: absolute; left: -8px; top: -5px;
+  width: 10px; height: 20px;
+  background: linear-gradient(100deg, #e8d9b8cc, #efdfc0bb);
+  transform: rotate(-6deg);
+  pointer-events: none;
+}
+
+.summary[data-state="failed"] { border-left-color: var(--bt-error); background: var(--bt-error-bg); }
+.summary[data-state="cancelled"] { border-left-color: var(--bt-ink-faint); background: #00000008; }
+.summary[data-state="waiting_user"] { border-left-color: var(--bt-warn); background: var(--bt-warn-bg); }
+.summary__title { font-family: var(--bt-hand); font-size: 13.5px; font-weight: 700; margin-bottom: 4px; }
+.summary__body { margin: 0 0 4px; font-size: 13.5px; }
+.summary__body.md { white-space: normal; overflow-wrap: anywhere; }
+
+/* ── 受控 Markdown（C 批）：标签由渲染器白名单固定，文本只进文本节点 ────── */
+.md { font-size: 13.5px; line-height: 1.65; white-space: normal; overflow-wrap: anywhere; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 8px; }
+/* 聊天里的文件卡（非图片文件的地址）：着重显示 + 点击弹窗预览。
+   与图片缩略图的分工：图片「直接看得见」，文件「着重 + 点击」——长会话里一眼分出。 */
+.md .md-file {
+  display: inline-flex; align-items: center; gap: 6px;
+  margin: 3px 0; padding: 5px 10px;
+  max-width: 100%;
+  background: var(--bt-card);
+  border: 1.5px dashed var(--bt-sky);
+  border-radius: 8px;
+  font-size: 12.5px; line-height: 1.4;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.md .md-file:hover { border-style: solid; background: #f0f7ff; }
+.md .md-file__ext {
+  flex: none;
+  padding: 0 5px; border-radius: 4px;
+  background: var(--bt-sky); color: #fff;
+  font-family: var(--bt-mono); font-size: 10.5px; font-weight: 700;
+  letter-spacing: 0.5px; text-transform: uppercase;
+}
+.md .md-file__name { color: var(--bt-ink); font-weight: 600; min-width: 0; }
+
+/* kkFileView 页内预览弹窗：图片与文件共用。全屏遮罩 + 居中面板，Esc/遮罩/按钮关闭。 */
+.kkp { position: fixed; inset: 0; z-index: 999; }
+.kkp[hidden] { display: none; }
+.kkp__backdrop { position: absolute; inset: 0; background: #0009; }
+.kkp__panel {
+  position: absolute; inset: 4vh 4vw;
+  display: flex; flex-direction: column;
+  background: var(--bt-card);
+  border: 2px solid var(--bt-stroke);
+  border-radius: 12px;
+  box-shadow: 6px 8px 0 #00000026;
+  overflow: hidden;
+}
+.kkp__bar {
+  flex: none;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px dashed var(--bt-line);
+  background: #fffdf6;
+}
+.kkp__title {
+  flex: 1; min-width: 0;
+  font-family: var(--bt-hand); font-size: 13.5px; font-weight: 700;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.kkp__close {
+  flex: none;
+  padding: 3px 10px;
+  border: 1.5px solid var(--bt-stroke); border-radius: 8px;
+  background: #fff; font-size: 12px;
+}
+.kkp__close:hover { background: var(--bt-error-bg); }
+.kkp__frame { flex: 1; width: 100%; border: 0; background: #fff; }
+@media (max-width: 640px) { .kkp__panel { inset: 2vh 2vw; } }
+
+/* 聊天里的图片（受控渲染的缩略图）：贴原型 C 的「文左图右」混排——图片右浮，
+   文本环绕，右上角一枚回形针涂鸦；窄屏取消浮动恢复全宽。 */
+.md .md-pic {
+  position: relative;
+  display: block; float: right;
+  margin: 2px 0 8px 14px;
+  /* 定宽（不是 max-width）：图未加载时高度为 0，float 收缩宽会塌成 2px；
+     定宽让加载前后尺寸稳定，也保证 eager 图有正确的布局框。 */
+  width: min(56%, 380px);
+  line-height: 0;
+}
+.md .md-pic img { display: block; width: 100%; height: auto; border: 1.5px solid var(--bt-stroke); border-radius: 8px; background: var(--bt-card); }
+.md .md-pic::after {
+  content: '';
+  position: absolute; top: -8px; right: 10px;
+  width: 15px; height: 22px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 24'%3E%3Cpath d='M11.4 6.2 5.8 11.8 C 4.4 13.2, 4.4 15.2, 5.8 16.4 C 7.2 17.6, 9 17.4, 10.2 16.2 L 15.8 10.4 C 18 8.2, 18 4.8, 15.8 2.6 C 13.6 0.6, 10 0.8, 7.8 3 L 2.2 8.6' fill='none' stroke='%237d7468' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat;
+  filter: drop-shadow(1px 1px 0 #00000030);
+}
+.md .md-pic:hover img { border-color: var(--bt-ink-soft); }
+@media (max-width: 640px) {
+  .md .md-pic { float: none; margin: 6px 0; max-width: 100%; }
+}
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 {
+  margin: 10px 0 6px; font-family: var(--bt-hand); font-weight: 700; line-height: 1.4;
+}
+.md h1 { font-size: 18px; }
+.md h2 { font-size: 16px; }
+.md h3, .md h4, .md h5, .md h6 { font-size: 14.5px; }
+.md ul, .md ol { margin: 0 0 8px; padding-left: 20px; }
+.md li { margin: 2px 0; }
+.md blockquote {
+  margin: 0 0 8px; padding: 2px 12px;
+  border-left: 3px solid var(--bt-line); color: var(--bt-ink-soft);
+}
+.md code { font-family: var(--bt-mono); font-size: 12px; background: #0000000a; border-radius: 4px; padding: 1px 5px; }
+.md pre.md-code {
+  margin: 0 0 8px; padding: 0; background: #f6f1e6;
+  border: 1.5px solid var(--bt-line); border-radius: 10px; overflow-x: auto;
+}
+.md pre.md-code > code {
+  display: block; padding: 8px 12px; background: none; font-size: 12px; line-height: 1.6;
+  white-space: pre; overflow-wrap: normal;
+}
+/* 大表格横向滚动：区域可聚焦，键盘也能滚进去看全（方案 5.4）。 */
+.md .table-scroll {
+  overflow-x: auto; margin: 0 0 10px;
+  border: 1.5px solid var(--bt-line); border-radius: 10px;
+}
+.md .table-scroll:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 1px; }
+.md table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
+.md th, .md td { border-bottom: 1px solid var(--bt-line); padding: 5px 10px; text-align: left; }
+.md tbody tr:last-child th, .md tbody tr:last-child td { border-bottom: none; }
+.md th { font-family: var(--bt-hand); font-weight: 700; background: #faf6ec; }
+.md hr { border: none; border-top: 1.5px dashed var(--bt-line); margin: 8px 0; }
+
+/* ── richText 场景变体（设计 v2）──────────────────────────────────────
+ *
+ * 思考区（.md--think）：沿用 think__body 的紧凑弱色口径，间距比正文档再收一档；
+ * 换行交给 Markdown 结构（覆盖纯文本时代的 pre-wrap）。
+ * 提问卡（.md--ask）：字号贴合原 ask 卡正文，段落间距紧凑。
+ */
+.md--think { font-size: 12px; line-height: 1.55; color: var(--bt-ink-soft); white-space: normal; }
+.md--think p { margin: 0 0 5px; }
+.md--think ul, .md--think ol { margin: 0 0 5px; padding-left: 16px; }
+.md--think li { margin: 1px 0; }
+.md--think h1, .md--think h2, .md--think h3, .md--think h4, .md--think h5, .md--think h6 { font-size: 12.5px; margin: 5px 0 3px; }
+.md--think pre.md-code { margin: 0 0 5px; }
+.md--think pre.md-code > code { font-size: 11px; padding: 5px 8px; }
+.md--think blockquote { margin: 0 0 5px; padding: 2px 8px; }
+.md--think .table-scroll { margin: 0 0 5px; }
+.md--ask { font-size: 13px; }
+.md--ask p { margin: 0 0 5px; }
+.md--ask > :last-child { margin-bottom: 0; }
+
+/* ── 历史阅读（C 批 I10/S13）────────────────────────────────────────── */
+
+/* 加载更早记录：线程顶部的分界入口。 */
+.history-head { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 2px 0 4px; }
+.history-head__note { font-size: 11.5px; color: var(--bt-ink-faint); }
+.history-head__error { font-size: 11.5px; color: var(--bt-error); }
+
+/* 任务摘要卡：明确是「摘要」不是对话；点开看完整记录。 */
+.task-card {
+  display: block; width: 100%; text-align: left; font: inherit; color: inherit;
+  background: var(--bt-card); border: 1.5px dashed var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm); padding: 8px 12px; cursor: pointer;
+}
+.task-card:hover { background: #00000005; }
+.task-card[data-state="failed"] { border-color: var(--bt-error); background: var(--bt-error-bg); }
+.task-card[data-state="waiting_user"], .task-card[data-state="external_pending"] { border-color: var(--bt-warn); background: var(--bt-warn-bg); }
+.task-card[data-state="completed"] { border-color: var(--bt-ok); }
+.task-card__head { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--bt-ink-faint); }
+.task-card__badge {
+  font-family: var(--bt-hand); font-weight: 700; font-size: 11px; color: #8a6100;
+  border: 1px solid var(--bt-amber); border-radius: 999px; padding: 0 8px;
+}
+.task-card__goal { font-size: 15px; margin-top: 3px; font-weight: 600; }
+.task-card__meta { font-size: 12px; color: var(--bt-ink-faint); margin-top: 3px; }
+
+/* 回到最新：跟随暂停时浮在线程右下角；左侧三道黄色短线是「注意这里」的涂鸦（原型 C）。 */
+.jump-latest {
+  position: absolute; right: 18px; bottom: 10px; z-index: 5;
+  background: var(--bt-card); border: 1.5px solid var(--bt-stroke); border-radius: 999px;
+  padding: 4px 12px; font-family: var(--bt-hand); font-size: 12px; font-weight: 700; color: var(--bt-ink);
+  box-shadow: 1px 2px 0 #00000018; cursor: pointer;
+}
+.jump-latest::before {
+  content: '';
+  position: absolute; top: 50%; left: -20px;
+  width: 15px; height: 15px; transform: translateY(-50%);
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 15 15'%3E%3Cpath d='M6 1.5 L7.5 5 M11 3 L9 6.5 M13.5 8 L10 8.5' stroke='%23f4b942' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat;
+  pointer-events: none;
+}
+.jump-latest:hover { transform: translate(-1px, -1px); box-shadow: 2px 3px 0 #00000018; }
+.jump-latest[hidden] { display: none; }
+
+/* 空状态：告示可撕条（E3 一比一复刻，绘语纯净底版）。底色 rgb(245,236,219) 是
+   资产图实测底色（8 点采样波动 ±1），与页面 --bt-paper 差 ≤3——边缘零色差。
+   容器与裁切区同比例（1182:883），元素按原图坐标换算百分比定位，字号跟容器宽
+   （cqw）——任意分辨率整体等比、文字不糊。 */
+.welcome--board {
+  /* 宽度受视口高约束：窗口矮时告示整体等比缩小，空状态页不出现纵向滚动条。
+     480px 是顶栏+输入框+上下留白的实测合计，再留一档余量。 */
+  margin: 2vh auto 0;
+  width: min(760px, 96%, calc((100vh - 480px) * 1.339));
+}
+
+.board {
+  position: relative;
+  aspect-ratio: 1182 / 883;
+  container-type: size;
+  background: rgb(245, 236, 219);
+}
+
+/* 告示上部：纸面 + 边框 + 枝纹胶带（位图，占容器高 60.6%）。 */
+.board__top {
+  position: absolute; left: 0; right: 0; top: 0; height: 60.6%;
+  background: center / 100% 100% no-repeat;
+}
+
+/* 标题与说明落在位图预留的空白区；「做什么」带红波浪（E3 设计稿元素）。 */
+.board__title {
+  position: absolute; left: 4%; right: 4%; top: 15%;
+  display: flex; align-items: center; justify-content: center;
+  margin: 0; font-family: var(--bt-hand); font-weight: 400;
+  font-size: 5.5cqw; color: var(--bt-ink); letter-spacing: 0.4cqw;
+}
+
+.board__title .red-wavy {
+  text-underline-offset: 0.55cqw;
+  /* 设计稿的波浪是砖红（比页面红笔批注深一档）。 */
+  text-decoration-color: #b5544a;
+}
+
+/* 标题右上角的两道手绘撇线（强调记号，E3 设计稿元素）。 */
+.board__title::before, .board__title::after {
+  content: ''; position: absolute; width: 0.22cqw; height: 1.7cqw;
+  background: var(--bt-ink); border-radius: 1px;
+  transform: rotate(18deg);
+}
+.board__title::before { right: 4.5%; top: 12%; }
+.board__title::after { right: 2.2%; top: 34%; }
+
+/* 标题两侧的竖排手写批注。 */
+.board__note {
+  position: absolute; margin: 0;
+  writing-mode: vertical-rl;
+  font-family: var(--bt-hand); font-size: clamp(8px, 1.3cqw, 12px);
+  color: var(--bt-ink-soft); opacity: .85; letter-spacing: 0.1cqw;
+  pointer-events: none;
+}
+.board__note--left { left: 6.5%; top: 26%; height: 26%; }
+.board__note--right { right: 6.5%; top: 30%; height: 26%; }
+
+.board__sub {
+  position: absolute; left: 6%; right: 6%; top: 33%;
+  margin: 0; text-align: center;
+  font-size: 2.5cqw; line-height: 1.75; color: var(--bt-ink-soft);
+}
+
+/* 六条可撕电话条：区域按原图 x200-1330 / y585-940 换算；条宽不一，flex 按实测宽度分。 */
+.board__tears {
+  position: absolute; left: 1.9%; right: 2.5%; top: 59.8%; bottom: 0;
+  display: flex;
+}
+
+.board__tear {
+  position: relative; flex: 190 1 0;
+  padding: 0; border: 0; background: center / 100% 100% no-repeat;
+  cursor: pointer; font: inherit;
+  transition: transform .15s ease, filter .15s ease;
+}
+
+.board__tear:nth-child(2) { flex-grow: 178; }
+.board__tear:nth-child(5) { flex-grow: 192; }
+
+.board__tear:hover { transform: translateY(3px); filter: brightness(1.02) drop-shadow(1px 3px 4px #00000024); }
+.board__tear:focus-visible { outline: 2px dashed var(--bt-ink-soft); outline-offset: -4px; }
+
+/* 撕条文字：竖排两列（22 字自动折列），落在序号+图标带之下、撕口之上。 */
+.board__tear-text {
+  position: absolute; left: 14%; right: 14%; top: 38%; bottom: 10%;
+  writing-mode: vertical-rl;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--bt-hand); color: var(--bt-ink);
+  font-size: clamp(9px, 2.1cqw, 14px); line-height: 1.55; letter-spacing: 0.14cqw;
+}
+
+/* 窄屏：整体等比缩小，字号有保底。 */
+@media (max-width: 640px) {
+  .welcome--board { margin-top: 3vh; }
+  .board__title { font-size: clamp(20px, 5.5cqw, 34px); }
+  .board__sub { font-size: clamp(10px, 2.5cqw, 13px); }
+  .board__tear-text { font-size: clamp(9px, 2.15cqw, 12px); }
+}
+
+.composer { padding: 0 16px 22px; }
+
+.composer__box {
+  position: relative;
+  max-width: 960px; margin: 0 auto;
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 7px 8px 7px 13px;
+  background: var(--bt-card);
+  border: 2px solid transparent;
+  border-image: var(--bt-ink-frame) 6 / 4px round;
+  box-shadow: 3px 4px 0 #00000010;
+}
+
+/* @ 提及选择器：贴着输入框上沿翻出来的一页点名簿，与输入框同一副墨线框。 */
+.mention[hidden] { display: none; }
+
+.mention {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 10px);
+  z-index: 30;
+  background: var(--bt-card);
+  border: 2px solid transparent;
+  border-image: var(--bt-ink-frame) 6 / 4px round;
+  box-shadow: 3px 4px 0 #00000018;
+}
+
+.mention__hint {
+  margin: 0; padding: 5px 12px 4px;
+  border-bottom: 1px dashed var(--bt-line);
+  color: var(--bt-ink-faint); font-size: 11.5px;
+}
+
+.mention__items { max-height: 264px; overflow-y: auto; padding: 4px; }
+
+.mention__none { margin: 0; padding: 10px 12px; color: var(--bt-ink-soft); font-size: 13px; }
+
+.mention__item {
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 9px; cursor: pointer;
+  border-radius: 6px;
+}
+
+.mention__item--active { background: #f3ead2; }
+
+.mention__item .member__name { font-size: 13.5px; }
+.mention__item .member__declared { font-size: 11.5px; }
+
+.mention__handle {
+  margin-left: auto;
+  color: var(--bt-ink-faint); font-size: 11.5px; font-family: var(--bt-mono);
+}
+
+.composer__box:focus-within { border-image: none; border-color: var(--bt-ink-soft); }
+
+.composer textarea {
+  flex: 1; min-width: 0;
+  border: 0; outline: none; resize: none;
+  max-height: 160px; padding: 5px 0;
+  background: transparent;
+  font-size: 13.5px; line-height: 1.65;
+}
+
+.composer textarea::placeholder { color: var(--bt-ink-faint); font-family: var(--bt-hand); }
+.composer__actions { display: flex; align-items: center; gap: 4px; }
+
+/* 输入框左边的手绘咖啡杯：装饰，桌上总得有杯咖啡。 */
+.composer__cup { flex: none; width: 24px; height: 22px; align-self: center; opacity: 0.85; }
+
+.doodle-btn {
+  flex: none;
+  display: grid; place-items: center;
+  width: 30px; height: 30px;
+  background: transparent; border: 0; border-radius: 50%;
+  color: var(--bt-ink-faint);
+}
+
+.doodle-btn:hover { color: var(--bt-ink-soft); background: #00000008; }
+.doodle-btn svg { width: 19px; height: 19px; }
+
+/* ── 待发附件条 ───────────────────────────────────────────────────────── */
+
+/* 与输入框同宽同中心：它是输入框的一部分，不是另一块面板。 */
+.attach { max-width: 960px; margin: 0 auto 6px; display: flex; flex-direction: column; gap: 5px; }
+.attach__items { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.attach__item {
+  display: inline-flex; align-items: center; gap: 6px;
+  max-width: 100%;
+  padding: 3px 4px 3px 10px;
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-ink-soft);
+  border-radius: 999px;
+  font-size: 12px; line-height: 1.5;
+}
+/* 名字可以长，但一行只让它占这么多：再长就省略，别把整条挤到换行。 */
+.attach__name { font-weight: 600; color: var(--bt-ink); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attach__size, .attach__note { color: var(--bt-ink-faint); font-size: 11.5px; }
+.attach__item[data-phase="uploading"] { opacity: 0.75; }
+/* 读不出内容的那一条用红框标出来：它还能交出去，只是管家看不到里面写了什么，用户得知道。 */
+.attach__item[data-phase="failed"] { border-color: var(--bt-error); }
+.attach__item[data-phase="failed"] .attach__note { color: var(--bt-error); }
+
+.attach__remove {
+  flex: none; width: 18px; height: 18px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 50%; background: transparent;
+  color: var(--bt-ink-faint); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.attach__remove:hover { background: #00000012; color: var(--bt-ink); }
+
+/* 已经随消息发出去的那一行：虚线、去掉移除按钮，读起来像"附件清单"而不是"待办"。 */
+.attach--sent { margin: 6px 0 0; }
+.attach--sent .attach__item { background: transparent; border-style: dashed; }
+.attach--sent .attach__remove { display: none; }
+
+.attach__url { display: flex; align-items: center; gap: 6px; }
+.attach__url input {
+  flex: 1; min-width: 0;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  color: var(--bt-ink);
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-ink-soft);
+  border-radius: 999px;
+  outline: none;
+}
+.attach__url input:focus { border-color: var(--bt-ink); }
+
+/* 拖拽悬停：整块输入区亮一下，让人知道"松手就放这儿"。 */
+.composer--drop .composer__box { border-image: none; border-color: var(--bt-coral); background: #fff7f4; }
+
+.send {
+  flex: none; width: 40px; height: 40px;
+  display: grid; place-items: center;
+  border: 1.5px solid var(--bt-stroke);
+  /* 以 C 原型为准：橙色圆形 + 白色纸飞机（与新建任务同色系）。 */
+  border-radius: 50%;
+  background: #f08a3c; color: #fff;
+}
+
+.send:hover:not(:disabled) { transform: translate(-1px, -1px); box-shadow: 2px 2px 0 #00000018; }
+.send:disabled { background: var(--bt-line); cursor: not-allowed; }
+
+.composer__hint {
+  max-width: 960px; margin: 6px auto 0;
+  display: flex; justify-content: space-between; gap: 10px;
+  font-size: 11.5px; color: var(--bt-ink-faint);
+}
+
+/* 页脚手写批注的落款小红心（原型 C）。 */
+#composer-hint::after { content: ' ❤'; color: var(--bt-red); }
+/* 红波浪那半句再垫一道黄色荧光（原型 C：荧光 + 红线双重标注）。 */
+#composer-hint .red-wavy { background: linear-gradient(transparent 58%, #ffe98ab3 58%); }
+
+/* ── 右栏 ─────────────────────────────────────────────────────────────── */
+
+.panel { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 9px; }
+.panel__note { font-size: 11.5px; color: var(--bt-ink-faint); line-height: 1.6; }
+/* 红笔波浪：批注重点（原型里「设置里改」那一笔）。 */
+.red-wavy {
+  text-decoration: underline wavy var(--bt-red);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 3px;
+}
+
+/* 右栏小节标题旁的墨线涂鸦（原型 C：记事本 / 柱状图 / 哭脸），纯图形点缀。 */
+.section-title--members::after,
+.section-title--metrics::after,
+.section-title--failures::after {
+  content: '';
+  display: inline-block; width: 15px; height: 15px; margin-left: 7px;
+  vertical-align: -2px;
+  background: var(--bt-doodle, none) center/contain no-repeat;
+}
+/* 小节标题的荧光统一粉色（原型高清裁剪定案：「任务记录」亦为粉），右栏回黑字。 */
+.column--right .section-title { background: none; }
+.section-title--members { --bt-doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='3' y='2.5' width='10.5' height='12' rx='1.5' fill='%23cfe3f2' stroke='%234a7fb5' stroke-width='1.4'/%3E%3Cpath d='M5.5 5.5 h5.5 M5.5 8 h5.5 M5.5 10.5 h3.5' stroke='%234a7fb5' stroke-width='1.3' stroke-linecap='round'/%3E%3Cpath d='M5.2 1.6 V3.4 M8 1.6 V3.4 M10.8 1.6 V3.4' stroke='%234a7fb5' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E"); }
+.section-title--metrics { --bt-doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.5 14 h11.5 M4.5 13.5 V8 M8 13.5 V5 M11.5 13.5 V2.5' stroke='%232f2b26' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E"); }
+.section-title--failures { --bt-doodle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6.4' fill='none' stroke='%232f2b26' stroke-width='1.5'/%3E%3Cpath d='M5.2 6.3 c.9-1 1.9-1 2.8 0 M8.9 6.3 c.9-1 1.9-1 2.8 0 M5.4 11 c1.6-1.6 3.6-1.6 5.2 0' fill='none' stroke='%232f2b26' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E"); }
+
+/* 0.12.2 成员档案两列紧凑卡：合理运用右栏宽度，名字超长省略、悬浮看全称。 */
+#member-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 6px; align-content: start; }
+/* 头像与名称同行（0.12.3）：头像在左、名字与描述纵叠在右，不再各占一行。 */
+#member-list .member { flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px 7px; }
+#member-list .member .avatar { width: 32px; height: 32px; font-size: 14px; }
+#member-list .member__name { font-size: 13.5px; }
+#member-list .member__declared { font-size: 11px; -webkit-line-clamp: 1; line-height: 1.35; }
+#member-list .member::after { width: 22px; height: 9px; top: -5px; right: 9px; }
+#member-list .empty { grid-column: 1 / -1; }
+
+/* 紧凑成员行：设置页接管了编辑，这里只留「是谁 + 在不在」。 */
+.member {
+  position: relative;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px;
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-card);
+}
+
+/* 成员卡右上角的小胶带：每张颜色略不同，像随手贴的（原型 C）。 */
+.member::after {
+  content: '';
+  position: absolute; top: -6px; right: 12px;
+  width: 34px; height: 12px;
+  background: linear-gradient(100deg, #cfe3f2cc, #dcedf8bb);
+  box-shadow: 0 1px 2px #00000018;
+  transform: rotate(4deg);
+  pointer-events: none;
+}
+.member:nth-of-type(2)::after { background: linear-gradient(100deg, #f4bcc9, #f9d6de 55%, #f2c3cf); transform: rotate(-3deg); }
+.member:nth-of-type(3)::after { background: linear-gradient(100deg, #c3e3c7, #d9efdc 55%, #b8dcbd); transform: rotate(5deg); }
+
+.member + .member { margin-top: 4px; }
+#member-list .member + .member { margin-top: 0; }
+.member__col { flex: 1; min-width: 0; }
+.member .spacer { flex: 1; }
+.member__avatar { position: relative; }
+
+.member__camera {
+  position: absolute; right: -3px; bottom: -3px;
+  width: 19px; height: 19px;
+  display: grid; place-items: center;
+  padding: 0; font: inherit; line-height: 1;
+  background: #fff; color: var(--bt-ink);
+  border-radius: 50%; font-size: 10.5px;
+  border: 1.6px solid var(--bt-stroke);
+  box-shadow: 1px 1px 0 #00000018;
+  cursor: pointer;
+}
+.member__camera:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 1px; }
+.member__avatar-slot { display: grid; place-items: center; }
+
+.member__name { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member__declared { font-size: 14px; color: var(--bt-ink-soft); font-family: var(--bt-hand); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 1.4; }
+
+.field { display: flex; flex-direction: column; gap: 3px; }
+.field label { font-size: 11.5px; color: var(--bt-ink-soft); }
+
+.swatches { display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* 内置头像带：横向一排小圆头像，点一下就给这位成员换上。 */
+.builtin-strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+
+.builtin-strip__item {
+  flex: none; width: 34px; height: 34px; padding: 0;
+  border: 1.6px solid var(--bt-line);
+  border-radius: 50%;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 90ms ease, border-color 90ms ease;
+}
+
+.builtin-strip__item:hover { transform: translateY(-2px); border-color: var(--bt-stroke); }
+.builtin-strip__item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* 颜料坨：每颗形状略有差异，选中的那颗用「手绘圈」圈出来。 */
+.swatch {
+  width: 22px; height: 21px; padding: 0;
+  border: 1.6px solid var(--bt-stroke);
+}
+
+.swatch:nth-child(6n+1) { border-radius: 62% 38% 55% 45% / 48% 60% 40% 52%; transform: rotate(-6deg); }
+.swatch:nth-child(6n+2) { border-radius: 45% 55% 48% 52% / 58% 42% 58% 42%; transform: rotate(4deg); }
+.swatch:nth-child(6n+3) { border-radius: 55% 45% 60% 40% / 42% 55% 45% 58%; transform: rotate(-3deg); }
+.swatch:nth-child(6n+4) { border-radius: 48% 52% 42% 58% / 55% 45% 60% 40%; transform: rotate(6deg); }
+.swatch:nth-child(6n+5) { border-radius: 58% 42% 52% 48% / 45% 58% 42% 55%; transform: rotate(-5deg); }
+.swatch:nth-child(6n+6) { border-radius: 42% 58% 45% 55% / 52% 48% 55% 45%; transform: rotate(3deg); }
+
+.swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--bt-card), 0 0 0 4.5px var(--bt-stroke); }
+
+/* 统计格：原型 C 是 3×2；数字用「批注彩墨」着色（与状态灯体系并行——
+   圆点说的是状态灯，数字是手帐里的彩色标注，同词不同色是原型事实）：
+   在干活/等你回话/待外部处理/已完成=蓝，部分完成=绿，失败=红。 */
+.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+
+.metric {
+  padding: 4px 2px; text-align: center;
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-card);
+}
+
+.metric__value { display: block; font-family: var(--bt-hand); font-size: 19px; font-weight: 700; line-height: 1.2; }
+/* 原型 C 彩墨（以原型图为准）：在干活/等你回话/待外部处理=橙，部分完成=绿，失败=红，已完成=蓝。 */
+/* 六格彩墨逐一对原型（高清裁剪定案）：1-2-4=橙、3-6=蓝、5=红。 */
+.metric:nth-child(1) .metric__value { color: #d9822b; }
+.metric:nth-child(2) .metric__value { color: #d9822b; }
+.metric:nth-child(3) .metric__value { color: #2b6cb0; }
+.metric:nth-child(4) .metric__value { color: #d9822b; }
+.metric:nth-child(5) .metric__value { color: var(--bt-error); }
+.metric:nth-child(6) .metric__value { color: #2b6cb0; }
+/* 统计标签在原型里也是手写体。 */
+.metric__label { display: block; font-family: var(--bt-hand); font-size: 12px; color: var(--bt-ink); }
+
+/* 失败记录：原型是一整张粉色撕边便签，红字条目逐行列在里面（不再一张条一个小卡）。
+   容器即便签（撕边+右上胶带）；每条 goal 一行、原因最多 3 行，区域限高滚动。 */
+#failure-list {
+  max-height: 300px; overflow-y: auto; overflow-x: hidden;
+  padding: 10px 12px;
+  position: relative;
+  background: #fbdcd8;
+  clip-path: polygon(0.4% 3%, 4% 1%, 9% 2.4%, 15% 0.6%, 22% 2.6%, 29% 0.8%, 36% 2.2%, 44% 0.5%, 52% 2.4%, 60% 0.9%, 68% 2.3%, 76% 0.7%, 84% 2.2%, 92% 0.8%, 100% 2%, 99.6% 40%, 100.3% 75%, 99.5% 96%, 94% 99%, 87% 97.8%, 79% 99.6%, 71% 98.2%, 63% 99.7%, 55% 98.4%, 47% 99.8%, 39% 98.3%, 31% 99.7%, 23% 98.4%, 15% 99.8%, 7% 98.6%, 0.3% 99.4%);
+  filter: drop-shadow(0 2px 3px rgba(74, 58, 34, 0.18));
+}
+/* 外包层：便签整体微倾 + 胶带/信封贴在包层上——`#failure-list` 自带 clip-path 撕边，
+   装饰若挂在它自己身上会被裁掉（这正是前几轮"胶带缺失"的根因）。 */
+.failure-note { position: relative; transform: rotate(-1.2deg); }
+.failure-note::before {
+  content: '';
+  position: absolute; top: -7px; left: -10px;
+  width: 58px; height: 16px; z-index: 1;
+  background: linear-gradient(100deg, #f2b8c6d4, #f8cdd8e0 55%, #eeadc0d4);
+  box-shadow: 0 1px 2px #00000022;
+  transform: rotate(-38deg);
+  pointer-events: none;
+}
+.failure-note::after {
+  content: '';
+  position: absolute; top: -12px; right: 10px;
+  width: 34px; height: 26px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 26 20'%3E%3Cpath d='M2 3 L24 2.4 L23 17 L1.4 17.6 Z' fill='%23fbe3e0' stroke='%23d2493f' stroke-width='1.5'/%3E%3Cpath d='M2 3 L12 10 L23.8 2.6 M12 10 L11.6 17.4' fill='none' stroke='%23d2493f' stroke-width='1.3'/%3E%3C/svg%3E") center/contain no-repeat;
+  transform: rotate(6deg);
+  pointer-events: none;
+}
+#failure-list .failure-row + .failure-row { margin-top: 8px; }
+
+.failure-row {
+  position: relative;
+  display: block; width: 100%; padding: 2px 2px;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 0;
+  transform: none;
+}
+
+.failure-row:nth-child(even) { transform: none; }
+.failure-row__goal {
+  display: block; font-size: 13.5px; color: #a33535; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.failure-row__meta {
+  display: -webkit-box; margin-top: 2px; font-size: 14px; color: #b56a6a;
+  -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* 鼓励语：失败便签下方右对齐的一行手写小字+笑脸（原型口径），
+   仍是按钮——点一下就能改（app.js renderMotto），只是不再包成便签卡。 */
+.motto {
+  position: sticky; bottom: 8px; flex: none; z-index: 3;
+  margin-top: 8px;
+  padding: 2px 10px;
+  transform: rotate(-0.8deg);
+  background: none;
+  border: none;
+  font-family: var(--bt-hand); font-size: 13.5px; text-align: right;
+  color: var(--bt-ink-soft);
+}
+
+.motto button { display: block; width: 100%; background: none; border: 0; font: inherit; padding: 0; }
+
+.motto input {
+  width: 100%;
+  border: 0; border-bottom: 1.5px dashed var(--bt-stroke);
+  background: transparent; font: inherit; text-align: center; outline: none;
+}
+
+.drawer-toggle, .sidebar-toggle { display: none; }
+.drawer-backdrop { display: none; }
+
+/* ── 设置页 ───────────────────────────────────────────────────────────── */
+
+/* 右上角齿轮：圆描边白底，和母版的圆形图标按钮一致。 */
+.icon-btn {
+  flex: none;
+  display: grid; place-items: center;
+  width: 32px; height: 32px;
+  border: 1.7px solid var(--bt-stroke);
+  border-radius: 50%;
+  background: #fff; color: var(--bt-ink-soft);
+  transition: transform 90ms ease, box-shadow 90ms ease;
+}
+
+.icon-btn:hover { color: var(--bt-ink); transform: translate(-1px, -1px); box-shadow: 2px 2px 0 #00000018; }
+.icon-btn svg { width: 17px; height: 17px; }
+.icon-btn[aria-expanded="true"] { background: var(--bt-amber); color: #fff; }
+
+/* 打开设置页时三栏整体让位，设置纸卡单独上场。 */
+body[data-settings="open"] .columns { display: none; }
+
+.settings { display: none; }
+
+body[data-settings="open"] .settings {
+  display: flex; flex-direction: column;
+  max-width: 920px; width: calc(100% - 24px);
+  margin: 12px auto 14px;
+  padding: 14px 18px 18px;
+  overflow-y: auto;
+}
+
+.settings__head {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding-bottom: 10px; margin-bottom: 12px;
+  border-bottom: 1.5px dashed var(--bt-line);
+}
+
+.settings__title { margin: 0; font-family: var(--bt-hand); font-size: 20px; font-weight: 700; }
+.settings__note { font-size: 12px; color: var(--bt-ink-soft); }
+
+.settings__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+/* 成员设置卡：右上角一条胶带按住（C 版贴法，同母版）。 */
+.set-card {
+  position: relative;
+  display: flex; flex-direction: column; gap: 9px;
+  padding: 12px;
+  border: 1.7px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-card);
+  box-shadow: 0 2px 0 #00000008, 0 4px 10px #0000000e;
+}
+
+.set-card::after {
+  content: '';
+  position: absolute; top: -8px; right: 16px;
+  width: 64px; height: 18px;
+  background: linear-gradient(100deg, #cfe3f2cc, #dcedf8bb 55%, #c4dcf0b8);
+  box-shadow: 0 1px 3px #00000022;
+  transform: rotate(4deg);
+  pointer-events: none;
+}
+
+.set-card__head { display: flex; align-items: center; gap: 10px; }
+.set-card__titles { min-width: 0; }
+.set-card__titles .member__name { font-family: var(--bt-hand); font-size: 15px; }
+.set-card__titles .member__declared { font-size: 11px; }
+.set-card__actions { display: flex; gap: 8px; }
+
+/* 卡内状态行（方案 I14）：未保存 / 保存中 / 已保存 / 失败，同一位置换文案不换布局。 */
+.set-card__status { min-height: 16px; font-size: 12px; color: var(--bt-ink-soft); }
+.set-card__status[data-kind="ok"] { color: var(--bt-ok); }
+.set-card__status[data-kind="error"] { color: var(--bt-error); }
+.set-card__status[data-kind="busy"] { color: var(--bt-ink-faint); }
+
+/* 执行中进设置页的提示（方案 I18）：跟在说明后面，不占新行。 */
+.settings__live { font-size: 12px; font-weight: 700; color: var(--bt-warn); }
+.settings__title:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 3px; }
+.column--left:focus-visible, .column--right:focus-visible { outline: none; }
+
+.field input {
+  padding: 5px 9px;
+  border: 1.5px solid var(--bt-line);
+  border-radius: var(--bt-wobble-sm);
+  background: #fff; font-size: 13px;
+}
+
+.field input:focus { border-color: var(--bt-sky); outline: none; }
+
+@media (max-width: 900px) {
+  .settings__grid { grid-template-columns: 1fr; }
+}
+
+/* ── 响应式 ───────────────────────────────────────────────────────────── */
+
+@media (max-width: 1200px) {
+  .columns { grid-template-columns: 228px minmax(0, 1fr); }
+
+  .column--right {
+    position: fixed; top: 0; right: 0; bottom: 0;
+    width: min(340px, 90vw); z-index: 40; padding: 12px;
+    background: var(--bt-paper);
+    border-left: 1.5px solid var(--bt-stroke);
+    transform: translateX(101%);
+    transition: transform 170ms ease;
+  }
+  /* 抽屉摊平：不再歪斜（贴边滑入的抽屉歪着很怪），保留纸面与撕边。 */
+  .desk .column--right { transform: none; }
+
+  body[data-drawer="open"] .column--right { transform: none; }
+  /* 抽屉形态恢复整栏滚动；成员卡回单列（窄抽屉放不下两列）。 */
+  .column--right { overflow-y: auto; }
+  .column--right > section, .column--right > section:first-child, .column--right > section:nth-child(3) { flex: none; }
+  .column--right > section .panel { flex: none; }
+  #member-list { grid-template-columns: 1fr; max-height: none; overflow: visible; flex: none; }
+  #failure-list { max-height: none; overflow: visible; flex: none; }
+  .drawer-toggle { display: inline-flex; }
+
+  .drawer-backdrop { position: fixed; inset: 0; z-index: 30; background: #3d363033; }
+  /* 共享遮罩（复核 2）：左右任一抽屉打开都亮，关闭即隐。 */
+  body[data-drawer="open"] .drawer-backdrop,
+  body[data-sidebar="open"] .drawer-backdrop { display: block; }
+}
+
+@media (max-width: 880px) {
+  .columns { grid-template-columns: minmax(0, 1fr); padding: 8px; gap: 8px; }
+
+  .topbar { padding: 10px 18px; background: var(--bt-card); border-bottom: 1.5px solid var(--bt-stroke); }
+  .topbar__brand { display: inline-flex; }
+
+  .column--left {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: min(290px, 88vw); z-index: 40; padding: 12px;
+    background: var(--bt-paper);
+    border-right: 1.5px solid var(--bt-stroke);
+    transform: translateX(-101%);
+    transition: transform 170ms ease;
+  }
+
+  body[data-sidebar="open"] .column--left { transform: none; }
+  .desk .column--left { transform: none; }
+  .sidebar-toggle { display: inline-flex; }
+
+  .thread { padding: 4px 10px 10px; }
+  .composer { padding: 0 10px 10px; }
+  .msg__col { max-width: 92%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  /* 无限循环的动效显式关掉（方案 6.1）：0.001ms 只是看不见，浏览器仍在跑计时。 */
+  .caret, .typing i, .rail__step[data-state="active"] .rail__badge::after,
+  .progress__fill--indeterminate { animation: none !important; }
+  /* 关掉动画后不确定条停在轨道里，静态可见即可。 */
+  .progress__fill--indeterminate { margin-left: 33%; }
+}
+
+/* 提交失败的重试行（A 批 S03）：错误说明和重试按钮排在同一行。 */
+.error-line--retry {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+
+/* ---------- 待确认操作卡 ----------
+ *
+ * 一个组件渲染所有"要用户点确认"的操作：只认呈现字段（标题/摘要/详情/字段/按钮文案/状态），
+ * 不认 kind。理由见 app.js 的 `actionCard`：新增一种操作不该再写一遍前端。
+ */
+.act-host { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.act {
+  padding: 9px 11px 10px;
+  background: #fffdf6;
+  border: 1.5px solid var(--bt-amber);
+  border-radius: var(--bt-wobble-sm);
+  display: flex; flex-direction: column; gap: 6px;
+}
+/* 状态决定边框与底色：等确认是"要你动手"，办完了就该安静下来。 */
+.act[data-state='succeeded'] { border-color: var(--bt-ok); background: var(--bt-ok-bg); }
+.act[data-state='failed'] { border-color: var(--bt-error); background: var(--bt-error-bg); }
+.act[data-state='cancelled'], .act[data-state='expired'] { border-color: var(--bt-line); background: var(--bt-card); }
+.act__head { display: flex; align-items: baseline; gap: 8px; }
+.act__title { font-family: var(--bt-hand); font-size: 13.5px; font-weight: 700; }
+.act__state { margin-left: auto; flex: none; font-size: 11px; color: var(--bt-warn); }
+.act[data-state='succeeded'] .act__state { color: var(--bt-ok); }
+.act[data-state='failed'] .act__state { color: var(--bt-error); }
+.act__summary { margin: 0; font-size: 12.5px; color: var(--bt-ink-soft); }
+.act__detail, .act__result { font-size: 12.5px; }
+.act__error { margin: 0; font-size: 12.5px; color: var(--bt-error); }
+.act__note { margin: 0; font-size: 11.5px; color: var(--bt-ink-faint); }
+/*
+ * 确认卡的操作按钮**钉在可视区底部**（sticky）：detail/字段表很长的卡滚到中段时，
+ * 「确认 / 先不办」依然贴在滚动容器底部可见——不用滑到卡片末尾才找得到按钮。
+ * 吸附参照是最近的滚动容器（聊天流或调度卡结果区），卡片本身滚出视口时按钮跟着走。
+ */
+.act__row {
+  position: sticky; bottom: 0;
+  display: flex; gap: 8px;
+  margin: 4px -11px -10px; padding: 8px 11px 10px;
+  background: #fffdf6;
+  border-top: 1px dashed var(--bt-line);
+  border-radius: 0 0 var(--bt-wobble-sm) var(--bt-wobble-sm);
+}
+/* 字段表沿用 `.md table` 那一套，这里只保证它在卡里有边距。 */
+.act .table-scroll { margin: 2px 0; }
+
+/* ---------- 成员交回的材料（产出区） ----------
+ *
+ * 与 `.act`（要你动手的事）区分开：材料是"已经交回来的东西"，安静、可核对——
+ * 链接可点、状态有标签、字段走 `.md table`。排在待确认卡上方。
+ */
+.mat-host { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.mat {
+  padding: 8px 11px 9px;
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-line);
+  border-radius: var(--bt-wobble-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+/* 已发布的产出给一个"办成了"的收口色，其余保持中性：状态标签来自执行方词表，不猜。 */
+.mat[data-state='published'] { border-color: var(--bt-ok); background: var(--bt-ok-bg); }
+.mat__head { display: flex; align-items: baseline; gap: 8px; }
+.mat__title { font-family: var(--bt-hand); font-size: 13px; font-weight: 700; }
+.mat__state { margin-left: auto; flex: none; font-size: 11px; color: var(--bt-ink-soft); }
+.mat[data-state='published'] .mat__state { color: var(--bt-ok); }
+.mat__link {
+  font-size: 12.5px;
+  color: var(--bt-ok);
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+.mat__link--plain { color: var(--bt-ink-soft); }
+.mat__path { font-size: 11.5px; color: var(--bt-ink-faint); align-self: flex-start; }
+.mat .table-scroll { margin: 2px 0; }
+
+/* ---------- 视图顶部条（二级视图的返回入口）----------
+ *
+ * 二级视图必须能出去：浏览器返回键（`popstate`）与这里的按钮走同一条路径。
+ */
+.view-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 0 2px 8px;
+}
+.view-head__crumb { font-size: 12px; color: var(--bt-ink-faint); }
+.view-head__back { flex: none; }
+
+/* ---------- 调度卡 ---------- */
+/*
+ * 本次派活**唯一**的一张卡：状态条 + 成员格子（一行最多三个）+ 选中成员的结果区。
+ * 它替掉了原先三处重复（「已分派」计划贴纸、群里每位成员的一行状态、折叠面板），
+ * 所以样式只有这一份。纸面风格沿用本页既有的手写体与虚线描边。
+ */
+.dcard {
+  margin-top: 7px;
+  /* 与消息气泡同宽（thread__inner 的 960px）：交回的内容一屏看得全，不挤在窄栏里滚动。 */
+  max-width: 960px;
+  position: relative;
+  background: var(--bt-card);
+  border: 2px dashed var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  /* 交互反馈统一在这里收口：位移/高度动画尊重"减少动态效果"偏好（见文件末尾）。 */
+  transition: border-color 160ms ease-out;
+}
+
+/* 胶带改贴「交回的内容」标题左端（原型 C 的贴法），斜贴不遮字。 */
+.dcard::before { content: none; }
+.dcard__bar {
+  display: block; cursor: pointer; list-style: none; padding: 0;
+}
+.dcard__bar::-webkit-details-marker { display: none; }
+/* 折叠头第一行（状态条 + 工具）；第二行是成员格子（见 .dcard__grid）——两行都常驻。 */
+.dcard__barline { display: flex; align-items: center; gap: 8px; padding: 5px 10px 4px; }
+.dcard__barline::before { content: '▸'; color: var(--bt-ink-faint); font-size: 11px; }
+.dcard[open] > .dcard__bar .dcard__barline::before { content: '▾'; }
+.dcard__barline:hover { background: #ffffff8c; border-radius: var(--bt-wobble-sm); }
+.dcard__bar-text { font-family: var(--bt-hand); font-size: 12.5px; color: var(--bt-ink-soft); }
+/* 收起之后又有新进展：**看得见的文字**加一个小圆点，展开即消失（120ms 淡入）。 */
+.dcard__fresh {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: 2px;
+  font-size: 11px; color: var(--bt-sky); animation: dcard-fade 120ms ease-out 1;
+}
+.dcard__fresh[hidden] { display: none; }
+@keyframes dcard-fade { from { opacity: 0 } to { opacity: 1 } }
+
+.dcard__tools { display: inline-flex; gap: 6px; margin-left: auto; }
+.dcard__tool {
+  font-family: var(--bt-hand); font-size: 12.5px; color: var(--bt-ink-soft);
+  background: #ffffff9c; border: 1.5px solid var(--bt-stroke); border-radius: 999px;
+  padding: 1px 8px; cursor: pointer;
+  transition: color 120ms ease-out, border-color 120ms ease-out, transform 90ms ease-out;
+}
+.dcard__tool:hover { color: var(--bt-ink); border-color: var(--bt-stroke); }
+/* 按下就立刻反馈（不等任何请求），并给键盘焦点一个看得见的光环。 */
+.dcard__tool:active { transform: translateY(1px); background: var(--bt-paper); }
+.dcard__tool:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 2px; }
+.dcard__tool--on { color: var(--bt-ink); border-color: var(--bt-stroke); background: #fff; font-weight: 700; }
+
+.dcard__grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px;
+  padding: 3px 10px 7px;
+}
+.dcard__cell {
+  display: flex; align-items: center; gap: 9px;
+  /* 整块可点：贴原型 C 的舒展比例（大头像 + 两行信息），不低于 48px 可点高度。 */
+  min-height: 52px; padding: 7px 9px; text-align: left;
+  font-family: inherit; color: inherit;
+  background: #ffffffb8; border: 1.5px solid var(--bt-line); border-radius: var(--bt-wobble-sm);
+  cursor: pointer; position: relative;
+  transition: background 120ms ease-out, border-color 120ms ease-out, transform 90ms ease-out;
+}
+.dcard__cell:hover { background: #fff; border-color: var(--bt-stroke); }
+.dcard__cell:active { transform: translateY(1px); background: var(--bt-paper); }
+.dcard__cell:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 2px; }
+/*
+ * 选中态：强调色描边 + 8% 强调色底 + 右上角小对勾。
+ *
+ * ⚠️ **不能用 `box-shadow` 画选中框**：状态变化时的脉冲动画也动画 `box-shadow`，而 CSS 动画
+ * 声明优先于普通声明——脉冲那 600ms 里选中框会消失，看起来像"选中被取消了"。所以选中走
+ * 边框与底色，脉冲独占 `box-shadow`。
+ */
+.dcard__cell--active {
+  /* C 版选中态：淡黄荧光底 + 墨框，批注对勾也是墨色——不引入蓝色系。 */
+  border-color: var(--bt-stroke);
+  background: #fff;
+  background: color-mix(in srgb, #ffd94d 14%, #fff);
+}
+.dcard__cell--active::after {
+  content: '✓'; position: absolute; top: 3px; right: 5px;
+  font-size: 10px; line-height: 1; color: var(--bt-stroke);
+}
+.dcard__col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.dcard__head { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+/* 名称只占一行：超长省略（完整名称与目标是格子的 title，悬停可见）。 */
+.dcard__name {
+  font-size: 12.5px; font-weight: 700;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 0 1 auto; min-width: 0;
+}
+.dcard__handle { font-family: var(--bt-mono); font-size: 10.5px; color: var(--bt-ink-faint); white-space: nowrap; flex: 0 0 auto; }
+/* 第二行：目标与状态挤同一行——目标弹性收缩，状态不换行不挤压。 */
+.dcard__meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.dcard__goal {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 11.5px; color: var(--bt-ink-soft);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dcard__status { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--bt-ink-soft); flex: 0 0 auto; }
+.dcard__elapsed { color: var(--bt-ink-faint); font-variant-numeric: tabular-nums; }
+.dcard__elapsed[hidden] { display: none; }
+
+/* 状态刚变化的那一格：描边呼吸一次（不位移、不抢焦点、不动滚动）。 */
+@keyframes dcard-pulse {
+  0% { box-shadow: 0 0 0 0 #4d96ff66; }
+  100% { box-shadow: 0 0 0 6px #4d96ff00; }
+}
+.dcard__cell--pulse { animation: dcard-pulse 600ms ease-out 1; }
+
+.dcard__result { padding: 4px 10px 9px; }
+.dcard__result-title {
+  position: relative;
+  font-family: var(--bt-hand); font-size: 12.5px; color: var(--bt-ink-soft);
+  padding: 0 2px 4px;
+}
+/* 「交回的内容」标题旁的红笔小闪电（原型 C 的批注涂鸦）。 */
+.dcard__result-title::after {
+  content: '';
+  display: inline-block; width: 12px; height: 12px; margin-left: 5px;
+  vertical-align: -2px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8.5 1.5 L3.5 9 h3.4 L6 14.5 L12.8 6 H8.2 L10.6 1.5 Z' fill='%23d2493f'/%3E%3C/svg%3E") center/contain no-repeat;
+  opacity: 0.9;
+}
+/* 标题左端一条竖斜胶带（原型贴法），压住便签边但不遮字。 */
+.dcard__result-title::before {
+  content: '';
+  position: absolute; left: -18px; top: -4px;
+  width: 12px; height: 22px;
+  background: linear-gradient(100deg, #e8d9b8cc, #efdfc0bb);
+  box-shadow: 0 1px 3px #00000022;
+  transform: rotate(-8deg);
+  pointer-events: none;
+}
+/*
+ * 结果区高度：**跟着内容走，但有一个上限**。
+ *
+ * 这里原本是 `height: 172px`（三到四行的窗口），理由是"换成员、秒数跳动都不会让卡片长高
+ * 变矮"。代价在生产上显出来了：一次派活拆成六份时，六张成员卡片挤在 172px 里，正文和
+ * **确认按钮**都要滚动才能看到——用户要点的东西藏在滚动条后面，这不是"稳定"，是难用。
+ *
+ * 现在改成：内容少时贴合内容（`min-height` 兜住一行的高度），内容多时最多长到视口的一半
+ * 再滚动。上下浮动确实会有一点，但换来的是"看得全、点得到"。
+ */
+.dcard__slots {
+  min-height: 96px;
+  max-height: min(56vh, 560px);
+  overflow-y: auto;
+}
+.dcard__slot { display: block; }
+.dcard__slot[hidden] { display: none; }
+/* 还没有内容的格子：不留空白框，直接说明现在是什么状况。 */
+.dcard__empty { margin: 0; font-size: 12px; color: var(--bt-ink-faint); }
+/* 成员名字与头像已经在格子里了，结果区不再重复一遍。 */
+.dcard__slot .msg__head, .dcard__slot > .msg > .avatar { display: none; }
+.dcard__slot .bubble { margin-top: 0; }
+
+/*
+ * 「只看结论」：把过程行收起来，交回的内容照旧。
+ *
+ * ⚠️ 失败/取消的**原因原文**也住在 `.msg__meta` 里（成员已经有正文时另起一行），那是用户最
+ * 需要看到的一句话 ⇒ 带 `--keep` 的那种不藏（同一失败在"还没吐字"时走正文，本来也不会被藏）。
+ */
+.dcard__slots--result-only .think,
+.dcard__slots--result-only .tool-line,
+.dcard__slots--result-only .typing,
+.dcard__slots--result-only .progress,
+.dcard__slots--result-only .msg__meta:not(.msg__meta--keep) { display: none; }
+
+/* 窄屏：一行两个，再窄一个（格子里的目标行本来就只留一行）。 */
+@media (max-width: 720px) {
+  .dcard__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 460px) {
+  .dcard__grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 「减少动态效果」：只保留底色与描边的变化，去掉位移、脉冲与淡入。 */
+@media (prefers-reduced-motion: reduce) {
+  .dcard, .dcard__cell, .dcard__tool { transition: none; }
+  .dcard__cell:active, .dcard__tool:active { transform: none; }
+  .dcard__cell--pulse, .dcard__fresh { animation: none; }
+}
+
+/* ── 0.12.3 任务记录管理：删除/批量删除 ─────────────────────────────── */
+
+/* 行内删除按钮（任务记录行尾与失败记录行尾共用）：平时只是淡淡的 ×，hover 才显形；
+ * 武装态（两段式确认）换成红笔批注胶囊。 */
+.row-delete {
+  flex: 0 0 auto;
+  align-self: center;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--bt-ink-faint);
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: var(--bt-wobble-sm);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.chat-row:hover .row-delete, .failure-row:hover .row-delete,
+.row-delete:focus-visible, .row-delete--armed { opacity: 1; }
+.row-delete--armed {
+  color: var(--bt-red);
+  font-size: 11px;
+  font-weight: 600;
+  background: #f6ded9;
+  border: 1.5px solid var(--bt-red);
+  white-space: nowrap;
+}
+.row-delete--armed::before { content: none; }
+
+/* 任务记录标题行：标题与「管理」开关同一行。 */
+.left__records { display: flex; align-items: baseline; gap: 8px; }
+.left__records .section-title { flex: 1; }
+.chat-manage-toggle {
+  font-family: var(--bt-hand);
+  font-size: 12.5px;
+  color: var(--bt-ink-soft);
+  background: none;
+  border: none;
+  border-bottom: 2px dashed var(--bt-ink-faint);
+  cursor: pointer;
+  padding: 0 1px 1px;
+}
+.chat-manage-toggle[aria-pressed="true"] { color: var(--bt-red); border-bottom-color: var(--bt-red); }
+
+/* 批量操作条：管理模式的工具行，贴纸感的小条。 */
+.chat-manage-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 5px 8px;
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  box-shadow: 2px 2px 0 #2f2b2622;
+}
+.chat-manage-bar__count { flex: 1; font-size: 11.5px; color: var(--bt-ink-soft); text-align: center; }
+.chat-manage-bar button {
+  font-family: var(--bt-hand);
+  font-size: 12.5px;
+  cursor: pointer;
+  background: none;
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  padding: 2px 8px;
+  color: var(--bt-ink);
+}
+.chat-manage-bar button:disabled { opacity: 0.4; cursor: default; }
+.chat-manage-bar__delete:not(:disabled) { color: var(--bt-red); border-color: var(--bt-red); }
+.chat-manage-bar__delete:not(:disabled):hover { background: #f6ded9; }
+.chat-manage-bar__pick, .chat-manage-bar__exit:hover { background: var(--bt-paper); }
+
+/* 管理模式的行：label 承载复选框，勾中的行加淡底与描边。 */
+.chat-row--manage { cursor: pointer; }
+.chat-row--picked { background: #f3ead2; border-color: var(--bt-red); }
+.chat-row__check {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--bt-red);
+  cursor: pointer;
+}
