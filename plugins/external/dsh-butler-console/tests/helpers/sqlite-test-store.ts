@@ -47,7 +47,7 @@ import type {
  * 8：子任务增加 `input_refs`（派单材料快照）与 `member_return`（协作返回原文）。
  * 9：任务与子任务增加 `acceptance`（验收口径：交回什么才算完成）。
  */
-const SCHEMA_VERSION = 10
+const SCHEMA_VERSION = 11
 
 /**
  * 能从这些旧版本就地升上来。
@@ -169,6 +169,7 @@ export class TaskStore {
         owner_namespace TEXT NOT NULL,
         owner_id TEXT NOT NULL,
         title TEXT NOT NULL DEFAULT '',
+        removal_state TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -344,6 +345,10 @@ export class TaskStore {
         // 没有裁决的任务照旧走终态判定，不因为「缺裁决」被判成不达标，与加这四列之前的行为一致。
         this.db.exec("ALTER TABLE subtasks ADD COLUMN verdict TEXT NOT NULL DEFAULT ''; ALTER TABLE subtasks ADD COLUMN verdict_reason TEXT NOT NULL DEFAULT ''; ALTER TABLE subtasks ADD COLUMN verdict_evidence TEXT NOT NULL DEFAULT ''; ALTER TABLE subtasks ADD COLUMN observation TEXT NOT NULL DEFAULT '';")
       }
+      if (from <= 10) {
+        // 11：移除围栏状态（会话删除）。旧会话一律空串 = 从未进过围栏。
+        this.db.exec("ALTER TABLE conversations ADD COLUMN removal_state TEXT NOT NULL DEFAULT ''")
+      }
 
       this.db.exec('COMMIT')
     } catch (error) {
@@ -499,14 +504,60 @@ export class TaskStore {
       .run(Date.now(), trimmed, conversationId)
   }
 
-  /** 侧栏列表；按最近使用排序。 */
+  /** 侧栏列表；按最近使用排序。已移除的会话不再出现（与 PG 版同口径）。 */
   listConversations(actor: Actor, limit: number): ConversationSummary[] {
     return this.db.prepare(`SELECT c.id AS id, c.title AS title, c.created_at AS createdAt, c.updated_at AS updatedAt,
         (SELECT count(*) FROM tasks t WHERE t.conversation_id = c.id) AS taskCount
       FROM conversations c
-      WHERE c.owner_namespace=? AND c.owner_id=?
+      WHERE c.owner_namespace=? AND c.owner_id=? AND COALESCE(c.removal_state,'') <> 'removed'
       ORDER BY c.updated_at DESC, c.id LIMIT ?`)
       .all(actor.namespace, actor.userId, limit) as unknown as ConversationSummary[]
+  }
+
+  /** 全量会话与围栏状态（同步镜像加载用；键拼法与 PG 版一致：`ns:uid:id`）。 */
+  conversationRemovals(): { key: string; state: string }[] {
+    return (this.db.prepare(`SELECT owner_namespace || ':' || owner_id || ':' || id AS key,
+        COALESCE(removal_state,'') AS state FROM conversations`).all() as { key: string; state: string }[])
+  }
+
+  /** 落库一条围栏状态；行不存在时静默无操作（与 PG 版同口径）。 */
+  markConversationRemoved(actor: Actor, conversationId: string, state: string): void {
+    this.db.prepare(`UPDATE conversations SET removal_state=? WHERE id=? AND owner_namespace=? AND owner_id=?`)
+      .run(state, conversationId, actor.namespace, actor.userId)
+  }
+
+  /** 清理会话的业务数据（任务/子任务/输入/幂等/附件索引），返回清理的会话数。 */
+  deleteConversationRows(actor: Actor, conversationIds: readonly string[]): number {
+    if (conversationIds.length === 0) return 0
+    const placeholders = conversationIds.map(() => '?').join(',')
+    this.db.prepare(`DELETE FROM attachments WHERE owner_namespace=? AND owner_id=? AND conversation_id IN (${placeholders})`)
+      .run(actor.namespace, actor.userId, ...conversationIds)
+    // subtasks / task_inputs 本库无 owner 列（归属经 tasks 传导），只按任务圈定。
+    this.db.prepare(`DELETE FROM task_inputs WHERE task_id IN
+        (SELECT id FROM tasks WHERE owner_namespace=? AND owner_id=? AND conversation_id IN (${placeholders}))`)
+      .run(actor.namespace, actor.userId, ...conversationIds)
+    this.db.prepare(`DELETE FROM subtasks WHERE task_id IN
+        (SELECT id FROM tasks WHERE owner_namespace=? AND owner_id=? AND conversation_id IN (${placeholders}))`)
+      .run(actor.namespace, actor.userId, ...conversationIds)
+    this.db.prepare(`DELETE FROM tasks WHERE owner_namespace=? AND owner_id=? AND conversation_id IN (${placeholders})`)
+      .run(actor.namespace, actor.userId, ...conversationIds)
+    this.db.prepare(`DELETE FROM requests WHERE owner_namespace=? AND owner_id=? AND conversation_id IN (${placeholders})`)
+      .run(actor.namespace, actor.userId, ...conversationIds)
+    return conversationIds.length
+  }
+
+  /** 删除一条终态任务（含子任务/输入/附件索引）；活跃返回 false。 */
+  deleteTask(actor: Actor, taskId: string): boolean {
+    const row = this.db.prepare(`SELECT state FROM tasks WHERE id=? AND owner_namespace=? AND owner_id=?`).get(taskId, actor.namespace, actor.userId) as { state: string } | undefined
+    if (row === undefined) return false
+    if (['queued', 'running', 'waiting_user', 'summarizing'].includes(row.state)) return false
+    const active = this.db.prepare(`SELECT 1 FROM subtasks WHERE task_id=? AND state IN ('queued','dispatched','running','waiting_user') LIMIT 1`).get(taskId)
+    if (active !== undefined) return false
+    this.db.prepare(`DELETE FROM tasks WHERE id=?`).run(taskId)
+    this.db.prepare(`DELETE FROM subtasks WHERE task_id=?`).run(taskId)
+    this.db.prepare(`DELETE FROM task_inputs WHERE task_id=?`).run(taskId)
+    this.db.prepare(`DELETE FROM attachments WHERE owner_namespace=? AND owner_id=? AND task_id=?`).run(actor.namespace, actor.userId, taskId)
+    return true
   }
 
   /**
@@ -1081,6 +1132,22 @@ export class SqliteButlerStorage implements ButlerStorage {
     if (this.store.subtaskState(taskId, subtaskId) !== 'waiting_user') return false
     this.store.setSubtaskState(taskId, subtaskId, 'failed', { error })
     return true
+  }
+
+  async conversationRemovals(): Promise<{ key: string; state: string }[]> {
+    return this.store.conversationRemovals()
+  }
+
+  async markConversationRemoved(actor: Actor, conversationId: string, state: string): Promise<void> {
+    this.store.markConversationRemoved(actor, conversationId, state)
+  }
+
+  async deleteConversationRows(actor: Actor, conversationIds: readonly string[]): Promise<number> {
+    return this.store.deleteConversationRows(actor, conversationIds)
+  }
+
+  async deleteTask(actor: Actor, taskId: string): Promise<boolean> {
+    return this.store.deleteTask(actor, taskId)
   }
 
   async cancelWaitingSubtasks(actor: Actor, conversationId: string, error: string, taskId = ''): Promise<readonly { taskId: string; subtaskId: string }[]> {

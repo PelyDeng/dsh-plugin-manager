@@ -28,7 +28,7 @@ import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { AccessError, conversationModel, defaultConversationModel, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor, type AgentAction, type AgentArtifact, type AgentSelfCheck } from '@dsh-plugin-manager/plugin-kit'
+import { AccessError, conversationModel, conversationRemover, defaultConversationModel, hostConversationBusy, listPlugins, UNIVERSAL_TOOL_CATEGORY, type Access, type Actor, type AgentAction, type AgentArtifact, type AgentSelfCheck, type ConversationRecord } from '@dsh-plugin-manager/plugin-kit'
 import type { ConversationModel } from '@dsh-plugin-manager/plugin-kit/models'
 import { listAgentCards, resolveExecutor, type AgentCard } from './agents.ts'
 import { ButlerAttachments } from './attachments.ts'
@@ -65,6 +65,11 @@ import { SUMMARY_PROMPT_GOAL, SUMMARY_PROMPT_RESULTS, TRANSCRIPT_LEAD_EVENTS, TR
 import type { Conversation, PlanSubmission, PlannedSubtask, PreparedAction, PreparedReply, PreparedSupplement, PreparedTurn, RunHooks, SubtaskOutcome, Turn, TurnOutcome, WaitingMember } from './butler/domain.ts'
 
 const CONVERSATION_ID = /^butler-web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+/** 移除围栏同步镜像的键：owner 双列 + 会话 id（围栏的 record/mark 都是同步查它）。 */
+function removalKey(actor: Actor, conversationId: string): string {
+  return `${actor.namespace}:${actor.userId}:${conversationId}`
+}
 const PLAN_TOOL = 'butler_plan'
 /**
  * 裁决工具：**批量**裁决已经终结的子任务。
@@ -419,6 +424,18 @@ export class ButlerConsole {
    */
   readonly attachments: ButlerAttachments
 
+  /**
+   * 移除围栏的同步镜像：`${namespace}:${userId}:${conversationId}` → `removal_state`。
+   *
+   * kit 的 `conversationRemover` 在**同步上下文**里调 `record` / `mark`，而管家存储是异步
+   * PG——镜像先拦住运行期路径（send/resume/fork 前的 record 判定、mark 即刻生效），落库走
+   * write-behind。启动时全量加载（单用户百级会话，内存可行），新会话登记时同步补登。
+   */
+  private readonly conversationIndex = new Map<string, string>()
+
+  /** kit 移除围栏产物：会话删除的宿主归档、围栏状态与忙检查都由它承担（不自造）。 */
+  readonly removeViaFence: ReturnType<typeof conversationRemover>
+
   constructor(
     private readonly ctx: Context,
     private readonly config: Config,
@@ -438,6 +455,42 @@ export class ButlerConsole {
       attachmentBind: (actor, ids, taskId, conversationId) => this.storage.attachmentBind(actor, ids, taskId, conversationId),
       taskAttachments: taskId => this.storage.taskAttachments(taskId),
     })
+    this.removeViaFence = conversationRemover(ctx, {
+      assert: actor => {
+        this.access.assert(actor)
+        if (this.disposed) throw new AccessError(503, '牛马大总管正在停止', 'butler_stopping')
+      },
+      store: {
+        record: (actor, id) => {
+          const state = this.conversationIndex.get(removalKey(actor, id))
+          // 未知、他人或已删除的会话同一个错，不泄露存在性（与 assertOwner 同一口径）。
+          if (state === undefined) throw new AccessError(404, '会话不存在或无权访问', 'conversation_not_found')
+          // 围栏只消费 removalState / deletedAt；title / updatedAt 不参与判定。
+          return { id, title: '', updatedAt: 0, deletedAt: null, removalState: state } satisfies ConversationRecord
+        },
+        mark: (actor, id, state) => {
+          const key = removalKey(actor, id)
+          this.conversationIndex.set(key, state)
+          // write-behind：镜像先行保证运行期拦截不落空；落库失败只记录——重启后状态回空
+          // 意味着该会话重新可见，但宿主会话已归档、业务表已清，用户看到的是空会话（可接受的降级）。
+          void this.storage.markConversationRemoved(actor, id, state).catch(error => {
+            console.error(`butler-console: 围栏状态（${id} → ${state}）落库失败：${visibleError(error, 200)}`)
+          })
+        },
+      },
+      busy: id => this.runs.has(id) || this.claims.has(id) || hostConversationBusy(ctx, id),
+      release: async id => {
+        // 围栏放行删除前 busy 已挡掉活跃轮；这里是兜底中止（abort 内部自含收尾）。
+        // 等待中的子任务无需处理：waiting_user 状态下执行方已返回，不存在悬空回调；
+        // 迟到的超时定时器只会写已删除的行（StorageError 日志），不会写脏数据。
+        this.abort(id)
+      },
+    })
+  }
+
+  /** 启动时把全部管家会话与围栏状态加载进同步镜像（index.ts 在就绪前调用）。 */
+  async loadConversationIndex(): Promise<void> {
+    for (const { key, state } of await this.storage.conversationRemovals()) this.conversationIndex.set(key, state)
   }
 
   /**
@@ -522,6 +575,9 @@ export class ButlerConsole {
     // openAgent 登记必须留在同一个同步块里，否则并发 open 会绕过 openings 各建一份会话句柄。
     if (requestedId !== undefined) await this.storage.openOrReserveConversation(id, actor)
     else await this.storage.reserveConversation(id, actor)
+    // 同步补登移除镜像：围栏的 record 是同步查表，新登记的会话必须立刻可见，否则
+    // 「刚建好就想删」会在围栏里被当成不存在。
+    if (!this.conversationIndex.has(removalKey(actor, id))) this.conversationIndex.set(removalKey(actor, id), '')
     const existing = this.conversations.get(id)
     if (existing !== undefined) {
       existing.lastUsedAt = Date.now()
@@ -898,6 +954,55 @@ export class ButlerConsole {
   /** 中止所有正在跑的会话；登录被撤销和插件卸载时使用。 */
   cancelAll(): void {
     for (const conversationId of [...this.runs.keys()]) this.abort(conversationId)
+  }
+
+  /**
+   * 删除会话（页面「任务记录」的删除/批量删除）。
+   *
+   * 复用 kit 的移除围栏（`conversationRemover`）：忙检查（管家轮次 + 宿主侧占用）、围栏状态
+   * 标记、宿主会话归档都由它承担；管家自己的业务数据（任务/子任务/输入/幂等/附件索引）在
+   * 围栏确认 `removed` 之后清理。逐会话返回结果，页面按结果提示。
+   */
+  async deleteConversations(actor: Actor, ids: readonly string[]): Promise<{ id: string; status: string; message?: string }[]> {
+    this.access.assert(actor)
+    const { results } = await this.removeViaFence(actor, [...ids])
+    const removed: string[] = []
+    for (const result of results) if (result.status === 'removed') removed.push(result.id)
+    if (removed.length > 0) {
+      // 宿主已归档、围栏已标 removed，业务表清理失败只影响「数据残留」不影响一致性
+      //（侧栏按围栏状态过滤，不会再显示）；失败记日志，下次删除同会话会走 alreadyRemoved，
+      // 业务表清理由那时补做——所以这里失败也要再试一次清表。
+      try {
+        await this.storage.deleteConversationRows(actor, removed)
+      } catch (error) {
+        console.error(`butler-console: 已移除会话的业务数据清理失败（${removed.join(',')}）：${visibleError(error, 200)}`)
+      }
+    }
+    return results
+  }
+
+  /**
+   * 删除一条任务（失败记录清理）。只允许删**终态**任务：活跃任务由存储层条件 DELETE 拒绝，
+   * 这里如实转成 409，页面提示先停止或等待完成。
+   */
+  async deleteTask(actor: Actor, taskId: string): Promise<void> {
+    this.access.assert(actor)
+    // 任务 id 不走会话正则（形状是 butler-task-<uuid>）；归属由存储层条件 DELETE 的
+    // owner 三列守住，形状不匹配即 0 行 → 下面的 404 分支。
+    const deleted = await this.storage.deleteTask(actor, taskId)
+    if (!deleted) {
+      const record = await this.storage.task(actor, taskId)
+      if (record === undefined) throw new AccessError(404, '任务不存在或无权访问', 'task_not_found')
+      throw new AccessError(409, '任务还没结束，先停止或等它完成', 'task_not_removable')
+    }
+    // 撤掉这条任务上可能还挂着的等待闹钟：行已删，迟到的超时只会写已删除的行。
+    for (const key of [...this.waitingTimers.keys()]) {
+      if (key.startsWith(`${taskId}:`)) {
+        clearTimeout(this.waitingTimers.get(key))
+        this.waitingTimers.delete(key)
+        this.waiting.delete(key)
+      }
+    }
   }
 
   /** 中止一轮：先中止执行方，再取消牛马大总管自己这一轮。 */

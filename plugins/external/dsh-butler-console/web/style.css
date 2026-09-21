@@ -289,6 +289,10 @@ textarea:focus-visible,
 /* 绘语重绘版大标题：图自带左下→右上约 8 度上扬动势（毛笔字 + 亮度抠像透明底），不再叠加 CSS 旋转。 */
 .brand__title { margin: 0; line-height: 0; }
 .brand__title img { display: block; height: 60px; width: auto; }
+/* 标题图与「N 个牛马」同一行（0.12.3）：图在左，数量靠右下坐——右端上扬的斜纸条正好留出这个角。 */
+.brand__row { display: flex; align-items: flex-end; gap: 10px; }
+.brand__row .left__brandline { margin: 0 0 5px auto; white-space: nowrap; }
+.brand__row .brand__title { flex: 0 0 auto; }
 .brand__wave { display: block; width: 158px; height: 8px; margin-top: 2px; color: #4d96ff; }
 .left__brandline { font-family: var(--bt-hand); font-size: 14px; color: var(--bt-ink-soft); margin-top: 2px; }
 
@@ -1122,7 +1126,9 @@ textarea:focus-visible,
 
 /* 0.12.2 成员档案两列紧凑卡：合理运用右栏宽度，名字超长省略、悬浮看全称。 */
 #member-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 6px; align-content: start; }
-#member-list .member { flex-direction: column; align-items: stretch; gap: 3px; padding: 6px 8px 7px; }
+/* 头像与名称同行（0.12.3）：头像在左、名字与描述纵叠在右，不再各占一行。 */
+#member-list .member { flex-direction: row; align-items: center; gap: 8px; padding: 6px 8px 7px; }
+#member-list .member .avatar { width: 32px; height: 32px; font-size: 14px; }
 #member-list .member__name { font-size: 13.5px; }
 #member-list .member__declared { font-size: 11px; -webkit-line-clamp: 1; line-height: 1.35; }
 #member-list .member::after { width: 22px; height: 9px; top: -5px; right: 9px; }
@@ -1742,4 +1748,87 @@ body[data-settings="open"] .settings {
   .dcard, .dcard__cell, .dcard__tool { transition: none; }
   .dcard__cell:active, .dcard__tool:active { transform: none; }
   .dcard__cell--pulse, .dcard__fresh { animation: none; }
+}
+
+/* ── 0.12.3 任务记录管理：删除/批量删除 ─────────────────────────────── */
+
+/* 行内删除按钮（任务记录行尾与失败记录行尾共用）：平时只是淡淡的 ×，hover 才显形；
+ * 武装态（两段式确认）换成红笔批注胶囊。 */
+.row-delete {
+  flex: 0 0 auto;
+  align-self: center;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--bt-ink-faint);
+  cursor: pointer;
+  padding: 3px 5px;
+  border-radius: var(--bt-wobble-sm);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.chat-row:hover .row-delete, .failure-row:hover .row-delete,
+.row-delete:focus-visible, .row-delete--armed { opacity: 1; }
+.row-delete--armed {
+  color: var(--bt-red);
+  font-size: 11px;
+  font-weight: 600;
+  background: #f6ded9;
+  border: 1.5px solid var(--bt-red);
+  white-space: nowrap;
+}
+.row-delete--armed::before { content: none; }
+
+/* 任务记录标题行：标题与「管理」开关同一行。 */
+.left__records { display: flex; align-items: baseline; gap: 8px; }
+.left__records .section-title { flex: 1; }
+.chat-manage-toggle {
+  font-family: var(--bt-hand);
+  font-size: 12.5px;
+  color: var(--bt-ink-soft);
+  background: none;
+  border: none;
+  border-bottom: 2px dashed var(--bt-ink-faint);
+  cursor: pointer;
+  padding: 0 1px 1px;
+}
+.chat-manage-toggle[aria-pressed="true"] { color: var(--bt-red); border-bottom-color: var(--bt-red); }
+
+/* 批量操作条：管理模式的工具行，贴纸感的小条。 */
+.chat-manage-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 5px 8px;
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  box-shadow: 2px 2px 0 #2f2b2622;
+}
+.chat-manage-bar__count { flex: 1; font-size: 11.5px; color: var(--bt-ink-soft); text-align: center; }
+.chat-manage-bar button {
+  font-family: var(--bt-hand);
+  font-size: 12.5px;
+  cursor: pointer;
+  background: none;
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  padding: 2px 8px;
+  color: var(--bt-ink);
+}
+.chat-manage-bar button:disabled { opacity: 0.4; cursor: default; }
+.chat-manage-bar__delete:not(:disabled) { color: var(--bt-red); border-color: var(--bt-red); }
+.chat-manage-bar__delete:not(:disabled):hover { background: #f6ded9; }
+.chat-manage-bar__pick, .chat-manage-bar__exit:hover { background: var(--bt-paper); }
+
+/* 管理模式的行：label 承载复选框，勾中的行加淡底与描边。 */
+.chat-row--manage { cursor: pointer; }
+.chat-row--picked { background: #f3ead2; border-color: var(--bt-red); }
+.chat-row__check {
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--bt-red);
+  cursor: pointer;
 }

@@ -83,7 +83,7 @@ describe('页面内容', () => {
   it('输出是一份完整的 HTML 文档', () => {
     const html = renderPage({ environment: ENVIRONMENT })
     expect(html.startsWith('<!doctype html>')).toBe(true)
-    expect(html).toContain('<title>绘语（图片智能体）</title>')
+    expect(html).toContain('<title>绘语图文助手</title>')
     expect(html.trimEnd().endsWith('</html>')).toBe(true)
   })
 

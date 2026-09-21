@@ -89,6 +89,12 @@ export const api = {
   },
   task: (id, signal) => request(`/task?id=${encodeURIComponent(id)}`, signal === undefined ? {} : { signal }),
   stop: (conversationId, signal) => request('/stop', { method: 'POST', body: JSON.stringify({ conversationId }), signal }),
+  /** 删除会话（单条/批量）。返回逐条结果：removed / alreadyRemoved / blocked / failed。 */
+  removeConversations: ids =>
+    request('/conversations/remove', { method: 'POST', body: JSON.stringify({ ids }) }),
+  /** 删除一条失败记录（终态任务）。活跃任务会 409。 */
+  removeTask: id =>
+    request('/tasks/remove', { method: 'POST', body: JSON.stringify({ id }) }),
   setAlias: (agentId, displayName, accent) =>
     request('/members/alias', { method: 'POST', body: JSON.stringify({ agentId, displayName, accent }) }),
   clearAvatar: agentId =>

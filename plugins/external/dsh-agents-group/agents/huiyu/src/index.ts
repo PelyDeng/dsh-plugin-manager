@@ -323,7 +323,7 @@ export async function mount(mountContext: AgentMountContext): Promise<{
     id: 'huiyu',
     packageName: manifest.name,
     version: manifest.version,
-    displayName: '绘语（图片智能体）',
+    displayName: '绘语图文助手',
     description: manifest.description,
     entryPath: config.routePrefix,
     permissions: ['huiyu:access'],

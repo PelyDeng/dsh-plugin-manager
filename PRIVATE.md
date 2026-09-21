@@ -76,7 +76,7 @@ pnpm package --external --plugins "agents-group,butler"
 
 封闭化智能体已并入[智能体群组](plugins/external/dsh-agents-group/README.md)，源码在 `plugins/external/dsh-agents-group/agents/closedoff/`，其 `vendor/` 包含构建播放器所需的版本化归档。该目录不受根 Apache-2.0 许可授权，适用群组的 [LICENSE](plugins/external/dsh-agents-group/LICENSE)。第三方资源保持各自许可。不得将该目录或包含它的提交推送公共仓库。
 
-博客智能体已并入[智能体群组](plugins/external/dsh-agents-group/README.md)，源码在 `plugins/external/dsh-agents-group/agents/blog/`，适用群组的 [LICENSE](plugins/external/dsh-agents-group/LICENSE)，只在 Gitee 集成。它通过 auth 使用博客工作台，通过 Typecho 桥接编辑文章，并使用独立 systemd 执行器备份网站。运行凭据源为插件自己的 `config/config.json`；文件不提交、不进入镜像和归档，生产以 `instances.blog.runtimeConfig` 显式引用。安装与使用见[插件说明](plugins/external/dsh-agents-group/agents/blog/README.md)。
+博客文章助手已并入[智能体群组](plugins/external/dsh-agents-group/README.md)，源码在 `plugins/external/dsh-agents-group/agents/blog/`，适用群组的 [LICENSE](plugins/external/dsh-agents-group/LICENSE)，只在 Gitee 集成。它通过 auth 使用博客工作台，通过 Typecho 桥接编辑文章，并使用独立 systemd 执行器备份网站。运行凭据源为插件自己的 `config/config.json`；文件不提交、不进入镜像和归档，生产以 `instances.blog.runtimeConfig` 显式引用。安装与使用见[插件说明](plugins/external/dsh-agents-group/agents/blog/README.md)。
 
 公共 example 的问答知识与源码索引只承载公共框架能力，不加入本文件、`private-deploy/`、定制插件源码、内部接口或运行凭据。私有模型路由和业务接入说明保留在本仓库及各私有插件文档中，不能为补齐公共问答而复制到 GitHub。
 

@@ -122,7 +122,7 @@ async function fixture(mode: 'standalone' | 'authenticated' = 'authenticated') {
     ctx,
     definition: {
       id: 'closedoff',
-      displayName: '封闭化管理智能助手',
+      displayName: '封闭化管理助手',
       description: '用例替身',
       persona: 'persona',
       config: {} as never,

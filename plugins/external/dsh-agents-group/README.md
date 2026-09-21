@@ -77,8 +77,8 @@ provider」这类难查的问题。它们统一由 `endpointsOf()` 从 id 推导
 
 | id | 显示名 | 页面 | 权限 | 说明 |
 | --- | --- | --- | --- | --- |
-| `closedoff` | 封闭化管理智能助手 | `/agents/closedoff` | `closedoff:access` | 园区业务查询、车辆轨迹、三维可视化 |
-| `blog` | 博客智能体 | `/agents/blog` | `blog:access` | 写作、发布、图床、备份；**强制认证** |
+| `closedoff` | 封闭化管理助手 | `/agents/closedoff` | `closedoff:access` | 园区业务查询、车辆轨迹、三维可视化 |
+| `blog` | 博客文章助手 | `/agents/blog` | `blog:access` | 写作、发布、图床、备份；**强制认证** |
 
 `blog` 在清单里标了 `requiresAuthentication`：它的业务前提是必须可信身份（按用户隔离草稿、
 附件与备份），所以即使在 standalone 模式的群里也会拿到 `authenticated` 的访问校验。缺提供者时

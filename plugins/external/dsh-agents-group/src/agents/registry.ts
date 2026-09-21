@@ -45,14 +45,14 @@ export interface AgentManifest {
 export const AGENT_MANIFESTS: readonly AgentManifest[] = [
   {
     id: 'closedoff',
-    displayName: '封闭化管理智能助手',
+    displayName: '封闭化管理助手',
     directory: 'closedoff',
     category: '封闭化园区',
     description: '园区封闭化业务查询、车辆轨迹与设备数据分析',
   },
   {
     id: 'blog',
-    displayName: '博客智能体',
+    displayName: '博客文章助手',
     directory: 'blog',
     category: '博客工作台',
     description: '博客写作、发布、图床与备份',
@@ -61,7 +61,7 @@ export const AGENT_MANIFESTS: readonly AgentManifest[] = [
   },
   {
     id: 'huiyu',
-    displayName: '绘语（图片智能体）',
+    displayName: '绘语图文助手',
     directory: 'huiyu',
     category: '图片与视觉',
     description: '图片理解与生成：看懂图片内容，也能按描述生成图片',

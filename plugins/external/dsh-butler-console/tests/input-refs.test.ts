@@ -85,12 +85,12 @@ function rawColumn(path: string, column: 'input_refs' | 'member_return'): string
   return row.value
 }
 
-describe('schema 10：当前结构', () => {
-  it('新库为 schema 10，口径列、快照列与裁决四列都存在', () => {
+describe('schema 11：当前结构', () => {
+  it('新库为 schema 11，口径列、快照列、裁决四列与围栏列都存在', () => {
     const path = tempDb()
     const store = new TaskStore(path)
     const db = new DatabaseSync(path)
-    expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 10 })
+    expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 11 })
     const columns = (db.prepare('PRAGMA table_info(subtasks)').all() as unknown as { name: string }[]).map(row => row.name)
     expect(columns).toContain('input_refs')
     expect(columns).toContain('member_return')
@@ -98,6 +98,9 @@ describe('schema 10：当前结构', () => {
     expect(columns).toContain('acceptance')
     const taskColumns = (db.prepare('PRAGMA table_info(tasks)').all() as unknown as { name: string }[]).map(row => row.name)
     expect(taskColumns).toContain('acceptance')
+    // v11 的移除围栏状态：会话删除的同步镜像靠它落库。
+    const conversationColumns = (db.prepare('PRAGMA table_info(conversations)').all() as unknown as { name: string }[]).map(row => row.name)
+    expect(conversationColumns).toContain('removal_state')
     db.close()
     store.close()
   })

@@ -97,7 +97,7 @@ export function renderPage(state: PageState): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>绘语（图片智能体）</title>
+<title>绘语图文助手</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }

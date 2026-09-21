@@ -121,7 +121,7 @@ interface Harness {
 function definitionOf(): AgentDefinition {
   return {
     id: AGENT_ID,
-    displayName: '封闭化管理智能助手',
+    displayName: '封闭化管理助手',
     description: '只读业务查询',
     persona: PERSONA,
     tools: () => [],

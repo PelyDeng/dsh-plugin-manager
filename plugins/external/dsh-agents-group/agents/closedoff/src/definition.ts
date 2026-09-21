@@ -87,7 +87,7 @@ export function createClosedoffDefinition(input: ClosedoffDefinitionInput): Agen
   const { gateway, config, persona, authorize, category } = input
   return {
     id: 'closedoff',
-    displayName: '封闭化管理智能助手',
+    displayName: '封闭化管理助手',
     description: '通过原有只读业务工具查询园区、通行与车辆信息，返回脱敏分析和原生会话。',
     persona,
     config: ConfigSchema,

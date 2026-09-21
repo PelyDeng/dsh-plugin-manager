@@ -69,7 +69,7 @@ describe('封闭化助手的 AgentDefinition', () => {
   it('身份与配置：id / displayName / description / persona / config 都是业务那一份', () => {
     const definition = definitionOf()
     expect(definition.id).toBe('closedoff')
-    expect(definition.displayName).toBe('封闭化管理智能助手')
+    expect(definition.displayName).toBe('封闭化管理助手')
     expect(definition.description).toBe('通过原有只读业务工具查询园区、通行与车辆信息，返回脱敏分析和原生会话。')
     expect(definition.persona).toBe(PERSONA)
     // `config` 必须是**业务 schema**（运行时用它校验 `mount()` 收到的原始配置），不是空壳。

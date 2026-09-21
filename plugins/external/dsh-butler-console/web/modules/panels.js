@@ -3,7 +3,7 @@
  * 会话列表与刷新。与 history 构成文档化环簇二（列表点击进详情、详情刷新列表）。
  */
 
-import { renderMention } from './composer.js'
+import { openNewChat, renderMention } from './composer.js'
 import { BUILTIN_AVATARS, PALETTE } from './config.js'
 import { accentOf, announce, avatarNode, clear, declaredNameOf, displayNameOf, formatTime, make } from './dom.js'
 import { el, state } from './state.js'
@@ -345,9 +345,51 @@ export function renderFailures(items) {
     // 头行=「时间 任务名」（原型 C 与 Figma 稿均为日期在前），正文=失败原因。
     row.appendChild(make('span', 'failure-row__goal', `${formatTime(item.updatedAt)}　${item.goal}`))
     row.appendChild(make('span', 'failure-row__meta', item.error || '没给原因'))
+    // 删除这条失败记录（终态任务）：两段式确认，别让一次手滑把记录抹了。
+    const del = make('span', 'row-delete')
+    del.setAttribute('role', 'button')
+    del.tabIndex = 0
+    del.title = '删除这条失败记录'
+    del.textContent = '×'
+    del.addEventListener('click', event => { event.stopPropagation(); armRowDelete(del, () => { void removeFailedTask(item.id, del) }) })
+    del.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); del.click() } })
+    row.appendChild(del)
     row.addEventListener('click', () => { void openTask(item.id) })
     el.failureList.appendChild(row)
   }
+}
+
+/** 行内删除的两段式确认：第一段武装（按钮亮起并提示再点确认），3 秒没确认就还原。 */
+function armRowDelete(node, onConfirm) {
+  const armed = state.deleteArmed.get(node)
+  if (armed !== undefined) {
+    clearTimeout(armed.timer)
+    state.deleteArmed.delete(node)
+    node.classList.remove('row-delete--armed')
+    node.textContent = '×'
+    onConfirm()
+    return
+  }
+  node.classList.add('row-delete--armed')
+  node.textContent = '确认删除'
+  state.deleteArmed.set(node, { timer: setTimeout(() => {
+    node.classList.remove('row-delete--armed')
+    node.textContent = '×'
+    state.deleteArmed.delete(node)
+  }, 3000) })
+}
+
+/** 删除一条失败记录后，就近刷新失败列表与计数。 */
+async function removeFailedTask(taskId, node) {
+  node.textContent = '…'
+  try {
+    await api.removeTask(taskId)
+    announce('失败记录已删除')
+  } catch (error) {
+    node.textContent = '×'
+    announce(error instanceof ApiError ? error.message : '删除失败，稍后再试')
+  }
+  await refreshPanels()
 }
 
 export function renderChatList(items, keyword) {
@@ -362,6 +404,22 @@ export function renderChatList(items, keyword) {
     return
   }
   for (const item of filtered) {
+    if (state.chatManage) {
+      // 管理模式：整行是 label（点击即勾选），不再承担「打开会话」。
+      const row = make('label', 'chat-row chat-row--manage')
+      if (state.chatPicked.has(item.id)) row.classList.add('chat-row--picked')
+      const check = make('input', 'chat-row__check')
+      check.type = 'checkbox'
+      check.checked = state.chatPicked.has(item.id)
+      check.addEventListener('change', () => { pickConversation(item.id, check.checked, row) })
+      row.appendChild(check)
+      const left = make('span')
+      left.appendChild(make('span', 'chat-row__title', item.title || '（还没起名）'))
+      if (item.preview) left.appendChild(make('span', 'chat-row__preview', item.preview))
+      row.appendChild(left)
+      el.chatList.appendChild(row)
+      continue
+    }
     const row = make('button', 'chat-row')
     row.type = 'button'
     if (item.id === state.conversationId) row.setAttribute('aria-current', 'true')
@@ -370,9 +428,85 @@ export function renderChatList(items, keyword) {
     if (item.preview) left.appendChild(make('span', 'chat-row__preview', item.preview))
     row.appendChild(left)
     row.appendChild(make('span', 'chat-row__time', formatTime(item.updatedAt)))
+    const del = make('span', 'row-delete')
+    del.setAttribute('role', 'button')
+    del.tabIndex = 0
+    del.title = '删除这条任务记录'
+    del.textContent = '×'
+    del.addEventListener('click', event => { event.stopPropagation(); armRowDelete(del, () => { void removeOneConversation(item.id, del) }) })
+    del.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); del.click() } })
+    row.appendChild(del)
     row.addEventListener('click', () => { void openConversation(item.id) })
     el.chatList.appendChild(row)
   }
+}
+
+/** 管理模式勾选变化：维护选中集并刷新计数与行样式。 */
+function pickConversation(id, picked, row) {
+  if (picked) state.chatPicked.add(id)
+  else state.chatPicked.delete(id)
+  row.classList.toggle('chat-row--picked', picked)
+  updateManageBar()
+}
+
+function updateManageBar() {
+  el.chatManageCount.textContent = `已选 ${state.chatPicked.size} 条`
+  el.chatManageDelete.disabled = state.chatPicked.size === 0
+}
+
+/** 开关管理模式：退出时清空选中；重画列表让行形态切换。 */
+export function setChatManage(on) {
+  state.chatManage = on
+  if (!on) state.chatPicked.clear()
+  el.chatManageToggle.textContent = on ? '管理中' : '管理'
+  el.chatManageToggle.setAttribute('aria-pressed', String(on))
+  el.chatManageBar.hidden = !on
+  updateManageBar()
+  void refreshChatList()
+}
+
+/** 单条删除（复用同一条围栏接口）。 */
+async function removeOneConversation(id, node) {
+  node.textContent = '…'
+  const results = await removeConversationsWithFeedback([id])
+  if (!results) node.textContent = '×'
+}
+
+/** 批量/单条删除共用：调围栏接口、按结果提示、刷新列表；当前会话被删时另起新会话。 */
+async function removeConversationsWithFeedback(ids) {
+  let results
+  try {
+    results = (await api.removeConversations(ids)).results
+  } catch (error) {
+    announce(error instanceof ApiError ? error.message : '删除失败，稍后再试')
+    return null
+  }
+  const removed = results.filter(result => result.status === 'removed')
+  const blocked = results.filter(result => result.status === 'blocked')
+  if (removed.length > 0) announce(`已删除 ${removed.length} 条任务记录`)
+  if (blocked.length > 0) announce(blocked.length === 1 ? '有 1 条正在执行，先停止再删' : `有 ${blocked.length} 条正在执行，先停止再删`)
+  if (removed.some(result => result.id === state.conversationId)) {
+    // 当前打开的会话被删掉了：回新会话，别让中栏挂在已删除的对话上。
+    state.chatPicked.clear()
+    await openNewConversation()
+    return results
+  }
+  state.chatPicked.clear()
+  await refreshChatList()
+  return results
+}
+
+/** 管理模式的「删除所选」：确认态在按钮上（两段式），防一次误触批量删。 */
+export async function deletePickedConversations() {
+  const ids = [...state.chatPicked]
+  if (ids.length === 0) return
+  await removeConversationsWithFeedback(ids)
+}
+
+/** 当前会话被删后的收尾：清选中、回新会话（openNewChat 自带视图重置与列表刷新）。 */
+async function openNewConversation() {
+  state.chatPicked.clear()
+  openNewChat()
 }
 
 /* ── 右栏操作 ─────────────────────────────────────────────────────────── */

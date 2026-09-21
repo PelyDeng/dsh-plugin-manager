@@ -220,7 +220,7 @@ export async function mount(context: AgentMountContext): Promise<{
     id: 'closedoff',
     packageName: manifest.name,
     version: manifest.version,
-    displayName: '封闭化管理智能助手',
+    displayName: '封闭化管理助手',
     description: manifest.description,
     entryPath: config.routePrefix,
     permissions: ['closedoff:access'],

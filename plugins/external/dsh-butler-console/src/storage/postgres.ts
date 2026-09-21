@@ -549,7 +549,7 @@ export class PostgresTaskStorage implements ButlerStorage {
       `SELECT c.id AS "id", c.title AS "title", c.created_at AS "createdAt", c.updated_at AS "updatedAt",
          (SELECT count(*) FROM butler_tasks t WHERE t.conversation_id = c.id) AS "taskCount"
        FROM dsh_conversations c
-       WHERE c.owner_namespace=$1 AND c.owner_id=$2 AND c.agent_id=$4
+       WHERE c.owner_namespace=$1 AND c.owner_id=$2 AND c.agent_id=$4 AND COALESCE(c.removal_state,'') <> 'removed'
        ORDER BY c.updated_at DESC, c.id LIMIT $3`,
       [actor.namespace, actor.userId, limit, BUTLER_AGENT_ID],
     )
@@ -560,6 +560,83 @@ export class PostgresTaskStorage implements ButlerStorage {
       updatedAt: Number(row.updatedAt),
       taskCount: Number(row.taskCount),
     }))
+  }
+
+  async conversationRemovals(): Promise<{ key: string; state: string }[]> {
+    // 启动加载镜像：**全量**管家会话（围栏 record 要同步判存在性，正常会话 state='' 也要在镜像里）。
+    const result = await this.run<{ key: string; state: string }>(
+      `SELECT owner_namespace || ':' || owner_id || ':' || id AS "key", COALESCE(removal_state,'') AS "state"
+       FROM dsh_conversations WHERE agent_id=$1`,
+      [BUTLER_AGENT_ID],
+    )
+    return result.rows.map(row => ({ key: row.key, state: row.state }))
+  }
+
+  async markConversationRemoved(actor: Actor, conversationId: string, state: string): Promise<void> {
+    // 归属三列照写（同 assertOwner 的防串 Agent 约束）；行不存在时静默无操作——
+    // 镜像才是运行期拦截依据，这里只是把镜像状态持久化。
+    await this.run(
+      `UPDATE dsh_conversations SET removal_state=$4 WHERE id=$1 AND owner_namespace=$2 AND owner_id=$3 AND agent_id=$5`,
+      [conversationId, actor.namespace, actor.userId, state, BUTLER_AGENT_ID],
+    )
+  }
+
+  async deleteConversationRows(actor: Actor, conversationIds: readonly string[]): Promise<number> {
+    const ids = [...conversationIds]
+    if (ids.length === 0) return 0
+    // 同一事务清五张业务表；dsh_conversations 行不动（共享表，由围栏状态决定可见性）。
+    return await this.withTransaction(async (client) => {
+      const args = [actor.namespace, actor.userId] as const
+      await client.query(
+        `DELETE FROM butler_attachments WHERE owner_namespace=$1 AND owner_id=$2 AND conversation_id = ANY($3)`,
+        [args[0], args[1], ids],
+      )
+      await client.query(
+        `DELETE FROM butler_task_inputs WHERE owner_namespace=$1 AND owner_id=$2 AND task_id IN
+           (SELECT id FROM butler_tasks WHERE conversation_id = ANY($3))`,
+        [args[0], args[1], ids],
+      )
+      await client.query(
+        `DELETE FROM butler_subtasks WHERE task_id IN
+           (SELECT id FROM butler_tasks WHERE owner_namespace=$1 AND owner_id=$2 AND conversation_id = ANY($3))`,
+        [args[0], args[1], ids],
+      )
+      await client.query(
+        `DELETE FROM butler_tasks WHERE owner_namespace=$1 AND owner_id=$2 AND conversation_id = ANY($3)`,
+        [args[0], args[1], ids],
+      )
+      // 幂等请求跟着会话走：删干净后同一 requestId 重放会当新请求处理（用户清空历史的语义）。
+      await client.query(
+        `DELETE FROM butler_requests WHERE owner_namespace=$1 AND owner_id=$2 AND conversation_id = ANY($3)`,
+        [args[0], args[1], ids],
+      )
+      return ids.length
+    })
+  }
+
+  async deleteTask(actor: Actor, taskId: string): Promise<boolean> {
+    return await this.withTransaction(async (client) => {
+      // 活跃任务拒删（条件 DELETE：state 白名单 + 无活跃子任务），不活跃返回 rowCount 0。
+      const claim = await client.query<{ conversation_id: string }>(
+        `DELETE FROM butler_tasks WHERE id=$1 AND owner_namespace=$2 AND owner_id=$3
+           AND state NOT IN ('queued','running','waiting_user','summarizing')
+           AND NOT EXISTS (SELECT 1 FROM butler_subtasks s WHERE s.task_id=$1
+             AND s.state IN ('queued','dispatched','running','waiting_user'))
+         RETURNING conversation_id`,
+        [taskId, actor.namespace, actor.userId],
+      )
+      if ((claim.rowCount ?? 0) === 0) return false
+      await client.query(`DELETE FROM butler_subtasks WHERE task_id=$1`, [taskId])
+      await client.query(
+        `DELETE FROM butler_task_inputs WHERE task_id=$1 AND owner_namespace=$2 AND owner_id=$3`,
+        [taskId, actor.namespace, actor.userId],
+      )
+      await client.query(
+        `DELETE FROM butler_attachments WHERE owner_namespace=$1 AND owner_id=$2 AND task_id=$3`,
+        [actor.namespace, actor.userId, taskId],
+      )
+      return true
+    })
   }
 
   async createTask(input: {

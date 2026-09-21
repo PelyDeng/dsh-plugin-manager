@@ -506,6 +506,30 @@ export interface ButlerStorage {
   listConversations(actor: Actor, limit: number): Promise<ConversationSummary[]>
 
   /**
+   * **全量**管家会话与移除围栏状态（正常会话 `state=''`）。启动时加载进同步镜像——
+   * kit 的 `conversationRemover` 在同步上下文里调 `record`（存在性判定）与 `mark`。
+   */
+  conversationRemovals(): Promise<{ key: string; state: string }[]>
+
+  /**
+   * 落库一条围栏状态（`pending` / `failed` / `removed`）。由同步镜像 write-behind 调用，
+   * 失败由调用方记录——镜像先行保证运行期拦截不落空，落库保证重启后状态还在。
+   */
+  markConversationRemoved(actor: Actor, conversationId: string, state: string): Promise<void>
+
+  /**
+   * 清理会话的管家业务数据：任务、子任务、任务输入、幂等请求与附件索引一并删除。
+   * 在移除围栏标成 `removed` 之后调用；不删 `dsh_conversations` 行（行由共享表的生命周期管理）。
+   */
+  deleteConversationRows(actor: Actor, conversationIds: readonly string[]): Promise<number>
+
+  /**
+   * 删除一条**终态**任务（失败记录清理用）：子任务、任务输入与附件索引一并删除。
+   * 活跃（queued/running/waiting_user/summarizing 任务或活跃子任务）返回 `false`，由调用方拒绝。
+   */
+  deleteTask(actor: Actor, taskId: string): Promise<boolean>
+
+  /**
    * 写入一份新计划。任务、首版输入与全部子任务在**同一个事务**里落盘，避免出现半个计划。
    *
    * 开头那条需求就是**版本 1**，与它一起写进输入表。子任务编号（seq）与目标标识

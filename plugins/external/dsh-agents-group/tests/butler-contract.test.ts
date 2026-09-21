@@ -17,8 +17,8 @@ import { executorFor, BUTLER_EXECUTORS_EVENT } from '../src/butler-bridge.ts'
 import type { AgentManifest } from '../src/agents/registry.ts'
 
 const manifests: AgentManifest[] = [
-  { id: 'closedoff', displayName: '封闭化管理智能助手', directory: 'closedoff', category: '封闭化园区', description: '园区业务查询、车辆轨迹' },
-  { id: 'blog', displayName: '博客智能体', directory: 'blog', category: '博客工作台', description: '写作、发布、图床与备份' },
+  { id: 'closedoff', displayName: '封闭化管理助手', directory: 'closedoff', category: '封闭化园区', description: '园区业务查询、车辆轨迹' },
+  { id: 'blog', displayName: '博客文章助手', directory: 'blog', category: '博客工作台', description: '写作、发布、图床与备份' },
 ]
 
 /**
@@ -87,7 +87,7 @@ describe('群组执行入口被牛马大总管接受', () => {
 
   it('卡片上的显示信息来自清单，不是群组代写', () => {
     const blog = listAgentCards(ctx).find(card => card.id === 'blog')
-    expect(blog?.displayName).toBe('博客智能体')
+    expect(blog?.displayName).toBe('博客文章助手')
     expect(blog?.entryPath).toBe('/agents/blog')
   })
 

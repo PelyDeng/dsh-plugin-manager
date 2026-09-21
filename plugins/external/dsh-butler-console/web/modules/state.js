@@ -41,6 +41,12 @@ export const el = {
   identity: document.getElementById('identity'),
   topStatus: document.getElementById('top-status'),
   newChat: document.getElementById('new-chat'),
+  chatManageToggle: document.getElementById('chat-manage-toggle'),
+  chatManageBar: document.getElementById('chat-manage-bar'),
+  chatManageAll: document.getElementById('chat-manage-all'),
+  chatManageCount: document.getElementById('chat-manage-count'),
+  chatManageDelete: document.getElementById('chat-manage-delete'),
+  chatManageExit: document.getElementById('chat-manage-exit'),
   sidebarToggle: document.getElementById('sidebar-toggle'),
   drawerToggle: document.getElementById('drawer-toggle'),
   backdrop: document.getElementById('drawer-backdrop'),
@@ -108,6 +114,12 @@ export const state = {
   /** 当前任务的链路状态。 */
   rail: { parse: 'idle', dispatch: 'idle', work: 'idle', sum: 'idle' },
   settingsOpen: false,
+  /** 左栏「任务记录」管理模式：开着时行首出复选框、批量操作条可见。 */
+  chatManage: false,
+  /** 管理模式下勾选的会话 id（live 集合，渲染与计数都读它）。 */
+  chatPicked: new Set(),
+  /** 行内删除按钮的两段式确认状态：`元素 → 还原计时器`，避免误触（手账风的轻量确认）。 */
+  deleteArmed: new Map(),
   /** 滚动跟随（I11）：用户上滚或选字时暂停，「回到最新」恢复；跟随判断在 DOM 增长前做。 */
   following: true,
   selecting: false,

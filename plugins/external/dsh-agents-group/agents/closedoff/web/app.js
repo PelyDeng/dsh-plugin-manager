@@ -721,7 +721,7 @@ import {createTrajectoryView} from './trajectory.js';
 
   function welcome() {
     inner.appendChild(el('div', 'welcome',
-      '<h2>您好，我是<em>封闭化管理智能助手</em></h2>' +
+      '<h2>您好，我是<em>封闭化管理助手</em></h2>' +
       '<p>我可以自动调用园区业务接口，为您查询并分析：<br>预约审批、车辆轨迹与实时定位、路网停车、预警报警、出入记录、黑白名单等。</p>' +
       '<div class="caps">' +
       '<span class="cap">' + IC.calendar + ' 预约审批</span><span class="cap">' + IC.track + ' 人车物定位追踪</span>' +

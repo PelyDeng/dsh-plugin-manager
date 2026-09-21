@@ -23,7 +23,7 @@ import type { AgentManifest } from '../src/agents/registry.ts'
 
 const manifest: AgentManifest = {
   id: 'closedoff',
-  displayName: '封闭化管理智能助手',
+  displayName: '封闭化管理助手',
   directory: 'closedoff',
   category: '封闭化园区',
   description: '园区业务查询、车辆轨迹',

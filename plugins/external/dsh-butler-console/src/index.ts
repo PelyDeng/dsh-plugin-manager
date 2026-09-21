@@ -98,8 +98,7 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
     await storage.init()
     // 上次进程没有正常退出时留下的执行中状态要收敛，否则页面会一直显示转圈。
     const interrupted = await storage.failInterrupted()
-    if (interrupted > 0) console.warn(`butler-console: 标记 ${interrupted} 个上次未完成的任务为失败`)
-  } catch (error) {
+    if (interrupted > 0) console.warn(`butler-console: 标记 ${interrupted} 个上次未完成的任务为失败`)  } catch (error) {
     // init 阶段失败也要把池收掉：装载失败后进程还在，留着空池只会占着连接与定时器。
     await storage.close().catch(() => {})
     throw error
@@ -107,6 +106,9 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   // 附件服务由 ButlerConsole 自己在构造时装配（页面那条路读 `console_.attachments`），
   // 这里不再单独造一个：两处各造一个就会各持一份状态。
   const console_ = new ButlerConsole(ctx, config, access, storage, persona)
+  // 移除围栏的同步镜像要在路由就绪前装满：围栏的 record 是同步查表，空镜像会把正常
+  // 会话的删除请求误判成「不存在」。加载失败按装载失败处理（否则删除面带着空镜像上线）。
+  await console_.loadConversationIndex()
   // 就绪状态来自启动序列的缓存结果（§2.5 口径：已装载未就绪 → 业务与 /ready 503）；
   // probe 供 /ready 在运行期核实 PG 此刻真的可达（已配置但运行中不可达 = 已装载未就绪）。
   const storageReady = {

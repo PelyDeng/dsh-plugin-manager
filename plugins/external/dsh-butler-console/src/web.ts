@@ -837,6 +837,36 @@ export async function installWeb(
     },
   }))
 
+  // 左栏：删除会话（单条/批量）。围栏逐条返回 removed / alreadyRemoved / blocked / failed，
+  // 页面按结果提示；忙检查在围栏内（管家轮次 + 宿主侧占用），这里只做形状校验。
+  ctx.effect(() => register({
+    kind: 'exact',
+    path: `${config.routePrefix}/conversations/remove`,
+    handler: async (request, response, actor) => {
+      method(request, 'POST')
+      const payload = await body(request, config.maxRequestBodyBytes)
+      const raw = payload.ids
+      if (!Array.isArray(raw) || raw.length === 0 || raw.length > 50) throw new HttpError(400, 'ids 必须是 1-50 个会话编号', 'remove_ids_invalid')
+      const ids = raw.map(item => String(item).trim())
+      if (ids.some(id => id.length === 0 || id.length > 80)) throw new HttpError(400, 'ids 含无效会话编号', 'remove_ids_invalid')
+      respond(actor, response, 200, { results: await console_.deleteConversations(actor, ids) })
+    },
+  }))
+
+  // 右栏：删除一条失败记录（终态任务）。活跃任务 409，让页面提示先停止。
+  ctx.effect(() => register({
+    kind: 'exact',
+    path: `${config.routePrefix}/tasks/remove`,
+    handler: async (request, response, actor) => {
+      method(request, 'POST')
+      const payload = await body(request, config.maxRequestBodyBytes)
+      const id = stringField(payload, 'id', 60).trim()
+      if (id === '') throw new HttpError(400, '缺少 id', 'missing_field')
+      await console_.deleteTask(actor, id)
+      respond(actor, response, 200, { ok: true })
+    },
+  }))
+
   // 左栏：运行历史。
   ctx.effect(() => register({
     kind: 'exact',

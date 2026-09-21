@@ -3,7 +3,7 @@ description: "面向封闭化园区业务的仓库外 DeepSeek Harness 只读问
 kind: "package-bundle"
 ---
 
-# DSH 封闭化管理智能助手
+# DSH 封闭化管理助手
 
 新站点优先使用[产物一键部署](../../../../../doc/first-deployment.md)，已有 Gitee 源码服务器使用[私有更新入口](../../../../../PRIVATE.md#源码一键更新)。插件的 `plugin.json` 管理启停和认证，业务 `env.conf` 独立保存；填写位置以 build 输出或已有实例引用为准，规则见[插件运行配置](../../../../../doc/plugin-configuration.md)。默认要求登录。
 

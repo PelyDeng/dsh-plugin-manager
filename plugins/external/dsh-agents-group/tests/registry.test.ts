@@ -11,7 +11,7 @@ import { assertUniqueManifests, AGENT_MANIFESTS, endpointsOf, type AgentManifest
 
 const sample: AgentManifest = {
   id: 'closedoff',
-  displayName: '封闭化管理智能助手',
+  displayName: '封闭化管理助手',
   directory: 'closedoff',
   category: '封闭化园区',
   description: '园区业务查询',
