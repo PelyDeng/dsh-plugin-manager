@@ -833,7 +833,7 @@ button:focus-visible {
   overflow-x: auto; margin: 0 0 10px;
   border: 1.5px solid var(--bt-line); border-radius: 10px;
 }
-.md .table-scroll:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 1px; }
+.md .table-scroll:focus-visible { outline: 2px dashed var(--bt-ink-soft); outline-offset: 1px; }
 .md table { border-collapse: collapse; font-size: 12.5px; width: 100%; }
 .md th, .md td { border-bottom: 1px solid var(--bt-line); padding: 5px 10px; text-align: left; }
 .md tbody tr:last-child th, .md tbody tr:last-child td { border-bottom: none; }
@@ -1246,7 +1246,7 @@ button:focus-visible {
   box-shadow: 1px 1px 0 #00000018;
   cursor: pointer;
 }
-.member__camera:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 1px; }
+.member__camera:focus-visible { outline: 2px dashed var(--bt-ink-soft); outline-offset: 1px; }
 .member__avatar-slot { display: grid; place-items: center; }
 
 .member__name { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1467,7 +1467,7 @@ button:focus-visible {
 
 /* 执行中进设置页的提示（方案 I18）：跟在说明后面，不占新行。 */
 .settings__live { font-size: 12px; font-weight: 700; color: var(--bt-warn); }
-.settings__title:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 3px; }
+.settings__title:focus-visible { outline: 2px dashed var(--bt-ink-soft); outline-offset: 3px; }
 .column--left:focus-visible, .column--right:focus-visible { outline: none; }
 
 .field input {
@@ -1681,7 +1681,7 @@ button:focus-visible {
 .dcard__tool:hover { color: var(--bt-ink); border-color: var(--bt-stroke); }
 /* 按下就立刻反馈（不等任何请求），并给键盘焦点一个看得见的光环。 */
 .dcard__tool:active { transform: translateY(1px); background: var(--bt-paper); }
-.dcard__tool:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 2px; }
+.dcard__tool:focus-visible { outline: 2px dashed var(--bt-ink-soft); outline-offset: 2px; }
 .dcard__tool--on { color: var(--bt-ink); border-color: var(--bt-stroke); background: #fff; font-weight: 700; }
 
 .dcard__grid {
@@ -1699,7 +1699,7 @@ button:focus-visible {
 }
 .dcard__cell:hover { background: #fff; border-color: var(--bt-stroke); }
 .dcard__cell:active { transform: translateY(1px); background: var(--bt-paper); }
-.dcard__cell:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: 2px; }
+.dcard__cell:focus-visible { outline: 2px dashed var(--bt-ink-soft); outline-offset: 2px; }
 /*
  * 选中态：强调色描边 + 8% 强调色底 + 右上角小对勾。
  *

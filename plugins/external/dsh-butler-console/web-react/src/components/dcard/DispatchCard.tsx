@@ -17,6 +17,7 @@ import { displayNameOf, useSessionStore } from '../../stores/session.ts'
 import { Avatar } from '../common/Avatar.tsx'
 import { AskCard } from '../chat/AskCard.tsx'
 import { STREAM_RICH_LIMIT } from '../../lib/config.ts'
+import { announce } from '../../lib/announce.ts'
 import { cardElapsedText, cardSettled, cardStateText, CARD_RESULT_TITLE, emptySlotHint } from './card-text.ts'
 import { stateTone } from '../../lib/task-state.ts'
 import { SubtaskBubble } from '../chat/SubtaskBubble.tsx'
@@ -37,6 +38,12 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
   const members = useSessionStore(state => state.members)
   const [copied, setCopied] = useState<'idle' | 'ok' | 'fail'>('idle')
   const gridRef = useRef<HTMLDivElement>(null)
+  // 「有更新」点亮要有读屏播报（评审 #21）：视觉靠收起卡上的 fresh 角标+格子脉冲。
+  const freshRef = useRef(entry.fresh)
+  useEffect(() => {
+    if (entry.fresh && !freshRef.current && !entry.open) announce('收起的任务卡有新进展')
+    freshRef.current = entry.fresh
+  }, [entry.fresh, entry.open])
 
   const memberBySubtask = useMemo(() => {
     const map = new Map<string, SubtaskEntry>()

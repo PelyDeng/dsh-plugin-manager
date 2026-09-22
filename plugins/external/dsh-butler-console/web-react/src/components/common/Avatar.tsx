@@ -19,7 +19,7 @@ export function Avatar({ agentId, size = '' }: { agentId: string; size?: string 
     : `${ROUTE_PREFIX}/assets/media/avatars/${file}${stamp === undefined ? '' : `?v=${stamp}`}`
   return (
     <div className={`avatar${size === '' ? '' : ` avatar--${size}`}`} style={style}>
-      {src !== null && <img alt="" src={src} onError={() => setFailed(true)} />}
+      {src !== null && <img alt="" src={src} loading="lazy" decoding="async" onError={() => setFailed(true)} />}
       <span>{[...displayNameOf(members, agentId)][0] ?? '?'}</span>
     </div>
   )

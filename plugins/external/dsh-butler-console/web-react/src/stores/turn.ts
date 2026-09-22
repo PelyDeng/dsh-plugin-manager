@@ -531,7 +531,6 @@ function handleSummaryEvent(event: TurnEvent): void {
   frameBuffer.clear()
   useTurnStore.getState().appendEntry({
     key: nextKey('summary'), kind: 'summary', state: event.state ?? '', text: dedup ? '' : text, error: typeof event.error === 'string' && event.error !== '' ? event.error : undefined, time: event.time,
-    ...(Array.isArray(event.followups) ? { followups: event.followups as string[] } : {}),
   })
   // 调度卡收口（settleCardForSummary 完整语义）：只有**收尾**的汇总才收口——
   // waiting_user/external_pending 是暂停（这一轮还活着），说成「已停止」是假话；

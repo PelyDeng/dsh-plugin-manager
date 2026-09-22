@@ -4,11 +4,12 @@
  * 回话幂等（S07）：同一次回话（含失败原样重试）复用同一 ID；改措辞即新回话换新 ID。
  * 受理成功才收卡；之前失败都在卡内恢复，输入不丢（I03）。
  */
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { runReply } from '../../hooks/use-turn.ts'
 import { resolveAskLocally } from '../../stores/turn.ts'
 import { errorTextOf } from '../../lib/error-text.ts'
 import { newConversationId } from '../../lib/turn-event.ts'
+import { announce } from '../../lib/announce.ts'
 import { RichText } from './RichText.tsx'
 
 export interface AskCardProps {
@@ -27,6 +28,8 @@ export function AskCard({ subtaskId, taskId, question, detail }: AskCardProps) {
   // 回话幂等身份：同一次回话（含失败重试）复用；改了措辞换新 ID。
   const requestIdRef = useRef<string | null>(null)
   const lastTriedRef = useRef<string | null>(null)
+  // 到达播报（评审 #21）：视觉上靠调度卡自动展开+脉冲，读屏用户要听到「在等回话」。
+  useEffect(() => { announce(`有成员在等你回话：${question ?? '需要你补充点信息'}`) }, [])
 
   const submit = async (text: string, decideByAgent: boolean) => {
     // streaming 占用时由 runReply 内部等待复位（确认卡出现先于回合收尾的窗口）。

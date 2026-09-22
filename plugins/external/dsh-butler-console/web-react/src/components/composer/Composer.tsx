@@ -227,6 +227,7 @@ export function Composer() {
                 type="url"
                 id="attach-url-input"
                 placeholder="粘贴文件或图片的链接，回车取回"
+                aria-label="附件链接"
                 autoComplete="off"
                 spellCheck={false}
                 onKeyDown={event => {
@@ -286,12 +287,13 @@ export function Composer() {
             </div>
           </div>
         )}
-        <label className="visually-hidden" htmlFor="message-input">说句话</label>
+        {/* 输入框可达名统一 aria-label 口径（评审 #21）：不用 visually-hidden label。 */}
         <textarea
           id="message-input"
           ref={inputRef}
           rows={1}
           placeholder="说说你要做什么"
+          aria-label="说句话"
           autoComplete="off"
           value={draft}
           onChange={() => { setDraft(inputRef.current?.value ?? ''); updateMention() }}

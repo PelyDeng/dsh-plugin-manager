@@ -174,11 +174,10 @@ function ErrorEntryViewFn({ text, retryFor }: {
 }
 
 /** 汇总卡（旧 summaryCard：标题按状态、正文受控 Markdown、去重后为空不显示占位）。 */
-function SummaryEntryViewFn({ state, text, error, followups }: {
+function SummaryEntryViewFn({ state, text, error }: {
   state: string
   text: string
   error?: string | undefined
-  followups?: string[] | undefined
 }) {
   const title = state === 'completed' ? '已完成'
     : state === 'failed' ? '这一轮失败'
@@ -191,16 +190,6 @@ function SummaryEntryViewFn({ state, text, error, followups }: {
     <div className="summary" data-state={state}>
       <div className="summary__title">{title}</div>
       {body !== '' && <div className="summary__body md"><RichText text={body} variant="card" /></div>}
-      {/* 追问芯片样张（Suggestion 手账化占位，mock 驱动；点击把话填进输入框）。 */}
-      {followups !== undefined && followups.length > 0 && (
-        <div className="summary__followups">
-          {followups.map(item => (
-            <button key={item} type="button" className="follow-chip" onClick={() => { useComposerStore.getState().requestFill(item) }}>
-              {item}
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   )
 }
@@ -284,7 +273,7 @@ export function renderEntry(entry: ThreadEntry): React.ReactNode {
     case 'subtask': return <SubtaskEntryView key={entry.key} entry={entry} />
     case 'note': return <NoteEntryView key={entry.key} text={entry.text} />
     case 'error': return <ErrorEntryView key={entry.key} text={entry.text} retryFor={entry.retryFor} />
-    case 'summary': return <SummaryEntryView key={entry.key} state={entry.state} text={entry.text} error={entry.error} followups={entry.followups} />
+    case 'summary': return <SummaryEntryView key={entry.key} state={entry.state} text={entry.text} error={entry.error} />
     case 'task': return <TaskEntryView key={entry.key} task={entry.task} />
     case 'dispatch': return <DispatchCard key={entry.key} entry={entry} />
     default: return null

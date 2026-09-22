@@ -3,8 +3,8 @@
  *
  * turn-engine 是解耦重写的纯控制流：订阅/探测/快照与渲染副作用全部注入，这里用
  * 假事件流逐条核对语义（对齐 web/modules/send.js followUntilTerminal 的 S05/S06/S09）。
- * 退避计时用假时钟推进；120s 硬期限由 AbortSignal.timeout 走真实时钟，测试内不会触达，
- * 预算耗尽以重订计数（4 次）为准。
+ * 退避计时用假时钟推进；预算可通过 FollowOptions.budget 注入短值（评审 #24）——
+ * 120s 硬期限与 4 次重订的默认值不再需要真实等待或大量假时钟推进。
  */
 import { describe, expect, it, vi } from 'vitest'
 import { followUntilTerminal, type TurnEngineHost, type TurnEngineLinks } from '../web-react/src/lib/turn-engine.ts'
@@ -32,7 +32,6 @@ function fakeHost() {
     note: text => { notes.push(text) },
     errorLine: text => { errors.push(text) },
     runTaskId: () => 'task-1',
-    setRunTaskId: () => {},
     sawTerminal: () => applied.some(event => event.type === 'summary'),
     markTerminal: () => {},
     calibrate: vi.fn(),
@@ -46,6 +45,7 @@ function fakeHost() {
 function scriptedLinks(script: Array<TurnEvent[]>, heads: RunHead[] = [], snapshots: TaskRecord[] = []) {
   let subscribeCalls = 0
   const afterLog: number[] = []
+  const snapshotIds: string[] = []
   const links: TurnEngineLinks = {
     subscribe: (_conversationId, after) => {
       afterLog.push(after)
@@ -57,9 +57,9 @@ function scriptedLinks(script: Array<TurnEvent[]>, heads: RunHead[] = [], snapsh
       })()
     },
     probeHead: () => Promise.resolve(heads[Math.min(subscribeCalls, heads.length) - 1] ?? null),
-    taskSnapshot: () => Promise.resolve(snapshots[0] ?? record()),
+    taskSnapshot: (taskId: string) => { snapshotIds.push(taskId); return Promise.resolve(snapshots[0] ?? record()) },
   }
-  return { links, afterLog, subscribeCount: () => subscribeCalls }
+  return { links, afterLog, subscribeCount: () => subscribeCalls, snapshotIds }
 }
 
 describe('followUntilTerminal', () => {
@@ -130,7 +130,7 @@ describe('followUntilTerminal', () => {
   it('reset 重建后续订对齐：重建成功才把游标推进到探测头部的 seq', async () => {
     // 第一段流：reset 后空 EOF；探测：仍在跑（同 runId、taskId=t9、seq=42）。
     // 第二段流：summary 终态。断言第二次订阅拿到的 after=42（head.seq）。
-    const { links, afterLog, subscribeCount } = scriptedLinks(
+    const { links, afterLog, subscribeCount, snapshotIds } = scriptedLinks(
       [[{ type: 'reset' }], [{ type: 'summary', state: 'completed', text: '收尾', seq: 43 }]],
       [{ runId: RUN, state: 'running', taskId: 't9', seq: 42 }],
       [record()],
@@ -141,6 +141,8 @@ describe('followUntilTerminal', () => {
     expect(host.rebuild).toHaveBeenCalledTimes(1)
     // 第一次订阅 from=3；重建成功后续订从 head.seq=42 起。
     expect(afterLog).toEqual([3, 42])
+    // 重建对象按探测头部的任务 id 取快照（评审 #24：入参传入而非回写宿主）。
+    expect(snapshotIds).toEqual(['t9'])
   })
 
   it('重建失败不推进游标：退避后按原 after 重订再试', async () => {
@@ -211,6 +213,33 @@ describe('followUntilTerminal', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('预算可注入（评审 #24）：deadline=0 立即如实放弃，不用等真实 120s', async () => {
+    // 订阅与探测都不会被触达——进循环第一拍就到期。
+    const { links } = scriptedLinks([[{ type: 'summary', state: 'completed', text: 'x', seq: 1 }]])
+    const { host, errors, sawApplied } = fakeHost()
+    await followUntilTerminal(CONV, { from: 0, expectedRunId: RUN, budget: { deadline: 0 } }, links, host)
+    expect(errors[0]).toContain('事件流已断开')
+    expect(sawApplied()).toEqual([])
+  })
+
+  it('预算可注入（评审 #24）：maxReconnects=1 一次重订后放弃', async () => {
+    let calls = 0
+    const links: TurnEngineLinks = {
+      subscribe: () => { calls += 1; return (async function* () { /* 立即 EOF */ })() },
+      probeHead: () => Promise.resolve({ runId: RUN, state: 'running', taskId: 'task-1' }),
+      taskSnapshot: () => Promise.resolve(record()),
+    }
+    const { host, errors } = fakeHost()
+    await followUntilTerminal(
+      CONV,
+      { from: 0, expectedRunId: RUN, budget: { base: 1, cap: 1, maxReconnects: 1, deadline: 5_000 } },
+      links,
+      host,
+    )
+    expect(calls).toBe(1)
+    expect(errors[0]).toContain('事件流已断开')
   })
 
   it('调用方取消：跟随立即返回（AbortError 不当失败）', async () => {

@@ -41,9 +41,9 @@ export interface TurnEngineHost {
   note(text: string): void
   /** 界面错误行。 */
   errorLine(text: string): void
-  /** 这一轮已受理的任务 id（快照校准/重建的依据；空串表示还没有）。 */
+  /** 这一轮已受理的任务 id（快照校准/重建的依据；空串表示还没有）。引擎只读不写（评审 #24：
+   *  重建对象的任务 id 经 rebuildFromSnapshot 入参传入，不再回写宿主）。 */
   runTaskId(): string
-  setRunTaskId(taskId: string): void
   /** 消费到 summary 即终态（含历史重建内出现的 summary）。 */
   sawTerminal(): boolean
   /** 标记终态已见（host 在 apply 里做，这里供引擎复核）。 */
@@ -58,16 +58,34 @@ export interface FollowOptions {
   from: number
   expectedRunId: string
   signal?: AbortSignal | undefined
+  /** 覆盖默认重试预算（评审 #24）：单测注入短预算验证到期/耗尽；生产调用不传。 */
+  budget?: Partial<RetryBudget> | undefined
 }
 
-const RETRY_BUDGET = { base: 1000, cap: 4000, maxReconnects: 4, deadline: 120_000 }
+/**
+ * 重试预算（评审 #24 可注入）：FollowOptions.budget 覆盖默认值——单测注入短预算
+ * 验证到期/耗尽语义，生产调用不传走 RETRY_BUDGET。
+ */
+export interface RetryBudget {
+  /** 退避基数（毫秒），指数增长。 */
+  base: number
+  /** 单次退避封顶（毫秒）。 */
+  cap: number
+  /** 最多重订次数。 */
+  maxReconnects: number
+  /** 总硬期限（毫秒）。 */
+  deadline: number
+}
+
+const RETRY_BUDGET: RetryBudget = { base: 1000, cap: 4000, maxReconnects: 4, deadline: 120_000 }
 
 export async function followUntilTerminal(
   conversationId: string,
-  { from, expectedRunId, signal }: FollowOptions,
+  { from, expectedRunId, signal, budget: budgetOverride }: FollowOptions,
   links: TurnEngineLinks = productionLinks,
   host: TurnEngineHost,
 ): Promise<void> {
+  const budget: RetryBudget = { ...RETRY_BUDGET, ...budgetOverride }
   let after = from
   if (expectedRunId === '' || expectedRunId === undefined) {
     // 归属未知（例如提交流断在 run 头之前）：明确说明并按快照尽量收尾，
@@ -76,7 +94,7 @@ export async function followUntilTerminal(
     return
   }
   const followedRunId = expectedRunId
-  const deadline = Date.now() + RETRY_BUDGET.deadline
+  const deadline = Date.now() + budget.deadline
   let reconnects = 0
   const giveUp = () => { host.errorLine('事件流已断开；已收到的内容保留，终态以右栏为准。') }
   // 可中断退避：截止或取消提前唤醒；进入时信号已取消则立即退出，不空等计时器。
@@ -85,7 +103,7 @@ export async function followUntilTerminal(
     if (stop.aborted) { resolve(); return }
     let timer: ReturnType<typeof setTimeout>
     const done = () => { clearTimeout(timer); stop.removeEventListener('abort', done); resolve() }
-    timer = setTimeout(done, Math.min(RETRY_BUDGET.base * 2 ** reconnects, RETRY_BUDGET.cap))
+    timer = setTimeout(done, Math.min(budget.base * 2 ** reconnects, budget.cap))
     stop.addEventListener('abort', done, { once: true })
   })
   for (;;) {
@@ -135,9 +153,9 @@ export async function followUntilTerminal(
       }
       if (sawReset) {
         // 重建要用快照：任务标识从探测头部取——reset 流本身不带 run 头（浏览器实测发现），
-        // 刷新接续时任务 id 还是空，不补这一步重建会空转。
-        if (head.taskId !== undefined) host.setRunTaskId(head.taskId)
-        const rebuilt = await rebuildFromSnapshot(conversationId, stop, links, host)
+        // 刷新接续时任务 id 还是空，不补这一步重建会空转。任务 id 作为 rebuild 的**输入
+        // 参数**传入（评审 #24：引擎不回写宿主状态；宿主的游标由续订时重放的 run 头补齐）。
+        const rebuilt = await rebuildFromSnapshot(conversationId, stop, links, host, head.taskId)
         // 快照读取失败不推进游标：保留原位，本轮按预算退避后重试重建（重订还会得到
         // reset，重建再次尝试）；只有重建成功才对齐到探测头部的窗口位置——探测与重建
         // 之间产生的事件 seq 必然更大，续订会带上，不丢也不重复重放。
@@ -153,7 +171,7 @@ export async function followUntilTerminal(
     }
     // 自然 EOF 后仍在跑（或断线）：同一份退避预算，不因「流正常结束」就零等待重连。
     reconnects += 1
-    if (reconnects >= RETRY_BUDGET.maxReconnects || Date.now() > deadline) {
+    if (reconnects >= budget.maxReconnects || Date.now() > deadline) {
       giveUp()
       return
     }
@@ -193,8 +211,10 @@ export async function rebuildFromSnapshot(
   stop: AbortSignal,
   links: TurnEngineLinks,
   host: TurnEngineHost,
+  /** 重建对象的任务 id（reset 后从探测头部带来）；缺省回落宿主已知的那一个。 */
+  taskIdHint?: string | undefined,
 ): Promise<boolean> {
-  const taskId = host.runTaskId()
+  const taskId = taskIdHint ?? host.runTaskId()
   if (taskId === '') return false
   try {
     const record = await links.taskSnapshot(taskId, stop)

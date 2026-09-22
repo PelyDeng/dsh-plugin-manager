@@ -89,8 +89,6 @@ export interface SummaryEntry {
   /** 失败原因（评审 B2）：失败/部分完成的汇总卡要能回答「为什么」。 */
   error?: string | undefined
   time?: number | undefined
-  /** 追问芯片占位（0.13.x 完整功能；本战役只做样张，方案 §3.6）。 */
-  followups?: string[] | undefined
 }
 
 /**

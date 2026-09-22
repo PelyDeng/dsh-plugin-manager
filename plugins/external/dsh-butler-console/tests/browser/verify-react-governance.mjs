@@ -203,16 +203,9 @@ const d2 = await evaluate(`(() => ({
   states: [...document.querySelectorAll('.dcard__statetext')].map(node => node.textContent),
 }))()`)
 check('[D2] 收尾：调度卡在场+两成员已完成+顶栏回已上线', settled && d2.dcard && d2.states.length >= 2 && d2.top === '已上线', JSON.stringify(d2))
+// followups 样张已删（后端从不发送，评审二选一取删）：mock 仍发该字段，断言被容忍且不渲染。
 const d3 = await evaluate(`document.querySelectorAll('.follow-chip').length`)
-check('[D3] 追问芯片渲染（mock followups×3）', d3 === 3, `chips=${d3}`)
-
-if (d3 > 0) {
-  const chipText = await evaluate(`document.querySelector('.follow-chip')?.textContent ?? ''`)
-  await click(await centerOf('.follow-chip'))
-  await sleep(300)
-  const d4 = await evaluate(`document.getElementById('message-input')?.value ?? ''`)
-  check('[D4] 追问芯片→输入框填入（与撕条同一通道）', d4 === chipText && chipText !== '', `input="${d4.slice(0, 16)}…" chip="${chipText.slice(0, 16)}…"`)
-}
+check('[D3] followups 字段容忍不渲染（样张已删）', d3 === 0, `chips=${d3}`)
 
 // ── E. 请示剧本：ask 卡（waiting_user 兜底走 lastRunTaskId）+回话收卡（#18 回归）──
 await click(await centerOf('#message-input'))
@@ -236,6 +229,35 @@ if (e1.card) {
   })()`)
   check('[E2] 回话受理：收卡+调度卡收尾已完成', e2.cardGone && e2.last === 'completed' && e2.states.some(text => text === '已完成'), JSON.stringify(e2))
 }
+
+// ── G. 无障碍批（评审 #21）与首屏媒体（缩图后可用性）─────────────────────
+const g1 = await evaluate(`(() => {
+  // 样式表里五处 :focus-visible 应为 dashed 墨系（不再 solid sky）。
+  // var() 参与的 shorthand 在 CSSOM 里 longhand 序列化为空，只能读 cssText 原文。
+  const hits = []
+  for (const sheet of document.styleSheets) {
+    for (const rule of sheet.cssRules) {
+      if (rule.cssText !== undefined && rule.cssText.includes(':focus-visible')) hits.push(rule.cssText)
+    }
+  }
+  return { total: hits.length, solidSky: hits.filter(h => h.includes('solid var(--bt-sky)')).length, dashed: hits.filter(h => h.includes('dashed')).length }
+})()`)
+check('[G1] 焦点环无 solid sky 残留（墨系 dashed）', g1.solidSky === 0 && g1.dashed >= 5 && g1.total >= 5, JSON.stringify(g1))
+
+const g2 = await evaluate(`(() => ({
+  inputLabel: document.getElementById('message-input')?.getAttribute('aria-label') ?? '',
+  hiddenLabelGone: document.querySelector('label[for="message-input"]') === null,
+  urlLabel: document.getElementById('attach-url-input')?.getAttribute('aria-label') ?? '(未开)',
+  firstCheck: document.querySelector('.chat-row__check')?.getAttribute('aria-label') ?? '',
+}))()`)
+check('[G2] 输入口径统一 aria-label+复选框可达名', g2.inputLabel === '说句话' && g2.hiddenLabelGone && g2.firstCheck.startsWith('选择 '), JSON.stringify({ input: g2.inputLabel, hiddenGone: g2.hiddenLabelGone, check: g2.firstCheck }))
+
+const g3 = await evaluate(`(() => ({
+  titleLoaded: [...document.querySelectorAll('.brand__title img, .center__title img')].every(img => img.naturalWidth > 0),
+  avatarLoaded: [...document.querySelectorAll('.avatar img')].every(img => img.naturalWidth > 0),
+  avatarCount: document.querySelectorAll('.avatar img').length,
+}))()`)
+check('[G3] 缩图后标题图/头像全部可解码加载', g3.titleLoaded && g3.avatarLoaded && g3.avatarCount > 0, JSON.stringify(g3))
 
 check('[F] console 无错误', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '))
 

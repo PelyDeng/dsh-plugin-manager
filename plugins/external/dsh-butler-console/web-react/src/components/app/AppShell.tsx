@@ -244,7 +244,7 @@ export function AppShell() {
               <h2 className="section-title section-title--members">成员档案</h2>
               <div id="member-list">
                 {members.map(member => (
-                  <div key={member.agentId} className="member member--compact" title={[member.displayName, `（@${member.agentId}）`, member.declaredName, member.description, member.version !== undefined ? `v${member.version} · ${member.toolCount ?? 0} 工具` : ''].filter(part => part !== undefined && part !== '').join(' ')}>
+                  <div key={member.agentId} className="member member--compact" title={[member.displayName, `（@${member.agentId}）`, member.declaredName, member.description, member.busy != null ? `手上正有活（${member.busy.state}）` : '', member.version !== undefined ? `v${member.version} · ${member.toolCount ?? 0} 工具` : ''].filter(part => part !== undefined && part !== '').join(' ')}>
                     <Avatar agentId={member.agentId} size="sm" />
                     <div>
                       <div className="member__name">{member.displayName}</div>

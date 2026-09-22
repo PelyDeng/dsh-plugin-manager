@@ -386,7 +386,6 @@ export async function createTurnEngineHost(): Promise<TurnEngineHost> {
     note: text => useTurnStore.getState().appendEntry({ key: `note-h${++hostEntrySeq}`, kind: 'note', text }),
     errorLine: text => useTurnStore.getState().appendEntry({ key: `error-h${++hostEntrySeq}`, kind: 'error', text }),
     runTaskId: () => useTurnStore.getState().lastRunTaskId,
-    setRunTaskId: taskId => { useTurnStore.setState({ lastRunTaskId: taskId }) },
     sawTerminal: () => terminalSeen,
     markTerminal: () => { terminalSeen = true },
     calibrate: record => {

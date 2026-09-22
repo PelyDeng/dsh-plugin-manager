@@ -102,7 +102,7 @@ ctx.effect(() => ctx.on('butler/executors', (accept: (executor: ButlerAgentExecu
 | --- | --- | --- |
 | `accessMode` | `authenticated` | `standalone` 仅用于本机调试 |
 | `publicOrigin` | 空 | 认证模式必填，HTTP(S) origin，不带路径 |
-| `routePrefix` | `/butler` | 页面与接口前缀 |
+| `routePrefix` | `/butler` | 页面与接口前缀。改它不用改前端源码：页面骨架 `web-react/index.html` 里的 `/butler` 字面量是**替换标记**，服务 `index.html` 时按配置整体 `replaceAll` 成实际前缀（`src/web.ts`）；JS 产物内部一律走注入的 `__BUTLER_CONFIG__.routePrefix`，不写死 |
 | `subtaskTimeoutMs` | 300000 | 单个子任务超时，超时中止并释放成员 |
 | `waitingTimeoutMs` | 600000 | 等用户回话的最长时间；到点按超时收尾，材料保留 |
 | `turnTimeoutMs` | 600000 | 单轮上限 |

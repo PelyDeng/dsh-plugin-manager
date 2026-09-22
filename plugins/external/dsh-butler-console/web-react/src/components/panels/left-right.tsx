@@ -159,6 +159,7 @@ export function ChatList() {
             <input
               type="checkbox"
               className="chat-row__check"
+              aria-label={`选择 ${item.title || '未命名会话'}`}
               checked={picked.includes(item.id)}
               onChange={event => togglePicked(item.id, event.target.checked)}
             />
@@ -203,6 +204,7 @@ function RenameInput({ id, current }: { id: string; current: string }) {
       className="chat-row__rename"
       value={value}
       placeholder="起个新名字"
+      aria-label="会话的新名字"
       maxLength={80}
       onChange={event => setValue(event.target.value)}
       onKeyDown={event => {
