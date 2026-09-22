@@ -3,6 +3,11 @@
  * 与 viewToken 是同一条 SSE 生命周期的三个面，收在这里；「切换会话」是**一个原子动作**
  * （bump viewToken + 清条目 + 重置游标 + abort），I09 守卫不复制到别处。
  *
+ * 字段口径（评审 #18 治理后）：lastRunTaskId 是**本轮执行绑定任务**的唯一游标——
+ * 补充（Composer）、喊停（stopTurn）、引擎宿主与 ask 卡兜底都读它；没有第二个
+ * 「视图任务 id」字段（旧 taskId 已删：任务详情页渲染历史记录不得污染运行游标）。
+ * subtask 条目按 subtaskId 从 entries 派生查找（subtaskEntryOf），无并行索引。
+ *
  * 消息流渲染模型：`entries` 是按时间追加的条目数组（React 的主数据）；高频增量
  * （chat_delta/subtask_delta）先累积在**非响应式缓冲**里，按绘制帧合并提交（旧
  * events.js 的 framePending/scheduleFrame 语义在 store 层重做），terminal/live 的
@@ -10,133 +15,23 @@
  */
 import { create } from 'zustand'
 import { rememberConversation } from '../lib/turn-event.ts'
-import type { TurnEvent } from '../lib/turn-event.ts'
-import type { TaskRecord, TaskSummary } from '../lib/api.ts'
-import type { AgentAction } from '../lib/turn-event.ts'
+import type { TurnEvent, AgentAction } from '../lib/turn-event.ts'
+import type { TaskRecord } from '../lib/api.ts'
 import { stateText } from '../lib/task-state.ts'
 import { STREAM_RICH_LIMIT } from '../lib/config.ts'
+import type { ThreadEntry, DispatchEntry, SubtaskEntry } from './thread-entries.ts'
+import {
+  subtaskEntryOf,
+  TERMINAL_TASK_STATES, TERMINAL_SUBTASK_STATES, PAUSED_SUBTASK_STATES, SETTLED_SUBTASK_STATES,
+} from './thread-entries.ts'
 
-/** 消息流条目：React 渲染的统一数据面（旧 DOM 追加模型的范式转换）。 */
-export type ThreadEntry = UserEntry | ButlerEntry | SubtaskEntry | NoteEntry | ErrorEntry | SummaryEntry | TaskEntry | DispatchEntry
-
-export interface UserEntry {
-  key: string
-  kind: 'user'
-  text: string
-  time?: number | undefined
-  /** 随消息发出的附件芯片（发送时从输入框摘下画到这里）。 */
-  attachments?: Array<{ key: string; name: string; size: number }> | undefined
-}
-
-/** 大总管气泡：streaming 期 text 逐帧增长，落定的 `chat` 收走（streaming=false）。 */
-export interface ButlerEntry {
-  key: string
-  kind: 'butler'
-  text: string
-  thinking: string
-  streaming: boolean
-  /** 超长正文降级纯文本追加（STREAM_RICH_LIMIT 分级判断在渲染层执行）。 */
-  time?: number | undefined
-  /** 被打断的管家答复（S13：标注出来，不冒充完整结论）。 */
-  interrupted?: boolean | undefined
-}
-
-/** 成员子任务气泡（批 3：含等待回话入口；调度卡在批 4b 收编）。 */
-export interface SubtaskEntry {
-  key: string
-  kind: 'subtask'
-  subtaskId: string
-  /** 所属任务 id（subtask 事件自带；决策 /action 入参需要，避免渲染层再派生）。 */
-  taskId?: string | undefined
-  agentId: string
-  goal: string
-  state: string
-  body: string
-  thinking: string
-  terminal: boolean
-  /** live=false 表示已离开执行态（如等待）：迟到增量不再点亮光标。 */
-  live: boolean
-  toolLine: { tool?: string | undefined; detail?: string | undefined } | null
-  artifacts: unknown[]
-  startedAt?: number | string | null | undefined
-  finishedAt?: number | string | null | undefined
-  detail?: string | null | undefined
-  error?: string | null | undefined
-  /** waiting_user 的回话入口（ask 卡）：question 是卡面问题，detail 是正文口径。 */
-  ask?: { taskId: string; question?: string | undefined; detail?: string | undefined } | undefined
-  /** 待用户确认的操作卡（AgentAction 协议呈现面；prepared 态出确认/取消按钮）。 */
-  actions?: ReadonlyArray<AgentAction> | undefined
-  /** external_pending 的结构化说明：在等谁做什么（reason）/办完能做什么（next）。 */
-  pending?: { reason: string; next?: string } | undefined
-  /** 派单理由（plan 事件的 reason：为什么派给这位成员）。 */
-  dispatchReason?: string | undefined
-  /** 协调方质检裁决（accept/rework/replace/unverified）与理由——历史恢复与详情回放带出。 */
-  verdict?: string | undefined
-  verdictReason?: string | undefined
-}
-
-export interface NoteEntry {
-  key: string
-  kind: 'note'
-  text: string
-}
-
-export interface ErrorEntry {
-  key: string
-  kind: 'error'
-  text: string
-  /** 发送失败的重试行：携带原文与幂等身份，重试复用同一 requestId（S07）。 */
-  retryFor?: { requestText: string; requestId: string } | undefined
-}
-
-/** 汇总卡：text 已按 S12 去重（与最后一条 butler 正文相同时置空）。 */
-export interface SummaryEntry {
-  key: string
-  kind: 'summary'
-  state: string
-  text: string
-  /** 失败原因（评审 B2）：失败/部分完成的汇总卡要能回答「为什么」。 */
-  error?: string | undefined
-  time?: number | undefined
-  /** 追问芯片占位（0.13.x 完整功能；本战役只做样张，方案 §3.6）。 */
-  followups?: string[] | undefined
-}
-
-/**
- * 调度卡条目（批 4b，旧 mountDispatch 的声明式对应物）：**本次派活唯一的一张卡**。
- * 成员的输出数据仍在 subtask entries（bubbleKeys 索引），本条目持顺序/选中/折叠——
- * 旧版靠「把成员消息 DOM 搬进 slot」的地方，React 版由 DispatchCard 按数据派生渲染。
- */
-export interface DispatchEntry {
-  key: string
-  kind: 'dispatch'
-  taskId: string
-  /** 子任务顺序（卡片格子顺序）。 */
-  order: string[]
-  /** 当前选中的成员（点已选中的不变——收起用折叠，一条动作一个语义）。 */
-  active: string | null
-  /** 折叠态：偏好（butler.card.{taskId}.open）优先，缺省收起。 */
-  open: boolean
-  /** 只看结论偏好（butler.card.{taskId}.resultOnly）。 */
-  resultOnly: boolean
-  /** 「有更新」：收起后状态又变了（展开即清）。 */
-  fresh: boolean
-  /** 状态变化过但未读的成员（描边脉冲用，600ms 自清）。 */
-  pulses: string[]
-}
-
-/** 历史任务摘要卡（点开看详情，批 3 完整调度卡回放）：列表投影形状。 */
-export interface TaskEntry {
-  key: string
-  kind: 'task'
-  task: TaskSummary
-}
+/** 条目类型独立在 thread-entries.ts（评审 #19）；此处 re-export 保持组件 import 路径稳定。 */
+export type { ThreadEntry, UserEntry, ButlerEntry, SubtaskEntry, NoteEntry, ErrorEntry, SummaryEntry, TaskEntry, DispatchEntry } from './thread-entries.ts'
 
 export interface TurnState {
   conversationId: string | null
   streaming: boolean
   abort: AbortController | null
-  /** 视图代次：所有会话切换入口共用，异步回包先核对它，旧响应不许写进新视图。 */
   /**
    * 视图代次（势力范围，评审 挂账#26）：中栏所有「换内容」的动作必须 bump 它并对
    * 回包核对 token；左栏列表（chatList）与附件（按 conversationId）是自治域，不核对。
@@ -145,7 +40,7 @@ export interface TurnState {
   viewToken: number
   /** 发送时预渲染、等服务端回放确认的那条用户消息（批 3 发送路径用）。 */
   pendingUser: { text: string } | null
-  /** 本轮事件消费进度：seq 用于断线重订的游标，taskId 用于 reset 后取快照。 */
+  /** 本轮事件消费进度：seq 用于断线重订的游标，lastRunTaskId 用于 reset 后取快照。 */
   lastSeq: number
   lastRunTaskId: string
   lastRunId: string
@@ -153,11 +48,8 @@ export interface TurnState {
   lastChatText: string
   /** 消息流条目（渲染主数据）。 */
   entries: ThreadEntry[]
-  /** 子任务 id → 条目 key：流式增量原地更新。 */
-  bubbleKeys: Map<string, string>
   /** 大总管流式那条的 key；落定的 `chat` 收走置 null。 */
   butlerSpeechKey: string | null
-  taskId: string | null
   /** 任务详情二级视图（openTask 进入，view-head/popstate 返回）。 */
   taskView: { taskId: string } | null
   /** 滚动跟随：用户上滚或选字时暂停，「回到最新」恢复。 */
@@ -186,12 +78,6 @@ export interface TurnState {
 let entrySeq = 0
 const nextKey = (prefix: string) => `${prefix}-${++entrySeq}`
 
-function newKeysMerge(base: Map<string, string>, extra: Map<string, string>): Map<string, string> {
-  const merged = new Map(base)
-  for (const [key, value] of extra) merged.set(key, value)
-  return merged
-}
-
 /**
  * 帧缓冲（非响应式）：delta 先落这里，flushFrame 一次性并入 entries。
  * 两条规则与旧 events.js 一致：terminal（已校准）或 live=false 的气泡不再追加。
@@ -205,18 +91,18 @@ interface FramePatch {
 const frameBuffer = new Map<string, FramePatch>()
 let frameScheduled = false
 
-function scheduleFlush(getState: () => TurnState): void {
+function scheduleFlush(): void {
   if (frameScheduled) return
   frameScheduled = true
   const run = () => {
     frameScheduled = false
-    getState().flushFrame()
+    useTurnStore.getState().flushFrame()
   }
   if (typeof globalThis.requestAnimationFrame === 'function') globalThis.requestAnimationFrame(run)
   else setTimeout(run, 16)
 }
 
-export const useTurnStore = create<TurnState>((set, get) => ({
+export const useTurnStore = create<TurnState>(set => ({
   conversationId: null,
   taskView: null,
   streaming: false,
@@ -228,39 +114,34 @@ export const useTurnStore = create<TurnState>((set, get) => ({
   lastRunId: '',
   lastChatText: '',
   entries: [],
-  bubbleKeys: new Map(),
   butlerSpeechKey: null,
-  taskId: null,
   following: true,
   selecting: false,
 
   switchConversation: (id, opts = {}) => {
     // 原子动作：先断悬挂连接，再一次性置换视图状态——I09 守卫只有这一份。
-    get().abort?.abort()
+    useTurnStore.getState().abort?.abort()
     set({
-      viewToken: get().viewToken + 1,
+      viewToken: useTurnStore.getState().viewToken + 1,
       conversationId: id,
       entries: [],
-      bubbleKeys: new Map(),
       butlerSpeechKey: null,
       pendingUser: null,
       lastSeq: 0,
       lastRunId: '',
       lastRunTaskId: '',
       lastChatText: '',
-      taskId: null,
       taskView: null,
       streaming: false,
       abort: null,
-      following: opts.keepFollowing === true ? get().following : true,
+      following: opts.keepFollowing === true ? useTurnStore.getState().following : true,
     })
   },
 
   beginRebuild: () => {
     set({
-      viewToken: get().viewToken + 1,
+      viewToken: useTurnStore.getState().viewToken + 1,
       entries: [],
-      bubbleKeys: new Map(),
       butlerSpeechKey: null,
       following: true,
     })
@@ -285,7 +166,7 @@ export const useTurnStore = create<TurnState>((set, get) => ({
   /** 渲染一条任务记录（历史回放/快照接续/任务详情页三处共用）：调度卡 + 成员数据面。 */
   renderTaskRecord: (record, opts = {}) => {
     const liveResume = opts.liveResume === true
-    const terminalRecord = ['completed', 'failed', 'cancelled', 'partial'].includes(record.state)
+    const terminalRecord = TERMINAL_TASK_STATES.includes(record.state)
     const prefs = readCardPrefs(record.id)
     const entries: ThreadEntry[] = []
     entries.push({ key: nextKey('user'), kind: 'user', text: record.goal, time: Number(record.createdAt) || undefined })
@@ -302,7 +183,7 @@ export const useTurnStore = create<TurnState>((set, get) => ({
     const order: string[] = []
     for (const subtask of record.subtasks) {
       order.push(subtask.id)
-      const terminalSub = ['succeeded', 'failed', 'cancelled', 'external_pending'].includes(subtask.state)
+      const terminalSub = TERMINAL_SUBTASK_STATES.includes(subtask.state)
       const waiting = subtask.state === 'waiting_user'
       memberEntries.push({
         key: nextKey('subtask'), kind: 'subtask', subtaskId: subtask.id, agentId: subtask.agentId,
@@ -336,227 +217,27 @@ export const useTurnStore = create<TurnState>((set, get) => ({
     if (terminalRecord || !liveResume) {
       entries.push({ key: nextKey('summary'), kind: 'summary', state: record.state, text: record.summary ?? '', error: typeof record.error === 'string' && record.error !== '' ? record.error : undefined, time: Number(record.updatedAt) || undefined })
     }
-    const nextKeys = new Map<string, string>()
-    for (const entry of memberEntries) {
-      if (entry.kind === 'subtask') nextKeys.set(entry.subtaskId, entry.key)
-    }
-    set(state => ({ entries: [...state.entries, ...entries], taskId: record.id, bubbleKeys: newKeysMerge(state.bubbleKeys, nextKeys) }))
+    // 注意不写 lastRunTaskId：任务详情页（openTask）渲染的可能是历史记录，运行游标
+    // 只属于活的一轮（resumeLiveTurn/openConversation 各自按头信息恢复，评审 #18）。
+    set(state => ({ entries: [...state.entries, ...entries] }))
   },
 
   applyTurnEvent: event => {
-    // ── 游标推进（consumeTurnEvent 语义，口径只有这一份）─────────────────
-    // 游标契约（评审 #14，依赖两条服务端事实，改动前先读）：
-    //   ① 每条**渲染类**事件必带 seq（服务端 src/web.ts streamRun 落流时写入）；
-    //   ② 每次订阅开始必先发一条 run 头（run 归零=服务端 event-log 每轮从 seq 1 重计数，
-    //      这是权威语义不是 bug）。
-    // run 头把 lastSeq 归零、其余事件推进 lastSeq——engine 侧 after 与此同源，交接见
-    // lib/turn-engine.ts followUntilTerminal（重订时 from=store.lastSeq）。
-    // 走 set 不可变更新：直接改 get() 返回对象不会触发订阅通知，DevTools 快照也失真。
-    if (event.type === 'run') {
-      set(state => ({
-        lastSeq: 0,
-        lastRunId: event.runId ?? '',
-        ...(event.taskId !== undefined && event.taskId !== '' ? { lastRunTaskId: event.taskId } : {}),
-      }))
-    } else if (event.seq !== undefined) {
-      set({ lastSeq: event.seq })
-    }
-    if ((event.type === 'subtask' || event.type === 'plan') && event.taskId !== undefined && event.taskId !== '') {
-      set({ lastRunTaskId: event.taskId })
-    }
-
-    // ── 分发（handleEvent 语义；调度卡/请示卡批 3/4b 完整化，批 1 降级视图）──
+    advanceTurnCursor(event)
     switch (event.type) {
-      case 'conversation': {
-        if (typeof event.conversationId === 'string' && event.conversationId !== '') {
-          set({ conversationId: event.conversationId })
-          rememberConversation(event.conversationId)
-        }
-        return
-      }
-      case 'user': {
-        // 受理回放对得上预渲染的那条就不重复画（对不上：历史回放、其他入口，照常渲染）。
-        // 与旧 events.js 同口径：user 到达即撤「只有思考」的预览并清思考快照。
-        const speechKey = get().butlerSpeechKey
-        if (speechKey !== null) {
-          const speech = get().entries.find(entry => entry.key === speechKey)
-          if (speech?.kind === 'butler' && speech.text === '') {
-            frameBuffer.delete(speechKey)
-            set(st => ({ entries: st.entries.filter(entry => entry.key !== speechKey), butlerSpeechKey: null }))
-          }
-        }
-        const pending = get().pendingUser
-        if (pending !== null && pending.text === event.text) {
-          set({ pendingUser: null })
-          return
-        }
-        get().appendEntry({ key: nextKey('user'), kind: 'user', text: event.text ?? '', time: event.time })
-        return
-      }
-      case 'chat': {
-        // 落定：收走流式那条；没有就新起一条（直接回答、接续回放）。
-        // 帧缓冲里该条的残留 delta 一并作废——落定正文是权威，不被残帧覆盖。
-        const speechKey = get().butlerSpeechKey
-        const text = event.text ?? ''
-        if (speechKey !== null) frameBuffer.delete(speechKey)
-        if (speechKey !== null) {
-          set(st => ({
-            butlerSpeechKey: null,
-            lastChatText: text,
-            entries: st.entries.map(entry => entry.key === speechKey && entry.kind === 'butler'
-              ? { ...entry, text, streaming: false, time: event.time ?? entry.time }
-              : entry),
-          }))
-        } else {
-          set(st => ({ lastChatText: text }))
-          get().appendEntry({ key: nextKey('butler'), kind: 'butler', text, thinking: '', streaming: false, time: event.time })
-        }
-        return
-      }
-      case 'chat_delta': {
-        const speechKey = get().butlerSpeechKey
-        const key = speechKey ?? nextKey('butler')
-        if (speechKey === null) {
-          set(st => ({ butlerSpeechKey: key, entries: [...st.entries, { key, kind: 'butler', text: '', thinking: '', streaming: true, time: undefined }] }))
-        }
-        const buffer = frameBuffer.get(key) ?? {}
-        buffer.butlerText = (buffer.butlerText ?? currentButlerText(get(), key)) + (event.text ?? '')
-        frameBuffer.set(key, buffer)
-        scheduleFlush(get)
-        return
-      }
-      case 'chat_thinking': {
-        // 思考常早于第一段正文（模型先推理后说话）：只推理还没吐字时也开气泡，
-        // 让「在想」可见；这条可能是会被重试掉的尝试（chat_reset 时撤，thinkingOnly 语义）。
-        const thinking = event.thinking ?? ''
-        if (thinking === '') return
-        const speechKey = get().butlerSpeechKey
-        if (speechKey === null) {
-          const key = nextKey('butler')
-          set(st => ({ butlerSpeechKey: key, entries: [...st.entries, { key, kind: 'butler', text: '', thinking, streaming: true, time: undefined }] }))
-          return
-        }
-        set(st => ({ entries: st.entries.map(entry => entry.key === speechKey && entry.kind === 'butler' ? { ...entry, thinking } : entry) }))
-        return
-      }
-      case 'chat_reset': {
-        // 模型重试（S08）：只有思考、还没吐字的那条预览撤掉，下一版从新气泡起头。
-        const speechKey = get().butlerSpeechKey
-        if (speechKey !== null) {
-          const speech = get().entries.find(entry => entry.key === speechKey)
-          if (speech?.kind === 'butler' && speech.text === '' && speech.thinking !== '') {
-            get().removeEntry(speechKey)
-            set({ butlerSpeechKey: null })
-          }
-        }
-        return
-      }
-      case 'input': {
-        if (event.taskId !== undefined) set({ taskId: event.taskId })
-        get().appendEntry({
-          key: nextKey('note'), kind: 'note',
-          text: event.source === 'supplement' ? `补充已收到（第 ${String(event.version)} 版）：${event.text ?? ''}` : event.text ?? '',
-        })
-        return
-      }
-      case 'plan': {
-        // 调度卡（批 4b）：一张卡 + 每个子任务一条 subtask entry（数据面），格子即那一行。
-        const taskId = event.taskId ?? get().taskId ?? ''
-        const entryKey = nextKey('dispatch')
-        const subtasks = Array.isArray(event.subtasks) ? event.subtasks as Array<{ id: string; agentId: string; goal?: string; state?: string; startedAt?: number; reason?: string }> : []
-        const prefs = readCardPrefs(taskId)
-        const dispatch: DispatchEntry = {
-          key: entryKey, kind: 'dispatch', taskId,
-          order: subtasks.map(subtask => subtask.id),
-          active: subtasks.length > 0 ? subtasks[0]?.id ?? null : null,
-          open: typeof prefs.open === 'boolean' ? prefs.open : false,
-          resultOnly: prefs.resultOnly === true,
-          fresh: false, pulses: [],
-        }
-        set(st => {
-          const nextKeys = new Map(st.bubbleKeys)
-          const memberEntries: ThreadEntry[] = subtasks.map(subtask => {
-            const key = nextKey('subtask')
-            nextKeys.set(subtask.id, key)
-            return {
-              key, kind: 'subtask', subtaskId: subtask.id, agentId: subtask.agentId ?? '', goal: subtask.goal ?? '',
-              state: subtask.state ?? 'queued', body: '', thinking: '', terminal: false, live: true,
-              toolLine: null, artifacts: [], startedAt: subtask.startedAt ?? null, detail: null, error: null,
-              dispatchReason: subtask.reason,
-            }
-          })
-          return { taskId, bubbleKeys: nextKeys, entries: [...st.entries, dispatch, ...memberEntries] }
-        })
-        return
-      }
-      case 'subtask': {
-        handleSubtaskEvent(get, event)
-        return
-      }
-      case 'subtask_delta': {
-        // 终态之后不再追加（S08）：迟到帧不把已校准的结论再改掉。
-        const key = get().bubbleKeys.get(event.id ?? '')
-        if (key === undefined) return
-        const entry = get().entries.find(candidate => candidate.key === key)
-        if (entry?.kind !== 'subtask' || entry.terminal || !entry.live) return
-        const buffer: FramePatch = frameBuffer.get(key) ?? { subtaskId: event.id }
-        buffer.subtaskBody = (buffer.subtaskBody ?? entry.body) + (event.delta ?? '')
-        frameBuffer.set(key, buffer)
-        scheduleFlush(get)
-        return
-      }
-      case 'subtask_thinking': {
-        const key = get().bubbleKeys.get(event.id ?? '')
-        if (key === undefined) return
-        set(st => ({ entries: st.entries.map(entry => entry.key === key && entry.kind === 'subtask' ? { ...entry, thinking: event.thinking ?? '' } : entry) }))
-        return
-      }
-      case 'summary': {
-        // 汇总是这一轮的定论：正文只展示一次（S12）——与最后一条 butler 正文相同时置空。
-        const text = event.text ?? ''
-        const dedup = text !== '' && text === get().lastChatText
-        // 所有流式条目此刻收口：帧缓冲里的残留增量全部作废。
-        frameBuffer.clear()
-        get().appendEntry({
-          key: nextKey('summary'), kind: 'summary', state: event.state ?? '', text: dedup ? '' : text, error: typeof event.error === 'string' && event.error !== '' ? event.error : undefined, time: event.time,
-          ...(Array.isArray(event.followups) ? { followups: event.followups as string[] } : {}),
-        })
-        // 调度卡收口（settleCardForSummary）：只有收尾汇总才收口——waiting_user/external_pending
-        // 是暂停不是结束；还没定论的格子明确说「已停止」，不替它编一个成功。
-        // 调度卡收口（settleCardForSummary 完整语义）：只有**收尾**的汇总才收口——
-        // waiting_user/external_pending 是暂停（这一轮还活着），说成「已停止」是假话；
-        // 还没定论的格子改写为 cancelled 并定格 finishedAt：结束的一轮里不能有永远在
-        // 干活的成员+秒数在跳；成功成员（已有终态）一律不动——不把真实结果改成别的说法。
-        const summaryState = event.state ?? ''
-        const at = typeof event.time === 'number' ? event.time : Date.now()
-        // 收尾守卫：只有 completed/failed/cancelled/partial 才改写未定论格子——
-        // waiting_user 汇总是暂停，把还在跑的成员说成「已停止」是假话（旧 :523 守卫）。
-        const isFinal = ['completed', 'failed', 'cancelled', 'partial'].includes(summaryState)
-        set(st => ({
-          entries: st.entries.map(entry => {
-            if (entry.kind === 'subtask' && isFinal) {
-              if (entry.terminal) return entry
-              if (['waiting_user', 'external_pending'].includes(entry.state)) return { ...entry, live: false }
-              return { ...entry, live: false, state: 'cancelled', finishedAt: at }
-            }
-            if (entry.kind === 'dispatch' && ['completed', 'failed', 'cancelled', 'partial'].includes(summaryState)) {
-              return { ...entry, fresh: !entry.open }
-            }
-            return entry
-          }),
-          bubbleKeys: new Map(),
-          butlerSpeechKey: null,
-        }))
-        return
-      }
-      case 'error': {
-        // 稳定码区分（评审 中14）：流断了要刷新重开，业务失败等下一轮即可。
-        const hint = event.code === 'stream_broken'
-          ? '连接断了；请刷新页面重开，这一轮的结果以右栏任务记录为准。'
-          : event.message ?? ''
-        get().appendEntry({ key: nextKey('error'), kind: 'error', text: hint })
-        return
-      }
+      case 'conversation': return handleConversationEvent(event)
+      case 'user': return handleUserEvent(event)
+      case 'chat': return handleChatEvent(event)
+      case 'chat_delta': return handleChatDelta(event)
+      case 'chat_thinking': return handleChatThinking(event)
+      case 'chat_reset': return handleChatReset(event)
+      case 'input': return handleInputEvent(event)
+      case 'plan': return handlePlanEvent(event)
+      case 'subtask': return handleSubtaskEvent(event)
+      case 'subtask_delta': return handleSubtaskDelta(event)
+      case 'subtask_thinking': return handleSubtaskThinking(event)
+      case 'summary': return handleSummaryEvent(event)
+      case 'error': return handleErrorEvent(event)
       default:
         return
     }
@@ -588,22 +269,156 @@ export const useTurnStore = create<TurnState>((set, get) => ({
   },
 }))
 
-function currentButlerText(state: TurnState, key: string): string {
-  const entry = state.entries.find(candidate => candidate.key === key)
-  return entry?.kind === 'butler' ? entry.text : ''
+// ── 游标推进（consumeTurnEvent 语义，口径只有这一份）─────────────────────
+// 游标契约（评审 #14，依赖两条服务端事实，改动前先读）：
+//   ① 每条**渲染类**事件必带 seq（服务端 src/web.ts streamRun 落流时写入）；
+//   ② 每次订阅开始必先发一条 run 头（run 归零=服务端 event-log 每轮从 seq 1 重计数，
+//      这是权威语义不是 bug）。
+// run 头把 lastSeq 归零、其余事件推进 lastSeq——engine 侧 after 与此同源，交接见
+// lib/turn-engine.ts followUntilTerminal（重订时 from=store.lastSeq）。
+function advanceTurnCursor(event: TurnEvent): void {
+  if (event.type === 'run') {
+    useTurnStore.setState(state => ({
+      lastSeq: 0,
+      lastRunId: event.runId ?? '',
+      ...(event.taskId !== undefined && event.taskId !== '' ? { lastRunTaskId: event.taskId } : {}),
+    }))
+  } else if (event.seq !== undefined) {
+    useTurnStore.setState({ lastSeq: event.seq })
+  }
+  if ((event.type === 'subtask' || event.type === 'plan') && event.taskId !== undefined && event.taskId !== '') {
+    useTurnStore.setState({ lastRunTaskId: event.taskId })
+  }
+}
+
+function handleConversationEvent(event: TurnEvent): void {
+  if (typeof event.conversationId === 'string' && event.conversationId !== '') {
+    useTurnStore.setState({ conversationId: event.conversationId })
+    rememberConversation(event.conversationId)
+  }
+}
+
+function handleUserEvent(event: TurnEvent): void {
+  // 受理回放对得上预渲染的那条就不重复画（对不上：历史回放、其他入口，照常渲染）。
+  // 与旧 events.js 同口径：user 到达即撤「只有思考」的预览并清思考快照。
+  const store = useTurnStore.getState()
+  const speechKey = store.butlerSpeechKey
+  if (speechKey !== null) {
+    const speech = store.entries.find(entry => entry.key === speechKey)
+    if (speech?.kind === 'butler' && speech.text === '') {
+      frameBuffer.delete(speechKey)
+      useTurnStore.setState(st => ({ entries: st.entries.filter(entry => entry.key !== speechKey), butlerSpeechKey: null }))
+    }
+  }
+  const pending = useTurnStore.getState().pendingUser
+  if (pending !== null && pending.text === event.text) {
+    useTurnStore.setState({ pendingUser: null })
+    return
+  }
+  useTurnStore.getState().appendEntry({ key: nextKey('user'), kind: 'user', text: event.text ?? '', time: event.time })
+}
+
+function handleChatEvent(event: TurnEvent): void {
+  // 落定：收走流式那条；没有就新起一条（直接回答、接续回放）。
+  // 帧缓冲里该条的残留 delta 一并作废——落定正文是权威，不被残帧覆盖。
+  const speechKey = useTurnStore.getState().butlerSpeechKey
+  const text = event.text ?? ''
+  if (speechKey !== null) frameBuffer.delete(speechKey)
+  if (speechKey !== null) {
+    useTurnStore.setState(st => ({
+      butlerSpeechKey: null,
+      lastChatText: text,
+      entries: st.entries.map(entry => entry.key === speechKey && entry.kind === 'butler'
+        ? { ...entry, text, streaming: false, time: event.time ?? entry.time }
+        : entry),
+    }))
+  } else {
+    useTurnStore.setState(st => ({ lastChatText: text }))
+    useTurnStore.getState().appendEntry({ key: nextKey('butler'), kind: 'butler', text, thinking: '', streaming: false, time: event.time })
+  }
+}
+
+function handleChatDelta(event: TurnEvent): void {
+  const speechKey = useTurnStore.getState().butlerSpeechKey
+  const key = speechKey ?? nextKey('butler')
+  if (speechKey === null) {
+    useTurnStore.setState(st => ({ butlerSpeechKey: key, entries: [...st.entries, { key, kind: 'butler', text: '', thinking: '', streaming: true, time: undefined }] }))
+  }
+  const buffer = frameBuffer.get(key) ?? {}
+  buffer.butlerText = (buffer.butlerText ?? currentButlerText(key)) + (event.text ?? '')
+  frameBuffer.set(key, buffer)
+  scheduleFlush()
+}
+
+function handleChatThinking(event: TurnEvent): void {
+  // 思考常早于第一段正文（模型先推理后说话）：只推理还没吐字时也开气泡，
+  // 让「在想」可见；这条可能是会被重试掉的尝试（chat_reset 时撤，thinkingOnly 语义）。
+  const thinking = event.thinking ?? ''
+  if (thinking === '') return
+  const speechKey = useTurnStore.getState().butlerSpeechKey
+  if (speechKey === null) {
+    const key = nextKey('butler')
+    useTurnStore.setState(st => ({ butlerSpeechKey: key, entries: [...st.entries, { key, kind: 'butler', text: '', thinking, streaming: true, time: undefined }] }))
+    return
+  }
+  useTurnStore.setState(st => ({ entries: st.entries.map(entry => entry.key === speechKey && entry.kind === 'butler' ? { ...entry, thinking } : entry) }))
+}
+
+function handleChatReset(_event: TurnEvent): void {
+  // 模型重试（S08）：只有思考、还没吐字的那条预览撤掉，下一版从新气泡起头。
+  const speechKey = useTurnStore.getState().butlerSpeechKey
+  if (speechKey !== null) {
+    const speech = useTurnStore.getState().entries.find(entry => entry.key === speechKey)
+    if (speech?.kind === 'butler' && speech.text === '' && speech.thinking !== '') {
+      useTurnStore.getState().removeEntry(speechKey)
+      useTurnStore.setState({ butlerSpeechKey: null })
+    }
+  }
+}
+
+function handleInputEvent(event: TurnEvent): void {
+  // input 是本轮的补充受理：taskId 属于活任务，写入运行游标（空值不写，与 advanceTurnCursor 同口径）。
+  if (event.taskId !== undefined && event.taskId !== '') {
+    useTurnStore.setState({ lastRunTaskId: event.taskId })
+  }
+  useTurnStore.getState().appendEntry({
+    key: nextKey('note'), kind: 'note',
+    text: event.source === 'supplement' ? `补充已收到（第 ${String(event.version)} 版）：${event.text ?? ''}` : event.text ?? '',
+  })
+}
+
+function handlePlanEvent(event: TurnEvent): void {
+  // 调度卡（批 4b）：一张卡 + 每个子任务一条 subtask entry（数据面），格子即那一行。
+  const taskId = event.taskId ?? useTurnStore.getState().lastRunTaskId ?? ''
+  const entryKey = nextKey('dispatch')
+  const subtasks = Array.isArray(event.subtasks) ? event.subtasks as Array<{ id: string; agentId: string; goal?: string; state?: string; startedAt?: number; reason?: string }> : []
+  const prefs = readCardPrefs(taskId)
+  const dispatch: DispatchEntry = {
+    key: entryKey, kind: 'dispatch', taskId,
+    order: subtasks.map(subtask => subtask.id),
+    active: subtasks.length > 0 ? subtasks[0]?.id ?? null : null,
+    open: typeof prefs.open === 'boolean' ? prefs.open : false,
+    resultOnly: prefs.resultOnly === true,
+    fresh: false, pulses: [],
+  }
+  useTurnStore.setState(st => {
+    const memberEntries: ThreadEntry[] = subtasks.map(subtask => ({
+      key: nextKey('subtask'), kind: 'subtask', subtaskId: subtask.id, agentId: subtask.agentId ?? '', goal: subtask.goal ?? '',
+      state: subtask.state ?? 'queued', body: '', thinking: '', terminal: false, live: true,
+      toolLine: null, artifacts: [], startedAt: subtask.startedAt ?? null, detail: null, error: null,
+      dispatchReason: subtask.reason,
+    }))
+    return { entries: [...st.entries, dispatch, ...memberEntries] }
+  })
 }
 
 /** subtask 事件（旧 handleSubtask 的 store 面）：状态机 dispatched/running/终态。 */
-function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
+function handleSubtaskEvent(event: TurnEvent): void {
   const subtaskId = event.id ?? ''
-  const keys = get().bubbleKeys
-  let key = keys.get(subtaskId)
-  if (key === undefined) {
-    key = nextKey('subtask')
-    const next = new Map(keys)
-    next.set(subtaskId, key)
-    useTurnStore.setState({ bubbleKeys: next })
-    get().appendEntry({
+  const existing = subtaskEntryOf(useTurnStore.getState().entries, subtaskId)
+  const key = existing?.key ?? nextKey('subtask')
+  if (existing === undefined) {
+    useTurnStore.getState().appendEntry({
       key, kind: 'subtask', subtaskId, taskId: event.taskId ?? undefined, agentId: event.agentId ?? '', goal: '',
       state: event.state ?? '', body: '', thinking: '', terminal: false, live: true,
       toolLine: null, artifacts: [], startedAt: event.startedAt, detail: null, error: null,
@@ -618,8 +433,8 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
         // 只有状态**真变化**才标注到调度卡（旧 attachToDispatch 的 changed 口径）：
         // running 的工具行更新不算变化，不反复点亮「有更新」与脉冲。
         if (entry.kind === 'dispatch' && entry.order.includes(subtaskId)) {
-          const before = st.entries.find(candidate => candidate.key === key)
-          const changed = before?.kind !== 'subtask' || before.state !== (event.state ?? '')
+          const before = subtaskEntryOf(st.entries, subtaskId)
+          const changed = before === undefined || before.state !== (event.state ?? '')
           if (!changed) return entry
           // 脉冲 600ms 自清（旧 pulseCardCell 的 setTimeout 语义）；timer 仅在
           // 状态真变化（会点亮脉冲）时安排，不空转（评审 #20）。
@@ -664,7 +479,7 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
         : entry),
     }))
   }
-  if (event.state === 'waiting_user' || event.state === 'external_pending' || event.state === 'succeeded' || event.state === 'failed' || event.state === 'cancelled') {
+  if (event.state !== undefined && SETTLED_SUBTASK_STATES.includes(event.state)) {
     const authoritative = typeof event.detail === 'string' ? event.detail.trim() : ''
     const finalText = authoritative !== '' ? event.detail ?? '' : undefined
     apply(entry => ({
@@ -686,10 +501,72 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
       // 等你回话不是在计算：给回复入口（ask 卡）。卡面问题用 question，正文用 detail，
       // 混用会让「正文」变成一句提问（旧 handleSubtask 的告诫）。
       ask: event.state === 'waiting_user'
-        ? { taskId: event.taskId ?? get().taskId ?? '', question: event.question as string | undefined, detail: event.detail ?? undefined }
+        ? { taskId: event.taskId ?? useTurnStore.getState().lastRunTaskId ?? '', question: event.question as string | undefined, detail: event.detail ?? undefined }
         : undefined,
     }))
   }
+}
+
+function handleSubtaskDelta(event: TurnEvent): void {
+  // 终态之后不再追加（S08）：迟到帧不把已校准的结论再改掉。
+  const entry = subtaskEntryOf(useTurnStore.getState().entries, event.id ?? '')
+  if (entry === undefined || entry.terminal || !entry.live) return
+  const buffer: FramePatch = frameBuffer.get(entry.key) ?? { subtaskId: event.id }
+  buffer.subtaskBody = (buffer.subtaskBody ?? entry.body) + (event.delta ?? '')
+  frameBuffer.set(entry.key, buffer)
+  scheduleFlush()
+}
+
+function handleSubtaskThinking(event: TurnEvent): void {
+  const entry = subtaskEntryOf(useTurnStore.getState().entries, event.id ?? '')
+  if (entry === undefined) return
+  useTurnStore.setState(st => ({ entries: st.entries.map(candidate => candidate.key === entry.key && candidate.kind === 'subtask' ? { ...candidate, thinking: event.thinking ?? '' } : candidate) }))
+}
+
+function handleSummaryEvent(event: TurnEvent): void {
+  // 汇总是这一轮的定论：正文只展示一次（S12）——与最后一条 butler 正文相同时置空。
+  const text = event.text ?? ''
+  const dedup = text !== '' && text === useTurnStore.getState().lastChatText
+  // 所有流式条目此刻收口：帧缓冲里的残留增量全部作废。
+  frameBuffer.clear()
+  useTurnStore.getState().appendEntry({
+    key: nextKey('summary'), kind: 'summary', state: event.state ?? '', text: dedup ? '' : text, error: typeof event.error === 'string' && event.error !== '' ? event.error : undefined, time: event.time,
+    ...(Array.isArray(event.followups) ? { followups: event.followups as string[] } : {}),
+  })
+  // 调度卡收口（settleCardForSummary 完整语义）：只有**收尾**的汇总才收口——
+  // waiting_user/external_pending 是暂停（这一轮还活着），说成「已停止」是假话；
+  // 还没定论的格子改写为 cancelled 并定格 finishedAt：结束的一轮里不能有永远在
+  // 干活的成员+秒数在跳；成功成员（已有终态）一律不动——不把真实结果改成别的说法。
+  const summaryState = event.state ?? ''
+  const at = typeof event.time === 'number' ? event.time : Date.now()
+  const isFinal = TERMINAL_TASK_STATES.includes(summaryState)
+  useTurnStore.setState(st => ({
+    entries: st.entries.map(entry => {
+      if (entry.kind === 'subtask' && isFinal) {
+        if (entry.terminal) return entry
+        if (PAUSED_SUBTASK_STATES.includes(entry.state)) return { ...entry, live: false }
+        return { ...entry, live: false, state: 'cancelled', finishedAt: at }
+      }
+      if (entry.kind === 'dispatch' && isFinal) {
+        return { ...entry, fresh: !entry.open }
+      }
+      return entry
+    }),
+    butlerSpeechKey: null,
+  }))
+}
+
+function handleErrorEvent(event: TurnEvent): void {
+  // 稳定码区分（评审 中14）：流断了要刷新重开，业务失败等下一轮即可。
+  const hint = event.code === 'stream_broken'
+    ? '连接断了；请刷新页面重开，这一轮的结果以右栏任务记录为准。'
+    : event.message ?? ''
+  useTurnStore.getState().appendEntry({ key: nextKey('error'), kind: 'error', text: hint })
+}
+
+function currentButlerText(key: string): string {
+  const entry = useTurnStore.getState().entries.find(candidate => candidate.key === key)
+  return entry?.kind === 'butler' ? entry.text : ''
 }
 
 /**

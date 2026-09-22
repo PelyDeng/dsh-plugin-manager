@@ -35,6 +35,7 @@ export function AppShell() {
   const leftPanelRef = useRef<HTMLElement>(null)
   const rightPanelRef = useRef<HTMLElement>(null)
   const centerRef = useRef<HTMLElement>(null)
+  const gearRef = useRef<HTMLButtonElement>(null)
   const drawerReturnFocus = useRef<HTMLElement | null>(null)
   const sidebarReturnFocus = useRef<HTMLElement | null>(null)
 
@@ -80,9 +81,7 @@ export function AppShell() {
       if (event.key !== 'Escape' || event.isComposing) return
       if (useSessionStore.getState().settingsOpen) {
         event.preventDefault()
-        useSessionStore.getState().setSettingsOpen(false)
-        // 关页后焦点送回齿轮，不落空（main setOpenSettings(false) 同口径）。
-        ;(document.querySelector('.icon-btn') as HTMLElement | null)?.focus()
+        closeSettings()
         return
       }
       if (drawerOpen) { event.preventDefault(); closeDrawer(); return }
@@ -121,6 +120,21 @@ export function AppShell() {
   const toggleSidebar = () => { sidebarOpen ? closeSidebar() : openSidebar() }
   const backdropVisible = drawerOpen || sidebarOpen
 
+  /** 关设置页：焦点送回齿轮，不落空（旧 main setOpenSettings(false) 同口径；评审 #22 去掉 querySelector）。
+   *  三栏在设置页打开期间带 hidden——同步 focus() 落在隐藏元素上是空操作，必须等
+   *  React 提交、三栏复现之后（rAF）再落焦。 */
+  const focusGearAfterRender = () => { window.requestAnimationFrame(() => gearRef.current?.focus()) }
+  const closeSettings = () => {
+    useSessionStore.getState().setSettingsOpen(false)
+    focusGearAfterRender()
+  }
+  const toggleSettings = () => {
+    const next = !useSessionStore.getState().settingsOpen
+    useSessionStore.getState().setSettingsOpen(next)
+    if (!next) focusGearAfterRender()
+    // 打开侧的落焦由 SettingsPage 自己负责（挂载后焦点到标题）。
+  }
+
   const total = members.length
   const taskView = useTurnStore(state => state.taskView)
   const busy = members.filter(member => member.busy !== null).length
@@ -134,7 +148,7 @@ export function AppShell() {
         <span className="topbar__dots" aria-hidden="true"><i /><i /><i /></span>
         <h1 className="topbar__brand">牛马台账</h1>
         <p className="topbar__motto">牛马虽苦，但一起干，<br />　　就不孤单了~加油!</p>
-        <span className="topbar__status"><span className="dot dot--online" aria-hidden="true" /><span>{topStatus !== '' ? topStatus : streaming ? '正在处理' : '已上线'}</span></span>
+        <span className="topbar__status"><span className="dot dot--online" aria-hidden="true" /><span>{topStatus.kind === 'error' ? topStatus.text : topStatus.kind === 'stopping' ? '正在请求停止' : streaming ? '正在处理' : '已上线'}</span></span>
         <span className="spacer" />
         <p className="topbar__slogan">把重复的事，<span className="red-wavy">交给牛马们!</span></p>
         <span className="topbar__smile" aria-hidden="true">☺</span>
@@ -142,7 +156,9 @@ export function AppShell() {
         <button type="button" className="btn btn--ghost drawer-toggle" aria-label="打开成员档案" aria-expanded={drawerOpen} onClick={toggleDrawer}>🐮</button>
       </header>
 
-      <div className="columns desk">
+      {/* 设置页打开时三栏整体让位（评审 #22 单轨化：React hidden 一处说了算，
+          不再另同步 body[data-settings] dataset）。 */}
+      <div className="columns desk" hidden={settingsOpen}>
         <aside className="column column--left" id="left-panel" ref={leftPanelRef} tabIndex={-1} aria-label="任务记录">
           <div className="left__top">
             <div className="brand">
@@ -208,12 +224,8 @@ export function AppShell() {
               title="设置"
               aria-label="设置"
               aria-expanded={settingsOpen}
-              onClick={() => {
-                const next = !settingsOpen
-                useSessionStore.getState().setSettingsOpen(next)
-                if (next) window.requestAnimationFrame(() => { (document.getElementById('settings-title') as HTMLElement | null)?.focus() })
-                else window.requestAnimationFrame(() => { (document.querySelector('.icon-btn') as HTMLElement | null)?.focus() })
-              }}
+              ref={gearRef}
+              onClick={toggleSettings}
             >
               <svg viewBox="0 0 20 20" aria-hidden="true">
                 <circle cx="10" cy="10" r="3.1" fill="none" stroke="currentColor" strokeWidth="1.8" />
@@ -273,7 +285,7 @@ export function AppShell() {
         </aside>
       </div>
 
-      <SettingsPage />
+      <SettingsPage onClose={closeSettings} />
 
       <div
         className="drawer-backdrop"

@@ -5,7 +5,7 @@
 import { api, ApiError } from '../lib/api.ts'
 import { errorTextOf } from '../lib/error-text.ts'
 import { announce } from '../lib/announce.ts'
-import { useSessionStore } from '../stores/session.ts'
+import { useSessionStore, TOP_IDLE } from '../stores/session.ts'
 import { clearAttachments } from './attachments.ts'
 import { useTurnStore } from '../stores/turn.ts'
 
@@ -23,16 +23,19 @@ export async function refreshPanelsData(options: { silent?: boolean } = {}): Pro
     const session = useSessionStore.getState()
     session.setMembers(members.items)
     session.setOverview(overview)
-    if (options.silent === true && session.topStatus === '读取失败') session.setTopStatus('')
+    // 静默自愈（评审 #3/#18）：成功清掉 panels 源错误（读取失败/没登录——登录恢复也算）。
+    if (options.silent === true && session.topStatus.kind === 'error' && session.topStatus.source === 'panels') {
+      session.setTopStatus(TOP_IDLE)
+    }
   } catch (error) {
     if (options.silent === true && !(error instanceof ApiError && error.status === 401)) return
     if (error instanceof ApiError && error.status === 401) {
       const session = useSessionStore.getState()
       session.setIdentity('')
-      session.setTopStatus('没登录')
+      session.setTopStatus({ kind: 'error', text: '没登录', source: 'panels' })
       return
     }
-    useSessionStore.getState().setTopStatus('读取失败')
+    useSessionStore.getState().setTopStatus({ kind: 'error', text: '读取失败', source: 'panels' })
   }
 }
 
@@ -111,7 +114,7 @@ export async function removePickedFailures(): Promise<void> {
     } catch (error) {
       // 顶栏可见（四通道对照表）：announce 对视觉用户不可见，删失败会被当成删掉了。
       const reason = error instanceof ApiError ? error.message : '删除失败，稍后再试'
-      useSessionStore.getState().setTopStatus(`失败记录${reason === '' ? '' : `：${reason}`}`)
+      useSessionStore.getState().setTopStatus({ kind: 'error', text: `失败记录${reason === '' ? '' : `：${reason}`}`, source: 'failures' })
     }
   }
   useSessionStore.getState().clearFailurePicked()

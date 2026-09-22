@@ -60,7 +60,6 @@ export async function resumeLiveTurn(): Promise<void> {
     conversationId,
     abort: controller,
     entries: [],
-    bubbleKeys: new Map(),
     butlerSpeechKey: null,
     streaming: true,
     following: true,

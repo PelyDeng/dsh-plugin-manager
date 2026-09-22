@@ -4,7 +4,7 @@
  * import 路径稳定；新代码请直接从对应 flows 文件导入。
  */
 export { act } from '../lib/api.ts'
-export { registerDraftRestore, sendMessage, stopTurn, runActionDecision, runSupplement, runReply, finishTurn, reportFailure, createTurnEngineHost } from '../flows/turn-flow.ts'
+export { sendMessage, stopTurn, runActionDecision, runSupplement, runReply, finishTurn, reportFailure, createTurnEngineHost } from '../flows/turn-flow.ts'
 export type { RetryEntry } from '../flows/turn-flow.ts'
 export { resumeLiveTurn, historyEntryToThreadEntry, openConversation, openTask, bindViewHistory, loadEarlier, loadIdentity } from '../flows/history-view.ts'
 export { refreshPanelsData, refreshChatList, gotoChatPage, renameConversation, removePickedFailures, removeConversationsWithFeedback, deletePickedConversations, openNewChat } from '../flows/panels.ts'

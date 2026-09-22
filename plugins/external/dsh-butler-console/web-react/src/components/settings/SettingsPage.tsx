@@ -193,28 +193,54 @@ function SettingsCard({ member, onSaved }: SettingsCardProps) {
   )
 }
 
-/** 设置页（方案 I18）：齿轮进、回群聊出；执行中给提示留「喊停」出路。 */
-export function SettingsPage() {
+/** 设置页（方案 I18）：齿轮进、回群聊出；执行中给提示留「喊停」出路。
+ *  显隐单轨（评审 #22）：React 条件渲染是唯一开关（关=不挂载），三栏让位由
+ *  AppShell 的 hidden 属性负责——不再同步 body[data-settings] dataset。
+ *  Tab 焦点陷阱：三栏隐藏后顶栏仍在，循环圈在设置页内，出去靠回群聊/Escape。 */
+export function SettingsPage({ onClose }: { onClose: () => void }) {
   const settingsOpen = useSessionStore(state => state.settingsOpen)
   const members = useSessionStore(state => state.members)
   const streaming = useTurnStore(state => state.streaming)
   const titleRef = useRef<HTMLHeadingElement>(null)
-  // 显隐由 body[data-settings] 驱动（0.12.7 CSS：.settings 默认 display:none，
-  // body[data-settings="open"] 才显示）——React 渲染面之外还要同步这个 dataset。
-  useEffect(() => {
-    document.body.dataset.settings = settingsOpen ? 'open' : 'closed'
-  }, [settingsOpen])
+  const rootRef = useRef<HTMLElement>(null)
   useEffect(() => {
     if (!settingsOpen) return
-    // 等显示切换（body dataset → display:flex）与渲染提交都完成，焦点才落得上。
-    const timer = setTimeout(() => titleRef.current?.focus(), 60)
-    return () => clearTimeout(timer)
+    // 挂载后一帧落焦标题（显示不再经 CSS 切换，rAF 即可）。
+    const raf = requestAnimationFrame(() => titleRef.current?.focus())
+    return () => cancelAnimationFrame(raf)
+  }, [settingsOpen])
+  // Tab 焦点陷阱：Shift+Tab 在首项回卷到末项、Tab 在末项回卷到首项；焦点已在
+  // 页外（顶栏）时也拉回圈内——设置页是整页接管视图，不让 Tab 游走到底下。
+  useEffect(() => {
+    if (!settingsOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return
+      const root = rootRef.current
+      if (root === null) return
+      const focusables = Array.from(root.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), select, textarea, a[href], [tabindex]:not([tabindex="-1"])',
+      ))
+      if (focusables.length === 0) return
+      const first = focusables[0] ?? root
+      const last = focusables[focusables.length - 1] ?? root
+      const active = document.activeElement
+      const inside = active instanceof Node && root.contains(active)
+      if (!event.shiftKey && (!inside || active === last)) {
+        event.preventDefault()
+        first.focus()
+      } else if (event.shiftKey && (!inside || active === first)) {
+        event.preventDefault()
+        last.focus()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
   }, [settingsOpen])
   if (!settingsOpen) return null
   return (
-    <section className="settings paper" id="settings" aria-label="设置">
+    <section className="settings paper" id="settings" aria-label="设置" ref={rootRef}>
       <div className="settings__head">
-        <button type="button" className="btn" onClick={() => useSessionStore.getState().setSettingsOpen(false)}>← 回群聊</button>
+        <button type="button" className="btn" onClick={onClose}>← 回群聊</button>
         <h2 className="settings__title" id="settings-title" ref={titleRef} tabIndex={-1}>设置</h2>
         <span className="settings__note">改外号、换头像、挑配色，只在你这里生效，不影响插件自己声明的身份。</span>
         {streaming && <span className="settings__live">有任务正在执行：回群聊可查看进度或喊停</span>}

@@ -11,13 +11,13 @@
  * - I02：只锁发送不锁输入，执行中可写下一句，草稿不被异步动作清掉。
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { registerDraftRestore, runSupplement, sendMessage, stopTurn } from '../../hooks/use-turn.ts'
+import { runSupplement, sendMessage, stopTurn } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
 import { useSessionStore, type MemberItem } from '../../stores/session.ts'
 import { useTurnStore } from '../../stores/turn.ts'
+import { useComposerStore } from '../../stores/composer.ts'
 import { addFiles, addUrl, dropAttachment } from '../../flows/attachments.ts'
 import { fileSizeText, useAttachmentsStore } from '../../stores/attachments.ts'
-import { registerTearTap } from '../chat/entries.tsx'
 
 interface MentionState {
   start: number
@@ -72,17 +72,15 @@ export function Composer() {
   const candidates = useMemo(() => (mention === null ? [] : mentionCandidates(members, mention.query)), [mention, members])
   const mentionItems = candidates.length > 0 ? candidates : members
 
-  // 失败草稿回填与欢迎板撕条填入：同一通道（I02——用户后来打过字就不覆盖由此处判断）。
+  // 回填单通道 pendingFill（评审 #10 步 4）：撕条/追问芯片/发送失败回填都从 store 来，
+  // 组件不再互相注册回调。restore 只在输入框为空时回填（I02——用户后来打过字就不覆盖）。
+  const pendingFill = useComposerStore(state => state.pendingFill)
   useEffect(() => {
-    registerDraftRestore(text => {
-      setDraft(current => (current === '' ? text : current))
-      inputRef.current?.focus()
-    })
-    registerTearTap(text => {
-      setDraft(text)
-      inputRef.current?.focus()
-    })
-  }, [])
+    if (pendingFill === null) return
+    setDraft(current => pendingFill.mode === 'restore' && current !== '' ? current : pendingFill.text)
+    inputRef.current?.focus()
+    useComposerStore.getState().clearFill()
+  }, [pendingFill])
 
   const autosize = () => {
     const input = inputRef.current
@@ -464,7 +462,6 @@ export function Composer() {
 export function StopButton() {
   const streaming = useTurnStore(state => state.streaming)
   const [disabled, setDisabled] = useState(false)
-  const setTopStatus = useSessionStore(state => state.setTopStatus)
   if (!streaming) return null
   return (
     <button
@@ -474,7 +471,7 @@ export function StopButton() {
       disabled={disabled}
       onClick={() => {
         setDisabled(true)
-        setTopStatus('正在请求停止')
+        // 顶栏过渡态由 stopTurn 自己置（TOP_STOPPING），此处不重复写。
         void stopTurn().finally(() => setDisabled(useTurnStore.getState().streaming))
       }}
     >

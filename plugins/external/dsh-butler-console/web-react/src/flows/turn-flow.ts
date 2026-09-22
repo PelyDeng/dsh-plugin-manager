@@ -26,7 +26,8 @@ import { newConversationId, rememberConversation } from '../lib/turn-event.ts'
 import { errorTextOf } from '../lib/error-text.ts'
 import type { TurnEvent } from '../lib/turn-event.ts'
 import { useTurnStore, type ThreadEntry } from '../stores/turn.ts'
-import { useSessionStore } from '../stores/session.ts'
+import { useSessionStore, TOP_IDLE, TOP_STOPPING } from '../stores/session.ts'
+import { useComposerStore } from '../stores/composer.ts'
 import { announce } from '../lib/announce.ts'
 import { useAttachmentsStore } from '../stores/attachments.ts'
 import { takeSentAttachments } from './attachments.ts'
@@ -45,7 +46,7 @@ export function reportFailure(error: unknown, fallback: string): void {
 /** 回合收尾：忙碌态落回 + 右栏低频数据刷新（I05 焦点归还随 composer 批 3/4a 落地）。 */
 export async function finishTurn(): Promise<void> {
   useTurnStore.setState({ streaming: false, abort: null })
-  useSessionStore.getState().setTopStatus('')
+  useSessionStore.getState().setTopStatus(TOP_IDLE)
   await refreshPanelsData()
   void refreshChatList()
 }
@@ -54,12 +55,6 @@ export async function finishTurn(): Promise<void> {
 import { refreshPanelsData, refreshChatList } from '../flows/panels.ts'
 export { refreshPanelsData, refreshChatList, gotoChatPage, renameConversation, removePickedFailures, removeConversationsWithFeedback, deletePickedConversations, openNewChat } from '../flows/panels.ts'
 /* ── 基础发送链路（批 3：直发+停止+失败重试，无 @提及/附件）──────────────── */
-
-/** 发送失败时把草稿交回输入框的出口（composer 组件注册，避免 hook 反向依赖 UI）。 */
-let draftRestore: ((text: string) => void) | null = null
-export function registerDraftRestore(restore: (text: string) => void): void {
-  draftRestore = restore
-}
 
 /** 重试入口渲染（error-line + 重试按钮），由 Thread 按 entry 渲染。 */
 export interface RetryEntry {
@@ -85,13 +80,11 @@ export async function sendMessage(text: string, reuseRequestId?: string): Promis
     useTurnStore.setState({
       viewToken: state.viewToken + 1,
       entries: [],
-      bubbleKeys: new Map(),
       butlerSpeechKey: null,
       lastSeq: 0,
       lastRunId: '',
       lastRunTaskId: '',
       lastChatText: '',
-      taskId: null,
       following: true,
     })
   }
@@ -150,10 +143,10 @@ export async function sendMessage(text: string, reuseRequestId?: string): Promis
     useTurnStore.getState().removeEntry(noteKey)
     const pending = useTurnStore.getState().pendingUser
     if (pending !== null) {
-      // 还没受理就失败：草稿回输入框（用户后来打过字就不覆盖），附件退回输入框上方；
-      // 重试入口复用同一幂等身份，不会把活再派一遍。
+      // 还没受理就失败：草稿回输入框（用户后来打过字就不覆盖——restore 语义），附件退回
+      // 输入框上方；重试入口复用同一幂等身份，不会把活再派一遍。
       useTurnStore.setState({ pendingUser: null })
-      draftRestore?.(trimmed)
+      useComposerStore.getState().requestFill(trimmed, 'restore')
       if (sentEntries.length > 0) {
         useAttachmentsStore.getState().add(sentEntries.map(entry => ({
           key: entry.key, name: entry.name, size: entry.size,
@@ -179,23 +172,23 @@ export async function sendMessage(text: string, reuseRequestId?: string): Promis
 export async function stopTurn(): Promise<void> {
   const conversationId = useTurnStore.getState().conversationId
   if (conversationId === null) return
-  useSessionStore.getState().setTopStatus('正在请求停止')
+  useSessionStore.getState().setTopStatus(TOP_STOPPING)
   try {
     // taskId 防误伤（评审 #10-中10）：只中止确实属于当前任务的那一轮。
     const outcome = await api.stop(conversationId, { taskId: useTurnStore.getState().lastRunTaskId, signal: AbortSignal.timeout(10000) })
     if (outcome.accepted) {
       // 等待中的任务被喊停时服务端给 reason（如「已把等待中的任务喊停，材料保留」）。
       if (typeof outcome.reason === 'string' && outcome.reason !== '') {
-        useSessionStore.getState().setTopStatus('')
+        useSessionStore.getState().setTopStatus(TOP_IDLE)
         useTurnStore.getState().appendEntry({ key: `note-stop-${Date.now()}`, kind: 'note', text: outcome.reason })
       }
       // 其余情况：终态由随后的 summary 事件落定，这里不再多说。
       return
     }
-    useSessionStore.getState().setTopStatus('已上线')
+    useSessionStore.getState().setTopStatus(TOP_IDLE)
     useTurnStore.getState().appendEntry({ key: `note-stop-${Date.now()}`, kind: 'note', text: `没有停止：${outcome.reason || '这一轮已经不在执行'}` })
   } catch {
-    useSessionStore.getState().setTopStatus('停止请求失败')
+    useSessionStore.getState().setTopStatus({ kind: 'error', text: '停止请求失败', source: 'stop' })
     useTurnStore.getState().appendEntry({ key: `error-stop-${Date.now()}`, kind: 'error', text: '停止请求没送到，可以再试一次；取消不能回滚已经发生的操作。' })
     announce('停止请求没送到，可以再试一次')
   }

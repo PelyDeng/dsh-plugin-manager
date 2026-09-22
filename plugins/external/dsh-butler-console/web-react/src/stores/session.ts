@@ -21,6 +21,19 @@ export interface ChatListItem {
   preview: string
 }
 
+/**
+ * 顶栏状态（评审 #18 枚举化）：idle 的显示词由 streaming 派生（正在处理/已上线）；
+ * stopping 是喊停的过渡态；错误带来源——轮询自愈（评审 #3）只清 panels 源，
+ * stop/failures 源的错误等 finishTurn 或下一次显式动作收口。
+ */
+export type TopStatus =
+  | { kind: 'idle' }
+  | { kind: 'stopping' }
+  | { kind: 'error'; text: string; source: 'panels' | 'stop' | 'failures' }
+
+export const TOP_IDLE: TopStatus = { kind: 'idle' }
+export const TOP_STOPPING: TopStatus = { kind: 'stopping' }
+
 export interface SessionState {
   identityLabel: string
   members: MemberItem[]
@@ -41,8 +54,8 @@ export interface SessionState {
   /** 失败记录勾选（0.12.7 与任务记录同款）。 */
   failurePicked: string[]
   overview: OverviewData | null
-  /** 顶栏状态词（已上线/正在处理/没登录/读取失败）。streaming 优先，错误态覆盖。 */
-  topStatus: string
+  /** 顶栏状态（TopStatus 枚举，评审 #18）：idle 显示词由 streaming 派生，错误态覆盖。 */
+  topStatus: TopStatus
   /** 「加载更早记录」控件状态（I10：两个游标都到底后换分界说明）。 */
   earlier: { phase: 'idle' | 'loading' | 'done' | 'error'; message?: string }
   /** 历史阅读游标（评审 #11：从 use-turn 模块级单例搬入——真相源单点）。 */
@@ -66,7 +79,7 @@ export interface SessionState {
   toggleFailurePicked: (id: string, picked: boolean) => void
   clearFailurePicked: () => void
   setOverview: (data: OverviewData | null) => void
-  setTopStatus: (status: string) => void
+  setTopStatus: (status: TopStatus) => void
   stampAvatar: (agentId: string) => void
 }
 
@@ -83,7 +96,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   renamingId: null,
   failurePicked: [],
   overview: null,
-  topStatus: '',
+  topStatus: TOP_IDLE,
   earlier: { phase: 'idle' },
   historyCursor: { transcriptBefore: null, taskOffset: null, loading: false, error: null, entriesCache: [] },
   settingsOpen: false,

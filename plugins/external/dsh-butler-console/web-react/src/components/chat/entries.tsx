@@ -16,6 +16,7 @@ import { SubtaskBubble } from './SubtaskBubble.tsx'
 import type { ThreadEntry, SubtaskEntry } from '../../stores/turn.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { accentOf, displayNameOf, useSessionStore } from '../../stores/session.ts'
+import { useComposerStore } from '../../stores/composer.ts'
 import { ROUTE_PREFIX } from '../../lib/api.ts'
 import { openTask, sendMessage } from '../../hooks/use-turn.ts'
 import { DispatchCard } from '../dcard/DispatchCard.tsx'
@@ -194,7 +195,7 @@ function SummaryEntryViewFn({ state, text, error, followups }: {
       {followups !== undefined && followups.length > 0 && (
         <div className="summary__followups">
           {followups.map(item => (
-            <button key={item} type="button" className="follow-chip" onClick={() => tearTapFill(item)}>
+            <button key={item} type="button" className="follow-chip" onClick={() => { useComposerStore.getState().requestFill(item) }}>
               {item}
             </button>
           ))}
@@ -220,7 +221,7 @@ function TaskEntryViewFn({ task }: { task: import('../../lib/api.ts').TaskSummar
 }
 
 /** 空状态欢迎板（旧 renderWelcome：告示可撕条 + 竖排边注 + 红波浪强调）。撕条点击把
- *  完整话填进输入框（composer 批 3 起由 draftRestore 承接；这里通过同一注册口回填）。 */
+ *  完整话填进输入框——回填单通道 pendingFill（评审 #10 步 4），不在组件间注册回调。 */
 export function Welcome() {
   return (
     <div className="welcome welcome--board">
@@ -235,13 +236,13 @@ export function Welcome() {
           也可以盯进展、提建议，陪你把事做成
         </p>
         <div className="board__tears">
-          {SUGGESTIONS.map((item, index) => (
+          {SUGGESTIONS.map(item => (
             <button
               key={item.label}
               type="button"
               className="board__tear"
               title={item.text}
-              onClick={() => { registerDraftRestoreTap(item.text) }}
+              onClick={() => { useComposerStore.getState().requestFill(item.text) }}
             >
               <span className="board__tear-text">{item.text}</span>
             </button>
@@ -250,18 +251,6 @@ export function Welcome() {
       </div>
     </div>
   )
-}
-
-/** 撕条点击的填入通道：composer 注册的草稿回填口在此复用（欢迎页没有别的输入路径）。 */
-let tearTap: ((text: string) => void) | null = null
-export function registerTearTap(handler: (text: string) => void): void {
-  tearTap = handler
-}
-function tearTapFill(text: string): void {
-  tearTap?.(text)
-}
-function registerDraftRestoreTap(text: string): void {
-  tearTap?.(text)
 }
 
 const UserEntryView = memo(UserEntryViewFn)
