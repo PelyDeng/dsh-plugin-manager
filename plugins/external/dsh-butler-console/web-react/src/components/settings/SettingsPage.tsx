@@ -15,6 +15,7 @@ import { useTurnStore } from '../../stores/turn.ts'
 import { refreshPanelsData } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
 import { Avatar } from '../common/Avatar.tsx'
+import { MemorySettings } from './MemorySettings.tsx'
 
 type CardStatusKind = '' | 'dirty' | 'busy' | 'ok' | 'error'
 
@@ -196,11 +197,14 @@ function SettingsCard({ member, onSaved }: SettingsCardProps) {
 /** 设置页（方案 I18）：齿轮进、回群聊出；执行中给提示留「喊停」出路。
  *  显隐单轨（评审 #22）：React 条件渲染是唯一开关（关=不挂载），三栏让位由
  *  AppShell 的 hidden 属性负责——不再同步 body[data-settings] dataset。
- *  Tab 焦点陷阱：三栏隐藏后顶栏仍在，循环圈在设置页内，出去靠回群聊/Escape。 */
+ *  Tab 焦点陷阱：三栏隐藏后顶栏仍在，循环圈在设置页内，出去靠回群聊/Escape。
+ *  记忆 Tab（v2.6 §4.6）：外观（只改显示）与记忆（影响管家行为）显式区隔——两种设置
+ *  的力量感分开，默认落在外观。 */
 export function SettingsPage({ onClose }: { onClose: () => void }) {
   const settingsOpen = useSessionStore(state => state.settingsOpen)
   const members = useSessionStore(state => state.members)
   const streaming = useTurnStore(state => state.streaming)
+  const [tab, setTab] = useState<'appearance' | 'memory'>('appearance')
   const titleRef = useRef<HTMLHeadingElement>(null)
   const rootRef = useRef<HTMLElement>(null)
   useEffect(() => {
@@ -242,14 +246,26 @@ export function SettingsPage({ onClose }: { onClose: () => void }) {
       <div className="settings__head">
         <button type="button" className="btn" onClick={onClose}>← 回群聊</button>
         <h2 className="settings__title" id="settings-title" ref={titleRef} tabIndex={-1}>设置</h2>
-        <span className="settings__note">改外号、换头像、挑配色，只在你这里生效，不影响插件自己声明的身份。</span>
+        <span className="settings__note">
+          {tab === 'appearance'
+            ? '改外号、换头像、挑配色，只在你这里生效，不影响插件自己声明的身份。'
+            : '记忆与要求会影响管家每一轮的行为——这里改的是它「怎么干活」。'}
+        </span>
         {streaming && <span className="settings__live">有任务正在执行：回群聊可查看进度或喊停</span>}
       </div>
-      <div className="settings__grid" id="settings-members">
-        {members.length === 0
-          ? <p className="empty">还没有可分派的成员</p>
-          : members.map(member => <SettingsCard key={member.agentId} member={member} onSaved={() => { void refreshPanelsData() }} />)}
+      <div className="settings__tabs" role="tablist" aria-label="设置分区">
+        <button type="button" role="tab" aria-selected={tab === 'appearance'} className={`btn btn--tiny${tab === 'appearance' ? ' btn--primary' : ''}`} onClick={() => setTab('appearance')}>外观（只改显示）</button>
+        <button type="button" role="tab" aria-selected={tab === 'memory'} className={`btn btn--tiny${tab === 'memory' ? ' btn--primary' : ''}`} onClick={() => setTab('memory')}>记忆与要求（影响管家的行为）</button>
       </div>
+      {tab === 'appearance' ? (
+        <div className="settings__grid" id="settings-members">
+          {members.length === 0
+            ? <p className="empty">还没有可分派的成员</p>
+            : members.map(member => <SettingsCard key={member.agentId} member={member} onSaved={() => { void refreshPanelsData() }} />)}
+        </div>
+      ) : (
+        <MemorySettings />
+      )}
     </section>
   )
 }

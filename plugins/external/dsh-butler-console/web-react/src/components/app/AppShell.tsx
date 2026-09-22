@@ -17,6 +17,7 @@ import { useTurnStore } from '../../stores/turn.ts'
 import { Thread } from '../chat/Thread.tsx'
 import { Avatar } from '../common/Avatar.tsx'
 import { ChatList, ChatPager, ChatSearch, FailureList, ManageBar, Motto } from '../panels/left-right.tsx'
+import { MemorySummary } from '../panels/memory-summary.tsx'
 import { Composer, StopButton } from '../composer/Composer.tsx'
 import { ActionDeck } from '../composer/ActionDeck.tsx'
 
@@ -279,6 +280,11 @@ export function AppShell() {
           <section>
             <div className="panel">
               <FailureList />
+            </div>
+          </section>
+          <section>
+            <div className="panel">
+              <MemorySummary />
             </div>
           </section>
           <Motto />

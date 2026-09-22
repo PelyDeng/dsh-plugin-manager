@@ -238,6 +238,42 @@ export const api = {
     request<{ items: AttachmentRecord[] }>(`/attachments/list?conversationId=${encodeURIComponent(conversationId)}`),
   removeAttachment: (id: string) =>
     request(`/attachments?id=${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  // ---- 记忆治理（v2.6 设计 §4.6；CONTRACT_VERSION 2）----
+  memorySummary: () =>
+    request<{ memoryCount: number; instructionCount: number; recent: MemoryItem[] }>('/memories/summary'),
+  memories: (agentId = '', kind = '') => {
+    const params = new URLSearchParams()
+    if (agentId !== '') params.set('agentId', agentId)
+    if (kind !== '') params.set('kind', kind)
+    const query = params.toString()
+    return request<{ items: MemoryItem[] }>(`/memories${query === '' ? '' : `?${query}`}`)
+  },
+  memoryCreate: (input: { kind: string; content: string; origin?: string; importance?: number }) =>
+    request<{ item: MemoryItem }>('/memories', { method: 'POST', body: JSON.stringify(input) }),
+  memoryUpdate: (input: { id: string; content?: string; importance?: number; expiresAt?: number | null; agentId?: string }) =>
+    request<{ item: MemoryItem }>('/memories', { method: 'PUT', body: JSON.stringify(input) }),
+  memoryDelete: (ids: string[], agentId?: string) =>
+    request<{ deleted: number }>('/memories', { method: 'DELETE', body: JSON.stringify({ ids, agentId }) }),
+  memoryPurge: () => request<{ deleted: number }>('/memories/purge', { method: 'POST' }),
+  memoryExportUrl: () => `${ROUTE_PREFIX}/memories/export`,
+  memoryProcedural: () =>
+    request<{ agentId: string; sections: Array<{ key: string; title: string; order: number; content: string }> }>('/memories/procedural?agent=butler'),
+}
+
+/** 一条长期记忆（后端 agent_memories 行的投影）。 */
+export interface MemoryItem {
+  id: string
+  agentId: string
+  shortId: string
+  kind: 'semantic' | 'episodic' | 'instruction'
+  content: string
+  origin: 'user_statement' | 'reference'
+  importance: number
+  source: 'tool' | 'manual'
+  sourceRef: string
+  expiresAt: number | null
+  createdAt: number
+  updatedAt: number
 }
 
 /**

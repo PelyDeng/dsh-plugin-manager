@@ -2007,3 +2007,28 @@ button:focus-visible {
 .action-deck__note-input { margin: 2px 0 4px; padding: 5px 9px; font-size: 12.5px; color: var(--bt-ink); background: #fffef8; border: 1.5px dashed #2f2b2660; border-radius: 8px 7px 9px 8px; }
 .action-deck__note-input::placeholder { color: var(--bt-ink-faint); }
 .action-deck__note-input:focus-visible { border-color: var(--bt-ink); outline: none; }
+
+/* ── 记忆治理（v2.6 §4.6）：设置页三分区 + 右栏轻摘要 ─────────────────── */
+.settings__tabs { display: flex; gap: 8px; margin: 10px 0 2px; }
+.mem-settings__tabs { display: flex; gap: 8px; margin: 8px 0 10px; flex-wrap: wrap; }
+.mem-note { margin: 4px 0 10px; font-size: 12.5px; line-height: 1.7; color: var(--bt-ink-soft); }
+.mem-warn { margin: 6px 0; font-size: 12.5px; color: var(--bt-warn); }
+.mem-error { margin: 6px 0; font-size: 12.5px; color: #b3261e; }
+.mem-row { display: flex; align-items: baseline; gap: 8px; padding: 6px 2px; border-bottom: 1px dashed #2f2b2622; }
+.mem-row__id { flex: none; font-weight: 600; font-size: 12px; color: var(--bt-ink-soft); }
+.mem-row__content { flex: 1 1 auto; min-width: 0; font-size: 13px; overflow-wrap: anywhere; }
+.mem-row__meta { font-size: 11.5px; color: var(--bt-ink-faint); }
+.mem-add { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.mem-add input { flex: 1 1 auto; min-width: 0; }
+.mem-add__count { flex: none; font-size: 11.5px; color: var(--bt-ink-faint); }
+.mem-library__capacity strong { color: var(--bt-ink); }
+.mem-library__divider { margin: 8px 0 2px; padding: 3px 6px; font-size: 11.5px; color: var(--bt-ink-soft); background: #2f2b2608; border-left: 3px solid var(--bt-ink-soft); border-radius: 2px; }
+.mem-library__actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.mem-library__purge { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: #b3261e; }
+.mem-procedural__card { margin-bottom: 8px; border: 1px solid #2f2b2622; border-radius: 8px; }
+.mem-procedural__head { display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 8px 10px; font: inherit; font-size: 13px; background: none; border: 0; cursor: pointer; text-align: left; }
+.mem-procedural__meta { font-size: 11.5px; color: var(--bt-ink-faint); }
+.mem-procedural__body { margin: 0; padding: 4px 12px 10px; font-size: 12.5px; line-height: 1.8; white-space: pre-wrap; font-family: inherit; color: var(--bt-ink); }
+.panel-section--memory .panel-section__count { margin: 2px 0 6px; font-size: 12.5px; }
+.panel-section--memory .panel-section__recent { margin: 0; padding-left: 16px; font-size: 12px; color: var(--bt-ink-soft); }
+.panel-section--memory .panel-section__recent li { margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
