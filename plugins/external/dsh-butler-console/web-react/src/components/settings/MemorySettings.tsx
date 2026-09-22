@@ -90,13 +90,13 @@ function SearchBox({ query, onQuery }: { query: string; onQuery: (value: string)
 }
 
 export function MemorySettings() {
-  const [tab, setTab] = useState<Tab>('procedural')
+  const [tab, setTab] = useState<Tab>('instructions')
   return (
     <div className="mem-settings">
       <div className="mem-settings__tabs" role="tablist" aria-label="记忆分区">
-        <button type="button" role="tab" aria-selected={tab === 'procedural'} className="btn btn--tiny" onClick={() => setTab('procedural')}>产品资产</button>
-        <button type="button" role="tab" aria-selected={tab === 'instructions'} className="btn btn--tiny" onClick={() => setTab('instructions')}>老大的要求</button>
-        <button type="button" role="tab" aria-selected={tab === 'library'} className="btn btn--tiny" onClick={() => setTab('library')}>记忆库</button>
+        <button type="button" role="tab" aria-selected={tab === 'procedural'} className={tab === 'procedural' ? 'btn btn--tiny mem-tab-active' : 'btn btn--tiny'} onClick={() => setTab('procedural')}>出厂规矩</button>
+        <button type="button" role="tab" aria-selected={tab === 'instructions'} className={tab === 'instructions' ? 'btn btn--tiny mem-tab-active' : 'btn btn--tiny'} onClick={() => setTab('instructions')}>老大的要求</button>
+        <button type="button" role="tab" aria-selected={tab === 'library'} className={tab === 'library' ? 'btn btn--tiny mem-tab-active' : 'btn btn--tiny'} onClick={() => setTab('library')}>记忆库</button>
       </div>
       {tab === 'procedural' && <ProceduralSection />}
       {tab === 'instructions' && <InstructionsSection />}
@@ -132,7 +132,7 @@ function ProceduralSection() {
   if (sections === null) return <p className="empty">读取中…</p>
   return (
     <div className="mem-procedural">
-      <p className="mem-note">管家怎么干活的<strong>出厂规矩，每次对话都会读</strong>，所有站点统一、随版本更新。对哪条规矩有意见，直接在群里跟管家提，它会记下来转给维护者。</p>
+      <p className="mem-note">管家的<strong>出厂规矩，每次对话都会读</strong>。有意见？在群里跟管家提，它会转给维护者。</p>
       <SearchBox query={query} onQuery={setQuery} />
       <div className="mem-procedural__scroll">
         {visible.length === 0 && <p className="empty">没有命中的规矩（换个关键词试试）</p>}
@@ -156,7 +156,7 @@ function ProceduralSection() {
                   <Highlighted text={section.title} query={query} />
                   {hitCount > 0 && <span className="mem-procedural__hits"> 命中 {hitCount} 处</span>}
                 </span>
-                <span className="mem-procedural__meta">{section.content.length} 字{isOpen ? ' ▲' : ' ▼'}</span>
+                <span className="mem-procedural__meta">{isOpen ? ' ▲' : ' ▼'}</span>
               </button>
               {isOpen && (
                 <div className="mem-procedural__body">
@@ -238,12 +238,8 @@ function InstructionsSection() {
 
   return (
     <div className="mem-instructions">
-      <p className="mem-note">
-        这里是你亲手定的规矩，<strong>永远生效、优先于管家自己记的</strong>；平时在群里随口说的偏好，管家会记进下面的记忆库。
-        只放风格与偏好，工作流程直接告诉管家；安全与流程类硬规则不在此列。
-        <strong> 当前对管家生效</strong>（每个成员各有一份，互不相通）。
-      </p>
-      <SearchBox query={query} onQuery={setQuery} />
+      <p className="mem-section__title">老大的要求</p>
+      <p className="mem-note"><strong>你亲手定的规矩：永远生效，优先于管家自己记的一切。</strong><br />只放风格与偏好；工作流程直接告诉管家。当前对管家生效。</p>
       <div className="mem-add">
         <div className="mem-add__main">
           <label className="mem-add__label" htmlFor="mem-instruction-input">✍ 写一条新规矩</label>
@@ -254,9 +250,9 @@ function InstructionsSection() {
             value={draft}
             placeholder={`例如：叫我 DPL（${CONTENT_MIN}-${INSTRUCTION_CONTENT_LIMIT} 字）`}
             onChange={event => { setDraft(event.target.value); setError('') }}
-            onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing && draftLength >= CONTENT_MIN) void add() }}
+            onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) void add() }}
           />
-          <span className="mem-add__count">{draft.length}/{INSTRUCTION_CONTENT_LIMIT}</span>
+          <span className={`mem-add__count${draft.length >= INSTRUCTION_CONTENT_LIMIT ? ' mem-add__count--full' : ''}`}>{draft.length}/{INSTRUCTION_CONTENT_LIMIT}</span>
         </div>
         <button
           type="button"
@@ -271,6 +267,7 @@ function InstructionsSection() {
       {tooShort && <p className="mem-warn" role="status">还差 {CONTENT_MIN - draftLength} 个字：规矩要写成一句完整的话，太短管家对不上号。</p>}
       {warning !== '' && <p className="mem-warn" role="status">{warning}</p>}
       {error !== '' && <p className="mem-error">{error}</p>}
+      <SearchBox query={query} onQuery={setQuery} />
       {items !== null && items.length === 0 && query === '' && <p className="empty">在上方输入框写下第一条规矩（如「叫我 DPL」），它永远生效</p>}
       {query !== '' && visible.length === 0 && <p className="empty">没有命中的要求（换个关键词试试）</p>}
       {visible.map(item => (
@@ -300,8 +297,11 @@ function LibrarySection() {
   useEffect(reload, [])
   const itemsSafe = useMemo(() => items ?? [], [items])
   const terms = searchTerms(query)
-  const visible = itemsSafe.filter(item => fuzzyMatch(`${item.content} ${item.kind} ${item.origin}`, terms))
+  // 分区边界（信息架构评审发现 1）：记忆库只放管家自记的（semantic/episodic），要求在分区二管。
+  const library = itemsSafe.filter(item => item.kind !== 'instruction')
+  const visible = library.filter(item => fuzzyMatch(`${item.content} ${item.kind} ${item.origin}`, terms))
   const injected = injectedCount(itemsSafe)
+  const instructionCount = itemsSafe.filter(item => item.kind === 'instruction').length
   // 统计概览（§4.6 P1.5）：按智能体分组的条数——自然显性化「各成员记忆互不相通」。
   const groupStats = useMemo(() => {
     const AGENT_LABELS: Record<string, string> = { butler: '管家', blog: '博客智能体', huiyu: '绘语', closedoff: '封闭化管理' }
@@ -314,6 +314,7 @@ function LibrarySection() {
     if (!window.confirm(`删掉这条记忆？[${item.shortId}]「${item.content}」\n删了就找不回来了，要留底先导出。`)) return
     try {
       await api.memoryDelete([item.id])
+      announce('已删除')
       reload()
     } catch (cause) {
       setError(errorTextOf(cause, '删除失败'))
@@ -346,7 +347,7 @@ function LibrarySection() {
   return (
     <div className="mem-library">
       <p className="mem-note mem-library__capacity">
-        当前注入 <strong>{injected}</strong> 条（上限 10 条/记忆清单 ≤1500 字符）；越重要越先被想起，预算满时靠后的不进对话。
+        每轮对话生效：你的要求 {instructionCount} 条 + 管家的记忆 <strong>{injected}</strong> 条（记忆注入上限 10，越重要越靠前）。
       </p>
       {groupStats.length > 0 && (
         <p className="mem-note mem-library__groups">
@@ -368,11 +369,9 @@ function LibrarySection() {
             )}
             <div className="mem-row">
               <span className="mem-row__id">[{item.shortId}]</span>
-              <span className="mem-row__content">
+              <span className="mem-row__content" title={`${item.origin === 'reference' ? '自资料记' : '老大原话'} · 记于 ${formatDate(item.updatedAt)}`}>
                 <Highlighted text={item.content} query={query} />
-                <span className="mem-row__meta">
-                  {' '}（{KIND_LABEL[item.kind]} · {item.origin === 'reference' ? '自资料记' : '老大原话'} · {formatDate(item.updatedAt)}）
-                </span>
+                <span className="mem-row__meta">（{KIND_LABEL[item.kind]}）</span>
               </span>
               <button type="button" className="btn btn--tiny" onClick={() => { void promote(item) }}>升级为要求</button>
               <button type="button" className="btn btn--tiny btn--ghost" onClick={() => { void remove(item) }}>删除</button>
@@ -381,14 +380,14 @@ function LibrarySection() {
         )
       })}
       <div className="mem-library__actions">
-        <a className="btn btn--tiny" href={api.memoryExportUrl()}>导出（含要求与记忆，不含产品守则）</a>
+        <a className="btn btn--tiny" href={api.memoryExportUrl()}>导出（含要求与记忆，不含出厂规矩）</a>
         {itemsSafe.length > 0 && !confirmPurge && (
           <button type="button" className="btn btn--tiny btn--ghost" onClick={() => setConfirmPurge(true)}>清空记忆库</button>
         )}
         {confirmPurge && (
           <span className="mem-library__purge">
             将清空记忆库的 {itemsSafe.filter(item => item.kind !== 'instruction').length} 条（不含「老大的要求」），不可恢复——确定？
-            <button type="button" className="btn btn--tiny btn--primary" onClick={() => { void purge() }}>确定清空</button>
+            <button type="button" className="btn btn--tiny mem-danger" onClick={() => { void purge() }}>确定清空</button>
             <button type="button" className="btn btn--tiny" onClick={() => setConfirmPurge(false)}>取消</button>
           </span>
         )}

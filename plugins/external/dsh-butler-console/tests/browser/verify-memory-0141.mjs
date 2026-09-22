@@ -46,7 +46,7 @@ const openMemoryTab = async () => {
 await openMemoryTab()
 
 // ①产品资产：markdown 渲染 + 滚动。
-await evaluate(`[...document.querySelectorAll('.mem-settings__tabs button')].find(b => b.textContent === '产品资产')?.click()`)
+await evaluate(`[...document.querySelectorAll('.mem-settings__tabs button')].find(b => b.textContent === '出厂规矩')?.click()`)
 await sleep(300)
 const procExpand = await evaluate(`(() => {
   const card = document.querySelector('.mem-procedural__card button')
@@ -131,7 +131,7 @@ const libSearch = await evaluate(`(() => ({
 check('③记忆库搜索过滤+高亮', libSearch.rows >= 1 && libSearch.marks > 0, JSON.stringify(libSearch))
 
 // ③c 产品资产搜索：命中卡片自动展开 + 命中数徽标。
-await evaluate(`[...document.querySelectorAll('.mem-settings__tabs button')].find(b => b.textContent === '产品资产')?.click()`)
+await evaluate(`[...document.querySelectorAll('.mem-settings__tabs button')].find(b => b.textContent === '出厂规矩')?.click()`)
 await sleep(250)
 await evaluate(`(async () => {
   const box = document.querySelector('.mem-procedural .mem-search input')

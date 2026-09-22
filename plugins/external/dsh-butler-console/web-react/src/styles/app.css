@@ -2059,3 +2059,68 @@ button:focus-visible {
 .mem-add__main input::placeholder { color: var(--bt-ink-faint); }
 .mem-add > .btn { align-self: flex-end; min-width: 64px; }
 .mem-library__groups { color: var(--bt-ink-faint); }
+
+/* ── 设置页 0.14.4 视觉/交互评审修正 ─────────────────────────────── */
+/* 二级分区选中态：琥珀贴纸（区别于一级 Tab 的墨底盖章，也区别于主操作红）。 */
+.mem-settings__tabs .btn.mem-tab-active {
+  background: #ffe9a8; color: #4a3a05; border-color: var(--bt-stroke);
+  transform: rotate(-1deg); font-weight: 700;
+}
+/* 一级 Tab 选中改墨底盖章——珊瑚红独占给动作按钮。 */
+.settings__tabs .btn--primary { background: var(--bt-ink); color: var(--bt-card); }
+/* 搜索框显形：白底墨框 + 放大镜前缀。 */
+.mem-search { position: relative; }
+.mem-search__input {
+  flex: 1 1 auto; min-width: 0; padding: 7px 10px 7px 30px;
+  font-size: 13px; background: #fff; border: 1.5px solid #2f2b2666; border-radius: 8px;
+}
+.mem-search::before {
+  content: '🔍'; position: absolute; left: 10px; top: 50%;
+  transform: translateY(-50%); font-size: 12px; opacity: 0.55; pointer-events: none;
+}
+/* 产品资产卡：手账墨框质感 + hover。 */
+.mem-procedural__card {
+  margin-bottom: 10px; border: 1.7px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm, 8px); background: var(--bt-card, #fffdf6);
+  box-shadow: 0 2px 0 #00000008, 0 3px 8px #0000000e;
+}
+.mem-procedural__head { padding: 9px 12px; font-weight: 700; }
+.mem-procedural__head:hover { background: var(--bt-paper, #f7f1e3); }
+/* 分区标题（手写体）。 */
+.mem-section__title {
+  margin: 2px 0 4px; font-family: var(--bt-hand, inherit); font-size: 18px;
+  font-weight: 700; color: var(--bt-ink); border-bottom: 2px dashed #2f2b2633; padding-bottom: 2px;
+}
+/* 正文限宽（中文舒适行宽）。 */
+.mem-procedural__body > * { max-width: 44em; }
+/* 截断分隔线：红笔虚线 + 标签。 */
+.mem-library__divider {
+  display: flex; align-items: center; gap: 8px;
+  margin: 10px 0 4px; padding: 0; font-size: 12px; color: var(--bt-ink-soft);
+  background: none; border: 0; border-top: 2px dashed #c0392b88;
+}
+.mem-library__divider::before {
+  content: '✂ 以下暂不注入'; flex: none; padding: 1px 8px;
+  background: var(--bt-paper, #f7f1e3); border: 1.5px solid #c0392b88; border-radius: 6px;
+}
+/* 录入区恢复单行动线 + 边框加深。 */
+.mem-add { flex-direction: row; align-items: center; }
+.mem-add > .btn { align-self: center; min-width: 72px; }
+.mem-add__main input { border-color: #2f2b2699; padding: 9px 12px; }
+.mem-add__main input:focus { border-color: var(--bt-ink); }
+.mem-add__count--full { color: #b3261e; font-weight: 700; }
+/* 容量数字贴纸化。 */
+.mem-library__capacity strong {
+  display: inline-block; padding: 0 8px; margin: 0 2px;
+  background: #ffe9a8; color: #4a3a05; border: 1.5px solid var(--bt-stroke, #2f2b26);
+  border-radius: 6px; font-family: var(--bt-hand, inherit); font-size: 15px;
+}
+.mem-library__groups { font-size: 11.5px; }
+/* 命中徽标与 mark 厚度。 */
+.mem-procedural__hits {
+  padding: 0 6px; background: #ffb70333; border: 1px solid var(--bt-warn, #c98a3d);
+  border-radius: 999px; font-size: 11px;
+}
+.mem-hit { padding: 0 3px; box-shadow: inset 0 -2px 0 #00000018; }
+/* 危险确认键。 */
+.mem-danger { background: #b3261e; color: #fff; border-color: #b3261e; }
