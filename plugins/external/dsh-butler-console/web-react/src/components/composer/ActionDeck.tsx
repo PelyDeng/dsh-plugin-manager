@@ -11,7 +11,7 @@ import { runActionDecision, runReply } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
 import { newConversationId } from '../../lib/turn-event.ts'
 import { RichText } from '../chat/RichText.tsx'
-import { actionExpired } from '../chat/ActionCard.tsx'
+import { actionExpired, actionDeadline } from '../chat/ActionCard.tsx'
 import { errorTextOf } from '../../lib/error-text.ts'
 
 interface PendingItem {
@@ -141,7 +141,10 @@ function PendingCard({ item }: { item: PendingItem }) {
         </>
       ) : (
         <>
-          <div className="action-deck__title">{item.title ?? item.summary ?? '待确认的操作'}</div>
+          <div className="action-deck__title">
+            {item.title ?? item.summary ?? '待确认的操作'}
+            {(() => { const dl = item.expiresAt !== undefined ? actionDeadline({ expiresAt: item.expiresAt }) : null; return dl !== null && <span className="action-deck__deadline">　{dl}</span> })()}
+          </div>
           <input
             type="text"
             className="action-deck__note-input"

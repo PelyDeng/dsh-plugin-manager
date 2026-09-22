@@ -245,6 +245,7 @@ export function AppShell() {
               <h2 className="section-title section-title--metrics">运行状态</h2>
               <div className="metrics" id="metrics">
                 {[
+                  { label: '排队中', value: counts.queued },
                   { label: '在干活', value: counts.running },
                   { label: '等你回话', value: counts.waitingUser },
                   { label: '待外部处理', value: counts.externalPending },

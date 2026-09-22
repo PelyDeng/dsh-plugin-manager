@@ -15,7 +15,7 @@ export interface AttachmentEntry {
   size: number
   phase: 'uploading' | 'ready' | 'failed'
   message: string
-  item: { id: string; name: string; bytes: number; status: string; message?: string } | null
+  item: { id: string; name: string; bytes: number; status: string; message?: string; kind?: string; preview?: string; totalUnits?: number; characters?: number; sourceUrl?: string } | null
 }
 
 export interface AttachmentsState {

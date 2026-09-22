@@ -202,7 +202,7 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
                 tabIndex={selected ? 0 : -1}
                 aria-controls={`${idPrefix}-panel-${subtaskId}`}
                 className={`dcard__cell${selected ? ' dcard__cell--active' : ''}${pulsing ? ' dcard__cell--pulse' : ''}`}
-                title={`${subtask?.goal ?? ''} @${subtask?.agentId ?? ''}`.trim()}
+                title={[subtask?.goal ?? '', subtask?.dispatchReason, `@${subtask?.agentId ?? ''}`].filter(part => part !== undefined && part !== '').join(' · ')}
                 onClick={event => { event.preventDefault(); event.stopPropagation(); select(subtaskId) }}
               >
                 <Avatar agentId={subtask?.agentId ?? ''} />

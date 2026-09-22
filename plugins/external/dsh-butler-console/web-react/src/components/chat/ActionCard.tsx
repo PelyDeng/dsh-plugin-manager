@@ -36,6 +36,13 @@ const STATE_TEXT: Record<string, string> = {
 }
 
 /** prepared 但已过确认有效期：恢复的历史卡常见（expiresAt 只有 10 分钟），不可再点。 */
+/** 期限提示文案（旧前端 cards.js 语义：有紧迫感才有确认率）。 */
+export function actionDeadline(action: { expiresAt?: number }): string | null {
+  if (typeof action.expiresAt !== 'number' || action.expiresAt < Date.now()) return null
+  const at = new Date(action.expiresAt)
+  return `请在 ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')} 前确认`
+}
+
 export function actionExpired(action: { state?: string; expiresAt?: number }): boolean {
   return (action.state ?? 'prepared') === 'prepared'
     && typeof action.expiresAt === 'number'
@@ -75,6 +82,7 @@ export function ActionCard({ action, taskId, subtaskId }: {
       <div className="act__head">
         <span className="act__title">{action.title ?? '待确认的操作'}</span>
         <span className="act__state">{STATE_TEXT[state] ?? state}</span>
+        {state === 'prepared' && actionDeadline(action) !== null && <span className="act__deadline">{actionDeadline(action)}</span>}
       </div>
       {action.summary !== undefined && action.summary !== '' && <p className="act__summary">{action.summary}</p>}
       {action.detail !== undefined && action.detail !== '' && <div className="act__detail md"><RichText text={action.detail} variant="card" /></div>}

@@ -1560,6 +1560,7 @@ body[data-settings="open"] .settings {
 .act[data-state='cancelled'], .act[data-state='expired'] { border-color: var(--bt-line); background: var(--bt-card); }
 .act__head { display: flex; align-items: baseline; gap: 8px; }
 .act__title { font-family: var(--bt-hand); font-size: 13.5px; font-weight: 700; }
+.act__deadline { margin-left: auto; color: var(--bt-warn); font-size: 12px; }
 .act__state { margin-left: auto; flex: none; font-size: 11px; color: var(--bt-warn); }
 .act[data-state='succeeded'] .act__state { color: var(--bt-ok); }
 .act[data-state='failed'] .act__state { color: var(--bt-error); }
@@ -2004,6 +2005,7 @@ body[data-settings="open"] .settings {
   font-size: 13px;
 }
 .action-deck__note { margin: 4px 0 0; font-size: 12px; color: var(--bt-ink-soft); }
+.action-deck__deadline { color: var(--bt-warn); font-size: 12.5px; }
 .action-deck__note-input { margin: 2px 0 4px; padding: 5px 9px; font-size: 12.5px; color: var(--bt-ink); background: #fffef8; border: 1.5px dashed #2f2b2660; border-radius: 8px 7px 9px 8px; }
 .action-deck__note-input::placeholder { color: var(--bt-ink-faint); }
 .action-deck__note-input:focus-visible { border-color: var(--bt-ink); outline: none; }

@@ -68,6 +68,8 @@ export interface SubtaskEntry {
   actions?: ReadonlyArray<AgentAction> | undefined
   /** external_pending 的结构化说明：在等谁做什么（reason）/办完能做什么（next）。 */
   pending?: { reason: string; next?: string } | undefined
+  /** 派单理由（plan 事件的 reason：为什么派给这位成员）。 */
+  dispatchReason?: string | undefined
   /** 协调方质检裁决（accept/rework/replace/unverified）与理由——历史恢复与详情回放带出。 */
   verdict?: string | undefined
   verdictReason?: string | undefined
@@ -135,6 +137,11 @@ export interface TurnState {
   streaming: boolean
   abort: AbortController | null
   /** 视图代次：所有会话切换入口共用，异步回包先核对它，旧响应不许写进新视图。 */
+  /**
+   * 视图代次（势力范围，评审 挂账#26）：中栏所有「换内容」的动作必须 bump 它并对
+   * 回包核对 token；左栏列表（chatList）与附件（按 conversationId）是自治域，不核对。
+   * 任务详情页与会话视图共用同一 token 序列（popstate 返回键依赖）。
+   */
   viewToken: number
   /** 发送时预渲染、等服务端回放确认的那条用户消息（批 3 发送路径用）。 */
   pendingUser: { text: string } | null
@@ -284,7 +291,9 @@ export const useTurnStore = create<TurnState>((set, get) => ({
     entries.push({ key: nextKey('user'), kind: 'user', text: record.goal, time: Number(record.createdAt) || undefined })
     entries.push({
       key: nextKey('butler'), kind: 'butler',
-      text: record.note ? `我按这个思路拆的：${record.note}` : '我按下面的方式拆了任务。',
+      text: record.note
+        ? `我按这个思路拆的：${record.note}`
+        : '我按下面的方式拆了任务。',
       thinking: '', streaming: false,
       time: Number(record.createdAt) || undefined,
     })
@@ -454,7 +463,7 @@ export const useTurnStore = create<TurnState>((set, get) => ({
         // 调度卡（批 4b）：一张卡 + 每个子任务一条 subtask entry（数据面），格子即那一行。
         const taskId = event.taskId ?? get().taskId ?? ''
         const entryKey = nextKey('dispatch')
-        const subtasks = Array.isArray(event.subtasks) ? event.subtasks as Array<{ id: string; agentId: string; goal?: string; state?: string; startedAt?: number }> : []
+        const subtasks = Array.isArray(event.subtasks) ? event.subtasks as Array<{ id: string; agentId: string; goal?: string; state?: string; startedAt?: number; reason?: string }> : []
         const prefs = readCardPrefs(taskId)
         const dispatch: DispatchEntry = {
           key: entryKey, kind: 'dispatch', taskId,
@@ -473,6 +482,7 @@ export const useTurnStore = create<TurnState>((set, get) => ({
               key, kind: 'subtask', subtaskId: subtask.id, agentId: subtask.agentId ?? '', goal: subtask.goal ?? '',
               state: subtask.state ?? 'queued', body: '', thinking: '', terminal: false, live: true,
               toolLine: null, artifacts: [], startedAt: subtask.startedAt ?? null, detail: null, error: null,
+              dispatchReason: subtask.reason,
             }
           })
           return { taskId, bubbleKeys: nextKeys, entries: [...st.entries, dispatch, ...memberEntries] }
@@ -540,7 +550,11 @@ export const useTurnStore = create<TurnState>((set, get) => ({
         return
       }
       case 'error': {
-        get().appendEntry({ key: nextKey('error'), kind: 'error', text: event.message ?? '' })
+        // 稳定码区分（评审 中14）：流断了要刷新重开，业务失败等下一轮即可。
+        const hint = event.code === 'stream_broken'
+          ? '连接断了；请刷新页面重开，这一轮的结果以右栏任务记录为准。'
+          : event.message ?? ''
+        get().appendEntry({ key: nextKey('error'), kind: 'error', text: hint })
         return
       }
       default:

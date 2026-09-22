@@ -188,7 +188,19 @@ export function Composer() {
         <div className="attach" id="attach-strip">
           <div className="attach__items" id="attach-items">
             {attachments.map(entry => (
-              <span key={entry.key} className="attach__item" data-phase={entry.phase}>
+              <span key={entry.key} className="attach__item" data-phase={entry.phase}
+                title={(() => {
+                  // 附件元数据悬浮（评审 中11）：解析了多少页/段、大概是什么、来自哪个链接。
+                  const item = entry.item
+                  if (item === null) return entry.name
+                  const parts = [item.name]
+                  if (item.kind !== undefined && item.kind !== '') parts.push(item.kind)
+                  if (item.totalUnits !== undefined) parts.push(`${item.totalUnits} 页/段`)
+                  if (item.characters !== undefined) parts.push(`${item.characters} 字`)
+                  if (item.preview !== undefined && item.preview !== '') parts.push(item.preview.slice(0, 80))
+                  if (item.sourceUrl !== undefined && item.sourceUrl !== '') parts.push(item.sourceUrl)
+                  return parts.join(' · ')
+                })()}>
                 <span className="attach__name">{entry.name}</span>
                 {fileSizeText(entry.size) !== '' && <span className="attach__size">{fileSizeText(entry.size)}</span>}
                 {(entry.phase !== 'ready' || entry.message !== '') && (

@@ -179,9 +179,15 @@ export async function stopTurn(): Promise<void> {
   if (conversationId === null) return
   useSessionStore.getState().setTopStatus('正在请求停止')
   try {
-    const outcome = await api.stop(conversationId, AbortSignal.timeout(10000))
+    // taskId 防误伤（评审 #10-中10）：只中止确实属于当前任务的那一轮。
+    const outcome = await api.stop(conversationId, { taskId: useTurnStore.getState().lastRunTaskId, signal: AbortSignal.timeout(10000) })
     if (outcome.accepted) {
-      // 服务端已接受中止：终态由随后的 summary 事件落定，这里不再多说。
+      // 等待中的任务被喊停时服务端给 reason（如「已把等待中的任务喊停，材料保留」）。
+      if (typeof outcome.reason === 'string' && outcome.reason !== '') {
+        useSessionStore.getState().setTopStatus('')
+        useTurnStore.getState().appendEntry({ key: `note-stop-${Date.now()}`, kind: 'note', text: outcome.reason })
+      }
+      // 其余情况：终态由随后的 summary 事件落定，这里不再多说。
       return
     }
     useSessionStore.getState().setTopStatus('已上线')

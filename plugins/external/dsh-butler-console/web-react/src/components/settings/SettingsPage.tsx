@@ -221,7 +221,7 @@ export function SettingsPage() {
       </div>
       <div className="settings__grid" id="settings-members">
         {members.length === 0
-          ? <p className="empty">还没有可分派的成员。</p>
+          ? <p className="empty">还没有可分派的成员</p>
           : members.map(member => <SettingsCard key={member.agentId} member={member} onSaved={() => { void refreshPanelsData() }} />)}
       </div>
     </section>

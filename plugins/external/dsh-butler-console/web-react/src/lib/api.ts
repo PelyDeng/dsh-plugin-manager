@@ -96,6 +96,8 @@ export interface MemberItem {
 }
 
 export interface TaskRecord {
+  /** 验收口径（评审 中19）：「交回什么才算完成」的对照物。 */
+  acceptance?: string
   id: string
   conversationId: string
   goal: string
@@ -127,6 +129,8 @@ export interface TaskSubtask {
   id: string
   agentId: string
   goal: string
+  /** 本步的验收口径。 */
+  acceptance?: string
   state: string
   startedAt: number | string | null
   finishedAt: number | string | null
@@ -153,7 +157,8 @@ export interface TaskSubtask {
 }
 
 export interface TranscriptItem {
-  seq: string
+  /** 事件序号（数值，不是字符串——历史合并按数值排序）。 */
+  seq: number
   role: string
   text: string
   time: number
@@ -206,9 +211,11 @@ export const api = {
     return request<{ items: TranscriptItem[]; prevBefore: string | null }>(`/transcript?${params.toString()}`, signal === undefined ? {} : { signal })
   },
   task: <T = TaskRecord>(id: string, signal?: AbortSignal) => request<T>(`/task?id=${encodeURIComponent(id)}`, signal === undefined ? {} : { signal }),
-  stop: (conversationId: string, signal?: AbortSignal) => {
-    const init: RequestInit = { method: 'POST', body: JSON.stringify({ conversationId }) }
-    return request<{ accepted: boolean; reason?: string }>('/stop', signal === undefined ? init : { ...init, signal })
+  stop: (conversationId: string, options: { taskId?: string | undefined; signal?: AbortSignal | undefined } = {}) => {
+    const body: Record<string, unknown> = { conversationId }
+    if (options.taskId !== undefined && options.taskId !== '') body.taskId = options.taskId
+    const init: RequestInit = { method: 'POST', body: JSON.stringify(body) }
+    return request<{ accepted: boolean; reason?: string }>('/stop', options.signal === undefined ? init : { ...init, signal: options.signal })
   },
   removeConversations: (ids: string[]) =>
     request<{ results: Array<{ id: string; status: string; message?: string }> }>('/conversations/remove', { method: 'POST', body: JSON.stringify({ ids }) }),
@@ -242,13 +249,18 @@ export async function uploadAttachment(file: File, conversationId = ''): Promise
   return (await response.json()).item as AttachmentRecord
 }
 
-/** 服务端附件记录。 */
+/** 服务端附件记录（评审 中11：preview/kind 等元数据供页面直接说明它是什么）。 */
 export interface AttachmentRecord {
   id: string
   name: string
   bytes: number
   status: string
   message?: string
+  kind?: string
+  preview?: string
+  totalUnits?: number
+  characters?: number
+  sourceUrl?: string
 }
 
 /** 从一个链接取回附件（服务端抓取）：地址合法性、跳转、大小、时长都由服务端把关。 */

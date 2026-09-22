@@ -17,6 +17,8 @@ export interface TurnEvent {
   delta?: string
   thinking?: string
   time?: number
+  /** 服务端稳定错误码（error 事件：stream_broken/turn_failed 等）。 */
+  code?: string
   /** subtask 事件。 */
   id?: string
   agentId?: string
