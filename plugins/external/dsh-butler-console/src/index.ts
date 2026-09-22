@@ -57,14 +57,39 @@ export const inject = [
   'webServer',
 ] as const
 
+/** 人设目录的权威拼装顺序（设计 §6.1：等价期按 persona.txt 原文线性顺序切分，逐字节等价迁移的基准）。 */
+export const PERSONA_SECTION_ORDER = [
+  '01-identity-intro',
+  '02-duties',
+  '03-duties-not',
+  '04-dispatch-plan',
+  '05-acceptance-spec',
+  '06-fidelity',
+  '07-tools',
+  '08-dispatch-select',
+  '09-acceptance-final',
+  '10-style',
+] as const
+
+/** 读取 persona/ 目录并按权威顺序拼装人设整体文本；任一文件缺失或为空都响亮失败。 */
+export async function loadPersonaText(readTextFile: (url: URL) => Promise<string>): Promise<string> {
+  const sections = await Promise.all(
+    PERSONA_SECTION_ORDER.map(async name => {
+      const text = (await readTextFile(new URL(`../persona/${name}.md`, import.meta.url))).trim()
+      if (text === '') throw new Error(`butler-console persona/${name}.md must not be empty`)
+      return text
+    }),
+  )
+  return sections.join('\n\n')
+}
+
 /** 装载工作台索引、牛马大总管会话、调度入口发现和页面。 */
 export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
-  const [personaText, manifestText] = await Promise.all([
-    readFile(new URL('../persona.txt', import.meta.url), 'utf8'),
+  const [persona, manifestText] = await Promise.all([
+    loadPersonaText((url: URL) => readFile(url, 'utf8')),
     readFile(new URL('../package.json', import.meta.url), 'utf8'),
   ])
-  const persona = personaText.trim()
-  if (persona === '') throw new Error('butler-console persona.txt must not be empty')
+  if (persona === '') throw new Error('butler-console persona/ sections must not be empty')
   const manifest = JSON.parse(manifestText) as {
     name: string
     version: string

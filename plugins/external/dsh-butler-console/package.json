@@ -21,7 +21,7 @@
     "web-react/",
     "migrations/postgres/0001_init.sql",
     "config/storage.example.json",
-    "persona.txt",
+    "persona/",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -46,7 +46,8 @@
       "butler:access"
     ],
     "verifyFiles": [
-      "persona.txt",
+      "persona/01-identity-intro.md",
+      "persona/10-style.md",
       "web-react/index.html",
       "web/media/avatars/avatar-butler.png",
       "web/fonts-lxgw.css",
