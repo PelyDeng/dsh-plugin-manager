@@ -95,95 +95,93 @@ export function registerMemoryRoutes(deps: MemoryHttpDeps): void {
     },
   })
 
-  // 治理列表（owner 等值强制；agentId/kind 是过滤维度）。
+  // `/memories` 同一路径四个方法（宿主 exact 路由不区分 method，必须合并注册）：
+  //   GET    治理列表（owner 等值强制；agentId/kind 是过滤维度）
+  //   POST   手动新增（source=manual；origin 默认 user_statement）
+  //   PUT    编辑（id + patch；跨 agent=用户终裁豁免）
+  //   DELETE 删除（id 数组；批量逐行审计）
   register({
     kind: 'exact',
     path: base,
     handler: async (request, response, actor) => {
-      deps.method(request, 'GET')
-      const url = new URL(request.url ?? '/', 'http://localhost')
-      const agentId = url.searchParams.get('agentId') ?? undefined
-      const kind = url.searchParams.get('kind') ?? undefined
-      if (kind !== undefined && kind !== '' && !['semantic', 'episodic', 'instruction'].includes(kind)) {
-        throw new Error(`未知的 kind：${kind}`)
+      const method = request.method ?? 'GET'
+
+      if (method === 'GET') {
+        const url = new URL(request.url ?? '/', 'http://localhost')
+        const agentId = url.searchParams.get('agentId') ?? undefined
+        const kind = url.searchParams.get('kind') ?? undefined
+        if (kind !== undefined && kind !== '' && !['semantic', 'episodic', 'instruction'].includes(kind)) {
+          throw new Error(`未知的 kind：${kind}`)
+        }
+        const items = await memories.list(actor, {
+          agentId: agentId ?? undefined,
+          kind: (kind === '' ? undefined : kind) as MemoryKind | undefined,
+        })
+        deps.json(response, 200, { items: items.map(memoryJson) })
+        return
       }
-      const items = await memories.list(actor, {
-        agentId: agentId ?? undefined,
-        kind: (kind === '' ? undefined : kind) as MemoryKind | undefined,
-      })
-      deps.json(response, 200, { items: items.map(memoryJson) })
-    },
-  })
 
-  // 手动新增（source=manual；origin 默认 user_statement）。
-  register({
-    kind: 'exact',
-    path: base,
-    handler: async (request, response, actor) => {
-      deps.method(request, 'POST')
-      const payload = await deps.body(request, deps.maxRequestBodyBytes)
-      const kind = deps.stringField(payload, 'kind', 20)
-      if (kind !== 'semantic' && kind !== 'episodic' && kind !== 'instruction') {
-        throw new Error(`未知的 kind：${kind}`)
+      if (method === 'POST') {
+        // 手动新增（source=manual；origin 默认 user_statement）。
+        const payload = await deps.body(request, deps.maxRequestBodyBytes)
+        const kind = deps.stringField(payload, 'kind', 20)
+        if (kind !== 'semantic' && kind !== 'episodic' && kind !== 'instruction') {
+          throw new Error(`未知的 kind：${kind}`)
+        }
+        const content = deps.stringField(payload, 'content', 200)
+        const origin = deps.stringField(payload, 'origin', 20, false) || 'user_statement'
+        if (origin !== 'user_statement' && origin !== 'reference') throw new Error('origin 只能是 user_statement 或 reference')
+        const importanceRaw = Number.parseInt(deps.stringField(payload, 'importance', 2, false), 10)
+        const importance = Number.isSafeInteger(importanceRaw) && importanceRaw >= 1 && importanceRaw <= 5 ? importanceRaw : undefined
+        const record = await memories.write(actor, {
+          kind: kind as MemoryKind,
+          content,
+          origin: origin as 'user_statement' | 'reference',
+          importance,
+          sourceRef: deps.stringField(payload, 'sourceRef', 200, false),
+          source: 'manual',
+        })
+        deps.json(response, record === undefined ? 409 : 200, record === undefined
+          ? { error: '同样的内容已经存在', code: 'memory_duplicate' }
+          : { item: memoryJson(record) })
+        return
       }
-      const content = deps.stringField(payload, 'content', 200)
-      const origin = deps.stringField(payload, 'origin', 20, false) || 'user_statement'
-      if (origin !== 'user_statement' && origin !== 'reference') throw new Error('origin 只能是 user_statement 或 reference')
-      const importanceRaw = Number.parseInt(deps.stringField(payload, 'importance', 2, false), 10)
-      const importance = Number.isSafeInteger(importanceRaw) && importanceRaw >= 1 && importanceRaw <= 5 ? importanceRaw : undefined
-      const record = await memories.write(actor, {
-        kind: kind as MemoryKind,
-        content,
-        origin: origin as 'user_statement' | 'reference',
-        importance,
-        sourceRef: deps.stringField(payload, 'sourceRef', 200, false),
-        source: 'manual',
-      })
-      deps.json(response, record === undefined ? 409 : 200, record === undefined
-        ? { error: '同样的内容已经存在', code: 'memory_duplicate' }
-        : { item: memoryJson(record) })
-    },
-  })
 
-  // 编辑（id + patch；跨 agent=用户终裁豁免）。
-  register({
-    kind: 'exact',
-    path: base,
-    handler: async (request, response, actor) => {
-      deps.method(request, 'PUT')
-      const payload = await deps.body(request, deps.maxRequestBodyBytes)
-      const id = deps.stringField(payload, 'id', 60)
-      const content = deps.stringField(payload, 'content', MEMORY_CONTENT_LIMIT * 4, false)
-      const importanceRaw = Number.parseInt(deps.stringField(payload, 'importance', 2, false), 10)
-      const expiresAtRaw = payload['expiresAt']
-      const record = await memories.update(
-        actor,
-        id,
-        {
-          content: content === '' ? undefined : content,
-          importance: Number.isSafeInteger(importanceRaw) && importanceRaw >= 1 && importanceRaw <= 5 ? importanceRaw : undefined,
-          expiresAt: typeof expiresAtRaw === 'number' ? expiresAtRaw : expiresAtRaw === null ? null : undefined,
-        },
-        deps.stringField(payload, 'agentId', 60, false) || undefined,
-      )
-      if (record === undefined) throw new Error('没有这条记忆')
-      deps.json(response, 200, { item: memoryJson(record) })
-    },
-  })
+      if (method === 'PUT') {
+        // 编辑（id + patch；跨 agent=用户终裁豁免）。
+        const payload = await deps.body(request, deps.maxRequestBodyBytes)
+        const id = deps.stringField(payload, 'id', 60)
+        const content = deps.stringField(payload, 'content', MEMORY_CONTENT_LIMIT * 4, false)
+        const importanceRaw = Number.parseInt(deps.stringField(payload, 'importance', 2, false), 10)
+        const expiresAtRaw = payload['expiresAt']
+        const record = await memories.update(
+          actor,
+          id,
+          {
+            content: content === '' ? undefined : content,
+            importance: Number.isSafeInteger(importanceRaw) && importanceRaw >= 1 && importanceRaw <= 5 ? importanceRaw : undefined,
+            expiresAt: typeof expiresAtRaw === 'number' ? expiresAtRaw : expiresAtRaw === null ? null : undefined,
+          },
+          deps.stringField(payload, 'agentId', 60, false) || undefined,
+        )
+        if (record === undefined) throw new Error('没有这条记忆')
+        deps.json(response, 200, { item: memoryJson(record) })
+        return
+      }
 
-  // 删除（id 数组；批量逐行审计）。
-  register({
-    kind: 'exact',
-    path: base,
-    handler: async (request, response, actor) => {
-      deps.method(request, 'DELETE')
-      const payload = await deps.body(request, deps.maxRequestBodyBytes)
-      const idsRaw = payload['ids']
-      if (!Array.isArray(idsRaw) || idsRaw.length === 0) throw new Error('ids 必须是非空数组')
-      const ids = idsRaw.map(value => String(value))
-      const agentId = deps.stringField(payload, 'agentId', 60, false) || undefined
-      const deleted = await memories.delete(actor, ids, agentId)
-      deps.json(response, 200, { deleted })
+      if (method === 'DELETE') {
+        // 删除（id 数组；批量逐行审计）。
+        const payload = await deps.body(request, deps.maxRequestBodyBytes)
+        const idsRaw = payload['ids']
+        if (!Array.isArray(idsRaw) || idsRaw.length === 0) throw new Error('ids 必须是非空数组')
+        const ids = idsRaw.map(value => String(value))
+        const agentId = deps.stringField(payload, 'agentId', 60, false) || undefined
+        const deleted = await memories.delete(actor, ids, agentId)
+        deps.json(response, 200, { deleted })
+        return
+      }
+
+      throw new Error(`只支持 GET/POST/PUT/DELETE（当前 ${method}）`)
     },
   })
 
@@ -255,22 +253,22 @@ export function registerMemoryRoutes(deps: MemoryHttpDeps): void {
         key,
         title,
         order: index + 1,
-        content: readFileSync(new URL(`./persona/${sectionFile(key)}.md`, import.meta.url), 'utf8'),
+        content: readFileSync(new URL(`../persona/${sectionFile(key)}.md`, import.meta.url), 'utf8'),
       }))
       deps.json(response, 200, { agentId: agent, sections })
     },
   })
 }
 
-/** 等价期九文件 → 六段的归属（等价期后合并为六文件，本映射不动——key 仍为六段名）。 */
+/** 六段 → 六文件名（等价期已收口合并；key 与 §4.6 展示契约一致）。 */
 function sectionFile(key: string): string {
   switch (key) {
-    case 'identity': return '01-identity-intro'
-    case 'duties': return '02-duties'
-    case 'dispatch': return '04-dispatch-plan'
-    case 'acceptance': return '05-acceptance-spec'
-    case 'fidelity': return '06-fidelity'
-    case 'tools': return '07-tools'
+    case 'identity': return 'identity'
+    case 'duties': return 'duties'
+    case 'dispatch': return 'dispatch'
+    case 'acceptance': return 'acceptance'
+    case 'fidelity': return 'fidelity'
+    case 'tools': return 'tools'
     default: throw new Error(`未知的 persona 段：${key}`)
   }
 }
