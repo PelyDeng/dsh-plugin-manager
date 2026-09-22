@@ -91,8 +91,15 @@ export interface MemberItem {
   agentId: string
   displayName: string
   declaredName: string
-  busy: string | null
   accent?: string
+  /** 成员简介（评审 中9）：档案卡次要行展示。 */
+  description?: string
+  /** 插件版本与工具数（悬浮可见）。 */
+  version?: string
+  toolCount?: number
+  capabilities?: ReadonlyArray<{ name?: string; description?: string }> | ReadonlyArray<string>
+  /** 正在忙的任务（真实形状是对象，此前误声明为 string）。 */
+  busy?: { taskId: string; subtaskId: string; state: string } | null
 }
 
 export interface TaskRecord {
@@ -169,6 +176,8 @@ export interface RunHead {
   runId: string
   state: string
   taskId?: string
+  startedAt?: number
+  finishedAt?: number | null
   /** 探测头部的窗口位置（reset 重建后续订对齐的基准）。 */
   seq?: number
 }

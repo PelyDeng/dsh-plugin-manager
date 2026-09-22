@@ -1049,7 +1049,8 @@ button:focus-visible {
 .mention__item--active { background: #f3ead2; }
 
 .mention__item .member__name { font-size: 13.5px; }
-.mention__item .member__declared { font-size: 11.5px; }
+.mention__item .member__desc { margin-top: 1px; font-size: 11.5px; color: var(--bt-ink-faint); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.member__declared { font-size: 11.5px; }
 
 .mention__handle {
   margin-left: auto;

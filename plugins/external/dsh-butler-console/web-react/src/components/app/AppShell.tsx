@@ -229,11 +229,12 @@ export function AppShell() {
               <h2 className="section-title section-title--members">成员档案</h2>
               <div id="member-list">
                 {members.map(member => (
-                  <div key={member.agentId} className="member member--compact" title={`${member.displayName}（@${member.agentId}）：${member.declaredName}`}>
+                  <div key={member.agentId} className="member member--compact" title={[member.displayName, `（@${member.agentId}）`, member.declaredName, member.description, member.version !== undefined ? `v${member.version} · ${member.toolCount ?? 0} 工具` : ''].filter(part => part !== undefined && part !== '').join(' ')}>
                     <Avatar agentId={member.agentId} size="sm" />
                     <div>
                       <div className="member__name">{member.displayName}</div>
                       <div className="member__declared">{member.declaredName}</div>
+                      {member.description !== undefined && member.description !== '' && <div className="member__desc">{member.description}</div>}
                     </div>
                   </div>
                 ))}
