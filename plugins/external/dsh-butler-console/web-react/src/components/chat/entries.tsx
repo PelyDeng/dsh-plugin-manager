@@ -9,7 +9,9 @@ import { RichText } from './RichText.tsx'
 import { Avatar } from '../common/Avatar.tsx'
 import { AskCard } from './AskCard.tsx'
 import { ActionCard } from './ActionCard.tsx'
-import { SUGGESTIONS, STATE_TEXT, DEFAULT_AVATAR_FILES, STREAM_RICH_LIMIT } from '../../lib/config.ts'
+import { SUGGESTIONS, DEFAULT_AVATAR_FILES, STREAM_RICH_LIMIT } from '../../lib/config.ts'
+import { stateText, statusColor } from '../../lib/task-state.ts'
+import { ThinkBlock } from '../common/basics.tsx'
 import type { ThreadEntry, SubtaskEntry } from '../../stores/turn.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { accentOf, displayNameOf, useSessionStore } from '../../stores/session.ts'
@@ -18,14 +20,6 @@ import { openTask, sendMessage } from '../../hooks/use-turn.ts'
 import { DispatchCard } from '../dcard/DispatchCard.tsx'
 import { fileSizeText } from '../../stores/attachments.ts'
 
-
-/** 成员行的状态色（旧 handleSubtask 的 status 颜色语义）。 */
-function statusColor(state: string): string {
-  if (state === 'failed') return 'var(--bt-error)'
-  if (state === 'waiting_user' || state === 'external_pending') return 'var(--bt-warn)'
-  if (state === 'succeeded') return 'var(--bt-ok)'
-  return 'var(--bt-ink-soft)'
-}
 
 function UserEntryViewFn({ text, time, attachments }: {
   text: string
@@ -83,14 +77,7 @@ function ButlerEntryViewFn({ text, thinking, streaming, time, interrupted }: {
           <span className="msg__tag">负责听懂你的意图</span>
         </div>
         <div className="bubble">
-          {thinking !== '' && (
-            <details className="think" open={streaming}>
-              <summary className="think__summary"><span className="think__title">思考</span></summary>
-              <div className="think__body">
-                <RichText text={thinking} variant="thinking" />
-              </div>
-            </details>
-          )}
+          {thinking !== '' && <ThinkBlock text={thinking} streaming={streaming} />}
           {/* 分级降级（方案 §3.4 坑 4）：超长正文不逐帧 Markdown 重渲，降级纯文本。 */}
           {text.length > STREAM_RICH_LIMIT
             ? <span>{text}</span>
@@ -117,15 +104,12 @@ function SubtaskEntryViewFn({ entry }: { entry: SubtaskEntry }) {
           </span>
           <span className="msg__handle">@{entry.agentId}</span>
           <span className="msg__tag" style={{ color: statusColor(entry.state) }}>
-            {STATE_TEXT[entry.state] ?? entry.state}
+            {stateText(entry.state)}
           </span>
         </div>
         <div className={`bubble${entry.state === 'waiting_user' || entry.state === 'external_pending' ? ' bubble--wait' : ''}${entry.state === 'succeeded' ? ' bubble--done' : ''}${entry.state === 'failed' ? ' bubble--fail' : ''}`}>
           {entry.thinking !== '' && (
-            <details className="think" open>
-              <summary className="think__summary"><span className="think__title">思考</span></summary>
-              <div className="think__body"><RichText text={entry.thinking} variant="thinking" /></div>
-            </details>
+            <ThinkBlock text={entry.thinking} />
           )}
           {entry.toolLine !== null && (entry.toolLine.tool !== undefined || entry.toolLine.detail !== undefined) && (
             <div className="tool-line">
@@ -234,7 +218,7 @@ function TaskEntryViewFn({ task }: { task: import('../../lib/api.ts').TaskSummar
     <button type="button" className="task-card" data-state={task.state} onClick={() => { void openTask(task.id) }}>
       <div className="task-card__head">
         <span className="task-card__badge">任务摘要</span>
-        <span className="task-card__state">{STATE_TEXT[task.state] ?? task.state}</span>
+        <span className="task-card__state">{stateText(task.state)}</span>
         <span className="task-card__time">{formatClock(Number(task.updatedAt) || undefined)}</span>
       </div>
       <div className="task-card__goal">{task.goal}</div>

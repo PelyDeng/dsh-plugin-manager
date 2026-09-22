@@ -7,6 +7,7 @@
 import { useRef, useState } from 'react'
 import { runReply } from '../../hooks/use-turn.ts'
 import { resolveAskLocally } from '../../stores/turn.ts'
+import { errorTextOf } from '../../lib/error-text.ts'
 import { newConversationId } from '../../lib/turn-event.ts'
 import { RichText } from './RichText.tsx'
 
@@ -53,7 +54,7 @@ export function AskCard({ subtaskId, taskId, question, detail }: AskCardProps) {
         onRejected: error => {
           setNote(null)
           setLocked(false)
-          setErrorText(`${error instanceof Error && error.message !== '' ? error.message : '没送出去'}；输入还在，改一下再试。`)
+          setErrorText(`${errorTextOf(error, '没送出去')}；输入还在，改一下再试。`)
           inputRef.current?.focus()
         },
       },

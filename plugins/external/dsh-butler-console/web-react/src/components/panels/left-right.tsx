@@ -13,6 +13,7 @@ import {
   removeConversationsWithFeedback, removePickedFailures, renameConversation,
 } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
+import { useClickOutside } from '../common/basics.tsx'
 
 
 /** 可见行（keyword 过滤后）：全选三态与搜索态判定共用这份口径。 */
@@ -34,12 +35,21 @@ function RecordsMenu() {
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLSpanElement>(null)
   useEffect(() => {
+    // 外点关闭走 useClickOutside（评审 #13）；Escape 关闭+焦点回扳机（评审 #16：
+    // 全页「Escape 依次收起」承诺，菜单不能把键盘用户困住）；打开时焦点进第一项
+    // （手写实现，不引 Base UI——见第二轮评审 §3.2 裁决）。
+    useClickOutside(rootRef, () => setOpen(false), open)
     if (!open) return
-    const onOutside = (event: MouseEvent) => {
-      if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) setOpen(false)
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setOpen(false)
+      rootRef.current?.querySelector<HTMLButtonElement>('.chat-manage-menu-btn')?.focus()
     }
-    document.addEventListener('click', onOutside)
-    return () => document.removeEventListener('click', onOutside)
+    window.requestAnimationFrame(() => {
+      rootRef.current?.querySelector<HTMLElement>('[role="menu"]')?.querySelector<HTMLElement>('button')?.focus()
+    })
+    rootRef.current?.addEventListener('keydown', onKey)
+    return () => rootRef.current?.removeEventListener('keydown', onKey)
   }, [open])
   return (
     <span className="chat-records-actions" ref={rootRef}>
@@ -249,12 +259,18 @@ export function FailureList() {
   const headRef = useRef<HTMLDivElement>(null)
   const items = overview?.failures ?? []
   useEffect(() => {
+    useClickOutside(headRef, () => setMenuOpen(false), menuOpen)
     if (!menuOpen) return
-    const onOutside = (event: MouseEvent) => {
-      if (headRef.current !== null && !headRef.current.contains(event.target as Node)) setMenuOpen(false)
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      setMenuOpen(false)
+      headRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
     }
-    document.addEventListener('click', onOutside)
-    return () => document.removeEventListener('click', onOutside)
+    window.requestAnimationFrame(() => {
+      headRef.current?.querySelector<HTMLElement>('[role="menu"]')?.querySelector<HTMLElement>('button')?.focus()
+    })
+    headRef.current?.addEventListener('keydown', onKey)
+    return () => headRef.current?.removeEventListener('keydown', onKey)
   }, [menuOpen])
   return (
     <>

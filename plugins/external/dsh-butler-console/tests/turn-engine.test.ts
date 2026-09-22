@@ -76,6 +76,23 @@ describe('followUntilTerminal', () => {
     expect(sawApplied().map(event => event.type)).toEqual(['run', 'chat', 'summary'])
   })
 
+  it('游标契约（评审 #14）：重放 run 头把游标归零、渲染事件推进 after——不产生重复 after', async () => {
+    const { links, afterLog } = scriptedLinks([[
+      { type: 'run', runId: RUN, seq: 0 },
+      { type: 'chat', text: '一', seq: 1 },
+      // 服务端语义：每轮从 seq 1 重计数——重连后事件重放（seq 回到小值）是合法形态
+      { type: 'run', runId: RUN, seq: 0 },
+      { type: 'chat', text: '一', seq: 1 },
+      { type: 'summary', state: 'completed', text: '一', seq: 2 },
+    ]])
+    const { host } = fakeHost()
+    await followUntilTerminal(CONV, { from: 0, expectedRunId: RUN }, links, host)
+    // after 单调不回退：重放 run 头归零只影响 store 侧口径，engine 的重订游标不受干扰
+    for (let i = 1; i < afterLog.length; i++) {
+      expect(afterLog[i]).toBeGreaterThanOrEqual(afterLog[i - 1]!)
+    }
+  })
+
   it('归属未知（expectedRunId 空）：只留说明，不订阅', async () => {
     const { links, subscribeCount } = scriptedLinks([[]])
     const { host, notes } = fakeHost()

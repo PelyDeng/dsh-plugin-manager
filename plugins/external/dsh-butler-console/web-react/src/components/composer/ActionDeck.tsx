@@ -12,6 +12,7 @@ import { announce } from '../../lib/announce.ts'
 import { newConversationId } from '../../lib/turn-event.ts'
 import { RichText } from '../chat/RichText.tsx'
 import { actionExpired } from '../chat/ActionCard.tsx'
+import { errorTextOf } from '../../lib/error-text.ts'
 
 interface PendingItem {
   key: string
@@ -85,10 +86,10 @@ function PendingCard({ item }: { item: PendingItem }) {
       }, {
         // 受理即摘卡：后端把子任务重新调度要数分钟，prepared 卡挂着只会诱导重复点击。
         onAccepted: () => { resolveActionLocally(item.subtaskId, item.actionId ?? ''); setNote(decision === 'confirm' ? '已受理，正在办理' : '已撤回') },
-        onRejected: error => { setNote(`${decision === 'confirm' ? '确认' : '撤回'}没成功：${error instanceof Error && error.message !== '' ? error.message : '网络异常'}`); setLocked(false) },
+        onRejected: error => { setNote(`${decision === 'confirm' ? '确认' : '撤回'}没成功：${errorTextOf(error)}`); setLocked(false) },
       })
     } catch (error) {
-      setNote(`${decision === 'confirm' ? '确认' : '撤回'}没成功：${error instanceof Error && error.message !== '' ? error.message : '网络异常'}`)
+      setNote(`${decision === 'confirm' ? '确认' : '撤回'}没成功：${errorTextOf(error)}`)
       setLocked(false)
     }
   }
@@ -101,11 +102,11 @@ function PendingCard({ item }: { item: PendingItem }) {
         { taskId: item.taskId, subtaskId: item.subtaskId, text, decideByAgent, requestId: newConversationId() },
         {
           onAccepted: () => { resolveAskLocally(item.subtaskId); setNote(null); setLocked(false); setReplyText(''); announce(`已回复 ${agentName}`) },
-          onRejected: error => { setNote(`没送出去：${error instanceof Error && error.message !== '' ? error.message : '网络异常'}`); setLocked(false) },
+          onRejected: error => { setNote(`没送出去：${errorTextOf(error)}`); setLocked(false) },
         },
       )
     } catch (error) {
-      setNote(`没送出去：${error instanceof Error && error.message !== '' ? error.message : '网络异常'}`)
+      setNote(`没送出去：${errorTextOf(error)}`)
       setLocked(false)
     }
   }

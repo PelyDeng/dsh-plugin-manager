@@ -30,20 +30,6 @@ export const BUILTIN_AVATARS = [
   { file: 'builtin-15.png', label: '草莓' },
 ]
 
-export const STATE_TEXT: Record<string, string> = {
-  queued: '排队中',
-  dispatched: '已收到',
-  running: '在干活',
-  waiting_user: '等你回话',
-  external_pending: '待外部处理',
-  partial: '部分完成',
-  succeeded: '已完成',
-  failed: '失败',
-  cancelled: '已停止',
-  summarizing: '在写总结',
-  completed: '已完成',
-}
-
 export const MOTTO_KEY = 'butler.motto'
 export const DEFAULT_MOTTO = '没关系，牛再来！换个姿势再来！'
 /** 上次用过的会话。刷新后要拿它去问「这一轮还在跑吗」。 */

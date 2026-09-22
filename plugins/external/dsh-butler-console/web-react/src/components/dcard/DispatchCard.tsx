@@ -18,7 +18,9 @@ import { Avatar } from '../common/Avatar.tsx'
 import { RichText } from '../chat/RichText.tsx'
 import { AskCard } from '../chat/AskCard.tsx'
 import { STREAM_RICH_LIMIT } from '../../lib/config.ts'
-import { cardElapsedText, cardSettled, cardStateText, CARD_RESULT_TITLE, DISPATCH_TONE, emptySlotHint } from './card-text.ts'
+import { cardElapsedText, cardSettled, cardStateText, CARD_RESULT_TITLE, emptySlotHint } from './card-text.ts'
+import { stateTone } from '../../lib/task-state.ts'
+import { ThinkBlock } from '../common/basics.tsx'
 
 /** 全页唯一的秒数节拍（旧 syncCardTicker 的 React 形态：一个 tick 状态驱动所有 live 格）。 */
 function useCardTicker(active: boolean): number {
@@ -182,7 +184,7 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
           {entry.order.map(subtaskId => {
             const subtask = memberBySubtask.get(subtaskId)
             const value = subtask?.state ?? 'queued'
-            const tone = DISPATCH_TONE[value] ?? 'queued'
+            const tone = stateTone(value)
             const since = typeof subtask?.startedAt === 'number' ? subtask.startedAt : undefined
             const until = cardSettled(value) ? (typeof subtask?.finishedAt === 'number' ? subtask.finishedAt : undefined) : undefined
             const elapsed = cardElapsedText(since, until, now)
@@ -244,10 +246,7 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
                 ) : (
                   <div className={`bubble${subtask.state === 'succeeded' ? ' bubble--done' : ''}${subtask.state === 'failed' ? ' bubble--fail' : ''}${subtask.state === 'waiting_user' || subtask.state === 'external_pending' ? ' bubble--wait' : ''}`}>
                     {subtask.thinking !== '' && !entry.resultOnly && (
-                      <details className="think" open>
-                        <summary className="think__summary"><span className="think__title">思考</span></summary>
-                        <div className="think__body"><RichText text={subtask.thinking} variant="thinking" /></div>
-                      </details>
+                      <ThinkBlock text={subtask.thinking} />
                     )}
                     {subtask.toolLine !== null && !entry.resultOnly && (subtask.toolLine.tool !== undefined || subtask.toolLine.detail !== undefined) && (
                       <div className="tool-line">

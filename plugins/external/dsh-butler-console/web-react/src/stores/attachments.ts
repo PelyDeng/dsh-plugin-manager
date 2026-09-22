@@ -1,3 +1,4 @@
+import { errorTextOf } from '../lib/error-text.ts'
 /**
  * 待发附件 store（批 4a）：选文件/拖拽/粘贴/链接取回的统一簿记（语义对齐 web/modules/
  * attachments.js）。三个来源最后都落到一份服务端记录；页面只画「上传中/就绪/读不出来」。
@@ -87,7 +88,7 @@ export async function addFiles(files: File[], conversationId: string | null): Pr
         phase: item.status === 'ready' ? 'ready' : 'failed',
       })
     } catch (error) {
-      failAttachment(key, error instanceof Error && error.message !== '' ? error.message : '上传失败')
+      failAttachment(key, errorTextOf(error, '上传失败'))
     }
   }
   if (list.length > room) {
@@ -118,7 +119,7 @@ export async function addUrl(raw: string, conversationId: string | null): Promis
       phase: item.status === 'ready' ? 'ready' : 'failed',
     })
   } catch (error) {
-    failAttachment(key, error instanceof Error && error.message !== '' ? error.message : '取回失败')
+    failAttachment(key, errorTextOf(error, '取回失败'))
   }
 }
 

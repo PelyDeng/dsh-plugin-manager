@@ -1,5 +1,14 @@
+import { errorTextOf } from '../lib/error-text.ts'
 /**
  * 回合驱动的应用层：把 turn-engine（纯控制流）与 turn store（状态面）绑定起来。
+ *
+ * ── 错误呈现四通道对照表（评审 #17，新错误先查这张表再选通道）──────────
+ * │ 通道            │ 视觉可见 │ 何时用                                     │ 例
+ * │ 流内 error 行   │ 是(持久) │ 回合内业务失败/连接中断，属于对话叙事        │ sendMessage catch
+ * │ 卡内 note       │ 是(随卡) │ 只属于这张卡的局部失败（决策/回话没送出）    │ ActionDeck.runDecision
+ * │ 顶栏 topStatus  │ 是(全局) │ 全局数据源故障（左右栏读不到/未登录）        │ refreshPanelsData
+ * │ announce        │ 否(读屏) │ 补充无障碍播报，或视觉无害的状态变化         │ 已补充给当前任务
+ * 原则：能就地（卡内）不全局（顶栏）；announce 永不作为视觉用户的唯一告知。
  *
  * 订阅幂等（StrictMode，方案 §3.3 批 0 决策的落地）：resumeLiveTurn 由 bootstrap effect
  * 调用，effect 双调用时第二次被 streaming 守卫与 viewToken 复核挡住；订阅本身挂 abort
@@ -246,7 +255,7 @@ export function reportFailure(error: unknown, fallback: string): void {
     useTurnStore.getState().appendEntry({ key: `error-h${++hostEntrySeq}`, kind: 'error', text: '连接已中断，这一轮是否结束以右栏状态为准。' })
     return
   }
-  useTurnStore.getState().appendEntry({ key: `error-h${++hostEntrySeq}`, kind: 'error', text: error instanceof Error && error.message !== '' ? error.message : fallback })
+  useTurnStore.getState().appendEntry({ key: `error-h${++hostEntrySeq}`, kind: 'error', text: errorTextOf(error, fallback) })
 }
 
 /** 回合收尾：忙碌态落回 + 右栏低频数据刷新（I05 焦点归还随 composer 批 3/4a 落地）。 */
@@ -348,6 +357,7 @@ export async function renameConversation(id: string, title: string): Promise<voi
 
 /** 失败记录的「删除所选」（0.12.7）：逐条删、按成功数播报、刷新右栏。 */
 export async function removePickedFailures(): Promise<void> {
+  // 失败走顶栏（四通道对照表）：右栏删除失败此前只进 announce，视觉用户以为删掉了。
   const ids = useSessionStore.getState().failurePicked
   if (ids.length === 0) return
   let removed = 0
@@ -356,7 +366,9 @@ export async function removePickedFailures(): Promise<void> {
       await api.removeTask(id)
       removed += 1
     } catch (error) {
-      announce(error instanceof ApiError ? error.message : '删除失败，稍后再试')
+      // 顶栏可见（四通道对照表）：announce 对视觉用户不可见，删失败会被当成删掉了。
+      const reason = error instanceof ApiError ? error.message : '删除失败，稍后再试'
+      useSessionStore.getState().setTopStatus(`失败记录${reason === '' ? '' : `：${reason}`}`)
     }
   }
   useSessionStore.getState().clearFailurePicked()
@@ -514,7 +526,7 @@ export async function sendMessage(text: string, reuseRequestId?: string): Promis
       }
       useTurnStore.getState().appendEntry({
         key: `error-${requestId}`, kind: 'error',
-        text: `${error instanceof Error && error.message !== '' ? error.message : '没送出去'}`,
+        text: errorTextOf(error, '没送出去'),
         retryFor: { requestText: trimmed, requestId },
       })
     } else {

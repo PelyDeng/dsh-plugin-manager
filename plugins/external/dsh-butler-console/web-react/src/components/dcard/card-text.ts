@@ -1,30 +1,9 @@
 /**
- * 调度卡文案与状态映射（自 web/modules/dcard.js 逐条迁移）。
+ * 调度卡文案与状态映射（自 web/modules/dcard.js 逐条迁移；0.13.9 起收敛到
+ * lib/task-state.ts 单表——本文件保留紧凑格式的展示语义：结果区标题/空位提示）。
  */
-import { STATE_TEXT } from '../../lib/config.ts'
-
-export const CARD_STATE_TEXT: Record<string, string> = {
-  queued: '排队',
-  dispatched: '已收到',
-  running: '进行中',
-  waiting_user: '等你回话',
-  external_pending: '待外部处理',
-  partial: '部分完成',
-  succeeded: '已完成',
-  completed: '已完成',
-  failed: '失败',
-  cancelled: '已停止',
-  summarizing: '在总结',
-}
-
-export function cardStateText(value: string | undefined): string {
-  return CARD_STATE_TEXT[value ?? ''] ?? STATE_TEXT[value ?? ''] ?? String(value ?? '')
-}
-
-/** 有定论的状态：到了这些状态秒数不再往上走（waiting_user 也算——挂几小时还在跳是骗人）。 */
-export function cardSettled(value: string | undefined): boolean {
-  return ['succeeded', 'completed', 'failed', 'cancelled', 'external_pending', 'waiting_user', 'partial'].includes(value ?? '')
-}
+import { cardSettled, cardStateText } from '../../lib/task-state.ts'
+export { cardSettled, cardStateText }
 
 /** 结果区里还没有内容时的说明（不留空白框）。 */
 export function emptySlotHint(value: string | undefined): string {
@@ -49,15 +28,6 @@ export const CARD_RESULT_TITLE: Record<string, string> = {
   cancelled: '已经停下',
 }
 
-/** 成员状态 → 面板小圆点配色。 */
-export const DISPATCH_TONE: Record<string, string> = {
-  succeeded: 'ok',
-  completed: 'ok',
-  failed: 'error',
-  cancelled: 'error',
-  waiting_user: 'warn',
-  external_pending: 'warn',
-}
 
 /** 已过时间：有结束时刻定格，否则按当前时间走（与 formatElapsed 同一口径）。 */
 export function cardElapsedText(since: number | undefined, until: number | undefined, now: number): string {

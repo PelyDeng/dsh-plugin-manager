@@ -1,3 +1,4 @@
+import { errorTextOf } from '../../lib/error-text.ts'
 /**
  * 设置页（批 5）：改名/换头像/配色草稿语义（I14/I15/I16）。
  * 语义对齐旧 panels.js：外号与配色是**草稿**，显式保存才提交；每张卡自带状态行，
@@ -59,7 +60,7 @@ function SettingsCard({ member, onSaved }: SettingsCardProps) {
         setStatus({ kind: 'dirty', text: '刚提交的已存上；之后的新改动还没保存' })
       }
     } catch (error) {
-      setStatus({ kind: 'error', text: `没保存成功：${error instanceof Error && error.message !== '' ? error.message : '网络异常'}；改动还在，再试一次` })
+      setStatus({ kind: 'error', text: `没保存成功：${errorTextOf(error)}；改动还在，再试一次` })
     } finally {
       setBusy(false)
     }
@@ -74,7 +75,7 @@ function SettingsCard({ member, onSaved }: SettingsCardProps) {
       announce(done)
       onSaved()
     } catch (error) {
-      setStatus({ kind: 'error', text: `${done}没成：${error instanceof Error && error.message !== '' ? error.message : '再试一次'}` })
+      setStatus({ kind: 'error', text: `${done}没成：${errorTextOf(error, '再试一次')}` })
     }
   }
 

@@ -13,7 +13,8 @@ import { rememberConversation } from '../lib/turn-event.ts'
 import type { TurnEvent } from '../lib/turn-event.ts'
 import type { TaskRecord, TaskSummary } from '../lib/api.ts'
 import type { AgentAction } from '../lib/turn-event.ts'
-import { STATE_TEXT, STREAM_RICH_LIMIT } from '../lib/config.ts'
+import { stateText } from '../lib/task-state.ts'
+import { STREAM_RICH_LIMIT } from '../lib/config.ts'
 
 /** 消息流条目：React 渲染的统一数据面（旧 DOM 追加模型的范式转换）。 */
 export type ThreadEntry = UserEntry | ButlerEntry | SubtaskEntry | NoteEntry | ErrorEntry | SummaryEntry | TaskEntry | DispatchEntry
@@ -299,7 +300,7 @@ export const useTurnStore = create<TurnState>((set, get) => ({
         goal: subtask.goal, state: subtask.state,
         body: subtask.state === 'failed' || subtask.state === 'cancelled'
           ? (subtask.error || '失败')
-          : (subtask.result || STATE_TEXT[subtask.state] || ''),
+          : (subtask.result || stateText(subtask.state) || ''),
         thinking: '', terminal: terminalSub, live: false, toolLine: null,
         artifacts: Array.isArray(subtask.artifacts) ? subtask.artifacts : [],
         actions: Array.isArray(subtask.actions) ? subtask.actions : undefined,
@@ -335,6 +336,12 @@ export const useTurnStore = create<TurnState>((set, get) => ({
 
   applyTurnEvent: event => {
     // ── 游标推进（consumeTurnEvent 语义，口径只有这一份）─────────────────
+    // 游标契约（评审 #14，依赖两条服务端事实，改动前先读）：
+    //   ① 每条**渲染类**事件必带 seq（服务端 src/web.ts streamRun 落流时写入）；
+    //   ② 每次订阅开始必先发一条 run 头（run 归零=服务端 event-log 每轮从 seq 1 重计数，
+    //      这是权威语义不是 bug）。
+    // run 头把 lastSeq 归零、其余事件推进 lastSeq——engine 侧 after 与此同源，交接见
+    // lib/turn-engine.ts followUntilTerminal（重订时 from=store.lastSeq）。
     // 走 set 不可变更新：直接改 get() 返回对象不会触发订阅通知，DevTools 快照也失真。
     if (event.type === 'run') {
       set(state => ({
