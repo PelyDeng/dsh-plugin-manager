@@ -58,9 +58,10 @@ export function Thread() {
 
   return (
     <div className="thread-wrap">
+      {/* 返回条在滚动容器之外：常驻固定，不随任务详情内容滚动（用户反馈）。 */}
+      <TaskViewHead />
       <div className="thread" id="thread" ref={threadRef} onScroll={onScroll}>
         <div className="thread__inner">
-          <TaskViewHead />
           {entries.length === 0 ? <Welcome /> : (
             <>
               <EarlierControl />
