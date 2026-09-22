@@ -120,6 +120,7 @@ export function AppShell() {
   const backdropVisible = drawerOpen || sidebarOpen
 
   const total = members.length
+  const taskView = useTurnStore(state => state.taskView)
   const busy = members.filter(member => member.busy !== null).length
   const working = busy > 0 ? ` · ${busy} 位手上有活` : ''
   const counts = overview?.counts ?? {}
@@ -189,12 +190,20 @@ export function AppShell() {
 
         <main className="column column--center" aria-label="牛马调度群" ref={centerRef}>
           <div className="center__head">
-            <h2 className="center__title" aria-label="牛马调度群">
+            {/* 左段：任务详情二级视图才显示返回与面包屑（用户反馈 0.13.18）。 */}
+            <div className="center__nav" hidden={taskView === null}>
+              <button type="button" className="btn btn--tiny view-head__back" onClick={() => { if (history.state?.butler === 'task') history.back() }}>
+                ← 返回会话
+              </button>
+              <span className="view-head__crumb">会话 › 任务记录</span>
+            </div>
+            {/* 中段：标题图缩小常驻居中（0.13.18 与返回/设置同行）。 */}
+            <h2 className="center__title center__title--compact" aria-label="牛马调度群">
               <svg className="center__circle" viewBox="0 0 190 46" preserveAspectRatio="none" aria-hidden="true">
                 <path d="M22 8 C 60 2, 150 2, 172 10 C 188 17, 186 30, 164 37 C 128 45, 52 44, 24 38 C 4 32, 4 18, 22 8 Z" fill="none" stroke="var(--bt-red)" strokeWidth="2.8" strokeLinecap="round" />
                 <path d="M30 6 C 70 1, 150 3, 170 12" fill="none" stroke="var(--bt-red)" strokeWidth="1.8" strokeLinecap="round" opacity="0.85" />
               </svg>
-              <img src={`${ROUTE_PREFIX}/assets/media/titles/title-center.png`} alt="" height="74" />
+              <img src={`${ROUTE_PREFIX}/assets/media/titles/title-center.png`} alt="" height="44" />
             </h2>
             <span className="center__sub">{total > 0 ? `${total} 位成员${working}` : '—'}</span>
             <span className="spacer" />
