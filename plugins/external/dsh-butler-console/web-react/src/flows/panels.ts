@@ -6,8 +6,8 @@ import { api, ApiError } from '../lib/api.ts'
 import { errorTextOf } from '../lib/error-text.ts'
 import { announce } from '../lib/announce.ts'
 import { useSessionStore } from '../stores/session.ts'
+import { clearAttachments } from './attachments.ts'
 import { useTurnStore } from '../stores/turn.ts'
-import { clearAttachments } from '../stores/attachments.ts'
 
 /** 右栏数据装配（批 2：401 时给「去登录」入口，其余错误置顶栏「读取失败」）。 */
 /**

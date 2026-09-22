@@ -15,10 +15,8 @@ import { registerDraftRestore, runSupplement, sendMessage, stopTurn } from '../.
 import { announce } from '../../lib/announce.ts'
 import { useSessionStore, type MemberItem } from '../../stores/session.ts'
 import { useTurnStore } from '../../stores/turn.ts'
-import {
-  addFiles, addUrl, dropAttachment, fileSizeText,
-  useAttachmentsStore,
-} from '../../stores/attachments.ts'
+import { addFiles, addUrl, dropAttachment } from '../../flows/attachments.ts'
+import { fileSizeText, useAttachmentsStore } from '../../stores/attachments.ts'
 import { registerTearTap } from '../chat/entries.tsx'
 
 interface MentionState {

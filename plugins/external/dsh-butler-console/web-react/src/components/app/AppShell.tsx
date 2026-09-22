@@ -234,7 +234,6 @@ export function AppShell() {
                     <div>
                       <div className="member__name">{member.displayName}</div>
                       <div className="member__declared">{member.declaredName}</div>
-                      {member.description !== undefined && member.description !== '' && <div className="member__desc">{member.description}</div>}
                     </div>
                   </div>
                 ))}

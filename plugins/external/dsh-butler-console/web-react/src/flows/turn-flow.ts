@@ -28,7 +28,9 @@ import type { TurnEvent } from '../lib/turn-event.ts'
 import { useTurnStore, type ThreadEntry } from '../stores/turn.ts'
 import { useSessionStore } from '../stores/session.ts'
 import { announce } from '../lib/announce.ts'
-import { attachmentsForSend, clearAttachments, loadAttachments, takeSentAttachments, useAttachmentsStore } from '../stores/attachments.ts'
+import { useAttachmentsStore } from '../stores/attachments.ts'
+import { takeSentAttachments } from './attachments.ts'
+import { attachmentsForSend, clearAttachments, loadAttachments } from './attachments.ts'
 
 let hostEntrySeq = 0
 

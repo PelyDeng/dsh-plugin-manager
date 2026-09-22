@@ -277,13 +277,13 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
                       // 不认识的协议按纯文本降级，绝不渲染成可点链接。
                       const href = typeof artifact.url === 'string' && /^https?:\/\//i.test(artifact.url) ? artifact.url : null
                       return (
-                        <span key={index} className="attach__item" data-phase="ready">
-                          {artifact.kind !== undefined && <span className="attach__note">{artifact.kind}</span>}
-                          <span className="attach__name">{artifact.title ?? artifact.path ?? '材料'}</span>
-                          {href !== null && <a className="attach__note" href={href} target="_blank" rel="noopener noreferrer">打开</a>}
-                          {artifact.state !== undefined && <span className="attach__note">{artifact.state}</span>}
+                        <span key={index} className="dcard__material">
+                          {artifact.kind !== undefined && <span className="dcard__material__note">{artifact.kind}</span>}
+                          <span className="dcard__material__name">{artifact.title ?? artifact.path ?? '材料'}</span>
+                          {href !== null && <a className="dcard__material__note" href={href} target="_blank" rel="noopener noreferrer">打开</a>}
+                          {artifact.state !== undefined && <span className="dcard__material__note">{artifact.state}</span>}
                           {(artifact.fields ?? []).map((field, fieldIndex) => (
-                            <span key={fieldIndex} className="attach__note">{field.label ?? ''}：{field.value ?? ''}</span>
+                            <span key={fieldIndex} className="dcard__material__note">{field.label ?? ''}：{field.value ?? ''}</span>
                           ))}
                         </span>
                       )

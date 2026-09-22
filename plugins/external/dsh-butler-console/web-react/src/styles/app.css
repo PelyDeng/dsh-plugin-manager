@@ -1049,8 +1049,7 @@ button:focus-visible {
 .mention__item--active { background: #f3ead2; }
 
 .mention__item .member__name { font-size: 13.5px; }
-.mention__item .member__desc { margin-top: 1px; font-size: 11.5px; color: var(--bt-ink-faint); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.member__declared { font-size: 11.5px; }
+.mention__item .member__declared { font-size: 11.5px; }
 
 .mention__handle {
   margin-left: auto;
@@ -1088,6 +1087,22 @@ button:focus-visible {
 
 /* 与输入框同宽同中心：它是输入框的一部分，不是另一块面板。 */
 .attach { max-width: 960px; margin: 0 auto 6px; display: flex; flex-direction: column; gap: 5px; }
+
+/* ── 调度卡材料行（#13 分家：不再借用附件胶囊样式）──────────────────── */
+.dcard__materials { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.dcard__material {
+  display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  max-width: 100%;
+  padding: 3px 8px;
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: 8px 7px 9px 8px;
+  font-size: 12px; line-height: 1.5;
+}
+.dcard__material__name { font-weight: 600; color: var(--bt-ink); min-width: 0; }
+.dcard__material__note { color: var(--bt-ink-faint); font-size: 11.5px; }
+.dcard__material__note[href] { text-decoration: underline; text-underline-offset: 2px; }
+
 .attach__items { display: flex; flex-wrap: wrap; gap: 6px; }
 
 .attach__item {
@@ -1279,7 +1294,7 @@ button:focus-visible {
 /* 统计格：原型 C 是 3×2；数字用「批注彩墨」着色（与状态灯体系并行——
    圆点说的是状态灯，数字是手帐里的彩色标注，同词不同色是原型事实）：
    在干活/等你回话/待外部处理/已完成=蓝，部分完成=绿，失败=红。 */
-.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; }
+.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px; }
 
 .metric {
   padding: 4px 2px; text-align: center;
@@ -1626,8 +1641,8 @@ body[data-settings="open"] .settings {
   position: sticky; top: 0; z-index: 5;
   display: flex; align-items: center; gap: 10px;
   margin: 0 -16px; padding: 8px 18px;
-  background: #f3edde;
-  border-bottom: 1.5px dashed #2f2b2640;
+  background-color: #f3edde;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.42 0 0 0 0 0.37 0 0 0 0 0.28 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='240' height='240' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 .view-head__crumb { font-size: 12px; color: var(--bt-ink-faint); }
 .view-head__back { flex: none; }

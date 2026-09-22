@@ -19,7 +19,7 @@ import { errorTextOf } from '../lib/error-text.ts'
 let hostEntrySeq = 0
 
 import type { ThreadEntry } from '../stores/turn.ts'
-import { clearAttachments, loadAttachments } from '../stores/attachments.ts'
+import { clearAttachments, loadAttachments } from './attachments.ts'
 
 /** 把 turn store 装配成引擎的宿主（渲染副作用全部走 store 动作）。 */
 /**
