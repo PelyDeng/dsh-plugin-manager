@@ -159,6 +159,13 @@ const LOCK_TIMEOUT_MS = 2000
 export class BlogPgStorage {
   private readonly dsn: string
   private readonly pool: Pool
+  /**
+   * 只读池访问：给同库的附加存储模块（如记忆 kit 的 MemoryStore）复用**同一个池**——
+   * 连接参数与 'error' 监听已在构造时统一配置，第二只池意味着第二份状态与两倍连接数。
+   */
+  get clientPool(): Pool {
+    return this.pool
+  }
   /** 池错误上报口（默认写 stderr；群组可注入自己的日志）。 */
   private readonly reportError: (error: unknown) => void
   /** init 失败的原因：非 undefined 即"未就绪"，读写一律以它拒绝。 */

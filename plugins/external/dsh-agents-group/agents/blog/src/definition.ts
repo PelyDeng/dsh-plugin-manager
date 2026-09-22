@@ -131,6 +131,11 @@ export interface BlogDefinitionInput {
      */
     operation?(owner: string, id: string): Promise<{ readonly id: string; readonly mode: string; readonly title: string; readonly status: string; readonly nonce?: string; readonly expiresAt?: number; readonly sessionId?: string; readonly chat?: { conversationId?: string } | null }>
   }
+  /**
+   * 记忆注入（P1.5 可选）：装配侧传入的每轮记忆段渲染（kit 的 renderMemorySection 产物）。
+   * 返回空串表示本轮无记忆可注入。缺省 = 不注入。
+   */
+  readonly memorySection?: (actor: { readonly namespace: string; readonly userId: string }) => Promise<string>
   /** 页面入口前缀（会话材料的位置由它拼出来）。 */
   readonly routePrefix: string
   /**

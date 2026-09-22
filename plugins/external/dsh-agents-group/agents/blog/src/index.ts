@@ -12,7 +12,7 @@ import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { agentResource } from '@dsh-agents-group/common'
-import { registerPlugin,registerConversations,AccessError,isAccessError,type Access,type ToolDescriptor } from '@dsh-plugin-manager/plugin-kit'
+import { registerPlugin,registerConversations,AccessError,isAccessError,type Access,type ToolDescriptor,createMemoryStore,renderMemorySection } from '@dsh-plugin-manager/plugin-kit'
 import type { ProtectedRoute } from '@dsh-plugin-manager/plugin-kit/http'
 import { loadSettings, invariant } from './settings.ts'
 import { ownerKey } from './store.ts'
@@ -416,6 +416,49 @@ export async function mount(mountContext:AgentMountContext):Promise<{
     // 移除被接受后，运行时那一半也要放（它缓存着句柄）；本类那一半由 `chat.ts` 自己放。
     release:async id=>{await assembly?.lifecycle.release(id)},
   })
+  // 记忆注入（P1.5，v2.6 §4.5）：kit MemoryStore（agentId='blog'）+ 每轮渲染注入段。
+  // 池来自 blog 业务存储（同一实例）；未配置存储时为 undefined，definition 跳过注入。
+  const memories = dsnSource
+    ? createMemoryStore({
+        agentId: 'blog',
+        executor: {
+          query: async (sql, params) => {
+            const r = await storage.clientPool.query({ text: sql, values: (params ?? []) as never[] })
+            return { rows: r.rows as Array<Record<string, unknown>>, rowCount: r.rowCount }
+          },
+          withTransaction: async (work) => {
+            const client = await storage.clientPool.connect()
+            interface Tx {
+              query(sql: string, params?: readonly unknown[]): Promise<{ rows: Array<Record<string, unknown>>; rowCount: number | null }>
+              withTransaction<T>(work: (tx: Tx) => Promise<T>): Promise<T>
+            }
+            const tx: Tx = {
+              query: async (sql, params) => {
+                const r = await client.query({ text: sql, values: (params ?? []) as never[] })
+                return { rows: r.rows as Array<Record<string, unknown>>, rowCount: r.rowCount }
+              },
+              withTransaction: work => work(tx),
+            }
+            try {
+              await client.query('BEGIN')
+              const result = await work(tx)
+              await client.query('COMMIT')
+              return result
+            } catch (error) {
+              await client.query('ROLLBACK').catch(() => {})
+              throw error
+            } finally {
+              client.release()
+            }
+          },
+        },
+      })
+    : undefined
+  const memorySection=memories?(async(actor: {readonly namespace: string;readonly userId: string})=>{
+    const now=Date.now()
+    const [instructions,records]=await Promise.all([memories.instructions(actor,now),memories.injectQuery(actor,now)])
+    return renderMemorySection(instructions,records,{userLabel:'用户'})
+  }):undefined
   const definition: AgentDefinition = withTurnBinding(createBlogDefinition({
       // 人设＝**对话人设**（`chat.ts` 的 `chatInstructions`）+ 思考语言那一段。
       // ⚠️ 只传 `jobs.ts` 的裸 `persona` 会**静默丢掉**对话专属的那一长段纪律（页面路径仍带着它）
@@ -431,6 +474,8 @@ export async function mount(mountContext:AgentMountContext):Promise<{
       routePrefix: config.routePrefix,
       // 跨轮候选判定要按**会话**读产出记录（运行时的 `loadResults()` 只读本轮）。
       results: { list: async (owner, conversationId) => conversations.results(owner, conversationId) },
+      // 记忆注入（P1.5）：每轮渲染记忆段（kit 模板；称谓「用户」按 blog 语境）。
+      ...(memorySection !== undefined ? { memorySection } : {}),
   }), chat)
   /**
    * 就地确认：用户在**台账**上点的那一下落在这里（实现见 `./actions.ts`，三条口径都在那里）。

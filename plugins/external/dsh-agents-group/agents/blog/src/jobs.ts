@@ -173,6 +173,15 @@ export const persona = `你是个人博客的写作助手，也是一位表达�
 不索取、输出或猜测凭据，不执行服务器操作。标题、正文、标签、分类和评论开关均可作为候选；先查询真实分类 ID。分类与标签的增删改查使用 blog_manage_list、blog_manage_get、blog_manage_change，不需要先选择文章。分类 parent=0 为顶级，其余 parent 指向父分类 ID；先查清层级和同名条目，再新增子分类或移动分类。更新、删除先读取详情，将 version 原样传给变更工具。新增、修改、删除只生成确认卡片，用户确认前不得声称已完成；每轮只准备一项变更。评论也使用这组管理工具。
 提交候选后用中文简述改动和查证状况。`
 
+/** 长期记忆端口（kit MemoryStore 的最小子集；写入的 owner 由绑定的用户 actor 决定）。 */
+export interface BlogMemoryPort {
+  write(
+    actor: { readonly namespace: string; readonly userId: string },
+    input: { readonly kind: 'semantic' | 'episodic'; readonly content: string; readonly origin: 'user_statement' | 'reference'; readonly importance?: number | undefined; readonly sourceRef?: string | undefined },
+  ): Promise<{ readonly shortId: string } | undefined>
+  list(actor: { readonly namespace: string; readonly userId: string }): Promise<readonly { readonly shortId: string; readonly content: string; readonly kind: string }[]>
+}
+
 export class BlogJobs {
   // —— 装配期注入的协作者与配置 ——
   declare readonly ctx: Context
@@ -201,6 +210,11 @@ export class BlogJobs {
   declare readonly active: Map<string, JobsTurn>
   declare closed: boolean
   declare readonly tools: ToolDescriptor[]
+  /**
+   * 长期记忆端口（P1.5 可选）：kit MemoryStore 的最小子集（agentId='blog' 已在装配侧绑定）。
+   * 缺省 = 不注册 memory_write 工具（记忆功能未部署时不影响 blog 其余能力）。
+   */
+  declare readonly memory?: BlogMemoryPort
   declare readonly chatTools: ToolDescriptor[]
   declare readonly toolNamesFor: (research: boolean) => readonly string[]
   declare readonly service: BlogService
@@ -268,6 +282,15 @@ export class BlogJobs {
         this.update(b, { proposalId: proposal.id }); return { proposalId: proposal.id, savedAs: 'candidate', requiresUserAction: true }
       }),
     ]
+    /** 长期记忆工具注册器（P1.5）：注入 kit MemoryStore；execute 的 actor 由绑定推导。 */
+    const registerMemory = (store: BlogMemoryPort) => (name: string, displayName: string, description: string, parameters: any, execute: (args: any, actor: { readonly namespace: string; readonly userId: string }) => Promise<any>) => tools.register(defineTool({
+      name, description, parameters, timeoutMs: 45000,
+      output: { schema: { type: 'json' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
+      execute: async (args, execution) => {
+        const boundActor = this.bound(execution.agent).job.actor
+        return execute(args, { namespace: boundActor.namespace, userId: boundActor.userId })
+      },
+    }), displayName, this.category)
     this.chatTools=[...this.tools,
       register('blog_manage_change','新增修改删除分类标签评论','新增(create)、修改(update)、删除(delete)分类(category)、标签(tag)或评论(comment)，只生成对话确认卡片。create 不传 id，分类/标签须提供 fields.name；update/delete 先查询并读取真实 id 与 version；delete 不需要 fields。分类/标签可设 name、slug、description；只有分类支持 parent（0 为顶级，否则为已查明的父分类 ID），不得选择自身或后代，标签不传 parent。分类 isDefault=true 可设为默认；删除默认分类前须先设置其他默认分类。删除分类标签只解除文章关联、保留文章；子分类上移一级。评论支持 author、text、mail、url、status(approved/waiting/spam)，新建另需 cid，可用 parent 回复同文章评论。更新评论不可换文章或父评论。每轮只准备一项变更，用户确认后才执行。',{
         kind:{type:'string',enum:['category','tag','comment'],required:true},operation:{type:'string',enum:['create','update','delete'],required:true},id:{type:'integer'},version:{type:'string',description:'manage-get 返回的版本，更新/删除时原样传入'},
@@ -284,6 +307,32 @@ export class BlogJobs {
         cid:{type:'integer',required:true},
       },(a,b,s)=>{invariant(b.chat,'请在博客对话中发起删除',403);return b.chat.prepareOperation(b,'delete',a,s)}),
     ]
+    // 记忆工具（P1.5）：挂在 chatTools 末尾（条件注册）；write 的 owner 由绑定 actor 推导。
+    if (this.memory !== undefined) {
+      const memoryStore = this.memory
+      this.chatTools.push(registerMemory(memoryStore)('memory_write', '记住长期偏好', '把一条跨会话仍然成立、以后会影响答复的事记成长期记忆：用户的长期偏好、项目的稳定事实、重要决定。不记：本次任务的过程与结果；对话原文；办完就作废的一次性安排。转述来的内容 origin 必须填 reference 并带 sourceRef；用户亲口说的才填 user_statement。拿不准就不记：漏记的代价低，记错的代价高。', {
+        kind: { type: 'string', required: true, description: '记忆大类：semantic（偏好与稳定事实）或 episodic（事件与决策结论）。' },
+        content: { type: 'string', required: true, description: '一句独立、自包含的陈述，4-60 字，不抄原文、不带换行。超长就拆成多条。' },
+        origin: { type: 'string', required: true, description: '信息来源：user_statement（用户亲口说的）或 reference（转述自网页/资料/工具结果）。' },
+        sourceRef: { type: 'string', description: 'origin=reference 时必填：出处（会话 id、任务 id 或地址）。' },
+        importance: { type: 'integer', description: '重要性 1-5：5=用户反复强调的核心偏好，3=一般事实（默认）。' },
+      }, async (args, actor) => {
+        const kind = String(args.kind ?? '')
+        if (kind !== 'semantic' && kind !== 'episodic') throw new Error('kind 只能是 semantic 或 episodic')
+        const content = String(args.content ?? '').trim()
+        if (content.length < 4 || content.length > 60) throw new Error(`记忆内容须在 4-60 字之间（当前 ${content.length} 字）`)
+        const origin = String(args.origin ?? '')
+        if (origin !== 'user_statement' && origin !== 'reference') throw new Error('origin 无效')
+        const sourceRef = String(args.sourceRef ?? '')
+        if (origin === 'reference' && sourceRef === '') throw new Error('reference 来源必须提供出处')
+        const importanceRaw = Number.parseInt(String(args.importance ?? ''), 10)
+        const importance = Number.isSafeInteger(importanceRaw) && importanceRaw >= 1 && importanceRaw <= 5 ? importanceRaw : undefined
+        const record = await memoryStore.write(actor, { kind, content, origin, importance, sourceRef: sourceRef || undefined })
+        return record === undefined
+          ? { shortId: '', duplicated: true, note: '这条内容此前已经记下，没有重复写入。' }
+          : { shortId: record.shortId, duplicated: false, note: `已记住（${kind === 'semantic' ? '偏好' : '事件'}，编号 ${record.shortId}）。` }
+      }))
+    }
     /**
      * 本 Agent 实际能用的工具名：本分类 + 通用集，再按本轮是否需要联网收窄。
      *
