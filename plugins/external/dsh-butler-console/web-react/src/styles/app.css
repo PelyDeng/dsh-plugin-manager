@@ -1620,8 +1620,13 @@ body[data-settings="open"] .settings {
  * 二级视图必须能出去：浏览器返回键（`popstate`）与这里的按钮走同一条路径。
  */
 .view-head {
+  /* 任务详情二级视图的返回条常驻可见（用户反馈）：sticky 吸附滚动容器顶部，
+     纸色不透明底遮挡滚过的内容——「返回会话」任何时候都在。 */
+  position: sticky; top: 0; z-index: 5;
   display: flex; align-items: center; gap: 10px;
-  padding: 0 2px 8px;
+  margin: 0 -16px; padding: 8px 18px;
+  background: #f3edde;
+  border-bottom: 1.5px dashed #2f2b2640;
 }
 .view-head__crumb { font-size: 12px; color: var(--bt-ink-faint); }
 .view-head__back { flex: none; }
