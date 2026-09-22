@@ -17,6 +17,7 @@ import { api, type MemoryItem } from '../../lib/api.ts'
 import { announce } from '../../lib/announce.ts'
 import { errorTextOf } from '../../lib/error-text.ts'
 import { RichText } from '../chat/RichText.tsx'
+import { Icon } from '../common/Icon.tsx'
 
 const INSTRUCTION_LIMIT = 10
 const INSTRUCTION_CONTENT_LIMIT = 60
@@ -67,6 +68,7 @@ function Highlighted({ text, query }: { text: string; query: string }) {
 function SearchBox({ query, onQuery }: { query: string; onQuery: (value: string) => void }) {
   return (
     <div className="mem-search">
+      <Icon name="search" size={13} className="mem-search__icon" />
       <input
         type="search"
         className="mem-search__input"
@@ -83,7 +85,7 @@ function SearchBox({ query, onQuery }: { query: string; onQuery: (value: string)
         title="向量检索将在后续版本启用（P2）"
         onClick={() => announce('AI 搜索（向量检索）将在后续版本启用')}
       >
-        AI 搜索
+        <Icon name="sparkles" size={12} /> AI 搜索
       </button>
     </div>
   )
@@ -156,7 +158,7 @@ function ProceduralSection() {
                   <Highlighted text={section.title} query={query} />
                   {hitCount > 0 && <span className="mem-procedural__hits"> 命中 {hitCount} 处</span>}
                 </span>
-                <span className="mem-procedural__meta">{isOpen ? ' ▲' : ' ▼'}</span>
+                <span className="mem-procedural__meta"><Icon name={isOpen ? 'chevron_up' : 'chevron_down'} size={12} /></span>
               </button>
               {isOpen && (
                 <div className="mem-procedural__body">
@@ -242,7 +244,7 @@ function InstructionsSection() {
       <p className="mem-note"><strong>你亲手定的规矩：永远生效，优先于管家自己记的一切。</strong><br />只放风格与偏好；工作流程直接告诉管家。当前对管家生效。</p>
       <div className="mem-add">
         <div className="mem-add__main">
-          <label className="mem-add__label" htmlFor="mem-instruction-input">✍ 写一条新规矩</label>
+          <label className="mem-add__label" htmlFor="mem-instruction-input"><Icon name="pen_line" size={13} /> 写一条新规矩</label>
           <input
             id="mem-instruction-input"
             type="text"
@@ -275,8 +277,8 @@ function InstructionsSection() {
           <span className="mem-row__id">[{item.shortId}]</span>
           <span className="mem-row__content"><Highlighted text={item.content} query={query} /></span>
           <span className="mem-row__meta">{formatDate(item.updatedAt)}</span>
-          <button type="button" className="btn btn--tiny" onClick={() => { void toMemory(item) }}>转为记忆</button>
-          <button type="button" className="btn btn--tiny btn--ghost" onClick={() => { void remove(item) }}>删除</button>
+          <button type="button" className="btn btn--tiny" onClick={() => { void toMemory(item) }}><Icon name="download" size={12} /> 转为记忆</button>
+          <button type="button" className="btn btn--tiny btn--ghost" onClick={() => { void remove(item) }}><Icon name="trash_2" size={12} /> 删除</button>
         </div>
       ))}
     </div>
@@ -365,7 +367,7 @@ function LibrarySection() {
         return (
           <div key={item.id}>
             {showDivider && (
-              <div className="mem-library__divider" title="这条分隔线以下的内容目前不进入管家的每轮对话">▲ 以上进入管家的每轮对话 · 以下暂不注入</div>
+              <div className="mem-library__divider" title="这条分隔线以下的内容目前不进入管家的每轮对话"><span className="mem-divider__tag"><Icon name="scissors" size={11} /> 以下暂不注入</span></div>
             )}
             <div className="mem-row">
               <span className="mem-row__id">[{item.shortId}]</span>
@@ -373,14 +375,14 @@ function LibrarySection() {
                 <Highlighted text={item.content} query={query} />
                 <span className="mem-row__meta">（{KIND_LABEL[item.kind]}）</span>
               </span>
-              <button type="button" className="btn btn--tiny" onClick={() => { void promote(item) }}>升级为要求</button>
+              <button type="button" className="btn btn--tiny" onClick={() => { void promote(item) }}><Icon name="arrow_up_right" size={12} /> 升级为要求</button>
               <button type="button" className="btn btn--tiny btn--ghost" onClick={() => { void remove(item) }}>删除</button>
             </div>
           </div>
         )
       })}
       <div className="mem-library__actions">
-        <a className="btn btn--tiny" href={api.memoryExportUrl()}>导出（含要求与记忆，不含出厂规矩）</a>
+        <a className="btn btn--tiny" href={api.memoryExportUrl()}><Icon name="download" size={12} /> 导出（含要求与记忆，不含出厂规矩）</a>
         {itemsSafe.length > 0 && !confirmPurge && (
           <button type="button" className="btn btn--tiny btn--ghost" onClick={() => setConfirmPurge(true)}>清空记忆库</button>
         )}

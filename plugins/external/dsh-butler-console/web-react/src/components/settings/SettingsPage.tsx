@@ -16,6 +16,7 @@ import { refreshPanelsData } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
 import { Avatar } from '../common/Avatar.tsx'
 import { MemorySettings } from './MemorySettings.tsx'
+import { Icon } from '../common/Icon.tsx'
 
 type CardStatusKind = '' | 'dirty' | 'busy' | 'ok' | 'error'
 

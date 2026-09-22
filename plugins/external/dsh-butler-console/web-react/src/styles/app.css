@@ -2074,9 +2074,9 @@ button:focus-visible {
   flex: 1 1 auto; min-width: 0; padding: 7px 10px 7px 30px;
   font-size: 13px; background: #fff; border: 1.5px solid #2f2b2666; border-radius: 8px;
 }
-.mem-search::before {
-  content: '🔍'; position: absolute; left: 10px; top: 50%;
-  transform: translateY(-50%); font-size: 12px; opacity: 0.55; pointer-events: none;
+.mem-search__icon {
+  position: absolute; left: 10px; top: 50%;
+  transform: translateY(-50%); color: var(--bt-ink-faint); pointer-events: none;
 }
 /* 产品资产卡：手账墨框质感 + hover。 */
 .mem-procedural__card {
@@ -2099,8 +2099,8 @@ button:focus-visible {
   margin: 10px 0 4px; padding: 0; font-size: 12px; color: var(--bt-ink-soft);
   background: none; border: 0; border-top: 2px dashed #c0392b88;
 }
-.mem-library__divider::before {
-  content: '✂ 以下暂不注入'; flex: none; padding: 1px 8px;
+.mem-library__divider .mem-divider__tag {
+  flex: none; padding: 1px 8px;
   background: var(--bt-paper, #f7f1e3); border: 1.5px solid #c0392b88; border-radius: 6px;
 }
 /* 录入区恢复单行动线 + 边框加深。 */
