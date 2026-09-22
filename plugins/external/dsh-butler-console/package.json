@@ -46,8 +46,8 @@
       "butler:access"
     ],
     "verifyFiles": [
-      "persona/01-identity-intro.md",
-      "persona/10-style.md",
+      "persona/identity.md",
+      "persona/tools.md",
       "web-react/index.html",
       "web/media/avatars/avatar-butler.png",
       "web/fonts-lxgw.css",
