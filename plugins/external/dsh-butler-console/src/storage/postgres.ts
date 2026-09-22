@@ -54,6 +54,12 @@ import type {
  * 指到旧形状库会得到"版本不符"的**响亮失败**，而不是静默降级。
  */
 export const STORAGE_SCHEMA_VERSION = 1
+/** 站点级跨插件共享表的登记主体与期望版本（`('agent-memories', 1)`，`0004_agent_memories.sql` 写入）。 */
+export const AGENT_MEMORIES_PLUGIN_ID = 'agent-memories'
+export const AGENT_MEMORIES_SCHEMA_VERSION = 1
+/** 共享表的核验面：除表本身外，两个唯一索引是防重与短 id 正确性的依赖项（误删=静默失效）。 */
+const AGENT_MEMORIES_INDEXES = ['agent_memories_dedup', 'agent_memories_short_id'] as const
+
 /** init 版本校验使用的期望版本（与 {@link STORAGE_SCHEMA_VERSION} 同源，/ready 汇报同一数值）。 */
 const EXPECTED_SCHEMA_VERSION = STORAGE_SCHEMA_VERSION
 
@@ -249,6 +255,15 @@ export class PostgresTaskStorage implements ButlerStorage {
   private inited = false
   private closed = false
 
+  /**
+   * 只读池访问：给同库的附加存储模块（如 `src/memories.ts`）复用**同一个池**——连接参数
+   * （max/超时/'error' 监听）已在构造时统一配置，第二只池意味着第二份状态与两倍连接数。
+   * P1.5 上收 kit 后这里改为注入式 executor（设计 §6.3），访问面收缩为 `{ query, connect }`。
+   */
+  get clientPool(): Pool {
+    return this.pool
+  }
+
   constructor(private readonly dsn: string, onError?: (error: Error) => void) {
     this.pool = new Pool({
       connectionString: dsn,
@@ -286,13 +301,18 @@ export class PostgresTaskStorage implements ButlerStorage {
       // 不受连接 search_path 影响（迁移执行保持现状，不在此建表）。
       const found = await this.pool.query<{ tab: string }>(
         'SELECT t.tab FROM unnest($1::text[]) AS t(tab) WHERE to_regclass(\'public.\' || t.tab) IS NOT NULL',
-        [[...EXPECTED_TABLES]],
+        [[...EXPECTED_TABLES, ...AGENT_MEMORIES_INDEXES]],
       )
       const present = new Set(found.rows.map(row => row.tab))
       const missing = EXPECTED_TABLES.filter(table => !present.has(table))
       if (missing.length > 0) {
         throw new StorageError('storage_schema_missing', `存储结构缺失，缺少表：${missing.join('、')}`)
       }
+      const missingIndexes = AGENT_MEMORIES_INDEXES.filter(index => !present.has(index))
+      if (missingIndexes.length > 0) {
+        throw new StorageError('storage_schema_missing', `存储结构缺失，缺少索引：${missingIndexes.join('、')}（防重与短 id 正确性依赖它们，请重跑 0004_agent_memories.sql）`)
+      }
+      await this.verifyAgentMemoriesVersion()
       this.inited = true
       this.readyError = undefined
       return
@@ -302,6 +322,26 @@ export class PostgresTaskStorage implements ButlerStorage {
         : new StorageError('storage_unknown', '存储初始化失败', { cause: error })
       this.readyError = failure
       throw failure
+    }
+  }
+
+  /**
+   * 站点级共享表 `agent_memories` 的版本行核验（设计 §4.2/§6.2）：严格相等——缺行、
+   * 版本不符都响亮失败。只核验存在性防不了版本不同步（未来 0005 扩枚举后旧代码对新表
+   * 静默半兼容）与列被误改；版本行必须参与核验（agents-group `assertSchema` 同一口径）。
+   * 「迁移先行、任一侧版本落后即拒服」是预期停机语义，不是故障。
+   */
+  private async verifyAgentMemoriesVersion(): Promise<void> {
+    const result = await this.pool.query<{ version: string | number }>(
+      'SELECT version FROM dsh_schema_versions WHERE plugin_id = $1',
+      [AGENT_MEMORIES_PLUGIN_ID],
+    )
+    const current = result.rows[0]?.version
+    if (current === undefined) {
+      throw new StorageError('storage_schema_missing', `站点级记忆表未登记（dsh_schema_versions 缺 '${AGENT_MEMORIES_PLUGIN_ID}' 行），请执行 private-deploy/db/0004_agent_memories.sql`)
+    }
+    if (Number(current) !== AGENT_MEMORIES_SCHEMA_VERSION) {
+      throw new StorageError('storage_schema_version', `不支持的记忆表结构版本：${current}（期望 ${AGENT_MEMORIES_SCHEMA_VERSION}）；请先执行对应版本的迁移再升级插件`)
     }
   }
 

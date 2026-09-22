@@ -28,6 +28,7 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { createAccess, registerPlugin } from '@dsh-plugin-manager/plugin-kit'
 import { ButlerConsole } from './butler.ts'
 import { Config as ConfigSchema, type Config as PluginConfig } from './config.ts'
+import { MemoryStore } from './memories.ts'
 import { resolveStorageDsn } from './storage/dsn.ts'
 import { PostgresTaskStorage, STORAGE_SCHEMA_VERSION } from './storage/postgres.ts'
 import { installWeb } from './web.ts'
@@ -130,7 +131,9 @@ export async function apply(ctx: Context, config: PluginConfig): Promise<void> {
   }
   // 附件服务由 ButlerConsole 自己在构造时装配（页面那条路读 `console_.attachments`），
   // 这里不再单独造一个：两处各造一个就会各持一份状态。
-  const console_ = new ButlerConsole(ctx, config, access, storage, persona)
+  // 记忆存储复用同一个池（第二只池=第二份状态与两倍连接数）；生命周期随 storage.close() 终结。
+  const memories = new MemoryStore(storage.clientPool, 'butler')
+  const console_ = new ButlerConsole(ctx, config, access, storage, persona, memories)
   // 移除围栏的同步镜像要在路由就绪前装满：围栏的 record 是同步查表，空镜像会把正常
   // 会话的删除请求误判成「不存在」。加载失败按装载失败处理（否则删除面带着空镜像上线）。
   await console_.loadConversationIndex()

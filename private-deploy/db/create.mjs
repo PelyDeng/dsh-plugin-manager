@@ -9,15 +9,16 @@ const { Client } = pg;
 /** 建库脚本不猜项目根：DDL 固定与本文件同目录，路径由显式 root 解析（AGENTS.md）。 */
 export const SQL_FILE = fileURLToPath(new URL('0001_init.sql', import.meta.url));
 
-/** 建库要写入版本表的四个归属；缺一项就说明 DDL 没跑完（设计 §3.1）。 */
-export const EXPECTED_VERSIONS = ['butler', 'blog', 'closedoff', 'runtime'];
+/** 建库要写入版本表的五个归属；缺一项就说明 DDL 没跑完（设计 §3.1）。`agent-memories` 是站点级跨插件共享表的登记主体（无前缀惯例例外）。 */
+export const EXPECTED_VERSIONS = ['butler', 'blog', 'closedoff', 'runtime', 'agent-memories'];
 
-/** 建库后应当存在的 15 张表。多一张少一张都说明库不是本脚本建出的形状。 */
+/** 建库后应当存在的 18 张表。多一张少一张都说明库不是本脚本建出的形状。 */
 export const EXPECTED_TABLES = [
   'dsh_schema_versions',
   'butler_tasks', 'butler_subtasks', 'butler_task_inputs', 'butler_agent_aliases', 'butler_requests',
   'dsh_conversations', 'dsh_turns', 'dsh_turn_results',
   'blog_drafts', 'blog_jobs', 'blog_operations', 'blog_audit', 'blog_attachments', 'blog_translations',
+  'agent_memories', 'agent_memories_audit', 'agent_memory_counters',
 ];
 
 const USAGE = `用法：node private-deploy/db/create.mjs [--dsn <DSN>] [--database <库名>] [--confirm <库名>] [--help]

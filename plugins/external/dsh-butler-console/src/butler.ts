@@ -54,6 +54,9 @@ import type {
 import { isTerminal, dependencyVerdict, type SubtaskState, type TaskState } from './task-model.ts'
 import { makePlanTool } from './butler/planning.ts'
 import { makeVerdictTool, readVerdictDecision } from './butler/verdict.ts'
+import { makeMemoryTools } from './butler/memories-tool.ts'
+import { renderMemorySection } from './butler/memory-section.ts'
+import type { MemoryStore } from './memories.ts'
 import { clip, digestOf, subtaskResultText, textOf } from './butler/text.ts'
 import { stackOf, visibleError } from './butler/errors.ts'
 import { requireAcceptance, taskAcceptanceFinding } from './butler/acceptance.ts'
@@ -65,6 +68,13 @@ import { SUMMARY_PROMPT_GOAL, SUMMARY_PROMPT_RESULTS, TRANSCRIPT_LEAD_EVENTS, TR
 import type { Conversation, PlanSubmission, PlannedSubtask, PreparedAction, PreparedReply, PreparedSupplement, PreparedTurn, RunHooks, SubtaskOutcome, Turn, TurnOutcome, WaitingMember } from './butler/domain.ts'
 
 const CONVERSATION_ID = /^butler-web-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+/**
+ * 内部中继会话（目标充实等）用的中性 actor：这类会话不面向任何人，setup 里的记忆注册
+ * 对它无意义——memories 查询带 owner 条件，中性 actor 查不到任何行，天然隔离。
+ * （standalone 分支的 userId 是字面量 'local' 联合类型，中继借同一个身份但走独立会话。）
+ */
+const NEUTRAL_ACTOR: Actor = { namespace: 'standalone', userId: 'local' }
 
 /** 移除围栏同步镜像的键：owner 双列 + 会话 id（围栏的 record/mark 都是同步查它）。 */
 function removalKey(actor: Actor, conversationId: string): string {
@@ -433,6 +443,48 @@ export class ButlerConsole {
    */
   private readonly conversationIndex = new Map<string, string>()
 
+  /**
+   * memory_forget 的待删除登记（会话 id → 在途确认）。内存态：进程重启即失效，重试路径会
+   * 重新走一遍 forget；确认动作在 HTTP 层（web.ts 的 /memories/forget/confirm）由鉴权 actor
+   * 消费后才真删+审计（设计 §4.4「代码层确认」）。TTL 与过期语义在 memories-tool.ts。
+   */
+  readonly pendingForgets = {
+    set: (sessionId: string, pending: { readonly memoryId: string; readonly shortId: string; readonly content: string; readonly createdAt: number }) => {
+      this.pendingForgetIndex.set(sessionId, pending)
+    },
+    take: (sessionId: string, memoryId: string) => {
+      const pending = this.pendingForgetIndex.get(sessionId)
+      // 只消费匹配的那条；不匹配（已被处理）时原样保留，返回 undefined。
+      if (pending === undefined || pending.memoryId !== memoryId) return undefined
+      this.pendingForgetIndex.delete(sessionId)
+      return pending
+    },
+  }
+  private readonly pendingForgetIndex = new Map<string, { readonly memoryId: string; readonly shortId: string; readonly content: string; readonly createdAt: number }>()
+
+  /** memory section 的每轮预取缓存（会话 id → 注入文本；空串=无记忆，section 贡献空文本）。 */
+  private readonly memoryCache = new Map<string, string>()
+
+  /**
+   * 每轮回合开始时预取本 actor 的记忆注入文本（§4.5 注入点在每轮组装）。
+   * 查询失败不阻塞回合：记忆是软参考，降级为「本轮无记忆」并记日志——
+   * 硬失败语义留给主链路（派活、落库），这里静默降级是对的。
+   */
+  async refreshMemoryCache(sessionId: string, actor: Actor): Promise<void> {
+    if (this.memories === undefined) return
+    try {
+      const now = Date.now()
+      const [instructions, records] = await Promise.all([
+        this.memories.instructions(actor, now),
+        this.memories.injectQuery(actor, now),
+      ])
+      this.memoryCache.set(sessionId, renderMemorySection(instructions, records))
+    } catch (error) {
+      this.memoryCache.delete(sessionId)
+      console.error(`butler-console: 记忆注入预取失败（本轮降级为无记忆）：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   /** kit 移除围栏产物：会话删除的宿主归档、围栏状态与忙检查都由它承担（不自造）。 */
   readonly removeViaFence: ReturnType<typeof conversationRemover>
 
@@ -443,6 +495,8 @@ export class ButlerConsole {
     /** 异步业务存储（生产为 PostgresTaskStorage；测试注入过渡适配器或替身）。 */
     private readonly storage: ButlerStorage,
     private readonly persona: string,
+    /** 长期记忆存储（v2.6 设计 §4；测试可传 undefined 关闭记忆功能——section 与工具都不注册）。 */
+    private readonly memories?: MemoryStore,
   ) {
     // 附件服务按**每一次调用**去问"此刻的存储"，而不是把 `storage` 抓在手里：这个字段是可变的
     // （测试在重开库之后会整只换掉它），抓住旧的那一个，换库之后读到的就是一张已经关掉的库
@@ -622,7 +676,7 @@ export class ButlerConsole {
       handle = await this.ctx.agents.resume({
         resumeSessionId: SessionId(id),
         agentOptions,
-        setup: agentCtx => this.setup(agentCtx, id),
+        setup: agentCtx => this.setup(agentCtx, id, actor),
       })
     } catch (error) {
       if (!isNotFound(error)) throw error
@@ -630,7 +684,7 @@ export class ButlerConsole {
         sessionId: SessionId(id),
         meta: { cwd: process.cwd() },
         agentOptions,
-        setup: agentCtx => this.setup(agentCtx, id),
+        setup: agentCtx => this.setup(agentCtx, id, actor),
       })
     }
     this.access.assert(actor)
@@ -652,7 +706,7 @@ export class ButlerConsole {
    * `sessionId` 由创建处闭包传入，而不是从 agentCtx 上读 `agent.id`：这样不依赖
    * 宿主对 Context 的类型扩展，行为也更明确。
    */
-  private setup(agentCtx: Context, sessionId: string): void {
+  private setup(agentCtx: Context, sessionId: string, actor: Actor): void {
     agentCtx.systemPrompt.section({ name: 'butler:persona', order: 600, text: this.persona })
     // 在场名单每次组装时重新求值：新插件装上来、旧插件卸下去，牛马大总管下一轮就知道，
     // 不需要重启也不需要改代码。
@@ -661,6 +715,25 @@ export class ButlerConsole {
       order: 610,
       text: () => this.rosterText(sessionId),
     })
+    // 长期记忆（v2.6 设计 §4.5）：order 620，在 roster 之后、最贴近对话端——roster 是派活
+    // 决策的硬约束，不应被记忆清单隔断。
+    //
+    // ⚠️ 机制说明：systemPrompt section 的 text 只接受**同步**函数（string | (() => string)），
+    // 而记忆查询是异步 PG——所以走「预取 + 同步读缓存」：每轮回合开始（send/supplement 入口）
+    // 先 `refreshMemoryCache` 异步取好本 actor 的注入文本，section 组装时同步读缓存。写入后
+    // 下一轮入口会重新预取，记忆立即生效（设计 §4.5「注入点在每轮组装」的落法）。缓存未预热
+    // （如宿主自行驱动的回合）时读到的可能是上一轮的文本——最坏滞后一轮，不会读到别人的
+    // （缓存键 = 会话 id，会话在 openAgent 时已与 actor 绑定）。未配置记忆存储时不注册。
+    // actor 在会话打开时由入口鉴权推导并闭包捕获（服务端推导，不从模型参数读——§4.4 红线）。
+    if (this.memories !== undefined) {
+      agentCtx.systemPrompt.section({
+        name: 'butler:memory',
+        order: 620,
+        text: () => this.memoryCache.get(sessionId) ?? '',
+      })
+      agentCtx.tools.register(this.memoryWriteTool(sessionId, actor))
+      agentCtx.tools.register(this.memoryForgetTool(sessionId, actor))
+    }
     agentCtx.tools.register(this.planTool(sessionId))
     // 裁决工具：同一个会话上再注册一个。它只在收尾的汇总轮里有上下文（见 `verdictContexts`），
     // 其余轮次调用它会拿到一句明确的拒绝，而不是静默什么都不做。
@@ -739,6 +812,29 @@ export class ButlerConsole {
       dispatchableAgents: () => this.dispatchableAgents(),
       maxSubtasks: this.config.maxSubtasks,
     })
+  }
+
+  /**
+   * `memory_write` 工具（工厂实现见 butler/memories-tool.ts 的 makeMemoryTools）。
+   * 仅在 memories 存储配置时注册（setup 已判空）；actor 闭包自会话打开时的入口鉴权。
+   */
+  private memoryWriteTool(sessionId: string, actor: Actor) {
+    return makeMemoryTools({
+      store: this.memories!,
+      actor: () => actor,
+      pendingForgets: this.pendingForgets,
+      sessionId,
+    }).writeTool
+  }
+
+  /** `memory_forget` 工具：删除走确认卡（pendingForgets 登记，HTTP 层确认后真删+审计）。 */
+  private memoryForgetTool(sessionId: string, actor: Actor) {
+    return makeMemoryTools({
+      store: this.memories!,
+      actor: () => actor,
+      pendingForgets: this.pendingForgets,
+      sessionId,
+    }).forgetTool
   }
 
   /**
@@ -1073,6 +1169,9 @@ export class ButlerConsole {
     const conversation = await this.open(conversationId, true, actor)
     if (conversation === undefined) throw new AccessError(500, '无法打开牛马大总管会话', 'conversation_open_failed')
     this.access.assert(actor)
+    // 记忆预取（§4.5 注入点在每轮组装）：放在互斥标志之前——它有 await，插到 active 检查
+    // 之后会把互斥窗口撕开。失败在内部降级（本轮无记忆），不阻塞回合。
+    await this.refreshMemoryCache(conversationId, actor)
 
     // 附件在互斥标志**之前**处理完：这一段里有 await（读库，模型收不了图片时还有一次读图
     // 调用），插在「检查 active」与「置位 active」之间会让同一会话的两个回合同时进来。
@@ -2145,7 +2244,7 @@ export class ButlerConsole {
           model: selection.model,
           ...(effort ? { reasoningEffort: ReasoningEffortId(effort) } : {}),
         },
-        setup: agentCtx => this.setup(agentCtx, id),
+        setup: agentCtx => this.setup(agentCtx, id, NEUTRAL_ACTOR),
       })
       const conversation: Conversation = { id, handle, selection, active: false, lastUsedAt: Date.now() }
       const prompt = [
