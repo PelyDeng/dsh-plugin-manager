@@ -254,7 +254,8 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
                         <span className="tool-line__name">{subtask.toolLine.tool ?? subtask.toolLine.detail}</span>
                       </div>
                     )}
-                    {subtask.body.length > STREAM_RICH_LIMIT
+                    {/* 超长降级只在流式中生效：终态恢复完整 Markdown（0.13.19 同款修复） */}
+                    {subtask.body.length > STREAM_RICH_LIMIT && subtask.live
                       ? <span>{subtask.body}</span>
                       : <RichText text={subtask.body} streaming={subtask.live && !subtask.terminal} />}
                     <span className="caret" hidden={subtask.terminal || !subtask.live} />

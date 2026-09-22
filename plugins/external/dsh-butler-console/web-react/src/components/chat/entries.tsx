@@ -79,7 +79,7 @@ function ButlerEntryViewFn({ text, thinking, streaming, time, interrupted }: {
         <div className="bubble">
           {thinking !== '' && <ThinkBlock text={thinking} streaming={streaming} />}
           {/* 分级降级（方案 §3.4 坑 4）：超长正文不逐帧 Markdown 重渲，降级纯文本。 */}
-          {text.length > STREAM_RICH_LIMIT
+          {text.length > STREAM_RICH_LIMIT && streaming
             ? <span>{text}</span>
             : <RichText text={text} streaming={streaming} />}
           <span className="caret" hidden={!streaming} />

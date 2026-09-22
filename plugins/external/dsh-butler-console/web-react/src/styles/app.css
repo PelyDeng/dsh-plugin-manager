@@ -447,7 +447,7 @@ button:focus-visible {
 /* 三段布局：左（返回+面包屑，任务详情才显示）/中（标题图居中）/右（设置）。 */
 .center__nav { display: flex; align-items: center; gap: 10px; flex: none; min-width: 150px; }
 .center__nav[hidden] { display: none; }
-.center__title--compact img { height: 44px; }
+.center__title--compact img { height: 58px; }
 .center__head .center__title { position: absolute; left: 50%; transform: translateX(-50%); }
 .center__head h2 { margin: 0; font-family: var(--bt-hand); font-size: 24px; font-weight: 800; -webkit-text-stroke: 0.7px var(--bt-stroke); text-shadow: 0.5px 0.5px 0 var(--bt-stroke); }
 /* 红笔圈注：罩在「牛马调度群」标题上的手绘椭圆（index.html 内联 SVG）。 */
