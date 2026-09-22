@@ -58,18 +58,17 @@ export const inject = [
   'webServer',
 ] as const
 
-/** 人设目录的权威拼装顺序（设计 §6.1：等价期按 persona.txt 原文线性顺序切分，逐字节等价迁移的基准）。 */
+/**
+ * 人设目录的权威拼装顺序（设计 §3.2 六文件目标形状；等价期已于收口提交结束——
+ * 十文件→六文件合并为受控段序变更，行多重集合与基线零差异，由 persona 守卫测试看护）。
+ */
 export const PERSONA_SECTION_ORDER = [
-  '01-identity-intro',
-  '02-duties',
-  '03-duties-not',
-  '04-dispatch-plan',
-  '05-acceptance-spec',
-  '06-fidelity',
-  '07-tools',
-  '08-dispatch-select',
-  '09-acceptance-final',
-  '10-style',
+  'identity',
+  'duties',
+  'dispatch',
+  'acceptance',
+  'fidelity',
+  'tools',
 ] as const
 
 /** 读取 persona/ 目录并按权威顺序拼装人设整体文本；任一文件缺失或为空都响亮失败。 */

@@ -495,8 +495,11 @@ export class ButlerConsole {
     /** 异步业务存储（生产为 PostgresTaskStorage；测试注入过渡适配器或替身）。 */
     private readonly storage: ButlerStorage,
     private readonly persona: string,
-    /** 长期记忆存储（v2.6 设计 §4；测试可传 undefined 关闭记忆功能——section 与工具都不注册）。 */
-    private readonly memories?: MemoryStore,
+    /**
+     * 长期记忆存储（v2.6 设计 §4；测试可传 undefined 关闭记忆功能——section 与工具都不注册）。
+     * 只读暴露给 web 层（`/memories` 路由的 owner 查询与治理操作都走这一份），与注入/工具同源。
+     */
+    readonly memories?: MemoryStore,
   ) {
     // 附件服务按**每一次调用**去问"此刻的存储"，而不是把 `storage` 抓在手里：这个字段是可变的
     // （测试在重开库之后会整只换掉它），抓住旧的那一个，换库之后读到的就是一张已经关掉的库

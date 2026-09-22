@@ -118,12 +118,16 @@ function errorCodeOf(caught: unknown, status: number): string {
  * **加字段不升版本**（老客户端忽略即可）；语义变化、字段改名或删除才 +1。`/identity` 会把它
  * 连同 `routePrefix` 一起返回，第二客户端据此发现入口，不必硬编码 `/butler` —— 那是部署配置，
  * 换个部署就可能不一样。
+ *
+ * 1 → 2（P1 记忆系统）：新增 `/memories` 系列端点（治理 CRUD/确认卡落点/导出/产品资产只读）。
  */
-export const CONTRACT_VERSION = 1
+export const CONTRACT_VERSION = 2
 
 function method(request: IncomingMessage, expected: string): void {
   if (request.method !== expected) throw new HttpError(405, `只支持 ${expected}`, 'method_not_allowed')
 }
+
+import { registerMemoryRoutes } from './web-memories.ts'
 
 function json(response: ServerResponse, status: number, value: unknown): void {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
@@ -1157,4 +1161,20 @@ export async function installWeb(
   // 安全的：属于其他登录的会话本来就不会因为这次撤销而继续运行，而被撤销的那个
   // 恰好会停下来。真正的归属校验在每次访问时由 `access.assert` 完成。
   ctx.effect(() => onRevoked(ctx, () => { console_.cancelAll() }))
+
+  // 记忆治理（v2.6 设计 §4.6/§6.2 步骤 5）：三分区 CRUD + 轻摘要 + 确认卡落点 + 导出 +
+  // 产品资产只读。未配置记忆存储时不注册（前端 summary 404 时隐藏右栏摘要即可）。
+  if (console_.memories !== undefined) {
+    registerMemoryRoutes({
+      memories: console_.memories,
+      routePrefix: config.routePrefix,
+      maxRequestBodyBytes: config.maxRequestBodyBytes,
+      register,
+      method,
+      body: (request, limit) => body(request, limit),
+      stringField,
+      json,
+      pendingForgets: console_.pendingForgets,
+    })
+  }
 }
