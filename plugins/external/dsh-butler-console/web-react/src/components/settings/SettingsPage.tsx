@@ -111,7 +111,7 @@ function SettingsCard({ member, onSaved }: SettingsCardProps) {
             aria-label={`给 ${displayNameOf(useSessionStore.getState().members, agentId)} 换头像`}
             onClick={() => fileRef.current?.click()}
           >
-            📷
+            <Icon name="camera" size={16} />
           </button>
           <input
             ref={fileRef}
