@@ -12,6 +12,7 @@ import { ActionCard } from './ActionCard.tsx'
 import { SUGGESTIONS, DEFAULT_AVATAR_FILES, STREAM_RICH_LIMIT } from '../../lib/config.ts'
 import { stateText, statusColor } from '../../lib/task-state.ts'
 import { ThinkBlock } from '../common/basics.tsx'
+import { SubtaskBubble } from './SubtaskBubble.tsx'
 import type { ThreadEntry, SubtaskEntry } from '../../stores/turn.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { accentOf, displayNameOf, useSessionStore } from '../../stores/session.ts'
@@ -107,25 +108,16 @@ function SubtaskEntryViewFn({ entry }: { entry: SubtaskEntry }) {
             {stateText(entry.state)}
           </span>
         </div>
-        <div className={`bubble${entry.state === 'waiting_user' || entry.state === 'external_pending' ? ' bubble--wait' : ''}${entry.state === 'succeeded' ? ' bubble--done' : ''}${entry.state === 'failed' ? ' bubble--fail' : ''}`}>
-          {entry.thinking !== '' && (
-            <ThinkBlock text={entry.thinking} />
-          )}
-          {entry.toolLine !== null && (entry.toolLine.tool !== undefined || entry.toolLine.detail !== undefined) && (
-            <div className="tool-line">
-              <span>{entry.toolLine.tool !== undefined ? '正在翻资料：' : ''}</span>
-              <span className="tool-line__name">{entry.toolLine.tool ?? entry.toolLine.detail}</span>
-            </div>
-          )}
-          {/* 历史恢复的子任务卡没有调度卡上下文：把目标亮出来，用户知道这格是干嘛的。 */}
-          {entry.goal !== '' && <div className="subtask__goal">{entry.goal}</div>}
-          {entry.body === ''
-            ? entry.state === 'running' && <div className="typing"><i /><i /><i /></div>
-            : entry.body.length > STREAM_RICH_LIMIT && entry.live
-              ? <span>{entry.body}</span>
-              : <RichText text={entry.body} streaming={entry.live && !entry.terminal} />}
-          <span className="caret" hidden={entry.terminal || !entry.live} />
-        </div>
+        <SubtaskBubble
+          state={entry.state}
+          body={entry.body}
+          thinking={entry.thinking !== '' ? entry.thinking : undefined}
+          toolLine={entry.toolLine}
+          live={entry.live}
+          terminal={entry.terminal}
+          goal={entry.goal}
+          pending={entry.pending}
+        />
         {entry.ask !== undefined && (
           <AskCard
             subtaskId={entry.subtaskId}

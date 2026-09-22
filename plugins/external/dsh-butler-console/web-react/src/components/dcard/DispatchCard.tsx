@@ -15,12 +15,11 @@ import { saveCardPref } from '../../stores/turn.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { displayNameOf, useSessionStore } from '../../stores/session.ts'
 import { Avatar } from '../common/Avatar.tsx'
-import { RichText } from '../chat/RichText.tsx'
 import { AskCard } from '../chat/AskCard.tsx'
 import { STREAM_RICH_LIMIT } from '../../lib/config.ts'
 import { cardElapsedText, cardSettled, cardStateText, CARD_RESULT_TITLE, emptySlotHint } from './card-text.ts'
 import { stateTone } from '../../lib/task-state.ts'
-import { ThinkBlock } from '../common/basics.tsx'
+import { SubtaskBubble } from '../chat/SubtaskBubble.tsx'
 
 /** 全页唯一的秒数节拍（旧 syncCardTicker 的 React 形态：一个 tick 状态驱动所有 live 格）。 */
 function useCardTicker(active: boolean): number {
@@ -244,23 +243,16 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
                 {subtask === undefined || !hasBody ? (
                   <p className="dcard__empty">{emptySlotHint(subtask?.state)}</p>
                 ) : (
-                  <div className={`bubble${subtask.state === 'succeeded' ? ' bubble--done' : ''}${subtask.state === 'failed' ? ' bubble--fail' : ''}${subtask.state === 'waiting_user' || subtask.state === 'external_pending' ? ' bubble--wait' : ''}`}>
-                    {subtask.thinking !== '' && !entry.resultOnly && (
-                      <ThinkBlock text={subtask.thinking} />
-                    )}
-                    {subtask.toolLine !== null && !entry.resultOnly && (subtask.toolLine.tool !== undefined || subtask.toolLine.detail !== undefined) && (
-                      <div className="tool-line">
-                        <span>{subtask.toolLine.tool !== undefined ? '正在翻资料：' : ''}</span>
-                        <span className="tool-line__name">{subtask.toolLine.tool ?? subtask.toolLine.detail}</span>
-                      </div>
-                    )}
-                    {/* 超长降级只在流式中生效：终态恢复完整 Markdown（0.13.19 同款修复） */}
-                    {subtask.body.length > STREAM_RICH_LIMIT && subtask.live
-                      ? <span>{subtask.body}</span>
-                      : <RichText text={subtask.body} streaming={subtask.live && !subtask.terminal} />}
-                    <span className="caret" hidden={subtask.terminal || !subtask.live} />
-                    {subtask.state === 'external_pending' && <div className="msg__meta">待外部处理，办好之后可以新开一轮</div>}
-                  </div>
+                  <SubtaskBubble
+                    state={subtask.state}
+                    body={subtask.body}
+                    thinking={subtask.thinking !== '' ? subtask.thinking : undefined}
+                    toolLine={subtask.toolLine}
+                    live={subtask.live}
+                    terminal={subtask.terminal}
+                    resultOnly={entry.resultOnly}
+                    pending={subtask.pending}
+                  />
                 )}
                 {subtask?.ask !== undefined && (
                   <AskCard
