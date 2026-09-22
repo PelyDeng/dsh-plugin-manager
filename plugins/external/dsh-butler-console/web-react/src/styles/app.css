@@ -440,7 +440,7 @@ button:focus-visible {
 /* ── 中栏 ─────────────────────────────────────────────────────────────── */
 
 .center__head {
-  display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+  display: flex; align-items: center; gap: 10px; padding: 16px 14px 8px;
   position: relative; z-index: 1; /* 自成层叠上下文，标题装饰不溢出到邻栏 */
   border-bottom: 1.5px solid var(--bt-line);
 }

@@ -121,7 +121,7 @@ function SubtaskEntryViewFn({ entry }: { entry: SubtaskEntry }) {
           {entry.goal !== '' && <div className="subtask__goal">{entry.goal}</div>}
           {entry.body === ''
             ? entry.state === 'running' && <div className="typing"><i /><i /><i /></div>
-            : entry.body.length > STREAM_RICH_LIMIT
+            : entry.body.length > STREAM_RICH_LIMIT && entry.live
               ? <span>{entry.body}</span>
               : <RichText text={entry.body} streaming={entry.live && !entry.terminal} />}
           <span className="caret" hidden={entry.terminal || !entry.live} />
