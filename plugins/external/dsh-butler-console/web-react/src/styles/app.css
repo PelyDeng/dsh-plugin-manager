@@ -73,18 +73,6 @@ body {
   padding: 24px;
 }
 
-.bt-hello { padding: 32px 40px; max-width: 640px; }
-.bt-hello__title {
-  margin: 0 0 8px;
-  font-family: var(--bt-hand);
-  font-size: 34px;
-  font-weight: 400;
-  line-height: 1.3;
-}
-.bt-hello__note { margin: 0 0 12px; color: var(--bt-ink-soft); }
-.bt-hello__config { margin: 0; }
-.bt-hello__config--mono { font-family: var(--bt-mono); font-size: 12.5px; color: var(--bt-ink-faint); }
-
 /* ── bt-overrides：Base UI/base-nova 默认皮肤 → 手账皮肤（方案 §3.5 覆写层）─────
  * 产物组件的默认形态（ring 焦点环、柔和阴影、blur 遮罩、zoom 动效）不在主题变量
  * 覆盖面，统一在这里按 data-slot 逐组件压回手账形态。本段不修改 CLI 产物的 tsx。
@@ -2016,3 +2004,6 @@ body[data-settings="open"] .settings {
   font-size: 13px;
 }
 .action-deck__note { margin: 4px 0 0; font-size: 12px; color: var(--bt-ink-soft); }
+.action-deck__note-input { margin: 2px 0 4px; padding: 5px 9px; font-size: 12.5px; color: var(--bt-ink); background: #fffef8; border: 1.5px dashed #2f2b2660; border-radius: 8px 7px 9px 8px; }
+.action-deck__note-input::placeholder { color: var(--bt-ink-faint); }
+.action-deck__note-input:focus-visible { border-color: var(--bt-ink); outline: none; }

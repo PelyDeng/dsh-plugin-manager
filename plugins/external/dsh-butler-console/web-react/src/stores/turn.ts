@@ -65,6 +65,11 @@ export interface SubtaskEntry {
   ask?: { taskId: string; question?: string | undefined; detail?: string | undefined } | undefined
   /** 待用户确认的操作卡（AgentAction 协议呈现面；prepared 态出确认/取消按钮）。 */
   actions?: ReadonlyArray<AgentAction> | undefined
+  /** external_pending 的结构化说明：在等谁做什么（reason）/办完能做什么（next）。 */
+  pending?: { reason: string; next?: string } | undefined
+  /** 协调方质检裁决（accept/rework/replace/unverified）与理由——历史恢复与详情回放带出。 */
+  verdict?: string | undefined
+  verdictReason?: string | undefined
 }
 
 export interface NoteEntry {
@@ -87,6 +92,8 @@ export interface SummaryEntry {
   kind: 'summary'
   state: string
   text: string
+  /** 失败原因（评审 B2）：失败/部分完成的汇总卡要能回答「为什么」。 */
+  error?: string | undefined
   time?: number | undefined
   /** 追问芯片占位（0.13.x 完整功能；本战役只做样张，方案 §3.6）。 */
   followups?: string[] | undefined
@@ -296,6 +303,8 @@ export const useTurnStore = create<TurnState>((set, get) => ({
         thinking: '', terminal: terminalSub, live: false, toolLine: null,
         artifacts: Array.isArray(subtask.artifacts) ? subtask.artifacts : [],
         actions: Array.isArray(subtask.actions) ? subtask.actions : undefined,
+        pending: subtask.pending,
+        verdict: subtask.verdict, verdictReason: subtask.verdictReason,
         startedAt: subtask.startedAt, finishedAt: subtask.finishedAt,
         detail: subtask.result, error: subtask.error,
         // 快照接续的等待是活的：回话入口重新给出（历史回放则提示重新描述目标）。
@@ -315,7 +324,7 @@ export const useTurnStore = create<TurnState>((set, get) => ({
     })
     entries.push(...memberEntries)
     if (terminalRecord || !liveResume) {
-      entries.push({ key: nextKey('summary'), kind: 'summary', state: record.state, text: record.summary ?? '', time: Number(record.updatedAt) || undefined })
+      entries.push({ key: nextKey('summary'), kind: 'summary', state: record.state, text: record.summary ?? '', error: typeof record.error === 'string' && record.error !== '' ? record.error : undefined, time: Number(record.updatedAt) || undefined })
     }
     const nextKeys = new Map<string, string>()
     for (const entry of memberEntries) {
@@ -325,15 +334,20 @@ export const useTurnStore = create<TurnState>((set, get) => ({
   },
 
   applyTurnEvent: event => {
-    const state = get()
     // ── 游标推进（consumeTurnEvent 语义，口径只有这一份）─────────────────
+    // 走 set 不可变更新：直接改 get() 返回对象不会触发订阅通知，DevTools 快照也失真。
     if (event.type === 'run') {
-      state.lastSeq = 0
-      state.lastRunId = event.runId ?? ''
-      if (event.taskId !== undefined && event.taskId !== '') state.lastRunTaskId = event.taskId
+      set(state => ({
+        lastSeq: 0,
+        lastRunId: event.runId ?? '',
+        ...(event.taskId !== undefined && event.taskId !== '' ? { lastRunTaskId: event.taskId } : {}),
+      }))
+    } else if (event.seq !== undefined) {
+      set({ lastSeq: event.seq })
     }
-    if (event.seq !== undefined) state.lastSeq = event.seq
-    if ((event.type === 'subtask' || event.type === 'plan') && event.taskId !== undefined) state.lastRunTaskId = event.taskId
+    if ((event.type === 'subtask' || event.type === 'plan') && event.taskId !== undefined && event.taskId !== '') {
+      set({ lastRunTaskId: event.taskId })
+    }
 
     // ── 分发（handleEvent 语义；调度卡/请示卡批 3/4b 完整化，批 1 降级视图）──
     switch (event.type) {
@@ -487,7 +501,7 @@ export const useTurnStore = create<TurnState>((set, get) => ({
         // 所有流式条目此刻收口：帧缓冲里的残留增量全部作废。
         frameBuffer.clear()
         get().appendEntry({
-          key: nextKey('summary'), kind: 'summary', state: event.state ?? '', text: dedup ? '' : text, time: event.time,
+          key: nextKey('summary'), kind: 'summary', state: event.state ?? '', text: dedup ? '' : text, error: typeof event.error === 'string' && event.error !== '' ? event.error : undefined, time: event.time,
           ...(Array.isArray(event.followups) ? { followups: event.followups as string[] } : {}),
         })
         // 调度卡收口（settleCardForSummary）：只有收尾汇总才收口——waiting_user/external_pending
@@ -646,6 +660,7 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
       // 终态（尤其 external_pending）才带 prepared 操作卡——确认按钮全靠它；
       // running 事件不带 actions，这里不透传会让 deck 永远派生不出确认项。
       actions: Array.isArray(event.actions) ? (event.actions as ReadonlyArray<AgentAction>) : entry.actions,
+      pending: typeof event.pending === 'object' && event.pending !== null && typeof (event.pending as { reason?: unknown }).reason === 'string' ? event.pending as { reason: string; next?: string } : entry.pending,
       // 等你回话不是在计算：给回复入口（ask 卡）。卡面问题用 question，正文用 detail，
       // 混用会让「正文」变成一句提问（旧 handleSubtask 的告诫）。
       ask: event.state === 'waiting_user'

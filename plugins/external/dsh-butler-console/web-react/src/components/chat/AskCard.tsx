@@ -6,7 +6,7 @@
  */
 import { useRef, useState } from 'react'
 import { runReply } from '../../hooks/use-turn.ts'
-import { useTurnStore } from '../../stores/turn.ts'
+import { resolveAskLocally } from '../../stores/turn.ts'
 import { newConversationId } from '../../lib/turn-event.ts'
 import { RichText } from './RichText.tsx'
 
@@ -45,13 +45,10 @@ export function AskCard({ subtaskId, taskId, question, detail }: AskCardProps) {
       { taskId, subtaskId, text, decideByAgent, requestId: requestIdRef.current },
       {
         onAccepted: () => {
-          // 受理：收卡（ask 字段清掉由 waiting_user → 新状态事件或这里显式清）。
+          // 受理只摘卡（0.13.8 收卡统一：resolveAskLocally 是唯一收卡动作）。状态回 running
+          // 等界面变化交给服务端事件——这里乐观迁移会吞掉调度卡「有更新」判定（复审 #1）。
           setNote(null)
-          useTurnStore.setState(st => ({
-            entries: st.entries.map(entry => entry.kind === 'subtask' && entry.subtaskId === subtaskId
-              ? { ...entry, ask: undefined, state: 'running', live: true, terminal: false }
-              : entry),
-          }))
+          resolveAskLocally(subtaskId)
         },
         onRejected: error => {
           setNote(null)

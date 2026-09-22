@@ -3,7 +3,7 @@
  * 1. web-react/src 不得引用已删除的旧前端目录（../web/ 下的 js/css/html）；
  * 2. web-react/src 模块引用图不得出现循环依赖（DFS 检测，环约束长期价值保留）。
  */
-import { readdirSync, readFileSync, existsSync } from 'node:fs'
+import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { join, dirname, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -79,4 +79,20 @@ if (errors > 0 || cycles > 0) {
   console.error(`check-web-react: ${errors} legacy import(s), ${cycles} cycle(s)`)
   process.exit(1)
 }
-console.log(`check-web-react: ${files.length} files, no legacy imports, no cycles`)
+
+// 产物体积门禁（评审 #8）：app.js 超过硬上限拦下、逼近上限警告——超限只能靠人眼是漏报源。
+// dist 未构建时跳过（门禁日常在构建前跑；发版链路 build 后会再跑一次）。
+const appJs = resolve(root, '../dist/web/app.js')
+let sizeLabel = ''
+if (existsSync(appJs)) {
+  const bytes = Number(statSync(appJs).size)
+  const LIMIT_HARD = 1_300_000
+  const LIMIT_WARN = 1_200_000
+  sizeLabel = ` (app.js ${(bytes / 1024).toFixed(1)} KB)`
+  if (bytes > LIMIT_HARD) {
+    console.error(`check-web-react: bundle over hard limit${sizeLabel}`)
+    process.exit(1)
+  }
+  if (bytes > LIMIT_WARN) console.warn(`check-web-react: bundle approaching limit${sizeLabel}`)
+}
+console.log(`check-web-react: ${files.length} files, no legacy imports, no cycles${sizeLabel}`)

@@ -913,6 +913,9 @@ export class ButlerConsole {
         // 它必须能到页面（刷新后还要重画确认卡），所以在这里从留存里投影出来，而不是把
         // 整份 `memberReturn` 原样外传。
         actions: (_memberReturn as { readonly actions?: readonly AgentAction[] } | undefined)?.actions ?? [],
+        // external_pending 的结构化说明（在等谁做什么/办完能做什么）同样是呈现数据：
+        // 刷新恢复的子任务卡靠它回答「卡在哪」，与 actions 同一投影理由。
+        pending: (_memberReturn as { readonly externalPending?: { reason: string; next?: string } } | undefined)?.externalPending,
       })),
     }
   }

@@ -6,7 +6,7 @@
  * controller，store.switchConversation 的原子动作负责完整 cleanup，after=lastSeq 保证
  * 重订不重复消费。
  */
-import { api, eventsHead, ApiError, chat, reply, act } from '../lib/api.ts'
+import { api, eventsHead, ApiError, chat, reply, act, supplement } from '../lib/api.ts'
 import type { TaskRecord } from '../lib/api.ts'
 export { act }
 import { followUntilTerminal, productionLinks, type TurnEngineHost } from '../lib/turn-engine.ts'
@@ -127,6 +127,8 @@ export function historyEntryToThreadEntry(entry: HistoryEntry): ThreadEntry {
       toolLine: null, artifacts: Array.isArray(sub.artifacts) ? sub.artifacts : [],
       startedAt: sub.startedAt ?? null, finishedAt: sub.finishedAt ?? null,
       detail: sub.result ?? null, error: sub.error ?? null,
+      pending: sub.pending,
+      verdict: sub.verdict, verdictReason: sub.verdictReason,
       actions: Array.isArray(sub.actions) ? sub.actions : undefined,
       // 会话视图里恢复的等待是活的：回话入口重新给出（taskId 从详情投影带来）。
       ...(sub.state === 'waiting_user'
@@ -256,13 +258,22 @@ export async function finishTurn(): Promise<void> {
 }
 
 /** 右栏数据装配（批 2：401 时给「去登录」入口，其余错误置顶栏「读取失败」）。 */
-export async function refreshPanelsData(): Promise<void> {
+/**
+ * 左右栏运维数据刷新（成员档案+运行状态）。
+ *
+ * `silent`（评审 #3）：AppShell 轮询走静默——失败不置顶栏（避免一次网络抖动把错误
+ * 钉在顶栏直到无关动作），成功时顺手清掉已有的错误标记（自愈）；显式调用（进入页面、
+ * 回合收尾）不带 silent，失败照旧置顶栏提示。
+ */
+export async function refreshPanelsData(options: { silent?: boolean } = {}): Promise<void> {
   try {
     const [members, overview] = await Promise.all([api.members(), api.overview()])
     const session = useSessionStore.getState()
     session.setMembers(members.items)
     session.setOverview(overview)
+    if (options.silent === true && session.topStatus === '读取失败') session.setTopStatus('')
   } catch (error) {
+    if (options.silent === true && !(error instanceof ApiError && error.status === 401)) return
     if (error instanceof ApiError && error.status === 401) {
       const session = useSessionStore.getState()
       session.setIdentity('')
@@ -302,10 +313,11 @@ export async function refreshChatList(): Promise<void> {
       preview: byConversation.get(item.id) ?? '',
     })))
   } catch (error) {
-    // 把服务端给的原因一并显示：只说「读取记录失败」，排查时等于什么都没有。
+    // 失败可见可重试（评审 #4）：视觉上落在 ChatList 的错误行（含原因与重试按钮），
+    // announce 保留为屏幕阅读器补充；不再清空列表冒充「还没有任务记录」。
     const reason = error instanceof Error ? error.message : ''
-    useSessionStore.getState().setChatList([])
-    announce(reason === '' ? '读取记录失败' : `读取记录失败：${reason}`)
+    useSessionStore.getState().setChatListError(reason === '' ? '读取记录失败' : `读取记录失败：${reason}`)
+    announce('读取记录失败')
   }
 }
 
@@ -555,6 +567,8 @@ export async function runActionDecision(input: {
   subtaskId: string
   actionId: string
   decision: 'confirm' | 'cancel'
+  /** 决策补充说明（评审 B4：如「换成 5 月再发」），后端 /action 原生支持。 */
+  note?: string | undefined
   requestId?: string | undefined
 }, hooks: { onAccepted?: () => void; onRejected?: (error: unknown) => void } = {}): Promise<void> {
   await waitForTurnIdle()
@@ -577,6 +591,38 @@ export async function runActionDecision(input: {
   } catch (error) {
     reportFailure(error, '操作没送出去')
     // 卡面也要知道失败：否则 note 停在「正在办理…」、按钮锁死，用户以为点了没反应。
+    hooks.onRejected?.(error)
+  } finally {
+    void finishTurn()
+  }
+}
+
+/**
+ * 给进行中的一轮补充目标/材料（/supplement，后端幂等）。受理即回调；事件进 store，
+ * 跟随到终态——补充后的界面变化由服务端事件驱动，与回话同一管线。
+ */
+export async function runSupplement(input: { taskId: string; text: string; expectVersion?: number; requestId?: string | null }, hooks: {
+  onAccepted?: () => void
+  onRejected?: (error: unknown) => void
+} = {}): Promise<void> {
+  await waitForTurnIdle()
+  useTurnStore.setState({ streaming: true, abort: new AbortController(), lastSeq: 0, lastRunId: '', following: true })
+  let accepted = false
+  const host = await makeEngineHost()
+  try {
+    for await (const event of supplement({ taskId: input.taskId, text: input.text, expectVersion: input.expectVersion, requestId: input.requestId ?? newConversationId(), signal: useTurnStore.getState().abort?.signal })) {
+      if (!accepted) {
+        accepted = true
+        hooks.onAccepted?.()
+      }
+      useTurnStore.getState().applyTurnEvent(event)
+    }
+    const st = useTurnStore.getState()
+    if (st.abort?.signal.aborted !== true && st.conversationId !== null) {
+      await followUntilTerminal(st.conversationId, { from: st.lastSeq, expectedRunId: st.lastRunId, signal: st.abort?.signal }, productionLinks, host)
+    }
+  } catch (error) {
+    reportFailure(error, '补充没送出去')
     hooks.onRejected?.(error)
   } finally {
     void finishTurn()

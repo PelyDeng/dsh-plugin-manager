@@ -3,6 +3,7 @@
  * 结构参照旧 speech.js/cards.js/history.js/member.js 的 DOM，渲染范式换成声明式。
  * 条目组件全部 memo：流式帧 flush 时未被更新的条目引用不变，跳过重渲（方案批 3 性能验收）。
  */
+import { formatClock } from '../../lib/time.ts'
 import { memo, type CSSProperties, useState } from 'react'
 import { RichText } from './RichText.tsx'
 import { Avatar } from '../common/Avatar.tsx'
@@ -17,14 +18,6 @@ import { openTask, sendMessage } from '../../hooks/use-turn.ts'
 import { DispatchCard } from '../dcard/DispatchCard.tsx'
 import { fileSizeText } from '../../stores/attachments.ts'
 
-function formatTime(value?: number): string {
-  if (value === undefined || value === 0) return ''
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  const clock = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-  if (date.toDateString() === new Date().toDateString()) return clock
-  return `${date.getMonth() + 1}-${String(date.getDate()).padStart(2, '0')} ${clock}`
-}
 
 /** 成员行的状态色（旧 handleSubtask 的 status 颜色语义）。 */
 function statusColor(state: string): string {
@@ -56,7 +49,7 @@ function UserEntryViewFn({ text, time, attachments }: {
             </div>
           </div>
         )}
-        <div className="msg__meta">{formatTime(time)}</div>
+        <div className="msg__meta">{formatClock(time)}</div>
       </div>
       <div className="avatar avatar--sm avatar--boss">
         {file !== undefined && (
@@ -105,7 +98,7 @@ function ButlerEntryViewFn({ text, thinking, streaming, time, interrupted }: {
           <span className="caret" hidden={!streaming} />
         </div>
         {interrupted === true && <div className="msg__meta">这一轮被打断，正文是已流出的部分</div>}
-        {time !== undefined && <div className="msg__meta">{formatTime(time)}</div>}
+        {time !== undefined && <div className="msg__meta">{formatClock(time)}</div>}
       </div>
     </div>
   )
@@ -161,7 +154,14 @@ function SubtaskEntryViewFn({ entry }: { entry: SubtaskEntry }) {
         {Array.isArray(entry.actions) && entry.actions.map(action => (
           <ActionCard key={action.id} action={action} taskId={entry.taskId ?? ''} subtaskId={entry.subtaskId} />
         ))}
-        {entry.state === 'external_pending' && <div className="msg__meta">待外部处理，办好之后可以新开一轮</div>}
+        {entry.state === 'external_pending' && (
+          <div className="msg__meta">
+            {entry.pending !== undefined ? `待外部处理：${entry.pending.reason}${entry.pending.next !== undefined ? `；${entry.pending.next}` : ''}` : '待外部处理，办好之后可以新开一轮'}
+          </div>
+        )}
+        {entry.verdict !== undefined && entry.verdict !== '' && entry.verdict !== 'accept' && (
+          <div className="msg__meta">总管复核：{entry.verdict}{entry.verdictReason !== undefined && entry.verdictReason !== '' ? `——${entry.verdictReason}` : ''}</div>
+        )}
       </div>
     </div>
   )
@@ -200,7 +200,7 @@ function ErrorEntryViewFn({ text, retryFor }: {
 function SummaryEntryViewFn({ state, text, error, followups }: {
   state: string
   text: string
-  error?: string | null
+  error?: string | undefined
   followups?: string[] | undefined
 }) {
   const title = state === 'completed' ? '已完成'
@@ -235,10 +235,10 @@ function TaskEntryViewFn({ task }: { task: import('../../lib/api.ts').TaskSummar
       <div className="task-card__head">
         <span className="task-card__badge">任务摘要</span>
         <span className="task-card__state">{STATE_TEXT[task.state] ?? task.state}</span>
-        <span className="task-card__time">{formatTime(Number(task.updatedAt) || undefined)}</span>
+        <span className="task-card__time">{formatClock(Number(task.updatedAt) || undefined)}</span>
       </div>
       <div className="task-card__goal">{task.goal}</div>
-      <div className="task-card__meta">{formatTime(Number(task.createdAt) || undefined)} 分派 · {task.subtaskDone}/{task.subtaskTotal} 项收尾</div>
+      <div className="task-card__meta">{formatClock(Number(task.createdAt) || undefined)} 分派 · {task.subtaskDone}/{task.subtaskTotal} 项收尾</div>
     </button>
   )
 }
@@ -319,7 +319,7 @@ export function renderEntry(entry: ThreadEntry): React.ReactNode {
     case 'subtask': return <SubtaskEntryView key={entry.key} entry={entry} />
     case 'note': return <NoteEntryView key={entry.key} text={entry.text} />
     case 'error': return <ErrorEntryView key={entry.key} text={entry.text} retryFor={entry.retryFor} />
-    case 'summary': return <SummaryEntryView key={entry.key} state={entry.state} text={entry.text} followups={entry.followups} />
+    case 'summary': return <SummaryEntryView key={entry.key} state={entry.state} text={entry.text} error={entry.error} followups={entry.followups} />
     case 'task': return <TaskEntryView key={entry.key} task={entry.task} />
     case 'dispatch': return <DispatchCard key={entry.key} entry={entry} />
     default: return null

@@ -11,7 +11,8 @@
  * - I02：只锁发送不锁输入，执行中可写下一句，草稿不被异步动作清掉。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { registerDraftRestore, sendMessage, stopTurn } from '../../hooks/use-turn.ts'
+import { registerDraftRestore, runSupplement, sendMessage, stopTurn } from '../../hooks/use-turn.ts'
+import { announce } from '../../lib/announce.ts'
 import { useSessionStore, type MemberItem } from '../../stores/session.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import {
@@ -58,6 +59,9 @@ export function Composer() {
   const attachments = useAttachmentsStore(state => state.items)
   const urlInputVisible = useAttachmentsStore(state => state.urlInputVisible)
   const [draft, setDraft] = useState('')
+  // 补充模式（/supplement）：有进行中的任务才可切；输入原样送当前任务作补充材料。
+  const [supplementMode, setSupplementMode] = useState(false)
+  const supplementTaskId = useTurnStore(state => state.lastRunTaskId)
   const [mention, setMention] = useState<MentionState | null>(null)
   const [dropping, setDropping] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -131,6 +135,15 @@ export function Composer() {
     setDraft('')
     closeMention()
     window.requestAnimationFrame(autosize)
+    if (supplementMode && supplementTaskId !== '') {
+      // 补充模式（评审 B7）：给进行中的一轮补话，不开新一轮、任务记录不分家。
+      void runSupplement(
+        { taskId: supplementTaskId, text },
+        { onAccepted: () => { announce('已补充给当前任务') }, onRejected: () => { setDraft(text) } },
+      )
+      setSupplementMode(false)
+      return
+    }
     void sendMessage(text)
   }
 
@@ -379,6 +392,17 @@ export function Composer() {
               void addFiles(files, conversationId)
             }}
           />
+          {supplementTaskId !== '' && !streaming && (
+            <button
+              type="button"
+              className={`btn btn--tiny${supplementMode ? ' btn--primary' : ''}`}
+              aria-pressed={supplementMode}
+              title={supplementMode ? '正在给当前任务补充材料，点击退出' : '这句话补给正在跑的任务（不开新一轮）'}
+              onClick={() => setSupplementMode(value => !value)}
+            >
+              {supplementMode ? '正在补充' : '补充'}
+            </button>
+          )}
           <button
             type="button"
             className="send"

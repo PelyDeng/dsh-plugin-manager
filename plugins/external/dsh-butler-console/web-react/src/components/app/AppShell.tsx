@@ -7,8 +7,9 @@
  * 左右栏批 1 只做基础渲染（列表/成员/状态/失败记录只读面），交互批 2 完整化。
  */
 import { useEffect, useRef, useState } from 'react'
-import { api } from '../../lib/api.ts'
+import { ROUTE_PREFIX } from '../../lib/api.ts'
 import { recallConversation } from '../../lib/turn-event.ts'
+import { formatClock } from '../../lib/time.ts'
 import { bindViewHistory, loadIdentity, openConversation, openNewChat, refreshChatList, refreshPanelsData, resumeLiveTurn } from '../../hooks/use-turn.ts'
 import { SettingsPage } from '../settings/SettingsPage.tsx'
 import { useSessionStore } from '../../stores/session.ts'
@@ -21,14 +22,6 @@ import { ActionDeck } from '../composer/ActionDeck.tsx'
 
 const DRAWER_QUERY = '(max-width: 1200px)'
 const SIDEBAR_QUERY = '(max-width: 880px)'
-
-function formatTime(value: number): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  const clock = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-  if (date.toDateString() === new Date().toDateString()) return clock
-  return `${date.getMonth() + 1}-${String(date.getDate()).padStart(2, '0')} ${clock}`
-}
 
 export function AppShell() {
   const identityLabel = useSessionStore(state => state.identityLabel)
@@ -48,20 +41,13 @@ export function AppShell() {
   // ── 启动装配 + 右栏低频轮询（streaming 时不打断）──────────────────────
   useEffect(() => {
     let cancelled = false
-    const refresh = async () => {
-      try {
-        const [memberPage, overviewPage] = await Promise.all([api.members(), api.overview()])
-        if (cancelled) return
-        const session = useSessionStore.getState()
-        session.setMembers(memberPage.items)
-        session.setOverview(overviewPage)
-      } catch { /* 右栏读不到保持现状：下一轮轮询再试。 */ }
-    }
+    // 左右栏数据只走 refreshPanelsData 一条路（评审 #3：组件内第二份 fetch+轮询已删——
+    // 双倍请求且错误标记两处写互不知情）。轮询静默：失败不置顶栏，成功自愈清错误标记。
+    const refresh = async () => { await refreshPanelsData({ silent: true }) }
     bindViewHistory()
-    void refresh()
     void loadIdentity()
-    void refreshPanelsData()
     void refreshChatList()
+    void refresh()
     const timer = setInterval(() => { if (!useTurnStore.getState().streaming) void refresh() }, 15000)
     // 不 await：接续要跟到那一轮结束，不能把页面启动卡在这里。
     void resumeLiveTurn()
@@ -162,7 +148,7 @@ export function AppShell() {
               </svg>
               <div className="brand__row">
                 <h2 className="brand__title" aria-label="牛马台账">
-                  <img src="/butler/assets/media/titles/title-left.png" alt="" height="58" />
+                  <img src={`${ROUTE_PREFIX}/assets/media/titles/title-left.png`} alt="" height="58" />
                 </h2>
                 <div className="left__brandline">{total > 0 ? `${total} 个牛马${working}` : '—'}</div>
               </div>
@@ -208,7 +194,7 @@ export function AppShell() {
                 <path d="M22 8 C 60 2, 150 2, 172 10 C 188 17, 186 30, 164 37 C 128 45, 52 44, 24 38 C 4 32, 4 18, 22 8 Z" fill="none" stroke="var(--bt-red)" strokeWidth="2.8" strokeLinecap="round" />
                 <path d="M30 6 C 70 1, 150 3, 170 12" fill="none" stroke="var(--bt-red)" strokeWidth="1.8" strokeLinecap="round" opacity="0.85" />
               </svg>
-              <img src="/butler/assets/media/titles/title-center.png" alt="" height="74" />
+              <img src={`${ROUTE_PREFIX}/assets/media/titles/title-center.png`} alt="" height="74" />
             </h2>
             <span className="center__sub">{total > 0 ? `${total} 位成员${working}` : '—'}</span>
             <span className="spacer" />

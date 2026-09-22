@@ -51,6 +51,9 @@ export interface SessionState {
   setSettingsOpen: (open: boolean) => void
   setIdentity: (label: string) => void
   setMembers: (members: MemberItem[]) => void
+  /** 左栏列表读取失败（评审 #4）：视觉用户要看得到并能在原地重试，不能只进屏幕阅读器。 */
+  chatListError: string | null
+  setChatListError: (message: string | null) => void
   setChatList: (items: ChatListItem[]) => void
   setChatKeyword: (keyword: string) => void
   setChatPageMeta: (meta: { chatPage?: number; chatTotal?: number; chatPageSize?: number }) => void
@@ -91,7 +94,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     return { members, avatarStamps: stamps }
   }),
-  setChatList: chatList => set({ chatList }),
+  chatListError: null,
+  setChatListError: message => set({ chatListError: message }),
+  setChatList: chatList => set({ chatList, chatListError: null }),
   setChatKeyword: chatKeyword => set({ chatKeyword }),
   setChatPageMeta: meta => set(meta),
   togglePicked: (id, picked) => {

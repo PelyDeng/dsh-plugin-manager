@@ -27,14 +27,38 @@ export const MAX_ATTACHMENTS_PER_MESSAGE: number = typeof config.maxAttachmentsP
 /** 任务记录分页大小（0.12.4）：与后端 conversationsPageSize 同步，identity 未下发时的缺省。 */
 export const CHAT_PAGE_SIZE: number = typeof config.chatPageSize === 'number' ? config.chatPageSize : 10
 
-/** 一次接口调用失败。带上状态码，页面据此区分未登录和真正的服务错误。 */
+/** 一次接口调用失败。带上状态码与稳定错误码（评审 B3：服务端承诺「客户端一律按 code 分支」）。 */
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** 服务端稳定错误码（如 run_already_finished / run_result_unknown / missing_field），无则 undefined。 */
+  code?: string | undefined
+  /** 409 冲突体附带的凭据：这轮其实已受理/结果未知时，据此引导去读任务快照。 */
+  runId?: string | undefined
+  conversationId?: string | undefined
+  constructor(status: number, message: string, extra: { code?: string | undefined; runId?: string | undefined; conversationId?: string | undefined } = {}) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.code = extra.code
+    this.runId = extra.runId
+    this.conversationId = extra.conversationId
   }
+}
+
+/** 从错误响应体里取出服务端约定字段（缺啥都容错）。 */
+async function errorFields(response: Response): Promise<{ message: string; code?: string | undefined; runId?: string | undefined; conversationId?: string | undefined }> {
+  let message = `请求失败（HTTP ${response.status}）`
+  let code: string | undefined
+  let runId: string | undefined
+  let conversationId: string | undefined
+  try {
+    const payload = await response.json()
+    if (typeof payload?.error === 'string' && payload.error !== '') message = payload.error
+    if (typeof payload?.code === 'string' && payload.code !== '') code = payload.code
+    if (typeof payload?.runId === 'string' && payload.runId !== '') runId = payload.runId
+    if (typeof payload?.conversationId === 'string' && payload.conversationId !== '') conversationId = payload.conversationId
+  } catch { /* 非 JSON 错误体时保留上面的通用提示。 */ }
+  return { message, code, runId, conversationId }
 }
 
 async function request<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
@@ -44,12 +68,8 @@ async function request<T = unknown>(path: string, options: RequestInit = {}): Pr
     ...options,
   })
   if (!response.ok) {
-    let message = `请求失败（HTTP ${response.status}）`
-    try {
-      const payload = await response.json()
-      if (typeof payload?.error === 'string' && payload.error !== '') message = payload.error
-    } catch { /* 非 JSON 错误体时保留上面的通用提示。 */ }
-    throw new ApiError(response.status, message)
+    const fields = await errorFields(response)
+    throw new ApiError(response.status, fields.message, fields)
   }
   if (response.status === 204) return null as T
   return await response.json() as T
@@ -113,6 +133,11 @@ export interface TaskSubtask {
   result: string | null
   error: string | null
   artifacts?: unknown[]
+  /** external_pending 的结构化说明（在等谁做什么/办完能做什么）。 */
+  pending?: { reason: string; next?: string }
+  /** 协调方质检裁决（accept/rework/replace/unverified）。 */
+  verdict?: string
+  verdictReason?: string
   actions?: ReadonlyArray<{
     id: string
     kind?: string
@@ -292,14 +317,33 @@ export function reply({ taskId, subtaskId, text, decideByAgent, requestId, signa
   return postStream<TurnEvent>('/reply', { taskId, subtaskId, text, decideByAgent, ...(requestId === undefined ? {} : { requestId }) }, signal)
 }
 
+/**
+ * 给进行中的一轮补充目标/材料（后端 /supplement：幂等 + expectVersion 并发防护）。
+ * 消费返回的事件流与 chat 同构（run 头 + 事件 + summary）。
+ */
+export function supplement({ taskId, text, expectVersion, requestId, signal }: {
+  taskId: string
+  text: string
+  expectVersion?: number | undefined
+  requestId?: string | undefined
+  signal?: AbortSignal | undefined
+}): AsyncGenerator<TurnEvent> {
+  return postStream<TurnEvent>('/supplement', {
+    taskId,
+    text,
+    ...(expectVersion === undefined ? {} : { expectVersion }),
+    ...(requestId === undefined ? {} : { requestId }),
+  }, signal)
+}
+
 /** 对一条待确认操作做决策。requestId 是受理幂等身份。 */
 export function act({ taskId, subtaskId, actionId, decision, note, requestId, signal }: {
   taskId: string
   subtaskId: string
   actionId: string
   decision: string
-  note?: string
-  requestId?: string
+  note?: string | undefined
+  requestId?: string | undefined
   signal?: AbortSignal | undefined
 }): AsyncGenerator<TurnEvent> {
   return postStream<TurnEvent>('/action', {
@@ -352,10 +396,6 @@ async function* postStream<T = TurnEvent>(path: string, payload: unknown, signal
 }
 
 async function streamFailure(response: Response): Promise<ApiError> {
-  let text = `请求失败（HTTP ${response.status}）`
-  try {
-    const parsed = await response.json()
-    if (typeof parsed?.error === 'string' && parsed.error !== '') text = parsed.error
-  } catch { /* 保留通用提示。 */ }
-  return new ApiError(response.status, text)
+  const { message, code, runId, conversationId } = await errorFields(response)
+  return new ApiError(response.status, message, { code, runId, conversationId })
 }

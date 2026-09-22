@@ -70,6 +70,7 @@ function PendingCard({ item }: { item: PendingItem }) {
   const [locked, setLocked] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const [replyText, setReplyText] = useState('')
+  const [noteText, setNoteText] = useState('')
   const agentName = displayNameOf(members, item.agentId)
 
   const runDecision = async (decision: 'confirm' | 'cancel') => {
@@ -79,6 +80,7 @@ function PendingCard({ item }: { item: PendingItem }) {
       await runActionDecision({
         taskId: item.taskId, subtaskId: item.subtaskId,
         actionId: item.actionId ?? '', decision,
+        note: noteText.trim() === '' ? undefined : noteText.trim(),
         requestId: newConversationId(),
       }, {
         // 受理即摘卡：后端把子任务重新调度要数分钟，prepared 卡挂着只会诱导重复点击。
@@ -139,6 +141,15 @@ function PendingCard({ item }: { item: PendingItem }) {
       ) : (
         <>
           <div className="action-deck__title">{item.title ?? item.summary ?? '待确认的操作'}</div>
+          <input
+            type="text"
+            className="action-deck__note-input"
+            value={noteText}
+            placeholder="给这条决策带句话（可选，如：换成 5 月再发）"
+            disabled={locked}
+            onChange={event => setNoteText(event.target.value)}
+            onKeyDown={event => { if (event.key === 'Enter' && !locked) { event.preventDefault(); void runDecision('confirm') } }}
+          />
           <div className="action-deck__row">
             <button type="button" className="btn btn--tiny btn--primary" disabled={locked} onClick={() => { void runDecision('confirm') }}>
               {item.confirmLabel ?? '确认'}

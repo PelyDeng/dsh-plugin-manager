@@ -47,7 +47,6 @@ export const STATE_TEXT: Record<string, string> = {
 export const MOTTO_KEY = 'butler.motto'
 export const DEFAULT_MOTTO = '没关系，牛再来！换个姿势再来！'
 /** 上次用过的会话。刷新后要拿它去问「这一轮还在跑吗」。 */
-export const CONVERSATION_KEY = 'butler.conversationId'
 
 /**
  * 流式正文逐帧重渲的字符上限（与旧前端同值）：超长输出放弃逐帧 Markdown 重渲、

@@ -3,6 +3,7 @@
  * 复选框常驻、⋯ 操作菜单、行内重命名、分页、搜索全量、失败菜单统一）。
  * 类名与语义对齐 main 版 panels.js；两段式行内删除已被 0.12.4 淘汰（删除统一走菜单）。
  */
+import { formatClock } from '../../lib/time.ts'
 import { useEffect, useRef, useState } from 'react'
 import { MOTTO_KEY, DEFAULT_MOTTO } from '../../lib/config.ts'
 import type { ChatListItem } from '../../stores/session.ts'
@@ -13,13 +14,6 @@ import {
 } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
 
-function formatTime(value: number): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  const clock = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
-  if (date.toDateString() === new Date().toDateString()) return clock
-  return `${date.getMonth() + 1}-${String(date.getDate()).padStart(2, '0')} ${clock}`
-}
 
 /** 可见行（keyword 过滤后）：全选三态与搜索态判定共用这份口径。 */
 export function visibleChatList(chatList: ChatListItem[], keyword: string): ChatListItem[] {
@@ -123,11 +117,21 @@ export function ManageBar() {
 /** 左栏任务记录列表（0.12.4/0.12.5）：复选框常驻、行内重命名、正文点击打开。 */
 export function ChatList() {
   const chatList = useSessionStore(state => state.chatList)
+  const chatListError = useSessionStore(state => state.chatListError)
   const keyword = useSessionStore(state => state.chatKeyword)
   const picked = useSessionStore(state => state.chatPicked)
   const togglePicked = useSessionStore(state => state.togglePicked)
   const renamingId = useSessionStore(state => state.renamingId)
   const conversationId = useTurnStoreCurrentId()
+  // 读取失败要在原地可见可重试（评审 #4）：不能清空列表冒充「还没有任务记录」。
+  if (chatListError !== null) {
+    return (
+      <div className="empty">
+        <p>{chatListError}</p>
+        <button type="button" className="btn btn--tiny" onClick={() => { void refreshChatList() }}>重试</button>
+      </div>
+    )
+  }
   const visible = visibleChatList(chatList, keyword)
   if (visible.length === 0) {
     return <p className="empty">{chatList.length === 0 ? '还没有任务记录' : '没有匹配结果'}</p>
@@ -155,7 +159,7 @@ export function ChatList() {
                     <>
                       <span className="chat-row__title">{item.title || '（还没起名）'}</span>
                       {item.preview !== '' && <span className="chat-row__preview">{item.preview}</span>}
-                      <span className="chat-row__time">{formatTime(item.updatedAt)}</span>
+                      <span className="chat-row__time">{formatClock(item.updatedAt)}</span>
                     </>
                   )}
             </span>
@@ -293,7 +297,7 @@ export function FailureList() {
                 onChange={event => toggleFailurePicked(item.id, event.target.checked)}
               />
               <span className="failure-row__body" onClick={() => { void openTask(item.id) }}>
-                <span className="failure-row__goal">{formatTime(item.updatedAt)}　{item.goal}</span>
+                <span className="failure-row__goal">{formatClock(item.updatedAt)}　{item.goal}</span>
                 <span className="failure-row__meta">{item.error || '没给原因'}</span>
               </span>
             </label>

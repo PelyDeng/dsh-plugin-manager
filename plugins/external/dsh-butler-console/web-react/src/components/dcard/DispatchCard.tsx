@@ -273,13 +273,22 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
                 )}
                 {subtask !== undefined && subtask.artifacts.length > 0 && (
                   <div className="dcard__materials">
-                    {(subtask.artifacts as Array<{ title?: string; link?: string; state?: string }>).map((artifact, index) => (
-                      <span key={index} className="attach__item" data-phase="ready">
-                        <span className="attach__name">{artifact.title ?? artifact.link ?? '材料'}</span>
-                        {artifact.link !== undefined && <a className="attach__note" href={artifact.link} target="_blank" rel="noreferrer">打开</a>}
-                        {artifact.state !== undefined && <span className="attach__note">{artifact.state}</span>}
-                      </span>
-                    ))}
+                    {(subtask.artifacts as Array<{ title?: string; path?: string; kind?: string; url?: string; state?: string; fields?: ReadonlyArray<{ label?: string; value?: string }> }>).map((artifact, index) => {
+                      // 协议 AgentArtifact：url 只放 http(s)（评审 B1——此前读 link，打开按钮从未出现）；
+                      // 不认识的协议按纯文本降级，绝不渲染成可点链接。
+                      const href = typeof artifact.url === 'string' && /^https?:\/\//i.test(artifact.url) ? artifact.url : null
+                      return (
+                        <span key={index} className="attach__item" data-phase="ready">
+                          {artifact.kind !== undefined && <span className="attach__note">{artifact.kind}</span>}
+                          <span className="attach__name">{artifact.title ?? artifact.path ?? '材料'}</span>
+                          {href !== null && <a className="attach__note" href={href} target="_blank" rel="noopener noreferrer">打开</a>}
+                          {artifact.state !== undefined && <span className="attach__note">{artifact.state}</span>}
+                          {(artifact.fields ?? []).map((field, fieldIndex) => (
+                            <span key={fieldIndex} className="attach__note">{field.label ?? ''}：{field.value ?? ''}</span>
+                          ))}
+                        </span>
+                      )
+                    })}
                   </div>
                 )}
               </section>
