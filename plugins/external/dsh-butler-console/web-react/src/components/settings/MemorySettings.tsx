@@ -12,7 +12,7 @@
  * 高亮定位（产品资产命中卡片自动展开、列表行内 <mark>）；「AI 搜索」为向量检索预留
  * 占位（P2 启用，当前点击提示未开通）。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, type MemoryItem } from '../../lib/api.ts'
 import { announce } from '../../lib/announce.ts'
 import { errorTextOf } from '../../lib/error-text.ts'
@@ -111,7 +111,6 @@ function ProceduralSection() {
   const [error, setError] = useState('')
   const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set())
   const [query, setQuery] = useState('')
-  const scrollRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     api.memoryProcedural()
       .then(result => setSections(result.sections))
@@ -135,7 +134,7 @@ function ProceduralSection() {
     <div className="mem-procedural">
       <p className="mem-note">管家怎么干活的<strong>出厂规矩，每次对话都会读</strong>，所有站点统一、随版本更新。对哪条规矩有意见，直接在群里跟管家提，它会记下来转给维护者。</p>
       <SearchBox query={query} onQuery={setQuery} />
-      <div className="mem-procedural__scroll" ref={scrollRef}>
+      <div className="mem-procedural__scroll">
         {visible.length === 0 && <p className="empty">没有命中的规矩（换个关键词试试）</p>}
         {visible.map(section => {
           const isOpen = terms.length > 0 || openKeys.has(section.key)
