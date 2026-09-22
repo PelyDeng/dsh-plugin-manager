@@ -70,6 +70,7 @@ export function AskCard({ subtaskId, taskId, question, detail }: AskCardProps) {
         <input
           type="text"
           ref={inputRef}
+          aria-label="给成员的回话"
           placeholder="补充说明"
           disabled={locked}
           onKeyDown={event => {

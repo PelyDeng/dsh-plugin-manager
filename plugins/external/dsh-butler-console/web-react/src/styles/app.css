@@ -1922,14 +1922,13 @@ body[data-settings="open"] .settings {
 .chat-row__body { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 6px; cursor: pointer; text-align: left; }
 .chat-row__body > span:first-child { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .chat-row--picked { background: #f3ead2; border-color: var(--bt-red); }
-.chat-row__check {
+.chat-row__check, .failure-row__check {
   flex: 0 0 auto;
-  width: 15px;
-  height: 15px;
-  margin: 0;
   accent-color: var(--bt-red);
   cursor: pointer;
 }
+.chat-row__check { width: 15px; height: 15px; margin: 0; }
+.failure-row__check { width: 14px; height: 14px; margin: 2px 0 0; }
 /* 行内重命名（0.12.4）：标题位换手账输入框。 */
 .chat-row__rename {
   width: 100%;
@@ -1949,14 +1948,6 @@ body[data-settings="open"] .settings {
 .failure-head .chat-records-actions { position: relative; display: inline-flex; }
 .failure-head .section-title { flex: 1; }
 .failure-row--pick { cursor: pointer; align-items: flex-start; }
-.failure-row__check {
-  flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  margin: 2px 0 0;
-  accent-color: var(--bt-red);
-  cursor: pointer;
-}
 .failure-row__body { flex: 1; min-width: 0; cursor: pointer; }
 .failure-row__body .failure-row__goal,
 .failure-row__body .failure-row__meta { display: block; }
