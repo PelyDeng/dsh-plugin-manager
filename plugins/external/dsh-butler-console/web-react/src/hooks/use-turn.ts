@@ -227,6 +227,10 @@ export async function openConversation(id: string): Promise<void> {
   const records = await loadTaskDetails(taskPage?.items ?? [])
   if (token !== useTurnStore.getState().viewToken) return
   const withSubs = mergeTaskDetails(merged, records)
+  // 恢复最近一个非终态任务的 id：补充入口（Composer「补充」开关）依赖它——
+  // lastRunTaskId 平时由实时事件设置，刷新后只剩这条路径能恢复。
+  const liveTask = [...records].reverse().find(record => !['completed', 'failed', 'cancelled'].includes(record.state))
+  if (liveTask !== undefined) useTurnStore.setState({ lastRunTaskId: liveTask.id })
   for (const item of withSubs) entries.push(historyEntryToThreadEntry(item))
   const store = useTurnStore.getState()
   for (const entry of entries) store.appendEntry(entry)

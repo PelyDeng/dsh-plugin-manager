@@ -149,7 +149,6 @@ function PendingCard({ item }: { item: PendingItem }) {
             placeholder="给这条决策带句话（可选，如：换成 5 月再发）"
             disabled={locked}
             onChange={event => setNoteText(event.target.value)}
-            onKeyDown={event => { if (event.key === 'Enter' && !locked) { event.preventDefault(); void runDecision('confirm') } }}
           />
           <div className="action-deck__row">
             <button type="button" className="btn btn--tiny btn--primary" disabled={locked} onClick={() => { void runDecision('confirm') }}>
