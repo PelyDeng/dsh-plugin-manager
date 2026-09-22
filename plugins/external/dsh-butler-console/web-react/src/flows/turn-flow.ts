@@ -207,11 +207,21 @@ export async function stopTurn(): Promise<void> {
  * 静默丢弃点击等于按钮坏了；等待复位后再发起，超时抛错让卡面提示。
  */
 async function waitForTurnIdle(timeoutMs = 15000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  while (useTurnStore.getState().streaming) {
-    if (Date.now() > deadline) throw new Error('上一轮还没收尾，稍等一下再点')
-    await new Promise(resolve => setTimeout(resolve, 200))
-  }
+  if (!useTurnStore.getState().streaming) return
+  // 事件化等待（评审 #20）：订阅 streaming 复位即返回，不轮询空转。
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      unsubscribe()
+      reject(new Error('上一轮还没收尾，稍等一下再点'))
+    }, timeoutMs)
+    const unsubscribe = useTurnStore.subscribe(state => {
+      if (!state.streaming) {
+        clearTimeout(timer)
+        unsubscribe()
+        resolve()
+      }
+    })
+  })
 }
 
 /** 操作卡决策入口（ActionDeck 用）：走 /action，requestId 幂等；跟随到终态。 */

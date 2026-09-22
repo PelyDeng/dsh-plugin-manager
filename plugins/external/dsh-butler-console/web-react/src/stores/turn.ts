@@ -621,19 +621,20 @@ function handleSubtaskEvent(get: () => TurnState, event: TurnEvent): void {
           const before = st.entries.find(candidate => candidate.key === key)
           const changed = before?.kind !== 'subtask' || before.state !== (event.state ?? '')
           if (!changed) return entry
+          // 脉冲 600ms 自清（旧 pulseCardCell 的 setTimeout 语义）；timer 仅在
+          // 状态真变化（会点亮脉冲）时安排，不空转（评审 #20）。
+          window.setTimeout(() => {
+            useTurnStore.setState(st => ({
+              entries: st.entries.map(entry => entry.kind === 'dispatch'
+                ? { ...entry, pulses: entry.pulses.filter(id => id !== subtaskId) }
+                : entry),
+            }))
+          }, 600)
           return { ...entry, fresh: !entry.open, pulses: entry.pulses.includes(subtaskId) ? entry.pulses : [...entry.pulses, subtaskId] }
         }
         return entry
       }),
     }))
-    // 脉冲 600ms 自清（旧 pulseCardCell 的 setTimeout 语义）。
-    window.setTimeout(() => {
-      useTurnStore.setState(st => ({
-        entries: st.entries.map(entry => entry.kind === 'dispatch'
-          ? { ...entry, pulses: entry.pulses.filter(id => id !== subtaskId) }
-          : entry),
-      }))
-    }, 600)
   }
 
   if (event.state === 'dispatched') {

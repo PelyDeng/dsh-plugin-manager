@@ -10,7 +10,7 @@
  * - 附件三通道最后都落到一份服务端记录；拖拽区挂整块输入区（用户瞄的是"那一片"）。
  * - I02：只锁发送不锁输入，执行中可写下一句，草稿不被异步动作清掉。
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { registerDraftRestore, runSupplement, sendMessage, stopTurn } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
 import { useSessionStore, type MemberItem } from '../../stores/session.ts'
@@ -90,6 +90,9 @@ export function Composer() {
     input.style.height = 'auto'
     input.style.height = `${Math.min(input.scrollHeight, 160)}px`
   }
+  // 高度自适应统一在此（评审 #20）：draft 变化后 DOM 更新完、绘制前调整——
+  // 各调用点 setDraft 后同步调 autosize 量的是旧 DOM，时机本来就是错的。
+  useLayoutEffect(() => { autosize() })
 
   /** 提及检测入口（input 时）：光标挪走、补空格都等于放弃这次提及。 */
   const updateMention = () => {
@@ -122,7 +125,6 @@ export function Composer() {
     window.requestAnimationFrame(() => {
       if (inputRef.current === null) return
       inputRef.current.setSelectionRange(caret, caret)
-      autosize()
       inputRef.current.focus()
     })
   }
@@ -294,7 +296,7 @@ export function Composer() {
           placeholder="说说你要做什么"
           autoComplete="off"
           value={draft}
-          onChange={() => { setDraft(inputRef.current?.value ?? ''); autosize(); updateMention() }}
+          onChange={() => { setDraft(inputRef.current?.value ?? ''); updateMention() }}
           onCompositionStart={() => { composingRef.current = true }}
           onCompositionEnd={() => { composingRef.current = false }}
           onBlur={() => {
@@ -352,7 +354,6 @@ export function Composer() {
               setDraft(next)
               input.setSelectionRange(start + 1, start + 1)
               input.focus()
-              autosize()
               setMention({ start, query: '', index: 0 })
             }}
           >
@@ -454,7 +455,6 @@ export function Composer() {
     window.requestAnimationFrame(() => {
       if (inputRef.current === null) return
       inputRef.current.setSelectionRange(caret, caret)
-      autosize()
       inputRef.current.focus()
     })
   }

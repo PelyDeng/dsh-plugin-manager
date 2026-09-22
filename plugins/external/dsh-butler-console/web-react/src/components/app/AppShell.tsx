@@ -89,8 +89,10 @@ export function AppShell() {
       if (sidebarOpen) { event.preventDefault(); closeSidebar() }
     }
     document.addEventListener('keydown', onKey)
+    // 依赖补齐（评审 #20）：settingsOpen 走 getState 不需要订阅，drawer/sidebar
+    // 是闭包捕获的状态——变化时重挂监听。
     return () => document.removeEventListener('keydown', onKey)
-  })
+  }, [drawerOpen, sidebarOpen])
 
   const openDrawer = () => {
     drawerReturnFocus.current = document.activeElement as HTMLElement | null
