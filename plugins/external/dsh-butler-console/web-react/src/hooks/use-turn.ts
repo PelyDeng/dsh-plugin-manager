@@ -1,4 +1,5 @@
 import { errorTextOf } from '../lib/error-text.ts'
+import type { TurnEvent } from '../lib/turn-event.ts'
 /**
  * 回合驱动的应用层：把 turn-engine（纯控制流）与 turn store（状态面）绑定起来。
  *
@@ -30,36 +31,6 @@ import { attachmentsForSend, clearAttachments, loadAttachments, takeSentAttachme
 let hostEntrySeq = 0
 
 /** 把 turn store 装配成引擎的宿主（渲染副作用全部走 store 动作）。 */
-function createHost(): TurnEngineHost {
-  let terminalSeen = false
-  return {
-    apply: event => {
-      if (event.type === 'summary') terminalSeen = true
-      useTurnStore.getState().applyTurnEvent(event)
-    },
-    note: text => useTurnStore.getState().appendEntry({ key: `note-h${++hostEntrySeq}`, kind: 'note', text }),
-    errorLine: text => useTurnStore.getState().appendEntry({ key: `error-h${++hostEntrySeq}`, kind: 'error', text }),
-    runTaskId: () => useTurnStore.getState().lastRunTaskId,
-    setRunTaskId: taskId => { useTurnStore.setState({ lastRunTaskId: taskId }) },
-    sawTerminal: () => terminalSeen,
-    markTerminal: () => { terminalSeen = true },
-    calibrate: record => {
-      // 快照校准：只在没消费到 summary 时补一张终态卡（引擎已保证 terminal 语义）。
-      if (terminalSeen) return
-      useTurnStore.getState().appendEntry({
-        key: `summary-h${++hostEntrySeq}`, kind: 'summary',
-        state: record.state, text: record.summary ?? '',
-      })
-    },
-    rebuild: record => {
-      // 按快照重建（S05）：清空视图原子动作 + 重画任务记录 + 接续回跟随态。
-      useTurnStore.getState().beginRebuild()
-      useTurnStore.getState().renderTaskRecord(record, { liveResume: true })
-      useTurnStore.setState({ streaming: true })
-    },
-  }
-}
-
 /**
  * 刷新或重新打开页面时，接上正在跑的那一轮（语义对齐 send.js resumeLiveTurn）。
  *
@@ -106,7 +77,7 @@ export async function resumeLiveTurn(): Promise<void> {
     lastRunId: head.runId,
     lastRunTaskId: head.taskId ?? '',
   })
-  const host = createHost()
+  const host = await createTurnEngineHost()
   try {
     // 只读订阅接续：reset 时按快照校准并从窗口头续订，断线有界重订（S05/S06）。
     await followUntilTerminal(conversationId, { from: 0, expectedRunId: head.runId, signal: controller.signal }, productionLinks, host)
@@ -492,28 +463,29 @@ export async function sendMessage(text: string, reuseRequestId?: string): Promis
   if (sentEntries.length > 0) {
     useAttachmentsStore.getState().setUrlInputVisible(false)
   }
-  let sawTerminal = false
   try {
     // 附件随消息送出（S-attach）：空数组也照发，后端按「没有附件」处理（老客户端兼容形态）。
-    for await (const event of chat({ conversationId: useTurnStore.getState().conversationId ?? '', message: trimmed, requestId, attachmentIds, signal: abortSignal })) {
-      if (event.type === 'summary') sawTerminal = true
-      useTurnStore.getState().applyTurnEvent(event)
-      // 占位 note 的撤除口径与旧 consumeTurnEvent 一致：受理（conversation）推进文案，
-      // 正文/计划/异常到达才撤；run/reset/user 是流元事件不撤。
-      if (event.type === 'conversation') {
-        useTurnStore.setState(st => ({ entries: st.entries.map(entry => entry.key === noteKey ? { ...entry, text: '正在理解目标…' } : entry) }))
-        announce('已受理，正在安排')
-      } else if (event.type !== 'user' && event.type !== 'run' && event.type !== 'reset') {
-        useTurnStore.getState().removeEntry(noteKey)
-      }
-    }
+    const host = await createTurnEngineHost()
+    const { sawTerminal } = await consumeTurnStream(
+      chat({ conversationId: useTurnStore.getState().conversationId ?? '', message: trimmed, requestId, attachmentIds, signal: abortSignal }),
+      host,
+      {
+        // 占位 note 的撤除口径与旧 consumeTurnEvent 一致：受理（conversation）推进文案，
+        // 正文/计划/异常到达才撤；run/reset/user 是流元事件不撤。
+        onEvent: event => {
+          if (event.type === 'conversation') {
+            useTurnStore.setState(st => ({ entries: st.entries.map(entry => entry.key === noteKey ? { ...entry, text: '正在理解目标…' } : entry) }))
+            announce('已受理，正在安排')
+          } else if (event.type !== 'user' && event.type !== 'run' && event.type !== 'reset') {
+            useTurnStore.getState().removeEntry(noteKey)
+          }
+        },
+      },
+    )
     useTurnStore.setState({ pendingUser: null })
     useTurnStore.getState().removeEntry(noteKey)
     // 连接自然结束但终态没来（S06）：断连窗口里可能已收尾或仍在跑，跟到终态为止。
-    if (!sawTerminal && useTurnStore.getState().abort?.signal.aborted !== true) {
-      const s = useTurnStore.getState()
-      await followUntilTerminal(s.conversationId ?? '', { from: s.lastSeq, expectedRunId: s.lastRunId, signal: s.abort?.signal }, productionLinks, await makeEngineHost())
-    }
+    await settleOrFollow(host, { sawTerminal, accepted: true })
   } catch (error) {
     useTurnStore.getState().removeEntry(noteKey)
     const pending = useTurnStore.getState().pendingUser
@@ -536,8 +508,7 @@ export async function sendMessage(text: string, reuseRequestId?: string): Promis
     } else {
       // 已受理后连接断掉：这一轮还在服务端跑，重订事件流跟到终态，不自动重发。
       reportFailure(error, '发送失败')
-      const s = useTurnStore.getState()
-      await followUntilTerminal(s.conversationId ?? '', { from: s.lastSeq, expectedRunId: s.lastRunId, signal: s.abort?.signal }, productionLinks, await makeEngineHost())
+      await settleOrFollow(await createTurnEngineHost(), { sawTerminal: false, accepted: true })
     }
   } finally {
     void finishTurn()
@@ -589,7 +560,7 @@ export async function runActionDecision(input: {
 }, hooks: { onAccepted?: () => void; onRejected?: (error: unknown) => void } = {}): Promise<void> {
   await waitForTurnIdle()
   useTurnStore.setState({ streaming: true, abort: new AbortController(), lastSeq: 0, lastRunId: '', following: true })
-  const host = await makeEngineHost()
+  const host = await createTurnEngineHost()
   try {
     let accepted = false
     for await (const event of act({ ...input, requestId: input.requestId ?? newConversationId(), signal: useTurnStore.getState().abort?.signal })) {
@@ -623,20 +594,15 @@ export async function runSupplement(input: { taskId: string; text: string; expec
 } = {}): Promise<void> {
   await waitForTurnIdle()
   useTurnStore.setState({ streaming: true, abort: new AbortController(), lastSeq: 0, lastRunId: '', following: true })
-  let accepted = false
-  const host = await makeEngineHost()
+  const host = await createTurnEngineHost()
   try {
-    for await (const event of supplement({ taskId: input.taskId, text: input.text, expectVersion: input.expectVersion, requestId: input.requestId ?? newConversationId(), signal: useTurnStore.getState().abort?.signal })) {
-      if (!accepted) {
-        accepted = true
-        hooks.onAccepted?.()
-      }
-      useTurnStore.getState().applyTurnEvent(event)
-    }
-    const st = useTurnStore.getState()
-    if (st.abort?.signal.aborted !== true && st.conversationId !== null) {
-      await followUntilTerminal(st.conversationId, { from: st.lastSeq, expectedRunId: st.lastRunId, signal: st.abort?.signal }, productionLinks, host)
-    }
+    // 受理判定：流内第一条事件即回执（deck 卡就地摘下），后续状态变化交给服务端事件。
+    const { sawTerminal } = await consumeTurnStream(
+      supplement({ taskId: input.taskId, text: input.text, expectVersion: input.expectVersion, requestId: input.requestId ?? newConversationId(), signal: useTurnStore.getState().abort?.signal }),
+      host,
+      { onFirstEvent: hooks.onAccepted },
+    )
+    await settleOrFollow(host, { sawTerminal, accepted: true })
   } catch (error) {
     reportFailure(error, '补充没送出去')
     hooks.onRejected?.(error)
@@ -658,30 +624,27 @@ export async function runReply(input: { taskId: string; subtaskId: string; text:
     lastRunId: '',
     following: true,
   })
-  let accepted = false
+  const host = await createTurnEngineHost()
   let sawTerminal = false
-  const host = await makeEngineHost()
+  let accepted = false
   try {
     const requestId = input.requestId ?? newConversationId()
-    for await (const event of reply({ taskId: input.taskId, subtaskId: input.subtaskId, text: input.text, decideByAgent: input.decideByAgent, requestId, signal: useTurnStore.getState().abort?.signal })) {
-      if (event.type === 'summary') sawTerminal = true
-      if (!accepted) {
-        accepted = true
-        hooks.onAccepted?.()
-      }
-      useTurnStore.getState().applyTurnEvent(event)
-    }
-    const s = useTurnStore.getState()
-    if (!sawTerminal && accepted && s.abort?.signal.aborted !== true && s.conversationId !== null) {
-      await followUntilTerminal(s.conversationId, { from: s.lastSeq, expectedRunId: s.lastRunId, signal: s.abort?.signal }, productionLinks, host)
-    }
+    // 受理判定：流内第一条事件；requireAccepted——未受理的失败不重订（回复没进系统）。
+    const consumed = await consumeTurnStream(
+      reply({ taskId: input.taskId, subtaskId: input.subtaskId, text: input.text, decideByAgent: input.decideByAgent, requestId, signal: useTurnStore.getState().abort?.signal }),
+      host,
+      { onFirstEvent: hooks.onAccepted },
+    )
+    sawTerminal = consumed.sawTerminal
+    accepted = consumed.accepted
+    await settleOrFollow(host, { sawTerminal, accepted: true }, { requireAccepted: true })
   } catch (error) {
     reportFailure(error, '回复没送出去')
-    if (!accepted) hooks.onRejected?.(error)
-    else if (useTurnStore.getState().abort?.signal.aborted !== true && useTurnStore.getState().conversationId !== null) {
+    if (!accepted) {
+      hooks.onRejected?.(error)
+    } else {
       // 已受理后断连：这一轮还在服务端跑，重订事件流跟到终态，不自动重发（S06）。
-      const st = useTurnStore.getState()
-      await followUntilTerminal(st.conversationId ?? '', { from: st.lastSeq, expectedRunId: st.lastRunId, signal: st.abort?.signal }, productionLinks, host)
+      await settleOrFollow(host, { sawTerminal: false, accepted: true })
     }
   } finally {
     void finishTurn()
@@ -689,7 +652,62 @@ export async function runReply(input: { taskId: string; subtaskId: string; text:
 }
 
 /** 引擎宿主（发送/回话/接续共用；apply 走 store，markTerminal 由 apply 顺带维护）。 */
-async function makeEngineHost(): Promise<TurnEngineHost> {
+/**
+ * 回合流公共消费层（评审 #9：五条路径——sendMessage/runSupplement/runReply/
+ * runActionDecision/resumeLiveTurn——各自的「for await + 逐条 apply + sawTerminal
+ * 计数 + 受理回调」骨架收拢为一份实现）。
+ *
+ * - onFirstEvent：流内第一条事件到达时触发一次。runReply/runActionDecision/
+ *   runSupplement 以它作「受理回执」（deck 卡就地摘下）；sendMessage 不用（它的
+ *   受理信号是 conversation 事件，走 onEvent 专属钩改占位文案）。
+ * - onEvent：每条事件 apply 之后触发。sendMessage 用它撤占位 note；多数路径不传。
+ */
+interface ConsumeHooks {
+  onFirstEvent?: (() => void) | undefined
+  onEvent?: ((event: TurnEvent) => void) | undefined
+}
+
+async function consumeTurnStream(
+  stream: AsyncGenerator<TurnEvent>,
+  host: TurnEngineHost,
+  hooks: ConsumeHooks = {},
+): Promise<{ sawTerminal: boolean; accepted: boolean }> {
+  let sawTerminal = false
+  let accepted = false
+  let first = true
+  for await (const event of stream) {
+    if (event.type === 'summary') sawTerminal = true
+    if (first) {
+      first = false
+      accepted = true
+      hooks.onFirstEvent?.()
+    }
+    host.apply(event)
+    hooks.onEvent?.(event)
+  }
+  return { sawTerminal, accepted }
+}
+
+/**
+ * 收尾统一（评审 #9）：流自然结束后没看到终态、连接没被取消、受理已发生、会话可寻址
+ * ——四个条件满足才跟着事件流到终态。此前五处四种写法，终态守卫已漂移出三种。
+ * requireAccepted：runReply 语义（未受理的失败不重订）；sendMessage 不要求（它的
+ * 受理与否看 conversation 事件，断连窗口里已受理的轮次照样要跟）。
+ */
+async function settleOrFollow(
+  host: TurnEngineHost,
+  consume: { sawTerminal: boolean; accepted: boolean },
+  options: { requireAccepted: boolean } = { requireAccepted: false },
+): Promise<void> {
+  const st = useTurnStore.getState()
+  if (consume.sawTerminal) return
+  if (options.requireAccepted && !consume.accepted) return
+  if (st.abort?.signal.aborted === true) return
+  if (st.conversationId === null) return
+  await followUntilTerminal(st.conversationId, { from: st.lastSeq, expectedRunId: st.lastRunId, signal: st.abort?.signal }, productionLinks, host)
+}
+
+export async function createTurnEngineHost(): Promise<TurnEngineHost> {
   let terminalSeen = false
   return {
     apply: event => {
