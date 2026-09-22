@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "newline": "lf",
-  "frameworkVersion": "0.20.0",
+  "frameworkVersion": "0.21.0",
   "sourceKind": "checkout",
   "sourceCommit": "a9c7ce835b22cc70f930645da2f552662b47152b",
   "sourceModified": [],
