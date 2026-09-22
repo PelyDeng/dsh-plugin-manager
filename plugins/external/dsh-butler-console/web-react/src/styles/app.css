@@ -2032,3 +2032,22 @@ button:focus-visible {
 .panel-section--memory .panel-section__count { margin: 2px 0 6px; font-size: 12.5px; }
 .panel-section--memory .panel-section__recent { margin: 0; padding-left: 16px; font-size: 12px; color: var(--bt-ink-soft); }
 .panel-section--memory .panel-section__recent li { margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── 记忆分区 0.14.1 反馈修正：搜索/高亮/markdown 渲染滚动/输入区强化 ── */
+.mem-search { display: flex; align-items: center; gap: 8px; margin: 6px 0 10px; }
+.mem-search__input { flex: 1 1 auto; min-width: 0; }
+.mem-hit { background: #ffe9a8; border-radius: 2px; padding: 0 1px; }
+.mem-procedural__hits { font-size: 11.5px; color: #b8860b; font-weight: 600; }
+.mem-procedural__scroll { max-height: 52vh; overflow-y: auto; padding-right: 4px; }
+.mem-procedural__body { max-height: 46vh; overflow-y: auto; padding: 4px 12px 10px; font-size: 12.5px; line-height: 1.8; color: var(--bt-ink); border-top: 1px dashed #2f2b2622; }
+.mem-procedural__body h2, .mem-procedural__body h3 { margin: 10px 0 4px; font-size: 13.5px; }
+.mem-procedural__body ul, .mem-procedural__body ol { margin: 4px 0; padding-left: 20px; }
+.mem-procedural__body p { margin: 4px 0; }
+.mem-procedural__body strong { color: var(--bt-ink); }
+.mem-add { flex-direction: column; align-items: stretch; gap: 6px; }
+.mem-add__main { display: flex; align-items: center; gap: 8px; }
+.mem-add__label { flex: none; font-size: 12.5px; font-weight: 600; color: var(--bt-ink); white-space: nowrap; }
+.mem-add__main input { flex: 1 1 auto; min-width: 0; padding: 7px 10px; font-size: 13px; background: #fff; border: 1.5px solid #2f2b2666; border-radius: 8px; }
+.mem-add__main input:focus-visible { border-color: var(--bt-ink); outline: 2px solid #2f2b2622; outline-offset: 1px; }
+.mem-add__main input::placeholder { color: var(--bt-ink-faint); }
+.mem-add > .btn { align-self: flex-end; min-width: 64px; }
