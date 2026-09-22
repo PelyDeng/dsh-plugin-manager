@@ -34,11 +34,11 @@ function RecordsMenu() {
   const picked = useSessionStore(state => state.chatPicked)
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLSpanElement>(null)
+  // 外点关闭走 useClickOutside（评审 #13）——hook 只能在组件顶层调用，不能进 effect。
+  useClickOutside(rootRef, () => setOpen(false), open)
   useEffect(() => {
-    // 外点关闭走 useClickOutside（评审 #13）；Escape 关闭+焦点回扳机（评审 #16：
-    // 全页「Escape 依次收起」承诺，菜单不能把键盘用户困住）；打开时焦点进第一项
-    // （手写实现，不引 Base UI——见第二轮评审 §3.2 裁决）。
-    useClickOutside(rootRef, () => setOpen(false), open)
+    // Escape 关闭+焦点回扳机（评审 #16：全页「Escape 依次收起」承诺，菜单不能把键盘
+    // 用户困住）；打开时焦点进第一项（手写实现，不引 Base UI——见第二轮评审 §3.2 裁决）。
     if (!open) return
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
@@ -258,8 +258,8 @@ export function FailureList() {
   const [menuOpen, setMenuOpen] = useState(false)
   const headRef = useRef<HTMLDivElement>(null)
   const items = overview?.failures ?? []
+  useClickOutside(headRef, () => setMenuOpen(false), menuOpen)
   useEffect(() => {
-    useClickOutside(headRef, () => setMenuOpen(false), menuOpen)
     if (!menuOpen) return
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
