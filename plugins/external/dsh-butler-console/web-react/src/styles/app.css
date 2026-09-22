@@ -444,19 +444,10 @@ button:focus-visible {
   position: relative; z-index: 1; /* 自成层叠上下文，标题装饰不溢出到邻栏 */
   border-bottom: 1.5px solid var(--bt-line);
 }
-/* 三段布局：左（返回+面包屑，任务详情才显示）/中（标题图居中）/右（设置）。 */
+/* 头部行：左（返回+面包屑，任务详情才显示）/右（设置）。 */
 .center__nav { display: flex; align-items: center; gap: 10px; flex: none; min-width: 150px; }
 .center__nav[hidden] { display: none; }
-.center__title--compact img { height: 58px; }
-.center__head .center__title { position: absolute; left: 50%; transform: translateX(-50%); }
 .center__head h2 { margin: 0; font-family: var(--bt-hand); font-size: 24px; font-weight: 800; -webkit-text-stroke: 0.7px var(--bt-stroke); text-shadow: 0.5px 0.5px 0 var(--bt-stroke); }
-/* 红笔圈注：罩在「牛马调度群」标题上的手绘椭圆（index.html 内联 SVG）。 */
-.center__title { position: relative; padding: 2px 10px; line-height: 0; overflow: hidden; }
-.center__title img { display: block; height: 86px; width: auto; pointer-events: none; /* 装饰图（红圈+毛笔字）几何溢出到邻栏上空，禁掉命中让点击穿到下面的控件（0.12.6） */ }
-.center__circle {
-  position: absolute; inset: -4px -6px; width: calc(100% + 12px); height: calc(100% + 8px);
-  pointer-events: none;
-}
 .center__sub { font-size: 15px; color: var(--bt-ink); font-family: var(--bt-hand); font-weight: 700; }
 
 /* 喊停：浅红底墨框——「要按住」的事必须比普通按钮显眼一档。 */
