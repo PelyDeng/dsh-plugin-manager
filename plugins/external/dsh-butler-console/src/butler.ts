@@ -55,7 +55,7 @@ import { isTerminal, dependencyVerdict, type SubtaskState, type TaskState } from
 import { makePlanTool } from './butler/planning.ts'
 import { makeVerdictTool, readVerdictDecision } from './butler/verdict.ts'
 import { makeMemoryTools } from './butler/memories-tool.ts'
-import { renderMemorySection } from './butler/memory-section.ts'
+import { renderMemorySection } from '@dsh-plugin-manager/plugin-kit'
 import type { MemoryStore } from './memories.ts'
 import { clip, digestOf, subtaskResultText, textOf } from './butler/text.ts'
 import { stackOf, visibleError } from './butler/errors.ts'
@@ -824,7 +824,7 @@ export class ButlerConsole {
   private memoryWriteTool(sessionId: string, actor: Actor) {
     return makeMemoryTools({
       store: this.memories!,
-      actor: () => actor,
+      getActor: () => actor,
       pendingForgets: this.pendingForgets,
       sessionId,
     }).writeTool
@@ -834,7 +834,7 @@ export class ButlerConsole {
   private memoryForgetTool(sessionId: string, actor: Actor) {
     return makeMemoryTools({
       store: this.memories!,
-      actor: () => actor,
+      getActor: () => actor,
       pendingForgets: this.pendingForgets,
       sessionId,
     }).forgetTool

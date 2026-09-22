@@ -9,7 +9,7 @@ import {
   renderMemoriesSection,
   renderMemorySection,
   MEMORY_SECTION_BUDGET,
-} from '../src/butler/memory-section.ts'
+} from '@dsh-plugin-manager/plugin-kit'
 import type { MemoryRecord } from '../src/memories.ts'
 
 /** golden-vector（设计 §4.3/§6.3）：规范化规则是持久化数据格式的一部分，这些期望值改动=破坏性变更。 */
@@ -81,7 +81,7 @@ describe('记忆注入段渲染（v2.6 §4.5）', () => {
     // F4 正向动作句（v2.4 曾丢失，第三轮核验锚点）。
     expect(section).toContain('发现记错了就说破并用 memory_write 更新')
     // 矛盾裁决句。
-    expect(section).toContain('两条互相矛盾时先问老大一句')
+    expect(section).toContain('两条互相矛盾时先问')
     // 编号以本次清单为准。
     expect(section).toContain('编号以本次清单为准')
     // 白名单式（行为来源声明）而非纯否定式。

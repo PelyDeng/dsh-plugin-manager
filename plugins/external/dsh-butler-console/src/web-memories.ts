@@ -195,7 +195,7 @@ export function registerMemoryRoutes(deps: MemoryHttpDeps): void {
       const memoryId = deps.stringField(payload, 'memoryId', 60)
       const result = await confirmForget({
         store: memories,
-        actor: () => actor,
+        getActor: () => actor,
         sessionId: deps.stringField(payload, 'sessionId', 120),
         pendingForgets: deps.pendingForgets,
         memoryId,

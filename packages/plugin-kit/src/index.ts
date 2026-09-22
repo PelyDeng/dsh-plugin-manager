@@ -38,6 +38,10 @@ export * from './http.ts'
 export * from './tools.ts'
 export * from './conversations.ts'
 export * from './models.ts'
+// 记忆系统（P1.5 上收）：store/注入渲染/工具工厂。零数据库依赖——执行器由插件注入。
+export * from './memory.ts'
+export * from './memory-section.ts'
+export * from './memory-tools.ts'
 // 跨插件派活契约：只有类型，显式列出（与 access.ts 同理，避免星号导出把同一份声明走两条路径）。
 export type {
   AgentAction,

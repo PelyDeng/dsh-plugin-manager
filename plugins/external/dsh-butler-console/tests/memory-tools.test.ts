@@ -71,7 +71,7 @@ function makeTools(store: FakeMemoryStore, now = Date.now) {
   }
   const deps = {
     store: store as unknown as MemoryStore,
-    actor: () => ACTOR,
+    getActor: () => ACTOR,
     pendingForgets,
     sessionId: 'sess-1',
     now,
