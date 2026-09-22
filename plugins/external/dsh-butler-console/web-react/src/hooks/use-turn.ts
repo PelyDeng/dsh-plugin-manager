@@ -134,8 +134,6 @@ export interface HistoryCursor {
   entriesCache: HistoryEntry[]
 }
 
-let historyCursor: HistoryCursor = { transcriptBefore: null, taskOffset: null, loading: false, error: null, entriesCache: [] }
-export const historyCursorOf = (): HistoryCursor => historyCursor
 
 /**
  * 打开一个历史会话（语义对齐 history.js openConversation 的守卫与 I09 核对）。
@@ -156,7 +154,7 @@ export async function openConversation(id: string): Promise<void> {
   void loadAttachments(id)
   const token = useTurnStore.getState().viewToken
 
-  historyCursor = { transcriptBefore: null, taskOffset: null, loading: false, error: null, entriesCache: [] }
+  useSessionStore.getState().setHistoryCursor({ transcriptBefore: null, taskOffset: null, loading: false, error: null, entriesCache: [] })
   const placeholderKey = `note-h${++hostEntrySeq}`
   useTurnStore.getState().appendEntry({ key: placeholderKey, kind: 'note', text: '正在读取记录…' })
 
@@ -189,7 +187,7 @@ export async function openConversation(id: string): Promise<void> {
   const merged = mergeHistoryEntries(transcript?.items ?? null, taskPage?.items ?? null)
   if (merged.length === 0 && transcriptError === null && taskError === null) {
     // 空会话：欢迎板由 Thread 按 entries 为空渲染，这里无需占位。
-    historyCursor = { transcriptBefore: null, taskOffset: null, loading: false, error: null, entriesCache: [] }
+    useSessionStore.getState().setHistoryCursor({ transcriptBefore: null, taskOffset: null, loading: false, error: null, entriesCache: [] })
     return
   }
   // 刷新/切会话后确认卡要能重画（0.13.6）：对本会话的任务拉详情（子任务终态+确认操作
@@ -205,13 +203,13 @@ export async function openConversation(id: string): Promise<void> {
   for (const item of withSubs) entries.push(historyEntryToThreadEntry(item))
   const store = useTurnStore.getState()
   for (const entry of entries) store.appendEntry(entry)
-  historyCursor = {
+  useSessionStore.getState().setHistoryCursor({
     transcriptBefore: transcript?.prevBefore ?? null,
     taskOffset: taskPage?.nextOffset ?? null,
     loading: false,
     error: null,
     entriesCache: withSubs,
-  }
+  })
 }
 
 /** 详情防御上限：会话里任务再多也只恢复最近这些（摘要卡不受影响，翻页可及）。 */
@@ -775,7 +773,7 @@ export function bindViewHistory(): void {
 
 /** 加载一页更早的记录（I10/复核 1/复核 3）：定位插入、归属核对、失败保留重试。 */
 export async function loadEarlier(): Promise<void> {
-  const cursor = historyCursorOf()
+  const cursor = useSessionStore.getState().historyCursor
   const id = useTurnStore.getState().conversationId
   if (cursor.loading || id === null) return
   if (cursor.transcriptBefore === null && cursor.taskOffset === null) {
@@ -783,7 +781,7 @@ export async function loadEarlier(): Promise<void> {
     return
   }
   const token = useTurnStore.getState().viewToken
-  historyCursor = { ...cursor, loading: true, error: null }
+  useSessionStore.getState().setHistoryCursor({ ...cursor, loading: true, error: null })
   useSessionStore.getState().setEarlier({ phase: 'loading' })
   const stillOwns = () => token === useTurnStore.getState().viewToken && id === useTurnStore.getState().conversationId
   let failure: unknown = null
@@ -798,18 +796,19 @@ export async function loadEarlier(): Promise<void> {
     ])
     if (!stillOwns()) return
     // 全局序列重排（React 版：entries 直接按 merged 重排，插入计划由渲染顺序表达）。
-    const existing: HistoryEntry[] = historyCursor.entriesCache
+    const existing: HistoryEntry[] = useSessionStore.getState().historyCursor.entriesCache
     const plan = planHistoryInsertion(existing, mergeHistoryEntries(page?.items ?? null, tasks?.items ?? null))
     const additions = plan.insertions.map(({ entry }) => historyEntryToThreadEntry(entry))
     useTurnStore.getState().prependEntries(additions)
-    historyCursor = {
+    useSessionStore.getState().setHistoryCursor({
       transcriptBefore: page?.prevBefore ?? cursor.transcriptBefore,
       taskOffset: tasks?.nextOffset ?? cursor.taskOffset,
       loading: false,
       error: null,
       entriesCache: plan.merged,
-    }
-    const done = plan.merged.length > 0 && historyCursor.transcriptBefore === null && historyCursor.taskOffset === null
+    })
+    const fresh = useSessionStore.getState().historyCursor
+    const done = plan.merged.length > 0 && fresh.transcriptBefore === null && fresh.taskOffset === null
     useSessionStore.getState().setEarlier(done ? { phase: 'done' } : { phase: 'idle' })
     return
   } catch (error) {
@@ -817,7 +816,8 @@ export async function loadEarlier(): Promise<void> {
   }
   if (stillOwns()) {
     const message = failure instanceof Error ? failure.message : '网络异常'
-    historyCursor = { ...historyCursorOf(), loading: false, error: message }
+    const fresh = useSessionStore.getState().historyCursor
+    useSessionStore.getState().setHistoryCursor({ ...fresh, loading: false, error: message })
     useSessionStore.getState().setEarlier({ phase: 'error', message })
   }
 }

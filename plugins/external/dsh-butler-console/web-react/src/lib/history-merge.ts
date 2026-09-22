@@ -102,6 +102,17 @@ export function subtaskEntry(taskId: string, sub: TaskSubtask): HistoryEntry {
   }
 }
 
+/** 历史阅读游标（评审 #11 起进 session store：真相源单点，模块级可变单例已删）。 */
+export interface HistoryCursor {
+  transcriptBefore: string | null
+  taskOffset: number | null
+  loading: boolean
+  error: string | null
+  entriesCache: HistoryEntry[]
+}
+
+export const EMPTY_HISTORY_CURSOR: HistoryCursor = { transcriptBefore: null, taskOffset: null, loading: false, error: null, entriesCache: [] }
+
 export interface InsertionPlan {
   merged: HistoryEntry[]
   insertions: Array<{ entry: HistoryEntry; beforeId: string | null }>

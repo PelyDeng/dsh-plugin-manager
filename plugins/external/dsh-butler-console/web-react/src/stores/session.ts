@@ -45,9 +45,12 @@ export interface SessionState {
   topStatus: string
   /** 「加载更早记录」控件状态（I10：两个游标都到底后换分界说明）。 */
   earlier: { phase: 'idle' | 'loading' | 'done' | 'error'; message?: string }
+  /** 历史阅读游标（评审 #11：从 use-turn 模块级单例搬入——真相源单点）。 */
+  historyCursor: import('../lib/history-merge.ts').HistoryCursor
   /** 设置页开关（I18：页面切换非模态）。 */
   settingsOpen: boolean
   setEarlier: (earlier: { phase: 'idle' | 'loading' | 'done' | 'error'; message?: string }) => void
+  setHistoryCursor: (cursor: import('../lib/history-merge.ts').HistoryCursor) => void
   setSettingsOpen: (open: boolean) => void
   setIdentity: (label: string) => void
   setMembers: (members: MemberItem[]) => void
@@ -82,6 +85,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   overview: null,
   topStatus: '',
   earlier: { phase: 'idle' },
+  historyCursor: { transcriptBefore: null, taskOffset: null, loading: false, error: null, entriesCache: [] },
   settingsOpen: false,
 
   setIdentity: label => set({ identityLabel: label }),
@@ -113,6 +117,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   setOverview: overview => set({ overview }),
   setTopStatus: topStatus => set({ topStatus }),
   setEarlier: earlier => set({ earlier }),
+  setHistoryCursor: cursor => set({ historyCursor: cursor }),
   setSettingsOpen: settingsOpen => set({ settingsOpen }),
   stampAvatar: agentId => {
     const next = new Map(get().avatarStamps)
