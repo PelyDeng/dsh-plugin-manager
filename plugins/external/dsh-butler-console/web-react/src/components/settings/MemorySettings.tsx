@@ -302,6 +302,13 @@ function LibrarySection() {
   const terms = searchTerms(query)
   const visible = itemsSafe.filter(item => fuzzyMatch(`${item.content} ${item.kind} ${item.origin}`, terms))
   const injected = injectedCount(itemsSafe)
+  // 统计概览（§4.6 P1.5）：按智能体分组的条数——自然显性化「各成员记忆互不相通」。
+  const groupStats = useMemo(() => {
+    const AGENT_LABELS: Record<string, string> = { butler: '管家', blog: '博客智能体', huiyu: '绘语', closedoff: '封闭化管理' }
+    const groups = new Map<string, number>()
+    for (const item of itemsSafe) groups.set(item.agentId, (groups.get(item.agentId) ?? 0) + 1)
+    return [...groups.entries()].map(([agentId, count]) => ({ label: AGENT_LABELS[agentId] ?? agentId, count }))
+  }, [itemsSafe])
 
   const remove = async (item: MemoryItem) => {
     if (!window.confirm(`删掉这条记忆？[${item.shortId}]「${item.content}」\n删了就找不回来了，要留底先导出。`)) return
@@ -341,6 +348,11 @@ function LibrarySection() {
       <p className="mem-note mem-library__capacity">
         当前注入 <strong>{injected}</strong> 条（上限 10 条/记忆清单 ≤1500 字符）；越重要越先被想起，预算满时靠后的不进对话。
       </p>
+      {groupStats.length > 0 && (
+        <p className="mem-note mem-library__groups">
+          {groupStats.map(group => `${group.label} ${group.count} 条`).join(' · ')}——各成员的记忆互不相通（每份各自生效）。
+        </p>
+      )}
       <SearchBox query={query} onQuery={setQuery} />
       {items === null && <p className="empty">读取中…</p>}
       {items !== null && items.length === 0 && query === '' && <p className="empty">在群里跟管家说「记住：……」，它会记到这里</p>}

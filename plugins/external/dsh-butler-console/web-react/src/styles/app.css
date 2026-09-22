@@ -2058,3 +2058,4 @@ button:focus-visible {
 .mem-add__main input:focus-visible { border-color: var(--bt-ink); outline: 2px solid #2f2b2622; outline-offset: 1px; }
 .mem-add__main input::placeholder { color: var(--bt-ink-faint); }
 .mem-add > .btn { align-self: flex-end; min-width: 64px; }
+.mem-library__groups { color: var(--bt-ink-faint); }
