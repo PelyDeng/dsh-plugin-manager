@@ -16,7 +16,7 @@
     "test": "pnpm build && pnpm -r --workspace-concurrency=1 --if-present test"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/cordis": "4.0.4",
     "@types/node": "^22.20.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.8",
