@@ -89,53 +89,84 @@ export async function supervise(deployment, release, { locked = false, unlock } 
   else rmSync(deployment.authUrlFile, { force: true });
   for (const signal of signals) process.on(signal, stop);
   const publicUrl = options['public-url'] ?? process.env.DSH_PUBLIC_URL ?? deployment.config.publicUrl ?? `http://127.0.0.1:${port}`;
-  // 官方诊断的抬头与明细有两个世代（0.1.6-alpha.1 → alpha.2）：
-  // - 可选警告两代相同：`dsh: warning: N entr(y|ies) did not activate`，随后每行是
-  //   `<入口 id> (<模块名>): <原因>`，而原因用 error.stack，本身可以多行。
+  // —— 启动诊断解析：世代描述表驱动 ——
+  // 宿主对必需失败一律非零退出，失败判定不依赖文案；解析只为两件事——把诊断块原样转报，
+  // 并把未激活条目/被跳过 bundle 的身份比对进托管名单。
+  //
+  // 抬头与明细按官方世代演进，GENERATIONS 每项是一代的抬头锚点（含 severity），新增世代
+  // 只加表项与对应明细形状，不改控制流：
+  // - 可选警告（alpha.1/alpha.2 相同）：`dsh: warning: N entr(y|ies) did not activate`，随后每行是
+  //   `<入口 id> (<模块名>): <原因>`，原因用 error.stack，本身可以多行。
   // - 必需失败 alpha.1：`... required startup failure: N entry did not activate` + 同款平铺明细行。
   // - 必需失败 alpha.2：`dsh: startup failed: N required plugin(s) did not activate` + 分组明细——
   //   `Failed plugins (N):` 下每项是 2 空格缩进的 `<id>[ (required)]`，其 `Package:` 与原因行 4 空格
   //   缩进；`Plugins waiting for services (N):` 是 2 空格缩进的两列表，可选条目也并入这份诊断。
-  //
-  // 宿主对必需失败一律非零退出，失败判定不依赖文案；解析只为两件事——把诊断块原样转报，
-  // 并把未激活条目的 id/包名比对进托管名单。
+  // 0.1.7-alpha.1/2 未改诊断格式，表项与 alpha.2 逐字一致。抬头的 `(?:^|: )` 容忍 Error 包装
+  // 前缀（如 `Error: dsh: ...`）。
   //
   // 这里**不能**按抬头里的条数收行：原因里的换行可能长得就像一条明细行，会把真正的条目挤掉，
   // 结果托管插件没激活却被当成成功（用真实 0.1.6 宿主复现过）。受管条目本来就有限，任何一条
   // 形状相符的行都拿来比对托管名单即可，误判需要原因里恰好写出托管插件的 id 或包名。
+  const GENERATIONS = [
+    { id: 'alpha.1/2 警告', header: /(?:^|: )warning: \d+ entr(?:y|ies) did not activate$/, severity: 'warning' },
+    { id: 'alpha.1 必需失败（平铺）', header: /(?:^|: )required startup failure: \d+ entr(?:y|ies) did not activate$/, severity: 'required' },
+    { id: 'alpha.2 必需失败（分组）', header: /(?:^|: )startup failed: \d+ required plugins? did not activate$/, severity: 'required' },
+  ];
+  // 宿主 0.1.7 起对解析失败的 profile bundle 裸行直写该行（stderr、无时间戳前缀）后跳过这一层
+  // 继续启动，"启动成功"不再等于"站点插件全部就位"：被跳过的托管 bundle 必须按启动失败处理。
+  // error 文本可能多行，这里只判定首行，余行按当前世代明细规则自然流过；`(?:^|: )` 容忍仅为
+  // 对齐抬头风格。
+  const SKIPPED_BUNDLE = /(?:^|: )dsh: skipping profile bundle "([^"]+)": (.*)$/;
+  // 必需失败明细行的形状库（具名锚点；平铺行在警告与必需两态的正则与取值不同，保留两支）。
+  const shapes = {
+    flatWarning: line => { const m = /^(\S+) \(([^)]*)\): (.*)$/.exec(line); return m && { id: m[1], name: m[2], reason: m[3] }; },
+    flatRequired: line => { const m = /^(\S+) \(([^)]*)\): /.exec(line); return m && { id: m[1], name: m[2] }; },
+    failedEntry: line => { const m = /^ {2}(\S+?)(?: \(required\))?$/.exec(line); return m && { id: m[1] }; },
+    waitingEntry: line => { const m = /^ {2}(\S+?)(?: \(required\))? {2,}(\S.*)$/.exec(line); return m && { id: m[1], service: m[2] }; },
+    packageLine: line => { const m = /^ {4}Package: (\S+)$/.exec(line); return m && { name: m[1] }; },
+    reasonLine: line => /^ {4}\S/.test(line),
+  };
   const inactive = new Map();
   const requiredFailures = [];
+  const skippedBundles = new Map();
   let severity = 'warning';
   let unnamedEntry = null;
   const noteActivation = line => {
-    const header = /(?:^|: )((?:warning|required startup failure): \d+ entr(?:y|ies) did not activate|startup failed: \d+ required plugins? did not activate)$/.exec(line);
+    const skipped = SKIPPED_BUNDLE.exec(line);
+    if (skipped) { skippedBundles.set(skipped[1], skipped[2]); return; }
+    const header = GENERATIONS.find(g => g.header.test(line));
     if (header) {
-      severity = header[1].startsWith('warning') ? 'warning' : 'required';
+      severity = header.severity;
       unnamedEntry = null;
       if (severity === 'required') requiredFailures.push(line);
       return;
     }
     if (severity === 'required') {
       requiredFailures.push(line);
-      const flat = /^(\S+) \(([^)]*)\): /.exec(line);
-      const failedEntry = /^ {2}(\S+?)(?: \(required\))?$/.exec(line);
-      const waitingEntry = /^ {2}(\S+?)(?: \(required\))? {2,}(\S.*)$/.exec(line);
-      const packageLine = /^ {4}Package: (\S+)$/.exec(line);
-      if (flat) inactive.set(flat[1], { name: flat[2], reason: '' });
-      else if (failedEntry) { unnamedEntry = { name: '', reason: '' }; inactive.set(failedEntry[1], unnamedEntry); }
-      else if (waitingEntry && waitingEntry[1] !== 'Plugin') inactive.set(waitingEntry[1], { name: '', reason: `waiting for services: ${waitingEntry[2]}` });
-      else if (packageLine && unnamedEntry) unnamedEntry.name = packageLine[1];
-      else if (unnamedEntry && /^ {4}\S/.test(line)) unnamedEntry.reason ||= line.trim();
+      const flat = shapes.flatRequired(line);
+      const failedEntry = shapes.failedEntry(line);
+      const waitingEntry = shapes.waitingEntry(line);
+      const packageLine = shapes.packageLine(line);
+      if (flat) inactive.set(flat.id, { name: flat.name, reason: '' });
+      else if (failedEntry) { unnamedEntry = { name: '', reason: '' }; inactive.set(failedEntry.id, unnamedEntry); }
+      else if (waitingEntry && waitingEntry.id !== 'Plugin') inactive.set(waitingEntry.id, { name: '', reason: `waiting for services: ${waitingEntry.service}` });
+      else if (packageLine && unnamedEntry) unnamedEntry.name = packageLine.name;
+      else if (unnamedEntry && shapes.reasonLine(line)) unnamedEntry.reason ||= line.trim();
       return;
     }
-    const entry = /^(\S+) \(([^)]*)\): (.*)$/.exec(line);
-    if (entry) inactive.set(entry[1], { name: entry[2], reason: entry[3] });
+    const entry = shapes.flatWarning(line);
+    if (entry) inactive.set(entry.id, { name: entry.name, reason: entry.reason });
   };
-  // 托管条目未激活就一定是失败；返回 undefined 表示没有证据说明托管插件没起来。
+  // 托管条目未激活、或托管 bundle 被宿主跳过，都一定是失败；返回 undefined 表示没有证据
+  // 说明托管内容没起来。
   const activationError = () => {
     const broken = [...inactive].filter(([id, entry]) => managedNames.has(id) || managedNames.has(entry.name));
-    if (!broken.length) return undefined;
-    return new Error(`托管插件未激活：${broken.map(([id, entry]) => `${id} (${entry.name}) ${entry.reason}`).join('；')}。请按插件日志修正后直接重新运行普通 build。`);
+    const skippedManaged = [...skippedBundles].filter(([bundle]) => managedNames.has(bundle));
+    if (!broken.length && !skippedManaged.length) return undefined;
+    const parts = [];
+    if (broken.length) parts.push(`托管插件未激活：${broken.map(([id, entry]) => `${id} (${entry.name}) ${entry.reason}`).join('；')}`);
+    if (skippedManaged.length) parts.push(`宿主跳过了托管 bundle：${skippedManaged.map(([bundle, error]) => `${bundle}（${error}）`).join('；')}`);
+    return new Error(`${parts.join('。')}。请按插件日志修正后直接重新运行普通 build。`);
   };
   let reportActivationFailure; const activationFailed = new Promise(resolvePromise => { reportActivationFailure = resolvePromise; });
   const output = line => {

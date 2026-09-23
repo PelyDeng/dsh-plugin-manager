@@ -473,6 +473,70 @@ test('a decoy line inside a failure reason cannot hide a later managed plugin', 
   assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
 });
 
+test('a skipped profile bundle containing a managed plugin fails owned startup as of 0.1.7', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const cliFile = join(f.root, 'skipped-bundle-host.mjs');
+  // 宿主 0.1.7 起对解析失败的 bundle 裸行直写该诊断（stderr、无时间戳前缀）后跳过这一层继续
+  // 启动：宿主正常服务不等于托管插件就位。bundle 名就是包名，命中托管名单必须判失败。
+  writeFileSync(cliFile, `import { createServer } from 'node:http';
+    process.stderr.write('dsh: skipping profile bundle "fixture-alpha": Error: Cannot find module \\'fixture-alpha\\'\\n');
+    createServer((_req, res) => res.end('ready')).listen(${port}, '127.0.0.1');`);
+  f.deployment.options['dsh-cli-js'] = cliFile;
+  f.deployment.options.port = port;
+  await assert.rejects(supervise(f.deployment, f.release), error => {
+    assert.match(error.message, /宿主跳过了托管 bundle：fixture-alpha/);
+    assert.match(error.message, /Cannot find module/);
+    return true;
+  });
+  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
+});
+
+test('a skipped profile bundle the manager does not own leaves startup successful', { timeout: 30000 }, async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const cliFile = join(f.root, 'foreign-skipped-bundle-host.mjs');
+  writeFileSync(cliFile, `import { createServer } from 'node:http';
+    process.stderr.write('dsh: skipping profile bundle "dsh-base": Error: broken manifest\\n');
+    createServer((_req, res) => res.end('ready')).listen(${port}, '127.0.0.1');
+    setTimeout(() => process.exit(0), 1500);`);
+  f.deployment.options['dsh-cli-js'] = cliFile;
+  f.deployment.options.port = port;
+  await supervise(f.deployment, f.release);
+  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
+});
+
+test('a skipped bundle and an inactive managed plugin both show up in the failure evidence', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const cliFile = join(f.root, 'skipped-and-inactive-host.mjs');
+  // 两线互斥可并存：被跳过的 bundle 不进 loader（不会出现在未激活明细里），未激活明细是另
+  // 一个托管插件——两类证据必须同时出现在最终错误里。
+  writeFileSync(cliFile, `import { createServer } from 'node:http';
+    process.stderr.write('dsh: skipping profile bundle "fixture-alpha": Error: bad patch\\ndsh: warning: 1 entry did not activate\\nexample (fixture-beta): failed to import\\n');
+    createServer((_req, res) => res.end('ready')).listen(${port}, '127.0.0.1');`);
+  f.deployment.options['dsh-cli-js'] = cliFile;
+  f.deployment.options.port = port;
+  await assert.rejects(supervise(f.deployment, f.release), error => {
+    assert.match(error.message, /宿主跳过了托管 bundle：fixture-alpha（Error: bad patch）/);
+    assert.match(error.message, /托管插件未激活：example \(fixture-beta\) failed to import/);
+    return true;
+  });
+  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
+});
+
 test('configuration revision does not reinstall and never enters the managed set', async t => {
   const f = fixture(t); await synchronize(f.deployment, f.release, options(f));
   await finalize(f.deployment, f.release, { running: true });

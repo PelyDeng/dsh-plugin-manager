@@ -47,44 +47,24 @@ const probe = createServer()
 await new Promise((resolve, reject) => { probe.once('error', reject); probe.listen(port, '127.0.0.1', resolve) })
 await new Promise(resolve => probe.close(resolve))
 const requests = []
-// 官方宿主从 0.1.6-alpha.2 起 deepseek-official 默认协议是 Messages（Anthropic 风格，请求
-// 路径以 /messages 结尾），chat-completions 需显式选择。替身按请求路径分发两种响应形状，
-// 回归覆盖宿主默认协议；两种协议的 tool result 形状不同（chat 是 role:'tool' 消息，
-// Messages 是 user 消息里的 tool_result 块），工具轮次判定兼容两者。
+// 官方宿主自 0.1.7 起 deepseek-official 为 Messages-only（Chat Completions 实现已删除），
+// 请求路径以 /messages 结尾。替身只接受 Messages 请求，收到其他路径即报错——替身与官方
+// 实现保持一致，把协议漂移变成显式失败而不是静默兼容。tool result 是 user 消息里的
+// tool_result 块（不再是 role:'tool' 消息）。
 const model = createServer(async (req, res) => {
   const chunks = []; for await (const chunk of req) chunks.push(chunk)
   const value = JSON.parse(Buffer.concat(chunks).toString('utf8')); requests.push(value)
+  assert.match(req.url ?? '', /\/messages\/?$/, 'official host must speak Messages protocol only')
   const messages = Array.isArray(value.messages) ? value.messages : []
   const history = JSON.stringify(messages)
-  const isToolResult = message => message.role === 'tool' || JSON.stringify(message.content ?? '').includes('"tool_result"')
+  const isToolResult = message => JSON.stringify(message.content ?? '').includes('"tool_result"')
   const toolResults = messages.filter(isToolResult)
-  const isMessages = /\/messages\/?$/.test(req.url ?? '')
   const toolTurn = history.includes('源码工具验收') && toolResults.length < 2
   const userCount = messages.filter(message => message.role === 'user' && !isToolResult(message)).length
   const toolArgs = toolResults.length ? { path: 'packages/plugin-manager/src/verification.mjs', startLine: 1, lines: 120 } : { query: 'verificationSubjects' }
   const toolName = toolResults.length ? 'example_read_framework' : 'example_search_framework'
   const reasoningTexts = ['先理解问题。', '再组织回答。']
   const answerTexts = ['你好！', '这是本地测试模型的回答。', `已收到 ${userCount} 条用户消息。`, '我们可以继续探索这个问题。']
-  if (!isMessages) {
-    res.writeHead(200, { 'content-type': 'text/event-stream' })
-    res.write('data: {"choices":[{"delta":{"role":"assistant","content":null}}]}\n\n')
-    if (toolTurn) {
-      res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: `reference_${toolResults.length}`, type: 'function', function: { name: toolName, arguments: JSON.stringify(toolArgs) } }] }, finish_reason: 'tool_calls' }] })}\n\n`)
-      res.end('data: [DONE]\n\n'); return
-    }
-    for (const text of reasoningTexts) {
-      if (res.destroyed) return
-      await delay(180)
-      res.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: text } }] })}\n\n`)
-    }
-    for (const text of answerTexts) {
-      if (res.destroyed) return
-      await delay(180)
-      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`)
-    }
-    res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":20}}\n\n')
-    res.end('data: [DONE]\n\n'); return
-  }
   res.writeHead(200, { 'content-type': 'text/event-stream' })
   const emit = (name, data) => res.write(`event: ${name}\ndata: ${JSON.stringify({ type: name, ...data })}\n\n`)
   emit('message_start', { message: { usage: { input_tokens: 20, output_tokens: 0 } } })
@@ -210,7 +190,7 @@ try {
   const personal = await chat('个人模式问题', alice)
   const toolRequestStart = requests.length
   await chat('源码工具验收：检索并读取验证模块', alice, personal)
-  // chat-completions 的 tool result 是 role:'tool' 消息，Messages 协议是 user 消息里的 tool_result 块；
+  // Messages 协议的 tool result 是 user 消息里的 tool_result 块；
   // 内容可能是字符串或块数组，取全部字符串值再匹配，避免对整条消息做 JSON 转义后误判。
   const collect = (value, into) => {
     if (typeof value === 'string') into.push(value)
@@ -218,7 +198,7 @@ try {
     else if (value && typeof value === 'object') for (const item of Object.values(value)) collect(item, into)
   }
   const toolTexts = requests.slice(toolRequestStart).flatMap(request => request.messages ?? [])
-    .filter(message => message.role === 'tool' || JSON.stringify(message.content ?? '').includes('"tool_result"'))
+    .filter(message => JSON.stringify(message.content ?? '').includes('"tool_result"'))
     .map(message => { const parts = []; collect(message.content, parts); return parts.join('\n') })
   assert.ok(toolTexts.some(text => text.includes('packages/plugin-manager/src/verification.mjs')), 'real Agent must receive source search results')
   assert.ok(toolTexts.some(text => text.includes('verificationSubjects')), 'real Agent must receive source content')
