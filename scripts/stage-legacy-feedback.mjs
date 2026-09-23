@@ -1,4 +1,4 @@
-/** Generate isolated Session V3 logs from legacy feedback; never publish into a live data root. */
+/** Generate isolated Session logs in the current format from legacy feedback; never publish into a live data root. */
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
@@ -32,12 +32,16 @@ const load = async name => {
   const require = resolvers.find(r => { try { r.resolve(pkg); return true; } catch { return false; } });
   assert.ok(require, 'Missing official package: ' + pkg);
   const version = JSON.parse(await readFile(require.resolve(pkg + '/package.json'), 'utf8')).version;
-  assert.equal(version, name === 'cordis' ? '4.0.2' : hostVersion, `${pkg} 的版本 ${version} 与运行镜像的宿主 ${hostVersion} 不一致。`);
+  assert.equal(version, name === 'cordis' ? '4.0.4' : hostVersion, `${pkg} 的版本 ${version} 与运行镜像的宿主 ${hostVersion} 不一致。`);
   return import(pathToFileURL(require.resolve(pkg)));
 };
 const { Context } = await load('cordis'), persistence = await load('dsh-session-persistence-jsonl');
-const { sessionFormatCatalog: catalog } = await load('dsh-session-format-catalog');
+const catalogModule = await load('dsh-session-format-catalog');
 const { releasedV2SessionFormatCodec: v2, releasedV3SessionFormatCodec: v3 } = await load('dsh-session-format-v2-to-v3');
+const { releasedV4SessionFormatCodec: v4 } = await load('dsh-session-format-v3-to-v4');
+// 离线迁移的输入是彼此独立的单会话快照，没有子会话 artifact 可供 V3→V4 收集证据，
+// 用空数组显式声明无子（否则 catalog 的 V4 边会拒绝迁移）。
+const catalog = catalogModule.createSessionFormatCatalogWithChildren([]);
 await mkdir(output, { mode: 0o700 });
 const from = new Context(), to = new Context(), mappings = []; let items = 0;
 try {
@@ -48,7 +52,7 @@ try {
     try { snapshot = { header: handle.header, inheritedEventCount: handle.inheritedEventCount, events: (await handle.read()).events }; }
     finally { await handle.close(); }
     assert.equal(snapshot.header.id, id);
-    const migrated = mergeLegacyFeedback(snapshot, row, { catalog, v2, v3 });
+    const migrated = mergeLegacyFeedback(snapshot, row, { catalog, v2, v3, v4 });
     const writer = await to.sessionPersistence.create(migrated.header, { inheritedEventCount: migrated.inheritedEventCount });
     try { await writer.append(migrated.events); await writer.flush(); assert.deepEqual((await writer.read()).events, migrated.events); }
     finally { await writer.close(); }

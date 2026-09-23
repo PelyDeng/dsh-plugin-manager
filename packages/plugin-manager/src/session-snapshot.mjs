@@ -1,10 +1,14 @@
 /** Offline Session snapshots use official codecs; callers own storage paths and write exclusion. */
 import assert from 'node:assert/strict';
 
-export function restoreSessionSnapshot(session, { catalog, v2, v3 }) {
-  assert.ok(session && [2, 3].includes(session.header?.version), 'Unsupported Session snapshot format.');
+// 快照 codec 按头部版本查表；catalog（现行格式）负责迁移与校验，产出一律是 catalog 的
+// 当前版本（宿主 0.1.7 起为 V4）——旧格式快照恢复后 header.version 随之前进。
+const CODECS_BY_VERSION = { 2: 'v2', 3: 'v3', 4: 'v4' };
+
+export function restoreSessionSnapshot(session, { catalog, v2, v3, v4 }) {
+  assert.ok(session && session.header?.version in CODECS_BY_VERSION, 'Unsupported Session snapshot format.');
   assert.ok(Array.isArray(session.events), 'Snapshot events must be an array.');
-  const codec = session.header.version === 2 ? v2 : v3;
+  const codec = { v2, v3, v4 }[CODECS_BY_VERSION[session.header.version]];
   const header = codec.encodeHeader(session.header, session.inheritedEventCount);
   const source = codec.createDecoder(header, 'strict');
   const discard = { emitEvent() {}, emitRun() {} };
