@@ -15,7 +15,7 @@ kind: "package-bundle"
 
 支持明确选择的独立运行和统一认证模式。启用认证后，页面通过 `/auth` 登录，全部业务 API 和工具要求 `closedoff:access`，历史对话按账号隔离；不安装 auth 时可使用独立模式。身份、存储及旧数据规则见 [认证与个人历史](doc/architecture.md#认证与个人历史)。
 
-会话机制（Agent 生命周期、工具限制、事件投影、协作入口）由智能体群组的运行时 `packages/runtime` 代管，本包只提供一份 `src/definition.ts` 声明与业务实现。实时输出走官方 `agent/assistant-stream`，历史走 Session V3 的 message/attempt 记录展开，保留思考预览、工具提示、失败或取消的部分输出和首 token 时间；瞬时帧不写入持久日志。开发依赖与运行宿主均固定为 `0.1.6-alpha.2`，升级和回退约束见[宿主兼容说明](../../../../../doc/host-compatibility.md)。
+会话机制（Agent 生命周期、工具限制、事件投影、协作入口）由智能体群组的运行时 `packages/runtime` 代管，本包只提供一份 `src/definition.ts` 声明与业务实现。实时输出走官方 `agent/assistant-stream`，历史走 Session（当前 V4）的 message/attempt 记录展开，保留思考预览、工具提示、失败或取消的部分输出和首 token 时间；瞬时帧不写入持久日志。开发依赖与运行宿主均固定为 `0.1.7-alpha.2`，升级和回退约束见[宿主兼容说明](../../../../../doc/host-compatibility.md)。
 
 ## 对话模型
 
@@ -236,4 +236,4 @@ DSH 上游升级时，先在单独测试 profile 中安装本包并运行 `--dum
 - 点击三维地图中的设备组标记或右侧设备组名称，会打开该组的摄像头详情。详情只包含 `deviceType = 6` 的摄像头，不展示 IP 广播或电源保障终端；设备接口返回 `videoAddress` 或 `accessAddress` 时使用园区定制播放器播放，两个字段都缺失时明确展示无可用视频地址。页面在收到含有效流地址的设备组后利用浏览器空闲时间预热本地播放器运行资源，视频流仍只在用户打开摄像头详情时连接。
 - 轨迹地图直接使用公共 CesiumJS `1.142.0` 加载地形和 3D Tiles，并使用其本地 `NaturalEarthII` 默认底图，不依赖 `@prism-next/core`。默认底图不是园区卫星影像；模型周边出现绿色区域不等于 tileset 未加载，当前提供的地形和 3D Tiles 地址之外还缺少业务系统使用的卫星影像图层。要复现业务系统中的连续地表画面，必须另行取得并配置该影像服务。
 - 地形与 3D Tiles 由外部数据服务提供。页面在 tileset 加载后先应用可配置高度偏移，再飞到模型，并保持地形深度检测开启。`layer.json` 可访问不代表地形可用；排障时还应抽查其声明的 `.terrain` 瓦片。CesiumJS 不能修复数据服务的 404、跨域、证书错误或缺失的数据内容。
-- 开发依赖固定在 DSH `0.1.6-alpha.2`，兼容范围以 package.json 为准。DSH 仍处于 alpha 阶段，升级前必须执行本包检查和隔离 profile 冒烟。
+- 开发依赖固定在 DSH `0.1.7-alpha.2`，兼容范围以 package.json 为准。DSH 仍处于 alpha 阶段，升级前必须执行本包检查和隔离 profile 冒烟。
