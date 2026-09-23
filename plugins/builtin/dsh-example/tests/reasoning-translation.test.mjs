@@ -94,7 +94,7 @@ test('server-owned source, provider and independent usage are preserved without 
   expect(call.sessionId).toBeUndefined()
   expect(call.purpose).toBeUndefined()
   expect(call.messages).toHaveLength(1)
-  expect(call.messages[0].source).toMatchObject({ kind: 'plugin', plugin: 'example' })
+  expect(call.messages[0].source).toMatchObject({ kind: 'user' })
   expect(JSON.parse(call.messages[0].content[0].text)).toEqual({ original: ORIGINAL })
   expect(f.sources.get(target.conversationId).events).toEqual(before)
   expect(before[0].data.usage).toBeUndefined()
