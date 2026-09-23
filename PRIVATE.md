@@ -82,9 +82,9 @@ pnpm package --external --plugins "agents-group,butler"
 
 首次配置分别按[封闭化业务参数](plugins/external/dsh-agents-group/agents/closedoff/README.md#配置业务参数)和[博客配置](plugins/external/dsh-agents-group/agents/blog/README.md#配置)填写。现有实例沿用原 `runtimeConfig` 引用。站点来源、选集、模型凭据优先级及入口默认值统一见[框架配置](doc/framework-configuration.md)。
 
-宿主子模块锁定 DSH `0.1.6-alpha.2`（提交 `ddefc45fbc7f8e46dd73185e68295696d1297887`），以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。业务插件（`plugins/external/*`）的宿主依赖已随本次升级对齐到 `0.1.6-alpha.2`（butler、agents-group 及其成员、niuma-boss 同步），保留各自的发布目录，随它们自己的升级再对齐宿主版本。
+宿主子模块锁定 DSH `0.1.7-alpha.2`（提交 `00102833dfaee1da9f48a3a8eae9d34005a75218`），以 Git gitlink 为准。升级公共框架时单独审查宿主版本变化；最终构建、插件归档和部署验收均以本仓库提交为依据。业务插件（`plugins/external/*`）的宿主依赖已随本次升级对齐到 `0.1.7-alpha.2`（butler、agents-group 及其成员、niuma-boss 同步，vendor 升 cordis 4.0.4 / schemastery 3.18.4），保留各自的发布目录，随它们自己的升级再对齐宿主版本。私有插件 `0.1.7` 真宿主回归未单独运行（内置插件已随 `test-report.sh` 通过），推迟到下次真实部署前结合部署验证执行。
 
-私有根更新入口不更新宿主子模块，也不替换 `DSH_HOST_IMAGE`。宿主升级时显式运行 `git submodule update --init deepseek-harness`，或准备与 gitlink 对应的干净检出并构建新镜像，再更新私有镜像引用；服务器直连 GitHub 失败时，可在本地用 `git bundle` 打包宿主历史再传输。Session V3 的迁移、刷新历史与数据回退约束见[宿主兼容说明](doc/host-compatibility.md)。生产选集为 `auth,example,agents-group,butler,niuma-boss`（blog 与 closedoff 是 agents-group 的成员，不单独占选集条目）。
+私有根更新入口不更新宿主子模块，也不替换 `DSH_HOST_IMAGE`。宿主升级时显式运行 `git submodule update --init deepseek-harness`，或准备与 gitlink 对应的干净检出并构建新镜像，再更新私有镜像引用；服务器直连 GitHub 失败时，可在本地用 `git bundle` 打包宿主历史再传输。Session V4 的迁移、刷新历史与数据回退约束（V4 数据不可被 0.1.6 宿主读取）见[宿主兼容说明](doc/host-compatibility.md)。`agents/blog/backup/chat-state.mjs` 是非活跃备份代码，仍按 `{catalog, v2, v3}` 组装；复活它时必须同步 V4 codec 与 children catalog。生产选集为 `auth,example,agents-group,butler,niuma-boss`（blog 与 closedoff 是 agents-group 的成员，不单独占选集条目）。
 
 ## 默认模型与私有插件
 
