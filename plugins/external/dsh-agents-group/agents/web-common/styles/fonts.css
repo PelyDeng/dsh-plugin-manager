@@ -1,0 +1,11 @@
+/*
+ * 字体资产轨（批 0 P0，方案 §3.4）：--bt-font（LXGW WenKai）/--bt-hand（Ma Shan Zheng）
+ * 的 @font-face 聚合入口。woff2 分片原样随迁自 butler web/media/fonts/（unicode-range
+ * 分片，不改内容）；lxgw.css 的 url 已改为本目录相对路径。
+ *
+ * 消费方式：成员 app.css 的 @import 链挂本文件，产物由 tailwindcss CLI 内联，
+ * 字体文件本身走成员静态资源路由（批 0 先由 tests/mock 的 page-server 静态服务；
+ * 各成员生产落位在其 React 页上线批次收口）。
+ */
+@import "../media/fonts/lxgw.css";
+@import "../media/fonts/ma-shan-zheng/ma-shan-zheng.css";

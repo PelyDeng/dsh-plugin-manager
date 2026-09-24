@@ -1,0 +1,42 @@
+/*
+ * React 前端 CSS 入口（群组二期批 0 hello 页）：Tailwind v4 单文件产物，
+ * 经 copy-web-assets.mjs 落位 web/assets/app.css，页面经 /closedoff-qa/assets/app.css 引用。
+ *
+ * 分层：preflight（Tailwind 自带）→ tokens → overrides → textures → fonts →
+ * 成员层（本文件其余部分）。
+ *
+ * ⚠️ @import 相对路径与 @source 都以本文件所在目录（web-react/src/styles/）为基准：
+ * - ../../       = web-react/（成员自身源码树）；
+ * - ../../../../ = agents/，故 ../../../../web-common/ 是群组共享基元层。
+ * 只圈 web-react 会把 web-common 的基元类 purge 掉（v4 自动探测从 git 根扫）。
+ * 产物里 @font-face 的 url 是产物相对形态（media/fonts/…）——相对 /closedoff-qa/assets/
+ * 解析，字体分片由 copy-web-assets.mjs 的 React 轨落位 web/assets/media/fonts/。
+ */
+@import "tailwindcss";
+@import "../../../../web-common/styles/tokens.css";
+@import "../../../../web-common/styles/overrides.css";
+@import "../../../../web-common/styles/textures.css";
+@import "../../../../web-common/styles/fonts.css";
+
+@source "../../";
+@source "../../../../web-common/";
+
+/* ── 批 0 hello 页（临时验证面，批 1 骨架落地后删除）────────────────── */
+
+.bt-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+/* 手账基底：暖米桌面 + 墨色正文 + 霞鹜正文（hello 页先落全局观感，批 1 换成
+   closedoff 自己的全屏工作台基底）。 */
+body {
+  margin: 0;
+  background-color: #f3edde; /* contract-exempt: 暖米桌面底，butler app.css 同配方 */
+  color: var(--bt-ink);
+  font-family: var(--bt-font);
+  font-size: 14px;
+  line-height: 1.7;
+}

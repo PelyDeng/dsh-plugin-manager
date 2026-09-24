@@ -1,0 +1,33 @@
+{
+  "name": "@dsh-agents-group/web-common",
+  "version": "0.1.0",
+  "description": "群组侧 React 前端共享基元层：手账 token、材质基元、字体轨、图标与富文本渲染器；由各成员构建内联，不对外发布",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./styles/tokens.css": "./styles/tokens.css",
+    "./styles/textures.css": "./styles/textures.css",
+    "./styles/overrides.css": "./styles/overrides.css",
+    "./styles/fonts.css": "./styles/fonts.css"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "node -e \"console.log('web-common 由成员构建内联，无需单独构建')\"",
+    "test": "vitest run",
+    "check": "pnpm typecheck && pnpm test"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "happy-dom": "^20.14.5",
+    "markdown-it": "15.0.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

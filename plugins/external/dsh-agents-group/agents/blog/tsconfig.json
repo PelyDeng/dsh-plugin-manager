@@ -8,9 +8,11 @@
     // ⚠️ 不要写成整份 `ES2024`：那会把 2023/2024 的**其它全局面**一并放进来，是**放宽**而不是等价。
     // `DOM` / `DOM.Iterable` 保持与推断默认一致（本包跑在 Node 侧，但既有代码读 `Response` 等 DOM 面）。
     "lib": ["ES2022", "ES2024.Promise", "DOM", "DOM.Iterable"],
+    // React 前端（群组二期批 0）：web-react 源码与 web-common 基元层走 automatic JSX runtime。
+    "jsx": "react-jsx",
     "allowImportingTsExtensions": true, "allowJs": true, "checkJs": false, "strict": true, "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true, "verbatimModuleSyntax": true,
     "declaration": true, "noEmit": true, "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "web-react/src/**/*.ts", "web-react/src/**/*.tsx"]
 }

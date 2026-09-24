@@ -36,6 +36,14 @@ describe('web asset modules', () => {
     expect(copyAssets).toContain("web/app.css")
     expect(copyAssets).toContain("web/trajectory.js")
     expect(copyAssets).toContain("web/app.js")
+    // 双轨开关（群组二期批 0）：dist/web/app.js 存在 = React 轨（产物落 assets 根 +
+    // 字体分片落 media/fonts/），不存在 = 旧轨（web/ 根第一方模块照旧）。三方资产两轨都拷。
+    expect(copyAssets).toContain("const reactTrack = existsSync(resolve(root, 'dist/web/app.js'))")
+    expect(copyAssets).toContain("if (reactTrack) {")
+    expect(copyAssets).toContain("'dist/web/app.js'")
+    expect(copyAssets).toContain("'dist/web/app.css'")
+    expect(copyAssets).toContain("'media/fonts/lxgw'")
+    expect(copyAssets).toContain("'media/fonts/ma-shan-zheng'")
     expect(watcher).toContain("'conversation-history.js', 'chat-ui.js', 'chat-base.css'")
     expect(watcher).toContain('const dirtyWebSources = new Set()')
     expect(watcher).toContain('for (const dirtySource of sources)')

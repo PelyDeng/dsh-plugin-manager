@@ -1,0 +1,133 @@
+/*
+ * 手账材质基元（批 0「材质解构定型」，方案 §3.2 裁剪清单）。
+ *
+ * 从 butler web-react/src/styles/app.css 的材质段解构而来——不是搬运：
+ * butler 的胶带绑 .column::before/after 伪元素、撕边绑 .desk .column 的 80+ 点
+ * clip-path，这些与三栏布局死锁；本文件只收**无布局耦合**的基元类，成员页按需
+ * 挂类。裁剪清单：保留 paper 墨线卡/胶带点缀/sticker/btn 手绘件/荧光笔标题/
+ * 墨线焦点环/纸感滚动条；不搬 desk 撕边纸整页布局/栏歪斜/全屏纸纹暗角。
+ * 弹层统一 butler 直角墨框形态（border-image 与圆角不共存的 CSS 特性所致），
+ * 与旧前端弹层材质的差异登记为对照表「弹层材质=新基线」。
+ *
+ * 焦点环与滚动条的全局条款在 overrides.css（本文件不重复）。
+ * 类名前缀：材质/基元统一 bt-*（待拍板项 9 定案），qa-* 不再新增。
+ */
+
+/* ── paper：墨线勾边纸卡 ─────────────────────────────────────────────── */
+
+.paper {
+  position: relative;
+  background: var(--bt-card);
+  /* 手绘墨线勾边：border-image 手绘框（线条波动）替代平直实线。
+     布局仍按 2px 占位，图像画到 4px——多出的 2px 侵入自身 padding 边缘，不挤压内容。 */
+  border: 2px solid transparent;
+  border-image: var(--bt-ink-frame) 6 / 4px round;
+  box-shadow: 0 2px 0 #00000008, 0 6px 16px #00000012;
+}
+
+/* ── bt-tape：纸胶带基元（解构自 butler .column::before 的布局耦合版）──────
+ * 纸卡顶部一条半透明胶带，像随手按住的。定位四要素（top/left/right/width）留给
+ * 使用者：绝对定位放哪、多宽，由消费处决定，基元只管材质。 */
+.bt-tape {
+  position: absolute;
+  height: 22px;
+  background: linear-gradient(100deg, #dbc79ecd, #e5d3aebe 55%, #d6c097bd);
+  box-shadow: 0 1px 3px #00000030;
+  transform: rotate(-4deg);
+  pointer-events: none;
+}
+
+/* ── sticker：手写标签贴纸 ───────────────────────────────────────────── */
+
+.sticker {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 8px;
+  background: var(--bt-amber); color: #4a3a05; /* contract-exempt: sticker 琥珀底的深棕字，butler 同款 */
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  font-size: 11.5px; font-weight: 700;
+  transform: rotate(-2deg);
+}
+
+/* ── btn：手绘按钮件 ─────────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 6px 14px;
+  background: var(--bt-card);
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  font-size: 13px; font-weight: 600;
+  transition: transform 90ms ease, box-shadow 90ms ease;
+}
+
+.btn:hover:not(:disabled) { transform: translate(-1px, -1px); box-shadow: 2px 3px 0 #00000014; }
+.btn:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: none; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn--primary { background: var(--bt-coral); color: #fff; }
+.btn--amber { background: var(--bt-amber); color: #4a3a05; }
+.btn--ghost { border-color: transparent; background: transparent; font-weight: 500; color: var(--bt-ink-soft); }
+.btn--ghost:hover:not(:disabled) { background: #00000008; box-shadow: none; transform: none; }
+.btn--tiny { padding: 3px 10px; font-size: 12px; }
+/* 马克笔涂的橙色块，深色底边压出厚度（butler 左栏顶那颗大手绘按钮的基元化）。 */
+.btn--chunky {
+  padding: 8px 14px;
+  border-width: 2px;
+  border-radius: 12px 10px 13px 9px / 10px 13px 9px 12px;
+  background: #f59a3c; color: #fff; /* contract-exempt: 马克笔橙块基元色，butler .btn--chunky 同款 */
+  font-family: var(--bt-hand); font-size: 16px; font-weight: 700; letter-spacing: 2px;
+  box-shadow: 0 3px 0 #b5651d, 2px 4px 0 #00000020; /* contract-exempt: 深橙底边压厚度，同款 */
+}
+.btn--chunky:active:not(:disabled) { box-shadow: 0 1px 0 #b5651d; } /* contract-exempt: 同上 */
+
+/* ── empty / error-line：空态与错误行 ────────────────────────────────── */
+
+.empty { padding: 18px 14px; text-align: center; color: var(--bt-ink-faint); font-size: 13px; line-height: 1.9; }
+
+.error-line {
+  margin: 0; padding: 8px 12px;
+  background: var(--bt-error-bg);
+  border: 1.5px dashed var(--bt-error);
+  border-radius: var(--bt-wobble-sm);
+  color: #a33535; font-size: 13px; /* contract-exempt: 错误正文的砖红字，butler .error-line 同款 */
+}
+/* 错误说明和重试按钮排在同一行（butler A 批 S03 条款）。 */
+.error-line--retry {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+
+/* ── section-title：荧光笔小节标题 ───────────────────────────────────── */
+
+.section-title {
+  margin: 0; font-family: var(--bt-hand); font-size: 23px; font-weight: 700; color: var(--bt-ink);
+  /* 荧光笔标记：小节标题下半截一道粉红，「认真圈过重点」的样子。 */
+  background: linear-gradient(transparent 58%, #f7c9c2b3 58%); /* contract-exempt: 粉色荧光笔基元，butler .section-title 同款 */
+  padding: 0 3px; align-self: flex-start;
+}
+
+/* ── bt-modal：弹层直角墨框（butler [data-slot="dialog-content"] 的基元化）──
+ * border-image 与 border-radius 不共存（CSS 特性），弹层取直角墨框形态；
+ * 批 1/2 组件化弹层时挂这些类（或映射到组件的 data-slot）。 */
+.bt-modal {
+  background: var(--bt-card);
+  border: 2px solid transparent;
+  border-image: var(--bt-ink-frame) 6 / 4px round;
+  border-radius: 0;
+  box-shadow: 2px 3px 0 #00000018, 0 6px 16px #00000012;
+  outline: none;
+  transition: opacity 90ms ease, transform 90ms ease;
+}
+.bt-modal__title { font-family: var(--bt-hand); font-size: 24px; font-weight: 400; color: var(--bt-ink); }
+.bt-modal__footer {
+  border-top: 1px dashed var(--bt-line);
+  background: var(--bt-paper);
+}
+/* 遮罩：墨色纸罩，不要毛玻璃（手账是纸面不是玻璃）。 */
+.bt-modal-backdrop { background: #2f2b2638; backdrop-filter: none; } /* contract-exempt: 墨色纸罩，butler dialog-overlay 同款 */
+
+/* ── visually-hidden：读屏可听、视觉隐藏（announce 的 #sr-status 消费面）─── */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%);
+  white-space: nowrap; border: 0;
+}

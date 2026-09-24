@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { existsSync } from 'node:fs'
+import { join, relative, isAbsolute, extname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage,ServerResponse } from 'node:http'
@@ -542,23 +544,48 @@ export async function mount(mountContext:AgentMountContext):Promise<{
   const translations=new ReasoningTranslations({ctx,pluginId:'blog',storage,access,selectModel:signal=>selectBlogModel(ctx,settings.models,false,signal),readOriginal:async(actor,target)=>reasoningOriginal(await chat.events(actor,target.conversationId),target.sourceId)})
   const manifest=JSON.parse(await readFile(blogResource('package.json'),'utf8'))
   ctx.effect(()=>registerPlugin(ctx,{id:'blog',packageName:manifest.name,version:manifest.version,displayName:'博客文章助手',description:manifest.description,entryPath:config.routePrefix,permissions:['blog:access'],category:mountContext.memberCategory,tools}))
-  for(const [suffix,file,mime] of [['','web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],['/style.css','web/style.css','text/css'],['/writing.css','web/writing.css','text/css'],['/chat-base.css','web/chat-base.css','text/css'],['/chat-theme.css','web/chat-theme.css','text/css'],...['chevron-down','copy','check','like','dislike','branch','database','clock','think','api','send','user','chat','stop'].map(name=>[`/media/icon-${name}.svg`,`web/media/icon-${name}.svg`,'image/svg+xml']),['/icons.svg','web/icons.svg','image/svg+xml']] as const){
+  // 前端双轨开关（群组二期批 0，比照 butler web.ts 的 existsSync 模式）：dist/web/app.css
+  // 只由 React 构建链（tsdown.web-react.config.ts + tailwindcss）产出，旧链
+  // （tsdown.web.config.ts）只产 app.js——两条链都以 dist/web 为清空再产出的目录，
+  // 构建哪个前端，这里就挂哪条链的页面骨架与条目。切一次构建即切前端，
+  // 这里不需要自己的开关配置。
+  const reactSkeleton = existsSync(fileURLToPath(blogResource('dist/web/app.css')))
+  for(const [suffix,file,mime] of [['',reactSkeleton?'web-react/index.html':'web/index.html','text/html'],['/app.js','dist/web/app.js','text/javascript'],...(reactSkeleton?[['/app.css','dist/web/app.css','text/css']]:[]),['/style.css','web/style.css','text/css'],['/writing.css','web/writing.css','text/css'],['/chat-base.css','web/chat-base.css','text/css'],['/chat-theme.css','web/chat-theme.css','text/css'],...['chevron-down','copy','check','like','dislike','branch','database','clock','think','api','send','user','chat','stop'].map(name=>[`/media/icon-${name}.svg`,`web/media/icon-${name}.svg`,'image/svg+xml']),['/icons.svg','web/icons.svg','image/svg+xml']] as const){
     // `file` 已是相对子包根的路径（web/... 或 dist/web/...），直接相对 agentRoot 解析。
     /**
      * ⚠️ **缺文件要报"缺构建产物"，不能让它以裸 `ENOENT` 冒出去。**
      *
      * `web/` 下的静态资源是**随包提交**的，而 `dist/web/*` 是**构建产物**（`dist/` 是 gitignored，
-     * 由 blog 的 `tsdown --config tsdown.web.config.ts` 生成）。少了它，`mount()` 会在
-     * **跑任何回合逻辑之前**就抛 `ENOENT: … agents/blog/dist/web/app.js` ——
-     * 而这条错误在现场看起来**像业务失败**（实测过：群组挂载用例报"blog 装载失败：ENOENT"，
+     * 由 blog 的三段 build 生成：tsdown 后端、tsdown.web-react（app.js）、tailwindcss（app.css））。
+     * 少了它，`mount()` 会在**跑任何回合逻辑之前**就抛 `ENOENT: … agents/blog/dist/web/app.js`
+     * ——而这条错误在现场看起来**像业务失败**（实测过：群组挂载用例报"blog 装载失败：ENOENT"，
      * 排查方向被带偏；生产上同理，容器里忘了构建就是一条看不懂的装载失败）。
      * ⇒ 在这里把它翻成一句**指明该做什么**的话。**不吞掉原因**（`cause` 原样保留）。
      */
     const asset = await readFile(blogResource(file),'utf8').catch((cause:unknown)=>{
-      throw new Error(`博客页面资源缺失：${file}（web/ 是随包提交的静态资源，dist/web/* 需要先构建——跑 \`pnpm --filter @dsh-agents-group/blog build\`）`,{cause})
+      throw new Error(`博客页面资源缺失：${file}（web/ 是随包提交的静态资源；dist/web/app.js 与 dist/web/app.css 由 React 构建链产出——跑 \`pnpm --filter @dsh-agents-group/blog build\`）`,{cause})
     })
     const content=asset.replaceAll('__BASE__',config.routePrefix)
     ctx.effect(()=>http.register({kind:'exact',path:config.routePrefix+suffix,surface:suffix?'asset':'page',handler(req,res){if(req.method!=='GET')throw new AccessError(405,'只支持 GET');res.writeHead(200,{'content-type':`${mime}; charset=utf-8`,'cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; img-src 'self' https: data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'"});res.end(content)}}))
+  }
+  // 字体资产轨（群组二期批 0，方案 §3.4）：app.css 里 @font-face 的 url 是产物相对
+  // 形态（media/fonts/…，相对 app.css 的 URL 目录解析成 /blog/media/fonts/…），
+  // 字体分片（LXGW WenKai / Ma Shan Zheng 的 unicode-range woff2）的唯一源在
+  // web-common/media/fonts/——它随群组包的 agents/ 目录进归档（与成员源码同层），
+  // 这里按 prefix 挂给页面；逐文件列资源表对 189 个
+  // 分片不可维护。缺目录（如独立检出）按 404 兜底，不让字体路由炸启动。
+  {
+    const fontRoot = fileURLToPath(agentResource(import.meta.url, 'blog', '../web-common/media/fonts'))
+    ctx.effect(()=>http.register({kind:'prefix',path:config.routePrefix+'/media/fonts',surface:'asset',handler:async(req,res)=>{
+      if(req.method!=='GET')throw new AccessError(405,'只支持 GET')
+      const suffix=decodeURIComponent(new URL(req.url!,'http://localhost').pathname.slice((config.routePrefix+'/media/fonts').length)).replace(/^\/+/,'')
+      if(suffix==='')throw new AccessError(404,'资源不存在')
+      const file=join(fontRoot,suffix)
+      const local=relative(fontRoot,file)
+      if(local.startsWith('..')||isAbsolute(local))throw new AccessError(404,'资源不存在')
+      const bytes=await readFile(file).catch(()=>{throw new AccessError(404,'资源不存在')})
+      res.writeHead(200,{'content-type':extname(file).toLowerCase()==='.css'?'text/css; charset=utf-8':'font/woff2','cache-control':'no-cache','x-content-type-options':'nosniff'});res.end(bytes)
+    }}))
   }
   // 存活与就绪探针由群组统一提供（/agents/health、/agents/ready 与 /agents/blog/ready），
   // 这里不再注册：容器级探针是群组的职责，重复一份还会因前缀来源不同而冲突。

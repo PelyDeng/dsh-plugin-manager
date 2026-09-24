@@ -1,0 +1,43 @@
+/*
+ * bt-overrides：Tailwind v4 preflight 冲突修正层（批 0 清单，方案 §3.2）。
+ *
+ * preflight 的全局样式与手账设计决定冲突的点，在这里显式压回；每条都对应旧前端
+ * style.css 的一个明确设计决定，不是装饰。本层与 textures.css 的分工：这里只放
+ * 「全局层」修正（html/通配/焦点/动效偏好/占位符），材质基元类在 textures.css。
+ * 参照 butler web-react/src/styles/app.css 的既有处理照单全收，antialiased 是
+ * 最高优先级失真源——Windows 灰度抗锯齿把细笔画手写体渲淡发虚。
+ */
+
+/* ① antialiased：不开。Windows 上灰度抗锯齿把细笔画手写体渲淡发虚，
+   交给系统 ClearType 更锐（style.css:75 的设计决定）。
+   preflight 若注入 font-smoothing，在此显式回到 auto。 */
+html {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
+/* ② 纸感滚动条：细圆条 + 纸色轨道，别让一根系统灰条戳破手帐画面。 */
+* { scrollbar-width: thin; scrollbar-color: #c9b998 transparent; } /* contract-exempt: 纸感滚动条的轨道色，butler app.css 同款基元色 */
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #c9b998; border-radius: 999px; } /* contract-exempt: 同上，纸色滚动条基元 */
+*::-webkit-scrollbar-thumb:hover { background: #b3a17e; } /* contract-exempt: 悬停加深一档，同一基元 */
+
+/* ③ 焦点环用墨系虚线（替代 preflight/ring 的实线焦点样式）：批注层（红）
+   与状态色不参与「这是键盘在这」的表达。 */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible { outline: 2px dashed var(--bt-ink-soft); outline-offset: 2px; }
+
+/* ④ 减少动态效果：全局只保留底色与描边的变化（butler app.css 的通用条款；
+   业务类专属的动效关停由各成员层自理）。 */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
+
+/* ⑤ 占位符：弱墨色 + 手写体（butler 各输入件的 ::placeholder 统一口径，
+   这里全局兜底；成员层可按件覆写）。 */
+input::placeholder,
+textarea::placeholder { color: var(--bt-ink-faint); font-family: var(--bt-hand); }

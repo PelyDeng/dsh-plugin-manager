@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>博客助手</title>
+<link rel="stylesheet" href="__BASE__/app.css">
+</head>
+<!-- 配置通道=body data-base 属性（方案 §4.4 批 0 定型）：本页 CSP 为 script-src 'self'，
+     不允许 head inline 注入；React 侧从 data-base 读前缀，不引入任何 inline script。 -->
+<body data-base="__BASE__">
+<div id="root"></div>
+<script type="module" src="__BASE__/app.js"></script>
+</body>
+</html>

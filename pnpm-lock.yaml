@@ -327,15 +327,27 @@ importers:
       '@dsh-agents-group/common':
         specifier: workspace:*
         version: link:../../packages/common
+      '@dsh-agents-group/web-common':
+        specifier: workspace:*
+        version: link:../web-common
       '@dsh-plugin-manager/plugin-kit':
         specifier: workspace:*
         version: link:../../../../../packages/plugin-kit
+      '@tailwindcss/cli':
+        specifier: 4.3.3
+        version: 4.3.3
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.1
       '@types/pg':
         specifier: ^8.15.0
         version: 8.23.1
+      '@types/react':
+        specifier: 19.3.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: 19.3.0
+        version: 19.3.0(@types/react@19.3.0)
       dompurify:
         specifier: 3.4.14
         version: 3.4.14
@@ -345,6 +357,15 @@ importers:
       pg:
         specifier: ^8.16.0
         version: 8.23.0
+      react:
+        specifier: 19.3.0
+        version: 19.3.0
+      react-dom:
+        specifier: 19.3.0
+        version: 19.3.0(react@19.3.0)
+      tailwindcss:
+        specifier: 4.3.3
+        version: 4.3.3
       tsdown:
         specifier: ^0.22.2
         version: 0.22.14(@volar/typescript@2.4.28(typescript@6.0.3))(typescript@6.0.3)(vue-tsc@3.3.11(typescript@6.0.3))
@@ -403,18 +424,39 @@ importers:
       '@dsh-agents-group/common':
         specifier: workspace:*
         version: link:../../packages/common
+      '@dsh-agents-group/web-common':
+        specifier: workspace:*
+        version: link:../web-common
       '@dsh-plugin-manager/plugin-kit':
         specifier: workspace:*
         version: link:../../../../../packages/plugin-kit
       '@hy-media/video-player':
         specifier: file:vendor/hy-media-video-player-0.0.37.tgz
         version: file:plugins/external/dsh-agents-group/agents/closedoff/vendor/hy-media-video-player-0.0.37.tgz
+      '@tailwindcss/cli':
+        specifier: 4.3.3
+        version: 4.3.3
       '@types/node':
         specifier: ^22.20.0
         version: 22.20.1
+      '@types/react':
+        specifier: 19.3.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: 19.3.0
+        version: 19.3.0(@types/react@19.3.0)
       cesium:
         specifier: 1.142.0
         version: 1.142.0
+      react:
+        specifier: 19.3.0
+        version: 19.3.0
+      react-dom:
+        specifier: 19.3.0
+        version: 19.3.0(react@19.3.0)
+      tailwindcss:
+        specifier: 4.3.3
+        version: 4.3.3
       tsdown:
         specifier: ^0.22.2
         version: 0.22.14(@volar/typescript@2.4.28(typescript@6.0.3))(typescript@6.0.3)(vue-tsc@3.3.11(typescript@6.0.3))
@@ -494,6 +536,33 @@ importers:
       tsdown:
         specifier: ^0.22.2
         version: 0.22.14(@volar/typescript@2.4.28(typescript@6.0.3))(typescript@6.0.3)(vue-tsc@3.3.11(typescript@6.0.3))
+      typescript:
+        specifier: ^6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.11(@types/node@22.20.1)(happy-dom@20.14.5)(vite@8.3.0(@types/node@22.20.1)(jiti@2.7.0)(yaml@2.9.1))
+
+  plugins/external/dsh-agents-group/agents/web-common:
+    devDependencies:
+      '@types/react':
+        specifier: 19.3.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: 19.3.0
+        version: 19.3.0(@types/react@19.3.0)
+      happy-dom:
+        specifier: ^20.14.5
+        version: 20.14.5
+      markdown-it:
+        specifier: 15.0.1
+        version: 15.0.1
+      react:
+        specifier: 19.3.0
+        version: 19.3.0
+      react-dom:
+        specifier: 19.3.0
+        version: 19.3.0(react@19.3.0)
       typescript:
         specifier: ^6.0.3
         version: 6.0.3

@@ -1,6 +1,7 @@
 /** Dedicated HTTP and SSE surface for business users. */
 
 import { readFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, isAbsolute, relative, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -238,7 +239,13 @@ export async function installWeb(
   access: Access,
   http: ReturnType<typeof createPluginHttp>,
 ): Promise<void> {
-  const sourceHtml = await readFile(agentResource(import.meta.url, 'closedoff', 'web/index.html'), 'utf8')
+  // 前端双轨开关（群组二期批 0，比照 butler web.ts 的 existsSync 模式）：dist/web/app.js
+  // 只由 React 构建链（tsdown.web-react.config.ts）产出、再由 copy-web-assets.mjs 落位
+  // web/assets/，旧链完全不产 dist/web——构建哪个前端，这里就读哪副页面骨架，
+  // 切一次构建即切前端。`/closedoff-qa` 前缀替换与 `__WEB_CONFIG__` 注入形态对
+  // 两副骨架一视同仁（见下）。
+  const reactSkeleton = existsSync(agentResourcePath(import.meta.url, 'closedoff', 'dist/web/app.js'))
+  const sourceHtml = await readFile(agentResource(import.meta.url, 'closedoff', reactSkeleton ? 'web-react/index.html' : 'web/index.html'), 'utf8')
   const webConfig = JSON.stringify({
     routePrefix: config.routePrefix,
     map: {

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>封闭化管理智能助手</title>
+<link rel="stylesheet" href="/closedoff-qa/assets/app.css">
+</head>
+<body>
+<div id="root"></div>
+<!-- 配置注入形态与旧骨架一致（本页无 CSP 约束，inline 形态照旧保留）；
+     /closedoff-qa 前缀由 src/web.ts 按部署配置统一替换。 -->
+<script>window.CLOSEDOFF_CONFIG = __WEB_CONFIG__;</script>
+<script type="module" src="/closedoff-qa/assets/app.js"></script>
+</body>
+</html>
