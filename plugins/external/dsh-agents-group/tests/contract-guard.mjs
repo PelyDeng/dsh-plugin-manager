@@ -37,6 +37,15 @@ const FILE_WHITELIST = [
   'agents/web-common/styles/tokens.css',
   'agents/web-common/styles/textures.css',
   'agents/huiyu/src/page.ts',
+  // 批 1b closedoff 暗色地图域（方案 §3.2(b) 待拍板项 6）：Cesium 底图容器
+  // (#101b2d)、视频预览深底 (#0d1d32)、加载遮罩 (rgba(9,19,34,.78)) 与深底上的
+  // 浅色文字——与手账纸面是两个世界，硬映射到 --bt-* 暖色槽必失真。文件内亮色
+  // 部分（弹窗外框/列表/信息行）仍消费 --bt-* 槽；逐色值理由见文件内注释。
+  'agents/closedoff/web-react/src/styles/enclaves.css',
+  // 同口径：Cesium 飞地引擎文件——色值全部是三维场景内的标绘材质（轨迹线/
+  // 起终点/围栏四色/底图色，画进 WebGL 画布），与页面 DOM 观感换肤无关；
+  // 设计文档 §3.3「Cesium 三方不扫」的延伸，色值随旧 trajectory.js 原样保留。
+  'agents/closedoff/web-react/src/enclaves/cesium-enclave.ts',
 ]
 
 /** 三类色值形态 + data-URI 的 %23。hex 要求词边界，避免命中 URL fragment 一类。 */

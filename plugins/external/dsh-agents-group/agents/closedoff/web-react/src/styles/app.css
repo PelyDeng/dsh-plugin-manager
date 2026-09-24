@@ -21,6 +21,9 @@
 @import "../../../../web-common/styles/textures.css";
 @import "../../../../web-common/styles/fonts.css";
 
+/* 批 1b 重交互面段（暗色地图域；文件级契约豁免见 enclaves.css 头注）。 */
+@import "./enclaves.css";
+
 @source "../../";
 @source "../../../../web-common/";
 
@@ -632,15 +635,7 @@ body {
   margin: 4px 0;
 }
 
-.co-media-stub {
-  padding: 5px 11px;
-  border: 1px solid var(--bt-line);
-  border-radius: 8px;
-  color: var(--bt-ink-soft);
-  font: inherit;
-  font-size: 12px;
-  cursor: not-allowed;
-}
+
 
 /* ── 分析正文与终态 ─────────────────────────────────────────────────── */
 
@@ -782,32 +777,6 @@ body {
   font-size: 12px;
   white-space: nowrap;
 }
-
-/* ── 地图占位（批 1b 飞地锚点）──────────────────────────────────────── */
-
-.co-map-placeholder {
-  flex: none;
-  margin: 10px 20px;
-  padding: 14px 18px;
-  border: 1px dashed var(--bt-line);
-  border-radius: 10px;
-  color: var(--bt-ink-faint);
-  background-color: var(--bt-card);
-}
-
-.co-map-placeholder-title {
-  margin: 0 0 4px;
-  color: var(--bt-ink-soft);
-  font-family: var(--bt-hand);
-  font-size: 15px;
-}
-
-.co-map-placeholder-copy {
-  margin: 0;
-  font-size: 12px;
-}
-
-.co-enclave-hidden { display: none; }
 
 /* ── 输入区 ─────────────────────────────────────────────────────────── */
 
@@ -1268,7 +1237,6 @@ body {
 
 @media (max-width: 900px) {
   .co-side { display: none; }
-  .co-map-placeholder { margin: 10px 8px; }
 }
 
 @media (max-width: 600px) {

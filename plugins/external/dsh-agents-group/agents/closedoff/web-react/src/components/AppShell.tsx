@@ -1,9 +1,10 @@
 /**
  * 工作台骨架（旧 web/index.html 的 header/main 结构）：顶栏、对话区、
- * 快捷提问侧栏、历史面板、批 1b 飞地占位宿主。
+ * 快捷提问侧栏、历史面板、批 1b 重交互飞地（三维弹窗/摄像头弹窗）。
  *
  * 全屏工作台布局（overflow hidden）与 prefers-reduced-motion 降级在成员 CSS
- * 里保留（方案 §3.2：不可破坏项）。
+ * 里保留（方案 §3.2：不可破坏项）；内嵌轨迹快照飞地跟随消息流渲染
+ * （TrackSnapshot），重交互弹窗按 enclave store 参数条件挂载。
  */
 import { useEffect, useState } from 'react'
 import { announce } from '@dsh-agents-group/web-common'
@@ -11,7 +12,8 @@ import { useSessionStore } from '../stores/session.ts'
 import { useBoardStore } from '../stores/board.ts'
 import { useChatStream } from '../hooks/use-chat-stream.ts'
 import type { ReactElement } from 'react'
-import { CameraModalPlaceholder, MapPlaceholder, Modal3dPlaceholder } from './EnclavePlaceholders.tsx'
+import { CameraModalEnclave } from '../enclaves/CameraModal.tsx'
+import { Modal3dEnclave } from '../enclaves/Modal3d.tsx'
 import { Composer } from './Composer.tsx'
 import { ConversationPanel } from './ConversationPanel.tsx'
 import { MessageList } from './MessageList.tsx'
@@ -98,7 +100,6 @@ export function AppShell(): ReactElement {
             onBranch={conversationId => { void openConversationById(conversationId) }}
             onNotice={notify}
           />
-          <MapPlaceholder />
           <Composer />
         </div>
 
@@ -128,9 +129,9 @@ export function AppShell(): ReactElement {
 
       {notice !== '' && <span className="co-notice" role="status">{notice}</span>}
 
-      {/* 批 1b 受控飞地宿主：React 只管挂载点，容器渲染权归 Cesium/播放器。 */}
-      <Modal3dPlaceholder />
-      <CameraModalPlaceholder />
+      {/* 批 1b 重交互飞地：三维弹窗与摄像头弹窗（打开=挂载，关闭=全链销毁）。 */}
+      <Modal3dEnclave />
+      <CameraModalEnclave />
 
       {/* announce() 的读屏播报区：容器常驻（live region 节点不卸载）。 */}
       <div id="sr-status" className="visually-hidden" role="status" aria-live="polite" />

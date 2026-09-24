@@ -41,11 +41,16 @@ export interface CardsPayload {
   }>
 }
 
-/** 轨迹点（批 1b Cesium 消费；批 1a 只入数据面）。 */
+/**
+ * 轨迹点（批 1b Cesium 消费）。形状对齐服务端 presentation-track.ts 的投影：
+ * { lon, lat, h, t? }；t 是采集时间（字符串或毫秒）。索引签名兜底长写法
+ * { longitude, latitude, height, pointTime }（trajectory-data 的别名收敛在这里汇合）。
+ */
 export interface TrackPoint {
   lon: number
   lat: number
-  time?: number
+  h?: number
+  t?: string
   [key: string]: unknown
 }
 
@@ -56,8 +61,16 @@ export interface TrackDeviceGroup {
   [key: string]: unknown
 }
 
-/** 电子围栏 payload（批 1b 渲染；批 1a 入数据面）。 */
+/** 电子围栏 payload（src/fences.ts FencesPayload 的页面投影；数据面透传，消费面用 asFencePayload 收窄）。 */
 export type FencePayload = unknown
+
+/** 单段围栏几何（src/fences.ts FenceGeometry 同形状）。 */
+export interface FenceGeometry {
+  name: string
+  kind: 'wall' | 'polygon'
+  positions: Array<[number, number, number]>
+  height: number
+}
 
 /** 车辆抓拍媒体项。 */
 export interface MediaItem {

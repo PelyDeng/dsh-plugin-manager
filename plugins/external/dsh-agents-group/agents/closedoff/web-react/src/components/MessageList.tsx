@@ -4,12 +4,25 @@
  * 跟底滚动沿用旧口径：用户在底部附近（≤24px）时新内容自动下滚，向上翻阅即停
  * （followBottom）。活动轮次是 turn store 的派生视图（与归档消息同构渲染）。
  */
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useBoardStore, useSessionStore, useTurnStore } from '../hooks/use-chat-stream.ts'
 import type { ReactElement } from 'react'
 import type { AssistantTurnView } from './AssistantTurn.tsx'
 import { AssistantTurn } from './AssistantTurn.tsx'
+import type { BoardTrack } from '../lib/restore.ts'
+import type { TrackDeviceGroup } from '../lib/types.ts'
 import { Icon } from '@dsh-agents-group/web-common'
+
+/** 流式中间态的轨迹/设备组合并（归档面 archive 同规则；id 域独立无碰撞）。 */
+function mergeTracksWithCameras(
+  tracks: Record<string, BoardTrack>,
+  cameras: Record<string, TrackDeviceGroup[]>,
+): Record<string, BoardTrack> {
+  return Object.fromEntries(Object.entries(tracks).map(([callId, track]) => {
+    const groups = cameras[callId]
+    return [callId, groups === undefined ? track : { ...track, groups }]
+  }))
+}
 
 function Welcome(): ReactElement {
   return (
@@ -50,6 +63,7 @@ export function MessageList({ onRated, onBranch, onNotice }: {
   const turnTracks = useTurnStore(state => state.tracks)
   const turnFences = useTurnStore(state => state.fences)
   const turnMedia = useTurnStore(state => state.media)
+  const turnCameras = useTurnStore(state => state.cameras)
   const turnHasStructured = useTurnStore(state => state.hasStructured)
   const turnFinishReason = useTurnStore(state => state.finishReason)
   const turnTerminalMessage = useTurnStore(state => state.terminalMessage)
@@ -65,6 +79,13 @@ export function MessageList({ onRated, onBranch, onNotice }: {
     if (followRef.current) scroller.scrollTop = scroller.scrollHeight
   })
 
+  // 流式期 cameras 单独成域（turn store）；快照消费面要它与轨迹合并（归档时
+  // archive 已合并，这里对齐流式中间态——旧 setCameras→redrawTrack 的重拍语义）。
+  const turnTracksWithCameras = useMemo(
+    () => mergeTracksWithCameras(turnTracks, turnCameras),
+    [turnTracks, turnCameras],
+  )
+
   const turnView: AssistantTurnView | null = turnActive
     ? {
       text: turnText,
@@ -73,7 +94,7 @@ export function MessageList({ onRated, onBranch, onNotice }: {
       thinkingDone: turnThinkingDone,
       tools: turnTools,
       cards: turnCards,
-      tracks: turnTracks,
+      tracks: turnTracksWithCameras,
       fences: turnFences,
       media: turnMedia,
       streaming: true,

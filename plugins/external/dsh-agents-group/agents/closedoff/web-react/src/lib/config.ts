@@ -29,3 +29,9 @@ export const APP_CONFIG: App = (() => {
 export function routePath(path: string): string {
   return APP_CONFIG.routePrefix + path
 }
+
+/** 地图配置的兜底读取（CLOSEDOFF_CONFIG.map 缺失时给最小合法值——单测/降级环境）。 */
+export function mapConfigOrFallback(): MapConfig {
+  return (globalThis as { CLOSEDOFF_CONFIG?: { map?: MapConfig } }).CLOSEDOFF_CONFIG?.map
+  ?? { terrainUrl: '', tilesetUrl: '', tilesetHeight: 0, trackDeviceRadiusMeters: 50 }
+}

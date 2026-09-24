@@ -1,0 +1,836 @@
+/*
+ * 批 1b 重交互面样式（轨迹快照/三维弹窗/摄像头弹窗/播放器/会话面板补齐段）。
+ *
+ * ⚠️ 本文件在 tests/contract-guard.mjs 的 FILE_WHITELIST 白名单内（文件级豁免）：
+ * Cesium 暗色底图域（#101b2d/#0d1d32/#07121f 与深底上的浅色文字）与手账纸面是
+ * 两个世界，硬映射到 --bt-* 暖色槽必失真（方案 §3.2(b) 待拍板项 6 的裁决口径）；
+ * 因此轨迹图/预览容器与弹窗骨架整体留在本文件按旧观感书写。亮色部分（弹窗外框、
+ * 列表、信息行）仍优先消费 --bt-* 槽，字面色只出现在与 Cesium 深底直接相接的域。
+ *
+ * 旧样式基准=web/app.css 的 trajectory/modal/camera 段（批 1b 迁移时的实测形态）。
+ */
+
+/* ── 轨迹快照（回答区静态三维截图 + 图例）───────────────────────────────── */
+
+.co-track-ref { display: block; padding: 10px; }
+
+.co-trajectory { margin: 4px 0 6px; }
+
+.co-trajectory-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 7px;
+  color: var(--bt-ink);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.co-trajectory-plate {
+  display: inline-block;
+  padding: 4px 10px;
+  border: 1px solid var(--bt-sky);
+  border-radius: 6px;
+  color: var(--bt-sky);
+  font-size: 17px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  overflow-wrap: anywhere;
+  background-color: var(--bt-paper);
+}
+
+.co-trajectory-time { color: var(--bt-ink-soft); font-weight: 400; }
+
+.co-track-actions { display: flex; gap: 8px; }
+
+/* 三维操作按钮（快照「全屏查看」与弹窗「截图并保存」共用，旧 track-3d-btn）。 */
+.co-map-3d-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--bt-line);
+  color: var(--bt-sky);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  background-color: var(--bt-paper);
+}
+
+.co-map-3d-btn:hover:not(:disabled) {
+  border-color: var(--bt-sky);
+  box-shadow: 0 4px 12px var(--bt-line);
+}
+
+.co-map-3d-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.co-map-3d-btn:focus-visible {
+  outline: 3px solid var(--bt-sky);
+  outline-offset: 1px;
+}
+
+.co-track-fig {
+  margin: 4px 0 6px;
+  overflow: hidden;
+  border: 1px solid var(--bt-line);
+  border-radius: 12px;
+  background-color: var(--bt-card);
+  box-shadow: 0 8px 24px var(--bt-line);
+}
+
+.co-track-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px;
+  height: 420px;
+  min-height: 0;
+}
+
+/* Cesium 飞地容器：深底是暗色地图域（白名单）；渲染权归引擎。 */
+.co-track-map {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: #101b2d; /* contract-exempt: Cesium 暗色底图域（方案 §3.2(b)） */
+}
+
+.co-track-snapshot {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.co-track-cap {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--bt-ink-soft);
+  padding: 8px 12px;
+  border-top: 1px solid var(--bt-line);
+  background-color: var(--bt-paper);
+}
+
+/* 地图状态条（引擎渲染，绝对定位盖在飞地容器上）。 */
+.co-map-status {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #dbeafe; /* contract-exempt: 深色底图上的浅色提示文字 */
+  font-size: 13px;
+  pointer-events: none;
+  background: rgba(9, 19, 34, 0.78); /* contract-exempt: 暗色地图加载遮罩 */
+}
+
+.co-map-status button { pointer-events: auto; }
+
+.co-map-status--error { color: #fecaca; } /* contract-exempt: 深底错误提示 */
+
+/* ── 图例（设备组/围栏列表，快照与三维弹窗共用）────────────────────────── */
+
+.co-track-legend {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--bt-line);
+  color: var(--bt-ink-soft);
+  background-color: var(--bt-paper);
+}
+
+.co-legend-head {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 13px;
+  border-bottom: 1px solid var(--bt-line);
+  background-color: var(--bt-paper);
+}
+
+.co-legend-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--bt-ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.co-legend-title small {
+  color: var(--bt-ink-soft);
+  font-size: 10.5px;
+  font-weight: 400;
+}
+
+.co-legend-total {
+  min-width: 26px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: var(--bt-sky);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  background-color: var(--bt-paper);
+}
+
+.co-legend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px;
+}
+
+.co-legend-empty {
+  padding: 24px 12px;
+  color: var(--bt-ink-soft);
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.co-lg-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 7px 8px;
+  color: var(--bt-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+}
+
+.co-lg-item:hover {
+  border-color: var(--bt-line);
+  color: var(--bt-sky);
+  background-color: var(--bt-card);
+}
+
+.co-lg-item:focus-visible {
+  outline: 3px solid var(--bt-sky);
+  outline-offset: 1px;
+}
+
+.co-lg-item--static { display: block; padding: 7px 8px; color: var(--bt-ink-soft); font-size: 12px; }
+
+.co-lg-no { color: var(--bt-ink-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.co-lg-name { overflow: hidden; font-size: 12.5px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.co-lg-count { color: var(--bt-ink-soft); font-size: 11px; white-space: nowrap; }
+
+/* ── 三维弹窗（modal3d）────────────────────────────────────────────────────── */
+
+.co-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(10, 20, 40, 0.62); /* contract-exempt: 弹窗遮罩（旧码同值） */
+  backdrop-filter: blur(5px);
+}
+
+.co-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(calc(100vw - 64px), 1420px);
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+  border: 2px solid var(--bt-stroke);
+  border-radius: 16px;
+  background-color: var(--bt-card);
+  box-shadow: 0 28px 80px var(--bt-line);
+}
+
+.co-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 52px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--bt-line);
+  color: var(--bt-ink);
+  font-weight: 650;
+}
+
+.co-modal-title { font-size: 14px; }
+
+.co-modal-close {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--bt-ink-soft);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  background: transparent;
+}
+
+.co-modal-close:hover {
+  color: var(--bt-error);
+  background-color: var(--bt-paper);
+}
+
+.co-modal-close:focus-visible {
+  outline: 3px solid var(--bt-sky);
+  outline-offset: 1px;
+}
+
+.co-modal-body { flex: 1; min-height: 0; overflow: auto; }
+
+.co-modal-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  height: min(74vh, 740px);
+  min-height: 0;
+}
+
+.co-modal-map {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: #101b2d; /* contract-exempt: Cesium 暗色底图域 */
+}
+
+.co-modal-legend { border-left: 1px solid var(--bt-line); }
+
+.co-modal-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 9px 18px 11px;
+  border-top: 1px solid var(--bt-line);
+  color: var(--bt-ink-soft);
+  font-size: 12px;
+  background-color: var(--bt-paper);
+}
+
+.co-modal-foot-copy { flex: 1; min-width: min(100%, 320px); }
+
+.co-modal-capture {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.co-capture-status {
+  min-height: 18px;
+  color: var(--bt-ink-soft);
+  font-size: 11.5px;
+}
+
+.co-capture-status--error { color: var(--bt-error); }
+
+/* ── 摄像头弹窗（含抓拍 capture-mode）────────────────────────────────────── */
+
+.co-camera-overlay {
+  z-index: 300;
+  background: rgba(7, 20, 42, 0.68); /* contract-exempt: 弹窗遮罩（旧码同值） */
+}
+
+.co-camera-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(calc(100vw - 64px), 1480px);
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+  border: 2px solid var(--bt-stroke);
+  border-radius: 16px;
+  background-color: var(--bt-card);
+  box-shadow: 0 28px 90px var(--bt-line);
+}
+
+.co-camera-body {
+  display: grid;
+  grid-template-columns: 292px minmax(0, 1fr);
+  height: min(78vh, 760px);
+  min-height: 560px;
+}
+
+.co-camera-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-right: 1px solid var(--bt-line);
+  background-color: var(--bt-paper);
+}
+
+.co-camera-stats {
+  display: flex;
+  gap: 14px;
+  padding: 14px 16px 10px;
+  color: var(--bt-ink-soft);
+  font-size: 12px;
+}
+
+.co-camera-stats strong { color: var(--bt-ink); font-size: 14px; }
+.co-camera-stats-online strong { color: var(--bt-ok); }
+
+.co-camera-search {
+  width: calc(100% - 28px);
+  margin: 0 14px 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--bt-line);
+  border-radius: 8px;
+  color: var(--bt-ink);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  background-color: var(--bt-card);
+}
+
+.co-camera-search:focus {
+  border-color: var(--bt-sky);
+  box-shadow: 0 0 0 3px var(--bt-line);
+}
+
+.co-camera-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 8px 12px;
+}
+
+.co-camera-list-empty {
+  padding: 28px 12px;
+  color: var(--bt-ink-soft);
+  font-size: 12px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+.co-camera-list-item {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 2px 0;
+  padding: 10px 11px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--bt-ink);
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+}
+
+.co-camera-list-item:hover {
+  border-color: var(--bt-line);
+  background-color: var(--bt-card);
+}
+
+.co-camera-list-item[aria-current="true"] {
+  border-color: var(--bt-sky);
+  color: var(--bt-sky);
+  background-color: var(--bt-paper);
+}
+
+.co-camera-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--bt-ink-faint);
+}
+
+.co-camera-status-dot--online { background-color: var(--bt-ok); }
+
+.co-camera-item-name {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.co-camera-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 16px 16px;
+}
+
+.co-camera-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 42px;
+}
+
+.co-camera-selected-name {
+  color: var(--bt-ink);
+  font-size: 18px;
+  font-weight: 750;
+}
+
+.co-camera-online {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--bt-ink-soft);
+  font-size: 12px;
+}
+
+.co-camera-online--ok { color: var(--bt-ok); }
+
+.co-camera-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 预览容器：深底（暗色视频域，白名单）。 */
+.co-camera-preview {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 330px;
+  overflow: hidden;
+  border: 1px solid var(--bt-line);
+  border-radius: 9px;
+  background: #0d1d32; /* contract-exempt: 暗色视频预览域 */
+}
+
+.co-camera-player-host {
+  width: 100%;
+  height: 100%;
+  min-height: 330px;
+}
+
+.co-camera-preview-state {
+  max-width: 440px;
+  padding: 24px;
+  text-align: center;
+}
+
+.co-camera-preview-title {
+  margin-bottom: 9px;
+  color: #ffffff; /* contract-exempt: 深色预览底上的标题 */
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.co-camera-preview-copy {
+  color: #aebfd6; /* contract-exempt: 深色预览底上的说明文字 */
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.co-camera-info {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-y: auto;
+  border: 1px solid var(--bt-line);
+  border-radius: 9px;
+  background-color: var(--bt-paper);
+}
+
+.co-camera-info-row {
+  padding: 9px 2px;
+  border-bottom: 1px solid var(--bt-line);
+}
+
+.co-camera-info-row:last-child { border-bottom: 0; }
+
+.co-camera-info dt {
+  margin-bottom: 4px;
+  color: var(--bt-ink-soft);
+  font-size: 11px;
+}
+
+.co-camera-info dd {
+  margin: 0;
+  color: var(--bt-ink);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.co-camera-info-ok { color: var(--bt-ok); font-weight: 650; }
+
+.co-camera-strip-title {
+  flex: none;
+  margin: 12px 0 8px;
+  color: var(--bt-ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.co-camera-strip {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  min-height: 86px;
+  padding-bottom: 3px;
+  overflow-x: auto;
+}
+
+.co-camera-thumb {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 164px;
+  flex: none;
+  min-height: 82px;
+  padding: 10px;
+  border: 1px solid var(--bt-line);
+  border-radius: 8px;
+  color: var(--bt-ink);
+  text-align: left;
+  cursor: pointer;
+  background-color: var(--bt-paper);
+}
+
+.co-camera-thumb:hover { border-color: var(--bt-sky); }
+
+.co-camera-thumb[aria-current="true"] {
+  border-color: var(--bt-sky);
+  box-shadow: inset 0 0 0 1px var(--bt-sky);
+  background-color: var(--bt-paper);
+}
+
+.co-camera-thumb-name {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.co-camera-thumb-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--bt-ink-soft);
+  font-size: 10.5px;
+}
+
+/* 抓拍形态：只留播放器与抓拍信息（旧 camera-overlay.capture-mode）。 */
+.co-camera-overlay--capture .co-camera-body {
+  display: block;
+  height: min(74vh, 680px);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.co-camera-overlay--capture .co-camera-main { min-height: 100%; }
+
+.co-camera-overlay--capture .co-camera-detail { grid-template-columns: minmax(0, 1fr) 250px; }
+
+/* ── 媒体引用行 ─────────────────────────────────────────────────────────── */
+
+.co-media-ref-title { margin: 0; }
+
+.co-media-play {
+  padding: 5px 11px;
+  border: 1px solid var(--bt-line);
+  border-radius: 8px;
+  color: var(--bt-sky);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  background-color: var(--bt-card);
+}
+
+.co-media-play:hover:not(:disabled) {
+  border-color: var(--bt-sky);
+  background-color: var(--bt-paper);
+}
+
+.co-media-play:disabled {
+  color: var(--bt-ink-faint);
+  cursor: not-allowed;
+}
+
+/* ── 会话面板补齐段（多选/菜单/导出）────────────────────────────────────── */
+
+.co-history-batch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 16px 10px;
+  padding: 7px 9px;
+  border: 1px solid var(--bt-line);
+  border-radius: 8px;
+  color: var(--bt-ink-soft);
+  font-size: 12px;
+  background-color: var(--bt-paper);
+}
+
+.co-history-batch button {
+  padding: 4px 10px;
+  border: 1px solid var(--bt-line);
+  border-radius: 7px;
+  color: var(--bt-ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  background-color: var(--bt-card);
+}
+
+.co-history-batch button:hover:not(:disabled) { border-color: var(--bt-sky); color: var(--bt-sky); }
+.co-history-batch button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.co-history-batch--danger:hover:not(:disabled) {
+  border-color: var(--bt-error);
+  color: var(--bt-error);
+}
+
+.co-history-check { flex: none; }
+
+.co-history-row { position: relative; }
+
+.co-history-menu {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 2px);
+  right: 2px;
+  display: flex;
+  flex-direction: column;
+  min-width: 132px;
+  padding: 4px;
+  border: 2px solid var(--bt-stroke);
+  border-radius: 10px;
+  background-color: var(--bt-card);
+  box-shadow: 3px 4px 0 var(--bt-line);
+}
+
+.co-history-menu-item {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--bt-ink);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+}
+
+.co-history-menu-item:hover:not(:disabled) { background-color: var(--bt-paper); }
+
+.co-history-menu-item--danger { color: var(--bt-error); }
+
+.co-history-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.co-history-dialog-title { margin: 0 0 8px; font-size: 15px; }
+
+.co-history-dialog-copy {
+  margin: 0 0 8px;
+  color: var(--bt-ink-soft);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.co-history-action--danger {
+  color: var(--bt-card);
+  border-color: var(--bt-error);
+  background-color: var(--bt-error);
+}
+
+.co-history-export-preview {
+  width: 100%;
+  min-height: 180px;
+  margin-bottom: 8px;
+  padding: 9px 11px;
+  border: 1px solid var(--bt-line);
+  border-radius: 8px;
+  color: var(--bt-ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.6;
+  resize: vertical;
+  background-color: var(--bt-card);
+}
+
+.co-history-export-status {
+  min-height: 16px;
+  margin: 0;
+  color: var(--bt-ink-soft);
+  font-size: 11.5px;
+}
+
+/* ── 响应式（旧码三档布局的对应收缩）────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .co-track-stage,
+  .co-modal-stage { grid-template-columns: 1fr; height: auto; }
+
+  .co-track-map { height: 340px; }
+
+  .co-modal-map { height: 52vh; }
+
+  .co-track-legend {
+    height: 190px;
+    max-height: 190px;
+    border-top: 1px solid var(--bt-line);
+    border-left: 0;
+  }
+
+  .co-modal-overlay,
+  .co-camera-overlay { padding: 12px; }
+
+  .co-modal,
+  .co-camera-modal {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+  }
+
+  .co-camera-body {
+    grid-template-columns: 220px minmax(0, 1fr);
+    min-height: 500px;
+  }
+
+  .co-camera-detail { grid-template-columns: 1fr; }
+
+  .co-camera-info { max-height: 190px; }
+}
+
+@media (max-width: 600px) {
+  .co-track-map { height: 260px; }
+
+  .co-track-legend {
+    height: 140px;
+    max-height: 140px;
+  }
+
+  .co-modal,
+  .co-camera-modal {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+  }
+}

@@ -3,21 +3,24 @@
  *
  * 两个消费方都把数据归一成 AssistantTurnView 再进来：board 里的已归档消息直接
  * 展开；活动轮次从 turn store 派生（streaming=true，带光标与进行中态）。
- * 轨迹/围栏/媒体在批 1a 只渲染「已保留」引用行——真实可视化是批 1b 的 Cesium
- * 飞地，锚点 id（co-track-<callId> / co-media-<callId>）已在占位上留好。
+ * 批 1b：轨迹/围栏引用行升级为 TrackSnapshot（Cesium 受控飞地，静态三维截图 +
+ * 图例），媒体引用行的「查看抓拍视频」接摄像头弹窗（captureMode）。每轨迹
+ * 挂载点 #co-track-<callId>、媒体 #co-media-<callId> 在 TrackSnapshot/引用块上保留。
  */
 import { RichText } from '@dsh-agents-group/web-common'
 import { assistantDisplayText, finishReasonMessage } from '../lib/format.ts'
 import { toolLabel } from '../lib/labels.ts'
+import { asFencePayload } from '../lib/trajectory-data.ts'
 import type { BoardTool, BoardTrack } from '../lib/restore.ts'
-import type { ReactElement } from 'react'
-import type { CardsPayload, FencePayload, MediaItem, TurnMeta } from '../lib/types.ts'
+import type { CardsPayload, FenceGeometry, MediaItem, TurnMeta } from '../lib/types.ts'
 import { progressSummary } from '../stores/turn.ts'
 import type { Rating } from './AnswerActions.tsx'
 import { AnswerActions } from './AnswerActions.tsx'
 import { DshIcon } from './DshIcon.tsx'
-import { MediaPlayStub } from './EnclavePlaceholders.tsx'
+import { MediaPlayButton } from './EnclavePlaceholders.tsx'
 import { ResultSections } from './ResultSections.tsx'
+import { TrackSnapshot } from '../enclaves/TrackSnapshot.tsx'
+import type { ReactElement } from 'react'
 
 export interface AssistantTurnView {
   text: string
@@ -27,7 +30,7 @@ export interface AssistantTurnView {
   tools: BoardTool[]
   cards: Record<string, CardsPayload>
   tracks: Record<string, BoardTrack>
-  fences: Record<string, FencePayload>
+  fences: Record<string, unknown>
   media: Record<string, MediaItem[]>
   streaming: boolean
   finishReason?: string | undefined
@@ -74,7 +77,13 @@ export function AssistantTurn({ view }: { view: AssistantTurnView }): ReactEleme
 
   const trackEntries = Object.entries(view.tracks)
   const mediaEntries = Object.entries(view.media).filter(([, items]) => items.length > 0)
-  const fenceCount = Object.keys(view.fences).length
+  // 围栏：payload 形状守卫（geometries 非空才有快照，旧 renderFences 口径）。
+  const fenceEntries = Object.entries(view.fences)
+    .map(([callId, payload]) => ({ callId, payload: asFencePayload(payload) }))
+    .filter((entry): entry is { callId: string; payload: { geometries: FenceGeometry[]; note: string } } => entry.payload !== undefined)
+  const fenceNote = Object.values(view.fences)
+    .map(payload => (typeof payload === 'object' && payload !== null ? (payload as { note?: unknown }).note : undefined))
+    .find((note): note is string => typeof note === 'string' && note !== '')
 
   return (
     <div className="co-msg co-msg--assistant">
@@ -115,25 +124,25 @@ export function AssistantTurn({ view }: { view: AssistantTurnView }): ReactEleme
 
         <ResultSections cards={view.cards} />
 
-        {(trackEntries.length > 0 || fenceCount > 0 || mediaEntries.length > 0) && (
+        {(trackEntries.length > 0 || fenceEntries.length > 0 || mediaEntries.length > 0) && (
           <div className="co-enclave-refs">
-            {trackEntries.map(([callId, track]) => (
-              <p className="co-enclave-ref" id={`co-track-${callId}`} key={callId} data-enclave="track">
-                车辆轨迹{track.vehicleNo === undefined || track.vehicleNo === '' ? '' : ` · ${track.vehicleNo}`} · {track.points.length} 个点
-                （轨迹视图批 1b 接入）
-              </p>
+            {fenceEntries.map(({ callId, payload }) => (
+              <TrackSnapshot key={`fences-${callId}`} content={{ callId, fences: payload.geometries }} />
             ))}
-            {fenceCount > 0 && (
-              <p className="co-enclave-ref" data-enclave="fences">电子围栏 · {fenceCount} 组（围栏视图批 1b 接入）</p>
+            {fenceNote !== undefined && fenceEntries.length === 0 && (
+              <p className="co-enclave-ref" data-enclave="fences" role="status">{fenceNote}</p>
             )}
+            {trackEntries.map(([callId, track]) => (
+              <TrackSnapshot key={`track-${callId}`} content={{ callId, track }} />
+            ))}
             {mediaEntries.map(([callId, items]) => (
               <div className="co-enclave-ref" id={`co-media-${callId}`} key={callId} data-enclave="media">
-                <p>车辆抓拍视频 · 共 {items.length} 段</p>
+                <p className="co-media-ref-title">车辆抓拍视频 · 共 {items.length} 段</p>
                 <ul>
                   {items.map((item, index) => (
                     <li key={index}>
                       <span>抓拍片段 {index + 1} · {item.startTime ?? '--'} · {item.timeLength ?? '--'}</span>
-                      <MediaPlayStub label="查看抓拍视频" />
+                      <MediaPlayButton item={item} />
                     </li>
                   ))}
                 </ul>

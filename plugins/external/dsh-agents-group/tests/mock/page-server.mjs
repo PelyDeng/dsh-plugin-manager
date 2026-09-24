@@ -28,8 +28,9 @@ const WEB_COMMON = resolve(GROUP_ROOT, 'agents/web-common')
 const BLOG_PREFIX = '/blog'
 const CO_PREFIX = '/closedoff-qa'
 
-// closedoff 的注入与 src/web.ts 同形态：routePrefix + 地图配置（mock 给最小合法值，
-// hello 页不消费，批 1 的地图飞地才需要）。
+// closedoff 的注入与 src/web.ts 同形态：routePrefix + 地图配置（批 1b：terrainUrl/
+// tilesetUrl 留空——React 飞地对空配置降级椭球地形+跳过 3D Tiles，mock/离线环境
+// 无地形与三维模型服务，降级后底图与标绘可真实渲染；真实部署两项恒非空，行为不变）。
 const CO_CONFIG = JSON.stringify({
   routePrefix: CO_PREFIX,
   map: { terrainUrl: '', tilesetUrl: '', tilesetHeight: 0, trackDeviceRadiusMeters: 50 },
@@ -103,6 +104,17 @@ const server = createServer(async (request, response) => {
     }
 
     // ── closedoff 轨 ─────────────────────────────────────────────────────
+    // 批 1b：mock 状态重置（verify 脚本开跑时调用，保证会话列表从初始态出发）。
+    if (pathname === `${CO_PREFIX}/__mock/reset` && request.method === 'POST') {
+      await readBody(request)
+      conversationStore = [
+        { id: 'conv-mock-1', title: '园区预约与轨迹演示会话', updatedAt: Date.now() - 3_600_000, state: 'ready', pinned: true, titleSource: 'manual' },
+        { id: 'conv-mock-2', title: '批 1a 冒烟新会话', updatedAt: Date.now(), state: 'ready', pinned: false, titleSource: 'automatic' },
+      ]
+      response.writeHead(200, HEADERS_JSON)
+      response.end(JSON.stringify({ ok: true }))
+      return
+    }
     if (pathname === CO_PREFIX || pathname === `${CO_PREFIX}/`) {
       await serveSkeleton(resolve(CLOSEDOFF, 'web-react/index.html'), response, [
         ['__WEB_CONFIG__', CO_CONFIG],
@@ -115,23 +127,28 @@ const server = createServer(async (request, response) => {
     if (pathname.startsWith(`${CO_PREFIX}/assets/media/fonts/`)) {
       if (await serveFont(pathname, response)) return
     }
+    // 批 1b：三方静态资产（Cesium/@hy-media/vue）——与真实 /assets 路由同根直引，
+    // 源=closedoff/web/assets/（构建产物不入 Git，需先 npm run build:web 落位）。
+    if (pathname.startsWith(`${CO_PREFIX}/assets/cesium/`) || pathname.startsWith(`${CO_PREFIX}/assets/video-player/`)) {
+      const relative = decodeURIComponent(pathname.slice(`${CO_PREFIX}/assets/`.length))
+      const target = normalize(join(CLOSEDOFF, 'web/assets', relative))
+      if (!target.startsWith(resolve(CLOSEDOFF, 'web/assets'))) throw new Error('越界路径')
+      await serveFile(target, response)
+      return
+    }
     // identity：形状对齐 src/web.ts 的 /identity 端点。
     if (pathname === `${CO_PREFIX}/identity`) {
       response.writeHead(200, HEADERS_JSON)
       response.end(JSON.stringify({ mode: 'standalone', key: 'mock-user', label: '独立模式', authPath: '/auth' }))
       return
     }
-    // 会话列表假数据（形状对齐 src/web.ts /conversations 的分页响应：state/pinned/
-    // titleSource 是页面行为依赖的字段；conv-mock-1 配有五类复原的 /history）。
+    // 会话列表（形状对齐 src/web.ts /conversations 的分页响应）——批 1b 起有状态：
+    // conversation-action 的 pin/rename/delete 落在本存储上，验证面板的置顶切换/
+    // 批量删除后列表真实变化。state/pinned/titleSource 是页面行为依赖的字段；
+    // conv-mock-1 配有五类复原的 /history。
     if (pathname === `${CO_PREFIX}/conversations`) {
       response.writeHead(200, HEADERS_JSON)
-      response.end(JSON.stringify({
-        items: [
-          { id: 'conv-mock-1', title: '园区预约与轨迹演示会话', updatedAt: Date.now() - 3_600_000, state: 'ready', pinned: true, titleSource: 'manual' },
-          { id: 'conv-mock-2', title: '批 1a 冒烟新会话', updatedAt: Date.now(), state: 'ready', pinned: false, titleSource: 'automatic' },
-        ],
-        nextOffset: null,
-      }))
+      response.end(JSON.stringify({ items: conversationStore.map(item => ({ ...item })), nextOffset: null }))
       return
     }
     if (pathname === `${CO_PREFIX}/models`) {
@@ -176,8 +193,21 @@ const server = createServer(async (request, response) => {
       response.end(JSON.stringify({ conversationId: 'conv-mock-branch' }))
       return
     }
+    // 会话操作（批 1b 起有状态）：pin/rename/delete 落在 conversationStore 上。
     if (pathname === `${CO_PREFIX}/conversation-action` && request.method === 'POST') {
       const body = await readBody(request)
+      const ids = Array.isArray(body.ids) ? body.ids : []
+      for (const id of ids) {
+        const item = conversationStore.find(entry => entry.id === id)
+        if (item === undefined) continue
+        if (body.operation === 'pin') item.pinned = body.pinned === true
+        if (body.operation === 'rename' && typeof body.title === 'string' && body.title.trim() !== '') item.title = body.title.trim()
+        if (body.operation === 'delete') item.state = 'pending'
+      }
+      // 删除在刷新时从列表剔除（真实服务端是 pending→消失两拍，这里直接收敛）。
+      if (typeof body.operation === 'string') {
+        conversationStore = conversationStore.filter(item => !(body.operation === 'delete' && ids.includes(item.id)))
+      }
       response.writeHead(200, HEADERS_JSON)
       response.end(JSON.stringify({ ok: true, operation: body.operation ?? '' }))
       return
@@ -197,7 +227,7 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`[agents-group-mock] closedoff   http://127.0.0.1:${PORT}${CO_PREFIX}`)
 })
 
-// ── closedoff 批 1a 假数据与 SSE 回放 ─────────────────────────────────────
+// ── closedoff 批 1a/1b 假数据与 SSE 回放 ──────────────────────────────────
 
 async function readBody(request) {
   let raw = ''
@@ -205,7 +235,32 @@ async function readBody(request) {
   try { return JSON.parse(raw || '{}') } catch { return {} }
 }
 
+/** 会话列表的有状态存储（conversation-action 的 pin/rename/delete 落在这里）。 */
+let conversationStore = [
+  { id: 'conv-mock-1', title: '园区预约与轨迹演示会话', updatedAt: Date.now() - 3_600_000, state: 'ready', pinned: true, titleSource: 'manual' },
+  { id: 'conv-mock-2', title: '批 1a 冒烟新会话', updatedAt: Date.now(), state: 'ready', pinned: false, titleSource: 'automatic' },
+]
+
 const MOCK_MESSAGE_ID = 'mock-msg-1'
+
+/** 轨迹沿途设备组（形状对齐 src/presentation-track.ts TrackDeviceGroup/TrackDevice）。 */
+function deviceGroup(id, name, lon, lat, devices) {
+  return { groupId: id, groupName: name, lon, lat, h: 1892, devices }
+}
+
+const NORTH_GATE_GROUP = deviceGroup('group-north', '北门设备组', 102.7138, 25.0425, [
+  {
+    id: 'dev-1', name: '北门-01', code: 'CAM-N1', status: 1, deviceType: 6,
+    deviceIp: '10.20.0.11', accessAddress: 'rtsp://mock.invalid/stream/n1',
+    cameraCode: 'CAM-N1', lastHeartbeatTime: Date.now() - 30_000,
+  },
+  {
+    id: 'dev-2', name: '北门-02', code: 'CAM-N2', status: 0, deviceType: 6,
+    deviceIp: '10.20.0.12', videoAddress: 'rtsp://mock.invalid/stream/n2',
+    cameraCode: 'CAM-N2', lastHeartbeatTime: Date.now() - 600_000,
+  },
+  { id: 'dev-9', name: '北门门禁', code: 'GATE-N1', status: 1, deviceType: 3 },
+])
 
 /** /history 假数据：conv-mock-1 带五类复原要素，其余会话空历史。 */
 function historyPayload(conversationId) {
@@ -253,20 +308,30 @@ function historyPayload(conversationId) {
         tracks: {
           'call-track': {
             points: [
-              { lon: 102.7102, lat: 25.0408, time: '2026-09-25 08:00:00' },
-              { lon: 102.7145, lat: 25.0431, time: '2026-09-25 08:01:00' },
-              { lon: 102.7188, lat: 25.0455, time: '2026-09-25 08:02:00' },
-              { lon: 102.7231, lat: 25.0472, time: '2026-09-25 08:03:00' },
+              { lon: 102.7102, lat: 25.0408, h: 1892, t: '2026-09-25 08:00:00' },
+              { lon: 102.7145, lat: 25.0431, h: 1893, t: '2026-09-25 08:01:00' },
+              { lon: 102.7188, lat: 25.0455, h: 1895, t: '2026-09-25 08:02:00' },
+              { lon: 102.7231, lat: 25.0472, h: 1896, t: '2026-09-25 08:03:00' },
             ],
             vehicleNo: '云A7D00M',
-            groups: [{ name: '北门设备组', devices: [{ deviceId: 'dev-1', name: '北门-01', online: 1 }, { deviceId: 'dev-2', name: '北门-02', online: 0 }] }],
+            groups: [NORTH_GATE_GROUP],
           },
         },
-        fences: { 'call-fence': { name: '核心区围栏', points: [{ lon: 102.71, lat: 25.04 }, { lon: 102.72, lat: 25.04 }, { lon: 102.72, lat: 25.05 }] } },
+        // 围栏形状对齐 src/fences.ts（geometries；批 1a 的旧形状无 geometries，
+        // 页面侧守卫不可视化——批 1b 起给真实形状以验证围栏快照）。
+        fences: {
+          'call-fence': {
+            geometries: [
+              { name: '核心区围栏', kind: 'wall', positions: [[102.7118, 25.0418, 1892], [102.7165, 25.0438, 1893], [102.7168, 25.0470, 1895]], height: 12 },
+              { name: '停车控制区', kind: 'polygon', positions: [[102.7190, 25.0450, 1895], [102.7225, 25.0455, 1896], [102.7228, 25.0478, 1896], [102.7195, 25.0472, 1895]], height: 0 },
+            ],
+            note: '围栏来自园区标绘存档，按保存的边界坐标与高度展示',
+          },
+        },
         media: {
           'call-media': [
-            { startTime: '2026-09-25 08:00:12', timeLength: '12s', deviceId: 'dev-1', mediaUrl: '' },
-            { startTime: '2026-09-25 08:02:40', timeLength: '8s', deviceId: 'dev-1', mediaUrl: '' },
+            { deviceId: 'dev-1', startTime: '2026-09-25 08:00:12', timeLength: '12s', mediaUrl: 'rtsp://mock.invalid/capture/1' },
+            { deviceId: 'dev-1', startTime: '2026-09-25 08:02:40', timeLength: '8s', mediaUrl: '' },
           ],
         },
         cards: {
@@ -347,16 +412,32 @@ async function replayChat(body, response) {
 
   // 轨迹 + 附近设备组 + 围栏 + 抓拍媒体。
   const points = [
-    { lon: 102.7102, lat: 25.0408, time: '2026-09-25 09:00:00' },
-    { lon: 102.7145, lat: 25.0431, time: '2026-09-25 09:01:00' },
-    { lon: 102.7188, lat: 25.0455, time: '2026-09-25 09:02:00' },
+    { lon: 102.7102, lat: 25.0408, h: 1892, t: '2026-09-25 09:00:00' },
+    { lon: 102.7145, lat: 25.0431, h: 1893, t: '2026-09-25 09:01:00' },
+    { lon: 102.7188, lat: 25.0455, h: 1895, t: '2026-09-25 09:02:00' },
   ]
   await sendLater({ type: 'tool_start', callId: 'call-track-live', name: 'closedoff_vehicle_track', presentation: { tool: 'closedoff_vehicle_track', group: 'track', variant: 'records', sourceLabel: '车辆轨迹' } }, 60)
   await sendLater({ type: 'tool_end', callId: 'call-track-live', status: 'done' }, 100)
   await sendLater({ type: 'track', callId: 'call-track-live', points, vehicleNo: '云A7D00M' }, 80)
-  await sendLater({ type: 'cameras', callId: 'call-track-live', cameras: [{ name: '北门设备组', devices: [{ deviceId: 'dev-1', name: '北门-01', online: 1 }] }] }, 80)
-  await sendLater({ type: 'fences', callId: 'call-fence-live', payload: { name: '核心区围栏', points: [{ lon: 102.71, lat: 25.04 }, { lon: 102.72, lat: 25.05 }] } }, 80)
-  await sendLater({ type: 'media', callId: 'call-media-live', items: [{ startTime: '2026-09-25 09:00:12', timeLength: '12s', deviceId: 'dev-1', mediaUrl: '' }] }, 80)
+  // 设备组形状对齐 src/presentation-track.ts（页面弹窗按 deviceType/status 消费）。
+  await sendLater({ type: 'cameras', callId: 'call-track-live', cameras: [NORTH_GATE_GROUP] }, 80)
+  // 围栏形状对齐 src/fences.ts（geometries）。
+  await sendLater({
+    type: 'fences', callId: 'call-fence-live',
+    payload: {
+      geometries: [
+        { name: '核心区围栏', kind: 'wall', positions: [[102.7118, 25.0418, 1892], [102.7165, 25.0438, 1893], [102.7168, 25.0470, 1895]], height: 12 },
+      ],
+      note: '围栏来自园区标绘存档',
+    },
+  }, 80)
+  // 抓拍媒体：一段有地址（验证播放器挂载）、一段无地址（验证占位态）。
+  await sendLater({
+    type: 'media', callId: 'call-media-live',
+    items: [
+      { deviceId: 'dev-1', startTime: '2026-09-25 09:00:12', timeLength: '12s', mediaUrl: 'rtsp://mock.invalid/capture/live1' },
+    ],
+  }, 80)
 
   // 正文（真实服务面在收尾发一次全量脱敏 delta）与 done+meta。
   const finalText = `已收到「${message}」。园区整体平稳：在园车辆 3 台、今日预警 2 条；云A7D00M 正沿主干道行驶，可回看北门设备组抓拍。`

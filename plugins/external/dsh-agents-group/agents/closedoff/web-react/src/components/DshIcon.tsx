@@ -59,6 +59,16 @@ const SHAPES: Record<string, DshShape> = {
   <path transform="translate(0.6689 1.073)" d="M6.02607 5.50955L6.44306 5.9274L3.84284 8.52762L3.425 8.11063L3.00715 7.69278L4.77253 5.9274L3.00715 4.16202L3.84284 3.32633L6.02607 5.50955Z" fill="currentColor"/>
   <path transform="translate(0.6689 1.073)" d="M9.23789 7.35397L9.23789 8.53488L6.96238 8.53488L6.96238 7.35397L9.23789 7.35397Z" fill="currentColor"/>`,
   },
+  // 相机与定位（旧 web/labels.js IC.camera/IC.locate 内联形的 React 迁移，用于
+  // 截图与全屏查看按钮；stroke 形随文字色）。
+  camera: {
+    viewBox: '0 0 24 24',
+    body: `<g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h3l2-2h6l2 2h3a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/></g>`,
+  },
+  locate: {
+    viewBox: '0 0 24 24',
+    body: `<g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5"/></g>`,
+  },
 }
 
 export type DshIconName = keyof typeof SHAPES
