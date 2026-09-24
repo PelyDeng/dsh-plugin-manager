@@ -1,18 +1,16 @@
 /**
- * 左右栏交互组件（批 2.5 回灌：对齐 main 0.12.4-0.12.7 的任务记录/失败记录重构——
- * 复选框常驻、⋯ 操作菜单、行内重命名、分页、搜索全量、失败菜单统一）。
- * 类名与语义对齐 main 版 panels.js；两段式行内删除已被 0.12.4 淘汰（删除统一走菜单）。
+ * 左栏交互组件（批 2.5 回灌；评审 #20 按栏拆分自 left-right.tsx）：任务记录列表——
+ * 复选框常驻、⋯ 操作菜单、行内重命名、分页、搜索全量。类名与语义对齐 main 版
+ * panels.js；两段式行内删除已被 0.12.4 淘汰（删除统一走菜单）。
  */
-import { formatClock } from '../../lib/time.ts'
 import { useEffect, useRef, useState } from 'react'
-import { MOTTO_KEY, DEFAULT_MOTTO } from '../../lib/config.ts'
+import { formatClock } from '../../lib/time.ts'
 import type { ChatListItem } from '../../stores/session.ts'
 import { useSessionStore } from '../../stores/session.ts'
+import { useTurnStore } from '../../stores/turn.ts'
 import {
-  deletePickedConversations, gotoChatPage, loadEarlier, openConversation, openTask, refreshChatList, refreshPanelsData,
-  removeConversationsWithFeedback, removePickedFailures, renameConversation,
+  deletePickedConversations, gotoChatPage, openConversation, refreshChatList, renameConversation,
 } from '../../hooks/use-turn.ts'
-import { announce } from '../../lib/announce.ts'
 import { useClickOutside } from '../common/basics.tsx'
 
 
@@ -132,7 +130,7 @@ export function ChatList() {
   const picked = useSessionStore(state => state.chatPicked)
   const togglePicked = useSessionStore(state => state.togglePicked)
   const renamingId = useSessionStore(state => state.renamingId)
-  const conversationId = useTurnStoreCurrentId()
+  const conversationId = useTurnStore(state => state.conversationId)
   // 读取失败要在原地可见可重试（评审 #4）：不能清空列表冒充「还没有任务记录」。
   if (chatListError !== null) {
     return (
@@ -252,121 +250,6 @@ export function ChatPager() {
   )
 }
 
-/** 失败记录（0.12.7 与任务记录同款）：failure-head ⋯ 菜单 + 行前复选框 + 正文点击进详情。 */
-export function FailureList() {
-  const overview = useSessionStore(state => state.overview)
-  const failurePicked = useSessionStore(state => state.failurePicked)
-  const toggleFailurePicked = useSessionStore(state => state.toggleFailurePicked)
-  const [menuOpen, setMenuOpen] = useState(false)
-  const headRef = useRef<HTMLDivElement>(null)
-  const items = overview?.failures ?? []
-  useClickOutside(headRef, () => setMenuOpen(false), menuOpen)
-  useEffect(() => {
-    if (!menuOpen) return
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      setMenuOpen(false)
-      headRef.current?.querySelector<HTMLButtonElement>('button')?.focus()
-    }
-    window.requestAnimationFrame(() => {
-      headRef.current?.querySelector<HTMLElement>('[role="menu"]')?.querySelector<HTMLElement>('button')?.focus()
-    })
-    headRef.current?.addEventListener('keydown', onKey)
-    return () => headRef.current?.removeEventListener('keydown', onKey)
-  }, [menuOpen])
-  return (
-    <>
-      <div className="failure-head" ref={headRef}>
-        <h2 className="section-title section-title--failures">失败记录</h2>
-        <span className="chat-records-actions">
-          <button
-            type="button"
-            className="chat-manage-menu-btn chat-manage-menu-btn--sm"
-            id="failure-menu"
-            aria-haspopup="true"
-            aria-expanded={menuOpen}
-            title="操作"
-            onClick={() => setMenuOpen(!menuOpen)}
-          >
-            ⋯
-          </button>
-          <span className="chat-manage-menu" id="failure-menu-pop" hidden={!menuOpen} role="menu">
-            <button
-              type="button"
-              role="menuitem"
-              className="chat-manage-menu__item chat-manage-menu__item--danger"
-              disabled={failurePicked.length === 0}
-              onClick={() => { setMenuOpen(false); void removePickedFailures() }}
-            >
-              删除所选
-            </button>
-          </span>
-        </span>
-      </div>
-      <div className="failure-note"><div id="failure-list">
-        {items.length === 0
-          ? <p className="empty">暂无失败记录</p>
-          : items.map(item => (
-            <label key={item.id} className="failure-row failure-row--pick">
-              <input
-                type="checkbox"
-                className="failure-row__check"
-                checked={failurePicked.includes(item.id)}
-                onChange={event => toggleFailurePicked(item.id, event.target.checked)}
-              />
-              <span className="failure-row__body" onClick={() => { void openTask(item.id) }}>
-                <span className="failure-row__goal">{formatClock(item.updatedAt)}　{item.goal}</span>
-                <span className="failure-row__meta">{item.error || '没给原因'}</span>
-              </span>
-            </label>
-          ))}
-      </div></div>
-    </>
-  )
-}
-
-/** 座右铭：点击就地编辑，blur/回车提交，空值回落默认（旧 renderMotto 语义；Esc 退出编辑为增强）。 */
-export function Motto() {
-  const [current, setCurrent] = useState(() => {
-    try { return localStorage.getItem(MOTTO_KEY) ?? DEFAULT_MOTTO } catch { return DEFAULT_MOTTO }
-  })
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(current)
-  const inputRef = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (editing) inputRef.current?.select()
-  }, [editing])
-  const commit = () => {
-    const next = draft.trim() || DEFAULT_MOTTO
-    try { localStorage.setItem(MOTTO_KEY, next) } catch { /* 隐私模式下忽略。 */ }
-    setCurrent(next)
-    setEditing(false)
-  }
-  if (!editing) {
-    return (
-      <button type="button" className="motto" id="motto" title="点一下改掉" onClick={() => { setDraft(current); setEditing(true) }}>
-        {current} ☺
-      </button>
-    )
-  }
-  return (
-    <div className="motto">
-      <input
-        ref={inputRef}
-        type="text"
-        maxLength={24}
-        value={draft}
-        onChange={event => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={event => {
-          if (event.key === 'Enter' && !event.nativeEvent.isComposing) commit()
-          if (event.key === 'Escape') setEditing(false)
-        }}
-      />
-    </div>
-  )
-}
-
 /** 搜索框（200ms 防抖；0.12.5 搜索拉全量再本地过滤，分页条隐藏）。 */
 export function ChatSearch() {
   const setKeyword = useSessionStore(state => state.setChatKeyword)
@@ -390,9 +273,3 @@ export function ChatSearch() {
     />
   )
 }
-
-/** 当前会话 id（aria-current 标记用）。 */
-function useTurnStoreCurrentId(): string | null {
-  return useTurnStoreForId(state => state.conversationId)
-}
-import { useTurnStore as useTurnStoreForId } from '../../stores/turn.ts'

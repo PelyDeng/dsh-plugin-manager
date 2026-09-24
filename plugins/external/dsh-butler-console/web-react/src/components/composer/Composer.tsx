@@ -4,59 +4,33 @@
  *
  * 语义对齐旧 composer.js/attachments.js/app.js：
  * - 提及检测：光标前未闭合 @，其前须是行首/空白/非 ASCII（中文不打空格），@ 与光标间
- *   无空白；英文数字后不触发（防邮箱）。
+ *   无空白；英文数字后不触发（防邮箱）。检测/过滤纯逻辑在 lib/mention.ts（评审 #20）。
  * - 键盘：菜单开着时 ↑↓ 移动、Enter/Tab 选中、Esc 关闭；输入法组合期间一概不拦。
  * - 落纸用外号：服务端成员清单就是「id（外号）」对照表，外号即点名。
  * - 附件三通道最后都落到一份服务端记录；拖拽区挂整块输入区（用户瞄的是"那一片"）。
  * - I02：只锁发送不锁输入，执行中可写下一句，草稿不被异步动作清掉。
+ *
+ * 拆分（评审 #20）：附件条在 AttachmentStrip.tsx、提及弹层在 MentionPopover.tsx，
+ * 本文件保留发送/补充/键盘导航/落纸这些与输入框状态强耦合的部分。
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { runSupplement, sendMessage, stopTurn } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
+import { detectMention, mentionCandidates } from '../../lib/mention.ts'
+import type { MentionState } from '../../lib/mention.ts'
 import { Icon } from '../common/Icon.tsx'
-import { useSessionStore, type MemberItem } from '../../stores/session.ts'
+import { useSessionStore } from '../../stores/session.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { useComposerStore } from '../../stores/composer.ts'
-import { addFiles, addUrl, dropAttachment } from '../../flows/attachments.ts'
-import { fileSizeText, useAttachmentsStore } from '../../stores/attachments.ts'
-
-interface MentionState {
-  start: number
-  query: string
-  index: number
-}
-
-/** 光标前是否有一个未闭合的 @（旧 detectMention 口径）。 */
-function detectMention(text: string, pos: number): { start: number; query: string } | null {
-  for (let i = pos - 1; i >= 0; i -= 1) {
-    const ch = text[i] ?? ''
-    if (ch === '@') {
-      const prev = i === 0 ? '' : text[i - 1] ?? ''
-      if (prev === '' || /[^\x00-\x7f]/.test(prev) || /\s/.test(prev)) {
-        return { start: i, query: text.slice(i + 1, pos) }
-      }
-      return null
-    }
-    if (/\s/.test(ch)) return null
-  }
-  return null
-}
-
-/** 过滤口径：外号、报名名、agentId 任一命中即可。 */
-function mentionCandidates(members: MemberItem[], query: string): MemberItem[] {
-  const q = query.trim().toLowerCase()
-  return members.filter(member =>
-    member.displayName.toLowerCase().includes(q)
-    || member.declaredName.toLowerCase().includes(q)
-    || member.agentId.toLowerCase().includes(q))
-}
+import { addFiles } from '../../flows/attachments.ts'
+import { useAttachmentsStore } from '../../stores/attachments.ts'
+import { AttachmentStrip } from './AttachmentStrip.tsx'
+import { MentionPopover } from './MentionPopover.tsx'
 
 export function Composer() {
   const streaming = useTurnStore(state => state.streaming)
   const conversationId = useTurnStore(state => state.conversationId)
   const members = useSessionStore(state => state.members)
-  const attachments = useAttachmentsStore(state => state.items)
-  const urlInputVisible = useAttachmentsStore(state => state.urlInputVisible)
   const [draft, setDraft] = useState('')
   // 补充模式（/supplement）：有进行中的任务才可切；输入原样送当前任务作补充材料。
   const [supplementMode, setSupplementMode] = useState(false)
@@ -65,7 +39,6 @@ export function Composer() {
   const [dropping, setDropping] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const urlInputRef = useRef<HTMLInputElement>(null)
   const composingRef = useRef(false)
   const composerRef = useRef<HTMLDivElement>(null)
   const mentionItemsRef = useRef<HTMLDivElement>(null)
@@ -182,111 +155,23 @@ export function Composer() {
         void addFiles(files, conversationId)
       }}
     >
-      {/* 待发附件条：选文件、拖进来、粘链接都落到这里；空时整块收起。 */}
-      {(attachments.length > 0 || urlInputVisible) && (
-        <div className="attach" id="attach-strip">
-          <div className="attach__items" id="attach-items">
-            {attachments.map(entry => (
-              <span key={entry.key} className="attach__item" data-phase={entry.phase}
-                title={(() => {
-                  // 附件元数据悬浮（评审 中11）：解析了多少页/段、大概是什么、来自哪个链接。
-                  const item = entry.item
-                  if (item === null) return entry.name
-                  const parts = [item.name]
-                  if (item.kind !== undefined && item.kind !== '') parts.push(item.kind)
-                  if (item.totalUnits !== undefined) parts.push(`${item.totalUnits} 页/段`)
-                  if (item.characters !== undefined) parts.push(`${item.characters} 字`)
-                  if (item.preview !== undefined && item.preview !== '') parts.push(item.preview.slice(0, 80))
-                  if (item.sourceUrl !== undefined && item.sourceUrl !== '') parts.push(item.sourceUrl)
-                  return parts.join(' · ')
-                })()}>
-                <span className="attach__name">{entry.name}</span>
-                {fileSizeText(entry.size) !== '' && <span className="attach__size">{fileSizeText(entry.size)}</span>}
-                {(entry.phase !== 'ready' || entry.message !== '') && (
-                  <span className="attach__note">
-                    {entry.phase === 'uploading' ? (entry.message === '' ? '上传中…' : entry.message)
-                      : entry.phase === 'failed' ? (entry.message === '' ? '没成' : entry.message)
-                        : entry.message}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  className="attach__remove"
-                  title="移除"
-                  aria-label={`移除 ${entry.name}`}
-                  onClick={() => { void dropAttachment(entry.key) }}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-          {urlInputVisible && (
-            <div className="attach__url" id="attach-url">
-              <input
-                ref={urlInputRef}
-                type="url"
-                id="attach-url-input"
-                placeholder="粘贴文件或图片的链接，回车取回"
-                aria-label="附件链接"
-                autoComplete="off"
-                spellCheck={false}
-                onKeyDown={event => {
-                  if (event.key === 'Escape') { event.preventDefault(); useAttachmentsStore.getState().setUrlInputVisible(false); return }
-                  if (event.key !== 'Enter' || event.nativeEvent.isComposing) return
-                  // 回车是「取回这个链接」，不是发送（不该把没写完的消息发出去）。
-                  event.preventDefault()
-                  const url = urlInputRef.current?.value ?? ''
-                  useAttachmentsStore.getState().setUrlInputVisible(false)
-                  void addUrl(url, conversationId)
-                }}
-              />
-              <button type="button" className="btn btn--tiny btn--ghost" id="attach-url-cancel" onClick={() => useAttachmentsStore.getState().setUrlInputVisible(false)}>
-                取消
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+      {/* 待发附件条：选文件、拖进来、粘链接都落到这里；空时整块收起（评审 #20 拆出）。 */}
+      <AttachmentStrip />
       <div className="composer__box">
-        {/* @ 提及选择器（aria：listbox/option/activedescendant）。 */}
+        {/* @ 提及选择器（aria：listbox/option/activedescendant；评审 #20 拆出弹层）。 */}
         {mention !== null && (
-          <div className="mention" id="mention-pop" role="listbox" aria-label="点名成员" aria-activedescendant={`mention-option-${mention.index}`}>
-            <p className="mention__hint" aria-hidden="true">↑↓ 选 · 回车点名 · Esc 关</p>
-            <div className="mention__items" id="mention-items" ref={mentionItemsRef}>
-              {candidates.length === 0 && (
-                <p className="mention__none">
-                  {members.length === 0 ? '还没有可点名的成员' : '没有对得上的成员'}
-                </p>
-              )}
-              {candidates.map((member, index) => (
-                <div
-                  key={member.agentId}
-                  id={`mention-option-${index}`}
-                  data-index={index}
-                  role="option"
-                  aria-selected={index === mention.index}
-                  className={`mention__item${index === mention.index ? ' mention__item--active' : ''}`}
-                  onMouseEnter={() => { if (mention.index !== index) setMention({ ...mention, index }) }}
-                  onMouseDown={event => event.preventDefault()}
-                  onClick={() => {
-                    setMention({ ...mention, index })
-                    // 点击选中：先同步 index 再落纸（acceptMention 读当前 state）。
-                    window.requestAnimationFrame(() => acceptMentionWithIndex(index))
-                  }}
-                >
-                  <span className="avatar avatar--sm" style={{ background: 'var(--bt-ink-faint)' }}>
-                    <span>{[...member.displayName][0] ?? '?'}</span>
-                  </span>
-                  <div className="member__col">
-                    <div className="member__name">{member.displayName}</div>
-                    <div className="member__declared">{member.declaredName}</div>
-                  </div>
-                  <span className="mention__handle">@{member.agentId}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          <MentionPopover
+            mention={mention}
+            candidates={candidates}
+            members={members}
+            itemsRef={mentionItemsRef}
+            onHover={index => { if (mention.index !== index) setMention({ ...mention, index }) }}
+            onPick={index => {
+              setMention({ ...mention, index })
+              // 点击选中：先同步 index 再落纸（acceptMention 读当前 state）。
+              window.requestAnimationFrame(() => acceptMentionWithIndex(index))
+            }}
+          />
         )}
         {/* 输入框可达名统一 aria-label 口径（评审 #21）：不用 visually-hidden label。 */}
         <textarea
@@ -375,17 +260,14 @@ export function Composer() {
               <path d="M13.4 8.2 9 12.6 C 8 13.6, 8 15, 9 15.8 C 10 16.7, 11.4 16.6, 12.3 15.7 L 16.6 11.3 C 18.2 9.7, 18.2 7.2, 16.6 5.7 C 15 4.2, 12.5 4.3, 10.9 5.8 L 6.5 10.2 C 4.9 11.7, 4.9 14.3, 6.4 15.9" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </button>
-          {/* 链接：把远处的文件取回来，和上传落到同一条路。 */}
+          {/* 链接：把远处的文件取回来，和上传落到同一条路（输入区聚焦由 AttachmentStrip 自理）。 */}
           <button
             type="button"
             className="doodle-btn"
             id="attach-link-button"
             title="粘贴链接，把远处的文件取回来"
             aria-label="从链接取回文件"
-            onClick={() => {
-              useAttachmentsStore.getState().setUrlInputVisible(true)
-              window.requestAnimationFrame(() => urlInputRef.current?.focus())
-            }}
+            onClick={() => { useAttachmentsStore.getState().setUrlInputVisible(true) }}
           >
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <path d="M8.4 11.6 C 7.2 10.4, 7.3 8.5, 8.5 7.3 L 11 4.8 C 12.2 3.6, 14.1 3.6, 15.3 4.8 C 16.5 6, 16.5 7.9, 15.3 9.1 L 14.2 10.2 M11.6 8.4 C 12.8 9.6, 12.7 11.5, 11.5 12.7 L 9 15.2 C 7.8 16.4, 5.9 16.4, 4.7 15.2 C 3.5 14, 3.5 12.1, 4.7 10.9 L 5.8 9.8" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />

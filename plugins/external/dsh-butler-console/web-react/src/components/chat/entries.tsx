@@ -251,19 +251,23 @@ const SummaryEntryView = memo(SummaryEntryViewFn)
 const TaskEntryView = memo(TaskEntryViewFn)
 
 /**
- * 消息流渲染（批 4b 收编）：被调度卡关联的成员行不再单独渲染——旧版「成员的真实输出
- * 收进调度卡，群里不再有每位成员一行」（格子就是那一行）。plan 前的孤立成员行（无 plan
- * 的降级面）仍独立呈现。
+ * 消息流渲染（批 4b 收编；评审 #20 由 renderEntries 更名为组件）：被调度卡关联的
+ * 成员行不再单独渲染——旧版「成员的真实输出收进调度卡，群里不再有每位成员一行」
+ * （格子就是那一行）。plan 前的孤立成员行（无 plan 的降级面）仍独立呈现。
  */
-export function renderEntries(entries: ThreadEntry[]): React.ReactNode {
+export function ThreadEntries({ entries }: { entries: ThreadEntry[] }) {
   const dispatchOrders = new Set<string>()
   for (const entry of entries) {
     if (entry.kind === 'dispatch') for (const id of entry.order) dispatchOrders.add(id)
   }
-  return entries.map(entry =>
-    entry.kind === 'subtask' && dispatchOrders.has(entry.subtaskId)
-      ? null
-      : renderEntry(entry))
+  return (
+    <>
+      {entries.map(entry =>
+        entry.kind === 'subtask' && dispatchOrders.has(entry.subtaskId)
+          ? null
+          : renderEntry(entry))}
+    </>
+  )
 }
 
 export function renderEntry(entry: ThreadEntry): React.ReactNode {
