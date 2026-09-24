@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
 <title>牛马台账 · 大总管群聊</title>
+<!-- 欢迎页横幅是空会话首屏的 LCP 元素（0.14.6 实测）：它是 React 挂载后才被发现的
+     CSS 背景图，不等挂载、在文档解析期就预载并高优先下载。有会话的老用户命中缓存，不重复传输。 -->
+<link rel="preload" as="image" href="/butler/assets/media/welcome/clean-top.png" fetchpriority="high">
+<link rel="preload" as="style" href="/butler/assets/fonts-lxgw.css">
 <link rel="stylesheet" href="/butler/assets/fonts-lxgw.css">
 <link rel="stylesheet" href="/butler/assets/app.css">
 </head>

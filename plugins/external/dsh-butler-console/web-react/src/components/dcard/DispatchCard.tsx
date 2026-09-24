@@ -15,6 +15,7 @@ import { saveCardPref } from '../../stores/turn.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { displayNameOf, useSessionStore } from '../../stores/session.ts'
 import { Avatar } from '../common/Avatar.tsx'
+import { Icon } from '../common/Icon.tsx'
 import { AskCard } from '../chat/AskCard.tsx'
 import { STREAM_RICH_LIMIT } from '../../lib/config.ts'
 import { announce } from '../../lib/announce.ts'
@@ -226,6 +227,7 @@ export function DispatchCard({ entry }: { entry: DispatchEntry }) {
                     </span>
                   </span>
                 </span>
+                {selected && <Icon name="check" size={10} className="dcard__cell-check" />}
               </button>
             )
           })}

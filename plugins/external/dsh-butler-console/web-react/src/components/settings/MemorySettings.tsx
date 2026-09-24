@@ -14,7 +14,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { api, type MemoryItem } from '../../lib/api.ts'
-import { announce } from '../../lib/announce.ts'
+import { useFlash } from '../../lib/useFlash.ts'
 import { errorTextOf } from '../../lib/error-text.ts'
 import { RichText } from '../chat/RichText.tsx'
 import { Icon } from '../common/Icon.tsx'
@@ -66,27 +66,33 @@ function Highlighted({ text, query }: { text: string; query: string }) {
 
 /** 搜索框（三分区共用）：关键字输入 + AI 搜索预留占位。 */
 function SearchBox({ query, onQuery }: { query: string; onQuery: (value: string) => void }) {
+  const notice = useFlash()
   return (
-    <div className="mem-search">
-      <Icon name="search" size={13} className="mem-search__icon" />
-      <input
-        type="search"
-        className="mem-search__input"
-        placeholder="搜索（关键字模糊匹配，空格分隔多个词）"
-        value={query}
-        onChange={event => onQuery(event.target.value)}
-      />
-      {query !== '' && (
-        <button type="button" className="btn btn--tiny btn--ghost" onClick={() => onQuery('')}>清空</button>
-      )}
-      <button
-        type="button"
-        className="btn btn--tiny"
-        title="向量检索将在后续版本启用（P2）"
-        onClick={() => announce('AI 搜索（向量检索）将在后续版本启用')}
-      >
-        <Icon name="sparkles" size={12} /> AI 搜索
-      </button>
+    <div className="mem-search-wrap">
+      <div className="mem-search">
+        <Icon name="search" size={13} className="mem-search__icon" />
+        <input
+          type="search"
+          className="mem-search__input"
+          placeholder="搜索（关键字模糊匹配，空格分隔多个词）"
+          value={query}
+          onChange={event => onQuery(event.target.value)}
+        />
+        {query !== '' && (
+          <button type="button" className="btn btn--tiny btn--ghost" onClick={() => onQuery('')}>清空</button>
+        )}
+        <button
+          type="button"
+          className="btn btn--tiny"
+          title="向量检索将在后续版本启用（P2）"
+          onClick={() => notice.flash('AI 搜索（向量检索）将在后续版本启用')}
+        >
+          <Icon name="sparkles" size={12} /> AI 搜索
+        </button>
+      </div>
+      <p className="mem-flash" role="status">
+        {notice.text !== '' && <span onAnimationEnd={notice.onEnd}>{notice.text}</span>}
+      </p>
     </div>
   )
 }
@@ -180,6 +186,7 @@ function InstructionsSection() {
   const [warning, setWarning] = useState('')
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
+  const notice = useFlash()
   const reload = () => {
     api.memories('', 'instruction')
       .then(result => setItems(result.items))
@@ -207,7 +214,7 @@ function InstructionsSection() {
     try {
       await api.memoryCreate({ kind: 'instruction', content })
       setDraft('')
-      announce('要求已保存')
+      notice.flash('要求已保存')
       reload()
     } catch (cause) {
       setError(errorTextOf(cause, '保存失败'))
@@ -218,7 +225,7 @@ function InstructionsSection() {
     if (!window.confirm(`删掉这条要求？「${item.content}」\n删了就找不回来了。`)) return
     try {
       await api.memoryDelete([item.id])
-      announce('已删除')
+      notice.flash('已删除')
       reload()
     } catch (cause) {
       setError(errorTextOf(cause, '删除失败'))
@@ -231,7 +238,7 @@ function InstructionsSection() {
       await api.memoryUpdate({ id: item.id, content: item.content, agentId: item.agentId })
       await api.memoryDelete([item.id])
       await api.memoryCreate({ kind: 'semantic', content: item.content, origin: 'user_statement' })
-      announce('已转为记忆库条目')
+      notice.flash('已转为记忆库条目')
       reload()
     } catch (cause) {
       setError(errorTextOf(cause, '转换失败'))
@@ -268,6 +275,9 @@ function InstructionsSection() {
       </div>
       {tooShort && <p className="mem-warn" role="status">还差 {CONTENT_MIN - draftLength} 个字：规矩要写成一句完整的话，太短管家对不上号。</p>}
       {warning !== '' && <p className="mem-warn" role="status">{warning}</p>}
+      <p className="mem-flash" role="status">
+        {notice.text !== '' && <span onAnimationEnd={notice.onEnd}>{notice.text}</span>}
+      </p>
       {error !== '' && <p className="mem-error">{error}</p>}
       <SearchBox query={query} onQuery={setQuery} />
       {items !== null && items.length === 0 && query === '' && <p className="empty">在上方输入框写下第一条规矩（如「叫我 DPL」），它永远生效</p>}
@@ -291,6 +301,7 @@ function LibrarySection() {
   const [error, setError] = useState('')
   const [confirmPurge, setConfirmPurge] = useState(false)
   const [query, setQuery] = useState('')
+  const notice = useFlash()
   const reload = () => {
     api.memories()
       .then(result => setItems(result.items))
@@ -316,7 +327,7 @@ function LibrarySection() {
     if (!window.confirm(`删掉这条记忆？[${item.shortId}]「${item.content}」\n删了就找不回来了，要留底先导出。`)) return
     try {
       await api.memoryDelete([item.id])
-      announce('已删除')
+      notice.flash('已删除')
       reload()
     } catch (cause) {
       setError(errorTextOf(cause, '删除失败'))
@@ -327,7 +338,7 @@ function LibrarySection() {
     try {
       await api.memoryPurge()
       setConfirmPurge(false)
-      announce('记忆库已清空（不含老大的要求）')
+      notice.flash('记忆库已清空（不含老大的要求）')
       reload()
     } catch (cause) {
       setError(errorTextOf(cause, '清空失败'))
@@ -339,7 +350,7 @@ function LibrarySection() {
     try {
       await api.memoryCreate({ kind: 'instruction', content: item.content, origin: item.origin })
       await api.memoryDelete([item.id])
-      announce('已升级为老大的要求（原记忆条目已移除，不重复占位）')
+      notice.flash('已升级为老大的要求（原记忆条目已移除，不重复占位）')
       reload()
     } catch (cause) {
       setError(errorTextOf(cause, '升级失败'))
@@ -394,6 +405,9 @@ function LibrarySection() {
           </span>
         )}
       </div>
+      <p className="mem-flash" role="status">
+        {notice.text !== '' && <span onAnimationEnd={notice.onEnd}>{notice.text}</span>}
+      </p>
       {error !== '' && <p className="mem-error">{error}</p>}
     </div>
   )

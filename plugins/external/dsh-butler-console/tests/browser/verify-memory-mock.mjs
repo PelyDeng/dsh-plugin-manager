@@ -105,7 +105,7 @@ check('记忆与要求 Tab 存在并切入', memTab === true)
 
 // [3] 三分区 Tab 结构。
 const sectionTabs = await evaluate(`[...document.querySelectorAll('.mem-settings__tabs button')].map(b => b.textContent)`)
-check('三分区 Tab（产品资产/老大的要求/记忆库）', JSON.stringify(sectionTabs) === JSON.stringify(['产品资产', '老大的要求', '记忆库']), JSON.stringify(sectionTabs))
+check('三分区 Tab（出厂规矩/老大的要求/记忆库）', JSON.stringify(sectionTabs) === JSON.stringify(['出厂规矩', '老大的要求', '记忆库']), JSON.stringify(sectionTabs))
 
 // [4] 老大的要求分区：假数据 + 分工说明 + 新增。
 const instructionInfo = await evaluate(`(() => {
@@ -148,8 +148,8 @@ const library = await evaluate(`(() => {
 })()`)
 check('记忆库：容量说明 + 行 + 导出 + 清空', library !== null && library.rows >= 2 && library.hasExport && library.hasPurge, JSON.stringify(library))
 
-// [6] 产品资产分区。
-await evaluate(`[...document.querySelectorAll('.mem-settings__tabs button')].find(b => b.textContent === '产品资产')?.click()`)
+// [6] 出厂规矩分区（0.14.4 文案改名，原「产品资产」）。
+await evaluate(`[...document.querySelectorAll('.mem-settings__tabs button')].find(b => b.textContent === '出厂规矩')?.click()`)
 await sleep(300)
 const procedural = await evaluate(`(() => {
   const root = document.querySelector('.mem-procedural')
@@ -161,7 +161,7 @@ const procedural = await evaluate(`(() => {
 })()`)
 await sleep(200)
 const proceduralBody = await evaluate(`document.querySelector('.mem-procedural__body')?.textContent.slice(0, 40) ?? ''`)
-check('产品资产：6 卡只读 + 因果说明 + 可展开', procedural !== null && procedural.cards === 6 && procedural.hasNote && proceduralBody.includes('牛马大总管'), `${procedural?.cards} 卡，正文「${proceduralBody.slice(0, 20)}…」`)
+check('出厂规矩：6 卡只读 + 因果说明 + 可展开', procedural !== null && procedural.cards === 6 && procedural.hasNote && proceduralBody.includes('牛马大总管'), `${procedural?.cards} 卡，正文「${proceduralBody.slice(0, 20)}…」`)
 
 // [7] console 无错误。
 check('console 无错误', consoleErrors.length === 0, consoleErrors.slice(0, 3).join(' | '))

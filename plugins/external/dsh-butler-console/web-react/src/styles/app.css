@@ -672,12 +672,7 @@ button:focus-visible {
   transform: rotate(45deg);
 }
 
-.ask::after {
-  content: '✋';
-  position: absolute; top: -13px; right: 8px;
-  font-size: 16px;
-  transform: rotate(16deg);
-}
+/* 举手贴纸改由 Icon 组件渲染（.ask__hand，见文件尾 0.14.6 区段）。 */
 
 /* 与确认卡同款：问题长、输入行滚出视野时，按钮贴在可视区底部。 */
 .ask__row {
@@ -1165,8 +1160,7 @@ button:focus-visible {
   font-size: 11.5px; color: var(--bt-ink-faint);
 }
 
-/* 页脚手写批注的落款小红心（原型 C）。 */
-#composer-hint::after { content: ' ❤'; color: var(--bt-red); }
+/* 落款小红心改由 Icon 组件渲染（.composer__hint-heart，见文件尾 0.14.6 区段）。 */
 /* 红波浪那半句再垫一道黄色荧光（原型 C：荧光 + 红线双重标注）。 */
 #composer-hint .red-wavy { background: linear-gradient(transparent 58%, #ffe98ab3 58%); }
 
@@ -1713,10 +1707,7 @@ button:focus-visible {
   background: #fff;
   background: color-mix(in srgb, #ffd94d 14%, #fff);
 }
-.dcard__cell--active::after {
-  content: '✓'; position: absolute; top: 3px; right: 5px;
-  font-size: 10px; line-height: 1; color: var(--bt-stroke);
-}
+/* 选中对勾改由 Icon 组件渲染（.dcard__cell-check，见文件尾 0.14.6 区段）。 */
 .dcard__col { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .dcard__head { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
 /* 名称只占一行：超长省略（完整名称与目标是格子的 title，悬停可见）。 */
@@ -2124,3 +2115,46 @@ button:focus-visible {
 .mem-hit { padding: 0 3px; box-shadow: inset 0 -2px 0 #00000018; }
 /* 危险确认键。 */
 .mem-danger { background: #b3261e; color: #fff; border-color: #b3261e; }
+
+/* ── 0.14.6 小残留清理：读屏区归位 / 就近轻提示 / emoji 换图标 / 卡底渐隐 ── */
+/* sr-status 挂的类：读屏可听、视觉隐藏。该类自 React 迁移起一直缺定义，
+   读屏播报文本泄漏成视口左下角的裸文字（三轮 UI 评审截图均可见），此处补上标准 sr-only 形态。 */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%);
+  white-space: nowrap; border: 0;
+}
+/* 操作反馈就近轻提示：出现在操作区附近，2.4s 淡入-保持-淡出；动画结束由组件清文本，
+   容器常驻（role="status" 的 live region 稳定，读屏播报不因节点卸载被吞）。 */
+.mem-flash { min-height: 1.2em; margin: 2px 0 0; font-size: 12.5px; color: #1c7a3d; }
+.mem-flash > span { display: inline-block; animation: mem-flash-cycle 2.4s ease both; }
+@keyframes mem-flash-cycle {
+  0% { opacity: 0; transform: translateY(3px); }
+  8% { opacity: 1; transform: none; }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+/* 提问卡举手贴纸（原 .ask::after 的 ✋ emoji → Lucide hand，位置/大小/倾角不变）。 */
+.ask__hand {
+  position: absolute; top: -13px; right: 8px;
+  color: var(--bt-ink);
+  transform: rotate(16deg);
+}
+/* 页脚手写批注的落款小红心（原型 C）。原 #composer-hint::after 规则在 React 版
+   因元素无此 id 而失效（迁移遗漏），此处随图标化一并恢复；fill 覆盖为实心，强度对齐原 ❤。 */
+.composer__hint-heart { color: var(--bt-red); fill: currentColor; }
+/* 派工卡选中格右上角墨色对勾（原 emoji ✓ → Lucide check，位置/大小不变，笔画加粗对齐原强度）。 */
+.dcard__cell-check {
+  position: absolute; top: 3px; right: 5px;
+  color: var(--bt-stroke);
+  stroke-width: 3;
+}
+/* 产品资产卡底渐隐：暗示正文区内可滚动（展开态才有正文；滚到底最后 16px 轻微没入纸色，
+   手账纸底渐变很柔，接受此折衷）。 */
+.mem-procedural__card:has(.mem-procedural__body) { position: relative; overflow: hidden; }
+.mem-procedural__card:has(.mem-procedural__body)::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 16px;
+  background: linear-gradient(to bottom, transparent, var(--bt-card, #fffdf6) 80%);
+  border-radius: 0 0 calc(var(--bt-wobble-sm, 8px) - 2px) calc(var(--bt-wobble-sm, 8px) - 2px);
+  pointer-events: none;
+}

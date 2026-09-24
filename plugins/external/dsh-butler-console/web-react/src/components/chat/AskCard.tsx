@@ -11,6 +11,7 @@ import { errorTextOf } from '../../lib/error-text.ts'
 import { newConversationId } from '../../lib/turn-event.ts'
 import { announce } from '../../lib/announce.ts'
 import { RichText } from './RichText.tsx'
+import { Icon } from '../common/Icon.tsx'
 
 export interface AskCardProps {
   subtaskId: string
@@ -66,6 +67,7 @@ export function AskCard({ subtaskId, taskId, question, detail }: AskCardProps) {
 
   return (
     <div className="ask">
+      <Icon name="hand" size={16} className="ask__hand" />
       <div>
         <RichText text={question ?? detail ?? '需要你补充点信息'} variant="ask" />
       </div>

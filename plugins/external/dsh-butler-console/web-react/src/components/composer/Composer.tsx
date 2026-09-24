@@ -13,6 +13,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { runSupplement, sendMessage, stopTurn } from '../../hooks/use-turn.ts'
 import { announce } from '../../lib/announce.ts'
+import { Icon } from '../common/Icon.tsx'
 import { useSessionStore, type MemberItem } from '../../stores/session.ts'
 import { useTurnStore } from '../../stores/turn.ts'
 import { useComposerStore } from '../../stores/composer.ts'
@@ -432,7 +433,7 @@ export function Composer() {
         <span>
           {hint !== null
             ? hint
-            : <>牛马大总管<span className="red-wavy">先听明白需求</span>，再替你分派成员</>}
+            : <>牛马大总管<span className="red-wavy">先听明白需求</span>，再替你分派成员<Icon name="heart" size={11} className="composer__hint-heart" /></>}
         </span>
         <span id="composer-count">{length > 0 ? `${length} 字` : ''}</span>
       </div>
