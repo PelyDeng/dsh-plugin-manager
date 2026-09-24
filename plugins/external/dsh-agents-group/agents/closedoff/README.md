@@ -48,6 +48,7 @@ closedoff 在 authenticated 模式接入 auth 的[会话管理](../../../../../d
 - [功能范围](#功能范围)
 - [架构关系](#架构关系)
 - [本地构建](#本地构建)
+- [前端迁移与本地 mock（React 二期）](#前端迁移与本地-mockreact-二期)
 - [安装到 DSH](#安装到-dsh)
 - [配置业务参数](#配置业务参数)
 - [启动与访问](#启动与访问)
@@ -111,6 +112,27 @@ pnpm check --external --plugins agents-group
 本包是群组 `dsh-agents-group` 的子包，**没有独立的构建入口**：构建与检查都通过群组完成。根 `check --external --plugins agents-group` 会先构建群组（含本子包），再执行类型、前端语法和行为检查；只构建时使用 `pnpm build --external --plugins agents-group`。子包单独的 `pnpm typecheck` 与 `pnpm test` 仍可在本目录执行，用于快速定位本包的问题。构建生成群组的 `dist/`，并把页面源码、固定为 `1.142.0` 的公共 CesiumJS、设备组标记图片、DSH 图标和 `@hy-media/video-player@0.0.37` 运行资源复制到本子包的 `web/assets/`。`index.html` 保留页面骨架，`app.js` 管理主交互，`trajectory.js` 管理地图、截图和摄像头播放器。轨迹地图和视频播放器均不使用公网 CDN。
 
 `@hy-media/video-player@0.0.37` 的版本化 npm 包快照保存在本插件的 `vendor/`，本包通过相对 `file:` 开发依赖安装，不再访问原私有 npm 源。CesiumJS 和其余公开依赖仍从公共 npm 源安装。正式插件 `.tgz` 携带复制到 `web/assets/` 的播放器运行资源，不依赖仓库外目录。
+
+## 前端迁移与本地 mock（React 二期）
+
+本包前端正在从 `web/`（vanilla JS）迁移到 `web-react/`（React 19 + zustand），依据群组二期的实施方案（`.local/dsh-agents-group/docs/设计/`）。构建开关信号是 `dist/web/app.js` 的存在性：`pnpm build` 产物包含它即切到 React 前端，删除后 `build:web` 复制旧前端，两条链可随时互切。批 1a 已就位数据层与主骨架（SSE 单向流、restore 复原、会话导航），地图/轨迹/视频/弹窗在批 1b 接入。
+
+不依赖真实宿主即可在浏览器跑通页面：用群组根下的 mock 服务器回放身份、会话列表、历史复原假数据与完整的 `/chat` SSE 事件序列（含十类事件与回合元信息），并配合同目录的验证脚本做浏览器断言与截图：
+
+```powershell
+# 1) 构建本包（群组根执行：pnpm build --external --plugins agents-group 亦可）
+Set-Location 'agents/closedoff'; pnpm build
+
+# 2) 启动 mock（默认 8791，避开 butler mock 的 8790；Ctrl+C 停止）
+Set-Location 'plugins/external/dsh-agents-group'; node tests/mock/page-server.mjs
+#    浏览器打开 http://127.0.0.1:8791/closedoff-qa
+
+# 3) 浏览器断言（需 Edge 以 --remote-debugging-port=9223 启动；截图落
+#    .local/dsh-agents-group/docs/验收/）
+node tests/mock/verify-closedoff-1a.mjs
+```
+
+`tests/mock/verify-hello.mjs` 是批 0 的基元层验证（hello 页），批 1a 的页面级验证用 `verify-closedoff-1a.mjs`：发送→流式渲染（thinking 节流、工具相位、卡片、结构化引用）、切会话复原五类要素、console 零错误与截图。
 
 ## 安装到 DSH
 
