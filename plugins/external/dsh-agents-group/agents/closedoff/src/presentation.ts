@@ -2,7 +2,7 @@
 
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { StreamChunk } from '@deepseek-ai/dsh-llm'
-import { historyAssistantDeltas } from '../../../packages/runtime/src/index.ts'
+import { historyAssistantDeltas, type AssistantDelta } from '../../../packages/runtime/src/index.ts'
 import { deriveTurnTokenUsage } from '@deepseek-ai/dsh-token-meter/client'
 import { redactJsonValue, redactVisibleText } from './redaction.ts'
 import { TOOL_BY_NAME } from './specs.ts'
@@ -598,7 +598,15 @@ export function projectHistory(events: readonly SessionEvent[], trackDeviceRadiu
   for (const event of events) {
     if (event.type === 'turn/start') turnEvents = [event]
     else if (turnEvents.length > 0) turnEvents.push(event)
-    for (const { time, step, chunk } of historyAssistantDeltas(event)) {
+    // `expandAssistantStream` 是 validating loader，坏 record 抛 TypeError。这里按空增量
+    // 降级：单条损坏的流不能让整个 /history 投影失败（web.ts 端点的兜底是最后一道）。
+    let deltas: readonly AssistantDelta[] = []
+    try {
+      deltas = historyAssistantDeltas(event)
+    } catch (caught: unknown) {
+      console.warn('closedoff-assistant: 历史流 record 损坏，该条事件按空增量处理', event.type, caught)
+    }
+    for (const { time, step, chunk } of deltas) {
       const entry = ensure(time)
       if (step === firstStep && firstTokenAt === undefined && isTokenDelta(chunk)) firstTokenAt = time
       if (chunk.type === 'text-delta') entry.text += chunk.text
@@ -610,7 +618,16 @@ export function projectHistory(events: readonly SessionEvent[], trackDeviceRadiu
       }
       else if (chunk.type === 'tool-call-delta' && !tools.has(String(chunk.id))) {
         const name = chunk.name ?? ''
-        const card: ToolCard = { callId: String(chunk.id), name, api: '', status: 'run', presentation: presentationDescriptor(name) }
+        // `assistant/attempt` 是失败/中断尝试的落定事件（宿主只在流失败或中止时写它，成功
+        // 尝试落定 assistant/message）：其中未 dispatch 的调用在日志里不会有 tool/call 与
+        // tool/result 跟进，按 'run' 建卡会让历史页这一行永远停在「查询中」。对齐实时通道
+        // tool_end 的失败口径直接建成终态；若后续确有结果事件（已 dispatch 未结算的合成
+        // result），tool/result 分支会再推进它。
+        const card: ToolCard = {
+          callId: String(chunk.id), name, api: '',
+          status: event.type === 'assistant/attempt' ? 'error' : 'run',
+          presentation: presentationDescriptor(name),
+        }
         tools.set(card.callId, card)
         entry.tools.push(card)
       }

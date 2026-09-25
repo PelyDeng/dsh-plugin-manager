@@ -440,12 +440,14 @@ export class BlogJobs {
         try {
           if (event.type==='assistant/message') {
             /**
-             * `reasoning` 是宿主加在 assistant 消息上的字段（`chat-history.ts` 也读它），
-             * 而官方 `AssistantMessage` 没有声明它 ⇒ 在这里按本文件的读法收一次形状。
+             * 官方 `AssistantMessage`（llm/src/message.ts:167-170）**没有** `reasoning` 顶层
+             * 字段：推理持久在 content 的 reasoning 块里（`{type:'reasoning', text}`，与
+             * chat-history.ts、reasoning-translation.ts 的消费点同口径）。块缺失时回落实时
+             * 累积帧，覆盖实时帧先于落定事件到达的常规时序。
              */
-            const m: { reasoning?: unknown; content: readonly { readonly type: string; readonly text?: string | undefined }[] } = event.data.message
+            const m: { content: readonly { readonly type: string; readonly text?: string | undefined }[] } = event.data.message
             b.text=m.content.filter(v=>v.type==='text').map(v=>v.text).join('')
-            const reasoning=typeof m.reasoning==='string'&&m.reasoning?m.reasoning:b.liveReasoning
+            const reasoning=m.content.filter(v=>v.type==='reasoning').map(v=>v.text).join('')||b.liveReasoning
             b.liveReasoning=''
             foldStep(reasoning, b.text)
             this.update(b,{text:b.text,thinking:thinkingView()})

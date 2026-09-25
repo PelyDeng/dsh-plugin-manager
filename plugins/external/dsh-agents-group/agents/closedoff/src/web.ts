@@ -442,10 +442,18 @@ export async function installWeb(
             feedbackUnavailable = true
           }
         }
+        // 投影内的坏 record 已按空增量降级；这层兜底保证任何投影意外都不再让 /history 500，
+        // 单个坏 record 最多损失整页历史，不该拖垮端点。
+        let history: ReturnType<typeof projectHistory> = []
+        if (conversation !== undefined) {
+          try {
+            history = projectHistory(lifecycle.events(conversation), config.trackDeviceRadiusMeters)
+          } catch (caught: unknown) {
+            console.warn(`closedoff-assistant: /history 投影失败，按空历史返回（会话 ${conversation.id}）`, caught)
+          }
+        }
         respond(actor, res, 200, {
-          history: conversation === undefined
-            ? []
-            : projectHistory(lifecycle.events(conversation), config.trackDeviceRadiusMeters),
+          history,
           feedback,
           feedbackUnavailable,
         })

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { analyzeTrackByDeviceGroups, collectOpaqueResultValues, extractCards, extractDeviceGroups, extractTrackPoints, extractVehicleMediaFromResult, filterDeviceGroupsNearTrack, gatewayResultFailed, projectHistory, projectReasoning } from '../src/presentation.ts'
 import { TOOL_SPECS } from '../src/specs.ts'
@@ -599,5 +599,78 @@ describe('Web projections', () => {
       finishReason: reason, ttftMs: 10, runMs: 100, branchSeq: 3,
       tools: [{ callId: 'call', name: 'closedoff_vehicle_track' }],
     })
+  })
+
+  it('settles calls expanded from an interrupted attempt instead of leaving them running forever', () => {
+    // attempt 是失败/中断尝试的落定事件：其中的调用未 dispatch 时，日志里没有 tool/call、
+    // tool/result 跟进（宿主对 undispatched 调用不补结果事件）。卡片保留展示，但不得停在 run——
+    // 否则历史页这一行永远「查询中」。
+    const events = [
+      { type: 'turn/start', seq: 0, time: 100, data: { turn: 1 } },
+      { type: 'step/start', seq: 1, time: 110, data: { step: 1, turn: 1 } },
+      { type: 'assistant/attempt', seq: 2, time: 150, data: {
+        turn: 1, step: 1,
+        stream: [
+          { type: 'chunk', time: 120, chunk: { type: 'reasoning-delta', index: 0, text: '查询轨迹。' } },
+          { type: 'chunk', time: 130, chunk: { type: 'tool-call-delta', index: 1, id: 'call-1', name: 'closedoff_vehicle_track', argumentsDelta: '{}' } },
+        ],
+      } },
+      { type: 'turn/end', seq: 3, time: 200, data: { reason: { kind: 'aborted', reason: { kind: 'user' } } } },
+    ] as unknown as SessionEvent[]
+
+    const entry = projectHistory(events)[0]
+    expect(entry).toMatchObject({ role: 'assistant', done: true, finishReason: 'aborted' })
+    expect(entry?.role === 'assistant' ? entry.tools : []).toEqual([
+      expect.objectContaining({ callId: 'call-1', name: 'closedoff_vehicle_track', status: 'error' }),
+    ])
+  })
+
+  it('keeps calls expanded from a settled message runnable until their result arrives', () => {
+    // 对照：正常落定消息展开的调用仍是 run，由后续 tool/result 推进终态（行为不变）。
+    const events = [
+      {
+        type: 'assistant/message', time: 150,
+        data: {
+          turn: 1, step: 1,
+          message: { id: 'm1', source: { provider: 'deepseek', model: 'test' }, content: [{ type: 'text', text: '查询中' }] },
+          stream: [{ type: 'chunk', time: 130, chunk: { type: 'tool-call-delta', index: 1, id: 'call-2', name: 'closedoff_vehicle_track', argumentsDelta: '{}' } }],
+        },
+      },
+      { type: 'tool/call', time: 160, data: { callId: 'call-2', name: 'closedoff_vehicle_track' } },
+      { type: 'tool/result', time: 170, data: { message: { toolCallId: 'call-2', content: [{ type: 'text', text: '{"ok":true,"data":[]}' }] } } },
+      { type: 'turn/end', time: 200, data: { reason: { kind: 'completed' } } },
+    ] as unknown as SessionEvent[]
+
+    const entry = projectHistory(events)[0]
+    expect(entry?.role === 'assistant' ? entry.tools : []).toEqual([
+      expect.objectContaining({ callId: 'call-2', status: 'ok' }),
+    ])
+  })
+
+  it('degrades a corrupted history stream to empty deltas instead of failing the projection', () => {
+    // expandAssistantStream 是 validating loader：坏 record 抛 TypeError。投影必须按空增量
+    // 吞掉它，落定正文与其他事件照常——/history 不能因单个坏 record 500。
+    const warnings: unknown[][] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { warnings.push(args) })
+    try {
+      const events = [
+        {
+          type: 'assistant/message', time: 150,
+          data: {
+            turn: 1, step: 1,
+            message: { id: 'm1', source: { provider: 'deepseek', model: 'test' }, content: [{ type: 'text', text: '完成' }] },
+            // 缺 `dt` 字段的 text-chunks：validateRecord 的 exactKeys 会拒绝。
+            stream: [{ type: 'text-chunks', time0: 120, index: 0, texts: ['坏 record'] }],
+          },
+        },
+        { type: 'turn/end', time: 200, data: { reason: { kind: 'completed' } } },
+      ] as unknown as SessionEvent[]
+
+      const entry = projectHistory(events)[0]
+      expect(entry).toMatchObject({ role: 'assistant', text: '完成', done: true })
+      expect(warnings).toHaveLength(1)
+    } finally {
+      warn.mockRestore()
+    }
   })
 })

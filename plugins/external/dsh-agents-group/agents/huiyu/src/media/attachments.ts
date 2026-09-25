@@ -30,10 +30,16 @@ export interface ImageRef {
   readonly name?: string
 }
 
-/** 宿主图片读取的结果。 */
+/**
+ * 宿主图片读取的结果。
+ *
+ * 字段名对齐宿主 0.1.7 的 `StoredImageAttachment { ref, data }`
+ * （deepseek-harness `packages/attachment/attachment/src/types.ts:130-133`）——旧代码读
+ * `attachment` 字段恒取不到，读图路由的 Content-Type 与识图元信息都退回了最小引用。
+ */
 export interface StoredImage {
   readonly data: Uint8Array | Buffer
-  readonly attachment?: ImageRef
+  readonly ref?: ImageRef
 }
 
 /** 本模块用到的宿主附件服务面。 */
@@ -83,7 +89,9 @@ export async function readImageBytes(
   } catch (cause: unknown) {
     throw new HuiyuError('not_found', `读不到这张图片（${attachmentId}）：它可能已被清理，或不属于当前会话`, { cause })
   }
-  return { data: toBytes(stored.data), ref: stored.attachment ?? ref }
+  // 宿主核验字节后回传完整引用（`StoredImageAttachment.ref`）：用它，媒体类型与尺寸才是
+  // 真实值；缺失时才退回上面的最小引用（宿主类型保证有 ref，这只兜测试替身的形状）。
+  return { data: toBytes(stored.data), ref: stored.ref ?? ref }
 }
 
 /** 把宿主回传的数据收成 `Uint8Array`（兼容 `Buffer` 与只读视图）。 */

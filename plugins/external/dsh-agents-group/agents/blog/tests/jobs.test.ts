@@ -90,7 +90,9 @@ test('official Jobs owns settlement, reports completion and isolates the exact A
 test('reasoning and step narration fold into a cumulative thinking trail without duplicating the answer',async t=>{
   const f=await fixture(t),job=await f.jobs.start(actor,f.request);await tick()
   const h=f.handles[0]!,stream=(type: string,text: string)=>f.emit('agent/assistant-stream',{agent:h.agent,frame:{type:'chunk',chunk:{type,text}}})
-  const message=(text: string,reasoning?: string)=>f.emit('session/event',{id:h.agent.id},{type:'assistant/message',data:{message:{content:[{type:'text',text}],...(reasoning!==undefined?{reasoning}:{})}}})
+  // 宿主 0.1.7 的 AssistantMessage 没有 reasoning 顶层字段：推理持久在 content 的
+  // reasoning 块里（jobs.ts 按块过滤提取）。替身按真实形状构造。
+  const message=(text: string,reasoning?: string)=>f.emit('session/event',{id:h.agent.id},{type:'assistant/message',data:{message:{content:[...(reasoning!==undefined?[{type:'reasoning',text:reasoning}]:[]),{type:'text',text}]}}})
   stream('reasoning-delta','先查定价来源。')
   await tick();assert.match((await f.jobs.get(actor,job.id)).thinking,/先查定价来源/)
   stream('text-delta','正文被截断，换个来源。')
@@ -107,6 +109,18 @@ test('reasoning and step narration fold into a cumulative thinking trail without
   assert.equal(done.status,'succeeded');assert.equal(done.text,'最终答案')
   assert.match(done.thinking,/先查定价来源/);assert.match(done.thinking,/正文被截断/);assert.match(done.thinking,/综合后作答/)
   assert.ok(!done.thinking.includes('最终答案'),'收尾后的思考不应重复最终答案')
+})
+test('reasoning persisted in the message content block survives a missing live frame',async t=>{
+  // 边缘时序：某步的 reasoning 只存在于落定 assistant/message 的 content 块，实时帧
+  // 缺失（适配器缓冲、订阅前已落定）。思考必须从块兜底，不能漏段。
+  const f=await fixture(t),job=await f.jobs.start(actor,f.request);await tick()
+  const h=f.handles[0]!
+  f.emit('session/event',{id:h.agent.id},{type:'assistant/message',data:{message:{content:[{type:'reasoning',text:'落定块里的推理。'},{type:'text',text:'最终答案'}]}}})
+  f.emit('session/event',{id:h.agent.id},{type:'turn/end',data:{reason:{kind:'completed'}}})
+  await tick()
+  const done=await f.jobs.get(actor,job.id)
+  assert.equal(done.status,'succeeded');assert.equal(done.text,'最终答案')
+  assert.match(done.thinking,/落定块里的推理。/)
 })
 test('cancel does not release capacity or settle before Agent is idle; late tool cannot propose',async t=>{
   const f=await fixture(t,{delayedIdle:true}),job=await f.jobs.start(actor,f.request);await tick()
