@@ -371,8 +371,8 @@ function fixture(options: FixtureOptions = {}): Harness {
       emit('tool/result', {
         turn: 1,
         step: 1,
-        // 参与者从 `message.content[0].content` 取结果正文、从 `meta` 取结构化值。
-        message: { content: [{ content: resultText === '' ? [] : [{ type: 'text', text: resultText }] }] },
+        // 宿主 0.1.7（Messages-only）后的形状：toolCallId 在 message 顶层、content 是块数组。
+        message: { toolCallId: 'fixture-call', content: resultText === '' ? [] : [{ type: 'text', text: resultText }] },
         ...(meta === undefined ? {} : { meta }),
       }, conversationId)
     },

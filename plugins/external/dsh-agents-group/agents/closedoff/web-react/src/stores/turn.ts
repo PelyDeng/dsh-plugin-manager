@@ -240,9 +240,15 @@ export const useTurnStore = create<TurnState>((set, get) => ({
                 : event.payload.state === 'empty' ? 'empty' as const : 'error' as const,
             }
             : tool)
+          // 旧 cards.js renderCards：查询卡落定（data/empty）即置位 hasStructured/hasResult——
+          // 正文 Markdown 的业务表格据此剥离（漏置位会导致卡片+正文表格双份重复，且
+          // archive() 固化后刷新前后显示不一致——评审三审 P1#1）。
+          const structured = event.payload.state === 'data' || event.payload.state === 'empty'
           return {
             cards: { ...state.cards, [event.callId]: event.payload },
             tools,
+            hasStructured: state.hasStructured || structured,
+            hasResult: state.hasResult || structured,
           }
         })
         break

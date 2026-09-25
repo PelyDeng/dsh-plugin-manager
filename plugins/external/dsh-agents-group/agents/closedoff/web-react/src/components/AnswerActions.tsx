@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.ts'
 import { compactDuration, compactTokens, exactTokens, fmtClock, summaryDuration } from '../lib/format.ts'
+import { legacyCopy } from '../lib/legacy-copy.ts'
 import type { ReactElement } from 'react'
 import type { TurnMeta } from '../lib/types.ts'
 import { DshIcon } from './DshIcon.tsx'
@@ -45,9 +46,11 @@ export function AnswerActions({ meta, answerText, conversationId, rating, feedba
   const copy = (): void => {
     const text = answerText.trim()
     if (text === '') return
+    // 旧 app.js writeClipboard 同款：非安全上下文（HTTP 内网部署）下 navigator.clipboard
+    // 不存在，回退 textarea + execCommand('copy')。
     const write = navigator.clipboard?.writeText !== undefined
       ? navigator.clipboard.writeText(text)
-      : Promise.reject(new Error('复制失败'))
+      : Promise.resolve(legacyCopy(text)).then(ok => { if (!ok) throw new Error('复制失败') })
     write.then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1000)
