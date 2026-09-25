@@ -91,4 +91,25 @@ describe('页面内容', () => {
     const html = renderPage({ unavailable: '缺配置' })
     expect(html).not.toContain('运行信息')
   })
+
+  it('契约化：:root 契约段在场，color-scheme 固定 light（行为变化，批 3a 登记）', () => {
+    const html = renderPage({ environment: ENVIRONMENT })
+    const style = html.slice(html.indexOf('<style>'), html.indexOf('</style>'))
+    // 契约段来自 web-common tokens.css 的机械生成——抽两条代表性槽核对在场。
+    expect(style).toContain('--bt-paper: #f6efdd;')
+    expect(style).toContain('--bt-ink: #2f2b26;')
+    // 原 `light dark`（随系统暗色）已随契约固定为亮色纸面。
+    expect(style).toContain('color-scheme: light;')
+    // 精确到声明形态：注释里可能出现「light dark」字样（行为变化登记），声明本身不得存在。
+    expect(style).not.toContain('color-scheme: light dark')
+  })
+
+  it('断网可读：样式段零 url() 引用，整页零外链资源（link/script/img 均无）', () => {
+    const html = renderPage({ environment: ENVIRONMENT })
+    const style = html.slice(html.indexOf('<style>'), html.indexOf('</style>'))
+    expect(style, '样式段不得含 url()（含 data: URI）——生成器在构建期已断言').not.toContain('url(')
+    expect(html).not.toContain('<link')
+    expect(html).not.toContain('<script')
+    expect(html).not.toContain('<img')
+  })
 })

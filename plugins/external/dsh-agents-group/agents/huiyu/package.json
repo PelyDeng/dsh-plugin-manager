@@ -22,10 +22,10 @@
     "node": "^22.19.0 || >=24.0.0"
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "node scripts/generate-contract.mjs && tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck",
+    "check": "node scripts/generate-contract.mjs --check && pnpm typecheck",
     "clean": "node ../../../../scripts/clean-plugin.mjs dist coverage"
   },
   "dependencies": {

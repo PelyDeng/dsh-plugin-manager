@@ -21,6 +21,8 @@ const TARGETS = [
   resolve(GROUP, 'agents/web-common/src'),
   resolve(GROUP, 'agents/web-common/styles'),
   resolve(GROUP, 'agents/huiyu/src/page.ts'),
+  // 生成段在扫描面内、白名单豁免：若有人误删白名单条目即红，豁免关系始终真实可验证。
+  resolve(GROUP, 'agents/huiyu/src/contract.ts'),
 ]
 const EXTS = new Set(['.css', '.ts', '.tsx'])
 
@@ -28,15 +30,16 @@ const EXTS = new Set(['.css', '.ts', '.tsx'])
  * 文件级白名单（入库清单，每条注理由）：
  * - web-common/styles/tokens.css：--bt-* token 定义本身（契约的唯一来源）；
  * - web-common/styles/textures.css：材质基元定义处（胶带/滚动条/荧光笔的基元配方色）；
- * - agents/huiyu/src/page.ts：SSR 说明页 12 个字面色——批 3 契约化（构建期从 tokens.css
- *   生成 :root 契约段）后收窄为「仅生成段」，批 0 先整文件豁免。
+ * - agents/huiyu/src/contract.ts：批 3a 契约化后的生成段豁免——构建期从 tokens.css
+ *   机械生成的 :root 契约段（方案 §3.3），色值随源零手改；漂移由 generate-contract.mjs
+ *   --check 断言（挂在群组 check）看住。page.ts 手写部分已随之退出白名单、开始纳管。
  * - closedoff 暗色地图域文件：批 1 Cesium 飞地落地时按色值逐条注理由加入（暗色底图域
  *   与手账纸面两个世界，走 contract-exempt 白名单，方案 §3.2(b) 待拍板项 6）。
  */
 const FILE_WHITELIST = [
   'agents/web-common/styles/tokens.css',
   'agents/web-common/styles/textures.css',
-  'agents/huiyu/src/page.ts',
+  'agents/huiyu/src/contract.ts',
   // 批 1b closedoff 暗色地图域（方案 §3.2(b) 待拍板项 6）：Cesium 底图容器
   // (#101b2d)、视频预览深底 (#0d1d32)、加载遮罩 (rgba(9,19,34,.78)) 与深底上的
   // 浅色文字——与手账纸面是两个世界，硬映射到 --bt-* 暖色槽必失真。文件内亮色

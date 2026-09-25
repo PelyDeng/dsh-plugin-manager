@@ -14,11 +14,23 @@
  * 页面内容是固定的，没有需要交互的状态。为它建一套 `web/` 资源 + 拷贝脚本 + 资源路由，
  * 换来的是"改一行文案要动四个文件"。等这个页面真的需要交互时再拆出去。
  *
- * 样式沿用群组内其他成员页面的观感（中性色、卡片、系统字体），不引外部资源——页面在离线
- * 部署里也要能正常显示。
+ * 样式与群组内其他成员页面同源：`:root` 契约段由 `scripts/generate-contract.mjs` 在
+ * 构建期从 `agents/web-common/styles/tokens.css` 机械生成（`src/contract.ts`），页面
+ * 规则只消费 `--bt-*` 槽，不自造字面色值（契约守护已对本文件纳管）。
+ *
+ * 批 3a 契约化登记的两点口径：
+ *
+ * - **字体轨明示降级**：本页不加载任何字体文件，保持系统字体栈——手账体系的
+ *   LXGW WenKai / Ma Shan Zheng 手写体不进 SSR 页（没有静态资源路由，渐进增强缺席
+ *   为已知观感差异）；色板与圆角已随契约段与 blog/closedoff 统一。离线可显示的约束
+ *   保留：契约段经生成器断言零 `url()` 引用，页面无任何外链资源，断网可读。
+ * - **color-scheme 行为变化**：原 `:root { color-scheme: light dark }` 跟随系统暗色
+ *   出暗色版；契约化后随 tokens.css 固定 `color-scheme: light`——系统暗色下页面保持
+ *   亮色纸面，与 blog/closedoff 两页一致。
  */
 
 import type { HuiyuEnvironment } from './env.ts'
+import { CONTRACT_ROOT_CSS } from './contract.ts'
 
 /** 一次渲染所需的运行状态。 */
 export interface PageState {
@@ -99,26 +111,31 @@ export function renderPage(state: PageState): string {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>绘语图文助手</title>
 <style>
-  :root { color-scheme: light dark; }
+  /* :root 契约段：构建期从 web-common tokens.css 机械生成（src/contract.ts），
+     含 color-scheme: light——原「light dark 随系统」的行为变化见文件头登记。 */
+  :root {
+${CONTRACT_ROOT_CSS}
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; padding: 32px 20px 56px; font: 15px/1.7 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: #1f2328; background: #f6f7f9; }
+  /* 字体轨降级口径（见文件头登记）：不加载字体文件，保持系统栈。 */
+  body { margin: 0; padding: 32px 20px 56px; font: 15px/1.7 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--bt-ink); background: var(--bt-paper); }
   main { max-width: 720px; margin: 0 auto; }
   h1 { margin: 0 0 4px; font-size: 24px; }
   h2 { margin: 32px 0 12px; font-size: 16px; }
-  h3 { margin: 0 0 8px; font-size: 14px; color: #57606a; font-weight: 600; }
-  .lead { margin: 0 0 16px; color: #57606a; }
-  .card { background: #fff; border: 1px solid #d8dee4; border-radius: 10px; padding: 18px 20px; margin-bottom: 16px; }
+  h3 { margin: 0 0 8px; font-size: 14px; color: var(--bt-ink-soft); font-weight: 600; }
+  .lead { margin: 0 0 16px; color: var(--bt-ink-soft); }
+  .card { background: var(--bt-card); border: 1px solid var(--bt-line); border-radius: var(--bt-wobble-sm); padding: 18px 20px; margin-bottom: 16px; }
   .status { margin: 0 0 16px; padding: 8px 12px; border-radius: 8px; font-size: 14px; }
-  .status.ok { background: #dafbe1; color: #116329; }
-  .status.bad { background: #fff1e5; color: #9a3412; }
+  .status.ok { background: var(--bt-ok-bg); color: var(--bt-ok); }
+  .status.bad { background: var(--bt-error-bg); color: var(--bt-error); }
   ul { margin: 0; padding: 0; list-style: none; }
   li { display: flex; gap: 10px; padding: 5px 0; align-items: baseline; }
-  code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #eff1f3; padding: 1px 6px; border-radius: 5px; white-space: nowrap; }
-  li span { color: #57606a; font-size: 14px; }
+  code { font: 13px/1.5 var(--bt-mono); background: var(--bt-paper); padding: 1px 6px; border-radius: 5px; white-space: nowrap; }
+  li span { color: var(--bt-ink-soft); font-size: 14px; }
   .facts { margin: 0; padding: 0; list-style: none; }
-  .facts li { display: block; padding: 3px 0; color: #57606a; font-size: 14px; }
-  a { color: #0969da; }
-  footer { margin-top: 32px; color: #8c959f; font-size: 13px; }
+  .facts li { display: block; padding: 3px 0; color: var(--bt-ink-soft); font-size: 14px; }
+  a { color: var(--bt-sky); }
+  footer { margin-top: 32px; color: var(--bt-ink-faint); font-size: 13px; }
 </style>
 </head>
 <body>

@@ -1,6 +1,6 @@
 {
   "name": "dsh-agents-group",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "DSH 智能体群组：统一分包管理多个智能体，共享公共组件，各自独立页面与授权",
   "license": "UNLICENSED",
   "private": true,
@@ -69,7 +69,7 @@
     "build": "pnpm --filter @dsh-agents-group/closedoff run build && pnpm --filter @dsh-agents-group/blog run build && pnpm --filter @dsh-agents-group/huiyu run build && tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "check": "pnpm typecheck && node tests/contract-guard.mjs && node tests/tokens-hash.mjs",
+    "check": "pnpm typecheck && node agents/huiyu/scripts/generate-contract.mjs --check && node tests/contract-guard.mjs && node tests/tokens-hash.mjs",
     "clean": "node ../../scripts/clean-plugin.mjs dist coverage"
   },
   "dependencies": {
