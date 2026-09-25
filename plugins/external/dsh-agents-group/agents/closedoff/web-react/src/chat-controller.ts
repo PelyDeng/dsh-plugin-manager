@@ -310,6 +310,21 @@ export async function bootstrap(): Promise<void> {
     const linked = linkedConversationId()
     const conversationId = isLinkedConversationId(linked) ? linked : stored ?? ''
     state.setConversationId(conversationId)
+    // authenticated 模式：顶栏显示名用 Auth 会话的 username 覆盖（旧码
+    // checkIdentity.then 里的 /auth/api/session 段；失败静默保持 /identity 的 label，
+    // 登录态在途变化时不得回写，按发起时的 identityEpoch 核对）。
+    if (identity.mode === 'authenticated') {
+      const epochAtFetch = useSessionStore.getState().identityEpoch
+      void fetch('/auth/api/session', { cache: 'no-store' })
+        .then(response => readJson<{ user?: { username?: unknown } }>(response))
+        .then(session => {
+          const username = session.user?.username
+          if (typeof username !== 'string' || username === '') return
+          if (useSessionStore.getState().identityEpoch !== epochAtFetch) return
+          useSessionStore.setState({ identityLabel: username })
+        })
+        .catch(() => {})
+    }
     await refreshConversations()
     useSessionStore.getState().setStatus('ok', '智能体就绪')
     await restore()

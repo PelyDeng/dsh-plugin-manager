@@ -11,6 +11,7 @@ import { announce } from '@dsh-agents-group/web-common'
 import { useSessionStore } from '../stores/session.ts'
 import { useBoardStore } from '../stores/board.ts'
 import { useTurnStore } from '../stores/turn.ts'
+import { MOBILE_QUERY, isMobileViewport } from '../lib/viewport.ts'
 import { useChatStream } from '../hooks/use-chat-stream.ts'
 import type { ReactElement } from 'react'
 import { CameraModalEnclave } from '../enclaves/CameraModal.tsx'
@@ -53,8 +54,17 @@ export function AppShell(): ReactElement {
   // 桌面默认展开（旧 conversation-history.js 的 layout()：非 mobile 且未收起即 show。
   // 旧 storageKey 是空串、折叠记忆从未生效——对齐的是「每次进入默认展开」的可见行为，
   // 不复刻一个坏掉的记忆）。≤960px 走浮层形态，默认收起。
-  const [historyOpen, setHistoryOpen] = useState(() => !window.matchMedia('(max-width: 960px)').matches)
+  const [historyOpen, setHistoryOpen] = useState(() => !isMobileViewport())
   const [notice, setNotice] = useState('')
+
+  // 断点变化时面板形态跟随（旧码 mobile change → layout() 同口径）：
+  // 窄屏转浮层即收起，宽屏恢复常驻展开。
+  useEffect(() => {
+    const media = window.matchMedia(MOBILE_QUERY)
+    const onChange = (): void => setHistoryOpen(!media.matches)
+    media.addEventListener('change', onChange)
+    return () => media.removeEventListener('change', onChange)
+  }, [])
 
   // 就地轻提示（announce 同步读屏；可见提示 2.4s 自清）。
   const notify = (text: string): void => {

@@ -115,6 +115,61 @@ describe('POST /chat 单向事件流的投影', () => {
     expect(assistant.hasStructured).toBe(false) // 错误卡不算结构化结果（旧码口径）
   })
 
+  it('纯卡片查询：cards data 即置位 hasStructured/hasResult（流式期与归档一致）', async () => {
+    // 旧 renderCards：查询卡落定（data/empty）即置位——正文业务表格据此剥离，
+    // archive 固化后 restore 前后同形。无 track/fences/media 也必须置位。
+    const manual = manualSseResponse()
+    stubFetch(manual.response)
+    const pending = sendMessage('查预警')
+    await vi.waitFor(() => expect(stores.turn.useTurnStore.getState().active).toBe(true))
+    manual.push(
+      { type: 'conversation', conversationId: 'closedoff-web-10' },
+      {
+        type: 'tool_start', callId: 'call-c', name: 'closedoff_warning_page',
+        presentation: { tool: 'closedoff_warning_page', group: 'risk', variant: 'records', sourceLabel: '预警报警查询' },
+      },
+      { type: 'cards', callId: 'call-c', payload: CARD_DATA },
+    )
+    // 流式期即置位（表格剥离不等 done）。
+    await vi.waitFor(() => expect(stores.turn.useTurnStore.getState().hasStructured).toBe(true))
+    expect(stores.turn.useTurnStore.getState().hasResult).toBe(true)
+    manual.push({ type: 'delta', text: '结论如下。' }, { type: 'done', reason: 'completed' })
+    manual.close()
+    await pending
+    const assistant = stores.board.useBoardStore.getState().messages[1]
+    if (assistant?.kind !== 'assistant') return expect.fail('助手消息缺失')
+    // 归档保持 hasStructured（restore 投影同口径，双路径显示一致）。
+    expect(assistant.hasStructured).toBe(true)
+  })
+
+  it('cards empty 同置位（旧 renderCards：empty 也算结果落地）', async () => {
+    stubFetch(sseResponse([
+      { type: 'conversation', conversationId: 'closedoff-web-11' },
+      { type: 'tool_start', callId: 'call-e', name: 'closedoff_black_page', presentation: { tool: 'closedoff_black_page', group: 'authorization', variant: 'records', sourceLabel: '黑名单' } },
+      { type: 'cards', callId: 'call-e', payload: { ...CARD_DATA, tool: 'closedoff_black_page', group: 'authorization', sourceLabel: '黑名单', state: 'empty', count: 0, shown: 0, cards: [] } },
+      { type: 'done', reason: 'completed' },
+    ]))
+    await sendMessage('查黑名单')
+    const empty = stores.board.useBoardStore.getState().messages[1]
+    if (empty?.kind !== 'assistant') return expect.fail('助手消息缺失')
+    expect(empty.cards['call-e']?.state).toBe('empty')
+    expect(empty.hasStructured).toBe(true)
+  })
+
+  it('cards error 不置位（旧 renderCards 口径：仅 data/empty 算结果）', async () => {
+    stubFetch(sseResponse([
+      { type: 'conversation', conversationId: 'closedoff-web-12' },
+      { type: 'tool_start', callId: 'call-x', name: 'closedoff_black_page', presentation: { tool: 'closedoff_black_page', group: 'authorization', variant: 'records', sourceLabel: '黑名单' } },
+      { type: 'cards', callId: 'call-x', payload: { ...CARD_DATA, tool: 'closedoff_black_page', group: 'authorization', sourceLabel: '黑名单', state: 'error', count: 0, shown: 0, cards: [] } },
+      { type: 'done', reason: 'completed' },
+    ]))
+    await sendMessage('查黑名单')
+    const failed = stores.board.useBoardStore.getState().messages[1]
+    if (failed?.kind !== 'assistant') return expect.fail('助手消息缺失')
+    expect(failed.cards['call-x']?.state).toBe('error')
+    expect(failed.hasStructured).toBe(false)
+  })
+
   it('fences/track/cameras/media 入数据面；track/media 顶掉同 callId 卡片并置 hasStructured', async () => {
     const points = [{ lon: 102.7, lat: 25.0 }, { lon: 102.71, lat: 25.01 }]
     stubFetch(sseResponse([
@@ -223,5 +278,46 @@ describe('POST /chat 单向事件流的投影', () => {
     expect(assistant.cards['c1']?.count).toBe(2)
     expect(assistant.rating).toBe('positive')
     expect(stores.session.useSessionStore.getState().conversationId).toBe('closedoff-web-9')
+  })
+
+  it('authenticated 模式顶栏显示名被 Auth 会话 username 覆盖（旧码 /auth/api/session 段）', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/identity')) {
+        return Promise.resolve(new Response(JSON.stringify({ mode: 'authenticated', key: 'tester', label: '身份标签' }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      }
+      if (url.includes('/auth/api/session')) {
+        return Promise.resolve(new Response(JSON.stringify({ user: { username: 'zhangsan' }, csrf: 'c' }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      }
+      if (url.includes('/models')) {
+        return Promise.resolve(new Response(JSON.stringify({ groups: [], failures: [], selected: null }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      }
+      return Promise.resolve(new Response(JSON.stringify({ items: [], nextOffset: null }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    }))
+    stores.session.useSessionStore.setState({ identityReady: false, identityKey: '', identityLabel: '', identityMode: '' })
+    await controller.bootstrap()
+    // 先落 /identity 的 label，再被 session username 覆盖。
+    await vi.waitFor(() => expect(stores.session.useSessionStore.getState().identityLabel).toBe('zhangsan'))
+    expect(stores.session.useSessionStore.getState().identityMode).toBe('authenticated')
+  })
+
+  it('standalone 模式不请求 Auth 会话，显示名保持 /identity 的 label', async () => {
+    const calls: string[] = []
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      calls.push(url)
+      if (url.includes('/identity')) {
+        return Promise.resolve(new Response(JSON.stringify({ mode: 'standalone', key: 'tester', label: '测试用户' }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      }
+      if (url.includes('/models')) {
+        return Promise.resolve(new Response(JSON.stringify({ groups: [], failures: [], selected: null }), { status: 200, headers: { 'content-type': 'application/json' } }))
+      }
+      return Promise.resolve(new Response(JSON.stringify({ items: [], nextOffset: null }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    }))
+    stores.session.useSessionStore.setState({ identityReady: false, identityKey: '', identityLabel: '', identityMode: '' })
+    await controller.bootstrap()
+    await vi.waitFor(() => expect(stores.session.useSessionStore.getState().identityReady).toBe(true))
+    expect(stores.session.useSessionStore.getState().identityLabel).toBe('测试用户')
+    expect(calls.some(url => url.includes('/auth/api/session'))).toBe(false)
   })
 })

@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { openConversation, refreshConversations, startFreshConversation } from '../chat-controller.ts'
 import { api } from '../lib/api.ts'
 import { conversationMarkdown, exportFileName } from '../lib/conversation-export.ts'
+import { isMobileViewport } from '../lib/viewport.ts'
 import { useSessionStore } from '../stores/session.ts'
 import type { ConversationItem } from '../lib/types.ts'
 import type { ReactElement } from 'react'
@@ -56,6 +57,7 @@ export function ConversationPanel({ open, onClose, busy }: { open: boolean; onCl
   const [keyword, setKeyword] = useState('')
   const [renaming, setRenaming] = useState<ConversationItem | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [renameError, setRenameError] = useState('')
   const [mutating, setMutating] = useState(false)
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [multi, setMulti] = useState(false)
@@ -108,7 +110,11 @@ export function ConversationPanel({ open, onClose, busy }: { open: boolean; onCl
 
   const submitRename = (target: ConversationItem): Promise<void> => mutate(async () => {
     const title = renameValue.trim()
-    if (title === '') return
+    // 旧码 rename submit：空标题不提交，就地给「请输入标题」提示（role=alert）。
+    if (title === '') {
+      setRenameError('请输入标题')
+      return
+    }
     await api.conversationAction({ operation: 'rename', ids: [target.id], title })
     // 手动改名后自动标题不再覆盖该会话（旧码 rename 当前会话停轮询）。
     if (target.id === currentId) useSessionStore.getState().stopTitlePoll()
@@ -165,12 +171,14 @@ export function ConversationPanel({ open, onClose, busy }: { open: boolean; onCl
           <Icon name="x" size={14} />
         </button>
       </div>
+      {/* 新建/打开行后仅窄屏浮层态收起（旧码 `if (mobile.matches) hide()`）：
+          桌面常驻形态收起会打断「连续翻历史」的操作流。 */}
       <button
         type="button"
         className="co-history-new"
         disabled={busy}
         title={busy ? '请等待回答完成或先停止' : '开启新对话'}
-        onClick={() => { void startFreshConversation().then(created => { if (created) onClose() }) }}
+        onClick={() => { void startFreshConversation().then(created => { if (created && isMobileViewport()) onClose() }) }}
       >
         <Icon name="sparkles" size={14} /> 开启新对话
       </button>
@@ -233,7 +241,7 @@ export function ConversationPanel({ open, onClose, busy }: { open: boolean; onCl
                   disabled={busy || mutating}
                   aria-current={item.id === currentId}
                   title={busy ? '请等待回答完成或先停止' : item.title}
-                  onClick={() => { void openConversation(item.id).then(opened => { if (opened) onClose() }) }}
+                  onClick={() => { void openConversation(item.id).then(opened => { if (opened && isMobileViewport()) onClose() }) }}
                 >
                   {item.title === '' ? '新对话' : item.title}
                 </button>
@@ -254,7 +262,7 @@ export function ConversationPanel({ open, onClose, busy }: { open: boolean; onCl
                     {MENU_ITEMS.map(label => {
                       const props =
                         label === '重命名'
-                          ? { onClick: () => { setMenuFor(null); setRenaming(item); setRenameValue(item.title) } }
+                          ? { onClick: () => { setMenuFor(null); setRenaming(item); setRenameValue(item.title); setRenameError('') } }
                           : label === '置顶'
                             ? { onClick: () => { setMenuFor(null); void togglePin(item) } }
                             : label === '分享导出'
@@ -297,11 +305,16 @@ export function ConversationPanel({ open, onClose, busy }: { open: boolean; onCl
               value={renameValue}
               maxLength={100}
               aria-label="对话标题"
-              onChange={event => setRenameValue(event.target.value)}
+              onChange={event => {
+                setRenameValue(event.target.value)
+                // 输入即清除旧提示（旧码每次 submit 重算 error）。
+                if (renameError !== '') setRenameError('')
+              }}
               onKeyDown={event => {
                 if (event.key === 'Enter' && !event.nativeEvent.isComposing) void submitRename(renaming)
               }}
             />
+            <p className="co-history-dialog-error" role="alert">{renameError}</p>
           </div>
           <div className="co-history-dialog-actions">
             <button type="button" className="co-history-action" onClick={() => setRenaming(null)}>取消</button>

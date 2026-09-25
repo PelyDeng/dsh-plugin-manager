@@ -1184,6 +1184,17 @@ body {
 
 .co-history-dialog-body input:focus { border-color: var(--bt-stroke); }
 
+/* 对话框就地错误提示（旧 qh-error 口径：role=alert 红字一行，空时不出现在版面；
+   色值取旧 chat-base.css 的 --qa-error 实际值 #d92d42）。 */
+.co-history-dialog-error {
+  margin: 8px 0 0;
+  color: #d92d42;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.co-history-dialog-error:empty { display: none; }
+
 .co-history-dialog-actions {
   display: flex;
   justify-content: flex-end;

@@ -49,6 +49,16 @@ export function useChatStream(): {
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
+  // bfcache 恢复（pageshow persisted）：内存态可能已落后于服务端，强制整页重载
+  // 走一遍身份核验与复原（旧码 pageshow 监听同口径；storage 的 reload 只覆盖跨标签页）。
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent): void => {
+      if (event.persisted) window.location.reload()
+    }
+    window.addEventListener('pageshow', onPageShow)
+    return () => window.removeEventListener('pageshow', onPageShow)
+  }, [])
+
   return {
     send: text => { void sendMessage(text) },
     stop: stopSend,
