@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { announce } from '@dsh-agents-group/web-common'
 import { useSessionStore } from '../stores/session.ts'
 import { useBoardStore } from '../stores/board.ts'
+import { useTurnStore } from '../stores/turn.ts'
 import { useChatStream } from '../hooks/use-chat-stream.ts'
 import type { ReactElement } from 'react'
 import { CameraModalEnclave } from '../enclaves/CameraModal.tsx'
@@ -48,7 +49,11 @@ export function AppShell(): ReactElement {
   const identityLabel = useSessionStore(state => state.identityLabel)
   const identityMode = useSessionStore(state => state.identityMode)
   const restoreError = useBoardStore(state => state.restoreError)
-  const [historyOpen, setHistoryOpen] = useState(false)
+  const turnActive = useTurnStore(state => state.active)
+  // 桌面默认展开（旧 conversation-history.js 的 layout()：非 mobile 且未收起即 show。
+  // 旧 storageKey 是空串、折叠记忆从未生效——对齐的是「每次进入默认展开」的可见行为，
+  // 不复刻一个坏掉的记忆）。≤960px 走浮层形态，默认收起。
+  const [historyOpen, setHistoryOpen] = useState(() => !window.matchMedia('(max-width: 960px)').matches)
   const [notice, setNotice] = useState('')
 
   // 就地轻提示（announce 同步读屏；可见提示 2.4s 自清）。
@@ -124,7 +129,7 @@ export function AppShell(): ReactElement {
           </div>
         </aside>
 
-        <ConversationPanel open={historyOpen} onClose={() => setHistoryOpen(false)} busy={false} />
+        <ConversationPanel open={historyOpen} onClose={() => setHistoryOpen(false)} busy={turnActive} />
       </div>
 
       {notice !== '' && <span className="co-notice" role="status">{notice}</span>}

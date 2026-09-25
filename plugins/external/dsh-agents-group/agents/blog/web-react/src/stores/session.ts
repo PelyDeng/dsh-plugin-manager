@@ -22,12 +22,14 @@ export interface SessionState {
   userId: string
   /** 公开博客地址（/identity 的 blogUrl；管理弹窗的链接行用）。 */
   blogUrl: string
+  /** 备份管理员（/identity 的 backupAdmin；管理弹窗的「备份与恢复」入口显隐）。 */
+  backupAdmin: boolean
   view: ViewName
   /** 顶层提示行（旧 #notice / #chat-error 的兜底锚点；组件局部错误不入此）。 */
   notice: { text: string; tone: 'error' | 'info' } | null
 
   beginViewChange: () => void
-  adoptIdentity: (identity: { userId: string; blogUrl?: string }) => void
+  adoptIdentity: (identity: { userId: string; blogUrl?: string; backupAdmin?: boolean }) => void
   setView: (view: ViewName) => void
   setNotice: (notice: { text: string; tone: 'error' | 'info' } | null) => void
 }
@@ -37,12 +39,13 @@ export const useSessionStore = create<SessionState>(set => ({
   identityReady: false,
   userId: '',
   blogUrl: '',
+  backupAdmin: false,
   view: 'chat',
   notice: null,
 
   beginViewChange: () => set(state => ({ viewToken: state.viewToken + 1 })),
 
-  adoptIdentity: identity => set({ identityReady: true, userId: identity.userId, blogUrl: identity.blogUrl ?? '' }),
+  adoptIdentity: identity => set({ identityReady: true, userId: identity.userId, blogUrl: identity.blogUrl ?? '', backupAdmin: identity.backupAdmin === true }),
 
   setView: view => set({ view }),
 

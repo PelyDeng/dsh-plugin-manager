@@ -3,7 +3,7 @@
  * 列表行（已发布/草稿徽标、未发布修改）、删除（走 prepareLibraryDelete 确认链路）、
  * 旧版内容迁移入口。
  */
-import { importArticle, prepareLibraryDelete, loadList, scheduleSearch } from '../../workspace-controller.ts'
+import { importArticle, openDraft, prepareLibraryDelete, loadList, scheduleSearch } from '../../workspace-controller.ts'
 import { api } from '../../lib/api.ts'
 import { createDraft } from '../../workspace-controller.ts'
 import { useSessionStore } from '../../stores/session.ts'
@@ -44,6 +44,9 @@ export function LibraryPanel(): ReactElement {
   const migrate = async (): Promise<void> => {
     try {
       await api.migrateDrafts()
+      // 迁移后当前草稿未脏则重新拉取装配（旧 migrate-drafts 的 fill 分支，A9）。
+      const { draft, dirty } = useWorkspaceStore.getState()
+      if (draft !== null && !dirty) await openDraft(draft.id)
       await loadList()
     } catch (issue) {
       onNotice(issue instanceof Error ? issue.message : String(issue))

@@ -90,6 +90,10 @@ export interface SourceRef {
   url: string
   title?: string | undefined
   fetched?: boolean | undefined
+  /** 抓取/检索时间（旧 showSources 的 meta 行；new Date() 本地化显示）。 */
+  retrievedAt?: string | number | undefined
+  /** 原文发布时间（旧码直接拼接字符串，不走 Date）。 */
+  publishedAt?: string | undefined
 }
 
 /** 文章候选卡（dsh_turn_results 投影；点击进入文章视图——批 2b 消费）。 */
@@ -201,6 +205,31 @@ export type StreamMessage =
   | { type: 'snapshot'; value: ChatHistoryResult }
   | { type: 'changed' }
   | { type: 'ping' }
+
+// ── 批 2c：备份与恢复（旧 web/app.js backup 段；backupAdmin 专属）──────────
+
+/** 一条备份记录（backup-status 的 backups 行）。 */
+export interface BackupRow {
+  id: string
+  status: string
+}
+
+/** backup-status 的响应（旧 loadBackups 消费的形状）。 */
+export interface BackupStatus {
+  schedule: { enabled: boolean; time: string; daily: number; weekly: number }
+  nextRun?: string | null | undefined
+  current?: { status?: string | undefined; message?: string | undefined; note?: string | undefined } | null | undefined
+  last?: { id?: string | undefined; backupId?: string | undefined; status?: string | undefined } | null | undefined
+  recoveryPending?: boolean | undefined
+  backups?: readonly BackupRow[] | undefined
+}
+
+/** 恢复准备票（backup-restore-prepare 的返回；confirm 需原样回传）。 */
+export interface RestoreTicket {
+  id: string
+  nonce: string
+  backupId: string
+}
 
 // ── 批 2b：评价、文章工作台与管理域 ────────────────────────────────────────
 

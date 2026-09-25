@@ -89,10 +89,11 @@ const server = createServer(async (request, response) => {
     if (pathname.startsWith(`${BLOG_PREFIX}/media/fonts/`)) {
       if (await serveFont(pathname, response)) return
     }
-    // identity：形状对齐 src/index.ts 的 /identity 端点。
+    // identity：形状对齐 src/index.ts 的 /identity 端点。backupAdmin=true 让
+    // 「备份与恢复」入口在场（批 2c 断言面；真实服务端按 allowedUserIds 判定）。
     if (pathname === `${BLOG_PREFIX}/identity`) {
       response.writeHead(200, HEADERS_JSON)
-      response.end(JSON.stringify({ userId: 'mock-user', version: '0.13.0-mock', backupAdmin: false, maxImageBytes: 26_214_400, blogUrl: 'https://blog.example.invalid' }))
+      response.end(JSON.stringify({ userId: 'mock-user', version: '0.13.0-mock', backupAdmin: true, maxImageBytes: 26_214_400, blogUrl: 'https://blog.example.invalid' }))
       return
     }
     // 批 2a：mock 状态重置（verify 脚本开跑时调用，从两个初始会话出发）。
@@ -310,6 +311,10 @@ server.listen(PORT, '127.0.0.1', () => {
 const blogConversations = new Map()
 let blogSeq = 100
 
+/** 批 2c：列表页长。真服务端是 30（src/chat-store.ts PAGE_SIZE）；mock 收紧到 5
+ * 让「加载更多」在种子数据量下可测，协议（offset/nextOffset）与真实一致。 */
+const BLOG_LIST_PAGE = 5
+
 // ── 批 2b：草稿、博客文章、分类标签评论与操作确认的状态面 ──────────────────
 
 const blogDrafts = new Map()
@@ -338,6 +343,17 @@ const blogComments = [
   { id: 32, cid: 12, author: '读者乙', text: '想问一下重连怎么处理？', status: 'waiting' },
 ]
 let blogRevision = 5
+
+/** 批 2c：备份与恢复的假数据面（backup-status 落在 blogBackup 上，schedule 可写）。 */
+const blogBackup = {
+  schedule: { enabled: true, time: '03:00', daily: 7, weekly: 4 },
+  lastRunAt: 0,
+  backups: [
+    { id: 'backup-20260924-0300', status: 'complete' },
+    { id: 'backup-20260923-0300', status: 'complete' },
+    { id: 'backup-20260922-0300', status: 'failed' },
+  ],
+}
 
 function makeBlogDraft(id, overrides = {}) {
   return {
@@ -377,7 +393,10 @@ function makeBlogConversation(id, title, pinned = false) {
   }
 }
 
-/** 初始两个会话：conv-mock-1 带一轮完整历史（切会话场景），conv-mock-2 空会话。 */
+/** 初始两个会话：conv-mock-1 带一轮完整历史（切会话场景），conv-mock-2 空会话。
+ * 批 2c 追加种子列表行（conv-seed-*）：覆盖「今天/昨天/7 天内/30 天内/更早」各
+ * 分组，条数超过页长让「加载更多」可测；id 不与 conv-mock-* 冲突，既有 2a/2b
+ * 断言不受影响。 */
 function resetBlogStore() {
   blogConversations.clear()
   blogSeq = 100
@@ -430,6 +449,22 @@ function resetBlogStore() {
   blogConversations.set('conv-mock-1', seeded)
   const fresh = makeBlogConversation('conv-mock-2', '批 2a 冒烟新会话')
   blogConversations.set('conv-mock-2', fresh)
+  // 批 2c 种子行：分组素材（今天/昨天/7 天内/30 天内/更早）+ 分页素材。
+  const seedSpecs = [
+    ['conv-seed-1', '清晨灵感速记', 2 * 3_600_000, false],
+    ['conv-seed-2', '归档目录整理', 1 * 86_400_000 + 3_600_000, false],
+    ['conv-seed-3', '写作选题头脑风暴', 3 * 86_400_000, false],
+    ['conv-seed-4', '评论回复模板打磨', 10 * 86_400_000, false],
+    ['conv-seed-5', '站点迁移备忘', 20 * 86_400_000, false],
+    ['conv-seed-6', '旧版数据导入清单', 45 * 86_400_000, false],
+    ['conv-seed-7', '年度盘点草稿', 120 * 86_400_000, false],
+    ['conv-seed-8', '首页文案微调记录', 200 * 86_400_000, false],
+  ]
+  for (const [id, title, ageMs, pinned] of seedSpecs) {
+    const conv = makeBlogConversation(id, title, pinned)
+    conv.info.updatedAt = Date.now() - ageMs
+    blogConversations.set(id, conv)
+  }
 }
 
 resetBlogStore()
@@ -543,7 +578,11 @@ const blogActions = {
     blogConversations.set(id, makeBlogConversation(id, '新对话'))
     return { id, title: '新对话', updatedAt: Date.now(), ready: true, parent: null, pinned: false }
   },
+  // 批 2c：query 按标题过滤（旧 placeholder「搜索对话标题」=titleOnly 口径）、
+  // 置顶优先 + 最近活动倒序、offset 分页（nextOffset=null 表示没有下一页）。
   'chat-list': args => {
+    const query = String(args.query ?? '').trim()
+    const offset = Number(args.offset ?? 0)
     const items = [...blogConversations.values()]
       .map(conv => ({
         id: conv.info.id,
@@ -552,10 +591,11 @@ const blogActions = {
         state: conv.busy ? 'busy' : 'ready',
         pinned: conv.info.pinned,
       }))
-      .sort((a, b) => b.updatedAt - a.updatedAt)
-    const offset = Number(args.offset ?? 0)
-    void args.query
-    return { items: offset > 0 ? [] : items, nextOffset: null }
+      .filter(item => query === '' || item.title.includes(query))
+      .sort((a, b) => (b.pinned === true) - (a.pinned === true) || b.updatedAt - a.updatedAt)
+    const page = items.slice(offset, offset + BLOG_LIST_PAGE)
+    const nextOffset = offset + BLOG_LIST_PAGE < items.length ? offset + BLOG_LIST_PAGE : null
+    return { items: page, nextOffset }
   },
   'chat-models': () => ({ ...MOCK_MODELS }),
   'chat-update': args => {
@@ -803,6 +843,39 @@ const blogActions = {
     }
   },
   upload: () => ({ url: 'https://img.pelycloud.com/mock/upload.png' }),
+  // ── 批 2c：备份与恢复（形状对齐 src/backup 域 actions；backupAdmin 专属）──
+  'backup-status': () => ({
+    schedule: blogBackup.schedule,
+    nextRun: blogBackup.schedule.enabled ? `明天 ${blogBackup.schedule.time}` : null,
+    current: null,
+    last: { id: 'backup-20260924-0300', backupId: 'backup-20260924-0300', status: 'complete' },
+    recoveryPending: false,
+    backups: blogBackup.backups.map(item => ({ ...item })),
+  }),
+  'backup-schedule': args => {
+    blogBackup.schedule = {
+      enabled: args.enabled === true,
+      time: String(args.time ?? '03:00'),
+      daily: Number(args.daily ?? 7),
+      weekly: Number(args.weekly ?? 4),
+    }
+    return { ok: true }
+  },
+  'backup-run': () => {
+    blogBackup.lastRunAt = Date.now()
+    return { ok: true }
+  },
+  'backup-verify': args => ({ id: String(args.id), components: 3 }),
+  'backup-restore-prepare': args => ({
+    id: `restore-${Date.now().toString(36)}`,
+    nonce: 'nonce-restore-mock',
+    backupId: String(args.id),
+    mode: args.mode === 'production' ? 'production' : 'isolated',
+  }),
+  'backup-restore-confirm': args => {
+    if (String(args.backupId ?? '') === '') throw new Error('请输入与所选版本一致的完整备份标识')
+    return { ok: true }
+  },
 }
 
 // ── closedoff 批 1a/1b 假数据与 SSE 回放 ──────────────────────────────────

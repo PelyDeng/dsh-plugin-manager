@@ -8,9 +8,12 @@
  *   正文 + 复制回答；回答与思考不接推理译文（旧码 assistant 侧无翻译）。
  * - 候选稿区：空态、生成时间与「保留的上一份候选」提示、正文、标签、设置摘要、
  *   冲突提示（baseRevision≠revision 时禁用应用）、字段勾选（应用全字段）、
- *   在光标处插入正文、删除候选稿（确认链）。
- * - 来源区：归属切换（最近任务/当前候选稿）+ 链接行（已抓取原文/仅搜索摘要）。
+ *   「查看此稿来源（N）」、在光标处插入正文、删除候选稿（确认链）。
+ * - 来源区：归属手动切换（下拉「最近任务/当前候选稿」；双向禁用与自动回落按
+ *   旧 app.js:87 renderSources）+ 链接行（已抓取原文/仅搜索摘要 + 时间元数据）。
  * - 附件区：添加资料（上传逐份、20MiB 上限）、勾选=本次阅读、查看（弹窗）、移除。
+ * - 指令输入：预设按钮在光标处插入（旧 layout.js:36 setRangeText 语义）；恢复
+ *   进行中任务且无暂存时回填 job.input.instruction（旧 loadTasks 的回填分支）。
  */
 import { useEffect, useRef, useState } from 'react'
 import DOMPurify from 'dompurify'
@@ -20,11 +23,9 @@ import { safeHttpUrl } from '../../lib/labels.ts'
 import {
   cancelTask,
   flush,
-  getTextState,
   loadAttachments,
   loadTasks,
   removeWorkspaceAttachment,
-  setTextState,
   startTask,
   toggleWorkspaceAttachment,
   applyProposal,
@@ -36,6 +37,9 @@ import type { ReactElement } from 'react'
 import { FilePreviewDialog } from '../common/FilePreviewDialog.tsx'
 
 type TabName = 'answer' | 'proposal' | 'sources' | 'attachments'
+
+/** 来源归属（旧 sourceMode：'task'=最近任务 / 'proposal'=当前候选稿）。 */
+type SourceScope = 'task' | 'proposal'
 
 const JOB_STATUS_TEXT: Record<string, string> = {
   queued: '等待开始',
@@ -64,6 +68,8 @@ export function AssistantPanel(): ReactElement {
   const job = useWorkspaceStore(state => state.job)
   const attachments = useWorkspaceStore(state => state.attachments)
   const selectedAttachments = useWorkspaceStore(state => state.selectedAttachments)
+  // 候选稿有无（来源归属联动用；布尔化避免 proposal 对象引用变化重跑 effect）。
+  const proposalAvailable = useWorkspaceStore(state => state.draft?.proposal != null)
   const [tab, setTab] = useState<TabName>('answer')
   const [instruction, setInstruction] = useState('')
   const [research, setResearch] = useState(true)
@@ -73,8 +79,11 @@ export function AssistantPanel(): ReactElement {
   const [checkedFields, setCheckedFields] = useState<string[]>(['title', 'text', 'tags', 'categories', 'allowComment'])
   const [previewTarget, setPreviewTarget] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  // 来源归属手动选择（旧 sourceMode；初值与切稿重置都是 'task'，旧 fill 同款）。
+  const [sourceScope, setSourceScope] = useState<SourceScope>('task')
   const attachmentInputRef = useRef<HTMLInputElement>(null)
   const answerRef = useRef<HTMLDivElement>(null)
+  const instructionRef = useRef<HTMLTextAreaElement>(null)
   const thinkingFollowRef = useRef(true)
 
   const onNotice = (issue: unknown): void =>
@@ -85,6 +94,27 @@ export function AssistantPanel(): ReactElement {
     if (draft === null) return
     setInstruction(useWorkspaceStore.getState().instructions[draft.id] ?? '')
   }, [draft?.id, draft])
+
+  // 切稿时来源归属回「最近任务」（旧 fill 的 sourceMode='task'）。
+  useEffect(() => {
+    setSourceScope('task')
+  }, [draft?.id])
+
+  // 来源归属联动（旧 app.js:87 renderSources）：无任务且有候选稿 → 自动切候选；
+  // 候选稿没了而当前停在候选 → 回最近任务（手动选择优先，有任务时不抢）。
+  useEffect(() => {
+    if (job === null && proposalAvailable) setSourceScope('proposal')
+    if (!proposalAvailable && sourceScope === 'proposal') setSourceScope('task')
+  }, [job === null, proposalAvailable, sourceScope])
+
+  // 恢复进行中任务且无暂存指令时回填 job.input.instruction（旧 loadTasks 的
+  // !instructions.has(draftId)&&!$('instruction').value 分支；A6）。
+  useEffect(() => {
+    if (job === null || draft === null) return
+    const backfill = job.input.instruction ?? ''
+    if (backfill === '' || useWorkspaceStore.getState().instructions[draft.id] !== undefined) return
+    setInstruction(previous => (previous === '' ? backfill : previous))
+  }, [job?.id, job, draft?.id, draft])
 
   // 首次挂载与草稿切换拉一次任务（旧 loadTasks 的入口时点）。
   useEffect(() => {
@@ -122,6 +152,8 @@ export function AssistantPanel(): ReactElement {
     try {
       await startTask({ instruction, research })
       setTab('answer')
+      // 新任务开始即回「最近任务」归属（旧 ask 的 sourceMode='task'）。
+      setSourceScope('task')
     } catch (issue) {
       onNotice(issue)
     } finally {
@@ -176,6 +208,17 @@ export function AssistantPanel(): ReactElement {
     useWorkspaceStore.getState().setPendingInsert(proposal.fields.text)
   }
 
+  /** 指令预设：光标处插入（旧 layout.js:36 setRangeText 'end' + input 暂存）。 */
+  const insertInstructionPreset = (text: string): void => {
+    const area = instructionRef.current
+    if (area === null) return
+    area.focus()
+    area.setRangeText(text, area.selectionStart, area.selectionEnd, 'end')
+    const next = area.value
+    setInstruction(next)
+    useWorkspaceStore.getState().stashInstruction(draft.id, next)
+  }
+
   const taskState = job === null
     ? ''
     : `${JOB_STATUS_TEXT[job.status] ?? job.status}${job.error ? ` · ${job.error.message}` : ''}${job.input.research === true && !(job.sources ?? []).some(source => source.fetched === true) ? ' · 未完成原文查证' : ''}`
@@ -184,11 +227,17 @@ export function AssistantPanel(): ReactElement {
     ? <div dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(jobText, { USE_PROFILES: { html: true } }) }} />
     : <RichText text={jobText} links codeCopy />
 
-  const sourceScope = job !== null ? 'task' : proposal !== null ? 'proposal' : 'task'
-  const sources = sourceScope === 'proposal' ? proposal?.sources ?? [] : job?.sources ?? []
+  // 生效归属（渲染期派生：state 被联动 effect 写回前避免一帧空列表；旧码同步改写）。
+  const effectiveScope: SourceScope = sourceScope === 'proposal' && proposal === null ? 'task' : sourceScope
+  const sources = effectiveScope === 'proposal' ? proposal?.sources ?? [] : job?.sources ?? []
+  const sourceHeading = effectiveScope === 'proposal' ? '当前候选的来源' : '最近任务的来源'
   const sourceSummary = sources.length > 0
     ? `${sources.length} 条来源 · ${sources.filter(item => item.fetched === true).length} 条已读原文，${sources.filter(item => item.fetched !== true).length} 条仅搜索摘要`
     : '尚无本次查证来源；启用联网后，真实链接将在这里显示。'
+  // 「保留的上一份候选」提示（旧 showProposal：job 在且 proposalId 不是当前候选）。
+  const keptPreviousHint = job !== null && proposal !== null && job.proposalId !== proposal.id
+    ? ' · 保留的上一份候选，本次任务尚未替换'
+    : ''
 
   return (
     <aside className="blg-assistant" aria-label="AI 写作助手">
@@ -206,7 +255,25 @@ export function AssistantPanel(): ReactElement {
             type="button"
             role="tab"
             aria-selected={tab === name}
+            tabIndex={tab === name ? 0 : -1}
             onClick={() => setTab(name)}
+            // 旧 layout.js 的 tab 键盘导航：左右箭头循环，Home/End 跳两端，
+            // roving tabIndex（活动 tab 才可聚焦）。
+            onKeyDown={event => {
+              const order = ['answer', 'proposal', 'sources', 'attachments'] as const
+              const index = order.indexOf(tab)
+              let next = -1
+              if (event.key === 'ArrowRight') next = (index + 1) % order.length
+              if (event.key === 'ArrowLeft') next = (index - 1 + order.length) % order.length
+              if (event.key === 'Home') next = 0
+              if (event.key === 'End') next = order.length - 1
+              const nextName = order[next]
+              if (next < 0 || nextName === undefined) return
+              event.preventDefault()
+              setTab(nextName)
+              const target = event.currentTarget.parentElement?.children[next]
+              if (target instanceof HTMLElement) target.focus()
+            }}
           >
             {name === 'answer' ? '回答' : name === 'proposal' ? `候选稿 ${proposal === null ? 0 : 1}` : name === 'sources' ? '来源' : `附件 ${attachments.length}`}
           </button>
@@ -256,11 +323,20 @@ export function AssistantPanel(): ReactElement {
               <>
                 <div className="blg-prose md">
                   <h3>候选稿</h3>
-                  <p className="blg-muted">生成于 {new Date(proposal.createdAt).toLocaleString('zh-CN')}</p>
+                  {/* 旧 proposal-context：生成时间 + 「保留的上一份候选」提示分支（A12）。 */}
+                  <p className="blg-muted">生成于 {new Date(proposal.createdAt).toLocaleString('zh-CN')}{keptPreviousHint}</p>
                   <h2>{proposal.fields.title}</h2>
                   <ProseHtml proposal={proposal} format={draft.format} />
                   <p>标签：{proposal.fields.tags.join('、')}</p>
                 </div>
+                {/* 旧 proposal-sources：切候选归属并跳来源页签。 */}
+                <button
+                  type="button"
+                  className="btn btn--tiny"
+                  onClick={() => { setSourceScope('proposal'); setTab('sources') }}
+                >
+                  查看此稿来源（{proposal.sources?.length ?? 0}）
+                </button>
                 {conflict && <p className="blg-warning">生成后原文已改变。请比较后手动合并，当前稿不会被覆盖。</p>}
                 <div className="blg-proposal-actions">
                   <div className="blg-checks">
@@ -299,6 +375,21 @@ export function AssistantPanel(): ReactElement {
         )}
         {tab === 'sources' && (
           <section className="blg-assistant-panel" role="tabpanel" aria-label="来源">
+            {/* 归属标题 + 手动切换（旧 source-heading + source-scope；选项按数据
+                有无双向禁用，旧 app.js:87）。 */}
+            <div className="blg-source-head">
+              <h3>{sourceHeading}</h3>
+              <label className="blg-source-scope-label">
+                来源归属{' '}
+                <select
+                  value={effectiveScope}
+                  onChange={event => setSourceScope(event.target.value as SourceScope)}
+                >
+                  <option value="task" disabled={job === null}>最近任务</option>
+                  <option value="proposal" disabled={proposal === null}>当前候选稿</option>
+                </select>
+              </label>
+            </div>
             <p id="blg-source-summary" className="blg-muted">{sourceSummary}</p>
             <div>
               {sources.length === 0 && <p className="blg-muted">尚无查证来源</p>}
@@ -309,7 +400,12 @@ export function AssistantPanel(): ReactElement {
                     {href !== null
                       ? <a href={href} target="_blank" rel="noopener noreferrer">{source.title ?? source.url}</a>
                       : <span>{source.title ?? source.url}</span>}
-                    <small>{source.fetched === true ? '已抓取原文' : '仅搜索摘要'}</small>
+                    {/* 时间元数据（旧 showSources 的 meta 行：抓取时间本地化 + 发布于）。 */}
+                    <small>
+                      {source.fetched === true ? '已抓取原文' : '仅搜索摘要'}
+                      {source.retrievedAt !== undefined ? ` · ${new Date(source.retrievedAt).toLocaleString('zh-CN')}` : ''}
+                      {source.publishedAt !== undefined ? ` · 发布于 ${source.publishedAt}` : ''}
+                    </small>
                   </div>
                 )
               })}
@@ -374,7 +470,8 @@ export function AssistantPanel(): ReactElement {
           <label htmlFor="blg-instruction">这次需要什么帮助？</label>
           <div className="blg-instruction-presets">
             {INSTRUCTION_PRESETS.map(preset => (
-              <button key={preset.label} type="button" onClick={() => { setInstruction(preset.text); setTextState(draft.id, { ...(getTextState(draft.id) ?? { title: draft.title, text: draft.text, slug: draft.slug, tags: draft.tags.join('，'), allowComment: draft.allowComment ?? true, categories: [...draft.categories] }), text: draft.text }); useWorkspaceStore.getState().stashInstruction(draft.id, preset.text) }}>
+              // 旧 layout.js:36：光标处 setRangeText 插入，不整体覆盖已输入内容。
+              <button key={preset.label} type="button" onClick={() => insertInstructionPreset(preset.text)}>
                 {preset.label}
               </button>
             ))}
@@ -382,6 +479,7 @@ export function AssistantPanel(): ReactElement {
         </div>
         <textarea
           id="blg-instruction"
+          ref={instructionRef}
           rows={3}
           maxLength={8000}
           placeholder="结合当前文章，告诉 AI 想补充或修改什么…"

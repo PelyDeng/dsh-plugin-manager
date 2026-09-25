@@ -236,7 +236,11 @@ export async function refreshConversations(append = false): Promise<void> {
     useConversationStore.getState().acceptConversationPage(page.items, page.nextOffset, append)
   } catch (error) {
     if (ticket !== listTicket) return
-    useConversationStore.getState().setConversationsError(error instanceof Error ? error.message : String(error))
+    // 旧侧栏 refresh 的 catch：非追加失败清空列表再报错（不留过期行误导点击）；
+    // 追加失败保留已加载内容，只把错误落到状态行。
+    const message = error instanceof Error ? error.message : String(error)
+    if (append) useConversationStore.getState().setConversationsError(message)
+    else useConversationStore.setState({ conversations: [], conversationsOffset: null, conversationsError: message })
   }
 }
 

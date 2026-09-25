@@ -5,7 +5,7 @@
  * 键盘与输入法语义照旧（旧 shouldSendChatEnter）：Enter 发送（触摸/窄屏与合成中
  * 除外）、Shift+Enter 换行、keyCode 229 视为合成中。粘贴/拖放的文件走上传链路。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { attachmentDownloadUrl } from '../lib/api.ts'
 import { removeAttachment, send, stopAnswer, toggleAttachment, transferredFiles, uploadFiles } from '../chat-controller.ts'
 import { useComposerStore, usePickerStore } from '../stores/composer.ts'
@@ -18,6 +18,10 @@ import type { CompositionEvent, ClipboardEvent, DragEvent, KeyboardEvent, ReactE
 
 const touchInput = (): boolean =>
   window.matchMedia('(pointer: coarse), (max-width: 760px)').matches
+
+/** 输入框自动增高的像素上限（旧 layout.js resizeComposer：窄屏 110 / 桌面 144）。 */
+export const COMPOSER_MAX_HEIGHT_MOBILE = 110
+export const COMPOSER_MAX_HEIGHT_DESKTOP = 144
 
 export function Composer({ onNotice }: { onNotice: (text: string) => void }): ReactElement {
   const draft = useComposerStore(state => state.draft)
@@ -63,6 +67,29 @@ export function Composer({ onNotice }: { onNotice: (text: string) => void }): Re
   useEffect(() => {
     if (!touchInput()) inputRef.current?.focus({ preventScroll: true })
   }, [])
+
+  // 切会话时关闭在开的资料预览弹窗（A5：旧码面板随 activate 整体重建）。
+  useEffect(() => {
+    setPreviewId(null)
+  }, [conversationId])
+
+  // 输入框自动增高（旧 resizeComposer：height=auto 实测后收进上限；切会话/窗口
+  // 尺寸变化都重算）。
+  const resizeComposer = useCallback(() => {
+    const area = inputRef.current
+    if (area === null) return
+    const maxHeight = window.matchMedia('(pointer: coarse), (max-width: 760px)').matches
+      ? COMPOSER_MAX_HEIGHT_MOBILE
+      : COMPOSER_MAX_HEIGHT_DESKTOP
+    area.style.height = 'auto'
+    area.style.height = `${Math.min(area.scrollHeight, maxHeight)}px`
+  }, [])
+  useEffect(() => { resizeComposer() }, [draft, conversationId, resizeComposer])
+  useEffect(() => {
+    const onResize = (): void => resizeComposer()
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [resizeComposer])
 
   const submit = (): void => {
     void send(draft).catch((error: unknown) => {

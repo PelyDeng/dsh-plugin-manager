@@ -667,25 +667,31 @@ body {
 
 .blg-model-note { padding: 6px 8px; color: var(--bt-ink-faint); font-size: 12px; line-height: 1.5; }
 
-/* ── 历史抽屉（旧 qa-history / qh-*）────────────────────────────────── */
+/* ── 历史对话左栏（旧 qa-history / qh-*）────────────────────────────── */
+/*
+ * 旧版形态回归（批 2c）：桌面端是 .blg-workbench 的 flex 子项，静态占位于最左
+ * （旧 .qa-history position:static; width:258px; flex:none 同款），展开时主区
+ * 让位——等价于旧 body.qh-expanded 的效果，但不需要全局 body 类。窄屏(≤960px)
+ * 切回 fixed 左侧浮层 + 遮罩（旧 mobile showModal 同语义）。
+ */
 
 .blg-history {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  position: relative;
   z-index: 40;
-  width: min(320px, 88vw);
+  width: 264px;
+  flex: none;
   display: none;
   flex-direction: column;
   padding: 12px;
   box-sizing: border-box;
   background: var(--bt-card);
-  border-left: 2px solid var(--bt-stroke);
-  box-shadow: -8px 0 24px #00000018; /* contract-exempt: 抽屉投影，butler 弹层同款 */
+  border-right: 2px solid var(--bt-stroke);
 }
 
 .blg-history--open { display: flex; }
+
+/* 窄屏遮罩（旧 showModal 的 ::backdrop 同位；桌面不显示）。 */
+.blg-history-backdrop { display: none; }
 
 .blg-history-head {
   display: flex;
@@ -811,6 +817,109 @@ body {
   font: inherit;
   font-size: 13px;
 }
+
+.blg-history-inline-error { flex-basis: 100%; color: var(--bt-error); font-size: 12px; }
+
+/* 多选勾选框（旧 .qh-row input：18px + 主题色 accent）。 */
+.blg-history-row input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  accent-color: var(--bt-sky);
+}
+
+/* 批量操作栏（旧 .qh-batch：已选计数 + 选择已加载/导出/删除/取消）。 */
+.blg-history-batch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 8px;
+  padding: 2px 4px;
+  font-size: 12px;
+}
+
+.blg-history-batch > span { flex-basis: 100%; color: var(--bt-ink-faint); }
+
+.blg-history-batch button {
+  padding: 5px 8px;
+  border: 1px solid var(--bt-line);
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-card);
+  color: var(--bt-ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.blg-history-batch button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 行内操作菜单（旧 .qh-menu popover：固定定位 + 视口内 clamp 由 JS 算）。 */
+.blg-history-menu {
+  position: fixed;
+  z-index: 60;
+  width: 190px;
+  padding: 5px;
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-card);
+  color: var(--bt-ink);
+  box-shadow: 0 8px 30px #24345222; /* contract-exempt: 菜单投影，butler 弹层同款 */
+}
+
+.blg-history-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-card);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.blg-history-menu-item:hover { background: #00000008; } /* contract-exempt: 菜单悬停淡墨面，btn--ghost 同款 */
+.blg-history-menu-item--danger { color: var(--bt-error); }
+.blg-history-menu button:focus-visible { outline: 2px solid var(--bt-sky); outline-offset: -2px; }
+
+/* 弹窗正文（删除确认/分享导出共用；旧 qh-dialog-body/actions 口径）。 */
+.blg-history-dialog-body { font-size: 13.5px; line-height: 1.7; }
+.blg-history-dialog-body > p { margin: 0 0 10px; }
+.blg-history-dialog-body > textarea {
+  display: block;
+  width: 100%;
+  min-height: 200px;
+  max-height: 45dvh;
+  box-sizing: border-box;
+  padding: 10px;
+  border: 1.5px solid var(--bt-line);
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-card);
+  color: var(--bt-ink);
+  font: inherit;
+  font-size: 12.5px;
+  resize: vertical;
+}
+.blg-history-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.blg-history-dialog-actions > button {
+  min-height: 36px;
+  padding: 7px 14px;
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-card);
+  color: var(--bt-ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.blg-history-dialog-actions > button:disabled { opacity: 0.45; cursor: not-allowed; }
+.blg-history-note { color: var(--bt-ink-faint); font-size: 12px; margin: 0 0 8px; }
 
 .btn--danger { background: var(--bt-error); color: var(--bt-card); border-color: var(--bt-stroke); }
 
@@ -1181,6 +1290,15 @@ body {
 .blg-checks { display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 12.5px; }
 .blg-checks label { display: inline-flex; align-items: center; gap: 4px; }
 
+/* 来源区归属行（旧 panel-intro：source-heading + source-scope 下拉，A1）。 */
+.blg-source-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.blg-source-head h3 { margin: 0; font-size: 14px; }
+.blg-source-scope-label { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--bt-ink-faint); white-space: nowrap; }
+.blg-source-scope-label select { max-width: 150px; }
+
+/* 回合用量摘要行（A4：无 assistant 消息的回合，挂在用户消息后）。 */
+.blg-turn-summary { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 6px 46px; }
+
 .blg-source-row { display: flex; flex-direction: column; gap: 1px; padding: 6px 0; border-bottom: 1px dashed var(--bt-line); }
 .blg-source-row a { color: var(--bt-sky); word-break: break-all; }
 .blg-source-row small { color: var(--bt-ink-faint); }
@@ -1231,6 +1349,9 @@ body {
   box-shadow: 0 8px 28px #00000022; /* contract-exempt: 弹层投影，butler 同款 */
 }
 .blg-dialog::backdrop { background: #0006; } /* contract-exempt: 遮罩暗化，旧 #0009 同语义 */
+/* 文章库弹层（B3：LibraryPanel 复用为弹层面板，宽高比侧栏形态放宽）。 */
+.blg-dialog--library { width: min(480px, 92vw); }
+.blg-dialog--library .blg-library { position: static; border: 0; padding: 0; background: transparent; box-shadow: none; }
 .blg-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
 .blg-dialog-head h2 { font-family: var(--bt-hand); font-size: 21px; margin: 0; }
 .blg-dialog-close {
@@ -1376,6 +1497,93 @@ body {
 }
 .blg-management-links-bar a { color: var(--bt-ink-faint); }
 .blg-management-links-bar a:hover { color: var(--bt-sky); }
+.blg-management-links-bar button {
+  border: 0;
+  background: transparent;
+  color: var(--bt-ink-faint);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+.blg-management-links-bar button:hover { color: var(--bt-sky); }
+
+/* ── 备份与恢复弹窗（旧 backup-dialog；backupAdmin 专属）────────────── */
+
+.blg-backup { font-size: 13px; }
+.blg-backup > .blg-muted { margin: 0 0 10px; color: var(--bt-ink-faint); }
+.blg-backup-schedule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-bottom: 10px;
+}
+.blg-backup-schedule label { display: inline-flex; align-items: center; gap: 6px; color: var(--bt-ink-soft); }
+.blg-backup-schedule input[type='time'],
+.blg-backup-schedule input[type='number'] {
+  width: 92px;
+  padding: 4px 8px;
+  border: 1.5px solid var(--bt-line);
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-card);
+  color: var(--bt-ink);
+  font: inherit;
+}
+.blg-backup-actions { display: flex; gap: 8px; margin-bottom: 10px; }
+.blg-backup-actions button {
+  padding: 5px 12px;
+  border: 1.5px solid var(--bt-stroke);
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-card);
+  color: var(--bt-ink);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.blg-backup-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+.blg-backup-status {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px dashed var(--bt-line);
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-paper);
+  color: var(--bt-ink-soft);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.blg-backup-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--bt-line);
+  font-size: 12.5px;
+}
+.blg-backup-row > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.blg-backup-row button {
+  padding: 3px 8px;
+  border: 1px solid var(--bt-line);
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-card);
+  color: var(--bt-ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.blg-backup-row button:disabled { opacity: 0.45; cursor: not-allowed; }
+.blg-history-dialog-body > input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1.5px solid var(--bt-line);
+  border-radius: var(--bt-wobble-sm);
+  background: var(--bt-card);
+  color: var(--bt-ink);
+  font: inherit;
+}
 
 /* ── 渲染器三能力（批 2b 增量：外链可点击/代码块复制/表格横滚）────────
  * 外链与代码复制由渲染器开关产出结构；表格横滚渲染器本就有 table-scroll 包装，
@@ -1535,7 +1743,25 @@ body {
 
 @media (max-width: 960px) {
   .blg-prompts { display: none; }
-  .blg-history { width: 100vw; border-left: 0; }
+  /* 左栏切浮层（旧 mobile .qa-history：fixed 左侧抽屉 + 遮罩）。 */
+  .blg-history {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(320px, 85vw);
+    border-right: 2px solid var(--bt-stroke);
+    box-shadow: 8px 0 24px #00000018; /* contract-exempt: 浮层投影，butler 弹层同款 */
+  }
+  .blg-history-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 35;
+    /* contract-exempt: 窄屏历史抽屉的暗色遮罩（对齐旧版冷蓝调遮罩，半透明叠加
+       在任意内容上，无对应 --bt-* 槽；与旧版 qa-history 遮罩观感一致）。 */
+    background: #17203655;
+  }
   .blg-chat-scroll { padding: 14px 12px 8px; }
   .blg-composer { margin: 0 10px 10px; }
 }

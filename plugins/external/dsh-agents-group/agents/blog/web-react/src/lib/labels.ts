@@ -35,18 +35,19 @@ export function statusLabel(status: string | undefined): string {
   return STATUS_LABELS[status ?? ''] ?? status ?? ''
 }
 
-/** Token 用量行（旧 usage() 的 rows 口径：恒显两项，其余有值才显示）。 */
+/** Token 用量行（旧 usage() 的 rows 口径：未缓存输入/输出恒显，其余有值才显示；
+ * 无值的恒显项按旧 stat 口径显示「未提供」）。 */
 export function usageRows(turn: TurnSummary): Array<[string, string]> {
   const u = (turn.usage ?? null) as Record<string, unknown> | null
   const rows: Array<[string, string]> = []
-  const pick = (key: string): string | null =>
+  const present = (key: string): string | null =>
     u !== null && typeof u === 'object' && u[key] !== undefined ? Number(u[key]).toLocaleString() : null
-  const uncached = pick('uncachedInputTokens')
-  const output = pick('outputTokens')
-  if (uncached !== null) rows.push(['未缓存输入', uncached])
-  if (output !== null) rows.push(['输出', output])
+  // 旧 chat.js:138：这两项不判 undefined，恒进 rows（缺值显示「未提供」，A10）。
+  const always = (key: string): string => present(key) ?? '未提供'
+  rows.push(['未缓存输入', always('uncachedInputTokens')])
+  rows.push(['输出', always('outputTokens')])
   for (const [key, label] of [['cacheReadTokens', '缓存读取'], ['cacheWriteTokens', '缓存写入'], ['reasoningTokens', '其中推理']] as const) {
-    const value = pick(key)
+    const value = present(key)
     if (value !== null) rows.push([label, value])
   }
   return rows

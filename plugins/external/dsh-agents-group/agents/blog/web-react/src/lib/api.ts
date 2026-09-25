@@ -22,8 +22,10 @@ import type {
   ModelCatalog,
   ModelSelection,
   OperationLogRow,
+  RestoreTicket,
   SendResult,
   WritingJob,
+  BackupStatus,
 } from './types.ts'
 
 /** 一次接口调用失败（错误体里带服务端 error/message 时优先用）。 */
@@ -154,7 +156,22 @@ export const api = {
   /** 分类/标签/评论的列表查询（kind 分流；评论带 page/status/cid）。 */
   manageList: (args: Record<string, unknown>): Promise<{ items: Array<Record<string, unknown>>; hasMore?: boolean }> => callAction('manage-list', args),
   manageGet: (args: { kind: string; id: number }): Promise<{ item?: Record<string, unknown>; version?: number; impact?: { defaultCategory?: boolean } }> => callAction('manage-get', args),
-  managePrepare: (args: Record<string, unknown>): Promise<ManagePrepareResult> => callAction<ManagePrepareResult>('manage-prepare', args),
+  managePrepare: (args: Record<string, unknown>): Promise<ManagePrepareResult> => callAction('manage-prepare', args),
+
+  // ── 批 2c：备份与恢复（旧 web/app.js backup 段；backupAdmin 专属）───────
+  /** 备份状态与列表（计划 + 当前任务 + 最近一次 + 全部备份行）。 */
+  backupStatus: (): Promise<BackupStatus> => callAction<BackupStatus>('backup-status'),
+  /** 保存定时备份计划（北京时间 time + 日/周保留数）。 */
+  backupSchedule: (args: { enabled: boolean; time: string; daily: number; weekly: number }): Promise<unknown> => callAction('backup-schedule', args),
+  /** 立即备份。 */
+  backupRun: (): Promise<unknown> => callAction('backup-run'),
+  /** 校验一份备份（返回组件数）。 */
+  backupVerify: (id: string): Promise<{ id: string; components: number }> => callAction<{ id: string; components: number }>('backup-verify', { id }),
+  /** 恢复准备（mode：isolated=隔离演练 / production=恢复到生产；返回确认票）。 */
+  backupRestorePrepare: (args: { id: string; mode: 'isolated' | 'production' }): Promise<RestoreTicket> =>
+    callAction<RestoreTicket>('backup-restore-prepare', args),
+  /** 恢复确认（backupId 必须与票面一致）。 */
+  backupRestoreConfirm: (args: { id: string; nonce: string; backupId: string }): Promise<unknown> => callAction('backup-restore-confirm', args),
 }
 
 /** 附件上传（POST /attachment，octet-stream；旧 request('/attachment?...') 等价）。 */

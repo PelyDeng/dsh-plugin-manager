@@ -2,11 +2,15 @@
  * 模型选择器（旧 web/model-picker.js 的展示面；状态面在 composer store 的
  * usePickerStore）。语义照旧：菜单打开时重拉目录；dirty 才随请求提交；
  * 发送中禁用。
+ *
+ * 键盘（旧 menu.onkeydown，B5）：Escape 关闭并回焦按钮；↑/↓ 循环移动、Home/End
+ * 跳首尾；Tab 关闭。trigger aria-controls 指向菜单（旧码 menu.id 同款）。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { DshIcon } from './DshIcon.tsx'
 import { usePickerStore } from '../stores/composer.ts'
 import type { ModelSelection } from '../lib/types.ts'
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 
 function same(a: ModelSelection | null | undefined, b: ModelSelection | null | undefined): boolean {
   return a?.provider === b?.provider && a?.model === b?.model
@@ -23,6 +27,16 @@ export function ModelPicker(): React.ReactElement {
   const refresh = usePickerStore(state => state.refresh)
   const [open, setOpen] = useState(false)
   const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuId = useId()
+
+  // 打开时聚焦选中项（无选中取首项；旧 trigger.onclick 同款）。
+  useEffect(() => {
+    if (!open) return
+    const menu = rootRef.current?.querySelector('[role="menu"]')
+    const target = menu?.querySelector<HTMLButtonElement>('[aria-checked="true"]') ?? menu?.querySelector<HTMLButtonElement>('button')
+    target?.focus()
+  }, [open, ready])
 
   const modelName = (value: ModelSelection | null | undefined): string =>
     catalog?.groups.find(group => group.id === value?.provider)?.models.find(model => model.id === value?.model)?.name
@@ -48,13 +62,35 @@ export function ModelPicker(): React.ReactElement {
     setOpen(false)
   }
 
+  /** 菜单键盘导航（旧 menu.onkeydown 逐键对齐）。 */
+  const onMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setOpen(false)
+      triggerRef.current?.focus()
+      return
+    }
+    if (event.key === 'Tab') { setOpen(false); return }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+    const rows = [...(rootRef.current?.querySelectorAll<HTMLButtonElement>('[role="menu"] button') ?? [])]
+    if (rows.length === 0) return
+    event.preventDefault()
+    const index = rows.indexOf(document.activeElement as HTMLButtonElement)
+    const next = event.key === 'Home' ? 0
+      : event.key === 'End' ? rows.length - 1
+        : (index + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length
+    rows[next]?.focus()
+  }
+
   return (
     <div className="blg-model-picker" ref={rootRef}>
       <button
+        ref={triggerRef}
         type="button"
         className="blg-model-trigger"
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-controls={menuId}
         aria-label="选择模型"
         title={errorText !== '' ? errorText : label}
         disabled={busy}
@@ -68,7 +104,7 @@ export function ModelPicker(): React.ReactElement {
         <DshIcon name="chevron_down" size={14} />
       </button>
       {open && (
-        <div className="blg-model-menu" role="menu" aria-label="选择模型">
+        <div className="blg-model-menu" role="menu" id={menuId} aria-label="选择模型" onKeyDown={onMenuKeyDown}>
           <div className="blg-model-heading">选择模型</div>
           {!ready ? (
             <>

@@ -63,8 +63,10 @@ function ToolChips({ group }: { group: TurnGroup }): ReactElement | null {
   )
 }
 
-/** 回合用量/用时（旧 usage() 的 qa-meta 形态：details 就地折叠）。 */
-function TurnUsage({ turn, group }: { turn: TurnSummary; group: TurnGroup }): ReactElement {
+/** 回合用量/用时（旧 usage() 的 qa-meta 形态：details 就地折叠）。
+ * 摘要行场景（无 assistant 消息的回合）没有 message，模型行按旧 stat 口径显示
+ * 「未提供」。 */
+function TurnUsage({ turn, provider, model }: { turn: TurnSummary; provider?: string | undefined; model?: string | undefined }): ReactElement {
   const usage = (turn.usage ?? null) as Record<string, unknown> | null
   return (
     <>
@@ -92,7 +94,7 @@ function TurnUsage({ turn, group }: { turn: TurnSummary; group: TurnGroup }): Re
             <span><dt>首 Token 等待</dt><dd>{formatMs(turn.ttftMs)}</dd></span>
             <span><dt>输出速度</dt><dd>{typeof turn.tokensPerSecond === 'number' && Number.isFinite(turn.tokensPerSecond) ? `${turn.tokensPerSecond.toFixed(1)} Token/秒` : '未提供'}</dd></span>
             <span><dt>模型尝试</dt><dd>{String(turn.attempts)}</dd></span>
-            <span><dt>模型</dt><dd>{group.model !== undefined ? `${group.provider ?? ''} / ${group.model}` : '未提供'}</dd></span>
+            <span><dt>模型</dt><dd>{model !== undefined ? `${provider ?? ''} / ${model}` : '未提供'}</dd></span>
           </dl>
         </div>
       </details>
@@ -101,13 +103,16 @@ function TurnUsage({ turn, group }: { turn: TurnSummary; group: TurnGroup }): Re
 }
 
 /** 回答操作区（旧 chat.js actions 段）：复制、赞/踩、分支、更多菜单、中断标记、
- * 用量/用时、时间。feedbackReady 之前赞踩禁用（旧 b.disabled=!state.feedbackReady）。 */
-function AssistantTurn({ group, conversationId, feedbackReady, onNotice, onOpenFeedback }: {
+ * 用量/用时、时间。feedbackReady 之前赞踩禁用（旧 b.disabled=!state.feedbackReady）。
+ * 更多菜单的开合由父级统一持有（旧 toggle 互斥 + Escape/点外关闭同款语义）。 */
+function AssistantTurn({ group, conversationId, feedbackReady, onNotice, onOpenFeedback, menuOpen, onMenuToggle }: {
   group: TurnGroup
   conversationId: string
   feedbackReady: boolean
   onNotice: (text: string) => void
   onOpenFeedback: (messageId: string) => void
+  menuOpen: boolean
+  onMenuToggle: (open: boolean) => void
 }): ReactElement {
   const [copied, setCopied] = useState(false)
   const [pending, setPending] = useState(false)
@@ -117,7 +122,6 @@ function AssistantTurn({ group, conversationId, feedbackReady, onNotice, onOpenF
   const turn = history?.turns.find(item => item.turn === group.turn)
   const complete = turnComplete(group, history?.turns ?? [])
   const hasMessage = typeof group.id === 'string' && group.id !== '' && !group.id.startsWith('pending-')
-  const [menuOpen, setMenuOpen] = useState(false)
 
   const rate = (rating: 'positive' | 'negative'): void => {
     if (!hasMessage || pending || !feedbackReady) return
@@ -229,7 +233,7 @@ function AssistantTurn({ group, conversationId, feedbackReady, onNotice, onOpenF
             </button>
           )}
           {(group.feedback === true || (group.forkCut !== undefined && group.forkCut !== null)) && hasMessage && (
-            <details className="blg-more" open={menuOpen} onToggle={event => { if ((event.target as HTMLDetailsElement).open !== menuOpen) setMenuOpen((event.target as HTMLDetailsElement).open) }}>
+            <details className="blg-more" open={menuOpen} onToggle={event => { if ((event.target as HTMLDetailsElement).open !== menuOpen) onMenuToggle((event.target as HTMLDetailsElement).open) }}>
               <summary className="blg-action" aria-label="更多回答操作" title="更多回答操作">
                 <DshIcon name="more" size={14} />
               </summary>
@@ -238,7 +242,7 @@ function AssistantTurn({ group, conversationId, feedbackReady, onNotice, onOpenF
                   <button
                     type="button"
                     disabled={!feedbackReady}
-                    onClick={() => { setMenuOpen(false); onOpenFeedback(group.id) }}
+                    onClick={() => { onMenuToggle(false); onOpenFeedback(group.id) }}
                   >
                     评价备注
                   </button>
@@ -248,7 +252,7 @@ function AssistantTurn({ group, conversationId, feedbackReady, onNotice, onOpenF
                     type="button"
                     title="保留原回答与文章，在新分支重新生成"
                     disabled={pending}
-                    onClick={() => { setMenuOpen(false); branch(true) }}
+                    onClick={() => { onMenuToggle(false); branch(true) }}
                   >
                     重新生成
                   </button>
@@ -257,7 +261,7 @@ function AssistantTurn({ group, conversationId, feedbackReady, onNotice, onOpenF
             </details>
           )}
           {group.interrupted === true && <small className="blg-muted">本段回答已中断</small>}
-          {turn !== undefined && typeof turn.runMs === 'number' && Number.isFinite(turn.runMs) && <TurnUsage turn={turn} group={group} />}
+          {turn !== undefined && typeof turn.runMs === 'number' && Number.isFinite(turn.runMs) && <TurnUsage turn={turn} provider={group.provider} model={group.model} />}
           {typeof group.time === 'number' && group.time > 0 && (
             <time className="blg-clock">{new Date(group.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time>
           )}
@@ -330,11 +334,26 @@ export function ChatHome(): ReactElement {
   const followRef = useRef(true)
   const [awayFromBottom, setAwayFromBottom] = useState(false)
   const [feedbackTarget, setFeedbackTarget] = useState<string | null>(null)
+  // 当前打开的「更多回答操作」菜单（displayKey；null=全部关闭）。旧 chat.js 用
+  // toggle 捕获互斥（打开一个关其他）+ document click 点外关闭 + Escape 关闭并
+  // 回焦 summary——单值 state 天然互斥，轻 dismissal 收敛在下方 effect。
+  const [activeMenu, setActiveMenu] = useState<string | null>(null)
 
   const conversationId = useConversationStore(state => state.conversationId)
   const messages = history?.messages ?? []
   const busy = history?.busy === true
   const display = chatTurns(messages, { busy, operations: history?.operations ?? [], requests: history?.requests ?? [] })
+
+  // 回合用量摘要行（旧 chat.js:195）：已计时但**没有** assistant 消息的回合，
+  // 用量行插到该回合的用户消息之后（旧 findLast(seq<startSeq) 的 user 位置）。
+  const summarizedTurns = (history?.turns ?? []).filter(turn =>
+    typeof turn.runMs === 'number' && Number.isFinite(turn.runMs) &&
+    !display.some(node => isTurnGroup(node) && String(node.turn ?? '') === String(turn.turn)))
+  const summaryAfterUser = new Map<string, TurnSummary>()
+  for (const turn of summarizedTurns) {
+    const user = [...messages].reverse().find(m => m.role === 'user' && m.seq < turn.startSeq)
+    if (user !== undefined && !summaryAfterUser.has(user.id)) summaryAfterUser.set(user.id, turn)
+  }
 
   // live 内联判定：最后一组回合未完结 → 内联；否则独立气泡（数据驱动，替代旧
   // renderLive 的 DOM 探测）。
@@ -342,6 +361,13 @@ export function ChatHome(): ReactElement {
   const liveInline = live !== null && busy && lastGroup !== undefined && !turnComplete(lastGroup, history?.turns ?? [])
 
   const onNotice = (text: string): void => setNoticeState({ text, tone: 'error' })
+
+  // 切会话时关闭在开的评价弹窗与「更多」菜单（A5；旧码面板随 activate 整体重建，
+  // React 的弹窗常驻组件需要显式收口）。
+  useEffect(() => {
+    setFeedbackTarget(null)
+    setActiveMenu(null)
+  }, [conversationId])
 
   // 近底部跟随（旧 nearBottom/bottom：阈值 90px；滚动即时无动画）。
   const measure = (): void => {
@@ -361,6 +387,39 @@ export function ChatHome(): ReactElement {
     box.addEventListener('scroll', measure, { passive: true })
     return () => box.removeEventListener('scroll', measure)
   }, [])
+
+  // 切回对话视图聚焦输入框（旧 view() 的 focusInput：非 touch 才聚焦）。
+  useEffect(() => {
+    if (window.matchMedia('(pointer: coarse), (max-width: 760px)').matches) return
+    document.getElementById('blg-chat-input')?.focus({ preventScroll: true })
+  }, [])
+
+  // 消息菜单的轻 dismissal（旧 chat.js:340-341）：点击菜单外关闭；Escape 关闭
+  // 并把焦点交回该菜单的 summary（读屏回焦点，preventScroll 同旧码）。
+  useEffect(() => {
+    if (activeMenu === null) return undefined
+    const onPointerDown = (event: PointerEvent): void => {
+      const target = event.target
+      if (target instanceof Element && target.closest('.blg-more') !== null) return
+      setActiveMenu(null)
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      setActiveMenu(previous => {
+        if (previous === null) return previous
+        const summary = document.querySelector<HTMLElement>(`[data-message="${CSS.escape(previous)}"] .blg-more > summary`)
+        summary?.focus({ preventScroll: true })
+        event.preventDefault()
+        return null
+      })
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [activeMenu !== null])
 
   const sendPrompt = (prompt: string): void => {
     setDraft(prompt)
@@ -410,33 +469,44 @@ export function ChatHome(): ReactElement {
                       feedbackReady={feedbackReady}
                       onNotice={onNotice}
                       onOpenFeedback={setFeedbackTarget}
+                      menuOpen={activeMenu === node.displayKey}
+                      onMenuToggle={open => setActiveMenu(open ? node.displayKey : null)}
                     />
                     {liveInline && node === lastGroup && <LiveInline conversationId={conversationId} />}
                   </div>
                 )
               }
               if (node.role === 'user') {
+                const summaryTurn = summaryAfterUser.get(node.id)
                 return (
-                  <section key={node.id} className="blg-message blg-message--user" data-message={node.id}>
-                    <span className="blg-avatar blg-avatar--user" aria-hidden="true"><DshIcon name="user" size={14} /></span>
-                    <div className="blg-bubble">
-                      <div className="blg-user-text">{node.text}</div>
-                      {node.attachments !== undefined && node.attachments.length > 0 && (
-                        <div className="blg-message-attachments">
-                          {node.attachments.map(file => (
-                            <a
-                              key={file.id}
-                              className="blg-file-link"
-                              href={chatAttachmentUrl(conversationId, node.requestId ?? node.id, file.id)}
-                            >
-                              <DshIcon name="paperclip" size={12} />
-                              {file.name ?? file.id}{file.range !== undefined && file.range !== null ? `（${file.range.from}–${file.range.to}）` : ''}
-                            </a>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </section>
+                  <>
+                    <section key={node.id} className="blg-message blg-message--user" data-message={node.id}>
+                      <span className="blg-avatar blg-avatar--user" aria-hidden="true"><DshIcon name="user" size={14} /></span>
+                      <div className="blg-bubble">
+                        <div className="blg-user-text">{node.text}</div>
+                        {node.attachments !== undefined && node.attachments.length > 0 && (
+                          <div className="blg-message-attachments">
+                            {node.attachments.map(file => (
+                              <a
+                                key={file.id}
+                                className="blg-file-link"
+                                href={chatAttachmentUrl(conversationId, node.requestId ?? node.id, file.id)}
+                              >
+                                <DshIcon name="paperclip" size={12} />
+                                {file.name ?? file.id}{file.range !== undefined && file.range !== null ? `（${file.range.from}–${file.range.to}）` : ''}
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </section>
+                    {/* 回合用量摘要行（A4）：该回合无 assistant 消息时用量插在用户消息后。 */}
+                    {summaryTurn !== undefined && (
+                      <div className="blg-turn-summary blg-actions" data-turn-summary={String(summaryTurn.turn)}>
+                        <TurnUsage turn={summaryTurn} />
+                      </div>
+                    )}
+                  </>
                 )
               }
               // 其余原始消息形态（status/工具散行）以弱化行呈现。
