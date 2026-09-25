@@ -1,0 +1,73 @@
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+.cache/
+.vite/
+.vitest/
+.tmp/
+playwright-report/
+test-results/
+*.tsbuildinfo
+.idea/
+.local/*
+plugins/external/dsh-niuma-boss/docs/04-资源/美术资源包/
+plugins/external/dsh-niuma-boss/docs/08-工具与研究/MCP评估记录/
+data/
+deploy-artifacts/
+/incoming/*
+!/incoming/README.md
+.env
+.env.*
+!.env.example
+env.conf
+!/env.conf
+# 配置归属：私有库中每个项目的配置是该项目根目录的 env.conf（子 Agent 并入所属项目，不另建），
+# 站点配置就是仓库根下的那一份；随公开材料分发的模板是 env.conf.example。
+# 其余 .local/ 内容（运行数据、产物、凭据缓存）仍然忽略。
+!plugins/external/*/env.conf
+!deploy/config/*.conf.example
+*.tgz
+*.log
+*.log.*
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+# 牛马-老板第四阶段技术验证的本地依赖、缓存和生成物
+/plugins/external/dsh-niuma-boss/docs/09-实施计划/技术验证/prototype/node_modules/
+/plugins/external/dsh-niuma-boss/docs/09-实施计划/技术验证/prototype/public/generated/
+/plugins/external/dsh-niuma-boss/docs/09-实施计划/技术验证/prototype/dist/
+/plugins/external/dsh-niuma-boss/docs/09-实施计划/技术验证/prototype/.artifacts/
+/plugins/external/dsh-niuma-boss/docs/09-实施计划/技术验证/evidence/
+/plugins/external/dsh-niuma-boss/docs/09-实施计划/技术验证/prototype/.browser-cache/
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+bower_components/
+jspm_packages/
+__pycache__/
+site-packages/
+venv/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）
