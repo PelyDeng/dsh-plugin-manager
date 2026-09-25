@@ -115,6 +115,41 @@ describe('POST /chat 单向事件流的投影', () => {
     expect(assistant.hasStructured).toBe(false) // 错误卡不算结构化结果（旧码口径）
   })
 
+  it('失败 attempt：服务端在 done 前补发 tool_end(error)，查询行不悬挂在「查询中」', async () => {
+    // 复审 N1：finish error/aborted 的 attempt 里 tool_start 之后 tool/result 不会再来，
+    // 服务端 turn/end 收尾先补 tool_end(error) 再发 done——这里按修复后的真实序列断言
+    // chip 落到 error、loading 卡置败，归档消息不再停在「正在查询…」。
+    stubFetch(sseResponse([
+      { type: 'conversation', conversationId: 'closedoff-web-13' },
+      { type: 'tool_start', callId: 'call-h', name: 'closedoff_warning_page', presentation: { tool: 'closedoff_warning_page', group: 'risk', variant: 'records', sourceLabel: '预警报警查询' } },
+      { type: 'tool_end', callId: 'call-h', status: 'error' },
+      { type: 'error', message: '智能体回答失败: 上游超时' },
+      { type: 'done', reason: 'error' },
+    ]))
+    await sendMessage('失败的问题')
+    const assistant = stores.board.useBoardStore.getState().messages[1]
+    if (assistant?.kind !== 'assistant') return expect.fail('助手消息缺失')
+    expect(assistant.tools[0]?.phase).toBe('error')
+    expect(assistant.tools[0]?.resultState).toBe('error')
+    expect(assistant.cards['call-h']?.state).toBe('error')
+    expect(assistant.terminalTone).toBe('error')
+  })
+
+  it('兜底：tool_start 后直接 done（无 tool_end）时 chip 不停在 calling（store 收尾保持）', async () => {
+    // done case 的 calling→done 收尾是前端最后一道防线；卡片的 loading 推进依赖服务端
+    // 补发 tool_end（本用例只锁定 chip 相位，不放宽对卡片的口径）。
+    stubFetch(sseResponse([
+      { type: 'conversation', conversationId: 'closedoff-web-14' },
+      { type: 'tool_start', callId: 'call-b', name: 'closedoff_warning_page', presentation: { tool: 'closedoff_warning_page', group: 'risk', variant: 'records', sourceLabel: '预警报警查询' } },
+      { type: 'done', reason: 'aborted' },
+    ]))
+    await sendMessage('中断的问题')
+    const assistant = stores.board.useBoardStore.getState().messages[1]
+    if (assistant?.kind !== 'assistant') return expect.fail('助手消息缺失')
+    expect(assistant.tools[0]?.phase).toBe('done')
+    expect(assistant.finishReason).toBe('aborted')
+  })
+
   it('纯卡片查询：cards data 即置位 hasStructured/hasResult（流式期与归档一致）', async () => {
     // 旧 renderCards：查询卡落定（data/empty）即置位——正文业务表格据此剥离，
     // archive 固化后 restore 前后同形。无 track/fences/media 也必须置位。

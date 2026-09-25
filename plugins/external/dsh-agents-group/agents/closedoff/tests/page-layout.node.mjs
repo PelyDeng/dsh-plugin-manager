@@ -18,12 +18,27 @@ import { probePage } from '../../../../../../scripts/web-page-probe.mjs';
 const here = fileURLToPath(new URL('.', import.meta.url));
 const pluginRoot = fileURLToPath(new URL('..', import.meta.url));
 const conversation = 'closedoff-web-12345678-1234-4123-8123-123456789012';
+// 产品轨判定与 src/web.ts、copy-web-assets.mjs 同一条 existsSync 口径：dist/web/app.js
+// 只由 React 构建链产出。骨架（web-react vs web）与 web/assets 的落位都按这一开关走，
+// 这里据它选页面骨架与断言集，探针 harness 与产品服务才不会各跑各的轨。
+const reactTrack = existsSync(`${pluginRoot}dist/web/app.js`);
+
+/** React 轨浅冒烟：深度对照（卡片行数/流式时序/弹窗焦点）属 React 迁移验收，这里只钉「页面活着」。 */
+function assertReactSmoke(width, value) {
+  assert.equal(value.error, undefined, `视口 ${width}: ${value.error}`);
+  assert.equal(value.routePrefix, '/closedoff-qa', `视口 ${width} 注入的宿主配置没生效`);
+  assert.equal(value.reactMounted, true, `视口 ${width} React 应用没有挂载到 #root`);
+  assert.equal(value.pageOverflow, false, `视口 ${width} 出现横向溢出`);
+}
 
 async function probe(t, options) {
   const assets = `${pluginRoot}web/assets`;
   assert.ok(existsSync(`${assets}/app.js`), `页面产物不存在，先运行 pnpm --filter @dsh-agents-group/closedoff run build:web（缺少 ${assets}/app.js）`);
   const result = await probePage({
-    root: pluginRoot, prefix: '/closedoff-qa', mount: [`/closedoff-qa/assets=${assets}`],
+    root: pluginRoot, prefix: '/closedoff-qa',
+    // 骨架跟产品轨走：React 轨服务 web-react（含 #root 挂载点），旧轨照旧默认 web/。
+    ...(reactTrack ? { dir: `${pluginRoot}web-react` } : {}),
+    mount: [`/closedoff-qa/assets=${assets}`],
     replace: [`__WEB_CONFIG__=${here}page-config.json`],
     stub: `${here}page-stub.json`, probe: `${here}page-probe.js`, settle: '1500', ...options,
   });
@@ -35,6 +50,12 @@ test('the welcome page boots with injected config and stays inside every width',
   const result = await probe(t, { widths: '1280,860,640' });
   if (!result) return;
   for (const { width, value } of result.results) {
+    if (reactTrack) {
+      // React 轨只断言 co-welcome 在场（深度对照属 React 迁移验收）。
+      assertReactSmoke(width, value);
+      assert.equal(value.reactWelcome, true, `视口 ${width} React 欢迎页没有渲染`);
+      continue;
+    }
     assert.equal(value.error, undefined, `视口 ${width}: ${value.error}`);
     assert.equal(value.routePrefix, '/closedoff-qa', `视口 ${width} 注入的宿主配置没生效`);
     assert.equal(value.hasShell, true, `视口 ${width} 页面壳没有渲染`);
@@ -48,6 +69,12 @@ test('a restored conversation renders its tool card at every width', async t => 
   const result = await probe(t, { widths: '1280,860,640', page: `/closedoff-qa/?conversationId=${conversation}` });
   if (!result) return;
   for (const { width, value } of result.results) {
+    if (reactTrack) {
+      // 恢复场景的消息会替换欢迎页：co-welcome 应当离场。
+      assertReactSmoke(width, value);
+      assert.equal(value.reactWelcome, false, `视口 ${width} 恢复对话后不该停在欢迎页`);
+      continue;
+    }
     assert.equal(value.error, undefined, `视口 ${width}: ${value.error}`);
     assert.equal(value.welcomeText, '', `视口 ${width} 恢复对话时不该再显示欢迎页`);
     assert.equal(value.cardsBlocks, 1, `视口 ${width} 工具卡片块没有渲染`);
@@ -59,11 +86,17 @@ test('a restored conversation renders its tool card at every width', async t => 
 });
 
 test('a live question streams the tool row, the card and the answer', async t => {
-  const result = await probe(t, {
-    widths: '1280,860,640', probe: `${here}page-stream-probe.js`, settle: '1200', budget: '8000',
-  });
+  const result = await probe(t, reactTrack
+    // React 轨没有流式量测探针：浅冒烟（欢迎页在场即可），深度流式对照属 React 迁移验收。
+    ? { widths: '1280,860,640' }
+    : { widths: '1280,860,640', probe: `${here}page-stream-probe.js`, settle: '1200', budget: '8000' });
   if (!result) return;
   for (const { width, value } of result.results) {
+    if (reactTrack) {
+      assertReactSmoke(width, value);
+      assert.equal(value.reactWelcome, true, `视口 ${width} React 欢迎页没有渲染`);
+      continue;
+    }
     assert.equal(value.error, undefined, `视口 ${width}: ${value.error}`);
     assert.equal(value.ready, true, `视口 ${width} 页面没有进入就绪状态：${value.statusText}`);
     assert.equal(value.finished, true, `视口 ${width} 回答没有收完（状态停在「${value.statusText}」）`);
@@ -86,11 +119,17 @@ test('a live question streams the tool row, the card and the answer', async t =>
 });
 
 test('a capture video card opens the camera modal and closes again', async t => {
-  const result = await probe(t, {
-    widths: '1280,860,640', stub: `${here}page-media-stub.json`, probe: `${here}page-media-probe.js`, settle: '1200', budget: '8000',
-  });
+  const result = await probe(t, reactTrack
+    // React 轨没有弹窗量测探针：浅冒烟（恢复对话不炸、欢迎页离场），深度弹窗对照属 React 迁移验收。
+    ? { widths: '1280,860,640', stub: `${here}page-media-stub.json`, page: `/closedoff-qa/?conversationId=${conversation}` }
+    : { widths: '1280,860,640', stub: `${here}page-media-stub.json`, probe: `${here}page-media-probe.js`, settle: '1200', budget: '8000' });
   if (!result) return;
   for (const { width, value } of result.results) {
+    if (reactTrack) {
+      assertReactSmoke(width, value);
+      assert.equal(value.reactWelcome, false, `视口 ${width} 恢复对话后不该停在欢迎页`);
+      continue;
+    }
     assert.equal(value.error, undefined, `视口 ${width}: ${value.error}`);
     assert.equal(value.ready, true, `视口 ${width} 页面没有进入就绪状态`);
     assert.equal(value.hasButton, true, `视口 ${width} 抓拍卡片上没有按钮：${value.captureCardText}`);

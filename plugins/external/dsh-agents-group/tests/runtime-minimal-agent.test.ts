@@ -402,8 +402,10 @@ function fixture(definition: AgentDefinition, extraActors: readonly Actor[] = []
       emit('tool/result', {
         turn: 1,
         step: 1,
-        // 参与者从 `message.content[0].content` 取结果正文、从 `meta` 取结构化值。
-        message: { content: [{ content: resultText === '' ? [] : [{ type: 'text', text: resultText }] }] },
+        // 宿主 0.1.7 新形状：toolCallId 提升到 message 顶层、content 直接是块数组
+        // （对齐 7abc30d 的 fixture 修正；旧嵌套 content[0].content 会让参与者按
+        // `textOf(content)` 取到空串，钩子里 `JSON.parse('')` 直接抛 SyntaxError）。
+        message: { toolCallId: 'call-1', content: resultText === '' ? [] : [{ type: 'text', text: resultText }] },
         ...(meta === undefined ? {} : { meta }),
       }, conversationId)
     },

@@ -350,6 +350,35 @@ describe('HTTP authentication and conversation ownership', () => {
     revoked.add('alice-login')
     expect(await reader.read()).toEqual({ value: undefined, done: true })
   })
+  it('closes dangling tool_start calls with tool_end(error) before done when the attempt fails', async () => {
+    // 失败 attempt：tool-call-delta 已建 tool_start，但 tool/result 永远不会来。
+    // turn/end 收尾必须先补 tool_end(error)（推进前端卡片）、再发 done（归档）。
+    const { request, actors, lifecycle, bus } = await fixture()
+    const c = (await lifecycle.open(undefined, true, actors.get('alice')!))!
+    const response = await request('/closedoff-qa/chat', 'alice', { conversationId: c.id, message: '失败收尾' })
+    expect(response.status).toBe(200)
+    const reader = response.body!.getReader()
+    const initial = new TextDecoder().decode((await reader.read()).value)
+    expect(JSON.parse(initial.slice(6).trim()).type).toBe('conversation')
+    bus.emit('session/event', { id: c.id }, {
+      type: 'assistant/live-chunk', time: 1,
+      data: { step: 1, chunk: { type: 'tool-call-delta', id: 'call-1', name: 'closedoff_warning_page', argumentsDelta: '{}' } },
+    })
+    bus.emit('session/event', { id: c.id }, { type: 'turn/end', data: { reason: { kind: 'error', error: { message: '上游超时' } } } })
+    let raw = ''
+    for (;;) {
+      const chunk = await reader.read()
+      if (chunk.done) break
+      raw += new TextDecoder().decode(chunk.value)
+    }
+    const events = raw.split('\n\n').filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)))
+    const ends = events.filter(event => event.type === 'tool_end')
+    const doneIndex = events.findIndex(event => event.type === 'done')
+    // 每个 tool_start 都有终态，且补发在 done 之前（前端先推进卡、再收 done 归档）。
+    expect(ends).toEqual([expect.objectContaining({ type: 'tool_end', callId: 'call-1', status: 'error' })])
+    expect(doneIndex).toBeGreaterThan(events.findIndex(event => event.type === 'tool_end'))
+    expect(events[doneIndex]).toMatchObject({ type: 'done', reason: 'error' })
+  })
   it('fails closed when a provider is removed while standalone remains usable', async () => {
     const authenticated = await fixture()
     authenticated.removeProvider()

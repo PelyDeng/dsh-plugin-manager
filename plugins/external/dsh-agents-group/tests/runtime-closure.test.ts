@@ -473,7 +473,8 @@ describe('补交轮：没调交活工具时补一次，补不上就按投影兜�
    * （有待办就不能报完成，否则用户以为事情结束了）。
    */
   it('模型交活时仍合并业务的结构化事实：actions 不丢，状态被校正为非完成', async () => {
-    const action = { id: 'op-1', kind: 'blog.publish', title: '发布文章', state: 'prepared' as const }
+    // `summary` 是 kit `AgentAction` 的必填字段（一句话说清会发生什么）。
+    const action = { id: 'op-1', kind: 'blog.publish', title: '发布文章', summary: '确认后立即发布这篇文章', state: 'prepared' as const }
     const hosted = host(definitionOf({
       projectResult: async () => ({
         status: 'external_pending',

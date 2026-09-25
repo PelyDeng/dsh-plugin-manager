@@ -53,6 +53,7 @@ describe('译文留档（B2-2b P0 回归）', () => {
       await store.translationWrite('id-1', 'key-1', 'user:alice', 'translated', { result: { text: '你好' }, textNormalized: true })
       const round = await store.translationLatest('key-1')
       expect(typeof round).toBe('object')
+      if (round === undefined) return expect.fail('刚写入的 translated 留档必须能读回')
       expect(round.result.text).toBe('你好')
     } finally {
       store.close()
@@ -86,6 +87,7 @@ describe('译文留档（B2-2b P0 回归）', () => {
       expect(await store.translationLatest('key-2')).toBeUndefined()
       await store.translationWrite('id-t', 'key-2', 'user:alice', 'translated', { result: { text: '完成' }, textNormalized: true })
       const latest = await store.translationLatest('key-2')
+      if (latest === undefined) return expect.fail('translated 留档必须能读回（running/failed 才不参与命中）')
       expect(latest.result.text).toBe('完成')
     } finally {
       store.close()

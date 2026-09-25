@@ -581,6 +581,8 @@ export async function installWeb(
         }
 
         const tools = new Map<string, { name: string; api: string }>()
+        // 已发过 tool_end 的 callId：tool/result 才是终态来源，turn/end 收尾时据此挑出悬挂项。
+        const endedCalls = new Set<string>()
         const tracks = new Map<string, TrackPoint[]>()
         const reasoningSteps = new Map<number, { raw: string; released: boolean }>()
         const opaqueValues = new Set<string>()
@@ -719,6 +721,7 @@ export async function installWeb(
               for (const value of collectOpaqueResultValues(fullResultText, event.data.meta)) opaqueValues.add(value)
               const failed = event.data.error !== undefined || message.isError === true || legacyBlock?.isError === true || gatewayResultFailed(fullResultText)
               send({ type: 'tool_end', callId, status: failed ? 'error' : 'done' })
+              endedCalls.add(callId)
               const tool = tools.get(callId)?.name ?? ''
               if (!failed && isFenceTool(tool)) send({ type: 'fences', callId, payload: fencesFromResult(fullResultText, event.data.meta) })
               if (!failed && tool === 'closedoff_vehicle_track') {
@@ -778,6 +781,13 @@ export async function installWeb(
               scheduleThinking(true, true)
               if (finalText !== '') send({ type: 'delta', text: redactVisibleText(finalText) })
               if (reason.kind === 'error') send({ type: 'error', message: redactVisibleText(`智能体回答失败: ${reason.error.message}`) })
+              // 失败 attempt（finish error/aborted、流中途异常）里 tool-call-delta 已发过 tool_start，
+              // 但对应的 tool/result 不会再来——不补终态的话该 callId 永无 tool_end，前端查询行
+              // 永久停在「查询中」。对齐历史路径的 error 口径：在 done 之前逐个补发 tool_end(error)，
+              // 前端先收到 tool_end 推进卡片、再收 done 归档。
+              for (const callId of tools.keys()) {
+                if (!endedCalls.has(callId)) send({ type: 'tool_end', callId, status: 'error' })
+              }
               const turnUsage = turnUsageSummary(turnEvents)
               const completed = reason.kind === 'completed'
               send({
