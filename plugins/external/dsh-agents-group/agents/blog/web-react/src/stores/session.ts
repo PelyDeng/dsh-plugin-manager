@@ -20,12 +20,14 @@ export interface SessionState {
   identityReady: boolean
   /** 登录身份（/identity 的 userId；storageKey 与草稿归属用）。 */
   userId: string
+  /** 公开博客地址（/identity 的 blogUrl；管理弹窗的链接行用）。 */
+  blogUrl: string
   view: ViewName
   /** 顶层提示行（旧 #notice / #chat-error 的兜底锚点；组件局部错误不入此）。 */
   notice: { text: string; tone: 'error' | 'info' } | null
 
   beginViewChange: () => void
-  adoptIdentity: (identity: { userId: string }) => void
+  adoptIdentity: (identity: { userId: string; blogUrl?: string }) => void
   setView: (view: ViewName) => void
   setNotice: (notice: { text: string; tone: 'error' | 'info' } | null) => void
 }
@@ -34,12 +36,13 @@ export const useSessionStore = create<SessionState>(set => ({
   viewToken: 0,
   identityReady: false,
   userId: '',
+  blogUrl: '',
   view: 'chat',
   notice: null,
 
   beginViewChange: () => set(state => ({ viewToken: state.viewToken + 1 })),
 
-  adoptIdentity: identity => set({ identityReady: true, userId: identity.userId }),
+  adoptIdentity: identity => set({ identityReady: true, userId: identity.userId, blogUrl: identity.blogUrl ?? '' }),
 
   setView: view => set({ view }),
 

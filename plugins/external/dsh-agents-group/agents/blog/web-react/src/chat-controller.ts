@@ -20,11 +20,13 @@
  */
 import { api, uploadAttachment } from './lib/api.ts'
 import { basePath } from './lib/config.ts'
+import type { FeedbackResult } from './lib/types.ts'
+import { useTranslationStore } from './lib/thinking-translation.ts'
 import { chatConversationTarget, setStorageAdapter, storedConversationId, useConversationStore } from './stores/conversation.ts'
 import { usePickerStore, useComposerStore } from './stores/composer.ts'
 import { useSessionStore } from './stores/session.ts'
 import { useTurnStore } from './stores/turn.ts'
-import type { StreamMessage } from './lib/types.ts'
+import type { OperationRecord, StreamMessage } from './lib/types.ts'
 
 /** snapshot/changed 后全量重拉的防抖窗口（旧 chat.js:96 的 60ms）。 */
 export const REFRESH_DEBOUNCE_MS = 60
@@ -148,6 +150,14 @@ export async function refresh(): Promise<void> {
   // live 投影位与快照对齐（旧码 live 寄存于 history、重拉整体覆盖的等价语义）：
   // 完成后快照 live=null 即收口流式区；busy 中受保护场景回写的是本地 live，无变化。
   useTurnStore.getState().setLive(merged.live)
+  // 回合结束后的评价面（旧 refresh 的 chat-feedback list 段）：守卫核对后整体替换。
+  if (!merged.busy) {
+    const feedback = await api.feedback({ conversationId: id, operation: 'list' })
+    if (ticket !== refreshTicket || staleView(view)) return
+    if (feedback.ok) {
+      useConversationStore.getState().setFeedback(feedback.value.items ?? [])
+    }
+  }
 }
 
 // ── 会话导航与创建 ────────────────────────────────────────────────────────
@@ -169,6 +179,9 @@ export async function activate(id: string | null): Promise<void> {
   conversation.resetPanel()
   useTurnStore.getState().resetLive()
   composer.resetTransient()
+  // 评价面与译文缓存随会话清空（旧 activate 的 feedback.clear/translations.reset）。
+  conversation.resetFeedback()
+  useTranslationStore.getState().reset()
   session.setNotice(null)
   // 会话 id 落地（storage + URL 同步在 setConversationId 单点；'' 即移除）。
   useConversationStore.getState().setConversationId(id ?? '')
@@ -407,6 +420,148 @@ export function transferredFiles(transfer: DataTransfer | null): File[] {
     .filter(item => item.kind === 'file')
     .map(item => item.getAsFile())
     .filter((file): file is File => file !== null)
+}
+
+// ── 操作卡确认/取消/核对（旧 operationCard 的 act + operationPending/operationErrors）──
+
+/** 操作卡动作进行中的集合（跨重渲稳定：模块级，旧 operationPending 同形态）。 */
+const operationPending = new Set<string>()
+/** 操作卡最近一次动作的错误文案（旧 operationErrors）。 */
+const operationErrors = new Map<string, string>()
+
+export function operationErrorOf(operationId: string): string | undefined {
+  return operationErrors.get(operationId)
+}
+
+/**
+ * 操作卡动作（旧 act 的解耦重写）：confirm/cancel/reconcile 走 chat-operation，
+ * 进行中防重入；成功或失败后都重拉（changed 广播也会触发，这里主动收口时延）。
+ */
+export async function runOperationAction(operation: OperationRecord, action: 'confirm' | 'cancel' | 'reconcile', consumeSavedDraft = false): Promise<void> {
+  const conversationId = useConversationStore.getState().conversationId
+  if (conversationId === '' || operationPending.has(operation.id)) return
+  const view = useSessionStore.getState().viewToken
+  operationPending.add(operation.id)
+  operationErrors.delete(operation.id)
+  try {
+    await api.operationAction({
+      conversationId,
+      id: operation.id,
+      ...(operation.nonce === undefined || operation.nonce === null ? {} : { nonce: operation.nonce }),
+      operation: action,
+      ...(action === 'confirm' ? { consumeSavedDraft } : {}),
+    })
+  } catch (error) {
+    operationErrors.set(operation.id, error instanceof Error ? error.message : String(error))
+  } finally {
+    operationPending.delete(operation.id)
+    if (!staleView(view)) {
+      await refresh().catch(notifyError)
+    }
+  }
+}
+
+// ── 评价与分支（旧 rate/checkFeedback/rememberFeedback/branch）────────────
+
+/** feedback 数据面（旧 state.feedback Map + feedbackReady）：随会话存 conversation store。 */
+
+/** 非空 note 才随请求提交（旧 sendFeedback 的 trim 判据）。 */
+function feedbackArgs(args: { conversationId: string; operation: 'put' | 'delete'; messageId: string; rating: 'positive' | 'negative'; ifVersion: number | null; note: string }): Parameters<typeof api.feedback>[0] {
+  return {
+    conversationId: args.conversationId,
+    operation: args.operation,
+    messageId: args.messageId,
+    rating: args.rating,
+    ifVersion: args.ifVersion,
+    ...(args.note.trim() !== '' ? { note: args.note } : {}),
+  }
+}
+
+/** 评价保存（弹窗路径，旧 saveFeedback）：version-conflict 时回写服务端当前值再抛错。 */
+export async function saveFeedbackDialog(args: {
+  conversationId: string
+  messageId: string
+  rating: 'positive' | 'negative'
+  note: string
+  ifVersion: number | null
+  operation: 'put' | 'delete'
+}): Promise<void> {
+  const result = await api.feedback(feedbackArgs(args))
+  const view = useSessionStore.getState().viewToken
+  checkFeedback(result, args.messageId, args.conversationId, view)
+  rememberFeedback(result, args.messageId, args.conversationId, view)
+  await refresh()
+}
+
+/** 快捷评/踩（旧 rate）：同档再点=撤销（operation=delete），note 沿用既有值。 */
+export async function rateAnswer(messageId: string, rating: 'positive' | 'negative'): Promise<void> {
+  const conversationId = useConversationStore.getState().conversationId
+  if (conversationId === '') return
+  const view = useSessionStore.getState().viewToken
+  const current = useConversationStore.getState().feedback.get(messageId)
+  const result = await api.feedback(feedbackArgs({
+    conversationId,
+    operation: current?.rating === rating ? 'delete' : 'put',
+    messageId,
+    rating,
+    ifVersion: current?.version ?? null,
+    note: current?.note ?? '',
+  }))
+  if (staleView(view)) return
+  checkFeedback(result, messageId, conversationId, view)
+  rememberFeedback(result, messageId, conversationId, view)
+  await refresh()
+}
+
+/** 评价失败的分流（旧 checkFeedback）：冲突回写当前版本并提示，其余按 code 给文案。 */
+function checkFeedback(result: FeedbackResult, messageId: string, conversationId: string, view: number): void {
+  if (result.ok) return
+  if (result.error.code === 'version-conflict') {
+    const current = result.error.current ?? null
+    if (conversationId === useConversationStore.getState().conversationId && !staleView(view)) {
+      if (current !== null) useConversationStore.getState().setFeedbackEntry(current)
+      else useConversationStore.getState().deleteFeedbackEntry(messageId)
+    }
+    throw new Error('评价已在其他窗口变化，已刷新当前版本，请核对后再提交')
+  }
+  const messages: Record<string, string> = {
+    'note-too-large': '评价备注过长，请缩短',
+    'note-blank': '评价备注不能只有空格',
+    'session-not-found': '对话尚未完成持久化，请稍后重试',
+    'target-not-found': '回答不存在或尚未完成',
+  }
+  throw new Error(messages[result.error.code] ?? '评价未能保存')
+}
+
+/** 评价结果落地（旧 rememberFeedback）：absent=已撤销，从映射中移除。 */
+function rememberFeedback(result: FeedbackResult, messageId: string, conversationId: string, view: number): void {
+  if (conversationId !== useConversationStore.getState().conversationId || staleView(view)) return
+  if (!result.ok) return
+  const value = result.value
+  if (value.absent === true) useConversationStore.getState().deleteFeedbackEntry(messageId)
+  else useConversationStore.getState().setFeedbackEntry({ messageId, rating: value.rating, ...(value.note === undefined ? {} : { note: value.note }), version: value.version })
+}
+
+/**
+ * 从一条回答分支新会话（旧 branch）：fork → activate 打开新会话 → 列表刷新；
+ * regenerate 时补发「基于上一轮资料重新生成」的指令（带原用户消息的 requestId，
+ * 服务端据此关联上下文）。分支期间代次守卫全程核对（旧 branchEpoch 双核对）。
+ */
+export async function branchFromMessage(messageId: string, messageSeq: number, regenerate: boolean): Promise<void> {
+  const conversationId = useConversationStore.getState().conversationId
+  if (conversationId === '') return
+  const view = useSessionStore.getState().viewToken
+  const prior = useConversationStore.getState().history?.messages.filter(m => m.role === 'user' && m.seq < messageSeq).at(-1)
+  const created = await api.fork({ conversationId, messageId, requestId: crypto.randomUUID() })
+  if (staleView(view)) return
+  const branchView = useSessionStore.getState().viewToken + 1
+  await activate(created.id)
+  if (useConversationStore.getState().conversationId !== created.id || useSessionStore.getState().viewToken !== branchView) return
+  await refreshConversations()
+  if (useConversationStore.getState().conversationId !== created.id || useSessionStore.getState().viewToken !== branchView) return
+  if (regenerate) {
+    await send('请基于上一轮资料重新给出回答或文章候选。沿用已关联文章；原回答与文章不回滚，不重复创建文章。', prior?.requestId ?? null)
+  }
 }
 
 // ── 启动 ──────────────────────────────────────────────────────────────────

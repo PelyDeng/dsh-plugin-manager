@@ -7,14 +7,23 @@
  */
 import { basePath } from './config.ts'
 import type {
+  ArticleListItem,
+  AttachmentContent,
   AttachmentItem,
+  BlogCategory,
+  BlogDraft,
   ChatHistoryResult,
   ConversationInfo,
   ConversationPage,
+  FeedbackEntry,
+  FeedbackResult,
   Identity,
+  ManagePrepareResult,
   ModelCatalog,
   ModelSelection,
+  OperationLogRow,
   SendResult,
+  WritingJob,
 } from './types.ts'
 
 /** 一次接口调用失败（错误体里带服务端 error/message 时优先用）。 */
@@ -92,6 +101,60 @@ export const api = {
   attachmentSelect: (args: { draftId: string; id: string; selected: boolean; range?: { from: number; to: number } | null }): Promise<unknown> =>
     callAction('attachment-select', args),
   attachmentRemove: (draftId: string, id: string): Promise<unknown> => callAction('attachment-remove', { draftId, id }),
+  /** 附件解析内容（旧 previewFile/viewAttachment 的 attachment-content）。 */
+  attachmentContent: (draftId: string, id: string): Promise<AttachmentContent> => callAction<AttachmentContent>('attachment-content', { draftId, id }),
+
+  // ── 批 2b：评价、分支与操作卡 ──────────────────────────────────────────
+  /** 评价查询/写入（operation=list|put|delete；version-conflict 由调用方分流）。 */
+  feedback: (args: {
+    conversationId: string
+    operation: 'list' | 'put' | 'delete'
+    messageId?: string
+    rating?: 'positive' | 'negative'
+    note?: string
+    ifVersion?: number | null
+  }): Promise<FeedbackResult> => callAction<FeedbackResult>('chat-feedback', args),
+  /** 从某条回答分支新会话（旧 chat-fork：{conversationId,messageId,requestId}）。 */
+  fork: (args: { conversationId: string; messageId: string; requestId: string }): Promise<ConversationInfo> =>
+    callAction<ConversationInfo>('chat-fork', args),
+  /** 操作卡确认/取消/核对（旧 chat-operation：confirm|cancel|reconcile）。 */
+  operationAction: (args: { conversationId: string; id: string; nonce?: string | null; operation: 'confirm' | 'cancel' | 'reconcile'; consumeSavedDraft?: boolean }): Promise<unknown> =>
+    callAction('chat-operation', args),
+
+  // ── 批 2b：文章工作台 ──────────────────────────────────────────────────
+  /** 文章/草稿列表（args.status: published|draft|all）。 */
+  articles: (args: { query?: string; page?: number; status?: string }): Promise<{ items: ArticleListItem[]; hasMore: boolean }> =>
+    callAction('articles', args),
+  /** 打开博客文章/保存稿（import：cid+variant）。 */
+  importArticle: (cid: number, variant: string): Promise<BlogDraft> => callAction<BlogDraft>('import', { cid, variant }),
+  draft: (id: string): Promise<BlogDraft> => callAction<BlogDraft>('draft', { id }),
+  /** 新建工作台草稿（create action；与 chat-create 的 create 撞名故另起）。 */
+  createDraftAction: (requestId: string): Promise<BlogDraft> => callAction<BlogDraft>('create', { requestId }),
+  save: (args: { id: string; revision: number; content: Record<string, unknown> }): Promise<BlogDraft> => callAction<BlogDraft>('save', args),
+  apply: (args: { id: string; revision: number; proposalId: string; fields: string[] }): Promise<BlogDraft> => callAction<BlogDraft>('apply', args),
+  discardProposal: (args: { id: string; revision: number; proposalId: string }): Promise<BlogDraft> => callAction<BlogDraft>('discard-proposal', args),
+  migrationStatus: (): Promise<{ remaining: number }> => callAction('migration-status'),
+  migrateDrafts: (): Promise<unknown> => callAction('migrate-drafts'),
+  metadata: (): Promise<{ categories: BlogCategory[] }> => callAction('metadata'),
+  tasks: (draftId: string): Promise<WritingJob[]> => callAction('tasks', { draftId }),
+  task: (id: string): Promise<WritingJob> => callAction<WritingJob>('task', { id }),
+  taskStart: (args: { requestId: string; draftId: string; expectedRevision: number; instruction: string; research: boolean; attachments: Array<{ id: string; version?: number; range?: { from: number; to: number } | null }> }): Promise<WritingJob> =>
+    callAction<WritingJob>('task-start', args),
+  taskCancel: (id: string): Promise<WritingJob> => callAction<WritingJob>('task-cancel', { id }),
+  operations: (draftId: string): Promise<OperationLogRow[]> => callAction('operations', { draftId }),
+  prepare: (args: { id: string; revision: number; mode: 'publish'; proposalId?: string }): Promise<Record<string, unknown>> => callAction('prepare', args),
+  prepareDelete: (cid: number): Promise<Record<string, unknown>> => callAction('prepare-delete', { cid }),
+  confirm: (args: { id: string; nonce: string; consumeSavedDraft: boolean }): Promise<{ status: string; message?: string; result?: { url?: string | null } }> => callAction('confirm', args),
+  reconcile: (id: string): Promise<{ status: string; message?: string; result?: { url?: string | null } }> => callAction('reconcile', { id }),
+  /** 图片上传（POST /upload，octet-stream；返回图床地址）。 */
+  uploadImage: (body: Blob | ArrayBuffer): Promise<{ url: string }> =>
+    request<{ url: string }>('/upload', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body }),
+
+  // ── 批 2b：管理域 ──────────────────────────────────────────────────────
+  /** 分类/标签/评论的列表查询（kind 分流；评论带 page/status/cid）。 */
+  manageList: (args: Record<string, unknown>): Promise<{ items: Array<Record<string, unknown>>; hasMore?: boolean }> => callAction('manage-list', args),
+  manageGet: (args: { kind: string; id: number }): Promise<{ item?: Record<string, unknown>; version?: number; impact?: { defaultCategory?: boolean } }> => callAction('manage-get', args),
+  managePrepare: (args: Record<string, unknown>): Promise<ManagePrepareResult> => callAction<ManagePrepareResult>('manage-prepare', args),
 }
 
 /** 附件上传（POST /attachment，octet-stream；旧 request('/attachment?...') 等价）。 */

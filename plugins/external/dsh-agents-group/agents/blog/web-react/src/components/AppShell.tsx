@@ -2,13 +2,12 @@
  * 应用外壳（旧 index.html 的 header/main 结构）：顶栏品牌与视图导航、对话主视图、
  * 快捷提问侧栏、历史对话抽屉与顶层提示行。
  *
- * 批 2a 范围：chat 视图与外壳。文章工作台/管理弹窗只渲染导航入口（点击提示
- * 批 2b 占位），workspace 视图给占位面。
+ * 批 2b 起：文章/管理入口接真实视图——「文章」切 workspace 视图（文章库/编辑器/
+ * 候选稿对照/AI 助手），「管理」开管理弹窗（分类/标签/评论 + 查看公开博客与账号
+ * 设置链接，旧 #management-dialog 的中转面并入）。
  */
 import { useState } from 'react'
-import { announce } from '@dsh-agents-group/web-common'
 import { newConversation } from '../chat-controller.ts'
-import { useComposerStore } from '../stores/composer.ts'
 import { useConversationStore } from '../stores/conversation.ts'
 import { useSessionStore } from '../stores/session.ts'
 import type { ReactElement } from 'react'
@@ -16,21 +15,18 @@ import { ChatHome } from './ChatHome.tsx'
 import { Composer } from './Composer.tsx'
 import { DshIcon } from './DshIcon.tsx'
 import { HistoryDrawer } from './HistoryDrawer.tsx'
+import { ManagementDialog } from './manage/ManagementDialog.tsx'
+import { WorkspaceView } from './writing/WorkspaceView.tsx'
 
 export function AppShell(): ReactElement {
   const view = useSessionStore(state => state.view)
   const setView = useSessionStore(state => state.setView)
   const notice = useSessionStore(state => state.notice)
   const identityReady = useSessionStore(state => state.identityReady)
-  const busy = useConversationStore(state => state.history?.busy === true)
-  const stopping = useComposerStore(state => state.stopping)
+  const blogUrl = useSessionStore(state => state.blogUrl)
   const conversationId = useConversationStore(state => state.conversationId)
   const [historyOpen, setHistoryOpen] = useState(false)
-
-  const batch2b = (name: string): void => {
-    announce(`${name}在批 2b 迁移`)
-    useSessionStore.getState().setNotice({ text: `${name}在批 2b 迁移，当前批只交付对话视图`, tone: 'info' })
-  }
+  const [manageOpen, setManageOpen] = useState(false)
 
   return (
     <div className="blg-shell">
@@ -50,11 +46,11 @@ export function AppShell(): ReactElement {
           <button
             type="button"
             aria-pressed={view === 'writing'}
-            onClick={() => batch2b('文章工作台')}
+            onClick={() => setView('writing')}
           >
             文章
           </button>
-          <button type="button" onClick={() => batch2b('管理弹窗')}>
+          <button type="button" aria-haspopup="dialog" onClick={() => setManageOpen(true)}>
             管理
           </button>
         </nav>
@@ -63,8 +59,8 @@ export function AppShell(): ReactElement {
             type="button"
             className="blg-topbar-btn"
             aria-expanded={historyOpen}
-            aria-label={historyOpen ? '收起历史对话' : '打开对话历史'}
-            title="历史对话"
+            aria-label="打开对话历史"
+            title="打开对话历史"
             onClick={() => setHistoryOpen(value => !value)}
           >
             历史对话
@@ -95,20 +91,16 @@ export function AppShell(): ReactElement {
           <HistoryDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} currentId={conversationId} />
         </div>
       ) : (
-        <main className="blg-workspace" aria-label="文章工作台">
-          <section className="paper blg-workspace-card">
-            <h1>文章工作台</h1>
-            <p className="section-title">批 2b 迁移中</p>
-            <p>
-              文章库、编辑器、候选稿对比与管理弹窗随批 2b 落地；当前批（2a）交付的是
-              订阅-快照数据层与对话视图。对话框视图不受影响，可先切回「对话」继续。
-            </p>
-            <button type="button" className="btn btn--primary" onClick={() => setView('chat')}>
-              返回对话
-            </button>
-          </section>
-        </main>
+        <WorkspaceView />
       )}
+
+      <ManagementDialog open={manageOpen} onClose={() => setManageOpen(false)} />
+
+      {/* 管理弹窗底部的公开博客与账号设置链接（旧 #management-dialog 的链接行）。 */}
+      <div className="blg-management-links-bar">
+        <a href={blogUrl} target="_blank" rel="noopener noreferrer">查看公开博客</a>
+        <a href="/auth">账号与模型设置</a>
+      </div>
 
       {/* announce() 的读屏播报区：容器常驻（live region 节点不卸载）。 */}
       <div id="sr-status" className="visually-hidden" role="status" aria-live="polite" />

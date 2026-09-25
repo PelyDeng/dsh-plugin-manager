@@ -41,6 +41,7 @@ beforeEach(async () => {
     'attachment-select': () => ({}),
     'attachment-remove': () => ({}),
     'chat-list': () => ({ items: [], nextOffset: null }),
+    'chat-feedback': () => ({ ok: true, value: { items: [] } }),
   })
   calls = stub.calls
 })

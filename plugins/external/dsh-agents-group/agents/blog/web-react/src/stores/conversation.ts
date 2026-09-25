@@ -7,7 +7,7 @@
  */
 import { create } from 'zustand'
 import { chatStorageKey, useSessionStore } from './session.ts'
-import type { ChatHistoryResult, ChatListItem } from '../lib/types.ts'
+import type { ChatHistoryResult, ChatListItem, FeedbackEntry } from '../lib/types.ts'
 
 /** sessionStorage 适配（node 测试注入内存版，避免环境分叉）。 */
 export interface StorageLike {
@@ -40,12 +40,22 @@ export interface ConversationState {
   conversationsOffset: number | null
   conversationsQuery: string
   conversationsError: string | null
+  /** 评价映射（旧 state.feedback：messageId → 条目）与就绪位（回合结束后可写）。 */
+  feedback: Map<string, FeedbackEntry>
+  feedbackReady: boolean
 
   setConversationId: (id: string) => void
   /** 重拉结果落地（守卫核对在 controller，这里只写）。 */
   acceptHistory: (data: ChatHistoryResult) => void
   /** 切会话原子动作的一段：清历史面板（live 清理由 turn.reset 负责）。 */
   resetPanel: () => void
+  /** 评价映射整体替换（旧 refresh 的 feedback list 段）。 */
+  setFeedback: (items: readonly FeedbackEntry[]) => void
+  /** 单条评价写入（旧 rememberFeedback）。 */
+  setFeedbackEntry: (entry: FeedbackEntry) => void
+  deleteFeedbackEntry: (messageId: string) => void
+  /** 切会话清空评价面（旧 activate 的 feedback.clear()）。 */
+  resetFeedback: () => void
   acceptConversationPage: (items: readonly ChatListItem[], nextOffset: number | null, append: boolean) => void
   setConversationsQuery: (query: string) => void
   setConversationsError: (message: string | null) => void
@@ -58,6 +68,8 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   conversationsOffset: null,
   conversationsQuery: '',
   conversationsError: null,
+  feedback: new Map(),
+  feedbackReady: false,
 
   setConversationId: id => {
     set({ conversationId: id })
@@ -73,6 +85,26 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   acceptHistory: history => set({ history }),
 
   resetPanel: () => set({ history: null }),
+
+  setFeedback: items => {
+    const feedback = new Map(items.map(item => [item.messageId, item]))
+    set({ feedback, feedbackReady: true })
+  },
+
+  setFeedbackEntry: entry => set(state => {
+    const feedback = new Map(state.feedback)
+    feedback.set(entry.messageId, entry)
+    return { feedback }
+  }),
+
+  deleteFeedbackEntry: messageId => set(state => {
+    if (!state.feedback.has(messageId)) return {}
+    const feedback = new Map(state.feedback)
+    feedback.delete(messageId)
+    return { feedback }
+  }),
+
+  resetFeedback: () => set({ feedback: new Map(), feedbackReady: false }),
 
   acceptConversationPage: (items, nextOffset, append) => set(state => {
     if (!append) return { conversations: [...items], conversationsOffset: nextOffset, conversationsError: null }

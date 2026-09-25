@@ -123,6 +123,22 @@ const server = createServer(async (request, response) => {
       }
       return
     }
+    // 批 2b：推理译文整理（形状对齐 src/reasoning-translation.ts 的 ReadingCopy）。
+    if (pathname === `${BLOG_PREFIX}/reasoning-translation` && request.method === 'POST') {
+      await readBody(request)
+      response.writeHead(200, HEADERS_JSON)
+      response.end(JSON.stringify({
+        status: 'translated',
+        text: '（中文译文）先列出已发布文章，再查看草稿箱的待发布内容，最后汇总本周动态。',
+        partial: false,
+        provider: 'mock-provider',
+        model: 'mock-lite',
+        usage: { inputTokens: 210, outputTokens: 48, totalTokens: 258 },
+        elapsedMs: 820,
+        createdAt: Date.now(),
+      }))
+      return
+    }
     // 订阅-快照流（批 2a）：GET /chat-events，首条 snapshot，其后 live/changed 广播
     // + 1s ping 心跳——形状对齐 src/index.ts 的 /chat-events 端点与 chat.subscribe。
     if (pathname === `${BLOG_PREFIX}/chat-events`) {
@@ -294,6 +310,57 @@ server.listen(PORT, '127.0.0.1', () => {
 const blogConversations = new Map()
 let blogSeq = 100
 
+// ── 批 2b：草稿、博客文章、分类标签评论与操作确认的状态面 ──────────────────
+
+const blogDrafts = new Map()
+const blogArticles = [
+  { cid: 11, title: '手账工作台实践', hasPublished: true, hasSavedDraft: false },
+  { cid: 12, title: '订阅-快照模型浅析', hasPublished: true, hasSavedDraft: true },
+  { cid: 13, title: '批 2b 冒烟草稿', hasPublished: false, hasSavedDraft: false },
+]
+const blogCategories = [
+  { id: 1, name: '技术' },
+  { id: 2, name: '生活' },
+]
+const blogTaxonomy = {
+  category: [
+    { id: 1, name: '技术', slug: 'tech', count: 12, parent: 0 },
+    { id: 2, name: '生活', slug: 'life', count: 3, parent: 0 },
+    { id: 3, name: '前端', slug: 'fe', count: 5, parent: 1 },
+  ],
+  tag: [
+    { id: 21, name: '架构', slug: 'arch', count: 9 },
+    { id: 22, name: '随笔', slug: 'essay', count: 2 },
+  ],
+}
+const blogComments = [
+  { id: 31, cid: 11, author: '读者甲', text: '写得很清楚，受益了。', status: 'approved' },
+  { id: 32, cid: 12, author: '读者乙', text: '想问一下重连怎么处理？', status: 'waiting' },
+]
+let blogRevision = 5
+
+function makeBlogDraft(id, overrides = {}) {
+  return {
+    id,
+    title: '批 2b 冒烟草稿',
+    text: '# 批 2b 冒烟草稿\n\n第一段正文。\n\n第二段正文。',
+    slug: '',
+    format: 'markdown',
+    tags: ['随笔'],
+    categories: [1],
+    allowComment: true,
+    revision: blogRevision,
+    blogNative: true,
+    proposal: {
+      id: 'proposal-' + String(id).replace(/^draft-/, ''), createdAt: Date.now() - 60_000, baseRevision: blogRevision,
+      fields: { title: '批 2b 冒烟草稿（候选）', text: '# 批 2b 冒烟草稿\n\n第一段正文（已润色）。\n\n新增的第三段正文。', tags: ['随笔', '架构'], categories: [1], allowComment: true },
+      sources: [{ url: 'https://example.invalid/source', title: '示例来源', fetched: true }],
+    },
+    remote: { deleted: false, published: { cid: 12 }, savedDraft: { cid: 12 } },
+    ...overrides,
+  }
+}
+
 function makeBlogConversation(id, title, pinned = false) {
   return {
     info: { id, title, updatedAt: Date.now(), ready: true, parent: null, pinned },
@@ -303,6 +370,10 @@ function makeBlogConversation(id, title, pinned = false) {
     live: null,
     turn: 0,
     listeners: new Set(),
+    requests: [],
+    operations: [],
+    results: [],
+    attachments: [],
   }
 }
 
@@ -313,18 +384,48 @@ function resetBlogStore() {
   const seeded = makeBlogConversation('conv-mock-1', '博客近况梳理会话', true)
   seeded.updatedAt = Date.now() - 3_600_000
   seeded.messages.push(
-    { id: 'msg-user-1', role: 'user', seq: 101, time: Date.now() - 3_590_000, turn: 1, text: '看看我的博客最近发布了哪些文章？', requestId: 'req-mock-1', attachments: [] },
+    { id: 'msg-user-1', role: 'user', seq: 101, time: Date.now() - 3_590_000, turn: 1, text: '看看我的博客最近发布了哪些文章？', requestId: 'req-mock-1', attachments: [{ id: 'att-doc', name: '近况笔记.txt', kind: 'text/plain', range: null, partial: false }] },
     {
       id: 'msg-assistant-1', role: 'assistant', seq: 102, time: Date.now() - 3_580_000, turn: 1,
-      text: '最近一周发布了《手账工作台实践》与《订阅-快照模型浅析》两篇文章；草稿箱里还有一篇待发布。\n\n需要我帮你起草下一篇吗？',
-      reasoning: '先按时间倒序列出已发布文章\n再看草稿箱的待发布内容',
-      interrupted: false, feedback: true, tail: true, model: 'mock-pro', provider: 'mock-provider',
+      text: [
+        '最近一周发布了《手账工作台实践》与《订阅-快照模型浅析》两篇文章；草稿箱里还有一篇待发布。',
+        '',
+        '建议下一步：把提纲落成草稿。',
+        '',
+        '```js',
+        'console.log("hello")',
+        '```',
+        '',
+        '参考 <https://example.invalid/archives> 与 [发布指南](https://example.invalid/guide)。',
+        '',
+        '| 指标 | 数值 |',
+        '| --- | --- |',
+        '| 文章 | 2 |',
+      ].join('\n'),
+      reasoning: 'I should list the published posts first, then check the draft box for pending items, and finally summarize the weekly activity in a compact table for the user.',
+      interrupted: false, feedback: true, tail: true, forkCut: 12, model: 'mock-pro', provider: 'mock-provider',
     },
   )
   seeded.turns.push({
     turn: 1, startSeq: 101, startedAt: Date.now() - 3_590_000, status: 'succeeded',
     usage: { uncachedInputTokens: 320, outputTokens: 96, totalTokens: 416, cacheReadTokens: 128 },
     runMs: 2400, ttftMs: 320, tokensPerSecond: 61.5, attempts: 1, cut: 103,
+  })
+  seeded.requests.push({ id: 'req-mock-1', conversationId: 'conv-mock-1', status: 'succeeded', createdAt: Date.now() - 3_590_000, userMessageId: 'msg-user-1', sources: [] })
+  seeded.results.push({
+    id: 'result-1', draftId: 'draft-result-1', title: '订阅-快照模型浅析（候选稿）', revision: blogRevision,
+    proposal: {
+      id: 'proposal-result-1', createdAt: Date.now() - 3_580_000, baseRevision: blogRevision,
+      fields: { title: '订阅-快照模型浅析（候选稿）', text: '# 订阅-快照模型浅析\n\n旧稿基于轮询；新稿改为 EventSource 订阅加快照重拉。', tags: ['架构'], categories: [1], allowComment: true },
+      sources: [],
+    },
+  })
+  seeded.operations.push({
+    id: 'op-mock-1', mode: 'publish', title: '订阅-快照模型浅析', status: 'prepared',
+    requestId: 'req-mock-1', canConfirm: true, nonce: 'nonce-mock-1', source: 'proposal',
+    hasSavedDraft: false,
+    after: { title: '订阅-快照模型浅析', text: '订阅-快照模型的正文内容。', tags: ['架构'], categories: [1], allowComment: true },
+    before: null,
   })
   blogConversations.set('conv-mock-1', seeded)
   const fresh = makeBlogConversation('conv-mock-2', '批 2a 冒烟新会话')
@@ -342,9 +443,9 @@ function blogHistory(id) {
     turns: conv.turns.map(turn => ({ ...turn })),
     busy: conv.busy,
     live: conv.live === null ? null : { ...conv.live },
-    requests: [],
-    results: [],
-    operations: [],
+    requests: [...(conv.requests ?? [])],
+    results: [...(conv.results ?? [])],
+    operations: [...(conv.operations ?? [])],
   }
 }
 
@@ -490,9 +591,218 @@ const blogActions = {
     return { ok: true }
   },
   'chat-image-capability': () => ({ message: '当前模型可读取图片资料', available: true, currentSupportsImages: true }),
-  attachments: () => [],
-  'attachment-select': () => ({}),
-  'attachment-remove': () => ({}),
+  attachments: args => {
+    const conv = blogConversations.get(String(args.draftId))
+    if (conv === undefined) throw new Error('会话不存在')
+    if ((conv.attachments ?? []).length === 0) {
+      conv.attachments.push(
+        { id: 'att-doc', name: '近况笔记.txt', kind: 'text/plain', status: 'ready', selected: true, version: 1, range: null, unit: '行', partial: false },
+        { id: 'att-img', name: '封面图.png', kind: 'image/png', status: 'ready', selected: false, version: 1, range: null, partial: false },
+      )
+    }
+    return conv.attachments.map(file => ({ ...file }))
+  },
+  'attachment-select': args => {
+    const conv = blogConversations.get(String(args.draftId))
+    const file = conv?.attachments?.find(item => item.id === String(args.id))
+    if (file !== undefined) {
+      file.selected = args.selected === true
+      if (args.range !== undefined && args.range !== null) file.range = args.range
+    }
+    return {}
+  },
+  'attachment-remove': args => {
+    const conv = blogConversations.get(String(args.draftId))
+    if (conv !== undefined) conv.attachments = (conv.attachments ?? []).filter(item => item.id !== String(args.id))
+    return {}
+  },
+  'attachment-content': args => {
+    if (String(args.id) === 'att-img') {
+      return { name: '封面图.png', kind: 'image/png', unit: '张', totalUnits: 1, parsedUnits: 1, characters: 0, partial: false, units: [], range: null }
+    }
+    return {
+      name: '近况笔记.txt', kind: 'text/plain', unit: '行', totalUnits: 6, parsedUnits: 6, characters: 120, partial: false,
+      units: [
+        { number: 1, text: '周一：发布了《手账工作台实践》。' },
+        { number: 2, text: '周三：发布了《订阅-快照模型浅析》。' },
+        { number: 3, text: '周四：草稿箱新增一篇待发布。' },
+        { number: 4, text: '周五：整理了评论与标签。' },
+        { number: 5, text: '周六：修订了分类层级。' },
+        { number: 6, text: '周日：休息。' },
+      ],
+      range: null,
+    }
+  },
+  'chat-feedback': args => {
+    const conv = blogConversations.get(String(args.conversationId))
+    if (conv === undefined) throw new Error('会话不存在')
+    if (args.operation === 'list') return { ok: true, value: { items: conv.feedbackItems ?? [] } }
+    if (args.operation === 'delete') {
+      conv.feedbackItems = (conv.feedbackItems ?? []).filter(item => item.messageId !== String(args.messageId))
+      return { ok: true, value: { messageId: args.messageId, rating: 'positive', absent: true, version: 2 } }
+    }
+    const entry = { messageId: String(args.messageId), rating: args.rating === 'negative' ? 'negative' : 'positive', note: typeof args.note === 'string' ? args.note : '', version: 2 }
+    conv.feedbackItems = (conv.feedbackItems ?? []).filter(item => item.messageId !== entry.messageId)
+    conv.feedbackItems.push(entry)
+    return { ok: true, value: { messageId: args.messageId, rating: args.rating, note: args.note ?? '', version: 2 } }
+  },
+  'chat-fork': args => {
+    const parent = blogConversations.get(String(args.conversationId))
+    const id = 'conv-fork-' + Date.now().toString(36)
+    const branch = makeBlogConversation(id, '分支：' + (parent?.info.title ?? '新对话'))
+    if (parent !== undefined) branch.messages = parent.messages.map(message => ({ ...message }))
+    blogConversations.set(id, branch)
+    return { id, title: branch.info.title, updatedAt: Date.now(), ready: true, parent: String(args.conversationId), pinned: false }
+  },
+  'chat-operation': args => {
+    const conv = blogConversations.get(String(args.conversationId))
+    const op = conv?.operations?.find(item => item.id === String(args.id))
+    if (op !== undefined && args.operation === 'confirm') {
+      op.status = 'succeeded'
+      op.canConfirm = false
+      op.nonce = null
+      op.result = { cid: 12, url: 'https://blog.example.invalid/archives/12' }
+    }
+    if (op !== undefined && args.operation === 'cancel') {
+      op.status = 'cancelled'
+      op.canConfirm = false
+      op.nonce = null
+    }
+    if (op !== undefined && args.operation === 'reconcile') op.status = 'succeeded'
+    return { status: op?.status ?? 'succeeded' }
+  },
+  // ── 批 2b：文章工作台与管理域 ──
+  articles: args => {
+    const query = String(args.query ?? '').trim()
+    const status = String(args.status ?? 'published')
+    let items = blogArticles
+    if (status === 'published') items = items.filter(item => item.hasPublished)
+    if (status === 'draft') items = items.filter(item => !item.hasPublished)
+    if (query !== '') items = items.filter(item => item.title.includes(query))
+    return { items: items.map(item => ({ ...item })), hasMore: false }
+  },
+  'migration-status': () => ({ remaining: 0 }),
+  'migrate-drafts': () => ({}),
+  metadata: () => ({ categories: blogCategories.map(item => ({ ...item })) }),
+  create: () => {
+    const id = 'draft-' + Date.now().toString(36)
+    const draft = makeBlogDraft(id, { title: '', text: '', proposal: null, remote: { deleted: false, published: null, savedDraft: null } })
+    blogDrafts.set(id, draft)
+    return { ...draft }
+  },
+  draft: args => {
+    const stored = blogDrafts.get(String(args.id))
+    if (stored !== undefined) return { ...stored }
+    return makeBlogDraft(String(args.id), {
+      id: String(args.id),
+      title: '订阅-快照模型浅析',
+      text: '# 订阅-快照模型浅析\n\n旧稿基于轮询；新稿改为 EventSource 订阅加快照重拉。',
+      tags: ['架构'],
+      remote: { deleted: false, published: { cid: 12 }, savedDraft: { cid: 12 } },
+    })
+  },
+  import: args => {
+    const article = blogArticles.find(item => item.cid === Number(args.cid))
+    const draft = makeBlogDraft('draft-import-' + Number(args.cid), {
+      title: article?.title ?? '导入文章',
+      proposal: null,
+      remote: { deleted: false, published: { cid: Number(args.cid) }, savedDraft: args.variant === 'savedDraft' ? { cid: Number(args.cid) } : null },
+    })
+    blogDrafts.set(draft.id, draft)
+    return { ...draft }
+  },
+  save: args => {
+    const stored = blogDrafts.get(String(args.id))
+    const payload = args.content ?? {}
+    if (stored !== undefined) {
+      blogRevision += 1
+      Object.assign(stored, payload, { revision: blogRevision })
+      if (stored.proposal !== null && stored.proposal !== undefined) stored.proposal.baseRevision = blogRevision
+      return { ...stored }
+    }
+    return makeBlogDraft(String(args.id), { ...payload, revision: blogRevision })
+  },
+  apply: args => {
+    const stored = blogDrafts.get(String(args.id))
+    if (stored === undefined) throw new Error('草稿不存在')
+    blogRevision += 1
+    stored.proposal = null
+    stored.revision = blogRevision
+    return { ...stored }
+  },
+  'discard-proposal': args => {
+    const stored = blogDrafts.get(String(args.id))
+    if (stored === undefined) throw new Error('草稿不存在')
+    stored.proposal = null
+    return { ...stored }
+  },
+  tasks: () => [],
+  'task-start': args => ({
+    id: 'job-1', status: 'succeeded',
+    text: '已按指令完成写作：本段由 mock 任务生成，用于验证回答区与复制链路。',
+    thinking: '整理指令\n按当前稿风格续写',
+    input: { instruction: String(args.instruction ?? ''), research: args.research === true },
+    sources: [{ url: 'https://example.invalid/ref', title: '参考来源', fetched: false }],
+  }),
+  task: () => ({ id: 'job-1', status: 'succeeded', text: '', input: { instruction: '', research: false } }),
+  'task-cancel': args => ({ id: String(args.id), status: 'cancelled', text: '', input: { instruction: '', research: false } }),
+  operations: () => [],
+  prepare: args => ({
+    id: 'prep-1', mode: 'publish', title: '订阅-快照模型浅析', nonce: 'nonce-prep-1', status: 'prepared',
+    source: args.proposalId !== undefined ? 'proposal' : 'draft',
+    before: { title: '订阅-快照模型浅析', text: '公开旧版正文。' },
+    after: { title: '订阅-快照模型浅析', text: '本次将提交的新版正文。', tags: ['架构'], categories: [1], allowComment: true },
+    hasSavedDraft: false,
+  }),
+  'prepare-delete': args => ({
+    id: 'prep-del-1', mode: 'delete', title: blogArticles.find(item => item.cid === Number(args.cid))?.title ?? '目标文章', nonce: 'nonce-del-1', status: 'prepared',
+    deletedArticles: [{ title: blogArticles.find(item => item.cid === Number(args.cid))?.title ?? '目标文章', type: 'post', cid: Number(args.cid) }],
+  }),
+  confirm: () => ({ status: 'succeeded', result: { url: 'https://blog.example.invalid/archives/12' } }),
+  reconcile: () => ({ status: 'succeeded', result: { url: 'https://blog.example.invalid/archives/12' } }),
+  'manage-list': args => {
+    const kind = String(args.kind)
+    if (kind === 'comment') {
+      let items = blogComments
+      const query = String(args.query ?? '').trim()
+      if (query !== '') items = items.filter(item => item.author.includes(query) || item.text.includes(query))
+      const status = String(args.status ?? 'all')
+      if (status !== 'all') items = items.filter(item => item.status === status)
+      return { items: items.map(item => ({ ...item })), hasMore: false }
+    }
+    const table = blogTaxonomy[kind] ?? []
+    const query = String(args.query ?? '').trim()
+    if (query !== '') return { items: table.filter(item => item.name.includes(query)).map(item => ({ ...item })), hasMore: false }
+    return { items: table.map(item => ({ ...item })), hasMore: false }
+  },
+  'manage-get': args => {
+    const kind = String(args.kind)
+    if (kind === 'comment') {
+      const row = blogComments.find(item => item.id === Number(args.id))
+      return { item: row ? { ...row } : {}, version: 1 }
+    }
+    const item = (blogTaxonomy[kind] ?? []).find(entry => entry.id === Number(args.id))
+    return { item: item ? { ...item } : {}, version: 1, impact: { defaultCategory: false, relatedCount: item?.count ?? 0 } }
+  },
+  'manage-prepare': args => {
+    const kind = String(args.kind)
+    const operation = String(args.operation ?? '')
+    const labels = { category: '分类', tag: '标签', comment: '评论' }
+    const opLabels = { create: '新建', update: '修改', delete: '删除' }
+    const id = args.id !== undefined ? Number(args.id) : undefined
+    const fields = args.fields ?? {}
+    return {
+      id: 'mop-' + Date.now().toString(36),
+      title: (opLabels[operation] ?? operation) + (labels[kind] ?? kind),
+      nonce: 'nonce-manage-1',
+      status: 'prepared',
+      management: { operation, kind, id, fields },
+      impact: operation === 'delete'
+        ? { relatedCount: kind === 'comment' ? 1 : 4, childCategories: 0, note: kind === 'category' ? '删除后文章将归入未分类。' : undefined }
+        : {},
+    }
+  },
+  upload: () => ({ url: 'https://img.pelycloud.com/mock/upload.png' }),
 }
 
 // ── closedoff 批 1a/1b 假数据与 SSE 回放 ──────────────────────────────────

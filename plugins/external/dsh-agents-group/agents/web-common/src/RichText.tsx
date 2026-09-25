@@ -28,9 +28,17 @@ export interface RichTextProps {
   variant?: 'message' | 'thinking' | 'ask' | 'card'
   /** 流式期：选区冻结与后台降频生效（richText 内部行为）。 */
   streaming?: boolean
+  /**
+   * 外链可点击（批 2b 增量，缺省关闭=butler 基线）：http(s) 链接与裸地址出受控
+   * `<a target=_blank rel=noopener noreferrer>`，图片/文件地址仍优先升级预览卡。
+   * blog 消息体启用；thinking/ask 变体由渲染器强制保持纯文本（images=false 优先）。
+   */
+  links?: boolean
+  /** 代码块复制工具栏（批 2b 增量，缺省关闭=butler 基线）：语言标签 + 复制按钮。 */
+  codeCopy?: boolean
 }
 
-export function RichText({ text, variant = 'message', streaming = false }: RichTextProps) {
+export function RichText({ text, variant = 'message', streaming = false, links, codeCopy }: RichTextProps) {
   const containerRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -38,8 +46,13 @@ export function RichText({ text, variant = 'message', streaming = false }: RichT
     if (container === null) return
     // richText 返回的 host 与 container 是同一个节点（本组件保证容器从一开始就是 div，
     // 不触发它内部的 span 升级路径），无需更新引用。
-    richText(container, text, { variant, streaming })
-  }, [text, variant, streaming])
+    richText(container, text, {
+      variant,
+      streaming,
+      ...(links === undefined ? {} : { links }),
+      ...(codeCopy === undefined ? {} : { codeCopy }),
+    })
+  }, [text, variant, streaming, links, codeCopy])
 
   return <div ref={containerRef} />
 }

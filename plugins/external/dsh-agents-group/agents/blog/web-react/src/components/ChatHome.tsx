@@ -6,21 +6,28 @@
  * chatTurns 投影会给最后的用户轮补 pending 组——live 内联进「未完成」的最后一组
  * （complete=false）；否则渲染为独立气泡（live 早于下一帧用户消息快照到达的场景，
  * 旧码注释「Never write it into a completed turn」由 complete 判定承接）。
+ *
+ * 批 2b 收尾：操作卡确认/取消（OperationCardRow）、评价与分支（快捷赞踩 + 更多
+ * 菜单：评价备注/重新生成）、思考区接推理译文（ThinkingBlock）。
  */
 import { useEffect, useRef, useState } from 'react'
 import { RichText } from '@dsh-agents-group/web-common'
+import { branchFromMessage, rateAnswer, send } from '../chat-controller.ts'
 import { chatAttachmentUrl } from '../lib/api.ts'
 import { chatTurns, isOperationCard, isTurnGroup } from '../lib/chat-turns.ts'
 import { compactTokens, formatMs, safeHttpUrl, statusLabel, toolLabel, usageRows } from '../lib/labels.ts'
-import { send } from '../chat-controller.ts'
 import { useComposerStore } from '../stores/composer.ts'
 import { useConversationStore } from '../stores/conversation.ts'
 import { useSessionStore } from '../stores/session.ts'
+import { useWorkspaceStore } from '../stores/workspace.ts'
 import { useTurnStore } from '../stores/turn.ts'
 import type { ChatHistoryResult, TurnSummary } from '../lib/types.ts'
 import type { TurnGroup } from '../lib/chat-turns.ts'
 import type { ReactElement } from 'react'
 import { DshIcon } from './DshIcon.tsx'
+import { FeedbackDialog } from './chat/FeedbackDialog.tsx'
+import { OperationCardRow } from './chat/OperationCardRow.tsx'
+import { ThinkingBlock } from './chat/ThinkingBlock.tsx'
 
 /** 欢迎区三建议（旧 data-prompt 按钮）。 */
 const SUGGESTIONS: Array<{ prompt: string; label: string }> = [
@@ -40,25 +47,6 @@ function turnComplete(group: TurnGroup, turns: readonly TurnSummary[]): boolean 
   if (group.tail === true) return true
   const turn = turns.find(item => item.turn === group.turn)
   return turn !== undefined && typeof turn.runMs === 'number' && Number.isFinite(turn.runMs)
-}
-
-/** 思考预览行（旧 chat-ui.js reasoningLine：最后一行非空占位）。 */
-function reasoningLine(text: string | undefined): string {
-  const lines = String(text ?? '').split(/\r?\n/).map(line => line.trim()).filter(line => line !== '' && line !== '正在生成…')
-  return lines.at(-1) ?? '正在生成…'
-}
-
-function ThinkingBlock({ text, running, defaultOpen = false }: { text: string; running: boolean; defaultOpen?: boolean }): ReactElement {
-  return (
-    <details className={`blg-thinking${running ? ' blg-thinking--running' : ''}`} open={defaultOpen}>
-      <summary>
-        <DshIcon name="think" size={14} />
-        <span className="blg-thinking-title">思考</span>
-        <span className="blg-thinking-preview">{reasoningLine(text)}</span>
-      </summary>
-      <div className="blg-thinking-body">{text}</div>
-    </details>
-  )
 }
 
 function ToolChips({ group }: { group: TurnGroup }): ReactElement | null {
@@ -112,16 +100,61 @@ function TurnUsage({ turn, group }: { turn: TurnSummary; group: TurnGroup }): Re
   )
 }
 
-function AssistantTurn({ group, onNotice }: { group: TurnGroup; onNotice: (text: string) => void }): ReactElement {
+/** 回答操作区（旧 chat.js actions 段）：复制、赞/踩、分支、更多菜单、中断标记、
+ * 用量/用时、时间。feedbackReady 之前赞踩禁用（旧 b.disabled=!state.feedbackReady）。 */
+function AssistantTurn({ group, conversationId, feedbackReady, onNotice, onOpenFeedback }: {
+  group: TurnGroup
+  conversationId: string
+  feedbackReady: boolean
+  onNotice: (text: string) => void
+  onOpenFeedback: (messageId: string) => void
+}): ReactElement {
   const [copied, setCopied] = useState(false)
+  const [pending, setPending] = useState(false)
+  const feedback = useConversationStore(state => state.feedback)
   const history = useConversationStore(state => state.history)
+  const current = feedback.get(group.id)
   const turn = history?.turns.find(item => item.turn === group.turn)
   const complete = turnComplete(group, history?.turns ?? [])
+  const hasMessage = typeof group.id === 'string' && group.id !== '' && !group.id.startsWith('pending-')
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  const rate = (rating: 'positive' | 'negative'): void => {
+    if (!hasMessage || pending || !feedbackReady) return
+    setPending(true)
+    Promise.resolve(rateAnswer(group.id, rating))
+      .catch((issue: unknown) => onNotice(issue instanceof Error ? issue.message : String(issue)))
+      .finally(() => setPending(false))
+  }
+
+  const branch = (regenerate: boolean): void => {
+    if (!hasMessage || pending) return
+    setPending(true)
+    Promise.resolve(branchFromMessage(group.id, group.seq ?? 0, regenerate))
+      .catch((issue: unknown) => onNotice(issue instanceof Error ? issue.message : String(issue)))
+      .finally(() => setPending(false))
+  }
+
+  const copy = (): void => {
+    void navigator.clipboard.writeText(group.text).then(() => {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    }).catch((issue: unknown) => onNotice(issue instanceof Error ? issue.message : String(issue)))
+  }
+
   return (
     <section className={`blg-message blg-message--assistant${complete ? '' : ' blg-message--open'}`} data-message={group.id}>
       <span className="blg-avatar" aria-hidden="true"><DshIcon name="chat" size={14} /></span>
       <div className="blg-bubble">
-        {group.reasoning !== '' && <ThinkingBlock text={group.reasoning} running={false} />}
+        {group.reasoning !== '' && (
+          <ThinkingBlock
+            text={group.reasoning}
+            running={false}
+            conversationId={conversationId}
+            sourceId={group.reasoningSource}
+            done
+          />
+        )}
         <ToolChips group={group} />
         {group.statuses.length > 0 && <p className="blg-stream-status">{group.statuses.at(-1)}</p>}
         {group.steps !== undefined && group.steps.length > 1 && (
@@ -130,15 +163,15 @@ function AssistantTurn({ group, onNotice }: { group: TurnGroup; onNotice: (text:
             {group.steps.slice(0, -1).map(step => (
               <section key={step.id}>
                 {step.reasoning !== undefined && step.reasoning !== '' && step.id !== group.reasoningSource && (
-                  <ThinkingBlock text={step.reasoning} running={false} />
+                  <ThinkingBlock text={step.reasoning} running={false} conversationId={conversationId} sourceId={step.id} done />
                 )}
-                {step.text !== undefined && step.text !== '' && <RichText text={step.text} />}
+                {step.text !== undefined && step.text !== '' && <RichText text={step.text} links codeCopy />}
               </section>
             ))}
           </details>
         )}
         <div className="blg-answer">
-          <RichText text={group.text} />
+          <RichText text={group.text} links codeCopy />
         </div>
         {group.attachments !== undefined && group.attachments.length > 0 && (
           <div className="blg-message-attachments">
@@ -146,7 +179,7 @@ function AssistantTurn({ group, onNotice }: { group: TurnGroup; onNotice: (text:
               <a
                 key={file.id}
                 className="blg-file-link"
-                href={chatAttachmentUrl(useConversationStore.getState().conversationId, group.id, file.id)}
+                href={chatAttachmentUrl(conversationId, group.id, file.id)}
               >
                 <DshIcon name="paperclip" size={12} />
                 {file.name ?? file.id}{file.range !== undefined && file.range !== null ? `（${file.range.from}–${file.range.to}）` : ''}
@@ -160,15 +193,69 @@ function AssistantTurn({ group, onNotice }: { group: TurnGroup; onNotice: (text:
             className="blg-action"
             aria-label={copied ? '已复制回答' : '复制回答'}
             title={copied ? '已复制' : '复制回答'}
-            onClick={() => {
-              void navigator.clipboard.writeText(group.text).then(() => {
-                setCopied(true)
-                window.setTimeout(() => setCopied(false), 1500)
-              }).catch((error: unknown) => onNotice(error instanceof Error ? error.message : String(error)))
-            }}
+            onClick={copy}
           >
-            <DshIcon name="copy" size={14} />
+            <DshIcon name={copied ? 'check' : 'copy'} size={14} />
           </button>
+          {group.feedback === true && hasMessage && (
+            <>
+              <button
+                type="button"
+                className="blg-action"
+                aria-pressed={current?.rating === 'positive'}
+                aria-label="有帮助"
+                title="有帮助"
+                disabled={!feedbackReady || pending}
+                onClick={() => rate('positive')}
+              >
+                <DshIcon name="like" size={14} />
+              </button>
+              <button
+                type="button"
+                className="blg-action"
+                aria-pressed={current?.rating === 'negative'}
+                aria-label="有待改进"
+                title="有待改进"
+                disabled={!feedbackReady || pending}
+                onClick={() => rate('negative')}
+              >
+                <DshIcon name="dislike" size={14} />
+              </button>
+            </>
+          )}
+          {group.forkCut !== undefined && group.forkCut !== null && hasMessage && (
+            <button type="button" className="blg-action" aria-label="在新对话中继续" title="在新对话中继续" disabled={pending} onClick={() => branch(false)}>
+              <DshIcon name="branch" size={14} />
+            </button>
+          )}
+          {(group.feedback === true || (group.forkCut !== undefined && group.forkCut !== null)) && hasMessage && (
+            <details className="blg-more" open={menuOpen} onToggle={event => { if ((event.target as HTMLDetailsElement).open !== menuOpen) setMenuOpen((event.target as HTMLDetailsElement).open) }}>
+              <summary className="blg-action" aria-label="更多回答操作" title="更多回答操作">
+                <DshIcon name="more" size={14} />
+              </summary>
+              <div className="blg-more-menu">
+                {group.feedback === true && (
+                  <button
+                    type="button"
+                    disabled={!feedbackReady}
+                    onClick={() => { setMenuOpen(false); onOpenFeedback(group.id) }}
+                  >
+                    评价备注
+                  </button>
+                )}
+                {group.forkCut !== undefined && group.forkCut !== null && (
+                  <button
+                    type="button"
+                    title="保留原回答与文章，在新分支重新生成"
+                    disabled={pending}
+                    onClick={() => { setMenuOpen(false); branch(true) }}
+                  >
+                    重新生成
+                  </button>
+                )}
+              </div>
+            </details>
+          )}
           {group.interrupted === true && <small className="blg-muted">本段回答已中断</small>}
           {turn !== undefined && typeof turn.runMs === 'number' && Number.isFinite(turn.runMs) && <TurnUsage turn={turn} group={group} />}
           {typeof group.time === 'number' && group.time > 0 && (
@@ -181,16 +268,24 @@ function AssistantTurn({ group, onNotice }: { group: TurnGroup; onNotice: (text:
 }
 
 /** 流式 live 段（内联形态：挂在最后一组未完成回合的气泡里）。 */
-function LiveInline(): ReactElement | null {
+function LiveInline({ conversationId }: { conversationId: string }): ReactElement | null {
   const live = useTurnStore(state => state.live)
   const stopping = useComposerStore(state => state.stopping)
   if (live === null) return null
   const status = stopping ? '正在停止，保留已生成内容…' : live.text !== '' ? '正在回答…' : live.reasoning !== '' ? '正在思考…' : '正在连接模型…'
   return (
     <>
-      {live.reasoning !== '' && <ThinkingBlock text={live.reasoning} running={live.text === ''} defaultOpen />}
+      {live.reasoning !== '' && (
+        <ThinkingBlock
+          text={live.reasoning}
+          running={live.text === ''}
+          defaultOpen
+          conversationId={conversationId}
+          done={live.text !== ''}
+        />
+      )}
       <div className="blg-answer blg-answer--streaming">
-        <RichText text={live.text} streaming />
+        <RichText text={live.text} streaming links codeCopy />
       </div>
       <small className="blg-stream-status" role="status">{status}</small>
     </>
@@ -198,7 +293,7 @@ function LiveInline(): ReactElement | null {
 }
 
 /** 独立 live 气泡（下一帧用户快照尚未落地时）。 */
-function LiveBubble(): ReactElement | null {
+function LiveBubble({ conversationId }: { conversationId: string }): ReactElement | null {
   const live = useTurnStore(state => state.live)
   const stopping = useComposerStore(state => state.stopping)
   if (live === null) return null
@@ -207,9 +302,17 @@ function LiveBubble(): ReactElement | null {
     <section className="blg-message blg-message--assistant blg-message--streaming">
       <span className="blg-avatar" aria-hidden="true"><DshIcon name="chat" size={14} /></span>
       <div className="blg-bubble">
-        {live.reasoning !== '' && <ThinkingBlock text={live.reasoning} running={live.text === ''} defaultOpen />}
+        {live.reasoning !== '' && (
+          <ThinkingBlock
+            text={live.reasoning}
+            running={live.text === ''}
+            defaultOpen
+            conversationId={conversationId}
+            done={live.text !== ''}
+          />
+        )}
         <div className="blg-answer blg-answer--streaming">
-          <RichText text={live.text} streaming />
+          <RichText text={live.text} streaming links codeCopy />
         </div>
         <small className="blg-stream-status" role="status">{status}</small>
       </div>
@@ -220,12 +323,15 @@ function LiveBubble(): ReactElement | null {
 export function ChatHome(): ReactElement {
   const history = useConversationStore(state => state.history)
   const live = useTurnStore(state => state.live)
+  const feedbackReady = useConversationStore(state => state.feedbackReady)
   const setDraft = useComposerStore(state => state.setDraft)
-  const setNotice = useSessionStore(state => state.setNotice)
+  const setNoticeState = useSessionStore(state => state.setNotice)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followRef = useRef(true)
   const [awayFromBottom, setAwayFromBottom] = useState(false)
+  const [feedbackTarget, setFeedbackTarget] = useState<string | null>(null)
 
+  const conversationId = useConversationStore(state => state.conversationId)
   const messages = history?.messages ?? []
   const busy = history?.busy === true
   const display = chatTurns(messages, { busy, operations: history?.operations ?? [], requests: history?.requests ?? [] })
@@ -235,7 +341,7 @@ export function ChatHome(): ReactElement {
   const lastGroup = [...display].reverse().find(isTurnGroup)
   const liveInline = live !== null && busy && lastGroup !== undefined && !turnComplete(lastGroup, history?.turns ?? [])
 
-  const onNotice = (text: string): void => setNotice({ text, tone: 'error' })
+  const onNotice = (text: string): void => setNoticeState({ text, tone: 'error' })
 
   // 近底部跟随（旧 nearBottom/bottom：阈值 90px；滚动即时无动画）。
   const measure = (): void => {
@@ -286,25 +392,26 @@ export function ChatHome(): ReactElement {
           <div className="blg-messages" aria-label="对话消息">
             {display.map(node => {
               if (isOperationCard(node)) {
-                // 管理操作卡的确认/取消交互在批 2b 迁移：占位行保持可见（等价于
-                // 旧码「确认已失效」形态的信息面，不冒充可交互）。
                 return (
-                  <section key={`op-${node.id}`} className="blg-message blg-operation" data-operation={node.id}>
-                    <div className="blg-bubble">
-                      <strong>{node.operation.mode === 'manage' ? '博客管理' : node.operation.mode === 'delete' ? '删除文章' : '发布草稿'} · {node.operation.title}</strong>
-                      <p className="blg-muted">
-                        {node.unassociated === true ? '历史操作（原轮次暂不可用）。' : ''}
-                        操作确认面板在批 2b 迁移；当前状态：{node.operation.status}。
-                      </p>
-                    </div>
-                  </section>
+                  <OperationCardRow
+                    key={`op-${node.id}`}
+                    operation={node.operation}
+                    unassociated={node.unassociated === true}
+                    onNotice={onNotice}
+                  />
                 )
               }
               if (isTurnGroup(node)) {
                 return (
                   <div key={node.displayKey} className="blg-turn">
-                    <AssistantTurn group={node} onNotice={onNotice} />
-                    {liveInline && node === lastGroup && <LiveInline />}
+                    <AssistantTurn
+                      group={node}
+                      conversationId={conversationId}
+                      feedbackReady={feedbackReady}
+                      onNotice={onNotice}
+                      onOpenFeedback={setFeedbackTarget}
+                    />
+                    {liveInline && node === lastGroup && <LiveInline conversationId={conversationId} />}
                   </div>
                 )
               }
@@ -320,7 +427,7 @@ export function ChatHome(): ReactElement {
                             <a
                               key={file.id}
                               className="blg-file-link"
-                              href={chatAttachmentUrl(useConversationStore.getState().conversationId, node.requestId ?? node.id, file.id)}
+                              href={chatAttachmentUrl(conversationId, node.requestId ?? node.id, file.id)}
                             >
                               <DshIcon name="paperclip" size={12} />
                               {file.name ?? file.id}{file.range !== undefined && file.range !== null ? `（${file.range.from}–${file.range.to}）` : ''}
@@ -339,7 +446,7 @@ export function ChatHome(): ReactElement {
                 </div>
               )
             })}
-            {live !== null && !liveInline && <LiveBubble />}
+            {live !== null && !liveInline && <LiveBubble conversationId={conversationId} />}
           </div>
 
           {(history?.requests ?? []).map(request => {
@@ -382,15 +489,7 @@ export function ChatHome(): ReactElement {
           })}
 
           {(history?.results ?? []).map(card => (
-            <section key={card.id} className="blg-result-ref">
-              <div className="blg-result-head">
-                <strong>{card.proposal?.fields.title ?? card.title ?? '文章候选稿'}</strong>
-                <button type="button" className="btn btn--tiny" onClick={() => onNotice('文章视图在批 2b 迁移，候选稿请稍后查看')}>
-                  打开文章
-                </button>
-              </div>
-              <small className="blg-muted">候选快照 · 基于版本 {card.revision}（批 2b 接入编辑器预览）</small>
-            </section>
+            <ArticleResultCard key={card.id} card={card} />
           ))}
         </div>
 
@@ -423,6 +522,40 @@ export function ChatHome(): ReactElement {
         <p>带上标题、关键词、分类或时间范围，查找会更准确。</p>
         <p>添加资料后，可结合原文写作。公开发布前可预览确认。</p>
       </aside>
+
+      <FeedbackDialog target={feedbackTarget === null ? null : { messageId: feedbackTarget }} onClose={() => setFeedbackTarget(null)} />
     </main>
+  )
+}
+
+/**
+ * 文章候选引用卡（旧 chat.js results 段）：打开文章 → workspace 视图打开该草稿
+ * 并进入候选稿对照（openDraft(id,{proposal}) → view(false) 的组合经 pendingOpen
+ * 待办位转交 WorkspaceView）。
+ */
+function ArticleResultCard({ card }: { card: NonNullable<ChatHistoryResult['results']>[number] }): ReactElement {
+  const setPendingOpen = useWorkspaceStore(state => state.setPendingOpen)
+  const setView = useSessionStore(state => state.setView)
+  return (
+    <section className="blg-result-ref">
+      <div className="blg-result-head">
+        <strong>{card.proposal?.fields.title ?? card.title ?? '文章候选稿'}</strong>
+        <button
+          type="button"
+          className="btn btn--tiny"
+          onClick={() => {
+            setPendingOpen({ draftId: card.draftId, proposal: card.proposal ?? null })
+            setView('writing')
+          }}
+        >
+          打开文章
+        </button>
+      </div>
+      <details>
+        <summary>候选快照 · 基于版本 {card.revision}</summary>
+        <RichText text={card.proposal?.fields.text ?? ''} links codeCopy />
+        <small className="blg-muted">历史候选快照，当前文章状态以编辑器为准</small>
+      </details>
+    </section>
   )
 }

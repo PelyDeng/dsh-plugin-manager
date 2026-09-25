@@ -18,6 +18,17 @@ export interface MarkdownPlanOptions {
   narrow?: boolean
   /** false 时地址一律保持文本（thinking/ask 变体）。 */
   images?: boolean
+  /**
+   * 外链可点击（批 2b 增量，缺省 false）：http(s) 的 markdown 链接与裸地址出受控
+   * `<a target=_blank rel=noopener noreferrer>`；命中图片/文件地址时优先升级
+   * md-pic/md-file。非 http(s) 协议不受此开关影响，恒为纯文本。
+   */
+  links?: boolean
+  /**
+   * 代码块复制工具栏（批 2b 增量，缺省 false）：fence/缩进代码块包
+   * div.code-block（div.code-toolbar：语言标签 + 复制按钮 + pre.md-code）。
+   */
+  codeCopy?: boolean
 }
 
 export interface RichTextOptions {
@@ -25,6 +36,10 @@ export interface RichTextOptions {
   streaming?: boolean
   narrow?: boolean
   images?: boolean
+  /** 透传 markdownPlan 的 links 开关（缺省关闭，butler 基线不变）。 */
+  links?: boolean
+  /** 透传 markdownPlan 的 codeCopy 开关（缺省关闭，butler 基线不变）。 */
+  codeCopy?: boolean
 }
 
 /** 解析 Markdown 为节点计划（纯数据，不碰 DOM）。 */

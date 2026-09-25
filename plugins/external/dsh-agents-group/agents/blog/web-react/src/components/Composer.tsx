@@ -12,6 +12,7 @@ import { useComposerStore, usePickerStore } from '../stores/composer.ts'
 import { useConversationStore } from '../stores/conversation.ts'
 import { useSessionStore } from '../stores/session.ts'
 import { DshIcon } from './DshIcon.tsx'
+import { FilePreviewDialog } from './common/FilePreviewDialog.tsx'
 import { ModelPicker } from './ModelPicker.tsx'
 import type { CompositionEvent, ClipboardEvent, DragEvent, KeyboardEvent, ReactElement } from 'react'
 
@@ -39,6 +40,8 @@ export function Composer({ onNotice }: { onNotice: (text: string) => void }): Re
   const fileInputRef = useRef<HTMLInputElement>(null)
   const composingRef = useRef(false)
   const [dragOver, setDragOver] = useState(false)
+  const [previewId, setPreviewId] = useState<string | null>(null)
+  const conversationId = useConversationStore(state => state.conversationId)
 
   const disabled = sending || stopping || busy || uploading || !identityReady
   const stopVisible = busy || stopping
@@ -154,11 +157,12 @@ export function Composer({ onNotice }: { onNotice: (text: string) => void }): Re
                   ? `${file.range.from}–${file.range.to} ${file.unit ?? ''}`
                   : file.message ?? ({ ready: '已就绪', failed: '解析失败', parsing: '解析中', uploading: '上传中' })[file.status] ?? file.status}
               </small>
-              {/* 文件预览弹窗在批 2b 迁移：按钮在场，点击给占位提示。 */}
+              {/* 资料内容弹窗（旧 previewFile → #chat-file-dialog 的等价）。 */}
               <button
                 type="button"
                 className="btn btn--tiny"
-                onClick={() => onNotice('文件预览弹窗在批 2b 迁移，当前可先发送资料')}
+                disabled={file.status !== 'ready' || conversationId === ''}
+                onClick={() => setPreviewId(file.id)}
               >
                 查看
               </button>
@@ -238,6 +242,17 @@ export function Composer({ onNotice }: { onNotice: (text: string) => void }): Re
         </button>
       </div>
       <small id="blg-chat-state" role="status">{stateText}</small>
+      {(() => {
+        const file = previewId === null ? undefined : files.find(item => item.id === previewId)
+        if (previewId === null || file === undefined || conversationId === '') return null
+        return (
+          <FilePreviewDialog
+            target={{ draftId: conversationId, id: file.id, name: file.name, kind: file.kind, range: file.range ?? null, variant: 'chat' }}
+            onClose={() => setPreviewId(null)}
+            onNotice={text => setNotice({ text, tone: 'error' })}
+          />
+        )
+      })()}
     </form>
   )
 }

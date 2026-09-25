@@ -81,6 +81,7 @@ export async function resetStores(): Promise<StoreModules> {
     viewToken: 0,
     identityReady: true,
     userId: 'tester',
+    blogUrl: 'https://blog.example.invalid',
     view: 'chat',
     notice: null,
   })
@@ -91,6 +92,8 @@ export async function resetStores(): Promise<StoreModules> {
     conversationsOffset: null,
     conversationsQuery: '',
     conversationsError: null,
+    feedback: new Map(),
+    feedbackReady: false,
   })
   modules.conversation.setStorageAdapter(memoryStorage())
   modules.turn.useTurnStore.setState({ live: null, liveAt: 0, liveClock: 0 })

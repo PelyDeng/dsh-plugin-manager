@@ -135,8 +135,32 @@ function fileSpec(url, ext) {
   }
 }
 
-/** 带预览识别的文本写入：图片地址→缩略图，文件地址→文件卡，其余保持纯文本。images=false 时地址一律保持文本（thinking/ask 变体）。 */
-function pushTextWithImages(parent, text, images) {
+/**
+ * 受控外链（可选能力，群组二期批 2b 增量）：`opts.links` 开启时生成可点击的
+ * `<a target=_blank rel=noopener noreferrer>`。缺省关闭——但ler 基线行为（链接降级
+ * 纯文本 + 地址括号）一字不动；blog 旧页 markdown-it linkify 直出外链可点击，
+ * 用该开关对齐（方案 §3.1 渲染器裁决的批 2b 落地）。
+ */
+function linkSpec(url) {
+  return {
+    tag: 'a',
+    className: 'md-link',
+    attrs: { href: url, target: '_blank', rel: 'noopener noreferrer' },
+    children: [{ text: url }],
+  }
+}
+
+/** http(s) 白名单（links 能力的安全边界；markdown-it validateLink 之外的双保险）。 */
+function isHttpUrl(url) {
+  return /^https?:\/\//iu.test(url) && !/\s/u.test(url)
+}
+
+/** 带预览识别的文本写入：图片地址→缩略图，文件地址→文件卡，其余保持纯文本。
+ *
+ * `links` 开启时（群组批 2b 增量，blog 消费）：未命中图片/文件识别的 http(s) 裸地址
+ * 包成受控外链——对齐旧 blog `linkify:true` 的观感；`images=false`（thinking/ask
+ * 变体）时优先级最高，地址一律保持文本，links 不生效。 */
+function pushTextWithImages(parent, text, images, links) {
   if (images === false) { pushText(parent, text); return }
   let cursor = 0
   for (const match of text.matchAll(IMAGE_URL_RE)) {
@@ -146,7 +170,14 @@ function pushTextWithImages(parent, text, images) {
     const start = match.index ?? 0
     const image = IMAGE_EXT_RE.test(url)
     const ext = fileExtensionOf(url)
-    if (!image && ext === undefined) continue
+    if (!image && ext === undefined) {
+      if (links === true && isHttpUrl(url)) {
+        if (start > cursor) pushText(parent, text.slice(cursor, start))
+        parent.children.push(linkSpec(url))
+        cursor = start + url.length
+      }
+      continue
+    }
     if (start > cursor) pushText(parent, text.slice(cursor, start))
     parent.children.push(image ? imageSpec(url, '') : fileSpec(url, ext))
     cursor = start + url.length
@@ -155,14 +186,15 @@ function pushTextWithImages(parent, text, images) {
   if (cursor < text.length) pushText(parent, text.slice(cursor))
 }
 
-/** 行内 token：文本、行内代码、粗斜体删除线、换行；链接降级为纯文本，图片出受控缩略图（images=false 时按占位文本）。 */
-function planInline(parent, tokens, images) {
+/** 行内 token：文本、行内代码、粗斜体删除线、换行；链接缺省降级为纯文本（`links`
+ * 开启时出受控外链，批 2b 增量），图片出受控缩略图（images=false 时按占位文本）。 */
+function planInline(parent, tokens, images, links) {
   const stack = [parent]
   for (const token of tokens ?? []) {
     const top = stack[stack.length - 1]
     switch (token.type) {
       case 'text':
-        pushTextWithImages(top, token.content, images)
+        pushTextWithImages(top, token.content, images, links)
         break
       case 'code_inline':
         top.children.push({ tag: 'code', text: token.content })
@@ -191,8 +223,22 @@ function planInline(parent, tokens, images) {
         break
       }
       case 'link_open': {
+        const href = token.attrGet?.('href') ?? ''
+        // links 增量（批 2b，blog 消费）：目标命中图片/文件地址时优先升级成
+        // md-pic/md-file（与裸地址识别同轨，旧 blog enhancePreviews 的升级语义），
+        // 链接文字随之丢弃；其余 http(s) 外链出受控 <a>。images=false（thinking/ask
+        // 变体）不开链接，走下方降级路径。非 http(s) 协议永远降级纯文本。
+        if (links === true && images !== false && isHttpUrl(href)) {
+          const ext = fileExtensionOf(href)
+          if (IMAGE_EXT_RE.test(href)) { top.children.push(imageSpec(href, '')); stack.push({ link: true, discard: true, href: '', children: [] }); break }
+          if (ext !== undefined) { top.children.push(fileSpec(href, ext)); stack.push({ link: true, discard: true, href: '', children: [] }); break }
+          const anchor = { link: true, anchor: true, href: '', children: [], attrs: { href, target: '_blank', rel: 'noopener noreferrer' } }
+          top.children.push(anchor)
+          stack.push(anchor)
+          break
+        }
         // 不建锚点：链接内容照常渲染，收尾补上完整地址，两边都可复制。
-        const link = { link: true, href: token.attrGet?.('href') ?? '', children: [] }
+        const link = { link: true, href, children: [] }
         top.children.push(link)
         stack.push(link)
         break
@@ -201,11 +247,20 @@ function planInline(parent, tokens, images) {
         const link = stack.pop()
         if (link === undefined || link.link !== true) break
         const parentOfLink = stack[stack.length - 1]
+        // links 增量的收口：图片/文件升级时丢弃链接文字（upgradeLink 同语义）；
+        // 受控外链保留 a 包裹，不再追加地址括号。
+        if (link.discard === true) break
+        if (link.anchor === true) {
+          parentOfLink.children.pop()
+          const anchor = { tag: 'a', className: 'md-link', attrs: link.attrs, children: link.children }
+          parentOfLink.children.push(anchor)
+          break
+        }
         parentOfLink.children.pop()
         parentOfLink.children.push(...link.children)
         const visible = link.children.map(child => child.text ?? '').join('')
         // 地址本身已是正文（如 `<https://…>` 自动链接）时不再重复一遍。
-        if (link.href !== '' && link.href !== visible) pushTextWithImages(parentOfLink, `（${link.href}）`, images)
+        if (link.href !== '' && link.href !== visible) pushTextWithImages(parentOfLink, `（${link.href}）`, images, links)
         break
       }
       default:
@@ -236,20 +291,35 @@ function planInline(parent, tokens, images) {
 export function markdownPlan(text, opts = {}) {
   const parser = opts.narrow === true ? markdownNarrow : markdown
   const images = opts.images !== false
+  // links/codeCopy 是批 2b 的可选能力开关（缺省 false，但ler 基线不变；blog 消息体启用）。
+  const links = opts.links === true
+  const codeCopy = opts.codeCopy === true
   const root = { tag: 'div', children: [] }
   const stack = [root]
   for (const token of parser.parse(text ?? '', {})) {
     const top = stack[stack.length - 1]
     if (token.type === 'inline') {
-      planInline(top, token.children, images)
+      planInline(top, token.children, images, links)
       continue
     }
     if (token.type === 'fence' || token.type === 'code_block') {
-      top.children.push({
-        tag: 'pre',
-        className: 'md-code',
-        children: [{ tag: 'code', className: languageClass(token.info), text: token.content }],
-      })
+      const code = { tag: 'code', className: languageClass(token.info), text: token.content }
+      if (codeCopy) {
+        // 代码块复制工具栏（批 2b 增量，blog 消费；旧 blog markdown.js fence 规则同款结构）：
+        // 语言标签取 info 首段（白名单外的字符只是不进 className，展示按文本给出），
+        // 复制按钮由渲染器固定创建（type=button），点击行为在 buildNode 接管。
+        const language = token.info.trim().split(/\s+/)[0] || 'text'
+        top.children.push({
+          tag: 'div',
+          className: 'code-block',
+          children: [
+            { tag: 'div', className: 'code-toolbar', children: [{ tag: 'span', text: language }, { tag: 'button', className: 'copy-code', attrs: { type: 'button' }, text: '复制代码' }] },
+            { tag: 'pre', className: 'md-code', children: [code] },
+          ],
+        })
+      } else {
+        top.children.push({ tag: 'pre', className: 'md-code', children: [code] })
+      }
       continue
     }
     if (token.type === 'hr') {
@@ -303,6 +373,16 @@ function buildNode(spec) {
     node.addEventListener('click', event => {
       event.preventDefault()
       openPreviewModal(node.getAttribute('data-preview') ?? node.getAttribute('href') ?? '')
+    })
+  }
+  // 代码块复制按钮（批 2b 增量）：复制整个代码块文本，按钮置「已复制」。旧 blog 的
+  // document 级委托同文案；流式/重渲会重建按钮，文字随之复原，不额外加计时器。
+  if (spec.className === 'copy-code') {
+    node.addEventListener('click', () => {
+      const code = node.closest('.code-block')?.querySelector('code')
+      if (code === null || code === undefined) return
+      try { void navigator.clipboard?.writeText(code.textContent ?? '') } catch { /* 剪贴板不可用：保持按钮原样 */ }
+      node.textContent = '已复制'
     })
   }
   return node
@@ -389,7 +469,14 @@ export function richText(container, text, opts = {}) {
     }
     for (const name of variant.className.split(' ')) host.classList.add(name)
     const pool = collectLoadedImages(host)
-    renderMarkdownInto(host, text ?? '', { narrow: variant.narrow, images: variant.images })
+    // links/codeCopy 是调用方（成员页）显式开启的能力开关（批 2b 增量）：
+    // 缺省 undefined → markdownPlan 按 false 处理，但ler 基线行为不变。
+    renderMarkdownInto(host, text ?? '', {
+      narrow: variant.narrow,
+      images: variant.images,
+      ...(opts.links === undefined ? {} : { links: opts.links }),
+      ...(opts.codeCopy === undefined ? {} : { codeCopy: opts.codeCopy }),
+    })
     reuseLoadedImages(host, pool)
   } catch (error) {
     richDegraded.add(host)

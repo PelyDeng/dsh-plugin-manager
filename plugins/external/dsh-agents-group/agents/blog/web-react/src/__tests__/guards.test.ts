@@ -44,6 +44,7 @@ beforeEach(async () => {
   historyResponses = []
   historyCalls = 0
   const stub = stubApi({
+    'chat-feedback': () => ({ ok: true, value: { items: [] } }),
     'chat-history': async args => {
       historyCalls += 1
       const gate = gates.shift()
@@ -105,6 +106,7 @@ describe('代次守卫（epoch → viewToken）：切会话丢在途', () => {
     const stub = stubApi({
       'chat-models': () => ({ groups: [], failures: [], selected: null, default: null }),
       'chat-history': args => historyPayload({ conversation: { id: String(args.conversationId), title: 't', updatedAt: 0, ready: true, parent: null, pinned: false } }),
+      'chat-feedback': () => ({ ok: true, value: { items: [] } }),
       attachments: () => [],
       'chat-list': () => ({ items: [], nextOffset: null }),
     })
