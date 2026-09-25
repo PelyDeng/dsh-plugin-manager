@@ -381,7 +381,7 @@ export class BlogJobs {
   /** 等待后台进度写排空；收尾状态写之前调用，避免最终状态被迟到的增量覆盖。 */
   async settleWrites() { const chain = this.writes; await chain; if (chain !== this.writes) await this.settleWrites() }
   recheck() { for (const b of this.active.values()) { try { this.access.assert(b.job.actor) } catch { void this.stop(b, 'cancelled', { code:'revoked', message:'登录或授权已失效' }) } } }
-  async get(actor: OwnerActor, id: string) { this.access.assert(actor); const { actor:_actor, owner:_owner, ...job } = await this.storage.jobGet(ownerKey(actor),id);const b=this.active.get(id);if(b?.runtimeJobId)job.runtimeStatus=this.ctx.jobs.get(b.runtimeJobId,b.handle.agent).status;this.access.assert(actor);return job }
+  async get(actor: OwnerActor, id: string) { this.access.assert(actor); const { actor:_actor, owner:_owner, ...job } = await this.storage.jobGet(ownerKey(actor),id);const b=this.active.get(id);if(b?.runtimeJobId)job.runtimeStatus=this.ctx.jobs.get(b.runtimeJobId,b.handle.agent.id).status;this.access.assert(actor);return job }
   async start(actor: OwnerActor, request: BlogTaskRequest) {
     this.access.assert(actor); invariant(!this.closed, '博客助手正在停止', 503)
     const d = await this.storage.get(ownerKey(actor), request.draftId)
@@ -498,6 +498,6 @@ export class BlogJobs {
     if(answer && b.thinking.endsWith(answer+'\n\n')) b.thinking=b.thinking.slice(0,b.thinking.length-answer.length-2).trimEnd()
     return b.thinking
   }
-  async cancel(actor: OwnerActor, id: string) { this.access.assert(actor);await this.storage.jobGet(ownerKey(actor),id);const b=this.active.get(id);if(b?.runtimeJobId)this.ctx.jobs.kill(b.runtimeJobId,b.handle.agent,'user');else if(b)void this.stop(b,'cancelled');return this.get(actor,id) }
+  async cancel(actor: OwnerActor, id: string) { this.access.assert(actor);await this.storage.jobGet(ownerKey(actor),id);const b=this.active.get(id);if(b?.runtimeJobId)this.ctx.jobs.kill(b.runtimeJobId,b.handle.agent.id,'user');else if(b)void this.stop(b,'cancelled');return this.get(actor,id) }
   async close(){this.closed=true;const active=[...this.active.values()];await Promise.all(active.map(b=>this.stop(b,'failed',{code:'interrupted',message:'服务正在停止'})));await Promise.all(active.map(b=>b.runPromise));await Promise.all(active.map(b=>b.completion))}
 }

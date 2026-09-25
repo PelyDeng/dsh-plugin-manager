@@ -752,8 +752,9 @@ export function createParticipant(input: CreateParticipantInput): RuntimePartici
               // 工具结果里的业务主键不能出现在思考正文里——**这是安全钩子，不是展示细节**。
               const opaque = definition.opaqueFromToolResult
               if (opaque !== undefined) {
-                const block = event.data.message.content[0]
-                if (block !== undefined) thinking.hide(opaque(textOf(block.content), event.data.meta))
+                // 双形状兼容：宿主 0.1.7 后 content 直接是块数组（旧 content[0].content
+                // 在新事件上是 undefined——脱敏钩子静默失效的根因）。
+                thinking.hide(opaque(textOf(event.data.message.content), event.data.meta))
               }
               progress('查询步骤已返回。')
             } else if (event.type === 'tool/call') {
