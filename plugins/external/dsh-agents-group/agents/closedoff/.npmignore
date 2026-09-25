@@ -4,7 +4,12 @@
 # 没有 .npmignore 时 npm 会沿用 .gitignore，于是那 448 个 Cesium 资源被一起排除，
 # 部署后三维地图的静态资源全部 404。所以这里显式排除「不该发布的」，不再依赖 .gitignore。
 node_modules/
-dist/
+# dist/*（而非 dist/）+ 否定规则：React 二期起 dist/web/ 是成员前端产物，必须随群组
+# 归档发布（closedoff 的骨架开关信号=dist/web/app.js 存在性）。0.9.x 时代整目录排除
+# 是对的（当时 dist 只有成员独立构建的后端，群组运行时用根 dist 内联）；群组统一
+# pack 会递归应用本文件，整目录排除会把前端产物一起剔掉（0.10.0 首次发版的 404 事故）。
+dist/*
+!dist/web
 .tmp/
 *.log
 req_*.json
