@@ -79,7 +79,8 @@ test('tool errors without optional diagnostic metadata stay failed in history an
   const events: ProjectedEvent[]=[{type:'turn/start',seq:0,time:0,data:{turn:1}}]
   for(const [callId,isError,error] of [['delete',true,undefined],['legacy',false,{code:'FAIL'}],['search',false,undefined]]){
     events.push({type:'tool/call',seq:events.length,time:1,data:{turn:1,callId,name:callId}})
-    events.push({type:'tool/result',seq:events.length,time:2,data:{turn:1,message:{source:{kind:'tool',callId},content:[{type:'tool-result',isError,content:[{type:'text',text:'PRIVATE-RESULT'}]}]},...(error?{error}:{})}})
+    // 宿主 0.1.7（Messages-only）新形状：isError 在 message 顶层（ContentBlockMap 无 'tool-result' 块类型）。
+    events.push({type:'tool/result',seq:events.length,time:2,data:{turn:1,message:{source:{kind:'tool',callId},content:[{type:'text',text:'PRIVATE-RESULT'}],...(isError?{isError:true}:{})},...(error?{error}:{})}})
   }
   // 这个替身只实现 `projectChat` 真正问的那一个面（`isAppendSurfaceEvent` 恒 `false` ⇒ 不走 surface 分支），
   // `HistorySdk` 的其余三项本用例用不到 ⇒ 在调用点按"夹具只实现被测路径用到的面"越过一次。
