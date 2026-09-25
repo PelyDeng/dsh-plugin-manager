@@ -216,4 +216,24 @@ python3 -m unittest discover -s plugins/external/dsh-agents-group/agents/blog/ba
 
 这些检查通过后，仍不能据此认定真实 Typecho/MySQL、宿主、模型、图床上传、定时触发、恢复或浏览器操作都正常；需要验收哪一项，就单独记录该项的实际结果。过程记录放在 Git 忽略的 `.local/dsh-agents-group/docs/`。
 
+## 前端迁移与本地 mock（React 二期）
+
+本包前端正在从 `web/`（vanilla JS）迁移到 `web-react/`（React 19 + zustand），依据群组二期的实施方案（`.local/dsh-agents-group/docs/设计/`）。构建开关信号是 `dist/web/app.css` 的存在性：`pnpm build` 三段构建（后端 tsdown → React 产物 app.js → Tailwind 产物 app.css）产出它即切到 React 前端，旧链 `tsdown.web.config.ts` 只产 app.js，两条链可随时互切。批 2a 已就位订阅-快照数据层（epoch→viewToken/refreshVersion→乱序守卫/liveClock→live 段保护的解耦重写）与对话视图骨架；文章工作台、管理弹窗与文件预览在批 2b 接入。
+
+React 前端的等价单测（订阅-快照三守卫、防抖重拉、发送/停止链路）在 `web-react/src/__tests__/`，`pnpm --filter @dsh-agents-group/blog exec vitest run` 运行。不依赖真实宿主即可在浏览器跑通页面：用群组根下的 mock 服务器回放身份、会话、历史假数据与 `/chat-events` 的 live/snapshot/changed 序列，并配合同目录的验证脚本做浏览器断言与截图：
+
+```powershell
+# 1) 构建本包（群组根执行：pnpm build --external --plugins agents-group 亦可）
+Set-Location 'agents/blog'; pnpm build
+
+# 2) 启动 mock（默认 8791，避开 butler mock 的 8790；Ctrl+C 停止）
+Set-Location 'plugins/external/dsh-agents-group'; node tests/mock/page-server.mjs
+#    浏览器打开 http://127.0.0.1:8791/blog
+
+# 3) 浏览器断言（需 Edge 以 --remote-debugging-port=9223 启动；截图落
+#    .local/dsh-agents-group/docs/验收/）
+node tests/mock/verify-blog-2a.mjs
+```
+
+
 中文译文接口 `POST /blog/reasoning-translation` 按当前身份读取所属会话的精确消息（或持久化 attempt）原文。成功结果按用户、会话、消息与原文摘要缓存，命中缓存仍校验权限。派生译文与独立调用记录保存在业务存储（PostgreSQL）中；其备份由 PostgreSQL 侧自行管理，插件数据目录的 `plugin-data.tar.gz` 不再包含它。原官方会话日志不变。原文超过 32,000 字符、90 秒超时或模型未正常完成时保留原文并显示可重试错误。同一用户最多两条翻译并行，无需单独配置密钥。

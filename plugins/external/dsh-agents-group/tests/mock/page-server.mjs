@@ -95,11 +95,68 @@ const server = createServer(async (request, response) => {
       response.end(JSON.stringify({ userId: 'mock-user', version: '0.13.0-mock', backupAdmin: false, maxImageBytes: 26_214_400, blogUrl: 'https://blog.example.invalid' }))
       return
     }
-    // 会话列表最小假数据（形状对齐 chat.list；hello 页不消费，批 2 迁移时增配）。
-    if (pathname === `${BLOG_PREFIX}/api` && request.method === 'POST') {
-      for await (const chunk of request) void chunk
+    // 批 2a：mock 状态重置（verify 脚本开跑时调用，从两个初始会话出发）。
+    if (pathname === `${BLOG_PREFIX}/__mock/reset` && request.method === 'POST') {
+      await readBody(request)
+      resetBlogStore()
       response.writeHead(200, HEADERS_JSON)
-      response.end(JSON.stringify({ items: [{ id: 'conv-mock-1', title: 'mock 会话', updatedAt: Date.now() }] }))
+      response.end(JSON.stringify({ ok: true }))
+      return
+    }
+    // 业务接口（批 2a 有状态化）：POST /api 的 {action,args} 信封，形状对齐
+    // src/index.ts 的 /api 分发（chat 域 + 附件最小集）。
+    if (pathname === `${BLOG_PREFIX}/api` && request.method === 'POST') {
+      const body = await readBody(request)
+      const action = blogActions[body.action]
+      if (action === undefined) {
+        response.writeHead(200, HEADERS_JSON)
+        response.end(JSON.stringify({ error: `mock 未实现 action：${body.action}` }))
+        return
+      }
+      try {
+        const result = await action(body.args ?? {})
+        response.writeHead(200, HEADERS_JSON)
+        response.end(JSON.stringify(result ?? {}))
+      } catch (error) {
+        response.writeHead(200, HEADERS_JSON)
+        response.end(JSON.stringify({ error: error?.message ?? String(error) }))
+      }
+      return
+    }
+    // 订阅-快照流（批 2a）：GET /chat-events，首条 snapshot，其后 live/changed 广播
+    // + 1s ping 心跳——形状对齐 src/index.ts 的 /chat-events 端点与 chat.subscribe。
+    if (pathname === `${BLOG_PREFIX}/chat-events`) {
+      const id = url.searchParams.get('conversationId') ?? ''
+      const conv = blogConversations.get(id)
+      if (conv === undefined) {
+        response.writeHead(404, HEADERS_JSON)
+        response.end(JSON.stringify({ error: '会话不存在' }))
+        return
+      }
+      response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' })
+      let closed = false
+      const send = value => {
+        if (closed) return
+        try { response.write(`data: ${JSON.stringify(value)}\n\n`) } catch { closed = true }
+      }
+      send({ type: 'snapshot', value: blogHistory(id) })
+      const listener = value => send(value)
+      conv.listeners.add(listener)
+      const ping = setInterval(() => send({ type: 'ping' }), 1000)
+      ping.unref?.()
+      request.on('close', () => {
+        closed = true
+        clearInterval(ping)
+        conv.listeners.delete(listener)
+        response.end()
+      })
+      return
+    }
+    // 附件缩略图（1x1 透明 PNG；inline=1 的内联预览）。
+    if (pathname === `${BLOG_PREFIX}/attachment-download`) {
+      const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')
+      response.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store' })
+      response.end(png)
       return
     }
 
@@ -226,6 +283,217 @@ server.listen(PORT, '127.0.0.1', () => {
   console.log(`[agents-group-mock] blog       http://127.0.0.1:${PORT}${BLOG_PREFIX}`)
   console.log(`[agents-group-mock] closedoff   http://127.0.0.1:${PORT}${CO_PREFIX}`)
 })
+
+// ── blog 批 2a 假数据与订阅-快照回放 ──────────────────────────────────────
+
+/**
+ * 会话状态（形状对齐 src/chat.ts 的内存态与 chat-history 投影）：
+ * - info/messages/turns 直接投影进 chat-history；
+ * - busy/live 是流式期状态；listeners 是 /chat-events 的订阅者集合。
+ */
+const blogConversations = new Map()
+let blogSeq = 100
+
+function makeBlogConversation(id, title, pinned = false) {
+  return {
+    info: { id, title, updatedAt: Date.now(), ready: true, parent: null, pinned },
+    messages: [],
+    turns: [],
+    busy: false,
+    live: null,
+    turn: 0,
+    listeners: new Set(),
+  }
+}
+
+/** 初始两个会话：conv-mock-1 带一轮完整历史（切会话场景），conv-mock-2 空会话。 */
+function resetBlogStore() {
+  blogConversations.clear()
+  blogSeq = 100
+  const seeded = makeBlogConversation('conv-mock-1', '博客近况梳理会话', true)
+  seeded.updatedAt = Date.now() - 3_600_000
+  seeded.messages.push(
+    { id: 'msg-user-1', role: 'user', seq: 101, time: Date.now() - 3_590_000, turn: 1, text: '看看我的博客最近发布了哪些文章？', requestId: 'req-mock-1', attachments: [] },
+    {
+      id: 'msg-assistant-1', role: 'assistant', seq: 102, time: Date.now() - 3_580_000, turn: 1,
+      text: '最近一周发布了《手账工作台实践》与《订阅-快照模型浅析》两篇文章；草稿箱里还有一篇待发布。\n\n需要我帮你起草下一篇吗？',
+      reasoning: '先按时间倒序列出已发布文章\n再看草稿箱的待发布内容',
+      interrupted: false, feedback: true, tail: true, model: 'mock-pro', provider: 'mock-provider',
+    },
+  )
+  seeded.turns.push({
+    turn: 1, startSeq: 101, startedAt: Date.now() - 3_590_000, status: 'succeeded',
+    usage: { uncachedInputTokens: 320, outputTokens: 96, totalTokens: 416, cacheReadTokens: 128 },
+    runMs: 2400, ttftMs: 320, tokensPerSecond: 61.5, attempts: 1, cut: 103,
+  })
+  blogConversations.set('conv-mock-1', seeded)
+  const fresh = makeBlogConversation('conv-mock-2', '批 2a 冒烟新会话')
+  blogConversations.set('conv-mock-2', fresh)
+}
+
+resetBlogStore()
+
+function blogHistory(id) {
+  const conv = blogConversations.get(id)
+  if (conv === undefined) throw new Error('会话不存在')
+  return {
+    conversation: { ...conv.info },
+    messages: conv.messages.map(message => ({ ...message })),
+    turns: conv.turns.map(turn => ({ ...turn })),
+    busy: conv.busy,
+    live: conv.live === null ? null : { ...conv.live },
+    requests: [],
+    results: [],
+    operations: [],
+  }
+}
+
+function blogBroadcast(conv, value) {
+  for (const listener of conv.listeners) listener(value)
+}
+
+function blogTouch(conv) {
+  conv.info.updatedAt = Date.now()
+}
+
+/**
+ * chat-send 的一轮流式回放：reasoning live 帧 → 分段正文 live 帧 → 落一条完整
+ * assistant 消息 + turn 摘要 → changed 广播（客户端防抖重拉后消息落位）。
+ */
+async function replayBlogTurn(conv, text) {
+  blogTouch(conv)
+  const turn = ++conv.turn
+  const startSeq = ++blogSeq
+  conv.busy = true
+  conv.live = { text: '', reasoning: '' }
+  blogBroadcast(conv, { type: 'changed' })
+
+  for (const piece of ['先梳理写作范围', '按时间倒序盘点文章与草稿']) {
+    await sleep(150)
+    if (!conv.busy) return
+    conv.live = { text: conv.live?.text ?? '', reasoning: piece }
+    blogBroadcast(conv, { type: 'live', live: { ...conv.live } })
+  }
+
+  const segments = [
+    `已收到「${text}」。`,
+    '近况小结：两篇新文已发布，草稿箱还有一篇待发。',
+    '建议下一步：把提纲落成草稿，我可以直接保存候选稿。',
+  ]
+  let streamed = ''
+  for (const segment of segments) {
+    await sleep(170)
+    if (!conv.busy) return
+    streamed += segment
+    conv.live = { text: streamed, reasoning: '' }
+    blogBroadcast(conv, { type: 'live', live: { ...conv.live } })
+  }
+
+  await sleep(130)
+  const endSeq = ++blogSeq
+  const finalText = streamed
+  conv.busy = false
+  conv.live = null
+  conv.messages.push({
+    id: `assistant-${endSeq}`, role: 'assistant', seq: endSeq, time: Date.now(), turn,
+    text: finalText,
+    reasoning: '先梳理写作范围',
+    interrupted: false, feedback: true, tail: true, model: 'mock-pro', provider: 'mock-provider',
+  })
+  conv.turns.push({
+    turn, startSeq, startedAt: startSeq, status: 'succeeded',
+    usage: { uncachedInputTokens: 210, outputTokens: 88, totalTokens: 298, cacheReadTokens: 64 },
+    runMs: 920, ttftMs: 160, tokensPerSecond: 88.4, attempts: 1, cut: endSeq + 1,
+  })
+  blogBroadcast(conv, { type: 'changed' })
+}
+
+/** chat-stop：停止即把已生成内容落成 interrupted 消息（真实服务面同口径）。 */
+async function stopBlogTurn(conv) {
+  if (!conv.busy) return
+  const partial = conv.live?.text ?? ''
+  conv.busy = false
+  conv.live = null
+  const seq = ++blogSeq
+  if (partial !== '') {
+    conv.messages.push({
+      id: `assistant-${seq}`, role: 'assistant', seq, time: Date.now(), turn: conv.turn,
+      text: partial, reasoning: '', interrupted: true, feedback: false, tail: false,
+      model: 'mock-pro', provider: 'mock-provider',
+    })
+  }
+  blogTouch(conv)
+  blogBroadcast(conv, { type: 'changed' })
+}
+
+const MOCK_MODELS = {
+  groups: [
+    { id: 'mock-provider', name: '演示模型组', models: [{ id: 'mock-pro', name: '演示模型 Pro' }, { id: 'mock-lite', name: '演示模型 Lite' }] },
+  ],
+  failures: [],
+  selected: null,
+  default: { provider: 'mock-provider', model: 'mock-pro' },
+}
+
+/** POST /api 的 action 分发（blog 域最小集；形状对齐 src/index.ts 的 switch）。 */
+const blogActions = {
+  'chat-create': () => {
+    const id = `conv-blog-${Date.now().toString(36)}`
+    blogConversations.set(id, makeBlogConversation(id, '新对话'))
+    return { id, title: '新对话', updatedAt: Date.now(), ready: true, parent: null, pinned: false }
+  },
+  'chat-list': args => {
+    const items = [...blogConversations.values()]
+      .map(conv => ({
+        id: conv.info.id,
+        title: conv.info.title,
+        updatedAt: conv.info.updatedAt,
+        state: conv.busy ? 'busy' : 'ready',
+        pinned: conv.info.pinned,
+      }))
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+    const offset = Number(args.offset ?? 0)
+    void args.query
+    return { items: offset > 0 ? [] : items, nextOffset: null }
+  },
+  'chat-models': () => ({ ...MOCK_MODELS }),
+  'chat-update': args => {
+    for (const id of args.ids ?? []) {
+      const conv = blogConversations.get(id)
+      if (conv === undefined) continue
+      if (args.operation === 'rename' && typeof args.title === 'string' && args.title.trim() !== '') conv.info.title = args.title.trim()
+      if (args.operation === 'pin') conv.info.pinned = args.pinned === true
+      if (args.operation === 'delete') blogConversations.delete(id)
+      blogTouch(conv)
+    }
+    return { ok: true }
+  },
+  'chat-history': args => blogHistory(String(args.conversationId)),
+  'chat-send': args => {
+    const conv = blogConversations.get(String(args.conversationId))
+    if (conv === undefined) throw new Error('会话不存在')
+    if (conv.busy) throw new Error('上一轮回答还在进行，请先停止')
+    const seq = ++blogSeq
+    conv.messages.push({
+      id: `user-${seq}`, role: 'user', seq, time: Date.now(), turn: conv.turn + 1,
+      text: String(args.text ?? ''), requestId: String(args.requestId ?? `req-${seq}`),
+      attachments: (args.attachments ?? []).map(file => ({ id: file.id, name: `资料 ${file.id}`, kind: 'text/plain', range: file.range ?? null, partial: false })),
+    })
+    blogTouch(conv)
+    void replayBlogTurn(conv, String(args.text ?? ''))
+    return { model: { provider: 'mock-provider', model: 'mock-pro' } }
+  },
+  'chat-stop': args => {
+    const conv = blogConversations.get(String(args.conversationId))
+    if (conv === undefined) throw new Error('会话不存在')
+    void stopBlogTurn(conv)
+    return { ok: true }
+  },
+  'chat-image-capability': () => ({ message: '当前模型可读取图片资料', available: true, currentSupportsImages: true }),
+  attachments: () => [],
+  'attachment-select': () => ({}),
+  'attachment-remove': () => ({}),
+}
 
 // ── closedoff 批 1a/1b 假数据与 SSE 回放 ──────────────────────────────────
 
