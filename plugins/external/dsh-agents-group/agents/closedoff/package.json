@@ -1,6 +1,6 @@
 {
   "name": "@dsh-agents-group/closedoff",
-  "version": "0.6.1",
+  "version": "0.10.5",
   "description": "封闭化园区业务查询、个人对话历史与可视化助手（智能体群组的子包）",
   "license": "UNLICENSED",
   "private": true,
@@ -51,18 +51,42 @@
     "@deepseek-ai/dsh-home-paths": "0.1.7-alpha.2"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/cordis": { "optional": true },
-    "@deepseek-ai/dsh-agent": { "optional": true },
-    "@deepseek-ai/dsh-agent-default-model": { "optional": true },
-    "@deepseek-ai/dsh-host-webserver": { "optional": true },
-    "@deepseek-ai/dsh-llm": { "optional": true },
-    "@deepseek-ai/dsh-message-feedback": { "optional": true },
-    "@deepseek-ai/dsh-session": { "optional": true },
-    "@deepseek-ai/dsh-session-persistence": { "optional": true },
-    "@deepseek-ai/dsh-system-prompt": { "optional": true },
-    "@deepseek-ai/dsh-token-meter": { "optional": true },
-    "@deepseek-ai/dsh-tools": { "optional": true },
-    "@deepseek-ai/dsh-home-paths": { "optional": true }
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-agent-default-model": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-host-webserver": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-llm": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-message-feedback": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-session-persistence": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-system-prompt": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-token-meter": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-home-paths": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@hy-media/video-player": "file:vendor/hy-media-video-player-0.0.37.tgz",

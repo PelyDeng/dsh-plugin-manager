@@ -171,6 +171,10 @@ export const useTurnStore = create<TurnState>((set, get) => ({
           const cards = { ...state.cards }
           const existing = cards[event.callId]
           if (failed && existing !== undefined) cards[event.callId] = { ...existing, state: 'error' }
+          // 旧 cards.js：tool_end(done) 即把查询行推进「已完成」，且无 cards 结果的查询
+          // （如 closedoff_vehicle_location）**不进结果区**——React 版 tool_start 就建
+          // loading 占位，不删的话会永远停在「正在查询…」（0.10.x 生产回归根因）。
+          if (!failed && existing !== undefined && existing.state === 'loading') delete cards[event.callId]
           return { tools, cards }
         })
         break
