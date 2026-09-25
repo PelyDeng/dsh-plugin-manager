@@ -700,11 +700,16 @@ export async function installWeb(
               break
             }
             case 'tool/result': {
-              const block = event.data.message.content[0]
-              const callId = String(block.toolCallId)
-              const fullResultText = textBlocks(block.content)
+              // 双形状兼容：宿主 0.1.7（Messages-only）把 toolCallId 提升到 message 顶层、
+              // content 是块数组；旧事件形状 toolCallId/正文嵌在 content[0] 块内。
+              // 任一形状取不到时按空结果处理（tool_end(done) 后查询行离开「查询中」）。
+              const message = event.data.message
+              const rawBlocks = Array.isArray(message.content) ? message.content : []
+              const legacyBlock = rawBlocks[0] as { toolCallId?: unknown; content?: unknown; isError?: boolean } | undefined
+              const callId = String(message.toolCallId ?? legacyBlock?.toolCallId ?? '')
+              const fullResultText = textBlocks(Array.isArray(legacyBlock?.content) ? legacyBlock.content : rawBlocks)
               for (const value of collectOpaqueResultValues(fullResultText, event.data.meta)) opaqueValues.add(value)
-              const failed = event.data.error !== undefined || block.isError || gatewayResultFailed(fullResultText)
+              const failed = event.data.error !== undefined || message.isError === true || legacyBlock?.isError === true || gatewayResultFailed(fullResultText)
               send({ type: 'tool_end', callId, status: failed ? 'error' : 'done' })
               const tool = tools.get(callId)?.name ?? ''
               if (!failed && isFenceTool(tool)) send({ type: 'fences', callId, payload: fencesFromResult(fullResultText, event.data.meta) })

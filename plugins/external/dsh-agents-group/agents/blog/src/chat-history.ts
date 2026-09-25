@@ -168,7 +168,10 @@ export function projectChat(events: readonly HistoryEvent[],requests: readonly R
       messages.push(node);tools.set(data.callId,node)
     }
     if(event.type==='tool/result'){
-      const node=tools.get(data.message.source.callId);if(node)node.status=data.error||data.message.content.some((block: ToolResultBlock)=>block.type==='tool-result'&&block.isError===true)?'failed':'succeeded'
+      // 宿主 0.1.7（Messages-only）后 isError 在 message 顶层、ContentBlockMap 无 'tool-result'
+      // 块类型（旧 .some 判定恒 false，isError:true 且无 error.info 的事件被误投成 succeeded）。
+      const node=tools.get(data.message.source.callId)
+      if(node)node.status=data.error||data.message.isError===true?'failed':'succeeded'
     }
     if(event.type==='llm/retry')messages.push({id:'retry-'+event.seq,role:'status',seq:event.seq,time:event.time,turn:turn?.turn,text:'模型请求失败，正在重试'})
     if(event.type==='assistant/attempt'){

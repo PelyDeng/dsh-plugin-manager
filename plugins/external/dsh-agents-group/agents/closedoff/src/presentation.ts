@@ -388,6 +388,8 @@ function escapePattern(value: string): string {
 
 /** 会话事件里的正文块：同一段文字无论出现在回答、工具结果还是思考里都按同一口径取。 */
 export function textBlocks(content: readonly unknown[]): string {
+  // 宿主 0.1.7（Messages-only 重构）后事件里的 content 可能缺失或非数组——按空正文处理。
+  if (!Array.isArray(content)) return ''
   let result = ''
   for (const block of content) {
     if (typeof block === 'object' && block !== null && 'type' in block && block.type === 'text'
@@ -398,6 +400,7 @@ export function textBlocks(content: readonly unknown[]): string {
 
 /** 同 {@link textBlocks}，取推理块。 */
 export function reasoningBlocks(content: readonly unknown[]): string {
+  if (!Array.isArray(content)) return ''
   let result = ''
   for (const block of content) {
     if (typeof block === 'object' && block !== null && 'type' in block && block.type === 'reasoning'
@@ -492,6 +495,7 @@ export function extractCards(tool: string, resultText: string): CardsPayload | u
 }
 
 function messageText(content: readonly unknown[]): string {
+  if (!Array.isArray(content)) return ''
   let result = ''
   for (const block of content) {
     if (typeof block === 'object' && block !== null && 'type' in block && block.type === 'text'
@@ -501,6 +505,7 @@ function messageText(content: readonly unknown[]): string {
 }
 
 function messageReasoning(content: readonly unknown[]): string {
+  if (!Array.isArray(content)) return ''
   let result = ''
   for (const block of content) {
     if (typeof block === 'object' && block !== null && 'type' in block && block.type === 'reasoning'
@@ -510,12 +515,16 @@ function messageReasoning(content: readonly unknown[]): string {
 }
 
 function toolResult(event: Extract<SessionEvent, { type: 'tool/result' }>): { callId: string; text: string; error: boolean } {
-  const block = event.data.message.content[0]
-  const text = messageText(block.content)
+  // 双形状兼容：宿主 0.1.7（Messages-only）后 toolCallId 在 message 顶层、content 是
+  // 块数组；旧形状 toolCallId/正文嵌在 content[0] 块内。任一形状取不到按空结果处理。
+  const message = event.data.message
+  const rawBlocks = Array.isArray(message.content) ? message.content : []
+  const legacyBlock = rawBlocks[0] as { toolCallId?: unknown; content?: unknown; isError?: boolean } | undefined
+  const text = messageText(Array.isArray(legacyBlock?.content) ? legacyBlock.content : rawBlocks)
   return {
-    callId: String(block.toolCallId),
+    callId: String(message.toolCallId ?? legacyBlock?.toolCallId ?? ''),
     text,
-    error: event.data.error !== undefined || (block.isError ?? false) || gatewayResultFailed(text),
+    error: event.data.error !== undefined || message.isError === true || legacyBlock?.isError === true || gatewayResultFailed(text),
   }
 }
 
