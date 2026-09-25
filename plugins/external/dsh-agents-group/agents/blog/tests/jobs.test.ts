@@ -78,7 +78,7 @@ async function fixture(t: TestContext,{delayedIdle=false,images=false}: { delaye
 }
 test('official Jobs owns settlement, reports completion and isolates the exact Agent owner',async t=>{
   const f=await fixture(t),job=await f.jobs.start(actor,f.request);await tick()
-  assert.equal(f.handles.length,1);const handle=f.handles[0]!,runtime=f.root.jobs.list(handle.agent)[0]!
+  assert.equal(f.handles.length,1);const handle=f.handles[0]!,runtime=f.root.jobs.list(handle.agent.id)[0]!
   assert.equal(runtime.status,'running');assert.match(handle.sections.at(-1)!.text!,/reasoning_content/);assert.ok(handle.sections.at(-1)!.order!>handle.sections[0]!.order!);assert.match(handle.contexts[0]!.text!,/当前交互界面的语言是简体中文/);assert.ok(handle.message!.content.some(c=>c.text?.includes('READ-MARKER-829')))
   assert.throws(()=>f.root.jobs.get(runtime.id),/another session/)
   const search=await f.tools.get('blog_web_search')!.execute({query:'source'},{agent:handle.agent})
@@ -110,9 +110,9 @@ test('reasoning and step narration fold into a cumulative thinking trail without
 })
 test('cancel does not release capacity or settle before Agent is idle; late tool cannot propose',async t=>{
   const f=await fixture(t,{delayedIdle:true}),job=await f.jobs.start(actor,f.request);await tick()
-  const h=f.handles[0]!,runtime=f.root.jobs.list(h.agent)[0]!
+  const h=f.handles[0]!,runtime=f.root.jobs.list(h.agent.id)[0]!
   f.jobs.cancel(actor,job.id);await tick()
-  assert.equal(h.cancelled,true);assert.equal(h.disposed,false);assert.equal(f.jobs.active.size,1);assert.equal(f.root.jobs.get(runtime.id,h.agent).status,'stopping')
+  assert.equal(h.cancelled,true);assert.equal(h.disposed,false);assert.equal(f.jobs.active.size,1);assert.equal(f.root.jobs.get(runtime.id,h.agent.id).status,'stopping')
   await assert.rejects(f.tools.get('blog_propose')!.execute({text:'late'},{agent:h.agent}),/身份/)
   f.release();await tick();assert.equal((await f.jobs.get(actor,job.id)).status,'cancelled');assert.equal(h.disposed,true)
 })

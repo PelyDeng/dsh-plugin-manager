@@ -832,8 +832,10 @@ export class BlogChat {
       await this.autoTitle(b)
       this.assertTurn(b)
       const done = new Promise<{ status: string }>(resolve => { b.settle = resolve })
-      b.runtimeJobId = this.ctx.jobs.start({ kind: 'blog', label: '博客对话', owner: b.handle.agent, run: () => ({ cancel: () => { void this.finish(b, 'interrupted', '已停止回答') }, done }) } as never)
-      b.observed = (async () => { let state; do { state = await this.ctx.jobs.wait(b.runtimeJobId! as never, this.timeoutMs + 60000, b.handle!.agent) } while (['running', 'stopping'].includes(state.status)); return state })()
+      // JobSpec.owner 是 SessionId（宿主 jobs-local 的 resolveOwner 按它查 agent registry）；
+      // 传 Agent 对象会在新宿主上序列化成 "[object Object]"（0.10.x 生产「无法启动对话」根因）。
+      b.runtimeJobId = this.ctx.jobs.start({ kind: 'blog', label: '博客对话', owner: b.handle.agent.id, run: () => ({ cancel: () => { void this.finish(b, 'interrupted', '已停止回答') }, done }) } as never)
+      b.observed = (async () => { let state; do { state = await this.ctx.jobs.wait(b.runtimeJobId! as never, this.timeoutMs + 60000, b.handle!.agent.id) } while (['running', 'stopping'].includes(state.status)); return state })()
       // Consume failures immediately, while retaining the promise for shutdown.
       void b.observed.catch(() => this.finish(b, 'failed', '对话任务服务中断'))
       b.unsub.push(this.ctx.on('agent/assistant-stream', ({ agent, frame }) => {

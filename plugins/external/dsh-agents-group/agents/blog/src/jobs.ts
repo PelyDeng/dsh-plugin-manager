@@ -416,7 +416,8 @@ export class BlogJobs {
       check()
       this.bindings.set(handle.agent,b); this.bound(handle.agent)
       const done: Promise<JobOutcome> = new Promise(resolve=>{b.settle=resolve})
-      b.runtimeJobId=this.ctx.jobs.start({kind:'blog',label:'博客写作',owner:handle.agent,run:()=>({cancel:()=>{void this.stop(b,'cancelled')},done})})
+      // owner 是 SessionId（同 chat.ts:835 的宿主契约修正）。
+      b.runtimeJobId=this.ctx.jobs.start({kind:'blog',label:'博客写作',owner:handle.agent.id,run:()=>({cancel:()=>{void this.stop(b,'cancelled')},done})})
       // A registered waiter consumes the completion before tool-jobs can wake the model.
       b.completion=this.observe(b)
       this.update(b,{status:'running'})
@@ -476,7 +477,7 @@ export class BlogJobs {
     try {
       // `status` 只按"是不是终态"读，故收成最小形状（`ctx.jobs.wait()` 的 `JobSnapshot` 可赋值）。
       let snapshot: { status: string }
-      do {snapshot=await this.ctx.jobs.wait(b.runtimeJobId!,this.timeoutMs+60000,b.handle.agent)} while(['running','stopping'].includes(snapshot.status))
+      do {snapshot=await this.ctx.jobs.wait(b.runtimeJobId!,this.timeoutMs+60000,b.handle.agent.id)} while(['running','stopping'].includes(snapshot.status))
       const status={completed:'succeeded',killed:'cancelled',failed:'failed'}[snapshot.status]
       await this.settleWrites()
       b.job=await this.storage.jobUpdate(b.job.id,{status,error:b.error??null,text:b.text,thinking:this.finalThinking(b),sources:b.sources})
