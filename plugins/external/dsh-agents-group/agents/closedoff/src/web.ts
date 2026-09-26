@@ -334,9 +334,7 @@ export async function installWeb(
           id: item.id,
           title: item.title,
           updatedAt: item.updatedAt,
-          // `state` 一并回给页面：它决定这一行能不能打开。页面侧照同一判据再跳一次（见
-          // `web/conversation-history.js` 的 `conversationRowVisible`），两道都留着是因为
-          // 页面可能连着旧服务端、服务端也可能连着一个更老/更新的端口实现。
+          // `state` 一并回给页面：它决定这一行能不能打开。React 版按同一判据再过滤一次。
           state: item.state,
           // `pinned` 的形状换了载体：端口给的是 boolean，旧 SQLite 行给的是 0|1。
           // 页面用的是真假判断（`if (item.pinned)`），语义没变；用例跟着改成 `true`。

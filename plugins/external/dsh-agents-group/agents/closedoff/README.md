@@ -236,7 +236,7 @@ HMR 会释放旧插件注册的路由、Agent 和正在响应的 SSE 流，开�
 
 DSH 上游升级时，先在单独测试 profile 中安装本包并运行 `--dump-default-config` 或启动冒烟；只有 DSH 插件 API、session event、bundle patch 或 Web Server API 改变时才需要调整本包。正常业务 Tool 增减只修改本包。
 
-`tests/agent.test.ts` 使用真实 Cordis 作用域验证新建对话的服务注入；`llm` 必须包含在插件导出的 `inject` 中。浏览器历史栏可运行 `node tests/history-browser.mjs`，需要当前环境已安装 Playwright 及浏览器；可通过 `DSH_TEST_PLAYWRIGHT` 指定其模块入口、`DSH_TEST_BROWSER=msedge` 使用已安装的 Edge、`DSH_TEST_OUTPUT` 指定截图目录。该检查使用真实页面和 HTTP 替身，不访问模型或园区服务，正式验收仍需发送真实问题并检查工具结果。
+`tests/agent.test.ts` 使用真实 Cordis 作用域验证新建对话的服务注入；`llm` 必须包含在插件导出的 `inject` 中。浏览器历史栏的页面级验证由 web-react 的 vitest 套件与群组 mock（tests/mock/）覆盖；旧 Playwright 探针（tests/history-browser.mjs）已随 vanilla 前端退役删除。正式验收仍需发送真实问题并检查工具结果。
 
 业务前后端升级后还应重新核对 `src/specs.ts` 的 `result`：先确认接口的 `data` 是列表、对象、内嵌分页对象还是未定结构，再核对模型分析所需字段。对象允许服务端增加字段，已知字段也不要求每条记录都存在；没有源码或脱敏响应证据的接口保持 `unknown`，不能按接口名猜测并收紧。
 

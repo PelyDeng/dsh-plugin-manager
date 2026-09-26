@@ -5,8 +5,8 @@
  *   parentChoices/readTaxonomy 的分页读取与中断）；
  * - thinking-translation 的 needsChineseTranslation（与旧 web/thinking-translation.js
  *   及服务端同一保守判定）。
- * 旧 tests/article-diff.test.ts / tests/management.test.ts 仍在测旧载体（删码窗口
- * 才收敛）；本文件在 React 载体上先立行为（方案 §4.3「删码安全前提」）。
+ * 旧 tests/article-diff.test.ts / tests/management.test.ts 已随批 C1 删码退役，
+ * 等价语义由本文件的 React 载体用例承接（方案 §4.3「删码安全前提」）。
  */
 import { describe, expect, it } from 'vitest'
 import { articleDiff } from '../lib/article-diff.ts'

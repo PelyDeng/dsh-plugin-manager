@@ -8,7 +8,7 @@
 
 本文描述当前实现，不要求其他模块复制封闭化业务名称。车辆、名单、轨迹等名称应替换为目标模块自己的业务分组，但交互模式和组件规则可以复用。
 
-实现位置：页面骨架 [web/index.html](../web/index.html)、样式 [web/app.css](../web/app.css)、会话交互 [web/app.js](../web/app.js)、三维与视频 [web/trajectory.js](../web/trajectory.js)。
+实现位置：页面骨架 web-react/index.html、样式 web-react/src/styles/（Tailwind + web-common token 层）、会话交互 web-react/src/components/、三维与视频 web-react/src/enclaves/。旧 vanilla 轨（web/）已于 React 二期批 C1 退役。
 
 ## 目录
 

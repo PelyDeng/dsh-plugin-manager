@@ -11,3 +11,4 @@ src/
 tests/
 tsconfig.json
 tsdown.config.ts
+tsdown.web-react.config.ts

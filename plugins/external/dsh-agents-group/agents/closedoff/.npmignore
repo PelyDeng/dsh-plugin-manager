@@ -27,3 +27,4 @@ scripts/
 tsconfig.json
 tsdown.config.ts
 vitest.config.ts
+tsdown.web-react.config.ts

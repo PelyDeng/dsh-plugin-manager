@@ -27,7 +27,7 @@ kind: "package-bundle"
 | `packages/runtime` | 群组运行时 | 会话生命周期、Agent 句柄与工具限制、事件投影、协作入口、存储端口与侧栏入口的唯一实现 |
 | `web/index.html`、`web/app.css` | 本包 | 定义专用页面的语义骨架和视觉规则，不承载业务事件处理 |
 | `web/app.js` | 本包 | 管理会话、SSE 事件、思考与 Tool 状态、卡片、回答操作和历史恢复 |
-| `web/trajectory.js` | 本包 | 封装轨迹三维、串行自动截图、全屏手动截图、设备组和摄像头播放器生命周期 |
+| `web-react/src/enclaves/` | 本包 | Cesium 受控飞地：轨迹三维、串行自动截图、全屏手动截图、设备组和摄像头播放器生命周期 |
 | Agent Loop / LLM | DSH | 组织回合、调用模型、执行 Tool、产生结构化 session event |
 | Session Persistence | DSH | 保存并恢复对话事件，不由本包另建聊天数据库 |
 | PostgreSQL `dsh_conversations` | 群组运行时 | 会话归属、标题、置顶与移除围栏的权威数据；三个私有 Agent 共用，靠 `agent_id` 区分 |
@@ -153,6 +153,6 @@ Agent handle 是进程内资源；销毁 handle 会移除活动对象，不等�
 | 会话交互或卡片渲染变化 | `web/app.js`、`src/presentation.ts` | 否 |
 | 会话生命周期、协作入口或存储端口的行为 | `packages/runtime`（群组运行时，机制只实现一次），本包只改 `src/definition.ts` 的声明 | 否 |
 | 本 Agent 的存储配置来源或就绪口径 | `src/runtime.ts` | 否 |
-| 轨迹三维、截图或摄像头变化 | `web/trajectory.js`、`src/presentation.ts` | 否 |
+| 轨迹三维、截图或摄像头变化 | `web-react/src/enclaves/`、`src/presentation.ts` | 否 |
 | 新增业务写操作 | 独立 Tool、权限/审批/审计设计、测试与文档 | 通常否，但不能直接复用当前只读策略 |
 | DSH Tool/Agent/Session API 破坏性升级 | 本包适配层 | 否，除非上游本身缺少必要扩展点 |
