@@ -10,3 +10,11 @@ export const MOBILE_QUERY = '(max-width: 960px)'
 export function isMobileViewport(): boolean {
   return typeof window !== 'undefined' && window.matchMedia(MOBILE_QUERY).matches
 }
+
+/** 跟随滚动的距底容差（旧 followBottom 口径：≤24px 视为在底部）。 */
+export const FOLLOW_BOTTOM_TOLERANCE_PX = 24
+
+/** 消息流跟随滚动判定（旧 followBottom：在底部附近时新内容自动下滚，向上翻阅即停）。 */
+export function followsBottom(scrollTop: number, scrollHeight: number, clientHeight: number, tolerance: number = FOLLOW_BOTTOM_TOLERANCE_PX): boolean {
+  return scrollHeight - scrollTop - clientHeight <= tolerance
+}

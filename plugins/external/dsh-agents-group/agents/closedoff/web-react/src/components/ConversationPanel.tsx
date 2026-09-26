@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { openConversation, refreshConversations, startFreshConversation } from '../chat-controller.ts'
 import { api } from '../lib/api.ts'
 import { conversationMarkdown, exportFileName } from '../lib/conversation-export.ts'
+import { conversationRowVisible, historyGroup } from '../lib/conversation-rows.ts'
 import { isMobileViewport } from '../lib/viewport.ts'
 import { useSessionStore } from '../stores/session.ts'
 import type { ConversationItem } from '../lib/types.ts'
@@ -25,26 +26,6 @@ const MULTI_SELECT_LIMIT = 100
 
 /** 行操作菜单项（旧 qh-menu 五项，顺序一致）。 */
 const MENU_ITEMS = ['重命名', '置顶', '分享导出', '多选', '删除'] as const
-
-/** 列表里只显示打得开的会话行（旧 conversationRowVisible：busy 必须保留）。 */
-function rowVisible(item: ConversationItem): boolean {
-  return item.state === undefined || item.state === 'ready' || item.state === 'busy'
-}
-
-/** 按最近活动时间分组（旧 historyGroup 口径：置顶优先，其余按自然日差）。 */
-function groupOf(item: ConversationItem, now: number): string {
-  if (item.pinned === true) return '置顶'
-  const day = new Date(now)
-  day.setHours(0, 0, 0, 0)
-  const updated = new Date(item.updatedAt)
-  updated.setHours(0, 0, 0, 0)
-  const age = Math.floor((day.getTime() - updated.getTime()) / 86400000)
-  if (age <= 0) return '今天'
-  if (age === 1) return '昨天'
-  if (age < 7) return '7 天内'
-  if (age < 30) return '30 天内'
-  return '更早'
-}
 
 export function ConversationPanel({ open, onClose, busy }: { open: boolean; onClose: () => void; busy: boolean }): ReactElement | null {
   const conversations = useSessionStore(state => state.conversations)
@@ -78,10 +59,10 @@ export function ConversationPanel({ open, onClose, busy }: { open: boolean; onCl
   if (!open) return null
 
   const now = Date.now()
-  const shown = conversations.filter(rowVisible)
+  const shown = conversations.filter(conversationRowVisible)
   const groups: Array<{ label: string; items: ConversationItem[] }> = []
   for (const item of shown) {
-    const label = groupOf(item, now)
+    const label = historyGroup(item, now)
     const bucket = groups.find(group => group.label === label)
     if (bucket === undefined) groups.push({ label, items: [item] })
     else bucket.items.push(item)

@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { attachmentDownloadUrl } from '../lib/api.ts'
 import { removeAttachment, send, stopAnswer, toggleAttachment, transferredFiles, uploadFiles } from '../chat-controller.ts'
+import { shouldSendChatEnter } from '../lib/keyboard.ts'
 import { useComposerStore, usePickerStore } from '../stores/composer.ts'
 import { useConversationStore } from '../stores/conversation.ts'
 import { useSessionStore } from '../stores/session.ts'
@@ -98,7 +99,7 @@ export function Composer({ onNotice }: { onNotice: (text: string) => void }): Re
   }
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key === 'Enter' && !touchInput() && !event.shiftKey && !event.nativeEvent.isComposing && !composingRef.current && event.keyCode !== 229) {
+    if (shouldSendChatEnter({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode }, touchInput(), composingRef.current)) {
       event.preventDefault()
       submit()
     }

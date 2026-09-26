@@ -11,6 +11,7 @@ import type { AssistantTurnView } from './AssistantTurn.tsx'
 import { AssistantTurn } from './AssistantTurn.tsx'
 import type { BoardTrack } from '../lib/restore.ts'
 import type { TrackDeviceGroup } from '../lib/types.ts'
+import { followsBottom } from '../lib/viewport.ts'
 import { Icon } from '@dsh-agents-group/web-common'
 
 /** 流式中间态的轨迹/设备组合并（归档面 archive 同规则；id 域独立无碰撞）。 */
@@ -114,7 +115,7 @@ export function MessageList({ onRated, onBranch, onNotice }: {
       ref={scrollerRef}
       onScroll={event => {
         const node = event.currentTarget
-        followRef.current = node.scrollHeight - node.scrollTop - node.clientHeight <= 24
+        followRef.current = followsBottom(node.scrollTop, node.scrollHeight, node.clientHeight)
       }}
     >
       <div className="co-inner">
