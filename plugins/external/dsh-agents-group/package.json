@@ -45,7 +45,7 @@
     "verifyFiles": [
       "config/group.example.json",
       "agents/closedoff/persona.txt",
-      "agents/closedoff/web/index.html",
+      "agents/closedoff/dist/web/app.js",
       "agents/blog/runtime/chat-sdk.mjs",
       "agents/blog/dist/web/app.js",
       "agents/blog/migrations/postgres/0001_init.sql",

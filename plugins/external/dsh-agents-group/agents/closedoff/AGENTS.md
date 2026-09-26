@@ -15,7 +15,7 @@
 
 ## 页面模块与资源
 
-- 页面脚本都是 ES 模块，由 `web/index.html` 里唯一的 `<script type="module">` 入口（`app.js`）逐层 import；不要再用经典脚本加全局变量那一套。新增模块要同时加进 `scripts/copy-web-assets.mjs` 的拷贝清单、`package.json` 的 `check:web`，以及 `tests/web-source.ts` 的源码拼接（那里有用例钉住「页面 import 的每个模块都被拷到根下」）。模块之间用相对路径引用；引用别的模块的函数时，按**实际用法**核依赖——作为回调或属性值传出去的引用（`pts.map(vh)`、`showGroup: showGroupPopup`）同样要导入或改到新入口，只替换 `名字(` 会漏。
-- 页面自己写的资源都在 `web/assets` 根下、按文件名直接引用，没有内容指纹，所以服务端对根下文件一律 `no-cache`，只有子目录里随包发布的第三方资源（Cesium、定制播放器）才用长缓存。把模块挪进子目录会让回访浏览器长期缓存旧版本，等于发布失效。
-- 改动后先跑 `pnpm test`：纯函数用 vitest 直接测（`web/trajectory-data.js` 这类不碰 DOM 的），页面行为用 `tests/page-layout.node.mjs` 的浏览器场景回归（首屏、恢复对话、流式提问、摄像头弹窗）。产物缺失属于构建问题，必须直接失败；只有机器上没有可用 Chromium 时才允许记 SKIP，跳过不能算通过。
-- 页面回归夹具放在 `tests/`：桩接口是 `page-stub.json`（流式场景是真实协议的 SSE），探针是 `page-probe.js`／`page-stream-probe.js`／`page-media-probe.js`。加新场景时先确认它能抓到东西（改坏一处实现，看它是否真的变红），再拿它当拆分的依据。
+- 页面前端是 `web-react/`（React 19 + zustand），骨架是 `web-react/index.html`，源码入口 `web-react/src/main.tsx`；旧 `web/` vanilla JS 前端已退役（批 C1 删码），不要在 `web/` 下新增页面源码。
+- 页面产物（`app.js`/`app.css`）都在 `web/assets` 根下、按文件名直接引用，没有内容指纹，所以服务端对根下文件一律 `no-cache`，只有子目录里随包发布的第三方资源（Cesium、定制播放器、字体分片）才用长缓存。把产物挪进子目录会让回访浏览器长期缓存旧版本，等于发布失效。
+- 改动后先跑 `pnpm test`：前端纯逻辑用 vitest 测（`web-react/src/__tests__/`），页面行为用 `tests/page-layout.node.mjs` 的浏览器场景回归（首屏、恢复对话、流式提问、媒体场景）。产物缺失属于构建问题，必须直接失败；只有机器上没有可用 Chromium 时才允许记 SKIP，跳过不能算通过。
+- 页面回归夹具放在 `tests/`：桩接口是 `page-stub.json`（流式场景是真实协议的 SSE），探针是 `page-probe.js`。加新场景时先确认它能抓到东西（改坏一处实现，看它是否真的变红），再拿它当拆分的依据。

@@ -336,6 +336,19 @@ test('saved attempts display authoritative original blocks with a stable partial
   assert.deepEqual(events,before,'translation source projection must not rewrite the official event log')
 })
 
+test('tool errors without optional diagnostic metadata stay failed in history',()=>{
+  // 事件体只写 `projectChat` 真正读的那几项（`turn`/`callId`/`name`/`message`/`error`）。
+  const events: FixtureEvent[]=[{type:'turn/start',seq:0,time:0,data:{turn:1}}]
+  for(const [callId,isError,error] of [['delete',true,undefined],['legacy',false,{code:'FAIL'}],['search',false,undefined]] as const){
+    events.push({type:'tool/call',seq:events.length,time:1,data:{turn:1,callId,name:callId}})
+    // 宿主 0.1.7（Messages-only）新形状：isError 在 message 顶层（ContentBlockMap 无 'tool-result' 块类型）。
+    events.push({type:'tool/result',seq:events.length,time:2,data:{turn:1,message:{source:{kind:'tool',callId},content:[{type:'text',text:'PRIVATE-RESULT'}],...(isError?{isError:true}:{})},...(error?{error}:{}) as FixturePayload}})
+  }
+  const projection=projectChat(events,[],sdk) as unknown as {readonly messages:readonly {readonly status?:string}[]}
+  assert.deepEqual(projection.messages.map(m=>m.status),['failed','failed','succeeded'])
+  assert.ok(!JSON.stringify(projection).includes('PRIVATE-RESULT'),'tool result bodies must not leak into the page history')
+})
+
 async function fixture(t: TestContext,{delayedOpen=false,delayedFlush=false,noPersistence=false,occupancy}: FixtureOptions={}): Promise<Fixture>{
   const root=new Context(),registry=root.plugin(AgentRegistry);await registry
   const runtimeJobs=root.plugin(LocalJobRegistry);await runtimeJobs

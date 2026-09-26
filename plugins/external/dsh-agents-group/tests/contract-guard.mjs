@@ -6,7 +6,7 @@
  * 豁免分级：行级 `/* contract-exempt: 理由 *​/` + 文件级白名单清单（下方数组，每条注理由）。
  *
  * 生效时点（架构评审 P2 定案）：批 0 只扫新增的 web-react/ + web-common/ + huiyu
- * page.ts；旧成员 web/ 不扫——旧 CSS 批 3 删码退出后自然收敛纳管。
+ * page.ts；旧成员 web/ 的 CSS 已随 React 二期批 C1 删码退出，无需再纳管。
  */
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, extname, join, relative, resolve, sep } from 'node:path'

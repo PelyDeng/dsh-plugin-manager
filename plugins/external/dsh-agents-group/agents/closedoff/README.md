@@ -109,13 +109,13 @@ pnpm install --frozen-lockfile
 pnpm check --external --plugins agents-group
 ```
 
-本包是群组 `dsh-agents-group` 的子包，**没有独立的构建入口**：构建与检查都通过群组完成。根 `check --external --plugins agents-group` 会先构建群组（含本子包），再执行类型、前端语法和行为检查；只构建时使用 `pnpm build --external --plugins agents-group`。子包单独的 `pnpm typecheck` 与 `pnpm test` 仍可在本目录执行，用于快速定位本包的问题。构建生成群组的 `dist/`，并把页面源码、固定为 `1.142.0` 的公共 CesiumJS、设备组标记图片、DSH 图标和 `@hy-media/video-player@0.0.37` 运行资源复制到本子包的 `web/assets/`。`index.html` 保留页面骨架，`app.js` 管理主交互，`trajectory.js` 管理地图、截图和摄像头播放器。轨迹地图和视频播放器均不使用公网 CDN。
+本包是群组 `dsh-agents-group` 的子包，**没有独立的构建入口**：构建与检查都通过群组完成。根 `check --external --plugins agents-group` 会先构建群组（含本子包），再执行类型与行为检查；只构建时使用 `pnpm build --external --plugins agents-group`。子包单独的 `pnpm typecheck` 与 `pnpm test` 仍可在本目录执行，用于快速定位本包的问题。构建生成群组的 `dist/`，再把 React 前端产物、固定为 `1.142.0` 的公共 CesiumJS、设备组标记图片、DSH 图标和 `@hy-media/video-player@0.0.37` 运行资源复制到本子包的 `web/assets/`。`web-react/index.html` 是页面骨架，`web-react/src/` 是 React 源码（React 19 + zustand），地图、截图和摄像头播放器在 `web-react/src/enclaves/`。轨迹地图和视频播放器均不使用公网 CDN。
 
 `@hy-media/video-player@0.0.37` 的版本化 npm 包快照保存在本插件的 `vendor/`，本包通过相对 `file:` 开发依赖安装，不再访问原私有 npm 源。CesiumJS 和其余公开依赖仍从公共 npm 源安装。正式插件 `.tgz` 携带复制到 `web/assets/` 的播放器运行资源，不依赖仓库外目录。
 
-## 前端迁移与本地 mock（React 二期）
+## 前端与本地 mock（React 二期）
 
-本包前端正在从 `web/`（vanilla JS）迁移到 `web-react/`（React 19 + zustand），依据群组二期的实施方案（`.local/dsh-agents-group/docs/设计/`）。构建开关信号是 `dist/web/app.js` 的存在性：`pnpm build` 产物包含它即切到 React 前端，删除后 `build:web` 复制旧前端，两条链可随时互切。批 1a 已就位数据层与主骨架（SSE 单向流、restore 复原、会话导航），地图/轨迹/视频/弹窗在批 1b 接入。
+本包前端是 `web-react/`（React 19 + zustand）；旧 `web/` vanilla JS 前端已在 React 二期收官时退役（批 C1 删码），页面骨架固定为 `web-react/index.html`。
 
 不依赖真实宿主即可在浏览器跑通页面：用群组根下的 mock 服务器回放身份、会话列表、历史复原假数据与完整的 `/chat` SSE 事件序列（含十类事件与回合元信息），并配合同目录的验证脚本做浏览器断言与截图：
 
@@ -222,7 +222,7 @@ dsh --profile web
 pnpm dev
 ```
 
-此后修改 `src/` 下的 TypeScript 文件会重建 `dist/index.mjs`；修改 `web/index.html`、`web/app.css`、`web/trajectory.js` 或 `web/app.js` 会同步第一方页面资源并刷新服务端持有的插件。Cordis 只卸载并重新加载本插件，不重启 DSH 进程。页面文件不是浏览器 HMR 模块，因此修改页面后仍需手动刷新浏览器，但不需要重启服务。
+此后修改 `src/` 下的 TypeScript 文件会重建 `dist/index.mjs` 并刷新服务端持有的插件；前端源码（`web-react/`）的改动随 `pnpm build` 生效。Cordis 只卸载并重新加载本插件，不重启 DSH 进程。页面文件不是浏览器 HMR 模块，因此修改页面后仍需手动刷新浏览器，但不需要重启服务。
 
 HMR 会释放旧插件注册的路由、Agent 和正在响应的 SSE 流，开发时应在智能体空闲时保存代码。修改 `package.json`、依赖、Bundle 列表或安装版本仍需重启；profile 与 home 的 `cordis.patch.yml` 配置继续由 DSH 自身热加载。
 

@@ -35,9 +35,9 @@ describe('子包资源定位', () => {
   it('两种形态对两个子包都成立', () => {
     for (const [id, relative] of [
       ['closedoff', 'persona.txt'],
-      ['closedoff', 'web/index.html'],
+      ['closedoff', 'web-react/index.html'],
       ['blog', 'runtime/chat-sdk.mjs'],
-      ['blog', 'web/index.html'],
+      ['blog', 'web-react/index.html'],
       ['blog', 'package.json'],
     ] as const) {
       const fromTestsPath = agentResourcePath(fromTests, id, relative)

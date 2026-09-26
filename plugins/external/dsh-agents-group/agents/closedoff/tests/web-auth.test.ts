@@ -391,11 +391,12 @@ describe('HTTP authentication and conversation ownership', () => {
     expect(() => standalone.lifecycle.authorizeAgent(undefined)).not.toThrow()
   })
 
-  // 页面模块按文件名直接引用、没有内容指纹：长缓存会让回访浏览器跑「新 app.js + 旧 cards.js」。
-  // 这里对真实响应头取证；`pnpm test` 会先跑 build:web 生成 web/assets。
-  it.skipIf(!existsSync(fileURLToPath(new URL('../web/assets/cards.js', import.meta.url))))('revalidates first-party page modules and still long-caches vendored bundles', async () => {
+  // 页面产物按文件名直接引用、没有内容指纹：长缓存会让回访浏览器跑「新 app.js + 旧模块」。
+  // 这里对真实响应头取证；`pnpm test` 会先跑 build:web 生成 web/assets（React 产物在根上，
+  // 子目录是 Cesium / 播放器 / 字体等随包第三方资源，走长缓存）。
+  it.skipIf(!existsSync(fileURLToPath(new URL('../web/assets/app.js', import.meta.url))))('revalidates first-party page modules and still long-caches vendored bundles', async () => {
     const { request } = await fixture()
-    for (const asset of ['cards.js', 'app.js', 'app.css', 'labels.js', 'format.js', 'render-text.js', 'model-picker.js', 'trajectory.js']) {
+    for (const asset of ['app.js', 'app.css']) {
       const response = await request(`/closedoff-qa/assets/${asset}`)
       expect(response.status, asset).toBe(200)
       expect(response.headers.get('cache-control'), asset).toBe('no-cache')
@@ -404,6 +405,6 @@ describe('HTTP authentication and conversation ownership', () => {
     expect(vendored.status).toBe(200)
     expect(vendored.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
     // 认证仍然在读取文件之后、写响应之前生效：未登录拿不到内容。
-    expect((await request('/closedoff-qa/assets/cards.js', '')).status).toBe(401)
+    expect((await request('/closedoff-qa/assets/app.js', '')).status).toBe(401)
   })
 })

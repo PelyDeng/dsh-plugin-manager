@@ -53,8 +53,6 @@ import { createFakeHost, type FakeHost } from './fixtures/fake-host.ts'
 import { memoryIndex } from './index-fixture.ts'
 // .db.conversations 在用例里读内存替身独有的观测量（size），所以要那个类的类型（只导入类型）。
 import type { MemoryConversationPort } from '../../../packages/runtime/src/storage/memory.ts'
-import { chatConversationTarget } from '../web/chat.js'
-import { renderMarkdown } from '../web/markdown.js'
 
 /**
  * 本文件的登录身份。
@@ -1469,14 +1467,15 @@ test('actual candidate paragraphs and headings render readably without JSON esca
   await f.store.propose(owner, draft.id, draft.revision, { title: '候选标题 "样例"', text: body }, [])
   await f.index.result(owner, turn!, 'candidate', await f.store.get(owner, draft.id))
   await f.complete(id, 'Agent 的概述不能代替候选正文')
-  const result = await running, html = renderMarkdown(result.text)
+  // 旧前端 markdown.js 已随批 C1 删码：这里直接断言协作消息的 markdown 源文本
+  // （结构化标题/列表在场、正文逐字保留、没有 JSON 转义残留），渲染交给 web-common RichText。
+  const result = await running
   assert.ok(result.text.includes(body), 'candidate body must remain complete and unmodified')
-  assert.match(html, /<h3>候选 1 · 待采用<\/h3>/)
-  assert.match(html, /<h2>数据来源<\/h2>/)
-  assert.match(html, /<p>这是实际候选的第一段。<\/p>/)
-  assert.match(html, /<li>本页 2 条样例<\/li>/)
-  assert.match(html, /&lt;script&gt;不能执行&lt;\/script&gt;/)
-  assert.doesNotMatch(html, /<script|\[\{&quot;title&quot;|\\n\\n##/)
+  assert.match(result.text, /### 候选 1 · 待采用/)
+  assert.match(result.text, /标题：候选标题 "样例"/)
+  assert.match(result.text, /## 数据来源/)
+  assert.match(result.text, /- 本页 2 条样例/)
+  assert.doesNotMatch(result.text, /\[\{|\\n\\n##|&quot;/)
   assert.equal(result.status, 'external_pending')
 })
 
@@ -1528,11 +1527,10 @@ test('multiple current draft candidates are deduplicated and forwarded together 
       assert.doesNotMatch(result.text, /甲稿正文|乙稿正文/)
     } else {
       for (const body of bodies) assert.equal(result.text.split(body).length - 1, 1)
-      const html = renderMarkdown(result.text)
-      assert.match(html, /<h3>候选 1 · 待采用<\/h3>/)
-      assert.match(html, /<h3>候选 2 · 待采用<\/h3>/)
-      assert.match(html, /候选 1 正文结束。/)
-      assert.match(html, /候选 2 正文结束。/)
+      assert.match(result.text, /### 候选 1 · 待采用/)
+      assert.match(result.text, /### 候选 2 · 待采用/)
+      assert.match(result.text, /候选 1 正文结束。/)
+      assert.match(result.text, /候选 2 正文结束。/)
     }
   })
 })
@@ -1626,13 +1624,4 @@ test('subscription revocation while running rejects instead of leaking a later a
   assert.equal(provider.lifecycle.isBusy(id), false, '撤权收尾后这一轮不再占用')
   assert.equal(f.host.listenerCount(), listenerBaseline,
     `撤权后不得多留 session/event 订阅（基线 ${listenerBaseline}，实测 ${f.host.listenerCount()}）`)
-})
-
-test('native chat deep links select the requested conversation over a previous local conversation', () => {
-  const path = '/blog?conversationId=' + encodeURIComponent('blog-chat-owned-id')
-  assert.equal(chatConversationTarget(new URL(path, 'https://example.invalid').search, 'previous-chat'), 'blog-chat-owned-id')
-  assert.equal(chatConversationTarget('', 'previous-chat'), 'previous-chat')
-  assert.equal(chatConversationTarget(''), null)
-  // 选择标识不授予访问权；非法和他人标识仍交给 activate 的原 HTTP 归属检查。
-  assert.equal(chatConversationTarget('?conversationId=unowned-id'), 'unowned-id')
 })

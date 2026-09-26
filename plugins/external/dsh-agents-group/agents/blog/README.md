@@ -216,9 +216,9 @@ python3 -m unittest discover -s plugins/external/dsh-agents-group/agents/blog/ba
 
 这些检查通过后，仍不能据此认定真实 Typecho/MySQL、宿主、模型、图床上传、定时触发、恢复或浏览器操作都正常；需要验收哪一项，就单独记录该项的实际结果。过程记录放在 Git 忽略的 `.local/dsh-agents-group/docs/`。
 
-## 前端迁移与本地 mock（React 二期）
+## 前端与本地 mock（React 二期）
 
-本包前端正在从 `web/`（vanilla JS）迁移到 `web-react/`（React 19 + zustand），依据群组二期的实施方案（`.local/dsh-agents-group/docs/设计/`）。构建开关信号是 `dist/web/app.css` 的存在性：`pnpm build` 三段构建（后端 tsdown → React 产物 app.js → Tailwind 产物 app.css）产出它即切到 React 前端，旧链 `tsdown.web.config.ts` 只产 app.js，两条链可随时互切。批 2a 已就位订阅-快照数据层（epoch→viewToken/refreshVersion→乱序守卫/liveClock→live 段保护的解耦重写）与对话视图骨架；文章工作台、管理弹窗与文件预览在批 2b 接入。
+本包前端是 `web-react/`（React 19 + zustand），骨架为 `web-react/index.html`；旧 `web/` vanilla JS 前端已在 React 二期收官时退役（批 C1 删码）。`pnpm build` 三段构建（后端 tsdown → React 产物 dist/web/app.js → Tailwind 产物 dist/web/app.css），页面只读这三个条目；字体分片走 `web-common/media/fonts/` 的前缀轨。
 
 React 前端的等价单测（订阅-快照三守卫、防抖重拉、发送/停止链路）在 `web-react/src/__tests__/`，`pnpm --filter @dsh-agents-group/blog exec vitest run` 运行。不依赖真实宿主即可在浏览器跑通页面：用群组根下的 mock 服务器回放身份、会话、历史假数据与 `/chat-events` 的 live/snapshot/changed 序列，并配合同目录的验证脚本做浏览器断言与截图：
 

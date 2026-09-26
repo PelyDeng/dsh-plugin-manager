@@ -1758,9 +1758,9 @@ body {
     position: fixed;
     inset: 0;
     z-index: 35;
-    /* contract-exempt: 窄屏历史抽屉的暗色遮罩（对齐旧版冷蓝调遮罩，半透明叠加
-       在任意内容上，无对应 --bt-* 槽；与旧版 qa-history 遮罩观感一致）。 */
-    background: #17203655;
+    /* 窄屏历史抽屉的暗色遮罩：对齐旧版冷蓝调遮罩，半透明叠加在任意内容上，
+       无对应 --bt-* 槽；与旧版 qa-history 遮罩观感一致。 */
+    background: #17203655; /* contract-exempt: 上一行注释的理由全文适用，标记须与色值同行 */
   }
   .blg-chat-scroll { padding: 14px 12px 8px; }
   .blg-composer { margin: 0 10px 10px; }
