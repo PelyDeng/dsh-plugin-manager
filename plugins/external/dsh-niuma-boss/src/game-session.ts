@@ -244,6 +244,7 @@ export class GameSession {
     if (open === null) return
     if (dialogueStillInReach(this.near, open.id, mapChanged)) return
     this.store.dialogue = null
+    this.flushEnvNotice()
   }
 
   /**
@@ -252,23 +253,42 @@ export class GameSession {
    */
   private interact(target: NearTarget): void {
     if (target.distanceTiles > INTERACT_RADIUS_TILES) {
-      this.store.notice = '走近一点再和' + target.label + '说话'
+      this.envNotice('走近一点再和' + target.label + '说话')
       this.syncPrompt()
       return
     }
     this.openTarget(target)
   }
 
+  /**
+   * 环境提示（走近一点/无可互动对象等）：任务本或对白打开时不打扰，挂起到关闭后补显；
+   * 写链路错误与状态类提示不受此限（它们必须即时可见）。
+   */
+  private envNotice(text: string): void {
+    if (this.store.bookOpen || this.store.dialogue !== null) {
+      this.store.pendingNotice = text
+      return
+    }
+    this.store.notice = text
+  }
+
+  /** 面板关闭时补显挂起的环境提示（closeBook/closeDialogue 尾部调用）。 */
+  private flushEnvNotice(): void {
+    if (!this.store.pendingNotice) return
+    this.store.notice = this.store.pendingNotice
+    this.store.pendingNotice = ''
+  }
+
   /** 用户意图：交互键（E）或点击就近提示。有提示就执行提示动作，没有就只给一次轻微反馈。 */
   interactKey(): void {
     const prompt: Prompt | null = this.store.prompt
     if (prompt === null) {
-      this.store.notice = '这里没有可以互动的对象'
+      this.envNotice('这里没有可以互动的对象')
       return
     }
     if (prompt.action === 'hint_only') {
       // 「正在收尾」这类提示只说明状态，不提供入口（interaction_rules.yaml 的 butler_busy_hint）。
-      this.store.notice = prompt.label + '：本轮正在收尾，以管家事件为准'
+      this.envNotice(prompt.label + '：本轮正在收尾，以管家事件为准')
       return
     }
     const target = this.near.find(entry => entry.id === prompt.target)
@@ -298,6 +318,7 @@ export class GameSession {
   closeDialogue(): void {
     this.store.dialogue = null
     this.syncPrompt()
+    this.flushEnvNotice()
   }
 
   /** 使旧会话的一切失效：取消订阅与在途请求，清空选择、任务与历史。 */
@@ -513,6 +534,7 @@ export class GameSession {
     this.store.bookOpen = false
     this.saveFeet(this.world.state)
     this.syncPrompt()
+    this.flushEnvNotice()
   }
 
   /** 用户意图：断线/过期后的手动重试。 */

@@ -11,7 +11,7 @@
  * 横竖屏：旋转不清空任何界面状态（位置与任务本开合都由会话/存储保存，旋转只改布局）；
  * 可见区域按 visualViewport 收缩，软键盘不遮挡输入框（真机未验证）。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useTaskBookStore } from './store'
 import { GameSession } from './game-session'
 // 状态文案：投影的映射 + labels 里补的三个英文 token（dispatched/executing/succeeded）。
@@ -103,6 +103,33 @@ const onVisibility = () => { document.hidden ? session?.onHidden() : session?.on
 /** 唯一生效的就近提示：点击等价于按交互键（interaction_rules.yaml#hotkey 的同一条动作）。 */
 const onPrompt = () => { session?.interactKey() }
 
+/** 轻提示自动消失（F2/A3）：每条 notice 展示 3.5s 后清空，不再驻留叠在新面板上。 */
+let noticeTimer: ReturnType<typeof setTimeout> | undefined
+watch(() => store.notice, text => {
+  if (noticeTimer) clearTimeout(noticeTimer)
+  if (text === '') return
+  noticeTimer = setTimeout(() => { store.notice = '' }, 3500)
+})
+
+/** 员工卡正文默认收起（F3/A4）：流式草稿可能整屏长，点击展开/收起。 */
+const expandedStaff = ref(new Set<string>())
+const toggleStaff = (id: string) => {
+  const next = new Set(expandedStaff.value)
+  next.has(id) ? next.delete(id) : next.add(id)
+  expandedStaff.value = next
+}
+
+/** 子任务正文/草稿默认限高（F3）：点击展开全文，再点收起；流式更新保持已选状态。 */
+const expandedTexts = ref(new Set<string>())
+const toggleText = (key: string) => {
+  const next = new Set(expandedTexts.value)
+  next.has(key) ? next.delete(key) : next.add(key)
+  expandedTexts.value = next
+}
+
+/** 任务终态：completed/failed/cancelled 时不再展示「本轮： running」这类运行中态（F4）。 */
+const roundFinished = computed(() => ['completed', 'failed', 'cancelled'].includes(store.task.state))
+
 /** 软键盘弹出时把输入框滚进可见区；真机未验证，只保证有焦点就把目标带进视野。 */
 const onFocusIn = (event: FocusEvent) => {
   const target = event.target as HTMLElement | null
@@ -152,7 +179,11 @@ onBeforeUnmount(() => {
           <span class="state">{{ member.stateLabel }}</span>
           <span class="action">{{ member.actionLabel }}</span>
         </header>
-        <p v-if="member.bubble" class="bubble">{{ member.bubble }}</p>
+        <!-- 长文默认收起（F3）：流式草稿可能很长，点击在限高/全文间切换。 -->
+        <p
+          v-if="member.bubble" class="bubble" :data-expanded="expandedStaff.has(member.id) ? 'true' : 'false'"
+          @click="toggleStaff(member.id)"
+        >{{ member.bubble }}</p>
       </article>
     </section>
 
@@ -227,7 +258,8 @@ onBeforeUnmount(() => {
           <h2>{{ store.task.goal || '（目标待管家给出）' }}</h2>
           <p class="state">
             <span class="badge" :data-state="store.task.state">{{ taskStateLabel(store.task.state) }}</span>
-            <span v-if="store.task.runState && store.task.runState !== 'idle'" class="run">本轮：{{ store.task.runState }}</span>
+            <!-- 任务已到终态时不再展示运行中态（F4）：「已完成 本轮： running」是状态矛盾。 -->
+            <span v-if="store.task.runState && store.task.runState !== 'idle' && !roundFinished" class="run">本轮：{{ store.task.runState }}</span>
             <button
               v-if="roundStoppable" type="button" class="stop"
               :disabled="store.submitting || writeBlocked" @click="session?.stopRound()"
@@ -248,7 +280,10 @@ onBeforeUnmount(() => {
                 <summary>思考中…</summary>
                 <pre>{{ subtask.thinking }}</pre>
               </details>
-              <p v-if="subtask.text" class="text">{{ subtask.text }}</p>
+              <p
+                v-if="subtask.text" class="text" :data-expanded="expandedTexts.has(subtask.id) ? 'true' : 'false'"
+                @click="toggleText(subtask.id)"
+              >{{ subtask.text }}</p>
               <form v-if="subtask.state === 'waiting_user'" class="reply" @submit.prevent="onReply(subtask.id)">
                 <input
                   v-model="store.replyDrafts[subtask.id]" type="text"

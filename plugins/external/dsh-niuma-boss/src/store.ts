@@ -41,6 +41,8 @@ export const useTaskBookStore = defineStore('task-book', {
     activeRun: null as RunInfo | null,
     /** 轻提示：资源错误、角色点击、写链路结果等；正式对白弹层属后续切片。 */
     notice: '',
+    /** 面板打开期间被挂起的环境提示（走近一点等）；关闭弹层后补显一次。显示计时在 App 层。 */
+    pendingNotice: '',
     /** 任务本开合；打开时暂停键盘移动，竖屏下为全屏弹层。 */
     bookOpen: false,
     /** 派活表单草稿；受理成立后清空，失败与结果不明时保留以便重试。 */

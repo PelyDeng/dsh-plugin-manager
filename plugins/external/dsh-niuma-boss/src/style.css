@@ -111,7 +111,11 @@ html, body, #app { height: 100%; margin: 0; }
 .subtasks .uncertain { margin: 4px 0 0; font-size: 12px; color: #8a6d1f; }
 .subtasks details { margin-top: 4px; font-size: 12px; color: #7a7461; }
 .subtasks pre { margin: 4px 0 0; white-space: pre-wrap; max-height: 120px; overflow-y: auto; }
-.subtasks .text { margin: 6px 0 0; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+.subtasks .text {
+  margin: 6px 0 0; font-size: 13px; white-space: pre-wrap; word-break: break-word;
+  max-height: 7.5em; overflow: hidden; cursor: pointer;
+}
+.subtasks .text[data-expanded='true'] { max-height: none; }
 
 .summary { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; background: #e4ecdf; font-size: 13px; white-space: pre-wrap; }
 .incomplete { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: #f2ead2; font-size: 12px; color: #6b5a24; }
@@ -143,7 +147,11 @@ html, body, #app { height: 100%; margin: 0; }
 .staff header { display: flex; gap: 6px; align-items: baseline; font-size: 12px; color: #55503f; }
 .staff .state { color: #2a5d8f; }
 .staff .action { margin-left: auto; color: #7a7461; }
-.staff .bubble { margin: 4px 0 0; font-size: 12px; color: #22303f; white-space: pre-wrap; word-break: break-word; }
+.staff .bubble {
+  margin: 4px 0 0; font-size: 12px; color: #22303f; white-space: pre-wrap; word-break: break-word;
+  max-height: 3.9em; overflow: hidden; cursor: pointer;
+}
+.staff .bubble[data-expanded='true'] { max-height: none; }
 
 /* 对白面板：普通 NPC 的作者预写台词；员工名牌没有自由输入框。 */
 .dialogue {
