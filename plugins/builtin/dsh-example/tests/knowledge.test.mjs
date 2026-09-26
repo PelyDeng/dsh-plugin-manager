@@ -71,7 +71,8 @@ test('platform entry and configuration questions receive current knowledge plus 
     for (const [path, expected] of [
       ['deploy/build.ps1', /scripts\/release\.mjs/],
       ['deploy/build.sh', /scripts\/release\.mjs/],
-      ['env.conf', /DSH_PORT=7902/],
+      // build-reference 只收录随包分发的模板（env.conf.example），私有 env.conf 不进公开索引。
+      ['env.conf.example', /DSH_PORT=7902/],
       ['packages/plugin-manager/src/site-config.mjs', /process\.getuid/],
       ['doc/framework-configuration.md', /已有.*不覆盖/],
       ['doc/first-deployment.md', /TCP 转发/],
@@ -89,7 +90,7 @@ test('platform entry and configuration questions receive current knowledge plus 
         content += page.content + '\n'; startLine = page.nextLine
       } while (startLine !== null)
       expect(content, path).toMatch(expected)
-      if (path === 'env.conf') {
+      if (path === 'env.conf.example') {
         expect(content).toContain('DSH_CONTAINER_UID=1000')
         expect(content).toMatch(/DSH_IMAGE_PLATFORM="?linux\/amd64"?/)
         expect(content).toMatch(/DEEPSEEK_API_KEY=\s*(?:\n|$)/)

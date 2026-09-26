@@ -64,6 +64,8 @@ test('source snapshot includes all public framework layers and excludes private 
     writeFileSync(join(root, 'packages/plugin-kit/src/types.d.mts'), 'export type Identity = string')
     const publicTemplate = renderFrameworkConfig()
     writeFileSync(join(root, 'env.conf'), publicTemplate)
+    // build-reference 只收随包分发的模板（env.conf.example），私有 env.conf 不进公开索引。
+    writeFileSync(join(root, 'env.conf.example'), publicTemplate)
     writeFileSync(join(root, 'test-report.sh'), '#!/bin/sh\n')
     buildReference(root, output)
     const value = JSON.parse(readFileSync(output))
@@ -75,7 +77,8 @@ test('source snapshot includes all public framework layers and excludes private 
     expect(JSON.stringify(value)).not.toContain('custom-private-app')
     expect(JSON.stringify(value)).not.toContain('private-fixture')
     expect(value.files.some(file => file.path.startsWith('.local/'))).toBe(false)
-    expect(value.files.some(file => file.path === 'env.conf')).toBe(true)
+    expect(value.files.some(file => file.path === 'env.conf.example')).toBe(true)
+    expect(value.files.some(file => file.path === 'env.conf')).toBe(false)
     expect(value.files.some(file => file.path === 'test-report.sh')).toBe(true)
     for (const path of versionTemplates) expect(value.files.find(file => file.path === path).text).toContain('{{FRAMEWORK_VERSION}}')
     expect(value.files.some(file => file.path.startsWith('doc/releases/'))).toBe(false)
@@ -85,8 +88,12 @@ test('source snapshot includes all public framework layers and excludes private 
     }
     for (const marker of ['historical-release-fixture', 'private-entry-fixture', 'unregistered-template-fixture', 'private-template-fixture']) expect(JSON.stringify(value)).not.toContain(marker)
     writeFileSync(join(root, 'env.conf'), publicTemplate.replace('DEEPSEEK_API_KEY=', 'DEEPSEEK_API_KEY=private-fixture'))
-    expect(() => buildReference(root, output)).toThrow('公开env.conf')
+    // 新实现只索引 env.conf.example（env.conf 不进公开索引）；守卫对象转为 example：
+    // 模板含私有密钥时 assertPublicFrameworkConfig 必须拒绝（公开快照只允许受控默认值）。
+    writeFileSync(join(root, 'env.conf.example'), publicTemplate.replace('DEEPSEEK_API_KEY=', 'DEEPSEEK_API_KEY=private-fixture'))
+    expect(() => buildReference(root, output)).toThrow('公开env.conf.example')
     writeFileSync(join(root, 'env.conf'), publicTemplate)
+    writeFileSync(join(root, 'env.conf.example'), publicTemplate)
     writeFileSync(join(root, 'packages/plugin-manager/src/implementation.mjs'), 'x'.repeat(19001))
     expect(() => buildReference(root, output)).toThrow('上限')
     writeFileSync(join(root, 'packages/plugin-manager/src/implementation.mjs'), '// public')

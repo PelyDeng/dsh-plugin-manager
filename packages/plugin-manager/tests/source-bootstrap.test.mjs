@@ -74,7 +74,12 @@ function snapshot(t, version = '11.19.0') {
   const root = resolve(base, 'checkout'), bin = resolve(base, 'bin'), marker = resolve(base, 'install.json');
   mkdirSync(root); mkdirSync(bin);
   // Archive the index so this test also covers a staged candidate before it is committed.
-  const tree = command('git', ['write-tree'], repository);
+  // 临时索引（GIT_INDEX_FILE）：write-tree 会写主仓 .git/index，与其他并发 git 操作竞争
+  // index.lock（生产 flaky 根因，QAb-P0-2）——隔离到测试临时目录；archive 读对象库不受影响。
+  const indexFile = resolve(base, 'bootstrap-index');
+  const gitEnv = { ...process.env, GIT_INDEX_FILE: indexFile };
+  command('git', ['read-tree', 'HEAD'], repository, gitEnv);
+  const tree = command('git', ['write-tree'], repository, gitEnv);
   const archive = resolve(base, 'source.tar');
   // 私有集成库的 external 子树含非 ASCII 文档路径，Windows 上 git archive/tar 会在解包时报
   // "Invalid empty pathname"。bootstrap 只使用框架工具、builtin 源码与公开构建输入，因此排除该
