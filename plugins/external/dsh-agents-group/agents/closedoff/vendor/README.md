@@ -8,7 +8,7 @@
 
 ## 怎么被用到
 
-只在**构建期**用：`scripts/copy-web-assets.mjs` 把包内 `lib/` 拷进 `web/assets/video-player`，页面从 `/assets/video-player/...` 加载（React 前端的 `web-react/src/enclaves/hy-player.ts`）。`vendor/` 不在 `files` 里，不会随插件归档发布；最终产物里带的是拷出去的那份资源。
+只在**构建期**用（子包独立 pack 语境下 vendor 不随归档发布；群组统一 pack 时 vendor tgz 经 files 声明随归档——两种路径都只消费拷出的那份资源）：`scripts/copy-web-assets.mjs` 把包内 `lib/` 拷进 `web/assets/video-player`，页面从 `/assets/video-player/...` 加载（React 前端的 `web-react/src/enclaves/hy-player.ts`）。`vendor/` 不在 `files` 里，不会随插件归档发布；最终产物里带的是拷出去的那份资源。
 
 ## 更新步骤
 

@@ -25,8 +25,8 @@ kind: "package-bundle"
 | `src/presentation.ts` | 本包 | 只读取持久 session event，整理成页面历史、卡片和轨迹点 |
 | `src/fences.ts` | 本包 | 解析围栏标绘，向实时页面与历史恢复提供完整边界和不可展示提示 |
 | `packages/runtime` | 群组运行时 | 会话生命周期、Agent 句柄与工具限制、事件投影、协作入口、存储端口与侧栏入口的唯一实现 |
-| `web/index.html`、`web/app.css` | 本包 | 定义专用页面的语义骨架和视觉规则，不承载业务事件处理 |
-| `web/app.js` | 本包 | 管理会话、SSE 事件、思考与 Tool 状态、卡片、回答操作和历史恢复 |
+| `web-react/index.html`、`web-react/src/styles/` | 本包 | React 页面的语义骨架与视觉规则（Tailwind + web-common token 层），不承载业务事件处理 |
+| `web-react/src/`（AppShell/stores/hooks） | 本包 | React 管理会话、SSE 事件、思考与 Tool 状态、卡片、回答操作和历史恢复 |
 | `web-react/src/enclaves/` | 本包 | Cesium 受控飞地：轨迹三维、串行自动截图、全屏手动截图、设备组和摄像头播放器生命周期 |
 | Agent Loop / LLM | DSH | 组织回合、调用模型、执行 Tool、产生结构化 session event |
 | Session Persistence | DSH | 保存并恢复对话事件，不由本包另建聊天数据库 |
@@ -149,8 +149,8 @@ Agent handle 是进程内资源；销毁 handle 会移除活动对象，不等�
 | --- | --- | --- |
 | 新增或调整业务查询 | `src/specs.ts`、对应测试、persona/README | 否 |
 | 业务认证协议变化 | `src/gateway.ts`、gateway 测试 | 否 |
-| 页面骨架或样式变化 | `web/index.html`、`web/app.css` | 否 |
-| 会话交互或卡片渲染变化 | `web/app.js`、`src/presentation.ts` | 否 |
+| 页面骨架或样式变化 | `web-react/index.html`、`web-react/src/styles/` | 否 |
+| 会话交互或卡片渲染变化 | `web-react/src/`、`src/presentation.ts` | 否 |
 | 会话生命周期、协作入口或存储端口的行为 | `packages/runtime`（群组运行时，机制只实现一次），本包只改 `src/definition.ts` 的声明 | 否 |
 | 本 Agent 的存储配置来源或就绪口径 | `src/runtime.ts` | 否 |
 | 轨迹三维、截图或摄像头变化 | `web-react/src/enclaves/`、`src/presentation.ts` | 否 |

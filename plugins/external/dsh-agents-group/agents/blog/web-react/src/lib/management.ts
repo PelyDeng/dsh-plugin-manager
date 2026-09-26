@@ -3,7 +3,7 @@
  * managementSummary（确认弹窗的摘要文本）、readTaxonomy（全量分页读取）、
  * categoryPath（层级路径）、parentChoices（可选父分类）。
  *
- * 行为断言：web-react/src/__tests__/management.test.ts（旧 tests/management.test.ts
+ * 行为断言：web-react/src/__tests__/management.test.ts（原 tests/management.test.ts 已随批 C1 删码退役，等价用例在 web-react 侧
  * 仍在测旧 web/*.js，删码窗口才收敛——本文件是 React 载体的等价实现）。
  */
 
