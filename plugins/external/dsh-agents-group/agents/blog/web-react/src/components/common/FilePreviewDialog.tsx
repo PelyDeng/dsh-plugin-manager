@@ -7,6 +7,7 @@
  * 打开时的「加载中…」占位与旧码一致。
  */
 import { useEffect, useState } from 'react'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { api, attachmentDownloadUrl } from '../../lib/api.ts'
 import type { AttachmentContent } from '../../lib/types.ts'
 import type { ReactElement } from 'react'
@@ -51,7 +52,7 @@ export function FilePreviewDialog({ target, onClose, onNotice }: {
         setTo(target.range?.to ?? data.range?.to ?? data.parsedUnits ?? 1)
       })
       .catch((error: unknown) => {
-        if (!cancelled) setLoadError(error instanceof Error ? error.message : String(error))
+        if (!cancelled) setLoadError(errorTextOf(error))
       })
     return () => { cancelled = true }
   }, [target])
@@ -74,7 +75,7 @@ export function FilePreviewDialog({ target, onClose, onNotice }: {
       await api.attachmentSelect({ draftId: target.draftId, id: target.id, selected: true, range: { from: Number(from), to: Number(to) } })
       onClose()
     } catch (error) {
-      onNotice(error instanceof Error ? error.message : String(error))
+      onNotice(errorTextOf(error))
     } finally {
       setSaving(false)
     }

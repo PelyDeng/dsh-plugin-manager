@@ -4,6 +4,7 @@
  * （reconcile 后刷新，uncertain 结果就地提示）。
  */
 import { useEffect, useState } from 'react'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { api } from '../../lib/api.ts'
 import { safeHttpUrl } from '../../lib/labels.ts'
 import { loadOperations } from '../../workspace-controller.ts'
@@ -38,7 +39,7 @@ export function OperationsDialog({ open, onClose }: { open: boolean; onClose: ()
       if (result.status === 'uncertain') setMessage(result.message ?? '操作结果待核对')
       await loadOperations()
     } catch (issue) {
-      useSessionStore.getState().setNotice({ text: issue instanceof Error ? issue.message : String(issue), tone: 'error' })
+      useSessionStore.getState().setNotice({ text: errorTextOf(issue), tone: 'error' })
     } finally {
       setReconciling(false)
     }

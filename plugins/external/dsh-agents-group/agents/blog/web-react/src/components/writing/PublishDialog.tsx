@@ -10,6 +10,7 @@
  * - 成功：显示结果行与「查看博客文章」外链；关闭按钮变「完成」。
  */
 import { useState } from 'react'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { confirmPublish, prepareLibraryDelete, preparePublish, reconcilePublish } from '../../workspace-controller.ts'
 import { safeHttpUrl } from '../../lib/labels.ts'
 import { useSessionStore } from '../../stores/session.ts'
@@ -32,7 +33,7 @@ export function PublishDialog(): ReactElement | null {
   const [resultUrl, setResultUrl] = useState('')
 
   const onNotice = (issue: unknown): void =>
-    useSessionStore.getState().setNotice({ text: issue instanceof Error ? issue.message : String(issue), tone: 'error' })
+    useSessionStore.getState().setNotice({ text: errorTextOf(issue), tone: 'error' })
 
   if (prepared === null) return null
   const deleting = prepared.mode === 'delete'
@@ -97,7 +98,7 @@ export function PublishDialog(): ReactElement | null {
       setPhase('confirm')
       setStatus('')
     } catch (issue) {
-      setError(issue instanceof Error ? issue.message : String(issue))
+      setError(errorTextOf(issue))
     }
   }
 

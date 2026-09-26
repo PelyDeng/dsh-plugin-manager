@@ -6,6 +6,7 @@
  * 除外）、Shift+Enter 换行、keyCode 229 视为合成中。粘贴/拖放的文件走上传链路。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { attachmentDownloadUrl } from '../lib/api.ts'
 import { removeAttachment, send, stopAnswer, toggleAttachment, transferredFiles, uploadFiles } from '../chat-controller.ts'
 import { shouldSendChatEnter } from '../lib/keyboard.ts'
@@ -94,7 +95,7 @@ export function Composer({ onNotice }: { onNotice: (text: string) => void }): Re
 
   const submit = (): void => {
     void send(draft).catch((error: unknown) => {
-      setNotice({ text: error instanceof Error ? error.message : String(error), tone: 'error' })
+      setNotice({ text: errorTextOf(error), tone: 'error' })
     })
   }
 
@@ -115,7 +116,7 @@ export function Composer({ onNotice }: { onNotice: (text: string) => void }): Re
       area.setRangeText(text, area.selectionStart, area.selectionEnd, 'end')
       setDraft(area.value)
     }
-    void uploadFiles(dropped).catch((error: unknown) => onNotice(error instanceof Error ? error.message : String(error)))
+    void uploadFiles(dropped).catch((error: unknown) => onNotice(errorTextOf(error)))
   }
 
   const onDrop = (event: DragEvent<HTMLFormElement>): void => {
@@ -123,7 +124,7 @@ export function Composer({ onNotice }: { onNotice: (text: string) => void }): Re
     if (dropped.length === 0) return
     event.preventDefault()
     setDragOver(false)
-    void uploadFiles(dropped).catch((error: unknown) => onNotice(error instanceof Error ? error.message : String(error)))
+    void uploadFiles(dropped).catch((error: unknown) => onNotice(errorTextOf(error)))
   }
 
   return (
@@ -175,7 +176,7 @@ export function Composer({ onNotice }: { onNotice: (text: string) => void }): Re
                   aria-label={`发送 ${file.name}`}
                   onChange={event => {
                     void toggleAttachment(file.id, event.target.checked)
-                      .catch((error: unknown) => onNotice(error instanceof Error ? error.message : String(error)))
+                      .catch((error: unknown) => onNotice(errorTextOf(error)))
                   }}
                 />
                 {file.name}
@@ -200,7 +201,7 @@ export function Composer({ onNotice }: { onNotice: (text: string) => void }): Re
                 disabled={disabled}
                 onClick={() => {
                   void removeAttachment(file.id)
-                    .catch((error: unknown) => onNotice(error instanceof Error ? error.message : String(error)))
+                    .catch((error: unknown) => onNotice(errorTextOf(error)))
                 }}
               >
                 移除
@@ -235,7 +236,7 @@ export function Composer({ onNotice }: { onNotice: (text: string) => void }): Re
           hidden
           onChange={event => {
             void uploadFiles([...event.target.files ?? []])
-              .catch((error: unknown) => onNotice(error instanceof Error ? error.message : String(error)))
+              .catch((error: unknown) => onNotice(errorTextOf(error)))
               .finally(() => { event.target.value = '' })
           }}
         />
@@ -253,7 +254,7 @@ export function Composer({ onNotice }: { onNotice: (text: string) => void }): Re
             title="停止回答"
             disabled={stopping || pickerBusy}
             onClick={() => {
-              void stopAnswer().catch((error: unknown) => onNotice(error instanceof Error ? error.message : String(error)))
+              void stopAnswer().catch((error: unknown) => onNotice(errorTextOf(error)))
             }}
           >
             <DshIcon name="stop" size={14} />

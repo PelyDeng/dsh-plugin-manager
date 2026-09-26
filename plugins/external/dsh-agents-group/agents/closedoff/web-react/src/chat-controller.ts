@@ -18,6 +18,7 @@ import { usePickerStore } from './stores/picker.ts'
 import { isLinkedConversationId, linkedConversationId, setTitlePollTick, useSessionStore } from './stores/session.ts'
 import { useTurnStore } from './stores/turn.ts'
 import type { ChatEvent, ModelSelection } from './lib/types.ts'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 
 /** 在途请求句柄：同一时刻至多一条活动流、一个在途复原（旧码同形态）。 */
 let activeChat: AbortController | null = null
@@ -46,7 +47,7 @@ export async function refreshConversations(append = false): Promise<void> {
     if (ticket !== listTicket) return
     // 身份变化导致的失败不作为列表错误展示（clearPrivateView 已接管界面）。
     if (useSessionStore.getState().identityReady) {
-      useSessionStore.getState().setConversationsError(error instanceof Error ? error.message : String(error))
+      useSessionStore.getState().setConversationsError(errorTextOf(error))
     }
   }
 }
@@ -72,7 +73,7 @@ async function restore(): Promise<void> {
     useBoardStore.getState().setMessages(projectRestoredHistory(data))
   } catch (error) {
     if (controller.signal.aborted || isStale(epoch, view, controller.signal)) return
-    const message = error instanceof Error ? error.message : String(error)
+    const message = errorTextOf(error)
     useSessionStore.getState().setStatus('off', message)
     useBoardStore.getState().setRestoreError(message)
   } finally {
@@ -125,7 +126,7 @@ export async function sendMessage(rawText: string): Promise<void> {
   try {
     modelPayload = usePickerStore.getState().payload()
   } catch (error) {
-    session.setStatus('off', error instanceof Error ? error.message : String(error))
+    session.setStatus('off', errorTextOf(error))
     return
   }
 
@@ -162,7 +163,7 @@ export async function sendMessage(rawText: string): Promise<void> {
     if (controller.signal.aborted) {
       turnState.markAborted()
     } else {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = errorTextOf(error)
       turnState.markError(message)
       // 未受理（没收到 conversation 事件）时把原话回填输入框，不必重打。
       if (!context.admitted && useComposerStore.getState().draft === '') {
@@ -291,7 +292,7 @@ export async function logout(): Promise<void> {
     session.clearPrivateView()
     window.location.replace('/auth')
   } catch (error) {
-    session.setStatus('off', error instanceof Error ? error.message : String(error))
+    session.setStatus('off', errorTextOf(error))
   }
 }
 
@@ -330,7 +331,7 @@ export async function bootstrap(): Promise<void> {
     await restore()
   } catch (error) {
     if (useSessionStore.getState().identityEpoch !== epochAtStart) return
-    useSessionStore.getState().setStatus('off', error instanceof Error ? error.message : String(error))
+    useSessionStore.getState().setStatus('off', errorTextOf(error))
   }
 }
 

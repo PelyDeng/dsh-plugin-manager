@@ -648,6 +648,9 @@ importers:
       '@dsh-agents-group/document-parse':
         specifier: workspace:*
         version: link:../dsh-agents-group/packages/document-parse
+      '@dsh-agents-group/web-common':
+        specifier: workspace:*
+        version: link:../dsh-agents-group/agents/web-common
       '@dsh-plugin-manager/plugin-kit':
         specifier: workspace:*
         version: link:../../../packages/plugin-kit

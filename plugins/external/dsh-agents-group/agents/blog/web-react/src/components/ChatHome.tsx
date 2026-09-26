@@ -11,7 +11,7 @@
  * 菜单：评价备注/重新生成）、思考区接推理译文（ThinkingBlock）。
  */
 import { useEffect, useRef, useState } from 'react'
-import { RichText } from '@dsh-agents-group/web-common'
+import { RichText, errorTextOf } from '@dsh-agents-group/web-common'
 import { branchFromMessage, rateAnswer, send } from '../chat-controller.ts'
 import { chatAttachmentUrl } from '../lib/api.ts'
 import { chatTurns, isOperationCard, isTurnGroup } from '../lib/chat-turns.ts'
@@ -127,7 +127,7 @@ function AssistantTurn({ group, conversationId, feedbackReady, onNotice, onOpenF
     if (!hasMessage || pending || !feedbackReady) return
     setPending(true)
     Promise.resolve(rateAnswer(group.id, rating))
-      .catch((issue: unknown) => onNotice(issue instanceof Error ? issue.message : String(issue)))
+      .catch((issue: unknown) => onNotice(errorTextOf(issue)))
       .finally(() => setPending(false))
   }
 
@@ -135,7 +135,7 @@ function AssistantTurn({ group, conversationId, feedbackReady, onNotice, onOpenF
     if (!hasMessage || pending) return
     setPending(true)
     Promise.resolve(branchFromMessage(group.id, group.seq ?? 0, regenerate))
-      .catch((issue: unknown) => onNotice(issue instanceof Error ? issue.message : String(issue)))
+      .catch((issue: unknown) => onNotice(errorTextOf(issue)))
       .finally(() => setPending(false))
   }
 
@@ -143,7 +143,7 @@ function AssistantTurn({ group, conversationId, feedbackReady, onNotice, onOpenF
     void navigator.clipboard.writeText(group.text).then(() => {
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
-    }).catch((issue: unknown) => onNotice(issue instanceof Error ? issue.message : String(issue)))
+    }).catch((issue: unknown) => onNotice(errorTextOf(issue)))
   }
 
   return (
@@ -531,7 +531,7 @@ export function ChatHome(): ReactElement {
                       className="btn btn--tiny"
                       onClick={() => {
                         void send('请基于前面的资料继续完成上一轮未完成的请求。', request.id)
-                          .catch((error: unknown) => onNotice(error instanceof Error ? error.message : String(error)))
+                          .catch((error: unknown) => onNotice(errorTextOf(error)))
                       }}
                     >
                       继续本次请求

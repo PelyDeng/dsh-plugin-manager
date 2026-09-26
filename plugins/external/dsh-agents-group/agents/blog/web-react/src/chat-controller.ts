@@ -18,6 +18,7 @@
  * snapshot/changed 一律触发 60ms 防抖后全量 chat-history 重拉（snapshot 的 value
  * 不直接渲染，旧码同款：渲染真相以重拉结果为准）；ping 心跳忽略。
  */
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { api, uploadAttachment } from './lib/api.ts'
 import { basePath } from './lib/config.ts'
 import type { FeedbackResult } from './lib/types.ts'
@@ -51,7 +52,7 @@ function staleView(view: number): boolean {
 }
 
 function notifyError(error: unknown): void {
-  useSessionStore.getState().setNotice({ text: error instanceof Error ? error.message : String(error), tone: 'error' })
+  useSessionStore.getState().setNotice({ text: errorTextOf(error), tone: 'error' })
 }
 
 // ── 订阅-快照：连接与消息分发 ─────────────────────────────────────────────
@@ -238,7 +239,7 @@ export async function refreshConversations(append = false): Promise<void> {
     if (ticket !== listTicket) return
     // 旧侧栏 refresh 的 catch：非追加失败清空列表再报错（不留过期行误导点击）；
     // 追加失败保留已加载内容，只把错误落到状态行。
-    const message = error instanceof Error ? error.message : String(error)
+    const message = errorTextOf(error)
     if (append) useConversationStore.getState().setConversationsError(message)
     else useConversationStore.setState({ conversations: [], conversationsOffset: null, conversationsError: message })
   }
@@ -377,7 +378,7 @@ export async function refreshImageCapability(): Promise<void> {
   } catch (error) {
     if (!staleView(view)) {
       useComposerStore.getState().setImageCapability({
-        message: `暂时无法检查图片模型：${error instanceof Error ? error.message : String(error)}`,
+        message: `暂时无法检查图片模型：${errorTextOf(error)}`,
         warning: true,
       })
     }
@@ -456,7 +457,7 @@ export async function runOperationAction(operation: OperationRecord, action: 'co
       ...(action === 'confirm' ? { consumeSavedDraft } : {}),
     })
   } catch (error) {
-    operationErrors.set(operation.id, error instanceof Error ? error.message : String(error))
+    operationErrors.set(operation.id, errorTextOf(error))
   } finally {
     operationPending.delete(operation.id)
     if (!staleView(view)) {

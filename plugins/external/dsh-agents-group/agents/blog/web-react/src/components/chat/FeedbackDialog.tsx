@@ -6,6 +6,7 @@
  * （旧 saveFeedback 的 target.version 回写段）；成功后关闭并刷新。
  */
 import { useEffect, useState } from 'react'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { saveFeedbackDialog } from '../../chat-controller.ts'
 import { useConversationStore } from '../../stores/conversation.ts'
 import type { ReactElement } from 'react'
@@ -48,7 +49,7 @@ export function FeedbackDialog({ target, onClose }: {
       operation,
     })
       .then(() => onClose())
-      .catch((issue: unknown) => setError(issue instanceof Error ? issue.message : String(issue)))
+      .catch((issue: unknown) => setError(errorTextOf(issue)))
       .finally(() => setBusy(false))
   }
 

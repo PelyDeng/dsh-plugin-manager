@@ -1,5 +1,5 @@
 /** Synchronize the framework release unit; custom plugins keep their own versions. */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -99,6 +99,104 @@ function checkHostAnchors(root, read, framework) {
   return problems;
 }
 
+// —— 宿主 peer 版本批量写（QAa-债-3 短期项：host <版本> 子命令）——
+// 宿主内部包没有稳定插件 API 门面，各 workspace 包以精确版本 pin 声明 @deepseek-ai/dsh-*
+// optional peer；宿主升级时用本子命令一处改、处处写（package.json 的 peer/dev pin +
+// 供应链豁免并集并列新版本），再以 check 兜底。deepseek-harness 子模块源码树不碰。
+const hostVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$/;
+
+// 按 pnpm-workspace.yaml 的 packages 模式展开 workspace 包清单；模式形如
+// 'plugins/external/*/agents/*'，通配段展开目录、最后一段 * 是包目录层。
+// 子模块与 tests fixture 不在任何模式内，天然不进清单。
+function workspaceManifests(root, patterns) {
+  const manifests = new Set();
+  for (const pattern of patterns) {
+    const segments = pattern.split('/');
+    if (segments.pop() !== '*') throw new Error(`不支持的 workspace 模式（结尾必须是 *）：${pattern}`);
+    let parents = [''];
+    for (const segment of segments) {
+      const next = [];
+      for (const dir of parents) {
+        for (const entry of readdirSync(resolve(root, dir || '.'), { withFileTypes: true })) {
+          if (entry.isDirectory() && (segment === '*' || entry.name === segment)) {
+            next.push(dir ? `${dir}/${entry.name}` : entry.name);
+          }
+        }
+      }
+      parents = next;
+    }
+    // parents 是 * 包目录层的父目录；每个直接子目录含 package.json 即一个 workspace 包。
+    for (const dir of parents) {
+      for (const entry of readdirSync(resolve(root, dir || '.'), { withFileTypes: true })) {
+        if (entry.isDirectory() && existsSync(resolve(root, dir, entry.name, 'package.json'))) {
+          manifests.add(`${dir ? `${dir}/` : ''}${entry.name}/package.json`);
+        }
+      }
+    }
+  }
+  return [...manifests].sort();
+}
+
+export function hostPeerVersions(root, { version, dryRun = false } = {}) {
+  if (!hostVersionPattern.test(version)) {
+    throw new Error(`宿主版本必须是 X.Y.Z 或 X.Y.Z-预发布，收到：${JSON.stringify(version)}`);
+  }
+  const read = name => readFileSync(resolve(root, name), 'utf8').replace(/\r\n/g, '\n');
+  const yamlName = 'pnpm-workspace.yaml';
+  const yamlText = read(yamlName);
+  // 只取 packages: 块内的清单模式（豁免清单行同样是两空格缩进的 - '...'，不能混入）。
+  const yamlLines = yamlText.split('\n');
+  const start = yamlLines.indexOf('packages:');
+  if (start < 0) throw new Error(`pnpm-workspace.yaml 缺少 packages 块`);
+  const patterns = [];
+  for (let index = start + 1; index < yamlLines.length; index += 1) {
+    const line = yamlLines[index];
+    if (line !== '' && !line.startsWith(' ')) break;
+    const match = line.match(/^ {2}- '([^']+)'$/);
+    if (match) patterns.push(match[1]);
+  }
+  const planned = new Map();
+  const lines = [];
+  let pins = 0, pinsDone = 0, excludes = 0, excludesDone = 0;
+  // 依赖字段里的精确 pin 文本级重写（保引号保缩进，diff 只含版本字符串）；
+  // ^/~ 区间、workspace: 协议与已等于目标值的条目原样保留。
+  for (const name of workspaceManifests(root, patterns)) {
+    const rewritten = read(name).replace(/("@deepseek-ai\/dsh-[a-z0-9.-]+":\s*")([^"]+)(")/g, (whole, head, old) => {
+      if (!hostVersionPattern.test(old)) return whole;
+      if (old === version) {
+        pinsDone += 1;
+        return whole;
+      }
+      const pkg = head.replace(/^"/, '').replace(/":\s*"$/, '');
+      lines.push(`  ${name}  ${pkg}: ${old} → ${version}`);
+      pins += 1;
+      return `${head}${version}"`;
+    });
+    if (rewritten !== read(name)) planned.set(name, rewritten);
+  }
+  // 豁免清单是「并集」语义：追加目标版本、保留历史版本（minimumReleaseAge 冷静期
+  // 需要旧版本仍在清单里），引号风格与缩进逐行保留。
+  const yamlRewritten = yamlText.replace(/^(\s*-\s*)(['"])(@deepseek-ai\/[^'"]+)@([^'"]+)\2$/gm, (whole, lead, quote, pkg, versions) => {
+    if (versions.split(' || ').includes(version)) {
+      excludesDone += 1;
+      return whole;
+    }
+    lines.push(`  ${yamlName}  ${pkg} 豁免并列 ${version}`);
+    excludes += 1;
+    return `${lead}${quote}${pkg}@${versions} || ${version}${quote}`;
+  });
+  if (yamlRewritten !== yamlText) planned.set(yamlName, yamlRewritten);
+  const changed = [...planned].filter(([name, content]) => read(name) !== content);
+  if (!dryRun) for (const [name, content] of changed) writeFileSync(resolve(root, name), content);
+  // 子模块版本是宿主侧唯一事实源（check 的 checkHostAnchors 据此核验豁免清单），
+  // 目标版本与它不一致时只提示不阻断：演练与分步升级都允许先跑 host。
+  const hostManifest = 'deepseek-harness/package.json';
+  const note = existsSync(resolve(root, hostManifest)) && JSON.parse(read(hostManifest)).version !== version
+    ? `提示：deepseek-harness 子模块当前版本 ${JSON.parse(read(hostManifest)).version}，与目标 ${version} 不一致；正常升级流程应先升级子模块再运行 host。`
+    : '';
+  return { version, dryRun, files: planned.size, pins, pinsDone, excludes, excludesDone, lines, note };
+}
+
 export function frameworkVersion(root, { mode = 'check', version } = {}) {
   if (!['check', 'sync', 'set'].includes(mode) || (mode !== 'set' && version !== undefined)) {
     throw new Error('用法：node scripts/version.mjs check | sync | set X.Y.Z');
@@ -138,10 +236,23 @@ export function frameworkVersion(root, { mode = 'check', version } = {}) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const [mode = 'check', version, ...extra] = process.argv.slice(2);
-    if (extra.length) throw new Error('用法：node scripts/version.mjs check | sync | set X.Y.Z');
-    const result = frameworkVersion(fileURLToPath(new URL('../', import.meta.url)), { mode, version });
-    console.log(`框架 ${result.version}：${mode === 'check' ? '版本与文档校验通过' : `同步 ${result.changed.length} 个文件`}。`);
+    const args = process.argv.slice(2);
+    const dryRun = args.includes('--dry-run');
+    const positional = args.filter(argument => argument !== '--dry-run');
+    const [mode = 'check', version, ...extra] = positional;
+    if (extra.length) throw new Error('用法：node scripts/version.mjs check | sync | set X.Y.Z | host <版本> [--dry-run]');
+    const root = fileURLToPath(new URL('../', import.meta.url));
+    if (mode === 'host') {
+      if (!version) throw new Error('用法：node scripts/version.mjs host <版本> [--dry-run]');
+      const result = hostPeerVersions(root, { version, dryRun });
+      const summary = `扫描 peer/dev 精确 pin 共 ${result.pins + result.pinsDone} 处、豁免行共 ${result.excludes + result.excludesDone} 行；`
+        + `${result.dryRun ? '待改' : '已改'} ${result.pins + result.excludes} 处（pin ${result.pins}、豁免并列 ${result.excludes}），涉及 ${result.files} 个文件${result.dryRun ? '；dry-run 未写入' : ''}。`;
+      console.log([`宿主 ${result.version}：`, ...result.lines, result.note, summary].filter(part => part !== '').join('\n'));
+    } else {
+      if (dryRun) throw new Error('--dry-run 只用于 host 子命令。');
+      const result = frameworkVersion(root, { mode, version });
+      console.log(`框架 ${result.version}：${mode === 'check' ? '版本与文档校验通过' : `同步 ${result.changed.length} 个文件`}。`);
+    }
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

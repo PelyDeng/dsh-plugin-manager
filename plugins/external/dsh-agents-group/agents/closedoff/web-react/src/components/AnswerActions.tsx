@@ -12,6 +12,7 @@ import { legacyCopy } from '../lib/legacy-copy.ts'
 import type { ReactElement } from 'react'
 import type { TurnMeta } from '../lib/types.ts'
 import { DshIcon } from './DshIcon.tsx'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 
 export type Rating = 'positive' | 'negative'
 
@@ -55,7 +56,7 @@ export function AnswerActions({ meta, answerText, conversationId, rating, feedba
       setCopied(true)
       setTimeout(() => setCopied(false), 1000)
     }).catch((error: unknown) => {
-      onNotice(error instanceof Error ? error.message : '复制失败', true)
+      onNotice(errorTextOf(error, '复制失败'), true)
     })
   }
 
@@ -64,7 +65,7 @@ export function AnswerActions({ meta, answerText, conversationId, rating, feedba
     setPending(true)
     api.feedback(conversationId, meta.messageId ?? '', value)
       .then(result => onRated(result.rating))
-      .catch((error: unknown) => onNotice(error instanceof Error ? error.message : '反馈失败', true))
+      .catch((error: unknown) => onNotice(errorTextOf(error, '反馈失败'), true))
       .finally(() => setPending(false))
   }
 
@@ -73,7 +74,7 @@ export function AnswerActions({ meta, answerText, conversationId, rating, feedba
     setPending(true)
     api.branch(conversationId, meta.branchSeq)
       .then(result => onBranch(result.conversationId))
-      .catch((error: unknown) => onNotice(error instanceof Error ? error.message : '创建分支失败', true))
+      .catch((error: unknown) => onNotice(errorTextOf(error, '创建分支失败'), true))
       .finally(() => setPending(false))
   }
 

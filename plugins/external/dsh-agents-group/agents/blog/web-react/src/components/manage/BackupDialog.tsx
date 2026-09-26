@@ -14,6 +14,7 @@
  *   提示「恢复任务已提交，点击刷新查看状态；生产恢复期间服务会短暂停止。」。
  */
 import { useEffect, useState } from 'react'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { api } from '../../lib/api.ts'
 import type { BackupStatus, RestoreTicket } from '../../lib/types.ts'
 import type { FormEvent, ReactElement } from 'react'
@@ -66,7 +67,7 @@ export function BackupDialog({ open, onClose }: {
       setWeekly(data.schedule.weekly)
       setStatusLine(renderStatusLine(data))
     } catch (issue) {
-      setError(issue instanceof Error ? issue.message : String(issue))
+      setError(errorTextOf(issue))
     }
   }
 
@@ -81,7 +82,7 @@ export function BackupDialog({ open, onClose }: {
     try {
       await fn()
     } catch (issue) {
-      setError(issue instanceof Error ? issue.message : String(issue))
+      setError(errorTextOf(issue))
     } finally {
       setBusy(false)
     }
@@ -119,7 +120,7 @@ export function BackupDialog({ open, onClose }: {
         setRestore(null)
         setStatusLine('恢复任务已提交，点击刷新查看状态；生产恢复期间服务会短暂停止。')
       } catch (issue) {
-        setRestoreError(issue instanceof Error ? issue.message : String(issue))
+        setRestoreError(errorTextOf(issue))
       } finally {
         setBusy(false)
       }

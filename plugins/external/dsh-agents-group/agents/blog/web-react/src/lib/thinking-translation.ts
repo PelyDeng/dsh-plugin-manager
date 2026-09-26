@@ -14,6 +14,7 @@
  * - 会话切换 reset：在途请求 abort、队列与缓存清空（旧 reset 的 epoch++ 语义）。
  */
 import { create } from 'zustand'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { basePath } from './config.ts'
 
 export interface ReadingCopy {
@@ -150,7 +151,7 @@ async function load(key: string, conversationId: string, sourceId: string, set: 
       const current = state.entries[key]
       if (current === undefined) return {}
       const aborted = error instanceof DOMException && error.name === 'AbortError'
-      return aborted ? {} : { entries: { ...state.entries, [key]: { ...current, state: 'failed', error: error instanceof Error ? error.message : String(error) } } }
+      return aborted ? {} : { entries: { ...state.entries, [key]: { ...current, state: 'failed', error: errorTextOf(error) } } }
     })
   } finally {
     controllers.delete(key)

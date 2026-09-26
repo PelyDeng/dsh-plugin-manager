@@ -19,7 +19,7 @@ import { isMobileViewport } from '../lib/viewport.ts'
 import { useSessionStore } from '../stores/session.ts'
 import type { ConversationItem } from '../lib/types.ts'
 import type { ReactElement } from 'react'
-import { Icon, announce } from '@dsh-agents-group/web-common'
+import { Icon, announce, errorTextOf } from '@dsh-agents-group/web-common'
 
 /** 多选上限（旧码 check.disabled=!checked&&selected.size>=100 口径）。 */
 const MULTI_SELECT_LIMIT = 100
@@ -350,7 +350,7 @@ function ExportDialog({ ids, onDone }: { ids: string[]; onDone: () => void }): R
       } catch (caught) {
         if (!cancelled) {
           setPreview('')
-          setError(caught instanceof Error ? caught.message : String(caught))
+          setError(errorTextOf(caught))
         }
       }
     }

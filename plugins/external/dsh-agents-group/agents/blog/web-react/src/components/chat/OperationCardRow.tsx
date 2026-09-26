@@ -19,7 +19,7 @@ import { safeHttpUrl } from '../../lib/labels.ts'
 import { useConversationStore } from '../../stores/conversation.ts'
 import type { OperationRecord } from '../../lib/types.ts'
 import type { ReactElement } from 'react'
-import { RichText } from '@dsh-agents-group/web-common'
+import { RichText, errorTextOf } from '@dsh-agents-group/web-common'
 
 /** 状态行文案（旧 operationCard 的 status 字典；prepared 的三态在组件内分流）。 */
 function statusText(op: OperationRecord, busy: boolean): string {
@@ -62,7 +62,7 @@ export function OperationCardRow({ operation, unassociated, onNotice }: {
     if (pending) return
     setPending(true)
     void runOperationAction(operation, action, consume)
-      .catch((issue: unknown) => onNotice(issue instanceof Error ? issue.message : String(issue)))
+      .catch((issue: unknown) => onNotice(errorTextOf(issue)))
       .finally(() => setPending(false))
   }
 

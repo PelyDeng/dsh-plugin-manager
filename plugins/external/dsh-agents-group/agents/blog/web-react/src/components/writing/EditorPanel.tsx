@@ -10,7 +10,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import DOMPurify from 'dompurify'
-import { RichText } from '@dsh-agents-group/web-common'
+import { RichText, errorTextOf } from '@dsh-agents-group/web-common'
 import { createDraft, flush, getTextState, markChanged, preparePublish, setTextState, updateCursor, uploadAndInsertImage } from '../../workspace-controller.ts'
 import { useSessionStore } from '../../stores/session.ts'
 import { useWorkspaceStore } from '../../stores/workspace.ts'
@@ -64,7 +64,7 @@ export function EditorPanel(): ReactElement {
   const imageInputRef = useRef<HTMLInputElement>(null)
 
   const onNotice = (issue: unknown): void =>
-    useSessionStore.getState().setNotice({ text: issue instanceof Error ? issue.message : String(issue), tone: 'error' })
+    useSessionStore.getState().setNotice({ text: errorTextOf(issue), tone: 'error' })
 
   // 草稿切换时从镜像回填（旧 fill 的编辑器装配段）。
   useEffect(() => {

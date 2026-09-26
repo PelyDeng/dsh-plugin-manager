@@ -23,6 +23,7 @@
  * 空标题错误文案「请输入标题」对齐旧码。
  */
 import { useEffect, useRef, useState } from 'react'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { activate, newConversation, refreshConversations } from '../chat-controller.ts'
 import { api } from '../lib/api.ts'
 import { conversationMarkdown, conversationRowVisible, exportFileName, historyGroup } from '../lib/history.ts'
@@ -145,7 +146,7 @@ export function HistoryDrawer({ open, onClose, currentId }: {
       await refreshConversations()
       return true
     } catch (issue) {
-      setNotice(issue instanceof Error ? issue.message : String(issue))
+      setNotice(errorTextOf(issue))
       return false
     } finally {
       setMutating(false)
@@ -246,7 +247,7 @@ export function HistoryDrawer({ open, onClose, currentId }: {
       setExportText(all.join('\n\n---\n\n'))
     } catch (issue) {
       setExportText('')
-      setExportNote(issue instanceof Error ? issue.message : String(issue))
+      setExportNote(errorTextOf(issue))
     }
   }
 
@@ -404,7 +405,7 @@ export function HistoryDrawer({ open, onClose, currentId }: {
                             if (window.matchMedia('(max-width: 960px)').matches) onClose()
                             // 旧码同款：回答进行中也可切换（activate 原子动作断流清面板，
                             // 迟到数据由 viewToken 守卫丢弃）。
-                            void activate(item.id).catch(issue => setNotice(issue instanceof Error ? issue.message : String(issue)))
+                            void activate(item.id).catch(issue => setNotice(errorTextOf(issue)))
                           }}
                         >
                           {rowTitle}

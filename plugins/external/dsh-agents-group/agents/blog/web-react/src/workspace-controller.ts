@@ -15,6 +15,7 @@
  *   先查 operations 的状态再决定给「核对」还是「重新预览」。
  * - 任务轮询 900ms（旧 poll），完成后回读草稿刷新候选稿。
  */
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { api, uploadAttachment } from './lib/api.ts'
 import type { BlogDraft, Proposal } from './lib/types.ts'
 import { useSessionStore } from './stores/session.ts'
@@ -43,7 +44,7 @@ export function draftStorageKey(userId: string): string {
 }
 
 function notify(error: unknown): void {
-  useSessionStore.getState().setNotice({ text: error instanceof Error ? error.message : String(error), tone: 'error' })
+  useSessionStore.getState().setNotice({ text: errorTextOf(error), tone: 'error' })
 }
 
 // ── 内容装配（旧 content()：编辑器 DOM 值 → 保存载荷）──────────────────────
@@ -522,14 +523,14 @@ async function publishSucceeded(prepared: PreparedPublish, result: { status: str
       await loadList()
     }
   } catch (error) {
-    notify(`操作已成功，但列表或工作台刷新失败：${error instanceof Error ? error.message : String(error)}`)
+    notify(`操作已成功，但列表或工作台刷新失败：${errorTextOf(error)}`)
   }
   return result.result?.url ?? ''
 }
 
 /** 发布确认/核对的失败分流（旧 checkPublishFailure）。 */
 async function publishFailed(prepared: PreparedPublish, error: unknown): Promise<'reconcile' | 'retry'> {
-  const message = error instanceof Error ? error.message : String(error)
+  const message = errorTextOf(error)
   notify(new Error(message))
   let state = ''
   try {

@@ -10,6 +10,7 @@
 import { create } from 'zustand'
 import { api } from '../lib/api.ts'
 import type { ModelCatalog, ModelSelection } from '../lib/types.ts'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 
 export interface PickerState {
   catalog: ModelCatalog | null
@@ -56,7 +57,7 @@ export const usePickerStore = create<PickerState>((set, get) => ({
       }))
     } catch (error) {
       if (version !== get().epoch) return
-      set({ ready: false, errorText: error instanceof Error ? error.message : String(error) })
+      set({ ready: false, errorText: errorTextOf(error) })
     }
   },
 

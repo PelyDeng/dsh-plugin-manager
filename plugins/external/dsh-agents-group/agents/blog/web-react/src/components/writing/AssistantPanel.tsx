@@ -17,7 +17,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import DOMPurify from 'dompurify'
-import { RichText } from '@dsh-agents-group/web-common'
+import { RichText, errorTextOf } from '@dsh-agents-group/web-common'
 import { uploadAttachment } from '../../lib/api.ts'
 import { safeHttpUrl } from '../../lib/labels.ts'
 import {
@@ -87,7 +87,7 @@ export function AssistantPanel(): ReactElement {
   const thinkingFollowRef = useRef(true)
 
   const onNotice = (issue: unknown): void =>
-    useSessionStore.getState().setNotice({ text: issue instanceof Error ? issue.message : String(issue), tone: 'error' })
+    useSessionStore.getState().setNotice({ text: errorTextOf(issue), tone: 'error' })
 
   // 切稿回填指令（旧 instructions Map）。
   useEffect(() => {

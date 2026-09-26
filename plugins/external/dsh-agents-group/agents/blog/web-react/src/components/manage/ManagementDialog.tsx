@@ -15,6 +15,7 @@
  *   失败/无回执给「核对执行结果」（reconcile），提示勿重复创建。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { api } from '../../lib/api.ts'
 import { categoryPath, managementSummary, parentChoices, readTaxonomy, type ManagementPreview, type TaxonomyItem } from '../../lib/management.ts'
 import { loadMetadata } from '../../workspace-controller.ts'
@@ -104,7 +105,7 @@ export function ManagementDialog({ open, initialKind = 'category', articleCid = 
       }
     } catch (issue) {
       if (current !== loadEpoch.current) return
-      setError(issue instanceof Error ? issue.message : String(issue))
+      setError(errorTextOf(issue))
     } finally {
       if (current === loadEpoch.current) setLoading(false)
     }
@@ -193,7 +194,7 @@ export function ManagementDialog({ open, initialKind = 'category', articleCid = 
         })
       }
     } catch (issue) {
-      setError(issue instanceof Error ? issue.message : String(issue))
+      setError(errorTextOf(issue))
     } finally {
       setEditorBusy(false)
     }
@@ -251,7 +252,7 @@ export function ManagementDialog({ open, initialKind = 'category', articleCid = 
         setConfirmMessage('暂未取得成功回执，请稍后核对，勿重复创建。')
       }
     } catch (issue) {
-      setConfirmError(issue instanceof Error ? issue.message : String(issue))
+      setConfirmError(errorTextOf(issue))
     } finally {
       setConfirmBusy(false)
     }
@@ -428,7 +429,7 @@ export function ManagementDialog({ open, initialKind = 'category', articleCid = 
                   <p>文章 {row.cid} · {STATUS_LABEL[row.status ?? ''] ?? row.status} · {row.text}</p>
                   <div className="blg-management-row-actions">
                     <button type="button" className="btn btn--tiny" onClick={() => { void editComment(row) }}>编辑</button>
-                    <button type="button" className="btn btn--tiny btn--danger" onClick={() => { void submitPrepare({ operation: 'delete', id: row.id }).catch(issue => setError(issue instanceof Error ? issue.message : String(issue))) }}>删除</button>
+                    <button type="button" className="btn btn--tiny btn--danger" onClick={() => { void submitPrepare({ operation: 'delete', id: row.id }).catch(issue => setError(errorTextOf(issue))) }}>删除</button>
                     <button type="button" className="btn btn--tiny" onClick={() => { void editComment(null).then(() => setEditing(current => current === null ? current : { ...current, values: { ...current.values, cid: String(row.cid), parent: String(row.id) } })) }}>回复</button>
                   </div>
                 </section>
@@ -456,13 +457,13 @@ export function ManagementDialog({ open, initialKind = 'category', articleCid = 
                     : { operation: 'create', fields: values })
                   setDirty(false)
                 } catch (issue) {
-                  setError(issue instanceof Error ? issue.message : String(issue))
+                  setError(errorTextOf(issue))
                 } finally {
                   setEditorBusy(false)
                 }
               }}
               onDelete={editing.id !== null
-                ? () => { void submitPrepare({ kind, operation: 'delete', id: editing.id, version: editing.version }).catch(issue => setError(issue instanceof Error ? issue.message : String(issue))) }
+                ? () => { void submitPrepare({ kind, operation: 'delete', id: editing.id, version: editing.version }).catch(issue => setError(errorTextOf(issue))) }
                 : undefined}
             />
           )}
@@ -491,7 +492,7 @@ export function ManagementDialog({ open, initialKind = 'category', articleCid = 
               setDirty(false)
               resetEditor()
             } catch (issue) {
-              setError(issue instanceof Error ? issue.message : String(issue))
+              setError(errorTextOf(issue))
             }
           }}
         />
@@ -682,7 +683,7 @@ function CommentEditor({ editing, onCancel, onSubmit }: {
           url: values.url ?? '',
           status: values.status ?? 'waiting',
           ...(editing.id !== null ? {} : { cid: Number(values.cid ?? 0), parent: values.parent === '' || values.parent === undefined ? 0 : Number(values.parent) }),
-        }).catch((issue: unknown) => setSubmitError(issue instanceof Error ? issue.message : String(issue))).finally(() => setSubmitting(false))
+        }).catch((issue: unknown) => setSubmitError(errorTextOf(issue))).finally(() => setSubmitting(false))
       }}>
         {field('author', '作者', true)}
         {field('text', '内容', true, 'textarea')}

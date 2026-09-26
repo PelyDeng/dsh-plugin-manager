@@ -29,6 +29,7 @@
 import type { MapConfig } from '../lib/config.ts'
 import type { FenceGeometry, TrackDeviceGroup, TrackPoint } from '../lib/types.ts'
 import { fencePoints, geoPoint } from '../lib/trajectory-data.ts'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 
 // ── window 形状（三方库不 bundling 不迁移，静态服务直引；只声明用到的面）────
 
@@ -342,7 +343,7 @@ export class TrackMapSession {
       this.destroyMap()
       this.container.setAttribute('aria-busy', 'false')
       this.container.dataset.snapshotState = 'error'
-      const message = error instanceof Error ? error.message : String(error)
+      const message = errorTextOf(error)
       onError(`三维截图生成失败：${message}`, () => { this.mountSnapshot(payload, callId, onError) })
     }
   }
@@ -452,7 +453,7 @@ export class TrackMapSession {
       if (this.expired(generation)) return
       this.destroyMap()
       this.container.setAttribute('aria-busy', 'false')
-      const message = error instanceof Error ? error.message : String(error)
+      const message = errorTextOf(error)
       onError(`地图加载失败：${message}`, () => { void this.mountInteractive(payload, callId, onError) })
       this.setCaptureState(false, '三维地图加载失败，请重试', true)
     }
@@ -563,7 +564,7 @@ export class TrackMapSession {
       this.setCaptureState(true, '截图已开始保存到本机，三维视图保持不变', false)
     } catch (error) {
       if (!this.isSuperseded(generation, slots, viewerAtStart)) {
-        const message = error instanceof Error ? error.message : String(error)
+        const message = errorTextOf(error)
         this.setCaptureState(true, `截图失败：${message}`, true)
       }
     } finally {

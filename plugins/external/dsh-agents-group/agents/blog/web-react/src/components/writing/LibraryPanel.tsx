@@ -3,6 +3,7 @@
  * 列表行（已发布/草稿徽标、未发布修改）、删除（走 prepareLibraryDelete 确认链路）、
  * 旧版内容迁移入口。
  */
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { importArticle, openDraft, prepareLibraryDelete, loadList, scheduleSearch } from '../../workspace-controller.ts'
 import { api } from '../../lib/api.ts'
 import { createDraft } from '../../workspace-controller.ts'
@@ -29,7 +30,7 @@ export function LibraryPanel(): ReactElement {
     try {
       await importArticle(item.cid, item.hasSavedDraft === true ? 'savedDraft' : 'published')
     } catch (issue) {
-      onNotice(issue instanceof Error ? issue.message : String(issue))
+      onNotice(errorTextOf(issue))
     }
   }
 
@@ -37,7 +38,7 @@ export function LibraryPanel(): ReactElement {
     try {
       await prepareLibraryDelete(item.cid)
     } catch (issue) {
-      onNotice(issue instanceof Error ? issue.message : String(issue))
+      onNotice(errorTextOf(issue))
     }
   }
 
@@ -49,7 +50,7 @@ export function LibraryPanel(): ReactElement {
       if (draft !== null && !dirty) await openDraft(draft.id)
       await loadList()
     } catch (issue) {
-      onNotice(issue instanceof Error ? issue.message : String(issue))
+      onNotice(errorTextOf(issue))
     }
   }
 

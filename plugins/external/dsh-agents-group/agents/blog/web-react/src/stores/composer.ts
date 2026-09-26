@@ -7,6 +7,7 @@
  * （旧 inputs Map）都发生在 controller 层。
  */
 import { create } from 'zustand'
+import { errorTextOf } from '@dsh-agents-group/web-common'
 import { api } from '../lib/api.ts'
 import type { AttachmentItem, ModelCatalog, ModelSelection } from '../lib/types.ts'
 
@@ -136,7 +137,7 @@ export const usePickerStore = create<PickerState>((set, get) => ({
       }))
     } catch (error) {
       if (version !== get().epoch) return
-      set({ ready: false, errorText: error instanceof Error ? error.message : String(error) })
+      set({ ready: false, errorText: errorTextOf(error) })
     }
   },
 
