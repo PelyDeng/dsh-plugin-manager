@@ -758,7 +758,9 @@ export class GameWorld {
           // F6：把 NPC 当前格按墙写入碰撞副本、用一次性 finder 寻路——路径绕开人而不是穿过去，
           // 起点豁免（老板自己所在格必须可出发）；副本寻路也顺带不再与员工的寻路互抢同一 finder。
           const grid = Array.from({ length: this.room.height }, (_, y) => this.room.collision.slice(y * this.room.width, (y + 1) * this.room.width))
-          for (const actor of world.sceneActors) grid[actor.cell[1]][actor.cell[0]] = 1
+          for (const actor of world.sceneActors) {
+            if (actor.phase !== 'walking') grid[actor.cell[1]][actor.cell[0]] = 1
+          }
           grid[from.y][from.x] = 0
           const finder = new Pathfinder(grid)
           const generation = ++this.pathGeneration
@@ -780,15 +782,16 @@ export class GameWorld {
       }
 
       /**
-       * 老板可入格 = 碰撞可走且不与其他角色同格（F6 软阻挡：只拦老板；员工到位是
-       * 脚本化落格，不经此判定，不存在互堵）。老板当前格恒放行——stepPosition 的
-       * 首个采样点就在当前格内，不能把它当阻挡。
+       * 老板可入格 = 碰撞可走且不与「站定/就座」的其他角色同格（F6 软阻挡：只拦老板；
+       * 员工到位是脚本化落格，不经此判定，不存在互堵）。行走中的员工是瞬态位置，
+       * 不当作阻挡——否则老板会被逐格走动的员工无端卡住。老板当前格恒放行——
+       * stepPosition 的首个采样点就在当前格内，不能把它当阻挡。
        */
       private movableTo(x: number, y: number): boolean {
         if (!this.finder.walkable(x, y)) return false
         const same = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
         if (same([x, y] as Cell, [Math.floor(this.player.x / TILE), Math.floor(this.player.y / TILE)])) return true
-        return !world.sceneActors.some(actor => same([x, y] as Cell, actor.cell))
+        return !world.sceneActors.some(actor => actor.phase !== 'walking' && same([x, y] as Cell, actor.cell))
       }
 
       intentDown(code: string): void {
