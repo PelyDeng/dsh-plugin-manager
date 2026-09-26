@@ -120,6 +120,12 @@ const SCENE_BACKDROP: Record<string, string> = {
   street: '#3a3440',
   cafe: '#452f22',
 }
+/** 传送门色相按目标地图（F9-1）：通向办公楼冷蓝、商业街暖橙、咖啡店咖啡棕。 */
+const PORTAL_COLORS: Record<string, number> = {
+  office: 0x4a90d9,
+  street: 0xd99a4a,
+  cafe: 0xb0703c,
+}
 /** 老板速度：balance_params.yaml#movement.boss_walk_tiles_per_sec = 4.0 格/秒，与 8fps 行走帧同步。 */
 const SPEED = 4 * TILE
 /** 员工速度：balance_params.yaml#movement.staff_walk/return_tiles_per_sec（3.0 / 2.5 格每秒）。 */
@@ -596,6 +602,10 @@ export class GameWorld {
         // 相机背景即「地图外」的颜色：按地图主题设定（office 保持冷白，street/cafe 用
         // 暗色包边），与 .shell 的 --stage-bg 一致——铺不满视口的轴不再露出刺眼空白。
         this.cameras.main.setBackgroundColor(SCENE_BACKDROP[this.room.id] ?? '#dbe9f4')
+        this.drawPortals()
+        // 切图/首屏淡入；传送门回到待命态（data-portal）。
+        this.cameras.main.fadeIn(200, 0, 0, 0)
+        this.setPortalState('idle')
         this.room.draws.forEach(draw => {
           this.add.image(draw.x, draw.y, this.room.id, draw.frame)
             .setOrigin(0).setDisplaySize(draw.width, draw.height).setDepth(draw.depth)
@@ -867,7 +877,12 @@ export class GameWorld {
         if (changed) this.tryPortal()
       }
 
-      /** 站在触发格上且入口已武装：开始切图；加载期间不响应第二次触发。 */
+      /**
+       * 站在触发格上且入口已武装：开始切图（F9 动效版）。
+       * 演出：老板吸入（缩小淡出）+ 相机淡出 → 加载目标图 → 新场景 fadeIn。
+       * 失败路径：恢复老板原状、画面淡回原图、入口保持解除武装（走开再回来才可能再触发），
+       * 界面按原图就绪收尾，不停在「地图装载中」。
+       */
       private tryPortal(): void {
         if (this.loading) return
         world.router!.rearm(this.feet.cell)
@@ -876,16 +891,51 @@ export class GameWorld {
         this.loading = true
         world.router!.disarm(this.room.id, portal.entryId)
         this.cancelInput()
+        this.setPortalState('transition')
         world.options.onLoading?.()
-        void world.open(portal.to, portal.entryId)
-          .then((data: RoomData) => this.scene.start(SCENE_KEY, data))
-          .catch(error => {
-            // 保留原图最后合法位置，入口保持解除武装：不自动重试，走开再回来才可能再触发。
-            // 切图没成功、原图仍是前台地图：按原图就绪收尾，界面不能停在「地图装载中」。
-            this.loading = false
-            world.options.onAssetsError(message(error))
-            world.options.onReady?.()
-          })
+        const body = this.player
+        this.tweens.add({ targets: body, alpha: 0.15, scale: 0.55, duration: 150 })
+        this.cameras.main.fadeOut(200, 0, 0, 0)
+        this.time.delayedCall(200, () => {
+          void world.open(portal.to, portal.entryId)
+            .then((data: RoomData) => this.scene.start(SCENE_KEY, data))
+            .catch(error => {
+              // 演出回退：老板恢复原状、画面淡回原图——「表现不决定业务终态」（ADR 0003）。
+              this.tweens.killTweensOf(body)
+              body.setAlpha(1).setScale(1)
+              this.cameras.main.fadeIn(200, 0, 0, 0)
+              this.setPortalState('idle')
+              this.loading = false
+              world.options.onAssetsError(message(error))
+              world.options.onReady?.()
+            })
+        })
+      }
+
+      /** 传送门演出状态（data-portal）：无界面诊断与自动化验收用，不是逐帧同步。 */
+      private setPortalState(state: 'idle' | 'transition'): void {
+        world.parent.setAttribute('data-portal', state)
+      }
+
+      /** 入口传送门（F9-1）：触发格上的双层能量圈，色相指向目标地图；纯表现层。
+       *  用 Shape（Arc）而不是 Graphics 线描：与精灵同一渲染管线，缩放/像素风下稳定可见；
+       *  内圈 scale 呼吸模拟漩涡脉动，只动 scale/alpha，渲染开销可忽略（G6 帧预算复核覆盖）。 */
+      private drawPortals(): void {
+        let count = 0
+        for (const entry of this.room.entries) {
+          const to = world.router!.portal(this.room.id, entry.trigger)?.to.map
+          const color = PORTAL_COLORS[to ?? ''] ?? 0xf2e6c8
+          const point = cellPoint(entry.trigger, TILE)
+          // 三层传送门：深色底盘（嵌地凹陷感）+ 色相能量环 + 亮色内核——浅色地板上也清晰。
+          const base = this.add.circle(point.x, point.y, 15, 0x1c2230, 0.55).setDepth(point.y - 1)
+          const ring = this.add.circle(point.x, point.y, 11, color, 0.85).setDepth(point.y - 1)
+          const core = this.add.circle(point.x, point.y, 4, 0xffe9b8, 0.95).setDepth(point.y - 1)
+          this.tweens.add({ targets: ring, alpha: { from: 0.55, to: 0.95 }, duration: 850, yoyo: true, repeat: -1 })
+          this.tweens.add({ targets: core, scale: { from: 0.7, to: 1.25 }, duration: 850, yoyo: true, repeat: -1 })
+          this.tweens.add({ targets: base, alpha: { from: 0.4, to: 0.65 }, duration: 1700, yoyo: true, repeat: -1 })
+          count++
+        }
+        world.parent.setAttribute('data-portals', String(count))
       }
     }
     this.game = new Phaser.Game({
