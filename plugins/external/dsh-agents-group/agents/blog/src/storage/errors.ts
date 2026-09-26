@@ -17,7 +17,7 @@
  * - `storage_unknown`：其余未知故障。
  *
  * 业务拒绝（归属不存在、版本冲突、终态后写入）不属于这里：它们以 settings.ts 的
- * `BlogError`（DSH_ACCESS_ERROR）原样穿透，本模块不包装、不降级。
+ * `BlogError`（`DSH_BUSINESS_ERROR`，kit 业务错误通道的类别标识）原样穿透，本模块不包装、不降级。
  */
 
 import { BlogError } from '../settings.ts'

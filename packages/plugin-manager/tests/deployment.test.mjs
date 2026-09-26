@@ -7,7 +7,7 @@ import { join, dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { createServer } from 'node:net';
-import { resolveDeployment, parseArguments, loadRelease, runtimeEnvironment, computeChanges, synchronize, atomicJSON, finalize, acquireLock, renderCompose, checkDataSelection, verifyReady, adoptLegacy, tarCommand, supervise, prepareOfflineDependencies, main } from '../src/deployment.mjs';
+import { resolveDeployment, parseArguments, loadRelease, runtimeEnvironment, computeChanges, synchronize, synchronizeAndRecord, atomicJSON, finalize, acquireLock, renderCompose, checkDataSelection, verifyReady, adoptLegacy, tarCommand, supervise, prepareOfflineDependencies, main } from '../src/deployment.mjs';
 import { installedMatches, readState } from '../src/installation.mjs';
 import { verificationSubjects } from '../src/verification.mjs';
 
@@ -102,6 +102,99 @@ test('unchanged sync reuses verified installs and publisher evidence never becom
   assert.equal(unchanged.verification[0].records[0].scope, 'real-host');
   assert.equal(f.calls.length, calls);
   assert.equal(Object.hasOwn(readState(statePath(f.deployment)), 'verification'), false);
+});
+
+test('unchanged sync reports the short-circuit summary for the install record', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  const unchanged = await synchronize(f.deployment, f.release, options(f));
+  assert.equal(unchanged.schemaVersion, 1);
+  assert.equal(unchanged.changed, false);
+  assert.equal(unchanged.shortCircuited, true);
+  assert.equal(unchanged.environmentChanged, false);
+  assert.deepEqual(unchanged.matchesFailures, []);
+});
+
+test('a drifted installed file is reinstalled and its failing field is reported', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  // 篡改已装文件字节：模拟现场漂移（文件被改或装坏），既不改引用也不改版本。
+  const plugin = f.release.plugins[0];
+  writeFileSync(join(f.deployment.profileRoot, 'node_modules', plugin.package, 'index.js'), 'export const name = "drifted";\n');
+  const again = await synchronize(f.deployment, f.release, options(f));
+  assert.equal(again.changed, true);
+  assert.equal(again.shortCircuited, false);
+  assert.equal(again.environmentChanged, false);
+  assert.ok(again.matchesFailures.some(entry => entry.id === plugin.id && entry.field === 'bytes'), JSON.stringify(again.matchesFailures));
+});
+
+test('an environment change invalidates reuse and reports environmentChanged without per-plugin fields', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  // 篡改状态里的环境指纹：模拟换 Node、宿主或模式之后的那次发布。
+  const state = readState(statePath(f.deployment));
+  state.environment.node = '0.0.0-fixture';
+  atomicJSON(statePath(f.deployment), state);
+  const changed = await synchronize(f.deployment, f.release, options(f));
+  assert.equal(changed.changed, true);
+  assert.equal(changed.environmentChanged, true);
+  assert.deepEqual(changed.matchesFailures, []);
+});
+
+test('a post-install mismatch fails with a structured install summary attached', async t => {
+  const f = fixture(t);
+  const tamper = (cli, d, args, home = d.home) => {
+    const targets = args.filter(arg => arg.startsWith('file:'));
+    if (args[0] === 'add' && targets.length > 1) { for (const target of targets) tamper(cli, d, ['add', target], home); return; }
+    f.execute(cli, d, args, home);
+    if (args[0] !== 'add') return;
+    // add 完成后篡改刚装的文件：模拟“装上的内容与归档不一致”，让安装后复核失败。
+    const name = JSON.parse(spawnSync(tarCommand, ['-xOf', args.at(-1).slice('file:'.length), 'package/package.json']).stdout).name;
+    const installed = join(home, 'profiles', d.profile, 'node_modules', name, 'index.js');
+    if (existsSync(installed)) writeFileSync(installed, 'export const name = "tampered";\n');
+  };
+  await assert.rejects(synchronize(f.deployment, f.release, { execute: tamper, cli: f.cli }), error => {
+    assert.match(error.message, /安装或 Bundle 验证失败/);
+    assert.equal(error.installSummary.schemaVersion, 1);
+    assert.equal(error.installSummary.status, 'install-failed');
+    assert.equal(error.installSummary.changed, true);
+    assert.ok(error.installSummary.matchesFailures.some(entry => entry.field === 'bytes'), JSON.stringify(error.installSummary));
+    return true;
+  });
+});
+
+test('container entry records the install summary on the shared volume; host runs do not', async t => {
+  const f = fixture(t);
+  const summaryPath = join(f.deployment.dataRoot, '.deployment-private', 'install-summary.json');
+  // 宿主直跑（record=false）：结果只在进程输出，不在挂载卷落盘。
+  await synchronizeAndRecord(f.deployment, f.release, options(f), false);
+  assert.equal(existsSync(summaryPath), false);
+  // 容器入口（record=true）：第一次安装已就位，这次短路复用——摘要落到宿主可读的挂载卷路径。
+  const result = await synchronizeAndRecord(f.deployment, f.release, options(f), true);
+  assert.equal(result.shortCircuited, true);
+  const saved = read(summaryPath);
+  assert.equal(saved.schemaVersion, 1);
+  assert.equal(saved.status, 'installed');
+  assert.deepEqual(saved.plugins.map(plugin => plugin.id), ['alpha', 'beta']);
+  // 复核失败的摘要同样在宿主读取前落盘：status=install-failed 且带逐插件失败字段。
+  // 先制造已装文件漂移（matches 报 bytes、驱动重装），tamper 让重装结果仍与归档不一致，
+  // 安装后复核随之失败——错误摘要在抛出前写入挂载卷。
+  const plugin = f.release.plugins[0];
+  writeFileSync(join(f.deployment.profileRoot, 'node_modules', plugin.package, 'index.js'), 'export const name = "drifted";\n');
+  const tamper = (cli, d, args, home = d.home) => {
+    const targets = args.filter(arg => arg.startsWith('file:'));
+    if (args[0] === 'add' && targets.length > 1) { for (const target of targets) tamper(cli, d, ['add', target], home); return; }
+    f.execute(cli, d, args, home);
+    if (args[0] !== 'add') return;
+    const name = JSON.parse(spawnSync(tarCommand, ['-xOf', args.at(-1).slice('file:'.length), 'package/package.json']).stdout).name;
+    const installed = join(home, 'profiles', d.profile, 'node_modules', name, 'index.js');
+    if (existsSync(installed)) writeFileSync(installed, 'export const name = "tampered";\n');
+  };
+  await assert.rejects(synchronizeAndRecord(f.deployment, f.release, { execute: tamper, cli: f.cli }, true), error => {
+    assert.equal(error.installSummary.status, 'install-failed');
+    assert.equal(read(summaryPath).status, 'install-failed');
+    return true;
+  });
 });
 
 test('an unchanged package is re-added when its archive reference changes', t => {

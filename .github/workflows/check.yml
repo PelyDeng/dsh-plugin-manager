@@ -109,6 +109,13 @@ jobs:
       - run: npm install --global pnpm@11.19.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - name: Manager static gates
+        # manager 不在 `pnpm check`（scripts/workspace.mjs）的固定覆盖清单里，而那个入口
+        # 也不是 `--if-present` 机制——不显式接线就不会跑。这里执行 manager 自己的 check
+        # （tests/check.sh：部署/恢复 shell 与 runtime mjs 的语法门禁 + manager 全量测试）。
+        # `pnpm -r --if-present test` 之后仍会跑一遍 manager test，与这里的重复是有意保留：
+        # check.sh 是"静态门禁 + 自检"的独立入口，不依赖工作区批量任务的存活。
+        run: pnpm --filter @dsh-plugin-manager/plugin-manager check
       - name: Typecheck external plugins
         # ⚠️ `pnpm check`（`scripts/workspace.mjs check`）**只覆盖框架包与 builtin 插件**：
         # 它以 `--external` 未给 ⇒ `scope='builtin'`、`requested='all'`，于是 `plugins/external/**`

@@ -176,7 +176,9 @@ export class ReasoningTranslations {
       audit.result=result;audit.textNormalized=true;audit.endedAt=Date.now();await write('translated');return result
     } catch(error) {
       audit.endedAt=Date.now();audit.error=entry.controller.signal.aborted?'cancelled':error instanceof AccessError?error.message:'译文请求失败'
-      await write('failed').catch(()=>{})
+      // 状态写失败仍按"失败已尽力记录"处理（不掩盖原始错误），但必须留下日志：吞掉后运维
+      // 既看不到译文失败原因，也看不到状态机停在了 'running'——这正是要避免的黑盒。
+      await write('failed').catch(writeError=>console.warn('agents-group/blog: 译文失败状态写入未落库',JSON.stringify({requestId,conversationId:entry.target.conversationId,sourceId:entry.target.sourceId,writeError:String(writeError)})))
       if(error instanceof AccessError)throw error
       throw new AccessError(entry.controller.signal.aborted?499:502,entry.controller.signal.aborted?'译文请求已取消或超时；原文仍可查看':'中文译文生成失败，请稍后重试；原文仍可查看')
     } finally { clearTimeout(timeout) }

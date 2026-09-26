@@ -1,7 +1,7 @@
 /** Container settings must be usable by the declared process identity before restart. */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -55,6 +55,34 @@ test('local image startup uses the configured health port and staged restart pol
   // 候选验证阶段 restart=no（不会无限重启），健康通过后才切回 unless-stopped：两次 up。
   assert.equal(ups.length, 2);
   assert.equal(service.restart, 'unless-stopped');
+});
+
+test('apply-compose consumes the container install summary into the operation directory', t => {
+  const f = fixture(t);
+  // 容器侧（container-start）把摘要写到共享挂载卷 dataRoot 下的固定相对位置。
+  const summary = { schemaVersion: 1, changed: false, shortCircuited: true, environmentChanged: false, matchesFailures: [], status: 'installed', plugins: [{ id: 'weather', package: 'fixture-weather', version: '1.0.0' }] };
+  mkdirSync(join(f.deployment.dataRoot, '.deployment-private'), { recursive: true });
+  atomicJSON(join(f.deployment.dataRoot, '.deployment-private', 'install-summary.json'), summary);
+  const result = applyCompose(f.deployment, f.release, () => {});
+  assert.deepEqual(result.installation, summary);
+  // 摘要转存到 --config 所在目录（真实流程即 operation 域，与 result.json 同域）。
+  assert.deepEqual(JSON.parse(readFileSync(join(dirname(f.deployment.configPath), 'install-summary.json'), 'utf8')), summary);
+  // 挂载卷上的原件已消费删除：陈旧摘要不会混进下一次发布。
+  assert.equal(existsSync(join(f.deployment.dataRoot, '.deployment-private', 'install-summary.json')), false);
+});
+
+test('a missing or unreadable install summary does not block apply-compose', t => {
+  const f = fixture(t);
+  // 没有摘要（旧容器入口、宿主直跑 sync）：返回值不带 installation，部署照常。
+  const plain = applyCompose(f.deployment, f.release, () => {});
+  assert.equal(plain.installation, undefined);
+  // 摘要损坏：保留原文件供人工检查，部署照常。
+  mkdirSync(join(f.deployment.dataRoot, '.deployment-private'), { recursive: true });
+  const broken = join(f.deployment.dataRoot, '.deployment-private', 'install-summary.json');
+  writeFileSync(broken, '{not-json');
+  const result = applyCompose(f.deployment, f.release, () => {});
+  assert.equal(result.installation, undefined);
+  assert.equal(existsSync(broken), true);
 });
 
 test('a stopped matching container permits preserving and clearing only its stale process records', t => {

@@ -871,7 +871,9 @@ export class BlogChat {
       this.update(b, { status: 'running', userMessageId: message.id })
       this.assertTurn(b)
       b.handle.agent.followup(message)
-    } catch (error) { await this.finish(b, 'failed', (error as { readonly code?: string } | null | undefined)?.code === 'DSH_ACCESS_ERROR' ? (error as Error).message : '无法启动对话，请检查宿主模型与插件配置') }
+    // 可展示错误按形状并列识别：kit 访问协议（`DSH_ACCESS_ERROR`）与业务通道（`DSH_BUSINESS_ERROR`，
+    // `BlogError` 迁移后的值）都透传原文案；其余降级为通用文案（与迁移前行为一致）。
+    } catch (error) { await this.finish(b, 'failed', (error as { readonly code?: string } | null | undefined)?.code === 'DSH_ACCESS_ERROR' || (error as { readonly code?: string } | null | undefined)?.code === 'DSH_BUSINESS_ERROR' ? (error as Error).message : '无法启动对话，请检查宿主模型与插件配置') }
   }
   /**
    * 一轮的**唯一收尾实现**。

@@ -35,7 +35,7 @@ const DSN = process.env.AGENTS_GROUP_TEST_PG_DSN ?? ''
 
 /** 稳定码断言：错误必须是 StorageError 且携带指定 code。 */
 const hasStorageCode = (error: unknown, code: string) => error instanceof StorageError && error.code === code
-/** 业务拒绝断言：BlogError（DSH_ACCESS_ERROR）且携带指定 HTTP 状态。 */
+/** 业务拒绝断言：BlogError（DSH_BUSINESS_ERROR，kit 业务通道类别标识）且携带指定 HTTP 状态。 */
 const isBlogStatus = (error: unknown, status: number) => error instanceof BlogError && error.status === status
 /** 驱动侧错误码断言：`pg` 抛的是带 `code` 的普通对象（23503 外键 / 23514 CHECK）。 */
 const hasDriverCode = (error: unknown, code: string) => (error as { code?: string }).code === code

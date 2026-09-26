@@ -183,6 +183,11 @@ export function releaseSite(options = {}, execute = command, adapter) {
     record.status = 'applying'; record.installStarted = true; persist(); installStarted = true;
     saveJson(runtimePath, candidateNow);
     step('部署并验证服务', process.execPath, [cli, 'apply-compose', '--root', root, '--config', runtimePath]);
+    // 安装事务短路原因摘要（QAa-债-2）：apply-compose 已把容器写入的摘要从挂载卷转存到本次
+    // operation 目录；读到就并入记录。读取或解析失败不回滚已就绪的服务——摘要是附加诊断，
+    // 现场以 check-records 与周期健康为准（与下方结果日志同一哲学）。
+    const summaryPath = resolve(dirname(record.candidatePath), 'install-summary.json');
+    if (existsSync(summaryPath)) { try { record.installation = readSiteJson(summaryPath); } catch (error) { console.error(`安装摘要读取失败（不影响发布结果）：${error.message}`); } }
     record.status = 'ready'; record.completedAt = new Date().toISOString();
     // 结果日志写失败不回滚已就绪的服务：现场以 check-records 与周期健康为准（设计 5.4）。
     try { persist(); } catch (error) { console.error(`业务结果已知、记录写入失败：${error.message}`); }

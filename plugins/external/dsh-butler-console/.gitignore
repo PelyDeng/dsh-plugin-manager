@@ -10,4 +10,3 @@ req_*.json
 res_*.json
 token.txt
 .credentials.yaml
-!vendor/*.tgz

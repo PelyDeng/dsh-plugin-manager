@@ -35,6 +35,8 @@
   },
   "scripts": {
     "build": "tsdown",
+    "check": "bash tests/check.sh",
+    "clean": "node scripts/clean.mjs",
     "test": "node --test tests/*.test.mjs"
   },
   "devDependencies": {

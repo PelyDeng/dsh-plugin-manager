@@ -224,11 +224,12 @@ export class BlogAttachments {
       return this.public(a)
     } catch(error) {
       // 捕获变量是 `unknown`（`useUnknownInCatchVariables`）：本项目的解析/宿主异常都带 `code`/`message`
-      //（`BlogError`），按字段收窄一次（与 `chat.ts:835` 同一写法）。判定与改造前逐字一致。
+      //（`BlogError`），按字段收窄一次（与 `chat.ts:835` 同一写法）。可展示错误按形状并列识别：
+      // kit 访问协议（`DSH_ACCESS_ERROR`）与业务通道（`DSH_BUSINESS_ERROR`，`BlogError` 迁移后的值）。
       const failure=error as { readonly code?: string | undefined; readonly message?: string | undefined }
       const row=await this.storage.attachmentRaw(a.id)
-      if(row && row.status!=='removed')await this.write({...a,status:'failed',selected:false,message:job.abort.signal.aborted?'解析已取消':failure.code==='DSH_ACCESS_ERROR'?failure.message:job.parseError??'文件无法解析，请检查格式、大小或宿主附件服务'})
-      throw failure.code==='DSH_ACCESS_ERROR'?error:new Error('资料处理未完成；请查看附件状态')
+      if(row && row.status!=='removed')await this.write({...a,status:'failed',selected:false,message:job.abort.signal.aborted?'解析已取消':failure.code==='DSH_ACCESS_ERROR'||failure.code==='DSH_BUSINESS_ERROR'?failure.message:job.parseError??'文件无法解析，请检查格式、大小或宿主附件服务'})
+      throw failure.code==='DSH_ACCESS_ERROR'||failure.code==='DSH_BUSINESS_ERROR'?error:new Error('资料处理未完成；请查看附件状态')
     } finally {await job.worker?.terminate();this.active.delete(a.id);finished();this.access.assert(actor)}
   }
   async parse(job: UploadJob,bytes: Uint8Array): Promise<ParsedDocument|undefined> {

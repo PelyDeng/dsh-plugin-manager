@@ -14,7 +14,7 @@ import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { agentResource } from '@dsh-agents-group/common'
-import { registerPlugin,registerConversations,AccessError,isAccessError,type Access,type ToolDescriptor,createMemoryStore,renderMemorySection } from '@dsh-plugin-manager/plugin-kit'
+import { registerPlugin,registerConversations,AccessError,isAccessError,isBusinessError,type Access,type ToolDescriptor,createMemoryStore,renderMemorySection } from '@dsh-plugin-manager/plugin-kit'
 import type { ProtectedRoute } from '@dsh-plugin-manager/plugin-kit/http'
 import { loadSettings, invariant } from './settings.ts'
 import { ownerKey } from './store.ts'
@@ -75,7 +75,12 @@ const STORAGE_STATUS: Record<string,{status:number,message?:string}> = {
  * blog 路由的 HTTP 错误渲染（群组经 `onError` 注入 createPluginHttp）。
  *
  * 存储层故障按稳定码归类：可用性类 503、约束冲突 409、未知 500，稳定码进响应体；
- * 其余错误保持 kit 默认渲染（AccessError 原状态、未知 500），对外契约不变。
+ * 其余错误保持 kit 默认渲染（AccessError / BusinessError 原状态、未知 500），对外契约不变。
+ *
+ * ⚠️ **已知的两类透传错误按形状并列识别**：`isAccessError`（kit 访问协议，401/403 等）
+ * 与 `isBusinessError`（kit 业务通道，`BlogError` 自 2026-09 起迁移到该通道，code 为
+ * `DSH_BUSINESS_ERROR`）。两类都透传原状态码与原文案；识别处必须并列，不能只认其一——
+ * 旧版本归档里的错误形状与新代码抛出的错误形状都要落到自己的分支。
  *
  * ⚠️ **存储故障用结构识别（`isStorageError`），不是 `instanceof`**：本边界要处理的错误
  * **来自两侧** —— 未配置占位抛的是 `./storage/errors.ts` 那一份类，而配好之后索引侧的故障
@@ -86,7 +91,7 @@ const STORAGE_STATUS: Record<string,{status:number,message?:string}> = {
  */
 export function blogStorageErrorHandler(response: ServerResponse, error: unknown): void {
   const storage = isStorageError(error)
-  const known = isAccessError(error)
+  const known = isAccessError(error) || isBusinessError(error)
   if (!storage && !known) {
     console.error('agents-group/blog: 请求处理失败', error)
     response.writeHead(500, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'})

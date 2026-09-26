@@ -112,30 +112,48 @@ export function computeChanges(managed, desired, installed, matches) {
   return { remove, add };
 }
 
-export function installedMatches(root, plugin) {
+/**
+ * 逐字段解释一次安装与目标是否相符（安装事务三判定条件之二：verifyFiles 字节与包元数据）。
+ *
+ * `installedMatches` 只回答「相符与否」，排障时需要知道**哪个判定分支**失败——否则容器内安装
+ * 事务在字节不一致、版本不符、Bundle 缺失之间不可区分，只能靠归档二分排查。字段取值：
+ * - `dependencies`：profile 依赖里没有这个包；
+ * - `bundles`：profile Bundle 清单里没有这个包；
+ * - `spec`：`file:`/`link:` 引用与本次目标不一致（换了归档或源码位置）;
+ * - `package-metadata`：已装包名或版本与本次目标不符；
+ * - `verify-files`：声明的核验文件在已装目录缺失或不是常规文件；
+ * - `archive`：发布归档不可读；
+ * - `bytes`：已装文件字节与归档成员不一致。
+ */
+export function explainInstalledMatches(root, plugin) {
   const manifest = profileManifest(root);
-  if (!manifest.dependencies?.[plugin.package] || !bundlesOf(manifest).includes(plugin.package)) return false;
+  if (!manifest.dependencies?.[plugin.package]) return { ok: false, field: 'dependencies' };
+  if (!bundlesOf(manifest).includes(plugin.package)) return { ok: false, field: 'bundles' };
   const reference = plugin.mode === 'development' ? `link:${canonical(plugin.source)}` : `file:${canonical(plugin.archivePath)}`;
-  if (anchoredSpec(root, manifest.dependencies[plugin.package]) !== reference) return false;
+  if (anchoredSpec(root, manifest.dependencies[plugin.package]) !== reference) return { ok: false, field: 'spec' };
   const packageRoot = join(root, 'node_modules', plugin.package);
   const installed = readOptional(join(packageRoot, 'package.json'));
   // 包名与版本必须与本次目标一致：装错包或版本不符不算相符（设计 4.1「安装后包名/版本/入口/Bundle 正确」）。
-  if (!installed || installed.name !== plugin.package || installed.version !== plugin.version) return false;
+  if (!installed || installed.name !== plugin.package || installed.version !== plugin.version) return { ok: false, field: 'package-metadata' };
   const files = plugin.verifyFiles.filter(file => file !== 'package.json');
   for (const file of files) {
     const target = join(packageRoot, file);
-    if (!existsSync(target) || !within(packageRoot, target) || !statSync(target).isFile()) return false;
+    if (!existsSync(target) || !within(packageRoot, target) || !statSync(target).isFile()) return { ok: false, field: 'verify-files' };
   }
   // 一次解压取出全部待校验成员：逐个成员各跑一次 tar 会把整包重解压 N 遍。
   let packed;
   try { packed = openArchiveMembers(plugin.archivePath, files.map(file => `package/${file}`)); }
-  catch { return false; } // An unreadable archive cannot verify the installed file.
+  catch { return { ok: false, field: 'archive' }; } // An unreadable archive cannot verify the installed file.
   try {
     for (const file of files) {
-      if (!readFileSync(join(packageRoot, file)).equals(packed.read(`package/${file}`))) return false;
+      if (!readFileSync(join(packageRoot, file)).equals(packed.read(`package/${file}`))) return { ok: false, field: 'bytes' };
     }
   } finally { packed.close(); }
-  return true;
+  return { ok: true };
+}
+
+export function installedMatches(root, plugin) {
+  return explainInstalledMatches(root, plugin).ok;
 }
 
 /** Compute package changes without treating discovery as installation ownership. */
@@ -227,6 +245,12 @@ export function dependencyEvidence(profileRoot, excluded) {
  * remove/add → 撤选完成后（依赖与 Bundle 都消失）才移除授权 → 验证实际安装（包名/版本/依赖引用/
  * Bundle/入口字节）通过才更新 environment。任何失败只报错并停止本次流程，下一次从第一步重新计算，
  * 不读取失败步骤；授权集合不是待完成任务队列，未安装的授权可长期存在。
+ *
+ * 返回值携带**短路原因摘要**（QAa-债-2）：`changed` / `shortCircuited`（无变更提前返回）/
+ * `environmentChanged`（环境指纹变化使重用失效）/ `matchesFailures`（驱动本次重装的逐插件失败
+ * 字段，来自 `explainInstalledMatches`）。摘要经容器入口落盘、宿主 apply-compose 读取后并入
+ * 发布记录，容器内安装事务不再只有 exit code 一条信息通道。安装后复核失败时，摘要挂在抛出
+ * 错误的 `installSummary` 属性上（`status: 'install-failed'`），由容器入口负责落盘。
  */
 export async function synchronize(deployment, release, options = {}) {
   assertReleaseMode(release, deployment.mode);
@@ -255,12 +279,23 @@ export async function synchronize(deployment, release, options = {}) {
     printVerification(verification);
     // environment 缺失或变化都使安装重用失效（设计 2.6）：接管后的包必须在目标环境重新装并核实。
     const environmentChanged = !same(previous.environment, environment);
+    // 逐插件预计算安装相符性解释：既驱动求差，也进短路原因摘要；environmentChanged 时跳过
+    // 字节核对（重用已整体失效，失败字段没有意义），matchesFailures 相应为空。
     const installed = profileManifest(deployment.profileRoot);
-    const changes = computeChanges(previous.managed, plugins, installed, plugin => !environmentChanged && installedMatches(deployment.profileRoot, plugin));
+    const explanations = new Map(plugins.map(plugin => [plugin.package,
+      environmentChanged ? { ok: false, field: 'environment' } : explainInstalledMatches(deployment.profileRoot, plugin)]));
+    const matchesFailures = environmentChanged ? [] : plugins.flatMap(plugin => {
+      const explained = explanations.get(plugin.package);
+      return explained.ok ? [] : [{ id: plugin.id, package: plugin.package, field: explained.field }];
+    });
+    const changes = computeChanges(previous.managed, plugins, installed, plugin => explanations.get(plugin.package).ok);
     const summary = () => plugins.map(entry => ({ id: entry.id, package: entry.package, version: entry.version }));
+    const installSummary = (changed, shortCircuited, status = 'installed') => ({
+      schemaVersion: 1, changed, shortCircuited, environmentChanged, matchesFailures, status,
+    });
     if (!changes.add.length && !changes.remove.length && !environmentChanged && previous.environment !== undefined) {
       if (options.freshContainer) synchronizedStopped.add(deployment);
-      return { changed: false, status: 'installed', activated: 'unknown', plugins: summary(), verification };
+      return { ...installSummary(false, true), activated: 'unknown', plugins: summary(), verification };
     }
     // 隔离安装只用于「本次要改包、且当前 profile 有待保留的非受管依赖」：没有非受管依赖时
     // 官方 CLI 直接按目标收敛即可，不必先造隔离候选（设计 3 节 preflight 条件保留）。
@@ -298,10 +333,25 @@ export async function synchronize(deployment, release, options = {}) {
     // 实际安装后复核同一份保留证据：不因隔离安装曾通过就忽略真实目标的变化（设计 5.3）。
     if (retainedEvidence && !same(retainedEvidence, dependencyEvidence(deployment.profileRoot, mutated))) fail('实际安装改变了要保留的非受管依赖或 Bundle；保持停服并报告差异，使用安装层备份显式处理。');
     // 实际安装结果验证通过才更新 environment；随后由启动流程验证就绪。
-    for (const plugin of plugins) if (!installedMatches(deployment.profileRoot, plugin)) fail(`${plugin.id}: 安装或 Bundle 验证失败。`);
+    // 复核失败把短路原因摘要挂在错误上：容器入口捕获后落盘，宿主侧能看到是哪些插件、
+    // 哪个判定字段失败（例如归档字节与已装文件不一致），不用进容器二分排查。
+    // 复核按**安装后**的现场重新解释字段：environmentChanged 时安装前的核对被跳过，
+    // 这里的解释才是本次失败的直接原因。
+    const mismatched = plugins
+      .map(plugin => ({ plugin, explained: explainInstalledMatches(deployment.profileRoot, plugin) }))
+      .filter(entry => !entry.explained.ok);
+    if (mismatched.length) {
+      const error = new Error(mismatched.map(({ plugin }) => `${plugin.id}: 安装或 Bundle 验证失败。`).join('\n'));
+      error.installSummary = {
+        ...installSummary(true, false, 'install-failed'),
+        matchesFailures: mismatched.map(({ plugin, explained }) => ({ id: plugin.id, package: plugin.package, field: explained.field })),
+        plugins: summary(),
+      };
+      throw error;
+    }
     atomicJSON(join(deployment.profileRoot, STATE), managedFile(deployment, managed, environment));
     synchronizedStopped.add(deployment);
-    return { changed: true, status: 'installed', activated: 'unknown', plugins: summary(), verification };
+    return { ...installSummary(true, false), activated: 'unknown', plugins: summary(), verification };
   } finally { releaseLock(); }
 }
 

@@ -68,6 +68,20 @@ Windows 用 `.\build.ps1` 替代 bash build.sh。doctor 只读诊断锁和记录
 受管授权集合（profile 状态 schema 3）承接部分失败：add 写一半失败后授权已持久保留，普通 build 重新求差并修复，不要求 pending 或同一包版本；remove 完成后才移除授权，遗留的精确受管 Bundle 会被清理，模板与非受管内容不变。换修复包、宿主或工具直接准备新的完整输入再 build；不自行删锁、改记录或删数据。恢复只收敛部署，不回滚业务数据；发布归档和配置副本不能代替独立数据备份。
 <!-- /excerpt:install-retry -->
 
+### 安装事务判定
+
+容器内的安装事务按三个条件逐包判定「已装的是否就是这次要装的」，全部满足且环境未变时**短路**——跳过安装直接复用（发布记录里 `installation.shortCircuited` 为 `true`）：
+
+| 判定条件 | 比对内容 | 不满足时的字段 |
+| --- | --- | --- |
+| 依赖引用 | profile 里 `file:`/`link:` 引用是否指向本次目标 | `spec` |
+| verifyFiles 字节 | 已装文件字节与发布归档成员逐一相等，外加包名与版本一致 | `bytes`、`package-metadata`、`verify-files` 等 |
+| environment 指纹 | 操作系统、架构、Node 版本、模式与包管理器身份 | `environmentChanged` |
+
+判定结果会进发布记录：容器入口把逐包结论（`changed` / `shortCircuited` / `environmentChanged` / `matchesFailures` 的插件与字段）写到共享挂载卷上，宿主在服务就绪后读取并并入 `result.json` 的 `installation` 键；`check-records` 展示同一份内容。容器与宿主之间因此多了这条文件通道，但退出码语义不变。安装后复核失败（例如归档与已装文件字节不一致）同样落盘，`status` 为 `install-failed`，并保留 `matchesFailures` 供定位是哪个包、哪个字段不符。
+
+归档按内容哈希命名、profile 以 `file:` 精确引用：内容变则归档名变、引用随之改写，不存在「同版本号但内容不同」被当作已装复用的情况。三个常见的「装了却不生效」原因：一是手工替换了归档文件或直接改动 `node_modules`，字节校验与引用都和现场对不上；二是换了 Node、宿主或模式，环境指纹变化使整批重用失效（`environmentChanged` 为 `true`，逐包重装是预期行为）；三是改动落在 verifyFiles 清单之外（如未声明的静态资源），既不触发重装也不被校验覆盖——这类文件应进包的 `verifyFiles` 声明。
+
 站点 build 由 manager 的 release-site 编排，仓库 source 准备仅作为输入适配；底层 start/apply-compose/compose-release 保持独立语义。底层 start/apply-compose/compose-release 保持独立语义；旧 pending 记录只由 `migrate-site` 做一次性导入，不在 install 路径消费，也不拿 profile unlock 处理外层站点锁。
 
 挂载、引擎身份、旧归档 previous 路径及非受管依赖/用户 patch 保护均保留。失败或中断保留操作目录作为证据，但该记录不决定下一步命令：修正输入后直接重跑普通 build，工具与镜像按新输入重新准备。镜像和平台差异见 [Docker 集成](../integrations/docker/README.md)。

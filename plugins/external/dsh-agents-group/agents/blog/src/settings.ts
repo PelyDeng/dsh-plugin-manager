@@ -1,9 +1,19 @@
 import { readFileSync } from 'node:fs'
 
+/**
+ * blog 业务错误：以**原状态码 + 原文案**穿过 HTTP 边界，不被包成 500。
+ *
+ * `code` 用 kit 业务错误通道的类别标识 `DSH_BUSINESS_ERROR`（`BusinessError` 同值，形状兼容
+ * `isBusinessError`，kit 的 `createPluginHttp` 默认渲染对其透传）。**不要**改回
+ * `DSH_ACCESS_ERROR`：那是 kit 访问协议（`AccessError`）的类别标识，借用它会让"访问错误"
+ * 与"业务错误"在识别处无法区分——本类历史上曾借用该值（伪装成访问错误传递），已迁移到
+ * 业务通道。群组的 `blogStorageErrorHandler` 与 chat/jobs/attachments 的识别点均按两个
+ * code 值并列识别（旧归档的 `AccessError` 与本类的业务错误都要走到各自的文案/状态分支）。
+ */
 export class BlogError extends Error {
   readonly status: number
   readonly code: string
-  constructor(status: number, message: string) { super(message); this.name = 'BlogError'; this.status = status; this.code = 'DSH_ACCESS_ERROR' }
+  constructor(status: number, message: string) { super(message); this.name = 'BlogError'; this.status = status; this.code = 'DSH_BUSINESS_ERROR' }
 }
 /** 断言式不变量：`asserts test` 让调用点后面的 `definition.parameters` 之类**真的收窄**（不只是修辞）。 */
 export function invariant(test: unknown, message: string, status = 400): asserts test { if (!test) throw new BlogError(status, message) }

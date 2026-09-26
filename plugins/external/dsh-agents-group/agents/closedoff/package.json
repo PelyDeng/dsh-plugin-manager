@@ -27,7 +27,7 @@
     "build": "tsdown && tsdown --config tsdown.web-react.config.ts && tailwindcss -i web-react/src/styles/app.css -o dist/web/app.css --minify && node scripts/copy-web-assets.mjs",
     "build:web": "node scripts/copy-web-assets.mjs",
     "dev": "node scripts/dev-watch.mjs",
-    "check:web": "node --check web/trajectory.js && node --check web/trajectory-data.js && node --check web/trajectory-camera.js && node --check web/app.js && node --check web/render-text.js && node --check web/format.js && node --check web/labels.js && node --check web/cards.js",
+    "check:web": "node ../../scripts/check-web.mjs web",
     "typecheck": "tsc --noEmit",
     "test": "pnpm build:web && vitest run && node --test tests/page-layout.node.mjs",
     "check": "pnpm typecheck && pnpm check:web",

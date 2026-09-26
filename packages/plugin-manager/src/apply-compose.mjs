@@ -1,5 +1,5 @@
 /** Apply an isolated generated Compose document; source configuration stays user-owned. */
-import { chownSync, copyFileSync, existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
+import { chownSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, posix, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { LOCK, OWNER, atomicJSON, canonical, fail, json, within } from './state.mjs';
@@ -57,6 +57,25 @@ export function checkCompose(deployment, release, execute = executeDocker, runti
   atomicJSON(generated.path, compose);
   if (runtime.desktop) checkDockerMounts(service, run);
   return { ...generated, project, runtime, status: 'checked' };
+}
+
+/**
+ * 宿主侧消费容器写入的安装事务摘要（QAa-债-2 跨容器通道的宿主半边）。
+ *
+ * 容器入口（container-start）已把 synchronize 的短路原因摘要写到共享挂载卷 dataRoot 下的
+ * `.deployment-private/install-summary.json`；这里读取后转存到本次 operation 目录
+ * （`--config` 指向的 deployment.json 所在目录，即 result.json 的同域），再删除挂载卷上的
+ * 原件——一次性消费，陈旧摘要不会混进下一次发布。文件缺失（旧容器入口、宿主直跑 sync）
+ * 或损坏时返回 null 并保留现场：摘要是附加诊断，缺失不阻断发布。
+ */
+function consumeInstallSummary(deployment) {
+  const source = join(deployment.dataRoot, '.deployment-private', 'install-summary.json');
+  if (!existsSync(source)) return null;
+  let summary;
+  try { summary = JSON.parse(readFileSync(source, 'utf8').replace(/^\uFEFF/, '')); } catch { return null; }
+  if (deployment.configPath) atomicJSON(join(dirname(deployment.configPath), 'install-summary.json'), summary);
+  rmSync(source);
+  return summary;
 }
 
 export function applyCompose(deployment, release, execute = executeDocker, runtime) {
@@ -117,5 +136,7 @@ export function applyCompose(deployment, release, execute = executeDocker, runti
   atomicJSON(generated.path, composed);
   start();
   atomicJSON(join(deployment.artifacts, 'active-compose.json'), { schemaVersion: 1, project, path: generated.path, runtime, appliedAt: new Date().toISOString() });
-  return { ...generated, project, status: 'ready' };
+  // 服务就绪后消费容器写入的安装摘要：转存到 operation 目录、由发布主路径并入 result.json。
+  const installation = consumeInstallSummary(deployment);
+  return { ...generated, project, status: 'ready', ...(installation ? { installation } : {}) };
 }

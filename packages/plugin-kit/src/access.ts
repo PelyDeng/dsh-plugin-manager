@@ -108,10 +108,48 @@ export class AccessError extends Error {
   }
 }
 
-/** Recognize errors emitted by another independently bundled copy of this protocol. */
+/**
+ * Recognize errors emitted by another independently bundled copy of this protocol.
+ *
+ * **形状契约，勿收紧**：本判定只认字段形状（`code` 值 + `status` 整数 + `message` 字符串），
+ * 不认 `name`、不认原型链——同一份协议可能被独立打包多份，`instanceof` 认不出跨副本的错误。
+ * 任何"加严"（比如要求 `name === 'AccessError'`）都会让旧版本插件副本抛的错误掉出识别范围，
+ * 在 HTTP 边界从"透传原状态码"退化为 500。历史上 blog 的 `BlogError` 曾借用本 code 值传递
+ * 业务错误（现已迁移到 {@link BusinessError} 的 `DSH_BUSINESS_ERROR` 通道），迁移后仍可能有
+ * 旧版本归档在运行——所以本判定**只放宽、不收紧**。
+ */
 export function isAccessError(error: unknown): error is AccessError {
   return typeof error === 'object' && error !== null
     && 'code' in error && error.code === 'DSH_ACCESS_ERROR'
+    && 'status' in error && typeof error.status === 'number' && Number.isInteger(error.status) && error.status >= 400 && error.status <= 599
+    && 'message' in error && typeof error.message === 'string'
+}
+
+/**
+ * 插件业务错误的显式透传通道。
+ *
+ * 插件想把自己的业务拒绝（校验失败、状态冲突、上游不可用等）以**原状态码 + 原文案**交给
+ * 客户端，而不是被 HTTP 边界包成 500「请求处理失败」时，抛本错误。`createPluginHttp` 的
+ * 默认渲染对它与 {@link AccessError} 同等透传（`http.ts` 的 `reject`）。
+ *
+ * 识别协议与 `isAccessError` 同族：跨独立打包副本按字段形状识别（`isBusinessError`），
+ * 不认原型链。`code` 用独立的 `DSH_BUSINESS_ERROR`，**不要**借用 `DSH_ACCESS_ERROR`——
+ * 那是访问协议的类别标识，借用会让"访问错误"与"业务错误"在识别处无法区分（blog 曾因此
+ * 把业务错误伪装成访问错误，见其 settings.ts 的迁移注释）。
+ */
+export class BusinessError extends Error {
+  /** 跨独立打包副本识别用的类别标识，见类注释。 */
+  readonly code = 'DSH_BUSINESS_ERROR'
+  constructor(readonly status: number, message: string) {
+    super(message)
+    this.name = 'BusinessError'
+  }
+}
+
+/** Recognize business errors emitted by another independently bundled copy of this protocol. */
+export function isBusinessError(error: unknown): error is BusinessError {
+  return typeof error === 'object' && error !== null
+    && 'code' in error && error.code === 'DSH_BUSINESS_ERROR'
     && 'status' in error && typeof error.status === 'number' && Number.isInteger(error.status) && error.status >= 400 && error.status <= 599
     && 'message' in error && typeof error.message === 'string'
 }

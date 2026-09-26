@@ -34,7 +34,7 @@ kit 提供可选的[会话管理协议](https://github.com/PelyDeng/dsh-plugin-m
 
 第三个参数是**工具分类标签**，由注册该工具的插件自己填写，随 `ToolDescriptor.category` 交给 auth 按标签分组展示。标签同时是可见性依据：`toolsForCategory(descriptors, 本分类)` 返回「本分类的工具 + 通用工具」，调用方在 Agent 的 setup 里用 `tools.restrict({ allow })` 应用它，该 Agent 就只能调用属于自己标签的工具。约定好的通用工具集使用固定标签 `通用工具`（导出常量 `UNIVERSAL_TOOL_CATEGORY`），每个 Agent 都可见。不传分类的工具不参与这套限制，因此既有插件不受影响。
 
-认证模式不可自动降级。提供者缺失、重复或协议不兼容时拒绝访问。协议版本为 1，通过错误对象的字段识别不同安装包抛出的 `AccessError`。`actorKey` 以账号身份生成稳定数据所有者，不使用短期登录 ID。`dsh-console` 是保留授权项，不能作为业务插件 ID。
+认证模式不可自动降级。提供者缺失、重复或协议不兼容时拒绝访问。协议版本为 1，通过错误对象的字段识别不同安装包抛出的 `AccessError`。插件的业务拒绝抛 `BusinessError`（携带 HTTP 状态与文案），HTTP 边界同样按字段形状识别并透传原状态码，不包成 500。`actorKey` 以账号身份生成稳定数据所有者，不使用短期登录 ID。`dsh-console` 是保留授权项，不能作为业务插件 ID。
 
 ```sh
 pnpm --filter @dsh-plugin-manager/plugin-kit build

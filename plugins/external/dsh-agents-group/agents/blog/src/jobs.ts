@@ -469,10 +469,11 @@ export class BlogJobs {
       }
       check();handle.agent.followup(createUserMessage({source:{kind:'user'},content}))
     } catch(error: unknown) {
-      // 捕获变量按 `unknown` 收：本处只读 `code` / `message`（AccessError 的两个字段），
-      // 收窄一次后判定与取值同改造前逐字一致。
+      // 捕获变量按 `unknown` 收：本处只读 `code` / `message`。可展示错误按形状并列识别——
+      // kit 访问协议（`DSH_ACCESS_ERROR`）与业务通道（`DSH_BUSINESS_ERROR`，`BlogError` 迁移后的
+      // 值）都透传原文案；判定与迁移前行为一致（迁移前两者共用同一个 code 值）。
       const failure=error as {code?: unknown; message?: string}
-      await this.stop(b,'failed',{code:'agent',message:failure?.code==='DSH_ACCESS_ERROR'?failure.message:'无法启动写作，请检查宿主模型与插件配置'})
+      await this.stop(b,'failed',{code:'agent',message:failure?.code==='DSH_ACCESS_ERROR'||failure?.code==='DSH_BUSINESS_ERROR'?failure.message:'无法启动写作，请检查宿主模型与插件配置'})
     }
   }
   async observe(b: JobsTurn) {

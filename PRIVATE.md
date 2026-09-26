@@ -86,6 +86,32 @@ pnpm package --external --plugins "agents-group,butler"
 
 私有根更新入口不更新宿主子模块，也不替换 `DSH_HOST_IMAGE`。宿主升级时显式运行 `git submodule update --init deepseek-harness`，或准备与 gitlink 对应的干净检出并构建新镜像，再更新私有镜像引用；服务器直连 GitHub 失败时，可在本地用 `git bundle` 打包宿主历史再传输。Session V4 的迁移、刷新历史与数据回退约束（V4 数据不可被 0.1.6 宿主读取）见[宿主兼容说明](doc/host-compatibility.md)。`agents/blog/backup/chat-state.mjs` 是非活跃备份代码，仍按 `{catalog, v2, v3}` 组装；复活它时必须同步 V4 codec 与 children catalog。生产选集为 `auth,example,agents-group,butler,niuma-boss`（blog 与 closedoff 是 agents-group 的成员，不单独占选集条目）。
 
+## 双仓库差异文件清单
+
+本仓库（Gitee）与公开库（GitHub）的文件差异分两类：**只在 Gitee 存在**的私有文件——任何推往 GitHub 的操作都必须排除它们；以及**两侧都有但内容有意不同**的文件——合并 upstream 时按本节规则取舍，不做无意识覆盖。这份清单是合并前自查与未来门禁自动核验的依据。
+
+**只在 Gitee 存在，永不推送 GitHub**：
+
+| 路径 | 说明 |
+| --- | --- |
+| `PRIVATE.md` | 本文件 |
+| `env.conf` | 站点私有配置：`DSH_PLUGIN_CONFIG` 携带 blog、backup、MinIO、closedoff 等真实业务参数。严禁出现在公开库 |
+| `private-deploy/` | 私有更新入口、公共输入交付脚本（`sync-origin`、`deliver-public-inputs` 等）及其测试 |
+| `tools/builtin-build/` | 内置构建视图的公共三件套交付物（`package.json`、`pnpm-workspace.yaml`、`pnpm-lock.yaml` 与 `input.json`） |
+| `plugins/external/` | 全部定制插件（agents-group、butler、niuma-boss，含群组成员子包、vendor 与 typecho 桥接资源） |
+| `.zcodeignore` | 本仓库的工具忽略配置 |
+
+**两侧都有，但内容有意不同**：
+
+| 路径 | 差异 | 合并取向 |
+| --- | --- | --- |
+| `env.conf.example` | Gitee 版含私有插件的配置段示例 | 保留 Gitee 版；公共段变化时人工合入 |
+| `pnpm-lock.yaml` | 公共与私有插件依赖混合记录 | 不能整份取单侧；按两侧 `package.json` 核对后用仓库锁定的 pnpm 重新整理，见[本地集成公共更新](#本地集成公共更新) |
+| `AGENTS.md`、根 `README.md` 与 `README.en.md`、`build.sh`/`build.ps1` | Gitee 版描述私有集成入口与外部插件选集 | 保留 Gitee 版；公共框架行为变化时人工同步对应段落 |
+| `deploy/` 部分文档、`integrations/docker` 部分文件、`.gitattributes` 部分行 | 与私有入口或私有插件相关的局部差异 | 逐项核对：公共侧改动照常合入，私有侧差异保留 |
+
+其余文件（`packages/*`、`plugins/builtin/*`、`doc/*`、`scripts/*` 等公共框架面）两侧同源，按[本地集成公共更新](#本地集成公共更新)的流程合并。发现上述清单之外的未知差异时，先核实来源再决定归属，不静默合并；新增只在 Gitee 存在的文件时同步更新本清单。
+
 ## 默认模型与私有插件
 
 三个应用的普通新会话使用框架默认模型，旧会话和分支沿用官方模型记录；各自输入框的选择器可以显式切换。模型选择、首句自动标题及手动命名行为分别见[博客对话](plugins/external/dsh-agents-group/agents/blog/README.md#对话与历史)和[封闭化对话](plugins/external/dsh-agents-group/agents/closedoff/README.md#对话模型)。

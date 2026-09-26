@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import type {} from '@deepseek-ai/dsh-host-webserver'
-import { isAccessError, type Access, type Actor } from './access.ts'
+import { isAccessError, isBusinessError, type Access, type Actor } from './access.ts'
 import { isPluginPath } from './route-path.mjs'
 
 export interface ProtectedRoute {
@@ -30,7 +30,8 @@ export function createPluginHttp(ctx: Context, options: {
   const reject = (response: ServerResponse, caught: unknown) => {
     if (response.headersSent) { response.destroy(); return }
     if (options.onError) { options.onError(response, caught); return }
-    const known = isAccessError(caught)
+    // 访问错误与业务错误同等透传原状态码与原文案；其余按未知错误落 500。
+    const known = isAccessError(caught) || isBusinessError(caught)
     response.writeHead(known ? caught.status : 500, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' })
     response.end(JSON.stringify({ error: known ? caught.message : '请求处理失败' }))
   }

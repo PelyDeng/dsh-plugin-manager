@@ -1,9 +1,9 @@
 import { checkDataSelection, parseArguments, resolveDeployment } from './config.mjs';
-import { join, resolve } from 'node:path';
-import { LOCK, STATE, fail, json } from './state.mjs';
+import { dirname, join, resolve } from 'node:path';
+import { LOCK, STATE, atomicJSON, fail, json } from './state.mjs';
 import { hostname } from 'node:os';
 import { alive, stopOwned } from './process.mjs';
-import { rmSync } from 'node:fs';
+import { existsSync, rmSync } from 'node:fs';
 import { acquireLock, adoptLegacy, finalize, readState, synchronize } from './installation.mjs';
 import { randomUUID } from 'node:crypto';
 import { packagePlugins } from './package-plugins.mjs';
@@ -13,8 +13,41 @@ import { prepareOfflineDependencies } from './offline.mjs';
 import { supervise } from './supervisor.mjs';
 import { verifyHealth } from './installation.mjs';
 import { applyPluginSettings, resolvePluginSettings } from './plugin-settings.mjs';
-import { existsSync } from 'node:fs';
 import { applyCompose } from './apply-compose.mjs';
+
+/**
+ * 安装事务短路原因摘要（QAa-债-2）在共享挂载卷 dataRoot 下的固定相对位置。
+ *
+ * 容器↔宿主跨进程原本只有 exit code 一条信息通道；摘要走的是**既有挂载卷上的文件**：
+ * 容器入口（container-start）把 synchronize 的摘要写到容器内 `/data`（dataRoot 挂载点），
+ * 宿主 apply-compose 从宿主 dataRoot 的同一相对路径读取——不新增挂载卷、不改变 exit code 语义。
+ */
+const INSTALL_SUMMARY = join('.deployment-private', 'install-summary.json');
+const summaryPath = deployment => join(deployment.dataRoot, INSTALL_SUMMARY);
+
+/** 只挑摘要字段落盘：verification 等大对象留在进程输出里，文件保持轻量。 */
+function writeInstallSummary(deployment, result) {
+  const { schemaVersion, changed, shortCircuited, environmentChanged, matchesFailures, status, plugins } = result;
+  atomicJSON(summaryPath(deployment), { schemaVersion, changed, shortCircuited, environmentChanged, matchesFailures, status, plugins });
+}
+
+/**
+ * synchronize + 容器入口摘要落盘（QAa-债-2 跨容器通道的容器半边）。
+ *
+ * `record` 为 true（仅 container-start）时，成功与失败两条路径都把短路原因摘要写到
+ * 共享挂载卷 dataRoot 下的 `.deployment-private/install-summary.json`，供宿主 apply-compose
+ * 读取；宿主直跑的动作结果已在进程输出里，不落盘。
+ */
+export async function synchronizeAndRecord(deployment, release, options, record) {
+  try {
+    const result = await synchronize(deployment, release, options);
+    if (record) writeInstallSummary(deployment, result);
+    return result;
+  } catch (error) {
+    if (record && error.installSummary) writeInstallSummary(deployment, error.installSummary);
+    throw error;
+  }
+}
 /** Public CLI shared by Bash, PowerShell and the container entrypoint. */
 export async function main(args = process.argv.slice(2)) {
   const options = parseArguments([...args]);
@@ -70,7 +103,8 @@ export async function main(args = process.argv.slice(2)) {
   // 只是兜底（release 幂等，重复调用不会重复解锁）。
   const unlock = acquireLock(deployment.profileRoot);
   try {
-    const result = await synchronize(deployment, release, { freshContainer: options.action === 'container-start', locked: true });
+    const containerEntry = options.action === 'container-start';
+    const result = await synchronizeAndRecord(deployment, release, { freshContainer: containerEntry, locked: true }, containerEntry);
     console.log(JSON.stringify(result));
     if (start) await supervise(deployment, release, { locked: true, unlock });
   } finally { unlock(); }

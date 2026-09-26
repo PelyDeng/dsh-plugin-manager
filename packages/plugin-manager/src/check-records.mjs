@@ -60,6 +60,16 @@ function savedFacts(root, operation) {
     activeSiteOperation: short(record.previousRuntime?.siteOperation),
     selectedPlugins: Array.isArray(record.selectedPlugins) ? record.selectedPlugins.map(item => item.id) : null,
     enabledPlugins: Array.isArray(record.enabledPlugins) ? record.enabledPlugins : null,
+    // 安装事务短路原因摘要（QAa-债-2）：容器内 synchronize 写、apply-compose 转存、发布主路径并入。
+    // 旧记录没有这个键（值域 null），消费方只读已知键、缺失不报错。
+    installation: record.installation && typeof record.installation === 'object' ? {
+      changed: record.installation.changed ?? null,
+      shortCircuited: record.installation.shortCircuited ?? null,
+      environmentChanged: record.installation.environmentChanged ?? null,
+      status: record.installation.status ?? null,
+      matchesFailures: Array.isArray(record.installation.matchesFailures) ? record.installation.matchesFailures : null,
+      plugins: Array.isArray(record.installation.plugins) ? record.installation.plugins.map(item => item.id) : null,
+    } : null,
     build: { timings: buildTimingFacts(root, record.timings?.path) },
   };
 }
