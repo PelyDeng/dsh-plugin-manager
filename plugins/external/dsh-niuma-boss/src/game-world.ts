@@ -266,6 +266,8 @@ export class GameWorld {
       private pending: WorldSnapshot | null | undefined
       /** 当前舞台布局（stageLayout 的场景侧缓存）：跟随与钳制每帧消费，resize/teleport 重算。 */
       private stage: StageLayout | null = null
+      /** 点击寻路的一次性 finder（占格副本）：找到即弃，update 顺带 tick 它。 */
+      private routeFinder?: Pathfinder
       private onResize = () => this.applyCamera()
       /** 走帧图集：是否已被要求/正在加载/就绪/失败；只有玩家操作过才会被要求。 */
       private walkWanted = false
@@ -751,17 +753,21 @@ export class GameWorld {
           this.requestWalkFrames()
           if (objects.length || world.movementLocked()) return
           const point = this.cameras.main.getWorldPoint(pointer.x, pointer.y)
+          const from = { x: Math.floor(this.player.x / TILE), y: Math.floor(this.player.y / TILE) }
+          const to = { x: Math.floor(point.x / TILE), y: Math.floor(point.y / TILE) }
+          // F6：把 NPC 当前格按墙写入碰撞副本、用一次性 finder 寻路——路径绕开人而不是穿过去，
+          // 起点豁免（老板自己所在格必须可出发）；副本寻路也顺带不再与员工的寻路互抢同一 finder。
+          const grid = Array.from({ length: this.room.height }, (_, y) => this.room.collision.slice(y * this.room.width, (y + 1) * this.room.width))
+          for (const actor of world.sceneActors) grid[actor.cell[1]][actor.cell[0]] = 1
+          grid[from.y][from.x] = 0
+          const finder = new Pathfinder(grid)
           const generation = ++this.pathGeneration
           this.path = []
-          void this.finder.find(
-            { x: Math.floor(this.player.x / TILE), y: Math.floor(this.player.y / TILE) },
-            { x: Math.floor(point.x / TILE), y: Math.floor(point.y / TILE) },
-          ).then(path => {
+          this.routeFinder = finder
+          void finder.find(from, to).then(path => {
+            if (this.routeFinder === finder) this.routeFinder = undefined
             if (generation !== this.pathGeneration || !path) return
-            // F6：路径上首个被角色占用的格即停（起点除外）——点击被挡方向时停在旁边，不穿人。
-            const stop = path.findIndex((c, i) => i > 0 && world.sceneActors.some(actor => actor.cell[0] === c.x && actor.cell[1] === c.y))
-            const usable = stop === -1 ? path : path.slice(0, stop)
-            this.path = usable.map(p => ({ x: (p.x + .5) * TILE, y: (p.y + .5) * TILE }))
+            this.path = path.map(p => ({ x: (p.x + .5) * TILE, y: (p.y + .5) * TILE }))
           })
         })
       }
@@ -826,6 +832,7 @@ export class GameWorld {
 
       update(time: number, delta: number): void {
         this.finder.tick()
+        this.routeFinder?.tick()
         this.followCamera(delta)
         // 员工与普通职员的逐格走动不受老板输入锁影响：界面开着时只暂停自主活动（见 roam）。
         this.stepActors(time, delta)
