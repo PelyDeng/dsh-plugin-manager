@@ -195,8 +195,8 @@ export class MapRouter {
   private readonly byId = new Map<string, MapSpec>()
   /** `${地图}/${入口}` → 对端地图与入口，两个方向都在这里登记。 */
   private readonly portals = new Map<string, { entry: EntrySpec; to: { map: string; entry: string } }>()
-  /** 刚用过的入口：角色不离开触发格就不再触发（防连跳，也是失败后不自动重试的依据）。 */
-  private disarmed: { map: string; entryId: string; trigger: Cell } | null = null
+  /** 刚用过的入口：角色不离开以 center 为圆心的武装圈就不再触发（防连跳 + B1 落点误触）。 */
+  private disarmed: { map: string; entryId: string; trigger: Cell; center: Cell } | null = null
 
   constructor(readonly world: WorldSpec) {
     if (!world || world.tileSize !== 32) throw new Error('世界拓扑缺少 tile 尺寸')
@@ -273,17 +273,41 @@ export class MapRouter {
   }
 
   /**
-   * 用过的入口解除武装：角色离开该触发格后才重新可用。
-   * 目标入口在本图不存在时保持原样（切图后按来源地图的入口 id 初始化是正常情形），
-   * 不把另一侧已经记下的解除武装状态抹掉——那会让防守连跳只剩数据兜底。
+   * 用过的入口解除武装：角色离开以 center 为圆心、ARRIVAL_RADIUS_TILES（1.5 格）为半径的
+   * 武装圈后才重新可用。center 是「实际落点」（切图后）或触发格本身（原图侧，原防连跳语义）。
+   * 落点紧邻反向入口的地图（street 落点 (5,12) 与回程触发格 (5,11) 相邻）不再一步误触（B1）；
+   * 主动返程的动线是先走出武装圈再折回，交互上以就地表提示说明。
    */
-  disarm(map: string, entryId: string): void {
+  disarm(map: string, entryId: string, center?: Cell): void {
     const entry = this.byId.get(map)?.entries.find(e => e.id === entryId)
-    if (entry) this.disarmed = { map, entryId, trigger: [...entry.trigger] as Cell }
+    if (entry) this.disarmed = { map, entryId, trigger: [...entry.trigger] as Cell, center: [...(center ?? entry.trigger)] as Cell }
   }
 
   rearm(cell: Cell): void {
-    if (this.disarmed && !sameCell(this.disarmed.trigger, cell)) this.disarmed = null
+    if (this.disarmed) {
+      const dx = this.disarmed.center[0] - cell[0]
+      const dy = this.disarmed.center[1] - cell[1]
+      if (Math.hypot(dx, dy) > ARRIVAL_RADIUS_TILES) this.disarmed = null
+    }
+  }
+
+  /** 该格是否为「解除武装中入口」的触发格：踩上去不会有任何效果，界面可据此给就地表提示。 */
+  disarmedAt(map: string, cell: Cell): boolean {
+    return !!this.disarmed && this.disarmed.map === map && sameCell(this.disarmed.trigger, cell)
+  }
+
+  /**
+   * 切图到达时解除「本图对端入口」的武装：open() 传来的是来源图的入口 id（office_to_street），
+   * 本图（street）上同一连接的入口叫另一个名字（street_to_office）——按对端 id 反查本图入口，
+   * 再以实际落点为圆心解除武装。之前直接按 id 找不到入口而 no-op，B1 的落点误触正源于此。
+   */
+  disarmByArrival(map: string, arrivedEntry: string, center: Cell): void {
+    for (const [key, linked] of this.portals) {
+      if (!key.startsWith(map + '/')) continue
+      if (linked.to.entry !== arrivedEntry) continue
+      this.disarm(map, key.slice(map.length + 1), center)
+      return
+    }
   }
 
   get disarmedEntry(): string { return this.disarmed ? this.disarmed.map + '/' + this.disarmed.entryId : '' }

@@ -111,6 +111,8 @@ export interface GameWorldOptions {
   readonly restore?: () => WorldSnapshot | null
   /** 舞台布局变化（建场景/resize/换 zoom）：界面据此把 DOM 提示锚定在游戏画面内。 */
   readonly onStage?: (stage: StageLayout) => void
+  /** 踩在武装中的入口触发格上（B1 防误触生效）：会话据此给就地表提示，而不是无声失效。 */
+  readonly onPortalHeld?: (hint: string) => void
 }
 
 const TILE = 32
@@ -291,7 +293,7 @@ export class GameWorld {
         this.walkLoading = false
         world.sceneActors = []
         // 刚穿过的入口保持解除武装，直到角色离开触发格（防连跳）。
-        if (data.arrivedEntry) world.router!.disarm(this.room.id, data.arrivedEntry)
+        if (data.arrivedEntry) world.router!.disarmByArrival(this.room.id, data.arrivedEntry, this.feet.cell)
       }
 
       preload(): void {
@@ -756,7 +758,10 @@ export class GameWorld {
             { x: Math.floor(point.x / TILE), y: Math.floor(point.y / TILE) },
           ).then(path => {
             if (generation !== this.pathGeneration || !path) return
-            this.path = path.map(p => ({ x: (p.x + .5) * TILE, y: (p.y + .5) * TILE }))
+            // F6：路径上首个被角色占用的格即停（起点除外）——点击被挡方向时停在旁边，不穿人。
+            const stop = path.findIndex((c, i) => i > 0 && world.sceneActors.some(actor => actor.cell[0] === c.x && actor.cell[1] === c.y))
+            const usable = stop === -1 ? path : path.slice(0, stop)
+            this.path = usable.map(p => ({ x: (p.x + .5) * TILE, y: (p.y + .5) * TILE }))
           })
         })
       }
@@ -766,6 +771,18 @@ export class GameWorld {
         this.path = []
         this.pathGeneration++
         if (this.player) this.play('idle')
+      }
+
+      /**
+       * 老板可入格 = 碰撞可走且不与其他角色同格（F6 软阻挡：只拦老板；员工到位是
+       * 脚本化落格，不经此判定，不存在互堵）。老板当前格恒放行——stepPosition 的
+       * 首个采样点就在当前格内，不能把它当阻挡。
+       */
+      private movableTo(x: number, y: number): boolean {
+        if (!this.finder.walkable(x, y)) return false
+        const same = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
+        if (same([x, y] as Cell, [Math.floor(this.player.x / TILE), Math.floor(this.player.y / TILE)])) return true
+        return !world.sceneActors.some(actor => same([x, y] as Cell, actor.cell))
       }
 
       intentDown(code: string): void {
@@ -836,7 +853,7 @@ export class GameWorld {
           }
         }
         if (target) {
-          const position = stepPosition(this.player, target, SPEED * Math.min(delta, 50) / 1000, (x, y) => this.finder.walkable(x, y))
+          const position = stepPosition(this.player, target, SPEED * Math.min(delta, 50) / 1000, (x, y) => this.movableTo(x, y))
           const moveX = position.x - this.player.x, moveY = position.y - this.player.y
           if (moveX || moveY) {
             if (!axis.dx && !axis.dy) this.facing = directionOf(moveX, moveY, this.facing)
@@ -887,9 +904,13 @@ export class GameWorld {
         if (this.loading) return
         world.router!.rearm(this.feet.cell)
         const portal = world.router!.portal(this.room.id, this.feet.cell)
-        if (!portal) return
+        if (!portal) {
+          // 武装圈内的反向入口：踩上不会切图（B1 防误触），给就地表提示而不是无声失效（R8）。
+          if (world.router!.disarmedAt(this.room.id, this.feet.cell)) world.options.onPortalHeld?.('传送门还在充能：先走远一点，再回到这里折返')
+          return
+        }
         this.loading = true
-        world.router!.disarm(this.room.id, portal.entryId)
+        world.router!.disarm(this.room.id, portal.entryId, this.feet.cell)
         this.cancelInput()
         this.setPortalState('transition')
         world.options.onLoading?.()
@@ -992,12 +1013,19 @@ export class GameWorld {
     return this.sceneActors.some(actor => same(cell, actor.cell))
   }
 
+  /** 目标图的 NPC 静态占格（open 时 sceneActors 仍是旧图，不能查它）：落点被占时 land 退格。
+   *  boss 不算——它的静态出生格正是入口 arrival，把自己挡在外面就永远回不了常规落点。 */
+  private occupiedInRuntime(runtime: RuntimeMap, cell: Cell): boolean {
+    const same = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
+    return runtime.characters.some(c => c.role !== 'player' && same(cell, c.seat?.cell ?? c.cell))
+  }
+
   /** 切图或重开地图：装载目标图资产并给出落点（失败抛错，由调用方保留原图）。 */
   private async open(to: { map: string; entry: string }, arrivedEntry: string): Promise<RoomData> {
     const runtime = await this.loadMap(to.map)
     const entry = this.router!.spec(to.map)?.entries.find(e => e.id === to.entry)
     if (!entry) throw new Error('入口不存在：' + to.map + '/' + to.entry)
-    const feet = this.router!.land(to.map, entry, this.current.facing, (map, cell) => this.walkable(map, cell))
+    const feet = this.router!.land(to.map, entry, this.current.facing, (map, cell) => this.walkable(map, cell) && !this.occupiedInRuntime(runtime, cell))
     return { runtime, feet, ...(arrivedEntry === '' ? {} : { arrivedEntry }) }
   }
 
@@ -1084,10 +1112,10 @@ export class GameWorld {
     ]
   }
 
-  /** 键盘与触摸共同的前置条件：弹层打开或输入法组词中都不接管按键。 */
-  movementLocked(): boolean {
-    return this.options.inputLocked() || this.composing
-  }
+      /** 键盘与触摸共同的前置条件：弹层打开或输入法组词中都不接管按键。 */
+      movementLocked(): boolean {
+        return this.options.inputLocked() || this.composing
+      }
 
   /** 位置事实：只在按格或朝向变化时回调一次（不是逐帧同步）。 */
   private setFeet(feet: Feet, changed: boolean): void {
