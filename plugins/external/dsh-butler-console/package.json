@@ -139,6 +139,7 @@
     "@deepseek-ai/dsh-system-prompt": "0.1.7-alpha.2",
     "@deepseek-ai/dsh-tools": "0.1.7-alpha.2",
     "@dsh-agents-group/document-parse": "workspace:*",
+    "@dsh-agents-group/web-common": "workspace:*",
     "@dsh-plugin-manager/plugin-kit": "workspace:*",
     "@tailwindcss/cli": "4.3.3",
     "@types/node": "^22.20.0",

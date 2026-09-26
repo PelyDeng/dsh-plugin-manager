@@ -1,7 +1,5 @@
 /**
- * 用户可见错误文案的单点（评审 #15：模板散落 8 处且 fallback 已漂移两种口径）。
- * 规则：Error 带非空 message 用原话（服务端原因优先），否则落 fallback。
+ * 用户可见错误文案的单点：实现已上收群组共享层 web-common（QAb-P1-5 上收项），
+ * 这里保留 re-export，既有调用方的 import 路径不变。
  */
-export function errorTextOf(error: unknown, fallback = '网络异常'): string {
-  return error instanceof Error && error.message !== '' ? error.message : fallback
-}
+export { errorTextOf } from '@dsh-agents-group/web-common'
