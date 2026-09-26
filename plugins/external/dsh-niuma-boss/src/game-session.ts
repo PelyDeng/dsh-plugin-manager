@@ -102,7 +102,6 @@ export class GameSession {
       },
       onInteractKey: () => { this.interactKey() },
       onAssetsError: detail => { this.store.notice = detail },
-      onPortalHeld: hint => { this.envNotice(hint) },
       onReady: () => {
         this.store.worldReady = true
         this.syncRoster()

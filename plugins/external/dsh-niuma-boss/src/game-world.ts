@@ -111,8 +111,6 @@ export interface GameWorldOptions {
   readonly restore?: () => WorldSnapshot | null
   /** 舞台布局变化（建场景/resize/换 zoom）：界面据此把 DOM 提示锚定在游戏画面内。 */
   readonly onStage?: (stage: StageLayout) => void
-  /** 踩在武装中的入口触发格上（B1 防误触生效）：会话据此给就地表提示，而不是无声失效。 */
-  readonly onPortalHeld?: (hint: string) => void
 }
 
 const TILE = 32
@@ -295,7 +293,7 @@ export class GameWorld {
         this.walkLoading = false
         world.sceneActors = []
         // 刚穿过的入口保持解除武装，直到角色离开触发格（防连跳）。
-        if (data.arrivedEntry) world.router!.disarmByArrival(this.room.id, data.arrivedEntry, this.feet.cell)
+        if (data.arrivedEntry) world.router!.disarm(this.room.id, data.arrivedEntry)
       }
 
       preload(): void {
@@ -761,6 +759,15 @@ export class GameWorld {
           for (const actor of world.sceneActors) {
             if (actor.phase !== 'walking') grid[actor.cell[1]][actor.cell[0]] = 1
           }
+          // B1 防误触：与老板相邻的入口触发格在寻路网格里按墙处理——落点紧邻回程门时
+          // （street 落点 (5,12) 与回程门 (5,11) 相邻），点远处不会第一步斜进家门弹回原图。
+          // 点击门格本身仍是合法意图：终点格豁免。
+          for (const entry of this.room.entries) {
+            const [tx, ty] = entry.trigger
+            if ((Math.abs(tx - from.x) === 1 && ty === from.y) || (Math.abs(ty - from.y) === 1 && tx === from.x)) {
+              if (to.x !== tx || to.y !== ty) grid[ty][tx] = 1
+            }
+          }
           grid[from.y][from.x] = 0
           const finder = new Pathfinder(grid)
           const generation = ++this.pathGeneration
@@ -914,13 +921,9 @@ export class GameWorld {
         if (this.loading) return
         world.router!.rearm(this.feet.cell)
         const portal = world.router!.portal(this.room.id, this.feet.cell)
-        if (!portal) {
-          // 武装圈内的反向入口：踩上不会切图（B1 防误触），给就地表提示而不是无声失效（R8）。
-          if (world.router!.disarmedAt(this.room.id, this.feet.cell)) world.options.onPortalHeld?.('传送门还在充能：先走远一点，再回到这里折返')
-          return
-        }
+        if (!portal) return
         this.loading = true
-        world.router!.disarm(this.room.id, portal.entryId, this.feet.cell)
+        world.router!.disarm(this.room.id, portal.entryId)
         this.cancelInput()
         this.setPortalState('transition')
         world.options.onLoading?.()

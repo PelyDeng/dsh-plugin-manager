@@ -94,7 +94,7 @@ describe('三图往返', () => {
     expect(map.land('street', street.entries[0], 'north', () => false)).toEqual({ map: 'street', cell: [5, 12], facing: 'north' })
   })
 
-  it('防连跳：用过的入口在走出武装圈（落点/触发格 1.5 格）之前不再触发，走远后才重新可用', () => {
+  it('防连跳：用过的入口在离开触发格之前不再触发，走开后重新可用', () => {
     const map = router()
     map.disarm('office', 'office_to_street')
     expect(map.disarmedEntry).toBe('office/office_to_street')
@@ -102,11 +102,8 @@ describe('三图往返', () => {
     // 站在触发格上不动：仍然不触发（不自动重试、不来回穿门）。
     map.rearm([34, 27])
     expect(map.portal('office', [34, 27])).toBeNull()
-    // 走开一格（距 1 ≤ 1.5）：仍在武装圈内——落点相邻的反向入口不再一步误触（B1）。
+    // 走开一格后重新武装。
     map.rearm([34, 26])
-    expect(map.disarmedEntry).toBe('office/office_to_street')
-    // 走出武装圈（距 2 > 1.5）后重新武装。
-    map.rearm([34, 25])
     expect(map.disarmedEntry).toBe('')
     expect(map.portal('office', [34, 27])).not.toBeNull()
   })
