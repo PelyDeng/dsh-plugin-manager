@@ -47,10 +47,11 @@ import { INTERACT_KEY, type NearTarget } from './interaction.ts'
 import type { WorldSnapshot } from './recovery.ts'
 import {
   ARRIVAL_RADIUS_TILES, BIRTH_MAP, MapRouter, RETURN_TILES_PER_SEC, WALK_TILES_PER_SEC, activityRoute, activityTarget,
-  cellKey, cellPoint, directionOf, frameOrigin, idleMs, integerZoom, rendezvousCell, safeMapId,
+  cellKey, cellPoint, directionOf, frameOrigin, idleMs, rendezvousCell, safeMapId,
   seatOrigin, seatPosition,
   type ActivityDomain, type Cell, type CharacterSpec, type Direction, type EntrySpec, type Feet, type Portal, type WorldSpec,
 } from './world-runtime.ts'
+import { cameraScrollFor, stageLayout, type StageLayout } from './stage.ts'
 
 type Frame = { path: string; size: [number, number]; anchor: [number, number]; seat?: [number, number] }
 type Clip = { action: string; direction: string; frames: Frame[] }
@@ -108,9 +109,17 @@ export interface GameWorldOptions {
   readonly assetsBase: string
   /** 按用户存的恢复候选（坏快照由 RecoveryStore 判为 null）。 */
   readonly restore?: () => WorldSnapshot | null
+  /** 舞台布局变化（建场景/resize/换 zoom）：界面据此把 DOM 提示锚定在游戏画面内。 */
+  readonly onStage?: (stage: StageLayout) => void
 }
 
 const TILE = 32
+/** 各地图「地图外」包边色（相机背景），与 style.css 的 --stage-bg 主题一一对应。 */
+const SCENE_BACKDROP: Record<string, string> = {
+  office: '#dbe9f4',
+  street: '#3a3440',
+  cafe: '#452f22',
+}
 /** 老板速度：balance_params.yaml#movement.boss_walk_tiles_per_sec = 4.0 格/秒，与 8fps 行走帧同步。 */
 const SPEED = 4 * TILE
 /** 员工速度：balance_params.yaml#movement.staff_walk/return_tiles_per_sec（3.0 / 2.5 格每秒）。 */
@@ -247,7 +256,9 @@ export class GameWorld {
       private nearAt = 0
       /** 场景还没建好时收到的恢复请求：先记下，create 之后立刻应用。 */
       private pending: WorldSnapshot | null | undefined
-      private onResize = () => this.applyZoom()
+      /** 当前舞台布局（stageLayout 的场景侧缓存）：跟随与钳制每帧消费，resize/teleport 重算。 */
+      private stage: StageLayout | null = null
+      private onResize = () => this.applyCamera()
       /** 走帧图集：是否已被要求/正在加载/就绪/失败；只有玩家操作过才会被要求。 */
       private walkWanted = false
       private walkLoading = false
@@ -582,6 +593,9 @@ export class GameWorld {
       }
 
       create(): void {
+        // 相机背景即「地图外」的颜色：按地图主题设定（office 保持冷白，street/cafe 用
+        // 暗色包边），与 .shell 的 --stage-bg 一致——铺不满视口的轴不再露出刺眼空白。
+        this.cameras.main.setBackgroundColor(SCENE_BACKDROP[this.room.id] ?? '#dbe9f4')
         this.room.draws.forEach(draw => {
           this.add.image(draw.x, draw.y, this.room.id, draw.frame)
             .setOrigin(0).setDisplaySize(draw.width, draw.height).setDepth(draw.depth)
@@ -592,11 +606,8 @@ export class GameWorld {
         for (const npc of this.room.characters) if (npc.id !== 'boss') world.sceneActors.push(this.actor(npc))
         const grid = Array.from({ length: this.room.height }, (_, y) => this.room.collision.slice(y * this.room.width, (y + 1) * this.room.width))
         this.finder = new Pathfinder(grid)
-        this.cameras.main
-          .setBounds(0, 0, this.room.width * TILE, this.room.height * TILE)
-          .setRoundPixels(true)
-          .startFollow(this.player, true, 0.12, 0.12)
-        this.applyZoom()
+        this.cameras.main.setRoundPixels(true)
+        this.applyCamera()
         this.scale.on('resize', this.onResize)
         this.bindPointer()
         this.play('idle')
@@ -692,9 +703,33 @@ export class GameWorld {
         }
       }
 
-      /** 整数倍缩放：只在地图装得下时放大，宁可留黑边。 */
-      private applyZoom(): void {
-        this.cameras.main.setZoom(integerZoom(this.scale, this.room))
+      /**
+       * 舞台与镜头布局（F1）：stageLayout 算出整数倍 zoom 与舞台矩形，
+       * setZoom 后把镜头**硬定位**到合法范围（teleport/resize/建场景共用）。
+       * 不用 setBounds/startFollow：bounds 小于视口时 Phaser 会把 scroll 钳回左上（A1 根因），
+       * 跟随轴的平滑逼近由 update 里的 followCamera 按帧做。
+       */
+      private applyCamera(): void {
+        const viewport = { width: this.scale.gameSize.width, height: this.scale.gameSize.height }
+        const layout = stageLayout(viewport, this.room, TILE)
+        this.stage = layout
+        this.cameras.main.setZoom(layout.zoom)
+        const focus = this.player ? { x: this.player.x, y: this.player.y } : cellPoint(this.feet.cell, TILE)
+        const scroll = cameraScrollFor(layout, viewport, this.room, TILE, focus)
+        this.cameras.main.setScroll(scroll.scrollX, scroll.scrollY)
+        world.options.onStage?.(layout)
+      }
+
+      /** 跟随轴每帧向目标 scroll 逼近（帧率无关的 0.12 lerp）；包边轴保持固定居中。 */
+      private followCamera(delta: number): void {
+        const layout = this.stage
+        if (!layout || !this.player) return
+        const viewport = { width: this.scale.gameSize.width, height: this.scale.gameSize.height }
+        const target = cameraScrollFor(layout, viewport, this.room, TILE, { x: this.player.x, y: this.player.y })
+        const cam = this.cameras.main
+        const step = 1 - Math.pow(1 - 0.12, Math.min(delta, 100) / 16.666)
+        if (layout.width >= viewport.width) cam.scrollX += (target.scrollX - cam.scrollX) * step
+        if (layout.height >= viewport.height) cam.scrollY += (target.scrollY - cam.scrollY) * step
       }
 
       /** 触摸与键盘共用同一份碰撞与位移：点地走 A*（同一网格），键盘按下走同一 stepPosition。 */
@@ -757,13 +792,14 @@ export class GameWorld {
         this.path = []
         const point = cellPoint(feet.cell, TILE)
         this.player.setPosition(point.x, point.y).setDepth(point.y)
-        this.cameras.main.centerOn(point.x, point.y)
+        this.applyCamera()
         this.play('idle')
         this.sync(true)
       }
 
       update(time: number, delta: number): void {
         this.finder.tick()
+        this.followCamera(delta)
         // 员工与普通职员的逐格走动不受老板输入锁影响：界面开着时只暂停自主活动（见 roam）。
         this.stepActors(time, delta)
         this.syncActors()

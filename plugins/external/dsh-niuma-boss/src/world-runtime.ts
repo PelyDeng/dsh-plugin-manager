@@ -149,17 +149,6 @@ export function rendezvousCell(
   return null
 }
 
-/**
- * 镜头缩放：只允许整数倍（map_rules.coordinate_system.scale），宁可留黑边也不用
- * 非整数倍缩放；地图比视口大时用 1 倍，等于开一个窗口看地图。
- */
-export function integerZoom(viewport: { width: number; height: number }, map: { width: number; height: number }, tileSize = 32, allowed: readonly number[] = [1, 2, 3, 4]): number {
-  const fit = Math.min(viewport.width / (map.width * tileSize), viewport.height / (map.height * tileSize))
-  let zoom = allowed[0]
-  for (const candidate of allowed) if (candidate <= fit + 1e-9) zoom = candidate
-  return zoom
-}
-
 const sameCell = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
 
 /** 格集合的键：活动域判定只比较格，不比较像素。 */

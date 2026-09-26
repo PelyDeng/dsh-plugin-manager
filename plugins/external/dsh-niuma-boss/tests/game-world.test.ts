@@ -53,6 +53,8 @@ const stub = vi.hoisted(() => {
   const camera = {
     setBounds: () => camera, setRoundPixels: () => camera, startFollow: () => camera,
     setZoom: () => camera, centerOn: () => camera,
+    setBackgroundColor: () => camera, setScroll: () => camera,
+    scrollX: 0, scrollY: 0, zoom: 1,
     getWorldPoint: (x: number, y: number) => ({ x, y }),
   }
   /** 每次 scene.start 的落点；切图失败时这里必须保持为空。 */
@@ -99,6 +101,7 @@ const stub = vi.hoisted(() => {
     readonly cameras = { main: camera }
     readonly scale = {
       width: 1440, height: 1000,
+      gameSize: { width: 1440, height: 1000 },
       on: (_event: string, _listener: unknown) => {}, off: (_event: string, _listener: unknown) => {},
     }
     readonly input = { on: (_event: string, _listener: unknown) => {} }

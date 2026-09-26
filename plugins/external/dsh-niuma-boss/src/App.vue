@@ -19,6 +19,7 @@ import { stateLabel as taskStateLabel } from './labels'
 import { installViewportHeight } from './viewport'
 
 const store = useTaskBookStore()
+const shell = ref<HTMLElement>()
 const host = ref<HTMLElement>()
 const book = ref<HTMLElement>()
 let session: GameSession | undefined
@@ -109,7 +110,7 @@ const onFocusIn = (event: FocusEvent) => {
 }
 
 onMounted(() => {
-  session = new GameSession({ parent: host.value!, assetsBase })
+  session = new GameSession({ parent: host.value!, stageHost: shell.value, assetsBase })
   detachViewport = installViewportHeight(window, document)
   document.addEventListener('visibilitychange', onVisibility)
   void session.start()
@@ -123,8 +124,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <main class="shell" :data-scene="store.worldMap">
+  <main ref="shell" class="shell" :data-scene="store.worldMap">
     <section ref="host" class="game" aria-label="牛马办公楼"></section>
+
+    <!-- 装载期中央提示：首屏与切图空档都不留空白画面（G3）。 -->
+    <div v-if="!store.worldReady" class="stage-loading" role="status">地图装载中…</div>
 
     <header class="hud" aria-label="状态与入口">
       <span class="badge" :data-status="store.status">{{ statusText }}</span>

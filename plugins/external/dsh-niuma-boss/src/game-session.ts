@@ -35,6 +35,7 @@ import { GameWorld } from './game-world.ts'
 import { INTERACT_RADIUS_TILES, dialogueStillInReach, npcDialogue, resolvePrompt, staffNameplate, type NearTarget, type Prompt } from './interaction.ts'
 import { deriveStaffCommands, staffDialogueViews } from './performance.ts'
 import { browserStorage, RecoveryStore, scopeOf, type WorldSnapshot } from './recovery.ts'
+import { applyStageVariables } from './stage.ts'
 import { useTaskBookStore, type PendingSubmit } from './store.ts'
 import { applyEvent, applySnapshot, emptyTaskView, taskStateLabel, type ButlerEvent, type ConversationSummary, type RecoveryContext, type RunInfo } from './task-projection.ts'
 import type { Feet } from './world-runtime.ts'
@@ -42,6 +43,8 @@ import type { Feet } from './world-runtime.ts'
 export interface GameSessionOptions {
   /** Phaser 挂载点。 */
   readonly parent: HTMLElement
+  /** 舞台变量宿主（.shell）：--stage-* 设在这里，提示/对白/toast 才能锚在游戏画面内。 */
+  readonly stageHost?: HTMLElement
   /** 编译后地图/图集资源的基路径（含部署前缀）。 */
   readonly assetsBase: string
   /** 管家入口发现起点等客户端参数；本地联调可覆盖。 */
@@ -87,6 +90,8 @@ export class GameSession {
     this.recovery = options.recovery ?? new RecoveryStore(browserStorage())
     this.world = new GameWorld(options.parent, {
       assetsBase: options.assetsBase,
+      // 舞台矩形变化（建场景/resize/换 zoom）写进 .shell 的 CSS 变量，DOM 提示跟着锚定游戏画面。
+      onStage: stage => applyStageVariables(options.stageHost, stage),
       inputLocked: () => this.store.bookOpen || this.store.dialogue !== null,
       onInteract: target => { this.interact(target) },
       onNearTargets: targets => {
