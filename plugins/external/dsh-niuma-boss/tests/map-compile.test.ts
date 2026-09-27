@@ -299,11 +299,16 @@ describe('真实交付的三图', () => {
     expect(() => compileActivity(outside, runtime, 'npc_hr', profiles.get('npc_hr'))).toThrow(/出生格不在活动域内/)
   })
 
-  it('职责与作者预写对白：员工没有对白块，普通 NPC 用名册里的内容，旧示例保持 unavailable', async () => {
+  it('职责与作者预写对白：员工没有对白块，普通 NPC 用名册里的内容，示例台词按名册编译', async () => {
     const characters = await json(resolve(delivery, 'characters.json'))
     const layout = await json(resolve(delivery, 'maps/office.layout.json'))
     const profiles = new Map([
       ['npc_hr', { name: '沈禾', role: '人事', lines: ['这页先留白，你说完我再记。'], ordinary: true }],
+      ['sample_explorer', { name: '谷雨', role: '探索研究员', ordinary: false, lines: [
+        '这栋楼我转了三圈:开发部的绿植是假的,人事部的零食是真的,老板办公室的门——至今只看你进出。',
+        '听说商业街咖啡店的豆子不错。等我哪天把走廊尽头的门摸清楚,第一个去替你试喝。',
+        '别问我探索过什么秘密。这栋楼的真相,比周报里那句「进展顺利」多多了。',
+      ] }],
     ])
     const character = (id: string) => (characters.characters as { id: string; label: string }[]).find(c => c.id === id)!
     expect(compileProfile('boss', layout, character('boss'), profiles)).toEqual({ role: 'player' })
@@ -313,10 +318,19 @@ describe('真实交付的三图', () => {
       role: 'npc',
       dialogue: { mode: 'authored_lines', name: '沈禾', role: '人事', lines: ['这页先留白，你说完我再记。'] },
     })
-    // 设计示例（sample_explorer）按作者数据原样保留：id 不改、名字来自交付、通道 unavailable。
+    // 设计示例（sample_explorer）的台词批次（E3）：名册与美术档名字一致、作者预写内容原样编译。
     expect(compileProfile('sample_explorer', layout, character('sample_explorer'), profiles)).toEqual({
       role: 'npc',
-      dialogue: { mode: 'unavailable', name: '探险NPC示例', role: '', lines: [] },
+      dialogue: {
+        mode: 'authored_lines',
+        name: '谷雨',
+        role: '探索研究员',
+        lines: [
+          '这栋楼我转了三圈:开发部的绿植是假的,人事部的零食是真的,老板办公室的门——至今只看你进出。',
+          '听说商业街咖啡店的豆子不错。等我哪天把走廊尽头的门摸清楚,第一个去替你试喝。',
+          '别问我探索过什么秘密。这栋楼的真相,比周报里那句「进展顺利」多多了。',
+        ],
+      },
     })
     // 业务员工拿不到对白块：本切片不给员工开搭话通道。
     expect(compileProfile('closedoff', layout, character('closedoff'), profiles)).not.toHaveProperty('dialogue')

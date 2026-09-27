@@ -93,11 +93,24 @@ export function cameraScrollFor(
   }
 }
 
-/** 把舞台矩形写进 CSS 变量（--stage-*）：提示/对白/toast 的定位锚定游戏画面。 */
-export function applyStageVariables(host: HTMLElement | null | undefined, stage: StageLayout): void {
+/**
+ * 把舞台矩形写进 CSS 变量（--stage-*）：提示/对白/toast 的定位锚定游戏画面。
+ * 视口内可见的舞台：横向 [max(0,x), min(x+w, viewport)]，纵向同理——舞台大于视口
+ * （covered/裁切态）时可见区就是整个视口，锚点不得落到画面外（多视口验收缺陷 #7/#8）。
+ */
+export function applyStageVariables(
+  host: HTMLElement | null | undefined,
+  stage: StageLayout,
+  viewport: { width: number; height: number },
+): void {
   if (!host) return
   host.style.setProperty('--stage-x', stage.offsetX + 'px')
   host.style.setProperty('--stage-y', stage.offsetY + 'px')
   host.style.setProperty('--stage-w', stage.width + 'px')
   host.style.setProperty('--stage-h', stage.height + 'px')
+  const visibleLeft = Math.max(0, stage.offsetX)
+  const visibleRight = Math.min(stage.offsetX + stage.width, viewport.width)
+  const visibleBottom = Math.min(stage.offsetY + stage.height, viewport.height)
+  host.style.setProperty('--stage-center-x', ((visibleLeft + visibleRight) / 2) + 'px')
+  host.style.setProperty('--stage-bottom-px', Math.max(0, viewport.height - visibleBottom) + 'px')
 }

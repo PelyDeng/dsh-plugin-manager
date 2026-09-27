@@ -18,7 +18,7 @@ html, body, #app { height: 100%; margin: 0; }
 
 /* 装载期中央提示：首屏与切图空档都显示在游戏画面中央（G3）。 */
 .stage-loading {
-  position: absolute; left: calc(var(--stage-x) + var(--stage-w) / 2); top: calc(var(--stage-y) + var(--stage-h) / 2);
+  position: absolute; left: var(--stage-center-x); top: 50vh;
   transform: translate(-50%, -50%); z-index: 15;
   padding: 10px 22px; border-radius: 999px;
   background: rgba(23, 34, 46, .85); color: #e8f1f8; font-size: 14px;
@@ -51,13 +51,13 @@ html, body, #app { height: 100%; margin: 0; }
 .book-toggle:hover { background: #2a3d52; }
 
 .toast {
-  position: absolute; left: calc(var(--stage-x) + var(--stage-w) / 2); transform: translateX(-50%); bottom: 24px; z-index: 30;
+  position: absolute; left: var(--stage-center-x); transform: translateX(-50%); bottom: 24px; z-index: 30;
   max-width: min(80vw, 480px); padding: 8px 16px; border-radius: 8px; cursor: pointer;
   background: rgba(23, 34, 46, .92); color: #fff; font-size: 13px;
 }
 
 .banner {
-  position: absolute; top: calc(var(--stage-y) + 52px); left: calc(var(--stage-x) + var(--stage-w) / 2); transform: translateX(-50%); z-index: 25;
+  position: absolute; top: 52px; left: var(--stage-center-x); transform: translateX(-50%); z-index: 25;
   padding: 8px 16px; border-radius: 8px; background: rgba(140, 32, 32, .92); color: #fff; font-size: 13px;
 }
 .banner a { color: #ffd9a8; }
@@ -131,7 +131,7 @@ html, body, #app { height: 100%; margin: 0; }
 /* 就近提示：同一时刻只有一个（interaction_rules.yaml#principles.single-prompt）；
    点击等价于按交互键 E。 */
 .prompt {
-  position: absolute; left: calc(var(--stage-x) + var(--stage-w) / 2); bottom: calc(100% - var(--stage-y) - var(--stage-h) + 84px); transform: translateX(-50%);
+  position: absolute; left: var(--stage-center-x); bottom: calc(var(--stage-bottom-px) + 84px); transform: translateX(-50%);
   font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 999px;
   border: 1px solid #c9c2b0; background: rgba(28, 42, 56, .92); color: #fff; cursor: pointer;
 }
@@ -155,7 +155,7 @@ html, body, #app { height: 100%; margin: 0; }
 
 /* 对白面板：普通 NPC 的作者预写台词；员工名牌没有自由输入框。 */
 .dialogue {
-  position: absolute; left: calc(var(--stage-x) + var(--stage-w) / 2); bottom: calc(100% - var(--stage-y) - var(--stage-h) + 20px); transform: translateX(-50%);
+  position: absolute; left: var(--stage-center-x); bottom: calc(var(--stage-bottom-px) + 20px); transform: translateX(-50%);
   width: min(520px, 92vw); padding: 10px 14px 12px; border-radius: 12px;
   background: rgba(252, 250, 244, .97); border: 1px solid #c9c2b0; box-shadow: 0 8px 24px rgba(20, 30, 40, .28);
 }

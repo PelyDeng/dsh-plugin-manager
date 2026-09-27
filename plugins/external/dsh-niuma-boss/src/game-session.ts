@@ -91,7 +91,7 @@ export class GameSession {
     this.world = new GameWorld(options.parent, {
       assetsBase: options.assetsBase,
       // 舞台矩形变化（建场景/resize/换 zoom）写进 .shell 的 CSS 变量，DOM 提示跟着锚定游戏画面。
-      onStage: stage => applyStageVariables(options.stageHost, stage),
+      onStage: stage => applyStageVariables(options.stageHost, stage, { width: options.parent.clientWidth, height: options.parent.clientHeight }),
       inputLocked: () => this.store.bookOpen || this.store.dialogue !== null,
       onInteract: target => { this.interact(target) },
       onNearTargets: targets => {
