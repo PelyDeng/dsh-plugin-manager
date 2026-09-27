@@ -72,6 +72,7 @@ const stub = vi.hoisted(() => {
       readonly sprites: Sprite[] = []
       readonly images: InstanceType<typeof Image>[] = []
       readonly portals: Sprite[] = []
+      readonly nametags: (Sprite & { textContent?: string })[] = []
       readonly time = {
         now: 0,
         delayedCall: (_delay: number, callback: () => void) => { callback() },
@@ -119,6 +120,12 @@ const stub = vi.hoisted(() => {
       sprite: (x: number, y: number) => { const sprite = new Sprite(x, y); this.sprites.push(sprite); return sprite },
       // 传送门能量圈是纯表现层：单独存放，不进 sprites（玩家按创建序定位）。
       circle: (x: number, y: number) => { const sprite = new Sprite(x, y); this.portals.push(sprite); return sprite },
+      text: (x: number, y: number, content: string) => {
+        const tag = new Sprite(x, y)
+        ;(tag as Sprite & { textContent?: string }).textContent = content
+        this.nametags.push(tag)
+        return tag
+      },
       image: (x: number, y: number, key: string, frame?: string) => {
         const image = new Image(x, y, key, frame)
         this.images.push(image)

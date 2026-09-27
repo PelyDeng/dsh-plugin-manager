@@ -11,12 +11,14 @@
  * 横竖屏：旋转不清空任何界面状态（位置与任务本开合都由会话/存储保存，旋转只改布局）；
  * 可见区域按 visualViewport 收缩，软键盘不遮挡输入框（真机未验证）。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useTaskBookStore } from './store'
 import { GameSession } from './game-session'
 // 状态文案：投影的映射 + labels 里补的三个英文 token（dispatched/executing/succeeded）。
 import { stateLabel as taskStateLabel } from './labels'
 import { installViewportHeight } from './viewport'
+// 受控 md 渲染（拷贝自 agents/web-common,那边是唯一权威）:原始记录弹窗按原格式渲染交回正文。
+import { renderMarkdownInto } from './vendor/markdown.js'
 
 const store = useTaskBookStore()
 const shell = ref<HTMLElement>()
@@ -111,14 +113,6 @@ watch(() => store.notice, text => {
   noticeTimer = setTimeout(() => { store.notice = '' }, 3500)
 })
 
-/** 员工卡正文默认收起（F3/A4）：流式草稿可能整屏长，点击展开/收起。 */
-const expandedStaff = ref(new Set<string>())
-const toggleStaff = (id: string) => {
-  const next = new Set(expandedStaff.value)
-  next.has(id) ? next.delete(id) : next.add(id)
-  expandedStaff.value = next
-}
-
 /** 子任务正文/草稿默认限高（F3）：点击展开全文，再点收起；流式更新保持已选状态。 */
 const expandedTexts = ref(new Set<string>())
 const toggleText = (key: string) => {
@@ -130,6 +124,77 @@ const toggleText = (key: string) => {
 /** 任务终态：completed/failed/cancelled 时不再展示「本轮： running」这类运行中态（F4）。 */
 const roundFinished = computed(() => ['completed', 'failed', 'cancelled'].includes(store.task.state))
 
+/** 头顶气泡定位（F2）：game-world 节流上报的视口坐标直写 DOM，不走 Vue 响应式。 */
+const bubbleLayer = ref<HTMLElement>()
+const applyActorScreens = (screens: readonly { id: string; x: number; y: number }[]) => {
+  const layer = bubbleLayer.value
+  if (!layer) return
+  for (const screen of screens) {
+    const el = layer.querySelector<HTMLElement>('[data-actor-id="' + screen.id + '"]')
+    if (el) el.style.transform = 'translate(' + screen.x + 'px,' + screen.y + 'px)'
+  }
+}
+
+/** 原始记录弹窗（F3）：该成员全部子任务的交回正文按 md 渲染;Esc/遮罩/按钮关闭。 */
+const recordBody = ref<HTMLElement>()
+watch(() => [store.recordModal, store.task.subtasks] as const, async ([modal]) => {
+  if (!modal) return
+  await nextTick()
+  const container = recordBody.value
+  if (!container) return
+  // 流式更新会反复重建:保留阅读滚动位置,不把人拉回顶部(轮3 P3)。
+  const keepScroll = container.scrollTop
+  container.innerHTML = ''
+  const mine = store.task.subtasks.filter(s => s.agentId === modal.memberId)
+  if (mine.length === 0) {
+    const empty = document.createElement('p')
+    empty.className = 'record-empty'
+    empty.textContent = '还没有交回的正文；派活后成员交回的内容会按原格式显示在这里。'
+    container.appendChild(empty)
+    return
+  }
+  for (const subtask of [...mine].reverse()) {
+    const head = document.createElement('h3')
+    head.className = 'record-goal'
+    head.textContent = subtask.goal || subtask.displayName || subtask.id
+    const state = document.createElement('span')
+    state.className = 'record-state'
+    state.textContent = taskStateLabel(subtask.state)
+    head.appendChild(state)
+    container.appendChild(head)
+    const body = document.createElement('div')
+    body.className = 'record-text'
+    if (subtask.text) {
+      try {
+        renderMarkdownInto(body, subtask.text)
+      } catch {
+        body.textContent = subtask.text
+      }
+    } else {
+      body.className += ' record-text-empty'
+      body.textContent = '（这条子任务还没有交回正文）'
+    }
+    container.appendChild(body)
+  }
+  container.scrollTop = keepScroll
+})
+
+/** 键盘直达:Esc 逐层关(记录弹窗→对白面板);对白打开时按方向键 = 想离开,自动收起面板(轮1 P1)。
+ *  方向键分支忽略输入框(轮2):任务本+对白同开时,输入框里移光标不应误收面板。 */
+const MOVE_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD']
+const onRecordKeydown = (event: KeyboardEvent) => {
+  const target = event.target as HTMLElement | null
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+  if (event.key === 'Escape') {
+    if (store.recordModal) session?.closeRecord()
+    else if (store.dialogue) session?.closeDialogue()
+    return
+  }
+  if (store.dialogue && MOVE_KEYS.includes(event.code)) {
+    session?.closeDialogue()
+  }
+}
+
 /** 软键盘弹出时把输入框滚进可见区；真机未验证，只保证有焦点就把目标带进视野。 */
 const onFocusIn = (event: FocusEvent) => {
   const target = event.target as HTMLElement | null
@@ -137,14 +202,17 @@ const onFocusIn = (event: FocusEvent) => {
 }
 
 onMounted(() => {
-  session = new GameSession({ parent: host.value!, stageHost: shell.value, assetsBase })
+  session = new GameSession({ parent: host.value!, stageHost: shell.value, assetsBase, onActorScreens: applyActorScreens })
   detachViewport = installViewportHeight(window, document)
   document.addEventListener('visibilitychange', onVisibility)
+  window.addEventListener('keydown', onRecordKeydown)
   void session.start()
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
+  window.removeEventListener('keydown', onRecordKeydown)
+  if (noticeTimer) clearTimeout(noticeTimer)
   detachViewport?.()
   session?.stop()
 })
@@ -156,6 +224,40 @@ onBeforeUnmount(() => {
 
     <!-- 装载期中央提示：首屏与切图空档都不留空白画面（G3）。 -->
     <div v-if="!store.worldReady" class="stage-loading" role="status">地图装载中…</div>
+
+    <!-- 头顶气泡层（F2/F4）：定位由 game-world 节流直写 transform;点击员工气泡出原始记录弹窗,
+         点击 NPC 台词气泡开完整对白面板。层本身不拦截地图点击,气泡自身可点。 -->
+    <div ref="bubbleLayer" class="bubble-layer">
+      <button
+        v-for="member in store.staff" :key="'b-' + member.id" type="button"
+        class="bubble staff-bubble" :data-actor-id="member.id"
+        :title="'点击查看 ' + member.label + ' 的原始记录'"
+        @click.stop="session?.openRecord(member.id, member.label)"
+      >
+        <span class="bubble-head">{{ member.label }} · {{ member.stateLabel }}</span>
+        <span class="bubble-line">{{ member.bubble || member.actionLabel }}</span>
+      </button>
+      <button
+        v-if="store.npcAutoBubble" type="button"
+        class="bubble npc-bubble" :data-actor-id="store.npcAutoBubble.id"
+        :title="'点击打开 ' + store.npcAutoBubble.label + ' 的完整对话'"
+        @click.stop="session?.openNpcDialogue(store.npcAutoBubble.id)"
+      >
+        <span class="bubble-head">{{ store.npcAutoBubble.label }}<i v-if="store.npcAutoBubble.more > 0"> · 还有{{ store.npcAutoBubble.more }}句,点击看</i></span>
+        <span class="bubble-line">{{ store.npcAutoBubble.line }}</span>
+      </button>
+    </div>
+
+    <!-- 原始记录弹窗（F3）：成员交回正文按受控 md 渲染,支持 Esc/遮罩/按钮关闭。 -->
+    <div v-if="store.recordModal" class="record-modal" role="dialog" :aria-label="store.recordModal.label + ' 的原始记录'" @click.self="session?.closeRecord()">
+      <section class="record-panel">
+        <header>
+          <strong>{{ store.recordModal.label }} · 原始记录</strong>
+          <button type="button" @click="session?.closeRecord()">关闭</button>
+        </header>
+        <div ref="recordBody" class="record-md"></div>
+      </section>
+    </div>
 
     <header class="hud" aria-label="状态与入口">
       <span class="badge" :data-status="store.status">{{ statusText }}</span>
@@ -171,21 +273,8 @@ onBeforeUnmount(() => {
       :data-kind="store.prompt.kind" @click="onPrompt"
     >{{ store.prompt.label }}</button>
 
-    <!-- 员工表现：只显示权威状态与权威正文气泡，不自造内容。 -->
-    <section v-if="store.staff.length > 0" class="staff" aria-label="员工状态">
-      <article v-for="member in store.staff" :key="member.id" :data-staff="member.id" :data-action="member.action">
-        <header>
-          <strong>{{ member.label }}</strong>
-          <span class="state">{{ member.stateLabel }}</span>
-          <span class="action">{{ member.actionLabel }}</span>
-        </header>
-        <!-- 长文默认收起（F3）：流式草稿可能很长，点击在限高/全文间切换。 -->
-        <p
-          v-if="member.bubble" class="bubble" :data-expanded="expandedStaff.has(member.id) ? 'true' : 'false'"
-          @click="toggleStaff(member.id)"
-        >{{ member.bubble }}</p>
-      </article>
-    </section>
+    <!-- 员工状态卡已移除(轮2 A1):权威状态由头顶气泡与名牌就地呈现,全员明细在任务本;
+         data-staff 诊断属性仍由 game-world 挂在挂载点上,自动化验收不受影响。 -->
 
     <!-- 对白面板：普通 NPC 播放作者预写台词；员工只给名牌与真实状态，都没有自由输入。 -->
     <aside v-if="store.dialogue" class="dialogue" :data-dialogue="store.dialogue.kind" role="dialog" :aria-label="store.dialogue.title">

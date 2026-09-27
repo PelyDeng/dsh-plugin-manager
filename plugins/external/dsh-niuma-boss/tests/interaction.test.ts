@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  INTERACT_RADIUS_TILES, WALK_AWAY_TILES, dialogueStillInReach, npcDialogue, promptIdOf, resolvePrompt, staffNameplate,
+  INTERACT_RADIUS_TILES, WALK_AWAY_TILES, dialogueStillInReach, npcDialogue, pickNpcAutoBubble, promptIdOf, resolvePrompt, staffNameplate,
   type InteractionState, type NearTarget,
 } from '../src/interaction.ts'
 import { rendezvousCell, seatOrigin, seatPosition } from '../src/world-runtime.ts'
@@ -40,7 +40,7 @@ describe('就近提示的唯一性与优先级', () => {
 
   it('业务员工只给名牌与真实状态：没有搭话入口（首版无独立通道）', () => {
     const prompt = resolvePrompt([target({ id: 'blog', label: '博客', kind: 'staff', dialogueMode: undefined })], idle)
-    expect(prompt).toMatchObject({ id: 'staff_busy_nametag', label: '员工名牌', action: 'staff_nameplate' })
+    expect(prompt).toMatchObject({ id: 'staff_busy_nametag', label: '看名牌·博客', action: 'staff_nameplate' })
     expect(prompt?.action).not.toBe('open_task_book')
   })
 
@@ -127,5 +127,29 @@ describe('作者锚点解析（map_rules.yaml#anchors）', () => {
     // 换图与角色离场（不在本图近邻事实里）都算会话结束。
     expect(dialogueStillInReach([target({ distanceTiles: 0.5 })], 'npc_hr', true)).toBe(false)
     expect(dialogueStillInReach([target({ id: 'npc_admin' })], 'npc_hr', false)).toBe(false)
+  })
+})
+
+describe('NPC 自动台词气泡选取（F4）', () => {
+  const base = { distanceTiles: 1, dialogueMode: 'authored_lines' as const, authoredLines: ['台词一', '台词二'] }
+  const npc = (overrides: Record<string, unknown> = {}) => ({
+    id: 'npc_x', label: '谷雨', kind: 'npc' as const, ...base, ...overrides,
+  } as Parameters<typeof pickNpcAutoBubble>[0][number])
+
+  it('半径内取最近的预写台词 NPC,气泡=第一句+剩余句数', () => {
+    const near = [npc({ distanceTiles: 0.8 }), { ...npc({ id: 'npc_far', distanceTiles: 1.4 }) }]
+    const picked = pickNpcAutoBubble(near, 1.5, false)
+    expect(picked).toMatchObject({ id: 'npc_x', line: '台词一', more: 1 })
+  })
+  it('半径外一律不选', () => {
+    expect(pickNpcAutoBubble([npc({ distanceTiles: 1.6 })], 1.5, false)).toBeNull()
+  })
+  it('任一弹层打开时返回 null(轮1 P1:弹层优先避免叠字)', () => {
+    const near = [npc()]
+    expect(pickNpcAutoBubble(near, 1.5, true)).toBeNull()
+  })
+  it('非 npc 或无台词的对象不参与选取', () => {
+    const staff = { ...npc({ id: 'blog', kind: 'staff' as const }), authoredLines: undefined }
+    expect(pickNpcAutoBubble([staff], 1.5, false)).toBeNull()
   })
 })

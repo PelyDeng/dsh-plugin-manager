@@ -111,6 +111,8 @@ export interface GameWorldOptions {
   readonly restore?: () => WorldSnapshot | null
   /** 舞台布局变化（建场景/resize/换 zoom）：界面据此把 DOM 提示锚定在游戏画面内。 */
   readonly onStage?: (stage: StageLayout) => void
+  /** 角色「头顶锚点」的视口坐标（节流 100ms）：头顶气泡层的定位数据，App 层直写 DOM。 */
+  readonly onActorScreens?: (screens: readonly { id: string; x: number; y: number }[]) => void
 }
 
 const TILE = 32
@@ -289,6 +291,7 @@ export class GameWorld {
         this.nearKey = ''
         this.ready = false
         this.actorsKey = ''
+        this.nametags = []
         // 场景重开等于换了一个加载器：在途的走帧加载不再回调，按未加载处理（纹理本身留在游戏级）。
         this.walkLoading = false
         world.sceneActors = []
@@ -620,6 +623,7 @@ export class GameWorld {
         this.finder = new Pathfinder(grid)
         this.cameras.main.setRoundPixels(true)
         this.applyCamera()
+        this.buildNametags()
         this.scale.on('resize', this.onResize)
         this.bindPointer()
         this.play('idle')
@@ -796,9 +800,64 @@ export class GameWorld {
        */
       private movableTo(x: number, y: number): boolean {
         if (!this.finder.walkable(x, y)) return false
-        const same = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
-        if (same([x, y] as Cell, [Math.floor(this.player.x / TILE), Math.floor(this.player.y / TILE)])) return true
-        return !world.sceneActors.some(actor => actor.phase !== 'walking' && same([x, y] as Cell, actor.cell))
+
+        if (sameCell([x, y] as Cell, [Math.floor(this.player.x / TILE), Math.floor(this.player.y / TILE)])) return true
+        return !world.sceneActors.some(actor => actor.phase !== 'walking' && sameCell([x, y] as Cell, actor.cell))
+      }
+
+      /** 角色头顶名牌（F1）：Text 随 sprite 每帧同步；切图随场景销毁重建。 */
+      private nametags: { text: Phaser.GameObjects.Text; sprite: Phaser.GameObjects.Sprite }[] = []
+
+      /** 建名牌：文字优先用对白名（阿沫/谷雨…），玩家用「老板」并配主题橙底。 */
+      private buildNametags(): void {
+        this.nametags = []
+        for (const c of this.room.characters) {
+          const sprite = c.id === 'boss'
+            ? this.player
+            : world.sceneActors.find(a => a.character.id === c.id)?.sprite
+          if (!sprite) continue
+          const text = this.add.text(sprite.x, sprite.y - 46, displayName(c), {
+            fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
+            fontSize: '10px',
+            color: c.id === 'boss' ? '#ffd9a8' : '#e8f1f8',
+            backgroundColor: c.id === 'boss' ? 'rgba(122,74,26,0.78)' : 'rgba(23,34,46,0.72)',
+            padding: { x: 4, y: 2 },
+          }).setOrigin(0.5, 1).setDepth(sprite.depth + 0.3)
+          this.nametags.push({ text, sprite })
+        }
+      }
+
+      /** 每帧把名牌钉在角色头顶（脚点上方 46px，随 zoom 自然缩放）。 */
+      private followNametags(): void {
+        for (const tag of this.nametags) {
+          if (!tag.text || !tag.sprite) continue
+          tag.text.setPosition(tag.sprite.x, tag.sprite.y - 46)
+        }
+      }
+
+      /** 角色「头顶锚点」的视口坐标（节流 100ms，F2）：气泡层定位数据，经 onActorScreens 交给 App。 */
+      private screensAt = -Infinity
+      private emitScreens(time: number): void {
+        if (!this.player || time - this.screensAt < 100) return
+        this.screensAt = time
+        const viewport = { width: this.scale.gameSize.width, height: this.scale.gameSize.height }
+        const cam = this.cameras.main
+        const halfW = viewport.width / 2
+        const halfH = viewport.height / 2
+        const project = (wx: number, wy: number) => ({
+          x: Math.round((wx - cam.scrollX - halfW) * cam.zoom + halfW),
+          y: Math.round((wy - cam.scrollY - halfH) * cam.zoom + halfH),
+        })
+        const list: { id: string; x: number; y: number }[] = [
+          { id: 'boss', ...project(this.player.x, this.player.y - 52) },
+        ]
+        for (const actor of world.sceneActors) {
+          list.push({
+            id: actor.character.id,
+            ...project(actor.sprite.x, actor.sprite.y - 52),
+          })
+        }
+        world.options.onActorScreens?.(list)
       }
 
       intentDown(code: string): void {
@@ -844,9 +903,11 @@ export class GameWorld {
         this.finder.tick()
         this.routeFinder?.tick()
         this.followCamera(delta)
+        this.followNametags()
         // 员工与普通职员的逐格走动不受老板输入锁影响：界面开着时只暂停自主活动（见 roam）。
         this.stepActors(time, delta)
         this.syncActors()
+        this.emitScreens(time)
         if (world.movementLocked()) {
           if (this.intent.clear()) this.path = []
           this.play('idle')
@@ -1006,10 +1067,13 @@ export class GameWorld {
     const actor = this.sceneActors.find(a => a.character.id === character.id)
     if (actor) return targetOf(actor, from)
     const kind = character.role === 'staff' ? 'staff' : character.role === 'butler' ? 'butler' : 'npc'
+    const dialogue = character.dialogue
     return {
-      id: character.id, label: character.label, kind,
+      id: character.id, label: dialogue?.name ?? character.label, kind,
       distanceTiles: Math.hypot(character.cell[0] - from[0], character.cell[1] - from[1]),
-      ...(character.dialogue ? { dialogueMode: character.dialogue.mode } : {}),
+      ...(dialogue
+        ? { dialogueMode: dialogue.mode, authoredLines: dialogue.mode === 'authored_lines' ? [...dialogue.lines] : undefined }
+        : {}),
     }
   }
 
@@ -1021,16 +1085,16 @@ export class GameWorld {
 
   /** 这一格是否已被某个角色占着（软阻挡的呈现侧判定，不参与业务）。 */
   occupied(cell: Cell, exclude: Cell): boolean {
-    const same = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
-    if (same(cell, exclude)) return true
-    return this.sceneActors.some(actor => same(cell, actor.cell))
+
+    if (sameCell(cell, exclude)) return true
+    return this.sceneActors.some(actor => sameCell(cell, actor.cell))
   }
 
   /** 目标图的 NPC 静态占格（open 时 sceneActors 仍是旧图，不能查它）：落点被占时 land 退格。
    *  boss 不算——它的静态出生格正是入口 arrival，把自己挡在外面就永远回不了常规落点。 */
   private occupiedInRuntime(runtime: RuntimeMap, cell: Cell): boolean {
-    const same = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
-    return runtime.characters.some(c => c.role !== 'player' && same(cell, c.seat?.cell ?? c.cell))
+
+    return runtime.characters.some(c => c.role !== 'player' && sameCell(cell, c.seat?.cell ?? c.cell))
   }
 
   /** 切图或重开地图：装载目标图资产并给出落点（失败抛错，由调用方保留原图）。 */
@@ -1158,12 +1222,20 @@ function message(error: unknown): string {
 
 const sameCell = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
 
-/** 一个角色的就近事实：谁、什么职责、离老板几格、对白通道模式（作者数据）。 */
+/** 角色显示名:对白名(阿沫/谷雨…)优先,回退美术档 label。 */
+function displayName(character: WorldCharacter): string {
+  return character.dialogue?.name ?? character.label
+}
+
+/** 一个角色的就近事实：谁（对白名优先）、什么职责、离老板几格、对白通道与作者预写台词（作者数据）。 */
 function targetOf(actor: Actor, from: Cell): NearTarget {
   const kind = actor.character.role === 'staff' ? 'staff' : actor.character.role === 'butler' ? 'butler' : 'npc'
+  const dialogue = actor.character.dialogue
   return {
-    id: actor.character.id, label: actor.character.label, kind,
+    id: actor.character.id, label: dialogue?.name ?? actor.character.label, kind,
     distanceTiles: Math.hypot(actor.cell[0] - from[0], actor.cell[1] - from[1]),
-    ...(actor.character.dialogue ? { dialogueMode: actor.character.dialogue.mode } : {}),
+    ...(dialogue
+      ? { dialogueMode: dialogue.mode, authoredLines: dialogue.mode === 'authored_lines' ? [...dialogue.lines] : undefined }
+      : {}),
   }
 }

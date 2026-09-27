@@ -33,6 +33,35 @@ export const WALK_AWAY_TILES = 3.5
 /** interaction_rules.yaml#hotkey.interact_key（另有 Space/Enter 备用键，本切片只用 E）。 */
 export const INTERACT_KEY = 'KeyE'
 
+export interface NpcAutoBubble {
+  readonly id: string
+  readonly label: string
+  readonly line: string
+  readonly more: number
+}
+
+/**
+ * 靠近的预写台词 NPC 的自动气泡内容(F4):半径内的最近者,取第一句台词;
+ * 弹层打开(gateOpen)时返回 null——纯函数,会话层只负责把结果写进 store。
+ */
+export function pickNpcAutoBubble(
+  targets: readonly NearTarget[],
+  radius: number,
+  gateOpen: boolean,
+): NpcAutoBubble | null {
+  if (gateOpen) return null
+  const candidate = targets
+    .filter(t => t.kind === 'npc' && t.authoredLines?.length && t.distanceTiles <= radius)
+    .sort((a, b) => a.distanceTiles - b.distanceTiles)[0]
+  if (!candidate || !candidate.authoredLines?.length) return null
+  return {
+    id: candidate.id,
+    label: candidate.label,
+    line: candidate.authoredLines[0],
+    more: Math.max(0, candidate.authoredLines.length - 1),
+  }
+}
+
 export type PromptId =
   | 'butler_reply_hint' | 'supplement_hint' | 'butler_busy_hint' | 'butler_idle_hint'
   | 'staff_busy_nametag' | 'npc_talk_hint' | 'npc_status_hint'
@@ -59,6 +88,8 @@ export interface NearTarget {
   /** 与老板所在格的格距离（表现层按格算，不做像素级判定）。 */
   readonly distanceTiles: number
   readonly dialogueMode?: DialogueMode
+  /** authored_lines 的作者预写台词全文：靠近时的自动台词气泡直接展示（对话呈现升级 F4）。 */
+  readonly authoredLines?: readonly string[]
 }
 
 /** 交互判定需要的**权威**任务事实；没有任务事实时按「空闲」处理。 */
@@ -93,9 +124,9 @@ const LABELS: Record<PromptId, string> = {
   supplement_hint: '补充一句',
   butler_busy_hint: '正在收尾',
   butler_idle_hint: '派活',
-  staff_busy_nametag: '员工名牌',
+  staff_busy_nametag: '看名牌',
   npc_talk_hint: '交谈',
-  npc_status_hint: '名牌与职责',
+  npc_status_hint: '看名牌',
 }
 
 const ACTIONS: Record<PromptId, PromptAction> = {
@@ -128,10 +159,14 @@ export function resolvePrompt(near: readonly NearTarget[], state: InteractionSta
     || a.target.distanceTiles - b.target.distanceTiles
     || (a.target.id < b.target.id ? -1 : a.target.id > b.target.id ? 1 : 0))
   const best = candidates[0]!
+  // 交谈提示带上对象名（轮1 评审 P2）：只有「交谈」两个字无法分辨指的是哪一位。
+  // 看名牌/交谈类提示带对象名(轮2):移动端无悬停,名字必须直接可见。
+  const NAMED = new Set(['npc_talk_hint', 'npc_status_hint', 'staff_busy_nametag'])
+  const label = NAMED.has(best.id) ? LABELS[best.id] + '·' + best.target.label : LABELS[best.id]
   return {
     id: best.id,
     priority: PRIORITY[best.id],
-    label: LABELS[best.id],
+    label,
     target: best.target.id,
     kind: best.target.kind,
     action: ACTIONS[best.id],

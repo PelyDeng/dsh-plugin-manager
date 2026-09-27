@@ -75,7 +75,6 @@ node packages/plugin-manager/dist/cli.mjs verify-release --release .local/dsh-pl
 - 管家不可用时页面按实际情况降级：地图与普通 NPC 的预写对白照常可用，写入口给出可见原因，`/events` 断开后按 1/2/5/10 秒退避重连并从最后序号续订。
 - 竖屏为精简布局（次要 HUD 隐藏、任务本与对话用全屏弹层）；`routePrefix` 改动后页面注入前缀会一起改写，不需要另改构建产物。
 
-- 竖屏为精简布局（次要 HUD 隐藏、任务本与对话用全屏弹层）；`routePrefix` 改动后页面注入前缀会一起改写，不需要另改构建产物。
 - 舞台布局按「最小覆盖整数倍缩放」铺满视口（`src/stage.ts` 纯函数）：两轴覆盖视口为原则，降一档后缺口仍 ≤96px 时允许小包边兜底；挂载点上的 `data-portal`（idle/transition）、`data-portals`（门数）、`data-portal-land`（最近落点）供诊断与自动化验收使用。入口的传送门为程序化光环（表现层）；点击寻路会绕开身旁的入口门格，主动踩门（键盘朝门或点门）正常切图。
 
 ## 当前范围
