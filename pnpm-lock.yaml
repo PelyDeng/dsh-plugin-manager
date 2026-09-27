@@ -702,6 +702,9 @@ importers:
       '@deepseek-ai/schemastery':
         specifier: 3.18.4
         version: 3.18.4
+      markdown-it:
+        specifier: 15.0.1
+        version: 15.0.1
     devDependencies:
       '@deepseek-ai/cordis':
         specifier: 4.0.4
