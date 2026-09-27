@@ -3,11 +3,25 @@
 html, body, #app { height: 100%; margin: 0; }
 
 /* 外壳按可见高度（--vvh，由 viewport.ts 跟随 visualViewport 更新）收缩：
-   软键盘弹出时任务本与输入框留在可见区内；真机行为未验证。 */
+   软键盘弹出时任务本与输入框留在可见区内；真机行为未验证。
+   --stage-* 由 game-world 的舞台布局回写（F1b）：提示/对白/toast 锚定游戏画面
+   而不是整个外壳；装载期底色按地图主题（--stage-bg）铺满，不再是一片空白。 */
 .shell {
   position: relative; width: 100%; height: var(--vvh, 100%); overflow: hidden;
-  background: #dbe9f4; font-family: system-ui, 'Microsoft YaHei', sans-serif;
+  --stage-x: 0px; --stage-y: 0px; --stage-w: 100%; --stage-h: 100%;
+  --stage-bg: #dbe9f4;
+  background: var(--stage-bg); font-family: system-ui, 'Microsoft YaHei', sans-serif;
   overscroll-behavior: none; touch-action: manipulation;
+}
+.shell[data-scene='street'] { --stage-bg: #3a3440; }
+.shell[data-scene='cafe'] { --stage-bg: #452f22; }
+
+/* 装载期中央提示：首屏与切图空档都显示在游戏画面中央（G3）。 */
+.stage-loading {
+  position: absolute; left: var(--stage-center-x); top: 50vh;
+  transform: translate(-50%, -50%); z-index: 15;
+  padding: 10px 22px; border-radius: 999px;
+  background: rgba(23, 34, 46, .85); color: #e8f1f8; font-size: 14px;
 }
 
 .game { position: absolute; inset: 0; }
@@ -37,13 +51,13 @@ html, body, #app { height: 100%; margin: 0; }
 .book-toggle:hover { background: #2a3d52; }
 
 .toast {
-  position: absolute; left: 50%; transform: translateX(-50%); bottom: 24px; z-index: 30;
+  position: absolute; left: var(--stage-center-x); transform: translateX(-50%); bottom: 24px; z-index: 30;
   max-width: min(80vw, 480px); padding: 8px 16px; border-radius: 8px; cursor: pointer;
   background: rgba(23, 34, 46, .92); color: #fff; font-size: 13px;
 }
 
 .banner {
-  position: absolute; top: 52px; left: 50%; transform: translateX(-50%); z-index: 25;
+  position: absolute; top: 52px; left: var(--stage-center-x); transform: translateX(-50%); z-index: 25;
   padding: 8px 16px; border-radius: 8px; background: rgba(140, 32, 32, .92); color: #fff; font-size: 13px;
 }
 .banner a { color: #ffd9a8; }
@@ -97,7 +111,11 @@ html, body, #app { height: 100%; margin: 0; }
 .subtasks .uncertain { margin: 4px 0 0; font-size: 12px; color: #8a6d1f; }
 .subtasks details { margin-top: 4px; font-size: 12px; color: #7a7461; }
 .subtasks pre { margin: 4px 0 0; white-space: pre-wrap; max-height: 120px; overflow-y: auto; }
-.subtasks .text { margin: 6px 0 0; font-size: 13px; white-space: pre-wrap; word-break: break-word; }
+.subtasks .text {
+  margin: 6px 0 0; font-size: 13px; white-space: pre-wrap; word-break: break-word;
+  max-height: 7.5em; overflow: hidden; cursor: pointer;
+}
+.subtasks .text[data-expanded='true'] { max-height: none; }
 
 .summary { margin: 10px 0 0; padding: 8px 10px; border-radius: 8px; background: #e4ecdf; font-size: 13px; white-space: pre-wrap; }
 .incomplete { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: #f2ead2; font-size: 12px; color: #6b5a24; }
@@ -113,7 +131,7 @@ html, body, #app { height: 100%; margin: 0; }
 /* 就近提示：同一时刻只有一个（interaction_rules.yaml#principles.single-prompt）；
    点击等价于按交互键 E。 */
 .prompt {
-  position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%);
+  position: absolute; left: var(--stage-center-x); bottom: calc(var(--stage-bottom-px) + 84px); transform: translateX(-50%);
   font: inherit; font-size: 13px; padding: 6px 14px; border-radius: 999px;
   border: 1px solid #c9c2b0; background: rgba(28, 42, 56, .92); color: #fff; cursor: pointer;
 }
@@ -129,11 +147,15 @@ html, body, #app { height: 100%; margin: 0; }
 .staff header { display: flex; gap: 6px; align-items: baseline; font-size: 12px; color: #55503f; }
 .staff .state { color: #2a5d8f; }
 .staff .action { margin-left: auto; color: #7a7461; }
-.staff .bubble { margin: 4px 0 0; font-size: 12px; color: #22303f; white-space: pre-wrap; word-break: break-word; }
+.staff .bubble {
+  margin: 4px 0 0; font-size: 12px; color: #22303f; white-space: pre-wrap; word-break: break-word;
+  max-height: 3.9em; overflow: hidden; cursor: pointer;
+}
+.staff .bubble[data-expanded='true'] { max-height: none; }
 
 /* 对白面板：普通 NPC 的作者预写台词；员工名牌没有自由输入框。 */
 .dialogue {
-  position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%);
+  position: absolute; left: var(--stage-center-x); bottom: calc(var(--stage-bottom-px) + 20px); transform: translateX(-50%);
   width: min(520px, 92vw); padding: 10px 14px 12px; border-radius: 12px;
   background: rgba(252, 250, 244, .97); border: 1px solid #c9c2b0; box-shadow: 0 8px 24px rgba(20, 30, 40, .28);
 }

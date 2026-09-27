@@ -27,6 +27,8 @@ const stub = vi.hoisted(() => {
     depth = 0
     origin: { x: number; y: number } = { x: 0, y: 0 }
     visible = true
+    alpha = 1
+    scale = 1
     /** 当前帧：帧名按角色动画键区分；帧锚点由测试通过 frameOf 提供。 */
     frame = { name: 'frame' }
     readonly played: string[] = []
@@ -35,6 +37,8 @@ const stub = vi.hoisted(() => {
     setDepth(value: number) { this.depth = value; return this }
     setPosition(x: number, y: number) { this.x = x; this.y = y; return this }
     setVisible(value: boolean) { this.visible = value; return this }
+    setAlpha(value: number) { this.alpha = value; return this }
+    setScale(value: number) { this.scale = value; return this }
     setInteractive() { return this }
     setDisplaySize() { return this }
     play(key: string) { this.played.push(key); return this }
@@ -53,19 +57,25 @@ const stub = vi.hoisted(() => {
   const camera = {
     setBounds: () => camera, setRoundPixels: () => camera, startFollow: () => camera,
     setZoom: () => camera, centerOn: () => camera,
+    setBackgroundColor: () => camera, setScroll: () => camera,
+    fadeIn: () => camera, fadeOut: () => camera,
+    scrollX: 0, scrollY: 0, zoom: 1,
     getWorldPoint: (x: number, y: number) => ({ x, y }),
   }
   /** 每次 scene.start 的落点；切图失败时这里必须保持为空。 */
   const transitions: { key: string; data: unknown }[] = []
-  /**
-   * 场景外壳：生命周期方法由真实 RoomScene 覆盖，这里只提供字段、记录器与
-   * 一个可用的 `scene.start`（成功切图才会走到）。`time.now` 与 update 的 time
-   * 共用同一个可推进的时钟，走动超时与自主活动的时长都以它为准。
-   */
-  class Scene {
-    readonly sprites: Sprite[] = []
-    readonly images: InstanceType<typeof Image>[] = []
-    readonly time = { now: 0 }
+    /** 场景外壳：生命周期方法由真实 RoomScene 覆盖，这里只提供字段、记录器与
+     *  一个可用的 `scene.start`（成功切图才会走到）。`time.now` 与 update 的 time
+     * 共用同一个可推进的时钟，走动超时与自主活动的时长都以它为准；
+     * delayedCall 同步触发，切图动效的加载保持与测试时钟同序。 */
+    class Scene {
+      readonly sprites: Sprite[] = []
+      readonly images: InstanceType<typeof Image>[] = []
+      readonly portals: Sprite[] = []
+      readonly time = {
+        now: 0,
+        delayedCall: (_delay: number, callback: () => void) => { callback() },
+      }
     init(_data: unknown): void {}
     preload(): void {}
     create(): void {}
@@ -99,6 +109,7 @@ const stub = vi.hoisted(() => {
     readonly cameras = { main: camera }
     readonly scale = {
       width: 1440, height: 1000,
+      gameSize: { width: 1440, height: 1000 },
       on: (_event: string, _listener: unknown) => {}, off: (_event: string, _listener: unknown) => {},
     }
     readonly input = { on: (_event: string, _listener: unknown) => {} }
@@ -106,11 +117,25 @@ const stub = vi.hoisted(() => {
     readonly scene = { start: (key: string, data: unknown) => { transitions.push({ key, data }) } }
     readonly add = {
       sprite: (x: number, y: number) => { const sprite = new Sprite(x, y); this.sprites.push(sprite); return sprite },
+      // 传送门能量圈是纯表现层：单独存放，不进 sprites（玩家按创建序定位）。
+      circle: (x: number, y: number) => { const sprite = new Sprite(x, y); this.portals.push(sprite); return sprite },
       image: (x: number, y: number, key: string, frame?: string) => {
         const image = new Image(x, y, key, frame)
         this.images.push(image)
         return image
       },
+      graphics: () => {
+        const g: { depth: number; angle: number; alpha: number } & Record<string, unknown> = {
+          depth: 0, angle: 0, alpha: 1,
+          lineStyle: () => g, beginPath: () => g, arc: () => g, strokePath: () => g, strokeCircle: () => g,
+          setDepth: (value: number) => { g.depth = value; return g },
+        }
+        return g
+      },
+    }
+    readonly tweens = {
+      add: (_config: unknown) => ({ config: _config }),
+      killTweensOf: (_target: unknown) => {},
     }
   }
   const games: InstanceType<typeof Game>[] = []

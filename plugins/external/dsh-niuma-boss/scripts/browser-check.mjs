@@ -178,7 +178,13 @@ const actorCells = async () => Object.fromEntries((await page.evaluate(() =>
   }))
 const staffPhase = async (id) => (await staffEntries())[id]?.phase ?? ''
 const waitScene = (name, timeout = 5_000) =>
-  page.waitForFunction(expected => document.querySelector('[data-scene]')?.getAttribute('data-scene') === expected, name, { timeout })
+  page.waitForFunction(expected => document.querySelector('[data-scene]')?.getAttribute('data-scene') === expected, name, { timeout }).catch(async error => {
+    const cell = await cellNow().catch(() => 'cell?')
+    const toast = await page.locator('.toast').textContent().catch(() => 'toast?')
+    const portal = await page.evaluate(() => document.querySelector('[data-portal]')?.getAttribute('data-portal') ?? 'none').catch(() => '?')
+    console.error('[waitScene FAIL]', name, JSON.stringify({ cell, toast, portal }))
+    throw error
+  })
 /** 短促点按方向键：像真人按键一样按下再抬起，位移交给场景自己的 update。 */
 const nudge = async (key, ms = 240) => {
   await page.keyboard.down(key)
@@ -235,7 +241,7 @@ const walkToward = async (target, budget = 40) => {
  * 在作者碰撞网格上按四向找路并逐格走过去（与游戏共用同一份 collision，不猜几何）。
  * 键盘每次只推进一格，格子真的变了再走下一步：比固定时长稳，也不依赖镜头位置。
  */
-const routeTo = (runtime, from, to) => {
+const routeTo = (runtime, from, to, blocked) => {
   const key = (cell) => cell[0] + ',' + cell[1]
   const queue = [from]
   const previous = new Map([[key(from), null]])
@@ -247,6 +253,7 @@ const routeTo = (runtime, from, to) => {
       if (previous.has(key(next))) continue
       if (next[0] < 0 || next[1] < 0 || next[0] >= runtime.width || next[1] >= runtime.height) continue
       if (!walkable(runtime, next)) continue
+      if (blocked && blocked.has(key(next)) && key(next) !== key(to)) continue
       previous.set(key(next), key(current))
       queue.push(next)
     }
@@ -260,13 +267,23 @@ const routeTo = (runtime, from, to) => {
 }
 const keyToward = (from, to) => to[0] !== from[0] ? (to[0] > from[0] ? 'd' : 'a') : (to[1] > from[1] ? 's' : 'w')
 const walkRoute = async (target, budget = 120) => {
+  const startScene = await scene()
+  let stalled = 0
   for (let step = 0; step < budget; step++) {
+    // 目标是入口触发格时踩上即切图：场景变了就视为到达，不再把玩家往新图的坐标上带。
+    if (await scene() !== startScene) return true
     const current = await cellNow()
     if (current[0] === target[0] && current[1] === target[1]) return true
     const runtime = await runtimeOf(await scene())
-    const path = routeTo(runtime, current, target)
+    // F6 软阻挡后游戏内 NPC 站定格不可入：用例寻路与游戏同语义（行走中的不算占格）。
+    const actors = await actorCells()
+    const blocked = new Set(Object.values(actors).filter(a => a.pose !== 'walking').map(a => a.cell.join(',')))
+    const path = routeTo(runtime, current, target, blocked)
     if (path === null || path.length === 0) return false
+    const before = current.join(',')
     await nudge(keyToward(current, path[0]), 220)
+    // 终点被占（NPC 恰好在终点）等短暂阻挡：连续原地三次就放弃，交给上层按距离判定。
+    if ((await cellNow()).join(',') === before) { stalled++; if (stalled >= 3) return false } else stalled = 0
   }
   const current = await cellNow()
   return current[0] === target[0] && current[1] === target[1]
@@ -344,6 +361,7 @@ await check('三图往返：office→street→cafe→street→office，落点固
     const runtime = await runtimeOf(map)
     assert.ok(walkable(runtime, cell), `${map} 上的人物落在阻挡格 ${cell.join(',')}`)
     visited.push(map + ':' + cell.join(','))
+    console.error('[roundtrip]', visited.at(-1))
     const shot = await page.locator('.game canvas').screenshot()
     assert.ok(shot.length > 30_000, `${map} 场景画面只有 ${shot.length} 字节，可能是空白`)
     shots.push({ map, bytes: shot.length, token: createHash('sha256').update(shot).digest('hex').slice(0, 12) })

@@ -47,10 +47,11 @@ import { INTERACT_KEY, type NearTarget } from './interaction.ts'
 import type { WorldSnapshot } from './recovery.ts'
 import {
   ARRIVAL_RADIUS_TILES, BIRTH_MAP, MapRouter, RETURN_TILES_PER_SEC, WALK_TILES_PER_SEC, activityRoute, activityTarget,
-  cellKey, cellPoint, directionOf, frameOrigin, idleMs, integerZoom, rendezvousCell, safeMapId,
+  cellKey, cellPoint, directionOf, frameOrigin, idleMs, rendezvousCell, safeMapId,
   seatOrigin, seatPosition,
   type ActivityDomain, type Cell, type CharacterSpec, type Direction, type EntrySpec, type Feet, type Portal, type WorldSpec,
 } from './world-runtime.ts'
+import { cameraScrollFor, stageLayout, type StageLayout } from './stage.ts'
 
 type Frame = { path: string; size: [number, number]; anchor: [number, number]; seat?: [number, number] }
 type Clip = { action: string; direction: string; frames: Frame[] }
@@ -108,9 +109,23 @@ export interface GameWorldOptions {
   readonly assetsBase: string
   /** 按用户存的恢复候选（坏快照由 RecoveryStore 判为 null）。 */
   readonly restore?: () => WorldSnapshot | null
+  /** 舞台布局变化（建场景/resize/换 zoom）：界面据此把 DOM 提示锚定在游戏画面内。 */
+  readonly onStage?: (stage: StageLayout) => void
 }
 
 const TILE = 32
+/** 各地图「地图外」包边色（相机背景），与 style.css 的 --stage-bg 主题一一对应。 */
+const SCENE_BACKDROP: Record<string, string> = {
+  office: '#dbe9f4',
+  street: '#3a3440',
+  cafe: '#452f22',
+}
+/** 传送门色相按目标地图（F9-1）：通向办公楼冷蓝、商业街暖橙、咖啡店咖啡棕。 */
+const PORTAL_COLORS: Record<string, number> = {
+  office: 0x4a90d9,
+  street: 0xd99a4a,
+  cafe: 0xb0703c,
+}
 /** 老板速度：balance_params.yaml#movement.boss_walk_tiles_per_sec = 4.0 格/秒，与 8fps 行走帧同步。 */
 const SPEED = 4 * TILE
 /** 员工速度：balance_params.yaml#movement.staff_walk/return_tiles_per_sec（3.0 / 2.5 格每秒）。 */
@@ -247,7 +262,11 @@ export class GameWorld {
       private nearAt = 0
       /** 场景还没建好时收到的恢复请求：先记下，create 之后立刻应用。 */
       private pending: WorldSnapshot | null | undefined
-      private onResize = () => this.applyZoom()
+      /** 当前舞台布局（stageLayout 的场景侧缓存）：跟随与钳制每帧消费，resize/teleport 重算。 */
+      private stage: StageLayout | null = null
+      /** 点击寻路的一次性 finder（占格副本）：找到即弃，update 顺带 tick 它。 */
+      private routeFinder?: Pathfinder
+      private onResize = () => this.applyCamera()
       /** 走帧图集：是否已被要求/正在加载/就绪/失败；只有玩家操作过才会被要求。 */
       private walkWanted = false
       private walkLoading = false
@@ -582,6 +601,13 @@ export class GameWorld {
       }
 
       create(): void {
+        // 相机背景即「地图外」的颜色：按地图主题设定（office 保持冷白，street/cafe 用
+        // 暗色包边），与 .shell 的 --stage-bg 一致——铺不满视口的轴不再露出刺眼空白。
+        this.cameras.main.setBackgroundColor(SCENE_BACKDROP[this.room.id] ?? '#dbe9f4')
+        this.drawPortals()
+        // 切图/首屏淡入；传送门回到待命态（data-portal）。
+        this.cameras.main.fadeIn(200, 0, 0, 0)
+        this.setPortalState('idle')
         this.room.draws.forEach(draw => {
           this.add.image(draw.x, draw.y, this.room.id, draw.frame)
             .setOrigin(0).setDisplaySize(draw.width, draw.height).setDepth(draw.depth)
@@ -592,11 +618,8 @@ export class GameWorld {
         for (const npc of this.room.characters) if (npc.id !== 'boss') world.sceneActors.push(this.actor(npc))
         const grid = Array.from({ length: this.room.height }, (_, y) => this.room.collision.slice(y * this.room.width, (y + 1) * this.room.width))
         this.finder = new Pathfinder(grid)
-        this.cameras.main
-          .setBounds(0, 0, this.room.width * TILE, this.room.height * TILE)
-          .setRoundPixels(true)
-          .startFollow(this.player, true, 0.12, 0.12)
-        this.applyZoom()
+        this.cameras.main.setRoundPixels(true)
+        this.applyCamera()
         this.scale.on('resize', this.onResize)
         this.bindPointer()
         this.play('idle')
@@ -692,9 +715,33 @@ export class GameWorld {
         }
       }
 
-      /** 整数倍缩放：只在地图装得下时放大，宁可留黑边。 */
-      private applyZoom(): void {
-        this.cameras.main.setZoom(integerZoom(this.scale, this.room))
+      /**
+       * 舞台与镜头布局（F1）：stageLayout 算出整数倍 zoom 与舞台矩形，
+       * setZoom 后把镜头**硬定位**到合法范围（teleport/resize/建场景共用）。
+       * 不用 setBounds/startFollow：bounds 小于视口时 Phaser 会把 scroll 钳回左上（A1 根因），
+       * 跟随轴的平滑逼近由 update 里的 followCamera 按帧做。
+       */
+      private applyCamera(): void {
+        const viewport = { width: this.scale.gameSize.width, height: this.scale.gameSize.height }
+        const layout = stageLayout(viewport, this.room, TILE)
+        this.stage = layout
+        this.cameras.main.setZoom(layout.zoom)
+        const focus = this.player ? { x: this.player.x, y: this.player.y } : cellPoint(this.feet.cell, TILE)
+        const scroll = cameraScrollFor(layout, viewport, this.room, TILE, focus)
+        this.cameras.main.setScroll(scroll.scrollX, scroll.scrollY)
+        world.options.onStage?.(layout)
+      }
+
+      /** 跟随轴每帧向目标 scroll 逼近（帧率无关的 0.12 lerp）；包边轴保持固定居中。 */
+      private followCamera(delta: number): void {
+        const layout = this.stage
+        if (!layout || !this.player) return
+        const viewport = { width: this.scale.gameSize.width, height: this.scale.gameSize.height }
+        const target = cameraScrollFor(layout, viewport, this.room, TILE, { x: this.player.x, y: this.player.y })
+        const cam = this.cameras.main
+        const step = 1 - Math.pow(1 - 0.12, Math.min(delta, 100) / 16.666)
+        if (layout.width >= viewport.width) cam.scrollX += (target.scrollX - cam.scrollX) * step
+        if (layout.height >= viewport.height) cam.scrollY += (target.scrollY - cam.scrollY) * step
       }
 
       /** 触摸与键盘共用同一份碰撞与位移：点地走 A*（同一网格），键盘按下走同一 stepPosition。 */
@@ -704,12 +751,30 @@ export class GameWorld {
           this.requestWalkFrames()
           if (objects.length || world.movementLocked()) return
           const point = this.cameras.main.getWorldPoint(pointer.x, pointer.y)
+          const from = { x: Math.floor(this.player.x / TILE), y: Math.floor(this.player.y / TILE) }
+          const to = { x: Math.floor(point.x / TILE), y: Math.floor(point.y / TILE) }
+          // F6：把 NPC 当前格按墙写入碰撞副本、用一次性 finder 寻路——路径绕开人而不是穿过去，
+          // 起点豁免（老板自己所在格必须可出发）；副本寻路也顺带不再与员工的寻路互抢同一 finder。
+          const grid = Array.from({ length: this.room.height }, (_, y) => this.room.collision.slice(y * this.room.width, (y + 1) * this.room.width))
+          for (const actor of world.sceneActors) {
+            if (actor.phase !== 'walking') grid[actor.cell[1]][actor.cell[0]] = 1
+          }
+          // B1 防误触：与老板相邻的入口触发格在寻路网格里按墙处理——落点紧邻回程门时
+          // （street 落点 (5,12) 与回程门 (5,11) 相邻），点远处不会第一步斜进家门弹回原图。
+          // 点击门格本身仍是合法意图：终点格豁免。
+          for (const entry of this.room.entries) {
+            const [tx, ty] = entry.trigger
+            if ((Math.abs(tx - from.x) === 1 && ty === from.y) || (Math.abs(ty - from.y) === 1 && tx === from.x)) {
+              if (to.x !== tx || to.y !== ty) grid[ty][tx] = 1
+            }
+          }
+          grid[from.y][from.x] = 0
+          const finder = new Pathfinder(grid)
           const generation = ++this.pathGeneration
           this.path = []
-          void this.finder.find(
-            { x: Math.floor(this.player.x / TILE), y: Math.floor(this.player.y / TILE) },
-            { x: Math.floor(point.x / TILE), y: Math.floor(point.y / TILE) },
-          ).then(path => {
+          this.routeFinder = finder
+          void finder.find(from, to).then(path => {
+            if (this.routeFinder === finder) this.routeFinder = undefined
             if (generation !== this.pathGeneration || !path) return
             this.path = path.map(p => ({ x: (p.x + .5) * TILE, y: (p.y + .5) * TILE }))
           })
@@ -721,6 +786,19 @@ export class GameWorld {
         this.path = []
         this.pathGeneration++
         if (this.player) this.play('idle')
+      }
+
+      /**
+       * 老板可入格 = 碰撞可走且不与「站定/就座」的其他角色同格（F6 软阻挡：只拦老板；
+       * 员工到位是脚本化落格，不经此判定，不存在互堵）。行走中的员工是瞬态位置，
+       * 不当作阻挡——否则老板会被逐格走动的员工无端卡住。老板当前格恒放行——
+       * stepPosition 的首个采样点就在当前格内，不能把它当阻挡。
+       */
+      private movableTo(x: number, y: number): boolean {
+        if (!this.finder.walkable(x, y)) return false
+        const same = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
+        if (same([x, y] as Cell, [Math.floor(this.player.x / TILE), Math.floor(this.player.y / TILE)])) return true
+        return !world.sceneActors.some(actor => actor.phase !== 'walking' && same([x, y] as Cell, actor.cell))
       }
 
       intentDown(code: string): void {
@@ -757,13 +835,15 @@ export class GameWorld {
         this.path = []
         const point = cellPoint(feet.cell, TILE)
         this.player.setPosition(point.x, point.y).setDepth(point.y)
-        this.cameras.main.centerOn(point.x, point.y)
+        this.applyCamera()
         this.play('idle')
         this.sync(true)
       }
 
       update(time: number, delta: number): void {
         this.finder.tick()
+        this.routeFinder?.tick()
+        this.followCamera(delta)
         // 员工与普通职员的逐格走动不受老板输入锁影响：界面开着时只暂停自主活动（见 roam）。
         this.stepActors(time, delta)
         this.syncActors()
@@ -790,7 +870,7 @@ export class GameWorld {
           }
         }
         if (target) {
-          const position = stepPosition(this.player, target, SPEED * Math.min(delta, 50) / 1000, (x, y) => this.finder.walkable(x, y))
+          const position = stepPosition(this.player, target, SPEED * Math.min(delta, 50) / 1000, (x, y) => this.movableTo(x, y))
           const moveX = position.x - this.player.x, moveY = position.y - this.player.y
           if (moveX || moveY) {
             if (!axis.dx && !axis.dy) this.facing = directionOf(moveX, moveY, this.facing)
@@ -831,7 +911,12 @@ export class GameWorld {
         if (changed) this.tryPortal()
       }
 
-      /** 站在触发格上且入口已武装：开始切图；加载期间不响应第二次触发。 */
+      /**
+       * 站在触发格上且入口已武装：开始切图（F9 动效版）。
+       * 演出：老板吸入（缩小淡出）+ 相机淡出 → 加载目标图 → 新场景 fadeIn。
+       * 失败路径：恢复老板原状、画面淡回原图、入口保持解除武装（走开再回来才可能再触发），
+       * 界面按原图就绪收尾，不停在「地图装载中」。
+       */
       private tryPortal(): void {
         if (this.loading) return
         world.router!.rearm(this.feet.cell)
@@ -840,16 +925,51 @@ export class GameWorld {
         this.loading = true
         world.router!.disarm(this.room.id, portal.entryId)
         this.cancelInput()
+        this.setPortalState('transition')
         world.options.onLoading?.()
-        void world.open(portal.to, portal.entryId)
-          .then((data: RoomData) => this.scene.start(SCENE_KEY, data))
-          .catch(error => {
-            // 保留原图最后合法位置，入口保持解除武装：不自动重试，走开再回来才可能再触发。
-            // 切图没成功、原图仍是前台地图：按原图就绪收尾，界面不能停在「地图装载中」。
-            this.loading = false
-            world.options.onAssetsError(message(error))
-            world.options.onReady?.()
-          })
+        const body = this.player
+        this.tweens.add({ targets: body, alpha: 0.15, scale: 0.55, duration: 150 })
+        this.cameras.main.fadeOut(200, 0, 0, 0)
+        this.time.delayedCall(200, () => {
+          void world.open(portal.to, portal.entryId)
+            .then((data: RoomData) => this.scene.start(SCENE_KEY, data))
+            .catch(error => {
+              // 演出回退：老板恢复原状、画面淡回原图——「表现不决定业务终态」（ADR 0003）。
+              this.tweens.killTweensOf(body)
+              body.setAlpha(1).setScale(1)
+              this.cameras.main.fadeIn(200, 0, 0, 0)
+              this.setPortalState('idle')
+              this.loading = false
+              world.options.onAssetsError(message(error))
+              world.options.onReady?.()
+            })
+        })
+      }
+
+      /** 传送门演出状态（data-portal）：无界面诊断与自动化验收用，不是逐帧同步。 */
+      private setPortalState(state: 'idle' | 'transition'): void {
+        world.parent.setAttribute('data-portal', state)
+      }
+
+      /** 入口传送门（F9-1）：触发格上的双层能量圈，色相指向目标地图；纯表现层。
+       *  用 Shape（Arc）而不是 Graphics 线描：与精灵同一渲染管线，缩放/像素风下稳定可见；
+       *  内圈 scale 呼吸模拟漩涡脉动，只动 scale/alpha，渲染开销可忽略（G6 帧预算复核覆盖）。 */
+      private drawPortals(): void {
+        let count = 0
+        for (const entry of this.room.entries) {
+          const to = world.router!.portal(this.room.id, entry.trigger)?.to.map
+          const color = PORTAL_COLORS[to ?? ''] ?? 0xf2e6c8
+          const point = cellPoint(entry.trigger, TILE)
+          // 三层传送门：深色底盘（嵌地凹陷感）+ 色相能量环 + 亮色内核——浅色地板上也清晰。
+          const base = this.add.circle(point.x, point.y, 15, 0x1c2230, 0.55).setDepth(point.y - 1)
+          const ring = this.add.circle(point.x, point.y, 11, color, 0.85).setDepth(point.y - 1)
+          const core = this.add.circle(point.x, point.y, 4, 0xffe9b8, 0.95).setDepth(point.y - 1)
+          this.tweens.add({ targets: ring, alpha: { from: 0.55, to: 0.95 }, duration: 850, yoyo: true, repeat: -1 })
+          this.tweens.add({ targets: core, scale: { from: 0.7, to: 1.25 }, duration: 850, yoyo: true, repeat: -1 })
+          this.tweens.add({ targets: base, alpha: { from: 0.4, to: 0.65 }, duration: 1700, yoyo: true, repeat: -1 })
+          count++
+        }
+        world.parent.setAttribute('data-portals', String(count))
       }
     }
     this.game = new Phaser.Game({
@@ -906,12 +1026,19 @@ export class GameWorld {
     return this.sceneActors.some(actor => same(cell, actor.cell))
   }
 
+  /** 目标图的 NPC 静态占格（open 时 sceneActors 仍是旧图，不能查它）：落点被占时 land 退格。
+   *  boss 不算——它的静态出生格正是入口 arrival，把自己挡在外面就永远回不了常规落点。 */
+  private occupiedInRuntime(runtime: RuntimeMap, cell: Cell): boolean {
+    const same = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
+    return runtime.characters.some(c => c.role !== 'player' && same(cell, c.seat?.cell ?? c.cell))
+  }
+
   /** 切图或重开地图：装载目标图资产并给出落点（失败抛错，由调用方保留原图）。 */
   private async open(to: { map: string; entry: string }, arrivedEntry: string): Promise<RoomData> {
     const runtime = await this.loadMap(to.map)
     const entry = this.router!.spec(to.map)?.entries.find(e => e.id === to.entry)
     if (!entry) throw new Error('入口不存在：' + to.map + '/' + to.entry)
-    const feet = this.router!.land(to.map, entry, this.current.facing, (map, cell) => this.walkable(map, cell))
+    const feet = this.router!.land(to.map, entry, this.current.facing, (map, cell) => this.walkable(map, cell) && !this.occupiedInRuntime(runtime, cell))
     return { runtime, feet, ...(arrivedEntry === '' ? {} : { arrivedEntry }) }
   }
 
@@ -998,10 +1125,10 @@ export class GameWorld {
     ]
   }
 
-  /** 键盘与触摸共同的前置条件：弹层打开或输入法组词中都不接管按键。 */
-  movementLocked(): boolean {
-    return this.options.inputLocked() || this.composing
-  }
+      /** 键盘与触摸共同的前置条件：弹层打开或输入法组词中都不接管按键。 */
+      movementLocked(): boolean {
+        return this.options.inputLocked() || this.composing
+      }
 
   /** 位置事实：只在按格或朝向变化时回调一次（不是逐帧同步）。 */
   private setFeet(feet: Feet, changed: boolean): void {

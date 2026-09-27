@@ -149,17 +149,6 @@ export function rendezvousCell(
   return null
 }
 
-/**
- * 镜头缩放：只允许整数倍（map_rules.coordinate_system.scale），宁可留黑边也不用
- * 非整数倍缩放；地图比视口大时用 1 倍，等于开一个窗口看地图。
- */
-export function integerZoom(viewport: { width: number; height: number }, map: { width: number; height: number }, tileSize = 32, allowed: readonly number[] = [1, 2, 3, 4]): number {
-  const fit = Math.min(viewport.width / (map.width * tileSize), viewport.height / (map.height * tileSize))
-  let zoom = allowed[0]
-  for (const candidate of allowed) if (candidate <= fit + 1e-9) zoom = candidate
-  return zoom
-}
-
 const sameCell = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
 
 /** 格集合的键：活动域判定只比较格，不比较像素。 */
@@ -283,11 +272,7 @@ export class MapRouter {
     return { entryId: entry.id, to: { map: target.id, entry: targetEntry.id, cell: [...targetEntry.arrival] as Cell } }
   }
 
-  /**
-   * 用过的入口解除武装：角色离开该触发格后才重新可用。
-   * 目标入口在本图不存在时保持原样（切图后按来源地图的入口 id 初始化是正常情形），
-   * 不把另一侧已经记下的解除武装状态抹掉——那会让防守连跳只剩数据兜底。
-   */
+  /** 用过的入口解除武装：角色离开该触发格后才重新可用（防连跳）。 */
   disarm(map: string, entryId: string): void {
     const entry = this.byId.get(map)?.entries.find(e => e.id === entryId)
     if (entry) this.disarmed = { map, entryId, trigger: [...entry.trigger] as Cell }

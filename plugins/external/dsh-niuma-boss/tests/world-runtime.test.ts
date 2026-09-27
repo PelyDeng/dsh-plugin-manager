@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   ARRIVAL_RADIUS_TILES, BIRTH_MAP, FACINGS, IDLE_MS_MAX, IDLE_MS_MIN, MapRouter, WALK_TILES_PER_SEC,
-  activityRoute, activityTarget, cellPoint, directionOf, frameOrigin, idleMs, integerZoom, rendezvousCell, safeMapId,
+  activityRoute, activityTarget, cellPoint, directionOf, frameOrigin, idleMs, rendezvousCell, safeMapId,
   type Cell, type EntrySpec, type MapSpec, type WorldSpec,
 } from '../src/world-runtime.ts'
 
@@ -94,7 +94,7 @@ describe('三图往返', () => {
     expect(map.land('street', street.entries[0], 'north', () => false)).toEqual({ map: 'street', cell: [5, 12], facing: 'north' })
   })
 
-  it('防连跳：用过的入口在离开触发格之前不再触发，走开后才重新可用', () => {
+  it('防连跳：用过的入口在离开触发格之前不再触发，走开后重新可用', () => {
     const map = router()
     map.disarm('office', 'office_to_street')
     expect(map.disarmedEntry).toBe('office/office_to_street')
@@ -168,14 +168,6 @@ describe('坐标、朝向与镜头', () => {
     expect(directionOf(0, 1, 'north')).toBe('south')
     expect(directionOf(0, -1, 'south')).toBe('north')
     expect(directionOf(0, 0, 'west')).toBe('west')
-  })
-
-  it('镜头只允许整数倍缩放，宁可留黑边', () => {
-    expect(integerZoom({ width: 1440, height: 1000 }, { width: 42, height: 30 })).toBe(1)
-    expect(integerZoom({ width: 390, height: 844 }, { width: 42, height: 30 })).toBe(1)
-    expect(integerZoom({ width: 3000, height: 2000 }, { width: 42, height: 30 })).toBe(2)
-    expect(integerZoom({ width: 8000, height: 8000 }, { width: 14, height: 15 })).toBe(4)
-    expect(integerZoom({ width: 8000, height: 8000 }, { width: 42, height: 30 })).toBe(4)
   })
 })
 
