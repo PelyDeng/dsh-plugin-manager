@@ -45,7 +45,7 @@ export interface GameSessionOptions {
   readonly parent: HTMLElement
   /** 舞台变量宿主（.shell）：--stage-* 设在这里，提示/对白/toast 才能锚在游戏画面内。 */
   readonly stageHost?: HTMLElement
-  /** 角色头顶锚点的视口坐标（节流 200ms）：头顶气泡层的定位数据。 */
+  /** 角色头顶锚点的视口坐标（节流 100ms）：头顶气泡层的定位数据。 */
   readonly onActorScreens?: (screens: readonly { id: string; x: number; y: number }[]) => void
   /** 编译后地图/图集资源的基路径（含部署前缀）。 */
   readonly assetsBase: string

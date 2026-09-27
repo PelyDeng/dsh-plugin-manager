@@ -848,13 +848,12 @@ export class GameWorld {
           x: Math.round((wx - cam.scrollX - halfW) * cam.zoom + halfW),
           y: Math.round((wy - cam.scrollY - halfH) * cam.zoom + halfH),
         })
-        const list: { id: string; label: string; x: number; y: number }[] = [
-          { id: 'boss', label: '老板', ...project(this.player.x, this.player.y - 52) },
+        const list: { id: string; x: number; y: number }[] = [
+          { id: 'boss', ...project(this.player.x, this.player.y - 52) },
         ]
         for (const actor of world.sceneActors) {
           list.push({
             id: actor.character.id,
-            label: displayName(actor.character),
             ...project(actor.sprite.x, actor.sprite.y - 52),
           })
         }

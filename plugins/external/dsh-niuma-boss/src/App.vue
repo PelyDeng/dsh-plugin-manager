@@ -142,6 +142,8 @@ watch(() => [store.recordModal, store.task.subtasks] as const, async ([modal]) =
   await nextTick()
   const container = recordBody.value
   if (!container) return
+  // 流式更新会反复重建:保留阅读滚动位置,不把人拉回顶部(轮3 P3)。
+  const keepScroll = container.scrollTop
   container.innerHTML = ''
   const mine = store.task.subtasks.filter(s => s.agentId === modal.memberId)
   if (mine.length === 0) {
@@ -174,6 +176,7 @@ watch(() => [store.recordModal, store.task.subtasks] as const, async ([modal]) =
     }
     container.appendChild(body)
   }
+  container.scrollTop = keepScroll
 })
 
 /** 键盘直达:Esc 逐层关(记录弹窗→对白面板);对白打开时按方向键 = 想离开,自动收起面板(轮1 P1)。
