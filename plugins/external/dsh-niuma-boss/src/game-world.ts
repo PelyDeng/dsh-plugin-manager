@@ -1070,7 +1070,7 @@ export class GameWorld {
     const kind = character.role === 'staff' ? 'staff' : character.role === 'butler' ? 'butler' : 'npc'
     const dialogue = character.dialogue
     return {
-      id: character.id, label: character.label, kind,
+      id: character.id, label: dialogue?.name ?? character.label, kind,
       distanceTiles: Math.hypot(character.cell[0] - from[0], character.cell[1] - from[1]),
       ...(dialogue
         ? { dialogueMode: dialogue.mode, authoredLines: dialogue.mode === 'authored_lines' ? [...dialogue.lines] : undefined }
@@ -1223,12 +1223,12 @@ function message(error: unknown): string {
 
 const sameCell = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
 
-/** 一个角色的就近事实：谁、什么职责、离老板几格、对白通道模式与作者预写台词（作者数据）。 */
+/** 一个角色的就近事实：谁（对白名优先）、什么职责、离老板几格、对白通道与作者预写台词（作者数据）。 */
 function targetOf(actor: Actor, from: Cell): NearTarget {
   const kind = actor.character.role === 'staff' ? 'staff' : actor.character.role === 'butler' ? 'butler' : 'npc'
   const dialogue = actor.character.dialogue
   return {
-    id: actor.character.id, label: actor.character.label, kind,
+    id: actor.character.id, label: dialogue?.name ?? actor.character.label, kind,
     distanceTiles: Math.hypot(actor.cell[0] - from[0], actor.cell[1] - from[1]),
     ...(dialogue
       ? { dialogueMode: dialogue.mode, authoredLines: dialogue.mode === 'authored_lines' ? [...dialogue.lines] : undefined }
