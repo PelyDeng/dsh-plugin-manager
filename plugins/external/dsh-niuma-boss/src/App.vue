@@ -184,9 +184,16 @@ watch(() => [store.recordModal, store.task.subtasks] as const, async ([modal]) =
   }
 })
 
-/** Esc 关闭原始记录弹窗。 */
+/** 键盘直达:Esc 逐层关(记录弹窗→对白面板);对白打开时按方向键 = 想离开,自动收起面板(轮1 P1)。 */
 const onRecordKeydown = (event: KeyboardEvent) => {
-  if (event.key === 'Escape' && store.recordModal) session?.closeRecord()
+  if (event.key === 'Escape') {
+    if (store.recordModal) session?.closeRecord()
+    else if (store.dialogue) session?.closeDialogue()
+    return
+  }
+  if (store.dialogue && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(event.code)) {
+    session?.closeDialogue()
+  }
 }
 
 /** 软键盘弹出时把输入框滚进可见区；真机未验证，只保证有焦点就把目标带进视野。 */

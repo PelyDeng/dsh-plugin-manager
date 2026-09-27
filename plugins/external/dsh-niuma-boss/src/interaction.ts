@@ -130,10 +130,12 @@ export function resolvePrompt(near: readonly NearTarget[], state: InteractionSta
     || a.target.distanceTiles - b.target.distanceTiles
     || (a.target.id < b.target.id ? -1 : a.target.id > b.target.id ? 1 : 0))
   const best = candidates[0]!
+  // 交谈提示带上对象名（轮1 评审 P2）：只有「交谈」两个字无法分辨指的是哪一位。
+  const label = best.id === 'npc_talk_hint' ? '和' + best.target.label + '交谈' : LABELS[best.id]
   return {
     id: best.id,
     priority: PRIORITY[best.id],
-    label: LABELS[best.id],
+    label,
     target: best.target.id,
     kind: best.target.kind,
     action: ACTIONS[best.id],

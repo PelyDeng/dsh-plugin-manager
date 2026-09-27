@@ -95,7 +95,7 @@ export class GameSession {
       // 舞台矩形变化（建场景/resize/换 zoom）写进 .shell 的 CSS 变量，DOM 提示跟着锚定游戏画面。
       onStage: stage => applyStageVariables(options.stageHost, stage, { width: options.parent.clientWidth, height: options.parent.clientHeight }),
       onActorScreens: options.onActorScreens,
-      inputLocked: () => this.store.bookOpen || this.store.dialogue !== null,
+      inputLocked: () => this.store.bookOpen || this.store.dialogue !== null || this.store.recordModal !== null,
       onInteract: target => { this.interact(target) },
       onNearTargets: targets => {
         this.near = targets
@@ -286,8 +286,13 @@ export class GameSession {
   /**
    * 靠近的预写台词 NPC（对话呈现升级 F4）：半径内的最近者头顶自动浮出台词气泡，
    * 免点击也免锁移动——纯展示，不开对白面板；离开半径即清空。
+   * 任务本/对白/记录弹窗任一打开时不显示（弹层优先，避免叠字）。
    */
   private syncNpcAutoBubble(targets: readonly NearTarget[]): void {
+    if (this.store.bookOpen || this.store.dialogue !== null || this.store.recordModal !== null) {
+      if (this.store.npcAutoBubble !== null) this.store.npcAutoBubble = null
+      return
+    }
     const candidate = targets
       .filter(t => t.kind === 'npc' && t.authoredLines?.length && t.distanceTiles <= INTERACT_RADIUS_TILES)
       .sort((a, b) => a.distanceTiles - b.distanceTiles)[0]

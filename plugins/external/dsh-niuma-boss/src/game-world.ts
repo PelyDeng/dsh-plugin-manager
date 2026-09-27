@@ -838,7 +838,7 @@ export class GameWorld {
       /** 角色「头顶锚点」的视口坐标（节流 200ms，F2）：气泡层定位数据，经 onActorScreens 交给 App。 */
       private screensAt = -Infinity
       private emitScreens(time: number): void {
-        if (!this.player || time - this.screensAt < 200) return
+        if (!this.player || time - this.screensAt < 100) return
         this.screensAt = time
         const viewport = { width: this.scale.gameSize.width, height: this.scale.gameSize.height }
         const cam = this.cameras.main
