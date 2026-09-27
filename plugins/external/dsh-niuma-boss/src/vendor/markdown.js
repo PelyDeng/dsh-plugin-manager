@@ -1,4 +1,7 @@
 /**
+ * [拷贝件] 拷贝自 dsh-agents-group/agents/web-common/src/lib/markdown.js(2026-09-27,战役2 F3)。
+ * 权威版本在那边:只跟随不先行——改渲染行为先改源再拷;本声明保留。
+ *
  * 受控 Markdown 渲染（方案 5.4 / C 批）。
  *
  * 复用 dsh-example 已声明的同一解析依赖 markdown-it（版本一致），但管家不把解析结果

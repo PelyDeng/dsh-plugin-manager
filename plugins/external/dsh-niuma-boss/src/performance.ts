@@ -69,14 +69,14 @@ export interface StaffDialogueView {
 }
 
 /** balance_params.yaml#text.max_bubble_chars：气泡最多显示多少字，超出截断并给省略号。 */
-export const MAX_BUBBLE_CHARS = 60
+export const MAX_BUBBLE_CHARS = 48
 
 const ACTION_LABELS: Record<StaffAction, string> = {
   walk_to_rendezvous: '走向会合点',
   start_work: '开工',
   wait_for_reply: '等待回话',
-  hand_back: '交回并回工位',
-  at_post: '在工位待命',
+  hand_back: '交回成果,返回工位',
+  at_post: '工位待命',
 }
 
 /** task_protocol.yaml#subtask.terminal：子任务终态。 */

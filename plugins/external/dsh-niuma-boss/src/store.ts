@@ -61,7 +61,7 @@ export const useTaskBookStore = defineStore('task-book', {
     /** 员工当前的对话气泡与权威状态文案；只读展示（动作文案由它一并给出）。 */
     staff: [] as StaffDialogueView[],
     /** 靠近的预写台词 NPC(最近者)的自动台词气泡;离开半径即清空(对话呈现升级 F4)。 */
-    npcAutoBubble: null as { id: string; label: string; line: string; hasMore: boolean } | null,
+    npcAutoBubble: null as { id: string; label: string; line: string; more: number } | null,
     /** 打开中的原始记录弹窗:成员 id 与显示名;内容由任务投影按 agentId 选取。 */
     recordModal: null as { memberId: string; label: string } | null,
     /** 就近范围内的唯一交互提示（interaction_rules.yaml 的全序优先级）。 */

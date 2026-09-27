@@ -111,8 +111,8 @@ export interface GameWorldOptions {
   readonly restore?: () => WorldSnapshot | null
   /** 舞台布局变化（建场景/resize/换 zoom）：界面据此把 DOM 提示锚定在游戏画面内。 */
   readonly onStage?: (stage: StageLayout) => void
-  /** 角色「头顶锚点」的视口坐标（节流 200ms）：头顶气泡层的定位数据，App 层直写 DOM。 */
-  readonly onActorScreens?: (screens: readonly { id: string; label: string; x: number; y: number }[]) => void
+  /** 角色「头顶锚点」的视口坐标（节流 100ms）：头顶气泡层的定位数据，App 层直写 DOM。 */
+  readonly onActorScreens?: (screens: readonly { id: string; x: number; y: number }[]) => void
 }
 
 const TILE = 32
@@ -800,9 +800,9 @@ export class GameWorld {
        */
       private movableTo(x: number, y: number): boolean {
         if (!this.finder.walkable(x, y)) return false
-        const same = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
-        if (same([x, y] as Cell, [Math.floor(this.player.x / TILE), Math.floor(this.player.y / TILE)])) return true
-        return !world.sceneActors.some(actor => actor.phase !== 'walking' && same([x, y] as Cell, actor.cell))
+
+        if (sameCell([x, y] as Cell, [Math.floor(this.player.x / TILE), Math.floor(this.player.y / TILE)])) return true
+        return !world.sceneActors.some(actor => actor.phase !== 'walking' && sameCell([x, y] as Cell, actor.cell))
       }
 
       /** 角色头顶名牌（F1）：Text 随 sprite 每帧同步；切图随场景销毁重建。 */
@@ -816,7 +816,7 @@ export class GameWorld {
             ? this.player
             : world.sceneActors.find(a => a.character.id === c.id)?.sprite
           if (!sprite) continue
-          const text = this.add.text(sprite.x, sprite.y - 46, c.dialogue?.name ?? c.label, {
+          const text = this.add.text(sprite.x, sprite.y - 46, displayName(c), {
             fontFamily: 'system-ui, "Microsoft YaHei", sans-serif',
             fontSize: '10px',
             color: c.id === 'boss' ? '#ffd9a8' : '#e8f1f8',
@@ -835,7 +835,7 @@ export class GameWorld {
         }
       }
 
-      /** 角色「头顶锚点」的视口坐标（节流 200ms，F2）：气泡层定位数据，经 onActorScreens 交给 App。 */
+      /** 角色「头顶锚点」的视口坐标（节流 100ms，F2）：气泡层定位数据，经 onActorScreens 交给 App。 */
       private screensAt = -Infinity
       private emitScreens(time: number): void {
         if (!this.player || time - this.screensAt < 100) return
@@ -854,7 +854,7 @@ export class GameWorld {
         for (const actor of world.sceneActors) {
           list.push({
             id: actor.character.id,
-            label: actor.character.dialogue?.name ?? actor.character.label,
+            label: displayName(actor.character),
             ...project(actor.sprite.x, actor.sprite.y - 52),
           })
         }
@@ -1086,16 +1086,16 @@ export class GameWorld {
 
   /** 这一格是否已被某个角色占着（软阻挡的呈现侧判定，不参与业务）。 */
   occupied(cell: Cell, exclude: Cell): boolean {
-    const same = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
-    if (same(cell, exclude)) return true
-    return this.sceneActors.some(actor => same(cell, actor.cell))
+
+    if (sameCell(cell, exclude)) return true
+    return this.sceneActors.some(actor => sameCell(cell, actor.cell))
   }
 
   /** 目标图的 NPC 静态占格（open 时 sceneActors 仍是旧图，不能查它）：落点被占时 land 退格。
    *  boss 不算——它的静态出生格正是入口 arrival，把自己挡在外面就永远回不了常规落点。 */
   private occupiedInRuntime(runtime: RuntimeMap, cell: Cell): boolean {
-    const same = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
-    return runtime.characters.some(c => c.role !== 'player' && same(cell, c.seat?.cell ?? c.cell))
+
+    return runtime.characters.some(c => c.role !== 'player' && sameCell(cell, c.seat?.cell ?? c.cell))
   }
 
   /** 切图或重开地图：装载目标图资产并给出落点（失败抛错，由调用方保留原图）。 */
@@ -1222,6 +1222,11 @@ function message(error: unknown): string {
 }
 
 const sameCell = (a: Cell, b: Cell) => a[0] === b[0] && a[1] === b[1]
+
+/** 角色显示名:对白名(阿沫/谷雨…)优先,回退美术档 label。 */
+function displayName(character: WorldCharacter): string {
+  return character.dialogue?.name ?? character.label
+}
 
 /** 一个角色的就近事实：谁（对白名优先）、什么职责、离老板几格、对白通道与作者预写台词（作者数据）。 */
 function targetOf(actor: Actor, from: Cell): NearTarget {

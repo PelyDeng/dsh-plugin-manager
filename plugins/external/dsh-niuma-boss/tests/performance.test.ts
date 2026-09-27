@@ -135,7 +135,7 @@ describe('员工表现命令（agent_fsm.yaml#staff 的两个并行区域）', (
 
 describe('员工气泡与状态文案', () => {
   it('气泡用权威正文并按 balance_params 截断，状态文案走任务的展示映射', () => {
-    const long = '草稿'.repeat(60)
+    const long = '草稿'.repeat(48)
     const commands = deriveStaffCommands(view({ subtasks: [sub({ text: long })] }), STAFF)
     const views = staffDialogueViews(view({ subtasks: [sub({ text: long })] }), commands, [{ id: 'blog', label: '博客' }])
     const blog = views.find(v => v.id === 'blog')!
@@ -143,7 +143,7 @@ describe('员工气泡与状态文案', () => {
     expect(blog.stateLabel).toBe('进行中')
     expect(blog.actionLabel).toBe('开工')
     expect(blog.truncated).toBe(true)
-    expect(blog.bubble.length).toBe(61) // 60 字 + 省略号
+    expect(blog.bubble.length).toBe(49) // 48 字 + 省略号
   })
 
   it('权威事件里的英文 token 有中文文案，不把原文直接端到界面上', () => {

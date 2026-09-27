@@ -32,7 +32,7 @@
  */
 import { ButlerClient, ButlerError, type ButlerStatus } from './butler-client.ts'
 import { GameWorld } from './game-world.ts'
-import { INTERACT_RADIUS_TILES, dialogueStillInReach, npcDialogue, resolvePrompt, staffNameplate, type NearTarget, type Prompt } from './interaction.ts'
+import { INTERACT_RADIUS_TILES, dialogueStillInReach, npcDialogue, pickNpcAutoBubble, resolvePrompt, staffNameplate, type NearTarget, type Prompt } from './interaction.ts'
 import { deriveStaffCommands, staffDialogueViews } from './performance.ts'
 import { browserStorage, RecoveryStore, scopeOf, type WorldSnapshot } from './recovery.ts'
 import { applyStageVariables } from './stage.ts'
@@ -46,7 +46,7 @@ export interface GameSessionOptions {
   /** 舞台变量宿主（.shell）：--stage-* 设在这里，提示/对白/toast 才能锚在游戏画面内。 */
   readonly stageHost?: HTMLElement
   /** 角色头顶锚点的视口坐标（节流 200ms）：头顶气泡层的定位数据。 */
-  readonly onActorScreens?: (screens: readonly { id: string; label: string; x: number; y: number }[]) => void
+  readonly onActorScreens?: (screens: readonly { id: string; x: number; y: number }[]) => void
   /** 编译后地图/图集资源的基路径（含部署前缀）。 */
   readonly assetsBase: string
   /** 管家入口发现起点等客户端参数；本地联调可覆盖。 */
@@ -289,26 +289,8 @@ export class GameSession {
    * 任务本/对白/记录弹窗任一打开时不显示（弹层优先，避免叠字）。
    */
   private syncNpcAutoBubble(targets: readonly NearTarget[]): void {
-    if (this.store.bookOpen || this.store.dialogue !== null || this.store.recordModal !== null) {
-      if (this.store.npcAutoBubble !== null) this.store.npcAutoBubble = null
-      return
-    }
-    const candidate = targets
-      .filter(t => t.kind === 'npc' && t.authoredLines?.length && t.distanceTiles <= INTERACT_RADIUS_TILES)
-      .sort((a, b) => a.distanceTiles - b.distanceTiles)[0]
-    if (!candidate) {
-      if (this.store.npcAutoBubble !== null) this.store.npcAutoBubble = null
-      return
-    }
-    const lines = candidate.authoredLines ?? []
-    const next = {
-      id: candidate.id,
-      label: candidate.label,
-      line: lines[0],
-      hasMore: lines.length > 1,
-    }
-    const current = this.store.npcAutoBubble
-    if (!current || current.id !== next.id || current.line !== next.line) this.store.npcAutoBubble = next
+    const gateOpen = this.store.bookOpen || this.store.dialogue !== null || this.store.recordModal !== null
+    this.store.npcAutoBubble = pickNpcAutoBubble(targets, INTERACT_RADIUS_TILES, gateOpen)
   }
 
   /** 用户意图：点击 NPC 头顶台词气泡，打开该 NPC 的完整对白面板（主动行为，维持移动锁）。 */

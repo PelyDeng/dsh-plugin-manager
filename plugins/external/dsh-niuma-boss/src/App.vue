@@ -113,14 +113,6 @@ watch(() => store.notice, text => {
   noticeTimer = setTimeout(() => { store.notice = '' }, 3500)
 })
 
-/** 员工卡正文默认收起（F3/A4）：流式草稿可能整屏长，点击展开/收起。 */
-const expandedStaff = ref(new Set<string>())
-const toggleStaff = (id: string) => {
-  const next = new Set(expandedStaff.value)
-  next.has(id) ? next.delete(id) : next.add(id)
-  expandedStaff.value = next
-}
-
 /** 子任务正文/草稿默认限高（F3）：点击展开全文，再点收起；流式更新保持已选状态。 */
 const expandedTexts = ref(new Set<string>())
 const toggleText = (key: string) => {
@@ -155,7 +147,7 @@ watch(() => [store.recordModal, store.task.subtasks] as const, async ([modal]) =
   if (mine.length === 0) {
     const empty = document.createElement('p')
     empty.className = 'record-empty'
-    empty.textContent = '还没有交回的正文;派活后成员交回的内容会按原格式显示在这里。'
+    empty.textContent = '还没有交回的正文；派活后成员交回的内容会按原格式显示在这里。'
     container.appendChild(empty)
     return
   }
@@ -184,14 +176,18 @@ watch(() => [store.recordModal, store.task.subtasks] as const, async ([modal]) =
   }
 })
 
-/** 键盘直达:Esc 逐层关(记录弹窗→对白面板);对白打开时按方向键 = 想离开,自动收起面板(轮1 P1)。 */
+/** 键盘直达:Esc 逐层关(记录弹窗→对白面板);对白打开时按方向键 = 想离开,自动收起面板(轮1 P1)。
+ *  方向键分支忽略输入框(轮2):任务本+对白同开时,输入框里移光标不应误收面板。 */
+const MOVE_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD']
 const onRecordKeydown = (event: KeyboardEvent) => {
+  const target = event.target as HTMLElement | null
+  if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
   if (event.key === 'Escape') {
     if (store.recordModal) session?.closeRecord()
     else if (store.dialogue) session?.closeDialogue()
     return
   }
-  if (store.dialogue && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD'].includes(event.code)) {
+  if (store.dialogue && MOVE_KEYS.includes(event.code)) {
     session?.closeDialogue()
   }
 }
@@ -228,7 +224,7 @@ onBeforeUnmount(() => {
 
     <!-- 头顶气泡层（F2/F4）：定位由 game-world 节流直写 transform;点击员工气泡出原始记录弹窗,
          点击 NPC 台词气泡开完整对白面板。层本身不拦截地图点击,气泡自身可点。 -->
-    <div ref="bubbleLayer" class="bubble-layer" aria-live="polite">
+    <div ref="bubbleLayer" class="bubble-layer">
       <button
         v-for="member in store.staff" :key="'b-' + member.id" type="button"
         class="bubble staff-bubble" :data-actor-id="member.id"
@@ -244,7 +240,7 @@ onBeforeUnmount(() => {
         :title="'点击打开 ' + store.npcAutoBubble.label + ' 的完整对话'"
         @click.stop="session?.openNpcDialogue(store.npcAutoBubble.id)"
       >
-        <span class="bubble-head">{{ store.npcAutoBubble.label }}<i v-if="store.npcAutoBubble.hasMore"> · E 看全部</i></span>
+        <span class="bubble-head">{{ store.npcAutoBubble.label }}<i v-if="store.npcAutoBubble.more > 0"> · 还有{{ store.npcAutoBubble.more }}句,点击看</i></span>
         <span class="bubble-line">{{ store.npcAutoBubble.line }}</span>
       </button>
     </div>
@@ -274,17 +270,8 @@ onBeforeUnmount(() => {
       :data-kind="store.prompt.kind" @click="onPrompt"
     >{{ store.prompt.label }}</button>
 
-    <!-- 员工表现：只显示权威状态与权威正文气泡，不自造内容。 -->
-    <section v-if="store.staff.length > 0" class="staff" aria-label="员工状态">
-      <article v-for="member in store.staff" :key="member.id" :data-staff="member.id" :data-action="member.action">
-        <header>
-          <strong>{{ member.label }}</strong>
-          <span class="state">{{ member.stateLabel }}</span>
-          <span class="action">{{ member.actionLabel }}</span>
-        </header>
-        <!-- 正文气泡已上角色头顶(F2),卡片只留状态行;点击头顶气泡看原始记录。 -->
-      </article>
-    </section>
+    <!-- 员工状态卡已移除(轮2 A1):权威状态由头顶气泡与名牌就地呈现,全员明细在任务本;
+         data-staff 诊断属性仍由 game-world 挂在挂载点上,自动化验收不受影响。 -->
 
     <!-- 对白面板：普通 NPC 播放作者预写台词；员工只给名牌与真实状态，都没有自由输入。 -->
     <aside v-if="store.dialogue" class="dialogue" :data-dialogue="store.dialogue.kind" role="dialog" :aria-label="store.dialogue.title">
