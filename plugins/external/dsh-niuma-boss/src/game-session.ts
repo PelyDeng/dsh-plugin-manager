@@ -45,6 +45,8 @@ export interface GameSessionOptions {
   readonly parent: HTMLElement
   /** 舞台变量宿主（.shell）：--stage-* 设在这里，提示/对白/toast 才能锚在游戏画面内。 */
   readonly stageHost?: HTMLElement
+  /** 角色头顶锚点的视口坐标（节流 200ms）：头顶气泡层的定位数据。 */
+  readonly onActorScreens?: (screens: readonly { id: string; label: string; x: number; y: number }[]) => void
   /** 编译后地图/图集资源的基路径（含部署前缀）。 */
   readonly assetsBase: string
   /** 管家入口发现起点等客户端参数；本地联调可覆盖。 */
@@ -92,6 +94,7 @@ export class GameSession {
       assetsBase: options.assetsBase,
       // 舞台矩形变化（建场景/resize/换 zoom）写进 .shell 的 CSS 变量，DOM 提示跟着锚定游戏画面。
       onStage: stage => applyStageVariables(options.stageHost, stage, { width: options.parent.clientWidth, height: options.parent.clientHeight }),
+      onActorScreens: options.onActorScreens,
       inputLocked: () => this.store.bookOpen || this.store.dialogue !== null,
       onInteract: target => { this.interact(target) },
       onNearTargets: targets => {
@@ -99,6 +102,7 @@ export class GameSession {
         // 走远/离场的角色自动结束就近会话，再按作者优先级解析唯一提示。
         this.closeDialogueIfOutOfReach()
         this.syncPrompt()
+        this.syncNpcAutoBubble(targets)
       },
       onInteractKey: () => { this.interactKey() },
       onAssetsError: detail => { this.store.notice = detail },
@@ -277,6 +281,44 @@ export class GameSession {
     if (!this.store.pendingNotice) return
     this.store.notice = this.store.pendingNotice
     this.store.pendingNotice = ''
+  }
+
+  /**
+   * 靠近的预写台词 NPC（对话呈现升级 F4）：半径内的最近者头顶自动浮出台词气泡，
+   * 免点击也免锁移动——纯展示，不开对白面板；离开半径即清空。
+   */
+  private syncNpcAutoBubble(targets: readonly NearTarget[]): void {
+    const candidate = targets
+      .filter(t => t.kind === 'npc' && t.authoredLines?.length && t.distanceTiles <= INTERACT_RADIUS_TILES)
+      .sort((a, b) => a.distanceTiles - b.distanceTiles)[0]
+    if (!candidate) {
+      if (this.store.npcAutoBubble !== null) this.store.npcAutoBubble = null
+      return
+    }
+    const lines = candidate.authoredLines ?? []
+    const next = {
+      id: candidate.id,
+      label: candidate.label,
+      line: lines[0],
+      hasMore: lines.length > 1,
+    }
+    const current = this.store.npcAutoBubble
+    if (!current || current.id !== next.id || current.line !== next.line) this.store.npcAutoBubble = next
+  }
+
+  /** 用户意图：点击 NPC 头顶台词气泡，打开该 NPC 的完整对白面板（主动行为，维持移动锁）。 */
+  openNpcDialogue(id: string): void {
+    const target = this.near.find(t => t.id === id)
+    if (target) this.openTarget(target)
+  }
+
+  /** 用户意图：点击员工权威气泡，打开该成员的原始记录弹窗（交回正文的 markdown 源）。 */
+  openRecord(memberId: string, label: string): void {
+    this.store.recordModal = { memberId, label }
+  }
+
+  closeRecord(): void {
+    this.store.recordModal = null
   }
 
   /** 用户意图：交互键（E）或点击就近提示。有提示就执行提示动作，没有就只给一次轻微反馈。 */

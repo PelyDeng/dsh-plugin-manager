@@ -61,7 +61,8 @@
     "clean": "node ../../scripts/clean-plugin.mjs dist web coverage public/generated"
   },
   "dependencies": {
-    "@deepseek-ai/schemastery": "3.18.4"
+    "@deepseek-ai/schemastery": "3.18.4",
+    "markdown-it": "15.0.1"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "4.0.4",

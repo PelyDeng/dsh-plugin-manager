@@ -11,12 +11,14 @@
  * 横竖屏：旋转不清空任何界面状态（位置与任务本开合都由会话/存储保存，旋转只改布局）；
  * 可见区域按 visualViewport 收缩，软键盘不遮挡输入框（真机未验证）。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useTaskBookStore } from './store'
 import { GameSession } from './game-session'
 // 状态文案：投影的映射 + labels 里补的三个英文 token（dispatched/executing/succeeded）。
 import { stateLabel as taskStateLabel } from './labels'
 import { installViewportHeight } from './viewport'
+// 受控 md 渲染（拷贝自 agents/web-common,那边是唯一权威）:原始记录弹窗按原格式渲染交回正文。
+import { renderMarkdownInto } from './vendor/markdown.js'
 
 const store = useTaskBookStore()
 const shell = ref<HTMLElement>()
@@ -130,6 +132,63 @@ const toggleText = (key: string) => {
 /** 任务终态：completed/failed/cancelled 时不再展示「本轮： running」这类运行中态（F4）。 */
 const roundFinished = computed(() => ['completed', 'failed', 'cancelled'].includes(store.task.state))
 
+/** 头顶气泡定位（F2）：game-world 节流上报的视口坐标直写 DOM，不走 Vue 响应式。 */
+const bubbleLayer = ref<HTMLElement>()
+const applyActorScreens = (screens: readonly { id: string; x: number; y: number }[]) => {
+  const layer = bubbleLayer.value
+  if (!layer) return
+  for (const screen of screens) {
+    const el = layer.querySelector<HTMLElement>('[data-actor-id="' + screen.id + '"]')
+    if (el) el.style.transform = 'translate(' + screen.x + 'px,' + screen.y + 'px)'
+  }
+}
+
+/** 原始记录弹窗（F3）：该成员全部子任务的交回正文按 md 渲染;Esc/遮罩/按钮关闭。 */
+const recordBody = ref<HTMLElement>()
+watch(() => [store.recordModal, store.task.subtasks] as const, async ([modal]) => {
+  if (!modal) return
+  await nextTick()
+  const container = recordBody.value
+  if (!container) return
+  container.innerHTML = ''
+  const mine = store.task.subtasks.filter(s => s.agentId === modal.memberId)
+  if (mine.length === 0) {
+    const empty = document.createElement('p')
+    empty.className = 'record-empty'
+    empty.textContent = '还没有交回的正文;派活后成员交回的内容会按原格式显示在这里。'
+    container.appendChild(empty)
+    return
+  }
+  for (const subtask of [...mine].reverse()) {
+    const head = document.createElement('h3')
+    head.className = 'record-goal'
+    head.textContent = subtask.goal || subtask.displayName || subtask.id
+    const state = document.createElement('span')
+    state.className = 'record-state'
+    state.textContent = taskStateLabel(subtask.state)
+    head.appendChild(state)
+    container.appendChild(head)
+    const body = document.createElement('div')
+    body.className = 'record-text'
+    if (subtask.text) {
+      try {
+        renderMarkdownInto(body, subtask.text)
+      } catch {
+        body.textContent = subtask.text
+      }
+    } else {
+      body.className += ' record-text-empty'
+      body.textContent = '（这条子任务还没有交回正文）'
+    }
+    container.appendChild(body)
+  }
+})
+
+/** Esc 关闭原始记录弹窗。 */
+const onRecordKeydown = (event: KeyboardEvent) => {
+  if (event.key === 'Escape' && store.recordModal) session?.closeRecord()
+}
+
 /** 软键盘弹出时把输入框滚进可见区；真机未验证，只保证有焦点就把目标带进视野。 */
 const onFocusIn = (event: FocusEvent) => {
   const target = event.target as HTMLElement | null
@@ -137,14 +196,17 @@ const onFocusIn = (event: FocusEvent) => {
 }
 
 onMounted(() => {
-  session = new GameSession({ parent: host.value!, stageHost: shell.value, assetsBase })
+  session = new GameSession({ parent: host.value!, stageHost: shell.value, assetsBase, onActorScreens: applyActorScreens })
   detachViewport = installViewportHeight(window, document)
   document.addEventListener('visibilitychange', onVisibility)
+  window.addEventListener('keydown', onRecordKeydown)
   void session.start()
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
+  window.removeEventListener('keydown', onRecordKeydown)
+  if (noticeTimer) clearTimeout(noticeTimer)
   detachViewport?.()
   session?.stop()
 })
@@ -156,6 +218,40 @@ onBeforeUnmount(() => {
 
     <!-- 装载期中央提示：首屏与切图空档都不留空白画面（G3）。 -->
     <div v-if="!store.worldReady" class="stage-loading" role="status">地图装载中…</div>
+
+    <!-- 头顶气泡层（F2/F4）：定位由 game-world 节流直写 transform;点击员工气泡出原始记录弹窗,
+         点击 NPC 台词气泡开完整对白面板。层本身不拦截地图点击,气泡自身可点。 -->
+    <div ref="bubbleLayer" class="bubble-layer" aria-live="polite">
+      <button
+        v-for="member in store.staff" :key="'b-' + member.id" type="button"
+        class="bubble staff-bubble" :data-actor-id="member.id"
+        :title="'点击查看 ' + member.label + ' 的原始记录'"
+        @click.stop="session?.openRecord(member.id, member.label)"
+      >
+        <span class="bubble-head">{{ member.label }} · {{ member.stateLabel }}</span>
+        <span class="bubble-line">{{ member.bubble || member.actionLabel }}</span>
+      </button>
+      <button
+        v-if="store.npcAutoBubble" type="button"
+        class="bubble npc-bubble" :data-actor-id="store.npcAutoBubble.id"
+        :title="'点击打开 ' + store.npcAutoBubble.label + ' 的完整对话'"
+        @click.stop="session?.openNpcDialogue(store.npcAutoBubble.id)"
+      >
+        <span class="bubble-head">{{ store.npcAutoBubble.label }}<i v-if="store.npcAutoBubble.hasMore"> · E 看全部</i></span>
+        <span class="bubble-line">{{ store.npcAutoBubble.line }}</span>
+      </button>
+    </div>
+
+    <!-- 原始记录弹窗（F3）：成员交回正文按受控 md 渲染,支持 Esc/遮罩/按钮关闭。 -->
+    <div v-if="store.recordModal" class="record-modal" role="dialog" :aria-label="store.recordModal.label + ' 的原始记录'" @click.self="session?.closeRecord()">
+      <section class="record-panel">
+        <header>
+          <strong>{{ store.recordModal.label }} · 原始记录</strong>
+          <button type="button" @click="session?.closeRecord()">关闭</button>
+        </header>
+        <div ref="recordBody" class="record-md"></div>
+      </section>
+    </div>
 
     <header class="hud" aria-label="状态与入口">
       <span class="badge" :data-status="store.status">{{ statusText }}</span>
@@ -179,11 +275,7 @@ onBeforeUnmount(() => {
           <span class="state">{{ member.stateLabel }}</span>
           <span class="action">{{ member.actionLabel }}</span>
         </header>
-        <!-- 长文默认收起（F3）：流式草稿可能很长，点击在限高/全文间切换。 -->
-        <p
-          v-if="member.bubble" class="bubble" :data-expanded="expandedStaff.has(member.id) ? 'true' : 'false'"
-          @click="toggleStaff(member.id)"
-        >{{ member.bubble }}</p>
+        <!-- 正文气泡已上角色头顶(F2),卡片只留状态行;点击头顶气泡看原始记录。 -->
       </article>
     </section>
 

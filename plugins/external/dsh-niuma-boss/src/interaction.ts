@@ -59,6 +59,8 @@ export interface NearTarget {
   /** 与老板所在格的格距离（表现层按格算，不做像素级判定）。 */
   readonly distanceTiles: number
   readonly dialogueMode?: DialogueMode
+  /** authored_lines 的作者预写台词全文：靠近时的自动台词气泡直接展示（对话呈现升级 F4）。 */
+  readonly authoredLines?: readonly string[]
 }
 
 /** 交互判定需要的**权威**任务事实；没有任务事实时按「空闲」处理。 */
