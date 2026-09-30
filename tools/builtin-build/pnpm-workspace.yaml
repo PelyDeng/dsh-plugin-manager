@@ -2,50 +2,76 @@ packages:
   - 'packages/*'
   - 'plugins/builtin/*'
   - 'plugins/external/*'
+  # 群组插件内部的子包：每个 Agent 一个，另有共享组件包。
+  # 它们不带 deepseekPlugin，因此不会被管理器当成独立插件。
+  - 'plugins/external/*/agents/*'
+  - 'plugins/external/*/packages/*'
 nodeLinker: hoisted
+# 平台二进制只装当前平台（lightningcss/esbuild/oxide 等 native 可选依赖都是全平台
+# optional 列表；不限定时 hoisted 安装会去拉 freebsd/arm64-musl 等永远用不到的
+# 二进制，镜像一缺文件整个 install 失败）。开发机 Windows 与构建服务器 Linux 各自
+# 解析 current，互不影响。⚠️ 前提是构建始终在目标机本机跑（build.sh 如此）；
+# 未来若出现「A 机为 B 平台构建」（跨平台容器/交叉打包），要把目标平台显式列进来。
+supportedArchitectures:
+  os:
+    - current
+  cpu:
+    - current
+  libc:
+    - current
 # 宿主内部包随 dsh 版本一起发布，npm 的 minimumReleaseAge 冷静期会拦下刚发布的版本。
 # pnpm 的豁免只接受精确版本的并集（不支持区间），宿主升级时在这里并列新旧版本；
 # scripts/version.mjs check 会核验清单与子模块版本一致。
 minimumReleaseAgeExclude:
-  - "@deepseek-ai/dsh-session-format-v2-to-v3@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2"
-  - '@deepseek-ai/dsh-session-format-v3-to-v4@0.1.7-alpha.2'
-  - "@deepseek-ai/dsh-session-format-catalog@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2"
-  - '@deepseek-ai/dsh-agent-default-model@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-agent@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-attachment@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-brand@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-credentials@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-host-webserver@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-invariants@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-llm@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-scope@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-session-persistence@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-session-projection@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-session@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-settings@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-system-prompt@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-timeout@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-tools@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-typert-protocol@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-user-approval@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-util-crypto@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-util-values@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-anonymous-user-id@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-command-feedback@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-commands@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-compaction@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-home-paths@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-llm-retry@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-message-feedback@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-storage-domain@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-storage@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-token-meter@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-session-format-v0-to-v1@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-session-format-v1-to-v2@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-session-format@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-compaction-image-offload@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-ptc-runtime@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-sandbox-policy@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
-  - '@deepseek-ai/dsh-sandbox@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2'
+  - "@deepseek-ai/dsh-session-format-v2-to-v3@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2"
+  - '@deepseek-ai/dsh-session-format-v3-to-v4@0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-jobs@0.1.7-alpha.2 || 0.2.0-rc.2'
+  - "@deepseek-ai/dsh-session-format-catalog@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2"
+  - '@deepseek-ai/dsh-agent-default-model@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-agent@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-attachment@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-brand@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-credentials@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-host-webserver@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-invariants@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-llm@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-scope@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-session-persistence@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-session-projection@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-session@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-settings@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-system-prompt@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-timeout@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-tools@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-typert-protocol@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-user-approval@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-util-crypto@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-util-values@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-anonymous-user-id@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-command-feedback@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-commands@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-compaction@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-home-paths@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-llm-retry@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-message-feedback@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-storage-domain@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-storage@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-token-meter@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-session-format-v0-to-v1@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-session-format-v1-to-v2@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-session-format@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-compaction-image-offload@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-ptc-runtime@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-sandbox-policy@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-sandbox@0.1.6-alpha.1 || 0.1.6-alpha.2 || 0.1.7-alpha.2 || 0.2.0-rc.2'
+  - '@deepseek-ai/dsh-app-boot@0.2.0-rc.2'
+  - '@deepseek-ai/dsh-atomic-write@0.2.0-rc.2'
+  - '@deepseek-ai/dsh-config-editor@0.2.0-rc.2'
+  - '@deepseek-ai/dsh-jobs-local@0.2.0-rc.2'
+  - '@deepseek-ai/dsh-launch-environment@0.2.0-rc.2'
+  - '@deepseek-ai/dsh-package-manifest@0.2.0-rc.2'
 allowBuilds:
+  # @parcel/watcher 是 @tailwindcss/cli 的 watch 依赖；一次性构建用不到原生
+  # watcher（真要 watch 时再改 true 并重装）。
+  '@parcel/watcher': false
   esbuild: true

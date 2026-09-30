@@ -8,7 +8,7 @@
   "deliveredAt": "2026-09-27T06:42:06.676Z",
   "files": {
     "package.json": "1454851fd30e6da0c801fdcfd2d11224a26085c1b257679124681bb75a728d42",
-    "pnpm-workspace.yaml": "08baa49a7da8eaf60bcd24b60448b93d72b9717d8a4f85586c333585044c6703",
+    "pnpm-workspace.yaml": "f2b6a46a91255c24f5f1ed0695d99950d62082f9f9f46dd4f199ced160b3ec9b",
     "pnpm-lock.yaml": "d3a08dd851915a474408972a91be688d730d191ad8a030549551cc49172ab97b"
   }
 }
