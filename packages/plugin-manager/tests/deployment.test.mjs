@@ -630,6 +630,30 @@ test('a skipped bundle and an inactive managed plugin both show up in the failur
   assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
 });
 
+test('a peer-incompatible plugin reaches the manager through the same skipped-bundle line as of 0.2.0', async t => {
+  const f = fixture(t);
+  await synchronize(f.deployment, f.release, options(f));
+  const reservation = createServer();
+  await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
+  const port = reservation.address().port;
+  await new Promise(resolve => reservation.close(resolve));
+  const cliFile = join(f.root, 'peer-incompatible-host.mjs');
+  // 官方 0.2.0 起 peer 版本不满足的插件不再报独立错误，而是进 skippedBundles 由 launcher
+  // 统一打印（文案逐字符取自 plugin-compatibility.ts 的 pluginCompatibilityWarning，仅截取
+  // 起始段）；同一 skipped-bundle 锚点必须继续把托管插件判为失败，豁免指引随证据转报。
+  writeFileSync(cliFile, `import { createServer } from 'node:http';
+    process.stderr.write('dsh: skipping profile bundle "fixture-alpha": Error: Plugin fixture-alpha@0.21.0 is incompatible with dsh 0.2.0-rc.2: peerDependencies {"@deepseek-ai/dsh-host-webserver":"0.1.7-alpha.2"}. Running it may cause crashes or data loss. Update the plugin or install a plugin version compatible with this dsh runtime. To accept this risk explicitly, grant the exact-version exemption for fixture-alpha@0.21.0 on dsh 0.2.0-rc.2 with \\\`dsh plugin allow-version\\\` or the plugin manager, then retry the installation or restart dsh. Exact-version exemption: not active.\\n');
+    createServer((_req, res) => res.end('ready')).listen(${port}, '127.0.0.1');`);
+  f.deployment.options['dsh-cli-js'] = cliFile;
+  f.deployment.options.port = port;
+  await assert.rejects(supervise(f.deployment, f.release), error => {
+    assert.match(error.message, /宿主跳过了托管 bundle：fixture-alpha（Error: Plugin fixture-alpha@0\.21\.0 is incompatible with dsh 0\.2\.0-rc\.2/);
+    assert.match(error.message, /dsh plugin allow-version/);
+    return true;
+  });
+  assert.equal(existsSync(join(f.deployment.profileRoot, '.deepseek-plugin-owner.json')), false);
+});
+
 test('configuration revision does not reinstall and never enters the managed set', async t => {
   const f = fixture(t); await synchronize(f.deployment, f.release, options(f));
   await finalize(f.deployment, f.release, { running: true });
